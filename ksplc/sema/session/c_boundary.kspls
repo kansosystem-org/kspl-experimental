@@ -1,0 +1,144 @@
+//< Rejects, during sema, what would break in the generated C
+//<
+//< It rejects two things, both **valid KSPL yet impossible to emit as C**.
+//< Caution: **Keep this check in sema.** In genc, the same source would be rejected for C yet pass
+//< for LLVM (the accepted names would depend on the backend).
+
+// ==========================================
+//   1. a type appearing in an `#export` signature — if the layout is Kanso-specific (a Result, a
+//      slice, an array, a trait value, an enum with a payload) it cannot cross the C boundary
+//   2. a name that is a C reserved word — when the name it is renamed to is already taken in
+//      the same scope
+// ==========================================
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/c_name" as base_c_name
+import "ksplc/base/core" as base_core
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "std/chars" // testing and slicing single characters
+import "std/ds" { List, Map }
+import "std/str" { Str_builder }
+
+priv const max_ffi_nesting_depth: Sz = 32 //<
+  //< The maximum depth to which check_ffi_safety_at walks a struct
+  //<
+  //< A second safety limit besides the cycle detection through seen.
+
+impl Sema_ctx
+  fn check_ffi_safety(r: Self$@, type_id: I32, err_node: Ast_node$@) //<
+    //< Checks whether a type in an `#export` function's signature can cross the C boundary
+    //<
+    //< The layouts listed in this file's header cannot; a plain struct, scalars and raw pointers
+    //< can.
+    //< Caution: Walk **inside** a struct too. Checking only the outermost level lets a wrapper
+    //< evade the check, as in `W { items: U8[] }`.
+    if err_node == null
+      return
+    $seen: = List<|I32|>.new()
+    defer seen.free()
+    r.check_ffi_safety_at(type_id, err_node, seen@, 0)
+
+  fn check_ffi_safety_at(r: Self$@, type_id: I32, err_node: Ast_node$@, seen: List<|I32|>$@,
+    depth: Sz)
+    if type_id == 0 || sema_type_env.is_unknown(type_id) || depth >= max_ffi_nesting_depth
+      return
+    real_id: = r.env.get_real_type(type_id)
+    for id in seen
+      if id == real_id
+        return // stops at a self-reference (a struct recursive through a pointer)
+    seen.push(real_id)
+
+    // Caution: **Recognize a slice by its spelling.** `T[]` is a `Slice<|T|>` instance, which the
+    // type constructor cannot tell from a plain struct, so it would silently cross the boundary
+    // (is_slice_like in `../type/query.kspls`).
+    if r.env.is_slice(real_id)
+      r.err(err_node,
+        "slices (T[]) cannot cross C-FFI boundaries. Use raw pointers (T@) and pass length \
+          separately.")
+      return
+    switch r.env.get_info(real_id) case .result(_b, _e)
+      r.err(err_node,
+        "result types (T?E) cannot cross C-FFI boundaries (their layout is Kanso-specific).")
+    case .array(_b, _s)
+      r.err(err_node,
+        "arrays (T[N]) cannot directly cross C-FFI boundaries. Use raw pointers (T@) instead.")
+    case .trait_type(_d)
+      r.err(err_node,
+        "interface values cannot cross C-FFI boundaries (an interface value is a Kanso-specific \
+          {object, vtable} pair). Pass a raw pointer (T@) to the concrete type instead.")
+    case .enum_type(def)
+      // A plain integer enum is C's enum; one with a payload is a tagged union.
+      for variant in def.variants_list
+        if variant.payload_fields.len > 0
+          r.err(err_node,
+            "enums with payloads cannot cross C-FFI boundaries (a payload variant lowers to a \
+              Kanso-specific tagged union). Use a payload-free enum, or pass the fields separately.")
+          return
+    case .struct_type(def)
+      // A plain struct passes as a C aggregate, but not by value at the signature itself (depth 0)
+      // on LLVM: genllvm lacks the per-target C ABI classification ("Passing an aggregate is an
+      // explicit internal ABI" in ksplc/docs/DESIGN.md).
+      if depth == 0 && base_core.is_llvm_target()
+        r.err(err_node,
+          "structs cannot be passed or returned by value across C-FFI boundaries on the LLVM \
+            backend (genllvm does not implement the per-target C ABI classification for by-value \
+            aggregates). Pass a pointer (T@) instead.")
+      for field in def.fields_list
+        r.check_ffi_safety_at(field.type_id, err_node, seen, depth + 1)
+    default {}
+  fn check_c_keyword_collision(r: Self$@, name: U8[], node: Ast_node$@): Bool //<
+    //< Whether a name C or the target's headers reserve clashes with its suffixed form in scope
+    //<
+    //< Such a name **may be used**: the generated C attaches a suffix (needs_c_escape in
+    //< base/c_name.kspls), so only a clash with the suffixed name is rejected.
+    //< Caution: **Keep this check in sema** (the reason is at this file's header).
+    $partner: = c_name_partner(name)
+    defer partner.free()
+    if partner.slice().len == 0 || !r.symtab.has_in_current_scope(partner.slice())
+      return false
+    return r.report_c_name_pair(node, name, partner.slice())
+
+  fn check_c_keyword_collision_field(r: Self$@, name: U8[], node: Ast_node$@,
+    seen: Map<|U8[], Bool|>$@): Bool //<
+      //< Whether a C reserved word and its suffixed form are both fields of the same struct.
+      //<
+      //< **Fields are not in the symbol table's scopes**, so check_c_keyword_collision does not
+      //< reach them; the same pair is looked up in `seen`.
+    $partner: = c_name_partner(name)
+    defer partner.free()
+    if partner.slice().len == 0 || !(seen.get(partner.slice()) catch false)
+      return false
+    return r.report_c_name_pair(node, name, partner.slice())
+
+  priv fn report_c_name_pair(r: Self$@, node: Ast_node$@, name: U8[], partner: U8[]): Bool //<
+    //< Reports the clash of `name` and its partner, the reserved word named first
+    if name.needs_c_escape()
+      return r.report_c_name_clash(node, name, partner)
+    return r.report_c_name_clash(node, partner, name)
+
+  fn report_c_name_clash(r: Self$@, node: Ast_node$@, kw: U8[], safe: U8[]): Bool //<
+    //< Reports that a C reserved word and its suffixed form clash
+    //<
+    //< Caution: **Keep this diagnostic in this one place**, or one failure reads as two for a local
+    //< (declare_symbol) and a field.
+    r.clear_scratch()
+      .s("'\{kw\}' is a C keyword or macro on some target, so it is emitted as '\{safe\}' in the \
+        generated C, but '\{safe\}' is also declared in this scope. Rename one of them.")
+    r.err(node, r.scratch.slice())
+    return true
+
+priv fn c_name_partner(name: U8[]): Str_builder //< the other name of `name`'s C pair, or empty
+  //<
+  //< A reserved word's partner is its suffixed form; a suffixed name's is the word it renames.
+  //< Caution: **Check both declaration orders**, or a suffixed name written first passes. Only
+  //< c_safe_name decides the renamed-to name; do not rebuild it here, and **do not build it in
+  //< r.scratch**: report_c_name_clash overwrites that scratch.
+  if name.needs_c_escape()
+    return name.c_safe_name()
+  $partner: = Str_builder.new()
+  if name.ends_with(base_c_name.c_name_suffix)
+    bare: = name.sub(0, name.len - base_c_name.c_name_suffix.len)
+    if bare.needs_c_escape()
+      partner.s(bare)
+  return partner

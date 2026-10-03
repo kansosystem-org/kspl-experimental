@@ -1,0 +1,200 @@
+//< The check for Principle 7, "a document speaks of now" (not the suite)
+//<
+//< Two things are checked: **a phrase that tells a history**, and **a value that goes out of date
+//< while nobody touches it** (an elapsed time measured by running something). **The code builds
+//< either way**, so the check reads the text.
+//< **Phrases are matched by word, so not every past-tense sentence is caught.**
+//< Note: The convention itself is "Development Principles" in `docs/DESIGN.md`; this file **only
+//< turns it into a check**.
+import "std/chars" // `is_digit` / `trim_spaces`
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" // `find_str` / `sub_from`
+import "std/strfmt" as _strfmt
+import "std/verdict"
+import "tests/support/conventions_scan" as scan + { Sample }
+import "tests/support/harness"
+import "tests/support/harness_text" as htext
+
+priv const history_words: U8[][4] = ::{ "used to be", "previously", "formerly", "in the past" } //<
+  //< The phrases that mark a sentence as history
+  //<
+  //< Caution: **List only phrases that can mean nothing else**: widened to text that could merely
+  //< describe a past defect, it also catches text about the current state. **Counting the hits
+  //< decides each needle**; these stay out because each mostly hits present-tense prose:
+  //< `back when`, `no longer`, `the old `, `before the fix`, `was renamed`, `deprecated`.
+
+priv const history_exempt: U8[][1] = ::{ "tests/support/conventions_now.kspls" } //<
+  //< Where the convention itself is written
+  //<
+  //< It quotes the phrases it forbids, so only this file is exempt.
+
+priv const history_exempt_line: U8[][2] = ::{ "History is not written here", "What not to write" } //<
+  //< The quoting lines themselves
+  //<
+  //< Caution: **Do not exempt by line number** — add one line and it drifts ("Linking documents
+  //< to source" in `docs/SPEC-documents.md` requires pointing by name).
+
+priv fn exempt_at(rel: U8[], line: U8[]): Bool
+  for e in history_exempt
+    if rel.equals(e)
+      return true
+  for e in history_exempt_line
+    if line.find_str(e) >= 0
+      return true
+  return false
+
+priv fn history_hit(line: U8[], arena: Arena$@): U8[] //<
+  //< The phrase that matched, folded to lower case (a sentence starts with a capital)
+  //<
+  //< The folding is ASCII only, which is all the list holds.
+  b: = arena.text()
+  for c in line
+    b.c(c.to_lower())
+  low: = b.take()
+  for w in history_words
+    if low.find_str(w) >= 0
+      return w
+  return ""
+
+priv fn check_history(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  for rel in harness.tracked_matching(U8[][]::scan.all_ext)
+    if scan.text_skip(rel)
+      continue
+    $i: Sz = 0
+    for line in harness.read_under_root(rel).lines(arena)
+      i += 1
+      seen += 1
+      hit: = history_hit(line, arena)
+      if hit.len == 0 || exempt_at(rel, line)
+        continue
+      bad
+        .push(arena.text().s(rel).s(":\{i\}: \"").s(hit).s("\"  ").s(line.trim_spaces()).take())
+  verdict.check_list("no turn of phrase tells a history (Principle 7 in docs/DESIGN.md)", seen,
+    "lines", bad@, "the place for a history is a git commit message")
+
+priv const measured_marks: U8[][3] = ::{ "measured", "in practice", "actually takes" } //<
+  //< The words that mark an elapsed time measured by a run
+  //<
+  //< Caution: **Do not put one in the source or the build files**: it changes every run with no
+  //< procedure to measure it again, so nobody sees it go stale. **Keep the markers narrow**: most
+  //< time values in comments are legitimate (a fixed cycle, a data sheet's figure, a hardware
+  //< timing).
+priv const time_units: U8[][8] = ::{ "ms", "us", "ns", "sec", "second", "minute", "min", "hour" }
+priv const measured_window: Sz = 30
+
+priv fn reads_time(line: U8[], i: Sz): Bool //< whether "a run of digits + a unit" reads from i
+  if i >= line.len || !line[i].is_digit()
+    return false
+  $j: = i
+  for j < line.len && (line[j].is_digit() || line[j] == ',' || line[j] == '.')
+    j += 1
+  for j < line.len && (line[j] == ' ' || line[j] == '\t')
+    j += 1
+  for u in time_units
+    if j + u.len <= line.len && line.sub(j, u.len).equals(u)
+      return true
+  return false
+
+priv fn measured_time(line: U8[], arena: Arena$@): Bool //<
+  //< Whether a time value appears within 30 characters on either side of a marker word
+  //<
+  //< Caution: **Check both sides.** The value comes after the marker ("measured at 42 seconds")
+  //< or before it ("it took 1,200 ms (measured)"), so checking one side misses the other.
+  b: = arena.text()
+  for c in line
+    b.c(c.to_lower())
+  low: = b.take()
+  for mark in measured_marks
+    $at: Sz = 0
+    for at + mark.len <= low.len
+      found: = low.sub_from(at).find_str(mark)
+      if found < 0
+        break
+      p: = at + Sz::found
+      // After it, 30 characters.
+      $j: = p + mark.len
+      $n: Sz = 0
+      for n <= measured_window && j < low.len
+        if reads_time(low, j)
+          return true
+        j += htext.cp_len(low[j])
+        n += 1
+      // Before it, 30 characters.
+      $k: = p - measured_window if p > measured_window else 0
+      for k < p
+        if reads_time(low, k)
+          return true
+        k += htext.cp_len(low[k])
+      at = p + mark.len
+  return false
+
+priv fn check_measured(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  for rel in harness.tracked_matching(U8[][]::scan.build_ext)
+    // **This file is excluded because it holds its own samples** (`measured_samples` below).
+    // Caution: **Do not add another file here**: an excluded file leaves the check entirely. The
+    // history check holds the same exclusion in `history_exempt`.
+    if rel.equals("tests/support/conventions_now.kspls")
+      continue
+    $i: Sz = 0
+    for line in harness.read_under_root(rel).lines(arena)
+      i += 1
+      seen += 1
+      if measured_time(line, arena)
+        bad
+          .push(arena.text().s(rel).s(":\{i\}: ").s(line.trim_spaces()).take())
+  verdict.check_list("no measured elapsed time is in the source or the build files (Principle 7 in \
+    docs/DESIGN.md)", seen, "lines", bad@,
+    "write the relation and the order of magnitude, and point at material carrying the procedure")
+
+// The samples showing that the judgment can fire (how they are written is "a check shows it can
+// fire" in `conventions_scan.kspls`).
+// Caution: **Keep the `used to ` / `used to be` pair**: it is why the needle is the longer phrase.
+// **Keep a capitalised row**: a sentence starts with a capital.
+priv const history_samples: Sample[10] = ::{
+  Sample::{ .text = "// It used to be parted in two.", .hits = true },
+  Sample::{ .text = "// Previously there was one entry point.", .hits = true },
+  Sample::{ .text = "// Formerly the shape differed.", .hits = true },
+  Sample::{ .text = "// The brittlenesses found in the past.", .hits = true },
+  Sample::{ .text = "// FORMERLY it fell here.", .hits = true },
+  Sample::{ .text = "// It is used to shorten a long type name.", .hits = false },
+  Sample::{ .text = "// The arena is used to hold the run.", .hits = false },
+  Sample::{ .text = "// Now there are two entry points.", .hits = false },
+  Sample::{ .text = "// That one time, the log stops.", .hits = false },
+  Sample::{ .text = "// This place is the one origin.", .hits = false },
+}
+
+// **It hits only where a marker word and a time value appear together.** Without the marker-only
+// and value-only samples, neither failure ("hits on the word", "hits on a number") is noticed.
+priv const measured_samples: Sample[8] = ::{
+  Sample::{ .text = "// Measured at 42 seconds.", .hits = true },
+  Sample::{ .text = "// measured: 0.15ms.", .hits = true },
+  Sample::{ .text = "// It took 1,200 ms (measured).", .hits = true },
+  Sample::{ .text = "// The measured box is 0.8 times the em.", .hits = false },
+  Sample::{ .text = "// About a tenth of the control cycle does it.", .hits = false },
+  Sample::{ .text = "// The ceiling is 5000 ms.", .hits = false },
+  Sample::{ .text = "// A repeat comes about every 108ms.", .hits = false },
+  Sample::{ .text = "// The procedure for measuring it again is in the material.", .hits = false },
+}
+
+priv fn history_hits(text: U8[], arena: Arena$@): Bool
+  return history_hit(text, arena).len > 0
+
+priv fn check_fires(arena: Arena$@)
+  $h: = scan.misjudged(Sample[]::history_samples, history_hits, arena)
+  verdict.check_list("the judgment of a history can fire", history_samples.len, "samples", h@,
+    "the table of what is hit and what is not is `history_samples`")
+  $m: = scan.misjudged(Sample[]::measured_samples, measured_time, arena)
+  verdict.check_list("the judgment of a measured figure can fire", measured_samples.len, "samples",
+    m@, "the table of what is hit and what is not is `measured_samples`")
+
+fn run(arena: Arena$@) //< this section's entry point
+  //<
+  //< Caution: **Call it from `suite/conventions_test.kspls`'s `main`** (there is one suite).
+  check_fires(arena)
+  check_history(arena)
+  check_measured(arena)

@@ -1,0 +1,121 @@
+//< Whether a file's line terminator changes anything
+//<
+//< Not a suite; part of `../suite/kspls_test.kspls`.
+//< **The line terminator belongs to the file, not the program**: nothing downstream may tell the
+//< two apart — the C, a raw text's bytes, what `ksplc fmt` writes back (`to_lf` in
+//< `../../parse/source_fix.kspls`).
+import "ksplc/tests/support/harness"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+priv const pair_dir: U8[] = "tests/kspls" //< the twins' directory, from the package's top
+  //<
+  //< **Kept apart from the suite's own**, so this file relies on nothing there.
+
+priv fn pair_path(stem: U8[], ext: U8[], arena: Arena$@): U8[]
+  return fs.join(pair_dir, arena.text().s(stem).s(ext).take(), arena)
+
+priv fn to_crlf(body: U8[], arena: Arena$@): U8[] //< widens `\n` to `\r\n`
+  //<
+  //< **It makes the file as a Windows editor saves it.**
+  //< Caution: **Widen every newline regardless of content**, strings included, as the editor does.
+  //< A `\r\n` is not doubled.
+  b: = arena.text()
+  $i: Sz = 0
+  for i < body.len
+    if body[i] == '\n' && (i == 0 || body[i - 1] != '\r')
+      b.c('\r')
+    b.c(body[i])
+    i += 1
+  return b.take()
+
+priv fn copy_into(from: U8[], to: U8[], stem: U8[], arena: Arena$@): Bool
+  src: = io.read_file(from) catch
+    return verdict.check(arena.text().s(stem).s(": the twins can be read").take(), false, from)
+  io.write_file(to, src) catch
+    return verdict.check(arena.text().s(stem).s(": they can be copied to the working directory")
+      .take(), false, to)
+  return true
+
+fn check_crlf(work: U8[], stem: U8[], arena: Arena$@) //<
+  //< Whether an indentation-notation file saved as CRLF generates the same C as LF
+  //<
+  //< Caution: **Put them in the same directory and build.** A symbol's name and `#line` come from
+  //< the source's path, so other paths differ by name, not newline. `#line` stays in the
+  //< comparison: **the lines do not move** with the terminator.
+  laid: = pair_path(stem, ".kspls", arena)
+  at: = fs.join(work, arena.text().s(stem).s(".kspls").take(), arena)
+  gen_lf: = fs.join(work, "crlf_lf.c", arena)
+  gen_crlf: = fs.join(work, "crlf_crlf.c", arena)
+  src: = io.read_file(laid) catch
+    _bad: = verdict.check(arena.text().s(stem).s(": the twins can be read (CRLF)").take(), false,
+      laid)
+    return
+  if !copy_into(laid, at, stem, arena)
+    return
+  ra: = harness.ksplc(U8[][]::{ at, gen_lf })
+  if !verdict.check(arena.text().s(stem).s(": the LF side builds").take(), ra.code == 0, ra.out)
+    return
+  io.write_file(at, to_crlf(src, arena)) catch
+    _bad: = verdict.check(arena.text().s(stem).s(": CRLF can be written").take(), false, at)
+    return
+  rb: = harness.ksplc(U8[][]::{ at, gen_crlf })
+  if !verdict.check(arena.text().s(stem).s(": the CRLF side builds").take(), rb.code == 0, rb.out)
+    return
+  a: = harness.read_generated(gen_lf)
+  b: = harness.read_generated(gen_crlf)
+  _same: = verdict.check(arena.text().s(stem).s(": CRLF puts the same C out as LF").take(),
+    a.equals(b), arena.text().s("LF \{a.len\} bytes / CRLF \{b.len\} bytes").take())
+
+// A `"""` text holds the file's own bytes, the one place a checkout's terminator could reach the
+// program. **The same source has to be the same program** (the reason is at the file header).
+priv const raw_text_src: U8[] =
+  "priv const text: U8[] =\n  \"\"\"one\ntwo\n\"\"\";\n\nfn main(): I32 {\n  return \
+    I32::text.len;\n}\n"
+
+fn check_crlf_raw_text(work: U8[], arena: Arena$@)
+  at: = fs.join(work, "crlf_raw.kspl", arena)
+  gen_lf: = fs.join(work, "crlf_raw_lf.c", arena)
+  gen_crlf: = fs.join(work, "crlf_raw_crlf.c", arena)
+  io.write_file(at, raw_text_src) catch
+    _bad: = verdict.check("a raw text can be written (LF)", false, at)
+    return
+  ra: = harness.ksplc(U8[][]::{ at, gen_lf })
+  if !verdict.check("a raw text builds (LF)", ra.code == 0, ra.out)
+    return
+  io.write_file(at, to_crlf(raw_text_src, arena)) catch
+    _bad: = verdict.check("a raw text can be written (CRLF)", false, at)
+    return
+  rb: = harness.ksplc(U8[][]::{ at, gen_crlf })
+  if !verdict.check("a raw text builds (CRLF)", rb.code == 0, rb.out)
+    return
+  a: = harness.read_generated(gen_lf)
+  b: = harness.read_generated(gen_crlf)
+  _same: = verdict.check("a raw text holds the same bytes whichever way the file closes its lines",
+    a.equals(b), arena.text().s("LF \{a.len\} bytes / CRLF \{b.len\} bytes").take())
+
+// **The formatter writes the file back with the terminator it came with**, as with the BOM
+// (`ksplc/main.kspls`). A file needing nothing else comes back byte for byte, so one terminator is
+// used — a `\r` left in a comment would mix two.
+fn check_crlf_fmt(work: U8[], arena: Arena$@)
+  at: = fs.join(work, "crlf_fmt.kspl", arena)
+  src: = io.read_file(pair_path("comments", ".kspl", arena)) catch
+    _bad: = verdict.check("the twin can be read (CRLF formatting)", false, at)
+    return
+  want: = to_crlf(src, arena)
+  io.write_file(at, want) catch
+    _bad: = verdict.check("a CRLF source can be written", false, at)
+    return
+  r: = harness.ksplc_bare(U8[][]::{ "fmt", "--in-place", at })
+  if !verdict.check("a CRLF source formats", r.code == 0, r.out)
+    return
+  got: = io.read_file(at) catch
+    _bad: = verdict.check("the formatted CRLF source can be read", false, at)
+    return
+  _same: = verdict.check("formatting hands the file back the terminator it came with",
+    got.equals(want),
+    arena.text().s("wrote \{got.len\} bytes / read \{want.len\} bytes").take())

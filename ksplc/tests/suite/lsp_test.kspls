@@ -1,0 +1,629 @@
+//< A smoke test of the LSP supervisor's recovery from a crash or a hang, and of its answers
+//<
+//< The language server is a supervisor process plus a worker. `std/jsonrpc` provides the framing
+//< (Content-Length, the id, the standard error, the timeout); `../support/lsp_client.kspls` builds
+//< LSP's params.
+//< **The workspace is this package's own folder**, where the suite runs. The root's `lsp-tree`
+//< makes the queries only the whole tree can answer (a word read across every package, callers in
+//< another package's demos), on the same client.
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/lsp_bound"
+import "ksplc/tests/support/lsp_calls" { heavy_ms, incoming, prepare_fn }
+import "ksplc/tests/support/lsp_client"
+import "ksplc/tests/support/lsp_docs"
+import "ksplc/tests/support/lsp_package"
+import "ksplc/tests/support/lsp_pick"
+import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, end_text, is_missing }
+import "ksplc/tests/support/lsp_recover"
+import "ksplc/tests/support/lsp_semtok" { off_words, read_tokens }
+import "ksplc/tests/support/lsp_spell"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/json" + { Json_builder }
+import "std/jsonrpc"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+
+priv const src: U8[] = "fn main(): Void {\n    var x = 1;\n}\n"
+// The source that **parses**, for the colouring: the colours come from the syntax tree, so a
+// document that does not parse comes back empty (`ksplc/lsp/semtok.kspls`'s header). A function's
+// name, a type's position, a struct's name and fields, and an import's alias are all in one.
+// **An enum too**: the compiler gives it a `variant_name` from a string of its own, which must
+// colour nothing (`made_by_compiler` in `ksplc/base/ast_ext.kspls`).
+priv const semtok_src: U8[] =
+  """struct Pair {
+  left: I32;
+  right: I32;
+}
+
+fn add(a: I32, b: I32): I32 {
+  return a + b;
+}
+
+enum Side {
+  near;
+  far;
+}
+"""
+priv const semtok_uri: U8[] = "file:///s.kspl"
+priv const probe_uri: U8[] = "file:///t.kspl"
+
+priv const ch_file: U8[] = "lsp/call_hier.kspls" //<
+  //< The Call Hierarchy's starting file, named from the package's top
+  //<
+  //< This Call Hierarchy comes with a workspace walk.
+priv const ch_decl: U8[] = "fn prepare_call_hierarchy"
+
+priv const normal_ms: I32 = 15000
+
+// ==========================================
+// A hover on a slice's own `len` and `ptr`
+// ==========================================
+
+// **They are answered inside the compiler** (`check_builtin_dot_access` in
+// `../../sema/body/dot.kspls`), not by a declaration the editor walks to.
+// Caution: **Ask again after the answer.** The supervisor returns `null` for a dying worker too,
+// so one response cannot tell a crash from a quiet "nothing to say".
+priv const builtin_src: U8[] =
+  """fn probe(s: U8[]): Sz {
+  n: = s.len;
+  p: = s.ptr;
+  return n + Sz::p$;
+}
+"""
+
+priv const builtin_uri: U8[] = "file:///builtin_probe.kspl"
+priv const builtin_decls: U8[][2] = ::{ "  n: =", "  p: =" }
+priv const builtin_marks: U8[][2] = ::{ ".len", ".ptr" }
+priv const builtin_wants: U8[][2] = ::{ "len: Sz", "ptr: U8@" }
+
+priv fn check_hover_builtin_member(c: jsonrpc.Client$@, arena: Arena$@)
+  _sent: = c.notify("textDocument/didOpen",
+    lsp_client.did_open(builtin_uri, builtin_src, arena), arena)
+  for i in Range.asc(builtin_decls.len)
+    decl: = builtin_decls[i]
+    col: = col_in_line(builtin_src, decl, builtin_marks[i], arena) + 2
+    pos: = lsp_client.at_pos(builtin_uri, decl_line(builtin_src, decl, arena), col, arena)
+    label: = arena.text().s("a hover on a slice's own '").s(builtin_marks[i]).s("' answers").take()
+    got: = c.request("textDocument/hover", pos, normal_ms, arena) catch e
+      verdict.check(label, false, end_text(e))
+      continue
+    text: = lsp_client.hover_text(got)
+    verdict.check(label, text.find_str(builtin_wants[i]) >= 0,
+      lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
+  // The worker is still the same one; a remade one would not know this document.
+  live: = lsp_client.at_pos(builtin_uri, decl_line(builtin_src, "fn probe", arena), 3, arena)
+  alive: = c.request("textDocument/hover", live, normal_ms, arena) catch e
+    verdict.check("the analysis side is still standing after them", false, end_text(e))
+    return
+  a_text: = lsp_client.hover_text(alive)
+  verdict.check("the analysis side is still standing after them", a_text.find_str("probe") >= 0,
+    lsp_client.why(c, arena.text().s("'").s(a_text).s("'").take(), arena))
+
+// ==========================================
+// A variant reached through an alias
+// ==========================================
+
+// **The value's type is the name written** (`Form.line(3)` is a `Form`) while the variant is the
+// enum's, so the hover and the jump look it up on the type the alias names; looked up on the alias,
+// both come back empty (resolve_enum_variant_def in `../../lsp/nav.kspls`).
+priv const alias_src: U8[] =
+  """enum Shape
+  dot
+  line(len: I32)
+
+typedef Form = Shape
+
+fn probe(): Form
+  return Form.line(3)
+"""
+
+priv const alias_uri: U8[] = "file:///alias_probe.kspls"
+priv const alias_use: U8[] = "  return Form.line(3)"
+
+priv fn check_variant_through_alias(c: jsonrpc.Client$@, arena: Arena$@)
+  _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(alias_uri, alias_src, arena), arena)
+  pos: = lsp_client.at_pos(alias_uri, decl_line(alias_src, alias_use, arena),
+    col_in_line(alias_src, alias_use, "line", arena) + 1, arena)
+  shown: = "a hover on a variant reached through an alias shows the variant"
+  got: = c.request("textDocument/hover", pos, normal_ms, arena) catch e
+    verdict.check(shown, false, end_text(e))
+    return
+  text: = lsp_client.hover_text(got)
+  verdict.check(shown, text.find_str("line(len: I32)") >= 0,
+    lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
+  jump: = "a jump from it lands on the enum's variant"
+  went: = c.request("textDocument/definition", pos, normal_ms, arena) catch e
+    verdict.check(jump, false, end_text(e))
+    return
+  landed: = went.get("result").get("range").get("start").get("line").as_int(-1)
+  verdict.check(jump, landed == I32::decl_line(alias_src, "  line(len: I32)", arena),
+    lsp_client.why(c, arena.text().s("line \{landed\}").take(), arena))
+
+// ==========================================
+// A shebang line gives no diagnostic in an editor buffer either
+// ==========================================
+
+// **An editor buffer takes a different path from a disk read.** If only the disk read masks the
+// shebang (mask_shebang in parse/source_fix.kspls), the `#` is analysed as an attribute and a
+// syntax error appears **on the file's first character, only in the editor**, while lint / run /
+// fmt stay green.
+priv const shebang_src: U8[] =
+  """#!/usr/bin/env -S ksplc run
+import "std/io";
+
+fn main(): I32 {
+    io.out().s("ok\n");
+    return 0;
+}
+"""
+
+priv const shebang_uri: U8[] = "file:///shebang_probe.kspl"
+
+// **Inside the workspace one buffer goes by three names** (opened path, logical name, that name
+// with its extension), and a check walking every name must report once.
+// Caution: **Keep these two on escaped lines, not in a `"""` text.** The check reads lines, so a
+// line opening with `//<` would be this file's own mark, and these two are wrong on purpose.
+priv const described_src: U8[] =
+  "#!/usr/bin/env -S ksplc run\n//< A script that describes itself under its start-up line\nimport \
+    \"std/io\"\n\nfn main()\n  io.out().s(\"ok\\n\")\n"
+
+priv const dangling_src: U8[] =
+  "//< A file that describes itself\nimport \"std/io\"\n\nfn main()\n  x: = 1\n  //< this continues \
+    nothing\n  if x > 0\n    io.out().s(\"ok\\n\")\n"
+
+// The two are opened inside the workspace (outside it the three names are two). **No file exists
+// under either name** (there is no `lsp_probe/`): the buffer is all the server reads.
+priv const described_rel: U8[] = "lsp_probe/shebang_described.kspls"
+priv const dangling_rel: U8[] = "lsp_probe/dangling.kspls"
+
+priv struct Published //< what the next publishDiagnostics for one document said
+  found: Bool
+  diags: List<|json.Val|>
+
+priv fn published_for(c: jsonrpc.Client$@, tail: U8[], arena: Arena$@): Published //<
+  //< Reads messages until one publishes the diagnostics of the URI ending `tail`
+  for _k in Range.asc(8)
+    msg: = c.read_msg(normal_ms, arena) catch
+      break
+    if !msg.get("method").as_str().equals("textDocument/publishDiagnostics")
+      continue
+    p: = msg.get("params")
+    if !p.get("uri").as_str().ends_with(tail)
+      continue
+    return Published::{ .found = true, .diags = p.get("diagnostics").arr_list(arena) }
+  return Published::{ .found = false, .diags = List<|json.Val|>.new(arena) }
+
+priv fn said(got: Published, arena: Arena$@): U8[] //< what a failing check shows of `got`
+  if !got.found
+    return "(no publishDiagnostics came)"
+  b: = arena.text()
+  for d in got.diags
+    b.s(d.get("message").as_str()).c('\n')
+  return b.s("\{got.diags.len\} diagnostic(s)").take()
+
+// ==========================================
+// The diagnostic's column and length are in UTF-16 units
+// Caution: **Do not say them in bytes.** LSP takes both in UTF-16 units, so bytes make **the
+// squiggle stretch over a string containing non-ASCII** and onto the next word.
+// ==========================================
+priv const wide_src: U8[] = "fn main(): I32 {\n  n: I32 = \"かんそ\";\n  return n;\n}\n"
+priv const wide_uri: U8[] = "file:///wide_probe.kspl"
+priv const wide_from: I64 = 11I64 //<
+  //< The `"かんそ"` of ` n: I32 = "かんそ";` is 5 units in UTF-16 (11 in bytes)
+priv const wide_to: I64 = 16I64
+
+priv fn check_wide_range(c: jsonrpc.Client$@, arena: Arena$@)
+  _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(wide_uri, wide_src, arena), arena)
+  $found: = false
+  $from: I64 = -1I64
+  $to: I64 = -1I64
+  for _k in Range.asc(12)
+    msg: = c.read_msg(heavy_ms, arena) catch
+      break
+    if !msg.get("method").as_str().equals("textDocument/publishDiagnostics")
+      continue
+    p: = msg.get("params")
+    if !p.get("uri").as_str().ends_with("wide_probe.kspl")
+      continue
+    got: = p.get("diagnostics").arr_list(arena)
+    if got.len == 0
+      continue
+    r: = got.get(0).get("range")
+    found = true
+    from = r.get("start").get("character").as_int(-1I32)
+    to = r.get("end").get("character").as_int(-1I32)
+    break
+  d: = arena.text().s("\{from\}..\{to\}").take() if found else "(no diagnostic came)"
+  verdict.check("the diagnostic's range comes in UTF-16 units",
+    found && from == wide_from && to == wide_to, d)
+
+// A misaligned column in the indentation notation reaches the editor.
+// **The compiler and the editor rewrite the indentation separately.** The check is that the
+// error reaches the screen, not the count (an empty `if` adds an `[I0307]` beside it); it carries
+// no code, so the match is on its wording.
+priv const ragged_src: U8[] =
+  """import "std/io"
+
+fn main(): I32
+  if 1 < 0
+      io.out().s("6 columns\\n")
+    io.out().s("4 columns, not level with the sibling\\n")
+  io.out().s("2 columns\\n")
+  return 0
+"""
+priv const ragged_uri: U8[] = "file:///ragged_probe.kspls"
+
+priv fn check_ragged_reaches(c: jsonrpc.Client$@, arena: Arena$@)
+  _sent: = c.notify("textDocument/didOpen",
+    lsp_client.did_open(ragged_uri, ragged_src, arena), arena)
+  $found: = false
+  $ragged: = false
+  for _k in Range.asc(12)
+    msg: = c.read_msg(heavy_ms, arena) catch
+      break
+    if !msg.get("method").as_str().equals("textDocument/publishDiagnostics")
+      continue
+    p: = msg.get("params")
+    if !p.get("uri").as_str().ends_with("ragged_probe.kspls")
+      continue
+    found = true
+    for one in p.get("diagnostics").arr_list(arena)
+      if one.get("message").as_str().find_str("but its siblings sit") >= 0
+        ragged = true
+    break
+  seen: = "the cautions did not come" if found else "(no publishDiagnostics came)"
+  verdict.check("a column slip in the indentation notation reaches the editor", found && ragged,
+    lsp_client.why(c, seen, arena))
+
+priv fn check_shebang(c: jsonrpc.Client$@, top: U8[], arena: Arena$@)
+  _sent: = c.notify("textDocument/didOpen",
+    lsp_client.did_open(shebang_uri, shebang_src, arena), arena)
+  got: = published_for(c, "shebang_probe.kspl", arena)
+  verdict.check("no diagnostic comes out on a shebang script being edited",
+    got.found && got.diags.len == 0, lsp_client.why(c, said(got, arena), arena))
+  described: = lsp_client.uri_of(top, described_rel, arena)
+  _sent2: = c.notify("textDocument/didOpen",
+    lsp_client.did_open(described, described_src, arena), arena)
+  quiet: = published_for(c, described_rel, arena)
+  verdict.check("a script described under its start-up line puts out no diagnostic in the editor",
+    quiet.found && quiet.diags.len == 0, lsp_client.why(c, said(quiet, arena), arena))
+  dangling: = lsp_client.uri_of(top, dangling_rel, arena)
+  _sent3: = c.notify("textDocument/didOpen",
+    lsp_client.did_open(dangling, dangling_src, arena), arena)
+  once: = published_for(c, dangling_rel, arena)
+  one: =
+    once.found && once.diags.len == 1 &&
+    once.diags.get(0).get("message").as_str().starts_with("[W0209]")
+  verdict.check("a continuation continuing nothing is reported once, as the command line does", one,
+    lsp_client.why(c, said(once, arena), arena))
+
+// ==========================================
+// Code covered by `#cfg()` can be read once the flag is set. **Code under an unset flag is dropped
+// before the analysis** (as in the compiler), so there **the editor's features look dead**.
+// ==========================================
+priv const cfg_src: U8[] =
+  """import "std/io";
+
+#cfg(probe_flag)
+fn cfg_only_fn(): Void {
+    io.out().s("x");
+}
+"""
+
+priv const cfg_uri: U8[] = "file:///cfg_probe.kspl"
+
+// ==========================================
+// A document that was didClose does not come back after the worker is remade
+// ==========================================
+
+priv const close_src: U8[] = "fn main(): I32 {\n  probe: I64 = 1;\n  return 0;\n}\n" //<
+  //< The source of the document the replay check closes
+  //<
+  //< The supervisor remembers the open documents' text, and replays it by didOpen into a remade
+  //< worker.
+  //< **The supervisor's record marks the document closed**, or a closed document revives on replay.
+  //< Caution: Test it with a dedicated client. The main client leaves many documents open, and the
+  //< replay's publishDiagnostics exceed read's skipping cap, dropping the response.
+priv const closed_uri: U8[] = "file:///closed_probe.kspl"
+priv const open_uri: U8[] = "file:///stays_open_probe.kspl"
+
+priv fn probe_hover(c: jsonrpc.Client$@, uri: U8[], arena: Arena$@): U8[]
+  got: =
+    c.request("textDocument/hover", lsp_client.at_pos(uri, 1, 3, arena), normal_ms, arena) catch
+    return ""
+  return lsp_client.hover_text(got)
+
+priv fn check_didclose(exe: U8[], arena: Arena$@)
+  $c: =
+    lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, "", arena) catch
+    verdict.check("a document left open is restored after the worker is remade", false,
+      "the client cannot be started")
+    return
+  defer c.free()
+  _init: = c.request("initialize", empty_obj(arena), normal_ms, arena) catch
+    fallback json.Val.null_val
+  for uri in U8[][]::{ closed_uri, open_uri }
+    _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(uri, close_src, arena), arena)
+  sys.sleep_ms(500)
+  _closed: = c.notify("textDocument/didClose", one_doc(closed_uri, arena), arena)
+  _crash: = c.notify("$/ksplTestCrash", empty_obj(arena), arena)
+  sys.sleep_ms(300)
+  stays: = probe_hover(c@, open_uri, arena)
+  d4: = lsp_client.why(c@, arena.text().s("'").s(stays).s("'").take(), arena)
+  ok11: = stays.find_str("I64") >= 0
+  verdict.check("a document left open is restored after the worker is remade", ok11, d4)
+  gone: = probe_hover(c@, closed_uri, arena)
+  d5: = lsp_client.why(c@, arena.text().s("'").s(gone).s("'").take(), arena)
+  ok10: = gone.find_str("I64") < 0
+  verdict.check("a document that was didClose is not restored after the worker is remade", ok10, d5)
+
+priv fn empty_obj(arena: Arena$@): json.Val
+  $b: = Json_builder.new(arena)
+  return b.obj().build()
+
+priv fn one_doc(uri: U8[], arena: Arena$@): json.Val
+  $b: = Json_builder.new(arena)
+  return b.obj().set("textDocument", b.obj().set("uri", b.str_val(uri)).build()).build()
+
+priv fn check_cfg(c: jsonrpc.Client$@, exe: U8[], arena: Arena$@)
+  _open: = c.notify("textDocument/didOpen", lsp_client.did_open(cfg_uri, cfg_src, arena), arena)
+  off: =
+    c.request("textDocument/hover", lsp_client.at_pos(cfg_uri, 3, 4, arena), normal_ms, arena) catch
+    fallback json.Val.null_val
+  off_text: = lsp_client.hover_text(off)
+  // Caution: **It must not return null.** A dropped declaration is not in the AST, so without a
+  // reason it looks like "nothing at that position" and the feature seems dead.
+  d13: = lsp_client.why(c, arena.text().s("'").s(off_text).s("'").take(), arena)
+  ok5: =
+    off_text.find_str("#cfg(probe_flag)") >= 0 && off_text.find_str("not analyzed") >= 0
+  verdict.check("what sits under an unraised #cfg answers with a reason", ok5, d13)
+  // The analysis worker is a separate process: only an environment variable reaches it.
+  _set: = sys.set_env("KSPLC_DEFINES", "probe_flag")
+  $c2: =
+    lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, "", arena) catch
+    verdict.check("raised by KSPLC_DEFINES, what is under #cfg can be hovered too", false,
+      "the client cannot be started")
+    return
+  defer c2.free()
+  _init: = c2.request("initialize", empty_obj(arena), normal_ms, arena) catch
+    fallback json.Val.null_val
+  _open2: = c2.notify("textDocument/didOpen", lsp_client.did_open(cfg_uri, cfg_src, arena), arena)
+  on: =
+    c2.request("textDocument/hover", lsp_client.at_pos(cfg_uri, 3, 4, arena), normal_ms, arena)
+    catch
+    fallback json.Val.null_val
+  on_text: = lsp_client.hover_text(on)
+  detail2: = lsp_client.why(c2@, arena.text().s("'").s(on_text).s("'").take(), arena)
+  ok4: = on_text.find_str("cfg_only_fn") >= 0
+  verdict.check("raised by KSPLC_DEFINES, what is under #cfg can be hovered too", ok4, detail2)
+  // Caution: **Delete it; do not set it empty.** `set_env` rejects an empty value, so that leaves
+  // the flag set for every server started after this one.
+  _unset: = sys.unset_env("KSPLC_DEFINES")
+
+// ==========================================
+// The language server walks the workspace itself. **The client passes no list** (the reason is in
+// `ksplc/lsp/workspace.kspls`'s header).
+// So the test makes **its own working directory**, not relying on this repository's `.gitignore`.
+// ==========================================
+
+// Caution: **Write the working directory's files in the default notation.** A file in the other
+// notation takes a path of its own; this checks the default.
+priv const walk_rels: U8[][5] = ::{ ".gitignore", "pkg/lib.kspls", "user.kspls", "built/copy.kspls",
+  "saved.kspls" }
+priv const walk_lib: U8[] = "fn hit(): I32\n  return 0\n" //<
+  //< The library file of the workspace-walk probe
+  //<
+  //< Caution: **Write the imports as paths from the root** (paths holding a `/`). A path without
+  //< one resolves **from that file's folder**, so only the copy in `built/` stops resolving, and
+  //< **skipped cannot be told from unresolved**. `use` and `stray` have different names to show
+  //< the reading order does not change the answer.
+priv const walk_user: U8[] = "import \"pkg/lib\"\n\nfn use(): I32\n  return lib.hit()\n"
+priv const walk_copy: U8[] = "import \"pkg/lib\"\n\nfn stray(): I32\n  return lib.hit()\n"
+// A file as a Windows editor saves it: a BOM first, and every line ending in `\r\n`. **The walk
+// reads it from the disk itself**, so only the walk's own reading can handle it.
+priv const walk_saved: U8[] =
+  "\uFEFFimport \"pkg/lib\"\r\n\r\nfn saved(): I32\r\n  return lib.hit()\r\n"
+priv const walk_bodies: U8[][5] = ::{ "built/\n", walk_lib, walk_user, walk_copy, walk_saved }
+
+priv fn walk_changes(exe: U8[], dir: U8[], arena: Arena$@): json.Val //<
+  //< It starts the language server in that directory and counts `hit`'s rename destinations
+  $c: =
+    lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
+    return json.Val.null_val
+  defer c.free()
+  $b: = Json_builder.new(arena)
+  _ready: = c.request("initialize", b.obj().build(), normal_ms, arena) catch
+    return json.Val.null_val
+  pos: = b.obj().set("line", b.int_val(0I64)).set("character", b.int_val(3I64)).build()
+  doc: = b.obj().set("uri", b.str_val("pkg/lib.kspls")).build()
+  params: = b.obj().set("textDocument", doc).set("position", pos)
+    .set("newName", b.str_val("tap")).build()
+  return c.request("textDocument/rename", params, heavy_ms, arena) catch
+    fallback json.Val.null_val
+
+priv fn check_walk(exe: U8[], arena: Arena$@)
+  dir: = harness.sandbox("lsp_walk") catch
+    verdict.check("it reaches the caller with no file list passed in", false,
+      "cannot make a working directory")
+    return
+  fs.write_tree(dir, U8[][]::walk_rels, U8[][]::walk_bodies, arena) catch
+    verdict.check("it reaches the caller with no file list passed in", false,
+      "it cannot be placed in the working directory")
+    return
+  changes: = walk_changes(exe, dir, arena).get("result").get("changes")
+  d1: = lsp_client.dump(changes, arena)
+  // **Check that it reaches the caller**: `lib.kspls` does not import `user.kspls`, so only the
+  // walk reaches it.
+  verdict.check("it reaches the caller with no file list passed in",
+    changes.has_key("pkg/lib.kspls") && changes.has_key("user.kspls"), d1)
+  // Caution: **It must not enter a folder `.gitignore` named.**
+  verdict.check("a folder `.gitignore` named is not walked",
+    !changes.has_key("built/copy.kspls"), d1)
+  // **The walk reads what a compile reads** (`settle` in `ksplc/parse/source_fix.kspls`). If not
+  // cleaned, the BOM fails the file's first line and the walk drops it; the column is right only
+  // where the BOM is not counted.
+  at: = changes.get("saved.kspls").get_at(0).get("range").get("start")
+  verdict.check("a file saved with a BOM and \\r\\n is walked as a compile reads it",
+    at.get("line").as_int(-1) == 3 && at.get("character").as_int(-1) == 13, d1)
+
+// ==========================================
+// The worker keeps showing it is alive even in the middle of one heavy request. The supervisor
+// detects a hang by "how long it has been silent" (worker_timeout_ms in ksplc/lsp/server.kspls).
+// Here the worker is driven directly, not through the supervisor.
+// ==========================================
+priv fn check_worker_alive(exe: U8[], top: U8[], ch_text: U8[], arena: Arena$@)
+  $w: = subproc.spawn_piped(U8[][]::{ exe, "lsp-worker" }, "") catch
+    verdict.check("it goes on telling it is alive mid-way through a heavy didOpen", false,
+      "the worker cannot be started")
+    return
+  $b: = Json_builder.new(arena)
+  root: = b.obj().set("rootUri", b.str_val(top)).build()
+  $frames: = Str_builder.new()
+  defer frames.free()
+  jsonrpc.frame_into(frames@, jsonrpc.encode("initialize", root, 1, arena))
+  opened: = jsonrpc.encode("textDocument/didOpen",
+    lsp_client.did_open(ch_file, ch_text, arena), -1, arena)
+  jsonrpc.frame_into(frames@, opened)
+  _wrote: = w.write(frames.slice())
+  w.close_stdin() // if not closed, the worker keeps waiting: it answers after reading everything
+  $seen: Sz = 0
+  buf: = U8$[]::{ .ptr = U8$@::arena.alloc(64 * 1024), .len = 64 * 1024 }
+  for _k in Range.asc(4000)
+    got: = w.read(buf, 300000) catch
+      break
+    seen += buf.sub(0, got).count_str("__KSPL_WORKER_ALIVE__")
+  w.kill()
+  d14: = arena.text().s("\{seen\} liveness marks").take()
+  verdict.check("it goes on telling it is alive mid-way through a heavy didOpen", seen > 0, d14)
+
+fn main(): I32
+  arena: = harness.begin(512 * 1024 * 1024)
+  exe: = harness.ksplc_exe()
+  // Caution: Start it with the server left running (the reason is in `lsp_client.kspls`'s header).
+  _std_dir: = sys.set_env("KSPLC_STD_DIR", harness.std_dir())
+  // The workspace is the package's top, where the suite runs (an empty path inherits it).
+  top: = fs.absolute("", arena) catch
+    return harness.fatal("the working directory cannot be read")
+  $c: =
+    lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, "", arena) catch
+    return harness.fatal("the language server cannot be started")
+  defer c.free()
+
+  init: = c.request("initialize", empty_obj(arena), normal_ms, arena) catch e
+    return harness
+      .fatal(arena.text().s("initialize does not return \{end_text(e)\}").take())
+  d15: = lsp_client.dump(init, arena)
+  ok3: = !is_missing(init.get("result").get("capabilities"))
+  verdict.check("initialize returns capabilities", ok3, d15)
+
+  _open: = c.notify("textDocument/didOpen", lsp_client.did_open(probe_uri, src, arena), arena)
+  // A request discards didOpen's publishDiagnostics while waiting for its own id.
+  probe_pos: = lsp_client.at_pos(probe_uri, 1, 8, arena)
+  hover1: = c.request("textDocument/hover", probe_pos, normal_ms, arena) catch
+    fallback json.Val.null_val
+  verdict.check("hover answers (before the injection)", !is_missing(hover1),
+    lsp_client.why(c@, "", arena))
+
+  // The source's colouring.
+  // Caution: **Having announced it, answer**, or the editor waits.
+  caps: = init.get("result").get("capabilities").get("semanticTokensProvider")
+  legend: = caps.get("legend")
+  types_n: = legend.get("tokenTypes").arr_list(arena).len
+  verdict.check("it names semanticTokens and puts the legend out",
+    types_n > 0 && legend.get("tokenModifiers").arr_list(arena).len > 0, d15)
+  // Caution: **Test it on a source that parses.**
+  _sem_open: = c.notify("textDocument/didOpen",
+    lsp_client.did_open(semtok_uri, semtok_src, arena), arena)
+  sem: =
+    c.request("textDocument/semanticTokens/full", lsp_client.at_doc(semtok_uri, arena), normal_ms,
+    arena) catch
+    fallback json.Val.null_val
+  sem_data: = sem.get("result").get("data")
+  toks: = read_tokens(sem_data, types_n, arena)
+  d_sem: = lsp_client.dump(sem, arena)
+  // The tokens are `Pair`, `I32` x5, `add`, `a` and `b`.
+  verdict.check("semanticTokens returns content", toks.count >= 6, d_sem)
+  // Caution: **Keep the five numbers of each token together**, or the colour lands off the text.
+  verdict.check("the kind's number stays inside the legend", !toks.over, d_sem)
+  verdict.check("the positions are ascending", !toks.back, d_sem)
+  verdict.check("it puts out no token of length 0", !toks.empty, d_sem)
+  // **The check is what each one covers**, not only the count: what the compiler made, placed at
+  // its own string's positions, colours `t Pa` and `g` in the file's first lines.
+  verdict.check("every token covers one whole name as written",
+    off_words(sem_data, semtok_src, arena) == 0, d_sem)
+
+  // **A document that fails to parse is coloured as far as it parsed**: the editor reads it a
+  // second time ("Only the editor's parse recovers from a syntax error" in `ksplc/docs/DESIGN.md`),
+  // colouring the valid declarations around it.
+  // Caution: **The skipped text is still not coloured**, and nothing is guessed
+  // (`lsp/semtok.kspls`'s header). The probe's `fn main` is valid and its `var x = 1;` is not, so
+  // the answer is one token.
+  bad: =
+    c.request("textDocument/semanticTokens/full", lsp_client.at_doc(probe_uri, arena), normal_ms,
+    arena) catch
+    fallback json.Val.null_val
+  bad_toks: = read_tokens(bad.get("result").get("data"), types_n, arena)
+  verdict.check("a source that does not pass is coloured as far as it parsed",
+    !is_missing(bad.get("result")) && bad_toks.count == 1 && !bad_toks.over && !bad_toks.back,
+    lsp_client.dump(bad, arena))
+
+  check_wide_range(c@, arena)
+
+  ch_text: = io.read_file(ch_file) catch
+    return harness.fatal("the call hierarchy's starting point cannot be read")
+  prep: = prepare_fn(c@, ch_file, ch_text, ch_decl, arena)
+  d16: = lsp_client.why(c@, prep.raw, arena)
+  verdict.check("prepareCallHierarchy returns one function", prep.found, d16)
+  if prep.found
+    calls: = incoming(c@, prep.item, arena).calls
+    // An array rather than null is the point: a crashed worker makes the supervisor return null.
+    d17: = lsp_client.why(c@, "", arena)
+    verdict.check("incomingCalls returns the callers (the whole workspace)", calls.len > 0, d17)
+  lsp_bound.check_template_bound(c@, arena)
+  check_shebang(c@, top, arena)
+  check_ragged_reaches(c@, arena)
+  lsp_spell.check_hover_types(c@, arena)
+  lsp_spell.check_hover_away(c@, arena)
+  lsp_spell.check_hover_prelude(c@, arena)
+  lsp_spell.check_hover_self_param(c@, arena)
+  lsp_spell.check_hover_receiver(c@, arena)
+  lsp_spell.check_hover_label(c@, arena)
+  lsp_spell.check_hover_generic_body(c@, arena)
+  lsp_spell.check_hover_default_arg(c@, arena)
+  lsp_spell.check_hover_owner(c@, arena)
+  lsp_spell.check_uri_spelling(c@, top, arena)
+  check_hover_builtin_member(c@, arena)
+  check_variant_through_alias(c@, arena)
+  lsp_docs.run(c@, arena)
+  lsp_recover.run(c@, arena)
+
+  _crash: = c.notify("$/ksplTestCrash", empty_obj(arena), arena)
+  sys.sleep_ms(300)
+  after_crash: = c.request("textDocument/hover", probe_pos, normal_ms, arena) catch
+    fallback json.Val.null_val
+  d19: = lsp_client.why(c@, "", arena)
+  ok2: = !is_missing(after_crash)
+  verdict.check("hover answers after a crash too (the supervisor remakes the worker)", ok2, d19)
+
+  _hang: = c.notify("$/ksplTestHang", empty_obj(arena), arena)
+  after_hang: = c.request("textDocument/hover", probe_pos, 20000, arena) catch
+    fallback json.Val.null_val
+  d20: = lsp_client.why(c@, "", arena)
+  ok1: = !is_missing(after_hang)
+  verdict.check("hover answers after a hang too (the watchdog brings it back)", ok1, d20)
+
+  check_cfg(c@, exe, arena)
+  check_didclose(exe, arena)
+  check_worker_alive(exe, top, ch_text, arena)
+  check_walk(exe, arena)
+  lsp_package.run(exe, arena)
+  lsp_pick.check_completion(c@, arena)
+  lsp_pick.check_completion_generic(c@, arena)
+  return harness.finish()

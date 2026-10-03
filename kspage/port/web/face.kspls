@@ -1,0 +1,374 @@
+//< The entry points that touch a style
+//<
+//< Note: **In kspage, `face` means a style** (as in `Block_face_op` in `write/record.kspls`).
+//< It is not a typeface — a typeface is `Font` and `Style.family`, and the screen's CSS calls it
+//< `--font`.
+//< Applying a style, changing its contents, number formats, a paragraph's alignment. Split from
+//< [`bridge.kspls`](bridge.kspls) for the 1000-line-per-file cap, and follows its boundary rules.
+import "kspage/lay/caret"
+import "kspage/model/collect" { Collect }
+import "kspage/model/doc" { Rect }
+import "kspage/model/paint"
+import "kspage/model/source"
+import "kspage/model/style"
+import "kspage/port/web/state" + { ed, ensure, in_ptr, input, input_cap, page, sheet }
+import "kspage/write/block"
+import "kspage/write/insert"
+import "kspage/write/shape"
+import "std/chars" as _chars // tests and cuts single characters
+
+// ---- Applying a style ----
+
+// Writes the style name of the cursor's inline and returns the length. Empty means the parent's.
+#export
+fn kspage_web_style(): Sz
+  ensure()
+  state.out.clear()
+  if ed.caret.inline != null
+    state.out.s(ed.caret.inline.style)
+  return state.out.len
+
+// Applies the `len` bytes in the typing arena to the selection as a style name; 1 if applied. An
+// empty name reverts to the parent's; **with nothing selected it applies to the whole inline.**
+#export
+fn kspage_web_set_style(len: Sz): I32
+  if len < 0 || len > input_cap
+    return 0
+  return 1 if ed.set_style(U8[]::{ .ptr = input@, .len = len }) else 0
+
+// The number of names in the style table (for the screen's "Style" list).
+#export
+fn kspage_web_style_count(): Sz
+  ensure()
+  return sheet.styles.len
+
+// Writes style `i`'s name and returns the length.
+#export
+fn kspage_web_style_name(i: Sz): Sz
+  ensure()
+  state.out.clear()
+  if state.has_style(i)
+    state.out.s(sheet.styles.get(i).name)
+  return state.out.len
+
+// Applies a color style to the selection; 1 if applied. **It replaces everything** — fields not
+// passed are dropped, and with none set it reverts to the parent's. The style name is built from
+// the settings, so the same settings again add no style.
+#export
+fn kspage_web_paint_span(has_color: I32, color: F32, has_back: I32, back: F32, has_under: I32,
+  under: I32, has_strike: I32, strike: I32, has_bold: I32, bold: I32, has_italic: I32, italic: I32):
+  I32
+  ensure()
+  $ink: paint.Ink = paint.inherit_ink()
+  if has_color != 0
+    ink.color = Option<|U32|>.some(U32::color)
+  if has_back != 0
+    ink.background = Option<|U32|>.some(U32::back)
+  if has_under != 0
+    ink.underline = Option<|Bool|>.some(under != 0)
+  if has_strike != 0
+    ink.strike = Option<|Bool|>.some(strike != 0)
+  $accent: paint.Accent = paint.inherit_accent()
+  if has_bold != 0
+    accent.bold = Option<|Bool|>.some(bold != 0)
+  if has_italic != 0
+    accent.italic = Option<|Bool|>.some(italic != 0)
+  return 1 if ed.paint_span(sheet, ink, accent) else 0
+
+// Writes 12 values into out for the color and emphasis of the cursor's inline (text color,
+// background, underline, strikethrough, bold, italic, each as "whether set" and the value). **Both
+// are replaced whole**, so to change one field read here first (unread, the other fields are
+// dropped). It returns the inline's own settings (not what it inherits from the parent).
+#export
+fn kspage_web_span_ink(out: F32$@)
+  state.clear_out(out, 12)
+  ensure()
+  if ed.caret.inline == null
+    return
+  if s: = sheet.find(ed.caret.inline.style)
+    state.color_into(out, s.ink.color)
+    state.color_into(out + 2, s.ink.background)
+    switch s.ink.underline case .some(v)
+      (out + 4)$ = 1.0
+      (out + 5)$ = 1.0 if v else 0.0
+    case .none {}
+    switch s.ink.strike case .some(v)
+      (out + 6)$ = 1.0
+      (out + 7)$ = 1.0 if v else 0.0
+    case .none {}
+    // Bold is derived from the weight (a style holds the weight; emphasis says whether it is bold).
+    switch s.font.weight case .some(v)
+      (out + 8)$ = 1.0
+      (out + 9)$ = 1.0 if v >= paint.bold_weight else 0.0
+    case .none {}
+    switch s.font.italic case .some(v)
+      (out + 10)$ = 1.0
+      (out + 11)$ = 1.0 if v else 0.0
+    case .none {}
+
+// ---- Shapes ----
+
+// Adds one shape to the cursor's container, in the style named in the typing arena; 1 if added.
+// **Inside a slide it goes to the slide itself** (even when clicked on a frame's text, a shape is
+// the frame's sibling), otherwise to the paragraph or cell. Not to a grid or a collecting block. A
+// missing style is made; for an existing one only the shape is changed.
+#export
+fn kspage_web_insert_shape(len: Sz, kind: I32): I32
+  ensure()
+  if len <= 0 || len > input_cap
+    return 0
+  // Caution: **Take the name from the typing arena** (the loading arena is for an image's source).
+  name: = U8[]::{ .ptr = input@, .len = len }
+  return 1 if ed.insert_shape(page, sheet, name, state.shape_at(kind)) else 0
+
+// Draws one shape of w × h from screen position (x, y) onto the clicked slide; 1 if drawn. **The
+// cursor is ignored** (this is picking a tool and dragging). **0 where the press was not on a
+// slide** (flow and grid layouts read no position). The core turns screen coordinates into the
+// frame's position.
+#export
+fn kspage_web_draw_shape(len: Sz, kind: I32, x: F32, y: F32, w: F32, h: F32): I32
+  ensure()
+  if len <= 0 || len > input_cap
+    return 0
+  name: = U8[]::{ .ptr = input@, .len = len }
+  return 1 if ed.draw_shape(page, sheet, name, state.shape_at(kind), x, y, w, h) else 0
+
+// Removes the selected frame if it holds no text; 1 if removed. **On a frame with text it is 0**,
+// and the key handler then deletes one character (otherwise Delete would stop working mid-typing).
+#export
+fn kspage_web_drop_picked(): I32
+  ensure()
+  return 1 if ed.drop_picked(sheet) else 0
+
+// ---- A paragraph's style ----
+
+// Writes the style name of the cursor's paragraph and returns the length. Empty means the parent's.
+// **It is separate from the inline's style** (`kspage_web_style`); the marker and the arrangement
+// belong here.
+#export
+fn kspage_web_block_style(): Sz
+  ensure()
+  state.out.clear()
+  state.out.s(ed.block_style_at())
+  return state.out.len
+
+// Makes the `len` bytes in the typing arena the style of the selected paragraphs; 1 if applied.
+// **Only paragraphs** (cells and containers in the range are untouched). **A style with a
+// different arrangement is not applied** (a table's style on a paragraph leaves the text nowhere
+// to go). Empty removes it, a list's marker included.
+#export
+fn kspage_web_set_block_style(len: Sz): I32
+  ensure()
+  if page == null || len < 0 || len > input_cap
+    return 0
+  name: = U8[]::{ .ptr = input@, .len = len }
+  // Caution: **Return the reason as a number** — a single false leaves the page no fitting message.
+  switch ed.set_block_style(page, sheet, name) case .done
+    return 1
+  case .no_paragraph
+    return 0
+  case .no_such_style
+    return -1
+  case .wrong_kind
+    return -2
+
+// Whether style `i` can be applied to a paragraph. **Only the core's `style.fits_block` decides**
+// (a separate check in the page could refuse a listed style).
+#export
+fn kspage_web_style_fits_block(i: Sz): I32
+  ensure()
+  if !state.has_style(i)
+    return 0
+  return 1 if style.fits_block(sheet.styles.get(i)) else 0
+
+// ---- Names, and the connector between boxes ----
+
+// Writes the name of the cursor's place and returns the length. **Empty means none** (it cannot
+// be pointed at). What it attaches to follows the table of `named_at` in `../../write/block.kspls`.
+#export
+fn kspage_web_name(): Sz
+  ensure()
+  state.out.clear()
+  state.out.s(ed.name_at(page))
+  return state.out.len
+
+// Makes the `len` bytes in the typing arena the name of the current place; 1 if set, empty removes
+// it. It is separate from a style's name.
+// Caution: **Refuse before layout** — layout decides whether it is a cell, so before it **a name
+// meant for the table attaches to the cell** while the screen says "set".
+#export
+fn kspage_web_set_name(len: Sz): I32
+  ensure()
+  if page == null || len < 0 || len > input_cap
+    return 0
+  return 1 if ed.set_name(page, U8[]::{ .ptr = input@, .len = len }) else 0
+
+// Inserts the `len`-byte name in the typing arena as an inline that refers from the body; 1 if
+// inserted. Only a block with a running number can be referred to. The number is recounted at
+// every layout; the document stores only the name.
+#export
+fn kspage_web_insert_refer(len: Sz): I32
+  ensure()
+  if page == null || len < 0 || len > input_cap
+    return 0
+  name: = U8[]::{ .ptr = input@, .len = len }
+  return 1 if ed.insert_refer(page, sheet, name) else 0
+
+// ---- Links ----
+
+// Writes the link target of the cursor's inline and returns the length. Empty means none.
+#export
+fn kspage_web_href(): Sz
+  ensure()
+  state.out.clear()
+  if ed.caret.inline != null
+    state.out.s(ed.caret.inline.href)
+  return state.out.len
+
+// Makes the selection (with nothing selected, the whole inline) a link; 1 if applied. **Empty text
+// removes it**, and the link's look reverts to the parent's too.
+#export
+fn kspage_web_set_href(len: Sz): I32
+  ensure()
+  if len < 0 || len > input_cap
+    return 0
+  // Caution: **Do not accept a scheme that cannot be opened** (`safe_href` in `model/source.kspls`)
+  // — accepted but never opened, it is a field that does nothing (Principle 5). Empty means "remove
+  // the link".
+  if len > 0 && !source.safe_href(U8[]::{ .ptr = input@, .len = len })
+    return 0
+  return 1 if ed.link_span(sheet, U8[]::{ .ptr = input@, .len = len }) else 0
+
+// Writes the link target of the text exactly at (x, y) and returns the length; **not moved to what
+// is nearby** (otherwise a click in the margin would follow the link), empty outside.
+// Caution: **Call it after layout** (with no boxes nothing is at any point).
+#export
+fn kspage_web_href_at(x: F32, y: F32): Sz
+  ensure()
+  state.out.clear()
+  if page != null
+    if n: = caret.inline_under(page, x, y)
+      // Caution: **Do not pass a scheme that cannot be opened** (`safe_href` in
+      // `model/source.kspls`) — the page opens it on a click.
+      if source.safe_href(n.href)
+        state.out.s(n.href)
+  return state.out.len
+// ---- Images ----
+
+// The number of laid-out images, **after layout.**
+#export
+fn kspage_web_picture_count(): Sz
+  if page == null
+    return 0
+  return page.pictures.len
+
+// Writes four values for image `i` into out (x / y / w / h); four 0s when absent.
+#export
+fn kspage_web_picture(i: Sz, out: F32$@)
+  $spot: = Rect::{ .x = 0.0, .y = 0.0, .w = 0.0, .h = 0.0 }
+  if page != null && i >= 0 && i < page.pictures.len
+    spot = page.pictures.get(i).rect
+  out$ = spot.x
+  (out + 1)$ = spot.y
+  (out + 2)$ = spot.w
+  (out + 3)$ = spot.h
+
+// Writes image `i`'s source and returns the length. The image itself is not held (loading and
+// drawing happen outside).
+#export
+fn kspage_web_picture_src(i: Sz): Sz
+  state.out.clear()
+  if page != null && i >= 0 && i < page.pictures.len
+    state.out.s(page.pictures.get(i).block.image)
+  return state.out.len
+
+// Inserts one image after the cursor's paragraph, with the `len` bytes in the loading arena as its
+// source; 1 if inserted.
+// Caution: **Use the loading arena, not the typing arena** (`kspage_web_load_buffer`) — the typing
+// arena has a fixed size, so a long source is silently cut. The caller passes the size (the core
+// cannot read an image).
+#export
+fn kspage_web_insert_image(len: Sz, w: F32, h: F32): I32
+  ensure()
+  if page == null || in_ptr == null || len <= 0
+    return 0
+  return 1 if ed.insert_image(page, U8[]::{ .ptr = in_ptr, .len = len }, w, h) else 0
+// Inserts a collecting block after the cursor's paragraph, named by the `len` bytes in the typing
+// arena: `kind` 1 a table of contents, 2 a list of notes. **The contents are not inserted** (they
+// are built at every layout); a missing style is made.
+#export
+fn kspage_web_insert_gathered(len: Sz, kind: I32): I32
+  ensure()
+  if page == null || len <= 0 || len > input_cap
+    return 0
+  what: = Collect.notes if kind == 2 else Collect.contents
+  name: = U8[]::{ .ptr = input@, .len = len }
+  return 1 if ed.insert_gathered(page, sheet, name, what) else 0
+
+// ---- Charts ----
+
+// Inserts a chart after the cursor's paragraph from `name\trange` in the typing arena; 1 if
+// inserted. `kind` 3 is bars, 4 lines (`Collect`'s list). **The range needs the table's name**
+// (`Details!C2:C4`), as a chart in the flow has none of its own. The contents are not inserted
+// (they are built from the range at layout time).
+#export
+fn kspage_web_insert_chart(len: Sz, kind: I32): I32
+  ensure()
+  two: = state.split_input(len)
+  if page == null || !two.found
+    return 0
+  return (1
+    if ed.insert_chart(page, sheet, two.head, two.tail, state.collect_at(kind)) else 0)
+
+// ---- Notes ----
+
+// Writes the note on the cursor's inline and returns the length. Empty means none.
+#export
+fn kspage_web_note(): Sz
+  ensure()
+  state.out.clear()
+  if ed.caret.inline != null
+    state.out.s(ed.caret.inline.note)
+  return state.out.len
+
+// Makes the `len` bytes in the typing arena the note at the cursor; 1 if set. Empty removes it.
+// It stores no number (numbers are counted where notes are listed).
+#export
+fn kspage_web_set_note(len: Sz): I32
+  ensure()
+  if len < 0 || len > input_cap
+    return 0
+  return 1 if ed.set_note(U8[]::{ .ptr = input@, .len = len }) else 0
+
+// ---- Comments ----
+
+// Writes the comment on the cursor's inline and returns the length. Empty means none.
+#export
+fn kspage_web_remark(): Sz
+  ensure()
+  state.out.clear()
+  if ed.caret.inline != null
+    state.out.s(ed.caret.inline.remark)
+  return state.out.len
+
+// Writes who wrote the comment on the cursor's inline and returns the length, **separately from
+// the words** (the words can hold any separator).
+#export
+fn kspage_web_remark_by(): Sz
+  ensure()
+  state.out.clear()
+  if ed.caret.inline != null
+    state.out.s(ed.caret.inline.remark_by)
+  return state.out.len
+
+// Makes the `len` bytes (`who\tthe words`) in the typing arena the comment on the selection; 1 if
+// set. **Without a tab it does nothing** (an empty who and a forgotten tab look alike).
+// Caution: **Put the who first** — the first tab separates them, so the words may hold tabs. Empty
+// words remove the comment, and the who with it.
+#export
+fn kspage_web_set_remark(len: Sz): I32
+  ensure()
+  two: = state.split_input(len)
+  if !two.found
+    return 0
+  return 1 if ed.set_remark(two.tail, two.head) else 0

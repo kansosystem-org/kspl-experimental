@@ -1,0 +1,103 @@
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+import "tools/repo_stat_path" as path_kind + { Opening }
+
+// ==========================================
+// Tests the functions that classify files by their path alone (`tools/repo_stat_path.kspls`).
+//
+// It is tested because **a mistake here breaks nothing visible**: a wrong skip, generated-file
+// test or comment mark each gives a plausible number, and nothing shows the misreading.
+// Caution: Test each case that matches together with one that does not. With only one side,
+// "always true" and "always false" both pass.
+// ==========================================
+
+fn test_the_files_listed(arena: Arena$@) //< git's two lists become one sorted list
+  verdict.start("[tools/repo_stat] the files to count test...")
+  got: = path_kind.listed("README.md\nksplc/main.kspls\nstd/io.kspls\n", "ksplc/usage.kspls\n\n",
+    arena)
+  assert(got.len == 4, "every listed path, and no empty line")
+  // Caution: **An untracked file falls among its folder's files**, or its folder's subtotal is
+  // written twice.
+  assert(got.get(0).equals("README.md") && got.get(1).equals("ksplc/main.kspls") &&
+    got.get(2).equals("ksplc/usage.kspls") && got.get(3).equals("std/io.kspls"), "sorted as one")
+  assert(path_kind.listed("", "", arena).len == 0, "nothing listed counts nothing")
+  verdict.pass("the tracked and the untracked are counted, sorted together.")
+
+fn test_which_file_is_generated() //< the seed is the generated one
+  verdict.start("[tools/repo_stat] telling a generated file apart test...")
+  assert(path_kind.is_generated("ksplc/seed.c"), "the seed is generated")
+  // Caution: **Do not catch hand-written C.** Judged by the extension or a partial match, the
+  // hand-written `.c` files drop out of the count.
+  assert(!path_kind.is_generated("ksplc/gen/c/root.kspls"),
+    "hand-written code inside ksplc is not generated")
+  assert(!path_kind.is_generated("ksplc/gen/runtime/core.c"), "another .c is not generated")
+  assert(!path_kind.is_generated("seed.c"), "the same name in a different place is not generated")
+  verdict.pass("the one thing taken for generated is `ksplc/seed.c`.")
+
+fn test_the_comment_marker() //< the mark is per extension, empty where that one has none
+  verdict.start("[tools/repo_stat] the line-comment mark test...")
+  assert(path_kind.comment_marker("a/b.kspl").equals("//"), ".kspl is //")
+  assert(path_kind.comment_marker("a/b.kspls").equals("//"), ".kspls is //")
+  assert(path_kind.comment_marker("a/b.c").equals("//"), ".c is //")
+  assert(path_kind.comment_marker("a/b.mjs").equals("//"), ".mjs is //")
+  assert(path_kind.comment_marker("a/b.py").equals("#"), ".py is #")
+  assert(path_kind.comment_marker("mk/test.mk").equals("#"), ".mk is #")
+  assert(path_kind.comment_marker("Makefile").equals("#"), "Makefile is #")
+  // Caution: **`.kspl` is not on the `#` side** (the reason is at `path_kind.comment_marker`).
+  assert(!path_kind.comment_marker("a/b.kspl").equals("#"), ".kspl is not #")
+  // An extension without a line mark gets an empty one (`.md` has no comments, `.ld` only `/* */`).
+  assert(path_kind.comment_marker("README.md").len == 0, ".md holds no mark")
+  assert(path_kind.comment_marker("ksos/port/cortex_m/link.ld").len == 0, ".ld holds no mark")
+  verdict.pass("the mark is chosen per extension, and one with none returns empty.")
+
+fn test_the_block_marks() //< a block comment's ends are per extension, empty where it has none
+  verdict.start("[tools/repo_stat] the block-comment ends test...")
+  c: = path_kind.block_marks("a/b.c")
+  assert(c.open.equals("/*") && c.close.equals("*/"), ".c's block is /* */")
+  css: = path_kind.block_marks("kspage/port/web/page.css")
+  assert(css.open.equals("/*") && css.close.equals("*/"), ".css's block is /* */")
+  html: = path_kind.block_marks("kspage/port/web/page.html")
+  assert(html.open.equals("<!--") && html.close.equals("-->"), ".html's block is <!-- -->")
+  // **KSPL has no block comment** ("Comments" in `../../docs/SPEC-language.md`).
+  assert(path_kind.block_marks("a/b.kspls").open.len == 0, ".kspls holds no block")
+  assert(path_kind.block_marks("Makefile").open.len == 0, "Makefile holds no block")
+  verdict.pass("the block's ends are chosen per extension, and one with none returns empty.")
+
+priv fn opened(path: U8[], line: U8[], open: Bool): Opening //< one line read by path's marks
+  return path_kind.opening(line, path_kind.comment_marker(path), path_kind.block_marks(path), open)
+
+fn test_where_a_comment_opens() //< where a line's comment text starts, per kind of file
+  verdict.start("[tools/repo_stat] where a comment opens test...")
+  // **A mark inside a string and a language's own use of the sign (`#cfg`) are the cases that slip
+  // through**, so each is tested both ways.
+  assert(opened("a.kspls", "  x = 1 // y", false).at == 10, "a comment's text follows its mark")
+  assert(opened("a.kspls", ".s(\"// heading\")", false).at == -1, "a mark in a string is no comment")
+  assert(opened("a.kspls", "#cfg(llvm)", false).at == -1, "KSPL's # is an attribute's sign")
+  assert(opened("Makefile", "\t@# y", false).at == 3, "a recipe's shell comment opens at its #")
+  assert(opened("a.mk", "X := 1 ## y", false).at == 9, "a doubled mark is passed whole")
+  assert(opened("a.yml", "  run: echo '#' # y", false).at == 17, "a quoted # opens nothing")
+  css: = opened("a.css", "/* y", false)
+  assert(css.at == 2 && css.block && css.open, "a block left open runs on")
+  shut: = opened("a.css", "   y */", true)
+  assert(shut.at == 0 && !shut.open, "a block carried on from above shuts at its close")
+  assert(opened("a.html", "<!-- y -->", false).at == 4, "an HTML comment's text follows <!--")
+  c: = opened("a.c", "f(); /* y", false)
+  assert(c.at == 7 && c.open, "a block opened after code runs on too")
+  assert(opened("a.js", "g('**/out/**')", false).at == -1, "a glob in a string opens no block")
+  verdict.pass("each kind's comment is read by its own marks, past what a string holds.")
+
+fn test_the_extension_and_the_top_folder() //< the extension, and the top tier's folder name
+  verdict.start("[tools/repo_stat] the extension and the top tier test...")
+  assert(path_kind.ext_of("ksplc/base/core.kspls").equals(".kspls"),
+    "the extension is from the dot on")
+  assert(path_kind.ext_of("Makefile").equals("Makefile"), "with no dot it is the name itself")
+  assert(path_kind.ext_of("a/b/Makefile").equals("Makefile"), "the same under a folder")
+  // **Do not pick up a dot in a folder's name** (only after the last separator).
+  assert(path_kind.ext_of("a.b/c").equals("c"), "a dot on the folder's side is not picked up")
+  assert(path_kind.ext_of(".gitignore").equals(".gitignore"),
+    "a leading dot is not made an extension")
+  assert(path_kind.top_of("ksplc/base/core.kspls").equals("ksplc"),
+    "the top tier is up to the first separator")
+  assert(path_kind.top_of("Makefile").len == 0, "a file directly under the root is empty")
+  verdict.pass("the extension is the dot after the last separator; the top tier runs to the first.")

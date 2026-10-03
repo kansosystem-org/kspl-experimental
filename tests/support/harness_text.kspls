@@ -1,0 +1,77 @@
+//< Helpers that read a string one character at a time
+//<
+//< Not a suite; part of tests/support/harness.kspls.
+//< Caution: **Do not put a decision here.** Only text helpers that mean the same to every check
+//< belong here ("is that position a word character", "how many bytes make one character");
+//< starting processes, the verdict and the workspace belong to the harness.
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str"
+
+// ==========================================
+// A word character (Python's `\w`). **A multi-byte character is a word character too**, so where
+// Japanese text follows `foo.kspl` directly there is no `\b` and **the path is not picked up**.
+// ==========================================
+const nonword_lo: Sz[13] = ::{ 0x00D7, 0x00F7, 0x2000, 0x2E00, 0x30FB, 0xFE00, 0xFE30, 0xFF01,
+  0xFF1A, 0xFF3B, 0xFF5B, 0x10000, 0x110000 }
+const nonword_hi: Sz[13] = ::{ 0x00D7, 0x00F7, 0x2BFF, 0x303F, 0x30FB, 0xFE0F, 0xFE4F, 0xFF0F,
+  0xFF20, 0xFF40, 0xFF65, 0x10FFFF, 0x110000 }
+
+fn cp_len(c: U8): Sz //< the character's byte count, from UTF-8's leading byte
+  if c < 0x80U8
+    return 1
+  if c >= 0xF0U8
+    return 4
+  return 3 if c >= 0xE0U8 else 2
+
+fn cp_at(text: U8[], i: Sz): Sz //< the code point of the character at text's i
+  c: = text[i]
+  n: = cp_len(c)
+  if n == 1
+    return c
+  first: = 0x1FU8 if n == 2 else (0x0FU8 if n == 3 else 0x07U8)
+  $v: Sz = c & first
+  for k in Range.new(1, n, 1)
+    if i + k >= text.len
+      return 0xFFFD
+    v = v * 64 + Sz::(text[i + k] & 0x3FU8)
+  return v
+
+fn is_word_cp(cp: Sz): Bool
+  if cp < 0x80
+    c: = U8::cp
+    return c.is_alnum() || c == '_'
+  for k in Range.asc(13)
+    if cp >= nonword_lo[k] && cp <= nonword_hi[k]
+      return false
+  return true
+
+fn is_word_at(text: U8[], i: Sz): Bool //< whether the character at text's i is a word character
+  return i < text.len && is_word_cp(cp_at(text, i))
+
+fn is_word_before(text: U8[], i: Sz): Bool //<
+  //< Whether the character **right before** i is a word character
+  //<
+  //< For a multi-byte character, it steps back to the leading byte.
+  if i == 0
+    return false
+  $j: = i - 1
+  for j > 0 && text[j] >= 0x80U8 && text[j] < 0xC0U8
+    j -= 1
+  return is_word_cp(cp_at(text, j))
+
+// ==========================================
+// Searching for and cutting out a string
+// ==========================================
+
+fn line_after(text: U8[], mark: U8[], arena: Arena$@): U8[] //<
+  //< Returns the string following a mark, to the end of the line that mark appeared on
+  //<
+  //< Caution: **Always use this to take a string out of a child's output.** A cut with
+  //< `find_char('\n')` keeps the `\r` that a text-mode stdout writes on Windows. Lines are split
+  //< only by `std/str`'s `lines` (which drops that `\r`).
+  for line in text.lines(arena)
+    at: = line.find_str(mark)
+    if at >= 0
+      return line.sub_from(at + mark.len)
+  return ""

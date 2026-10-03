@@ -1,0 +1,34 @@
+//< The Cortex-M core's own registers, in the System Control Space (shared by Armv7-M/Armv8-M)
+//<
+//< The SCS (0xE000E000-0xE000EFFF) sits in every Cortex-M whatever the chip: here the NVIC's
+//< interrupt enable and SCB->AIRCR's system reset. Only what this project uses is written.
+import "ksos/drivers/mmio"
+
+// ==========================================
+// The NVIC. This project only enables external interrupts 0 to 31, so it writes ISER0 alone
+// (Interrupt Set-Enable Register 0); priorities, IRQs 32 and above, and disabling (ICER) are not
+// implemented.
+// ==========================================
+const iser0: U32 = 0xE000E100
+
+fn enable_irq(irq: U32) //< enables external interrupt number irq (0 to 31, the NVIC IRQn)
+  //<
+  //< The vector table's exception number is irq+16.
+  mmio.write32(iser0, 1U32 << irq)
+
+// ==========================================
+// The system reset: SYSRESETREQ (bit2) of SCB->AIRCR, written with the key VECTKEY
+// (bit[31:16]=0x05FA, which the architecture requires; a write without it is ignored), restarts
+// from Reset_Handler at once, with no power loss. RAM keeps its content, so the next start-up can
+// read a panic's crash record (`take_panic_record` in std/lang.kspls).
+// ==========================================
+const aircr: U32 = 0xE000ED0C
+const aircr_vectkey: U32 = 0x05FAU32 << 16
+const aircr_sysresetreq: U32 = 1U32 << 2
+
+fn system_reset() //<
+  //< Requests a system reset; it does not return to the caller
+  //<
+  //< The CPU is reset right after the write.
+  mmio.write32(aircr, aircr_vectkey | aircr_sysresetreq)
+  for {} // spin for the few instructions until the reset takes effect (should not be reached)

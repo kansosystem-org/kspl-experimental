@@ -1,0 +1,293 @@
+//< The small model kssrv keeps resident inside the server
+//<
+//< It trains at startup, then **quantizes to int8 and drops the F32 weights**; the int8 weights are
+//< expanded into the computing arena just before a matrix product (as `ksai/quant.kspls` does).
+//< **After `build()` the model is read-only**, so the worker thread reads it without a lock. Any
+//< path that writes to it needs a lock designed for it.
+
+// ==========================================
+// The shape:
+//   the preceding ctx_len bytes -> the embeddings joined -> fc1 -> SiLU -> fc2 -> 256 logits
+// ==========================================
+import "ksai/grad"
+import "ksai/lora"
+import "ksai/nn"
+import "ksai/nn_grad"
+import "ksai/optim"
+import "ksai/quant"
+import "ksai/sampler"
+import "ksai/tensor" { Tensor }
+import "std/log" { Level, Log }
+import "std/mem" + { Arena, dealloc }
+import "std/prng"
+import "std/str" { Str_builder }
+import "std/strfmt"
+import "std/sys"
+
+const ctx_len: Sz = 8 //< how many preceding bytes are looked at as the context
+priv const emb_dim: Sz = 32 //< the embedding's dimension per byte
+priv const hidden: Sz = 128 //< the hidden layer's width
+priv const vocab: Sz = 256 //< the vocabulary is the bytes themselves (it holds no tokenizer)
+
+priv const train_epochs: Sz = 24 //< the start-up training's epoch count
+  //<
+  //< It runs at every startup; keep it within what the startup time allows.
+priv const learning_rate: F64 = 0.05
+priv const weight_seed: U64 = 12345U64 //< the random seed
+  //<
+  //< **It is fixed**, or the same request gets different answers and no regression test can be
+  //< written.
+
+// The training text. **The model can talk only about what this text talks about**; repeating its
+// phrases reflects the model's size, not a defect.
+priv const corpus: U8[] =
+  "kssrv is a server written in kspl. kspl is a systems language. the server serves files and json. \
+    kanso is the project. kssrv serves files. kspl compiles to c. the server is small and fast. "
+
+const max_steps: Sz = 256 //< the cap on the bytes one generation can make
+
+priv const lora_rank: Sz = 8 //<
+  //< The rank and scale of the LoRA used for continued training
+  //<
+  //< Caution: Keep them small: it is resident, and shipped to a small target such as a car.
+priv const lora_alpha: F64 = 16.0
+priv const adam_lr: F64 = 0.003 //< adam's step, and the cap on the epochs one request can run
+const max_train_epochs: Sz = 32
+const max_train_bytes: Sz = 8 * 1024 //< the cap on the length of text one request may send
+  //<
+  //< Without it, one request occupies the worker as long as it likes.
+
+struct Model //< the model quantized and kept resident
+  priv arena: Arena$@ //< where the quantized weights and the biases live
+  priv qemb: quant.Quantized_tensor //< [vocab, emb_dim]
+  priv qfc1: quant.Quantized_tensor //< [ctx_len*emb_dim, hidden]
+  priv qfc2: quant.Quantized_tensor //< [hidden, vocab]
+  priv b1: Tensor<|F32|>
+  priv b2: Tensor<|F32|>
+  params: Sz //< the weights' element count
+  f32_bytes: Sz //< the resident byte count before quantizing
+  int8_bytes: Sz //< the resident byte count after quantizing
+  train_ms: I64
+  final_loss: F64
+  // The LoRA adapters that continued training updates. **The base (the three quantized tensors) is
+  // frozen**, so the resident size barely grows and shipping needs only these.
+  priv l1: lora.Lora<|F32|> //< for fc1 [ctx_len*emb_dim, hidden]
+  priv l2: lora.Lora<|F32|> //< for fc2 [hidden, vocab]
+  priv opt_l1a: optim.Adam<|F32|>
+  priv opt_l1b: optim.Adam<|F32|>
+  priv opt_l2a: optim.Adam<|F32|>
+  priv opt_l2b: optim.Adam<|F32|>
+  adapter_params: Sz
+  trainings: I64 //< how many continued trainings have run so far
+  last_train_loss: F64
+
+struct Stats //< the statistics reported by `/api/status`
+  //<
+  //< Caution: **Do not read the model itself from the accepting thread**, which continued training
+  //< changes; read these, copied under the lock.
+  params: Sz
+  f32_bytes: Sz
+  int8_bytes: Sz
+  train_ms: I64
+  final_loss: F64
+  adapter_params: Sz
+  trainings: I64
+  last_train_loss: F64
+
+fn stats_of(m: Model$@): Stats
+  return Stats::{ .params = m.params, .f32_bytes = m.f32_bytes, .int8_bytes = m.int8_bytes,
+    .train_ms = m.train_ms, .final_loss = m.final_loss, .adapter_params = m.adapter_params,
+    .trainings = m.trainings, .last_train_loss = m.last_train_loss }
+
+priv struct Trainable //< the F32 form used only during training
+  emb: nn.Embedding<|F32|>
+  mlp: nn.Mlp<|F32|>
+
+priv fn embed_context(w: Tensor<|F32|>, toks: I32$[], arena: Arena$@): Tensor<|F32|> //<
+  //< Joins the embeddings of the preceding ctx_len bytes into one vector [1, ctx_len*emb_dim]
+  //<
+  //< The layout is the `[ctx_len, emb_dim]` `nn.Embedding.backward_seq` expects, so the backward
+  //< pass uses it unchanged.
+  shape: Sz[2] = ::{ 1, ctx_len * emb_dim }
+  x: = Tensor<|F32|>.new(Sz[]::shape, arena)
+  for i in Range.asc(ctx_len)
+    woff: = Sz::(toks.ptr + i)$ * emb_dim
+    doff: = i * emb_dim
+    for j in Range.asc(emb_dim)
+      (x.data + doff + j)$ = (w.data + woff + j)$
+  return x
+
+priv fn train(t: Trainable$@, compute: Arena$@): F64 //< the start-up training
+  //<
+  //< Returns the last epoch's mean loss.
+  base: = compute.save()
+  $toks: I32[ctx_len] = ::{}
+  $last_loss: F64 = 0.0
+  for _epoch in Range.asc(train_epochs)
+    $loss_sum: F64 = 0.0
+    $seen: Sz = 0
+    for $p: Sz = ctx_len; p < corpus.len; p += 1
+      for i in Range.asc(ctx_len)
+        toks[i] = corpus[p - ctx_len + i]
+      target: = I32::corpus[p]
+      x: = embed_context(t.emb.weight, I32$[]::toks, compute)
+      $logits: = t.mlp.forward(x)
+      loss_sum += logits.cross_entropy_loss(target)
+      seen += 1
+      dy: = logits.grad_softmax_cross_entropy(target)
+      dx: = t.mlp.backward(x, dy, learning_rate)
+      t.emb.backward_seq(I32$[]::toks, ctx_len, dx, learning_rate)
+      // Rewind on every step, or the arena grows through the training.
+      compute.restore(base)
+    last_loss = loss_sum / F64::seen if seen > 0 else 0.0
+  return last_loss
+
+fn build(compute: Arena$@): Model$@ //< makes one model
+  //<
+  //< Training, quantizing and dropping the F32 all finish here. `compute` is working space, free
+  //< for the caller to reuse on return.
+  heap_before: = mem.heap_used_bytes()
+  f32_arena: = Arena.new(1024 * 1024)
+  $rng: = prng.Prng.new(weight_seed)
+  $t: Trainable = ::{ .emb = nn.Embedding<|F32|>.new(vocab, emb_dim, f32_arena),
+    .mlp = nn.Mlp<|F32|>.new(ctx_len * emb_dim, hidden, vocab, f32_arena) }
+  // Initialize them with uniform random values (the reason is at `Linear.init_uniform` in
+  // `ksai/nn.kspls`).
+  t.emb.init_uniform(rng@, 0.08)
+  t.mlp.init_uniform(rng@, 0.06)
+
+  t0: = sys.mono_us()
+  loss: = train(t@, compute)
+  train_ms: = (sys.mono_us() - t0) / 1000I64
+  f32_bytes: = mem.heap_used_bytes() - heap_before
+
+  // Caution: **Put the quantized copy in a different arena**, or freeing the F32 frees it too and
+  // the resident size does not shrink.
+  q_arena: = Arena.new(192 * 1024)
+  m: = mem.alloc_as<|Model|>()
+  m.arena = q_arena
+  m.qemb = t.emb.weight.quantize(q_arena) catch panic("model: embedding must be a 2D tensor")
+  m.qfc1 = t.mlp.fc1.weights.quantize(q_arena) catch panic("model: fc1 must be a 2D tensor")
+  m.qfc2 = t.mlp.fc2.weights.quantize(q_arena) catch panic("model: fc2 must be a 2D tensor")
+  // The biases are small and one-dimensional, so they stay F32.
+  m.b1 = t.mlp.fc1.bias.dup(q_arena)
+  m.b2 = t.mlp.fc2.bias.dup(q_arena)
+  f32_arena.free()
+
+  // The LoRA adapters that continued training updates (resident as F32, a small part of the base).
+  m.l1 = lora.Lora<|F32|>.new(ctx_len * emb_dim, hidden, lora_rank, lora_alpha, rng@, q_arena)
+  m.l2 = lora.Lora<|F32|>.new(hidden, vocab, lora_rank, lora_alpha, rng@, q_arena)
+  m.opt_l1a = optim.Adam<|F32|>.new_default(m.l1.a, adam_lr)
+  m.opt_l1b = optim.Adam<|F32|>.new_default(m.l1.b, adam_lr)
+  m.opt_l2a = optim.Adam<|F32|>.new_default(m.l2.a, adam_lr)
+  m.opt_l2b = optim.Adam<|F32|>.new_default(m.l2.b, adam_lr)
+  m.adapter_params = m.l1.a.size + m.l1.b.size + m.l2.a.size + m.l2.b.size
+  m.trainings = 0
+  m.last_train_loss = 0.0
+
+  m.params = vocab * emb_dim + ctx_len * emb_dim * hidden + hidden * vocab
+  m.f32_bytes = f32_bytes
+  m.int8_bytes = mem.heap_used_bytes() - heap_before
+  m.train_ms = train_ms
+  m.final_loss = loss
+  return m
+
+fn free(m: Model$@)
+  m.arena.free()
+  dealloc(Void$@::m)
+
+priv fn expand(m: Model$@, compute: Arena$@): nn.Mlp<|F32|> //<
+  //< The network in F32, with the quantized weights expanded into `compute`
+  //<
+  //< **It is expanded again on each call**: the F32 form lives only in the computing arena, and a
+  //< rewind past it drops it.
+  $q1: = m.qfc1
+  $q2: = m.qfc2
+  return nn.Mlp<|F32|>::{
+    .fc1 = nn.Linear<|F32|>::{ .weights = q1.dequantize<|F32|>(compute), .bias = m.b1 },
+    .fc2 = nn.Linear<|F32|>::{ .weights = q2.dequantize<|F32|>(compute), .bias = m.b2 },
+  }
+
+fn generate(m: Model$@, prompt: U8[], steps: Sz, compute: Arena$@): U8$[] //<
+  //< Generates the `steps` bytes that follow `prompt`, always picking the most likely byte
+  //<
+  //< Caution: **Keep it greedy**, so the same request gets the same response and a regression test
+  //< can be written (ksai/sampler would need a seed per request). The return value is in `compute`:
+  //< copy it before rewinding.
+  $out: = Str_builder.new()
+  defer out.free()
+  // Only the last ctx_len bytes are kept; a shorter prompt is left-padded with spaces.
+  $hist: U8[ctx_len] = ::{}
+  for i in Range.asc(ctx_len)
+    take: = prompt.len - ctx_len + i
+    hist[i] = prompt[take] if take >= 0 && take < prompt.len else ' '
+  n: = steps if steps <= max_steps else max_steps
+  // **The frozen base is expanded once**, not per step (per step would use much more arena); the
+  // rewind point comes after it.
+  $qe: = m.qemb
+  ew: = qe.dequantize<|F32|>(compute)
+  $mlp: = expand(m, compute)
+  base: = compute.save()
+  for _step in Range.asc(n)
+    $toks: I32[ctx_len] = ::{}
+    for i in Range.asc(ctx_len)
+      toks[i] = hist[i]
+    x: = embed_context(ew, I32$[]::toks, compute)
+    logits: = mlp.forward_lora(x, m.l1@, m.l2@)
+    next: = sampler.argmax(logits)
+    out.c(U8::next)
+    for $i: Sz = 0; i + 1 < ctx_len; i += 1
+      hist[i] = hist[i + 1]
+    hist[ctx_len - 1] = U8::next
+    compute.restore(base)
+  return compute.dup_str(out.slice())
+
+fn train_lora(m: Model$@, text: U8[], epochs: Sz, compute: Arena$@): F64 //<
+  //< Continues training only the LoRA adapters on the given text (the base stays frozen)
+  //<
+  //< Returns the last epoch's mean loss.
+  //< Caution: **Call it only from the worker thread.** It rewrites the model, which the accepting
+  //< thread must not read meanwhile (hence `Stats`).
+  if text.len <= ctx_len
+    return m.last_train_loss // not even enough for one context
+  n_epochs: = epochs if epochs <= max_train_epochs else max_train_epochs
+  // The base is frozen here too, so it is expanded once.
+  $qe: = m.qemb
+  ew: = qe.dequantize<|F32|>(compute)
+  $mlp: = expand(m, compute)
+  base: = compute.save()
+
+  $toks: I32[ctx_len] = ::{}
+  $last_loss: F64 = 0.0
+  for _epoch in Range.asc(n_epochs)
+    $loss_sum: F64 = 0.0
+    $seen: Sz = 0
+    for $p: Sz = ctx_len; p < text.len; p += 1
+      for i in Range.asc(ctx_len)
+        toks[i] = text[p - ctx_len + i]
+      target: = I32::text[p]
+      x: = embed_context(ew, I32$[]::toks, compute)
+      $logits: = mlp.forward_lora(x, m.l1@, m.l2@)
+      loss_sum += logits.cross_entropy_loss(target)
+      seen += 1
+      dy: = logits.grad_softmax_cross_entropy(target)
+      $g1: lora.Grads<|F32|> = ::{}
+      $g2: lora.Grads<|F32|> = ::{}
+      // Only the gradients: `backward_lora` would apply them with SGD, leaving no room for Adam.
+      _dx: = mlp.backward_lora_grads(x, dy, m.l1@, g1@, m.l2@, g2@)
+      m.opt_l1a.step(m.l1.a, g1.da)
+      m.opt_l1b.step(m.l1.b, g1.db)
+      m.opt_l2a.step(m.l2.a, g2.da)
+      m.opt_l2b.step(m.l2.b, g2.db)
+      compute.restore(base)
+    last_loss = loss_sum / F64::seen if seen > 0 else last_loss
+  m.trainings += 1I64
+  m.last_train_loss = last_loss
+  return last_loss
+
+fn print_summary(m: Model$@, lg: Log$@) //<
+  //< Prints one line at startup (the training time explains a slow startup)
+  if ln: = lg.at(Level.information)
+    ln
+      .s("model ready — \{m.params\} params, resident \{m.f32_bytes\} -> \{m.int8_bytes\} bytes \
+        (int8), trained in \{m.train_ms\} ms, loss \{m.final_loss:.4\}")

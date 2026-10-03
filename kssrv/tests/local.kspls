@@ -1,0 +1,157 @@
+//< Tests the file endpoints of `kssrv --local`
+//<
+//< For local use; not a suite; part of `kssrv/tests/main.kspls`.
+//< **It can only be tested in a separate process.** Local or outward-facing is chosen at start-up,
+//< so one process cannot show both. Starting the server is the caller's job; this file holds only
+//< the checks after connecting. **A second endpoint is the same hole again**, so this checks that
+//< a path the static serving refuses is refused by the file endpoint too.
+import "kssrv/tests/client"
+import "kssrv/tests/run"
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+const local_port: I32 = 18392 //<
+  //< The port the local-use run listens on
+  //<
+  //< Caution: **Use a different port from the outward-facing test.** Right after the previous
+  //< server stops, the OS may not have released its port yet (TIME_WAIT).
+
+priv const put_body: U8[] = "かんそ\nwritten\n" //< the body written back
+  //<
+  //< **Include something outside ASCII.** If anything on the way treats the bytes as a string,
+  //< only this shows it.
+
+priv const local_body: Sz = 200 * 1024 //< the length used to test the body's cap
+  //<
+  //< Caution: **Do not copy the cap's value** (fitting under it is enough). It is a length the
+  //< outward-facing server refuses and the local one accepts.
+
+fn cases(token: U8[], arena: Arena$@): Void?client.Http_end
+  auth: = client.bearer_head(token, arena)
+
+  // --- Tokens --- **The page itself needs no token.** The page is how the token is passed on,
+  // so requiring one there leaves no way to pass it.
+  page: = client.get(local_port, "/", "", arena)?
+  ok1: = page.status == 200 && page.body.equals("root index\n")
+  verdict.check("even on --local the page is handed out without a token", ok1,
+    client.shown(page, arena))
+
+  // Caution: **Do not decide per endpoint whether a token is needed**, or a new endpoint forgets.
+  // This also checks that the existing endpoints need one.
+  for target in U8[][]::{ "/api/status", "/api/list", "/api/file?path=sub/one.txt",
+    "/api/stat?path=sub/one.txt", "/api/run/1" }
+    r: = client.get(local_port, target, "", arena)?
+    nm: = arena.text().s("--local refuses a request with no token: ").s(target).take()
+    verdict.check(nm, r.status == 401, client.shown(r, arena))
+  // Caution: **Do not put the raw header in the check's name.** A CRLF in it breaks the output's
+  // lines, so what was tried is described in words.
+  bad_names: U8[][3] = ::{ "an empty token", "a different token", "a token with no Bearer" }
+  bad_heads: U8[][3] = ::{ "Authorization: Bearer \r\n", "Authorization: Bearer deadbeef\r\n",
+    "Authorization: deadbeef\r\n" }
+  for i in Range.asc(3)
+    r: = client.get(local_port, "/api/file?path=sub/one.txt", bad_heads[i], arena)?
+    nm: = arena.text().s("--local refuses a token that does not match: ").s(bad_names[i]).take()
+    verdict.check(nm, r.status == 401, client.shown(r, arena))
+  // Caution: A token that merely **starts with** the real one must not pass (a prefix match would
+  // let it through).
+  longer: = client.bearer_head(arena.text().s(token).c('x').take(), arena)
+  extra: = client.get(local_port, "/api/file?path=sub/one.txt", longer, arena)?
+  verdict.check("--local refuses characters appended behind the token", extra.status == 401,
+    client.shown(extra, arena))
+
+  // **It must declare that it is for local use.** The page reads this and shows the local tools
+  // (rather than having to probe the server to find out).
+  st0: = client.get(local_port, "/api/status", auth, arena)?
+  verdict.check("--local's status declares it is for local use",
+    client.doc_of(st0, arena).get("local").as_bool(false), client.shown(st0, arena))
+
+  // --- Reading ---
+  got: = client.get(local_port, "/api/file?path=sub/one.txt", auth, arena)?
+  ok2: = got.status == 200 && got.body.equals("one\n")
+  verdict.check("GET /api/file returns the content", ok2, client.shown(got, arena))
+  // Caution: **Do not guess the type from the content.** The receiver trusts a guessed type and
+  // interprets the content by it.
+  ctype: = client.header(got.head, "content-type")
+  verdict.check("/api/file returns as octet-stream", ctype.equals("application/octet-stream"), ctype)
+
+  // A path the static serving refuses must be refused here too.
+  for q in U8[][]::{ "path=../secret.txt", "path=%2e%2e/secret.txt", "path=sub/../../secret.txt" }
+    r: = client.get(local_port, arena.text().s("/api/file?\{q\}").take(), auth, arena)?
+    nm: = arena.text().s("/api/file refuses outside the root too: \{q\}").take()
+    verdict.check(nm, r.status == 403, client.shown(r, arena))
+  missing: = client.get(local_port, "/api/file?path=nope.txt", auth, arena)?
+  verdict.check("a name that is not there is 404", missing.status == 404,
+    client.shown(missing, arena))
+  // On some OSes `fopen` succeeds on a folder. Judged by the read result alone, it looks like a
+  // broken file.
+  folder: = client.get(local_port, "/api/file?path=sub", auth, arena)?
+  verdict.check("a folder is not returned as a file", folder.status == 404,
+    client.shown(folder, arena))
+  named: = client.get(local_port, "/api/file", auth, arena)?
+  verdict.check("/api/file with no name is 400", named.status == 400,
+    client.shown(named, arena))
+  head_raw: = client.raw("HEAD", "/api/file?path=sub/one.txt", auth, "", arena)
+  heads: = client.request(local_port, head_raw, 1, client.default_timeout_ms, true, arena)?
+  client.check_405("there is no HEAD on /api/file", heads.get(0), arena)
+
+  // --- Has it changed ---
+  st: = client.get(local_port, "/api/stat?path=sub/one.txt", auth, arena)?
+  doc: = client.doc_of(st, arena)
+  ok3: =
+    st.status == 200 && doc.get("size").as_int(-1) == 4 &&
+    doc.get("changed_at").as_int64(0I64) > 0I64
+  verdict.check("/api/stat returns the size and the time", ok3, client.shown(st, arena))
+  // Caution: **Do not return the content.** Returned here, the same content comes by two paths.
+  verdict.check("/api/stat does not return the content", st.body.find_str("one") < 0,
+    client.shown(st, arena))
+  st_gone: = client.get(local_port, "/api/stat?path=nope.txt", auth, arena)?
+  verdict.check("/api/stat on a name that is not there is 404", st_gone.status == 404,
+    client.shown(st_gone, arena))
+
+  // --- Writing ---
+  put: = client.put_file(local_port, "/api/file?path=sub/two.txt", auth, put_body, arena)?
+  ok4: =
+    put.status == 200 &&
+    client.doc_of(put, arena).get("wrote").as_int(-1) == put_body.len
+  verdict.check("PUT /api/file returns the length written", ok4, client.shown(put, arena))
+  // Caution: **Compare the written string byte by byte.** A length check alone passes even with
+  // the encoding broken.
+  back: = client.get(local_port, "/api/file?path=sub/two.txt", auth, arena)?
+  ok5: = back.status == 200 && back.body.equals(put_body)
+  verdict.check("the string written comes back byte for byte", ok5, client.shown(back, arena))
+  // Caution: **Leave no half-written file.** Otherwise the next write starts under the same name
+  // as the half-written one.
+  entries: = client.get(local_port, "/api/list?path=sub", auth, arena)?
+  names: = client.list_names(entries, arena)
+  verdict.check("no half-written file is left",
+    !client.has_name(names@, "two.txt.kssrv-part"), client.shown(entries, arena))
+  // Writing twice adds no file (it replaces the one of the same name).
+  again: = client.put_file(local_port, "/api/file?path=sub/two.txt", auth, "second\n", arena)?
+  twice: = client.get(local_port, "/api/file?path=sub/two.txt", auth, arena)?
+  ok6: = again.status == 200 && twice.body.equals("second\n")
+  verdict.check("writing twice replaces", ok6, client.shown(twice, arena))
+  // Caution: Apply the root check to writing too (fix reading alone and a path outside the root
+  // can still be written).
+  out: = client.put_file(local_port, "/api/file?path=%2e%2e/secret.txt", auth, "x", arena)?
+  verdict.check("PUT refuses outside the root too", out.status == 403,
+    client.shown(out, arena))
+
+  // --- The cap ---
+  // **Check that the local cap is higher.** Without that, a single document cannot be written
+  // back (it does not fit the outward-facing cap).
+  big: = client.filler(local_body, arena)
+  wide: = client.put_file(local_port, "/api/file?path=sub/big.txt", auth, big, arena)?
+  ok7: =
+    wide.status == 200 &&
+    client.doc_of(wide, arena).get("wrote").as_int(-1) == local_body
+  verdict.check("--local takes a body larger than the outward-facing one", ok7,
+    client.shown(wide, arena))
+
+  // --- The process endpoint --- (what it checks, and why, is in `kssrv/tests/run.kspls`)
+  run.cases(local_port, auth, arena)?
+  // Caution: **Also test a connection that has only said "I will send no more"** (the reason is at
+  // `run.half_closed_cases`).
+  run.half_closed_cases(local_port, auth, arena)?

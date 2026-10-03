@@ -1,0 +1,100 @@
+//< LSP: walks the workspace and counts which sources belong to it
+//<
+//< **Both notations are collected** (`has_kspl_ext` in `../base/core.kspls`), or files in one of
+//< them would get no squiggles and no jumps though they are right there.
+//< **It does not ask the client for the file list.** Other language servers find the files too
+//< (rust-analyzer from `Cargo.toml`, clangd from `compile_commands.json`, gopls from `go list`).
+//< A list from the client would only name candidates it reads anyway. **KSPL has no manifest
+//< file** (an import resolves by a name from the root), so it walks.
+//< **The root is the current working directory.**
+import "ksplc/base/core" as base_core
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena, dealloc }
+import "std/str"
+
+const max_depth: Sz = 24 //< the limits on the walk's depth and file count
+  //<
+  //< **Both are needed**: a count limit alone never returns on a deep tree, a depth limit alone
+  //< never on a wide one. They stop the walk before the supervisor's watchdog does.
+const max_files: Sz = 20000
+
+const ignore_file: U8[] = ".gitignore" //< the file naming the folders that are not source
+  //<
+  //< Caution: **Do not list the names to exclude here.** The build folder's name differs per
+  //< project, so a list here would fit only this repository; `.gitignore` already names it.
+
+fn workspace_kspl(arena: Arena$@): List<|U8[]|> //<
+  //< It lists the sources under the root, by their paths relative to the root
+  //<
+  //< **It does not enter a folder whose name starts with a dot.** `.git` holds no source and is
+  //< not in `.gitignore` either.
+  $out: = List<|U8[]|>.new(arena)
+  $skip: = read_ignored_dirs(arena)
+  walk("", skip@, 0, out@, arena)
+  return out
+
+priv fn read_ignored_dirs(arena: Arena$@): List<|U8[]|> //<
+  //< From `.gitignore`, it takes only the lines naming a folder
+  //<
+  //< Caution: **Do not read any other kind of line.** With negation, globs and per-folder
+  //< overrides, a second resolver would **differ slightly from git's**. A file line (`*.exe`) is
+  //< already dropped by the extension filter.
+  $out: = List<|U8[]|>.new(arena)
+  src: = io.read_file(ignore_file) catch U8$[]::{ .ptr = null, .len = 0 }
+  if src.ptr == null
+    return out
+  defer dealloc(Void$@::src.ptr)
+  text: U8[] = src
+  for line in text.lines(arena)
+    if name: = ignored_dir(line.trim_spaces())
+      out.push(arena.dup_str(name))
+  return out
+
+priv fn ignored_dir(line: U8[]): Option<|U8[]|> //< the folder the line names, if it names one
+  $s: = line
+  if s.len < 2 || s[0] == '#' || s[0] == '!'
+    return Option<|U8[]|>.none
+  if s[s.len - 1] != '/'
+    return Option<|U8[]|>.none
+  s = s.sub(0, s.len - 1)
+  if s.len > 0 && s[0] == '/'
+    s = s.sub_from(1)
+  if s.len == 0 || s.find_char('/') >= 0 || s.find_char('*') >= 0 || s.find_char('?') >= 0 ||
+    s.find_char('[') >= 0
+    return Option<|U8[]|>.none
+  return Option<|U8[]|>.some(s)
+
+priv fn named_in(names: List<|U8[]|>@, want: U8[]): Bool
+  for i in Range.asc(names.len)
+    if names.get(i).equals(want)
+      return true
+  return false
+
+priv fn walk(rel: U8[], skip: List<|U8[]|>@, depth: Sz, out: List<|U8[]|>$@, arena: Arena$@) //<
+  //< It walks one level under `rel`
+  //<
+  //< **Do not stop on a folder that cannot be read** (vanished or forbidden); skip only that one.
+  //< Caution: **Report progress for each entry.** One level can be slow on slow storage, and a
+  //< silent walk gets killed by the supervisor's watchdog (`report_progress` rate-limits itself).
+  if depth > max_depth
+    return
+  dir: = "." if rel.len == 0 else rel
+  names: = fs.read_dir(dir, arena) catch _e
+    return
+  for name in names
+    if out.len >= max_files
+      return
+    if name.len == 0 || name[0] == '.'
+      continue
+    base_core.report_progress()
+    child: = name if rel.len == 0 else fs.join(rel, name, arena)
+    info: = fs.stat(child) catch _e
+      continue
+    if info.is_dir
+      if !named_in(skip, name)
+        walk(child, skip, depth + 1, out, arena)
+    else if child.has_kspl_ext()
+      out.push(child)

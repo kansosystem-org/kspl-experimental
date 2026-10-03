@@ -1,0 +1,260 @@
+//< Drives the language server over the whole repository, as an editor open on it does
+//<
+//< It sends the workspace queries such an editor sends, at the same size.
+//< **Only what the whole tree can show is here**: a common word across every package, a driver's
+//< callers in other packages, files built not to compile, a rename reaching closed files.
+//< The rest is in ksplc's own `lsp` suite; this one drives the same client
+//< (`ksplc/tests/support/lsp_client.kspls`) with the repository's root as the workspace.
+import "ksplc/tests/support/lsp_calls" { Prepared, incoming, prepare_fn }
+import "ksplc/tests/support/lsp_client"
+import "ksplc/tests/support/lsp_read" { end_text, from_names, has_name, is_missing }
+import "std/chars"
+import "std/ds" { List }
+import "std/json" + { Json_builder }
+import "std/jsonrpc"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+import "tests/support/harness"
+import "tests/support/lsp_tree_uses"
+
+priv const normal_ms: I32 = 15000 //< the read deadline for a request that walks no files
+
+priv fn prepare_in_tree(c: jsonrpc.Client$@, rel: U8[], decl: U8[], arena: Arena$@): Prepared //<
+  //< prepareCallHierarchy at `decl`'s name in the repository's file `rel`, opened as it is on disk
+  return prepare_fn(c, rel, harness.read_under_root(rel), decl, arena)
+
+priv const broken_ws_file: U8[] = "std/log.kspls" //<
+  //< The starting point of a workspace walk that **reaches the files built not to compile**
+  //<
+  //< The common last segment `at` pulls in nearly all of `ksplc/tests/negative`, including the one
+  //< nested too deep to check.
+  //< Caution: **Do not swap in a rarer name** (`init` below reaches few); this check would go green
+  //< after walking straight past what it exists to test.
+priv const broken_ws_decl: U8[] = "  pub fn at"
+
+priv fn check_workspace_survives_unbuildable(c: jsonrpc.Client$@, arena: Arena$@) //<
+  //< A workspace query over a tree that holds files built not to compile
+  //<
+  //< Caution: **The point is that it answers at all.** A worker killed by a too-deep tree answers
+  //< "no callers", which reads exactly like a true empty answer.
+  prep: = prepare_in_tree(c, broken_ws_file, broken_ws_decl, arena)
+  verdict.check("prepareCallHierarchy lands on the name the unbuildable files also carry",
+    prep.found, lsp_client.why(c, prep.raw, arena))
+  if !prep.found
+    return
+  got: = incoming(c, prep.item, arena)
+  names: = from_names(got.calls@, arena)
+  verdict.check("a workspace holding a file that cannot be built still answers",
+    !got.timed_out && got.calls.len > 0, lsp_client.why(c, "", arena))
+  // Caution: **Name a caller.** A non-empty answer alone goes green on a half-analysed workspace's
+  // wrong callers.
+  verdict.check("and the callers named are the real ones", has_name(names@, "say"),
+    lsp_client.why(c, "", arena))
+
+priv fn check_ht16k33_callers(c: jsonrpc.Client$@, item: json.Val, arena: Arena$@) //<
+  //< A caller is always inside a file that refers to ht16k33.
+  got: = incoming(c, item, arena)
+  calls: = got.calls
+  $strays: = List<|U8[]|>.new(arena)
+  $marked: = List<|U8[]|>.new(arena)
+  for i in Range.asc(calls.len)
+    from: = calls.get(i).get("from")
+    rel: = from.get("uri").as_str()
+    if harness.read_under_root(rel).find_str("ht16k33") < 0
+      strays.push(rel)
+    // An ordinary call must not carry the "passed as a function pointer" mark, or the reader
+    // cannot tell how certain the call is.
+    if from.get("detail").as_str().find_str("fn pointer") >= 0
+      marked.push(from.get("name").as_str())
+  // Caution: **Do not merge "did it come back" and "is nothing mixed in" into one check**, or an
+  // empty answer fails as "an unrelated file mixed in" with an empty explanation.
+  // **Always add the count and the supervisor's message**: empty may mean "not found" or "the wait
+  // ran out". This query is an order of magnitude heavier than the others.
+  reason: = "the wait ran out" if got.timed_out else "it came back empty"
+  d6a: = lsp_client.why(c,
+    arena.text().s("count=\{calls.len\} (").s(reason).s(")").take(), arena)
+  verdict.check("ht16k33.init's callers come back", calls.len > 0, d6a)
+  d6: = lsp_client.why(c, lsp_client.join(strays@, arena), arena)
+  verdict.check("no unrelated file mixes into ht16k33.init's callers", strays.len == 0, d6)
+  d7: = lsp_client.join(marked@, arena)
+  verdict.check("a caller that really calls carries no fn pointer mark", marked.len == 0, d7)
+  check_caller_order(calls@, arena)
+
+priv fn check_caller_order(calls: List<|json.Val|>@, arena: Arena$@) //<
+  //< The callers are sorted by file and position
+  //<
+  //< Caution: **Do not return them in `Map`'s order**, or **the same question is answered in a
+  //< different order every run** and a reader loses track of how far they have read. With over a
+  //< hundred callers here, a broken order always shows.
+  $out_of_order: = List<|U8[]|>.new(arena)
+  $prev_uri: U8[] = ""
+  $prev_line: I64 = -1I64
+  for i in Range.asc(calls.len)
+    from: = calls.get(i).get("from")
+    uri: = from.get("uri").as_str()
+    line: = from.get("range").get("start").get("line").as_int64(-1I64)
+    order: = uri.compare(prev_uri)
+    if order < 0 || (order == 0 && line < prev_line)
+      out_of_order
+        .push(arena.text().s(prev_uri).s(":\{prev_line\} was followed by ").s(uri).s(":\{line\}")
+        .take())
+    prev_uri = uri
+    prev_line = line
+  verdict.check("the callers line up in order of file and position", out_of_order.len == 0,
+    lsp_client.join(out_of_order@, arena))
+
+priv fn check_fn_pointer(c: jsonrpc.Client$@, arena: Arena$@) //< callers via a function pointer
+  //<
+  //< ksos's task entry points and `Link`'s implementations are **passed as function pointers with
+  //< no call**.
+  p: =
+    prepare_in_tree(c, "ksos/demo/rp2040/rp2040_board_probe.kspls", "fn probe_task(", arena)
+  d8: = lsp_client.why(c, p.raw, arena)
+  verdict.check("a function only handed as a function pointer can be a starting point too",
+    p.found, d8)
+  if !p.found
+    return
+  calls: = incoming(c, p.item, arena).calls
+  $names: = from_names(calls@, arena)
+  d9: = lsp_client.join(names@, arena)
+  ok9: = has_name(names@, "ksos_main")
+  verdict.check("ksos_main comes out among probe_task's callers", ok9, d9)
+  // **`fromRanges` is on the call item** (not inside `from`); one level deeper it is always 0,
+  // and "it does not double-count" is always green.
+  $call: = json.Val.null_val
+  $found: = false
+  for i in Range.asc(calls.len)
+    from: = calls.get(i).get("from")
+    if from.get("name").as_str().equals("ksos_main")
+      call = calls.get(i)
+      found = true
+  entry: = call.get("from")
+  d10: = lsp_client.dump(entry, arena)
+  ok8: = found && entry.get("detail").as_str().find_str("fn pointer") >= 0
+  verdict.check("that place carries the fn pointer mark", ok8, d10)
+  // One range per place the pointer is passed (counting both identifier and path gives two).
+  ranges: = call.get("fromRanges").arr_list(arena)
+  d11: = arena.text().s("fromRanges=\{ranges.len\} ").s(lsp_client.dump(call, arena)).take()
+  ok7: = found && ranges.len == 1
+  verdict.check("the same hand-over is not double-counted", ok7, d11)
+  // Unless the declaration's own name is left out, every function is listed as its own caller.
+  d12: = lsp_client.join(names@, arena)
+  ok6: = !has_name(names@, "matrix_task")
+  verdict.check("it does not line up as its own caller", ok6, d12)
+
+// ==========================================
+// A query looking at the whole workspace does not stay silent longer than the supervisor's window
+// **This is a different path from didOpen.** That one reads by walking imports from one entry
+// point, while this walks under the root and reads what the pre-filter picks up
+// (`build_workspace_state` in `ksplc/lsp/worker.kspls`).
+// ==========================================
+
+priv const worst_gap_max_ms: Sz = 5000 //<
+  //< The longest a workspace query may leave the worker silent
+  //<
+  //< Caution: **Do not make the supervisor's window (`worker_timeout_ms` in
+  //< `ksplc/lsp/server.kspls`) itself the threshold.** The worker is killed the moment the window
+  //< is reached, so that would call "just before failing" green; half leaves room. **Do not raise
+  //< it to get back to green**; make the query lighter.
+
+priv fn check_worker_alive_workspace(exe: U8[], root: U8[], arena: Arena$@)
+  name: = "a workspace query does not stay silent longer than the supervisor's window"
+  if !sys.timing_available()
+    return // it cannot be measured on a target with a degenerate clock
+    // (`timing_available` in `std/sys`).
+  $w: = subproc.spawn_piped(U8[][]::{ exe, "lsp-worker" }, "") catch
+    verdict.check(name, false, "the worker cannot be started")
+    return
+  $b: = Json_builder.new(arena)
+  init: = b.obj().set("rootUri", b.str_val(root)).build()
+  // **Only the name's last segment decides the weight**; a common one (`init`) hits an order of
+  // magnitude more files than other queries.
+  // Caution: **Do not swap in a light name**, or it goes green having measured nothing.
+  item: = b.obj().set("uri", b.str_val("ksos/drivers/ht16k33.kspls"))
+    .set("data", b.str_val("ksos.drivers.ht16k33.init")).build()
+  params: = b.obj().set("item", item).build()
+  $frames: = Str_builder.new()
+  defer frames.free()
+  jsonrpc.frame_into(frames@, jsonrpc.encode("initialize", init, 1, arena))
+  jsonrpc.frame_into(frames@,
+    jsonrpc.encode("callHierarchy/incomingCalls", params, 2, arena))
+  _wrote: = w.write(frames.slice())
+  w.close_stdin()
+  buf: = U8$[]::{ .ptr = U8$@::arena.alloc(64 * 1024), .len = 64 * 1024 }
+  $last: = sys.mono_us()
+  $worst_us: I64 = 0I64
+  $seen: Sz = 0
+  for _k in Range.asc(20000)
+    got: = w.read(buf, 300000) catch
+      break
+    now: = sys.mono_us()
+    gap: = now - last
+    last = now
+    if gap > worst_us
+      worst_us = gap
+    seen += buf.sub(0, got).count_str("__KSPL_WORKER_ALIVE__")
+  w.kill()
+  worst_ms: = Sz::(worst_us / 1000I64)
+  // **Print the measured value on a passing run too**, or nobody knows the margin on each machine
+  // (as `ksplc/tests/suite/thin_use_test.kspls` does beside each bound).
+  // Caution: **Do not copy the number into the check's name**; the canonical source is this line.
+  shown: = arena.text().s(name).s(" (worst silence \{worst_ms\} ms / cap \{worst_gap_max_ms\} ms)")
+    .take()
+  d: = arena.text().s("\{seen\} marks").take()
+  verdict.check(shown, worst_ms < worst_gap_max_ms, d)
+
+priv fn empty_obj(arena: Arena$@): json.Val
+  $b: = Json_builder.new(arena)
+  return b.obj().build()
+
+fn main(): I32
+  arena: = harness.begin(512 * 1024 * 1024)
+  exe: = harness.ksplc_exe()
+  root: = harness.root()
+  // Start it with the server left standing (the reason is `lsp_client.kspls`'s opening header).
+  _std_dir: = sys.set_env("KSPLC_STD_DIR", harness.std_dir())
+  // **Call it before the other queries.** The silence is measured with nothing read yet; placed
+  // after them, the files are already read and a lighter path is measured.
+  check_worker_alive_workspace(exe, root, arena)
+  $c: =
+    lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, root, arena) catch
+    return harness.fatal("the language server cannot be started")
+  defer c.free()
+  init: = c.request("initialize", empty_obj(arena), normal_ms, arena) catch e
+    return harness
+      .fatal(arena.text().s("initialize does not return \{end_text(e)\}").take())
+  if !verdict.check("the language server comes up over the whole tree",
+    !is_missing(init.get("result").get("capabilities")), lsp_client.dump(init, arena))
+    return harness.finish()
+
+  check_workspace_survives_unbuildable(c@, arena)
+
+  // A process-lifetime table allocated from the per-request arena is freed under the worker after
+  // a workspace query, and the worker crashes; the supervisor's null reads as "everything stops
+  // working". Check that **content** comes back: a response arrives even after a crash.
+  a: = prepare_in_tree(c@, "ksos/drivers/ht16k33.kspls", "fn init(", arena)
+  d18: = lsp_client.why(c@, a.raw, arena)
+  verdict.check("another document can be analysed after a workspace query too", a.found, d18)
+
+  // A definition is identified by its data field alone (VS Code sends it back); a bare name would
+  // list every file's `init` callers.
+  b2: = prepare_in_tree(c@, "ksos/drivers/rp2040/clocks.kspls", "fn init(", arena)
+  same_data: =
+    a.found && b2.found &&
+    a.item.get("data").as_str().equals(b2.item.get("data").as_str())
+  pair: = arena.text().s("a=").s(a.item.get("data").as_str()).s(" b=")
+    .s(b2.item.get("data").as_str()).take()
+  detail5: = lsp_client.why(c@, pair, arena)
+  verdict.check("an init of the same name in a different file holds different data",
+    a.found && b2.found && !same_data, detail5)
+
+  if a.found
+    check_ht16k33_callers(c@, a.item, arena)
+  check_fn_pointer(c@, arena)
+  lsp_tree_uses.check_rename(c@, arena)
+  lsp_tree_uses.check_references(c@, arena)
+  return harness.finish()

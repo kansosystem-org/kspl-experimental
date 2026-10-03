@@ -1,0 +1,348 @@
+//< The one lowering walk: the dispatch on each node's kind, and blocks, branches and loops
+//<
+//< Every node is lowered through `lower` here. `expr.kspls` (expressions, `?`, a `catch` and its
+//< `fallback`), `defer.kspls` (cleanups and the ways out that run them) and `arc.kspls` (retain and
+//< release) add the kinds they own to the same walk; its state is in `ctx.kspls`.
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_kinds" as base_ast_kinds
+import "ksplc/base/core" as base_core
+import "ksplc/base/diag" as base_diag
+import "ksplc/lower/arc" as lower_arc
+import "ksplc/lower/ctx" { Fallback_ctx, Jump_ctx, Lowering_ctx }
+import "ksplc/lower/defer" as lower_defer
+import "ksplc/lower/expr" as lower_expr
+import "ksplc/sema/body/stmt" as sema_body_stmt
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/env" as sema_type_env
+import "std/ds" { List, Map }
+import "std/io"
+import "std/sys"
+
+const max_lower_depth: Sz = 2000 //<
+  //< The depth limit for lower's recursion, and for the walks of lower/verify and lower/prune
+  //<
+  //< A postfix chain (`x$$$...$;`) is outside the parser's max_parse_depth; every recursion here
+  //< goes through r.lower().
+  //< Caution: **Do not make it small**: prune's walk cut off here drops a live function.
+
+fn run(ctx: Sema_ctx$@, root: Ast_node$@)
+  base_diag.ice_assert(root != null, "lower_root.run: root is null")
+  lctx: = Lowering_ctx.new(ctx)
+  // It caches the answer to "does this value own ARC memory" only during this stage (the reason
+  // and the danger are at arc_content_memo in sema/type/env.kspls).
+  // Caution: **Turn it on here and nowhere else.** Only here have the types stopped growing;
+  // earlier it would cache answers from before the fields were complete.
+  $arc_memo: = Map<|I32, I32|>.new()
+  defer arc_memo.free()
+  ctx.env.arc_content_memo = arc_memo@
+  root.lower(lctx)
+  // The ARC helpers (one per type, like Rust's and Swift's drop glue) are created during the walk
+  // and added after it.
+  for helper in lctx.arc_helper_decls
+    root.add_child(helper)
+  // Caution: Always turn it off when leaving the stage; arc_memo is freed right after.
+  ctx.env.arc_content_memo = null
+
+impl Ast_node
+  fn lower(r: Self$@, lctx: Lowering_ctx$@)
+    if r == null
+      return
+    lctx.lower_depth += 1
+    if lctx.lower_depth >= max_lower_depth
+      io.err()
+        .s("\nfatal: expression/statement nesting too deep during lowering (possible unbounded \
+          pointer/array/deref chain).\n")
+      sys.exit(1)
+
+    switch r.kind_id case .k_decl_fn
+      r.lower_decl_fn(lctx)
+    case .k_stmt_block, .k_file
+      r.lower_block(lctx)
+    case .k_stmt_labeled_block
+      r.lower_stmt_labeled_block(lctx)
+    case .k_stmt_return, .k_stmt_throw
+      r.lower_return_or_throw_stmt(lctx)
+    case .k_stmt_break, .k_stmt_continue
+      r.lower_loop_jump(lctx)
+    case .k_stmt_fallback
+      r.lower_fallback_stmt(lctx)
+    case .k_stmt_if
+      r.lower_stmt_if(lctx)
+    case .k_stmt_defer
+      r.lower_cleanup_stmt(lctx)
+    case .k_decl_var
+      r.lower_arc_var_decl(lctx)
+    case .k_struct_literal
+      r.lower_arc_aggregate_literal(lctx)
+    case .k_enum_init_call
+      r.lower_arc_enum_init_call(lctx)
+    case .k_stmt_loop
+      r.lower_stmt_loop(lctx)
+    case .k_stmt_match
+      r.lower_stmt_match(lctx)
+    case .k_expr
+      r.lower_expr_node(lctx)
+    case .k_expr_unary
+      r.lower_expr_unary(lctx)
+    case .k_expr_postfix
+      r.lower_expr_postfix(lctx)
+    case .k_expr_upcast
+      r.lower_expr_upcast(lctx)
+    case .k_stmt_expr
+      r.lower_stmt_expr(lctx)
+    case .k_expr_ternary
+      r.lower_expr_ternary(lctx)
+    case .k_expr_catch_chain
+      r.lower_expr_catch_chain(lctx)
+    default
+      r.lower_default(lctx)
+    lctx.lower_depth -= 1
+
+  fn hoist_complex_expr(r: Ast_node$@, lctx: Lowering_ctx$@, force: Bool = false): Ast_node$@
+    // `force` copies a receiver to a temporary: a literal or computed result has no side effect
+    // but no address either, so it **must be put in a slot** (`&3` is not C).
+    if r == null || (!force && !r.has_side_effect())
+      return r
+
+    // The temporary is numbered before the lower, not by hoist_to_tmp: the recursive lower can
+    // use numbers too, and the order would differ between stage1 and stage2 when self-hosting.
+    tmp_name: = lctx.gen_tmp_name()
+    r.lower(lctx)
+    lctx.pre_stmts.push(lctx.build_let_decl(tmp_name, r.type_id, r, r.loc))
+    return Ast_node.build_ident(tmp_name, r.type_id, r.loc)
+
+  fn lower_decl_fn(r: Ast_node$@, lctx: Lowering_ctx$@)
+    saved_counter: = lctx.tmp_counter
+    lctx.tmp_counter = 0
+    old_fb: = lctx.fb
+    old_cleanup_stack: = lctx.cleanup_stack
+    old_jump_stack: = lctx.jump_stack
+
+    lctx.fb = Fallback_ctx::{ .target = "", .label = "", .label_used = false, .depth = 0 }
+    lctx.cleanup_stack = List<|List<|Ast_node$@|>$@|>.create(base_core.arena)
+    lctx.jump_stack = List<|Jump_ctx|>.create(base_core.arena)
+
+    // It pushes the release of an ARC-managed value argument onto the pending list (the body
+    // block flushes it into its own scope).
+    lctx.arc_param_pending.len = 0
+    lctx.register_arc_params(r)
+
+    r.lower_default(lctx)
+
+    lctx.tmp_counter = saved_counter
+    lctx.fb = old_fb
+    lctx.cleanup_stack = old_cleanup_stack
+    lctx.jump_stack = old_jump_stack
+
+  fn lower_stmt_labeled_block(r: Self$@, lctx: Lowering_ctx$@)
+    if r.children.len < 2
+      return
+    l_node: = r.get_labeled_block_label()
+    label_node: = l_node.find_child(.k_identifier) if l_node != null else null
+    block_node: = r.get_labeled_block_inner()
+    user_label: = label_node.text if label_node != null else ""
+
+    brk_label: = lctx.gen_label_name()
+    lctx.push_jump_ctx("", brk_label, user_label, false)
+
+    block_node.lower(lctx)
+
+    is_brk_used: = lctx.pop_jump_ctx().break_used
+
+    r.morph(.k_stmt_block, "stmt_block")
+    r.clear_children()
+    r.add_child(block_node)
+
+    // The jump target label is emitted only where a break refers to it.
+    if is_brk_used
+      r.add_child(Ast_node.build_label_stmt(brk_label, r.loc))
+
+  fn lower_block(r: Ast_node$@, lctx: Lowering_ctx$@)
+    cleanup_scope: = base_ast.new_ast_node_list()
+    lctx.cleanup_stack.push(cleanup_scope)
+
+    // It flushes the argument releases that lower_decl_fn pushed into this scope, the function
+    // body's: the first block under decl_fn, so nested blocks never receive them.
+    if lctx.arc_param_pending.len > 0
+      for pending_stmt in lctx.arc_param_pending
+        cleanup_scope.push(pending_stmt)
+      lctx.arc_param_pending.len = 0
+
+    old_children: = r.children
+    new_children: = base_ast.new_ast_node_list()
+
+    for stmt in old_children
+      start_pre: = lctx.pre_stmts.len
+
+      stmt.lower(lctx)
+
+      lctx.flush_pre_stmts_to_list(start_pre, new_children)
+
+      if stmt.kind_id != .k_empty
+        new_children.push(stmt)
+    scope_len: = cleanup_scope.len
+    for $j: = scope_len; j > 0; j -= 1
+      d_node: = lctx.lower_and_wrap_cleanup(cleanup_scope.get(j - 1))
+      new_children.push(d_node)
+
+    r.children = new_children
+    lctx.cleanup_stack.len -= 1
+
+  fn wrap_stmt_with_break_label(r: Ast_node$@, inner_kind: base_ast_kinds.Ast_kind,
+    inner_text: U8[], loc: base_ast.Loc, brk_label: U8[], needs_label: Bool) //<
+      //< It wraps a labelled statement that a break refers to as `{ <the statement>; label: }`
+      //<
+      //< The wrapper is a stmt_block. lower_stmt_if, lower_stmt_loop and lower_stmt_match use it.
+      //< **With no label to place, it wraps nothing**: the wrapper would be a scope holding only
+      //< the statement (a loop's init is scoped by `emit_loop_stmt` itself).
+    if !needs_label
+      return
+    inner: = Ast_node.new(inner_kind, inner_text, loc)
+    inner.children = r.children
+    r.children = base_ast.new_ast_node_list()
+    r.morph(.k_stmt_block, "stmt_block")
+    r.add_child(inner)
+    r.add_child(Ast_node.build_label_stmt(brk_label, loc))
+
+  fn lower_stmt_if(r: Ast_node$@, lctx: Lowering_ctx$@)
+    label_node: = r.get_if_label()
+    user_label: = label_node.text if label_node != null else ""
+    is_jumpable: = user_label.len > 0
+    brk_label: = lctx.gen_label_name() if is_jumpable else ""
+
+    if is_jumpable
+      lctx.push_jump_ctx("", brk_label, user_label, false)
+
+    cond: = r.get_if_cond()
+    cond.lower(lctx)
+    r.get_if_then_block().lower(lctx)
+
+    alt_node: = r.get_if_else_block()
+    if alt_node != null
+      if alt_node.kind_id == .k_stmt_if
+        start_pre: = lctx.pre_stmts.len
+        alt_node.lower(lctx)
+
+        if lctx.pre_stmts.len > start_pre
+          wrapper_block: = Ast_node.new(.k_stmt_block, "stmt_block", alt_node.loc)
+          lctx.flush_pre_stmts_to_node(start_pre, wrapper_block)
+          wrapper_block.add_child(alt_node)
+          r.set_child(3, wrapper_block)
+      else
+        alt_node.lower(lctx)
+
+    if is_jumpable
+      is_brk_used: = lctx.pop_jump_ctx().break_used
+      if is_brk_used
+        r.wrap_stmt_with_break_label(.k_stmt_if, "if", r.loc, brk_label, true)
+
+  fn lower_stmt_loop(r: Ast_node$@, lctx: Lowering_ctx$@)
+    label_node: = r.get_loop_label()
+    user_label: = label_node.text if label_node != null else ""
+
+    init_node: = r.get_loop_init()
+    cond_node: = r.get_loop_cond()
+    step_node: = r.get_loop_step()
+    body_block: = r.get_loop_block()
+    loc: = r.loc
+
+    if init_node.kind_id != .k_empty
+      init_node.lower(lctx)
+
+    cond_start_pre: = lctx.pre_stmts.len
+    if cond_node.kind_id != .k_empty
+      cond_node.lower(lctx)
+    has_cond_pre: = lctx.pre_stmts.len > cond_start_pre
+    cond_stmts: = base_ast.new_ast_node_list()
+    lctx.flush_pre_stmts_to_list(cond_start_pre, cond_stmts)
+
+    step_start_pre: = lctx.pre_stmts.len
+    if step_node.kind_id != .k_empty
+      step_node.lower(lctx)
+    has_step_pre: = lctx.pre_stmts.len > step_start_pre
+    step_stmts: = base_ast.new_ast_node_list()
+    lctx.flush_pre_stmts_to_list(step_start_pre, step_stmts)
+
+    cont_label: = lctx.gen_label_name() // always generate a label, forcing continue into a goto
+    brk_label: = lctx.gen_label_name()
+
+    lctx.push_jump_ctx(cont_label, brk_label, user_label, true)
+
+    if has_cond_pre
+      // A condition with pre_stmts cannot go in C's for condition clause, so its evaluation
+      // and the break move to the start of the body and the loop becomes unconditional
+      // (r.set_child(2, ...) below).
+      bool_id: = I32::sema_type_env.Builtin_type_id.bool_type
+      not_expr: = Ast_node.build_unary_expr("!", cond_node, bool_id, loc)
+      goto_stmt: = Ast_node.build_goto_stmt(brk_label, loc)
+      break_block: = Ast_node.new(.k_stmt_block, "stmt_block", loc)
+      break_block.add_child(goto_stmt)
+      node_if_brk: = Ast_node.build_if_stmt(not_expr, break_block, null, loc)
+      body_block.lower(lctx)
+
+      new_body_children: = base_ast.new_ast_node_list()
+      for cond_stmt in cond_stmts
+        new_body_children.push(cond_stmt)
+      new_body_children.push(node_if_brk)
+
+      for orig_child in body_block.children
+        new_body_children.push(orig_child)
+
+      body_block.children = new_body_children
+      r.set_child(2, Ast_node.new(.k_empty, "", loc))
+    else
+      body_block.lower(lctx)
+
+    popped_jc: = lctx.pop_jump_ctx()
+    is_cont_used: = popped_jc.continue_used
+    is_brk_used: = popped_jc.break_used
+
+    if has_step_pre || is_cont_used
+      if is_cont_used
+        body_block.add_child(Ast_node.build_label_stmt(cont_label, loc))
+
+      for step_stmt in step_stmts
+        body_block.add_child(step_stmt)
+
+      if step_node.kind_id == .k_loop_step
+        for step_child in step_node.children
+          step_expr: = Ast_node.new(.k_stmt_expr, "expr", loc)
+          step_expr.add_child(step_child)
+          body_block.add_child(step_expr)
+        r.set_child(3, Ast_node.new(.k_empty, "", loc))
+
+    r.wrap_stmt_with_break_label(.k_stmt_loop, "for", loc, brk_label, is_brk_used || has_cond_pre)
+
+  fn lower_stmt_match(r: Ast_node$@, lctx: Lowering_ctx$@)
+    label_node: = r.get_match_label()
+    user_label: = label_node.text if label_node != null else ""
+    is_jumpable: = user_label.len > 0
+    brk_label: = lctx.gen_label_name() if is_jumpable else ""
+
+    lctx.push_jump_ctx("", brk_label, user_label, false)
+
+    cond: = r.get_match_cond()
+    cond.lower(lctx)
+    if !cond.is_plain_name()
+      r.set_child(1, cond.hoist_to_tmp(lctx, cond.loc))
+
+    for $i: = 2; i < r.children.len; i += 1
+      child: = r.get_child(i)
+      if child.is_keyword("case") || child.is_keyword("default")
+        continue
+
+      if child.kind_id == .k_stmt_block
+        child.lower(lctx)
+      else if child.kind_id == .k_match_pattern
+        if expr_node: = child.first_expr()
+          expr_node.lower(lctx)
+
+    is_brk_used: = lctx.pop_jump_ctx().break_used
+
+    if is_jumpable && is_brk_used
+      r.wrap_stmt_with_break_label(.k_stmt_match, "switch", r.loc, brk_label, true)
+
+  fn lower_default(r: Ast_node$@, lctx: Lowering_ctx$@)
+    for child in r.children
+      child.lower(lctx)

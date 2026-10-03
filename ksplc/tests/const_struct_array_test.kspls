@@ -1,0 +1,84 @@
+//< Checks that a top-level immutable `const` array follows its element's struct type
+//<
+//< A `Row[2]`'s element is `const_of(Row)`, so genc must strip the qualifier to see the dependency,
+//< or C fails with `array has incomplete element type` and no KSPL diagnostic ("The output order
+//< of genc's type definitions is decided after the immutability marks are stripped" in
+//< ksplc/docs/DESIGN.md).
+import "std/str" { Str_builder }
+import "std/verdict"
+
+struct Const_row
+  name: U8[]
+  n: I32
+
+priv const const_rows: Const_row[_] = ::{
+  ::{ .name = "a", .n = 1 },
+  ::{ .name = "b", .n = 2 },
+}
+
+fn test_const_struct_array()
+  verdict.start("[genc] a top-level immutable const struct array test...")
+  $total: I32 = 0
+  for row in const_rows
+    total += row.n
+  assert(total == 3, "a top-level const array of structs must be readable")
+  assert(const_rows[0].name.equals("a"), "element fields must survive the emission order")
+  verdict.pass("")
+fn test_multi_dim_array() //< that multi-dimensional fixed-length arrays share one struct tag in C
+  //<
+  //< Caution: **Choose the tag only after stripping every level of the element's immutable
+  //< qualifier** (gen/c/decl.kspls). Test both an immutable binding and a mutable one. The mutable
+  //< one has a different type id, without the qualifier, so with only one the two names never meet.
+  verdict.start("[genc] a multi-dimensional fixed-length array test...")
+  grid: I32[2][3] = ::{::{ 1, 2 }, ::{ 3, 4 }, ::{ 5, 6 } }
+  $sum: I32 = 0
+  for row in grid
+    sum += row[0] + row[1]
+  assert(sum == 21, "a 2-D array must be iterable and indexable")
+
+  $mut_grid: I32[2][3] = grid
+  mut_grid[0][0] = 10
+  assert(mut_grid[0][0] == 10, "a writable binding must accept element writes")
+  assert(grid[0][0] == 1, "copying into another binding must not alias the source")
+
+  // A slice element takes the same path (`Const_U8_Slice`).
+  names: U8[][2][2] = ::{::{ "a", "b" }, ::{ "c", "d" } }
+  $joined: = Str_builder.new()
+  defer joined.free()
+  for pair in names
+    joined.s(pair[0]).s(pair[1])
+  assert(joined.slice().equals("abcd"), "a 2-D array of slices must keep its elements")
+  verdict.pass("one C struct tag is shared even in multiple dimensions.")
+
+// ==========================================
+// A struct holds an enum by value and that enum's payload holds **a slice of the first struct**.
+// A descriptor needs only a forward declaration of the element; **treating it as needing the full
+// definition makes a false cycle** (`Cyc_row` → `Cyc_kind` → `Cyc_row`).
+// ==========================================
+
+struct Cyc_row //<
+  //< The struct half of a struct and an enum pointing at each other through a slice
+  //<
+  //< **Building the array** is the point (only it needs the wrapper). The payload is built at run
+  //< time, because `--target=llvm` cannot lower a variant with a payload written into a `const`
+  //< (emit_llvm_const_init in gen/llvm/decl.kspls).
+  name: U8[]
+  kind: Cyc_kind
+
+enum Cyc_kind
+  leaf
+  branch(rows: Cyc_row[])
+
+fn test_struct_enum_slice_cycle()
+  verdict.start("[genc] a struct and an enum pointing at each other test...")
+  leaves: Cyc_row[2] = ::{::{ .name = "x", .kind = .leaf }, ::{ .name = "y", .kind = .leaf } }
+  root: Cyc_row = ::{ .name = "r", .kind = Cyc_kind.branch(Cyc_row[]::leaves) }
+  $names: = Str_builder.new()
+  defer names.free()
+  names.s(root.name)
+  switch root.kind case .branch(sub)
+    for leaf in sub
+      names.c('/').s(leaf.name)
+  default {}
+  assert(names.slice().equals("r/x/y"), "a struct/enum cycle through a slice must emit in order")
+  verdict.pass("")

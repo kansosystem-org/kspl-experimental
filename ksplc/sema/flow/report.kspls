@@ -1,0 +1,130 @@
+//< The diagnostics the dataflow analysis reports
+//<
+//< The tracking (`sema/flow/track.kspls`) computes each binding's state; this file only decides
+//< how it is reported, so a message or condition is changed only here.
+//< Caution: **Report once.** A binding can go wrong along several paths; the caller keeps the
+//< already-reported flag, and this file stays silent when it is set (`report_*_if_needed`).
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/sema/flow/track" as sema_flow_track
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/arc" as sema_type_arc
+import "ksplc/sema/type/query" as sema_type_query
+import "std/chars" // testing and slicing single characters
+import "std/str"
+
+fn is_arc_related(c: Sema_ctx$@, type_id: I32): Bool //<
+  //< Whether a declared type is ARC-managed itself or has an ARC-managed value field
+  //<
+  //< The type is a variable's or an argument's.
+  //< One pointer is stripped at the top level only (`Rc<|T|>@`), not in the recursion (see
+  //< Env.type_has_arc_content).
+  stripped: = c.env.strip_ptr(type_id)
+  return c.env.type_is_managed(stripped)
+
+fn check_local_usage(c: Sema_ctx$@, st: sema_flow_track.Local_state)
+  decl: = st.node
+  is_param: = decl.kind_id == .k_fn_param
+  is_match_payload: = decl.kind_id == .k_identifier
+  $var_name: = ""
+  $target_node: = decl
+
+  if is_param
+    id_node: = decl.find_child(.k_identifier)
+    if id_node != null
+      var_name = id_node.text
+      target_node = id_node
+  else if is_match_payload
+    var_name = decl.text
+  else
+    id_node: = decl.get_var_decl_id()
+    if id_node != null
+      var_name = id_node.text
+      target_node = id_node
+
+  if var_name.len == 0 || var_name.starts_with("_")
+    return
+
+  // [W0602] ARC inserts hidden retain / release calls, a risk where execution must be
+  // deterministic, so it warns at each use. Off by default like I0603 (`##lint(W0602 = on)`), so
+  // its level is asked first: walking every local's type costs as much as the rest of the check.
+  if !is_match_payload && !c.is_code_off(target_node, "W0602") &&
+    is_arc_related(c, decl.type_id)
+    c.clear_scratch()
+      .s("[W0602] Variable '\{var_name\}' has an ARC-managed type, which inserts hidden \
+        retain()/release() calls whose timing is not visible at this declaration. This conflicts \
+        with deterministic-mode's goal of fully visible execution timing. Consider explicit \
+        ownership (arena/defer) instead, or accept this as an intentional exception.")
+    c.warn(target_node, c.scratch.slice())
+
+  if !st.is_read
+    if st.is_mutated
+      c.clear_scratch()
+        .s("[W0208] Variable '\{var_name\}' is assigned but never read. Prefix with '_' to ignore.")
+    else
+      c.clear_scratch()
+        .s("[W0207] Nothing reads local variable or parameter '\{var_name\}'. Prefix with '_' to \
+          ignore.")
+      // Caution: **Say "nobody reads it", not "unused".** A fixed-length array's `.len` folds to a
+      // constant (sema/body/postfix.kspls), so `a.len` alone reads nothing. The reason is added
+      // for an array only.
+      if c.env.is_array(decl.type_id)
+        c.scratch
+          .s(" Note: a fixed array's '.len' folds at compile time, so it does not count as a read; \
+            declare a 'const' if you only need the length.")
+    c.warn(target_node, c.scratch.slice())
+  else if is_param && !st.is_reassigned && decl.has_mut_binding_marker()
+    // [I0601] The formal-parameter version: not normalized to `let` / `var`, so `$` is checked
+    // directly (has_mut_binding_marker).
+    c.clear_scratch()
+      .s("[I0601] Parameter '\{var_name\}' is never reassigned. Remove the '$' marker.")
+    c.information(target_node, c.scratch.slice())
+  else if decl.kind_id == .k_decl_var && decl.text.equals("var") && !st.is_reassigned
+    // [I0601] The local-variable version. "var_synth" (the for-in temporary, see desugar.kspls)
+    // is excluded: no marker can be written there.
+    c.clear_scratch().s("[I0601] Binding '\{var_name\}' is never mutated. Remove the '$' marker.")
+    c.information(target_node, c.scratch.slice())
+
+fn err_node_var_name(err_node: Ast_node$@): U8[] //<
+  //< The variable's name, taken from the identifier node (or its first child) for a message
+  return (err_node.text if err_node.kind_id == .k_identifier
+    else (err_node.get_child(0).text if err_node.children.len > 0 else ""))
+
+fn report_uninit_if_needed(c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@,
+  def: Ast_node$@, err_node: Ast_node$@)
+  if !state.contains(def)
+    var_name: = err_node_var_name(err_node)
+    c.sema.clear_scratch().s("variable '\{var_name\}' may be used uninitialized here")
+    c.sema.err(err_node, c.sema.scratch.slice())
+    c.has_error = true
+    state.add(def)
+
+fn report_freed_if_needed(c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@,
+  def: Ast_node$@, err_node: Ast_node$@) //<
+    //< Reports a suspected use-after-free or double free
+    //<
+    //< Once reported, the freed state is cleared so later references do not cascade errors (as the
+    //< uninit check does).
+  if state.contains_freed(def)
+    var_name: = err_node_var_name(err_node)
+    c.sema.clear_scratch()
+      .s("variable '\{var_name\}' may already be freed here (use-after-free or double free)")
+    c.sema.err(err_node, c.sema.scratch.slice())
+    c.has_error = true
+    state.remove_freed(def)
+
+fn report_moved_if_needed(c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@,
+  def: Ast_node$@, err_node: Ast_node$@) //<
+    //< Reports a Move_only binding used after being moved
+    //<
+    //< Once reported, the moved state is cleared (as for uninit and freed).
+  if !state.moved_vars.contains(def)
+    return
+  var_name: = err_node_var_name(err_node)
+  c.sema.clear_scratch()
+    .s("variable '\{var_name\}' was moved out of and cannot be used again (its type opts into \
+      'Move_only', so copying it would duplicate an owned handle and free it twice). Borrow it with \
+      '\{var_name\}@' instead of passing it by value, or re-assign it before this use.")
+  c.sema.err(err_node, c.sema.scratch.slice())
+  c.has_error = true
+  state.moved_vars.remove(def)

@@ -1,0 +1,79 @@
+//< The HC-SR04 ultrasonic distance sensor (wired directly to a Raspberry Pi Pico W / RP2040's GPIO)
+//<
+//< A 10µs High pulse on TRIG makes the sensor send eight bursts at 40kHz and hold ECHO High until
+//< the reflection returns.
+//< Caution: **Call clocks.init() first.** The width is measured in real microseconds on
+//< rp2040/timer. This drives **an external device**, not an RP2040 peripheral.
+import "ksos/drivers/rp2040/gpio"
+import "ksos/drivers/rp2040/timer"
+
+const max_distance_mm: U32 = 3000 //< the largest distance that can be measured
+  //<
+  //< Beyond it, or with no reflection, the result is "too far", not "an error".
+
+const echo_timeout_us: U32 = 18000 //< the limit on waiting for ECHO
+  //<
+  //< The same value as Freenove's sample (300cm × 60).
+
+const settle_us: U32 = 36000 //<
+  //< Left between measurements, so the next one does not pick up the previous reflection
+
+const trigger_pulse_us: U32 = 10 //< the pulse width sent on TRIG
+  //<
+  //< The data sheet requires at least 10µs.
+
+struct Distance
+  ok: Bool //< false means it could not be measured (see the reason below)
+  mm: U32 //< 0 to 3000 when ok
+  echo_us: U32 //< the raw High width in µs (for calibration)
+  timed_out: Bool //< true means no reflection came back: too far, or absorbed
+
+fn init(trig: U32, echo: U32) //< sets up the pins
+  //<
+  //< Call it once after gpio.init().
+  gpio.init_out(trig)
+  gpio.clear(trig)
+  // No pull. The sensor drives ECHO itself.
+  gpio.init_in(echo)
+
+fn echo_us_to_mm(us: U32): U32 //< converts the time of flight in µs to the distance in mm
+  //<
+  //< Caution: **Multiply in U64.** In U32, `us * 17` wraps and an out-of-range input becomes
+  //< **a plausible small value** ("0mm = an obstacle right ahead").
+  return U32::(U64::us * 17U64 / 100U64)
+
+fn measure(trig: U32, echo: U32): Distance //< measures once
+  //<
+  //< It blocks for 2 × echo_timeout_us (36ms) at worst. When calling it repeatedly, leave settle_us
+  //< between calls.
+  // --- send the 10µs pulse ---
+  // Drive Low first; starting from High it is not seen as a pulse.
+  gpio.clear(trig)
+  timer.delay_us(2)
+  gpio.set(trig)
+  timer.delay_us(trigger_pulse_us)
+  gpio.clear(trig)
+
+  // --- wait for ECHO to go High ---
+  // A limit here too: with no sensor connected it never goes High.
+  wait_start: = timer.now_us()
+  for !gpio.read(echo)
+    if timer.elapsed_us(wait_start) > echo_timeout_us
+      // No response at all: suspect the wiring, not "too far".
+      return Distance::{ .ok = false, .mm = 0, .echo_us = 0, .timed_out = false }
+
+  // --- measure the High width ---
+  high_start: = timer.now_us()
+  for gpio.read(echo)
+    if timer.elapsed_us(high_start) > echo_timeout_us
+      return Distance::{
+        .ok = true,
+        .mm = max_distance_mm,
+        .echo_us = echo_timeout_us,
+        .timed_out = true,
+      }
+  width: = timer.elapsed_us(high_start)
+  $mm: U32 = echo_us_to_mm(width)
+  if mm > max_distance_mm
+    mm = max_distance_mm
+  return Distance::{ .ok = true, .mm = mm, .echo_us = width, .timed_out = false }

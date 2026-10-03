@@ -1,0 +1,34 @@
+//< Reads the file an `embed` names, for either backend
+//<
+//< **Both backends read the file here**: it is found the way an import's file is, from the file
+//< that embeds it (`resolve_embed_path` in `../base/ast.kspls`), and one that cannot be read is
+//< rejected at the path written, naming the path opened.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/core" as base_core
+import "ksplc/base/diag" as base_diag
+import "ksplc/base/locate" as base_locate
+import "std/ds" { Map }
+import "std/io"
+import "std/str" { Str_builder }
+
+fn read(decl: Ast_node$@, source_map: Map<|U8[], U8$[]|>$@): Option<|U8[]|> //<
+  //< The bytes of the file an `embed` declaration names, or none once the failure is reported
+  //<
+  //< The caller owns the bytes (it frees their `ptr`) and fails its translation on none.
+  path_node: = decl.get_embed_path()
+  decl.ice_assert(path_node != null, "embed_decl missing its path")
+  raw_path: = path_node.text
+  decl.ice_assert(raw_path.len >= 2, "embed_decl path is not a string literal")
+  clean_path: = U8[]::{ .ptr = raw_path.ptr + 1, .len = raw_path.len - 2 }
+  path: = base_locate.embed_disk_path(decl.loc.file().resolve_embed_path(clean_path))
+  data: = io.read_file(path) catch
+    src: = source_map.get(decl.loc.file()) catch ""
+    $msg: = Str_builder.new()
+    defer msg.free()
+    msg.s("cannot read embed file '\{path\}'")
+    base_diag.print_diagnostic(decl.loc.file(), src, path_node.loc.offset, raw_path.len,
+      msg.slice(), .error, src.line_starts(base_core.arena))
+    return Option<|U8[]|>.none
+  base_locate.note_embedded(path)
+  return Option<|U8[]|>.some(data)

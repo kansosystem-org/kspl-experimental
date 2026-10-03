@@ -1,0 +1,296 @@
+//< Builds the thunks and vtables for a trait value
+//<
+//< An `x as I` becomes the pair of "the subject's address" and "that type's vtable for I".
+//< Caution: **Do not copy how the key is built.** genc and genllvm print the same
+//< `kspl_vtable_impl_<conforming type>_<trait>`, so if the base-type stripping drifts, only the
+//< reference is printed and no vtable is emitted (see vtable_key).
+//< It runs once, before `ksplc/lower/root.kspls` lowers statements and expressions.
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/base/diag" as base_diag
+import "ksplc/lower/abi" as lower_abi
+import "ksplc/lower/ctx" as lower_ctx
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/def" as sema_type_def
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
+import "std/ds" { List, Map }
+
+priv fn vtable_key(c: Sema_ctx$@, target_id: I32, trait_id: I32): U8[] //<
+  //< The vtable key an upcast names
+  //<
+  //< It is built from the same pair as the `kspl_vtable_impl_<conforming type>_<trait>` printed
+  //< by emit_upcast_expr in gen/c/expr.kspls and by gen/llvm/expr_agg.kspls.
+  //< Caution: **Take the base type with receiver_base_id.** The upcast's side comes from the
+  //< expression's type (`b@` is a `Box immut@`; `p: Pt@` with `typedef Pt = Box` has an alias
+  //< under the pointer), the vtable's side from the impl's target (`Box`): a qualifier or alias
+  //< left on makes the keys disagree, and genc prints only the reference, with no vtable.
+  base_id: = c.env.receiver_base_id(target_id)
+  return base_core.arena
+    .dup_str(c.clear_scratch().s("\{base_id\}:\{trait_id\}").slice())
+
+priv fn collect_upcast_keys(r: Ast_node$@, c: Sema_ctx$@, out: Map<|U8[], Bool|>$@) //<
+  //< It collects the (conforming type, trait) pairs the upcasts in this tree need
+  //<
+  //< It limits the vtable constants to **the pairs needed, and no others**: a conformance that
+  //< grows per instance (`impl<|T|> List<|T|>: operator.Index`) would otherwise keep producing
+  //< constants and thunks nobody upcasts to.
+  if r == null
+    return
+  if r.kind_id == .k_expr_upcast
+    inner: = r.get_upcast_inner()
+    if inner != null && r.type_id != 0 && inner.type_id != 0
+      out.set(vtable_key(c, inner.type_id, r.type_id), true)
+  for child in r.children
+    collect_upcast_keys(child, c, out)
+
+fn generate_trait_thunks(root: Ast_node$@, c: Sema_ctx$@)
+  base_diag.ice_assert(root != null, "lower_root.generate_trait_thunks: root is null")
+  new_decls: = base_ast.new_ast_node_list()
+  $needed: = Map<|U8[], Bool|>.new(base_core.arena)
+  collect_upcast_keys(root, c, needed@)
+  // Caution: **Do not filter by whether it has a live method.** An `impl P: Trait {}` conforms
+  // with inherent methods (found by `resolve_impl_target`), and `is_alive_for_backend` needs a
+  // `decl_fn` child, so its vtable would go missing while genc prints the reference and the C
+  // compiler fails on an undefined name. `needed` does the filtering.
+  for child in root.children
+    if child.kind_id == .k_decl_impl && !child.is_generic_template()
+      generate_thunks_for_impl(child, c, new_decls, needed@)
+  // An instantiated generic's impl has no `decl_impl` in the tree, so it is built from the list
+  // sema recorded (Trait_inst in sema/session/state.kspls).
+  // Caution: loc must be the position where the generic's impl was **written**. `loc.file`'s
+  // hash decides which translation unit it goes to (unit_for in gen/c/ctx.kspls).
+  for inst in c.generics.trait_insts
+    emit_trait_vtable(c, inst.target_id, inst.trait_id, inst.loc_node.loc, new_decls, needed@)
+  for new_decl in new_decls
+    root.add_child(new_decl)
+
+priv struct Thunk_parts //< the result of building a thunk's signature
+  //<
+  //< It holds p0 and the other parameter nodes, for the body's def_node links.
+  thunk_fn: Ast_node$@
+  p0: Ast_node$@
+  p_nodes: List<|Ast_node$@|>$@
+
+priv struct Impl_target //< the resolved callee (the implementing method)
+  name: U8[] //< the already-mangled call name (on the arena)
+  is_self_ptr: Bool //<
+    //< whether the receiver is passed by pointer (dereferenced with $ where by value)
+  ret_id: I32 //< the implementation's return type (0 uses the trait declaration's type)
+  def_node: Ast_node$@
+
+priv fn build_thunk_signature(c: Sema_ctx$@, req_m: Sema_symbol$@, perm_thunk_name: U8[],
+  loc: base_ast.Loc): Thunk_parts //<
+    //< Step 1: it builds the thunk function's signature fn <name>(r: Void@, ...): Ret.
+  params: = Ast_node.new(.k_param_list, "params", loc)
+  void_ptr_id: = I32::sema_type_env.Builtin_type_id.void_ptr
+  p0: = Ast_node.build_synth_param("r", c.env.get_str(void_ptr_id), void_ptr_id, loc)
+  params.add_child(p0)
+
+  req_params: = req_m.node.get_fn_params()
+  p_nodes: = List<|Ast_node$@|>.create(base_core.arena)
+  if req_params != null
+    $param_idx: = 0
+    for rp in req_params.children
+      if rp.kind_id == .k_fn_param
+        if param_idx > 0
+          params.add_child(Ast_node.new(.k_literal, ",", loc))
+          p_node: = Ast_node.build_synth_param(rp.get_decl_id_text(),
+            c.env.get_str(rp.type_id), rp.type_id, loc)
+          params.add_child(p_node)
+          p_nodes.push(p_node)
+        param_idx += 1
+  thunk_fn: = Ast_node.build_synth_fn(perm_thunk_name, params, c.env.get_str(req_m.type_id),
+    req_m.type_id, loc)
+  return Thunk_parts::{ .thunk_fn = thunk_fn, .p0 = p0, .p_nodes = p_nodes }
+
+priv fn resolve_impl_target(c: Sema_ctx$@, req_m: Sema_symbol$@, t_id: I32, clean_t_id: I32,
+  t_mangled: U8[]): Impl_target //<
+    //< Step 2: the target type's implementing method: call name, receiver passing, return type
+    //<
+    //< Where none is found, the call name is the default mangled name.
+  m_name: = req_m.name
+  $res: = Impl_target::{ .name = "", .is_self_ptr = true, .ret_id = 0, .def_node = req_m.node }
+
+  real_t_id: = c.env.get_real_type(clean_t_id)
+  if real_t_id >= 0 && real_t_id < c.env.id_to_type.len
+    target_methods: = c.env.id_to_type.get(real_t_id).methods
+    if target_methods != null
+      impl_sym: = target_methods.get(m_name) catch null
+      if impl_sym != null
+        res.def_node = impl_sym.node
+        res.ret_id = impl_sym.type_id
+        if impl_sym.flags.is_generated_instance
+          m_id_node: = impl_sym.node.find_child(.k_identifier)
+          res.name = m_id_node.text if m_id_node != null else impl_sym.name
+        else
+          res.name = c.clear_scratch().s("kspl_").s(t_mangled).s("_").s(m_name).slice()
+        res.is_self_ptr = impl_sym.node.receiver_is_pointer(c)
+  if res.name.len == 0
+    res.is_self_ptr = c.env.is_pointer(t_id)
+    res.name = c.clear_scratch().s("kspl_").s(t_mangled).s("_").s(m_name).slice()
+  res.name = base_core.arena.dup_str(res.name)
+  return res
+
+priv fn build_thunk_body(c: Sema_ctx$@, parts: Thunk_parts, target: Impl_target,
+  req_m: Sema_symbol$@, i_id: I32, clean_t_id: I32, loc: base_ast.Loc): Ast_node$@ //<
+    //< Step 3: it builds the thunk body `{ return <impl>((T@)r, ...); }`
+    //<
+    //< A return of the trait itself is upcast. A Void one is a statement plus an empty return.
+  block: = Ast_node.new(.k_stmt_block, "stmt_block", loc)
+
+  call_node: = Ast_node.new(.k_expr_postfix, "(", loc)
+  call_node.type_id = target.ret_id if target.ret_id != 0 else req_m.type_id
+  ident_node: = Ast_node.new(.k_identifier, target.name, loc)
+  ident_node.def_node = target.def_node
+  call_node.add_child(ident_node)
+  call_node.add_child(Ast_node.new(.k_literal, "(", loc))
+
+  args: = Ast_node.new(.k_expr_args, "args", loc)
+
+  ptr_target_id: = c.env.make_ptr(clean_t_id)
+  cast_node: = Ast_node.new(.k_expr_postfix, "::", loc)
+  cast_node.type_id = ptr_target_id
+  ref_r: = Ast_node.new(.k_identifier, "r", loc)
+    .with_type(I32::sema_type_env.Builtin_type_id.void_ptr)
+  ref_r.def_node = parts.p0 // as build_synth_param links it (ksplc/base/ast.kspls)
+  cast_node.add_child(ref_r)
+  cast_node.add_child(Ast_node.new(.k_literal, "::", loc))
+  ptr_type_expr: = Ast_node.build_type_expr(c.env.get_str(ptr_target_id), ptr_target_id, loc)
+  cast_node.add_child(ptr_type_expr)
+
+  $final_arg0: = cast_node
+  if !target.is_self_ptr
+    // Where it is passed by value, it adds a `$` node for the dereference (*(T*)r).
+    deref_node: = Ast_node.new(.k_expr_postfix, "$", loc)
+    deref_node.type_id = clean_t_id
+    deref_node.add_child(cast_node)
+    deref_node.add_child(Ast_node.new(.k_literal, "$", loc))
+    final_arg0 = deref_node
+  args.add_child(final_arg0)
+
+  req_params: = req_m.node.get_fn_params()
+  if req_params != null
+    $param_idx: = 0
+    for rp in req_params.children
+      if rp.kind_id == .k_fn_param
+        if param_idx > 0
+          args.add_child(Ast_node.new(.k_literal, ",", loc))
+          ref_p: = Ast_node.new(.k_identifier, rp.get_decl_id_text(), loc).with_type(rp.type_id)
+          ref_p.def_node = parts.p_nodes.get(param_idx - 1) // as for ref_r above
+          args.add_child(ref_p)
+        param_idx += 1
+  call_node.add_child(args)
+
+  is_void: = sema_type_env.is_void(req_m.type_id)
+  stmt_ret: = Ast_node.new(.k_stmt_return, "return", loc)
+  stmt_ret.add_child(Ast_node.new(.k_keyword, "return", loc))
+  if req_m.type_id == i_id
+    upcast_node: = Ast_node.new(.k_expr_upcast, "upcast", loc)
+    upcast_node.type_id = i_id
+    upcast_node.add_child(call_node)
+    stmt_ret.add_child(upcast_node)
+  else if !is_void
+    stmt_ret.add_child(call_node)
+  else
+    block.add_child(Ast_node.new(.k_stmt_expr, "expr", loc).add_child(call_node))
+  block.add_child(stmt_ret)
+  return block
+
+priv fn generate_thunks_for_impl(impl_node: Ast_node$@, c: Sema_ctx$@,
+  out_decls: List<|Ast_node$@|>$@, needed: Map<|U8[], Bool|>$@)
+  target_node: = impl_node.get_decl_type_node()
+  $trait_node: Ast_node$@ = null
+  if inode: = impl_node.get_impl_trait_node()
+    trait_node = inode
+  if target_node == null || trait_node == null
+    return
+  emit_trait_vtable(c, target_node.type_id, trait_node.type_id, impl_node.loc, out_decls, needed)
+
+// It builds one conformance's thunks and vtable constant, for a written `decl_impl` or an
+// instantiated generic's (`Trait_inst` in `sema/session/ctx.kspls`).
+// A thunk body's own `expr_upcast` (`build_thunk_body`) names the pair being built, so nothing
+// needs adding to needed.
+priv fn emit_trait_vtable(c: Sema_ctx$@, t_id: I32, i_id: I32, loc: base_ast.Loc,
+  out_decls: List<|Ast_node$@|>$@, needed: Map<|U8[], Bool|>$@)
+  // The base type used for the vtable's name. It must be stripped the same way as in vtable_key.
+  clean_t_id: = c.env.receiver_base_id(t_id)
+  if t_id == 0 || i_id == 0
+    return
+  if !(needed.get(vtable_key(c, clean_t_id, i_id)) catch false)
+    return
+
+  $trait_def: sema_type_def.Trait_def$@ = null
+  switch c.env.get_trait_def(c.env.get_str(i_id)) case .some(id)
+    trait_def = id
+  case .none
+    return
+
+  c.clear_scratch()
+  c.env.mangle_type_id_to(clean_t_id, c.scratch)
+  t_mangled: = base_core.arena.dup_str(c.scratch.slice())
+
+  c.clear_scratch()
+  c.env.mangle_type_id_to(i_id, c.scratch)
+  i_mangled: = base_core.arena.dup_str(c.scratch.slice())
+
+  vtable_init: = Ast_node.new(.k_struct_literal, "struct_literal", loc)
+  vtable_type_name: = c.clear_scratch().s("kspl_vtable_").s(i_mangled).slice()
+  vtable_type_id: = c.env.get_or_add(vtable_type_name)
+  vtable_init.type_id = vtable_type_id
+  // Per method it does "build the signature -> resolve the implementation -> build the body ->
+  // register the symbol -> add the vtable field".
+  // **Fill only the methods that have a slot.** The emitter (`../gen/c/types.kspls`) emits no
+  // slot for a method with a default body, so filling one here gives C naming a missing field.
+  $wrote_one: = false
+  for k in Range.asc(trait_def.methods_list.len)
+    req_m: = trait_def.methods_list.get(k)
+    if !req_m.node.has_vtable_slot()
+      continue
+    thunk_scratch: = c.clear_scratch().s("kspl_thunk_").s(t_mangled).s("_").s(i_mangled).s("_")
+      .s(req_m.name).slice()
+    perm_thunk_name: = base_core.arena.dup_str(thunk_scratch)
+
+    parts: = build_thunk_signature(c, req_m, perm_thunk_name, loc)
+    target: = resolve_impl_target(c, req_m, t_id, clean_t_id, t_mangled)
+    parts.thunk_fn
+      .add_child(build_thunk_body(c, parts, target, req_m, i_id, clean_t_id, loc))
+
+    lower_ctx.register_synth_symbol(parts.thunk_fn, sema_type_scope.Sym_kind.function(false),
+      perm_thunk_name, req_m.type_id)
+    out_decls.push(parts.thunk_fn)
+
+    // Caution: **Put the separator in front**, or each one skipped leaves an extra `,`.
+    if wrote_one
+      vtable_init.add_child(Ast_node.new(.k_literal, ",", loc))
+    wrote_one = true
+    field_init: = Ast_node.new(.k_expr_field_init, "=", loc)
+    field_init.add_child(Ast_node.new(.k_literal, ".", loc))
+    field_init.add_child(Ast_node.new(.k_identifier, req_m.name, loc))
+    field_init.add_child(Ast_node.new(.k_literal, "=", loc))
+    // Caution: **Set def_node** ("The limits on building an AST" in ksplc/docs/DESIGN.md). A
+    // vtable is the only place that names a thunk, **as data** and never as a call; without it
+    // prune_unreachable_fns drops every thunk.
+    thunk_ref: = Ast_node.new(.k_identifier, perm_thunk_name, loc)
+    thunk_ref.def_node = parts.thunk_fn
+    field_init.add_child(thunk_ref)
+    vtable_init.add_child(field_init)
+
+  const_name: = c.clear_scratch().s("kspl_vtable_impl_").s(t_mangled).s("_").s(i_mangled).slice()
+  perm_const_name: = base_core.arena.dup_str(const_name)
+
+  vtable_const: = Ast_node.new(.k_decl_const, "const", loc)
+  vtable_const.add_child(Ast_node.new(.k_empty, "", loc))
+  vtable_const.add_child(Ast_node.new(.k_keyword, "const", loc))
+  vtable_const.add_child(Ast_node.new(.k_identifier, perm_const_name, loc))
+  vtable_const.add_child(Ast_node.build_type_expr(vtable_type_name, vtable_type_id, loc))
+  vtable_const.add_child(vtable_init)
+  vtable_const.type_id = vtable_type_id
+
+  lower_ctx.register_synth_symbol(vtable_const, sema_type_scope.Sym_kind.constant, perm_const_name,
+    vtable_type_id)
+
+  out_decls.push(vtable_const)

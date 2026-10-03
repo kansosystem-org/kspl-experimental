@@ -1,0 +1,38 @@
+//< Counts the training material
+//<
+//< It is kept apart from its caller `tools/ai_assist/build_corpus.kspls` so that a test can
+//< import it: a program holds only one `main`.
+import "std/chars" // `is_space`
+import "std/str"
+
+fn skip_dir(name: U8[]): Bool //< the folders left out of the scan
+  //<
+  //< It goes by the name alone: the only `negative` directory is ksplc/tests/negative
+  //< (make_error_fix.kspls does not use this; it breaks a valid file itself).
+  return name.equals("negative")
+
+fn count_words(text: U8[]): Sz //< how many words, a run of whitespace being one boundary
+  $n: Sz = 0
+  $in_word: = false
+  for i in Range.asc(text.len)
+    is_ws: = (text.ptr + i).is_space()
+    if !is_ws && !in_word
+      n += 1
+      in_word = true
+    else if is_ws
+      in_word = false
+  return n
+
+fn approx_tokens(text: U8[]): Sz //< a rough token count: length / 4 or the word count, the larger
+  //<
+  //< It gives a sense of the size before the real tokenizer is chosen.
+  by_len: = text.len / 4
+  by_words: = count_words(text)
+  return by_len if by_len > by_words else by_words
+
+fn count_lines(text: U8[]): Sz //< how many lines, an empty text counting as one
+  $n: Sz = 1
+  for i in Range.asc(text.len)
+    if (text.ptr + i)$ == '\n'
+      n += 1
+  return n

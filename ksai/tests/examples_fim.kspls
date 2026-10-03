@@ -1,0 +1,86 @@
+//< Trains `fim_coder` for a few steps on a corpus written here, then has it fill one hole
+//<
+//< Part of `ksai/tests/examples_main.kspls`, not a suite. **What is tested is the round trip**
+//< (train, write, read, complete, one answer line per hole) and that threads change only the time.
+//< Answer quality is not tested here; the compiler's evaluation outside this package measures it.
+import "std/fs"
+import "std/io"
+import "std/json"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/subproc"
+import "std/verdict"
+
+priv const fim_wait_ms: I32 = 600000 //< the cap on one run of fim_coder
+priv const said_cap: Sz = 1024 * 1024 //< how much of what it says is kept
+
+priv fn byte_vocab(arena: Arena$@): U8[] //< a vocabulary of the 256 bytes alone
+  //<
+  //< **Every text encodes under it** with no merge, so the corpus below needs no tokenizer
+  //< trained first.
+  $b: = Str_builder.new()
+  defer b.free()
+  hex: = "0123456789abcdef"
+  for i in Range.asc(256)
+    b.s("\{i + 1\}\t").c(hex[i / 16]).c(hex[i % 16]).c('\n')
+  return arena.dup_str(b.slice())
+
+priv fn run(argv: U8[][], work: U8[], arena: Arena$@): U8[] //< one run; its output if it failed
+  r: = subproc.run_capture(argv, work, fim_wait_ms, said_cap, arena)
+  if r.spawn_failed || r.timed_out || r.exit_code != 0
+    return arena.text().s("exit \{r.exit_code\}:\n").s(r.stdout_data).s(r.stderr_data).take()
+  return ""
+
+fn test_fim_round_trip(exe: U8[], work: U8[], arena: Arena$@) //<
+  //< fim_coder trains, writes its weights, reads them back, and answers each hole with candidates
+  verdict.start("[examples] fim_coder trains on a corpus and answers a hole")
+  dir: = fs.join(work, "fim", arena)
+  fs.mkdir_all(dir) catch
+    panic(U8$[]::arena.text().s("cannot create the working directory: \{dir\}").take())
+  corpus: =
+    "{\"prefix\":\"fn one(): I32\\n  return \
+      \",\"middle\":\"1\",\"suffix\":\"\\n\"}\n{\"prefix\":\"fn two(): I32\\n  return \
+      \",\"middle\":\"2\",\"suffix\":\"\\n\"}\n"
+  holes: = "{\"prefix\":\"fn three(): I32\\n  return \",\"suffix\":\"\\n\"}\n"
+  fs.write_tree(dir, U8[][]::{ "vocab.txt", "merges.txt", "fim.jsonl", "holes.jsonl" },
+    U8[][]::{ byte_vocab(arena), "", corpus, holes }, arena) catch
+    panic(U8$[]::arena.text().s("the samples cannot be written: \{dir\}").take())
+  tok: = U8[][]::{ "--vocab=vocab.txt", "--merges=merges.txt" }
+  trained: =
+    run(U8[][]::{ exe, "train", tok[0], tok[1], "--corpus=fim.jsonl", "--out=fim.safetensors",
+    "--steps=5" }, dir, arena)
+  assert(trained.len == 0,
+    U8$[]::arena.text().s("fim_coder train failed, ").s(trained).take())
+  answered: =
+    run(U8[][]::{ exe, "complete", tok[0], tok[1], "--weights=fim.safetensors", "--in=holes.jsonl",
+    "--out=answers.jsonl", "--samples=2" }, dir, arena)
+  assert(answered.len == 0,
+    U8$[]::arena.text().s("fim_coder complete failed, ").s(answered).take())
+  text: = io.read_file(fs.join(dir, "answers.jsonl", arena)) catch
+    panic("fim_coder wrote no answers")
+  lines: = text.lines(arena)
+  assert(lines.len == 1,
+    U8$[]::arena.text().s("one hole, not one answer line:\n").s(text).take())
+  one: = json.parse(lines[0], arena) catch json.Val.null_val
+  assert(one.get("candidates").arr_list(arena).len == 2,
+    U8$[]::arena.text().s("one hole did not get two candidates:\n").s(text).take())
+  verdict.pass("fim_coder's weights round-trip, and each hole gets its candidates, greedy first")
+
+fn test_fim_threads_keep_weights(exe: U8[], work: U8[], arena: Arena$@) //<
+  //< A batch trained on one thread and on two writes the same weights, byte for byte
+  verdict.start("[examples] fim_coder's weights do not depend on the thread count")
+  dir: = fs.join(work, "fim", arena) // the round trip's samples, written already
+  tok: = U8[][]::{ "--vocab=vocab.txt", "--merges=merges.txt" }
+  for threads in U8[][]::{ "1", "2" }
+    said: =
+      run(U8[][]::{ exe, "train", tok[0], tok[1], "--corpus=fim.jsonl", "--steps=3", "--batch=2",
+      arena.text().s("--threads=").s(threads).take(),
+      arena.text().s("--out=threads_").s(threads).s(".safetensors").take() }, dir, arena)
+    assert(said.len == 0,
+      U8$[]::arena.text().s("fim_coder train failed, ").s(said).take())
+  one: = io.read_file(fs.join(dir, "threads_1.safetensors", arena)) catch
+    panic("fim_coder wrote no weights on one thread")
+  two: = io.read_file(fs.join(dir, "threads_2.safetensors", arena)) catch
+    panic("fim_coder wrote no weights on two threads")
+  assert(one.equals(two), "fim_coder: two threads wrote other weights than one")
+  verdict.pass("fim_coder: the sequences are drawn and summed in one order, whichever thread ran")

@@ -1,0 +1,206 @@
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/json" + { Json_builder }
+import "std/jsonrpc"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// std/jsonrpc: tests of extracting a frame and of building one.
+//
+// Caution: **Always include a case where a read's boundary and a frame's boundary differ**, or the
+// tests pass without ever extracting from a backlog. **Check that the next frame is still readable
+// after a broken header**; a broken header that is not discarded fails forever.
+// ==========================================
+priv fn taken_or(acc: Str_builder$@, arena: Arena$@): U8[]
+  got: = jsonrpc.take_frame(acc, arena) catch
+    return "(broken)"
+  switch got case .some(body)
+    return body
+  case .none
+    return "(none)"
+
+priv fn length_or(head: U8[]): Sz //< the length `head` declares under a limit of 100, or -1
+  return jsonrpc.content_length(head, 100).unwrap_or(-1)
+
+fn test_jsonrpc_take_frame()
+  verdict.start("[Jsonrpc] cutting a frame out test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  $acc: = Str_builder.new()
+  defer acc.free()
+
+  // With only the header in, no frame can be extracted.
+  acc.s("Content-Length: 5\r\n\r\n")
+  assert(taken_or(acc@, arena).equals("(none)"), "head only must not yield a frame")
+  // No frame can be extracted while the body is still short either.
+  acc.s("ab")
+  assert(taken_or(acc@, arena).equals("(none)"), "short body must not yield a frame")
+  // A frame is returned as soon as all of it is in.
+  acc.s("cde")
+  assert(taken_or(acc@, arena).equals("abcde"), "complete frame must be returned")
+  assert(taken_or(acc@, arena).equals("(none)"), "the frame must be consumed")
+
+  // One read brings two frames: the second must remain.
+  acc.s("Content-Length: 2\r\n\r\nhiContent-Length: 3\r\n\r\nbye")
+  assert(taken_or(acc@, arena).equals("hi"), "first of two frames")
+  assert(taken_or(acc@, arena).equals("bye"), "second of two frames")
+  assert(taken_or(acc@, arena).equals("(none)"), "both frames must be consumed")
+
+  // The length can be read even with other headers mixed in.
+  acc.s("Content-Type: application/json\r\nContent-Length: 2\r\n\r\nok")
+  assert(taken_or(acc@, arena).equals("ok"), "length must be found among other headers")
+  assert(length_or("Content-Length:  7\r\n") == 7, "spaces before the digits")
+  assert(length_or("Content-Type: x\r\n") == -1, "no length is none")
+  assert(length_or("Content-Type: x\r\ncontent-length: 3") == 3, "the name in any case")
+  assert(length_or("X-Content-Length: 3") == -1, "the name only at a line's start")
+  assert(length_or("Content-Length: 1x") == -1, "digits alone")
+  assert(length_or("Content-Length: 100") == 100, "the limit itself")
+  assert(length_or("Content-Length: 101") == -1, "past the limit")
+  verdict
+    .pass("A frame that crosses a read's boundary, and two frames from one read, are both cut out \
+      in order.")
+
+fn test_jsonrpc_broken_frame()
+  verdict.start("[Jsonrpc] a broken frame test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  $acc: = Str_builder.new()
+  defer acc.free()
+
+  // A header that gives no length is broken; the next frame must still be readable.
+  acc.s("Content-Type: application/json\r\n\r\nContent-Length: 4\r\n\r\nnext")
+  assert(taken_or(acc@, arena).equals("(broken)"), "a head without a length is broken")
+  assert(taken_or(acc@, arena).equals("next"), "the next frame must still be readable")
+
+  // A length above the cap is broken.
+  $huge: = Str_builder.new()
+  defer huge.free()
+  huge.s("Content-Length: \{jsonrpc.max_body_bytes + 1\}\r\n\r\n")
+  acc.s(huge.slice())
+  assert(taken_or(acc@, arena).equals("(broken)"), "a length above the cap is broken")
+  verdict
+    .pass("A head that names no length and a length above the cap come back as broken, and reading \
+      carries on after.")
+
+fn test_jsonrpc_encode()
+  verdict.start("[Jsonrpc] building a body test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  $b: = Json_builder.new(arena)
+  params: = b.obj().set("n", b.int_val(7I64)).build()
+
+  // With an id (a request).
+  req: = jsonrpc.encode("ping", params, 3, arena)
+  assert(req.find_str("\"id\":3") >= 0, "a request must carry its id")
+  assert(req.find_str("\"jsonrpc\":\"2.0\"") >= 0, "the version must be named")
+  assert(req.find_str("\"method\":\"ping\"") >= 0, "the method must be named")
+
+  // Without an id (a notification). A negative id means "do not write one".
+  note: = jsonrpc.encode("ping", params, -1, arena)
+  assert(note.find_str("\"id\"") < 0, "a notification must not carry an id")
+
+  // A built frame can be extracted again (the round trip).
+  $out: = Str_builder.new()
+  defer out.free()
+  jsonrpc.frame_into(out@, req)
+  body: = jsonrpc.take_frame(out@, arena) catch panic("a freshly framed body must be takeable")
+  switch body case .some(text)
+    doc: = json.parse(text, arena) catch panic("the framed body must parse as JSON")
+    assert(doc.get("id").as_int(-1) == 3, "the id must survive the round trip")
+    assert(doc.get("params").get("n").as_int(0) == 7, "the params must survive the round trip")
+  case .none
+    panic("a complete frame must be returned")
+  verdict
+    .pass("A notification and a round trip are written apart by whether there is an id, and a body \
+      goes into a frame and back.")
+
+priv const flood_lines: Sz = 3000 //< how many lines the peer writes
+  //<
+  //< Multiplied by one line's length, it decides how far past the pipe's buffer the output goes.
+
+priv const flood_line: U8[] = //< the line the peer writes
+  "flooding stderr so the pipe buffer fills while the reader waits on stdout\n"
+
+fn test_jsonrpc_stderr_flood(ksplc: U8[]) //<
+  //< Checks that a round trip works while the peer writes a lot to standard error
+  //<
+  //< ksplc is the peer (`run_std` passes it). **This is the only gate for `drain_err`.**
+  //< Caution: **Make sure the output exceeds the pipe's buffer (64KB on Linux)**, or the peer never
+  //< stalls and draining is never tested (ksplc's diagnostics stop at the first one).
+  verdict.start("[Jsonrpc] a round trip with a peer that floods standard error test...")
+  arena: = Arena.new(1024 * 1024)
+  defer arena.free()
+  dir: = "out/tmp/kspl_test_debug_jsonrpc"
+  fs.mkdir_all(dir) catch panic("the work directory must be creatable")
+  src: = "out/tmp/kspl_test_debug_jsonrpc/flood.kspl"
+  script: = arena.text().s("import \"std/io\";\n\nfn main(): I32 {\n")
+    .s("  for _k in Range.asc(\{flood_lines\}) {\n    io.err().s(\"").s(flood_line.trim_end())
+    .s("\\n\");\n  }\n  return 0;\n}\n").take()
+  io.write_file(src, script) catch panic("the flooding script must be writable")
+  assert(flood_lines * flood_line.len > 64 * 1024,
+    "the flood must exceed the pipe buffer, or the child never stalls")
+
+  $c: = jsonrpc.spawn(U8[][]::{ ksplc, "run", src }, "") catch
+    panic("the flooding child must start")
+  defer c.free()
+  // No frame comes. **The test checks that it ends with "closed"**; without draining, the peer
+  // stalls on standard error and the timeout expires.
+  _frame: = c.read_msg(60000, arena) catch e
+    switch e case .closed
+      kept: = c.err_tail().len
+      assert(kept > 0, "the child's output on stderr must be kept")
+      verdict
+        .pass("A side writing more to standard error than the buffer holds still runs to the end, \
+          and what it had to say is kept.")
+      return
+    case .timed_out
+      panic("the child stalled: stderr was not drained while waiting on stdout")
+    case .broken
+      panic("the child's output could not be read")
+  panic("a non-JSON-RPC child must not yield a frame")
+
+priv const notes_before_answer: Sz = 100 //<
+  //< How many notifications the peer sends before the answer
+  //<
+  //< **It stands for "one per open document"**, which a language server sends on reanalysis. The
+  //< point is that no count breaks it.
+
+fn test_jsonrpc_notification_burst(ksplc: U8[]) //<
+  //< Checks that a request still finds its answer behind a long run of notifications
+  //<
+  //< ksplc is the peer (`run_std` passes it).
+  //< **This is the gate for `request` being bounded by time, not count.** A limit on how many
+  //< are skipped breaks at "however many documents happen to be open", with no source change.
+  verdict.start("[Jsonrpc] a request behind a run of notifications test...")
+  arena: = Arena.new(1024 * 1024)
+  defer arena.free()
+  dir: = "out/tmp/kspl_test_debug_jsonrpc"
+  fs.mkdir_all(dir) catch panic("the work directory must be creatable")
+  src: = "out/tmp/kspl_test_debug_jsonrpc/burst.kspl"
+  script: = arena.text()
+    .s("import \"std/io\";\nimport \"std/jsonrpc\";\nimport \"std/str\" { Str_builder };\n\n")
+    .s("priv fn put_frame(body: U8[]) {\n  $f: = Str_builder.new();\n  defer f.free();\n")
+    .s("  jsonrpc.frame_into(f@, body);\n  io.out().s(f.slice());\n}\n\n")
+    .s("fn main(): I32 {\n  for _k in Range.asc(\{notes_before_answer\}) {\n")
+    .s("    put_frame(\"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"method\\\":\\\"note\\\"}\");\n  }\n")
+    .s("  \
+      put_frame(\"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":1,\\\"result\\\":{\\\"ok\\\":1}}\");\n")
+    .s("  _f: = io.out().flush();\n  return 0;\n}\n").take()
+  io.write_file(src, script) catch panic("the burst script must be writable")
+
+  $c: = jsonrpc.spawn(U8[][]::{ ksplc, "run", src }, "") catch
+    panic("the burst child must start")
+  defer c.free()
+  $b: = Json_builder.new(arena)
+  got: = c.request("probe", b.obj().build(), 60000, arena) catch e
+    switch e case .broken
+      panic("the answer was given up on behind the notifications")
+    case .timed_out
+      panic("the answer did not arrive in time")
+    case .closed
+      panic("the peer closed before answering")
+  assert(got.get("result").get("ok").as_int(0) == 1I64, "the answer's own body must come back")
+  verdict.pass("A request finds its answer however many notifications stand in front of it.")

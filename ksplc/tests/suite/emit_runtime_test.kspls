@@ -1,0 +1,803 @@
+#!/usr/bin/env -S ksplc run
+//< It checks `ksplc emit-runtime` writes the same C runtime the generated C embeds
+//<
+//< When the distributed runtime and the one embedded at the artefact's head disagree, **both pass
+//< on their own**; linked into one executable, one runtime quietly drives the other's code
+//< ("Embedding the runtime, and the two ways to keep it out" in `ksplc/docs/DESIGN.md`).
+//< Caution: **Do not copy the content into this file.** A copy misses the embedded and the
+//< distributed runtime breaking the same way; compare against the generated C itself.
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/harness_build"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/seq"
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+priv const abi_def: U8[] = "\nvoid kspl_runtime_abi_" //<
+  //< The version symbol's body, present only at the end of the distributed runtime
+  //<
+  //< It is where it joins the runtime itself.
+
+priv const impl_mark: U8[] = "/* ---- kspl runtime implementation half ---- */\n" //<
+  //< The mark for the start of the definition half
+  //<
+  //< The source is `impl_half_mark` in `ksplc/gen/runtime.kspls`.
+
+priv const abi_ref: U8[] = "\nextern void kspl_runtime_abi_" //<
+  //< Where the generated C's marked reference to the version symbol begins
+  //<
+  //< Up to a blank line it is a fragment needing no header, buildable for each format's target.
+
+// Keep it using the runtime: an empty generated C makes "the head agrees" pass trivially.
+priv const prog: U8[] = """import "std/io";
+fn main() { io.out().s("hi\n"); }
+"""
+
+// The two programs that check artefacts linking with each other.
+// Caution: **Make both use the same std.** Without an overlap there is no telling whether weak
+// works.
+priv const lib_src: U8[] =
+  """import "std/str" { Str_builder };
+import "std/ds" { List };
+import "std/mem" { Arena };
+#export
+pub fn kanso_probe(n: I32): I32 {
+  arena: = Arena.new(4096);
+  defer arena.free();
+  $xs: = List<|I32|>.create(arena);
+  for i in Range.asc(Sz::n) { xs.push(I32::i); }
+  $b: = Str_builder.new();
+  defer b.free();
+  b.s("\{I64::xs.len\}");
+  return I32::b.slice().len;
+}
+"""
+
+priv const app_src: U8[] =
+  """import "std/io";
+import "std/str" { Str_builder };
+import "std/ds" { List };
+import "std/mem" { Arena };
+extern "C" { fn kanso_probe(n: I32): I32; }
+fn main() {
+  arena: = Arena.new(4096);
+  defer arena.free();
+  $xs: = List<|I32|>.create(arena);
+  xs.push(1);
+  $b: = Str_builder.new();
+  defer b.free();
+  b.s("\{I64::xs.len\}");
+  io.out().s("\{I64::kanso_probe(4)\}").s(b.slice()).s("\n");
+}
+"""
+
+priv const elf_triple: U8[] = "x86_64-pc-linux-gnu" //< the per-object-format "do not drop" mark
+  //<
+  //< ksplc allows only the formats listed here. **The check reads the assembler text**: a
+  //< symbol-table reader (llvm-readobj and the like) may be absent and the whole check would be
+  //< skipped, while a C compiler is always present.
+  //< Caution: **Do not confuse a symbol's mark with a section's mark.** ELF puts it on the
+  //< section's flags, Mach-O on the symbol.
+priv const macho_triple: U8[] = "x86_64-apple-darwin"
+
+priv const pe_triple: U8[] = "x86_64-w64-mingw32" //< the triple for PE (Windows)
+  //<
+  //< **Only here is there no mark to search for** — what keeps it is the resolution order, not an
+  //< attribute, so the check is "the link stops on an undefined symbol".
+priv const pe_entry: U8[] = "int kspl_pe_entry(void) { return 0; }\n" //<
+  //< The entry point the fragment built for PE holds
+  //<
+  //< Caution: **Do not link the CRT** (it stops building in an environment without it).
+
+priv const bare_triple: U8[] = "wasm32-unknown-unknown" //<
+  //< An object format with no way to ask for a mark
+  //<
+  //< **Always test one**, or this test stays green when the rejection disappears.
+
+priv struct Text //< the result of one generation
+  ok: Bool
+  body: U8[]
+  why: U8[]
+
+priv fn missing(why: U8[]): Text
+  return Text::{ .ok = false, .body = "", .why = why }
+
+priv fn emit(dir: U8[], tag: U8[], extra: U8[][], arena: Arena$@): Text //<
+  //< It reads `ksplc emit-runtime`'s output
+  path: = fs.join(dir, arena.text().s("kspl_runtime_\{tag\}.c").take(), arena)
+  $args: = List<|U8[]|>.new(arena)
+  for e in extra
+    args.push(e)
+  args.push("emit-runtime")
+  args.push(path)
+  r: = harness.ksplc_bare(args.slice())
+  if r.code != 0
+    return missing(arena.text().s("the output failed: \{r.out\}").take())
+  text: = harness.read_generated(path)
+  if text.len == 0
+    return missing(arena.text().s("the file has not been made: \{path\}").take())
+  return Text::{ .ok = true, .body = text, .why = "" }
+
+priv fn check_startup_calls(tag: U8[], gen: Text, arena: Arena$@) //<
+  //< The calls the generated `main` must make before `kspl_main`
+  //<
+  //< **This is the only gate either one has on this machine.** Both are empty outside Windows, so
+  //< nothing here runs what they do — this pins down that the generated `main` still calls them,
+  //< in that order, before the program's own code (`startup_calls` in `../../gen/entry.kspls`).
+  if !gen.ok
+    return
+  name: = arena.text().s("\{tag\}'s generated main sets up the console and the byte mode first")
+    .take()
+  if tag.equals("freestanding")
+    // A freestanding artefact holds no `main` and no C runtime.
+    verdict.check(name, gen.body.find_str("kspl_io_set_stdio_binary();") < 0,
+      "a freestanding artefact must not carry the hosted startup calls")
+    return
+  // Caution: **Search only inside `main`.** `kspl_main` is declared further up the file, so a
+  // search over the whole text finds that declaration and reports the order as wrong.
+  entry: = gen.body.find_str("int main(int _argc, char **_argv) {")
+  if entry < 0
+    verdict.check(name, false, "the generated C holds no hosted entry point")
+    return
+  body: = gen.body.sub_from(entry)
+  console_at: = body.find_str("kspl_io_init_console();")
+  binary_at: = body.find_str("kspl_io_set_stdio_binary();")
+  call_at: = body.find_str("kspl_main(")
+  ok: =
+    console_at >= 0 && binary_at >= 0 && call_at >= 0 && binary_at > console_at &&
+    binary_at < call_at
+  verdict.check(name, ok,
+    arena.text().s("inside main: console at \{console_at\}, byte mode at \{binary_at\}, ")
+    .s("kspl_main at \{call_at\}; every one must be found, in that order").take())
+
+priv fn generated(dir: U8[], tag: U8[], extra: U8[][], arena: Arena$@): Text //<
+  //< It reads the generated C made under the same settings
+  src: = fs.join(dir, arena.text().s("rt_prog_\{tag\}.kspl").take(), arena)
+  out_c: = fs.join(dir, arena.text().s("rt_prog_\{tag\}.c").take(), arena)
+  io.write_file(src, prog) catch
+    return missing("cannot write the material")
+  $args: = List<|U8[]|>.new(arena)
+  for e in extra
+    args.push(e)
+  args.push(src)
+  args.push(out_c)
+  r: = harness.ksplc(args.slice())
+  if r.code != 0
+    return missing(arena.text().s("the generation failed: \{r.out\}").take())
+  text: = harness.read_generated(out_c)
+  if text.len == 0
+    return missing("the generated C cannot be read")
+  return Text::{ .ok = true, .body = text, .why = "" }
+
+priv fn asm_version(gen: U8[]): U8[] //< it extracts the version from `__asm__("<version>_...`.
+  //<
+  //< Caution: **Do not write the version's text into this file**, or it drifts from the generator
+  //< unnoticed. Only the shape it is extracted by is kept.
+  head: = "__asm__(\""
+  at: = gen.find_str(head)
+  if at < 0
+    return ""
+  rest: = gen.sub_from(at + head.len)
+  end: = rest.find_char('_')
+  if end < 0
+    return ""
+  return rest.sub(0, end)
+
+priv fn ref_symbol(frag: U8[]): U8[] //<
+  //< It reads the name of the symbol the reference binds from the fragment itself
+  //<
+  //< Caution: Do not copy the name out.
+  head: = "(* const "
+  at: = frag.find_str(head)
+  if at < 0
+    return ""
+  rest: = frag.sub_from(at + head.len)
+  end: = rest.find_char(')')
+  return "" if end < 0 else rest.sub(0, end)
+
+priv fn abi_ref_fragment(gen: U8[]): U8[] //<
+  //< It extracts the marked reference to the version symbol from the generated C
+  at: = gen.find_str(abi_ref)
+  if at < 0
+    return ""
+  rest: = gen.sub_from(at)
+  end: = rest.find_str("\n\n")
+  return "" if end < 0 else rest.sub(0, end)
+
+priv fn elf_marked(asm_text: U8[], sym: U8[], arena: Arena$@): Bool //<
+  //< ELF: whether that symbol's section carries the retain mark (the flag character `R`)
+  for line in asm_text.lines(arena)
+    if line.find_str(".section") < 0 || line.find_str(sym) < 0
+      continue
+    first: = line.find_char('"')
+    if first < 0
+      continue
+    rest: = line.sub_from(first + 1)
+    close: = rest.find_char('"')
+    if close >= 0 && rest.sub(0, close).find_char('R') >= 0
+      return true
+  return false
+
+priv fn macho_marked(asm_text: U8[], sym: U8[], arena: Arena$@): Bool //<
+  //< Mach-O: whether that symbol carries `.no_dead_strip`
+  for line in asm_text.lines(arena)
+    t: = line.trim_spaces()
+    if !t.starts_with(".no_dead_strip")
+      continue
+    if t.find_str(sym) >= 0
+      return true
+  return false
+
+priv struct Nm_out //< `nm --defined-only`'s answer
+  //<
+  //< **Only "the tool is not there" may be skipped**; a tool that is there but does not answer is
+  //< **a failure** (`bad`).
+  //< Caution: **Do not merge the two** — a mix-up of names then turns into "the tool is not there"
+  //< and **looks green.**
+  lines: List<|U8[]|>
+  gone: Bool
+  bad: U8[]
+
+priv fn nm_lines(dir: U8[], name: U8[], arena: Arena$@): Nm_out //<
+  //< It runs `nm --defined-only` inside the directory
+  //<
+  //< Caution: **Pass the path relative to the directory, and pass the directory as cwd.** `nm`'s
+  //< CRT **maps argv onto the current code page**, so an absolute path containing non-ASCII cannot
+  //< be opened **even when this code passes it correctly** (under CP932 `かんそシステム` is
+  //< garbled into `Illegal byte sequence`).
+  out: = List<|U8[]|>.new(arena)
+  probe: = harness.run(U8[][]::{ "nm", "--version" })
+  if probe.code != 0
+    return Nm_out::{ .lines = out, .gone = true, .bad = "" }
+  r: = harness.run_in(U8[][]::{ "nm", "--defined-only", name }, dir)
+  if r.code != 0
+    return Nm_out::{ .lines = out, .gone = false,
+      .bad = arena.text().s("nm cannot read \{name\}: \{r.out\}").take() }
+  lines: = r.out.lines(arena)
+  kept: = lines.where(fn(line: U8[]; ): Bool {
+    return line.trim_spaces().len > 0;
+  }).to_list(arena)
+  return Nm_out::{ .lines = kept, .gone = false, .bad = "" }
+
+priv fn last_word(line: U8[], arena: Arena$@): U8[] //< the line's last word (the symbol's name)
+  $last: = ""
+  for w in line.split(' ', arena)
+    if w.len > 0
+      last = w
+  return last
+
+priv fn kind_word(line: U8[], arena: Arena$@): U8[] //<
+  //< The second-to-last word of the line (nm's kind)
+  $prev: = ""
+  $last: = ""
+  for w in line.split(' ', arena)
+    if w.len == 0
+      continue
+    prev = last
+    last = w
+  return prev
+
+priv fn is_weak_kind(k: U8[]): Bool
+  return k.equals("W") || k.equals("w") || k.equals("V") || k.equals("v")
+
+priv fn target_probe(dir: U8[], arena: Arena$@): verdict.Run_out //<
+  //< Whether the C compiler takes `--target` (code 0), building one small file for ELF
+  //<
+  //< Caution: On a tool that cannot (a C compiler with no `--target`), print a SKIP rather than
+  //< passing silently: not failing is not the same as having checked.
+  probe_c: = fs.join(dir, "target_probe.c", arena)
+  io.write_file(probe_c, "int kspl_probe(void) { return 0; }\n") catch {}
+  return harness
+    .run(U8[][]::{ harness.cc(), arena.text().s("--target=\{elf_triple\}").take(), "-std=c99", "-c",
+    probe_c, "-o", fs.join(dir, "target_probe.o", arena) })
+
+priv const atomic_names: U8[][4] = ::{ "kspl_atomic_add(", "kspl_atomic_cas(", "kspl_atomic_load(",
+  "kspl_atomic_store(" } //< the four atomics the runtime defines, as they open a definition
+
+priv const lock_free_triples: U8[][5] = ::{ "x86_64-pc-windows-msvc", "x86_64-w64-mingw32",
+  "x86_64-pc-linux-gnu", "x86_64-apple-darwin", "thumbv7m-none-eabi" } //<
+    //< Targets whose pointer atomics are lock-free, so the runtime defines the four itself
+    //<
+    //< **MSVC is the one that matters**: clang there defines only `__CLANG_ATOMIC_*`, and a guard
+    //< asking `__GCC_ATOMIC_*` alone left the four out, seen only at the link on Windows.
+
+priv const no_lock_free_triple: U8[] = "thumbv6m-none-eabi" //<
+  //< Armv6-M, with no LDREX/STREX: the four are left to the port layer
+  //<
+  //< Caution: **Always test it**: a guard that lets everything through passes the list above.
+
+priv fn atomics_block(body: U8[], arena: Arena$@): U8[] //<
+  //< The `#if` … `#endif` around the atomics' definitions, cut from the runtime, or ""
+  //<
+  //< The innermost `#if` opened before the first definition is the guard itself.
+  $block: = List<|U8[]|>.new(arena)
+  $inside: = false
+  $found: = false
+  for line in body.lines(arena)
+    if line.starts_with("#if")
+      block = List<|U8[]|>.new(arena)
+      inside = true
+    if inside
+      block.push(line)
+    if line.find_str(atomic_names[0]) >= 0 && line.starts_with("Sz ")
+      found = inside
+    if line.starts_with("#endif")
+      if found
+        text: = arena.text()
+        for l in block
+          text.s(l).s("\n")
+        return text.take()
+      inside = false
+  return ""
+
+priv fn check_atomics(dir: U8[], body: U8[], arena: Arena$@) //<
+  //< The atomics' guard, run through the preprocessor for each target: kept, or left out
+  on_name: = "the runtime defines the atomics wherever pointer atomics are lock-free"
+  off_name: = "the runtime leaves the atomics out on a core without them"
+  block: = atomics_block(body, arena)
+  if block.len == 0
+    verdict.check(on_name, false, "the atomics' guard cannot be cut out of the runtime")
+    verdict.check(off_name, false, "the atomics' guard cannot be cut out of the runtime")
+    return
+  src: = fs.join(dir, "atomics_frag.c", arena)
+  io.write_file(src, block) catch
+    verdict.check(on_name, false, "the fragment cannot be written")
+    return
+  probe: = target_probe(dir, arena)
+  if probe.code != 0
+    why: = arena.text().s("the C compiler does not take --target\n\{probe.out\}").take()
+    verdict.skip_check(on_name, why)
+    verdict.skip_check(off_name, why)
+    return
+  $bad: = List<|U8[]|>.new(arena)
+  for t in lock_free_triples
+    r: = harness
+      .run(U8[][]::{ harness.cc(), arena.text().s("--target=\{t\}").take(), "-E", "-P", src })
+    for n in atomic_names
+      if r.code != 0 || r.out.find_str(n) < 0
+        bad.push(arena.text().s("\{t\}: no \{n\}").take())
+  why: = arena.text()
+  for b in bad
+    why.s(b).s("\n")
+  verdict.check(on_name, bad.len == 0, why.take())
+  off: = harness
+    .run(U8[][]::{ harness.cc(),
+    arena.text().s("--target=\{no_lock_free_triple\}").take(), "-E", "-P", src })
+  verdict.check(off_name, off.code == 0 && off.out.find_str("kspl_atomic_") < 0,
+    arena.text().s("under \{no_lock_free_triple\}:\n\{off.out\}").take())
+
+priv fn cross_format_checks(dir: U8[], gen: U8[], arena: Arena$@) //<
+  //< For the other object formats: the mark is carried, and a format with no mark rejects it
+  //<
+  //< Caution: **Do not test only the local object format.** Only the local format can be linked;
+  //< the others go only as far as "it builds", but the assembler shows whether the mark is there.
+  elf_name: = "under ELF the mark is carried"
+  macho_name: = "under Mach-O the mark is carried"
+  pe_name: = "under PE the link stops on an undefined symbol"
+  bare_name: = "under an object format that cannot ask for a mark the generated C turns it away"
+  frag: = abi_ref_fragment(gen)
+  sym: = ref_symbol(frag)
+  if frag.len == 0 || sym.len == 0
+    why: = "the reference to the version symbol cannot be cut out of the generated C"
+    verdict.check(elf_name, false, why)
+    verdict.check(macho_name, false, why)
+    verdict.check(pe_name, false, why)
+    verdict.check(bare_name, false, why)
+    return
+  src: = fs.join(dir, "abi_ref_frag.c", arena)
+  io.write_file(src, arena.text().s("\{frag\}\n").take()) catch
+    verdict.check(elf_name, false, "the fragment cannot be written")
+    return
+  cc: = harness.cc()
+  probe: = target_probe(dir, arena)
+  if probe.code != 0
+    why: = arena.text().s("the C compiler does not take --target\n\{probe.out\}").take()
+    verdict.skip_check(elf_name, why)
+    verdict.skip_check(macho_name, why)
+    verdict.skip_check(pe_name, why)
+    verdict.skip_check(bare_name, why)
+    return
+  elf_s: = fs.join(dir, "abi_ref_elf.s", arena)
+  elf: = harness
+    .run(U8[][]::{ cc, arena.text().s("--target=\{elf_triple\}").take(), "-std=c99", "-S", src,
+    "-o", elf_s })
+  if elf.code != 0
+    verdict.check(elf_name, false,
+      arena.text().s("it does not build\n\{elf.out\}").take())
+  else
+    text: = harness.read_generated(elf_s)
+    verdict.check(elf_name, elf_marked(text, sym, arena),
+      arena.text().s("the mark is not carried\n\{text\}").take())
+  macho_s: = fs.join(dir, "abi_ref_macho.s", arena)
+  macho: = harness
+    .run(U8[][]::{ cc, arena.text().s("--target=\{macho_triple\}").take(), "-std=c99", "-S", src,
+    "-o", macho_s })
+  if macho.code != 0
+    verdict.check(macho_name, false,
+      arena.text().s("it does not build\n\{macho.out\}").take())
+  else
+    text: = harness.read_generated(macho_s)
+    verdict.check(macho_name, macho_marked(text, sym, arena),
+      arena.text().s("the mark is not carried\n\{text\}").take())
+  check_pe_link(dir, frag, sym, pe_name, arena)
+  bare: = harness
+    .run(U8[][]::{ cc, arena.text().s("--target=\{bare_triple\}").take(), "-std=c99", "-c", src,
+    "-o", fs.join(dir, "abi_ref_bare.o", arena) })
+  verdict.check(bare_name,
+    bare.code != 0 && bare.out.find_str(harness.runtime_extern_refusal) >= 0,
+    "it built (it is let through with no way to ask for the mark)" if bare.code == 0
+    else arena.text()
+    .s("it failed without the refusal message (it fails for another reason)\n\{bare.out\}").take())
+
+priv fn pe_link(dir: U8[], stem: U8[], body: U8[], arena: Arena$@): verdict.Run_out //<
+  //< It builds one for PE and links it
+  //<
+  //< Caution: **Do not link the CRT** — up to here it passes with no Windows tool, given a linker
+  //< that writes PE.
+  src: = fs.join(dir, arena.text().s("\{stem\}.c").take(), arena)
+  io.write_file(src, body) catch {}
+  return harness
+    .run(U8[][]::{ harness.cc(), arena.text().s("--target=\{pe_triple\}").take(), "-std=c99",
+    "-ffunction-sections", "-fdata-sections", "-fuse-ld=lld", "-nostdlib", "-Wl,--gc-sections",
+    "-Wl,-e,kspl_pe_entry", src, "-o",
+    fs.join(dir, arena.text().s("\{stem\}.exe").take(), arena) })
+
+priv fn check_pe_link(dir: U8[], frag: U8[], sym: U8[], name: U8[], arena: Arena$@) //<
+  //< PE: it checks the fragment holding the version symbol stops the link
+  //<
+  //< The fragment not holding it must link.
+  //< Caution: **Test the case that does not stop too.** If the unmarked fragment does not build
+  //< either, the tool stopped it rather than the mark, and this check has tested nothing.
+  bare: = pe_link(dir, "abi_ref_pe_bare", pe_entry, arena)
+  if bare.code != 0
+    verdict.skip_check(name,
+      arena.text().s("no linker that can write PE is present\n\{bare.out\}").take())
+    return
+  held: =
+    pe_link(dir, "abi_ref_pe",
+    arena.text().s(frag).s("\n").s(pe_entry).take(), arena)
+  verdict.check(name, held.code != 0 && held.out.find_str(sym) >= 0,
+    "it did not stop (the mark is not taking effect)" if held.code == 0
+    else arena.text().s("it stopped but does not name the version symbol\n\{held.out\}").take())
+
+priv fn check_mixed_std(dir: U8[], std_other: U8[], rt_c: U8[], tag_repo: U8[], tag_other: U8[],
+  arena: Arena$@) //<
+    //< Checks that no symbol is silently folded when stds of different versions are mixed.
+  name: = "artefacts built with std of different versions hold no symbol folded in silence"
+  cc: = harness.cc()
+  $objs: = List<|U8[]|>.new(arena)
+  $gens: = List<|U8[]|>.new(arena)
+  for i in Range.asc(2)
+    src_body: = lib_src if i == 0 else app_src
+    std_dir: = harness.std_dir() if i == 0 else std_other
+    stem: = "mixlib" if i == 0 else "mixapp"
+    src: = fs.join(dir, arena.text().s("\{stem\}.kspl").take(), arena)
+    gen: = fs.join(dir, arena.text().s("\{stem\}_mix.c").take(), arena)
+    obj: = fs.join(dir, arena.text().s("\{stem\}_mix.o").take(), arena)
+    io.write_file(src, src_body) catch
+      verdict.check(name, false, "cannot write the material")
+      return
+    r: = harness
+      .run(U8[][]::{ harness.ksplc_exe(),
+      arena.text().s("--std-dir=\{std_dir\}").take(), "--omit-runtime", src, gen })
+    if r.code != 0
+      verdict.check(name, false, r.out)
+      return
+    c: = harness.run(U8[][]::{ cc, "-std=c99", "-w", "-O0", "-c", gen, "-o", obj })
+    if c.code != 0
+      verdict.check(name, false, c.out)
+      return
+    objs.push(obj)
+    gens.push(gen)
+  // Caution: **Pass only the name** (the reason is at `nm_lines`).
+  a: = nm_lines(dir, "mixlib_mix.o", arena)
+  b: = nm_lines(dir, "mixapp_mix.o", arena)
+  if a.gone || b.gone
+    verdict.skip_check(name, "nm is not present")
+  else if a.bad.len > 0 || b.bad.len > 0
+    verdict.check(name, false, a.bad if a.bad.len > 0 else b.bad)
+  else
+    $shared: = ""
+    for i in Range.asc(a.lines.len)
+      if !is_weak_kind(kind_word(a.lines.get(i), arena))
+        continue
+      sym: = last_word(a.lines.get(i), arena)
+      for j in Range.asc(b.lines.len)
+        if is_weak_kind(kind_word(b.lines.get(j), arena)) &&
+          last_word(b.lines.get(j), arena).equals(sym) && shared.len == 0
+          shared = sym
+    verdict.check(name, shared.len == 0,
+      arena.text().s("a weak symbol both define: \{shared\}").take())
+  exe: = fs.join(dir, "wk_mixed.exe", arena)
+  $srcs: = List<|U8[]|>.new(arena)
+  srcs.push(gens.get(0))
+  srcs.push(gens.get(1))
+  srcs.push(rt_c)
+  linked: = harness_build.build_exe(srcs.slice(), exe, U8[][]::harness_build.default_cflags)
+  verdict.check("artefacts built with std of different versions link with each other",
+    linked.code == 0, linked.out)
+  if linked.code != 0 || tag_repo.len == 0 || tag_other.len == 0
+    return
+  ran: = harness.run(U8[][]::{ exe })
+  both: = "both stds are present in the linked executable"
+  // Caution: **Pass only the name** (the reason is at `nm_lines`).
+  names: = nm_lines(dir, "wk_mixed.exe", arena)
+  if names.gone
+    verdict.skip_check(both, "nm is not present")
+    return
+  if names.bad.len > 0
+    verdict.check(both, false, names.bad)
+    return
+  $seen_repo: = false
+  $seen_other: = false
+  for i in Range.asc(names.lines.len)
+    sym: = last_word(names.lines.get(i), arena)
+    if sym.starts_with(arena.text().s("\{tag_repo\}_").take())
+      seen_repo = true
+    if sym.starts_with(arena.text().s("\{tag_other\}_").take())
+      seen_other = true
+  verdict.check(both, seen_repo && seen_other && ran.code == 0,
+    "only one version is present (it is folded)" if ran.code == 0 else ran.out)
+
+priv fn version_of(dir: U8[], tag: U8[], std_dir: U8[], arena: Arena$@): U8[] //<
+  //< It extracts the version from `--omit-runtime`'s generated C
+  src: = fs.join(dir, arena.text().s("tag_prog_\{tag\}.kspl").take(), arena)
+  gen: = fs.join(dir, arena.text().s("tag_prog_\{tag\}.c").take(), arena)
+  io.write_file(src, prog) catch
+    return ""
+  r: = harness
+    .run(U8[][]::{ harness.ksplc_exe(), arena.text().s("--std-dir=\{std_dir\}").take(),
+    "--omit-runtime", src, gen })
+  if r.code != 0
+    return ""
+  return asm_version(harness.read_generated(gen))
+
+fn main(): I32
+  arena: = harness.begin(512 * 1024 * 1024)
+  dir: = harness.sandbox("emit_runtime") catch
+    return harness.fatal("cannot make a working directory")
+  work: = dir
+  cc: = harness.cc()
+  io.out().s("# ksplc emit-runtime\n")
+
+  // The LLVM artefact holds no runtime and links with `emit-runtime`'s output.
+  // Caution: **Pin down `kspl_*`'s bodies in the IR as "no define, only a declare"** (the
+  // reference to the version symbol is checked the same way).
+  llvm_src: = fs.join(work, "rt_llvm.kspl", arena)
+  llvm_ll: = fs.join(work, "rt_llvm.ll", arena)
+  io.write_file(llvm_src, prog) catch
+    return harness.fatal("cannot write the material")
+  llvm: = harness.ksplc(U8[][]::{ "--target=llvm", "--omit-runtime", llvm_src, llvm_ll })
+  verdict.check("--omit-runtime passes under LLVM too", llvm.code == 0, llvm.out)
+  if llvm.code == 0
+    ir: = harness.read_generated(llvm_ll)
+    declares_only: =
+      ir.find_str("declare void @kspl_io_init_console()") >= 0 &&
+      ir.find_str("declare void @kspl_runtime_abi_") >= 0 &&
+      ir.find_str("define i64 @kspl_thread_spawn") < 0 &&
+      ir.find_str("define ptr @kspl_os_argv") < 0
+    verdict.check("the LLVM IR only declares the runtime and does not define it", declares_only,
+      "kspl_*'s bodies are left in the IR, or there is no reference to the version symbol")
+    // The LLVM entry point makes the C entry point's startup calls, in the same order.
+    main_at: = ir.find_str("define i32 @main(")
+    entry_ir: = ir.sub_from(main_at) if main_at >= 0 else ""
+    console_at: = entry_ir.find_str("call void @kspl_io_init_console()")
+    binary_at: = entry_ir.find_str("call void @kspl_io_set_stdio_binary()")
+    call_at: = entry_ir.find_str("@kspl_main(")
+    verdict.check("the LLVM main sets up the console and the byte mode first, as C's does",
+      ir.find_str("declare void @kspl_io_set_stdio_binary()") >= 0 && console_at >= 0 &&
+      binary_at > console_at && call_at > binary_at,
+      arena.text().s("inside main: console at \{console_at\}, byte mode at \{binary_at\}, ")
+      .s("kspl_main at \{call_at\}; every one must be declared and found, in that order").take())
+    llvm_exe: = fs.join(work, "rt_llvm.exe", arena)
+    built: = harness_build.build_llvm_exe(U8[][]::{ llvm_ll }, llvm_exe,
+      U8[][]::harness_build.llvm_cflags)
+    $ran_ok: = false
+    if built.code == 0
+      ran: = harness.run(U8[][]::{ llvm_exe })
+      ran_ok = ran.code == 0
+    verdict.check("the LLVM artefact links with emit-runtime's runtime and runs",
+      built.code == 0 && ran_ok, built.out)
+
+  $hosted: = missing("")
+  for i in Range.asc(2)
+    tag: = "hosted" if i == 0 else "freestanding"
+    extra: = U8[][]::{ .ptr = null, .len = 0 } if i == 0 else U8[][]::{ "--freestanding" }
+    rt: = emit(work, tag, extra, arena)
+    verdict.check(arena.text().s("\{tag\}'s runtime can be written out").take(), rt.ok, rt.why)
+    if i == 0
+      hosted = rt
+    if !rt.ok
+      continue
+    gen: = generated(work, tag, extra, arena)
+    verdict.check(arena.text().s("the generated C can be made under \{tag\}").take(), gen.ok,
+      gen.why)
+    if !gen.ok
+      continue
+    check_startup_calls(tag, gen, arena)
+    // Caution: Check **the position** rather than "it contains", or the declaration half moving
+    // after the generated body, or the definition half slipping into the middle, goes unnoticed.
+    // In the distributed runtime the halves are contiguous, the version symbol's body at the end.
+    tail_cut: = rt.body.find_str(abi_def)
+    runtime: = rt.body if tail_cut < 0 else rt.body.sub(0, tail_cut)
+    mark_at: = runtime.find_str(impl_mark)
+    verdict.check(arena.text().s("\{tag\}'s distributing side has the body half's mark").take(),
+      mark_at >= 0, arena.text().s("not found: \{impl_mark\}").take())
+    if mark_at < 0
+      continue
+    decls: = runtime.sub(0, mark_at)
+    impl_half: = runtime.sub(mark_at, runtime.len - Sz::mark_at)
+    verdict.check(arena.text()
+      .s("\{tag\}'s distributing side's declaration half agrees with the generated C's head").take(),
+      gen.body.starts_with(decls),
+      arena.text().s("distributing \{decls.len\} bytes / embedded \{gen.body.len\} bytes").take())
+    verdict.check(arena.text()
+      .s("\{tag\}'s distributing side's body half agrees with the generated C's tail").take(),
+      gen.body.len >= impl_half.len &&
+      gen.body.sub(gen.body.len - impl_half.len, impl_half.len).equals(impl_half),
+      arena.text().s("distributing \{impl_half.len\} bytes / embedded \{gen.body.len\} bytes")
+      .take())
+
+  // **Without the version symbol's body at the end, "it agrees with the head" above loses where to
+  // cut and passes trivially.** It holds under every object format.
+  if !hosted.ok
+    return harness.finish()
+  verdict.check("the version symbol is present in the runtime written out",
+    hosted.body.find_str(abi_def) >= 0, arena.text().s("not found: \{abi_def\}").take())
+
+  // The receiver builds only this one file, so it must build on its own.
+  rt_c: = fs.join(work, "kspl_runtime_hosted.c", arena)
+  rt_o: = fs.join(work, "kspl_runtime_hosted.o", arena)
+  standalone: = harness.run(U8[][]::{ cc, "-std=c99", "-c", rt_c, "-o", rt_o })
+  verdict.check("the runtime written out becomes a .o on its own", standalone.code == 0,
+    standalone.out)
+  check_atomics(work, hosted.body, arena)
+
+  // If the two are the same, `--freestanding` is not taking effect on the runtime's selection.
+  free_text: = harness.read_generated(fs.join(work, "kspl_runtime_freestanding.c", arena))
+  verdict.check("--freestanding changes the content",
+    free_text.len > 0 && !hosted.body.equals(free_text),
+    "the hosted and bare-metal versions have become the same content")
+
+  // --- std's version goes into the symbol names (`--omit-runtime`) ---
+  // Caution: **Only std's content may decide the version.** If `--std-dir`'s path changed it, the
+  // same std placed elsewhere would stop folding. **Different content must always be a different
+  // version**, or the linker quietly picks one of the bodies ("Folding the definitions that come
+  // from std into one (`--omit-runtime`'s std side)" in `ksplc/docs/DESIGN.md`).
+  std_same: = fs.join(work, "std_same", arena)
+  std_other: = fs.join(work, "std_other", arena)
+  fs.copy_tree(harness.std_dir(), std_same, fs.skip_none, arena) catch
+    return harness.fatal("std cannot be copied")
+  fs.copy_tree(harness.std_dir(), std_other, fs.skip_none, arena) catch
+    return harness.fatal("std cannot be copied")
+  // Caution: Change only the content, not the file name, or a split by name is mistaken for a
+  // split by content.
+  probe_rel: = "lang.kspls"
+  probe_path: = fs.join(std_other, probe_rel, arena)
+  probe_body: = io.read_file(probe_path) catch
+    return harness.fatal("the copied std cannot be read")
+  io.write_file(probe_path, arena.text().s("\{probe_body\}\n// version probe\n").take()) catch
+    return harness.fatal("the copied std cannot be changed")
+  tag_repo: = version_of(work, "repo", harness.std_dir(), arena)
+  verdict.check("the version goes into a std-derived symbol", tag_repo.len > 0,
+    "no version is carried on a std-derived symbol")
+  tag_same: = version_of(work, "same", std_same, arena)
+  tag_other: = version_of(work, "other", std_other, arena)
+  verdict.check("std of the same content gets the same version even in a different place",
+    tag_repo.len > 0 && tag_repo.equals(tag_same),
+    arena.text().s("the version changes by place alone: \{tag_repo\} / \{tag_same\}").take())
+  verdict.check("std of a different content gets a different version",
+    tag_other.len > 0 && !tag_repo.equals(tag_other),
+    arena.text().s("the version is the same after changing the content: \{tag_repo\}").take())
+
+  // Caution: **Try building.** The version is an assembler name, so a tool without `__asm__`
+  // fails on the generated C; without building, "the version is in" passes while it builds
+  // nowhere. It is skipped under an object format that cannot keep the mark (the `--omit-runtime`
+  // stage below counts the rejection).
+  weak_obj: = harness
+    .run(U8[][]::{ cc, "-std=c99", "-c", fs.join(work, "tag_prog_repo.c", arena), "-o",
+    fs.join(work, "tag_prog_repo.o", arena) })
+  if weak_obj.code != 0 && weak_obj.out.find_str(harness.runtime_extern_refusal) >= 0
+    verdict.skip_check("the generated C with the version in it builds",
+      "an object format that cannot keep the mark (the generated C itself turns it away)")
+  else
+    verdict.check("the generated C with the version in it builds", weak_obj.code == 0,
+      weak_obj.out)
+
+  // --- `--omit-runtime` and the version symbol ---
+  //
+  // Caution: **Test the mismatching versions too.** The matching case alone lets through a version
+  // symbol that is not actually referenced (`--gc-sections` dropping the reference, say).
+  ext_src: = fs.join(work, "rt_extern_prog.kspl", arena)
+  ext_c: = fs.join(work, "rt_extern_prog.c", arena)
+  io.write_file(ext_src, prog) catch
+    return harness.fatal("cannot write the material")
+  ext: = harness.ksplc(U8[][]::{ "--omit-runtime", ext_src, ext_c })
+  verdict.check("it can generate under --omit-runtime", ext.code == 0, ext.out)
+  if ext.code != 0
+    return harness.finish()
+  gen_text: = harness.read_generated(ext_c)
+  // Whether it builds depends on the object format keeping the mark: building decides it.
+  ext_o: = harness
+    .run(U8[][]::{ cc, "-std=c99", "-c", ext_c, "-o",
+    fs.join(work, "rt_extern_prog.o", arena) })
+  cross_format_checks(work, gen_text, arena)
+  if ext_o.code != 0
+    // Caution: **Do not check only "it failed"**: another defect in the generated C makes it fail
+    // too, hiding a shape broken only on that target.
+    verdict.check("under a format that cannot keep the mark the generated C does not build",
+      ext_o.out.find_str(harness.runtime_extern_refusal) >= 0,
+      arena.text()
+      .s("it failed without the refusal message (it fails for another reason)\n\{ext_o.out\}")
+      .take())
+    // Caution: **Name what was not run**: a check silently left out reads as one that passed.
+    for name in U8[][]::{ "it links with a runtime of the same version",
+      "the linked executable runs", "it does not link with a runtime of a different version",
+      "two --omit-runtime artefacts link statically", "the two linked artefacts run",
+      "artefacts built with std of different versions hold no symbol folded in silence",
+      "artefacts built with std of different versions link with each other",
+      "both stds are present in the linked executable" }
+      verdict.skip_check(name,
+        "an object format that cannot keep the mark (the generated C itself turns it away)")
+    return harness.finish()
+  verdict.check("under a format that can keep the mark the generated C builds", true, "")
+
+  // Link with unreferenced sections dropped (`build_exe` adds it through `info exe-flags`);
+  // otherwise it passes with the version symbol unreferenced and checks nothing.
+  exe: = fs.join(work, "rt_extern_prog.exe", arena)
+  linked: = harness_build.build_exe(U8[][]::{ ext_c, rt_c }, exe,
+    U8[][]::harness_build.default_cflags)
+  verdict.check("it links with a runtime of the same version", linked.code == 0, linked.out)
+  if linked.code == 0
+    ran: = harness.run(U8[][]::{ exe })
+    verdict.check("the linked executable runs", ran.code == 0, ran.out)
+
+  // A runtime of a different version (standing for another ksplc's); only the symbol names change.
+  other_rt: = fs.join(work, "kspl_runtime_other.c", arena)
+  io.write_file(other_rt,
+    hosted.body.replace(abi_def, arena.text().s("\{abi_def\}x").take(), arena)) catch
+    return harness.fatal("the stand-in runtime cannot be written")
+  bad: = harness_build.build_exe(U8[][]::{ ext_c, other_rt },
+    fs.join(work, "rt_extern_bad.exe", arena), U8[][]::harness_build.default_cflags)
+  verdict.check("it does not link with a runtime of a different version", bad.code != 0,
+    "the link passed (the version symbol is not referenced)")
+
+  // --- static linking between artefacts (`--omit-runtime`) ---
+  //
+  // One option drops the runtime's body and makes std's definitions weak: either alone fails on a
+  // duplicate definition.
+  lib_path: = fs.join(work, "wk_lib.kspl", arena)
+  app_path: = fs.join(work, "wk_app.kspl", arena)
+  io.write_file(lib_path, lib_src) catch
+    return harness.fatal("cannot write the material")
+  io.write_file(app_path, app_src) catch
+    return harness.fatal("cannot write the material")
+  $srcs: = List<|U8[]|>.new(arena)
+  $ok: = true
+  for j in Range.asc(2)
+    src: = lib_path if j == 0 else app_path
+    gen: = fs.join(work, arena.text().s("wk_\{j\}.c").take(), arena)
+    r: = harness.ksplc(U8[][]::{ "--omit-runtime", src, gen })
+    if r.code != 0
+      ok = false
+    srcs.push(gen)
+  srcs.push(rt_c)
+  wk_exe: = fs.join(work, "wk.exe", arena)
+  b: = harness_build.build_exe(srcs.slice(), wk_exe, U8[][]::harness_build.default_cflags)
+  verdict.check("two --omit-runtime artefacts link statically", ok && b.code == 0, b.out)
+  if ok && b.code == 0
+    ran: = harness.run(U8[][]::{ wk_exe })
+    verdict.check("the two linked artefacts run", ran.code == 0, ran.out)
+
+  // --- mixing stds of different versions ---
+  // A foldable symbol is weak (`--omit-runtime` on std's side), so **it is silently folded where
+  // two artefacts of different std versions hold a weak symbol of the same name**.
+  // Caution: Do not count std's symbols by name; a new one would slip by. Check only "what both
+  // define and is weak".
+  check_mixed_std(work, std_other, rt_c, tag_repo, tag_other, arena)
+  return harness.finish()

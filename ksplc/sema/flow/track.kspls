@@ -1,0 +1,650 @@
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/base/mangle" as base_mangle
+import "ksplc/sema/flow/release" as sema_flow_release
+import "ksplc/sema/flow/report" as sema_flow_report
+import "ksplc/sema/flow/stmt" as sema_flow_stmt
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/arc" as sema_type_arc
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "std/chars" // testing and slicing single characters
+import "std/ds" { List }
+import "std/str"
+
+struct Df_set //< the "set of local declaration nodes" the dataflow tracks
+  //<
+  //< One type for sets that differ only in merge direction, so the set operations are written once.
+  //< **These structs and Df_ctx belong only to the dataflow's three files**; they are not priv only
+  //< because of the file split. From elsewhere, add a function that returns the result rather
+  //< than reading them directly.
+  items: List<|Ast_node$@|>$@
+  merge_is_intersect: Bool //<
+    //< The merge's direction: true = intersection, false = union
+    //<
+    //< Intersection is must, as "initialized"; union is may, as "released or moved".
+
+impl Df_set
+  fn new(merge_is_intersect: Bool): Df_set$@
+    items: = List<|Ast_node$@|>.create(base_core.arena)
+    return base_core.arena
+      .create(Df_set::{ .items = items, .merge_is_intersect = merge_is_intersect })
+
+  fn contains(r: Self$@, v: Ast_node$@): Bool
+    return df_list_contains(r.items, v)
+
+  fn add(r: Self$@, v: Ast_node$@)
+    if v != null && !r.contains(v)
+      r.items.push(v)
+
+  fn remove(r: Self$@, v: Ast_node$@)
+    if v == null
+      return
+    for $i: = 0; i < r.items.len; i += 1
+      if r.items.get(i) == v
+        r.items.set(i, r.items.get(r.items.len - 1))
+        r.items.len -= 1
+        return
+
+  fn copy_from(r: Self$@, other: Df_set$@)
+    for v in other.items
+      r.items.push(v)
+
+  fn merged(a: Df_set$@, b: Df_set$@): Df_set$@ //<
+    //< Returns a new set merging a and b according to a's direction (intersection / union)
+    ns: = Df_set.new(a.merge_is_intersect)
+    if a.merge_is_intersect
+      for v in a.items
+        if b.contains(v)
+          ns.add(v)
+      return ns
+    ns.copy_from(a)
+    for v in b.items
+      ns.add(v)
+    return ns
+
+struct Df_state
+  init_vars: Df_set$@ //< the initialized locals (must-be-initialized)
+  freed_vars: Df_set$@ //< the locals possibly released (may-be-freed, for use-after-free)
+  moved_vars: Df_set$@ //< the locals possibly moved (may-be-moved, for Move_only)
+  reachable: Bool
+
+impl Df_state
+  fn new(): Df_state$@
+    init_vars: = Df_set.new(true)
+    freed_vars: = Df_set.new(false)
+    moved_vars: = Df_set.new(false)
+    return base_core.arena
+      .create(Df_state::{ .init_vars = init_vars, .freed_vars = freed_vars,
+      .moved_vars = moved_vars, .reachable = true })
+
+  fn clone(r: Self$@): Df_state$@
+    ns: = Df_state.new()
+    ns.reachable = r.reachable
+    ns.init_vars.copy_from(r.init_vars)
+    ns.freed_vars.copy_from(r.freed_vars)
+    ns.moved_vars.copy_from(r.moved_vars)
+    return ns
+
+  fn apply_merged_state(r: Self$@, merged: Df_state$@) //<
+    //< Writes a branch merge's result back into itself
+    r.init_vars = merged.init_vars
+    r.freed_vars = merged.freed_vars
+    r.moved_vars = merged.moved_vars
+    r.reachable = merged.reachable
+
+  fn contains(r: Self$@, v: Ast_node$@): Bool
+    return r.init_vars.contains(v)
+
+  fn add(r: Self$@, v: Ast_node$@)
+    r.init_vars.add(v)
+
+  fn contains_freed(r: Self$@, v: Ast_node$@): Bool
+    return r.freed_vars.contains(v)
+
+  fn add_freed(r: Self$@, v: Ast_node$@)
+    r.freed_vars.add(v)
+
+  fn remove_freed(r: Self$@, v: Ast_node$@) //<
+    //< Clears the released flag once a reassignment (x = ...) has stored a new value
+    r.freed_vars.remove(v)
+
+struct Local_state
+  node: Ast_node$@
+  is_read: Bool
+  // Mutability has two axes, one per field below ("The two axes of mutability" in
+  // docs/SPEC-language.md).
+  is_reassigned: Bool //<
+    //< The binding axis: the name is given a new value (`x = v` / `x += v`); it decides `$x`.
+  is_mutated: Bool //<
+    //< The value axis: what the name holds is changed in place
+    //<
+    //< It is also set by a receiver's method call or `@` / `[` / `$` (for W0208 and similar).
+
+struct Df_ctx
+  sema: Sema_ctx$@
+  locals: List<|Local_state|>$@
+  has_error: Bool
+  has_reported_unreachable: Bool
+  suppress_move: Bool //<
+    //< Set during a read that copies no value, so a Move_only binding's ownership does not move
+    //<
+    //< Such a read is a receiver, or the target of `@` / `$` / `[`.
+  pending_defers: List<|Ast_node$@|>$@ //<
+    //< The defer bodies the current block registered, analyzed at its end
+    //<
+    //< The reason is at df_stmt_block_scope.
+
+impl Ast_node
+  fn get_assign_target_def(r: Self$@): Option<|Ast_node$@|>
+    $curr: = r
+    for curr != null
+      k: = curr.kind_id
+      if k == .k_expr_path || k == .k_identifier || k == .k_type_path
+        return Option<|Ast_node$@|>.some(curr.def_node)
+      if (k == .k_expr_postfix || k == .k_method_access) && curr.children.len > 0
+        curr = curr.get_postfix_receiver()
+        continue
+      if k == .k_expr_primary && curr.children.len > 0
+        curr = curr.get_primary_inner_expr()
+        continue
+      if curr.children.len == 1
+        curr = curr.get_child(0)
+        continue
+      break
+    return Option<|Ast_node$@|>.none
+
+  fn is_bare_name_target(r: Self$@): Bool //<
+    //< Whether an assignment's left-hand side is a "bare name"
+    //<
+    //< `x` / `(x)` are true, `r.f` / `a[i]` / `p$` false: the binding axis versus the value axis,
+    //< for [I0601] and the definite-initialization tracking.
+    $curr: = r
+    if curr != null && curr.kind_id == .k_expr_primary && curr.children.len > 0
+      child: = curr.get_child(0)
+      if child.is_path_or_ident()
+        curr = child
+    if curr == null
+      return false
+    // A path node can hold "a.b"; only a childless one is a bare name.
+    return curr.kind_id == .k_identifier ||
+      ((curr.kind_id == .k_expr_path || curr.kind_id == .k_type_path) && curr.children.len <= 1)
+
+  fn write_crosses_indirection(r: Self$@, c: Df_ctx$@): Bool //<
+    //< Whether the path to the assignment destination crosses a pointer or a slice
+    //<
+    //< A value's field (`v.f = x`) or element does not cross: it writes the binding (the axes are
+    //< at Local_state). An unresolved type does not cross either; the only cost is [I0601] missing
+    //< a spare `$`.
+    if r == null
+      return false
+    if r.kind_id == .k_expr_primary && r.children.len > 0
+      return r.get_primary_inner_expr().write_crosses_indirection(c)
+    if r.kind_id != .k_expr_postfix || r.children.len < 2
+      return false
+    op: = r.get_postfix_op()
+    if op == null
+      return false
+    if op.text.equals("$")
+      return true // an explicit dereference
+    is_index: = op.text.starts_with("[")
+    if !op.text.equals(".") && !is_index
+      return false
+    recv: = r.get_postfix_receiver()
+    if recv == null
+      return false
+    env: = c.sema.env
+    if env.is_pointer(recv.type_id)
+      return true
+    // An index crosses a slice (the elements are outside the descriptor); `s.ptr = p` writes the
+    // descriptor, so it does not.
+    if is_index && env.is_slice(recv.type_id)
+      return true
+    return recv.write_crosses_indirection(c)
+
+  fn is_tracked_local(r: Self$@, c: Df_ctx$@): Bool
+    if r == null
+      return false
+    d_kind: = r.kind_id
+    if d_kind == .k_decl_var || d_kind == .k_decl_const || d_kind == .k_fn_param ||
+      d_kind == .k_decl_var_item || d_kind == .k_identifier
+      for local in c.locals
+        if local.node == r
+          return true
+    return false
+
+  fn analyze_df_node(r: Self$@, c: Df_ctx$@, state: Df_state$@)
+    if r == null
+      return
+    if !state.reachable
+      if r.kind_id != .k_empty && r.kind_id != .k_stmt_block && r.kind_id != .k_stmt_label &&
+        r.kind_id != .k_decl_var && r.kind_id != .k_decl_const
+        if !c.has_reported_unreachable
+          $target_node: = r
+          kw: = r.find_child(.k_keyword)
+          if kw != null
+            target_node = kw
+          else if r.children.len > 0
+            first: = r.get_child(0)
+            if first.kind_id == .k_identifier || first.kind_id == .k_literal
+              target_node = first
+          c.sema.warn(target_node, "[W0201] Unreachable code detected")
+          c.has_reported_unreachable = true
+      return
+
+    switch r.kind_id case .k_decl_var, .k_decl_const
+      r.df_decl_var(c, state)
+    case .k_stmt_expr
+      r.df_stmt_expr(c, state)
+    case .k_identifier, .k_expr_path, .k_type_path
+      r.df_identifier(c, state)
+    case .k_expr_catch
+      r.df_expr_catch(c, state)
+    case .k_method_access
+      r.df_method_access(c, state)
+    case .k_expr_postfix
+      r.df_expr_postfix(c, state)
+    case .k_stmt_if
+      r.df_stmt_if(c, state)
+    case .k_stmt_match
+      r.df_stmt_match(c, state)
+    case .k_stmt_loop
+      r.df_stmt_loop(c, state)
+    case .k_stmt_labeled_block
+      r.df_stmt_labeled_block(c, state)
+    case .k_stmt_block
+      r.df_stmt_block_scope(c, state)
+    case .k_stmt_defer
+      r.df_stmt_defer(c, state)
+    case .k_stmt_return, .k_stmt_throw, .k_stmt_fallback, .k_stmt_break, .k_stmt_continue
+      r.df_stmt_return_like(c, state)
+    case .k_expr_ternary
+      r.df_expr_ternary(c, state)
+    default
+      r.df_default_traverse(c, state)
+
+  fn df_expr_ternary(r: Self$@, c: Df_ctx$@, state: Df_state$@)
+    if r.children.len == 3
+      cond: = r.get_ternary_cond()
+      cond.analyze_df_node(c, state)
+
+      state_then: = state.clone()
+      r.get_ternary_true().analyze_df_node(c, state_then)
+
+      state_else: = state.clone()
+      r.get_ternary_false().analyze_df_node(c, state_else)
+
+      state.apply_merged_state(intersect_states(state_then, state_else))
+    else
+      r.df_default_traverse(c, state)
+
+  fn df_default_traverse(r: Self$@, c: Df_ctx$@, state: Df_state$@)
+    for child in r.children
+      child.analyze_df_node(c, state)
+
+  fn df_decl_var(r: Self$@, c: Df_ctx$@, state: Df_state$@)
+    id_node: = r.get_var_decl_id()
+    expr_node: = r.get_var_decl_expr()
+    if id_node != null
+      c.locals
+        .push(Local_state::{ .node = r, .is_read = false, .is_reassigned = false,
+        .is_mutated = false })
+      r.get_var_decl_type_node().df_type_array_sizes(c, state)
+      if expr_node != null && expr_node.kind_id != .k_empty
+        expr_node.analyze_df_node(c, state)
+        state.add(r)
+
+  fn df_type_array_sizes(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
+    //< Walks the array-size expression written in a type annotation (the `n` of `a: I32[n]`)
+    //<
+    //< Without it, an in-function `const` used only as an array size gets a false [W0207] "unused".
+    if r == null
+      return
+    // The `$` at the head of the postfix's text is stripped first (as in
+    // sema/decl/resolve.kspls).
+    if r.kind_id == .k_type_postfix && r.children.len > 0
+      pt: = r.text.strip_prefix("$")
+      if pt.starts_with("[")
+        r.get_child(0).analyze_df_node(c, state)
+    for child in r.children
+      child.df_type_array_sizes(c, state)
+
+  fn df_stmt_expr(r: Self$@, c: Df_ctx$@, state: Df_state$@)
+    left: = r.get_assign_left()
+    right: = r.get_assign_right()
+    op: = r.get_assign_op()
+
+    if right != null
+      right.analyze_df_node(c, state)
+    if right != null && op != null
+      // The definite-initialization tracking only looks at `x = v`.
+      is_simple: = left.is_bare_name_target() && op.text.equals("=")
+      if def: = left.get_assign_target_def()
+        if def != null && def.is_tracked_local(c)
+          // The binding axis is set only for a bare name: `r.f = v` writes the pointee, which
+          // `Self$@` permits (see Local_state), or [I0601] misses a spare `$` on `r`.
+          if left.write_crosses_indirection(c)
+            c.mark_mutated(def)
+          else
+            c.mark_reassigned(def)
+          if is_simple
+            state.add(def)
+            state.remove_freed(def) // a reassignment makes it a new value, so clear released
+            state.moved_vars.remove(def) // and moved
+            return
+      // `x$ = value` overwrites all of what x points at, so the released state up to then can be
+      // cleared (x's own initialization state is separate, so init_vars is not touched). Example:
+      // `pending_ast.free(); pending_ast$ = next_pending_ast;` in ksplc/gen/c/root.kspls.
+      if op.text.equals("=") && left != null && left.kind_id == .k_expr_postfix
+        deref_op: = left.get_postfix_op()
+        if deref_op != null && deref_op.text.equals("$")
+          $deref_def: Ast_node$@ = null
+          if dd: = left.get_postfix_receiver().get_direct_local_def()
+            deref_def = dd
+          state.remove_freed(deref_def)
+    if left != null
+      left.analyze_df_node(c, state)
+
+  fn df_identifier(r: Self$@, c: Df_ctx$@, state: Df_state$@)
+    def: = r.def_node
+    if def != null && def.is_tracked_local(c)
+      c.mark_read(def)
+      sema_flow_report.report_uninit_if_needed(c, state, def, r)
+      sema_flow_report.report_freed_if_needed(c, state, def, r)
+      sema_flow_report.report_moved_if_needed(c, state, def, r)
+      // A Move_only binding read as a value moves, except the borrows under suppress_move (listing
+      // the exceptions misses fewer cases than listing the copies).
+      if !c.suppress_move && c.sema.env.is_move_only(def.type_id)
+        state.moved_vars.add(def)
+
+  fn analyze_as_borrow(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
+    //< Analyzes a child node as "a read that copies nothing", such as a receiver position
+    if r == null
+      return
+    saved: = c.suppress_move
+    c.suppress_move = true
+    r.analyze_df_node(c, state)
+    c.suppress_move = saved
+
+  fn df_expr_catch(r: Self$@, c: Df_ctx$@, state: Df_state$@)
+    catch_state: = state.clone()
+    $target_block: Ast_node$@ = null
+    for ch in r.children
+      if ch.kind_id == .k_identifier
+        c.locals
+          .push(Local_state::{ .node = ch, .is_read = false, .is_reassigned = false,
+          .is_mutated = false })
+        catch_state.add(ch)
+      else if ch.kind_id == .k_stmt_block
+        target_block = ch
+        ch.analyze_df_node(c, catch_state)
+      else if !ch.is_keyword("catch") && ch.kind_id != .k_literal
+        ch.analyze_df_node(c, catch_state)
+    if target_block != null
+      is_void: =
+        sema_type_env.is_void(r.type_id) || sema_type_env.is_unknown(r.type_id)
+      if !is_void && catch_state.reachable
+        c.sema.err(r, "catch block must yield a value using 'fallback' or exit")
+        c.has_error = true
+    state.apply_merged_state(intersect_states(state, catch_state))
+
+  fn mark_postfix_receiver_mutated(r: Self$@, c: Df_ctx$@)
+    receiver: = r.get_postfix_receiver()
+    if def: = receiver.get_assign_target_def()
+      if def != null
+        c.mark_mutated(def)
+
+  fn mark_value_receiver_reassigned(r: Self$@, c: Df_ctx$@) //<
+    //< Sets the binding axis on a method call whose receiver is **a value**
+    //<
+    //< A value is not a pointer or a slice, so the call amounts to writing the binding itself, as
+    //< `v.f = x` does; otherwise [I0601] says "`$` is not needed". A pointer or slice receiver
+    //< writes the pointee (`p.m()` on `p: T$@` needs no `$p`).
+    receiver: = r.get_postfix_receiver()
+    if receiver == null
+      return
+    env: = c.sema.env
+    if env.is_pointer(receiver.type_id) || env.is_slice(receiver.type_id)
+      return
+    if def: = receiver.get_assign_target_def()
+      if def != null
+        c.mark_reassigned(def)
+
+  fn get_direct_local_def(r: Self$@): Option<|Ast_node$@|> //<
+    //< The receiver of `.free()` / `.dealloc()`, only where it is a bare identifier
+    //<
+    //< get_assign_target_def would take `r.list.free()` as releasing `r`.
+    $curr: = r
+    if curr != null && curr.kind_id == .k_expr_primary && curr.children.len > 0
+      curr = curr.get_primary_inner_expr()
+    if curr != null &&
+      (curr.kind_id == .k_identifier || curr.kind_id == .k_expr_path ||
+      curr.kind_id == .k_type_path)
+      return Option<|Ast_node$@|>.some(curr.def_node)
+    return Option<|Ast_node$@|>.none
+
+  fn get_addressed_local_def(r: Self$@): Option<|Ast_node$@|> //<
+    //< The local's declaration node, where the argument is that bare local or its address
+    //<
+    //< The address is an explicit one, such as the `f@` of `close_it(f@)`.
+    //< This lets passing a pointer be tracked across the call (mark_call_freed_args).
+    if direct: = r.get_direct_local_def()
+      return Option<|Ast_node$@|>.some(direct)
+    // `f@` and `Void$@::f` are stripped: a real `dealloc(Void$@::p)` almost always casts.
+    if r != null && r.kind_id == .k_expr_postfix
+      op: = r.get_postfix_op()
+      if op != null && (op.text.equals("@") || op.text.equals("::"))
+        return r.get_postfix_receiver().get_addressed_local_def()
+    return Option<|Ast_node$@|>.none
+
+  fn mark_free_call_if_any(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
+    //< Registers a bare local's `.free()` / `.dealloc()` in freed_vars
+    //<
+    //< `r.field.free()` is not tracked, avoiding false positives.
+    $freed_expr: Ast_node$@ = null
+    $frees_the_pointer: = false
+    switch r.get_free_call_receiver(c.sema) case .some(rv)
+      freed_expr = rv
+    case .none
+      // The free-function form (`dealloc(x)`).
+      if arg: = r.get_free_fn_arg()
+        freed_expr = arg
+        frees_the_pointer = true
+    $def: Ast_node$@ = null
+    if freed_expr != null
+      if d: = freed_expr.get_addressed_local_def()
+        def = d
+    if def != null && def.is_tracked_local(c)
+      state.add_freed(def)
+      if frees_the_pointer
+        r.warn_if_arena_handout(def, c)
+
+  priv fn warn_if_arena_handout(r: Self$@, def: Ast_node$@, c: Df_ctx$@) //<
+    //< [W0104] Warns when a pointer an arena handed out is passed to a call that releases it
+    //<
+    //< **Only for the free-function form (`dealloc(x)`).** `x.free()` releases `x`'s
+    //< **contents**, which is correct for an arena's container (`m: = arena.create(Map.new())` +
+    //< `defer m.free()`).
+    //< The origin is decided by type; by name alone, another type with that method would be caught.
+    if def.kind_id != .k_decl_var
+      return
+    kw: = def.safe_get_child(1)
+    if kw == null || kw.text.is_mut_binding_kw()
+      return
+    init: = def.get_var_decl_expr()
+    if init == null || !init.is_arena_handout(c.sema)
+      return
+    c.sema.clear_scratch()
+      .s("[W0104] This pointer was handed out by an arena, so it cannot be released here. Arena \
+        memory is freed all at once by 'Arena.free()'; releasing one handout corrupts the heap")
+    c.sema.warn(r, c.sema.scratch.slice())
+
+  fn mark_call_freed_args(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
+    //< Marks a bare local argument released where the callee always releases that parameter
+    //<
+    //< The call is `foo(x)`, `obj.m(x)` or `T.m(x)`.
+    //< **A method call shifts the parameters by one** (the receiver), or `a` is checked as self.
+    callee: = r.get_postfix_receiver()
+    fn_node: = callee.def_node if callee != null else null
+    if fn_node == null || fn_node.kind_id != .k_decl_fn
+      return
+    args_node: = r.find_child(.k_expr_args)
+    if args_node == null
+      return
+    param_list: = fn_node.get_fn_params()
+    if param_list == null
+      return
+    is_method: = callee.kind_id == .k_method_access
+    $param_idx: Sz = 0
+    for p in base_ast_ext.Param_cursor.new(param_list, false)
+      arg: = sema_flow_release.call_arg_for_param(callee, args_node, param_idx, is_method)
+      if arg == null
+        break
+      if fn_node.body_frees_param_directly(p.get_decl_id_text(), c.sema)
+        if def: = arg.get_addressed_local_def()
+          if def != null && def.is_tracked_local(c)
+            state.add_freed(def)
+      param_idx += 1
+
+  fn df_method_access(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
+    //< Walks a field access's or a method call's receiver without counting it as a use as a value
+    //<
+    //< `x.field` does not move x. It does, however, **run the already-released check**.
+    //< Caution: **The freed check must not be suppressed along with it here**, even though some
+    //< `.free()` only resets a buffer: `p.free(); p.v` / `p.get()` would go undiagnosed.
+    if r.children.len > 0
+      r.mark_postfix_receiver_mutated(c)
+      r.mark_value_receiver_reassigned(c)
+    for i in Range.asc(r.children.len)
+      child: = r.get_child(i)
+      if i == 0
+        // Not a move, but still a use of something released (analyze_as_borrow).
+        child.analyze_as_borrow(c, state)
+      else
+        child.analyze_df_node(c, state)
+    r.mark_free_call_if_any(c, state)
+
+  priv fn cast_makes_mutable_view(r: Self$@, c: Df_ctx$@): Bool //<
+    //< Whether a prefix cast's destination is a writable indirection
+    //<
+    //< That is a mutable slice or a mutable pointer.
+    //< **This also sets the binding axis**: without `$` the C declaration is `const`, and a write
+    //< through `U8$[]::buf` hits read-only memory.
+    ty: = r.get_postfix_member()
+    if ty == null
+      return false
+    env: = c.sema.env
+    tid: = ty.type_id
+    if !env.is_slice(tid) && !env.is_pointer(tid)
+      return false
+    return !env.const_elem_of(tid)
+
+  fn df_expr_postfix(r: Self$@, c: Df_ctx$@, state: Df_state$@)
+    op_node: = r.get_postfix_op()
+    $op_text: = r.text
+    if op_node != null
+      op_text = op_node.text
+    if op_text.equals("@") || op_text.equals("[") || op_text.equals("$") ||
+      (op_text.equals("::") && r.cast_makes_mutable_view(c))
+      r.mark_postfix_receiver_mutated(c)
+      // A fixed-length array's elements take the binding's `$` (see Local_state), so `buf@` /
+      // `buf[i]@` sets the binding axis too.
+      // Caution: Go back to the root to set it: `arr[0]@` is decided by `$arr`.
+      recv_addr: = r.get_postfix_receiver()
+      if recv_addr != null
+        if def: = recv_addr.get_assign_target_def()
+          if def != null
+            c.mark_reassigned(def)
+    if op_text.equals(".") && r.children.len > 0
+      // A field read's receiver is not a use as a value (see df_method_access).
+      r.get_postfix_receiver().analyze_as_borrow(c, state)
+      for $i: = 1; i < r.children.len; i += 1
+        r.get_child(i).analyze_df_node(c, state)
+    else if op_text.equals("@") || op_text.equals("$") || op_text.equals("[")
+      // Address-taking, dereferencing and indexing borrow.
+      r.get_postfix_receiver().analyze_as_borrow(c, state)
+      for $i: = 1; i < r.children.len; i += 1
+        r.get_child(i).analyze_df_node(c, state)
+    else
+      r.df_default_traverse(c, state)
+      if op_text.equals("(")
+        // Registers `dealloc(x)` and an argument to a function wrapping a release (one level).
+        r.mark_free_call_if_any(c, state)
+        r.mark_call_freed_args(c, state)
+
+fn df_list_contains(list: List<|Ast_node$@|>$@, v: Ast_node$@): Bool //<
+  //< Whether v is held in a node list (null never is)
+  if v == null
+    return false
+  for item in list
+    if item == v
+      return true
+  return false
+
+fn intersect_states(s1: Df_state$@, s2: Df_state$@): Df_state$@
+  if !s1.reachable
+    return s2.clone()
+  if !s2.reachable
+    return s1.clone()
+  ns: = Df_state.new()
+  ns.reachable = true
+  ns.init_vars = Df_set.merged(s1.init_vars, s2.init_vars)
+  ns.freed_vars = Df_set.merged(s1.freed_vars, s2.freed_vars)
+  ns.moved_vars = Df_set.merged(s1.moved_vars, s2.moved_vars)
+  return ns
+
+impl Df_ctx
+  fn find_local(r: Self$@, v: Ast_node$@): I32
+    if v == null
+      return -1
+    for i in Range.asc(r.locals.len)
+      if r.locals.get(i).node == v
+        return I32::i
+    return -1
+
+  fn mark_read(r: Self$@, v: Ast_node$@)
+    i: = r.find_local(v)
+    if i >= 0
+      $st: = r.locals.get(i)
+      st.is_read = true
+      r.locals.set(i, st)
+
+  fn mark_mutated(r: Self$@, v: Ast_node$@) //<
+    //< Sets only the value axis (a method call, an application of `@` / `[` / `$`)
+    i: = r.find_local(v)
+    if i >= 0
+      $st: = r.locals.get(i)
+      st.is_mutated = true
+      r.locals.set(i, st)
+
+  fn mark_reassigned(r: Self$@, v: Ast_node$@) //< sets the binding axis (and the value axis)
+    i: = r.find_local(v)
+    if i >= 0
+      $st: = r.locals.get(i)
+      st.is_reassigned = true
+      st.is_mutated = true
+      r.locals.set(i, st)
+
+fn analyze_definite_initialization(c: Sema_ctx$@, fn_node: Ast_node$@, block: Ast_node$@): Bool
+  $ctx: = Df_ctx::{ .sema = c, .locals = List<|Local_state|>.create(base_core.arena),
+    .has_error = false, .has_reported_unreachable = false, .suppress_move = false,
+    .pending_defers = null }
+  state: = Df_state.new()
+
+  param_list: = fn_node.get_fn_params()
+  if param_list != null
+    for p in base_ast_ext.Param_cursor.new(param_list, false)
+      ctx.locals
+        .push(Local_state::{ .node = p, .is_read = false, .is_reassigned = false,
+        .is_mutated = false })
+      state.add(p)
+
+  block.analyze_df_node(ctx@, state)
+
+  if !c.suppress_errors
+    for local in ctx.locals
+      sema_flow_report.check_local_usage(c, local)
+  return !ctx.has_error

@@ -1,0 +1,40 @@
+//< A generic struct's or enum's instance is refused where the same non-generic declaration is
+//<
+//< An instance fills its fields and variants through the same functions as a plain declaration
+//< (fill_struct_fields and fill_enum_variants in ksplc/sema/decl/registry.kspls).
+// EXPECT: field 'a' is already defined in struct
+// EXPECT: struct fields cannot be of type 'Void'
+// EXPECT: variant 'none' is already defined in enum
+
+struct Twice<|T|>
+  a: T
+  a: I32
+
+struct Holds_void<|T|>
+  t: T
+  v: Void
+
+enum Twice_variant<|T|>
+  none
+  some(t: T)
+  none
+
+fn case_duplicate_field(): I32
+  w: Twice<|I32|> = ::{ .a = 1 }
+  return w.a
+
+fn case_void_field(): I32
+  w: Holds_void<|I32|> = ::{ .t = 1 }
+  return w.t
+
+fn case_duplicate_variant(): I32
+  e: Twice_variant<|I32|> = .some(1)
+  switch e case .some(t)
+    return t
+  default {}
+  return 0
+
+fn main()
+  case_duplicate_field()
+  case_void_field()
+  case_duplicate_variant()

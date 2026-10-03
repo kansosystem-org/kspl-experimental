@@ -1,0 +1,594 @@
+//< Parses and builds HTTP/1.1 messages, both requests and responses
+//<
+//< Use it for a web server or client over `std/net`'s TCP sockets. **It supports only a body
+//< delimited by `Content-Length`**: not `Transfer-Encoding: chunked`, `100-continue` or HTTP/2.
+//< The reader handles pipelining through `consumed`.
+
+// ==========================================
+// Caution: **Refuse any syntax where another implementation might find a different body boundary;
+// never interpret it silently.** A boundary one byte off from the server in front (a reverse
+// proxy) allows request smuggling.
+// ==========================================
+import "std/chars"
+import "std/mem" { Arena }
+import "std/net"
+import "std/str" { Str_builder }
+import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
+
+pub enum Http_error //< why a message could not be read, or cannot be trusted
+  invalid_request_line //< the first line is not `METHOD target VERSION`
+  invalid_status_line //< the first line is not `VERSION status reason`
+  invalid_header //< a header line is not `name: value`
+  unsupported_transfer_encoding //< the message has `Transfer-Encoding`, which is always refused.
+    //<
+    //< Ignoring it silently would let it disagree with Content-Length (request smuggling).
+  invalid_line_break //< a bare CR or LF was in the headers; only CRLF ends a line
+  unsupported_version //< the version is not `HTTP/` plus one digit, a dot and one digit
+  incomplete //< the header or body has not all arrived yet
+  head_too_large //< the first line and the headers went over `max_head_bytes` (HTTP's 431)
+  body_too_large //< `Content-Length` names more than the caller's body limit (HTTP's 413)
+  connection_closed //< the peer closed before the header or body was fully read
+  io(err: net.Net_error) //< the socket itself failed
+
+pub const max_head_bytes: Sz = 64 * 1024 //< the most a message's head may take, against DoS
+  //<
+  //< The head is the first line and the headers; every reader here refuses a longer one.
+pub const default_max_body_bytes: Sz = 16 * 1024 * 1024 //< the body limit if the caller sets none
+
+// ---------------------------------------------------------
+// Checking the character sets (the parser and the builder use the same ones)
+// ---------------------------------------------------------
+
+priv fn is_token(s: U8[]): Bool //<
+  //< Whether it is an RFC 9110 token, the character set of a header name and a method
+  //<
+  //< An empty string is not a token.
+  //< Caution: **Check a header name with this.** If a space were allowed, `Content-Length : 5`,
+  //< which the proxy in front passes on as "an unknown header", would be Content-Length only here:
+  //< the body boundaries disagree, the same hole that Transfer-Encoding is refused for.
+  if s.len == 0
+    return false
+  for i in Range.asc(s.len)
+    if !s[i].is_alnum() && "!#$%&'*+-.^_`|~".find_char(s[i]) < 0
+      return false
+  return true
+
+priv fn is_field_value(s: U8[]): Bool //<
+  //< Whether the text can appear in a header value or a reason phrase
+  //<
+  //< It refuses control characters other than HTAB, and DEL (0x80-0xFF is allowed). An empty
+  //< string is allowed.
+  for i in Range.asc(s.len)
+    if s[i] != '\t' && (s[i] < ' ' || s[i] == 127)
+      return false
+  return true
+
+priv fn check_version(v: U8[]): Void?Http_error //<
+  //< HTTP-version is always 8 bytes: "HTTP/" + one digit + "." + one digit
+  if v.len != 8 || !v.starts_with("HTTP/")
+    throw Http_error.unsupported_version
+  if !v[5].is_digit() || v[6] != '.' || !v[7].is_digit()
+    throw Http_error.unsupported_version
+
+priv fn parse_digits(s: U8[]): Sz?Http_error //< it accepts only `1*DIGIT`
+  //<
+  //< Caution: **Do not pass it directly to parse_size**, which reads `5abc` as 5 and accepts `+5`;
+  //< accepting what the proxy in front refuses makes the body boundaries disagree.
+  if s.len == 0
+    throw Http_error.invalid_header
+  for i in Range.asc(s.len)
+    if !s[i].is_digit()
+      throw Http_error.invalid_header
+  // parse_size refuses 19 or more digits as an overflow.
+  return s.parse_size() catch
+    throw Http_error.invalid_header
+
+// ---------------------------------------------------------
+// The headers (a linked list with case-insensitive names; the order is kept, and several headers
+// with the same name are allowed)
+// ---------------------------------------------------------
+pub struct Header //< one header, linked to the next in the order they arrived
+  pub name: U8$[] //< the name as it arrived; its case has no meaning
+  pub value: U8$[] //< the value as it arrived, with surrounding whitespace trimmed
+  pub next: Header$@ //< the header after this one, or null
+
+impl Header
+  pub fn find( //< the first value with that name, or nothing; case is ignored
+    r: Self$@,
+    name: U8[], //< the header name to look for
+  ): Option<|U8[]|>
+    $node: = r
+    for node != null
+      if node.name.equals_ignore_case(name)
+        return Option<|U8[]|>.some(node.value)
+      node = node.next
+    return Option<|U8[]|>.none
+
+  priv fn has(r: Self$@, name: U8[]): Bool
+    $found: = false
+    if _v: = r.find(name)
+      found = true
+    return found
+
+priv fn get_content_length(head: Header$@): Sz?Http_error //<
+  //< Parses the Content-Length header's value (if absent, returns 0 for no body)
+  //<
+  //< Transfer-Encoding is refused, and so are two different Content-Length values: implementations
+  //< disagree on which one to use, which opens the way to smuggling.
+  $found: = false
+  $length: Sz = 0
+  $node: = head
+  for node != null
+    if node.name.equals_ignore_case("Transfer-Encoding")
+      throw Http_error.unsupported_transfer_encoding
+    if node.name.equals_ignore_case("Content-Length")
+      v: = parse_digits(node.value)?
+      if found && v != length
+        throw Http_error.invalid_header
+      found = true
+      length = v
+    node = node.next
+  return length if found else 0
+
+priv fn check_content_length(head: Header$@, max_body: Sz): Sz?Http_error //<
+  //< Refuses a Content-Length larger than max_body
+  content_length: = get_content_length(head)?
+  if content_length > max_body
+    throw Http_error.body_too_large
+  return content_length
+
+pub struct Header_builder //< builds a header list, keeping the order the headers were added in
+  //<
+  //< The same "list builder that tracks head/tail by value" pattern as json.kspls's
+  //< Obj_builder/Array_builder.
+  pub arena: Arena$@ //< where the headers go
+  pub head: Header$@ //< the first header added, or null
+  pub tail: Header$@ //< the last header added, so the next one is appended without a walk
+
+pub fn headers( //< an empty header builder
+  arena: Arena$@, //< where the headers go
+): Header_builder //< the builder; each add returns it again, for chaining
+  return Header_builder::{ .arena = arena, .head = null, .tail = null }
+
+impl Header_builder
+  pub fn add( //< appends one header; the same name may be added again
+    $r: Self,
+    name: U8[], //< the header name
+    value: U8[], //< its value
+  ): Self
+    hdr: Header = ::{ .name = r.arena.dup_str(name), .value = r.arena.dup_str(value),
+      .next = null }
+    h: = r.arena.create(hdr)
+    if r.head == null
+      r.head = h
+    else
+      r.tail.next = h
+    r.tail = h
+    return Header_builder::{ .arena = r.arena, .head = r.head, .tail = h }
+
+  pub fn build(r: Self): Header$@ //< the list built so far, or null if none was added
+    return r.head
+
+// ---------------------------------------------------------
+// Request / Response. The reader drops `consumed` bytes to reach the next message
+// (Str_builder.drop_prefix).
+// ---------------------------------------------------------
+pub struct Request //< one received request, and how much of the buffer it used
+  pub method: U8$[] //< the method as it arrived, such as `GET`
+  pub target: U8$[] //< the raw target, including the query string, such as `/foo?x=1`
+  pub version: U8$[] //< the version as it arrived, such as `HTTP/1.1`
+  pub headers: Header$@ //< the headers in the order they arrived, or null
+  pub body: U8$[] //< the body, of the length `Content-Length` gave
+  pub consumed: Sz //< how many bytes of the buffer this message used; the rest is the next one
+
+pub struct Response //< one received response, and how much of the buffer it used
+  pub version: U8$[] //< the version as it arrived, such as `HTTP/1.1`
+  pub status: I32 //< the status number
+  pub reason: U8$[] //< the reason phrase, as the peer wrote it
+  pub headers: Header$@ //< the headers in the order they arrived, or null
+  pub body: U8$[] //< the body, of the length `Content-Length` gave
+  pub consumed: Sz //< how many bytes of the buffer this message used; the rest is the next one
+
+// ---------------------------------------------------------
+// The shared core of buffer parsing (the state of one CRLF-delimited scan)
+// ---------------------------------------------------------
+priv struct Scan_ctx
+  src: U8[]
+  pos: Sz
+
+priv fn read_line(ctx: Scan_ctx$@): U8[]?Http_error //<
+  //< Cuts out one line ending in "\r\n", without the "\r\n", and moves pos past it
+  //<
+  //< If none is found it throws incomplete.
+  //< Caution: **Accept a bare LF or a bare CR neither as a line end nor as content.** Many
+  //< implementations split on an LF alone, so `Content-Length: 0\nContent-Length: 44` would be one
+  //< header to one side and two to the other.
+  start: = ctx.pos
+  for ctx.pos < ctx.src.len
+    if ctx.src[ctx.pos] == '\n'
+      throw Http_error.invalid_line_break
+    if ctx.src[ctx.pos] == '\r'
+      if ctx.pos + 1 >= ctx.src.len
+        break // maybe in the middle of a CRLF; do not decide yet
+      if ctx.src[ctx.pos + 1] != '\n'
+        throw Http_error.invalid_line_break
+      line: = ctx.src.sub(start, ctx.pos - start)
+      ctx.pos += 2
+      return U8[]::line
+    ctx.pos += 1
+  throw Http_error.incomplete
+
+priv fn parse_headers(ctx: Scan_ctx$@, arena: Arena$@): Header$@?Http_error //<
+  //< Parses the "Name: Value" lines up to the empty line
+  $b: = headers(arena)
+  for
+    line: = read_line(ctx)?
+    if line.len == 0
+      break
+    colon: = line.find_char(':')
+    if colon < 0
+      throw Http_error.invalid_header
+    // Caution: **Check the name as it is, without trimming** (see is_token); the value is
+    // trimmed by convention.
+    name: = line.sub(0, colon)
+    value: = line.sub_from(colon + 1).trim_spaces()
+    if !is_token(name) || !is_field_value(value)
+      throw Http_error.invalid_header
+    b = b.add(name, value)
+  return b.build()
+
+priv struct Request_line //< parses the request line ("METHOD SP target SP HTTP-version")
+  method: U8[]
+  target: U8[]
+  version: U8[]
+
+priv fn parse_request_line(line: U8[]): Request_line?Http_error
+  sp1: = line.find_char(' ')
+  if sp1 < 0
+    throw Http_error.invalid_request_line
+  rest: = line.sub_from(sp1 + 1)
+  sp2: = rest.find_char(' ')
+  if sp2 < 0
+    throw Http_error.invalid_request_line
+  method: = line.sub(0, sp1)
+  target: = rest.sub(0, sp2)
+  version: = rest.sub_from(sp2 + 1)
+  // Caution: Do not accept an empty method or an empty target (`" / HTTP/1.1"`, `"GET
+  // HTTP/1.1"`); every later branch would run on an empty string.
+  if !is_token(method) || target.len == 0
+    throw Http_error.invalid_request_line
+  check_version(version)?
+  return Request_line::{ .method = method, .target = target, .version = version }
+
+priv struct Status_line //< parses the status line ("HTTP-version SP status SP reason")
+  version: U8[]
+  status: I32
+  reason: U8[]
+
+priv fn parse_status_line(line: U8[]): Status_line?Http_error
+  sp1: = line.find_char(' ')
+  if sp1 < 0
+    throw Http_error.invalid_status_line
+  check_version(line.sub(0, sp1))?
+  rest: = line.sub_from(sp1 + 1)
+  sp2: = rest.find_char(' ')
+  status_str: = rest.sub(0, sp2) if sp2 >= 0 else rest
+  reason: = rest.sub_from(sp2 + 1) if sp2 >= 0 else ""
+  // status-code is three digits; otherwise `I32::` truncates silently (`4294967496` becomes 200).
+  if status_str.len != 3 || !is_field_value(reason)
+    throw Http_error.invalid_status_line
+  status: = parse_digits(status_str) catch
+    throw Http_error.invalid_status_line
+  return Status_line::{ .version = line.sub(0, sp1), .status = I32::status, .reason = reason }
+
+priv fn build_request(arena: Arena$@, line: Request_line, head: Header$@, body: U8[], consumed: Sz):
+  Request$@ //<
+    //< Shared by parse_request/read_request.
+  req: Request = ::{
+    .method = arena.dup_str(line.method),
+    .target = arena.dup_str(line.target),
+    .version = arena.dup_str(line.version),
+    .headers = head,
+    .body = arena.dup_str(body),
+    .consumed = consumed,
+  }
+  return arena.create(req)
+
+priv fn build_response(arena: Arena$@, line: Status_line, head: Header$@, body: U8[], consumed: Sz):
+  Response$@ //<
+    //< Shared by parse_response/read_response.
+  resp: Response = ::{
+    .version = arena.dup_str(line.version),
+    .status = line.status,
+    .reason = arena.dup_str(line.reason),
+    .headers = head,
+    .body = arena.dup_str(body),
+    .consumed = consumed,
+  }
+  return arena.create(resp)
+
+priv struct Message_parts //<
+  //< One message split into "the first line, the headers, the body"
+  //<
+  //< A request and a response differ only in the first line and the final assembly, so they share
+  //< the scan. first_line and body are views into the original buffer and must not outlive it.
+  first_line: U8[]
+  head: Header$@
+  body: U8[]
+  consumed: Sz //< how many bytes of src this message used
+
+priv struct Head_parts //< a message's head, read, and where its body starts
+  first_line: U8[] //< a view into the buffer
+  head: Header$@
+  head_end: Sz //< where the body starts in the buffer
+  body_len: Sz //< the body's length, `Content-Length`'s and within the caller's limit
+
+priv fn scan_head(src: U8[], max_body: Sz, arena: Arena$@): Head_parts?Http_error //<
+  //< Reads the head at the start of src, and checks both limits
+  //<
+  //< **Every reader goes through this**, buffered or from a socket, so the limits hold alike. It
+  //< throws incomplete until the head's empty line arrives, or `head_too_large` past the limit.
+  $ctx: = Scan_ctx::{ .src = src, .pos = 0 }
+  first_line: = read_line(ctx@) catch e
+    throw e.past_head_limit(src)
+  head: = parse_headers(ctx@, arena) catch e
+    throw e.past_head_limit(src)
+  if ctx.pos > max_head_bytes
+    throw Http_error.head_too_large
+  body_len: = check_content_length(head, max_body)?
+  return Head_parts::{ .first_line = first_line, .head = head, .head_end = ctx.pos,
+    .body_len = body_len }
+
+impl Http_error
+  priv fn past_head_limit(r: Self, src: U8[]): Http_error //<
+    //< The error to throw for a head still arriving: `head_too_large` once src is past the limit
+    switch r case .incomplete
+      if src.len > max_head_bytes
+        return Http_error.head_too_large
+    default {}
+    return r
+
+priv fn split_message(src: U8[], max_body: Sz, arena: Arena$@): Message_parts?Http_error //<
+  //< Splits the one message at the start of src into its parts
+  //<
+  //< The body is Content-Length bytes (empty if absent); it throws incomplete until all arrive.
+  //< Caution: **Check the body's length.** All the headers can be present while the body is only
+  //< partly there, and cutting without the check returns a view that points outside the buffer.
+  h: = scan_head(src, max_body, arena)?
+  if src.len - h.head_end < h.body_len
+    throw Http_error.incomplete
+  return Message_parts::{
+    .first_line = h.first_line,
+    .head = h.head,
+    .body = src.sub(h.head_end, h.body_len),
+    .consumed = h.head_end + h.body_len,
+  }
+
+pub fn parse_request( //< the one request at the start of the buffer; fails if it is incomplete
+  //<
+  //< **A body over `max_body` fails as soon as the head says so**, before it arrives, and a head
+  //< over `max_head_bytes` as soon as that much has arrived without its end.
+  src: U8[], //< what has arrived so far
+  max_body: Sz, //< the largest body accepted (`default_max_body_bytes` when the caller has none)
+  arena: Arena$@, //< where the parts are allocated
+): Request$@?Http_error //< the request; fails with incomplete while more bytes are due
+  m: = split_message(src, max_body, arena)?
+  req_line: = parse_request_line(m.first_line)?
+  return build_request(arena, req_line, m.head, m.body, m.consumed)
+
+pub fn parse_response( //< the one response at the start of the buffer; fails if it is incomplete
+  //<
+  //< The body limit is `default_max_body_bytes`; the head's is `max_head_bytes`.
+  src: U8[], //< what has arrived so far
+  arena: Arena$@, //< where the parts are allocated
+): Response$@?Http_error //< the response; fails with incomplete while more bytes are due
+  m: = split_message(src, default_max_body_bytes, arena)?
+  status_line: = parse_status_line(m.first_line)?
+  return build_response(arena, status_line, m.head, m.body, m.consumed)
+
+// ---------------------------------------------------------
+// Reading from a socket (reading until the header and the Content-Length body are all present)
+// ---------------------------------------------------------
+
+priv fn read_chunk_into(stream: net.Tcp_stream$@, b: Str_builder$@, chunk: U8$[]): Void?Http_error //<
+  //< Appends up to chunk.len bytes read from stream to b (0 bytes: the peer closed)
+  n: = stream.read(chunk) catch e
+    throw Http_error.io(e)
+  if n == 0
+    throw Http_error.connection_closed
+  b.s(U8$[]::{ .ptr = chunk.ptr, .len = n })
+
+priv fn read_message(stream: net.Tcp_stream$@, b: Str_builder$@, arena: Arena$@, max_body: Sz):
+  Message_parts?Http_error //<
+    //< Reads one message from stream and splits it into its parts
+    //<
+    //< It reads until the head's empty line (or past `max_head_bytes`), then the body by
+    //< Content-Length. The returned views point into b: finish with them before freeing b.
+  chunk: U8[4096] = ::{}
+  for b.slice().find_str("\r\n\r\n") < 0 && b.len <= max_head_bytes
+    read_chunk_into(stream, b, U8$[]::chunk)?
+  h: = scan_head(b.slice(), max_body, arena)?
+  for b.len - h.head_end < h.body_len
+    read_chunk_into(stream, b, U8$[]::chunk)?
+  return Message_parts::{
+    .first_line = h.first_line,
+    .head = h.head,
+    .body = b.slice().sub(h.head_end, h.body_len),
+    .consumed = h.head_end + h.body_len,
+  }
+
+pub fn read_request( //< reads one whole request from a connection and splits it into its parts
+  stream: net.Tcp_stream$@, //< the connection to read from, which blocks
+  arena: Arena$@, //< where the parts are allocated
+  max_body: Sz, //< the largest body accepted; a larger one is refused, not read
+): Request$@?Http_error //< the request, held in `arena`; fails if the connection closes first
+  $b: = Str_builder.new()
+  defer b.free()
+  m: = read_message(stream, b@, arena, max_body)?
+  req_line: = parse_request_line(m.first_line)?
+  return build_request(arena, req_line, m.head, m.body, m.consumed)
+
+pub fn read_response( //< reads one whole response from a connection and splits it into its parts
+  stream: net.Tcp_stream$@, //< the connection to read from, which blocks
+  arena: Arena$@, //< where the parts are allocated
+  max_body: Sz, //< the largest body accepted; a larger one is refused, not read
+): Response$@?Http_error //< the response, held in `arena`; fails if the connection closes first
+  $b: = Str_builder.new()
+  defer b.free()
+  m: = read_message(stream, b@, arena, max_body)?
+  status_line: = parse_status_line(m.first_line)?
+  return build_response(arena, status_line, m.head, m.body, m.consumed)
+
+// ---------------------------------------------------------
+// Writing (if Content-Length is not given, it is added from the body's length) The builder runs
+// the **same** checks as the parser (is_token / is_field_value).
+// ---------------------------------------------------------
+priv fn write_header_lines(b: Str_builder$@, head: Header$@): Void?Http_error
+  $node: = head
+  for node != null
+    if !is_token(node.name) || !is_field_value(node.value)
+      throw Http_error.invalid_header
+    b.s(node.name).s(": ").s(node.value).s("\r\n")
+    node = node.next
+
+priv fn write_headers_and_body(b: Str_builder$@, head: Header$@, body: U8[]): Void?Http_error
+  needs_content_length: = !head.has("Content-Length")
+  write_header_lines(b, head)?
+  if needs_content_length
+    b.s("Content-Length: \{body.len\}\r\n")
+  b.s("\r\n")
+  if body.len > 0
+    b.s(body)
+
+pub fn write_request( //< sends one whole request: the first line, the headers and the body
+  stream: net.Tcp_stream$@, //< the connection to write to
+  method: U8[], //< the method, such as `GET`
+  target: U8[], //< the target, including the query string
+  head: Header$@, //< the headers, or null
+  body: U8[]): Void?Http_error
+  // Caution: Do not allow a space in the target. The request line splits on spaces, so a space
+  // makes the rest the version, and a second request can be packed into one line.
+  if !is_token(method) || target.len == 0 || !is_field_value(target) ||
+    target.find_char(' ') >= 0
+    throw Http_error.invalid_request_line
+  $b: = Str_builder.new()
+  defer b.free()
+  b.s(method).s(" ").s(target).s(" HTTP/1.1\r\n")
+  write_headers_and_body(b@, head, body)?
+  // Caution: write can stop partway and silently truncate the message. Use write_all (see the
+  // note in std/net.kspls).
+  stream.write_all(b.slice()) catch e
+    throw Http_error.io(e)
+pub fn reason_phrase( //< the standard phrase for a status number, so the two cannot disagree
+  //<
+  //< RFC 9110's "reason-phrase"; empty for a number it does not know. The builders below write it
+  //< from the number, so no caller passes the number and the phrase as a pair (which could say
+  //< `404 Bad Request`).
+  //< Caution: **Do not fill in `"unknown"`**: a phrase from nowhere stays in the receiver's log.
+  status: I32, //< the status number
+): U8[] //< the phrase, a fixed string that needs no freeing
+  switch status case 200
+    return "OK"
+  case 201
+    return "Created"
+  case 204
+    return "No Content"
+  case 206
+    return "Partial Content"
+  case 301
+    return "Moved Permanently"
+  case 302
+    return "Found"
+  case 304
+    return "Not Modified"
+  case 400
+    return "Bad Request"
+  case 401
+    return "Unauthorized"
+  case 403
+    return "Forbidden"
+  case 404
+    return "Not Found"
+  case 405
+    return "Method Not Allowed"
+  case 408
+    return "Request Timeout"
+  case 409
+    return "Conflict"
+  case 411
+    return "Length Required"
+  case 413
+    // RFC 9110's name (RFC 7231's is "Payload Too Large").
+    return "Content Too Large"
+  case 414
+    return "URI Too Long"
+  case 415
+    return "Unsupported Media Type"
+  case 429
+    return "Too Many Requests"
+  case 431
+    return "Request Header Fields Too Large"
+  case 500
+    return "Internal Server Error"
+  case 501
+    return "Not Implemented"
+  case 503
+    return "Service Unavailable"
+  case 505
+    return "HTTP Version Not Supported"
+  default {}
+  return ""
+
+pub fn format_response( //< builds one whole response as bytes, for the caller to send
+  //<
+  //< Appends the status line, the headers, an empty line and the body to b, **leaving the bytes
+  //< to the caller**: a non-blocking socket cannot always send it all at once (see write_all in
+  //< std/net.kspls), so the sender must remember how far it got and continue once writable.
+  b: Str_builder$@, //< where the message is built
+  status: I32, //< the status number; its phrase is `reason_phrase`'s
+  head: Header$@, //< the headers, or null; `Content-Length` is added here
+  body: U8[], //< the whole body
+): Void?Http_error
+  write_status_line(b, status)?
+  write_headers_and_body(b, head, body)?
+
+priv fn write_status_line(b: Str_builder$@, status: I32): Void?Http_error //<
+  //< Writes `HTTP/1.1 <status> <phrase>` and its CRLF, the phrase from `reason_phrase`
+  //<
+  //< Caution: **Keep status to three digits**, or the unreadable "HTTP/1.1 1000 x" goes out.
+  if status < 100 || status > 999
+    throw Http_error.invalid_status_line
+  b.s("HTTP/1.1 \{status\} ").s(reason_phrase(status)).s("\r\n")
+
+pub fn format_response_head( //< builds only a response's head, for a body sent piece by piece
+  //<
+  //< Caution: **Do not add `Content-Length`.** That is why this function exists: a streamed
+  //< body's length is not known in advance, and `format_response` adds it.
+  //< **Always include `Connection: close`** (it fails without it).
+  b: Str_builder$@, //< where the head is built
+  status: I32, //< the status number; its phrase is `reason_phrase`'s
+  head: Header$@, //< the headers; `Connection: close` must be among them
+): Void?Http_error
+  if head.has("Content-Length") || !closing(head)
+    throw Http_error.invalid_header
+  write_status_line(b, status)?
+  write_header_lines(b, head)?
+  b.s("\r\n")
+
+priv fn closing(head: Header$@): Bool //< whether it says `Connection: close`
+  $said: = false
+  if v: = head.find("Connection")
+    said = v.equals_ignore_case("close")
+  return said
+
+pub fn write_response( //< builds one whole response and sends every byte of it
+  stream: net.Tcp_stream$@, //< the connection to write to, which blocks
+  status: I32, //< the status number; its phrase is `reason_phrase`'s
+  head: Header$@, //< the headers, or null
+  body: U8[]): Void?Http_error
+  $b: = Str_builder.new()
+  defer b.free()
+  format_response(b@, status, head, body)?
+  // Caution: write_all, not write (the reason is in write_request).
+  stream.write_all(b.slice()) catch e
+    throw Http_error.io(e)

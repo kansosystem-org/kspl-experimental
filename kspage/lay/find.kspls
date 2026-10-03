@@ -1,0 +1,151 @@
+//< Searching for a text
+//<
+//< It searches only for a **position** in the document; it does not rewrite (replacing is
+//< [`shape.kspls`](shape.kspls)'s job, which selects and types over).
+//< Caution: **Do not touch the document here**, or searching alone adds to the undo record.
+//< **It searches across runs** (applying a style splits a run, and a partly bold text would not
+//< be found). **The order is the layout's** (own inlines first, the child blocks after).
+import "kspage/lay/caret" { Selection }
+import "kspage/model/doc" { Block, Doc }
+import "kspage/model/run" { Inline }
+import "std/chars"
+
+priv struct Hunt //< the state while searching
+  needle: U8[]
+  // The run it starts from, and the byte position within it. **Null means "anywhere"** (after
+  // wrapping around to the start).
+  at: Inline$@
+  offset: Sz
+  past: Bool //<
+    //< Whether it has passed the run it started from (it walks in document order).
+  back: Bool //<
+    //< Whether it searches backwards (the last match is kept).
+  hit: Selection
+  found: Bool
+
+priv fn match_at(b: Block$@, run: Sz, n: Inline$@, offset: Sz, needle: U8[]): Selection //<
+  //< Whether needle continues from n's offset
+  //<
+  //< Where it does, it returns the end position; where it does not, found = false. **It crosses
+  //< into the next run in the same block**, never outside the block.
+  $here: Inline$@ = n
+  $index: Sz = run
+  $at: Sz = offset
+  $done: Sz = 0
+  for done < needle.len
+    text: = here.text()
+    if at >= text.len
+      // Caution: Cross an empty run and continue too, or text around a removed style could not be
+      // found.
+      index += 1
+      if index >= b.inlines.len
+        return Selection::{ .from = null, .from_offset = 0, .to = null, .to_offset = 0 }
+      here = b.inlines.get(index)
+      at = 0
+      continue
+    if text[at] != needle[done]
+      return Selection::{ .from = null, .from_offset = 0, .to = null, .to_offset = 0 }
+    at += 1
+    done += 1
+  return Selection::{ .from = n, .from_offset = offset, .to = here, .to_offset = at }
+
+priv fn wanted(h: Hunt$@, n: Inline$@, offset: Sz): Bool //<
+  //< Whether that position is after the starting point (before it, when searching backwards)
+  if h.at == null
+    return true
+  if n != h.at
+    return h.past if !h.back else !h.past
+  return offset >= h.offset if !h.back else offset < h.offset
+
+priv fn hunt_block(h: Hunt$@, b: Block$@) //< looks at one block in the same order as the layout
+  for $i: Sz = 0; i < b.inlines.len; i += 1
+    n: = b.inlines.get(i)
+    text: = n.text()
+    // **Start only at a character boundary**, or a match can start mid-character.
+    // Caution: **Do not start at a run's end.** The same range as the next run's start would be
+    // found in two forms, and the selection would start at the end of the run before.
+    $at: Sz = 0
+    for at < text.len
+      got: = match_at(b, i, n, at, h.needle)
+      if got.from != null && wanted(h, n, at) && (!h.found || h.back)
+        h.hit = got
+        h.found = true
+      at += text.next_codepoint(at)
+    if n == h.at
+      h.past = true
+  for $i: Sz = 0; i < b.children.len; i += 1
+    hunt_block(h, b.children.get(i))
+
+priv fn hunt(d: Doc$@, needle: U8[], at: Inline$@, offset: Sz, back: Bool): Option<|Selection|>
+  $h: = Hunt::{ .needle = needle, .at = at, .offset = offset, .past = false, .back = back,
+    .hit = Selection::{ .from = null, .from_offset = 0, .to = null, .to_offset = 0 },
+    .found = false }
+  for $i: Sz = 0; i < d.blocks.len; i += 1
+    hunt_block(h@, d.blocks.get(i))
+  return Option<|Selection|>.some(h.hit) if h.found else Option<|Selection|>.none
+
+fn next_match(d: Doc$@, needle: U8[], at: Inline$@, offset: Sz, wrap: Bool): Option<|Selection|> //<
+  //< The first position where needle starts, after (at, offset)
+  //<
+  //< **Where wrap is true it goes back to the start once at the end.** **Where `at` is null it
+  //< searches from the document's start.** An empty needle is not searched for.
+  if needle.len <= 0
+    return Option<|Selection|>.none
+  if sp: = hunt(d, needle, at, offset, false)
+    return Option<|Selection|>.some(sp)
+  if !wrap || at == null
+    return Option<|Selection|>.none
+  return hunt(d, needle, null, 0, false)
+
+fn prev_match(d: Doc$@, needle: U8[], at: Inline$@, offset: Sz, wrap: Bool): Option<|Selection|> //<
+  //< The last position where needle starts, before (at, offset)
+  //<
+  //< **It follows the same rules as `next_match`.**
+  if needle.len <= 0
+    return Option<|Selection|>.none
+  if sp: = hunt(d, needle, at, offset, true)
+    return Option<|Selection|>.some(sp)
+  if !wrap || at == null
+    return Option<|Selection|>.none
+  return hunt(d, needle, null, 0, true)
+
+fn count_matches(d: Doc$@, needle: U8[]): Sz //<
+  //< How many times needle appears in the whole document, without overlaps
+  //<
+  //< Caution: **Do not count overlaps**: replacing continues from a match's **end** (`replace_all`
+  //< in [`../write/shape.kspls`](../write/shape.kspls)), so the count would disagree with the
+  //< number replaced ("aaa" holds one "aa"). **Count it in one walk** (it runs on every
+  //< keystroke). A formula's run is counted though it cannot be replaced (`swappable`).
+  if needle.len <= 0
+    return 0
+  $tally: Sz = 0
+  for $i: Sz = 0; i < d.blocks.len; i += 1
+    tally += tally_block(needle, d.blocks.get(i))
+  return tally
+
+priv fn tally_block(needle: U8[], b: Block$@): Sz //< counts one block and its children
+  //<
+  //< **The order is the same as `hunt_block`'s** (the order decides where a text crossing runs is
+  //< counted).
+  $tally: Sz = 0
+  $i: Sz = 0
+  $at: Sz = 0
+  for i < b.inlines.len
+    text: = b.inlines.get(i).text()
+    if at >= text.len
+      i += 1
+      at = 0
+      continue
+    got: = match_at(b, i, b.inlines.get(i), at, needle)
+    if got.from == null
+      // Caution: **Start only at a character boundary** (the reason is at `hunt_block`).
+      at += text.next_codepoint(at)
+      continue
+    tally += 1
+    // Jumps to the end of the match. **The run may have changed** (a text crosses runs).
+    for i < b.inlines.len && b.inlines.get(i) != got.to
+      i += 1
+    at = got.to_offset
+  for $k: Sz = 0; k < b.children.len; k += 1
+    tally += tally_block(needle, b.children.get(k))
+  return tally

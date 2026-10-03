@@ -1,0 +1,224 @@
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/query" as sema_type_query
+import "std/chars"
+import "std/str" { Str_builder }
+
+// ==========================================
+// Inferring the type arguments from the actual arguments
+// ==========================================
+priv fn bound_contains_generic(bound: U8[], gen_name: U8[]): Bool //<
+  //< Whether the type-argument list bound holds gen_name itself at the top level
+  //<
+  //< An example of bound is "K, ksplc.sema.scope.Symbol@". A name inside a nested `<|...|>` does
+  //< not count.
+  //< An inferred list can be longer than the declaration's (`f<|K|>` taking a `Map<|K, V|>`), so
+  //< no count check belongs here: it would fail a correct call.
+  for pos in Range.asc(bound.count_type_args())
+    if bound.nth_type_arg(pos).trim_spaces().equals(gen_name)
+      return true
+  return false
+
+priv fn type_str_mentions_generic(param_type_str: U8[], gen_name: U8[]): Bool //<
+  //< Whether param_type_str holds the type variable gen_name, bare or inside another type
+  //<
+  //< For example Option<|T|>, T[], T@, T? or Container<|X, gen_name, ...|>.
+  if param_type_str.equals(gen_name)
+    return true
+  // One level of `[]` / `@` / `?` (as in `T[]`) is stripped before comparing.
+  if param_type_str.strip_suffix("[]").equals(gen_name) ||
+    param_type_str.strip_suffix("@").equals(gen_name) ||
+    param_type_str.strip_suffix("?").equals(gen_name)
+    return true
+  switch param_type_str.find_generic_bounds() case .found(_s, ins, ine, _e)
+    return bound_contains_generic(param_type_str.sub(ins, ine - ins), gen_name)
+  default
+    return false
+
+priv fn trait_impl_spelling(c: Sema_ctx$@, expected_str: U8[], arg_id: I32): U8[] //<
+  //< The type-argument string the type variable binds to, taken from the actual argument arg_id
+  //<
+  //< expected_str is the declared type of that argument.
+  //< **It exists for closures.**
+  base: = expected_str.get_generic_base_name()
+  if base.len == 0
+    return ""
+  return c.env
+    .implemented_trait_key_of(c.env.strip_const_deep(arg_id), c.resolve_fqn_for_type(base))
+
+priv fn extract_generic_binding(c: Sema_ctx$@, expected_str: U8[], arg_id: I32): U8[]
+  arg_str: = c.env.get_str(arg_id)
+
+  $clean_arg_id: = c.env.strip_const(arg_id)
+  no_result_id: = c.env.strip_result(clean_arg_id)
+  no_ptr_id: = c.env.strip_ptr(no_result_id)
+  no_slice_id: = c.env.slice_elem(no_ptr_id)
+  clean_arg_id = c.env.strip_array(no_slice_id)
+
+  $orig_arg_str: U8[] = c.env.get_str(clean_arg_id)
+  // Caution: Do not walk all of instantiated_nodes: N instantiations times M calls is O(N*M). Use
+  // the index (inst_type_index of sema_type_env.Env).
+  found_key: = c.env.inst_type_index.get(clean_arg_id) catch ""
+  if found_key.len > 0
+    orig_arg_str = found_key
+
+  switch orig_arg_str.find_generic_bounds() case .found(_s, ins, ine, _e)
+    return orig_arg_str.sub(ins, ine - ins)
+  default
+    // Otherwise from the instantiation of the trait it conforms to.
+    named: = trait_impl_spelling(c, expected_str, clean_arg_id)
+    switch named.find_generic_bounds() case .found(_s2, ins2, ine2, _e2)
+      return named.sub(ins2, ine2 - ins2)
+    default {}
+    if expected_str.ends_with("[]") && arg_str.ends_with("[]")
+      return arg_str.strip_suffix("[]")
+    if expected_str.ends_with("@") && arg_str.ends_with("@")
+      return arg_str.strip_suffix("@")
+    if expected_str.ends_with("?") && arg_str.ends_with("?")
+      return arg_str.strip_suffix("?")
+  return arg_str
+
+priv fn positional_generic_binding(c: Sema_ctx$@, expected_str: U8[], gen_name: U8[], arg_id: I32):
+  U8[] //<
+    //< Takes from the actual argument the type at **the same position** gen_name has in the type
+    //<
+    //< It serves the path that must not return the whole list.
+    //< Caution: **If the counts do not match, return empty**, or another variable's binding is
+    //< taken.
+  switch expected_str.find_generic_bounds() case .found(_s, ins, ine, _e)
+    whole: = extract_generic_binding(c, expected_str, arg_id)
+    want: = expected_str.sub(ins, ine - ins)
+    n: = want.count_type_args()
+    if n != whole.count_type_args()
+      return ""
+    for i in Range.asc(n)
+      if want.nth_type_arg(i).equals(gen_name)
+        return base_core.arena.dup_str(whole.nth_type_arg(i))
+    return ""
+  default
+    return ""
+
+priv fn params_from(p_list: Ast_node$@, skip: Sz): base_ast_ext.Param_cursor //<
+  //< A cursor over p_list's formal parameters, the first `skip` of them passed over
+  $params: = base_ast_ext.Param_cursor.new(p_list, false)
+  for _i in Range.asc(skip)
+    _passed: = params.next()
+  return params
+
+priv fn binding_for_generic(c: Sema_ctx$@, p_list: Ast_node$@, args_node: Ast_node$@,
+  param_offset: Sz, gen_name: U8[], one_at_a_time: Bool): U8[] //<
+    //< Builds the binding from the actual argument of **the first** parameter that uses gen_name
+    //<
+    //< Empty if there is none. one_at_a_time selects the one-variable-at-a-time path.
+    //< Caution: Not just the first one: in `fn pick<|T|>(flag: Bool, v: T): T`, T would be Bool.
+  $params: = params_from(p_list, param_offset)
+  for arg_node in args_node.children
+    if arg_node.is_literal(",")
+      continue
+    $target_param: Ast_node$@ = null
+    switch params.next() case .some(pn)
+      target_param = pn
+    case .none
+      break
+    p_type: = target_param.get_decl_type_node()
+    if p_type == null
+      continue
+
+    $expected_str_b: = p_type.extract_type_name()
+    defer expected_str_b.free()
+    expected_str: = expected_str_b.slice()
+    if expected_str.equals(gen_name)
+      return c.env.get_str(arg_node.type_id)
+    if !type_str_mentions_generic(expected_str, gen_name)
+      continue
+    // Caution: **Match by position even with one type variable**: the `U` of
+    // `f<|U|>(g: Callable1<|T, U|>)` is the second; the whole list would bind it to `T`.
+    picked: = positional_generic_binding(c, expected_str, gen_name, arg_node.type_id)
+    if picked.len > 0
+      return picked
+    if one_at_a_time
+      // One variable at a time: skip to the next formal parameter (the whole list would repeat
+      // once per variable).
+      continue
+    return extract_generic_binding(c, expected_str, arg_node.type_id)
+  return ""
+
+priv fn bare_bindings_for_all(c: Sema_ctx$@, gen_params: Ast_node$@, p_list: Ast_node$@,
+  args_node: Ast_node$@, param_offset: Sz): U8[] //<
+    //< Lists, per type variable, the binding of the parameter declared as exactly that variable
+    //<
+    //< Empty if any variable is left unbound (then the composite-type path takes over).
+    //< Caution: Keep a const generic (`<|const N|>`) out: argument types do not determine it, and
+    //< the list would come out shifted by one.
+  $joined: = Str_builder.new()
+  defer joined.free()
+  $count: = 0
+  for gp in gen_params.children
+    if gp.find_child(.k_keyword) != null
+      return ""
+    name: = gp.gen_param_name()
+    if name.len == 0
+      continue
+    bound: = binding_for_generic(c, p_list, args_node, param_offset, name, true)
+    if bound.len == 0
+      return ""
+    if count > 0
+      joined.s(", ")
+    joined.s(bound)
+    count += 1
+  if count < 2
+    return ""
+  return base_core.arena.dup_str(joined.slice())
+
+fn extract_inferred_generic_arg(c: Sema_ctx$@, def_node: Ast_node$@, args_node: Ast_node$@,
+  arg0_id: I32, is_method: Bool): U8[] //<
+    //< Infers a generic call's type arguments from the actual arguments (`<|…|>` not written)
+    //<
+    //< It infers each type variable from the actual argument of the first formal parameter that
+    //< uses it (skipping a method's receiver), and lists the bindings in the declaration's order.
+  arg0_str: = c.env.get_str(arg0_id)
+  if def_node == null
+    return arg0_str
+
+  gen_params: = def_node.find_child(.k_type_gen_params)
+  if gen_params == null || gen_params.children.len == 0
+    return arg0_str
+
+  gen_name: = gen_params.get_child(0).gen_param_name()
+  if gen_name.len == 0
+    return arg0_str
+
+  p_list: = def_node.get_fn_params()
+  if p_list == null || p_list.children.len == 0
+    return arg0_str
+
+  param_offset: Sz = 1 if is_method else 0
+  if args_node != null
+    if gen_params.children.len > 1
+      all: = bare_bindings_for_all(c, gen_params, p_list, args_node, param_offset)
+      if all.len > 0
+        return all
+    else
+      found: = binding_for_generic(c, p_list, args_node, param_offset, gen_name, false)
+      return found if found.len > 0 else arg0_str
+
+  $params: = params_from(p_list, param_offset)
+  $target_param: Ast_node$@ = null
+  switch params.next() case .some(pn)
+    target_param = pn
+  case .none
+    return arg0_str
+  p1_type: = target_param.get_decl_type_node()
+  if p1_type == null
+    return arg0_str
+
+  $expected_str_b: = p1_type.extract_type_name()
+  defer expected_str_b.free()
+  expected_str: = expected_str_b.slice()
+  if expected_str.equals(gen_name)
+    return arg0_str
+  return extract_generic_binding(c, expected_str, arg0_id)

@@ -1,0 +1,355 @@
+//< The main body of the compilation pipeline
+//<
+//< The Compiler that chains parse -> sema -> lower -> codegen, and its error type Compile_error,
+//< shared by the CLI (main) and the LSP (lsp/worker).
+import "kspeg/engine" as kspeg
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/core" as base_core
+import "ksplc/base/lint_codes" as base_lint_codes
+import "ksplc/base/package" as base_package
+import "ksplc/base/stats" as base_stats
+import "ksplc/gen/c/ctx" as gen_c_ctx + { Genc_ctx }
+import "ksplc/gen/c/root" as gen_c_root
+import "ksplc/gen/llvm/ctx" { Genllvm_ctx }
+import "ksplc/gen/llvm/module" as gen_llvm_module
+import "ksplc/gen/runtime" as gen_runtime
+import "ksplc/lower/abi" as lower_abi
+import "ksplc/lower/prune" as lower_prune
+import "ksplc/lower/root" as lower_root
+import "ksplc/lower/verify" as lower_verify
+import "ksplc/lower/vtable" as lower_vtable
+import "ksplc/parse/ast_cache" as parse_ast_cache
+import "ksplc/parse/desugar" as parse_desugar
+import "ksplc/parse/load" as parse_load
+// Where the extension methods check_one_main / check_main_signature live (imported explicitly).
+import "ksplc/sema/body/analyze" as sema_body_analyze
+import "ksplc/sema/body/expr" as sema_body_expr
+import "ksplc/sema/body/infer" as sema_body_infer
+import "ksplc/sema/decl/collect" as sema_decl_collect
+import "ksplc/sema/decl/layout" as sema_decl_layout
+import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
+import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
+import "ksplc/sema/session/import_table" as sema_session_import_table
+import "ksplc/sema/session/prof" as sema_session_prof
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/scope" { Sema_symbol }
+import "ksplc/source_checks"
+import "std/ds" { List, Map }
+import "std/io"
+import "std/mem" { Arena_headroom }
+import "std/str" { Str_builder }
+import "std/strfmt"
+import "std/sys"
+
+fn emit_runtime(out_path: U8[]): Void?Compile_error //<
+  //< It writes the runtime's source as one translation unit (`emit-runtime`)
+  //<
+  //< The user builds it with their own tools rather than using a prebuilt `.a` ("Embedding the
+  //< runtime" in ksplc/docs/DESIGN.md). **The contents change with `--freestanding`**, so emit it
+  //< with the same options as the generated C it links with. **No analysis runs at all.**
+  $out_file: = io.open(out_path, "w") catch e
+    throw Compile_error.io(e)
+  gen_runtime.write_unit(out_file)
+  out_file.flush()
+  out_file.free()
+
+fn print_stats_report(elapsed_us: I64, arena_used: Sz, arena_cap: Sz, arena_head: Arena_headroom,
+  peak_heap: Sz) //<
+    //< It prints `--stats`' report once; only this function lays it out.
+    //<
+    //< **Put the summary (`[Overall]`) at the end**: a terminal shows the last screen;
+    //< `make perf-log` uses `cat`.
+    //< Caution: **Do not change the names `Compile time` / `AST Arena headroom` / `System Peak
+    //< Memory`.** `tests/tools/perf_guard.kspls` reads those three lines.
+  if !base_core.config.enable_stats
+    return
+  parse_load.prof.print_kspeg()
+  sema_session_prof.prof.print_bodies()
+
+  io.out().s("\n[Layer]\n")
+  print_layer("Parse", base_stats.stages.parse)
+  if sys.timing_available()
+    $sb: = Str_builder.new()
+    defer sb.free()
+    sb.s("  - File I/O:    \{Sz::(parse_load.prof.io_us / 1000):6,\} ms\n")
+      .s("  - KSPEG Parse: \{Sz::(parse_load.prof.kspeg_us / 1000):6,\} ms\n")
+      .s("  - AST Conv:    \{Sz::(parse_load.prof.ast_conv_us / 1000):6,\} ms\n")
+      .s("  - AST Norm:    \{Sz::(parse_load.prof.norm_us / 1000):6,\} ms\n")
+      .s("  - Cache I/O:   \{Sz::(parse_load.prof.cache_us / 1000):6,\} ms\n")
+    io.out().s(sb.slice())
+  else
+    io.out().s("  - File I/O / KSPEG Parse / AST Conv / AST Norm / Cache I/O: N/A\n")
+  parse_ast_cache.print_stats()
+  print_layer("Desugar", base_stats.stages.desugar)
+  print_layer("Sema", base_stats.stages.sema)
+  sema_session_prof.prof.print_phases()
+  print_layer("Lower & ABI", base_stats.stages.lower)
+  $pr: = Str_builder.new()
+  defer pr.free()
+  pr.s("  - Pruned fns:  \{lower_prune.stats.fn_dropped:6,\} of \{lower_prune.stats.fn_defs:,\}\n")
+  io.out().s(pr.slice())
+  print_layer("Backend Gen", base_stats.stages.backend)
+  // Caution: **Print the remainder**: `Compile time` and `AST Arena usage` minus the stages'
+  // total (start-up, argument parsing, allocations after a stage). Without it, a growing
+  // unmeasured stage goes unnoticed.
+  measured: = base_stats.stages.total()
+  print_layer("Other",
+    base_stats.Stage::{ .us = elapsed_us - measured.us, .bytes = arena_used - measured.bytes })
+
+  $tail: = Str_builder.new()
+  defer tail.free()
+  tail.s("\n[Overall]\n")
+  if sys.timing_available()
+    tail.s("Compile time      : \{Sz::(elapsed_us / 1000):,\} ms\n")
+  else
+    tail.s("Compile time      : N/A (real-time measurement is supported on the C backend alone)\n")
+  // The two factors of the tree's memory use. **When raising this number, check the count it is
+  // multiplied by** (8 bytes each changes tens of MB); `tests/tools/perf_guard.kspls` checks it.
+  tail.s("AST Node bytes    : \{sizeof(Ast_node)\}\n")
+    .s("AST Kids bytes    : \{sizeof(List<|Ast_node$@|>)\}\n")
+  tail.s("AST Arena usage   : \{arena_used:,\} / \{arena_cap:,\} bytes\n")
+    .s("AST Arena headroom: \{arena_head.free:,\} bytes before next chunk (+\{arena_head.step:,\} \
+      bytes)\n").s("System Peak Memory: \{peak_heap:,\} bytes\n\n")
+  io.out().s(tail.slice())
+
+priv fn print_layer(label: U8[], stage: base_stats.Stage) //< one stage's line
+  //<
+  //< **The time and the arena use share one line**, so the log alone says which stage grew. Where
+  //< the clock is broken it says `N/A`, not a misleading `0 ms`.
+  //< Caution: **Print the bytes there too**: the memory allocated is measured the same way on a
+  //< target without a clock.
+  $sb: = Str_builder.new()
+  defer sb.free()
+  if sys.timing_available()
+    sb.s("\{label\}: \{Sz::(stage.us / 1000):,\} ms, \{stage.bytes:,\} bytes\n")
+  else
+    sb.s("\{label\}: N/A, \{stage.bytes:,\} bytes\n")
+  io.out().s(sb.slice())
+
+enum Compile_error
+  parse(err: parse_load.Parse_error)
+  sema(err: Sema_error)
+  io(err: io.Io_error) //<
+    //< an I/O error belonging to no particular phase, such as writing the output
+  codegen //<
+    //< code generation failed, such as on an unreadable embed; the diagnostic is already printed
+  fmt_failed //<
+    //< `ksplc fmt` failed on one or more files (diagnostics printed); the rest are formatted first.
+
+struct Compiler
+  base_parser: kspeg.Target$@
+  source_map: Map<|U8[], U8$[]|>$@
+  loaded_files: List<|U8$[]|>$@
+  root_file: Ast_node$@
+  sema: Sema_ctx$@
+  has_load_error: Bool
+  is_valid: Bool
+
+impl Compiler
+  fn new(base_parser: kspeg.Target$@): Compiler$@
+    source_map: = base_core.arena.create(Map<|U8[], U8$[]|>.new_with_cap(128, null))
+    loaded_files: = List<|U8$[]|>.create(base_core.arena)
+    root_file: = Ast_node.new(.k_file, "file", base_ast.Loc.at("", 0))
+    return base_core.arena
+      .create(Compiler::{
+      .base_parser = base_parser,
+      .source_map = source_map,
+      .loaded_files = loaded_files,
+      .root_file = root_file,
+    })
+
+  // Caution: **`src_is_disk` is the caller's promise that the override is the file's own bytes.**
+  // It lets the AST cache keep them; a buffer being edited must not claim it.
+  fn parse_file(r: Self$@, file_path: U8[], src_override: U8[], src_is_disk: Bool):
+    Void?Compile_error
+    // **A logical name is always relative to the project root** or the package's top; with an
+    // absolute path the mangled names change per machine (`name_entry` in base/package.kspls).
+    clean_mod: = base_package.name_entry(file_path).strip_kspl_ext()
+    perm_file: = base_core.arena.dup_str(clean_mod)
+
+    if r.root_file.loc.file().len == 0
+      r.root_file.loc = r.root_file.loc.with_file(perm_file)
+
+    if src_override.len > 0
+      p_path: = base_core.arena.dup_str(file_path)
+      p_src: = base_core.arena.dup_str(src_override)
+      r.source_map.set(p_path, p_src)
+      if !perm_file.equals(p_path)
+        r.source_map.set(perm_file, p_src)
+
+    // Caution: **Put std/lang into the tree first**: every file imports it implicitly, so it must
+    // come before collect's Pass 0. loaded_files makes sure it is read once.
+    lang_file: = sema_session_import_table.lang_file()
+    if !perm_file.equals(lang_file)
+      lang_stack: = List<|U8$[]|>.create(base_core.arena)
+      parse_load.load_and_parse_file(lang_file, r.loaded_files, r.root_file, r.base_parser,
+        r.source_map, lang_stack, false) catch e
+        r.has_load_error = true
+        throw Compile_error.parse(e)
+    import_stack: = List<|U8$[]|>.create(base_core.arena)
+    parse_load.load_and_parse_file(perm_file, r.loaded_files, r.root_file, r.base_parser,
+      r.source_map, import_stack, src_is_disk) catch e
+      r.has_load_error = true
+      throw Compile_error.parse(e)
+
+  // Caution: **`bodies_everywhere = false` is only for the editor's document view.** It checks
+  // only `main_file`'s bodies, so nothing that needs another file's call sites (references,
+  // renaming, call hierarchy) may be built on it. Compiling and linting pass true.
+  fn run_semantic_analysis(r: Self$@, main_file: U8[], is_lint: Bool, suppress_errors: Bool,
+    bodies_everywhere: Bool): Void?Sema_error
+    // Desugar runs here, once over root_file, not in parse_file, which the LSP's workspace walk
+    // (lsp/worker.build_workspace_state) calls per file. ksplc.cfg is checked here too.
+    for loaded in r.loaded_files
+      base_lint_codes.validate_config_for_file(loaded)
+
+    t1: = sys.mono_us()
+    // A failed closure synthesis has already reported its diagnostic. **It stops the run only
+    // where diagnostics are shown**, so a half-desugared tree cannot cause a distant error; when
+    // they are suppressed, going on lets the rest of a workspace answer ("One bad file does not
+    // poison" in `ksplc/docs/DESIGN.md`).
+    quiet: = suppress_errors || r.has_load_error
+    if !parse_desugar.run(r.root_file, r.base_parser, r.source_map) && !quiet
+      throw Sema_error.analysis_failed
+    base_stats.stages.desugar = base_stats.end_stage(t1, sys.mono_us())
+
+    env: = sema_type_env.Env.new()
+    // On the global heap.
+    scope_map: = Map<|I32, Sema_symbol$@|>.new_with_cap(2048, null)
+    global_scope: = base_core.arena.create(scope_map)
+    // Caution: **Every function that receives an entry file goes through here.** A raw name
+    // differs from the logical name `parse_file` made, which shows up far away as "not one lint
+    // diagnostic is reported" (`name_entry` in base/package.kspls).
+    entry: = base_package.name_entry(main_file)
+    init_src: = r.source_map.get(entry) catch ""
+
+    ctx: = Sema_ctx.new(init_src, entry, env, global_scope, r.source_map)
+    sema: = base_core.arena.create(ctx)
+    // The only way decl calls into body (infer_expr_fn in sema/session/ctx.kspls).
+    // Caution: Insert it before sema_decl_collect.run, whose constant folding is its first user.
+    sema.infer_expr_fn = sema_body_expr.infer_expr_of
+    base_core.config.is_lint = is_lint
+    // Run the checks in lint mode or when any code is raised to an error; an or, so the CLI's
+    // --lint=CODE=error is kept.
+    base_core.config.run_lint_checks = is_lint || base_core.config.run_lint_checks
+    sema.suppress_errors = suppress_errors || r.has_load_error
+    sema.bodies_everywhere = bodies_everywhere
+    r.sema = sema
+
+    t3: = sys.mono_us()
+    sema_session_prof.prof.init()
+    sema_decl_collect.run(r.root_file, sema)?
+    t_collect: = sys.mono_us()
+    sema_session_prof.prof.collect_us = t_collect - t3
+    // Caution: **After Pass 0 of the collecting, not before it** (the reason is at `report_all`).
+    source_checks.report_all(r.loaded_files, r.source_map, r.root_file, r.base_parser, sema)
+    r.is_valid = true
+    sema_body_infer.run(r.root_file, sema) catch
+      r.is_valid = false
+    t_infer: = sys.mono_us()
+    sema_session_prof.prof.infer_us = t_infer - t_collect
+    // The postponed generic constraints: infer flushes them per body, but **what the last body
+    // pushed** is flushed here. Without it a violation passes silently (the reason is at
+    // Pending_constraint in sema/session/state.kspls).
+    sema.drain_pending_constraints()
+    t_constraints: = sys.mono_us()
+    sema_session_prof.prof.constraints_us = t_constraints - t_infer
+    // It checks once, after every file is loaded (main may be in another file).
+    sema.check_one_main()
+    sema.check_main_signature()
+    sema.check_type_layouts(r.root_file)
+    t4: = sys.mono_us()
+    sema_session_prof.prof.layouts_us = t4 - t_constraints
+    base_stats.stages.sema = base_stats.end_stage(t3, t4)
+
+    r.is_valid = r.is_valid && !sema.has_error()
+    if !r.is_valid
+      throw Sema_error.analysis_failed
+
+  fn free(r: Self$@)
+    if r.source_map != null
+      r.source_map.free()
+    if r.sema != null
+      r.sema.free()
+
+  fn run_lower_and_codegen(r: Self$@, out_path: U8[]): Void?Compile_error
+    if !r.is_valid || r.sema == null || r.root_file == null
+      throw Compile_error.sema(.analysis_failed)
+
+    t3: = sys.mono_us()
+    lower_root.run(r.sema, r.root_file)
+    lower_vtable.generate_trait_thunks(r.root_file, r.sema)
+    lower_abi.run(r.root_file, r.sema)
+    // Caution: **Call it after all synthesis is done** (the reason is at prune_unreachable_fns).
+    lower_prune.prune_unreachable_fns(r.root_file, r.sema)
+    // **Call it right after the functions**: a type only a signature names goes with its function.
+    lower_prune.prune_unreachable_types(r.root_file, r.sema)
+    // **Check it last in lower's run.** Earlier, it misses the types vtable / abi wrote (the
+    // ABI conversion inserts `@` and `$` and computes those types itself).
+    lower_verify.run(r.sema, r.root_file)
+
+    t4: = sys.mono_us()
+    base_stats.stages.lower = base_stats.end_stage(t3, t4)
+
+    $codegen_failed: = false
+    switch base_core.config.target case .c
+      units: = base_core.unit_count_or_one()
+      if units > 1
+        codegen_failed = r.emit_c_units(out_path, units)?
+      else
+        codegen_failed = r.emit_c_part(out_path, gen_c_ctx.whole_output)?
+    case .llvm
+      $out_file: = io.open(out_path, "w") catch e
+        throw Compile_error.io(e)
+      cg: = Genllvm_ctx.new(out_file, r.sema, r.source_map)
+      defer cg.free()
+      gen_llvm_module.run(r.root_file, cg, r.root_file.loc.file())
+      cg.flush()
+      codegen_failed = cg.had_error
+      out_file.free()
+    if codegen_failed
+      throw Compile_error.codegen
+
+    base_stats.stages.backend = base_stats.end_stage(t4, sys.mono_us())
+
+  fn emit_c_units(r: Self$@, out_path: U8[], units: Sz): Bool?Compile_error //<
+    //< It writes the generated C split into several translation units
+    //<
+    //< `out_path` gives only the `<stem>` (its last extension dropped); **no file of that name is
+    //< created**, and every `.c` is linked. It walks the AST units+1 times, a new Ctx per walk.
+    //< `<stem>.h`     … the shared header every unit `#include`s (types, prototypes, extern)
+    //< `<stem>.<i>.c` … unit i's definitions (i from 0 to units-1)
+    stem: = sys.strip_last_ext(out_path)
+    $path: = Str_builder.new()
+    defer path.free()
+    path.s(stem).s(".h")
+    // The `#include` names the file, not a path, as it is next to the `.c`; it is copied to
+    // another Builder because the loop rebuilds path.
+    $header_name: = Str_builder.new()
+    defer header_name.free()
+    header_name.s(sys.get_file_name(path.slice()))
+
+    shared: = gen_c_ctx.Emit_split::{ .part = .shared_decls, .unit_count = units, .unit_index = 0,
+      .shared_header = "" }
+    $failed: = r.emit_c_part(path.slice(), shared)?
+
+    for i in Range.asc(units)
+      path.len = 0
+      path.s(stem).s(".\{i\}.c")
+      unit: = gen_c_ctx.Emit_split::{ .part = .unit, .unit_count = units, .unit_index = i,
+        .shared_header = header_name.slice() }
+      failed = r.emit_c_part(path.slice(), unit)? || failed
+    return failed
+
+  fn emit_c_part(r: Self$@, path: U8[], split: gen_c_ctx.Emit_split): Bool?Compile_error //<
+    //< It writes one file of the generated C, the part `split` names
+    $out_file: = io.open(path, "w") catch e
+      throw Compile_error.io(e)
+    cg: = Genc_ctx.new(out_file, r.sema, r.source_map, split)
+    defer cg.free()
+    gen_c_root.run(r.root_file, cg)
+    cg.flush()
+    failed: = cg.had_error
+    out_file.free()
+    return failed
+
+impl Compiler: Owned {}

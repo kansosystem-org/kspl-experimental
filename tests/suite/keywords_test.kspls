@@ -1,0 +1,254 @@
+#!/usr/bin/env -S ksplc run
+//< The check on `ksplc info keywords`
+//<
+//< The command prints the grammar's (`ksplc/kspl.kspeg`) keywords grouped by rule-name prefix.
+//< **This checks the output itself**: the total alone misses a broken grouping or deduplication.
+//< Leaving out a meta rule (a leading `_`) is not verified: no such rule holds a keyword, so a
+//< check would always pass and only look like coverage.
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/strnum"
+import "std/verdict"
+import "tests/support/harness"
+
+priv struct Group //< one group
+  //<
+  //< `declared` is the count the heading states, and `words` are the words actually listed.
+  name: U8[]
+  declared: I64
+  words: List<|U8[]|>
+
+priv struct Total //< the total line
+  //<
+  //< If `ok` is false, no such line was found.
+  ok: Bool
+  groups: I64
+
+priv fn parse_head(ln: U8[]): Group //< parses the `name (count):` heading
+  //<
+  //< If it is not a heading, `declared` is negative.
+  open: = ln.find_char('(')
+  if open <= 0 || !ln.ends_with("):")
+    return Group::{ .name = "", .declared = -1I64, .words = List<|U8[]|>::{} }
+  count: = ln.sub(open + 1, ln.len - (open + 1) - 2).to_i64() catch
+    fallback -1I64
+  return Group::{ .name = ln.sub(0, open - 1), .declared = count,
+    .words = List<|U8[]|>::{} }
+
+priv fn parse_total(ln: U8[], arena: Arena$@): Total //<
+  //< Parses `Total: N unique keyword(s) across M group(s)`
+  if !ln.starts_with("Total: ")
+    return Total::{ .ok = false, .groups = 0I64 }
+  fields: = ln.split(' ', arena)
+  // The seven words of `Total: <N> unique keyword(s) across <M> group(s)`.
+  if fields.len < 7
+    return Total::{ .ok = false, .groups = 0I64 }
+  uniq: = fields.get(1).to_i64() catch
+    fallback -1I64
+  grp: = fields.get(5).to_i64() catch
+    fallback -1I64
+  return Total::{ .ok = uniq >= 0I64 && grp >= 0I64, .groups = grp }
+
+priv fn copied_words(arena: Arena$@): List<|U8[]|> //<
+  //< The copy of the words kspage holds (`kspl_words` in `kspage/model/code.kspls`)
+  //<
+  //< Caution: **Read them from the source**; a separate list would be a third copy to keep in step.
+  //< Only the content of `"..."` is read.
+  src: = harness.read_under_root("kspage/model/code.kspls")
+  $out: = List<|U8[]|>.new(arena)
+  from: = src.find_str("kspl_words")
+  if from < 0
+    return out
+  rest: = src.sub_from(from)
+  // A `}` at column 0 ends the list (the rows are indented). Searching for `};` instead runs past
+  // a list without the `;` into C's and JavaScript's words, reported as extra words, not a miss.
+  end: = rest.find_str("\n}")
+  body: = rest.sub(0, end) if end >= 0 else rest
+  $i: Sz = 0
+  for i < body.len
+    if body[i] != '"'
+      i += 1
+      continue
+    close: = body.sub_from(i + 1).find_char('"')
+    if close < 0
+      break
+    out.push(body.sub(i + 1, close))
+    i += i + 1 + close + 1 - i
+  return out
+
+priv fn grammar_words(arena: Arena$@): List<|U8[]|> //<
+  //< The words the VS Code grammar names in the form `\b(...|...)\b`
+  //<
+  //< **Read them from the source.** Only this form counts, or a numeric suffix or a run of symbols
+  //< would count as a word.
+  src: = harness.read_under_root(".vscode/extensions/kspl/tmLanguage.json")
+  $out: = List<|U8[]|>.new(arena)
+  head: = "\\\\b("
+  tail: = ")\\\\b"
+  $i: Sz = 0
+  for i < src.len
+    at: = src.sub_from(i).find_str(head)
+    if at < 0
+      break
+    from: = i + at + head.len
+    end: = src.sub_from(from).find_str(tail)
+    if end < 0
+      break
+    body: = src.sub(from, end)
+    push_split(body, out@)
+    i = from + end + tail.len
+  return out
+
+priv fn push_split(body: U8[], out: List<|U8[]|>$@) //< adds `a|b|c` word by word
+  //<
+  //< Caution: **Drop what is not a word** (`?:` and runs of symbols appear too).
+  $from: Sz = 0
+  for $i: Sz = 0; i <= body.len; i += 1
+    if i < body.len && body[i] != '|'
+      continue
+    word: = body.sub(from, i - from)
+    from = i + 1
+    if word.len <= 0 || !worded(word)
+      continue
+    out.push(word)
+
+priv fn worded(w: U8[]): Bool //<
+  //< whether it is made of word characters alone (letters and `_` only)
+  for $i: Sz = 0; i < w.len; i += 1
+    c: = w[i]
+    if !c.is_alpha() && c != '_' && !c.is_digit()
+      return false
+  return true
+
+priv fn named_in(src: U8[], want: U8[]): Bool //<
+  //< Whether the word appears somewhere in the string as a whole word
+  //<
+  //< **If a letter or `_` is next to it, it is a different word.**
+  $i: Sz = 0
+  for i + want.len <= src.len
+    at: = src.sub_from(i).find_str(want)
+    if at < 0
+      return false
+    from: = i + at
+    before: = from == 0 || !kin(src[from - 1])
+    to: = from + want.len
+    after: = to >= src.len || !kin(src[to])
+    if before && after
+      return true
+    i = from + 1
+  return false
+
+priv fn kin(c: U8): Bool
+  return c.is_alpha() || c.is_digit() || c == '_'
+
+priv fn holds(xs: List<|U8[]|>$@, want: U8[]): Bool //< whether it is in the list
+  for $i: Sz = 0; i < xs.len; i += 1
+    if xs.get(i).equals(want)
+      return true
+  return false
+
+fn main(): I32
+  arena: = harness.begin(8 * 1024 * 1024)
+  r: = harness.ksplc(U8[][]::{ "info", "keywords" })
+  if !verdict.check("the exit code is 0", r.code == 0, r.out)
+    return harness.finish()
+
+  $groups: = List<|Group|>.new(arena)
+  $total: = Total::{ .ok = false, .groups = 0I64 }
+  $unexpected: = ""
+  for raw in r.out.lines(arena)
+    ln: = raw.trim_end()
+    if ln.trim_spaces().len == 0
+      continue
+    t: = parse_total(ln, arena)
+    if t.ok
+      total = t
+      continue
+    h: = parse_head(ln)
+    if h.declared >= 0I64
+      g: = Group::{ .name = h.name, .declared = h.declared,
+        .words = List<|U8[]|>.new(arena) }
+      groups.push(g)
+      continue
+    if ln.starts_with("  ") && groups.len > 0
+      groups[groups.len - 1].words.push(ln.trim_spaces())
+      continue
+    unexpected = ln
+
+  verdict.check("there is no unexpected line", unexpected.len == 0, unexpected)
+  verdict.check("the groups and the total line come out", groups.len > 0 && total.ok, r.out)
+
+  $bad_count: = ""
+  $unsorted: = ""
+  $dup: = ""
+  for g in groups.slice()
+    if g.declared != I64::g.words.len
+      bad_count = g.name
+    for i in Range.asc(g.words.len)
+      if i > 0 && g.words.get(i - 1).compare(g.words.get(i)) > 0
+        unsorted = g.name
+      if i > 0 && g.words.get(i - 1).equals(g.words.get(i))
+        dup = g.name
+  verdict.check("the heading's count matches the lines within the group", bad_count.len == 0,
+    bad_count)
+  verdict.check("within a group it is alphabetical", unsorted.len == 0, unsorted)
+  verdict.check("the same keyword does not come out twice within a group", dup.len == 0, dup)
+  verdict.check("the total line's group count matches the number of headings",
+    total.ok && total.groups == I64::groups.len, r.out)
+
+  // Compared with the **two** copies: kspage cannot import ksplc (the reference direction, in
+  // [`../../docs/SPEC-documents.md`](../../docs/SPEC-documents.md)), and the VS Code grammar
+  // (`.vscode/extensions/kspl/tmLanguage.json`) is JSON. **The canonical source is this output.**
+  // Caution: **A copy drifts silently**: a removed word stays named, and a new one gets no colour.
+  $mine: = List<|U8[]|>.new(arena)
+  for g in groups.slice()
+    for w in g.words.slice()
+      $had: = false
+      for k in mine.slice()
+        if k.equals(w)
+          had = true
+      if !had
+        mine.push(w)
+  $copied: = copied_words(arena)
+  $missing: = Str_builder.new()
+  defer missing.free()
+  for w in mine.slice()
+    $had: = false
+    for k in copied.slice()
+      if k.equals(w)
+        had = true
+    if !had
+      missing.s("\n    a word not in kspage: \{w\}")
+  for k in copied.slice()
+    $had: = false
+    for w in mine.slice()
+      if k.equals(w)
+        had = true
+    if !had
+      missing.s("\n    a word kspage has over: \{k\}")
+  $name: = Str_builder.new()
+  defer name.free()
+  name.s("kspage's copy of the words matches (\{mine.len\} words)")
+  verdict.check(name.slice(), missing.slice().len == 0, missing.slice())
+
+  // Caution: **Compare in both directions** with the VS Code grammar (a removed word that remains
+  // and an added word that is missing are separate failures).
+  $told: = grammar_words(arena)
+  grammar: = harness.read_under_root(".vscode/extensions/kspl/tmLanguage.json")
+  $off: = Str_builder.new()
+  defer off.free()
+  for $i: Sz = 0; i < told.len; i += 1
+    w: = told.get(i)
+    if !holds(mine@, w)
+      off.s("\n    a word the grammar names but ksplc has not: \{w\}")
+  for $i: Sz = 0; i < mine.len; i += 1
+    w: = mine.get(i)
+    if !named_in(grammar, w)
+      off.s("\n    a word ksplc has but that never comes out in the grammar: \{w\}")
+  name.clear()
+  name.s("the VS Code grammar's words match (\{told.len\} named)")
+  verdict.check(name.slice(), off.slice().len == 0, off.slice())
+  return harness.finish()

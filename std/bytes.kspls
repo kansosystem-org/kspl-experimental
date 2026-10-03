@@ -1,0 +1,115 @@
+//< Reading and writing fixed-width integers in a byte sequence, in either byte order
+//<
+//< **The receiver has no `$`**; with one, a call could not chain onto a temporary
+//< ("Implementations (`impl`) and receivers" in `docs/SPEC-language.md`). Reading takes a
+//< `U8[]`; writing takes the mutable `U8$[]`.
+
+// ==========================================
+// Caution: **Do not import `std/lang`.** This file is a leaf ("How many files one import brings
+// along" in `std/README.md`, `make test-thin-use`'s LEAVES), so even a counting loop is C-style.
+//   len: = frame.get_u16_be(2);        // reading: an immutable slice will do
+//   out.put_u32_le(0, 0xdeadbeef);     // writing: a mutable slice is needed
+// ==========================================
+
+// The reading methods.
+// Caution: **Make the target a slice of immutable elements.** With a `$`, a `U8[]` could not call
+// these methods. Without one, a mutable slice still reaches them by one level of weakening
+// ("Making a single instantiation the target of an impl" in `../docs/DESIGN.md`).
+impl U8[]
+  // --- Checking ---
+
+  // Uses the reflected polynomial 0xedb88320. `b.crc32(a.crc32(seed))` equals one pass over `a`
+  // then `b`, so data that arrives in pieces needs no buffer.
+  //   the general CRC-32 (zlib / PNG):  data.crc32(0xffffffff) ^ 0xffffffff
+  //   RP2040's boot ROM:                bit-reverses input and result
+  pub fn crc32( //< the standard CRC-32; it can be continued across pieces
+    r: U8[],
+    seed: U32, //< 0 to start, or the value returned for the previous piece
+  ): U32
+    $c: U32 = seed
+    for b in r
+      c = c ^ U32::b
+      for $k: Sz = 0; k < 8; k += 1
+        c = (c >> 1) ^ 0xedb88320 if (c & 1) != 0 else c >> 1
+    return c
+
+  // --- Reading (big endian = network byte order) ---
+  pub fn get_u16_be(r: U8[], at: Sz): U16 //< reads two bytes, most significant first
+    return (U16::r[at] << 8) | U16::r[at + 1]
+
+  pub fn get_u32_be(r: U8[], at: Sz): U32 //< reads four bytes, most significant first
+    return (U32::r[at] << 24) | (U32::r[at + 1] << 16) | (U32::r[at + 2] << 8) | U32::r[at + 3]
+
+  pub fn get_u64_be(r: U8[], at: Sz): U64 //< reads eight bytes, most significant first
+    return (U64::r.get_u32_be(at) << 32) | U64::r.get_u32_be(at + 4)
+
+  // --- Reading (little endian = the native order of x86 and Arm) ---
+  pub fn get_u16_le(r: U8[], at: Sz): U16 //< reads two bytes, least significant first
+    return U16::r[at] | (U16::r[at + 1] << 8)
+
+  pub fn get_u32_le(r: U8[], at: Sz): U32 //< reads four bytes, least significant first
+    return U32::r[at] | (U32::r[at + 1] << 8) | (U32::r[at + 2] << 16) | (U32::r[at + 3] << 24)
+
+  pub fn get_u64_le(r: U8[], at: Sz): U64 //< reads eight bytes, least significant first
+    return U64::r.get_u32_le(at) | (U64::r.get_u32_le(at + 4) << 32)
+
+// The writing methods. **These put `$` on the target**; without it, an immutable slice could be
+// written into.
+impl U8$[]
+  // --- Filling and copying ---
+
+  pub fn fill(r: Self@, v: U8) //< makes every byte `v`
+    //<
+    //< Python's `buf[:] = bytes([v]) * len(buf)`.
+    for $i: Sz = 0; i < r.len; i += 1
+      r[i] = v
+
+  pub fn copy_from( //< copies into a position, drops what overflows, and returns the count copied
+    //<
+    //< What does not fit is dropped. **It works even when the ranges overlap** (like memmove), so
+    //< it can shift a range within one buffer; memcpy breaks there.
+    r: Self@,
+    at: Sz, //< where in the destination the copy starts
+    src: U8[], //< the bytes to copy; they may overlap the destination
+  ): Sz
+    if at < 0 || at >= r.len
+      return 0
+    n: = src.len if src.len < r.len - at else r.len - at
+    // When the destination lies after the source, copy from the tail; otherwise, from the head.
+    if r.ptr + at > src.ptr
+      for $i: Sz = n; i > 0; i -= 1
+        r[at + i - 1] = src[i - 1]
+    else
+      for $i: Sz = 0; i < n; i += 1
+        r[at + i] = src[i]
+    return n
+
+  // --- Writing (big endian) ---
+  pub fn put_u16_be(r: Self@, at: Sz, v: U16) //< writes two bytes, most significant first
+    r[at] = U8::(v >> 8)
+    r[at + 1] = U8::(v & 0xff)
+
+  pub fn put_u32_be(r: Self@, at: Sz, v: U32) //< writes four bytes, most significant first
+    r[at] = U8::(v >> 24)
+    r[at + 1] = U8::((v >> 16) & 0xff)
+    r[at + 2] = U8::((v >> 8) & 0xff)
+    r[at + 3] = U8::(v & 0xff)
+
+  pub fn put_u64_be(r: Self@, at: Sz, v: U64) //< writes eight bytes, most significant first
+    r.put_u32_be(at, U32::(v >> 32))
+    r.put_u32_be(at + 4, U32::(v & 0xffffffff))
+
+  // --- Writing (little endian) ---
+  pub fn put_u16_le(r: Self@, at: Sz, v: U16) //< writes two bytes, least significant first
+    r[at] = U8::(v & 0xff)
+    r[at + 1] = U8::(v >> 8)
+
+  pub fn put_u32_le(r: Self@, at: Sz, v: U32) //< writes four bytes, least significant first
+    r[at] = U8::(v & 0xff)
+    r[at + 1] = U8::((v >> 8) & 0xff)
+    r[at + 2] = U8::((v >> 16) & 0xff)
+    r[at + 3] = U8::(v >> 24)
+
+  pub fn put_u64_le(r: Self@, at: Sz, v: U64) //< writes eight bytes, least significant first
+    r.put_u32_le(at, U32::(v & 0xffffffff))
+    r.put_u32_le(at + 4, U32::(v >> 32))

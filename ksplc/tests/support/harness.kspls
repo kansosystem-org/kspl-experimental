@@ -1,0 +1,201 @@
+//< What ksplc's suites rely on: the compiler they inspect, the std it reads, and their scratch
+//<
+//< **One ksplc runs a suite, which inspects another.** `make test-suites` gives every suite the
+//< compiler under inspection and its scratch directory first, and runs it with another ksplc:
+//< built with the one inspected, a broken compiler and a failed check look the same. The checks
+//< and a child's run come from `std/verdict`, and the directories from `std/fs`.
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena, dealloc }
+import "std/str" // `arena.text()`
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+
+priv $suite_arena: Arena$@ = null
+priv $under: U8[] = "" //< `ksplc_exe`'s answer, set as the suite begins
+priv $scratch: U8[] = "" //< where this suite's scratch goes, from the root
+priv $more: U8[][] = U8[][]::{} //< the suite's arguments after the two paths
+
+fn begin(chunk_size: Sz): Arena$@ //< starts a suite, and returns the arena it allocates from
+  //<
+  //< Caution: **Call it once, at the start of `main`, and do not free what it returns** — `finish`
+  //< and `fatal` do. Every line carries the suite's name (`KANSO_SUITE`). **The paths are decided
+  //< here**, before a case changes the environment they are read from.
+  verdict.begin(sys.get_env("KANSO_SUITE").unwrap_or(""))
+  suite_arena = Arena.new(chunk_size)
+  argv: = sys.args()
+  if argv.len < 3
+    panic("usage: ksplc run tests/suite/<name>_test.kspls <compiler under inspection> <scratch \
+      place> [what the suite reads itself]")
+  under = fs.absolute(argv.get(1), suite_arena) catch
+    fallback ""
+  scratch = fs.absolute(argv.get(2), suite_arena) catch
+    fallback ""
+  if under.len == 0 || scratch.len == 0
+    panic("the working directory cannot be read, so the two arguments cannot be made absolute")
+  $rest: = List<|U8[]|>.new(suite_arena)
+  for i in Range.asc(argv.len)
+    if i >= 3
+      rest.push(suite_arena.dup_str(argv.get(i)))
+  more = rest.slice()
+  fs.mkdir_all(scratch) catch panic("the scratch place cannot be made")
+  refuse_inside_package(scratch)
+  std_path = settle_std_dir()
+  return suite_arena
+
+fn more_args(): U8[][] //< the suite's arguments after the two paths, for it to read itself
+  return more
+
+priv fn refuse_inside_package(dir: U8[]) //< stops if the scratch directory is inside a package
+  //<
+  //< **A file under a folder whose `ksplc.cfg` names a package belongs to that package**, so a
+  //< case's files there would compile under its `uses` and fail for another reason.
+  //< Caution: **Ask the compiler under inspection** (`info package`, in that folder) rather than
+  //< walking up here: the walk is the compiler's rule, and a copy would drift from it.
+  r: = run_in(U8[][]::{ under, "info", "package" }, dir)
+  if r.code != 0
+    panic(U8$[]::suite_arena.text()
+      .s("which package the scratch place \{dir\} stands in cannot be asked\n\{r.out\}").take())
+  lines: = r.out.lines(suite_arena)
+  name: = lines.get(0).trim_spaces() if lines.len > 0 else ""
+  if name.len > 0
+    panic(U8$[]::suite_arena.text().s("the scratch place \{dir\} stands inside the package '")
+      .s(name).s("'; hand one outside it (SCRATCH in ksplc/Makefile)").take())
+
+fn arena(): Arena$@ //< the suite's arena, for a helper that takes none
+  return suite_arena
+
+priv fn end_suite()
+  if suite_arena != null
+    suite_arena.free()
+    suite_arena = null
+
+fn finish(): I32 //< prints the `RESULT:` line and returns the verdict as the exit code
+  //<
+  //< **`return finish()` from `main`.** The suite's arena is freed here (`begin`'s).
+  code: = verdict.finish()
+  end_suite()
+  return code
+
+fn fatal(msg: U8[]): I32 //< ends a suite that cannot continue (its input files are missing, say)
+  code: = verdict.fatal(msg)
+  end_suite()
+  return code
+
+// ==========================================
+// The compiler under inspection, and its std
+// ==========================================
+
+fn ksplc_exe(): U8[] //< the compiler under inspection, from the root
+  return under
+
+priv $std_path: U8[] = "" //< `std_dir`'s answer, set as the suite begins
+
+fn std_dir(): U8[] //< the std given to the compiler under inspection (`--std-dir=`)
+  //<
+  //< Caution: **Pass it explicitly on every run** (`ksplc_argv`): a case whose working directory is
+  //< a scratch directory would otherwise look for a `std` beside it.
+  return std_path
+
+priv fn settle_std_dir(): U8[] //<
+  //< `KSPLC_STD_DIR` where named, else the compiler's own (`info std-dir`), made absolute
+  named: = sys.get_env("KSPLC_STD_DIR").unwrap_or("")
+  if named.len > 0
+    return fs.absolute(named, suite_arena) catch
+      fallback suite_arena.dup_str(named)
+  r: = run(U8[][]::{ under, "info", "std-dir" })
+  if r.code != 0
+    return ""
+  answered: = r.out.trim_spaces()
+  return fs.absolute(answered, suite_arena) catch
+    fallback answered
+
+fn ksplc_argv(args: U8[][]): U8[][] //< the compiler under inspection's argv, `--std-dir=` first
+  //<
+  //< For a `subproc.Job` run side by side; for one run, call `ksplc`.
+  $argv: = List<|U8[]|>.new(suite_arena)
+  argv.push(under)
+  argv.push(suite_arena.text().s("--std-dir=\{std_dir()\}").take())
+  for a in args
+    argv.push(a)
+  return argv.slice()
+
+fn ksplc(args: U8[][]): verdict.Run_out //< runs the compiler under inspection once
+  return run(ksplc_argv(args))
+
+fn ksplc_bare(args: U8[][]): verdict.Run_out //< runs it once without `--std-dir=` in front
+  //<
+  //< Caution: **Call `fmt`, `clean` and `emit-runtime` with this one.** They read no standard
+  //< library and so take no `--std-dir`, which they reject.
+  $argv: = List<|U8[]|>.new(suite_arena)
+  argv.push(under)
+  for a in args
+    argv.push(a)
+  return run(argv.slice())
+
+const runtime_extern_refusal: U8[] = "stripped without a word" //<
+  //< The message `--omit-runtime`'s C uses to reject a format that cannot keep the version symbol
+  //<
+  //< On PE (Windows) it rejects with an `#error`, so a case there is **a SKIP, not a failure**,
+  //< told apart by this message rather than the exit code.
+
+fn read_generated(path: U8[]): U8[] //< the text the compiler wrote, its newlines made LF
+  //<
+  //< Text mode on Windows writes each `\n` as `\r\n`.
+  body: = io.read_file(path) catch
+    return ""
+  defer dealloc(Void$@::body.ptr)
+  return body.replace("\r\n", "\n", suite_arena)
+
+// ==========================================
+// The C compiler
+// ==========================================
+
+fn cc(): U8[] //< the C compiler: `CC` where it is set, and clang otherwise, as ksplc picks it
+  named: = sys.get_env("CC").unwrap_or("")
+  if named.len > 0
+    return suite_arena.dup_str(named)
+  return "clang"
+
+fn cc_target(): U8[] //< the C compiler's target triple (`cc -dumpmachine`), empty where unknown
+  //<
+  //< It is for a case whose subject differs by target.
+  //< Caution: **Choose no link flag by it** — ask the compiler for those (`harness_build`).
+  r: = run(U8[][]::{ cc(), "-dumpmachine" })
+  return "" if r.code != 0 else r.out.trim_spaces()
+
+// ==========================================
+// Scratch
+// ==========================================
+
+fn tmp_dir(): U8[] //< this suite's scratch directory, emptied by the Makefile before each run
+  return scratch
+
+fn sandbox(name: U8[]): U8[]?fs.Fs_error //< a directory of its own for one case, made fresh
+  //<
+  //< Nothing removes it: the Makefile empties the whole scratch directory before the next run.
+  return fs.mkdir_unique(scratch, suite_arena.text().s(name).c('_').take(), suite_arena)
+
+// ==========================================
+// Starting a process: `std/verdict`'s runs, in the suite's arena
+// ==========================================
+
+fn run(argv: U8[][]): verdict.Run_out //< runs argv in the working directory the suite began in
+  return run_capped(argv, "", verdict.default_timeout_ms)
+
+fn run_in(argv: U8[][], cwd: U8[]): verdict.Run_out //< runs it in the given working directory
+  return run_capped(argv, cwd, verdict.default_timeout_ms)
+
+fn run_capped(argv: U8[][], cwd: U8[], timeout_ms: I32): verdict.Run_out //<
+  //< Runs it with a given timeout
+  //<
+  //< **Only a case whose failure mode is not stopping uses this** (`verdict.default_timeout_ms`'s).
+  return verdict.run_child(argv, cwd, timeout_ms, suite_arena)
+
+fn run_all(items: subproc.Job[], name: U8[]): List<|verdict.Run_out|>$@ //<
+  //< Runs jobs side by side (`verdict.run_children`), collected in `work_<name>` in the scratch
+  dir: = fs.join(scratch, suite_arena.text().s("work_\{name\}").take(), suite_arena)
+  return verdict.run_children(items, dir, suite_arena)

@@ -1,0 +1,93 @@
+#!/usr/bin/env -S ksplc run
+//< The way to redirect a child's standard output and standard error to named files
+//<
+//< `spawn_redirect` in `std/subproc`.
+//< Caution: **Do not check only "it does not fail"** — the check is that **both streams remain**.
+//< | Environment | How it breaks when the same path is passed twice |
+//< | :-- | :-- |
+//< | Windows | **it fails at start** (`FILE_SHARE_READ` does not allow two writers) |
+//< | POSIX | it does not fail, but **the positions are independent** so one overwrites the other |
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/harness_build"
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/subproc"
+import "std/verdict"
+
+// The child that writes to both streams and ends.
+// Caution: **Fix the order it writes them in** (the check is that both remain).
+priv const child_src: U8[] =
+  """import "std/io";
+
+fn main() {
+  io.out().s("this is standard output\n");
+  io.err().s("this is standard error\n");
+}
+"""
+
+priv fn build_child(work: U8[], arena: Arena$@): U8[] //< it builds the child
+  //<
+  //< Empty if it cannot be built.
+  src: = fs.join(work, "twostreams.kspl", arena)
+  gen: = fs.join(work, "twostreams.c", arena)
+  exe: = fs.join(work, "twostreams.exe", arena)
+  io.write_file(src, child_src) catch
+    verdict.check("the child's source can be written", false, src)
+    return ""
+  c: = harness.run(harness.ksplc_argv(U8[][]::{ src, gen }))
+  if c.code != 0
+    verdict.check("the child translates to C", false, c.out)
+    return ""
+  b: = harness_build.build_exe(U8[][]::{ gen }, exe, U8[][]::harness_build.default_cflags)
+  if b.code != 0
+    verdict.check("the child builds", false, b.out)
+    return ""
+  return exe
+
+priv fn ran(exe: U8[], out_path: U8[], err_path: U8[]): U8[] //<
+  //< It starts exe, waits until it ends, and returns what out_path holds
+  //<
+  //< It returns empty where exe cannot be started or the file cannot be read.
+  argv: = U8[][]::{ exe }
+  $child: = subproc.spawn_redirect(argv, "", out_path, err_path) catch
+    return ""
+  child.wait()
+  return io.read_file(out_path) catch
+    return ""
+
+fn main(): I32
+  arena: = harness.begin(64 * 1024 * 1024)
+  work: = fs.join(harness.tmp_dir(), "spawn", arena)
+  fs.mkdir_all(work) catch
+    verdict.check("the place can be made", false, work)
+    return harness.finish()
+  exe: = build_child(work, arena)
+  if exe.len == 0
+    return harness.finish()
+
+  // 1. The same path is passed twice (as `make kspage` does).
+  one: = fs.join(work, "one.log", arena)
+  said: = ran(exe, one, one)
+  // Caution: **Do not check only that it started.** Windows fails here while POSIX loses one
+  // stream; **only the content catches both with the same check**.
+  verdict.check("it starts even with both outputs pointed at the same record", said.len > 0, one)
+  verdict.check("standard output remains in the same record",
+    said.find_str("this is standard output") >= 0, said)
+  verdict.check("standard error remains in the same record too",
+    said.find_str("this is standard error") >= 0, said)
+
+  // 2. Different paths go to their own targets (**merged into one, this fails**).
+  two_out: = fs.join(work, "two_out.log", arena)
+  two_err: = fs.join(work, "two_err.log", arena)
+  split_out: = ran(exe, two_out, two_err)
+  split_err: = io.read_file(two_err) catch
+    return harness.finish()
+  verdict.check("pointed at separate records, only standard output enters one",
+    split_out.find_str("this is standard output") >= 0 &&
+    split_out.find_str("this is standard error") < 0, split_out)
+  verdict.check("pointed at separate records, only standard error enters the other",
+    split_err.find_str("this is standard error") >= 0 &&
+    split_err.find_str("this is standard output") < 0, split_err)
+  return harness.finish()

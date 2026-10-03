@@ -1,0 +1,97 @@
+#!/usr/bin/env -S ksplc run
+//< The test that "a program's own output" is not lost on an abnormal exit
+//<
+//< Where stdout is a pipe (CI's log collection, `| tee`) the C standard library makes it fully
+//< buffered.
+
+// ==========================================
+// The properties pinned down:
+//   * panic flushes stdout before the abort (the output before the panic remains)
+//   * io.set_line_buffered() keeps the output even when a signal kills the program (no panic)
+// ==========================================
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/harness_build"
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+priv const lines: Sz = 300 //< the number of lines printed
+  //<
+  //< Caution: **Make it more than one full buffer**, or a loss cannot be told from everything
+  //< happening to stay in the buffer.
+
+// A SIGSEGV from a null dereference. A signal does not flush stdio, so without line buffering the
+// output is all lost (as with macOS's abort()).
+priv const crash: U8[] = """    p: I32$@ = null;
+    p$ = 1;
+"""
+
+priv const panic_call: U8[] = """    panic("boom");
+"""
+
+priv const prog_head: U8[] = """import "std/io";
+
+fn main(): I32 {
+"""
+
+// Caution: Keep it a raw string, so the interpolation's characters reach the program as typed.
+priv const prog_print: U8[] = """        io.out().s("line \{i\}").c('\n');
+    }
+"""
+
+priv const prog_tail: U8[] = """    return 0;
+}
+"""
+
+priv fn program(prologue: U8[], death: U8[], arena: Arena$@): U8[] //<
+  //< The program that prints lines and then ends abnormally with the code in death
+  return arena.text().s(prog_head).s(prologue).s("    for $i: = 0; i < \{lines\}; i += 1 {\n")
+    .s(prog_print).s(death).s(prog_tail).take()
+
+priv fn check_case(slot: U8[], name: U8[], prologue: U8[], death: U8[], want_all: Bool,
+  want_text: U8[], arena: Arena$@) //<
+    //< One case; want_all demands every one of lines remain.
+    //<
+    //< Caution: Take the directory's name as `slot`. The case name as it is makes a directory
+    //< holding a `:`, which cannot be made on Windows.
+  work: = harness.sandbox(arena.text().s("flush_\{slot\}").take()) catch
+    verdict.check(name, false, "cannot make a working directory")
+    return
+  src: = fs.join(work, "p.kspl", arena)
+  io.write_file(src, program(prologue, death, arena)) catch
+    verdict.check(name, false, "cannot write the material")
+    return
+  b: = harness_build.build_and_run(src, work, "p", U8[][]::{})
+  if !b.built
+    verdict.check(name, false, b.out)
+    return
+  seen: = b.out.count_str("line ")
+  if want_all && seen != lines
+    verdict.check(name, false,
+      arena.text().s("the count of lines seen is short\n\{b.out\}").take())
+    return
+  if !want_all && seen >= lines
+    verdict.check(name, false, "all of it is visible (under full buffering it should be lost)")
+    return
+  if want_text.len > 0 && b.out.find_str(want_text) < 0
+    verdict.check(name, false,
+      arena.text().s("\{want_text\} did not come out\n\{b.out\}").take())
+    return
+  verdict.check(name, true, "")
+
+fn main(): I32
+  arena: = harness.begin(64 * 1024 * 1024)
+  io.out().s("# keeping the output on an abnormal exit: 3\n")
+  check_case("panic", "panic: the output before the panic remains", "", panic_call, true,
+    "panic: boom", arena)
+  // The premise: unless the output is lost with no line buffer, the next case passing proves
+  // nothing about set_line_buffered.
+  check_case("nobuf",
+    "no line buffer: the output is lost on a death by signal (confirming the premise)", "", crash,
+    false, "", arena)
+  check_case("linebuf", "set_line_buffered: the output remains even on a death by signal",
+    "    io.set_line_buffered();\n", crash, true, "", arena)
+  return harness.finish()

@@ -1,0 +1,328 @@
+//< A faithful native inference engine for the Qwen2.5 family, and the CLI that drives it
+//<
+//< It is built from `ksai/nn`'s `Gqa_attention` / `Swiglu_mlp` / `Rms_norm` / `Embedding` /
+//< `Linear`; under `tie_word_embeddings`, `LM_head`'s weight is the embedding's transpose, exported
+//< as `"lm_head.weight"` [hidden, vocab].
+//< **The weights and the settings both come from the safetensors `export_qwen_to_kspl.py` wrote**:
+//< PyTorch's [out,in] is already KSPL's `Linear` [in,out] there, and the settings are its `"cfg"`
+//< tensor (one-dimensional F32). **To change a tensor's name or `"cfg"`'s order, change the
+//< exporter too**, or loading fails.
+
+// ==========================================
+// The composition, per layer and then the end:
+//   h += Attn(RMSNorm(h))
+//   h += SwiGLU(RMSNorm(h))
+//   logits = LM_head(RMSNorm(h))
+// **`ksai/tests/examples_qwen.kspls` tests mode 1's answer** (`make test` in this package).
+// ==========================================
+import "ksai/lora_set"
+import "ksai/model_file" as ai_file
+import "ksai/nn"
+import "ksai/safetensors" as st
+import "ksai/sampler"
+import "ksai/tensor" { Tensor }
+import "ksai/tokenizer"
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
+import "std/sys"
+
+priv struct Qwen_config
+  priv n_layers: Sz
+  priv hidden: Sz
+  priv n_heads: Sz
+  priv n_kv_heads: Sz
+  priv head_dim: Sz
+  priv intermediate: Sz
+  priv vocab: Sz
+  priv rope_theta: F64
+  priv eps: F64
+
+priv struct Qwen_layer<|T|> //<
+  //< One Qwen decoder layer: attention and an MLP, each after its RMS norm
+  //<
+  //< The naming matches ksai/examples/llama_engine/model.Mini_llama
+  //< (ksai/nn.Transformer_block): attention / attention_norm / ffn_norm, though this one's fourth
+  //< field is mlp, not ffn.
+  priv attention_norm: nn.Rms_norm<|T|>
+  priv attention: nn.Gqa_attention<|T|>
+  priv ffn_norm: nn.Rms_norm<|T|>
+  priv mlp: nn.Swiglu_mlp<|T|>
+
+priv struct Qwen_model<|T|>
+  priv cfg: Qwen_config
+  priv tok_embed: nn.Embedding<|T|>
+  priv layers: Qwen_layer<|T|>$@ //< cfg.n_layers of them
+  priv norm: nn.Rms_norm<|T|>
+  priv lm_head: nn.Linear<|T|>
+  // Every weight is a zero-copy view into this Safetensors' raw data, so it lives as a field for
+  // the model's lifetime (freeing it inside load() would be an immediate use-after-free).
+  priv backing: st.Safetensors
+
+impl<|T|> Qwen_model<|T|>
+  priv fn load(path: U8[], max_seq_len: Sz, arena: Arena$@):
+    Qwen_model<|T|>?st.Safetensors_error //<
+      //< Builds the whole model from an exported safetensors (a zero-copy mapping of every weight).
+    $s: = ai_file.load_safetensors(path, arena)?
+    cfg: = read_cfg(s, arena)?
+    eps: = T::cfg.eps
+
+    $tok_embed: = nn.Embedding<|T|>.new(cfg.vocab, cfg.hidden, arena)
+    s.map_into<|F32|>("embed.weight", tok_embed.weight@, arena)?
+
+    layers: =
+      Qwen_layer<|T|>$@::arena.alloc(cfg.n_layers * sizeof(Qwen_layer<|T|>))
+    $b: = Str_builder.new()
+    defer b.free()
+    for i in Range.asc(cfg.n_layers)
+      // A safetensors key (".attn.wq.weight" and the like) is an external format fixed by
+      // export_qwen_to_kspl.py, so it does not follow the field names above.
+      $attention: = nn.Gqa_attention<|T|>
+        .new(cfg.hidden, cfg.n_heads, cfg.n_kv_heads, cfg.head_dim, max_seq_len, cfg.rope_theta,
+        arena)
+      s.map_into<|F32|>(key(b@, i, ".attn.wq.weight"), attention.wq.weights@, arena)?
+      s.map_into<|F32|>(key(b@, i, ".attn.wq.bias"), attention.wq.bias@, arena)?
+      s.map_into<|F32|>(key(b@, i, ".attn.wk.weight"), attention.wk.weights@, arena)?
+      s.map_into<|F32|>(key(b@, i, ".attn.wk.bias"), attention.wk.bias@, arena)?
+      s.map_into<|F32|>(key(b@, i, ".attn.wv.weight"), attention.wv.weights@, arena)?
+      s.map_into<|F32|>(key(b@, i, ".attn.wv.bias"), attention.wv.bias@, arena)?
+      s.map_into<|F32|>(key(b@, i, ".attn.wo.weight"), attention.wo.weights@, arena)?
+
+      $mlp: = nn.Swiglu_mlp<|T|>.new(cfg.hidden, cfg.intermediate, arena)
+      s.map_into<|F32|>(key(b@, i, ".mlp.gate.weight"), mlp.gate.weights@, arena)?
+      s.map_into<|F32|>(key(b@, i, ".mlp.up.weight"), mlp.up.weights@, arena)?
+      s.map_into<|F32|>(key(b@, i, ".mlp.down.weight"), mlp.down.weights@, arena)?
+
+      $attention_norm: = nn.Rms_norm<|T|>.new(cfg.hidden, eps, arena)
+      s.map_into<|F32|>(key(b@, i, ".attn_norm.weight"), attention_norm.weight@, arena)?
+      $ffn_norm: = nn.Rms_norm<|T|>.new(cfg.hidden, eps, arena)
+      s.map_into<|F32|>(key(b@, i, ".ffn_norm.weight"), ffn_norm.weight@, arena)?
+      (layers + i)$ = Qwen_layer<|T|>::{ .attention_norm = attention_norm, .attention = attention,
+        .ffn_norm = ffn_norm, .mlp = mlp }
+    $norm: = nn.Rms_norm<|T|>.new(cfg.hidden, eps, arena)
+    s.map_into<|F32|>("norm.weight", norm.weight@, arena)?
+    $lm_head: = nn.Linear<|T|>.new(cfg.hidden, cfg.vocab, arena)
+    s.map_into<|F32|>("lm_head.weight", lm_head.weights@, arena)?
+
+    return Qwen_model<|T|>::{ .cfg = cfg, .tok_embed = tok_embed, .layers = layers, .norm = norm,
+      .lm_head = lm_head, .backing = s }
+  priv fn load_lora_set(r: Self$@, path: U8[], arena: Arena$@):
+    lora_set.Qkv_lora<|T|>$@?st.Safetensors_error //<
+      //< Reads a set of externally fine-tuned LoRA adapters
+      //<
+      //< They are named as in load_lora_set of ksai/examples/llama_engine/model.Mini_llama
+      //< ("blocks.{i}.attn.{q,v}.lora_{a,b,scale}"), so if the layer counts agree, the same file
+      //< reads unchanged.
+    return ai_file.load_qkv_lora_set<|T|>(path, r.cfg.n_layers, arena)
+  priv fn forward(r: Self$@, token_id: I32, start_pos: Sz,
+    adapters: lora_set.Qkv_lora<|T|>$@, ca: Arena$@): Tensor<|T|> //<
+      //< Streams token_id one step at start_pos and returns the logits [1, vocab]
+      //<
+      //< A non-null adapters applies LoRA to each layer's Q/V.
+    $h: = r.tok_embed.forward(token_id, ca)
+    for i in Range.asc(r.cfg.n_layers)
+      attn_in: = (r.layers + i).attention_norm.forward(h)
+      attn_out: =
+        ((r.layers + i).attention.forward(attn_in, start_pos) if adapters == null
+        else (r.layers + i).attention
+        .forward_lora(attn_in, start_pos, (adapters + i).q@, (adapters + i).v@))
+      h = h + attn_out
+      ffn_in: = (r.layers + i).ffn_norm.forward(h)
+      mlp_out: = (r.layers + i).mlp.forward(ffn_in)
+      h = h + mlp_out
+    final_norm: = r.norm.forward(h)
+    return r.lm_head.forward(final_norm)
+
+// Reads one F32 field of the cfg tensor as an Sz dimension.
+// Caution: The F32→Sz cast (fptosi) is poison (undefined behaviour) out of range (NaN, Inf, a
+// huge value, a negative), with neither saturation nor wrap-around, and a tampered "cfg" can hold
+// any of them; so the value is compared while still F32 (safe even against NaN or Inf).
+priv const max_cfg_dim: F32 = 100000000.0 // the same value as ksai/tensor.max_tensor_elems
+priv fn safe_cfg_dim(v: F32): Sz?st.Safetensors_error
+  if !(v >= 0.0 && v <= max_cfg_dim)
+    throw st.Safetensors_error.invalid_header
+  return Sz::v
+
+priv fn read_cfg($s: st.Safetensors, arena: Arena$@): Qwen_config?st.Safetensors_error
+  c: = s.get_tensor<|F32|>("cfg", arena)? // [9] = Qwen_config's field order
+  // get_tensor verifies only that the declared shape fits inside the file; with fewer than 9
+  // elements, the fixed nine-element read below would run past the raw data.
+  if c.size < 9
+    throw st.Safetensors_error.invalid_header
+  n_layers: = safe_cfg_dim((c.data + 0)$)?
+  hidden: = safe_cfg_dim((c.data + 1)$)?
+  n_heads: = safe_cfg_dim((c.data + 2)$)?
+  n_kv_heads: = safe_cfg_dim((c.data + 3)$)?
+  head_dim: = safe_cfg_dim((c.data + 4)$)?
+  intermediate: = safe_cfg_dim((c.data + 5)$)?
+  vocab: = safe_cfg_dim((c.data + 6)$)?
+  cfg: = Qwen_config::{ .n_layers = n_layers, .hidden = hidden, .n_heads = n_heads,
+    .n_kv_heads = n_kv_heads, .head_dim = head_dim, .intermediate = intermediate, .vocab = vocab,
+    .rope_theta = (c.data + 7)$, .eps = (c.data + 8)$ }
+  // Beyond each field's range, the values' consistency: a broken or tampered cfg can divide by
+  // zero (n_heads/n_kv_heads=0) or overflow Sz into an out-of-bounds write (an abnormal n_layers).
+  if cfg.n_layers == 0 || cfg.hidden == 0 || cfg.n_heads == 0 || cfg.n_kv_heads == 0 ||
+    cfg.head_dim == 0 || cfg.intermediate == 0 || cfg.vocab == 0
+    throw st.Safetensors_error.invalid_header
+  // GQA assumes each KV head serves n_heads/n_kv_heads query heads evenly, and the Q projection's
+  // width must be hidden (what goes back to the residual stream through wo).
+  if cfg.n_heads % cfg.n_kv_heads != 0 || cfg.n_heads * cfg.head_dim != cfg.hidden
+    throw st.Safetensors_error.invalid_header
+  return cfg
+
+priv fn key(b: Str_builder$@, i: Sz, suffix: U8[]): U8[]
+  return b.clear().s("layers.\{I32::i\}").s(suffix).slice()
+
+priv const max_seq: Sz = 4096 // the cap on the KV cache taken (a practical cap for the demo, not a constraint of the model itself)
+priv const gen_max: Sz = 64 // the cap on generate mode's autoregressive steps (likewise)
+
+fn read_tokens(arena: Arena$@): List<|I32|>$@ //<
+  //< Reads whitespace-separated non-negative integers from standard input into an I32 list
+  //<
+  //< It is for mode 1.
+  list: = List<|I32|>.create(arena)
+  $cur: I32 = 0
+  $in_num: = false
+  $overflowed: = false
+  for
+    c: = io.getchar()
+    if c >= '0' && c <= '9'
+      // Prevents I32 overflow (it adds a digit only if the result still fits). On overflow it
+      // sets overflowed and drops the token later, instead of truncating it into another valid
+      // ID (silent data corruption).
+      if cur <= 214748363
+        cur = cur * 10 + (c - '0')
+      else
+        overflowed = true
+      in_num = true
+    else
+      if in_num
+        if overflowed
+          io.err().s("[warn] token ID overflowed I32 range, skipping\n")
+        else
+          list.push(cur)
+        cur = 0
+        in_num = false
+        overflowed = false
+      if c < 0
+        break
+  return list
+
+fn cmd_logits(a: sys.Args, arena: Arena$@)
+  model_path: = "out/qwen_kspl.safetensors" if a.len < 2 else a[1]
+  $m: = Qwen_model<|F32|>.load(model_path, max_seq, arena) catch
+    io.err().s("[Error] model load failed: \{model_path\}\n")
+    return
+  defer m.backing.free()
+  io.err().s("[qwen] loaded: layers=\{I32::m.cfg.n_layers\} hidden=\{I32::m.cfg.hidden\} ")
+  io.err().s("heads=\{I32::m.cfg.n_heads\}/\{I32::m.cfg.n_kv_heads\} vocab=\{I32::m.cfg.vocab\}\n")
+
+  $adapters: lora_set.Qkv_lora<|F32|>$@ = null
+  if a.len >= 3
+    adapters = m.load_lora_set(a[2], arena) catch
+      io.err().s("[Error] LoRA load failed: \{a[2]\}\n")
+      return
+    io.err().s("[qwen] LoRA adapter loaded: \{a[2]\}\n")
+
+  tokens: = read_tokens(arena)
+  if tokens.len == 0
+    io.err().s("[Error] there is no token ID on standard input\n")
+    return
+  if tokens.len > max_seq
+    io.err().s("[Error] input has \{I32::tokens.len\} tokens, exceeds max_seq=\{I32::max_seq\}\n")
+    return
+
+  $logits: = Tensor<|F32|>.new(Sz$[]::{ .ptr = null, .len = 0 }, arena)
+  for i in Range.asc(tokens.len)
+    ca: = Arena.new(1024 * 1024 * 64)
+    defer ca.free()
+    logits = m.forward(tokens[i], i, adapters, ca)
+    if i == tokens.len - 1
+      logits = logits.dup(arena) // copied so it survives ca being freed
+
+  io.out().s("ARGMAX \{sampler.argmax(logits)\}\n")
+  io.out().s("LOGITS[0:10]")
+  n: = 10 if logits.size >= 10 else logits.size
+  for i in Range.asc(n)
+    io.out().s(" \{(logits.data + i)\}")
+  io.out().s("\n")
+
+fn cmd_generate(a: sys.Args, arena: Arena$@)
+  if a.len < 6
+    io.err()
+      .s("usage: qwen_infer generate <model.safetensors> <vocab.txt> <merges.txt> <eos_id> \
+        [lora.safetensors]\n")
+    return
+  model_path: = a[2]
+  vocab_path: = a[3]
+  merges_path: = a[4]
+  eos_id: = I32::(a[5].parse_size() catch 0)
+
+  $m: = Qwen_model<|F32|>.load(model_path, max_seq, arena) catch
+    io.err().s("[Error] model load failed: \{model_path\}\n")
+    return
+  defer m.backing.free()
+  $adapters: lora_set.Qkv_lora<|F32|>$@ = null
+  if a.len >= 7
+    adapters = m.load_lora_set(a[6], arena) catch
+      io.err().s("[Error] LoRA load failed: \{a[6]\}\n")
+      return
+    io.err().s("[qwen] LoRA adapter loaded: \{a[6]\}\n")
+
+  $tok: = tokenizer.Tokenizer.new(arena)
+  tok.load(vocab_path, merges_path) catch
+    io.err().s("[Error] tokenizer load failed: \{vocab_path\}, \{merges_path\}\n")
+    return
+
+  prompt: = io.read_stdin(arena)
+  ids: = tok.encode(prompt)
+  if ids.len == 0
+    io.err().s("[Error] an empty prompt\n")
+    return
+  if ids.len > max_seq
+    io.err().s("[Error] prompt has \{I32::ids.len\} tokens, exceeds max_seq=\{I32::max_seq\}\n")
+    return
+  io.err().s("[qwen] prompt tokens=\{I32::ids.len\}\n")
+
+  // Up to here it is cmd_logits' main loop; from here on is the autoregressive generation
+  // (argmax → the EOS check → feeding the next token).
+  $pos: Sz = 0
+  $logits: = Tensor<|F32|>.new(Sz$[]::{ .ptr = null, .len = 0 }, arena)
+  for i in Range.asc(ids.len)
+    ca: = Arena.new(1024 * 1024 * 64)
+    defer ca.free()
+    logits = m.forward(ids[i], pos, adapters, ca)
+    pos += 1
+    if i == ids.len - 1
+      logits = logits.dup(arena)
+
+  gen: = List<|I32|>.create(arena)
+  for _step in Range.asc(gen_max)
+    next: = sampler.argmax(logits)
+    if next == eos_id || pos >= max_seq
+      break
+    gen.push(next)
+    ca: = Arena.new(1024 * 1024 * 64)
+    defer ca.free()
+    $step_logits: = m.forward(next, pos, adapters, ca)
+    logits = step_logits.dup(arena)
+    pos += 1
+
+  io.out().s(tok.decode(gen))
+  io.out().s("\n")
+
+fn main() //<
+  //< Runs a small Qwen: prints the logits for token IDs, or generates text from a prompt
+  //<
+  //< `echo "3 1 4" | qwen_infer [out/qwen_kspl.safetensors [lora.safetensors]]` prints logits;
+  //< `echo "let n = " | qwen_infer generate <model> <vocab.txt> <merges.txt> <eos_id> [lora]`
+  //< generates (for Qwen2.5-Coder-0.5B, eos_id is 151643 = config.json's eos_token_id).
+  a: = sys.args()
+  arena: = Arena.new(1024 * 1024 * 64)
+  defer arena.free()
+  if a.len >= 2 && a[1].equals("generate")
+    cmd_generate(a, arena)
+  else
+    cmd_logits(a, arena)

@@ -1,0 +1,279 @@
+//< The document shown when the page opens
+//<
+//< **The contents are a stand-in for the real thing.** The functions that read and write replace
+//< them, so what is decided here is only "what is shown when nothing is read in".
+//<
+//< **Do not put it in the bridge code.** The boundary's shape and the sample's contents change
+//< for different reasons.
+import "kspage/model/collect" { Collect }
+import "kspage/model/doc" { Axis, Doc, Rect, add_framed_child }
+import "kspage/model/font"
+import "kspage/model/marker"
+import "kspage/model/paint"
+import "kspage/model/style" { Sheet, Arrange }
+import "std/mem" { Arena }
+
+struct Made //< the assembled document, and its style table
+  //<
+  //< **The two belong together** (the style decides the layout).
+  doc: Doc$@
+  sheet: Sheet$@
+
+fn styles(a: Arena$@): Sheet$@ //< the style table that a new, untouched document carries
+  //<
+  //< **A blank document gets this table too.** Without it a table and a slide pile up as ordinary
+  //< paragraphs, and a document started with "New" could not insert a table.
+  //< Caution: **Do not merge it into one function with the sample's contents**, or a blank
+  //< document builds the sample's paragraphs only to drop them.
+  sheet: = Sheet.new(font.default_root(), a)
+
+  $big: paint.Font_spec = paint.inherit_all()
+  big.size_px = Option<|F32|>.some(28.0)
+  big.weight = Option<|U16|>.some(700U16)
+  h1: = sheet.add("heading", big)
+  h1.space_after = 8.0
+  // The heading's depth. **This is what the contents collect** (not the style's name).
+  h1.outline = 1
+  // The style that Enter at a heading's end continues in. **A heading is not followed by a
+  // heading**, so neither the outline nor the contents gains an empty line.
+  h1.next = "body"
+
+  // The contents. **What is inside does not go into the document** (it is built from the headings
+  // at every layout). The indent is the step for one level of depth.
+  toc: = sheet.add("contents", paint.inherit_all())
+  toc.collect = Collect.contents
+  toc.indent = 16.0
+  toc.space_after = 12.0
+  // **A collecting block is not followed by itself** (a second would lay out the same contents).
+  toc.next = "body"
+
+  // The notes' list. **The numbers do not go into the document** (they are counted at layout).
+  notes: = sheet.add("footnote", paint.inherit_all())
+  notes.collect = Collect.notes
+  notes.space_before = 12.0
+  notes.next = "body"
+
+  body: = sheet.add("body", paint.inherit_all())
+  body.space_after = 12.0
+
+  $bold: paint.Font_spec = paint.inherit_all()
+  bold.weight = Option<|U16|>.some(700U16)
+  sheet.add("strong", bold)
+
+  // The line decorations. **The measurements do not change** (they are not part of the typeface).
+  sheet.add("underline", paint.inherit_all()).ink.underline = Option<|Bool|>.some(true)
+  sheet.add("strikethrough", paint.inherit_all()).ink.strike = Option<|Bool|>.some(true)
+
+  // A bullet list. **The mark sits in the space the indent leaves.**
+  item: = sheet.add("bullet", paint.inherit_all())
+  item.indent = 24.0
+  item.marker = marker.Marker.bullet("• ")
+
+  // Numbered. **A paragraph without a number in between restarts the count at 1.**
+  step: = sheet.add("numbered", paint.inherit_all())
+  step.indent = 32.0
+  step.marker = marker.Marker.number(". ")
+
+  // The style that lays the children out in rows and columns (the document does not say "table").
+  table: = sheet.add("table", paint.inherit_all())
+  table.arrange = Arrange.grid
+  table.space_before = 12.0
+  table.space_after = 12.0
+  // It adds space at the column's left edge and draws the grid. **The cell's style carries the
+  // grid.** **Styles do not inherit from one another**, so another cell style has to draw the line
+  // too.
+  cell: = sheet.add("cell", paint.inherit_all())
+  cell.pad = 4.0
+  cell.rule_width = 1.0
+  cell.rule_color = 0xccccccU32
+
+  // A heading cell. The same line, with a faint fill behind.
+  // Caution: **Set the text color along with the fill** (the reason is at `rule_gray` in
+  // `manual.kspls`).
+  head_cell: = sheet.add("heading-cell", paint.inherit_all())
+  head_cell.pad = 4.0
+  head_cell.rule_width = 1.0
+  head_cell.rule_color = 0xccccccU32
+  head_cell.fill = Option<|U32|>.some(0xf0f0f0U32)
+  head_cell.ink.color = Option<|U32|>.some(0x1a1a1aU32)
+
+  // The number format for an amount. **It applies only to a formula's result** (not typed numbers).
+  money: = sheet.add("amount", paint.inherit_all())
+  money.pad = 4.0
+  money.rule_width = 1.0
+  money.rule_color = 0xccccccU32
+  money.number.grouped = true
+  money.number.places = Option<|Sz|>.some(0)
+  money.number.prefix = "$"
+
+  // A block of code. **It does not wrap** (wrapped, the space at the break is lost and the indent
+  // depth changes). The style's typeface gives the fixed width.
+  $mono: paint.Font_spec = paint.inherit_all()
+  mono.family = Option<|U8[]|>.some("monospace")
+  code: = sheet.add("code", mono)
+  code.wrap = false
+  code.space_before = 12.0
+  code.space_after = 12.0
+  // The space inside the box. **Not with the line height multiple**, which would widen the gaps
+  // between lines too (Principle 6).
+  code.pad = 10.0
+  code.line_spacing = 1.35
+  // **Set the fill and the text color as a pair** (as in a heading cell).
+  code.fill = Option<|U32|>.some(0xf5f5f5U32)
+  code.ink.color = Option<|U32|>.some(0x1a1a1aU32)
+  // The box's outline: one line marks the edge in the background's color.
+  code.rule_width = 1.0
+  code.rule_color = 0xd8d8d8U32
+
+  // Columns. **The style holds the column count** (no invisible section mark is made). The
+  // children's heights are balanced, so the right column does not come out empty.
+  two: = sheet.add("columns", paint.inherit_all())
+  two.columns = 2
+  two.column_gap = 24.0
+  two.space_before = 12.0
+  two.space_after = 12.0
+  // A paragraph inside a column: an ordinary paragraph under a name separate from the body's, so
+  // that a check on the body's style is not affected by the columns' width.
+  sheet.add("column-body", paint.inherit_all()).space_after = 8.0
+
+  // A slide, which places its children at fixed positions. **The style sets the height** (from
+  // the contents, slides of one style would differ).
+  slide: = sheet.add("slide", paint.inherit_all())
+  slide.arrange = Arrange.absolute
+  // **The style sets a slide's size in both directions** (with no width, the frames move with the
+  // window's width).
+  slide.width = 620.0
+  slide.height = 120.0
+  slide.space_before = 12.0
+  slide.space_after = 12.0
+  return sheet
+
+fn blank(a: Arena$@): Made //< a blank document
+  //<
+  //< Caution: **Put one empty paragraph in** (with none there is nowhere for the cursor).
+  //< **Put an empty run in too.** With only a block, no box is laid out, so a click sets no
+  //< position: **a blank document appears and cannot be typed in**.
+  sheet: = styles(a)
+  doc: = Doc.new(a)
+  doc.add_block("body").add_text("")
+  return Made::{ .doc = doc, .sheet = sheet }
+
+fn build(a: Arena$@): Made //< the document for the demo
+  //<
+  //< **The contents are a stand-in for the real thing** (see the file header).
+  sheet: = styles(a)
+  doc: = Doc.new(a)
+  doc.add_block("heading").add_text("kspage")
+
+  p: = doc.add_block("body")
+  p.add_text("Prose, tables and slides alike, it is an editing system for writing them ")
+  p.add_text("all in one document", "strong")
+  p.add_text(". Only the arranging differs, and below that they are shared.")
+
+  list: = doc.add_block("body")
+  list.add_child("bullet")
+    .add_text("Breaking into lines, inheriting and lining baselines up are all on the core's side.")
+  list.add_child("bullet")
+    .add_text("All this bridging does is borrow the measures and hand the boxes over.")
+
+  // The line decorations. **They do not move where the lines break.**
+  lines: = doc.add_block("body")
+  lines.add_text("A line of decoration is a style too (")
+  lines.add_text("underline", "underline")
+  lines.add_text(" and ")
+  lines.add_text("strikethrough", "strikethrough")
+  lines.add_text(").")
+
+  // A block of code. **It does not wrap even past the column's width.**
+  doc.add_block("code").add_text("fn main() {")
+  doc.add_block("code").add_text("    io.out().s(\"Hello, Kanso!\\n\");")
+  doc.add_block("code").add_text("}")
+
+  // What is inside the columns. **The children are split into columns** (this paragraph is one).
+  cols: = doc.add_block("columns")
+  cols.add_child("column-body")
+    .add_text("Columns are a settlement the style carries. Write the count of columns and that \
+      style's block's children part into columns.")
+  cols.add_child("column-body")
+    .add_text("No invisible mark called a section's seam is made. One block is one set of columns \
+      as it stands.")
+  cols.add_child("column-body")
+    .add_text("The columns' heights are measured first and then levelled. The right column does not \
+      come out empty even where the contents are short.")
+  cols.add_child("column-body")
+    .add_text("The columns' width is not written. It is settled by their count and the gap between \
+      them.")
+
+  steps: = doc.add_block("body")
+  steps.add_text("The numbers are handed out at the placing.")
+  steps.add_child("numbered").add_text("The style carries the mark.")
+  steps.add_child("numbered").add_text("The arranging counts by the order of the siblings.")
+  steps.add_child("numbered").add_text("The numbers do not go into the document.")
+
+  // A table inside flowing text. A row's block holds the cells' blocks.
+  t: = doc.add_block("table")
+  head: = t.add_child("")
+  head.add_child("heading-cell").add_text("The look", "strong")
+  head.add_child("heading-cell").add_text("The order", "strong")
+  r1: = t.add_child("")
+  r1.add_child("cell").add_text("Prose")
+  r1.add_child("cell").add_text("Flowed in")
+  r2: = t.add_child("")
+  r2.add_child("cell").add_text("Table")
+  r2.add_child("cell").add_text("Grid")
+  r3: = t.add_child("")
+  r3.add_child("cell").add_text("Slide")
+  r3.add_child("cell").add_text("Absolute coordinates")
+
+  // A table with formulas. **A text starting with `=` is a formula**; type a number over one and
+  // the amount and the total follow.
+  calc_t: = doc.add_block("table")
+  // **The table holds the name, not the style.** Another table refers to it by this name.
+  calc_t.name = "detail"
+  // The quantity and price widths are set; the amount column sizes to its contents. **The table
+  // holds the width, not the style.**
+  calc_t.set_size(Axis.column, 0, Option<|F32|>.some(64.0))
+  calc_t.set_size(Axis.column, 1, Option<|F32|>.some(64.0))
+  head2: = calc_t.add_child("")
+  head2.add_child("heading-cell").add_text("Qty", "strong")
+  head2.add_child("heading-cell").add_text("Price", "strong")
+  head2.add_child("heading-cell").add_text("Amount", "strong")
+  q1: = calc_t.add_child("")
+  q1.add_child("cell").add_text("3")
+  q1.add_child("cell").add_text("120")
+  q1.add_child("cell").add_text("=A2*B2", "amount")
+  q2: = calc_t.add_child("")
+  q2.add_child("cell").add_text("5")
+  q2.add_child("cell").add_text("80")
+  q2.add_child("cell").add_text("=A3*B3", "amount")
+  total: = calc_t.add_child("")
+  total.add_child("cell").add_text("Total", "strong")
+  total.add_child("cell").add_text("")
+  total.add_child("cell").add_text("=C2:C3.sum()", "amount")
+
+  // A table that refers to another table by name (`the table's name!the position`).
+  sum_t: = doc.add_block("table")
+  sum_t.name = "summary"
+  head3: = sum_t.add_child("")
+  head3.add_child("heading-cell").add_text("Items", "strong")
+  head3.add_child("heading-cell").add_text("Sum", "strong")
+  vals: = sum_t.add_child("")
+  vals.add_child("cell").add_text("=detail!C2:C3.count()")
+  vals.add_child("cell").add_text("=detail!C4")
+
+  // One slide laid out in the flow. **A frame inside it takes its position from its own `frame`.**
+  deck: = doc.add_block("slide")
+  left_at: = Rect::{ .x = 0.0, .y = 8.0, .w = 300.0, .h = 40.0 }
+  add_framed_child(deck, "heading", left_at).add_text("As one sheet")
+  right_at: = Rect::{ .x = 320.0, .y = 16.0, .w = 300.0, .h = 80.0 }
+  add_framed_child(deck, "", right_at)
+    .add_text("The same tree can be one slide as well, changing only the style's arranging.")
+
+  // A formula in the body. **The body has no table of its own**, so it refers by name.
+  tail: = doc.add_block("body")
+  tail
+    .add_text("The table and the slide are both part of the flow. Type the quantity over and the \
+      amount, the total, and the sum of ")
+  tail.add_text("=detail!C4")
+  tail.add_text(" all follow along.")
+  return Made::{ .doc = doc, .sheet = sheet }

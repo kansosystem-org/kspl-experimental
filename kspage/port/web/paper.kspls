@@ -1,0 +1,231 @@
+//< The entry points for page breaks, and for a page's header and footer
+//<
+//< **The paper settings belong to the document** (not to a style). The size, the margins and the
+//< body's width all live in `Paper` in [`model/style.kspls`](../../model/style.kspls).
+//< Note: It is split from [`bridge.kspls`](bridge.kspls) for the 1000-line-per-file cap, and
+//< follows its boundary rules.
+import "kspage/lay/chrome" as band
+import "kspage/lay/flow"
+import "kspage/model/doc" { Chrome }
+import "kspage/model/paint"
+import "kspage/model/paper" + { Paper }
+import "kspage/port/web/state" + { doc, ed, ensure, input, input_cap, page, sheet, source }
+import "kspage/write/edit" as _edit
+import "kspage/write/shape"
+import "std/mem" { Arena }
+
+// ---- Splitting into pages ----
+
+// Writes eight values for one page's settings into out (the paper's width / the page's height /
+// left / top / right / bottom / the content height / the body's width).
+// **Height 0 means "do not split" and width 0 means "the container's width".** The core computes
+// the content height too. Computing the height minus the margins in the caller would put the
+// layout and the printed copy out of step (`Sheet.column_height`).
+#export
+fn kspage_web_paper(out: F32$@)
+  ensure()
+  out$ = sheet.paper.width
+  (out + 1)$ = sheet.paper.height
+  (out + 2)$ = sheet.paper.left
+  (out + 3)$ = sheet.paper.top
+  (out + 4)$ = sheet.paper.right
+  (out + 5)$ = sheet.paper.bottom
+  (out + 6)$ = sheet.column_height()
+  (out + 7)$ = sheet.paper.reading
+
+// Writes six values for the default paper into out (the paper's width / the page's height / left
+// / top / right / bottom).
+// Caution: **Do not copy the numbers into JS.** The canonical source is `a4_portrait` in
+// `../../model/paper.kspls` — a copy drifts (15mm margins in one place and one inch in the other),
+// and two documents made from the same screen get different margins.
+#export
+fn kspage_web_default_paper(out: F32$@)
+  ensure()
+  had: = paper.a4_portrait()
+  out$ = had.width
+  (out + 1)$ = had.height
+  (out + 2)$ = had.left
+  (out + 3)$ = had.top
+  (out + 4)$ = had.right
+  (out + 5)$ = had.bottom
+
+// Replaces one page's settings as a whole.
+// At height 0 it stops splitting.
+// Caution: **Do not write `sheet.paper` directly.** Written directly it is not in the undo record,
+// so clicking undo after changing the paper undoes the change before it while the paper stays
+// changed.
+#export
+fn kspage_web_set_paper(width: F32, height: F32, left: F32, top: F32, right: F32, bottom: F32,
+  reading: F32)
+  ensure()
+  $fresh: Paper = sheet.paper
+  fresh.width = width if width > 0.0 else 0.0
+  fresh.height = height if height > 0.0 else 0.0
+  fresh.left = left if left > 0.0 else 0.0
+  fresh.top = top if top > 0.0 else 0.0
+  fresh.right = right if right > 0.0 else 0.0
+  fresh.bottom = bottom if bottom > 0.0 else 0.0
+  fresh.reading = reading if reading > 0.0 else 0.0
+  ed.set_paper(sheet, fresh)
+
+// Writes two values for the viewer's overrides into out (the body's width / the body's text
+// size; 0 means not overridden).
+// These are not document settings. They are neither saved nor applied when printing.
+#export
+fn kspage_web_over(out: F32$@)
+  ensure()
+  out$ = sheet.over.reading
+  (out + 1)$ = sheet.over.size_px
+
+// Replaces the viewer's overrides as a whole. A negative value becomes 0 (0 means "do not
+// override").
+// **Reset it to 0 while printing** (the pages follow the document's settings). The caller resets
+// it. The text size is in pixels, not a multiple (it means "read the body at this size"). The
+// core computes the resulting ratio (`Sheet.text_ratio` in `../../model/style.kspls`).
+#export
+fn kspage_web_set_over(reading: F32, size_px: F32)
+  ensure()
+  sheet.over.reading = reading if reading > 0.0 else 0.0
+  sheet.over.size_px = size_px if size_px > 0.0 else 0.0
+
+// Passes whether the page's background is dark. **It lays out again only when that changed** (it
+// is passed on every draw). It is a viewer setting. A theme is not stored in the document, so it
+// is neither saved nor applied to the page — the page is white, so **it is the light setting while
+// printing** (the caller resets it).
+// This decides the color of text whose style sets no fill (`dark_ground` in
+// `../../model/style.kspls`).
+#export
+fn kspage_web_set_dark_ground(dark: I32)
+  ensure()
+  now: = dark != 0
+  if sheet.over.dark == now
+    return
+  sheet.over.dark = now
+  page = null
+
+// Sets the step to show now. **A negative value shows all steps** (no filtering).
+// It is a viewer setting. It is neither saved nor applied when printing. It is a filter that lasts
+// only while showing one step at a time.
+// Caution: **Set it back to negative when the presentation stops** (the caller resets it).
+#export
+fn kspage_web_set_reveal(upto: I32)
+  ensure()
+  sheet.over.reveal = Option<|Sz|>.none if upto < 0I32 else Option<|Sz|>.some(upto)
+
+// The largest step in slide `i`. **0 when no frame has a step.**
+// **It counts the document's children** (not the laid-out frames). While filtering, a frame not
+// yet shown is not laid out, so counted from the layout the steps would disappear one at a time.
+// A slide itself stays while filtering, so the blocks can be traced from there.
+#export
+fn kspage_web_max_step(i: Sz): Sz
+  ensure()
+  if page == null || i >= page.surfaces.len
+    return 0
+  slide: = page.surfaces.get(i).block
+  $seen: Sz = 0
+  for $c: Sz = 0; c < slide.children.len; c += 1
+    one: = slide.children.get(c).step
+    if one > seen
+      seen = one
+  return seen
+
+// The column's width in layout, where the container's width is `avail`.
+// **Setting the paper's width makes it narrower than the container.** Do not repeat the
+// expression in the caller (the laid-out width and the printed width would get out of step).
+#export
+fn kspage_web_column(avail: F32): F32
+  ensure()
+  return sheet.column_width(avail)
+
+// The column's left edge (in document coordinates), where the container's width is `avail`.
+// **With a body width set it is not 0** (it moves inward by half the remaining space). Do not
+// repeat the expression in the caller.
+#export
+fn kspage_web_column_left(avail: F32): F32
+  ensure()
+  return sheet.column_left(avail)
+
+// How many pages the current layout makes. **It is the count after layout** (the height is
+// unknown before layout).
+// Caution: **Do not write the counting expression here.** The page count comes from the layout
+// result, so the canonical source is `paper_count` in `../../lay/flow.kspls` (which `make debug`
+// can check). A copy here would not catch a defect such as an extra blank page at the end.
+#export
+fn kspage_web_paper_count(): Sz
+  if page == null
+    return 1
+  return flow.paper_count(page, sheet.column_height())
+
+// ---- A page's header and footer ----
+
+// Lays out the band of page number `no` (from 1) and returns the number of boxes. `which` 0 is
+// the header, 1 the footer. **The coordinates are from the page's top left** (not document
+// coordinates). A band appears on every page, so it has no place in the document's single
+// continuous coordinate space. `{page}` in the text is replaced by `no` and `{pages}` by `of`.
+#export
+fn kspage_web_chrome(which: I32, no: Sz, of: Sz): Sz
+  ensure()
+  // The previous band is freed here. It is laid out again for each page, so if kept, one print
+  // piles up allocations by the page count.
+  if state.chrome_arena != null
+    state.chrome_arena.free()
+  state.chrome_arena = Arena.new(8 * 1024)
+  side: = Chrome.footer if which != 0 else Chrome.header
+  state.chrome = band.layout_chrome(doc, sheet, source(), side, no, of, state.chrome_arena)
+  return state.chrome.boxes.len
+
+// Writes 15 values for the shape of the band's box `i` into out (the same layout as
+// `kspage_web_box`).
+#export
+fn kspage_web_chrome_box(i: Sz, out: F32$@)
+  state.clear_out(out, 15)
+  if state.chrome == null || i < 0 || i >= state.chrome.boxes.len
+    return
+  b: = state.chrome.boxes.get(i)
+  out$ = b.rect.x
+  (out + 1)$ = b.rect.y
+  (out + 2)$ = b.rect.w
+  (out + 3)$ = b.rect.h
+  (out + 4)$ = b.font.size_px
+  (out + 5)$ = F32::b.font.weight
+  (out + 6)$ = 1.0 if b.font.italic else 0.0
+  state.color_into(out + 8, b.ink.color)
+  state.color_into(out + 10, b.ink.background)
+  (out + 12)$ = 1.0 if paint.drawn(b.ink.underline) else 0.0
+  (out + 13)$ = 1.0 if paint.drawn(b.ink.strike) else 0.0
+  (out + 14)$ = b.spacing
+
+// Writes the text and font name of the band's box `i`, separated by a tab, and returns the length.
+// There is one arena, so they travel separated (the same form as the texts before and after a
+// shown number).
+#export
+fn kspage_web_chrome_text(i: Sz): Sz
+  state.out.clear()
+  if state.chrome != null && i >= 0 && i < state.chrome.boxes.len
+    b: = state.chrome.boxes.get(i)
+    state.out.s(b.text).c('\t').s(b.font.family)
+  return state.out.len
+
+// Replaces the band's whole text. `which` 0 is the header, 1 the footer.
+// **It goes into the same record as typing** (undo restores it).
+#export
+fn kspage_web_set_chrome(which: I32, len: Sz): I32
+  ensure()
+  if len < 0 || len > input_cap
+    return 0
+  b: = doc.chrome_of(Chrome.footer if which != 0 else Chrome.header)
+  if b.inlines.len <= 0
+    return 0
+  ed.set_chrome(b.inlines.get(0), U8[]::{ .ptr = input@, .len = len })
+  return 1
+
+// Writes the band's text and returns the length. It is the text before replacement (with `{page}`
+// as it is).
+#export
+fn kspage_web_chrome_source(which: I32): Sz
+  ensure()
+  state.out.clear()
+  b: = doc.chrome_of(Chrome.footer if which != 0 else Chrome.header)
+  if b.inlines.len > 0
+    state.out.s(b.inlines.get(0).text())
+  return state.out.len

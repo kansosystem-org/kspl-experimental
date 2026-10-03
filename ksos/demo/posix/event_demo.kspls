@@ -1,0 +1,49 @@
+//< Event flags (a POSIX host)
+//<
+//< One coordinator waits twice on the bits that setter raises one tick apart: 1) .any holds once
+//< either bit0 or bit1 is set (an OR wait). 2) .all holds once both bit1 and bit2 are set (an AND
+//< wait), and clears those bits when it holds. Each time setter sets a bit, the waiters wake and
+//< check their condition again (wake-and-recheck).
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+import "std/io"
+
+$g_ev: sync.Event
+
+$tcb_co: Task
+$tcb_set: Task
+$stack_co: U8[65536]
+$stack_set: U8[65536]
+fn setter(_arg: Void$@): Void //< Set bit0, then bit1, then bit2, one tick apart
+  Task.delay(1)
+  g_ev.set(0x1)
+  io.out().s("[setter] set bit0\n")
+  Task.delay(1)
+  g_ev.set(0x2)
+  io.out().s("[setter] set bit1\n")
+  Task.delay(1)
+  g_ev.set(0x4)
+  io.out().s("[setter] set bit2\n")
+
+fn coordinator(_arg: Void$@): Void
+  io.out().s("[coord] wait ANY of {bit0,bit1}\n")
+  a: = g_ev.wait(0x3, .any, false)
+  io.out().s("[coord] ANY satisfied, bits=\{I32::a\}\n")
+  // setter sets bit0 first, so ANY holds on bit0 alone (bit1 is not set yet).
+  assert(a == 0x1, "event: ANY must return as soon as bit0 alone is set")
+  io.out().s("[coord] wait ALL of {bit1,bit2} (clear on exit)\n")
+  b: = g_ev.wait(0x6, .all, true)
+  io.out().s("[coord] ALL satisfied, bits=\{I32::b\}\n")
+  assert(b == 0x7, "event: ALL must see bit1 and bit2 together (bit0 still set)")
+  after: = g_ev.get()
+  io.out().s("[coord] bits after clear=\{I32::after\} (0x6 cleared, bit0 remains)\n")
+  assert(after == 0x1, "event: clear_on_exit must clear only the waited bits")
+
+fn main()
+  io.out().s("=== Kanso OS (POSIX port) — event flags demo ===\n")
+  g_ev.init()
+  // coordinator has the higher priority (2), so it runs first and blocks on the unmet condition.
+  tcb_co.create(U8$[]::stack_co, coordinator, null, 2, "coord")
+  tcb_set.create(U8$[]::stack_set, setter, null, 1, "setter")
+  task.start_scheduler()
+  io.out().s("=== scheduler finished (all tasks done) ===\n")

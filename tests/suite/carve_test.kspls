@@ -1,0 +1,287 @@
+#!/usr/bin/env -S ksplc run
+//< Holds a package's carving to its promise: a read-only copy that still works
+//<
+//< The copy's references still open what they named, and its own `make test` passes from a fresh
+//< clone.
+//< `ksdb` is carved as a person would carve it (`make carve`); every other package that builds
+//< from a copy has its references re-pointed and checked to land (`test-extract` checks the split
+//< and build). **Each check is a way the copy could mislead while looking complete.** **An
+//< address is checked to name a file the commit holds**, not to open on the web: where the
+//< repository is published is a person's decision.
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/sys"
+import "std/verdict"
+import "tests/support/carve_refs" as carve
+import "tests/support/carve_samples" as samples
+import "tests/support/harness"
+import "tests/support/harness_refs" as refs
+
+priv const pkg: U8[] = "ksdb" //< the package carved
+  //<
+  //< The one "What settles it as done" names in `docs/PLAN.md` (it covers every form of
+  //< re-pointing).
+
+priv fn git(at: U8[], args: U8[][]): verdict.Run_out //< one git, run in `at`
+  arena: = harness.arena()
+  $argv: = List<|U8[]|>.new(arena)
+  argv.push("git")
+  for a in args
+    argv.push(a)
+  return harness.run_in(argv.slice(), at)
+
+priv fn out_of(r: verdict.Run_out): U8[] //< a git's answer, its last line trimmed
+  arena: = harness.arena()
+  lines: = r.out.trim_end().lines(arena)
+  return "" if lines.len == 0 else lines.get(lines.len - 1).trim_spaces()
+
+priv fn carve_into(dest: U8[]): verdict.Run_out //< `make carve` of the package into `dest`
+  arena: = harness.arena()
+  return harness
+    .make(U8[][]::{ "carve", arena.text().s("PKG=\{pkg\}").take(),
+    arena.text().s("DEST=\{dest\}").take() })
+
+priv fn tree_at(at: U8[], rev: U8[], prefix: U8[], arena: Arena$@): carve.Tree //<
+  //< The files `rev` holds in the repository at `at`, each put under `prefix`
+  r: = git(at, U8[][]::{ "ls-tree", "-r", "--name-only", "-z", rev })
+  $paths: = List<|U8[]|>.new(arena)
+  for p in r.out.split(0x00U8, arena)
+    if p.len > 0
+      paths.push(p)
+  return carve.tree_of(paths.slice(), prefix, arena)
+
+priv fn blob(at: U8[], rev: U8[], path: U8[]): U8[] //<
+  //< a file as the commit holds it, byte for byte
+  arena: = harness.arena()
+  return git(at,
+    U8[][]::{ "cat-file", "blob", arena.text().s("\{rev\}:\{path\}").take() }).out
+
+priv fn is_url_byte(c: U8): Bool //< whether a byte can be part of an address written in text
+  return c > 0x20U8 && c != ')' && c != '`' && c != '"' && c != '\'' && c != '<' && c != '>'
+
+priv fn is_stop(c: U8): Bool //< whether a byte is punctuation a sentence puts after an address
+  return c == '.' || c == ',' || c == ';' || c == ':' || c == '!' || c == '?'
+
+priv fn check_addresses(path: U8[], text: U8[], base: U8[], pin: U8[], t: carve.Tree@, seen: Sz$@,
+  bad: List<|U8[]|>$@, arena: Arena$@) //<
+    //< Checks every address into the repository in one file of the copy
+    //<
+    //< Each must name a file, or a folder, that the commit holds.
+  for kind in U8[][]::{ "blob", "tree" }
+    head: = arena.text().s("\{base\}/\{kind\}/").take()
+    $from: Sz = 0
+    for
+      at: = text.sub_from(from).find_str(head)
+      if at < 0
+        break
+      start: = from + Sz::at + head.len
+      $end: = start
+      for end < text.len && is_url_byte(text[end])
+        end += 1
+      // A sentence may run on past the address; its stops are the sentence's.
+      for end > start && is_stop(text[end - 1])
+        end -= 1
+      from = end
+      seen$ += 1
+      rest: = text.sub(start, end - start)
+      hash: = rest.find_char('#')
+      named: = rest if hash < 0 else rest.sub(0, hash)
+      slash: = named.find_char('/')
+      commit: = "" if slash < 0 else named.sub(0, slash)
+      file: = "" if slash < 0 else named.sub_from(slash + 1)
+      holds: =
+        carve.has_dir(t, file) if kind.equals("tree") else carve.has_file(t, file)
+      if !commit.equals(pin) || !holds
+        bad.push(arena.text().s("\{path\}: \{base\}/\{kind\}/\{rest\}").take())
+
+priv fn packages_with_make(arena: Arena$@): List<|U8[]|> //<
+  //< The top-level folders carrying their own `Makefile`: the packages that build from a copy
+  //<
+  //< It is the set `make test-extract` builds.
+  $out: = List<|U8[]|>.new(arena)
+  for rel in harness.tracked_matching(U8[][]::{ "*/Makefile" })
+    dir: = sys.get_dir_name(rel)
+    if dir.find_char('/') < 0
+      out.push(dir)
+  return out
+
+fn main(): I32
+  arena: = harness.begin(256 * 1024 * 1024)
+  root: = harness.root()
+  // Caution: **Report a missing `git subtree`; do not skip it silently.** It ships in git's
+  // contributed commands, and a git built without them answers "not a git command".
+  probe: = git(root, U8[][]::{ "subtree", "-h" })
+  if probe.out.find_str("subtree split") < 0
+    verdict.skip_check("a package carves into a read-only copy", "`git subtree` is not installed")
+    return harness.finish()
+  // The rules first, on the table's own tree.
+  wrong: = samples.carve_sample_failures(arena)
+  verdict.check_list("the carving reads each shape of reference as it should",
+    samples.sample_count(), "samples", wrong@, "")
+  verdict.check("the landing check tells a reference left pointing out from one that lands",
+    samples.landing_fires(arena), "")
+  place: = harness.sandbox("carve") catch
+    return harness.fatal("the workspace cannot be made")
+  copy: = fs.join(place, "copy", arena)
+  made: = carve_into(copy)
+  if !verdict.check("`make carve` carves ksdb into a place of its own", made.code == 0, made.out)
+    return harness.finish()
+
+  // The commit the copy points at, and the history it stands on.
+  pin: = out_of(git(root, U8[][]::{ "rev-list", "-1", "HEAD", "--", pkg }))
+  msg: = git(copy, U8[][]::{ "log", "-1", "--format=%s", "main" }).out.trim_spaces()
+  head: = arena.text().s("Carve \{pkg\} from ").take()
+  cut: = msg.find_str(" at ")
+  base: =
+    msg.sub(head.len, cut - head.len) if msg.starts_with(head) && cut > 0 else ""
+  said: = msg.sub_from(cut + 4) if cut > 0 else ""
+  verdict.check("the copy's commit names the commit ksdb last changed in, and an address",
+    base.len > 0 && said.equals(pin), msg)
+  history: = out_of(git(copy, U8[][]::{ "rev-parse", "main^^{tree}" }))
+  at_pin: = arena.text().s("\{pin\}:\{pkg\}").take()
+  committed: = out_of(git(root, U8[][]::{ "rev-parse", at_pin }))
+  verdict.check("the history under the copy's commit ends in ksdb as committed",
+    history.len > 0 && history.equals(committed), history)
+  commits: = out_of(git(copy, U8[][]::{ "rev-list", "--count", "main^" }))
+  touched: = out_of(git(root, U8[][]::{ "rev-list", "--count", pin, "--", pkg }))
+  verdict.check("the copy carries every commit that touched ksdb, and no other",
+    commits.len > 0 && commits.equals(touched),
+    arena.text().s("\{commits\} in the copy, \{touched\} touching ksdb").take())
+
+  // A fresh clone builds and tests with nothing but a compiler and its `std`.
+  fresh: = fs.join(place, "fresh", arena)
+  cloned: = git(place, U8[][]::{ "clone", "-q", copy, fresh })
+  verdict.check("the copy clones", cloned.code == 0, cloned.out)
+  sys.set_env("KSPLC_STD_DIR", harness.std_dir())
+  sys.unset_env("KSPLC_PKG_SRC_DIR")
+  tested: = harness
+    .make(U8[][]::{ "-C", fresh, "test",
+    arena.text().s("KSPLC=\{harness.ksplc_exe()\}").take() })
+  verdict.check("a fresh clone of the copy passes its own `make test`", tested.code == 0,
+    tested.out)
+
+  // Every reference lands from the copy.
+  whole: = tree_at(root, pin, "", arena)
+  dirs: = carve.picked_dirs(whole@, arena)
+  inside: = arena.text().s("\{pkg\}/").take()
+  held: = tree_at(copy, "main", inside, arena)
+  $left: Sz = 0
+  $astray: = List<|U8[]|>.new(arena)
+  $addresses: Sz = 0
+  $unheld: = List<|U8[]|>.new(arena)
+  $differ: = List<|U8[]|>.new(arena)
+  $files: Sz = 0
+  listing: = git(copy, U8[][]::{ "ls-tree", "-r", "--name-only", "-z", "main" }).out
+  for path in listing.split(0x00U8, arena)
+    if path.len == 0 || path.equals(".gitattributes")
+      continue
+    files += 1
+    rel: = arena.text().s(inside).s(path).take()
+    text: = blob(copy, "main", path)
+    // The copy's file is the package's, with only its references out of the package re-pointed.
+    was: = blob(root, pin, rel)
+    if !refs.is_scanned(rel)
+      if !text.equals(was)
+        differ.push(path)
+      continue
+    if !text
+      .equals(carve.carve_text(rel, was, pkg, pin, base, whole@, dirs, arena).text)
+      differ.push(path)
+    check_addresses(path, text, base, pin, whole@, addresses@, unheld@, arena)
+    for r in carve.refs_of(rel, text, dirs, arena)
+      if r.cls == carve.in_code || r.cls == carve.in_link_text
+        continue
+      there: = carve.lands(r@, rel, text, whole@, arena)
+      if there.len == 0
+        continue
+      left += 1
+      here: = carve.lands(r@, rel, text, held@, arena)
+      if !here.equals(there)
+        astray
+          .push(arena.text()
+          .s("\{path\}: `\{r.text\}` names \{there\} here, and \{here\} in the copy").take())
+  verdict.check_list("every reference left as written lands where it did in the repository", left,
+    "references", astray@, "a reference leaving the package has to be re-pointed")
+  verdict.check_list("every re-pointed reference opens a file the commit holds", addresses,
+    "addresses", unheld@, "")
+  verdict.check_list("the copy holds ksdb's files, changed only where a reference leaves it", files,
+    "files", differ@, "")
+  $owned: Sz = 0
+  for p in git(root, U8[][]::{ "ls-tree", "-r", "--name-only", "-z", pin, "--", pkg }).out
+    .split(0x00U8, arena)
+    if p.len > 0
+      owned += 1
+  verdict.check("the copy holds every file of ksdb, and no other but its .gitattributes",
+    owned > 0 && owned == files,
+    arena.text().s("\{files\} in the copy, \{owned\} in ksdb").take())
+
+  // The attributes a clone checks out with.
+  attributes: = blob(copy, "main", ".gitattributes")
+  $foreign: = List<|U8[]|>.new(arena)
+  $lines: Sz = 0
+  for line in attributes.lines(arena)
+    t: = line.trim_spaces()
+    if t.len == 0 || t.starts_with("#")
+      continue
+    lines += 1
+    space: = t.find_char(' ')
+    pattern: = t if space < 0 else t.sub(0, space)
+    if pattern.find_char('/') >= 0
+      foreign.push(t)
+  verdict.check("the copy's .gitattributes pins its line ends as the repository's does",
+    attributes.find_str("* text=auto eol=lf") >= 0, attributes)
+  verdict.check_list("the copy's .gitattributes names no folder the copy does not hold", lines,
+    "lines", foreign@, "")
+
+  // Every package's re-pointed references land from its copy, read from the working tree so an
+  // edit is checked before it is committed.
+  $tracked: = harness.tracked() catch
+    return harness.fatal("git knows no files here")
+  now: = carve.tree_of(tracked.slice(), "", arena)
+  now_dirs: = carve.picked_dirs(now@, arena)
+  $every: Sz = 0
+  $lost: = List<|U8[]|>.new(arena)
+  for dir in packages_with_make(arena)
+    under: = arena.text().s("\{dir\}/").take()
+    $own: = List<|U8[]|>.new(arena)
+    for i in Range.asc(tracked.len)
+      if tracked.get(i).starts_with(under)
+        own.push(tracked.get(i).sub_from(under.len))
+    its: = carve.tree_of(own.slice(), under, arena)
+    for i in Range.asc(tracked.len)
+      rel: = tracked.get(i)
+      if !rel.starts_with(under) || !refs.is_scanned(rel)
+        continue
+      carved: = carve
+        .carve_text(rel, harness.read_under_root(rel), dir, "HEAD", base, now@, now_dirs, arena)
+        .text
+      for r in carve.refs_of(rel, carved, now_dirs, arena)
+        if r.cls == carve.in_code || r.cls == carve.in_link_text
+          continue
+        there: = carve.lands(r@, rel, carved, now@, arena)
+        if there.len == 0
+          continue
+        every += 1
+        here: = carve.lands(r@, rel, carved, its@, arena)
+        if !here.equals(there)
+          lost.push(arena.text().s("\{rel\}: `\{r.text\}` names \{there\}").take())
+  verdict.check_list("every package's references, re-pointed, land from its copy", every,
+    "references", lost@, "a shape the carving does not re-point stands in that file")
+
+  // Carved again, it adds nothing; carved elsewhere, it is the same commit.
+  tip: = out_of(git(copy, U8[][]::{ "rev-parse", "main" }))
+  again: = carve_into(copy)
+  verdict.check("carving the same state into the same place adds nothing",
+    again.code == 0 &&
+    out_of(git(copy, U8[][]::{ "rev-parse", "main" })).equals(tip) &&
+    again.out.find_str("already holds") >= 0, again.out)
+  other: = fs.join(place, "other", arena)
+  elsewhere: = carve_into(other)
+  verdict.check("carving it elsewhere gives the same commit",
+    elsewhere.code == 0 &&
+    out_of(git(other, U8[][]::{ "rev-parse", "main" })).equals(tip), elsewhere.out)
+  return harness.finish()

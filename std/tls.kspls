@@ -1,0 +1,127 @@
+//< A TLS client: an encrypted connection on top of a `std/net` socket
+//<
+//< **It covers client connections only** (`TLS_client_method`).
+//< Caution: **The security level does not depend on the system's configuration.** OpenSSL does the
+//< work, but openssl.cnf does not decide which protocol version it connects with.
+
+// ==========================================
+// The implementation is kspl_tls_* in hosted_tls.c (built only under `#cfg(tls)`); the LLVM
+// builds link the same C runtime.
+// ==========================================
+#cfg(tls)
+import "std/mem" + { dealloc }
+// Only the cfg(tls) code below uses alloc_as, so the import line carries the same cfg.
+import "std/net"
+
+extern "C"
+  fn kspl_net_raw_fd(handle: I64): I32 //<
+    //< Returns the raw OS fd inside the opaque handle of std/net.kspls (for SSL_set_fd and similar)
+
+// The functions that OpenSSL implements.
+// Caution: Put functions with a different cfg condition in a separate block
+// (kspl_net_raw_fd above is an ordinary socket API, which links even with TLS=0).
+#cfg(tls)
+extern "C"
+  fn kspl_tls_client_ctx_new(): I64
+  fn kspl_tls_ctx_free(ctx: I64)
+  fn kspl_tls_new(ctx: I64, fd: I32, hostname_ptr: U8@, hostname_len: Sz): I64
+  fn kspl_tls_connect(ssl: I64): I32
+  fn kspl_tls_verify_ok(ssl: I64): Bool
+  fn kspl_tls_read(ssl: I64, buf: U8$@, cap: Sz): I32
+  fn kspl_tls_write(ssl: I64, buf: U8@, len: Sz): I32
+  fn kspl_tls_free(ssl: I64)
+
+// SSL_read/SSL_write take the length as a C int, so a buf.len of 2^31 or more would become negative
+// in the cast. Partial I/O is already the contract (the caller loops), so clamping breaks nothing.
+priv const max_tls_io_len: Sz = 2147483647 // I32::MAX
+
+priv fn clamp_tls_io_len(len: Sz): Sz
+  return len if len <= max_tls_io_len else max_tls_io_len
+
+pub enum Tls_error //< why a secure connection could not be opened or used
+  connect_failed //< the underlying TCP connection failed
+  ctx_failed //< OpenSSL setup failed (SSL_CTX_new, SSL_new and similar)
+  handshake_failed //< SSL_connect (the handshake) failed
+  cert_verify_failed //< the handshake succeeded, but the certificate or host name did not verify
+  io_failed //< a send or a receive failed
+  unsupported //< the build did not use `make TLS=1` (the default build)
+
+priv fn transferred(n: I32): Sz?Tls_error //<
+  //< Turns the return value of an OpenSSL read or write (negative on failure) into a byte count
+  if n < 0
+    throw Tls_error.io_failed
+  return Sz::n
+
+pub struct Tls_stream //< a TCP connection with TLS on top, which owns its resources
+  priv tcp: net.Tcp_stream$@
+  priv ctx: I64
+  priv ssl: I64
+
+// The cleanup for a failure at or after the handshake, when both ssl and ctx exist.
+#cfg(tls)
+priv fn cleanup_ssl_ctx_tcp(ssl: I64, ctx: I64, tcp: net.Tcp_stream$@)
+  kspl_tls_free(ssl)
+  kspl_tls_ctx_free(ctx)
+  tcp.free()
+
+#cfg(tls)
+impl Tls_stream
+  pub fn connect( //< connects, then does the TLS handshake, verifying the certificate
+    host: U8[], //< the host name to connect to; SNI and the certificate check also use it
+    port: I32, //< the port on that host
+  ): Tls_stream$@?Tls_error
+    tcp: = net.Tcp_stream.connect(host, port) catch
+      throw Tls_error.connect_failed
+    ctx: = kspl_tls_client_ctx_new()
+    if ctx == 0
+      tcp.free()
+      throw Tls_error.ctx_failed
+    fd: = kspl_net_raw_fd(tcp.raw_handle())
+    ssl: = kspl_tls_new(ctx, fd, host.ptr, host.len)
+    if ssl == 0
+      kspl_tls_ctx_free(ctx)
+      tcp.free()
+      throw Tls_error.ctx_failed
+    if kspl_tls_connect(ssl) != 1
+      cleanup_ssl_ctx_tcp(ssl, ctx, tcp)
+      throw Tls_error.handshake_failed
+    if !kspl_tls_verify_ok(ssl)
+      cleanup_ssl_ctx_tcp(ssl, ctx, tcp)
+      throw Tls_error.cert_verify_failed
+
+    s: = mem.alloc_as<|Tls_stream|>()
+    s.tcp = tcp
+    s.ctx = ctx
+    s.ssl = ssl
+    return s
+
+  pub fn write( //< sends and returns how much was sent; a partial send is normal, so loop
+    r: Self$@,
+    buf: U8[], //< the bytes to send
+  ): Sz?Tls_error
+    return transferred(kspl_tls_write(r.ssl, buf.ptr, clamp_tls_io_len(buf.len)))
+
+  pub fn read( //< receives and returns how much arrived; 0 means the peer closed
+    r: Self$@,
+    buf: U8$[], //< where the bytes go
+  ): Sz?Tls_error
+    return transferred(kspl_tls_read(r.ssl, buf.ptr, clamp_tls_io_len(buf.len)))
+
+  pub fn free(r: Self$@) //< closes the connection and frees everything it owns
+    kspl_tls_free(r.ssl)
+    kspl_tls_ctx_free(r.ctx)
+    r.tcp.free()
+    dealloc(Void$@::r)
+
+// cfg(!tls): the default build. connect() always throws unsupported, so no Tls_stream@ exists and
+// read/write/free are not defined.
+#cfg(!tls)
+impl Tls_stream
+  pub fn connect( //< always fails with `unsupported`; build with `make TLS=1` to enable it
+    _host: U8[],
+    _port: I32,
+  ): Tls_stream$@?Tls_error
+    throw Tls_error.unsupported
+
+#cfg(tls)
+impl Tls_stream: Owned {} //< it owns its memory and frees it with `free()`

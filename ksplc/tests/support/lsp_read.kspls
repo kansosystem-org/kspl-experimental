@@ -1,0 +1,63 @@
+import "std/chars"
+import "std/ds" { List }
+import "std/json"
+import "std/jsonrpc"
+import "std/mem" { Arena }
+import "std/str" // `lines` and `starts_with`
+
+// ==========================================
+// The readers the LSP suite uses that **touch no client** — pure functions over a text or a
+// response, kept apart from `../suite/lsp_test.kspls` for its length; the reference goes one way,
+// from the suite into here. **The split is not by group of tests**: a group moved out would start
+// the language server a second time (the grounds are "Files near the limit and how they split" in
+// `../../README.md`).
+// ==========================================
+
+fn decl_line(text: U8[], decl: U8[], arena: Arena$@): Sz //<
+  //< The number of the line starting with `decl` (0-based)
+  //<
+  //< 0 if it is not found.
+  $i: Sz = 0
+  for line in text.lines(arena)
+    if line.starts_with(decl)
+      return i
+    i += 1
+  return 0
+
+fn col_in_line(text: U8[], decl: U8[], needle: U8[], arena: Arena$@): Sz //<
+  //< The column at which `needle` starts within that line (0 if none), so no column is hardcoded
+  for line in text.lines(arena)
+    if line.starts_with(decl)
+      at: = line.find_str(needle)
+      return at if at >= 0 else 0
+  return 0
+
+pub fn is_missing(v: json.Val): Bool //< whether the response is `null` (or missing)
+  //<
+  //< **A `null` is both "there is none" and "the supervisor answered instead"**, so whether content
+  //< came back is checked separately from whether a response came at all.
+  switch v case .null_val
+    return true
+  default
+    return false
+
+pub fn end_text(e: jsonrpc.Rpc_end): U8[] //< why no response came, in words
+  switch e case .timed_out
+    return "(the wait ran out)"
+  case .closed
+    return "(the peer closed the connection)"
+  case .broken
+    return "(the frame could not be read)"
+
+pub fn from_names(calls: List<|json.Val|>@, arena: Arena$@): List<|U8[]|> //<
+  //< The caller's name in each incoming call
+  $out: = List<|U8[]|>.new(arena)
+  for i in Range.asc(calls.len)
+    out.push(calls.get(i).get("from").get("name").as_str())
+  return out
+
+pub fn has_name(names: List<|U8[]|>@, want: U8[]): Bool //< whether `names` holds `want`
+  for i in Range.asc(names.len)
+    if names.get(i).equals(want)
+      return true
+  return false

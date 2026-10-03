@@ -1,0 +1,76 @@
+//< Reads the marks in a fixture's opening comment (not a suite)
+//<
+//< It reads the expectation marks from a source's opening comment.
+//< [`harness_expect.kspls`](harness_expect.kspls) runs them; this file only reads them.
+// ==========================================
+//   `// EXPECT:     <a substring>`       it must be contained in the output (write the same line
+//                                        N times to demand N places)
+//   `// EXPECT-NOT: <a substring>`       it must not be contained in the output
+//   `// ARGS:       <extra arguments>`   the arguments prefixed to the compiler
+// `EXPECT-NOT` is matched before `EXPECT`.
+// ==========================================
+import "ksplc/tests/support/harness"
+import "std/chars" // `trim_spaces`
+import "std/ds" { List }
+import "std/mem" as _mem // harness owns the arena (`harness.arena()`)
+import "std/str" { Str_builder }
+import "std/verdict"
+
+struct Markers
+  expect: List<|U8[]|>
+  deny: List<|U8[]|>
+  args: List<|U8[]|>
+
+fn check(name: U8[], expect: U8[][], deny: U8[][], out: U8[]): Bool //<
+  //< One check: the output holds every EXPECT and no EXPECT-NOT (`match_markers`)
+  fail: = match_markers(expect, deny, out)
+  return verdict.check(name, fail.len == 0, fail)
+
+fn match_markers(expect: U8[][], deny: U8[][], out: U8[]): U8[] //<
+  //< Matches EXPECT / EXPECT-NOT against the output
+  //<
+  //< Empty where they agree, and where they differ a string saying what is missing or extra.
+  //< Caution: **Check both directions**: too strict and too loose are each caught by only one.
+  arena: = harness.arena()
+  $b: = Str_builder.new()
+  defer b.free()
+  for i in Range.asc(expect.len)
+    want: = expect[i]
+    // Writing the same string N times demands **N places or more**; a substring test passes one.
+    $need: Sz = 0
+    $first: Sz = expect.len
+    for j in Range.asc(expect.len)
+      if expect[j].equals(want)
+        need += 1
+        first = j if j < first else first
+    if first != i
+      continue // the same string was counted where it first appeared
+    got: = out.count_str(want)
+    if got < need
+      b.s("it came out at \{got\} places, and the expectation is \{need\} or more: \{want\}\n")
+  for bad in deny
+    if out.find_str(bad) >= 0
+      b.s("it must not come out: \{bad\}\n")
+  if b.len == 0
+    return ""
+  b.s("--- the actual output ---\n").s(out)
+  return arena.dup_str(b.slice())
+
+fn markers(body: U8[]): Markers
+  arena: = harness.arena()
+  $m: = Markers::{ .expect = List<|U8[]|>.new(arena), .deny = List<|U8[]|>.new(arena),
+    .args = List<|U8[]|>.new(arena) }
+  for raw in body.lines(arena)
+    ln: = raw.trim_spaces()
+    if !ln.starts_with("//")
+      continue
+    text: = ln.sub_from(2).trim_spaces()
+    if text.starts_with("EXPECT-NOT:")
+      m.deny.push(text.sub_from(11).trim_spaces())
+    else if text.starts_with("EXPECT:")
+      m.expect.push(text.sub_from(7).trim_spaces())
+    else if text.starts_with("ARGS:")
+      for a in text.sub_from(5).trim_spaces().split(' ', arena)
+        if a.len > 0
+          m.args.push(a)
+  return m

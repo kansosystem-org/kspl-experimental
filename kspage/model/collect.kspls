@@ -1,0 +1,64 @@
+//< The things collected into a block and listed in order
+//<
+//< A table of contents, a list of notes, a chart.
+//< **None of them goes into the document** (each is built every time it is laid out). **Do not
+//< store the kind in two marks**, as in [`marker.kspls`](marker.kspls). The layout knows what is
+//< collected; this file holds only which setting collects, and its name.
+//< Note: It is split from [`style.kspls`](style.kspls) to keep each file under 1000 lines.
+import "std/str"
+
+enum Collect //< a thing collected into a block and laid out in order
+  //<
+  //< None of them goes into the document (see the file header); a style saves which it is.
+  //< Caution: **Do not rename a variant**: its name is the spelling a saved text holds (`make test`
+  //< pins every one).
+  none
+  contents //< the headings listed in order (a table of contents)
+  notes //<
+    //< The notes listed in order. **The numbers are given out at layout time.**
+  bars //< a range's values drawn as bars. **The block holds the range** (`Block.chart`)
+  lines //< a range's values drawn as a line
+  source //<
+    //< The text of the symbol the source points at (the window)
+    //<
+    //< **The block holds what it points at** (`Block.aim`).
+    //< **The text does not go into the document** (it is cut from the borrowed text at layout).
+  imports //<
+    //< A figure of what the pointed-at source imports (boxes and lines)
+    //<
+    //< The block holds what it points at, as for `Collect.source`.
+    //< **Neither the boxes nor the lines go into the document** (they are built from the borrowed
+    //< text's `import`s). **They cannot be moved by hand.**
+
+impl Collect
+  fn same_collect(a: Self, b: Collect): Bool //< whether the way of collecting is the same
+    //<
+    //< Caution: **Do not compare two enums directly** (that breaks once one holds a value).
+    //< Compare the names.
+    return a.variant_name().equals(b.variant_name())
+
+  fn charted(c: Self): Bool //<
+    //< Whether that way of collecting draws a picture from a range's values (bars or a line)
+    switch c case .bars
+      return true
+    case .lines
+      return true
+    case .none, .contents, .notes, .source, .imports {}
+    return false
+
+fn collect_from(name: U8[]): Collect //< reads a way of collecting from a name
+  //<
+  //< **An unknown name means "collect nothing".**
+  if name.equals("contents")
+    return Collect.contents
+  if name.equals("notes")
+    return Collect.notes
+  if name.equals("bars")
+    return Collect.bars
+  if name.equals("lines")
+    return Collect.lines
+  if name.equals("source")
+    return Collect.source
+  if name.equals("imports")
+    return Collect.imports
+  return Collect.none

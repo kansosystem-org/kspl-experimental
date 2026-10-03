@@ -1,0 +1,487 @@
+//< Reads **what a citation carries** besides its path (not a suite)
+//<
+//< It carries one of two things: a section number (`§8.1.1`) or a heading's name (`"…"`); with
+//< either, **move the target and only the reference goes stale**.
+//< Caution: **Do not forget that there are two word orders.** A name comes before the citation
+//< (`"the name" in `path``) or after it (`` `path`'s "the name" ``).
+//< Picking up the paths belongs to `find_paths` in `tests/support/harness_refs.kspls`; this file
+//< reads only what comes after and before.
+import "std/chars" as std_chars
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "tests/support/harness_refs" { Hit, find_paths }
+import "tests/support/harness_text" as htext
+
+// A reference carrying a section number: `<doc>… §12` and `<doc>… chapter 8`, with up to
+// `section_window` characters between.
+// Caution: **Do not keep the list of folders here** — the caller passes it from `doc_dirs`.
+
+// The names of documents written without a folder (meaning a file in the same folder).
+priv const section_bares: U8[][8] = ::{ "README.md", "DESIGN.md", "CONTRIBUTING.md",
+  "SPEC-language.md", "SPEC-local-server.md", "SPEC-notation.md", "SPEC-tools.md", "PLAN.md" }
+
+priv const section_window: Sz = 40 //<
+  //< How far after the citation the number may be, in **characters**
+  //<
+  //< Not bytes: a character outside ASCII takes several, shrinking a byte window. **The ASCII `.`
+  //< is not a stop**; a few references are read across one.
+  //< Caution: **Do not simply add the stop**: `e.g. 8.2` also has a `.` and a space, so deciding
+  //< what ends a sentence first needs samples that show the check can fire.
+
+fn read_section_number(text: U8[], i: Sz, arena: Arena$@): U8[] //<
+  //< Reads `§?\s*(\d+(\.\d+)*)` from i in text
+  //<
+  //< The number read (empty where there is none).
+  $j: = i
+  if j + 2 <= text.len && text.sub(j, 2).equals("§")
+    j += 2
+  // **The space here includes a newline too**, as Python's `\s*` does: a number at the start of
+  // the line after the citation is picked up.
+  for j < text.len &&
+    (text[j] == ' ' || text[j] == '\t' || text[j] == '\n' || text[j] == '\r')
+    j += 1
+  if j >= text.len || !text[j].is_digit()
+    return ""
+  // **A digit inside a word is not a section number** (`RP2040`'s `2040` after a citation).
+  // Caution: **Check only ASCII word characters.** `is_word_before` (`is_word_cp`) counts every
+  // byte at or above 0x80 as a word character, rejecting even `§9.1.4`'s `9` and reading `1.4`,
+  // so the check **fails pointing at a different section**.
+  if j > 0 && text[j - 1] < 0x80U8 && (text[j - 1].is_alnum() || text[j - 1] == '_')
+    return ""
+  start: = j
+  for j < text.len && text[j].is_digit()
+    j += 1
+  for j + 1 < text.len && text[j] == '.' && text[j + 1].is_digit()
+    j += 1
+    for j < text.len && text[j].is_digit()
+      j += 1
+  return arena.dup_str(text.sub(start, j - start))
+
+priv const sec_joiners: U8[][2] = ::{ " in ", " of " } //<
+  //< The joiners that tie a section number before a path
+  //<
+  //< English often reverses the order: the number first, the path after (`3.2.5 in
+  //< `docs/DESIGN.md``). Without reading before the path, an English reference **goes green on a
+  //< smaller count** (as with symbols; the caution on `sym_joiners` in `docref_scan.kspls`).
+
+priv const sec_not_prefix: U8[][1] = ::{ "Principle" } //<
+  //< The words that mark a number before a joiner as not a section number
+  //<
+  //< **`Principle N` is not a section number**: another check watches it, and picked here
+  //< `Principle 8 in [`DESIGN.md`]` becomes "there is no §8 in DESIGN.md".
+
+priv fn read_section_before(text: U8[], at: Sz, arena: Arena$@): U8[] //<
+  //< Returns the section number an English joiner ties before `at`, or empty
+  //<
+  //< **Pick up only the form where the joiner comes right after the number.** A wide window reads
+  //< a digit that merely comes before the path (`RP2040`, `IPv4`, `13 times`) as a section number.
+  // Step back over the decoration before a citation (`` ` `` and `[`).
+  $k: = at
+  for k > 0 && (text[k - 1] == '`' || text[k - 1] == '[')
+    k -= 1
+  for j in sec_joiners
+    if k < j.len || !text.sub(k - j.len, j.len).equals(j)
+      continue
+    end: = k - j.len
+    $s: = end
+    for s > 0 &&
+      (text[s - 1].is_digit() ||
+      (text[s - 1] == '.' && s >= 2 && text[s - 2].is_digit()))
+      s -= 1
+    if s >= end || !text[s].is_digit()
+      continue
+    // **A digit inside a word is not a number** (`RP2040 in `README.md``). Only ASCII word
+    // characters are checked (the reason is at `read_section_number`).
+    if s > 0 && text[s - 1] < 0x80U8 && (text[s - 1].is_alnum() || text[s - 1] == '_')
+      continue
+    $w: = s
+    for w > 0 && text[w - 1] == ' '
+      w -= 1
+    $cited: = false
+    for pre in sec_not_prefix
+      if w >= pre.len && text.sub(w - pre.len, pre.len).equals(pre)
+        cited = true
+    if !cited
+      return arena.dup_str(text.sub(s, end - s))
+  return ""
+
+priv fn skip_link_target(text: U8[], at: Sz): Sz //< the position past a whole `](…)` run
+  //<
+  //< It stays at `at` where there is nothing to skip.
+  //< Caution: **Skip the form holding one path twice**: `[`X.md`](X.md)` holds it as text and
+  //< target, so **one reference looks like two**. The backtick before it is included in what is
+  //< skipped.
+  $j: = at
+  for j < text.len && text[j] == '`'
+    j += 1
+  if j + 2 > text.len || !text.sub(j, 2).equals("](")
+    return at
+  $c: = j + 2
+  for c < text.len && text[c] != ')'
+    c += 1
+  return c + 1 if c < text.len else c
+
+fn find_sections(text: U8[], dirs: U8[][], arena: Arena$@): List<|Hit|>
+  $out: = List<|Hit|>.new(arena)
+  paths: =
+    find_paths(text, dirs, U8[][]::{ "md" }, false, U8[][]::section_bares, arena)
+  // Caution: **Do not cross a range already read.** A citation inside what was read up to the
+  // number is dropped from the next candidates, as Python's finditer does (else the counts differ).
+  $taken: Sz = 0
+  for p in paths
+    // Where a `#` comes right after the `.md`, it is not a section number.
+    if p.at < taken || (p.end < text.len && text[p.end] == '#')
+      continue
+    before: = read_section_before(text, p.at, arena)
+    if before.len > 0
+      out.push(Hit::{ .at = p.at, .end = p.end, .text = p.text, .extra = before })
+      taken = skip_link_target(text, p.end)
+      continue
+    $j: = p.end
+    $chars: Sz = 0
+    for chars <= section_window && j <= text.len
+      num: = read_section_number(text, j, arena)
+      if num.len > 0
+        out.push(Hit::{ .at = p.at, .end = p.end, .text = p.text, .extra = num })
+        // Caution: **Do not read `j` as the start of the number**: it is where the `§` starts, so
+        // on `§ 6.6` `j + num.len` lands **inside the number** and the next citation reads a digit
+        // beyond.
+        $num_at: = j
+        for num_at + num.len <= text.len && !text.sub(num_at, num.len).equals(num)
+          num_at += 1
+        taken = num_at + num.len
+        // The `](…)` after the number is skipped too, or the second citation reads **a digit in
+        // the prose beyond** (`](DESIGN.md)). The ceiling is 256` becoming "there is no §256").
+        taken = skip_link_target(text, taken)
+        break
+      // The window stops at a newline (only the space right before the number may be crossed) and
+      // at `](`: beyond it is the link's target, whose **anchor digits would read as a section
+      // number** (`](SPEC-language.md#84-…)` becoming "there is no §84"). The ASCII `.` is not a
+      // stop (the caution on `section_window`).
+      if j >= text.len || text[j] == '\n' ||
+        (j + 2 <= text.len && text.sub(j, 2).equals("]("))
+        break
+      j += htext.cp_len(text[j])
+      chars += 1
+  return out
+
+// ==========================================
+// The "heading's name" carried alongside a citation
+// **The number alone is not enough**: a reference by name has none.
+// Caution: **Do not limit it to headings**: a name may point at a table row's heading or a bold
+// subheading.
+// ==========================================
+
+priv fn quote_body_ok(body: U8[]): Bool //< whether a quotation's body passes as a name
+  //<
+  //< Caution: **Do not accept a body starting with punctuation**: a source string's closing `"`
+  //< read as an opening makes **everything up to the next argument look like a name**. A backtick
+  //< or `[` may start one. **Nor an over-long body**: that is a quoted sentence.
+  if body.len < 2 || body.len > 120
+    return false
+  for b in body
+    if b == '\n'
+      return false
+  c: = body[0]
+  if c >= 0x80U8
+    return true
+  return c.is_alnum() || c == '`' || c == '['
+
+priv fn skip_wrap(text: U8[], at: Sz): Sz //<
+  //< The position past `at`'s newline and the following line's indent and comment marker
+  //<
+  //< **Cross the whole comment marker**, or it lands inside the folded name. **It is not always two
+  //< characters**: `///` and `//<` are comments too.
+  $j: = at + 1
+  for j < text.len && (text[j] == ' ' || text[j] == '\t')
+    j += 1
+  if j + 2 <= text.len && text.sub(j, 2).equals("//")
+    for j < text.len && text[j] == '/'
+      j += 1
+    if j < text.len && text[j] == '<'
+      j += 1
+  else if j < text.len && (text[j] == '*' || text[j] == '#')
+    j += 1
+  for j < text.len && (text[j] == ' ' || text[j] == '\t')
+    j += 1
+  return j
+
+priv fn skip_wrap_back(text: U8[], at: Sz): Sz //<
+  //< Where a wrap is in front of `at`, the position of the previous line's newline
+  //<
+  //< Where it is not a wrap, `at` as it is. **The backward reader needs it too**: English's
+  //< "name in `path`" often wraps **between the two**, or it passes unread.
+  $j: = at
+  for j > 0 && (text[j - 1] == ' ' || text[j - 1] == '\t')
+    j -= 1
+  // **Cross the whole marker, as `skip_wrap` does forwards**: `//<` and `///` are comments too.
+  m: = j - 1 if j > 0 && text[j - 1] == '<' else j
+  if m >= 2 && text.sub(m - 2, 2).equals("//")
+    j = m - 2
+    for j > 0 && text[j - 1] == '/'
+      j -= 1
+  else if j > 0 && (text[j - 1] == '*' || text[j - 1] == '#')
+    j -= 1
+  for j > 0 && (text[j - 1] == ' ' || text[j - 1] == '\t')
+    j -= 1
+  return j - 1 if j > 0 && text[j - 1] == '\n' else at
+
+priv fn crossed_lines(seen: U8[]): Sz //< how many lines were crossed
+  //<
+  //< Caution: **Use it in the backward reader**: searching back for an opening has **nothing to
+  //< stop it** and would run to the start of the file.
+  $n: Sz = 0
+  for b in seen
+    if b == '\n'
+      n += 1
+  return n
+
+priv fn fold_one_wrap(body: U8[], arena: Arena$@): U8[] //<
+  //< Folds a body running across lines into one line
+  //<
+  //< Caution: **If the newline rejection is dropped from `quote_body_ok`, restore it here.**
+  //< **Drop the comment marker at the start of the continuation line too**, or it lands inside the
+  //< name as **a name in no document**.
+  // **Drop the escape at a name's end**: cited from a source string, the closing quote is `\"`,
+  // and the lone `\` left puts the name **in no document**. No heading ends in `\`.
+  if body.len > 0 && body[body.len - 1] == '\\'
+    return fold_one_wrap(body.sub(0, body.len - 1), arena)
+  $nl: Sz = -1
+  for i in Range.asc(body.len)
+    if body[i] == '\n'
+      nl = i
+      break
+  if nl < 0
+    return body
+  j: = skip_wrap(body, nl)
+  if j >= body.len
+    return ""
+  // **A space belongs at a wrap only between words**: a wrap leaves no trace, so a space is added
+  // only where both sides are ASCII. **Fix a failing name** by keeping it on one line; widening
+  // the guess breaks correct ones.
+  head: = body.sub(0, nl)
+  tail: = body.sub(j, body.len - j)
+  // **Where one side is empty there is no character before it or after it** (a quote ending a
+  // line, as in JSON).
+  $gap: U8[] = ""
+  if head.len > 0 && tail.len > 0 && head[head.len - 1] < 0x80U8 && tail[0] < 0x80U8
+    gap = " "
+  // **Fold every wrap, not only the first**: a long name can span three lines, and one left
+  // unfolded makes `quote_body_ok` drop the citation without a word.
+  return fold_one_wrap(arena.text().s(head).s(gap).s(tail).take(), arena)
+
+priv fn opens_at_wrap(body: U8[]): Bool //<
+  //< Whether the body starts at the line break — only blanks come before the wrap
+  //<
+  //< **Then the quote found closes something else**: a wrapped name starts on the citation's line,
+  //< so a body starting at the wrap means a literal's **closing** quote was taken, reading code as
+  //< the name.
+  for b in body
+    if b == '\n'
+      return true
+    if b != ' ' && b != '\t'
+      return false
+  return false
+
+priv fn read_quoted(text: U8[], at: Sz, arena: Arena$@): U8[] //< reads a `"…"` from `at`
+  //<
+  //< The name read (empty where there is none).
+  if at >= text.len || text[at] != '"'
+    return ""
+  open: Sz = 1
+  close: U8[] = "\""
+  $j: = at + open
+  // **Where a name is wrapped in a link, skip the target before searching for the close.**
+  // Caution: **Do not cross a line** (with an unclosed `[`, everything after it looks like the
+  // name).
+  if j < text.len && text[j] == '['
+    $c: = j
+    for c + 2 <= text.len && text[c] != '\n' && !text.sub(c, 2).equals("](")
+      c += 1
+    if c + 2 <= text.len && text[c] == ']'
+      for c < text.len && text[c] != '\n' && text[c] != ')'
+        c += 1
+      j = c
+  for j < text.len
+    if j + close.len <= text.len && text.sub(j, close.len).equals(close)
+      raw: = text.sub(at + open, j - (at + open))
+      if opens_at_wrap(raw)
+        return ""
+      body: = fold_one_wrap(raw, arena)
+      return arena.dup_str(body) if quote_body_ok(body) else ""
+    j += htext.cp_len(text[j])
+  return ""
+
+priv fn joiner_before(text: U8[], k: Sz, j: U8[]): Sz //<
+  //< Whether the joiner `j` comes before the citation
+  //<
+  //< Where it does, the position the name ends at; -1 where it does not. **A wrap stands in for the
+  //< joiner's trailing space** (`… in` at a line's end), so a crossed wrap matches one space
+  //< shorter.
+  if k >= j.len && text.sub(k - j.len, j.len).equals(j)
+    return k - j.len
+  w: = skip_wrap_back(text, k)
+  if w == k
+    return -1
+  head: = j.sub(0, j.len - 1)
+  if w < head.len || !text.sub(w - head.len, head.len).equals(head)
+    return -1
+  return w - head.len
+
+priv fn read_quoted_before(text: U8[], at: Sz, arena: Arena$@): U8[] //<
+  //< Reads the name placed before the citation (the `"name" in `path`` order)
+  //<
+  //< The name read (empty where there is none).
+  //< Caution: **Do not read only after the citation**: this order is common, and a smaller count
+  //< cannot be told from green (the caution on `sec_joiners` above).
+  $k: = at
+  for k > 0 && (text[k - 1] == '`' || text[k - 1] == '[')
+    k -= 1
+  for j in sec_joiners
+    end: = joiner_before(text, k, j)
+    if end < 0
+      continue
+    $body: U8[] = ""
+    if end >= 1 && text[end - 1] == '"'
+      $s: = end - 1
+      for s > 0 && text[s - 1] != '"' && crossed_lines(text.sub(s, end - 1 - s)) < 3
+        s -= 1
+      if s > 0 && text[s - 1] == '"'
+        body = text.sub(s, end - 1 - s)
+    folded: = fold_one_wrap(body, arena)
+    if quote_body_ok(folded)
+      return arena.dup_str(folded)
+  return ""
+
+// Picks up the name carried with a citation. `extra` is the name and `text` is the document's
+// path.
+// Caution: **Do not use a wide window.** A quotation mark that merely comes near the citation (a
+// shell's `"$PWD"`, an emphasis) is read as a name; only the joining characters are crossed.
+priv const quote_joiners: U8[][7] = ::{ " ", "`", "'", "s", ",", ")", "]" }
+
+priv fn skip_quote_joiners(text: U8[], at: Sz): Sz //<
+  //< Whether the name is reached from `at` crossing only joining characters
+  //<
+  //< The position reached (0 where it is not).
+  $j: = at
+  $steps: Sz = 0
+  $wrapped: = false
+  for steps <= 8 && j < text.len
+    if text[j] == '"'
+      return j
+    // Caution: **One wrap must be crossable.** The line often wraps between the citation and the
+    // name, so the name alone on the next line is common. Stop here and **that reference passes
+    // unread**: an edit that shortens a name silently drops it from the check.
+    if text[j] == '\n' && !wrapped
+      j = skip_wrap(text, j)
+      wrapped = true
+      steps += 1
+      continue
+    w: = htext.cp_len(text[j])
+    $ok: = false
+    for t in quote_joiners
+      if w == t.len && text.sub(j, w).equals(t)
+        ok = true
+    if !ok
+      return 0
+    j += w
+    steps += 1
+  return 0
+
+fn step_dir(text: U8[], at: Sz, arena: Arena$@): U8[] //<
+  //< The `working-directory:` of the workflow step holding the position; empty where it names none
+  //<
+  //< **A step's command runs from there**, so its paths are read from there. The step is the `- `
+  //< item found climbing out of the keys the position is nested in; **climb only through keys**,
+  //< since a line under a job's own key belongs to no step.
+  $starts: = List<|Sz|>.new(arena)
+  starts.push(0)
+  for i in Range.asc(text.len)
+    if text[i] == '\n'
+      starts.push(i + 1)
+  $k: Sz = 0
+  for j in Range.asc(starts.len)
+    if starts.get(j) <= at
+      k = j
+  $head: I64 = -1
+  if is_item(line_of(text, starts@, k))
+    head = k
+  $want: = indent_of(line_of(text, starts@, k))
+  $j: = k
+  for head < 0 && j > 0 && want > 0
+    j -= 1
+    l: = line_of(text, starts@, j)
+    t: = l.trim_spaces()
+    if t.len == 0 || t.starts_with("#") || indent_of(l) >= want
+      continue
+    if is_item(l)
+      head = j
+    else
+      want = indent_of(l)
+  if head < 0
+    return ""
+  top: = indent_of(line_of(text, starts@, Sz::head))
+  for n in Range.new(Sz::head, starts.len, 1)
+    l: = line_of(text, starts@, n)
+    t: = l.trim_spaces()
+    if n > Sz::head && t.len > 0 && !t.starts_with("#") && indent_of(l) <= top
+      break
+    key: = t.strip_prefix("- ").trim_spaces() if n == Sz::head else t
+    if key.starts_with(step_dir_key)
+      return unquoted(key.sub_from(step_dir_key.len).trim_spaces())
+  return ""
+
+priv const step_dir_key: U8[] = "working-directory:"
+
+priv fn line_of(text: U8[], starts: List<|Sz|>@, j: Sz): U8[] //< line j, its `\r` dropped
+  end: = text.len if j + 1 >= starts.len else starts.get(j + 1) - 1
+  return text.sub(starts.get(j), end - starts.get(j)).strip_suffix("\r")
+
+priv fn indent_of(line: U8[]): Sz //< the spaces a line starts with
+  $n: Sz = 0
+  for n < line.len && line[n] == ' '
+    n += 1
+  return n
+
+priv fn is_item(line: U8[]): Bool //< whether a YAML line starts a list item
+  t: = line.trim_spaces()
+  return t.equals("-") || t.starts_with("- ")
+
+priv fn unquoted(value: U8[]): U8[] //< a YAML scalar with the quotes around it dropped
+  if value.len >= 2 && (value[0] == '"' || value[0] == '\'') &&
+    value[value.len - 1] == value[0]
+    return value.sub(1, value.len - 2)
+  return value
+
+fn find_doc_quotes(text: U8[], dirs: U8[][], arena: Arena$@): List<|Hit|> //<
+  //< Finds each quoted name cited together with the path of a document or a source
+  //<
+  //< Caution: **A source file must be a target too, not only documents.** A check is cited by its
+  //< own verdict line (`` `run_test.kspls`'s "That cc is not started many times…" ``); keyed on
+  //< `.md` alone **none is read**, and a rename leaves it silently dangling. The narrow joiners
+  //< keep code's literals from pairing.
+  $out: = List<|Hit|>.new(arena)
+  // **The longer extension comes first**: `find_paths` stops at the first entry that fits, so
+  // `kspl` first cuts every default-notation citation a byte short.
+  paths: =
+    find_paths(text, dirs, U8[][]::{ "md", "kspls", "kspl", "js", "mjs", "py" }, false,
+    U8[][]::section_bares, arena)
+  // **The section-number side's two workarounds are not needed here**: the read after a path
+  // stops at `(`, and on the target side no joiner comes before, so **only one of the two ever
+  // reaches a name**; and for a link with an anchor, the read before still finds the document.
+  // Caution: **Add `(` to `quote_joiners` and the workaround is needed here again** (one reference
+  // looks like two).
+  for p in paths
+    before: = read_quoted_before(text, p.at, arena)
+    if before.len > 0
+      out.push(Hit::{ .at = p.at, .end = p.end, .text = p.text, .extra = before })
+      continue
+    at: = skip_quote_joiners(text, p.end)
+    if at == 0
+      continue
+    q: = read_quoted(text, at, arena)
+    if q.len > 0
+      out.push(Hit::{ .at = p.at, .end = p.end, .text = p.text, .extra = q })
+  return out

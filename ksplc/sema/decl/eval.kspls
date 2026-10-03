@@ -1,0 +1,582 @@
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/literal" as base_literal
+import "ksplc/sema/decl/layout" as sema_decl_layout
+import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
+import "ksplc/sema/session/import_table" as sema_session_import_table
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" { Sema_symbol }
+import "std/chars" // testing and slicing single characters
+import "std/ds" { Map }
+import "std/str"
+
+impl U8[]
+  priv fn parse_int_literal(r: U8[], node: Ast_node$@, c: Sema_ctx$@): I64?Sema_error //<
+    //< Reads an integer literal as I64; going outside I64's range is an immediate error
+    //<
+    //< Wrapped silently, an array size or a generic bound reaches Lower/Gen as a smaller, wrong
+    //< value. A per-type range (300 into a `U8`) is check_literal_bounds's job in
+    //< sema/body/literal.kspls. A leading `-` comes from substituting a const generic's value.
+    is_neg: = r.len > 0 && r.ptr$ == '-'
+    lit: = (r.sub_from(1) if is_neg else r).parse_int_literal_u64()
+    // Set the upper limit by **the literal's type**: `0xFFFFFFFFFFFFFFFFU64` is correct past
+    // I64::MAX and is carried as I64's bit pattern.
+    is_u64: =
+      c.env.get_primitive_bit_size(node.type_id) >= 64 && c.env.is_unsigned(node.type_id)
+    limit: U64 = 18446744073709551615U64 if is_u64 else 9223372036854775807U64
+    if lit.overflow || lit.value > limit
+      if !c.suppress_errors
+        c.err(node, "integer literal is too large for a compile-time constant expression")
+      throw .invalid_argument
+    signed_val: = I64::lit.value
+    return -signed_val if is_neg else signed_val
+
+impl Sema_ctx
+  fn fold_quietly(r: Self$@, node: Ast_node$@, narrow: Bool): I64?Sema_error //<
+    //< Folds a constant expression with its diagnostics discarded, narrowed to I32 where `narrow`
+    //<
+    //< **Every quiet fold goes through here.** The suppression flag and the error count are put
+    //< back on every way out, so a fold that fails leaves no trace.
+    old_err: = r.diags.counts.errors
+    old_sup: = r.suppress_errors
+    r.suppress_errors = true
+    defer
+      r.diags.counts.errors = old_err
+      r.suppress_errors = old_sup
+    if narrow
+      return I64::node.eval_constexpr(r)?
+    return node.eval_constexpr_wide(r)?
+
+  fn eval_constexpr_quiet(r: Self$@, node: Ast_node$@, dflt: I32): I32 //<
+    //< Evaluates a constant expression with errors suppressed, returning dflt on failure
+    return r.try_eval_constexpr(node).unwrap_or(dflt)
+
+  fn eval_attribute_arg(r: Self$@, n: Ast_node$@, name: U8[]): I32 //<
+    //< Folds and returns the N of `#name(N)`
+    //<
+    //< Returns 0 where the attribute is absent. The value's shape is checked only in
+    //< `sema/decl/attrs.kspls`.
+    if attr: = n.get_attribute(name)
+      arg_node: = attr.safe_get_child(1)
+      return r.eval_constexpr_quiet(arg_node, 0) if arg_node != null else 0
+    return 0
+
+  fn try_eval_constexpr(r: Self$@, node: Ast_node$@): Option<|I32|> //<
+    //< The same quiet evaluation, but **it tells whether it folded**
+    //<
+    //< Caution: Use this where the value becomes a name (a type argument's canonical name):
+    //< eval_constexpr_quiet's default cannot be told apart from a fold that yields the same value.
+    v: = r.fold_quietly(node, true) catch
+      return Option<|I32|>.none
+    return Option<|I32|>.some(I32::v)
+
+  fn try_eval_constexpr_wide(r: Self$@, node: Ast_node$@): Option<|I64|> //<
+    //< The same quiet fold, not narrowed to I32
+    //<
+    //< **Only code that writes values out uses it** (`--emit-decls`'s `const`, a global's
+    //< initializer on LLVM), so `1U32 << 31` survives.
+    v: = r.fold_quietly(node, false) catch
+      return Option<|I64|>.none
+    return Option<|I64|>.some(v)
+
+priv const i64_max_val: I64 = 9223372036854775807I64 //< i64's boundaries
+  //<
+  //< The lower one is built as `-(2^63 - 1) - 1`: the literal 2^63 does not fit in I64. The `I64`
+  //< suffix keeps it clear of the rule for a `-`'s left-hand literal in sema/body/binary.kspls.
+priv const i64_min_val: I64 = -9223372036854775807I64 - 1
+
+// Fits the folded result of an addition, subtraction or multiplication into the operands' width.
+// **A signed result that does not fit is an error** (`I32`'s `2147483647 + 1` fits i64; in C it
+// is undefined behaviour).
+// Caution: **Do not send a shift through here.** `1 << 31` is the correct way to set a bit (the
+// width is checked against the shift amount).
+priv fn fit_or_report(r: Ast_node$@, c: Sema_ctx$@, v: I64, bits: I32, is_uns: Bool):
+  I64?Sema_error
+  if is_uns
+    return fit_result(v, bits, is_uns)
+  if bits < 64
+    limit: I64 = 1I64 << I64::(bits - 1)
+    if v >= limit || v < -limit
+      return r.report_overflow(c)?
+  return v
+
+priv fn fit_result(v: I64, bits: I32, is_uns: Bool): I64 //< fits a result into the operands' type
+  //<
+  //< Unsigned wraps mod 2^bits, as in the generated C; signed is returned unchanged (the caller
+  //< rejects overflow); 64-bit is I64's bit pattern unchanged.
+  if !is_uns || bits >= 64
+    return v
+  return I64::(U64::v & ((U64::1 << U64::bits) - 1))
+
+priv const guaranteed_const_chain: I32 = 256 //<
+  //< The constant-reference chain length the specification promises, named by the diagnostic
+  //<
+  //< The promise is in "Implementation limits" in docs/SPEC-language.md.
+  //< Caution: **Do not show max_constexpr_depth below**: it counts nodes, a larger number than the
+  //< chain that can be written.
+
+priv const max_constexpr_depth: I32 = guaranteed_const_chain * 4 //< the fold's recursion limit
+  //<
+  //< **The higher it is, the more a pathological input costs.** One expression's nesting is
+  //< stopped by max_parse_tree_depth in ksplc/parse/normalize.kspls; only a chain across
+  //< declarations (eval_ident_or_path) reaches here.
+
+priv struct Bad_init //< where a form that cannot be a static initializer was found
+  //<
+  //< is_cycle: the cause was a cycle among constant definitions (it changes the message).
+  node: Ast_node$@
+  is_cycle: Bool
+
+impl Ast_node
+  fn eval_constexpr(r: Self$@, c: Sema_ctx$@): I32?Sema_error //<
+    //< Folds a constant expression as I32
+    //<
+    //< **Narrowing happens only here**; out of range is always an error.
+    return r.check_i32_overflow(c, r.eval_constexpr_internal(c, 0)?)?
+
+  fn eval_constexpr_wide(r: Self$@, c: Sema_ctx$@): I64?Sema_error //<
+    //< Folds a constant expression, keeping I64
+    //<
+    //< **Only code that writes a value out uses it** (try_eval_constexpr_wide), to emit a value
+    //< that is correct for its type but does not fit I32, like `1U32 << 31`, without the narrowing
+    //< rejecting it.
+    //< Used elsewhere, a value that does not fit I32 would go through unchecked.
+    return r.eval_constexpr_internal(c, 0)?
+
+  fn eval_constexpr_internal(r: Self$@, c: Sema_ctx$@, depth: I32): I64?Sema_error
+    if r == null
+      throw .not_constant
+    if depth > max_constexpr_depth
+      // Caution: **Do not return with `not_constant`.** Under suppression this `err` is
+      // discarded, and report_init_overflow re-folds only what did not return `not_constant`, so
+      // the depth error would appear nowhere.
+      if !c.suppress_errors
+        c.clear_scratch()
+          .s("constant expression nesting too deep. The language guarantees \
+            \{guaranteed_const_chain\} levels of constant reference chaining; folding walks one \
+            native stack frame per level and deeper input would exhaust the stack")
+        c.err(r, c.scratch.slice())
+      throw .nesting_too_deep
+
+    switch r.kind_id case .k_integer
+      return r.eval_integer(c, depth)?
+    case .k_bool
+      return r.eval_bool(c, depth)?
+    case .k_char
+      return r.eval_char(c, depth)?
+    case .k_expr_unary
+      return r.eval_unary(c, depth)?
+    case .k_expr
+      return r.eval_binary(c, depth)?
+    case .k_expr_ternary
+      return r.eval_ternary(c, depth)?
+    case .k_expr_primary
+      return r.eval_primary(c, depth)?
+    case .k_expr_sizeof
+      return r.eval_sizeof(c, depth)?
+    case .k_expr_offsetof
+      return r.eval_offsetof(c, depth)?
+    case .k_identifier, .k_expr_path, .k_type_path, .k_expr_postfix, .k_method_access
+      return r.eval_ident_or_path(c, depth)?
+    case .k_enum_init
+      // A scalar enum's variant (`Color.green`, a k_enum_init) folds to its tag (valid in codegen
+      // after mangling too).
+      real_type_id: = c.env.get_real_type(r.type_id)
+      if e_def: = c.env.get_enum_def(c.env.get_str(real_type_id))
+        switch e_def.get_variant(r.last_child().text) case .some(v_def)
+          return v_def.tag_value
+        case .none {}
+      if !c.suppress_errors
+        c.err(r, "enum value is not a compile-time constant")
+      throw .not_constant
+    default
+      return r.eval_unknown(c, depth)?
+
+  fn eval_ternary(r: Self$@, c: Sema_ctx$@, depth: I32): I64?Sema_error
+    if r.children.len == 3
+      cond_val: = r.get_ternary_cond().eval_constexpr_internal(c, depth + 1)?
+      return (r.get_ternary_true().eval_constexpr_internal(c, depth + 1)? if cond_val != 0
+        else r.get_ternary_false().eval_constexpr_internal(c, depth + 1)?)
+    return r.eval_unknown(c, depth)?
+
+  fn eval_unknown(r: Self$@, c: Sema_ctx$@, _depth: I32): I64?Sema_error
+    if !c.suppress_errors
+      c.err(r, "expression is not a valid compile-time constant.")
+    throw .not_constant
+
+  fn eval_integer(r: Self$@, c: Sema_ctx$@, _depth: I32): I64?Sema_error
+    return r.text.parse_int_literal(r, c)?
+
+  fn check_i32_overflow(r: Self$@, c: Sema_ctx$@, wide: I64): I32?Sema_error //<
+    //< A value outside I32's range is an error, like division_by_zero
+    //<
+    //< The reason is at parse_int_literal.
+    if wide > I64::2147483647 || wide < I64::(-2147483647 - 1)
+      if !c.suppress_errors
+        c.err(r, "integer overflow in compile-time constant expression")
+      throw .invalid_argument
+    return I32::wide
+
+  priv fn report_overflow(r: Self$@, c: Sema_ctx$@): I64?Sema_error //<
+    //< The single place that reports overflow (called from each arithmetic branch)
+    if !c.suppress_errors
+      c.err(r, "integer overflow in compile-time constant expression")
+    throw .invalid_argument
+
+  fn eval_bool(r: Self$@, _c: Sema_ctx$@, _depth: I32): I64?Sema_error
+    return 1 if r.text.equals("true") else 0
+
+  fn eval_char(r: Self$@, _c: Sema_ctx$@, _depth: I32): I64?Sema_error
+    if r.text.len < 3
+      throw .invalid_argument
+    return I64::base_literal.char_literal_byte(r.text)
+
+  fn eval_unary(r: Self$@, c: Sema_ctx$@, depth: I32): I64?Sema_error
+    if r.children.len >= 2
+      op: = r.get_unary_op().text
+      val: = r.get_unary_target().eval_constexpr_internal(c, depth + 1)?
+      if op.equals("-")
+        // Caution: Negating the minimum silently wraps to itself (as in checked_neg in
+        // std/checked_int.kspls).
+        if val == i64_min_val
+          if !c.suppress_errors
+            c.err(r,
+              "integer overflow (negation of the minimum value) in compile-time constant expression")
+          throw .invalid_argument
+        return -val
+      return ~val if op.equals("~") else val
+    return r.eval_unknown(c, depth)?
+
+  fn eval_binary(r: Self$@, c: Sema_ctx$@, depth: I32): I64?Sema_error
+    if r.children.len >= 3
+      left: = r.get_binary_left().eval_constexpr_internal(c, depth + 1)?
+      op: = r.get_binary_op().text
+      right: = r.get_binary_right().eval_constexpr_internal(c, depth + 1)?
+
+      // Caution: Take the width and the sign from **the left operand's type**: a comparison's own
+      // type is Bool, and a shift's width is the left side's. Before types are known (the
+      // declaration walk) it is 32-bit signed, matching check_i32_overflow's narrowing.
+      left_id: = r.get_binary_left().type_id
+      bits: = c.env.get_portable_bit_size(left_id)
+      is_uns: = c.env.is_unsigned(left_id)
+      // Division, remainder, right shift and ordering depend on the sign, so they read U64.
+      ul: = U64::left
+      ur: = U64::right
+
+      if op.equals("/") || op.equals("%")
+        if right == 0
+          if !c.suppress_errors
+            c.err(r, "division or modulo by zero in constant expression")
+          throw .division_by_zero
+      // Check signed overflow **before** operating; afterwards, the wrapped value looks in range.
+      // Caution: Do not check unsigned. C wraps it mod 2^N (fit_result), so an error here would
+      // reject a constant that works at run time.
+      if op.equals("+")
+        if !is_uns &&
+          ((right > 0 && left > i64_max_val - right) || (right < 0 && left < i64_min_val - right))
+          return r.report_overflow(c)?
+        return fit_or_report(r, c, left + right, bits, is_uns)?
+      if op.equals("-")
+        if !is_uns &&
+          ((right < 0 && left > i64_max_val + right) || (right > 0 && left < i64_min_val + right))
+          return r.report_overflow(c)?
+        return fit_or_report(r, c, left - right, bits, is_uns)?
+      if op.equals("*")
+        if !is_uns && left != 0 && right != 0
+          // Checked by absolute value; I64's minimum has none, so it is rejected outright.
+          if left == i64_min_val || right == i64_min_val
+            return r.report_overflow(c)?
+          la: = -left if left < 0 else left
+          ra: = -right if right < 0 else right
+          if la > i64_max_val / ra
+            return r.report_overflow(c)?
+        return fit_or_report(r, c, left * right, bits, is_uns)?
+      if op.equals("/")
+        return I64::(ul / ur) if is_uns else left / right
+      if op.equals("%")
+        return I64::(ul % ur) if is_uns else left % right
+      // Caution: Make the upper limit the operand's width. A fixed one rejects `1U64 << 40` or lets
+      // a narrow type shift by its width (undefined behaviour in C).
+      if op.equals("<<")
+        if right < 0 || right >= I64::bits
+          if !c.suppress_errors
+            c.err(r, "shift amount is out of range in compile-time constant expression")
+          throw .invalid_argument
+        if !is_uns && left != 0 &&
+          (left > (i64_max_val >> right) || left < (i64_min_val >> right))
+          return r.report_overflow(c)?
+        return fit_result(I64::(ul << ur) if is_uns else left << right, bits, is_uns)
+      if op.equals(">>")
+        if right < 0 || right >= I64::bits
+          if !c.suppress_errors
+            c.err(r, "shift amount is out of range in compile-time constant expression")
+          throw .invalid_argument
+        return I64::(ul >> ur) if is_uns else left >> right
+      if op.equals("|")
+        return left | right
+      if op.equals("&")
+        return left & right
+      if op.equals("^")
+        return left ^ right
+      if op.equals("==")
+        return I64::(left == right)
+      if op.equals("!=")
+        return I64::(left != right)
+      if op.equals("<")
+        return I64::(ul < ur) if is_uns else I64::(left < right)
+      if op.equals(">")
+        return I64::(ul > ur) if is_uns else I64::(left > right)
+      if op.equals("<=")
+        return I64::(ul <= ur) if is_uns else I64::(left <= right)
+      if op.equals(">=")
+        return I64::(ul >= ur) if is_uns else I64::(left >= right)
+      if op.equals("&&")
+        return I64::(left != 0 && right != 0)
+      if op.equals("||")
+        return I64::(left != 0 || right != 0)
+      throw .not_constant
+    return r.eval_unknown(c, depth)?
+
+  fn eval_primary(r: Self$@, c: Sema_ctx$@, depth: I32): I64?Sema_error
+    if r.children.len > 0
+      child: = r.get_primary_inner_expr()
+      return child.eval_constexpr_internal(c, depth + 1)?
+    return r.eval_unknown(c, depth)?
+
+  fn eval_sizeof(r: Self$@, c: Sema_ctx$@, _depth: I32): I64?Sema_error
+    target: = r.get_sizeof_target()
+    if target != null
+      $type_id: = target.type_id
+      if type_id == 0
+        prev_sup: = c.suppress_errors
+        c.suppress_errors = true
+        // A type is resolved here; an expression needs type inference (infer_expr_fn in
+        // sema/session/ctx.kspls).
+        if target.kind_id == .k_type_expr
+          type_id = target.resolve_type(c)?
+        else if c.infer_expr_fn != null
+          type_id = c.infer_expr_fn(target, c, I32::sema_type_env.Builtin_type_id.unknown)?
+        c.suppress_errors = prev_sup
+      if type_id == 0
+        throw .not_constant
+      // Caution: Request the declaration's layout first. The field list is complete only after
+      // collect's Pass 3 (ensure_type_registry in sema/decl/layout.kspls).
+      c.ensure_type_registry(type_id, r)?
+      return I64::c.type_layout(type_id).size
+    throw .not_constant
+
+  fn eval_offsetof(r: Self$@, c: Sema_ctx$@, _depth: I32): I64?Sema_error //<
+    //< folds `offsetof(T, f)`
+    //<
+    //< Caution: **Resolve the type the same way as `sizeof`** (`eval_sizeof`). The layout itself
+    //< comes from `field_offset_of` in `sema/decl/layout.kspls`.
+    target: = r.get_offsetof_type()
+    field: = r.get_offsetof_field()
+    if target == null || field == null
+      throw .not_constant
+    $type_id: = target.type_id
+    if type_id == 0
+      prev_sup: = c.suppress_errors
+      c.suppress_errors = true
+      type_id = target.resolve_type(c) catch 0
+      c.suppress_errors = prev_sup
+    if type_id == 0
+      throw .not_constant
+    return I64::c.field_offset_of(type_id, field.text, r)?
+
+  fn eval_ident_or_path(r: Self$@, c: Sema_ctx$@, depth: I32): I64?Sema_error
+    if r.kind_id == .k_expr_postfix
+      op_node: = r.get_postfix_op()
+      if op_node != null && op_node.text.equals("::")
+        recv: = r.get_postfix_receiver()
+        if recv != null
+          return recv.eval_constexpr_internal(c, depth + 1)?
+    sym_ptr: = r.resolve_ref_symbol(c)
+    if sym_ptr != null
+      switch sym_ptr.kind case .enum_variant(tag_value)
+        return tag_value
+      default {}
+    if decl_node: = r.const_decl_of(sym_ptr)
+      expr_node: = decl_node.get_var_decl_expr()
+      if expr_node != null && expr_node.kind_id != .k_empty
+        // A cycle (`const A = B; const B = A;`) is stopped here rather than at the depth limit.
+        // Caution: Track the path with a Map (keyed by the declaration node's address); a List
+        // costs the square of the chain's length.
+        decl_key: = Sz::decl_node
+        if c.resolving.consts.get(decl_key) catch false
+          throw .not_constant
+        c.resolving.consts.set(decl_key, true)
+        defer c.resolving.consts.remove(decl_key)
+        return expr_node.eval_constexpr_internal(c, depth + 1)?
+    if !c.suppress_errors
+      c.err(r,
+        "identifier is not a compile-time constant" if r.kind_id == .k_identifier
+        else "path does not resolve to a compile-time constant")
+    throw .not_constant
+
+  priv fn resolve_ref_symbol(r: Self$@, c: Sema_ctx$@): Sema_symbol$@ //<
+    //< The symbol this reference names
+    //<
+    //< Caution: **Keep name lookup in this one place.** An identifier, a path, a method access and
+    //< an import alias each look up differently; copies drift until one folds and another does not.
+    $sym_ptr: Sema_symbol$@ = null
+    if r.kind_id == .k_identifier
+      sym_ptr = c.symtab.resolve(r.text) catch null
+    else
+      $target_name: = ""
+      $prefix_name: = ""
+
+      if r.kind_id == .k_expr_postfix || r.kind_id == .k_method_access
+        mem_node: = r.get_postfix_member()
+        if mem_node != null
+          target_name = mem_node.text
+        recv_node: = r.get_postfix_receiver()
+        if recv_node != null
+          prefix_name =
+            (recv_node.get_path_name()
+            if recv_node.kind_id == .k_expr_path || recv_node.kind_id == .k_type_path ||
+            recv_node.kind_id == .k_identifier else recv_node.text)
+      else
+        if r.children.len > 0
+          target_name = r.get_child(r.children.len - 1).text
+        if r.children.len >= 2
+          prefix_name =
+            (r.get_child(r.children.len - 3).text
+            if r.get_child(r.children.len - 2).text.equals(".") && r.children.len >= 3
+            else r.get_child(r.children.len - 2).text)
+
+      sym_ptr = c.symtab.resolve(target_name) catch null
+      if sym_ptr == null && prefix_name.len > 0
+        c.clear_scratch().s("\{prefix_name\}.\{target_name\}")
+        sym_ptr = c.symtab.resolve(c.scratch.slice()) catch null
+      if sym_ptr == null && prefix_name.len > 0
+        target_file: = c.get_file_alias_target(c.file_name, prefix_name)
+        if target_file.len > 0
+          sym_ptr =
+            c.symtab.resolve(c.build_mod_fqn(target_file, target_name)) catch null
+    return sym_ptr
+
+  priv fn const_decl_of(r: Self$@, sym_ptr: Sema_symbol$@): Option<|Ast_node$@|> //<
+    //< The referenced constant's declaration node
+    //<
+    //< Found by name where the lookup succeeds; otherwise the `def_node` Sema linked. null where it
+    //< does not point at a constant.
+    //< Caution: **Do not rely on the name alone.** The ABI pass (lower/abi.kspls) rewrites a `priv`
+    //< top-level identifier's text into a mangled name (`kspl_priv_<file>_<name>`). The fold is
+    //< called from codegen too (emit_llvm_const_scalar_expr in gen/llvm/decl.kspls), and by then
+    //< the tree is rewritten, so the name is not in symtab.
+    $decl_node: Ast_node$@ = null
+    if sym_ptr != null
+      switch sym_ptr.kind case .constant
+        decl_node = sym_ptr.node
+      default {}
+    if decl_node == null && r.def_node != null && r.def_node.kind_id == .k_decl_const
+      decl_node = r.def_node
+    if decl_node == null
+      return Option<|Ast_node$@|>.none
+    // Caution: Link a resolved declaration to def_node. An annotation's array size (`a: I32[n]`) is
+    // resolved only here; unlinked, [W0207] "unused" fires wrongly and the LSP cannot jump to it.
+    if r.def_node == null && (r.kind_id == .k_identifier || r.kind_id == .k_expr_path)
+      r.def_node = decl_node
+    return Option<|Ast_node$@|>.some(decl_node)
+
+  fn const_init_expr(r: Self$@, c: Sema_ctx$@): Option<|Ast_node$@|> //<
+    //< The initializing expression of the `const` this reference points at
+    //<
+    //< null where it points at no constant, or there is no initializer.
+    //< Note: Used when the generated C writes a top-level `const`'s initializer
+    //< (`gen/c/expr.kspls`). C requires a constant expression there, but a weak symbol can be
+    //< replaced at link time, so its value is not fixed and, emitted by name, it does not compile.
+    //< Emitting **the expression it points at** instead of the name meets that constraint.
+    if decl_node: = r.const_decl_of(r.resolve_ref_symbol(c))
+      expr_node: = decl_node.get_var_decl_expr()
+      if expr_node != null && expr_node.kind_id != .k_empty
+        return Option<|Ast_node$@|>.some(expr_node)
+    return Option<|Ast_node$@|>.none
+
+  priv fn find_bad_init_expr(r: Self$@, seen: Map<|Sz, Bool|>$@, clean: Map<|Sz, Bool|>$@):
+    Option<|Bad_init|> //<
+      //< The first form in a top-level initializer that a static initializer cannot contain
+      //<
+      //< It searches the initializer depth-first.
+      //< Caution: eval_constexpr folds integers only, not `::{...}`, a string, null or a cast.
+      //< **Follow a constant reference**, or `const A = B; const B = A;` slips through.
+    if r == null
+      return Option<|Bad_init|>.none
+    op: = r.get_postfix_op()
+    if op != null
+      // `x@` is C's "address constant"; it reads no value, so the receiver is not followed.
+      if op.text.equals("@")
+        return Option<|Bad_init|>.none
+      // A function call and a dereference do not have their value fixed at link time.
+      if op.text.equals("(") || op.text.equals("$")
+        return Option<|Bad_init|>.some(Bad_init::{ .node = r, .is_cycle = false })
+    if r.def_node != null
+      // A variable's reference is a run-time read. An enum variant, a function (a legitimate
+      // function pointer initializer) and a field have other def_node kinds.
+      if r.def_node.kind_id == .k_decl_var || r.def_node.kind_id == .k_decl_var_item
+        return Option<|Bad_init|>.some(Bad_init::{ .node = r, .is_cycle = false })
+      if r.def_node.kind_id == .k_decl_const
+        key: = Sz::r.def_node
+        if seen.get(key) catch false
+          return Option<|Bad_init|>.some(Bad_init::{ .node = r, .is_cycle = true })
+        // Caution: **Do not walk a declaration twice once it is known clean.** A `k_expr_path`
+        // and its `k_identifier` point at one reference, so the cost becomes 2^N. It is clean only
+        // where **the walk reached the end and found nothing**; a partial walk lets a problem by.
+        already: = clean.get(key) catch false
+        inner: = r.def_node.get_var_decl_expr()
+        if !already && inner != null && inner.kind_id != .k_empty
+          seen.set(key, true)
+          found: = inner.find_bad_init_expr(seen, clean)
+          seen.remove(key)
+          if found.is_some()
+            return found
+          clean.set(key, true)
+    for child in r.children
+      found: = child.find_bad_init_expr(seen, clean)
+      if found.is_some()
+        return found
+    return Option<|Bad_init|>.none
+
+  fn check_static_initializer(r: Self$@, c: Sema_ctx$@) //<
+    //< Checks a top-level variable's or constant's initializer
+    //<
+    //< C requires a constant expression there, so a run-time computation is rejected here rather
+    //< than failing in C with `initializer element is not constant`.
+    // Caution: **Track the path (seen) and the finished declarations (clean) with a Map** (keyed by
+    // the declaration node's address); a List goes cubic and **never finishes**. An empty Map takes
+    // no memory (Map.new in std/ds.kspls).
+    $seen: = Map<|Sz, Bool|>.new()
+    defer seen.free()
+    // Caution: **Use clean only inside this one walk.** Across declarations it would remember
+    // "clean" before `def_node` is linked and let a cycle by (tests/negative/const_cycle.kspls).
+    $clean: = Map<|Sz, Bool|>.new()
+    defer clean.free()
+    if bad: = r.find_bad_init_expr(seen@, clean@)
+      if bad.is_cycle
+        c.err(bad.node, "circular constant definition detected")
+      else
+        c.err(bad.node, "top-level variable initializer is not a compile-time constant")
+      return
+    r.report_init_overflow(c)
+
+  priv fn report_init_overflow(r: Self$@, c: Sema_ctx$@) //<
+    //< Folds an initializer whose form passed, reporting overflow and division by zero
+    //<
+    //< **`eval_constexpr` cannot be relied on.** The width and sign come from the operands' types.
+    // **Fold quietly first**, or a string, `::{}`, `x@` or a function name gets a needless "not a
+    // constant expression" (find_bad_init_expr checks the form).
+    $broken: = false
+    _quiet: = c.fold_quietly(r, false) catch e
+      switch e case .not_constant {} default
+        broken = true
+      fallback 0I64
+    if !broken
+      return
+    // It overflows, divides by 0, or is too deep.
+    // **Report by folding again**, so one reporting point names the step that overflowed. A chain
+    // **not used** as a constant expression is folded only here, so its depth is reported here.
+    _loud: = r.eval_constexpr_internal(c, 0) catch 0I64

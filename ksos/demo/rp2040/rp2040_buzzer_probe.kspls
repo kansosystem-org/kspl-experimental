@@ -1,0 +1,48 @@
+//< The smallest check that the real Freenove 4WD car works (Raspberry Pi Pico W / RP2040)
+//<
+//< This is one step towards confirming that ksos **works on the real RP2040 chip**.
+//< **It does not use semihosting (ksos/demo/common/semihost_console), on purpose.**
+//< **This demo checks two stages at once**
+
+// ==========================================
+//   stage 1  … a sound = the whole path works on the real chip (verified)
+//   stage 2a … the pitch and the interval **being right** = the clock tree reached its set values
+// ==========================================
+import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/demo/rp2040/common/buzzer"
+import "ksos/drivers/rp2040/clocks"
+import "ksos/drivers/rp2040/gpio"
+import "ksos/drivers/rp2040/timer"
+import "ksos/kernel/task" + { Task }
+
+$tcb_buzzer: Task
+$stack_buzzer: U8[2048]
+
+const beep_ms: U32 = 250 //< one note's length
+  //<
+  //< **Only the length is set here, not the frequency** — the pitch is the signals' shared value
+  //< (`buzzer.beep_hz` = 2kHz), which a tuner or a phone's frequency meter can confirm. Only this
+  //< demo makes it longer (than the default signal beep). The aim is hearing that it sounds; too
+  //< short, and the beeps cannot be told apart.
+const gap_ms: U32 = 250
+
+fn buzzer_task(_arg: Void$@): Void
+  // Set up the clocks before anything else. Continue after a failure here and no later delay_us
+  // returns (the TIMER's tick is not supplied). The silence tells you.
+  if !clocks.init()
+    return
+  if !gpio.init()
+    return // releasing the reset failed (hardware that does not answer). The silence tells you
+  gpio.init_out(board.buzzer_pin)
+  // It does not return. Once the task is done, run_single_task only enters for{}, so it keeps
+  // looping here so that "it keeps sounding = it is alive".
+  for
+    buzzer.tone(buzzer.beep_hz, beep_ms)
+    timer.delay_ms(gap_ms)
+
+// The on_idle for `task.run_single_task`: semihosting's exit is not available, so it does nothing.
+priv fn park() {}
+
+#export
+fn ksos_main()
+  task.run_single_task(tcb_buzzer@, U8$[]::stack_buzzer, buzzer_task, "buzzer", park)

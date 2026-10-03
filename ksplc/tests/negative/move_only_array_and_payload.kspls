@@ -1,0 +1,22 @@
+//< Move_only's structural derivation also walks an enum's payload and an array's elements
+//<
+//< Without that walk, a struct holding an array of owning handles by value could be copied in
+//< silence and become a double free (ksplc/docs/DESIGN.md §11.1).
+// EXPECT: was moved out of and cannot be used again
+import "std/mem"
+
+priv struct Handle
+  v: I32
+
+impl Handle: Move_only {}
+
+priv struct Holds_array
+  a: Handle[2]
+
+priv fn take(h: Holds_array): I32
+  return h.a[0].v
+
+fn main()
+  h: Holds_array = ::{ .a = ::{::{ .v = 1 }, ::{ .v = 2 } } }
+  _a: = take(h)
+  _b: = take(h)

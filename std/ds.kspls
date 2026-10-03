@@ -1,0 +1,437 @@
+//< The containers: the growable `List<|T|>`, and `Map<|K, V|>` keyed by anything `Hashable`
+//<
+//< Both allocate from an `Arena` or from the heap, so a structure built inside an arena is freed
+//< all at once when that arena is reset.
+//< **`ds` never imports `std/io`** (the reason is at `grow_cap`).
+import "std/chars" as _chars // reaches the single-character tests and slicing
+import "std/mem" + { Arena, alloc_in, dealloc }
+
+pub enum Ds_error //< why a container lookup failed
+  key_not_found //< there is no entry for that key
+
+priv fn grow_cap(cap: Sz, initial: Sz): Sz //<
+  //< The next capacity: initial for an empty container, otherwise twice cap
+  //<
+  //< Caution: **Do not use `io`.** That makes the cycle `ds → io → str → ds`, and code that only
+  //< uses `List` / `Map` pays for the whole string and IO library. Build a message with a number
+  //< with `Panic_msg` (std/lang), which allocates nothing and works on freestanding.
+  return initial if cap == 0 else cap * 2
+
+priv fn checked_cap_bytes(cap: Sz, elem_size: Sz): Sz
+  if cap < 0
+    panic("capacity must be non-negative")
+  if cap == 0 || elem_size == 0
+    return 0
+  ucap: = U64::cap
+  uelem: = U64::elem_size
+  ubytes: U64 = ucap * uelem
+  bytes: = Sz::ubytes
+  if bytes < 0 || bytes / cap != elem_size
+    panic("capacity too large (overflow)")
+  return bytes
+
+priv fn alloc_zeroed(bytes: Sz, arena: Arena$@): Void$@ //<
+  //< Zeroes newly allocated memory and returns it
+  //<
+  //< All of `List`'s and `Map`'s memory comes from here.
+  //< Caution: **Do not skip the zeroing.** Storing an element is an ordinary assignment, so for ARC
+  //< elements the compiler releases the old value being overwritten, and following garbage crashes.
+  p: = alloc_in(arena, bytes)
+  mem.zero(p, bytes)
+  return p
+
+priv fn grow_slot(slot: Void$@$@, cap: Sz$@, len: Sz, initial: Sz, arena: Arena$@, elem_size: Sz) //<
+  //< Allocates, copies and zero-fills when a List grows
+  //<
+  //< Caution: **Leave the `len >= cap` check to the caller**, so a push with room to spare makes no
+  //< call. Only the unused tail is zeroed (the reason is at `alloc_zeroed`); the copy fills the
+  //< front.
+  new_cap: Sz = grow_cap(cap$, initial)
+  new_ptr: = alloc_in(arena, new_cap * elem_size)
+  used_bytes: = len * elem_size if cap$ > 0 else 0
+  if cap$ > 0
+    mem.copy(new_ptr, slot$, used_bytes)
+    if arena == null
+      dealloc(slot$)
+  mem.zero(Void$@::((U8$@::new_ptr) + used_bytes), new_cap * elem_size - used_bytes)
+  slot$ = new_ptr
+  cap$ = new_cap
+// ==========================================
+// Hashable: what is required of a type that can be a Map's key
+// ==========================================
+
+pub trait Hashable<|Key|> //< what a type must provide to be a `Map`'s key
+  //<
+  //< A key type declares `impl X: ds.Hashable<|X|>`; `Map`'s type argument carries the constraint,
+  //< so a type that does not meet it is diagnosed in the user's code, not inside std. `Self` cannot
+  //< be written on a non-receiver parameter, so the other key arrives as `Key`.
+  fn hash(r: Self): U32 //< a value spread over the buckets; equal keys must give equal values
+  fn equals(r: Self, other: Key): Bool //< whether the two are the same key
+
+pub fn fmix32( //< MurmurHash3's finalizer, for a hash whose differences are in the high bits
+  //<
+  //< `Map` takes the bucket from the low bits with `hash & (cap-1)`, so **a key whose differences
+  //< are in the high bits** (a string through FNV, a sequential I32) runs its hash through this at
+  //< the end of `hash()`.
+  //< Caution: **Do not add it everywhere.** It costs extra work per lookup, and in a `hash` that
+  //< runs in the innermost loop that cost outweighs the better spread (for a parser's memo key it
+  //< slows self-hosting's parse by 10-20%).
+  h: U32, //< the value to spread
+): U32 //< the mixed value; two different inputs never give the same one
+  $v: = h
+  v = (v ^ (v >> 16)) * 0x85ebca6b
+  v = (v ^ (v >> 13)) * 0xc2b2ae35
+  return v ^ (v >> 16)
+
+impl I32: Hashable<|I32|> //< so an `I32` can be a `Map`'s key
+  //<
+  //< A primitive's method receives r as a pointer, so the value is r$
+  pub fn hash(r: Self@): U32 //< the value spread over the buckets
+    return fmix32(U32::r$)
+  pub fn equals(r: Self@, other: I32): Bool //< whether the two are the same number
+    return r$ == other
+
+impl Sz: Hashable<|Sz|> //< so an `Sz` can be a `Map`'s key
+  //<
+  //< `Sz` is here because keying on a pointer's address is common.
+  //< Caution: **Do not put an impl that makes a built-in type a key of std's containers in the
+  //< compiler**, which would invert the layers; it goes here, next to the trait that requires it.
+  pub fn hash(r: Self@): U32 //< the value spread over the buckets
+    h: = U64::r$
+    return (U32::(h ^ (h >> 32))) * U32::2654435761
+  pub fn equals(r: Self@, other: Sz): Bool //< whether the two are the same number
+    return r$ == other
+// ==========================================
+// List<|T|> (the generic version)
+// ==========================================
+pub struct List<|T|> //< a sequence of elements that grows as elements are pushed
+  pub ptr: T$@ //< the memory holding the elements
+  pub len: Sz //< how many elements it holds
+  pub cap: Sz //< how many fit before it has to grow
+  pub arena: Arena$@ //< where the elements go; null means the global heap
+
+impl<|T|> List<|T|>
+  pub fn new( //< an empty list, which has allocated no memory yet
+    //<
+    //< **`arena` is "where the elements go"**; the `List` itself is the caller's variable. Without
+    //< an arena, free it with `defer xs.free()`.
+    arena: Arena$@ = null, //< where the elements go; if omitted, the global heap and a `free()`
+  ): List<|T|>
+    return List<|T|>::{ .ptr = null, .len = 0, .cap = 0, .arena = arena }
+
+  pub fn create( //< an empty list stored in the arena itself, to be passed around as a pointer
+    arena: Arena$@, //< where both the list and its elements go
+  ): List<|T|>$@
+    return arena.create(List<|T|>.new(arena))
+
+  pub fn new_with_cap( //< an empty list with room already allocated, so it need not grow
+    initial_cap: Sz, //< how many elements must fit before it grows
+    arena: Arena$@ = null, //< where the elements go; if omitted, the global heap and a `free()`
+  ): List<|T|>
+    ptr: = T$@::alloc_zeroed(checked_cap_bytes(initial_cap, sizeof(T)), arena)
+    return List<|T|>::{ .ptr = ptr, .len = 0, .cap = initial_cap, .arena = arena }
+
+  priv fn ensure_cap(r: Self$@)
+    if r.len >= r.cap
+      // An initial capacity of 2: most lists hold zero to two items (an AST node's children), and
+      // a large list doubles, so the small start costs little.
+      grow_slot(Void$@$@::r.ptr@, r.cap@, r.len, 2, r.arena, sizeof(T))
+
+  #inline
+  pub fn push(r: Self$@, item: T) //< adds one element at the end, growing if it must
+    r.ensure_cap()
+    (r.ptr + r.len)$ = item
+    r.len += 1
+
+  pub fn insert( //< inserts one element, shifting the following elements along
+    r: Self$@,
+    index: Sz, //< where it goes; an index out of range stops the program
+    item: T, //< the element to insert
+    file: U8[] = caller_file, //< keep the default unless this is called from a wrapper
+    line: Sz = caller_line, //< keep the default unless this is called from a wrapper
+  )
+    if index < 0 || index > r.len
+      bounds_panic("List.insert", index, r.len, file, line)
+    r.ensure_cap()
+    for $i: = r.len; i > index; i -= 1
+      (r.ptr + i)$ = (r.ptr + i - 1)$
+    (r.ptr + index)$ = item
+    r.len += 1
+
+  pub fn remove_at( //< removes one element, shifting the following elements back
+    //<
+    //< Caution: **Overwrite the freed last slot with zero.** If T holds ARC content, that
+    //< assignment releases the old value being overwritten (the same reason as in `free`); without
+    //< it, every removal leaks.
+    r: Self$@,
+    index: Sz, //< which element to remove; an index out of range stops the program
+    file: U8[] = caller_file, //< keep the default unless this is called from a wrapper
+    line: Sz = caller_line, //< keep the default unless this is called from a wrapper
+  )
+    if index < 0 || index >= r.len
+      bounds_panic("List.remove_at", index, r.len, file, line)
+    for $i: = index; i < r.len - 1; i += 1
+      (r.ptr + i)$ = (r.ptr + i + 1)$
+    $empty: T[1] = ::{}
+    (r.ptr + r.len - 1)$ = empty[0]
+    r.len -= 1
+
+  pub fn free(r: Self$@) //< frees the elements and the memory
+    //<
+    //< Caution: **Release the elements' ownership before freeing the memory.** If T holds ARC
+    //< content, assigning the zero value releases the old value; without it all the contents leak
+    //< on every discard, where the caller cannot reach them. Without ARC it is a cheap write.
+    $empty: T[1] = ::{}
+    for i in Range.asc(r.len)
+      (r.ptr + i)$ = empty[0]
+    if r.cap > 0 && r.arena == null
+      dealloc(Void$@::r.ptr)
+    r.len = 0
+    r.cap = 0
+
+  pub fn slice(r: Self$@): T$[] //< a view of every element, for a function that takes a slice
+    //<
+    //< Caution: It is borrowed: a push/insert that grows the capacity reallocates the memory and
+    //< invalidates it (the same promise as Str_builder.slice's).
+    return T$[]::{ .ptr = r.ptr, .len = r.len }
+
+  pub fn sub( //< a view of part of it; out of range gives an empty view instead of stopping
+    //<
+    //< **Out of range it returns empty; it does not panic** (unlike `xs[i]`, see `Index` below).
+    //< Caution: **Do not build the descriptor by hand.** `T$[]::{ .ptr = xs.ptr + s, .len =
+    //< xs.len - s }` has length −1 when `xs` is empty, and code that trusts `len` reads on forever.
+    r: Self$@,
+    start: Sz, //< where the part begins
+    len: Sz, //< the most elements it holds; anything past the end is cut off
+  ): T$[]
+    n: = sub_count(r.len, start, len)
+    return (T$[]::{ .ptr = null, .len = 0 } if n == 0
+      else T$[]::{ .ptr = r.ptr + start, .len = n })
+
+  pub fn sub_from( //< a view from a position to the end
+    r: Self$@,
+    start: Sz, //< where the part begins
+  ): T$[]
+    return r.sub(start, r.len - start if start >= 0 && start < r.len else 0)
+
+impl<|T|> List<|T|>: Index<|Sz, T|> //< so `xs[i]` reads an element
+  //<
+  //< An index out of range panics: the caller can check it against len, so a failure is a bug.
+  //< Map.get/remove are recoverable (V?Ds_error/Bool), since a key's presence is run-time data.
+  #inline
+  pub fn get(r: Self@, index: Sz): T //< a copy of the element; out of range stops the program
+    if index < 0 || index >= r.len
+      bounds_panic("List.get", index, r.len, "", 0)
+    return (r.ptr + index)$
+
+impl<|T|> List<|T|>: Index_mut<|Sz, T|> //< so `xs[i] = v` writes an element
+  #inline
+  pub fn set(r: Self$@, index: Sz, item: T) //< writes one element; out of range stops the program
+    if index < 0 || index >= r.len
+      bounds_panic("List.set", index, r.len, "", 0)
+    (r.ptr + index)$ = item
+
+impl<|T|> List<|T|>: Index_place<|Sz, T|> //< so `xs[i] += v` and `xs[i]@` can be written
+  //<
+  //< It makes `l[i]` an lvalue, as with a built-in slice; with only get/set a compound assignment
+  //< cannot be built, and `@` would give a temporary's address.
+  #inline
+  pub fn at(r: Self$@, index: Sz, file: U8[], line: Sz): T$@ //< the element's address, not a copy
+    if index < 0 || index >= r.len
+      bounds_panic("List.at", index, r.len, file, line)
+    return r.ptr + index // the pointer to the element itself (adding `@` gives a double pointer)
+
+impl<|T|> List<|T|>: Index_ref<|Sz, T|> //< so `xs[i]` through a read-only pointer copies nothing
+  //<
+  //< **`at` cannot be used through a read-only pointer (`xs: List<|T|>@`).** Without this impl,
+  //< `xs[i]` there resolves to `get` and **copies the whole element**, even for `xs[i].f`, and
+  //< `xs[i]@` is rejected.
+  #inline
+  pub fn at_ref(r: Self@, index: Sz, file: U8[], line: Sz): T@ //< the element, read-only
+    if index < 0 || index >= r.len
+      bounds_panic("List.at_ref", index, r.len, file, line)
+    return r.ptr + index // the same address as `at` returns, but read-only
+// ==========================================
+// Map<|K, V|> (the unified general-purpose hash map)
+// ==========================================
+pub struct Map_entry<|K, V|> //< one slot of a `Map`, live, empty or a tombstone
+  pub key: K //< the key as it was passed in
+  pub value: V //< the value stored for the key
+  pub hash: U32 //< the key's hash, kept so a resize need not compute it again
+  pub is_active: Bool //< whether this slot holds a live pair
+  pub is_tombstone: Bool //< whether a removal left a mark here, which a lookup skips.
+    //<
+    //< An insertion reuses it. **Without it, a removal hides the keys after it**: a colliding key
+    //< sits one slot further on, and a plain empty slot before it ends the lookup.
+
+pub struct Map<|K: Hashable<|K|>, V|> //< keys to values, held in an open-addressed table
+  pub entries: Map_entry<|K, V|>$@ //< the slots, `cap` of them
+  pub cap: Sz //< how many slots there are, always a power of two
+  pub len: Sz //< how many live pairs it holds
+  pub used: Sz //< live slots and tombstones together, which decide a resize.
+    //<
+    //< **Growth is decided by this, not by len.** With len, repeated set and remove fill the table
+    //< with tombstones until no insertion point can be found.
+  pub arena: Arena$@ //< where the slots go; null means the global heap
+
+impl<|K: Hashable<|K|>, V|> Map<|K, V|>
+  pub fn new( //< an empty map, which has allocated no memory yet
+    //<
+    //< **`arena` is "where the elements go"** (as with `List.new`).
+    arena: Arena$@ = null, //< where the slots go; if omitted, the global heap and a `free()`
+  ): Map<|K, V|>
+    return Map<|K, V|>::{ .entries = null, .cap = 0, .len = 0, .used = 0, .arena = arena }
+
+  pub fn new_with_cap( //< an empty map with slots already allocated, so it need not resize
+    //<
+    //< The bucket is hash & (cap - 1), hence the power of two (resize() doubles from 32).
+    initial_cap: Sz, //< how many slots, which must be a power of two
+    arena: Arena$@ = null, //< where the slots go; if omitted, the global heap and a `free()`
+  ): Map<|K, V|>
+    cap_bytes: = checked_cap_bytes(initial_cap, sizeof(Map_entry<|K, V|>))
+    entries: = Map_entry<|K, V|>$@::alloc_zeroed(cap_bytes, arena)
+    return Map<|K, V|>::{ .entries = entries, .cap = initial_cap, .len = 0, .used = 0,
+      .arena = arena }
+
+  priv fn find_entry(r: Self$@, key: K): Map_entry<|K, V|>$@
+    if r.cap == 0
+      return null
+    h: = key.hash()
+    $idx: Sz = Sz::h & (r.cap - 1)
+    start_idx: Sz = idx
+
+    for
+      entry: Map_entry<|K, V|>$@ = r.entries + idx
+      // Caution: Do not stop at a tombstone, or a key that collided and sits after it is lost.
+      if !entry.is_active && !entry.is_tombstone
+        return null
+      if entry.is_active && entry.key.equals(key)
+        return entry
+      idx = (idx + 1) & (r.cap - 1)
+      if idx == start_idx
+        break
+    return null
+
+  pub fn remove( //< removes a pair, leaving a tombstone; false if there was none
+    r: Self$@,
+    key: K, //< the key to look for
+  ): Bool
+    entry: = r.find_entry(key)
+    if entry != null
+      // Caution: Release the ownership of the element being removed (as List.free does).
+      $empty: V[1] = ::{}
+      entry.value = empty[0]
+      entry.is_active = false
+      entry.is_tombstone = true
+      r.len -= 1
+      return true
+    return false
+
+  priv fn resize(r: Self$@)
+    old_cap: = r.cap
+    old_entries: = r.entries
+    new_cap: Sz = grow_cap(old_cap, 32)
+
+    new_entries: =
+      Map_entry<|K, V|>$@::alloc_zeroed(new_cap * sizeof(Map_entry<|K, V|>), r.arena)
+
+    r$ = ::{ .entries = new_entries, .cap = new_cap, .len = 0, .used = 0, .arena = r.arena }
+
+    // Caution: Release the ownership of the old slots once moved. set_with_hash copies (retains)
+    // the value, so freeing the old array as it is leaks on every growth with ARC content.
+    $empty: V[1] = ::{}
+    for j in Range.asc(old_cap)
+      old_e: = old_entries + j
+      if old_e.is_active
+        r.set_with_hash(old_e.key, old_e.value, old_e.hash)
+        old_e.value = empty[0]
+
+    if old_cap > 0 && r.arena == null
+      dealloc(Void$@::old_entries)
+
+  priv fn set_with_hash(r: Self$@, key: K, value: V, h: U32) //<
+    //< Takes the hash already known, so resize() does not hash each key again
+    // A 50% load factor keeps clustering low under open addressing.
+    // Caution: Count the tombstones too (see used). Growth drops the tombstones, so used
+    // returns to len.
+    if r.used * 2 >= r.cap
+      r.resize()
+    $idx: Sz = Sz::h & (r.cap - 1)
+    // Caution: **Look ahead for the same key until a plain empty slot is reached.** Writing into
+    // the first tombstone at once duplicates a key stored after it. The insertion point is the
+    // first free slot passed, a tombstone included.
+    $free_idx: Sz = -1
+    for
+      entry: = r.entries + idx
+      if entry.is_active
+        if entry.key.equals(key)
+          entry.value = value
+          entry.hash = h
+          return
+      else
+        if free_idx < 0
+          free_idx = idx
+        if !entry.is_tombstone
+          break
+      idx = (idx + 1) & (r.cap - 1)
+    slot: = r.entries + free_idx
+    if !slot.is_tombstone
+      r.used += 1
+    r.len += 1
+    slot.key = key
+    slot.value = value
+    slot.hash = h
+    slot.is_active = true
+    slot.is_tombstone = false
+
+  pub fn free(r: Self$@) //< frees the pairs and the memory
+    //<
+    //< As in `List.free`, the live slots' ownership is released before the memory is freed.
+    $empty: V[1] = ::{}
+    for i in Range.asc(r.cap)
+      e: = r.entries + i
+      if e.is_active
+        e.value = empty[0]
+    if r.cap > 0 && r.arena == null
+      dealloc(Void$@::r.entries)
+    r.len = 0
+    r.cap = 0
+
+  pub fn items(r: Self$@): Map_seq<|K, V|> //< a chain over the live pairs (`for e in m.items()`)
+    //<
+    //< Caution: **Do not return a list.** It would instantiate **all of `List` for the nested
+    //< element type** for every `Map`, increasing translation time and peak memory ("A function
+    //< that returns every entry does not build a nested generic" in `std/docs/DESIGN.md`).
+    return Map_seq<|K, V|>::{ .m = r, .i = 0 }
+
+pub struct Map_seq<|K: Hashable<|K|>, V|> //< walks a `Map` one live pair at a time
+  //<
+  //< It is the chain step that walks a `Map`. **It does not allocate** (see `items`).
+  priv m: Map<|K, V|>$@
+  priv i: Sz
+
+impl<|K: Hashable<|K|>, V|> Map_seq<|K, V|>: Iter<|Map_entry<|K, V|>$@|> //< so a `for` drives it
+  pub fn next(r: Self$@): Option<|Map_entry<|K, V|>$@|> //< the next live pair, or nothing
+    //<
+    //< Caution: **Skip the empty slots** (their content is undefined); a tombstone is not active.
+    $out: = Option<|Map_entry<|K, V|>$@|>.none
+    for r.i < r.m.cap
+      entry: = r.m.entries + r.i
+      r.i += 1
+      if entry.is_active
+        out = Option<|Map_entry<|K, V|>$@|>.some(entry)
+        break
+    return out
+
+impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Index_mut<|K, V|> //< so `m[k] = v` writes a pair
+  pub fn set(r: Self$@, key: K, value: V) //< stores a pair, replacing any old value for the key
+    r.set_with_hash(key, value, key.hash())
+
+impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Index<|K, V?Ds_error|> //< so `m[k]` reads a pair
+  pub fn get(r: Self$@, key: K): V?Ds_error //< the value for the key, or an error if absent
+    entry: = r.find_entry(key)
+    if entry != null
+      return entry.value
+    throw Ds_error.key_not_found
+impl<|T|> List<|T|>: Owned {} //< it owns its resources and releases them with `free()`.
+impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Owned {} //< it owns its memory, released with `free()`

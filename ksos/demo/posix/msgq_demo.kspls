@@ -1,0 +1,42 @@
+//< A producer and a consumer through a bounded message queue (capacity 3)
+//<
+//< The small capacity shows the producer blocking on a full queue while the consumer is slow.
+//< Blocking in both directions is something a counting semaphore cannot express.
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+import "std/io"
+
+$g_q: sync.Queue<|I32|>
+$g_qbuf: I32[3] // a small capacity, so the queue fills and the producer blocks
+
+$tcb_p: Task
+$tcb_c: Task
+$stack_p: U8[65536]
+$stack_c: U8[65536]
+
+fn producer(_arg: Void$@): Void
+  for $i: I32 = 1; i <= 6; i += 1
+    v: = i * 10
+    g_q.send(v) // blocks here while the queue is full, and resumes once the consumer makes room
+    io.out().s("[producer] sent \{v\} (tick=\{I32::task.current_tick()\})\n")
+  io.out().s("[producer] done\n")
+
+fn consumer(_arg: Void$@): Void
+  for $n: I32 = 1; n <= 6; n += 1
+    v: = g_q.recv() // blocks while the queue is empty, until data arrives
+    io.out().s("[consumer] recv \{v\} (tick=\{I32::task.current_tick()\})\n")
+    // A bounded queue keeps the order. The order must hold even when a sender that waited on a
+    // full queue resumes.
+    assert(v == n * 10, "msgq: values must arrive in the order they were sent")
+    Task.delay(2) // consume slowly
+  io.out().s("[consumer] done\n")
+
+fn main()
+  io.out().s("=== Kanso OS (POSIX port) — message queue demo (cap=3) ===\n")
+  g_q.init(g_qbuf[0]@, 3)
+  // The producer has the higher priority (2), so it runs first, fills all 3 slots at once and
+  // blocks on the full queue.
+  tcb_p.create(U8$[]::stack_p, producer, null, 2, "producer")
+  tcb_c.create(U8$[]::stack_c, consumer, null, 1, "consumer")
+  task.start_scheduler()
+  io.out().s("=== scheduler finished (all tasks done) ===\n")

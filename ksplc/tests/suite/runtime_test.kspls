@@ -1,0 +1,93 @@
+#!/usr/bin/env -S ksplc run
+//< It **builds and runs** `tests/runtime/*.kspls` and checks each one stops at run time
+//<
+//< Some safety properties are guarded by **stopping at run time**, with nothing reported at
+//< translation time (a slice's index, `List.get`, a `Tensor`'s shape product).
+//< Caution: **Do not merge it with `tests/suite/negative_test.kspls`.** That one needs only ksplc,
+//< while this one needs a C compiler.
+//< ==========================================
+
+// ==========================================
+//   make test-runtime   … this suite
+// ==========================================
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/harness_build"
+import "ksplc/tests/support/harness_markers"
+import "std/chars" // single-character checks and extraction
+import "std/ds" as _ds // what makes `fixtures.len` available
+import "std/fs"
+import "std/io"
+import "std/seq"
+import "std/str" // what makes `arena.text()` available
+import "std/sys"
+import "std/verdict"
+
+priv const fixture_dir: U8[] = "tests/runtime"
+priv const fixture_ext: U8[] = ".kspls" //<
+  //< The notation the fixtures here are written in — the default one
+  //<
+  //< Caution: **A file in the other notation would be silently skipped**: a fixture added as a
+  //< `.kspl` goes uncounted, and "not one item" below catches only an empty folder.
+
+priv fn run_side(path: U8[], work: U8[], stem: U8[], name: U8[], m: harness_markers.Markers$@,
+  llvm: Bool) //<
+    //< It builds and runs on one of the backends and prints one verdict line
+  // The artifacts are kept apart per fixture, lest they overwrite each other.
+  b: = harness_build.build_and_run(path, work, stem, m.args.slice(), llvm)
+  if !b.built
+    verdict.check(name, false, b.out)
+    return
+  // Caution: **Check that it did not exit with 0 too.** Matching the output alone misses one that
+  // prints the expected string and continues (the check turned into a warning, say).
+  if b.code == 0
+    detail: = harness.arena().text().s("it ended at 0 without stopping\n\{b.out\}").take()
+    verdict.check(name, false, detail)
+    return
+  harness_markers.check(name, m.expect.slice(), m.deny.slice(), b.out)
+
+priv fn run_one(path: U8[], work: U8[], with_llvm: Bool) //<
+  //< It builds and runs one fixture on both backends
+  file: = sys.get_file_name(path)
+  name: = harness.arena().text().s("runtime/\{file\}").take()
+  body: = io.read_file(path) catch
+    verdict.check(name, false, "cannot read the fixture")
+    return
+  $m: = harness_markers.markers(body)
+  // Caution: Do not accept a fixture with no mark (the reason is in harness_expect.kspls).
+  if m.expect.len == 0 && m.deny.len == 0
+    verdict.check(name, false, "there is no EXPECT / EXPECT-NOT mark")
+    return
+  stem: = file.strip_suffix(fixture_ext)
+  run_side(path, work, stem, name, m@, false)
+  if !with_llvm
+    return
+  llvm_name: = harness.arena().text().s("\{name\} (llvm)").take()
+  llvm_stem: = harness.arena().text().s("\{stem\}_llvm").take()
+  run_side(path, work, llvm_stem, llvm_name, m@, true)
+
+fn main(): I32
+  arena: = harness.begin(64 * 1024 * 1024)
+  dir: = fs.absolute(fixture_dir, arena) catch
+    return harness.fatal("the working directory cannot be read")
+  files: = fs.walk_files(dir, fs.skip_none, arena) catch
+    return harness.fatal("cannot read tests/runtime/")
+  fixtures: = files.where(fn(f: U8[]; ): Bool {
+    return f.ends_with(fixture_ext);
+  }).to_list(arena)
+  // No items means "the check tests nothing", so it fails.
+  if fixtures.len == 0
+    return harness.fatal("there is no fixture in tests/runtime/")
+  work: = harness.sandbox("runtime") catch
+    return harness.fatal("cannot make a working directory")
+  // Caution: **Run the LLVM backend too.** Each backend keeps the stop message in a different
+  // place (`ksplc/gen/runtime/hosted.h` for C, `ksplc/gen/llvm/module.kspls` for LLVM), and
+  // fixing only one makes the same program print a different message per target.
+  // The same EXPECT is applied to both, so a disagreement not only in the wording but in the
+  // **position** (`at <file>:<line>`) shows here too.
+  with_llvm: = harness.cc_target().find_str("msvc") < 0
+  if !with_llvm
+    io.out().s("# runtime: the LLVM side is not turned on MSVC\n")
+  io.out().s("# runtime: \{fixtures.len\}\n")
+  for path in fixtures
+    run_one(path, work, with_llvm)
+  return harness.finish()

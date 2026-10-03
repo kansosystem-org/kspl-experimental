@@ -1,0 +1,341 @@
+//< The lines a test run emits, and the `RESULT:` line closing it, built in one place
+//<
+//< **The line format comes from the table in `make test-conventions`**, so a test writing its
+//< own lines would drift from what the gates read. There are two ways to run tests:
+//< - one test at a time (`start` / `pass` / `skip`), where a failure is `std/lang`'s panic, and
+//<   `panic: <reason> at <file>:<line>` names the test;
+//< - **a run of checks that continues past a failure** (`begin` / `check` / `finish`): a failing
+//<   check prints its `FAIL` line and the run continues, ending with one `RESULT:` line.
+//< **A child's run is read here too** (`run_child` / `run_children`): its code and its one text.
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strnum" // `to_i64`
+import "std/subproc"
+import "std/sys"
+
+// Usage:
+//   fn test_foo() {
+//     verdict.start("[Foo]");
+//     assert(1 + 1 == 2, "1 + 1 must equal 2");
+//     verdict.pass("addition works correctly.");
+//   }
+
+priv const mark_pass: U8[] = "pass" //< the marks at the start of a line
+  //<
+  //< A single test fails with `std/lang`'s panic; a run of checks prints `FAIL`, which a gate's
+  //< summary picks up.
+priv const mark_fail: U8[] = "FAIL"
+priv const mark_skip: U8[] = "SKIP"
+
+// The current test's label, and the text of its heading.
+// Caution: **Keep the heading alive until `pass` is called.** These hold a view into the string
+// the caller passed, not a copy.
+priv $cur_tag: U8[] = ""
+priv $cur_body: U8[] = ""
+
+priv fn line(mark: U8[], text: U8[], tail: U8[]) //<
+  //< Builds one line in the order mark, label, text, and ends it
+  //<
+  //< **This is the only place that builds a line.** A heading that does not start with `[` gets
+  //< no separator either. A non-empty `tail` adds one "why" at the end.
+  io.out().s(mark).c(' ')
+  // A heading's own label wins; without one, the run's label (from `begin`) is printed.
+  tag: = cur_tag if cur_tag.len > 0 else run_tag.slice()
+  if tag.len > 0
+    io.out().s(tag).s(": ")
+  io.out().s(text)
+  if tail.len > 0
+    io.out().s(": ").s(tail)
+  io.out().c('\n')
+
+priv fn remember(name: U8[]) //<
+  //< splits the heading `[label] text` into the label and the text
+  cur_tag = ""
+  cur_body = without_tail_dots(name)
+  if !name.starts_with("[")
+    return
+  close: = name.find_char(']')
+  if close < 1
+    return
+  cur_tag = name.sub(1, close - 1)
+  cur_body = without_tail_dots(name.sub_from(close + 1).trim_start())
+
+priv fn without_tail_dots(name: U8[]): U8[] //<
+  //< Returns **a view** of name without trailing whitespace and the `.`s before it
+  //<
+  //< Headings are sometimes written as `…test...`.
+  trimmed: = name.trim_end()
+  $e: = trimmed.len
+  for e > 0 && (trimmed.ptr + e - 1)$ == '.'
+    e -= 1
+  return trimmed.sub(0, e)
+
+pub fn start( //< starts a test, so a run that hangs shows where it stopped
+  //<
+  //< A run that hangs stopped at **the test after the last line printed**.
+  //< Caution: **Do not write the same thing in the heading and in `pass`.** The line prints the
+  //< text given to `pass`; the heading's text appears only when `pass` gets an empty text.
+  name: U8[], //< what this test is about, in plain words for the reader
+)
+  remember(name)
+
+pub fn pass( //< reports that the test passed
+  //<
+  //< **One line says one thing.** Trailing whitespace is dropped; a `desc` that contains a newline
+  //< prints a blank line.
+  desc: U8[], //< what was confirmed; if empty, the heading's text is used
+)
+  text: = desc.trim_end()
+  line(mark_pass, text if text.len > 0 else cur_body, "")
+
+pub fn skip( //< reports that the test does not apply on this target, and why
+  //<
+  //< Caution: **Do not skip it silently.** Printing nothing looks like a pass, and a degraded
+  //< environment looks like "everything passed". This prints the heading's text and the reason.
+  why: U8[], //< what this environment lacks, so the reader can tell it from a failure
+)
+  text: = why.trim_end()
+  if cur_body.len == 0
+    line(mark_skip, text, "")
+    return
+  line(mark_skip, cur_body, text)
+  skipped.add(cur_body)
+
+// ==========================================
+// A run of checks that continues past a failure
+// ==========================================
+// Usage (**the exit code is the verdict**, so `main` returns `finish()`):
+//   fn main(): I32 {
+//     verdict.begin("mytool");
+//     verdict.check("one plus one is two", 1 + 1 == 2, "");
+//     return verdict.finish();
+//   }
+
+priv struct Names //< the names a `RESULT:` line lists, copied into a buffer of its own
+  //<
+  //< **When the names do not all fit, it prints `…` after the ones it kept**, rather than
+  //< failing; the count on the line is still the full count.
+  buf: U8[4000]
+  len: Sz
+  count: Sz //< how many names were added
+  kept: Sz //< how many of those fit in the buffer
+
+impl Names
+  priv fn add(r: Self$@, name: U8[]) //< keeps name if the buffer still has room for it
+    r.count += 1
+    need: = name.len + (2 if r.len > 0 else 0)
+    if r.len + need > r.buf.len
+      return
+    if r.len > 0
+      r.buf[r.len] = ','
+      r.buf[r.len + 1] = ' '
+      r.len += 2
+    for i in Range.asc(name.len)
+      r.buf[r.len + i] = name[i]
+    r.len += name.len
+    r.kept += 1
+
+  priv fn put(r: Self$@) //< prints the names kept, and `…` if some did not fit
+    io.out().s((U8$[]::r.buf).sub(0, r.len))
+    if r.kept < r.count
+      io.out().s(" …")
+
+priv struct Tag //< the run's label, copied so it outlives the caller's string
+  buf: U8[128]
+  len: Sz
+
+impl Tag
+  priv fn slice(r: Self@): U8[]
+    return (U8$[]::r.buf).sub(0, r.len)
+
+priv $run_tag: Tag = ::{ .buf = ::{}, .len = 0 }
+priv $failed: Names = ::{ .buf = ::{}, .len = 0, .count = 0, .kept = 0 }
+priv $skipped: Names = ::{ .buf = ::{}, .len = 0, .count = 0, .kept = 0 }
+
+pub const max_findings_shown: Sz = 20 //< how many of a walk's findings one check lists
+  //<
+  //< Beyond this many, a longer list tells the reader nothing more.
+
+pub fn begin( //< starts a run of checks, and makes the output line-buffered
+  //<
+  //< Line buffering means a run that hangs shows how far it got, and a pipe shared by several runs
+  //< never splits a line.
+  tag: U8[], //< the label on every line; if empty, no label is printed
+)
+  io.set_line_buffered()
+  $n: = tag.len
+  if n > run_tag.buf.len
+    n = run_tag.buf.len
+  for i in Range.asc(n)
+    run_tag.buf[i] = tag[i]
+  run_tag.len = n
+
+pub fn check( //< one check: prints a `pass` line if it holds, a `FAIL` line if it does not
+  //<
+  //< A failure does not stop the run; it is counted, and named on the `RESULT:` line.
+  name: U8[], //< what was checked, in plain words for the reader
+  ok: Bool, //< whether it held
+  detail: U8[], //< what was found when it did not hold; if empty, nothing more is printed
+): Bool //< `ok` itself, so the call can be used as a condition
+  cur_tag = ""
+  if ok
+    line(mark_pass, name, "")
+    return true
+  line(mark_fail, name, detail)
+  failed.add(name)
+  return false
+
+pub fn list_verdict( //< whether a walk passes: it found nothing wrong, and it looked at something
+  //<
+  //< **It is separate from the printing so tests can check it against sample inputs.**
+  seen: Sz, //< how many things the walk looked at
+  bad_len: Sz, //< how many of them had a problem
+): Bool //< true only when `bad_len` is 0 and `seen` is not
+  return bad_len == 0 && seen > 0
+
+pub fn check_list( //< reports a walk's findings as one check, with how many things it looked at
+  //<
+  //< Caution: **Looking at nothing fails**: the code that reads broke, or what it reads has moved
+  //< (a subject that is really empty still walks the files it looked in). Hence the count argument.
+  name: U8[], //< what was checked
+  seen: Sz, //< how many things the walk looked at
+  unit: U8[], //< what was counted (`lines`, `files`, `items`)
+  bad: List<|U8[]|>@, //< the problems found, one entry per finding
+  tail: U8[], //< how to fix the findings; printed only when there are some
+): Bool //< true when it held, as `list_verdict` decides
+  ok: = list_verdict(seen, bad.len)
+  cur_tag = ""
+  $shown: = Str_builder.new()
+  defer shown.free()
+  shown.s(name).s(" (\{seen\} \{unit\})")
+  $why: = Str_builder.new()
+  defer why.free()
+  for i in Range.asc(bad.len)
+    if i >= max_findings_shown
+      why.s("\n    (and \{bad.len - max_findings_shown\} more)")
+      break
+    why.s("\n    ").s(bad.get(i))
+  if tail.len > 0 && bad.len > 0
+    why.s("\n    ").s(tail)
+  if seen == 0
+    why.s("\n    it walked no \{unit\} at all, so it held nothing up against anything — the ")
+      .s("reading broke, or what it reads has moved")
+  if ok
+    line(mark_pass, shown.slice(), "")
+    return true
+  line(mark_fail, shown.slice(), why.slice().trim_start())
+  failed.add(shown.slice())
+  return false
+
+pub fn skip_check( //< reports a check this environment cannot run, with the reason
+  //<
+  //< Caution: **Do not pass it with `check(…, true, …)`.** It would read as confirmed, and the
+  //< `RESULT:` line would not name it.
+  name: U8[], //< the check that is skipped
+  why: U8[], //< what this environment lacks
+)
+  cur_tag = ""
+  line(mark_skip, name, why.trim_end())
+  skipped.add(name)
+
+pub fn finish(): I32 //<
+  //< ends the run with its `RESULT:` line, and returns the verdict as the exit code
+  //<
+  //< Caution: **Start no line but the verdict with `RESULT:`**: the gates read that word.
+  if failed.count > 0
+    io.out().s("RESULT: SOME FAILED (\{failed.count\}) -> ")
+    failed.put()
+    io.out().c('\n')
+    return 1
+  if skipped.count > 0
+    io.out().s("RESULT: ALL PASS (\{skipped.count\} skipped) -> ")
+    skipped.put()
+    io.out().c('\n')
+    return 0
+  io.out().s("RESULT: ALL PASS\n")
+  return 0
+
+pub fn fatal( //< ends a run that cannot continue (for example, its input files are missing)
+  msg: U8[], //< why it cannot continue
+): I32 //< always 1, the exit code to return from main
+  cur_tag = ""
+  line(mark_fail, msg, "")
+  io.out().s("RESULT: SOME FAILED (1)\n")
+  return 1
+
+// ==========================================
+// A child's run, as a check reads it
+// ==========================================
+
+pub const default_timeout_ms: I32 = 600000 //< the usual limit on waiting for a child (`run_child`)
+  //<
+  //< Long, as insurance against a run that hangs. **Only a check whose failure is not stopping
+  //< passes a shorter one.**
+
+priv const run_output_cap: Sz = 4 * 1024 * 1024 //< how much of each of a child's outputs is kept
+  //<
+  //< Caution: What is beyond it is cut without a word: enough for matching diagnostics, not for
+  //< receiving an artifact itself.
+
+pub struct Run_out //< one child's run as a check reads it: how it ended, and what it wrote
+  //<
+  //< **A diagnostic appears on either stdout or stderr** (by version and route), so the two are
+  //< joined, and the matcher misses neither.
+  pub code: I32 //< the exit code; -1 where it could not start or was killed on a timeout
+  pub out: U8[] //< what it wrote, one text (`Run_result.text`); where it did not end, why
+
+priv fn folded(r: subproc.Run_result@, arena: Arena$@): Run_out //< one run, as a code and a text
+  //<
+  //< **Where it could not start, the text says so too**: the code alone can look like "it ended
+  //< non-zero".
+  if r.spawn_failed
+    return Run_out::{ .code = -1, .out = "[harness] it could not start" }
+  text: = r.text(arena)
+  if r.timed_out
+    return Run_out::{ .code = -1,
+      .out = arena.text().s(text).s("\n[harness] killed on a timeout\n").take() }
+  return Run_out::{ .code = r.exit_code, .out = text }
+
+pub fn run_child( //< runs one child to its end, and returns how it ended and what it wrote
+  argv: U8[][], //< the executable and its arguments
+  cwd: U8[], //< the working directory; empty inherits the caller's
+  timeout_ms: I32, //< how long it may run before it is killed (-1 in `code`)
+  arena: Arena$@, //< where the text is kept
+): Run_out
+  r: = subproc.run_capture(argv, cwd, timeout_ms, run_output_cap, arena)
+  return folded(r@, arena)
+
+pub fn jobs(): Sz //< how many children `run_children` runs side by side
+  //<
+  //< The core count, capped at 8; `KANSO_TEST_JOBS=1` runs them one at a time (to read a failed
+  //< case's output).
+  if v: = sys.get_env("KANSO_TEST_JOBS")
+    n: = v.to_i64() catch
+      fallback 0I64
+    if n > 0I64
+      return Sz::n
+  n: = sys.cpu_count()
+  return 8 if n > 8 else n
+
+#cfg(!freestanding)
+pub fn run_children( //< runs children side by side (`jobs`), and returns their runs in order
+  //<
+  //< **The results come in the input's order**, so the code that judges has one form, sequential
+  //< or parallel. **There is no timeout** (`run_many`'s), so run nothing here that might not stop.
+  //< Caution: **Give each run a `work_dir` of its own.** The outputs are collected there in files
+  //< of fixed names (`j<number>.out`), so two runs sharing one at once read each other's.
+  items: subproc.Job[], //< what to run
+  work_dir: U8[], //< where the outputs are collected; made where missing
+  arena: Arena$@, //< where the texts are kept
+): List<|Run_out|>$@
+  fs.mkdir_all(work_dir) catch {}
+  rs: = subproc.run_many(items, jobs(), run_output_cap, work_dir, arena)
+  outs: = List<|Run_out|>.create(arena)
+  for i in Range.asc(rs.len)
+    r: = rs.get(i)
+    outs.push(folded(r@, arena))
+  return outs

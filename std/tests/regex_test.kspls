@@ -1,0 +1,464 @@
+import "std/mem" + { Arena }
+import "std/regex"
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// Tests of std/regex: matching, capture groups, find_all, escapes, group repetition, and refusing
+// a bad count or range. Encoding itself is tested in `encoding_test.kspls`.
+// ==========================================
+priv fn compile_is_rejected(pattern: U8[]): Bool //<
+  //< Compiles one pattern and returns only whether it was refused (freeing it if it compiled)
+  r: = regex.Regex.compile(pattern) catch
+    return true
+  r.free()
+  return false
+
+priv fn rejected_with(pattern: U8[], want: regex.Regex_error): Bool //<
+  //< Compiles one pattern and returns whether it was refused **for that reason**
+  //<
+  //< Caution: Check the reason, or a refusal with a different error passes too.
+  r: = regex.Regex.compile(pattern) catch e
+    return e == want
+  r.free()
+  return false
+
+priv fn match_end(pattern: U8[], text: U8[]): Sz //<
+  //< The end of the first match (-1 if none is found)
+  r: = regex.Regex.compile(pattern) catch
+    return -1
+  defer r.free()
+  m: = r.find(text) catch
+    return -1
+  return m.end
+
+// ==========================================
+// std/regex: the basic correctness of compile/is_match/find.
+// ==========================================
+fn test_regex_match()
+  verdict.start("[Regex] compile/is_match/find test...")
+  heap_before: = mem.heap_used_bytes()
+  r: = regex.Regex.compile("[0-9]+-[0-9]+") catch panic("regex compile failed")
+  assert(r.is_match("order 2024-11 shipped"), "regex should match embedded pattern")
+  assert(!r.is_match("no numbers here"), "regex should not match unrelated text")
+
+  m: = r.find("order 2024-11 shipped") catch panic("regex find should have succeeded")
+  assert(m.start == 6 && m.end == 13, "find() should report the exact match span")
+  r.free()
+
+  r2: = regex.Regex.compile("^(cat|dog)s?$") catch panic("regex compile failed")
+  assert(r2.is_match("cat"), "alternation + optional 's' should match singular")
+  assert(r2.is_match("dogs"), "alternation + optional 's' should match plural")
+  assert(!r2.is_match("catfish"), "anchored pattern must not match a superstring")
+  r2.free()
+
+  // **`\d` inside a class is a set**, not a plain 'd' (which would compile yet match no digit);
+  // `[^\d]` does not match a digit.
+  rcls: = regex.Regex.compile("^[\\d]+$") catch panic("regex compile failed")
+  assert(rcls.is_match("507"), "a class containing \\d must match digits")
+  assert(!rcls.is_match("ddd"), "a class containing \\d must not match the letter d")
+  rcls.free()
+  rncls: = regex.Regex.compile("^[^\\d]+$") catch panic("regex compile failed")
+  assert(rncls.is_match("abc"), "a negated class with \\d must match non-digits")
+  assert(!rncls.is_match("7"), "a negated class with \\d must reject digits")
+  rncls.free()
+
+  // Caution: **Resolve an escape at a range's upper end too.** Otherwise the upper end becomes `\`
+  // (0x5C), which is smaller than the lower end 'a' (0x61), so the range silently becomes empty.
+  rrange: = regex.Regex.compile("^[a-\\{]+$") catch panic("regex compile failed")
+  assert(rrange.is_match("mist"), "an escaped range endpoint must still form the range")
+  assert(!rrange.is_match("A1"), "the range must not swallow characters outside it")
+  rrange.free()
+
+  // Caution: **Test a lazy match by "how far it matches", not by "whether it matches".** `is_match`
+  // is true either way, so without `find`'s span the difference from greedy never shows. The
+  // expected values come from Python's `re`.
+  rlazy: = regex.Regex.compile("a.*?b") catch panic("regex compile failed")
+  mlazy: = rlazy.find("axxbyyb") catch panic("a lazy pattern must find the short match")
+  assert(mlazy.start == 0 && mlazy.end == 4, "'.*?' must stop at the first 'b'")
+  rlazy.free()
+  rgreedy: = regex.Regex.compile("a.*b") catch panic("regex compile failed")
+  mgreedy: = rgreedy.find("axxbyyb") catch panic("a greedy pattern must find the long match")
+  assert(mgreedy.start == 0 && mgreedy.end == 7, "'.*' must run to the last 'b'")
+  rgreedy.free()
+  // `+?` matches at least one; `??` tries zero first (which gives an empty match).
+  rplus: = regex.Regex.compile("a+?") catch panic("regex compile failed")
+  mplus: = rplus.find("aaa") catch panic("'+?' must match once")
+  assert(mplus.start == 0 && mplus.end == 1, "'+?' must take the fewest repetitions")
+  rplus.free()
+  ropt: = regex.Regex.compile("a??") catch panic("regex compile failed")
+  mopt: = ropt.find("a") catch panic("'??' must match empty")
+  assert(mopt.start == 0 && mopt.end == 0, "'??' must prefer taking nothing")
+  ropt.free()
+
+  // A trailing `\` and a set at a range's end are errors; the former would otherwise match nothing,
+  // with no error.
+  assert(compile_is_rejected("a\\"), "a trailing backslash must be rejected")
+  assert(compile_is_rejected("[a-\\d]"), "a shorthand class cannot be a range endpoint")
+
+  // free() frees the nested node tree and the lists, leaving no leak.
+  heap_after: = mem.heap_used_bytes()
+  assert(heap_after == heap_before, "Regex.free() must recursively free the node tree (no leak)")
+
+  // Deep nesting `(((...` must be refused as an error, not exhaust the stack at compile time.
+  $deep_pattern: = Str_builder.new()
+  defer deep_pattern.free()
+  for _i in Range.asc(600)
+    deep_pattern.c('(')
+  deep_rejected: = compile_is_rejected(deep_pattern.slice())
+  assert(deep_rejected, "pathologically deep group nesting must be rejected, not crash")
+
+  // Caution: **List every pattern that must be refused, leaving none out.** A pattern that is not
+  // refused is taken as a literal and silently passes as **a different pattern**: `*a` as
+  // "`a` after `*`", `(a)\1` as "the character `1` after `a`", `a\qb` as "the character `q` after
+  // `a`".
+  // `(a)*` is not here: a quantifier on a group is valid (test_regex_group_repeat).
+  bad_patterns: U8[][12] = ::{ "a)b", "(a", "[a", "^*", "*a", "a**", "a*??", "(a)\\1",
+    "(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)", "a\\qb", "[\\b]", "\\b*" }
+  // Caution: **Free the tree of a refused pattern too.** Throwing partway through the parse leaves
+  // the nodes allocated so far unreachable, and the success path above cannot notice it.
+  err_heap_before: = mem.heap_used_bytes()
+  for _round in Range.asc(4)
+    for p in bad_patterns
+      assert(compile_is_rejected(p), "a malformed pattern must be rejected")
+  err_heap_after: = mem.heap_used_bytes()
+  assert(err_heap_after == err_heap_before,
+    "a failed Regex.compile must free the nodes it built before throwing")
+
+  // Catastrophic backtracking (ReDoS) is cut off and returns false instead of hanging.
+  r3: =
+    regex.Regex.compile("a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?b") catch panic("regex compile failed")
+  r3_matched: = r3.is_match("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+  assert(!r3_matched, "catastrophic backtracking must not hang or falsely match")
+  r3.free()
+
+  verdict.pass("compile/is_match/find behave correctly against real input.")
+
+priv fn group_of(pattern: U8[], text: U8[], n: Sz): U8[] //<
+  //< The string of the n-th capture group of one match: `-` if it did not take part, `!` if none
+  r: = regex.Regex.compile(pattern) catch
+    return "!"
+  defer r.free()
+  m: = r.find(text) catch
+    return "!"
+  return "-" if !m.has_group(n) else m.group(n, text)
+
+priv fn group_count_of(pattern: U8[], text: U8[]): Sz
+  r: = regex.Regex.compile(pattern) catch
+    return -1
+  defer r.free()
+  m: = r.find(text) catch
+    return -1
+  return m.group_count()
+
+// ==========================================
+// std/regex: capture groups.
+// Caution: **Always check that a group of an alternative dropped by backtracking keeps no
+// value.** The match is right, so a group holding the previous try's value looks plausible.
+// ==========================================
+fn test_regex_groups()
+  verdict.start("[Regex] capture group test...")
+  heap_before: = mem.heap_used_bytes()
+
+  // Caution: **Bind a match's string to a name before comparing it.**
+  // `assert(f(…).equals(…), …)` triggers [H0802] as soon as the argument list wraps.
+  num1: = group_of("(\\d+)-(\\d+)", "x 12-345 y", 1)
+  num2: = group_of("(\\d+)-(\\d+)", "x 12-345 y", 2)
+  assert(num1.equals("12"), "the string of group 1")
+  assert(num2.equals("345"), "the string of group 2")
+  pet: = group_of("(cat|dog)s", "dogs", 1)
+  assert(pet.equals("dog"), "a capture inside an alternative")
+  // Numbered by opening paren: the outer of a nest is 1, the inner 2.
+  outer: = group_of("((a)b)", "ab", 1)
+  inner: = group_of("((a)b)", "ab", 2)
+  assert(outer.equals("ab"), "the outer of a nest is number 1")
+  assert(inner.equals("a"), "the inner of a nest is number 2")
+
+  // A group that did not take part and a group that matched with length 0 are two different things.
+  absent: = group_of("(a)|b", "b", 1)
+  zero_len: = group_of("(x?)y", "y", 1)
+  assert(absent.equals("-"), "has_group is false for a group that did not take part")
+  assert(zero_len.equals(""), "a group matching with length 0 has has_group true and is empty")
+
+  // **A dropped alternative's group must keep no value**: `c` matched, so 1 and 2 took no part.
+  top1: = group_of("(a)(b)|c", "c", 1)
+  top2: = group_of("(a)(b)|c", "c", 2)
+  assert(top1.equals("-"), "group 1 of a dropped alternative does not stay behind")
+  assert(top2.equals("-"), "group 2 of a dropped alternative does not stay behind")
+  // **After backtracking inside a group, the group holds the last string that matched**: `a`,
+  // then `ab`.
+  back: = group_of("(a|ab)c", "abc", 1)
+  assert(back.equals("ab"), "the string after backtracking inside a group")
+  // **A nested group filled inside a dropped alternative must keep no value either**: `(a)x`
+  // fills group 2 and is dropped. An alternative inside a group is not reset per try, so these
+  // two cases alone cover the saving and restoring.
+  nest_out: = group_of("((a)x|ab)c", "abc", 1)
+  nest_in: = group_of("((a)x|ab)c", "abc", 2)
+  assert(nest_out.equals("ab"), "the outer after an alternative inside a group dropped out")
+  assert(nest_in.equals("-"), "the nest does not stay behind when a group's alternative drops out")
+
+  // `(?:…)` does not use up a group number.
+  skipped: = group_of("(?:a)(b)", "ab", 1)
+  n_skip: = group_count_of("(?:a)(b)", "ab")
+  n_none: = group_count_of("[0-9]+", "42")
+  n_full: = group_count_of("(a)(b)(c)(d)(e)(f)(g)(h)(i)", "abcdefghi")
+  assert(n_skip == 1, "a non-capturing group is not counted")
+  assert(skipped.equals("b"), "what follows a non-capturing group is number 1")
+  assert(n_none == 0, "a pattern with no group is 0")
+  assert(n_full == 9, "exactly the upper bound goes through")
+
+  // **Do not leak on a pattern with groups either** (the end-marker node included).
+  heap_after: = mem.heap_used_bytes()
+  assert(heap_after == heap_before, "Regex.free() with groups does not leak the tree")
+  verdict
+    .pass("Capture groups come out in number order, and a dropped alternative's value is gone.")
+
+priv fn spans_of(pattern: U8[], text: U8[], arena: Arena$@): U8[] //<
+  //< Joins every match into a list of "start,end " (`!` if the pattern is an error)
+  //<
+  //< Caution: **Compare by position, not by content.** Length-0 matches in between change no
+  //< string, so a mistake in how it advances never shows.
+  r: = regex.Regex.compile(pattern) catch
+    return "!"
+  defer r.free()
+  ms: = r.find_all(text, arena) catch
+    return "!"
+  b: = arena.text()
+  for m in ms
+    b.s("\{m.start\},\{m.end\} ")
+  return b.take()
+
+priv fn nth_group(pattern: U8[], text: U8[], n: Sz, g: Sz, arena: Arena$@): U8[] //<
+  //< The g-th capture group of the n-th match (0 based), `-` if there is none
+  r: = regex.Regex.compile(pattern) catch
+    return "!"
+  defer r.free()
+  ms: = r.find_all(text, arena) catch
+    return "!"
+  if n >= ms.len
+    return "-"
+  return ms.get(n).group(g, text)
+
+// ==========================================
+// std/regex: `find_all`, which collects every match.
+// ==========================================
+
+fn test_regex_find_all() //<
+  //< That collecting every match finds them all, at the right positions
+  //<
+  //< Caution: **Always check that a length-0 match advances by one byte**, or it hangs rather
+  //< than fails. **Also check that a returned position counts from the start of text**; code that
+  //< adds the slice offset back but forgets the groups' positions is caught only through
+  //< `group`.
+  verdict.start("[Regex] collecting every match test...")
+  heap_before: = mem.heap_used_bytes()
+  // Caution: **Free the arena only after the comparisons.** The returned strings live in it.
+  arena: = Arena.new(64 * 1024)
+
+  // The expected values come from Python's `finditer`.
+  star: = spans_of("a*", "baa", arena)
+  adjacent: = spans_of("ab", "ababX", arena)
+  empty_text: = spans_of("x*", "", arena)
+  none: = spans_of("zzz", "abc", arena)
+  spread: = spans_of("(\\d+)", "aa 12 bb 345", arena)
+  assert(star.equals("0,0 1,3 3,3 "), "a length-0 match still advances by one byte")
+  assert(adjacent.equals("0,2 2,4 "), "two adjacent matches are both picked up")
+  assert(empty_text.equals("0,0 "), "even an empty string gets one match")
+  assert(none.len == 0, "an empty List when there is not one match")
+  assert(spread.equals("3,5 9,12 "), "a position is an index from the head of the original string")
+
+  // The groups differ per match; the second must be read against the original string.
+  second: = nth_group("(\\d+)", "aa 12 bb 345", 1, 1, arena)
+  pair_a: = nth_group("(a)(b)", "abab", 1, 1, arena)
+  pair_b: = nth_group("(a)(b)", "abab", 1, 2, arena)
+  assert(second.equals("345"), "the second match's group reads off the original string")
+  assert(pair_a.equals("a"), "group 1 of the second match")
+  assert(pair_b.equals("b"), "group 2 of the second match")
+
+  // **A pattern starting with `^` does not move the start position** (find_from's fast path).
+  // **If one alternative does not start with `^`, it must move** (`^a|b`), or a match is silently
+  // lost.
+  anchored: = spans_of("^a", "aaa", arena)
+  mixed: = spans_of("^a|b", "cb", arena)
+  tail_only: = spans_of("^a", "ba", arena)
+  head_ok: = anchored.equals("0,1 ")
+  mixed_ok: = mixed.equals("1,2 ")
+  assert(head_ok, "`^` matches only the one at the head")
+  assert(mixed_ok, "when only one side has `^`, the other still matches further back")
+  assert(tail_only.len == 0, "`^` does not match anywhere but the head")
+
+  arena.free()
+  heap_after: = mem.heap_used_bytes()
+  assert(heap_after == heap_before,
+    "find_all leaks neither the Regex nor anything outside the arena")
+  verdict.pass("Every position agrees with other implementations, and a length-0 match advances.")
+
+priv fn matches(pattern: U8[], text: U8[]): Bool
+  r: = regex.Regex.compile(pattern) catch
+    return false
+  defer r.free()
+  return r.is_match(text)
+
+// ==========================================
+// std/regex: escapes for control characters (`\t` `\n` `\r`) and word boundaries (`\b` `\B`).
+// Caution: **For both, test "what must not match" as well.** An implementation that takes the
+// escape as a literal makes `a\tb` match the character `t`.
+// ==========================================
+fn test_regex_escapes()
+  verdict.start("[Regex] control characters and word boundaries test...")
+  heap_before: = mem.heap_used_bytes()
+
+  assert(matches("a\\tb", "a\tb"), "`\\t` is a tab")
+  assert(!matches("a\\tb", "atb"), "`\\t` is not the character `t`")
+  assert(matches("a\\nb", "a\nb"), "`\\n` is a newline")
+  assert(!matches("a\\nb", "anb"), "`\\n` is not the character `n`")
+  assert(matches("a\\rb", "a\rb"), "`\\r` is a carriage return")
+
+  // A word boundary has no width: one side a word character, the other not.
+  assert(matches("cat\\b", "cat dog"), "the boundary at a word's end")
+  assert(!matches("cat\\b", "cats"), "the middle of a word is not a boundary")
+  assert(matches("\\bcat", "a cat"), "the boundary at a word's start")
+  assert(!matches("\\bcat", "scat"), "it does not start from the middle of a word")
+  assert(matches("\\bcat\\b", "cat"), "an end is treated as a boundary")
+  // `\B` is the complement. Testing only one side lets an "always true" implementation pass.
+  assert(matches("cat\\B", "cats"), "`\\B` matches the middle of a word")
+  assert(!matches("cat\\B", "cat x"), "`\\B` does not match a boundary")
+
+  // An escaped symbol is the plain character. Without this, `\.` cannot be written.
+  assert(matches("a\\.b", "a.b"), "`\\.` is the dot itself")
+  assert(!matches("a\\.b", "axb"), "`\\.` is not any one character")
+
+  heap_after: = mem.heap_used_bytes()
+  assert(heap_after == heap_before, "Regex.free() with escapes does not leak the tree")
+  verdict.pass("Control characters are undone, and a word boundary works without holding width.")
+
+priv fn late_match_start(): Sz //< whether a match further back can be found
+  //<
+  //< **The test checks the answer, not the speed.** If a repetition that matches empty is not cut
+  //< off, it uses up the backtracking budget shared across the whole `find`, ends as
+  //< `too_complex`, and the real match further back is missed. The regex is freed inside, since
+  //< the caller compares the heap.
+  $long_text: = Str_builder.new()
+  defer long_text.free()
+  for _i in Range.asc(800)
+    long_text.c('c')
+  long_text.s("ab")
+  r: = regex.Regex.compile("(a?)*b") catch
+    return -1
+  defer r.free()
+  m: = r.find(long_text.slice()) catch
+    return -1
+  return m.start
+
+// ==========================================
+// std/regex: a quantifier on a group (`(ab)*` `(ab)+` `(ab)?` and their lazy forms).
+// Caution: **Check "that it stops" before the answer.** Without a cut-off, a body that can match
+// empty (`(a?)*`) loops at the same position, which shows up as a timeout, not a failure.
+// ==========================================
+fn test_regex_group_repeat()
+  verdict.start("[Regex] a quantifier on a group test...")
+  heap_before: = mem.heap_used_bytes()
+
+  star: = group_of("(ab)*", "ababX", 1)
+  plus: = group_of("(ab)+", "abab", 1)
+  assert(star.equals("ab"), "`(ab)*` captures the last round")
+  assert(plus.equals("ab"), "`(ab)+` captures the last round too")
+  assert(!matches("(ab)+", "X"), "`(ab)+` does not match at zero rounds")
+  assert(matches("^(?:ab)*$", "abab"), "a repeated non-capturing group")
+  assert(group_count_of("^(?:ab)*$", "abab") == 0, "a non-capturing group is not counted")
+
+  // `?` wraps the group from **outside**; an empty alternative inside would fill it with "" when
+  // `(ab)?c` matches `c`, where other implementations answer "did not take part".
+  opt_hit: = group_of("(ab)?c", "abc", 1)
+  opt_miss: = group_of("(ab)?c", "c", 1)
+  assert(opt_hit.equals("ab"), "`(ab)?` captures when it is taken")
+  assert(opt_miss.equals("-"), "`(ab)?` does not take part when it is not taken")
+
+  // **The one round that matched empty is kept.** Only the repetition is cut off.
+  empty_none: = group_of("(a?)*b", "b", 1)
+  empty_after: = group_of("(a?)*b", "aaab", 1)
+  empty_alt: = group_of("(x|)*y", "y", 1)
+  assert(empty_none.equals(""), "the one round that went on empty stays as the empty string")
+  assert(empty_after.equals(""), "the empty round after advancing stays too")
+  assert(empty_alt.equals(""), "the round that went on the empty alternative stays too")
+
+  // The match further back tests the cut-off (the reason is at `late_match_start`).
+  assert(late_match_start() == 800, "a match further back is found")
+
+  backtrack: = group_of("(a|ab)*c", "ababc", 1)
+  assert(backtrack.equals("ab"), "the last string backtracked to while going round")
+
+  // The lazy form. **`is_match` shows no difference**, so the captured string tests it.
+  lazy: = group_of("(?:[\\w]+\\s+)*?@(\\w+)", "call void @abort", 1)
+  assert(lazy.equals("abort"), "a lazily repeated group")
+
+  heap_after: = mem.heap_used_bytes()
+  assert(heap_after == heap_before, "Regex.free() does not leak, the copy per round included")
+  verdict
+    .pass("A repeated group returns the same answer as Python, and it stops even going on empty.")
+// ==========================================
+// std/regex: counted repetition `{n}` `{n,}` `{n,m}`, `.` against a newline, and range errors.
+// Caution: **Test refusals down to their reason.** Taking `a{` as a character only fails to match,
+// which the tests of valid patterns do not catch.
+// ==========================================
+fn test_regex_bounds()
+  verdict.start("[Regex] counted repetition, `.` and ranges test...")
+  heap_before: = mem.heap_used_bytes()
+
+  assert(matches("^a{3}$", "aaa"), "`{3}` is exactly 3 rounds")
+  assert(!matches("^a{3}$", "aa"), "2 rounds are not enough for `{3}`")
+  assert(!matches("^a{3}$", "aaaa"), "`{3}` does not take 4 rounds")
+  assert(matches("^a{2,}$", "aaaa"), "`{2,}` has no upper bound")
+  assert(!matches("^a{2,}$", "a"), "1 round is not enough for `{2,}`")
+  assert(matches("^a{1,3}$", "aa"), "within `{1,3}`")
+  assert(!matches("^a{1,3}$", "aaaa"), "`{1,3}` is not exceeded")
+  assert(matches("^\\d{4}-\\d{2}$", "2024-11"), "a count can be put on a class too")
+  assert(!matches("^\\d{4}-\\d{2}$", "224-11"), "digits short of the count do not fit")
+  assert(matches("^.{3}$", "abc"), "a count can be put on `.` too")
+  assert(match_end("a{2,4}", "aaaaa") == 4, "the greedy form takes up to the upper bound")
+  assert(match_end("a{2,4}?", "aaaaa") == 2, "the lazy form stops at the lower bound")
+  assert(match_end("a{0,1}b", "b") == 1, "`{0,1}` is the same as `?`")
+  // A count on a group **must stop at the upper bound**.
+  assert(match_end("(ab){2}", "ababab") == 4, "a group's `{2}` stops at exactly 2 rounds")
+  assert(!matches("^(ab){2}$", "ababab"), "a group's `{2}` does not take 3 rounds")
+  assert(matches("^(ab){1,2}$", "abab"), "within a group's `{1,2}`")
+  assert(!matches("^(ab){2,}$", "ab"), "1 round is not enough for a group's `{2,}`")
+  assert(group_of("(ab){2}", "ababab", 1).equals("ab"),
+    "a group's counted repetition captures the last round too")
+  assert(match_end("(ab){1,2}?c", "ababc") == 5,
+    "a group's lazy form also goes to the upper bound if it has to")
+
+  // A `{` that does not form a count is refused. A literal `{` is escaped or placed in a class.
+  assert(rejected_with("a{", .invalid_repeat), "`a{` is not shaped as a count")
+  assert(rejected_with("a{,3}", .invalid_repeat), "`{,3}`, with no lower bound, is refused")
+  assert(rejected_with("a{3,2}", .invalid_repeat), "a lower bound above the upper one is refused")
+  assert(rejected_with("a{1001}", .invalid_repeat), "a count above max_repeat_count is refused")
+  assert(rejected_with("a{x}", .invalid_repeat), "a count that is not digits is refused")
+  assert(rejected_with("{3}", .dangling_quantifier), "`{3}` with nothing to repeat is refused")
+  assert(rejected_with("^{3}", .dangling_quantifier), "a count cannot be put on an anchor")
+  assert(matches("a\\{3\\}", "a{3}"), "`\\{` is the literal `{`")
+  assert(matches("^[{]$", "{"), "`{` inside a class is a literal")
+  assert(matches("^a}$", "a}"), "`}` alone is a literal")
+
+  // `.` does not match a newline (as in other engines); a negated class and `\s` do.
+  assert(!matches("a.b", "a\nb"), "`.` does not fit a newline")
+  assert(matches("a.b", "a b"), "`.` fits any 1 character but a newline")
+  assert(matches("a[^x]b", "a\nb"), "a negated class fits a newline too")
+  assert(matches("a\\sb", "a\nb"), "`\\s` fits a newline")
+  assert(matches("a[\\s\\S]b", "a\nb"), "`[\\s\\S]` is any 1 character, a newline included")
+
+  // A reversed range accepted as empty would match nothing, with no error.
+  assert(rejected_with("[z-a]", .invalid_range), "a reversed range is refused")
+  assert(rejected_with("[a-\\d]", .invalid_range), "a set cannot be a range's upper end")
+  assert(rejected_with("[\\d-z]", .invalid_range),
+    "a `-` next to a set is neither a range nor a literal")
+  assert(matches("^[-\\d]+$", "1-2"), "a `-` at the head is a literal")
+  assert(matches("^[\\d-]+$", "1-2"), "a `-` at the tail is a literal")
+  assert(matches("^[\\d\\-z]+$", "1-z"), "`\\-` is the literal `-`")
+  assert(matches("^[a-a]$", "a"), "a range with the same ends is 1 character")
+
+  heap_after: = mem.heap_used_bytes()
+  assert(heap_after == heap_before, "Regex.free() does not leak, counted repetition included")
+  verdict
+    .pass("Counted repetition stops at its upper bound, a malformed `{` and a reversed range are \
+      refused, and `.` does not fit a newline.")

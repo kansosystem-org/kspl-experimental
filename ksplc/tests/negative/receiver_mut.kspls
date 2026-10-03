@@ -1,0 +1,62 @@
+//< One subject per file, with one function for each case
+//<
+//< The file's marks are every case's marks gathered at the head. The same mark written N times
+//< must match N places.
+// EXPECT: cannot call a method that takes a writable receiver
+// EXPECT: cannot call a method that takes a writable receiver
+// EXPECT: cannot call a method that takes a writable receiver
+// EXPECT: cannot assign to immutable variable 'x'
+// EXPECT: cannot assign to immutable variable 'r'
+
+// A method taking `Self$@` (a receiver it may rewrite) could be called on a read-only place. **A
+// receiver is a place whose address is taken implicitly.** Shut the assignment alone and a mutable
+// receiver's method called on the same place can still write (it was a loophole where `cs.n = 9`
+// was rejected while `cs.bump()` passed). Against `const` data it becomes a write to ROM.
+// A method taking `Self@` can be called on a read-only place too (it declares that it does
+// not write).
+struct Box
+  n: I32
+
+impl Box
+  fn bump(r: Self$@)
+    r.n = 99
+  fn peek(r: Self@): I32
+    return r.n
+
+impl U8
+  fn bump_byte(r: Self$@)
+    r$ = 99
+
+const ro_box: Box = ::{ .n = 1 }
+const ro_arr: U8[4] = ::{ 1, 2, 3, 4 }
+
+fn case_mut_method_on_readonly_recv(): I32
+  ro_box.bump() // a const struct
+  ro_arr[0].bump_byte() // an element of a const array
+  $live: Box = ::{ .n = 1 }
+  rp: Box@ = live@ // a read-only pointer
+  rp.bump()
+  return ro_box.peek() // Self@ passes
+
+// A binding is immutable unmarked (to make it mutable, write `$x: = ...`). Reassigning to an
+// unmarked binding should be refused.
+fn case_immut_binding_reassign()
+  x: I32 = 5
+  x = 10
+
+// A read-only receiver passed by value, `r: Self` (unmarked, so immutable on the binding axis). A
+// field write by way of the binding `r` should be refused by sema (enforce_mutability walks the
+// `.` and checks the root binding's is_mut). To rewrite it, use the binding axis's `$r: Self`.
+struct P
+  priv x: I32
+impl P
+  priv fn bad(r: Self)
+    r.x = 5
+fn case_immut_value_receiver_field_write()
+  p: = P::{ .x = 3 }
+  p.bad()
+
+fn main()
+  case_mut_method_on_readonly_recv()
+  case_immut_binding_reassign()
+  case_immut_value_receiver_field_write()

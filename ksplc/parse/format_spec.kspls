@@ -1,0 +1,178 @@
+//< Reads the SPEC of a string interpolation `\{value:SPEC\}`
+//<
+//< The grammar is `[0]?[width]?[,]?[.precision]?[xX]?[c]?`: a leading 0 is zero-padding, the digits
+//< after it the width, a `,` the thousands separator, a `.N` the digits after the decimal point, a
+//< trailing `x`/`X` hexadecimal (`X` upper case) and `c` one byte as a character. `build_call`
+//< turns it into the method call `ksplc/parse/desugar.kspls` puts in place.
+//< **The callee decides which items take effect.**
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/core" as base_core
+import "std/chars"
+
+priv struct Format_spec_val //< the result of interpreting the SPEC
+  //<
+  //< Where `consumed` differs from spec.len, part of the text could not be read.
+  zero: Bool
+  width: Sz
+  comma: Bool
+  precision: I32 //< -1 where not written
+  hex: Bool
+  upper: Bool //< whether hex digits are upper case (`X`)
+  chr: Bool //< `c` (print the byte as a character)
+  consumed: Sz
+
+priv const max_format_spec_digits: I64 = 922337203685477579 //<
+  //< The largest value the digit accumulation allows, checked before adding
+  //<
+  //< The check matches parse_number's in json.kspls, though a SPEC is too short to reach it.
+
+priv fn parse_format_spec(spec: U8[]): Format_spec_val
+  $i: Sz = 0
+  $zero: = false
+  if spec.len > 0 && spec.ptr$ == '0'
+    zero = true
+    i = 1
+  $width: I64 = 0
+  for i < spec.len && (spec.ptr + i).is_digit()
+    if width > max_format_spec_digits
+      break
+    width = width * 10 + I64::((spec.ptr + i)$ - '0')
+    i += 1
+  $comma: = false
+  if i < spec.len && (spec.ptr + i)$ == ','
+    comma = true
+    i += 1
+  $precision: I64 = -1
+  if i < spec.len && (spec.ptr + i)$ == '.'
+    i += 1
+    precision = 0
+    for i < spec.len && (spec.ptr + i).is_digit()
+      if precision > max_format_spec_digits
+        break
+      precision = precision * 10 + I64::((spec.ptr + i)$ - '0')
+      i += 1
+  $hex: = false
+  $upper: = false
+  if i < spec.len && ((spec.ptr + i)$ == 'x' || (spec.ptr + i)$ == 'X')
+    hex = true
+    upper = (spec.ptr + i)$ == 'X'
+    i += 1
+  // A `c` takes none of a number's options (the reason is at `char_alone`).
+  $chr: = false
+  if i < spec.len && (spec.ptr + i)$ == 'c'
+    chr = true
+    i += 1
+  return Format_spec_val::{ .zero = zero, .width = Sz::width, .comma = comma,
+    .precision = I32::precision, .hex = hex, .upper = upper, .chr = chr, .consumed = i }
+
+fn is_complete(spec_text: U8[], out_rest: U8[]$@): Bool //<
+  //< Whether the spelling could be read to the end
+  //<
+  //< It stores the unread rest in out_rest.
+  //< Caution: **Do not silently drop unread text.** In a misordered `\{n:.2,05\}` only `.2` would
+  //< take effect and `,05` would vanish without a trace: the "written but does nothing" failure
+  //< of an unknown attribute ("Compiler directives and attributes" in docs/SPEC-language.md).
+  fs: = parse_format_spec(spec_text)
+  if fs.consumed >= spec_text.len
+    return true
+  out_rest$ = spec_text.sub_from(fs.consumed)
+  return false
+
+fn combination_is_valid(spec_text: U8[], out_bad: U8[]$@, out_owner: U8[]$@): Bool //<
+  //< Whether every item means something in combination with the others
+  //<
+  //< Caution: **Do not silently discard an item that has no effect**: a `,` or `.N` on a
+  //< hexadecimal, or a width on a `c`, has nothing to act on. `out_owner` is the item it cannot
+  //< combine with (`x` / `c`), which selects the diagnostic's wording.
+  fs: = parse_format_spec(spec_text)
+  if fs.chr
+    out_owner$ = "c"
+    return char_alone(fs, out_bad)
+  if !fs.hex
+    return true
+  out_owner$ = "x"
+  if fs.comma
+    out_bad$ = ","
+    return false
+  if fs.precision >= 0
+    out_bad$ = ".N"
+    return false
+  return true
+
+priv fn char_alone(fs: Format_spec_val, out_bad: U8[]$@): Bool //<
+  //< Whether the `c` is written on its own
+  //<
+  //< It stores the spelling of any number option attached in out_bad.
+  //< Caution: **Do not let it take a number's options.** One character has no place for a width,
+  //< zero-padding, thousands separator or decimal digits; allowed, they would be written but do
+  //< nothing.
+  if fs.hex
+    out_bad$ = "x"
+    return false
+  if fs.zero
+    out_bad$ = "0"
+    return false
+  if fs.width > 0
+    out_bad$ = "width"
+    return false
+  if fs.comma
+    out_bad$ = ","
+    return false
+  if fs.precision >= 0
+    out_bad$ = ".N"
+    return false
+  return true
+
+struct Fmt_call //< the pair `build_call` returns
+  //<
+  //< The desugaring puts these two into a method call unchanged.
+  method: U8[]
+  args: Ast_node$@
+
+fn build_call(spec_text: U8[], loc: base_ast.Loc): Fmt_call //<
+  //< It chooses, from the SPEC's spelling, the method name and argument node the desugaring uses
+  //<
+  //< **Only this function maps spellings to method names**; the names themselves are in
+  //< `ksplc/base/core.kspls`, shared with the diagnostics. **The methods are split so no type
+  //< ignores an argument it cannot use**: with one method for all, `\{n:.2\}` on an integer would
+  //< be written but do nothing.
+  fs: = parse_format_spec(spec_text)
+  if fs.chr
+    return Fmt_call::{ .method = base_core.fmt_method_char, .args = build_char_args(loc) }
+  if fs.hex
+    return Fmt_call::{ .method = base_core.fmt_method_hex, .args = build_hex_args(fs, loc) }
+  if fs.precision >= 0
+    return Fmt_call::{ .method = base_core.fmt_method_prec, .args = build_prec_args(fs, loc) }
+  return Fmt_call::{ .method = base_core.fmt_method_spec, .args = build_spec_args(fs, loc) }
+
+priv fn build_char_args(loc: base_ast.Loc): Ast_node$@ //<
+  //< `value.fmt_char()`'s argument node (expr_args)
+  //<
+  //< **It takes no argument** (a `c` stands alone).
+  return Ast_node.new(.k_expr_args, "args", loc)
+
+priv fn build_spec_args(fs: Format_spec_val, loc: base_ast.Loc): Ast_node$@ //<
+  //< It builds `value.fmt_spec(width, zero, comma)`'s argument node (expr_args)
+  args: = Ast_node.new(.k_expr_args, "args", loc)
+  args.add_child(Ast_node.build_int_literal(fs.width, loc))
+  args.add_child(Ast_node.build_bool_literal(fs.zero, loc))
+  args.add_child(Ast_node.build_bool_literal(fs.comma, loc))
+  return args
+
+priv fn build_prec_args(fs: Format_spec_val, loc: base_ast.Loc): Ast_node$@ //<
+  //< `value.fmt_prec(width, zero, comma, precision)`'s argument node (expr_args)
+  args: = build_spec_args(fs, loc)
+  args.add_child(Ast_node.build_int_literal(fs.precision, loc))
+  return args
+
+priv fn build_hex_args(fs: Format_spec_val, loc: base_ast.Loc): Ast_node$@ //<
+  //< It builds `value.fmt_hex(width, zero, upper)`'s argument node (expr_args)
+  //<
+  //< **A separate method rather than one more argument to `fmt_spec`**, which every integer and
+  //< floating-point type implements: an extra argument would change them all, while a new name
+  //< leaves them alone and makes `:x` on a float fail with "there is no such method".
+  args: = Ast_node.new(.k_expr_args, "args", loc)
+  args.add_child(Ast_node.build_int_literal(fs.width, loc))
+  args.add_child(Ast_node.build_bool_literal(fs.zero, loc))
+  args.add_child(Ast_node.build_bool_literal(fs.upper, loc))
+  return args

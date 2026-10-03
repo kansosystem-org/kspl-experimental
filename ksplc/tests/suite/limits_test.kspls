@@ -1,0 +1,188 @@
+#!/usr/bin/env -S ksplc run
+//< The executable form of "Implementation limits" in `docs/SPEC-language.md`
+//<
+//< It generates the shape at exactly the guaranteed depth and checks that **it compiles and prints
+//< the right value**. **Testing only the rejection is not enough**: it stays green when something
+//< breaks below the guaranteed value. A hand-written nesting would not follow a changed value.
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/harness_build"
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+// Under an alias: `arena.text()` and a number's `fmt` must live in this translation unit, though
+// no name of it is used.
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/sys"
+import "std/verdict"
+
+priv const block_nesting: Sz = 64 //<
+  //< The limits table of the specification named in the file header
+  //<
+  //< Caution: Change the table and change here too.
+priv const paren_nesting: Sz = 64
+priv const type_postfix: Sz = 64
+priv const struct_nesting: Sz = 64
+priv const generic_nesting: Sz = 64
+priv const alias_chain: Sz = 256
+priv const const_chain: Sz = 256
+
+priv fn src_block(n: Sz, arena: Arena$@): U8[] //<
+  //< It makes one value inside an n-deep block and returns it outwards
+  //<
+  //< **Every level carries a label** ("A bare block carries a label" in
+  //< `../../../docs/DESIGN.md`); `_` names a level there is nothing to call.
+  b: = arena.text()
+  b.s("fn main(): I32 {\n  $x: I32 = 0;\n")
+  for _i in Range.asc(n)
+    b.s("  _: {\n")
+  b.s("  x = 7;\n")
+  for _i in Range.asc(n)
+    b.s("  }\n")
+  return b.s("  return x - 7;\n}\n").take()
+
+priv fn src_paren(n: Sz, arena: Arena$@): U8[]
+  b: = arena.text()
+  b.s("fn main(): I32 { x: = ")
+  for _i in Range.asc(n)
+    b.c('(')
+  b.c('7')
+  for _i in Range.asc(n)
+    b.c(')')
+  return b.s("; return x - 7; }\n").take()
+
+priv fn src_type_postfix(n: Sz, arena: Arena$@): U8[] //< `I32@@@...` n deep
+  //<
+  //< It is only a null comparison, so no body is needed.
+  b: = arena.text()
+  b.s("fn main(): I32 {\n  p: I32")
+  for _i in Range.asc(n)
+    b.c('@')
+  return b.s(" = null;\n  return 0 if p == null else 1;\n}\n").take()
+
+priv fn src_struct(n: Sz, arena: Arena$@): U8[]
+  b: = arena.text()
+  b.s("priv struct S0 { v: I32; }\n")
+  for i in Range.asc(n)
+    b.s("priv struct S\{i + 1\} { inner: S\{i\}; }\n")
+  b.s("fn main(): I32 {\n  s: S\{n\} = ::{};\n  return s")
+  for _i in Range.asc(n)
+    b.s(".inner")
+  return b.s(".v;\n}\n").take()
+
+priv fn src_generic(n: Sz, arena: Arena$@): U8[]
+  t: = arena.text()
+  for _i in Range.asc(n)
+    t.s("List<|")
+  t.s("I32")
+  for _i in Range.asc(n)
+    t.s("|>")
+  nested: = t.take()
+  return arena.text()
+    .s("import \"std/ds\" { List };\nfn main(): I32 {\n  p: \{nested\}$@ = null;\n")
+    .s("  return 0 if p == null else 1;\n}\n").take()
+
+priv fn src_alias(n: Sz, arena: Arena$@): U8[]
+  b: = arena.text()
+  b.s("typedef A0 = I32;\n")
+  for i in Range.asc(n)
+    b.s("typedef A\{i + 1\} = A\{i\};\n")
+  return b.s("fn main(): I32 { x: A\{n\} = 7; return I32::x - 7; }\n").take()
+
+priv fn src_const_chain(n: Sz, arena: Arena$@): U8[] //<
+  //< It writes a source with a chain of n constants, each the one before plus 1
+  //<
+  //< Caution: **Use the chain's last constant as an array length.** A run-time read alone (`return
+  //< I32::a<n>;`) never walks the chain and goes green without reaching the folding cap. Keep the
+  //< run-time read as well: any other walk superlinear in the depth **stops the suite from
+  //< returning** rather than failing.
+  b: = arena.text()
+  b.s("const a0: I32 = 1;\n")
+  for i in Range.asc(n)
+    b.s("const a\{i + 1\}: I32 = a\{i\} + 1;\n")
+  b.s("fn main(): I32 {\n  _buf: I32[a\{n\}] = ::{};\n")
+  return b.s("  return I32::_buf.len - a\{n\}; }\n").take()
+
+priv fn src_alias_forward(n: Sz, arena: Arena$@): U8[] //<
+  //< It writes a source with a forward chain of n aliases (`A0 = A1; A1 = A2; ...`)
+  //<
+  //< **A chain takes a different path by direction**: forward nests the resolution, backward
+  //< (`A1 = A0; ...`) does not. Testing one alone goes green with the other silently broken.
+  b: = arena.text()
+  for i in Range.asc(n)
+    b.s("typedef A\{i\} = A\{i + 1\};\n")
+  b.s("typedef A\{n\} = I32;\n")
+  return b.s("fn main(): I32 { x: A0 = 7; return I32::x - 7; }\n").take()
+
+priv fn write_src(slot: U8[], src: U8[], arena: Arena$@): U8[] //<
+  //< It writes the source to the working directory and returns that path
+  work: = harness.sandbox(arena.text().s("limits_\{slot\}").take()) catch
+    return ""
+  path: = fs.join(work, "p.kspl", arena)
+  io.write_file(path, src) catch
+    return ""
+  return path
+
+priv fn at_limit(slot: U8[], name: U8[], src: U8[], arena: Arena$@) //<
+  //< Checks that the shape at exactly the guaranteed value passes and returns 0 ("as expected")
+  path: = write_src(slot, src, arena)
+  if path.len == 0
+    verdict.check(name, false, "cannot place the material")
+    return
+  b: = harness_build.build_and_run(path, sys.get_dir_name(path), "p", U8[][]::{})
+  if !b.built
+    verdict.check(name, false, b.out)
+    return
+  verdict.check(name, b.code == 0, b.out)
+
+priv fn too_deep(slot: U8[], name: U8[], src: U8[], marker: U8[], arena: Arena$@) //<
+  //< Checks that a chain too deep is rejected by a diagnostic that names the depth
+  path: = write_src(slot, src, arena)
+  if path.len == 0
+    verdict.check(name, false, "cannot place the material")
+    return
+  gen: = fs.join(sys.get_dir_name(path), "p.c", arena)
+  r: = harness.ksplc(U8[][]::{ path, gen })
+  if r.code == 0
+    verdict.check(name, false, "not refused")
+    return
+  verdict.check(name, r.out.find_str(marker) >= 0,
+    arena.text().s("not refused as a depth\n\{r.out\}").take())
+
+fn main(): I32
+  arena: = harness.begin(256 * 1024 * 1024)
+  io.out().s("# implementation limits: 10\n")
+  at_limit("block",
+    arena.text().s("a block can be nested \{block_nesting\} deep").take(),
+    src_block(block_nesting, arena), arena)
+  at_limit("paren",
+    arena.text().s("an expression's parentheses can be nested \{paren_nesting\} deep").take(),
+    src_paren(paren_nesting, arena), arena)
+  at_limit("postfix",
+    arena.text().s("a type's postfix steps can be stacked \{type_postfix\} deep").take(),
+    src_type_postfix(type_postfix, arena), arena)
+  at_limit("struct",
+    arena.text().s("a struct can be embedded \{struct_nesting\} deep").take(),
+    src_struct(struct_nesting, arena), arena)
+  at_limit("generic",
+    arena.text().s("type arguments can be nested \{generic_nesting\} deep").take(),
+    src_generic(generic_nesting, arena), arena)
+  at_limit("alias",
+    arena.text().s("typedefs can be chained \{alias_chain\} deep").take(),
+    src_alias(alias_chain, arena), arena)
+  at_limit("const",
+    arena.text().s("constant references can be chained \{const_chain\} deep").take(),
+    src_const_chain(const_chain, arena), arena)
+
+  // The cut-off differs per kind of chain, so the depth is kept per kind (shared, the constant
+  // chain misses the cap). The constant chain goes over modestly: folding costs declarations times
+  // depth, and once over, any depth tests the same thing.
+  deep: = alias_chain * 8
+  too_deep("deep_alias", "a typedef's backward chain too deep is refused as a depth",
+    src_alias(deep, arena), "chain too deep", arena)
+  too_deep("deep_alias_fwd", "a typedef's forward chain too deep is refused as a depth",
+    src_alias_forward(deep, arena), "chain too deep", arena)
+  too_deep("deep_const", "a constant reference chain too deep is refused as a depth",
+    src_const_chain(const_chain * 5, arena), "nesting too deep", arena)
+  return harness.finish()

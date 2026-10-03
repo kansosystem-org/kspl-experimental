@@ -1,0 +1,44 @@
+//< An RC servo (the angle is set by a PWM pulse width at 50Hz)
+//<
+//< A 0.5ms High pulse in a 20ms period is 0°, 2.5ms is 180°: a PWM duty of **2.5% to 12.5%**.
+//< **Call `clocks.init()` first**: the period comes from clk_sys.
+//< Caution: **Do not put it on the same slice as the motors.** The period is per slice, so the
+//< motors' 500Hz would break one of them (servo_head_pin in `board.kspls`).
+
+// ==========================================
+// How it is used:
+// ==========================================
+
+//   servo.init(board.servo_head_pin);
+//   servo.set_angle(board.servo_head_pin, 90);
+import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/drivers/rp2040/pwm"
+
+// The two ends of the duty, in parts per thousand. **The pulse width sets them, not the angle.**
+priv const duty_min_permille: U32 = 25 // 2.5% = 0.5ms / 20ms
+priv const duty_max_permille: U32 = 125 // 12.5% = 2.5ms / 20ms
+priv const angle_span: U32 = 180
+
+fn init(pin: U32) //< sets up one pin for a servo
+  //<
+  //< **The period is per slice**, shared with the slice's other channel.
+  pwm.init_pin(pin)
+  pwm.config_slice(pwm.slice_of(pin), board.servo_pwm_div_int, 0, board.servo_pwm_top)
+
+fn clamp_angle(angle: I32): U32 //< clamps an angle in degrees to the range of motion
+  //<
+  //< Caution: **Do not widen it.** Beyond its range of motion the mechanism collides with itself
+  //< (the range is `board.servo_angle_min` / `max`).
+  lo: = I32::board.servo_angle_min
+  hi: = I32::board.servo_angle_max
+  return U32::(lo if angle < lo else (hi if angle > hi else angle))
+
+fn set_angle(pin: U32, angle: I32) //< sets an angle in degrees
+  //<
+  //< **An out-of-range angle is clamped first.**
+  a: = clamp_angle(angle)
+  span: = duty_max_permille - duty_min_permille
+  permille: = duty_min_permille + (a * span / angle_span)
+  // **Compute in parts per thousand**; in percent, 180 degrees get only 10 steps.
+  level: = (board.servo_pwm_top + 1) * permille / 1000
+  pwm.set_level(pin, level)

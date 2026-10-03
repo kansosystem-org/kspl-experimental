@@ -1,0 +1,242 @@
+import "std/ds" { List }
+import "std/fs"
+import "std/fuzz"
+import "std/io"
+import "std/mem" { Arena }
+import "std/prng" { Prng }
+import "std/str" // `arena.text()` and `replace`
+import "std/subproc"
+import "std/tests/sys_test"
+import "std/verdict"
+
+// ==========================================
+// std/fuzz: mutating bytes, picking seeds, and reading how a round ended.
+// **Read a round's end from a real child where possible**: the marks an abort prints and the exit
+// codes differ per platform, and a constructed result would agree with itself on every platform.
+// The line that `report_all` prints is checked in a child, since it goes into the run's own
+// tally.
+// ==========================================
+
+priv const work_dir: U8[] = "out/tmp/kspl_test_fuzz"
+
+fn test_fuzz_mutate()
+  verdict.start("[fuzz] breaking a copy, the same way from the same seed test...")
+  arena: = Arena.new(1024 * 1024)
+  defer arena.free()
+  src: = "fn main(): I32 { return 0; }"
+  keep: = arena.dup_str(src)
+  $a: = Prng.new(7U64)
+  $b: = Prng.new(7U64)
+  $changed: Sz = 0
+  for _round in Range.asc(200)
+    x: = fuzz.mutate(src, a@, arena)
+    y: = fuzz.mutate(src, b@, arena)
+    assert(x.equals(y), "the same seed must break the same way")
+    assert(x.len > 0, "a copy of a seed longer than any cut is never empty")
+    if !x.equals(src)
+      changed += 1
+  assert(src.equals(keep), "the seed itself is never rewritten")
+  assert(changed > 150, "nearly every round must change something")
+  assert(fuzz.mutate("", a@, arena).len == 0, "empty input comes back empty")
+  verdict.pass("A seed is broken in a copy, the same way from the same seed, and left as it was.")
+
+fn test_fuzz_pick()
+  verdict.start("[fuzz] a seed picked within its input kind test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  $all: = List<|fuzz.Sample|>.new(arena)
+  for k in U8[][]::{ "few", "many", "many", "many" }
+    all.push(fuzz.Sample::{ .kind = k, .name = k, .data = "x", .built = false })
+  $r: = Prng.new(1U64)
+  $hits: Sz[4] = ::{ 0, 0, 0, 0 }
+  for _round in Range.asc(300)
+    assert(fuzz.pick(all@, "few", r@) == 0, "a kind holding one seed always gets that one")
+    at: = fuzz.pick(all@, "many", r@)
+    assert(at >= 1 && at <= 3, "the seed picked is one of that kind's own")
+    hits[at] += 1
+  assert(hits[1] > 0 && hits[2] > 0 && hits[3] > 0, "every seed of a kind comes up")
+  assert(fuzz.pick(all@, "none", r@) == all.len, "a kind holding none returns the count")
+  verdict
+    .pass("A seed is picked within its kind, every one of them comes up, and none is the count.")
+
+fn test_fuzz_gather()
+  verdict.start("[fuzz] seeds gathered from folders, in the order of their paths test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  dir: = fs.mkdir_unique(work_dir, "gather_", arena) catch
+    panic("mkdir_unique should make a directory")
+  rels: = U8[][]::{ "b.md", "a.md", "sub/c.md", "skip.txt", "out/made.md", ".git/kept.md",
+    ".tool/set.md", "big.md" }
+  bodies: = U8[][]::{ "b", "a", "c", "t", "o", "g", "h", "0123456789" }
+  fs.write_tree(dir, rels, bodies, arena) catch
+    panic("the tree must be writable")
+  missing: = fs.join(dir, "missing", arena)
+  got: = fuzz.gather(U8[][]::{ dir, missing }, U8[][]::{ ".md" }, 10I64, arena)
+  names: = arena.text()
+  for i in Range.asc(got.len)
+    names.s("," if i > 0 else "").s(got.get(i).name)
+  said: = names.take()
+  assert(said.equals(".tool/set.md,a.md,b.md,sub/c.md"),
+    "the paths below the folder, in order, past out/, .git/ and a file at the cap")
+  assert(got.get(1).kind.equals(".md") && got.get(1).data.equals("a"),
+    "a seed carries the ending it matched and its bytes")
+  sys_test.clear_tree_best_effort(dir, arena)
+  verdict.pass("Seeds come in the order of their paths, and what was made or git keeps stays out.")
+
+priv const subject_src: U8[] =
+  """import "std/str"
+import "std/sys"
+
+fn main(): I32
+  mode: = sys.args().get(1)
+  if mode.equals("stop")
+    panic("on purpose")
+  if mode.equals("fall")
+    sys.exit(3)
+  return 1 if mode.equals("refuse") else 0
+"""
+
+fn test_fuzz_rounds(ksplc: U8[], arena: Arena$@) //< ksplc runs the subject
+  verdict.start("[fuzz] how a round ended, read from outside test...")
+  fs.mkdir_all(work_dir) catch panic("the work directory must be creatable")
+  script: = fs.join(work_dir, "subject.kspls", arena)
+  io.write_file(script, subject_src) catch panic("the subject must be writable")
+  found: = fuzz.findings_new(arena)
+  for mode in U8[][]::{ "answer", "refuse", "stop", "fall" }
+    t: = fuzz.run_trial(U8[][]::{ ksplc, "run", script, mode }, 300000, arena)
+    assert(!t.got.spawn_failed && !t.got.timed_out, "the subject must start and come to an end")
+    fuzz.note(found, t@, 0, mode, mode, work_dir, ".txt", arena)
+  // A round that also ran past the extended wait, as `run_trial` returns it.
+  hung: = fuzz.Trial::{ .got = subproc.Run_result::{ .spawn_failed = false, .timed_out = true,
+    .exit_code = 0, .stdout_data = "", .stderr_data = "" }, .slow = false }
+  fuzz.note(found, hung@, 1, "hung", "h", work_dir, ".txt", arena)
+  assert(found.aborts.len == 1 && found.aborts.get(0).seed_name.equals("stop"),
+    "a panic is a stop the program announced")
+  assert(found.crashes.len == 1 && found.crashes.get(0).seed_name.equals("fall"),
+    "an end in a code of its own, with no mark, is a crash")
+  assert(fs.exists(found.crashes.get(0).saved), "the input a round crashed on is kept")
+  assert(found.hangs.len == 1 && found.hangs.get(0).why.equals("timed out"),
+    "a round that did not end is said without the killer's code")
+  verdict.pass("Answering and refusing are not findings; a panic, a crash and no end each are.")
+
+// One crash found in five rounds: its line fails, the other two pass, and the command to run it
+// again carries both numbers.
+priv const report_main: U8[] =
+  """
+import "std/fuzz"
+import "std/mem" { Arena }
+import "std/subproc"
+import "std/verdict"
+
+fn main(): I32
+  verdict.begin("probe")
+  arena: = Arena.new(1 << 20)
+  defer arena.free()
+  found: = fuzz.findings_new(arena)
+  t: = fuzz.Trial::{ .got = subproc.Run_result::{ .spawn_failed = false, .timed_out = false,
+    .exit_code = 139, .stdout_data = "", .stderr_data = "" }, .slow = false }
+  fuzz.note(found, t@, 3, "seed.txt", "broken", "out/tmp/kspl_test_fuzz", ".txt", arena)
+  o: = fuzz.Opts::{ .trials = 5I64, .seed = 9I64 }
+  fuzz.report_all(found, o, "probe", 100, "run it", arena)
+  none: = fuzz.Opts::{ .trials = 0I64, .seed = 9I64 }
+  fuzz.report_all(fuzz.findings_new(arena), none, "idle", 100, "run it", arena)
+  return verdict.finish()
+"""
+priv const report_out: U8[] =
+  """
+
+# a break in memory safety
+  trial 3: seed=seed.txt exit code=139 kept at=out/tmp/kspl_test_fuzz/fuzz_crash_3.txt
+FAIL probe: probe does not crash on broken input (5 rounds): 1 found
+pass probe: probe announces no stop on broken input (5 rounds)
+pass probe: probe ends on broken input (5 rounds)
+to reproduce: run it --seed=9 --trials=5
+FAIL probe: idle was scattered at: not one round was run (--trials)
+RESULT: SOME FAILED (2) -> probe does not crash on broken input (5 rounds), idle was scattered at
+"""
+
+fn test_fuzz_report(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
+  verdict.start("[fuzz] the lines a scattering ends on test...")
+  fs.mkdir_all(work_dir) catch panic("the work directory must be creatable")
+  src: = fs.join(work_dir, "report.kspls", arena)
+  io.write_file(src, report_main) catch panic("the child's program must be writable")
+  r: = subproc.run_capture(U8[][]::{ ksplc, "run", src }, "", 300000, 1 << 20, arena)
+  assert(!r.spawn_failed && !r.timed_out, "the child must start and come to an end")
+  // A child's standard output is text mode on Windows, so its lines arrive as CRLF.
+  got: = r.stdout_data.replace("\r\n", "\n", arena)
+  if !got.equals(report_out) || r.exit_code != 1
+    panic(U8$[]::arena.text().s("the report put out\n").s(got).s("and ended on \{r.exit_code\}\n")
+      .s(r.stderr_data).take())
+  verdict
+    .pass("Each way of ending has its line, the way to run it again follows, and none is none.")
+
+// A fuzz run over the subject: a seed the run built must read back, one found may be refused and
+// is dropped, a kind left with no seed is skipped, and a run the subject refuses throughout fails
+// the reach.
+priv const scatter_main: U8[] =
+  """
+import "std/ds" { List }
+import "std/fuzz"
+import "std/mem" { Arena }
+import "std/sys"
+import "std/verdict"
+
+priv const kinds: fuzz.Input_kind[2] = ::{ fuzz.Input_kind::{ .name = "answer", .ext = ".a" },
+  fuzz.Input_kind::{ .name = "refuse", .ext = ".r" } }
+
+fn main(): I32
+  verdict.begin("probe")
+  arena: = Arena.new(1 << 22)
+  defer arena.free()
+  a: = sys.args()
+  c: = fuzz.Campaign::{ .subject = "probe", .argv = U8[][]::{ a.get(1), "run", a.get(2) },
+    .tell_kind = true, .after = U8[][]::{}, .work = a.get(3), .kinds = fuzz.Input_kind[]::kinds,
+    .in_turn = true, .wait_ms = 300000, .reach_div = 2, .again = "run it" }
+  $all: = List<|fuzz.Sample|>.new(arena)
+  all.push(fuzz.Sample::{ .kind = "answer", .name = "made", .data = "x", .built = true })
+  all.push(fuzz.Sample::{ .kind = "refuse", .name = "made", .data = "x", .built = true })
+  all.push(fuzz.Sample::{ .kind = "refuse", .name = "found", .data = "x", .built = false })
+  $live: = fuzz.check_seeds(c@, all@, arena)
+  fuzz.scatter(c@, live@, "bytes", fuzz.Opts::{ .trials = 2I64, .seed = 1I64 }, arena) catch why
+    return verdict.fatal(why)
+  $refused: = List<|fuzz.Sample|>.new(arena)
+  refused.push(all.get(2))
+  fuzz.scatter(c@, refused@, "bytes", fuzz.Opts::{ .trials = 2I64, .seed = 1I64 }, arena) catch why
+    return verdict.fatal(why)
+  return verdict.finish()
+"""
+priv const scatter_out: U8[] =
+  """
+FAIL probe: probe itself can read back the seeds probe wrote (3 seeds): refuse: made: what was written cannot be read back
+SKIP probe: scattering at the refuse input: no seed of it is left under the folders the seeds come from
+
+# scattering broken bytes (2 trials, 1 seeds, rng seed 1)
+pass probe: some of the broken input is accepted and reaches deep into the reader
+pass probe: probe does not crash on broken input (2 rounds)
+pass probe: probe announces no stop on broken input (2 rounds)
+pass probe: probe ends on broken input (2 rounds)
+SKIP probe: scattering at the answer input: no seed of it is left under the folders the seeds come from
+
+# scattering broken bytes (2 trials, 1 seeds, rng seed 1)
+FAIL probe: some of the broken input is accepted and reaches deep into the reader: 0 of 2 rounds
+pass probe: probe does not crash on broken input (2 rounds)
+pass probe: probe announces no stop on broken input (2 rounds)
+pass probe: probe ends on broken input (2 rounds)
+RESULT: SOME FAILED (2) -> probe itself can read back the seeds probe wrote (3 seeds), some of the broken input is accepted and reaches deep into the reader
+"""
+
+fn test_fuzz_scatter(ksplc: U8[], arena: Arena$@) //< ksplc runs the child and the subject
+  verdict.start("[fuzz] a fuzz run's seeds, its kinds and its reach test...")
+  fs.mkdir_all(work_dir) catch panic("the work directory must be creatable")
+  script: = fs.join(work_dir, "subject.kspls", arena)
+  io.write_file(script, subject_src) catch panic("the subject must be writable")
+  src: = fs.join(work_dir, "scatter.kspls", arena)
+  io.write_file(src, scatter_main) catch panic("the child's program must be writable")
+  r: = subproc.run_capture(U8[][]::{ ksplc, "run", src, ksplc, script, work_dir }, "", 600000,
+    1 << 20, arena)
+  assert(!r.spawn_failed && !r.timed_out, "the child must start and come to an end")
+  got: = r.stdout_data.replace("\r\n", "\n", arena)
+  if !got.equals(scatter_out) || r.exit_code != 1
+    panic(U8$[]::arena.text().s("the fuzz run put out\n").s(got).s("and ended on \{r.exit_code\}\n")
+      .s(r.stderr_data).take())
+  verdict.pass("A refused seed the run made fails, a found one is dropped, and no reach fails.")

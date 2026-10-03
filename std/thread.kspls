@@ -1,0 +1,209 @@
+//< Thin wrappers over OS threads, mutexes, condition variables and atomic variables
+//<
+//< This is true parallel execution on real OS threads, and **it is for hosted environments
+//< only** (Linux, macOS, Windows). A freestanding or embedded build gets its cooperative or
+//< pre-emptive scheduling from the OS it runs on.
+
+// ==========================================
+// The work is done by the pthread (POSIX) / CreateThread (Windows) code in
+// `ksplc/gen/runtime/hosted.c`, and by the IR that calls pthread, which
+// `ksplc/gen/llvm/module.kspls` generates directly.
+// ==========================================
+import "std/mem" + { dealloc }
+
+pub enum Thread_error //< why the OS could not create a thread or a lock
+  spawn_failed //< the OS failed to create the thread (out of resources, for example)
+  mutex_create_failed //< the OS failed to initialize the mutex
+  cond_create_failed //< the OS failed to initialize the condition variable
+
+pub typedef Thread_entry = fn(arg: Void$@): Void$@ //< the function a thread starts running.
+  //<
+  //< The function passed here carries `#export`, so it links with C's callback convention and
+  //< no name mangling.
+
+extern "C"
+  pub fn kspl_thread_spawn(entry: Thread_entry, arg: Void$@): I64
+  pub fn kspl_thread_join(handle: I64): Void$@
+  pub fn kspl_mutex_create(): I64
+  pub fn kspl_mutex_lock(handle: I64)
+  pub fn kspl_mutex_unlock(handle: I64)
+  pub fn kspl_mutex_destroy(handle: I64)
+  pub fn kspl_cond_create(): I64
+  pub fn kspl_cond_wait(cond_handle: I64, mutex_handle: I64)
+  pub fn kspl_cond_signal(handle: I64)
+  pub fn kspl_cond_broadcast(handle: I64)
+  pub fn kspl_cond_destroy(handle: I64)
+  pub fn kspl_atomic_load(ptr: Sz$@): Sz
+  pub fn kspl_atomic_store(ptr: Sz$@, val: Sz)
+  pub fn kspl_atomic_add(ptr: Sz$@, delta: Sz): Sz
+  pub fn kspl_atomic_cas(ptr: Sz$@, expected: Sz, new_val: Sz): Sz
+
+priv fn require_handle(h: I64, err: Thread_error): I64?Thread_error //<
+  //< Throws err when h, the handle an OS create call returned, is 0 (a failure)
+  if h == 0
+    throw err
+  return h
+
+// ============================ Thread ============================
+pub struct Thread //< one running OS thread, joined and freed in one call
+  priv handle: I64
+
+impl Thread
+  pub fn spawn<|T|>( //< starts a function on a new OS thread
+    //<
+    //< Caution: **Only the type is checked, not whether the data is safe to share.** Threads that
+    //< touch what `arg` points at race; wrap a shared value in a `Mutex<|T|>` or an `Arc<|T|>`
+    //< (the count of an `Rc<|T|>` breaks).
+    entry: fn(arg: T$@): Void$@, //< the function the thread runs; it carries `#export`
+    arg: T$@, //< the argument passed to it; the signature fixes its type, so it cannot mismatch
+  ): Thread$@?Thread_error
+    spawned: = kspl_thread_spawn(Thread_entry::Void$@::entry, Void$@::arg)
+    h: = require_handle(spawned, Thread_error.spawn_failed)?
+    t: = mem.alloc_as<|Thread|>()
+    t.handle = h
+    return t
+
+  priv fn join(r: Self$@): Void$@ //<
+    //< Waits for the thread to end and returns what its thread function returned
+    //<
+    //< **join and free are priv**, so only join_and_free can be called: code can neither free
+    //< without joining nor join and forget to free.
+    return kspl_thread_join(r.handle)
+
+  priv fn free(r: Self$@) //<
+    //< Free tracking needs the name `free` and conformance to `Owned`
+    //<
+    //< When another name (join_and_free) wraps it, the tracking (`mark_call_freed_args`) follows
+    //< one level, so the caller's use-after-free and double free are still caught.
+    dealloc(Void$@::r)
+
+  pub fn join_and_free(r: Self$@): Void$@ //< waits for the thread to end and returns its result
+    //<
+    //< `spawn` / `join_and_free` pair like malloc / free; this call frees `r` itself.
+    ret: = r.join()
+    r.free()
+    return ret
+
+// ============================ Raw_mutex ============================
+priv struct Raw_mutex //< the OS mutex itself (pthread_mutex_t / CRITICAL_SECTION)
+  //<
+  //< It is priv because a bare lock can live apart from the data it protects, so the compiler
+  //< cannot see a caller that forgets lock() and touches the data directly.
+  priv handle: I64
+
+impl Raw_mutex
+  fn new(): Raw_mutex?Thread_error
+    h: = require_handle(kspl_mutex_create(), Thread_error.mutex_create_failed)?
+    return Raw_mutex::{ .handle = h }
+
+  fn lock(r: Self$@)
+    kspl_mutex_lock(r.handle)
+
+  fn unlock(r: Self$@)
+    kspl_mutex_unlock(r.handle)
+
+  fn free(r: Self$@) //< destroys the OS mutex
+    //<
+    //< A Raw_mutex is a value stored in place, so there is no memory to free here.
+    kspl_mutex_destroy(r.handle)
+
+// ============================ Cond_var ============================
+pub struct Cond_var //< lets a thread wait, together with a lock, until a condition holds
+  //<
+  //< pthread_cond_t / CONDITION_VARIABLE, paired with a `Mutex<|T|>` (a producer-consumer queue,
+  //< waiting for completion).
+  priv handle: I64
+
+impl Cond_var
+  pub fn new(): Cond_var?Thread_error //< creates one through the OS
+    h: = require_handle(kspl_cond_create(), Thread_error.cond_create_failed)?
+    return Cond_var::{ .handle = h }
+
+  pub fn wait<|T|>( //< releases the lock and waits; returns holding the lock again
+    //<
+    //< Caution: **A spurious wakeup is possible**, so check the condition again in a `for` and
+    //< wait again if it does not hold.
+    r: Self$@,
+    m: Mutex<|T|>$@, //< the lock, which the caller must already hold
+  )
+    kspl_cond_wait(r.handle, m.mutex.handle)
+
+  pub fn signal(r: Self$@) //< wakes exactly one waiting thread
+    kspl_cond_signal(r.handle)
+
+  pub fn broadcast(r: Self$@) //< wakes every waiting thread
+    kspl_cond_broadcast(r.handle)
+
+  pub fn free(r: Self$@) //< destroys the OS condition variable
+    //<
+    //< As with `Raw_mutex.free`, the value itself has no memory to free.
+    kspl_cond_destroy(r.handle)
+
+// ============================ Mutex<T> ============================
+pub struct Mutex<|T|> //< a lock and the data it protects, kept together so neither is forgotten
+  //<
+  //< The data is reachable only through lock() (like Rust's `Mutex<T>`). This is the only public
+  //< mutex in KSPL (the bare Raw_mutex is priv).
+  priv mutex: Raw_mutex
+  priv value: T
+
+impl<|T|> Mutex<|T|>
+  pub fn new( //< creates a lock around a value
+    value: T, //< the data the lock protects; the only way to reach it is `lock()`
+  ): Mutex<|T|>?Thread_error
+    m: = Raw_mutex.new()?
+    return Mutex<|T|>::{ .mutex = m, .value = value }
+
+  pub fn lock(r: Self$@): T$@ //< takes the lock and returns a pointer to the data
+    //<
+    //< Caution: Call `unlock()` when you are done with the data.
+    r.mutex.lock()
+    return r.value@
+
+  pub fn unlock(r: Self$@) //< releases the lock
+    r.mutex.unlock()
+
+  pub fn free(r: Self$@) //< destroys the OS lock
+    r.mutex.free()
+
+// ============================ Atomic_sz ============================
+pub struct Atomic_sz //< a shared counter or flag that changes without taking a lock
+  //<
+  //< Lock-free; it uses the same kspl_atomic_add/cas as the `Arc<T>` reference counts in
+  //< std/refcount.
+  priv value: Sz
+
+impl Atomic_sz
+  pub fn new(initial: Sz): Atomic_sz //< creates one holding the initial value
+    return Atomic_sz::{ .value = initial }
+
+  pub fn load(r: Self$@): Sz //< reads the value without tearing
+    return kspl_atomic_load(r.value@)
+
+  pub fn store(r: Self$@, new_val: Sz) //< writes the value without tearing
+    kspl_atomic_store(r.value@, new_val)
+
+  pub fn fetch_add( //< adds, and returns the value from before the addition
+    r: Self$@,
+    delta: Sz, //< the amount to add
+  ): Sz
+    return kspl_atomic_add(r.value@, delta)
+
+  pub fn compare_and_swap( //< writes only if the value is still the one read; true if it wrote
+    r: Self$@,
+    expected: Sz, //< the value last read
+    new_val: Sz, //< the value to write
+  ): Bool
+    return kspl_atomic_cas(r.value@, expected, new_val) == expected
+
+impl Raw_mutex: Move_only { //< copying it would destroy one OS object twice.
+  //<
+  //< `Mutex<|T|>` holds a Raw_mutex by value, so it is Move_only too. To borrow one, pass a
+  //< pointer with `@`.
+}
+impl Cond_var: Move_only {} //< copying it would destroy one OS object twice
+
+impl Thread: Owned {} //< it owns its resources and frees them with `free()`.
+impl Raw_mutex: Owned {} //< it owns an OS object and releases it with `free()`
+impl Cond_var: Owned {} //< it owns an OS object and releases it with `free()`
+impl<|T|> Mutex<|T|>: Owned {} //< it owns an OS object and releases it with `free()`

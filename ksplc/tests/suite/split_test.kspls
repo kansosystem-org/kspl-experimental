@@ -1,0 +1,192 @@
+#!/usr/bin/env -S ksplc run
+//< The test that pins down that `--split=N` makes "the same program as one unit does"
+//<
+//< Neither way of breaking shows before linking, so it **always links and runs**. The expected
+//< output is the single-TU build's, not a copy here, which would miss both breaking the same way.
+
+// ==========================================
+//   1. the body is emitted into two or more units -> a duplicate definition at link time
+//   2. the body is emitted into no unit / a `static` is in a different unit from its caller ->
+//      undefined at link time
+// ==========================================
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/harness_build"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/sys"
+import "std/verdict"
+
+priv const fixture: U8[] = "tests/prog/split.kspls"
+
+priv const unit_counts: Sz[4] = ::{ 1, 2, 3, 16 } //< the number of splits
+  //<
+  //< It lists 1 (do not split), about the core count, and a number larger than the file count.
+  //< Caution: Include "larger than the file count": it makes empty units and puts **the caller and
+  //< the callee in different units**, without which a symbol with too narrow a linkage passes.
+
+priv const runtime_marker: U8[] = "I64 kspl_mono_us(void)" //<
+  //< The mark for the runtime's definition half (hosted.c)
+  //<
+  //< Caution: Count by the text of a definition that is not `static` and is only in hosted.c.
+
+priv struct Built //< the result of building and running
+  //<
+  //< If ok is false, out is the explanation of the failure.
+  ok: Bool
+  out: U8[]
+
+priv fn unit_path(stem: U8[], i: Sz, arena: Arena$@): U8[]
+  return arena.text().s("\{stem\}.\{i\}.c").take()
+
+priv fn has_definition(text: U8[], marker: U8[]): Bool //<
+  //< Whether the marker is at the start of a line
+  //<
+  //< Caution: Check the line's start; a forward declaration contains the same text.
+  if text.starts_with(marker)
+    return true
+  return text.find_str(harness.arena().text().s("\n\{marker\}").take()) >= 0
+
+priv fn build_split(dir: U8[], n: Sz, arena: Arena$@): Built //<
+  //< It builds the fixture at n splits and runs it
+  stem: = fs.join(dir, arena.text().s("u\{n\}").take(), arena)
+  single: = arena.text().s("\{stem\}.c").take()
+  r: = harness
+    .ksplc(U8[][]::{ arena.text().s("--split=\{n\}").take(), fixture, single })
+  if r.code != 0
+    return Built::{ .ok = false,
+      .out = arena.text().s("generation failed: \{r.out\}").take() }
+  $srcs: = List<|U8[]|>.new(arena)
+  if n == 1
+    // Under "do not split", one file is written at the given path.
+    if !fs.exists(single)
+      return Built::{ .ok = false,
+        .out = arena.text().s("units=1 yet no \{single\}").take() }
+    srcs.push(single)
+  else
+    header: = arena.text().s("\{stem\}.h").take()
+    if !fs.exists(header)
+      return Built::{ .ok = false,
+        .out = arena.text().s("no shared header: \{header\}").take() }
+    for i in Range.asc(n)
+      path: = unit_path(stem, i, arena)
+      if !fs.exists(path)
+        return Built::{ .ok = false,
+          .out = arena.text().s("a file that did not come out: \{path\}").take() }
+      srcs.push(path)
+    // The given path itself is not created, or linking every `.c` doubles the body.
+    if fs.exists(single)
+      return Built::{ .ok = false,
+        .out = arena.text().s("\{single\} must not be made when splitting").take() }
+  exe: = arena.text().s("\{stem\}.exe").take()
+  b: = harness_build.build_exe(srcs.slice(), exe, U8[][]::harness_build.default_cflags)
+  if b.code != 0
+    return Built::{ .ok = false,
+      .out = arena.text().s("the link failed: \{b.out\}").take() }
+  out: = harness.run(U8[][]::{ exe })
+  if out.code != 0
+    return Built::{ .ok = false,
+      .out = arena.text().s("the run failed: \{out.out\}").take() }
+  return Built::{ .ok = true, .out = out.out }
+
+priv fn check_assignment_is_stable(dir: U8[], arena: Arena$@) //<
+  //< Only the file path decides which unit a file goes to
+  //<
+  //< Size or order mixed into the assignment would let an unrelated edit move a definition and
+  //< make every cached object stale. Only the output directory changes: the `#include` line comes
+  //< from the output's name, which would always differ by one line.
+  name: =
+    "the same input gives the same unit content (the assignment is decided by the input alone)"
+  $stems: = List<|U8[]|>.new(arena)
+  for tag in U8[][]::{ "usame_a", "usame_b" }
+    sub_dir: = fs.join(dir, tag, arena)
+    fs.mkdir_all(sub_dir) catch
+      verdict.check(name, false, "the place cannot be made")
+      return
+    stem: = fs.join(sub_dir, "u", arena)
+    r: = harness
+      .ksplc(U8[][]::{ "--split=3", fixture, arena.text().s("\{stem\}.c").take() })
+    if r.code != 0
+      verdict.check(name, false, r.out)
+      return
+    stems.push(stem)
+  for i in Range.asc(3)
+    a: = io.read_file(unit_path(stems.get(0), i, arena)) catch
+      verdict.check(name, false, "one of the units cannot be read")
+      return
+    b: = io.read_file(unit_path(stems.get(1), i, arena)) catch
+      verdict.check(name, false, "one of the units cannot be read")
+      return
+    if !a.equals(b)
+      verdict.check(name, false, arena.text().s("unit \{i\}'s content differs").take())
+      return
+  verdict.check(name, true, "")
+
+priv fn check_unit_shape(dir: U8[], arena: Arena$@) //<
+  //< Each unit holds no declaration but the shared header, and only one holds the runtime's body
+  stem: = fs.join(dir, "u3", arena)
+  header: = arena.text().s("\{stem\}.h").take()
+  want_include: = arena.text().s("#include \"\{sys.get_file_name(header)\}\"").take()
+  $includes_ok: = true
+  $carriers: Sz = 0
+  for i in Range.asc(3)
+    text: = io.read_file(unit_path(stem, i, arena)) catch
+      verdict.check("each unit takes in the shared header at its head", false,
+        "a unit cannot be read")
+      return
+    if !text.starts_with(want_include)
+      includes_ok = false
+    if has_definition(text, runtime_marker)
+      carriers += 1
+  verdict.check("each unit takes in the shared header at its head", includes_ok, want_include)
+  // The runtime's definition half (hosted.c) goes into only one unit; checked first, before it
+  // turns into a less readable duplicate definition at link time.
+  verdict.check("only one unit holds the runtime's body", carriers == 1,
+    arena.text().s("\{carriers\} units hold it").take())
+  hdr: = io.read_file(header) catch
+    verdict.check("the shared header does not hold the runtime's body", false,
+      "the header cannot be read")
+    return
+  verdict.check("the shared header does not hold the runtime's body",
+    !has_definition(hdr, runtime_marker), "")
+
+fn main(): I32
+  arena: = harness.begin(256 * 1024 * 1024)
+  dir: = harness.sandbox("split") catch
+    return harness.fatal("cannot make a working directory")
+  io.out().s("# --split\n")
+  $outs: = List<|U8[]|>.new(arena)
+  for n in unit_counts
+    b: = build_split(dir, n, arena)
+    verdict.check(arena.text().s("it builds and runs at units=\{n\}").take(), b.ok, b.out)
+    outs.push(b.out if b.ok else "")
+  base: = outs.get(0)
+  for i in Range.asc(unit_counts.len)
+    n: = unit_counts[i]
+    if n == 1
+      continue
+    got: = outs.get(i)
+    verdict.check(arena.text().s("units=\{n\}'s output matches the single TU").take(),
+      base.len > 0 && got.equals(base),
+      arena.text().s("single TU=\{base\} / split=\{got\}").take())
+  check_assignment_is_stable(dir, arena)
+  check_unit_shape(dir, arena)
+
+  // --- an invalid setting is not silently accepted ---
+  for bad in U8[][]::{ "0", "-1", "abc", "" }
+    r: = harness
+      .ksplc(U8[][]::{ arena.text().s("--split=\{bad\}").take(), fixture,
+      fs.join(dir, "ubad.c", arena) })
+    verdict.check(arena.text().s("--split=\{bad\} is refused").take(),
+      r.code != 0 && r.out.find_str("--split") >= 0, r.out)
+  // The LLVM backend cannot split ("Genllvm (LLVM IR): why the structure itself differs, and
+  // managing SSA" in `ksplc/docs/DESIGN.md`), so it must not be accepted with no effect.
+  llvm: = harness
+    .ksplc(U8[][]::{ "--target=llvm", "--split=2", fixture, fs.join(dir, "ullvm.ll", arena) })
+  verdict.check("using it together with --target=llvm is refused",
+    llvm.code != 0 && llvm.out.find_str("--split") >= 0, llvm.out)
+  return harness.finish()

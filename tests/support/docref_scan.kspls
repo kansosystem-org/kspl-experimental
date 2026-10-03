@@ -1,0 +1,361 @@
+//< What a document holds as its own names, and the symbols a text cites (not a suite)
+//<
+//< A heading's id and number, a name a document holds, and a symbol cited "in" a file. Picking up
+//< a naming and resolving where it lands belong to the base layer (`harness_refs.kspls`).
+//< **This part copies the Python version's regular expressions.** Loosen the matching and an error
+//< in a reference passes silently; when changing it, confirm that broken input reports the same
+//< lines as the Python version ("Moving a tool out of Python" in
+//< ../docs/HOWTO-write-a-suite.md).
+//< The verdict belongs to `tests/suite/docref_test.kspls`; this file only picks up the names.
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "tests/support/harness_refs" { Hit, is_path_at, src_path_ext }
+import "tests/support/harness_text" as htext
+
+fn slugify(heading: U8[], arena: Arena$@): U8[] //<
+  //< Builds the id that the Markdown renderer gives a heading's name
+  //<
+  //< It drops the punctuation and writes one `-` for each space.
+  //< Caution: Do not fold runs of `-` together: `A / B` becomes `a--b`, and folding them reports a
+  //< correct anchor as broken. **Do not drop multi-byte characters**: a Japanese heading keeps
+  //< them in the id (Python's `\w` includes Unicode letters).
+  b: = arena.text()
+  h: = heading.trim_spaces()
+  $i: Sz = 0
+  for i < h.len
+    n: = htext.cp_len(h[i])
+    if h[i] == ' ' || h[i] == '\t'
+      b.c('-')
+    else if h[i] == '-' || htext.is_word_at(h, i)
+      for k in Range.asc(n)
+        b.c(h[i + k].to_lower())
+    i += n
+  return b.take()
+
+fn heading_text(line: U8[], max_level: Sz): U8[] //<
+  //< If the line is a heading, it returns the body with the `#` removed (empty otherwise)
+  $n: Sz = 0
+  for n < line.len && line[n] == '#'
+    n += 1
+  if n == 0 || n > max_level || n >= line.len || (line[n] != ' ' && line[n] != '\t')
+    return ""
+  return line.sub_from(n + 1).trim_spaces()
+
+fn quotes_in_heading(line: U8[]): Bool //< whether a heading line holds a double quote
+  //<
+  //< A citation quotes a heading's text in double quotes, so one inside the heading ends the
+  //< citation early and it is never checked. A quote inside a code span is left alone; write any
+  //< other inner quote as `'`.
+  text: = heading_text(line, 6)
+  $in_code: = false
+  for c in text
+    if c == '`'
+      in_code = !in_code
+    else if c == '"' && !in_code
+      return true
+  return false
+
+fn heading_anchors_of(text: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< The set of ids the headings of that document hold
+  //<
+  //< **A repeated id is numbered, not refused.** The renderer gives the second heading with the
+  //< same id a `-1` and the third a `-2` (`#cfg` and `#cfg(!…)` reduce to one), so without counting
+  //< here a correct link is reported broken.
+  $out: = List<|U8[]|>.new(arena)
+  for line in text.lines(arena)
+    h: = heading_text(line, 6)
+    if h.len <= 0
+      continue
+    base: = slugify(h, arena)
+    $n: Sz = 0
+    for one in out
+      if one.equals(base)
+        n += 1
+    out.push(base)
+    if n > 0
+      out.push(arena.text().s(base).c('-').s("\{n\}").take())
+  return out
+
+fn heading_number(line: U8[], arena: Arena$@): U8[] //<
+  //< Takes the number (`8.2` and so on) out of a heading line
+  //<
+  //< Empty where it holds no number. A part's heading has the form `Part II:` with no number, so
+  //< no workaround for `Part IV 8.2` is needed.
+  //< Caution: **If a part's heading ever carries a number, add that workaround here.**
+  h: = heading_text(line, 4)
+  if h.len == 0
+    return ""
+  $rest: = h
+  // Read only runs of digits and the `.` between them (`1.2.`'s trailing dot is not part of
+  // the number).
+  $i: Sz = 0
+  for i < rest.len && rest[i].is_digit()
+    i += 1
+  if i == 0
+    return ""
+  for i + 1 < rest.len && rest[i] == '.' && rest[i + 1].is_digit()
+    i += 1
+    for i < rest.len && rest[i].is_digit()
+      i += 1
+  // What follows the number must be a `.` or a space (`1.2x` is not a number).
+  if i < rest.len && rest[i] != '.' && rest[i] != ' ' && rest[i] != '\t'
+    return ""
+  return arena.dup_str(rest.sub(0, i))
+
+fn heading_numbers_of(text: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< The set of heading numbers that exist in that document
+  //<
+  //< `### 8.2 …` allows both 8 and 8.2.
+  $out: = List<|U8[]|>.new(arena)
+  for line in text.lines(arena)
+    num: = heading_number(line, arena)
+    if num.len == 0
+      continue
+    $i: Sz = 0
+    for i < num.len
+      if num[i] == '.'
+        out.push(num.sub(0, i))
+      i += 1
+    out.push(num)
+  return out
+
+fn holds_name(text: U8[], name: U8[], arena: Arena$@): Bool //<
+  //< Whether a document holds `name` as a name of its own
+  //<
+  //< **Where it names things**: inside a heading (any part, so a short form counts), inside a bold
+  //< span, and at the start of a table cell or a list item.
+  //< Caution: **Not anywhere in the text**: a document quotes its partner's names back, and that
+  //< quote would keep a renamed name alive.
+  for line in text.lines(arena)
+    t: = line.trim_spaces()
+    if heading_text(t, 6).len > 0
+      if t.find_str(name) >= 0
+        return true
+      continue
+    if bold_holds(t, name) || opens_with(t, name)
+      return true
+  return false
+
+priv fn bold_holds(t: U8[], name: U8[]): Bool //< whether a bold span in the line holds the name
+  $at: Sz = 0
+  for at < t.len
+    open: = t.sub_from(at).find_str("**")
+    if open < 0
+      return false
+    from: = at + Sz::open + 2
+    close: = t.sub_from(from).find_str("**")
+    if close < 0
+      return false
+    if t.sub(from, close).find_str(name) >= 0
+      return true
+    at = from + Sz::close + 2
+  return false
+
+priv fn opens_with(t: U8[], name: U8[]): Bool //<
+  //< Whether a table cell or a list item of the line starts with the name
+  //<
+  //< The bold around a cell (`**kspage**`) and a list item's mark (`*`, `-`, `1.`) are skipped.
+  if t.starts_with("|")
+    $rest: = t.sub_from(1)
+    for rest.len > 0
+      close: = rest.find_char('|')
+      cell: = (rest if close < 0 else rest.sub(0, close)).trim_spaces()
+      if cell.strip_prefix("**").starts_with(name)
+        return true
+      if close < 0
+        return false
+      rest = rest.sub_from(close + 1)
+    return false
+  $item: = t
+  if item.starts_with("* ") || item.starts_with("- ")
+    item = item.sub_from(2)
+  else
+    $d: Sz = 0
+    for d < item.len && item[d].is_digit()
+      d += 1
+    if d == 0 || !item.sub_from(d).starts_with(". ")
+      return false
+    item = item.sub_from(d + 2)
+  return item.trim_spaces().strip_prefix("**").starts_with(name)
+
+priv const sym_joiners: U8[][3] = ::{ " in ", " of ", " inside " } //<
+  //< The words that join a citation of "what is in which file"
+  //<
+  //< Caution: **The symbol comes first and the path after.** These joiners tie them, so a citation
+  //< joined another way is picked up by nothing here, **and the check goes green on a smaller
+  //< count**, which looks like a real green.
+
+fn sym_base(sym: U8[]): U8[] //<
+  //< The word to look for in the file, taken from the cited name
+  //<
+  //< Empty where there is none. A method (`Str_builder.s/c`) or type arguments (`List<|T|>`) give
+  //< the leading identifier (`sym_member` handles the member), so a spelling difference alone does
+  //< not fail it.
+  s: = sym.trim_spaces()
+  if s.len == 0 || s.find_char(' ') >= 0
+    return ""
+  $i: Sz = 0
+  for i < s.len && s[i] != '.' && s[i] != ':' && s[i] != '(' && s[i] != '[' && s[i] != '$' &&
+    s[i] != '@' && s[i] != '|' && s[i] != '<'
+    i += 1
+  base: = s.sub(0, i)
+  if base.len == 0 || !(base[0].is_alpha() || base[0] == '_')
+    return ""
+  $k: Sz = 0
+  for k < base.len
+    if !htext.is_word_at(base, k)
+      return ""
+    k += htext.cp_len(base[k])
+  return base
+
+fn sym_member(sym: U8[]): U8[] //<
+  //< The member's word from a cited `Owner.member`, looked for next to the owner's
+  //<
+  //< Empty where the name carries no member. The arguments are cut off first (`Foo.bar(x.y)`), and
+  //< only a dot right after a name, a `|>` or a `]` opens a member; an ellipsis's dots do not.
+  //< Caution: **Do not stop at the owner.** A method that moved leaves its type named in the old
+  //< file, so checking only the owner keeps finding it and the citation goes stale silently.
+  if sym_base(sym).len == 0
+    return ""
+  s: = sym.trim_spaces()
+  paren: = s.find_char('(')
+  head: = s if paren < 0 else s.sub(0, paren)
+  dot: = head.rfind_char('.')
+  if dot <= 0
+    return ""
+  at: Sz = dot
+  if !htext.is_word_before(head, at) && head[at - 1] != '>' && head[at - 1] != ']'
+    return ""
+  start: = at + 1
+  $j: = start
+  for j < head.len && htext.is_word_at(head, j)
+    j += htext.cp_len(head[j])
+  word: = head.sub(start, j - start)
+  if word.len == 0 || !(word[0].is_alpha() || word[0] == '_')
+    return ""
+  return word
+
+priv fn looks_like_place(s: U8[], dirs: U8[][]): Bool //<
+  //< Whether a name in backticks looks like it **cites a place**
+  //<
+  //< A path carrying an extension and an import's extensionless spelling (`std/lang`) are both
+  //< places.
+  //< Caution: **Do not drop the extensionless form**: it is this repository's usual way to cite a
+  //< place, so checking extensions alone leaves the check green on a smaller count. **For it,
+  //< check that the first step is a folder of this repository**, or `Str_builder.s/c` becomes a
+  //< place and a real citation is dropped.
+  if looks_like_path(s)
+    return true
+  cut: = s.find_char('/')
+  if cut <= 0 || cut + 1 >= s.len
+    return false
+  $named: = false
+  for d in dirs
+    if !named && s.sub(0, cut).equals(d)
+      named = true
+  if !named
+    return false
+  $i: Sz = 0
+  for i < s.len
+    if !is_path_at(s, i)
+      return false
+    i += htext.cp_len(s[i])
+  return true
+
+priv fn looks_like_path(s: U8[]): Bool //<
+  //< Whether a name in backticks looks like the name of a file carrying an extension
+  for e in src_path_ext
+    if s.len > e.len + 1 && s.ends_with(e) && s[s.len - e.len - 1] == '.'
+      $i: Sz = 0
+      for i < s.len
+        if !is_path_at(s, i)
+          return false
+        i += htext.cp_len(s[i])
+      return true
+  return false
+
+fn read_ticks(text: U8[], i: Sz): Hit //< reads one `` `…` `` body
+  //<
+  //< Given the opening position i, it returns the position after the close and the body.
+  if i >= text.len || text[i] != '`'
+    return Hit::{ .at = i, .end = i, .text = "", .extra = "" }
+  $j: = i + 1
+  for j < text.len && text[j] != '`' && text[j] != '\n'
+    j += 1
+  if j >= text.len || text[j] != '`' || j == i + 1
+    return Hit::{ .at = i, .end = i, .text = "", .extra = "" }
+  return Hit::{ .at = i, .end = j + 1, .text = text.sub(i + 1, j - i - 1), .extra = "" }
+
+priv fn skip_spaces(text: U8[], i: Sz): Sz
+  $j: = i
+  for j < text.len && (text[j] == ' ' || text[j] == '\t' || text[j] == '\n')
+    j += 1
+  return j
+
+fn find_symbol_refs(text: U8[], dirs: U8[][], arena: Arena$@): List<|Hit|> //<
+  //< Picks up the citations of symbols
+  //<
+  //< In `text`, Hit.text is the path and `extra` is the symbol. **Advance only by what was picked
+  //< up**: skip a backtick that could not be picked up and the next opening is taken for a close.
+  //< Caution: **Do not copy the folder list**; the caller passes it (the canonical list is the
+  //< table in `docs/SPEC-documents.md`).
+  $out: = List<|Hit|>.new(arena)
+  $i: Sz = 0
+  for i < text.len
+    if text[i] != '`'
+      i += 1
+      continue
+    first: = read_ticks(text, i)
+    if first.end == i
+      i += 1
+      continue
+    $next: = i + 1
+    if !looks_like_place(first.text, dirs)
+      // The `` `symbol` in `path` `` form.
+      // **A name that looks like a path is not treated as a symbol** (`` `a/x.md` in `b/y.md` `` is
+      // for the check above).
+      // Caution: **Read a run (`A` / `B` / `C` in `path`) to the end.** The run comes **before**
+      // the joiner, so looking only at the last one silently drops the rest.
+      $names: = List<|U8[]|>.new(arena)
+      names.push(first.text)
+      $k: = first.end
+      for k < text.len
+        sep: = skip_spaces(text, k)
+        if sep >= text.len || text[sep] != '/'
+          break
+        at: = skip_spaces(text, sep + 1)
+        item: = read_ticks(text, at)
+        if item.end == at || looks_like_place(item.text, dirs)
+          break
+        names.push(item.text)
+        k = item.end
+      $joiner: Sz = 0
+      for j in sym_joiners
+        if joiner == 0 && k + j.len <= text.len && text.sub(k, j.len).equals(j)
+          joiner = j.len
+      if joiner > 0
+        at: = k + joiner
+        item: = read_ticks(text, at)
+        if item.end > at && looks_like_place(item.text, dirs)
+          for n in names
+            out.push(Hit::{ .at = i, .end = item.end, .text = item.text, .extra = n })
+          next = item.end
+    if next == i + 1
+      // The `` `symbol`(`path`) `` form.
+      $k: = skip_spaces(text, first.end)
+      open: = k < text.len && text[k] == '('
+      if open
+        k = skip_spaces(text, k + 1)
+        inner: = read_ticks(text, k)
+        if inner.end > k && looks_like_place(inner.text, dirs)
+          m: = skip_spaces(text, inner.end)
+          closed: = m < text.len && text[m] == ')'
+          if closed
+            out
+              .push(Hit::{ .at = i, .end = inner.end, .text = inner.text, .extra = first.text })
+            next = m + 1
+    i = next
+  return out

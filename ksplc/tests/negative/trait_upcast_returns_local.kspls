@@ -1,0 +1,36 @@
+//< Returning or throwing a trait value upcast from local storage is rejected
+//<
+//< The upcast synthesises `&the value` with no `@` in the source, so it dangles once the frame
+//< goes (docs/DESIGN.md §4.3). A value parameter and a throw are the same; into a `Trait?Err` the
+//< upcast sits inside result_wrap, which is peeled off and checked too.
+// EXPECT: cannot return an interface value built from local storage
+// EXPECT: cannot return an interface value built from local storage
+// EXPECT: cannot throw an interface value built from local storage
+
+pub trait Shape
+  fn area(r: Self$@): I32
+
+pub struct Sq
+  pub n: I32
+
+impl Sq: Shape
+  pub fn area(r: Self$@): I32
+    return r.n * r.n
+
+priv fn from_local(): Shape
+  $s: = Sq::{ .n = 7 }
+  return s
+
+priv fn from_param(s: Sq): Shape
+  return s
+
+priv fn thrown(): I32?Shape
+  $s: = Sq::{ .n = 5 }
+  throw s
+
+fn main()
+  a: = from_local()
+  b: = from_param(Sq::{ .n = 2 })
+  c: = thrown() catch
+    fallback 0
+  _x: = a.area() + b.area() + c

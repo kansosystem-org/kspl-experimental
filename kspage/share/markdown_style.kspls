@@ -1,0 +1,345 @@
+//< Picks the styles a Markdown text needs and adds them
+//<
+//< Caution: **Look styles up by part.** Looking up by remembered names silently breaks the day a
+//< document renames a style ([`../docs/DESIGN.md`](../docs/DESIGN.md)'s table of parts). Use what
+//< is there and add only where there is none.
+//< Do not decide the look here, or looks the text does not hold creep in; the look is set in the
+//< table beforehand ([`markdown_look.kspls`](markdown_look.kspls)).
+import "kspage/model/collect" { Collect }
+import "kspage/model/marker" { Marker }
+import "kspage/model/paint" + { Accent }
+import "kspage/model/style" + { Sheet, Style, Arrange }
+import "kspage/share/markdown"
+import "kspage/share/markdown_look" { apart_name, body_name, cell_names, chart_prefix, slide_name,
+  divider_name, grid_name, head_names, item_name, notes_name, step_name }
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+priv fn free_name(sheet: Sheet$@, want: U8[], arena: Arena$@): U8[] //<
+  //< A free name, for adding a style
+  //<
+  //< Caution: **Do not make two styles of the same name** — the later one can no longer be looked
+  //< up. One more than the number of styles in the table always finds a free name.
+  switch sheet.find(want) case .none
+    return want
+  case .some {}
+  for $n: Sz = 2; n <= sheet.styles.len + 1; n += 1
+    $sb: = Str_builder.new()
+    defer sb.free()
+    sb.s(want).s("-\{n\}")
+    switch sheet.find(sb.slice()) case .none
+      return arena.dup_str(sb.slice())
+    case .some {}
+  return want
+
+priv fn add_style(sheet: Sheet$@, want: U8[], arena: Arena$@): Style$@ //< adds one style
+  //<
+  //< Caution: **The name must be a free one** (`free_name`).
+  return sheet.add(free_name(sheet, want, arena), paint.inherit_all())
+
+priv fn unmarked(s: Style$@): Bool //< whether it is a style holding no mark
+  switch s.marker case .none
+    return true
+  case .bullet, .number, .serial, .outline {}
+  return false
+
+fn heading_style(sheet: Sheet$@, level: Sz, arena: Arena$@): U8[] //<
+  //< The name of the style for a heading at depth `level`
+  //<
+  //< Choose one with no marker (the chapter number is in the text and would show twice). Use what
+  //< is there and add only where there is none; the look is not decided here (see the header).
+  for $i: Sz = 0; i < sheet.styles.len; i += 1
+    s: = sheet.styles.get(i)
+    if s.outline == level && unmarked(s)
+      return s.name
+  fresh: = add_style(sheet, head_names[level - 1], arena)
+  fresh.outline = level
+  return fresh.name
+
+fn list_style(sheet: Sheet$@, kind: Sz, arena: Arena$@): U8[] //<
+  //< The name of a list's style (`kind` 1 is bullets, 2 is numbers)
+  //<
+  //< Decide by the marker alone; the indent and the bullet are look, taken from an existing style.
+  //< An added one gets "• " (written out as `-`).
+  for $i: Sz = 0; i < sheet.styles.len; i += 1
+    s: = sheet.styles.get(i)
+    switch s.marker case .bullet(_g)
+      if kind == 1
+        return s.name
+    case .number(_a)
+      if kind == 2
+        return s.name
+    case .none, .serial, .outline {}
+  if kind == 2
+    fresh: = add_style(sheet, step_name, arena)
+    fresh.marker = Marker.number(". ")
+    return fresh.name
+  made: = add_style(sheet, item_name, arena)
+  made.marker = Marker.bullet("• ")
+  return made.name
+
+fn code_style(sheet: Sheet$@, info: U8[], bold: Bool, italic: Bool, arena: Arena$@): U8[] //<
+  //< The name of the code style
+  //<
+  //< A block (a ``` fence) and inline code (a `` ` `` fence) share one style, which a theme styles
+  //< through this one part (`dressed` in `../write/theme.kspls`). **Code with emphasis is another
+  //< style** (`` **`x`** ``), so the emphasis is compared too.
+  $want: Accent = paint.inherit_accent()
+  if bold
+    want.bold = Option<|Bool|>.some(true)
+  if italic
+    want.italic = Option<|Bool|>.some(true)
+  wanted: = coded_name(info, bold, italic)
+  $model: Style$@ = null
+  for $i: Sz = 0; i < sheet.styles.len; i += 1
+    s: = sheet.styles.get(i)
+    if s.wrap || s.outline > 0 || !unmarked(s)
+      continue
+    if same_accent(s, want) && s.name.equals(wanted)
+      return s.name
+    // Caution: **Keep the model to copy the look from.** A declared language and emphasized
+    // code get a new name, but the part is still code; added plain, such a fence shows as text.
+    if model == null
+      model = s
+  if model == null
+    fresh: = add_style(sheet, wanted, arena)
+    fresh.wrap = false
+    fresh.font = paint.accent_into(fresh.font, want)
+    return fresh.name
+  made: = like(sheet, model, wanted, arena)
+  made.font = paint.accent_into(made.font, want)
+  return made.name
+
+priv fn same_accent(s: Style$@, want: Accent): Bool //<
+  //< Whether the emphasis that `s` sets is the same as `want`
+  //<
+  //< Caution: **Tell "not set" apart from "turned off"** (plain code inside a bold parent is not a
+  //< style that cancels the bold).
+  $got: Accent = paint.inherit_accent()
+  if w: = s.font.weight
+    got.bold = Option<|Bool|>.some(w >= paint.bold_weight)
+  got.italic = s.font.italic
+  return same_flag(got.bold, want.bold) && same_flag(got.italic, want.italic)
+
+priv fn same_flag(a: Option<|Bool|>, b: Option<|Bool|>): Bool
+  return paint.drawn(a) == paint.drawn(b)
+
+priv fn coded_name(info: U8[], bold: Bool, italic: Bool): U8[] //< the code style's name
+  //<
+  //< Caution: **The same shape must give the same name**, or the style table grows on every
+  //< layout. A declared language is the name as it is (`kspl`); with none it is `plain_code_name`
+  //< in `markdown.kspls`, which only the writer reads as "declares no language".
+  if info.len > 0
+    return info
+  if bold && italic
+    return "code-w1-i1"
+  if bold
+    return "code-w1"
+  return "code-i1" if italic else markdown.plain_code_name
+
+priv fn divider_named(s: Style$@): Bool //< whether it is a divider's style
+  //<
+  //< Only this is told apart by name: a divider that draws no line has the same fields as a plain
+  //< paragraph. **Keep the test in this one place**, or the paragraph after a divider gets the
+  //< divider's style.
+  return s.name.starts_with(divider_name)
+
+priv fn like(sheet: Sheet$@, model: Style$@, want: U8[], arena: Arena$@): Style$@ //<
+  //< Adds one style copied from a model
+  //<
+  //< Caution: **Change only the name** (copying chosen fields misses a field added later).
+  fresh: = add_style(sheet, want, arena)
+  kept: = fresh.name
+  fresh$ = model$
+  fresh.name = kept
+  return fresh
+
+fn body_style(sheet: Sheet$@, arena: Arena$@): U8[] //< the name of a plain paragraph's style
+  //<
+  //< Caution: **Do not leave it unnamed**, or the spacing and the line height have nowhere to be
+  //< written. A style holding a run's look (a color) is not a plain paragraph.
+  for $i: Sz = 0; i < sheet.styles.len; i += 1
+    s: = sheet.styles.get(i)
+    if plain(s)
+      return s.name
+  return add_style(sheet, body_name, arena).name
+
+priv fn plain(s: Style$@): Bool //< whether it is a style holding no part at all
+  if s.outline > 0 || !unmarked(s) || !s.wrap || divider_named(s)
+    return false
+  if s.pad > 0.0 || s.rule_width > 0.0 || paint.any_ink(s.ink)
+    return false
+  if _v: = s.fill
+    return false
+  switch s.collect case .none {} default
+    return false
+  return s.arrange.same_arrange(Arrange.flow) && s.align.same_align(style.Align.left)
+
+fn divider_style(sheet: Sheet$@, ruled: Bool, arena: Arena$@): U8[] //<
+  //< The name of a divider's style
+  //<
+  //< The one that draws a line is another style (only it appears in the text; one drawing none only
+  //< separates neighbouring fences). The look is not decided further here (see the header).
+  for $i: Sz = 0; i < sheet.styles.len; i += 1
+    s: = sheet.styles.get(i)
+    if s.outline <= 0 && unmarked(s) && (s.rule_width > 0.0) == ruled && divider_named(s)
+      return s.name
+  fresh: = add_style(sheet, divider_name if ruled else apart_name, arena)
+  if ruled
+    fresh.rule_width = 1.0
+  return fresh.name
+
+fn grid_style(sheet: Sheet$@, arena: Arena$@): U8[] //< the name of a table's style
+  //<
+  //< It is a style that lays out as a grid (decided by the layout, not by the name).
+  for $i: Sz = 0; i < sheet.styles.len; i += 1
+    s: = sheet.styles.get(i)
+    switch s.arrange case .grid
+      return s.name
+    case .flow, .absolute {}
+  fresh: = add_style(sheet, grid_name, arena)
+  fresh.arrange = Arrange.grid
+  return fresh.name
+
+fn slide_style(sheet: Sheet$@, w: F32, h: F32, arena: Arena$@): U8[] //<
+  //< The name of the style for a slide of that size
+  //<
+  //< A slide's size belongs to its style ("How a grid and absolute coordinates are laid out" in
+  //< [`../docs/DESIGN.md`](../docs/DESIGN.md)), so a second size makes a second style.
+  for $i: Sz = 0; i < sheet.styles.len; i += 1
+    s: = sheet.styles.get(i)
+    if s.arrange.same_arrange(Arrange.absolute) && s.width == w && s.height == h
+      return s.name
+  fresh: = add_style(sheet, slide_name, arena)
+  fresh.arrange = Arrange.absolute
+  fresh.width = w
+  fresh.height = h
+  return fresh.name
+
+fn chart_style(sheet: Sheet$@, what: Collect, height: F32, arena: Arena$@): U8[] //<
+  //< The name of the style for a chart with that aggregation and height
+  //<
+  //< Both belong to the style (only the range belongs to the block), so a second height makes a
+  //< second style.
+  for $i: Sz = 0; i < sheet.styles.len; i += 1
+    s: = sheet.styles.get(i)
+    if s.collect.same_collect(what) && s.height == height
+      return s.name
+  $sb: = Str_builder.new()
+  defer sb.free()
+  sb.s(chart_prefix).s(what.variant_name())
+  fresh: = add_style(sheet, arena.dup_str(sb.slice()), arena)
+  fresh.collect = what
+  fresh.height = height
+  return fresh.name
+
+fn frame_style(sheet: Sheet$@, want: U8[], arena: Arena$@): U8[] //<
+  //< The name of the style set on one frame
+  //<
+  //< Empty stays empty (the slide's default look). A name from the text is used as it is;
+  //< looking up by part would draw every frame the same.
+  if want.len <= 0
+    return ""
+  switch sheet.find(want) case .some(got)
+    return got.name
+  case .none {}
+  return add_style(sheet, want, arena).name
+
+fn notes_style(sheet: Sheet$@, arena: Arena$@): U8[]
+  for $i: Sz = 0; i < sheet.styles.len; i += 1
+    s: = sheet.styles.get(i)
+    switch s.collect case .notes
+      return s.name
+    case .none, .contents, .bars, .lines, .source, .imports {}
+  fresh: = add_style(sheet, notes_name, arena)
+  fresh.collect = Collect.notes
+  return fresh.name
+
+fn accent_style(sheet: Sheet$@, bold: Bool, italic: Bool, arena: Arena$@): U8[] //<
+  //< The name of the style for a run with emphasis
+  //<
+  //< Empty where there is no emphasis (the run keeps the parent's style).
+  //< Only one function builds the name (`paint.span_name`), or the same emphasis appears twice in
+  //< the style table.
+  if !bold && !italic
+    return ""
+  $want: Accent = paint.inherit_accent()
+  if bold
+    want.bold = Option<|Bool|>.some(true)
+  if italic
+    want.italic = Option<|Bool|>.some(true)
+  $sb: = Str_builder.new()
+  defer sb.free()
+  if !paint.span_name(paint.inherit_ink(), want, sb@)
+    return ""
+  if s: = sheet.find(sb.slice())
+    // Set the contents again, or a style's look can disagree with its name (as `paint_ink` in
+    // `write/shape.kspls`).
+    s.font = paint.accent_into(s.font, want)
+    return s.name
+  spec: = paint.accent_into(paint.inherit_all(), want)
+  fresh: = sheet.add(arena.dup_str(sb.slice()), spec)
+  return fresh.name
+
+fn cell_style(sheet: Sheet$@, want: style.Align, arena: Arena$@): U8[] //<
+  //< The name of a table cell's style
+  //<
+  //< It is looked up by part: a flowing paragraph with padding and no marker is a cell (`cell_like`
+  //< in `../model/style.kspls`, which inserting a table uses too).
+  //< Caution: **Name the left-aligned one too**, or the grid's line and the padding have nowhere to
+  //< be written.
+  for $i: Sz = 0; i < sheet.styles.len; i += 1
+    s: = sheet.styles.get(i)
+    if style.cell_like(s) && s.align.same_align(want)
+      return s.name
+  // Where a model exists, copy it (a cell that differs only in its alignment).
+  for $i: Sz = 0; i < sheet.styles.len; i += 1
+    s: = sheet.styles.get(i)
+    if style.cell_like(s)
+      made: = like(sheet, s, cell_name(want), arena)
+      made.align = want
+      return made.name
+  fresh: = add_style(sheet, cell_name(want), arena)
+  fresh.align = want
+  return fresh.name
+
+priv fn cell_name(want: style.Align): U8[] //< the cell style names, per alignment
+  if want.same_align(style.Align.center)
+    return cell_names[1]
+  return cell_names[2] if want.same_align(style.Align.right) else cell_names[0]
+
+fn link_style(sheet: Sheet$@, bold: Bool, italic: Bool, arena: Arena$@): U8[] //<
+  //< The name of a link's run style
+  //<
+  //< It is looked up by part: a style that sets both a color and an underline (`linked` in
+  //< `../model/style.kspls`).
+  //< Where the table has none, use the emphasis alone (the look belongs to the table in
+  //< `markdown_look.kspls`).
+  $found: Style$@ = null
+  for $i: Sz = 0; i < sheet.styles.len; i += 1
+    s: = sheet.styles.get(i)
+    if style.linked(s) && s.outline <= 0 && unmarked(s)
+      found = s
+      break
+  if found == null
+    return accent_style(sheet, bold, italic, arena)
+  if !bold && !italic
+    return found.name
+  // With emphasis too, it is a style that adds the emphasis to the link's color and underline.
+  // Only one function builds the name (`paint.span_name`).
+  $want: Accent = paint.inherit_accent()
+  if bold
+    want.bold = Option<|Bool|>.some(true)
+  if italic
+    want.italic = Option<|Bool|>.some(true)
+  $sb: = Str_builder.new()
+  defer sb.free()
+  if !paint.span_name(found.ink, want, sb@)
+    return found.name
+  if s: = sheet.find(sb.slice())
+    return s.name
+  made: = sheet.add(arena.dup_str(sb.slice()),
+    paint.accent_into(paint.inherit_all(), want))
+  made.ink = found.ink
+  return made.name

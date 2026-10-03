@@ -1,0 +1,389 @@
+#!/usr/bin/env -S ksplc run
+//< Compiles the code `docs/SPEC-language.md` calls "refused" and "allowed", and compares results
+//<
+//< Nobody runs the specification's prose.
+//< Caution: **List refusals and allowances in pairs.** Refusals alone let an implementation that
+//< refuses everything go green.
+//< A section number marks where a case was copied from; the check does not use it
+//< (`tests/suite/docref_test.kspls` checks that the section exists).
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/verdict"
+import "tests/support/harness"
+
+priv struct Case //< one claim
+  //<
+  //< `reject` true means "the specification writes that it refuses".
+  sec: U8[]
+  claim: U8[]
+  reject: Bool
+  src: U8[]
+
+// The table of the specification's claims.
+// Caution: **List refusals and allowances in pairs** (the reason is in the file header).
+priv const cases: Case[116] = ::{
+  Case::{ .sec = "2.2", .claim = "a KSPL reserved word cannot be used as an identifier",
+    .reject = true, .src = "fn main(): I32 { struct: I32 = 1; return struct; }\n" },
+  Case::{ .sec = "2.2", .claim = "a C reserved word can be used as an identifier", .reject = false,
+    .src = "fn main(): I32 { goto: I32 = 1; return goto - 1; }\n" },
+  Case::{ .sec = "2.2", .claim = "where it dodged to collides if it is in the same scope",
+    .reject = true,
+    .src = "fn main(): I32 { goto: I32 = 1; goto_kw: I32 = 2; return goto + goto_kw; }\n" },
+  Case::{ .sec = "2.2", .claim = "a Microsoft keyword collides with where it dodged to as well",
+    .reject = true,
+    .src = "fn main(): I32 { _try: I32 = 1; _try_kw: I32 = 2; return _try + _try_kw; }\n" },
+  Case::{ .sec = "2.2", .claim = "a name in the compiler's space stands beside where it dodged to",
+    .reject = false,
+    .src = "fn main(): I32 { __try: I32 = 1; __try_kw: I32 = 2; return __try + __try_kw; }\n" },
+  Case::{ .sec = "3.2", .claim = "in a variable declaration T[_]'s length can be inferred",
+    .reject = false,
+    .src = "fn main(): I32 { a: I32[_] = ::{ 1, 2, 3 }; return I32::a.len - 3; }\n" },
+  Case::{ .sec = "3.2", .claim = "T[_] cannot be written on a struct's field", .reject = true,
+    .src = "priv struct S { a: I32[_]; }\nfn main(): I32 { return 0; }\n" },
+  Case::{ .sec = "3.3", .claim = "a struct holding itself as a value is refused", .reject = true,
+    .src = "priv struct S { inner: S; }\nfn main(): I32 { return 0; }\n" },
+  Case::{ .sec = "3.3", .claim = "a self-reference across a pointer is allowed", .reject = false,
+    .src = "priv struct S { next: S@; }\nfn main(): I32 { return 0; }\n" },
+  Case::{ .sec = "3.2", .claim = "a function type stands as a type argument and a return",
+    .reject = false,
+    .src =
+    "import \"std/ds\" { List };\npriv fn two(a: I32): I32 { return a * 2; }\npriv fn pick(): fn(a: \
+      I32): I32 { return two; }\nfn main(): I32 { $l: = List<|fn(a: I32): I32|>.new(); defer \
+      l.free(); l.push(pick()); return l.get(0)(0); }\n" },
+  Case::{ .sec = "3.2", .claim = "a call through a function value is checked against its type",
+    .reject = true,
+    .src =
+    "priv fn two(a: I32): I32 { return a * 2; }\npriv fn pick(): fn(a: I32): I32 { return two; \
+      }\nfn main(): I32 { return pick()(1, 2); }\n" },
+  Case::{ .sec = "3.4", .claim = "a duplicate variant name is refused", .reject = true,
+    .src = "priv enum E { a; a; }\nfn main(): I32 { return 0; }\n" },
+  Case::{ .sec = "3.4", .claim = "setting a scalar enum's tag is allowed", .reject = false,
+    .src = "priv enum E { a = 5; b = 9; }\nfn main(): I32 { e: E = E.b; return 0; }\n" },
+  Case::{ .sec = "3.5", .claim = "a cycle among typedefs is refused", .reject = true,
+    .src = "typedef A = B;\ntypedef B = A;\nfn main(): I32 { return 0; }\n" },
+  Case::{ .sec = "3.5", .claim = "a chain that is not a cycle is allowed", .reject = false,
+    .src = "typedef A1 = I32;\ntypedef A2 = A1;\nfn main(): I32 { x: A2 = 0; return x; }\n" },
+  Case::{ .sec = "3.5", .claim = "a type's members are reached through its typedef",
+    .reject = false,
+    .src =
+    "import \"std/ds\" { List };\npriv enum E { a; b; }\npriv typedef F = E;\ntypedef Nums = \
+      List<|I32|>;\nfn main(): I32 { _f: F = F.b; $n: = Nums.new(); defer n.free(); n.push(1); \
+      return n.get(0) - 1; }\n" },
+  Case::{ .sec = "3.5", .claim = "a member the type behind a typedef lacks is refused",
+    .reject = true,
+    .src = "priv enum E { a; b; }\npriv typedef F = E;\nfn main(): I32 { _f: F = F.c; return 0; }\n" },
+  Case::{ .sec = "3.6", .claim = "interpolation outside a Writer chain is refused", .reject = true,
+    .src = "fn main(): I32 { n: I32 = 1; s: U8[] = \"n=\\{n\\}\"; return I32::s.len; }\n" },
+  Case::{ .sec = "3.6", .claim = "inside a Writer chain it is allowed", .reject = false,
+    .src =
+    "import \"std/io\";\nfn main(): I32 { n: I32 = 1; io.out().s(\"n=\\{n\\}\\n\"); return 0; }\n" },
+  Case::{ .sec = "4.1", .claim = "reassigning a binding with no '$' is refused", .reject = true,
+    .src = "fn main(): I32 { x: I32 = 1; x = 2; return x; }\n" },
+  Case::{ .sec = "4.1", .claim = "with a '$' it can be reassigned", .reject = false,
+    .src = "fn main(): I32 { $x: I32 = 1; x = 2; return x - 2; }\n" },
+  Case::{ .sec = "4.1", .claim = "an rvalue's address cannot be taken", .reject = true,
+    .src = "priv fn f(): I32 { return 1; }\nfn main(): I32 { p: I32@ = f()@; return p$; }\n" },
+  Case::{ .sec = "4.1", .claim = "a write across a read-only pointer is refused", .reject = true,
+    .src =
+    "priv struct S { v: I32; }\nfn main(): I32 { $s: S = ::{}; p: S@ = s@; p.v = 1; return 0; }\n" },
+  Case::{ .sec = "4.2", .claim = "reading while uninitialised is refused", .reject = true,
+    .src = "fn main(): I32 { $x: I32; return x; }\n" },
+  Case::{ .sec = "4.2", .claim = "initialised on every route it is allowed", .reject = false,
+    .src =
+    "priv fn c(): Bool { return true; }\nfn main(): I32 { $x: I32; if c() { x = 0; } else { x = 1; \
+      } return x; }\n" },
+  Case::{ .sec = "4.2",
+    .claim = "under a constant condition true, the living side initialising it is allowed",
+    .reject = false,
+    .src = "fn main(): I32 { $x: I32; if true { x = 0; } else { x = 1; } return x; }\n" },
+  Case::{ .sec = "4.2",
+    .claim = "under a constant condition false, the living side initialising it is allowed",
+    .reject = false,
+    .src = "fn main(): I32 { $x: I32; if false { x = 0; } else { x = 1; } return x - 1; }\n" },
+  Case::{ .sec = "4.2",
+    .claim = "under a constant condition, the living side not initialising is refused",
+    .reject = true, .src = "fn main(): I32 { $x: I32; if true { } else { x = 1; } return x; }\n" },
+  Case::{ .sec = "4.2", .claim = "a function call in a top-level initialiser is refused",
+    .reject = true,
+    .src = "priv fn f(): I32 { return 1; }\npriv g: I32 = f();\nfn main(): I32 { return 0; }\n" },
+  Case::{ .sec = "4.2", .claim = "consts referring to each other are refused", .reject = true,
+    .src = "const a: I32 = b;\nconst b: I32 = a;\nfn main(): I32 { return 0; }\n" },
+  Case::{ .sec = "4.2", .claim = "a const declared later can be referred to from earlier",
+    .reject = false,
+    .src = "const a: I32 = b + 1;\nconst b: I32 = 2;\nfn main(): I32 { return a - 3; }\n" },
+  Case::{ .sec = "4.3", .claim = "redeclaring in the same scope is refused", .reject = true,
+    .src = "fn main(): I32 { x: I32 = 1; x: I32 = 2; return x; }\n" },
+  // **The inner scope carries a label** (a block with no heading is writable in neither notation).
+  Case::{ .sec = "4.3", .claim = "shadowing in an inner scope is allowed", .reject = false,
+    .src = "fn main(): I32 { x: I32 = 1; inner: { x: I32 = 2; return x - 2; } }\n" },
+  Case::{ .sec = "4.3", .claim = "assigning to the result of taking an address is refused",
+    .reject = true, .src = "fn main(): I32 { $x: I32 = 1; x@ = null; return x; }\n" },
+  Case::{ .sec = "4.3", .claim = "assigning to a call's return value is refused", .reject = true,
+    .src = "priv fn one(): I32 { return 1; }\nfn main(): I32 { one() = 2; return 0; }\n" },
+  Case::{ .sec = "4.3", .claim = "assigning to the result of arithmetic is refused", .reject = true,
+    .src = "fn main(): I32 { $x: I32 = 1; x + 1 = 2; return x; }\n" },
+  Case::{ .sec = "4.3", .claim = "assigning to a literal is refused", .reject = true,
+    .src = "fn main(): I32 { 1 = 2; return 0; }\n" },
+  Case::{ .sec = "4.3", .claim = "assigning to a dereference is allowed", .reject = false,
+    .src = "fn main(): I32 { $x: I32 = 1; p: I32$@ = x@; p$ = 0; return x; }\n" },
+  Case::{ .sec = "4.3", .claim = "assigning to a field and a subscript is allowed", .reject = false,
+    .src =
+    "priv struct S { v: I32; }\nfn main(): I32 { $s: S = S::{ .v = 1 }; s.v = 0; $a: I32[2] = ::{ \
+      1, 2 };\n  a[0] = 0; return s.v + a[0]; }\n" },
+  Case::{ .sec = "5.2", .claim = "a 'Self$@' method cannot be called from a read-only receiver",
+    .reject = true,
+    .src =
+    "priv struct S { v: I32; }\nimpl S { fn bump(r: Self$@) { r.v += 1; } }\nfn main(): I32 { s: S \
+      = ::{}; s.bump(); return 0; }\n" },
+  Case::{ .sec = "5", .claim = "the word used to declare one is trait alone", .reject = true,
+    .src = "priv iface I { fn f(r: Self): I32; }\nfn main(): I32 { return 0; }\n" },
+  Case::{ .sec = "5.3", .claim = "a trait short of a method is refused", .reject = true,
+    .src =
+    "priv trait I { fn f(r: Self): I32; }\npriv struct S { v: I32; }\nimpl S: I {}\nfn main(): I32 \
+      { return 0; }\n" },
+  Case::{ .sec = "5.3", .claim = "a trait with a different return type is refused", .reject = true,
+    .src =
+    "priv trait I { fn f(r: Self): I32; }\npriv struct S { v: I32; }\nimpl S: I { fn f(r: Self@): \
+      U8[] { return \"x\"; } }\nfn main(): I32 { return 0; }\n" },
+  Case::{ .sec = "5.4", .claim = "copying a Move_only type is refused", .reject = true,
+    .src =
+    "priv struct S { v: I32; }\nimpl S: Move_only {}\nfn main(): I32 { a: S = ::{}; b: S = a; \
+      return b.v + a.v; }\n" },
+  Case::{ .sec = "6.2", .claim = "subscripting a raw pointer is refused", .reject = true,
+    .src = "fn main(): I32 { $x: I32 = 1; p: I32$@ = x@; return p[0]; }\n" },
+  Case::{ .sec = "6.2", .claim = "'(p + i)$' can be written", .reject = false,
+    .src = "fn main(): I32 { $x: I32 = 1; p: I32$@ = x@; return (p + 0)$ - 1; }\n" },
+  Case::{ .sec = "6.2.1", .claim = "a '.' across a pointer is walked automatically",
+    .reject = false,
+    .src = "priv struct S { v: I32; }\nfn main(): I32 { $s: S = ::{}; p: S$@ = s@; return p.v; }\n" },
+  Case::{ .sec = "6.2.1", .claim = "a slice cast that changes the element size is refused",
+    .reject = true,
+    .src = "fn main(): I32 { a: U8[8] = ::{}; w: = I32[]::a; return I32::w.len; }\n" },
+  Case::{ .sec = "6.2.1", .claim = "a reinterpretation of the same size is allowed",
+    .reject = false,
+    .src = "fn main(): I32 { a: U8[8] = ::{}; w: = I8[]::a; return I32::w.len - 8; }\n" },
+  Case::{ .sec = "6.4", .claim = "a narrowing implicit conversion is refused", .reject = true,
+    .src = "fn main(): I32 { a: I32 = 300; b: I8 = a; return I32::b; }\n" },
+  Case::{ .sec = "6.4", .claim = "a widening implicit conversion is allowed", .reject = false,
+    .src = "fn main(): I32 { a: I8 = 3; b: I32 = a; return b - 3; }\n" },
+  Case::{ .sec = "6.4", .claim = "an implicit conversion from U64 to Sz is refused", .reject = true,
+    .src = "fn main(): I32 { a: U64 = 3U64; b: Sz = a; return I32::b; }\n" },
+  Case::{ .sec = "6.4", .claim = "a direct cast to a struct is refused", .reject = true,
+    .src = "priv struct S { v: I32; }\nfn main(): I32 { s: S = S::1; return s.v; }\n" },
+  Case::{ .sec = "4.2", .claim = "a constant shift at or over the width is refused", .reject = true,
+    .src = "fn main(): I32 { x: I32 = 1 << 40; return x; }\n" },
+  Case::{ .sec = "4.2", .claim = "a constant shift inside the width is allowed", .reject = false,
+    .src = "fn main(): I32 { x: I32 = 1 << 30; return x - 1073741824; }\n" },
+  Case::{ .sec = "4.2", .claim = "dividing by 0 is refused", .reject = true,
+    .src = "fn main(): I32 { return 7 / 0; }\n" },
+  Case::{ .sec = "4.2", .claim = "a floating-point division by 0 is allowed", .reject = false,
+    .src = "fn main(): I32 { x: F64 = 1.0 / 0.0; return 0 if x > 0.0 else 1; }\n" },
+  Case::{ .sec = "4.2",
+    .claim = "a constant overflow is refused (an intermediate result is looked at too)",
+    .reject = true,
+    .src = "priv enum E { a = (2147483647 + 1) - 1; }\nfn main(): I32 { return 0; }\n" },
+  Case::{ .sec = "6.2", .claim = "pointers to the same type can be subtracted (the answer is Sz)",
+    .reject = false,
+    .src =
+    "fn main(): I32 { a: I32[4] = ::{ 1, 2, 3, 4 }; d: Sz = a[3]@ - a[0]@; return (I32)::d - 3; }\n" },
+  Case::{ .sec = "6.2",
+    .claim = "an addition with the integer left and the pointer right is refused", .reject = true,
+    .src =
+    "priv fn op(n: Sz): Sz { return n; }\nfn main(): I32 { a: I32[2] = ::{ 1, 2 }; d: Sz = op(1) + \
+      a[0]@; return (I32)::d; }\n" },
+  Case::{ .sec = "6.2", .claim = "adding two pointers is refused", .reject = true,
+    .src =
+    "fn main(): I32 { a: I32[2] = ::{ 1, 2 }; d: Sz = Sz::(a[0]@ + a[1]@); return (I32)::d; }\n" },
+  Case::{ .sec = "6.2",
+    .claim = "a compound assignment advancing a pointer by an integer is allowed", .reject = false,
+    .src = "fn main(): I32 { a: I32[2] = ::{ 1, 2 }; $p: = a[0]@; p += 1; return p$ - 2; }\n" },
+  Case::{ .sec = "6.2", .claim = "a compound assignment whose advance is a pointer is refused",
+    .reject = true,
+    .src = "fn main(): I32 { a: I32[2] = ::{ 1, 2 }; $p: = a[0]@; p += a[1]@; return p$; }\n" },
+  Case::{ .sec = "6.2", .claim = "a '*=' on a pointer is refused", .reject = true,
+    .src = "fn main(): I32 { a: I32[2] = ::{ 1, 2 }; $p: = a[0]@; p *= 2; return p$; }\n" },
+  Case::{ .sec = "6.2", .claim = "pointers to different types cannot be subtracted", .reject = true,
+    .src = "fn main(): I32 { a: I32 = 1; b: U8 = 2; d: = a@ - b@; return (I32)::d; }\n" },
+  Case::{ .sec = "6.6", .claim = "'::{}' fills every field with 0", .reject = false,
+    .src = "priv struct S { a: I32; b: I32; }\nfn main(): I32 { s: S = ::{}; return s.a + s.b; }\n" },
+  Case::{ .sec = "6.6", .claim = "initialising by a field name that is not there is refused",
+    .reject = true,
+    .src = "priv struct S { a: I32; }\nfn main(): I32 { s: S = S::{ .nope = 1 }; return s.a; }\n" },
+  Case::{ .sec = "6.6", .claim = "a positional setting past the field count is refused",
+    .reject = true,
+    .src = "priv struct S { a: I32; }\nfn main(): I32 { s: S = S::{ 1, 2 }; return s.a; }\n" },
+  Case::{ .sec = "6.6", .claim = "an array literal past the length is refused", .reject = true,
+    .src = "fn main(): I32 { a: I32[2] = ::{ 1, 2, 3 }; return a[0]; }\n" },
+  Case::{ .sec = "6.6", .claim = "a subscript setting past the length is refused too",
+    .reject = true, .src = "fn main(): I32 { a: I32[2] = ::{ [5] = 1 }; return a[0]; }\n" },
+  Case::{ .sec = "6.6", .claim = "inside the length it is allowed", .reject = false,
+    .src = "fn main(): I32 { a: I32[3] = ::{ 1, 2, 3 }; return a[2] - 3; }\n" },
+  Case::{ .sec = "6.6",
+    .claim = "a '::{ ... }' writing fields on a type that holds none is refused", .reject = true,
+    .src = "fn main(): I32 { n: I32 = ::{ 1, 2 }; return n; }\n" },
+  Case::{ .sec = "6.6", .claim = "the shape writing fields on an enum is refused too",
+    .reject = true,
+    .src = "priv enum E { a; }\nfn main(): I32 { e: E = ::{ .a = 1 }; return I32::e; }\n" },
+  Case::{ .sec = "6.6", .claim = "the shape assembling a Result from fields is refused too",
+    .reject = true,
+    .src =
+    "pub enum E: U8 { bad = 1; }\nfn main(): I32 { r: I32?E = ::{ .is_err = false, .val = 1 };\n  \
+      return r catch 0; }\n" },
+  Case::{ .sec = "6.6", .claim = "even on a type holding no field an empty '::{}' is allowed",
+    .reject = false, .src = "fn main(): I32 { n: I32 = ::{}; return n; }\n" },
+  Case::{ .sec = "6.6", .claim = "if a Result's success side is a struct, fields can be written",
+    .reject = false,
+    .src =
+    "pub enum E: U8 { bad = 1; }\npriv struct P { x: I32; }\nfn main(): I32 { r: P?E = ::{ .x = 0 \
+      };\n  p: = r catch ::{ .x = 1 }; return p.x; }\n" },
+  Case::{ .sec = "7.1", .claim = "a switch on a slice is refused", .reject = true,
+    .src =
+    "fn main(): I32 { s: U8[] = \"a\"; switch s case \"a\" { return 0; } default { return 1; } }\n" },
+  Case::{ .sec = "7.1", .claim = "a switch on an integer is allowed", .reject = false,
+    .src = "fn main(): I32 { n: I32 = 1; switch n case 1 { return 0; } default { return 1; } }\n" },
+  Case::{ .sec = "7.1", .claim = "a switch on a character literal (U8) is allowed", .reject = false,
+    .src = "fn main(): I32 { c: U8 = 'a'; switch c case 'a' { return 0; } default { return 1; } }\n" },
+  Case::{ .sec = "7.1", .claim = "an enum short of exhaustive is refused", .reject = true,
+    .src = "priv enum E { a; b; }\nfn main(): I32 { e: E = E.a; switch e case .a { return 0; } }\n" },
+  Case::{ .sec = "7.1", .claim = "with a default it is allowed", .reject = false,
+    .src =
+    "priv enum E { a; b; }\nfn main(): I32 { e: E = E.a; switch e case .a { return 0; } default { \
+      return 1; } }\n" },
+  Case::{ .sec = "7.2", .claim = "a break outside a loop is refused", .reject = true,
+    .src = "fn main(): I32 { break; }\n" },
+  Case::{ .sec = "7.2", .claim = "a continue outside a loop is refused", .reject = true,
+    .src = "fn main(): I32 { continue; }\n" },
+  Case::{ .sec = "7.3", .claim = "a labelled break can leave the outer one", .reject = false,
+    .src = "fn main(): I32 { outer: for { for { break outer; } } return 0; }\n" },
+  Case::{ .sec = "7.3", .claim = "a break to a name that is not there is refused", .reject = true,
+    .src = "fn main(): I32 { for { break nowhere; } }\n" },
+  Case::{ .sec = "8.1", .claim = "a different argument count is refused", .reject = true,
+    .src = "priv fn f(a: I32, b: I32): I32 { return a + b; }\nfn main(): I32 { return f(1); }\n" },
+  Case::{ .sec = "8.1", .claim = "an anonymous function with no ';' cannot capture", .reject = true,
+    .src =
+    "priv fn ap(f: fn(a: I32): I32): I32 { return f(1); }\nfn main(): I32 { k: I32 = 2; return \
+      ap(fn(a: I32): I32 { return a + k; }); }\n" },
+  Case::{ .sec = "8.1", .claim = "binding a function value with no type annotation is refused",
+    .reject = true,
+    .src =
+    "priv fn big(x: I32): Bool { return x > 5; }\nfn main(): I32 { p: = big; return 0 if p(7) else \
+      1; }\n" },
+  Case::{ .sec = "8.1", .claim = "write the type and a function can be bound", .reject = false,
+    .src =
+    "priv typedef Pred = fn(x: I32): Bool;\npriv fn big(x: I32): Bool { return x > 5; }\nfn main(): \
+      I32 { p: Pred = big; return 0 if p(7) else 1; }\n" },
+  Case::{ .sec = "8.1", .claim = "write the ';' and it can capture", .reject = false,
+    .src =
+    "priv fn ap(f: Callable1<|I32, I32|>): I32 { return f.call(1); }\nfn main(): I32 { k: I32 = 2; \
+      return ap(fn(a: I32; k: I32): I32 { return a + k; }) - 3; }\n" },
+  Case::{ .sec = "8.2", .claim = "main need return nothing", .reject = false,
+    .src = "fn main() { }\n" },
+  Case::{ .sec = "8.2", .claim = "main returning a slice is refused", .reject = true,
+    .src = "fn main(): U8[] { return \"x\"; }\n" },
+  Case::{ .sec = "8.3", .claim = "using a Result as a bare value is refused", .reject = true,
+    .src =
+    "priv enum E { bad; }\npriv fn f(): I32?E { return 1; }\nfn main(): I32 { x: I32 = f(); return \
+      x; }\n" },
+  Case::{ .sec = "8.3", .claim = "a default value can be given by catch", .reject = false,
+    .src =
+    "priv enum E { bad; }\npriv fn f(): I32?E { throw E.bad; }\nfn main(): I32 { return f() catch \
+      0; }\n" },
+  Case::{ .sec = "8.3", .claim = "a '?' in a function that returns no Result is refused",
+    .reject = true,
+    .src =
+    "priv enum E { bad; }\npriv fn f(): I32?E { return 1; }\nfn main(): I32 { x: = f()?; return x; \
+      }\n" },
+  Case::{ .sec = "8.4", .claim = "a double free is refused", .reject = true,
+    .src =
+    "priv struct B { v: I32; }\nimpl B { fn free(r: Self$@) { r.v = 0; } }\nimpl B: Owned {}\nfn \
+      main(): I32 { $b: B = ::{}; b.free(); b.free(); return 0; }\n" },
+  Case::{ .sec = "8.4", .claim = "use after free is refused", .reject = true,
+    .src =
+    "priv struct B { v: I32; }\nimpl B { fn free(r: Self$@) { r.v = 0; } }\nimpl B: Owned {}\nfn \
+      main(): I32 { $b: B = ::{}; b.free(); return b.v; }\n" },
+  Case::{ .sec = "8.4.2", .claim = "Ref_counted demands retain/release", .reject = true,
+    .src = "priv struct S { n: I32; }\nimpl S: Ref_counted {}\nfn main(): I32 { return 0; }\n" },
+  Case::{ .sec = "9", .claim = "priv is invisible from another file", .reject = true,
+    .src = "import \"std/strnum\";\nfn main(): I32 { return I32::strnum.max_pad_len; }\n" },
+  Case::{ .sec = "9", .claim = "pub is visible", .reject = false,
+    .src = "import \"std/math\" { pi };\nfn main(): I32 { return 0 if pi > 3.0 else 1; }\n" },
+  Case::{ .sec = "9", .claim = "a name not imported cannot be used", .reject = true,
+    .src = "fn main(): I32 { return I32::math.pi; }\n" },
+  Case::{ .sec = "10", .claim = "an unknown attribute is refused", .reject = true,
+    .src = "#nosuchattr\npriv fn f(): I32 { return 1; }\nfn main(): I32 { return 0; }\n" },
+  Case::{ .sec = "10", .claim = "a function dropped by #cfg cannot be called", .reject = true,
+    .src = "#cfg(nosuchflag)\npriv fn f(): I32 { return 1; }\nfn main(): I32 { return f(); }\n" },
+  Case::{ .sec = "10", .claim = "#align(N) whose N is not a constant is refused", .reject = true,
+    .src = "priv $n: I32 = 4;\n#align(n)\npriv struct S { v: I32; }\nfn main(): I32 { return 0; }\n" },
+  Case::{ .sec = "11.1", .claim = "a slice cannot be handed to an extern argument", .reject = true,
+    .src = "extern \"C\" { fn ext(s: U8[]): I32; }\nfn main(): I32 { return 0; }\n" },
+  Case::{ .sec = "11.1", .claim = "a fixed-length array cannot be handed to an extern argument",
+    .reject = true,
+    .src = "extern \"C\" { fn ext(a: I32[4]): I32; }\nfn main(): I32 { return 0; }\n" },
+  Case::{ .sec = "11.1", .claim = "a Result cannot be used as an extern return value",
+    .reject = true,
+    .src = "priv enum E { bad; }\nextern \"C\" { fn ext(): I32?E; }\nfn main(): I32 { return 0; }\n" },
+  Case::{ .sec = "11.1", .claim = "a raw pointer and a length can be handed over", .reject = false,
+    .src = "extern \"C\" { fn ext(s: U8$@, n: Sz): I32; }\nfn main(): I32 { return 0; }\n" },
+  Case::{ .sec = "11.4", .claim = "__kspl_inline_c wants a string literal", .reject = true,
+    .src =
+    "priv $s: U8[] = \"x\";\npriv fn f() { __kspl_inline_c(s); }\nfn main(): I32 { return 0; }\n" },
+  Case::{ .sec = "Appendix A", .claim = "class cannot be written", .reject = true,
+    .src = "class C { }\nfn main(): I32 { return 0; }\n" },
+  Case::{ .sec = "Appendix A", .claim = "try-finally cannot be written", .reject = true,
+    .src = "fn main(): I32 { try { return 0; } finally { } }\n" },
+  Case::{ .sec = "Appendix A", .claim = "while cannot be written", .reject = true,
+    .src = "fn main(): I32 { while true { break; } return 0; }\n" },
+  Case::{ .sec = "Appendix A", .claim = "for cannot be written", .reject = true,
+    .src = "fn main(): I32 { for i in 0..3 { } return 0; }\n" },
+  Case::{ .sec = "Appendix A", .claim = "there is no null-coalescing operator", .reject = true,
+    .src = "fn main(): I32 { p: I32@ = null; return p ?? 0; }\n" },
+  Case::{ .sec = "Appendix A", .claim = "a trailing closure cannot be written", .reject = true,
+    .src =
+    "priv fn f(xs: I32[], p: Callable1<|I32, Bool|>): Bool { return p.call(xs[0]); }\nfn main(): \
+      I32 { xs: = I32[]::{ 1 }; ok: = f(xs) fn(x: I32; ): Bool { return x > 0; }; return 0 if ok \
+      else 1; }\n" },
+  Case::{ .sec = "Appendix A", .claim = "a closure inside the call's parentheses can be written",
+    .reject = false,
+    .src =
+    "priv fn f(xs: I32[], p: Callable1<|I32, Bool|>): Bool { return p.call(xs[0]); }\nfn main(): \
+      I32 { xs: = I32[]::{ 1 }; ok: = f(xs, fn(x: I32; ): Bool { return x > 0; }); return 0 if ok \
+      else 1; }\n" },
+}
+
+fn main(): I32
+  arena: = harness.begin(64 * 1024 * 1024)
+  dir: = harness.sandbox("spec_claims") catch
+    return harness.fatal("cannot make a working directory")
+  work: = dir
+  // Caution: **Write each case's input to its own file**, or children running side by side read
+  // each other's.
+  $jobs: = List<|subproc.Job|>.new(arena)
+  for i in Range.asc(cases.len)
+    src: = fs.join(work, arena.text().s("c\{i\}.kspl").take(), arena)
+    gen: = fs.join(work, arena.text().s("c\{i\}.c").take(), arena)
+    io.write_file(src, cases[i].src) catch
+      return harness.fatal("cannot place the material")
+    jobs
+      .push(subproc.Job::{ .argv = harness.ksplc_argv(U8[][]::{ src, gen }),
+      .cwd = harness.root() })
+  io.out().s("# the specification's claims: \{cases.len\} (parallelism \{verdict.jobs()\})\n")
+  outs: = harness.run_all(jobs.slice(), "spec_claims")
+  for i in Range.asc(cases.len)
+    c: = cases[i]@
+    r: = outs.get(i)
+    got_reject: = r.code != 0
+    name: = arena.text().s("[").s(c.sec).s("] ").s(c.claim).take()
+    if got_reject == c.reject
+      verdict.check(name, true, "")
+      continue
+    if c.reject
+      verdict.check(name, false, "it passes (the specification writes that it refuses)")
+      continue
+    verdict.check(name, false,
+      arena.text().s("it is refused (the specification writes that it allows):\n\{r.out\}").take())
+  return harness.finish()

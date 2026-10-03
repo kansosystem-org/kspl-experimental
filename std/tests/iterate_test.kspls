@@ -1,0 +1,158 @@
+import "std/ds" + { List, Map }
+import "std/json"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// Tests that every std API allowed to allocate the whole result returns a list with `.len` and an
+// index, and that `for x in` iterates that list directly ("One mechanism per
+// purpose" in docs/DESIGN.md).
+// This is the index form of `for x in`; the `next()` form (a lazy chain) is `std/seq`'s.
+// Caution: **Do not change it to a form that returns a listing** (the reason is at `items` in
+// `std/ds.kspls`).
+// ==========================================
+fn test_iteration(arena: Arena$@)
+  verdict
+    .start("[iterate] every allocating API lines up as a list that goes round under for in test...")
+
+  // --- str.split: n separators means n+1 elements ---
+  $lines: = "a\nbb\n\nccc".split('\n', arena)
+  assert(lines.len == 4, "split: 3 separators means 4 elements")
+  assert(lines.get(0).equals("a") && lines.get(1).equals("bb"), "split: the first 2 elements")
+  assert(lines.get(2).len == 0, "split: between two adjacent separators is length 0")
+  assert(lines.get(3).equals("ccc"), "split: the last element")
+
+  $total_len: Sz = 0
+  for line in lines
+    total_len += line.len
+  assert(total_len == 6, "split's result goes round under for in")
+
+  // Ending on a separator puts a length-0 element at the end.
+  $trailing: = "x,".split(',', arena)
+  assert(trailing.len == 2 && trailing.get(1).len == 0, "split: a trailing separator")
+  // An empty string is one element of length 0.
+  assert("".split(',', arena).len == 1, "split: an empty string is one element")
+
+  // --- Map.entries: only the entries in use, updatable through the pointer ---
+  $m: = Map<|I32, I32|>.new(arena)
+  m.set(1, 10)
+  m.set(2, 20)
+  m.set(3, 30)
+  m.remove(2)
+
+  $seen: Sz = 0
+  $sum: I32 = 0
+  for e in m.items()
+    seen += 1
+    sum += e.value
+    e.value += 1
+  assert(seen == 2, "entries: a slot already removed is not walked")
+  assert(sum == 40, "entries: the sum of the values")
+  v1: = m.get(1) catch 0
+  v3: = m.get(3) catch 0
+  assert(v1 == 11 && v3 == 31,
+    "entries: an update through the returned pointer reaches the Map itself")
+
+  // --- json.Val.arr_list ---
+  v: = json.parse("[1, 2, 3, 4]", arena) catch panic("iterate_test: parsing the JSON failed")
+  $j_sum: I64 = 0
+  for item in v.arr_list(arena)
+    j_sum += item.as_int(0)
+  assert(j_sum == 10, "arr_list: the sum of the elements")
+  // For a value that is not an array, it returns an empty list.
+  scalar: = json.parse("42", arena) catch panic("iterate_test: parsing the JSON failed")
+  assert(scalar.arr_list(arena).len == 0, "arr_list: empty when it is not an array")
+
+  verdict.pass("split, entries and arr_list all went round under for in.")
+// ==========================================
+// Removal from `Map`. `Map` uses linear probing, so a wrong removal makes **another key**
+// unreachable.
+// ==========================================
+
+fn test_map_removal() //<
+  //< That after removal and re-insertion in a Map every key is found, and found once
+  //<
+  //< Caution: **Test with a pair of colliding keys**: a plain empty slot left behind ends the probe
+  //< before the key that was pushed past it. **Test re-insertion too**: writing into the tombstone
+  //< can duplicate a key that stands further along.
+  verdict.start("[Map] removal and re-insertion test...")
+
+  // Two keys in the same bucket (the low 5 bits of the initial capacity 32).
+  $ka: I32 = 0
+  $kb: I32 = 0
+  $found: = false
+  for $a: I32 = 1; a < 400 && !found; a += 1
+    for $b: I32 = a + 1; b < 400 && !found; b += 1
+      if (Sz::ds.fmix32(U32::a) & 31) == (Sz::ds.fmix32(U32::b) & 31)
+        ka = a
+        kb = b
+        found = true
+  assert(found, "a pair of colliding keys is found")
+
+  $m: = Map<|I32, I32|>.new()
+  defer m.free()
+  m.set(ka, 100)
+  m.set(kb, 200)
+  assert(m.remove(ka), "the earlier key can be removed")
+  assert(m.len == 1, "the count goes down by one")
+  assert((m.get(kb) catch -1) == 200,
+    "the key behind is still reachable after removing the earlier one")
+
+  m.set(kb, 300)
+  assert(m.len == 1, "the count does not go up when it is put back in")
+  assert((m.get(kb) catch -1) == 300, "the value put back in is reachable")
+
+  // Through repeated removal and insertion, only the remaining keys are reachable.
+  $m2: = Map<|I32, I32|>.new()
+  defer m2.free()
+  for i in Range.asc(200)
+    m2.set(I32::i, I32::(i * 10))
+  for i in Range.asc(200)
+    if i % 2 == 0
+      m2.remove(I32::i)
+  assert(m2.len == 100, "100 after removing half")
+  $all_ok: = true
+  for i in Range.asc(200)
+    got: = m2.get(I32::i) catch -1
+    want: I32 = -1 if i % 2 == 0 else I32::(i * 10)
+    if got != want
+      all_ok = false
+  assert(all_ok, "only the removed keys are unreachable")
+  $live: Sz = 0
+  for _e in m2.items()
+    live += 1
+  assert(live == 100, "entries agrees with the count still alive")
+
+  // **Test repeated set and remove**: if growth ignores the tombstones, they fill the table while
+  // the count stays small.
+  $m3: = Map<|I32, I32|>.new()
+  defer m3.free()
+  for _i in Range.asc(5000)
+    m3.set(7, 1)
+    m3.remove(7)
+  m3.set(7, 42)
+  assert((m3.get(7) catch -1) == 42, "it is reachable through repeated set and remove")
+
+  verdict.pass("A colliding key is not lost to removal, and putting it back in does not double it.")
+fn test_list_remove_at() //< the counterpart of `List.insert`
+  verdict.start("[ds] List.remove_at test...")
+  arena: = Arena.new(8 * 1024)
+  defer arena.free()
+  xs: = List<|I32|>.create(arena)
+  for $i: I32 = 0; i < 5; i += 1
+    xs.push(i)
+  xs.remove_at(2)
+  assert(xs.len == 4, "it goes down by one")
+  assert(xs.get(0) == 0 && xs.get(1) == 1, "what is in front stays as it is")
+  assert(xs.get(2) == 3 && xs.get(3) == 4, "what is behind packs forward by one")
+  xs.remove_at(0)
+  assert(xs.len == 3 && xs.get(0) == 1, "the head can be taken out too")
+  xs.remove_at(xs.len - 1)
+  assert(xs.len == 2 && xs.get(1) == 3, "the tail can be taken out too")
+  // remove_at undoes insert.
+  xs.insert(1, 9)
+  assert(xs.len == 3 && xs.get(1) == 9, "an insertion goes into the counterpart position")
+  xs.remove_at(1)
+  assert(xs.len == 2 && xs.get(1) == 3, "taking it out comes back to the original")
+  verdict.pass("remove_at packs what is behind forward, as insert's counterpart.")

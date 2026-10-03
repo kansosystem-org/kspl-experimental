@@ -1,0 +1,39 @@
+//< A slice descriptor built from a stack frame's memory must not escape it
+//<
+//< A cast from a fixed-length array or a run of elements synthesises a pointer into the frame with
+//< not one `@` in the source, so it dangles after return. Only that invisible pointer is stopped:
+//< a written `@` is the writer's responsibility (docs/DESIGN.md §4.3); a call's result passes.
+// EXPECT: cannot return a slice built from local storage
+// EXPECT-NOT: cannot throw a slice built from local storage
+import "std/io"
+import "std/str" { Str_builder }
+
+priv struct Holder
+  pub s: U8[]
+
+priv fn from_local_array(): U8[]
+  a: U8[4] = ::{ 'a', 'b', 'c', 'd' }
+  return U8[]::a // this one stops
+
+priv fn from_elem_list(): U8[][]
+  return U8[][]::{ "a", "b" } // this stops too (the array a run of elements makes is temporary)
+
+priv fn wrapped_in_struct(): Holder
+  a: U8[4] = ::{ 'a', 'b', 'c', 'd' }
+  return Holder::{ .s = U8[]::a } // the same when carried on a struct
+
+// A shape with an `@` written passes (the lifetime is the writer's responsibility).
+priv fn explicit_addr(): U8[]
+  $a: U8[4] = ::{ 'a', 'b', 'c', 'd' }
+  return U8[]::{ .ptr = a[1]@, .len = 2 }
+
+// A call's result passes (the memory is on the heap and the compiler does not know its target).
+priv fn from_builder(): U8[]
+  $b: = Str_builder.new()
+  b.s("abc")
+  return b.slice()
+
+pub fn main(): I32
+  io.out()
+    .s("\{from_local_array()\}\{from_elem_list().len\}\{wrapped_in_struct().s\}\{explicit_addr()\}\{from_builder()\}\n")
+  return 0

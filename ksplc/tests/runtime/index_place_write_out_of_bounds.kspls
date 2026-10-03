@@ -1,0 +1,29 @@
+//< Even an index that returns a place and **writes** must stop when out of range
+//<
+//< A type of its own (`Index_place.at`) handles the index, and the stop names the user's line.
+//< Caution: **Do not write `$` on the receiver.** The `at` below declares `Self@`, so a value
+//< received by value can be written to as well ("Indexing" in `../../../docs/SPEC-language.md`).
+// EXPECT: panic: index out of bounds in Cells.at (idx: 9, len: 2)
+// EXPECT: at ksplc/tests/runtime/index_place_write_out_of_bounds:
+// EXPECT-NOT: must not get here
+import "std/io"
+import "std/mem" { alloc_in, Arena }
+
+struct Cells //< a few I32s, indexed the way a container outside std indexes its elements
+  data: I32$@
+  size: Sz
+
+impl Cells: Index_place<|Sz, I32|> //< so `c[i]` reads and writes one cell
+  fn at(r: Self@, index: Sz, file: U8[], line: Sz): I32$@ //< one cell's place
+    if index < 0 || index >= r.size
+      bounds_panic("Cells.at", index, r.size, file, line)
+    return r.data + index
+
+fn main(): I32
+  ar: = Arena.new(1024)
+  defer ar.free()
+  c: = Cells::{ .data = I32$@::alloc_in(ar, 2 * sizeof(I32)), .size = 2 }
+  io.out().s("about to write at 9\n")
+  c[9] = 1
+  io.out().s("must not get here: \{c[0]\}\n")
+  return 0

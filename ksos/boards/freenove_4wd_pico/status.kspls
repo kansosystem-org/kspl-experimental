@@ -1,0 +1,118 @@
+//< The names of the car's states, and how they are shown (the report line, and WS2812)
+//<
+//< **The state strings are kept in one place.** Only the first two LEDs are sent:
+//<   the first  ... the state's colour. **It blinks** (showing that the loop is running)
+//<   the second ... red just after a safety timeout issued a command. Dark otherwise.
+//<   if !status.init(board.ws2812_pin, board.ws2812_level) { … }
+//<   status.show(status.State.driving, false);   // every loop (it sends only on a change)
+import "ksos/drivers/rp2040/ws2812"
+
+enum State //< the car's states
+  //<
+  //< **Every state except `driving` means "stopped".**
+  // Starting up. **This takes long** (seconds on the battery), and unlit it would look dead.
+  starting
+  // The policy is deciding and driving the wheels.
+  driving
+  // Stopped at the battery's minimum. Switching it off and on brings it back.
+  battery
+  // Stopped by the remote. Holding a key down brings it back.
+  remote
+  // Stopped at the run-time limit. Holding a key down brings it back.
+  time_limit
+  // No policy from the PC or from the record. It never moves.
+  no_policy
+  // The policy received from the PC cannot be read.
+  bad_policy
+  // The policy in the record cannot be read.
+  bad_stored_policy
+
+impl State
+  fn text(s: Self): U8[] //< the string shown on the report line
+    //<
+    //< **For `driving` nothing goes on the line.** Not `variant_name()`: `stopped by remote` reads
+    //< better in a log.
+    if s == State.battery
+      return "battery low"
+    if s == State.remote
+      return "stopped by remote"
+    if s == State.time_limit
+      return "run time limit"
+    if s == State.no_policy
+      return "no policy"
+    if s == State.bad_policy
+      return "bad policy"
+    if s == State.bad_stored_policy
+      return "bad stored policy"
+    if s == State.starting
+      return "starting up"
+    return "driving"
+
+  priv fn color(s: Self): U32 //< the state's colour
+    //<
+    //< Caution: **Scale the brightness by `level`**, never 0xff: eight bright LEDs drain the
+    //< battery and trip the low-voltage check.
+    if s == State.starting
+      return (level << 8) | level // cyan
+    if s == State.driving
+      return level << 8 // green
+    if s == State.battery
+      return level << 16 // red
+    if s == State.remote
+      return level // blue
+    if s == State.time_limit
+      return (level << 16) | (level << 8) // yellow
+    return (level << 16) | level // purple = no policy, or it cannot be read
+
+  fn show(s: Self, by_safety: Bool) //< shows the state
+    //<
+    //< **It may be called every loop** (it sends to the line only when what is shown changes).
+    //< **`by_safety` means "a safety timeout issued the previous command"**, shown separately
+    //< because its triple looks like the policy's own reversing.
+    if !ready
+      return
+    tick += 1
+    if by_safety
+      alert_left = alert_rounds
+    else if alert_left > 0
+      alert_left -= 1
+    // The blink.
+    // Caution: **Include the dark phase**, or a stopped loop looks like a running one.
+    lit: = (tick / blink_rounds) % 2 == 0
+    px[0] = s.color() if lit else 0
+    px[1] = (level << 16) if alert_left > 0 else 0
+    if !first && px[0] == sent_0 && px[1] == sent_1
+      return
+    first = false
+    sent_0 = px[0]
+    sent_1 = px[1]
+    _ok: = ws2812.send(U32[]::px)
+
+priv const blink_rounds: U32 = 5 //< the blink's half period, in loops
+  //<
+  //< **Make it long enough for the eye** (5 loops of 100ms is 0.5 seconds).
+priv const alert_rounds: U32 = 3 //< how long the safety timeout's red stays on, in loops
+  //<
+  //< **One loop is too short to see.**
+
+priv $level: U32 = 0
+priv $ready: Bool = false
+// The two LEDs sent. **This is the one place they are built**; only show sends them.
+priv $px: U32[2]
+// The two LEDs sent last. **If nothing changed it does not send.**
+priv $sent_0: U32 = 0
+priv $sent_1: U32 = 0
+priv $first: Bool = true
+// Counts the blink and the red's remaining time.
+priv $tick: U32 = 0
+priv $alert_left: U32 = 0
+
+fn init(pin: U32, brightness: U32): Bool //< makes the LEDs usable
+  //<
+  //< **true once they are ready.** The caller passes the brightness (`board.ws2812_level`).
+  ready = false
+  if !ws2812.init(pin)
+    return false
+  level = brightness
+  ready = true
+  return true

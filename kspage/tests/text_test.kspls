@@ -1,0 +1,209 @@
+import "kspage/lay/flow"
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/font" { Font }
+import "kspage/model/style" { Sheet }
+import "kspage/share/text"
+import "kspage/tests/base"
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// kspage: checks that the text form is kept exactly as it is.
+//
+// **The round trip on real files is checked by `tests/suite/textrip_test.kspls`**; here, the
+// edge cases (an empty file, only newlines, no final newline, a NUL) and a style's part.
+// ==========================================
+
+priv fn trip(src: U8[], out: Str_builder$@, arena: Arena$@) //< round-trips a text once
+  sheet: = text.sheet_for(base.root_font(), "", arena)
+  text.write(text.read(src, sheet, arena), out)
+
+priv fn same(src: U8[], arena: Arena$@): Bool //<
+  //< Whether one round trip returns the original
+  $out: = Str_builder.new()
+  defer out.free()
+  trip(src, out@, arena)
+  return src.equals(out.slice())
+
+priv fn lines_of(src: U8[], arena: Arena$@): Sz //< the number of lines read
+  sheet: = text.sheet_for(base.root_font(), "", arena)
+  return text.read(src, sheet, arena).blocks.len
+
+fn test_the_bytes_come_back_exactly()
+  verdict.start("[kspage/text] the text form coming back without one byte changed test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+
+  // **Whether it ends in a newline is kept**: adding one grows the diff by a line, and dropping it
+  // makes it unreadable to some tools.
+  assert(same("a\nb\n", arena), "a text ending in a newline")
+  assert(same("a\nb", arena), "a text not ending in a newline")
+  assert(same("", arena), "an empty file")
+  assert(same("\n", arena), "newlines alone")
+  assert(same("\n\n\n", arena), "a row of empty lines")
+  // **Trailing whitespace and tabs stay** (tidied, it would become another file).
+  assert(same("fn main() {\n\treturn 0;   \n}\n", arena), "a tab and whitespace at the end")
+  // **A line that looks like Markdown markup is text too** (the text form has no markup).
+  assert(same("# not a heading\n- nor a bullet\n| a | b |\n", arena), "rows that look like marks")
+  // **A CR is kept as a character of the line** (stored as "CRLF", a mixed text would break).
+  assert(same("a\r\nb\r\n", arena), "CRLF")
+  assert(same("a\r\nb\n", arena), "a text with mixed newlines")
+  verdict.pass("not one of the edges changes by one byte on the way back.")
+
+fn test_a_line_is_a_block()
+  verdict.start("[kspage/text] one row becoming one block test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+
+  // **There is a line after the final newline too**, and that alone tells whether the text ends in
+  // one; a separate flag would say the same thing twice.
+  assert(lines_of("", arena) == 1, "an empty file is one row too")
+  assert(lines_of("a", arena) == 1, "with no newline it is one row")
+  assert(lines_of("a\n", arena) == 2, "ending in a newline, there is a row behind it too")
+  assert(lines_of("a\nb\nc", arena) == 3, "two newlines make three rows")
+  verdict.pass("a row is the piece cut at a newline, as it stands.")
+
+fn test_what_is_not_text_is_refused()
+  verdict.start("[kspage/text] refusing what is no text test...")
+
+  assert(text.texty("an ordinary text\n"), "an ordinary text comes through")
+  assert(text.texty(""), "an empty one comes through too")
+  // **Reject what holds a NUL**: opened, it shows garbled and **saving it breaks the original**.
+  // It is built as bytes (a NUL cannot be written inside a text literal).
+  bytes: U8[5] = ::{ 'P', 'N', 'G', 0U8, 0x1aU8 }
+  assert(!text.texty(U8[]::bytes), "a text holding a NUL is refused")
+  verdict.pass("a file holding a NUL is not opened as the text form.")
+
+fn test_the_sheet_has_one_role()
+  verdict.start("[kspage/text] the style's part being one only test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+
+  sheet: = text.sheet_for(base.root_font(), "", arena)
+  assert(sheet.styles.len == 1, "there is one style")
+  one: = sheet.styles.get(0)
+  // Caution: **Do not wrap.** Wrapping drops the whitespace at the break, and the indent depth
+  // silently changes.
+  assert(!one.wrap, "it does not wrap")
+  assert(one.outline == 0, "it is no heading")
+  // **Set neither a background color nor a frame** (it is the document itself, not a band).
+  if _v: = one.fill
+    assert(false, "it lays no fill")
+  assert(one.rule_width == 0.0, "it draws no line")
+  assert(one.pad == 0.0, "it lays no space inside")
+  // The line number. **It is not written into the text**, so the round trip does not change.
+  switch one.marker case .number {} default
+    assert(false, "the row-number mark goes on")
+  // **The gutter must be wider than the number.** Too narrow, the number overlaps the body
+  // (`place_mark` in `lay/line.kspls`).
+  assert(one.indent > 0.0, "there is a gutter the numbers are laid in")
+
+  // Given an empty table (not `sheet_for`'s), it still adds its own style.
+  bare: = Sheet.new(base.root_font(), arena)
+  d: = text.read("a\nb\n", bare, arena)
+  assert(bare.styles.len == 1, "only one is added to an empty table")
+  assert(!bare.styles.get(0).wrap, "what is added is a style that does not wrap either")
+  assert(d.blocks.get(0).style.equals(bare.styles.get(0).name), "that style is laid on")
+  verdict.pass("the part is the one `it does not wrap` and nothing else.")
+priv fn gutter_of(lines: Sz, arena: Arena$@): F32 //<
+  //< The width of the line-number gutter after reading a text of `lines` lines
+  $src: = Str_builder.new()
+  defer src.free()
+  for $i: Sz = 0; i < lines; i += 1
+    src.s("x\n")
+  sheet: = text.sheet_for(base.root_font(), "", arena)
+  _d: = text.read(src.slice(), sheet, arena)
+  return sheet.styles.get(0).indent
+
+fn test_the_number_gutter_follows_the_line_count() //<
+  //< The line-number gutter is sized from the digit count of the line count
+  //<
+  //< Caution: **Do not fix the width**, or a file with three-digit line numbers gets a margin three
+  //< characters too wide. **Do not make it narrower than the number and the space after it** — too
+  //< narrow, the number overlaps the body (`place_mark` in `../lay/line.kspls`).
+  verdict.start("[kspage/text] the width of the row numbers' gutter test...")
+  arena: = Arena.new(1024 * 1024)
+  defer arena.free()
+  small: = gutter_of(9, arena)
+  mid: = gutter_of(99, arena)
+  big: = gutter_of(1000, arena)
+  assert(small < mid && mid < big, "more places and the gutter widens")
+  // **The number and a space are counted**: four digits make the five characters "1000 ".
+  src: = fixed.make()
+  font: = Font::{ .family = "monospace", .size_px = 16.0 * 0.9F32, .weight = 400U16,
+    .italic = false }
+  assert(src.measure_width(font, "1000 ") <= big,
+    "a number of four places and a space go into the gutter")
+  assert(src.measure_width(font, "9 ") <= small, "a number of one place and a space go in too")
+  verdict
+    .pass("the gutter widens with the places in the count of rows, and the number and the space \
+      beside it always go in.")
+
+fn test_the_line_numbers_reach_the_screen()
+  verdict.start("[kspage/text] the row numbers coming out as far as the screen test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+
+  sheet: = text.sheet_for(base.root_font(), "", arena)
+  d: = text.read("a\nb\nc\n", sheet, arena)
+  page: = flow.layout(d, sheet, fixed.make(), 400.0, arena)
+
+  // **The number is a box that is not in the document** (clicked, no position comes back).
+  // One number box per line is laid out before the text's box.
+  $marks: Sz = 0
+  $first: U8[] = ""
+  for $i: Sz = 0; i < page.boxes.len; i += 1
+    box: = page.boxes.get(i)
+    if box.inline != null
+      continue
+    marks += 1
+    if marks == 1
+      first = box.text
+  // Four lines are read (there is a line after the final newline too).
+  assert(d.blocks.len == 4, "it becomes four rows")
+  assert(marks == 4, "as many numbers come out as there are rows")
+  assert(first.starts_with("1"), "it counts from 1")
+  // **The number must sit inside the gutter.** Sticking out, it overlaps the body.
+  $body: F32 = 0.0
+  for $i: Sz = 0; i < page.boxes.len; i += 1
+    box: = page.boxes.get(i)
+    if box.inline != null
+      body = box.rect.x
+      break
+  for $i: Sz = 0; i < page.boxes.len; i += 1
+    box: = page.boxes.get(i)
+    if box.inline == null
+      assert(box.rect.x + box.rect.w <= body, "the number ends nearer than the body's left edge")
+  verdict
+    .pass("the row numbers line up right-aligned inside the gutter and do not bite into the body.")
+fn test_the_lines_are_as_tight_as_a_code_editor()
+  verdict.start("[kspage/text] a row's height being about a code editor's test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+
+  sheet: = text.sheet_for(base.root_font(), "", arena)
+  d: = text.read("a\nb\nc\nd\n", sheet, arena)
+  page: = flow.layout(d, sheet, fixed.make(), 400.0, arena)
+
+  // The tops of two text boxes differ by one line's advance.
+  // Caution: **Skip the number boxes** (they sit on the same line).
+  $first: F32 = -1.0
+  $second: F32 = -1.0
+  for $i: Sz = 0; i < page.boxes.len; i += 1
+    box: = page.boxes.get(i)
+    if box.inline == null
+      continue
+    if first < 0.0
+      first = box.rect.y
+    else if second < 0.0
+      second = box.rect.y
+  assert(first >= 0.0 && second > first, "two rows or more are laid")
+  pitch: = second - first
+  size: = base.root_font().size_px * 0.9F32
+  // **Do not exceed 1.4 times**, or a screen holds a quarter fewer lines (VS Code uses 1.35).
+  assert(pitch <= size * 1.4F32, "a row's advance does not go past 1.4 times the font size")
+  // **Do not pack it too tight** (the characters would touch above and below).
+  assert(pitch >= size * 1.15F32, "a row's advance does not fall below 1.15 times the font size")
+  verdict.pass("one row's advance sits within 1.15 to 1.4 times the font size")

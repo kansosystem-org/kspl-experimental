@@ -1,0 +1,479 @@
+//< Laying out the flow
+//<
+//< One of the three layout strategies, and **the entry point for layout**. Only an `Arrange.grid`
+//< block is passed to `kspage/grid` (the cell's contents come back here). Pure functions.
+
+// ==========================================
+// Usage:
+//   page: = flow.layout(doc, sheet, src, 300.0, arena);
+// ==========================================
+import "kspage/lay/absolute"
+import "kspage/lay/chart"
+import "kspage/lay/columns"
+import "kspage/lay/gather"
+import "kspage/lay/grid"
+// **The file below builds one line** (the two import each other; one folder needs no direction).
+import "kspage/lay/line" + { Pen }
+import "kspage/lay/page" { Page, Panel, Picture, Placed, Region, Surface, new_page, page_break,
+  page_top, placed_of, rewind }
+import "kspage/lay/panel"
+import "kspage/model/code"
+import "kspage/model/collect" { Collect }
+import "kspage/model/doc" { Doc, Block, Rect }
+import "kspage/model/fence" + { Joint }
+import "kspage/model/font" { Font_source }
+import "kspage/model/marker"
+import "kspage/model/number"
+import "kspage/model/panel_paint"
+import "kspage/model/source"
+import "kspage/model/style" + { Align, Arrange, Look, Sheet }
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+priv fn place_inlines(p: Pen$@, b: Block$@, sheet: Sheet$@, look: Look)
+  line.place_mark(p, look)
+  for $i: Sz = 0; i < b.inlines.len; i += 1
+    n: = b.inlines.get(i)
+    run_look: = style.look_for(sheet, n.style, look)
+    // **Lay out the text to show.** A run holding a formula shows the computed value
+    // (`Inline.face`), and the run being typed in shows the formula itself.
+    line.place_wrapped(p, n.showing(), run_look, n)
+    // A note's mark comes after the text; **its number is taken from the collected list**.
+    if n.note.len > 0
+      no: = number.note_number(p.out.notes, n)
+      if no > 0
+        line.place_note_mark(p, run_look, no)
+  if p.out.boxes.len > p.line_start
+    line.close_line(p, false)
+
+priv fn place_own_text(p: Pen$@, b: Block$@, sheet: Sheet$@, look: Look) //<
+  //< Lays out the texts this block holds directly
+  //<
+  //< **Move a block that fits on a page to the next page whole** (one line left behind confuses
+  //< the reader). It is laid out, measured, and where moved, rolled back and laid out again.
+  //< **Where there are no pages (the screen) it is laid out once.**
+  keep: = p.page_height
+  if keep <= 0.0 || b.inlines.len <= 0
+    place_inlines(p, b, sheet, look)
+    return
+  back: = placed_of(p.out)
+  from: = p.y
+  p.page_height = 0.0
+  place_inlines(p, b, sheet, look)
+  tall: = p.y - from
+  p.page_height = keep
+  $to: F32 = from
+  if top: = page_break(keep, from, tall)
+    // **A block taller than a page is not moved**: it does not fit there either, and moving it
+    // only wastes the rest of the page.
+    if tall <= keep
+      to = top
+  // No page was crossed: the measured layout is the result.
+  if to == from && page_top(keep, from) == page_top(keep, p.y - 0.001F32)
+    return
+  rewind(p.out, back)
+  p.y = to
+  p.x = p.left
+  p.line_start = p.out.boxes.len
+  place_inlines(p, b, sheet, look)
+
+priv fn place_picture(p: Pen$@, b: Block$@) //< lays out one picture
+  //<
+  //< **A picture is not split**: one that does not fit goes whole to the next page. **It is not
+  //< shrunk to fit the width** (it sticks out, visibly). The block's text follows below it as the
+  //< caption.
+  if b.image.len <= 0 || b.image_w <= 0.0 || b.image_h <= 0.0
+    return
+  if top: = page_break(p.page_height, p.y, b.image_h)
+    p.y = top
+  at: = Rect::{ .x = p.left, .y = p.y, .w = b.image_w, .h = b.image_h }
+  p.out.pictures.push(p.arena.create(Picture::{ .rect = at, .block = b }))
+  p.y += b.image_h
+  p.x = p.left
+  p.line_start = p.out.boxes.len
+
+priv fn layout_block(p: Pen$@, b: Block$@, sheet: Sheet$@, parent: Look, left: F32, ord: Sz,
+  floor: F32, joint: Joint) //<
+    //< Lays out one block
+    //<
+    //< `floor` is the lower edge the band is closed at (0: the contents' height); only an
+    //< absolute-coordinate frame passes one (the reason is at `place_blocks`).
+  $look: Look = parent
+  $space_before: F32 = 0.0
+  $space_after: F32 = 0.0
+  $indent: F32 = 0.0
+  $pad: F32 = 0.0
+  $arrange: = Arrange.flow
+  $width: F32 = 0.0
+  $height: F32 = 0.0
+  $collect: = Collect.none
+  $column_count: Sz = 0
+  $column_gap: F32 = 0.0
+  $breaks: = false
+  // Caution: **Reset it to the value here.** Not reset, a paragraph with no style takes the
+  // previous paragraph's alignment.
+  p.align = Align.left
+  p.lead = 0.0
+  p.wrap = true
+  p.mark = ""
+  p.mark_left = left
+  // **A name not in the table is treated as "not set"** (a typo does not stop the layout).
+  if s: = sheet.find(b.style)
+    look = style.resolve_look(s, parent)
+    breaks = s.break_before
+    space_before = s.space_before
+    space_after = s.space_after
+    indent = s.indent
+    pad = s.pad
+    arrange = s.arrange
+    width = s.width
+    height = s.height
+    collect = s.collect
+    column_count = s.columns
+    column_gap = s.column_gap
+    p.align = s.align
+    p.lead = s.line_spacing
+    p.wrap = s.wrap
+    // **What it declares is the style's name itself** ("What a Markdown round trip
+    // drops" in `../docs/DESIGN.md`).
+    // Caution: **Where the declaration changes, reset the token state**, or a comment open in the
+    // fence before runs on into this block. While it stays the same the state is passed on.
+    if !s.name.equals(p.spoken)
+      p.carry = code.Carry.plain
+    p.spoken = s.name
+    // Caution: **Copy the mark into the layout's arena** (a box only points at a text, and `mk` is
+    // freed on the way out).
+    $mk: = Str_builder.new()
+    defer mk.free()
+    // **Neither a running number nor a chapter number is a sibling number** (they come from the
+    // list collected over the whole document).
+    no: = number.serial_number(p.out.serials, b) if s.marker.serialed() else ord
+    if s.marker.outlined()
+      marker.mark_outline_into(mk@, s.marker, number.heading_number(p.out.headings, b))
+    else
+      marker.mark_into(mk@, s.marker, no)
+    if mk.slice().len > 0
+      p.mark = p.arena.dup_str(mk.slice())
+
+  // A style under a condition changes the look by the value. **Only the look is laid over** (a
+  // line height that moved with a value would confuse the reader). It reads the first text.
+  value: = b.inlines.get(0).text() if b.inlines.len > 0 else ""
+  over: = style.when_style(sheet, b.style, value)
+  if w: = over
+    look = style.resolve_look(w, look)
+  // The text color and the diagnostic color choose their pair from this block's **background**
+  // (`dark_ground` in `../model/style.kspls`). **Reset it here** (not reset, the next paragraph is
+  // colored for the previous background).
+  p.dark = style.dark_ground(panel_paint.paint_of(sheet.find(b.style), over).fill,
+    sheet.over.dark)
+
+  // A page break before the block.
+  // Caution: **Move to the next page before the space above** (moved after it, the space meant for
+  // the previous page is left at the top of the new page). **It does not move mid-fence** (the
+  // fill's band would be split across two pages), nor at the top of a page (`page_break` decides).
+  if breaks && !joint.joined()
+    if top: = page_break(p.page_height, p.y, p.page_height)
+      p.y = top
+  // Caution: **Do not add the space before mid-fence**, or the fill comes out striped (likewise,
+  // the space after is added only where the fence closes).
+  if !joint.joined()
+    p.y += space_before
+  // The inner space. **Only the contents narrow the region** (the fill's band spans all of it).
+  // Caution: **Always restore the right edge**: the pen holds one right edge for the region, so
+  // without restoring it the next sibling is laid out that much narrower.
+  $gutter: F32 = indent
+  if p.mark.len > 0
+    need: = p.out.src.measure_width(look.font, p.mark) - pad
+    if need > gutter
+      gutter = need
+  room: = p.right
+  p.left = left + gutter + pad
+  p.right = p.left + contents_width(room - left, gutter, pad)
+  p.x = p.left
+  p.line_start = p.out.boxes.len
+  // **Open the band before the contents** (an inner block's fill then lies on top). **A chart
+  // opens none**: the bars are the fill, and a band would cover them. **Nor is one opened
+  // mid-fence** (an unused band stays in the drawing code's count, and the fill comes out striped).
+  inside: = joint.joined()
+  $band: = Option<|Panel$@|>.none
+  if !inside && !collect.charted()
+    band = panel.hold(p, b, panel_paint.paint_of(sheet.find(b.style), over), left, room)
+  // **The inner space above comes after the band** (the band's top edge is above it).
+  if !inside
+    p.y += pad
+  // Caution: **Save the top edge**: a positioned child is laid out from it, and it is lost once
+  // the contents are laid out.
+  head: = p.y
+  $from: Placed = placed_of(p.out)
+  // Mid-fence, the band opened at the fence's start is stretched as it is.
+  // Caution: **Measure the closing position from the fence start's mark too** (from a mark
+  // partway, the band's top edge drops to the second line).
+  if inside
+    band = p.fence
+    from = p.fence_from
+  else
+    p.fence = band
+    p.fence_from = from
+  place_picture(p, b)
+  place_own_text(p, b, sheet, look)
+  // The style decides how the children are laid out: **the document says neither "it is a table"
+  // nor "it is a slide".** Anything but flow takes the whole line.
+  $at: = Rect::{ .x = p.left, .y = p.y, .w = p.right - p.left, .h = 0.0 }
+  $used: F32 = -1.0
+  switch arrange case .grid
+    used = grid.place_rows(p.out, b, sheet, at, look, p.page_height, p.arena)
+  case .absolute
+    // **A slide is not split**: its size is known, so one that does not fit goes to the next page.
+    if top: = page_break(p.page_height, p.y, height)
+      p.y = top
+      at.y = top
+    used = absolute.place_surface(p.out, b, sheet, at, width, height, look, p.arena)
+  case .flow
+    // Columns. **The style gives the number of columns** (not a section break), and **a block
+    // with no children is not laid out in columns** (there is nothing to distribute).
+    if column_count > 1 && b.children.len > 0
+      // **A column layout does not cross pages**: like a slide, one that does not fit goes whole
+      // to the next page.
+      $tall: F32 = columns.place_columns(p.out, b, sheet, at, look, column_count, column_gap,
+        p.arena)
+      if top: = page_break(p.page_height, p.y, tall)
+        // **Moved, it is rolled back and laid out again** (a column once laid out cannot move).
+        back: = placed_of(p.out)
+        rewind(p.out, back)
+        p.y = top
+        at.y = top
+        tall = columns.place_columns(p.out, b, sheet, at, look, column_count, column_gap, p.arena)
+      used = tall
+  if used >= 0.0
+    p.y += used
+    // **In a column layout too, a positioned child does not go into the flow** (only the column
+    // layout needs this here).
+    if column_count > 1
+      absolute.hang_framed(p.out, b, sheet, held_box(left, head, room, p.y), look, p.arena)
+    p.x = p.left
+    p.line_start = p.out.boxes.len
+    close_block(p, band, from, floor, pad, space_after, room)
+    return
+
+  // A collecting block lays out what it collected instead of its children. **The document's
+  // children are not laid out.**
+  $gathered: = true
+  switch collect case .contents
+    gather.place_contents(p, sheet, look, indent)
+  case .notes
+    gather.place_notes(p, look)
+  case .bars
+    gather.place_chart(p, b, sheet, look, Collect.bars)
+  case .lines
+    gather.place_chart(p, b, sheet, look, Collect.lines)
+  case .source
+    gather.place_source(p, b, look)
+  case .imports
+    gather.place_imports(p, b, sheet, look)
+  case .none
+    gathered = false
+  if gathered
+    close_block(p, band, from, floor, pad, space_after, room)
+    return
+
+  // Caution: **Save the children's left edge first.** A child with its own indent rewrites
+  // `p.left`, so read in the loop, each sibling would be indented again by the one before's indent.
+  child_left: = p.left
+  // **The lower edge is not passed to the children**: only the frame's own band closes at its
+  // height (passed on, the fill of a paragraph inside would stretch to the frame's floor).
+  place_siblings(p, b.children, sheet, look, child_left, 0.0)
+  // Caution: **Lay it out after the contents**, or the text covers the figure.
+  absolute.hang_framed(p.out, b, sheet, held_box(left, head, room, p.y), look, p.arena)
+  // **Close a fence only where it closes** (closed partway, the band is cut at one line's height),
+  // **but always restore the region's right edge** (not restored, the next sibling narrows).
+  if !joint.closes()
+    p.right = room
+    return
+  close_block(p, band, from, floor, pad, space_after, room)
+
+fn contents_width(band: F32, gutter: F32, pad: F32): F32 //<
+  //< The width a block lays its contents out at, in a region of width band
+  //<
+  //< The gutter (the indent, or a mark wider than it) and the inner space on both sides narrow it.
+  //< **It is computed here and nowhere else**: `layout_block` and the column setting of a new
+  //< table both ask it, so the two cannot drift apart.
+  return band - gutter - pad - pad
+
+priv fn held_box(left: F32, top: F32, room: F32, bottom: F32): Rect //<
+  //< This block's rectangle when it holds positioned children
+  //<
+  //< **It is the region's whole width** (the indent and the inner space narrow only the contents).
+  return Rect::{ .x = left, .y = top, .w = room - left, .h = bottom - top }
+
+priv fn close_block(p: Pen$@, band: Option<|Panel$@|>, from: Placed, floor: F32, pad: F32,
+  space_after: F32, room: F32) //<
+    //< Closes one block
+    //<
+    //< It adds the bottom inner space, closes the band, restores the right edge, adds space after.
+    //< Caution: **Close in this one place**, or one exit forgets a step. **The space after is
+    //< outside the band** (inside, the gap to the next block would be painted too).
+  p.y += pad
+  panel.seal(p.out, band, from, p.y, floor, pad)
+  p.right = room
+  p.x = p.left
+  // Caution: **Record it before the space after is added**, or it can add a page (the reason is
+  // at `Page.filled`). **The lowest is kept** (an inner block ends inside the outer one's band).
+  if p.y > p.out.filled
+    p.out.filled = p.y
+  p.y += space_after
+
+// Lays out a list of sibling blocks, in order.
+//
+// **Numbers are counted by the code that sees the whole list** (one block does not know its
+// siblings; the rule is `style.next_ord`). A nested list is another list, numbered from 1.
+priv fn place_siblings(p: Pen$@, blocks: List<|Block$@|>$@, sheet: Sheet$@, look: Look, left: F32,
+  floor: F32)
+  // Caution: **Save the outer fence.** A list of children opens its own fence, so without
+  // restoring it the outer fence is closed by the child's band (`Pen.fence`).
+  outer: = p.fence
+  outer_from: = p.fence_from
+  $ord: Sz = 0
+  // The extent of the fence it is in, **computed here, where the list is walked in order**
+  // (computed from each block, the whole list would be walked once per block).
+  $head: Sz = 0
+  $end: Sz = 0
+  for $i: Sz = 0; i < blocks.len; i += 1
+    b: = blocks.get(i)
+    // Caution: **Do not put a positioned child into the flow**, or the line drops by the figure's
+    // height and `hang_framed` lays it out a second time.
+    if _f: = b.frame
+      continue
+    ord = style.next_ord(sheet, b.style, ord)
+    if i >= end
+      head = i
+      end = fence.fence_end(sheet, blocks, i)
+    layout_block(p, b, sheet, look, left, ord, floor, fence.joint_of(head, end, i))
+  p.fence = outer
+  p.fence_from = outer_from
+
+fn place_framed_block(dst: Page$@, b: Block$@, sheet: Sheet$@, at: Rect, look: Look, floor: F32,
+  arena: Arena$@): F32 //<
+    //< Lays out one positioned block inside that rectangle
+    //<
+    //< Returns the height used. **Do not go through the flow's list**, which skips a positioned
+    //< child. `floor` is as in `place_blocks`.
+  p: = line.new_pen(dst, at, 0.0, arena)
+  layout_block(p, b, sheet, look, at.x, style.next_ord(sheet, b.style, 0), floor, Joint.alone)
+  return p.y - at.y
+
+fn place_blocks(dst: Page$@, blocks: List<|Block$@|>$@, sheet: Sheet$@, at: Rect, look: Look,
+  page_height: F32, floor: F32, arena: Arena$@): F32 //<
+    //< Flows blocks from `at`'s upper left at width `at.w`, and adds what was laid out to dst
+    //<
+    //< **`at.h` is ignored.** The grid and absolute-coordinate layouts call this per region.
+    //< `floor` is the lower edge at which blocks' bands are closed, and 0 leaves them at the
+    //< contents' height. **Only an absolute-coordinate frame passes it** (a frame's size is set
+    //< first, so a frame with no contents is drawn at the frame's size too).
+  p: = line.new_pen(dst, at, page_height, arena)
+  place_siblings(p, blocks, sheet, look, at.x, floor)
+  return p.y - at.y
+
+priv fn fitted(dst: Page$@, from: Placed, band: Rect, kind: Arrange): Rect //<
+  //< The region's width, narrowed to the contents that were laid out
+  //<
+  //< Caution: **Keep the height at the band** (the space around a paragraph belongs to the region
+  //< too), but not the width, or a page-wide frame appears around a narrow table or slide.
+  $lo: F32 = band.x + band.w
+  $hi: F32 = band.x
+  switch kind case .grid
+    for $i: Sz = from.cells; i < dst.cells.len; i += 1
+      r: = dst.cells.get(i).rect
+      lo = r.x if r.x < lo else lo
+      hi = r.x + r.w if r.x + r.w > hi else hi
+  case .absolute
+    for $i: Sz = from.surfaces; i < dst.surfaces.len; i += 1
+      r: = dst.surfaces.get(i).rect
+      lo = r.x if r.x < lo else lo
+      hi = r.x + r.w if r.x + r.w > hi else hi
+  case .flow
+    return band
+  if hi <= lo
+    return band
+  return Rect::{ .x = lo, .y = band.y, .w = hi - lo, .h = band.h }
+
+priv fn note_region(dst: Page$@, kind: Arrange, at: Rect, arena: Arena$@) //< records one region
+  //<
+  //< Caution: **Merge a run of flow into one**, or one run of writing looks like a region per
+  //< paragraph. **A region with no height is not recorded** (it would show as a line).
+  if at.h <= 0.0
+    return
+  if dst.regions.len > 0 && kind.same_arrange(Arrange.flow)
+    last: = dst.regions.get(dst.regions.len - 1)
+    if last.kind.same_arrange(Arrange.flow)
+      last.rect.h = at.y + at.h - last.rect.y
+      return
+  dst.regions.push(arena.create(Region::{ .rect = at, .kind = kind }))
+
+fn layout(doc: Doc$@, sheet: Sheet$@, src: Font_source, width: F32, arena: Arena$@,
+  hand: source.Hand$@ = null): Page$@ //<
+    //< Flows the document at width width
+    //<
+    //< **Regions are recorded here and nowhere else.**
+    //< Caution: **Do not use `doc.arena` for `arena`.** A page is thrown away at every keystroke,
+    //< so the web bridge allocates a short-lived arena and passes it (`page_arena` in
+    //< `port/web/bridge.kspls`).
+  page: = new_page(src, arena)
+  // **The borrowing entry point is passed here only** (passed to code that lays out only to
+  // measure, the borrowed text would be cut every time a column's width is measured).
+  page.hand = hand
+  // Caution: **Ask the style table for the column's width, the left edge and one page's height
+  // alike.** Computed separately here, the laid-out width and the printed width would disagree
+  // (`Sheet.column_width` / `column_left` / `column_height`).
+  at: = Rect::{ .x = sheet.column_left(width), .y = 0.0, .w = sheet.column_width(width), .h = 0.0 }
+  p: = line.new_pen(page, at, sheet.column_height(), arena)
+  // The lists are collected and the numbers given out before any layout. **`number.number_all`
+  // owns the order**; the references go into the document's arena, which outlives the layout
+  // arena.
+  number.number_all(doc.blocks, sheet, page.headings, page.notes, page.serials, arena, doc.arena)
+  // Caution: **Collect the charts' values before layout too** (the reason is at `Figure` in
+  // `page.kspls`).
+  for $i: Sz = 0; i < doc.blocks.len; i += 1
+    chart.collect_figures(doc, doc.blocks.get(i), sheet, page.figures, arena)
+  // **It cannot loop through `place_siblings`**: a region needs a mark before and after each
+  // block. Only the number counting is shared.
+  $ord: Sz = 0
+  // The fence boundaries are computed here too, where the list is walked (the same shape as
+  // `place_siblings`).
+  $head: Sz = 0
+  $end: Sz = 0
+  for $i: Sz = 0; i < doc.blocks.len; i += 1
+    b: = doc.blocks.get(i)
+    // **The line number is the index in the list above** (in a document in text form one line is
+    // one block).
+    p.line_no = i
+    from: = placed_of(page)
+    top: = p.y
+    ord = style.next_ord(sheet, b.style, ord)
+    if i >= end
+      head = i
+      end = fence.fence_end(sheet, doc.blocks, i)
+    look: = style.root_look(sheet.root, sheet.text_ratio())
+    joint: = fence.joint_of(head, end, i)
+    layout_block(p, b, sheet, look, at.x, ord, 0.0, joint)
+    band: = Rect::{ .x = at.x, .y = top, .w = at.w, .h = p.y - top }
+    kind: = sheet.arrange_of(b.style)
+    note_region(page, kind, fitted(page, from, band, kind), arena)
+    // **A region cannot be used instead** (the reason is at `Page.holders`).
+    page.holders.push(arena.create(Surface::{ .rect = band, .block = b }))
+  page.height = p.y - at.y
+  // Caution: **Use the same origin as the height** (`filled` is absolute during layout).
+  page.filled = 0.0 if page.filled < at.y else page.filled - at.y
+  return page
+
+fn paper_count(page: Page$@, band: F32): Sz //<
+  //< How many pages it takes, split at this band's height
+  //<
+  //< Caution: **Do not count from `height`**, or **a blank page appears at the end** (the reason is
+  //< at `Page.filled`). **Count a partial page** (dropped, the last page is not printed).
+  if band <= 0.0
+    return 1
+  $n: = Sz::I64::(page.filled / band)
+  if F32::n * band < page.filled
+    n += 1
+  return 1 if n < 1 else n

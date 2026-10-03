@@ -1,0 +1,439 @@
+//< Reading a command line as the program declared it: flags, values, and `--help`
+//<
+//< **Each declared item takes a pointer to the caller's own variable as its destination**, written
+//< with `$`. So the default is that variable's initial value, and there is no table to look a value
+//< up in by name.
+//< Caution: **Anything starting with `-` that no declaration knows is an error**, and a value is
+//< always joined with `=`. Otherwise a path containing a space arrives as word-split fragments,
+//< and the failure shows up far from them.
+//< The design and its costs are in "How an argument's destination is declared, and why
+//< anything unknown is an error" in `std/docs/DESIGN.md`.
+import "std/chars"
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
+import "std/sys"
+
+pub enum Argp_error //< why the arguments could not be read as declared
+  help_requested //< `--help` was given; not a failure, but parsing does not continue either
+  unknown_option(name: U8[]) //< a `--name` no declaration knows
+  missing_value(name: U8[]) //< an item that takes a value has no `=value` attached
+  bad_value(name: U8[]) //< the value cannot be read as a number
+  missing_required(name: U8[]) //< an item that cannot be omitted was omitted
+  unexpected_value(name: U8[]) //< a flag carried `=value`
+  multiple_commands(name: U8[]) //< two commands were named at once
+  unexpected_arg(name: U8[]) //< a positional argument was given to a CLI that takes none
+
+priv enum Kind //< an item's kind and its destination
+  //<
+  //< The destination is **held in the payload**, so the switch, not a `Void$@` cast per kind,
+  //< guarantees that kind and destination agree.
+  str_val(out: U8[]$@)
+  int_val(out: I64$@)
+  f64_val(out: F64$@)
+  flag(out: Bool$@)
+  str_list(out: List<|U8[]|>$@) //<
+    //< An item given repeatedly; each value is pushed in order
+  command //<
+    //< A command selected by an option's name (`--version`); it is stored in Parser.command
+
+priv struct Opt
+  name: U8[] //< the name as typed (`--define`)
+  help: U8[]
+  kind: Kind
+  required: Bool
+  seen: Bool
+  seen_empty: Bool //< it was given at least once with nothing after its `=`
+
+priv struct Cmd //< a command selected by a positional argument's name (`fmt` / `run`)
+  name: U8[]
+  help: U8[]
+  trailing: List<|U8[]|>$@ //<
+    //< Where the rest after this command's target goes, or null
+    //<
+    //< When this is not null, **nothing after this command's first positional argument is
+    //< interpreted** (in `ksplc run script.kspl --verbose`, the `--verbose` belongs to the script).
+
+priv fn store_value(o: Opt$@, val: U8[]): Void?Argp_error //<
+  //< Interprets the value by o's kind and stores it in the destination
+  switch o.kind case .str_val(out)
+    out$ = val
+  case .int_val(out)
+    out$ = val.to_i64() catch
+      throw Argp_error.bad_value(o.name)
+  case .f64_val(out)
+    out$ = val.to_f64() catch
+      throw Argp_error.bad_value(o.name)
+  case .str_list(out)
+    out.push(val)
+  default
+    // A flag or command takes no value; parse_list refuses `=value` earlier, but it is not ignored.
+    throw Argp_error.unexpected_value(o.name)
+
+priv const help_column: Sz = 26 //< the column where the description starts
+  //<
+  //< Each byte counts as one display column (ASCII).
+
+priv fn pad_to(line: Str_builder$@, column: Sz)
+  for line.len < column
+    line.c(' ')
+  line.c(' ') // a name past the column still gets one space
+
+pub struct Parser //< the declarations, and where the parsed values go
+  pub prog: U8[] //< the program's name, used in the usage and in every error
+  pub about: U8[] //< one line saying what the program is, shown above the options
+  priv opts: List<|Opt|>$@
+  priv cmds: List<|Cmd|>$@
+  pub rest: List<|U8[]|>$@ //< the positional arguments, in the order they appeared.
+    //<
+    //< Neither an option nor a command name. Unless `positional` declared them, each is an error.
+  priv positional_help: U8[] //<
+    //< The usage name declared by `positional`. Empty means the CLI takes no positional argument.
+  priv takes_positional: Bool
+  pub command: U8[] //< the chosen command, or empty; the caller decides the default.
+    //<
+    //< A default kept in argp would drift from the declaration.
+
+impl Parser
+  pub fn create( //< a parser with nothing declared yet
+    //<
+    //< Memory is freed with the arena, so there is no separate `free`.
+    prog: U8[], //< the program's name, used in the usage and in every error
+    about: U8[], //< one line saying what the program is
+    arena: Arena$@, //< the arena the declarations and results are allocated in
+  ): Parser$@
+    opts: = List<|Opt|>.create(arena)
+    cmds: = List<|Cmd|>.create(arena)
+    rest: = List<|U8[]|>.create(arena)
+    p: = Parser::{ .prog = prog, .about = about, .opts = opts, .cmds = cmds, .rest = rest,
+      .positional_help = "", .takes_positional = false }
+    return arena.create(p)
+
+  pub fn positional( //< declares that this CLI takes positional arguments
+    //<
+    //< **A positional argument given to a CLI that declares none is an error**, for the same
+    //< reason as an unknown `--name`: a path's word-split fragments arrive **as positional
+    //< arguments**, and dropping them silently hides the cause.
+    r: Self$@,
+    usage: U8[], //< how they are written in the `Usage:` line (`<input.kspl> [output]`)
+  )
+    r.takes_positional = true
+    r.positional_help = usage
+
+  priv fn add(r: Self$@, name: U8[], help: U8[], kind: Kind, required: Bool)
+    r.opts
+      .push(Opt::{
+      .name = name,
+      .help = help,
+      .kind = kind,
+      .required = required,
+      .seen = false,
+      .seen_empty = false,
+    })
+
+  pub fn subcommand( //< a command chosen by name (`ksplc fmt`); the choice is stored in `command`
+    r: Self$@,
+    name: U8[], //< the command's name as typed
+    help: U8[], //< the one line shown beside it in the usage
+  )
+    r.cmds.push(Cmd::{ .name = name, .help = help, .trailing = null })
+
+  pub fn subcommand_trailing( //< a command taking one target and an uninterpreted rest
+    //<
+    //< Its own options go before the target, as with `python x.py --foo`.
+    r: Self$@,
+    name: U8[], //< the command's name as typed
+    help: U8[], //< the one line shown beside it in the usage
+    trailing: List<|U8[]|>$@, //< the rest; never read as options, even if it looks like them
+  )
+    r.cmds.push(Cmd::{ .name = name, .help = help, .trailing = trailing })
+
+  pub fn command_flag( //< a command chosen by an option's name (`--version`); takes no value
+    //<
+    //< Not a flag, so the commands stay **mutually exclusive** (`prog fmt --version` is refused).
+    //< Caution: **Add a mode as an option only where one is enough.** As they multiply, the name
+    //< no longer says which is a subcommand and which is an option.
+    r: Self$@,
+    name: U8[], //< the name as typed
+    help: U8[], //< the one line shown beside it in the usage
+  )
+    r.add(name, help, Kind.command, false)
+
+  pub fn str_opt( //< a string, written as `--name=<value>`
+    r: Self$@,
+    name: U8[], //< the name as typed
+    out: U8[]$@, //< where the value goes; its current value is the default
+    help: U8[], //< the one line shown beside it in the usage
+  )
+    r.add(name, help, Kind.str_val(out), false)
+
+  pub fn str_required( //< a string that cannot be omitted; omitting it gives `missing_required`
+    r: Self$@,
+    name: U8[], //< the name as typed
+    out: U8[]$@, //< where the value goes
+    help: U8[], //< the one line shown beside it in the usage
+  )
+    r.add(name, help, Kind.str_val(out), true)
+
+  pub fn int_opt( //< an integer; a value that cannot be read gives `bad_value`
+    r: Self$@,
+    name: U8[], //< the name as typed
+    out: I64$@, //< where the value goes; its current value is the default
+    help: U8[], //< the one line shown beside it in the usage
+  )
+    r.add(name, help, Kind.int_val(out), false)
+
+  pub fn f64_opt( //< a floating-point number; a value that cannot be read gives `bad_value`
+    r: Self$@,
+    name: U8[], //< the name as typed
+    out: F64$@, //< where the value goes; its current value is the default
+    help: U8[], //< the one line shown beside it in the usage
+  )
+    r.add(name, help, Kind.f64_val(out), false)
+
+  pub fn flag( //< a switch taking no value (Python's `action="store_true"`)
+    r: Self$@,
+    name: U8[], //< the name as typed
+    out: Bool$@, //< set to true when the name is given
+    help: U8[], //< the one line shown beside it in the usage
+  )
+    r.add(name, help, Kind.flag(out), false)
+
+  pub fn str_list_opt( //< a string that can be given any number of times
+    //<
+    //< Caution: **It accumulates instead of overwriting.** With `str_opt`, `--define=a --define=b`
+    //< silently keeps only the later value.
+    r: Self$@,
+    name: U8[], //< the name as typed
+    out: List<|U8[]|>$@, //< where each value is pushed, in the order given
+    help: U8[], //< the one line shown beside it in the usage
+  )
+    r.add(name, help, Kind.str_list(out), false)
+
+  pub fn append_names( //< pushes every declared name, in declaration order
+    //<
+    //< For a caller that walks the items (with `saw`).
+    //< Caution: **Do not let the caller copy the list of names.** A copy silently drifts when a
+    //< declaration is added.
+    r: Self$@,
+    out: List<|U8[]|>$@, //< where the names are pushed
+  )
+    for o in r.opts
+      out.push(o.name)
+
+  pub fn saw( //< whether that item was given at all, whatever its value
+    //<
+    //< It tells "not given" from "given empty" (`--out=`), which the value alone cannot.
+    r: Self$@,
+    name: U8[], //< the declared name
+  ): Bool
+    o: = r.find(name)
+    return o != null && o.seen
+
+  pub fn saw_empty( //< whether that item was given with nothing after its `=` (`--out=`)
+    //<
+    //< An empty value is a value, so parsing takes it; a caller none of whose items means anything
+    //< by one refuses it through here.
+    r: Self$@,
+    name: U8[], //< the declared name
+  ): Bool
+    o: = r.find(name)
+    return o != null && o.seen_empty
+
+  priv fn find(r: Self$@, name: U8[]): Opt$@ //< looks an item up by its declared name
+    for i in Range.asc(r.opts.len)
+      o: = r.opts.at(i)
+      if o.name.equals(name)
+        return o
+    return null
+
+  priv fn find_cmd(r: Self$@, name: U8[]): Cmd$@
+    for i in Range.asc(r.cmds.len)
+      c: = r.cmds.at(i)
+      if c.name.equals(name)
+        return c
+    return null
+
+  priv fn set_command(r: Self$@, name: U8[]): Void?Argp_error //< selects a command
+    //<
+    //< A second one throws multiple_commands.
+    if r.command.len > 0
+      throw Argp_error.multiple_commands(name)
+    r.command = name
+
+  pub fn parse( //< reads the process's own arguments, skipping the program name at the start
+    r: Self$@,
+    a: sys.Args, //< what `sys.args()` returned
+    arena: Arena$@, //< the arena the parsed values are allocated in
+  ): Void?Argp_error
+    $argv: = List<|U8[]|>.new(arena)
+    for $i: Sz = 1; i < a.len; i += 1
+      argv.push(a[i])
+    return r.parse_list(argv@)
+
+  pub fn parse_list( //< reads an argument list into the declared destinations
+    //<
+    //< Also for arguments from elsewhere, such as a configuration file or a test.
+    r: Self$@,
+    argv: List<|U8[]|>$@, //< the arguments, **without** the program's own name
+  ): Void?Argp_error
+    // subcommand_trailing's rest, pushed once its target has arrived.
+    $trail: List<|U8[]|>$@ = null
+    for $i: Sz = 0; i < argv.len; i += 1
+      arg: = argv.get(i)
+      // Caution: Make this check before every other one: after the target, not even `--help` may
+      // be interpreted (it would take the script's own).
+      if trail != null && r.rest.len > 0
+        trail.push(arg)
+        continue
+      if arg.equals("--help")
+        throw Argp_error.help_requested
+      // A misspelling with a single `-` (`-out=X`) is refused too, not passed on to rest. A lone
+      // `-` is positional and means "standard input".
+      if !arg.starts_with("-") || arg.equals("-")
+        c: = r.find_cmd(arg)
+        if c != null
+          r.set_command(c.name)?
+          if c.trailing != null
+            trail = c.trailing
+          continue
+        // subcommand_trailing's target is accepted whether declared or not (trail takes the rest).
+        if !r.takes_positional && trail == null
+          throw Argp_error.unexpected_arg(arg)
+        r.rest.push(arg)
+        continue
+      // Matching has two steps: 1. the whole argument (`--in-place`); 2. split at the first `=`
+      // (`--lint=CODE=level`).
+      $name: = arg
+      $val: U8[] = ""
+      $has_val: = false
+      $o: = r.find(arg)
+      if o == null
+        eq: = arg.find_char('=')
+        if eq >= 0
+          name = arg.sub(0, eq)
+          o = r.find(name)
+          if o != null
+            val = arg.sub_from(eq + 1)
+            has_val = true
+      if o == null
+        // Reports **the argument as given**, so the user finds what they typed.
+        throw Argp_error.unknown_option(arg)
+      o.seen = true
+      switch o.kind case .flag(out)
+        if has_val
+          throw Argp_error.unexpected_value(name)
+        out$ = true
+      case .command
+        if has_val
+          throw Argp_error.unexpected_value(name)
+        r.set_command(o.name)?
+      default
+        // **A value is joined with `=`, never taken from the next argument**, so nothing depends
+        // on guessing whether the next argument is a value or an item.
+        if !has_val
+          throw Argp_error.missing_value(name)
+        o.seen_empty = o.seen_empty || val.len == 0
+        store_value(o, val)?
+    for i in Range.asc(r.opts.len)
+      o: = r.opts.at(i)
+      if o.required && !o.seen
+        throw Argp_error.missing_required(o.name)
+
+  pub fn print_usage(r: Self$@) //< writes the whole usage to standard output
+    out: = io.out()
+    out.s("Usage: ").s(r.prog)
+    if r.cmds.len > 0
+      out.s(" [command]")
+    out.s(" [options]")
+    if r.positional_help.len > 0
+      out.s(" ").s(r.positional_help)
+    out.s("\n")
+    if r.about.len > 0
+      out.s("\n").s(r.about).s("\n")
+    r.print_options()
+
+  pub fn print_options(r: Self$@) //< writes only the commands and options, with no heading
+    //<
+    //< For a CLI that appends **the list built from the declarations** after its own text; a
+    //< copied list goes stale.
+    out: = io.out()
+    if r.cmds.len > 0
+      out.s("\nCommands:\n")
+      for i in Range.asc(r.cmds.len)
+        c: = r.cmds.at(i)
+        $line: = Str_builder.new()
+        defer line.free()
+        line.s("  ").s(c.name)
+        if c.trailing != null
+          line.s(" <target> [args...]")
+        pad_to(line@, help_column)
+        out.s(line.slice()).s(c.help).c('\n')
+    out.s("\nOptions:\n")
+    for i in Range.asc(r.opts.len)
+      o: = r.opts.at(i)
+      $line: = Str_builder.new()
+      defer line.free()
+      line.s("  ")
+      line.s(o.name)
+      // Only ASCII before the column (see `help_column`).
+      switch o.kind case .int_val(_o)
+        line.s("=<int>")
+      case .f64_val(_o)
+        line.s("=<num>")
+      case .str_val(_o)
+        line.s("=<str>")
+      case .str_list(_o)
+        line.s("=<str>") // the description says that it repeats
+      default {} // a flag and a command take no value
+      pad_to(line@, help_column)
+      line.s(o.help)
+      if o.required
+        line.s(" (required)")
+      out.s(line.slice()).c('\n')
+    $help_line: = Str_builder.new()
+    defer help_line.free()
+    help_line.s("  --help")
+    pad_to(help_line@, help_column)
+    out.s(help_line.slice()).s("show this usage\n")
+
+  pub fn parse_or_exit( //< reads the arguments, or prints why and ends the process
+    //<
+    //< **It returns only on success.** The exit code is 0 for `--help` and 2 for an error.
+    r: Self$@,
+    a: sys.Args, //< what `sys.args()` returned
+    arena: Arena$@, //< the arena the parsed values are allocated in
+  )
+    r.parse(a, arena) catch e
+      switch e case .help_requested
+        r.print_usage()
+        sys.exit(0)
+      default
+        io.err().s("\{r.prog\}: \{e\}\n")
+        r.print_usage()
+        sys.exit(2)
+
+impl Argp_error: Formattable //< so a failure can be written straight into a message
+  pub fn fmt(r: Self, w: Writer): Writer //< writes the reason for a person to read
+    //<
+    //< Interpolation expands into a chain of calls on a Writer ("The expansion specification for
+    //< string interpolation" in docs/SPEC-language.md); returning a `U8[]` would leave the caller
+    //< managing a temporary buffer's lifetime.
+    switch r case .help_requested
+      return w.s("help requested")
+    case .unknown_option(n)
+      return w.s("unknown option '").s(n).s("'")
+    case .missing_value(n)
+      return w.s("option '").s(n).s("' needs a value, written as '").s(n).s("=<value>'")
+    case .bad_value(n)
+      return w.s("option '").s(n).s("' got a value that is not a number")
+    case .missing_required(n)
+      return w.s("option '").s(n).s("' is required")
+    case .unexpected_value(n)
+      return w.s("option '").s(n).s("' is a flag and takes no value")
+    case .multiple_commands(n)
+      return w.s("cannot combine '").s(n).s("' with another command")
+    case .unexpected_arg(n)
+      return w.s("unexpected argument '").s(n).s("'")

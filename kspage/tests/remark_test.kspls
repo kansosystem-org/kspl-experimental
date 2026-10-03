@@ -1,0 +1,148 @@
+import "kspage/lay/caret"
+import "kspage/lay/flow"
+import "kspage/model/doc" { Doc }
+import "kspage/model/fixed_font" as fixed
+// `html.write` needs metrics (a line-height multiple scales one line's height). Why these are
+// fixed: the header of `kspage/model/fixed_font.kspls`.
+import "kspage/model/run" { Inline }
+import "kspage/model/style" { Sheet }
+import "kspage/share/html"
+import "kspage/tests/base"
+import "kspage/write/edit"
+import "kspage/write/shape"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// kspage: checks the annotation on an inline (someone's comment).
+//
+// **An annotation does not appear in the flow**, neither on the page nor in the HTML; unchecked,
+// nobody would notice the day it starts to. A note, whose mark does appear, is `Inline.note`.
+// ==========================================
+
+priv fn runs_of(d: Doc$@): Sz
+  return d.blocks.get(0).inlines.len
+
+priv fn run_at(d: Doc$@, i: Sz): Inline$@
+  return d.blocks.get(0).inlines.get(i)
+
+priv fn one_para(arena: Arena$@): edit.Editor$@ //<
+  //< One paragraph of "abcde", with the cursor in it
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("abcde")
+  e: = edit.new_editor(d)
+  e.caret = caret.at(n, 0)
+  return e
+
+fn test_a_remark_covers_the_span_and_undoes_as_one_step() //<
+  //< An annotation covers the selected range, and the words and who wrote them are set together
+  verdict.start("[kspage/shape] an annotation lying on a range test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  ed: = one_para(arena)
+  // "ab" is selected.
+  ed.caret.offset = 2
+  assert(ed.set_remark("better not to put this so flatly", "Alice"), "it can be put on")
+
+  assert(runs_of(ed.doc) == 2, "the run splits where it was selected")
+  marked: = run_at(ed.doc, 0)
+  assert(marked.remark.equals("better not to put this so flatly"), "the words go on")
+  assert(marked.remark_by.equals("Alice"), "who wrote them goes on too")
+  assert(run_at(ed.doc, 1).remark.len == 0, "it does not go on where nothing was selected")
+  assert(ed.undo(), "it can be put back in one")
+  assert(run_at(ed.doc, 0).remark.len == 0, "the words come off")
+  assert(run_at(ed.doc, 0).remark_by.len == 0, "who wrote them comes off too")
+  verdict
+    .pass("an annotation lies on the range selected, and one undo takes both the words and who \
+      wrote them off.")
+
+fn test_an_empty_remark_drops_the_writer_too() //< an empty text removes who wrote it too
+  //<
+  //< Left in place, a name with no words would stay on the inline.
+  verdict.start("[kspage/shape] an empty annotation coming off with who wrote it test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  ed: = one_para(arena)
+  assert(ed.set_remark("better changed", "Alice"), "it can be put on")
+  assert(run_at(ed.doc, 0).remark_by.equals("Alice"), "who wrote it is on")
+  assert(ed.set_remark("", "Alice"), "it can be taken off")
+  assert(run_at(ed.doc, 0).remark.len == 0, "the words go empty")
+  assert(run_at(ed.doc, 0).remark_by.len == 0, "who wrote it goes empty too")
+  verdict.pass("where the text is empty, who wrote it is cleared too.")
+
+fn test_a_remark_stays_out_of_the_flow() //< an annotation does not appear in the flow
+  //<
+  //< Laid out again the boxes do not grow, and it does not appear in the exported HTML either.
+  verdict.start("[kspage/flow] an annotation not coming out in the flow test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  ed: = one_para(arena)
+  sheet: = Sheet.new(base.root_font(), arena)
+  before: = flow.layout(ed.doc, sheet, fixed.make(), 200.0, arena).boxes.len
+  assert(ed.set_remark("this is not to come out in the flow", "Alice"), "it can be put on")
+  after: = flow.layout(ed.doc, sheet, fixed.make(), 200.0, arena)
+  assert(after.boxes.len == before, "putting an annotation on does not grow the boxes")
+
+  $sb: = Str_builder.new()
+  defer sb.free()
+  html.write(ed.doc, sheet, fixed.make(), sb@)
+  out: = sb.slice()
+  assert(!base.has(out, "this is not to come out in the flow"),
+    "the words do not come out in the HTML written out")
+  assert(!base.has(out, "Alice"), "who wrote them does not come out either")
+  verdict.pass("an annotation comes out in neither a laying-out again nor a writing out.")
+
+fn test_a_split_run_keeps_the_remark_on_both_halves() //<
+  //< An annotation covers a range, so it stays on both sides of a split inline (as a link does)
+  verdict.start("[kspage/edit] an annotation being left on both sides of a split run test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  ed: = one_para(arena)
+  assert(ed.set_remark("words on the whole of it", "Alice"), "it can be put on the whole")
+  // Split in the middle, the second half keeps the same words.
+  switch edit.split_run(ed, ed.step(), run_at(ed.doc, 0), 2) case .some {} case .none
+    panic("it does not split")
+  assert(runs_of(ed.doc) == 2, "the runs become two")
+  assert(run_at(ed.doc, 0).remark.equals("words on the whole of it"), "it is left in front")
+  assert(run_at(ed.doc, 1).remark.equals("words on the whole of it"), "it is left behind too")
+  assert(run_at(ed.doc, 1).remark_by.equals("Alice"), "who wrote it carries over too")
+  verdict.pass("split, the annotation stays lying on both sides.")
+
+fn test_neighbouring_runs_with_different_remarks_stay_apart() //<
+  //< Neighbouring inlines with different annotations are not joined
+  //<
+  //< Joined, what was said about one would cover both.
+  verdict.start("[kspage/edit] runs of differing annotations not being brought together test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  ed: = one_para(arena)
+  ed.caret.offset = 2
+  assert(ed.set_remark("words on the front half", "Alice"), "they were put on the front half")
+  ed.caret = caret.at(run_at(ed.doc, 1), 0)
+  ed.caret.offset = 2
+  assert(ed.set_remark("words on the back half", "Alice"), "they were put on the back half")
+
+  assert(runs_of(ed.doc) == 3, "neighbours or not, they do not become one")
+  head: = run_at(ed.doc, 0)
+  assert(head.remark.equals("words on the front half"), "the front half's words stay as they were")
+  assert(run_at(ed.doc, 1).remark.equals("words on the back half"),
+    "the back half holds other words")
+  verdict.pass("where the annotations differ, neighbouring runs are not brought together.")
+
+fn test_a_remark_survives_saving_and_loading() //<
+  //< An annotation is included in what is saved
+  //<
+  //< Read back, the words and who wrote them come back together.
+  verdict.start("[kspage/store] an annotation being left through a putting out and in test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  ed: = one_para(arena)
+  sheet: = Sheet.new(base.root_font(), arena)
+  assert(ed.set_remark("that it is left when read back", "Alice"), "it can be put on")
+
+  back: = base.round_trip(ed.doc, sheet, arena)
+  run: = back.doc.blocks.get(0).inlines.get(0)
+  assert(run.remark.equals("that it is left when read back"), "the words come back")
+  assert(run.remark_by.equals("Alice"), "who wrote them comes back too")
+  verdict.pass("an annotation goes into what is saved and comes back together when read back.")

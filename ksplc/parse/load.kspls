@@ -1,0 +1,645 @@
+import "kspeg/engine" as kspeg
+import "kspeg/rule" { Kspeg_signal }
+import "ksplc/base/as_written" as base_as_written
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_kinds" as base_ast_kinds
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/base/diag" as base_diag
+import "ksplc/base/locate" as base_locate
+import "ksplc/base/package" as base_package
+import "ksplc/parse/ast_cache"
+import "ksplc/parse/layout" as parse_layout
+import "ksplc/parse/normalize" as parse_normalize
+import "ksplc/parse/source_fix" as parse_source_fix
+import "ksplc/parse/syntax_msg" as parse_syntax_msg
+import "std/chars" // the one-character checks and cuts
+import "std/ds" { List, Map }
+import "std/io"
+import "std/mem" { Arena, dealloc }
+import "std/seq"
+import "std/str" { Str_builder }
+import "std/strfmt"
+import "std/sys"
+
+priv struct Kspeg_prof_entry
+  name: U8[]
+  calls: I64
+  memo_hits: I64
+  parsed_ok: I64
+  memo_off: Bool //< whether the memo was turned off for this rule, in any file
+
+struct Profiler
+  priv kspeg_map: Map<|U8[], Kspeg_prof_entry$@|>
+  priv kspeg_list: List<|Kspeg_prof_entry$@|>
+  io_us: I64
+  kspeg_us: I64
+  ast_conv_us: I64
+  norm_us: I64
+  cache_us: I64 //<
+    //< Reading and writing a cached normalized AST (ksplc/parse/ast_cache.kspls)
+    //<
+    //< **Without it, Parse Total's breakdown does not add up**: on a hit KSPEG, Conv and Norm are
+    //< all 0, and growth would go unnoticed in a large total whose breakdown is zero.
+  is_init: Bool
+
+// The indentation problems found while converting to braces: a file's name -> its notes.
+// Caution: **It only collects; nothing is printed here.** Sema counts the diagnostics (the lint
+// gate reads that summary), so a diagnostic printed before the analysis would slip past the gate.
+// One pool serves both entry points: this one, which reads the disk, and `../lsp/worker.kspls`,
+// which receives text from the editor.
+$layout_notes: Map<|U8[], List<|parse_layout.Note|>$@|>$@ = null
+
+fn record_layout_notes(file: U8[], notes: List<|parse_layout.Note|>$@) //<
+  //< It records one file's notes
+  //<
+  //< Caution: **Do not call it twice under the same name** — the conversion runs once per entry
+  //< point (the caution in `load_and_parse_file`), so a second call means it ran twice.
+  if notes.len == 0
+    return
+  if layout_notes == null
+    fresh: = Map<|U8[], List<|parse_layout.Note|>$@|>.new_with_cap(16, base_core.arena)
+    layout_notes = base_core.arena.create(fresh)
+  layout_notes.set(base_core.arena.dup_str(file), notes)
+
+fn layout_noted_files(arena: Arena$@): List<|U8[]|> //<
+  //< it returns the recorded file names in name order
+  $out: = List<|U8[]|>.new(arena)
+  if layout_notes == null
+    return out
+  for e in layout_notes.items()
+    out.push(e.key)
+  return out
+
+fn layout_notes_for(file: U8[]): Option<|List<|parse_layout.Note|>$@|> //<
+  //< The notes the indentation conversion left for `file`, if any were recorded
+  //<
+  //< Caution: **Return an `Option`.** A file with no notes is ordinary (the brace notation), and
+  //< an `Option`, unlike a `null`, forces the caller to handle both cases ([H0704]).
+  if layout_notes == null
+    return .none
+  found: = layout_notes.get(file) catch
+    return .none
+  return .some(found)
+
+fn forget_layout_notes() //< it clears the collected notes
+  //<
+  //< Caution: **Pair it with rewinding the arena**: the global points into base_core.arena, and
+  //< rewinding alone leaves it dangling. `wind_back` in ksplc/lsp/state.kspls is the one place that
+  //< pairs them.
+  layout_notes = null
+  // Both are facts about the round that has just ended.
+  took_recovery = false
+
+// Whether a file in this round was parsed a second time with the recovery branches on. **Its tree
+// is not sound**, so what later stages find in it is not reported (the grounds are "Only the
+// editor's parse recovers from a syntax error" in `../docs/DESIGN.md`).
+$took_recovery: Bool = false
+
+fn recovered(): Bool
+  return took_recovery
+
+$prof: Profiler = ::{}
+$kspeg_arena: Arena$@ = null
+
+impl Profiler
+  fn free(r: Self$@)
+    if r.is_init
+      r.kspeg_map.free()
+      r.kspeg_list.free()
+      r.is_init = false
+
+  fn init(r: Self$@)
+    r.io_us = 0
+    r.kspeg_us = 0
+    r.ast_conv_us = 0
+    r.norm_us = 0
+    r.cache_us = 0
+    if !r.is_init
+      r.kspeg_map = Map<|U8[], Kspeg_prof_entry$@|>.new(base_core.arena)
+      r.kspeg_list = List<|Kspeg_prof_entry$@|>.new()
+      r.is_init = true
+    else
+      r.kspeg_map.free()
+      r.kspeg_map = Map<|U8[], Kspeg_prof_entry$@|>.new(base_core.arena)
+      r.kspeg_list.len = 0
+
+  fn print_kspeg(r: Self$@)
+    if !base_core.config.enable_stats || r.kspeg_list.cap == 0
+      return
+    len: = r.kspeg_list.len
+    // A copy sorted by call count, descending: sorting kspeg_list itself would make where the next
+    // measurement lands depend on whether it was printed.
+    // Caution: Do not compare by subtraction (an I64's difference does not fit in I32).
+    ranked: = r.kspeg_list
+      .order_by(fn(a: Kspeg_prof_entry$@, b: Kspeg_prof_entry$@; ): I32 {
+      if a.calls == b.calls {
+        return 0;
+      } return -1 if a.calls > b.calls else 1;
+    }, base_core.arena)
+
+    // Counts, unlike wall-clock time, are the same on every backend. The total comes first because
+    // "did the amount of parsing change" is easier to follow than per-rule changes, and the memo
+    // hits beside it show in one number whether packrat memoization works.
+    $total: I64 = 0
+    $total_memo: I64 = 0
+    $memo_off: Sz = 0
+    for p in r.kspeg_list
+      total += p.calls
+      total_memo += p.memo_hits
+      if p.memo_off
+        memo_off += 1
+    $head: = Str_builder.new()
+    defer head.free()
+    head.s("\n[KSPEG Rule] \{Sz::total:,\} rule invocations, ")
+      .s("\{Sz::total_memo:,\} from memo, \{memo_off:,\} rules left it (Top 20 by calls)\n")
+    io.out().s(head.slice())
+    // Caution: **Derive failed by subtraction** (the reason is at Rule_prof in kspeg/engine.kspls).
+    io.out().s("        calls   memo hit     parsed     failed  rule\n")
+    limit: = 20 if len > 20 else len
+    for i in Range.asc(limit)
+      p: = ranked.get(i)
+      failed: = p.calls - p.memo_hits - p.parsed_ok
+      $sb: = Str_builder.new()
+      defer sb.free()
+      sb.s("      \{Sz::p.calls:7,\}\{Sz::p.memo_hits:11,\}\{Sz::p.parsed_ok:11,\}")
+        .s("\{Sz::failed:11,\}  \{p.name\}\n")
+      io.out().s(sb.slice())
+fn init() //< the parse layer's initialization and release
+  //<
+  //< main calls this pair; `fin` releases kspeg_arena, which parse_raw_ast allocates lazily.
+  prof.init()
+
+fn fin()
+  prof.free()
+  if kspeg_arena != null
+    kspeg_arena.free()
+    kspeg_arena = null
+
+priv const layout_roles: U8[][3] = ::{ "Block_open", "Block_close", "Stmt_end" } //<
+  //< The three roles that become levels and newlines in the indentation notation (`.kspls`)
+  //<
+  //< They must match the grammar's rule names (the heading of [`../kspl.kspeg`](../kspl.kspeg)).
+
+priv fn rule_kind(rule: U8[]): base_ast_kinds.Ast_kind //< it looks up the kind for a rule's name
+  //<
+  //< **The roles' names stay out of the tree**: the grammar names the three above to show where the
+  //< notation changes, and the tree keeps them `Literal`.
+  for one in layout_roles
+    if rule.equals(one)
+      return .k_literal
+  return Ast_node.peek_kind_id(rule)
+
+fn to_ast_node(knode: kspeg.Node$@, file_name: U8[], depth: Sz): Option<|Ast_node$@|>
+  if knode == null
+    return Option<|Ast_node$@|>.none
+  if depth >= parse_normalize.max_parse_tree_depth
+    io.err()
+      .s("\nfatal: source nesting too deep to convert to AST (possible unbounded recursive \
+        construct).\n")
+    sys.exit(1)
+  // **The one place a name turns into a kind** (KSPEG's rules come by name).
+  // Caution: **Do not look it up twice for one node.** Each lookup hashes the name, per node.
+  kind_id: = rule_kind(knode.kind)
+  if knode.children.len == 1 && parse_normalize.is_expr_wrapper_kind(kind_id)
+    return to_ast_node(knode.children.get(0), file_name, depth + 1)
+  anode: = Ast_node.new(kind_id, knode.text, base_ast.Loc.at(file_name, knode.offset))
+  for raw_child in knode.children
+    if child: = to_ast_node(raw_child, file_name, depth + 1)
+      anode.add_child(child)
+  return Option<|Ast_node$@|>.some(anode)
+
+fn kanso_space_skipper(ctx: kspeg.Target$@) //<
+  //< It moves `ctx.pos` past whitespace and `//` line comments
+  for ctx.pos < ctx.source.len
+    c: = (ctx.source.ptr + ctx.pos)$
+    if c.is_space()
+      ctx.pos += 1
+      continue
+    if ctx.source.starts_with("//", ctx.pos)
+      for ctx.pos < ctx.source.len
+        c2: = (ctx.source.ptr + ctx.pos)$
+        ctx.pos += 1
+        if c2 == '\n'
+          break
+      continue
+    // A block comment `/* */` is not skipped (matching _Space in ksplc/kspl.kspeg). Skipped, a form
+    // the grammar does not accept would pass silently.
+    break
+
+enum Parse_error
+  syntax_error
+  circular_import(path: U8[])
+  io(err: io.Io_error)
+  kspeg(err: Kspeg_signal)
+
+impl Parse_error
+  priv fn report_bad_import(e: Self, decl: Ast_node$@, wanted: U8[], importer: U8[],
+    importer_src: U8[]): Bool //<
+      //< It reports an import that could not be read, at the position where it is written.
+      //<
+      //< Caution: **Do not print the name alone**: finding which file asked for it would take a
+      //< full-text search. On true the caller throws `syntax_error`, the signal for "already
+      //< reported" (as parse_raw_ast does) that outer stages pass along, so it is reported once.
+    $why: = Str_builder.new()
+    defer why.free()
+    switch e case .io(io_err)
+      // Caution: **Print the absolute name.** Some import names are looked up from the **working
+      // directory** rather than beside the entry file, and a relative name hides which
+      // folder was searched (`to_absolute` in `base/locate.kspls`).
+      switch io_err case .file_not_found(p)
+        why.s("import not found: '\{wanted\}' (looked for \{base_locate.to_absolute(p)\})")
+      case .read_failed(p)
+        why.s("import could not be read: '\{wanted\}' (\{base_locate.to_absolute(p)\})")
+      default {}
+    case .circular_import(p)
+      why.s("circular import across directory boundaries: '\{p\}'")
+    default {}
+    if why.slice().len == 0
+      return false
+    print_at_import(why.slice(), decl, importer, importer_src)
+    return true
+
+fn parse_raw_ast(src: U8[], file_path: U8[], parser: kspeg.Target$@): Ast_node$@?Parse_error
+  // The KSPEG arena is reused and rewound: one request to the OS, and each parse's garbage is gone.
+  if kspeg_arena == null
+    kspeg_arena = Arena.new(1024 * 1024 * 16)
+  arena_state: = kspeg_arena.save()
+  defer kspeg_arena.restore(arena_state)
+
+  $target_parser: = kspeg.Target.new(src, kspeg_arena)
+  defer target_parser.free_memo()
+  target_parser.share_grammar_from(parser)
+  target_parser.enable_profiling = base_core.config.enable_stats
+  target_parser.space_skipper = kanso_space_skipper
+
+  t_kspeg_start: = sys.mono_us()
+  raw_kspeg_ast: = target_parser.parse_rule("program") catch e
+    switch e case .fatal(fatal_msg)
+      // Caution: When cut off by depth, report the recorded position (the engine's
+      // depth_exceeded_pos): backtracking has moved `pos` back to the start, so it is at line 1.
+      fatal_pos: =
+        target_parser.depth_exceeded_pos if target_parser.depth_exceeded else target_parser.pos
+      starts: = src.line_starts(base_core.arena)
+      base_diag.print_diagnostic(file_path, src, fatal_pos, 1, fatal_msg, .error, starts)
+    case .mismatch
+      max_pos: = target_parser.fail.max_fail_pos
+      // Ask by how the file was opened (`reads_as_laid_out` in `../base/core.kspls`); asked by
+      // `is_laid_out`, every import's syntax error would name braces nobody wrote.
+      $msg: = parse_syntax_msg.build_parse_error_msg(target_parser@, src, max_pos,
+        file_path.reads_as_laid_out())
+      defer msg.free()
+      starts: = src.line_starts(base_core.arena)
+      base_diag.print_diagnostic(file_path, src, max_pos, 1, msg.slice(), .error, starts)
+    // **The diagnostic is printed; the lenient run below adds none**: a second one, taken from a
+    // recovered tree, would list a dozen unrelated errors behind one missing bracket. **Only the
+    // editor takes this path** (`recover_syntax` in `../base/core.kspls`).
+    if base_core.config.recover_syntax
+      switch e case .mismatch
+        switch parse_leniently(src, file_path, parser) case .some(tree)
+          return tree
+        default {}
+      default {}
+    throw Parse_error.syntax_error
+
+  if base_core.config.enable_stats
+    for p in target_parser.prof_list
+      entry: = prof.kspeg_map.get(p.name) catch
+        new_entry: = base_core.arena
+          .create(Kspeg_prof_entry::{ .name = p.name, .calls = 0, .memo_hits = 0, .parsed_ok = 0,
+          .memo_off = false })
+        prof.kspeg_map.set(p.name, new_entry)
+        prof.kspeg_list.push(new_entry)
+        fallback new_entry
+      entry.calls += p.calls
+      entry.memo_hits += p.memo_hits
+      entry.parsed_ok += p.parsed_ok
+      if p.memo_off
+        entry.memo_off = true
+
+  t_kspeg_end: = sys.mono_us()
+  prof.kspeg_us += t_kspeg_end - t_kspeg_start
+
+  t_ast_start: = sys.mono_us()
+  raw_ast: = to_ast_node(raw_kspeg_ast, file_path, 0).unwrap_or(null)
+  t_ast_end: = sys.mono_us()
+  prof.ast_conv_us += t_ast_end - t_ast_start
+
+  return raw_ast
+
+priv fn parse_leniently(src: U8[], file_path: U8[], parser: kspeg.Target$@):
+  Option<|Ast_node$@|> //<
+    //< The second parse, with the recovery branches on
+    //<
+    //< None where even that fails. **It uses its own `Target`**, leaving the first run's position
+    //< and failure record alone; the memo shared with the grammar starts empty (`begin` in
+    //< `kspeg/memo.kspls`), so nothing found with the branches off is reused. **It prints no
+    //< diagnostic.**
+  $lenient: = kspeg.Target.new(src, kspeg_arena)
+  defer lenient.free_memo()
+  lenient.share_grammar_from(parser)
+  lenient.space_skipper = kanso_space_skipper
+  lenient.is_lenient = true
+  tree: = lenient.parse_rule("program") catch
+    return Option<|Ast_node$@|>.none
+  took_recovery = true
+  got: = to_ast_node(tree, file_path, 0).unwrap_or(null)
+  return Option<|Ast_node$@|>.none if got == null else Option<|Ast_node$@|>.some(got)
+
+priv fn print_at_import(why: U8[], decl: Ast_node$@, importer: U8[], importer_src: U8[]) //<
+  //< It prints one rejection at the position of the import that caused it
+  info: = decl.get_span_offset()
+  starts: = importer_src.line_starts(base_core.arena)
+  base_diag.print_diagnostic(importer, importer_src, info.offset, info.span, why, .error, starts)
+
+priv fn read_source(file_path: U8[]): U8[]?Parse_error //< it reads one file
+  //<
+  //< **The name already identifies the file**: one without an extension went through
+  //< `name_as_found` (`../base/locate.kspls`) when resolved, so nothing is looked up twice.
+  return io.read_file(file_path) catch e
+    // The diagnostic carries the path opened, not the logical name: where a `std/...` resolves
+    // changes with --std-dir / KSPLC_STD_DIR.
+    throw read_error(e, base_core.arena.dup_str(file_path))
+
+priv fn read_error(e: io.Io_error, failed_path: U8[]): Parse_error
+  switch e case .read_failed
+    return Parse_error.io(.read_failed(failed_path))
+  default {}
+  return Parse_error.io(.file_not_found(failed_path))
+
+fn load_and_parse_file(import_path: U8[], loaded_files: List<|U8$[]|>$@, root_file: Ast_node$@,
+  parser: kspeg.Target$@, source_map: Map<|U8[], U8$[]|>$@, import_stack: List<|U8$[]|>$@,
+  src_is_disk: Bool): Void?Parse_error //<
+    //< It reads and parses the file `import_path` names, adding its declarations to `root_file`
+    //<
+    //< **`src_is_disk` says the given source is the file's own bytes**, not a buffer being
+    //< typed into. Only the caller can tell: the language server's workspace walk reads the disk,
+    //< its open document does not.
+  for seen_path in import_stack
+    if seen_path.equals(import_path)
+      dir1: = sys.get_dir_name(import_path)
+      dir2: = sys.get_dir_name(import_stack.get(import_stack.len - 1))
+      if !dir1.equals(dir2)
+        throw .circular_import(import_path)
+      return
+
+  for loaded_path in loaded_files
+    if loaded_path.equals(import_path)
+      return
+
+  perm_path: = base_core.arena.dup_str(import_path)
+  loaded_files.push(perm_path)
+  // Report progress per file read: one entry file pulls in hundreds of imports, and a long silence
+  // makes the LSP's supervisor kill the worker.
+  base_core.report_progress()
+  import_stack.push(perm_path)
+  defer import_stack.len -= 1
+
+  path_key: = perm_path // the same content as import_path, so the copy is shared
+  $perm_src: = source_map.get(path_key) catch ""
+  // Already in source_map means the caller supplied it (the LSP's editor buffer, or a test), and it
+  // may differ from the disk.
+  from_override: = perm_src.len > 0
+
+  t_io_start: = sys.mono_us()
+  // Whether it is the indentation notation (`.kspls`). **The name alone decides it**, so a
+  // supplied source (the LSP's editor buffer), with no path to open, gets the same answer. A
+  // logical name with no extension (`std/io`, most of them) takes the default, hence
+  // `reads_as_laid_out`, not `is_laid_out` (`../base/core.kspls`).
+  laid_out: = import_path.reads_as_laid_out()
+  // Caution: **Do not convert a supplied source.** Whoever read those bytes mends them (the reason
+  // is at `parse_layout.mend`): this branch for what it opens, `lsp/worker.kspls` for what the
+  // editor sends and what the language server reads from disk itself.
+  if perm_src.len == 0
+    // The logical name (import_path) and the path read from are different things. A `std/...`
+    // resolves pinned to base_locate.std_dir() (see base/locate.kspls).
+    $file_path: = Str_builder.new()
+    defer file_path.free()
+    base_locate.append_file_path(import_path, laid_out, file_path@)
+    raw: = read_source(file_path.slice())?
+    // The notes are only collected (the reason is at `layout_notes` above).
+    laid_notes: = List<|parse_layout.Note|>.create(base_core.arena)
+    mended: = parse_layout.mend(raw, laid_out, laid_notes, base_core.arena)
+    // **Remember the text as written**: a diagnostic prints its lines from here
+    // (`remember_as_written` in base/as_written.kspls), or shows a `;` and `}` nobody typed.
+    // Text written in braces is not converted, so it needs no copy.
+    if laid_out
+      base_as_written.remember_as_written(path_key, base_core.arena.dup_str(mended.written))
+    // Caution: **Put the converted text into `source_map`.** The later stages (a diagnostic's
+    // column, hover, jump-to-definition) read the text there, using the tree's positions.
+    record_layout_notes(path_key, laid_notes)
+    perm_src = base_core.arena.dup_str(mended.code)
+    dealloc(Void$@::raw.ptr)
+    source_map.set(path_key, perm_src)
+  // It turns the shebang line into a line comment.
+  // Caution: **A supplied source goes through this too.** Skipped, the LSP's editor buffer reads
+  // the `#` as an attribute mark and `expected 'import', ...` lands on the first character, in the
+  // editor only (lint / run / fmt read the saved file), far from the cause.
+  if parse_source_fix.has_shebang(perm_src)
+    base_as_written.remember_shebang(path_key)
+  parse_source_fix.mask_shebang(perm_src)
+  t_io_end: = sys.mono_us()
+  prof.io_us += t_io_end - t_io_start
+
+  // The top-level declarations this file adds to root_file. **This is the cache's unit**, and its
+  // content depends only on this file's source and ksplc itself (ksplc/parse/ast_cache.kspls).
+  decls: = base_ast.new_ast_node_list()
+  // **Only storing has an exception** (below). The key covers the whole source, so a hit is an AST
+  // for exactly these bytes whoever supplied them; refusing to read too would make the LSP's
+  // workspace walk parse every file from scratch on every query.
+  t_cache_start: = sys.mono_us()
+  hit: = ast_cache.load(import_path, perm_src, decls)
+  t_cache_end: = sys.mono_us()
+  prof.cache_us += t_cache_end - t_cache_start
+  if !hit
+    parse_into_decls(perm_src, import_path, parser, decls)?
+    append_enum_variant_names(decls, import_path, parser)?
+    // **A source is stored unless it is a buffer being typed into**, whose entry per keystroke
+    // would fill the cache up; bytes from disk are worth an entry however they arrive ("The
+    // workspace walk reads through the AST cache" in `../docs/DESIGN.md`).
+    if !from_override || src_is_disk
+      t_store_start: = sys.mono_us()
+      ast_cache.store(import_path, perm_src, decls)
+      t_store_end: = sys.mono_us()
+      prof.cache_us += t_store_end - t_store_start
+
+  // Caution: Read the import targets first. root_file's children must come in the order
+  // "dependency -> self": sema registers every file first, but the generated C follows this order.
+  for decl in decls
+    if decl.kind_id != .k_decl_import
+      continue
+    // A path that is not a plain string is not read (sema's collect_import_decl reports it);
+    // stripping its quotes by count would open another file for a raw string such as `""a""`.
+    path_opt: = decl.get_import_path_text()
+    if path_opt.is_none()
+      continue
+    next_path: = path_opt.unwrap_or("")
+    $resolved_str: = import_path.resolve_import_path(next_path)
+    defer resolved_str.free()
+    perm_slice: = base_core.arena.dup_str(resolved_str.slice())
+    // **A package that declares its name declares what it uses**; an import outside that list is
+    // rejected where written, before its file is read (`refused_use` in `../base/package.kspls`).
+    refusal: = base_package.refused_use(import_path, perm_slice)
+    if refusal.len > 0
+      print_at_import(refusal, decl, import_path, perm_src)
+      throw Parse_error.syntax_error
+    load_and_parse_file(perm_slice, loaded_files, root_file, parser, source_map, import_stack,
+      false) catch e
+      if e.report_bad_import(decl, next_path, import_path, perm_src)
+        throw Parse_error.syntax_error
+      throw e
+
+  // **An embedded file follows the rule for an imported one**: a package that declares its name
+  // embeds only its own files, `std`'s and those of what it uses; the rest is rejected here, as an
+  // import outside the list is (the file is read when emitted).
+  for decl in decls
+    if decl.kind_id != .k_decl_embed
+      continue
+    path_node: = decl.get_embed_path()
+    if path_node == null || path_node.text.len < 2
+      continue
+    written: = path_node.text.sub(1, path_node.text.len - 2)
+    refusal: = base_package.refused_use(import_path, import_path.resolve_embed_path(written))
+    if refusal.len > 0
+      print_at_import(refusal, decl, import_path, perm_src)
+      throw Parse_error.syntax_error
+
+  for decl in decls
+    root_file.add_child(decl)
+
+fn parse_synth_decls(src: U8[], file_path: U8[], parser: kspeg.Target$@,
+  out: List<|Ast_node$@|>$@): Void?Parse_error //<
+    //< It turns an assembled KSPL source string into top-level declarations appended to `out`.
+    //<
+    //< Caution: **Synthesize declarations through here.** A hand-built AST shows its mistakes only
+    //< in the generated C and must track every change to a declaration's shape (the grammar
+    //< `ksplc/kspl.kspeg` would stop being the canonical source).
+  parse_into_decls(base_core.arena.dup_str(src), file_path, parser, out)?
+
+priv fn parse_into_decls(src: U8$[], path: U8[], parser: kspeg.Target$@,
+  out: List<|Ast_node$@|>$@): Void?Parse_error //<
+    //< It parses and normalizes a whole source, appending its top-level declarations to `out`
+    //<
+    //< **One path for a file's text and for a synthesized declaration's**, so the two cannot
+    //< disagree on the tree's shape. `src` must outlive the tree (the nodes point into it).
+  raw: = parse_raw_ast(src, path, parser)?
+  t_norm_start: = sys.mono_us()
+  file_node: = raw.normalize_ast(src, 0).unwrap_or(null)
+  prof.norm_us += sys.mono_us() - t_norm_start
+  base_diag.ice_assert(file_node != null, "normalize_ast returned null")
+  file_node.set_kind(.k_file)
+  file_node.text = "file"
+  // A tree too deep to check is rejected as this file's failure, **not the whole run's**. The
+  // diagnostic naming the place is already printed (`validate_layout` in `../base/ast.kspls`).
+  if !file_node.validate_layout(src, path)
+    throw Parse_error.syntax_error
+  for child in file_node.children
+    out.push(child.unwrap_top_level())
+
+priv fn append_enum_variant_names(decls: List<|Ast_node$@|>$@, file_path: U8[],
+  parser: kspeg.Target$@): Void?Parse_error //<
+    //< For each enum this file declares, it synthesizes `variant_name(): U8[]` and adds it to root
+    //<
+    //< Only the compiler knows a variant name's spelling.
+    //< Caution: **Keep the return value at U8[] and do not use a Writer** — making every enum
+    //< depend on std/io would pull all of the trait's thunks into a freestanding build.
+  $src: = Str_builder.new()
+  defer src.free()
+  // Where each generated impl goes (`place_as_made` in `../base/ast_ext.kspls`): the enum's name,
+  // in the order the impls are written into `src`.
+  $origins: = List<|base_ast.Loc|>.new()
+  defer origins.free()
+  // **Push after finishing the walk** (the synthesis results are added to the same decls).
+  for decl in decls
+    if decl.kind_id != .k_decl_enum
+      continue
+    name_node: = decl.find_child(.k_identifier)
+    name: = decl.find_text(.k_identifier)
+    if name_node == null || name.len == 0 || has_user_variant_name(decls, name)
+      continue
+    $params: = Str_builder.new()
+    defer params.free()
+    if !append_gen_params(decl, params@)
+      continue // a const generic is out of scope for the synthesis
+    p: = params.slice()
+    // Caution: **Match the visibility to the enum's.** A `pub fn` on an enum that is not `pub`
+    // widens nothing, and the visibility-width check (sema/decl/access.kspls) fires pointing at
+    // generated code.
+    vis: = "pub " if decl.has_keyword("pub") else ""
+    // **Each enum's impl is built separately** and added only once a variant was read: built and
+    // cleared in `src`, one enum without variants would discard the impls of the enums before it.
+    $one: = Str_builder.new()
+    defer one.free()
+    one.s("impl").s(p).s(" ").s(name).s(p).s(" {\n  ").s(vis).s("fn variant_name(r: ").s(name).s(p)
+      .s("): U8[] {\n    switch r")
+    $any: = false
+    for v in decl.children
+      if v.kind_id != .k_enum_variant || v.children.len == 0
+        continue
+      v_name: = v.get_child(0).text
+      one.s(" case .").s(v_name).s(" { return \"").s(v_name).s("\"; }")
+      any = true
+    if !any
+      continue // no variant could be read, so nothing is synthesized
+    one.s("\n  }\n}\n")
+    src.s(one.slice())
+    origins.push(name_node.loc)
+  if src.len == 0
+    return
+
+  from: = decls.len
+  parse_synth_decls(src.slice(), file_path, parser, decls)?
+  // **One impl per enum, in the order written** (a top-level `impl` stays one declaration).
+  base_diag.ice_assert(decls.len - from == origins.len,
+    "variant_name synthesis: the impls parsed do not match the enums")
+  for i in Range.asc(origins.len)
+    decls.get(from + i).place_as_made(origins.get(i))
+
+priv fn has_user_variant_name(decls: List<|Ast_node$@|>$@, enum_name: U8[]): Bool //<
+  //< Whether that file has an impl writing `variant_name` under `impl <name>`
+  for decl in decls
+    if decl.kind_id != .k_decl_impl
+      continue
+    target: = decl.get_decl_type_node()
+    if target == null
+      continue
+    $t_name: = target.extract_type_name()
+    defer t_name.free()
+    if !t_name.slice().get_generic_base_name().equals(enum_name)
+      continue
+    for m in decl.children
+      if m.kind_id == .k_decl_fn && m.find_text(.k_identifier).equals("variant_name")
+        return true
+  return false
+
+priv fn append_gen_params(decl: Ast_node$@, out: Str_builder$@): Bool //<
+  //< It writes an enum's type arguments into out in the `<|T, U|>` shape
+  //<
+  //< Nothing where there are none; false for a const generic, whose names are not restored (the
+  //< synthesis is skipped).
+  gp: = decl.find_child(.k_type_gen_params)
+  if gp == null
+    return true
+  $names: = List<|U8[]|>.new()
+  defer names.free()
+  for p in gp.children
+    if p.find_child(.k_keyword) != null
+      return false // a type argument with `const`
+    id: = p.find_text(.k_identifier)
+    if id.len > 0
+      names.push(id)
+    else if p.kind_id == .k_identifier && p.text.len > 0
+      names.push(p.text)
+  if names.len == 0
+    return true
+  out.s("<|")
+  for i in Range.asc(names.len)
+    if i > 0
+      out.s(", ")
+    out.s(names.get(i))
+  out.s("|>")
+  return true
+
+// It owns memory and releases it with `free()` (why it must conform: `Owned` in std/lang.kspls).
+impl Profiler: Owned {}

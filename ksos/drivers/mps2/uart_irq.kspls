@@ -1,0 +1,58 @@
+//< The interrupt-driven UART0 RX driver for the ARM MPS2 AN385 (Cortex-M3)
+//<
+//< In QEMU's board definition (hw/arm/mps2.c), UART0's (0x40004000's) RX interrupt is wired to
+//< external IRQ 0 (the vector table's exception number 16).
+//< The vector table in ksos/port/cortex_m/startup.S always refers to a symbol named
+//< `uart0_irq0_handler`, but the symbol is weak (the default is in
+//< ksos/port/cortex_m/ksos_port_cm.c), so demos that do not link this driver are unaffected.
+import "ksos/drivers/cortex_m/scs"
+import "ksos/drivers/mmio"
+import "ksos/drivers/mps2/uart"
+
+const uart0_intstatus: U32 = 0x4000400c
+const ctrl_rx_inten: U32 = 0x8
+const intstatus_rx: U32 = 0x2
+
+const uart0_rx_irq: U32 = 0 // external IRQ0 (the mps2-an385's UART0 RX)
+
+$rx_ready: Bool = false
+$rx_byte: U8 = 0
+$rx_isr_count: U32 = 0
+
+fn init() //< enables TX and RX, enables the RX interrupt, and enables NVIC IRQ0
+  mmio.write32(uart.uart0_ctrl, uart.ctrl_tx_enable | uart.ctrl_rx_enable | ctrl_rx_inten)
+  scs.enable_irq(uart0_rx_irq)
+
+fn putc(c: U8): Bool //< sends one byte (sending still polls); false on a timeout
+  //<
+  //< Only RX is interrupt-driven. It reuses the polling version in ksos/drivers/mps2/uart.
+  return uart.putc(c)
+
+fn puts(s: U8[]): Bool
+  return uart.puts(s)
+
+// The NVIC IRQ0 (UART0 RX) interrupt handler. The vector table in ksos/port/cortex_m/startup.S
+// calls it directly (#export keeps the symbol name C sees unchanged).
+#export
+fn uart0_irq0_handler()
+  rx_byte = U8::mmio.read32(uart.uart0_data)
+  mmio.write32(uart0_intstatus, intstatus_rx) // clear the interrupt's cause (write-1-to-clear)
+  rx_isr_count += 1
+  rx_ready = true
+
+fn has_byte(): Bool //< whether the ISR has marked a byte as received
+  //<
+  //< The caller polls this together with WFI (WFI halts the CPU until an interrupt arrives; this is
+  //< not busy polling).
+  return rx_ready
+
+fn take_byte(): U8 //< takes the received byte (check that has_byte() is true before calling it)
+  rx_ready = false
+  return rx_byte
+
+fn irq_count(): U32 //<
+  //< How many times the ISR has run so far (it should equal the number of bytes received)
+  //<
+  //< It verifies that the ISR really ran: has_byte() alone cannot tell where the flag was set, so
+  //< this independent counter backs it up.
+  return rx_isr_count

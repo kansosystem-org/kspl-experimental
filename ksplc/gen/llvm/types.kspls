@@ -1,0 +1,451 @@
+//< Maps a KSPL type to an LLVM type string, and the low-level IR helpers
+//<
+//< The helpers are `alloca` and load/store. Two parts: the type-output methods on Ctx (t / t_gep
+//< and so on), and the Ast_node extensions that convert composite types and parameter lists.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/core" as base_core
+import "ksplc/base/diag" as base_diag
+import "ksplc/gen/llvm/ctx" as gen_llvm_ctx + { Genllvm_ctx }
+import "ksplc/sema/decl/layout" as sema_decl_layout
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "std/str"
+
+priv const max_llvm_type_depth: Sz = 1000 //<
+  //< The depth limit for Ctx.t's recursive walk down a `[N]` array chain
+  //<
+  //< The parser does not count a repeated `[N]` as depth, so a very long one could overflow the
+  //< stack; past it, had_error is set and a fallback type returned (codegen_failed reports it).
+
+priv const max_inline_zero_fill_bytes: Sz = 256 //<
+  //< The largest aggregate, in bytes, still zeroed with one `store <T> zeroinitializer`
+  //<
+  //< Above it, llvm.memset is used (see emit_zero_fill); a small type keeps a readable store.
+
+priv fn llvm_prim_name(base_str: U8[]): U8[] //<
+  //< It returns the LLVM scalar type for a KSPL primitive type name ("" for a non-primitive)
+  //<
+  //< Ctx.t_impl and Ctx.is_llvm_aggregate both read this one table; two tables would let "an i64
+  //< treated as an aggregate" slip in silently.
+  prim_map: = U8[][]::{ "I8", "i8", "I16", "i16", "I32", "i32", "I64", "i64", "U8", "i8", "U16",
+    "i16", "U32", "i32", "U64", "i64", "Sz", "i64", "Bool", "i8", "F32", "float", "F64", "double" }
+  for $i: = 0; i < prim_map.len; i += 2
+    if base_str.equals(prim_map[i])
+      return prim_map[i + 1]
+  return ""
+
+impl Genllvm_ctx
+  fn reg_str(r: Self$@, reg: I32): U8$[]
+    r.scratch.len = 0
+    r.scratch.s("%\{reg\}")
+    return r.take_scratch()
+
+  fn emit_numeric_to_i32(r: Self$@, val_reg: U8[], src_type_id: I32): U8$[] //<
+    //< It converts val_reg (a register holding the type src_type_id) to i32 and returns it
+    //<
+    //< Where it is already an i32/u32, it returns the register unchanged and emits nothing.
+    //<
+    //< It lets a main()'s Result error type give the right process exit code even when it is a
+    //< numeric type other than I32, a scalar enum included (see emit_main_wrapper in
+    //< gen/llvm/module.kspls). A fixed `ret i32 %reg` that ignores the value's type gives invalid
+    //< LLVM IR, a type mismatch, for a non-I32 type.
+    resolved_src: = r.env.scalar_repr_id(src_type_id)
+    if resolved_src == (I32::sema_type_env.Builtin_type_id.i32_type) ||
+      resolved_src == (I32::sema_type_env.Builtin_type_id.u32_type)
+      return base_core.arena.dup_str(val_reg)
+
+    is_float: = r.env.is_float(resolved_src)
+    is_unsigned: = r.env.is_unsigned(resolved_src)
+    bits: = r.env.get_primitive_bit_size(resolved_src)
+    reg: = r.next_reg()
+    r.s("    %\{reg\} = ")
+    if is_float
+      r.s("fptoui " if is_unsigned else "fptosi ")
+    else if bits < 32
+      r.s("zext " if is_unsigned else "sext ")
+    else
+      r.s("trunc ")
+    r.t(src_type_id).s(" ").s(val_reg).s(" to i32\n")
+    return r.reg_str(reg)
+
+  fn emit_numeric_coerce(r: Self$@, val_reg: U8[], src_id: I32, dst_id: I32): U8$[] //<
+    //< It returns val_reg (of type src_id) converted to dst_id's width and sign
+    //<
+    //< Where the representation is the same, it returns it unchanged and emits no instruction.
+    //<
+    //< Caution: A store must always be emitted in **the destination's type**. Integer literals
+    //< infer to I32, so `Sz$[]::{ .len = 2 }` stores an I32 into an i64; as `store i32 2` only 4
+    //< bytes are written and **the other 4 rely on the preceding zeroinitializer**.
+    src: = r.env.get_clean_real_type(src_id)
+    dst: = r.env.get_clean_real_type(dst_id)
+    if src == dst || src <= 0 || dst <= 0
+      return base_core.arena.dup_str(val_reg)
+    src_bits: = r.env.get_primitive_bit_size(src)
+    dst_bits: = r.env.get_primitive_bit_size(dst)
+    // Not both numbers, or the same width: the representation is the same.
+    if src_bits == 0 || dst_bits == 0 ||
+      (src_bits == dst_bits && !r.env.is_float(src) && !r.env.is_float(dst))
+      return base_core.arena.dup_str(val_reg)
+    if r.env.is_float(src) != r.env.is_float(dst)
+      // Sema rejects integers mixed with floating point; one here passes unconverted and shows up
+      // as LLVM's type mismatch rather than as a silently changed value.
+      return base_core.arena.dup_str(val_reg)
+    reg: = r.next_reg()
+    r.s("    %\{reg\} = ")
+    if r.env.is_float(src)
+      r.s("fpext " if dst_bits > src_bits else "fptrunc ")
+    else if dst_bits > src_bits
+      r.s("zext " if r.env.is_unsigned(src) else "sext ")
+    else
+      r.s("trunc ")
+    r.t(src_id).s(" ").s(val_reg).s(" to ").t(dst_id).s("\n")
+    return r.reg_str(reg)
+
+  fn get_or_alloc_tmp_slot(r: Self$@, node: Void$@, type_id: I32): U8$[]
+    is_existing: = r.has_local_var_id(node)
+    m_id: = r.get_or_add_local_var_id(node)
+    r.scratch.len = 0
+    r.scratch.s("%v_tmp_ast_\{m_id\}")
+    ptr_str: = r.take_scratch()
+    if !is_existing
+      r.emit_alloca(ptr_str, type_id)
+    return ptr_str
+  fn emit_ret_value(r: Self$@, val_str: U8[]) //<
+    //< It returns val_str following the ABI of the function being emitted
+    //<
+    //< val_str is a register name, or a constant such as `zeroinitializer`. In an sret function it
+    //< writes through the hidden pointer and does `ret void`. Use this rather than writing a `ret`
+    //< directly.
+    if r.current_ret_is_sret
+      r.s("    store ").t(r.current_ret_id).s(" ").s(val_str).s(", ptr ")
+        .s(gen_llvm_ctx.sret_param_name).s("\n")
+      r.s("    ret void\n")
+      return
+    r.s("    ret ").t(r.current_ret_id).s(" ").s(val_str).s("\n")
+
+  fn alloc_tmp_slot(r: Self$@, type_id: I32): U8$[] //<
+    //< It allocates new temporary memory for each call site and returns its name
+    //<
+    //< Unlike get_or_alloc_tmp_slot it is not keyed on an AST node, so it never collides (an
+    //< sret's destination, a byval copy). It goes into the alloca group at the function's start,
+    //< since an alloca in a loop grows the stack per iteration.
+    m_id: = r.var_counter
+    r.var_counter += 1
+    r.scratch.len = 0
+    r.scratch.s("%v_tmp_abi_\{m_id\}")
+    ptr_str: = r.take_scratch()
+    r.emit_alloca(ptr_str, type_id)
+    return ptr_str
+
+  fn emit_agg_param_type(r: Self$@): Self$@ //<
+    //< It emits the type of an argument that passes an aggregate explicitly through memory
+    //<
+    //< This is **a plain `ptr`**, not an `sret(%T)` / `byval(%T)`: with the attribute, how the
+    //< aggregate is passed would depend again on each target's convention.
+    return r.s("ptr")
+
+  fn emit_alloca(r: Self$@, slot: U8[], type_id: I32) //<
+    //< It writes `<slot> = alloca <type>` to the alloca group at the function's start
+    //<
+    //< An `#align(N)` struct gets `, align N` as well.
+    align_val: = r.get_struct_align(type_id)
+    prev: = r.emit.target
+    r.emit.target = .alloca
+    r.s("    ").s(slot).s(" = alloca ").t(type_id)
+    if align_val > 0
+      r.s(", align \{align_val\}")
+    r.s("\n")
+    r.emit.target = prev
+
+  fn emit_zero_fill(r: Self$@, ptr: U8[], type_id: I32) //<
+    //< It fills the type_id-sized memory that ptr points at with zeros
+    //<
+    //< A large `store <T> zeroinitializer` is expanded per element at -O0, and a big enough one
+    //< **crashes clang itself with SIGSEGV**. Above the threshold llvm.memset is used
+    //< ("A huge aggregate is not handled as a first-class value" in ksplc/docs/DESIGN.md).
+    if !base_core.config.is_freestanding
+      lay: = r.sema.type_layout(type_id)
+      if lay.size > max_inline_zero_fill_bytes
+        align_val: = lay.align if lay.align > 0 else 1
+        r.s("    call void @llvm.memset.p0.i64(ptr align \{align_val\} ").s(ptr)
+          .s(", i8 0, i64 \{lay.size\}, i1 false)\n")
+        return
+    r.s("    store ").t(type_id).s(" zeroinitializer, ptr ").s(ptr).s("\n")
+
+  fn op_load(r: Self$@, res_reg: I32, type_id: I32, ptr: U8[])
+    r.s("    %\{res_reg\} = load ").t(type_id).s(", ptr ").s(ptr).s("\n")
+  fn op_store(r: Self$@, type_id: I32, val: U8[], ptr: U8[])
+    r.s("    store ").t(type_id).s(" ").s(val).s(", ptr ").s(ptr).s("\n")
+  fn op_gep(r: Self$@, res_reg: I32, type_id: I32, ptr: U8[], idx0: I32, idx1: I32)
+    r.s("    %\{res_reg\} = getelementptr inbounds ").t(type_id).s(", ptr ").s(ptr)
+      .s(", i32 \{idx0\}, i32 \{idx1\}\n")
+  fn t_gep(r: Self$@, type_id: I32): Self$@ //<
+    //< It emits a type for a GEP's element, with unknown and void as i8
+    //<
+    //< void cannot be a GEP's element type, so those become i8 for byte-wise access; everything
+    //< else goes to t().
+    if type_id <= 0 || sema_type_env.is_unknown(type_id) || sema_type_env.is_void(type_id)
+      return r.s("i8")
+    real_id: = r.env.get_real_type(type_id)
+    if sema_type_env.is_void(real_id)
+      return r.s("i8")
+    return r.t(type_id)
+
+  fn t(r: Self$@, type_id: I32): Self$@ //<
+    //< It maps a Kanso type ID to its LLVM IR type
+    return r.t_impl(type_id, 0)
+
+  fn t_impl(r: Self$@, type_id: I32, depth: Sz): Self$@
+    if depth >= max_llvm_type_depth
+      if !r.had_error
+        base_diag.print_unplaced("", 0,
+          "array type nesting too deep (possible unbounded '[N]' chain).")
+        r.had_error = true
+      return r.s("i8")
+    if type_id <= 0 || sema_type_env.is_unknown(type_id)
+      return r.s("ptr") // an opaque type cannot be used as a value, so it becomes ptr
+
+    // The immutability qualifier (`Info.const_of`) is stripped first.
+    // **Alias resolution and qualifier stripping alternate** (`get_clean_real_type`, as in sema);
+    // doing each once leaves `const_of(alias B)` as an undefined `%..._B` (`loading unsized types
+    // is not allowed`).
+    real_id: = r.env.get_clean_real_type(type_id)
+
+    if r.env.is_fn_ptr(real_id)
+      return r.s("ptr")
+
+    info: = r.env.get_info(real_id)
+
+    switch info case .void_type
+      return r.s("void")
+    case .pointer(_base_id)
+      // Modern LLVM (v15+) uses Opaque Pointers.
+      return r.s("ptr")
+    case .array(base_id, size)
+      if size == -1
+        return r.s("ptr") // where the length is unknown, it becomes a pointer
+      return r.s("[\{size\} x ").t_impl(base_id, depth + 1).s("]")
+    case .result(_base_id, _err_id)
+      return r.s("%kspl_").s_mangled(real_id)
+    case .enum_type(def)
+      if def.is_scalar()
+        return r.t_impl(def.base_type_id, depth + 1)
+    default {}
+
+    // The LLVM IR has no const qualifier; the plain base type is used.
+    base_str: = r.env.get_str(r.env.strip_const(real_id))
+    prim: = llvm_prim_name(base_str)
+    if prim.len > 0
+      return r.s(prim)
+    // Everything else is a user-defined type such as a struct or an enum.
+    return r.s("%").s_mangled(real_id)
+
+  fn is_llvm_aggregate(r: Self$@, type_id: I32): Bool //<
+    //< Whether a type_id's LLVM form is a first-class aggregate (a struct or array)
+    //<
+    //< Caution: This must match t_impl's branches one to one (both use llvm_prim_name's table), or
+    //< an ABI mismatch (sret in the definition, a value return at the caller) is silently built in
+    //< ("Passing an aggregate is an explicit internal ABI" in ksplc/docs/DESIGN.md).
+    return r.is_llvm_aggregate_impl(type_id, 0)
+
+  priv fn is_llvm_aggregate_impl(r: Self$@, type_id: I32, depth: Sz): Bool
+    if depth >= max_llvm_type_depth
+      return false // t_impl makes it i8 too (it is not an aggregate)
+    if type_id <= 0 || sema_type_env.is_unknown(type_id)
+      return false // ptr
+    real_id: = r.env.get_clean_real_type(type_id)
+    if r.env.is_fn_ptr(real_id)
+      return false // ptr
+    switch r.env.get_info(real_id) case .void_type
+      return false
+    case .pointer(_base_id)
+      return false
+    case .array(_base_id, size)
+      return size != -1 // an unknown length becomes ptr
+    case .result(_base_id, _err_id)
+      return true // %kspl_<T> = { i8, <err>, <val> }
+    case .enum_type(def)
+      if def.is_scalar()
+        return r.is_llvm_aggregate_impl(def.base_type_id, depth + 1)
+      return true
+    default {}
+
+    // A primitive gives the scalar type, anything else a named struct or trait type.
+    return llvm_prim_name(r.env.get_str(r.env.strip_const(real_id))).len == 0
+
+  fn ret_needs_sret(r: Self$@, type_id: I32): Bool //<
+    //< Whether a return type type_id should be returned by an explicit `sret` pointer argument
+    //<
+    //< The LLVM IR accepts a multi-field first-class aggregate such as `ret { i64, i64 }`, but
+    //< which registers or memory it ends up in is not fixed by any ABI. No aggregate return value
+    //< crosses the FFI boundary (`#ext` / `#export`), so this internal ABI can be chosen
+    //< independently without drifting from C. Where a form that could drift appears,
+    //< gen/llvm/decl.kspls fails with an ICE.
+    return r.is_llvm_aggregate(type_id)
+  fn get_struct_align(r: Self$@, type_id: I32): I32 //<
+    //< The `#align(N)` a named struct type requires (0 where there is none)
+    //<
+    //< A named struct type cannot carry an alignment, so each alloca or global adds `, align N`
+    //< taken from here.
+    $align_val: I32 = 0
+    // With an immutability qualifier on the type name, the struct definition is not found and the
+    // `#align(N)` is silently lost (it is stripped for the same reason as in t_impl).
+    if sdef: = r.env.get_struct_def(r.env.get_str(r.env.strip_const(type_id)))
+      align_val = sdef.align_attr
+    return align_val
+
+fn emit_complex_types(cg: Genllvm_ctx$@)
+  $seen: = sema_type_env.Mangle_seen.new(cg.env)
+  defer seen.free()
+
+  for type_id in cg.env.complex_types
+    info: = cg.env.get_info(type_id)
+    cg.clear_scratch()
+    cg.env.mangle_type_id_to(type_id, cg.scratch)
+    m_slice: = cg.scratch.slice()
+    if seen.admit(type_id)
+      switch info case .result(base_id, err_id)
+        // A Result is the struct { is_err (i8), error_code, val }.
+        cg.s("%kspl_").s(m_slice).s(" = type { i8, ")
+        cg.t(err_id)
+        if !sema_type_env.is_void(base_id)
+          cg.s(", ").t(base_id)
+        cg.s(" }\n")
+      default {}
+  // It defines the base type of a string slice.
+  cg.s("%U8_Slice = type { ptr, i64 }\n")
+  cg.s("%Const_U8_Slice = type { ptr, i64 }\n\n")
+
+impl Ast_node
+  fn emit_llvm_type_decl(r: Ast_node$@, cg: Genllvm_ctx$@)
+    if r == null
+      return
+
+    switch r.kind_id case .k_decl_struct
+      r.emit_llvm_struct(cg)
+    case .k_decl_enum
+      r.emit_llvm_enum(cg)
+    case .k_decl_trait
+      r.emit_llvm_trait(cg)
+    default {}
+  fn emit_llvm_param_list(r: Ast_node$@, cg: Genllvm_ctx$@, opts: gen_llvm_ctx.Param_list_opts):
+    Bool //<
+      //< The shared code that emits LLVM's argument list separated by ", "
+      //<
+      //< Declarations, definitions and variadic calls share it. It returns true where it emitted
+      //< anything (so the caller can add a ", ..." at the end).
+    if r == null
+      return opts.emitted_before
+    $is_first: = !opts.emitted_before
+    for param in r.children
+      if param.kind_id == .k_fn_param
+        if !is_first
+          cg.s(", ")
+        p_type: = param.get_decl_type_node()
+        p_type_id: = p_type.type_id if p_type != null else 0
+        if p_type == null
+          cg.s("ptr")
+        else if opts.kspl_abi && cg.is_llvm_aggregate(p_type_id)
+          cg.emit_agg_param_type()
+        else
+          cg.t(p_type_id)
+        if opts.with_names
+          id_node: = param.find_child(.k_identifier)
+          cg.s(" %").s(id_node.text if id_node != null else "unknown")
+        is_first = false
+      else if opts.emit_variadic && param.is_literal("...")
+        if !is_first
+          cg.s(", ")
+        cg.s("...")
+        is_first = false
+    return !is_first
+  priv fn mangled_type_name(r: Ast_node$@, cg: Genllvm_ctx$@): U8[] //<
+    //< It returns the mangled name of a type ID ("" where the type is unresolved)
+    //<
+    //< The caller skips a type that returns "".
+    if r.type_id == 0
+      return ""
+    cg.clear_scratch()
+    cg.env.mangle_type_id_to(r.type_id, cg.scratch)
+    return cg.take_scratch()
+
+  priv fn emit_llvm_struct(r: Ast_node$@, cg: Genllvm_ctx$@)
+    m_name: = r.mangled_type_name(cg)
+    if m_name.len == 0
+      return
+
+    $is_packed: = false
+    $size_val: I32 = 0
+    if struct_def: = cg.env.get_struct_def(cg.env.get_str(r.type_id))
+      is_packed = struct_def.is_packed
+      size_val = struct_def.size_attr
+
+    // An opaque struct only reserves the space, as in gen/c/types.kspls. The `align N` at each
+    // use carries the alignment (get_struct_align).
+    if size_val > 0
+      cg.s("%").s(m_name).s(" = type { [\{size_val\} x i8] }\n")
+      return
+    cg.s("%").s(m_name).s(" = type <{ " if is_packed else " = type { ")
+
+    $is_first: = true
+    for c in r.children
+      if c.kind_id == .k_struct_field
+        type_node: = c.get_decl_type_node()
+        if type_node != null
+          if !is_first
+            cg.s(", ")
+          cg.t(type_node.type_id)
+          is_first = false
+    cg.s(" }>\n" if is_packed else " }\n")
+
+  priv fn emit_llvm_enum(r: Ast_node$@, cg: Genllvm_ctx$@)
+    m_name: = r.mangled_type_name(cg)
+    if m_name.len == 0
+      return
+
+    if !cg.env.is_scalar_enum(r.type_id)
+      // LLVM has no tagged union, so a non-scalar enum is declared as "the tag (i32) plus raw
+      // bytes". Field access (emit_llvm_enum_init_call / match) gives the GEP an anonymous struct
+      // of the payload types; with opaque pointers the GEP type only sets the offset.
+      lay: = cg.sema.type_layout(r.type_id)
+
+      if lay.align >= 8
+        n: = (lay.size - 8) / 8
+        if n > 0
+          cg.s("%").s(m_name).s(" = type { i32, [\{n\} x i64] }\n")
+        else
+          cg.s("%").s(m_name).s(" = type { i32 }\n")
+      else
+        n: = (lay.size - 4) / 4
+        if n > 0
+          cg.s("%").s(m_name).s(" = type { i32, [\{n\} x i32] }\n")
+        else
+          cg.s("%").s(m_name).s(" = type { i32 }\n")
+
+  priv fn emit_llvm_trait(r: Ast_node$@, cg: Genllvm_ctx$@)
+    m_name: = r.mangled_type_name(cg)
+    if m_name.len == 0
+      return
+
+    fqn_name: = cg.env.get_str(r.type_id)
+
+    cg.s("%").s(m_name).s(" = type { ptr, ptr }\n")
+
+    if trait_def: = cg.env.get_trait_def(fqn_name)
+      cg.s("%kspl_vtable_").s(m_name).s(" = type { ")
+      // Caution: **Count only the methods that have a slot.** The code that fills the table
+      // (`../../lower/vtable.kspls`) skips by the same predicate; counting all here makes the
+      // element counts disagree, and LLVM rejects it with
+      // `initializer with struct type has wrong # elements`.
+      $is_first: = true
+      for method in trait_def.methods_list
+        if !method.node.has_vtable_slot()
+          continue
+        if !is_first
+          cg.s(", ")
+        cg.s("ptr")
+        is_first = false
+      if is_first
+        cg.s("ptr")
+      cg.s(" }\n")

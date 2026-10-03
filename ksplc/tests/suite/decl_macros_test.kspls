@@ -1,0 +1,164 @@
+#!/usr/bin/env -S ksplc run
+//< It checks that KSPL handles **every one** of the names the declaration-half headers `#define`
+//<
+//< Caution: **Do not keep the list of replaced names by hand.** Which names get replaced changes
+//< with libc's version. A name erased by `#undef` disappears from `-dM -E`'s output, so the output
+//< itself lists the names not yet erased. **Do not pin down which names or how many pass**, only
+//< that every one is handled.
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/harness_build"
+import "std/chars"
+import "std/ds" { List, Map }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+priv const impl_mark: U8[] = "/* ---- kspl runtime implementation half ---- */\n" //<
+  //< The mark for the start of the definition half
+  //<
+  //< The source is `impl_half_mark` in `ksplc/gen/runtime.kspls`.
+
+priv fn is_kspl_identifier(name: U8[], keywords: Map<|U8[], Bool|>$@): Bool //<
+  //< Whether the name can be written as a KSPL identifier
+  //<
+  //< **A name that cannot be written is out of scope.** `true` / `false` stop at KSPL's syntax
+  //< diagnostic before reaching C.
+  if name.len == 0
+    return false
+  if !(name[0].is_alpha() || name[0] == '_')
+    return false
+  for i in Range.asc(name.len)
+    if !(name[i].is_alnum() || name[i] == '_')
+      return false
+  return !(keywords.get(name) catch {
+    fallback false;
+  })
+
+priv fn is_snake_case(name: U8[]): Bool //<
+  //< Whether [I0502] stays silent on name at every position where a bare name is written
+  //<
+  //< Those positions are a local variable, a formal parameter and a field.
+  //< **This sets the check's scope.** Loosen it and the test demands names the naming check
+  //< rejects; tighten it and names that really can collide are missed.
+  if name.len == 0 || !name[0].is_lower()
+    return false
+  for i in Range.asc(name.len)
+    if !(name[i].is_lower() || name[i].is_digit() || name[i] == '_')
+      return false
+  return true
+
+priv fn keywords_of(arena: Arena$@): Map<|U8[], Bool|>$@ //<
+  //< It collects the reserved words from `ksplc info keywords`'s output (an indented line is one)
+  out: = arena.create(Map<|U8[], Bool|>.new(arena))
+  r: = harness.ksplc_bare(U8[][]::{ "info", "keywords" })
+  if r.code != 0
+    return out
+  for line in r.out.lines(arena)
+    if line.len == 0 || !line[0].is_space()
+      continue
+    w: = line.trim_spaces()
+    if w.len > 0
+      out.set(w, true)
+  return out
+
+priv fn object_macro_name(line: U8[]): U8[] //<
+  //< From one line of `cc -dM -E`, it extracts an object-like macro's name
+  //<
+  //< Caution: **Do not include the function-like form (`#define max(a,b) ...`).** It expands only
+  //< before a `(`, so an identifier of the same name is safe. A space right after the name tells
+  //< them apart.
+  head: U8[] = "#define "
+  if !line.starts_with(head)
+    return ""
+  rest: = line.sub_from(head.len)
+  $i: Sz = 0
+  for i < rest.len && (rest[i].is_alnum() || rest[i] == '_')
+    i += 1
+  if i == 0 || i >= rest.len || !rest[i].is_space()
+    return ""
+  return rest.sub(0, i)
+
+priv fn program_using(names: List<|U8[]|>, arena: Arena$@): U8[] //<
+  //< It builds one KSPL program that uses each of names wherever a bare name is written
+  //<
+  //< Caution: **Put them into one program.** One per name means dozens of builds; in one, the C
+  //< compiler's error still names the name that failed.
+  b: = arena.text()
+  b.s("struct Holder {\n")
+  for n in names
+    b.s("  ").s(n).s(": I32;\n")
+  b.s("}\n\n")
+  // Caution: **Put the formal parameter and the local in different functions.** The same name for
+  // both in one function is a redefinition in C, a fault of the test program rather than of KSPL.
+  for n in names
+    b.s("priv fn take_").s(n).s("(").s(n).s(": I32): I32 {\n  return ").s(n).s(";\n}\n\n")
+    b.s("priv fn local_").s(n).s("(v: I32): I32 {\n  ").s(n).s(": = v + 1;\n  return ").s(n)
+      .s(";\n}\n\n")
+  b.s("fn main(): I32 {\n  h: Holder = ::{ ")
+  for n in names
+    b.s(".").s(n).s(" = 1, ")
+  b.s(" };\n  held: Holder@ = h@;\n  $total: I32 = 0;\n")
+  for n in names
+    b.s("  total += take_").s(n).s("(h.").s(n).s(") + held.").s(n).s(" + local_").s(n).s("(1);\n")
+  b.s("  return 0 if total > 0 else 1;\n}\n")
+  return b.take()
+
+fn main(): I32
+  arena: = harness.begin(16 * 1024 * 1024)
+  work: = harness.sandbox("declmacro") catch
+    return harness.fatal("cannot make a working directory")
+
+  // The declaration half; `emit-runtime` does not take `--std-dir`, so ksplc_bare is used.
+  rt: = fs.join(work, "runtime.c", arena)
+  e: = harness.ksplc_bare(U8[][]::{ "emit-runtime", rt })
+  if e.code != 0
+    return harness.fatal(arena.text().s("emit-runtime failed\n\{e.out\}").take())
+  text: = harness.read_generated(rt)
+  cut: = text.find_str(impl_mark)
+  if cut < 0
+    return harness.fatal("no mark for the body half (impl_half_mark in ksplc/gen/runtime.kspls)")
+  decl: = fs.join(work, "decl_half.c", arena)
+  half: = arena.text()
+  half.s(text.sub(0, cut)).s("\nint main(void) { return 0; }\n")
+  io.write_file(decl, half.take()) catch
+    return harness.fatal("the declaration half cannot be written")
+
+  probe: = harness.run(U8[][]::{ harness.cc(), "-std=c99", "-dM", "-E", decl })
+  if probe.code != 0
+    verdict.skip_check("counting up the names the declaration half's macros replace",
+      "cc does not hold `-dM -E` (under MSVC they cannot be counted up this way)")
+    return harness.finish()
+  keywords: = keywords_of(arena)
+  $names: = List<|U8[]|>.new(arena)
+  $skipped: Sz = 0
+  for line in probe.out.lines(arena)
+    name: = object_macro_name(line)
+    if name.len == 0
+      continue
+    // Not snake_case: the naming check rejects it, so it is out of scope.
+    if !is_snake_case(name) || !is_kspl_identifier(name, keywords)
+      skipped += 1
+      continue
+    names.push(name)
+  verdict.check("the counting up is not empty (cc's output is being read)",
+    names.len > 0 || skipped > 0, probe.out)
+  if names.len == 0
+    return harness.finish()
+
+  src: = fs.join(work, "decl_macro_names.kspl", arena)
+  body: = program_using(names, arena)
+  io.write_file(src, body) catch
+    return harness.fatal("cannot write the material")
+  b: = harness_build.build_and_run(src, work, "decl_macro_names", U8[][]::{})
+  why: = arena.text()
+  why.s("the material using the \{names.len\} counted up at every position does not build.\n")
+    .s("Caution: Add the name the C compiler's error named to the `#undef` in ")
+    .s("`ksplc/gen/c/ctx.kspls`,\nor if it cannot be erased, to `is_preamble_macro` in ")
+    .s("`ksplc/base/c_name.kspls`.\n").s(b.out)
+  note: = why.take()
+  verdict.check("every name the declaration half's macros replace passes as a bare name",
+    b.built && b.code == 0, note)
+  return harness.finish()

@@ -1,0 +1,119 @@
+//< The GPIO driver for the real Raspberry Pi Pico / Pico W (RP2040) chip
+//<
+//< Its GPIO is split across three blocks — PADS_BANK0 (the electrical settings), IO_BANK0
+//< (FUNCSEL) and SIO (the value and direction). An output needs all three; miss one and nothing
+//< happens, silently.
+
+// ==========================================
+// The register map is in "GPIO (`gpio.kspls`)" in ksos/docs/DESIGN.md.
+// SIO's SET/CLR/XOR registers change single bits without a read-modify-write.
+// QEMU has no RP2040 board model: it is checked on a real Pico W (stage 1 in
+// ksos/docs/HOWTO-bring-up.md).
+// ==========================================
+import "ksos/drivers/mmio"
+import "ksos/drivers/rp2040/resets"
+
+const reset_io_bank0: U32 = 1U32 << 5
+const reset_pads_bank0: U32 = 1U32 << 8
+
+const io_bank0_base: U32 = 0x40014000
+const pads_bank0_base: U32 = 0x4001c000
+
+const sio_gpio_in: U32 = 0xd0000004
+const sio_gpio_out_set: U32 = 0xd0000014
+const sio_gpio_out_clr: U32 = 0xd0000018
+const sio_gpio_out_xor: U32 = 0xd000001c
+const sio_gpio_oe_set: U32 = 0xd0000024
+const sio_gpio_oe_clr: U32 = 0xd0000028
+
+const funcsel_sio: U32 = 5
+const pad_pde: U32 = 1U32 << 2
+const pad_pue: U32 = 1U32 << 3
+const pad_ie: U32 = 1U32 << 6
+const pad_od: U32 = 1U32 << 7
+
+fn init(): Bool //< takes IO_BANK0 and PADS_BANK0 out of reset
+  //<
+  //< Call it once before using GPIO (twice is safe). true once they are out; the wait has a
+  //< timeout (`unreset` in `resets.kspls`).
+  both: = reset_io_bank0 | reset_pads_bank0
+  return resets.unreset(both)
+
+fn select_function(pin: U32, funcsel: U32) //<
+  //< Switches pin's function to funcsel and clears its output disable
+  //<
+  //< It also enables the input. Drivers for other functions (PWM=4 and the like) use it too, so
+  //< the register layout stays inside this file.
+  pad_addr: = pads_bank0_base + 0x04 + 4 * pin
+  pad: = mmio.read32(pad_addr)
+  mmio.write32(pad_addr, (pad & ~pad_od) | pad_ie)
+  ctrl_addr: = io_bank0_base + 0x04 + 8 * pin
+  mmio.write32(ctrl_addr, funcsel)
+
+fn init_out(pin: U32) //< makes pin an SIO output (Low to start)
+  //<
+  //< Call it after init().
+  select_function(pin, funcsel_sio)
+  // Drive Low before enabling the output (so no undefined value appears when it is enabled)
+  clear(pin)
+  mmio.write32(sio_gpio_oe_set, 1U32 << pin)
+
+fn init_in(pin: U32) //< makes pin an SIO input
+  //<
+  //< **No pull is set: the other end must drive High/Low itself**, or the value floats. For a
+  //< pull, use init_in_pull.
+  select_function(pin, funcsel_sio)
+  mmio.write32(sio_gpio_oe_clr, 1U32 << pin)
+
+fn init_in_pull(pin: U32, up: Bool) //<
+  //< Makes pin an SIO input with a pull-up (up=true) or a pull-down
+  init_in(pin)
+  pad_addr: = pads_bank0_base + 0x04 + 4 * pin
+  pad: = mmio.read32(pad_addr)
+  cleared: = pad & ~(pad_pue | pad_pde)
+  mmio.write32(pad_addr, cleared | (pad_pue if up else pad_pde))
+
+fn read(pin: U32): Bool //< true if pin's input is High
+  //<
+  //< Call it after init_in / init_in_pull.
+  return (mmio.read32(sio_gpio_in) & (1U32 << pin)) != 0
+
+fn set_pull(pin: U32, up: Bool, down: Bool) //< changes only pin's pull-up/pull-down
+  //<
+  //< It does not touch FUNCSEL: it is **for a pull on a pin with another function, such as
+  //< I2C** (init_in_pull switches the pin back to SIO).
+  pad_addr: = pads_bank0_base + 0x04 + 4 * pin
+  pad: = mmio.read32(pad_addr)
+  $v: U32 = pad & ~(pad_pue | pad_pde)
+  if up
+    v |= pad_pue
+  if down
+    v |= pad_pde
+  mmio.write32(pad_addr, v)
+
+fn init_analog(pin: U32) //<
+  //< Connects pin to the ADC input (meaningful only for GPIO 26 to 29)
+  //<
+  //< Caution: **Turn off both the digital input buffer and the pulls**, or they load the analog
+  //< voltage and the readings drift. FUNCSEL is not touched (the ADC path is separate).
+  pad_addr: = pads_bank0_base + 0x04 + 4 * pin
+  pad: = mmio.read32(pad_addr)
+  mmio.write32(pad_addr, pad & ~(pad_ie | pad_pue | pad_pde))
+
+fn set(pin: U32)
+  mmio.write32(sio_gpio_out_set, 1U32 << pin)
+
+fn clear(pin: U32)
+  mmio.write32(sio_gpio_out_clr, 1U32 << pin)
+
+fn toggle(pin: U32)
+  mmio.write32(sio_gpio_out_xor, 1U32 << pin)
+
+fn spin(iters: U32) //< a rough busy wait
+  //<
+  //< Its real duration is **not guaranteed**. **Where time matters, use rp2040/timer**; this is for
+  //< before clocks.init. It reads SIO volatile each iteration, since an empty loop vanishes at -Os.
+  $i: U32 = 0
+  for i < iters
+    _ignored: = mmio.read32(sio_gpio_in)
+    i += 1

@@ -1,0 +1,94 @@
+//< Reads the answer of `semanticTokens/full`, kept apart from the suite that asks for it
+//<
+//< Note: It is kept apart from `../suite/lsp_test.kspls` and uses nothing else there: it decodes
+//< five-number rows and knows no JSON-RPC. The reference goes one way, from the suite into here
+//< ("Files near the limit and how they split" in `../../README.md`).
+import "std/chars" // the single-character checks
+import "std/json"
+import "std/mem" { Arena }
+
+struct Toks //< it decodes `semanticTokens/full`'s answer
+  //<
+  //< **Five numbers make one token** (the line delta, the column delta, the length, the kind, the
+  //< modifiers). **They are deltas, absolute only once summed**, or the colour lands off the text.
+  count: Sz
+  // Whether a kind number beyond the declared kinds appeared.
+  over: Bool
+  // Whether a position was not ascending.
+  back: Bool
+  // Whether there was one whose length was 0 or under.
+  empty: Bool
+
+fn read_tokens(data: json.Val, types: Sz, arena: Arena$@): Toks
+  // A JSON array is a linked list, copied into a list to index (`arr_list` in `std/json`).
+  nums: = data.arr_list(arena)
+  n: = nums.len
+  $got: = Toks::{ .count = 0, .over = false, .back = false, .empty = false }
+  if n == 0 || n % 5 != 0
+    return got
+  $line: I32 = 0I32
+  $char: I32 = 0I32
+  $first: = true
+  for $i: Sz = 0; i + 4 < n; i += 5
+    d_line: = nums.get(i).as_int(-1I32)
+    d_char: = nums.get(i + 1).as_int(-1I32)
+    wide: = nums.get(i + 2).as_int(0I32)
+    kind: = nums.get(i + 3).as_int(-1I32)
+    if d_line < 0I32 || d_char < 0I32
+      got.back = true
+    if wide <= 0I32
+      got.empty = true
+    if kind < 0I32 || kind >= I32::types
+      got.over = true
+    // **If the line changes, the column counts from the line's start**, else it is added.
+    if d_line > 0I32 || first
+      line += d_line
+      char = d_char
+    else
+      char += d_char
+    first = false
+    got.count += 1
+  return got
+
+fn off_words(data: json.Val, src: U8[], arena: Arena$@): Sz //<
+  //< How many tokens do not cover one whole name as written
+  //<
+  //< **A colour on anything but a name is a token nobody wrote there** (one the compiler made,
+  //< read at its own string's positions, lands on a string or inside a keyword). The column is
+  //< taken as the byte, so give it an ASCII source.
+  nums: = data.arr_list(arena)
+  $line: I32 = 0I32
+  $char: I32 = 0I32
+  $head: Sz = 0 // where the token's line starts
+  $at_line: I32 = 0I32 // the line `head` is for
+  $bad: Sz = 0
+  for $i: Sz = 0; i + 4 < nums.len; i += 5
+    d_line: = nums.get(i).as_int(-1I32)
+    d_char: = nums.get(i + 1).as_int(-1I32)
+    wide: = nums.get(i + 2).as_int(0I32)
+    if d_line > 0I32 || i == 0
+      line += d_line
+      char = d_char
+    else
+      char += d_char
+    for at_line < line && head < src.len
+      if src[head] == '\n'
+        at_line += 1
+      head += 1
+    from: = head + Sz::char
+    to: = from + Sz::wide
+    if !is_word(src, from, to)
+      bad += 1
+  return bad
+
+priv fn is_word(src: U8[], from: Sz, to: Sz): Bool //< whether [from, to) is one whole name
+  if from >= to || to > src.len
+    return false
+  for $k: Sz = from; k < to; k += 1
+    if !is_name_char(src[k])
+      return false
+  return (from == 0 || !is_name_char(src[from - 1])) &&
+    (to == src.len || !is_name_char(src[to]))
+
+priv fn is_name_char(ch: U8): Bool
+  return ch.is_alnum() || ch == '_'

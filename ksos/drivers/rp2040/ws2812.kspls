@@ -1,0 +1,128 @@
+//< Drives WS2812 (daisy-chained full-colour LEDs) from one pin
+//<
+//< WS2812 uses one line at 800kHz, where **the length of the High pulse is the bit's value**.
+
+// ==========================================
+// The bit timing, why PWM counts it rather than software, the slack each period leaves and why
+// PIO is not used are all in "The WS2812 full-color LED" in ksos/docs/DESIGN.md.
+// Caution: **Mind the current** — one LED draws close to 60mA, so the caller keeps the brightness
+// low.
+// ==========================================
+
+// How it is used:
+
+//   if !ws2812.init(board.ws2812_pin) { … }
+//   _ok: = ws2812.send(U32[]::{ .ptr = px[0]@, .len = 8 });
+import "ksos/drivers/mmio"
+import "ksos/drivers/rp2040/clocks"
+import "ksos/drivers/rp2040/pwm"
+import "ksos/drivers/rp2040/timer"
+import "ksos/kernel/task"
+
+priv const bit_counts: U32 = clocks.sys_hz / 800000 //< one bit's period, in counts
+  //<
+  //< It counts clk_sys with no divisor, so 1 count = 1/clk_sys.
+  //< Caution: **Keep it an expression, not a number**, or a changed clk_sys gives wrong colours
+  //< even with correct wiring.
+priv const bit_top: U32 = bit_counts - 1 //<
+  //< PWM's TOP is the wrap value, so the period is TOP+1 counts
+priv const high_0: U32 = clocks.sys_hz / 2500000 //< the High pulse's length
+  //<
+  //< 0 is 0.4us (= 1/2.5MHz) and 1 is 0.8us (= 1/1.25MHz).
+priv const high_1: U32 = clocks.sys_hz / 1250000
+priv const tail_gate: U32 = high_1 + 2 //<
+  //< The count at which the next period's duty may be written
+  //<
+  //< Caution: **It must be after `high_1`** (before it, the pulse is cut short). It is a
+  //< boundary, not a margin, so +2 is enough; more narrows the window for the write.
+
+priv const latch_us: U32 = 80 //< the Low time in µs at the end that latches the colours
+  //<
+  //< The standard's minimum is 50µs; this leaves some margin.
+
+const max_pixels: Sz = 8 //< how many LEDs can be sent at once
+  //<
+  //< **The bytes in wire order are built here**, so to send more, enlarge this array.
+priv $wire: U8[max_pixels*3]
+
+// This pin's PWM registers, and the two values written to them.
+//
+// **The values written to CC are computed in full at init**; the sending loop only writes one of
+// the two. The C compiler would move any arithmetic in there **after** the wait, eating the slack.
+priv $ctr_addr: U32 = 0
+priv $cc_addr: U32 = 0
+// The CC values for a 0 bit, a 1 bit, and dark; the other channel's duty is kept.
+priv $cc_for_0: U32 = 0
+priv $cc_for_1: U32 = 0
+priv $cc_for_low: U32 = 0
+priv $ready: Bool = false
+
+fn init(pin: U32): Bool //<
+  //< Connects the pin to the PWM for WS2812 and returns true once it is ready
+  //<
+  //< **It starts at duty 0 (Low)**; otherwise a pulse from the previous value gives an LED a
+  //< garbled colour.
+  ready = false
+  if !pwm.init()
+    return false
+  pwm.config_slice(pwm.slice_of(pin), 1, 0, bit_top)
+  pwm.set_level(pin, 0)
+  pwm.init_pin(pin)
+  ctr_addr = pwm.ctr_addr_of(pin)
+  cc_addr = pwm.cc_addr_of(pin)
+  shift: U32 = 16 if pwm.is_channel_b(pin) else 0
+  cur: = mmio.read32(cc_addr)
+  other: = (cur & 0x0000FFFF) if pwm.is_channel_b(pin) else (cur & 0xFFFF0000)
+  cc_for_0 = other | (high_0 << shift)
+  cc_for_1 = other | (high_1 << shift)
+  cc_for_low = other
+  ready = true
+  return true
+
+priv fn fill_wire(pixels: U32[]): Sz //< builds the bytes sent on the line
+  //<
+  //< Each LED is given as 0xRRGGBB and reordered into **G, R, B**.
+  $n: Sz = 0
+  for c in pixels
+    wire[n] = U8::((c >> 8) & 0xff) // G
+    wire[n + 1] = U8::((c >> 16) & 0xff) // R
+    wire[n + 2] = U8::(c & 0xff) // B
+    n += 3
+  return n
+
+// The sending loop. **Only this function runs from RAM** (why: the DESIGN.md section above).
+// Caution: **Take both the address and the value as arguments.** Within the slack, all it can do
+// is "write one of the two".
+// **Call no function either** (a flash read overruns the slack). **Whenever arithmetic is added,
+// read the generated instructions again.**
+#noinline
+#section(".ram_text")
+priv fn send_window(ctr: U32, cc: U32, lo: U32, hi: U32, low: U32, len: Sz)
+  for $i: Sz = 0; i < len; i += 1
+    b: = U32::wire[i]
+    $mask: U32 = 0x80
+    for mask != 0
+      w: = hi if (b & mask) != 0 else lo
+      // Wait for the current period's tail (so the pulse being sent is not cut short).
+      for mmio.read32(ctr) < tail_gate {}
+      mmio.write32(cc, w)
+      // Wait for the wrap (the bit just written is being sent).
+      for mmio.read32(ctr) >= tail_gate {}
+      mask >>= 1
+  // Send the last bit in full, then return to Low. Without this the final bit repeats.
+  for mmio.read32(ctr) < tail_gate {}
+  mmio.write32(cc, low)
+
+fn send(pixels: U32[]): Bool //< sends the LEDs' colours (one LED = 0xRRGGBB)
+  //<
+  //< true once they are sent.
+  //< **Interrupts are off while it sends** (30µs per LED), so do not call it every loop.
+  if !ready || pixels.len > max_pixels
+    return false
+  len: = fill_wire(pixels)
+  st: = task.irq_save()
+  send_window(ctr_addr, cc_addr, cc_for_0, cc_for_1, cc_for_low, len)
+  task.irq_restore(st)
+  // The latch wait happens after interrupts are restored (it may be long).
+  timer.delay_us(latch_us)
+  return true

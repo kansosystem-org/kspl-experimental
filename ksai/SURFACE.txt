@@ -1,0 +1,276 @@
+# The record of the API this package publishes, written by ksplc --emit-surface.
+# Caution: Do not fix it by hand. Change the API, remake it with `make surface`, and commit the diff.
+# The columns are tab-separated: the file's logical name / the key / the text / the documentation (left off where there is none). Rows are by key, ascending.
+ksai/attention_train	Attention_grads	pub struct Attention_grads<|T|>	the four projections' weight gradients
+ksai/attention_train	Attention_grads.wk	pub wk: Tensor<|T|>	the key projection's gradient
+ksai/attention_train	Attention_grads.wo	pub wo: Tensor<|T|>	the output projection's gradient
+ksai/attention_train	Attention_grads.wq	pub wq: Tensor<|T|>	the query projection's gradient
+ksai/attention_train	Attention_grads.wv	pub wv: Tensor<|T|>	the value projection's gradient
+ksai/attention_train	Attention_grads<|T|>.accumulate	pub fn accumulate(r: Self$@, o: Self$@)	adds another sequence's gradients in, in place
+ksai/attention_train	Attention_train	pub struct Attention_train<|T|>	what the forward pass keeps for the backward pass
+ksai/attention_train	Attention_train.attn_weights	pub attn_weights: Tensor<|T|>	how much each position attends to each earlier one, [S,S]
+ksai/attention_train	Attention_train.context	pub context: Tensor<|T|>	what the attention gathered, A·V, [S,d]
+ksai/attention_train	Attention_train.k_rope	pub k_rope: Tensor<|T|>	K after the positional rotation, [S,d]
+ksai/attention_train	Attention_train.out	pub out: Tensor<|T|>	the layer's output, [S,d]
+ksai/attention_train	Attention_train.q_rope	pub q_rope: Tensor<|T|>	Q after the positional rotation, [S,d]
+ksai/attention_train	Attention_train.scale	pub scale: F64	the factor the scores were multiplied by before the softmax, 1/sqrt(dim)
+ksai/attention_train	Attention_train.v	pub v: Tensor<|T|>	V, [S,d]
+ksai/attention_train	Attention_train.x	pub x: Tensor<|T|>	the input it was given, [S,d]
+ksai/attention_train	nn.Self_attention<|T|>.apply_grads	pub fn apply_grads(r: Self$@, g: Attention_grads<|T|>$@, u: optim.Updater<|T|>$@)	moves the four weights by `g`
+ksai/attention_train	nn.Self_attention<|T|>.backward	pub fn backward(r: Self$@, c: Attention_train<|T|>$@, dout: Tensor<|T|>, lr: F64): Tensor<|T|>	one SGD step on all four weights; returns the input's gradient
+ksai/attention_train	nn.Self_attention<|T|>.backward_grads	pub fn backward_grads(r: Self$@, c: Attention_train<|T|>$@, $dout: Tensor<|T|>, g: Attention_grads<|T|>$@): Tensor<|T|>	writes the four weights' gradients to `g`; returns the input gradient
+ksai/attention_train	nn.Self_attention<|T|>.backward_lora	pub fn backward_lora(r: Self$@, c: Attention_train<|T|>$@, $dout: Tensor<|T|>, lr: F64, q_lora: lora.Lora<|T|>$@, v_lora: lora.Lora<|T|>$@): Tensor<|T|>	one step on the adapters only; the four base weights stay frozen. The returned gradient is the sum of the base path and the adapter path.
+ksai/attention_train	nn.Self_attention<|T|>.train_forward	pub fn train_forward(r: Self$@, x: Tensor<|T|>): Attention_train<|T|>	runs the whole sequence at once, keeping what the backward pass needs. It is `train_forward_lora` with no adapter (null skips both delta paths).
+ksai/attention_train	nn.Self_attention<|T|>.train_forward_lora	pub fn train_forward_lora(r: Self$@, x: Tensor<|T|>, q_lora: lora.Lora<|T|>$@, v_lora: lora.Lora<|T|>$@): Attention_train<|T|>	the same as `train_forward`, with the adapters' delta added. It does not update the base weights (wq/wk/wv/wo) at all, and adds the adapters' delta to Q's and V's outputs (symmetrical with inference's `forward_lora`).
+ksai/block_train	Block_grads	pub struct Block_grads<|T|>	every weight gradient of one block
+ksai/block_train	Block_grads.attention	pub attention: attn_train.Attention_grads<|T|>	the attention's four projections' gradients
+ksai/block_train	Block_grads.attention_norm	pub attention_norm: nn_grad.Rms_norm_grads<|T|>	the first norm's gradient
+ksai/block_train	Block_grads.ffn	pub ffn: nn_grad.Mlp_grads<|T|>	the gradients of the feed-forward part's two layers
+ksai/block_train	Block_grads.ffn_norm	pub ffn_norm: nn_grad.Rms_norm_grads<|T|>	the second norm's gradient
+ksai/block_train	Block_grads<|T|>.accumulate	pub fn accumulate(r: Self$@, o: Self$@)	adds another sequence's gradients in, in place
+ksai/block_train	Block_train	pub struct Block_train<|T|>	what the forward pass keeps for the backward pass
+ksai/block_train	Block_train.attn	pub attn: attn_train.Attention_train<|T|>	what the attention kept, including its own output
+ksai/block_train	Block_train.h	pub h: Tensor<|T|>	the sum after the first residual, which is also the second norm's input
+ksai/block_train	Block_train.norm_h	pub norm_h: Tensor<|T|>	the input the feed-forward part was given
+ksai/block_train	Block_train.out	pub out: Tensor<|T|>	the block's output, [S,d]
+ksai/block_train	Block_train.x	pub x: Tensor<|T|>	the input it was given, which is also the first norm's input
+ksai/block_train	nn.Transformer_block<|T|>.apply_grads	pub fn apply_grads(r: Self$@, g: Block_grads<|T|>$@, u: optim.Updater<|T|>$@)	moves every weight of the block by `g`
+ksai/block_train	nn.Transformer_block<|T|>.backward	pub fn backward(r: Self$@, c: Block_train<|T|>$@, dout: Tensor<|T|>, lr: F64): Tensor<|T|>	one SGD step on every weight in the block; returns the input's gradient
+ksai/block_train	nn.Transformer_block<|T|>.backward_grads	pub fn backward_grads(r: Self$@, c: Block_train<|T|>$@, dout: Tensor<|T|>, g: Block_grads<|T|>$@): Tensor<|T|>	writes every weight's gradient into `g`; returns the input's gradient
+ksai/block_train	nn.Transformer_block<|T|>.backward_lora	pub fn backward_lora(r: Self$@, c: Block_train<|T|>$@, dout: Tensor<|T|>, lr: F64, q_lora: lora.Lora<|T|>$@, v_lora: lora.Lora<|T|>$@, fc1_lora: lora.Lora<|T|>$@, fc2_lora: lora.Lora<|T|>$@): Tensor<|T|>	one step on the adapters only; every base weight stays frozen. The base is frozen (a backward with lr=0 returns only the gradient). The returned gradient sums every path.
+ksai/block_train	nn.Transformer_block<|T|>.train_forward	pub fn train_forward(r: Self$@, x: Tensor<|T|>): Block_train<|T|>	runs the whole sequence at once, keeping what the backward pass needs
+ksai/block_train	nn.Transformer_block<|T|>.train_forward_lora	pub fn train_forward_lora(r: Self$@, x: Tensor<|T|>, q_lora: lora.Lora<|T|>$@, v_lora: lora.Lora<|T|>$@, fc1_lora: lora.Lora<|T|>$@, fc2_lora: lora.Lora<|T|>$@): Block_train<|T|>	the same as `train_forward`, with the adapters' delta added. It does not update the base (attention_norm, wq/wk/wv/wo, ffn_norm, fc1/fc2) at all, and folds only the adapters' deltas into the block's forward pass.
+ksai/grad	Tensor<|T|>.accumulate	pub fn accumulate(r: Self$@, grad: Tensor<|T|>)	adds another gradient into this one, in place. self += grad. **The caller decides the order of the additions**: floating-point addition is not associative, so a sum that must match on every run has to be taken in one fixed order.
+ksai/grad	Tensor<|T|>.cross_entropy_loss	pub fn cross_entropy_loss(r: Self$@, target: I32): F64	how wrong the last position's prediction was, in nats. Self's final dimension is the vocabulary; L = logsumexp(logits) - logits[target]. Of several rows it takes only the last (one step of teacher forcing); for every row, use `cross_entropy_loss_seq`.
+ksai/grad	Tensor<|T|>.cross_entropy_loss_seq	pub fn cross_entropy_loss_seq(r: Self$@, targets: I32$[]): F64	how wrong every position's prediction was, averaged, in nats. Every row's loss: next-token prediction, what a language model is trained on.
+ksai/grad	Tensor<|T|>.grad_matmul_input_into	pub fn grad_matmul_input_into(r: Self$@, w: Tensor<|T|>, out: Tensor<|T|>)	the gradient for a matrix product's input, into `out`
+ksai/grad	Tensor<|T|>.grad_matmul_weight	pub fn grad_matmul_weight(r: Self$@, dy: Tensor<|T|>): Tensor<|T|>	the same, but allocated on `r.arena` instead of into `out`
+ksai/grad	Tensor<|T|>.grad_matmul_weight_into #cfg(!blas)	pub fn grad_matmul_weight_into(r: Self$@, dy: Tensor<|T|>, $out: Tensor<|T|>)	the gradient for a matrix product's weights, into `out`
+ksai/grad	Tensor<|T|>.grad_matmul_weight_into #cfg(blas)	pub fn grad_matmul_weight_into(r: Self$@, dy: Tensor<|T|>, out: Tensor<|T|>)	the gradient for a matrix product's weights, into `out`
+ksai/grad	Tensor<|T|>.grad_softmax_cross_entropy	pub fn grad_softmax_cross_entropy(r: Self$@, target: I32): Tensor<|T|>	the gradient of the last position's scores. It is softmax(logits) with 1 subtracted at [target].
+ksai/grad	Tensor<|T|>.grad_softmax_cross_entropy_seq	pub fn grad_softmax_cross_entropy_seq(r: Self$@, targets: I32$[]): Tensor<|T|>	the gradient of every position's scores. Each row is averaged by 1/rows.
+ksai/grad	Tensor<|T|>.sgd_step	pub fn sgd_step(r: Self$@, grad: Tensor<|T|>, lr: F64)	one plain gradient-descent step, changing the parameter in place. self -= lr * grad
+ksai/lora	Grads	pub struct Grads<|T|>	the gradients of A and B, ready to pass to an optimizer. Caution: **`backward_grads` allocates the tensors on `x.arena`**, so use them before rewinding `x`'s arena.
+ksai/lora	Grads.da	pub da: Tensor<|T|>	the gradient of A, shaped [in, rank]
+ksai/lora	Grads.db	pub db: Tensor<|T|>	the gradient of B, shaped [rank, out]
+ksai/lora	Lora	pub struct Lora<|T|>	the pair of low-rank matrices trained in place of a frozen linear layer
+ksai/lora	Lora.a	pub a: Tensor<|T|>	the matrix the input meets first, shaped [in, rank]
+ksai/lora	Lora.b	pub b: Tensor<|T|>	the matrix that widens the rank back out, shaped [rank, out]
+ksai/lora	Lora.scale	pub scale: T	how much of the delta reaches the output, alpha / rank
+ksai/lora	Lora<|T|>.backward	pub fn backward(r: Self$@, x: Tensor<|T|>, dy: Tensor<|T|>, lr: F64): Tensor<|T|>	one SGD step on A and B with the base frozen; returns the input's gradient
+ksai/lora	Lora<|T|>.backward_grads	pub fn backward_grads(r: Self$@, $x: Tensor<|T|>, $dy: Tensor<|T|>, g: Grads<|T|>$@): Tensor<|T|>	writes the gradients of A and B to `g`; returns the input's gradient. **It does not update**, so the caller picks the optimizer (SGD / Adam); `backward` below is built on it. It returns `dx` so a LoRA in an intermediate layer can be summed with the base path's dx and passed further back.
+ksai/lora	Lora<|T|>.forward	pub fn forward(r: Self$@, $x: Tensor<|T|>): Tensor<|T|>	the delta (x·A·B) * scale, which the caller adds to the base output. The result is allocated on `x`'s arena.
+ksai/lora	Lora<|T|>.load_raw	pub fn load_raw(src: Void$@, in_dim: Sz, out_dim: Sz, rank: Sz, arena: Arena$@): Lora<|T|>	rebuilds the adapter from what `save_raw` wrote, given the shapes again
+ksai/lora	Lora<|T|>.new	pub fn new(in_dim: Sz, out_dim: Sz, rank: Sz, alpha: F64, rng: prng.Prng$@, arena: Arena$@): Lora<|T|>	an adapter whose delta starts at zero, so the base output is untouched at first
+ksai/lora	Lora<|T|>.raw_size	pub fn raw_size(r: Self$@): Sz	how many bytes `save_raw` writes. The bundle (`save_set_into` / `load_set_from` in `ksai/lora_set`) goes through safetensors and JSON, which need the global heap (`mem.alloc`): **on bare metal, call `mem.init_freestanding_heap()` first**, or an arena-only build panics. This is the smallest heap-free format: A's and B's raw bytes and `scale` back to back, for an embedded target's flash or NVRAM (restoring assumes the caller knows the shapes).
+ksai/lora	Lora<|T|>.save_raw	pub fn save_raw(r: Self$@, dest: Void$@)	copies A, B and `scale` out contiguously, without using the heap
+ksai/lora_set	Mlp_lora	pub struct Mlp_lora<|T|>	one block's feed-forward adapters, the counterpart of `Qkv_lora`. The adapters on the MLP's fc1/fc2, used with Qkv_lora when the feed-forward part is also tuned on the device.
+ksai/lora_set	Mlp_lora.fc1	pub fc1: Lora<|T|>	the adapter on the widening layer
+ksai/lora_set	Mlp_lora.fc2	pub fc2: Lora<|T|>	the adapter on the narrowing layer
+ksai/lora_set	Mlp_lora<|T|>.load_set_from	pub fn load_set_from(s: st.Safetensors, n_layers: Sz, arena: Arena$@): Mlp_lora<|T|>$@?st.Safetensors_error	reads every block's feed-forward adapters in one call. The names read are "blocks.{i}.mlp.{fc1,fc2}.lora_{a,b,scale}". It takes an already parsed Safetensors, not a path (the same as `Qkv_lora.load_set_from`).
+ksai/lora_set	Mlp_lora<|T|>.save_set_into	pub fn save_set_into(adapters: Mlp_lora<|T|>$@, n_layers: Sz, w: st.Safetensors_writer$@, arena: Arena$@)	the inverse of `load_set_from`: writes every block's adapters. The same shape as `Qkv_lora.save_set_into`.
+ksai/lora_set	Qkv_lora	pub struct Qkv_lora<|T|>	one block's attention adapters, on Q and V as in the paper. **Several models share this shape**, so it is defined once here.
+ksai/lora_set	Qkv_lora.q	pub q: Lora<|T|>	the adapter on the query projection
+ksai/lora_set	Qkv_lora.v	pub v: Lora<|T|>	the adapter on the value projection
+ksai/lora_set	Qkv_lora<|T|>.load_set_from	pub fn load_set_from(s: st.Safetensors, n_layers: Sz, arena: Arena$@): Qkv_lora<|T|>$@?st.Safetensors_error	reads every block's attention adapters in one call. The names read are "blocks.{i}.attn.{q,v}.lora_{a,b,scale}". It takes a parsed Safetensors, not a path (the reason is in this file's header); on bare metal, pass `embed`ed bytes through `Safetensors.load_from_bytes` first.
+ksai/lora_set	Qkv_lora<|T|>.save_set_into	pub fn save_set_into(adapters: Qkv_lora<|T|>$@, n_layers: Sz, w: st.Safetensors_writer$@, arena: Arena$@)	the inverse of `load_set_from`: writes every block's adapters. The caller prepares the `Safetensors_writer` (as with `load_set_from`), and its `finish()` produces the bytes; for a quick local save, `Lora.save_raw` is lighter.
+ksai/model_file	load_qkv_lora_set	pub fn load_qkv_lora_set<|T|>(path: U8[], n_layers: Sz, arena: Arena$@): lora_set.Qkv_lora<|T|>$@?st.Safetensors_error	reads every block's attention adapters directly from a file. The names read are "blocks.{i}.attn.{q,v}.lora_*".
+ksai/model_file	load_safetensors	pub fn load_safetensors(path: U8[], arena: Arena$@): st.Safetensors?st.Safetensors_error	reads and parses a model file; the result owns the bytes it read. The result **owns** the bytes it read (`free()` releases them). Ownership is the opposite of `load_from_bytes`, so confusing the two gives a double free or a leak.
+ksai/model_file	save_qkv_lora_set	pub fn save_qkv_lora_set<|T|>(adapters: lora_set.Qkv_lora<|T|>$@, n_layers: Sz, path: U8[], arena: Arena$@): Void?st.Safetensors_error	the inverse of `load_qkv_lora_set`: writes adapters to a file
+ksai/model_file	save_safetensors	pub fn save_safetensors(w: st.Safetensors_writer$@, path: U8[]): Void?st.Safetensors_error	writes what a writer has collected as a model file
+ksai/nn	Embedding	pub struct Embedding<|T|>	the table that maps a token number to a vector
+ksai/nn	Embedding.weight	pub weight: Tensor<|T|>	one row per token, each as long as the model's width
+ksai/nn	Embedding<|T|>.forward	pub fn forward(r: Self$@, token_id: I32, compute_arena: Arena$@): Tensor<|T|>	the vector for one token. **This arena decides where every later computation happens.** The first tensor comes from it, and matrix products and the rest follow it implicitly.
+ksai/nn	Embedding<|T|>.init_uniform	pub fn init_uniform(r: Self$@, rng: prng.Prng$@, scale: F64)	initializes the table for training
+ksai/nn	Embedding<|T|>.new	pub fn new(vocab_size: Sz, dim: Sz, arena: Arena$@): Embedding<|T|>	a table of that shape, with constant starting values
+ksai/nn	Gqa_attention	pub struct Gqa_attention<|T|>	grouped-query attention: several query heads share one key head
+ksai/nn	Gqa_attention.head_dim	pub head_dim: Sz	how wide one head is
+ksai/nn	Gqa_attention.k_cache	pub k_cache: Tensor<|T|>	every key seen so far, `[max_seq, n_kv_heads * head_dim]`
+ksai/nn	Gqa_attention.n_heads	pub n_heads: Sz	how many query heads
+ksai/nn	Gqa_attention.n_kv_heads	pub n_kv_heads: Sz	how many key and value heads; it must divide `n_heads`
+ksai/nn	Gqa_attention.rope_theta	pub rope_theta: F64	the base of the positional rotation (RoPE)
+ksai/nn	Gqa_attention.v_cache	pub v_cache: Tensor<|T|>	every value seen so far, shaped the same
+ksai/nn	Gqa_attention.wk	pub wk: Linear<|T|>	`[dim, n_kv_heads * head_dim]`, the keys, of which there are fewer
+ksai/nn	Gqa_attention.wo	pub wo: Linear<|T|>	`[n_heads * head_dim, dim]`, the output projection
+ksai/nn	Gqa_attention.wq	pub wq: Linear<|T|>	`[dim, n_heads * head_dim]`, the queries
+ksai/nn	Gqa_attention.wv	pub wv: Linear<|T|>	the values, shaped as the keys are
+ksai/nn	Gqa_attention<|T|>.forward	pub fn forward(r: Self$@, x: Tensor<|T|>, start_pos: Sz): Tensor<|T|>	attention over everything cached so far, this input included
+ksai/nn	Gqa_attention<|T|>.forward_lora	pub fn forward_lora(r: Self$@, x: Tensor<|T|>, start_pos: Sz, q_lora: lora.Lora<|T|>$@, v_lora: lora.Lora<|T|>$@): Tensor<|T|>	the same, with fine-tuned adapters added at inference. The adapters go on the Q and V projection outputs, before RoPE, where `peft` puts them.
+ksai/nn	Gqa_attention<|T|>.new	pub fn new(dim: Sz, n_heads: Sz, n_kv_heads: Sz, head_dim: Sz, max_seq_len: Sz, rope_theta: F64, arena: Arena$@): Gqa_attention<|T|>	the four projections, and a cache long enough for the sequence
+ksai/nn	Linear	pub struct Linear<|T|>	one fully connected layer: a weight matrix and a bias
+ksai/nn	Linear.bias	pub bias: Tensor<|T|>	the bias added to each output, `out_features` long
+ksai/nn	Linear.weights	pub weights: Tensor<|T|>	the matrix, shaped `[in_features, out_features]`
+ksai/nn	Linear<|T|>.forward	pub fn forward(r: Self$@, $x: Tensor<|T|>): Tensor<|T|>	the input times the matrix, plus the bias
+ksai/nn	Linear<|T|>.init_uniform	pub fn init_uniform(r: Self$@, rng: prng.Prng$@, scale: F64)	initializes the weights for training. Caution: **Do not start training from `new`'s default (every element 0.1).** Every output unit gets the same value and the same gradient, so the units stay identical forever.
+ksai/nn	Linear<|T|>.new	pub fn new(in_features: Sz, out_features: Sz, arena: Arena$@): Linear<|T|>	a layer of that shape, with constant starting weights
+ksai/nn	Mlp	pub struct Mlp<|T|>	two layers with SiLU between them
+ksai/nn	Mlp.fc1	pub fc1: Linear<|T|>	the first layer, widening to the hidden size
+ksai/nn	Mlp.fc2	pub fc2: Linear<|T|>	the second layer, narrowing back to the output size
+ksai/nn	Mlp<|T|>.forward	pub fn forward(r: Self$@, x: Tensor<|T|>): Tensor<|T|>	the input through both layers, with SiLU in between
+ksai/nn	Mlp<|T|>.forward_lora	pub fn forward_lora(r: Self$@, x: Tensor<|T|>, fc1_lora: lora.Lora<|T|>$@, fc2_lora: lora.Lora<|T|>$@): Tensor<|T|>	the same, with an adapter's delta added to either layer
+ksai/nn	Mlp<|T|>.init_uniform	pub fn init_uniform(r: Self$@, rng: prng.Prng$@, scale: F64)	initializes both layers for training
+ksai/nn	Mlp<|T|>.new	pub fn new(in_dim: Sz, hidden_dim: Sz, out_dim: Sz, arena: Arena$@): Mlp<|T|>	two layers of these shapes
+ksai/nn	Rms_norm	pub struct Rms_norm<|T|>	root-mean-square normalization with a learned per-element gain
+ksai/nn	Rms_norm.eps	pub eps: T	added under the square root, so a row of zeros does not divide by zero
+ksai/nn	Rms_norm.weight	pub weight: Tensor<|T|>	the gain, one number per element of the last dimension
+ksai/nn	Rms_norm<|T|>.forward	pub fn forward(r: Self$@, $x: Tensor<|T|>): Tensor<|T|>	the input, normalized and multiplied by the gain
+ksai/nn	Rms_norm<|T|>.new	pub fn new(dim: Sz, eps: T, arena: Arena$@): Rms_norm<|T|>	a normalization whose gain starts at 1.0, which is also where training starts
+ksai/nn	Self_attention	pub struct Self_attention<|T|>	single-head attention over one sequence, with a KV cache
+ksai/nn	Self_attention.dim	pub dim: Sz	the width, which also sets the `1/sqrt(dim)` the scores are divided by
+ksai/nn	Self_attention.k_cache	pub k_cache: Tensor<|T|>	every key seen so far, so a continued run need not recompute them
+ksai/nn	Self_attention.v_cache	pub v_cache: Tensor<|T|>	every value seen so far, kept for the same reason
+ksai/nn	Self_attention.wk	pub wk: Linear<|T|>	the projection that makes the key
+ksai/nn	Self_attention.wo	pub wo: Linear<|T|>	the output projection for the attended context
+ksai/nn	Self_attention.wq	pub wq: Linear<|T|>	the projection that makes the query
+ksai/nn	Self_attention.wv	pub wv: Linear<|T|>	the projection that makes the value
+ksai/nn	Self_attention<|T|>.forward	pub fn forward(r: Self$@, x: Tensor<|T|>, start_pos: Sz): Tensor<|T|>	attention over everything cached so far, this input included
+ksai/nn	Self_attention<|T|>.forward_lora	pub fn forward_lora(r: Self$@, x: Tensor<|T|>, start_pos: Sz, q_lora: lora.Lora<|T|>$@, v_lora: lora.Lora<|T|>$@): Tensor<|T|>	the same, with fine-tuned adapters added at inference. The adapters go on the Q and V projections' outputs, the same place `peft` puts them.
+ksai/nn	Self_attention<|T|>.init_uniform	pub fn init_uniform(r: Self$@, rng: prng.Prng$@, scale: F64)	initializes all four projections for training
+ksai/nn	Self_attention<|T|>.new	pub fn new(dim: Sz, max_seq_len: Sz, arena: Arena$@): Self_attention<|T|>	the four projections, and a cache long enough for the sequence
+ksai/nn	Swiglu_mlp	pub struct Swiglu_mlp<|T|>	the Llama/Qwen feed-forward part: three matrices and no bias
+ksai/nn	Swiglu_mlp.down	pub down: Linear<|T|>	`[hidden, dim]`, narrowing back to the model's width
+ksai/nn	Swiglu_mlp.gate	pub gate: Linear<|T|>	`[dim, hidden]`, the side SiLU is applied to
+ksai/nn	Swiglu_mlp.up	pub up: Linear<|T|>	`[dim, hidden]`, the side multiplied with it
+ksai/nn	Swiglu_mlp<|T|>.forward	pub fn forward(r: Self$@, x: Tensor<|T|>): Tensor<|T|>	`down(silu(gate(x)) * up(x))`
+ksai/nn	Swiglu_mlp<|T|>.new	pub fn new(dim: Sz, hidden: Sz, arena: Arena$@): Swiglu_mlp<|T|>	the three matrices of these shapes
+ksai/nn	Transformer_block	pub struct Transformer_block<|T|>	one block: normalize, attend, normalize, feed forward
+ksai/nn	Transformer_block.attention	pub attention: Self_attention<|T|>	the attention itself
+ksai/nn	Transformer_block.attention_norm	pub attention_norm: Rms_norm<|T|>	the normalization before attention
+ksai/nn	Transformer_block.ffn	pub ffn: Mlp<|T|>	the feed-forward part
+ksai/nn	Transformer_block.ffn_norm	pub ffn_norm: Rms_norm<|T|>	the normalization before the feed-forward part
+ksai/nn	Transformer_block<|T|>.forward	pub fn forward(r: Self$@, x: Tensor<|T|>, start_pos: Sz): Tensor<|T|>	the input through the whole block
+ksai/nn	Transformer_block<|T|>.forward_lora	pub fn forward_lora(r: Self$@, x: Tensor<|T|>, start_pos: Sz, q_lora: lora.Lora<|T|>$@, v_lora: lora.Lora<|T|>$@): Tensor<|T|>	the same, with adapters passed on to the attention
+ksai/nn	Transformer_block<|T|>.init_uniform	pub fn init_uniform(r: Self$@, rng: prng.Prng$@, scale: F64)	initializes the attention and the feed-forward part for training. The reason is at `Linear.init_uniform`. The normalization weights stay at `Rms_norm.new`'s 1.0, which is training's initial value.
+ksai/nn	Transformer_block<|T|>.new	pub fn new(dim: Sz, hidden_dim: Sz, max_seq_len: Sz, eps: T, arena: Arena$@): Transformer_block<|T|>	one block of these shapes
+ksai/nn_grad	Linear_grads	pub struct Linear_grads<|T|>	a `Linear`'s weight gradient (its bias is never moved)
+ksai/nn_grad	Linear_grads.dw	pub dw: Tensor<|T|>	the weights' gradient, in their shape
+ksai/nn_grad	Linear_grads<|T|>.accumulate	pub fn accumulate(r: Self$@, o: Self$@)	adds another sequence's gradient in, in place
+ksai/nn_grad	Mlp_grads	pub struct Mlp_grads<|T|>	an `Mlp`'s two layers' gradients
+ksai/nn_grad	Mlp_grads.fc1	pub fc1: Linear_grads<|T|>	the widening layer's gradient
+ksai/nn_grad	Mlp_grads.fc2	pub fc2: Linear_grads<|T|>	the narrowing layer's gradient
+ksai/nn_grad	Mlp_grads<|T|>.accumulate	pub fn accumulate(r: Self$@, o: Self$@)	adds another sequence's gradients in, in place
+ksai/nn_grad	Rms_norm_grads	pub struct Rms_norm_grads<|T|>	an `Rms_norm`'s per-channel weight gradient
+ksai/nn_grad	Rms_norm_grads.dw	pub dw: Tensor<|T|>	the gain's gradient, one per channel
+ksai/nn_grad	Rms_norm_grads<|T|>.accumulate	pub fn accumulate(r: Self$@, o: Self$@)	adds another sequence's gradient in, in place
+ksai/nn_grad	nn.Embedding<|T|>.backward	pub fn backward(r: Self$@, token_id: I32, dy: Tensor<|T|>, lr: F64)	one SGD step on the single row for one token. The input layer: there is no earlier layer to pass a gradient to.
+ksai/nn_grad	nn.Embedding<|T|>.backward_seq	pub fn backward_seq(r: Self$@, tokens: I32$[], count: Sz, dx: Tensor<|T|>, lr: F64)	the same over a whole sequence, one row per position
+ksai/nn_grad	nn.Embedding<|T|>.backward_seq_grads	pub fn backward_seq_grads(r: Self$@, tokens: I32$[], count: Sz, dx: Tensor<|T|>): Tensor<|T|>	the whole table's gradient: each position's row is added into its token's row. **Dense, in the table's shape**: a token seen twice sums its rows, and an optimizer with memory (Adam) moves every row, as a dense embedding does elsewhere. Allocated on `dx.arena`.
+ksai/nn_grad	nn.Linear<|T|>.apply_grads	pub fn apply_grads(r: Self$@, g: Linear_grads<|T|>$@, u: optim.Updater<|T|>$@)	moves the weights by `g`; the bias stays unchanged
+ksai/nn_grad	nn.Linear<|T|>.backward	pub fn backward(r: Self$@, x: Tensor<|T|>, dy: Tensor<|T|>, lr: F64): Tensor<|T|>	one SGD step on the weights; returns the input's gradient. **Only the weights are updated, never the bias.** The LLaMA family has no bias (`bias` stays 0, and forward's `add_bias` does nothing), and updating it would break the round trip through standard weights-only safetensors.
+ksai/nn_grad	nn.Linear<|T|>.backward_grads	pub fn backward_grads(r: Self$@, $x: Tensor<|T|>, $dy: Tensor<|T|>, g: Linear_grads<|T|>$@): Tensor<|T|>	writes the weights' gradient into `g`; returns the input's gradient
+ksai/nn_grad	nn.Mlp<|T|>.apply_grads	pub fn apply_grads(r: Self$@, g: Mlp_grads<|T|>$@, u: optim.Updater<|T|>$@)	moves both layers by `g`
+ksai/nn_grad	nn.Mlp<|T|>.backward	pub fn backward(r: Self$@, x: Tensor<|T|>, dy: Tensor<|T|>, lr: F64): Tensor<|T|>	one SGD step on both layers; returns the input's gradient
+ksai/nn_grad	nn.Mlp<|T|>.backward_grads	pub fn backward_grads(r: Self$@, x: Tensor<|T|>, dy: Tensor<|T|>, g: Mlp_grads<|T|>$@): Tensor<|T|>	writes both layers' gradients into `g`; returns the input's gradient
+ksai/nn_grad	nn.Mlp<|T|>.backward_lora	pub fn backward_lora(r: Self$@, x: Tensor<|T|>, dy: Tensor<|T|>, lr: F64, fc1_lora: lora.Lora<|T|>$@, fc2_lora: lora.Lora<|T|>$@): Tensor<|T|>	the same, but applies the gradients by SGD at once
+ksai/nn_grad	nn.Mlp<|T|>.backward_lora_grads	pub fn backward_lora_grads(r: Self$@, x: Tensor<|T|>, $dy: Tensor<|T|>, fc1_lora: lora.Lora<|T|>$@, fc1_g: lora.Grads<|T|>$@, fc2_lora: lora.Lora<|T|>$@, fc2_g: lora.Grads<|T|>$@): Tensor<|T|>	only the adapters' gradients; both base layers stay frozen. **It does not update**, so the caller picks the optimizer (SGD / Adam). The returned gradient is the sum of the base path and the adapter path.
+ksai/nn_grad	nn.Rms_norm<|T|>.apply_grads	pub fn apply_grads(r: Self$@, g: Rms_norm_grads<|T|>$@, u: optim.Updater<|T|>$@)	moves the gain by `g`
+ksai/nn_grad	nn.Rms_norm<|T|>.backward	pub fn backward(r: Self$@, x: Tensor<|T|>, dy: Tensor<|T|>, lr: F64): Tensor<|T|>	one SGD step on the per-channel weights; returns the input's gradient
+ksai/nn_grad	nn.Rms_norm<|T|>.backward_grads	pub fn backward_grads(r: Self$@, x: Tensor<|T|>, dy: Tensor<|T|>, g: Rms_norm_grads<|T|>$@): Tensor<|T|>	writes the gain's gradient into `g`; returns the input's gradient
+ksai/optim	Adam	pub struct Adam<|T|>	one parameter's optimizer, tracking the direction of its gradient
+ksai/optim	Adam.beta1	pub beta1: F64	how long `m` remembers; closer to 1 is longer
+ksai/optim	Adam.beta2	pub beta2: F64	how long `v` remembers; closer to 1 is longer
+ksai/optim	Adam.eps	pub eps: F64	added to the divisor so a parameter that is not moving does not divide by zero
+ksai/optim	Adam.lr	pub lr: F64	the learning rate
+ksai/optim	Adam.m	pub m: Tensor<|T|>	the gradient's recent direction, as a running average
+ksai/optim	Adam.timestep	pub timestep: I64	how many steps have been taken, which the early bias correction needs
+ksai/optim	Adam.v	pub v: Tensor<|T|>	the gradient's recent size, as a running average
+ksai/optim	Adam<|T|>.new_default	pub fn new_default(param: Tensor<|T|>, lr: F64): Adam<|T|>	an optimizer with the usual settings, 0.9/0.999/1e-8
+ksai/optim	Adam<|T|>.step	pub fn step(r: Self$@, param: Tensor<|T|>, grad: Tensor<|T|>)	one step, moving the parameter the way the gradient has been pointing
+ksai/optim	Updater	pub struct Updater<|T|>	how every weight of a model is moved by its gradient: SGD, or Adam. A layer's `apply_grads` passes it each weight with its gradient, in the layer's own order. **Adam keeps one state per weight, matched by position in that order**: the n-th weight in a step gets the n-th state, made on the first step. Caution: **Call `begin_step` before each step's weights**; a step passing more or fewer weights than the first one stops there, instead of pairing a weight with another's state.
+ksai/optim	Updater.lr	pub lr: F64	the learning rate
+ksai/optim	Updater<|T|>.adam	pub fn adam(lr: F64): Updater<|T|>	Adam with the usual settings, one state per weight (`Adam.new_default`)
+ksai/optim	Updater<|T|>.begin_step	pub fn begin_step(r: Self$@)	marks the start of one step's weights
+ksai/optim	Updater<|T|>.free	pub fn free(r: Self$@)	frees the list of states (the weights own the states themselves)
+ksai/optim	Updater<|T|>.sgd	pub fn sgd(lr: F64): Updater<|T|>	plain gradient descent, with no state
+ksai/optim	Updater<|T|>.update	pub fn update(r: Self$@, $param: Tensor<|T|>, grad: Tensor<|T|>)	moves one weight by its gradient, in place
+ksai/optim	Updater<|T|>:Owned	impl<|T|> Updater<|T|>: Owned	it owns its list of states and frees it with `free()`
+ksai/quant	Quantized_tensor	pub struct Quantized_tensor	a weight matrix stored one byte per element, with a scale per row. dequantized[i][j] = data[i][j] * scales[i]. The quantization is symmetric, so it holds no zero point, and a quantized value is kept within [-127, 127].
+ksai/quant	Quantized_tensor.arena	pub arena: Arena$@	the arena it came from; null means the heap, and `free` then releases it
+ksai/quant	Quantized_tensor.cols	pub cols: Sz	how many columns
+ksai/quant	Quantized_tensor.data	pub data: I8$@	the quantized values, rows*cols of them, row by row
+ksai/quant	Quantized_tensor.dequantize	pub fn dequantize<|T|>(r: Self$@, arena: Arena$@): Tensor<|T|>	the matrix restored to full width, ready for a normal matrix product. After that, the existing matmul and the rest work unchanged.
+ksai/quant	Quantized_tensor.free	pub fn free(r: Self$@)	frees the bytes; does nothing when an arena holds them
+ksai/quant	Quantized_tensor.rows	pub rows: Sz	how many rows, each with a scale of its own
+ksai/quant	Quantized_tensor.scales	pub scales: F64$@	what each row's values are multiplied by to restore them, one per row
+ksai/quant	Quantized_tensor:Owned	impl Quantized_tensor: Owned	it owns its bytes and frees them with `free()`
+ksai/quant	Tensor<|T|>.quantize	pub fn quantize(r: Self$@, arena: Arena$@): Quantized_tensor?tensor.Tensor_error	the same matrix at one byte per element; a rank other than 2 is rejected. **The caller chooses where to allocate.** Memory is saved only if the original is dropped after quantizing; on the original's arena, dropping it would drop the quantized copy too.
+ksai/safetensors	Safetensors	pub struct Safetensors	one weights file, read without copying the weights themselves
+ksai/safetensors	Safetensors.data_offset	pub data_offset: Sz	where the weights begin, past the header
+ksai/safetensors	Safetensors.free	pub fn free(r: Self$@)	frees the file's bytes, once. Caution: Every tensor `get_tensor` returned becomes invalid here, so call it only when the model is no longer used.
+ksai/safetensors	Safetensors.get_tensor	pub fn get_tensor<|T|>(r: Self$@, name: U8[], arena: Arena$@): Tensor<|T|>?Safetensors_error	one tensor as a view into the file, copying no elements. Caution: **The result borrows from the file.** The elements are not copied, so `r.free()` must wait until this tensor, and every weight taken from it, is no longer used.
+ksai/safetensors	Safetensors.load_from_bytes	pub fn load_from_bytes(file_data: U8[], arena: Arena$@): Safetensors?Safetensors_error	reads the header of a file the caller already holds in memory. **The function that opens a file lives elsewhere** (`ksai/model_file`): here it would need `std/io`, and code that only uses tensors would pay for file I/O. The bytes belong to the caller (typically `embed "model.safetensors" as model_bytes;`), and free() does not release them.
+ksai/safetensors	Safetensors.map_into	pub fn map_into<|T|>(r: Self$@, name: U8[], dst: Tensor<|T|>$@, arena: Arena$@): Void?Safetensors_error	maps one tensor from the file into `dst`, rejecting a different shape. Caution: **Check the shape before swapping the weights in.** The model is built with its own dimensions, so weights that do not fit fail later in some matmul, with no hint of which tensor differs (typically, a different checkpoint was passed).
+ksai/safetensors	Safetensors.metadata	pub metadata: json.Val	the header, giving each tensor's type, shape and position
+ksai/safetensors	Safetensors.raw_data	pub raw_data: U8[]	the whole file as bytes; every tensor is a view into this
+ksai/safetensors	Safetensors:Owned	impl Safetensors: Owned	it owns the file's bytes and frees them with `free()`
+ksai/safetensors	Safetensors_error	pub enum Safetensors_error	why a weights file could not be read or written. I/O, a broken header and a missing tensor are recoverable run-time conditions, so they propagate as an error union (?E) for the caller to handle.
+ksai/safetensors	Safetensors_error.dtype_mismatch	dtype_mismatch(name: U8[])	the file's element width is not the one being read, naming it
+ksai/safetensors	Safetensors_error.invalid_header	invalid_header	the JSON header could not be parsed
+ksai/safetensors	Safetensors_error.read_failed	read_failed	the file could not be read
+ksai/safetensors	Safetensors_error.shape_mismatch	shape_mismatch(name: U8[])	the file's shape is not the one expected, naming the tensor
+ksai/safetensors	Safetensors_error.tensor_not_found	tensor_not_found(name: U8[])	the header has no tensor of that name
+ksai/safetensors	Safetensors_error.too_small	too_small	the file is shorter than the 8-byte header length
+ksai/safetensors	Safetensors_error.write_failed	write_failed	the file could not be written
+ksai/safetensors	Safetensors_writer	pub struct Safetensors_writer	collects tensors one at a time and writes one file at the end. Writes trained weights (F32, row-major contiguous) out in the safetensors format: `add` puts the name into the header and the bytes into the data, and `save` writes one file. data_offsets follows the order added, so it streams without holding on to the tensors.
+ksai/safetensors	Safetensors_writer.add	pub fn add(r: Self$@, name: U8[], t: Tensor<|F32|>)	appends one more tensor; its position in the file follows the order added
+ksai/safetensors	Safetensors_writer.count	pub count: Sz	how many tensors have been added
+ksai/safetensors	Safetensors_writer.data	pub data: Str_builder	the tensors' raw bytes, joined in the order added
+ksai/safetensors	Safetensors_writer.finish	pub fn finish($r: Self$@): Str_builder	the whole file as bytes, header and weights. For a destination that is not a file (sending it over a network, reading it back in memory); it pairs with load / load_from_bytes. **Call it only once**: it releases the builder's three buffers, and the caller frees the result.
+ksai/safetensors	Safetensors_writer.head	pub head: Str_builder	the JSON header being built
+ksai/safetensors	Safetensors_writer.meta	pub meta: Str_builder	what goes under `__metadata__`; nothing is written when it is empty
+ksai/safetensors	Safetensors_writer.new	pub fn new(): Safetensors_writer	an empty writer; `finish()` frees it. **It takes no arena**: head, data and meta are freed by `finish()`, so they must live on the heap, and an `_in` would misstate where the memory goes ("A constructor's name says where the returned thing goes" in `std/README.md`).
+ksai/safetensors	Safetensors_writer.set_meta	pub fn set_meta(r: Self$@, key: U8[], value: U8[])	one entry under `__metadata__`; the order of calls does not matter. `__metadata__` is safetensors' standard optional table of strings, for what a reader needs in order to use the weights (a preprocessing constant, the format's version). finish writes them all at the end. Caution: **Do not pass a name containing `"` or `\`.** This does no JSON escaping (nor does add, which writes tensor names).
+ksai/sampler	Sample_config	pub struct Sample_config	how adventurous the sampling is, and which candidates it may pick
+ksai/sampler	Sample_config.greedy	pub fn greedy(): Sample_config	the settings under which `sample` behaves like `argmax`
+ksai/sampler	Sample_config.temperature	pub temperature: F64	how far it strays; 1.0 follows the model, 0 or below means `argmax`
+ksai/sampler	Sample_config.top_k	pub top_k: Sz	at most this many top-scoring candidates; 0 means no limit
+ksai/sampler	Sample_config.top_p	pub top_p: F64	only candidates within this cumulative probability; 1.0 means no limit
+ksai/sampler	argmax	pub fn argmax<|T|>(logits: Tensor<|T|>): I32	the highest-scoring token, the same one every time. Caution: **Also reject a shape whose last dimension is 0.** A size of 0 is legitimate for an empty tensor (`Tensor.new` in `ksai/tensor.kspls`), and checking only the number of dimensions lets `(logits.data + offset)$` read a region with no elements. No range check catches a raw dereference, and it does not crash: it returns **a plausible token ID**, 0.
+ksai/sampler	sample	pub fn sample<|T|>(logits: Tensor<|T|>, cfg: Sample_config, rng: prng.Prng$@, arena: Arena$@): I32	one token chosen at random, weighted by the model's scores
+ksai/tensor	Tensor	pub struct Tensor<|T|>	a multi-dimensional array: the elements and their shape
+ksai/tensor	Tensor.arena	pub arena: Arena$@	the arena the elements were allocated from; null means the global heap
+ksai/tensor	Tensor.data	pub data: T$@	the elements, laid out with the last dimension varying fastest
+ksai/tensor	Tensor.shape	pub shape: Sz$[]	each dimension's size; how many there are is `shape.len`
+ksai/tensor	Tensor.size	pub size: Sz	the total number of elements, kept because every loop bound needs it
+ksai/tensor	Tensor<|T|>.add	pub fn add(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>	the sum; a shape mismatch panics
+ksai/tensor	Tensor<|T|>.apply_rope	pub fn apply_rope(r: Self$@, start_pos: Sz): Tensor<|T|>?Tensor_error	rotates each pair of elements by its position, so the order is encoded
+ksai/tensor	Tensor<|T|>.at #inline	pub fn at(r: Self@, index: Sz, file: U8[], line: Sz): T$@	the element at a flat index
+ksai/tensor	Tensor<|T|>.checked_add	pub fn checked_add(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>?Tensor_error	element-wise sum; rejects shapes that do not match. **Do not merge the three loops below into one.** Passing the operation as a function pointer makes an indirect call per element, and -O3's auto-vectorization stops working (the property the SIMD gate in `tests` checks).
+ksai/tensor	Tensor<|T|>.checked_mul	pub fn checked_mul(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>?Tensor_error	element-wise product; rejects shapes that do not match
+ksai/tensor	Tensor<|T|>.checked_sub	pub fn checked_sub(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>?Tensor_error	element-wise difference; rejects shapes that do not match
+ksai/tensor	Tensor<|T|>.dup	pub fn dup(r: Self$@, arena: Arena$@): Tensor<|T|>	a copy in another arena, flattened to one dimension. It is for keeping a value alive after the caller's arena is gone.
+ksai/tensor	Tensor<|T|>.fill	pub fn fill(r: Self$@, val: T)	writes the same value into every element
+ksai/tensor	Tensor<|T|>.fill_uniform	pub fn fill_uniform(r: Self$@, rng: prng.Prng$@, scale: F64)	writes uniform random values into every element. **A constant start makes every unit symmetric and training impossible** (every token would get the same embedding), so training from scratch begins here.
+ksai/tensor	Tensor<|T|>.free	pub fn free(r: Self$@)	frees the elements and the shape
+ksai/tensor	Tensor<|T|>.matmul	pub fn matmul(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>?Tensor_error	the matrix product, in a newly allocated tensor
+ksai/tensor	Tensor<|T|>.matmul_into	pub fn matmul_into(r: Self$@, rhs: Tensor<|T|>, out: Tensor<|T|>): Void?Tensor_error	the matrix product, written into a tensor the caller owns. It is for a hot loop that would otherwise allocate once per step.
+ksai/tensor	Tensor<|T|>.mul	pub fn mul(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>	the element-wise product
+ksai/tensor	Tensor<|T|>.new	pub fn new(shape: Sz[], arena: Arena$@): Tensor<|T|>	a tensor of that shape, its elements not yet written
+ksai/tensor	Tensor<|T|>.rmsnorm	pub fn rmsnorm(r: Self$@, weight: Tensor<|T|>, eps: T): Tensor<|T|>?Tensor_error	root-mean-square normalization over the last dimension
+ksai/tensor	Tensor<|T|>.scale	pub fn scale(r: Self$@, factor: T): Tensor<|T|>	every element multiplied, in a newly allocated tensor
+ksai/tensor	Tensor<|T|>.silu	pub fn silu(r: Self$@): Tensor<|T|>	the SiLU (Swish) activation, element by element
+ksai/tensor	Tensor<|T|>.softmax	pub fn softmax(r: Self$@): Tensor<|T|>?Tensor_error	each row turned into weights that sum to 1. The row's maximum is subtracted first, so a large value does not overflow.
+ksai/tensor	Tensor<|T|>.sub	pub fn sub(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>	the difference; a mismatch panics
+ksai/tensor	Tensor<|T|>:Add<|Tensor<|T|>, Tensor<|T|>|>	impl<|T|> Tensor<|T|>: Add<|Tensor<|T|>, Tensor<|T|>|>	so `a + b` can be written
+ksai/tensor	Tensor<|T|>:Index_place<|Sz, T|>	impl<|T|> Tensor<|T|>: Index_place<|Sz, T|>	so `t[i]` reads and writes one element. Note: An index out of range panics (for the same reason as `std/ds.kspls`'s List: the caller can compute the range from `size`, so going outside it is a bug). Only a shape mismatch is a recoverable `Tensor_error` (the reason is at `Tensor_error`).
+ksai/tensor	Tensor<|T|>:Mul<|Tensor<|T|>, Tensor<|T|>|>	impl<|T|> Tensor<|T|>: Mul<|Tensor<|T|>, Tensor<|T|>|>	so `a * b` is element-wise, not matmul
+ksai/tensor	Tensor<|T|>:Owned	impl<|T|> Tensor<|T|>: Owned	it owns its elements and frees them with `free()`
+ksai/tensor	Tensor<|T|>:Sub<|Tensor<|T|>, Tensor<|T|>|>	impl<|T|> Tensor<|T|>: Sub<|Tensor<|T|>, Tensor<|T|>|>	so `a - b` can be written
+ksai/tensor	Tensor_error	pub enum Tensor_error	why an operation could not run on the shapes it was given. A shape mismatch can come from run-time data (a bad shape in weights read from a safetensors file), so it propagates as an error union (?E) for the caller to handle.
+ksai/tensor	Tensor_error.out_of_bounds	out_of_bounds	a row number outside the tensor; a bad element index stops the program instead
+ksai/tensor	Tensor_error.rank_mismatch	rank_mismatch	the number of dimensions is not what the operation expects
+ksai/tensor	Tensor_error.shape_mismatch	shape_mismatch	a dimension's size does not match, such as the inner-product dimension
+ksai/tensor	max_tensor_elems	pub const max_tensor_elems: Sz = 100000000	the most elements one tensor may hold. The cap `new` enforces, which fits cfg(freestanding)'s 32-bit Sz (800MB even at F64). It is pub so safetensors.get_tensor, which bypasses `new`, applies the same cap.
+ksai/tokenizer	Bpe_key:ds.Hashable<|Bpe_key|>	impl Bpe_key: ds.Hashable<|Bpe_key|>	so a pair of token IDs can stand as a map's key. The two hashes below skip `ds.fmix32`: token IDs are consecutive numbers whose low bits are already spread, so mixing would only add an operation to each BPE merge lookup.
+ksai/tokenizer	Token_key:ds.Hashable<|Token_key|>	impl Token_key: ds.Hashable<|Token_key|>	so a token ID can stand as a map's key
+ksai/tokenizer	Tokenizer	pub struct Tokenizer	the vocabulary and merge rules that turn text into token IDs
+ksai/tokenizer	Tokenizer.add_merge	pub fn add_merge(r: Self$@, id1: I32, id2: I32, merged_id: I32)	adds one merge rule: this pair, when adjacent, becomes that one word. Caution: **The call order is the rank**, so the rules must arrive in priority order (`load()` and `train_bpe.py`'s merges.txt already do).
+ksai/tokenizer	Tokenizer.add_token	pub fn add_token(r: Self$@, token: U8[], id: I32)	adds one word to the vocabulary, looked up in both directions from then on
+ksai/tokenizer	Tokenizer.arena	pub arena: Arena$@	the arena for every word and for what `encode` and `decode` return
+ksai/tokenizer	Tokenizer.decode	pub fn decode(r: Self$@, tokens: List<|I32|>$@): U8[]	the text for the IDs, allocated on the tokenizer's arena
+ksai/tokenizer	Tokenizer.decode_one	pub fn decode_one(r: Self$@, id: I32): U8[]	the text for one ID, for printing each generated token as it comes. Sugar for calling `decode()` on a one-element list.
+ksai/tokenizer	Tokenizer.encode	pub fn encode(r: Self$@, text: U8[]): List<|I32|>$@	the token IDs for a text, allocated on the tokenizer's arena. Splits into chunks (pretokenize) and within each chunk merges the pair of the smallest rank every time; no merge crosses a chunk, as during training.
+ksai/tokenizer	Tokenizer.load	pub fn load(r: Self$@, vocab_path: U8[], merges_path: U8[]): Void?io.Io_error	loads the vocabulary and merge rules that `train_bpe.py` wrote
+ksai/tokenizer	Tokenizer.new	pub fn new(arena: Arena$@): Tokenizer	an empty tokenizer, to be filled by `load` or by `add_token` / `add_merge`
+ksai/tokenizer	Tokenizer.next_rank	pub next_rank: I32	the rank the next `add_merge` gets; the call order is the rank
+ksai/tokenizer	Tokenizer.vocab	pub vocab: Map<|U8[], I32|>$@	each word's byte sequence, mapped to its ID

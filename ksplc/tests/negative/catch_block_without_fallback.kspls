@@ -1,0 +1,28 @@
+//< A `catch` block whose value can be read must provide one
+//<
+//< Falling off its end leaves the binding the zero value in silence, while `catch alt()` hands the
+//< value over (Principle 8 in `../../../docs/DESIGN.md`); `catch { }` reads as "ignore the failure"
+//< and is the same hole. The four shapes handing the value to nobody must pass (the `EXPECT-NOT`).
+// EXPECT: 'catch' is expected to produce 'std_lang_Slice_U8_Const'
+// EXPECT: without 'fallback'
+// EXPECT-NOT: produce 'Sz'
+import "std/io"
+
+priv fn counted(): Sz?io.Io_error
+  body: = io.read_file("/nowhere/at/all")?
+  return body.len
+
+fn main(): I32
+  worked: = io.read_file("/nowhere/at/all") catch
+    io.out().s("it failed\n")
+  quiet: = io.read_file("/nowhere/at/all") catch {}
+  _unread: = counted() catch {}
+  counted() catch {}
+  // These two are read, so what lets them stand is that the handler never finishes: one leaves by
+  // a call declaring `#noreturn`, the other by a loop with no condition and no `break`.
+  from_panic: = counted() catch
+    panic("this fixture is never run")
+  from_loop: = counted() catch
+    for {}
+  io.out().s("\{worked.len\}/\{quiet.len\}/\{from_panic\}/\{from_loop\}\n")
+  return 0

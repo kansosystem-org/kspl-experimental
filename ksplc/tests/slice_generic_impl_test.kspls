@@ -1,0 +1,59 @@
+import "std/chars"
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// A generic impl targeting a slice as a whole (`impl<|T|> T$[]`).
+//
+// `T$[]` is sugar for `std/lang`'s `Slice<|$T|>`, so this is an ordinary generic impl,
+// monomorphized per element type. **A different element type is a different instance** (collapsed
+// into one, both would pass with one's type argument baked into the other).
+// ==========================================
+impl<|T|> T$[]
+  fn nth(r: Self, i: Sz): T
+    return r[i]
+
+  fn first_or(r: Self, d: T): T
+    return d if r.len == 0 else r[0]
+
+fn test_generic_impl_over_slices()
+  verdict.start("[Slice] a generic impl targeting a slice as a whole test...")
+  $ints: I32[3] = ::{ 7, 8, 9 }
+  si: = I32$[]::ints
+  assert(si.nth(1) == 8, "generic slice impl: the method is called on the I32 instance")
+
+  $bytes: U8[2] = ::{ 65, 66 }
+  sb: = U8$[]::bytes
+  assert(sb.first_or(0) == 65, "generic slice impl: the U8 instance is monomorphized separately")
+
+  empty: U8$[] = ::{ .ptr = null, .len = 0 }
+  assert(empty.first_or(9) == 9, "generic slice impl: length 0 falls back to the default too")
+  verdict.pass("`impl<|T|> T$[]` is an ordinary generic impl, monomorphized per element type.")
+
+fn test_subsequence_over_slices() //<
+  //< It checks a subsequence (`sub` / `sub_from` / `sub_mut`) works for any element type
+  //<
+  //< The three are in `std/chars`.
+  //< Caution: **Test it with more than `U8[]`**, or a return to `impl U8[]` goes unnoticed.
+  //< **Always include a slice from `List.slice()`**: `U8[]$[]` resolves differently from `U8[][]`.
+  verdict.start("[Slice] a subsequence not minding the element type test...")
+  ints: I32[5] = ::{ 1, 2, 3, 4, 5 }
+  v: = I32[]::ints
+  mid: = v.sub(1, 3)
+  assert(mid.len == 3 && mid[0] == 2 && mid[2] == 4, "sub: a subsequence cuts out of an I32[]")
+  assert(v.sub_from(3).len == 2, "sub_from: to an I32[]'s end")
+  // Out of range is empty rather than a panic (`sub_count`'s convention).
+  assert(v.sub(9, 2).len == 0 && v.sub_from(0 - 1).len == 0, "sub: out of range returns empty")
+
+  words: = U8[][]::{ "a", "b", "c" }
+  assert(words.sub_from(1).len == 2, "sub_from: it cuts out of a slice of slices too")
+
+  s: U8[] = "kanso"
+  assert(s.sub(1, 3).equals("ans") && s.sub_from(2).equals("nso"), "sub: U8[] is as it was")
+
+  $room: I32[4] = ::{ 0, 0, 0, 0 }
+  mv: = I32$[]::room
+  win: = mv.sub_mut(1, 2)
+  win[0] = 42
+  assert(room[1] == 42, "sub_mut: what was cut out is writable")
+  verdict.pass("a subsequence is one function that works for any element type.")

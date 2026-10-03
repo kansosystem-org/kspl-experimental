@@ -1,0 +1,64 @@
+//< Builds the applications as they ship and checks what they print when run
+//<
+//< `make test` runs it (`ksai/Makefile`), passing the programs it built and a working directory.
+import "ksai/tests/examples_fim" as fim
+import "ksai/tests/examples_qwen" as qwen
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" // `arena.text()` and `lines`
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+
+priv const usage: U8[] =
+  "usage: ksplc run tests/examples_main.kspls <llama_engine> <qwen_infer> <fim_coder> <work_dir>" //<
+    //< the arguments, in that order (`make test` in `ksai/Makefile` passes them)
+
+priv const llama_verdict: U8[] = "RESULT: ALL PASS" //< what llama_engine says when training works
+  //<
+  //< Caution: **Keep it in step with `ksai/examples/llama_engine/main.kspls`**, whose line
+  //< `make run`'s gate reads too.
+
+priv const llama_wait_ms: I32 = 600000 //< the cap on one run of llama_engine (it trains)
+
+priv const llama_said_cap: Sz = 1024 * 1024 //< how much of what it says is kept
+
+fn main(): I32
+  io.set_line_buffered()
+  arena: = Arena.new(64 * 1024 * 1024)
+  defer arena.free()
+  argv: = sys.args()
+  if argv.len != 5
+    panic(arena.dup_str(usage))
+  // The children start in `work`, so the programs' paths are made absolute first.
+  llama: = fs.absolute(argv.get(1), arena) catch panic("cannot read the working directory")
+  qwen_exe: = arena.dup_str(argv.get(2))
+  fim_exe: = fs.absolute(argv.get(3), arena) catch panic("cannot read the working directory")
+  work: = arena.dup_str(argv.get(4))
+  test_llama_trains(llama, work, arena)
+  qwen.test_qwen_answers(qwen_exe, work, arena)
+  fim.test_fim_round_trip(fim_exe, work, arena)
+  fim.test_fim_threads_keep_weights(fim_exe, work, arena)
+  return 0
+
+priv fn test_llama_trains(exe: U8[], work: U8[], arena: Arena$@) //<
+  //< llama_engine trains from the weights embedded in it, and reports that the loss went down
+  //<
+  //< **It runs from the working directory**, which has no `ksai/` folder, so a program that still
+  //< reads its weights by path fails here instead of in someone else's folder.
+  verdict.start("[examples] llama_engine trains from the weights burned into it")
+  fs.mkdir_all(work) catch
+    panic(U8$[]::arena.text().s("cannot create the working directory: \{work\}").take())
+  r: = subproc.run_capture(U8[][]::{ exe }, work, llama_wait_ms, llama_said_cap, arena)
+  said: = arena.text().s(r.stdout_data).s(r.stderr_data).take()
+  $held: = false
+  for line in said.lines(arena)
+    if line.starts_with(llama_verdict)
+      held = true
+  assert(!r.spawn_failed && !r.timed_out && r.exit_code == 0 && held,
+    U8$[]::arena.text().s("llama_engine did not say the loss fell (exit \{r.exit_code\}):\n")
+    .s(said).take())
+  verdict.pass("llama_engine trains from its own weights, from any folder, and the loss falls")

@@ -1,0 +1,80 @@
+//< Keeps leftover merge markers out of tracked files (not the suite)
+//<
+//< **Every other check passes a leftover marker**: it is neither KSPL nor a reference, so the
+//< format, lint and document checks all skip it. So this check reads every tracked file. The
+//< verdict is held to the samples below (Principle 5 in `../../docs/DESIGN.md`).
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+import "tests/support/harness"
+
+priv const run_len: Sz = 7 //< how long a run of one character has to be before it is a marker
+  //<
+  //< Git writes runs of this length.
+
+priv const ends: U8[2] = ::{ '<', '>' } //< the two ends of a conflict
+  //<
+  //< **The middle rule is not checked**: a run of `=` is also a divider here and a Markdown
+  //< underline. A conflict always writes both ends, so these two find every conflict.
+
+priv fn opens_run(line: U8[], c: U8): Bool //<
+  //< Whether the line opens with a run of `c` long enough to be a marker's
+  //<
+  //< **The run is counted, never written out as a literal.** Written here as a string, it would be
+  //< found by this file's own check, and every run would fail on this file.
+  $n: Sz = 0
+  for n < line.len && line[n] == c
+    n += 1
+  if n < run_len
+    return false
+  // A marker's run is followed by a space or by the line's end. Anything else is text that
+  // happens to start with the same character.
+  return n == line.len || line[n] == ' '
+
+fn opens_a_marker(line: U8[]): Bool //< whether the line is one of a conflict's ends
+  for c in ends
+    if opens_run(line, c)
+      return true
+  return false
+
+priv fn run_line(c: U8, n: Sz, tail: U8[], arena: Arena$@): U8[] //<
+  //< Builds a line opening with a run of `c` that is `n` long, with `tail` behind it
+  out: = arena.text()
+  for $i: Sz = 0; i < n; i += 1
+    out.c(c)
+  return out.s(tail).take()
+
+priv fn check_fires(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  // The character, the length of its run, and what follows it. **The last two guard the boundary**:
+  // a run of `=` is this repository's divider, and a run followed by a letter is text.
+  chars: U8[6] = ::{ '<', '>', '>', '<', '=', '>' }
+  lens: Sz[6] = ::{ run_len, run_len, run_len + 2, run_len - 1, run_len, 1 }
+  tails: U8[][6] = ::{ " HEAD", " a commit", " deep", " HEAD", "", " a quotation" }
+  want: Bool[6] = ::{ true, true, true, false, false, false }
+  for i in Range.asc(want.len)
+    seen += 1
+    line: = run_line(chars[i], lens[i], tails[i], arena)
+    if opens_a_marker(line) != want[i]
+      bad
+        .push(arena.text().s("\"").s(line).s("\" was read the other way").take())
+  verdict.check_list("the verdict on a merge's leftover marker can fire", seen, "samples", bad@, "")
+
+priv fn check_files(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  for rel in harness.tracked_matching(U8[][]::{ "*" })
+    $no: Sz = 0
+    for line in harness.read_under_root(rel).lines(arena)
+      no += 1
+      seen += 1
+      if opens_a_marker(line)
+        bad.push(arena.text().s(rel).c(':').s("\{no\}").take())
+  verdict.check_list("no tracked file carries a merge's leftover marker", seen, "lines", bad@,
+    "finish the merge: keep the side that is right, and take all three rules away")
+
+fn run(arena: Arena$@)
+  check_fires(arena)
+  check_files(arena)

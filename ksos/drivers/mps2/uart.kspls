@@ -1,0 +1,57 @@
+//< The UART0 driver for the ARM MPS2 FPGA prototyping board (the CMSDK APB UART IP)
+
+// ==========================================
+//   0x00 DATA     : the data sent and received (only the low 8 bits are meaningful)
+//   0x04 STATE    : bit0=TX_FULL bit1=RX_FULL bit2=TX_OVERRUN bit3=RX_OVERRUN
+//   0x08 CTRL     : bit0=TX_ENABLE bit1=RX_ENABLE (the interrupt bits are unused here)
+//   0x0C INTSTATUS: the interrupt cause (unused)
+//   0x10 BAUDDIV  : the baud rate divisor (must be 16 or more for PCLK. QEMU ignores it, but a
+//                   valid value is set for compatibility with real hardware)
+// ==========================================
+import "ksos/drivers/mmio"
+
+const uart0_data: U32 = 0x40004000
+const uart0_state: U32 = 0x40004004
+const uart0_ctrl: U32 = 0x40004008
+const uart0_bauddiv: U32 = 0x40004010
+
+const state_tx_full: U32 = 0x1
+const state_rx_full: U32 = 0x2
+const ctrl_tx_enable: U32 = 0x1
+const ctrl_rx_enable: U32 = 0x2
+
+fn init() //< initializes UART0 (enabling both TX and RX)
+  mmio.write32(uart0_bauddiv, 16U32)
+  mmio.write32(uart0_ctrl, ctrl_tx_enable | ctrl_rx_enable)
+
+fn putc(c: U8): Bool //< sends one byte (busy-waits until the TX buffer has space)
+  //<
+  //< On a timeout it returns false (the byte was not sent).
+  if !mmio.poll(uart0_state, state_tx_full, false)
+    return false
+  mmio.write32(uart0_data, c)
+  return true
+
+fn puts(s: U8[]): Bool //< sends a string a byte at a time
+  //<
+  //< If putc times out partway it returns false at once.
+  for c in s
+    if !putc(c)
+      return false
+  return true
+
+fn getc(): Option<|U8|> //<
+  //< Receives one byte (busy-waits until data arrives in the RX buffer)
+  //<
+  //< On a timeout it returns none.
+  if !mmio.poll(uart0_state, state_rx_full, true)
+    return Option<|U8|>.none
+  return Option<|U8|>.some(U8::mmio.read32(uart0_data))
+
+fn try_getc(): Option<|U8|> //<
+  //< Takes a byte from the receive buffer at once, or returns none if it is empty
+  //<
+  //< It does not wait: it is one iteration of the polling loop's check, exposed on its own.
+  if (mmio.read32(uart0_state) & state_rx_full) == 0
+    return Option<|U8|>.none
+  return Option<|U8|>.some(U8::mmio.read32(uart0_data))

@@ -1,0 +1,54 @@
+//< Pre-emptive scheduling on the POSIX port (ucontext)
+//<
+//< The POSIX version of ksos/demo/cortex_m/cortex_m_preempt.kspls, where the explanation of what
+//< it proves is. Here SIGALRM (setitimer) calls ksos_tick() at a fixed rate instead of SysTick.
+import "ksos/kernel/task" + { Task }
+import "std/io"
+import "std/sys"
+
+$g_ran_a: I32 = 0
+$g_ran_b: I32 = 0
+
+$tcb_a: Task
+$tcb_b: Task
+$tcb_m: Task
+// The POSIX port switches with ucontext (makecontext/swapcontext) and needs a larger stack than
+// Cortex-M's plain assembly switch (libc's signal handling and the like use stack). The Cortex-M
+// version's 4096 bytes are not enough here, and it crashes.
+$stack_a: U8[65536]
+$stack_b: U8[65536]
+$stack_m: U8[65536]
+
+fn task_a(_arg: Void$@): Void //< a computing task that never yields
+  for
+    g_ran_a = 1
+
+fn task_b(_arg: Void$@): Void
+  for
+    g_ran_b = 1
+
+fn monitor(_arg: Void$@): Void //< the monitoring task
+  //<
+  //< It sleeps 20 ticks on Task.delay. It can only wake if the SIGALRM-driven tick forces A and B,
+  //< which never yield, to switch and advances the clock.
+  Task.delay(20)
+  io.out().s("=== Kanso OS (POSIX) preemptive scheduling ===\n")
+  io.out().s("[monitor] woke after task_delay while A/B never yield -> preemption works\n")
+  // Caution: **Check that both A and B ran too** — waking alone does not show the case where
+  // one task hogs the CPU while only the clock advances (a gap in the round robin).
+  assert(g_ran_a == 1, "preempt: task A never got the CPU")
+  assert(g_ran_b == 1, "preempt: task B never got the CPU")
+  io.out().s("[monitor] task A ran\n[monitor] task B ran\n")
+  io.out().s("=== done ===\n")
+  // A and B loop forever, so start_scheduler() never returns. The process ends here once the
+  // monitor has reported.
+  sys.exit(0)
+
+fn main()
+  tcb_a.create(U8$[]::stack_a, task_a, null, 1, "a")
+  tcb_b.create(U8$[]::stack_b, task_b, null, 1, "b")
+  tcb_m.create(U8$[]::stack_m, monitor, null, 1, "m")
+  // Start SIGALRM/setitimer with a 1000-microsecond (1ms) period. On the POSIX port reload is in
+  // microseconds, a host-specific unit unlike the Cortex-M port's SysTick counter value.
+  task.enable_preemption(1000)
+  task.start_scheduler()

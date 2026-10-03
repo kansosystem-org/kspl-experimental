@@ -1,0 +1,22 @@
+//< The Move_only version of the same root cause as above
+//<
+//< Move it in the body and then use it in the defer's body and the run order becomes "move -> move
+//< again". Analysed at the state at registration it goes undiagnosed (ksplc/docs/DESIGN.md §11.1).
+// EXPECT: was moved out of and cannot be used again
+import "std/mem"
+
+priv struct M
+  v: I32
+
+impl M: Move_only {}
+
+priv fn take(m: M): I32
+  return m.v
+
+priv fn move_then_use_in_defer(): I32
+  m: M = ::{ .v = 1 }
+  defer { _z: = take(m) }
+  return take(m)
+
+fn main()
+  _x: = move_then_use_in_defer()

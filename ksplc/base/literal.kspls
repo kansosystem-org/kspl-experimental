@@ -1,0 +1,308 @@
+//< Reads a literal's spelling
+//<
+//< It covers strings, characters and numbers, each read from the spelling in the source.
+//< Caution: **Do not write a copy of this.** Fix only one copy and they drift apart as "the
+//< contents differ only when built through C".
+//< A literal's **type and range** belong to `ksplc/sema/body/literal.kspls`, and **turning it into
+//< a C string** to `ksplc/gen/c/literal.kspls` (one per layer).
+import "std/chars"
+import "std/str" { Str_builder }
+
+struct Number_u64 //< the result of converting a numeric literal to U64
+  //<
+  //< Caution: **Do not silently wrap an overflow**, or an out-of-range literal passes on as an
+  //< in-range value until the C compiler says `integer literal is too large`
+  //< ("Failing fast through an exception or an ICE" in ksplc/docs/DESIGN.md).
+  value: U64 //<
+    //< where overflow is true, the value just before it overflowed (not used for display)
+  overflow: Bool //< it does not fit in U64
+
+fn literal_escape_byte(ec: U8): U8 //< the byte that the character after a backslash stands for
+  //<
+  //< **This table is the canonical source**: constant evaluation (eval_char in
+  //< sema/decl/eval.kspls) and both backends' string output use it.
+  return (10 if ec == 'n' else 13 if ec == 'r' else 9 if ec == 't' else 39 if ec == '\''
+    else 92 if ec == '\\' else 0 if ec == '0' else ec)
+
+fn is_known_escape(ec: U8): Bool //<
+  //< Whether a character may follow a backslash inside a literal
+  //<
+  //< Caution: **List the accepted escapes here and nowhere else.** literal_escape_byte turns an
+  //< unlisted one into the character itself, so `'\b'` (8 in C) would silently become `'b'`
+  //< (Principle 5 in docs/DESIGN.md). **Keep the `{` and `}`**, as interpolation is `\{` … `\}`.
+  //< **Only the `u` goes on past one character** (`\uXXXX`).
+  return ec == 'n' || ec == 'r' || ec == 't' || ec == '0' || ec == '\'' || ec == '"' || ec == '\\'
+    || ec == '{' || ec == '}' || ec == 'u'
+
+fn line_continuation_span(text: U8[], at: Sz, end: Sz): Sz //<
+  //< How far a `\` at a line's end reaches
+  //<
+  //< It reaches past the line terminator and past the next line's indent.
+  //< 0 where there is none; asked before `is_known_escape`. It stands for **no byte at all**.
+  //< Caution: **The next line's indent goes with it**, or re-indenting the block would change the
+  //< text (as Rust, Swift and Java's text blocks decide it).
+  if at >= end || (text.ptr + at)$ != '\\' || at + 1 >= end
+    return 0
+  $j: = at + 1
+  if (text.ptr + j)$ == '\r' && j + 1 < end && (text.ptr + j + 1)$ == '\n'
+    j += 2
+  else if (text.ptr + j)$ == '\n'
+    j += 1
+  else
+    return 0
+  for j < end && ((text.ptr + j)$ == ' ' || (text.ptr + j)$ == '\t')
+    j += 1
+  return j - at
+
+enum Literal_fault //< the reason a literal's spelling is invalid
+  none //< it is valid
+  unknown //< an escape not in the table (`\b` and the like)
+  short_hex //< four hexadecimal digits do not follow the `\u`
+  surrogate //< the `\u` points at a surrogate code point (D800-DFFF)
+  wide_in_char //< a `\u` that does not fit in one byte is written into a character literal
+  wide_char_body //< a character literal's body does not fit in one byte (`'€'` / `'ab'`)
+
+struct Literal_check //<
+  //< The fault found in a spelling, with its position and length
+  //<
+  //< The length is counted from the backslash.
+  //< **Decide the length here too.** If the caller counted it again, a `"\u12"` short of digits
+  //< would copy everything up to the closing quote into the diagnostic.
+  fault: Literal_fault
+  at: Sz
+  len: Sz
+
+fn escape_code_point(text: U8[], at: Sz): I32 //< the code point a `\uXXXX` stands for
+  //<
+  //< `at` is the backslash's index; -1 without four hexadecimal digits (as hex4 in std/chars).
+  return text.hex4(at + 2)
+
+struct Literal_step //< one step through a string literal's body, and what it stands for
+  advance: Sz //< how many characters of the spelling it consumes
+  code_point: I32 //< a `\uXXXX`'s character, standing for its 1 to 3 UTF-8 bytes; -1 otherwise
+  byte: U8 //< the one byte it stands for, where code_point is -1 and it is not a continuation
+  is_cont: Bool //< a `\` at a line's end, standing for no byte at all
+
+impl Literal_step
+  fn byte_count(r: Self): Sz //< how many bytes the step stands for
+    if r.is_cont
+      return 0
+    return 1 if r.code_point < 0 else chars.codepoint_len(r.code_point)
+
+fn literal_step(text: U8[], at: Sz, end: Sz, is_raw: Bool): Literal_step //<
+  //< The step starting at `at` in a string literal's body, which ends at `end`
+  //<
+  //< **The only reader of the escapes**: `literal_span` counts with it and `append_literal_bytes`
+  //< writes with it, so a string's reported length and the bytes either backend emits agree.
+  b: = (text.ptr + at)$
+  if is_raw || b != '\\' || at + 1 >= end
+    return Literal_step::{ .advance = 1, .code_point = -1, .byte = b }
+  cont: = line_continuation_span(text, at, end)
+  if cont > 0
+    return Literal_step::{ .advance = cont, .code_point = -1, .is_cont = true }
+  if (text.ptr + at + 1)$ == 'u' && at + 6 <= end
+    cp: = escape_code_point(text, at)
+    if cp >= 0
+      return Literal_step::{ .advance = 6, .code_point = cp }
+  return Literal_step::{ .advance = 2, .code_point = -1,
+    .byte = literal_escape_byte((text.ptr + at + 1)$) }
+
+fn literal_end(src: U8[], at: Sz): Sz //<
+  //< Where the string or character literal that starts at `at` ends
+  //<
+  //< It skips a raw string's closing `"""`, the byte after each `\`, and a string inside an
+  //< interpolation (`\{ … \}`), so that string's quote does not close the outer one. A character
+  //< literal also stops at a line's end, where a broken one would otherwise run on.
+  //< **The only reader of a literal in raw text**; the indentation reader keeps its own, which
+  //< stops at every line end by design (`skip_string` in `../parse/layout.kspls`).
+  if at >= src.len
+    return src.len
+  if src.starts_with("\"\"\"", at)
+    $r: = at + 3
+    for r < src.len && !src.starts_with("\"\"\"", r)
+      r += 1
+    return src.len if r >= src.len else r + 3
+  quote: = src[at]
+  $j: = at + 1
+  $depth: Sz = 0
+  for j < src.len
+    c: = src[j]
+    if c == '\\'
+      // **A `\{` opens an interpolation only inside a double quote**; in `'\{'` it is a
+      // character.
+      if quote == '"' && j + 1 < src.len && src[j + 1] == '{'
+        depth += 1
+      else if depth > 0 && j + 1 < src.len && src[j + 1] == '}'
+        depth -= 1
+      j += 2
+      continue
+    if depth > 0 && (c == '"' || c == '\'')
+      j = literal_end(src, j)
+      continue
+    if depth == 0 && c == quote
+      return j + 1
+    if depth == 0 && quote == '\'' && c == '\n'
+      return j
+    j += 1
+  return src.len
+
+fn literal_fault(text: U8[], one_byte: Bool): Literal_check //<
+  //< It finds the first fault in a literal's spelling
+  //<
+  //< `.none` where there is none. Strings and characters are checked the same way; a raw string
+  //< (`"""`) is not checked, as a backslash means nothing there.
+  //< Caution: **Pass `one_byte` as true for a character literal**, which neither `'é'` nor `'€'`
+  //< fits; forget it and only the leading byte silently remains.
+  span: = text.literal_span()
+  ok: = Literal_check::{ .fault = Literal_fault.none, .at = -1, .len = 0 }
+  if span.is_raw
+    return ok
+  $j: Sz = span.start
+  for j < span.end
+    if (text.ptr + j)$ != '\\' || j + 1 >= span.end
+      j += 1
+      continue
+    // A character literal is on one line, so a continuation there becomes `.unknown`.
+    cont: = 0 if one_byte else line_continuation_span(text, j, span.end)
+    if cont > 0
+      j += cont
+      continue
+    ec: = (text.ptr + j + 1)$
+    if !is_known_escape(ec)
+      return Literal_check::{ .fault = Literal_fault.unknown, .at = j, .len = 2 }
+    if ec != 'u'
+      j += 2
+      continue
+    cp: = escape_code_point(text, j)
+    if cp < 0 || j + 6 > span.end
+      return Literal_check::{ .fault = Literal_fault.short_hex, .at = j,
+        .len = 6 if j + 6 <= span.end else span.end - j }
+    if cp >= 0xD800 && cp <= 0xDFFF
+      return Literal_check::{ .fault = Literal_fault.surrogate, .at = j, .len = 6 }
+    if one_byte && cp > 0x7F
+      return Literal_check::{ .fault = Literal_fault.wide_in_char, .at = j, .len = 6 }
+    j += 6
+  // **A character literal is one byte**, so `'€'` and `'ab'` are rejected, or char_literal_byte
+  // **silently returns only the leading byte**. **Count with literal_span's byte_len**; a recount
+  // here would be off by a `\uXXXX`'s extra bytes.
+  if one_byte && span.byte_len != 1
+    return Literal_check::{ .fault = Literal_fault.wide_char_body, .at = span.start,
+      .len = span.end - span.start }
+  return ok
+
+fn char_literal_byte(text: U8[]): U8 //<
+  //< The byte a character literal's spelling (`'a'` / `'\n'` / `'A'`) stands for
+  //<
+  //< 0 for a spelling shorter than three characters; pass only what passed the syntax check.
+  //< Caution: **Do not pass a `\u` to literal_escape_byte**, which returns `'u'` for it.
+  //< literal_fault checks that it fits in one byte.
+  if text.len < 3
+    return 0
+  ch: = (text.ptr + 1)$
+  if ch != '\\' || text.len < 4
+    return ch
+  if (text.ptr + 2)$ == 'u'
+    cp: = escape_code_point(text, 1)
+    return 0 if cp < 0 else U8::cp
+  return literal_escape_byte((text.ptr + 2)$)
+
+struct Str_span //<
+  //< A string literal's body: its start, its end and its real byte length
+  start: Sz //< the body's start position (the quotes and a raw leading newline excluded)
+  end: Sz //< the body's end position (the closing quote excluded)
+  byte_len: Sz //< the real byte length (an escape counted as one byte)
+  is_raw: Bool //< whether it is a raw string by \"\"\"
+
+impl U8[]
+  fn literal_span(r: U8[]): Str_span //< it measures a string literal's spelling
+    //<
+    //< It lives here so genc and genllvm agree on the length. A raw (\"\"\") drops only the newline
+    //< right after the opening """, as modern languages do.
+    if r.len >= 6 && r.starts_with("\"\"\"")
+      $start: Sz = 3
+      end: = r.len - 3
+      if start < end && (r.ptr + start)$ == '\n'
+        start += 1
+      else if start + 1 < end && (r.ptr + start)$ == '\r' && (r.ptr + start + 1)$ == '\n'
+        start += 2
+      return Str_span::{ .start = start, .end = end, .byte_len = end - start, .is_raw = true }
+    end: = r.len - 1 if r.len > 0 else 0
+    // **Only the `\uXXXX` is not one byte**: its UTF-8 length (1 to 3) is counted, or both
+    // backends' output disagrees with `.len` (KSPL_STR counts with sizeof).
+    $byte_len: Sz = 0
+    $j: Sz = 1
+    for j < end
+      step: = literal_step(r, j, end, false)
+      j += step.advance
+      byte_len += step.byte_count()
+    return Str_span::{ .start = 1, .end = end, .byte_len = byte_len, .is_raw = false }
+
+  fn append_literal_bytes(r: U8[], out: Str_builder$@) //<
+    //< It appends the bytes a string literal's spelling stands for to out
+    //<
+    //< **Both backends write these bytes**, each with its own escapes (`gen/c/literal.kspls`,
+    //< `gen/llvm/ctx.kspls`); only `literal_step` reads the spelling.
+    span: = r.literal_span()
+    $j: = span.start
+    for j < span.end
+      step: = literal_step(r, j, span.end, span.is_raw)
+      j += step.advance
+      if step.code_point >= 0
+        for k in Range.asc(chars.codepoint_len(step.code_point))
+          out.c(chars.codepoint_byte(step.code_point, k))
+      else if !step.is_cont
+        out.c(step.byte)
+
+  fn append_clean_number(r: U8[], out: Str_builder$@, stops: U8[]): I32 //<
+    //< It writes a numeric literal's body into out, without '_', stopping at any of stops
+    //<
+    //< It returns where it stopped (-1 if it never stopped); the caller handles the type suffix.
+    for i in Range.asc(r.len)
+      ch: = (r.ptr + i)$
+      if stops.find_char(ch) >= 0
+        return I32::i
+      if ch != '_'
+        out.c(ch)
+    return -1
+
+  fn parse_clean_number_u64(r: U8[]): Number_u64 //<
+    //< It converts a literal body already cleaned by append_clean_number to U64
+    //<
+    //< It handles the 0x/0b prefixes.
+    //< It reads only the digits and ignores the type. The code generator's path that **cleans a
+    //< literal and emits it as it is** (emit_llvm_integer_literal in gen/llvm/expr.kspls) has no
+    //< type resolution, so it uses this rather than sema's evaluator (which takes the width from
+    //< the type).
+    $i: Sz = 0
+    $radix: U64 = 10
+    if r.len >= 2 && r.ptr$ == '0' && ((r.ptr + 1)$ == 'x' || (r.ptr + 1)$ == 'X')
+      radix = 16
+      i = 2
+    else if r.len >= 2 && r.ptr$ == '0' && ((r.ptr + 1)$ == 'b' || (r.ptr + 1)$ == 'B')
+      radix = 2
+      i = 2
+    $val: U64 = 0
+    for i < r.len
+      d: = (r.ptr + i).hex_val()
+      if d >= 0
+        // Unsigned arithmetic wraps mod 2^64, so it computes first and then detects the overflow
+        // from the result (as Cu64 in std/checked_int does).
+        scaled: = val * radix
+        if val != 0 && scaled / val != radix
+          return Number_u64::{ .value = val, .overflow = true }
+        next: = scaled + U64::d
+        if next < scaled
+          return Number_u64::{ .value = val, .overflow = true }
+        val = next
+      i += 1
+    return Number_u64::{ .value = val, .overflow = false }
+
+  fn parse_int_literal_u64(r: U8[]): Number_u64 //<
+    //< An integer literal's absolute value as U64; it ignores the sign
+    //<
+    //< The spelling may use `_` separators, `0x`/`0b`, and a type suffix.
+    //< In source, `-1` is unary minus on `1`; the caller handles the sign.
+    $clean: = Str_builder.new()
+    defer clean.free()
+    _stop: = r.append_clean_number(clean@, "UIS")
+    return clean.slice().parse_clean_number_u64()

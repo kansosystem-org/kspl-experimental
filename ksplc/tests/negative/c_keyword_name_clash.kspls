@@ -1,0 +1,36 @@
+//< Rejects a C reserved word and its renamed form standing in the same scope
+//<
+//< **Look at a struct's fields too.** A field does not go onto the symbol table's scope,
+//< so the check on locals (declare_symbol) does not reach. The check is placed in sema. Placed in
+//< genc, the same source is refused on C and passes on LLVM.
+// EXPECT: 'goto' is a C keyword
+// EXPECT: 'do' is a C keyword
+// EXPECT: 'long' is a C keyword
+// EXPECT: 'union' is a C keyword
+// EXPECT-NOT: 'while' is a C keyword
+
+priv struct Fields_forward
+  long: I32
+  long_kw: I32 // the dodge's target is taken
+
+priv struct Fields_backward
+  union_kw: I32 // the dodge's target comes first
+  union: I32
+
+priv struct Fields_ok
+  short: I32
+  while_kw: I32 // `while` is a different name, so no clash
+
+priv fn forward(): I32
+  goto: I32 = 1
+  goto_kw: I32 = 2 // the dodge's target is taken
+  return goto + goto_kw
+
+priv fn backward(): I32
+  do_kw: I32 = 1 // the dodge's target comes first
+  do: I32 = 2
+  return do + do_kw
+
+fn main(): I32
+  while: I32 = forward() + backward() // no clash, so legitimate
+  return while

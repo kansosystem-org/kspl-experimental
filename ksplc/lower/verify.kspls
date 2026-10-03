@@ -1,0 +1,77 @@
+//< Checks at lower's exit that the tree's types match
+//<
+//< **lower "carries types by hand".** Many places set a synthesized node's `type_id` themselves
+//< with `env`'s type operations; without this check a mix-up shows only **after code
+//< generation**, in C's warnings or the LLVM IR's signature check.
+//< **A generic's template never reaches here.** An uninstantiated one (`Arena.alloc_as<|T|>` in
+//< `std/mem`) survives sema's rebuilding, but `lower_prune` drops it as unreachable.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/diag" as base_diag
+import "ksplc/lower/root" as lower_root
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/query" as sema_type_query
+import "std/str" { Str_builder }
+
+priv const max_norm_steps: Sz = 8 //< the limit on repeating the type normalization
+  //<
+  //< Caution: **Repeat it until nothing changes.** The marks nest (`const_of(alias Meters)`), so
+  //< one resolution and one strip are not enough (the regression test is `Meters` in
+  //< ksplc/tests/lang_types_test.kspls).
+
+priv fn norm(c: Sema_ctx$@, id: I32): I32 //<
+  //< It reduces a type to the form in which equal types compare equal
+  //<
+  //< **const is dropped: a value read out does not carry it** (`$` on a `U8 immut@` reads a `U8`).
+  //< **An alias is resolved: another name, the same type.**
+  $cur: = id
+  for _i in Range.asc(max_norm_steps)
+    next: = c.env.strip_const_deep(c.env.get_real_type(cur))
+    if next == cur
+      return cur
+    cur = next
+  return cur
+
+priv fn fail(c: Sema_ctx$@, r: Ast_node$@, op: U8[], child_id: I32, want: I32)
+  $msg: = Str_builder.new()
+  defer msg.free()
+  msg.s("Lower ICE: the types of '").s(op).s("' do not mesh: child=")
+    .s(c.env.get_str(child_id))
+  msg.s(" means self=").s(c.env.get_str(want)).s(" was expected, but self=")
+    .s(c.env.get_str(r.type_id))
+  r.ice_panic(msg.slice())
+
+priv fn check_postfix(r: Ast_node$@, c: Sema_ctx$@)
+  child: = r.get_child(0)
+  if child == null
+    return
+  if r.text.equals("$")
+    want: = c.env.strip_ptr(child.type_id)
+    if norm(c, r.type_id) != norm(c, want)
+      fail(c, r, "$", child.type_id, want)
+    return
+  if !r.text.equals("@")
+    return
+  // **An array decays to a pointer to its element** (`U8[32]`'s `@` is a `U8@`, as in C). The
+  // element type after the decay is not checked.
+  if c.env.is_array(c.env.get_real_type(child.type_id))
+    return
+  want: = c.env.make_ptr(child.type_id)
+  if norm(c, r.type_id) != norm(c, want)
+    fail(c, r, "@", child.type_id, want)
+
+priv fn walk(r: Ast_node$@, c: Sema_ctx$@, depth: Sz)
+  if r == null || depth >= lower_root.max_lower_depth
+    return
+  if r.kind_id == .k_decl_fn && r.is_generic_template()
+    r
+      .ice_panic("Lower ICE: an unrealized generic came here. this stage is to run last in lower's \
+        run (after lower_prune)")
+  if r.kind_id == .k_expr_postfix && r.children.len >= 1
+    check_postfix(r, c)
+  for child in r.children
+    walk(child, c, depth + 1)
+
+fn run(ctx: Sema_ctx$@, root: Ast_node$@)
+  base_diag.ice_assert(root != null, "lower_verify.run: root is null")
+  walk(root, ctx, 0)

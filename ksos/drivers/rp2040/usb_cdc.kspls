@@ -1,0 +1,717 @@
+//< The USB CDC device for the real Raspberry Pi Pico / Pico W (RP2040) chip
+//<
+//< It is a composite device providing **two functions** over one USB cable.
+
+// ==========================================
+// The two functions and the register map are in "USB CDC (`usb_cdc.kspls`)" in ksos/docs/DESIGN.md.
+// Caution: **Call clocks.init() first.** USB needs exactly 48MHz on clk_usb (full speed's
+// tolerance is ±0.25%). On the built-in ROSC it does not even reach enumeration.
+// **It runs by polling, not by interrupt**, so ksos's scheduler need not share interrupt priorities
+// with it (if lost events start to matter, move to the NVIC — `enable_irq` in
+// ksos/drivers/cortex_m/scs.kspls).
+// ==========================================
+// QEMU has no RP2040 model: it is checked on a real Pico W (ksos/docs/HOWTO-bring-up.md), and the
+// descriptors statically by ksos/tests/usb_descriptors.kspls.
+// ==========================================
+import "ksos/drivers/cdc_ncm" as ncm
+import "ksos/drivers/mmio"
+import "ksos/drivers/rp2040/resets"
+import "ksos/drivers/rp2040/usb_desc"
+import "ksos/drivers/rp2040/usb_hw" as hw
+import "std/bytes"
+import "std/chars"
+import "std/ring"
+
+const mac_addr: U8[6] = ::{ 0x02, 0x00, 0x00, 0x00, 0x00, 0x01 } //< the device's own MAC
+  //<
+  //< It must differ from the host's (usb_desc.desc_mac).
+
+// ==========================================
+// The state
+// ==========================================
+
+// Caution: DATA0/DATA1 must alternate per endpoint. The host silently drops a packet with the wrong
+// PID: "it is connected and nothing arrives".
+$ep0_in_pid: U32 = 0
+$ep2_in_pid: U32 = 0
+$ep2_out_pid: U32 = 0
+$ep3_in_pid: U32 = 0
+$ep4_in_pid: U32 = 0
+$ep4_out_pid: U32 = 0
+// SET_ADDRESS takes effect only after its response has been sent in full (the host waits for it
+// at address 0).
+$pending_address: U32 = 0
+$device_address: U32 = 0
+$configured: Bool = false
+
+// Whether `init()` completed. **It is `poll_once`'s guard** (the reason is at `poll_once`).
+$started: Bool = false
+
+// EP0's data stage. **It may take more than one packet (64 bytes)**: the response is copied here
+// and the rest is sent on each completion (stop partway and enumeration fails).
+$ep0_tx: U8[256] // the largest is the configuration descriptor's 160 bytes
+$ep0_tx_len: U32 = 0
+$ep0_tx_sent: U32 = 0
+$ep0_tx_active: Bool = false
+$ep0_tx_zlp: Bool = false
+// Whether a host-to-device data stage is still being received.
+$ep0_out_active: Bool = false
+
+const tx_ring_size: Sz = 512 //< the send queue (EP2 IN)
+  //<
+  //< It exists **so the caller does not see the 64-bytes-per-packet limit**.
+  //< poll_once sends it one packet at a time.
+$tx_buf: U8[tx_ring_size]
+// **Its buf stays null** until the start of init(). Do not call write/pending before init (both
+// check configured, so the normal path never gets that far).
+$tx: ring.Ring<|tx_ring_size|>
+$tx_busy: Bool = false // whether an armed packet awaits completion
+
+// ==========================================
+// The NCM (network) side's state
+// ==========================================
+
+// The alternate setting the host chose for the data interface (IF 3). **Do not send while it is
+// still 0**: that setting has no endpoints.
+$ncm_alt: U32 = 0
+
+const notify_idle: U32 = 0 //< the steps for sending the notifications
+  //<
+  //< **The order is fixed.** First the speed, then the connection. Reversed, Windows leaves the
+  //< adapter disabled as "connected but the speed is unknown".
+const notify_want_speed: U32 = 1
+const notify_want_connect: U32 = 2
+const notify_done: U32 = 3
+$notify_state: U32 = 0
+$notify_busy: Bool = false // whether an armed notification awaits completion
+
+// ==========================================
+// NCM's frame exchange
+// ==========================================
+
+const rx_ntb_cap: Sz = 2048 //<
+  //< The size of the buffer a received NTB is reassembled in [bytes]
+  //<
+  //< **An NTB arrives split into 64-byte packets** and is reassembled here. Keep its size equal to
+  //< dwNtbOutMaxSize in GET_NTB_PARAMETERS (if smaller, it overflows).
+$rx_ntb: U8[2048]
+$rx_len: Sz = 0 // the bytes received so far
+$rx_want: Sz = 0 // the total length read from the NTH16 (0 = not readable yet)
+$rx_index: Sz = 0 // the index of the next datagram to return
+$rx_ready: Bool = false // whether one NTB is fully received and waiting to be read
+
+// For sending: 802.3's largest frame, 1514, plus the 28-byte header.
+$tx_ntb: U8[1600]
+$tx_ntb_len: Sz = 0
+$tx_ntb_sent: Sz = 0
+$tx_ntb_busy: Bool = false // whether an NTB is still being sent
+$tx_ntb_inflight: Bool = false // whether an armed EP4 packet awaits completion
+$tx_ntb_zlp: Bool = false // whether a zero-length packet is needed to mark the end
+$tx_seq: Sz = 0
+// The frames dropped because they could not be sent.
+// Caution: Always count them. Dropped silently, "sometimes it does not arrive" cannot be traced.
+$tx_drops: U32 = 0
+
+const stage_init: U32 = 1 //< the stage showing how far it got
+  //<
+  //< It lets the buzzer and the like report progress on real hardware (there is no SWD).
+const stage_bus_reset: U32 = 2
+const stage_setup_seen: U32 = 3
+const stage_addressed: U32 = 4
+const stage_long_reply: U32 = 5 //<
+  //< The stage at which a response over 64 bytes has been sent in full, split into packets
+  //<
+  //< That response is the configuration descriptor. If it stops before this stage, suspect the
+  //< split sending.
+const stage_configured: U32 = 6
+const stage_ncm_up: U32 = 7 //<
+  //< The stage at which the host has enabled NCM's data endpoints (alt 1) and the link is up
+  //<
+  //< The device has finished sending the notification that the link is up.
+$stage: U32 = 0
+
+fn current_stage(): U32 //< how far it got
+  return stage
+
+fn is_configured(): Bool
+  return configured
+
+fn ncm_is_up(): Bool //< whether it is usable as a network
+  //<
+  //< Caution: **Do not send a frame while this is false.** Under alt 0 the endpoints do not
+  //< exist.
+  return configured && ncm_alt == 1 && notify_state == notify_done
+
+fn ncm_alt_setting(): U32 //< the alternate setting the host has chosen
+  //<
+  //< If it stays 0, suspect SET_INTERFACE.
+  return ncm_alt
+
+priv fn stall_ep0(is_in: Bool) //< rejects a request (a protocol STALL)
+  //<
+  //< On EP0, **EP_STALL_ARM is set first**, then the buffer control's STALL (reversed, it has no
+  //< effect). The next SETUP clears it. Left unanswered, the host waits seconds per request.
+  ep0_tx_active = false
+  ep0_out_active = false
+  mmio.write32(hw.regs_ep_stall_arm, hw.stall_arm_ep0_in if is_in else hw.stall_arm_ep0_out)
+  addr: = hw.buf_ctrl_addr(0, is_in)
+  mmio.write32(addr, hw.buf_ctrl_stall)
+
+priv fn ack_ep0() //< a response with no content (the status stage)
+  //<
+  //< The convention is to return it as DATA1.
+  ep0_tx_active = false
+  empty: U8[1] = ::{ 0 }
+  hw.send(0, hw.dpram_ep0_buf, empty[0]@, 0, 1)
+  ep0_in_pid = 0
+
+priv fn ep0_tx_next() //< sends one packet of the rest of the stored response
+  //<
+  //< With nothing left it becomes a zero-length packet.
+  //< Caution: ep0_tx_sent is also an index into ep0_tx, so do not let it pass ep0_tx_len.
+  $n: U32 = ep0_tx_len - ep0_tx_sent
+  if n > hw.max_packet
+    n = hw.max_packet
+  hw.send(0, hw.dpram_ep0_buf, ep0_tx[Sz::ep0_tx_sent]@, n, ep0_in_pid)
+  ep0_in_pid = 1 - ep0_in_pid
+  ep0_tx_sent += n
+
+priv fn reply_ep0(data: U8@, total: U32, want: U32) //<
+  //< Returns a descriptor or similar on EP0, never more than the requested length (wLength)
+  //<
+  //< What does not fit in 64 bytes is sent by poll_once's send-completion path.
+  $want_len: U32 = total
+  if want_len > want
+    want_len = want
+  // copy_from truncates what does not fit and returns **the number copied**; the lengths below use
+  // that value (with any other, ep0_tx_sent would run past the capacity).
+  dst: = U8$[]::ep0_tx
+  len: = U32::dst.copy_from(0, U8[]::{ .ptr = data, .len = Sz::want_len })
+  ep0_tx_len = len
+  ep0_tx_sent = 0
+  ep0_tx_active = true
+  // If the response is shorter than requested and exactly a multiple of 64, no short packet marks
+  // the end of the data stage, so a zero-length packet is added (if len is 0 the first packet is
+  // itself a short packet, so none is needed).
+  ep0_tx_zlp = len != 0 && len < want && (len % hw.max_packet) == 0
+  ep0_tx_next()
+
+// ==========================================
+// Handling the SETUP packet
+// ==========================================
+priv fn setup_byte(off: U32): U32
+  a: = hw.dpram_setup + off
+  return mmio.read8(a)
+
+priv fn handle_get_descriptor(value: U32, want: U32) //< GET_DESCRIPTOR
+  //<
+  //< The high byte is the type and the low byte the index.
+  kind: = (value >> 8) & 0xff
+  index: = value & 0xff
+  if kind == 1
+    reply_ep0(usb_desc.desc_device[0]@, U32::usb_desc.desc_device.len, want)
+  else if kind == 2
+    reply_ep0(usb_desc.desc_config[0]@, U32::usb_desc.desc_config.len, want)
+  else if kind == 3
+    if index == 0
+      reply_ep0(usb_desc.desc_lang[0]@, U32::usb_desc.desc_lang.len, want)
+    else if index == 1
+      reply_ep0(usb_desc.desc_manufacturer[0]@, U32::usb_desc.desc_manufacturer.len, want)
+    else if index == 2
+      reply_ep0(usb_desc.desc_product[0]@, U32::usb_desc.desc_product.len, want)
+    else if index == 3
+      reply_ep0(usb_desc.desc_mac[0]@, U32::usb_desc.desc_mac.len, want)
+    else
+      // Windows also asks for 0xee (the MS OS descriptor); answered with a string, Windows
+      // misreads it, so it is answered as absent.
+      stall_ep0(true)
+  else
+    stall_ep0(true) // a type not provided, such as DEVICE_QUALIFIER (6)
+
+// The answer to NCM's GET_NTB_PARAMETERS (28 bytes; GetNtbParameters in CDC NCM 1.0).
+// **If this is not answered, the host does not bring the link up.** It is NCM's only mandatory
+// class request.
+// wNtbOutMaxDatagrams = 1 makes the host put one frame in each NTB, which keeps parsing simple.
+const desc_ntb_params: U8[28] = ::{
+  28,
+  0, // wLength
+  1,
+  0, // bmNtbFormatsSupported: 16-bit only
+  0x00,
+  0x08,
+  0x00,
+  0x00, // dwNtbInMaxSize  = 2048
+  4,
+  0, // wNdpInDivisor
+  0,
+  0, // wNdpInPayloadRemainder
+  4,
+  0, // wNdpInAlignment
+  0,
+  0, // wPadding1
+  0x00,
+  0x08,
+  0x00,
+  0x00, // dwNtbOutMaxSize = 2048
+  4,
+  0, // wNdpOutDivisor
+  0,
+  0, // wNdpOutPayloadRemainder
+  4,
+  0, // wNdpOutAlignment
+  1,
+  0, // wNtbOutMaxDatagrams
+}
+
+priv fn handle_ncm_request(req: U32, want: U32): Bool //< NCM's class requests
+  //<
+  //< true if it was handled.
+  //< Caution: Reject what cannot be handled with a STALL (ACK it silently and the host goes on
+  //< believing it was accepted, and later nothing adds up).
+  if req == 0x80 // GET_NTB_PARAMETERS
+    reply_ep0(desc_ntb_params[0]@, 28, want)
+    return true
+  if req == 0x85 // GET_NTB_INPUT_SIZE
+    in_size: U8[4] = ::{ 0x00, 0x08, 0x00, 0x00 }
+    reply_ep0(in_size[0]@, 4, want)
+    return true
+  if req == 0x83 // GET_NTB_FORMAT: 16bit(0)
+    ntb_format: U8[2] = ::{ 0, 0 }
+    reply_ep0(ntb_format[0]@, 2, want)
+    return true
+  // SET_NTB_INPUT_SIZE (0x86). A data stage follows, so a receive buffer is armed before the empty
+  // response; the data is not used.
+  if req == 0x86
+    ep0_out_active = true
+    hw.arm_recv(0, 1, hw.max_packet)
+    return true
+  // SET_NTB_FORMAT (0x84) / SET_ETHERNET_PACKET_FILTER (0x43): no data stage, and the device is
+  // fixed at 16-bit with no filter, so the empty response is enough.
+  if req == 0x84 || req == 0x43
+    ack_ep0()
+    return true
+  return false
+
+priv fn handle_setup()
+  bm: = setup_byte(0)
+  req: = setup_byte(1)
+  value: = setup_byte(2) | (setup_byte(3) << 8)
+  index: = setup_byte(4) | (setup_byte(5) << 8)
+  want: = setup_byte(6) | (setup_byte(7) << 8)
+
+  // After SETUP it always starts with DATA1; any previous request in progress is discarded.
+  ep0_in_pid = 1
+  ep0_tx_active = false
+  ep0_out_active = false
+  mmio.write32(hw.regs_ep_stall_arm, 0U32) // clear the previous STALL
+  if stage < stage_setup_seen
+    stage = stage_setup_seen
+
+  is_standard: = (bm & 0x60) == 0
+  if is_standard && req == 6
+    handle_get_descriptor(value, want)
+    return
+  if is_standard && req == 5
+    // SET_ADDRESS. **Do not set it yet** (see `pending_address`).
+    pending_address = value & 0x7f
+    ack_ep0()
+    return
+  if is_standard && req == 9
+    configured = value != 0
+    if configured
+      stage = stage_configured
+      // Arm one reception (so input from the host is not lost)
+      ep2_out_pid = 0
+      hw.arm_recv(2, 0, hw.max_packet)
+    // A new configuration resets the alternate setting to 0 and restarts the notifications.
+    ncm_alt = 0
+    notify_state = notify_idle
+    ack_ep0()
+    return
+  // SET_INTERFACE. **This brings NCM's link up**: alt 1 on IF 3 makes the endpoints usable, and
+  // the notifications start.
+  if is_standard && req == 11
+    if index == 3
+      ncm_alt = value
+      if ncm_alt == 1
+        ep4_out_pid = 0
+        ep4_in_pid = 0
+        tx_ntb_busy = false
+        tx_ntb_inflight = false
+        rx_rearm()
+        notify_state = notify_want_speed
+      else
+        notify_state = notify_idle
+      ack_ep0()
+    else if value == 0
+      ack_ep0() // the other interfaces have only alt 0
+    else
+      stall_ep0(true)
+    return
+  // GET_INTERFACE.
+  // Caution: Return one byte. Without it the host cannot check the alternate setting.
+  if is_standard && req == 10
+    $cur: U8[1] = ::{ 0 }
+    if index == 3
+      cur[0] = U8::ncm_alt
+    reply_ep0(cur[0]@, 1, want)
+    return
+  // GET_STATUS. **The host stops unless two bytes are returned** (0,0: neither self-powered nor
+  // remote-wakeup).
+  if is_standard && req == 0
+    st: U8[2] = ::{ 0, 0 }
+    reply_ep0(st[0]@, 2, want)
+    return
+  // NCM's class requests go to the control interface (IF 2). **Their numbers overlap ACM's**
+  // (IF 0; 0x21 is ACM's GET_LINE_CODING), so they are split by destination first.
+  if (bm & 0x60) == 0x20 && index == 2
+    if !handle_ncm_request(req, want)
+      stall_ep0((bm & 0x80) != 0)
+    return
+  // CDC's class requests. SET_LINE_CODING (0x20) / SET_CONTROL_LINE_STATE (0x22) may be ignored,
+  // but **a response must always be returned** or the host cannot open the port.
+  if (bm & 0x60) == 0x20 && req == 0x21
+    // GET_LINE_CODING: it answers 115200 8N1 (the value itself means nothing)
+    lc: U8[7] = ::{ 0x00, 0xc2, 0x01, 0x00, 0, 0, 8 }
+    reply_ep0(lc[0]@, 7, want)
+    return
+  if (bm & 0x80) != 0
+    stall_ep0(true) // a device-to-host request whose data cannot be returned
+    return
+  // A request carrying host-to-device data **receives that first**, then returns the empty
+  // response (without an armed receive buffer the host cannot continue).
+  if want != 0
+    ep0_out_active = true
+    hw.arm_recv(0, 1, hw.max_packet)
+    return
+  ack_ep0()
+
+// ==========================================
+// The main part
+// ==========================================
+
+fn init(): Bool //< starts running as a USB device
+  //<
+  //< Caution: Call it after clocks.init().
+  // First of all, so the send queue has a buffer even after an early return.
+  tx = ring.Ring<|tx_ring_size|>.new(tx_buf[0]@)
+  started = false
+  if !resets.reset_then_unreset(hw.reset_usbctrl)
+    return false
+
+  // Fill DPRAM with 0; leftovers that look like an endpoint control enumerate an unused endpoint.
+  for $i: U32 = 0; i < 0x180; i += 4
+    a: = hw.dpram + i
+    mmio.write32(a, 0U32)
+
+  mmio.write32(hw.regs_muxing, hw.muxing_to_phy | hw.muxing_softcon)
+  // Override the VBUS detection to "enabled": the Pico does not wire VBUS to the USB controller.
+  mmio.write32(hw.regs_pwr, hw.pwr_vbus_detect | hw.pwr_vbus_detect_override_en)
+  mmio.write32(hw.regs_main_ctrl, hw.main_ctrl_controller_en)
+  mmio.write32(hw.regs_sie_ctrl, hw.sie_ctrl_ep0_int_1buf)
+
+  // EP0 has no control register (only a buffer control); EP1 to EP4 are enabled.
+  hw.enable_ep(1, true, hw.ep_type_interrupt, hw.ep1_in_buf)
+  hw.enable_ep(2, false, hw.ep_type_bulk, hw.ep2_out_buf)
+  hw.enable_ep(2, true, hw.ep_type_bulk, hw.ep2_in_buf)
+  hw.enable_ep(3, true, hw.ep_type_interrupt, hw.ep3_in_buf)
+  hw.enable_ep(4, false, hw.ep_type_bulk, hw.ep4_out_buf)
+  hw.enable_ep(4, true, hw.ep_type_bulk, hw.ep4_in_buf)
+
+  stage = stage_init
+  // Setting the pull-up last makes the device visible to the host.
+  sc: = mmio.read32(hw.regs_sie_ctrl)
+  mmio.write32(hw.regs_sie_ctrl, sc | hw.sie_ctrl_pullup_en)
+  started = true
+  return true
+
+fn poll_once() //< handles one round of pending work
+  //<
+  //< **Call it regularly** (without the calls, enumeration does not advance). **It is safe to call
+  //< before `init()`**: it returns at once, since reading USBCTRL before its reset is released
+  //< stops the bus for good. So firmware without USB can share code that calls it.
+  if !started
+    return
+  status: = mmio.read32(hw.regs_sie_status)
+
+  if (status & hw.sie_status_bus_reset) != 0
+    mmio.write32(hw.regs_sie_status, hw.sie_status_bus_reset) // write to clear
+    mmio.write32(hw.regs_addr_endp, 0U32)
+    device_address = 0
+    pending_address = 0
+    configured = false
+    ep0_in_pid = 1
+    ep2_in_pid = 0
+    ep2_out_pid = 0
+    ep0_tx_active = false
+    ep0_out_active = false
+    // Discard what is still being sent: keeping tx_busy set would block sending forever (the
+    // completion never comes).
+    tx.clear()
+    tx_busy = false
+    // Reset the NCM side too (the alternate setting goes back to 0).
+    ncm_alt = 0
+    notify_state = notify_idle
+    notify_busy = false
+    ep3_in_pid = 0
+    ep4_in_pid = 0
+    ep4_out_pid = 0
+    rx_len = 0
+    rx_want = 0
+    rx_index = 0
+    rx_ready = false
+    tx_ntb_busy = false
+    tx_ntb_inflight = false
+    if stage < stage_bus_reset
+      stage = stage_bus_reset
+
+  // The endpoints whose sending or receiving finished.
+  // Caution: **Write 1 to clear it.** If not cleared, the same work is picked up again and again.
+  // **Read it before SETUP.** Both can appear in the same round; in the other order an old
+  // completion is taken for the new request's, corrupting the data being sent.
+  $buff: U32 = mmio.read32(hw.regs_buff_status)
+  if buff != 0
+    mmio.write32(hw.regs_buff_status, buff)
+
+  if (status & hw.sie_status_setup_rec) != 0
+    mmio.write32(hw.regs_sie_status, hw.sie_status_setup_rec)
+    buff = buff & ~3U32 // EP0's leftover completions are void once a new request arrives
+    handle_setup()
+
+  // bit0 = EP0 IN.
+  if (buff & 1U32) != 0
+    if pending_address != 0
+      // Once this completes, SET_ADDRESS may take effect.
+      device_address = pending_address
+      pending_address = 0
+      mmio.write32(hw.regs_addr_endp, device_address)
+      stage = stage_addressed
+    else if ep0_tx_active
+      if ep0_tx_sent < ep0_tx_len
+        ep0_tx_next() // send the rest (the configuration descriptor takes two packets, 64 + 3)
+      else if ep0_tx_zlp
+        ep0_tx_zlp = false
+        ep0_tx_len = 0
+        ep0_tx_sent = 0
+        ep0_tx_next()
+      else
+        // A zero-length OUT follows the data stage. **Without an armed receive buffer it keeps
+        // NAKing** and the request never completes.
+        ep0_tx_active = false
+        if ep0_tx_len > hw.max_packet && stage < stage_long_reply
+          stage = stage_long_reply
+        hw.arm_recv(0, 1, 0)
+  // bit1 = EP0 OUT. A fully received data stage gets the empty response.
+  if (buff & (1U32 << 1)) != 0 && ep0_out_active
+    ep0_out_active = false
+    ack_ep0()
+  // bit4 = EP2 IN. One packet has been sent, so any remaining data is sent next.
+  if (buff & (1U32 << 4)) != 0
+    tx_busy = false
+  // bit5 = EP2 OUT. The data is discarded and the next reception armed; DATA0/DATA1 alternates
+  // here too.
+  if (buff & (1U32 << 5)) != 0
+    ep2_out_pid = 1 - ep2_out_pid
+    hw.arm_recv(2, ep2_out_pid, hw.max_packet)
+  // bit6 = EP3 IN. One notification has been sent, so move to the next stage.
+  if (buff & (1U32 << 6)) != 0
+    notify_busy = false
+    if notify_state == notify_want_speed
+      notify_state = notify_want_connect
+    else if notify_state == notify_want_connect
+      notify_state = notify_done
+      stage = stage_ncm_up
+  // bit8 = EP4 IN. Send the rest of the NTB.
+  if (buff & (1U32 << 8)) != 0
+    tx_ntb_inflight = false
+  // bit9 = EP4 OUT. Append what arrived to the NTB.
+  if (buff & (1U32 << 9)) != 0
+    rx_packet_done()
+  pump_notify()
+  pump_ncm_tx()
+  pump_tx()
+
+// ==========================================
+// NCM's frame exchange (EP4) — the three functions ksos/net's Link uses
+// ==========================================
+
+priv fn rx_rearm() //< re-arms the receive buffer to wait for the next NTB
+  rx_len = 0
+  rx_want = 0
+  rx_index = 0
+  rx_ready = false
+  hw.arm_recv(4, ep4_out_pid, hw.max_packet)
+
+priv fn rx_packet_done() //< one packet arrived on EP4 OUT
+  //<
+  //< It reassembles the NTB and, once complete, marks it ready to be read.
+  //< Caution: **Keep re-arming the receive buffer until the NTB is complete, and not after.** Stop
+  //< partway and the host cannot send the rest; re-arm once complete and an NTB not yet read is
+  //< overwritten.
+  n: = hw.recv_len(4)
+  ep4_out_pid = 1 - ep4_out_pid
+  if rx_len + n <= rx_ntb_cap
+    hw.copy_from_dpram(hw.ep4_out_buf, U8$[]::rx_ntb, rx_len, n)
+    rx_len += n
+  else
+    rx_rearm() // it does not fit, so the stream is out of step: discard it and start over
+    return
+  if rx_want == 0
+    rx_want = ncm.block_length(U8[]::rx_ntb, rx_len)
+    // A wrong signature or an oversized length means the stream is out of step: discard it.
+    if rx_len >= ncm.nth16_len && (rx_want == 0 || rx_want > rx_ntb_cap)
+      rx_rearm()
+      return
+  if rx_want != 0 && rx_len >= rx_want
+    rx_index = 0
+    rx_ready = true
+    return // it does not re-arm (the host waits until the NTB is read)
+  if n < Sz::hw.max_packet
+    rx_rearm() // it ended on a short packet but is incomplete: it was cut off partway
+    return
+  hw.arm_recv(4, ep4_out_pid, hw.max_packet)
+
+fn rx_available(): Bool //< whether a received frame is waiting
+  //<
+  //< It does not block (the caller polls).
+  if !rx_ready
+    return false
+  return ncm.datagram_at(U8[]::rx_ntb, rx_len, rx_index).ok
+
+fn recv_frame(out: U8$[]): Sz //< takes one frame and returns its actual byte count
+  //<
+  //< Caution: Call it only if rx_available is true.
+  if !rx_ready
+    return 0
+  d: = ncm.datagram_at(U8[]::rx_ntb, rx_len, rx_index)
+  if !d.ok
+    rx_rearm()
+    return 0
+  // copy_from returns **the number copied**: a frame too big for the caller's buffer is truncated.
+  src: = U8[]::rx_ntb
+  n: = out.copy_from(0, src.sub(d.offset, d.len))
+  rx_index += 1
+  // Once this NTB is fully read, the next one is accepted.
+  if !ncm.datagram_at(U8[]::rx_ntb, rx_len, rx_index).ok
+    rx_rearm()
+  return n
+
+priv fn pump_ncm_tx() //< sends the stored NTB one packet at a time
+  if !tx_ntb_busy || tx_ntb_inflight || ncm_alt != 1
+    return
+  if tx_ntb_sent >= tx_ntb_len
+    // An exact multiple of 64 has no short packet, so a zero-length packet marks the end.
+    if tx_ntb_zlp
+      tx_ntb_zlp = false
+      hw.send(4, hw.ep4_in_buf, tx_ntb[0]@, 0, ep4_in_pid)
+      ep4_in_pid = 1 - ep4_in_pid
+      tx_ntb_inflight = true
+      return
+    tx_ntb_busy = false
+    return
+  $n: = tx_ntb_len - tx_ntb_sent
+  if n > Sz::hw.max_packet
+    n = Sz::hw.max_packet
+  hw.send(4, hw.ep4_in_buf, tx_ntb[tx_ntb_sent]@, U32::n, ep4_in_pid)
+  ep4_in_pid = 1 - ep4_in_pid
+  tx_ntb_sent += n
+  tx_ntb_inflight = true
+
+fn send_frame(frame: U8[], len: Sz): Bool //< sends one frame
+  //<
+  //< **true once it is sent**, and false if it cannot be sent now (ksos/net/link.Send_frame).
+  //< There is only one NTB buffer, so it is false until the host has taken the previous frame:
+  //< call poll_once() until ncm_tx_busy() is false and try again. tx_dropped() counts the refusals.
+  if ncm_alt != 1 || tx_ntb_busy
+    tx_drops += 1
+    return false
+  n: = ncm.build_one(U8$[]::tx_ntb, frame, len, tx_seq)
+  if n == 0
+    tx_drops += 1
+    return false
+  tx_seq += 1
+  tx_ntb_len = n
+  tx_ntb_sent = 0
+  tx_ntb_busy = true
+  tx_ntb_zlp = (n % Sz::hw.max_packet) == 0
+  pump_ncm_tx()
+  return true
+
+fn ncm_tx_busy(): Bool //< whether an NTB (an Ethernet frame) is still being sent
+  //<
+  //< The `ncm_` prefix keeps it apart from `tx_busy` (sending on the CDC serial port).
+  //< Waiting on it avoids wasted retries; what send_frame returns is what decides success.
+  return tx_ntb_busy
+
+fn tx_dropped(): U32 //< the frames dropped because they could not be sent
+  //<
+  //< If it keeps growing, sending is backing up.
+  return tx_drops
+
+// ==========================================
+// NCM's notifications (EP3 IN). **Without them, Windows leaves the adapter at "A network cable is
+// not plugged in".** Two are sent: the speed change (0x2A), then the connection (0x00).
+// ==========================================
+priv fn pump_notify()
+  if notify_busy || !configured || ncm_alt != 1
+    return
+  if notify_state == notify_want_speed
+    // CONNECTION_SPEED_CHANGE: an 8-byte header plus the down- and upstream bit rates (32 bits
+    // each); 12 Mbps = 0x00b71b00, full-speed USB's raw speed.
+    msg: U8[16] = ::{ 0xa1, 0x2a, 0, 0, 2, 0, 8, 0, 0x00, 0x1b, 0xb7, 0x00, 0x00, 0x1b, 0xb7, 0x00 }
+    hw.send(3, hw.ep3_in_buf, msg[0]@, 16, ep3_in_pid)
+    ep3_in_pid = 1 - ep3_in_pid
+    notify_busy = true
+    return
+  if notify_state == notify_want_connect
+    // NETWORK_CONNECTION: wValue = 1 means "connected". There is no data stage.
+    msg: U8[8] = ::{ 0xa1, 0x00, 1, 0, 2, 0, 0, 0 }
+    hw.send(3, hw.ep3_in_buf, msg[0]@, 8, ep3_in_pid)
+    ep3_in_pid = 1 - ep3_in_pid
+    notify_busy = true
+    return
+
+// ==========================================
+// Sending. One packet (64 bytes at most) at a time, never armed over a send in progress
+// (tx_busy), which would overwrite the previous packet. EP2 IN's completion arms the next.
+// ==========================================
+priv fn pump_tx()
+  if tx_busy || tx.is_empty() || !configured
+    return
+  // peek returns only the contiguous part up to the ring's wrap. Filling one packet can take
+  // **two rounds** (stop after one and the packet is short at the wrap point).
+  $n: U32 = 0
+  for n < hw.max_packet && !tx.is_empty()
+    chunk: = tx.peek()
+    $c: = U32::chunk.len
+    if c > hw.max_packet - n
+      c = hw.max_packet - n
+    for $i: U32 = 0; i < c; i += 1
+      a: = hw.ep2_in_buf + n + i
+      mmio.write8(a, chunk[Sz::i])
+    tx.consume(Sz::c)
+    n += c
+  $v: U32 = n | hw.buf_ctrl_avail | hw.buf_ctrl_full | hw.buf_ctrl_last
+  if ep2_in_pid != 0
+    v = v | hw.buf_ctrl_data1_pid
+  addr: = hw.buf_ctrl_addr(2, true)
+  mmio.write32(addr, v)
+  ep2_in_pid = 1 - ep2_in_pid
+  tx_busy = true
+
+fn write(data: U8[]): Bool //< adds data to the send queue
+  //<
+  //< true once it is queued. **If it does not fit it returns false without queuing a single
+  //< byte** (a torn line is useless in a log). When not configured, it always returns false.
+  // Ring.write's contract allows a partial write, so whether it fits is checked **first**.
+  if !has_room(data.len)
+    return false
+  tx.write(data)
+  pump_tx() // if there is room, the first packet is sent at once
+  return true
+
+fn has_room(n: Sz): Bool //< whether there is room to queue n bytes
+  //<
+  //< Caution: **Check with this before sending data that must not be lost.** By the time `write`
+  //< returns false, a caller that reuses its buffer has already lost the data.
+  return configured && n <= tx.free_space()

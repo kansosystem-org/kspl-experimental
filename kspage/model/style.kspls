@@ -1,0 +1,573 @@
+//< Named styles, looked up by name, and their inheritance
+//<
+//< A block and an inline each name their style; they never hold a size or a weight. **This is
+//< what makes writing HTML a mechanical mapping** (the style name becomes the class name).
+//< A look is inherited as "the parent's resolved font + the child's settings".
+//< Caution: **Write "not set" as `Option`'s `.none`.** With 0 or an empty text as the mark, some
+//< fields cannot tell it from a real value (no weight is 0, but italic `false` is a real
+//< setting).
+import "kspage/model/collect" { Collect }
+import "kspage/model/day" { Dating }
+import "kspage/model/font" { Font }
+import "kspage/model/marker" { Marker }
+import "kspage/model/over"
+import "kspage/model/paint" + { Font_spec, Ink }
+import "kspage/model/paper" + { Paper }
+import "kspage/model/style_when" + { When }
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+
+enum Arrange //< how the children are laid out
+  //<
+  //< **The style decides this, not the document.** The design relies on laying out the same tree
+  //< in another way, and writing "this is a table" into the document would take that away.
+  //< Caution: **Do not rename a variant**: its name is the spelling a saved text holds (`make test`
+  //< pins every one).
+  flow //< continues from where the element before ended
+  grid //< lays them out in rows × columns: the children are rows, the grandchildren cells
+  absolute //<
+    //< Places each child at its own `frame`. **The style decides a slide's size.**
+
+impl Arrange
+  fn same_arrange(a: Self, b: Arrange): Bool //< whether the way of laying out is the same
+    //<
+    //< **It compares the names (`variant_name`), not numbers.** Compared as numbers, a mismatch
+    //< passes silently once a kind is added; each way has a name of its own, so none slips through.
+    return a.variant_name().equals(b.variant_name())
+
+fn fits_block(s: Style$@): Bool //< whether that style applies to a paragraph
+  //<
+  //< **This is the one place that decides it** (a second copy could reject a style that is in the
+  //< page's list). Only a flowing style can become a paragraph; the styles of a table and a slide
+  //< are containers.
+  if s == null
+    return false
+  return s.arrange.same_arrange(Arrange.flow)
+
+fn arrange_from(name: U8[]): Arrange //< reads a way of laying out from a name
+  //<
+  //< **An unknown name means flow** (a typo is easier to fix when you can see it laid out).
+  if name.equals("grid")
+    return Arrange.grid
+  if name.equals("absolute")
+    return Arrange.absolute
+  return Arrange.flow
+
+enum Shape //< the shape drawn in the band a block takes up
+  //<
+  //< **A line and an arrow run along the band's diagonal.** An arrow's head is at the end point,
+  //< and a `_back` arrow's head at the start (the band alone does not decide the direction).
+  //< **A line and an arrow are not filled** (they enclose no inside).
+  //< Caution: **Do not rename a variant**: its name is the spelling a saved text holds (`make test`
+  //< pins every one).
+  box
+  round_box //<
+    //< A box with rounded corners
+    //<
+    //< **The corner radius is fixed** (a radius field could be larger than the band).
+  ellipse
+  triangle //< a triangle whose apex is the middle of the top edge
+  diamond //< a diamond joining the midpoints of the four edges
+  fall_line
+  rise_line
+  fall_arrow
+  rise_arrow
+  fall_arrow_back
+  rise_arrow_back
+
+impl Shape
+  fn same_shape(a: Self, b: Shape): Bool //< whether the shape is the same
+    //<
+    //< It compares the names (the reason is at `same_arrange`).
+    return a.variant_name().equals(b.variant_name())
+
+fn shape_from(name: U8[]): Shape //< reads a shape from a name
+  //<
+  //< **An unknown name means a box** (the reason is at `arrange_from`).
+  if name.equals("round_box")
+    return Shape.round_box
+  if name.equals("ellipse")
+    return Shape.ellipse
+  if name.equals("triangle")
+    return Shape.triangle
+  if name.equals("diamond")
+    return Shape.diamond
+  if name.equals("fall_line")
+    return Shape.fall_line
+  if name.equals("rise_line")
+    return Shape.rise_line
+  if name.equals("fall_arrow")
+    return Shape.fall_arrow
+  if name.equals("rise_arrow")
+    return Shape.rise_arrow
+  if name.equals("fall_arrow_back")
+    return Shape.fall_arrow_back
+  if name.equals("rise_arrow_back")
+    return Shape.rise_arrow_back
+  return Shape.box
+
+enum Align //< where a line's contents sit within the column
+  //<
+  //< Caution: **Do not rename a variant**: its name is the spelling a saved text holds (`make test`
+  //< pins every one).
+  left //< against the left edge (the default)
+  center
+  right
+  justify //<
+    //< Stretched to both edges
+    //<
+    //< **The leftover width is shared out between the characters** (`Box.spacing`). A paragraph's
+    //< last line is not stretched (it stays left-aligned).
+
+impl Align
+  fn same_align(a: Self, b: Align): Bool //< whether the alignment is the same
+    //<
+    //< It compares the names (the reason is at `same_arrange`).
+    return a.variant_name().equals(b.variant_name())
+
+fn align_from(name: U8[]): Align //< reads an alignment from a name
+  //<
+  //< **An unknown name means left** (the default).
+  if name.equals("center")
+    return Align.center
+  if name.equals("right")
+    return Align.right
+  if name.equals("justify")
+    return Align.justify
+  return Align.left
+
+fn next_ord(sheet: Sheet$@, name: U8[], ord: Sz): Sz //<
+  //< The position within a run of numbered siblings
+  //<
+  //< ord is the number of the sibling before.
+  //< Caution: **Go back to 0 when an unnumbered sibling comes between**, or two lists far apart
+  //< share one numbering. The rule lives here alone, or the screen and the written HTML
+  //< disagree.
+  if s: = sheet.find(name)
+    switch s.marker case .number(_a)
+      return ord + 1
+    case .bullet, .none, .serial, .outline {}
+  return 0
+
+struct Number_spec //<
+  //< How a number is shown
+  //<
+  //< It covers the currency, the digit separator, the percent, the decimal places and the date.
+  //< **It applies only where text is made from the value** (`expr/calc.kspls`); typed text stays
+  //< as typed. The sign goes in front (`-$1,200`), or it looks like a subtraction.
+  places: Option<|Sz|> //<
+    //< The decimal places. **Not set means "as many as needed"** (trailing zeros are dropped).
+  grouped: Bool //< whether the whole part is split every three digits
+  percent: Bool //<
+    //< Whether it is shown multiplied by 100 (a percent)
+    //<
+    //< No symbol is added (write one into `suffix`).
+  prefix: U8[] //< the text put before and after (a currency symbol, or a unit)
+  suffix: U8[]
+  dated: Dating //<
+    //< Whether it is shown as a date (`Dating` in `model/day.kspls`)
+    //<
+    //< The value is then a count of days. **For a date the number formatting does not
+    //< apply** (the screen could not show which of the two applied).
+
+fn plain_number(): Number_spec //< no formatting (the number stays plain)
+  return Number_spec::{ .places = Option<|Sz|>.none, .grouped = false, .percent = false,
+    .prefix = "", .suffix = "", .dated = Dating.none }
+
+fn dark_ground(fill: Option<|U32|>, ground: Bool): Bool //< whether the text's background is dark
+  //<
+  //< **The text color is chosen from this** (`role_ink` in `../model/code.kspls`).
+  //< Caution: **Do not fix one pair of colors**: a pair that reads on light paper does not read on
+  //< a dark background, so a theme **moves the text color with the background**.
+  if c: = fill
+    return dark_color(c)
+  return ground
+
+fn dark_color(c: U32): Bool //< whether that color is dark
+  //<
+  //< Caution: **Do not use a plain average** (the eye weighs the colors differently, so blue
+  //< comes out too bright).
+  r: = (c >> 16U32) & 0xffU32
+  g: = (c >> 8U32) & 0xffU32
+  b: = c & 0xffU32
+  return (r * 299U32 + g * 587U32 + b * 114U32) / 1000U32 < 128U32
+
+struct Look //< the inherited look, all in one (resolved)
+  //<
+  //< Caution: **Carry the font and the color together**. Passed separately, any code that forgets
+  //< one silently drops the parent's color. `Font` and `Ink` stay two types because measuring is
+  //< keyed on the font alone.
+  font: Font
+  ink: Ink
+  ratio: F32 //<
+    //< The ratio by which the reader scales the characters
+    //<
+    //< **1.0 is unscaled.**
+    //< Caution: **Apply it here**, not in the drawing code by reading `Sheet`. It is carried down
+    //< the tree, so **any code that must not apply it has to say so** (the page's bands and the
+    //< written HTML).
+
+fn root_look(root: Font, ratio: F32): Look //< where inheritance starts
+  //<
+  //< **The color starts as not set** (the screen's color, no background painted).
+  //< **The caller declares the ratio** (`Sheet.text_ratio()` for the document, 1.0 for the page's
+  //< bands and the written HTML).
+  $font: Font = root
+  font.size_px = root.size_px * ratio
+  return Look::{ .font = font, .ink = paint.inherit_ink(), .ratio = ratio }
+
+fn resolve_look(s: Style$@, parent: Look): Look //< the look with one style laid over parent
+  //<
+  //< **The ratio comes from the parent.**
+  return Look::{ .font = paint.resolve(s.font, parent.font, parent.ratio),
+    .ink = paint.resolve_ink(s.ink, parent.ink), .ratio = parent.ratio }
+
+fn look_for(sheet: Sheet$@, name: U8[], parent: Look): Look //<
+  //< The look with a style, looked up by name, laid over parent
+  //<
+  //< **An unknown name silently leaves parent as it is**, so the layout does not stop; check the
+  //< name with `Sheet.find` first.
+  if s: = sheet.find(name)
+    return resolve_look(s, parent)
+  return parent
+
+struct Style //< one style
+  name: U8[]
+  font: Font_spec
+  ink: Ink //<
+    //< The character and background colors
+    //<
+    //< **They are inherited with the font** (these two are the only inherited things).
+  number: Number_spec //<
+    //< How a number is shown. **It is not inherited** (only text made from the value reads it).
+  // The height added before and after the paragraph, and the indent on the left (pixels).
+  // **These three are not inherited**: a child that received them would add the space again at
+  // every nesting level.
+  space_before: F32
+  space_after: F32
+  indent: F32
+  pad: F32 //<
+    //< The space inside the fill and the line (on all four sides)
+    //<
+    //< Caution: **Do not fake it with the line height ratio**: done with the ratio, the lines move
+    //< apart too and the text looks sparse (Principle 6).
+  align: Align //<
+    //< How a line's contents are aligned. **It is not inherited** (it is set per paragraph).
+  line_spacing: F32 //<
+    //< The line height ratio
+    //<
+    //< **0 means "not set"** (the font's height); below 1 tightens it.
+    //< **It is not inherited**: inherited, the ratio would multiply at every nesting level.
+  // The width (pixels) and color of the line drawn around it. **0 draws none.** It is not
+  // inherited (inherited, a run inside a framed paragraph would get a frame too). A table's grid
+  // is a frame on the cells' style (neighbouring edges overlap).
+  rule_width: F32
+  rule_color: U32
+  fill: Option<|U32|> //<
+    //< The color that fills the band the block takes up
+    //<
+    //< **Not set paints nothing.**
+    //< **It is separate from the character background (`Ink.background`)**; when a style has both,
+    //< the narrower one, the characters', wins on the screen and in HTML alike.
+  shape: Shape //<
+    //< The shape the band is drawn in
+    //<
+    //< **It is not inherited.** A line and an arrow mean something only in a frame at absolute
+    //< coordinates.
+  outline: Sz //<
+    //< A heading's depth, which a table of contents collects
+    //<
+    //< **0 is not a heading** (1 is the outermost). It is not inherited (a run inside a heading
+    //< would become one too).
+    //< Caution: **Do not make the table of contents list the heading styles' names**: it would
+    //< silently go empty whenever a style is renamed.
+  next: U8[] //<
+    //< The style that the next paragraph takes when a paragraph is ended here
+    //<
+    //< **Empty means "the same style again"** (so nothing already saved changes). It applies only
+    //< when the paragraph is ended at its end (Word does the same).
+  in_chapters: Bool //<
+    //< Whether it goes into the list of chapters
+    //<
+    //< Caution: **Do not fake it with `outline` 0**: that means "not a heading", which removes it
+    //< from the map too. **Nor separate the table of contents from the counting**: separated, a
+    //< heading could use up a number without appearing in the contents, leaving a gap in the
+    //< chapter numbers.
+  collect: Collect //<
+    //< What is collected into this block and laid out
+    //<
+    //< **The collected contents do not go into the document** (they are built at every layout);
+    //< written in, they would go stale without anyone seeing it.
+  marker: Marker //<
+    //< The mark put at a paragraph's start, in the indent's space. **It is not inherited.**
+  wrap: Bool //<
+    //< Whether a line wraps
+    //<
+    //< **False lets text wider than the column stick out.**
+    //< A block of code uses this: wrapped, the space at the break is dropped (`skip_spaces` in
+    //< `line.kspls`) and the indent depth changes silently. It is not inherited (it is set per
+    //< paragraph).
+  break_before: Bool //<
+    //< Whether a new page starts before a block of this style
+    //<
+    //< **A one-off page break is a style too** ("page-break"; no second means, Principle 6). It
+    //< has no effect on a document that is not split into pages.
+  arrange: Arrange //<
+    //< How the children are laid out
+    //<
+    //< **This is not inherited either.** Inherited, a paragraph inside a table cell would become a
+    //< table.
+  width: F32 //<
+    //< A slide's size, set **by the style** so that every slide of one style has one size
+    //<
+    //< **0 means "not set"** (the container's width).
+  height: F32
+  columns: Sz //<
+    //< The column layout
+    //<
+    //< **The style decides the number of columns** (not a section break).
+    //< **0 and 1 mean no columns.** The heights are balanced, so the right-hand column does not
+    //< end up empty. Only the flow layout reads it.
+  column_gap: F32 //<
+    //< The gap between one column and the next
+    //<
+    //< **A column's width is computed from this** (a width field would let width × columns + the
+    //< gaps disagree with the region's width).
+  when: When //<
+    //< The condition that changes the look by the value
+    //<
+    //< **It is applied only on a match** (with no match, the plain style stays).
+
+fn put_face(s: Style$@, fresh: Style) //< copies everything but the name over
+  //<
+  //< Caution: **Do not copy the fields one at a time**: a newly added field is silently left out.
+  //< **The name is not copied**: copying it would take the style off everything that uses it.
+  had: = s.name
+  s$ = fresh
+  s.name = had
+
+fn cell_like(s: Style$@): Bool //<
+  //< Whether the style has a table cell's features
+  //<
+  //< That is a flowing paragraph with inner space, no mark and no heading depth.
+  //< **This is the one place that recognizes a cell by its features**: the Markdown reader and
+  //< inserting a table from the screen both ask it, so a typed table and one read from text use
+  //< one style. A divider draws a line too but has no inner space; the space tells them apart.
+  if s.outline > 0 || !s.wrap || s.pad <= 0.0
+    return false
+  switch s.marker case .none
+    return true
+  case .bullet, .number, .serial, .outline {}
+  return false
+
+fn class_byte(c: U8): U8 //< the byte that a name's byte becomes inside a class
+  //<
+  //< **A hyphen replaces whitespace**, and every other byte stays as it is.
+  //< Caution: **Do not look for an escaping that covers whitespace instead**: a `.`, a `<` or a
+  //< leading digit can be escaped and still match, but `class` **splits on whitespace**, so a name
+  //< holding one can never be one class ("The mapping into HTML" in `../docs/DESIGN.md`).
+  // **Do not cut the set down to the space**: all five are HTML's whitespace, and a name holding a
+  // tab splits into two classes just the same.
+  if c == ' ' || c == '\t' || c == '\n' || c == 0x0CU8 || c == '\r'
+    return '-'
+  return c
+
+fn name_plain(name: U8[]): Bool //<
+  //< Whether that name appears unchanged in the written HTML
+  //<
+  //< That is, `class_byte` above leaves every byte of it alone.
+  //< A name read from a text comes out folded; kspage's own names all have this shape
+  //< (`column-body`), so the entry point rejects only a name nothing in the product wanted.
+  for $i: Sz = 0; i < name.len; i += 1
+    if class_byte(name[i]) != name[i]
+      return false
+  return true
+
+struct Sheet //< the style table
+  styles: List<|Style$@|>$@
+  priv memo: Sz //<
+    //< The index in `styles` of the style found last, plus 1 (0 remembers none)
+    //<
+    //< Caution: **The index is remembered, not the name's text, and "not found" never is**. The
+    //< reason and the measurements are in "A style is looked up by name once" in
+    //< `../docs/DESIGN.md`.
+    //< **Check every time whether the table has shrunk**: undo removes an added style (`remove_at`
+    //< in `../write/edit.kspls`), and reading past the end at a remembered index crashes, **and in
+    //< wasm it loops forever** (a freestanding panic enters `for {}`).
+  root: Font //<
+    //< Where inheritance starts
+    //<
+    //< **Only here is every field filled in** (or a field no style sets would have no value).
+  paper: Paper //<
+    //< The page setup
+    //<
+    //< **It applies to the whole document, not to a style** (so it sits beside `root`).
+  over: over.Over //<
+    //< The reader's overrides
+    //<
+    //< **It is not saved** (it is not a setting of the document).
+    //< **It stays when a document is read in again** (it belongs to the reader).
+  arena: Arena$@
+
+fn plain_style(name: U8[], font: Font_spec): Style //< a style named `name` that sets only `font`
+  //<
+  //< Every other field holds its default: what `Sheet.add` starts a style from.
+  return Style::{
+    .name = name,
+    .font = font,
+    .ink = paint.inherit_ink(),
+    .number = plain_number(),
+    .space_before = 0.0,
+    .space_after = 0.0,
+    .indent = 0.0,
+    .pad = 0.0,
+    .align = Align.left,
+    .wrap = true,
+    .break_before = false,
+    .in_chapters = true,
+    .next = "",
+    .line_spacing = 0.0,
+    .outline = 0,
+    .collect = Collect.none,
+    .marker = Marker.none,
+    .rule_width = 0.0,
+    .rule_color = 0U32,
+    .fill = Option<|U32|>.none,
+    .shape = Shape.box,
+    .arrange = Arrange.flow,
+    .width = 0.0,
+    .height = 0.0,
+    .columns = 0,
+    .column_gap = 0.0,
+    .when = style_when.no_when(),
+  }
+
+impl Sheet
+  fn column_width(r: Self@, avail: F32): F32 //< the column's width at layout time
+    //<
+    //< **Where the paper width is set, it is narrower than the container.**
+    //< **It is computed here and nowhere else**, or the laid-out width and the printed width
+    //< disagree. Where the margins alone fill the page it is 0.
+    room: = r.paper.width if r.paper.width > 0.0 else avail
+    got: = room - r.paper.left - r.paper.right
+    // **The cap applies after the margins are taken off** (before, the body would be narrower
+    // than the written width by the margins).
+    // **Where the paper width is set, the reader's override does not apply either**, or the
+    // printed result would differ per reader.
+    if r.paper.width > 0.0
+      return got if got > 0.0 else 0.0F32
+    // The reader's override wins where there is one.
+    cap: = r.over.reading if r.over.reading > 0.0 else r.paper.reading
+    if cap > 0.0 && got > cap
+      return cap
+    return got if got > 0.0 else 0.0F32
+
+  fn text_ratio(r: Self@): F32 //< the ratio by which the reader scales the characters
+    //<
+    //< **Think of it as a size, not a zoom**: every document opens at the reader's size, whatever
+    //< its root size. **A size written in scales by the same ratio**, so a heading keeps its rank.
+    if r.over.size_px <= 0.0 || r.root.size_px <= 0.0
+      return 1.0F32
+    return r.over.size_px / r.root.size_px
+
+  fn column_left(r: Self@, avail: F32): F32 //<
+    //< the column's left edge (document coordinates)
+    //<
+    //< **The margins do not show here**: the screen is one continuous scroll, so they show only as
+    //< a narrower column. **It is added here and nowhere else** (the reason is at
+    //< `column_width`). Where the width is not capped it is 0.
+    if r.paper.width > 0.0
+      return 0.0F32
+    slack: = avail - r.paper.left - r.paper.right - r.column_width(avail)
+    return slack / 2.0F32 if slack > 0.0 else 0.0F32
+
+  fn column_height(r: Self@): F32 //< the height of the contents that fit on one page
+    //<
+    //< **0 means no page breaks**, and so does a page the margins alone fill (moving text to the
+    //< next page would never make it fit).
+    if r.paper.height <= 0.0
+      return 0.0F32
+    got: = r.paper.height - r.paper.top - r.paper.bottom
+    return got if got > 0.0 else 0.0F32
+
+  fn new(root: Font, arena: Arena$@): Sheet$@ //<
+    //< Makes an empty table with root as where inheritance starts
+    sheet: = Sheet::{
+      .styles = List<|Style$@|>.create(arena),
+      .memo = 0,
+      .root = root,
+      .paper = paper.no_paper(),
+      .over = over.no_over(),
+      .arena = arena,
+    }
+    return arena.create(sheet)
+
+  fn add(r: Self$@, name: U8[], font: Font_spec): Style$@ //< adds one style and returns it
+    //<
+    //< Caution: **Do not add the same name twice**: `find` returns the first, and never the later
+    //< one. A name holding whitespace is accepted (text that is read can carry one). The rest is
+    //< written onto the returned style afterwards (as arguments, most would just be defaults).
+    s: = r.arena.create(plain_style(name, font))
+    r.styles.push(s)
+    return s
+
+  fn arrange_of(r: Self$@, name: U8[]): Arrange //< how a block of the style `name` lays out
+    //<
+    //< **An unknown name means flow**, as the layout treats it (a typo still lays out).
+    if s: = r.find(name)
+      return s.arrange
+    return Arrange.flow
+
+  fn find(r: Self$@, name: U8[]): Option<|Style$@|>
+    if r.memo > 0 && r.memo <= r.styles.len
+      had: = r.styles.get(r.memo - 1)
+      if had.name.equals(name)
+        return Option<|Style$@|>.some(had)
+    for $i: Sz = 0; i < r.styles.len; i += 1
+      s: = r.styles.get(i)
+      if s.name.equals(name)
+        r.memo = i + 1
+        return Option<|Style$@|>.some(s)
+    return Option<|Style$@|>.none
+fn when_style(sheet: Sheet$@, name: U8[], text: U8[]): Option<|Style$@|> //<
+  //< The style laid over name's style, where its condition matches that text
+  //<
+  //< **Only the look is laid over**: the caller reads the spacing and the layout from the plain
+  //< style (a line height that moved with a value would confuse the reader). **A condition that
+  //< points at its own style is applied once** (there is no second pass, so no loop).
+  if sheet == null
+    return Option<|Style$@|>.none
+  if s: = sheet.find(name)
+    if style_when.suits(s.when, text)
+      return sheet.find(s.when.then)
+  return Option<|Style$@|>.none
+
+const drawn_color: U32 = 0x4472c4U32 //< the color for drawn content (a chart, a diagram)
+  //<
+  //< Caution: **Make it one color that reads on both a dark and a light screen**: black is a dark
+  //< screen's background and white a light one's. It is defined here only.
+
+fn draws(s: Style$@): Bool //<
+  //< Whether this style's fill and line are drawn content (rather than the page's decoration)
+  //<
+  //< **Keep it apart from the page's decoration**: a bar's or a diagram box's fill is the content
+  //< itself, not a table's grid. **Do not look at the block** (a style cannot reach it).
+  return s.collect.charted() || s.collect.same_collect(Collect.imports) ||
+    !s.shape.same_shape(Shape.box)
+
+fn linked(s: Style$@): Bool //<
+  //< Whether this style **looks like a link** (whether it has both a color and an underline)
+  //<
+  //< **It does not mean "is a link"**; use it only to find the one link look in a table the same
+  //< code made (`link_style` in `../share/markdown_style.kspls`), where no other style has both a
+  //< color and an underline.
+  switch s.ink.underline case .some(u)
+    if !u
+      return false
+  case .none
+    return false
+  if _c: = s.ink.color
+    return true
+  return false

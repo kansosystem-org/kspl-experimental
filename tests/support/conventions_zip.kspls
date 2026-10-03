@@ -1,0 +1,125 @@
+//< Holds the release zip's README to the documents it copies (not the suite)
+//<
+//< **The zip's README stands alone**: nothing else the zip carries can be read, so it repeats the
+//< first steps instead of pointing at them. So every fenced block in it must stand, whole and
+//< unchanged, in one of the documents it copies, and a command changed there cannot go stale in
+//< the zip. The verdict is held to the samples below (Principle 5 in `../../docs/DESIGN.md`).
+import "std/chars" // `trim_start` / `trim_spaces` / `starts_with`
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+import "tests/support/harness"
+
+priv const copy_rel: U8[] = "tools/release-assets/README.md" //< the README the release zip carries
+
+priv const source_rels: U8[][2] = ::{ "docs/HOWTO-set-up-a-project.md", "README.md" } //<
+  //< The documents it copies: the set-up how-to first, then the root README's quick start
+  //<
+  //< The program `hello.kspls` stands only in the root README, so the how-to alone cannot hold it.
+
+priv const fence: U8[] = "```" //< what opens and closes a fenced block
+
+priv fn fenced_blocks(text: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< Every fenced block of a Markdown text: its opening line's language, a newline, and its body
+  //<
+  //< **The opening fence's indentation is taken off every body line**, so a block inside a list
+  //< item reads the same as one at the margin. The language is part of the block: the same lines
+  //< under another language are another block.
+  $out: = List<|U8[]|>.new(arena)
+  $body: = Str_builder.new()
+  defer body.free()
+  $inside: = false
+  $col: Sz = 0
+  for raw in text.lines(arena)
+    t: = raw.trim_spaces()
+    if !inside
+      if t.starts_with(fence)
+        inside = true
+        col = raw.len - raw.trim_start().len
+        body.clear()
+        body.s(t.sub_from(fence.len)).c('\n')
+      continue
+    if t.equals(fence)
+      inside = false
+      out.push(arena.dup_str(body.slice()))
+      continue
+    body.s(raw.sub_from(col) if raw.len >= col else raw.trim_start()).c('\n')
+  return out
+
+priv fn held_in(block: U8[], text: U8[], arena: Arena$@): Bool //<
+  //< Whether one fenced block of the text is that block
+  for b in fenced_blocks(text, arena)
+    if b.equals(block)
+      return true
+  return false
+
+priv fn held(copy: U8[], source: U8[], arena: Arena$@): Bool //<
+  //< Whether every fenced block of the copy stands, whole, as a fenced block of the source
+  for b in fenced_blocks(copy, arena)
+    if !held_in(b, source, arena)
+      return false
+  return true
+
+priv struct Copy_sample //< a copy, a source, and whether every block of the copy is in it
+  copy: U8[]
+  source: U8[]
+  hits: Bool
+
+priv const samples: Copy_sample[6] = ::{
+  Copy_sample::{ .copy = "Run it:\n\n```sh\n./ksplc run a.kspls\n```\n",
+    .source = "Text.\n\n```sh\n./ksplc run a.kspls\n```\n", .hits = true },
+  // **A block inside a list item** carries the item's indentation in the source.
+  Copy_sample::{ .copy = "```sh\nmake\n\nmake test\n```\n",
+    .source = "1. **Build**\n\n  ```sh\n  make\n\n  make test\n  ```\n", .hits = true },
+  // **One character off** is a drift.
+  Copy_sample::{ .copy = "```sh\n./ksplc run a.kspls\n```\n",
+    .source = "```sh\n./ksplc run b.kspls\n```\n", .hits = false },
+  // **The same lines under another language** are another block.
+  Copy_sample::{ .copy = "```sh\nclang a.c\n```\n", .source = "```powershell\nclang a.c\n```\n",
+    .hits = false },
+  // **A part of a longer block** is not the block: the line left out may be the one that matters.
+  Copy_sample::{ .copy = "```sh\nmake\n```\n", .source = "```sh\nmake\nmake install\n```\n",
+    .hits = false },
+  // **The same line in prose** is not a block.
+  Copy_sample::{ .copy = "```sh\nmake\n```\n", .source = "Type `make`, then:\n\n    make\n",
+    .hits = false },
+}
+
+priv fn check_fires(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  $i: Sz = 0
+  for s in samples
+    if held(s.copy, s.source, arena) != s.hits
+      bad.push(arena.text().s("sample \{i\} came out the other way").take())
+    i += 1
+  verdict.check_list("the verdict on a copied block can fire", samples.len, "samples", bad@,
+    "the table is `samples`")
+
+priv fn first_line(block: U8[], arena: Arena$@): U8[] //< the block's first body line, to name it
+  ls: = block.lines(arena)
+  return ls.get(1) if ls.len > 1 else ls.get(0)
+
+priv fn check_copy(arena: Arena$@)
+  // A copy with no block fails too: `check_list` refuses a walk that looked at nothing.
+  blocks: = fenced_blocks(harness.read_under_root(copy_rel), arena)
+  $sources: = List<|U8[]|>.new(arena)
+  for rel in source_rels
+    sources.push(harness.read_under_root(rel))
+  $bad: = List<|U8[]|>.new(arena)
+  for b in blocks
+    $found: = false
+    for text in sources
+      if held_in(b, text, arena)
+        found = true
+        break
+    if !found
+      bad
+        .push(arena.text().s("the block opening with \"").s(first_line(b, arena)).s("\"").take())
+  verdict.check_list("every block of the zip's README stands in the documents it copies",
+    blocks.len, "blocks", bad@,
+    "copy the block from docs/HOWTO-set-up-a-project.md or the root README, whichever changed")
+
+fn run(arena: Arena$@)
+  check_fires(arena)
+  check_copy(arena)

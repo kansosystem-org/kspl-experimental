@@ -1,0 +1,587 @@
+//< Checks the conventions for how a document is written (not a suite; part of conventions)
+//<
+//< Caution: **Check what the reader sees, not just the text**: tables, vocabulary and marks read
+//< fine to their writer, so nobody notices when one drifts. Sizes and phrasing are checked in
+//< `tests/suite/conventions_test.kspls`.
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+import "tests/support/conventions_scan" as scan + { Sample }
+import "tests/support/harness"
+import "tools/repo_stat_path" as path_kind
+
+// ==========================================
+// 7. A vertical bar is written one way inside a table and another outside it
+// (docs/SPEC-documents.md)
+// ==========================================
+
+//   * That no `\|` is in the body (inside a backquote the reader sees the `\`).
+//   * That a table's row holds as many columns as its heading: a bare `|` splits the cell, and GFM
+//     **drops** the extra cells, which the source does not show.
+
+priv fn strip_quote(line: U8[]): U8[] //<
+  //< Strips the quote mark from the start (a table inside a quote is a table too)
+  $s: = line.trim_start()
+  for s.starts_with(">")
+    s = s.sub_from(1).trim_start()
+  return s
+
+priv fn cell_count(line: U8[], arena: Arena$@): Sz //<
+  //< The number of cells, counted after masking the escaped vertical bars
+  //<
+  //< The mask is NUL (`\0`), absent from Markdown, so it is neither a `|` nor part of a word.
+  $s: = strip_quote(line).replace("\\|", "\0", arena)
+  s = s.strip_prefix("|").strip_suffix("|")
+  return scan.count_char(s, '|') + 1
+
+priv fn is_table_rule(body: U8[]): Bool //< whether it is the separator row (`|---|---|`)
+  if !body.starts_with("|") || body.find_char('-') < 0
+    return false
+  for c in body
+    if c != '|' && c != '-' && c != ':' && c != ' ' && c != '\t'
+      return false
+  return true
+
+priv fn check_md_tables(arena: Arena$@)
+  $escape: = List<|U8[]|>.new(arena)
+  $ragged: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  for rel in harness.tracked_matching(U8[][]::{ "*.md" })
+    seen += 1
+    $lines: = harness.read_under_root(rel).lines(arena)
+    $in_fence: = false
+    $header: Sz = 0
+    for i in Range.asc(lines.len)
+      raw: = lines.get(i)
+      if raw.trim_start().starts_with("```")
+        in_fence = !in_fence
+        continue
+      if in_fence
+        header = 0
+        continue
+      body: = strip_quote(raw)
+      if !body.starts_with("|")
+        header = 0
+        if raw.find_str("\\|") >= 0
+          escape
+            .push(arena.text().s(rel).s(":\{i + 1\}: ").s(raw.trim_spaces()).take())
+        continue
+      // Caution: Mask the heading before counting it too (a generic can appear in a heading too).
+      if is_table_rule(body)
+        header = 0 if i == 0 else cell_count(lines.get(i - 1), arena)
+        continue
+      if header > 0
+        got: = cell_count(raw, arena)
+        if got != header
+          ragged
+            .push(arena.text().s(rel)
+            .s(":\{i + 1\}: the heading has \{header\} columns != \{got\}  ")
+            .s(raw.trim_spaces()).take())
+  verdict.check_list("there is no `\\|` outside a table (docs/SPEC-documents.md)", seen, "files",
+    escape@, "outside a table write a bare `|` (the `\\` comes out as it stands)")
+  verdict.check_list("a table's row holds as many columns as its heading (docs/SPEC-documents.md)",
+    seen, "files", ragged@,
+    "a `|` inside a cell becomes `\\|` (the columns that grew are thrown away)")
+
+// ==========================================
+// 12. kspage uses one word for each thing
+// Caution: **Do not use different words on the screen, in the code and in the comments**, or **the
+// reader cannot tell they mean one thing**. Which word is used, and why, is in
+// "The vocabulary is one" in `../../kspage/docs/DESIGN.md`.
+// ==========================================
+
+// The rejected words, **only where a single replacement is decided**, or "fix it" does not say to
+// what. Each form is written out (`erase` misses `erased`); `face_keep` is masked first.
+priv const face_words: U8[][20] = ::{ "answering side", "insertion bar", "dress-up", "peep window",
+  "leverage", "robust", "streamline", "utilise", "utilize", "erase", "erased", "erases", "erasing",
+  "erasable", "unerased", "erasure", "skin", "skins", "door", "doors" }
+
+priv const face_keep: U8[][2] = ::{ "robustness", "asking" } //< words kept as different words
+  //<
+  //< Caution: **Mask these first**, or the letters inside them are caught: `robustness` is the
+  //< field's word for a measured property, not the vague `robust`, and **`asking` holds `skin`**
+  //< (the search is by plain substring).
+
+// The files checked.
+// Caution: **Include the places kspage uses too**, or a corrected word comes back from there. The
+// checks' drivers, both make halves and the fuzz suite under `tests/suite/` are listed too.
+priv const face_globs: U8[][10] = ::{ "kspage/*.md", "kspage/**/*.kspls", "kspage/**/*.js",
+  "kspage/**/*.mjs", "kspage/**/*.html", "kspage/**/*.md", "kspage/**/*.css", "kspage/Makefile",
+  "mk/kspage.mk", "tests/suite/kspage_*.kspls" }
+
+priv fn face_exempt(rel: U8[]): Bool //< the files this check skips
+  //<
+  //< **Exactly these two**: the list itself, and `DESIGN.md` (which explains why).
+  return rel.equals("tests/support/conventions_prose.kspls") ||
+    rel.equals("kspage/docs/DESIGN.md")
+
+priv fn face_masked(line: U8[], arena: Arena$@): U8[] //<
+  //< The line with the words kept masked out, folded to lower case
+  //<
+  //< The page's marks (`{page}` / `{pages}`) are saved into the document, so they stay as they are.
+  //< Caution: **Fold the case, and write the list in lower case.** A screen's label starts with a
+  //< capital (`"Erase the row"`), so a case-sensitive search misses the very place the rule is for.
+  b: = arena.text()
+  for c in line
+    b.c(c.to_lower())
+  $s: = b.take()
+  for k in face_keep
+    s = s.replace(k, "\0", arena)
+  return s
+
+priv fn face_hit(line: U8[], w: U8[], arena: Arena$@): Bool //<
+  //< Whether that line holds the rejected word `w` (checked after the kept words are masked)
+  //<
+  //< Caution: **Keep the judging in this one place**, where the table showing it can fire reaches
+  //< it.
+  return face_masked(line, arena).find_str(w) >= 0
+
+priv fn face_hit_robust(line: U8[], arena: Arena$@): Bool //<
+  //< Whether the line is caught for the word robust
+  //<
+  //< The sample table cannot pass a word, so the most easily confused words each get a helper
+  //< like this one.
+  //<
+  //< **`robust` is inside `robustness` as well**: with the masking broken, that one is caught.
+  return face_hit(line, "robust", arena)
+
+priv fn face_hit_skin(line: U8[], arena: Arena$@): Bool //<
+  //< **`skin` is inside `asking`** — a word all over the tree
+  //<
+  //< **Each mask needs its own table**: one helper covers only the needle it names, so a mask added
+  //< without one is a mask nothing tests.
+  return face_hit(line, "skin", arena)
+
+priv fn check_face_words(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  for rel in harness.tracked_matching(U8[][]::face_globs)
+    if face_exempt(rel)
+      continue
+    $i: Sz = 0
+    for line in harness.read_under_root(rel).lines(arena)
+      i += 1
+      seen += 1
+      for w in face_words
+        if face_hit(line, w, arena)
+          bad
+            .push(arena.text().s(rel).s(":\{i\}: \"").s(w).s("\"  ").s(line.trim_spaces()).take())
+  verdict.check_list("kspage's vocabulary keeps to one word", seen, "lines", bad@,
+    "bring it in line with kspage/docs/DESIGN.md's \"The vocabulary is one\"")
+
+// **Search only after masking the kept words.**
+// The samples for the `skin` mask. **A skin is the field's word for a swappable look**, which the
+// page's theme is and a panel's paint is not, so the word is rejected here.
+priv const skin_samples: Sample[6] = ::{
+  Sample::{ .text = "// the skin's colours", .hits = true },
+  Sample::{ .text = "// two skins to choose from", .hits = true },
+  // Caution: **A capital must be caught too**, the same as on the `robust` side.
+  Sample::{ .text = "label: \"Skin\"", .hits = true },
+  Sample::{ .text = "// it keeps asking until it goes in", .hits = false },
+  Sample::{ .text = "// the caller comes to asking the core once more", .hits = false },
+  Sample::{ .text = "// the theme's colours", .hits = false }
+}
+
+priv const face_samples: Sample[6] = ::{
+  Sample::{ .text = "// a robust answer", .hits = true },
+  Sample::{ .text = "// keep it robust", .hits = true },
+  // Caution: **A capital must be caught too** (the reason is at `face_masked`).
+  Sample::{ .text = "label: \"Robust answer\"", .hits = true },
+  Sample::{ .text = "// robustness is measured here", .hits = false },
+  Sample::{ .text = "// the robustness of the join", .hits = false },
+  Sample::{ .text = "// a sturdy answer", .hits = false }
+}
+
+// The count of a table's cells. **`\|` is not counted** (it is masked before counting).
+priv const cell_samples: U8[][5] = ::{ "| a | b |", "| a \\| b |", "> | a | b | c |", "a | b",
+  "|---|---|" }
+priv const cell_want: Sz[5] = ::{ 2, 1, 3, 2, 2 }
+
+// ==========================================
+// 13. A caution label is only on what breaks if it is not obeyed (docs/SPEC-documents.md)
+// A label on every assertion makes the reader skip the labels. **Only the text is checked**: a
+// label not first in its line or comment, two on one line, one in a table cell or heading. **What
+// slips past is still a breach** (Principle 8).
+// ==========================================
+
+priv const labels: U8[][2] = ::{ "Caution:", "Note:" } //< the only labels
+  //<
+  //< It is disjoint from what a diagnostic carries (`error` / `warning` / `information` / `hint`),
+  //< so a word never belongs to both.
+
+priv const near_lines: I64 = 4I64 //<
+  //< How close two labels may be before they blur together
+  //<
+  //< **Two in a row already read as one**: the reader skips the markers, including the one that
+  //< mattered (Google's guidance names this pattern). Where two meet, the second keeps its words
+  //< and drops the label.
+
+// What a `Note:` must name to earn the label.
+// Caution: **A backquoted name on its own is not a place**: `check_line_wrap` guides a person,
+// but to a machine it is any backquoted word, and counting it lets bare facts back in.
+priv const place_exts: U8[][13] = ::{ ".kspl", ".kspls", ".md", ".js", ".mjs", ".c", ".h", ".mk",
+  ".kspeg", ".css", ".html", ".py", ".cfg" }
+priv const place_docs: U8[][4] = ::{ "README.md", "DESIGN.md", "CONTRIBUTING.md", "SPEC-" }
+
+// What `names_a_place` must catch and what it must let pass.
+// Caution: **Put both sides in the table, not only the catching side**: an extension named in
+// passing and a lone backquoted name must not count, and a table of hits alone still passes the
+// day either starts to count.
+priv const place_samples: Sample[8] = ::{ Sample::{ .text =
+  "the count is in `tests/tools/perf_guard.kspls`", .hits = true },
+  Sample::{ .text = "drawn by `port/web/draw_crop.js`", .hits = true },
+  Sample::{ .text = "it is rebuilt by `make surface`", .hits = true },
+  Sample::{ .text = "the grounds are in [`DESIGN.md`](DESIGN.md)", .hits = true },
+  Sample::{ .text = "stated by \u00A78.1.5 of that document", .hits = true },
+  Sample::{ .text = "the .kspl directly under it", .hits = false },
+  Sample::{ .text = "the shape `check_line_wrap` reads", .hits = false },
+  Sample::{ .text = "make the formula fall away", .hits = false } }
+
+priv fn star_dropped(head: U8[]): U8[] //<
+  //< a block comment's continuation line without its leading `*`
+  t: = head.trim_start()
+  return t.sub_from(1) if t.starts_with("*") && !t.starts_with("**") else head
+
+priv fn quoted_at(line: U8[], spot: Sz): Bool //<
+  //< Whether the position is inside a pair of backquotes
+  //<
+  //< **A label named inside backquotes is a mention, not a use**: the rule itself writes `Caution:`
+  //< as a name (docs/SPEC-documents.md).
+  $ticks: Sz = 0
+  for i in Range.asc(spot)
+    if line[i] == '`'
+      ticks += 1
+  return ticks % 2 == 1
+
+priv fn leads_only(head: U8[]): Bool //<
+  //< Whether only what may precede a label comes before it
+  //<
+  //< That is the indentation, a comment opener, a blockquote's `>`, and at most one bullet.
+  $rest: = head.trim_start()
+  if rest.starts_with("//")
+    rest = rest.sub_from(2).trim_start()
+  if rest.starts_with(">")
+    rest = rest.sub_from(1).trim_start()
+  for mark in U8[][]::{ "* ", "- ", "+ " }
+    if rest.starts_with(mark)
+      rest = rest.sub_from(mark.len).trim_start()
+      break
+  if rest.len >= 3 && rest[0].is_digit() && rest[1] == '.' && rest[2] == ' '
+    rest = rest.sub_from(3).trim_start()
+  return rest.len == 0
+
+priv fn label_spots(line: U8[], arena: Arena$@): List<|Sz|> //<
+  //< Where labels appear on this line, skipping those inside backquotes
+  return spots_of(line, U8[][]::labels, arena)
+
+priv fn spots_of(line: U8[], names: U8[][], arena: Arena$@): List<|Sz|>
+  $out: = List<|Sz|>.new(arena)
+  for name in names
+    $at: Sz = 0
+    for at < line.len
+      found: = line.sub_from(at).find_str(name)
+      if found < 0
+        break
+      spot: = at + Sz::found
+      if !quoted_at(line, spot)
+        out.push(spot)
+      at = spot + name.len
+  return out
+
+priv fn slash_before(text: U8[], spot: Sz): Bool //<
+  //< Whether a `/` appears inside the name that ends here
+  //<
+  //< That separates a path from an extension named in passing (`the .kspl directly under it`).
+  $i: = spot
+  for i > 0
+    c: = text[i - 1]
+    if c == '/'
+      return true
+    if !(c.is_alnum() || c == '.' || c == '-')
+      return false
+    i -= 1
+  return false
+
+priv fn holds_path(text: U8[]): Bool
+  for ext in U8[][]::place_exts
+    $at: Sz = 0
+    for at < text.len
+      hit: = text.sub_from(at).find_str(ext)
+      if hit < 0
+        break
+      spot: = at + Sz::hit
+      if slash_before(text, spot)
+        return true
+      at = spot + ext.len
+  return false
+
+priv fn names_a_place(text: U8[]): Bool //<
+  //< Whether the text names somewhere the reader can go
+  //<
+  //< That is a link, a section, a document, a path or a make target.
+  //<
+  //< **The make target must be in backquotes**: bare, the English verb matches (`make the formula
+  //< fall away`).
+  for mark in U8[][]::{ "](", "§", "`make " }
+    if text.find_str(mark) >= 0
+      return true
+  for doc in U8[][]::place_docs
+    if text.find_str(doc) >= 0
+      return true
+  return holds_path(text)
+
+priv fn place_hit(text: U8[], _arena: Arena$@): Bool
+  return names_a_place(text)
+
+priv fn label_text(lines: List<|U8[]|>$@, k: Sz, prose: Bool, mark: U8[], close: U8[],
+  arena: Arena$@): U8[] //<
+    //< The label's whole text: the line it starts and its continuation lines
+    //<
+    //< Caution: **Read past the line it starts**: a note's place is often on the next line, and
+    //< the first line alone reads as "it names nowhere". A block (`close` not empty) runs to its
+    //< closing mark, a line comment while the lines start with `mark`.
+  b: = arena.text()
+  b.s(lines.get(k))
+  $shut: = close.len > 0 && lines.get(k).find_str(close) >= 0
+  $j: = k + 1
+  for j < lines.len && !shut
+    t: = lines.get(j).trim_start()
+    if t.len == 0 || t.find_str("Caution:") >= 0 || t.find_str("Note:") >= 0
+      break
+    if prose
+      if t.starts_with("#") || t.starts_with("|") || t.starts_with("```")
+        break
+    else if close.len > 0
+      shut = t.find_str(close) >= 0
+    else if !t.starts_with(mark)
+      break
+    b.s(" ").s(t)
+    j += 1
+  return b.take()
+
+priv fn check_labels(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  $files: Sz = 0
+  // **Every file a person writes** (`scan.all_ext`): Principle 7 applies whatever the file's kind.
+  for rel in harness.tracked_matching(U8[][]::scan.all_ext)
+    if scan.text_skip(rel)
+      continue
+    files += 1
+    prose: = rel.ends_with(".md")
+    mark: = path_kind.comment_marker(rel)
+    block: = path_kind.block_marks(rel)
+    $in_fence: = false
+    $in_raw: = false
+    $in_block: = false
+    $last_label: I64 = -100I64
+    $lines: = harness.read_under_root(rel).lines(arena)
+    for k in Range.asc(lines.len)
+      raw: = lines.get(k)
+      i: = k + 1
+      if prose && raw.trim_start().starts_with("```")
+        in_fence = !in_fence
+        continue
+      // Caution: **Do not check a label inside a string** (a diagnostic's, a generated heading, a
+      // formatter's test data): once flagged, the program's own output gets rewritten.
+      was_raw: = in_raw
+      if !prose
+        in_raw = scan.flip_raw(raw, in_raw)
+      if in_fence || (was_raw && in_raw)
+        continue
+      carried: = in_block
+      op: = path_kind.opening(raw, mark, block, in_block)
+      in_block = op.open
+      $spots: = label_spots(raw, arena)
+      $seen_here: Sz = 0
+      for spot in spots.slice()
+        // Outside a document only a comment is read: a label in code is a name, not a caution.
+        if !prose && (op.at < 0 || spot < Sz::op.at)
+          continue
+        open_at: = 0 if prose else Sz::op.at
+        $head: = raw.sub(open_at, spot - open_at)
+        if carried
+          head = star_dropped(head)
+        seen_here += 1
+        if seen_here > 1
+          bad
+            .push(arena.text().s(rel).s(":\{i\}: a second label stands on the same line").take())
+          break
+        if prose && raw.trim_start().starts_with("|")
+          bad
+            .push(arena.text().s(rel).s(":\{i\}: a label is inside a table's cell").take())
+          break
+        if prose && raw.trim_start().starts_with("#")
+          bad
+            .push(arena.text().s(rel).s(":\{i\}: a label is inside a heading").take())
+          break
+        if !leads_only(head)
+          bad
+            .push(arena.text().s(rel).s(":\{i\}: a label does not come first in its line").take())
+          break
+        if raw.sub_from(spot).starts_with("Note:") &&
+          !names_a_place(label_text(lines@, k, prose, mark, block.close if op.block else "", arena))
+          bad
+            .push(arena.text().s(rel).s(":\{i\}: a `Note:` that names no place to go").take())
+        if I64::i - last_label <= near_lines
+          bad
+            .push(arena.text().s(rel).s(":\{i\}: a label stands beside the one at line ")
+            .s("\{last_label\}").take())
+        last_label = i
+  verdict.check_list("a label comes first and stands alone", files, "files", bad@,
+    "part the line, or move the label out of the cell (docs/SPEC-documents.md's \"Caution markers \
+      go only on things that break if ignored\")")
+
+priv fn check_prose_fires(arena: Arena$@)
+  $b: = scan.misjudged(Sample[]::face_samples, face_hit_robust, arena)
+  verdict.check_list("the judging of kspage's vocabulary can fire", face_samples.len, "samples", b@,
+    "the table of what is caught and what is not is `face_samples`")
+  $k: = scan.misjudged(Sample[]::skin_samples, face_hit_skin, arena)
+  verdict.check_list("the judging of kspage's vocabulary can fire on the skin mask too",
+    skin_samples.len, "samples", k@,
+    "the table of what is caught and what is not is `skin_samples`")
+  $id: = scan.misjudged(Sample[]::idiom_samples, idiom_hit, arena)
+  verdict.check_list("the judging of word-for-word idioms can fire", idiom_samples.len, "samples",
+    id@, "the table of what is caught and what is not is `idiom_samples`")
+  $pl: = scan.misjudged(Sample[]::place_samples, place_hit, arena)
+  verdict.check_list("the judging of what names a place can fire", place_samples.len, "samples",
+    pl@, "the table of what is caught and what is not is `place_samples`")
+  $c: = List<|U8[]|>.new(arena)
+  for i in Range.asc(cell_samples.len)
+    got: = cell_count(cell_samples[i], arena)
+    if got != cell_want[i]
+      c
+        .push(arena.text().s("\"").s(cell_samples[i]).s("\" was counted as \{got\} columns")
+        .s(" (\{cell_want[i]\} was wanted)").take())
+  verdict.check_list("the place that counts a table's cells tells an escaped bar apart",
+    cell_samples.len, "samples", c@, "")
+
+// ==========================================
+// 13. A word-for-word idiom gives way to the plain word, across the tree
+// (docs/SPEC-documents.md's "A word-for-word idiom gives way to the plain word")
+// ==========================================
+
+priv struct Idiom
+  word: U8[] //< the idiom, in lower case
+  plain: U8[] //< the one word written instead, named in the failure
+
+// **Only a word with a single replacement goes in**, or "fix it" does not say to what. One entry
+// covers its plural too (the search is by substring), so `mouth` also catches `mouths`.
+priv const idiom_words: Idiom[5] = ::{ Idiom::{ .word = "receiving side", .plain = "receiver" },
+  Idiom::{ .word = "calling side", .plain = "caller" },
+  Idiom::{ .word = "reading side", .plain = "reader" },
+  Idiom::{ .word = "entrance", .plain = "entry point" },
+  Idiom::{ .word = "mouth", .plain = "entry point" } }
+
+priv fn idiom_exempt(rel: U8[]): Bool //< the files this check skips
+  //<
+  //< **Exactly these two**: the list itself, and kspage's `DESIGN.md`, whose vocabulary table names
+  //< the words it turns away.
+  return rel.equals("tests/support/conventions_prose.kspls") ||
+    rel.equals("kspage/docs/DESIGN.md")
+
+priv fn idiom_masked(line: U8[], arena: Arena$@): U8[] //<
+  //< The line folded to lower case, with each backquoted span dropped
+  //<
+  //< A span in backquotes is code (a make variable, an identifier), not prose.
+  //< Caution: **Fold the case**, or a sentence that opens with the word passes.
+  b: = arena.text()
+  $code: = false
+  for c in line
+    if c == '`'
+      code = !code
+    else if !code
+      b.c(c.to_lower())
+  return b.take()
+
+priv fn idiom_at(line: U8[], arena: Arena$@): Sz //< the index of the idiom the line holds, or -1
+  low: = idiom_masked(line, arena)
+  for i in Range.asc(idiom_words.len)
+    if low.find_str(idiom_words[i].word) >= 0
+      return i
+  return -1
+
+priv fn idiom_hit(line: U8[], arena: Arena$@): Bool //< whether the line holds an idiom
+  return idiom_at(line, arena) >= 0
+
+priv const idiom_samples: Sample[6] = ::{
+  Sample::{ .text = "// the receiving side checks it", .hits = true },
+  // Caution: **A capital must be caught too** (the reason is at `idiom_masked`).
+  Sample::{ .text = "// The entrance to the extension", .hits = true },
+  Sample::{ .text = "// one of the mouths for it", .hits = true },
+  Sample::{ .text = "// the caller checks it", .hits = false },
+  // **Code in backquotes is not prose**: a make variable keeps its own name.
+  Sample::{ .text = "the variable `ENTRANCE` holds it", .hits = false },
+  Sample::{ .text = "// the entry point of the extension", .hits = false }
+}
+
+priv fn check_idioms(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  for rel in harness.tracked_matching(U8[][]::scan.all_ext)
+    if scan.text_skip(rel) || idiom_exempt(rel)
+      continue
+    $i: Sz = 0
+    for line in harness.read_under_root(rel).lines(arena)
+      i += 1
+      seen += 1
+      k: = idiom_at(line, arena)
+      if k < 0
+        continue
+      bad
+        .push(arena.text().s(rel).s(":\{i\}: \"").s(idiom_words[k].word).s("\" -> \"")
+        .s(idiom_words[k].plain).s("\"  ").s(line.trim_spaces()).take())
+  verdict.check_list("no word-for-word idiom stands where a plain word is decided \
+    (docs/SPEC-documents.md)", seen, "lines", bad@, "write the word after the arrow instead")
+
+// ==========================================
+// One alert box, the root README's status notice
+// ==========================================
+
+priv const alert_home: U8[] = "README.md" //< the one document an alert may stand in, at the root
+
+fn is_alert(line: U8[], _arena: Arena$@): Bool //< whether a line starts GitHub's alert box
+  return line.trim_spaces().starts_with("> [!")
+
+priv const alert_samples: Sample[4] = ::{
+  Sample::{ .text = "> [!CAUTION]", .hits = true },
+  Sample::{ .text = "  > [!NOTE]", .hits = true },
+  // **A quotation is not an alert**, nor is the markup named in backquotes.
+  Sample::{ .text = "> a quoted sentence", .hits = false },
+  Sample::{ .text = "written as GitHub's alert (`> [!CAUTION]`) under the title", .hits = false },
+}
+
+priv fn check_alerts(arena: Arena$@) //<
+  //< An alert appears only in the root `README.md`, and only once
+  //<
+  //< Caution: **Do not allow a second**: a repeated box stops standing out, which is its purpose.
+  $n: = scan.misjudged(Sample[]::alert_samples, is_alert, arena)
+  verdict.check_list("the judgment of an alert box can fire", alert_samples.len, "samples", n@,
+    "the table of what is hit and what is not is `alert_samples`")
+  $bad: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  $home: Sz = 0
+  for rel in harness.tracked_matching(U8[][]::{ "*.md", ":!private" })
+    seen += 1
+    $i: Sz = 0
+    for line in harness.read_under_root(rel).lines(arena)
+      i += 1
+      if !is_alert(line, arena)
+        continue
+      if rel.equals(alert_home)
+        home += 1
+      if !rel.equals(alert_home) || home > 1
+        bad
+          .push(arena.text().s(rel).s(":\{i\}: ").s(line.trim_spaces()).take())
+  verdict.check_list("one alert box stands in the tree, the root README's status notice \
+    (docs/SPEC-documents.md)", seen, "files", bad@, "write any other caution as `Caution:`")
+
+fn run(arena: Arena$@)
+  check_prose_fires(arena)
+  check_alerts(arena)
+  check_md_tables(arena)
+  check_face_words(arena)
+  check_idioms(arena)
+  check_labels(arena)

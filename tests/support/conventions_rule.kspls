@@ -1,0 +1,115 @@
+//< Checks the Development Principles' numbering (not the suite)
+//<
+//< **A number changes its meaning the day one more principle is added**, and the numbers are
+//< copied into many places; where a copy is allowed, a check holds the two together (Principle 4 in
+//< `docs/DESIGN.md`).
+//< Caution: **Do not copy the list of numbers into here.** Its canonical source is the list under
+//< "Development Principles" in `docs/DESIGN.md`, which this file reads and compares with the uses.
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+import "tests/support/conventions_scan" as scan + { Sample }
+import "tests/support/harness"
+
+priv const rule_doc: U8[] = "docs/DESIGN.md" //< where the numbers come from
+priv const rule_head: U8[] = "## Development Principles" //<
+  //< The heading where the Development Principles' list begins
+  //<
+  //< Caution: **Do not mix it with another numbered list**: `docs/DESIGN.md` uses `1. **…**` in its
+  //< chapters too, so only the text under this heading is read.
+priv const rule_mark: U8[] = ". **"
+
+priv const cite_word: U8[] = "Principle " //< the form of a citation
+  //<
+  //< Caution: **Do not drop the trailing space**: `take_numbers` reads the number right after
+  //< this text, and would not reach `Principle 5`'s `5`.
+
+priv fn numbers_in_doc(arena: Arena$@): List<|U8[]|> //<
+  //< Picks the principles' numbers out of `docs/DESIGN.md`
+  $out: = List<|U8[]|>.new(arena)
+  $inside: = false
+  for line in harness.read_under_root(rule_doc).lines(arena)
+    if line.starts_with("## ")
+      inside = line.trim_end().equals(rule_head)
+      continue
+    dot: = line.find_str(rule_mark)
+    if !inside || dot <= 0
+      continue
+    $all: = true
+    for i in Range.asc(dot)
+      if !(line.ptr + i).is_digit()
+        all = false
+    if all
+      out.push(line.sub(0, dot))
+  return out
+
+priv fn cited(line: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< Picks the numbers of the principles cited in one line
+  //<
+  //< **Two are always written in full, as `Principle 1 and Principle 6`**, so reading one at a
+  //< time is enough. The word with no number after it (`Principle compliance`) yields nothing.
+  $out: = List<|U8[]|>.new(arena)
+  $at: Sz = 0
+  for at < line.len
+    hit: = line.sub_from(at).find_str(cite_word)
+    if hit < 0
+      break
+    at = at + Sz::hit + cite_word.len
+    take_numbers(line, at, out@)
+  return out
+
+priv fn take_numbers(line: U8[], from: Sz, out: List<|U8[]|>$@) //<
+  //< Pushes the number that starts at `from`
+  //<
+  //< With no number there, nothing is pushed.
+  $n: = from
+  for n < line.len && (line.ptr + n).is_digit()
+    n += 1
+  if n == from
+    return
+  out.push(line.sub(from, n - from))
+
+priv fn known(names: List<|U8[]|>@, want: U8[]): Bool
+  for n in names
+    if n.equals(want)
+      return true
+  return false
+
+priv fn check_cites(arena: Arena$@)
+  $numbers: = numbers_in_doc(arena)
+  $seen: Sz = 0
+  $bad: = List<|U8[]|>.new(arena)
+  specs: = scan.kspl_specs_with(U8[][]::{ "*.md", "*.py", "*.mk" }, arena)
+  for rel in harness.tracked_matching(specs)
+    $i: Sz = 0
+    for line in harness.read_under_root(rel).lines(arena)
+      i += 1
+      for n in cited(line, arena)
+        seen += 1
+        if !known(numbers@, n)
+          bad
+            .push(arena.text().s(rel).s(":\{i\}: there is no ").s(cite_word).s(n).take())
+  verdict.check_list("a Principle's number named really exists", seen, "namings", bad@,
+    "the numbers' origin is the run of \"Development Principles\" in `docs/DESIGN.md`")
+
+// The samples for the judgment ("a check shows it can fire" in `conventions_scan.kspls`).
+priv const cite_samples: Sample[4] = ::{
+  Sample::{ .text = "// nothing that does not act (Principle 5).", .hits = true },
+  Sample::{ .text = "// taking away, and one means (Principle 1 and Principle 6).", .hits = true },
+  Sample::{ .text = "* Principle compliance comes first.", .hits = false },
+  Sample::{ .text = "* Principles (all eight) come first.", .hits = false },
+}
+
+priv fn cites(line: U8[], arena: Arena$@): Bool
+  return cited(line, arena).len > 0
+
+priv fn check_fires(arena: Arena$@)
+  $h: = scan.misjudged(Sample[]::cite_samples, cites, arena)
+  verdict.check_list("the judgment that picks a number up can fire", cite_samples.len, "samples",
+    h@, "the table of what is hit and what is not is `cite_samples`")
+
+fn run(arena: Arena$@)
+  check_cites(arena)
+  check_fires(arena)

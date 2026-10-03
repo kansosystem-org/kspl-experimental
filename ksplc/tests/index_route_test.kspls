@@ -1,0 +1,97 @@
+import "std/ds"
+import "std/mem" { Arena }
+import "std/verdict"
+
+// ==========================================
+// Which of the four methods (`Index.get` / `Index_mut.set` / `Index_place.at` /
+// `Index_ref.at_ref`) a subscript resolves to, and its write permission. **No copy is made.**
+// ==========================================
+// ==========================================
+// ==========================================
+priv struct Ro_view<|T|>
+  ptr: T@
+  len: Sz
+
+// What it points at is immutable, so it cannot implement `Index_place` (`at` promises to return
+// `Output$@`).
+impl<|T|> Ro_view<|T|>: Index_ref<|Sz, T|>
+  fn at_ref(r: Self, index: Sz, _file: U8[], _line: Sz): T@
+    return r.ptr + index
+
+priv struct Wide
+  a: I64
+  b: I64
+  c: I64
+  d: I64
+
+priv fn wide_at_ro(xs: ds.List<|Wide|>@, i: Sz): Wide@ //<
+  //< Taken by a read-only pointer (std's usual way to take one)
+  return xs[i]@
+
+fn test_index_ref_returns_a_place()
+  verdict.start("[Index] a subscript returning a read-only place test...")
+  $store: Wide[2] = ::{::{ .a = 1, .b = 2, .c = 3, .d = 4 },
+    ::{ .a = 5, .b = 6, .c = 7, .d = 8 } }
+  v: Ro_view<|Wide|> = ::{ .ptr = store[0]@, .len = 2 }
+
+  assert(v[1].c == 7I64, "index_ref: an element's field reads")
+
+  // **This is the real check.** A copy would give a temporary's address and would not match.
+  want: Wide@ = store[1]@
+  got: Wide@ = v[1]@
+  assert(got == want,
+    "index_ref: the element's address points at the original container (not a copy)")
+
+  // `List` is both `Index_place` and `Index_ref`; a read-only receiver uses the latter, which is
+  // still a place.
+  arena: = Arena.new(4 * 1024)
+  defer arena.free()
+  $l: = ds.List<|Wide|>.new(arena)
+  l.push(::{ .a = 9, .b = 8, .c = 7, .d = 6 })
+  l.push(::{ .a = 5, .b = 4, .c = 3, .d = 2 })
+  via_mut: Wide$@ = l.at(1)
+  via_ro: Wide@ = wide_at_ro(l@, 1)
+  same_place: = (Wide@)::via_mut == via_ro
+  assert(same_place,
+    "index_ref: a List through a read-only pointer points at the same element's place")
+  verdict
+    .pass("a subscript returning a read-only place points at the element's place without copying \
+      it.")
+
+// ==========================================
+// An `Index_place` implementation's receiver shape decides writing through a read-only frame.
+// **A borrowed view and an owned container are right to give different answers.**
+// Note: `tests/negative/index_readonly_receiver.kspls` pins the rejected shape.
+// ==========================================
+priv struct Rw_view
+  ptr: I32$@
+  len: Sz
+
+// The receiver is `Self@`: the descriptor is only read, returning the mutable pointer inside.
+impl Rw_view: Index_place<|Sz, I32|>
+  fn at(r: Self@, index: Sz, _file: U8[], _line: Sz): I32$@
+    return r.ptr + index
+
+priv struct Frame
+  v: Rw_view
+
+priv fn poke(f: Frame@) //< takes the frame **read-only**
+  f.v[0] = 99
+  f.v[1] += 5
+  p: I32$@ = f.v[2]@
+  p$ = 77
+
+fn test_view_receiver_decides_write_permission()
+  verdict
+    .start("[Index] the receiver shape the implementation declares decides the permission test...")
+  $store: I32[3] = ::{ 0, 10, 0 }
+  f: Frame = ::{ .v = Rw_view::{ .ptr = store[0]@, .len = 3 } }
+
+  // Caution: **All three must pass.** Two places apply the rule; with only one tested, an
+  // assignment that passes while `f.v[2]@` is rejected goes unnoticed.
+  poke(f@)
+  assert(store[0] == 99, "view: it assigns through a read-only frame")
+  assert(store[1] == 15, "view: it compound-assigns through a read-only frame")
+  assert(store[2] == 77, "view: a mutable address can be taken through a read-only frame")
+  verdict
+    .pass("a view giving `at(r: Self@, …)` can write to an element through a read-only frame too.")

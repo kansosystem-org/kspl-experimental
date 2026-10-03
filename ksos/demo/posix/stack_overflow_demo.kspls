@@ -1,0 +1,25 @@
+//< Detecting a stack overflow with the canary that task_create plants
+//<
+//< The demo does not overflow the stack by deep recursion, because tuning the recursion depth is
+//< brittle: how many bytes one call uses depends on the optimization level, the ABI and whether
+//< debug information is present, and cannot be predicted. The recursion can step past the stack
+//< into unmapped memory before the intended depth and cause a real SEGV instead.
+import "ksos/kernel/task" + { Task }
+import "std/io"
+
+$tcb: Task
+$stack: U8[65536]
+
+fn overflow_task(_arg: Void$@): Void
+  io.out().s("=== Kanso OS (POSIX) stack-overflow canary guard ===\n")
+  io.out().s("[overflow] clobbering this task's stack-guard canary...\n")
+  // Overwrite the canary that task_create wrote into stack[0..stack_guard_bytes) directly (the
+  // same state a real overflow leaves when it reaches there).
+  stack[0] = 0x00
+  Task.yield() // schedule() checks this task's canary here and panics
+  io.out().s("[overflow] UNEXPECTED: returned without triggering the guard\n")
+
+fn main()
+  tcb.create(U8$[]::stack, overflow_task, null, 1, "overflow")
+  task.start_scheduler()
+  io.out().s("[overflow] UNEXPECTED: scheduler returned without a panic\n")

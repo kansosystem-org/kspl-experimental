@@ -1,0 +1,196 @@
+//< Whether a place may be written to
+//<
+//< Note: The statement's inference itself is in `sema/body/stmt.kspls`.
+
+// ==========================================
+//   0. the place   — is it even an expression pointing at writable memory (a value, an address
+//                    or a call's result is not)
+//   1. the path    — does it cross a read-only pointer (`T@`) on the way
+//   2. the binding — is the root mutable (`$`). A `const` declaration and a place from a
+//                    literal are not
+//   3. the type    — is the level of the pointee, or of the element, mutable
+// ==========================================
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
+import "ksplc/sema/body/expr" as sema_body_expr
+import "ksplc/sema/decl/access" as sema_decl_access
+import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "std/str"
+
+impl Ast_node
+  fn write_target_type(r: Self$@, c: Sema_ctx$@): I32?Sema_error //<
+    //< Computes the receiver type along the path to the write destination without rewriting the AST
+    //<
+    //< infer_expr is destructive (it morphs nodes: "The AST nodes the Sema layer creates (its
+    //< contract with Lower and Genc)" in ksplc/docs/DESIGN.md), and this runs before the main
+    //< inference. Applied early to a method-call receiver (`node.get_child(0).def_node = v`), it
+    //< would leave broken nodes and wrong code.
+    unknown: = I32::sema_type_env.Builtin_type_id.unknown
+    if r == null
+      return unknown
+    if r.is_path_or_ident()
+      return r.infer_expr(c, unknown)?
+    // Pointer arithmetic (`p + i`) keeps the operand's pointer type, so step into the operand
+    // (not infer_expr, for the reason above); giving up lets `(p + 1)$ = v` write through a
+    // `p: U8@`.
+    if r.kind_id == .k_expr && r.children.len == 3
+      op_text: = r.get_binary_op().text
+      if op_text.equals("+") || op_text.equals("-")
+        left_tid: = r.get_binary_left().write_target_type(c)?
+        if left_tid != unknown && c.env.is_pointer(left_tid)
+          return left_tid
+        right_tid: = r.get_binary_right().write_target_type(c)?
+        if right_tid != unknown && c.env.is_pointer(right_tid)
+          return right_tid
+      return unknown
+    // Only `.`, `$` and `[` can be followed by type alone; anything else gives up.
+    if r.kind_id != .k_expr_postfix
+      return unknown
+    op: = r.get_postfix_op()
+    if op == null
+      return unknown
+    // Caution: `$` and `[` have no member, so they are handled before the `.` check. If not
+    // followed, the type reaches reject_write_through_const_ptr as unknown, reads as "not a
+    // pointer", and the check fails open: `pp$$ = v` / `arr[i]$ = v` pass a read-only level.
+    if op.text.equals("$") || op.text.equals("[")
+      base_tid: = r.get_postfix_receiver().write_target_type(c)?
+      if base_tid == unknown
+        return unknown
+      if op.text.equals("$")
+        // Steps down to the pointee; for a non-pointer, it gives up.
+        if !c.env.is_pointer(base_tid)
+          return unknown
+        return c.env.strip_ptr(base_tid)
+      // An index steps down to the element type (slice then array, as in the element check
+      // below); neither, such as a user-defined Index, gives up.
+      elem_id: = c.env.slice_elem(base_tid)
+      if elem_id != base_tid
+        return elem_id
+      arr_elem_id: = c.env.strip_array(base_tid)
+      if arr_elem_id != base_tid
+        return arr_elem_id
+      return unknown
+    member: = r.get_postfix_member()
+    if member == null || !op.text.equals(".") || member.kind_id != .k_identifier
+      return unknown
+    base_tid: = r.get_postfix_receiver().write_target_type(c)?
+    if base_tid == unknown
+      return unknown
+    return c.env.field_type_of(base_tid, member.text)
+
+  fn reject_write_through_const_ptr(recv: Self$@, c: Sema_ctx$@, err_node: Self$@):
+    Bool?Sema_error //<
+      //< Checks that the assignment destination is not the pointee of a read-only pointer (`T@`).
+      //<
+      //< It checks only whether the pointee itself is immutable (`U8[]$@` and `U8$[]@` differ: the
+      //< element's level versus the descriptor's level).
+    if recv == null
+      return false
+    recv_type: = recv.write_target_type(c)?
+    if sema_type_env.is_unknown(recv_type) || !c.env.is_pointer(recv_type)
+      return false
+    pointee: = c.env.strip_ptr(recv_type)
+    // `U8[]$@` points at a slice, so `p$ = other` is allowed; `U8$[]@` points at an immutable
+    // descriptor, so it is rejected.
+    if !c.env.is_const(pointee)
+      return true // what it points at is mutable: writable
+    c.err(err_node,
+      "cannot write through a read-only pointer (use '$@' to allow writing through it)")
+    throw Sema_error.analysis_failed
+
+  fn check_write_path(r: Self$@, c: Sema_ctx$@): Void?Sema_error //<
+    //< Checks whether the path to the destination crosses a read-only pointer
+    //<
+    //< **A form that cannot be followed counts as "cannot write" (fail-closed).** An explicit cast
+    //< (`U8$@::(p)`) is **the deliberate way out**, for registers or an external API ("Places, and
+    //< the rules for when they may be written" in docs/SPEC-language.md).
+    r.reject_write_to_const_element(c)?
+    if !c.place_denies_write(r)
+      return
+    c.err(r,
+      "cannot write here: the path to this location goes through a read-only pointer, or its type \
+        could not be determined (use '$@' to allow writing through it, or cast explicitly with \
+        'T$@::(...)' if the write is intended)")
+    throw Sema_error.analysis_failed
+
+  priv fn reject_write_to_const_element(r: Self$@, c: Sema_ctx$@): Void?Sema_error //<
+    //< Checks the element's mutability (step 3, the type)
+    //<
+    //< place_crosses_const_elem in `sema/decl/access.kspls` decides; this only reports it.
+    if !c.place_crosses_const_elem(r)
+      return
+    c.err(r,
+      "cannot write to an element of a read-only slice or array (use '$[]' to allow writing to \
+        elements)")
+    throw Sema_error.analysis_failed
+
+  fn enforce_assignable_place(r: Self$@, c: Sema_ctx$@): Void?Sema_error //<
+    //< Checks that the assignment destination is a place
+    //<
+    //< **genc emits the left-hand side as written**, so a non-place gives C `&x = …` / `f() = …`
+    //< and the C compiler's `expression is not assignable` (Principle 2).
+    //< Caution: **Point out a mix-up of `@` and `$`.** The writer of `p@ = v` believes it writes
+    //< through the pointer.
+    if r == null || r.is_place_expr()
+      return
+    c.clear_scratch()
+      .s("cannot assign to this expression: it is a value, not a place. Only a variable, a field \
+        ('a.b'), an element ('a[i]'), or a dereference ('p$') can be assigned to")
+    op: = r.get_postfix_op()
+    if op != null && op.text.equals("@")
+      c.scratch
+        .s("\n  Hint: '@' takes an address, '$' reads through a pointer. To write through 'p', use \
+          'p$ = …'.")
+    c.err(r, c.scratch.slice())
+    throw Sema_error.analysis_failed
+
+  fn enforce_mutability(r: Self$@, c: Sema_ctx$@): Void?Sema_error //<
+    //< Checks whether a write to the assignment destination (the left-hand side) is allowed
+    //<
+    //< If no pointer is crossed (a variable, a field of a value), the binding must be mutable
+    //< (sym.flags.is_mut). If one is (`p.f = v` / `p$ = v`), the pointee must be (`T$@`), not `p`.
+    if r == null
+      return
+
+    $root_name: U8[] = ""
+    if r.kind_id == .k_expr_path || r.kind_id == .k_identifier
+      full_name: = r.text
+      $dot_idx: Sz = 0
+      for dot_idx < full_name.len
+        if (full_name.ptr + dot_idx)$ == '.'
+          break
+        dot_idx += 1
+      root_name = U8[]::{ .ptr = full_name.ptr, .len = dot_idx }
+    else if r.kind_id == .k_expr_postfix && r.children.len >= 2
+      op: = r.get_child(1)
+      if op.kind_id == .k_literal && (op.text.equals(".") || op.text.equals("$"))
+        recv: = r.get_child(0)
+        if recv.reject_write_through_const_ptr(c, r)?
+          return // a pointer was crossed: the binding's mutability is not checked
+        // `$` always crosses a pointer, so only an unresolved type reaches here.
+        if op.text.equals("$")
+          return
+        return recv.enforce_mutability(c)
+      // An index. Crossing a read-only pointer forbids the write even for a mutable element.
+      // **A plain binding** as receiver demands nothing: the type's level decides `buf[0] = v`.
+      if op.kind_id == .k_literal && op.text.equals("[")
+        recv: = r.get_child(0)
+        if recv.kind_id == .k_identifier || recv.kind_id == .k_expr_path
+          return
+        // **If a user-defined `at` declares `Self@`, the path ends here** (only
+        // index_stops_permission_walk in `../decl/access.kspls` decides).
+        if c.index_stops_permission_walk(recv.write_target_type(c)?)
+          return
+        return recv.enforce_mutability(c)
+
+    if root_name.len > 0
+      sym_opt: = c.symtab.resolve(root_name) catch null
+      if sym_opt != null && !sym_opt.flags.is_mut
+        c.clear_scratch()
+          .s("cannot assign to immutable variable '\{root_name\}'. Prefix the declaration with '$' \
+            to make it mutable.")
+        c.err(r, c.scratch.slice())
+        throw Sema_error.analysis_failed

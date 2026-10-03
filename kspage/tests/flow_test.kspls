@@ -1,0 +1,868 @@
+import "kspage/lay/caret"
+import "kspage/lay/flow"
+import "kspage/lay/page" { Page }
+import "kspage/model/collect" { Collect }
+import "kspage/model/doc" + { Doc, Rect }
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/marker"
+import "kspage/model/number"
+import "kspage/model/paint"
+import "kspage/model/style" { Align, Arrange, Sheet }
+import "kspage/tests/base"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// kspage: checks flow layout of the document model (a golden test).
+// **The metrics are fixed (`kspage/model/fixed_font`)**: em 16px, ASCII 8px, a non-ASCII
+// character 16px, a line 19.2px. **The multi-byte fixtures are deliberate.**
+// ==========================================
+
+priv fn bare_sheet(arena: Arena$@): Sheet$@ //< a sheet with no styles added at all
+  return Sheet.new(base.root_font(), arena)
+
+fn test_one_short_line_makes_one_box()
+  verdict.start("[kspage/flow] one row that fits becoming one box test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("abc")
+
+  page: = flow.layout(d, bare_sheet(arena), fixed.make(), 300.0, arena)
+  assert(page.boxes.len == 1, "it does not wrap, so the box is one")
+  b: = page.boxes.get(0)
+  assert(base.near(b.rect.x, 0.0) && base.near(b.rect.y, 0.0), "it is laid at the top left")
+  assert(base.near(b.rect.w, 24.0), "three ASCII characters = 24px")
+  assert(base.near(page.height, 19.2), "one row's worth of height")
+  verdict.pass("a text that fits is laid at the origin as one box.")
+
+fn test_wrapping_breaks_at_spaces() //< it wraps at whitespace
+  //<
+  //< The whitespace at the break stays at the end of the previous line.
+  verdict.start("[kspage/flow] wrapping at a whitespace test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("aaa bbb ccc")
+
+  // 40px = five ASCII characters; only "aaa " fits.
+  page: = flow.layout(d, bare_sheet(arena), fixed.make(), 40.0, arena)
+  assert(page.boxes.len == 3, "it breaks into three rows")
+  assert(base.near(page.boxes.get(0).rect.y, 0.0), "the first row")
+  assert(base.near(page.boxes.get(1).rect.y, 19.2), "the second row is one row lower")
+  assert(base.near(page.boxes.get(2).rect.y, 38.4), "the third row is two rows lower")
+  // With the whitespace, the first two lines are four characters wide.
+  assert(base.near(page.boxes.get(0).rect.w, 32.0), "\"aaa \" = 32px")
+  assert(base.near(page.boxes.get(2).rect.w, 24.0), "\"ccc\" = 24px")
+  assert(base.near(page.height, 57.6), "three rows' worth of height")
+  verdict.pass("it breaks behind the whitespace, and each row is one row lower.")
+
+fn test_wrapping_breaks_between_wide_characters() //<
+  //< A non-ASCII character breaks without any whitespace
+  verdict.start("[kspage/flow] a character of one em breaking between characters test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("あいうえお")
+
+  // 40px holds two one-em characters (32px).
+  page: = flow.layout(d, bare_sheet(arena), fixed.make(), 40.0, arena)
+  assert(page.boxes.len == 3, "it breaks into three rows of two characters each")
+  assert(base.near(page.boxes.get(0).rect.w, 32.0), "the first row is two characters = 32px")
+  assert(base.near(page.boxes.get(1).rect.w, 32.0), "the second row is two characters = 32px")
+  assert(base.near(page.boxes.get(2).rect.w, 16.0), "the third row is one character = 16px")
+  verdict.pass("with no whitespace at all, a character of one em breaks between characters.")
+
+fn test_too_narrow_still_places_one_character() //<
+  //< Where not even one character fits, one is placed sticking out (the lines keep advancing)
+  verdict.start("[kspage/flow] laying one character even where the width is short test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("あい")
+
+  // Narrower than one one-em character (16px).
+  page: = flow.layout(d, bare_sheet(arena), fixed.make(), 4.0, arena)
+  assert(page.boxes.len == 2, "it becomes two rows of one character each")
+  assert(base.near(page.boxes.get(0).rect.w, 16.0), "one character is laid even past the width")
+  verdict
+    .pass("one character is laid even where it does not fit, so the rows do not stop advancing.")
+
+fn test_style_name_changes_the_font() //< a style's name changes the font
+  verdict.start("[kspage/flow] a style's name changing the font test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  $big: paint.Font_spec = paint.inherit_all()
+  big.size_px = Option<|F32|>.some(32.0)
+  sheet.add("h1", big)
+
+  d: = Doc.new(arena)
+  d.add_block("h1").add_text("abc")
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(base.near(page.boxes.get(0).rect.w, 48.0),
+    "the em is doubled, so the width doubles too (three characters = 48px)")
+  assert(base.near(page.height, 38.4), "the row's height doubles too")
+  verdict.pass("the style is looked up by name, and only the fields written change.")
+
+fn test_unspecified_fields_are_inherited() //< an unset field is inherited from the parent
+  verdict.start("[kspage/flow] what is not written being inherited test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  $bold: paint.Font_spec = paint.inherit_all()
+  bold.weight = Option<|U16|>.some(700U16)
+  sheet.add("strong", bold)
+
+  d: = Doc.new(arena)
+  b: = d.add_block("body")
+  b.add_text("abc", "strong")
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  box: = page.boxes.get(0)
+  assert(box.font.weight == 700U16, "the field written changes")
+  assert(base.near(box.font.size_px, 16.0), "the field not written stays the parent's")
+  assert(box.font.family.equals("sans-serif"), "the name stays the parent's too")
+  verdict.pass("only what is written changes, and the rest is inherited from the parent.")
+
+fn test_space_and_indent_move_the_block() //<
+  //< The space before and after a paragraph, and the indent, take effect
+  verdict.start("[kspage/flow] a paragraph's space and indent acting test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  s: = sheet.add("body", paint.inherit_all())
+  s.space_before = 10.0
+  s.space_after = 5.0
+  s.indent = 20.0
+
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("abc")
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  box: = page.boxes.get(0)
+  assert(base.near(box.rect.y, 10.0), "it goes down by the space in front")
+  assert(base.near(box.rect.x, 20.0), "it comes right by the indent")
+  assert(base.near(page.height, 34.2), "10 + 19.2 + 5")
+  verdict.pass("the space before and behind and the indent come out in the place.")
+
+fn test_space_after_comes_after_the_children() //<
+  //< The space after goes after the whole block, not after the block's own text
+  verdict.start("[kspage/flow] the space behind going in after the children test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  s: = sheet.add("outer", paint.inherit_all())
+  s.space_after = 5.0
+
+  d: = Doc.new(arena)
+  outer: = d.add_block("outer")
+  outer.add_text("a")
+  outer.add_child("item").add_text("b")
+  d.add_block("item").add_text("c")
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(base.near(page.boxes.get(0).rect.y, 0.0), "its own text comes first")
+  assert(base.near(page.boxes.get(1).rect.y, 19.2), "the child follows right below")
+  next_y: = page.boxes.get(2).rect.y
+  assert(base.near(next_y, 43.4), "the space goes in after the child, between it and the next block")
+  verdict.pass("the space behind goes in behind the whole block.")
+
+fn test_children_stack_under_the_parent_indent() //<
+  //< A nested block's indent adds to the parent's indent
+  verdict.start("[kspage/flow] a nested indent stacking up test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  s: = sheet.add("item", paint.inherit_all())
+  s.indent = 20.0
+
+  d: = Doc.new(arena)
+  outer: = d.add_block("item")
+  outer.add_text("a")
+  outer.add_child("item").add_text("b")
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(base.near(page.boxes.get(0).rect.x, 20.0), "the outer is indented 20px")
+  assert(base.near(page.boxes.get(1).rect.x, 40.0), "the inner is indented 20px further")
+  assert(base.near(page.boxes.get(1).rect.y, 19.2), "the child is laid below the parent")
+  verdict.pass("a nested indent is stacked on top of the parent's indent.")
+
+fn test_sibling_children_share_the_same_left_edge() //<
+  //< Siblings' children line up on one left edge (the previous sibling's indent is not inherited)
+  verdict.start("[kspage/flow] siblings' children lining up on the same left edge test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  s: = sheet.add("item", paint.inherit_all())
+  s.indent = 24.0
+
+  d: = Doc.new(arena)
+  list: = d.add_block("body")
+  list.add_child("item").add_text("a")
+  list.add_child("item").add_text("b")
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  // If the second came out at 48px, it would be inheriting the first's indent.
+  assert(base.near(page.boxes.get(0).rect.x, 24.0), "the first is indented 24px")
+  assert(base.near(page.boxes.get(1).rect.x, 24.0), "the second stays 24px too")
+  verdict.pass("siblings' children line up on the same left edge.")
+
+fn test_mixed_sizes_align_on_the_baseline() //<
+  //< Characters of different sizes on one line align on the baseline
+  verdict.start("[kspage/flow] characters of differing sizes lining up on the baseline test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  $big: paint.Font_spec = paint.inherit_all()
+  big.size_px = Option<|F32|>.some(32.0)
+  sheet.add("big", big)
+
+  d: = Doc.new(arena)
+  b: = d.add_block("body")
+  b.add_text("a")
+  b.add_text("b", "big")
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  small_box: = page.boxes.get(0)
+  big_box: = page.boxes.get(1)
+  // The ascent is 0.8 em. A line's ascent follows the larger (25.6).
+  assert(base.near(big_box.rect.y, 0.0), "the largest character sits at the row's top edge")
+  assert(base.near(small_box.rect.y, 12.8), "the small character goes down by 25.6 - 12.8")
+  assert(base.near(page.height, 38.4), "the row's height is decided by the tallest character")
+  verdict.pass("the characters of one row line up on the baseline.")
+
+fn test_unknown_style_name_falls_back_to_the_parent() //<
+  //< A missing style name does not stop the layout
+  verdict.start("[kspage/flow] a style name that is not there not stopping the laying-out test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  d: = Doc.new(arena)
+  d.add_block("no_such_style").add_text("abc")
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(page.boxes.len == 1, "it is laid")
+  assert(base.near(page.boxes.get(0).rect.w, 24.0), "it stays the parent's font")
+  // Caution: A typo would pass silently; first check with `Sheet.find` that the name really is
+  // missing.
+  if _s: = sheet.find("no_such_style")
+    assert(false, "a name that was not added cannot be looked up")
+  verdict
+    .pass("a name that is not there is held as if nothing were written, and find tells them apart.")
+
+// ---- regions ----
+
+fn test_regions_group_the_document_by_arrangement() //<
+  //< Consecutive paragraphs become one region; a table and a slide each become their own
+  verdict.start("[kspage/flow] the regions parting per arrangement test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  base.table_style(sheet)
+  slide: = sheet.add("slide", paint.inherit_all())
+  slide.arrange = Arrange.absolute
+  slide.width = 120.0
+  slide.height = 60.0
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("ab")
+  d.add_block("body").add_text("cd")
+  table: = d.add_block("table")
+  row: = table.add_child("row")
+  row.add_child("cell").add_text("a")
+  d.add_block("slide").add_child("frame").add_text("e")
+  d.add_block("body").add_text("fg")
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  // Split per paragraph it would be five; consecutive flow is merged into one.
+  assert(page.regions.len == 4, "the regions are four")
+  assert(is_kind(page, 0, Arrange.flow), "the first is writing")
+  assert(is_kind(page, 1, Arrange.grid), "the second is a table")
+  assert(is_kind(page, 2, Arrange.absolute), "the third is a presentation's slide")
+  assert(is_kind(page, 3, Arrange.flow),
+    "behind the table and the slide comes another writing region")
+  assert(base.near(page.regions.get(0).rect.h, 38.4),
+    "the writing region covers the two paragraphs that ran on")
+  assert(base.near(page.regions.get(0).rect.w, 300.0),
+    "the writing region is the column's whole width")
+  // Left at the column's width, a page-wide frame would appear around a narrow table.
+  assert(page.regions.get(1).rect.w < 300.0, "the table's region goes only to the cells' width")
+  assert(base.near(page.regions.get(2).rect.w, 120.0), "the slide's region is the style's width")
+  verdict
+    .pass("the regions part per arrangement, and writing that runs on comes together into one.")
+
+priv fn is_kind(page: Page$@, i: Sz, want: Arrange): Bool
+  return page.regions.get(i).kind.same_arrange(want)
+
+fn test_a_framed_child_does_not_take_a_line() //< a positioned child is not in the flow
+  //<
+  //< Otherwise the next paragraph would drop by the figure's height and it would be laid out twice.
+  verdict.start("[kspage/flow] a child holding a place not riding the flow test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  holder: = d.add_block("body")
+  holder.add_text("a")
+  doc.add_framed_child(holder, "", Rect::{ .x = 100.0, .y = 0.0, .w = 40.0, .h = 20.0 })
+    .add_text("x")
+  d.add_block("body").add_text("b")
+
+  page: = flow.layout(d, bare_sheet(arena), fixed.make(), 300.0, arena)
+  assert(page.boxes.len == 3, "the three of a, x and b, with the figure's contents laid once only")
+  assert(base.near(page.boxes.get(2).rect.y, 19.2),
+    "the next paragraph goes down one row's worth only (the figure's height is not counted)")
+  verdict
+    .pass("a child holding a place makes no row, and the holder that carries it lays it once only.")
+
+fn test_an_empty_slide_keeps_the_band_as_its_region() //<
+  //< An empty slide's region is the slide's own size (it does not spread to the column's width)
+  verdict.start("[kspage/flow] an empty slide's region being the slide's size test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  slide: = sheet.add("slide", paint.inherit_all())
+  slide.arrange = Arrange.absolute
+  slide.width = 120.0
+  slide.height = 60.0
+  d: = Doc.new(arena)
+  d.add_block("slide")
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(page.regions.len == 1, "the region is the slide's one")
+  r: = page.regions.get(0).rect
+  assert(base.near(r.w, 120.0),
+    "the width is the slide's own (it does not spread to the column's whole width)")
+  assert(base.near(r.h, 60.0), "the height is the slide's own height")
+  verdict.pass("a slide with no contents becomes a region of the slide's own width and height.")
+
+fn test_an_empty_table_does_not_split_the_flow_region() //<
+  //< A region with no height is not recorded
+  //<
+  //< Recorded, an empty table would split the text before and after into two regions.
+  verdict.start("[kspage/flow] an empty table not splitting the writing region test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  base.table_style(sheet)
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("a")
+  d.add_block("table")
+  d.add_block("body").add_text("b")
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(page.regions.len == 1,
+    "a table region with no height is not remembered, so the writing is one region")
+  assert(is_kind(page, 0, Arrange.flow), "what is left is the writing region")
+  assert(base.near(page.regions.get(0).rect.h, 38.4), "it covers the two paragraphs with one")
+  verdict
+    .pass("an empty table becomes no region, and the writing before and behind comes together into \
+      one region.")
+
+// ---- line alignment, and line spacing ----
+
+fn test_alignment_moves_the_line_inside_the_column() //<
+  //< It is aligned to the center and to the right
+  //<
+  //< **A line with no remaining space does not move** (a wrapped line is the full width).
+  verdict.start("[kspage/flow] a row being aligned to one side within the column test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  sheet.add("mid", paint.inherit_all()).align = Align.center
+  sheet.add("end", paint.inherit_all()).align = Align.right
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("abcd")
+  d.add_block("mid").add_text("abcd")
+  d.add_block("end").add_text("abcd")
+
+  // Four ASCII characters = 32px. The column is 100px, so 68px remains.
+  page: = flow.layout(d, sheet, fixed.make(), 100.0, arena)
+  assert(base.near(page.boxes.get(0).rect.x, 0.0), "what stands is to sit at the left edge")
+  assert(base.near(page.boxes.get(1).rect.x, 34.0), "the centre comes right by half the remainder")
+  assert(base.near(page.boxes.get(2).rect.x, 68.0),
+    "aligned right, it comes right by the whole remainder")
+  verdict
+    .pass("where a row is aligned to is decided by its remainder, and what stands is the left edge.")
+
+fn test_justified_lines_reach_both_edges() //<
+  //< Justification spreads a line's remaining space into the letter spacing, out to the right edge
+  //<
+  //< **A paragraph's last line is not stretched** (a few characters would scatter). Six 16px
+  //< characters fit in 100px; the 4px left is spread over five gaps of 0.8px.
+  verdict.start("[kspage/flow] justifying test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  sheet.add("both", paint.inherit_all()).align = Align.justify
+  d: = Doc.new(arena)
+  d.add_block("both").add_text("あいうえおかきくけこ")
+
+  page: = flow.layout(d, sheet, fixed.make(), 100.0, arena)
+  assert(page.boxes.len == 2, "it becomes two rows of six characters and four")
+  full: = page.boxes.get(0)
+  tail: = page.boxes.get(1)
+  assert(base.near(full.spacing, 0.8F32),
+    "the remainder is parted out evenly between the characters")
+  assert(base.near(full.rect.x, 0.0), "the row's left edge does not move")
+  assert(base.near(full.rect.x + full.rect.w, 100.0), "the characters reach the column's right edge")
+  assert(base.near(tail.spacing, 0.0), "no letter spacing goes into the last row")
+  assert(base.near(tail.rect.w, 64.0), "the last row stays the characters' width")
+  verdict.pass("only a row that wrapped reaches both edges, by the letter spacing.")
+
+fn test_a_justified_line_spreads_across_every_box() //<
+  //< On a line of two or more boxes, the letter spacing is spread evenly over the whole line
+  //<
+  //< **The next box starts one letter spacing after the previous box's right edge** (a box's width
+  //< does not include a trailing letter spacing).
+  verdict.start("[kspage/flow] justifying crossing the boxes test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  sheet.add("both", paint.inherit_all()).align = Align.justify
+  d: = Doc.new(arena)
+  para: = d.add_block("both")
+  para.add_text("あいう")
+  para.add_text("えおかきくけこ")
+
+  // The first line is 3 + 3 characters (96px); the 4px left is spread over the five gaps.
+  page: = flow.layout(d, sheet, fixed.make(), 100.0, arena)
+  head: = page.boxes.get(0)
+  next: = page.boxes.get(1)
+  same_gap: = base.near(head.spacing, 0.8F32) && base.near(next.spacing, 0.8F32)
+  assert(same_gap, "one row has one letter spacing")
+  assert(base.near(head.rect.w, 49.6F32), "a box's width goes to where its last character reaches")
+  after_gap: = head.rect.x + head.rect.w + 0.8F32
+  assert(base.near(next.rect.x, after_gap), "the next box is one letter spacing further on")
+  assert(base.near(next.rect.x + next.rect.w, 100.0),
+    "the row's right edge is the column's right edge")
+  verdict
+    .pass("the letter spacing is parted evenly over the whole row, and one goes into the boxes' \
+      joint too.")
+
+fn test_a_click_on_a_justified_line_lands_on_the_letter_it_hits() //<
+  //< The clicked position is computed with the letter spacing included
+  //<
+  //< **Without it, the error grows the further right along the line the click is.**
+  verdict.start("[kspage/flow] pressing a justified row test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  sheet.add("both", paint.inherit_all()).align = Align.justify
+  d: = Doc.new(arena)
+  d.add_block("both").add_text("あいうえおかきくけこ")
+  page: = flow.layout(d, sheet, fixed.make(), 100.0, arena)
+
+  // Spacing of 0.8px puts the fourth character's start at 3 × 16.8 = 50.4px (48px without), byte 9.
+  mid: = page.boxes.get(0)
+  spot: = caret.hit_test(page, 50.4F32, mid.rect.y + 1.0F32)
+  assert(spot.offset == 9, "it points at the head of the fourth character (byte 9)")
+  // The line's end is the column's right edge (96px without the letter spacing).
+  ends: = caret.hit_test(page, 100.0, mid.rect.y + 1.0F32)
+  assert(ends.offset == 18, "it points at the row's end (byte 18)")
+  verdict.pass("with the letter spacing added in, the character pressed can be found.")
+
+fn test_alignment_is_not_inherited_by_the_next_block() //<
+  //< Line alignment is not inherited
+  //<
+  //< Inherited by a next paragraph with no style, a paragraph nobody remembers changing would move.
+  verdict.start("[kspage/flow] where a row is aligned to not moving to the next paragraph test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  sheet.add("end", paint.inherit_all()).align = Align.right
+  d: = Doc.new(arena)
+  right: = d.add_block("end")
+  right.add_text("abcd")
+  right.add_child("").add_text("abcd")
+  d.add_block("").add_text("abcd")
+
+  page: = flow.layout(d, sheet, fixed.make(), 100.0, arena)
+  assert(base.near(page.boxes.get(0).rect.x, 68.0), "the paragraph aligned right goes right")
+  assert(base.near(page.boxes.get(1).rect.x, 0.0), "the child goes back to the left edge")
+  assert(base.near(page.boxes.get(2).rect.x, 0.0),
+    "the next paragraph goes back to the left edge too")
+  verdict
+    .pass("where a row is aligned to is per paragraph, and neither the child nor the next paragraph \
+      inherits it.")
+
+fn test_line_spacing_scales_the_line_height() //< the line-height multiple
+  //<
+  //< **0 means "not set", and the font's line height applies.**
+  verdict.start("[kspage/flow] the row spacing's multiplier acting test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  sheet.add("loose", paint.inherit_all()).line_spacing = 2.0
+  d: = Doc.new(arena)
+  // 40px = five ASCII characters: three lines.
+  d.add_block("loose").add_text("aaa bbb ccc")
+
+  page: = flow.layout(d, sheet, fixed.make(), 40.0, arena)
+  step: = page.boxes.get(1).rect.y - page.boxes.get(0).rect.y
+  assert(base.near(step, 38.4), "the rows part by the multiplier")
+  assert(base.near(page.boxes.get(0).rect.w, 32.0), "the characters' width does not change")
+  assert(base.near(page.boxes.get(0).font.size_px, 16.0), "the font size does not change either")
+  assert(base.near(page.height, 115.2), "the height used is by the multiplier too")
+  verdict.pass("the multiplier acts on the row's height alone, and the characters do not grow.")
+
+// ---- the marker ----
+
+fn test_a_bullet_hangs_in_the_indent() //<
+  //< The marker fits into the indent, and the body's left edge does not move
+  verdict.start("[kspage/flow] a mark going into the indent's space test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  item: = sheet.add("item", paint.inherit_all())
+  item.indent = 24.0
+  item.marker = marker.Marker.bullet("*")
+  d: = Doc.new(arena)
+  // 64px minus the 24px indent leaves 40px = five ASCII characters, so it breaks into two lines.
+  d.add_block("item").add_text("aaa bbb")
+
+  page: = flow.layout(d, sheet, fixed.make(), 64.0, arena)
+  assert(page.boxes.len == 3, "the mark and the boxes of the two rows it broke into are laid")
+  mark: = page.boxes.get(0)
+  assert(mark.text.equals("*"), "the first box is the mark")
+  // The 8px marker fits inside the 24px indent, right-aligned.
+  assert(base.near(mark.rect.x, 16.0), "the mark ends in front of the body's left edge")
+  assert(base.near(page.boxes.get(1).rect.x, 24.0), "the body starts at the indent")
+  // **The wrapped second line starts at the body's left edge too** (shifted by the marker's width,
+  // the list would break).
+  assert(base.near(page.boxes.get(2).rect.x, 24.0),
+    "the second row lines up on the body's left edge too")
+  assert(base.near(mark.rect.y, page.boxes.get(1).rect.y), "the mark rides on the first row")
+  // **The document does not hold this box**; clicking it gives no position inside the marker.
+  assert(mark.inline == null, "the mark's box points at no document")
+  found: = caret.hit_test(page, mark.rect.x, mark.rect.y + 1.0F32)
+  assert(found.inline == page.boxes.get(1).inline, "pressing on the mark gives the body's place")
+  verdict.pass("the mark fits into the indent, and the body's left edge does not move.")
+
+fn test_numbering_counts_consecutive_siblings() //<
+  //< The number follows the siblings' order
+  //<
+  //< Where a paragraph without a marker comes in between, it counts from 1 again.
+  verdict.start("[kspage/flow] a number counting the siblings that ran on test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  step: = sheet.add("step", paint.inherit_all())
+  step.indent = 32.0
+  step.marker = marker.Marker.number(".")
+  d: = Doc.new(arena)
+  d.add_block("step").add_text("a")
+  d.add_block("step").add_text("b")
+  d.add_block("body").add_text("c")
+  d.add_block("step").add_text("d")
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(mark_at(page, 0).equals("1."), "the first is 1")
+  assert(mark_at(page, 2).equals("2."), "the sibling that follows is 2")
+  assert(page.boxes.get(4).inline != null, "the paragraph that came in between gets no mark")
+  assert(mark_at(page, 5).equals("1."), "after one comes in between it counts from 1 afresh")
+  verdict
+    .pass("the number is the order of the siblings that ran on, and one coming in between takes it \
+      back to 1.")
+
+fn test_nested_numbering_starts_over() //< a nested list is a new sequence
+  //<
+  //< Inherit the parent's number and a number per depth could not be built.
+  verdict.start("[kspage/flow] a nested number starting from 1 test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  step: = sheet.add("step", paint.inherit_all())
+  step.indent = 32.0
+  step.marker = marker.Marker.number(".")
+  d: = Doc.new(arena)
+  d.add_block("step").add_text("a")
+  second: = d.add_block("step")
+  second.add_text("b")
+  second.add_child("step").add_text("c")
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(mark_at(page, 0).equals("1."), "the first is 1")
+  assert(mark_at(page, 2).equals("2."), "the second is 2")
+  assert(mark_at(page, 4).equals("1."), "the child starts from 1")
+  verdict.pass("a nested number does not inherit from the parent, and starts from 1.")
+
+priv fn mark_at(page: Page$@, i: Sz): U8[]
+  b: = page.boxes.get(i)
+  assert(b.inline == null, "that box is a mark")
+  return b.text
+
+// ---- running numbers (a figure's or a chart's caption) ----
+
+priv fn figures_and_text(d: Doc$@, arena: Arena$@): Sheet$@ //<
+  //< A document of alternating figure captions and body paragraphs, and its sheet
+  sheet: = Sheet.new(base.root_font(), arena)
+  fig: = sheet.add("figure", paint.inherit_all())
+  fig.indent = 40.0
+  fig.marker = marker.Marker.serial("Figure ", ". ")
+  cht: = sheet.add("chart", paint.inherit_all())
+  cht.indent = 40.0
+  cht.marker = marker.Marker.serial("Chart ", ". ")
+  d.add_block("figure").add_text("a")
+  d.add_block("body").add_text("b")
+  d.add_block("chart").add_text("c")
+  d.add_block("figure").add_text("d")
+  return sheet
+
+fn test_a_serial_number_runs_through_the_document() //<
+  //< A running number counts across the whole document
+  //<
+  //< Nothing in between resets it (otherwise every added figure would renumber those after it); a
+  //< figure and a chart count separately, per style name.
+  verdict.start("[kspage/flow] a running number carrying on through the whole document test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = figures_and_text(d, arena)
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(mark_at(page, 0).equals("Figure 1. "), "the first figure is 1")
+  assert(mark_at(page, 3).equals("Chart 1. "), "the chart is another group, so it counts from 1")
+  assert(mark_at(page, 5).equals("Figure 2. "),
+    "with a body paragraph and a chart in between, the figure is still 2")
+  verdict.pass("a running number carries on through the whole document, and counts per group.")
+
+fn test_a_serial_number_counts_nested_figures() //<
+  //< A figure inside nesting belongs to the same group
+  //<
+  //< Count a figure inside a cell separately, and the body's reference and the caption disagree.
+  verdict.start("[kspage/flow] a figure inside the nesting counting in the same group test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = Sheet.new(base.root_font(), arena)
+  fig: = sheet.add("figure", paint.inherit_all())
+  fig.indent = 40.0
+  fig.marker = marker.Marker.serial("Figure ", ". ")
+  base.table_style(sheet)
+  d.add_block("figure").add_text("a")
+  grid: = d.add_block("table")
+  row: = grid.add_child("row")
+  row.add_child("figure").add_text("b")
+  d.add_block("figure").add_text("c")
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(page.serials.len == 3, "a figure inside the nesting is picked up too")
+  last: = d.blocks.get(2)
+  no: = number.serial_number(page.serials, last)
+  assert(no == 3, "carrying on from the figure inside the cell, it is 3")
+  verdict.pass("a figure inside the nesting counts in the same group.")
+
+// ---- fill and border ----
+
+fn test_a_fill_covers_the_block_but_not_its_spacing() //<
+  //< The fill's band covers the paragraph, but not the space before and after
+  verdict.start("[kspage/flow] the fill's band covering the paragraph test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  lit: = sheet.add("lit", paint.inherit_all())
+  lit.fill = Option<|U32|>.some(0xeeeeeeU32)
+  lit.rule_width = 2.0
+  lit.rule_color = 0xff0000U32
+  lit.space_before = 10.0
+  lit.space_after = 20.0
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("ab")
+  d.add_block("lit").add_text("cd")
+  d.add_block("body").add_text("ef")
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(page.panels.len == 1, "the band is only for the paragraph that wrote one")
+  band: = page.panels.get(0).rect
+  // It starts below the first line (19.2px), after the 10px space before.
+  assert(base.near(band.y, 29.2), "the band starts after the space in front")
+  assert(base.near(band.h, 19.2),
+    "the band's height is the contents' one row, and does not hold the space behind")
+  assert(base.near(band.w, 300.0), "the band is the column's whole width")
+  assert(page.panels.get(0).width == 2.0, "the line's thickness carries over")
+  assert(page.panels.get(0).color == 0xff0000U32, "the line's colour carries over too")
+  switch page.panels.get(0).fill case .some(v)
+    assert(v == 0xeeeeeeU32, "the fill's colour carries over too")
+  case .none
+    assert(false, "the fill carries over")
+  verdict
+    .pass("the band covers the paragraph's contents alone, and the space before and behind is \
+      outside.")
+
+fn test_a_style_without_a_fill_or_a_rule_makes_no_panel() //<
+  //< No band is created for a style with neither a fill nor a line
+  //<
+  //< Created, the drawing code would count an empty band every time.
+  verdict.start("[kspage/flow] a style with nothing written making no band test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  sheet.add("plain", paint.inherit_all()).space_after = 8.0
+  d: = Doc.new(arena)
+  d.add_block("plain").add_text("ab")
+  // A line of thickness 0 is no band either (a style that sets only the color means `no line`).
+  sheet.add("edgeless", paint.inherit_all()).rule_color = 0xff0000U32
+  d.add_block("edgeless").add_text("cd")
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(page.panels.len == 0, "not one band comes out")
+  verdict.pass("with neither a fill nor a line, no band comes out.")
+fn test_a_picture_takes_the_size_the_document_gives() //<
+  //< A picture is laid out at the size the document holds
+  //<
+  //< **The core cannot read a picture, so it has no way to measure it.**
+  verdict.start("[kspage/flow] a picture's size test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("ab")
+  shot: = d.add_block("body")
+  shot.image = "picture.png"
+  shot.image_w = 80.0
+  shot.image_h = 40.0
+  // The text of a block with a picture is the caption shown below the picture.
+  shot.add_text("cd")
+
+  page: = flow.layout(d, Sheet.new(base.root_font(), arena), fixed.make(), 200.0, arena)
+  assert(page.pictures.len == 1, "the picture is laid once")
+  got: = page.pictures.get(0)
+  sized: = base.near(got.rect.w, 80.0) && base.near(got.rect.h, 40.0)
+  assert(sized, "it stays the size the document holds")
+  assert(base.near(got.rect.y, 19.2), "it starts below the paragraph in front")
+  assert(got.block == shot, "which block's picture it is stays")
+  assert(base.near(page.boxes.get(1).rect.y, 59.2), "the text follows below the picture")
+  verdict.pass("a picture is laid at the size the document holds, and the text follows below it.")
+
+fn test_a_picture_without_a_size_is_not_placed() //<
+  //< It is not laid out unless both the source and the size are there (one alone cannot be)
+  verdict.start("[kspage/flow] a picture with no size test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  half: = d.add_block("body")
+  half.image = "picture.png"
+  half.add_text("ab")
+
+  page: = flow.layout(d, Sheet.new(base.root_font(), arena), fixed.make(), 200.0, arena)
+  assert(page.pictures.len == 0, "with no size it is not laid")
+  assert(base.near(page.boxes.get(0).rect.y, 0.0), "the text is laid from the head")
+  verdict.pass("a picture with no size is not laid, and the text alone comes out.")
+priv fn outlined(arena: Arena$@): Sheet$@ //<
+  //< A document with headings, and a sheet with one table of contents at its start
+  sheet: = Sheet.new(base.root_font(), arena)
+  sheet.add("h1", paint.inherit_all()).outline = 1
+  sheet.add("h2", paint.inherit_all()).outline = 2
+  toc: = sheet.add("toc", paint.inherit_all())
+  toc.collect = Collect.contents
+  // This is the width each depth level indents by.
+  toc.indent = 16.0
+  return sheet
+
+fn test_the_contents_lists_the_headings() //<
+  //< The table of contents collects the headings and lists them
+  //<
+  //< **No contents go into the document.**
+  verdict.start("[kspage/flow] the table of contents lining the headings up test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  // Placed at the document's start, it collects the headings after it too.
+  toc: = d.add_block("toc")
+  d.add_block("h1").add_text("a")
+  d.add_block("body").add_text("b")
+  d.add_block("h2").add_text("c")
+
+  page: = flow.layout(d, outlined(arena), fixed.make(), 200.0, arena)
+  assert(page.headings.len == 2, "two headings are picked up")
+  assert(page.headings.get(0).text.equals("a"), "they line up in the document's order")
+  assert(page.headings.get(1).level == 2, "the depth is picked up too")
+  // The boxes come in the order: the contents' item, the heading, the body and the heading.
+  assert(page.boxes.get(0).text.equals("a"), "the first of the contents is the first heading")
+  assert(page.boxes.get(1).text.equals("c"), "the second lines up right after it")
+  // Indented by depth (one step is the contents style's indent; depth 1 sits at it).
+  assert(base.near(page.boxes.get(0).rect.x, 16.0), "depth 1 sits at the contents' own indent")
+  assert(base.near(page.boxes.get(1).rect.x, 32.0), "depth 2 goes one further in")
+  // The contents item is not document text (a click does not get inside the contents).
+  assert(page.boxes.get(0).inline == null, "an item points at no text")
+  assert(toc.inlines.len == 0, "no contents go into the document")
+  verdict
+    .pass("the table of contents picks the headings up and lines them out, and no contents go into \
+      the document.")
+
+fn test_the_contents_follows_the_headings() //<
+  //< Change the heading and the contents change too (no copy in the document can go stale)
+  verdict.start("[kspage/flow] the table of contents following the headings test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = outlined(arena)
+  d: = Doc.new(arena)
+  d.add_block("toc")
+  head: = d.add_block("h1").add_text("a")
+
+  first: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(first.boxes.get(0).text.equals("a"), "at first it is the heading as it stands")
+  head.insert(1, "b")
+  again: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(again.boxes.get(0).text.equals("ab"),
+    "what was typed comes out in the contents as it stands")
+  verdict.pass("change the heading and the table of contents follows.")
+fn test_a_note_puts_a_raised_mark_after_its_run() //<
+  //< A note belongs to an inline, and its mark appears as a superscript after the text
+  //<
+  //< **The number is not stored in the document.**
+  verdict.start("[kspage/flow] a note's mark test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  notes: = sheet.add("footnote", paint.inherit_all())
+  notes.collect = Collect.notes
+  d: = Doc.new(arena)
+  p: = d.add_block("body")
+  marked: = p.add_text("a")
+  marked.note = "the first note"
+  p.add_text("b")
+  d.add_block("footnote")
+
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(page.notes.len == 1, "one note is picked up")
+  assert(page.boxes.get(1).text.equals("1"), "the mark comes out behind the text")
+  // It is raised (at the body's height, it would look like part of the text).
+  assert(page.boxes.get(1).rect.y < page.boxes.get(0).rect.y, "the mark comes out above the body")
+  assert(page.boxes.get(1).font.size_px < page.boxes.get(0).font.size_px, "the mark is small")
+  assert(page.boxes.get(1).inline == null, "the mark points at no text")
+  assert(page.boxes.get(2).text.equals("b"), "the text that carries on is behind the mark")
+  // The list appears where notes are collected. **The number is the list position.**
+  assert(page.boxes.get(3).text.equals("1 the first note"),
+    "it comes out in the list with its number")
+  verdict
+    .pass("a note's mark comes out raised behind the text, and the list lines up where they are \
+      gathered.")
+
+fn test_note_numbers_follow_the_document_order() //<
+  //< The numbers are assigned anew in document order
+  verdict.start("[kspage/flow] a note's number test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  sheet.add("footnote", paint.inherit_all()).collect = Collect.notes
+  d: = Doc.new(arena)
+  p: = d.add_block("body")
+  first: = p.add_text("a")
+  second: = p.add_text("b")
+  second.note = "the later note"
+  d.add_block("footnote")
+
+  once: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(once.boxes.get(2).text.equals("1"), "at first it is number 1")
+  first.note = "the earlier note"
+  twice: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(twice.notes.len == 2, "the notes become two")
+  assert(twice.boxes.get(1).text.equals("1"), "the note in front becomes number 1")
+  assert(twice.boxes.get(3).text.equals("2"), "the later note moves to number 2")
+  assert(twice.boxes.get(4).text.equals("1 the earlier note"),
+    "the list is in the document's order too")
+  verdict
+    .pass("a note's number is given afresh in the document's order, and does not go into the \
+      document.")

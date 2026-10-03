@@ -1,0 +1,166 @@
+import "kspage/lay/flow"
+import "kspage/lay/page" { Page }
+import "kspage/model/collect" { Collect }
+import "kspage/model/doc" { Doc }
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/paint"
+import "kspage/model/source" { Hand }
+import "kspage/model/style" { Sheet }
+import "kspage/share/store"
+import "kspage/tests/base"
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// kspage: checks a window (the text of a target symbol, borrowed and shown at every layout).
+// **The text does not go into the document**, **it is cut from the borrowed text at every
+// layout**, and **it is not empty even where nothing was passed in**.
+// Caution: **Test the case where nothing was passed in first.** Tried only on the others, a window
+// that goes blank would pass, and nobody could see what it points at.
+// ==========================================
+
+priv fn window_sheet(arena: Arena$@): Sheet$@ //< the window's style (it does not wrap)
+  //<
+  //< **The style decides whether it is a window** (`Style.collect`).
+  sheet: = Sheet.new(base.root_font(), arena)
+  sheet.add("body", paint.inherit_all())
+  win: = sheet.add("window", paint.inherit_all())
+  win.wrap = false
+  win.collect = Collect.source
+  return sheet
+
+priv fn lent(file: U8[]): U8[] //< the borrowed text
+  //<
+  //< **The borrowing interface is outside** (the core does not open files).
+  if !file.equals("a.kspl")
+    return ""
+  return "pub struct Aim {\n  pub file: U8[];\n}\n\nfn two() {\n\n  return;\n}\n"
+
+priv fn a_hand(arena: Arena$@): Hand$@
+  return arena.create(Hand::{ .read = lent })
+
+priv fn one_window(arena: Arena$@, aim: U8[]): Doc$@ //< a document with one window
+  d: = Doc.new(arena)
+  b: = d.add_block("window")
+  b.aim = aim
+  return d
+
+priv fn joined(page: Page$@, sb: Str_builder$@): U8[]
+  sb.clear()
+  for $i: Sz = 0; i < page.boxes.len; i += 1
+    sb.s(page.boxes.get(i).text).c('|')
+  return sb.slice()
+
+fn test_a_window_shows_the_symbol_it_aims_at() //<
+  //< Only that symbol's part of the borrowed text is shown
+  verdict.start("[kspage/window] a window putting out the text of the symbol it points at test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  d: = one_window(arena, "src:a.kspl#Aim")
+  page: = flow.layout(d, window_sheet(arena), fixed.make(), 400.0, arena, a_hand(arena))
+  $sb: = Str_builder.new()
+  defer sb.free()
+  got: = joined(page, sb@)
+  assert(got.equals("pub struct Aim {|  pub file: U8[];|}|"),
+    "that symbol's three rows alone come out")
+  // **The boxes do not point at the document's text** (a click cannot get inside a window).
+  assert(page.boxes.get(0).inline == null, "the boxes point at no text of the document")
+  verdict.pass("a window puts out, from the borrowed text, that symbol's part alone.")
+
+fn test_a_blank_line_keeps_its_room() //< an empty line advances by one line too
+  //<
+  //< **Delete it and the shown text differs from the real one.**
+  verdict.start("[kspage/window] an empty row inside a window being left test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  d: = one_window(arena, "src:a.kspl#two")
+  page: = flow.layout(d, window_sheet(arena), fixed.make(), 400.0, arena, a_hand(arena))
+  $sb: = Str_builder.new()
+  defer sb.free()
+  // **An empty line also gets one box**, or it has no height and the line disappears.
+  assert(joined(page, sb@).equals("fn two() {||  return;|}|"), "an empty row becomes one box too")
+  // Four lines, the empty one included, of 1.2 em (19.2px).
+  assert(page.height > 19.2F32 * 3.5F32,
+    "it advances for the empty row too (the height of four rows is wanted)")
+  verdict.pass("an empty row inside a window advances by one row too.")
+
+fn test_a_window_without_a_hand_shows_what_it_aims_at() //<
+  //< Where nothing was passed in, the text of the target is shown
+  //<
+  //< **Do not make it empty.**
+  verdict
+    .start("[kspage/window] a window with nothing handed over putting out what it points at test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  d: = one_window(arena, "src:a.kspl#Aim")
+  // No borrowing interface is passed (the parameter's default).
+  page: = flow.layout(d, window_sheet(arena), fixed.make(), 400.0, arena)
+  $sb: = Str_builder.new()
+  defer sb.free()
+  assert(joined(page, sb@).equals("src:a.kspl#Aim|"), "the text of what it points at comes out")
+  // Passed in or not, where that file is missing it is the same.
+  gone: = one_window(arena, "src:nowhere.kspl#Aim")
+  page2: = flow.layout(gone, window_sheet(arena), fixed.make(), 400.0, arena, a_hand(arena))
+  lost: = joined(page2, sb@)
+  assert(lost.equals("src:nowhere.kspl#Aim|"), "a file with nothing handed over is the same")
+  // Where the symbol is missing it is the same. **No window is shown empty.**
+  missing: = one_window(arena, "src:a.kspl#nowhere")
+  page3: = flow.layout(missing, window_sheet(arena), fixed.make(), 400.0, arena, a_hand(arena))
+  assert(joined(page3, sb@).equals("src:a.kspl#nowhere|"),
+    "a symbol that is not there still puts out what it points at")
+  verdict.pass("a window with nothing handed over puts out the text of what it points at.")
+
+fn test_the_borrowed_text_never_reaches_the_file() //< the text does not go into what is saved
+  //<
+  //< **Stored, the same text would exist twice with no telling which is newer.**
+  verdict.start("[kspage/window] the borrowed text not going into what is saved test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  d: = one_window(arena, "src:a.kspl#Aim")
+  sheet: = window_sheet(arena)
+  // Laid out, then saved.
+  flow.layout(d, sheet, fixed.make(), 400.0, arena, a_hand(arena))
+  $sb: = Str_builder.new()
+  defer sb.free()
+  store.save(d, sheet, sb@)
+  out: = sb.slice()
+  assert(out.find_str("pub struct Aim") < 0, "the borrowed text is not written")
+  assert(out.find_str("src:a.kspl#Aim") >= 0, "what it points at is written")
+  // Read back, the target is kept.
+  back: = store.load(out, arena) catch _e
+    panic("the text just written cannot be read")
+  assert(back.doc.blocks.get(0).aim.equals("src:a.kspl#Aim"),
+    "read back, what it points at comes back")
+  assert(back.doc.blocks.get(0).children.len == 0, "no child goes in")
+  assert(back.doc.blocks.get(0).inlines.len == 0, "no text goes in either")
+  verdict.pass("the borrowed text does not go into what is saved; only what it points at is left.")
+
+fn test_a_window_follows_the_source() //<
+  //< Change the borrowed source and it changes at the next layout
+  //<
+  //< **This is what "it does not copy" is worth.**
+  verdict.start("[kspage/window] a window following the source test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  d: = one_window(arena, "src:a.kspl#Aim")
+  sheet: = window_sheet(arena)
+  $sb: = Str_builder.new()
+  defer sb.free()
+  was: =
+    joined(flow.layout(d, sheet, fixed.make(), 400.0, arena, a_hand(arena)), sb@)
+  $keep: = Str_builder.new()
+  defer keep.free()
+  keep.s(was)
+  // The same document laid out again through an interface returning another text.
+  fresh: = arena.create(Hand::{ .read = changed })
+  now: = joined(flow.layout(d, sheet, fixed.make(), 400.0, arena, fresh), sb@)
+  assert(!keep.slice().equals(now), "the changed text comes out at the next laying out")
+  assert(now.find_str("changed") >= 0, "the part changed comes out")
+  verdict.pass("a window follows the source every time it is laid (it holds no copy).")
+
+priv fn changed(file: U8[]): U8[]
+  if !file.equals("a.kspl")
+    return ""
+  return "pub struct Aim {\n  pub file: U8[]; // changed\n}\n"

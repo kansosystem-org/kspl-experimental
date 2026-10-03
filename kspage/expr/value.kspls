@@ -1,0 +1,115 @@
+//< One cell's value, and the reason when there is no value
+//<
+//< The functions that fold a range are here too.
+//< **It knows neither the document, the cell, nor the formula's text** (which cell a value came
+//< from is [`calc.kspls`](calc.kspls)'s concern), so the folding alone can be tested.
+//< **Turning the reason into text happens in this one place** (`error_text`), or the mark differs
+//< between the screen and the exported text.
+import "kspage/expr/addr" { broken_ref }
+import "kspage/expr/shown"
+import "std/str"
+
+enum Cell_error //< the reason there is no value
+  //<
+  //< **It is shown as visible text**, so the kinds are chosen to show how to fix it.
+  syntax //< it does not read as a formula
+  no_cell //< there is no cell where it points
+  not_number //< what it points at is not a number
+  circular //< it loops back to itself
+  no_name //< an unknown name (a function's name, or a table's)
+
+impl Cell_error
+  fn error_text(e: Self): U8[]
+    switch e case .syntax
+      return "#SYNTAX!"
+    case .no_cell
+      return broken_ref
+    case .not_number
+      return "#VALUE!"
+    case .circular
+      return "#CYCLE!"
+    case .no_name
+      return "#NAME!"
+    return "#SYNTAX!"
+
+  fn failed(e: Self): Value
+    return Value::{ .num = 0.0, .ok = false, .err = e }
+
+struct Value //< one cell's value
+  num: F64
+  ok: Bool //< whether it is a number. Where false, err is the reason
+  err: Cell_error
+
+fn number(v: F64): Value
+  return Value::{ .num = v, .ok = true, .err = Cell_error.syntax }
+
+fn rounded(v: F64, places: F64): Value //< the value rounded to places decimals
+  //<
+  //< **It is separate from the decimal places of the display**: it changes the value itself. How
+  //< it rounds, and what is too large to round, is at `shown.round_to`.
+  if places < 0.0 || places > 9.0
+    return Cell_error.not_number.failed()
+  return number(shown.round_to(v, Sz::I64::places))
+
+priv const fn_sum: Sz = 0 //<
+  //< The functions that fold a range
+  //<
+  //< **Only what the existing operations cannot express is added.** An average is
+  //< `r.sum() / r.count()` and an absolute value is `-A1 if A1 < 0 else A1`, so neither exists.
+priv const fn_min: Sz = 1
+priv const fn_max: Sz = 2
+priv const fn_count: Sz = 3
+
+fn fn_kind(name: U8[]): Sz
+  if name.equals("sum")
+    return fn_sum
+  if name.equals("min")
+    return fn_min
+  if name.equals("max")
+    return fn_max
+  if name.equals("count")
+    return fn_count
+  return -1
+
+struct Fold //< the state partway through folding, taking the arguments' values one at a time
+  kind: Sz
+  acc: F64
+  seen: Sz //< how many were counted as numbers
+  broken: Bool
+  err: Cell_error
+
+fn take(f: Fold$@, v: Value) //< takes one value
+  //<
+  //< **A cell that is not a number is skipped** (a range means "the numbers around here", and an
+  //< empty cell or a heading word gets mixed in). **Every other error is carried through**, or a
+  //< broken formula's total would look right.
+  if f.broken
+    return
+  if !v.ok
+    switch v.err case .not_number
+      return
+    default {}
+    f.broken = true
+    f.err = v.err
+    return
+  f.seen += 1
+  if f.kind == fn_count
+    return
+  if f.kind == fn_sum
+    f.acc += v.num
+    return
+  first: = f.seen == 1
+  if first || (f.kind == fn_min && v.num < f.acc) || (f.kind == fn_max && v.num > f.acc)
+    f.acc = v.num
+
+fn folded(f: Fold$@): Value //< the value after folding
+  //<
+  //< **With no numbers at all**, a total and a count are 0, but the smallest and the largest do
+  //< not exist.
+  if f.broken
+    return f.err.failed()
+  if f.kind == fn_count
+    return number(F64::f.seen)
+  if f.kind == fn_sum
+    return number(f.acc)
+  return Cell_error.not_number.failed() if f.seen <= 0 else number(f.acc)

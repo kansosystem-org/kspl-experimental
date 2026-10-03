@@ -1,0 +1,176 @@
+#!/usr/bin/env -S ksplc run
+//< Checks that the generated C is warning-free under a C compiler's `-Wall`
+//<
+//< Nobody reads the generated C, so warnings pile up unnoticed; held at zero, the check fails the
+//< moment one is added.
+//< Caution: **Do not bring existing C files into the scope.** Only the C that ksplc writes is
+//< checked, under `-fsyntax-only` (no linking).
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/seq"
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+import "tests/support/harness"
+
+priv const candidates: U8[][3] = ::{ "clang", "gcc", "cc" } //<
+  //< The compilers the generated C is put through
+  //<
+  //< Caution: **Do not check with one alone.** Each warns about code the other is silent on (gcc:
+  //< an arithmetic or comparison operand of a bit operation). With only one installed, it decides.
+
+// **Do not leave `-Wextra` and `-O2` out.** Without them -Wsign-compare and
+// -Wstrict-aliasing (inactive without optimisation) are invisible, and both catch wrong answers.
+// Only `-Wmissing-field-initializers` is left out: genc's `{0}` / `{{0}}` is correct, since the
+// standard zeroes the rest.
+priv const cflags: U8[][6] = ::{ "-std=c99", "-Wall", "-Wextra", "-Wno-missing-field-initializers",
+  "-O2", "-fsyntax-only" }
+
+priv struct Target //< the inputs that produce the generated C
+  //<
+  //< Caution: **Compile freestanding with `-ffreestanding`.** Without it the compiler treats
+  //< libc's functions as built-ins and reports what the real build does not (a redeclaration of
+  //< malloc/memcpy).
+  slot: U8[]
+  src: U8[]
+  ksplc_flags: U8[][]
+  cc_flags: U8[][]
+  headers: U8[][]
+
+priv const freestanding_ksplc: U8[][1] = ::{ "--freestanding" } //<
+  //< The ksplc options for the freestanding target
+  //<
+  //< Caution: **Keep the list of options in a const.** A `U8[][]::{ ... }` built in a function and
+  //< put in a struct points at the stack frame, gone after the return, with no diagnostic ("Why
+  //< dangling is stopped only on the paths that create an invisible pointer" in `docs/DESIGN.md`);
+  //< it breaks far away, as a garbled argv length.
+priv const freestanding_cc: U8[][1] = ::{ "-ffreestanding" }
+priv const tls_db_ksplc: U8[][2] = ::{ "--define=tls", "--define=db" }
+priv const tls_db_cc: U8[][1] = ::{ "-DKSPL_TLS" }
+priv const tls_db_headers: U8[][1] = ::{ "openssl/ssl.h" }
+
+priv fn targets(arena: Arena$@): List<|Target|> //<
+  //< The sources whose generated C is checked, each with its own flags
+  //<
+  //< Caution: **Do not remove any of these rows**; each alone shows one class of warning. `tls_db`
+  //< holds the sources `#cfg` drops, `freestanding` genc's own extern declarations, `equiv` the
+  //< code both backends accept. Without the OpenSSL header only `tls_db` is skipped
+  //< (named on the `RESULT:` line).
+  // An empty row is a descriptor (a length-0 array cannot be written) pointing at nothing.
+  none: = U8[][]::{ .ptr = null, .len = 0 }
+  $out: = List<|Target|>.new(arena)
+  out
+    .push(Target::{ .slot = "ksplc", .src = "ksplc/main.kspls", .ksplc_flags = none,
+    .cc_flags = none, .headers = none })
+  out
+    .push(Target::{ .slot = "tests_debug", .src = "tests/debug/main.kspls", .ksplc_flags = none,
+    .cc_flags = none, .headers = none })
+  out
+    .push(Target::{ .slot = "freestanding",
+    .src = "ksos/demo/cortex_m/cortex_m_ai_train_probe.kspls",
+    .ksplc_flags = U8[][]::freestanding_ksplc, .cc_flags = U8[][]::freestanding_cc,
+    .headers = none })
+  out
+    .push(Target::{ .slot = "tls_db", .src = "tests/debug/main.kspls",
+    .ksplc_flags = U8[][]::tls_db_ksplc, .cc_flags = U8[][]::tls_db_cc,
+    .headers = U8[][]::tls_db_headers })
+  out
+    .push(Target::{ .slot = "equiv", .src = "ksplc/tests/prog/equiv.kspls", .ksplc_flags = none,
+    .cc_flags = none, .headers = none })
+  return out
+
+priv fn identity(cc: U8[], arena: Arena$@): U8[] //< that compiler's identity
+  //<
+  //< The same compiler gives the same identity: target, version and family. **Not by the name it
+  //< reports** (`--version`'s first line): gcc prints the name it was called by.
+  triple: = harness.run(U8[][]::{ cc, "-dumpmachine" })
+  if triple.code != 0
+    return ""
+  version: = harness.run(U8[][]::{ cc, "-dumpversion" })
+  banner: = harness.run(U8[][]::{ cc, "--version" })
+  family: = "clang" if banner.out.find_str("clang") >= 0 else "gcc"
+  return arena.text().s("\{triple.out.trim_spaces()\}|\{version.out.trim_spaces()\}|\{family\}")
+    .take()
+
+priv fn compilers(arena: Arena$@): List<|U8[]|> //<
+  //< Returns the usable compilers, keeping one of each identity
+  //<
+  //< Caution: **Drop the duplicates.** `cc` is usually a symlink to clang/gcc, and running it twice
+  //< only doubles the failing lines. Whether it starts is tested by starting it (PATH is not read).
+  $found: = List<|U8[]|>.new(arena)
+  $ids: = List<|U8[]|>.new(arena)
+  for name in candidates
+    id: = identity(name, arena)
+    if id.len == 0
+      continue
+    $seen: = false
+    for i in Range.asc(ids.len)
+      if ids.get(i).equals(id)
+        seen = true
+    if seen
+      continue
+    ids.push(id)
+    found.push(name)
+  return found
+
+priv fn warning_lines(out: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< Collects only the warning lines
+  lines: = out.lines(arena)
+  return lines.where(fn(ln: U8[]; ): Bool {
+    return ln.find_str(": warning:") >= 0;
+  }).to_list(arena)
+
+priv fn missing_header(cc: U8[], headers: U8[][], dir: U8[], arena: Arena$@): U8[] //<
+  //< Returns one header that cc cannot find (empty if it finds them all)
+  //<
+  //< It decides whether the optional-backend configuration is skipped.
+  probe: = fs.join(dir, "probe.c", arena)
+  for hdr in headers
+    io.write_file(probe, arena.text().s("#include <\{hdr\}>\n").take()) catch
+      return hdr
+    r: = harness.run(U8[][]::{ cc, "-fsyntax-only", probe })
+    if r.code != 0
+      return hdr
+  return ""
+
+fn main(): I32
+  arena: = harness.begin(64 * 1024 * 1024)
+  ccs: = compilers(arena)
+  if ccs.len == 0
+    return harness.fatal("no C compiler that can put the generated C through is found")
+  dir: = harness.sandbox("c_warnings") catch
+    return harness.fatal("cannot make a working directory")
+  io.out().s("# warnings in the generated C\n")
+  for t in targets(arena)
+    gen: = fs.join(dir, arena.text().s("\{t.slot\}.c").take(), arena)
+    $args: = List<|U8[]|>.new(arena)
+    for f in t.ksplc_flags
+      args.push(f)
+    args.push(t.src)
+    args.push(gen)
+    r: = harness.ksplc(args.slice())
+    if r.code != 0
+      verdict.check(arena.text().s("\{t.slot\}: it can be generated").take(), false, r.out)
+      continue
+    for cc in ccs
+      name: = arena.text().s("\{t.slot\}: \{cc\} is warning-free").take()
+      lack: = missing_header(cc, t.headers, dir, arena)
+      if lack.len > 0
+        verdict.skip_check(name, arena.text().s("no header: \{lack\}").take())
+        continue
+      // No `-I` is needed: ksplc embeds the runtime headers that the generated C `#include`s.
+      $argv: = List<|U8[]|>.new(arena)
+      argv.push(cc)
+      for f in cflags
+        argv.push(f)
+      for f in t.cc_flags
+        argv.push(f)
+      argv.push(gen)
+      out: = harness.run(argv.slice())
+      warns: = warning_lines(out.out, arena)
+      verdict.check(name, out.code == 0 && warns.len == 0,
+        arena.text().s("\{warns.len\} found\n").s(out.out).take())
+  return harness.finish()

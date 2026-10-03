@@ -1,0 +1,35 @@
+import "std/mem" + { Arena, alloc, dealloc }
+import "std/verdict"
+
+// ==========================================
+// `import "p" + { A };` brings in the qualified name and the bare name **at the same time**.
+//
+// **No other test shows it** (`tests/negative/` holds the rejected shapes). **Translating cleanly
+// is not enough**: a name never written stays unresolved and still green, so both notations must
+// reach the same definition and give the same answer.
+// ==========================================
+
+fn test_plus_brings_the_alias_and_the_bare_names() //<
+  //< Checks that the bare name and the qualified name point at the same type and function
+  //<
+  //< **Do not write only one of them** (the note above).
+  verdict.start("[import] `+` brings in the qualified name and the bare name at once test...")
+  bare: = Arena.new(4096)
+  defer bare.free()
+  qualified: = mem.Arena.new(4096)
+  defer qualified.free()
+  assert(bare.default_chunk_size == qualified.default_chunk_size,
+    "the two notations point at the same type")
+
+  // A function resolves by both notations too.
+  // Caution: **Mix the notations between the allocation and the release** — if they resolved to
+  // separate definitions, the release would not match here.
+  p: = alloc(64)
+  assert(p != null, "the bare name can allocate")
+  mem.dealloc(p)
+  q: = mem.alloc(64)
+  assert(q != null, "the qualified name can allocate")
+  dealloc(q)
+  verdict
+    .pass("`+` brings in both the qualified name and the bare name, and both point at the same \
+      definition.")

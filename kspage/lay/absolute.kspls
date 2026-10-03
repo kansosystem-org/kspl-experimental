@@ -1,0 +1,180 @@
+//< Laying out at absolute coordinates
+//<
+//< One of the three layout strategies (shared the same way as `grid.kspls`); a frame's contents
+//< use the flow layout. A presentation slide is this: a slide's size is set, and a frame's
+//< position is its own `frame`, not the elements before and after.
+//< **The entry point is not here but `lay/flow.kspls`** (it calls here for `Arrange.absolute`).
+import "kspage/lay/flow"
+import "kspage/lay/page" { Framed, Page, Surface }
+import "kspage/model/doc" { Block, Rect }
+import "kspage/model/style" { Look, Sheet, Shape }
+import "std/mem" { Arena }
+import "std/str"
+
+fn tied_frame(slide: Block$@, name: U8[]): Option<|Rect|> //<
+  //< Looks up, by name, the frame it connects to among the same slide's children
+  //<
+  //< **It looks only inside the same slide** (another slide would give the coordinates two
+  //< sources). **Where two have the same name it is whichever is found first.**
+  if name.len <= 0
+    return Option<|Rect|>.none
+  for $i: Sz = 0; i < slide.children.len; i += 1
+    kid: = slide.children.get(i)
+    if kid.name.len > 0 && kid.name.equals(name)
+      return kid.frame
+  return Option<|Rect|>.none
+
+priv fn tie_band(from: Rect, to: Rect, arrow: Bool): Panel_form //<
+  //< The band taken up by a line connecting two frames
+  //<
+  //< **It connects the midpoints of the facing edges**, chosen by the direction in which the
+  //< centres are further apart (connected at the centres, the line would pass through a frame).
+  //< `back` puts the arrow's head at the start (the target lies to the left).
+  ax: = from.x + from.w / 2.0F32
+  ay: = from.y + from.h / 2.0F32
+  bx: = to.x + to.w / 2.0F32
+  by: = to.y + to.h / 2.0F32
+  dx: = bx - ax
+  dy: = by - ay
+  wide: = dx if dx > 0.0 else -dx
+  high: = dy if dy > 0.0 else -dy
+  $x1: F32 = ax
+  $y1: F32 = ay
+  $x2: F32 = bx
+  $y2: F32 = by
+  if wide >= high
+    x1 = from.x + from.w if dx >= 0.0 else from.x
+    x2 = to.x if dx >= 0.0 else to.x + to.w
+  else
+    y1 = from.y + from.h if dy >= 0.0 else from.y
+    y2 = to.y if dy >= 0.0 else to.y + to.h
+  lo_x: = x1 if x1 < x2 else x2
+  lo_y: = y1 if y1 < y2 else y2
+  hi_x: = x1 if x1 > x2 else x2
+  hi_y: = y1 if y1 > y2 else y2
+  // Whether it is the diagonal from upper left to lower right (coinciding ends count as falling).
+  falls: = (x1 <= x2) == (y1 <= y2)
+  // The arrow's head appears at the target's end; with the target on the right, at the end point.
+  ahead: = x1 <= x2
+  return Panel_form::{ .rect = Rect::{ .x = lo_x, .y = lo_y, .w = hi_x - lo_x, .h = hi_y - lo_y },
+    .shape = tie_shape(falls, ahead, arrow) }
+
+priv struct Panel_form //< the band a connecting line takes up, and the shape it is drawn in
+  rect: Rect
+  shape: Shape
+
+priv fn tie_shape(falls: Bool, ahead: Bool, arrow: Bool): Shape
+  if !arrow
+    return Shape.fall_line if falls else Shape.rise_line
+  if falls
+    return Shape.fall_arrow if ahead else Shape.fall_arrow_back
+  return Shape.rise_arrow if ahead else Shape.rise_arrow_back
+
+priv fn draws_arrow(sheet: Sheet$@, name: U8[]): Bool //< whether that style draws an arrow
+  //<
+  //< **A shape that is neither a line nor an arrow is laid out as a line.**
+  if s: = sheet.find(name)
+    switch s.shape case .fall_arrow
+      return true
+    case .rise_arrow
+      return true
+    case .fall_arrow_back
+      return true
+    case .rise_arrow_back
+      return true
+    case .box, .round_box, .ellipse, .triangle, .diamond, .fall_line, .rise_line {}
+  return false
+
+priv fn turn_panel(dst: Page$@, from: Sz, b: Block$@, shape: Shape) //<
+  //< Rewrites the shape of that block's band, among those laid out
+  //<
+  //< Caution: **Rewrite it after layout.** `flow` makes the band, and a connecting line's
+  //< direction is not known until both frames are laid out.
+  for $i: Sz = from; i < dst.panels.len; i += 1
+    panel: = dst.panels.get(i)
+    if panel.block == b
+      panel.shape = shape
+
+priv fn shown(sheet: Sheet$@, child: Block$@): Bool //<
+  //< Whether that frame is shown at the current step
+  //<
+  //< **Where no step is selected it is always shown.**
+  if upto: = sheet.over.reveal
+    return child.step <= upto
+  return true
+
+fn place_surface(dst: Page$@, slide: Block$@, sheet: Sheet$@, at: Rect, width: F32, height: F32,
+  look: Look, arena: Arena$@): F32 //<
+    //< Lays out one slide of `width` × `height` from `at`'s upper left
+    //<
+    //< It adds what was laid out to dst. **The height returned is `height`, not the contents'**
+    //< (it does not stretch for something sticking out). **`at.h` is ignored**; the style sets the
+    //< size (`Style.width` / `Style.height`). **A width of 0 means "not set"**: the container's
+    //< width.
+  wide: = width if width > 0.0 else at.w
+  // Caution: **Keep the slide itself first**, or a slide inside a frame comes before it and the
+  // slides are out of document order.
+  spot: = Rect::{ .x = at.x, .y = at.y, .w = wide, .h = height }
+  surface: = arena.create(Surface::{ .rect = spot, .block = slide })
+  dst.surfaces.push(surface)
+  for $i: Sz = 0; i < slide.children.len; i += 1
+    child: = slide.children.get(i)
+    // Where a step is selected, a frame not yet shown is not laid out.
+    // Caution: **Filter it in the layout.** Hidden only by the drawing code, a hidden frame's text
+    // could still be selected and searched.
+    if !shown(sheet, child)
+      continue
+    place_one(dst, surface, child, sheet, look, arena)
+  return height
+
+priv fn place_one(dst: Page$@, holder: Surface$@, child: Block$@, sheet: Sheet$@, look: Look,
+  arena: Arena$@) //<
+    //< Lays out one frame from the upper left of its container
+    //<
+    //< The container's own position is known only once it is laid out. **A child with no position
+    //< is laid over the whole container**; dropped, what was written would silently vanish.
+  spot: = holder.rect
+  $put: Rect = spot
+  if f: = child.frame
+    put = Rect::{ .x = spot.x + f.x, .y = spot.y + f.y, .w = f.w, .h = f.h }
+  // A connecting line is placed by the two frames it connects, not by its written position.
+  // **Where the other frame is not found it appears at the written position**, not dropped.
+  $turn: = false
+  $form: = Panel_form::{ .rect = put, .shape = Shape.fall_line }
+  if one: = tied_frame(holder.block, child.tie_from)
+    switch tied_frame(holder.block, child.tie_to) case .some(other)
+      form = tie_band(one, other, draws_arrow(sheet, child.style))
+      put = Rect::{ .x = spot.x + form.rect.x, .y = spot.y + form.rect.y, .w = form.rect.w,
+        .h = form.rect.h }
+      turn = true
+    case .none {}
+  // Caution: **Keep it before the contents**, or the innermost frame could not be found by
+  // searching from the end (the same as `Page.cells`).
+  dst.frames
+    .push(arena.create(Framed::{ .rect = put, .block = child, .surface = holder }))
+  panel_from: = dst.panels.len
+  // Caution: **Pass the frame's bottom**, so the fill and the line cover the frame, not the
+  // contents (without it, a figure with no contents gets height 0 and vanishes).
+  flow.place_framed_block(dst, child, sheet, put, look, put.y + put.h, arena)
+  if turn
+    turn_panel(dst, panel_from, child, form.shape)
+
+fn hang_framed(dst: Page$@, b: Block$@, sheet: Sheet$@, box: Rect, look: Look, arena: Arena$@) //<
+  //< Lays out the positioned children of a block in the flow, from that block's upper left
+  //<
+  //< Caution: **Do not put them into the flow**: inserted between the lines, a figure would move
+  //< the text. **Call it after the contents are laid out**, so a figure appears over the text.
+  //< **Where it has no children, drop the container** (otherwise a click has more to search).
+  $any: = false
+  for $i: Sz = 0; i < b.children.len; i += 1
+    if _f: = b.children.get(i).frame
+      any = true
+  if !any
+    return
+  // Caution: **Do not add it to the list** that clicks are searched against; it serves only as the
+  // source of a frame's position (`Framed.surface`).
+  holder: = arena.create(Surface::{ .rect = box, .block = b })
+  for $i: Sz = 0; i < b.children.len; i += 1
+    child: = b.children.get(i)
+    if _f: = child.frame
+      place_one(dst, holder, child, sheet, look, arena)

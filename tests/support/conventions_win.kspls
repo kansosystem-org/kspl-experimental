@@ -1,0 +1,344 @@
+//< Forbids code that is **green locally but breaks only on Windows**
+//<
+//< It is not a suite of its own; it is a part of conventions.
+//< **Each of them runs correctly on Linux and macOS**, so they pass for whoever wrote them and show
+//< up first in CI's Windows job or on a user's machine. The symptom is not "it fails" but **"the
+//< covered range silently shrinks", "an invisible byte gets mixed in", "that one entry point can
+//< start nothing"**, so the log leads to no cause.
+//< Note: Which Windows jobs run the gates is "What each platform runs" in `docs/SPEC-gates.md`.
+import "std/chars" // `trim_spaces`
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+import "tests/support/conventions_scan" as scan + { Sample }
+import "tests/support/harness"
+
+// ==========================================
+// 6. A test does not hand git a wildcard path spec
+// Caution: **On Windows only, the covered range silently shrinks.** A `git.exe` built on the
+// MSYS2 runtime **expands the arguments' wildcards itself** when the caller is not an MSYS2
+// process.
+// ==========================================
+
+// A string holding no wildcard is not expanded, and a make recipe is out of scope (MSYS2's bash is
+// the parent there).
+
+priv fn ws_back(text: U8[], from: Sz): Sz //< steps back over the whitespace before `from`
+  //<
+  //< The scan reads only the run `["git", "ls-files", …]`.
+  //< Caution: **Do not match the text `"ls-files"` alone**: it hits lines that only talk about it
+  //< (this check's own).
+  $b: = from
+  for b > 0 && text[b - 1].is_space()
+    b -= 1
+  return b
+
+priv const ls_files: U8[] = "\"ls-files\""
+priv const git_word: U8[] = "\"git\""
+
+priv fn pathspec_hits(text: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< Lists the text of the calls that hit
+  //<
+  //< **This one function both runs the check and shows it can fire** ("a check shows it can fire"
+  //< in `conventions_scan.kspls`).
+  $out: = List<|U8[]|>.new(arena)
+  $i: Sz = 0
+  for i + ls_files.len <= text.len
+    at: = text.sub_from(i).find_str(ls_files)
+    if at < 0
+      break
+    p: = i + Sz::at
+    i = p + ls_files.len
+    head: = list_head(text, p)
+    if head == 0
+      continue
+    close: = pathspec_end(text, i)
+    if close == 0
+      continue
+    args: = text.sub(i, close - 1 - i)
+    if args.find_char('*') < 0 && args.find_char('?') < 0
+      continue
+    whole: = text.sub(head - 1, close - head + 1)
+    out.push(whole if whole.len <= 60 else whole.sub(0, 60))
+  return out
+
+priv fn hands_pathspec(text: U8[], arena: Arena$@): Bool
+  return pathspec_hits(text, arena).len > 0
+
+priv fn check_git_pathspec(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  for rel in harness.tracked_matching(U8[][]::{ "tests/*.py" })
+    seen += 1
+    for hit in pathspec_hits(harness.read_under_root(rel), arena)
+      bad.push(arena.text().s(rel).s(": ").s(hit).take())
+  verdict.check_list("a test does not hand git ls-files a wildcard", seen, "files", bad@,
+    "take the path spec off and narrow it in the caller")
+
+priv fn list_head(text: U8[], at: Sz): Sz //<
+  //< The `[`'s position + 1 where `[ "git" ,` comes before `"ls-files"`
+  //<
+  //< It returns 0 where there is no match.
+  $b: = ws_back(text, at)
+  if b == 0 || text[b - 1] != ','
+    return 0
+  b = ws_back(text, b - 1)
+  if b < git_word.len || !text.sub(b - git_word.len, git_word.len).equals(git_word)
+    return 0
+  b = ws_back(text, b - git_word.len)
+  if b == 0 || text[b - 1] != '['
+    return 0
+  return b
+
+priv fn pathspec_end(text: U8[], from: Sz): Sz //<
+  //< Returns the closing `]`'s position + 1 (0 means no match)
+  //<
+  //< Only an empty list (a `]` right after) or one continuing with a `,` holds arguments.
+  //< Caution: **Anything else is not an argument**: in `["git", "ls-files"] + tail]`, a call
+  //< passing no path spec would be reported.
+  end: = text.sub_from(from).find_char(']')
+  if end < 0
+    return 0
+  span: = text.sub(from, end)
+  if span.len > 0 && !span.trim_start().starts_with(",")
+    return 0
+  return from + Sz::end + 1
+
+// ==========================================
+// 8. A test does not cut a child's output into lines by hand **Only on Windows is a `\r` left at
+// the end of the cut text** (like the git path spec above, it breaks only there).
+// Note: Two functions split lines (`line_after` in `tests/support/harness_text.kspls`, `lines`
+// in `std/str`). Both drop a `\r` at a line's end.
+// ==========================================
+
+priv const hand_cut: U8[] = "find_char('\\n')"
+
+priv fn cuts_by_hand(line: U8[], arena: Arena$@): Bool //< whether it cuts into lines by hand
+  //<
+  //< String literals and line comments are dropped first, so this section's own explanation is
+  //< not hit.
+  //< Caution: **Keep the judging in this one place** (the reason is at `pathspec_hits`).
+  return scan.strip_code(line, arena).find_str(hand_cut) >= 0
+
+priv fn check_line_cut(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  for rel in harness.tracked_matching(U8[][]::{ "tests/*.kspls", "tests/*.kspl" })
+    $i: Sz = 0
+    for line in harness.read_under_root(rel).lines(arena)
+      i += 1
+      seen += 1
+      if cuts_by_hand(line, arena)
+        bad
+          .push(arena.text().s(rel).s(":\{i\}: it cuts into lines by hand").take())
+  verdict.check_list("a test does not cut a child's output into lines by hand", seen, "lines", bad@,
+    "go through harness's line_after or std/str's lines (a \\r is left at the cut text's end)")
+
+// ==========================================
+// `fs.is_executable` is not used for the check before starting **`is_executable` is always false on
+// Windows** (no execute bit there); `fs.can_run` answers that.
+// ==========================================
+priv const spawn_calls: U8[][5] = ::{ "spawn_piped", "spawn_redirect", "spawn_wait", "spawn_async",
+  "run_capture" }
+
+priv fn gates_on_exec(body: U8[], _arena: Arena$@): Bool //<
+  //< Whether a file that starts a child uses that predicate for the check before starting
+  //<
+  //< Caution: **Keep the judging in this one place** (the reason is at `pathspec_hits`).
+  if body.find_str("is_executable") < 0
+    return false
+  for call in spawn_calls
+    if body.find_str(call) >= 0
+      return true
+  return false
+
+priv fn check_exec_gate(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    body: = harness.read_under_root(rel)
+    seen += 1
+    // **There are exactly three exemptions**: the predicate's definition, the test pinning it to
+    // false on Windows, and this check.
+    if rel.equals("std/fs.kspls") || rel.equals("std/tests/sys_test.kspls") ||
+      rel.equals("tests/support/conventions_win.kspls")
+      continue
+    if gates_on_exec(body, arena)
+      bad
+        .push(arena.text().s(rel).s(": it starts a child and holds `is_executable`").take())
+  verdict.check_list("`fs.is_executable` is not used for the check before starting", seen, "files",
+    bad@, "use `fs.can_run` (`is_executable` is always false on Windows)")
+
+// ==========================================
+// 9. `/tmp` is not written straight into a place's text **There is no `/tmp` on Windows.**
+// Opening it gives a `FileNotFoundError`, which shows up first there or in the Windows job.
+// ==========================================
+
+priv const tmp_literals: U8[][2] = ::{ "\"/tmp/", "'/tmp/" } //<
+  //< The forms of a string that starts with a `/tmp/` path
+  //<
+  //< **Only `"/tmp/` inside a string is checked**; a comment explaining `/tmp` is not hit.
+
+priv fn opens_tmp(line: U8[], _arena: Arena$@): Bool //< whether a string starts with `/tmp/`
+  //<
+  //< Caution: **Keep the judging in this one place** (the reason is at `pathspec_hits`).
+  for lit in tmp_literals
+    if line.find_str(lit) >= 0
+      return true
+  return false
+
+// Caution: **Include the explaining sentences.** A comment explaining `/tmp` must not hit, so
+// without them a broken quote-mark test goes unnoticed.
+priv const tmp_samples: Sample[7] = ::{
+  Sample::{ .text = "path = \"/tmp/x.safetensors\"", .hits = true },
+  Sample::{ .text = "open('/tmp/out', 'wb')", .hits = true },
+  Sample::{ .text = "SOCK := \"/tmp/uart.sock\"", .hits = true },
+  Sample::{ .text = "// On macOS /tmp is a link to /private/tmp.", .hits = false },
+  Sample::{ .text = "// MSYS2 rewrites the /tmp/… it hands to a child.", .hits = false },
+  Sample::{ .text = "path = os.path.join(work, \"out\")", .hits = false },
+  Sample::{ .text = "assert(!fs.is_safe_relative(\"C:/tmp/x\"))", .hits = false },
+}
+
+priv fn check_tmp_fires(arena: Arena$@)
+  $bad: = scan.misjudged(Sample[]::tmp_samples, opens_tmp, arena)
+  verdict.check_list("the judgment of `/tmp` can fire", tmp_samples.len, "samples", bad@,
+    "the table of what is hit and what is not is `tmp_samples`")
+
+priv fn check_tmp_literal(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  for rel in harness.tracked_matching(U8[][]::scan.build_ext)
+    // **This file is excluded because it holds its own samples** (`tmp_samples` above).
+    if rel.equals("tests/support/conventions_win.kspls")
+      continue
+    $i: Sz = 0
+    for line in harness.read_under_root(rel).lines(arena)
+      i += 1
+      seen += 1
+      if opens_tmp(line, arena)
+        bad.push(arena.text().s(rel).s(":\{i\}: \{line.trim_spaces()\}").take())
+  verdict.check_list("`/tmp` is not written straight into a place's text", seen, "lines", bad@,
+    "there is no `/tmp` on Windows. Let a tool answer with the place")
+
+// ==========================================
+// 10. A path git is looking at can be made on Windows
+// ==========================================
+
+// **Such a path cannot be checked out on Windows, and nothing here shows it.** What gets in is a
+// typo (a `>` or `|` that lost its quoting becomes the name), so **the paths** are checked rather
+// than any text, untracked files included (`harness.tracked` picks up `--others`).
+
+priv const win_bad_chars: U8[] = "<>:\"|?*"
+priv const win_devices: U8[][4] = ::{ "con", "prn", "aux", "nul" }
+
+priv fn win_device(part: U8[]): Bool //<
+  //< Whether it is a device's name
+  //<
+  //< The names are `CON` `PRN` `AUX` `NUL`, and `COM1` to `COM9`, `LPT1` to `LPT9`.
+  //<
+  //< Caution: **Check without the extension** (`nul.txt` is a device too), **and ignore case**
+  //< (names there are case-insensitive).
+  dot: = part.find_char('.')
+  stem: = part.sub(0, dot) if dot > 0 else part
+  for d in win_devices
+    if stem.equals_ignore_case(d)
+      return true
+  if stem.len != 4
+    return false
+  head: = stem.sub(0, 3)
+  if !head.equals_ignore_case("com") && !head.equals_ignore_case("lpt")
+    return false
+  return stem[3] >= '1' && stem[3] <= '9'
+
+priv fn win_hostile(path: U8[], arena: Arena$@): Bool //<
+  //< whether a path cannot be created on Windows
+  //<
+  //< Caution: **Check each element separately** (the separating `/` is of course allowed).
+  for part in path.split('/', arena)
+    if part.len == 0
+      continue
+    for $i: Sz = 0; i < part.len; i += 1
+      if part[i] < ' ' || win_bad_chars.find_char(part[i]) >= 0
+        return true
+    last: = part[part.len - 1]
+    if last == '.' || last == ' ' || win_device(part)
+      return true
+  return false
+
+priv fn check_win_paths(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  files: = harness.tracked() catch
+    harness.fatal("git ls-files failed")
+    return
+  for rel in files
+    if win_hostile(rel, arena)
+      bad.push(arena.dup_str(rel))
+  verdict.check_list("a path git is looking at can be made on Windows", files.len, "paths", bad@,
+    "`<>:\"|?*`, a control character, a trailing dot or space, a device's name: none come out")
+
+// ==========================================
+// The four judgments above show they can fire **"no hits" cannot be told apart from green**:
+// when the walk falls out of step with the implementation, the check passes while hitting
+// nothing.
+// ==========================================
+
+// **It requires `git` and `ls-files` next to each other**, so a line that only talks about it is
+// not hit, nor is a string holding no wildcard.
+priv const pathspec_samples: Sample[5] = ::{ Sample::{ .text =
+  "subprocess.run([\"git\", \"ls-files\", \"*.md\"])", .hits = true },
+  Sample::{ .text = "subprocess.run([\"git\", \"ls-files\", \"docs/?.md\"])", .hits = true },
+  Sample::{ .text = "subprocess.run([\"git\", \"ls-files\"])", .hits = false },
+  Sample::{ .text = "subprocess.run([\"git\", \"ls-files\", \"docs/README.md\"])", .hits = false },
+  Sample::{ .text = "# do not hand *.md to git's ls-files", .hits = false } }
+
+// The misses rely on `cuts_by_hand` dropping string literals and line comments.
+priv const line_cut_samples: Sample[4] = ::{ Sample::{ .text = "  at: = out.find_char('\\n');",
+  .hits = true }, Sample::{ .text = "  // do not cut with find_char('\\n')", .hits = false },
+  Sample::{ .text = "  want: = \"find_char('\\n')\";", .hits = false },
+  Sample::{ .text = "  for line in out.lines(arena) {", .hits = false } }
+
+// **The only test is whether both appear in the same file.** One alone is not a hit.
+priv const exec_gate_samples: Sample[4] = ::{ Sample::{ .text =
+  "if fs.is_executable(p) { subproc.spawn_piped(argv, \"\"); }", .hits = true },
+  Sample::{ .text = "if fs.is_executable(p) { subproc.run_capture(argv); }", .hits = true },
+  Sample::{ .text = "if fs.is_executable(p) { return true; }", .hits = false },
+  Sample::{ .text = "if fs.can_run(p) { subproc.spawn_piped(argv, \"\"); }", .hits = false } }
+
+// **It checks each element**, so the separating `/` alone is not hit. The first row is text that
+// lost its quoting and became a file name.
+priv const win_path_samples: Sample[10] = ::{ Sample::{ .text =
+  "indow.app;|const app = window.kspage;|", .hits = true },
+  Sample::{ .text = "out/tmp/a>b.txt", .hits = true },
+  Sample::{ .text = "out/tmp/x:1.txt", .hits = true },
+  Sample::{ .text = "out/tmp/nul.js", .hits = true },
+  Sample::{ .text = "out/tmp/com1", .hits = true },
+  Sample::{ .text = "out/tmp/note./x.txt", .hits = true },
+  Sample::{ .text = "out/tmp/note /x.txt", .hits = true },
+  Sample::{ .text = "std/str.kspls", .hits = false },
+  Sample::{ .text = "kspage/port/web/page.html", .hits = false },
+  Sample::{ .text = "tests/support/conventions_win.kspls", .hits = false } }
+
+priv fn check_win_fires(arena: Arena$@)
+  $d: = scan.misjudged(Sample[]::win_path_samples, win_hostile, arena)
+  verdict.check_list("the judgment of a path Windows cannot make can fire", win_path_samples.len,
+    "samples", d@, "the table of what is hit and what is not is `win_path_samples`")
+  $a: = scan.misjudged(Sample[]::pathspec_samples, hands_pathspec, arena)
+  verdict.check_list("the judgment of a path spec can fire", pathspec_samples.len, "samples", a@,
+    "the table of what is hit and what is not is `pathspec_samples`")
+  $b: = scan.misjudged(Sample[]::line_cut_samples, cuts_by_hand, arena)
+  verdict.check_list("the judgment of cutting into lines by hand can fire", line_cut_samples.len,
+    "samples", b@, "the table of what is hit and what is not is `line_cut_samples`")
+  $c: = scan.misjudged(Sample[]::exec_gate_samples, gates_on_exec, arena)
+  verdict.check_list("the judgment of the check before starting can fire", exec_gate_samples.len,
+    "samples", c@, "the table of what is hit and what is not is `exec_gate_samples`")
+
+fn run(arena: Arena$@)
+  check_win_fires(arena)
+  check_win_paths(arena)
+  check_tmp_fires(arena)
+  check_git_pathspec(arena)
+  check_line_cut(arena)
+  check_exec_gate(arena)
+  check_tmp_literal(arena)

@@ -1,0 +1,205 @@
+import "std/chars"
+import "std/str" { Str_builder }
+import "std/strfmt"
+import "std/strnum" // `to_f64`
+import "std/verdict"
+
+// ==========================================
+// String interpolation `\{x\}` and how its format specification is written.
+// The language rules are in `lang_test.kspls`, and the type and place rules in
+// `lang_types_test.kspls`. `\{value:SPEC\}`: the width, the zero fill, the comma separation, the
+// decimal precision.
+// ==========================================
+// ==========================================
+// ==========================================
+fn test_string_format_spec()
+  verdict.start("[fmt] string interpolation format spec (\\{value:SPEC\\}) test...")
+  n: I32 = 7
+  neg: I32 = -5
+  big: I32 = 1234567
+  pi: F64 = 3.14159
+
+  $b: = Str_builder.new()
+  defer b.free()
+  b.clear().s("\{n:02\}")
+  assert(b.slice().equals("07"), "fmt spec: zero-pad width must work")
+  b.clear().s("\{n:5\}")
+  assert(b.slice().equals("    7"), "fmt spec: space-pad width must work")
+  b.clear().s("\{neg:03\}")
+  assert(b.slice().equals("-05"), "fmt spec: zero-pad must pack inside the sign")
+  b.clear().s("\{big:,\}")
+  assert(b.slice().equals("1,234,567"), "fmt spec: comma grouping must work")
+  b.clear().s("\{pi:.2\}")
+  assert(b.slice().equals("3.14"), "fmt spec: float precision must work")
+  // A float uses the width, the zero fill and the separation too. **Measure the text after
+  // building it** (rounding adds digits, as with the 9.99 below).
+  b.clear().s("\{pi:8.2\}")
+  assert(b.slice().equals("    3.14"), "fmt spec: float width must pad on the left")
+  b.clear().s("\{pi:08.3\}")
+  assert(b.slice().equals("0003.142"), "fmt spec: float zero-pad must fill to the width")
+  neg_f: F64 = -3.5
+  b.clear().s("\{neg_f:09.2\}")
+  assert(b.slice().equals("-00003.50"), "fmt spec: float zero-pad must pack inside the sign")
+  b.clear().s("\{neg_f:9.2\}")
+  assert(b.slice().equals("    -3.50"), "fmt spec: float space-pad must sit outside the sign")
+  money: F64 = 1234567.25
+  b.clear().s("\{money:,.2\}")
+  assert(b.slice().equals("1,234,567.25"), "fmt spec: float comma must group the integer part")
+  b.clear().s("\{money:14,.2\}")
+  assert(b.slice().equals("  1,234,567.25"), "fmt spec: float width must count the commas")
+  carry: F64 = 9.99
+  b.clear().s("\{carry:1.1\}")
+  assert(b.slice().equals("10.0"), "fmt spec: width is a minimum, so a carried digit stays")
+  b.clear().s("\{n\}")
+  assert(b.slice().equals("7"), "fmt spec: bare interpolation (no spec) must be unaffected")
+  // Caution: **A large value must fit in the buffer too.** `%.*f` writes `1.0e300` as 301 digits;
+  // too small a buffer silently leaks the stack's contents after the text.
+  huge: F64 = 1.0e300
+  b.clear().s("\{huge:.2\}")
+  assert(b.slice().len == 301 + 1 + 2, "fmt spec: a large float must fit its own buffer")
+  assert(b.slice().starts_with("10"), "fmt spec: a large float must start with its digits")
+  assert(b.slice().ends_with(".00"), "fmt spec: a large float must end with its fraction")
+  // NaN and infinity.
+  // Caution: **Build them at run time.** KSPL, not libc, writes the text, so both targets agree
+  // (glibc writes x86's `0.0 / 0.0` as `-nan`). The width fills with spaces; `0` and the precision
+  // do not apply.
+  zero: F64 = 0.0
+  not_a_number: F64 = zero / zero
+  positive_inf: F64 = 1.0 / zero
+  negative_inf: F64 = -1.0 / zero
+  b.clear().s("\{not_a_number\} \{positive_inf\} \{negative_inf\}")
+  assert(b.slice().equals("nan inf -inf"),
+    "fmt: NaN and the infinities must be spelled nan / inf / -inf")
+  b.clear().s("\{not_a_number:5\}|\{positive_inf:05\}|\{negative_inf:.2\}")
+  assert(b.slice().equals("  nan|  inf|-inf"),
+    "fmt spec: nan/inf take the width with spaces and ignore the '0' flag and the precision")
+  verdict.pass("")
+// ==========================================
+// A float's default notation (shortest round trip) and the exactness of a fixed digit count.
+// ==========================================
+
+fn test_float_spelling() //<
+  //< It checks how floating-point values are spelled
+  //<
+  //< **Reading it back must give the same value** — that is the contract, not the digit
+  //< count (`0.1 + 0.2` is `0.30000000000000004`). **F32 must be shortest at F32's width**, or
+  //< `0.1F32` becomes `0.10000000149011612`. **A fixed digit count must have exact digits**, as
+  //< libc's `%.2f`, with exact halves rounded to even (`0.125`'s `.2` is `0.12`).
+  verdict
+    .start("[fmt] a float's default notation (the shortest round-tripping representation) test...")
+  $b: = Str_builder.new()
+  defer b.free()
+  sum: F64 = 0.1 + 0.2
+  third: F64 = 1.0 / 3.0
+  hundred: F64 = 100.0
+  big: F64 = 1.0e21
+  big_int: F64 = 123456789012345680000.0
+  tiny: F64 = 1.0e-7
+  small: F64 = 0.000001
+  neg_zero: F64 = -0.0
+  min_sub: F64 = 5.0e-324
+  max_f64: F64 = 1.7976931348623157e308
+  b.clear().s("\{sum\}|\{third\}|\{hundred\}|\{neg_zero\}")
+  assert(b.slice().equals("0.30000000000000004|0.3333333333333333|100.0|-0.0"),
+    "fmt: the default spelling is the shortest one that reads back to the same value")
+  b.clear().s("\{big\}|\{big_int\}|\{tiny\}|\{small\}")
+  assert(b.slice().equals("1e+21|123456789012345680000.0|1e-7|0.000001"),
+    "fmt: exponent form starts at 1e21 and below 1e-6, like JSON / JS")
+  b.clear().s("\{min_sub\}|\{max_f64\}")
+  assert(b.slice().equals("5e-324|1.7976931348623157e+308"),
+    "fmt: the ends of the F64 range keep their shortest digits")
+  f32_tenth: F32 = 0.1F32
+  f32_third: = F32::third
+  b.clear().s("\{f32_tenth\}|\{f32_third\}")
+  assert(b.slice().equals("0.1|0.33333334"), "fmt: F32 is shortest at F32 precision")
+  // The width, the zero fill and the separation apply to the shortest form too.
+  b.clear().s("\{sum:22\}|\{hundred:07\}|\{big_int:,\}")
+  assert(b.slice().equals("   0.30000000000000004|00100.0|123,456,789,012,345,680,000.0"),
+    "fmt: width, zero fill and grouping apply to the shortest spelling too")
+  // Reading back through `to_f64` gives the same F64.
+  vals: F64[_] = ::{ 0.1, sum, third, 1.0e21, 1.0e-7, 5.0e-324, 1.7976931348623157e308, 2.0 / 3.0,
+    1234567.25, 9.99 }
+  for v in vals
+    b.clear().s("\{v\}")
+    back: = b.slice().to_f64() catch panic("fmt: the shortest spelling must parse")
+    assert(back == v, "fmt: the shortest spelling must read back to the same value")
+  // A fixed digit count.
+  eighth: F64 = 0.125
+  two_half: F64 = 2.5
+  huge: F64 = 1.0e300
+  b.clear().s("\{eighth:.2\}|\{two_half:.0\}|\{eighth:.3\}|\{third:.20\}")
+  assert(b.slice().equals("0.12|2|0.125|0.3333333333333333148"),
+    "fmt spec: fixed digits round half to even and stop at 19 digits")
+  b.clear().s("\{huge:.2\}")
+  huge_ok: =
+    b.slice().len == 301 + 3 &&
+    b.slice()
+    .starts_with("1000000000000000052504760255204420248704468581108159154915854115511802457988908195786371375080447864043704443832883878176942523235360430575644792184786706982848387200926575803737830233794788090059368953234970799945081119038967640880074652742780142494579258788820056842838115669472196386865459400540160.00")
+  assert(huge_ok, "fmt spec: 1e300 with .2 prints all 301 integer digits exactly")
+  verdict.pass("")
+// ==========================================
+// `\{x\}` on a primitive ("The default notation for primitives" in docs/SPEC-language.md).
+// ==========================================
+
+fn test_primitive_interpolation() //<
+  //< It checks a primitive's default appearance, both plain and with a format specifier
+  //<
+  //< **Test both.** The expansions differ (`put(w, x)` / `put(w, x.fmt_spec(...))`), so testing
+  //< one lets them disagree.
+  //<
+  //< Caution: **Use a value with the top bit set for the unsigned**, or a signed copy looks right.
+  //< **`U8` is a number.** Only `\{b:c\}` prints it as a character.
+  verdict.start("[fmt] a primitive's default appearance test...")
+  $b: = Str_builder.new()
+  defer b.free()
+
+  // (the text, the plain interpolation, the format-specified interpolation). The third's width
+  // is the value's digit count, so the texts match.
+  u8max: U8 = 255U8
+  u16max: U16 = 65535U16
+  u32max: U32 = 4294967295U32
+  u64max: U64 = 18446744073709551615U64
+  i8min: = I8::(0 - 128)
+  i64min: I64 = -9223372036854775807I64 - 1I64
+  szv: Sz = -1234
+
+  b.clear().s("\{u8max\}|\{u8max:3\}")
+  assert(b.slice().equals("255|255"), "U8 comes out as a number (not a character)")
+  b.clear().s("\{u16max\}|\{u16max:5\}")
+  assert(b.slice().equals("65535|65535"), "U16")
+  b.clear().s("\{u32max\}|\{u32max:10\}")
+  assert(b.slice().equals("4294967295|4294967295"), "a U32 value with the upper bit up")
+  b.clear().s("\{u64max\}|\{u64max:20\}")
+  u64_shown: = b.slice().equals("18446744073709551615|18446744073709551615")
+  assert(u64_shown, "a U64 value with the upper bit up")
+  b.clear().s("\{i8min\}|\{i8min:4\}")
+  assert(b.slice().equals("-128|-128"), "I8's minimum")
+  b.clear().s("\{i64min\}|\{i64min:20\}")
+  i64_shown: = b.slice().equals("-9223372036854775808|-9223372036854775808")
+  assert(i64_shown, "I64's minimum")
+  b.clear().s("\{szv\}|\{szv:5\}")
+  assert(b.slice().equals("-1234|-1234"), "Sz")
+
+  // The format, not the type, prints it as a character.
+  // **Test it beside the plain interpolation.**
+  ch: U8 = 'A'
+  b.clear().s("\{ch:c\}|\{ch\}")
+  assert(b.slice().equals("A|65"), "`:c` comes out as a character, and plain as a number")
+
+  // An unsigned takes the decorations the same way a signed does.
+  b.clear().s("\{u64max:,\}")
+  u64_grouped: = b.slice().equals("18,446,744,073,709,551,615")
+  assert(u64_grouped, "a U64's comma separation")
+  b.clear().s("\{u32max:012\}")
+  assert(b.slice().equals("004294967295"), "a U32's zero fill")
+
+  bl: = true
+  b.clear().s("\{bl\}")
+  assert(b.slice().equals("true"), "Bool")
+  s: U8[] = "abc"
+  b.clear().s("\{s\}")
+  assert(b.slice().equals("abc"), "a string comes out as it is")
+
+  verdict
+    .pass("an unsigned comes out in decimal up to the upper bit, and the answer does not change \
+      with or without a format specification.")

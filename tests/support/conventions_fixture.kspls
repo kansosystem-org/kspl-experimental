@@ -1,0 +1,78 @@
+//< A fixture says in at most four lines what it pins down
+//<
+//< The rule is the fixture's opening shape in `ksplc/README.md` ("The suites' folders, and adding
+//< a fixture"): the cases are a few lines each, so a description past four lines outgrows what it
+//< describes, and the traps a case guards stand beside that case instead.
+import "std/chars" // `trim_spaces`
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" // `starts_with` / `lines`
+import "std/strfmt" as _strfmt
+import "std/verdict"
+import "tests/support/conventions_scan" as scan + { Sample }
+import "tests/support/harness"
+
+priv const max_fixture_lines: Sz = 4 //< the most lines of text a fixture's description holds
+
+priv const fixture_specs: U8[][3] = ::{ "ksplc/tests/negative/*.kspl*", "ksplc/tests/lint/*.kspl*",
+  "ksplc/tests/runtime/*.kspl*" } //<
+    //< The three folders whose files are read by their marks (`harness_markers.kspls`)
+
+fn description_lines(text: U8[], arena: Arena$@): Sz //<
+  //< How many lines of text the file's first `//<` run holds
+  //<
+  //< **The parting (a `//<` carrying nothing) is not counted**: it separates, it says nothing.
+  //< **The run is the first one, wherever it starts**: a fixture whose point is its first line of
+  //< code (a directive, a shebang look-alike) describes itself just below it.
+  $n: Sz = 0
+  $inside: = false
+  for raw in text.lines(arena)
+    ln: = raw.trim_spaces()
+    if !ln.starts_with("//<")
+      if inside
+        break
+      continue
+    inside = true
+    if ln.sub_from(3).trim_spaces().len > 0
+      n += 1
+  return n
+
+priv fn too_long(text: U8[], arena: Arena$@): Bool //< whether the description is past the cap
+  return description_lines(text, arena) > max_fixture_lines
+
+priv const too_long_samples: Sample[6] = ::{
+  Sample::{ .text = "//< one\n//<\n//< two\n//< three\n//< four\n// EXPECT: x\n", .hits = false },
+  Sample::{ .text = "//< one\n//<\n//< two\n//< three\n//< four\n//< five\n// EXPECT: x\n",
+    .hits = true },
+  // **The partings do not count**: four lines of text with two partings still fit.
+  Sample::{ .text = "//< one\n//<\n//< two\n//<\n//< three\n//< four\n", .hits = false },
+  // **Only the first run counts**: a function's own `//<` below the marks is not the description.
+  Sample::{ .text = "//< one\n// EXPECT: x\nfn f() //< a\n  //< b\n  //< c\n  //< d\n  //< e\n",
+    .hits = false },
+  // **A run below a first line of code is still the description.**
+  Sample::{ .text = "##error(x)\n//< one\n//< two\n//< three\n//< four\n//< five\n", .hits = true },
+  // **A plain `//` is no part of it**: the marks and remarks around it are not counted.
+  Sample::{ .text = "//< one\n// a remark\n// another\n// a third\n// a fourth\n", .hits = false },
+}
+
+priv fn check_fires(arena: Arena$@)
+  $n: = scan.misjudged(Sample[]::too_long_samples, too_long, arena)
+  verdict.check_list("the count of a fixture's description can fire", too_long_samples.len,
+    "samples", n@, "the table of what is hit and what is not is `too_long_samples`")
+
+priv fn check_fixtures(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  for rel in harness.tracked_matching(U8[][]::fixture_specs)
+    seen += 1
+    n: = description_lines(harness.read_under_root(rel), arena)
+    if n > max_fixture_lines
+      bad.push(arena.text().s(rel).s(": \{n\} lines of description").take())
+  name: = arena.text().s("a fixture says in at most \{max_fixture_lines\} lines what it pins ")
+    .s("down (ksplc/README.md)").take()
+  verdict.check_list(name, seen, "fixtures", bad@,
+    "keep what it pins down and why; a case's own trap goes beside that case")
+
+fn run(arena: Arena$@)
+  check_fires(arena)
+  check_fixtures(arena)

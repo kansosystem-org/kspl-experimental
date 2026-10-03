@@ -1,0 +1,64 @@
+import "ksplc/base/core" as base_core
+
+// ==========================================
+// Where the per-stage time and arena use that `--stats` prints are collected.
+// **This file only collects; it does not print.** Each layer holds its own breakdown (the rules'
+// table in `../parse/load.kspls`, the bodies' table in `../sema/session/prof.kspls`, the dead-code
+// elimination's count in `../lower/prune.kspls`). base cannot import those, so
+// `../pipeline.kspls`, which can import them all, lists them.
+// Caution: **Do not print per layer.** The stage numbers are useful because they read as one
+// block (`[Layer]`). Printed on the spot in the order the stages ran, the detail tables would
+// land between them.
+// ==========================================
+
+struct Stage //< one stage's elapsed time and arena consumption
+  //<
+  //< **The bytes are kept next to the time.** When memory use grows, the log alone shows which
+  //< stage grew. The time alone cannot, since the stage that got slower is not always the one
+  //< that grew.
+  us: I64 //< microseconds
+  bytes: I64 //< how far the arena grew
+
+impl Stage
+  fn plus(r: Self, o: Stage): Stage //< the two stages' numbers added
+    return Stage::{ .us = r.us + o.us, .bytes = r.bytes + o.bytes }
+
+struct Stages //< every stage's numbers, in the order they run
+  //<
+  //< Caution: **The parts must add up to the total.** The gap to `[Overall]`'s `Compile time` and
+  //< `AST Arena usage` prints as `Other` (startup, the CLI's argument parsing, and allocations
+  //< after a stage land there); drop that row silently and nobody notices a stage not measured.
+  parse: Stage
+  desugar: Stage
+  sema: Stage
+  lower: Stage
+  backend: Stage
+
+impl Stages
+  fn total(r: Self): Stage //< every stage's numbers added
+    return r.parse.plus(r.desugar).plus(r.sema).plus(r.lower).plus(r.backend)
+
+$stages: Stages = ::{}
+
+fn end_stage(from_us: I64, to_us: I64): Stage //<
+  //< The numbers of a stage that ran from `from_us` to `to_us`, its bytes taken by `take_bytes`
+  return Stage::{ .us = to_us - from_us, .bytes = take_bytes() }
+
+// The arena's usage when the last seam was placed. It exists only so that `take_bytes` can take
+// the difference.
+$last_used: I64 = 0I64
+
+fn reset_bytes() //< it places a seam before a stage
+  //<
+  //< Caution: **Call it once before parse.** Startup and the CLI's argument parsing allocate
+  //< too; without the call their share is counted as parse's.
+  last_used = base_core.arena.get_total_used()
+
+fn take_bytes(): I64 //< it returns the increment since the last seam and advances the seam to now
+  //<
+  //< Caution: **Call it in the order the stages run.** It only takes the difference, so a wrong
+  //< order reports another stage's use.
+  used: = I64::base_core.arena.get_total_used()
+  grown: = used - last_used
+  last_used = used
+  return grown

@@ -1,0 +1,257 @@
+#!/usr/bin/env -S ksplc run
+//< Stage 0 / ③: deriving the BPE vocabulary and merges from the corpus
+//<
+//< ksai/tokenizer only "runs on the vocab/merges it is given", so training from the corpus is done
+//< here.
+
+// ==========================================
+// What it writes, under tools/ai_assist/tokenizer/:
+//   vocab.txt   each line "<id>\t<hex>"  (id 0=<unk>, 1..256=each byte, 257..=a merged word)
+//   merges.txt  each line "<id1> <id2> <merged_id>" (in training order)
+// ==========================================
+// Usage:
+//   ./out/train_bpe.exe --vocab=2000
+// ==========================================
+import "std/argp"
+import "std/chars"
+import "std/ds" { List, Map }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena, alloc_in }
+import "std/regex"
+import "std/str" { Str_builder }
+import "std/strfmt"
+import "std/sys"
+import "tools/ai_assist/ksplc_oracle" as oracle
+
+priv const train_path: U8[] = "tools/ai_assist/corpus/train.jsonl"
+priv const val_path: U8[] = "tools/ai_assist/corpus/val.jsonl"
+priv const out_dir: U8[] = "tools/ai_assist/tokenizer"
+priv const vocab_out: U8[] = "tools/ai_assist/tokenizer/vocab.txt"
+priv const merges_out: U8[] = "tools/ai_assist/tokenizer/merges.txt"
+
+priv const word_pattern: U8[] = "[A-Za-z_][A-Za-z0-9_]*|\\d+|\\s+|." //<
+  //< A simple pre-split for code (identifier / number / whitespace run / any other character)
+  //<
+  //< The trailing `.` takes any one character; without it the splitting stops at the first other
+  //< character and the rest of the text is dropped.
+
+priv const pair_shift: Sz = 1048576 //< how a pair is packed to be a Map key
+  //<
+  //< An id is below the vocabulary size, so 2^20 is enough.
+
+struct Word //< one word of the corpus, with how often it was seen
+  ids: List<|I32|> //< starts as "the byte value + 1" per byte and gets shorter with each merge
+  count: Sz //< how many times this word appeared
+
+struct Merge //< one merge rule: a pair of symbols replaced by a new one
+  a: I32 //< the symbol on the left
+  b: I32 //< the symbol on the right
+  id: I32 //< the symbol the pair becomes
+
+priv fn load_text(path: U8[], arena: Arena$@): U8[] //<
+  //< Takes "code" from each line of the jsonl and joins them with newlines
+  recs: = oracle.load_jsonl(path, arena) catch
+    io.err().s("\{sys.program_name()\}: cannot read \{path\}\n")
+    sys.exit(1)
+  $b: = Str_builder.new()
+  for i in Range.asc(recs.len)
+    if i > 0
+      b.c('\n')
+    b.s(recs[i].get("code").as_str())
+  // Caution: Copy it into the arena; once returned, the Str_builder's heap memory cannot be freed.
+  out: = arena.dup_str(b.slice())
+  b.free()
+  return out
+
+priv fn count_words(text: U8[], arena: Arena$@): Map<|U8[], Sz|>$@ //<
+  //< Pre-splits the text and counts each word's occurrences
+  rx: = regex.Regex.compile(word_pattern) catch panic("the word pattern itself does not compile")
+  defer rx.free()
+  out: = arena.create(Map<|U8[], Sz|>.new_with_cap(4096, arena))
+  $pos: Sz = 0
+  for pos < text.len
+    rest: = text.sub_from(pos)
+    m: = rx.find(rest) catch
+      break
+    if m.end <= m.start
+      break
+    w: = rest.sub(m.start, m.end - m.start)
+    out.set(w, (out.get(w) catch 0) + 1)
+    pos += m.end
+  return out
+
+priv fn build_corpus(words: Map<|U8[], Sz|>$@, arena: Arena$@): List<|Word|> //<
+  //< Turns the word table into "a list of byte ids plus the occurrence count"
+  //<
+  //< Words that give the same list are not combined: it would only save time, the answer unchanged.
+  $out: = List<|Word|>.new(arena)
+  for e in words.items()
+    $ids: = List<|I32|>.new(arena)
+    w: = e.key
+    for j in Range.asc(w.len)
+      ids.push(w[j] + 1)
+    out.push(Word::{ .ids = ids, .count = e.value })
+  return out
+
+priv fn best_pair(corpus: List<|Word|>$@, arena: Arena$@): Merge //<
+  //< Counts the pairs of adjacent ids and returns the most common
+  //<
+  //< Where nothing occurs twice or more, `.id = -1`.
+  //< Caution: **Break ties explicitly.** The Map's order depends on the table's size and hashing,
+  //< so one corpus could give different vocabularies. The smaller packed key (a high, b low) wins.
+  $pairs: = Map<|Sz, Sz|>.new_with_cap(8192, arena)
+  defer pairs.free()
+  for i in Range.asc(corpus.len)
+    w: = corpus.at(i)
+    for $j: Sz = 0; j + 1 < w.ids.len; j += 1
+      key: Sz = w.ids.get(j) * pair_shift + w.ids.get(j + 1)
+      pairs.set(key, (pairs.get(key) catch 0) + w.count)
+  $best: Sz = 1
+  $best_key: Sz = -1
+  for e in pairs.items()
+    if e.value > best || (e.value == best && best_key >= 0 && e.key < best_key)
+      best = e.value
+      best_key = e.key
+  if best_key < 0
+    return Merge::{ .a = 0, .b = 0, .id = -1 }
+  return Merge::{ .a = I32::(best_key / pair_shift), .b = I32::(best_key % pair_shift), .id = 0 }
+
+priv fn apply_merge(corpus: List<|Word|>$@, a: I32, b: I32, new_id: I32) //<
+  //< Replaces (a, b) with `new_id` across every word
+  // Caution: Get the element with `at`; `get` returns a copy, so shortening its ids misses the
+  // original.
+  for i in Range.asc(corpus.len)
+    w: = corpus.at(i)
+    ids: = w.ids@
+    $write: Sz = 0
+    $read: Sz = 0
+    for read < ids.len
+      if read + 1 < ids.len && ids.get(read) == a && ids.get(read + 1) == b
+        ids.set(write, new_id)
+        read += 2
+      else
+        ids.set(write, ids.get(read))
+        read += 1
+      write += 1
+    ids.len = write
+
+priv fn init_expand(arena: Arena$@): List<|U8[]|> //< id -> a byte sequence
+  //<
+  //< 0 is <unk> and empty, 1..256 are the individual bytes, and 257 and above are the merged words.
+  $out: = List<|U8[]|>.new(arena)
+  out.push("")
+  for b in Range.asc(256)
+    p: = U8$@::alloc_in(arena, 1)
+    p$ = U8::b
+    out.push(U8[]::{ .ptr = p, .len = 1 })
+  return out
+
+priv fn concat_bytes(x: U8[], y: U8[], arena: Arena$@): U8[] //<
+  //< Builds expand[a] + expand[b] in the arena
+  p: = U8$@::alloc_in(arena, x.len + y.len)
+  $out: = U8$[]::{ .ptr = p, .len = x.len + y.len }
+  for i in Range.asc(x.len)
+    out[i] = x[i]
+  for i in Range.asc(y.len)
+    out[x.len + i] = y[i]
+  return out
+
+priv fn write_vocab(expand: List<|U8[]|>$@)
+  path: = vocab_out
+  $f: = io.open(path, "w") catch panic("cannot write vocab.txt")
+  $b: = Str_builder.new()
+  defer b.free()
+  for i in Range.asc(expand.len)
+    bytes: = expand.get(i)
+    b.clear().s("\{i\}").c('\t')
+    for by in bytes
+      b.c((by >> 4U8).to_hex_lower()).c((by & 0xfU8).to_hex_lower())
+    b.c('\n')
+    f.s(b.slice())
+  oracle.close_or_die(f@, path)
+
+priv fn write_merges(merges: List<|Merge|>$@)
+  path: = merges_out
+  $f: = io.open(path, "w") catch panic("cannot write merges.txt")
+  $b: = Str_builder.new()
+  defer b.free()
+  for m in merges
+    b.clear().s("\{m.a\}").c(' ').s("\{m.b\}").c(' ').s("\{m.id\}").c('\n')
+    f.s(b.slice())
+  oracle.close_or_die(f@, path)
+
+priv fn count_tokens(text: U8[], merges: List<|Merge|>$@, arena: Arena$@): Sz //<
+  //< How many tokens the val text becomes, merging in rank order (the compression rate)
+  $rank: = Map<|Sz, Sz|>.new_with_cap(8192, arena)
+  defer rank.free()
+  $merged_id: = Map<|Sz, Sz|>.new_with_cap(8192, arena)
+  defer merged_id.free()
+  for i in Range.asc(merges.len)
+    m: = merges.get(i)
+    key: Sz = m.a * pair_shift + m.b
+    rank.set(key, i)
+    merged_id.set(key, m.id)
+
+  words: = count_words(text, arena)
+  $total: Sz = 0
+  for e in words.items()
+    $ids: = List<|I32|>.new(arena)
+    w: = e.key
+    for j in Range.asc(w.len)
+      ids.push(w[j] + 1)
+    for ids.len >= 2
+      $best_rank: Sz = -1
+      $best_i: Sz = -1
+      for $j: Sz = 0; j + 1 < ids.len; j += 1
+        key: Sz = ids.get(j) * pair_shift + ids.get(j + 1)
+        r: = rank.get(key) catch -1
+        if r >= 0 && (best_rank < 0 || r < best_rank)
+          best_rank = r
+          best_i = j
+      if best_i < 0
+        break
+      key: Sz = ids.get(best_i) * pair_shift + ids.get(best_i + 1)
+      ids.set(best_i, I32::(merged_id.get(key) catch 0))
+      for $j: = best_i + 1; j + 1 < ids.len; j += 1
+        ids.set(j, ids.get(j + 1))
+      ids.len -= 1
+    total += ids.len * e.value
+  return total
+
+fn main() //< derives the BPE vocabulary and merges from the corpus
+  arena: = Arena.new(512 * 1024 * 1024)
+  defer arena.free()
+  $target_vocab: I64 = 2000
+  p: = argp.Parser
+    .create(sys.program_name(), "train BPE's vocabulary and merges from the corpus", arena)
+  p.int_opt("--vocab", target_vocab@, "the target vocabulary size")
+  p.parse_or_exit(sys.args(), arena)
+
+  fs.mkdir(out_dir) catch {} // fails harmlessly if it already exists
+
+  text: = load_text(train_path, arena)
+  words: = count_words(text, arena)
+  $corpus: = build_corpus(words, arena)
+  $expand: = init_expand(arena)
+  $merges: = List<|Merge|>.new(arena)
+
+  for expand.len < Sz::target_vocab
+    m: = best_pair(corpus@, arena)
+    if m.id < 0
+      break
+    new_id: = I32::expand.len
+    expand.push(concat_bytes(expand.get(m.a), expand.get(m.b), arena))
+    merges.push(Merge::{ .a = m.a, .b = m.b, .id = new_id })
+    apply_merge(corpus@, m.a, m.b, new_id)
+
+  write_vocab(expand@)
+  write_merges(merges@)
+
+  val_text: = load_text(val_path, arena)
+  val_tokens: = count_tokens(val_text, merges@, arena)
+  io.out()
+    .s("BPE trained: vocab=\{I32::expand.len\} (target \{I32::target_vocab\}), \
+      merges=\{I32::merges.len\}\n")
+  io.out().s("  val compression: \{I32::val_text.len\} bytes -> \{I32::val_tokens\} tokens\n")
+  io.out().s("  -> \{out_dir\}/vocab.txt, merges.txt\n")

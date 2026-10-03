@@ -1,0 +1,138 @@
+//< Reads the piloting policy it is given (one safetensors) and decides the car's next manoeuvre
+//<
+//< **The car decides alone, on a policy downloaded once**, so losing the link does not stop it.
+
+// ==========================================
+// Caution: **Check the version before reading.** The shapes do not show the features' order, the
+// activation or the manoeuvre table's meaning, and another version goes silently wrong.
+// ==========================================
+// What is in the one file (format version `format_version`):
+//   fc1.weight [5, hidden] / fc1.bias [hidden]        … the input layer. The activation is SiLU
+//   fc2.weight [hidden, actions] / fc2.bias [actions] … the output layer (the logits)
+//   maneuvers  [actions, 3]                           … the manoeuvre's number -> lon, lat, rot
+//   __metadata__.kspl_pilot                           … the format's version
+//   __metadata__.far_mm                               … the limit for normalizing the distance [mm]
+// ==========================================
+import "ksai/nn"
+import "ksai/safetensors" as st
+import "ksai/sampler"
+import "ksai/tensor" { Tensor }
+import "std/mem" { Arena }
+import "std/str" // U8[].equals's extension impl
+import "std/strfmt" as _strfmt
+import "std/strnum" // U8[].to_i64's extension impl
+
+const format_version: U8[] = "2" //< the format version this reader can interpret
+  //<
+  //< Caution: It must match the side that produces the policy.
+
+priv const feature_count: Sz = 5 //< how many features
+  //<
+  //< **The format version fixes them, order included**: change them only with the version.
+  //< [measured or not, the normalized distance, left, middle, right]
+priv const drive_fields: Sz = 3 //< how many values one manoeuvre holds (lon, lat, rot)
+
+enum Pilot_error
+  bad_blob //< it does not read as safetensors
+  bad_version //< there is no `__metadata__.kspl_pilot`, or the version is unknown
+  bad_meta //< the metadata (far_mm) cannot be read
+  missing //< a required tensor is absent
+  bad_shape //< a tensor's shape differs from what this version expects
+
+struct Drive //< values that can be passed to the car's `motor.drive` as they are
+  //<
+  //< **Positive = forward / right / clockwise**.
+  lon: I32
+  lat: I32
+  rot: I32
+
+struct Policy
+  priv mlp: nn.Mlp<|F32|>
+  priv maneuvers: Tensor<|F32|>
+  far_mm: I64
+  hidden: Sz
+  actions: Sz
+
+fn empty(): Policy //< a policy with nothing read into it yet
+  //<
+  //< **Nothing may be decided with this**; it is only a placeholder until `load` returns. The
+  //< fields are private, so `Policy::{}` cannot be written from outside.
+  return Policy::{}
+
+priv fn dim(t: Tensor<|F32|>, i: Sz): Sz
+  return 0 if i >= t.shape.len else t.shape[i]
+
+fn load(blob: U8[], arena: Arena$@): Policy?Pilot_error //<
+  //< Reads the one file given and returns a policy ready to decide with
+  //<
+  //< blob belongs to the caller.
+  //< Caution: **Keep it alive as long as the returned Policy is used** (the weights point straight
+  //< into blob, zero copy; see get_tensor in ksai/safetensors).
+  $sf: = st.Safetensors.load_from_bytes(blob, arena) catch
+    throw Pilot_error.bad_blob
+  meta: = sf.metadata.get("__metadata__")
+  if !meta.get("kspl_pilot").as_str().equals(format_version)
+    throw Pilot_error.bad_version
+  far_mm: = meta.get("far_mm").as_str().to_i64() catch
+    throw Pilot_error.bad_meta
+  if far_mm <= 0I64
+    throw Pilot_error.bad_meta
+
+  w1: = sf.get_tensor<|F32|>("fc1.weight", arena) catch
+    throw Pilot_error.missing
+  b1: = sf.get_tensor<|F32|>("fc1.bias", arena) catch
+    throw Pilot_error.missing
+  w2: = sf.get_tensor<|F32|>("fc2.weight", arena) catch
+    throw Pilot_error.missing
+  b2: = sf.get_tensor<|F32|>("fc2.bias", arena) catch
+    throw Pilot_error.missing
+  man: = sf.get_tensor<|F32|>("maneuvers", arena) catch
+    throw Pilot_error.missing
+
+  hidden: = dim(w1, 1)
+  actions: = dim(w2, 1)
+  // Caution: Check every shape before building. Miss even one and a later matmul reads outside
+  // blob.
+  if dim(w1, 0) != feature_count || hidden == 0 || actions == 0
+    throw Pilot_error.bad_shape
+  if dim(b1, 0) != hidden || dim(w2, 0) != hidden || dim(b2, 0) != actions
+    throw Pilot_error.bad_shape
+  if dim(man, 0) != actions || dim(man, 1) != drive_fields
+    throw Pilot_error.bad_shape
+
+  // The same nn.Mlp as the producer: one forward pass, not a copy of the formula.
+  $mlp: = nn.Mlp<|F32|>.new(feature_count, hidden, actions, arena)
+  mlp.fc1.weights = w1
+  mlp.fc1.bias = b1
+  mlp.fc2.weights = w2
+  mlp.fc2.bias = b2
+  return Policy::{ .mlp = mlp, .maneuvers = man, .far_mm = far_mm, .hidden = hidden,
+    .actions = actions }
+
+priv fn features(p: Policy$@, dist_mm: I64, line: I64, arena: Arena$@): Tensor<|F32|> //<
+  //< Turns an observation into a feature vector
+  //<
+  //< `dist_mm` **0 means "could not be measured"**, not "close", hence the separate `valid`.
+  shape: Sz[2] = ::{ 1, feature_count }
+  x: = Tensor<|F32|>.new(Sz[]::shape, arena)
+  valid: = dist_mm > 0I64
+  clamped: = dist_mm if dist_mm < p.far_mm else p.far_mm
+  x[0] = 1.0 if valid else 0.0
+  x[1] = F32::(F64::clamped / F64::p.far_mm) if valid else 0.0
+  x[2] = 1.0 if (line & 4I64) != 0I64 else 0.0
+  x[3] = 1.0 if (line & 2I64) != 0I64 else 0.0
+  x[4] = 1.0 if (line & 1I64) != 0I64 else 0.0
+  return x
+
+fn decide(p: Policy$@, dist_mm: I64, line: I64, compute: Arena$@): Drive //<
+  //< Decides the next manoeuvre from an observation
+  //<
+  //< compute is the working arena the caller resets. **On a tie the lower number wins**
+  //< (`sampler.argmax`, like the producer's argmax): with nothing measured and no line all logits
+  //< are 0, and number 0 is "stop".
+  x: = features(p, dist_mm, line, compute)
+  best: = Sz::sampler.argmax(p.mlp.forward(x))
+  // The manoeuvre table holds small integers as F32, so truncation recovers them exactly.
+  row: = best * drive_fields
+  return Drive::{ .lon = I32::p.maneuvers[row], .lat = I32::p.maneuvers[row + 1],
+    .rot = I32::p.maneuvers[row + 2] }

@@ -1,0 +1,789 @@
+import "std/chars"
+import "std/checked_int" + { Ci32, Cu32 as My_cu32, Checked_error }
+import "std/ds" + { Map }
+import "std/io"
+import "std/math" { pi as math_pi, sqrt as math_sqrt }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// std/lang: null safety through Option<|T|>. Presence is in the type, and the value is reached
+// only through a switch whose exhaustiveness check forces the absent case.
+// ==========================================
+priv fn option_lookup(key: I32): Option<|I32|>
+  // Returns a value only where key == 1, and "absent" otherwise.
+  if key == 1
+    return Option<|I32|>.some(42)
+  return Option<|I32|>.none
+
+priv fn option_unwrap_or(key: I32, alt: I32): I32
+  switch option_lookup(key) case .some(v)
+    return v
+  case .none
+    return alt
+
+fn test_option_null_safety()
+  verdict.start("[Option] null safety through a generic enum (a switch forced) test...")
+
+  assert(option_unwrap_or(1, -1) == 42, "some(42) must yield the contained value")
+  assert(option_unwrap_or(9, -1) == -1, "none must force the fallback path")
+
+  // The monomorphization at another type argument (Option<|Bool|>) works independently too.
+  ob: = Option<|Bool|>.some(true)
+  $got: = false
+  switch ob case .some(b)
+    got = b
+  case .none
+    got = false
+  assert(got, "Option<|Bool|>.some(true) must extract true via switch")
+
+  verdict
+    .pass("the presence of a value is expressed by the type and taken out with a switch alone \
+      (handling none forced).")
+// ==========================================
+// std/lang: Option<|T|>'s combinator methods
+// (is_some/is_none/unwrap_or/unwrap_or_else/map/and_then), each a thin wrapper over a switch,
+// including a chain directly on a temporary.
+// ==========================================
+fn double_i32(x: I32): I32
+  return x * 2
+
+fn half_if_even(x: I32): Option<|I32|>
+  if x % 2 == 0
+    return Option<|I32|>.some(x / 2)
+  return Option<|I32|>.none
+
+fn neg_one(): I32
+  return -1
+
+fn test_option_combinators()
+  verdict
+    .start("[Option] the combinator methods (is_some/unwrap_or/map/and_then and so on) test...")
+
+  some_val: = Option<|I32|>.some(21)
+  none_val: = Option<|I32|>.none
+
+  assert(some_val.is_some(), "some(21).is_some() must be true")
+  assert(!some_val.is_none(), "some(21).is_none() must be false")
+  assert(!none_val.is_some(), "none.is_some() must be false")
+  assert(none_val.is_none(), "none.is_none() must be true")
+
+  assert(some_val.unwrap_or(99) == 21, "some(21).unwrap_or(99) must yield 21")
+  assert(none_val.unwrap_or(99) == 99, "none.unwrap_or(99) must yield 99")
+  none_fallback: = none_val.unwrap_or_else(neg_one)
+  assert(none_fallback == -1, "none.unwrap_or_else(neg_one) must call neg_one and yield -1")
+
+  doubled: = map<|I32, I32|>(some_val, double_i32)
+  assert(doubled.unwrap_or(0) == 42, "some(21).map(double_i32) must yield some(42)")
+
+  halved: = and_then<|I32, I32|>(doubled, half_if_even)
+  halved_val: = halved.unwrap_or(0)
+  assert(halved_val == 21, "42.and_then(half_if_even) must yield some(21) since 42 is even")
+
+  // The chain works directly on the producing expression.
+  chained: = map<|I32, I32|>(Option<|I32|>.some(7), double_i32).unwrap_or(0)
+  assert(chained == 14, "chaining directly on a temporary Option must work")
+
+  verdict.pass("an Option can be composed and taken out without using a switch.")
+// ==========================================
+// std/lang: Range (a value type with .len / .get) as what for-in loops over, covering the C-style
+// ascending and descending loops.
+// ==========================================
+fn test_range_loop()
+  verdict.start("[Range] the C-style forward / backward / step loops through for-in test...")
+
+  $fwd_sum: Sz = 0
+  $fwd_count: Sz = 0
+  for i in Range.asc(5)
+    fwd_sum += i
+    fwd_count += 1
+  assert(fwd_count == 5, "asc(5) must yield exactly 5 elements")
+  assert(fwd_sum == 0 + 1 + 2 + 3 + 4, "asc(5) must yield 0..4 in order")
+
+  $rev_first: Sz = -1
+  $rev_last: Sz = -1
+  $rev_count: Sz = 0
+  for i in Range.desc(5)
+    if rev_count == 0
+      rev_first = i
+    rev_last = i
+    rev_count += 1
+  assert(rev_count == 5, "desc(5) must yield exactly 5 elements")
+  assert(rev_first == 4, "desc(5) must start at 4")
+  assert(rev_last == 0, "desc(5) must end at 0")
+
+  $step_sum: Sz = 0
+  $step_count: Sz = 0
+  for i in Range.new(2, 10, 3)
+    step_sum += i
+    step_count += 1
+  assert(step_count == 3, "step(2,10,3) must yield 3 elements (2,5,8)")
+  assert(step_sum == 2 + 5 + 8, "step(2,10,3) must yield 2,5,8")
+
+  $neg_step_count: I32 = 0
+  for _i in Range.new(10, 2, -3)
+    neg_step_count += 1
+  assert(neg_step_count == 3, "step(10,2,-3) must yield 3 elements (10,7,4)")
+
+  $empty_count: I32 = 0
+  for _i in Range.asc(0)
+    empty_count += 1
+  assert(empty_count == 0, "asc(0) must be empty")
+
+  verdict
+    .pass("the C-style loop equivalents can be written concisely with for-in (forward / backward / \
+      step / an empty range).")
+
+fn test_checked_int()
+  verdict.start("[Checked_int] the Swift-style overflow-detecting integer types test...")
+
+  // I8: an addition with no overflow through the ordinary operator (`+`)
+  sum8: = checked_int.Ci8.new(10) + checked_int.Ci8.new(20)
+  assert(sum8.val == 30, "Ci8: 10 + 20 must equal 30 via operator sugar")
+
+  // I8: checked_add throws a Checked_error on overflow, and catch can continue
+  $i8_caught: = false
+  _bad8: =
+    checked_int.Ci8.new(100).checked_add(checked_int.Ci8.new(50)) catch
+    i8_caught = true
+    fallback checked_int.Ci8.new(0)
+  assert(i8_caught, "Ci8: 100 + 50 must overflow I8 range and be catchable")
+
+  // U8: an unsigned subtraction's underflow is detected as a Checked_error too
+  $u8_caught: = false
+  _bad_u8: =
+    checked_int.Cu8.new(5).checked_sub(checked_int.Cu8.new(10)) catch
+    u8_caught = true
+    fallback checked_int.Cu8.new(0)
+  assert(u8_caught, "Cu8: 5 - 10 must underflow and be catchable")
+
+  // I32: a multiplication overflow (100000 * 100000 exceeds I32's range)
+  $i32_caught: = false
+  _bad32: =
+    checked_int.Ci32.new(100000).checked_mul(checked_int.Ci32.new(100000)) catch
+    i32_caught = true
+    fallback checked_int.Ci32.new(0)
+  assert(i32_caught, "Ci32: 100000 * 100000 must overflow I32 range")
+
+  // I32: a unary minus on I32::MIN overflows (the sign cannot be flipped)
+  $neg_caught: = false
+  _bad_neg: = checked_int.Ci32.new(-2147483647 - 1).checked_neg() catch
+    neg_caught = true
+    fallback checked_int.Ci32.new(0)
+  assert(neg_caught, "Ci32: negating I32::MIN must overflow")
+
+  // I32: division by zero is detected as div_by_zero
+  $div_caught: = false
+  _bad_div: =
+    checked_int.Ci32.new(5).checked_div(checked_int.Ci32.new(0)) catch
+    div_caught = true
+    fallback checked_int.Ci32.new(0)
+  assert(div_caught, "Ci32: division by zero must be catchable")
+
+  // I64/U64: the path that compares against the boundary values (there is no 128-bit width)
+  $i64_caught: = false
+  _bad64: =
+    checked_int.Ci64.new(4000000000).checked_mul(checked_int.Ci64.new(4000000000)) catch
+    i64_caught = true
+    fallback checked_int.Ci64.new(0)
+  assert(i64_caught, "Ci64: 4e9 * 4e9 must overflow I64 range")
+
+  sum64: =
+    checked_int.Ci64.new(1000000000000).checked_add(checked_int.Ci64.new(1)) catch panic("Ci64: \
+      this addition must not overflow")
+  assert(sum64.val == 1000000000001, "Ci64: non-overflowing add must compute exactly")
+
+  $u64_caught: = false
+  _bad_u64: =
+    checked_int.Cu64.new(18446744073709551615).checked_add(checked_int.Cu64.new(1)) catch
+    u64_caught = true
+    fallback checked_int.Cu64.new(0)
+  assert(u64_caught, "Cu64: U64::MAX + 1 must overflow")
+
+  // U32: a subtraction with no overflow through the ordinary operator (`-`)
+  diff32: = checked_int.Cu32.new(100) - checked_int.Cu32.new(30)
+  assert(diff32.val == 70, "Cu32: 100 - 30 must equal 70 via operator sugar")
+
+  // The native integer types implement operator.Cast, so `Dest::src` builds a Ci* / Cu* (sugar
+  // for Ci32.new(v); see ksplc/sema/body/postfix.kspls), from a literal, a variable and an
+  // expression.
+  cast_lit: = checked_int.Ci32::123
+  assert(cast_lit.val == 123, "Ci32::123 (literal receiver) must produce val=123")
+
+  src_i32: I32 = 7
+  cast_var: = checked_int.Ci32::src_i32
+  assert(cast_var.val == 7, "Ci32::src_i32 (variable receiver) must produce val=7")
+
+  cast_expr: = checked_int.Cu8::(200U8 - 50U8)
+  assert(cast_expr.val == 150, "Cu8::(expr) (non-lvalue receiver) must produce val=150")
+
+  verdict
+    .pass("the Checked_* types detect the overflow of addition, subtraction, multiplication, \
+      division and the unary minus correctly, and work through the operators and through the prefix \
+      cast notation (operator.Cast) alike.")
+
+// The selective import `import "path" { A, B as C };` (dropping the namespace, renaming).
+// A `typedef` taken by a selective import can be written as a type. **That this declaration
+// compiles at all is the check.**
+priv fn _uses_selective_alias(_h: Panic_hook) {}
+
+fn test_selective_import()
+  verdict.start("[Import] the selective import (namespace-free, renaming) test...")
+
+  // Built with the bare Ci32 and passed to a function taking checked_int.Ci32: the same type.
+  bare: = Ci32.new(41)
+  qualified: checked_int.Ci32 = bare + checked_int.Ci32.new(1)
+  assert(qualified.val == 42, "Ci32 (namespace-free) must be the same type as checked_int.Ci32")
+
+  // It works the same through the renaming (`as`) too.
+  renamed: My_cu32 = My_cu32.new(100) - My_cu32.new(58)
+  assert(renamed.val == 42, "the renaming import Cu32 as My_cu32 must work correctly")
+
+  // Caution: **Kinds other than a type must resolve too.** If one kind does not, the import line
+  // passes yet the use fails with `undefined path or identifier` (Principle 5 of docs/DESIGN.md).
+  root: = math_sqrt(16.0)
+  assert(root > 3.99 && root < 4.01,
+    "a selectively imported function (with a renaming) must be callable")
+  assert(math_pi > 3.14 && math_pi < 3.15, "a selectively imported constant must be readable")
+
+  // An enum must resolve not only the type name but a variant reference (`Type.variant`) too.
+  kind: = Checked_error.div_by_zero
+  assert(kind == Checked_error.div_by_zero,
+    "a selectively imported enum's variant must resolve with `Type.variant`")
+
+  // **A generic must resolve to the same instance as the prefixed one too.** A slice's default
+  // immutability is not in the spelling (`U8[]` is `U8 immut[]`); as a different instance, `U8[]`
+  // is rejected as "not implementing" `Hashable<|U8[]|>`.
+  $tbl: = Map<|U8[], I32|>.new()
+  defer tbl.free()
+  tbl.set("answer", 42)
+  looked_up: = tbl.get("answer") catch 0
+  assert(looked_up == 42,
+    "handing a slice type argument to a selectively imported generic must give the same instance as \
+      the prefixed one")
+  qualified_tbl: ds.Map<|U8[], I32|>$@ = tbl@
+  assert(qualified_tbl.len == 1, "the namespace-free Map and ds.Map must be the same type")
+
+  // An alias is checked by the argument type of `_uses_alias` below.
+
+  verdict
+    .pass("the selective import takes effect for a type, a function, a constant, an enum's variant \
+      and an alias alike, and lives together with a renaming and an ordinary alias.")
+
+fn first_or<|T|>(v: T, has: Bool): Option<|T|> //<
+  //< A free generic function whose return type builds another generic from its own T
+  //<
+  //< It is a free function, not an impl method, and its return type is Option<|T|>.
+  //< The return type is resolved in collect.kspls's registration while T is still unbound; T must
+  //< not be taken for a real type (an unsubstituted "T" in the C), called or not.
+  if has
+    return Option<|T|>.some(v)
+  return Option<|T|>.none
+
+fn test_generic_fn_returning_own_type_param()
+  verdict
+    .start("[Generics] a free function returning another generic built from its own type parameter \
+      test...")
+  switch first_or(42, true) case .some(v)
+    assert(v == 42, "first_or(42, true) must yield some(42)")
+  case .none
+    assert(false, "first_or(42, true) must not yield none")
+  if _v: = first_or(42, false)
+    assert(false, "first_or(42, false) must not yield some")
+  verdict
+    .pass("the generic monomorphization of a free function returning Option<|T|> works correctly.")
+
+fn pick_second<|T|>(_flag: Bool, v: T): T //<
+  //< The type inference of a call whose T-declaring parameter is the second or later
+  //<
+  //< The inference looks through the parameters for the one declaring T
+  //< (extract_inferred_generic_arg in sema/body/call.kspls); if it took the first one,
+  //< `pick(true, 42)` would bind T = Bool.
+  return v
+
+struct Pick_box
+  tag: I32
+
+impl Pick_box
+  fn pick_method<|T|>(_r: Self$@, _flag: Bool, v: T): T
+    return v
+
+priv fn take_two<|A, B|>(a: A, _b: B): A //<
+  //< A call with two generic type variables, both appearing as "a parameter's declared type itself"
+  //<
+  //< One must not be inferred with the rest left unbound; if the first argument filled them all,
+  //< the second would fail with "expected 'T', but got …".
+  return a
+
+fn test_two_generic_params_inferred()
+  verdict.start("[Generics] the type inference of a call with two type variables test...")
+  n: = take_two(42, true)
+  assert(n == 42, "take_two(42, true) must infer A=I32 and B=Bool")
+  f: = take_two(1.5F64, "s")
+  assert(f > 1.4F64 && f < 1.6F64, "take_two(1.5, \"s\") must infer A=F64 and B=U8[]")
+  verdict.pass("")
+
+fn test_interp_keeps_concrete_writer() //<
+  //< It checks the writer's **concrete type** stays in the chain across an interpolation
+  //<
+  //< Caution: **Write it up to `.slice()` in one expression** — split into two statements it
+  //< passes green even with the return value collapsed to `Writer`. **Test a string starting
+  //< with `\{…\}` too.** It is the only shape where the chain starts at the receiver itself, and a
+  //< Str_builder passed by value is a copy.
+  verdict.start("[fmt] a chain with an interpolation in between keeps the concrete type test...")
+  n: = 7
+  $b: = Str_builder.new()
+  defer b.free()
+  head: = b.s("n=\{n\}").slice()
+  assert(head.equals("n=7"),
+    "`.slice()` can be continued from a chain of interpolation starting with a literal")
+  lead: = b.clear().s("\{n\}<").slice()
+  assert(lead.equals("7<"),
+    "the builder's length advances even for a string starting with an interpolation")
+  $v: = Str_builder.new()
+  defer v.free()
+  two: = v.s("\{n\}\{n\}").slice()
+  assert(two.equals("77"), "a string of interpolation alone")
+  verdict.pass("")
+
+fn test_generic_param_not_first_arg()
+  verdict.start("[Generics] the type inference of a call whose T is not the first argument test...")
+  r: = pick_second(true, 42)
+  assert(r == 42, "pick_second(true, 42) must infer T=I32 and return 42")
+
+  $b: = Pick_box::{ .tag = 1 }
+  rm: = b.pick_method(true, 77)
+  assert(rm == 77, "Pick_box.pick_method(true, 77) must infer T=I32 and return 77")
+  verdict
+    .pass("T is inferred from the right actual argument even where the parameter declaring it is \
+      not the first.")
+
+// The method table and the trait conformance attach even where the instantiation (at the type
+// annotation) comes before that type's generic impl.
+// Caution: Keep the two declarations below **before** the impl block. Reordered, they test nothing.
+priv early_bag: Order_bag<|I32|> = ::{ .slot = 7 }
+
+priv fn peek_early(b: Order_bag<|I32|>@): I32
+  return b.peek()
+
+struct Order_bag<|T|>
+  slot: T
+
+impl<|T|> Order_bag<|T|>
+  fn peek(r: Self@): T
+    return r.slot
+
+impl<|T|> Order_bag<|T|>: Index<|Sz, T|>
+  fn get(r: Self@, _i: Sz): T
+    return r.slot
+
+struct Numbered //< a value answering `x[i]` with a copy
+  base: I32
+
+impl Numbered: Index<|Sz, I32|>
+  fn get(r: Self@, i: Sz): I32
+    return r.base + I32::i
+
+priv fn numbered(base: I32): Numbered //<
+  //< a fresh value, so `numbered(40)[2]` indexes a call's result
+  return Numbered::{ .base = base }
+
+fn test_index_on_a_call_result() //< `f()[i]` reads through a receiver held in a slot
+  verdict.start("[Index] indexing the value a call returns test...")
+  // **The receiver has no address.** `get` takes `Self@`, so a call's result goes into a
+  // slot first; without it the C is `&f()`, which the C compiler rejects (`sys.args()[1]`).
+  assert(numbered(40)[2] == 42, "a call's result is indexed through its own get")
+  verdict.pass("f()[i] reads through a get that takes its receiver by pointer.")
+
+fn test_instantiation_before_generic_impl()
+  verdict.start("[Generics] a type instantiated before its generic impl test...")
+  peeked: = peek_early(early_bag@)
+  assert(peeked == 7,
+    "a method from a later impl block must be available on an earlier instantiation")
+  assert(early_bag[0] == 7, "an trait impl registered later must be applied too")
+  verdict
+    .pass("the method table and the trait conformance attach even where the instantiation precedes \
+      the impl's registration.")
+// ==========================================
+// The two axes of immutability (the binding `$p` and the target `T$@`) are independent: an
+// unmarked `p: T$@` is only "not rebound", and the target stays writable (else an `impl`'s
+// receiver could not be left unmarked).
+// ==========================================
+priv struct Imm_axes
+  f: I32
+
+// `r: Self$@` — the receiver is not rebound (unmarked) while the target's field is rewritten.
+impl Imm_axes
+  priv fn bump(r: Self$@)
+    r.f += 1
+
+fn test_immutability_axes_are_independent()
+  verdict
+    .start("[Immut] the binding's immutability and the target's immutability are independent \
+      test...")
+
+  $v: Imm_axes = ::{ .f = 10 }
+  // (1) that a field is writable through `p: T$@` (an unmarked binding)
+  p: Imm_axes$@ = v@
+  p.f = 20
+  assert(v.f == 20, "write through an immutable binding of T$@ must reach the pointee")
+
+  // (2) that it is writable with a dereference `$` on the same binding too (a scalar)
+  $x: I32 = 1
+  xp: I32$@ = x@
+  xp$ = 99
+  assert(x == 99, "write through xp: I32$@ with $ must reach the pointee")
+
+  // (3) that a method taking `r: Self$@` can update the target
+  v.bump()
+  assert(v.f == 21, "method with an r: Self$@ receiver must be able to mutate the pointee")
+
+  // (4) for comparison: a slice keeps the two axes independent the same way
+  arr: I32[2] = ::{}
+  s: = I32$[]::arr
+  s[0] = 7
+  assert(arr[0] == 7, "write to an element via s: I32$[] must reach the array")
+
+  verdict
+    .pass("a binding's $ permits rebinding alone, and the target's mutability is decided by the \
+      type (T@ / T$@).")
+
+// ==========================================
+// A subexpression is evaluated once even where genc **writes it twice**, seen through a counting
+// function; tests/prog/equiv.kspls checks the **order**.
+// ==========================================
+$index_recv_calls: I32 = 0
+$index_recv_src: I32[3] = ::{ 10, 20, 30 }
+
+priv fn counted_slice(): I32$[]
+  index_recv_calls += 1
+  return I32$[]::index_recv_src
+
+priv fn counted_writer(): Writer
+  index_recv_calls += 1
+  return io.out()
+
+fn test_subexpressions_are_evaluated_once()
+  verdict.start("[Eval] a subexpression written out twice is evaluated exactly once test...")
+
+  // (1) a slice's subscript — reading
+  index_recv_calls = 0
+  v: = counted_slice()[1]
+  assert(v == 20, "indexing a returned slice must read the right element")
+  assert(index_recv_calls == 1, "the receiver of a read index must be evaluated exactly once")
+
+  // (2) a slice's subscript — writing
+  index_recv_calls = 0
+  counted_slice()[2] = 99
+  assert(index_recv_src[2] == 99, "writing through a returned slice must reach the array")
+  assert(index_recv_calls == 1, "the receiver of a write index must be evaluated exactly once")
+
+  // (3) the receiver of a trait (vtable) call. The string is empty, so nothing is printed.
+  index_recv_calls = 0
+  counted_writer().s("")
+  assert(index_recv_calls == 1, "the receiver of an trait method call must be evaluated once")
+
+  // (4) a compound assignment into a subscripted destination (read and written)
+  index_recv_calls = 0
+  index_recv_src[0] = 5
+  counted_slice()[0] += 7
+  assert(index_recv_src[0] == 12, "a compound assignment through a returned slice must apply once")
+  assert(index_recv_calls == 1, "the destination of a compound assignment must be evaluated once")
+
+  verdict
+    .pass("a subexpression the same expression comes out twice for (a subscript's receiver, a \
+      trait's receiver, a compound assignment's destination) is evaluated once only.")
+// ==========================================
+// Taking a view (`List.sub` / `List.sub_from` / `str.sub` / `str.sub_mut`).
+// **One place holds the clamping (`sub_count`).** A hand-built descriptor
+// (`T$[]::{ .ptr = xs.ptr + s, .len = xs.len - s }`) gives length −1 on an empty List, and code
+// that trusts `len` runs on without end.
+// ==========================================
+fn test_slice_views(arena: Arena$@)
+  verdict.start("[view] List.sub / str.sub's boundaries test...")
+
+  xs: = ds.List<|Sz|>.create(arena)
+  for i in Range.asc(5)
+    xs.push(i * 10)
+
+  // A straightforward range.
+  mid: = xs.sub(1, 3)
+  assert(mid.len == 3, "sub(1, 3) must yield 3 elements")
+  assert(mid[0] == 10 && mid[2] == 30, "sub must start at the requested index")
+
+  tail: = xs.sub_from(2)
+  assert(tail.len == 3, "sub_from(2) must yield the rest")
+  assert(tail[0] == 20, "sub_from must start at the requested index")
+
+  // The length is clamped to the remainder (a check by addition wraps and lets it through).
+  assert(xs.sub(3, 99).len == 2, "sub must clamp the length to what remains")
+  assert(xs.sub(0, 5).len == 5, "sub must allow exactly the whole range")
+
+  // Out of range and negative are empty.
+  assert(xs.sub(5, 1).len == 0, "sub past the end must be empty")
+  assert(xs.sub(-1, 3).len == 0, "sub with a negative start must be empty")
+  assert(xs.sub(1, -3).len == 0, "sub with a negative length must be empty")
+  assert(xs.sub_from(5).len == 0, "sub_from at the end must be empty")
+  assert(xs.sub_from(-1).len == 0, "sub_from with a negative start must be empty")
+
+  // An empty List: the −1 case.
+  empty: = ds.List<|Sz|>.create(arena)
+  assert(empty.sub_from(1).len == 0, "sub_from on an empty list must be empty")
+  assert(empty.sub(0, 1).len == 0, "sub on an empty list must be empty")
+
+  // A view is borrowed, so writing reaches the original (the same promise as `slice`).
+  $w: = xs.sub(1, 2)
+  w[0] = 111
+  assert(xs[1] == 111, "writing through a sub view must reach the list")
+
+  // The same rule applies to U8[] too (`sub_count` is shared).
+  s: U8[] = "abcdef"
+  assert(s.sub(2, 3).equals("cde"), "str.sub must yield the requested range")
+  assert(s.sub(4, 99).equals("ef"), "str.sub must clamp the length")
+  assert(s.sub(6, 1).len == 0, "str.sub past the end must be empty")
+  assert(s.sub(-1, 2).len == 0, "str.sub with a negative start must be empty")
+  assert(s.sub(1, -2).len == 0, "str.sub with a negative length must be empty")
+
+  verdict
+    .pass("out of range, a negative start and a negative len come out empty, and no view of \
+      negative length is built.")
+priv fn one_default(a: I32, b: I32 = 2): I32 //< the set of functions holding default values
+  //<
+  //< Caution: **Do not list functions that are only declared** — here each one is checked by value.
+  return a * 10 + b
+
+priv fn all_default(a: I32 = 5): I32
+  return a * 100
+
+priv fn two_defaults(a: I32, b: I32 = 2, c: I32 = 3): I32
+  return a * 100 + b * 10 + c
+
+priv fn null_default(p: Void$@ = null): Bool
+  return p == null
+
+priv fn str_default(s: U8[] = "none"): Sz
+  return s.len
+
+priv struct Counter
+  n: I32
+
+impl Counter
+  priv fn bump(r: Self$@, by: I32 = 1): I32
+    r.n += by
+    return r.n
+
+// ==========================================
+// Default arguments (only a foldable constant).
+// ==========================================
+
+fn test_default_args() //<
+  //< It checks default arguments, both omitted and written
+  //<
+  //< Caution: **Test both omitted and written arguments.** Omitted ones alone pass where the
+  //< default is "always used" and a written value is silently dropped. **Test omitting only some
+  //< too**: a wrong filling order swaps the values.
+  verdict.start("[Lang] default arguments test...")
+
+  assert(one_default(1) == 12, "the default value goes into the omitted argument")
+  assert(one_default(1, 9) == 19, "a written argument beats the default value")
+  assert(all_default() == 500, "it calls with everything omitted")
+  assert(all_default(7) == 700, "writing into a function that can omit everything passes too")
+  assert(two_defaults(1) == 123, "omitting two fills in the declaration's order")
+  assert(two_defaults(1, 4) == 143, "omitting the end alone fills the last parameter")
+  assert(two_defaults(1, 4, 5) == 145, "the shape writing everything passes too")
+  assert(null_default(), "null can be written as a default value too")
+  assert(str_default() == 4, "a string literal can be written as a default value too")
+  assert(str_default("abcdef") == 6, "the side writing a string passes too")
+
+  // On a method too: the arguments shift by the receiver, a separate path.
+  $c: Counter = ::{ .n = 0 }
+  first: = c.bump()
+  second: = c.bump(10)
+  assert(first == 1, "a method's default value goes in")
+  assert(second == 11, "a value written to a method wins")
+
+  verdict
+    .pass("an omitted argument is filled with the declaration's default value, and a written value \
+      beats it.")
+
+priv struct Off_padded //< the types used in `offsetof`'s check
+  //<
+  //< They cover all three: the alignment's padding, `#packed` and nesting.
+  a: U8
+  b: I64
+  c: U8
+
+#packed
+priv struct Off_packed
+  a: U8
+  b: I64
+
+priv struct Off_nested
+  h: U8
+  inner: Off_padded
+
+// It folds in a constant's context too.
+// Caution: **Do not leave this out.** The C passes it to C's `offsetof`, but a constant's
+// initializer and `--target=llvm` use ksplc's fold: two paths.
+priv const off_table: Sz[3] = ::{
+  offsetof(Off_padded, a),
+  offsetof(Off_padded, b),
+  offsetof(Off_padded, c),
+}
+
+fn test_offsetof()
+  verdict.start("[Lang] offsetof test...")
+
+  // A position not obtainable by accumulating the sizes (`a` is one byte yet `b` starts at 8).
+  assert(offsetof(Off_padded, a) == 0, "the leading field is 0")
+  assert(offsetof(Off_padded, b) == 8, "the position across the alignment's padding comes out")
+  assert(offsetof(Off_padded, c) == 16, "behind the padding it keeps counting on")
+  assert(sizeof(Off_padded) == 24, "the whole size rounds the tail up too")
+
+  // `#packed` stops the padding, so there the offsets equal the accumulated sizes.
+  assert(offsetof(Off_packed, a) == 0, "the head is 0 under packed too")
+  assert(offsetof(Off_packed, b) == 1, "packed puts no padding in")
+
+  // Nesting inherits the inner type's alignment.
+  assert(offsetof(Off_nested, h) == 0, "before the nesting it is 0")
+  assert(offsetof(Off_nested, inner) == 8, "the nesting rounds up to the inner type's alignment")
+
+  first: = off_table[0]
+  second: = off_table[1]
+  third: = off_table[2]
+  assert(first == 0, "it folds in a constant's context too (the head)")
+  assert(second == 8, "it crosses the padding in a constant's context too")
+  assert(third == 16, "it keeps counting on in a constant's context too")
+
+  verdict.pass("the alignment's padding, #packed and nesting all answer the same position as C.")
+
+// A generic struct's instance is filled as the same non-generic struct is: its layout attributes
+// hold, and an array field's elements follow the binding (fill_struct_fields in
+// sema/decl/registry.kspls).
+#packed
+priv struct Off_packed_of<|T|>
+  a: U8
+  b: T
+
+#align(16)
+priv struct Aligned_of<|T|>
+  a: T
+
+priv struct Array_field_of<|T|>
+  items: T[2]
+
+fn test_generic_struct_fills_as_plain()
+  verdict
+    .start("[Generics] a generic struct's instance is laid out and written as a plain one test...")
+
+  // Named only in `sizeof` / `offsetof`, an instance stays in the output (is_alive_for_backend in
+  // lower/prune.kspls).
+  assert(offsetof(Off_packed_of<|I64|>, b) == 1, "#packed on a generic puts no padding in")
+  assert(sizeof(Off_packed_of<|I64|>) == 9, "#packed on a generic stops the tail padding too")
+  assert(sizeof(Aligned_of<|U8|>) == 16, "#align on a generic rounds the instance up")
+
+  $held: Array_field_of<|I32|> = ::{ .items = ::{ 1, 2 } }
+  held.items[1] = 7
+  assert(held.items[1] == 7, "a mutable binding writes an array field of a generic's instance")
+
+  verdict.pass("#packed, #align and an array field's elements take effect on a generic's instance.")
+
+priv fn const_arg_of<|const n: I32|>(): I32 //< the value its const type argument carries
+  return n
+
+priv const minus_three: I32 = -3
+
+fn test_negative_const_type_arg()
+  verdict.start("[Generics] a negative literal as a const type argument test...")
+  // A negated literal is a unary node, not a literal: read by its text alone, the argument is
+  // `-` and the instance returns `-;` (const_type_arg_value in sema/decl/resolve.kspls).
+  assert(const_arg_of<|-3|>() == -3, "a negative literal reaches the body as its value")
+  assert(const_arg_of<|minus_three|>() == -3, "a const of the same value gives the same instance")
+  assert(const_arg_of<|3|>() == 3, "a positive literal stays apart from the negative one")
+  verdict.pass("a negative literal passed as a const type argument carries its value.")
+
+// ==========================================
+// A non-returning call (`#noreturn`) can be placed as `catch`'s alternative value.
+// **Test the case that does not stop**; the case that stops panics (the rejected shape is
+// `tests/negative/noreturn_outside_fallback.kspls`).
+// ==========================================
+priv enum Nr_error
+  bad
+
+priv fn nr_probe(ok: Bool): I32?Nr_error
+  if !ok
+    throw Nr_error.bad
+  return 7
+
+priv fn nr_via_fallback(ok: Bool): I32
+  v: = nr_probe(ok) catch _e
+    fallback panic("it passes in the fallback statement too")
+  return v
+
+fn test_noreturn_as_catch_value()
+  verdict.start("[Lang] placing a non-returning call as catch's alternative value test...")
+  a: = nr_probe(true) catch panic("it passes in the expression form too")
+  assert(a == 7,
+    "writing a panic into catch's expression form still lets a successful value out as it is")
+  assert(nr_via_fallback(true) == 7, "the same in the fallback statement")
+  verdict.pass("a `#noreturn` call passes as catch's alternative value.")
+
+priv fn bind_probe(n: I32): Option<|I32|> //<
+  //< `if name: = expr { … }` binds an Option ("Branching" in `../../docs/SPEC-language.md`)
+  //<
+  //< Caution: **Check that the body is skipped when the binding fails**, or a non-empty `.none`
+  //< branch passes. **Check that `else` means "when there was none" too.**
+  return Option<|I32|>.some(n * 2) if n > 0 else Option<|I32|>.none
+
+fn test_if_binds_option()
+  verdict.start("[Lang] if binds an Option test...")
+  $got: I32 = 0
+  if v: = bind_probe(7)
+    got += v
+  assert(got == 14, "with a value there it binds and goes inside")
+  if _w: = bind_probe(-1)
+    got += 100
+  assert(got == 14, "with no value it does not go inside")
+  if x: = bind_probe(-1)
+    got += x
+  else
+    got += 1
+  assert(got == 15, "else is the branch for when there was none")
+  // **It expands to an ordinary switch** (the bound name exists only inside).
+  if y: = bind_probe(3)
+    if z: = bind_probe(y)
+      got += z
+  assert(got == 27, "the bindings do not mix even nested")
+  verdict.pass("`if name: = expr` binds an Option, and does nothing where there is none.")
+
+// ==========================================
+// A `for` with no condition that no `break` leaves never ends, so a function can end on it
+// ("Loops" in `../../docs/SPEC-language.md`). The shapes that still need a `return` after the loop
+// are in `tests/negative/endless_for_*.kspls`.
+// ==========================================
+priv fn first_square_above(n: I32): I32 //< the first i whose square exceeds n
+  $i: I32 = 0
+  for
+    if i * i > n
+      return i
+    i += 1
+
+priv fn rounds_until(n: I32): I32 //<
+  //< The same, with an inner loop's `break`, which leaves only the inner loop
+  $i: I32 = 0
+  $inner: I32 = 0
+  for
+    for
+      inner += 1
+      break
+    if i >= n
+      return i * 10 + inner
+    i += 1
+
+fn test_endless_for_ends_a_function()
+  verdict.start("[Lang] a function ending on a for that never ends test...")
+  assert(first_square_above(50) == 8, "8 * 8 = 64 is the first square above 50")
+  assert(first_square_above(-1) == 0, "the first round can already return")
+  assert(rounds_until(3) == 34, "the inner break leaves only the inner loop, once per round")
+  verdict.pass("a function may end on a `for` with no condition and no `break` leaving it.")

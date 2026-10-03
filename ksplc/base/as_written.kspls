@@ -1,0 +1,69 @@
+//< What the writer typed, kept for the places that show it back
+//<
+//< **The layout stage rewrites the text before anything reads it** (`../parse/layout.kspls`),
+//< so a diagnostic line taken from the rewritten text would show a `;` and a `}` nobody typed.
+//< This file keeps the text from before the rewrite, and whether it opened with a `#!` that the
+//< rewrite changed. The loader stores both; a diagnostic and the source checks read them back.
+import "ksplc/base/core" as base_core
+import "std/chars"
+import "std/ds" { List, Map }
+
+struct As_written //< the text the writer sees
+  //<
+  //< The rewrite inserts only at line ends, so a line number from the rewritten text fits here too.
+  //< Caution: **Keep the line-start table with it**: recounting per lookup costs "count × size" on
+  //< a file with many findings (the head note of print_diagnostic in base/diag.kspls).
+  src: U8[]
+  starts: List<|Sz|>$@
+
+$as_written: Map<|U8[], As_written|>$@ = null
+
+fn remember_as_written(file: U8[], src: U8[]) //< it stores the text from before the rewrite
+  //<
+  //< Caution: **Copy it to the arena before passing it in**: the caller frees the buffer it read.
+  if as_written == null
+    as_written = base_core.arena
+      .create(Map<|U8[], As_written|>.new_with_cap(16, base_core.arena))
+  as_written.set(base_core.arena.dup_str(file),
+    As_written::{ .src = src, .starts = src.line_starts(base_core.arena) })
+
+$shebangs: Map<|U8[], Bool|>$@ = null //< the files whose leading `#!` was rewritten to `//`
+
+fn remember_shebang(file: U8[]) //< it remembers that `file` opened with a `#!`, rewritten to `//`
+  //<
+  //< **The rewrite keeps the length but loses the spelling** (`mask_shebang` in
+  //< `parse/source_fix.kspls`): followed by its path, the `#!` reads as a `///` nobody typed, so
+  //< the check asks here what the writer really put there (`[W0212]`).
+  if shebangs == null
+    shebangs = base_core.arena
+      .create(Map<|U8[], Bool|>.new_with_cap(4, base_core.arena))
+  shebangs.set(base_core.arena.dup_str(file), true)
+
+fn opened_with_shebang(file: U8[]): Bool //< whether `file`'s leading `//` was written `#!`
+  if shebangs == null
+    return false
+  return shebangs.get(file) catch false
+
+fn forget_as_written() //< it forgets what it stored about the files as written
+  //<
+  //< Caution: **Pair it with the arena's rewind.** The map is a global but its contents live on the
+  //< arena, so a rewind alone leaves a dangling pointer and the next store crashes in `Map.set`,
+  //< far from here. Nothing is lost: the next request rebuilds the memo.
+  as_written = null
+  shebangs = null
+
+fn as_written_line(file: U8[], line: Sz): U8[] //<
+  //< Line `line` (1-based) of the text from before the rewrite
+  //<
+  //< It returns an empty string where nothing is stored.
+  if as_written == null || line < 1
+    return ""
+  e: = as_written.get(file) catch
+    return ""
+  if line > e.starts.len
+    return ""
+  start: = e.starts.get(line - 1)
+  $end: = start
+  for end < e.src.len && e.src[end] != '\n' && e.src[end] != '\r'
+    end += 1
+  return e.src.sub(start, end - start)

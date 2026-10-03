@@ -1,0 +1,70 @@
+//< WS2812 ×8 (stage 10 in ksos/docs/HOWTO-bring-up.md)
+//<
+//< **The check is "does the colour seen by eye match the sequence".** In order: 1. all eight red →
+//< green → blue … whether all three colours land on the right bits; 2. one white, the rest off,
+//< walking … whether the boundary between LEDs (every 24 bits) is right
+
+// ==========================================
+//   3. all off … whether it returns to Low (the latch)
+// ==========================================
+import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/demo/rp2040/common/bringup" as boot
+import "ksos/demo/rp2040/common/console" as con
+import "ksos/drivers/rp2040/ws2812"
+
+const step_ms: U32 = 1000 //< how long one step is shown [ms]
+  //<
+  //< Make it long enough for the eye to follow (too fast and it ends at "I think it lit").
+
+priv $ready: Bool = false
+$px: U32[board.ws2812_count] = ::{}
+
+fn init(): Bool //< starts it
+  //<
+  //< false means the data line's PWM could not be set up.
+  ready = ws2812.init(board.ws2812_pin)
+  return ready
+
+priv fn dim(r: Bool, g: Bool, b: Bool): U32 //< the colour to send
+  //<
+  //< **The brightness comes from the limit in board** (do not write 0xff here).
+  lv: = board.ws2812_level
+  $c: U32 = 0
+  if r
+    c |= lv << 16
+  if g
+    c |= lv << 8
+  if b
+    c |= lv
+  return c
+
+priv fn fill(c: U32) //< sets all eight LEDs to the same colour
+  v: = U32$[]::px
+  for $i: Sz = 0; i < v.len; i += 1
+    v[i] = c
+
+priv fn show(ln: con.Line$@, what: U8[], hold_ms: U32)
+  con.say(ln, "[led]", what)
+  _r: = ws2812.send(U32[]::px)
+  boot.pump(hold_ms)
+
+fn run(ln: con.Line$@)
+  if !ready
+    con.say(ln, "[led]", "FAILED to set up pwm for the data line")
+    return
+  fill(dim(true, false, false))
+  show(ln, "all red", step_ms)
+  fill(dim(false, true, false))
+  show(ln, "all green", step_ms)
+  fill(dim(false, false, true))
+  show(ln, "all blue", step_ms)
+
+  con.say(ln, "[led]", "one white, walking")
+  for $i: Sz = 0; i < px.len; i += 1
+    fill(0)
+    px[i] = dim(true, true, true)
+    _w: = ws2812.send(U32[]::px)
+    boot.pump(200)
+
+  fill(0)
+  show(ln, "all off", step_ms)

@@ -1,0 +1,201 @@
+//< The format of the line printed for each verdict (not the suite)
+//<
+//< **This file is the format's canonical source.**
+//< Caution: **A failure's mark must be `FAIL`.** `mk/ci.mk`'s summary picks up that form, so where
+//< a place writes it another way **the failed line does not reach the summary**.
+//< **When the format changes, this table changes**; the checks below then fail, naming the file to
+//< fix. The suites and a package's `test/` share the format (`std/verdict.kspls` builds it for
+//< both).
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/sys"
+import "std/verdict"
+import "tests/support/conventions_scan" as scan
+import "tests/support/harness"
+
+priv const mark_ok: U8[] = "pass" //< the pass mark
+  //<
+  //< The word is `pass` **rather than the pair `OK` / `NG`**: it is the same word as the `RESULT:
+  //< ALL PASS` summary, and all three marks are four letters long. **Only the passing mark is lower
+  //< case, so the lines that need attention form a block of capitals**; the word holds the meaning.
+  //< Caution: **`SKIP` is in capitals on purpose**: a skipped step needs attention as much as a
+  //< failed one (skipped silently, it looks like "all green").
+priv const mark_bad: U8[] = "FAIL"
+priv const mark_skip: U8[] = "SKIP"
+
+// Where a line is built, and the text each place must hold.
+// **One place per file** (this table itself keeps them from spreading).
+priv const line_files: U8[][6] = ::{ "tests/support/harness.py", "kspage/tests/browser/probe.js",
+  "kspage/tests/wasm/shell.mjs", "kspage/Makefile", "tools/kspl_lldb.py", "std/verdict.kspls" }
+
+priv const line_readers: U8[][2] = ::{ "mk/ci.mk", "tests/suite/pytools_test.kspls" } //<
+  //< Where a mark is **read**
+  //<
+  //< **Updating only the writers is not enough**: a reader waiting for an old mark fails, the day
+  //< the mark changes, with the false reason "not one ran".
+
+// Of those, the places that also have a failure path.
+// Caution: **A failure's mark must be `FAIL`** (the reason is in the header). `kspage/Makefile`
+// only prints the mark, so it is not listed here.
+priv const line_reporters: U8[][5] = ::{ "std/verdict.kspls", "tests/support/harness.py",
+  "kspage/tests/browser/probe.js", "kspage/tests/wasm/shell.mjs", "tools/kspl_lldb.py" }
+
+priv const line_shapes: U8[][2] = ::{ "\"pass ", "'pass " } //<
+  //< The forms that build a pass mark, allowed only in the table above
+  //<
+  //< Caution: **Do not write this form inside a comment either**: the check reads the text, so a
+  //< quoted example is hit (describe it in words). **Search for the form right after a quote
+  //< mark**: the mark alone hits English words in prose and the forms in a per-gate list.
+
+priv const line_marks: U8[][3] = ::{ mark_ok, mark_bad, mark_skip } //<
+  //< The text every one of those places must hold
+
+priv const line_banned: U8[][5] = ::{ "\"NG ", "`NG ", "\"OK ", "'OK ", "`OK " } //<
+  //< The rejected marks
+  //<
+  //< Caution: **Do not bring back `NG` or `OK`.** `NG` is Japanese-made English that others do not
+  //< know, and `OK` does not pair with `FAIL`.
+
+priv fn check_one_place(arena: Arena$@) //<
+  //< The places building a mark are the ones in the table and no others
+  $seen: Sz = 0
+  $bad: = List<|U8[]|>.new(arena)
+  specs: = scan.kspl_specs_with(U8[][]::{ "*.py", "*.js", "*.mjs", "*.mk" }, arena)
+  for rel in harness.tracked_matching(specs)
+    seen += 1
+    if named_in(U8[][]::line_files, rel) || rel.equals(here)
+      continue
+    src: = harness.read_under_root(rel)
+    for shape in line_shapes
+      if src.find_str(shape) >= 0
+        bad.push(arena.text().s(rel).s(" builds a mark of its own").take())
+  verdict.check_list("the places building a per-verdict line are inside the table alone", seen,
+    "files", bad@, "only the places in `tests/support/conventions_line.kspls`'s table may build it")
+
+priv const here: U8[] = "tests/support/conventions_line.kspls"
+
+priv fn named_in(names: U8[][], want: U8[]): Bool
+  for n in names
+    if n.equals(want)
+      return true
+  return false
+
+priv fn check_marks(arena: Arena$@)
+  $seen: Sz = 0
+  $bad: = List<|U8[]|>.new(arena)
+  for rel in line_files
+    src: = harness.read_under_root(rel)
+    seen += 1
+    for m in line_marks
+      // **Each place holds different marks**: without a skip it writes no `SKIP`, without a
+      // failure path no `FAIL` (only `line_reporters` hold it). Only the passing mark is required
+      // of them all.
+      if m.equals(mark_skip) ||
+        (m.equals(mark_bad) && !named_in(U8[][]::line_reporters, rel))
+        continue
+      // Caution: **Search with the quote mark included.** A mention in a comment or in English
+      // satisfies the bare word (`pass` is also Python's statement), and **a place that forgot to
+      // fix its mark passes**.
+      if src.find_str(arena.text().c('"').s(m).take()) < 0 &&
+        src.find_str(arena.text().c('\'').s(m).take()) < 0
+        bad
+          .push(arena.text().s(rel).s(" does not hold \"").s(m).s("\"").take())
+    for b in line_banned
+      if src.find_str(b) >= 0
+        bad
+          .push(arena.text().s(rel).s(" has \"").s(b.sub_from(1)).s("\" left in it").take())
+  verdict.check_list("the marks line up across the building places", seen, "places", bad@,
+    "to change the shape, change `tests/support/conventions_line.kspls`'s table")
+
+priv fn check_tag_reaches(arena: Arena$@) //<
+  //< A per-verdict line in a run's log holds mark, label, contents, in that order
+  //<
+  //< **Reading the text without running is not enough**: where the code that passes the label
+  //< (`KANSO_SUITE` in `mk/test.mk`) is lost, lines come out with no label. This suite checks its
+  //< own line; `make ci` always passes the label.
+  told: = sys.get_env("KANSO_SUITE").unwrap_or("")
+  // Caution: **Do not fail on a run started directly** (there, a missing label is normal).
+  verdict.check("the label is handed over by the running side",
+    told.len == 0 || told.equals("conventions"),
+    arena.text().s("KANSO_SUITE=[").s(told).s("]").take())
+
+priv fn check_readers(arena: Arena$@) //<
+  //< the readers wait for the current marks
+  $seen: Sz = 0
+  $bad: = List<|U8[]|>.new(arena)
+  for rel in line_readers
+    src: = harness.read_under_root(rel)
+    seen += 1
+    // **Each reader waits for a different mark** (the summary for failed lines, the tools' check
+    // for passed ones), so each must wait for one current mark and write no rejected one.
+    if src.find_str(mark_bad) < 0 && src.find_str(mark_ok) < 0
+      bad
+        .push(arena.text().s(rel).s(" waits on not one of the marks as they now stand").take())
+    for b in line_banned
+      if src.find_str(b) >= 0
+        bad
+          .push(arena.text().s(rel).s(" writes the turned-away mark \"").s(b.sub_from(1)).s("\"")
+          .take())
+  verdict.check_list("the code reading a mark expects the marks as they now stand", seen, "places",
+    bad@, "to change a mark, update the reader too (the table is `conventions_line.kspls`)")
+
+// The places that must flush one line at a time, and their names.
+// **In a combined log, a split line cannot be repaired afterwards.** Buffering flushes at 4KB even
+// mid-line, so where `ci` combines suites into one pipe a split line merges with another suite's.
+// The probes are not listed (each environment runs only one at a time).
+priv const flush_files: U8[][3] = ::{ "std/verdict.kspls", "tests/support/harness.py",
+  "tests/debug/parts.kspls" }
+
+priv const flush_marks: U8[][2] = ::{ "set_line_buffered", "line_buffering" } //<
+  //< Either one is enough (in KSPL it is in `std/io`, in Python an argument of `reconfigure`)
+
+priv fn check_line_flush(arena: Arena$@)
+  $seen: Sz = 0
+  $bad: = List<|U8[]|>.new(arena)
+  for rel in flush_files
+    src: = harness.read_under_root(rel)
+    seen += 1
+    $told: = false
+    for m in flush_marks
+      if src.find_str(m) >= 0
+        told = true
+    if !told
+      bad
+        .push(arena.text().s(rel).s(" does not send out a line at a time").take())
+  verdict.check_list("a place putting a per-verdict line out sends it a line at a time", seen,
+    "places", bad@,
+    "buffering the whole parts a line in a bundled log (`set_line_buffered` / `line_buffering`)")
+
+priv const verdict_seen: Sz[4] = ::{ 800, 800, 0, 0 } //<
+  //< A walk's verdict stands only where it walked something
+  //<
+  //< **The count seen is not only shown on screen; it is judged.** A really empty subject still
+  //< walks files, so 0 means the reading broke, never "there was nothing to find".
+priv const verdict_bad: Sz[4] = ::{ 0, 3, 0, 3 }
+priv const verdict_want: Bool[4] = ::{ true, false, false, false } //<
+  //< The expected verdict for each sample
+  //<
+  //< In order: walked 800 and found nothing (passes) / found 3 (fails) / walked nothing (fails) /
+  //< walked nothing and found 3 (fails)
+
+priv fn check_verdict_fires(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  for i in Range.asc(verdict_seen.len)
+    got: = verdict.list_verdict(verdict_seen[i], verdict_bad[i])
+    if got != verdict_want[i]
+      bad
+        .push(arena.text().s("seen \{verdict_seen[i]\}, found \{verdict_bad[i]\}: read as ")
+        .s("passing" if got else "failing").s(" (it should ")
+        .s("pass" if verdict_want[i] else "fail").c(')').take())
+  verdict.check_list("a walk's verdict stands only where it walked something", verdict_seen.len,
+    "samples", bad@, "")
+
+fn run(arena: Arena$@)
+  check_verdict_fires(arena)
+  check_one_place(arena)
+  check_line_flush(arena)
+  check_readers(arena)
+  check_marks(arena)
+  check_tag_reaches(arena)

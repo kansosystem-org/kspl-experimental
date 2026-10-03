@@ -1,0 +1,172 @@
+import "std/verdict"
+
+// ==========================================
+// Checks that nothing depends on the order of declarations.
+// The type and place rules are in `lang_types_test.kspls`, and the syntax and basic types in
+// `lang_test.kspls`.
+// Caution: **Put a use before the declaration.** With only uses after it, it passes, helped by
+// Pass 3's order.
+// ==========================================
+// ==========================================
+// ==========================================
+priv $sz_before_decl: U8[sizeof(Sz_later)] = ::{}
+priv typedef Sz_alias_buf = U8[sizeof(Sz_later)]
+
+priv struct Sz_later
+  priv a: I64
+  priv b: I64
+  priv c: I64
+
+priv struct Sz_holder //< uses the size of a struct not yet laid out, from another struct's field
+  priv room: U8[sizeof(Sz_nested)]
+
+priv struct Sz_nested
+  priv inner: Sz_inner
+  priv tag: I32
+
+priv struct Sz_inner
+  priv x: I64
+  priv y: I64
+
+priv enum Sz_enum
+  none
+  some(p: Sz_inner)
+
+priv $sz_before_enum_decl: U8[sizeof(Sz_enum)] = ::{}
+
+priv fn sz_in_return_type(): U8[sizeof(Sz_later)]
+  return ::{}
+
+fn test_sizeof_does_not_depend_on_declaration_order()
+  verdict.start("[sizeof] a size resolves even before the declaration test...")
+
+  assert(sz_before_decl.len == sizeof(Sz_later),
+    "a top-level array length resolves before the declaration")
+  assert(sz_before_decl.len == 24, "three I64, so 24 bytes")
+  // Caution: Bind the return value and use an element too. `.len` of a fixed-length array
+  // folds, so `f().len` alone throws the call away ([W0102]) and C sees an unused variable
+  // (Principle 2).
+  $rb: = sz_in_return_type()
+  rb[23] = 5
+  assert(rb.len == 24 && rb[23] == 5, "it resolves in a function's return type too")
+  $ab: Sz_alias_buf = ::{}
+  ab[23] = 7
+  assert(ab.len == 24 && ab[23] == 7, "it resolves inside an alias too")
+  // Nested: Sz_holder needs Sz_nested, and Sz_nested needs Sz_inner.
+  assert(sizeof(Sz_inner) == 16, "the inner struct")
+  assert(sizeof(Sz_holder) == sizeof(Sz_nested), "the size taken from a field agrees")
+  assert(sizeof(Sz_holder) == 24, "16 + an I32 aligned to 8")
+  // An enum with a payload can be used before its declaration too.
+  assert(sz_before_enum_decl.len == sizeof(Sz_enum),
+    "an enum's size resolves before the declaration")
+  assert(sz_before_enum_decl.len > 16, "it holds both the tag and the payload")
+
+  verdict.pass("whatever the declarations' order, it fills when asked and answers the size.")
+
+// ==========================================
+// A top-level declaration can refer to a constant declared behind it.
+// Caution: **Test a chain too.** With one step alone, merely swapping the output order once
+// passes.
+// ==========================================
+priv $ord_buf: U8[ord_len] = ::{}
+priv const ord_len: Sz = ord_base * 2
+priv const ord_base: Sz = 3
+
+priv struct Ord_pair
+  x: I32
+  y: I32
+
+priv const ord_pair: Ord_pair = Ord_pair::{ .x = ord_x, .y = 2 }
+priv const ord_x: I32 = 9
+priv const ord_arr: I32[3] = ::{ ord_x, ord_x + 1, ord_x + 2 }
+priv $ord_mut: Sz = ord_base * 10
+
+priv fn ord_in_return_type(): U8[ord_len]
+  return ::{}
+
+fn test_declarations_may_reference_later_constants()
+  verdict.start("[order] a constant declared behind can be referred to test...")
+
+  assert(ord_len == 6 && ord_base == 3, "a chain of constants solves backwards")
+  assert(ord_buf.len == 6, "an array length is computed from a constant declared later")
+  $rb: = ord_in_return_type()
+  rb[5] = 1
+  assert(rb.len == 6 && rb[5] == 1, "the same for a function return type's array length")
+  assert(ord_pair.x == 9 && ord_pair.y == 2,
+    "a struct's initializer can refer to a constant behind")
+  assert(ord_arr[0] == 9 && ord_arr[2] == 11, "the same for an array's initializer")
+  assert(ord_mut == 30, "the same for a mutable global")
+
+  verdict.pass("neither sema's fold nor genc's output order is bound to the declarations' order.")
+
+// ==========================================
+// Checks that a generic type's `impl` may be written before the type's declaration or its use.
+// Caution: **Test the trait conformance too.** Even with the methods in place, an upcast does not
+// pass unless `impl<|T|> C<|T|>: Trait` attaches.
+// ==========================================
+priv const slot_size: Sz = sizeof(Slot<|I32|>)
+
+impl<|T|> Slot<|T|>
+  fn get(r: Self@): T
+    return r.v
+  fn put(r: Self$@, x: T)
+    r.v = x
+
+impl<|T|> Slot<|T|>: Slot_tag
+  fn tag(_r: Self): I32
+    return 42
+
+priv trait Slot_tag
+  fn tag(r: Self): I32
+
+priv struct Slot<|T|>
+  v: T
+
+priv fn slot_tag_of(t: Slot_tag): I32
+  return t.tag()
+
+fn test_generic_impl_may_precede_its_type()
+  verdict.start("[generic] a generic impl may come before its type test...")
+
+  assert(slot_size == sizeof(I32), "the size of a type declared after the impl resolves")
+  $c: Slot<|I32|> = ::{ .v = 1 }
+  c.put(9)
+  assert(c.get() == 9, "a method of an impl written before the declaration has grown")
+  tag: = slot_tag_of(c@)
+  assert(tag == 42, "the trait conformance of an impl written before the declaration attaches too")
+
+  verdict.pass("the registration of a generic impl is not bound to the order.")
+
+// ==========================================
+// Checks that an alias can refer to an alias declared after it.
+// ==========================================
+
+priv typedef Ord_a = Ord_b //<
+  //< The head of a chain of aliases, each naming one declared after it
+  //<
+  //< Caution: C's `typedef` needs the type name on its right defined before that position. If
+  //< genc wrote them in source order, C would say `unknown type name` while ksplc reports nothing
+  //< (Principle 2). Dependency decides the output order (emit_fwd_aliases in gen/c/decl.kspls).
+  //< **Test a chain, and shapes wrapped in a pointer or an array too.** The dependency is followed
+  //< while stripping type ids, so with only a plain reference an implementation that looks one
+  //< step deep passes as well.
+priv typedef Ord_b = Ord_c
+priv typedef Ord_c = I64
+priv typedef Ord_arr = Ord_c[3]
+priv typedef Ord_of_struct = Ord_s
+
+priv struct Ord_s
+  n: I32
+
+fn test_alias_may_reference_later_alias()
+  verdict.start("[alias] an alias declared behind can be referred to test...")
+
+  x: Ord_a = 5
+  assert(x == 5, "a three-step chain of aliases solves backwards")
+  $a: Ord_arr = ::{}
+  a[2] = 7
+  assert(a.len == 3 && a[2] == 7, "the same for an alias wrapped in an array")
+  s: Ord_of_struct = ::{ .n = 4 }
+  assert(s.n == 4, "the same for an alias pointing at a struct")
+
+  verdict.pass("typedef's output order is not bound to the declarations' order.")

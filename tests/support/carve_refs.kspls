@@ -1,0 +1,468 @@
+//< Which references a carving re-points in a package's files, and what each becomes
+//<
+//< Not a suite: the piece the carving (`tests/tools/carve.kspls`) and its check
+//< (`tests/suite/carve_test.kspls`) share. Picking up and landing belong to `harness_refs.kspls`,
+//< so a carving moves exactly what the reference check checks; this file adds **where a naming
+//< stands** and **what it becomes**.
+//< Caution: **Never rewrite code.** A path in a string literal is data a program reads, and a copy
+//< that rewrites it behaves differently from the package.
+import "std/chars"
+import "std/ds" { List, Map }
+import "std/mem" { Arena }
+import "std/str" as _str + { Arena_text }
+import "std/strfmt" as _strfmt
+import "std/sys"
+import "tests/support/harness_refs" as refs
+
+// ==========================================
+// The files one commit holds
+// ==========================================
+
+struct Tree //< the files one commit holds, and the folders they stand in
+  files: Map<|U8[], Bool|>$@
+  dirs: Map<|U8[], Bool|>$@
+  tops: List<|U8[]|> //< the folders at the top, in the order found
+
+fn tree_of(paths: U8[][], prefix: U8[], arena: Arena$@): Tree //<
+  //< The tree holding these paths, each put under `prefix` (empty for none)
+  //<
+  //< `prefix` reads a copy at its place in the repository, so a naming that lands on the copy's
+  //< same-named file while meaning the repository's is told apart.
+  files: = arena.create(Map<|U8[], Bool|>.new_with_cap(4096, arena))
+  dirs: = arena.create(Map<|U8[], Bool|>.new_with_cap(1024, arena))
+  $tops: = List<|U8[]|>.new(arena)
+  for p in paths
+    if p.len == 0
+      continue
+    full: = arena.text().s(prefix).s(p).take()
+    files.set(full, true)
+    for j in Range.asc(full.len)
+      if full[j] != '/'
+        continue
+      dir: = full.sub(0, j)
+      seen: = dirs.get(dir) catch false
+      if seen
+        continue
+      dirs.set(dir, true)
+      if dir.find_char('/') < 0
+        tops.push(dir)
+  return Tree::{ .files = files, .dirs = dirs, .tops = tops }
+
+fn has_file(t: Tree@, rel: U8[]): Bool
+  files: = t.files
+  found: = files.get(rel) catch false
+  return found
+
+fn has_dir(t: Tree@, rel: U8[]): Bool
+  dirs: = t.dirs
+  found: = dirs.get(rel) catch false
+  return found
+
+fn picked_dirs(t: Tree@, arena: Arena$@): U8[][] //<
+  //< The folders a naming may start with: every folder at the tree's top except hidden ones
+  //<
+  //< **Read from the tree, not copied from the reference check's table** (`layer_from` in
+  //< `tests/suite/docref_test.kspls`), so a folder added at the top is re-pointed from that day.
+  $out: = List<|U8[]|>.new(arena)
+  for i in Range.asc(t.tops.len)
+    d: = t.tops.get(i)
+    if !d.starts_with(".")
+      out.push(d)
+  return out.slice()
+
+// ==========================================
+// Where each byte of a file stands
+// ==========================================
+
+const in_code: U8 = 0 //< code: a program's text, a fenced block, a span holding more than a naming
+const in_prose: U8 = 1 //< a document's prose, or a source's comment
+const in_span: U8 = 2 //< a document's code span
+const in_link_text: U8 = 3 //< the text of a document's link, whose target is what is re-pointed
+
+priv fn mark(b: Arena_text$@, cls: U8, n: Sz) //< n bytes of class cls
+  for _k in Range.asc(n)
+    b.c(cls)
+
+fn contexts(rel: U8[], text: U8[], arena: Arena$@): U8[] //<
+  //< Where each byte of a file stands, one class per byte
+  //<
+  //< Decided by the file's kind. **A kind not named here is all code**, left as written: a miss
+  //< shows as a reference pointing out, where a guess would rewrite a program.
+  if rel.ends_with(".md")
+    return md_contexts(text, arena)
+  if rel.ends_with(".kspl") || rel.ends_with(".kspls")
+    return slash_contexts(text, true, false, true, arena)
+  if rel.ends_with(".c") || rel.ends_with(".h") || rel.ends_with(".js") ||
+    rel.ends_with(".mjs") || rel.ends_with(".S") || rel.ends_with(".kspeg")
+    return slash_contexts(text, true, true, false, arena)
+  if rel.ends_with(".css")
+    return slash_contexts(text, false, true, false, arena)
+  if rel.ends_with(".html")
+    return html_contexts(text, arena)
+  if rel.ends_with(".py")
+    return hash_contexts(text, true, arena)
+  if rel.ends_with(".mk") || rel.ends_with("Makefile") || rel.ends_with(".cfg") ||
+    rel.ends_with(".yml")
+    return hash_contexts(text, false, arena)
+  b: = arena.text()
+  mark(b, in_code, text.len)
+  return b.take()
+
+priv fn past_quoted(text: U8[], at: Sz, triple: Bool, one_line: Bool): Sz //<
+  //< Just past the literal opening at `at`, its quote being `text[at]`
+  //<
+  //< A `\` skips what follows (a string continued past a line's end is read whole). `triple` runs
+  //< from three quotes to three; `one_line` closes at the line's end (an apostrophe in a shell
+  //< script or config opens nothing).
+  q: = text[at]
+  if triple && at + 2 < text.len && text[at + 1] == q && text[at + 2] == q
+    close: = text.sub_from(at + 3).find_str(text.sub(at, 3))
+    return text.len if close < 0 else at + 3 + Sz::close + 3
+  $i: = at + 1
+  for i < text.len
+    c: = text[i]
+    if c == '\\' && i + 1 < text.len
+      i += 2
+      continue
+    if one_line && c == '\n'
+      return i
+    i += 1
+    if c == q
+      return i
+  return i
+
+priv fn slash_contexts(text: U8[], line: Bool, block: Bool, triple: Bool, arena: Arena$@): U8[] //<
+  //< The C family's comments: `//` to the line's end where `line`, `/* … */` where `block`
+  b: = arena.text()
+  $i: Sz = 0
+  for i < text.len
+    c: = text[i]
+    two: = i + 1 < text.len
+    if line && c == '/' && two && text[i + 1] == '/'
+      $j: = i
+      for j < text.len && text[j] != '\n'
+        j += 1
+      mark(b, in_prose, j - i)
+      i = j
+      continue
+    if block && c == '/' && two && text[i + 1] == '*'
+      close: = text.sub_from(i + 2).find_str("*/")
+      j: = text.len if close < 0 else i + 2 + Sz::close + 2
+      mark(b, in_prose, j - i)
+      i = j
+      continue
+    if c == '"' || c == '\'' || c == '`'
+      j: = past_quoted(text, i, triple, false)
+      mark(b, in_code, j - i)
+      i = j
+      continue
+    b.c(in_code)
+    i += 1
+  return b.take()
+
+priv fn hash_contexts(text: U8[], triple: Bool, arena: Arena$@): U8[] //<
+  //< A `#` comment to the line's end: make, shell, Python, YAML and `ksplc.cfg`
+  b: = arena.text()
+  $i: Sz = 0
+  for i < text.len
+    c: = text[i]
+    if c == '#'
+      $j: = i
+      for j < text.len && text[j] != '\n'
+        j += 1
+      mark(b, in_prose, j - i)
+      i = j
+      continue
+    if c == '"' || c == '\''
+      j: = past_quoted(text, i, triple, true)
+      mark(b, in_code, j - i)
+      i = j
+      continue
+    b.c(in_code)
+    i += 1
+  return b.take()
+
+priv fn html_contexts(text: U8[], arena: Arena$@): U8[] //< a `<!-- … -->` comment
+  b: = arena.text()
+  $i: Sz = 0
+  for i < text.len
+    if text.sub_from(i).starts_with("<!--")
+      close: = text.sub_from(i + 4).find_str("-->")
+      j: = text.len if close < 0 else i + 4 + Sz::close + 3
+      mark(b, in_prose, j - i)
+      i = j
+      continue
+    b.c(in_code)
+    i += 1
+  return b.take()
+
+priv fn fence_at(line: U8[]): U8[] //< the fence a line opens or closes with (empty where none)
+  $k: Sz = 0
+  for k < line.len && k < 3 && line[k] == ' '
+    k += 1
+  rest: = line.sub_from(k)
+  if rest.starts_with("```")
+    return "```"
+  if rest.starts_with("~~~")
+    return "~~~"
+  return ""
+
+priv fn md_contexts(text: U8[], arena: Arena$@): U8[] //<
+  //< A document's prose, its fenced blocks, and its code spans
+  //<
+  //< A span is paired as the reference check pairs it (`span_close` in `harness_refs.kspls`), so
+  //< the two never disagree on code and prose.
+  fenced: = arena.text()
+  $open: U8[] = ""
+  $s: Sz = 0
+  for s < text.len
+    $e: = s
+    for e < text.len && text[e] != '\n'
+      e += 1
+    stop: = e + 1 if e < text.len else e
+    fence: = fence_at(text.sub(s, e - s))
+    cls: = in_code if open.len > 0 || fence.len > 0 else in_prose
+    if open.len == 0 && fence.len > 0
+      open = fence
+    else if open.len > 0 && fence.equals(open)
+      open = ""
+    mark(fenced, cls, stop - s)
+    s = stop
+  lines: = fenced.take()
+  b: = arena.text()
+  $i: Sz = 0
+  for i < text.len
+    if lines[i] == in_code || text[i] != '`'
+      b.c(lines[i])
+      i += 1
+      continue
+    $n: Sz = 0
+    for i + n < text.len && text[i + n] == '`'
+      n += 1
+    close: = refs.span_close(text, i + n, n)
+    if close == 0
+      mark(b, in_prose, n)
+      i += n
+      continue
+    mark(b, in_span, close - i)
+    i = close
+  return b.take()
+
+priv fn link_text_from(text: U8[], cls: U8[], at: Sz): I64 //<
+  //< Where the text of the link whose `](` is at `at` starts (-1 where no `[` matches it)
+  //<
+  //< A span inside the text is skipped whole, so a bracket written in one does not count.
+  $depth: Sz = 0
+  $j: = at
+  for j > 0
+    j -= 1
+    if cls[j] == in_span
+      continue
+    c: = text[j]
+    if c == '\n' && j > 0 && text[j - 1] == '\n'
+      return -1
+    if c == ']'
+      depth += 1
+    else if c == '['
+      if depth == 0
+        return j
+      depth -= 1
+  return -1
+
+// ==========================================
+// The references of a file
+// ==========================================
+
+const ref_link: U8 = 0 //< a document's link: its target is re-pointed
+const ref_href: U8 = 1 //< a `.kspage`'s `href`: its value is re-pointed
+const ref_doc: U8 = 2 //< a naming of a document
+const ref_src: U8 = 3 //< a naming of an implementation or test file
+
+struct Ref //< one reference as it stands in a file
+  //<
+  //< `at` and `end` bound what is replaced: a link's or an `href`'s target, or the naming itself.
+  at: Sz
+  end: Sz
+  text: U8[] //< the naming as written (a target without its anchor)
+  anchor: U8[] //< the anchor added back after the replacement of an escaped `href`
+  kind: U8
+  cls: U8 //< where it stands (`in_prose`, `in_span`, `in_link_text`, `in_code`)
+
+fn refs_of(rel: U8[], text: U8[], dirs: U8[][], arena: Arena$@): List<|Ref|> //<
+  //< The references a file holds, each with where it stands
+  cls: = contexts(rel, text, arena)
+  $out: = List<|Ref|>.new(arena)
+  $texts: = List<|Sz|>.new(arena)
+  if rel.ends_with(".md") || rel.ends_with(".kspage")
+    for l in refs.links_of(rel, text, arena)
+      if rel.ends_with(".kspage")
+        if l.text.len == 0 || refs.is_external(l.text)
+          continue
+        // A plain `href` holds its path at its start, and only that is replaced; an escaped one
+        // is replaced whole, its anchor added back.
+        at: = href_value_at(text, l.at)
+        raw: = text.sub(at, l.end - 1 - at)
+        plain: = raw.find_char('\\') < 0
+        out
+          .push(Ref::{ .at = at, .end = at + l.text.len if plain else l.end - 1, .text = l.text,
+          .anchor = "" if plain else l.extra, .kind = ref_href, .cls = in_prose })
+        continue
+      if cls[l.at] == in_code
+        continue
+      // Caution: **Treat a link's text separately whatever its target is**: a naming shown as a
+      // link's text is that link's words, and wrapping it would nest one link in another.
+      from: = link_text_from(text, cls, l.at)
+      if from >= 0
+        texts.push(Sz::from)
+        texts.push(l.at)
+      if l.text.len == 0 || refs.is_external(l.text)
+        continue
+      at: = l.at + 2
+      out
+        .push(Ref::{ .at = at, .end = at + l.text.len, .text = l.text, .anchor = "",
+        .kind = ref_link, .cls = in_prose })
+  for p in refs.find_doc_paths(text, dirs, arena)
+    if !refs.is_link_target(text, p.at)
+      out
+        .push(Ref::{ .at = p.at, .end = p.end, .text = p.text, .anchor = "", .kind = ref_doc,
+        .cls = class_at(text, cls, texts@, p.at, p.end) })
+  for p in refs.find_src_paths(text, dirs, arena)
+    if !refs.is_link_target(text, p.at)
+      out
+        .push(Ref::{ .at = p.at, .end = p.end, .text = p.text, .anchor = "", .kind = ref_src,
+        .cls = class_at(text, cls, texts@, p.at, p.end) })
+  return out
+
+priv fn class_at(text: U8[], cls: U8[], texts: List<|Sz|>@, at: Sz, end: Sz): U8 //<
+  //< Where the naming at `at` stands, with a link's text as its own class
+  //<
+  //< **A span holding more than the naming is code** (`KSPAGE_DOC=docs/CONTRIBUTING.md`): a command
+  //< or message the naming is a piece of.
+  $k: Sz = 0
+  for k + 1 < texts.len
+    if at > texts.get(k) && at < texts.get(k + 1)
+      return in_link_text
+    k += 2
+  if cls[at] != in_span
+    return cls[at]
+  exact: = at > 0 && end < text.len && text[at - 1] == '`' && text[end] == '`'
+  return in_span if exact else in_code
+
+priv fn href_value_at(text: U8[], at: Sz): Sz //<
+  //< Where the value of the `"href"` field at `at` starts, just past its quote
+  $j: = at + 6
+  for j < text.len && text[j] != '"'
+    j += 1
+  return j + 1
+
+fn lands(r: Ref@, rel: U8[], text: U8[], t: Tree@, arena: Arena$@): U8[] //<
+  //< Where a reference lands in a tree, read as the reference check reads it (empty where nowhere)
+  //<
+  //< A link, and a naming of a document, may name a folder; an implementation file is a file.
+  here: = sys.get_dir_name(rel)
+  if r.kind == ref_src
+    places: = refs.src_places(here, r.text, arena)
+    $k: Sz = 0
+    $p: = refs.src_place(places@, k, arena)
+    for p.len > 0
+      if has_file(t, p)
+        return p
+      k += 1
+      p = refs.src_place(places@, k, arena)
+    return ""
+  $target: U8[] = ""
+  if r.kind == ref_doc
+    target = refs.hit_target(here, text,
+      refs.Hit::{ .at = r.at, .end = r.end, .text = r.text, .extra = "" }, arena)
+  else
+    target = refs.normalize(arena.text().s("\{here\}/\{r.text\}").take(), arena)
+  return target if has_file(t, target) || has_dir(t, target) else ""
+
+// ==========================================
+// What a reference becomes
+// ==========================================
+
+fn url_of(base: U8[], pin: U8[], path: U8[], t: Tree@, arena: Arena$@): U8[] //<
+  //< The page showing `path` as it was at `pin`: `blob/` for a file, `tree/` for a folder
+  kind: = "tree" if has_dir(t, path) else "blob"
+  return arena.text().s("\{base\}/\{kind\}/\{pin\}/\{path\}").take()
+
+struct Carved //< a file's text with its references re-pointed
+  text: U8[]
+  moved: Sz //< how many were re-pointed
+
+struct Edit //< one stretch of a text replaced
+  at: Sz
+  end: Sz
+  with: U8[]
+
+fn carve_text(rel: U8[], text: U8[], pkg: U8[], pin: U8[], base: U8[], t: Tree@, dirs: U8[][],
+  arena: Arena$@): Carved //<
+    //< The file at `rel` (in the repository) as its copy holds it
+    //<
+    //< **A reference is re-pointed only where it leaves the package**, to the page for what it
+    //< named as it was at `pin`.
+    //< Caution: **Do not re-point what lands inside the package**, including a naming that starts
+    //< with the package's own name (`ksdb/log.kspls`): that naming works wherever its folder is.
+  inside: = arena.text().s(pkg).s("/").take()
+  $edits: = List<|Edit|>.new(arena)
+  for r in refs_of(rel, text, dirs, arena)
+    if r.cls == in_code || r.cls == in_link_text
+      continue
+    to: = lands(r@, rel, text, t, arena)
+    if to.len == 0 || to.equals(pkg) || to.starts_with(inside)
+      continue
+    url: = url_of(base, pin, to, t, arena)
+    if r.kind == ref_href && r.anchor.len > 0
+      edits
+        .push(Edit::{ .at = r.at, .end = r.end,
+        .with = arena.text().s("\{url\}#\{r.anchor\}").take() })
+      continue
+    if r.kind == ref_link || r.kind == ref_href || !rel.ends_with(".md") ||
+      defines_link(text, r.at)
+      edits.push(Edit::{ .at = r.at, .end = r.end, .with = url })
+      continue
+    // A naming in a span is the span's whole (`class_at`), so the span's backticks go inside the
+    // link's words.
+    span: = r.cls == in_span
+    at: = r.at - 1 if span else r.at
+    end: = r.end + 1 if span else r.end
+    words: = text.sub(at, end - at)
+    edits
+      .push(Edit::{ .at = at, .end = end,
+      .with = arena.text().s("[\{words\}](\{url\})").take() })
+  return apply(text, edits@, arena)
+
+priv fn defines_link(text: U8[], at: Sz): Bool //<
+  //< Whether the naming at `at` is the target of a link's definition (`[name]: path`)
+  //<
+  //< A definition is a link already, so its target is replaced; wrapped, it would define nothing.
+  $s: = at
+  for s > 0 && text[s - 1] != '\n'
+    s -= 1
+  head: = text.sub(s, at - s).trim_spaces()
+  return head.starts_with("[") && head.ends_with("]:")
+
+priv fn apply(text: U8[], edits: List<|Edit|>$@, arena: Arena$@): Carved //<
+  //< The text with each stretch replaced, in order
+  //<
+  //< Caution: **An edit overlapping one already taken is dropped**, never merged, or two matches of
+  //< one stretch (a `.c` path inside a `.c.md` name) write it twice.
+  for i in Range.asc(edits.len)
+    for j in Range.new(i + 1, edits.len, 1)
+      if edits.get(j).at < edits.get(i).at
+        tmp: = edits.get(i)
+        edits.set(i, edits.get(j))
+        edits.set(j, tmp)
+  b: = arena.text()
+  $pos: Sz = 0
+  $moved: Sz = 0
+  for i in Range.asc(edits.len)
+    e: = edits.get(i)
+    if e.at < pos
+      continue
+    b.s(text.sub(pos, e.at - pos)).s(e.with)
+    pos = e.end
+    moved += 1
+  b.s(text.sub_from(pos))
+  return Carved::{ .text = b.take(), .moved = moved }

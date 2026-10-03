@@ -1,0 +1,489 @@
+#!/usr/bin/env -S ksplc run
+//< Opens one document in kspage
+//<
+//< It starts the local server, builds the URL to open, and passes it to the browser.
+//< **This is a leaf**: neither `kspage` nor `kssrv` knows the other, so only this file may know
+//< both ("Reference direction between documents" in `docs/SPEC-documents.md`).
+//< Note: So the URL's format is known in one place, `make kspage` uses this tool too.
+//< **The path is built in `tools/kspage_aim.kspls`**, which handles only paths so that a test can
+//< check it. `--list`, `--stop=<folder>` and `--stop-all` tend the servers it left (`tend`).
+
+// ==========================================
+// Caution: **Do not pass the token on the command line**: `ps` shows it. It is read from the line
+// kssrv prints once at start-up, and written to the note for the next run.
+// ==========================================
+// **The note is as sensitive as the token.** It lives under `out/` (which git ignores), so only
+// those who can read the source being edited can read it.
+// ==========================================
+import "std/argp"
+import "std/chars"
+import "std/fs"
+import "std/http"
+import "std/io"
+import "std/mem" { Arena }
+import "std/net"
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/sys"
+import "tools/kspage_aim" as aim
+
+priv const server_names: U8[][] = U8[][]::{ "kssrv.exe", "kssrv" } //<
+  //< The server names looked for next to this program
+  //<
+  //< Caution: **Look next to this program first**: from a double click, the working directory is
+  //< home or `/`. Under `ksplc run` the program is built in a scratch folder, so `out/` under the
+  //< working directory is checked too; make runs from the repository's root.
+priv const server_near: U8[] = "out"
+
+priv const page_rel: U8[] = "kspage_web/kspage.html" //<
+  //< Where the built page is (relative to the server's folder)
+  //<
+  //< Caution: **Do not copy it into the served folder.** The page and the documents are served
+  //< from different places; requiring "under the root" would copy a 2MB page into the user's
+  //< folder. kssrv returns the file named by `--page` for `/` (the agreement is "Where it listens"
+  //< in `docs/SPEC-local-server.md`).
+
+priv const tree_mark: U8[] = "std" //< the folder that marks a KSPL tree
+  //<
+  //< Caution: **Serve the tree's root when the document is inside a tree.** The server refuses
+  //< anything outside its root (that is the boundary), so if only the document's folder is served,
+  //< nothing else in the tree can be opened.
+
+priv const max_climb: Sz = 32 //< the cap on how many folders up to look for the tree's root
+  //<
+  //< Caution: **Do not climb without limit** (it must stop even at `/`).
+priv const default_port: U8[] = "8080" //< the default port to listen on
+  //<
+  //< **Keep it equal to `make kspage`'s `KSPAGE_SERVE_PORT`** (or make and a direct run start
+  //< different servers).
+
+priv const idle_hold: U8[] = "300" //< how long the server waits with no page holding it [s]
+  //<
+  //< **A page holds the server open while it is open**, so this covers only the gaps before the
+  //< first page (a cold browser start) and after the last, when the next document reuses it.
+
+priv const log_rel: U8[] = "tmp/kspage_open.log" //< where the log and the note live
+  //<
+  //< **It is `tmp/` next to the server** (relative to the working directory, a double click would
+  //< scatter them under home).
+priv const state_rel: U8[] = "tmp/kspage_open.state" //< the note of the running servers
+  //<
+  //< Its format is at `aim.state_count`.
+priv const browser_rel: U8[] = "tmp/kspage_open.browser.log" //<
+  //< Where the browser's start-up output is kept
+  //<
+  //< Caution: **Do not throw it away** (when it cannot start, it says what is missing).
+priv const path_sep: U8 = ':' //< PATH's separator
+  //<
+  //< **Only on POSIX can PATH be split on `:`** (a Windows path is `C:\…`; Windows is handled
+  //< another way, see `hand_to_browser`).
+priv const wait_steps: Sz = 300
+priv const port_tries: I32 = 16 //< how many ports, counting up from the one named, are tried
+  //<
+  //< **Do not give up after one** (the reason is at `free_port`).
+
+priv const openers: U8[][] = U8[][]::{ "xdg-open", "open" } //< the tools that start a browser
+  //<
+  //< Caution: **Try the ones that exist, in turn** (with only one, nothing happens, silently, where
+  //< it is missing). macOS has `open`, the others `xdg-open`.
+priv const openers_win: U8[][] = U8[][]::{ "explorer" } //< the tool that starts one on Windows
+  //<
+  //< **Do not work around it by turning the quoting off** (the quoting blocks argument injection).
+  //< `explorer.exe` is a real executable, so one URL is enough to reach the default browser. **Keep
+  //< a separate list per environment.** On Windows PATH is not checked (`on_path`), so an earlier
+  //< tool in the list would count as "passed on" the moment it starts.
+
+struct Where //< every path this run needs, found once
+  //<
+  //< **Find them once and pass them around** (looked up in two places, only one gets fixed).
+  server: U8[] //< the path of the server to start
+  log: U8[] //< where the server's output goes
+  state: U8[] //< where the note of the running servers is kept
+  browser: U8[] //< the path of the browser's start-up output
+  page: U8[] //< the page returned for `/`; without it nothing opens (`make kspage-web` first)
+
+priv fn where_from(argv0: U8[], arena: Arena$@): Where //<
+  //< Finds the server and the paths next to it
+  //<
+  //< **Where it is not found, `server` is empty.**
+  for dir in U8[][]::{ aim.parent_of(argv0), server_near }
+    for one in server_names
+      at: = fs.join(dir, one, arena)
+      if fs.can_run(at)
+        home: = aim.parent_of(at)
+        return Where::{ .server = at, .log = fs.join(home, log_rel, arena),
+          .state = fs.join(home, state_rel, arena),
+          .browser = fs.join(home, browser_rel, arena),
+          .page = fs.join(home, page_rel, arena) }
+  return Where::{ .server = "", .log = "", .state = "", .browser = "", .page = "" }
+
+priv fn full(p: U8[], arena: Arena$@): U8[] //<
+  //< Turns a relative path into an absolute one, from the working directory
+  //<
+  //< **Compare the note by absolute paths**: `.` and `/home/me/devel` stored as given would start
+  //< two servers for one folder.
+  //< Caution: **Do not join a `.` unchanged** (`fs.join` makes `/home/me/devel/.`, yet another
+  //< string).
+  dir: = aim.trim_end_sep(p)
+  if sys.is_absolute(dir)
+    return dir
+  $buf: U8[4096] = ::{}
+  at: = sys.cwd(U8$[]::buf)
+  if at.len == 0
+    return dir
+  return arena.dup_str(at) if dir.equals(".") else fs.join(at, dir, arena)
+
+priv fn tree_root(from: U8[], arena: Arena$@): U8[] //<
+  //< The tree's root, when that document is inside a KSPL tree
+  //<
+  //< **Empty where there is none** (then the document's folder is served: it opens, but with no
+  //< jump to a definition). The mark is `std/` (the reason is at `tree_mark`).
+  //< Caution: **Do not decide it from the document's own path**: being a KSPL source is irrelevant.
+  $at: U8[] = from
+  for $step: Sz = 0; step < max_climb; step += 1
+    if at.len == 0
+      break
+    if fs.is_dir(fs.join(at, tree_mark, arena))
+      return at
+    up: = aim.parent_of(at)
+    if up.equals(at)
+      break
+    at = up
+  return ""
+
+priv fn ask(at: I32, token: U8[], method: U8[], target: U8[]): I32 //<
+  //< Sends one request with our token to the server on that port, and returns the status
+  //<
+  //< **0 where nothing answered** (nothing listens there, or it closed without an answer).
+  arena: = Arena.new(16 * 1024)
+  defer arena.free()
+  stream: = net.Tcp_stream.connect("127.0.0.1", at) catch
+    return 0
+  defer stream.free()
+  $bearer: = Str_builder.new()
+  defer bearer.free()
+  bearer.s("Bearer ").s(token)
+  head: = http.headers(arena).add("Host", "127.0.0.1").add("Authorization", bearer.slice()).build()
+  http.write_request(stream, method, target, head, "") catch
+    return 0
+  answer: = http.read_response(stream, arena, http.default_max_body_bytes) catch
+    return 0
+  return answer.status
+
+priv fn server_answers(at: I32, token: U8[]): Bool //<
+  //< Whether that server is alive and accepts our token
+  //<
+  //< Caution: **Check the token too.** An open port alone does not tell whether some other program
+  //< listens there; `/api/status` needs a token in local use, so a 200 means kssrv.
+  return ask(at, token, "GET", "/api/status") == 200
+
+priv const gone_steps: Sz = 50 //< how many times, 100ms apart, a stopped server is looked for
+
+priv fn stop_server(at: I32, token: U8[]): Bool //<
+  //< asks that server to stop, and waits until it has
+  //<
+  //< Caution: **Do not report a stop that was only answered.** The server answers before it stops
+  //< ("Stopping it when asked" in `docs/SPEC-local-server.md`), so it is looked for until it is
+  //< gone.
+  if ask(at, token, "POST", "/api/stop") != 200
+    return false
+  for $step: Sz = 0; step < gone_steps; step += 1
+    if !server_answers(at, token)
+      return true
+    sys.sleep_ms(100)
+  return false
+
+priv fn tend(where: Where, stop_root: U8[], stop_all: Bool): I32 //<
+  //< Lists the servers in the note that still answer, or stops the ones asked for
+  //<
+  //< **Only a server that answers with its token is running**: a record outliving its server is
+  //< dropped from the note, never listed. **A server is picked by the folder it serves**, the key
+  //< the reuse looks it up by, not by its port, which changes from run to run.
+  //< Returns the exit code.
+  body: = io.read_file(where.state) catch ""
+  listing: = stop_root.len == 0 && !stop_all
+  $kept: = Str_builder.new()
+  defer kept.free()
+  $stopped: Sz = 0
+  $failed: = false
+  count: = aim.state_count(body)
+  for $i: Sz = 0; i < count; i += 1
+    one: = aim.state_record(body, i)
+    at: = aim.port_num(aim.port_in_url(one[0]))
+    token: = aim.token_in_url(one[0])
+    if at == 0 || !server_answers(at, token)
+      continue
+    picked: = !listing && (stop_all || one[1].equals(stop_root))
+    if !picked
+      if listing
+        io.out().s("\{one[0]\} \{one[1]\}\n")
+      aim.state_put(kept@, one[0], one[1])
+      continue
+    if stop_server(at, token)
+      io.out().s("\{sys.program_name()\}: stopped the server serving \{one[1]\}\n")
+      stopped += 1
+      continue
+    io.err().s("\{sys.program_name()\}: the server serving \{one[1]\} did not stop\n")
+    aim.state_put(kept@, one[0], one[1])
+    failed = true
+  if body.len > 0
+    io.write_file(where.state, kept.slice()) catch
+      io.err().s("\{sys.program_name()\}: cannot write the note: \{where.state\}\n")
+  if failed
+    return 1
+  if stopped == 0 && !listing
+    if stop_all
+      io.err().s("\{sys.program_name()\}: no server is running\n")
+      return 0
+    // Caution: **A folder with no server is a failure**: a mistyped folder must not read as done.
+    io.err().s("\{sys.program_name()\}: no server is serving \{stop_root\}\n")
+    return 1
+  if listing && kept.len == 0
+    io.err().s("\{sys.program_name()\}: no server is running\n")
+  return 0
+
+priv fn reusable(root: U8[], state_path: U8[]): U8[] //<
+  //< Returns the URL of a server in the note that can reach this document
+  //<
+  //< **Only a server for the same folder** (kssrv refuses anything outside its root). **The port is
+  //< not compared**; the port named is only where a new server starts looking (`free_port`).
+  body: = io.read_file(state_path) catch
+    return ""
+  count: = aim.state_count(body)
+  for $i: Sz = 0; i < count; i += 1
+    one: = aim.state_record(body, i)
+    if !one[1].equals(root)
+      continue
+    at: = aim.port_num(aim.port_in_url(one[0]))
+    if at != 0 && server_answers(at, aim.token_in_url(one[0]))
+      return one[0]
+  return ""
+
+priv fn free_port(from: I32, text: Str_builder$@): U8[] //<
+  //< looks for a port that can be listened on
+  //<
+  //< **Empty where there is none.**
+  //< Caution: **Do not give up after one.** Where something already listens on the port named (our
+  //< own server for another folder included), kssrv fails silently and 30 seconds are lost **each
+  //< time a document from another folder opens**; the next port is tried, as Jupyter and Vite do.
+  for $step: I32 = 0; step < port_tries; step += 1
+    at: = from + step
+    // Caution: **Do not check it by connecting**: the question is "can we listen", and binding as
+    // kssrv does asks exactly that.
+    probe: = net.Tcp_listener.bind("127.0.0.1", at) catch
+      continue
+    probe.free()
+    text.s("\{at\}")
+    return text.slice()
+  return ""
+
+priv fn on_path(tool: U8[], arena: Arena$@): Bool //< whether that tool is on PATH
+  //<
+  //< Caution: **Check before starting.** On POSIX, creating the child **succeeds even for a missing
+  //< tool** (the child just exits with 127). On Windows there is nothing to check, and PATH must
+  //< not be split on `:` (the reason is at `path_sep`).
+  if sys.is_windows()
+    return true
+  if path: = sys.get_env("PATH")
+    for dir in path.split(path_sep, arena)
+      if fs.can_run(fs.join(dir, tool, arena))
+        return true
+  return false
+
+priv fn hand_to_browser(open_url: U8[], where: Where, arena: Arena$@): Bool //<
+  //< Passes the URL to the browser
+  //<
+  //< Caution: **Try the tools in turn, from the list for this environment** (the reasons are at
+  //< `openers` and `openers_win`). Keep their output (the reason is at `browser_rel`).
+  for tool in openers_win if sys.is_windows() else openers
+    if !on_path(tool, arena)
+      continue
+    way: = U8[][]::{ tool, open_url }
+    _h: = subproc.spawn_redirect(way, "", where.browser, where.browser) catch
+      continue
+    return true
+  return false
+
+priv fn tell_how(doc: U8[], handed: U8[]) //< the instructions printed after it opens
+  //<
+  //< **Say to pass the URL on to its very end**: a page missing the token part looks open yet
+  //< cannot read a single file.
+  //< Caution: **Say how to open it by hand even when the browser was started** (`handed` not
+  //< empty).
+  io.out().s("\n")
+  io.out().s("  * this page opens \{doc\} itself\n")
+  io.out().s("  * Ctrl+S saves, Ctrl+F finds, and the ribbon's tabs hold the rest\n")
+  io.out()
+    .s("  * hand the URL over to its very end (drop the token part and the page cannot read a \
+      file)\n")
+  if handed.len > 0
+    io.out()
+      .s("  * where nothing shows, open the URL above yourself (what starting it said: \
+        \{handed\})\n")
+
+priv fn hand_and_tell(open_url: U8[], doc: U8[], show_only: Bool, where: Where, arena: Arena$@) //<
+  //< Passes the URL to the browser and prints the instructions
+  //<
+  //< Caution: **Do not copy it into two places.** Both the "reused" and the "started" paths need
+  //< it; copied, only one gets fixed. With `--show`, nothing is passed to the browser.
+  $handed: U8[] = ""
+  if !show_only
+    if hand_to_browser(open_url, where, arena)
+      handed = where.browser
+    else
+      io.err().s("\{sys.program_name()\}: could not start a browser. Please open the URL above\n")
+  tell_how(doc, handed)
+
+fn main(): I32 //< opens one document in kspage, starting the server and the browser as needed
+  io.set_line_buffered()
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  $show_only: = false
+  $root_said: U8[] = ""
+  $at: U8[] = default_port
+  // Caution: **Do not parse the arguments by hand**: `--root --show` would take the next item as
+  // the value, and the mistake would show 30 seconds later as "the server does not come up".
+  p: = argp.Parser
+    .create(sys.program_name(), "open a document on a local server, or list and stop servers", arena)
+  p.positional("<the document's path>")
+  p.str_opt("--root", root_said@,
+    "the folder to serve (default: the KSPL tree's root above that document, else its folder)")
+  p.str_opt("--port", at@, "the number to wait on, or the next free one (default 8080)")
+  p.flag("--show", show_only@, "put the URL out and wait (do not start a browser)")
+  // **Listing and stopping take nothing else**: a document or an option beside them would do
+  // nothing, and its writer would believe it had.
+  $stop_said: U8[] = ""
+  p.command_flag("--list", "put out each running server's URL and the folder it serves")
+  p.str_opt("--stop", stop_said@, "stop the server serving that folder")
+  p.command_flag("--stop-all", "stop every running server")
+  p.parse_or_exit(sys.args(), arena)
+  tending: = p.command.len > 0 || p.saw("--stop")
+  if tending &&
+    (p.rest.len != 0 || p.saw("--root") || p.saw("--port") || p.saw("--show") ||
+    p.command.len > 0 && p.saw("--stop") || p.saw_empty("--stop"))
+    io.err().s("\{sys.program_name()\}: --list, --stop=<folder> and --stop-all each stand alone\n")
+    return 1
+  if !tending && p.rest.len != 1
+    p.print_usage()
+    return 1
+  $cmd: = sys.args()
+  where: = where_from(cmd.get(0), arena)
+  if where.server.len == 0
+    io.err()
+      .s("\{sys.program_name()\}: kssrv not found (`make kssrv` and `make kspage-web` first)\n")
+    return 1
+  if tending
+    // Caution: **Make the folder absolute** (the reason is at `full`); the note holds it so.
+    return tend(where, full(stop_said, arena) if stop_said.len > 0 else "",
+      p.command.equals("--stop-all"))
+  path: = p.rest.get(0)
+  if aim.port_num(at) == 0
+    io.err().s("\{sys.program_name()\}: that number cannot be waited on: \{at\}\n")
+    return 1
+  if !fs.exists(path)
+    io.err().s("\{sys.program_name()\}: there is no such file: \{path\}\n")
+    return 1
+  // **The writer creates the folder** (not every run goes through make).
+  fs.mkdir_all(aim.parent_of(where.log)) catch {}
+
+  if !fs.exists(where.page)
+    io.err()
+      .s("\{sys.program_name()\}: there is no page: \{where.page\} (`make kspage-web` first)\n")
+    return 1
+  split: = aim.split_path(path)
+  // If none is named, the served folder is the tree's root, or else the document's folder.
+  // Caution: **Make it absolute** (the reason is at `full`).
+  tree: = tree_root(split[0], arena)
+  said: = root_said if root_said.len > 0 else split[0] if tree.len == 0 else tree
+  root: = full(said, arena)
+  // **Make it relative to the served folder** (the reason is at `aim.doc_under`).
+  doc: = aim.doc_under(root, path)
+
+  // A running server is reused; starting one without looking piles up a server per document,
+  // their ports colliding (a common complaint about notebook servers).
+  had: = reusable(root, where.state)
+  if had.len > 0
+    $kept: = Str_builder.new()
+    defer kept.free()
+    open_url: = aim.url_for(had, doc, sys.is_windows(), kept@)
+    io.out().s("\{open_url\}\n")
+    io.out()
+      .s("\{sys.program_name()\}: used a running server (serving \{root\} on \
+        \{aim.port_in_url(had)\})\n")
+    hand_and_tell(open_url, doc, show_only, where, arena)
+    return 0
+
+  // Caution: **Send the output to a file**: the token appears only on that one line.
+  io.write_file(where.log, "") catch
+    io.err().s("\{sys.program_name()\}: cannot make the log: \{where.log\}\n")
+    return 1
+  $chose: = Str_builder.new()
+  defer chose.free()
+  serve_at: = free_port(aim.port_num(at), chose@)
+  if serve_at.len == 0
+    io.err().s("\{sys.program_name()\}: nothing free in the \{port_tries\} numbers from \{at\}\n")
+    return 1
+  // Caution: **Name the page from outside the root** (the reason is at `page_rel`).
+  // **The idle stop is passed only when this tool exits** (with `--show`, Ctrl+C is right there;
+  // `--idle` in `kssrv/main.kspls`).
+  all: U8[][6] = ::{ where.server, serve_at, root, "--local",
+    arena.text().s("--page=\{where.page\}").take(),
+    arena.text().s("--idle=\{idle_hold\}").take() }
+  told: = U8[][]::all
+  argv: = told.sub(0, 5) if show_only else told
+  $child: = subproc.spawn_redirect(argv, "", where.log, where.log) catch
+    // **Say what to check**: either the server or the log can be the cause, so naming one alone
+    // leads to suspecting a file that is fine.
+    io.err()
+      .s("\{sys.program_name()\}: cannot start \{where.server\} (the log it points at: \
+        \{where.log\})\n")
+    return 1
+  $url: U8[] = ""
+  for $step: Sz = 0; step < wait_steps; step += 1
+    seen: = io.read_file(where.log) catch
+      sys.sleep_ms(100)
+      continue
+    url = aim.url_in_log(seen)
+    if url.len > 0
+      break
+    sys.sleep_ms(100)
+  if url.len == 0
+    io.err().s("\{sys.program_name()\}: the server did not come up in 30 seconds (\{where.log\})\n")
+    return 1
+  // Caution: **Write the note only after the server is up** (not for one that failed).
+  // **Add to the existing records**; overwritten, an earlier server for another folder is lost,
+  // holding its port with nobody able to reuse it.
+  had_body: = io.read_file(where.state) catch ""
+  $note: = Str_builder.new()
+  defer note.free()
+  io.write_file(where.state, aim.state_text(url, root, had_body, note@)) catch
+    io.err().s("\{sys.program_name()\}: cannot write the note: \{where.state\}\n")
+  $text: = Str_builder.new()
+  defer text.free()
+  open_url: = aim.url_for(url, doc, sys.is_windows(), text@)
+  io.out().s("\{open_url\}\n")
+  hand_and_tell(open_url, doc, show_only, where, arena)
+  // Caution: **Once the browser has the URL, exit here.** Waiting would leave one of these behind
+  // per document for someone not watching a terminal (a double click).
+  // **The server stays** for the next open (`reusable`).
+  if !show_only
+    io.out().s("  * the server stays (the next open uses this one)\n")
+    io.out().s("  * it stops itself once every kspage tab has been closed\n")
+    io.out().s("  * --list shows the servers left running, --stop=\{root\} stops this one\n\n")
+    return 0
+  io.out().s("  * to stop it: Ctrl+C\n\n")
+  // **`make kspage` watches this output**, so the server's output is passed through unchanged
+  // (otherwise the lines about who connected reach nobody).
+  $sent: Sz = 0
+  for
+    seen: = io.read_file(where.log) catch
+      sys.sleep_ms(200)
+      continue
+    if seen.len > sent
+      io.out().s(seen.sub_from(sent))
+      sent = seen.len
+    if !child.alive()
+      break
+    sys.sleep_ms(200)
+  return child.wait()

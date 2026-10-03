@@ -1,0 +1,61 @@
+import "std/fs"
+import "std/mem" { Arena }
+import "std/sys"
+import "std/tests/sys_test"
+import "std/thread"
+import "std/verdict"
+
+// ==========================================
+// std/fs: a file lock, which a second holder waits for or is refused.
+// **Each check works in a folder that `mkdir_unique` creates for it**, so a run never sees what an
+// earlier run left.
+// ==========================================
+
+priv const base: U8[] = "out/tmp/kspl_test_lock"
+priv const hold_ms: I32 = 300 //< how long the other thread holds the lock
+
+priv struct Holder //< the thread that holds the lock, and what it tells the main thread
+  path: U8[]
+  holding: thread.Atomic_sz //< 1 once it has the lock
+  let_go: thread.Atomic_sz //< 1 just before it releases the lock
+
+priv fn held_elsewhere(path: U8[]): Bool //< whether try_take is refused because another holds it
+  $lock: = fs.File_lock.try_take(path) catch e
+    switch e case .held_elsewhere
+      return true
+    default
+      return false
+  lock.free()
+  return false
+
+#export
+fn lock_test_hold(h: Holder$@): Void$@ //< takes the lock, holds it a while, and releases it
+  $lock: = fs.File_lock.take(h.path) catch panic("the holder must get the free lock")
+  h.holding.store(1)
+  sys.sleep_ms(hold_ms)
+  h.let_go.store(1)
+  lock.free()
+  return null
+
+fn test_file_lock()
+  verdict.start("[Fs] a file lock refuses a second holder, and take waits for the first...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  dir: = fs.mkdir_unique(base, "lock_", arena) catch panic("cannot create the working directory")
+  path: = fs.join(dir, "lock", arena)
+  $first: = fs.File_lock.take(path) catch panic("a lock nobody holds must be taken")
+  assert(held_elsewhere(path), "try_take must refuse, without waiting, a lock another holds")
+  first.free()
+  $again: = fs.File_lock.try_take(path) catch panic("a lock let go must be free again")
+  again.free()
+  $h: = Holder::{ .path = path, .holding = thread.Atomic_sz.new(0),
+    .let_go = thread.Atomic_sz.new(0) }
+  t: = thread.Thread.spawn<|Holder|>(lock_test_hold, h@) catch panic("the holder must start")
+  for h.holding.load() == 0
+    sys.sleep_ms(5)
+  $waited: = fs.File_lock.take(path) catch panic("take must get the lock once it is let go")
+  assert(h.let_go.load() == 1, "take must wait until the holder lets the lock go")
+  waited.free()
+  t.join_and_free()
+  sys_test.clear_tree_best_effort(dir, arena)
+  verdict.pass("a second holder is refused or waits, and the lock is free once let go")

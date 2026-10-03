@@ -1,0 +1,36 @@
+//< An index on a read-only receiver "can be read but not written"
+//<
+//< Caution: Keep the non-firing side alongside: the **reads** of `for x in xs` and `xs[i]` pass,
+//< and so does `xs[i]@` (the read-only place `at_ref` returns). What stops is taking that as an
+//< `I32$@`, refused for its mutability rather than as "the address of a copy".
+// EXPECT: cannot assign through a read-only location
+// EXPECT: expected 'I32$@', but got 'I32@'
+// EXPECT-NOT: discards qualifiers
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+
+// The passing side: a read-only receiver is read by for in and by an index.
+priv fn total(xs: List<|I32|>@): I32
+  $s: = 0
+  for x in xs
+    s += x
+  return s + xs[0]
+
+// The stopping side: writing to a read-only receiver.
+priv fn bad_write(xs: List<|I32|>@)
+  xs[0] = 5
+
+// The stopping side: taking a **writable** pointer from a read-only receiver.
+priv fn bad_addr(xs: List<|I32|>@): I32$@
+  return xs[0]@
+
+fn main(): I32
+  arena: = Arena.new(4096)
+  defer arena.free()
+  $src: = List<|I32|>.new(arena)
+  src.push(7)
+  src.push(9)
+  bad_write(src@)
+  io.out().s("\{total(src@)\}/\{bad_addr(src@)$\}\n")
+  return 0

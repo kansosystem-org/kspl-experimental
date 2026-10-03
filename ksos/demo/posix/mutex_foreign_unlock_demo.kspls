@@ -1,0 +1,32 @@
+//< When a task that does not hold the mutex unlocks it, the kernel panics instead of ignoring it
+//<
+//< If the kernel ignored it, the caller would go on believing it had released the lock, and a
+//< stretch of code with no mutual exclusion would go undiagnosed.
+//< Success is the panic, so `ksos-mutex-foreign-unlock` greps the output for it.
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+import "std/io"
+
+$g_mutex: sync.Mutex
+$tcb_owner: Task
+$tcb_other: Task
+$stack_owner: U8[65536]
+$stack_other: U8[65536]
+
+fn owner(_arg: Void$@): Void
+  io.out().s("=== Kanso OS (POSIX) mutex unlock by a non-holder ===\n")
+  g_mutex.lock()
+  io.out().s("[owner] holding; handing the CPU to the other task\n")
+  Task.yield()
+  g_mutex.unlock()
+
+fn other(_arg: Void$@): Void
+  io.out().s("[other] unlocking a mutex I do not hold; this must stop here\n")
+  g_mutex.unlock()
+  io.out().s("[other] returned from unlock without a panic\n")
+
+fn main()
+  g_mutex.init()
+  tcb_owner.create(U8$[]::stack_owner, owner, null, 1, "owner")
+  tcb_other.create(U8$[]::stack_other, other, null, 1, "other")
+  task.start_scheduler()

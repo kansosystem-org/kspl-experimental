@@ -1,0 +1,279 @@
+import "kspage/lay/flow"
+import "kspage/model/doc" { Doc }
+import "kspage/model/fixed_font" as fixed
+// `html.write` needs metrics (a line-height multiple scales one line's height). Why these are
+// fixed: the header of `kspage/model/fixed_font.kspls`.
+import "kspage/model/paint"
+import "kspage/model/style" { Sheet }
+import "kspage/share/html"
+import "kspage/tests/base"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// kspage: checks a code block (a paragraph that does not wrap).
+// **Wrapping changes the text**: the whitespace at the break is dropped (`skip_spaces` in
+// `kspage/lay/line.kspls`), so the indent depth silently changes. A paragraph that does not wrap
+// stays one box past the column's width.
+// The metrics are fixed (`kspage/model/fixed_font`): ASCII 8px, a line 19.2px.
+// ==========================================
+
+priv fn code_sheet(arena: Arena$@): Sheet$@ //<
+  //< A table with a wrapping "body" and a non-wrapping "code"
+  //<
+  //< **Fixed width comes from the style's font**; the fixed metrics ignore the typeface, so only
+  //< the wrapping is checked.
+  sheet: = Sheet.new(base.root_font(), arena)
+  sheet.add("body", paint.inherit_all())
+  $mono: paint.Font_spec = paint.inherit_all()
+  mono.family = Option<|U8[]|>.some("monospace")
+  code: = sheet.add("code", mono)
+  code.wrap = false
+  return sheet
+
+priv const source_line: U8[] = "    let x = 1;" //< the column's width is 40px = 5 ASCII characters
+  //<
+  //< "    let x = 1;" is 14 characters = 112px, so a wrapping style would split it into lines
+
+priv const spaced_line: U8[] = "aa    bb" //< a text with a run of whitespace
+  //<
+  //< **Wrapped, the whitespace after the break is dropped**, breaking code aligned with spaces
+
+fn test_no_wrap_keeps_one_box()
+  verdict.start("[kspage/code] a paragraph that does not wrap becoming one box test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  doc: = Doc.new(arena)
+  doc.add_block("code").add_text(source_line)
+
+  page: = flow.layout(doc, code_sheet(arena), fixed.make(), 40.0, arena)
+  assert(page.boxes.len == 1, "it does not wrap, so the box is one")
+  b: = page.boxes.get(0)
+  assert(b.text.equals(source_line), "the text is as it was typed (no whitespace is dropped)")
+  assert(base.near(b.rect.w, 112.0),
+    "14 ASCII characters = 112px. Past the column's width it stays as it is")
+  assert(base.near(page.height, 19.2), "the row is one row high")
+  verdict.pass("past the column's width it does not split, and the whitespace stays as it was.")
+
+fn test_wrapping_style_still_splits_and_drops_spaces() //<
+  //< **The same text splits under a wrapping style**, losing the whitespace at the split
+  verdict.start("[kspage/code] a wrapping style splitting as it always did test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  doc: = Doc.new(arena)
+  doc.add_block("body").add_text(spaced_line)
+
+  page: = flow.layout(doc, code_sheet(arena), fixed.make(), 40.0, arena)
+  assert(page.boxes.len > 1, "on a wrapping style the boxes grow")
+  $joined: = Str_builder.new()
+  defer joined.free()
+  for $i: Sz = 0; i < page.boxes.len; i += 1
+    joined.s(page.boxes.get(i).text)
+  same: = joined.slice().equals(spaced_line)
+  assert(!same, "the whitespace at the split is dropped, so the text changes")
+  verdict.pass("that wrapping changes the text is made sure of too.")
+
+fn test_next_block_wraps_again() //<
+  //< The paragraph after one that does not wrap wraps again
+  //<
+  //< Caution: **Do not carry it over to the next paragraph.** The pen is set anew per paragraph
+  //< (`Pen.wrap`).
+  verdict.start("[kspage/code] what follows a paragraph that does not wrap wrapping test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  doc: = Doc.new(arena)
+  doc.add_block("code").add_text(source_line)
+  doc.add_block("body").add_text(source_line)
+
+  page: = flow.layout(doc, code_sheet(arena), fixed.make(), 40.0, arena)
+  assert(page.boxes.len > 2, "the paragraph behind splits, so the boxes are more than two")
+  assert(page.boxes.get(0).text.equals(source_line), "the paragraph in front stays one whole")
+  verdict.pass("the setting not to wrap does not cross a paragraph.")
+
+fn test_wrap_survives_store() //< it survives saving and loading
+  //<
+  //< **The default is to wrap** (it is written only when false).
+  verdict
+    .start("[kspage/code] the setting not to wrap being left through a putting out and in test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  doc: = Doc.new(arena)
+  doc.add_block("code").add_text(source_line)
+
+  back: = base.round_trip(doc, code_sheet(arena), arena)
+  switch back.sheet.find("code") case .some(s)
+    assert(!s.wrap, "read back it still does not wrap")
+  case .none
+    panic("kspage_code: the style 'code' cannot be read back")
+  switch back.sheet.find("body") case .some(s)
+    assert(s.wrap, "a style with nothing written on it wraps (the default)")
+  case .none
+    panic("kspage_code: the style 'body' cannot be read back")
+  verdict.pass("the setting not to wrap is left through a round trip of JSON.")
+
+fn test_html_keeps_spaces() //<
+  //< The exported HTML keeps the whitespace
+  //<
+  //< Caution: **Keep the whitespace in the HTML too**; with `nowrap` alone the browser collapses
+  //< runs of it into one.
+  verdict.start("[kspage/code] the HTML written out keeping the whitespace test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  doc: = Doc.new(arena)
+  doc.add_block("code").add_text(source_line)
+
+  $out: = Str_builder.new()
+  defer out.free()
+  html.write(doc, code_sheet(arena), fixed.make(), out@)
+  text: = out.slice()
+  assert(base.has(text, "white-space: pre;"), "a style that does not wrap is written out as pre")
+  assert(base.has(text, source_line), "the text comes out as it was typed")
+  verdict.pass("it is written out with both the wrapping and the folding of whitespace stopped.")
+priv fn panel_sheet(arena: Arena$@): Sheet$@ //<
+  //< A table with a non-wrapping style that has a fill and space before and after
+  //<
+  //< **With the spacing at 0 there are no stripes**, so the fault checked here would not show.
+  sheet: = code_sheet(arena)
+  switch sheet.find("code") case .some(s)
+    s.fill = Option<|U32|>.some(0xf5f5f5U32)
+    s.space_before = 8.0
+    s.space_after = 8.0
+  case .none
+    panic("kspage_code: there is no style 'code'")
+  switch sheet.find("body") case .some(s)
+    s.fill = Option<|U32|>.some(0xeeeeeeU32)
+    s.space_before = 8.0
+    s.space_after = 8.0
+  case .none
+    panic("kspage_code: there is no style 'body'")
+  return sheet
+
+fn test_a_run_of_code_lines_is_one_panel() //<
+  //< One fenced block is filled by one band
+  //<
+  //< **Fill the code lines one by one and the background color shows through the gaps between
+  //< them** (black and white stripes).
+  verdict.start("[kspage/code] rows of code carrying on becoming one band test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  doc: = Doc.new(arena)
+  doc.add_block("code").add_text("fn main() {")
+  doc.add_block("code").add_text("  let x = 1;")
+  doc.add_block("code").add_text("}")
+
+  page: = flow.layout(doc, panel_sheet(arena), fixed.make(), 400.0, arena)
+  assert(page.panels.len == 1, "three rows and still one band")
+  band: = page.panels.get(0)
+  assert(base.near(band.rect.h, 57.6),
+    "the band's height is three rows (the gaps between do not go in)")
+  assert(base.near(page.height, 73.6),
+    "the space before and behind is one each, outside the fenced block")
+  verdict.pass("rows of code carrying on are one band, with no ground colour peeping between.")
+
+fn test_another_style_breaks_the_run() //<
+  //< **Whatever separates fenced blocks keeps them separate**
+  //<
+  //< Another style or a wrapping paragraph in between ends the band there (otherwise paragraphs
+  //< with another look would share the band).
+  verdict.start("[kspage/code] another style coming in between cutting the fenced block test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  doc: = Doc.new(arena)
+  doc.add_block("code").add_text("fn main() {")
+  doc.add_block("body").add_text("This is the body.")
+  doc.add_block("code").add_text("}")
+
+  page: = flow.layout(doc, panel_sheet(arena), fixed.make(), 400.0, arena)
+  assert(page.panels.len == 3, "the band is another per style")
+  for $i: Sz = 0; i < page.panels.len; i += 1
+    assert(base.near(page.panels.get(i).rect.h, 19.2), "every band is one row high")
+  verdict
+    .pass("the paragraph that came in between cuts the fenced block, and the bands become three.")
+
+fn test_indent_is_room_inside_the_panel() //<
+  //< **An indent does not narrow the region**
+  //<
+  //< Narrowed, the fill would start right of the indent and leave a strip of background color left
+  //< of the code (on a list, before the marker).
+  verdict.start("[kspage/code] the indent becoming the space inside the fill test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  doc: = Doc.new(arena)
+  doc.add_block("code").add_text("fn main() {")
+
+  sheet: = panel_sheet(arena)
+  switch sheet.find("code") case .some(s)
+    s.indent = 8.0
+  case .none
+    panic("kspage_code: there is no style 'code'")
+  page: = flow.layout(doc, sheet, fixed.make(), 400.0, arena)
+  assert(page.panels.len == 1, "the band is one")
+  band: = page.panels.get(0)
+  assert(base.near(band.rect.x, 0.0),
+    "the band's left edge is the region's left edge (in front of the indent)")
+  assert(base.near(band.rect.w, 400.0), "the band's width is the whole region")
+  assert(page.boxes.len == 1, "the box is one")
+  assert(base.near(page.boxes.get(0).rect.x, 8.0), "the text alone comes right by the indent")
+  verdict
+    .pass("the indent only lowers the contents, and the fill comes out across the whole region.")
+fn test_pad_is_room_between_the_band_and_the_text() //<
+  //< **The line-height multiple cannot stand in for the padding**
+  //<
+  //< It widens the gaps between lines too, and the line spacing looks too large.
+  verdict.start("[kspage/code] the space inside going between the band and the contents test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  doc: = Doc.new(arena)
+  doc.add_block("code").add_text("fn main() {")
+  doc.add_block("code").add_text("}")
+
+  sheet: = panel_sheet(arena)
+  switch sheet.find("code") case .some(s)
+    s.pad = 10.0
+  case .none
+    panic("kspage_code: there is no style 'code'")
+  page: = flow.layout(doc, sheet, fixed.make(), 400.0, arena)
+  assert(page.panels.len == 1, "the band is one")
+  band: = page.panels.get(0)
+  // Two lines = 38.4px. With 10px padding above and below, 58.4px.
+  assert(base.near(band.rect.h, 58.4), "the band is 10px taller than the contents above and below")
+  assert(base.near(band.rect.x, 0.0),
+    "the band's left edge is the region's left edge (in front of the space)")
+  assert(base.near(band.rect.w, 400.0), "the band's width is the whole region too")
+  assert(page.boxes.len == 2, "the boxes are two")
+  assert(base.near(page.boxes.get(0).rect.x, 10.0), "the text comes right by the space")
+  assert(base.near(page.boxes.get(0).rect.y, 18.0),
+    "the first row is below the space before and the space inside")
+  // The gap between lines stays one line (the multiple is unchanged).
+  assert(base.near(page.boxes.get(1).rect.y - page.boxes.get(0).rect.y, 19.2),
+    "the gap between the rows does not open")
+  assert(base.near(page.height, 74.4), "the space before and behind is outside the band")
+  verdict
+    .pass("the space inside goes between the band and the contents alone, and the gap between the \
+      rows does not open.")
+
+fn test_pad_does_not_narrow_the_next_block() //<
+  //< A block's padding does not narrow the next block
+  //<
+  //< Caution: **Restore the region's right edge**, or the next sibling of a block with padding is
+  //< laid out narrower by that much (the number of wraps changes).
+  verdict.start("[kspage/code] the space inside not being left for the next block test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  doc: = Doc.new(arena)
+  doc.add_block("code").add_text("x")
+  doc.add_block("body").add_text("y")
+
+  sheet: = panel_sheet(arena)
+  switch sheet.find("code") case .some(s)
+    s.pad = 40.0
+  case .none
+    panic("kspage_code: there is no style 'code'")
+  page: = flow.layout(doc, sheet, fixed.make(), 400.0, arena)
+  assert(page.panels.len == 2, "the bands are two")
+  next_band: = page.panels.get(1)
+  assert(base.near(next_band.rect.w, 400.0), "the next block's band is the whole region")
+  assert(base.near(page.boxes.get(1).rect.x, 0.0),
+    "the next block's text starts from the left edge")
+  verdict.pass("the space inside acts within that block alone.")

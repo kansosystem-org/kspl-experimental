@@ -1,0 +1,66 @@
+//< A probe showing that a crash record survives a real CPU soft reset
+//<
+//< The record is the one a freestanding panic leaves (`std/sys.kspls`, the `.noinit_panic`
+//< section); the reset is `ksos/drivers/cortex_m/scs.system_reset` (AIRCR.SYSRESETREQ).
+//< On the first boot take_panic_record() finds nothing (no panic yet), so the probe panics on
+//< purpose. panic_hook prints the message and resets the CPU with system_reset(). This is a warm
+//< reset, not a power cycle, so the .noinit_panic region keeps its content in RAM.
+import "ksos/demo/common/semihost_console" as con
+import "ksos/drivers/cortex_m/scs"
+import "ksos/kernel/task" + { Task }
+import "std/strfmt" as _strfmt // `:08x`
+
+$tcb_probe: Task
+$stack_probe: U8[4096]
+
+const test_msg: U8[] = "panic probe: intentional test panic"
+
+fn panic_reset_hook(msg: U8$[]) //<
+  //< The panic_hook for the first boot only: prints the message, then really resets the CPU
+  con.puts("[panic] hook fired: ")
+  con.puts(msg)
+  con.puts("\n[panic] triggering a real CPU reset (AIRCR.SYSRESETREQ)...\n")
+  scs.system_reset()
+
+fn probe_task(_arg: Void$@): Void
+  switch take_panic_record() case .some(info)
+    con.puts("=== Cortex-M panic-record probe (2nd boot, post-reset) ===\n")
+    con.puts("[recovered] msg: ")
+    con.puts(info.msg)
+    con.putc('\n')
+    con.out().s("[recovered] sp: 0x\{U32::info.sp:08x\}\n")
+
+    $msg_matches: Bool = info.msg.len == test_msg.len
+    for $i: Sz = 0; i < info.msg.len && i < test_msg.len; i += 1
+      if info.msg[i] != test_msg[i]
+        msg_matches = false
+    con.check("recovered message matches what was panicked with", msg_matches)
+
+    // The SP depends on each run's stack layout and cannot be predicted exactly, but it should be
+    // non-zero and in a valid RAM range (0x20000000-0x20020000; see link.ld).
+    con.check("recovered sp looks like a plausible RAM address",
+      info.sp >= 0x20000000 && info.sp < 0x20020000)
+
+    // The exact words in the stack fragment depend on the compiler's frame layout, but if they
+    // really came from the stack at least one is non-zero (record_panic() copies raw bytes from
+    // the SP on). All zeros means the copy did not happen, which points at a bug.
+    $any_nonzero: = false
+    for i in Range.asc(info.stack_len)
+      if panic_stack_word(i) != 0
+        any_nonzero = true
+    con.check("recovered stack fragment has at least one nonzero word", any_nonzero)
+
+    con.print_summary("panic-record probe")
+    con.exit()
+    for {}
+  case .none
+    con.puts("=== Cortex-M panic-record probe (1st boot) ===\n")
+    con.puts("about to panic on purpose...\n")
+    panic_hook = panic_reset_hook
+    panic("panic probe: intentional test panic")
+    for {} // unreachable (a panic goes through panic_hook to system_reset())
+// The bare-metal entry called from startup.S. On either boot probe_task never returns normally:
+// it ends with con.exit() and for{} (second boot) or with system_reset() through the panic.
+#export
+fn ksos_main()
+  task.run_single_task(tcb_probe@, U8$[]::stack_probe, probe_task, "panic", con.exit)

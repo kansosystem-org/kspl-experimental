@@ -1,0 +1,39 @@
+//< [W0107] Finds places that take a lock and do not release it
+//<
+//< Forget to release and every thread trying to take that lock stops forever (a deadlock).
+//< forgets() alone is a finding; an explicit unlock and a release by defer are not.
+//< **The marks' line numbers name the `mx.lock()` lines**: the finding points at the lock.
+// EXPECT: [W0107] 'mx' is locked here but never unlocked
+// EXPECT: lock_not_released.kspls:16:3: warning: [W0107]
+// EXPECT-NOT: lock_not_released.kspls:22
+// EXPECT-NOT: lock_not_released.kspls:31
+import "std/io"
+import "std/thread"
+
+priv fn forgets() //< forgetting to call it (a finding)
+  $mx: = thread.Mutex<|I32|>.new(0) catch
+    return
+  p: = mx.lock()
+  p$ += 1
+
+priv fn explicit_unlock() //< an explicit unlock (not a finding)
+  $mx: = thread.Mutex<|I32|>.new(0) catch
+    return
+  p: = mx.lock()
+  p$ += 1
+  mx.unlock()
+
+priv fn released_by_defer() //< a release by defer (not a finding)
+  //<
+  //< Every road out releases, so forgets()'s problem cannot arise.
+  $mx: = thread.Mutex<|I32|>.new(0) catch
+    return
+  p: = mx.lock()
+  defer { mx.unlock(); }
+  p$ += 1
+
+fn main()
+  forgets()
+  explicit_unlock()
+  released_by_defer()
+  io.out().s("done\n")

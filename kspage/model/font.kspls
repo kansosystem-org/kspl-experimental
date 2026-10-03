@@ -1,0 +1,67 @@
+//< The interface for looking up a font's measurements
+//<
+//< All the layout needs is "how many pixels wide is this string in this font" and "how tall is
+//< one line".
+
+// ==========================================
+// **Why a struct of function-typed fields.**
+//   import "kspage/model/fixed_font" as fixed;
+//   src: = fixed.make();
+//   f: = Font::{ .family = "sans", .size_px = 16.0, .weight = 400U16, .italic = false };
+//   w: = src.measure_width(f, "hello");
+// ==========================================
+
+struct Font //< which font to draw in
+  //<
+  //< **It holds only what affects the measurements** (not the color or the lines).
+  family: U8[] //<
+    //< The family name
+    //<
+    //< In the browser it goes into canvas's `font` string; in native code, into the search key.
+    //< Caution: **The caller keeps the text alive** (this holds no copy of it).
+  size_px: F32 //< the size of an em (pixels)
+  weight: U16 //<
+    //< The weight, 100 to 900
+    //<
+    //< **Pass it in multiples of 100** (in between, each implementation rounds differently).
+  italic: Bool
+
+fn default_root(): Font //< the root font a style table starts from
+  //<
+  //< A new document takes it, and so does a saved text that names no root.
+  return Font::{ .family = "sans-serif", .size_px = 16.0, .weight = 400U16, .italic = false }
+
+struct Vmetrics //< one font's vertical measurements (pixels)
+  //<
+  //< **They do not depend on the string**, or the line heights would not be even within one
+  //< paragraph.
+  // Above the baseline and below it. **Both are positive values.**
+  ascent: F32
+  descent: F32
+  line_gap: F32 //< what is added between one line and the next
+
+typedef Measure_width = fn(font: Font, text: U8[]): F32 //<
+  //< The horizontal width of text drawn in font (pixels)
+  //<
+  //< **text is a run of UTF-8 bytes.** Do not pass a run cut in the middle of a character.
+  //< Caution: **Do not let a line break in** (this measures one line only).
+
+typedef Vmetrics_of = fn(font: Font): Vmetrics //< font's vertical measurements
+
+struct Font_source //< where the measurements come from
+  measure_width: Measure_width
+  vmetrics_of: Vmetrics_of
+
+impl Vmetrics
+  fn line_height(m: Vmetrics): F32 //< the distance to the next line's baseline (pixels)
+    //<
+    //< The sum is computed here only, or lines come out tight where `line_gap` is forgotten.
+    //< Caution: **Compute it from the measurements**, or a caller that holds them **measures the
+    //< typeface again** (two boundary calls per box).
+    return m.ascent + m.descent + m.line_gap
+
+impl Font_source
+  fn line_height(r: Font_source, font: Font): F32 //< straight from the typeface
+    //<
+    //< It is the shortcut for a caller that holds no cache.
+    return r.vmetrics_of(font).line_height()

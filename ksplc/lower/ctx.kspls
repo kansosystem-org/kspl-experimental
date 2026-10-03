@@ -1,0 +1,150 @@
+//< The state one lowering walk carries, and the helpers that collect what a node hoists
+//<
+//< `Lowering_ctx` belongs to the walk: the statements hoisted before the one being lowered
+//< (`pre_stmts`), the numbering of temporaries and labels, and the stacks of cleanups (`defer` and
+//< ARC's releases) and jump targets that each way out reads. The walk itself is in `root.kspls`;
+//< every file of `lower/` receives this context.
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/core" as base_core
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/scope" { Sema_symbol, Sym_kind }
+import "std/ds" { List, Map }
+import "std/str" { Str_builder }
+
+struct Jump_ctx
+  cleanup_depth: Sz
+  continue_label: U8[]
+  continue_used: Bool
+  break_label: U8[]
+  break_used: Bool
+  jump_label: U8[]
+  is_loop: Bool
+
+impl Jump_ctx
+  fn new(cleanup_depth: Sz, cont_label: U8[], brk_label: U8[], jump_label: U8[], is_loop: Bool):
+    Jump_ctx
+    return Jump_ctx::{
+      .cleanup_depth = cleanup_depth,
+      .continue_label = cont_label,
+      .continue_used = false,
+      .break_label = brk_label,
+      .break_used = false,
+      .jump_label = jump_label,
+      .is_loop = is_loop,
+    }
+
+struct Fallback_ctx
+  target: U8[]
+  label: U8[]
+  label_used: Bool
+  depth: Sz
+
+struct Lowering_ctx
+  sema: Sema_ctx$@
+  pre_stmts: List<|Ast_node$@|>$@
+  tmp_counter: I32
+  fb: Fallback_ctx
+  cleanup_stack: List<|List<|Ast_node$@|>$@|>$@
+  jump_stack: List<|Jump_ctx|>$@
+  arc_param_pending: List<|Ast_node$@|>$@ //<
+    //< The releases of ARC-managed arguments, waiting for the function body's cleanup scope
+    //<
+    //< lower_decl_fn pushes them, and the first lower_block flushes them. There they are
+    //< released like the local variables, both at the normal exit and on an early return (see
+    //< ksplc/lower/arc.kspls).
+  lower_depth: Sz
+  arc_helpers: Map<|U8[], Ast_node$@|>$@ //<
+    //< The per-type helper functions for the ARC chain's retain/release
+    //<
+    //< They are the drop glue in ksplc/lower/arc.kspls. arc_helpers maps
+    //< "<method>:<mangled type name>" to the generated decl_fn, and arc_helper_decls lists them
+    //< for adding to root afterwards.
+  arc_helper_decls: List<|Ast_node$@|>$@
+
+impl Lowering_ctx
+  fn new(sema: Sema_ctx$@): Lowering_ctx$@
+    pre_stmts: = base_ast.new_ast_node_list()
+    cleanup_stack: = List<|List<|Ast_node$@|>$@|>.create(base_core.arena)
+    jump_stack: = List<|Jump_ctx|>.create(base_core.arena)
+    arc_param_pending: = base_ast.new_ast_node_list()
+    arc_helpers: = base_core.arena
+      .create(Map<|U8[], Ast_node$@|>.new(base_core.arena))
+    arc_helper_decls: = base_ast.new_ast_node_list()
+    fb: = Fallback_ctx::{ .target = "", .label = "", .label_used = false, .depth = 0 }
+    ctx: = Lowering_ctx::{ .sema = sema, .pre_stmts = pre_stmts, .tmp_counter = 0, .fb = fb,
+      .cleanup_stack = cleanup_stack, .jump_stack = jump_stack,
+      .arc_param_pending = arc_param_pending, .lower_depth = 0, .arc_helpers = arc_helpers,
+      .arc_helper_decls = arc_helper_decls }
+    return base_core.arena.create(ctx)
+
+  fn push_jump_ctx(r: Self$@, cont_label: U8[], brk_label: U8[], user_label: U8[], is_loop: Bool) //<
+    //< The jump-target registration shared by if / for / switch / labeled_block
+    //<
+    //< cleanup_depth is always the current cleanup_stack depth.
+    jc: = Jump_ctx.new(r.cleanup_stack.len, cont_label, brk_label, user_label, is_loop)
+    r.jump_stack.push(jc)
+
+  fn pop_jump_ctx(r: Self$@): Jump_ctx //< the pop matching push_jump_ctx
+    //<
+    //< Its break/continue flags tell the caller whether wrapping is needed.
+    last_idx: = r.jump_stack.len - 1
+    jc: = r.jump_stack.get(last_idx)
+    r.jump_stack.len -= 1
+    return jc
+
+  fn flush_pre_stmts_to_list(r: Self$@, start_idx: Sz, dest: List<|Ast_node$@|>$@)
+    for $i: = start_idx; i < r.pre_stmts.len; i += 1
+      dest.push(r.pre_stmts.get(i))
+    r.pre_stmts.len = start_idx
+
+  fn flush_pre_stmts_to_node(r: Self$@, start_idx: Sz, dest: Ast_node$@)
+    for $i: = start_idx; i < r.pre_stmts.len; i += 1
+      dest.add_child(r.pre_stmts.get(i))
+    r.pre_stmts.len = start_idx
+
+  fn gen_indexed_name(r: Self$@, prefix: U8[]): U8$[] //<
+    //< A new temporary name: prefix followed by a serial number
+    //<
+    //< prefix is only read, so it is a `U8[]`; as `U8$[]` a `.rodata` string could not be passed.
+    r.tmp_counter += 1
+    $s: = Str_builder.new()
+    c: = r.tmp_counter
+    pad: = "00" if c < 10 else ("0" if c < 100 else "")
+    s.s(prefix).s(pad).s("\{c\}")
+    name: = base_core.arena.dup_str(s.slice())
+    s.free()
+    return name
+
+  fn gen_tmp_name(r: Self$@): U8$[]
+    return r.gen_indexed_name("_mir_tmp_")
+  fn gen_label_name(r: Self$@): U8$[]
+    return r.gen_indexed_name("_mir_label_")
+
+  fn build_let_decl(r: Self$@, name: U8[], type_id: I32, expr: Ast_node$@, loc: base_ast.Loc):
+    Ast_node$@
+    decl: = Ast_node.build_var_decl(name, r.sema.env.get_str(type_id), type_id, loc).add_child(expr)
+    kw: = decl.find_child(.k_keyword)
+    if kw != null
+      kw.text = "let"
+    return decl
+
+fn register_synth_symbol(decl: Ast_node$@, kind: Sym_kind, name: U8[], type_id: I32) //<
+  //< It gives a declaration Lower synthesizes (a helper, a thunk, a vtable) its symbol
+  //<
+  //< The name is already the C one. is_premangled says so, keeping genc and genllvm from putting
+  //< a second prefix on; it is not is_export, since only KSPL calls these, under the internal ABI
+  //< (see is_premangled in sema/decl/scope.kspls).
+  sym: = Sema_symbol.new(kind, name, decl)
+  sym.type_id = type_id
+  sym.flags.is_premangled = true
+  decl.sym_ptr = Void$@::sym
+
+impl Ast_node
+  fn hoist_to_tmp(r: Ast_node$@, lctx: Lowering_ctx$@, loc: base_ast.Loc): Ast_node$@ //<
+    //< It copies expression r into a temporary and returns an identifier node for that temporary
+    //<
+    //< The statement that copies it is pushed onto pre_stmts.
+    //< It does not lower r; the caller does.
+    tmp_name: = lctx.gen_tmp_name()
+    lctx.pre_stmts.push(lctx.build_let_decl(tmp_name, r.type_id, r, loc))
+    return Ast_node.build_ident(tmp_name, r.type_id, loc)

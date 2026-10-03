@@ -1,0 +1,29 @@
+//< A closure can be written only inside a block
+//<
+//< The environment is a temporary on the caller's frame, and the top level has nowhere to declare
+//< it. **That the reason is stated is pinned down**, not an error naming `_anon_env_v_1`. A
+//< function with no capture list holds no environment and has to pass in a top-level `const`.
+// EXPECT: a closure can only appear inside a function body
+// EXPECT-NOT: undefined path or identifier
+import "std/io"
+
+priv typedef Int_op = fn(a: I32): I32
+
+priv struct Slot
+  priv op: Int_op
+
+// The passing side: an anonymous function can be placed in a top-level const and in a struct's
+// field.
+priv const g_op: Int_op = fn(a: I32): I32
+  return a * 2
+priv const g_slot: Slot = Slot::{ .op = fn(a: I32): I32 {
+  return a + 1;
+} }
+
+// The stopping side: the shape with a capture list written cannot be placed outside a block.
+priv const g_pred: Callable1<|I32, Bool|> = fn(x: I32; ): Bool
+  return x > 0
+
+fn main(): I32
+  io.out().s("\{g_op(4)\}/\{g_slot.op(4)\}/\{g_pred.call(1)\}\n")
+  return 0

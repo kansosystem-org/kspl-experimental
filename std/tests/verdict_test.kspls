@@ -1,0 +1,159 @@
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" // `arena.text()` and `replace`
+import "std/subproc"
+import "std/verdict"
+
+// ==========================================
+// std/verdict: tests of a run of checks that continues past a failure.
+// **Each run is its own child process**: the tally lasts as long as the process, so a run in this
+// process would end this one. The test checks all of the child's output and its exit code.
+// Caution: **Test the failing path above all.** No suite would notice a `finish` that prints
+// `ALL PASS` after a failure.
+// ==========================================
+
+priv const work_dir: U8[] = "out/tmp/kspl_test_verdict"
+
+priv const child_head: U8[] =
+  """
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/verdict"
+
+fn main(): I32
+"""
+
+// A failed check and a skipped check both let the run continue; only the failure is named.
+priv const falls_main: U8[] =
+  """
+  verdict.begin("probe")
+  verdict.check("one holds", true, "")
+  verdict.check("two fails", false, "what was found")
+  verdict.skip_check("three is passed over", "this machine lacks it")
+  verdict.check("four still runs", true, "")
+  return verdict.finish()
+"""
+priv const falls_out: U8[] =
+  """
+pass probe: one holds
+FAIL probe: two fails: what was found
+SKIP probe: three is passed over: this machine lacks it
+pass probe: four still runs
+RESULT: SOME FAILED (1) -> two fails
+"""
+
+// Nothing failed, so it passes and names what it skipped; an empty label prints no separator.
+priv const passes_main: U8[] =
+  """
+  verdict.begin("")
+  verdict.check("one holds", true, "")
+  verdict.skip_check("two is passed over", "why")
+  return verdict.finish()
+"""
+priv const passes_out: U8[] =
+  """
+pass one holds
+SKIP two is passed over: why
+RESULT: ALL PASS (1 skipped) -> two is passed over
+"""
+
+priv const stops_main: U8[] =
+  """
+  verdict.begin("probe")
+  verdict.check("one holds", true, "")
+  return verdict.fatal("its material is not there")
+"""
+priv const stops_out: U8[] =
+  """
+pass probe: one holds
+FAIL probe: its material is not there
+RESULT: SOME FAILED (1)
+"""
+
+// A walk of no files fails, just as one that finds something does; the findings are indented below.
+priv const walks_main: U8[] =
+  """
+  verdict.begin("")
+  arena: = Arena.new(4096)
+  defer arena.free()
+  $found: = List<|U8[]|>.new(arena)
+  verdict.check_list("a walk of one", 1, "files", found@, "")
+  verdict.check_list("a walk of none", 0, "files", found@, "")
+  found.push("x.kspls holds it")
+  verdict.check_list("a walk finding one", 2, "files", found@, "mend it so")
+  return verdict.finish()
+"""
+priv const walks_out: U8[] =
+  """
+pass a walk of one (1 files)
+FAIL a walk of none (0 files): it walked no files at all, so it held nothing up against anything — the reading broke, or what it reads has moved
+FAIL a walk finding one (2 files): x.kspls holds it
+    mend it so
+RESULT: SOME FAILED (2) -> a walk of none (0 files), a walk finding one (2 files)
+"""
+
+// More failures than the `RESULT:` line has room to name.
+priv const overflows_main: U8[] =
+  """
+  for _i in Range.asc(300)
+    verdict.check("a check whose name is long enough to fill the room", false, "")
+  return verdict.finish()
+"""
+
+priv fn run_child( //< writes one child's program and runs it to the end
+  ksplc: U8[], //< the compiler that runs the child
+  name: U8[], //< the child's file name, which is also how a failure names it
+  body: U8[], //< the child's `main`, indented
+  arena: Arena$@,
+): subproc.Run_result
+  fs.mkdir_all(work_dir) catch panic("the work directory must be creatable")
+  src: = arena.text().s(work_dir).c('/').s(name).s(".kspls").take()
+  io.write_file(src, arena.text().s(child_head).s(body).take()) catch
+    panic("the child's program must be writable")
+  r: = subproc.run_capture(U8[][]::{ ksplc, "run", src }, "", 300000, 1 << 20, arena)
+  assert(!r.spawn_failed && !r.timed_out, "the child must start and come to an end")
+  return r
+
+priv fn holds_to( //< runs one child and stops if its output or exit code is not what is wanted
+  ksplc: U8[],
+  name: U8[],
+  body: U8[],
+  want: U8[], //< all the output it should print
+  want_code: I32, //< the exit code it should end with
+  arena: Arena$@,
+)
+  r: = run_child(ksplc, name, body, arena)
+  // A child's standard output is text mode on Windows, so its lines arrive as CRLF.
+  got: = r.stdout_data.replace("\r\n", "\n", arena)
+  if got.equals(want) && r.exit_code == want_code
+    return
+  panic(U8$[]::arena.text().s(name).s(" put out\n").s(got).s("and ended on \{r.exit_code\}, where ")
+    .s("it should put out\n").s(want).s("and end on \{want_code\}\n").s(r.stderr_data).take())
+
+fn test_verdict_goes_on_past_a_failure(ksplc: U8[], arena: Arena$@)
+  verdict.start("[Verdict] a run of checks going on past a failure test...")
+  holds_to(ksplc, "falls", falls_main, falls_out, 1, arena)
+  holds_to(ksplc, "passes", passes_main, passes_out, 0, arena)
+  holds_to(ksplc, "stops", stops_main, stops_out, 1, arena)
+  verdict
+    .pass("A failed check does not stop the run, and the `RESULT:` line and the exit code say it.")
+
+fn test_verdict_walk_of_nothing_fails(ksplc: U8[], arena: Arena$@)
+  verdict.start("[Verdict] a walk that walked nothing failing test...")
+  holds_to(ksplc, "walks", walks_main, walks_out, 1, arena)
+  verdict.pass("A walk that walked nothing fails, as one that found something does.")
+
+fn test_verdict_names_what_fits(ksplc: U8[], arena: Arena$@)
+  verdict.start("[Verdict] a `RESULT:` line naming more than its room holds test...")
+  r: = run_child(ksplc, "overflows", overflows_main, arena)
+  lines: = r.stdout_data.lines(arena)
+  assert(r.exit_code == 1 && lines.len == 301,
+    "each failure puts its line out, and the run ends on 1")
+  last: = lines.get(lines.len - 1)
+  assert(last.starts_with("RESULT: SOME FAILED (300) -> a check whose name"),
+    "the count on the line stays whole")
+  assert(last.ends_with(" …") && last.len < 4100, "the names are held to their room, and say so")
+  verdict
+    .pass("A `RESULT:` line naming more than its room holds keeps the count whole and says `…`.")

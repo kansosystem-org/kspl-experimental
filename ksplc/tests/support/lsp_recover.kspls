@@ -1,0 +1,126 @@
+import "ksplc/tests/support/lsp_client"
+import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, end_text }
+import "std/chars"
+import "std/ds" as _ds // what makes `arr_list`'s List available
+import "std/json" as _json // what makes `get` and `as_str` on a value available
+import "std/jsonrpc"
+import "std/mem" { Arena }
+import "std/str" // `find_str` and `equals`
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+// ==========================================
+// A file holding one broken line still answers. **The editor reads it a second time with the
+// recovering branches enabled** (the grounds are "Only the editor's parse recovers from a syntax
+// error" in `../../docs/DESIGN.md`), so after a half-typed `pt.` hover and the jump still answer.
+// **This is not a suite of its own**; one would start the language server a second time, so it
+// uses the suite's client (the reason is in `lsp_docs.kspls`'s header).
+// ==========================================
+
+priv const normal_ms: I32 = 15000
+
+// The `q: = pt.` line is broken. Everything above and below it is valid.
+priv const broken_src: U8[] =
+  """struct Point { //< a place on the page
+  x: I32;
+  y: I32;
+}
+
+fn area(p: Point): I32 { //< how much it covers
+  return p.x * p.y;
+}
+
+fn main(): I32 {
+  pt: Point = ::{ .x = 3, .y = 4 };
+  n: = area(pt);
+  q: = pt.
+  return n;
+}
+"""
+
+priv const broken_uri: U8[] = "file:///recover_probe.kspl"
+
+priv fn check_answers_beside_the_break(c: jsonrpc.Client$@, arena: Arena$@)
+  _sent: = c.notify("textDocument/didOpen",
+    lsp_client.did_open(broken_uri, broken_src, arena), arena)
+  line: = decl_line(broken_src, "  n: = area(pt);", arena)
+  col: = col_in_line(broken_src, "  n: = area(pt);", "area", arena)
+  got: =
+    c.request("textDocument/hover", lsp_client.at_pos(broken_uri, line, col, arena), normal_ms,
+    arena) catch e
+    verdict.check("a hover beside a broken line still answers", false, end_text(e))
+    return
+  text: = lsp_client.hover_text(got)
+  verdict.check("a hover beside a broken line still answers",
+    text.find_str("how much it covers") >= 0,
+    lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
+
+  // Caution: **Test a jump too**: a hover needs only the node under the caret, the jump the tree
+  // above it.
+  def_got: =
+    c.request("textDocument/definition", lsp_client.at_pos(broken_uri, line, col, arena), normal_ms,
+    arena) catch e
+    verdict.check("a jump beside a broken line still lands", false, end_text(e))
+    return
+  def_line: = def_got.get("result").get("range").get("start").get("line").as_int(-1)
+  want: = decl_line(broken_src, "fn area(p: Point): I32 {", arena)
+  verdict.check("a jump beside a broken line still lands", def_line == want,
+    lsp_client.why(c, arena.text().s("landed on line ").s("\{def_line\}").take(), arena))
+
+priv fn check_one_account_only(c: jsonrpc.Client$@, arena: Arena$@) //<
+  //< It checks a missing bracket is reported once, by the parse
+  //<
+  //< **Only the parse reports it**. In a recovered tree the later stages find only the chain of
+  //< unrelated errors one missing bracket sets off.
+  _sent: = c.notify("textDocument/didOpen",
+    lsp_client.did_open(broken_uri, broken_src, arena), arena)
+  $count: Sz = 0
+  $came: = false
+  for _k in Range.asc(12)
+    msg: = c.read_msg(normal_ms, arena) catch
+      break
+    if !msg.get("method").as_str().equals("textDocument/publishDiagnostics")
+      continue
+    got: = msg.get("params")
+    if !got.get("uri").as_str().ends_with("recover_probe.kspl")
+      continue
+    list: = got.get("diagnostics").arr_list(arena)
+    count = list.len
+    came = true
+    break
+  verdict.check("a broken line is accounted for once and no more", came && count == 1,
+    lsp_client.why(c, arena.text().s("\{count\} diagnostics, came=\{came\}").take(), arena))
+
+// A declaration whose block is never closed, **holding everything below it**: the file above must
+// still answer, and the parse must not run on to the end of the input.
+priv const unclosed_src: U8[] =
+  """fn area(p: I32): I32 { //< how much it covers
+  return p * p;
+}
+struct Half {
+fn tail(): I32 {
+  return 1;
+}
+"""
+
+priv const unclosed_uri: U8[] = "file:///unclosed_probe.kspl"
+
+priv fn check_an_unclosed_block(c: jsonrpc.Client$@, arena: Arena$@)
+  _sent: = c.notify("textDocument/didOpen",
+    lsp_client.did_open(unclosed_uri, unclosed_src, arena), arena)
+  line: = decl_line(unclosed_src, "fn area(p: I32): I32 {", arena)
+  col: = col_in_line(unclosed_src, "fn area(p: I32): I32 {", "area", arena)
+  got: =
+    c.request("textDocument/hover", lsp_client.at_pos(unclosed_uri, line, col, arena), normal_ms,
+    arena) catch e
+    verdict.check("a block left unclosed does not take the file with it", false, end_text(e))
+    return
+  text: = lsp_client.hover_text(got)
+  verdict.check("a block left unclosed does not take the file with it",
+    text.find_str("how much it covers") >= 0,
+    lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
+
+fn run(c: jsonrpc.Client$@, arena: Arena$@)
+  check_answers_beside_the_break(c, arena)
+  check_one_account_only(c, arena)
+  check_an_unclosed_block(c, arena)

@@ -1,0 +1,409 @@
+//< Lifts an anonymous function, or a closure with its captures, into its own declarations
+//<
+//< A closure's captures become the fields of a synthesized environment struct, and the place it
+//< was written becomes a value of that struct; the declarations are written as KSPL source and
+//< parsed with the file's grammar. `desugar_node` in `desugar.kspls` calls it.
+import "ksplc/base/ast" as base_ast + { Ast_node, build_anon_env_name, build_anon_fn_name }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/base/diag" as base_diag
+import "ksplc/parse/desugar" { Desugar_ctx, closure_empty_field, next_anon_serial, build_temp_name,
+  serial_str, build_path_ref }
+import "ksplc/parse/load" as parse_load
+import "std/ds" { List }
+import "std/str" { Str_builder }
+
+// ==========================================
+// The expansion of a function literal (a closure)
+// ==========================================
+
+impl Ast_node
+  fn desugar_fn_lit(r: Ast_node$@, ctx: Desugar_ctx$@) //<
+    //< It lifts an anonymous function into a top-level `priv fn _anon_fn_N`, referred to by name
+    //<
+    //< Lifted, the body sees only its own parameters and the file's top level: an outer local,
+    //< the enclosing function's type arguments and an `impl`'s receiver are not visible.
+    // Caution: Give the lifted declaration the written position's loc unchanged. The translation
+    // unit is chosen by `loc.file()`'s hash (unit_for in gen/c/ctx.kspls), and an empty one goes to
+    // unit 0. A lifted function is `static`, so in a different unit from its use it cannot be
+    // linked.
+    loc: = r.loc
+    sig: = r.find_child(.k_expr_fn_lit_sig)
+    body: = r.find_child(.k_stmt_block)
+    r.ice_assert(sig != null && body != null,
+      "desugar_fn_lit: expr_fn_lit must carry both an expr_fn_lit_sig and a stmt_block")
+    // **Default arguments are rejected here**: once lifted they would pass as an ordinary
+    // function's (sema/decl/resolve.kspls), yet nothing calls a closure by name, so a default could
+    // be written but never take effect (Principle 5).
+    sig.reject_param_defaults(ctx)
+
+    // **The `;` decides the branch, not the capture list's node**: `fn(x: I32; )` is a Callable
+    // with zero captures, for an API that takes no function pointer. The `;` stays a child of
+    // expr_fn_lit_sig.
+    if sig.has_capture_marker()
+      r.desugar_closure(ctx, sig, body, sig.find_child(.k_capture_list))
+      return
+
+    // No captures means a plain anonymous function: its signature works as a function pointer as
+    // is, so only the kind changes.
+    sig.set_kind(.k_type_fn_sig)
+    // **The enclosing type arguments cannot be used**: the lifted function is a non-generic
+    // top-level function used as a function pointer value, and unlike a closure's they cannot be
+    // copied over, since nothing decides the instantiation where a value is passed. Without this
+    // check, the lifted `T` gives the baffling "missing import alias prefix for type 'T'".
+    fwd: = forwarded_gen_params(ctx, sig, sig.find_child(.k_param_list), null)
+    if fwd.len > 0
+      $msg: = Str_builder.new()
+      defer msg.free()
+      msg
+        .s("an anonymous function cannot use the enclosing type parameter '\{fwd.get(0)\}' (it is \
+          lifted to a top-level function and passed as a plain function pointer). Add a capture \
+          list to make it a closure (`fn(x: \{fwd.get(0)\}; ): …`), which carries the type \
+          parameter, or take the value as a parameter")
+      r.desugar_err(ctx, msg.slice())
+      return
+    lifted: = ctx.lifted
+    name: = build_anon_fn_name(next_anon_serial(ctx, loc.file()))
+
+    // The shape collect_fn_def reads; it finds every part by find_child, in any order.
+    fn_decl: = Ast_node.new(.k_decl_fn, "fn", loc)
+      .add_child(Ast_node.new(.k_keyword, "priv", loc))
+      .add_child(Ast_node.new(.k_keyword, "fn", loc))
+      .add_child(Ast_node.build_ident(name, 0, loc)).add_child(sig).add_child(body)
+    lifted.push(fn_decl)
+
+    // The reference takes a plain name's shape (one `Identifier` under an `expr_path`).
+    // Caution: Do not use the `Identifier` alone: `transform_path_access` in lower/abi.kspls,
+    // which mangles the name, looks at a `k_expr_path`.
+    // morph empties the children, so call it after taking sig and body out.
+    r.morph(.k_expr_path, name)
+    r.add_child(Ast_node.build_ident(name, 0, loc))
+
+  fn push_gen_params(r: Ast_node$@, ctx: Desugar_ctx$@) //<
+    //< It pushes the names of the type arguments this declaration introduces onto ctx
+    //<
+    //< Both an `impl<|T|>` and an `fn f<|U|>` count; when nested, both are pushed.
+    if r.kind_id != .k_decl_impl && r.kind_id != .k_decl_fn
+      return
+    params: = r.find_child(.k_type_gen_params)
+    if params == null
+      return
+    for p in params.children
+      if id_node: = p.gen_param_id_node()
+        ctx.gen_params.push(id_node.text)
+
+  fn has_capture_marker(r: Ast_node$@): Bool //< whether a `;` is written
+    for c in r.children
+      if c.kind_id == .k_literal && c.text.equals(";")
+        return true
+    return false
+
+  fn desugar_closure(r: Ast_node$@, ctx: Desugar_ctx$@, sig: Ast_node$@, body: Ast_node$@,
+    captures: Ast_node$@) //<
+      //< It expands a capturing closure into a struct and an impl of `Callable1` / `Callable2`
+      //<
+      //< The closure is written `fn(x: I32; n: I32): Bool { … }`, and the struct points at the
+      //< captured values. **The declarations are written as KSPL source and parsed** (the reason
+      //< is at parse_synth_decls in parse/load.kspls).
+    loc: = r.loc
+    params: = sig.find_child(.k_param_list)
+    arity: = count_fn_params(params)
+    if arity != 1 && arity != 2
+      r.desugar_err(ctx,
+        "a closure with captures must take exactly 1 or 2 parameters (it conforms to 'Callable1' or \
+          'Callable2', and KSPL has no variadic generics). Write the extra values as captures after \
+          ';', or use a named function")
+      return
+    // **Only inside a block**: the environment is a temporary on the caller's frame, declared in a
+    // block. At the top level the user would see a name they never wrote:
+    // `undefined path or identifier '_anon_env_v_1'`.
+    if ctx.block_depth == 0
+      r.desugar_err(ctx,
+        "a closure can only appear inside a function body (its captures live in the enclosing \
+          frame). At top level, write a named function and take it as a function pointer, or move \
+          the closure into the function that uses it")
+      return
+    serial: = next_anon_serial(ctx, loc.file())
+    env_name: = build_anon_env_name(serial)
+    // The synthesized declarations go to the top level, where the enclosing type arguments are not
+    // visible; those the signature uses are copied over (with none, it stays non-generic).
+    fwd_params: = forwarded_gen_params(ctx, sig, params, captures)
+
+    $src: = Str_builder.new()
+    defer src.free()
+    if !r.build_closure_src(ctx, sig, params, captures, env_name,
+      build_anon_env_ctor_name(serial), arity, gen_args_text(fwd_params), src@)
+      return
+
+    // Caution: **Do not copy the ordinary path (parse -> normalize -> validate) here**; it lives in
+    // parse_synth_decls in `parse/load.kspls`.
+    synth_decls: = base_ast.new_ast_node_list()
+    parse_load.parse_synth_decls(src.slice(), loc.file(), ctx.parser, synth_decls) catch
+      base_diag.ice_panic("desugar_closure: synthesized closure source failed to parse")
+      return
+
+    // Not realigned, diagnostics would point at the synthesized source's offsets in the user file.
+    for d in synth_decls
+      d.retarget_loc(loc)
+      ctx.lifted.push(d)
+      // The original statements run after the captures' rebinding that opens the synthesized
+      // `call`.
+      if d.kind_id == .k_decl_impl
+        d.graft_closure_body(body)
+
+    // The use position becomes a reference to a temporary.
+    // Caution: Write copied type arguments **explicitly** on the call. Inference has nothing to go
+    // on with zero captures, and with captures it binds `T` from an immutable binding's `n@` to
+    // `I32 const`, a different instantiation from the impl's.
+    val_name: = build_anon_env_val_name(serial)
+    ctor_call: = Ast_node.new(.k_expr_postfix, "postfix", loc)
+      .add_child(build_generic_path_ref(build_anon_env_ctor_name(serial), fwd_params, loc))
+      .add_child(Ast_node.new(.k_literal, "(", loc))
+      .add_child(build_capture_args(captures, loc))
+    ctx.hoisted.push(Ast_node.build_inferred_var_decl(val_name, ctor_call, loc))
+
+    r.morph(.k_expr_path, val_name)
+    r.add_child(Ast_node.build_ident(val_name, 0, loc))
+
+  fn reject_param_defaults(r: Ast_node$@, ctx: Desugar_ctx$@) //<
+    //< It rejects a default value in a closure's signature
+    //<
+    //< Parameters and captures are both `fn_param`, so both lists are checked.
+    for list in r.children
+      if list.kind_id != .k_param_list && list.kind_id != .k_capture_list
+        continue
+      for p in base_ast_ext.Param_cursor.new(list, false)
+        d: = p.get_param_default()
+        if d != null
+          d.desugar_err(ctx,
+            "a closure parameter or capture cannot have a default value: there is no call site that \
+              names it, so the default would never be used")
+
+  // It builds the KSPL source of the declarations to synthesize (false: a diagnostic was reported).
+  fn build_closure_src(r: Ast_node$@, ctx: Desugar_ctx$@, sig: Ast_node$@, params: Ast_node$@,
+    captures: Ast_node$@, env_name: U8[], ctor_name: U8[], arity: Sz, gen_args: U8[],
+    src: Str_builder$@): Bool
+    // The environment struct. The captures are held by pointer.
+    src.s("priv struct \{env_name\}\{gen_args\} {\n")
+    // One field is placed even with zero captures. C99 has no empty struct, and the generated C
+    // warns `excess elements in struct initializer` for `struct X { };` with `= {0}`
+    // (Principle 2: not one warning from the generated C either).
+    if captures == null
+      src.s("  priv \{closure_empty_field\}: U8;\n")
+    if captures != null
+      for cap in base_ast_ext.Param_cursor.new(captures, false)
+        if !r.append_capture_field(ctx, cap, src)
+          return false
+    src.s("}\n")
+
+    // The function that builds the environment, so the use position builds one kind of node, a
+    // call, rather than a struct literal by hand.
+    src.s("priv fn \{ctor_name\}\{gen_args\}(")
+    $first: = true
+    if captures != null
+      for cap in base_ast_ext.Param_cursor.new(captures, false)
+        c_name: = cap.find_text(.k_identifier)
+        c_ty: = written_type_text(cap.get_decl_type_node())
+        if !first
+          src.s(", ")
+        src.s("\{c_name\}: \{c_ty\}@")
+        first = false
+    src.s("): \{env_name\}\{gen_args\} {\n  return \{env_name\}\{gen_args\}::{")
+    first = true
+    if captures == null
+      src.s(" .\{closure_empty_field\} = 0")
+      first = false
+    if captures != null
+      for cap in base_ast_ext.Param_cursor.new(captures, false)
+        c_name: = cap.find_text(.k_identifier)
+        src.s(" " if first else ", ")
+        src.s(".\{c_name\} = \{c_name\}")
+        first = false
+    src.s("};\n}\n" if first else " };\n}\n")
+
+    // The impl of Callable; the written argument and return types become its type arguments.
+    ret_node: = sig.find_child(.k_type_expr)
+    ret_ty: = "Void" if ret_node == null else written_type_text(ret_node)
+    src.s("impl\{gen_args\} \{env_name\}\{gen_args\}: Callable\{arity\}<|")
+    for p in base_ast_ext.Param_cursor.new(params, false)
+      p_ty: = written_type_text(p.get_decl_type_node())
+      if p_ty.equals("Unknown")
+        r.desugar_err(ctx, "a closure parameter must have a type annotation")
+        return false
+      src.s("\{p_ty\}, ")
+    // With zero captures the receiver goes unread, so it is `_r`: a [W0207] on a synthesized
+    // declaration lands on the user's source, where nothing can remove it.
+    recv_name: = "_r" if captures == null else "r"
+    // **No `pub`**: on a `priv` struct's method it widens nothing (the visibility-width check;
+    // sema/decl/access.kspls), and the call goes through the `Callable` vtable's slot either way
+    // ("Traits (`trait`)" in docs/SPEC-language.md).
+    src.s("\{ret_ty\}|> {\n  fn call(\{recv_name\}: Self@")
+    for p in base_ast_ext.Param_cursor.new(params, false)
+      p_name: = p.find_text(.k_identifier)
+      src.s(", \{p_name\}: \{written_type_text(p.get_decl_type_node())\}")
+    src.s("): \{ret_ty\} {\n")
+    // It rebinds the captured names, so **the body needs no rewriting**: `n` resolves as an
+    // ordinary local, and since it is immutable, the mutability check stops a write to it.
+    if captures != null
+      for cap in base_ast_ext.Param_cursor.new(captures, false)
+        c_name: = cap.find_text(.k_identifier)
+        src.s("    \{c_name\}: = r.\{c_name\}$;\n")
+    src.s("  }\n}\n")
+    return true
+
+  // One field of the environment struct. A capture is "a name and a type", nothing else.
+  fn append_capture_field(r: Ast_node$@, ctx: Desugar_ctx$@, cap: Ast_node$@, src: Str_builder$@):
+    Bool
+    // No `$`: captures are read-only, or the enclosing function's local could be written through
+    // the closure, hiding the dependence on call order from the reader.
+    for c in cap.children
+      if c.kind_id == .k_literal && c.text.equals("$")
+        r.desugar_err(ctx,
+          "a capture cannot be marked '$': captures are read-only. Pass a pointer as a parameter if \
+            the closure must write through it")
+        return false
+    c_name: = cap.find_text(.k_identifier)
+    if c_name.len == 0
+      r.desugar_err(ctx, "a capture must be a name with a type ('n: I32')")
+      return false
+    c_ty: = written_type_text(cap.get_decl_type_node())
+    if c_ty.len == 0 || c_ty.equals("Unknown")
+      $m: = Str_builder.new()
+      defer m.free()
+      m
+        .s("capture '\{c_name\}' needs a type annotation ('\{c_name\}: I32'). Only local variables \
+          may omit their type")
+      r.desugar_err(ctx, m.slice())
+      return false
+    src.s("  priv \{c_name\}: \{c_ty\}@;\n")
+    return true
+
+  fn graft_closure_body(r: Ast_node$@, body: Ast_node$@) //<
+    //< It moves the original closure body's statements into the synthesized `call`'s body
+    call_fn: = r.find_child(.k_decl_fn)
+    if call_fn == null
+      base_diag.ice_panic("graft_closure_body: synthesized impl has no 'call'")
+      return
+    dest: = call_fn.find_child(.k_stmt_block)
+    if dest == null
+      base_diag.ice_panic("graft_closure_body: synthesized 'call' has no body")
+      return
+    for stmt in body.children
+      dest.add_child(stmt)
+
+fn written_type_text(r: Ast_node$@): U8[] //<
+  //< It returns the type node's spelling as written
+  //<
+  //< Caution: **Do not use `extract_type_name()`**: it drops the mutability marker `$` (`U8$[]` ->
+  //< `U8[]`, `P$@` -> `P@`), so the impl implements a `Callable` with another type argument and
+  //< the caller gets "does not explicitly implement interface". Normalization folds the postfix
+  //< levels into `type_expr.text` (normalize_by_kind in parse/normalize.kspls), `$` included.
+  if r == null
+    return ""
+  if r.text.len > 0
+    return r.text
+  $b: = r.extract_type_name()
+  defer b.free()
+  return base_core.arena.dup_str(b.slice())
+
+fn build_anon_env_ctor_name(serial: Sz): U8[] //< the names to synthesize
+  //<
+  //< Caution: Start every one with `_`, or [W0206] fires where one goes unused.
+  return build_temp_name("_anon_env_new_", serial_str(serial))
+
+fn build_anon_env_val_name(serial: Sz): U8[]
+  return build_temp_name("_anon_env_v_", serial_str(serial))
+
+fn forwarded_gen_params(ctx: Desugar_ctx$@, sig: Ast_node$@, params: Ast_node$@,
+  captures: Ast_node$@): List<|U8[]|>$@ //<
+    //< It returns the enclosing type arguments that the closure's signature uses, in order
+    //<
+    //< The order is the order they were declared in.
+    //< Caution: Keep only the ones it uses: a synthesized type differs per instantiation, so an
+    //< unused one duplicates the closure for every instantiation of the enclosing declaration.
+  out: = List<|U8[]|>.create(base_core.arena)
+  if ctx.gen_params.len == 0
+    return out
+  $types: = Str_builder.new()
+  defer types.free()
+  signature_type_text(sig, params, captures, types@)
+  type_text: = types.slice()
+  for name in ctx.gen_params
+    if base_ast_spell.mentions_ident(type_text, name)
+      out.push(name)
+  return out
+
+fn gen_args_text(names: List<|U8[]|>$@): U8[] //<
+  //< The `<|T, U|>` names of the type arguments copied over
+  //<
+  //< Empty where there are none, leaving the synthesized declarations non-generic.
+  if names.len == 0
+    return ""
+  $out: = Str_builder.new()
+  defer out.free()
+  out.s("<|")
+  for i in Range.asc(names.len)
+    out.s(", " if i > 0 else "").s(names.get(i))
+  out.s("|>")
+  return base_core.arena.dup_str(out.slice())
+
+fn build_generic_path_ref(name: U8[], names: List<|U8[]|>$@, loc: base_ast.Loc): Ast_node$@ //<
+  //< The node of the type arguments written on the reference to the lifted declaration
+  //<
+  //< Caution: Place the type arguments as `type_args`' **children**; a `<|T|>` in the path's text
+  //< alone is not reached by the substitution at instantiation (replace_type_vars in
+  //< sema/decl/subst.kspls), which rebuilds the text from the children.
+  if names.len == 0
+    return build_path_ref(name, loc)
+  args_text: = gen_args_text(names)
+  type_args: = Ast_node.new(.k_type_args, args_text, loc)
+  for n in names
+    type_args.add_child(Ast_node.new(.k_type_atom, n, loc))
+  full: = base_core.arena.text().s(name).s(args_text).take()
+  return Ast_node.new(.k_expr_path, full, loc).add_child(Ast_node.build_ident(name, 0, loc))
+    .add_child(type_args)
+
+fn build_capture_args(captures: Ast_node$@, loc: base_ast.Loc): Ast_node$@ //<
+  //< The arguments `name@`, one per capture (passed to the constructor)
+  args: = Ast_node.new(.k_expr_args, "args", loc)
+  if captures == null
+    return args
+  for cap in base_ast_ext.Param_cursor.new(captures, false)
+    id_node: = cap.find_child(.k_identifier)
+    if id_node == null
+      continue
+    addr_of: = Ast_node.new(.k_expr_postfix, "postfix", loc)
+      .add_child(build_path_ref(id_node.text, loc))
+      .add_child(Ast_node.new(.k_literal, "@", loc))
+    args.add_child(addr_of)
+  return args
+
+fn count_fn_params(params: Ast_node$@): Sz //<
+  //< The number of parameters in a `param_list` (a `...` is not counted)
+  if params == null
+    return 0
+  $n: Sz = 0
+  for p in params.children
+    if p.kind_id == .k_fn_param
+      n += 1
+  return n
+
+fn signature_type_text(sig: Ast_node$@, params: Ast_node$@, captures: Ast_node$@,
+  out: Str_builder$@) //<
+    //< It joins the type spellings in the closure's signature: parameters, return value, captures
+    //<
+    //< The choice of which type arguments to copy over reads this text.
+  ret_node: = sig.find_child(.k_type_expr)
+  if ret_node != null
+    out.s(written_type_text(ret_node)).s(" ")
+  append_param_type_text(params, out)
+  append_param_type_text(captures, out)
+
+fn append_param_type_text(list: Ast_node$@, out: Str_builder$@) //<
+  //< It adds the parameter type names in a `param_list` / `capture_list`, separated by spaces
+  if list == null
+    return
+  for p in list.children
+    if p.kind_id == .k_fn_param
+      out.s(written_type_text(p.get_decl_type_node())).s(" ")

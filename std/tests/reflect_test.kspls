@@ -1,0 +1,370 @@
+#!/usr/bin/env -S ksplc run
+//< Tests of the round trip through `std/reflect`'s field table
+//<
+//< The round trip is `std/json`'s `from_struct` / `into_struct`.
+
+// ==========================================
+// The tests come down to three points:
+//   * Where **ksplc builds** the table and `fields()`, the declared field name is the key.
+//   * A table **written by hand** is kept; nothing is synthesized over it.
+//   * A missing key and a key that is `null` are refused **with different values**, not defaulted.
+// ==========================================
+import "std/ds" { List }
+import "std/json" + { Json_builder }
+import "std/json_struct"
+import "std/mem" { Arena }
+import "std/reflect"
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// The round trip through std/reflect's field table (from_struct / into_struct).
+// ==========================================
+priv struct Sample
+  label: U8[]
+  count: I64
+  ratio: F64
+  ok: Bool
+  tries: I32
+
+priv const sample_fields: reflect.Field_info[5] = ::{
+  ::{ .name = "tag", .offset = offsetof(Sample, label), .kind = .str_field },
+  ::{ .name = "count", .offset = offsetof(Sample, count), .kind = .int_field,
+    .extra = ::{ .width = sizeof(I64) } },
+  ::{ .name = "ratio", .offset = offsetof(Sample, ratio), .kind = .float_field,
+    .extra = ::{ .width = sizeof(F64) } },
+  ::{ .name = "ok", .offset = offsetof(Sample, ok), .kind = .bool_field },
+  ::{ .name = "tries", .offset = offsetof(Sample, tries), .kind = .int_field,
+    .extra = ::{ .width = sizeof(I32) } },
+}
+
+// **A body written by hand is kept, not synthesized**: if it were synthesized, the keys would go
+// back to `label` ("a trait returning a table" in `../../docs/DESIGN.md`).
+impl Sample: reflect.Reflectable
+  fn fields(_r: Self): reflect.Field_info[]
+    return reflect.Field_info[]::sample_fields
+
+priv struct Derived //<
+  //< It has the same fields, but ksplc builds the table and `fields()`
+  label: U8[]
+  count: I64
+  ratio: F64
+  ok: Bool
+  tries: I32
+
+impl Derived: reflect.Reflectable {}
+
+priv struct Half //< a nested struct
+  //<
+  //< **Two fields have this type**, and its table is merged into one per file.
+  ms: I64
+  bytes: I64
+
+priv struct Both
+  tag: U8[]
+  cold: Half
+  warm: Half
+
+impl Both: reflect.Reflectable {}
+
+priv struct Doc //< a container
+  //<
+  //< **It covers both an element that is a number and one that is a struct.**
+  name: U8[]
+  nums: List<|I64|>
+  items: List<|Half|>
+
+impl Doc: reflect.Reflectable {}
+
+priv struct Spec //< fields that are either present or absent
+  //<
+  //< **It also covers content that is a struct.**
+  family: Option<|U8[]|>
+  size_px: Option<|F64|>
+  weight: Option<|I64|>
+  part: Option<|Half|>
+
+impl Spec: reflect.Reflectable {}
+
+priv struct Widths //< the widths of a number
+  //<
+  //< Caution: **Always include the unsigned types, `F32` and `Sz`.** If they are not covered here,
+  //< the round trip breaks as soon as one `U16` appears in a declaration (a file format whose every
+  //< field is that width, for example).
+  tiny: I8
+  short_num: I16
+  mid: I32
+  wide: I64
+  u_tiny: U8
+  u_short: U16
+  u_mid: U32
+  u_wide: U64
+  count: Sz
+  narrow: F32
+  broad: F64
+
+impl Widths: reflect.Reflectable {}
+
+priv struct Narrow_bag //< a number with a width, carried in a container and in an option too
+  //<
+  //< **The width of an element or of an option's content comes from `extra.elem_size`**, a path
+  //< separate from the field's own `extra.width`.
+  codes: List<|U16|>
+  scale: Option<|F32|>
+
+impl Narrow_bag: reflect.Reflectable {}
+
+fn test_json_struct_roundtrip(arena: Arena$@)
+  verdict.start("[Json] walking the table to round-trip a whole container test...")
+  src: Sample = ::{ .label = "cold", .count = 7052, .ratio = 1.25, .ok = true, .tries = 3 }
+
+  // A key is the field's name, in the table's order.
+  $b: = Json_builder.new(arena)
+  $out: = Str_builder.new()
+  defer out.free()
+  json_struct.from_struct(src@, b@).dump(out@, 0)
+  want: U8[] = "{\"tag\":\"cold\",\"count\":7052,\"ratio\":1.25,\"ok\":true,\"tries\":3}"
+  hand_written: = out.slice().equals(want)
+  assert(hand_written,
+    "json: a hand-written table's keys line up as they stand (nothing is synthesized)")
+
+  parsed: = json.parse(out.slice(), arena) catch panic("json: what was written out has to be \
+    readable")
+  $back: Sample = ::{}
+  json_struct.into_struct(parsed, back@, arena) catch panic("json: the round trip does not fail")
+  assert(back.label.equals("cold"), "json: a string round-trips")
+  assert(back.count == 7052I64, "json: an integer round-trips")
+  assert(back.ratio > 1.24 && back.ratio < 1.26, "json: a fraction round-trips")
+  assert(back.ok, "json: a boolean round-trips")
+  assert(back.tries == 3, "json: a 32-bit integer round-trips")
+
+  // Where ksplc builds the table, **a key is the declared field name.**
+  out.clear()
+  derived: Derived = ::{ .label = "cold", .count = 7052, .ratio = 1.25, .ok = true, .tries = 3 }
+  json_struct.from_struct(derived@, b@).dump(out@, 0)
+  want_derived: U8[] = "{\"label\":\"cold\",\"count\":7052,\"ratio\":1.25,\"ok\":true,\"tries\":3}"
+  derived_keys: = out.slice().equals(want_derived)
+  assert(derived_keys, "json: a synthesized table keys on the declared field names")
+  round: = json.parse(out.slice(), arena) catch panic("json: what a synthesized table wrote has to \
+    be readable")
+  $derived_back: Derived = ::{}
+  json_struct.into_struct(round, derived_back@, arena) catch panic("json: the round trip does not \
+    fail under a synthesized table either")
+  all_back: =
+    derived_back.label.equals("cold") && derived_back.count == 7052I64 && derived_back.ok &&
+    derived_back.tries == 3
+  assert(all_back, "json: everything round-trips under a synthesized table")
+
+  // Refuse a missing key and a null one with different values; with a default, a misspelled name
+  // on the sender's side would show only as "the value was 0".
+  $absent: U8[] = ""
+  short: = json.parse("{\"label\":\"x\"}", arena) catch panic("json: the fixture must parse")
+  $partial: Derived = ::{}
+  json_struct.into_struct(short, partial@, arena) catch e
+    switch e case .missing_field(which)
+      absent = which
+    default
+      panic("json: expected missing_field")
+  assert(absent.equals("count"), "json: a dropped key is named")
+
+  $nulled_at: U8[] = ""
+  nulled: = json.parse("{\"label\":null}", arena) catch panic("json: the fixture must parse")
+  $nulled_out: Derived = ::{}
+  json_struct.into_struct(nulled, nulled_out@, arena) catch e
+    switch e case .field_type(which)
+      nulled_at = which
+    default
+      panic("json: null is \"the kind differs\", not \"the key is missing\"")
+  assert(nulled_at.equals("label"),
+    "json: a key that is present and null is refused as a difference in kind")
+
+  // A nest becomes nested JSON, not a flat key (`cold.ms`).
+  out.clear()
+  both: Both = ::{ .tag = "t", .cold = ::{ .ms = 1, .bytes = 2 },
+    .warm = ::{ .ms = 3, .bytes = 4 } }
+  json_struct.from_struct(both@, b@).dump(out@, 0)
+  want_nested: U8[] =
+    "{\"tag\":\"t\",\"cold\":{\"ms\":1,\"bytes\":2},\"warm\":{\"ms\":3,\"bytes\":4}}"
+  nested_keys: = out.slice().equals(want_nested)
+  assert(nested_keys, "json: a nest becomes a nested object")
+  deep: = json.parse(out.slice(), arena) catch panic("json: what a nest wrote has to be readable")
+  $both_back: Both = ::{}
+  json_struct.into_struct(deep, both_back@, arena) catch panic("json: the round trip does not fail \
+    under a nest either")
+  all_deep: =
+    both_back.tag.equals("t") && both_back.cold.ms == 1I64 && both_back.cold.bytes == 2I64 &&
+    both_back.warm.ms == 3I64 && both_back.warm.bytes == 4I64
+  assert(all_deep, "json: the round trip reaches the content of a nest")
+
+  // A key missing inside a nest is refused with **the inner name**.
+  $inner_missing: U8[] = ""
+  thin: =
+    json.parse("{\"tag\":\"t\",\"cold\":{\"ms\":1},\"warm\":{\"ms\":3,\"bytes\":4}}", arena) catch panic("json: the fixture must parse")
+  $thin_out: Both = ::{}
+  json_struct.into_struct(thin, thin_out@, arena) catch e
+    switch e case .missing_field(which)
+      inner_missing = which
+    default
+      panic("json: expected missing_field")
+  named_inner: = inner_missing.equals("bytes")
+  assert(named_inner, "json: a key missing inside a nest is named by the inner name")
+
+  // When a key that should be a nest is not an object, it is refused with **that key's name**.
+  $not_obj: U8[] = ""
+  flat: =
+    json.parse("{\"tag\":\"t\",\"cold\":5,\"warm\":{\"ms\":3,\"bytes\":4}}", arena) catch panic("json: the fixture must parse")
+  $flat_out: Both = ::{}
+  json_struct.into_struct(flat, flat_out@, arena) catch e
+    switch e case .field_type(which)
+      not_obj = which
+    default
+      panic("json: expected field_type")
+  named_key: = not_obj.equals("cold")
+  assert(named_key, "json: a value handed over that is not a nest is refused by the key's name")
+
+  // **A container's positions do not depend on the element type**: `std/json` uses those of `U8`
+  // for all of them.
+  same_ptr: = offsetof(List<|I64|>, ptr) == offsetof(List<|Half|>, ptr)
+  assert(same_ptr, "reflect: a container's ptr position does not depend on the element's type")
+  same_len: = offsetof(List<|I64|>, len) == offsetof(List<|Half|>, len)
+  assert(same_len, "reflect: a container's len position does not depend on the element's type")
+
+  // A container becomes a JSON array (of objects for a struct element).
+  out.clear()
+  $nums: = List<|I64|>.new(arena)
+  nums.push(1I64)
+  nums.push(2I64)
+  $items: = List<|Half|>.new(arena)
+  items.push(::{ .ms = 10, .bytes = 20 })
+  doc: Doc = ::{ .name = "d", .nums = nums, .items = items }
+  json_struct.from_struct(doc@, b@).dump(out@, 0)
+  want_list: U8[] = "{\"name\":\"d\",\"nums\":[1,2],\"items\":[{\"ms\":10,\"bytes\":20}]}"
+  list_keys: = out.slice().equals(want_list)
+  assert(list_keys,
+    "json: a container becomes an array, and when the element is a struct the array holds objects")
+
+  wide: = json.parse(out.slice(), arena) catch panic("json: what a container wrote has to be \
+    readable")
+  $doc_back: Doc = ::{}
+  json_struct.into_struct(wide, doc_back@, arena) catch panic("json: the round trip does not fail \
+    under a container either")
+  counts_back: = doc_back.nums.len == 2 && doc_back.items.len == 1
+  assert(counts_back, "json: a container's length round-trips")
+  elems_back: =
+    doc_back.nums[0] == 1I64 && doc_back.nums[1] == 2I64 && doc_back.items[0].ms == 10I64 &&
+    doc_back.items[0].bytes == 20I64
+  assert(elems_back, "json: a container's content round-trips")
+
+  // When a key that should be a container is not an array, it is refused with that key's name.
+  $not_arr: U8[] = ""
+  scalar: = json.parse("{\"name\":\"d\",\"nums\":5,\"items\":[]}", arena) catch panic("json: the \
+    fixture must parse")
+  $scalar_out: Doc = ::{}
+  json_struct.into_struct(scalar, scalar_out@, arena) catch e
+    switch e case .field_type(which)
+      not_arr = which
+    default
+      panic("json: expected field_type")
+  named_list: = not_arr.equals("nums")
+  assert(named_list, "json: a value handed over that is not an array is refused by the key's name")
+
+  // **`.none` writes no key.** Writing `null` would give two ways to say "it is absent".
+  out.clear()
+  spec: Spec = ::{ .family = Option<|U8[]|>.some("serif"), .size_px = Option<|F64|>.none,
+    .weight = Option<|I64|>.some(700I64),
+    .part = Option<|Half|>.some(::{ .ms = 1, .bytes = 2 }) }
+  json_struct.from_struct(spec@, b@).dump(out@, 0)
+  want_opt: U8[] = "{\"family\":\"serif\",\"weight\":700,\"part\":{\"ms\":1,\"bytes\":2}}"
+  opt_keys: = out.slice().equals(want_opt)
+  assert(opt_keys, "json: an absent field writes no key, and only the fields present line up")
+
+  opt_round: = json.parse(out.slice(), arena) catch panic("json: a string holding only the fields \
+    present has to be readable")
+  $spec_back: Spec = ::{}
+  json_struct.into_struct(opt_round, spec_back@, arena) catch panic("json: the round trip does not \
+    fail under a field that resolves to present or absent either")
+  $got_family: U8[] = ""
+  if v: = spec_back.family
+    got_family = v
+  family_back: = got_family.equals("serif")
+  assert(family_back, "json: a field that is present round-trips")
+  size_none: = !spec_back.size_px.is_some()
+  assert(size_none, "json: a field with no key comes back still absent")
+  $got_ms: I64 = 0
+  if v: = spec_back.part
+    got_ms = v.ms
+  part_back: = got_ms == 1I64
+  assert(part_back, "json: a field whose content is a struct round-trips too")
+
+  // An explicit `null` is refused as a difference in kind.
+  $null_at: U8[] = ""
+  explicit: = json.parse("{\"family\":null}", arena) catch panic("json: the fixture must parse")
+  $null_out: Spec = ::{}
+  json_struct.into_struct(explicit, null_out@, arena) catch e
+    switch e case .field_type(which)
+      null_at = which
+    default
+      panic("json: an explicit null is a difference in kind")
+  named_null: = null_at.equals("family")
+  assert(named_null, "json: an explicit null is refused with the key's name attached")
+
+  // Caution: **Check that an unsigned value is not read with sign extension**, which makes
+  // `U8`=200, `U16`=60000 and `U32`=0xFFFFFFFF negative.
+  out.clear()
+  widths: Widths = ::{ .tiny = -5, .short_num = -300, .mid = -70000, .wide = -5000000000I64,
+    .u_tiny = 200, .u_short = 60000, .u_mid = 4294967295, .u_wide = U64::12345678901234I64,
+    .count = 42, .narrow = 1.5, .broad = 2.25 }
+  json_struct.from_struct(widths@, b@).dump(out@, 0)
+  want_widths: U8[] =
+    "{\"tiny\":-5,\"short_num\":-300,\"mid\":-70000,\"wide\":-5000000000,\"u_tiny\":200,\"u_short\":60000,\"u_mid\":4294967295,\"u_wide\":12345678901234,\"count\":42,\"narrow\":1.5,\"broad\":2.25}"
+  width_keys: = out.slice().equals(want_widths)
+  assert(width_keys, "json: a number of any width is written keeping its sign")
+
+  width_round: = json.parse(out.slice(), arena) catch panic("json: what a number with a width wrote \
+    has to be readable")
+  $widths_back: Widths = ::{}
+  json_struct.into_struct(width_round, widths_back@, arena) catch panic("json: the round trip does \
+    not fail at any width")
+  signed_back: =
+    widths_back.tiny == -5 && widths_back.short_num == -300 && widths_back.mid == -70000 &&
+    widths_back.wide == -5000000000I64
+  assert(signed_back, "json: the four signed widths round-trip")
+  unsigned_back: =
+    widths_back.u_tiny == 200 && widths_back.u_short == 60000 && widths_back.u_mid == 4294967295 &&
+    widths_back.u_wide == U64::12345678901234I64
+  assert(unsigned_back, "json: the four unsigned widths round-trip")
+  size_back: = widths_back.count == 42
+  assert(size_back, "json: Sz round-trips")
+  // Test `F32` with a value it represents exactly (the text of 0.1 changes with the width).
+  float_back: = widths_back.narrow == 1.5 && widths_back.broad == 2.25
+  assert(float_back, "json: F32 and F64 round-trip")
+
+  // A container's element and an option's content: **the `extra.elem_size` path.**
+  out.clear()
+  $codes: = List<|U16|>.new(arena)
+  codes.push(60000)
+  codes.push(1)
+  bag: Narrow_bag = ::{ .codes = codes, .scale = Option<|F32|>.some(1.5) }
+  json_struct.from_struct(bag@, b@).dump(out@, 0)
+  want_bag: U8[] = "{\"codes\":[60000,1],\"scale\":1.5}"
+  bag_keys: = out.slice().equals(want_bag)
+  assert(bag_keys, "json: a narrow element and content are written keeping their sign too")
+
+  bag_round: = json.parse(out.slice(), arena) catch panic("json: what a narrow element wrote has to \
+    be readable")
+  $bag_back: Narrow_bag = ::{}
+  json_struct.into_struct(bag_round, bag_back@, arena) catch panic("json: the round trip does not \
+    fail under a narrow element either")
+  codes_back: =
+    bag_back.codes.len == 2 && bag_back.codes[0] == 60000 && bag_back.codes[1] == 1
+  assert(codes_back, "json: a narrow element round-trips")
+  $got_scale: F32 = 0.0
+  if v: = bag_back.scale
+    got_scale = v
+  scale_back: = got_scale == 1.5
+  assert(scale_back, "json: a narrow content round-trips")
+
+  verdict
+    .pass("A synthesized table walks nests, containers, present-or-absent and number widths, while \
+      a hand-written table stays as it is. A missing key, a null and a difference in shape are \
+      refused with different values.")

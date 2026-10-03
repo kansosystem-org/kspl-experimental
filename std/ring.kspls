@@ -1,0 +1,113 @@
+//< A fixed-size byte queue over memory the caller owns, which **never allocates**
+//<
+//< The capacity is a compile-time argument and the caller passes in the storage, so it needs no
+//< heap. **A write that does not fit stores what fits and returns how much**, and `peek` returns
+//< the contiguous bytes up to the wrap.
+
+priv fn step(i: Sz, n: Sz, cap: Sz): Sz
+  return (i + n) % cap
+
+//   $buf: U8[512];
+//   $r: = ring.Ring<|512|>.new(buf[0]@);
+//   n: = r.write("hello");        // bytes stored (a partial write is allowed)
+//   chunk: = r.peek();             // only the contiguous part up to the wrap
+//   r.consume(chunk.len);
+pub struct Ring<|const cap: Sz|> //< a fixed-size byte queue held in memory the caller owns
+  priv buf: U8$@ //<
+    //< The start of the caller's `U8[cap]`
+  // The next write and read positions, in `[0, cap)`. **Only `step` advances them** (a missing
+  // `% cap` writes out of range).
+  priv head: Sz
+  priv tail: Sz
+  priv count: Sz //<
+    //< How many bytes the queue holds now
+    //<
+    //< **Without it, full and empty look the same** (both have head == tail), unless one byte is
+    //< left unused.
+
+impl<|const cap: Sz|> Ring<|cap|>
+  pub fn new( //< makes a queue over memory the caller owns
+    buf: U8$@, //< the start of a `U8[cap]`; anything smaller is written out of range
+  ): Ring<|cap|>
+    // cap == 0 would divide by 0 in `step`; this catches the configuration mistake here, not later.
+    assert(cap > 0, "Ring.new: cap must be greater than 0")
+    return Ring<|cap|>::{ .buf = buf, .head = 0, .tail = 0, .count = 0 }
+
+  pub fn len(r: Self@): Sz //< how many bytes the queue holds
+    return r.count
+
+  pub fn free_space(r: Self@): Sz //< how many more bytes would fit
+    return cap - r.count
+
+  pub fn is_empty(r: Self@): Bool //< whether the queue holds nothing
+    return r.count == 0
+
+  pub fn is_full(r: Self@): Bool //< whether no more bytes fit
+    return r.count == cap
+
+  pub fn clear(r: Self$@) //< discards everything in the queue
+    //<
+    //< The next write overwrites the contents.
+    r.head = 0
+    r.tail = 0
+    r.count = 0
+
+  pub fn write( //< writes as much as fits, and returns how many bytes it stored
+    //<
+    //< A partial write is normal; when everything must fit, check `free_space()` first.
+    r: Self$@,
+    src: U8[], //< the bytes to write; the end of them may not fit
+  ): Sz
+    room: = r.free_space()
+    n: = src.len if src.len < room else room
+    for i in Range.asc(n)
+      (r.buf + r.head)$ = src[i]
+      r.head = step(r.head, 1, cap)
+    r.count += n
+    return n
+
+  pub fn write_byte(r: Self$@, b: U8): Bool //< writes one byte, or returns false if full
+    if r.count == cap
+      return false
+    (r.buf + r.head)$ = b
+    r.head = step(r.head, 1, cap)
+    r.count += 1
+    return true
+
+  pub fn read( //< reads as much as fits in the destination, and returns how many bytes it read
+    r: Self$@,
+    dst: U8$[], //< where the bytes go; the bytes read leave the queue
+  ): Sz
+    n: = dst.len if dst.len < r.count else r.count
+    for i in Range.asc(n)
+      dst[i] = (r.buf + r.tail)$
+      r.tail = step(r.tail, 1, cap)
+    r.count -= n
+    return n
+
+  pub fn read_byte(r: Self$@): Option<|U8|> //< removes and returns one byte, or none if empty
+    if r.count == 0
+      return Option<|U8|>.none
+    b: = (r.buf + r.tail)$
+    r.tail = step(r.tail, 1, cap)
+    r.count -= 1
+    return Option<|U8|>.some(b)
+
+  pub fn peek(r: Self@): U8[] //< the bytes from the read position to the wrap, without copying
+    //<
+    //< **It may not be everything in the queue**: data that crosses the wrap needs a second
+    //< `peek` -> `consume` (joining would need a memmove). It is valid until `consume`; a `write`
+    //< that wraps around overwrites it.
+    if r.count == 0
+      return U8[]::{ .ptr = null, .len = 0 }
+    to_end: = cap - r.tail
+    n: = r.count if r.count < to_end else to_end
+    return U8[]::{ .ptr = r.buf + r.tail, .len = n }
+
+  pub fn consume( //< marks bytes that `peek` returned as read
+    r: Self$@,
+    n: Sz, //< how many of them were handled; more than the queue holds is a program error
+  )
+    assert(n <= r.count, "Ring.consume: n exceeds the number of buffered bytes")
+    r.tail = step(r.tail, n, cap)
+    r.count -= n

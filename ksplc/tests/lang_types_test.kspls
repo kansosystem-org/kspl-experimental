@@ -1,0 +1,702 @@
+import "std/chars" as std_chars
+import "std/ds" { List, Map }
+import "std/io"
+import "std/mem" + { Arena, dealloc }
+import "std/str" { Str_builder }
+import "std/sys"
+import "std/verdict"
+
+// ==========================================
+// The language rules around types, places, conversion and visibility; the syntax and basic-type
+// rules are in `lang_test.kspls`. A failure here is checked against a different document.
+// ==========================================
+
+// ==========================================
+
+// The slice descriptor literal (`T[]::{ .ptr = ..., .len = ... }`), above all nested (`U8[]$[]`):
+// it is the only way to build a slice of a length counted at run time, and a field's expected type
+// off by one level lets a single-level literal pass **without a type check** ("How immutability
+// marks are expressed in a type" in ksplc/docs/DESIGN.md).
+
+// ==========================================
+
+// A literal with no field names, given to a slice type, is read as a list of elements.
+// Caution: **Test it together with the descriptor literal.** One alone passes green even when
+// the field names fail to tell them apart (`U8[]::{ .ptr = …, .len = … }` read as two elements).
+
+priv fn count_of(xs: U8[][]): Sz //<
+  //< It returns how many elements xs holds
+  //<
+  //< **Test elements that are identifiers too.** An identifier first is easily read as a field
+  //< name, which reaches the C and fails there.
+  return xs.len
+
+fn test_slice_elem_literal()
+  verdict.start("[Slice] a run of elements handed to a slice type test...")
+  assert(count_of(U8[][]::{ "a", "bb", "ccc" }) == 3, "a run of elements passes as a slice")
+  chars: = U8[]::{ 'x', 'y' }
+  assert(chars.len == 2 && chars[0] == 'x' && chars[1] == 'y',
+    "the elements' values and order are kept")
+  a: U8 = 'p'
+  b: U8 = 'q'
+  named_elems: = U8[]::{ a, b }
+  assert(named_elems.equals("pq"), "a run of identifiers is a run of elements too")
+  $store: U8[4] = ::{ 'w', 'x', 'y', 'z' }
+  desc: = U8[]::{ .ptr = store[0]@, .len = 3 }
+  assert(desc.equals("wxy"), "a run with names written is a descriptor assembly")
+  verdict.pass("a run of elements and a descriptor assembly split by how they are written.")
+
+fn test_slice_descriptor_literals(arena: Arena$@)
+  verdict.start("[Slice] the slice descriptor literal test...")
+
+  // Single step: a mutable view from a mutable area, an immutable view from an immutable string.
+  raw: = U8$@::arena.alloc(4)
+  for i in Range.asc(4)
+    (raw + i)$ = ('a' + U8::i)
+  mut_view: = U8$[]::{ .ptr = raw, .len = 4 }
+  (mut_view.ptr + 0)$ = 'z'
+  assert(mut_view.equals("zbcd"), "a single-step mutable view descriptor")
+
+  src: U8[] = "hello"
+  imm_view: = U8[]::{ .ptr = src.ptr + 1, .len = 3 }
+  assert(imm_view.equals("ell"), "a single-step immutable view descriptor")
+
+  // Nested: a mutable slice of immutable views, counted at run time.
+  slots: = U8[]$@::arena.alloc(sizeof(U8[]) * 3)
+  (slots + 0)$ = "ab"
+  (slots + 1)$ = "cde"
+  (slots + 2)$ = ""
+  nested: = U8[]$[]::{ .ptr = slots, .len = 3 }
+  $total: Sz = 0
+  for i in Range.asc(nested.len)
+    total += nested[i].len
+  assert(total == 5, "a nested slice descriptor can be assembled and each element read")
+  assert(nested[1].equals("cde"), "a nested element can be read by subscript too")
+  // `.ptr`'s type keeps the element type (`U8[]@`, not `U8@`); the check is that this compiles.
+  slot_ptr: U8[]@ = nested.ptr
+  assert(slot_ptr.equals("ab"), "a nested `.ptr` is a pointer to the element (an immutable view)")
+  assert((nested.ptr + 1).len == 3, "`.len` works on a pointer to a slice too")
+
+  // --- `.` and `[]` through a pointer ---
+  // "`.` and `[]` dereference a pointer whatever the number of levels, `[]` only where the target
+  // holds its own length" ("Member access and indexing through a pointer" in
+  // docs/SPEC-language.md). A built-in member, a subscript and a method all follow it
+  // (receiver_base_id in sema/type/env.kspls).
+  pm: U8$[]@ = mut_view@
+  pi: U8[]@ = imm_view@
+  assert(pm.len == 4 && pi.len == 3, "`.len` works on a U8$[]@ / U8[]@")
+  (pm.ptr + 1)$ = 'Y'
+  assert(mut_view.equals("zYcd"), "a write through a U8$[]@'s `.ptr` reaches the original")
+  assert((pi.ptr + 0)$ == 'e', "a U8[]@'s `.ptr` can read the element")
+  // A subscript dereferences the same way, as a left side too (`ps[i] = v` reaches the buffer).
+  assert(pm[0] == 'z' && pi[0] == 'e', "`[]` works on a pointer to a slice")
+  pm[3] = 'W'
+  wrote_through_index: = mut_view.equals("zYcW")
+  assert(wrote_through_index, "a `[]` assignment through a pointer to a slice reaches the original")
+  // A multi-level pointer too.
+  ppm: U8$[]@@ = pm@
+  assert(ppm.len == 4 && ppm[0] == 'z', "`.` and `[]` reach through a multi-step pointer too")
+
+  // --- an empty array literal becomes a slice of length 0 ---
+  // Only this shape makes an array type with zero elements (sema rejects a declaration written
+  // `T[0]`). C does not allow an array of length 0, so genc puts one element there
+  // (gen/c/decl.kspls).
+  empty: = U8[]::{}
+  assert(empty.len == 0, "an immutable slice made from an empty array literal has length 0")
+
+  verdict
+    .pass("a descriptor literal has its fields' types checked whether single-step or nested, and a \
+      built-in member works through a pointer too.")
+
+// ==========================================
+// An alias carrying an immutable qualifier resolves all the way; the normalization resolves
+// aliases and strips qualifiers **in turn**.
+// ==========================================
+priv typedef Meters = I32
+
+priv fn meters_plus_one(p: Meters@): I32
+  return p$ + 1
+
+// ==========================================
+// An enum's variant name.
+// Caution: **For an enum where the user wrote a `fmt`, that one must win.** Otherwise the format
+// written by hand is quietly ignored.
+// ==========================================
+priv enum Vn_plain
+  alpha
+  beta(x: I32)
+  gamma
+
+priv enum Vn_custom
+  one
+  two
+
+impl Vn_custom: Formattable
+  fn fmt(_r: Self, w: Writer): Writer
+    return w.s("<custom>")
+
+fn test_enum_variant_name()
+  verdict.start("[enum] the synthesis of a variant name, and interpolation test...")
+
+  a: = Vn_plain.alpha
+  b: = Vn_plain.beta(7)
+  g: = Vn_plain.gamma
+  assert(a.variant_name().equals("alpha"), "variant_name: with no payload")
+  b_name: = b.variant_name()
+  assert(b_name.equals("beta"), "variant_name: it returns the name alone with a payload too")
+  assert(g.variant_name().equals("gamma"), "variant_name: the third variant")
+
+  $sb: = Str_builder.new()
+  defer sb.free()
+  sb.s("\{a\}/\{b\}")
+  assert(sb.slice().equals("alpha/beta"), "interpolation goes through variant_name")
+
+  // The user's fmt wins
+  c: = Vn_custom.two
+  sb.clear().s("\{c\}")
+  assert(sb.slice().equals("<custom>"), "a fmt the user wrote takes priority")
+  c_name: = c.variant_name()
+  assert(c_name.equals("two"), "variant_name has grown even with a fmt of one's own")
+
+  // On another file's (std's) enum too
+  e: = Option<|I32|>.none
+  assert(e.variant_name().equals("none"), "it is synthesized for a generic enum too")
+
+  verdict
+    .pass("the synthesized variant_name is right for every variant, interpolation goes through it, \
+      and the user's fmt takes priority.")
+
+// ==========================================
+// **A container holding** a nested view type **as its element**: "the element is immutable" and
+// "its frame is mutable" are separate levels.
+// Note: ksplc's own tests reject a write to an element (`make test-place`'s "a step's type").
+// ==========================================
+fn test_container_of_nested_views(arena: Arena$@)
+  verdict.start("[Slice] a container holding nested views as its elements test...")
+  $l: = List<|U8[][]|>.new(arena)
+  l.push(U8[][]::{ "ab", "cde" })
+  l.push(U8[][]::{ "f" })
+  assert(l.len == 2, "nested views can be pushed onto a List as elements")
+  assert(l.get(0)[1].equals("cde"),
+    "a pushed element can be read by subscript down to its inner element")
+  assert(l.get(1).len == 1, "the length is kept per element")
+  verdict.pass("even with immutable views as the elements, the frame they sit in is mutable.")
+
+fn test_const_alias_resolves_through()
+  verdict.start("[Alias] resolving an alias carrying an immutable qualifier test...")
+  m: Meters = 41
+  assert(meters_plus_one(m@) == 42, "a Meters@'s target can be handled as a number")
+  verdict.pass("the alias resolution and the immutable qualifier's peeling work alternately.")
+
+fn test_alias_element_acts_as_its_base() //<
+  //< It checks an alias read out of an immutable slice acts as its base type
+  //<
+  //< Caution: **Read the alias out of an immutable slice.** The element is the alias under an
+  //< immutable mark, and stripping each once leaves the alias itself, which conforms to nothing:
+  //< the interpolation then reports "does not implement 'Formattable'".
+  verdict.start("[Alias] an alias read out of an immutable slice acts as its base type test...")
+  ms: = Meters[]::{ 3, 4 }
+  $b: = Str_builder.new()
+  defer b.free()
+  b.s("\{ms[0]\} \{-ms[1]\} \{ms[0] < ms[1]\}")
+  assert(b.slice().equals("3 -4 true"), "an element formats, negates and compares as an I32")
+  verdict.pass("an alias's element peels to its base however the marks and the alias stack.")
+
+// ==========================================
+// A subscript's type is the implementation's `Idx` (`trait Index<|Idx, Output|>`), not `Sz`.
+// ==========================================
+priv struct Str_keyed
+  base: I32
+
+impl Str_keyed: Index<|U8[], I32|>
+  fn get(r: Self, key: U8[]): I32
+    return r.base + I32::key.len
+
+impl Str_keyed: Index_mut<|U8[], I32|>
+  fn set(r: Self$@, key: U8[], value: I32)
+    r.base = value - I32::key.len
+
+fn test_index_key_type_follows_the_impl(arena: Arena$@)
+  verdict.start("[Index] a subscript's type follows the implementation's declaration test...")
+  $t: Str_keyed = ::{ .base = 10 }
+  assert(t["abc"] == 13, "an Index implementation taking a non-Sz subscript (U8[]) resolves")
+  assert(t[""] == 10, "an empty key works too")
+  // Caution: Test both a read and a write. A subscript's type is looked up in two places,
+  // `Index.get` and `Index_mut.set`, so with only one the other stays pinned to `Sz`.
+  t["xy"] = 20
+  assert(t.base == 18, "an Index_mut implementation taking a non-Sz subscript can be assigned to")
+  // An instantiated implementation must resolve the same way: its parameter can hold no copy of
+  // the type after substitution, and falling back to `Sz` there rejects the key.
+  $m: = Map<|U8[], I32|>.new(arena)
+  m["k"] = 9
+  assert((m["k"] catch -1) == 9, "an instantiated Map<|U8[], I32|> reads and writes with `[]`")
+  assert((m["nope"] catch -1) == -1, "a missing key goes to the Result's error side")
+  verdict
+    .pass("a subscript's expected type is not pinned to Sz but taken from the implementation's \
+      declaration.")
+
+// ==========================================
+// "A subscript returning a place" (operator.Index_place): the shapes that a value get/set
+// (`Index` / `Index_mut`) cannot express work on a type implementing `at` as on a built-in slice.
+// ==========================================
+priv struct Cell
+  n: I32
+
+fn test_index_place_gives_real_places(arena: Arena$@)
+  verdict.start("[Index_place] a subscript returns the element's \"place\" test...")
+
+  l: = List<|I32|>.create(arena)
+  l.push(10)
+  l.push(20)
+
+  // (1) a plain assignment
+  l[0] = 1
+  assert(l[0] == 1, "simple assignment through at() must reach the element")
+
+  // (2) a compound assignment (impossible with a value get/set)
+  l[1] += 5
+  assert(l[1] == 25, "compound assignment through at() must read-modify-write in place")
+
+  // (3) taking the element's address (with a value get it would be a copy's address)
+  p: = l[0]@
+  p$ = 7
+  assert(l[0] == 7, "the address taken from at() must be the element itself")
+
+  // (4) a struct element's field can be updated directly (without going through a copy)
+  cl: = List<|Cell|>.create(arena)
+  cl.push(Cell::{ .n = 3 })
+  cl[0].n = 99
+  assert(cl[0].n == 99, "a field of a struct element must be updatable in place")
+
+  verdict
+    .pass("what at() returns is the element's place, and an assignment, a compound assignment and \
+      taking an address work just as on a built-in slice.")
+
+// ==========================================
+// A template's body is analysed in the template's file, but its `T` is the user's: Cell is
+// file_private here, so the visibility check sees std/ds.kspls's body writing `T`.
+// ==========================================
+fn test_private_type_arg_reaches_template_body(arena: Arena$@)
+  verdict.start("[generics] a file_private type argument reaches a template's body test...")
+
+  l: = List<|Cell|>.create(arena)
+  l.push(Cell::{ .n = 11 })
+  l.push(Cell::{ .n = 22 })
+
+  view: = l.slice()
+  assert(view.len == 2, "List.slice must borrow every element")
+  assert(view[1].n == 22, "the borrowed view must read the List's own storage")
+
+  view[0].n = 33
+  assert(l[0].n == 33, "the view must be a borrow, not a copy")
+
+  verdict
+    .pass("a template body instantiated with a file_private type is analysed, and the borrowed view \
+      points at the original data.")
+
+// ==========================================
+// The NUL check on a string passed across the C boundary: a KSPL slice can contain a NUL, and C
+// stops reading at the first one.
+// ==========================================
+fn test_embedded_nul_is_rejected_at_c_boundary()
+  verdict.start("[NUL] the NUL check on a string handed across the C boundary test...")
+
+  assert("ok.txt\0../../etc/passwd".contains_nul(), "contains_nul must detect a NUL")
+  assert(!"ok.txt".contains_nul(), "contains_nul must not fire on a clean string")
+
+  // io.open: a path containing a NUL is not opened and becomes an Io_error (C would see only
+  // "ok.txt").
+  $open_rejected: = false
+  io.open("ok.txt\0../../etc/passwd", "r") catch
+    open_rejected = true
+  assert(open_rejected, "io.open must reject a path containing a NUL")
+
+  // sys.get_env: a name containing a NUL is not looked up and gives .none.
+  if _v: = sys.get_env("PATH\0IGNORED")
+    panic("get_env must reject a name containing a NUL")
+
+  // A name containing no NUL is looked up.
+  switch sys.get_env("PATH") case .some {} case .none
+    panic("get_env must still resolve a clean name")
+
+  verdict
+    .pass("a string containing a NUL is not truncated at the C boundary; the conversion itself \
+      fails.")
+// ==========================================
+// A defer's block reads an outer variable when the scope is left, not when the defer was
+// registered.
+// There is no capture-list notation (`defer a, b { ... }`).
+// ==========================================
+priv fn defer_sees_value_at_scope_exit(): Sz
+  $n: Sz = 1
+  $observed: Sz = 0
+  until_exit:
+    defer observed = n
+    n = 100
+  return observed
+
+priv fn defer_frees_grown_buffer() //<
+  //< It checks a deferred free releases the builder's buffer after it has grown
+  //<
+  //< A frozen copy with `cap == 0` would leak the whole buffer.
+  $b: = Str_builder.new()
+  defer b.free()
+  for _i in Range.asc(200)
+    b.s("0123456789")
+  assert(b.slice().len == 2000, "the builder must actually hold the appended bytes")
+
+priv fn defer_explicit_snapshot(): Sz //<
+  //< Where the value at registration is needed, the user copies it explicitly
+  $n: Sz = 1
+  $observed: Sz = 0
+  until_exit:
+    snapshot: = n
+    defer observed = snapshot
+    n = 100
+  return observed
+
+fn test_defer_reads_values_at_scope_exit()
+  verdict.start("[defer] a block reads the value at the moment the scope is left test...")
+
+  at_exit: = defer_sees_value_at_scope_exit()
+  assert(at_exit == 100, "a defer block must read its variables at scope exit, not at registration")
+
+  heap_before: = mem.heap_used_bytes()
+  defer_frees_grown_buffer()
+  heap_after: = mem.heap_used_bytes()
+  assert(heap_after == heap_before,
+    "`defer { b.free(); }` must free the buffer the builder actually owns at scope exit")
+
+  snapshot: = defer_explicit_snapshot()
+  assert(snapshot == 1, "an explicitly copied snapshot must keep the value it had at registration")
+
+  verdict
+    .pass("it reads the value at the moment of leaving, and the value at registration can be kept \
+      by copying it oneself.")
+// ==========================================
+// Calling a function that **returns** a function pointer.
+// A named function's symbol holds its return type in type_id, so judged by type alone `fn cb(): Cb`
+// (Cb an alias of a function pointer) looks like a function pointer to call, mistyping `cb()`.
+// ==========================================
+priv typedef Cb_i32 = fn(): I32
+priv typedef Cb_item = fn(): Fn_ptr_item
+
+priv struct Fn_ptr_item
+  v: I32
+
+priv fn fn_ptr_source_i32(): I32
+  return 9
+
+priv fn fn_ptr_source_item(): Fn_ptr_item
+  return Fn_ptr_item::{ .v = 21 }
+
+priv fn returns_cb_i32(): Cb_i32
+  return fn_ptr_source_i32
+
+priv fn returns_cb_item(): Cb_item
+  return fn_ptr_source_item
+
+priv struct Cb_holder
+  f: Cb_item
+
+fn test_fn_returning_fn_ptr()
+  verdict.start("[fn-ptr] a function returning a function pointer test...")
+
+  // With a type annotation: the return type resolves to the alias itself.
+  annotated: Cb_i32 = returns_cb_i32()
+  assert(annotated() == 9, "a function returning a fn-pointer alias must yield the alias")
+
+  // With no type annotation (the path prone to wrong C with zero diagnostics).
+  inferred: = returns_cb_item()
+  inferred_v: = inferred().v
+  assert(inferred_v == 21,
+    "an unannotated binding must take the fn-pointer type, not its return type")
+
+  // An indirect call through a field holding a function pointer is still an indirect call.
+  h: Cb_holder = ::{ .f = returns_cb_item() }
+  assert(h.f().v == 21, "calling through a fn-pointer field must stay an indirect call")
+
+  // The same for an indirect call through a function-pointer variable.
+  via_var: Cb_i32 = fn_ptr_source_i32
+  assert(via_var() == 9, "calling through a fn-pointer variable must stay an indirect call")
+
+  verdict.pass("")
+// ==========================================
+// The three safe shapes of returning a trait value (a global, the heap, a pointer's target) pass
+// the check that stops a value's upcast (which synthesizes `&value` into {obj, vtable}).
+// ==========================================
+priv struct Up_sq
+  n: I32
+
+impl Up_sq: Up_shape
+  fn area(r: Self$@): I32
+    return r.n * r.n
+
+priv trait Up_shape
+  fn area(r: Self): I32
+
+priv struct Up_bare //<
+  //< The shape with the methods in the inherent impl and the conforming impl left empty
+  //<
+  //< **A vtable is built from the target type's method table.** Treat an empty conformance as
+  //< unused and the C references a vtable that is never emitted.
+  n: I32
+
+impl Up_bare
+  fn area(r: Self$@): I32
+    return r.n + 1
+
+impl Up_bare: Up_shape {}
+
+priv $up_global: Up_sq = ::{ .n = 3 }
+
+priv fn up_from_global(): Up_shape
+  return up_global
+
+priv fn up_from_ptr(p: Up_sq$@): Up_shape
+  return p
+
+priv fn up_from_pointee(p: Up_sq$@): Up_shape
+  return p$
+
+priv struct Up_holder //< holds a conforming value by value, reached through a pointer below
+  sq: Up_sq
+
+// A field behind a pointer lives where the pointer points, not in this frame, so it may be
+// returned upcast (is_frame_storage in sema/body/stmt_escape.kspls).
+priv fn up_from_pointee_field(h: Up_holder$@): Up_shape
+  return h.sq
+
+fn test_trait_upcast_lifetimes()
+  verdict.start("[trait] the three shapes a value can be returned in test...")
+
+  g: = up_from_global()
+  assert(g.area() == 9, "upcasting a global must stay valid after return")
+
+  hp: = mem.alloc_as<|Up_sq|>()
+  defer dealloc(Void$@::hp)
+  hp.n = 5
+  h: = up_from_ptr(hp)
+  assert(h.area() == 25, "upcasting a heap pointer must stay valid after return")
+
+  $local: Up_sq = ::{ .n = 4 }
+  p: = up_from_pointee(local@)
+  assert(p.area() == 16, "upcasting through a pointer must address the pointee, not a frame")
+
+  $holder: Up_holder = ::{ .sq = ::{ .n = 6 } }
+  f: = up_from_pointee_field(holder@)
+  assert(f.area() == 36, "upcasting a field behind a pointer must address the pointee's field")
+
+  verdict.pass("")
+
+fn test_trait_upcast_from_empty_conformance() //<
+  //< The vtable an upcast names is the same one whatever the receiver's immutable qualifier
+  //<
+  //< Caution: **Always include the `@` of an immutable binding.** It is `T immut@`, so stripping
+  //< that leaves one level of qualifier passes the mutable-binding and value-only checks and fails
+  //< only here.
+  verdict.start("[trait] an upcast works even with an empty conforming impl test...")
+
+  $b: Up_bare = ::{ .n = 41 }
+  s: Up_shape = b@
+  assert(s.area() == 42, "an empty conformance impl must still produce a vtable")
+
+  verdict
+    .pass("a type satisfying a conformance with inherent methods can be raised to a trait value \
+      too.")
+
+fn test_trait_upcast_ignores_constness()
+  verdict.start("[trait] the same vtable is named whatever the immutable qualifier test...")
+
+  immut: Up_sq = ::{ .n = 7 }
+  from_const_ptr: Up_shape = immut@
+  assert(from_const_ptr.area() == 49, "upcast from an immutable binding's pointer")
+
+  $mut: Up_sq = ::{ .n = 8 }
+  from_mut_ptr: Up_shape = mut@
+  assert(from_mut_ptr.area() == 64, "upcast from a mutable binding's pointer")
+
+  from_value: Up_shape = immut
+  assert(from_value.area() == 49, "upcast from a value")
+
+  verdict.pass("the immutable, the mutable and the value all three resolve to the same vtable.")
+
+priv typedef Up_named = Up_sq
+
+fn test_trait_upcast_through_an_alias_pointer() //<
+  //< It checks a pointer to an alias upcasts to a trait as its base type
+  //<
+  //< Caution: **Give the trait a pointer to the alias.** Removing the pointer level leaves the
+  //< alias as the conforming type: the conformance check then rejects it ("does not explicitly
+  //< implement"), and the vtable is named after the alias, which nothing defines.
+  verdict.start("[trait] a pointer to an alias upcasts as its base type test...")
+
+  $named: Up_named = ::{ .n = 6 }
+  p: Up_named$@ = named@
+  from_ptr: Up_shape = p
+  from_binding: Up_shape = named@
+  assert(from_ptr.area() == 36 && from_binding.area() == 36,
+    "a pointer to an alias reaches its base type's vtable")
+
+  verdict.pass("a pointer to an alias conforms and dispatches as its base type.")
+// ==========================================
+// A return value needing a conversion inside a Result, such as `Trait?Err` / `Void$@?Err`.
+// Against a Result expected type, convert to the ok type first, then wrap; wrapping only on an
+// exact match leaves these functions able only to throw.
+// ==========================================
+priv enum Wrap_err
+  bad
+
+priv $wrap_global: Up_sq = ::{ .n = 6 }
+
+priv fn wrap_from_ptr(p: Up_sq$@): Up_shape?Wrap_err
+  return p
+
+priv fn wrap_from_global(): Up_shape?Wrap_err
+  return wrap_global
+
+priv fn wrap_throws(): Up_shape?Wrap_err
+  throw Wrap_err.bad
+
+priv fn wrap_void_ptr(p: I32$@): Void$@?Wrap_err
+  return p
+
+fn test_result_wraps_coerced_value()
+  verdict.start("[result] a return value needing a conversion inside a Result test...")
+
+  hp: = mem.alloc_as<|Up_sq|>()
+  defer dealloc(Void$@::hp)
+  hp.n = 5
+  a: = wrap_from_ptr(hp) catch
+    assert(false, "upcasting a pointer inside a Result must succeed")
+    return
+  assert(a.area() == 25, "an interface upcast must survive the Result wrapper")
+
+  b: = wrap_from_global() catch
+    assert(false, "upcasting a global inside a Result must succeed")
+    return
+  assert(b.area() == 36, "a global upcast must survive the Result wrapper")
+
+  $threw: = false
+  _c: = wrap_throws() catch
+    threw = true
+    fallback b
+  assert(threw, "the throw path of an interface-returning Result must still work")
+
+  $n: I32 = 11
+  vp: = wrap_void_ptr(n@) catch
+    assert(false, "widening a typed pointer to Void$@ inside a Result must succeed")
+    return
+  assert((I32$@::vp)$ == 11, "the pointer widening must round-trip through the Result")
+
+  verdict.pass("")
+// ==========================================
+// Checks `return f()?;` for a function returning `Void`.
+// Caution: Test a Void call not wrapped in a Result with it. `return plain_void(x);`'s call appears
+// only in that expression, so skipping too much silently deletes the call and its side effect.
+// ==========================================
+priv enum Void_ret_err
+  bad
+
+priv $void_ret_side: I32 = 0
+
+priv fn void_ret_inner(x: I32): Void?Void_ret_err
+  if x < 0
+    throw Void_ret_err.bad
+  void_ret_side += x
+
+priv fn void_ret_plain(x: I32)
+  void_ret_side += x * 10
+
+priv fn void_ret_forward(x: I32): Void?Void_ret_err
+  return void_ret_inner(x)?
+
+priv fn void_ret_wrap_plain(x: I32): Void?Void_ret_err
+  return void_ret_plain(x)
+
+fn test_void_result_return_forms()
+  verdict.start("[Void?E] the return of a Result returning Void test...")
+
+  void_ret_side = 0
+  void_ret_forward(3) catch
+    assert(false, "forwarding a successful Void result must not throw")
+    return
+  assert(void_ret_side == 3, "`return f()?;` performs the call inside exactly once")
+
+  $threw: = false
+  void_ret_forward(-1) catch
+    threw = true
+  assert(threw, "`return f()?;` hands a failure to the caller")
+  assert(void_ret_side == 3, "a failed call leaves no side effect")
+
+  void_ret_wrap_plain(2) catch
+    assert(false, "wrapping a plain Void call must not throw")
+    return
+  assert(void_ret_side == 23, "`return plain_void(x);`'s call does not disappear")
+
+  verdict.pass("a collapsed `?` is skipped and an uncollapsed Void is put out.")
+
+// ==========================================
+// The implicit conversion that relaxes immutability works through an alias too (a raw
+// `strip_const_deep` comparison gives "expected 'P', but got 'I32$@'"). The one check is
+// `same_shape_ignoring_const`, shared with the ternary operator.
+// ==========================================
+
+priv typedef Al_ptr = I32@ //<
+  //< An alias of a read-only pointer, the target of the relaxing conversion
+  //<
+  //< **It must be the relaxing direction only**; immutable back to mutable stays rejected
+  //< **Only the outermost alias is resolved** (the reason is at same_shape_ignoring_const).
+priv typedef Al_arr = I32@[2]
+
+fn test_alias_does_not_block_const_relaxation()
+  verdict.start("[alias] relaxing immutability through an alias test...")
+
+  $v: I32 = 7
+  $w: I32 = 8
+  // A mutable pointer can be passed as an immutable pointer written as an alias.
+  p: Al_ptr = v@
+  assert(p$ == 7, "a mutable pointer can be handed to an immutable pointer written as an alias")
+  // The ternary operator's type unification uses the same check.
+  pick: Al_ptr = v@ if p$ == 7 else w@
+  assert(pick$ == 7, "an alias resolves in the unification of a ternary operator's branches too")
+  // An alias pointing at an array; the element is not an alias (same_shape_ignoring_const).
+  $arr: Al_arr = ::{}
+  arr[0] = v@
+  arr[1] = w@
+  assert(arr[0]$ + arr[1]$ == 15, "the outermost resolves for an alias pointing at an array too")
+
+  verdict.pass("an alias does not stop the implicit conversion.")
+
+priv struct Hold<|T|> //<
+  //< A composite type that each of two or more type arguments is bound from **inside**
+  //<
+  //< **Choose by position.** In `f<|K, V|>(m: Map<|K, V|>)` both hit the same parameter; K takes
+  //< the 0th type argument, V the 1st (positional_generic_binding in
+  //< `ksplc/sema/body/generic_infer.kspls`).
+  v: T
+
+priv fn two_bare<|S, T|>(_a: S, _b: T): Sz
+  return 1
+
+priv fn bare_then_nested<|S, T|>(_a: S, _p: Hold<|T|>): Sz
+  return 2
+
+priv fn nested_then_bare<|T, S|>(_p: Hold<|T|>, _a: S): Sz
+  return 3
+
+priv fn nested_in_trait<|S, T|>(_a: S, _p: Callable1<|T, Bool|>): Sz
+  return 4
+
+fn test_generic_args_infer_from_composites()
+  verdict.start("[Types] inferring a type argument from inside a composite type test...")
+  h: = Hold<|I32|>::{ .v = 1 }
+  pred: Callable1<|I32, Bool|> = fn(x: I32; ): Bool
+    return x > 0
+  assert(two_bare(h, 5) == 1, "the plain-against-plain shape")
+  assert(bare_then_nested(5, h) == 2, "it resolves with a composite type after a plain one")
+  assert(nested_then_bare(h, 5) == 3, "the plain behind resolves with the composite type first too")
+  assert(nested_in_trait(5, pred) == 4, "it resolves from inside a trait's type argument too")
+  verdict
+    .pass("with two or more type arguments the binding target is decided by the position inside a \
+      composite type.")

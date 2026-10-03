@@ -1,0 +1,34 @@
+//< Sounds the passive buzzer
+//<
+//< **It does not use PWM.**
+//< It keeps USB running while it sounds. Before `init()` that does nothing, so firmware that does
+//< not use USB can call it directly (the guard in `usb_cdc.poll_once`).
+//< **The beep counts and the gaps between them are `bringup.beep`'s.**
+
+// ==========================================
+// How to use it:
+//   buzzer.tone(beep_hz, beep_ms);   // 2kHz for 100ms
+// ==========================================
+import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/drivers/rp2040/gpio"
+import "ksos/drivers/rp2040/timer"
+import "ksos/drivers/rp2040/usb_cdc" as usb
+
+const beep_hz: U32 = 2000 //< the pitch and length used for the signal beeps
+  //<
+  //< **It must be a square wave in the audible range** — DC makes no sound.
+const beep_ms: U32 = 100
+
+fn tone(freq_hz: U32, ms: U32) //< outputs a square wave of freq_hz for ms milliseconds
+  //<
+  //< **Call it after `clocks.init()`** (at the 12MHz from before initialization, `delay_us`'s tick
+  //< does not match and the length is off by several times).
+  if freq_hz == 0 || ms == 0
+    return
+  half_us: = 500000 / freq_hz
+  edges: = ms * 1000 / half_us
+  for _i in Range.asc(Sz::edges)
+    gpio.toggle(board.buzzer_pin)
+    usb.poll_once()
+    timer.delay_us(half_us)
+  gpio.clear(board.buzzer_pin)

@@ -1,0 +1,172 @@
+//< The tree a regular-expression pattern compiles into, and how it is made and freed
+//<
+//< **It is not meant for direct use**, apart from the limits `max_groups` and
+//< `max_repeat_count`; compiling and matching are in `std/regex`.
+
+// ==========================================
+// **Both** compiling and matching (`regex.kspls`) build on this, so the tree lives below both:
+// otherwise, splitting either one out would make it import `regex.kspls` back.
+// Caution: **Read each allocation together with its release.** `new_repeat_step` makes a shallow
+// copy, so `drop_repeat_step` frees it (passed to `free_rx_node`, it would free the shared tree
+// too).
+// ==========================================
+import "std/ds" { List }
+import "std/mem" + { dealloc }
+
+pub const max_groups: Sz = 9 //< how many capturing groups a pattern may have.
+  //<
+  //< Caution: **Refuse a pattern that exceeds it** (`too_many_groups`); otherwise the tenth group
+  //< onward silently comes back empty. 9 matches `\1`…`\9` and sets the size a Match holds.
+
+pub const max_repeat_count: Sz = 1000 //< the largest `{m,n}` count accepted, as in RE2 and Go.
+  //<
+  //< Caution: **Refuse a count that exceeds it** (`invalid_repeat`). A repeated group recurses one
+  //< level per round, so a large count hits regex.kspls's max_match_depth first.
+
+pub struct Slots //< what each capturing group caught; `-1` means it did not take part
+  //<
+  //< **`-1` is not 0**: an empty match has `start == end`.
+  count: Sz
+  start: Sz[max_groups]
+  end: Sz[max_groups]
+
+pub fn reset_slots( //< marks every group as not having taken part
+  c: Slots$@, //< the slots to clear
+  count: Sz, //< how many groups the pattern has
+)
+  c.count = count
+  for i in Range.asc(max_groups)
+    c.start[i] = -1
+    c.end[i] = -1
+
+pub enum Rx_kind //< what one node of a compiled pattern stands for
+  lit //< one literal byte
+  any //< `.`
+  class //< a `[...]` set
+  group //< a `(...)`; its alternatives hang off it
+  repeat //< one atom repeated; `*`, `+`, `?` and `{m,n}` are all this
+  start_anchor //< `^`
+  end_anchor //< `$`
+  group_end //< the mark that closes a group, so the capture's end gets recorded
+  word_boundary //< `\b`
+  not_word_boundary //< `\B`
+  group_repeat //< a whole group repeated
+
+pub struct Rx_node //< one node of a compiled pattern; `kind` decides which fields mean something
+  kind: Rx_kind
+  ch: U8 //< for .lit
+  lazy: Bool //<
+    //< For .repeat/.group_repeat: the shortest match (`*?` `+?` `??` `{m,n}?`)
+  neg: Bool //< for .class: `[^...]`
+  set: Bool[256] //< for .class: the membership table
+  sub: Rx_node$@ //< for .repeat: the quantified atom; for .group_repeat: the repeated group
+  alts: List<|List<|Rx_node$@|>|> //< for .group: one atom list per alternative
+  gidx: I32 //<
+    //< For .group/.group_end: which capturing group; `-1` for a non-capturing group (`(?:…)`).
+  end_marker: Rx_node$@ //<
+    //< For .group: the node marking the group's end
+    //<
+    //< Caution: **Make one at compile time and reuse it**; otherwise match_group makes one per try.
+  min_count: I32 //<
+    //< For .repeat/.group_repeat: the minimum count (0 for `*`, 1 for `+`, m for `{m,n}`).
+  max_count: I32 //<
+    //< For .repeat/.group_repeat: the maximum count (n for `{m,n}`, 1 for `?`)
+    //<
+    //< `-1` means no bound (`*` `+` `{m,}`).
+  pos_mark: Sz //<
+    //< For .group_repeat: **the position where the current round started**; `-1` before the first
+    //<
+    //< It stops a round that did not advance (without it, `(a?)*` loops forever).
+
+pub fn new_node( //< one new node; a `.group` is made with `new_group_node` instead
+  //<
+  //< Caution: Make a .group only with new_group_node. Made here, its .alts stays uninitialized and
+  //< free_rx_alts walks a garbage list.
+  kind: Rx_kind, //< what the node stands for
+): Rx_node$@ //< the node on the heap; free it with `free_rx_node`
+  n: = mem.alloc_as<|Rx_node|>()
+  n.kind = kind
+  n.ch = 0
+  n.lazy = false
+  n.neg = false
+  n.sub = null
+  n.gidx = -1
+  n.end_marker = null
+  n.min_count = 0
+  n.max_count = -1
+  n.pos_mark = -1
+  return n
+
+pub fn new_group_node( //< one new group node, with its alternatives and closing mark
+  alts: List<|List<|Rx_node$@|>|>, //< one atom list per alternative
+  gidx: I32, //< which capturing group; `-1` for a non-capturing `(?:…)`
+): Rx_node$@ //< the node; a non-capturing group gets no closing mark
+  n: = new_node(.group)
+  n.alts = alts
+  n.gidx = gidx
+  if gidx >= 0
+    m: = new_node(.group_end)
+    m.gidx = gidx
+    n.end_marker = m
+  return n
+
+pub fn new_repeat_step( //< a temporary copy that stands for this round of a repeated group
+  //<
+  //< Caution: **Make it a shallow copy.** `sub` **shares** the compile-time tree; free the copy
+  //< with `drop_repeat_step` (see the caution at the top of this file).
+  from: Rx_node$@, //< the group being repeated; its tree is shared, not copied
+  started_at: Sz, //< where this round began, so a round that did not advance can be stopped
+): Rx_node$@ //< the copy, with one round taken off its counts
+  n: = new_node(.group_repeat)
+  n.sub = from.sub
+  n.lazy = from.lazy
+  // The counts left after one round; no bound (-1) stays -1.
+  n.min_count = from.min_count - 1 if from.min_count > 0 else 0
+  n.max_count = from.max_count - 1 if from.max_count > 0 else from.max_count
+  n.pos_mark = started_at
+  return n
+
+pub fn drop_repeat_step(n: Rx_node$@) //< frees one `new_repeat_step` copy, but nothing it shares
+  //<
+  //< Caution: **Do not use `free_rx_node`** (it walks the shared `sub`).
+  dealloc(Void$@::n)
+
+pub fn new_class_node(): Rx_node$@ //< one new `[...]` node with an empty membership table
+  n: = new_node(.class)
+  for i in Range.asc(256)
+    n.set[i] = false
+  return n
+
+pub fn set_range( //< adds every byte in a range to a `[...]` set
+  n: Rx_node$@, //< the set node to write into
+  lo: U8, //< the range's first byte
+  hi: U8, //< the range's last byte
+)
+  for $c: Sz = lo; c <= Sz::hi; c += 1
+    n.set[c] = true
+
+pub fn free_rx_alts( //< frees a group's alternatives and every node under them
+  //<
+  //< It frees the Lists too. Walk .alts only for the .group kind (for others it is uninitialized).
+  alts: List<|List<|Rx_node$@|>|>$@, //< the alternatives to free
+)
+  for i in Range.asc(alts.len)
+    $seq: = alts.get(i)
+    for k in Range.asc(seq.len)
+      free_rx_node(seq.get(k))
+    seq.free()
+  alts.free()
+
+pub fn free_rx_node( //< frees one node and everything under it
+  n: Rx_node$@, //< the node to free
+)
+  if n == null
+    return
+  if n.sub != null
+    free_rx_node(n.sub)
+  // `.group_repeat`'s `sub` is the group itself, already freed above.
+  if n.kind == .group
+    free_rx_alts(n.alts@)
+    if n.end_marker != null
+      free_rx_node(n.end_marker)
+  dealloc(Void$@::n)

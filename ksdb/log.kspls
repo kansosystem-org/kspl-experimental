@@ -1,0 +1,314 @@
+//< An append-only log whose records can still be read after a power cut
+//<
+//< The smallest way for a device to keep a sensor's time series, or a policy it was sent.
+//< **It never rewrites a record**: it only appends, so every finished record survives a power
+//< cut. `std/db` does not fit here: it hands the work to SQLite by FFI (libsqlite3 and a C
+//< backend), which a freestanding microcontroller does not have.
+
+// ==========================================
+// A record's layout, the order its parts are written in, what a power cut leaves behind, and why
+// appending stops at `full` instead of wrapping around are in `ksdb/docs/DESIGN.md`.
+// ==========================================
+
+import "ksdb/store" { Store }
+import "std/bytes"
+import "std/chars" // classifying and extracting one character
+
+// Using it:
+//   store: = ram.make(U8$[]::buf, 4096);        // a 4KB sector
+//   $lg: = ksdblog.Log.open(store);
+//   lg.append(kind_sample, "…") catch { … };
+//   $it: = lg.iter(); for it.next() { … }        // oldest first
+//   n: = lg.last(kind_policy, U8$[]::dst)?;     // the newest one of that kind
+pub const header_size: Sz = 8 //< the size of a record's header, in bytes.
+pub const max_payload: Sz = 0xfffe //< the largest content one record can hold.
+  //<
+  //< `0xFFFF` marks an empty slot, so it cannot be a content length.
+priv const empty_len: U16 = 0xffff //< the `len` an erased slot reads as (nothing is written yet)
+priv const chunk_size: Sz = 64 //< how many bytes are read at a time
+  //<
+  //< Caution: The buffer lives on the stack, so keep it small: a microcontroller's task stack is
+  //< only a few kilobytes.
+
+pub enum Ksdb_error //< why an append or a read failed
+  full //< the medium has no room left; the log only appends, so this lasts until a `reset`.
+  too_large //< the content is longer than `max_payload`, or does not fit in one sector.
+  write_failed //< the medium refused a write or an erase.
+  too_small //< the `dst` passed to `last` is shorter than the content.
+  not_found //< no record of that kind exists.
+    //<
+    //< Caution: **Do not report "there is none" as length 0.** A record with empty content is
+    //< legitimate (see the caution on `Cursor`'s `started`). An empty record would then read as
+    //< "there is none": the writer wrote it, cannot read it back, and nothing shows why.
+
+pub struct Log //< an append-only log on one `Store` that can be read again after a power cut
+  priv store: Store
+  // The position to write next. **`open` has checked that everything from here on is erased.**
+  priv tail: Sz
+
+priv fn align4(n: Sz): Sz //< rounds up to a multiple of 4
+  //<
+  //< Caution: **Keep record boundaries aligned.** Otherwise the header's 2-byte integer sits at an
+  //< odd address, and a target that reads it directly faults.
+  return (n + 3) - ((n + 3) % 4)
+
+priv fn record_span(payload_len: Sz): Sz //<
+  //< One record's length: the header, the content and the padding
+  return align4(header_size + payload_len)
+
+priv struct Chunks //< a read of `left` bytes from `at`, one chunk at a time
+  //<
+  //< Caution: **It holds no buffer**; the caller passes one `chunk_size` array to every `next`, so
+  //< a walk costs one chunk of stack however long the range.
+  priv store: Store
+  priv at: Sz
+  priv left: Sz
+
+impl Chunks
+  priv fn next(r: Self$@, chunk: U8$[]): U8[] //< reads the next part of the range into chunk
+    n: = r.left if r.left < chunk.len else chunk.len
+    v: = chunk.sub_mut(0, n)
+    r.store.read_at(r.at, v)
+    r.at += n
+    r.left -= n
+    return v
+
+priv fn crc_range(store: Store, at: Sz, len: Sz, seed: U32): U32 //<
+  //< Computes the CRC of `len` bytes from `at`, continuing from `seed`
+  //<
+  //< `crc32` can be continued, so reading in chunks gives the same value as reading all at once.
+  $c: U32 = seed
+  $chunk: U8[chunk_size] = ::{}
+  $rd: = Chunks::{ .store = store, .at = at, .left = len }
+  for rd.left > 0
+    c = rd.next(U8$[]::chunk).crc32(c)
+  return c
+
+priv fn record_is_valid(store: Store, at: Sz, header: U8[]): Bool //<
+  //< Whether the CRC of the record at `at`, whose header has been read into `header`, matches
+  //<
+  //< The CRC covers the header except its own crc field.
+  head4: = header.sub(0, 4).crc32(0xffffffff)
+  c: = crc_range(store, at + header_size, header.get_u16_le(0), head4)
+  return (c ^ 0xffffffff) == header.get_u32_le(4)
+
+priv fn is_erased(store: Store, at: Sz, len: Sz): Bool //< whether len bytes from at are erased
+  $chunk: U8[chunk_size] = ::{}
+  $rd: = Chunks::{ .store = store, .at = at, .left = len }
+  for rd.left > 0
+    for b in rd.next(U8$[]::chunk)
+      if b != 0xff
+        return false
+  return true
+
+priv fn cursor(store: Store, end: Sz): Cursor //< a walk over the records in [0, end)
+  return Cursor::{ .store = store, .at = 0, .end = end, .started = false, .len = 0, .kind = 0 }
+
+impl Log
+  pub fn open(store: Store): Log //< scans the medium and opens the log where it can append
+    //<
+    //< **It scans on every open**: a position stored separately would be a second source of
+    //< truth, and after a power cut the two would disagree. **If the scan ends where the medium
+    //< is not erased, it moves to the next sector**: a half-written record cannot be written over.
+    // Caution: **Check the medium's sizes here.** A sector size of 0 never advances the scan, and
+    // one that does not divide the capacity erases into the next region; both break silently.
+    assert(store.sector_size > 0, "ksdb: Store.sector_size has to be greater than 0")
+    assert(store.capacity % store.sector_size == 0,
+      "ksdb: Store.capacity has to be divisible by sector_size")
+    // **How to walk the records lives only in `Cursor`.** A copy here would make the scan (`iter`)
+    // and the choice of the append position (here) two separate rules, which disagree as soon as
+    // one reads a sector the other skipped.
+    $it: = cursor(store, store.capacity)
+    $after_last: Sz = 0
+    for it.next()
+      after_last = it.at + record_span(it.len)
+    // **Check the whole rest of that sector, not just a header's worth.** `append` writes the
+    // content first and the header last, so the likeliest power cut leaves the content written
+    // and the header still erased. This reads one sector at most.
+    if after_last < store.capacity
+      room: = store.next_sector(after_last) - after_last
+      if !is_erased(store, after_last, room)
+        after_last = store.next_sector(after_last)
+    return Log::{ .store = store, .tail = after_last }
+
+  pub fn append( //< adds one record without crossing a sector boundary or erasing anything
+    //<
+    //< **A record stays inside one sector**: if it spanned two, erasing one would leave only the
+    //< header in the other. **No sector is erased here**, since erasing `tail`'s sector would take
+    //< its finished records with it. A region not erased is only skipped; erasing is `reset`'s job.
+    r: Self$@,
+    kind: U16, //< the caller's own tag; `iter` returns it and `last` matches on it
+    payload: U8[],
+  ): Void?Ksdb_error
+    if payload.len > max_payload
+      throw Ksdb_error.too_large
+    span: = record_span(payload.len)
+    if span > r.store.sector_size
+      throw Ksdb_error.too_large
+    // Caution: **Do not stop at a region that is not erased.** A half-written record can remain in
+    // a sector beyond `tail`'s, which `open` does not check. Skip it; when nothing fits any more,
+    // throw `full`.
+    $found: = false
+    for !found
+      // If the record would span two sectors, try again from the start of the next one.
+      if r.store.sector_base(r.tail) != r.store.sector_base(r.tail + span - 1)
+        r.tail = r.store.next_sector(r.tail)
+      if r.tail + span > r.store.capacity
+        throw Ksdb_error.full
+      if is_erased(r.store, r.tail, span)
+        found = true
+      else
+        r.tail = r.store.next_sector(r.tail)
+    $head: U8[header_size] = ::{}
+    hv: = U8$[]::head
+    hv.put_u16_le(0, U16::payload.len)
+    hv.put_u16_le(2, kind)
+    head4: = U8[]::{ .ptr = head[0]@, .len = 4 }
+    hv.put_u32_le(4, payload.crc32(head4.crc32(0xffffffff)) ^ 0xffffffff)
+    // Caution: **Write the content first and the header last.** The other way round, a power cut
+    // after the header leaves a record with a correct length but no content. Content first, the
+    // header stays erased, so the scan sees an empty slot and the partial write never counts.
+    if payload.len > 0
+      if !r.store.program_at(r.tail + header_size, payload)
+        throw Ksdb_error.write_failed
+    if !r.store.program_at(r.tail, U8[]::head)
+      throw Ksdb_error.write_failed
+    r.tail += span
+
+  pub fn reset(r: Self$@): Void?Ksdb_error //< erases the whole medium; the records are lost
+    //<
+    //< Use it before a device's first write (a device is erased when it leaves the factory, not
+    //< after it has been written), and after someone has copied the records off a full log.
+    $at: Sz = 0
+    for at < r.store.capacity
+      if !r.store.erase_sector(at)
+        throw Ksdb_error.write_failed
+      at += r.store.sector_size
+    r.tail = 0
+
+  pub fn used(r: Self$@): Sz //< the number of bytes in use, which is where the next record goes
+    return r.tail
+
+  pub fn iter(r: Self$@): Cursor //< a walk over the records, oldest first
+    //<
+    //< It is separate from `Log`, so appending during a scan breaks neither.
+    // It stops at `tail`: going to `capacity` would walk the erased sectors to the end for the
+    // same answer, which costs too much in a loop.
+    return cursor(r.store, r.tail)
+
+  priv fn find_last(r: Self$@, kind: U16, out_at: Sz$@, out_len: Sz$@): Bool //<
+    //< Finds the position and length of the newest record of `kind`
+    //<
+    //< Returns true if found. **The search lives only here**, shared by copying and by comparing
+    //< (for the same reason as the `Cursor` note in `open`).
+    $found: = false
+    $it: = r.iter()
+    for it.next()
+      if it.kind == kind
+        out_at$ = it.payload_at()
+        out_len$ = it.len
+        found = true
+    return found
+
+  pub fn last( //< copies out the newest record of that kind and returns its length
+    //<
+    //< This is how a device keeps a policy it was sent: the same kind is appended again and again
+    //< and **the newest one wins**, so a power cut mid-write leaves the old policy in force. A
+    //< caller that is fine with 0 when there is none can write `catch 0`.
+    r: Self$@,
+    kind: U16,
+    dst: U8$[], //< the destination; if it is shorter than the content, it throws `too_small`
+  ): Sz?Ksdb_error
+    $found_at: Sz = 0
+    $found_len: Sz = 0
+    if !r.find_last(kind, found_at@, found_len@)
+      throw Ksdb_error.not_found
+    if found_len > dst.len
+      throw Ksdb_error.too_small
+    if found_len > 0
+      v: = dst.sub_mut(0, found_len)
+      r.store.read_at(found_at, v)
+    return found_len
+
+  pub fn last_equals( //< whether the newest record of that kind already holds this data
+    //<
+    //< false if there is none. **It lets the caller skip writing what has not changed**, since
+    //< each append uses up space (a policy of a few KB fills the medium in a few dozen writes). It
+    //< needs no output buffer: it reads in chunks, since a second record-sized buffer costs too
+    //< much of a device's RAM.
+    r: Self$@,
+    kind: U16,
+    data: U8[], //< the bytes to compare against, read one chunk at a time
+  ): Bool
+    $found_at: Sz = 0
+    $found_len: Sz = 0
+    if !r.find_last(kind, found_at@, found_len@)
+      return false
+    if found_len != data.len
+      return false
+    $chunk: U8[chunk_size] = ::{}
+    $rd: = Chunks::{ .store = r.store, .at = found_at, .left = found_len }
+    $done: Sz = 0
+    for rd.left > 0
+      for b in rd.next(U8$[]::chunk)
+        if b != data[done]
+          return false
+        done += 1
+    return true
+
+pub struct Cursor //< a walk over the records, oldest first, kept separate from the `Log`
+  //<
+  //< **It looks only up to `end`, the range `open` checked**: a half-written record may lie beyond
+  //< it, so the scan must not go further.
+  priv store: Store
+  pub at: Sz //< the start of the record it points at now.
+    //<
+    //< `Log.open` reads it to find the end of the last record.
+  priv end: Sz
+  // Whether it has advanced to the first record.
+  // Caution: **Do not decide this from `len` and `kind`.** A record with empty content and kind 0
+  // is legitimate, and would be misread as "it has not started yet".
+  priv started: Bool
+  pub len: U16 //< the current record's content length
+  pub kind: U16 //< the tag the current record was appended with
+
+impl Cursor
+  pub fn next(r: Self$@): Bool //< moves to the next record; false when none is left
+    //<
+    //< Caution: **It must not stop at a garbled record.** A power cut can leave one half-written
+    //< record, and stopping there would make everything appended after it (in the next sector)
+    //< unreadable forever.
+    //< **It must not stop at an erased region either.** Appending leaves a gap at a sector's end
+    //< rather than span two sectors, so stopping at that gap misses the next sector's records.
+    if r.started
+      r.at += record_span(r.len)
+    r.started = true
+    $h: U8[header_size] = ::{}
+    header: = U8[]::h
+    for r.at + header_size <= r.end
+      r.store.read_at(r.at, U8$[]::h)
+      len: = header.get_u16_le(0)
+      span: = record_span(len)
+      valid: =
+        len != empty_len && r.at + span <= r.end && record_is_valid(r.store, r.at, header)
+      if valid
+        r.len = len
+        r.kind = header.get_u16_le(2)
+        return true
+      // **It must always advance**; with a sector size of 0 the scan would never end. `Log.open`
+      // rejects that size up front, so no check is needed here (Principle 5: a check that can
+      // never fire reads as "this can happen").
+      r.at = r.store.next_sector(r.at)
+    return false
+
+  pub fn payload_at(r: Self$@): Sz //< where the current record's content begins
+    return r.at + header_size
+
+  pub fn read( //< copies the current record's content out
+    r: Self$@,
+    dst: U8$[], //< the destination; it must hold at least `len` bytes
+  )
+    if r.len == 0
+      return
+    v: = dst.sub_mut(0, r.len)
+    r.store.read_at(r.payload_at(), v)

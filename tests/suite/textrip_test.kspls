@@ -1,0 +1,75 @@
+#!/usr/bin/env -S ksplc run
+//< Checks that a text format read into a kspage document and written back changes **not one byte**
+//<
+//< **Markdown's "fixed point" is not enough.** It does not count the choice of spelling (an `*`
+//< bullet becoming a `-`, and so on) as content, but these files are input to a compiler or a
+//< tool, so **one byte different is a different file**.
+//< Caution: **Test on the real files.** A small made-up text has no trailing space, tab, missing
+//< final newline or run of empty lines, so every file git knows goes through whole. **A file
+//< holding a NUL is not a text format** (an image or an executable); the suite also checks that
+//< those are refused.
+import "kspage/tests/trip"
+import "std/fs"
+import "std/io"
+import "std/str" { Str_builder }
+import "std/verdict"
+import "tests/support/harness"
+
+priv fn lines_in(src: U8[]): Sz //< the count of lines in a text (the count of newlines + 1)
+  $n: Sz = 1
+  for $i: Sz = 0; i < src.len; i += 1
+    if src[i] == '\n'
+      n += 1
+  return n
+
+priv fn parts_at(a: U8[], b: U8[]): Sz //<
+  //< The position of the first byte that differs (the shorter length when none differs)
+  $i: Sz = 0
+  for i < a.len && i < b.len
+    if a[i] != b[i]
+      return i
+    i += 1
+  return i
+
+fn main(): I32
+  arena: = harness.begin(512 * 1024 * 1024)
+  root: = harness.root()
+  files: = harness.tracked() catch
+    return harness.fatal("cannot list the files git knows")
+  $moved: = Str_builder.new()
+  defer moved.free()
+  $binary: = Str_builder.new()
+  defer binary.free()
+  $seen: Sz = 0
+  $skipped: Sz = 0
+  $lines: Sz = 0
+  for rel in files
+    text_of: = io.read_file(fs.join(root, rel, arena)) catch
+      continue
+    // **A refused file is not round-tripped** (it is marked as a file not to open).
+    if !trip.is_texty(text_of)
+      skipped += 1
+      continue
+    seen += 1
+    lines += lines_in(text_of)
+    $back: = Str_builder.new()
+    defer back.free()
+    trip.text_trip(text_of, back@, arena)
+    if !text_of.equals(back.slice())
+      at: = parts_at(text_of, back.slice())
+      moved.s("\n    \{rel\}: \{text_of.len\} bytes -> \{back.len\} bytes (from byte \{at\})")
+  // Not one item means "the check is looking at nothing", so it fails.
+  if seen == 0
+    return harness.fatal("not one text format that git knows")
+  // An image or an executable must be refused. **If none is refused, the text test is not
+  // working.**
+  if skipped == 0
+    binary.s("\n    not one file holding a NUL (whether the telling-apart works is unknown)")
+  $name: = Str_builder.new()
+  defer name.free()
+  name.s("a text format round-trips without one byte changed (\{seen\} files, \{lines\} lines)")
+  verdict.check(name.slice(), moved.slice().len == 0, moved.slice())
+  name.clear()
+  name.s("a file that is not text is refused (\{skipped\})")
+  verdict.check(name.slice(), binary.slice().len == 0, binary.slice())
+  return harness.finish()

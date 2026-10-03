@@ -1,0 +1,164 @@
+//< Builds and tests packages from a copy; both extract suites run it, each on its own share
+//<
+//< **Each suite is a file of its own**, as every other name in `mk/test.mk`'s table is, so the
+//< two share this body rather than one file taking flags.
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/mem" { Arena }
+import "std/str" // `arena.text()` and `trim_spaces`
+import "std/sys"
+import "std/verdict"
+import "tests/support/harness"
+
+priv const alone_dir: U8[] = "alone" //<
+  //< The folder name of the copy
+  //<
+  //< Caution: **Never the package's own name**, or a package found by its folder passes too and
+  //< the one thing this suite checks goes unseen.
+
+priv fn packages_with_make(arena: Arena$@): List<|U8[]|> //< the top folders carrying a `Makefile`
+  $out: = List<|U8[]|>.new(arena)
+  for rel in harness.tracked_matching(U8[][]::{ "*/Makefile" })
+    dir: = sys.get_dir_name(rel)
+    if dir.find_char('/') < 0
+      out.push(dir)
+  return out
+
+priv fn declared(dir: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< What `ksplc info package` answers in that folder: the name first, then what it uses
+  //<
+  //< **The compiler answers**, so this suite cannot disagree with it. Empty: no package is named.
+  r: = harness.run_in(U8[][]::{ harness.ksplc_exe(), "info", "package" },
+    fs.join(harness.root(), dir, arena))
+  $out: = List<|U8[]|>.new(arena)
+  lines: = r.out.lines(arena)
+  if r.code != 0 || lines.len == 0 || lines.get(0).trim_spaces().len == 0
+    return out
+  out.push(lines.get(0).trim_spaces())
+  if lines.len > 1
+    for u in lines.get(1).split(' ', arena)
+      if u.len > 0
+        out.push(u)
+  return out
+
+priv fn copy_package(dir: U8[], to: U8[]): Bool //<
+  //< the package's own files, and no others, into to
+  arena: = harness.arena()
+  $rels: = List<|U8[]|>.new(arena)
+  $bodies: = List<|U8[]|>.new(arena)
+  for rel in harness.tracked_matching(U8[][]::{ dir })
+    rels.push(rel.sub_from(dir.len + 1))
+    bodies.push(harness.read_under_root(rel))
+  fs.write_tree(to, rels.slice(), bodies.slice(), arena) catch
+    return false
+  return rels.len > 0
+
+priv fn make_in(copy: U8[], deps: U8[], target: U8[], more: U8[][], arena: Arena$@):
+  verdict.Run_out //<
+    //< Runs the copy's own `make <target>`
+    //<
+    //< It passes make the compiler, `std`, where its dependencies are, a scratch folder beside the
+    //< copy (a folder inside it would belong to the package), and `more`.
+    //<
+    //< Caution: **Set both paths again every time**, or the caller's leftovers let a run that
+    //< should find nothing pass.
+  sys.set_env("KSPLC_STD_DIR", harness.std_dir())
+  if deps.len > 0
+    sys.set_env("KSPLC_PKG_SRC_DIR", deps)
+  else
+    sys.unset_env("KSPLC_PKG_SRC_DIR")
+  scratch: = fs.join(sys.get_dir_name(copy), "scratch", arena)
+  $args: = List<|U8[]|>.new(arena)
+  for a in U8[][]::{ "-C", copy, target }
+    args.push(a)
+  args.push(arena.text().s("KSPLC=\{harness.ksplc_exe()\}").take())
+  args.push(arena.text().s("SCRATCH=\{scratch\}").take())
+  for a in more
+    args.push(a)
+  return harness.make(args.slice())
+
+priv fn offers(copy: U8[], target: U8[]): Bool //< whether the copy's `Makefile` holds that target
+  //<
+  //< **make answers, with a dry run** ("No rule to make target" where it is absent).
+  return harness.make(U8[][]::{ "-C", copy, "-n", target }).code == 0
+
+priv fn relay_skips(dir: U8[], out: U8[], arena: Arena$@) //<
+  //< The checks a package's own tests skipped, reported again as this gate's own
+  //<
+  //< Caution: **Do not leave them inside a passing run's output**, shown only on failure; where
+  //< this gate is the one running them in CI, a skipped check would pass silently.
+  for line in out.lines(arena)
+    if line.starts_with("SKIP ")
+      verdict.skip_check(arena.text().s("\{dir\}'s own tests").take(), line.sub_from(5))
+
+priv fn case_alone(dir: U8[], arena: Arena$@) //<
+  //< One package: its copy passes its own tests, and fails without what finds it
+  //<
+  //< **The second run is what gives the first its meaning**: if it still passes without its name,
+  //< it finds its files some other way. `std` loses `lang` instead, which every program reads.
+  is_std: = fs.join(harness.root(), dir, arena).equals(harness.std_dir())
+  decl: = declared(dir, arena)
+  name: = arena.text().s("\{dir\} builds and tests from a copy holding nothing else").take()
+  if decl.len == 0 && !is_std
+    verdict.check(name, false,
+      arena.text().s("\{dir\} carries a Makefile but names no package in its ksplc.cfg").take())
+    return
+  work: = harness.sandbox(arena.text().s("extract_\{dir\}").take()) catch
+    verdict.check(name, false, "cannot make a working directory")
+    return
+  copy: = fs.join(work, alone_dir, arena)
+  deps: = fs.join(work, "deps", arena)
+  $placed: = copy_package(dir, copy)
+  for i in Range.asc(decl.len)
+    if i > 0
+      placed =
+        placed && copy_package(decl.get(i), fs.join(deps, decl.get(i), arena))
+  if !placed
+    verdict.check(name, false, "cannot copy the package or what it uses")
+    return
+  uses: = "" if decl.len <= 1 else deps
+  // **A package that rebuilds itself is checked for that too** (`self-host`). It goes first: the
+  // compiler it rebuilds is the one the checks then inspect.
+  if offers(copy, "self-host")
+    h: = make_in(copy, uses, "self-host", U8[][]::{}, arena)
+    verdict.check(arena.text().s("\{dir\} rebuilds itself from the copy").take(), h.code == 0,
+      h.out)
+  // **The checks run side by side** (CI runs ksplc's suites here, the longest wait otherwise);
+  // each line carries its suite's name, so interleaving stays readable.
+  jobs: = arena.text().s("-j\{verdict.jobs()\}").take()
+  r: = make_in(copy, uses, "test", U8[][]::{ jobs }, arena)
+  if verdict.check(name, r.code == 0, r.out)
+    relay_skips(dir, r.out, arena)
+  // The seeds are the repository's files, as `make test-<name>-fuzz` passes them, so a finding
+  // repeats from the same two numbers.
+  if offers(copy, "test-fuzz")
+    seeds: = arena.text().s("FUZZ_SEEDS=\{harness.root()\}").take()
+    f: = make_in(copy, uses, "test-fuzz", U8[][]::{ seeds }, arena)
+    fuzzed: = arena.text().s("\{dir\} scatters broken input from the copy").take()
+    if verdict.check(fuzzed, f.code == 0, f.out)
+      relay_skips(dir, f.out, arena)
+  taken: = "lang.kspls" if is_std else "ksplc.cfg"
+  proof: =
+    ("and without its own lang the copy does not build" if is_std
+    else "and without its declaration the copy does not build")
+  fs.remove_path(fs.join(copy, taken, arena)) catch
+    verdict.check(proof, false, arena.text().s("cannot take \{taken\} away").take())
+    return
+  lost: = make_in(copy, uses, "test", U8[][]::{}, arena)
+  verdict.check(proof, lost.code != 0, lost.out)
+
+fn run(only: U8[], except: U8[]): I32 //<
+  //< Every package with its own `Makefile`, or only `only`, minus `except`; the suite's exit code
+  arena: = harness.begin(64 * 1024 * 1024)
+  $pkgs: = List<|U8[]|>.new(arena)
+  for dir in packages_with_make(arena)
+    if (only.len == 0 || dir.equals(only)) && !dir.equals(except)
+      pkgs.push(dir)
+  // **Seeing none is a failure, not a pass**, or it goes green having looked at nothing.
+  verdict.check("a package carries its own Makefile", pkgs.len > 0,
+    "no top folder holds a Makefile" if only.len == 0
+    else arena.text().s("\{only\} holds no Makefile").take())
+  for dir in pkgs
+    case_alone(dir, arena)
+  return harness.finish()

@@ -1,0 +1,44 @@
+//< Repeats the last command (F4)
+//<
+//< It is not a redo: it runs the same command again, **wherever the cursor is now**. They are two
+//< keys.
+//< The command is remembered, not read back from the record (`Again` in
+//< [`record.kspls`](record.kspls) says why). This file is the one place that rebuilds the
+//< commands — it imports them and nothing imports it.
+
+// ==========================================
+// Usage:
+//   ed.do_again(page, sheet);
+// ==========================================
+import "kspage/lay/page" { Page }
+import "kspage/model/style" { Sheet }
+import "kspage/write/block" + { Block_style_end }
+import "kspage/write/cells"
+import "kspage/write/edit" as _edit + { Editor }
+import "kspage/write/shape"
+
+impl Editor
+  fn again_says(r: Self$@): U8[] //<
+    //< What doing it again would do (**empty where there is nothing**)
+    //<
+    //< Caution: **Say the name of what would happen** (`again_word` in `record.kspls` says why).
+    return r.again.again_word()
+
+  fn do_again(r: Self$@, page: Page$@, sheet: Sheet$@): Bool //<
+    //< Runs the last repeatable command again, where the cursor is now (F4)
+    //<
+    //< True if done. False means "nothing to repeat" or "it would not apply" (whether `again_says`
+    //< is empty tells them apart).
+    //< Caution: **Call it after layout** (the commands it stands in for need the page).
+    if r.shut()
+      return false
+    switch r.again case .none
+      return false
+    case .add_line(axis)
+      return r.add_line(page, axis)
+    case .drop_line(axis)
+      return r.drop_line(page, axis)
+    case .style(name)
+      return r.set_style(name)
+    case .block_style(name)
+      return r.set_block_style(page, sheet, name) == Block_style_end.done

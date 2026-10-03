@@ -1,0 +1,176 @@
+//< Which call releases what
+//<
+//< **Err on the side of no false positives.** A form that cannot be tracked (per field,
+//< conditional, delegated two levels deep) counts as "does not release".
+
+// ==========================================
+//   1. `x.free()`   — whether the receiver's type conforms to `Owned` (not decided by the name)
+//   2. `dealloc(x)` — a free function that releases its actual argument
+//   3. whether the callee releases a formal parameter unconditionally (walked one level only)
+// ==========================================
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/arc" as sema_type_arc
+import "ksplc/sema/type/query" as sema_type_query
+import "std/str"
+
+fn is_untracked_release_name(name: U8[]): Bool //<
+  //< A method name that suggests a release but is outside `Owned`'s contract ([W0108]'s subject)
+  //<
+  //< Not `release` (`Ref_counted`'s, correct on an ARC type) nor `clear` / `reset` (the value
+  //< lives on).
+  return name.equals("close") || name.equals("destroy") || name.equals("deinit") ||
+    name.equals("dispose") || name.equals("shutdown") || name.equals("delete") ||
+    name.equals("teardown")
+
+priv const arena_type_fqn: U8[] = "std.mem.Arena" //< the FQN of the arena's type itself
+  //<
+  //< Caution: **Do not decide by the name alone**: a user's own `Arena` is a different type (as for
+  //< `Ref_counted`, shadowed_known_trait in `sema/type/arc.kspls`).
+
+priv fn is_arena_handout_name(name: U8[]): Bool //<
+  //< The names of the arena methods that hand out pointers
+  //<
+  //< **The name alone does not decide**: the receiver must be the type named by the FQN above
+  //< (not `pool.create(v)`).
+  return name.equals("alloc") || name.equals("alloc_as") || name.equals("create")
+
+priv fn is_arena_type(c: Sema_ctx$@, type_id: I32): Bool //<
+  //< Whether the type id is the arena (`std.mem.Arena`) itself
+  //<
+  //< Caution: **Strip the pointer before comparing** (the receiver arrives as `Arena$@`).
+  sym: = c.symtab.resolve_fqn(arena_type_fqn) catch
+    return false
+  if sym == null || sym.type_id == 0
+    return false
+  return c.env.strip_ptr(type_id) == c.env.strip_ptr(sym.type_id)
+
+priv fn is_free_fn_path(callee: Ast_node$@): Bool //<
+  //< Whether callee is a free function that releases its actual argument (`dealloc(x)`)
+  //<
+  //< By the last segment only, so an aliased import (`m.dealloc`) counts too.
+  if callee == null || !callee.is_path_or_ident()
+    return false
+  return callee.get_path_or_ident_name().equals("dealloc")
+
+priv fn expr_names_local(e: Ast_node$@, name: U8[]): Bool //<
+  //< Whether the expression refers to the binding named `name` itself
+  //<
+  //< `f@` and `Void$@::f` are stripped (as get_addressed_local_def does) down to a bare name. A
+  //< field like `r.ptr` is excluded (its lifetime is not tracked, so it would be a false positive).
+  $curr: = e
+  for curr != null && curr.kind_id == .k_expr_postfix
+    op: = curr.get_postfix_op()
+    if op == null || !(op.text.equals("@") || op.text.equals("::"))
+      break
+    curr = curr.get_postfix_receiver()
+  if curr == null
+    return false
+  return (curr.kind_id == .k_identifier || curr.kind_id == .k_expr_path) &&
+    curr.text.equals(name)
+
+fn call_arg_for_param(callee: Ast_node$@, args_node: Ast_node$@, param_idx: Sz, is_method: Bool):
+  Ast_node$@ //<
+    //< The actual-argument node for the formal parameter param_idx, or null
+    //<
+    //< On a method call 0 is the receiver (as in mark_call_freed_args).
+  if is_method && param_idx == 0
+    return callee.get_postfix_receiver()
+  at: = param_idx - 1 if is_method else param_idx
+  return args_node.get_child(at) if at < args_node.children.len else null
+
+impl Ast_node
+  fn get_free_call_receiver(r: Self$@, c: Sema_ctx$@): Option<|Ast_node$@|> //<
+    //< The receiver node where the method call is a release method, or null for any other call
+    //<
+    //< **It decides by whether the receiver's type conforms to `Owned`, not by the name** (a `free`
+    //< without it gets [W0108] at the declaration).
+    member: = r.get_postfix_member()
+    if member == null || !member.text.equals("free")
+      return Option<|Ast_node$@|>.none
+    receiver: = r.get_postfix_receiver()
+    if receiver == null || !c.env.is_owned(receiver.type_id)
+      return Option<|Ast_node$@|>.none
+    return Option<|Ast_node$@|>.some(receiver)
+
+  fn is_arena_handout(r: Self$@, c: Sema_ctx$@): Bool //<
+    //< Whether this expression is a call where an arena hands out a pointer
+    //<
+    //< **A pointer an arena handed out cannot be released.** It points inside a chunk; passed to
+    //< `mem.dealloc` it corrupts libc's heap, or on freestanding the free list.
+    //< Caution: Release is `Arena.free()`, all at once. **Decide by the receiver's type, not by the
+    //< name alone** (the same rule as `get_free_call_receiver`).
+    op: = r.get_postfix_op()
+    if op == null || !op.text.equals("(")
+      return false
+    callee: = r.get_postfix_receiver()
+    if callee == null
+      return false
+    // The method form (`arena.alloc_as<|T|>()`).
+    // Caution: **Look one level below the call parentheses**, at the receiver's k_method_access.
+    if callee.kind_id == .k_method_access
+      member: = callee.get_postfix_member()
+      if member == null || !is_arena_handout_name(member.text.get_generic_base_name())
+        return false
+      recv: = callee.get_postfix_receiver()
+      return recv != null && is_arena_type(c, recv.type_id)
+    // The free-function form (`mem.alloc_in(arena, n)`). The first actual argument is the arena.
+    if !callee.is_path_or_ident() || !callee.get_path_or_ident_name().equals("alloc_in")
+      return false
+    args: = r.find_child(.k_expr_args)
+    if args == null || args.children.len == 0
+      return false
+    first: = args.get_child(0)
+    return first != null && is_arena_type(c, first.type_id)
+
+  fn get_free_fn_arg(r: Self$@): Option<|Ast_node$@|> //<
+    //< The released argument node, where the call is to a free function like `dealloc(x)`
+    //<
+    //< Such a function releases its actual argument.
+    //< mark_call_freed_args cannot see this: dealloc's body only calls `libc.free(...)`, so the
+    //< release is identified here.
+    callee: = r.get_postfix_receiver()
+    if callee == null || !is_free_fn_path(callee)
+      return Option<|Ast_node$@|>.none
+    args_node: = r.find_child(.k_expr_args)
+    if args_node == null || args_node.children.len != 1
+      return Option<|Ast_node$@|>.none
+    return Option<|Ast_node$@|>.some(args_node.get_child(0))
+  fn body_frees_param_directly(r: Self$@, param_name: U8[], c: Sema_ctx$@): Bool //<
+    //< Whether the body's top-level statements unconditionally free the formal parameter param_name
+    //<
+    //< One level only: a delegation or a release inside an if or a for is not tracked. Once the
+    //< name is shadowed, nothing counts.
+    block: = r.find_child(.k_stmt_block)
+    if block == null
+      return false
+    $is_shadowed: = false
+    for stmt in block.children
+      if stmt.kind_id == .k_decl_var || stmt.kind_id == .k_decl_const
+        if stmt.get_decl_id_text().equals(param_name)
+          is_shadowed = true
+        continue
+      if is_shadowed || stmt.kind_id != .k_stmt_expr
+        continue
+      $inner: = stmt.get_assign_left()
+      if inner != null && inner.kind_id == .k_expr_primary && inner.children.len > 0
+        inner = inner.get_primary_inner_expr()
+      // Caution: **Check the free-function form `dealloc(Void$@::x)` too**: it is nearly always
+      // `free()`'s last line.
+      if arg: = inner.get_free_fn_arg()
+        if expr_names_local(arg, param_name)
+          return true
+      // `x.free()` is a call "(" node whose receiver is a k_method_access.
+      if inner != null && inner.kind_id == .k_expr_postfix
+        call_op: = inner.get_postfix_op()
+        if call_op != null && call_op.text.equals("(")
+          inner = inner.get_postfix_receiver()
+      if inner == null || inner.kind_id != .k_method_access
+        continue
+      if receiver: = inner.get_free_call_receiver(c)
+        if expr_names_local(receiver, param_name)
+          return true
+    return false

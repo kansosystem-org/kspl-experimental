@@ -1,0 +1,111 @@
+//< A probe showing that the freestanding heap really works on Cortex-M bare metal
+//<
+//< It runs, under QEMU (mps2-an385), the free-list allocator of `std/mem.kspls` through
+//< `ksos/kernel/heap.kspls` (the counterpart of `pvPortMalloc`, safe from a task and an ISR by
+//< irq_save/irq_restore), and `Arc<T>` on top of it.
+import "ksos/demo/common/semihost_console" as con
+// Imported only for the ksos_tick() export SysTick_Handler (port.o) needs; no scheduler is used.
+import "ksos/kernel/heap"
+import "std/mem" { Arena }
+import "std/refcount" { Arc }
+
+$heap_buf: U8[4096]
+// Caution: Do not make it a local. Cortex-M's stack is small.
+$arena_buf: U8[1024]
+
+#export
+fn ksos_main()
+  con.puts("=== Cortex-M freestanding heap probe ===\n")
+  heap.heap_init(U8$[]::heap_buf)
+
+  // 1. The basics: separate blocks must point at independent regions.
+  $p1: = heap.heap_alloc(64)
+  $p2: = heap.heap_alloc(128)
+  $p3: = heap.heap_alloc(32)
+  (U8$@::p1)$ = 0xAAU8
+  (U8$@::p2)$ = 0xBBU8
+  (U8$@::p3)$ = 0xCCU8
+  con.check("basic alloc independence",
+    (U8$@::p1)$ == 0xAAU8 && (U8$@::p2)$ == 0xBBU8 && (U8$@::p3)$ == 0xCCU8)
+
+  // 2. A freed block must be reused by a later allocation of the same size.
+  // Take the address before freeing; a freed p2 cannot be read.
+  p2_addr: = p2
+  heap.heap_free(p2)
+  p4: = heap.heap_alloc(128)
+  con.check("freed block reused by same-size alloc", p4 == p2_addr)
+  heap.heap_free(p4)
+
+  // 3. Adjacent free blocks must be merged when freed, so their total can be allocated again as
+  //    a single block.
+  heap.heap_free(p1)
+  heap.heap_free(p3)
+  big: = heap.heap_alloc(64 + 128 + 32)
+  con.check("adjacent free blocks coalesce into one", big != null)
+  heap.heap_free(big)
+
+  // 4. The heap must survive many random-ish alloc/free rounds (the canaries stay intact).
+  $stress_ptrs: Void$@[8] = ::{}
+  $seed: U32 = 12345U32
+  $stress_ok: = true
+  for $round: I32 = 0; round < 200; round += 1
+    seed = seed * 1103515245U32 + 12345U32
+    slot: = Sz::(seed >> 16) % 8
+    existing: = stress_ptrs[slot]
+    if existing != null
+      if (U8$@::existing)$ != U8::(slot + 1)
+        stress_ok = false
+      heap.heap_free(existing)
+      stress_ptrs[slot] = null
+    else
+      sz: = 8 + Sz::((seed >> 8) % 200)
+      $np: = heap.heap_alloc(sz)
+      (U8$@::np)$ = U8::(slot + 1)
+      stress_ptrs[slot] = np
+  for p in Void$@[]::stress_ptrs
+    if p != null
+      heap.heap_free(p)
+  con.check("200-round randomized alloc/dealloc stress", stress_ok)
+
+  // 5. Arc<T>: kspl_atomic_add/cas must link and work freestanding, and new/clone/get/release must
+  //    not crash or hang. The release is the automatic one at the block's exit, the path real code
+  //    takes (retain/release by hand would double the compiler's).
+  release_on_exit:
+    $a: = Arc<|I32|>.new(42)
+    $b: = a.clone()
+    con.check("Arc<T> new/clone/get", a.get()$ == 42 && b.get()$ == 42)
+
+  // 6. The allocated region must be 8-byte aligned.
+  // **It only breaks on a 32-bit target** (F64 / I64 / U64 need 8 under AAPCS); on 64-bit the
+  // header is already a multiple of 8, so no hosted test catches it.
+  $align_ok: = true
+  for i in Range.asc(8)
+    q: = heap.heap_alloc(1 + i * 3)
+    if Sz::q % 8 != 0
+      align_ok = false
+    heap.heap_free(q)
+  con.check("heap_alloc returns 8-byte aligned blocks", align_ok)
+
+  // The arena too (arena_chunk_header_size in std/mem.kspls is rounded up to 8).
+  $ar: = Arena.from_buffer(Void$@::arena_buf@, 1024)
+  $arena_align_ok: = true
+  for i in Range.asc(8)
+    a: = ar.alloc(1 + i * 3)
+    if Sz::a % 8 != 0
+      arena_align_ok = false
+  con.check("Arena.alloc returns 8-byte aligned blocks", arena_align_ok)
+
+  // Caution: **The returned addresses must be aligned even when the buffer's start is not**:
+  // .bss's layout can put `arena_buf` at an odd address, and an alignment fault hangs in the
+  // default handler without printing any mark.
+  $ar_odd: = Arena.from_buffer(Void$@::((arena_buf@) + 1), 1023)
+  $odd_align_ok: = true
+  for i in Range.asc(8)
+    a: = ar_odd.alloc(1 + i * 3)
+    if a == null || Sz::a % 8 != 0
+      odd_align_ok = false
+  con.check("Arena.from_buffer aligns an unaligned buffer", odd_align_ok)
+
+  con.print_summary("heap probe done")
+  con.exit()
+  for {}

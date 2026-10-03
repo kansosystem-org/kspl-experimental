@@ -1,0 +1,125 @@
+#!/usr/bin/env -S ksplc run
+//< Stage 1: generating the FIM (fill-in-the-middle) training data in bulk
+//<
+//< It cuts (prefix, middle, suffix) examples out of the corpus (the output of build_corpus.kspls).
+//< The originals are committed sources that pass make self-host, so the middle is by definition
+//< "the right completion" and needs no recompile. Each file gets several hole positions and widths;
+//< a hole of only whitespace is dropped.
+
+// ==========================================
+//       tools/ai_assist/corpus/fim_stats.json
+// ==========================================
+import "std/chars"
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/sys"
+import "tools/ai_assist/ksplc_oracle" as oracle
+
+priv const min_lines: Sz = 6 // a file with fewer lines is skipped
+priv const max_per_file: Sz = 40 // the cap per file (keeps the data from growing too large)
+priv const margin: Sz = 1 // this many lines at the start and the end never become holes
+
+priv struct Fim_out
+  path: U8[]
+  prefix: U8[]
+  middle: U8[]
+  suffix: U8[]
+
+priv fn join_lines(lines: List<|U8[]|>$@, start: Sz, end: Sz, arena: Arena$@): U8[]
+  $b: = Str_builder.new()
+  defer b.free()
+  for $i: Sz = start; i < end; i += 1
+    if i > start
+      b.c('\n')
+    b.s(lines[i])
+  return arena.dup_str(b.slice())
+
+priv fn str_concat3(a: U8[], b: U8[], c: U8[], arena: Arena$@): U8[]
+  return arena.text().s(a).s(b).s(c).take()
+
+priv fn fim_examples(path: U8[], code: U8[], out: List<|Fim_out|>$@, arena: Arena$@) //<
+  //< Lists the (prefix, middle, suffix) examples of one file and appends them to `out`
+  // Caution: **Use `split('\n')`, not `lines`** (the reason is at `corrupt_file` in
+  // `make_error_fix.kspls`).
+  lines: = arena.create(code.split('\n', arena))
+  n: = lines.len
+  if n < min_lines
+    return
+  // The hole's line counts. `start` only increases and `mask_sizes` has no duplicates, so no
+  // (start, end) pair repeats and no duplicate check is needed.
+  mask_sizes: = I32[]::{ 1, 2, 3 }
+  denom: = max_per_file / mask_sizes.len + 1
+  raw_stride: = (n - 2 * margin) / denom
+  stride: = 1 if raw_stride < 1 else raw_stride
+
+  $made: Sz = 0
+  for $start: Sz = margin; start < n - margin; start += stride
+    for k in Range.asc(mask_sizes.len)
+      size: = Sz::mask_sizes[k]
+      end: = start + size
+      if end > n - margin
+        continue
+      middle: = join_lines(lines, start, end, arena)
+      if middle.trim_spaces().len == 0 // a hole of only whitespace teaches nothing
+        continue
+      prefix: = str_concat3(join_lines(lines, 0, start, arena), "\n", "", arena)
+      suffix: = str_concat3("\n", join_lines(lines, end, n, arena), "", arena)
+      path_copy: = arena.dup_str(path)
+      out
+        .push(Fim_out::{ .path = path_copy, .prefix = prefix, .middle = middle, .suffix = suffix })
+      made += 1
+      if made >= max_per_file
+        return
+
+priv struct Build_stats
+  files: Sz
+  examples: Sz
+
+priv fn build(split_name: U8[], arena: Arena$@): Build_stats
+  $in_path: = Str_builder.new()
+  defer in_path.free()
+  in_path.s(oracle.corpus_dir).c('/').s(split_name).s(".jsonl")
+  recs: = oracle.load_jsonl(in_path.slice(), arena) catch
+    io.err().s("[error] cannot read \{in_path.slice()\} (run build_corpus first)\n")
+    sys.exit(1)
+
+  examples: = List<|Fim_out|>.create(arena)
+  for rec in recs
+    fim_examples(rec.get("path").as_str(), rec.get("code").as_str(), examples, arena)
+
+  $out_path: = Str_builder.new()
+  defer out_path.free()
+  out_path.s(oracle.corpus_dir).c('/').s("fim_").s(split_name).s(".jsonl")
+  $f: = io.open(out_path.slice(), "w") catch panic("cannot open output file for writing")
+  $b: = Str_builder.new()
+  defer b.free()
+  for ex in examples
+    b.clear()
+    b.s("{\"path\":\"").escape_and_append(ex.path).s("\",\"prefix\":\"")
+      .escape_and_append(ex.prefix).s("\",\"middle\":\"").escape_and_append(ex.middle)
+      .s("\",\"suffix\":\"").escape_and_append(ex.suffix).s("\"}\n")
+    f.s(b.slice())
+  oracle.close_or_die(f@, out_path.slice())
+
+  return Build_stats::{ .files = recs.len, .examples = examples.len }
+
+fn main() //< cuts the fill-in-the-middle examples out of the corpus
+  arena: = Arena.new(512 * 1024 * 1024)
+  defer arena.free()
+  train_stats: = build("train", arena)
+  val_stats: = build("val", arena)
+
+  $stats_path: = Str_builder.new()
+  defer stats_path.free()
+  stats_path.s(oracle.corpus_dir).s("/fim_stats.json")
+  $f: = io.open(stats_path.slice(), "w") catch panic("cannot open fim_stats.json for writing")
+  f
+    .s("{\n  \"train\":{\"files\":\{train_stats.files\},\"examples\":\{train_stats.examples\}},\n  \
+      \"val\":{\"files\":\{val_stats.files\},\"examples\":\{val_stats.examples\}}\n}\n")
+  oracle.close_or_die(f@, stats_path.slice())
+
+  io.out().s("train: \{train_stats.examples\} FIM examples from \{train_stats.files\} files\n")
+  io.out().s("val  : \{val_stats.examples\} FIM examples from \{val_stats.files\} files\n")
+  io.out().s("  -> tools/ai_assist/corpus/fim_{train,val}.jsonl, fim_stats.json\n")

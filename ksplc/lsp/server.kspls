@@ -1,0 +1,264 @@
+//< The language server's supervisor, which passes every editor message to a worker process
+//<
+//< It owns the stdio with the editor; the worker is `worker.kspls`.
+//<
+//< A worker that crashes or hangs is killed and restarted, and the open documents are replayed into
+//< it; a document that crashes it again during the replay is quarantined. The analysis never runs
+//< here, so no fault in it takes down the editor's connection.
+import "kspeg/engine" as kspeg
+import "ksplc/lsp/msg" as lsp_msg
+import "ksplc/lsp/state" { Doc_store }
+import "ksplc/lsp/worker" as lsp_worker
+import "std/chars"
+import "std/ds" { Map }
+import "std/io"
+import "std/json" + { Json_builder }
+import "std/jsonrpc"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/subproc"
+import "std/sys"
+
+// Caution: **Do not write your own wrapper for talking to a child process.** `Piped_child` in
+// `std/subproc` is the only one (declared twice, the timeout's guarantee or the cleanup steps
+// would change on one side only).
+
+priv const worker_timeout_ms: I32 = 10000 // the hang-detection timeout (a first analysis is slow)
+
+priv fn relay_stripping_alive(src: U8[], out: Str_builder$@) //<
+  //< It copies into out while removing the liveness markers
+  //<
+  //< Without this the markers reach the editor unchanged and break the LSP's framing.
+  tag: = lsp_msg.worker_alive_tag
+  $i: Sz = 0
+  for i < src.len
+    at: = lsp_msg.marker_at(src, i, tag)
+    end: = src.len if at < 0 else Sz::at
+    out.s(src.sub(i, end - i))
+    if at < 0
+      return
+    i = end + lsp_msg.marker_len(tag)
+priv enum Worker_end //< the reason a worker was given up on
+  //<
+  //< Caution: **Do not merge the cases.** The editor sees the same null response for all of them,
+  //< yet the fix differs entirely (a hang means the analysis is too heavy, exited means the worker
+  //< crashes). Merged, they can only look like "it stops working after a while", which cannot be
+  //< traced from this side either.
+  done //< it read as far as the completion marker
+  hang //< not one byte came for worker_timeout_ms
+  exited //< the pipe closed (the worker crashed)
+  write_failed //< the request could not be written to the worker
+  read_error //< the read itself failed
+
+impl Worker_end
+  priv fn worker_end_text(e: Self): U8[]
+    switch e case .done
+      return "done"
+    case .hang
+      return "no output within the watchdog window (hang)"
+    case .exited
+      return "pipe closed (the worker exited)"
+    case .write_failed
+      return "could not write the request to the worker"
+    case .read_error
+      return "read from the worker failed"
+
+  priv fn log_worker_giveup(e: Self, method: U8[]) //<
+    //< It prints the reason it gave up to stderr, on one line
+    //<
+    //< **Never to stdout**, the JSON-RPC channel to the editor; mixing breaks the protocol.
+    io.err()
+      .s("ksplc lsp: giving up on the worker while handling '\{method\}': \{e.worker_end_text()\} \
+        (restarting)\n")
+
+priv fn pump_worker_output(worker: subproc.Piped_child, arena: Arena$@): Worker_end //<
+  //< It reads the worker's output up to the completion marker and relays what precedes it
+  //<
+  //< Nothing is relayed before the marker comes, so a partial message never breaks the protocol.
+  cap: Sz = 65536
+  rbuf: = U8$@::arena.alloc(cap)
+  $acc: = Str_builder.new()
+  defer acc.free()
+  $ok: = Worker_end.exited
+  // Each search resumes marker-length-1 before where the last found none, so a marker crossing a
+  // chunk boundary is still found; re-walking the whole buffer per chunk is quadratic in an output
+  // that can reach tens of MB.
+  tag: = lsp_msg.worker_done_tag
+  overlap: = lsp_msg.marker_len(tag) - 1
+  $scanned: Sz = 0
+  for
+    got: =
+      worker.read(U8$[]::{ .ptr = rbuf, .len = cap }, worker_timeout_ms) catch e
+      switch e case .timed_out
+        ok = Worker_end.hang
+      case .closed
+        ok = Worker_end.exited
+      case .failed
+        ok = Worker_end.read_error
+      break
+    acc.s(U8$[]::{ .ptr = rbuf, .len = got })
+    search_from: = 0 if scanned < overlap else scanned - overlap
+    idx: = lsp_msg.marker_at(acc.slice(), search_from, tag)
+    if idx >= 0
+      if idx > 0
+        $clean: = Str_builder.new()
+        defer clean.free()
+        relay_stripping_alive(acc.slice().sub(0, idx), clean@)
+        io.out().s(clean.slice())
+        io.out().flush()
+      ok = Worker_end.done
+      break
+    scanned = acc.slice().len
+  return ok
+
+priv fn spawn_worker(): Option<|subproc.Piped_child|> //< it starts one worker
+  //<
+  //< **A failed start is `none`, not 0.** The worker is restarted on the next round, and without
+  //< "not there yet" in the type, a write to a missing worker would be accepted. This is the only
+  //< place that holds the name `lsp-worker`.
+  cmd_args: = sys.args()
+  child: = subproc.spawn_piped(U8[][]::{ cmd_args[0], "lsp-worker" }, "") catch
+    return Option<|subproc.Piped_child|>.none
+  return Option<|subproc.Piped_child|>.some(child)
+priv struct Lsp_docs //< the open documents as the editor sent them, and the ones quarantined
+  //<
+  //< It restores a restarted worker's state (replay) and quarantines a document that crashes
+  //< reproducibly.
+  store: Doc_store //< uri -> the latest text, raw (the worker converts its own copy)
+  quarantine: Map<|U8[], I32|>$@ //< the poisoned uris (crashing on replay), on store's arena
+
+impl Lsp_docs
+  priv fn new(): Lsp_docs
+    store: = Doc_store.new()
+    quarantine: = store.arena.create(Map<|U8[], I32|>.new(store.arena))
+    return Lsp_docs::{ .store = store, .quarantine = quarantine }
+
+  priv fn free(r: Self$@)
+    r.store.free()
+
+  priv fn observe(r: Self$@, method: U8[], params: json.Val) //<
+    //< It records the text on didOpen / didChange and discards it on didClose
+    td: = params.get("textDocument")
+    uri: = td.get("uri").as_str()
+    if uri.len == 0
+      return
+    if method.equals("textDocument/didClose")
+      r.store.close(uri)
+    else if method.equals("textDocument/didOpen")
+      r.store.put(uri, td.get("text").as_str())
+    else if method.equals("textDocument/didChange")
+      r.store
+        .put(uri, params.get("contentChanges").get_at(0).get("text").as_str())
+    else
+      return
+    r.quarantine.remove(uri) // a new edit lifts the poison mark (once fixed, it is analysed again)
+
+  priv fn poison(r: Self$@, uri: U8[])
+    r.quarantine.set(r.store.arena.dup_str(uri), 1)
+
+  priv fn is_poison(r: Self$@, uri: U8[]): Bool
+    return (r.quarantine.get(uri) catch 0) != 0
+
+// It owns memory and releases it with `free()` (why it must conform: `Owned` in std/lang.kspls).
+// [W0108] checks only `pub` methods, so nothing warns if this one, with `priv fn free`, is missing.
+impl Lsp_docs: Owned {}
+priv fn build_didopen_frame(uri: U8[], text: U8[], arena: Arena$@): Str_builder //<
+  //< It builds a didOpen message (framed) from the cached text
+  $b: = Json_builder.new(arena)
+  td: = b.obj().set("uri", b.str_val(uri)).set("languageId", b.str_val("kspl"))
+    .set("version", b.int_val(1)).set("text", b.str_val(text)).build()
+  params: = b.obj().set("textDocument", td).build()
+  $frame: = Str_builder.new()
+  jsonrpc.frame_into(frame@, jsonrpc.encode("textDocument/didOpen", params, -1, arena))
+  return frame
+priv fn replay_docs(docs: Lsp_docs$@, worker: Option<|subproc.Piped_child|>, arena: Arena$@):
+  Option<|subproc.Piped_child|> //<
+    //< After a worker restart, it sends every unquarantined document again with didOpen
+    //<
+    //< A document that crashes again during the replay is quarantined, and the worker is restarted
+    //< to continue.
+  $w: = worker
+  for e in docs.store.map.items()
+    // Caution: Do not send a closed document. The entry remains, so without checking is_open a
+    // document already closed by didClose is reopened on every worker restart.
+    if !e.value.is_open || docs.is_poison(e.key)
+      continue
+    $frame: = build_didopen_frame(e.key, e.value.text.slice(), arena)
+    defer frame.free()
+    // Restarted when there is no worker, the write fails or no answer comes back.
+    $respawn: = true
+    if c: = w
+      if c.write(frame.slice())
+        respawn = false
+        replay_end: = pump_worker_output(c, arena)
+        switch replay_end case .done {} default
+          // Caution: **Name a quarantined document explicitly.** Only that document loses hover
+          // and jump-to-definition, and nothing shows it on the editor's side.
+          io.err().s("ksplc lsp: quarantining '\{e.key\}': \{replay_end.worker_end_text()\}\n")
+          docs.poison(e.key) // this text crashes it every time -> quarantine
+          c.kill()
+          respawn = true
+    if respawn
+      w = spawn_worker()
+  return w
+
+fn run_lsp_supervisor(base_parser: kspeg.Target$@): Void
+  $worker: = spawn_worker()
+  if worker.is_none()
+    // Where no worker can be started, it runs in-process instead.
+    lsp_worker.run_lsp_worker(base_parser)
+    return
+
+  $docs: = Lsp_docs.new()
+  defer docs.free()
+  arena: = Arena.new(8 * 1024 * 1024)
+  defer arena.free()
+  base: = arena.save()
+  $body: = Str_builder.new()
+  defer body.free()
+
+  for
+    arena.restore(base)
+    lsp_msg.read_message(body@) catch
+      break // the editor disconnected
+    msg_body: = body.slice()
+
+    doc: = json.parse(msg_body, arena) catch json.Val.null_val
+    method: = doc.get("method").as_str()
+    id_val: = doc.get("id")
+    docs.observe(method, doc.get("params"))
+    // forward to the worker (rebuilt with a proper header)
+    $frame: = Str_builder.new()
+    defer frame.free()
+    jsonrpc.frame_into(frame@, msg_body)
+    fs: = frame.slice()
+    $end: = Worker_end.write_failed
+    if c: = worker
+      if c.write(fs)
+        end = pump_worker_output(c, arena)
+    $handled: = false
+    switch end case .done
+      handled = true
+    default {}
+
+    if !handled
+      end.log_worker_giveup(method)
+      // A crash or a hang: kill, restart and replay every document. Only a document that crashes
+      // again on the replay is quarantined, none in advance.
+      if c: = worker
+        c.kill()
+      worker = replay_docs(docs@, spawn_worker(), arena)
+      // A request awaiting an answer gets an empty one, so the editor is not left waiting.
+      $has_id: = true
+      switch id_val case .null_val
+        has_id = false
+      default {}
+      if has_id
+        $b: = Json_builder.new(arena)
+        lsp_msg.send_response(id_val, b.null_val(), arena)
+
+    if method.equals("shutdown")
+      break
+
+  if c: = worker
+    c.kill()

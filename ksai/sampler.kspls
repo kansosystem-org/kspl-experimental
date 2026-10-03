@@ -1,0 +1,113 @@
+//< Picks one token ID from a model's logits during generation
+//<
+//< There are two ways: `argmax`, which is deterministic and gives the same token every time, and
+//< the probabilistic `sample`, which is nucleus sampling by temperature, top-k and top-p. They are
+//< free functions rather than methods on `Tensor<|T|>`, to keep type inference from getting
+//< confused.
+import "ksai/tensor" { Tensor }
+import "std/math"
+import "std/mem" { Arena }
+import "std/prng"
+
+pub fn argmax<|T|>( //< the highest-scoring token, the same one every time
+  //<
+  //< Caution: **Also reject a shape whose last dimension is 0.** A size of 0 is legitimate for an
+  //< empty tensor (`Tensor.new` in `ksai/tensor.kspls`), and checking only the number of dimensions
+  //< lets `(logits.data + offset)$` read a region with no elements. No range check catches a raw
+  //< dereference, and it does not crash: it returns **a plausible token ID**, 0.
+  logits: Tensor<|T|>, //< the model's scores; the last row is read, and it must not be empty
+): I32 //< the token ID; on a tie, the lowest one
+  assert(logits.shape.len >= 1, "logits must be at least 1D")
+  n: = logits.shape[logits.shape.len - 1]
+  assert(n > 0, "argmax: logits' final dimension is 0 (there is no candidate to pick)")
+  offset: = logits.size - n
+
+  $max_val: = (logits.data + offset)$
+  $max_idx: I32 = 0
+
+  for $i: Sz = 1; i < n; i += 1
+    val: = (logits.data + offset + i)$
+    if val > max_val
+      max_val = val
+      max_idx = I32::i
+  return max_idx
+pub struct Sample_config //< how adventurous the sampling is, and which candidates it may pick
+  pub temperature: F64 //< how far it strays; 1.0 follows the model, 0 or below means `argmax`
+  pub top_k: Sz //< at most this many top-scoring candidates; 0 means no limit
+  pub top_p: F64 //< only candidates within this cumulative probability; 1.0 means no limit
+
+impl Sample_config
+  pub fn greedy(): Sample_config //< the settings under which `sample` behaves like `argmax`
+    return Sample_config::{ .temperature = 0.0, .top_k = 0, .top_p = 1.0 }
+priv fn sort_desc(idx: Sz$@, probs: F64$@, n: Sz) //<
+  //< An insertion sort by descending probability (the vocabulary is taken to be small to medium)
+  //<
+  //< It reorders `idx`.
+  for $i: Sz = 1; i < n; i += 1
+    cur: = (idx + i)$
+    key: = (probs + cur)$
+    $j: = i - 1
+    for j >= 0 && (probs + (idx + j)$)$ < key
+      (idx + j + 1)$ = (idx + j)$
+      j -= 1
+    (idx + j + 1)$ = cur
+
+pub fn sample<|T|>( //< one token chosen at random, weighted by the model's scores
+  logits: Tensor<|T|>, //< the model's scores; the last row is read, and it must not be empty
+  cfg: Sample_config, //< how adventurous the choice is
+  rng: prng.Prng$@, //< the source of randomness; the same seed gives the same run
+  arena: Arena$@, //< the arena for the working probabilities and ordering
+): I32 //< the token ID; with a temperature of 0 or below, `argmax`'s pick
+  assert(logits.shape.len >= 1, "logits must be at least 1D")
+  n: = logits.shape[logits.shape.len - 1]
+  // 0 is rejected for the same reason as in argmax: `max_logit` below would read no elements.
+  assert(n > 0, "sample: logits' final dimension is 0 (there is no candidate to pick)")
+  offset: = logits.size - n
+  // At a temperature of 0 or below it reduces to the greedy method (argmax)
+  if cfg.temperature <= 0.0
+    return argmax(logits)
+
+  probs: = F64$@::arena.alloc(n * sizeof(F64))
+  idx: = Sz$@::arena.alloc(n * sizeof(Sz))
+  // 1. The largest scaled value (for a numerically stable softmax)
+  $max_logit: = ((logits.data + offset)$) / cfg.temperature
+  for $i: Sz = 1; i < n; i += 1
+    v: = ((logits.data + offset + i)$) / cfg.temperature
+    if v > max_logit
+      max_logit = v
+  // 2. Turns it into a probability distribution by softmax
+  $sum_exp: = 0.0
+  for i in Range.asc(n)
+    v: = ((logits.data + offset + i)$) / cfg.temperature
+    e: = math.exp(v - max_logit)
+    (probs + i)$ = e
+    (idx + i)$ = i
+    sum_exp += e
+  for i in Range.asc(n)
+    (probs + i)$ = (probs + i)$ / sum_exp
+  // 3. The top-k / top-p filter (sorted by descending probability only where that is needed)
+  $keep: = n
+  if cfg.top_k > 0 || cfg.top_p < 1.0
+    sort_desc(idx, probs, n)
+    if cfg.top_k > 0 && cfg.top_k < keep
+      keep = cfg.top_k
+    if cfg.top_p < 1.0
+      $cum: = 0.0
+      $p_keep: Sz = 1
+      for i in Range.asc(keep)
+        cum += (probs + (idx + i)$)$
+        p_keep = i + 1
+        if cum >= cfg.top_p
+          break
+      keep = p_keep
+  // 4. A cumulative walk, normalized by the kept candidates' total probability
+  $total: = 0.0
+  for i in Range.asc(keep)
+    total += (probs + (idx + i)$)$
+  u: = rng.next_f64() * total
+  $acc: = 0.0
+  for i in Range.asc(keep)
+    acc += (probs + (idx + i)$)$
+    if acc >= u
+      return I32::(idx + i)$
+  return I32::(idx + (keep - 1))$ // guards against a floating-point remainder

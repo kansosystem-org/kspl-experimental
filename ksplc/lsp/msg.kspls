@@ -1,0 +1,302 @@
+import "ksplc/base/core" as base_core
+import "ksplc/base/diag" as base_diag
+import "ksplc/base/locate" as base_locate
+import "std/chars"
+import "std/ds" { List }
+import "std/io"
+import "std/json" + { Json_builder }
+import "std/jsonrpc"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+enum Lsp_error
+  io_error
+  format_error
+// ==========================================
+// Types
+// ==========================================
+struct Position
+  line: Sz
+  character: Sz
+// ==========================================
+// Utility methods
+// ==========================================
+impl Json_builder
+  fn position(r: Self$@, line: Sz, col: Sz): json.Val
+    return r.obj().set("line", r.int_val(I32::line)).set("character", r.int_val(I32::col)).build()
+
+  fn range(r: Self$@, sl: Sz, sc: Sz, el: Sz, ec: Sz): json.Val
+    return r.obj().set("start", r.position(sl, sc)).set("end", r.position(el, ec)).build()
+
+  fn location(r: Self$@, uri: U8[], sl: Sz, sc: Sz, el: Sz, ec: Sz): json.Val
+    $safe_uri: = uri.escape_json_path()
+    defer safe_uri.free()
+
+    return r.obj().set("uri", r.str_val(safe_uri.slice()))
+      .set("range", r.range(sl, sc, el, ec)).build()
+
+impl U8[]
+  fn escape_json_path(r: U8[]): Str_builder
+    $res: = Str_builder.new()
+    for i in Range.asc(r.len)
+      c: = (r.ptr + i)$
+      res.c('/' if c == '\\' else c)
+    return res
+
+  fn get_line_char(r: Self, target_offset: Sz, starts: List<|Sz|>$@): Position //<
+    //< The LSP position of an offset: a 0-based line and a character in UTF-16 code units
+    //<
+    //< The internal line is 1-based; character is already in UTF-16 units from get_line_info.
+    //< **Where the same source is used many times, build the line-start table once and pass it
+    //< in** (the reason is at get_line_info in base/core.kspls). A one-off call may build it here.
+    info: = r.get_line_info(target_offset, starts)
+    return Position::{ .line = info.line - 1, .character = info.char_idx }
+  fn get_offset_from_pos(r: U8[], target_line: Sz, target_col: Sz): Sz //<
+    //< The byte offset of a 0-based line and a character in UTF-16 code units
+    //<
+    //< It is `get_line_char`'s inverse.
+    //<
+    //< A position past a line's end lands on that line's end, one past the text on the text's end.
+    $current_line: Sz = 0
+    $current_col: Sz = 0
+    $i: Sz = 0
+    for i < r.len
+      if current_line == target_line && current_col >= target_col
+        return i
+      if current_line > target_line
+        return i
+      c: = (r.ptr + i)$
+      if c == '\n'
+        if current_line == target_line
+          return i
+        current_line += 1
+        current_col = 0
+        i += 1
+      else if c == '\r'
+        i += 1
+      else
+        step: = r.next_codepoint(i)
+        utf16_len: = 2 if step == 4 else 1
+        if current_line == target_line && current_col + utf16_len > target_col
+          return i
+        current_col += utf16_len
+        i += step
+    return r.len
+
+  fn clamp_offset(r: U8[], offset: Sz): Sz //<
+    //< It clamps the offset to the source length's range [0, len-1] (shared across the LSP)
+    if r.len == 0
+      return 0
+    return 0 if offset < 0 else (r.len - 1 if offset >= r.len else offset)
+
+impl Str_builder
+  fn ensure_kspl_ext(r: Self$@) //<
+    //< It adds the default extension to a URI or path string that has none (shared across the LSP)
+    //<
+    //< `default_ext` in `base/core.kspls` decides which one.
+    if !r.slice().has_kspl_ext()
+      r.s(base_core.default_ext())
+// ==========================================
+// Reading a message, and writing one
+// ==========================================
+
+priv const max_content_length: I32 = 128 * 1024 * 1024 //<
+  //< The limit on a Content-Length, which prevents memory exhaustion and digit overflow
+  //<
+  //< It leaves ample room for an ordinary LSP message.
+priv const max_header_line_len: Sz = 8192 //< the limit on one header line
+  //<
+  //< A real header fits in a few dozen bytes; this stops line_buf growing without limit when a
+  //< peer never sends a newline.
+
+fn offset_at(src: U8[], params: json.Val): Sz //<
+  //< The offset in `src` of the position a request names (`params.position`)
+  pos: = params.get("position")
+  return src.get_offset_from_pos(pos.get("line").as_int(0), pos.get("character").as_int(0))
+
+fn read_message(out: Str_builder$@): Void?Lsp_error //<
+  //< It reads one message from stdin, its header and then its body, into `out`
+  //<
+  //< **The worker and the supervisor both read through here.** A body the peer cut short is
+  //< passed on as far as it arrived, and the JSON reader rejects it.
+  len: = read_content_length()?
+  out.len = 0
+  out.reserve(len)
+  for _i in Range.asc(len)
+    c: = io.getchar()
+    if c < 0
+      break
+    out.c(U8::c)
+
+fn read_content_length(): I32?Lsp_error
+  $len: I32 = -1
+  $line_buf: = Str_builder.new()
+  defer line_buf.free()
+  $prev_was_nl: = false
+
+  for
+    c: = io.getchar()
+    if c < 0
+      throw Lsp_error.io_error
+    ch: = U8::c
+    if ch == '\r'
+      continue
+
+    if ch == '\n'
+      if prev_was_nl
+        if len >= 0
+          return len
+        throw Lsp_error.format_error
+      prev_was_nl = true
+      if n: = jsonrpc.content_length(line_buf.slice(), max_content_length)
+        len = I32::n
+      line_buf.len = 0
+      continue
+
+    prev_was_nl = false
+    if line_buf.len >= max_header_line_len
+      throw Lsp_error.format_error
+    line_buf.c(ch)
+
+priv fn build_jsonrpc_envelope($b: Json_builder, id_val: json.Val): json.Obj_builder
+  $obj: = b.obj().set("jsonrpc", b.str_val(jsonrpc.version))
+  switch id_val case .null_val
+    obj = obj.set("id", b.null_val())
+  default
+    obj = obj.set("id", id_val)
+  return obj
+
+priv fn dump_and_send_val(val: json.Val)
+  $body: = Str_builder.new()
+  defer body.free()
+  val.dump(body@)
+  send_rpc_message(body.slice())
+
+priv fn dump_and_send(obj: json.Obj_builder)
+  dump_and_send_val(obj.build())
+
+fn send_response(id_val: json.Val, result: json.Val, arena: Arena$@)
+  b: = Json_builder.new(arena)
+  obj: = build_jsonrpc_envelope(b, id_val).set("result", result)
+  dump_and_send(obj)
+
+fn send_null_response(id_val: json.Val, arena: Arena$@)
+  send_response(id_val, json.Val.null_val, arena)
+
+fn send_error_response(id_val: json.Val, code: I32, msg: U8$[], arena: Arena$@)
+  $b: = Json_builder.new(arena)
+
+  err_obj: = b.obj().set("code", b.int_val(code)).set("message", b.str_val(msg)).build()
+  obj: = build_jsonrpc_envelope(b, id_val).set("error", err_obj)
+  dump_and_send(obj)
+
+fn send_diagnostics_list(uri: U8[], diags: List<|base_diag.Lsp_diagnostic|>$@)
+  arena: = Arena.new(2 * 1024 * 1024)
+  defer arena.free()
+  $b: = Json_builder.new(arena)
+
+  $final_uri: = Str_builder.new()
+  defer final_uri.free()
+  if !uri.has_kspl_ext()
+    final_uri.s(uri).s(base_core.default_ext())
+  else
+    final_uri.s(uri)
+
+  $arr: = b.arr()
+  local_uri: = final_uri.slice().strip_file_uri()
+
+  if diags != null
+    for d in diags
+      // Caution: **Leave the same-file check to `base_locate`.** A diagnostic uses the file's
+      // logical name and the LSP names a file by URI, so matching the names is not enough.
+      if !base_locate.is_same_file(local_uri, d.file)
+        continue
+
+      sev: = d.severity.to_lsp_severity()
+      $d_obj: = b.obj()
+        .set("range", b.range(d.line, d.col, d.line, d.col + d.len))
+        .set("severity", b.int_val(sev)).set("source", b.str_val("kspl"))
+        .set("message", b.str_val(d.msg))
+
+      is_unnecessary: =
+        (sev == 4 && (d.msg.starts_with("[H") || d.msg.starts_with("Unused "))) ||
+        (sev == 2 && (d.msg.starts_with("[W0207]") || d.msg.starts_with("[W0208]")))
+      is_deprecated: = sev == 2 && d.msg.starts_with("[W0702]")
+
+      if is_unnecessary
+        d_obj = d_obj.set("tags", b.arr().push(b.int_val(1)).build())
+      else if is_deprecated
+        d_obj = d_obj.set("tags", b.arr().push(b.int_val(2)).build())
+
+      arr = arr.push(d_obj.build())
+
+  $safe_uri: = final_uri.slice().escape_json_path()
+  defer safe_uri.free()
+
+  params: = b.obj().set("uri", b.str_val(safe_uri.slice())).set("diagnostics", arr.build()).build()
+  send_publish_diagnostics(b, params)
+
+fn send_single_diagnostic(uri: U8[], $severity: base_diag.Diagnostic_severity, line: Sz, col: Sz,
+  len: Sz, msg: U8$[])
+  arena: = Arena.new(1024 * 1024)
+  defer arena.free()
+  $b: = Json_builder.new(arena)
+
+  d_obj: = b.obj().set("range", b.range(line, col, line, col + len))
+    .set("severity", b.int_val(severity.to_lsp_severity())).set("source", b.str_val("kspl"))
+    .set("message", b.str_val(msg)).build()
+
+  $safe_uri: = uri.escape_json_path()
+  defer safe_uri.free()
+
+  arr: = b.arr().push(d_obj).build()
+  params: = b.obj().set("uri", b.str_val(safe_uri.slice())).set("diagnostics", arr).build()
+  send_publish_diagnostics(b, params)
+// ==========================================
+// Private API
+// ==========================================
+priv fn send_publish_diagnostics($b: Json_builder, params: json.Val)
+  msg_obj: = b.obj().set("jsonrpc", b.str_val(jsonrpc.version))
+    .set("method", b.str_val("textDocument/publishDiagnostics")).set("params", params).build()
+  dump_and_send_val(msg_obj)
+
+priv fn send_rpc_message(json_body: U8$[])
+  $frame: = Str_builder.new()
+  defer frame.free()
+  jsonrpc.frame_into(frame@, json_body)
+  io.out().s(frame.slice())
+  io.out().flush()
+const worker_alive_tag: U8[] = "__KSPL_WORKER_ALIVE__" //< the tag of the liveness marker
+const worker_done_tag: U8[] = "__KSPL_WORKER_DONE__" //< the tag of the completion marker
+
+fn send_worker_alive() //<
+  //< It tells the supervisor the worker is alive, so long handling is not taken for a hang
+  //<
+  //< The supervisor's timeout is **per read** (worker_timeout_ms in server.kspls): silent past it,
+  //< even a live worker is killed and the client gets a null. A real hang stops this output too.
+  send_marker(worker_alive_tag)
+
+fn send_worker_done() //<
+  //< The marker an LSP worker sends to tell the supervisor it finished handling one message
+  send_marker(worker_done_tag)
+
+fn marker_len(tag: U8[]): Sz //< how many bytes the marker for `tag` takes, its NULs included
+  return tag.len + 2
+
+fn marker_at(src: U8[], start: Sz, tag: U8[]): I32 //<
+  //< Where the marker for `tag` (NUL, the tag, NUL) starts in `src`, from `start` on; -1 if none
+  total: = marker_len(tag)
+  for $i: Sz = start; i + total <= src.len; i += 1
+    if src[i] == 0U8 && src[i + total - 1] == 0U8 &&
+      src.sub(i + 1, tag.len).equals(tag)
+      return I32::i
+  return -1
+
+priv fn send_marker(tag: U8[]) //< it writes the marker for `tag`
+  //<
+  //< NUL-separated, it never collides with the JSON output.
+  $m: = Str_builder.new()
+  defer m.free()
+  m.c(0U8).s(tag).c(0U8)
+  io.out().s(m.slice())
+  io.out().flush()

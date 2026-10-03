@@ -1,0 +1,30 @@
+//< Where folding is required, a signed overflow is rejected
+//<
+//< Caution: **Look at the intermediate result too**: `(2147483647 + 1) - 1` fits an `I32` at last.
+//< **Decide by the operands' type width**, not `I64`'s boundary. `1 << 31` stands the top bit up
+//< and is no overflow (a shift looks at its amount; tests/negative/shift_count_out_of_range.kspls).
+// EXPECT: integer overflow in compile-time constant expression
+// EXPECT-NOT: [W0
+import "std/io"
+
+// The shape where only the middle overflows. The final value fits an I32.
+priv enum Mid_add
+  a = (2147483647 + 1) - 1
+priv enum Mid_mul
+  b = (100000 * 100000) / 100000
+// The lower boundary.
+priv enum Mid_sub
+  c = (-2147483647 - 2) + 1
+
+// Inside the width it passes (that the errors do not grow here is pinned down at the same time).
+priv enum Ok_add
+  d = (2147483646 + 1) - 1
+priv enum Ok_bit
+  e = 1 << 30
+priv enum Ok_min
+  f = -2147483647 - 1
+
+fn main(): I32
+  io.out()
+    .s("\{Mid_add.a.variant_name()\}\{Ok_add.d.variant_name()\}\{Ok_bit.e.variant_name()\}\{Ok_min.f.variant_name()\}\{Mid_mul.b.variant_name()\}\{Mid_sub.c.variant_name()\}\n")
+  return 0

@@ -1,0 +1,104 @@
+import "std/ring"
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// std/ring: tests of a byte ring buffer.
+//
+// **Always make the data cross the wrap**, or the `% cap` is never tested.
+// ==========================================
+
+// The buffer, as long as the capacity, lives outside the Ring, which holds only its address.
+$ring_buf: U8[8]
+
+priv const named_cap: Sz = 4 //<
+  //< The capacity written as a named const (the form a driver's buffer uses)
+  //<
+  //< Both the buffer's length and the const generic argument come from one constant.
+$named_buf: U8[named_cap]
+
+fn test_ring_basic()
+  verdict.start("[Ring] write/read/full/empty test...")
+
+  $r: = ring.Ring<|8|>.new(ring_buf[0]@)
+  assert(r.is_empty(), "Ring: it starts out empty")
+  assert(!r.is_full(), "Ring: it does not start out full")
+  assert(r.len() == 0, "Ring: len starts at 0")
+  assert(r.free_space() == 8, "Ring: free_space starts at cap")
+  assert(r.peek().len == 0, "Ring: an empty peek is length 0")
+  assert(r.read_byte().is_none(), "Ring: an empty read_byte is none")
+
+  n: = r.write("hello")
+  assert(n == 5, "Ring: write returns the number of bytes written")
+  assert(r.len() == 5 && r.free_space() == 3, "Ring: len/free_space after a write")
+
+  out: U8[5] = ::{}
+  m: = r.read(U8$[]::out)
+  got: = U8[]::out
+  assert(m == 5 && got.equals("hello"), "Ring: read returns in the order written")
+  assert(r.is_empty(), "Ring: empty once everything is read")
+
+  // It writes until full and discards the rest (a partial write).
+  f: = r.write("0123456789")
+  assert(f == 8 && r.is_full(), "Ring: a partial write stops at cap")
+  assert(!r.write_byte('x'), "Ring: write_byte is false when full")
+  assert(r.write("z") == 0, "Ring: write is 0 when full")
+
+  r.clear()
+  assert(r.is_empty() && r.free_space() == 8, "Ring: clear goes back to empty")
+
+  // Writing the capacity as a named const behaves the same as writing it as a literal.
+  $named: = ring.Ring<|named_cap|>.new(named_buf[0]@)
+  named_space: = named.free_space()
+  assert(named_space == 4, "Ring<|named_cap|>: a named const takes effect as the capacity")
+  assert(named.write("abcdef") == 4, "Ring<|named_cap|>: it stops at cap")
+  assert(named.is_full(), "Ring<|named_cap|>: it becomes full")
+
+  // **Two spellings of the same value give the same type** ("What can be written where a value is
+  // passed as a type argument" in `../../docs/SPEC-language.md`). A separate instantiation would
+  // fail here with a type mismatch.
+  same: ring.Ring<|4|> = ring.Ring<|named_cap|>.new(named_buf[0]@)
+  assert(same.free_space() == 4, "Ring<|named_cap|> and Ring<|4|> are one and the same type")
+
+  verdict
+    .pass("write/read keep the order, a full buffer stops at a partial write, clear goes back to \
+      empty, and a capacity written as a named const lands on the same type as a literal.")
+
+fn test_ring_wraparound()
+  verdict.start("[Ring] the wrap, peek and consume test...")
+
+  $r: = ring.Ring<|8|>.new(ring_buf[0]@)
+  r.clear()
+
+  // Advances tail to 4, so that the write runs past the end.
+  r.write("hello")
+  drop: U8[4] = ::{}
+  r.read(U8$[]::drop)
+  assert(r.len() == 1, "Ring: one byte is left")
+
+  // The free space is 7. The write wraps and puts 3 bytes at the start of the buffer.
+  n: = r.write("world!")
+  assert(n == 6 && r.len() == 7, "Ring: a write that crosses the wrap")
+
+  // peek returns only the contiguous part up to the wrap; a second peek returns the rest.
+  c1: = r.peek()
+  assert(c1.len == 4 && c1.equals("owor"), "Ring: peek gives the contiguous part alone")
+  r.consume(c1.len)
+  c2: = r.peek()
+  assert(c2.len == 3 && c2.equals("ld!"), "Ring: the second round's peek gives the rest")
+  r.consume(c2.len)
+  assert(r.is_empty(), "Ring: two rounds of peek/consume leave it empty")
+
+  // Crossing the wrap one byte at a time works too.
+  r.write("abcdefgh")
+  for i in Range.asc(6)
+    assert(r.read_byte().unwrap_or(0) == 'a' + U8::i, "Ring: read_byte is in the order written")
+  assert(r.write_byte('X'), "Ring: write_byte succeeds once there is free space")
+  assert(r.len() == 3, "Ring: len after the wrap")
+  tailbuf: U8[3] = ::{}
+  r.read(U8$[]::tailbuf)
+  tail: = U8[]::tailbuf
+  assert(tail.equals("ghX"), "Ring: a read that crossed the wrap")
+  verdict
+    .pass("A write/read that crosses the wrap goes through, peek gives the contiguous part alone, \
+      and two rounds give the whole.")

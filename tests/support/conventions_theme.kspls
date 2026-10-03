@@ -1,0 +1,339 @@
+//< Kspage's look: colours kept as roles, and each style named by one class (not the suite)
+//<
+//< Caution: **Do not write a colour directly into a rule.** Each one escapes the theme, and only
+//< that place keeps the old colour when the theme changes.
+//< VS Code's themes have hundreds of fields, so every new part leaves all the themes behind.
+import "std/chars"
+import "std/ds" { List }
+import "std/math"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+import "tests/support/conventions_scan" as scan + { Sample }
+import "tests/support/harness"
+
+// Whether that line holds a colour's value (the value itself and nothing else).
+// Caution: **What follows the `#` must be hex digits** (a `#id` selector is not a colour). **A
+// role's name (`var(--…)`) is not a colour**, so it is not listed here.
+priv const color_marks: U8[][] = U8[][]::{ "rgb(", "rgba(", "hsl(", "hsla(", "color-mix(", "Canvas",
+  "CanvasText", "Highlight", "HighlightText", "ButtonFace", "ButtonBorder", "GrayText" }
+
+priv fn holds_color(code: U8[], _arena: Arena$@): Bool
+  for mark in color_marks
+    if code.find_str(mark) >= 0
+      return true
+  for $i: Sz = 0; i + 3 < code.len; i += 1
+    if code[i] != '#'
+      continue
+    $digits: Sz = 0
+    for $k: Sz = i + 1; k < code.len && digits < 8; k += 1
+      if code[k].hex_val() >= 0
+        digits += 1
+        continue
+      break
+    // Caution: **Count three digits or more as a colour** (so `#page` drops out at its `p`).
+    if digits >= 3
+      return true
+  return false
+
+priv fn check_theme_roles(arena: Arena$@)
+  $seen: Sz = 0
+  $bad: = List<|U8[]|>.new(arena)
+  for rel in harness.tracked_matching(U8[][]::{ "*.css" })
+    $in_root: = false
+    $i: Sz = 0
+    for line in harness.read_under_root(rel).lines(arena)
+      seen += 1
+      i += 1
+      // Caution: **Check the line with its comment removed**, or a colour named in an explanation
+      // fails here.
+      cut: = line.find_str("/*")
+      code: = line.sub(0, cut) if cut >= 0 else line
+      if code.trim_spaces().starts_with(":root")
+        in_root = true
+      if in_root
+        if code.find_str("}") >= 0
+          in_root = false
+        continue
+      if holds_color(code, arena)
+        bad
+          .push(arena.text().s(rel).s(":\{i\}: ").s(line.trim_spaces()).take())
+  verdict.check_list("the look's colours are held by the roles alone (no colour outside `:root`)",
+    seen, "lines", bad@,
+    "add one more role and point at it with `var(--…)` (kspage/port/web/page.css)")
+
+priv const lum_weight: F64[3] = ::{ 0.2126, 0.7152, 0.0722 } //< the contrast's luminance weights
+  //<
+  //< **A role's colour comes from the theme, so enough contrast under one theme can fall short
+  //< under another.** **The bare `:root` is not checked**: it uses `CanvasText` and the like, set
+  //< by the environment.
+  //< Note: The threshold is 4.5:1, the same as WCAG 2.2's 1.4.3 (the decision is in
+  //< `kspage/docs/DESIGN.md`).
+
+priv fn srgb_part(v: F64): F64
+  return v / 12.92 if v <= 0.03928 else math.pow((v + 0.055) / 1.055, 2.4)
+
+priv fn luminance(hex: U8[]): F64 //< the relative luminance of a `#rrggbb`
+  //<
+  //< Caution: **Pass it six hex digits and nothing else**; the caller filters out
+  //< `color-mix(…)` and system colours.
+  $out: F64 = 0.0
+  for k in Range.asc(3)
+    hi: = hex[1 + k * 2].hex_val()
+    lo: = hex[2 + k * 2].hex_val()
+    out += lum_weight[k] * srgb_part(F64::(hi * 16 + lo) / 255.0)
+  return out
+
+priv fn contrast_x100(fg: U8[], bg: U8[]): I64 //<
+  //< Returns the contrast times 100, as an integer
+  //<
+  //< Caution: **Do not pass it around as a fraction**: dropping digits when printing rounds a
+  //< shortfall up to "enough".
+  a: = luminance(fg)
+  b: = luminance(bg)
+  hi: = a if a > b else b
+  lo: = a if a < b else b
+  return I64::((hi + 0.05) / (lo + 0.05) * 100.0)
+
+priv fn is_hex6(v: U8[]): Bool
+  if v.len != 7 || v[0] != '#'
+    return false
+  for k in Range.asc(6)
+    if v[1 + k].hex_val() < 0
+      return false
+  return true
+
+// The pairs of colours checked.
+// Caution: **List only pairs that really overlap** (a pair that never meets adds a finding
+// nobody can fix).
+// **List them two at a time, the foreground colour then the background's.**
+priv const theme_pair: U8[][22] = ::{ "--ink", "--panel", "--ink", "--paper", "--ink", "--field",
+  "--ink", "--raised", "--ink-dim", "--panel", "--ink-dim", "--paper", "--ink-dim", "--field",
+  "--ink-dim", "--raised", "--accent", "--panel", "--accent", "--raised", "--accent-ink",
+  "--accent" }
+
+priv fn value_of(names: List<|U8[]|>@, vals: List<|U8[]|>@, want: U8[]): U8[]
+  for k in Range.asc(names.len)
+    if names.get(k).equals(want)
+      return vals.get(k)
+  return ""
+
+priv fn theme_defects(rel: U8[], theme: U8[], names: List<|U8[]|>@, vals: List<|U8[]|>@,
+  bad: List<|U8[]|>$@, arena: Arena$@)
+  $k: Sz = 0
+  for k + 1 < theme_pair.len
+    fg: = value_of(names, vals, theme_pair[k])
+    bg: = value_of(names, vals, theme_pair[k + 1])
+    if !is_hex6(fg) || !is_hex6(bg)
+      k += 2
+      continue
+    r: = contrast_x100(fg, bg)
+    if r < 450
+      frac: = r % 100
+      bad
+        .push(arena.text().s(rel).s(": ").s(theme).s(": ").s(theme_pair[k]).s(" over ")
+        .s(theme_pair[k + 1]).s(" comes out \{r / 100\}.").s("0" if frac < 10 else "")
+        .s("\{frac\}:1 (4.5:1 is the line)").take())
+    k += 2
+
+priv fn check_theme_contrast(arena: Arena$@)
+  $seen: Sz = 0
+  $bad: = List<|U8[]|>.new(arena)
+  for rel in harness.tracked_matching(U8[][]::{ "*.css" })
+    $theme: U8[] = ""
+    $names: = List<|U8[]|>.new(arena)
+    $vals: = List<|U8[]|>.new(arena)
+    for line in harness.read_under_root(rel).lines(arena)
+      cut: = line.find_str("/*")
+      code: = line.sub(0, cut) if cut >= 0 else line
+      t: = code.trim_spaces()
+      if t.starts_with(":root[data-theme=")
+        open: = t.find_char('"')
+        shut: = t.rfind_char('"')
+        theme = t.sub(open + 1, shut - open - 1) if shut > open else "?"
+        names = List<|U8[]|>.new(arena)
+        vals = List<|U8[]|>.new(arena)
+        continue
+      if theme.len == 0
+        continue
+      if t.find_str("}") >= 0
+        theme_defects(rel, theme, names@, vals@, bad@, arena)
+        theme = ""
+        continue
+      if !t.starts_with("--")
+        continue
+      c: = t.find_str(":")
+      if c < 0
+        continue
+      $v: = t.sub(c + 1, t.len - c - 1).trim_spaces()
+      if v.ends_with(";")
+        v = v.sub(0, v.len - 1).trim_spaces()
+      names.push(t.sub(0, c).trim_spaces())
+      vals.push(v)
+      seen += 1
+  verdict.check_list("per theme the letters against the ground are 4.5:1 or more", seen, "colours",
+    bad@, "deepen the role's colour (`:root[data-theme=…]` in kspage/port/web/page.css)")
+
+// The samples for the judgment of whether a line holds a colour.
+// Caution: **Include both a role's name and a selector that looks like hex but is not**, or a
+// check that hits every line of CSS passes. `#ab` shows why fewer than three digits are not a
+// colour (`#id`).
+priv const color_samples: Sample[8] = ::{ Sample::{ .text = "  --ink: #1a1a1a;", .hits = true },
+  Sample::{ .text = "  --ink: #eee;", .hits = true },
+  Sample::{ .text = "  --x: #ab;", .hits = false },
+  Sample::{ .text = "  color: var(--ink);", .hits = false },
+  Sample::{ .text = "  #page { margin: 0; }", .hits = false },
+  Sample::{ .text = "  background: rgba(0, 0, 0, 0.5);", .hits = true },
+  Sample::{ .text = "  color: Canvas;", .hits = true },
+  Sample::{ .text = "  border-radius: 4px;", .hits = false } }
+
+// The samples for whether it is six hex digits.
+// Caution: **Include both a value short of digits and one with a non-hex letter** (a role's value
+// may be `color-mix(…)` or a system colour, which the luminance cannot read).
+priv const hex6_samples: U8[][5] = ::{ "#1a1a1a", "#1a1a1", "#1a1a1g", "Canvas",
+  "color-mix(in srgb, Canvas 50%, CanvasText)" }
+priv const hex6_want: Bool[5] = ::{ true, false, false, false, false }
+
+// The samples for the contrast.
+// Caution: **Place the samples right at 4.5:1.** Far-apart values alone let a rounding error
+// pass.
+// Listed two at a time, as `theme_pair` is.
+priv const contrast_pair: U8[][8] = ::{ "#000000", "#ffffff", "#ffffff", "#000000", "#ffffff",
+  "#ffffff", "#767676", "#ffffff" }
+priv const contrast_want: I64[4] = ::{ 2100, 2100, 100, 454 } //<
+  //< The expected contrast for each sample, times 100
+  //<
+  //< In order: black on white (21.00:1) / the same swapped / one colour against itself (1.00:1) /
+  //< just above the threshold
+
+// The samples for reading a style's name off a line.
+// Caution: **Include both a name written with a mark and a name in prose**; the second makes
+// explicit that prose is not read here.
+priv const style_samples: Sample[7] = ::{
+  Sample::{ .text = "  sheet.add(\"page break\", paint.inherit_all());", .hits = true },
+  Sample::{ .text = "  sheet.add(\"page-break\", paint.inherit_all());", .hits = false },
+  Sample::{ .text = "priv const line_name: U8[] = \"code line\";", .hits = true },
+  Sample::{ .text = "const grid_name: U8[] = \"table\";", .hits = false },
+  // A name passed as a value: there is no literal to read.
+  Sample::{ .text = "  cell: = sheet.add(name, paint.inherit_all());", .hits = false },
+  // Two on one line, the second one bad.
+  Sample::{ .text = "sheet.add(\"body\"); sheet.add(\"page break\");", .hits = true },
+  // Prose. **Not read** (the limit above).
+  Sample::{ .text = "// make a style named \"page break\" and hang it on", .hits = false },
+}
+
+priv fn check_theme_fires(arena: Arena$@)
+  $a: = scan.misjudged(Sample[]::color_samples, holds_color, arena)
+  verdict.check_list("the judgment of whether it holds a colour can fire", color_samples.len,
+    "samples", a@, "the table of what is hit and what is not is `color_samples`")
+
+  $b: = List<|U8[]|>.new(arena)
+  for i in Range.asc(hex6_samples.len)
+    got: = is_hex6(hex6_samples[i])
+    if got != hex6_want[i]
+      b
+        .push(arena.text().s("read \"").s(hex6_samples[i]).s("\" as \{got\}").take())
+  verdict.check_list("the judgment of whether it is six hex digits can fire", hex6_samples.len,
+    "samples", b@, "")
+
+  $c: = List<|U8[]|>.new(arena)
+  for i in Range.asc(contrast_want.len)
+    fg: = contrast_pair[i * 2]
+    bg: = contrast_pair[i * 2 + 1]
+    got: = contrast_x100(fg, bg)
+    if got != contrast_want[i]
+      c
+        .push(arena.text().s("read ").s(fg).s(" against ").s(bg)
+        .s(" as \{got\} (it should be \{contrast_want[i]\})").take())
+  verdict.check_list("the contrast's reckoning can fire", contrast_want.len, "pairs", c@, "")
+
+  $d: = scan.misjudged(Sample[]::style_samples, spaced_style_name, arena)
+  verdict.check_list("the reading of a style's name written down can fire", style_samples.len,
+    "samples", d@, "the table of what is hit and what is not is `style_samples`")
+
+// ---- A style's name comes out as one class ----
+
+// The marks with which the product writes a style's name.
+// Caution: **Do not search for the names themselves**: a table of names needs a fix for each name
+// added, and **a name added in the wrong form is exactly the case that must fail**. `sheet.add`
+// makes every product name; the `…_name` constants are the ones code uses.
+priv const style_marks: U8[][2] = ::{ "sheet.add(\"", "_name: U8[] = \"" }
+
+priv const style_where: U8[][2] = ::{ "kspage/*.kspls", ":!kspage/tests/" } //<
+  //< Where the product's names are written
+  //<
+  //< **`kspage/tests/` is left out**: a check there makes a name holding a space on purpose
+  //< (`html_test.kspls`'s `2col <x>`), and others hold one as a fixture.
+
+priv fn name_at(line: U8[], from: Sz): Sz //<
+  //< The position of the first byte of a style's name written at or after from, or -1.
+  //<
+  //< **All marks are searched and the nearest one wins**, so a line writing two names is read to
+  //< the end.
+  $best: Sz = -1
+  for mark in style_marks
+    at: = line.sub_from(from).find_str(mark)
+    if at < 0
+      continue
+    got: = from + at + mark.len
+    if best < 0 || got < best
+      best = got
+  return best
+
+priv fn spaced_style_name(line: U8[], _arena: Arena$@): Bool //<
+  //< Whether that line writes a style's name that holds whitespace
+  //<
+  //< **Such a name gets no style at all in the HTML**: `class` splits on whitespace, and no
+  //< escaping makes it one class. **A name in prose is not read here.**
+  $i: Sz = 0
+  for i < line.len
+    at: = name_at(line, i)
+    if at < 0
+      break
+    $k: Sz = at
+    for k < line.len && line[k] != '"'
+      if line[k] == ' ' || line[k] == '\t'
+        return true
+      k += 1
+    i = k + 1
+  return false
+
+priv fn names_on(line: U8[]): Sz //< how many style names that line writes
+  $n: Sz = 0
+  $i: Sz = 0
+  for i < line.len
+    at: = name_at(line, i)
+    if at < 0
+      break
+    n += 1
+    i = at + 1
+  return n
+
+priv const style_names_floor: Sz = 40 //<
+  //< The fewest style names the reader may find
+  //<
+  //< **It is a floor, not a count.** Adding a name never changes it, and a reader that finds
+  //< nothing (a mark changed on one side only) fails.
+
+priv fn check_style_names(arena: Arena$@)
+  $seen: Sz = 0
+  $bad: = List<|U8[]|>.new(arena)
+  for rel in harness.tracked_matching(U8[][]::style_where)
+    $i: Sz = 0
+    for line in harness.read_under_root(rel).lines(arena)
+      i += 1
+      seen += names_on(line)
+      if spaced_style_name(line, arena)
+        bad
+          .push(arena.text().s(rel).s(":\{i\}: ").s(line.trim_spaces()).take())
+  verdict.check_list("a style's name written down holds no whitespace", seen, "names", bad@,
+    "join the words with a hyphen (`kspage/docs/DESIGN.md`'s \"The mapping into HTML\")")
+  verdict.check("the reading of the names written down still finds them", seen >= style_names_floor,
+    arena.text().s("read \{seen\} (the floor is \{style_names_floor\})").take())
+
+fn run(arena: Arena$@)
+  check_theme_roles(arena)
+  check_theme_contrast(arena)
+  check_style_names(arena)
+  check_theme_fires(arena)

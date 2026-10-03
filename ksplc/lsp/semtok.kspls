@@ -1,0 +1,208 @@
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_kinds" as base_ast_kinds
+import "ksplc/base/core"
+import "ksplc/lsp/msg" as lsp_msg
+import "ksplc/lsp/state" { Doc_state }
+import "std/ds" { List }
+import "std/json" + { Json_builder }
+import "std/mem" { Arena }
+import "std/seq"
+import "std/str"
+
+// ==========================================
+// `textDocument/semanticTokens/full` — it reports the colouring of names from the syntax tree, on
+// top of the editor's own grammar colouring; a document with no tree gets an empty answer
+// (`handle`). A call's target could be reported, but it cannot be told apart from a call through
+// a function-pointer variable.
+// Caution: **Do not send a token that spans lines** (the LSP forbids it). Identifiers cannot,
+// but one that did is dropped.
+// **Sort them in ascending order** (they are packed as differences, so a wrong order breaks the
+// positions).
+// ==========================================
+
+// The kinds that are sent. **The position in this list is the number** (sent in the same order as
+// `legend`'s tokenTypes). Do not reorder them. The names are the LSP's (editors colour by them).
+priv const token_types: U8[][8] = ::{ "namespace", "type", "struct", "enum", "interface",
+  "function", "property", "parameter" }
+priv const t_namespace: I32 = 0I32 //< the number per kind
+  //<
+  //< Caution: **Keep it in step with the list above.**
+priv const t_type: I32 = 1I32
+priv const t_struct: I32 = 2I32
+priv const t_enum: I32 = 3I32
+priv const t_interface: I32 = 4I32
+priv const t_function: I32 = 5I32
+priv const t_property: I32 = 6I32
+priv const t_parameter: I32 = 7I32
+
+priv const token_mods: U8[][1] = ::{ "declaration" } //< the modifiers attached
+  //<
+  //< **Only `declaration`** (the others would be guesswork). The position in the list is the bit.
+priv const m_none: I32 = 0I32
+priv const m_decl: I32 = 1I32
+
+priv struct Tok //< one token to send
+  //<
+  //< **It holds the byte position** (the conversion to UTF-16 happens once, at the end).
+  offset: Sz
+  bytes: Sz
+  kind: I32
+  mods: I32
+
+fn provider(b: Json_builder$@): json.Val //< the capability declared in `initialize`
+  //<
+  //< Caution: **Always send the `legend`** — that list, and nothing else, defines what the numbers
+  //< mean.
+  $types: = b.arr()
+  for $i: Sz = 0; i < token_types.len; i += 1
+    types = types.push(b.str_val(token_types[i]))
+  $mods: = b.arr()
+  for $i: Sz = 0; i < token_mods.len; i += 1
+    mods = mods.push(b.str_val(token_mods[i]))
+  legend: = b.obj().set("tokenTypes", types.build()).set("tokenModifiers", mods.build()).build()
+  // **`range` and `delta` are not declared.** Declared but not answered, the editor would wait.
+  return b.obj().set("legend", legend).set("full", b.bool_val(true)).build()
+
+priv fn kind_of_decl(k: base_ast_kinds.Ast_kind): I32 //<
+  //< The token type number for a declaration's kind
+  //<
+  //< **An unknown declaration kind is not sent** (-1).
+  switch k case .k_decl_fn, .k_decl_fn_proto
+    return t_function
+  case .k_decl_struct
+    return t_struct
+  case .k_decl_enum
+    return t_enum
+  case .k_decl_trait
+    return t_interface
+  case .k_decl_alias
+    return t_type
+  case .k_struct_field, .k_enum_field
+    return t_property
+  case .k_enum_variant
+    return t_enum
+  case .k_fn_param, .k_type_gen_param
+    return t_parameter
+  default
+    return -1I32
+
+priv fn gather(node: Ast_node$@, file: U8[], out: List<|Tok|>$@) //<
+  //< It walks the tree and collects the tokens to send
+  //<
+  //< Caution: **Do not send the same position twice** (the editor applies the colour twice). A
+  //< declaration sends one identifier child, a type position only its leaf identifiers.
+  // **Nothing the compiler generated is sent** (`made_by_compiler` in `../base/ast_ext.kspls`).
+  if node == null || node.made_by_compiler()
+    return
+  // A type position. **The identifier inside is "the type's name"** (the syntax says so without
+  // resolving).
+  if in_type(node.kind_id)
+    add_ids(node, file, t_type, m_none, out)
+    return
+  // An import's alias. **Without an `as` it is derived from the name**, so where it is not in the
+  // tree it is not sent.
+  if node.kind_id == .k_decl_import
+    add_child_id(node, file, t_namespace, m_decl, out)
+  want: = kind_of_decl(node.kind_id)
+  if want >= 0I32
+    add_child_id(node, file, want, m_decl, out)
+  // A constant's and a variable's declaration have the name's child at a fixed position.
+  if node.kind_id == .k_decl_const || node.kind_id == .k_decl_var_item
+    add_one(node.get_var_decl_id(), file, t_parameter, m_decl, out)
+  for c in node.children
+    gather(c, file, out)
+
+priv fn in_type(k: base_ast_kinds.Ast_kind): Bool //<
+  //< Whether it is a node at a position where a type is written
+  switch k case .k_type_path, .k_type_atom
+    return true
+  default
+    return false
+
+priv fn add_child_id(node: Ast_node$@, file: U8[], kind: I32, mods: I32, out: List<|Tok|>$@) //<
+  //< It sends one token: the first identifier directly under that node
+  add_one(node.find_child(.k_identifier), file, kind, mods, out)
+
+priv fn add_ids(node: Ast_node$@, file: U8[], kind: I32, mods: I32, out: List<|Tok|>$@) //<
+  //< It sends every identifier under that node (used at a type position)
+  if node == null
+    return
+  if node.kind_id == .k_identifier
+    add_one(node, file, kind, mods, out)
+    return
+  for c in node.children
+    add_ids(c, file, kind, mods, out)
+
+priv fn add_one(node: Ast_node$@, file: U8[], kind: I32, mods: I32, out: List<|Tok|>$@) //<
+  //< It sends one token
+  //<
+  //< **A node from another file is not sent** (the answer covers one file).
+  if node == null || node.text.len <= 0 || !node.loc.file().equals(file)
+    return
+  out
+    .push(Tok::{ .offset = node.loc.offset, .bytes = node.text.len, .kind = kind, .mods = mods })
+
+priv fn position_order(a: Tok, b: Tok): I32 //<
+  //< By position in the file
+  //<
+  //< **The walk order is not necessarily the order of the names** (normalization moves nodes), so
+  //< the collected tokens are sorted this way before they are packed.
+  if a.offset == b.offset
+    return 0
+  return -1 if a.offset < b.offset else 1
+
+priv fn packed(src: U8[], toks: List<|Tok|>$@, b: Json_builder$@, arena: Arena$@): json.Val //<
+  //< It packs the collected tokens into the LSP's number array
+  //<
+  //< **Each token is five numbers** (the line's difference, the column's difference, the length,
+  //< the kind, the modifiers). **Each difference is from the previous token** — on the same line
+  //< the column is a difference too, and after a line change the column counts from its start.
+  starts: = src.line_starts(arena)
+  $data: = b.arr()
+  $last_line: Sz = 0
+  $last_char: Sz = 0
+  $first: = true
+  for $i: Sz = 0; i < toks.len; i += 1
+    t: = toks.get(i)
+    if t.offset + t.bytes > src.len
+      continue
+    from: = src.get_line_info(t.offset, starts)
+    to: = src.get_line_info(t.offset + t.bytes, starts)
+    // Caution: **Drop tokens that span lines** (see the file header).
+    if to.line != from.line
+      continue
+    // **The length is in UTF-16 units too** (not a byte count).
+    wide: = to.char_idx - from.char_idx
+    if wide <= 0
+      continue
+    line: = from.line - 1
+    same: = !first && line == last_line
+    data = data.push(b.int_val((line - last_line) if !first else line))
+    data = data.push(b.int_val((from.char_idx - last_char) if same else from.char_idx))
+    data = data.push(b.int_val(wide))
+    data = data.push(b.int_val(t.kind))
+    data = data.push(b.int_val(t.mods))
+    last_line = line
+    last_char = from.char_idx
+    first = false
+  return b.obj().set("data", data.build()).build()
+
+fn handle(state: Doc_state$@, id_val: json.Val, arena: Arena$@) //<
+  //< It answers `textDocument/semanticTokens/full`
+  //<
+  //< Caution: **Answer empty for a document that is not open** (dropped silently, the editor
+  //< waits).
+  $b: = Json_builder.new(arena)
+  $toks: = List<|Tok|>.new(arena)
+  // **Whether the analysis succeeded is not checked**: the answer comes from the syntax tree,
+  // which exists even when an `import` cannot be resolved.
+  // Caution: Requiring `is_valid` here makes all colours of a file opened from outside the
+  // workspace disappear. **Only a document with no tree gets an empty answer.**
+  if state != null && state.root_file != null
+    gather(state.root_file, state.mod_name_perm, toks@)
+    toks = toks.order_by(fn(a: Tok, b: Tok; ): I32 {
+      return position_order(a, b);
+    }, arena)
+  src: U8[] = state.src_perm if state != null else ""
+  lsp_msg.send_response(id_val, packed(src, toks@, b@, arena), arena)

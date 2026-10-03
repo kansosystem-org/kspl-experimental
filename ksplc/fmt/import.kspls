@@ -1,0 +1,183 @@
+//< Sorts the run of `import`s by name (a stage before the formatter)
+//<
+//< It rebuilds the original text in the new order and parses it again, rather than reordering the
+//< tree. The rewritten region starts at the first import, and a blank line separates groups.
+//< Caution: **Do not reorder by looking at lines**: a test fixture (`"""…"""`) can hold an
+//< `import` line.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/lines" { line_end, line_start, skip_blanks }
+import "ksplc/base/literal" { literal_end }
+import "std/chars" // the one-character checks
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/seq"
+import "std/str" { Str_builder }
+
+priv struct Item //< the unit of reordering
+  //<
+  //< Positions are offsets into the original; `end` excludes the newline.
+  //< Caution: **Keep `lead` and `body` apart.** The `lead` of a group's first item (the comments
+  //< after a blank line) is that group's heading; merged in, the reordering moves it mid-group.
+  //< **An attribute is never heading**: `#cfg` binds to the `import` below it, so from the first
+  //< attribute line on (`own`) the lead moves with its item.
+  key: U8[]
+  lead: Sz //< the start of the comments and attributes directly above
+  own: Sz //< where the item's own lines start: its first attribute line, else `body`
+  body: Sz //< the start of the `import` (or attribute) itself
+  end: Sz
+  new_group: Bool //< a blank line sits before this item (a new group starts here)
+
+priv fn stmt_end_from(src: U8[], from: Sz): Sz //< it returns just after the `import`'s `;`
+  //<
+  //< A `;` inside a string literal is not counted.
+  $i: = from
+  for i < src.len
+    c: = (src.ptr + i)$
+    if c == '"' || c == '\''
+      i = literal_end(src, i)
+      continue
+    if c == ';'
+      return i + 1
+    i += 1
+  return i
+
+priv fn with_trailing_comment(src: U8[], end: Sz): Sz //<
+  //< The end position, extended over a comment that follows `end` on the same line
+  i: = skip_blanks(src, end)
+  if i + 1 < src.len && (src.ptr + i)$ == '/' && (src.ptr + i + 1)$ == '/'
+    return line_end(src, i)
+  return end
+
+priv fn lead_start(src: U8[], body_start: Sz, floor: Sz): Sz //<
+  //< It returns the start of the comment and attribute lines directly above `body_start`
+  //<
+  //< It does not go back beyond `floor`, nor across a blank line (a group's separator).
+  $at: = body_start
+  for at > floor
+    // Take the previous line's range [ls, le).
+    le: = at - 1 // the byte before `at` should be a newline
+    if (src.ptr + le)$ != '\n'
+      break
+    start: = line_start(src, le)
+    ls: = start if start > floor else floor
+    trimmed: = U8[]::{ .ptr = src.ptr + ls, .len = le - ls }.trim_spaces()
+    if trimmed.len == 0
+      break // a blank line separates groups
+    if !trimmed.starts_with("//") && !trimmed.starts_with("#")
+      break
+    at = ls
+  return at
+
+priv fn first_attribute(src: U8[], from: Sz, to: Sz): Sz //<
+  //< The start of the first line in [from, to) that opens with `#`, or `to` where none does
+  $at: = from
+  for at < to
+    le: = line_end(src, at)
+    if U8[]::{ .ptr = src.ptr + at, .len = le - at }.trim_spaces().starts_with("#")
+      return at
+    at = le + 1
+  return to
+
+priv fn has_blank_line(src: U8[], from: Sz, to: Sz): Bool //<
+  //< whether [from, to) holds a blank line
+  $nl: Sz = 0
+  $i: = from
+  for i < to && i < src.len
+    c: = (src.ptr + i)$
+    if c == '\n'
+      nl += 1
+      if nl >= 2
+        return true
+    else if c != ' ' && c != '\t' && c != '\r'
+      nl = 0
+    i += 1
+  return false
+
+priv fn collect_items(src: U8[], root: Ast_node$@, arena: Arena$@): List<|Item|> //<
+  //< It collects the import items at the head of the file
+  //<
+  //< It stops at the first declaration that is not an import.
+  $items: = List<|Item|>.new(arena)
+  $prev_end: Sz = 0
+  for top in root.children
+    inner: = top.unwrap_top_level()
+    if inner == null || inner.kind_id != .k_decl_import
+      break
+    path_opt: = inner.get_import_path_text()
+    if path_opt.is_none()
+      break // not a plain string path: sema rejects it
+    body_start: = inner.loc.offset
+    if body_start >= src.len
+      break
+    end: = with_trailing_comment(src, stmt_end_from(src, body_start))
+    // Caution: **The first item's floor is its declaration's start, attributes included**: a
+    // `#cfg` above the first `import` belongs to it, and left outside the region it stays put
+    // while its import moves. The file's heading comments stay outside.
+    decl_start: = top.loc.offset if top.loc.offset < body_start else body_start
+    floor: = prev_end if items.len > 0 else decl_start
+    start: = lead_start(src, body_start, floor)
+    items
+      .push(Item::{ .key = path_opt.unwrap_or(""), .lead = start,
+      .own = first_attribute(src, start, body_start), .body = body_start, .end = end,
+      .new_group = has_blank_line(src, prev_end, start) if items.len > 0 else false })
+    prev_end = end
+  return items
+
+priv fn sorted_indices(items: List<|Item|>@, lo: Sz, hi: Sz, arena: Arena$@): List<|Sz|> //<
+  //< The indices of one group [lo, hi) in key order (stable)
+  $group: = List<|Sz|>.new(arena)
+  for idx in Range.new(lo, hi, 1)
+    group.push(idx)
+  return group.order_by(fn(a: Sz, b: Sz; items: List<|Item|>@): I32 {
+    return items.get(a).key.compare(items.get(b).key);
+  }, arena)
+
+fn reorder(src: U8[], root: Ast_node$@, arena: Arena$@): U8[] //<
+  //< It returns the original with the run of imports put into name order
+  //<
+  //< Where nothing moves it returns `src` unchanged.
+  //< Caution: **Where it returns something other than `src`, the caller must parse again**: the
+  //< positions move, and the old tree would attach the comments to other lines.
+  if root == null
+    return src
+  items: = collect_items(src, root, arena)
+  if items.len < 2
+    return src
+  // Sort each group and check whether anything moved.
+  $order: = List<|Sz|>.new(arena)
+  $lo: Sz = 0
+  for i in Range.asc(items.len)
+    if i > 0 && items.get(i).new_group
+      for v in sorted_indices(items@, lo, i, arena)
+        order.push(v)
+      lo = i
+  for v in sorted_indices(items@, lo, items.len, arena)
+    order.push(v)
+  $changed: = false
+  for i in Range.asc(order.len)
+    if order.get(i) != i
+      changed = true
+  if !changed
+    return src
+  // The region [items[0].lead, items[len-1].end) is rebuilt; the text around it is copied as is.
+  region_from: = items.get(0).lead
+  region_to: = items.get(items.len - 1).end
+  out: = arena.text()
+  out.s(U8[]::{ .ptr = src.ptr, .len = region_from })
+  for i in Range.asc(order.len)
+    slot: = items.get(i) // the output slot; the slot, not the item, holds separators and headings
+    idx: = order.get(i)
+    it: = items.get(idx)
+    if i > 0
+      out.s("\n\n" if slot.new_group else "\n")
+    if i == 0 || slot.new_group
+      // The group's heading stays first, whichever item moves to the front.
+      out.s(U8[]::{ .ptr = src.ptr + slot.lead, .len = slot.own - slot.lead })
+    // Caution: **Write a group's original first item from its `own`**: the lines before it are
+    // already written as the heading and would appear twice.
+    from: = it.own if idx == 0 || it.new_group else it.lead
+    out.s(U8[]::{ .ptr = src.ptr + from, .len = it.end - from })
+  out.s(U8[]::{ .ptr = src.ptr + region_to, .len = src.len - region_to })
+  return out.take()

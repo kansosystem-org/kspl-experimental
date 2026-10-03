@@ -1,0 +1,224 @@
+//< Self-attention's forward and backward passes for training
+//<
+//< Inference (`ksai/nn`) runs one token at a time against a KV cache; training takes the whole
+//< sequence at once, so a whole-sequence forward pass with a causal mask lives here, **sharing the
+//< weights**. What the forward pass computes is kept in `Attention_train` for the backward pass,
+//< so the layer itself gains no field.
+
+// ==========================================
+// The layout (a single head over the whole dim, the same reduction as inference):
+//   Q,K,V = X·Wq/Wk/Wv → RoPE(Q,K) → S = Qr·Krᵀ → causal softmax(S*scale)
+//   → context = A·V → out = context·Wo
+// ==========================================
+import "ksai/grad" as _grad // uses Tensor's grad_* / apply_rope_grad
+import "ksai/lora"
+import "ksai/nn"
+import "ksai/optim"
+import "ksai/tensor" { Tensor }
+import "std/math"
+
+pub struct Attention_grads<|T|> //< the four projections' weight gradients
+  pub wq: Tensor<|T|> //< the query projection's gradient
+  pub wk: Tensor<|T|> //< the key projection's gradient
+  pub wv: Tensor<|T|> //< the value projection's gradient
+  pub wo: Tensor<|T|> //< the output projection's gradient
+
+impl<|T|> Attention_grads<|T|>
+  pub fn accumulate(r: Self$@, o: Self$@) //< adds another sequence's gradients in, in place
+    r.wq.accumulate(o.wq)
+    r.wk.accumulate(o.wk)
+    r.wv.accumulate(o.wv)
+    r.wo.accumulate(o.wo)
+
+pub struct Attention_train<|T|> //< what the forward pass keeps for the backward pass
+  pub out: Tensor<|T|> //< the layer's output, [S,d]
+  pub x: Tensor<|T|> //< the input it was given, [S,d]
+  pub q_rope: Tensor<|T|> //< Q after the positional rotation, [S,d]
+  pub k_rope: Tensor<|T|> //< K after the positional rotation, [S,d]
+  pub attn_weights: Tensor<|T|> //< how much each position attends to each earlier one, [S,S]
+  pub v: Tensor<|T|> //< V, [S,d]
+  pub context: Tensor<|T|> //< what the attention gathered, A·V, [S,d]
+  pub scale: F64 //< the factor the scores were multiplied by before the softmax, 1/sqrt(dim)
+
+priv struct Qkv_grads<|T|> //<
+  //< The gradients of Q/K/V that the backward pass's core (context → A → S → RoPE) returns
+  dq: Tensor<|T|> //< after RoPE's backward pass [S,d]
+  dk: Tensor<|T|> //< after RoPE's backward pass [S,d]
+  dv: Tensor<|T|> //< [S,d]
+
+// Computes dcontext → the gradients of Q/K/V, the part whose **formulas are the same** in
+// `backward` (updating the weights) and `backward_lora` (base frozen), so it lives here once.
+// Caution: **With two copies, fixing one makes the gradients quietly disagree, and a broken
+// training run still passes the tests.** The callers differ only in how they make dcontext and
+// use this return value.
+priv fn attn_backward_core<|T|>(c: Attention_train<|T|>$@, $dcontext: Tensor<|T|>):
+  Qkv_grads<|T|>
+  // context = A·V
+  dattn: = dcontext.matmul_transb(c.v) catch // dcontext·Vᵀ [S,S]
+    panic("backward: matmul_transb failed")
+  dv: = c.attn_weights.grad_matmul_weight(dcontext) // Aᵀ·dcontext [S,d]
+  // A = causal_softmax(S*scale)
+  $dscores: = c.attn_weights.causal_softmax_grad(dattn, c.scale) // [S,S]
+  // S = Qr·Krᵀ
+  $dqr: = dscores.matmul(c.k_rope) catch // dS·Kr [S,d]
+    panic("backward: matmul failed")
+  $dkr: = dscores.grad_matmul_weight(c.q_rope) // dSᵀ·Qr [S,d]
+  // RoPE's backward pass
+  return Qkv_grads<|T|>::{ .dq = dqr.apply_rope_grad(0), .dk = dkr.apply_rope_grad(0), .dv = dv }
+
+impl<|T|> Tensor<|T|>
+  priv fn causal_softmax(r: Self$@, scale: F64): Tensor<|T|> //< a causal softmax per row
+    //<
+    //< self=the raw scores [S,S], scaled by `scale` before the softmax; position i sees only j<=i.
+    //< The output is on `self.arena`.
+    assert(r.shape.len == 2, "causal_softmax expects 2D [S,S]")
+    rows: = r.shape[0]
+    cols: = r.shape[1]
+    attn: = Tensor<|T|>.new(r.shape, r.arena)
+    for i in Range.asc(rows)
+      base: = i * cols
+      $mx: = (r.data + base)$ * scale
+      for $j: Sz = 1; j <= i && j < cols; j += 1
+        v: = (r.data + base + j)$ * scale
+        if v > mx
+          mx = v
+      $sum: = 0.0
+      for $j: Sz = 0; j <= i && j < cols; j += 1
+        e: = math.exp((r.data + base + j)$ * scale - mx)
+        (attn.data + base + j)$ = T::e
+        sum += e
+      for j in Range.asc(cols)
+        if j <= i
+          (attn.data + base + j)$ = T::((attn.data + base + j)$ / sum)
+        else
+          (attn.data + base + j)$ = 0.0 // the causal mask
+    return attn
+  priv fn causal_softmax_grad(r: Self$@, dattn: Tensor<|T|>, scale: F64): Tensor<|T|> //<
+    //< The backward pass of the causal softmax
+    //<
+    //< self=softmax's output A[S,S], dattn=the upstream gradient. dscore[i,j] = A[i,j]*(dattn[i,j]
+    //< - Σ_k A[i,k]dattn[i,k]) * scale (j<=i only)
+    assert(r.shape.len == 2, "causal_softmax_grad expects 2D [S,S]")
+    rows: = r.shape[0]
+    cols: = r.shape[1]
+    dscore: = Tensor<|T|>.new(r.shape, r.arena)
+    for i in Range.asc(rows)
+      base: = i * cols
+      $dot: = 0.0
+      for $j: Sz = 0; j <= i && j < cols; j += 1
+        dot += (r.data + base + j)$ * (dattn.data + base + j)$
+      for j in Range.asc(cols)
+        if j <= i
+          a: = (r.data + base + j)$
+          g: = a * ((dattn.data + base + j)$ - dot) * scale
+          (dscore.data + base + j)$ = T::g
+        else
+          (dscore.data + base + j)$ = 0.0
+    return dscore
+
+impl<|T|> nn.Self_attention<|T|>
+  pub fn train_forward( //< runs the whole sequence at once, keeping what the backward pass needs
+    //<
+    //< It is `train_forward_lora` with no adapter (null skips both delta paths).
+    r: Self$@,
+    x: Tensor<|T|>, //< every position's input together, [S,d]
+  ): Attention_train<|T|>
+    return r.train_forward_lora(x, null, null)
+  pub fn backward( //< one SGD step on all four weights; returns the input's gradient
+    r: Self$@,
+    c: Attention_train<|T|>$@, //< what `train_forward` kept for this same input
+    dout: Tensor<|T|>, //< the gradient of the layer's output
+    lr: F64, //< the learning rate
+  ): Tensor<|T|>
+    $g: Attention_grads<|T|> = ::{}
+    dx: = r.backward_grads(c, dout, g@)
+    $u: = optim.Updater<|T|>.sgd(lr)
+    defer u.free()
+    r.apply_grads(g@, u@)
+    return dx
+  pub fn backward_grads( //< writes the four weights' gradients to `g`; returns the input gradient
+    r: Self$@,
+    c: Attention_train<|T|>$@, //< what `train_forward` kept for this same input
+    $dout: Tensor<|T|>, //< the gradient of the layer's output
+    g: Attention_grads<|T|>$@, //< where the four gradients are written
+  ): Tensor<|T|>
+    // 1. out = context·Wo   (the LLaMA family has no bias; only the weights move)
+    dcontext: = dout.grad_matmul_input(r.wo.weights)
+    g.wo = c.context.grad_matmul_weight(dout)
+    // 2-5. context→A→S→RoPE (shared with `backward_lora`)
+    core: = attn_backward_core(c, dcontext)
+    $dq: = core.dq
+    $dk: = core.dk
+    $dv: = core.dv
+    // 6. Q,K,V = X·Wq/Wk/Wv → the weights' gradients and dX summed (no bias)
+    dxq: = dq.grad_matmul_input(r.wq.weights)
+    g.wq = c.x.grad_matmul_weight(dq)
+    dxk: = dk.grad_matmul_input(r.wk.weights)
+    g.wk = c.x.grad_matmul_weight(dk)
+    dxv: = dv.grad_matmul_input(r.wv.weights)
+    g.wv = c.x.grad_matmul_weight(dv)
+    $dx: = dxq + dxk
+    dx = dx + dxv
+    return dx
+  pub fn apply_grads( //< moves the four weights by `g`
+    r: Self$@,
+    g: Attention_grads<|T|>$@, //< the gradients `backward_grads` computed
+    u: optim.Updater<|T|>$@, //< the optimizer that moves them
+  )
+    u.update(r.wq.weights, g.wq)
+    u.update(r.wk.weights, g.wk)
+    u.update(r.wv.weights, g.wv)
+    u.update(r.wo.weights, g.wo)
+
+  pub fn train_forward_lora( //< the same as `train_forward`, with the adapters' delta added
+    //<
+    //< It does not update the base weights (wq/wk/wv/wo) at all, and adds the adapters' delta to
+    //< Q's and V's outputs (symmetrical with inference's `forward_lora`).
+    r: Self$@,
+    x: Tensor<|T|>, //< every position's input together, [S,d]
+    q_lora: lora.Lora<|T|>$@, //< the adapter on the query side; null means none
+    v_lora: lora.Lora<|T|>$@, //< the adapter on the value side; null means none
+  ): Attention_train<|T|>
+    $q: = r.wq.forward(x)
+    if q_lora != null
+      q = q + q_lora.forward(x)
+    $k: = r.wk.forward(x)
+    $v: = r.wv.forward(x)
+    if v_lora != null
+      v = v + v_lora.forward(x)
+    $qr: = q.apply_rope(0) catch panic("train_forward_lora: apply_rope failed")
+    kr: = k.apply_rope(0) catch panic("train_forward_lora: apply_rope failed")
+    $scores: = qr.matmul_transb(kr) catch // [S,S]
+      panic("train_forward_lora: matmul_transb failed")
+    scale: = 1.0 / math.sqrt(F64::r.dim)
+    $attn: = scores.causal_softmax(scale) // [S,S]
+    context: = attn.matmul(v) catch // [S,d]
+      panic("train_forward_lora: matmul failed")
+    out: = r.wo.forward(context)
+    return Attention_train<|T|>::{ .out = out, .x = x, .q_rope = qr, .k_rope = kr,
+      .attn_weights = attn, .v = v, .context = context, .scale = scale }
+  pub fn backward_lora( //< one step on the adapters only; the four base weights stay frozen
+    //<
+    //< The returned gradient is the sum of the base path and the adapter path.
+    r: Self$@,
+    c: Attention_train<|T|>$@, //< what `train_forward_lora` kept for this same input
+    $dout: Tensor<|T|>, //< the gradient of the layer's output
+    lr: F64, //< the learning rate
+    q_lora: lora.Lora<|T|>$@, //< the adapter updated on the query side; null skips it
+    v_lora: lora.Lora<|T|>$@, //< the adapter updated on the value side; null skips it
+  ): Tensor<|T|>
+    // 1. out = context·Wo (frozen: dwo is not needed)
+    dcontext: = dout.grad_matmul_input(r.wo.weights)
+    // 2-5. context→A→S→RoPE (shared with `backward`)
+    $g: = attn_backward_core(c, dcontext)
+    $dq: = g.dq
+    $dv: = g.dv
+    // 6. Q,K,V = X·Wq/Wk/Wv (frozen) + LoRA (only A/B updated). dX sums every path.
+    $dx: = dq.grad_matmul_input(r.wq.weights) // the base route (frozen, not updated)
+    if q_lora != null
+      dx = dx + q_lora.backward(c.x, dq, lr)
+    dx = dx + g.dk.grad_matmul_input(r.wk.weights) // K has no adapter; it is only frozen
+    dx = dx + dv.grad_matmul_input(r.wv.weights) // the base route (frozen, not updated)
+    if v_lora != null
+      dx = dx + v_lora.backward(c.x, dv, lr)
+    return dx

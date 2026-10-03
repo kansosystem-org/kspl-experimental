@@ -1,0 +1,87 @@
+import "ksplc/base/ast" as base_ast
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/session/import_table" as sema_session_import_table
+import "std/chars" // testing and slicing single characters
+import "std/str"
+
+// ==========================================
+// The checks against import lines.
+// ==========================================
+// The table itself is in ksplc/sema/session/import_table.kspls. This file has the two checks run
+// once at the end of the analysis (selectors exist, no redundant alias).
+//
+// Caution: **Set the used flag by "was it written"** (the reason is at mark_import_written in
+// ksplc/sema/session/import_table.kspls).
+
+impl Sema_ctx
+  fn check_import_symbols_exist(r: Self$@) //<
+    //< Checks that each selector of a selective import (`import "p" { A };`) exists at its source
+    //<
+    //< **This is an error, not a lint**, or a slip (`{ twise }`) goes unreported and surfaces as
+    //< `undefined path or identifier` at the use. Visibility is left to the use site (`cannot
+    //< access symbol`).
+    //< A diagnostic on these checks takes its file from the declaration node (report_diagnostic in
+    //< ctx.kspls), so no current file is set for it.
+    if r.suppress_errors
+      return
+    for entry in r.import_symbols.files.items()
+      info: = entry.value
+      if info.decl_node == null
+        continue
+      file_env: = r.env.files.get(info.target_path) catch null
+      if file_env == null
+        continue // the loading itself failed (another diagnostic has been reported)
+      if (file_env.symbols.get(info.original_name) catch null) != null
+        continue
+      r.clear_scratch()
+        .s("file '\{info.target_path\}' has no symbol named '\{info.original_name\}'")
+      r.err(info.decl_node, r.scratch.slice())
+  fn check_redundant_import_alias(r: Self$@) //< reports an `as` that adds nothing
+    //<
+    //< A plain `import "a/b";` derives the same alias from the path's last part: two ways to write
+    //< one thing ("One notation per purpose" in docs/DESIGN.md). `as` is for a different name
+    //< (`import "ksplc/base/ast" as base_ast;`).
+    if r.suppress_errors || !base_core.config.run_lint_checks
+      return
+    for entry in r.aliases.files.items()
+      info: = entry.value
+      if info.decl_node == null
+        continue
+      // Caution: Tell apart whether the alias was derived or written; by name alone it would ask to
+      // remove an `as` that is not there.
+      written: = info.decl_node.get_import_alias()
+      if written.len == 0
+        continue
+      path_opt: = info.decl_node.get_import_path_text()
+      if path_opt.is_none()
+        continue
+      path: = path_opt.unwrap_or("")
+      if !path.default_import_alias().equals(written)
+        continue
+      // The quoted spelling carries no `;`: the default notation ends on the newline, and `;`
+      // would not parse in the reader's file.
+      r.clear_scratch()
+        .s("[I0310] Redundant 'as \{written\}'; 'import \"\{path\}\"' gives the same name.")
+      r.information(info.decl_node, r.scratch.slice())
+
+  fn check_unused_imports(r: Self$@)
+    if r.suppress_errors || !base_core.config.run_lint_checks
+      return
+    // The list is allocated on the heap (once, at the end; the arena is not grown).
+    for entry in r.aliases.files.items()
+      ali_name: = sema_session_import_table.import_key_name(entry.key)
+      info: = entry.value
+      if !info.is_used && info.decl_node != null && !ali_name.starts_with("_")
+        r.clear_scratch()
+          .s("[I0401] Unused import alias '\{ali_name\}'. Prefix with '_' to ignore.")
+        r.information(info.decl_node, r.scratch.slice())
+    for entry in r.import_symbols.files.items()
+      local_name: = sema_session_import_table.import_key_name(entry.key)
+      info: = entry.value
+      if !info.is_used && info.decl_node != null && !local_name.starts_with("_")
+        r.clear_scratch()
+          .s("[I0401] Unused import symbol '\{local_name\}'. Prefix with '_' to ignore.")
+        r.information(info.decl_node, r.scratch.slice())

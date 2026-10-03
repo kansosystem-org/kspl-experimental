@@ -1,0 +1,170 @@
+import "kspage/model/source"
+import "std/chars"
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// kspage: checks the code that points from a document at a source (a golden test).
+//
+// **The link is split correctly**, and **a symbol's extent can be cut by its column**.
+// Caution: **Test a missing name first.** Tried only on names that exist, an empty answer would
+// pass, and nobody would notice the symbol has gone.
+// ==========================================
+
+priv fn kspl_text(sb: Str_builder$@): U8[] //< a sample of a formatted text
+  //<
+  //< **The columns must match the real format's** (the cut goes by column).
+  sb.clear()
+  sb.s("import \"std/io\";").c('\n')
+  sb.s("").c('\n')
+  sb.s("priv const mark: U8[] = \"src:\";").c('\n')
+  sb.s("").c('\n')
+  sb.s("pub struct Aim {").c('\n')
+  sb.s("  pub file: U8[];").c('\n')
+  sb.s("}").c('\n')
+  sb.s("").c('\n')
+  sb.s("impl Aim {").c('\n')
+  sb.s("  pub fn empty(r: Self@): Bool {").c('\n')
+  sb.s("    return r.file.len <= 0;").c('\n')
+  sb.s("  }").c('\n')
+  sb.s("").c('\n')
+  sb.s("  fn same(r: Self@, b: Self@): Bool {").c('\n')
+  sb.s("    return r.file.equals(b.file);").c('\n')
+  sb.s("  }").c('\n')
+  sb.s("}").c('\n')
+  sb.s("").c('\n')
+  sb.s("pub fn long_head(one: U8[], two: U8[],").c('\n')
+  sb.s("  three: U8[]): Bool {").c('\n')
+  sb.s("  return one.len + two.len + three.len > 0;").c('\n')
+  sb.s("}").c('\n')
+  return sb.slice()
+
+fn test_a_source_link_is_split_into_two_names() //<
+  //< Splits a link into "the file's name" and "the symbol's name"
+  //<
+  //< **Reject a link without the mark** (taken as a source, a click would say "nothing passed in").
+  verdict.start("[kspage/source] splitting a link into two names test...")
+  got: = source.aim_of("src:kspage/model/doc.kspls#Inline.text")
+  assert(got.found, "it points at a source")
+  assert(got.file.equals("kspage/model/doc.kspls"), "the file's name comes out")
+  assert(got.name.equals("Inline.text"), "the symbol's name comes out")
+  // With no symbol it is the whole file.
+  whole: = source.aim_of("src:kspage/share/store.kspls")
+  assert(whole.found && whole.name.len <= 0, "write no symbol and it is the whole file")
+  // **A text without the mark is an ordinary link.**
+  assert(!source.aim_of("https://example.com/#x").found, "an ordinary link is refused")
+  assert(!source.aim_of("").found, "an empty one is refused too")
+  assert(!source.aim_of("src:").found, "with no file name it is refused")
+  assert(!source.aim_of("src:#name").found, "with the file name empty it is refused too")
+  // **Building and splitting are a pair.**
+  $sb: = Str_builder.new()
+  defer sb.free()
+  source.href_of("a/b.kspl", "Aim.empty", sb@)
+  back: = source.aim_of(sb.slice())
+  assert(back.file.equals("a/b.kspl") && back.name.equals("Aim.empty"),
+    "built and split it comes back")
+  sb.clear()
+  source.href_of("a/b.kspl", "", sb@)
+  assert(sb.slice().equals("src:a/b.kspl"), "with no symbol no `#` is written either")
+  verdict
+    .pass("a link splits into the two of a file and a symbol, and a text with no mark is refused.")
+
+fn test_a_symbol_is_cut_by_its_column() //<
+  //< A symbol at column 0 runs from its declaration's line to the closing at the same column
+  verdict.start("[kspage/source] cutting a symbol by its column test...")
+  $sb: = Str_builder.new()
+  defer sb.free()
+  src: = kspl_text(sb@)
+  got: = source.symbol_at(src, "Aim")
+  assert(got.found, "the struct is found")
+  cut: = src.sub(got.at, got.len)
+  assert(cut.starts_with("pub struct Aim {"), "it starts from the line of the declaration")
+  assert(cut.ends_with("}"), "it ends at the closing at the same column")
+  assert(cut.find_str("impl Aim") < 0, "the next declaration does not go in")
+  assert(got.line == 5, "it says which line it starts from (line 5)")
+  // **A declaration ending in `;` is one line.**
+  one: = source.symbol_at(src, "mark")
+  assert(one.found, "the const is found")
+  assert(src.sub(one.at, one.len).equals("priv const mark: U8[] = \"src:\";"), "it cuts at one line")
+  // **A wrapped signature is one symbol too** (the header does not end on one line).
+  long: = source.symbol_at(src, "long_head")
+  assert(long.found, "a signature that wrapped is found")
+  assert(src.sub(long.at, long.len).find_str("three: U8[]") >= 0, "the wrapped line goes in too")
+  assert(src.sub(long.at, long.len).ends_with("}"), "it goes in to the end of the contents")
+  verdict.pass("a symbol runs from the line of its declaration to the closing at the same column.")
+
+fn test_a_method_is_found_inside_its_impl() //<
+  //< The nesting goes one level only, and it looks inside column 2.
+  verdict.start("[kspage/source] looking for a function inside an impl test...")
+  $sb: = Str_builder.new()
+  defer sb.free()
+  src: = kspl_text(sb@)
+  got: = source.symbol_at(src, "Aim.empty")
+  assert(got.found, "the function inside the impl is found")
+  cut: = src.sub(got.at, got.len)
+  assert(cut.starts_with("  pub fn empty("),
+    "it starts from the line of the declaration at column 2")
+  assert(cut.find_str("fn same") < 0, "the next function does not go in")
+  // A function without `priv` can be found too.
+  assert(source.symbol_at(src, "Aim.same").found, "a function with no priv mark on it is found too")
+  // **Two levels are refused** (how a name maps to a column is not defined).
+  assert(!source.symbol_at(src, "Aim.empty.more").found, "a name of two tiers is refused")
+  assert(!source.symbol_at(src, "Aim.").found, "with the end empty it is refused too")
+  verdict
+    .pass("a function inside an impl is looked for at column 2, and a name of two tiers is refused.")
+
+fn test_a_missing_name_says_so() //< a missing name says "it is not there"
+  //<
+  //< **Do not return an empty one.**
+  verdict.start("[kspage/source] saying it is not there, of a name that is not there test...")
+  $sb: = Str_builder.new()
+  defer sb.free()
+  src: = kspl_text(sb@)
+  assert(!source.symbol_at(src, "nowhere").found, "a name that is not there is not found")
+  assert(!source.symbol_at(src, "Aim.nowhere").found,
+    "a function that is not there is not found either")
+  assert(!source.symbol_at(src, "std").found, "an import line is no declaration")
+  assert(!source.symbol_at(src, "io").found, "the middle of a text is no declaration")
+  assert(!source.symbol_at("", "Aim").found, "nothing comes out of an empty text")
+  // Where the name is empty it is the whole file.
+  whole: = source.symbol_at(src, "")
+  assert(whole.found && whole.at == 0 && whole.len == src.len,
+    "with the name empty it is the whole file")
+  assert(whole.line == 1, "the whole file is from line 1")
+  verdict.pass("a name that is not there says so, and returns no empty text.")
+
+fn test_only_a_few_schemes_open() //< only a link that may be opened passes
+  //<
+  //< **This is not about looks**: a `javascript:` link runs anything in the clicker's page. **It is
+  //< an allow-list of schemes** — a deny-list would silently let the next new scheme through.
+  verdict.start("[kspage/source] letting only a link that may be opened through test...")
+  assert(source.safe_href("https://example.com/"), "https comes through")
+  assert(source.safe_href("http://example.com/"), "http comes through too")
+  assert(source.safe_href("mailto:a@example.com"), "mailto comes through too")
+  assert(source.safe_href("notes/design.json"), "a relative path comes through")
+  assert(source.safe_href("#heading"), "within the same document comes through too")
+  assert(source.safe_href("a/b:c"), "a `:` behind a `/` is no scheme")
+  assert(!source.safe_href("javascript:alert(1)"), "javascript is not let through")
+  // **Do not tell upper case from lower.**
+  assert(!source.safe_href("JaVaScRiPt:alert(1)"), "a scheme is the same in upper case")
+  // **Drop leading whitespace and control characters before checking** (the browser does).
+  assert(!source.safe_href(" \tjavascript:alert(1)"), "a space put in front does not slip past")
+  assert(!source.safe_href("\njavascript:alert(1)"),
+    "a newline put in front does not slip past either")
+  assert(!source.safe_href("data:text/html,<script>x</script>"), "data is not let through either")
+  assert(!source.safe_href("vbscript:x"), "vbscript is not let through either")
+  assert(!source.safe_href("file:///etc/passwd"), "file is not let through either")
+  // **An unknown scheme does not pass.**
+  assert(!source.safe_href("kspage-run:whatever"), "a scheme not known is not let through either")
+  assert(!source.safe_href(""), "an empty one does not open")
+  verdict.pass("what opens is a relative path and http, https and mailto, and nothing else.")
+
+fn test_writing_out_drops_the_mark() //< exporting drops the mark
+  //<
+  //< **`src:` is a text for the screen and nowhere else.**
+  verdict.start("[kspage/source] dropping the mark when writing out test...")
+  aimed: = source.plain_href("src:kspage/model/doc.kspls#Inline.text")
+  assert(aimed.equals("kspage/model/doc.kspls"), "it becomes the file's path")
+  plain: = source.plain_href("https://example.com/")
+  assert(plain.equals("https://example.com/"), "an ordinary link stays as it is")
+  verdict.pass("the link written out is the file's path with the mark dropped.")

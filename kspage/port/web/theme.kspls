@@ -1,0 +1,35 @@
+//< The entry points that apply the document's look as one set (a theme)
+//<
+//< The core holds the list.
+//< Caution: **Do not copy it into the page** — the day a theme is added, the number the page offers
+//< and the number there are get out of step.
+//< A theme is applied only on a click.
+//< It is split from [`bridge.kspls`](bridge.kspls) for the 1000-line-per-file cap, and
+//< follows its boundary rules.
+import "kspage/port/web/state" + { ed, ensure, sheet }
+import "kspage/write/edit" as _edit
+import "kspage/write/shape" as _shape
+import "kspage/write/theme"
+
+// The number of themes that can be chosen.
+#export
+fn kspage_web_theme_count(): Sz
+  ensure()
+  return theme.count()
+
+// Writes theme `i`'s name and returns the length. 0 for a number out of range.
+#export
+fn kspage_web_theme_name(i: Sz): Sz
+  ensure()
+  state.out.clear()
+  if i < theme.count()
+    state.out.s(theme.at(i).name)
+  return state.out.len
+
+// Applies theme `i` to the style table. Returns 1 if anything changed.
+// **One undo restores it all** (only the core's two ends open an undo step). **Applying the same
+// colors again returns 0** (no undo step that restores nothing is recorded).
+#export
+fn kspage_web_wear_theme(i: Sz): I32
+  ensure()
+  return 1 if theme.wear(ed, sheet, i) else 0

@@ -1,0 +1,86 @@
+#!/usr/bin/env -S ksplc run
+//< It pins down at which boundary each of visibility's three levels closes
+//<
+//< The convention is "Visibility" in `docs/SPEC-language.md`; the properties pinned down are below.
+//< Caution: **Pair a case that fires with one that does not.** One kind alone notices neither too
+//< strict (closing at the folder) nor too loose (visible from anywhere).
+
+// ==========================================
+//   * no marker is visible across folders, as long as it is inside the package
+//   * no marker is invisible across packages
+//   * `pub` is visible across packages too
+//   * `priv` is invisible even from another file of the same package
+// ==========================================
+import "ksplc/tests/support/harness"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/subproc" { Job }
+import "std/verdict"
+
+priv const lib_body: U8[] = //< two folders of different depth inside the package `alpha`
+  "const secret: I32 = 7;\npub const open: I32 = 9;\npriv const hidden: I32 = 5;\n"
+
+priv struct Case //< one case
+  //<
+  //< extra_rel/extra_body are the additional file; entry is the file compiled.
+  name: U8[]
+  extra_rel: U8[]
+  extra_body: U8[]
+  entry: U8[]
+  expect: U8[] //< empty means the check is "no error is reported"
+
+priv const cases: Case[] = Case[]::{
+  Case::{ .name = "unspecified is visible from another folder inside the same package",
+    .extra_rel = "alpha/mid.kspl",
+    .extra_body = "import \"alpha/deep/lib\" as lib;\npub fn touch(): I32 { return lib.secret; }\n",
+    .entry = "alpha/mid.kspl", .expect = "" },
+  Case::{ .name = "unspecified is invisible across packages", .extra_rel = "beta/main.kspl",
+    .extra_body = "import \"alpha/deep/lib\" as lib;\nfn main(): I32 { return lib.secret; }\n",
+    .entry = "beta/main.kspl", .expect = "cannot access symbol 'secret'" },
+  Case::{ .name = "pub is visible across packages too", .extra_rel = "beta/main.kspl",
+    .extra_body = "import \"alpha/deep/lib\" as lib;\nfn main(): I32 { return lib.open; }\n",
+    .entry = "beta/main.kspl", .expect = "" },
+  Case::{ .name = "priv is invisible even from another file of the same package",
+    .extra_rel = "alpha/mid.kspl",
+    .extra_body = "import \"alpha/deep/lib\" as lib;\npub fn touch(): I32 { return lib.hidden; }\n",
+    .entry = "alpha/mid.kspl", .expect = "cannot access symbol 'hidden'" },
+}
+
+priv fn prepare(c: Case, index: Sz, arena: Arena$@): Job //<
+  //< It makes one case's directory, writes the files, and builds the Job to run there
+  $nb: = Str_builder.new()
+  defer nb.free()
+  name: = U8[]::arena.dup_str(nb.s("vis_\{index\}").slice())
+  dir: = harness.sandbox(name) catch
+    fallback U8$[]::{ .ptr = null, .len = 0 }
+  if dir.len == 0
+    return Job::{ .argv = U8[][]::{}, .cwd = "" }
+  rels: = U8[][]::{ "alpha/deep/lib.kspl", c.extra_rel }
+  bodies: = U8[][]::{ lib_body, c.extra_body }
+  fs.write_tree(dir, rels, bodies, arena) catch {}
+  return Job::{ .argv = harness.ksplc_argv(U8[][]::{ c.entry, "out.c" }), .cwd = dir }
+
+fn main(): I32
+  arena: = harness.begin(1 << 22)
+  io.out()
+    .s("# the boundary visibility closes at: \{cases.len\} (\{verdict.jobs()\} in parallel)\n")
+
+  jobs: = List<|Job|>.create(arena)
+  for $i: = 0; i < cases.len; i += 1
+    jobs.push(prepare(cases[i], i, arena))
+  outs: = harness.run_all(jobs.slice(), "visibility")
+
+  for $i: = 0; i < cases.len; i += 1
+    c: = cases[i]
+    out: = outs.get(i).out
+    if c.expect.len > 0
+      verdict.check(c.name, out.find_str(c.expect) >= 0, out)
+    else
+      // A pass means "no error", not the exit code, which may fail for another reason.
+      verdict.check(c.name, out.find_str("error:") < 0, out)
+  return harness.finish()

@@ -1,0 +1,221 @@
+import "kspage/lay/caret"
+import "kspage/lay/flow"
+import "kspage/lay/page" { Page, Panel }
+import "kspage/model/doc" + { Doc, Rect }
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/paint"
+import "kspage/model/style" { Arrange, Sheet, Shape }
+import "kspage/tests/base"
+import "kspage/write/block"
+import "kspage/write/edit"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// kspage: checks the connector that joins one box to another.
+//
+// **A connector has no position in the document**: it is computed from the two frames at every
+// layout — which edges are joined, which diagonal, and at which end the arrowhead goes.
+// The metrics are fixed (`kspage/model/fixed_font`).
+// ==========================================
+
+priv fn tie_sheet(arena: Arena$@): Sheet$@ //<
+  //< One slide, and a table with the styles for drawing a line
+  sheet: = Sheet.new(base.root_font(), arena)
+  slide: = sheet.add("slide", paint.inherit_all())
+  slide.arrange = Arrange.absolute
+  slide.width = 200.0
+  slide.height = 200.0
+  sheet.add("frame", paint.inherit_all())
+  line: = sheet.add("tie", paint.inherit_all())
+  line.shape = Shape.fall_arrow
+  line.rule_width = 2.0
+  return sheet
+
+priv fn named_frame(slide: doc.Block$@, name: U8[], at: Rect) //< adds one named frame
+  made: = doc.add_framed_child(slide, "frame", at)
+  made.name = name
+  made.add_text(name)
+
+priv fn tie(slide: doc.Block$@, from: U8[], to: U8[]): doc.Block$@ //<
+  //< Adds one connector joining two frames
+  made: = doc.add_framed_child(slide, "tie",
+    Rect::{ .x = 0.0, .y = 0.0, .w = 10.0, .h = 10.0 })
+  made.tie_from = from
+  made.tie_to = to
+  return made
+
+priv fn band_of(page: Page$@, b: doc.Block$@): Option<|Panel$@|> //<
+  //< The band that connector was laid out in
+  //<
+  //< **Returned in coordinates from the slide's top left** (a band is in screen coordinates).
+  for $i: Sz = 0; i < page.panels.len; i += 1
+    one: = page.panels.get(i)
+    if one.block == b
+      return Option<|Panel$@|>.some(one)
+  return Option<|Panel$@|>.none
+
+priv fn laid(d: Doc$@, sheet: Sheet$@, arena: Arena$@): Page$@
+  return flow.layout(d, sheet, fixed.make(), 200.0, arena)
+
+fn test_a_tie_joins_the_facing_sides() //<
+  //< Two frames side by side are joined at the middles of their facing edges
+  verdict.start("[kspage/absolute] a joining line carrying the facing edges test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  slide: = d.add_block("slide")
+  named_frame(slide, "A", Rect::{ .x = 10.0, .y = 10.0, .w = 40.0, .h = 20.0 })
+  named_frame(slide, "B", Rect::{ .x = 100.0, .y = 60.0, .w = 40.0, .h = 20.0 })
+  line: = tie(slide, "A", "B")
+  sheet: = tie_sheet(arena)
+
+  switch band_of(laid(d, sheet, arena), line) case .some(band)
+    // From the middle of A's right edge (50, 20) to the middle of B's left edge (100, 70).
+    corner: = base.near(band.rect.x, 50.0) && base.near(band.rect.y, 20.0)
+    assert(corner, "the top left is the middle of A's right edge")
+    size: = base.near(band.rect.w, 50.0) && base.near(band.rect.h, 50.0)
+    assert(size, "the band fences both ends")
+    falls: = band.shape.same_shape(Shape.fall_arrow)
+    assert(falls, "it becomes an arrow falling from upper left to lower right")
+  case .none
+    assert(false, "the joining line's band is laid")
+  verdict
+    .pass("a joining line is laid as a band carrying the middles of the edges facing each other.")
+
+fn test_a_tie_uses_the_taller_gap() //<
+  //< Two frames one above the other are joined at their top and bottom edges
+  //<
+  //< The direction in which they are further apart decides the edges.
+  verdict
+    .start("[kspage/absolute] frames apart up and down being joined at the top and bottom edges \
+      test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  slide: = d.add_block("slide")
+  named_frame(slide, "A", Rect::{ .x = 10.0, .y = 10.0, .w = 40.0, .h = 20.0 })
+  named_frame(slide, "B", Rect::{ .x = 20.0, .y = 120.0, .w = 40.0, .h = 20.0 })
+  line: = tie(slide, "A", "B")
+
+  switch band_of(laid(d, tie_sheet(arena), arena), line) case .some(band)
+    // From the middle of A's bottom edge (30, 30) to the middle of B's top edge (40, 120).
+    corner: = base.near(band.rect.x, 30.0) && base.near(band.rect.y, 30.0)
+    assert(corner, "the top left is the middle of A's bottom edge")
+    size: = base.near(band.rect.w, 10.0) && base.near(band.rect.h, 90.0)
+    assert(size, "the band is tall")
+  case .none
+    assert(false, "the joining line's band is laid")
+  verdict.pass("the edges in the bearing they are further apart in are joined.")
+
+fn test_a_backwards_tie_puts_the_head_at_the_near_end() //<
+  //< Where the other frame is to the upper left, the arrowhead is at the start
+  //<
+  //< The band alone does not give the direction.
+  verdict
+    .start("[kspage/absolute] the head of an arrow going left coming out at the starting end \
+      test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  slide: = d.add_block("slide")
+  named_frame(slide, "A", Rect::{ .x = 100.0, .y = 60.0, .w = 40.0, .h = 20.0 })
+  named_frame(slide, "B", Rect::{ .x = 10.0, .y = 10.0, .w = 40.0, .h = 20.0 })
+  line: = tie(slide, "A", "B")
+
+  switch band_of(laid(d, tie_sheet(arena), arena), line) case .some(band)
+    assert(band.shape.same_shape(Shape.fall_arrow_back), "the head comes out at the upper-left end")
+  case .none
+    assert(false, "the joining line's band is laid")
+  verdict.pass("where what it joins to lies in front, the head comes out at the starting end.")
+
+fn test_a_tie_follows_the_boxes() //< move a frame and the connector follows it
+  //<
+  //< **A connector has no position**, or it would get out of step with the frame.
+  verdict.start("[kspage/absolute] the line going with a frame that is moved test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  slide: = d.add_block("slide")
+  named_frame(slide, "A", Rect::{ .x = 10.0, .y = 10.0, .w = 40.0, .h = 20.0 })
+  named_frame(slide, "B", Rect::{ .x = 100.0, .y = 60.0, .w = 40.0, .h = 20.0 })
+  line: = tie(slide, "A", "B")
+  sheet: = tie_sheet(arena)
+  $was: F32 = 0.0
+  switch band_of(laid(d, sheet, arena), line) case .some(band)
+    was = band.rect.x
+  case .none
+    assert(false, "the joining line's band is laid")
+  // A is moved 20 to the right.
+  slide.children.get(0).frame = Option<|Rect|>
+    .some(Rect::{ .x = 30.0, .y = 10.0, .w = 40.0, .h = 20.0 })
+  switch band_of(laid(d, sheet, arena), line) case .some(band)
+    assert(base.near(was, 50.0) && base.near(band.rect.x, 70.0), "the line's ends move along too")
+  case .none
+    assert(false, "the band is laid after the moving too")
+  verdict.pass("a joining line is worked out from the two frames every time it is laid.")
+
+fn test_a_tie_without_its_partner_stays_where_it_says() //<
+  //< Where the other frame is not found, it appears at the stored position
+  //<
+  //< Dropped, a drawn connector would silently disappear.
+  verdict.start("[kspage/absolute] a line with no partner coming out at the place written test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  slide: = d.add_block("slide")
+  named_frame(slide, "A", Rect::{ .x = 10.0, .y = 10.0, .w = 40.0, .h = 20.0 })
+  line: = tie(slide, "A", "elsewhere")
+
+  switch band_of(laid(d, tie_sheet(arena), arena), line) case .some(band)
+    assert(base.near(band.rect.x, 0.0) && base.near(band.rect.y, 0.0),
+      "it comes out at the place written")
+  case .none
+    assert(false, "the joining line's band is laid")
+  verdict.pass("even where the other one is not found, the line does not go.")
+
+fn test_naming_a_frame_undoes_as_one_step() //< one undo restores a frame's name
+  //<
+  //< It is separate from a style's name.
+  verdict.start("[kspage/shape] putting a name on a frame test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  slide: = d.add_block("slide")
+  box: = doc.add_framed_child(slide, "frame",
+    Rect::{ .x = 10.0, .y = 10.0, .w = 40.0, .h = 20.0 })
+  n: = box.add_text("box")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 0)
+  // **Lay it out first, then call it** (where it goes is `named_at` in `../write/block.kspls`).
+  page: = laid(d, tie_sheet(arena), arena)
+
+  assert(ed.name_at(page).len == 0, "at first it holds no name")
+  assert(ed.set_name(page, "A"), "it can be put on")
+  assert(box.name.equals("A"), "the name goes on the frame itself")
+  assert(ed.name_at(page).equals("A"), "it reads back")
+  assert(!box.style.equals("A"), "the style's name does not change")
+  assert(ed.undo(), "it can be put back in one")
+  assert(box.name.len == 0, "the name comes off")
+  verdict.pass("a frame's name goes back in one undo, and the style's name does not move.")
+
+fn test_a_tie_survives_saving_and_loading() //<
+  //< The joined frame's name is saved, and is kept when read back
+  verdict
+    .start("[kspage/store] the partner joined to being left through a putting out and in test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  slide: = d.add_block("slide")
+  named_frame(slide, "A", Rect::{ .x = 10.0, .y = 10.0, .w = 40.0, .h = 20.0 })
+  named_frame(slide, "B", Rect::{ .x = 100.0, .y = 60.0, .w = 40.0, .h = 20.0 })
+  tie(slide, "A", "B")
+
+  back: = base.round_trip(d, tie_sheet(arena), arena)
+  kids: = back.doc.blocks.get(0).children
+  assert(kids.get(0).name.equals("A"), "the frame's name comes back")
+  line: = kids.get(2)
+  assert(line.tie_from.equals("A") && line.tie_to.equals("B"), "the partner joined to comes back")
+  verdict
+    .pass("both the partner joined to and the frame's name are left through a putting out and in.")

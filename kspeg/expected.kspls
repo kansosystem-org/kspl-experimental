@@ -1,0 +1,165 @@
+//< The position where the parse failed, and the list of what could have come there
+//<
+//< A syntax error's `expected …` is built from it. **This layer holds only how far the parse got
+//< and what could stand there**; it never reads the input itself. `kspeg/engine` applies the rule
+//< tree; `kspeg/rule` represents a rule.
+
+// ==========================================
+// Caution: Do not import engine or notation here; they use this, and importing back makes a cycle
+// (which is why the state lives in `Fail_track` itself, not in `Target`'s fields). It is split
+// from `engine` because it is read for a different reason ("Files near the limit and how they
+// split" in [kspeg](README.md)).
+// ==========================================
+import "kspeg/rule" { Rule }
+import "std/mem" { Arena }
+import "std/str" // `equals`
+
+pub const max_expected_labels: Sz = 8 //< how many `expected` labels one position may carry.
+  //<
+  //< Caution: Keep the number in this one place; with copies, raising one would write past the
+  //< buffer another sized. **Raising it does not help**: what overflows is the operators that
+  //< could continue an expression (after `x: = 1`, some thirty are recorded and `';'` comes last).
+
+pub const no_skippable: Sz = -1 //< the position that means "no skippable attempt is open".
+  //<
+  //< Caution: **It must be a value that matches no position**: with 0, a failure at the start of
+  //< the file would count as skippable.
+
+pub struct Expected //< one thing that could have come where the parse stopped
+  //<
+  //< Caution: **Do not mix literal text with a rule's name.** Literal text (`';'`) is typed as it
+  //< stands; a rule's name (`Identifier`) is not, and in the same quotes it reads as though
+  //< typing `'Identifier'` would work. Only the code that records it knows which, so it is kept.
+  pub text: U8[] //< the literal text, or a rule's name when `is_rule` is set
+  pub is_rule: Bool //< whether it is a rule's name rather than text a user types.
+    //<
+    //< The report phrases the two differently.
+  pub is_optional: Bool //< whether nothing had to be written here, so it did not stop the parse.
+    //<
+    //< An optional or a repetition that gave up before reading a character. **Ignoring this fills
+    //< the list with ways to continue**: forget a `;` after an expression and every operator is
+    //< listed at that position before `';'`, though only `';'` stopped the parse. Pass the list
+    //< through `order_expected` before reporting it.
+
+pub struct Fail_track //< one input's failure record: how far it got, and what could go there
+  //<
+  //< Caution: **Do not move the fields back into `Target`**: that makes the import cycle named at
+  //< the top of this file. There is one per input (`Target` creates and holds it); a `Target` that
+  //< only lends its grammar leaves its own unused.
+  pub max_fail_pos: Sz //< the furthest position where an expected spelling did not match.
+    //<
+    //< **A failure cut off by depth is not recorded here** (`Target.depth_exceeded_pos` keeps it).
+  pub expected_labels: Expected$@ //< what could have come at that position, up to the cap
+  pub expected_label_count: Sz //< how many of those are in use
+  pub deepest_try: Sz //< how far the lexical token being read has got.
+    //<
+    //< Caution: **Count only the failures inside the token** (where recording is suppressed). An
+    //< ordinary rule failing inside it (an expression inside interpolation) records at its own
+    //< position; counted here too, it would list the token's name at that position as well.
+  pub skippable_start: Sz //< where the innermost open skippable attempt began, or `no_skippable`.
+    //<
+    //< **Save it and restore it.** Attempts nest, so leaving it overwritten makes an outer
+    //< attempt look at an inner position.
+
+impl Fail_track
+  pub fn new(arena: Arena$@): Fail_track$@ //< an empty record; its label buffer is allocated once
+    //<
+    //< Caution: **Allocate `expected_labels` here, once.** Allocating per record grows the arena
+    //< with every failure, and one parse can fail over a million times.
+    return arena
+      .create(Fail_track::{
+      .expected_labels = Expected$@::arena.alloc(sizeof(Expected) * max_expected_labels),
+      .skippable_start = no_skippable,
+    })
+
+  pub fn reset(r: Self$@) //< empties the record for a new run, keeping its label buffer
+    r.max_fail_pos = 0
+    r.expected_label_count = 0
+    r.deepest_try = 0
+    r.skippable_start = no_skippable
+
+  pub fn track_token_fail( //< records that a lexical token could not be read, under its own name
+    //<
+    //< Caution: **Do not record a failure from inside the token as it is** (`character class`, or
+    //< one inside `_Name`). **Do not check the suppression here**: the caller
+    //< (parse_reference_impl) has already decided whether to record.
+    r: Self$@,
+    pos: Sz,
+    body: Rule$@, //< the token's own rule, searched for a spelling to name it by
+    name: U8[], //< the token's name, used where the body gives no spelling
+  )
+    switch body$ case .literal(text), .keyword_literal(text)
+      r.push_expected(pos, Expected::{ .text = text, .is_rule = false })
+    default
+      r.push_expected(pos, Expected::{ .text = name, .is_rule = true })
+
+  pub fn push_expected( //< records one thing that could have come at that position
+    r: Self$@,
+    pos: Sz, //< a position past `max_fail_pos` restarts the list
+    e: Expected,
+  )
+    if pos > r.max_fail_pos
+      r.max_fail_pos = pos
+      $first: = e
+      first.is_optional = pos == r.skippable_start
+      r.expected_labels$ = first
+      r.expected_label_count = 1
+    else if pos == r.max_fail_pos
+      $found: = false
+      $add: = e
+      add.is_optional = pos == r.skippable_start
+      for i in Range.asc(r.expected_label_count)
+        if (r.expected_labels + i).text.equals(add.text)
+          // Caution: **A label that stopped the parse wins.** The same text may already be listed
+          // as skippable, and if that mark stayed, an overflow would drop it first.
+          if !add.is_optional
+            (r.expected_labels + i).is_optional = false
+          found = true
+          break
+      if found
+        return
+      if r.expected_label_count < max_expected_labels
+        (r.expected_labels + r.expected_label_count)$ = add
+        r.expected_label_count += 1
+        return
+      // It overflowed. **Drop a label that need not be written**, or the operators that could
+      // continue the expression fill the list and the `';'` ending the statement never gets in
+      // (the order is explained at `order_expected`). The labels that stopped the parse never
+      // exceed the cap (one position requires no more than its grammar has).
+      for i in Range.asc(max_expected_labels)
+        if (r.expected_labels + i).is_optional
+          (r.expected_labels + i)$ = add
+          return
+
+  pub fn demote_expected_since( //< marks what a dropped branch recorded as not what stopped it
+    //<
+    //< Another branch read the input, so the dropped branch's failure did not stop the parse.
+    //< **Change only the mark; do not drop the label** (that text can still be written there). If
+    //< the failure position has advanced, the list was rebuilt, so every label is marked.
+    r: Self$@,
+    prev_pos: Sz, //< the failure position before that branch was tried
+    prev_n: Sz, //< the label count before that branch; the labels after it are the branch's own
+  )
+    $start: = prev_n
+    if r.max_fail_pos > prev_pos
+      start = 0
+    for $i: = start; i < r.expected_label_count; i += 1
+      (r.expected_labels + i).is_optional = true
+
+  pub fn order_expected(r: Self$@) //< moves what stopped the parse to the front, before reporting
+    //<
+    //< Labels at one position are recorded from the inside outward, so without reordering the
+    //< fixes (`';'` / `')'` / `'}'`) are buried behind operators that could continue the
+    //< expression. **Put the rest after them instead of dropping them**: what need not be written
+    //< can still be written there (after `f(`, both a parameter and a `)` can).
+    //< Caution: **Keep the order within each group**: inside to outside says which is closest.
+    $sorted: Expected[max_expected_labels] = ::{}
+    $n: Sz = 0
+    for pass in Range.asc(2)
+      for i in Range.asc(r.expected_label_count)
+        e: = (r.expected_labels + i)$
+        if e.is_optional == (pass == 1)
+          sorted[n] = e
+          n += 1
+    for i in Range.asc(n)
+      (r.expected_labels + i)$ = sorted[i]

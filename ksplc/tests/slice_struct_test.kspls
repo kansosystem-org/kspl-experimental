@@ -1,0 +1,61 @@
+import "std/verdict"
+
+// ==========================================
+// A slice held as an ordinary struct (`Slice<|$T|>` in `std/lang`).
+// **`T[]` is sugar for this type** ("`T[]` is sugar for `Slice<|$T|>`" in `../../docs/DESIGN.md`).
+// This file **writes `Slice<|...|>`**; `tests/suite/slice_struct_test.kspls` covers the sugar, and
+// `tests/runtime/slice_struct_out_of_bounds.kspls` an out-of-range access (which stops).
+// ==========================================
+$store: I32[4] = ::{ 10, 20, 30, 40 }
+
+priv fn total(s: Slice<|I32|>): I32 //< takes only the immutable version
+  $t: I32 = 0
+  for x in s
+    t += x
+  return t
+
+priv struct Frame
+  s: Slice<|$I32|>
+
+priv fn poke_through_frame(f: Frame@) //<
+  //< It writes to an element through a read-only frame
+  //<
+  //< `at` takes its receiver as `Self@`, so the returned pointer's type carries the permission
+  //< ("Where permission lives changes with whether it is owned" in `docs/DESIGN.md`).
+  f.s[0] = 77
+
+fn test_slice_struct_places()
+  verdict.start("[Slice] a slice held as a struct test...")
+  store = ::{ 10, 20, 30, 40 }
+  m: Slice<|$I32|> = ::{ .ptr = store[0]@, .len = 4 }
+
+  m[1] = 99
+  m[2] += 5
+  p: I32$@ = m[3]@
+  p$ = 7
+  assert(store[1] == 99, "slice struct: an assignment reaches the original area")
+  assert(store[2] == 35, "slice struct: a compound assignment reaches it")
+  assert(store[3] == 7, "slice struct: a mutable address can be taken")
+
+  // **The binding needs no `$`**, because `at` takes `Self@`; `Self$@` would make this fail.
+  assert(total(m) == 10 + 99 + 35 + 7,
+    "slice struct: the mutable version passes to an immutable parameter")
+
+  ro: Slice<|I32|> = ::{ .ptr = store[0]@, .len = 4 }
+  assert(ro[1] == 99, "slice struct: an element reads through the immutable version too")
+  assert(ro.len == 4, "slice struct: len reads")
+  verdict
+    .pass("with a struct slice, reading, assignment, compound assignment, taking an address and for \
+      in all go through.")
+
+fn test_slice_struct_in_readonly_frame()
+  verdict.start("[Slice] a slice put in a read-only frame test...")
+  store = ::{ 1, 2, 3, 4 }
+  f: Frame = ::{ .s = Slice<|$I32|>::{ .ptr = store[0]@, .len = 4 } }
+  poke_through_frame(f@)
+  assert(store[0] == 77,
+    "slice struct: an element is writable through a read-only frame (the shape the built-in \
+      refuses)")
+  verdict
+    .pass("what speaks of an element's permission is the returned pointer's type, not the frame's \
+      mutability.")

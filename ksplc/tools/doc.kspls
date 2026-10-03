@@ -1,0 +1,454 @@
+//< `ksplc doc`: what a file, one entry or a folder publishes, rendered from the source when asked
+//<
+//< It reads the lines `--emit-surface` reads (`surface_lines` in `tools/surface.kspls`), so the
+//< reference and the record cannot disagree. **Nothing is written to disk**: a declaration's own
+//< `//<` is the one copy of what it says, and this renders it on request, as Markdown.
+
+// ==========================================
+//     ksplc doc std            # every file std publishes, one line each
+//     ksplc doc std/io         # that file's entries
+//     ksplc doc std/mem.Arena  # one entry, with its members
+// ==========================================
+import "kspeg/engine" as kspeg
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/core" as base_core
+import "ksplc/base/locate" as base_locate
+import "ksplc/parse/layout" as parse_layout
+import "ksplc/parse/load" as parse_load
+import "ksplc/parse/source_fix" as parse_source_fix
+import "ksplc/tools/surface" as tools_surface
+import "std/chars" // `find_char`
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { dealloc }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt // `\{n\}` on a `Sz`
+
+priv struct Entry //< one of `surface_lines`' lines, taken apart
+  key: U8[] //< the entry's key within its file
+  text: U8[] //< the declaration as written
+  doc: U8[] //< its own description (**empty where there is none**)
+  owner: U8[] //< the declaration a part describes; **empty where the line is a declaration**
+  part: U8[] //< a parameter's name; **empty, with an owner, for the return value**
+  of_file: Bool //< whether the line is the file's own description (the text is in `doc`)
+
+priv fn entries_of(lines: List<|tools_surface.Line|>): List<|Entry|> //< the lines taken apart
+  $out: = List<|Entry|>.new(base_core.arena)
+  for l in lines
+    out
+      .push(Entry::{ .key = l.key, .text = l.text, .doc = l.doc,
+      .owner = tools_surface.owner_of(l.key), .part = tools_surface.part_name_of(l.key),
+      .of_file = tools_surface.is_file_row(l.key) })
+  return out
+
+priv fn shown(e: Entry): Bool //< whether the line is an entry of its own, not a part or the file
+  return !e.of_file && e.owner.len <= 0
+
+// ==========================================
+// Finding and reading the file. **A name resolves as `import` resolves it** (`name_as_found` and
+// `append_file_path` in `base/locate.kspls`), so `ksplc doc std/io` reads what `import "std/io"`
+// would, whatever `--std-dir` or `KSPLC_STD_DIR` says.
+// ==========================================
+
+priv fn file_path_of(logical: U8[]): U8[] //< the path a logical name's file is read from
+  found: = base_locate.name_as_found(logical)
+  $out: = Str_builder.new()
+  defer out.free()
+  base_locate.append_file_path(found, found.reads_as_laid_out(), out@)
+  return base_core.arena.dup_str(out.slice())
+
+priv fn folder_path_of(name: U8[]): U8[] //< the folder a name such as `std` or `ksai` stands for
+  //<
+  //< **`std` alone is std's folder**: the logical names under it start `std/`, so the bare name is
+  //< asked here rather than through `embed_disk_path`, which would look for it locally.
+  if name.equals("std")
+    return base_locate.std_dir()
+  return base_locate.embed_disk_path(name)
+
+priv fn read_lines(path: U8[], logical: U8[], parser: kspeg.Target$@): Option<|List<|Entry|>|> //<
+  //< One file's entries, or none where it cannot be read or parsed (the reason is printed)
+  //<
+  //< **The bytes are mended as the loader mends them** (`parse_layout.mend`), so a `.kspls` file
+  //< gives the record the same text a compile gives it.
+  raw: = io.read_file(path) catch e
+    io.err().s("ksplc doc: cannot read \{path\}: \{e\}\n")
+    return Option<|List<|Entry|>|>.none
+  defer dealloc(Void$@::raw.ptr)
+  $notes: = List<|parse_layout.Note|>.new(base_core.arena)
+  src: = base_core.arena
+    .dup_str(parse_layout.mend(raw, path.is_laid_out(), notes@, base_core.arena).code)
+  parse_source_fix.mask_shebang(src)
+  root: Ast_node$@ = parse_load.parse_raw_ast(src, logical, parser) catch
+    return Option<|List<|Entry|>|>.none
+  return Option<|List<|Entry|>|>.some(entries_of(tools_surface.surface_lines(root, src)))
+
+// ==========================================
+// Rendering. **Every heading's anchor is the one the renderer gives it**, so the contents' links
+// land where the Markdown is shown (a browser, an editor's preview).
+// ==========================================
+
+priv fn summary_of(doc: U8[]): U8[] //< the first sentence of a description
+  //<
+  //< **Only one sentence is kept**: a line in a list holding the whole description would be as
+  //< long as the entry.
+  //< Caution: **Cut at a period followed by a space**; one with none after it is inside a name
+  //< (`std/mem`, `1.5`).
+  $i: Sz = 0
+  for i + 1 < doc.len
+    if doc[i] == '.' && doc[i + 1] == ' '
+      return doc.sub(0, i + 1)
+    i += 1
+  return doc
+
+priv fn anchor_of(head: U8[], out: Str_builder$@) //< the anchor the renderer gives that heading
+  //<
+  //< Lower case; a space becomes `-`; word characters and `-` stay, the rest goes. **An `_` and a
+  //< byte of a multi-byte character stay too**, as the renderer keeps them.
+  for ch in head
+    if ch >= 'A' && ch <= 'Z'
+      out.c(ch - 'A' + 'a')
+    else if ch.is_alnum() || ch == '_' || ch == '-' || ch >= 0x80U8
+      out.c(ch)
+    else if ch == ' '
+      out.c('-')
+
+priv fn anchor_taken(seen: List<|U8[]|>$@, key: U8[]): U8[] //<
+  //< The anchor a heading over `key` gets, counting the ones given out before it
+  //<
+  //< **A repeat is numbered**: the second heading reducing to the same text gets `-1`, the third
+  //< `-2` (`#cfg(!freestanding)` and `#cfg(freestanding)` do collide).
+  $base: = Str_builder.new()
+  defer base.free()
+  anchor_of(key, base@)
+  $n: Sz = 0
+  for one in seen
+    if one.equals(base.slice())
+      n += 1
+  seen.push(base_core.arena.dup_str(base.slice()))
+  if n == 0
+    return base_core.arena.dup_str(base.slice())
+  return base_core.arena.text().s(base.slice()).c('-').s("\{n\}").take()
+
+priv fn anchors(rows: List<|Entry|>@): List<|U8[]|> //<
+  //< The anchor each row's heading gets, one per row (**empty where it gets none**)
+  //<
+  //< Caution: **Count in the order the headings are written**; the contents, written before the
+  //< entries, and a link inside a description both read this list.
+  $seen: = List<|U8[]|>.new(base_core.arena)
+  $out: = List<|U8[]|>.new(base_core.arena)
+  for r in rows
+    if shown(r)
+      out.push(anchor_taken(seen@, r.key))
+    else
+      out.push("")
+  return out
+
+priv fn names_entry(entry: U8[], name: U8[]): Bool //< whether `name` is that entry's key
+  //<
+  //< **A declaration written per configuration has its `#cfg` in the key** (`dealloc
+  //< #cfg(!freestanding)`), so the name is compared up to that mark; the first one gets the link.
+  return entry.equals(name) ||
+    (entry.starts_with(name) && entry.sub_from(name.len).starts_with(" #"))
+
+priv fn target_of(rows: List<|Entry|>@, links: List<|U8[]|>@, tail: U8[], name: U8[]): U8[] //<
+  //< The anchor a dotted name in a description links to, or empty
+  //<
+  //< **An entry keyed by the whole name comes first** (`Parser.parse`), then the file's own last
+  //< part with the entry the rest names (`mem.dealloc` inside `std/mem`). **Only this file's
+  //< entries link**: another file's name stays text, and `ksplc doc` on it shows it.
+  whole: = link_for(rows, links, name)
+  dot: = name.find_char('.')
+  if whole.len > 0 || dot <= 0 || !name.sub(0, dot).equals(tail)
+    return whole
+  return link_for(rows, links, name.sub_from(dot + 1))
+
+priv fn link_for(rows: List<|Entry|>@, links: List<|U8[]|>@, name: U8[]): U8[] //<
+  //< The anchor of the entry `name` names, or empty where none does
+  for i in Range.asc(rows.len)
+    if shown(rows.get(i)) && names_entry(rows.get(i).key, name)
+      return links.get(i)
+  return ""
+
+priv fn dotted_len(doc: U8[], from: Sz, close: Sz): Sz //<
+  //< How long the dotted name filling `[from, close)` is, or 0 where the span holds anything else
+  //<
+  //< The form the compiler accepts (`[W0211]`): at least two parts, call brackets only at the end.
+  $i: = from
+  $parts: Sz = 0
+  for
+    if i >= close || !(doc[i].is_alpha() || doc[i] == '_')
+      return 0
+    for i < close && (doc[i].is_alnum() || doc[i] == '_')
+      i += 1
+    parts += 1
+    if i < close && doc[i] == '.'
+      i += 1
+      continue
+    break
+  if parts < 2
+    return 0
+  name_end: = i
+  if i < close && doc[i] == '('
+    $depth: Sz = 0
+    for i < close
+      if doc[i] == '('
+        depth += 1
+      else if doc[i] == ')'
+        depth -= 1
+        if depth == 0
+          i += 1
+          break
+      i += 1
+  return name_end - from if i == close else 0
+
+priv fn linked(doc: U8[], rows: List<|Entry|>@, links: List<|U8[]|>@, tail: U8[]): U8[] //<
+  //< `doc` with each backquoted dotted name of this file's entries turned into a link to it
+  //<
+  //< Caution: **Leave a span already inside a link alone** (`[`name`](…)`); wrapped again, one
+  //< link would nest in another.
+  $out: = Str_builder.new()
+  defer out.free()
+  $copied: Sz = 0
+  $i: Sz = 0
+  for i < doc.len
+    if doc[i] != '`'
+      i += 1
+      continue
+    rel: = doc.sub_from(i + 1).find_char('`')
+    if rel < 0
+      break
+    close: = i + 1 + Sz::rel
+    got: = dotted_len(doc, i + 1, close)
+    if got > 0 && (i == 0 || doc[i - 1] != '[')
+      target: = target_of(rows, links, tail, doc.sub(i + 1, got))
+      if target.len > 0
+        out.s(doc.sub(copied, i - copied)).c('[').s(doc.sub(i, close + 1 - i)).s("](#").s(target)
+          .c(')')
+        copied = close + 1
+    i = close + 1
+  if copied == 0
+    return doc
+  out.s(doc.sub_from(copied))
+  return base_core.arena.dup_str(out.slice())
+
+priv fn next_label(doc: U8[], from: Sz): Sz //< where the next label after `from` starts
+  //<
+  //< **A label counts only after a space**; inside a word, or at the start of the description, it
+  //< splits nothing (cut there, the paragraph would start empty).
+  labels: U8[][2] = ::{ "Caution: ", "Note: " }
+  $best: = doc.len
+  for one in labels
+    $i: = from
+    for i < best
+      at: = doc.sub_from(i).find_str(one)
+      if at < 0
+        break
+      here: = i + at
+      if here > from && doc[here - 1] == ' '
+        if here - 1 < best
+          best = here - 1
+        break
+      i = here + one.len
+  return best
+
+priv fn say(doc: U8[], out: Str_builder$@) //< one description, written out as paragraphs
+  //<
+  //< **A label starts a paragraph of its own.** The comment is joined into one line, so a
+  //< `Caution:` would otherwise land mid-paragraph.
+  $at: Sz = 0
+  for at < doc.len
+    cut: = next_label(doc, at)
+    out.s(doc.sub(at, cut - at))
+    if cut >= doc.len
+      break
+    out.s("\n\n")
+    // Caution: **Step past the space at the cut**; otherwise the next pass finds the same label and
+    // never advances.
+    at = cut + 1
+
+priv fn write_parts(rows: List<|Entry|>@, links: List<|U8[]|>@, tail: U8[], key: U8[],
+  out: Str_builder$@) //<
+    //< The list of one declaration's parameters and its return value
+    //<
+    //< Caution: **Match the owner; do not trust the order.** A part's key ends in a mark that sorts
+    //< after letters, so `sub`'s parts land after `sub_from` and would be read as its parts.
+  $listing: = false
+  for r in rows
+    if r.of_file || !r.owner.equals(key)
+      continue
+    if !listing
+      out.c('\n')
+      listing = true
+    out.s("* ")
+    // **The return value has no name**, so it is described in words rather than left blank.
+    if r.part.len > 0
+      out.s("`").s(r.part).s("` — ")
+    else
+      out.s("**what comes back** — ")
+    out.s(linked(r.doc, rows, links, tail)).s("\n")
+
+priv fn write_entry(rows: List<|Entry|>@, links: List<|U8[]|>@, tail: U8[], at: Sz,
+  out: Str_builder$@) //<
+    //< One entry: its heading, the declaration as written, its description and its parts
+  r: = rows.get(at)
+  heading: = "###" if r.key.find_char('.') >= 0 else "##"
+  out.s("\n").s(heading).s(" `").s(r.key).s("`\n\n")
+  // **The declaration goes in a fence that names no language**: the fence keeps a generic's `|`
+  // from reading as a table column, and `impl X: Owned` alone is not a program.
+  out.s("```\n").s(r.text).s("\n```\n")
+  if r.doc.len > 0
+    out.c('\n')
+    say(linked(r.doc, rows, links, tail), out)
+    out.c('\n')
+  write_parts(rows, links, tail, r.key, out)
+
+priv fn tail_of(file: U8[]): U8[] //< a logical name's last part (`std/mem` gives `mem`)
+  at: = file.rfind_char('/')
+  return file if at < 0 else file.sub_from(at + 1)
+
+priv fn said_of_file(rows: List<|Entry|>@): U8[] //< the file's own description
+  for r in rows
+    if r.of_file
+      return r.doc
+  return ""
+
+priv fn entries_in(rows: List<|Entry|>@): Sz //< how many entries the file holds
+  $n: Sz = 0
+  for r in rows
+    if shown(r)
+      n += 1
+  return n
+
+priv fn scope_says(): U8[] //< the line saying what the reference holds
+  if base_core.config.surface_all
+    return "Everything a file here may reach, whether or not it is published \
+      (`--surface-scope=all`). **A declaration that is not `pub` is nobody outside to rely on.**"
+  return "What is published (`pub`); what is not is reachable only from inside the package."
+
+priv fn write_file(file: U8[], rows: List<|Entry|>@, out: Str_builder$@) //<
+  //< One file's reference: what it is for, what it holds, and every entry in it
+  //<
+  //< **The order is the record's** (by key), so a type's members follow it.
+  links: = anchors(rows)
+  tail: = tail_of(file)
+  out.s("# ").s(file).s(" — the API reference\n\n")
+  said: = said_of_file(rows)
+  if said.len > 0
+    say(linked(said, rows, links@, tail), out)
+    out.s("\n\n")
+  out.s(scope_says()).s(" `ksplc doc ").s(file).s(".<name>` shows one entry.\n\n## Contents\n\n")
+  for i in Range.asc(rows.len)
+    r: = rows.get(i)
+    if !shown(r)
+      continue
+    out.s("* [`").s(r.key).s("`](#").s(links.get(i)).s(")")
+    first: = summary_of(r.doc)
+    if first.len > 0
+      out.s(" — ").s(first)
+    out.c('\n')
+  out.s("\n---\n")
+  for i in Range.asc(rows.len)
+    if shown(rows.get(i))
+      write_entry(rows, links@, tail, i, out)
+
+priv fn write_one(file: U8[], rows: List<|Entry|>@, name: U8[], out: Str_builder$@): Sz //<
+  //< The entries `name` names: the entry itself and, for a type, its members; how many
+  //<
+  //< **A member is an entry whose key starts with the name and a `.`** (`Arena.alloc` under
+  //< `Arena`), so asking for a type shows what can be called on it.
+  links: = anchors(rows)
+  $n: Sz = 0
+  for i in Range.asc(rows.len)
+    r: = rows.get(i)
+    if !shown(r)
+      continue
+    if names_entry(r.key, name) ||
+      r.key.starts_with(base_core.arena.text().s(name).c('.').take())
+      if n == 0
+        out.s("# ").s(file).c('.').s(name).s("\n")
+      write_entry(rows, links@, tail_of(file), i, out)
+      n += 1
+  return n
+
+// ==========================================
+// A folder: every file in it that publishes, one line each
+// ==========================================
+
+priv fn skip_dir(name: U8[]): Bool //< `tests/`, build output, and git's own folder
+  //<
+  //< **`tests/` is skipped**: what a package's tests declare is nobody's to call.
+  return name.equals("tests") || fs.skip_build_output(name)
+
+priv fn write_folder(name: U8[], dir: U8[], parser: kspeg.Target$@, out: Str_builder$@): Bool //<
+  //< Every source under the folder that publishes something, with its summary
+  //<
+  //< False where the folder cannot be walked.
+  //< **A file that cannot be read is named, not dropped**: a listing missing a file reads exactly
+  //< like a folder that holds no such file.
+  paths: = fs.walk_files(dir, skip_dir, base_core.arena) catch e
+    io.err().s("ksplc doc: cannot read the folder \{dir\}: \{e\}\n")
+    return false
+  out.s("# ").s(name).s(" — the API reference\n\n").s(scope_says())
+    .s(" `ksplc doc <file>` shows one file's entries.\n\n")
+  $missed: = List<|U8[]|>.new(base_core.arena)
+  for path in paths
+    if !path.ends_with(".kspls") && !path.ends_with(".kspl")
+      continue
+    rest: = path.sub_from(dir.len + 1)
+    logical: = base_core.arena.text().s(name).c('/')
+      .s(rest.strip_suffix(".kspls").strip_suffix(".kspl")).take()
+    switch read_lines(path, logical, parser) case .some(rows)
+      if entries_in(rows@) == 0
+        continue
+      out.s("* `").s(logical).s("` — \{entries_in(rows@)\} entries")
+      first: = summary_of(said_of_file(rows@))
+      if first.len > 0
+        out.s(". ").s(first)
+      out.c('\n')
+    case .none
+      missed.push(logical)
+  if missed.len > 0
+    out.s("\nThese could not be read, so what they hold is not listed:\n\n")
+    for one in missed
+      out.s("* `").s(one).s("`\n")
+  return true
+
+// ==========================================
+// The entry point
+// ==========================================
+
+fn print_doc(target: U8[], parser: kspeg.Target$@): Bool //<
+  //< Prints the reference `target` names; false (with the reason printed) where it names nothing
+  //<
+  //< **The entry follows the first `.` after the last `/`** (`std/mem.Arena.alloc` is the file
+  //< `std/mem` and the entry `Arena.alloc`), since a logical name holds no `.`.
+  slash: = target.rfind_char('/')
+  dot_rel: = target.sub_from(slash + 1).find_char('.')
+  cut: = target.len if dot_rel < 0 else slash + 1 + Sz::dot_rel
+  name: = target.sub(0, cut)
+  key: = "" if cut >= target.len else target.sub_from(cut + 1)
+  $out: = Str_builder.new()
+  defer out.free()
+  path: = file_path_of(name)
+  if !fs.exists(path)
+    dir: = folder_path_of(name)
+    if key.len > 0 || !fs.is_dir(dir)
+      io.err().s("ksplc doc: no file or folder is called '\{name\}' (looked for \{path\})\n")
+      return false
+    if !write_folder(name, dir, parser, out@)
+      return false
+    io.out().s(out.slice())
+    return true
+  switch read_lines(path, name, parser) case .some(rows)
+    if key.len == 0
+      write_file(name, rows@, out@)
+    else if write_one(name, rows@, key, out@) == 0
+      io.err()
+        .s("ksplc doc: \{name\} publishes nothing called '\{key\}' (`ksplc doc \{name\}` lists what \
+          it does)\n")
+      return false
+  case .none
+    return false
+  io.out().s(out.slice())
+  return true

@@ -1,0 +1,212 @@
+#!/usr/bin/env -S ksplc run
+//< Stage 0 / ②: the evaluation harness for FIM (fill-in-the-middle) completion
+//<
+//< For each file in val.jsonl it hides single lines, has the model fill each, runs
+//< prefix+completion+suffix through ksplc, and measures the compile-pass rate and the exact-match
+//< rate. The main measure is **the compile-pass rate**, not a judgement.
+
+// ==========================================
+// Usage:
+//   ./out/eval_fim.exe --model=oracle   # the upper bound (the right answer inserted): 100%
+//   ./out/eval_fim.exe --model=empty    # the lower bound (nothing inserted): 0% by construction
+//   ./out/eval_fim.exe --model=native   # ksai/examples/fim_coder, K candidates per hole
+// ==========================================
+import "std/argp"
+import "std/chars"
+import "std/ds" { List }
+import "std/io"
+import "std/json" { Json_builder }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt"
+import "std/subproc"
+import "std/sys"
+import "tools/ai_assist/ksplc_oracle" as oracle
+
+priv const holes_per_file: Sz = 8 // the most holes taken from one file
+priv const stride: Sz = 3 // every third line that holds text is tried as a hole
+priv const stem: U8[] = "_eval_tmp"
+priv const vocab_path: U8[] = "tools/ai_assist/tokenizer/vocab.txt"
+priv const merges_path: U8[] = "tools/ai_assist/tokenizer/merges.txt"
+priv const holes_path: U8[] = "out/eval_fim_holes.jsonl"
+priv const answers_path: U8[] = "out/eval_fim_answers.jsonl"
+priv const coder_wait_ms: I32 = 3600000 // the cap on one run of the model over every hole
+
+priv struct Hole
+  prefix: U8[]
+  middle: U8[]
+  suffix: U8[]
+
+priv fn join_lines(lines: List<|U8[]|>$@, start: Sz, end: Sz, arena: Arena$@): U8[]
+  $b: = Str_builder.new()
+  defer b.free()
+  for $i: Sz = start; i < end; i += 1
+    if i > start
+      b.c('\n')
+    b.s(lines[i])
+  return arena.dup_str(b.slice())
+
+priv fn holes_of(code: U8[], arena: Arena$@): List<|Hole|> //<
+  //< The holes taken from one file: single non-blank lines, **each one needed for the compile**
+  //<
+  //< Caution: **Keep only a hole whose removal breaks the compile.** A comment or a blank line
+  //< still compiles when removed, so the empty completion would pass it and the rate could not
+  //< tell a model from nothing. Use `split('\n')`, not `lines` (the reason is at `corrupt_file` in
+  //< `make_error_fix.kspls`).
+  lines: = arena.create(code.split('\n', arena))
+  $out: = List<|Hole|>.new(arena)
+  $seen: Sz = 0
+  for $i: Sz = 1; i + 1 < lines.len && out.len < holes_per_file; i += 1
+    if lines[i].trim_spaces().len == 0
+      continue
+    seen += 1
+    if seen % stride != 0
+      continue
+    prefix: = arena.text().s(join_lines(lines, 0, i, arena)).c('\n').take()
+    suffix: = arena.text().c('\n').s(join_lines(lines, i + 1, lines.len, arena)).take()
+    if oracle.compiles(arena.text().s(prefix).s(suffix).take(), stem, arena)
+      continue
+    out.push(Hole::{ .prefix = prefix, .middle = lines[i], .suffix = suffix })
+  return out
+
+priv fn native_answers(holes: List<|Hole|>$@, coder: U8[], weights: U8[], samples: U8[],
+  arena: Arena$@): List<|List<|U8[]|>|> //<
+    //< Every hole's candidates from `fim_coder complete`, **run as its own process**
+    //<
+    //< The model stays out of this tool: the holes go out as one file and the answers come back as
+    //< another, one line each, in the same order.
+  $b: = Json_builder.new(arena)
+  $text: = Str_builder.new()
+  defer text.free()
+  for h in holes
+    b.obj().set("prefix", b.str_val(h.prefix)).set("suffix", b.str_val(h.suffix)).build()
+      .dump(text@)
+    text.c('\n')
+  io.write_file(holes_path, text.slice()) catch
+    io.err().s("[error] cannot write \{holes_path\}\n")
+    sys.exit(1)
+  argv: = U8[][]::{ coder, "complete",
+    arena.text().s("--vocab=").s(vocab_path).take(),
+    arena.text().s("--merges=").s(merges_path).take(),
+    arena.text().s("--weights=").s(weights).take(),
+    arena.text().s("--in=").s(holes_path).take(),
+    arena.text().s("--out=").s(answers_path).take(),
+    arena.text().s("--samples=").s(samples).take() }
+  r: = subproc.run_capture(argv, "", coder_wait_ms, 1024 * 1024, arena)
+  if r.spawn_failed || r.timed_out || r.exit_code != 0
+    io.err().s("[error] \{coder\} did not answer\n\{r.stderr_data\}")
+    sys.exit(1)
+  recs: = oracle.load_jsonl(answers_path, arena) catch
+    io.err().s("[error] cannot read \{answers_path\}\n")
+    sys.exit(1)
+  if recs.len != holes.len
+    io.err().s("[error] \{holes.len\} holes went out, \{recs.len\} answers came back\n")
+    sys.exit(1)
+  $out: = List<|List<|U8[]|>|>.new(arena)
+  for rec in recs
+    $one: = List<|U8[]|>.new(arena)
+    for c in rec.get("candidates").arr_list(arena)
+      one.push(c.as_str())
+    out.push(one)
+  return out
+
+priv fn first_passing(h: Hole, cands: List<|U8[]|>$@, arena: Arena$@): Sz //<
+  //< The position of the first candidate the compiler accepts, or `cands.len` if none does
+  //<
+  //< An empty candidate or a repeat is not compiled: the file without the hole is known to fail,
+  //< and a repeat can only give the same answer.
+  for i in Range.asc(cands.len)
+    c: = cands[i]
+    if c.trim_spaces().len == 0
+      continue
+    $again: = false
+    for j in Range.asc(i)
+      if cands[j].equals(c)
+        again = true
+    if again
+      continue
+    if oracle.compiles(arena.text().s(h.prefix).s(c).s(h.suffix).take(), stem, arena)
+      return i
+  return cands.len
+
+priv fn pct(n: Sz, t: Sz): F64 //< n out of t, as a percentage
+  return 100.0 * F64::n / F64::t
+
+fn main() //< measures the completion's compile-pass and exact-match rates
+  began: = sys.mono_us()
+  arena: = Arena.new(512 * 1024 * 1024)
+  defer arena.free()
+  $model: U8[] = "oracle"
+  $coder: U8[] = "out/fim_coder.exe"
+  $weights: U8[] = "out/fim_coder.safetensors"
+  $samples: U8[] = "4"
+  p: = argp.Parser
+    .create(sys.program_name(), "measure the compile-pass rate of FIM completion over val.jsonl",
+    arena)
+  p.str_opt("--model", model@, "the model scored (oracle / empty / native)")
+  p.str_opt("--coder", coder@, "native: the fim_coder executable (out/fim_coder.exe)")
+  p.str_opt("--weights", weights@, "native: the weights (out/fim_coder.safetensors)")
+  p.str_opt("--samples", samples@, "native: candidates per hole, the greedy one first (4)")
+  p.parse_or_exit(sys.args(), arena)
+  if !model.equals("oracle") && !model.equals("empty") && !model.equals("native")
+    io.err().s("--model must be oracle, empty or native\n")
+    sys.exit(2)
+
+  $val_path: = Str_builder.new()
+  defer val_path.free()
+  val_path.s(oracle.corpus_dir).s("/val.jsonl")
+  recs: = oracle.load_jsonl(val_path.slice(), arena) catch
+    io.err().s("[error] cannot read \{val_path.slice()\} (run build_corpus first)\n")
+    sys.exit(1)
+
+  // Only a file that compiles cleanly on its own gives holes (for a fair comparison).
+  $holes: = List<|Hole|>.new(arena)
+  $files: Sz = 0
+  $skipped: Sz = 0
+  for rec in recs
+    code: = rec.get("code").as_str()
+    if !oracle.compiles(code, stem, arena)
+      skipped += 1
+      continue
+    files += 1
+    for h in holes_of(code, arena)
+      holes.push(h)
+
+  $answers: = List<|List<|U8[]|>|>.new(arena)
+  if model.equals("native")
+    answers = native_answers(holes@, coder, weights, samples, arena)
+  else
+    for h in holes
+      $one: = List<|U8[]|>.new(arena)
+      one.push(h.middle if model.equals("oracle") else "")
+      answers.push(one)
+
+  $first: Sz = 0
+  $any: Sz = 0
+  $exact: Sz = 0
+  $most: Sz = 0
+  for i in Range.asc(holes.len)
+    h: = holes[i]
+    $cands: = answers[i]
+    if cands.len > most
+      most = cands.len
+    at: = first_passing(h, cands@, arena)
+    if at == 0
+      first += 1
+    if at < cands.len
+      any += 1
+    if cands.len > 0 && cands[0].trim_spaces().equals(h.middle.trim_spaces())
+      exact += 1
+
+  total: = holes.len
+  io.out().s("model=\{model\}  holes=\{total\} from \{files\} files  (skipped=\{skipped\}: ")
+    .s("they do not compile alone)\n")
+  if total > 0
+    io.out().s("  pass@1       : \{first\}/\{total\} = \{pct(first, total):.1\}%  ")
+      .s("(holes the first candidate fills so the file compiles)\n")
+    io.out().s("  pass@\{most\}       : \{any\}/\{total\} = \{pct(any, total):.1\}%  ")
+      .s("(holes any of \{most\} candidates fills so, the compiler choosing)\n")
+    io.out().s("  exact-match@1: \{exact\}/\{total\} = \{pct(exact, total):.1\}%  ")
+      .s("(holes the first candidate fills with the very line removed)\n")
+  took: = F64::(sys.mono_us() - began) / 1.0e6
+  io.out().s("evaluated in \{took:.1\} s = \{(took / 60.0):.1\} min\n")

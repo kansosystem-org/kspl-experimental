@@ -1,0 +1,82 @@
+//< The formatter's single path through a text
+//<
+//< It runs the import reordering, the printer, and the rounds that insert parentheses.
+//<
+//< **`ksplc fmt` and the lint both take this path**, so where the lint says a comment lands in the
+//< other notation (`[I0805]`), formatting puts it there. The work around it — reading the file,
+//< the BOM, the line terminator, the shebang, writing back — is in `file.kspls`.
+import "kspeg/engine" as kspeg
+import "ksplc/base/core" as base_core
+import "ksplc/base/lines" { line_end }
+import "ksplc/fmt/import" as fmt_import
+import "ksplc/fmt/printer" as fmt_printer + { Formatter }
+import "ksplc/fmt/style" { Config }
+import "ksplc/fmt/trivia" as fmt_trivia // the formatter's `catch_up_trivia`
+import "ksplc/parse/load" as parse_load
+import "std/str"
+
+priv const max_paren_rounds: Sz = 4 //< how many rounds of inserting parentheses may run
+
+fn format_text(given: U8[], path: U8[], parser: kspeg.Target$@, config: Config, to_layout: Bool,
+  from_layout: Bool): Formatter?parse_load.Parse_error //<
+    //< The formatter that printed `given`, holding its output
+    //<
+    //< `from_layout` says `given` was converted from the indentation notation, `to_layout` that it
+    //< is printed in that notation. The text the last round read is the formatter's `src`.
+    //< Caution: **Check `too_deep` before using the output** — where it is set the walk stopped
+    //< early, so the output is cut short and must not be written back.
+  $work: U8[] = given
+  $ast: = parse_load.parse_raw_ast(work, path, parser)?
+  // **Parse again once the order has changed** (the reason is at `fmt_import.reorder`).
+  sorted: = fmt_import.reorder(work, ast, base_core.arena)
+  if !sorted.equals(work)
+    work = sorted
+    ast = parse_load.parse_raw_ast(work, path, parser)?
+  $formatter: = Formatter.new(config, work, to_layout, from_layout)
+  formatter.format(ast)
+  // **A conditional value split outside every bracket gets parentheses**, which go into the text
+  // before it is parsed and formatted again (`Formatter.paren_spans`). Inserting them can push a
+  // later value along its line, so this repeats until none are needed; the bound keeps a
+  // pathological input from looping forever.
+  for _round in Range.asc(max_paren_rounds)
+    if formatter.paren_spans.len == 0 || formatter.too_deep
+      break
+    work = fmt_printer.with_parens(work, formatter.paren_spans@, base_core.arena)
+    formatter.free()
+    ast = parse_load.parse_raw_ast(work, path, parser)?
+    formatter = Formatter.new(config, work, to_layout, from_layout)
+    formatter.format(ast)
+  if !formatter.too_deep
+    formatter.catch_up_trivia(work.len, false)
+    formatter.end_with_one_nl()
+  return formatter
+
+fn given_offset(read: U8[], at: Sz, given: U8[]): Sz //<
+  //< Where the line comment at `at` in `read` sits in `given`
+  //<
+  //< `read` is the text the last round read, and `given` is the text `format_text` was given.
+  //<
+  //< **Neither the reordering nor the parentheses move such a comment to another line.** The
+  //< reordering copies what follows the imports unchanged (apart from blank lines it drops), and a
+  //< parenthesis never goes after a comment. **It answers only for a comment after the imports**;
+  //< the one caller asks about a comment after a `}`, which the imports cannot hold.
+  if read.equals(given)
+    return at
+  $line: = line_index(read, at) + line_index(given, given.len)
+  line -= line_index(read, read.len)
+  back: = line_end(read, at) - at
+  $start: Sz = 0
+  $seen: Sz = 0
+  for start < given.len && seen < line
+    if given[start] == '\n'
+      seen += 1
+    start += 1
+  stop: = line_end(given, start)
+  return stop - back if back <= stop - start else start
+
+priv fn line_index(text: U8[], at: Sz): Sz //< how many line ends come before `at`
+  $n: Sz = 0
+  for i in Range.asc(at)
+    if text[i] == '\n'
+      n += 1
+  return n

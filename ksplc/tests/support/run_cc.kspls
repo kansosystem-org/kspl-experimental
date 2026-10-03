@@ -1,0 +1,97 @@
+//< Helpers for checking the arguments passed to cc
+//<
+//< `ksplc run` starts the C compiler as a child, so **what was passed** is not visible from
+//< outside: `CC` is replaced by a stand-in that records argv, which this reads.
+//< **The verdict itself is not here** but in `run_test.kspls`, so a diff says which of the two
+//< was changed.
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/harness_build"
+import "ksplc/tests/support/run_progs"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/mem" { Arena }
+import "std/str"
+import "std/sys"
+
+fn build_probe(work: U8[], arena: Arena$@): U8[] //<
+  //< It builds the C compiler's stand-in and returns it (empty where it cannot build one)
+  //<
+  //< Caution: **Build it before replacing CC**, which it uses. **The name has to state the
+  //< notation** — `cc_probe_src` is in braces, and as `.kspls` it never builds, which looks like
+  //< "it cannot be run with the stand-in cc".
+  fs.write_tree(work, U8[][]::{ "cc_probe.kspl" }, U8[][]::{ run_progs.cc_probe_src }, arena) catch
+    return ""
+  gen: = fs.join(work, "cc_probe.c", arena)
+  src: = fs.join(work, "cc_probe.kspl", arena)
+  g: = harness.run_in(harness.ksplc_argv(U8[][]::{ src, gen }), work)
+  if g.code != 0
+    return ""
+  exe: = fs.join(work, "cc_probe.exe", arena)
+  b: = harness_build.build_exe(U8[][]::{ gen }, exe, U8[][]::harness_build.default_cflags)
+  return "" if b.code != 0 else exe
+
+struct Seen //< what the record shows, read one line at a time, counting only the `ARG:` lines
+  absolute: U8[] //< The first absolute path found (empty where there is none)
+  dumpmachine: Sz
+  c_files: Sz
+  objects: Sz
+  exe: Sz
+  // Objects after a `-o` already passed once: **twice, cc writes one file in parallel.** Only right
+  // after a -o, as the link lists the objects as inputs.
+  dup_objects: Sz
+
+priv fn seen_before(xs: List<|U8[]|>$@, a: U8[]): Bool //<
+  //< Whether that argument is already in the list
+  for x in xs
+    if x.equals(a)
+      return true
+  return false
+
+fn read_log(log: U8[], arena: Arena$@): Seen //<
+  //< It reads the record in log and counts the arguments its `ARG:` lines hold
+  //<
+  //< Caution: **Leave splitting into lines to `lines`**, which drops a trailing `'\r'`. Split by
+  //< hand, a record written in text mode on Windows counts **not one** `-dumpmachine`, `.c` or
+  //< `.o`, which looks like "it was not passed".
+  $out: = Seen::{ .absolute = "", .dumpmachine = 0, .c_files = 0, .objects = 0, .exe = 0,
+    .dup_objects = 0 }
+  $wrote: = List<|U8[]|>.new(arena)
+  $want_out: = false
+  for line in log.lines(arena)
+    if !line.starts_with("ARG:")
+      continue
+    a: = line.sub_from(4)
+    if want_out
+      want_out = false
+      if a.ends_with(".o")
+        if seen_before(wrote@, a)
+          out.dup_objects += 1
+        wrote.push(a)
+    want_out = a.equals("-o")
+    if sys.is_absolute(a) && out.absolute.len == 0
+      out.absolute = a
+    if a.equals("-dumpmachine")
+      out.dumpmachine += 1
+    if a.ends_with(".c")
+      out.c_files += 1
+    if a.ends_with(".o")
+      out.objects += 1
+    if a.equals("prog.new.exe")
+      out.exe += 1
+  return out
+
+fn link_call(log: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< The arguments of the call that linked, in order; empty where the record holds none
+  //<
+  //< The link is the call making `prog.new.exe`. **Split the record at its `CALL` lines**: the
+  //< compiles run in parallel, so an argument's position does not say whose it is.
+  $found: = List<|U8[]|>.new(arena)
+  $call: = List<|U8[]|>.new(arena)
+  for line in log.lines(arena)
+    if line.equals("CALL")
+      found = call if seen_before(call@, "prog.new.exe") else found
+      call = List<|U8[]|>.new(arena)
+    else if line.starts_with("ARG:")
+      call.push(line.sub_from(4))
+  return call if seen_before(call@, "prog.new.exe") else found

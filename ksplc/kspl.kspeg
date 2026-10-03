@@ -1,0 +1,306 @@
+// Kanso Language Grammar
+
+// === Only these three marks change in the notation written by indentation (`.kspls`) ===
+// Indentation, outdentation and a newline say the `{` `}` `;`, mended to them before the
+// analyser (`parse/layout.kspls`). **A check reads the rosters** (`make test-kspls`): mend them.
+// [opens] decl_extern_block decl_trait decl_struct decl_enum decl_impl stmt_block
+// [value] decl_import_selector_list String_content
+// [uses] decl_fn stmt_defer stmt_if stmt_loop stmt_match stmt_labeled_block expr_catch
+// [uses] expr_fn_lit
+// [ends] decl_import decl_embed decl_extern decl_top decl_directive decl_const decl_fn decl_alias
+// [ends] decl_trait decl_struct struct_field enum_variant stmt stmt_return stmt_throw
+// [ends] stmt_fallback stmt_break stmt_continue stmt_defer item_broken stmt_broken
+// [keeps] stmt_loop expr_fn_lit_sig
+// **[opens]** opens a block by `Block_open` / `Block_close`. **[value]** a brace that is a value
+// and remains (an `import … { … }`, a string's escape; a `::{` is another spelling). **[uses]**
+// draws `stmt_block` without opening one. **[ends]** ends a declaration or statement by
+// `Stmt_end`. **[keeps]** the `;` is no terminator and remains (a C-style loop, captures).
+// ==========================================
+
+program = top_level_item* !.
+
+visibility = 'pub' | 'priv'
+
+// Caution: **`item_broken` stands last and nowhere else**: alive only in the editor's lenient
+// run, it must follow every branch that failed.
+top_level_item =
+    attribute_list? ( decl_import
+    | decl_embed
+    | decl_extern_block
+    | visibility? decl_top
+    )
+    | item_broken
+
+item_broken = ~";\n" Stmt_end?
+
+decl_import = 'import' String ( 'as' Identifier )? ( decl_import_plus? decl_import_selector_list )? Stmt_end
+// Caution: **Not a bare `"+"`**: a separator literal drops in normalization; a rule stays a node.
+decl_import_plus = "+"
+decl_import_selector_list = "{" decl_import_selector ( "," decl_import_selector )* ","? "}"
+decl_import_selector = Identifier ( 'as' Identifier )?
+
+decl_embed = 'embed' String 'as' Identifier Stmt_end
+
+decl_extern_block = 'extern' String Block_open decl_extern* Block_close
+decl_extern = attribute_list? visibility? ( decl_fn_proto | decl_var | decl_extern_struct ) Stmt_end
+decl_extern_struct = 'struct' Identifier
+
+decl_top =
+    decl_const
+    | decl_var Stmt_end
+    | decl_alias
+    | decl_struct
+    | decl_enum
+    | decl_trait
+    | decl_impl
+    | decl_fn
+    | decl_directive
+
+// Caution: **Write no directive names here**: their one origin is `directive_shape` in
+// `sema/decl/attrs.kspls`. `##` opens one (`#!` is a shebang's); both argument shapes are taken
+// and sema refuses a mismatch — a named choice would wrap each argument in a node to peel.
+decl_directive = Directive_prefix "(" ( lint_setting | expr ) ( "," ( lint_setting | expr ) )* ")"Stmt_end
+lint_setting = Identifier "=" Identifier
+
+// The type may be omitted **for a local alone**; decl_top and stmt share these rules.
+decl_const = attribute_list? 'const' Identifier ( ":" type_expr )? "=" expr Stmt_end
+
+decl_var = decl_var_item ( "," decl_var_item )*
+
+decl_var_item = attribute_list? "$"? Identifier ":" type_expr? ( "=" expr )?
+
+decl_fn_proto = 'fn' Identifier type_gen_params? type_fn_sig
+decl_fn = decl_fn_proto ( stmt_block | Stmt_end )
+
+type_fn_sig = "(" param_list? ")" ( ":" type_expr )?
+param_list = ( fn_param ( "," fn_param )* ( "," "..." )? ","? ) | "..."
+fn_param = "$"? Identifier ( ":" type_expr )? ( "=" expr )?
+
+type_gen_params = "<|" type_gen_param ( "," type_gen_param )* ","? "|>"
+type_gen_param  = ( 'const' Identifier ( ":" type_expr )? ) | "$"? Identifier ( ":" type_constraint )?
+type_constraint = type_path ( "+" type_path )*
+
+decl_alias = 'typedef' Identifier "=" type_expr Stmt_end
+
+// A method is a declaration alone or holds a default body (`sema/decl/trait_default.kspls`).
+// Caution: **The declaration-alone side goes first**: `decl_fn` swallows the `;` too, and
+// swapped, what looks for `decl_fn_proto` (the vtable's assembly) silently sees nothing.
+decl_trait =
+    'trait' Identifier type_gen_params?
+    Block_open ( attribute_list? visibility? ( decl_fn_proto Stmt_end | decl_fn ) )* Block_close
+
+// A `struct S;` is an opaque type sized by `#size` / `#align` (check_struct_decl_shape in
+// sema/decl/collect.kspls). **No empty body**: `struct S {}` would be a second spelling of it.
+decl_struct =
+    'struct' Identifier type_gen_params?
+    ( Block_open struct_field+ Block_close | Stmt_end )
+
+struct_field = visibility? Identifier ":" type_expr Stmt_end
+
+// The values close with `;` as fields do; **a `,` is not let through** ("9.5 Every item in a
+// declaration block ends with `;`" in `../docs/DESIGN.md`). **No empty body**: C refuses it
+// after sema.
+decl_enum =
+    'enum' Identifier type_gen_params? ( ":" type_expr )?
+    Block_open enum_variant+ Block_close
+
+enum_variant =
+    Identifier ( "(" enum_field ( "," enum_field )* ","? ")" )? ( "=" expr )? Stmt_end
+enum_field = Identifier ":" type_expr
+
+decl_impl = 'impl' type_gen_params? type_expr ( ":" type_path )?
+    Block_open ( attribute_list? visibility? decl_fn )* Block_close
+
+// Caution: **`stmt` does not draw this**: a lone `{ … }` reads as the previous statement's
+// continuation, so the parse stops at the `{` and names the label to put on.
+stmt_block = Block_open stmt* Block_close
+
+stmt = attribute_list? (
+    stmt_labeled_block
+    | stmt_return
+    | stmt_throw
+    | stmt_fallback
+    | stmt_break
+    | stmt_continue
+    | stmt_defer
+    | stmt_if
+    | stmt_loop
+    | stmt_match
+    | decl_const
+    | decl_var Stmt_end
+    | stmt_expr Stmt_end
+    )
+    | stmt_broken
+
+// It swallows to the statement's end or the block's close, leaving the `}` for the block around.
+stmt_broken = ~";}\n" Stmt_end?
+
+stmt_return   = 'return' expr? Stmt_end
+stmt_throw    = 'throw' expr Stmt_end
+stmt_fallback = 'fallback' expr Stmt_end
+stmt_break    = 'break' Identifier? Stmt_end
+stmt_continue = 'continue' Identifier? Stmt_end
+// A statement or a block; the normalizer gives both the block shape
+// (`normalize_defer_stmt` in parse/normalize_stmt.kspls).
+stmt_defer    = 'defer' ( stmt_block | stmt_expr Stmt_end )
+
+// A condition is an expression or **an Option binding, tried first** (else `expr` eats the name
+// and sticks at the `:`); the binding is `Option`'s alone (§7.1 of `../docs/SPEC-language.md`).
+// Caution: **Not a user's enum**: a variant added later would make a branch that silently passes.
+stmt_if = label? 'if' ( if_bind | expr ) stmt_block ( 'else' ( stmt_block | stmt_if ) )?
+if_bind = Identifier ":" "=" expr
+
+label = Identifier ":"
+
+stmt_loop = label? 'for' (
+    Identifier 'in' expr stmt_block
+    | loop_init? ";" expr? ";" loop_step? stmt_block
+    | expr stmt_block
+    | stmt_block
+)
+loop_init = decl_var | stmt_expr
+loop_step = stmt_expr ( "," stmt_expr )*
+
+stmt_match = label? 'switch' expr ( 'case' match_pattern ( "," match_pattern )* stmt_block )+ ( 'default' stmt_block )?
+stmt_labeled_block = label stmt_block
+match_pattern = ( "." Identifier ( "(" identifier_list ")" )? ) | expr
+identifier_list = Identifier ( "," Identifier )*
+
+stmt_expr = expr ( assign_op expr )?
+assign_op = "<<=" | ">>=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "="
+
+expr = expr_ternary
+expr_ternary = expr_catch_chain ( 'if' expr_catch_chain 'else' expr_ternary )?
+
+// catch sits inside the ternary and outside `||` (`a || b catch 0` is `(a || b) catch 0`).
+// Caution: **At most one catch**: after the first the subject is `T`, and `*` would accept what
+// sema always refuses. expr_catch stays a rule: the formatter and the flow check read its node.
+expr_catch_chain = expr_or ( expr_catch )?
+expr_catch = 'catch' ( Identifier? stmt_block | expr_or )
+
+expr_or    = expr_and ( "||" expr_and )*
+expr_and   = expr_cmp ( "&&" expr_cmp )*
+expr_cmp   = expr_add ( ( "==" | "!=" | "<=" | ">=" | "<" | ">" ) expr_add )*
+expr_add   = expr_mul ( ( "+" | "-" | "|" | "^" ) expr_mul )*
+expr_mul   = expr_unary ( ( "*" | "/" | "%" | "&" !"&" | "<<" | ">>" ) expr_unary )*
+
+// Caution: **Do not gather `sizeof`'s two lines into one choice**: a PEG keeps the branch that
+// succeeded, so on `sizeof(n + 1)` `type_expr` takes `n` and the `+` sinks it (`case .choice`
+// in `kspeg/engine.kspls`); the memo spares the reread.
+expr_unary =
+    "-" expr_unary
+    | "!" expr_unary
+    | "~" expr_unary
+    | 'sizeof' "(" type_expr ")"
+    | 'sizeof' "(" expr ")"
+    | 'offsetof' "(" type_expr "," Identifier ")"
+    | expr_cast
+    | expr_postfix
+
+// A cast sits at unary's level and is entered only where one stands.
+// Caution: **Before expr_postfix**: `::` is no postfix operator, so that side eats `T` of `T::x`.
+expr_cast = type_expr "::" expr_unary
+
+expr_postfix = expr_primary (
+    ( "." Identifier type_args? )
+    | ( "[" expr "]" )
+    | ( "(" expr_args? ")" )
+    | "?"
+    | "@"
+    | "$"
+)*
+
+expr_implicit_dot = "." Identifier ( "(" expr_args? ")" )?
+
+expr_primary =
+    expr_fn_lit
+    | Literal
+    | expr_compound
+    | Primitive_type
+    | expr_implicit_dot
+    | expr_path
+    | "(" expr ")"
+
+// A function literal: no name after `fn`, and a body. **A `;` after the arguments makes it a
+// closure** (even `fn(x: I32; )`; parse/desugar.kspls); its own rule keeps captures off a type.
+expr_fn_lit = 'fn' expr_fn_lit_sig stmt_block
+expr_fn_lit_sig = "(" param_list? ( ";" capture_list? )? ")" ( ":" type_expr )?
+
+// A capture writes its name and type: only a local may omit one (`../docs/SPEC-language.md` §4.1).
+capture_list = fn_param ( "," fn_param )* ","?
+
+expr_path = Identifier type_args?
+type_path = Identifier type_args? ( "." Identifier type_args? )*
+type_args = "<|" type_arg ( "," type_arg )* ","? "|>"
+type_arg = ( "$" type_expr ) | type_expr | expr
+
+expr_args = expr ( "," expr )* ","?
+expr_compound =
+    ( type_expr &"::{" )? "::{" ( expr_field_init ( "," expr_field_init )* ","? )? "}"
+expr_field_init = ( ( "." Identifier | "[" expr "]" ) "=" )? expr
+
+type_expr = type_atom type_postfix*
+// A `$` before a sized `[N]` parses so that sema refuses it naming the fix (the binding carries
+// the writability, `$name: U8[N]`; `ksplc/sema/decl/resolve.kspls`).
+type_postfix = ( "?" type_expr ) | ( "$"? "[" expr? "]" ) | ( "$"? "@" )
+
+type_atom =
+    'fn' type_fn_sig
+    | Primitive_type
+    | type_path
+    | "(" type_expr ")"
+
+// An attribute stands **before** its subject, even the visibility; `#` covers what comes next,
+// `##` the file around it.
+// Caution: **Do not part them by `!`**: it cannot be told from `#cfg(!x)` or the shebang.
+attribute_list = attribute+
+attribute = Attribute_prefix ( "(" expr ( "," expr )* ")" )?
+
+// === Lexical tokens ===
+// **A syntax error names these rules** (`track_token_fail` in `kspeg/expected.kspls`):
+// `Primitive_type` reads `a primitive type`, and a one-spelling rule reads its spelling.
+// Caution: **Do not abbreviate; make them ordinary words separated by `_`**.
+
+// **The three are capital-initial**, so each is one token and behaves as the braces or the `;`
+// written; the heading's `[opens]` / `[uses]` / `[ends]` say which rules hold them.
+Block_open  = "{"
+Block_close = "}"
+Stmt_end    = ";"
+
+Identifier = _Name
+
+// **It is `_`-initial, so it makes no node**: through `Identifier` the marked spellings below
+// would carry a bare-name child, and the walkers could not settle which to read.
+_Name = !_Keyword [A-Za-z_] [A-Za-z0-9_]*
+
+// Caution: **Keep the spelling a capital-initial rule**: a lower-case one reads past whitespace,
+// so `# cfg`, even across lines, would pass; as one token the mark cannot stand apart.
+Attribute_prefix = "#" _Name
+Directive_prefix = "##" _Name
+
+// **The grammar says only that a backslash and one character are one unit**: the roster is
+// `literal_escape_byte` / `is_known_escape` in `ksplc/base/literal.kspls`, and sema refuses.
+String  = "\"\"\"" ( !"\"\"\"" . )* "\"\"\"" | ["] String_part* ["]
+
+String_part = String_expr | String_content
+String_expr = "\\{" _Space expr ( ":" Format_spec )? _Space "\\}"
+String_content = ( "\\" !"{" !"}" . | !["\\] . )+
+Format_spec = [0-9,.xXc]+
+
+Literal = Float | Integer | String | Char | Bool | Null
+
+Integer = ( "0x" [0-9A-Fa-f_]+ | "0b" [01_]+ | [0-9] [0-9_]* ) ( ( "I" | "U" ) ( "8" | "16" | "32" | "64" )? | 'Sz' )?
+Float   = [0-9] [0-9_]* "." [0-9_]+ ( [eE] [+\-]? [0-9_]+ )? ( "F32" | "F64" )?
+Bool    = 'true' | 'false'
+Null    = 'null'
+Char    = ['] ( "\\" . | !['\\] . )+ [']
+
+Primitive_type = 'I8' | 'I16' | 'I32' | 'I64' | 'U8' | 'U16' | 'U32' | 'U64' | 'F32' | 'F64' | 'Bool' | 'Void' | 'Sz'
+
+// === Meta and transparent rules (where undefined, the engine's default values are adopted) ===
+// Caution: **kanso_space_skipper in ksplc/parse/load.kspls reads past**; this only declares the
+// engine's default. Mend one alone and they disagree.
+_Space         = ( [ \t] | _New_line | _Line_comment )*
+_Boundary      = [A-Za-z0-9_]
+_Line_comment  = "//" ( !_New_line . )*
+_New_line      = "\r\n" | "\n" | "\r"

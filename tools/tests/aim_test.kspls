@@ -1,0 +1,208 @@
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+import "tools/kspage_aim" as aim
+
+// ==========================================
+// Tests the URL that opens kspage and the paths in the note (`tools/kspage_aim.kspls`).
+//
+// It is tested because **a mistake here breaks nothing visible**: a badly built URL opens the page,
+// which stays blank and says nothing. `make kspage` uses the same code, so this also keeps the
+// building from moving back into the Makefile.
+// ==========================================
+
+fn test_the_url_keeps_the_token_last() //< the query goes before the fragment, the token last
+  verdict.start("[tools/kspage_aim] building the URL that opens test...")
+  $sb: = Str_builder.new()
+  defer sb.free()
+  got: = aim.url_for("http://127.0.0.1:8080/#t=abc123", "kspage/model/filter.kspls", false, sb@)
+  assert(got.equals("http://127.0.0.1:8080/?doc=kspage/model/filter.kspls#t=abc123"),
+    "the query goes before the fragment")
+  // Caution: **The token must stay last**, or the page opens but no file can be read.
+  assert(aim.token_in_url(got).equals("abc123"), "the token is still readable after building")
+  sb.clear()
+  // The query is added even to a URL with no fragment (kssrv printed no token).
+  bare: = aim.url_for("http://127.0.0.1:8080/", "a.kspl", false, sb@)
+  assert(bare.equals("http://127.0.0.1:8080/?doc=a.kspl"), "it builds with no fragment")
+  sb.clear()
+  // **`#`, `?` and a space must be escaped** (or the name is cut off there).
+  odd: = aim.url_for("http://h:1/#t=k", "my doc#2?.kspl", false, sb@)
+  assert(odd.equals("http://h:1/?doc=my%20doc%232%3F.kspl#t=k"),
+    "#, ? and a space in a name are escaped")
+  sb.clear()
+  // Caution: **A Windows separator (`out\sample.kspage`) must become `/`**, or the URL keeps a
+  // byte that is not a separator there.
+  won: = aim.url_for("http://h:1/#t=k", "out\\sample.kspage", true, sb@)
+  assert(won.equals("http://h:1/?doc=out/sample.kspage#t=k"), "a Windows separator becomes /")
+  sb.clear()
+  // **On POSIX it must not change** (`\` can be part of a file name).
+  kept: = aim.url_for("http://h:1/#t=k", "out\\sample.kspage", false, sb@)
+  assert(kept.equals("http://h:1/?doc=out\\sample.kspage#t=k"),
+    "on POSIX \\ is left as part of the name")
+  verdict
+    .pass("the query goes before the fragment, the token is left last, marks in a name are escaped.")
+
+fn test_what_the_server_printed() //< the URL, port and token come out of the start-up line
+  verdict.start("[tools/kspage_aim] reading the line put out at start-up test...")
+  log: =
+    "kssrv: I: listening on 127.0.0.1:8080, root=.\nkssrv: I: open \
+      http://127.0.0.1:8080/#t=zz\nkssrv: I: ready\n"
+  got: = aim.url_in_log(log)
+  assert(got.equals("http://127.0.0.1:8080/#t=zz"), "only the line with the URL to open is taken")
+  assert(aim.port_in_url(got).equals("8080"), "the port comes out of the URL")
+  assert(aim.token_in_url(got).equals("zz"), "the token comes out of the URL")
+  // Caution: **Do not guess where there is none**; before the line arrives, the result is empty.
+  assert(aim.url_in_log("kssrv: I: listening on 127.0.0.1:8080\n").len == 0,
+    "where there is none yet it is empty")
+  assert(aim.token_in_url("http://127.0.0.1:8080/").len == 0, "where there is no token it is empty")
+  // **Look for the port only after the `://` and before the first `/`** (the reason is at
+  // `port_in_url`).
+  assert(aim.port_in_url("http://127.0.0.1/#t=a:b").len == 0, "where there is no port it is empty")
+  assert(aim.port_in_url("http://h:99/#t=a:b").equals("99"),
+    "a `:` in the fragment is not made the port")
+  verdict
+    .pass("the URL comes out of the line that opens, then the port and the token; none gives empty.")
+
+fn test_a_port_that_cannot_be_waited_on() //< a string that is not a port becomes 0
+  verdict.start("[tools/kspage_aim] refusing a port that cannot be waited on test...")
+  assert(aim.port_num("8080") == 8080, "an ordinary port becomes a number")
+  assert(aim.port_num("1") == 1, "the low end gets through")
+  assert(aim.port_num("65535") == 65535, "the high end gets through")
+  assert(aim.port_num("") == 0, "empty is refused")
+  assert(aim.port_num("80a") == 0, "a non-numeric string is refused")
+  // Caution: **Check the range too.** Truncated to 16 bits, 65536 silently becomes another port.
+  assert(aim.port_num("65536") == 0, "outside the high end is refused")
+  assert(aim.port_num("0") == 0, "port 0 is refused")
+  assert(aim.port_num("-1") == 0, "a negative number is refused too")
+  verdict
+    .pass("only a port that gets through becomes a number; out of range and non-numeric give 0.")
+
+fn test_the_note_lists_the_running_servers() //< the note is a run of records, newest first
+  verdict.start("[tools/kspage_aim] the note of the running servers test...")
+  $one: = Str_builder.new()
+  defer one.free()
+  first: = aim.state_text("http://127.0.0.1:8080/#t=k9", ".", "", one@)
+  assert(aim.state_count(first) == 1, "start one and there is one record")
+  a: = aim.state_record(first, 0)
+  assert(a[0].equals("http://127.0.0.1:8080/#t=k9"), "a record holds the URL to open")
+  assert(a[1].equals("."), "a record holds the folder being served")
+  // A server for a different folder is **added**, not written over (written over, the first one is
+  // lost, holding its port with nobody able to reuse it).
+  $two: = Str_builder.new()
+  defer two.free()
+  both: = aim.state_text("http://127.0.0.1:8081/#t=zz", "/home/me/docs", first, two@)
+  assert(aim.state_count(both) == 2, "a different folder makes two records")
+  assert(aim.state_record(both, 0)[1].equals("/home/me/docs"), "the newer one comes first")
+  assert(aim.state_record(both, 1)[1].equals("."), "the one started first is left too")
+  // Serving the same folder again drops the old record.
+  $again: = Str_builder.new()
+  defer again.free()
+  fresh: = aim.state_text("http://127.0.0.1:8082/#t=n1", ".", both, again@)
+  assert(aim.state_count(fresh) == 2, "records for the same folder do not grow")
+  assert(aim.state_record(fresh, 0)[0].equals("http://127.0.0.1:8082/#t=n1"),
+    "the newer one is left")
+  assert(aim.state_record(fresh, 1)[1].equals("/home/me/docs"),
+    "a record for a different folder is left")
+  verdict
+    .pass("the note is a newest-first run of records, and only the same folder's old record drops.")
+
+fn test_a_note_that_was_cut_short() //< a note cut off partway is read as far as it goes
+  //<
+  //< Caution: **Do not abort on it.**
+  verdict.start("[tools/kspage_aim] reading a note that was cut short test...")
+  assert(aim.state_count("") == 0, "an empty note has no record")
+  // A note with one line (a run that died mid-write) holds no record.
+  assert(aim.state_count("http://h:1/#t=k\n") == 0, "a note with only a URL is not a record")
+  assert(aim.state_count("http://h:1/#t=k\n.\n") == 1, "two lines together make one record")
+  assert(aim.state_record("http://h:1/#t=k\n", 0)[1].len == 0, "a line that is not there is empty")
+  assert(aim.state_record("http://h:1/#t=k\n.\n", 9)[0].len == 0, "a record not there is empty")
+  // **Do not let it grow without limit**: past the cap, the oldest records go first.
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  $body: = Str_builder.new()
+  defer body.free()
+  $dir: = Str_builder.new()
+  defer dir.free()
+  $had: U8[] = ""
+  for $i: Sz = 0; i < 12; i += 1
+    dir.clear()
+    dir.s("/dir/\{i\}")
+    body.clear()
+    made: = aim.state_text("http://h:1/#t=k", dir.slice(), had, body@)
+    // Caution: **Copy it**; the next pass rebuilds the same buffer.
+    keep: = arena.text()
+    keep.s(made)
+    had = keep.take()
+  assert(aim.state_count(had) == 8, "it stops at the cap of 8")
+  assert(aim.state_record(had, 0)[1].equals("/dir/11"), "the newest record is left")
+  verdict.pass("a cut-short note does not stop it, and records are cut off at the cap of 8.")
+
+fn test_a_note_rebuilt_from_its_records() //< records put back one by one read back the same
+  //<
+  //< **Listing and stopping rebuild the note this way**, keeping only the servers still answering.
+  verdict.start("[tools/kspage_aim] rebuilding the note record by record test...")
+  had: = "http://h:1/#t=a\n/one\nhttp://h:2/#t=b\n/two\nhttp://h:3/#t=c\n/my docs\n"
+  $kept: = Str_builder.new()
+  defer kept.free()
+  // The second server stopped answering, so only the first and the third are put back.
+  for i in Sz[]::{ 0, 2 }
+    one: = aim.state_record(had, i)
+    aim.state_put(kept@, one[0], one[1])
+  got: = kept.slice()
+  assert(aim.state_count(got) == 2, "the records put back are all there is")
+  assert(aim.state_record(got, 0)[1].equals("/one"), "the order is kept")
+  assert(aim.state_record(got, 1)[0].equals("http://h:3/#t=c"), "the URL comes back whole")
+  // A folder with a space in it stays one folder.
+  assert(aim.state_record(got, 1)[1].equals("/my docs"), "a space in a folder does not split it")
+  verdict.pass("a note put back record by record reads back the records, in order, unchanged.")
+
+fn test_a_folder_named_with_a_separator_at_its_end() //< `devel/` is the same folder as `devel`
+  verdict.start("[tools/kspage_aim] a separator after a folder's name test...")
+  assert(aim.trim_end_sep("/home/me/devel/").equals("/home/me/devel"), "a trailing `/` drops")
+  assert(aim.trim_end_sep("/home/me/devel//").equals("/home/me/devel"), "every trailing `/` drops")
+  assert(aim.trim_end_sep("C:\\work\\").equals("C:\\work"), "a trailing `\\` drops too")
+  assert(aim.trim_end_sep("/home/me/devel").equals("/home/me/devel"), "without one it is unchanged")
+  // Caution: **A root keeps its separator**, or `/` becomes empty and `C:\` a drive's current
+  // folder.
+  assert(aim.trim_end_sep("/").equals("/"), "the root keeps its `/`")
+  assert(aim.trim_end_sep("C:\\").equals("C:\\"), "a drive's root keeps its `\\`")
+  verdict.pass("the separators after a folder's name drop, and a root keeps its own.")
+
+fn test_climbing_up_from_a_file() //< a path goes up one folder, absolute or not
+  verdict.start("[tools/kspage_aim] the path climbing up test...")
+  assert(aim.parent_of("kspage/model").equals("kspage"), "it goes one tier up")
+  assert(aim.parent_of("kspage").equals("."), "with no tier it is where we are")
+  assert(aim.parent_of(".").len == 0, "above where we are there is nothing")
+  assert(aim.parent_of("/home/me").equals("/home"), "even absolute it goes one tier up")
+  assert(aim.parent_of("/home").equals("/"), "one below the root goes up to the root")
+  // **The parent of the root is the root** (the caller stops on it).
+  assert(aim.parent_of("/").equals("/"), "above the root is the root")
+  assert(aim.parent_of("C:\\work\\a").equals("C:\\work"), "it goes up with `\\` too")
+  verdict.pass("it climbs a tier at a time, and stops at the root.")
+
+fn test_the_path_the_server_will_see() //< the path the server sees for a document
+  verdict.start("[tools/kspage_aim] the path as seen from the folder served test...")
+  got: = aim.doc_under("/home/me/devel", "/home/me/devel/kspage/model/filter.kspls")
+  assert(got.equals("kspage/model/filter.kspls"), "the root part drops")
+  assert(aim.doc_under(".", "kspage/model/filter.kspls").equals("kspage/model/filter.kspls"),
+    "serving where we are, it is left as it stands")
+  assert(aim.doc_under("/other", "/home/me/a.kspl").equals("/home/me/a.kspl"),
+    "not under the root, it is left as it stands")
+  assert(aim.doc_under("/", "/home/me/a.kspl").equals("home/me/a.kspl"),
+    "it drops even for the root itself")
+  assert(aim.doc_under("/home/me", "/home/me").equals("/home/me"),
+    "handed the root itself, it is kept")
+  verdict.pass("the root part drops, and what is not under the root and the root itself are kept.")
+
+fn test_where_the_file_lives() //< a path splits into its folder and its name
+  verdict.start("[tools/kspage_aim] how a path splits test...")
+  a: = aim.split_path("kspage/model/filter.kspls")
+  assert(a[0].equals("kspage/model") && a[1].equals("filter.kspls"), "it splits at `/`")
+  b: = aim.split_path("C:\\work\\a.kspl")
+  assert(b[0].equals("C:\\work") && b[1].equals("a.kspl"), "it splits at `\\` too")
+  c: = aim.split_path("filter.kspls")
+  assert(c[0].equals(".") && c[1].equals("filter.kspls"), "with no container it is where we are")
+  d: = aim.split_path("C:\\work/a.kspl")
+  assert(d[0].equals("C:\\work") && d[1].equals("a.kspl"),
+    "mixed in, it splits at the separator further back")
+  verdict.pass("a path splits at both separators, and with no container it becomes where we are.")

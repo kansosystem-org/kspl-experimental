@@ -1,0 +1,90 @@
+//< The column layout
+//<
+//< **A column layout is one block.**
+//< **The heights are measured first and balanced.**
+//< Measuring means "lay it out, read the height, and roll it back"; laid out at the same width,
+//< the second layout has the same height.
+//< **The entry point is not here but [`flow.kspls`](flow.kspls).**
+import "kspage/lay/flow"
+import "kspage/lay/page" + { Page }
+import "kspage/model/doc" { Block, Rect }
+import "kspage/model/style" { Look, Sheet }
+import "std/ds" { List }
+import "std/mem" { Arena }
+
+priv fn column_width(whole: F32, count: Sz, gap: F32): F32 //< a column's width
+  //<
+  //< **There is one gap fewer than columns** (no gap at the edges).
+  //< Caution: **It must not go negative** (0 instead: in a negative width a line breaks at every
+  //< character and never stops).
+  room: = whole - gap * F32::(count - 1)
+  return 0.0 if room <= 0.0 else room / F32::count
+
+priv fn height_of(dst: Page$@, kid: Block$@, sheet: Sheet$@, at: Rect, look: Look, wide: F32,
+  arena: Arena$@): F32 //<
+    //< Lays out one child at width `wide` as a trial, and measures only the height
+    //<
+    //< Caution: **Roll it back after measuring**, or it appears laid out twice on the screen.
+  only: = List<|Block$@|>.create(arena)
+  only.push(kid)
+  back: = page.placed_of(dst)
+  box: = Rect::{ .x = at.x, .y = at.y, .w = wide, .h = 0.0 }
+  // **The page height is not passed** (pages are handled after the columns are split out).
+  tall: = flow.place_blocks(dst, only, sheet, box, look, 0.0, 0.0, arena)
+  page.rewind(dst, back)
+  return tall
+
+priv fn target_of(total: F32, count: Sz): F32 //< the target height at which a column is broken
+  //<
+  //< **Round it up** (rounded down, it spills into the last column). It is a target, not a cap: a
+  //< child that passes it stays in that column.
+  return total / F32::count
+
+fn place_columns(dst: Page$@, b: Block$@, sheet: Sheet$@, at: Rect, look: Look, count: Sz, gap: F32,
+  arena: Arena$@): F32 //<
+    //< Flows a block's children into `count` columns and adds what was laid out to dst
+    //<
+    //< **A child is not split**, so the heights are only roughly even. **Where there are fewer
+    //< children than columns, leave the spare columns empty** (or one child would show no columns).
+  if b.children.len <= 0 || count <= 1
+    return 0.0
+  wide: = column_width(at.w, count, gap)
+  // First every child's height is measured.
+  // Caution: **Measure at the width used for layout**, or the wrapping and the height differ.
+  $total: F32 = 0.0
+  tall: = List<|F32|>.create(arena)
+  for $i: Sz = 0; i < b.children.len; i += 1
+    one: = height_of(dst, b.children.get(i), sheet, at, look, wide, arena)
+    tall.push(one)
+    total += one
+  target: = target_of(total, count)
+  $used: F32 = 0.0
+  $at_kid: Sz = 0
+  for $c: Sz = 0; c < count; c += 1
+    // Caution: **Leave as many children as there are columns left**, or later columns end up empty.
+    keep: = count - c - 1
+    $filled: F32 = 0.0
+    $first: = true
+    only: = List<|Block$@|>.create(arena)
+    for at_kid < b.children.len
+      // **But always put the first one in**, or with fewer children than columns the contents
+      // would all go into the last column.
+      if !first && b.children.len - at_kid <= keep
+        break
+      only.push(b.children.get(at_kid))
+      filled += tall.get(at_kid)
+      at_kid += 1
+      first = false
+      // **Move to the next column once the target is passed** (the child that passed it stays).
+      // The last column takes everything left.
+      if keep > 0 && filled >= target
+        break
+    if only.len <= 0
+      continue
+    box: = Rect::{ .x = at.x + (wide + gap) * F32::c, .y = at.y, .w = wide, .h = 0.0 }
+    // **The page height is not passed.** A column layout does not cross pages (the reader could
+    // not follow which column continues); the caller moves it whole.
+    got: = flow.place_blocks(dst, only, sheet, box, look, 0.0, 0.0, arena)
+    if got > used
+      used = got
+  return used

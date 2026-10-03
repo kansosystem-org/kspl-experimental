@@ -1,0 +1,129 @@
+//< Takes one block from an earlier version (a limited merge)
+//<
+//< The limit fits in one line: do not take a block whose number is already in the current
+//< document.
+//< Caution: **Copy it, then add it.** The other document's block lives in that document's arena,
+//< and dangles once that arena is freed. The copy goes through the saved text
+//< (`share/store.kspls`), the one way to copy a tree.
+//< Record it for undo (one undo takes it back).
+import "kspage/model/doc" { Block, Doc }
+import "kspage/share/store"
+import "kspage/write/edit" + { Editor }
+import "std/ds" { List }
+import "std/json" + { Json_builder }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+priv fn none_block(): Option<|Block$@|>
+  return Option<|Block$@|>.none
+
+priv fn find_id(d: Doc$@, id: Sz): Option<|Block$@|> //< the block with that number
+  //<
+  //< 0 is not searched for (0 means "no number").
+  if d == null || id == 0
+    return none_block()
+  return in_kin(d.blocks, id)
+
+priv fn in_kin(kin: List<|Block$@|>$@, id: Sz): Option<|Block$@|>
+  for $i: Sz = 0; i < kin.len; i += 1
+    b: = kin.get(i)
+    if b == null
+      continue
+    if b.id == id
+      return Option<|Block$@|>.some(b)
+    if got: = in_kin(b.children, id)
+      return Option<|Block$@|>.some(got)
+  return none_block()
+
+priv fn copied(one: Block$@, into: Arena$@): Option<|Block$@|> //<
+  //< Copies the other document's block, unchanged, into this document's arena
+  //<
+  //< The returned copy has the same shape.
+  //< It goes through the saved text. The number is copied too (the same number is what makes it
+  //< the same thing).
+  scratch: = Arena.new(16 * 1024)
+  defer scratch.free()
+  $jb: = Json_builder.new(scratch)
+  $out: = Str_builder.new()
+  defer out.free()
+  store.block_val(jb@, one).dump(out@)
+  // Caution: **Put the text and the parsed tree into the arena the block is added to.** A style
+  // name and a note point into the text (as with `load` in `share/store.kspls`), so a short-lived
+  // arena leaves them dangling.
+  text: = into.dup_str(out.slice())
+  root: = json.parse(text, into) catch
+    return none_block()
+  made: = store.read_block(root, into) catch _e
+    return none_block()
+  return Option<|Block$@|>.some(made)
+
+priv fn before(was: Doc$@, one: Block$@): Option<|Block$@|> //<
+  //< In the other document, the sibling just before `one`
+  //<
+  //< None if there is no such sibling (it is the first block).
+  owner: = was.parent_of(one)
+  if !owner.found
+    return none_block()
+  kin: = was.kin_of(owner.block)
+  if owner.index <= 0 || owner.index > kin.len
+    return none_block()
+  return Option<|Block$@|>.some(kin.get(owner.index - 1))
+
+priv struct Slot //< where the block is added
+  //<
+  //< Caution: **Decide it by number** (a path shifts when a block is added in between): after the
+  //< sibling before it, if that is here, else at the start of the parent. **If the parent is not
+  //< here, the block is not taken** (that would mean taking the parent too).
+  parent: Block$@
+  at: Sz
+  found: Bool
+
+priv fn slot_for(ed: Editor$@, was: Doc$@, one: Block$@): Slot
+  owner: = was.parent_of(one)
+  if !owner.found
+    return Slot::{ .parent = null, .at = 0, .found = false }
+  $parent: Block$@ = null
+  if owner.block != null
+    switch find_id(ed.doc, owner.block.id) case .some(got)
+      parent = got
+    case .none
+      return Slot::{ .parent = null, .at = 0, .found = false }
+  kin: = ed.doc.kin_of(parent)
+  if ahead: = before(was, one)
+    switch find_id(ed.doc, ahead.id) case .some(mate)
+      for $i: Sz = 0; i < kin.len; i += 1
+        if kin.get(i) == mate
+          return Slot::{ .parent = parent, .at = i + 1, .found = true }
+    case .none {}
+  // With no sibling before it, it goes first (at the end the order would differ).
+  return Slot::{ .parent = parent, .at = 0, .found = true }
+
+fn take(ed: Editor$@, was: Doc$@, one: Block$@): Bool //<
+  //< Takes one block that exists only in the other document into the current one
+  //<
+  //< Caution: **Count each case it refuses**: no number, a number already here, a parent not here,
+  //< different origin marks (added silently, the same thing would appear twice or get mixed up).
+  //< A taken block keeps its number, so it drops out of the next difference.
+  if ed.shut()
+    return false
+  if ed == null || was == null || one == null || one.id == 0
+    return false
+  // It can be taken only between two documents with the same origin mark (where the marks differ,
+  // the same number is a different thing).
+  if was.origin.len <= 0 || !was.origin.equals(ed.doc.origin)
+    return false
+  // Where the number is already here, it is not taken (that is the limit of this merge).
+  if _had: = find_id(ed.doc, one.id)
+    return false
+  spot: = slot_for(ed, was, one)
+  if !spot.found
+    return false
+  $made: Block$@ = null
+  switch copied(one, ed.doc.arena) case .some(got)
+    made = got
+  case .none
+    return false
+  ed.break_group()
+  edit.do_block(ed, ed.step(), spot.parent, spot.at, true, made)
+  ed.break_group()
+  return true

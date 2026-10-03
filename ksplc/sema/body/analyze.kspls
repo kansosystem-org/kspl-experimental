@@ -1,0 +1,307 @@
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/base/locate" as base_locate
+import "ksplc/sema/body/coerce" as sema_body_coerce
+import "ksplc/sema/flow/release" as sema_flow_release
+import "ksplc/sema/flow/track" as sema_flow_track
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/arc" as sema_type_arc
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
+import "std/chars" // testing and slicing single characters
+import "std/ds" { List }
+import "std/str"
+
+impl Sema_ctx
+  fn check_one_main(r: Self$@) //< checks that there is only one entry point
+    //<
+    //< Caution: **Do not let two or more go unreported.** `find_main_symbol` returns the first
+    //< match, so an imported file that holds a `main` **silently builds a program whose own `main`
+    //< never runs** (Principle 5). Report every one: if only one is marked, the user cannot tell
+    //< which to delete.
+    if r.suppress_errors
+      return
+    $mains: = List<|Sema_symbol$@|>.new(base_core.arena)
+    r.env.collect_main_symbols(mains@)
+    if mains.len <= 1
+      return
+    for m in mains
+      r.clear_scratch()
+        .s("this program defines main() \{mains.len\} times. A program has exactly one entry point; \
+          with more than one, which of them becomes the entry depends on the order the files happen \
+          to be read, so the others are silently dropped. Remove the extra main(), or move it out \
+          of the file being imported.")
+      r.err(m.node, r.scratch.slice())
+
+  fn check_main_signature(r: Self$@) //<
+    //< Limits main's visibility and return type to what the entry can call and use
+    //<
+    //< A `priv` main is `static` in C, out of reach of the start-up code in another file. Only
+    //< nothing, an integer (the exit code) or a Result of either converts meaningfully to C's
+    //< `int main`. A freestanding build's return is not checked: it emits no `int main` wrapper,
+    //< so the startup code decides what happens to the return value.
+    if r.suppress_errors
+      return
+    main_sym: = r.env.find_main_symbol().unwrap_or(null)
+    if main_sym == null
+      return
+    if main_sym.vis == sema_type_scope.Visibility.file_private
+      r.err(main_sym.node,
+        "main() cannot be 'priv': the program's start-up code calls it from outside its file, and a \
+          'priv' function is visible only inside its own. Drop 'priv'.")
+      return
+    if base_core.config.is_freestanding
+      return
+    ret_id: = main_sym.type_id
+    val_id: = r.env.strip_result(ret_id)
+    if sema_type_env.is_void(val_id) || r.env.is_integer(val_id)
+      return
+    r.clear_scratch()
+      .s("main() must return nothing, an integer (used as the process exit code), or a Result of \
+        either ('Void?E' / 'I32?E'), but returns '\{r.env.get_str(ret_id)\}'. A value of this type \
+        cannot become an exit code, so it would be silently discarded.")
+    r.err(main_sym.node, r.scratch.slice())
+
+  fn check_unused_symbols(r: Self$@) //< [W0206] checks **the target file alone** for unused names
+    //<
+    //< Caution: Do not use `symtab.current_file`: at the end of the analysis it names the last
+    //< file read, so a file with even one import never has its own declarations checked ([W0206]
+    //< never fires on real sources). Checking every file is wrong too.
+    if r.suppress_errors || !base_core.config.run_lint_checks
+      return
+    target: = r.env.files.get(r.main_file) catch null
+    if target == null
+      return
+    old_file: = r.file_name
+    r.set_current_file(r.main_file)
+    r.check_unused_symbols_in(target)
+    r.set_current_file(old_file)
+
+  fn check_unit_internal_pubs(r: Self$@) //<
+    //< [I0402] A `pub` used only from inside the same package
+    //<
+    //< Off by default. **It checks only the entry's package**: another unit (`std/` and so on) just
+    //< has no outside user in this compilation, and in a library an unused `pub` is correct.
+    if r.suppress_errors || !base_core.config.run_lint_checks
+      return
+    unit: = base_locate.package_of(r.main_file)
+    for entry in r.env.files.items()
+      if !base_locate.package_of(entry.key).equals(unit)
+        continue
+      for s in entry.value.symbols.items()
+        sym: = s.value
+        if sym.vis != sema_type_scope.Visibility.public || sym.flags.is_used_outside_unit
+          continue
+        // Caution: **Check only declarations that state their own visibility**, or the user cannot
+        // act on the report: an enum's variants inherit the enum's, and an import has nowhere to
+        // write one. A `pub` sits under the declaration or in the attribute list, so only
+        // `has_explicit_visibility` decides.
+        if !sym.node.has_explicit_visibility()
+          continue
+        // **Nor can the user drop `pub` from a synthesized symbol**: the per-enum `variant_name`
+        // (`parse/load.kspls`) and a lifted anonymous function (`_anon_env_N.call`).
+        if sym.name.ends_with(".variant_name") || sym.name.find_str("._anon_") >= 0
+          continue
+        // Nor from a generated instance; and a function called from C has users that the unit's
+        // references do not show.
+        if sym.flags.is_export || sym.flags.is_generated_instance || sym.flags.is_premangled ||
+          sym.name.starts_with("_") || sym.name.equals("main") ||
+          sym.name.equals("kspl_main")
+          continue
+        r.clear_scratch()
+          .s("[I0402] Public symbol '\{sym.name\}' is only used inside its own package \
+            ('\{unit\}'). Drop 'pub' to keep it there; 'pub' is a contract with the outside.")
+        r.information(sym.node, r.scratch.slice())
+
+  priv fn check_unused_symbols_in(r: Self$@, file_env: sema_type_scope.File_env$@)
+    for entry in file_env.symbols.items()
+      sym: = entry.value
+      // Caution: **Do not reject a `#export` on a `priv` here** (`sema/decl/attrs.kspls` does):
+      // this runs only under lint and only on the target file, so another file's would pass
+      // silently.
+      if sym.vis != sema_type_scope.Visibility.file_private || sym.flags.is_used
+        continue
+
+      if sym.name.starts_with("_") || sym.name.equals("main") || sym.name.equals("kspl_main")
+        continue
+
+      $kind_str: U8$[] = "symbol"
+      switch sym.kind case .function(_v)
+        kind_str = "function"
+      case .constant
+        kind_str = "constant"
+      case .variable
+        kind_str = "variable"
+      case .struct_def
+        kind_str = "struct"
+      case .enum_def
+        kind_str = "enum"
+      case .alias_def
+        kind_str = "typedef"
+      case .trait_def
+        kind_str = "trait"
+      default {}
+      r.clear_scratch()
+        .s("[W0206] Unused private \{kind_str\} '\{sym.name\}'. Prefix with '_' to ignore or remove \
+          it.")
+      r.warn(sym.node, r.scratch.slice())
+
+impl Ast_node
+  fn analyze_function_body(r: Self$@, c: Sema_ctx$@, block: Ast_node$@): Bool
+    if block == null
+      return true
+
+    $ok: = true
+    $is_void_ok: = false
+    base_ret_id: = c.env.strip_result(c.fn_ctx.ret_id)
+    if sema_type_env.is_void(base_ret_id) || sema_type_env.is_unknown(base_ret_id)
+      is_void_ok = true
+
+    if !is_void_ok && !block.is_guaranteed_to_leave(false)
+      ret_str: = c.env.get_str(c.fn_ctx.ret_id)
+      fn_name: = c.fn_ctx.name
+      c.clear_scratch()
+        .s("function '\{fn_name\}' is expected to return '\{ret_str\}', but control may reach the \
+          end without returning")
+      c.err(r, c.scratch.slice())
+      ok = false
+
+    if !sema_flow_track.analyze_definite_initialization(c, r, block)
+      ok = false
+
+    if base_core.config.run_lint_checks && block.children.len > 0
+      if is_void_ok
+        last_stmt: = block.last_child()
+        if last_stmt.kind_id == .k_stmt_return && last_stmt.get_return_expr() == null
+          c.information(last_stmt, "[I0305] Redundant 'return' at the end of a Void function.")
+      r.lint_nullable_pointer_return(c, block, base_ret_id)
+      r.lint_release_method_spelling(c)
+    return ok
+
+  priv fn lint_release_method_spelling(r: Self$@, c: Sema_ctx$@) //<
+    //< [W0108] Warns at a declaration that releases through an untracked name or contract
+    //<
+    //< **Two routes are tracked. Warn only when neither applies.** Visibility and the arguments
+    //< after the first are ignored (a `priv` can conform, and `free(r, arena)` releases too). A
+    //< free function is checked as well, since a release can be written that way too.
+    name: = r.get_decl_id_text()
+    is_free: = name.equals("free")
+    if !is_free && !sema_flow_release.is_untracked_release_name(name)
+      return
+    params: = r.get_fn_params()
+    if params == null || params.children.len == 0
+      return
+    recv: = params.get_child(0)
+    if recv == null || !c.env.is_pointer(recv.type_id) || c.env.is_owned(recv.type_id)
+      return
+    if r.body_frees_param_directly(recv.get_decl_id_text(), c)
+      return // tracked by route 2
+    sb: = c.clear_scratch()
+    if c.fn_ctx.impl_name.len > 0
+      sb
+        .s("[W0108] '\{name\}' releases the receiver, but its type does not conform to 'Owned', so \
+          use-after-free is not tracked for it. Add 'impl \{c.fn_ctx.impl_name\}: Owned {}'")
+        .s(" and spell the method 'free'." if !is_free else ".")
+    else
+      sb
+        .s("[W0108] '\{name\}' releases its first parameter, but that type does not conform to \
+          'Owned', so use-after-free is not tracked for it. Make it a 'free' method on the type and \
+          conform it to 'Owned'.")
+    c.warn(r, c.scratch.slice())
+
+  fn lint_nullable_pointer_return(r: Self$@, c: Sema_ctx$@, block: Ast_node$@, base_ret_id: I32) //<
+    //< [H0704] Suggests Option<|T|> where a function returns a raw pointer that can be null
+    //<
+    //< It is a Hint, not an Information: existing code often returns null for "not found", and an
+    //< Information would break CI's gate that requires zero items.
+    if r.loc.file().starts_with("std/") || !c.env.is_pointer(base_ret_id)
+      return
+    $is_export: = false
+    if r.sym_ptr != null
+      sym: = Sema_symbol$@::r.sym_ptr
+      is_export = sym.flags.is_export
+    if is_export || !block.contains_return_null()
+      return
+    c.clear_scratch()
+      .s("[H0704] Function '\{c.fn_ctx.name\}' can return a null pointer ('return null' on some \
+        path). Consider returning 'Option<|T|>' instead so the compiler forces callers to handle \
+        the no-value case explicitly.")
+    c.hint(r, c.scratch.slice())
+
+  fn contains_return_null(r: Self$@): Bool //<
+    //< Whether a "return null" appears anywhere in the subtree, nested blocks included
+    if r == null
+      return false
+    if r.kind_id == .k_stmt_return
+      expr: = r.get_return_expr()
+      return expr != null && expr.kind_id == .k_null
+    for ch in r.children
+      if ch.contains_return_null()
+        return true
+    return false
+
+  fn is_guaranteed_to_leave(r: Self$@, from_catch: Bool): Bool //<
+    //< Whether control cannot fall off the end of `r`
+    //<
+    //< **A catch block has three exits that a function body lacks**: `fallback` passes the value
+    //< out, and `break` / `continue` leave for the enclosing loop ("Catching an error (`catch`)"
+    //< in `../../../docs/SPEC-language.md`). `from_catch` says which set counts.
+    // **Control continues after a statement a `break` leaves**, whatever its inside does:
+    // `blk: { if c { break blk; } return 1; }` can still reach the end.
+    if r == null || r.is_left_by_break()
+      return false
+    switch r.kind_id case .k_stmt_return, .k_stmt_throw
+      return true
+    case .k_stmt_fallback, .k_stmt_break, .k_stmt_continue
+      return from_catch
+    case .k_stmt_loop
+      // **Control never leaves a loop with no condition and no `break`** (`con.exit(); for {}` is
+      // how a freestanding probe stops), in a function body as in a catch block.
+      return r.is_endless_loop()
+    case .k_stmt_expr
+      // **A call declared not to return ends the block.** Only a catch block asks this (whether
+      // the value is passed out); a function body asks whether C gets a `return`.
+      return from_catch && r.children.len > 0 && r.get_child(0).is_noreturn_call()
+    case .k_stmt_block
+      for child in r.children
+        if child.is_guaranteed_to_leave(from_catch)
+          return true
+      return false
+    case .k_stmt_if
+      then_block: = r.get_if_then_block()
+      else_block: = r.get_if_else_block()
+      return then_block != null && else_block != null &&
+        then_block.is_guaranteed_to_leave(from_catch) &&
+        else_block.is_guaranteed_to_leave(from_catch)
+    case .k_stmt_match
+      return r.ret_stmt_match(from_catch)
+    case .k_stmt_labeled_block
+      return r.children.len > 1 && r.get_child(1).is_guaranteed_to_leave(from_catch)
+    default
+      return false
+
+  fn ret_stmt_match(r: Self$@, from_catch: Bool): Bool //<
+    //< Whether every case of the switch, its default included, is sure to leave.
+    //<
+    //< Note: has_default needs no check. sema/body/match.kspls requires 'default' on a non-enum
+    //< switch, and every variant covered without it (process_match_exhaustiveness), so a switch
+    //< here always enters a case or the default.
+    $all_returns: = true
+    $has_case: = false
+    for i in Range.asc(r.children.len)
+      if r.get_child(i).is_keyword("case") || r.get_child(i).is_keyword("default")
+        has_case = true
+        $has_ret: = false
+        for $j: = i + 1; j < r.children.len; j += 1
+          c2: = r.get_child(j)
+          if c2.kind_id == .k_stmt_block
+            has_ret = c2.is_guaranteed_to_leave(from_catch)
+            break
+          if c2.is_keyword("case") || c2.is_keyword("default")
+            break
+        if !has_ret
+          all_returns = false
+    return has_case && all_returns

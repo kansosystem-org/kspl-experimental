@@ -1,0 +1,30 @@
+//< An `Index_place` implementation with a by-value receiver is rejected through a read-only slot
+//<
+//< **Let it through and the pointer returned points at a copy.** Only an `at(r: Self@, …)`, which
+//< merely reads the descriptor, may cut the permission path short (index_stops_permission_walk in
+//< `ksplc/sema/decl/access.kspls`); the passing side is `ksplc/tests/index_route_test.kspls`.
+// EXPECT: cannot write through a read-only pointer
+import "std/io"
+
+priv struct By_val
+  ptr: I32$@
+  len: Sz
+
+// The receiver is by value. `r` being a copy, `r.ptr` is the pointer inside the copy.
+impl By_val: Index_place<|Sz, I32|>
+  fn at(r: Self, index: Sz, _file: U8[], _line: Sz): I32$@
+    return r.ptr + index
+
+priv struct Frame
+  v: By_val
+
+priv fn poke(f: Frame@)
+  f.v[0] = 99
+
+$store: I32[1] = ::{ 0 }
+
+fn main(): I32
+  f: Frame = ::{ .v = By_val::{ .ptr = store[0]@, .len = 1 } }
+  poke(f@)
+  io.out().s("\{store[0]\}\n")
+  return 0

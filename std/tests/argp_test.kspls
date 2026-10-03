@@ -1,0 +1,337 @@
+import "std/argp"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// Tests of std/argp through `parse_list`: `sys.Args` reads libc's argv and cannot be faked. The
+// list holds no executable name (`parse` drops it).
+// ==========================================
+
+priv fn argv_of(items: U8[][], arena: Arena$@): List<|U8[]|>$@
+  l: = List<|U8[]|>.create(arena)
+  for i in Range.asc(items.len)
+    l.push(items[i])
+  return l
+
+fn test_argp(arena: Arena$@)
+  verdict.start("[argp] parsing command line arguments test...")
+
+  // --- a default is the variable's initial value itself ---
+  $out: U8[] = "default.jsonl"
+  $count: I64 = 10
+  $ratio: F64 = 0.5
+  $verbose: = false
+  p: = argp.Parser.create("t", "", arena)
+  p.str_opt("--out", out@, "where to write")
+  p.int_opt("--count", count@, "how many")
+  p.f64_opt("--ratio", ratio@, "the ratio")
+  p.flag("--verbose", verbose@, "in detail")
+
+  p.parse_list(argv_of(U8[][]::{}, arena)) catch panic("argp: an empty argument list failed")
+  kept_defaults: = out.equals("default.jsonl") && count == 10 && !verbose
+  assert(kept_defaults, "argp: the default stays when nothing is handed over")
+
+  // --- a value is joined with `=` ---
+  joined: =
+    argv_of(U8[][]::{ "--out=a.txt", "--count=3", "--ratio=0.25", "--verbose" }, arena)
+  p.parse_list(joined) catch panic("argp: the --name=value shape failed")
+  assert(out.equals("a.txt") && count == 3 && verbose, "argp: --name=value")
+  assert(ratio > 0.24 && ratio < 0.26, "argp: taking an F64")
+
+  $out2: U8[] = ""
+  $count2: I64 = 0
+  q: = argp.Parser.create("t", "", arena)
+  q.str_opt("--out", out2@, "")
+  q.int_opt("--count", count2@, "")
+  q.parse_list(argv_of(U8[][]::{ "--out=b.txt", "--count=-7" }, arena)) catch panic("argp: the \
+    --name=value shape failed")
+  assert(out2.equals("b.txt") && count2 == -7, "argp: --name=value (a negative number reads too)")
+
+  // --- an argument that is not an option goes into rest, in order ---
+  $dummy: = false
+  rp: = argp.Parser.create("t", "", arena)
+  rp.positional("<file>...")
+  rp.flag("--v", dummy@, "")
+  rp.parse_list(argv_of(U8[][]::{ "one", "--v", "two" }, arena)) catch panic("argp: collecting rest \
+    failed")
+  rest_ok: =
+    rp.rest.len == 2 && rp.rest.get(0).equals("one") && rp.rest.get(1).equals("two")
+  assert(rest_ok, "argp: an argument that is not an option goes to rest, in order")
+
+  // A typo with one `-` is refused too, or `-out=X` silently runs with the default.
+  $dash_out: U8[] = "DEFAULT"
+  sp: = argp.Parser.create("t", "", arena)
+  sp.str_opt("--out", dash_out@, "")
+  $saw_single_dash: = false
+  sp.parse_list(argv_of(U8[][]::{ "-out=X" }, arena)) catch e
+    switch e case .unknown_option(n)
+      saw_single_dash = n.equals("-out=X")
+    default {}
+  assert(saw_single_dash,
+    "argp: a slip written with one `-` is refused, and the spelling handed over is reported")
+  assert(dash_out.equals("DEFAULT"), "argp: a refused argument does not reach where it writes")
+  assert(sp.rest.len == 0, "argp: a refused argument does not enter rest either")
+
+  // The space-separated form is refused, and the argument after it is not taken as the value,
+  // whether it looks like a value (`--out a.txt`) or like an option (`--out --verbose`).
+  $spaced: U8[] = "DEFAULT"
+  $spaced_rest: = false
+  wp: = argp.Parser.create("t", "", arena)
+  wp.positional("<file>")
+  wp.str_opt("--out", spaced@, "")
+  wp.parse_list(argv_of(U8[][]::{ "--out", "a.txt" }, arena)) catch e
+    switch e case .missing_value(n)
+      spaced_rest = n.equals("--out")
+    default {}
+  assert(spaced_rest && spaced.equals("DEFAULT"),
+    "argp: `--out a.txt` is refused, not read as --out=a.txt")
+  $eaten: U8[] = "DEFAULT"
+  $eaten_flag: = false
+  vp: = argp.Parser.create("t", "", arena)
+  vp.str_opt("--out", eaten@, "")
+  vp.flag("--verbose", eaten_flag@, "")
+  $saw_missing: = false
+  vp.parse_list(argv_of(U8[][]::{ "--out", "--verbose" }, arena)) catch e
+    switch e case .missing_value(n)
+      saw_missing = n.equals("--out")
+    default {}
+  assert(saw_missing, "argp: an item in a value's position is refused as \"there is no value\"")
+  assert(eaten.equals("DEFAULT"), "argp: an item not eaten does not reach where it writes")
+  assert(!eaten_flag, "argp: on the round it refused, what follows is not interpreted either")
+
+  // A value starting with `-` uses the `=` form (`--count=-7` above).
+  $neg: U8[] = ""
+  dashv: = argp.Parser.create("t", "", arena)
+  dashv.str_opt("--out", neg@, "")
+  dashv.parse_list(argv_of(U8[][]::{ "--out=-weird" }, arena)) catch panic("argp: under `=`, a \
+    value starting with `-` goes through")
+  assert(neg.equals("-weird"),
+    "argp: in the `=` shape, a value starting with `-` can be handed over too")
+
+  // A `-` on its own is the convention for "standard input", so it is passed to the positionals.
+  dp: = argp.Parser.create("t", "", arena)
+  dp.positional("<file>")
+  dp.parse_list(argv_of(U8[][]::{ "-" }, arena)) catch panic("argp: a `-` on its own was refused")
+  assert(dp.rest.len == 1 && dp.rest.get(0).equals("-"), "argp: a `-` on its own is a positional")
+
+  // A positional given to a CLI that has not declared `positional` is refused: a word-splitting
+  // fragment arrives **looking like a positional**.
+  xp: = argp.Parser.create("t", "", arena)
+  xp.subcommand("train", "")
+  $saw_unexpected_arg: = false
+  xp.parse_list(argv_of(U8[][]::{ "tran" }, arena)) catch e
+    switch e case .unexpected_arg(n)
+      saw_unexpected_arg = n.equals("tran")
+    default {}
+  assert(saw_unexpected_arg,
+    "argp: a positional is an error when `positional` has not been declared")
+  assert(xp.rest.len == 0, "argp: a refused positional does not enter rest either")
+  assert(xp.command.len == 0, "argp: a refused positional does not become a command either")
+
+  // `-h` is not a spelling of `--help`: it is refused like any undeclared option.
+  hp: = argp.Parser.create("t", "", arena)
+  $saw_short_help: = false
+  hp.parse_list(argv_of(U8[][]::{ "-h" }, arena)) catch e
+    switch e case .unknown_option(n)
+      saw_short_help = n.equals("-h")
+    default {}
+  assert(saw_short_help, "argp: -h is an unknown option, not --help")
+
+  // --- an error is never ignored: the item at fault is reported ---
+  // If an unknown --name were ignored, a typo or a word-splitting fragment would get through.
+  $ignored: U8[] = ""
+  ep: = argp.Parser.create("t", "", arena)
+  ep.str_opt("--known", ignored@, "")
+  $saw_unknown: = false
+  ep.parse_list(argv_of(U8[][]::{ "--nope" }, arena)) catch e
+    switch e case .unknown_option(n)
+      saw_unknown = n.equals("--nope")
+    default {}
+  assert(saw_unknown, "argp: an unknown option is refused, and its name reported")
+
+  $saw_missing_value: = false
+  ep.parse_list(argv_of(U8[][]::{ "--known" }, arena)) catch e
+    switch e case .missing_value(_n)
+      saw_missing_value = true
+    default {}
+  assert(saw_missing_value, "argp: an item that takes a value with no value is refused")
+
+  $num: I64 = 0
+  np: = argp.Parser.create("t", "", arena)
+  np.int_opt("--n", num@, "")
+  $saw_bad: = false
+  np.parse_list(argv_of(U8[][]::{ "--n=12abc" }, arena)) catch e
+    switch e case .bad_value(_n)
+      saw_bad = true
+    default {}
+  // "12abc" must not be silently taken as 12.
+  assert(saw_bad, "argp: a value that cannot be read as a number is refused")
+
+  $flag_v: = false
+  fp: = argp.Parser.create("t", "", arena)
+  fp.flag("--f", flag_v@, "")
+  $saw_unexpected: = false
+  fp.parse_list(argv_of(U8[][]::{ "--f=1" }, arena)) catch e
+    switch e case .unexpected_value(_n)
+      saw_unexpected = true
+    default {}
+  assert(saw_unexpected, "argp: a value put on a flag is refused")
+
+  // --- what is required, and --help ---
+  $req: U8[] = ""
+  reqp: = argp.Parser.create("t", "", arena)
+  reqp.str_required("--must", req@, "")
+  $saw_required: = false
+  reqp.parse_list(argv_of(U8[][]::{}, arena)) catch e
+    switch e case .missing_required(n)
+      saw_required = n.equals("--must")
+    default {}
+  assert(saw_required, "argp: what is required, not handed over, is refused")
+  reqp.parse_list(argv_of(U8[][]::{ "--must=x" }, arena)) catch panic("argp: it failed although \
+    what is required was handed over")
+  assert(req.equals("x"), "argp: taking what is required")
+
+  $saw_help: = false
+  reqp.parse_list(argv_of(U8[][]::{ "--help" }, arena)) catch e
+    switch e case .help_requested
+      saw_help = true
+    default {}
+  // --help is not a failure but stops the run, so it returns before the required check.
+  assert(saw_help, "argp: --help returns before the check on what is required")
+
+  test_no_short_names(arena)
+  test_repeatable(arena)
+  test_commands(arena)
+  test_trailing(arena)
+
+  verdict
+    .pass("Defaults, the `=` shape and refusing the spaced one, rest, refusing a single dash, each \
+      error, what is required, --help, refusing short forms, repetition, commands and the \
+      uninterpreted remainder are all confirmed.")
+
+// ==========================================
+// There are no short forms: a letter nobody declared is refused, joined to a value or not.
+// ==========================================
+priv fn test_no_short_names(arena: Arena$@)
+  for arg in U8[][]::{ "-i", "-D", "-Dflag" }
+    $in_place: = false
+    defs: = List<|U8[]|>.create(arena)
+    p: = argp.Parser.create("t", "", arena)
+    p.flag("--in-place", in_place@, "")
+    p.str_list_opt("--define", defs, "")
+    $refused: = false
+    p.parse_list(argv_of(U8[][]::{ arg, "x" }, arena)) catch e
+      switch e case .unknown_option(n)
+        refused = n.equals(arg)
+      default {}
+    assert(refused && !in_place && defs.len == 0,
+      "argp: -i / -D / -Dflag are unknown options, not short forms")
+
+  // The value is everything after the first `=`; a later `=` stays in it.
+  defs: = List<|U8[]|>.create(arena)
+  p: = argp.Parser.create("t", "", arena)
+  p.str_list_opt("--define", defs, "")
+  p.parse_list(argv_of(U8[][]::{ "--define=a", "--define=b=c" }, arena)) catch
+    panic("argp: parsing --define failed")
+  both: =
+    defs.len == 2 && defs.get(0).equals("a") && defs.get(1).equals("b=c")
+  assert(both, "argp: --define=value reaches the item, a later `=` kept in the value")
+
+  // An empty value is taken, and `saw_empty` tells it from a value and from nothing given.
+  $emptied: U8[] = "DEFAULT"
+  $kept: U8[] = "DEFAULT"
+  $unset: U8[] = "DEFAULT"
+  ep: = argp.Parser.create("t", "", arena)
+  ep.str_opt("--out", emptied@, "")
+  ep.str_opt("--in", kept@, "")
+  ep.str_opt("--log", unset@, "")
+  ep.parse_list(argv_of(U8[][]::{ "--out=", "--in=a" }, arena)) catch
+    panic("argp: an empty value was refused")
+  told_apart: =
+    emptied.len == 0 && ep.saw_empty("--out") && !ep.saw_empty("--in") &&
+    !ep.saw_empty("--log")
+  assert(told_apart, "argp: `--out=` is taken empty, and saw_empty names it alone")
+
+// ==========================================
+// An option that can be given repeatedly. It accumulates rather than overwrites.
+// ==========================================
+priv fn test_repeatable(arena: Arena$@)
+  items: = List<|U8[]|>.create(arena)
+  p: = argp.Parser.create("t", "", arena)
+  p.str_list_opt("--lint", items, "")
+  p.parse_list(argv_of(U8[][]::{ "--lint=A=off", "--lint=B=error" }, arena)) catch panic("argp: \
+    parsing a repetition failed")
+  // Both must stay; if overwritten, only the last setting would take effect (unlike str_opt).
+  accumulated: =
+    items.len == 2 && items.get(0).equals("A=off") && items.get(1).equals("B=error")
+  assert(accumulated, "argp: repeated values pile up in order rather than overwriting")
+
+// ==========================================
+// Commands. A positional's name (`fmt`) and an option's name (`--version`) both go into command
+// once chosen, and a second one is refused.
+// ==========================================
+priv fn test_commands(arena: Arena$@)
+  p: = argp.Parser.create("t", "", arena)
+  p.positional("<file>...")
+  p.subcommand("fmt", "")
+  p.subcommand("lint", "")
+  p.command_flag("--version", "")
+  p.parse_list(argv_of(U8[][]::{ "fmt", "a.kspl" }, arena)) catch panic("argp: parsing a command \
+    failed")
+  assert(p.command.equals("fmt"), "argp: a command is chosen by a positional's name")
+  // Do not put a command's name into rest, or the input file count goes up by one.
+  cmd_not_in_rest: = p.rest.len == 1 && p.rest.get(0).equals("a.kspl")
+  assert(cmd_not_in_rest, "argp: a command's name does not enter rest")
+
+  // Empty when none is given; the caller chooses the default.
+  np: = argp.Parser.create("t", "", arena)
+  np.positional("<file>")
+  np.subcommand("fmt", "")
+  np.parse_list(argv_of(U8[][]::{ "a.kspl" }, arena)) catch panic("argp: it failed with no command")
+  assert(np.command.len == 0, "argp: command is empty when none is handed over")
+
+  fp: = argp.Parser.create("t", "", arena)
+  fp.command_flag("--version", "")
+  fp.parse_list(argv_of(U8[][]::{ "--version" }, arena)) catch panic("argp: a command named as an \
+    option failed")
+  chose_by_flag: = fp.command.equals("--version")
+  assert(chose_by_flag, "argp: a command is chosen by an option's name too")
+
+  // Giving two is refused, or the later one silently wins; for positionals and options alike.
+  for pair in U8[][]::{ "fmt", "--version" }
+    mp: = argp.Parser.create("t", "", arena)
+    mp.subcommand("fmt", "")
+    mp.subcommand("lint", "")
+    mp.command_flag("--version", "")
+    $saw_multi: = false
+    mp.parse_list(argv_of(U8[][]::{ "lint", pair }, arena)) catch e
+      switch e case .multiple_commands(n)
+        saw_multi = n.equals(pair)
+      default {}
+    assert(saw_multi, "argp: giving two commands is refused")
+
+// ==========================================
+// A command that takes "one subject + an uninterpreted remainder".
+// ==========================================
+priv fn test_trailing(arena: Arena$@)
+  $stats: = false
+  rest_args: = List<|U8[]|>.create(arena)
+  p: = argp.Parser.create("t", "", arena)
+  p.flag("--stats", stats@, "")
+  p.subcommand_trailing("run", "", rest_args)
+  // The `--stats` before the subject belongs to the command; the one after it, to the script.
+  args: =
+    argv_of(U8[][]::{ "run", "--stats", "s.kspl", "--stats", "--help", "x" }, arena)
+  p.parse_list(args) catch panic("argp: parsing the uninterpreted remainder failed")
+  assert(p.command.equals("run"), "argp: a trailing command enters command too")
+  assert(stats, "argp: an option before the subject is its own")
+  assert(p.rest.len == 1 && p.rest.get(0).equals("s.kspl"),
+    "argp: only the one subject goes to rest")
+  // `--help` must not be taken away, or the script can never print its own usage.
+  passed_through: =
+    rest_args.len == 3 && rest_args.get(0).equals("--stats") &&
+    rest_args.get(1).equals("--help") && rest_args.get(2).equals("x")
+  assert(passed_through,
+    "argp: what is after the subject is passed on uninterpreted, --help included")

@@ -1,0 +1,132 @@
+#!/usr/bin/env -S ksplc run
+//< A client for sending `ksplc lsp` one request by hand
+//<
+//< **The line and the column are 0-based**, as LSP counts (an editor shows them one higher).
+//< `KANSO_LSP_EXE` chooses the program to start (the default is the C back end's stage1).
+
+// ==========================================
+//     ./out/ksplc_stage1.exe run tools/lsp_client.kspls hover <file.kspl> <line> <column>
+//     ./out/ksplc_stage1.exe run tools/lsp_client.kspls definition <file.kspl> <line> <column>
+//     ./out/ksplc_stage1.exe run tools/lsp_client.kspls raw '<a JSON-RPC body>' ...
+// ==========================================
+import "ksplc/tests/support/lsp_client"
+import "std/argp"
+import "std/ds" { List }
+import "std/io"
+import "std/json" + { Json_builder }
+import "std/jsonrpc"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/sys"
+import "tools/lsp_place" as place
+
+priv const default_exe: U8[] = "out/ksplc_stage1.exe"
+priv const wait_ms: I32 = 60000 //< the cap on waiting for one response (milliseconds)
+  //<
+  //< The parse walks the whole import tree, so do not make it short.
+
+priv fn exe_path(arena: Arena$@): U8[] //< the executable to start
+  if v: = sys.get_env("KANSO_LSP_EXE")
+    return arena.dup_str(v)
+  return default_exe
+
+priv fn dump(msg: json.Val)
+  $out: = Str_builder.new()
+  defer out.free()
+  msg.dump(out@)
+  io.out().s(out.slice()).c('\n')
+
+fn main(): I32 //< sends `ksplc lsp` one request by hand
+  arena: = Arena.new(16 * 1024 * 1024)
+  defer arena.free()
+  // Caution: **Do not parse the arguments by hand**: if only the positionals are counted,
+  // `hover f abc def` silently asks about line 0, column 0.
+  $more: = List<|U8[]|>.new(arena)
+  p: = argp.Parser.create(sys.program_name(), "ask `ksplc lsp` once by hand", arena)
+  p.subcommand("hover", "ask for that position's explanation")
+  p.subcommand("definition", "ask where that position is defined")
+  p.subcommand_trailing("raw", "send a JSON-RPC body as it stands (several allowed)", more@)
+  p.positional("<file.kspl> <line> <column>   for raw, <body>...")
+  p.parse_or_exit(sys.args(), arena)
+  if p.command.len == 0
+    p.print_usage()
+    return 2
+  // **Check the positional arguments before starting the server**, not after paying for
+  // `ksplc lsp` to start and for the initialize round trip.
+  $path: U8[] = ""
+  $line: I64 = 0I64
+  $col: I64 = 0I64
+  if p.command.equals("raw")
+    if p.rest.len == 0
+      p.print_usage()
+      return 2
+  else
+    if p.rest.len != 3
+      p.print_usage()
+      return 2
+    path = p.rest.get(0)
+    said_line: = p.rest.get(1)
+    said_col: = p.rest.get(2)
+    line = place.zero_based(said_line)
+    col = place.zero_based(said_col)
+    if line < 0I64 || col < 0I64
+      io.err()
+        .s("\{sys.program_name()\}: the line and column are 0 or more (`\{said_line\}` \
+          `\{said_col\}`)\n")
+      return 1
+  $c: = lsp_client.start(exe_path(arena), U8[][]::{}, "", arena) catch
+    io.err().s("cannot start: \{exe_path(arena)\}\n")
+    return 1
+  defer c.free()
+  $b: = Json_builder.new(arena)
+  init: = c.request("initialize", b.obj().build(), wait_ms, arena) catch
+    io.err().s("no answer to initialize | the server: \{c.err_tail()\}\n")
+    return 1
+  dump(init)
+  if p.command.equals("raw")
+    return send_raw_all(c@, p.rest.get(0), more@, arena)
+  return ask_at(c@, p.command, path, Sz::line, Sz::col, arena)
+
+priv fn send_raw_all(c: jsonrpc.Client$@, first: U8[], more: List<|U8[]|>$@, arena: Arena$@): I32 //<
+  //< `raw`: sends each body unchanged and prints each frame that comes back
+  //<
+  //< The first comes from `p.rest`, the others from `subcommand_trailing` (after the subcommand,
+  //< argp **reads nothing as an option**).
+  if !send_one(c, first, arena)
+    return 1
+  for i in Range.asc(more.len)
+    if !send_one(c, more.get(i), arena)
+      return 1
+  return 0
+
+priv fn send_one(c: jsonrpc.Client$@, body: U8[], arena: Arena$@): Bool //<
+  //< Sends one body and prints one answer
+  if !c.send_raw(body)
+    io.err().s("cannot send | the server: \{c.err_tail()\}\n")
+    return false
+  msg: = c.read_msg(wait_ms, arena) catch
+    io.err().s("no answer | the server: \{c.err_tail()\}\n")
+    return false
+  dump(msg)
+  return true
+
+priv fn ask_at(c: jsonrpc.Client$@, cmd: U8[], path: U8[], line: Sz, character: Sz,
+  arena: Arena$@): I32 //<
+    //< `hover` / `definition`: opens the document, then asks about one position.
+    //<
+    //< Caution: **Send didOpen first**; the server does not know a document that is not open.
+  uri: = place.uri_of(path, arena)
+  text: = io.read_file(path) catch
+    io.err().s("cannot read: \{path\}\n")
+    return 1
+  if !c.notify("textDocument/didOpen", lsp_client.did_open(uri, text, arena), arena)
+    io.err().s("cannot send didOpen | the server: \{c.err_tail()\}\n")
+    return 1
+  method: = arena.text().s("textDocument/").s(cmd).take()
+  msg: =
+    c.request(method, lsp_client.at_pos(uri, line, character, arena), wait_ms, arena) catch
+    io.err().s("no answer | the server: \{c.err_tail()\}\n")
+    return 1
+  dump(msg)
+  return 0

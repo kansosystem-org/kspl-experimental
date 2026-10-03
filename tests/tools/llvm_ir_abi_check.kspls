@@ -1,0 +1,490 @@
+#!/usr/bin/env -S ksplc run
+//< That a direct call's argument types agree with the callee's `define` in the LLVM IR
+//<
+//< It also checks that no instruction follows a block's terminator. LLVM's verifier checks
+//< neither.
+//< Caution: **Do not rewrite it with a regular expression.** It cannot count nested brackets (the
+//< commas inside `{i64, i64}`), a wrapped declaration must be joined first, and a group costs
+//< several times a plain match ("A group reassembles the sequence per attempt, so it has no effect
+//< in a per-line use" in `std/docs/DESIGN.md`).
+//< Usage: ksplc run tests/tools/llvm_ir_abi_check.kspls <file.ll> [<file.ll> ...]
+import "std/chars"
+import "std/ds" { List, Map }
+import "std/io"
+import "std/mem" { Arena, dealloc }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/sys"
+
+priv const max_reported: Sz = 40 //< the cap on the disagreements reported
+  //<
+  //< Caution: Always print the remaining count when cut short (cut silently, a fix that seems to
+  //< work may be "merely not displayed").
+
+// The argument attributes that do not affect the type (before or after the type's text).
+// **Only this list holds them.** A forgotten one is matched as part of the type, so attributes
+// that differ between definition and call report a false disagreement.
+priv const type_attrs: U8[][14] = ::{ "noalias", "nocapture", "nonnull", "readonly", "readnone",
+    "writeonly", "signext", "zeroext", "inreg", "returned", "immarg", "noundef", "nofree",
+    "dead_on_unwind",
+}
+
+// The start of a value's text. Reaching it ends the type.
+priv const value_heads: U8[][6] = ::{ "zeroinitializer", "null", "true", "false", "undef", "poison",
+}
+
+// A block's terminator (no instruction may follow until the next label). LLVM reads one placed
+// after it as an unnamed block that uses up an implicit number, so every later `%N` disagrees and
+// "the number is too small" is reported far from the cause; caught in the text, the causing line
+// is named.
+priv const terminators: U8[][6] = ::{ "ret", "br", "switch", "unreachable", "resume", "indirectbr",
+}
+
+priv struct Call //< one direct call
+  //<
+  //< Matched after every define is read (forward references leave the callee unknown at the call).
+  lineno: Sz
+  name: U8[]
+  args: U8[]
+  raw: U8[]
+
+priv struct Def_params //< the callee's parameters
+  //<
+  //< Caution: **Keep a `count`.** The text alone cannot tell "a define with no parameters"
+  //< (to match) from "no define" (a `declare`-only external, to skip).
+  count: Sz
+  text: U8[]
+
+priv struct Bad //< one disagreement found
+  lineno: Sz
+  name: U8[]
+  why: U8[]
+  raw: U8[]
+
+priv struct File_stats //< the result of reading one file
+  defines: Sz
+  calls: Sz
+  rets: Sz
+
+// ==========================================
+// Splitting the text
+// ==========================================
+
+priv fn is_name_char(c: U8): Bool //<
+  //< Whether it is a character allowed in an LLVM name (`@name` / `%reg` / a label)
+  return c.is_alnum() || c == '_' || c == '.' || c == '$'
+
+priv fn is_word_char(c: U8): Bool //< whether it is a character used to find a word boundary
+  //<
+  //< Caution: Keep it separate from `is_name_char`, whose `.` and `$` would read `ret.foo` as a
+  //< longer word than `ret` and miss a terminator.
+  return c.is_alnum() || c == '_'
+
+priv fn starts_word(s: U8[], w: U8[]): Bool //<
+  //< Whether the text starts with the word `w` followed by a space
+  //<
+  //< **A prefix match is not enough** — `defineX` would pass.
+  return s.starts_with(w) && s.len > w.len && s[w.len].is_space()
+
+priv fn starts_value(t: U8[]): Bool
+  for h in value_heads
+    if t.starts_with(h)
+      return true
+  if t.starts_with("c\"")
+    return true
+  $i: Sz = 0
+  if t.len > 0 && t[0] == '-'
+    i = 1
+  return i < t.len && (t[i].is_digit() || t[i] == '.')
+
+priv fn is_type_attr(t: U8[]): Bool
+  for a in type_attrs
+    if t.equals(a)
+      return true
+  return t.starts_with("align") || t.starts_with("dereferenceable")
+
+priv fn type_of(operand: U8[]): U8[] //<
+  //< Cuts only the type out of `i64 %3` / `ptr @g` / `[2 x i64] zeroinitializer`
+  //<
+  //< Caution: **Do not allocate** (it runs per operand); it returns a view into the operand. **A
+  //< define's parameters, a call's arguments and a `ret` all use this**, or one type disagrees.
+  $begin: Sz = -1
+  $end: Sz = 0
+  $n: Sz = 0
+  $i: Sz = 0
+  for i < operand.len
+    if operand[i].is_space()
+      i += 1
+      continue
+    start: = i
+    for i < operand.len && !operand[i].is_space()
+      i += 1
+    t: = operand.sub(start, i - start)
+    if is_type_attr(t)
+      continue
+    if t[0] == '%'
+      // A named type (`%Foo`) appears only at a type's start; a later `%` is an SSA value.
+      if n > 0
+        break
+    else if t[0] == '@' || (n > 0 && !t.equals("x") && starts_value(t))
+      // `x` is excluded: after the `2` of `[2 x i64]` it is part of the type.
+      break
+    if begin < 0
+      begin = start
+    end = i
+    n += 1
+  return "" if begin < 0 else operand.sub(begin, end - begin)
+
+priv fn next_top_level(s: U8[], pos: Sz$@, out_part: U8[]$@): Bool //<
+  //< Returns the next element delimited by a top-level comma
+  //<
+  //< A comma inside `{i64, i64}` or `[2 x i64]` is not counted.
+  //< Caution: **Do not return a trailing empty element** (`a,` is one; counted, a trailing comma
+  //< adds an argument).
+  from: = pos$
+  if from >= s.len
+    return false
+  $depth: I32 = 0
+  $i: = from
+  for i < s.len
+    c: = s[i]
+    if c == '[' || c == '{' || c == '(' || c == '<'
+      depth += 1
+    else if c == ']' || c == '}' || c == ')' || c == '>'
+      depth -= 1
+    else if c == ',' && depth == 0
+      out_part$ = s.sub(from, i - from).trim_spaces()
+      pos$ = i + 1
+      return true
+    i += 1
+  tail: = s.sub_from(from).trim_spaces()
+  pos$ = s.len
+  if tail.len == 0
+    return false
+  out_part$ = tail
+  return true
+
+priv fn top_level_count(s: U8[]): Sz //< the count of top-level elements
+  //<
+  //< Empty and `void` count as 0.
+  body: = s.trim_spaces()
+  if body.len == 0 || body.equals("void")
+    return 0
+  $n: Sz = 0
+  $pos: Sz = 0
+  $part: U8[] = ""
+  for next_top_level(body, pos@, part@)
+    n += 1
+  return n
+
+priv fn callee_at(s: U8[], from: Sz, out_name: U8[]$@, out_open: Sz$@): Bool //<
+  //< Searches for the `@name(` form and returns the name and its `(`'s position
+  //<
+  //< Caution: **Check only the first `@`.** In a call through a function pointer (`call void
+  //< %12(ptr @g)`) it is an argument, not followed by `(`, so it fails here; search further and
+  //< **the function passed as an argument is mistaken for the callee**.
+  rel: = s.sub_from(from).find_char('@')
+  if rel < 0
+    return false
+  start: = from + rel + 1
+  $i: = start
+  for i < s.len && is_name_char(s[i])
+    i += 1
+  if i == start || i >= s.len || s[i] != '('
+    return false
+  out_name$ = s.sub(start, i - start)
+  out_open$ = i
+  return true
+
+priv fn define_parts(ln: U8[], out_name: U8[]$@, out_params: U8[]$@, out_ret: U8[]$@): Bool //<
+  //< Reads `define [attributes] <return type> @name(<parameters>) [attributes] {`
+  //<
+  //< Caution: **Read a define whose parameters wrap across lines as one too.** Otherwise it is "not
+  //< a define" and **its `ret` is matched against the previous function's return type** — unseen
+  //< where they happen to agree.
+  if !starts_word(ln, "define")
+    return false
+  body: = ln.trim_end()
+  if !body.ends_with("{")
+    return false
+  $name: U8[] = ""
+  $open: Sz = 0
+  if !callee_at(body, 6, name@, open@)
+    return false
+  close: = body.rfind_char(')')
+  if close <= open
+    return false
+  at: = open - name.len - 1
+  out_name$ = name
+  out_params$ = body.sub(open + 1, close - open - 1)
+  out_ret$ = body.sub(6, at - 6).trim_spaces()
+  return true
+
+priv fn define_opens(ln: U8[]): Bool //<
+  //< The start of a wrap (there is a `define …(` but it does not close on that line)
+  $name: U8[] = ""
+  $open: Sz = 0
+  return starts_word(ln, "define") && callee_at(ln, 6, name@, open@)
+
+priv fn call_parts(ln: U8[], out_name: U8[]$@, out_args: U8[]$@): Bool //<
+  //< Reads `[%r = ] [tail ] call [attributes] [(<function type>) ] @name(<actual arguments>)`
+  $rest: = ln.trim_spaces()
+  if !rest.ends_with(")")
+    return false
+  if rest[0] == '%'
+    // Strip the `%r = `. With no `=` it is not a call (`%12(…)` calls a function pointer).
+    $i: Sz = 1
+    for i < rest.len && is_name_char(rest[i])
+      i += 1
+    after: = rest.sub_from(i).trim_start()
+    if after.len == 0 || after[0] != '='
+      return false
+    rest = after.sub_from(1).trim_start()
+  if starts_word(rest, "tail")
+    rest = rest.sub_from(4).trim_start()
+  if !starts_word(rest, "call")
+    return false
+  $name: U8[] = ""
+  $open: Sz = 0
+  if !callee_at(rest, 4, name@, open@)
+    return false
+  close: = rest.rfind_char(')')
+  if close <= open
+    return false
+  out_name$ = name
+  out_args$ = rest.sub(open + 1, close - open - 1)
+  return true
+
+priv fn is_varargs(raw: U8[]): Bool //< whether it is a variadic call
+  //<
+  //< Such a call is not matched. The check is **before the callee's `@`** (the arguments hold no
+  //< `...`).
+  at: = raw.find_char('@')
+  head: = raw if at < 0 else raw.sub(0, at)
+  return head.find_str("...") >= 0
+
+priv fn ret_type(ln: U8[], out_ty: U8[]$@): Bool //< the type of `ret <type> [value]`
+  //<
+  //< Cut by type_of, as the parameters and arguments are.
+  s: = ln.trim_spaces()
+  if !starts_word(s, "ret")
+    return false
+  body: = s.sub_from(3).trim_start()
+  if body.len == 0
+    return false
+  out_ty$ = type_of(body)
+  return true
+
+priv fn is_terminator(ln: U8[]): Bool //< whether it is a block terminator instruction
+  //<
+  //< Caution: **Check only a line that starts with a space** (a `ret` at column 0 is outside the
+  //< function).
+  if ln.len == 0 || !ln[0].is_space()
+    return false
+  s: = ln.trim_start()
+  for t in terminators
+    if s.starts_with(t) && (s.len == t.len || !is_word_char(s[t.len]))
+      return true
+  return false
+
+priv fn is_label(ln: U8[]): Bool //< a block's label (`name:`), only at a line's start
+  $i: Sz = 0
+  for i < ln.len && is_name_char(ln[i])
+    i += 1
+  return i > 0 && i < ln.len && ln[i] == ':'
+
+// ==========================================
+// Reading one file
+// ==========================================
+
+priv fn join_define(lines: List<|U8[]|>, at: Sz, used: Sz$@, arena: Arena$@): U8[] //<
+  //< Joins a wrapped define into one line and returns the number of lines used in used
+  //<
+  //< Caution: **Join until it closes**, not just one line — a declaration wrapped over three lines
+  //< would be missed, unseen as long as today's IR closes in one.
+  b: = arena.text()
+  b.s(lines.get(at).trim_spaces())
+  $n: Sz = 1
+  for at + n < lines.len
+    part: = lines.get(at + n).trim_spaces()
+    b.c(' ').s(part)
+    n += 1
+    if part.ends_with("{")
+      break
+  used$ = n
+  return b.take()
+
+priv fn add_bad(bad: List<|Bad|>$@, lineno: Sz, name: U8[], why: U8[], raw: U8[])
+  bad.push(Bad::{ .lineno = lineno, .name = name, .why = why, .raw = raw })
+
+priv fn check_call(c: Call, want: Def_params, bad: List<|Bad|>$@, arena: Arena$@) //<
+  //< Matches the callee's parameters against the caller's actual arguments
+  //<
+  //< With opaque pointers a call's signature comes from the call itself, so `define void @f(i64
+  //< %n)` next to `call void @f(i32 2)` passes the verifier. In a register it comes out right, but
+  //< on the stack (the fifth argument on Win64) the upper 4 bytes keep the slot's old value — only
+  //< windows-ucrt64 breaks ("Why it differs between platforms" in `ksplc/docs/DESIGN.md`).
+  got_n: = top_level_count(c.args)
+  if got_n != want.count
+    wb: = arena.text()
+    why: = wb.s("the argument count is \{got_n\} and the definition side's is \{want.count\}")
+      .take()
+    add_bad(bad, c.lineno, c.name, why, c.raw)
+    return
+  if want.count == 0
+    return
+  pw: = want.text.trim_spaces()
+  pg: = c.args.trim_spaces()
+  $wpos: Sz = 0
+  $gpos: Sz = 0
+  $w: U8[] = ""
+  $g: U8[] = ""
+  $i: Sz = 0
+  for next_top_level(pw, wpos@, w@) && next_top_level(pg, gpos@, g@)
+    wt: = type_of(w)
+    gt: = type_of(g)
+    if !gt.equals(wt)
+      wb: = arena.text()
+      why: = wb.s("argument \{i\} is '\{gt\}' and the definition side's is '\{wt\}'").take()
+      add_bad(bad, c.lineno, c.name, why, c.raw)
+    i += 1
+
+priv fn check(path: U8[], stats: File_stats$@, bad: List<|Bad|>$@, arena: Arena$@): Bool //<
+  //< Reads one file and adds the disagreements to bad
+  //<
+  //< false where it cannot be read.
+  //< Caution: **Check for an instruction after a terminator on "the raw line".** On a line where a
+  //< wrapped define was joined, the line number is off by the joined lines and points away from
+  //< the cause.
+  heap_text: = io.read_file(path) catch
+    return false
+  // Caution: Copy into the arena before letting go: the strings in bad are views into the body,
+  // so freeing it first reads freed memory at the report.
+  text: U8[] = arena.dup_str(heap_text)
+  dealloc(Void$@::heap_text.ptr)
+  lines: = text.lines(arena)
+  $defines: = Map<|U8[], Def_params|>.new(arena)
+  $calls: = List<|Call|>.new(arena)
+  $term_bad: = List<|Bad|>.new(arena)
+  $cur_fn: U8[] = ""
+  $cur_ret: U8[] = ""
+  $has_ret_ty: = false
+  $term_fn: U8[] = ""
+  $terminated: = false
+  $in_switch: = false
+  $skip: Sz = 0
+  $t_name: U8[] = ""
+  $t_params: U8[] = ""
+  $t_ret: U8[] = ""
+  for idx in Range.asc(lines.len)
+    raw: = lines.get(idx)
+    lineno: = idx + 1
+
+    // --- Is an instruction placed after a block's terminator (checked on the raw line) ---
+    // A `switch`'s table of targets runs from `[` to `]` over lines that are not instructions.
+    if in_switch
+      in_switch = raw.find_char(']') < 0
+    else if define_parts(raw, t_name@, t_params@, t_ret@)
+      term_fn = t_name
+      terminated = false
+    else if raw.trim_spaces().len == 0 || raw.starts_with("}") || is_label(raw)
+      terminated = false
+    else if terminated
+      shown: = "?" if term_fn.len == 0 else term_fn
+      body: = raw.trim_spaces()
+      add_bad(term_bad@, lineno, shown, "an instruction follows a block's terminator", body)
+      terminated = false
+    else if is_terminator(raw)
+      terminated = true
+      in_switch = raw.trim_end().ends_with("[")
+
+    if skip > 0
+      skip -= 1
+      continue
+
+    // --- The declarations, the calls and the `ret` are checked on the joined line ---
+    $ln: = raw
+    if !define_parts(raw, t_name@, t_params@, t_ret@) && define_opens(raw)
+      $used: Sz = 1
+      ln = join_define(lines, idx, used@, arena)
+      skip = used - 1
+    $name: U8[] = ""
+    $params: U8[] = ""
+    $ret_ty: U8[] = ""
+    if define_parts(ln, name@, params@, ret_ty@)
+      defines.set(name, Def_params::{ .count = top_level_count(params), .text = params })
+      stats.defines += 1
+      cur_fn = name
+      cur_ret = ret_ty
+      has_ret_ty = true
+      continue
+    $c_name: U8[] = ""
+    $c_args: U8[] = ""
+    if call_parts(ln, c_name@, c_args@)
+      body: = ln.trim_spaces()
+      calls.push(Call::{ .lineno = lineno, .name = c_name, .args = c_args, .raw = body })
+      stats.calls += 1
+      continue
+    // A `ret` off the return type disagrees with the width the caller reads the same way; match it
+    // against the define's return type.
+    $got: U8[] = ""
+    if ret_type(ln, got@) && has_ret_ty
+      stats.rets += 1
+      if !got.equals(cur_ret)
+        wb: = arena.text()
+        why: = wb.s("ret's type is '\{got\}' and the definition side's is '\{cur_ret\}'").take()
+        add_bad(bad, lineno, cur_fn, why, ln.trim_spaces())
+
+  // Caution: Keep the order "`ret` → terminator → arguments": only the first 40 are reported, so
+  // a new order shows other items for the same IR.
+  for tb in term_bad
+    bad.push(tb)
+  absent: = Def_params::{ .count = -1, .text = "" }
+  for c in calls
+    want: = defines.get(c.name) catch
+      fallback absent
+    if want.count < 0 || is_varargs(c.raw)
+      continue // extern / a `declare` alone / a runtime stub / variadic
+    check_call(c, want, bad, arena)
+  return true
+
+// ==========================================
+// The entry point
+// ==========================================
+
+priv fn report(path: U8[], stats: File_stats, bad: List<|Bad|>$@)
+  io.out().s(path).s(": ")
+  io.out()
+    .s("\{stats.defines\} defines, \{stats.calls\} direct calls, \{stats.rets\} rets checked\n")
+  shown: = max_reported if bad.len > max_reported else bad.len
+  for k in Range.asc(shown)
+    b: = bad.get(k)
+    io.out().s("  ").s(path).s(":\{b.lineno\}: @\{b.name\}: \{b.why\}\n")
+    io.out().s("      ").s(b.raw).s("\n")
+  if bad.len > max_reported
+    io.out().s("  ... and \{bad.len - max_reported\} more\n")
+
+fn main(): I32
+  $args: = sys.args()
+  if args.len < 2
+    io.out().s("usage: llvm_ir_abi_check.kspls <file.ll> [...]\n")
+    return 2
+  $total_bad: Sz = 0
+  for i in Range.asc(args.len - 1)
+    path: U8[] = args.get(i + 1)
+    // Caution: Allocate a fresh arena per file: the body and its lines go here, so reusing it
+    // piles them up file after file (one file's IR runs to megabytes).
+    arena: = Arena.new(16 * 1024 * 1024)
+    defer arena.free()
+    $stats: = File_stats::{ .defines = 0, .calls = 0, .rets = 0 }
+    $bad: = List<|Bad|>.new(arena)
+    if !check(path, stats@, bad@, arena)
+      io.err().s("llvm_ir_abi_check: ").s(path).s(" cannot be read\n")
+      return 2
+    report(path, stats, bad@)
+    total_bad += bad.len
+  if total_bad > 0
+    io.out().s("RESULT: SOME FAILED (\{total_bad\}) -> invalid IR. See the lines above\n")
+    return 1
+  io.out().s("RESULT: ALL PASS (the signatures agree and no instruction follows a terminator)\n")
+  return 0

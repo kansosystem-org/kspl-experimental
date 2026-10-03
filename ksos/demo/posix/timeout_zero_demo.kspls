@@ -1,0 +1,22 @@
+//< A timeout of 0 panics instead of silently meaning `try_`
+//<
+//< If 0 meant "do not wait", the same thing could be written two ways, `try_take` and
+//< `take_for(0)`. Success is the panic, so `ksos-timeout-zero` greps the output for it.
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+import "std/io"
+
+$g_sem: sync.Sem
+$tcb: Task
+$stack: U8[65536]
+
+fn zero_waiter(_arg: Void$@): Void
+  io.out().s("=== Kanso OS (POSIX) take_for with a zero deadline ===\n")
+  io.out().s("[zero] take_for(0) must stop here\n")
+  got: = g_sem.take_for(0)
+  io.out().s("[zero] returned \{got\} from take_for(0) without a panic\n")
+
+fn main()
+  g_sem.init(0)
+  tcb.create(U8$[]::stack, zero_waiter, null, 1, "zero")
+  task.start_scheduler()

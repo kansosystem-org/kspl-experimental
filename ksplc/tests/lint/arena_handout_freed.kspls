@@ -1,0 +1,34 @@
+//< Passing a pointer that an arena allocated to `mem.dealloc()`
+//<
+//< The type is the same `T$@` a heap allocation returns, so without this it breaks at run time.
+//< Each of the four functions (`alloc` / `alloc_as` / `create` / `alloc_in`) is one finding.
+//< **Two must stay silent**: a heap allocation, and `free()` of a container placed in an arena.
+// EXPECT: [W0104] This pointer was handed out by an arena
+// EXPECT-NOT: error:
+// EXPECT: 0 error(s), 4 warning(s)
+import "std/ds" { List }
+import "std/io"
+import "std/mem" + { Arena }
+
+pub fn probe(): I32
+  arena: = Arena.new(4096)
+  defer arena.free()
+  a: = arena.alloc(4)
+  mem.dealloc(a)
+  b: = arena.alloc_as<|I32|>()
+  mem.dealloc(Void$@::b)
+  c: = arena.create<|I32|>(3)
+  mem.dealloc(Void$@::c)
+  d: = mem.alloc_in(arena, 4)
+  mem.dealloc(d)
+  // It must stay silent where the source is the heap.
+  h: = mem.alloc_as<|I32|>()
+  h$ = 9
+  mem.dealloc(Void$@::h)
+  // It must stay silent on the shape letting go of the content of a container placed in an arena
+  // too.
+  items: = arena.create(List<|I32|>.new())
+  defer items.free()
+  items.push(1)
+  io.out().s("arena handout \{items.len\}\n")
+  return 0

@@ -1,0 +1,46 @@
+//< Reading and writing MMIO registers
+//<
+//< Caution: **A driver must not call `__kspl_read_volatile` / `__kspl_write_volatile` directly.**
+//< The raw intrinsics take a pointer, so the caller needs a `U32$@::` cast every time.
+//< **Do not add a version without volatile.** An MMIO value can change on every read, and a
+//< write is itself a side effect.
+//< The intrinsics themselves stay.
+
+// ==========================================
+// A 32-bit register. Most peripheral registers are this.
+// ==========================================
+#inline
+fn read32(addr: U32): U32
+  return __kspl_read_volatile(U32$@::addr)
+#inline
+fn write32(addr: U32, val: U32)
+  __kspl_write_volatile(U32$@::addr, val)
+
+// An 8-bit window, for a region that can only be accessed a byte at a time, such as USB's packet
+// buffer.
+#inline
+fn read8(addr: U32): U8
+  return __kspl_read_volatile(U8$@::addr)
+#inline
+fn write8(addr: U32, val: U8)
+  __kspl_write_volatile(U8$@::addr, val)
+
+// ==========================================
+// The busy wait every driver shares: it gives up after poll_timeout_iters iterations, so hardware
+// that does not answer cannot stall a driver forever. The limit leaves ample room for a wait that
+// working hardware clears in a few to a few tens of microseconds.
+// ==========================================
+const poll_timeout_iters: Sz = 1000000
+
+fn poll(addr: U32, mask: U32, want_nonzero: Bool): Bool //<
+  //< Waits until (the value read at addr & mask) is non-zero or zero, as want_nonzero asks
+  //<
+  //< With want_nonzero=true it waits for the bit to be set, with false for it to be cleared.
+  //< After poll_timeout_iters it gives up and returns false (the caller treats that as a
+  //< timeout).
+  $i: Sz = 0
+  for ((read32(addr) & mask) != 0) != want_nonzero
+    i += 1
+    if i >= poll_timeout_iters
+      return false
+  return true

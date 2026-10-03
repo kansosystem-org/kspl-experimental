@@ -1,0 +1,763 @@
+import "kspage/lay/caret"
+import "kspage/lay/flow"
+import "kspage/lay/page" { Page }
+import "kspage/model/collect" { Collect }
+import "kspage/model/doc" { Doc }
+import "kspage/model/doc" { Rect }
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/paint"
+import "kspage/model/style" { Sheet }
+import "kspage/tests/base"
+import "kspage/write/block"
+import "kspage/write/edit"
+import "kspage/write/typing"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// kspage: checks the cursor and editing (a golden test).
+// **The metrics are fixed (`kspage/model/fixed_font`)**: ASCII 8px, a non-ASCII character 16px, a
+// line 19.2px. **The multi-byte fixtures are deliberate**: whole-character deletion, measuring
+// rather than prorating, and wrapping without whitespace depend on them.
+// ==========================================
+
+priv fn one_line(text: U8[], width: F32, arena: Arena$@): Page$@ //<
+  //< A document holding one text, and its layout
+  d: = Doc.new(arena)
+  d.add_block("body").add_text(text)
+  return flow.layout(d, Sheet.new(base.root_font(), arena), fixed.make(), width, arena)
+
+fn test_added_text_is_copied_into_the_document()
+  verdict.start("[kspage/edit] a text added becoming the document's own test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("abc")
+  // Readable contents show the caller's text is copied (it need not be kept alive).
+  assert(n.text().equals("abc"), "the text copied over can be read")
+  verdict.pass("a text added is copied over to the document's side.")
+
+fn test_insert_and_backspace_change_the_text()
+  verdict.start("[kspage/edit] typing and deleting changing the text test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("ac")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 1)
+
+  ed.insert("b")
+  assert(n.text().equals("abc"), "it can be inserted in between")
+  assert(ed.caret.offset == 2, "the cursor is sent behind what was typed")
+
+  ed.backspace()
+  assert(n.text().equals("ac"), "the one in front goes")
+  assert(ed.caret.offset == 1, "the cursor goes back to where it deleted")
+  verdict.pass("typing inserts, and deleting takes the one in front.")
+
+fn test_backspace_removes_a_whole_character() //<
+  //< A multi-byte character is deleted whole, not a byte at a time
+  verdict.start("[kspage/edit] deleting going by the character test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("あい")
+  // `あい` is six bytes in UTF-8.
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 6)
+  ed.backspace()
+  // Had only one byte been deleted, the text would break and not match `あ`.
+  assert(n.text().equals("あ"), "three bytes go together")
+  assert(ed.caret.offset == 3, "the cursor goes back to a character's boundary too")
+  verdict.pass("a character of more than one byte goes whole.")
+
+fn test_moving_steps_by_characters()
+  verdict.start("[kspage/edit] moving left and right going by the character test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("aあb")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 0)
+
+  ed.move_right(false)
+  assert(ed.caret.offset == 1, "ASCII goes on one byte")
+  ed.move_right(false)
+  assert(ed.caret.offset == 4, "a character of one em goes on three bytes")
+  ed.move_left()
+  assert(ed.caret.offset == 1, "going back is by the character too")
+  verdict.pass("moving left and right goes on by characters, not by bytes.")
+
+fn test_moving_stops_at_both_ends() //< it stops at both ends (it does not overshoot)
+  verdict.start("[kspage/edit] stopping at both ends test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("ab")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 0)
+  ed.move_left()
+  assert(ed.caret.offset == 0, "it does not go in front of the head")
+  ed.caret.offset = 2
+  ed.move_right(false)
+  assert(ed.caret.offset == 2, "it does not go behind the end")
+  verdict.pass("it stops at the ends and does not stick out.")
+
+fn test_clicking_lands_on_a_character_boundary() //<
+  //< The clicked point becomes a position in the document
+  verdict.start("[kspage/edit] the place pressed becoming a character's boundary test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  page: = one_line("abcd", 300.0, arena)
+  // ASCII is 8px each: 13px is nearer the break at 16px than the one at 8px, and at the midpoint
+  // (12px) it takes the break on the left.
+  c: = caret.hit_test(page, 13.0, 5.0)
+  assert(c.offset == 2, "it sits at the nearer break")
+  tie: = caret.hit_test(page, 12.0, 5.0)
+  assert(tie.offset == 1, "at the same distance it sits on the left")
+  // Clicked left of the edge, it still goes to the start.
+  head: = caret.hit_test(page, -50.0, 5.0)
+  assert(head.offset == 0, "press in front of it and it is the head")
+  verdict.pass("the place pressed becomes the nearest character's boundary.")
+
+fn test_clicking_picks_the_row_that_was_clicked() //<
+  //< Clicked on another line, it lands in that line's box
+  verdict.start("[kspage/edit] sitting in the box of the row pressed test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  // A width of 40px = two one-em characters. `あいうえお` becomes three lines.
+  page: = one_line("あいうえお", 40.0, arena)
+  // The left edge of the second line (y = 19.2 to 38.4) is clicked.
+  c: = caret.hit_test(page, 0.0, 25.0)
+  // The second line is `うえ`, and its start is byte 6 of the text.
+  assert(c.offset == 6, "it sits at the second row's head")
+  verdict.pass("it sits in the box of the row pressed, and does not jump to the row beside.")
+
+fn test_cursor_stands_where_the_caret_points() //< the cursor position can be drawn
+  verdict.start("[kspage/edit] the place the cursor stands being found test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  page: = one_line("abcd", 300.0, arena)
+  n: = page.boxes.get(0).inline
+
+  head: = caret.cursor(page, caret.at(n, 0))
+  assert(head.found && base.near(head.x, 0.0), "the head stands at the left edge")
+  mid: = caret.cursor(page, caret.at(n, 2))
+  assert(mid.found && base.near(mid.x, 16.0), "behind the second character is 16px")
+  // The end is found too; if not found, the cursor would vanish when typing at a line's end.
+  tail: = caret.cursor(page, caret.at(n, 4))
+  assert(tail.found && base.near(tail.x, 32.0), "the end is found too")
+  assert(base.near(tail.h, 19.2), "the height is the row's height")
+  verdict.pass("the cursor stands where it points, and does not go out even at the end.")
+
+fn test_typing_then_relayout_shows_the_new_text() //<
+  //< Lay it out again after typing and the changed text shows
+  verdict.start("[kspage/edit] what was typed coming out in the next laying-out test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = Sheet.new(base.root_font(), arena)
+  n: = d.add_block("body").add_text("ab")
+
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 2)
+  ed.insert("cd")
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(page.boxes.len == 1, "it stays one row")
+  assert(base.near(page.boxes.get(0).rect.w, 32.0), "it comes out four characters' worth of width")
+  assert(page.boxes.get(0).text.equals("abcd"), "the text typed comes out")
+  verdict.pass("what was typed comes out in the next laying-out.")
+
+fn test_a_caret_pointing_nowhere_does_nothing() //<
+  //< A cursor pointing nowhere does nothing when typing or deleting
+  verdict.start("[kspage/edit] a caret pointing nowhere doing nothing test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  ed: = edit.new_editor(d)
+  // The state right after clicking into an empty document; it must not crash.
+  ed.insert("a")
+  ed.backspace()
+  ed.move_left()
+  ed.move_right(false)
+  assert(ed.caret.offset == 0, "the place does not move")
+  // **Composing, replacing and selecting all arrive in this state too**: an IME acts in an empty
+  // document, and Ctrl+A can be pressed there.
+  ed.set_preedit("に")
+  assert(ed.caret.preedit == 0, "no composing starts either")
+  ed.set_source("x")
+  assert(!ed.select_all(), "there is nowhere to choose either")
+  page: = flow.layout(d, Sheet.new(base.root_font(), arena), fixed.make(), 300.0, arena)
+  assert(!caret.cursor(page, ed.caret).found, "there is nowhere to stand either")
+  verdict.pass("where it points nowhere nothing happens, and it does not crash.")
+fn test_cursor_measures_instead_of_prorating_bytes() //<
+  //< The cursor's position comes from the measured width, not the byte count
+  verdict.start("[kspage/edit] the cursor's place being decided by the width measured test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  // Caution: Mix ASCII (1 byte, 8px) with one-em characters (3 bytes, 16px). A byte-count ratio
+  // then lands inside a character; unmixed, no difference shows.
+  page: = one_line("aあb", 300.0, arena)
+  n: = page.boxes.get(0).inline
+
+  // The text is five bytes, and the width is 8 + 16 + 8 = 32px.
+  head: = caret.cursor(page, caret.at(n, 0))
+  assert(base.near(head.x, 0.0), "the head is 0px")
+  // By byte ratio it would be 32 * 1/5 = 6.4px. Measured, it is 8px.
+  after_ascii: = caret.cursor(page, caret.at(n, 1))
+  assert(base.near(after_ascii.x, 8.0), "behind one ASCII character is 8px")
+  // By byte ratio it would be 32 * 4/5 = 25.6px. Measured, it is 24px.
+  after_wide: = caret.cursor(page, caret.at(n, 4))
+  assert(base.near(after_wide.x, 24.0), "behind one character of one em is 24px")
+  tail: = caret.cursor(page, caret.at(n, 5))
+  assert(base.near(tail.x, 32.0), "the end is 32px")
+  verdict.pass("the cursor stands at the width measured, not at a share worked out.")
+
+// ---- moving across inlines and blocks ----
+
+fn test_moving_crosses_into_the_next_run() //<
+  //< It moves into the next inline (inside the same block)
+  verdict.start("[kspage/edit] crossing into the run beside test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  b: = d.add_block("body")
+  first: = b.add_text("ab")
+  second: = b.add_text("cd", "strong")
+
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(first, 2)
+  ed.move_right(false)
+  assert(ed.caret.inline == second && ed.caret.offset == 0,
+    "from the end it crosses to the next run's head")
+  ed.move_left()
+  assert(ed.caret.inline == first && ed.caret.offset == 2,
+    "from the head it goes back to the end of the run in front")
+  verdict.pass("← and → cross a run's break.")
+
+fn test_moving_crosses_into_the_next_block() //< it moves into the next block
+  verdict.start("[kspage/edit] crossing into the next paragraph test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  head: = d.add_block("body").add_text("ab")
+  tail: = d.add_block("body").add_text("cd")
+
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(head, 2)
+  ed.move_right(false)
+  assert(ed.caret.inline == tail && ed.caret.offset == 0, "it crosses to the next paragraph's head")
+  ed.move_left()
+  assert(ed.caret.inline == head && ed.caret.offset == 2,
+    "it goes back to the end of the paragraph in front")
+  verdict.pass("← and → cross a paragraph's break too.")
+
+fn test_moving_visits_children_after_their_parent() //< a nested child is visited in order too
+  //<
+  //< The order is the layout's (the block itself first, the children after).
+  verdict.start("[kspage/edit] a child block coming after its parent test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  parent: = d.add_block("body")
+  own: = parent.add_text("ab")
+  kid: = parent.add_child("item").add_text("cd")
+
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(own, 2)
+  ed.move_right(false)
+  assert(ed.caret.inline == kid && ed.caret.offset == 0, "after its own inlines comes the child")
+  verdict.pass("the order it runs is the order the laying-out lays them.")
+
+fn test_moving_stops_at_the_ends_of_the_document() //< it stops at both ends of the document
+  verdict.start("[kspage/edit] stopping at both ends of the document test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  only: = d.add_block("body").add_text("ab")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(only, 0)
+  ed.move_left()
+  assert(ed.caret.inline == only && ed.caret.offset == 0, "there is nothing in front of the head")
+  ed.caret.offset = 2
+  ed.move_right(false)
+  assert(ed.caret.inline == only && ed.caret.offset == 2, "there is nothing behind the end")
+  verdict.pass("it stops at the document's ends.")
+
+fn test_backspace_at_the_start_stops_at_the_block_edge() //<
+  //< Deleting at a paragraph's start does not reach the paragraph before
+  //<
+  //< The caller joins paragraphs (`join_prev` in `write/block.kspls`), and deletes forward
+  //< (`delete_forward` in `write/typing.kspls`).
+  verdict.start("[kspage/edit] deleting at a paragraph's head not reaching in front test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  head: = d.add_block("body").add_text("ab")
+  tail: = d.add_block("body").add_text("cd")
+
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(tail, 0)
+  ed.backspace()
+  assert(head.text().equals("ab"), "the paragraph in front does not shrink")
+  assert(tail.text().equals("cd"), "the paragraph it stands in does not change either")
+  assert(ed.caret.inline == tail && ed.caret.offset == 0, "the cursor does not move either")
+  verdict.pass("deleting at a paragraph's head does not reach the paragraph in front.")
+
+fn test_vertical_movement_walks_the_rows() //< moving up and down works over the laid-out lines
+  verdict.start("[kspage/edit] moving up and down crossing the rows test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("あいうえお")
+  page: = flow.layout(d, Sheet.new(base.root_font(), arena), fixed.make(), 40.0, arena)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 0)
+
+  ed.move_vertical(page, 1)
+  assert(ed.caret.offset == 6, "going down it is the same column of the second row")
+  ed.move_vertical(page, 1)
+  assert(ed.caret.offset == 12, "down once more it is the third row")
+  ed.move_vertical(page, -1)
+  assert(ed.caret.offset == 6, "it goes back up")
+  verdict.pass("moving up and down crosses the rows one at a time.")
+
+priv fn three_rows(arena: Arena$@): Page$@ //<
+  //< Passing through a short line does not shrink the goal column
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("abcdef")
+  d.add_block("body").add_text("a")
+  d.add_block("body").add_text("abcdef")
+  return flow.layout(d, Sheet.new(base.root_font(), arena), fixed.make(), 300.0, arena)
+
+fn test_vertical_movement_keeps_the_goal_column()
+  verdict.start("[kspage/edit] the column not shrinking on a short row test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  page: = three_rows(arena)
+  d: = page.boxes.get(0).inline
+  ed: = edit.new_editor(Doc.new(arena))
+  // It is at the first line's end (six characters = 48px).
+  ed.caret = caret.at(d, 6)
+
+  ed.move_vertical(page, 1)
+  // The second line has one character, so it stops at its end (1).
+  assert(ed.caret.offset == 1, "on a short row it stops at the end")
+  ed.move_vertical(page, 1)
+  // If the goal column were not remembered, this would give 1.
+  assert(ed.caret.offset == 6, "on the third row it returns to the column it had")
+  verdict.pass("passing through a short row does not shrink the column it aims at.")
+
+fn test_moving_sideways_forgets_the_goal_column() //<
+  //< Moving sideways forgets the goal column
+  verdict.start("[kspage/edit] moving sideways forgetting the column aimed at test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  page: = three_rows(arena)
+  head: = page.boxes.get(0).inline
+  ed: = edit.new_editor(Doc.new(arena))
+  ed.caret = caret.at(head, 6)
+
+  ed.move_vertical(page, 1)
+  assert(ed.caret.offset == 1, "it is the second row's end")
+  ed.move_left()
+  assert(ed.caret.offset == 0, "moving left it becomes the row's head")
+  ed.move_vertical(page, 1)
+  // If it were not forgotten, this would give the previous column (6).
+  assert(ed.caret.offset == 0, "on the third row it aims at the column it stands in")
+  verdict.pass("after moving sideways it aims afresh at the column it stands in.")
+
+fn test_a_wrap_boundary_is_read_by_how_it_was_reached() //<
+  //< A wrap position reads as one line's end or the next line's start, by how it was reached
+  verdict.start("[kspage/edit] reading a wrap's place by the way it was reached test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  // 40px = two one-em characters: `あいうえお` is three lines, and byte 6 is the wrap position.
+  page: = one_line("あいうえお", 40.0, arena)
+  n: = page.boxes.get(0).inline
+
+  // By default it reads as the end of the previous line.
+  plain: = caret.cursor(page, caret.at(n, 6))
+  assert(base.near(plain.y, 0.0) && base.near(plain.x, 32.0), "what stands is the first row's end")
+
+  // Coming down from the line above, it is at the next line's start.
+  ed: = edit.new_editor(Doc.new(arena))
+  ed.caret = caret.at(n, 0)
+  ed.move_vertical(page, 1)
+  assert(ed.caret.offset == 6, "where it came down to is the wrap's place")
+  came: = caret.cursor(page, ed.caret)
+  assert(base.near(came.y, 19.2) && base.near(came.x, 0.0),
+    "come down, it stands at the second row's head")
+
+  clicked: = caret.cursor(page, caret.hit_test(page, 0.0, 25.0))
+  assert(base.near(clicked.y, 19.2), "it stands at the head of the row pressed too")
+  verdict.pass("a wrap's place stands on the row the way it was reached says.")
+
+fn test_vertical_movement_crosses_a_gathered_block() //<
+  //< ↓ steps over a block built at layout time, and over the space under a heading
+  verdict.start("[kspage/edit] moving down crossing a block gathered test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  head: = sheet.add("heading", paint.inherit_all())
+  head.outline = 1
+  // **The heading collects a table of contents too**: its lines are on the screen but in no
+  // document, so the cursor cannot stand on them.
+  head.collect = Collect.contents
+  head.space_after = 8.0
+  sheet.add("body", paint.inherit_all())
+
+  d: = Doc.new(arena)
+  top: = d.add_block("heading").add_text("Title")
+  d.add_block("body").add_text("second")
+  d.add_block("body").add_text("third")
+  page: = flow.layout(d, sheet, fixed.make(), 400.0, arena)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(top, 0)
+
+  // **Stepping by a line's height and asking where it lands cannot cross this**: the gap is over
+  // half a line, so the landing snaps back to the line it left and ↓ does nothing.
+  ed.move_vertical(page, 1)
+  assert(ed.caret.inline.text().equals("second"), "one press down reaches the next row")
+  ed.move_vertical(page, 1)
+  assert(ed.caret.inline.text().equals("third"), "and the one after that")
+  ed.move_vertical(page, -1)
+  assert(ed.caret.inline.text().equals("second"), "going back up crosses it the same way")
+  ed.move_vertical(page, -1)
+  assert(ed.caret.inline.text().equals("Title"), "and comes home to the heading")
+  verdict.pass("moving up and down steps over a block gathered at laying time.")
+
+fn test_vertical_movement_stops_at_the_first_and_last_row() //<
+  //< It does not go past the lines at either end
+  verdict.start("[kspage/edit] moving up and down stopping at the ends test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("あいうえお")
+  page: = flow.layout(d, Sheet.new(base.root_font(), arena), fixed.make(), 40.0, arena)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 0)
+  ed.move_vertical(page, -1)
+  assert(ed.caret.offset == 0, "there is nothing above the first row")
+  // Caution: Set it anew through `at`; changing the field directly leaves the goal column as it
+  // was.
+  ed.caret = caret.at(n, 15)
+  ed.move_vertical(page, 1)
+  assert(ed.caret.offset == 15, "there is nothing below the last row")
+  verdict.pass("moving up and down does not move at the ends.")
+
+// ---- composition (IME) ----
+
+fn test_preedit_is_replaced_not_appended() //<
+  //< The composing text is replaced (it does not pile up)
+  verdict.start("[kspage/edit] the text being composed being swapped rather than piled up test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("ab")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 1)
+
+  ed.set_preedit("に")
+  assert(n.text().equals("aにb"), "the text being composed goes into the document")
+  assert(ed.caret.preedit == 3, "its length is remembered")
+
+  // Deleted before inserted; added alone, it would pile up as `aににほんb`.
+  ed.set_preedit("にほん")
+  assert(n.text().equals("aにほんb"), "the composing before goes and is swapped for it")
+  assert(ed.caret.offset == 10, "the cursor stands behind the composing")
+  verdict.pass("the text being composed is swapped rather than piled up.")
+
+fn test_preedit_commit_keeps_the_text()
+  verdict.start("[kspage/edit] the text being left once it is committed test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("ab")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 1)
+  ed.set_preedit("日本")
+  ed.commit_preedit()
+  assert(n.text().equals("a日本b"), "the text is left")
+  assert(ed.caret.preedit == 0, "it is composing no more")
+  verdict.pass("committed, the text is left and only the mark is dropped.")
+
+fn test_preedit_cancel_removes_the_text()
+  verdict.start("[kspage/edit] the text going when it is called off test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("ab")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 1)
+  ed.set_preedit("日本")
+  ed.cancel_preedit()
+  assert(n.text().equals("ab"), "it returns to what it was")
+  assert(ed.caret.offset == 1 && ed.caret.preedit == 0, "the cursor returns to the place it had too")
+  verdict.pass("called off, both the text and the cursor return to what they were.")
+
+fn test_a_cancelled_composition_leaves_no_undo_step() //<
+  //< A cancelled composition leaves no undo step
+  verdict.start("[kspage/edit] a composing broken off leaving no step test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("ab")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 1)
+  ed.set_preedit("にほん")
+  ed.cancel_preedit()
+  assert(n.text().equals("ab"), "the text returns to what it was")
+  // Recorded, the composition would leave a step that restores nothing; undo would seem dead.
+  assert(!ed.undo(), "no step to put back is left")
+  assert(n.text().equals("ab"), "put back, the text does not change")
+  verdict.pass("a composing broken off leaves no undo step.")
+
+fn test_a_committed_composition_undoes_as_one_step() //<
+  //< A committed composition goes into the record (while composing it is not recorded)
+  verdict.start("[kspage/edit] a committed composing being put back in one test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("ab")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 1)
+  ed.set_preedit("に")
+  ed.set_preedit("にほん")
+  ed.commit_preedit()
+  assert(ed.undo(), "what was committed can be put back")
+  assert(n.text().equals("ab"), "what was swapped goes back together too")
+  assert(ed.redo() && n.text().equals("aにほんb"), "it can be done again")
+  verdict.pass("a committed composing is put back in one.")
+
+fn test_moving_during_a_composition_records_it() //<
+  //< Moving while composing commits that text (it is not left out of the record)
+  verdict.start("[kspage/edit] what was composed before moving going onto the record test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("ab")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 1)
+  ed.set_preedit("日本")
+  ed.move_left()
+  assert(ed.caret.preedit == 0, "once it moves it is composing no more")
+  assert(ed.undo() && n.text().equals("ab"), "what was committed before the move goes back")
+  verdict.pass("what was composed before moving goes onto the record too.")
+
+fn test_deleting_ahead_is_refused_during_composition() //<
+  //< Delete while composing is for the composition to handle (it deletes no character)
+  //<
+  //< Unguarded, the character after the composing text would be deleted, outside the composition
+  //< window, where the typist cannot see it.
+  verdict.start("[kspage/edit] Delete being refused during a composing test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("abcd")
+  page: = flow.layout(d, Sheet.new(base.root_font(), arena), fixed.make(), 300.0, arena)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 1)
+  ed.set_preedit("に")
+  was: = arena.dup_str(n.text())
+  ed.delete_ahead(page)
+  assert(n.text().equals(was), "the text does not lose one character")
+  assert(ed.caret.preedit == 3, "it is composing still")
+  verdict.pass("Delete during a composing does not shrink the text.")
+
+fn test_cancelling_when_not_composing_keeps_the_selection() //<
+  //< Cancelling while not composing does not collapse the selection
+  //<
+  //< This happens: cancelled right after a composition starts, only "cancelled" arrives, with a
+  //< length of 0 (`compositionend` in `kspage/port/web/keys.js`).
+  verdict.start("[kspage/edit] breaking off while not composing keeping the choice test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("abcd")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 1)
+  ed.caret.offset = 3
+  assert(caret.has_selection(ed.caret), "something is chosen first")
+  ed.cancel_preedit()
+  assert(caret.has_selection(ed.caret), "broken off, it is chosen still")
+  assert(n.text().equals("abcd"), "the text does not change either")
+  verdict.pass("breaking off while not composing does not fold the choice.")
+
+fn test_backspace_during_composition_cancels_it() //<
+  //< Backspace while composing cancels the whole composition, not one character
+  verdict.start("[kspage/edit] deleting during a composing calling the whole of it off test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("ab")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 1)
+  ed.set_preedit("にほん")
+  ed.backspace()
+  // Deleting only one character would leave `aにほb`, and the length would not match.
+  assert(n.text().equals("ab"), "the composing is called off whole")
+  assert(ed.caret.preedit == 0, "it is composing no more")
+  verdict.pass("deleting during a composing calls the whole of it off.")
+
+fn test_typing_during_composition_commits_first() //<
+  //< Typing while composing commits it first, and then inserts
+  verdict.start("[kspage/edit] typing during a composing committing it first test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("ab")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 1)
+  ed.set_preedit("日本")
+  ed.insert("X")
+  assert(n.text().equals("a日本Xb"), "it goes in behind the composing")
+  assert(ed.caret.preedit == 0, "it is composing no more")
+  verdict.pass("typing during a composing commits it first and then goes in.")
+
+fn test_composing_boxes_are_marked() //< a composing box gets a mark
+  verdict.start("[kspage/edit] the composing boxes getting a mark test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = Sheet.new(base.root_font(), arena)
+  n: = d.add_block("body").add_text("ab")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 2)
+  ed.set_preedit("にほん")
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  // Layout alone sets no mark; `mark_composing` does.
+  assert(!page.boxes.get(0).composing, "laying it alone puts none on")
+  caret.mark_composing(page, ed.caret)
+  assert(page.boxes.get(0).composing, "put on afresh, the mark goes on")
+
+  ed.commit_preedit()
+  page2: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  caret.mark_composing(page2, ed.caret)
+  assert(!page2.boxes.get(0).composing, "once committed none goes on")
+  verdict.pass("only a composing box gets a mark, and it is dropped once committed.")
+// ---- selection ----
+
+fn test_extending_keeps_the_anchor() //< move with Shift held and the anchor stays
+  verdict.start("[kspage/edit] the anchor being left when it is stretched test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("abcd")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 1)
+  assert(!caret.has_selection(ed.caret), "at first nothing is chosen")
+
+  ed.move_right(true)
+  assert(caret.has_selection(ed.caret), "stretched, it becomes chosen")
+  assert(ed.caret.anchor_offset == 1 && ed.caret.offset == 2,
+    "where it set off is left, and only the place it stands moves")
+
+  // Move without extending and it collapses.
+  ed.move_right(false)
+  assert(!caret.has_selection(ed.caret), "move without stretching and it folds")
+  verdict.pass("stretched, where it set off is left; unstretched, it folds.")
+
+fn test_selection_is_ordered_by_the_document() //<
+  //< The selection is put back in document order
+  //<
+  //< Extended to the left, the start and the end are not swapped.
+  verdict.start("[kspage/edit] the range chosen standing in the document's order test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("abcd")
+  // It extends one character left from 3 (the anchor is the later one).
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 3)
+  ed.move_left(true)
+  sp: = caret.selection(d, ed.caret)
+  assert(sp.from_offset == 2 && sp.to_offset == 3, "the front is the smaller one")
+  verdict.pass("stretched left, the range still stands front to back.")
+
+fn test_deleting_a_selection_removes_just_that_range()
+  verdict.start("[kspage/edit] only what was chosen going test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("abcd")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 1)
+  ed.move_right(true)
+  ed.move_right(true)
+
+  // Not one character more is deleted than was selected.
+  ed.backspace()
+  assert(n.text().equals("ad"), "only the 'bc' chosen goes")
+  held: = caret.has_selection(ed.caret)
+  assert(ed.caret.offset == 1 && !held, "the cursor folds at the range's head")
+  verdict.pass("only what was chosen goes, and the cursor stands at its head.")
+
+fn test_typing_over_a_selection_replaces_it() //< typing with a selection replaces it
+  verdict.start("[kspage/edit] what was chosen being swapped for the character typed test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("abcd")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 1)
+  ed.move_right(true)
+  ed.move_right(true)
+
+  ed.insert("X")
+  // Inserted without deleting it would become `aXbcd`: an addition, not a replacement.
+  assert(n.text().equals("aXd"), "what was chosen is swapped")
+  assert(!caret.has_selection(ed.caret), "once typed it folds")
+  verdict.pass("what was chosen is swapped for the character typed.")
+
+fn test_deleting_a_selection_across_blocks() //< a selection across paragraphs can be deleted too
+  //<
+  //< The inlines in between are deleted whole.
+  verdict.start("[kspage/edit] a choice across paragraphs going test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  head: = d.add_block("body").add_text("abc")
+  middle: = d.add_block("body").add_text("XYZ")
+  tail: = d.add_block("body").add_text("def")
+
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(head, 1)
+  ed.caret.inline = tail
+  ed.caret.offset = 2
+  ed.delete_selection()
+  assert(head.text().equals("a"), "the front one loses its back half")
+  assert(middle.text().equals(""), "the one between goes whole")
+  assert(tail.text().equals("f"), "the last one loses its front half")
+  assert(ed.caret.inline == head && ed.caret.offset == 1, "the cursor stands at the range's head")
+  verdict.pass("a choice across paragraphs goes with its ends and its middle right.")
+
+fn test_selection_rects_cover_just_the_range() //<
+  //< The painted rectangles cover the selection and no more
+  verdict.start("[kspage/edit] the paint covering only what was chosen test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = Sheet.new(base.root_font(), arena)
+  // Four ASCII characters = 8px each, 32px in all.
+  n: = d.add_block("body").add_text("abcd")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 1)
+  ed.move_right(true)
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  rects: = List<|Rect|>.create(arena)
+  caret.selection_rects(d, page, ed.caret, rects)
+  assert(rects.len == 1, "it is one row, so the rectangle is one")
+  // Painting the whole box would give 0 to 32px; the selection is only the second character.
+  assert(base.near(rects.get(0).x, 8.0), "it starts where the choice starts")
+  assert(base.near(rects.get(0).w, 8.0), "it is the width of the choice alone")
+
+  caret.collapse(ed.caret@)
+  none: = List<|Rect|>.create(arena)
+  caret.selection_rects(d, page, ed.caret, none)
+  assert(none.len == 0, "folded, there is nothing to paint")
+  verdict.pass("the rectangles painted cover only the range chosen.")

@@ -1,0 +1,342 @@
+import "kspage/lay/caret"
+import "kspage/lay/flow"
+import "kspage/lay/page" { Page }
+import "kspage/model/doc" { Axis, Doc }
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/run"
+import "kspage/model/style" { Sheet }
+import "kspage/tests/base"
+import "kspage/write/block"
+import "kspage/write/edit"
+import "kspage/write/shape"
+import "kspage/write/typing"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// kspage: copying the selection out, and taking text in (copy, cut, paste).
+// **An `Inline` cannot hold a newline** (splitting lines is the layout's job): going out, a
+// paragraph break becomes one newline, and coming in the reverse. The deletion part of cutting is
+// checked by [`edit_test.kspls`](edit_test.kspls).
+// ==========================================
+
+priv fn three_paragraphs(d: Doc$@) //< a document with three paragraphs
+  d.add_block("body").add_text("abc")
+  d.add_block("body").add_text("XYZ")
+  d.add_block("body").add_text("def")
+
+priv fn plain_page(d: Doc$@, arena: Arena$@): Page$@ //< a page of plain flowing text
+  //<
+  //< A paste checks whether it is inside a cell, so it needs a page.
+  return flow.layout(d, Sheet.new(base.root_font(), arena), fixed.make(), 200.0, arena)
+
+priv fn picked(d: Doc$@, c: caret.Caret, sb: Str_builder$@): U8[] //<
+  //< The text of the selection
+  //<
+  //< The returned text lives in `sb` (usable only until the next write into `sb`).
+  sb.clear()
+  caret.selection_into(d, c, sb)
+  return sb.slice()
+
+priv fn para_run(d: Doc$@, i: Sz): run.Inline$@ //< the inline holding a paragraph's text
+  return d.blocks.get(i).inlines.get(0)
+
+priv fn para(d: Doc$@, i: Sz): U8[] //< reads one paragraph's text
+  return para_run(d, i).text()
+
+// ---- copying out ----
+
+fn test_the_selected_text_comes_out_as_typed()
+  verdict.start("[kspage/clip] the text selected coming out as it stands test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  $sb: = Str_builder.new()
+  defer sb.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("abcd")
+  ed: = edit.new_editor(d)
+
+  // With nothing selected it is empty, and neither copy nor cut runs (the JS side decides by it).
+  ed.caret = caret.at(n, 1)
+  assert(picked(d, ed.caret, sb@).len == 0, "with nothing selected nothing comes out")
+
+  ed.move_right(true)
+  ed.move_right(true)
+  assert(picked(d, ed.caret, sb@).equals("bc"), "only what was selected comes out")
+  verdict.pass("only the range selected comes out, as the text was typed.")
+
+fn test_paragraph_breaks_come_out_as_one_newline() //<
+  //< **A paragraph break is one newline.** Without it, the paragraphs would join when pasted back
+  verdict.start("[kspage/clip] a paragraph's break becoming one newline test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  $sb: = Str_builder.new()
+  defer sb.free()
+  d: = Doc.new(arena)
+  three_paragraphs(d)
+
+  // It selects from the first paragraph's "c" to the third's "de".
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(para_run(d, 0), 2)
+  ed.caret.inline = para_run(d, 2)
+  ed.caret.offset = 2
+  assert(picked(d, ed.caret, sb@).equals("c\nXYZ\nde"),
+    "the paragraph between is carried by a newline too")
+  verdict.pass("across paragraphs, one newline goes in per break.")
+
+fn test_styled_runs_in_one_paragraph_stay_on_one_line() //<
+  //< **No newline is added where inlines split within a paragraph**
+  //<
+  //< Applying a style splits the inlines, and a mere bold would multiply the paragraphs.
+  verdict.start("[kspage/clip] a style within a paragraph not growing the newlines test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  $sb: = Str_builder.new()
+  defer sb.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("abcd")
+  ed: = edit.new_editor(d)
+
+  // The middle "bc" is made bold, splitting the inlines into three.
+  ed.caret = caret.at(n, 1)
+  ed.move_right(true)
+  ed.move_right(true)
+  assert(ed.set_style("strong"), "the style lies on")
+  assert(d.blocks.get(0).inlines.len == 3, "the runs split into three")
+
+  ed.caret = caret.at(d.blocks.get(0).inlines.get(0), 0)
+  ed.caret.inline = d.blocks.get(0).inlines.get(2)
+  ed.caret.offset = 1
+  assert(picked(d, ed.caret, sb@).equals("abcd"), "it stays one row")
+  verdict.pass("within the same paragraph it comes out as one row even where the runs split.")
+
+// ---- pasting in ----
+
+fn test_pasting_puts_the_text_at_the_caret()
+  verdict.start("[kspage/clip] the text pasted going in at the cursor test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("ad")
+  page: = plain_page(d, arena)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 1)
+
+  assert(ed.paste(page, "bc"), "it pastes")
+  assert(para(d, 0).equals("abcd"), "it goes in at the cursor")
+  assert(d.blocks.len == 1, "with no newline the paragraphs do not grow")
+  assert(ed.caret.offset == 3, "the cursor stands behind the text pasted")
+  assert(!ed.paste(page, ""), "an empty text is not pasted")
+  verdict.pass("a text with no newline goes in at the cursor as it stands.")
+
+fn test_pasting_lines_makes_paragraphs() //<
+  //< **The paragraph count grows by the number of newlines**
+  //<
+  //< Folded into one paragraph, the newlines would be lost (an `Inline` cannot hold them as text).
+  verdict.start("[kspage/clip] a newline becoming a paragraph's break test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("")
+  page: = plain_page(d, arena)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(para_run(d, 0), 0)
+
+  // A `\r\n` is two bytes and one break. Counted as two, an empty paragraph would appear between.
+  assert(ed.paste(page, "one\ntwo\r\nthree"), "it pastes")
+  assert(d.blocks.len == 3, "the paragraphs become three")
+  assert(para(d, 0).equals("one"), "the first row is the first paragraph")
+  assert(para(d, 1).equals("two"), "the second row is the second paragraph")
+  assert(para(d, 2).equals("three"), "the third row is the third paragraph")
+  verdict.pass("a paragraph splits per newline, and a `\\r\\n` is one break too.")
+
+fn test_pasting_lines_inside_a_paragraph_keeps_the_tail() //<
+  //< Paste several lines mid-paragraph and the second half stays after the last line
+  verdict.start("[kspage/clip] the back half being left when pasting mid-paragraph test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("az")
+  page: = plain_page(d, arena)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 1)
+
+  assert(ed.paste(page, "b\nc"), "it pastes")
+  assert(d.blocks.len == 2, "the paragraphs become two")
+  assert(para(d, 0).equals("ab"), "the first row goes on in front")
+  // Dropped, the "z" would be lost. The last line goes at the start of the split-off second half.
+  assert(para(d, 1).equals("cz"), "the original back half is left behind the last row")
+  verdict.pass("pasted mid-paragraph, the paragraph's back half is not deleted.")
+
+fn test_pasting_replaces_the_selection_in_one_undo_step() //<
+  //< **Where something is selected, pasting replaces it**
+  //<
+  //< Inserted without deleting, typing over would become adding.
+  //< **One paste is one undo**, not one per line.
+  verdict.start("[kspage/clip] a paste replacing in one step test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("aXYd")
+  page: = plain_page(d, arena)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 1)
+  ed.move_right(true)
+  ed.move_right(true)
+
+  assert(ed.paste(page, "b\nc"), "it pastes")
+  assert(d.blocks.len == 2, "the paragraphs grow by the count of rows")
+  assert(para(d, 0).equals("ab"), "what was selected goes and the first row goes in")
+  assert(para(d, 1).equals("cd"), "the rest carries on into the second paragraph")
+
+  assert(ed.undo(), "it can be put back")
+  assert(d.blocks.len == 1, "the paragraphs come back in one step")
+  assert(para(d, 0).equals("aXYd"), "the text that had been selected comes back too")
+  assert(!ed.undo(), "there is one hand to go back by and no more")
+  verdict.pass("a paste replaces what was selected, and goes back in one.")
+
+fn test_pasting_inside_a_cell_folds_the_newlines() //<
+  //< **Inside a cell no paragraph is split** (the cell would grow and the table would break)
+  //<
+  //< A newline becomes one space.
+  verdict.start("[kspage/clip] a newline becoming a space inside a cell test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = d.add_block("table")
+  row: = table.add_child("row")
+  row.add_child("cell").add_text("a")
+  row.add_child("cell").add_text("b")
+  sheet: = Sheet.new(base.root_font(), arena)
+  base.table_style(sheet)
+
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(page.boxes.get(0).inline, 1)
+  assert(ed.paste(page, "x\ny"), "it pastes")
+  assert(table.line_count(Axis.row) == 1, "the rows stay one")
+  assert(table.children.get(0).children.len == 2, "the cells stay two too")
+  cell: = row.children.get(0).inlines.get(0).text()
+  assert(cell.equals("ax y"), "the newline is folded into one space")
+  verdict
+    .pass("pasted into a cell the table's shape does not change, and a newline becomes a space.")
+
+fn test_a_copied_range_pastes_back_the_same() //<
+  //< Copied out and pasted back, it gives the same shape (both directions share one rule)
+  verdict.start("[kspage/clip] copying and pasting back giving the same shape test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  $sb: = Str_builder.new()
+  defer sb.free()
+  d: = Doc.new(arena)
+  three_paragraphs(d)
+  sheet: = Sheet.new(base.root_font(), arena)
+  ed: = edit.new_editor(d)
+
+  ed.caret = caret.at(para_run(d, 0), 0)
+  ed.caret.inline = para_run(d, 2)
+  ed.caret.offset = 3
+  held: = picked(d, ed.caret, sb@)
+
+  ed.caret = caret.at(para_run(d, 2), 3)
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(ed.paste(page, held), "it pastes")
+  assert(d.blocks.len == 5, "three paragraphs grow, and one break is carried onto the end")
+  assert(para(d, 2).equals("defabc"), "the first row carries on into the paragraph pasted into")
+  assert(para(d, 3).equals("XYZ"), "the paragraph between lines up as it was")
+  assert(para(d, 4).equals("def"), "the last row becomes a paragraph too")
+  verdict.pass("paste the text carried out back and it lines up at the same breaks.")
+// ---- find and replace ----
+
+fn test_finding_walks_the_document_and_wraps() //<
+  //< It searches in document order, and at the end it wraps to the start
+  verdict.start("[kspage/find] the order of looking and the coming round test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  head: = d.add_block("body").add_text("ax ay")
+  tail: = d.add_block("body").add_text("az")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(head, 0)
+
+  assert(ed.find_next("a"), "it is found")
+  assert(ed.caret.anchor == head && ed.caret.anchor_offset == 0, "the first is at the head")
+  // It selects the match; only placing the cursor there would leave the match unseen on the screen.
+  assert(caret.has_selection(ed.caret), "where it was found is selected")
+  assert(ed.find_next("a") && ed.caret.anchor_offset == 3, "it goes on to the second")
+  assert(ed.find_next("a") && ed.caret.anchor == tail, "it goes on to the next paragraph too")
+  // Without wrapping, nothing would be found after searching to the bottom.
+  assert(ed.find_next("a") && ed.caret.anchor == head, "reaching the end it comes back to the head")
+  wrapped_back: = ed.find_next("a", true) && ed.caret.anchor == tail
+  assert(wrapped_back, "backward it comes round to the end")
+  assert(ed.find_next("a", true) && ed.caret.anchor_offset == 3, "it goes on further back")
+  assert(!ed.find_next("no such text"), "where there is none it is not found")
+  assert(!ed.find_next(""), "an empty text is not looked for")
+  verdict.pass("the order of looking is the document's order, and at the edge it comes round.")
+
+fn test_finding_crosses_runs_but_not_blocks() //< it crosses inlines but not paragraphs
+  verdict.start("[kspage/find] crossing runs but not paragraphs test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  b: = d.add_block("body")
+  first: = b.add_text("ab")
+  b.add_text("cd", "strong")
+  d.add_block("body").add_text("ef")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(first, 0)
+
+  // Without crossing, a text that spans a bold part would not be found.
+  assert(ed.find_next("bc"), "it is found across the runs")
+  assert(ed.caret.anchor == first && ed.caret.anchor_offset == 1, "the start is in the first run")
+  ends_in_second: = ed.caret.inline == b.inlines.get(1) && ed.caret.offset == 1
+  assert(ends_in_second, "the end is in the second run")
+  // No character stands between paragraphs; crossing, one's end and the next's start look joined.
+  assert(!ed.find_next("de"), "it does not cross a paragraph")
+  verdict.pass("looking crosses runs and does not cross paragraphs.")
+
+fn test_replacing_undoes_in_one_step() //<
+  //< One replacement is one undo, and replacing all is also undone in one
+  verdict.start("[kspage/find] a replacing going back in one test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("axayaz")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 0)
+
+  assert(ed.replace_next("a", "X"), "one is replaced")
+  assert(para(d, 0).equals("Xxayaz"), "the first one alone changes")
+  assert(ed.undo() && para(d, 0).equals("axayaz"), "it goes back in one")
+
+  // Wrapping at the end, the replaced text would be found again and it would loop forever.
+  assert(ed.replace_all("a", "aa") == 3, "all three are replaced")
+  assert(para(d, 0).equals("aaxaayaaz"),
+    "even with a text that grows it does not go round for ever")
+  assert(ed.undo() && para(d, 0).equals("axayaz"), "the whole goes back in one")
+  assert(ed.replace_all("no such text", "X") == 0, "where there is none it is 0")
+  verdict.pass("one replacing is one undo, and even a text that grows stops.")
+
+fn test_a_formula_cell_is_not_replaced() //<
+  //< A formula's text is not replaced (changed, what it points at and means would change too)
+  //<
+  //< **The typed text is searched** (a position in the value is no position in the document).
+  verdict.start("[kspage/find] not typing over a cell holding a formula test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  b: = d.add_block("body")
+  plain: = b.add_text("12")
+  shown: = b.add_text("=1+11")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(plain, 0)
+
+  assert(ed.replace_all("12", "X") == 1, "the text form alone is replaced")
+  assert(plain.text().equals("X"), "the text form changes")
+  assert(shown.text().equals("=1+11"), "the formula's text does not change")
+  ed.caret = caret.at(plain, 0)
+  assert(ed.find_next("1+11"), "the formula's text can be looked for")
+  ed.caret = caret.at(plain, 0)
+  assert(!ed.find_next("12"), "the value worked out is not looked for")
+  verdict.pass("both the looking and the typing over are on the text as it was typed.")

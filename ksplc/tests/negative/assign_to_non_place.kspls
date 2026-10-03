@@ -1,0 +1,28 @@
+//< The diagnostic that rejects an assignment to an expression that is not a place
+//<
+//< **Let it through and not one diagnostic comes out**: genc emits C like `&x = …` / `f() = …`,
+//< and the C compiler's `expression is not assignable` reaches the user (Principle 2).
+//< Caution: **Keep the stopping side last**: a passing side wrongly refused hides the `@` hint.
+// EXPECT: cannot assign to this expression: it is a value, not a place
+// EXPECT: '@' takes an address, '$' reads through a pointer
+import "std/io"
+
+priv struct P
+  x: I32
+
+fn main(): I32
+  $n: = 1
+  $arr: I32[4] = ::{ 0, 0, 0, 0 }
+  $p: = P::{ .x = 0 }
+  $ptr: I32$@ = n@
+  s: I32$[] = I32$[]::arr
+  // The passing side.
+  n = 2
+  p.x = 3
+  arr[0] = 4
+  ptr$ = 5
+  (s.ptr + 1)$ = 6
+  io.out().s("\{n\}\{p.x\}\{arr[0]\}\{arr[1]\}\n")
+  // The stopping side: the result of taking an address is not a place (a mistyped `$`).
+  n@ = 5
+  return 0

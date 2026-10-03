@@ -1,0 +1,137 @@
+//< Checks that the manual matches what the screen shows
+//<
+//< It is not a suite of its own; it is a part of conventions.
+//< Caution: **The day a label is added, the manual goes stale silently**: neither the count nor
+//< the names are generated from the implementation. **The wording is not checked** (a machine
+//< cannot tell whether "press it and it opens" is right); only the count, the names and the order
+//< are. The theme's colours are checked in `conventions_theme.kspls`.
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+import "tests/support/harness"
+
+priv fn tab_names(text: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< The navigation labels' names (they appear as `>name<span class="tally">`)
+  //<
+  //< Caution: **Take the name from the `>` just before**: searched for by its text, this would need
+  //< a fix for every label added. Only a label carries `tally`, so that mark is enough.
+  $out: = List<|U8[]|>.new(arena)
+  mark: = "<span class=\"tally\">"
+  $i: Sz = 0
+  for i < text.len
+    at: = text.sub_from(i).find_str(mark)
+    if at < 0
+      break
+    shut: = i + Sz::at
+    $from: Sz = shut
+    for from > 0 && text[from - 1] != '>'
+      from -= 1
+    if from < shut
+      out.push(text.sub(from, shut - from))
+    i = shut + mark.len
+  return out
+
+priv fn joined(names: List<|U8[]|>@, arena: Arena$@): U8[] //<
+  //< Joins the names the way the manual writes them (`the 3 tabs A, B and C`)
+  //<
+  //< **The last one is joined by `and`**, as in English lists; commas alone would fail on correct
+  //< prose.
+  want: = arena.text()
+  want.s("the \{names.len\} tabs ")
+  for i in Range.asc(names.len)
+    join: = "" if i == 0 else " and " if i + 1 == names.len else ", "
+    want.s(join).s(names.get(i))
+  return want.take()
+
+priv fn count_after_digit(text: U8[], needle: U8[]): Sz //<
+  //< How many times the needle appears with a digit in front of it, no two overlapping
+  //<
+  //< **Anchor a needle that is ordinary English to something that is not**: `" tabs "` alone
+  //< catches "the tab characters" or "the tabs and a run of empty lines", and counts a place not
+  //< about the navigation as written wrong.
+  $n: Sz = 0
+  $i: Sz = 0
+  for i < text.len
+    at: = text.sub_from(i).find_str(needle)
+    if at < 0
+      break
+    spot: = i + at
+    if spot > 0 && text[spot - 1] >= '0' && text[spot - 1] <= '9'
+      n += 1
+    i = spot + needle.len
+  return n
+
+priv fn check_manual_tabs(arena: Arena$@) //<
+  //< That the manual counts the navigation's labels correctly and lists their names
+  //<
+  //< Caution: **Do not search for a name in the whole text**: "Files" and "Headings" appear
+  //< anywhere, making **a check that cannot fail**. The form "`the N tabs` and the names" is
+  //< matched, so the count, names and order are checked at once. **Check every place it is
+  //< written**, and **fail when there is none**, or a deleted sentence goes green.
+  $bad: = List<|U8[]|>.new(arena)
+  names: = tab_names(harness.read_under_root("kspage/port/web/page.html"), arena)
+  book: = arena.text()
+  for rel in harness.tracked_matching(U8[][]::{ "kspage/content/manual*.kspls" })
+    book.s(harness.read_under_root(rel))
+  said: = book.take()
+  told: = joined(names@, arena)
+  tail: = " tabs "
+  seen: = count_after_digit(said, tail)
+  fit: = said.count_str(told)
+  if seen == 0
+    bad
+      .push(arena.text().s("the manual does not touch the navigation's labels").take())
+  if seen != fit
+    bad
+      .push(arena.text().s("a place is not written in the shape \"").s(told).s("\" (\{fit\} agree)")
+      .take())
+  verdict.check_list("the manual counts the navigation's labels rightly and lists their names",
+    seen, "places", bad@,
+    "keep kspage/content/manual_write.kspls and kspage/port/web/page.html in step")
+
+// The sample screen.
+// Caution: **Keep it at 3 labels** (the list of names and the count both appear in one form).
+// **Mix in one label with no `tally`**: a reader that ignores the mark would list buttons that are
+// not labels (the real screen has a `push` set).
+priv const tab_sample: U8[][] = U8[][]::{ "<div id=\"side-tabs\">",
+  "<button>Alpha<span class=\"tally\">2</span></button>",
+  "<button>Beta<span class=\"tally\">0</span></button>",
+  "<button>Elsewhere<span class=\"push\">Ctrl+B</span></button>",
+  "<button>Gamma<span class=\"tally\">7</span></button></div>" }
+priv const tab_told: U8[] = "the 3 tabs Alpha, Beta and Gamma"
+
+priv const count_text: U8[] = "the 2 tabs and 13 tabs , not the tabs; x1111" //<
+  //< the sample for counting with a digit in front
+  //<
+  //< Caution: **Include an overlapping case** — get the advance wrong and `11` counts as 2.
+priv const count_needle: U8[][3] = ::{ " tabs ", "11", "absent" }
+priv const count_want: Sz[3] = ::{ 2, 1, 0 }
+
+priv fn check_manual_fires(arena: Arena$@)
+  $a: = List<|U8[]|>.new(arena)
+  page: = arena.text()
+  for part in tab_sample
+    page.s(part)
+  names: = tab_names(page.take(), arena)
+  got: = joined(names@, arena)
+  if !got.equals(tab_told)
+    a
+      .push(arena.text().s("read \"").s(got).s("\" from the sample screen (should be \"")
+      .s(tab_told).s("\")").take())
+  verdict.check_list("the reading of the labels' names can fire", tab_sample.len, "lines", a@, "")
+
+  $b: = List<|U8[]|>.new(arena)
+  for i in Range.asc(count_want.len)
+    n: = count_after_digit(count_text, count_needle[i])
+    if n != count_want[i]
+      b
+        .push(arena.text().s("counted \"").s(count_needle[i]).s("\" as \{n\}")
+        .s(" (should be \{count_want[i]\})").take())
+  verdict.check_list("the counting verdict can fire", count_want.len, "samples", b@, "")
+
+fn run(arena: Arena$@)
+  check_manual_tabs(arena)
+  check_manual_fires(arena)

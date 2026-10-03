@@ -1,0 +1,92 @@
+//< A probe showing that ksai runs on Cortex-M bare metal
+//<
+//< It avoids malloc with Arena.from_buffer, and for panic it uses the cfg(freestanding) version
+//< that --freestanding enables automatically (no libc; console output through panic_hook). F32's
+//< arithmetic compiles to software floating point (__aeabi_*), so arm-none-eabi's libgcc.a (the
+//< nofp version) must be passed at link time (see the Makefile).
+import "ksai/nn"
+import "ksai/tensor" { Tensor }
+import "ksos/demo/common/semihost_console" as con
+import "std/mem" { Arena }
+
+$storage: Sz[8192] = ::{}
+
+// SysTick_Handler (port.o) calls it. This probe does not use the scheduler, so it is empty.
+#export
+fn ksos_tick() {}
+
+#export
+fn ksos_main()
+  con.puts("=== Cortex-M AI probe ===\n")
+  panic_hook = con.on_panic
+  $arena: = Arena.from_buffer(Void$@::storage@, sizeof(Sz) * 8192)
+
+  x_shape: Sz[2] = ::{ 2, 3 }
+  $x: = Tensor<|F32|>.new(Sz[]::x_shape, arena@)
+  x.fill(F32::2.0)
+  w_shape: Sz[2] = ::{ 3, 2 }
+  $w: = Tensor<|F32|>.new(Sz[]::w_shape, arena@)
+  w.fill(F32::0.5)
+  y: = x.matmul(w) catch // expected: each element = Σ_3(2.0*0.5) = 3.0
+    panic("matmul shape mismatch")
+
+  con.check("matmul", (y.data + 0)$ == F32::3.0 && (y.data + 3)$ == F32::3.0)
+
+  // rmsnorm: the input [0,0,0,4] is chosen so that ss=16, mean=4 and rms=sqrt(4)=2 are exact.
+  // It checks that the cfg(freestanding) math.sqrt works on real hardware (in software floating
+  // point).
+  rn_shape: Sz[2] = ::{ 1, 4 }
+  $rn_x: = Tensor<|F32|>.new(Sz[]::rn_shape, arena@)
+  rn_x.fill(F32::0.0)
+  (rn_x.data + 3)$ = F32::4.0
+  w1_shape: Sz[1] = ::{ 4 }
+  $rn_w: = Tensor<|F32|>.new(Sz[]::w1_shape, arena@)
+  rn_w.fill(F32::1.0)
+  rn_out: = rn_x.rmsnorm(rn_w, F32::0.0) catch panic("rmsnorm shape mismatch")
+  con.check("rmsnorm",
+    (rn_out.data + 0)$ == F32::0.0 && (rn_out.data + 3)$ == F32::2.0)
+
+  // softmax: all-zero logits give four exp(0)=1 summing to 4, so each element is exactly
+  // 1/4=0.25. It checks that the cfg(freestanding) math.exp works on real hardware.
+  $sm_x: = Tensor<|F32|>.new(Sz[]::rn_shape, arena@)
+  sm_x.fill(F32::0.0)
+  sm_out: = sm_x.softmax() catch panic("softmax shape mismatch")
+  con.check("softmax",
+    (sm_out.data + 0)$ == F32::0.25 && (sm_out.data + 3)$ == F32::0.25)
+
+  // apply_rope: rotation (RoPE) preserves a vector's length, so it rotates [3,4] (length² = 25),
+  // recomputes length² and checks it is close to 25 (this covers the whole path through
+  // pow/cos/sin without computing exact cos/sin values by hand).
+  // start_pos=5 is non-trivial on purpose: at 0 the rotation angle is always 0 and nothing is
+  // checked.
+  rp_shape: Sz[2] = ::{ 1, 2 }
+  $rp_x: = Tensor<|F32|>.new(Sz[]::rp_shape, arena@)
+  (rp_x.data + 0)$ = F32::3.0
+  (rp_x.data + 1)$ = F32::4.0
+  rp_out: = rp_x.apply_rope(5) catch panic("apply_rope shape mismatch")
+  v0: = (rp_out.data + 0)$
+  v1: = (rp_out.data + 1)$
+  norm_sq: = v0 * v0 + v1 * v1
+  diff: = norm_sq - F32::25.0
+  diff_abs: = -diff if diff < F32::0.0 else diff
+  con.check("apply_rope", diff_abs < F32::0.01)
+
+  // Inference through a whole Transformer_block (embedding → attention plus RoPE → the residual →
+  // the MLP → the residual → the LM head). The expected value is the reference from running the
+  // same setup on the host build (with the real libm), recorded at F64 precision. It checks that
+  // the software maths' errors (sqrt/exp/pow/sin/cos), even accumulated, stay well within bounds.
+  $emb: = nn.Embedding<|F32|>.new(4, 4, arena@)
+  $blk: = nn.Transformer_block<|F32|>.new(4, 8, 4, F32::1.0e-5, arena@)
+  $lm_head: = nn.Linear<|F32|>.new(4, 4, arena@)
+  h0: = emb.forward(0, arena@)
+  h1: = blk.forward(h0, 0)
+  logits: = lm_head.forward(h1)
+  logit0: = (logits.data + 0)$
+  ref_logit0: = 0.14163680374622345
+  ldiff: = logit0 - ref_logit0
+  ldiff_abs: = -ldiff if ldiff < 0.0 else ldiff
+  con.check("transformer_block", ldiff_abs < 1.0e-4)
+
+  con.print_summary("AI probe done")
+  con.exit()
+  for {}

@@ -1,0 +1,39 @@
+//< Tests the tool that builds the table of diagnostic codes (`tools/code_rows.kspls`)
+//<
+//< **A mistake here gives a table that lists less than the sections do**, and
+//< `make test-conventions` stays green, since the table matches the same broken builder.
+import "std/chars" // `find_str`
+import "std/mem" { Arena }
+import "std/str" // `equals`
+import "std/verdict"
+import "tools/code_rows" as rows
+
+priv const spec_sample: U8[] =
+  "# Spec\n\n| The code | The name |\n| :-- | :-- |\n| W0001 | stale |\n\nAfter.\n\n#### [W0001] An \
+    unused thing\n\nBody.\n\n```\n#### [W9999] Inside a code block\n```\n\n#### [H0002] A proposal \
+    to adopt `Option<|T|>`\n\n#### [I0003] ARC in use\n"
+
+priv const registry_sample: U8[] =
+  "  if code.equals(\"W0001\")\n    return info(true)\n  if code.equals(\"H0002\")\n    return \
+    info(false)\n  if code.equals(\"I0003\")\n    return info(true)\n"
+
+fn test_the_rows_follow_the_sections(arena: Arena$@) //<
+  //< One row per section heading, in order, and nothing else of the document changes
+  verdict.start("[tools/code_rows] the table's rows test...")
+  text: = rows.with_table(spec_sample, registry_sample, arena)
+  want: =
+    "| W0001 | an unused thing |\n| H0002 | a proposal to adopt `Option<\\|T\\|>` (off by default) \
+      |\n| I0003 | ARC in use |\n\nAfter."
+  assert(text.find_str(want) >= 0, "a row per heading: lower-cased, escaped, and marked off")
+  assert(text.find_str("stale") < 0, "the old rows are gone")
+  assert(text.find_str("| W9999 |") < 0, "a heading inside a code block is not a section")
+  assert(text.ends_with("#### [I0003] ARC in use\n"), "the document after the table is kept")
+  assert(rows.with_table(text, registry_sample, arena).equals(text), "a second run changes nothing")
+  verdict.pass("the table is the sections' headings, and the rest of the document is untouched.")
+
+fn test_a_document_without_the_table(arena: Arena$@) //<
+  //< A document holding no table comes back as it was
+  verdict.start("[tools/code_rows] no table test...")
+  doc: = "# Spec\n\n#### [W0001] An unused thing\n"
+  assert(rows.with_table(doc, registry_sample, arena).equals(doc), "nothing is added")
+  verdict.pass("a document with no table is returned unchanged.")

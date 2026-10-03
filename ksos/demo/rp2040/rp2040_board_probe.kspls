@@ -1,0 +1,89 @@
+//< Every board probe in one run, on the real Freenove 4WD car (Pico W)
+//<
+//< It goes through the peripherals in turn and prints one line for each, so fixing one of them
+//< and breaking another shows on the same screen.
+
+// ==========================================
+// What is printed, in order:
+//   [board] round=N       the start of the round. The buzzer beeps once here
+//   ksos: [1] [2] [3]     USB CDC's send queue (a run of 3 lines and a 91-byte line)
+//   [rtc]  …              whether the calendar RTC is ticking
+//   [heap] … RESULT       alloc / the atomics / Arc / std/http
+//   [ksdb] boot #N        whether the record at the end of Flash survives power cuts
+//   [sensor] bat= light=  one screen of sensors (8 lines, every 0.5 seconds)
+//   [i2c]  scan / frame   the bus scan and the LED matrix
+//   [led]  …              WS2812's colours
+// ==========================================
+import "ksos/demo/rp2040/board_probe/console" as st_console
+import "ksos/demo/rp2040/board_probe/heap" as st_heap
+import "ksos/demo/rp2040/board_probe/leds" as st_leds
+import "ksos/demo/rp2040/board_probe/matrix" as st_matrix
+import "ksos/demo/rp2040/board_probe/records" as st_records
+import "ksos/demo/rp2040/board_probe/rtc" as st_rtc
+import "ksos/demo/rp2040/board_probe/sensor" as st_sensor
+import "ksos/demo/rp2040/common/bringup" as boot
+import "ksos/demo/rp2040/common/console" as con
+import "ksos/drivers/rp2040/usb_cdc" as usb
+import "ksos/kernel/task" + { Task }
+
+$tcb: Task
+// The one task that calls the stages in order. The single-stage firmware managed with 2048, so
+// this leaves room for the calls going one stage deeper.
+$stack: U8[4096]
+$ln: con.Line
+
+const console_timeout_ms: U32 = 8000 //<
+  //< The limit on waiting for the console to become usable [ms]
+  //<
+  //< Caution: **Keep it finite** — a start-up with no USB attached never gets configured, so
+  //< waiting forever would keep the LED and matrix stages from ever starting.
+
+priv fn init_stages() //< sets up the stages
+  //<
+  //< **Call it after the clocks and before USB** (the ADC, I2C and the RTC need the clocks). A
+  //< stage that did not start reports it on its own line, so the return values are not checked
+  //< here.
+  _rtc: = st_rtc.init()
+  _sensor: = st_sensor.init()
+  _matrix: = st_matrix.init()
+  _leds: = st_leds.init()
+
+priv fn round_head(round: U32)
+  if !usb.is_configured()
+    // A round with no console. The beep count of the stage reached is the only window.
+    boot.beep(usb.current_stage())
+    return
+  ln.reset()
+  ln.str("[board] round=")
+  ln.u32(round)
+  _s: = ln.flush()
+  boot.beep(1)
+
+fn probe_task(_arg: Void$@): Void
+  if !boot.clocks_and_gpio()
+    return // silent; see `boot.clocks_and_gpio`
+  init_stages()
+  // It carries on even if USB does not start (it beeps nine times). The LEDs and the matrix can
+  // still be seen then.
+  _usb: = boot.usb_up()
+  _console: = boot.wait_configured(console_timeout_ms)
+
+  // It does not return.
+  $round: U32 = 0
+  for
+    round += 1
+    round_head(round)
+    st_console.run()
+    st_rtc.run(ln@)
+    st_heap.run(ln@, round)
+    st_records.run(ln@)
+    st_sensor.run(ln@)
+    st_matrix.run(ln@)
+    st_leds.run(ln@)
+
+// The on_idle for `task.run_single_task`: semihosting's exit is not available, so it does nothing.
+priv fn park() {}
+
+#export
+fn ksos_main()
+  task.run_single_task(tcb@, U8$[]::stack, probe_task, "board", park)

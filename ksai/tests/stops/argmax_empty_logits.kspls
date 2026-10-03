@@ -1,0 +1,23 @@
+//< Given logits whose last dimension is 0, it must stop instead of picking
+//<
+//< A dimension of size 0 is legitimate for an empty tensor; why argmax and sample must still stop
+//< is at `sampler.argmax`.
+//< Caution: The shape must be **decided at run time**; a constant is folded and the run-time
+//< check never runs.
+import "ksai/sampler"
+import "ksai/tensor" { Tensor }
+import "std/io"
+import "std/mem" { Arena }
+import "std/sys"
+
+fn main(): I32
+  arena: = Arena.new(4096)
+  defer arena.free()
+  // The arguments are the executable's name alone, so this is 0.
+  $shape: Sz[1] = ::{ 0 }
+  shape[0] = sys.args().len - 1
+  t: = Tensor<|F32|>.new(Sz[]::shape, arena)
+  io.out().s("about to pick from \{t.shape[0]\} candidates\n")
+  picked: = sampler.argmax(t)
+  io.out().s("must not get here: \{picked\}\n")
+  return 0

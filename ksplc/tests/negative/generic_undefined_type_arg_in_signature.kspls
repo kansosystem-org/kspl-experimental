@@ -1,0 +1,24 @@
+//< A method signature using, as a type argument, a name that is not a type
+//<
+//< The name `t` is a typo for `S` (names_unknown_type in ksplc/sema/decl/resolve.kspls).
+//< Caution: **Do not make a substance out of a typo.** A `Box2<|t|>` disagrees with the body's
+//< `Chain<|Box2<|S|>|>`, lining up derived errors, and polymorphic recursion never stops compiling.
+// EXPECT: undefined type 't'
+// EXPECT-NOT: but got
+struct Box2<|S|>
+  inner: S
+
+struct Chain<|S|>
+  v: S
+  n: I32
+
+impl<|S|> Chain<|S|>
+  fn deeper(r: Self): Chain<|Box2<|t|>|>
+    return Chain<|Box2<|S|>|>::{ .v = Box2<|S|>::{ .inner = r.v }, .n = r.n }
+
+  fn tag(r: Self): I32
+    return r.n
+
+fn main(): I32
+  c: = Chain<|I32|>::{ .v = 1, .n = 2 }
+  return c.deeper().deeper().tag()

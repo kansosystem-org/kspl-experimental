@@ -1,0 +1,170 @@
+//< Six kernel promises that looking right does not prove
+//<
+//< Each is a place where the obvious reading and the real behaviour differ, so each is checked
+//< here rather than left to watching a demo.
+
+// ==========================================
+//   1. When one waiter is woken, it is the waiter with **the highest priority** (not the
+//      registration order).
+//   2. A task suspended while blocked does not advance even when the resource comes, and advances
+//      after the resume.
+//   3. A task deleted while blocked never advances again, even when the resource comes.
+// ==========================================
+//   4. A `delay_until` to a past time returns without waiting.
+//   5. Unlock returns a lent priority.
+//   6. Once the task limit is reached, `Task.create` returns false and registers nothing more.
+// ==========================================
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+import "std/chars" // U8$[].sub_mut
+import "std/verdict"
+
+$g_sem: sync.Sem
+$g_order: I32[3]
+$g_taken: Sz = 0
+
+$g_sem_hold: sync.Sem
+$g_hold_progress: I32 = 0
+
+$g_sem_gone: sync.Sem
+$g_gone_progress: I32 = 0
+
+$g_mutex: sync.Mutex
+
+priv const max_tasks: Sz = 32 //<
+  //< How many slots the limit test fills: the kernel's task limit
+  //<
+  //< It equals the kernel's `max_tasks`, which is priv, so the number is repeated here and checked
+  //< against it. Only `delete` frees a slot; a task that returned from its entry and became done
+  //< keeps its slot. Deleting `gone` in check 3 frees one, so the free room is 32 - 6 + 1.
+priv const fixed_tasks: Sz = 6 // coord + lo/mid/hi + hold + gone
+priv const freed_by_delete: Sz = 1 // gone
+priv const free_slots: Sz = max_tasks - fixed_tasks + freed_by_delete
+priv const filler_slots: Sz = free_slots + 1 // one extra, to see it refused
+priv const filler_stack: Sz = 32768
+
+$tcb_coord: Task
+$tcb_lo: Task
+$tcb_mid: Task
+$tcb_hi: Task
+$tcb_hold: Task
+$tcb_gone: Task
+$tcb_filler: Task[28]
+$stack_coord: U8[65536]
+$stack_lo: U8[65536]
+$stack_mid: U8[65536]
+$stack_hi: U8[65536]
+$stack_hold: U8[65536]
+$stack_gone: U8[65536]
+$stack_filler: U8[917504] // filler_slots × filler_stack
+
+fn waiter(arg: Void$@): Void //< 1. All three wait on the same semaphore
+  //<
+  //< Caution: **Make the lower-priority task wait first** (it is also registered first). An
+  //< implementation that wakes by registration or waiting order has lo take it first; one that
+  //< wakes by priority has hi take it first.
+  id: = (I32$@::arg)$
+  // hi is delayed so that it starts waiting last (3 → no delay, 2 → 1, 1 → 2).
+  Task.delay(U64::(3 - id))
+  g_sem.take()
+  g_order[g_taken] = id
+  g_taken += 1
+$g_id_lo: I32 = 1
+$g_id_mid: I32 = 2
+$g_id_hi: I32 = 3
+
+fn holder(_arg: Void$@): Void //< 2. The task suspended while it waits
+  g_sem_hold.take()
+  g_hold_progress = 1
+
+fn goner(_arg: Void$@): Void //< 3. The task deleted while it waits
+  g_sem_gone.take()
+  g_gone_progress = 1
+
+fn filler_entry(_arg: Void$@): Void {}
+
+fn coordinator(_arg: Void$@): Void
+  // --- 1. the waking order ---
+  verdict.start("[ksos] wake picks the highest-priority waiter")
+  Task.delay(4) // wait until all three are waiting (hi starts 2 ticks late)
+  for _n in Range.asc(3)
+    g_sem.give()
+    Task.delay(1)
+  assert(g_taken == 3, "kernel_check: all three waiters must have taken the semaphore")
+  assert(g_order[0] == 3 && g_order[1] == 2 && g_order[2] == 1,
+    "kernel_check: the semaphore went to a lower-priority waiter first")
+  verdict
+    .pass("giving one at a time where three are waiting, they take it in order of priority \
+      (3→2→1).")
+
+  // --- 2. suspend / resume while blocked ---
+  verdict.start("[ksos] suspend while blocked")
+  Task.delay(1) // holder starts waiting on its take
+  tcb_hold.suspend()
+  g_sem_hold.give() // the semaphore is given, but a suspended task cannot take it
+  Task.delay(2)
+  assert(g_hold_progress == 0, "kernel_check: a suspended waiter took the semaphore")
+  tcb_hold.resume()
+  Task.delay(2)
+  assert(g_hold_progress == 1, "kernel_check: a resumed waiter did not take the semaphore")
+  verdict
+    .pass("while it is stopped, giving does not advance it; resumed, it takes it from where it was.")
+
+  // --- 3. delete while blocked ---
+  verdict.start("[ksos] delete while blocked")
+  tcb_gone.delete()
+  g_sem_gone.give()
+  Task.delay(2)
+  assert(g_gone_progress == 0, "kernel_check: a deleted waiter came back to life")
+  verdict.pass("a task erased never advances again, even when the resource it awaited comes.")
+
+  // --- 4. delay_until into the past ---
+  verdict.start("[ksos] delay_until into the past")
+  before: = task.current_tick()
+  Task.delay_until(0)
+  assert(task.current_tick() == before, "kernel_check: delay_until(past) advanced the clock")
+  verdict.pass("handed a past moment, it returns without waiting.")
+
+  // --- 5. the lent priority is returned ---
+  verdict.start("[ksos] inherited priority is returned")
+  // Nobody contends while this task (prio 4) holds the mutex, so no loan can happen here. Instead
+  // it checks that plain lock and unlock leave the priority alone (ksos-cm-pi checks the loan).
+  my_prio: = tcb_coord.get_prio()
+  g_mutex.lock()
+  g_mutex.unlock()
+  assert(tcb_coord.get_prio() == my_prio, "kernel_check: lock/unlock changed the holder's priority")
+  verdict.pass("merely taking and letting go does not move the priority.")
+
+  // --- 6. the cap on seats ---
+  verdict.start("[ksos] Task.create refuses past the limit")
+  $made: Sz = 0
+  $refused: Sz = 0
+  fillers: = U8$[]::stack_filler
+  for i in Range.asc(filler_slots)
+    ok: = tcb_filler[i].create(fillers.sub_mut(i * filler_stack, filler_stack), filler_entry, null,
+      1, "filler")
+    if ok
+      made += 1
+    else
+      refused += 1
+  assert(made == free_slots, "kernel_check: free slots are not (32 - 6 fixed + 1 freed by delete)")
+  assert(refused == 1, "kernel_check: create did not refuse the 33rd task")
+  assert(Task.count() == max_tasks, "kernel_check: the table holds more than max_tasks")
+  verdict
+    .pass("registering after the 32 seats are filled is turned away with false, and the table grows \
+      no further (a seat that was deleted is reused).")
+
+fn main()
+  g_sem.init(0)
+  g_sem_hold.init(0)
+  g_sem_gone.init(0)
+  g_mutex.init()
+  // Registration order is lo → mid → hi. If waking followed registration order, lo would take it
+  // first.
+  tcb_coord.create(U8$[]::stack_coord, coordinator, null, 4, "coord")
+  tcb_lo.create(U8$[]::stack_lo, waiter, Void$@::g_id_lo@, 1, "lo")
+  tcb_mid.create(U8$[]::stack_mid, waiter, Void$@::g_id_mid@, 2, "mid")
+  tcb_hi.create(U8$[]::stack_hi, waiter, Void$@::g_id_hi@, 3, "hi")
+  tcb_hold.create(U8$[]::stack_hold, holder, null, 1, "hold")
+  tcb_gone.create(U8$[]::stack_gone, goner, null, 1, "gone")
+  task.start_scheduler()

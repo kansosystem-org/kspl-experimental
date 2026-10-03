@@ -1,0 +1,443 @@
+import "ksai/attention_train" as ai_attn_train
+import "ksai/block_train" as ai_block_train
+import "ksai/lora" as ai_lora
+import "ksai/nn" as ai_nn
+import "ksai/nn_grad" as ai_nn_grad
+import "ksai/tensor" { Tensor }
+import "ksai/tests/common_test"
+import "std/mem" { Arena }
+import "std/prng"
+import "std/verdict"
+
+// ==========================================
+// Matches the gradients of the weights being trained against a finite difference.
+// Caution: **The dX tests do not check any weight's gradient.** dW can be wrong where dX is
+// right, so a `grad_matmul_weight` with rows and columns swapped, or a dW missing its
+// coefficient, passes those tests.
+// **Do not add a way to return only the gradient**: the code under test and the code training
+// uses would diverge, leaving **the path training actually uses untested**.
+// ==========================================
+
+priv const fd_eps: F64 = 1.0e-5 //< the finite difference's step
+  //<
+  //< It is a central difference, so the truncation error scales as eps^2.
+priv const probe_lr: F64 = 1.0e-2 //< the SGD step used to recover the analytic gradient
+  //<
+  //< **If it is too small, the difference is lost in rounding.**
+
+priv fn spread(t: Tensor<|F64|>, seed: Sz) //<
+  //< Sets one weight to deterministic, **non-uniform** values
+  //<
+  //< Caution: **Do not fill it with the same value.** `nn.Linear.new`'s default is 0.1 in every
+  //< element, and then every output unit gets the same value. **A gradient with rows and columns
+  //< swapped then matches anyway**, so the mistake cannot be found.
+  for i in Range.asc(t.size)
+    k: = (i * 7 + seed * 13) % 11
+    (t.data + i)$ = 0.09 * (F64::k) - 0.4
+
+priv fn grad_from_step(w: Tensor<|F64|>, before: Tensor<|F64|>, arena: Arena$@): Tensor<|F64|> //<
+  //< Recovers the gradient from how far SGD moved the weight, then restores the weight
+  //<
+  //< Caution: **Restore it.** Otherwise the finite difference after this measures the gradient at a
+  //< different point.
+  g: = Tensor<|F64|>.new(w.shape, arena)
+  for i in Range.asc(w.size)
+    (g.data + i)$ = ((before.data + i)$ - (w.data + i)$) / probe_lr
+    (w.data + i)$ = (before.data + i)$
+  return g
+
+priv fn max_gap(w: Tensor<|F64|>, g: Tensor<|F64|>, loss: Callable1<|Sz, F64|>): F64 //<
+  //< Returns the largest gap between the analytic gradient and the finite difference, for `w`
+  $worst: = 0.0
+  for k in Range.asc(w.size)
+    saved: = (w.data + k)$
+    (w.data + k)$ = saved + fd_eps
+    l_plus: = loss.call(0)
+    (w.data + k)$ = saved - fd_eps
+    l_minus: = loss.call(0)
+    (w.data + k)$ = saved
+    d: = (l_plus - l_minus) / (2.0 * fd_eps) - (g.data + k)$
+    ad: = -d if d < 0.0 else d
+    if ad > worst
+      worst = ad
+  return worst
+
+priv fn ones_like(t: Tensor<|F64|>, arena: Arena$@): Tensor<|F64|> //<
+  //< A dout filled with 1
+  //<
+  //< The loss is L = Σ out, so the output-side gradient is 1 everywhere.
+  $d: = Tensor<|F64|>.new(t.shape, arena)
+  d.fill(1.0)
+  return d
+
+priv struct Param //< one weight to match
+  //<
+  //< The name is there only to show which weight failed.
+  name: U8$[]
+  w: Tensor<|F64|>
+  g: Tensor<|F64|>
+
+priv fn check_all(ps: Param[], tol: F64, loss: Callable1<|Sz, F64|>) //<
+  //< Checks the listed weights, one at a time
+  //<
+  //< Caution: **Do not write the loss out separately for each weight.** Every weight of one model
+  //< uses the same loss; with separate copies, one using another model goes unnoticed.
+  for p in ps
+    gap: = max_gap(p.w, p.g, loss)
+    assert(gap < tol, p.name)
+
+fn test_linear_weight_grad()
+  verdict.start("[NN] Linear's weight gradient matches a finite difference...")
+  work: = Arena.new(4 * 1024 * 1024)
+  defer work.free()
+  in_d: Sz = 3
+  out_d: Sz = 4
+  rows: Sz = 2
+  $lin: = ai_nn.Linear<|F64|>.new(in_d, out_d, work)
+  spread(lin.weights, 1)
+  x_shape: Sz[2] = ::{ rows, in_d }
+  x: = Tensor<|F64|>.new(Sz[]::x_shape, work)
+  spread(x, 2)
+
+  lp: = lin@
+  before: = lin.weights.dup(work)
+  dy: = ones_like(lin.forward(x), work)
+  lin.backward(x, dy, probe_lr)
+  ps: Param[1] = ::{ Param::{ .name = "Linear: dW", .w = lin.weights,
+    .g = grad_from_step(lin.weights, before, work) } }
+
+  check_all(Param[]::ps, 1.0e-6,
+    fn(_i: Sz; lp: ai_nn.Linear<|F64|>$@, x: Tensor<|F64|>): F64 {
+    return common_test.tsum_f64(lp.forward(x));
+  })
+  verdict.pass("")
+
+fn test_rmsnorm_weight_grad()
+  verdict.start("[NN] RMSNorm's weight gradient matches a finite difference...")
+  work: = Arena.new(4 * 1024 * 1024)
+  defer work.free()
+  n: Sz = 4
+  rows: Sz = 3
+  $rn: = ai_nn.Rms_norm<|F64|>.new(n, 1.0e-5, work)
+  spread(rn.weight, 3)
+  x_shape: Sz[2] = ::{ rows, n }
+  x: = Tensor<|F64|>.new(Sz[]::x_shape, work)
+  spread(x, 4)
+
+  rp: = rn@
+  before: = rn.weight.dup(work)
+  dy: = ones_like(rn.forward(x), work)
+  rn.backward(x, dy, probe_lr)
+  ps: Param[1] = ::{ Param::{ .name = "RMSNorm: dW", .w = rn.weight,
+    .g = grad_from_step(rn.weight, before, work) } }
+
+  check_all(Param[]::ps, 1.0e-6,
+    fn(_i: Sz; rp: ai_nn.Rms_norm<|F64|>$@, x: Tensor<|F64|>): F64 {
+    return common_test.tsum_f64(rp.forward(x));
+  })
+  verdict.pass("")
+
+fn test_mlp_weight_grad()
+  verdict.start("[NN] the MLP's two weight gradients match a finite difference...")
+  work: = Arena.new(8 * 1024 * 1024)
+  defer work.free()
+  d: Sz = 3
+  hidden: Sz = 4
+  rows: Sz = 2
+  $mlp: = ai_nn.Mlp<|F64|>.new(d, hidden, d, work)
+  spread(mlp.fc1.weights, 5)
+  spread(mlp.fc2.weights, 6)
+  x_shape: Sz[2] = ::{ rows, d }
+  x: = Tensor<|F64|>.new(Sz[]::x_shape, work)
+  spread(x, 7)
+
+  mp: = mlp@
+  b1: = mlp.fc1.weights.dup(work)
+  b2: = mlp.fc2.weights.dup(work)
+  dy: = ones_like(mlp.forward(x), work)
+  mlp.backward(x, dy, probe_lr)
+  ps: Param[2] = ::{ Param::{ .name = "MLP: fc1's dW", .w = mlp.fc1.weights,
+    .g = grad_from_step(mlp.fc1.weights, b1, work) },
+    Param::{ .name = "MLP: fc2's dW", .w = mlp.fc2.weights,
+    .g = grad_from_step(mlp.fc2.weights, b2, work) } }
+
+  check_all(Param[]::ps, 1.0e-6,
+    fn(_i: Sz; mp: ai_nn.Mlp<|F64|>$@, x: Tensor<|F64|>): F64 {
+    return common_test.tsum_f64(mp.forward(x));
+  })
+  verdict.pass("")
+
+fn test_attention_weight_grad()
+  verdict.start("[Attn] Wq/Wk/Wv/Wo's gradients match a finite difference...")
+  work: = Arena.new(32 * 1024 * 1024)
+  defer work.free()
+  seqn: Sz = 3
+  d: Sz = 4
+  $att: = ai_nn.Self_attention<|F64|>.new(d, seqn, work)
+  spread(att.wq.weights, 1)
+  spread(att.wk.weights, 2)
+  spread(att.wv.weights, 3)
+  spread(att.wo.weights, 4)
+  x_shape: Sz[2] = ::{ seqn, d }
+  x: = Tensor<|F64|>.new(Sz[]::x_shape, work)
+  spread(x, 5)
+
+  ap: = att@
+  bq: = att.wq.weights.dup(work)
+  bk: = att.wk.weights.dup(work)
+  bv: = att.wv.weights.dup(work)
+  bo: = att.wo.weights.dup(work)
+  $c: = att.train_forward(x)
+  dout: = ones_like(c.out, work)
+  att.backward(c@, dout, probe_lr)
+  ps: Param[4] = ::{ Param::{ .name = "Attn: dWq", .w = att.wq.weights,
+    .g = grad_from_step(att.wq.weights, bq, work) },
+    Param::{ .name = "Attn: dWk", .w = att.wk.weights,
+    .g = grad_from_step(att.wk.weights, bk, work) },
+    Param::{ .name = "Attn: dWv", .w = att.wv.weights,
+    .g = grad_from_step(att.wv.weights, bv, work) },
+    Param::{ .name = "Attn: dWo", .w = att.wo.weights,
+    .g = grad_from_step(att.wo.weights, bo, work) } }
+
+  check_all(Param[]::ps, 1.0e-5,
+    fn(_i: Sz; ap: ai_nn.Self_attention<|F64|>$@, x: Tensor<|F64|>): F64 {
+    return common_test.tsum_f64(ap.train_forward(x).out);
+  })
+  verdict.pass("")
+
+fn test_block_weight_grad()
+  verdict.start("[Block] the whole block's eight weight gradients match a finite difference...")
+  work: = Arena.new(64 * 1024 * 1024)
+  defer work.free()
+  seqn: Sz = 2
+  // **Keep it even.** RoPE rotates adjacent elements in pairs, so `apply_rope`
+  // (`ksai/tensor.kspls`) rejects an odd width.
+  d: Sz = 4
+  hidden: Sz = 4
+  $blk: = ai_nn.Transformer_block<|F64|>.new(d, hidden, seqn, 1.0e-5, work)
+  spread(blk.attention_norm.weight, 1)
+  spread(blk.attention.wq.weights, 2)
+  spread(blk.attention.wk.weights, 3)
+  spread(blk.attention.wv.weights, 4)
+  spread(blk.attention.wo.weights, 5)
+  spread(blk.ffn_norm.weight, 6)
+  spread(blk.ffn.fc1.weights, 7)
+  spread(blk.ffn.fc2.weights, 8)
+  x_shape: Sz[2] = ::{ seqn, d }
+  x: = Tensor<|F64|>.new(Sz[]::x_shape, work)
+  spread(x, 9)
+
+  bp: = blk@
+  b_an: = blk.attention_norm.weight.dup(work)
+  b_q: = blk.attention.wq.weights.dup(work)
+  b_k: = blk.attention.wk.weights.dup(work)
+  b_v: = blk.attention.wv.weights.dup(work)
+  b_o: = blk.attention.wo.weights.dup(work)
+  b_fn: = blk.ffn_norm.weight.dup(work)
+  b_f1: = blk.ffn.fc1.weights.dup(work)
+  b_f2: = blk.ffn.fc2.weights.dup(work)
+
+  $c: = blk.train_forward(x)
+  dout: = ones_like(c.out, work)
+  blk.backward(c@, dout, probe_lr)
+
+  ps: Param[8] = ::{ Param::{ .name = "Block: attention_norm's dW",
+    .w = blk.attention_norm.weight,
+    .g = grad_from_step(blk.attention_norm.weight, b_an, work) },
+    Param::{ .name = "Block: dWq", .w = blk.attention.wq.weights,
+    .g = grad_from_step(blk.attention.wq.weights, b_q, work) },
+    Param::{ .name = "Block: dWk", .w = blk.attention.wk.weights,
+    .g = grad_from_step(blk.attention.wk.weights, b_k, work) },
+    Param::{ .name = "Block: dWv", .w = blk.attention.wv.weights,
+    .g = grad_from_step(blk.attention.wv.weights, b_v, work) },
+    Param::{ .name = "Block: dWo", .w = blk.attention.wo.weights,
+    .g = grad_from_step(blk.attention.wo.weights, b_o, work) },
+    Param::{ .name = "Block: ffn_norm's dW", .w = blk.ffn_norm.weight,
+    .g = grad_from_step(blk.ffn_norm.weight, b_fn, work) },
+    Param::{ .name = "Block: fc1's dW", .w = blk.ffn.fc1.weights,
+    .g = grad_from_step(blk.ffn.fc1.weights, b_f1, work) },
+    Param::{ .name = "Block: fc2's dW", .w = blk.ffn.fc2.weights,
+    .g = grad_from_step(blk.ffn.fc2.weights, b_f2, work) } }
+
+  check_all(Param[]::ps, 1.0e-5,
+    fn(_i: Sz; bp: ai_nn.Transformer_block<|F64|>$@, x: Tensor<|F64|>): F64 {
+    return common_test.tsum_f64(bp.train_forward(x).out);
+  })
+  verdict.pass("")
+
+// ==========================================
+// The LoRA's A/B. **This is the only path for on-device training** (the base stays frozen and
+// only A and B move).
+// Caution: **Do not leave `b` at 0.** `Lora.new`'s initial value is `b = 0`, and then
+// `dA = x^T·(dy·B^T)` is all zeros. Comparing 0 with 0 proves nothing.
+// ==========================================
+fn test_lora_weight_grad()
+  verdict.start("[LoRA] A/B's gradients match a finite difference...")
+  work: = Arena.new(4 * 1024 * 1024)
+  defer work.free()
+  in_d: Sz = 4
+  out_d: Sz = 3
+  rank: Sz = 2
+  rows: Sz = 2
+  $rng: = prng.Prng.new(21U64)
+  $lo: = ai_lora.Lora<|F64|>.new(in_d, out_d, rank, 4.0, rng@, work)
+  spread(lo.a, 1)
+  spread(lo.b, 2)
+  x_shape: Sz[2] = ::{ rows, in_d }
+  x: = Tensor<|F64|>.new(Sz[]::x_shape, work)
+  spread(x, 3)
+
+  op: = lo@
+  ba: = lo.a.dup(work)
+  bb: = lo.b.dup(work)
+  dy: = ones_like(lo.forward(x), work)
+  lo.backward(x, dy, probe_lr)
+  ps: Param[2] = ::{ Param::{ .name = "LoRA: dA", .w = lo.a,
+    .g = grad_from_step(lo.a, ba, work) },
+    Param::{ .name = "LoRA: dB", .w = lo.b, .g = grad_from_step(lo.b, bb, work) } }
+
+  check_all(Param[]::ps, 1.0e-6,
+    fn(_i: Sz; op: ai_lora.Lora<|F64|>$@, x: Tensor<|F64|>): F64 {
+    return common_test.tsum_f64(op.forward(x));
+  })
+  verdict.pass("")
+
+fn test_attention_lora_weight_grad()
+  verdict.start("[Attn+LoRA] the inserted A/B's gradients match a finite difference...")
+  work: = Arena.new(32 * 1024 * 1024)
+  defer work.free()
+  seqn: Sz = 3
+  d: Sz = 4
+  rank: Sz = 2
+  $att: = ai_nn.Self_attention<|F64|>.new(d, seqn, work)
+  spread(att.wq.weights, 1)
+  spread(att.wk.weights, 2)
+  spread(att.wv.weights, 3)
+  spread(att.wo.weights, 4)
+  $rng: = prng.Prng.new(33U64)
+  $ql: = ai_lora.Lora<|F64|>.new(d, d, rank, 4.0, rng@, work)
+  $vl: = ai_lora.Lora<|F64|>.new(d, d, rank, 4.0, rng@, work)
+  spread(ql.a, 5)
+  spread(ql.b, 6)
+  spread(vl.a, 7)
+  spread(vl.b, 8)
+  x_shape: Sz[2] = ::{ seqn, d }
+  x: = Tensor<|F64|>.new(Sz[]::x_shape, work)
+  spread(x, 9)
+
+  ap: = att@
+  qp: = ql@
+  vp: = vl@
+  wq_before: = att.wq.weights.dup(work)
+  bqa: = ql.a.dup(work)
+  bqb: = ql.b.dup(work)
+  bva: = vl.a.dup(work)
+  bvb: = vl.b.dup(work)
+  $c: = att.train_forward_lora(x, qp, vp)
+  dout: = ones_like(c.out, work)
+  att.backward_lora(c@, dout, probe_lr, qp, vp)
+  // Caution: **Also check that the base stays frozen.** If it is not, the loss still goes down
+  // but the training is no longer LoRA, and since the loss goes down, nobody notices.
+  for i in Range.asc(att.wq.weights.size)
+    assert((att.wq.weights.data + i)$ == (wq_before.data + i)$,
+      "Attn+LoRA: not one element of the base Wq may move")
+  ps: Param[4] = ::{ Param::{ .name = "Attn+LoRA: q_lora's dA", .w = ql.a,
+    .g = grad_from_step(ql.a, bqa, work) },
+    Param::{ .name = "Attn+LoRA: q_lora's dB", .w = ql.b,
+    .g = grad_from_step(ql.b, bqb, work) },
+    Param::{ .name = "Attn+LoRA: v_lora's dA", .w = vl.a,
+    .g = grad_from_step(vl.a, bva, work) },
+    Param::{ .name = "Attn+LoRA: v_lora's dB", .w = vl.b,
+    .g = grad_from_step(vl.b, bvb, work) } }
+
+  check_all(Param[]::ps, 1.0e-5,
+    fn(_i: Sz; ap: ai_nn.Self_attention<|F64|>$@, x: Tensor<|F64|>,
+    qp: ai_lora.Lora<|F64|>$@, vp: ai_lora.Lora<|F64|>$@): F64 {
+    return common_test.tsum_f64(ap.train_forward_lora(x, qp, vp).out);
+  })
+  verdict.pass("")
+
+fn test_block_lora_weight_grad() //< LoRA over the whole block
+  //<
+  //< **The MLP side's A/B (fc1/fc2) go through different code from the attention side's**
+  //< (`Mlp.backward_lora_grads` in `ksai/nn_grad.kspls`), so this can be wrong even where the
+  //< attention side is right.
+  verdict.start("[Block+LoRA] the four adapters' A/B gradients match a finite difference...")
+  work: = Arena.new(64 * 1024 * 1024)
+  defer work.free()
+  seqn: Sz = 2
+  d: Sz = 4
+  hidden: Sz = 4
+  rank: Sz = 2
+  $blk: = ai_nn.Transformer_block<|F64|>.new(d, hidden, seqn, 1.0e-5, work)
+  spread(blk.attention_norm.weight, 1)
+  spread(blk.attention.wq.weights, 2)
+  spread(blk.attention.wk.weights, 3)
+  spread(blk.attention.wv.weights, 4)
+  spread(blk.attention.wo.weights, 5)
+  spread(blk.ffn_norm.weight, 6)
+  spread(blk.ffn.fc1.weights, 7)
+  spread(blk.ffn.fc2.weights, 8)
+  $rng: = prng.Prng.new(55U64)
+  $ql: = ai_lora.Lora<|F64|>.new(d, d, rank, 4.0, rng@, work)
+  $vl: = ai_lora.Lora<|F64|>.new(d, d, rank, 4.0, rng@, work)
+  $f1l: = ai_lora.Lora<|F64|>.new(d, hidden, rank, 4.0, rng@, work)
+  $f2l: = ai_lora.Lora<|F64|>.new(hidden, d, rank, 4.0, rng@, work)
+  spread(ql.a, 1)
+  spread(ql.b, 2)
+  spread(vl.a, 3)
+  spread(vl.b, 4)
+  spread(f1l.a, 5)
+  spread(f1l.b, 6)
+  spread(f2l.a, 7)
+  spread(f2l.b, 8)
+  x_shape: Sz[2] = ::{ seqn, d }
+  x: = Tensor<|F64|>.new(Sz[]::x_shape, work)
+  spread(x, 9)
+
+  bp: = blk@
+  qp: = ql@
+  vp: = vl@
+  f1p: = f1l@
+  f2p: = f2l@
+  fc1_before: = blk.ffn.fc1.weights.dup(work)
+  b_qa: = ql.a.dup(work)
+  b_qb: = ql.b.dup(work)
+  b_va: = vl.a.dup(work)
+  b_vb: = vl.b.dup(work)
+  b_1a: = f1l.a.dup(work)
+  b_1b: = f1l.b.dup(work)
+  b_2a: = f2l.a.dup(work)
+  b_2b: = f2l.b.dup(work)
+
+  $c: = blk.train_forward_lora(x, qp, vp, f1p, f2p)
+  dout: = ones_like(c.out, work)
+  blk.backward_lora(c@, dout, probe_lr, qp, vp, f1p, f2p)
+  // Caution: **Also check that the base stays frozen** (the reason is on the attention side).
+  for i in Range.asc(blk.ffn.fc1.weights.size)
+    assert((blk.ffn.fc1.weights.data + i)$ == (fc1_before.data + i)$,
+      "Block+LoRA: not one element of the base fc1 may move")
+  ps: Param[8] = ::{ Param::{ .name = "Block+LoRA: q_lora's dA", .w = ql.a,
+    .g = grad_from_step(ql.a, b_qa, work) },
+    Param::{ .name = "Block+LoRA: q_lora's dB", .w = ql.b,
+    .g = grad_from_step(ql.b, b_qb, work) },
+    Param::{ .name = "Block+LoRA: v_lora's dA", .w = vl.a,
+    .g = grad_from_step(vl.a, b_va, work) },
+    Param::{ .name = "Block+LoRA: v_lora's dB", .w = vl.b,
+    .g = grad_from_step(vl.b, b_vb, work) },
+    Param::{ .name = "Block+LoRA: fc1_lora's dA", .w = f1l.a,
+    .g = grad_from_step(f1l.a, b_1a, work) },
+    Param::{ .name = "Block+LoRA: fc1_lora's dB", .w = f1l.b,
+    .g = grad_from_step(f1l.b, b_1b, work) },
+    Param::{ .name = "Block+LoRA: fc2_lora's dA", .w = f2l.a,
+    .g = grad_from_step(f2l.a, b_2a, work) },
+    Param::{ .name = "Block+LoRA: fc2_lora's dB", .w = f2l.b,
+    .g = grad_from_step(f2l.b, b_2b, work) } }
+
+  check_all(Param[]::ps, 1.0e-5,
+    fn(_i: Sz; bp: ai_nn.Transformer_block<|F64|>$@, x: Tensor<|F64|>,
+    qp: ai_lora.Lora<|F64|>$@, vp: ai_lora.Lora<|F64|>$@, f1p: ai_lora.Lora<|F64|>$@,
+    f2p: ai_lora.Lora<|F64|>$@): F64 {
+    return common_test.tsum_f64(bp.train_forward_lora(x, qp, vp, f1p, f2p).out);
+  })
+  verdict.pass("")

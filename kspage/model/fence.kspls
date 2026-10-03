@@ -1,0 +1,123 @@
+//< Where one fence (a block of code) starts and ends, among the blocks that continue it
+//<
+//< **This is a question about the document, not the layout**: the layout joins the fill into one
+//< sheet, and the Markdown writer fences it with one pair of ```.
+//< Caution: **Do not decide it in either of them**, or the screen shows one sheet while the text
+//< is fenced line by line.
+//< **It does not look for a style named "code".**
+import "kspage/model/doc" { Block }
+import "kspage/model/style" { Sheet, Style }
+import "std/ds" { List }
+import "std/str"
+
+enum Joint //< a block's position inside its fence
+  //<
+  //< `alone` is a fence of one block, whose spacing and fill stay as they are.
+  alone
+  head
+  mid
+  tail
+
+impl Joint
+  fn joined(j: Self): Bool //< whether the fence of the block before continues this far
+    //<
+    //< This is where the fill is not started again.
+    switch j case .mid
+      return true
+    case .tail
+      return true
+    case .alone, .head {}
+    return false
+
+  fn closes(j: Self): Bool //< whether that fence closes here
+    //<
+    //< This is where the fill is closed and the space after it is added.
+    switch j case .mid
+      return false
+    case .head
+      return false
+    case .alone, .tail {}
+    return true
+
+priv fn listed(st: Style$@): Bool //< whether it is a style that takes a mark
+  //<
+  //< **A bullet and a number do not go into a fence** (the mark needs its indent).
+  switch st.marker case .bullet(_g)
+    return true
+  case .number(_a)
+    return true
+  case .none, .serial, .outline {}
+  return false
+
+fn divides(sheet: Sheet$@, b: Block$@): Bool //< whether it is a divider block
+  //<
+  //< The style decides the look (a line where it draws one, otherwise only space). **Three things
+  //< are not dividers.** An empty line inside a fence **holds one empty run** (`read_fence` in
+  //< `../share/markdown_read.kspls` adds it with `add_text("")`).
+  if b.inlines.len > 0 || b.children.len > 0 || b.image.len > 0 || b.chart.len > 0
+    return false
+  if st: = sheet.find(b.style)
+    switch st.collect case .none {} default
+      return false
+    switch st.arrange case .flow {} case .grid
+      return false
+    case .absolute
+      return false
+  return true
+
+fn fenced(sheet: Sheet$@, b: Block$@): Bool //<
+  //< Whether that block can be part of a fence (a paragraph that does not wrap)
+  //<
+  //< **A heading, a table, a slide, collected content and a picture are not.**
+  //< **Nor is a divider**, or two fences with one between would become one block.
+  if divides(sheet, b)
+    return false
+  if st: = sheet.find(b.style)
+    if st.wrap || st.outline > 0 || listed(st) || b.image.len > 0 || b.chart.len > 0
+      return false
+    switch st.collect case .none {} case .contents
+      return false
+    case .notes
+      return false
+    case .bars
+      return false
+    case .lines
+      return false
+    case .imports
+      return false
+    case .source
+      // **A window is not made a fence**, or two windows on different files look like one sheet.
+      return false
+    switch st.arrange case .flow
+      return true
+    case .grid, .absolute {}
+  return false
+
+fn fence_end(sheet: Sheet$@, blocks: List<|Block$@|>$@, from: Sz): Sz //<
+  //< Where the fence starting at `from` ends (that index is not in the fence)
+  //<
+  //< Where there is no fence it returns `from`. **It continues only while the style's name is the
+  //< same** (joined, one of the looks would be lost). **It ends where a block has children.**
+  if from >= blocks.len || !fenced(sheet, blocks.get(from))
+    return from
+  name: = blocks.get(from).style
+  $i: Sz = from
+  for i < blocks.len
+    b: = blocks.get(i)
+    if !b.style.equals(name) || !fenced(sheet, b)
+      return i
+    i += 1
+    if b.children.len > 0
+      return i
+  return i
+
+fn joint_of(from: Sz, end: Sz, at: Sz): Joint //<
+  //< The position of the block at `at`, inside the fence from `from` to `end`
+  //<
+  //< **The caller holds the range** (computed from each block, the list would be walked once per
+  //< block).
+  if end - from <= 1
+    return Joint.alone
+  if at <= from
+    return Joint.head
+  return Joint.tail if at >= end - 1 else Joint.mid

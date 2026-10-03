@@ -1,0 +1,595 @@
+//< For `impl X: reflect.Reflectable {}` with **an empty body**, synthesizes the field table
+//<
+//< It builds `std/reflect`'s table and `fields()`'s body; an impl with a body is left alone. **It
+//< runs in collect's Pass 2a', after 2a and before 2b.**
+//< Caution: **Do not move it later**: the const it creates would become "an undeclared name".
+//< **Build an `offsetof` node for the offset** (do not fold the number). **Node shapes follow "The
+//< list of the normalized AST's nodes (the shape the Parse layer hands downstream)" in
+//< `../../docs/DESIGN.md`.**
+import "ksplc/base/ast" { Ast_node, Loc }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/sema/decl/layout" as sema_decl_layout
+import "ksplc/sema/decl/mono" as sema_decl_mono
+import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/def" as sema_type_def
+import "ksplc/sema/type/display" as sema_type_display
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "std/chars"
+import "std/ds" { List, Map }
+import "std/str" { Str_builder }
+
+priv const trait_fqn: U8[] = "std.reflect.Reflectable" //<
+  //< The `std/reflect` names the compiler refers to
+  //<
+  //< **If they are renamed there, change these too** (the top of `../../../std/reflect.kspls`;
+  //< `make test-conventions` checks them).
+priv const info_name: U8[] = "Field_info"
+priv const method_name: U8[] = "fields"
+
+priv const table_prefix: U8[] = "_reflect_fields_" //< the prefix of a synthesized table's name
+  //<
+  //< The leading `_` keeps it apart from user names.
+
+priv const list_fqn: U8[] = "std.ds.List" //< the container's name
+  //<
+  //< **If `std/ds`'s `List` is renamed, change this too** (`make test-conventions` checks it).
+
+priv const max_nest_depth: Sz = 32 //< the maximum nesting depth walked
+  //<
+  //< Value nesting is finite (`sema/decl/layout.kspls` rejects an infinite size); this keeps a
+  //< deep chain from overflowing the native stack.
+
+impl Sema_ctx
+  fn synthesize_reflect_impls(r: Self$@, root: Ast_node$@): List<|Ast_node$@|>$@ //<
+    //< Fills in every empty `impl X: Reflectable {}`
+    //<
+    //< Caution: **Add the children after the walk**, or the added ones are visited again. **Return
+    //< the list of consts it created**: 2a's `declare_var_syms` has already run.
+    made: = base_core.arena.create(List<|Ast_node$@|>.new())
+    targets: = base_core.arena.create(List<|Ast_node$@|>.new())
+    for top_node in root.children
+      child: = top_node.unwrap_top_level()
+      if child.kind_id != .k_decl_impl
+        continue
+      r.set_current_file(child.loc.file())
+      if r.is_empty_reflect_impl(child)
+        targets.push(child)
+    // The names of the tables emitted per nested type.
+    // Caution: **Keep one per file**, or a type nested in two outer types gets two consts.
+    emitted: = base_core.arena.create(Map<|U8[], U8[]|>.new(base_core.arena))
+    for impl_node in targets
+      r.set_current_file(impl_node.loc.file())
+      extra: = base_core.arena.create(List<|Ast_node$@|>.new())
+      if table: = r.build_field_table(impl_node, emitted, extra, 0)
+        for nested_decl in extra
+          root.add_child(nested_decl)
+          made.push(nested_decl)
+        root.add_child(table)
+        made.push(table)
+        prefix: = r.reflect_prefix(impl_node)
+        method: = make_fields_method(impl_node, table.get_decl_id_text(), prefix)
+        impl_node.add_child(method)
+      extra.free()
+    emitted.free()
+    targets.free()
+    return made
+
+  priv fn build_field_table(r: Self$@, impl_node: Ast_node$@,
+    emitted: Map<|U8[], U8[]|>$@, extra: List<|Ast_node$@|>$@, depth: Sz): Option<|Ast_node$@|> //<
+      //< Builds one table; if it cannot, it reports a diagnostic and returns `none`.
+    target: = impl_node.find_child(.k_type_expr)
+    if target == null
+      return Option<|Ast_node$@|>.none
+    if depth > max_nest_depth
+      r.err(impl_node,
+        "'Reflectable' gave up nesting: this struct embeds other structs deeper than the limit, so \
+          write the 'fields()' body by hand for the inner types")
+      return Option<|Ast_node$@|>.none
+    if impl_node.find_child(.k_type_gen_params) != null
+      r.err(impl_node,
+        "a generic type cannot derive 'Reflectable': the field table is one constant per concrete \
+          type, so write the 'fields()' body by hand for each instantiation")
+      return Option<|Ast_node$@|>.none
+    type_id: = target.resolve_type(r) catch 0
+    if type_id == 0
+      return Option<|Ast_node$@|>.none
+    r.ensure_type_registry(type_id, impl_node) catch
+      return Option<|Ast_node$@|>.none
+    real_id: = r.env.get_clean_real_type(type_id)
+    clean_name: = r.env.base_type_name(real_id)
+    $def_fields: List<|sema_type_def.Struct_field$@|>$@ = null
+    if sd: = r.env.get_struct_def(clean_name)
+      def_fields = sd.fields_list
+    if def_fields == null
+      r.err(impl_node,
+        "only a struct can derive 'Reflectable': the field table names fields at fixed offsets, \
+          which no other kind of type has")
+      return Option<|Ast_node$@|>.none
+    if def_fields.len == 0
+      r.err(impl_node,
+        "an opaque struct (one that names its size with '#size(N)' instead of listing fields) \
+          cannot derive 'Reflectable': there are no field names to build a table from")
+      return Option<|Ast_node$@|>.none
+    $rows: = List<|Row_spec|>.new()
+    defer rows.free()
+    if !r.collect_field_kinds(def_fields, rows@, impl_node, emitted, extra, depth)
+      return Option<|Ast_node$@|>.none
+    prefix: = r.reflect_prefix(impl_node)
+    table: = make_table_decl(impl_node, target, rows@, prefix)
+    return Option<|Ast_node$@|>.some(table)
+
+  priv fn collect_field_kinds(r: Self$@,
+    def_fields: List<|sema_type_def.Struct_field$@|>$@, rows: List<|Row_spec|>$@,
+    impl_node: Ast_node$@, emitted: Map<|U8[], U8[]|>$@, extra: List<|Ast_node$@|>$@, depth: Sz):
+    Bool //<
+      //< Collects each field's row, one per field in `def_fields`' order
+      //<
+      //< **If any field fails, do not build the table** (false): a table one field short would slip
+      //< in behind the diagnostic.
+    $ok: = true
+    for f in def_fields
+      k: = r.field_kind_name(f.type_id)
+      site: = f.node if f.node != null else impl_node
+      f_type: = f.node.find_child(.k_type_expr) if f.node != null else null
+      // Caution: **Check for the container first.** As a plain struct, `List<|T|>` is walked into
+      // `ptr` / `len` / `cap` / `arena` and rejected under a name the user did not write.
+      is_list: = r.clause_names(f_type, list_fqn)
+      if is_list || r.clause_names(f_type, sema_type_env.option_fqn)
+        if !r.push_wrapper_row(rows, f, f_type, is_list, site, impl_node, emitted, extra, depth)
+          ok = false
+        continue
+      $spec: = Row_spec::{ .field = f.name, .kind = k }
+      // Only a number's row has a width.
+      // Caution: **Pass the declaration's type clause unchanged**; a rebuilt one does not resolve.
+      if r.is_numeric_kind(k)
+        spec.self_type = f_type
+      if k.equals("struct_field")
+        // The nested type's table goes **into the same file** (see ensure_nested_table).
+        // Caution: **Copy the nested type's name from the field's declaration.** `display_str`'s
+        // qualified name carries a leading `.`, so a rebuilt one is read as an import alias.
+        spec.sub = r.ensure_nested_table(f.type_id, f_type, site, impl_node, emitted, extra, depth)
+        if spec.sub.len == 0
+          ok = false
+      else if k.len == 0
+        $shown: = r.env.display_str(f.type_id)
+        defer shown.free()
+        r.clear_scratch()
+          .s("field '\{f.name\}' has type '\{shown.slice()\}', which 'Reflectable' cannot derive a \
+            table entry for (covered: the integer types, F32, F64, Bool, U8[], a nested struct of \
+            those, and List<|T|> / Option<|T|> of those); write the 'fields()' body by hand")
+        r.err(site, r.scratch.slice())
+        ok = false
+      rows.push(spec)
+    return ok
+
+  priv fn push_wrapper_row(r: Self$@, rows: List<|Row_spec|>$@, f: sema_type_def.Struct_field$@,
+    f_type: Ast_node$@, is_list: Bool, site: Ast_node$@, impl_node: Ast_node$@,
+    emitted: Map<|U8[], U8[]|>$@, extra: List<|Ast_node$@|>$@, depth: Sz): Bool //<
+      //< Adds the row of a `List<|T|>` (is_list) or an `Option<|T|>` field; false if it cannot
+      //<
+      //< Caution: **Recognize a wrapper of wrappers by name**, not by kind (a `struct_field`), for
+      //< the same reason as the container check in collect_field_kinds.
+    inner_id: =
+      r.list_elem_type(f.type_id) if is_list else r.option_inner_type(f.type_id)
+    $inner_node: Ast_node$@ = null
+    if found: = r.list_elem_node(f_type)
+      inner_node = found
+    inner_kind: = r.field_kind_name(inner_id)
+    // **Decide it first:** `clause_names` writes to scratch.
+    nested: =
+      r.clause_names(inner_node, list_fqn) ||
+      (!is_list && r.clause_names(inner_node, sema_type_env.option_fqn))
+    $spec: = Row_spec::{ .field = f.name, .kind = "list_field" if is_list else "opt_field" }
+    if inner_kind.len == 0 || nested
+      // **Show the name the user wrote.** An instantiated `List`'s internal name
+      // (`std_ds_List_I64_Ptr`) does not appear in the source.
+      $spelled: = f_type.extract_type_name()
+      defer spelled.free()
+      r.clear_scratch().s("field '\{f.name\}' has type '\{spelled.slice()\}'")
+      if nested && is_list
+        r.scratch
+          .s(": 'Reflectable' does not cover a list whose element is itself a list; write the \
+            'fields()' body by hand")
+      else if nested
+        r.scratch
+          .s(": 'Reflectable' does not cover an option whose content is itself a list or an option; \
+            write the 'fields()' body by hand")
+      else
+        part: = "element" if is_list else "content"
+        r.scratch
+          .s(", whose \{part\} 'Reflectable' cannot derive a table entry for (covered: the integer \
+            types, F32, F64, Bool, U8[] and a struct of those); write the 'fields()' body by hand")
+      r.err(site, r.scratch.slice())
+      rows.push(spec)
+      return false
+    $ok: = true
+    if inner_kind.equals("struct_field")
+      spec.sub = r.ensure_nested_table(inner_id, inner_node, site, impl_node, emitted, extra, depth)
+      ok = spec.sub.len > 0
+    spec.elem = inner_kind
+    // Caution: **Record the contents' width too** (`.opt_field`'s `elem_size`, `Field_extra` in
+    // `../../../std/reflect.kspls`), or it reads as 0.
+    spec.elem_type = inner_node
+    if !is_list
+      spec.payload_offset = r.enum_payload_offset(f.type_id)
+      spec.some_tag = r.option_tag(f.type_id, true)
+      spec.none_tag = r.option_tag(f.type_id, false)
+    rows.push(spec)
+    return ok
+
+  priv fn ensure_nested_table(r: Self$@, type_id: I32, f_type_node: Ast_node$@, site: Ast_node$@,
+    outer: Ast_node$@, emitted: Map<|U8[], U8[]|>$@, extra: List<|Ast_node$@|>$@, depth: Sz): U8[] //<
+      //< Builds the nested type's table (if not built yet) and returns that const's name
+      //<
+      //< Empty if it cannot. **The table goes into the file that has the `impl`**: another file's
+      //< is `priv`. `emitted` keeps one per type.
+    if f_type_node == null
+      return ""
+    real_id: = r.env.get_clean_real_type(type_id)
+    key: = r.env.base_type_name(real_id)
+    have: = emitted.get(key) catch ""
+    if have.len > 0
+      return have
+    holder: = make_nested_holder(site, f_type_node, outer)
+    if sub_table: = r.build_field_table(holder, emitted, extra, depth + 1)
+      name: = sub_table.get_decl_id_text()
+      emitted.set(base_core.arena.dup_str(key), name)
+      extra.push(sub_table)
+      return name
+    return ""
+
+  priv fn clause_names(r: Self$@, f_type: Ast_node$@, generic_fqn: U8[]): Bool //<
+    //< Whether that type's clause is an instance of the generic `generic_fqn` (`List<|T|>`)
+    //<
+    //< Caution: **Resolve the written name's generic base to an FQN and check that.** The
+    //< internal name's shape silently changes when the mangling rule changes; and the clause, not
+    //< the type, is read, since the element's clause is taken from it (list_elem_node).
+    if f_type == null
+      return false
+    $spelled: = f_type.extract_type_name()
+    defer spelled.free()
+    base: = spelled.slice().get_generic_base_name()
+    if base.len == 0
+      return false
+    return r.resolve_fqn_for_type(base).equals(generic_fqn)
+
+  priv fn list_elem_type(r: Self$@, list_id: I32): I32 //< `List<|T|>`'s element type
+    //<
+    //< Caution: **Take it from the instantiated struct's `ptr`**; the name's type argument misleads
+    //< on an alias or a nested generic. **Strip one pointer level only**, or `List<|I64$@|>` looks
+    //< like `I64`'s and **a pointer container silently round-trips as integers**.
+    real_id: = r.env.get_clean_real_type(list_id)
+    if sd: = r.env.get_struct_def(r.env.base_type_name(real_id))
+      for lf in sd.fields_list
+        if lf.name.equals("ptr")
+          return r.env.strip_ptr(lf.type_id)
+    return 0
+
+  priv fn list_elem_node(_r: Self$@, f_type: Ast_node$@): Option<|Ast_node$@|> //<
+    //< The clause of the `T` of `List<|T|>`
+    $args: Ast_node$@ = null
+    if found: = f_type.find_deep_child(.k_type_args)
+      args = found
+    if args == null
+      return Option<|Ast_node$@|>.none
+    for c in args.children
+      if c.kind_id == .k_type_arg || c.kind_id == .k_type_expr
+        inner: = c.find_child(.k_type_expr)
+        return Option<|Ast_node$@|>.some(inner if inner != null else c)
+    return Option<|Ast_node$@|>.none
+
+  priv fn option_inner_type(r: Self$@, opt_id: I32): I32 //< `Option<|T|>`'s contents' type
+    //<
+    //< **Taken from the only field of the variant that has a payload** (as in `list_elem_type`).
+    real_id: = r.env.get_clean_real_type(opt_id)
+    if enum_def: = r.env.get_enum_def(r.env.base_type_name(real_id))
+      for v in enum_def.variants_list
+        if v.payload_fields.len == 1
+          return v.payload_fields.get(0).type_id
+    return 0
+
+  priv fn option_tag(r: Self$@, opt_id: I32, want_payload: Bool): I32 //< the two tags
+    //<
+    //< Caution: **Take them from the declaration**; a fixed order silently reverses if `std/lang`
+    //< reorders them. `want_payload` true selects the "there is a value" tag.
+    real_id: = r.env.get_clean_real_type(opt_id)
+    if enum_def: = r.env.get_enum_def(r.env.base_type_name(real_id))
+      for v in enum_def.variants_list
+        if (v.payload_fields.len == 1) == want_payload
+          return v.tag_value
+    return 0
+
+  priv fn is_numeric_kind(_r: Self$@, kind: U8[]): Bool //<
+    //< whether it is a kind that needs a width
+    //<
+    //< **Only these three rows write `Field_extra.width`**.
+    return kind.equals("int_field") || kind.equals("uint_field") || kind.equals("float_field")
+
+  priv fn field_kind_name(r: Self$@, type_id: I32): U8[] //<
+    //< The `Field_kind` variant name corresponding to the field's type
+    //<
+    //< A type that cannot be covered returns empty.
+    //< Caution: **Keep them one-to-one with `std/reflect`'s `Field_kind`**, or a kind can be
+    //< written but not synthesized, or synthesized but not walked (Principle 5).
+    real_id: = r.env.get_clean_real_type(type_id)
+    switch real_id case I32::sema_type_env.Builtin_type_id.i8_type,
+      I32::sema_type_env.Builtin_type_id.i16_type, I32::sema_type_env.Builtin_type_id.i32_type,
+      I32::sema_type_env.Builtin_type_id.i64_type
+      return "int_field"
+    case I32::sema_type_env.Builtin_type_id.u8_type,
+      I32::sema_type_env.Builtin_type_id.u16_type, I32::sema_type_env.Builtin_type_id.u32_type,
+      I32::sema_type_env.Builtin_type_id.u64_type,
+      I32::sema_type_env.Builtin_type_id.size_type
+      return "uint_field"
+    case I32::sema_type_env.Builtin_type_id.f32_type,
+      I32::sema_type_env.Builtin_type_id.f64_type
+      return "float_field"
+    case I32::sema_type_env.Builtin_type_id.bool_type
+      return "bool_field"
+    default {}
+    // Both `U8[]` and `U8$[]`: the same descriptor, written under the immutable name
+    // (`../../../std/json.kspls`).
+    u8_id: = r.env.get_or_add("U8")
+    const_slice: = r.slice_type_of(r.env.make_const(u8_id))
+    if real_id == const_slice || real_id == r.slice_type_of(u8_id)
+      return "str_field"
+    // Caution: **Check this after the descriptors and pointers are handled**, so only a plain
+    // struct held by value reaches here.
+    if _sd: = r.env.get_struct_def(r.env.base_type_name(real_id))
+      return "struct_field"
+    return ""
+
+  priv fn reflect_prefix(_r: Self$@, impl_node: Ast_node$@): U8[] //<
+    //< The prefix that plays the role of the `reflect.` in `impl X: reflect.Reflectable`
+    //<
+    //< It is empty for a selective import.
+    //<
+    //< Caution: **Take it from the name written on the impl.** A fixed `reflect` is "an undeclared
+    //< name" under another alias or a selective import.
+    path: = impl_node.find_child(.k_expr_path)
+    if path == null || path.children.len < 2
+      return ""
+    return path.get_child(0).text
+
+  priv fn is_empty_reflect_impl(r: Self$@, impl_node: Ast_node$@): Bool //<
+    //< Whether it is an `impl X: reflect.Reflectable` with no body
+    //<
+    //< Caution: **Match by FQN.** By the last segment alone, a file's own `trait Reflectable` gets
+    //< the synthesis and a baffling diagnostic ("Why compiler-known traits are confined to
+    //< `std/lang`" in `../../../docs/DESIGN.md`).
+    path: = impl_node.find_child(.k_expr_path)
+    if path == null || path.children.len == 0
+      return false
+    if impl_node.find_child(.k_decl_fn) != null
+      return false
+    $spelling: = path.get_full_path_str()
+    defer spelling.free()
+    return r.resolve_fqn_for_type(spelling.slice()).equals(trait_fqn)
+
+priv fn make_table_decl(impl_node: Ast_node$@, target: Ast_node$@, rows_in: List<|Row_spec|>$@,
+  prefix: U8[]): Ast_node$@ //<
+    //< Builds the const declaration of `_reflect_fields_X`, one row per field
+  loc: = impl_node.loc
+  info_spelling: = qualified(prefix, info_name)
+  $name: = Str_builder.new()
+  defer name.free()
+  name.s(table_prefix).s(flatten_name(target.text))
+  $sized: = Str_builder.new()
+  defer sized.free()
+  sized.s(info_spelling).s("[\{rows_in.len\}]")
+  mods: = Ast_node.new(.k_attribute_list, "mods", loc)
+  mods.add_child(Ast_node.new(.k_keyword, "priv", loc))
+  rows: = Ast_node.new(.k_struct_literal, "struct_literal", loc)
+  for spec in rows_in
+    row: = make_row(spec, target, info_spelling, loc)
+    item: = Ast_node.new(.k_expr_field_init, "expr_field_init", loc)
+    item.add_child(row)
+    rows.add_child(item)
+  decl: = Ast_node.new(.k_decl_const, "const", loc)
+  decl.add_child(mods)
+  decl.add_child(Ast_node.new(.k_keyword, "const", loc))
+  decl
+    .add_child(Ast_node.new(.k_identifier, base_core.arena.dup_str(name.slice()), loc))
+  decl.add_child(make_type_expr(base_core.arena.dup_str(sized.slice()), loc))
+  decl.add_child(rows)
+  return decl
+
+priv struct Row_spec //<
+  //< One row of the table (`::{ .name = "f", .offset = offsetof(X, f), .kind = .int_field }`)
+  //<
+  //< Caution: Pass them as one value rather than adding arguments (a row is built in one place).
+  field: U8[]
+  kind: U8[]
+  sub: U8[]
+  elem: U8[]
+  elem_type: Ast_node$@ //<
+    //< The element's or contents' type clause, for `elem_size`'s `sizeof`
+    //<
+    //< It is null except on a container's and an option's row.
+  self_type: Ast_node$@ //<
+    //< The field's own type clause (for `width`'s `sizeof`); null except on a number's row
+  payload_offset: Sz //<
+    //< `.opt_field` only: the payload's position
+    //<
+    //< The position comes from the enumeration's layout, the tags from the declaration.
+  some_tag: I32
+  none_tag: I32
+
+priv fn make_row(spec: Row_spec, target: Ast_node$@, info_spelling: U8[], loc: Loc): Ast_node$@
+  field_name: = spec.field
+  sub_name: = spec.sub
+  quoted: = base_core.arena.text().c('"').s(field_name).c('"').take()
+  off_node: = Ast_node.new(.k_expr_offsetof, "offsetof", loc)
+  off_node.add_child(Ast_node.new(.k_keyword, "offsetof", loc))
+  off_node.add_child(target.clone())
+  off_node.add_child(Ast_node.new(.k_identifier, field_name, loc))
+  kind_node: = Ast_node.new(.k_expr_implicit_dot, "expr_implicit_dot", loc)
+  kind_node.add_child(Ast_node.new(.k_identifier, spec.kind, loc))
+  name_node: = Ast_node.new(.k_string, quoted, loc)
+  row: = Ast_node.new(.k_struct_literal, "struct_literal", loc)
+  row.add_child(make_field_init("name", name_node, loc))
+  row.add_child(make_field_init("offset", off_node, loc))
+  row.add_child(make_field_init("kind", kind_node, loc))
+  // A row that does not nest **omits** `nested` (the omission fills it with 0).
+  // Caution: Do not build an empty slice explicitly; that gives one "length 0" two spellings.
+  if sub_name.len > 0
+    row
+      .add_child(make_field_init("nested", make_slice_of(sub_name, info_spelling, loc), loc))
+  // The per-kind additions go in one value, **omitted** where not needed.
+  if spec.elem.len > 0 || spec.self_type != null
+    row.add_child(make_field_init("extra", make_extra(spec, loc), loc))
+  return row
+
+priv fn make_extra(spec: Row_spec, loc: Loc): Ast_node$@ //< `Field_extra`'s value
+  //<
+  //< Builds `sizeof` nodes for the width and the stride, so they agree with C's own (`Sz` too). The
+  //< position and the tags come only from the enumeration's layout (`Field_extra` in
+  //< `../../../std/reflect.kspls`).
+  extra: = Ast_node.new(.k_struct_literal, "struct_literal", loc)
+  if spec.self_type != null
+    extra.add_child(make_field_init("width", make_sizeof(spec.self_type, loc), loc))
+  // Caution: **Do not write it on a row that has no element kind**: an empty `elem` reads as "an
+  // implicit dot with no variant name".
+  if spec.elem.len > 0
+    elem_node: = Ast_node.new(.k_expr_implicit_dot, "expr_implicit_dot", loc)
+    elem_node.add_child(Ast_node.new(.k_identifier, spec.elem, loc))
+    extra.add_child(make_field_init("elem", elem_node, loc))
+  if spec.elem_type != null
+    extra.add_child(make_field_init("elem_size", make_sizeof(spec.elem_type, loc), loc))
+  if spec.payload_offset > 0
+    off_lit: = Ast_node.new(.k_integer, int_text(spec.payload_offset), loc)
+    extra.add_child(make_field_init("payload_offset", off_lit, loc))
+  if spec.some_tag != 0
+    tag_lit: = Ast_node.new(.k_integer, int_text(spec.some_tag), loc)
+    extra.add_child(make_field_init("some_tag", tag_lit, loc))
+  if spec.none_tag != 0
+    none_lit: = Ast_node.new(.k_integer, int_text(spec.none_tag), loc)
+    extra.add_child(make_field_init("none_tag", none_lit, loc))
+  return extra
+
+priv fn int_text(v: Sz): U8[]
+  return base_core.arena.text().s("\{v\}").take()
+
+priv fn make_slice_of(name: U8[], info_spelling: U8[], loc: Loc): Ast_node$@ //<
+  //< `<info_spelling>[]::<name>` (the form dropping a constant array to a slice of the elements)
+  slice_spelling: = base_core.arena.dup_str(join3(info_spelling, "[]", ""))
+  table_ref: = Ast_node.new(.k_expr_path, name, loc)
+  table_ref.add_child(Ast_node.new(.k_identifier, name, loc))
+  cast: = Ast_node.new(.k_expr_postfix, "::", loc)
+  cast.add_child(table_ref)
+  cast.add_child(Ast_node.new(.k_literal, "::", loc))
+  cast.add_child(make_type_expr(slice_spelling, loc))
+  return cast
+
+priv fn make_nested_holder(site: Ast_node$@, f_type_node: Ast_node$@, outer: Ast_node$@):
+  Ast_node$@ //<
+    //< The scaffolding, shaped as `impl <type>`, for building a nested type's table
+    //<
+    //< **It lets `build_field_table` be reached one way only**, so the rejection rules exist once.
+  loc: = site.loc
+  holder: = Ast_node.new(.k_decl_impl, "impl", loc)
+  holder.add_child(Ast_node.new(.k_keyword, "impl", loc))
+  // Copies the field's declared type clause; do not rebuild it (as above).
+  holder.add_child(f_type_node.clone())
+  // **Copy the trait's name from the outer impl**: reflect_prefix reads it (an alias, a selective
+  // import).
+  outer_path: = outer.find_child(.k_expr_path)
+  if outer_path != null
+    holder.add_child(outer_path.clone())
+  return holder
+
+priv fn make_sizeof(type_node: Ast_node$@, loc: Loc): Ast_node$@ //< `sizeof(<type>)`
+  //<
+  //< The children's order follows "The expressions and the types" in `../../docs/DESIGN.md`.
+  node: = Ast_node.new(.k_expr_sizeof, "sizeof", loc)
+  node.add_child(Ast_node.new(.k_keyword, "sizeof", loc))
+  node.add_child(type_node.clone())
+  return node
+
+priv fn make_field_init(key: U8[], value: Ast_node$@, loc: Loc): Ast_node$@ //< one `.key = value`
+  //<
+  //< The children's order is `expr_field_init`'s (the document is named at make_sizeof).
+  init: = Ast_node.new(.k_expr_field_init, "expr_field_init", loc)
+  init.add_child(Ast_node.new(.k_literal, ".", loc))
+  init.add_child(Ast_node.new(.k_identifier, key, loc))
+  init.add_child(Ast_node.new(.k_literal, "=", loc))
+  init.add_child(value)
+  return init
+
+priv fn make_fields_method(impl_node: Ast_node$@, table_name: U8[], prefix: U8[]): Ast_node$@ //<
+  //< `fn fields(_r: Self): <prefix>Field_info[] { return <prefix>Field_info[]::<table>; }`
+  loc: = impl_node.loc
+  info_spelling: = qualified(prefix, info_name)
+  slice_spelling: = base_core.arena.dup_str(join3(info_spelling, "[]", ""))
+  param: = Ast_node.new(.k_fn_param, "fn_param", loc)
+  param.add_child(Ast_node.new(.k_identifier, "_r", loc))
+  param.add_child(make_type_expr("Self", loc))
+  params: = Ast_node.new(.k_param_list, "param_list", loc)
+  params.add_child(param)
+  sig: = Ast_node.new(.k_type_fn_sig, "type_fn_sig", loc)
+  sig.add_child(Ast_node.new(.k_literal, "(", loc))
+  sig.add_child(params)
+  sig.add_child(Ast_node.new(.k_literal, ")", loc))
+  sig.add_child(Ast_node.new(.k_literal, ":", loc))
+  sig.add_child(make_type_expr(slice_spelling, loc))
+  // `<table>` converted to a slice. **Do not leave it fixed-length**: without `T[]::arr` the length
+  // is baked into the type.
+  ret: = Ast_node.new(.k_stmt_return, "return", loc)
+  ret.add_child(Ast_node.new(.k_keyword, "return", loc))
+  ret.add_child(make_slice_of(table_name, info_spelling, loc))
+  block: = Ast_node.new(.k_stmt_block, "stmt_block", loc)
+  block.add_child(ret)
+  method: = Ast_node.new(.k_decl_fn, "fn", loc)
+  method.add_child(Ast_node.new(.k_keyword, "fn", loc))
+  method.add_child(Ast_node.new(.k_identifier, method_name, loc))
+  method.add_child(sig)
+  method.add_child(block)
+  return method
+
+priv fn make_type_expr(spelling: U8[], loc: Loc): Ast_node$@ //<
+  //< Builds a `type_expr` from the name `a.b[n]`
+  //<
+  //< Caution: **Build the children too.** The resolution walks the children rather than the name
+  //< (resolve_type in `resolve.kspls`), so text alone ends up as "an unknown type".
+  $bracket: Sz = spelling.len
+  for $i: Sz = 0; i < spelling.len; i += 1
+    if spelling[i] == '['
+      bracket = i
+      break
+  base: = spelling.sub(0, bracket)
+  path: = Ast_node.new(.k_expr_path, base, loc)
+  $start: Sz = 0
+  for $i: Sz = 0; i <= base.len; i += 1
+    if i == base.len || base[i] == '.'
+      path.add_child(Ast_node.new(.k_identifier, base.sub(start, i - start), loc))
+      start = i + 1
+  atom: = Ast_node.new(.k_type_atom, base, loc)
+  atom.add_child(path)
+  node: = Ast_node.new(.k_type_expr, spelling, loc)
+  node.add_child(atom)
+  if bracket < spelling.len
+    suffix: = spelling.sub(bracket, spelling.len - bracket)
+    post: = Ast_node.new(.k_type_postfix, suffix, loc)
+    if suffix.len > 2
+      post.add_child(Ast_node.new(.k_integer, suffix.sub(1, suffix.len - 2), loc))
+    node.add_child(post)
+  return node
+
+priv fn qualified(prefix: U8[], name: U8[]): U8[] //<
+  //< `prefix.name` (`name` as it is where prefix is empty)
+  return name if prefix.len == 0 else base_core.arena.dup_str(join3(prefix, ".", name))
+
+priv fn join3(a: U8[], b: U8[], c: U8[]): U8[]
+  return base_core.arena.text().s(a).s(b).s(c).take()
+
+priv fn flatten_name(spelling: U8[]): U8[] //<
+  //< Collapses a type's name into one identifier (`a.B[2]` → `a_B_2_`)
+  $s: = Str_builder.new()
+  defer s.free()
+  for ch in spelling
+    s.c(ch if ch.is_alpha() || ch.is_digit() || ch == '_' else '_')
+  return base_core.arena.dup_str(s.slice())

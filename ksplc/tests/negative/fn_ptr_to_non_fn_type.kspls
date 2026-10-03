@@ -1,0 +1,25 @@
+//< A function used as a value is matched against the expected type, whatever that type is
+//<
+//< Caution: Exempt only "there is nothing to match against" (fn_value_type_id in
+//< ksplc/sema/body/resolve_path.kspls); exempting "not a function pointer" lets this and `Callable`
+//< through, to be learnt for the first time on the C side. Keep the non-firing side alongside.
+// EXPECT: function 'big' cannot be used as 'Sz'
+// EXPECT-NOT: cannot be used as 'fn(v: Sz):Bool'
+// EXPECT-NOT: cannot be used as 'Void$@'
+import "std/io"
+
+priv fn big(v: Sz): Bool
+  return v > 4
+
+priv fn takes_fp(f: fn(v: Sz): Bool): Bool
+  return f(9)
+
+priv fn takes_raw(p: Void$@): Bool
+  return p != null
+
+pub fn main(): I32
+  ok: = takes_fp(big) // the correct shape. it must pass
+  raw: = takes_raw(Void$@::big) // the FFI relaxation. it must pass
+  bad: Sz = big // this one alone stops
+  io.out().s("\{ok\}\{raw\}\{bad\}").c('\n')
+  return 0

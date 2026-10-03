@@ -1,0 +1,426 @@
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/core" as base_core
+import "ksplc/base/locate" as base_locate
+import "ksplc/lsp/msg" as lsp_msg
+import "ksplc/lsp/nav" as lsp_nav
+import "ksplc/lsp/state" { Doc_state }
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/scope" { Sema_symbol }
+import "std/chars"
+import "std/ds" { List, Map }
+import "std/json" + { Json_builder }
+import "std/mem" { Arena }
+import "std/seq"
+import "std/str" { Str_builder }
+import "std/sys"
+// ==========================================
+// Call Hierarchy Implementation
+// ==========================================
+priv const request_failed: I32 = -32803 //<
+  //< The LSP's "the request was understood and could not be carried out" (3.17's RequestFailed)
+  //<
+  //< Not -32601: that says the method is unknown, and the editor stops offering it.
+priv fn is_fn_or_impl_decl(n: Ast_node$@): Bool //<
+  //< Whether it is a function's or an impl's declaration node
+  //<
+  //< Such a node can be either end of a call hierarchy's edge.
+  return n != null &&
+    (n.kind_id == .k_decl_fn || n.kind_id == .k_decl_fn_proto || n.kind_id == .k_decl_impl)
+
+priv struct Call_hier_entry
+  caller_def: Ast_node$@
+  callee_def: Ast_node$@
+  ranges: List<|Ast_node$@|>$@
+  has_call: Bool //<
+    //< Whether the counterpart is called on this edge
+    //<
+    //< A counterpart can be both called and passed as a function pointer. Kept apart from
+    //< has_ref, the mark in the detail string (the LSP has no field for an edge's kind) stays on
+    //< **pointers only**.
+  has_ref: Bool
+
+priv fn add_call_entry(idx: Fqn_lookup_idx$@, caller: Ast_node$@, callee: Ast_node$@,
+  range_node: Ast_node$@, is_ref: Bool, map: Map<|U8[], Call_hier_entry$@|>$@)
+  target: = caller if caller != null else callee
+  fqn: = compute_def_fqn(idx, target)
+
+  $entry: = map.get(fqn) catch null
+  if entry == null
+    // On the arena, rewound with the request: nothing frees the entries one by one.
+    ranges: = base_core.arena.create(List<|Ast_node$@|>.new(base_core.arena))
+    entry = base_core.arena
+      .create(Call_hier_entry::{ .caller_def = caller, .callee_def = callee, .ranges = ranges })
+    map.set(fqn, entry)
+  if is_ref
+    entry.has_ref = true
+  else
+    entry.has_call = true
+  entry.ranges.push(range_node)
+
+priv fn build_call_hier_item(target: Ast_node$@, id_n: Ast_node$@, name: U8[], fqn_slice: U8[],
+  src_res: U8[], starts: List<|Sz|>$@, is_ref_only: Bool, style: base_locate.Uri_style,
+  $b: Json_builder): json.Val
+  t_off: = id_n.loc.offset if id_n != null else target.loc.offset
+  t_len: = id_n.text.len if id_n != null else 1
+  r_val: = span_range(src_res, t_off, t_len, starts, b)
+
+  $safe_uri: = target.loc.file().escape_json_path()
+  defer safe_uri.free()
+  full_uri: = style.spell(safe_uri.slice())
+
+  // The detail carries the defining file's name: a call hierarchy crosses files, and the function
+  // name alone does not say which definition it is.
+  $file_name: = Str_builder.new()
+  defer file_name.free()
+  file_name.s(sys.get_file_name(target.loc.file()))
+  file_name.ensure_kspl_ext()
+  // Caution: **It must not look the same as a call.** A function pointer passed along may only be
+  // stored; mixed in, it reads as "always called".
+  if is_ref_only
+    file_name.s(" (as fn pointer)")
+
+  return b.obj().set("name", b.str_val(name)).set("kind", b.int_val(12)) // Function
+  .set("detail", b.str_val(file_name.slice())).set("uri", b.str_val(full_uri)).set("range", r_val)
+    .set("selectionRange", r_val).set("data", b.str_val(fqn_slice)).build()
+
+// The LSP range of `len` bytes from `off` in `src`.
+priv fn span_range(src: U8[], off: Sz, len: Sz, starts: List<|Sz|>$@, $b: Json_builder): json.Val
+  s_pos: = src.get_line_char(off, starts)
+  e_pos: = src.get_line_char(off + len, starts)
+  return b.range(s_pos.line, s_pos.character, e_pos.line, e_pos.character)
+
+priv fn build_call_hier_json(c: Sema_ctx$@, idx: Fqn_lookup_idx$@, entry: Call_hier_entry$@,
+  is_incoming: Bool, style: base_locate.Uri_style, $b: Json_builder): json.Val
+  target: = entry.caller_def if is_incoming else entry.callee_def
+
+  id_n: = target.find_child(.k_identifier)
+  name: = id_n.text if id_n != null else target.text
+  fqn: = compute_def_fqn(idx, target)
+
+  d_file: = target.loc.file()
+  src_res: = base_core.source_of(c.source_map, d_file)
+  // Caution: Build the line-start table once per file (the reason is at get_line_info in
+  // base/core.kspls); `line_starts_for` keeps it across one file's entries.
+  starts_res: = c.line_starts_for(d_file, src_res)
+  item: =
+    build_call_hier_item(target, id_n, name, fqn, src_res, starts_res,
+    entry.has_ref && !entry.has_call, style, b)
+
+  $ranges_arr: = b.arr()
+  for r_node in entry.ranges
+    range_obj: =
+      span_range(src_res, r_node.loc.offset, r_node.text.len, starts_res, b)
+    ranges_arr = ranges_arr.push(range_obj)
+
+  return b.obj().set("from" if is_incoming else "to", item)
+    .set("fromRanges", ranges_arr.build()).build()
+
+priv struct Call_target_info
+  target_def: Ast_node$@
+  range_node: Ast_node$@
+
+impl Ast_node
+  priv fn extract_call_target(r: Self$@): Call_target_info
+    $res: = Call_target_info::{ .target_def = null, .range_node = null }
+    if r == null
+      return res
+    // The call is the outer "(" node, whose receiver already holds def_node; checking the
+    // receiver node separately would count the same call twice.
+    if r.kind_id == .k_expr_postfix
+      op: = r.get_postfix_op()
+      if op != null && op.text.equals("(")
+        recv: = r.get_postfix_receiver()
+        if recv != null
+          res.target_def = recv.def_node
+          res.range_node = recv
+    else if r.kind_id == .k_enum_init_call && r.children.len > 0
+      first: = r.get_child(0)
+      res.target_def = first.def_node
+      res.range_node = first
+    return res
+priv struct Fqn_lookup_idx //< the indexes compute_def_fqn uses, built once per request
+  //<
+  //< The call hierarchy calls compute_def_fqn per call site, and its two reverse lookups (an
+  //< instance's template name, a generic method template's FQN) as linear walks would be O(N*M);
+  //< build_fqn_lookup_idx indexes both.
+  inst_names: Map<|U8[], U8[]|>$@ //<
+    //< an instance's name -> the original template's registration key
+  template_locs: Map<|U8[], U8[]|>$@ //< a template's file#offset -> its registration key
+
+priv fn node_loc_key(node: Ast_node$@, out: Str_builder$@) //<
+  //< It builds a position key string from a node's (file, offset)
+  //<
+  //< No two declarations share a position, so the key (NUL-separated from the file name) is unique.
+  out.s(node.loc.file()).c(0U8).s("\{node.loc.offset\}")
+
+priv fn build_fqn_lookup_idx(sema: Sema_ctx$@): Fqn_lookup_idx$@
+  inst_names: = base_core.arena.create(Map<|U8[], U8[]|>.new(base_core.arena))
+  // The list is taken from the heap, once per request.
+  for entry in sema.env.instantiated_nodes.items()
+    if entry.value != null
+      id_node: = entry.value.find_child(.k_identifier)
+      if id_node != null
+        inst_names.set(id_node.text, entry.key)
+
+  template_locs: = base_core.arena.create(Map<|U8[], U8[]|>.new(base_core.arena))
+  for e in sema.generics.templates.items()
+    $key_sb: = Str_builder.new()
+    defer key_sb.free()
+    node_loc_key(e.value, key_sb@)
+    template_locs.set(base_core.arena.dup_str(key_sb.slice()), e.key)
+
+  return base_core.arena
+    .create(Fqn_lookup_idx::{ .inst_names = inst_names, .template_locs = template_locs })
+
+priv fn find_template_fqn_indexed(idx: Fqn_lookup_idx$@, node: Ast_node$@): U8[]
+  $key_sb: = Str_builder.new()
+  defer key_sb.free()
+  node_loc_key(node, key_sb@)
+  return idx.template_locs.get(key_sb.slice()) catch ""
+
+priv fn qualified_sym_name(sym: Sema_symbol$@): U8[] //<
+  //< A global symbol's full name ("ksos.drivers.ht16k33.init")
+  //<
+  //< **A top-level sym.name is the bare name.** As the identity, same-named functions in different
+  //< files (`init`) would merge, and unrelated callers would be listed. It matches the FQN sema
+  //< puts in symtab.by_fqn (make_fqn in sema/decl/resolve.kspls), so resolve_def_by_fqn is O(1).
+  if !sym.flags.is_global
+    return sym.name
+  $full: = Str_builder.new()
+  defer full.free()
+  lsp_nav.write_full_name(sym.name, sym.get_defined_in(), full@)
+  return base_core.arena.dup_str(full.slice())
+
+priv fn compute_def_fqn(idx: Fqn_lookup_idx$@, def_node: Ast_node$@): U8[] //<
+  //< The FQN that identifies a definition node
+  //<
+  //< That is the full name, a generic instance's template name, or, with no sym_ptr, the template
+  //< table's key.
+  if def_node.sym_ptr != null
+    sym: = Sema_symbol$@::def_node.sym_ptr
+    if sym.flags.is_generated_instance
+      return idx.inst_names.get(sym.name) catch sym.name
+    return qualified_sym_name(sym)
+  return find_template_fqn_indexed(idx, def_node)
+
+priv fn build_callee_id_set(root: Ast_node$@): Map<|U8[], I32|>$@ //<
+  //< The call targets' identifiers, so a function used as a value is told apart from a call
+  //<
+  //< An identifier **using a function as a value without calling it** is recorded as an edge.
+  //<
+  //< Caution: **It is not a call and must not be treated as one.** It is still an edge because
+  //< **much code is reachable only through a function pointer** (task entry points, bio
+  //< callbacks); shown with "no caller" it looks unused and is mistaken for removable.
+  set: = base_core.arena.create(Map<|U8[], I32|>.new(base_core.arena))
+  collect_callee_ids(root, set, 0)
+  return set
+
+priv fn collect_callee_ids(node: Ast_node$@, set: Map<|U8[], I32|>$@, depth: Sz)
+  if node == null || depth > lsp_nav.max_walk_depth
+    return
+  info: = node.extract_call_target()
+  if info.range_node != null
+    mark_fn_ids(info.range_node, set, 0)
+  for child in node.children
+    collect_callee_ids(child, set, depth + 1)
+
+priv fn mark_fn_ids(node: Ast_node$@, set: Map<|U8[], I32|>$@, depth: Sz) //<
+  //< It registers the function identifiers inside a call's callee (`foo` / `usb.send_frame`)
+  if node == null || depth > lsp_nav.max_walk_depth
+    return
+  if node.kind_id == .k_identifier && is_fn_or_impl_decl(node.def_node)
+    $key: = Str_builder.new()
+    defer key.free()
+    node_loc_key(node, key@)
+    set.set(base_core.arena.dup_str(key.slice()), 1)
+  for child in node.children
+    mark_fn_ids(child, set, depth + 1)
+
+priv fn is_fn_ref_use(node: Ast_node$@, callee_ids: Map<|U8[], I32|>$@): Bool //<
+  //< Whether this identifier passes a function as a function pointer
+  //<
+  //< The declaration's own name is excluded: its def_node points at itself, so otherwise **every
+  //< function would be listed as its own caller**.
+  if node.kind_id != .k_identifier || !is_fn_or_impl_decl(node.def_node)
+    return false
+  if node.def_node.find_child(.k_identifier) == node
+    return false
+  $key: = Str_builder.new()
+  defer key.free()
+  node_loc_key(node, key@)
+  return (callee_ids.get(key.slice()) catch 0) == 0
+
+priv fn find_incoming_calls(node: Ast_node$@, idx: Fqn_lookup_idx$@, target_fqn: U8[],
+  caller_def: Ast_node$@, callee_ids: Map<|U8[], I32|>$@,
+  map: Map<|U8[], Call_hier_entry$@|>$@, depth: Sz)
+  if node == null || depth > lsp_nav.max_walk_depth
+    return
+
+  $current_caller: = caller_def
+  if is_fn_or_impl_decl(node)
+    current_caller = node
+
+  info: = node.extract_call_target()
+  if info.target_def != null && current_caller != null
+    called_fqn: = compute_def_fqn(idx, info.target_def)
+    if called_fqn.equals(target_fqn)
+      add_call_entry(idx, current_caller, null, info.range_node, false, map)
+  else if current_caller != null && is_fn_ref_use(node, callee_ids)
+    ref_fqn: = compute_def_fqn(idx, node.def_node)
+    if ref_fqn.equals(target_fqn)
+      add_call_entry(idx, current_caller, null, node, true, map)
+
+  for child in node.children
+    find_incoming_calls(child, idx, target_fqn, current_caller, callee_ids, map, depth + 1)
+
+priv fn find_outgoing_calls(node: Ast_node$@, idx: Fqn_lookup_idx$@, caller_def: Ast_node$@,
+  callee_ids: Map<|U8[], I32|>$@, map: Map<|U8[], Call_hier_entry$@|>$@, depth: Sz) //<
+    //< Unlike find_incoming_calls' current_caller, caller_def never changes in the recursion.
+  if node == null || depth > lsp_nav.max_walk_depth
+    return
+
+  info: = node.extract_call_target()
+  if is_fn_or_impl_decl(info.target_def)
+    add_call_entry(idx, null, info.target_def, info.range_node, false, map)
+  else if is_fn_ref_use(node, callee_ids)
+    // The reverse direction is recorded for the same reason: without the edge, someone tracing a
+    // task entry point has no lead.
+    add_call_entry(idx, null, node.def_node, node, true, map)
+
+  for child in node.children
+    find_outgoing_calls(child, idx, caller_def, callee_ids, map, depth + 1)
+priv fn find_def_by_fqn(node: Ast_node$@, idx: Fqn_lookup_idx$@, target_fqn: U8[]):
+  Option<|Ast_node$@|> //<
+    //< It looks for the definition node matching target_fqn in the whole AST
+    //<
+    //< Not Symbol_table.resolve(): it tries current_file (whichever was walked last) and then FQN
+    //< keys, so a function in an unrelated file can fail to resolve.
+  return find_def_by_fqn_depth(node, idx, target_fqn, 0)
+
+priv fn find_def_by_fqn_depth(node: Ast_node$@, idx: Fqn_lookup_idx$@, target_fqn: U8[], depth: Sz):
+  Option<|Ast_node$@|>
+  if node == null || depth > lsp_nav.max_walk_depth
+    return Option<|Ast_node$@|>.none
+  if is_fn_or_impl_decl(node) && compute_def_fqn(idx, node).equals(target_fqn)
+    return Option<|Ast_node$@|>.some(node)
+  for child in node.children
+    if found: = find_def_by_fqn_depth(child, idx, target_fqn, depth + 1)
+      return Option<|Ast_node$@|>.some(found)
+  return Option<|Ast_node$@|>.none
+priv fn resolve_def_by_fqn(root: Ast_node$@, c: Sema_ctx$@, idx: Fqn_lookup_idx$@,
+  target_fqn: U8[]): Ast_node$@ //<
+    //< It resolves target_fqn's definition node
+    //<
+    //< It tries Symbol_table.resolve_fqn first, then the tree walk (find_def_by_fqn) for what
+    //< symtab lacks, such as a generics template.
+  sym: = c.symtab.resolve_fqn(target_fqn) catch null
+  if sym != null
+    return sym.node
+  $found: Ast_node$@ = null
+  if f: = find_def_by_fqn(root, idx, target_fqn)
+    found = f
+  return found
+// ==========================================
+// Interface APIs for Handlers
+// ==========================================
+
+fn prepare_call_hierarchy(state: Doc_state$@, params: json.Val, id_val: json.Val, arena: Arena$@)
+  $b: = Json_builder.new(arena)
+  path: = lsp_nav.find_path_at_params(state, params)
+  defer path.free()
+
+  if path.len > 0
+    $def_node: Ast_node$@ = null
+    // On the declaration's own name this is the declaration itself (`get_definition_node`).
+    if d: = lsp_nav.get_definition_node(state.sema, path)
+      def_node = d
+
+    if is_fn_or_impl_decl(def_node)
+      id_node: = def_node.find_child(.k_identifier)
+      name: = id_node.text if id_node != null else def_node.text
+      idx: = build_fqn_lookup_idx(state.sema)
+      fqn: = compute_def_fqn(idx, def_node)
+
+      def_file: = def_node.loc.file()
+      src_res: = base_core.source_of(state.sema.source_map, def_file)
+      // The starting point is no edge, so it gets no mark.
+      starts_res: = state.sema.line_starts_for(def_file, src_res)
+      item: =
+        build_call_hier_item(def_node, id_node, name, fqn, src_res, starts_res, false,
+        base_locate.uri_style_of(state.uri_perm), b)
+
+      lsp_msg.send_response(id_val, b.arr().push(item).build(), arena)
+      return
+  lsp_msg.send_null_response(id_val, arena)
+
+priv fn call_order(a: Call_hier_entry$@, b: Call_hier_entry$@, is_incoming: Bool): I32 //<
+  //< By the counterpart's location: its file, then its position
+  a_t: = a.caller_def if is_incoming else a.callee_def
+  b_t: = b.caller_def if is_incoming else b.callee_def
+  order: = a_t.loc.file().compare(b_t.loc.file())
+  if order != 0
+    return order
+  if a_t.loc.offset != b_t.loc.offset
+    return -1 if a_t.loc.offset < b_t.loc.offset else 1
+  return 0
+
+priv fn respond_with_call_hier_entries(calls_map: Map<|U8[], Call_hier_entry$@|>$@,
+  sema: Sema_ctx$@, idx: Fqn_lookup_idx$@, is_incoming: Bool, style: base_locate.Uri_style,
+  $b: Json_builder, id_val: json.Val, arena: Arena$@)
+  $arr: = b.arr()
+  // **Only here is a list built** (sorting needs them all). Code that only iterates uses
+  // `entries()` (the reason is at `entries` in `../../std/ds.kspls`).
+  // Caution: **Do not answer in the Map's order.** That order comes from the hash, so the same
+  // question gets a different order on every run, and a client walking the list loses its place.
+  $calls: = List<|Call_hier_entry$@|>.new(null)
+  defer calls.free()
+  for entry in calls_map.items()
+    calls.push(entry.value)
+  sorted: = calls.order_by(fn(a: Call_hier_entry$@, b: Call_hier_entry$@; is_incoming: Bool): I32 {
+    return call_order(a, b, is_incoming);
+  }, arena)
+  for call in sorted
+    res_obj: = build_call_hier_json(sema, idx, call, is_incoming, style, b)
+    arr = arr.push(res_obj)
+  lsp_msg.send_response(id_val, arr.build(), arena)
+
+priv fn answered_no_workspace(ws_state: Doc_state$@, id_val: json.Val, arena: Arena$@): Bool //<
+  //< It answers an error where the workspace was not analysed far enough, and returns if it did
+  //<
+  //< **`build_workspace_state` hides the analysis's failure**, and `handle_calls` below reads
+  //< `sema` directly.
+  //< Caution: **Do not answer the empty array.** "It has no callers" is something the reader acts
+  //< on, and a wrong one costs more than hearing the question could not be answered.
+  if ws_state != null && ws_state.sema != null && ws_state.root_file != null
+    return false
+  lsp_msg.send_error_response(id_val, request_failed,
+    "the workspace could not be analysed, so the callers cannot be listed", arena)
+  return true
+
+fn item_fqn(params: json.Val): U8[] //<
+  //< The FQN of the function a call hierarchy request asks about (the `data` prepare returned)
+  return params.get("item").get("data").as_str()
+
+fn handle_calls(ws_state: Doc_state$@, params: json.Val, id_val: json.Val, is_incoming: Bool,
+  arena: Arena$@) //<
+    //< It answers `callHierarchy/incomingCalls`, or `outgoingCalls` where not `is_incoming`
+  if answered_no_workspace(ws_state, id_val, arena)
+    return
+  target_fqn: = item_fqn(params)
+  calls_map: = base_core.arena
+    .create(Map<|U8[], Call_hier_entry$@|>.new(base_core.arena))
+  defer calls_map.free()
+
+  idx: = build_fqn_lookup_idx(ws_state.sema)
+  // The exclusion table is built from **the whole tree**; from the target alone a call's callee
+  // would also be listed as passing a function pointer.
+  callee_ids: = build_callee_id_set(ws_state.root_file)
+  if is_incoming
+    find_incoming_calls(ws_state.root_file, idx, target_fqn, null, callee_ids, calls_map, 0)
+  else
+    target_def: = resolve_def_by_fqn(ws_state.root_file, ws_state.sema, idx, target_fqn)
+    if target_def != null
+      find_outgoing_calls(target_def, idx, target_def, callee_ids, calls_map, 0)
+  respond_with_call_hier_entries(calls_map, ws_state.sema, idx, is_incoming,
+    base_locate.uri_style_of(ws_state.uri_perm), Json_builder.new(arena), id_val, arena)

@@ -1,0 +1,412 @@
+//< KSPEG's rule tree, and the operations that need nothing but the tree
+//<
+//< **This layer holds only how a rule is represented.** `kspeg/engine` applies rules to input;
+//< `kspeg/notation` builds them from a `.kspeg` string.
+
+// ==========================================
+// Caution: Do not import engine or notation here: this is the lowest layer, and importing upward
+// makes a cycle.
+// ==========================================
+import "std/chars" // `is_upper`
+import "std/ds" { List, Map }
+import "std/mem" { Arena }
+import "std/stack_limit" { Stack_limit }
+import "std/str" // `equals`
+
+pub enum Kspeg_signal //< what a rule throws: both backtracking and a real failure, in one type
+  //<
+  //< It is one type because the single recursive entry point (Rule.parse) can throw either.
+  //< Caution: **Sharing a type, the two are easy to confuse.** `catch false` turns even a fatal
+  //< into "it did not match"; only engine's `try_parse` may swallow one ("A backtracking signal
+  //< may be swallowed, a real failure may not" in `kspeg/docs/SPEC-notation.md`).
+  mismatch //< this rule did not match here; try the next alternative
+  fatal(msg: U8[]) //< a real failure, to be passed up to the caller and never swallowed
+
+pub const max_parse_depth: Sz = 3000 //< how deep the rule tree may be walked before it gives up.
+  //<
+  //< Pathologically deep nesting (a long run of `(`) becomes a compile error at a depth ordinary
+  //< code never reaches, **the same on every build**. The stack cost per level differs by backend
+  //< (LLVM and MSVC use more than clang's C), so the walk also stops near the stack's end
+  //< (`walk_limit` below). engine's Rule.parse and notation's parse_primary check both.
+
+pub fn walk_limit(): Stack_limit //<
+  //< where a walk on the current thread stops, short of the end of its stack
+  //<
+  //< **The second limit, next to the depth count**: a short stack fails with the same "nesting
+  //< too deep" instead of crashing. Create it on the thread where the walk runs.
+  //< Caution: **Keep the margin wide.** One level's calls, and the throw with its message, still
+  //< run below the point that checked.
+  return Stack_limit.new(256 * 1024)
+
+pub struct Rule_entry //< one rule of the grammar: its name and its tree
+  pub name: U8[] //< the name the grammar gives it
+  pub rule: Rule$@ //< the tree that name stands for
+  memo_writes: I64 //< how many times the memo has been written for this rule
+  first: First_bytes //< the bytes a match of it can begin with (`compute_first_bytes`)
+  skips_space: Bool //< whether it reads in syntax mode, skipping whitespace before each part
+  memo_answered: Bool //< whether the memo has ever answered for it
+    //<
+    //< **Together they turn the memo off for a rule it can never help**: a rule reached from only
+    //< one place is tried once per position, so its writes (a hash and an insert in the parse's
+    //< innermost loop) are never read. They live on the grammar, which is shared from file to
+    //< file, so the decision holds for the whole build (`share_grammar_from` in `engine.kspls`).
+
+pub struct First_bytes //< the bytes a match can begin with, and whether it can match nothing
+  //<
+  //< **A rule cannot match where the next byte is not among its bits**, unless it can match
+  //< nothing; then the bits say nothing about it. engine skips such a rule without entering it.
+  //< Caution: **Err only on the side of too many bits.** A missing one makes a rule that could
+  //< match be skipped, and the parse goes another way with nothing to say so.
+  pub bits: U64[4] //< bit `c` of the 256 set where a match can begin with byte `c`
+  pub can_be_empty: Bool //< whether it can match without reading a byte
+
+impl First_bytes
+  pub fn allows(r: Self@, c: U8): Bool //< whether a match can begin with `c`
+    return ((r.bits[c / 64] >> (U64::c % 64U64)) & 1U64) != 0U64
+
+  fn add(r: Self$@, c: U8) //< lets a match begin with `c`
+    r.bits[c / 64] |= 1U64 << (U64::c % 64U64)
+
+  fn add_all(r: Self$@) //< lets a match begin with any byte
+    for i in Range.asc(4)
+      r.bits[i] = ~0U64
+
+  fn merge(r: Self$@, other: First_bytes) //< lets a match also begin as `other`'s can
+    for i in Range.asc(4)
+      r.bits[i] |= other.bits[i]
+
+  fn same(r: Self@, other: First_bytes): Bool //< whether both say the same
+    for i in Range.asc(4)
+      if r.bits[i] != other.bits[i]
+        return false
+    return r.can_be_empty == other.can_be_empty
+
+pub fn reads_in_syntax_mode(name: U8[]): Bool //< whether a rule of this name skips whitespace
+  //<
+  //< A rule named with a lower-case initial reads in syntax mode. An upper-case one is a lexical
+  //< token and a `_` one is transparent; neither skips ("A rule's name sets its mode" in
+  //< `kspeg/docs/SPEC-notation.md`).
+  return name.len > 0 && (name.ptr + 0)$ != '_' && !(name.ptr + 0).is_upper()
+
+pub fn char_class_matches( //< whether one byte is in a character class's ranges
+  //<
+  //< Caution: Do not interpret a character class anywhere but here. If the code that re-reads
+  //< `_Boundary` (keyword_set) disagreed, where a keyword ends would depend on where it is matched.
+  ranges: U8[], //< a 3-byte `X-Y` is a range; every other byte is a literal on its own
+  c: U8,
+): Bool //< true when `c` falls in a range or equals a literal
+  for $i: = 0; i < ranges.len;
+    if i + 2 < ranges.len && (ranges.ptr + i + 1)$ == '-'
+      if c >= (ranges.ptr + i)$ && c <= (ranges.ptr + i + 2)$
+        return true
+      i += 3
+      continue
+    if c == (ranges.ptr + i)$
+      return true
+    i += 1
+  return false
+
+priv fn push_keyword(keywords: List<|U8[]|>$@, text: U8[]) //<
+  //< Adds `text` unless it is already listed, keeping the declaration order
+  for i in Range.asc(keywords.len)
+    if keywords.get(i).equals(text)
+      return
+  keywords.push(text)
+
+pub fn keyword_set_boundary( //< the ranges to fold a keyword set on, or `.none` where it cannot
+  //<
+  //< It folds only where the boundary check means "the whole extracted word matches": `_Boundary`
+  //< is one character class, and no keyword is empty or holds a byte outside it (`'->'`).
+  //< Caution: Do not fold where these do not hold: `_Keyword` then always fails, and in a grammar
+  //< that writes `!_Keyword`, an identifier swallows a reserved word.
+  boundary: Rule$@, //< the grammar's `_Boundary`; only a single character class can fold
+  keywords: List<|U8[]|>$@, //< the words to fold; an empty word or an outside byte prevents it
+): Option<|U8[]|> //< a view of `boundary`'s ranges, not a copy
+  if boundary == null
+    return Option<|U8[]|>.none
+  switch boundary$ case .char_class(ranges)
+    for kw in keywords
+      if kw.len == 0
+        return Option<|U8[]|>.none
+      for i in Range.asc(kw.len)
+        if !char_class_matches(ranges, kw[i])
+          return Option<|U8[]|>.none
+    return Option<|U8[]|>.some(ranges)
+  default
+    return Option<|U8[]|>.none
+
+fn sub_rules( //< the rules directly inside this one, in the order the grammar writes them
+  //<
+  //< **The one place that knows which variants hold rules**: every walk over the tree goes through
+  //< it, so a variant added to `Rule` is followed by each walk once it is added here.
+  rule: Rule$@, //< the node whose children are wanted; null has none
+  out: List<|Rule$@|>$@, //< where they are appended
+)
+  if rule == null
+    return
+  switch rule$ case .sequence(rules), .choice
+    for i in Range.asc(rules.len)
+      out.push(rules.get(i))
+  case .zero_or_more(inner), .one_or_more, .optional, .and_pred, .not_pred
+    out.push(inner)
+  default {}
+
+pub fn collect_keywords( //< every keyword the rule matches, in the order the grammar writes them
+  rule: Rule$@,
+  keywords: List<|U8[]|>$@, //< where they are appended; one already in it is not added twice
+)
+  if rule == null
+    return
+  switch rule$ case .keyword_set(set)
+    // A folded choice's words too; otherwise they are missed, and both `_Keyword` and the
+    // per-rule listing come up short.
+    for kw in set.order
+      push_keyword(keywords, kw)
+  case .keyword_literal(text)
+    push_keyword(keywords, text)
+  default {}
+  $kids: = List<|Rule$@|>.new()
+  defer kids.free()
+  sub_rules(rule, kids@)
+  for kid in kids
+    collect_keywords(kid, keywords)
+
+pub fn collect_references( //< every place where this rule refers to another rule by name
+  //<
+  //< `resolved_ref` is skipped: its name is already resolved.
+  rule: Rule$@,
+  names: List<|U8[]|>$@, //< where they are appended; a name referred to twice is appended twice
+)
+  if rule == null
+    return
+  switch rule$ case .reference(name)
+    names.push(name)
+  default {}
+  $kids: = List<|Rule$@|>.new()
+  defer kids.free()
+  sub_rules(rule, kids@)
+  for kid in kids
+    collect_references(kid, names)
+
+pub fn keyword_set_rule( //< one rule matching any of these keywords with a single lookup
+  //<
+  //< Caution: **Call it only where keyword_set_boundary answered `ranges`.** Elsewhere the scan
+  //< that cuts the word out does not stop where the keyword ends.
+  keywords: List<|U8[]|>$@, //< in the grammar's order, each listed once
+  ranges: U8[], //< what keyword_set_boundary answered for them
+  arena: Arena$@,
+): Rule$@
+  words: = arena.create(Map<|U8[], Sz|>.new(arena))
+  for i in Range.asc(keywords.len)
+    words.set(keywords.get(i), i)
+  set: = arena.create(Keyword_set::{ .words = words, .order = keywords, .boundary = ranges })
+  return arena.create(Rule.keyword_set(set))
+
+pub fn fold_keyword_choices( //< turns each run of keywords inside a choice into one set lookup
+  //<
+  //< A run of keywords in a choice folds wherever the set may (keyword_set_boundary): each matches
+  //< only the whole run of boundary characters, so at most one can match at a position and their
+  //< order decides nothing. The alternatives around the run keep their places, and the set records
+  //< the labels the run would have, so folding changes neither a tree nor a syntax error.
+  rule: Rule$@, //< folded in place, with everything inside it
+  boundary: Rule$@, //< the grammar's `_Boundary`; with no single character class, nothing folds
+  arena: Arena$@,
+)
+  if rule == null
+    return
+  $kids: = List<|Rule$@|>.new()
+  defer kids.free()
+  sub_rules(rule, kids@)
+  for kid in kids
+    fold_keyword_choices(kid, boundary, arena)
+  switch rule$ case .choice(rules)
+    folded: = List<|Rule$@|>.create(arena)
+    $i: Sz = 0
+    for i < rules.len
+      run: = List<|U8[]|>.create(arena)
+      $j: = i
+      for j < rules.len
+        switch rules.get(j)$ case .keyword_literal(text)
+          push_keyword(run, text)
+        default
+          break
+        j += 1
+      $did_fold: = false
+      if j - i >= 2
+        switch keyword_set_boundary(boundary, run) case .some(ranges)
+          folded.push(keyword_set_rule(run, ranges, arena))
+          did_fold = true
+        case .none {}
+      if !did_fold
+        for k in Range.asc(j - i)
+          folded.push(rules.get(i + k))
+      if j == i
+        folded.push(rules.get(i))
+        j += 1
+      i = j
+    if folded.len == 1
+      rule$ = folded.get(0)$
+    else if folded.len < rules.len
+      rule$ = Rule.choice(folded)
+  default {}
+
+fn first_bytes_of( //< what a match of this part can begin with, as far as the rules' are known
+  rule: Rule$@,
+  entries: List<|Rule_entry$@|>$@, //< the grammar, its references resolved to indices
+  skips: Bool, //< whether the rule this part belongs to reads in syntax mode
+): First_bytes
+  $f: = First_bytes::{}
+  if rule == null
+    f.can_be_empty = true
+    return f
+  switch rule$ case .literal(text), .keyword_literal
+    if text.len == 0
+      f.can_be_empty = true
+    else
+      f.add(text[0])
+  case .keyword_set(set)
+    // keyword_set_boundary admits no empty keyword.
+    for kw in set.order
+      f.add(kw[0])
+  case .wildcard, .recover
+    f.add_all()
+  case .char_class(ranges)
+    for c in Range.asc(256)
+      if char_class_matches(ranges, U8::c)
+        f.add(U8::c)
+  case .sequence(rules)
+    f.can_be_empty = true
+    for i in Range.asc(rules.len)
+      part: = first_bytes_of(rules.get(i), entries, skips)
+      f.merge(part)
+      if !part.can_be_empty
+        f.can_be_empty = false
+        break
+  case .choice(rules)
+    for i in Range.asc(rules.len)
+      alt: = first_bytes_of(rules.get(i), entries, skips)
+      f.merge(alt)
+      if alt.can_be_empty
+        f.can_be_empty = true
+  case .zero_or_more(inner), .optional
+    f = first_bytes_of(inner, entries, skips)
+    f.can_be_empty = true
+  case .one_or_more(inner)
+    f = first_bytes_of(inner, entries, skips)
+  case .and_pred, .not_pred
+    // A lookahead reads nothing: what follows decides the byte.
+    f.can_be_empty = true
+  case .resolved_ref(r_id)
+    target: = entries.get(r_id)
+    f = target.first
+    // A rule in syntax mode skips whitespace before its first byte; only a caller in syntax mode
+    // has skipped it already (the atomic parts in `engine.kspls`).
+    if target.skips_space && !skips
+      f.add_all()
+  case .reference
+    // Unresolved, it names no rule (check_rule_names refuses that); assume anything.
+    f.add_all()
+    f.can_be_empty = true
+  return f
+
+pub fn compute_first_bytes( //< fills in each rule's `first`, once its references are resolved
+  //<
+  //< **A fixed point**: a rule's bytes depend on the rules it begins with, which may refer back.
+  //< Each round only adds bits and empties, so it ends after a few rounds over the grammar.
+  entries: List<|Rule_entry$@|>$@,
+)
+  for e in entries
+    e.first = First_bytes::{}
+    e.skips_space = reads_in_syntax_mode(e.name)
+  for
+    $changed: = false
+    for e in entries
+      f: = first_bytes_of(e.rule, entries, e.skips_space)
+      if !f.same(e.first)
+        e.first = f
+        changed = true
+    if !changed
+      break
+
+fn left_refs( //< the rules this part can enter before reading a byte
+  rule: Rule$@,
+  entries: List<|Rule_entry$@|>$@,
+  skips: Bool,
+  out: List<|I32|>$@, //< where their indices are appended
+)
+  if rule == null
+    return
+  switch rule$ case .resolved_ref(r_id)
+    out.push(r_id)
+  case .sequence(rules)
+    for i in Range.asc(rules.len)
+      left_refs(rules.get(i), entries, skips, out)
+      if !first_bytes_of(rules.get(i), entries, skips).can_be_empty
+        break
+  case .choice(rules)
+    for i in Range.asc(rules.len)
+      left_refs(rules.get(i), entries, skips, out)
+  case .zero_or_more(inner), .one_or_more, .optional, .and_pred, .not_pred
+    left_refs(inner, entries, skips, out)
+  default {}
+
+pub fn left_recursive_rule( //< a rule that can enter itself before reading a byte, if any
+  //<
+  //< Such a rule never matches: each entry enters it again at the same position, until the depth
+  //< limit stops the parse. Call it after compute_first_bytes, which says what can be empty.
+  entries: List<|Rule_entry$@|>$@,
+): Option<|U8[]|> //< the first such rule in the grammar's order
+  for i in Range.asc(entries.len)
+    $seen: = List<|Bool|>.new()
+    defer seen.free()
+    for _ in Range.asc(entries.len)
+      seen.push(false)
+    $todo: = List<|I32|>.new()
+    defer todo.free()
+    left_refs(entries.get(i).rule, entries, entries.get(i).skips_space, todo@)
+    // A queue read from the front; each rule is looked into once.
+    for $k: Sz = 0; k < todo.len; k += 1
+      r_id: = todo[k]
+      if Sz::r_id == i
+        return Option<|U8[]|>.some(entries.get(i).name)
+      if seen[r_id]
+        continue
+      seen[r_id] = true
+      e: = entries.get(r_id)
+      left_refs(e.rule, entries, e.skips_space, todo@)
+  return Option<|U8[]|>.none
+
+pub struct Keyword_set //< keywords folded into one rule: extract one word, then look it up once
+  //<
+  //< words and order hold the same keywords: words for the match, order for the expected labels.
+  //< Caution: Do not drop order and walk words instead. A Map iterates in hash order, so a syntax
+  //< error's `expected …` would change from run to run.
+  pub words: Map<|U8[], Sz|>$@ //< each keyword's index in order, for the lookup itself
+  pub order: List<|U8[]|>$@ //< the same keywords in the grammar's order, for an `expected` list
+  pub boundary: U8[] //< `_Boundary`'s ranges, which decide where a keyword ends.
+    //<
+    //< Caution: Do not make this a fixed value; a grammar may override `_Boundary`.
+
+pub enum Rule //< one node of the rule tree; each variant is one way of matching
+  literal(text: U8[]) //< these bytes, matched exactly
+  keyword_literal(text: U8[]) //< a literal that must end at a boundary, so it is a whole word
+  keyword_set(set: Keyword_set$@) //< a whole set of keywords folded into one lookup
+  wildcard //< any one byte
+  sequence(rules: List<|Rule$@|>$@) //< each of these in turn; all must match
+  choice(rules: List<|Rule$@|>$@) //< the first of these that matches, tried in order
+  zero_or_more(rule: Rule$@) //< this, repeated as often as it matches; zero times is enough
+  one_or_more(rule: Rule$@) //< this, repeated as often as it matches, but at least once
+  optional(rule: Rule$@) //< this if it matches, and nothing if it does not
+  and_pred(rule: Rule$@) //< matches where this would, consuming nothing and building nothing
+  not_pred(rule: Rule$@) //< matches where this would not, consuming nothing and building nothing
+  char_class(ranges: U8[]) //< one byte in these ranges.
+    //<
+    //< A byte range X..Y is the 3-byte run "X-Y"; every other byte is a literal (`[a-z0-9_]`).
+  reference(name: U8[]) //< another rule, by name, before `load_rules` resolves it
+  resolved_ref(rule_id: I32) //< that same rule after resolving, referred to by index, not name
+  recover(stops: U8[]) //< absorbs input up to one of these, and also marks the run as lenient.
+    //<
+    //< Outside a lenient run it matches nothing, so its branch is dead.
+    //< Caution: **Do not separate the swallowing from the mark**, or a run could set the mark alone
+    //< (the notation is in "`~\"...\"`: swallowing a run, and the mark of the lenient run" in
+    //< `kspeg/docs/SPEC-notation.md`).

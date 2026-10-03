@@ -1,0 +1,84 @@
+import "std/verdict"
+// ==========================================
+// Checks that ARC decides by conformance to `std.lang.Ref_counted` by its full name (FQN), not by
+// a match on the name's suffix.
+// **This shape is what [W0504] is for.**
+// Caution: **Keep the same-named declaration inside this file.** Every file imports `std/lang`
+// implicitly, so a file that declares the same name uses its own.
+// It also holds Qualified_arc, which names `lang.Ref_counted` beside the same-named declaration.
+// ==========================================
+##lint(W0504 = off)
+
+import "std/mem" + { dealloc }
+
+trait Ref_counted
+  fn retain(r: Self)
+  fn release(r: Self)
+
+struct Not_arc
+  n: I32
+
+impl Not_arc: Ref_counted
+  fn retain(r: Self$@)
+    r.n += 1
+  fn release(r: Self$@)
+    r.n -= 1
+
+fn test_lookalike_trait_is_not_arc()
+  verdict.start("[ARC] a same-named Ref_counted from another file is not an ARC target test...")
+  a: Not_arc = ::{ .n = 0 }
+  b: = a // If it were an ARC type, the compiler would insert a retain here and n would go up.
+  assert(a.n == 0 && b.n == 0,
+    "an unrelated trait that merely shares the name 'Ref_counted' must not enable ARC")
+  // Called explicitly, the count moves (it is not ARC, so the method is not `priv`).
+  $c: = a
+  c.retain()
+  assert(c.n == 1, "the methods themselves are ordinary pub methods and remain callable")
+  verdict
+    .pass("the judgement goes by an FQN match on std.lang.Ref_counted, and a same-named separate \
+      declaration is not an ARC target.")
+
+// ==========================================
+// In a file that declares the same name, `lang.` still reaches std/lang's trait (the only
+// difference from `Not_arc` above).
+// ==========================================
+priv struct _Qualified_arc_ctrl
+  count: Sz
+  value: I32
+
+struct Qualified_arc
+  priv ctrl: _Qualified_arc_ctrl$@
+
+impl Qualified_arc
+  fn new(v: I32): Qualified_arc
+    c: = mem.alloc_as<|_Qualified_arc_ctrl|>()
+    c.count = 1
+    c.value = v
+    return ::{ .ctrl = c }
+  fn get(r: Self$@): I32$@
+    return r.ctrl.value@
+
+impl Qualified_arc: lang.Ref_counted
+  priv fn retain(r: Self@)
+    r.ctrl.count += 1
+  priv fn release(r: Self@)
+    r.ctrl.count -= 1
+    if r.ctrl.count == 0
+      dealloc(Void$@::r.ctrl)
+
+priv fn qualified_body()
+  $a: = Qualified_arc.new(5)
+  assert(a.get()$ == 5, "the qualified ARC handle must read its value")
+
+fn test_qualified_lang_trait_is_arc()
+  verdict
+    .start("[ARC] in a file declaring the same name, lang.Ref_counted is still an ARC target \
+      test...")
+  b0: = mem.heap_used_bytes()
+  qualified_body()
+  b1: = mem.heap_used_bytes()
+  assert(b1 == b0,
+    "conforming through 'lang.Ref_counted' must enable ARC even where 'Ref_counted' is shadowed")
+  verdict
+    .pass("unqualified resolves to the declaration inside the file, and `lang.`-qualified to \
+      std/lang.")

@@ -1,0 +1,20 @@
+//< A mutable slice must not be made from read-only memory
+//<
+//< The descriptor holds a mutable pointer, so a write makes the C rewrite `.rodata`: silent in
+//< KSPL, it falls at run time on a host and writes to ROM on freestanding. Only read-only memory
+//< is in scope: a cast to an immutable slice, or from a `$` binding's own memory, must pass.
+// EXPECT: cannot cast a 'const' declaration to the mutable slice type 'U8$[]'
+// EXPECT: cannot cast a string literal to the mutable slice type 'U8$[]'
+// EXPECT-NOT: cannot cast a 'const' declaration to the mutable slice type 'U8[]'
+import "std/io"
+
+const ro: U8[4] = ::{ 1U8, 2U8, 3U8, 4U8 }
+
+pub fn main(): I32
+  bad_const: = U8$[]::ro // this one stops
+  bad_literal: = U8$[]::"abc" // this one stops too
+  ok_immutable: = U8[]::ro // an immutable slice passes
+  $buf: U8[4] = ::{}
+  ok_owned: = U8$[]::buf // memory one holds oneself passes
+  io.out().s("\{bad_const.len\}\{bad_literal.len\}\{ok_immutable.len\}\{ok_owned.len\}\n")
+  return 0

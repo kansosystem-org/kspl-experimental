@@ -1,0 +1,420 @@
+//< The layers a model is composed of, built on `ksai/tensor`'s basic operations
+//<
+//< `Linear`, `Rms_norm`, `Self_attention` and `Gqa_attention`, `Embedding`, `Swiglu_mlp`, and the
+//< `Transformer_block` gathering them into one block. **Only the inference path is here**; the
+//< backward passes are split into `ksai/nn_grad`, `ksai/attention_train` and `ksai/block_train`,
+//< so a binary that only runs inference carries no training code. Read it after `ksai/tensor`.
+import "ksai/lora"
+import "ksai/tensor" { Tensor }
+import "std/math"
+import "std/mem" { Arena }
+import "std/prng"
+
+pub struct Linear<|T|> //< one fully connected layer: a weight matrix and a bias
+  pub weights: Tensor<|T|> //< the matrix, shaped `[in_features, out_features]`
+  pub bias: Tensor<|T|> //< the bias added to each output, `out_features` long
+
+impl<|T|> Linear<|T|>
+  pub fn new( //< a layer of that shape, with constant starting weights
+    in_features: Sz, //< how many inputs
+    out_features: Sz, //< how many outputs
+    arena: Arena$@, //< the arena the weights are allocated from
+  ): Linear<|T|>
+    w_shape: Sz[2] = ::{ in_features, out_features }
+    b_shape: Sz[1] = ::{ out_features }
+    $w: = Tensor<|T|>.new(Sz[]::w_shape, arena)
+    $b: = Tensor<|T|>.new(Sz[]::b_shape, arena)
+    w.fill(0.1) // sets dummy weights, for the tests
+    b.fill(0.0)
+    return Linear<|T|>::{ .weights = w, .bias = b }
+
+  pub fn init_uniform( //< initializes the weights for training
+    //<
+    //< Caution: **Do not start training from `new`'s default (every element 0.1).** Every output
+    //< unit gets the same value and the same gradient, so the units stay identical forever.
+    r: Self$@,
+    rng: prng.Prng$@, //< the random generator; its seed makes a run reproducible
+    scale: F64, //< the weights land in [-scale, scale)
+  )
+    r.weights.fill_uniform(rng, scale)
+
+  pub fn forward( //< the input times the matrix, plus the bias
+    r: Self$@,
+    $x: Tensor<|T|>, //< the input, whose last dimension is `in_features`
+  ): Tensor<|T|>
+    // Y = X * W + b
+    $mul_res: = x.matmul(r.weights) catch panic("Linear.forward: matmul shape mismatch")
+    return mul_res.add_bias(r.bias) catch panic("Linear.forward: add_bias shape mismatch")
+// ---------------------------------------------------------
+// RMSNorm Layer
+// ---------------------------------------------------------
+pub struct Rms_norm<|T|> //< root-mean-square normalization with a learned per-element gain
+  pub weight: Tensor<|T|> //< the gain, one number per element of the last dimension
+  pub eps: T //< added under the square root, so a row of zeros does not divide by zero
+
+impl<|T|> Rms_norm<|T|>
+  pub fn new( //< a normalization whose gain starts at 1.0, which is also where training starts
+    dim: Sz, //< the length of the dimension being normalized
+    eps: T, //< added under the square root
+    arena: Arena$@, //< the arena the gain is allocated from
+  ): Rms_norm<|T|>
+    $shape: Sz[1] = ::{ dim }
+    $w: = Tensor<|T|>.new(Sz$[]::{ .ptr = shape@, .len = 1 }, arena)
+    w.fill(1.0)
+    return Rms_norm<|T|>::{ .weight = w, .eps = eps }
+
+  pub fn forward( //< the input, normalized and multiplied by the gain
+    r: Self$@,
+    $x: Tensor<|T|>, //< the input, normalized along its last dimension
+  ): Tensor<|T|>
+    return x.rmsnorm(r.weight, r.eps) catch panic("Rms_norm.forward: shape mismatch")
+// ---------------------------------------------------------
+// MLP Layer (Multi-Layer Perceptron)
+// ---------------------------------------------------------
+pub struct Mlp<|T|> //< two layers with SiLU between them
+  pub fc1: Linear<|T|> //< the first layer, widening to the hidden size
+  pub fc2: Linear<|T|> //< the second layer, narrowing back to the output size
+
+impl<|T|> Mlp<|T|>
+  pub fn new( //< two layers of these shapes
+    in_dim: Sz, //< how many inputs
+    hidden_dim: Sz, //< the hidden width between the layers
+    out_dim: Sz, //< how many outputs
+    arena: Arena$@, //< the arena the weights are allocated from
+  ): Mlp<|T|>
+    return Mlp<|T|>::{ .fc1 = Linear<|T|>.new(in_dim, hidden_dim, arena),
+      .fc2 = Linear<|T|>.new(hidden_dim, out_dim, arena) }
+
+  pub fn init_uniform( //< initializes both layers for training
+    r: Self$@,
+    rng: prng.Prng$@, //< the random generator; its seed makes a run reproducible
+    scale: F64, //< the weights land in [-scale, scale)
+  )
+    r.fc1.init_uniform(rng, scale)
+    r.fc2.init_uniform(rng, scale)
+
+  pub fn forward( //< the input through both layers, with SiLU in between
+    r: Self$@,
+    x: Tensor<|T|>, //< the input
+  ): Tensor<|T|>
+    return r.forward_lora(x, null, null)
+
+  pub fn forward_lora( //< the same, with an adapter's delta added to either layer
+    r: Self$@, x: Tensor<|T|>, //< the input
+    fc1_lora: lora.Lora<|T|>$@, //< the adapter on the first layer; null adds nothing
+    fc2_lora: lora.Lora<|T|>$@): Tensor<|T|>
+    $h: = r.fc1.forward(x)
+    if fc1_lora != null
+      h = h + fc1_lora.forward(x)
+    a: = h.silu()
+    $out: = r.fc2.forward(a)
+    if fc2_lora != null
+      out = out + fc2_lora.forward(a)
+    return out
+// ---------------------------------------------------------
+// Self-Attention Layer. **It has one head**, mixing the whole sequence with a single attention.
+// Caution: **Do not add a head-count parameter.** Nothing splits Q/K/V per head, so it would be an
+// option that can be passed but does nothing (Principle 5).
+// ---------------------------------------------------------
+pub struct Self_attention<|T|> //< single-head attention over one sequence, with a KV cache
+  pub wq: Linear<|T|> //< the projection that makes the query
+  pub wk: Linear<|T|> //< the projection that makes the key
+  pub wv: Linear<|T|> //< the projection that makes the value
+  pub wo: Linear<|T|> //< the output projection for the attended context
+  pub dim: Sz //< the width, which also sets the `1/sqrt(dim)` the scores are divided by
+  pub k_cache: Tensor<|T|> //< every key seen so far, so a continued run need not recompute them
+  pub v_cache: Tensor<|T|> //< every value seen so far, kept for the same reason
+
+impl<|T|> Self_attention<|T|>
+  pub fn new( //< the four projections, and a cache long enough for the sequence
+    dim: Sz, //< the input and output width
+    max_seq_len: Sz, //< the longest sequence the cache must hold
+    arena: Arena$@, //< the arena the weights and the cache are allocated from
+  ): Self_attention<|T|>
+    // Caution: **Reject an odd width here.** RoPE rotates adjacent elements in pairs, so it cannot
+    // handle an odd width (`apply_rope` in `ksai/tensor.kspls`). Otherwise it fails inside the
+    // first `forward`, with no hint that the width was odd.
+    assert(dim % 2 == 0,
+      "Self_attention.new: dim has to be even (because RoPE rotates adjacent pairs)")
+    // Allocates cache space for the maximum sequence length on the persistent arena
+    cache_shape: Sz[2] = ::{ max_seq_len, dim }
+    k_cache: = Tensor<|T|>.new(Sz[]::cache_shape, arena)
+    v_cache: = Tensor<|T|>.new(Sz[]::cache_shape, arena)
+
+    return Self_attention<|T|>::{ .wq = Linear<|T|>.new(dim, dim, arena),
+      .wk = Linear<|T|>.new(dim, dim, arena), .wv = Linear<|T|>.new(dim, dim, arena),
+      .wo = Linear<|T|>.new(dim, dim, arena), .dim = dim, .k_cache = k_cache, .v_cache = v_cache }
+
+  pub fn init_uniform( //< initializes all four projections for training
+    r: Self$@,
+    rng: prng.Prng$@, //< the random generator; its seed makes a run reproducible
+    scale: F64, //< the weights land in [-scale, scale)
+  )
+    r.wq.init_uniform(rng, scale)
+    r.wk.init_uniform(rng, scale)
+    r.wv.init_uniform(rng, scale)
+    r.wo.init_uniform(rng, scale)
+
+  pub fn forward( //< attention over everything cached so far, this input included
+    r: Self$@,
+    x: Tensor<|T|>, //< the input for this step
+    start_pos: Sz, //< this input's position in the sequence, so the cache and RoPE line up
+  ): Tensor<|T|>
+    return r.forward_lora(x, start_pos, null, null)
+
+  pub fn forward_lora( //< the same, with fine-tuned adapters added at inference
+    //<
+    //< The adapters go on the Q and V projections' outputs, the same place `peft` puts them.
+    r: Self$@, x: Tensor<|T|>, //< the input for this step
+    start_pos: Sz, //< this input's position in the sequence
+    q_lora: lora.Lora<|T|>$@, //< the adapter on the query; null adds nothing
+    v_lora: lora.Lora<|T|>$@): Tensor<|T|>
+    compute_arena: = x.arena
+
+    $q: = r.wq.forward(x)
+    if q_lora != null
+      q = q + q_lora.forward(x)
+    $k: = r.wk.forward(x)
+    $v: = r.wv.forward(x)
+    if v_lora != null
+      v = v + v_lora.forward(x)
+
+    $q_rope: = q.apply_rope(start_pos) catch panic("Self_attention: apply_rope failed")
+    k_rope: = k.apply_rope(start_pos) catch panic("Self_attention: apply_rope failed")
+    r.k_cache.update_row(start_pos, k_rope) catch panic("Self_attention: update_row failed")
+    r.v_cache.update_row(start_pos, v) catch panic("Self_attention: update_row failed")
+    // A zero-copy view of every past token
+    seq_len: = start_pos + 1
+    k_view: = r.k_cache.view_rows(0, seq_len, compute_arena) catch panic("Self_attention: view_rows \
+      failed")
+    v_view: = r.v_cache.view_rows(0, seq_len, compute_arena) catch panic("Self_attention: view_rows \
+      failed")
+    $scores: = q_rope.matmul_transb(k_view) catch panic("Self_attention: matmul_transb failed")
+
+    scale_factor: = T::(1.0 / math.sqrt(F64::r.dim))
+    $scaled_scores: = scores.scale(scale_factor)
+    $attn_weights: = scaled_scores.softmax() catch panic("Self_attention: softmax failed")
+    context: = attn_weights.matmul(v_view) catch panic("Self_attention: matmul failed")
+
+    return r.wo.forward(context)
+// ---------------------------------------------------------
+// Transformer Block Layer
+// ---------------------------------------------------------
+pub struct Transformer_block<|T|> //< one block: normalize, attend, normalize, feed forward
+  pub attention_norm: Rms_norm<|T|> //< the normalization before attention
+  pub attention: Self_attention<|T|> //< the attention itself
+  pub ffn_norm: Rms_norm<|T|> //< the normalization before the feed-forward part
+  pub ffn: Mlp<|T|> //< the feed-forward part
+
+impl<|T|> Transformer_block<|T|>
+  pub fn new( //< one block of these shapes
+    dim: Sz, //< the input and output width
+    hidden_dim: Sz, //< the feed-forward part's hidden width
+    max_seq_len: Sz, //< the longest sequence the attention's cache must hold
+    eps: T, //< what the normalizations add under the square root
+    arena: Arena$@, //< the arena the weights and the cache are allocated from
+  ): Transformer_block<|T|>
+    return Transformer_block<|T|>::{ .attention_norm = Rms_norm<|T|>.new(dim, eps, arena),
+      .attention = Self_attention<|T|>.new(dim, max_seq_len, arena),
+      .ffn_norm = Rms_norm<|T|>.new(dim, eps, arena),
+      .ffn = Mlp<|T|>.new(dim, hidden_dim, dim, arena) }
+
+  pub fn init_uniform( //< initializes the attention and the feed-forward part for training
+    //<
+    //< The reason is at `Linear.init_uniform`. The normalization weights stay at `Rms_norm.new`'s
+    //< 1.0, which is training's initial value.
+    r: Self$@,
+    rng: prng.Prng$@, //< the random generator; its seed makes a run reproducible
+    scale: F64, //< the weights land in [-scale, scale)
+  )
+    r.attention.init_uniform(rng, scale)
+    r.ffn.init_uniform(rng, scale)
+
+  pub fn forward( //< the input through the whole block
+    r: Self$@,
+    x: Tensor<|T|>, //< the input for this step
+    start_pos: Sz, //< this input's position in the sequence
+  ): Tensor<|T|>
+    return r.forward_lora(x, start_pos, null, null)
+
+  pub fn forward_lora( //< the same, with adapters passed on to the attention
+    r: Self$@, x: Tensor<|T|>, //< the input for this step
+    start_pos: Sz, //< this input's position in the sequence
+    q_lora: lora.Lora<|T|>$@, //< the adapter on the query; null adds nothing
+    v_lora: lora.Lora<|T|>$@): Tensor<|T|>
+    // 1. The attention path (a residual connection)
+    norm_x: = r.attention_norm.forward(x)
+    attn_out: = r.attention.forward_lora(norm_x, start_pos, q_lora, v_lora)
+    h: = x + attn_out
+    // 2. The feed-forward path (a residual connection)
+    norm_h: = r.ffn_norm.forward(h)
+    ffn_out: = r.ffn.forward(norm_h)
+    return h + ffn_out
+// ---------------------------------------------------------
+// Embedding Layer (Token ID -> Vector)
+// ---------------------------------------------------------
+pub struct Embedding<|T|> //< the table that maps a token number to a vector
+  pub weight: Tensor<|T|> //< one row per token, each as long as the model's width
+
+impl<|T|> Embedding<|T|>
+  pub fn new( //< a table of that shape, with constant starting values
+    vocab_size: Sz, //< how many tokens there are
+    dim: Sz, //< the length of each token's vector
+    arena: Arena$@, //< the arena the table is allocated from
+  ): Embedding<|T|>
+    $shape: Sz[2] = ::{ vocab_size, dim }
+    $w: = Tensor<|T|>.new(Sz$[]::{ .ptr = shape@, .len = 2 }, arena)
+    w.fill(T::0.01)
+    return Embedding<|T|>::{ .weight = w }
+  pub fn init_uniform( //< initializes the table for training
+    r: Self$@,
+    rng: prng.Prng$@, //< the random generator; its seed makes a run reproducible
+    scale: F64, //< the values land in [-scale, scale)
+  )
+    r.weight.fill_uniform(rng, scale)
+  pub fn forward( //< the vector for one token
+    //<
+    //< **This arena decides where every later computation happens.** The first tensor comes from
+    //< it, and matrix products and the rest follow it implicitly.
+    r: Self$@,
+    token_id: I32, //< which row of the table
+    compute_arena: Arena$@, //< the arena this step's working tensors are allocated from
+  ): Tensor<|T|>
+    // token_id can be invalid if the vocabulary is broken or tampered with (load() in
+    // ksai/tokenizer.kspls can produce a negative from a truncating cast from Sz). I32→Sz
+    // sign-extends, so a negative becomes a huge offset and an out-of-bounds read (a panic stops it
+    // here, as in Tensor.get/set).
+    if token_id < 0 || Sz::token_id >= r.weight.shape[0]
+      panic("Embedding.forward: token_id out of bounds")
+    dim: = r.weight.shape[1]
+    out_shape: Sz[2] = ::{ 1, dim }
+    out: = Tensor<|T|>.new(Sz[]::out_shape, compute_arena)
+
+    offset: = Sz::token_id * dim
+    for i in Range.asc(dim)
+      (out.data + i)$ = (r.weight.data + offset + i)$
+    return out
+// ---------------------------------------------------------
+// The SwiGLU MLP (the Llama/Qwen family): down(silu(gate(x)) ⊙ up(x))
+// Unlike Mlp (fc1→SiLU→fc2): three matrices, gate/up/down, with no bias.
+// ---------------------------------------------------------
+pub struct Swiglu_mlp<|T|> //< the Llama/Qwen feed-forward part: three matrices and no bias
+  pub gate: Linear<|T|> //< `[dim, hidden]`, the side SiLU is applied to
+  pub up: Linear<|T|> //< `[dim, hidden]`, the side multiplied with it
+  pub down: Linear<|T|> //< `[hidden, dim]`, narrowing back to the model's width
+
+impl<|T|> Swiglu_mlp<|T|>
+  pub fn new( //< the three matrices of these shapes
+    dim: Sz, //< the input and output width
+    hidden: Sz, //< the hidden width in between
+    arena: Arena$@, //< the arena the weights are allocated from
+  ): Swiglu_mlp<|T|>
+    return Swiglu_mlp<|T|>::{ .gate = Linear<|T|>.new(dim, hidden, arena),
+      .up = Linear<|T|>.new(dim, hidden, arena),
+      .down = Linear<|T|>.new(hidden, dim, arena) }
+
+  pub fn forward( //< `down(silu(gate(x)) * up(x))`
+    r: Self$@,
+    x: Tensor<|T|>, //< the input
+  ): Tensor<|T|>
+    $g: = r.gate.forward(x)
+    gs: = g.silu()
+    u: = r.up.forward(x)
+    gu: = gs * u
+    return r.down.forward(gu)
+// ---------------------------------------------------------
+// Grouped-Query Attention (the Llama/Qwen family): Q has n_heads, K/V n_kv_heads (a divisor of
+// n_heads); NeoX-style RoPE per head_dim with a variable theta; Q/K/V carry a bias and O none
+// (Qwen2's convention); one token at a time over the KV cache.
+// ---------------------------------------------------------
+pub struct Gqa_attention<|T|> //< grouped-query attention: several query heads share one key head
+  pub wq: Linear<|T|> //< `[dim, n_heads * head_dim]`, the queries
+  pub wk: Linear<|T|> //< `[dim, n_kv_heads * head_dim]`, the keys, of which there are fewer
+  pub wv: Linear<|T|> //< the values, shaped as the keys are
+  pub wo: Linear<|T|> //< `[n_heads * head_dim, dim]`, the output projection
+  pub n_heads: Sz //< how many query heads
+  pub n_kv_heads: Sz //< how many key and value heads; it must divide `n_heads`
+  pub head_dim: Sz //< how wide one head is
+  pub rope_theta: F64 //< the base of the positional rotation (RoPE)
+  pub k_cache: Tensor<|T|> //< every key seen so far, `[max_seq, n_kv_heads * head_dim]`
+  pub v_cache: Tensor<|T|> //< every value seen so far, shaped the same
+
+impl<|T|> Gqa_attention<|T|>
+  pub fn new( //< the four projections, and a cache long enough for the sequence
+    dim: Sz, //< the model's input and output width
+    n_heads: Sz, //< how many query heads
+    n_kv_heads: Sz, //< how many key and value heads; it must divide `n_heads`
+    head_dim: Sz, //< how wide one head is
+    max_seq_len: Sz, //< the longest sequence the cache must hold
+    rope_theta: F64, //< the base of the positional rotation (RoPE)
+    arena: Arena$@): Gqa_attention<|T|>
+    q_dim: = n_heads * head_dim
+    kv_dim: = n_kv_heads * head_dim
+    cache_shape: Sz[2] = ::{ max_seq_len, kv_dim }
+    k_cache: = Tensor<|T|>.new(Sz[]::cache_shape, arena)
+    v_cache: = Tensor<|T|>.new(Sz[]::cache_shape, arena)
+    return Gqa_attention<|T|>::{ .wq = Linear<|T|>.new(dim, q_dim, arena),
+      .wk = Linear<|T|>.new(dim, kv_dim, arena),
+      .wv = Linear<|T|>.new(dim, kv_dim, arena), .wo = Linear<|T|>.new(q_dim, dim, arena),
+      .n_heads = n_heads, .n_kv_heads = n_kv_heads, .head_dim = head_dim, .rope_theta = rope_theta,
+      .k_cache = k_cache, .v_cache = v_cache }
+
+  pub fn forward( //< attention over everything cached so far, this input included
+    r: Self$@,
+    x: Tensor<|T|>, //< the input for this step
+    start_pos: Sz, //< this input's position in the sequence, so the cache and RoPE line up
+  ): Tensor<|T|>
+    return r.forward_lora(x, start_pos, null, null)
+
+  pub fn forward_lora( //< the same, with fine-tuned adapters added at inference
+    //<
+    //< The adapters go on the Q and V projection outputs, before RoPE, where `peft` puts them.
+    r: Self$@, x: Tensor<|T|>, //< the input for this step
+    start_pos: Sz, //< this input's position in the sequence
+    q_lora: lora.Lora<|T|>$@, //< the adapter on the query; null adds nothing
+    v_lora: lora.Lora<|T|>$@): Tensor<|T|>
+    compute_arena: = x.arena
+    kv_dim: = r.n_kv_heads * r.head_dim
+    q_dim: = r.n_heads * r.head_dim
+    $q0: = r.wq.forward(x)
+    if q_lora != null
+      q0 = q0 + q_lora.forward(x)
+    q: = q0.apply_rope_neox(start_pos, r.head_dim, r.rope_theta) catch panic("Gqa_attention: \
+      apply_rope_neox failed")
+    $k0: = r.wk.forward(x)
+    k: = k0.apply_rope_neox(start_pos, r.head_dim, r.rope_theta) catch panic("Gqa_attention: \
+      apply_rope_neox failed")
+    $v: = r.wv.forward(x)
+    if v_lora != null
+      v = v + v_lora.forward(x)
+    r.k_cache.update_row(start_pos, k) catch panic("Gqa_attention: update_row failed")
+    r.v_cache.update_row(start_pos, v) catch panic("Gqa_attention: update_row failed")
+
+    seq_len: = start_pos + 1
+    groups: = r.n_heads / r.n_kv_heads // how many Q heads share one KV head
+    scale: = T::(1.0 / math.sqrt(F64::r.head_dim))
+    out_shape: Sz[2] = ::{ 1, q_dim }
+    out: = Tensor<|T|>.new(Sz[]::out_shape, compute_arena)
+
+    for h in Range.asc(r.n_heads)
+      qo: = h * r.head_dim // this head's Q offset
+      ko: = (h / groups) * r.head_dim // the corresponding KV head's offset
+      sc_shape: Sz[2] = ::{ 1, seq_len }
+      $sc: = Tensor<|T|>.new(Sz[]::sc_shape, compute_arena)
+      for t in Range.asc(seq_len)
+        $dot: = T::0.0
+        for d in Range.asc(r.head_dim)
+          dot = dot + (q.data + qo + d)$ * (r.k_cache.data + t * kv_dim + ko + d)$
+        (sc.data + t)$ = dot * scale
+      attn: = sc.softmax() catch panic("Gqa_attention: softmax failed")
+      // t goes outside and the accumulation runs parallel over d (as in grad_matmul_weight_into).
+      // For a fixed d the addition order stays ascending t, so the result is unchanged bit for bit,
+      // and v_cache is read contiguously within t's row, which favours auto-vectorization.
+      for d in Range.asc(r.head_dim)
+        (out.data + qo + d)$ = T::0.0
+      for t in Range.asc(seq_len)
+        attn_t: = (attn.data + t)$
+        v_row: = r.v_cache.data + t * kv_dim + ko
+        for d in Range.asc(r.head_dim)
+          (out.data + qo + d)$ = (out.data + qo + d)$ + attn_t * (v_row + d)$
+    return r.wo.forward(out)

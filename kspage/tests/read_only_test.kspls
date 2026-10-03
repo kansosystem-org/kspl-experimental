@@ -1,0 +1,132 @@
+import "kspage/lay/caret"
+import "kspage/lay/flow"
+import "kspage/model/collect" { Collect }
+import "kspage/model/doc" as docs + { Axis, Doc, Rect }
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/paint"
+import "kspage/model/style" + { Sheet }
+import "kspage/share/store"
+import "kspage/tests/base"
+import "kspage/write/block"
+import "kspage/write/cells"
+import "kspage/write/edit"
+import "kspage/write/insert"
+import "kspage/write/merge"
+import "kspage/write/shape"
+import "kspage/write/theme"
+import "kspage/write/typing"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// kspage: checks that a document opened read-only cannot be changed by any path.
+// Caution: **Do not check by listing the paths one by one** (the reason is at
+// `test_a_read_only_document_never_changes`). **Whether the tools were hidden is not checked**
+// (that is `kspage/tests/browser/store.js`'s job).
+// ==========================================
+
+fn test_a_read_only_document_never_changes() //<
+  //< A document opened read-only does not change by any path
+  //<
+  //< Caution: **Do not check by listing the paths one by one.** There are dozens, so a list
+  //< silently leaves a hole the day one more is added. What is checked is **that the saved text
+  //< differs by not one byte**, whichever path was tried.
+  verdict.start("[kspage/read-only] a read-only document not changing test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  // It carries an origin mark, so a block can be taken from another version.
+  doc: = Doc.new(arena, "mark")
+  sheet: = Sheet.new(base.root_font(), arena)
+  sheet.add("body", paint.inherit_all())
+  head: = doc.add_block("body").add_text("abcde")
+  t: = doc.add_block("table")
+  t.name = "detail"
+  row: = t.add_child("")
+  cell: = row.add_child("").add_text("a")
+  row.add_child("").add_text("b")
+  slide: = doc.add_block("slide")
+  framed: = docs.add_framed_child(slide, "",
+    Rect::{ .x = 10.0, .y = 10.0, .w = 40.0, .h = 20.0 })
+  docs.add_framed_child(slide, "", Rect::{ .x = 60.0, .y = 10.0, .w = 40.0, .h = 20.0 })
+  page: = flow.layout(doc, sheet, fixed.make(), 200.0, arena)
+  ed: = edit.new_editor(doc)
+  ed.caret = caret.at(head, 2)
+
+  // It changes the document once first, so there is a step for "undo" to be refused on.
+  ed.insert("p")
+  ed.break_group()
+  $was: = Str_builder.new()
+  defer was.free()
+  store.save(doc, sheet, was@)
+  // Another version with one block more, to take in.
+  theirs: = store.load(was.slice(), arena) catch _e
+    panic("the text just written cannot be read")
+  fresh: = theirs.doc.add_block("body")
+  fresh.add_text("z")
+  $their_text: = Str_builder.new()
+  defer their_text.free()
+  store.save(theirs.doc, theirs.sheet, their_text@)
+
+  ed.read_only = true
+  // Typing, deleting, pasting, composing.
+  ed.insert("q")
+  ed.backspace()
+  ed.delete_ahead(page)
+  ed.delete_span(page)
+  ed.paste(page, "pasted text")
+  ed.split_block(page, sheet)
+  ed.join_prev(page)
+  ed.delete_forward()
+  ed.set_preedit("composing")
+  ed.commit_preedit()
+  ed.set_source("replaced")
+  ed.set_chrome(head, "a band")
+  // A style and a color.
+  ed.set_style("em")
+  ed.set_block_style(page, sheet, "h1")
+  ed.link_span(sheet, "https://example.com/")
+  ed.set_note("a note")
+  ed.set_remark("a memo", "someone")
+  ed.set_name(page, "another name")
+  // A table.
+  // Caution: **Go inside a cell before touching it**, or the path's own check refuses and the core
+  // is never tried.
+  ed.caret = caret.at(cell, 0)
+  ed.add_line(page, Axis.row)
+  ed.drop_line(page, Axis.column)
+  ed.merge_cell(page, Axis.column)
+  ed.fill_along(page, Axis.column)
+  ed.sort_rows(page, true)
+  // Inserting.
+  ed.caret = caret.at(head, 1)
+  ed.insert_table(page, sheet, "another table", 2, 2)
+  ed.insert_shape(page, sheet, "shape", style.Shape.ellipse)
+  ed.insert_gathered(page, sheet, "contents", Collect.contents)
+  ed.insert_image(page, "picture.png", 40.0, 30.0)
+  // A frame, a theme, and a block from another version.
+  ed.pick_only(framed)
+  ed.raise_frame(true)
+  ed.caret = caret.at(head, 1)
+  theme.wear(ed, sheet, 1)
+  merge.take(ed, theirs.doc, fresh)
+  // Undo and redo.
+  ed.undo()
+  ed.redo()
+  // Find and replace. **It touches the whole document.**
+  ed.replace_all("a", "z")
+
+  $now: = Str_builder.new()
+  defer now.free()
+  store.save(doc, sheet, now@)
+  assert(now.slice().equals(was.slice()), "the text saved changes by not one byte")
+
+  // **Turn it off and editing works again** (it must not be left merely unwritable).
+  ed.read_only = false
+  ed.caret = caret.at(head, 0)
+  ed.insert("s")
+  $after: = Str_builder.new()
+  defer after.free()
+  store.save(doc, sheet, after@)
+  assert(!after.slice().equals(was.slice()), "take the read-only off and it can be written")
+  verdict.pass("a read-only document does not change by one byte, by any means.")

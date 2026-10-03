@@ -1,0 +1,19 @@
+//< Passing a pointer an arena allocated to `mem.dealloc` must stop before touching the heap
+//<
+//< **Neither the type nor translation tells them apart** (both `alloc_as<|T|>()` return `T$@`), so
+//< only the start of `dealloc` can stop it. Libc cannot be relied on: glibc can let it pass, and on
+//< freestanding a fake header joins the free list: **the heap breaks with nobody reporting it**.
+// EXPECT: mem.dealloc: this pointer did not come from mem.alloc
+// EXPECT-NOT: must not get here
+import "std/io"
+import "std/mem" + { Arena }
+
+fn main(): I32
+  arena: = Arena.new(4096)
+  defer arena.free()
+  p: = arena.alloc_as<|I32|>()
+  p$ = 7
+  io.out().s("arena=\{p$\}\n").flush()
+  mem.dealloc(Void$@::p)
+  io.out().s("must not get here\n").flush()
+  return 0

@@ -1,0 +1,113 @@
+//< The entry points that list the contents of the current container
+//<
+//< It lists the container's children (frames, shapes and connectors), selects one, and changes
+//< the stacking order.
+//< Caution: **Call all of them after layout** — which slide the cursor is in is unknown until it
+//< is laid out.
+//< The stacking order is the document's order; `raise_frame` moves an item up and down the list.
+//< It is split from [`bridge.kspls`](bridge.kspls) for the 1000-line-per-file cap, and
+//< follows its boundary rules.
+import "kspage/lay/ask"
+import "kspage/model/doc" { Block, Rect }
+import "kspage/port/web/state" + { ed, ensure, out, page }
+import "kspage/write/block"
+import "kspage/write/edit" as _edit
+
+priv fn face(): Option<|Block$@|> //< the current container
+  //<
+  //< None when absent (outside a frame, and the current paragraph holds no frame either). It
+  //< returns an `Option` rather than a raw `null`, so `switch`'s exhaustiveness check ([H0704])
+  //< keeps the caller from forgetting the absent case.
+  ensure()
+  if page == null
+    return Option<|Block$@|>.none
+  if b: = ed.framer_at()
+    return Option<|Block$@|>.some(b)
+  return Option<|Block$@|>.none
+
+// The number of items in the current container. **0 outside a container** (this count decides
+// both where the list is shown and where it is not).
+#export
+fn kspage_web_object_count(): Sz
+  if got: = face()
+    return got.children.len
+  return 0
+
+// Writes nine values for item `i` (the frame's x / y / w / h / flags, then x / y / w / h in
+// screen coordinates).
+// Caution: **Return both sets from one entry point** — editing by number needs the offset from
+// the container's top left, and outlining the selected frame needs screen coordinates (split into
+// two entry points, one goes stale when a layout happens in between).
+#export
+fn kspage_web_object(i: Sz, out_at: F32$@)
+  state.clear_out(out_at, 9)
+  $got: Block$@ = null
+  switch face() case .some(b)
+    got = b
+  case .none
+    return
+  if i >= got.children.len
+    return
+  kid: = got.children.get(i)
+  $spot: = Rect::{ .x = 0.0, .y = 0.0, .w = 0.0, .h = 0.0 }
+  if f: = kid.frame
+    spot = f
+  out_at$ = spot.x
+  (out_at + 1)$ = spot.y
+  (out_at + 2)$ = spot.w
+  (out_at + 3)$ = spot.h
+  $flags: F32 = 0.0
+  if ed.holds_pick(kid)
+    flags += 1.0
+  if kid.inlines.len > 0 || kid.children.len > 0
+    flags += 2.0
+  if kid.tie_to.len > 0
+    flags += 4.0
+  (out_at + 4)$ = flags
+  // Screen coordinates exist only after layout (before it, they are 0).
+  if page != null
+    if seen: = ask.frame_rect(page, kid)
+      (out_at + 5)$ = seen.x
+      (out_at + 6)$ = seen.y
+      (out_at + 7)$ = seen.w
+      (out_at + 8)$ = seen.h
+
+// Writes item `i`'s name and returns the length. **0 when it has no name** (the list gives it a
+// label such as "Shape 3"; a label made by the core would look as if it were in the document).
+#export
+fn kspage_web_object_name(i: Sz): Sz
+  ensure()
+  out.clear()
+  if got: = face()
+    if i < got.children.len
+      out.s(got.children.get(i).name)
+  return out.len
+
+// Writes item `i`'s style name and returns the length. Empty means the parent's.
+// The list needs it to show what the item is (a shape keeps its form and its color in this
+// style).
+#export
+fn kspage_web_object_style(i: Sz): Sz
+  ensure()
+  out.clear()
+  if got: = face()
+    if i < got.children.len
+      out.s(got.children.get(i).style)
+  return out.len
+
+// Selects item `i`. Returns 1 if it could be selected. One is selected at a time.
+// **The cursor does not move** (a shape with no text has nowhere for it to stand, and moving it
+// into a frame with text would let a click on the list change where typing goes).
+#export
+fn kspage_web_pick_object(i: Sz): I32
+  ensure()
+  return 1 if ed.pick_nth(i) else 0
+
+// Moves the selected frame one place forward or back in the stacking order. Returns 1 if it
+// moved.
+// **At either end it returns 0** (reporting "it cannot move" is better than silently doing
+// nothing). With `up` not 0 it goes up (backward, toward what is drawn in front).
+#export
+fn kspage_web_raise_object(up: I32): I32
+  ensure()
+  return 1 if ed.raise_frame(up != 0) else 0

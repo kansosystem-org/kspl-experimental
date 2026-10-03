@@ -1,0 +1,173 @@
+//< The API record's text format: how it is written, read and compared
+//<
+//< It is kept apart from its caller `tools/surface.kspls`: a `main` here would **silently replace
+//< the entry point's `main`** where a test imports it.
+//< Caution: **Do not fix only one of how the header is written and how it is skipped.** They are a
+//< pair: while the writer starts the header with `#`, the reader drops such lines. Fix one alone
+//< and the header is read as a row (the check is `tools/tests/surface_test.kspls`).
+import "std/chars" // `find_char`
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+// The reader skips a line starting with `#` (`rows_of` below).
+const record_head: U8[] = //< the record's header
+  "# The record of the API this package publishes, written by ksplc --emit-surface.\n# Caution: Do \
+    not fix it by hand. Change the API, remake it with `make surface`, and commit the diff.\n# The \
+    columns are tab-separated: the file's logical name / the key / the text / the documentation \
+    (left off where there is none). Rows are by key, ascending.\n"
+
+struct Row //< one unit compared
+  key: U8[] //< the file's logical name joined to the key
+  text: U8[] //< the text of that entry
+
+fn rows_of(data: U8[], arena: Arena$@): List<|Row|> //< the record's text as a list of rows
+  //<
+  //< Lines starting with `#` and blank lines are skipped (they are the header).
+  $out: = List<|Row|>.new(arena)
+  $ls: = data.lines(null)
+  defer ls.free()
+  for ln in ls
+    if ln.len == 0 || ln[0] == '#'
+      continue
+    first: = ln.find_char('\t')
+    if first < 0
+      continue
+    second: = ln.sub_from(first + 1).find_char('\t')
+    if second < 0
+      continue
+    cut: = first + 1 + second
+    out.push(Row::{ .key = ln.sub(0, cut), .text = ln.sub_from(cut + 1) })
+  return out
+
+struct Parts //< one row taken apart into its four fields
+  //<
+  //< **`Row` holds two halves, compared by key**; code that reads the entries wants all four.
+  file: U8[] //< the file's logical name
+  key: U8[] //< the entry's key within that file
+  text: U8[] //< the declaration as written
+  doc: U8[] //< its own description (**empty where there is none**)
+  owner: U8[] //<
+    //< The key of the declaration this row describes a part of (a parameter, or the return value)
+    //<
+    //< **Empty where the row is the declaration itself.**
+  part: U8[] //<
+    //< A parameter's name. **Empty with a non-empty `owner`, the row is the return value.**
+    //<
+    //< Caution: **Read `owner` first.** Empty here means two different things on its own.
+  of_file: Bool //<
+    //< Whether the row is the file's own description (**the text is in `doc`**)
+
+priv const part_mark: U8 = '~' //<
+  //< The character that separates a declaration's key from the part a row describes
+  //<
+  //< **The compiler decides it** (`ksplc/tools/surface.kspls`). No name contains it, so a key
+  //< holding one is a part.
+
+fn parts_of(r: Row): Parts //< takes one row apart
+  //<
+  //< Caution: **Split rows here and nowhere else**; a second place that splits on tabs goes wrong
+  //< the day a column is added.
+  at: = r.key.find_char('\t')
+  cut: = r.text.find_char('\t')
+  key: = "" if at < 0 else r.key.sub_from(at + 1)
+  mark: = key.find_char(part_mark)
+  $owner: U8[] = ""
+  $part: U8[] = ""
+  // **The mark alone is the file's own row**; a part has its owner's key in front of the mark.
+  if mark > 0
+    owner = key.sub(0, mark)
+    rest: = key.sub_from(mark + 1)
+    // **A parameter has its position in front of its name** (the name starts after the `.`); the
+    // return value has the mark a second time and no name.
+    dot: = rest.find_char('.')
+    part = "" if dot < 0 else rest.sub_from(dot + 1)
+  return Parts::{
+    .file = r.key if at < 0 else r.key.sub(0, at),
+    .key = key,
+    .text = r.text if cut < 0 else r.text.sub(0, cut),
+    .doc = "" if cut < 0 else r.text.sub_from(cut + 1),
+    .owner = owner,
+    .part = part,
+    .of_file = key.len == 1 && mark == 0,
+  }
+
+fn is_declaration(r: Row): Bool //< whether the row is a declaration in its own right
+  //<
+  //< False for a parameter, the return value, and the file's own description.
+  //< **The record keeps only these**; `ksplc doc` shows everything ("Why the record and the
+  //< reference are two renderings" in [`tools/docs/DESIGN.md`](docs/DESIGN.md)).
+  p: = parts_of(r)
+  return !p.of_file && p.owner.len <= 0
+
+priv fn text_of(rows: List<|Row|>$@, key: U8[]): U8[] //< looks up by key
+  //<
+  //< Empty if there is none. It holds one package, so a linear search is enough.
+  for r in rows
+    if r.key.equals(key)
+      return r.text
+  return ""
+
+priv fn has_key(rows: List<|Row|>$@, key: U8[]): Bool //< whether the key is there
+  //<
+  //< Caution: **Do not judge by the length `text_of` returns** (a row's text may be empty).
+  for r in rows
+    if r.key.equals(key)
+      return true
+  return false
+
+priv fn write_row(b: Str_builder$@, mark: U8[], key: U8[]) //<
+  //< Writes one line in the form "mark logical-name key"
+  b.s("  ").s(mark).s("  ")
+  for ch in key
+    b.c(' ' if ch == '\t' else ch)
+  b.c('\n')
+
+fn undocumented( //< lists the published entries with no description, and returns how many
+  //<
+  //< The fourth column is the summary, so a row whose text holds no tab has none.
+  //< Caution: **Check the current sources, not the record** (what was committed): a declaration
+  //< added in the same change is not in it, so the entry that most needs a sentence gets through.
+  rows: List<|Row|>$@, //< the package as it is now
+  b: Str_builder$@, //< where their names are written
+): Sz
+  $n: Sz = 0
+  for r in rows
+    if r.text.find_char('\t') >= 0
+      continue
+    write_row(b, "no summary", r.key)
+    n += 1
+  return n
+
+fn classify( //< writes the differences out and returns how many there were
+  //<
+  //< Compares the record with the current sources.
+  //< Caution: **Write the removed entries first.** Only a removal breaks a user's build, and it
+  //< also decides how far the version is raised.
+  old_rows: List<|Row|>$@, //< the record as committed
+  new_rows: List<|Row|>$@, //< the package as it is now
+  b: Str_builder$@, //< where the differences are written
+): Sz
+  $n: Sz = 0
+  for o in old_rows
+    if !has_key(new_rows, o.key)
+      write_row(b, "removed", o.key)
+      b.s("          record: \{o.text\}\n")
+      n += 1
+  for w in new_rows
+    if !has_key(old_rows, w.key)
+      continue
+    had: = text_of(old_rows, w.key)
+    if had.equals(w.text)
+      continue
+    write_row(b, "changed", w.key)
+    b.s("          record: \{had\}\n")
+    b.s("          now:    \{w.text\}\n")
+    n += 1
+  for w in new_rows
+    if has_key(old_rows, w.key)
+      continue
+    write_row(b, "added", w.key)
+    b.s("          now:    \{w.text\}\n")
+    n += 1
+  return n

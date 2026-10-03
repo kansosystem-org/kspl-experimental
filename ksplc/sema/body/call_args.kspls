@@ -1,0 +1,177 @@
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/sema/body/call_defaults" as sema_body_call_defaults
+import "ksplc/sema/body/coerce" as sema_body_coerce
+import "ksplc/sema/body/expr" as sema_body_expr
+import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
+import "ksplc/sema/type/def" { Fn_sig }
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/scope" { Sema_symbol }
+import "std/str"
+
+// ==========================================
+// Matching the actual arguments against the formal parameters.
+// **Only `Param_cursor` walks the formal parameters.** The default arguments are filled in
+// before this, in the same form, by `call_defaults.kspls`.
+// **On a generic call the arguments' expected type stays `unknown` up to here.**
+// Caution: **Check every argument, not just the traits.** While the expected type is `unknown`,
+// **the arguments' type check and conversion are skipped entirely**, so nothing is converted
+// twice.
+// ==========================================
+fn check_args_against_instance(c: Sema_ctx$@, args_node: Ast_node$@, inst_node: Ast_node$@,
+  is_method_access: Bool)
+  if args_node == null || inst_node == null
+    return
+  param_list: = inst_node.get_fn_params()
+  if param_list == null
+    return
+  $cursor: = base_ast_ext.Param_cursor.new(param_list, is_method_access)
+  for arg_node in args_node.children
+    if arg_node.is_literal(",")
+      continue
+    $param_node: Ast_node$@ = null
+    switch cursor.next() case .some(p)
+      param_node = p
+    case .none
+      return
+    p_type_node: = param_node.find_child(.k_type_expr)
+    if p_type_node == null
+      continue
+    // A formal parameter's type resolves in the template's file (as in infer_call_args).
+    old_file: = c.file_name
+    if p_type_node.loc.file().len > 0
+      c.set_current_file(p_type_node.loc.file())
+    p_id: = p_type_node.resolve_type(c) catch 0
+    c.set_current_file(old_file)
+    if p_id == 0 || sema_type_env.is_unknown(p_id)
+      continue
+    a_id: = arg_node.type_id
+    if a_id == 0 || sema_type_env.is_unknown(a_id) || a_id == p_id
+      continue
+    // A bare function name got the type `generic_fn_value_type_id`, **a marker with no
+    // signature**, since a generic call passes no expected type (the matching fix in
+    // infer_call_args). Now the parameter's type is known, so the function is checked against it.
+    if a_id == c.env.generic_fn_value_type_id()
+      arg_node.type_id = arg_node.infer_expr(c, p_id) catch a_id
+      continue
+    // apply_type_coercion inserts the conversions it allows (widening, an upcast, a Result wrap)
+    // and anything else is reported, as on the non-generic route.
+    if arg_node.apply_type_coercion(c, a_id, p_id) == p_id
+      continue
+    c.report_type_mismatch(arg_node, p_id, a_id)
+fn infer_value_call_args(c: Sema_ctx$@, call_node: Ast_node$@, args_node: Ast_node$@,
+  sig: Fn_sig$@): Void?Sema_error //<
+    //< Matches the arguments of a call through a function value against its type's parameters
+    //<
+    //< A function type holds no defaults and no variadic tail, so the count must be exact.
+  $a_count: Sz = 0
+  if args_node != null
+    for arg_node in args_node.children
+      if !arg_node.is_literal(",")
+        a_count += 1
+  if a_count != sig.params.len
+    c.clear_scratch().s("argument count mismatch. Expected \{sig.params.len\}, but got \{a_count\}")
+    c.err(args_node if args_node != null else call_node, c.scratch.slice())
+  if args_node == null
+    return
+  $pos: Sz = 0
+  for arg_node in args_node.children
+    if arg_node.is_literal(",")
+      continue
+    $expected_id: = I32::sema_type_env.Builtin_type_id.unknown
+    if pos < sig.params.len
+      expected_id = sig.params.get(pos)
+    arg_node.infer_expr(c, expected_id)?
+    pos += 1
+
+fn infer_call_args(c: Sema_ctx$@, args_node: Ast_node$@, def_node: Ast_node$@,
+  is_method_access: Bool, op_text: U8[], is_generic_call: Bool): I32?Sema_error
+  $fn_sig: Ast_node$@ = null
+  $param_list: Ast_node$@ = null
+  // What comes here is a named function's or method's declaration; a call through a function
+  // value is matched against the value's type instead (infer_value_call_args).
+  if def_node != null
+    fn_sig = def_node.find_child(.k_type_fn_sig)
+    if fn_sig != null
+      param_list = fn_sig.find_child(.k_param_list)
+
+  if fn_sig != null && !op_text.equals("enum_init") && !op_text.equals("enum_init_call")
+    p_count: = base_ast_ext.Param_cursor.count(param_list)
+    is_variadic: = param_list != null && param_list.has_literal_child("...")
+    $a_count: Sz = 0
+    if args_node != null
+      for arg_child in args_node.children
+        if !arg_child.is_literal(",")
+          a_count += 1
+    expected_args: = p_count
+    $actual_args: = a_count
+    if is_method_access
+      actual_args += 1
+
+    if is_variadic
+      if actual_args < expected_args
+        c.clear_scratch()
+          .s("not enough arguments for function call. Expected at least \{expected_args\}, but got \
+            \{actual_args\}")
+        if args_node != null
+          c.err(args_node, c.scratch.slice())
+        else
+          c.err(def_node, c.scratch.slice())
+    else if args_node != null && actual_args < expected_args &&
+      expected_args - actual_args <= sema_body_call_defaults.trailing_default_count(param_list)
+      // Fills the missing arguments with the declaration's defaults. **Once filled, the counts
+      // match, so a second analysis does not enter here** (a copied body gets no second copy).
+      sema_body_call_defaults.fill_default_args(c, args_node, param_list,
+        expected_args - actual_args)
+    else if actual_args != expected_args
+      c.clear_scratch()
+        .s("argument count mismatch. Expected \{expected_args\}, but got \{actual_args\}")
+      if args_node != null
+        c.err(args_node, c.scratch.slice())
+      else
+        c.err(def_node, c.scratch.slice())
+
+  $actual_arg_idx: = 0
+  $arg0_id: = I32::sema_type_env.Builtin_type_id.unknown
+  $cursor: = base_ast_ext.Param_cursor.new(param_list, is_method_access)
+
+  for arg_node in args_node.children
+    if arg_node.is_literal(",")
+      continue
+
+    $expected_arg_id: = I32::sema_type_env.Builtin_type_id.unknown
+    if param_node: = cursor.next()
+      param_type_node: = param_node.find_child(.k_type_expr)
+      // A generic call has no expected type yet (`T` / `U` are unbound); it is checked right after
+      // the instantiation (check_args_against_instance).
+      if param_type_node != null && !is_generic_call
+        old_file: = c.file_name
+        if param_type_node.loc.file().len > 0
+          c.set_current_file(param_type_node.loc.file())
+        expected_arg_id = param_type_node.resolve_type(c)?
+        c.set_current_file(old_file)
+
+    $eval_id: = arg_node.infer_expr(c, expected_arg_id)?
+
+    // On a generic call a bare function name has no expected type, so its type would default to
+    // sym.type_id, the function's return type (and genllvm would emit a wrong scalar type for the
+    // function-pointer argument).
+    if sema_type_env.is_unknown(expected_arg_id) &&
+      (arg_node.kind_id == .k_identifier || arg_node.kind_id == .k_expr_path) &&
+      arg_node.def_node != null && arg_node.def_node.sym_ptr != null
+      arg_sym: = Sema_symbol$@::arg_node.def_node.sym_ptr
+      if arg_sym.kind.is_function()
+        eval_id = c.env.generic_fn_value_type_id()
+        arg_node.type_id = eval_id
+
+    if !sema_type_env.is_unknown(expected_arg_id) && !sema_type_env.is_unknown(eval_id) &&
+      expected_arg_id != eval_id
+      if op_text.len > 0 && !op_text.equals("postfix") && !op_text.equals("enum_init") &&
+        !op_text.equals("(")
+        c.report_type_mismatch(arg_node, expected_arg_id, eval_id)
+
+    if actual_arg_idx == 0
+      arg0_id = eval_id
+    actual_arg_idx += 1
+  return arg0_id

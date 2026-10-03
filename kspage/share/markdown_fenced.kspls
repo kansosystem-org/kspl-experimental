@@ -1,0 +1,306 @@
+//< How kspage spells the blocks it writes as its own fences (a slide, a chart)
+//<
+//< **This is the only place that holds the spelling.** The writer
+//< ([`markdown.kspls`](markdown.kspls)) and the reader
+//< ([`markdown_read.kspls`](markdown_read.kspls)) both use it; spelled in two places, a written
+//< text stops reading back and nothing says so. Nothing here builds or walks a block: it turns
+//< one line's text into fields and back.
+//< Note: The grounds are "Markdown carries a slide as the positions of its frames" in
+//< [`../docs/DESIGN.md`](../docs/DESIGN.md).
+import "kspage/expr/shown"
+import "kspage/model/doc" { Rect }
+import "kspage/model/style"
+import "std/chars"
+import "std/str" { Str_builder }
+import "std/strnum" // reads a number out of a text
+
+const lang: U8[] = "kspage-slide" //< the language a slide's fence declares
+  //<
+  //< This one name is reserved: otherwise a fence's language is a style's name ("The mapping into
+  //< Markdown" in `../docs/DESIGN.md`).
+
+priv const frame_word: U8[] = "frame" //<
+  //< The words that start the line of one frame, and of one connector
+priv const tie_word: U8[] = "tie"
+priv const at_word: U8[] = "at" //< the words that name the fields
+  //<
+  //< They come in a fixed order.
+priv const size_word: U8[] = "size"
+priv const style_word: U8[] = "style"
+priv const tie_arrow: U8[] = "->" //< what stands between the two ends of a connector
+priv const name_mark: U8 = '#' //< the mark that starts a name
+  //<
+  //< It is the mark a source's symbol uses (`src:<file>#<symbol>`), and HTML's for an id.
+
+const step: Sz = 2 //< the number of spaces per level of contents
+  //<
+  //< It is the same 2 as a bullet list's level (`read_line` in `markdown_read.kspls`).
+
+struct Head //< what the fence's declaration says
+  found: Bool
+  // The slide's size. It comes from the declaration, not from the frames' extent (known first, it
+  // lets absolute coordinates sit inside the flow).
+  w: F32
+  h: F32
+  name: U8[] //< the name the slide is referred to by. **Empty means no name.**
+
+struct Frame //< what one frame's line says
+  found: Bool
+  name: U8[]
+  at: Rect
+  style: U8[] //<
+    //< The style set on the frame, which gives its shape. Empty means "the slide's default".
+
+struct Tie //< what one connector's line says
+  found: Bool
+  from: U8[]
+  to: U8[]
+  style: U8[]
+
+priv fn no_head(): Head
+  return Head::{ .found = false, .w = 0.0, .h = 0.0, .name = "" }
+
+priv fn no_frame(): Frame
+  return Frame::{ .found = false, .name = "",
+    .at = Rect::{ .x = 0.0, .y = 0.0, .w = 0.0, .h = 0.0 }, .style = "" }
+
+priv fn no_tie(): Tie
+  return Tie::{ .found = false, .from = "", .to = "", .style = "" }
+
+// ---- Walking a line's words ----
+
+priv struct Walk //< how far reading has got within one line
+  text: U8[]
+  pos: Sz
+
+priv fn walking(line: U8[]): Walk
+  return Walk::{ .text = line, .pos = 0 }
+
+priv fn next_word(w: Walk$@): U8[] //< the next word, and moves past it
+  //<
+  //< Empty when the words have run out.
+  for w.pos < w.text.len && w.text[w.pos] == ' '
+    w.pos += 1
+  $end: Sz = w.pos
+  for end < w.text.len && w.text[end] != ' '
+    end += 1
+  got: = w.text.sub(w.pos, end - w.pos)
+  w.pos = end
+  return got
+
+priv fn spent(w: Walk$@): Bool //< whether every word has been taken
+  //<
+  //< A word left over means the line does not read (it is not a frame).
+  $i: Sz = w.pos
+  for i < w.text.len && w.text[i] == ' '
+    i += 1
+  return i >= w.text.len
+
+// ---- One number, and a pair of them ----
+
+priv fn num_into(out: Str_builder$@, v: F32) //< writes one number
+  //<
+  //< Caution: **Drop the digits that are not needed**, or `24` comes out `24.000000` on every line.
+  //< What is written must read back to the same value (Graphviz's known slip), so a second round
+  //< gives the same text as the first.
+  shown.write_shown(out, v, style.plain_number())
+
+priv fn num_of(text: U8[], ok: Bool$@): F32 //< reads one number
+  //<
+  //< A text that does not read is no number (the fence then stays a code block).
+  if text.len <= 0
+    ok$ = false
+    return 0.0
+  v: = text.to_f64() catch
+    ok$ = false
+    return 0.0
+  return F32::v
+
+priv fn pair_into(out: Str_builder$@, a: F32, b: F32) //< writes `<a>x<b>`
+  num_into(out, a)
+  out.c('x')
+  num_into(out, b)
+
+priv fn mark_at(text: U8[], mark: U8): Sz //< where `mark` first appears
+  //<
+  //< -1 where it does not appear.
+  for $i: Sz = 0; i < text.len; i += 1
+    if text[i] == mark
+      return i
+  return -1
+
+priv fn pair_of(text: U8[], mark: U8, first: F32$@, second: F32$@): Bool //<
+  //< Reads a pair separated by `mark` (`24,16` and `180x64` are both pairs)
+  at: = mark_at(text, mark)
+  if at <= 0 || at + 1 >= text.len
+    return false
+  $ok: = true
+  first$ = num_of(text.sub(0, at), ok@)
+  second$ = num_of(text.sub_from(at + 1), ok@)
+  return ok
+
+priv fn name_of(word: U8[], ok: Bool$@): U8[] //< the name a word carries (`#one`)
+  //<
+  //< Without the mark it does not read.
+  if word.len <= 1 || word[0] != name_mark
+    ok$ = false
+    return ""
+  return word.sub_from(1)
+
+// ---- The fence's declaration ----
+
+fn head_into(out: Str_builder$@, w: F32, h: F32, name: U8[]) //<
+  //< Writes the fence's declaration (`kspage-slide 620x120 #plan`)
+  out.s(lang).c(' ')
+  pair_into(out, w, h)
+  if name.len > 0
+    out.c(' ').c(name_mark).s(name)
+
+fn head_of(info: U8[]): Head //< reads the fence's declaration
+  //<
+  //< Without a size it is not a slide (a default here would be a second place stating the size).
+  $w: Walk = walking(info)
+  if !next_word(w@).equals(lang)
+    return no_head()
+  $wide: F32 = 0.0
+  $high: F32 = 0.0
+  if !pair_of(next_word(w@), 'x', wide@, high@) || wide <= 0.0 || high <= 0.0
+    return no_head()
+  if spent(w@)
+    return Head::{ .found = true, .w = wide, .h = high, .name = "" }
+  $ok: = true
+  name: = name_of(next_word(w@), ok@)
+  if !ok || !spent(w@)
+    return no_head()
+  return Head::{ .found = true, .w = wide, .h = high, .name = name }
+
+// ---- One frame, and one joining line ----
+
+fn frame_into(out: Str_builder$@, name: U8[], at: Rect, look: U8[]) //< writes one frame's line
+  out.s(frame_word)
+  if name.len > 0
+    out.c(' ').c(name_mark).s(name)
+  out.c(' ').s(at_word).c(' ')
+  num_into(out, at.x)
+  out.c(',')
+  num_into(out, at.y)
+  out.c(' ').s(size_word).c(' ')
+  pair_into(out, at.w, at.h)
+  if look.len > 0
+    out.c(' ').s(style_word).c(' ').s(look)
+
+fn tie_into(out: Str_builder$@, from: U8[], to: U8[], look: U8[]) //<
+  //< Writes one connector's line
+  out.s(tie_word).c(' ').c(name_mark).s(from).c(' ').s(tie_arrow).c(' ').c(name_mark).s(to)
+  if look.len > 0
+    out.c(' ').s(style_word).c(' ').s(look)
+
+priv fn style_tail(w: Walk$@, ok: Bool$@): U8[] //<
+  //< Reads the style at the end of a line (`style <name>`)
+  //<
+  //< Empty where there is none; the word `style` without a name does not read.
+  if spent(w)
+    return ""
+  if !next_word(w).equals(style_word)
+    ok$ = false
+    return ""
+  got: = next_word(w)
+  if got.len <= 0 || !spent(w)
+    ok$ = false
+    return ""
+  return got
+
+fn frame_of(line: U8[]): Frame //< reads one frame's line
+  //<
+  //< The fields come in a fixed order (`frame #name at x,y size wxh style name`); only the name and
+  //< the style may be absent.
+  $w: Walk = walking(line)
+  if !next_word(w@).equals(frame_word)
+    return no_frame()
+  $ok: = true
+  $name: U8[] = ""
+  $word: U8[] = next_word(w@)
+  if word.len > 0 && word[0] == name_mark
+    name = name_of(word, ok@)
+    word = next_word(w@)
+  if !ok || !word.equals(at_word)
+    return no_frame()
+  $x: F32 = 0.0
+  $y: F32 = 0.0
+  if !pair_of(next_word(w@), ',', x@, y@)
+    return no_frame()
+  if !next_word(w@).equals(size_word)
+    return no_frame()
+  $wide: F32 = 0.0
+  $high: F32 = 0.0
+  if !pair_of(next_word(w@), 'x', wide@, high@)
+    return no_frame()
+  look: = style_tail(w@, ok@)
+  if !ok
+    return no_frame()
+  return Frame::{ .found = true, .name = name,
+    .at = Rect::{ .x = x, .y = y, .w = wide, .h = high }, .style = look }
+
+fn tie_of(line: U8[]): Tie //< reads one connector's line (`tie #from -> #to style name`)
+  $w: Walk = walking(line)
+  if !next_word(w@).equals(tie_word)
+    return no_tie()
+  $ok: = true
+  from: = name_of(next_word(w@), ok@)
+  arrow: = next_word(w@)
+  to: = name_of(next_word(w@), ok@)
+  if !ok || !arrow.equals(tie_arrow)
+    return no_tie()
+  look: = style_tail(w@, ok@)
+  if !ok
+    return no_tie()
+  return Tie::{ .found = true, .from = from, .to = to, .style = look }
+
+// ---- A chart's fence ----
+
+const chart_lang: U8[] = "kspage-chart" //< the language a chart's fence declares
+  //<
+  //< It is a second reserved name, written and read by the same rule as a slide's.
+
+struct Chart //< what a chart's declaration says
+  found: Bool
+  kind: U8[] //<
+    //< The aggregation (`Collect`'s name, `bars` or `lines`).
+    //<
+    //< It belongs to the style, so it is in the declaration.
+  height: F32 //<
+    //< The height.
+    //<
+    //< **A chart with no height draws nothing** and cannot be written (like a slide with no size).
+  name: U8[]
+
+priv fn no_chart(): Chart
+  return Chart::{ .found = false, .kind = "", .height = 0.0, .name = "" }
+
+fn chart_into(out: Str_builder$@, kind: U8[], height: F32, name: U8[]) //<
+  //< Writes a chart's declaration (`kspage-chart bars 120 #sales`)
+  out.s(chart_lang).c(' ').s(kind).c(' ')
+  num_into(out, height)
+  if name.len > 0
+    out.c(' ').c(name_mark).s(name)
+
+fn chart_of(info: U8[]): Chart //< reads a chart's declaration
+  //<
+  //< The aggregation is taken as the text it is: the core decides which names are a chart's,
+  //< when it reads them into the style.
+  $w: Walk = walking(info)
+  if !next_word(w@).equals(chart_lang)
+    return no_chart()
+  kind: = next_word(w@)
+  if kind.len <= 0
+    return no_chart()
+  $ok: = true
+  height: = num_of(next_word(w@), ok@)
+  if !ok || height <= 0.0
+    return no_chart()
+  if spent(w@)
+    return Chart::{ .found = true, .kind = kind, .height = height, .name = "" }
+  name: = name_of(next_word(w@), ok@)
+  if !ok || !spent(w@)
+    return no_chart()
+  return Chart::{ .found = true, .kind = kind, .height = height, .name = name }

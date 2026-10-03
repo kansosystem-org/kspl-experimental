@@ -1,0 +1,143 @@
+//< How a declaration is spelt for the editor: its types and its signature
+//<
+//< The hover and the completion list show a type in the notation the source uses, and a signature
+//< on one line or one parameter per line. **Only the spelling lives here**; finding what a name
+//< points at is `nav.kspls`'s.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_doc" as base_ast_doc
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/display" as sema_type_display
+import "std/ds" { List }
+import "std/str" { Str_builder }
+
+priv const sig_one_line_max: Sz = 100 //<
+  //< How wide the one-line form may be before the parameters are laid out one per line
+  //<
+  //< It is the formatter's column limit (`../fmt/style.kspls`'s `.column_limit`), so a
+  //< declaration the source keeps on one line is kept on one line here too; `make test-conventions`
+  //< keeps the two numbers in step.
+
+priv const sig_max_param_lines: Sz = 16 //<
+  //< How many parameters are laid out before the rest is given as a count
+  //<
+  //< It is above any hand-written declaration, so only generated input is cut short.
+
+priv fn write_self_spelling(type_node: Ast_node$@, out: Str_builder$@): Bool //<
+  //< It writes a type written `Self` as is, and returns true if it did
+  //<
+  //< **It takes precedence over every type id.** `Self` is the fixed spelling rather than a type
+  //< to resolve ("Traits (`trait`)" in `../../docs/SPEC-language.md`), and on a template the
+  //< ids around it belong to whatever was instantiated last (`r: Self` would read `r: U8[]`).
+  if type_node == null
+    return false
+  // `--emit-decls` keeps it as written too (`append_type` in `../tools/decls.kspls`).
+  spelt: = type_node.self_type_spelling()
+  if spelt.len == 0
+    return false
+  out.s(spelt)
+  return true
+
+fn write_type_of(c: Sema_ctx$@, type_node: Ast_node$@, own_id: I32, out: Str_builder$@) //<
+  //< The type a declaration's node names, in the notation the source uses
+  //<
+  //< own_id is the holder's own resolved type (a parameter's `type_id`), or 0.
+  //< Caution: **Send the spelling through the display even where there is no type id.** A
+  //< declaration in another file carries none (the editor checks one document's bodies), and its
+  //< node holds the spelling **after** the desugaring, so `U8[]` reads `Slice<|U8|>`
+  //< (`../sema/type/display.kspls`).
+  if write_self_spelling(type_node, out)
+    return
+  id: = own_id if own_id != 0 else (type_node.type_id if type_node != null else 0)
+  if id != 0 && c != null
+    $t_str: = c.env.display_str(id)
+    defer t_str.free()
+    out.s(t_str.slice())
+    return
+  if type_node == null || c == null
+    out.s("Unknown")
+    return
+  // Caution: **Take the whole spelling, not the path's last name.** `get_path_name` answers "what
+  // is this path called", so on a desugared slice it returns only the element and a `U8[][]`
+  // comes out as `U8`.
+  $spelt: = type_node.get_full_path_str()
+  defer spelt.free()
+  $named: = c.env.display_str_named(spelt.slice())
+  defer named.free()
+  out.s(named.slice())
+
+priv fn spell_for_editor(c: Sema_ctx$@, part: base_ast_spell.Sig_part, out: Str_builder$@): Bool //<
+  //< A signature's type as the editor shows it (`write_type_of` above); it always writes one
+  write_type_of(c, part.type_node, part.type_id, out)
+  return true
+
+priv fn param_doc_at(docs: List<|base_ast_doc.Param_doc|>@, i: Sz): U8[] //<
+  //< The description on parameter `i`'s own line, or empty where it has none
+  return docs.get(i).doc if i < docs.len else ""
+
+fn format_fn_sig_flat(c: Sema_ctx$@, fn_node: Ast_node$@): Str_builder //<
+  //< The signature on one line, `(a: I32, b: I32 = 2): I32`
+  //<
+  //< **It is all the completion list's one row can show**, and the hover's answer where it fits;
+  //< its content comes from `write_sig` in `../base/ast_spell.kspls`, as for `--emit-decls`.
+  $res: = Str_builder.new()
+  base_ast_spell.write_sig(fn_node,
+    fn(part: base_ast_spell.Sig_part, out: Str_builder$@; c: Sema_ctx$@): Bool {
+    return spell_for_editor(c, part, out);
+  }, res@)
+  return res
+
+fn format_fn_sig(c: Sema_ctx$@, fn_node: Ast_node$@, src: U8[]): Str_builder //<
+  //< The signature as the editor shows it
+  //<
+  //< It is `(a: I32, b: I32): I32` on one line where that fits and no parameter or return value
+  //< has a description, and one parameter per line where one does.
+  //< Caution: **Use one line per parameter where anything in the signature is described.** A `//<`
+  //< describes the line it is on, so squeezed onto one line every description runs together into
+  //< a sentence that describes nothing.
+  $docs: = List<|base_ast_doc.Param_doc|>.new()
+  defer docs.free()
+  if src.len > 0 && fn_node.get_fn_params() != null
+    base_ast_doc.param_docs(src, fn_node, docs@)
+  ret_doc: = base_ast_doc.return_doc(src, fn_node) if src.len > 0 else ""
+
+  $flat: = format_fn_sig_flat(c, fn_node)
+  defer flat.free()
+  $described: = ret_doc.len > 0
+  for i in Range.asc(docs.len)
+    if docs.get(i).doc.len > 0
+      described = true
+      break
+
+  $res: = Str_builder.new()
+  if !described && flat.len <= sig_one_line_max
+    res.s(flat.slice())
+    return res
+
+  $parts: = List<|base_ast_spell.Sig_part|>.new()
+  defer parts.free()
+  fn_node.sig_parts(parts@)
+  res.s("(\n")
+  for i in Range.asc(parts.len)
+    if i == sig_max_param_lines
+      res.s("  // ... \{parts.len - i\} more\n")
+      break
+    res.s("  ")
+    base_ast_spell.write_sig_part(parts.get(i),
+      fn(part: base_ast_spell.Sig_part, out: Str_builder$@; c: Sema_ctx$@): Bool {
+      return spell_for_editor(c, part, out);
+    }, res@)
+    res.c(',')
+    doc: = param_doc_at(docs@, i)
+    if doc.len > 0
+      res.s(" //< ").s(doc)
+    res.c('\n')
+  res.c(')')
+  base_ast_spell.write_sig_ret(fn_node,
+    fn(part: base_ast_spell.Sig_part, out: Str_builder$@; c: Sema_ctx$@): Bool {
+    return spell_for_editor(c, part, out);
+  }, res@)
+  if ret_doc.len > 0
+    res.s(" //< ").s(ret_doc)
+  return res

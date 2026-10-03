@@ -1,0 +1,301 @@
+//< How kssrv decides the steering it returns to the car (`POST /api/car`)
+//<
+//< The car sends **the distance and the line** as raw readings, and how to move is decided here.
+//< **This net learns from `rule_action` below.** The net is no smarter than the rules.
+//< **The safety timeout is on the car's side.**
+//< **After `build()` this struct is read-only.**
+
+// ==========================================
+// The shape:
+//   [was it measurable, the normalized distance, left, centre, right]
+//     -> fc1 -> SiLU -> fc2 -> 10 logits
+// ==========================================
+import "ksai/grad"
+import "ksai/nn"
+import "ksai/nn_grad"
+import "ksai/safetensors" as st
+import "ksai/sampler"
+import "ksai/tensor" { Tensor }
+import "std/log" { Level, Log }
+import "std/mem" + { Arena, dealloc }
+import "std/prng"
+import "std/str" { Str_builder }
+import "std/strfmt"
+import "std/sys"
+
+const feature_count: Sz = 5 //<
+  //< How many features go into the net, and how many manoeuvres can be picked
+const action_count: Sz = 10
+priv const hidden: Sz = 24
+
+const act_stop: Sz = 0 //< a manoeuvre's number
+  //<
+  //< It is also the logit's index.
+const act_forward: Sz = 1
+const act_back: Sz = 2
+const act_strafe_left: Sz = 3
+const act_strafe_right: Sz = 4
+const act_creep: Sz = 5
+const act_track_left: Sz = 6
+const act_track_right: Sz = 7
+const act_track_left_hard: Sz = 8
+const act_track_right_hard: Sz = 9
+
+struct Maneuver //< the instruction for one manoeuvre
+  //<
+  //< lon/lat/rot go to the car's `motor.drive` unchanged; **positive = forward / right /
+  //< clockwise**.
+  name: U8[]
+  lon: I32
+  lat: I32
+  rot: I32
+
+// Caution: The order must match the `act_*` above (they are looked up by number).
+// **A line-following manoeuvre combines forward, sideways and rotation**; turning on the spot
+// stops forward motion while correcting, so the car zigzags instead of following. Only the ratio of
+// the three matters, and the sideways part can be added without reducing the rotation.
+const maneuvers: Maneuver[_] = ::{
+  ::{ .name = "stop", .lon = 0, .lat = 0, .rot = 0 },
+  ::{ .name = "forward", .lon = 60, .lat = 0, .rot = 0 },
+  ::{ .name = "back", .lon = -45, .lat = 0, .rot = 0 },
+  ::{ .name = "strafe_left", .lon = 0, .lat = -50, .rot = 0 },
+  ::{ .name = "strafe_right", .lon = 0, .lat = 50, .rot = 0 },
+  // Caution: **Keep it below the car's cap**, which scales by the largest component: at the cap it
+  // equals `forward`, and "go slowly once the line is lost" no longer happens.
+  ::{ .name = "creep", .lon = 18, .lat = 0, .rot = 0 },
+  ::{ .name = "track_left", .lon = 40, .lat = -15, .rot = -25 },
+  ::{ .name = "track_right", .lon = 40, .lat = 15, .rot = 25 },
+  ::{ .name = "track_left_hard", .lon = 10, .lat = -30, .rot = -50 },
+  ::{ .name = "track_right_hard", .lon = 10, .lat = 30, .rot = 50 },
+}
+
+struct Obs //< the observation arriving from the car
+  //<
+  //< In `dist_mm`, **0 means "it could not be measured"** (the ultrasonic ECHO never went high),
+  //< not "close"; hence `valid` among the features.
+  dist_mm: I64
+  line: I64 //< left<<2 | centre<<1 | right. 1 = black
+
+// The rules' boundaries [mm].
+priv const back_mm: I64 = 150 // closer than this -> back off
+priv const avoid_mm: I64 = 400 // closer than this -> dodge sideways
+priv const far_mm: I64 = 1000 //< the distance cap used for normalizing
+  //<
+  //< Anything farther than this is treated as the same "far".
+
+const command_valid_ms: I64 = 500 //< how long [ms] the car may wait for the next answer
+  //<
+  //< If no answer comes in time, the car stops. **The server decides it**, or every policy change
+  //< would mean reflashing the car.
+
+priv const train_epochs: Sz = 400 //< the training settings
+  //<
+  //< They run at every startup; keep them within what the startup time allows.
+priv const learning_rate: F64 = 0.08
+priv const weight_seed: U64 = 4242U64
+priv const train_dist_seed: U64 = 31337U64 //< the seed for the random distances used in training
+  //<
+  //< The line has only 8 patterns, all used; only the distance is random.
+priv const line_patterns: Sz = 8
+priv const train_dists: Sz = 96
+
+priv const export_format: U8[] = "2" //< the format version of the exported policy (`export`)
+  //<
+  //< Caution: **Raise it when the order of the features, the activation (SiLU), or the manoeuvre
+  //< table's meaning changes.** The shapes still fit, so an old reader silently uses new weights
+  //< with the old meaning.
+
+priv const eval_step_mm: I64 = 5 //<
+  //< The step [mm] and the cap used when the agreement rate is measured
+  //<
+  //< Caution: **Measure by stepping through the whole range, not by random draws.** The
+  //< disagreements lie within tens of mm of the boundaries, which random draws can miss entirely
+  //< and report "100%"; stepping always covers them, with no seed.
+priv const eval_max_mm: I64 = 3000
+
+struct Pilot
+  priv arena: Arena$@
+  priv mlp: nn.Mlp<|F32|>
+  params: Sz
+  samples: Sz //< how many observations training used
+  train_ms: I64
+  final_loss: F64
+  // The agreement rate with the rules (0.0-1.0), and how many observations were measured.
+  agreement: F64
+  checked: Sz
+
+fn rule_action(o: Obs): Sz //< the rules the net learns from
+  //<
+  //< **They are checked nearest first**: an obstacle takes priority over the line.
+  if o.dist_mm <= 0I64
+    return act_stop // the ultrasonic gives no answer; it does not drive without seeing ahead
+  if o.dist_mm < back_mm
+    return act_back
+  if o.dist_mm < avoid_mm
+    // Dodges sideways (mecanum wheels need no turn), to the side with no line.
+    return act_strafe_left if (o.line & 1I64) != 0I64 else act_strafe_right
+  left: = (o.line & 4I64) != 0I64
+  mid: = (o.line & 2I64) != 0I64
+  right: = (o.line & 1I64) != 0I64
+  if left && mid && right
+    return act_stop // all three black = a junction or the end; it cannot tell which, so it stops
+  // The correction follows the drift: only an end sensor black means a large one, an end and the
+  // centre a small one.
+  // Caution: **Check the stronger case first.** From "left is black" alone, large cannot be told
+  // from small.
+  if left && !mid && !right
+    return act_track_left_hard
+  if left && mid
+    return act_track_left
+  if right && !mid && !left
+    return act_track_right_hard
+  if right && mid
+    return act_track_right
+  if mid
+    return act_forward // only the centre black = it is on the line
+  // What remains: all three white, or only the two ends black. **Both mean "the line's position is
+  // unknown", not "on the line"**; at forward's speed it would drive blind. The observation has no
+  // history, so no direction to recover in can be chosen.
+  return act_creep
+
+priv fn features(o: Obs, arena: Arena$@): Tensor<|F32|> //<
+  //< Turns an observation into a feature vector
+  //<
+  //< Caution: **Use the same function for training and inference.** Written twice, fixing only one
+  //< shows up as "training works, yet the answers are wrong".
+  shape: Sz[2] = ::{ 1, feature_count }
+  x: = Tensor<|F32|>.new(Sz[]::shape, arena)
+  valid: = o.dist_mm > 0I64
+  clamped: = o.dist_mm if o.dist_mm < far_mm else far_mm
+  x[0] = 1.0 if valid else 0.0
+  x[1] = F32::(F64::clamped / F64::far_mm) if valid else 0.0
+  x[2] = 1.0 if (o.line & 4I64) != 0I64 else 0.0
+  x[3] = 1.0 if (o.line & 2I64) != 0I64 else 0.0
+  x[4] = 1.0 if (o.line & 1I64) != 0I64 else 0.0
+  return x
+
+priv fn sample_dist(rng: prng.Prng$@, index: Sz): I64 //< picks one distance for training
+  //<
+  //< The distances always include 0 (not measurable); the rest are random in 0-3000mm.
+  //< Caution: Randomize only the distance; a random line might never show some of its 8 patterns.
+  if index == 0
+    return 0I64 // the not-measurable case; at least one must be included
+  return I64::(rng.next_f64() * 3000.0) + 1I64
+
+priv fn measure_agreement(p: Pilot$@, compute: Arena$@, out_seen: Sz$@): F64 //<
+  //< Measures the share of points where the net agrees with the rules, from 0mm to eval_max_mm
+  //<
+  //< It steps by eval_step_mm and puts the number of points measured into `out_seen`.
+  base: = compute.save()
+  $hit: Sz = 0
+  $seen: Sz = 0
+  for $dist: I64 = 0I64; dist <= eval_max_mm; dist += eval_step_mm
+    for l in Range.asc(line_patterns)
+      o: = Obs::{ .dist_mm = dist, .line = l }
+      if decide(p, o, compute) == rule_action(o)
+        hit += 1
+      seen += 1
+      compute.restore(base)
+  out_seen$ = seen
+  return F64::hit / F64::seen if seen > 0 else 0.0
+
+priv fn train(mlp: nn.Mlp<|F32|>$@, compute: Arena$@): F64 //< the start-up training
+  //<
+  //< It learns from `rule_action`, with cross-entropy loss.
+  base: = compute.save()
+  $last_loss: F64 = 0.0
+  for _epoch in Range.asc(train_epochs)
+    // The distances are the same every epoch (the generator is re-seeded), or a falling loss could
+    // come from an easier set rather than from training.
+    $rng: = prng.Prng.new(train_dist_seed)
+    $loss_sum: F64 = 0.0
+    $seen: Sz = 0
+    for d in Range.asc(train_dists)
+      dist: = sample_dist(rng@, d)
+      for l in Range.asc(line_patterns)
+        o: = Obs::{ .dist_mm = dist, .line = l }
+        target: = I32::rule_action(o)
+        x: = features(o, compute)
+        $logits: = mlp.forward(x)
+        loss_sum += logits.cross_entropy_loss(target)
+        seen += 1
+        dy: = logits.grad_softmax_cross_entropy(target)
+        _dx: = mlp.backward(x, dy, learning_rate)
+        // Caution: Rewind on every step, or the arena grows throughout the training.
+        compute.restore(base)
+    last_loss = loss_sum / F64::seen if seen > 0 else 0.0
+  return last_loss
+
+fn build(compute: Arena$@): Pilot$@ //< makes one steering policy
+  //<
+  //< `compute` is working space, no longer used once this returns.
+  arena: = Arena.new(64 * 1024)
+  p: = mem.alloc_as<|Pilot|>()
+  p.arena = arena
+  p.mlp = nn.Mlp<|F32|>.new(feature_count, hidden, action_count, arena)
+  // Caution: Initialize them with uniform random values (the reason is at `Linear.init_uniform` in
+  // `ksai/nn.kspls`).
+  $rng: = prng.Prng.new(weight_seed)
+  p.mlp.init_uniform(rng@, 0.5)
+
+  t0: = sys.mono_us()
+  p.final_loss = train(p.mlp@, compute)
+  p.train_ms = (sys.mono_us() - t0) / 1000I64
+  p.params = feature_count * hidden + hidden + hidden * action_count + action_count
+  p.samples = train_dists * line_patterns
+  $checked: Sz = 0
+  p.agreement = measure_agreement(p, compute, checked@)
+  p.checked = checked
+  return p
+
+fn free(p: Pilot$@)
+  p.arena.free()
+  dealloc(Void$@::p)
+
+fn decide(p: Pilot$@, o: Obs, compute: Arena$@): Sz //<
+  //< Picks a manoeuvre's number from an observation
+  //<
+  //< `compute` is a working arena the caller rewinds.
+  x: = features(o, compute)
+  logits: = p.mlp.forward(x)
+  return sampler.argmax(logits)
+
+priv fn maneuver_tensor(arena: Arena$@): Tensor<|F32|> //<
+  //< Copies the manoeuvre table into an [action_count, 3] tensor (one row is lon, lat, rot)
+  //<
+  //< **The integers are stored as F32**, the only dtype that can be written here; F32 holds these
+  //< small integers exactly, and the reader converts them back.
+  shape: Sz[2] = ::{ action_count, 3 }
+  t: = Tensor<|F32|>.new(Sz[]::shape, arena)
+  for a in Range.asc(action_count)
+    m: = maneuvers[a]
+    row: = a * 3
+    t[row] = F32::m.lon
+    t[row + 1] = F32::m.lat
+    t[row + 2] = F32::m.rot
+  return t
+
+fn export(p: Pilot$@, arena: Arena$@): Str_builder //<
+  //< Builds the whole steering policy the car downloads, as one safetensors file (`GET /api/pilot`)
+  //<
+  //< Caution: **Make the file enough on its own to reproduce `decide` and the manoeuvres'
+  //< meaning.** With the weights alone, the reader must copy the features (`far_mm`) and the table,
+  //< and cannot notice when the server changes them.
+  $w: = st.Safetensors_writer.new()
+  w.add("fc1.weight", p.mlp.fc1.weights)
+  w.add("fc1.bias", p.mlp.fc1.bias)
+  w.add("fc2.weight", p.mlp.fc2.weights)
+  w.add("fc2.bias", p.mlp.fc2.bias)
+  w.add("maneuvers", maneuver_tensor(arena))
+  w.set_meta("kspl_pilot", export_format)
+  $num: = Str_builder.new()
+  defer num.free()
+  w.set_meta("far_mm", num.s("\{far_mm\}").slice())
+  return w.finish()
+
+fn print_summary(p: Pilot$@, lg: Log$@)
+  if ln: = lg.at(Level.information)
+    ln
+      .s("pilot ready — \{p.params\} params, \{p.samples\} samples, trained in \{p.train_ms\} ms, \
+        loss \{p.final_loss:.4\}, agrees with the rules on \{p.agreement * 100.0:.2\}% of \
+        \{p.checked\} swept observations")

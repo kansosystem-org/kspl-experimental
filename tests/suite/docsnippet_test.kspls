@@ -1,0 +1,244 @@
+#!/usr/bin/env -S ksplc run
+//< Checks that the KSPL code fragments in the documents really read as KSPL
+//<
+//< Only **the syntax** is checked (`ksplc fmt` fails on a syntax error, not on an undefined name,
+//< which a fragment without its context usually has). **The grammar's canonical source is the one
+//< `ksplc/kspl.kspeg`**, read by the compiler itself. An unreadable fragment is excused **only**
+//< where it holds a `...` / `…` (the writer's deliberate omission).
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+import "tests/support/harness"
+
+priv const fence_laid: U8[] = "```kspls" //< the fences collected, and the notation each names
+  //<
+  //< **Both are here**, or the other notation's fragments rot unread.
+  //< Caution: **Check the longer one first.** ` ```kspl ` is the start of ` ```kspls `, so the
+  //< other order takes every indentation fence for a brace one.
+priv const fence_braced: U8[] = "```kspl"
+priv const fence_close: U8[] = "```"
+priv const snippet_fn: U8[] = "_doc_snippet"
+
+// The keywords that start a declaration when they open a line.
+priv const top_level: U8[][] = U8[][]::{ "import", "embed", "pub", "priv", "fn", "struct", "enum",
+    "trait", "impl", "typedef", "extern", "const", "#lint",
+}
+
+priv const elision: U8[][] = U8[][]::{ "...", "…" } //< the mark of the writer's omission
+  //<
+  //< A fragment holding this is excused even if unreadable.
+
+priv struct Snippet //< one fragment
+  //<
+  //< `line` is the starting line in the document (1-based).
+  doc: U8[]
+  line: Sz
+  body: U8[]
+  laid: Bool //< the fence named the indentation notation
+
+priv fn starts_top_level(ln: U8[]): Bool
+  t: = ln.trim_spaces()
+  for kw in top_level
+    if !t.starts_with(kw)
+      continue
+    rest: = t.sub_from(kw.len)
+    // Caution: Check up to the word boundary, or `constant:` is picked up as `const`.
+    if rest.len == 0 || !rest[0].is_alpha() && !rest[0].is_digit()
+      return true
+  return false
+
+priv fn code_only(ln: U8[], arena: Arena$@): U8[] //<
+  //< The line without its string literals and line comment, for counting braces
+  $b: = Str_builder.new()
+  defer b.free()
+  $in_str: = false
+  $i: Sz = 0
+  for i < ln.len
+    c: = ln[i]
+    if in_str
+      if c == '\\' && i + 1 < ln.len
+        i += 2
+        continue
+      if c == '"'
+        in_str = false
+      i += 1
+      continue
+    if c == '"'
+      in_str = true
+      i += 1
+      continue
+    if c == '/' && i + 1 < ln.len && ln[i + 1] == '/'
+      break
+    b.c(c)
+    i += 1
+  return arena.dup_str(b.slice())
+
+priv struct Split //< a fragment split into its declarations and its statements
+  //<
+  //< Only the depth-0 lines decide the split.
+  decls: U8[]
+  stmts: U8[]
+
+priv fn split_decls_and_stmts(body: U8[], laid: Bool, arena: Arena$@): Split //<
+  //< Splits a fragment's body into its declarations and its statements
+  //<
+  //< Caution: **"The outermost" differs by notation**: brace depth 0, or column 0 in the
+  //< indentation notation. Braces counted on an indentation fragment never leave 0, and body lines
+  //< are filed under the declarations.
+  $decls: = Str_builder.new()
+  defer decls.free()
+  $stmts: = Str_builder.new()
+  defer stmts.free()
+  $depth: Sz = 0
+  $to_decls: = false
+  $picked: = false
+  for raw in body.lines(arena)
+    outermost: = at_column_zero(raw) if laid else depth == 0
+    if outermost && !picked
+      to_decls = starts_top_level(raw)
+      picked = true
+    if to_decls
+      decls.s(raw).c('\n')
+    else
+      stmts.s(raw).c('\n')
+    if laid
+      // A blank line belongs to whatever is open.
+      picked = false if at_column_zero(raw) && raw.trim_spaces().len > 0 else picked
+      continue
+    code: = code_only(raw, arena)
+    for i in Range.asc(code.len)
+      if code[i] == '{'
+        depth += 1
+      else if code[i] == '}' && depth > 0
+        depth -= 1
+    if depth == 0
+      picked = false
+  return Split::{ .decls = arena.dup_str(decls.slice()),
+    .stmts = arena.dup_str(stmts.slice()) }
+
+priv fn at_column_zero(ln: U8[]): Bool //<
+  //< Whether the line starts at column 0 (a blank line counts, so it does not end a run by itself)
+  return ln.len == 0 || ln[0] != ' '
+
+priv fn parses(path: U8[], src: U8[]): Bool //<
+  //< Has `ksplc fmt` read it and checks only whether it passes as syntax
+  //<
+  //< **The file name decides the notation ksplc reads**, so the fragment is written under the name
+  //< its fence names (`snippet_path`); under a `.kspl` name every indentation one reads as broken.
+  io.write_file(path, src) catch
+    return false
+  return harness.ksplc_bare(U8[][]::{ "fmt", path }).code == 0
+
+priv fn without_line_comment(ln: U8[]): U8[] //<
+  //< The line without its line comment, for finding the ellipsis
+  //<
+  //< Caution: **Do not drop the string literals.** An omission such as `b.s("...")` is marked
+  //< inside one. `code_only` (for braces) drops them, so the two stay separate.
+  at: = ln.find_str("//")
+  return ln if at < 0 else ln.sub(0, at)
+
+priv fn has_elision(body: U8[], arena: Arena$@): Bool
+  for raw in body.lines(arena)
+    code: = without_line_comment(raw)
+    for e in elision
+      if code.find_str(e) >= 0
+        return true
+  return false
+
+priv fn collect(doc: U8[], text: U8[], out: List<|Snippet|>$@, arena: Arena$@) //<
+  //< Collects the KSPL fences from one document, in either notation
+  $body: = Str_builder.new()
+  defer body.free()
+  $inside: = false
+  $laid: = false
+  $fence_col: Sz = 0
+  $start: Sz = 0
+  $lineno: Sz = 0
+  for raw in text.lines(arena)
+    lineno += 1
+    t: = raw.trim_spaces()
+    if !inside
+      if t.equals(fence_laid) || t.equals(fence_braced)
+        inside = true
+        laid = t.equals(fence_laid)
+        // Caution: **Remove the fence's own indentation from every body line.** A fence in a list
+        // item carries its indentation, which the indentation notation reads as structure: a block
+        // never opened.
+        fence_col = raw.len - raw.trim_start().len
+        start = lineno
+        body.clear()
+      continue
+    if t.equals(fence_close)
+      inside = false
+      s: = Snippet::{ .doc = doc, .line = start, .body = arena.dup_str(body.slice()),
+        .laid = laid }
+      out.push(s)
+      continue
+    body.s(raw.sub_from(fence_col) if raw.len >= fence_col else raw).c('\n')
+
+priv fn first_line(body: U8[], arena: Arena$@): U8[]
+  for raw in body.lines(arena)
+    t: = raw.trim_spaces()
+    if t.len > 0
+      return t if t.len <= 70 else t.sub(0, 70)
+  return ""
+
+fn main(): I32
+  arena: = harness.begin(256 * 1024 * 1024)
+  root: = harness.root()
+  dir: = harness.sandbox("docsnippet") catch
+    return harness.fatal("cannot make a working directory")
+  laid_path: = fs.join(dir, "snippet.kspls", arena)
+  braced_path: = fs.join(dir, "snippet.kspl", arena)
+
+  docs: = harness.tracked() catch
+    return harness.fatal("cannot list the files git knows")
+  $snippets: = List<|Snippet|>.new(arena)
+  for rel in docs
+    if !rel.ends_with(".md")
+      continue
+    text: = io.read_file(fs.join(root, rel, arena)) catch
+      continue
+    collect(rel, text, snippets@, arena)
+  // Not one item means the check looks at nothing.
+  if snippets.len == 0
+    return harness.fatal("not one KSPL fence in the documents")
+
+  $checked: Sz = 0
+  $skipped: Sz = 0
+  $bad: = Str_builder.new()
+  defer bad.free()
+  $bad_count: Sz = 0
+  for s in snippets
+    path: = laid_path if s.laid else braced_path
+    sp: = split_decls_and_stmts(s.body, s.laid, arena)
+    $wrapped: = Str_builder.new()
+    defer wrapped.free()
+    wrapped.s(sp.decls)
+    if sp.stmts.trim_spaces().len > 0
+      if s.laid
+        wrapped.s("\nfn \{snippet_fn\}()\n")
+        for ln in sp.stmts.lines(arena)
+          (wrapped.s("  ").s(ln).c('\n') if ln.trim_spaces().len > 0 else wrapped.c('\n'))
+      else
+        wrapped.s("\nfn \{snippet_fn\}() {\n").s(sp.stmts).s("\n}\n")
+    if parses(path, s.body) || parses(path, wrapped.slice())
+      checked += 1
+      continue
+    if has_elision(s.body, arena)
+      skipped += 1
+      continue
+    bad_count += 1
+    if bad_count <= 20
+      bad.s("\n    \{s.doc\}:\{s.line\}: \{first_line(s.body, arena)\}")
+
+  $name: = Str_builder.new()
+  defer name.free()
+  name.s("a document's KSPL fragments read as KSPL (\{checked\} checked / ")
+  name.s("\{skipped\} carrying an ellipsis)")
+  verdict.check(name.slice(), bad_count == 0, bad.slice())
+  return harness.finish()

@@ -1,0 +1,37 @@
+//< A panel's paint: what is drawn behind one block, and the line around it
+//<
+//< **It is not the style itself.**
+//< Note: Once placed, it becomes a `Panel` ([`../lay/page.kspls`](../lay/page.kspls)): these
+//< fields plus its position ("paint" is SVG's word). It is split out of
+//< [`style.kspls`](style.kspls) to keep each file under 1000 lines.
+import "kspage/model/style" { Style, Shape }
+
+struct Panel_paint //< the settings for what is drawn behind one block, and the line around it
+  //<
+  //< **Width 0 means "draw no line".** A `none` fill means "no fill".
+  width: F32
+  color: U32
+  fill: Option<|U32|>
+  shape: Shape
+
+fn paint_of(base: Option<|Style$@|>, over: Option<|Style$@|>): Panel_paint //<
+  //< The resolved paint, with over laid over base
+  //<
+  //< Caution: **Lay it over field by field**, or the plain fill and line are used where the
+  //< condition matched. A field that over does not set (line width 0, fill `none`) keeps base's
+  //< value, and **so does the shape**.
+  $out: = Panel_paint::{ .width = 0.0, .color = 0U32, .fill = Option<|U32|>.none,
+    .shape = Shape.box }
+  if s: = base
+    out.width = s.rule_width
+    out.color = s.rule_color
+    out.fill = s.fill
+    out.shape = s.shape
+  if s: = over
+    if s.rule_width > 0.0
+      out.width = s.rule_width
+      out.color = s.rule_color
+    switch s.fill case .some(c)
+      out.fill = Option<|U32|>.some(c)
+    case .none {}
+  return out

@@ -1,0 +1,51 @@
+//< How close the calling thread's stack is to its end, for a walk that recurses on its input
+//<
+//< **A depth count guards a recursion only on the build where it was measured**: the cost of one
+//< level changes with the backend, the toolchain and the optimization level. This module asks the
+//< OS for the thread's own stack bounds, so a walk stops before its stack runs out on every build.
+
+// ==========================================
+// The per-OS code (`pthread_getattr_np`, `pthread_get_stackaddr_np`,
+// `GetCurrentThreadStackLimits`) stays inside `kspl_stack_floor` in
+// `ksplc/gen/runtime/hosted_thread.c`. A freestanding build answers "not known" here.
+// ==========================================
+
+#cfg(!freestanding)
+extern "C"
+  fn kspl_stack_floor(): Sz
+
+#cfg(!freestanding)
+priv fn stack_floor(): Sz //< where the calling thread's stack ends, as the OS reports it
+  return kspl_stack_floor()
+
+#cfg(freestanding)
+priv fn stack_floor(): Sz //< 0, "not known": the bounds are the linker script's, unread here
+  return 0
+
+pub struct Stack_limit //<
+  //< where a walk on the calling thread stops, a margin before the end of its stack
+  //<
+  //< Caution: **Create it on the thread that walks.** It holds that thread's bounds, and another
+  //< thread's stack is somewhere else.
+  floor: Sz //< the lowest address the walk may reach; 0 where the OS does not tell
+
+impl Stack_limit
+  pub fn new( //< the limit for the calling thread
+    //<
+    //< **It asks the OS, and that is not cheap** (on Linux the main thread's bounds are
+    //< read from a file). Create it once per walk and keep it.
+    margin: Sz, //< how many bytes to keep free below the point where the walk stops
+  ): Stack_limit
+    low: = stack_floor()
+    return Stack_limit::{ .floor = 0 if low == 0 else low + margin }
+
+  pub fn near( //< whether the caller is within the margin of the stack's end
+    //<
+    //< **Always false where the OS does not tell** (a freestanding build), so a walk also keeps its
+    //< own depth count.
+    limit: Self@,
+  ): Bool
+    here: U8 = 0
+    // **Compare the difference**, not the two addresses: when the stack crosses the middle of the
+    // address space, the signed `Sz` changes sign between the two; the difference does not.
+    return limit.floor != 0 && Sz::here@ - limit.floor < 0

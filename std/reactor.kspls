@@ -1,0 +1,114 @@
+//< Watches many sockets for readiness in one OS call, so one thread can serve them all
+//<
+//< Register a non-blocking socket's raw handle, and `wait` returns a `Ready` for each one that
+//< became ready, carrying the token you chose. **You pick the token**, and the caller maps it
+//< back to the socket: the reactor owns no socket.
+
+// ==========================================
+// The work is done by the poll(2) / WSAPoll wrapper in `ksplc/gen/runtime/hosted_net.c`.
+// ==========================================
+import "std/ds" { List }
+
+extern "C"
+  pub fn kspl_net_poll(handles: I64$@, interest: U8$@, n: Sz, timeout_ms: I32, revents_out: U8$@):
+    I32
+
+pub enum Reactor_error //< why a wait failed
+  poll_failed //< the OS refused the wait itself, not any one handle
+
+pub const readable: U8 = 0x1 //< there is data to read, or the peer closed.
+  //<
+  //< Caution: **The values must match `kspl_net_poll` in `ksplc/gen/runtime/hosted_net.c`**
+  //< (`make test-conventions` checks this).
+pub const writable: U8 = 0x2 //< a send would not block
+pub const err_or_closed: U8 = 0x4 //< the handle is unusable; only reported, never requested
+pub const hangup: U8 = 0x8 //< the peer closed its sending side; only reported, never requested.
+  //<
+  //< Caution: **Do not confuse it with `err_or_closed`.** `WSAPoll` returns it on the peer's FIN,
+  //< where POSIX's `poll` returns only `readable`, so decide by **what `read` returns** (0, or an
+  //< error).
+
+pub struct Ready //< one watched handle that became ready
+  pub token: Sz //< the token the caller registered it under, to find the socket again
+  pub revents: U8 //< what actually happened, which may not be what was asked for
+
+pub struct Reactor //< watches many handles at once and reports which became ready
+  priv handles: List<|I64|>
+  priv interests: List<|U8|>
+  priv tokens: List<|Sz|>
+  priv revents_scratch: List<|U8|>
+
+impl Reactor
+  pub fn new(): Reactor //< a reactor with nothing registered yet
+    return Reactor::{
+      .handles = List<|I64|>.new(),
+      .interests = List<|U8|>.new(),
+      .tokens = List<|Sz|>.new(),
+      .revents_scratch = List<|U8|>.new(),
+    }
+
+  pub fn register( //< adds one handle to watch
+    r: Self$@,
+    handle: I64, //< what `.raw_handle()` returned; call `.set_nonblocking()` on it first
+    interest: U8, //< `readable`, `writable`, or both; do not request the report-only flags
+    token: Sz, //< the caller's own name for it, returned in a `Ready`
+  )
+    r.handles.push(handle)
+    r.interests.push(interest)
+    r.tokens.push(token)
+
+  pub fn clear(r: Self$@) //< drops every registration but keeps the memory already allocated
+    //<
+    //< Use it to rebuild the set before each `wait()`, so no registration for a closed peer and
+    //< no stale interest remains.
+    r.handles.len = 0
+    r.interests.len = 0
+    r.tokens.len = 0
+
+  pub fn unregister(r: Self$@, handle: I64) //< drops the one registration for that handle
+    //<
+    //< It moves the last element into the gap, so the order is not kept.
+    $i: Sz = 0
+    for i < r.handles.len
+      if r.handles.get(i) == handle
+        last: = r.handles.len - 1
+        r.handles.set(i, r.handles.get(last))
+        r.interests.set(i, r.interests.get(last))
+        r.tokens.set(i, r.tokens.get(last))
+        r.handles.len -= 1
+        r.interests.len -= 1
+        r.tokens.len -= 1
+        return
+      i += 1
+
+  pub fn wait( //< waits, and returns only the handles something happened on
+    r: Self$@,
+    timeout_ms: I32, //< the longest time to wait; a negative value waits forever
+  ): List<|Ready|>?Reactor_error
+    $results: = List<|Ready|>.new()
+    n: = r.handles.len
+    if n == 0
+      return results
+    for r.revents_scratch.len < n
+      r.revents_scratch.push(0)
+
+    ready_count: =
+      kspl_net_poll(r.handles.ptr, r.interests.ptr, n, timeout_ms, r.revents_scratch.ptr)
+    if ready_count < 0
+      throw Reactor_error.poll_failed
+
+    $i: Sz = 0
+    for i < n
+      rv: = r.revents_scratch.get(i)
+      if rv != 0
+        results.push(Ready::{ .token = r.tokens.get(i), .revents = rv })
+      i += 1
+    return results
+
+  pub fn free(r: Self$@) //< frees the registration lists; it owns no socket
+    r.handles.free()
+    r.interests.free()
+    r.tokens.free()
+    r.revents_scratch.free()
+
+impl Reactor: Owned {} //< it owns its resources and releases them with `free()`.

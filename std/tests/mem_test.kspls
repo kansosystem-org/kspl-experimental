@@ -1,0 +1,71 @@
+import "std/mem" + { Arena, alloc, dealloc }
+import "std/thread"
+import "std/verdict"
+
+// ==========================================
+// std/mem: what an arena keeps when it is reset for another round.
+// ==========================================
+priv const kib: Sz = 1024
+
+priv fn one_round(a: Arena$@) //< three allocations, each bigger than the chunk before could hold
+  a.alloc(100 * kib)
+  a.alloc(300 * kib)
+  a.alloc(700 * kib)
+
+fn test_arena_reset_keeps_one_chunk()
+  verdict.start("[Arena] reset keeps what a round used as one chunk, and the next round fits...")
+  a: = Arena.new(1024 * kib)
+  defer a.free()
+  one_round(a)
+  grown: = a.get_total_allocated()
+  a.reset()
+  kept: = a.get_total_allocated()
+  assert(kept < grown, "Arena: what the chunks held unused is let go")
+  assert(a.remaining() == 1100 * kib, "Arena: one chunk holds what the round used, past the ceiling")
+  one_round(a)
+  assert(a.get_total_allocated() == kept, "Arena: the same round again takes no new chunk")
+  verdict.pass("Arena.reset keeps one chunk, as big as the round, and the next round reuses it")
+
+fn test_arena_reset_fixed_buffer()
+  verdict.start("[Arena] reset on a fixed buffer hands the whole buffer out again...")
+  buf: U8[4096] = ::{}
+  $a: = Arena.from_buffer(Void$@::buf@, 4096)
+  whole: = a.remaining()
+  a.alloc(whole)
+  a.reset()
+  assert(a.remaining() == whole, "Arena: a fixed buffer is whole again after reset")
+  a.alloc(whole)
+  verdict.pass("Arena.reset on a fixed buffer frees nothing and hands it all out again")
+
+// ==========================================
+// std/mem: the heap's counters, when several threads allocate and free at once.
+// ==========================================
+priv const churn_threads: Sz = 4
+priv const churn_rounds: I32 = 50000
+priv const churn_bytes: Sz = 24
+
+#export
+fn heap_churn(rounds: I32$@): Void$@ //< allocates and frees one block, rounds times over
+  for _i in Range.asc(rounds$)
+    dealloc(alloc(churn_bytes))
+  return null
+
+fn test_heap_counters_across_threads()
+  verdict.start("[Mem] the heap's counters lose no update when threads allocate at once...")
+  used0: = mem.heap_used_bytes()
+  total0: = mem.heap_requested_total_bytes()
+  $rounds: = churn_rounds
+  $ts: thread.Thread$@[churn_threads] = ::{}
+  for i in Range.asc(churn_threads)
+    ts[i] = thread.Thread.spawn<|I32|>(heap_churn, rounds@) catch panic("thread spawn failed")
+  for i in Range.asc(churn_threads)
+    ts[i].join_and_free()
+  // Each thread's handle is on the heap too, freed by its join.
+  want: = churn_threads * (Sz::churn_rounds * churn_bytes + sizeof(thread.Thread))
+  assert(mem.heap_used_bytes() == used0, "Mem: the bytes in use return to where they started")
+  assert(mem.heap_requested_total_bytes() - total0 == want,
+    "Mem: the running total counts every byte each thread asked for")
+  assert(mem.heap_peak_used_bytes() >= used0 + churn_bytes,
+    "Mem: the peak holds at least one block live at once")
+  verdict
+    .pass("four threads allocating at once leave the in-use count, the total and the peak right")

@@ -1,0 +1,203 @@
+//< Copies what a trait's declaration provides into the impls of that trait
+//<
+//< **A default value has one source, the trait's declaration** (an impl's own is rejected by
+//< check_trait_method_sig in `trait_check.kspls`).
+//< **It runs in collect's Pass 1b, before generic instantiation** (the reason is at Pass 1b in
+//< `collect.kspls`).
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/sema/decl/access" as sema_decl_access
+import "ksplc/sema/decl/mono" as sema_decl_mono
+import "ksplc/sema/decl/mono_name" as sema_decl_mono_name
+import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/decl/subst" as sema_decl_subst
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/scope" as sema_type_scope
+import "std/chars"
+import "std/str"
+
+const inherited_default: I32 = 1 //< the flag for a copied default value
+  //<
+  //< Caution: **Store it in `ival`.** Non-zero means the impl did not write it, so the rejecting
+  //< check (`trait_check.kspls`) skips it.
+
+impl Sema_ctx
+  fn propagate_trait_defaults(r: Self$@, root: Ast_node$@) //<
+    //< Copies the trait declaration's default values to every impl of the trait
+    for top_node in root.children
+      child: = top_node.unwrap_top_level()
+      if child.kind_id != .k_decl_impl
+        continue
+      if t_node: = child.get_impl_trait_node()
+        r.set_current_file(child.loc.file())
+        r.copy_defaults_from_trait(child, t_node)
+
+  priv fn copy_defaults_from_trait(r: Self$@, impl_node: Ast_node$@, trait_node: Ast_node$@) //<
+    //< Copies the default values, method by method, from the trait that impl names
+    //<
+    //< It looks up the trait's **declaration node** first.
+    //<
+    //< Caution: **Do not resolve it as a type.** `resolve_type` and `resolve_type_method_fqn`
+    //< **create an instance at once**, an unneeded one in the output; look up the symbol by FQN.
+    $spelled: = trait_node.extract_type_name()
+    defer spelled.free()
+    // A generic's actual arguments are dropped: the template holds the default values.
+    full: = spelled.slice()
+    $base: U8[] = full
+    switch full.find_generic_bounds() case .found(start_idx, _is, _ie, _end_idx)
+      base = full.sub(0, start_idx)
+    default {}
+    // **A generic trait is in the template table, not the symbol table**; if it is missed,
+    // `Index_ref`'s default values are silently not copied.
+    $decl: Ast_node$@ = r.generics.templates.get(base) catch null
+    if decl == null
+      raw_fqn: = r.resolve_fqn_for_type(base)
+      if raw_fqn.len == 0
+        return
+      trait_fqn: = base_core.arena.dup_str(raw_fqn)
+      t_sym: = r.symtab.resolve_fqn(trait_fqn) catch null
+      if t_sym != null
+        decl = t_sym.node
+    if decl == null || decl.kind_id != .k_decl_trait
+      return
+    // Caution: **Get the implementing type's visibility first.** The copied body becomes that
+    // type's method, so it must not be more visible than the type ("the visibility written on a
+    // member" in `access.kspls`).
+    $target_vis: = sema_type_scope.Visibility.public
+    if t_sym: = sema_decl_access.impl_target_symbol(r, impl_node)
+      target_vis = t_sym.vis
+    r.copy_default_bodies(impl_node, decl, full, target_vis)
+    for m in impl_node.children
+      if m.kind_id != .k_decl_fn
+        continue
+      m_name: = m.get_decl_id_text()
+      if m_name.len == 0
+        continue
+      if req: = find_trait_method(decl, m_name)
+        copy_param_defaults(req, m)
+
+  // Copies a trait's default bodies **into the impl's block** where the impl does not write them,
+  // so `Self` and the impl's type arguments apply directly.
+  // Caution: **Replace the declaration's type parameters with the impl's actual arguments.**
+  // The `T` inside the body copied into `impl<|S, T, U|> Conv<|S, T, U|>: Chain<|U|>` means `U`.
+  priv fn copy_default_bodies(r: Self$@, impl_node: Ast_node$@, decl: Ast_node$@, spelled: U8[],
+    target_vis: sema_type_scope.Visibility)
+    // **If there is nothing to copy, touch nothing.** The binding below adds names to the type
+    // table, making a type variable (`V`) resolvable as a type, and `V?Ds_error` reaches C.
+    if !has_default_body(decl)
+      return
+    saved: = r.generics.args.len
+    defer r.generics.args.len = saved
+    r.bind_trait_decl_params(decl, spelled)
+    for m in decl.children
+      // Only a method with a body is copied.
+      if m.kind_id != .k_decl_fn || m.find_child(.k_stmt_block) == null
+        continue
+      name: = m.get_decl_id_text()
+      if name.len == 0 || impl_defines(impl_node, name)
+        continue
+      fresh: = m.clone()
+      fresh.replace_type_vars(r)
+      adopt_as_impl_method(fresh, impl_node, target_vis)
+      impl_node.children.push(fresh)
+
+  priv fn bind_trait_decl_params(r: Self$@, decl: Ast_node$@, spelled: U8[]) //<
+    //< Binds the declaration's type parameters to the names of the actual arguments the impl wrote
+    //<
+    //< Caution: **Do not resolve it as a type** (the reason is at copy_defaults_from_trait).
+    args_str: = spelled.generic_args_str()
+    if args_str.len == 0
+      return
+    args: = sema_decl_mono_name.split_args(args_str)
+    defer sema_decl_mono_name.free_args_list(args)
+    r.bind_generic_args(decl.find_child(.k_type_gen_params), args, false)
+
+priv fn adopt_as_impl_method(fresh: Ast_node$@, impl_node: Ast_node$@,
+  target_vis: sema_type_scope.Visibility) //<
+    //< Makes the copied body into that impl's method
+    //<
+    //< **Replace the position too, with the impl's**: that is where a mistake gets fixed, and
+    //< visibility follows the `loc`'s file (get_defined_in in `../type/scope.kspls`).
+    //< Caution: **Do not make it more visible than the implementing type** (check_one_member in
+    //< `access.kspls`).
+  fresh.retarget_loc(impl_node.loc)
+  set_visibility_keyword(fresh,
+    sema_decl_access.narrower_vis(target_vis, fresh.get_visibility()))
+
+priv fn set_visibility_keyword(decl: Ast_node$@, vis: sema_type_scope.Visibility) //<
+  //< Sets the declaration's visibility keyword to exactly one
+  //<
+  //< **`internal` has no keyword**, so none is left.
+  strip_visibility_keywords(decl)
+  strip_visibility_keywords(decl.find_child(.k_attribute_list))
+  if vis == sema_type_scope.Visibility.public
+    decl.add_child(Ast_node.new(.k_keyword, "pub", decl.loc))
+  else if vis == sema_type_scope.Visibility.file_private
+    decl.add_child(Ast_node.new(.k_keyword, "priv", decl.loc))
+
+priv fn strip_visibility_keywords(node: Ast_node$@) //<
+  //< Removes the pub and priv keywords from a declaration
+  //<
+  //< Caution: **Remove it from both places**, directly under the declaration and in the
+  //< attributes (get_visibility in `sema/type/scope.kspls`); one left behind stays in effect.
+  if node == null
+    return
+  $i: Sz = 0
+  for i < node.children.len
+    c: = node.children.get(i)
+    if c.kind_id == .k_keyword && (c.text.equals("pub") || c.text.equals("priv"))
+      node.children.remove_at(i)
+      continue
+    i += 1
+
+priv fn has_default_body(decl: Ast_node$@): Bool //<
+  //< Whether that trait declares any method with a default body
+  for m in decl.children
+    if m.kind_id == .k_decl_fn && m.find_child(.k_stmt_block) != null
+      return true
+  return false
+
+priv fn impl_defines(impl_node: Ast_node$@, name: U8[]): Bool //<
+  //< Whether that impl writes a method of that name itself
+  for m in impl_node.children
+    if m.kind_id == .k_decl_fn && m.get_decl_id_text().equals(name)
+      return true
+  return false
+
+priv fn find_trait_method(trait_decl: Ast_node$@, name: U8[]): Option<|Ast_node$@|> //<
+  //< Finds, in the trait's declaration, the declaration of the method with that name
+  for m in trait_decl.children
+    if m.kind_id != .k_decl_fn && m.kind_id != .k_decl_fn_proto
+      continue
+    if m.get_decl_id_text().equals(name)
+      return Option<|Ast_node$@|>.some(m)
+  return Option<|Ast_node$@|>.none
+
+priv fn copy_param_defaults(req_m: Ast_node$@, impl_m: Ast_node$@) //<
+  //< Copies the parameter default values that only the trait's declaration has
+  //<
+  //< **A parameter the impl gives its own default is not touched**: overwritten, the rejection
+  //< would vanish. It matches **by position**, since the names may differ (`index` / `_index`); the
+  //< count is checked in `trait_check.kspls`.
+  req_params: = req_m.get_fn_params()
+  impl_params: = impl_m.get_fn_params()
+  if req_params == null || impl_params == null
+    return
+  $impl_cur: = base_ast_ext.Param_cursor.new(impl_params, false)
+  for rp in base_ast_ext.Param_cursor.new(req_params, false)
+    $ip: Ast_node$@ = null
+    if got: = impl_cur.next()
+      ip = got
+    if ip == null
+      return
+    d: = rp.get_param_default()
+    if d == null || ip.get_param_default() != null
+      continue
+    fresh: = d.clone()
+    fresh.ival = inherited_default
+    // Caution: **Add the `=` too**: the value is read as the child after the `=`
+    // (`../../parse/normalize.kspls`).
+    ip.add_child(Ast_node.new(.k_literal, "=", ip.loc))
+    ip.add_child(fresh)

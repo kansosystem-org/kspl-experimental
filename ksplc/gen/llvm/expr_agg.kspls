@@ -1,0 +1,257 @@
+//< The part of `emit_llvm_expr` that builds aggregate values, kept in a file of its own
+//<
+//< They are struct, enum, trait and result.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/core" as base_core
+import "ksplc/gen/llvm/ctx" { Genllvm_ctx }
+import "ksplc/gen/llvm/expr" as gen_llvm_expr
+import "ksplc/gen/llvm/types" as gen_llvm_types
+import "ksplc/sema/type/def" as sema_type_def
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "std/ds" { Map }
+
+impl Ast_node
+  priv fn emit_enum_tag_init(r: Ast_node$@, cg: Genllvm_ctx$@, real_type_id: I32, tag_value: I32):
+    U8$[] //<
+      //< It zero-fills an enum type's temporary slot, writes the tag and returns the pointer
+      //<
+      //< It stores a zeroinitializer and writes .tag. emit_llvm_enum_init and
+      //< emit_llvm_enum_init_call share it.
+    tmp_ptr: = cg.get_or_alloc_tmp_slot(Void$@::r, real_type_id)
+    cg.s("    store ")
+    cg.t(real_type_id).s(" zeroinitializer, ptr ").s(tmp_ptr).s("\n")
+
+    tag_ptr: = cg.next_reg()
+    cg.s("    %\{tag_ptr\} = getelementptr inbounds ")
+    cg.t_gep(real_type_id).s(", ptr ").s(tmp_ptr).s(", i32 0, i32 0\n")
+    cg.s("    store i32 \{tag_value\}, ptr %\{tag_ptr\}\n")
+    return tmp_ptr
+
+  fn emit_llvm_enum_init(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
+    variant_name: = r.last_child().text
+    real_type_id: = cg.env.get_real_type(r.type_id)
+    if e_def: = cg.env.get_enum_def(cg.env.get_str(real_type_id))
+      switch e_def.get_variant(variant_name) case .some(v_def)
+        if e_def.is_scalar()
+          cg.clear_scratch().s("\{v_def.tag_value\}")
+          return cg.take_scratch()
+        tmp_ptr: = r.emit_enum_tag_init(cg, real_type_id, v_def.tag_value)
+
+        res_reg: = cg.next_reg()
+        cg.op_load(res_reg, real_type_id, tmp_ptr)
+        return cg.reg_str(res_reg)
+      case .none {}
+    return base_core.arena.dup_str("zeroinitializer")
+
+  fn emit_llvm_enum_init_call(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
+    variant_name: = r.get_child(0).last_child().text
+    real_type_id: = cg.env.get_real_type(r.type_id)
+    if e_def: = cg.env.get_enum_def(cg.env.get_str(real_type_id))
+      if !e_def.is_scalar()
+        switch e_def.get_variant(variant_name) case .some(v_def)
+          tmp_ptr: = r.emit_enum_tag_init(cg, real_type_id, v_def.tag_value)
+
+          args_node: = r.find_child(.k_expr_args)
+          if args_node != null
+            args_node.emit_llvm_enum_payload(cg, real_type_id, tmp_ptr, v_def)
+
+          res_reg: = cg.next_reg()
+          cg.op_load(res_reg, real_type_id, tmp_ptr)
+          return cg.reg_str(res_reg)
+        case .none {}
+    return base_core.arena.dup_str("zeroinitializer")
+
+  priv fn emit_llvm_enum_payload(r: Ast_node$@, cg: Genllvm_ctx$@, real_type_id: I32,
+    tmp_ptr: U8[], v_def: sema_type_def.Enum_variant$@) //<
+      //< It writes an enum's payload fields one at a time into `tmp_ptr`'s payload area.
+      //<
+      //< `r` is a k_expr_args.
+      //< Caution: **Write out the payload's type list every time.** LLVM's getelementptr needs the
+      //< anonymous struct's type inline, so the `{ T, U, ... }` must be written again for each
+      //< element.
+    payload_ptr: = cg.next_reg()
+    cg.s("    %\{payload_ptr\} = getelementptr inbounds ")
+    cg.t_gep(real_type_id).s(", ptr ").s(tmp_ptr).s(", i32 0, i32 1\n")
+
+    $arg_idx: Sz = 0
+    for arg_node in r.children
+      if arg_node.is_literal(",")
+        continue
+      val_reg: = arg_node.emit_llvm_expr(cg)
+      field_ptr: = cg.next_reg()
+      cg.s("    %\{field_ptr\} = getelementptr inbounds { ")
+      $is_first: = true
+      for field in v_def.payload_fields
+        if !is_first
+          cg.s(", ")
+        cg.t(field.type_id)
+        is_first = false
+      cg.s(" }, ptr %\{payload_ptr\}, i32 0, i32 \{I32::arg_idx\}\n")
+      cg.s("    store ").t(arg_node.type_id).s(" ").s(val_reg).s(", ptr %\{field_ptr\}\n")
+      arg_idx += 1
+
+  fn emit_llvm_upcast(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
+    inner: = r.get_child(0)
+    trait_id: = r.type_id
+    base_id: = inner.type_id
+    // Caution: Strip it the same way as vtable_key in lower/vtable.kspls (strip_ptr leaves one
+    // level of the immutability qualifier and prints a `Const_<type>`, a symbol with no
+    // definition).
+    clean_base_id: = cg.env.receiver_base_id(base_id)
+
+    is_ptr: = cg.env.is_pointer(base_id)
+    $obj_ptr_reg: = ""
+    if is_ptr
+      inner_val: = inner.emit_llvm_expr(cg)
+      obj_ptr_reg = base_core.arena.dup_str(inner_val)
+    else
+      inner_lval: = inner.emit_llvm_lvalue(cg)
+      obj_ptr_reg = base_core.arena.dup_str(inner_lval)
+
+    tmp1: = cg.next_reg()
+    cg.s("    %\{tmp1\} = insertvalue ")
+    cg.t(trait_id).s(" zeroinitializer, ptr ").s(obj_ptr_reg).s(", 0\n")
+
+    tmp2: = cg.next_reg()
+    cg.s("    %\{tmp2\} = insertvalue ")
+    cg.t(trait_id).s(" %\{tmp1\}, ptr @kspl_vtable_impl_")
+    cg.clear_scratch()
+    cg.env.mangle_type_id_to(clean_base_id, cg.scratch)
+    cg.s(cg.scratch.slice()).s("_")
+    cg.clear_scratch()
+    cg.env.mangle_type_id_to(trait_id, cg.scratch)
+    cg.s(cg.scratch.slice()).s(", 1\n")
+
+    return cg.reg_str(tmp2)
+
+  fn emit_llvm_struct_literal(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[] //<
+    //< It builds a compound literal in a temporary and returns its **value**
+    //<
+    //< Where the caller already has the memory the value should end up in, use
+    //< emit_llvm_struct_literal_into. This one does "build in a temporary -> load as a value ->
+    //< the caller stores": three copies, with waste proportional to the aggregate's size.
+    tmp_ptr: = cg.get_or_alloc_tmp_slot(Void$@::r, r.type_id)
+    r.emit_llvm_struct_literal_into(cg, tmp_ptr)
+    res_reg: = cg.next_reg()
+    cg.op_load(res_reg, r.type_id, tmp_ptr)
+    return cg.reg_str(res_reg)
+
+  priv fn covers_whole_aggregate(r: Ast_node$@, cg: Genllvm_ctx$@): Bool //<
+    //< Whether this literal fills every byte of the memory (so the leading zero-fill can go)
+    //<
+    //< It requires not "the value is the same anyway" but "not one uninitialized byte remains".
+    //< Dropping the fill is for robustness, not speed: with a zero-fill right before, the backend
+    //< learns "the high bytes are already 0" and may narrow the following store. No code may rely
+    //< on the zero-fill surviving ("Correctness is not entrusted to zero filling" in
+    //< ksplc/docs/DESIGN.md).
+    switch cg.env.get_info(cg.env.get_real_type(r.type_id)) case .array(elem_id, size)
+      if size <= 0
+        return false
+      // An element type that can itself contain padding (a struct, array, slice and the like) is
+      // excluded.
+      if cg.is_llvm_aggregate(elem_id)
+        return false
+      $init_count: Sz = 0
+      for child in r.children
+        if child.kind_id != .k_expr_field_init
+          continue
+        // With even one subscript (`::{ [3] = x }`), which elements are filled cannot be decided
+        // statically here (a subscript is not always a constant expression).
+        if child.get_field_init_index().is_some()
+          return false
+        init_count += 1
+      return init_count == Sz::size
+    default {}
+    return false
+
+  fn emit_llvm_struct_literal_into(r: Ast_node$@, cg: Genllvm_ctx$@, tmp_ptr: U8[]) //<
+    //< It builds a compound literal directly in the memory dest_ptr points at (with no copy)
+    //<
+    //< Where the literal does not fill all the memory, dest_ptr is first overwritten with a
+    //< zeroinitializer, so it cannot be used where a field's initializer reads dest_ptr itself. A
+    //< variable declaration (`x: T = ::{...}`) cannot read x before its declaration and so is
+    //< safe, but an assignment to an existing binding (`x = ::{ x.a }`) would need a temporary
+    //< copy first.
+    if !r.covers_whole_aggregate(cg)
+      cg.emit_zero_fill(tmp_ptr, r.type_id)
+    is_array: = cg.env.is_array(r.type_id)
+    $current_field_idx: = 0
+
+    // It builds the table from a named field initializer's field name to its index once here
+    // (it does not change with r.type_id). A linear walk of fields_list per initializer would be
+    // O(F*M).
+    $field_name_idx: Map<|U8[], I32|>$@ = null
+    if !is_array
+      clean_str: = cg.env.base_type_name(cg.env.get_real_type(r.type_id))
+      if s_def: = cg.env.get_struct_def(clean_str)
+        field_name_idx = base_core.arena.create(Map<|U8[], I32|>.new(base_core.arena))
+        for f in Range.asc(s_def.fields_list.len)
+          field_name_idx.set(s_def.fields_list.get(f).name, I32::f)
+
+    for child in r.children
+      if child.kind_id == .k_expr_field_init
+        val_expr: = child.get_field_init_expr()
+        val_reg: = val_expr.emit_llvm_expr(cg)
+        $field_idx_reg: = 0
+        // The type of the destination field. The store is always emitted in this type (the reason
+        // is at Ctx.emit_numeric_coerce). Only where it cannot be resolved is the value's type
+        // used.
+        $field_type_id: = val_expr.type_id
+
+        if is_array
+          switch cg.env.get_info(cg.env.get_real_type(r.type_id)) case .array(elem_id, _size)
+            field_type_id = elem_id
+          default {}
+          switch child.get_field_init_index() case .some(idx_node)
+            // idx_node can use registers of its own, so field_idx_reg's next_reg() call comes
+            // after idx_node is evaluated (SSA register numbers must follow allocation order =
+            // output order; see emit_llvm_binary).
+            idx_val: = idx_node.emit_llvm_expr(cg)
+            field_idx_reg = cg.next_reg()
+            cg.s("    %\{field_idx_reg\} = getelementptr inbounds ")
+            cg.t_gep(r.type_id).s(", ptr ").s(tmp_ptr).s(", i32 0, ").t(idx_node.type_id).s(" ")
+              .s(idx_val).s("\n")
+          case .none
+            field_idx_reg = cg.next_reg()
+            cg.s("    %\{field_idx_reg\} = getelementptr inbounds ")
+            cg.t_gep(r.type_id).s(", ptr ").s(tmp_ptr).s(", i32 0, i32 \{current_field_idx\}\n")
+            current_field_idx += 1
+        else
+          name_node: = child.get_field_init_name().unwrap_or(null)
+
+          $field_idx: = current_field_idx
+
+          if field_name_idx != null
+            if name_node != null && name_node.kind_id == .k_identifier
+              found_idx: = field_name_idx.get(name_node.text) catch -1
+              if found_idx != -1
+                field_idx = found_idx
+          current_field_idx = field_idx + 1
+          clean_name: = cg.env.base_type_name(cg.env.get_real_type(r.type_id))
+          if sd: = cg.env.get_struct_def(clean_name)
+            if field_idx >= 0 && field_idx < sd.fields_list.len
+              field_type_id = sd.fields_list.get(field_idx).type_id
+
+          field_idx_reg = cg.next_reg()
+          cg.s("    %\{field_idx_reg\} = getelementptr inbounds ")
+          cg.t_gep(r.type_id).s(", ptr ").s(tmp_ptr).s(", i32 0, i32 \{field_idx\}\n")
+        stored_reg: = cg.emit_numeric_coerce(val_reg, val_expr.type_id, field_type_id)
+        cg.s("    store ").t(field_type_id).s(" ").s(stored_reg).s(", ptr %\{field_idx_reg\}\n")
+
+  fn emit_llvm_result_wrap(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
+    inner: = r.get_child(0)
+    val_reg: = inner.emit_llvm_expr(cg)
+
+    tmp1: = cg.next_reg()
+    cg.s("    %\{tmp1\} = insertvalue ")
+    cg.t(r.type_id).s(" zeroinitializer, i8 0, 0\n")
+
+    if !sema_type_env.is_void(inner.type_id)
+      tmp2: = cg.next_reg()
+      cg.s("    %\{tmp2\} = insertvalue ")
+      cg.t(r.type_id).s(" %\{tmp1\}, ").t(inner.type_id).s(" ").s(val_reg).s(", 2\n")
+      return cg.reg_str(tmp2)
+
+    return cg.reg_str(tmp1)

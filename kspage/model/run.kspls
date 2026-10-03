@@ -1,0 +1,236 @@
+//< How one run (`Inline`) is stored
+//<
+//< The text, what applies to that text (the style, the link, the note, the annotation, what it
+//< refers to) and a cache of measuring results.
+//< **Walking the tree does not belong here**; it is [`doc.kspls`](doc.kspls)'s job: how one text
+//< is stored and how the tree is walked are read for different reasons (Principle 3). That file
+//< imports this one, never the other way.
+//< **Read the text with `text()`.** `buf` and `shown` are priv, so only three methods change the
+//< visible text (`insert` / `remove` / `show_value`).
+import "kspage/model/font" { Font }
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" // provides `U8[].equals`
+
+struct Fit_at //< one pass's result for where the text wraps
+  //<
+  //< **This is not part of the document** (it is rebuilt at every layout, as `Inline.shown` is).
+  //< The text laid from `start` runs to `end`, with width `wide`. `whole` is the width from `start`
+  //< to the end and **does not depend on the space** (unwrapped text reads it too).
+  start: Sz
+  end: Sz
+  wide: F32
+  whole: F32
+
+struct Inline
+  priv buf: List<|U8|>$@ //<
+    //< The text, as a run of UTF-8 bytes
+    //<
+    //< Caution: **Do not let a line break in** (splitting lines is the layout's job). **Do not
+    //< read it directly** (use `text()`); it moves on editing.
+  style: U8[] //<
+    //< The style's name. **Empty keeps the parent block's style** (it does not cancel anything).
+  priv shown: List<|U8|>$@ //<
+    //< The text of the computed value
+    //<
+    //< Caution: **Do not overwrite the typed text**, or undo gets mixed in when a formula cell is
+    //< typed over. The arena is reused. **Two functions set it**: `recalc` in `expr/calc.kspls`
+    //< and `number_refs` in `model/number.kspls`.
+  priv number: Option<|F64|> //<
+    //< The number of the computed value
+    //<
+    //< Caution: **Set it together with the text** (`show_value`); a chart reads this one.
+  href: U8[] //<
+    //< The link
+    //<
+    //< **Empty means ordinary text.**
+    //< **It holds no look** (that is the style's job; `link_span` in `write/shape.kspls`).
+    //< **Typing does not remove it**, unlike a formula.
+  note: U8[] //<
+    //< The note's text
+    //<
+    //< **Empty means no note.** **It holds no number** (numbers are counted at layout time, so
+    //< adding a note makes nothing stale). The mark appears after this run's text.
+  // The annotation's text, and who wrote it. **An empty text means no annotation.** **It does not
+  // appear in the flow**: it is a remark on this text, not content (unlike `note`). **The author
+  // comes in from outside** (the core holds no user names).
+  remark: U8[]
+  remark_by: U8[]
+  refers: U8[] //<
+    //< The name of what the body refers to (`Block.name`)
+    //<
+    //< **Empty means ordinary text.** **It holds no number**: the visible "Figure 1" is computed
+    //< at layout time into `shown`. **Like a formula, this run is neither split nor merged.**
+  priv fit_font: Font //<
+    //< The cache of measuring results
+    //<
+    //< **This is not part of the document** (as with `shown`).
+    //< Caution: **Throw it away when the visible text changes**; only the three methods below
+    //< change it (`insert` / `remove` / `show_value`). Where one paragraph is one run, every line
+    //< asks with the same space, so the cache keeps hitting.
+  priv fit_avail: F32
+  priv fits: List<|Fit_at|>$@
+
+impl Inline
+  fn text(r: Self@): U8[] //< the current text
+    //<
+    //< Caution: **Do not keep it.** It moves on the next edit.
+    return U8[]::{ .ptr = r.buf.ptr, .len = r.buf.len }
+
+  fn shows_value(r: Self@): Bool //< whether a computed value is present
+    return r.shown != null && r.shown.len > 0
+
+  fn figure(r: Self@): Option<|F64|> //< the number of the computed value
+    //<
+    //< **Like the text, it is not part of the document** (none where it is not a number). A chart
+    //< reads this.
+    return r.number
+
+  fn showing(r: Self@): U8[] //< the text shown on the screen
+    //<
+    //< **Where a value was computed, it is that**; otherwise the typed text.
+    //< Caution: **Layout, export and sorting must all read this one** (the typed text may be a
+    //< formula). **Editing does not**: typing positions and search work on the typed text.
+    if !r.shows_value()
+      return r.text()
+    return U8[]::{ .ptr = r.shown.ptr, .len = r.shown.len }
+
+  priv fn same_value(r: Self@, s: U8[], num: Option<|F64|>): Bool //<
+    //< Whether it is the same value as now
+    //<
+    //< Caution: **Compare both the text and the number** (the same formatting may hide a changed
+    //< number). A NaN counts as "different" (the safe side).
+    $now: U8[] = ""
+    if r.shown != null
+      now = U8[]::{ .ptr = r.shown.ptr, .len = r.shown.len }
+    if !now.equals(s)
+      return false
+    if a: = r.number
+      switch num case .some(b)
+        return a == b
+      case .none
+        return false
+    if _b: = num
+      return false
+    return true
+
+  fn show_value(r: Self$@, s: U8[], num: Option<|F64|>, arena: Arena$@) //<
+    //< Sets the computed value (the text and the number)
+    //<
+    //< The arena is reused.
+    //< Caution: **Do not set the text and the number separately**, or they end up disagreeing
+    //< (the chart alone shows the old value).
+    // **Do nothing where nothing changed**: "no value" arrives at every layout (`show_free` in
+    // `../expr/calc.kspls`), and `wide` would never hit the cache.
+    if r.same_value(s, num)
+      return
+    r.number = num
+    r.forget()
+    if s.len <= 0
+      if r.shown != null
+        r.shown.len = 0
+      return
+    if r.shown == null
+      r.shown = List<|U8|>.create(arena)
+    r.shown.len = 0
+    for $i: Sz = 0; i < s.len; i += 1
+      r.shown.push((s.ptr + i)$)
+
+  fn is_formula(r: Self@): Bool //< whether the typed text is a formula
+    //<
+    //< **This is the one place that decides it** (a text starting with `=`). A formula run is
+    //< neither split nor merged.
+    t: = r.text()
+    return t.len > 0 && t[0] == '='
+
+  fn forget(r: Self$@) //< throws the cache away
+    //<
+    //< **Every change to the visible text must come through here** (`fit_font`).
+    if r.fits != null
+      r.fits.len = 0
+
+  priv fn same_ask(r: Self@, font: Font, avail: F32): Bool //<
+    //< Whether it is the same question as the cached pair
+    //<
+    //< Caution: **Compare the typeface name by its address** (do not read the text, which may be
+    //< freed).
+    return r.fit_avail == avail && r.fit_font.family.ptr == font.family.ptr &&
+      r.fit_font.family.len == font.family.len && r.fit_font.size_px == font.size_px &&
+      r.fit_font.weight == font.weight && r.fit_font.italic == font.italic
+
+  fn known_fit(r: Self@, font: Font, avail: F32, start: Sz): Option<|Fit_at|> //<
+    //< The cached result
+    //<
+    //< Caution: **Return it only for the same "typeface and space" pair.**
+    if r.fits == null || !r.same_ask(font, avail)
+      return Option<|Fit_at|>.none
+    for i in Range.asc(r.fits.len)
+      had: = r.fits.get(i)
+      if had.start == start
+        return Option<|Fit_at|>.some(had)
+    return Option<|Fit_at|>.none
+
+  fn known_whole(r: Self@, font: Font, start: Sz): Option<|F32|> //<
+    //< The cached "width from start to the end"
+    //<
+    //< **The space is not checked** (that value does not depend on the space).
+    if r.fits == null || r.fit_font.family.ptr != font.family.ptr ||
+      r.fit_font.family.len != font.family.len || r.fit_font.size_px != font.size_px ||
+      r.fit_font.weight != font.weight || r.fit_font.italic != font.italic
+      return Option<|F32|>.none
+    for i in Range.asc(r.fits.len)
+      had: = r.fits.get(i)
+      if had.start == start
+        return Option<|F32|>.some(had.whole)
+    return Option<|F32|>.none
+
+  fn remember_fit(r: Self$@, font: Font, avail: F32, got: Fit_at) //<
+    //< remembers a measured result
+    //<
+    //< Caution: **Clear it first when the pair changes.** **The arena is the run's own**, so none
+    //< is taken as an argument: given the layout arena, the next layout would point at freed
+    //< memory, **and in wasm loop forever**.
+    if r.fits == null
+      r.fits = List<|Fit_at|>.create(r.buf.arena)
+    if !r.same_ask(font, avail)
+      r.fits.len = 0
+      r.fit_font = font
+      r.fit_avail = avail
+    r.fits.push(got)
+
+  fn insert(r: Self$@, at: Sz, s: U8[]) //< inserts s at byte at
+    //<
+    //< Caution: **at must be a character boundary.**
+    if s.len <= 0 || at < 0 || at > r.buf.len
+      return
+    r.forget()
+    old_len: = r.buf.len
+    for $i: Sz = 0; i < s.len; i += 1
+      r.buf.push(0U8)
+    // Caution: **Copy from the end**, or it overwrites bytes not read yet.
+    $j: Sz = old_len
+    for j > at
+      j -= 1
+      r.buf.set(j + s.len, r.buf.get(j))
+    for $k: Sz = 0; k < s.len; k += 1
+      r.buf.set(at + k, (s.ptr + k)$)
+
+  fn remove(r: Self$@, at: Sz, len: Sz) //< deletes len bytes from byte at
+    //<
+    //< Caution: **Both must be character boundaries.**
+    if len <= 0 || at < 0 || at + len > r.buf.len
+      return
+    r.forget()
+    for $i: Sz = at + len; i < r.buf.len; i += 1
+      r.buf.set(i - len, r.buf.get(i))
+    r.buf.len -= len
+
+fn new_inline(style: U8[], arena: Arena$@): Inline$@ //<
+  //< makes one empty inline (attached to nothing)
+  n: = Inline::{ .buf = List<|U8|>.create(arena), .style = style, .shown = null,
+    .number = Option<|F64|>.none, .href = "", .note = "", .remark = "", .remark_by = "",
+    .refers = "", .fits = null, .fit_avail = 0.0,
+    .fit_font = Font::{ .family = "", .size_px = 0.0, .weight = 0U16, .italic = false } }
+  return arena.create(n)
+
+// A node in the tree. A paragraph, a heading, a bullet item and a quotation are each one.

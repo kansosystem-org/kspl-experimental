@@ -1,0 +1,1290 @@
+# The record of the API this package publishes, written by ksplc --emit-surface.
+# Caution: Do not fix it by hand. Change the API, remake it with `make surface`, and commit the diff.
+# The columns are tab-separated: the file's logical name / the key / the text / the documentation (left off where there is none). Rows are by key, ascending.
+std/argp	Argp_error	pub enum Argp_error	why the arguments could not be read as declared
+std/argp	Argp_error.bad_value	bad_value(name: U8[])	the value cannot be read as a number
+std/argp	Argp_error.fmt	pub fn fmt(r: Self, w: Writer): Writer	writes the reason for a person to read. Interpolation expands into a chain of calls on a Writer ("The expansion specification for string interpolation" in docs/SPEC-language.md); returning a `U8[]` would leave the caller managing a temporary buffer's lifetime.
+std/argp	Argp_error.help_requested	help_requested	`--help` was given; not a failure, but parsing does not continue either
+std/argp	Argp_error.missing_required	missing_required(name: U8[])	an item that cannot be omitted was omitted
+std/argp	Argp_error.missing_value	missing_value(name: U8[])	an item that takes a value has no `=value` attached
+std/argp	Argp_error.multiple_commands	multiple_commands(name: U8[])	two commands were named at once
+std/argp	Argp_error.unexpected_arg	unexpected_arg(name: U8[])	a positional argument was given to a CLI that takes none
+std/argp	Argp_error.unexpected_value	unexpected_value(name: U8[])	a flag carried `=value`
+std/argp	Argp_error.unknown_option	unknown_option(name: U8[])	a `--name` no declaration knows
+std/argp	Argp_error:Formattable	impl Argp_error: Formattable	so a failure can be written straight into a message
+std/argp	Parser	pub struct Parser	the declarations, and where the parsed values go
+std/argp	Parser.about	pub about: U8[]	one line saying what the program is, shown above the options
+std/argp	Parser.append_names	pub fn append_names(r: Self$@, out: List<|U8[]|>$@)	pushes every declared name, in declaration order. For a caller that walks the items (with `saw`). Caution: **Do not let the caller copy the list of names.** A copy silently drifts when a declaration is added.
+std/argp	Parser.command	pub command: U8[]	the chosen command, or empty; the caller decides the default. A default kept in argp would drift from the declaration.
+std/argp	Parser.command_flag	pub fn command_flag(r: Self$@, name: U8[], help: U8[])	a command chosen by an option's name (`--version`); takes no value. Not a flag, so the commands stay **mutually exclusive** (`prog fmt --version` is refused). Caution: **Add a mode as an option only where one is enough.** As they multiply, the name no longer says which is a subcommand and which is an option.
+std/argp	Parser.create	pub fn create(prog: U8[], about: U8[], arena: Arena$@): Parser$@	a parser with nothing declared yet. Memory is freed with the arena, so there is no separate `free`.
+std/argp	Parser.f64_opt	pub fn f64_opt(r: Self$@, name: U8[], out: F64$@, help: U8[])	a floating-point number; a value that cannot be read gives `bad_value`
+std/argp	Parser.flag	pub fn flag(r: Self$@, name: U8[], out: Bool$@, help: U8[])	a switch taking no value (Python's `action="store_true"`)
+std/argp	Parser.int_opt	pub fn int_opt(r: Self$@, name: U8[], out: I64$@, help: U8[])	an integer; a value that cannot be read gives `bad_value`
+std/argp	Parser.parse	pub fn parse(r: Self$@, a: sys.Args, arena: Arena$@): Void?Argp_error	reads the process's own arguments, skipping the program name at the start
+std/argp	Parser.parse_list	pub fn parse_list(r: Self$@, argv: List<|U8[]|>$@): Void?Argp_error	reads an argument list into the declared destinations. Also for arguments from elsewhere, such as a configuration file or a test.
+std/argp	Parser.parse_or_exit	pub fn parse_or_exit(r: Self$@, a: sys.Args, arena: Arena$@)	reads the arguments, or prints why and ends the process. **It returns only on success.** The exit code is 0 for `--help` and 2 for an error.
+std/argp	Parser.positional	pub fn positional(r: Self$@, usage: U8[])	declares that this CLI takes positional arguments. **A positional argument given to a CLI that declares none is an error**, for the same reason as an unknown `--name`: a path's word-split fragments arrive **as positional arguments**, and dropping them silently hides the cause.
+std/argp	Parser.print_options	pub fn print_options(r: Self$@)	writes only the commands and options, with no heading. For a CLI that appends **the list built from the declarations** after its own text; a copied list goes stale.
+std/argp	Parser.print_usage	pub fn print_usage(r: Self$@)	writes the whole usage to standard output
+std/argp	Parser.prog	pub prog: U8[]	the program's name, used in the usage and in every error
+std/argp	Parser.rest	pub rest: List<|U8[]|>$@	the positional arguments, in the order they appeared. Neither an option nor a command name. Unless `positional` declared them, each is an error.
+std/argp	Parser.saw	pub fn saw(r: Self$@, name: U8[]): Bool	whether that item was given at all, whatever its value. It tells "not given" from "given empty" (`--out=`), which the value alone cannot.
+std/argp	Parser.saw_empty	pub fn saw_empty(r: Self$@, name: U8[]): Bool	whether that item was given with nothing after its `=` (`--out=`). An empty value is a value, so parsing takes it; a caller none of whose items means anything by one refuses it through here.
+std/argp	Parser.str_list_opt	pub fn str_list_opt(r: Self$@, name: U8[], out: List<|U8[]|>$@, help: U8[])	a string that can be given any number of times. Caution: **It accumulates instead of overwriting.** With `str_opt`, `--define=a --define=b` silently keeps only the later value.
+std/argp	Parser.str_opt	pub fn str_opt(r: Self$@, name: U8[], out: U8[]$@, help: U8[])	a string, written as `--name=<value>`
+std/argp	Parser.str_required	pub fn str_required(r: Self$@, name: U8[], out: U8[]$@, help: U8[])	a string that cannot be omitted; omitting it gives `missing_required`
+std/argp	Parser.subcommand	pub fn subcommand(r: Self$@, name: U8[], help: U8[])	a command chosen by name (`ksplc fmt`); the choice is stored in `command`
+std/argp	Parser.subcommand_trailing	pub fn subcommand_trailing(r: Self$@, name: U8[], help: U8[], trailing: List<|U8[]|>$@)	a command taking one target and an uninterpreted rest. Its own options go before the target, as with `python x.py --foo`.
+std/base64	Base64_error	pub enum Base64_error	why a Base64 string could not be read
+std/base64	Base64_error.invalid_char	invalid_char	a character outside the alphabet, including an `=` outside the padding
+std/base64	Base64_error.invalid_length	invalid_length	the input's length is not a multiple of 4
+std/base64	decode	pub fn decode(s: U8[], arena: Arena$@): U8[]?Base64_error	decodes a Base64 string into a new byte array
+std/base64	encode	pub fn encode(data: U8[], arena: Arena$@): U8[]	encodes bytes with the standard alphabet and `=` padding into a new string
+std/bignat	Bignat	pub struct Bignat	a natural number of a fixed, generous width, held by value. Caution: **The unused limbs must be 0.** `add` and `cmp` read limbs past the other value's `len`; only `sub` and `trim` shrink `len`, and only over limbs that became 0.
+std/bignat	Bignat.add	pub fn add(r: Self$@, o: Self@)	adds another value in place
+std/bignat	Bignat.add_small	pub fn add_small(r: Self$@, v: U32)	adds, in place, a value that fits in one limb
+std/bignat	Bignat.cmp	pub fn cmp(r: Self@, o: Self@): I32	returns -1, 0 or 1 for less, equal or greater
+std/bignat	Bignat.from_u64	pub fn from_u64(v: U64): Bignat	the same value, widened
+std/bignat	Bignat.is_zero	pub fn is_zero(r: Self@): Bool	whether the value is 0
+std/bignat	Bignat.mul	pub fn mul(r: Self$@, o: Self@)	multiplies in place by another value of the same width. Long multiplication, from o's top limb down. The other value is `10^n`, which `std/strnum` keeps so it need not rebuild it on each call.
+std/bignat	Bignat.mul_pow10	pub fn mul_pow10(r: Self$@, n: Sz)	multiplies in place by 10 to the power of `n`. It multiplies by 10^9 at a time, the largest power of 10 that fits in a U32.
+std/bignat	Bignat.mul_small	pub fn mul_small(r: Self$@, m: U32)	multiplies in place by a value that fits in one limb
+std/bignat	Bignat.shl	pub fn shl(r: Self$@, bits: Sz)	shifts left in place, which multiplies by 2 to that power
+std/bignat	Bignat.sub	pub fn sub(r: Self$@, o: Self@)	subtracts another value in place. Caution: r >= o must hold, because a natural number never goes negative.
+std/bignat	Bignat.zero	pub fn zero(): Bignat	the value 0
+std/bignat	bignat_limbs	pub const bignat_limbs: Sz = 120	how many 32-bit limbs one holds (3840 bits). `to_f64`'s correct rounding sets this size: with up to 768 decimal digits against the power of 2, the largest value is `2^56 x 10^1098 ~= 2^3704` (std/strnum's `cmp_scaled`).
+std/bignat	f32_from_bits	pub fn f32_from_bits(bits: U32): F32	the same bits read as a float; no numeric conversion
+std/bignat	f32_to_bits	pub fn f32_to_bits(v: F32): U32	the same bits read as an integer; no numeric conversion
+std/bignat	f64_from_bits	pub fn f64_from_bits(bits: U64): F64	the same bits read as a float; no numeric conversion
+std/bignat	f64_to_bits	pub fn f64_to_bits(v: F64): U64	the same bits read as an integer; no numeric conversion
+std/buf	Buf_writer	pub struct Buf_writer	a destination that writes into memory the caller holds
+std/buf	Buf_writer.c	pub fn c(r: Self$@, val: U8): Self$@	writes one byte, dropping it if it does not fit
+std/buf	Buf_writer.clear	pub fn clear(r: Self$@): Self$@	rewinds to the start and forgets any dropped bytes. Use it to reuse the same memory each cycle.
+std/buf	Buf_writer.flush	pub fn flush(r: Self$@): Self$@	does nothing; it exists to complete `Writer`
+std/buf	Buf_writer.len	pub len: Sz	how many bytes have been written so far
+std/buf	Buf_writer.new	pub fn new(buf: U8$[]): Buf_writer	creates a writer over the given destination. Pass a fixed-length array as `U8$[]::buf`. **Bytes that do not fit are dropped**, and only `overflowed()` reports it. Check it where the content matters (a protocol's body). It does not panic, because a long display string should not stop a program.
+std/buf	Buf_writer.overflowed	pub fn overflowed(r: Self@): Bool	whether any byte was dropped for not fitting
+std/buf	Buf_writer.s	pub fn s(r: Self$@, val: U8[]): Self$@	writes a string, dropping what does not fit
+std/buf	Buf_writer.slice	pub fn slice(r: Self@): U8[]	what has been written so far. Caution: It points into the caller's memory, so do not let it outlive that memory.
+std/buf	Buf_writer:Writer	impl Buf_writer: Writer	so it can be used wherever a `Writer` is expected
+std/bytes	U8$[].copy_from	pub fn copy_from(r: Self@, at: Sz, src: U8[]): Sz	copies into a position, drops what overflows, and returns the count copied. What does not fit is dropped. **It works even when the ranges overlap** (like memmove), so it can shift a range within one buffer; memcpy breaks there.
+std/bytes	U8$[].fill	pub fn fill(r: Self@, v: U8)	makes every byte `v`. Python's `buf[:] = bytes([v]) * len(buf)`.
+std/bytes	U8$[].put_u16_be	pub fn put_u16_be(r: Self@, at: Sz, v: U16)	writes two bytes, most significant first
+std/bytes	U8$[].put_u16_le	pub fn put_u16_le(r: Self@, at: Sz, v: U16)	writes two bytes, least significant first
+std/bytes	U8$[].put_u32_be	pub fn put_u32_be(r: Self@, at: Sz, v: U32)	writes four bytes, most significant first
+std/bytes	U8$[].put_u32_le	pub fn put_u32_le(r: Self@, at: Sz, v: U32)	writes four bytes, least significant first
+std/bytes	U8$[].put_u64_be	pub fn put_u64_be(r: Self@, at: Sz, v: U64)	writes eight bytes, most significant first
+std/bytes	U8$[].put_u64_le	pub fn put_u64_le(r: Self@, at: Sz, v: U64)	writes eight bytes, least significant first
+std/bytes	U8[].crc32	pub fn crc32(r: U8[], seed: U32): U32	the standard CRC-32; it can be continued across pieces
+std/bytes	U8[].get_u16_be	pub fn get_u16_be(r: U8[], at: Sz): U16	reads two bytes, most significant first
+std/bytes	U8[].get_u16_le	pub fn get_u16_le(r: U8[], at: Sz): U16	reads two bytes, least significant first
+std/bytes	U8[].get_u32_be	pub fn get_u32_be(r: U8[], at: Sz): U32	reads four bytes, most significant first
+std/bytes	U8[].get_u32_le	pub fn get_u32_le(r: U8[], at: Sz): U32	reads four bytes, least significant first
+std/bytes	U8[].get_u64_be	pub fn get_u64_be(r: U8[], at: Sz): U64	reads eight bytes, most significant first
+std/bytes	U8[].get_u64_le	pub fn get_u64_le(r: U8[], at: Sz): U64	reads eight bytes, least significant first
+std/chars	T$[].sub_mut	pub fn sub_mut(r: T$[], start: Sz, len: Sz): T$[]	a writable view of part of it, without copying
+std/chars	T[].sub	pub fn sub(r: T[], start: Sz, len: Sz): T[]	a view of part of it, without copying; out of range gives empty
+std/chars	T[].sub_from	pub fn sub_from(r: T[], start: Sz): T[]	a view from a position to the end, without copying. Caution: **Do not delegate to `sub`.** For a `U8[]$[]` receiver (what `List<|U8[]|>.slice()` returns), the `T` resolved inside disagrees and it fails with "expected 'U8[]$[]', but got 'U8[][]'". The clamping stays in `sub_count`.
+std/chars	U8.hex_val	pub fn hex_val(r: Self): I32	the value of one hex digit, or -1 if it is not one. An `I32`, so -1 can be told apart.
+std/chars	U8.is_alnum	pub fn is_alnum(r: Self): Bool	`is_alpha` or `is_digit`
+std/chars	U8.is_alpha	pub fn is_alpha(r: Self): Bool	an ASCII letter or `_`, so it can start an identifier. Unlike C's isalpha, it counts '_' as a letter.
+std/chars	U8.is_digit	pub fn is_digit(r: Self): Bool	`0`-`9`
+std/chars	U8.is_lower	pub fn is_lower(r: Self): Bool	`a`-`z` only; `_` does not count
+std/chars	U8.is_space	pub fn is_space(r: Self): Bool	a space, a tab, a newline or a carriage return
+std/chars	U8.is_upper	pub fn is_upper(r: Self): Bool	`A`-`Z` only; `_` does not count. **The range differs from `is_alpha`'s.** Use it where a capital first letter marks a type name.
+std/chars	U8.to_lower	pub fn to_lower(r: Self): U8	the lower-case letter, or the byte unchanged. ASCII only.
+std/chars	U8[].compare	pub fn compare(r: U8[], b: U8[]): I32	-1, 0 or 1 by bytes, for sorting. Like C's strcmp, it compares bytes, not a locale's collation; pass it to `seq.order_by`. `U8[]` has no `<`, since `<` would not say whether it compares contents or pointers.
+std/chars	U8[].contains_nul	pub fn contains_nul(r: U8[]): Bool	whether a NUL byte appears anywhere in it. The check to run before passing a string across the C boundary (see `to_cstr`).
+std/chars	U8[].count_codepoints	pub fn count_codepoints(r: U8[]): Sz	how many code points it holds. **It is not the byte count**: it counts only lead bytes, not `10xxxxxx`. **It does not stop even on a broken string.**
+std/chars	U8[].count_str	pub fn count_str(r: U8[], target: U8[]): Sz	how many times the text appears, without overlaps. **It counts from the start, and each match steps past itself** (the same places `std/str`'s `replace` replaces), so `"aaaa"` holds `"aa"` twice. **An empty text counts as zero**, as `replace` replaces none.
+std/chars	U8[].ends_with	pub fn ends_with(r: U8[], suffix: U8[]): Bool	whether the text appears at the end
+std/chars	U8[].equals_ignore_case	pub fn equals_ignore_case(r: U8[], b: U8[]): Bool	the same text, ignoring ASCII case. For a name whose case is not fixed, such as an HTTP header name. ASCII only: no Unicode folding (ß→ss).
+std/chars	U8[].find_char	pub fn find_char(r: U8[], ch: U8): I32	where the byte first appears, or -1
+std/chars	U8[].find_str	pub fn find_str(r: U8[], target: U8[]): I32	where the text first appears, or -1
+std/chars	U8[].hex4	pub fn hex4(r: U8[], at: Sz): I32	four hex digits as a number, or -1 when there are not four. Four, because every `\uXXXX` that uses it (JSON, KSPL, KSPEG) has four.
+std/chars	U8[].next_codepoint	pub fn next_codepoint(r: U8[], offset: Sz): Sz	how far to step to the next code point; 0 when offset is past the end
+std/chars	U8[].rfind_char	pub fn rfind_char(r: U8[], ch: U8): I32	where the byte last appears, or -1
+std/chars	U8[].starts_with	pub fn starts_with(r: U8[], prefix: U8[], offset: Sz = 0): Bool	whether the text appears at that position. **Omitting `offset` and writing `0` call the same function** (a default argument; the rule is "A default argument is allowed only for a foldable constant" in docs/DESIGN.md).
+std/chars	U8[].strip_prefix	pub fn strip_prefix(r: U8[], prefix: U8[]): U8[]	a view past the prefix, or the whole string. Python's `str.removeprefix`. Use it instead of `x.sub_from(7)`, whose count silently goes wrong when the string changes.
+std/chars	U8[].strip_suffix	pub fn strip_suffix(r: U8[], suffix: U8[]): U8[]	a view without the suffix, or all of it
+std/chars	U8[].trim_end	pub fn trim_end(r: U8[]): U8[]	a view without the trailing whitespace
+std/chars	U8[].trim_spaces	pub fn trim_spaces(r: U8[]): U8[]	a view with the whitespace at both ends dropped
+std/chars	U8[].trim_start	pub fn trim_start(r: U8[]): U8[]	a view past the leading whitespace. All three return a **view**, valid as long as `r` is, and share `U8.is_space`.
+std/chars	codepoint_byte	pub fn codepoint_byte(cp: I32, i: Sz): U8	one byte of a code point's UTF-8 encoding
+std/chars	codepoint_len	pub fn codepoint_len(cp: I32): Sz	how many bytes a code point takes in UTF-8, 1 to 4. **The count has its own function**, to get a `\uXXXX`'s length with no buffer to write to. **Refuse a surrogate (D800-DFFF) and anything over 10FFFF before passing it**; otherwise an invalid sequence is written and fails only later. Caution: `codepoint_byte`'s `i` must be less than this (beyond it, the last byte is returned).
+std/checked_int	Checked_error	pub enum Checked_error	why an operation could not give a result
+std/checked_int	Checked_error.div_by_zero	div_by_zero	the divisor was 0
+std/checked_int	Checked_error.overflow	overflow	the result does not fit in the type
+std/checked_int	Ci16	pub struct Ci16	a checked `I16`
+std/checked_int	Ci16.add	pub fn add(r: Self$@, rhs: Ci16): Ci16	the sum; overflow stops the program
+std/checked_int	Ci16.checked_add	pub fn checked_add(r: Self, rhs: Ci16): Ci16?Checked_error	the sum, or an error if it does not fit
+std/checked_int	Ci16.checked_div	pub fn checked_div(r: Self, rhs: Ci16): Ci16?Checked_error	the quotient, or an error for a 0 divisor or for the minimum / -1 (overflow)
+std/checked_int	Ci16.checked_mul	pub fn checked_mul(r: Self, rhs: Ci16): Ci16?Checked_error	the product, or an error if it does not fit
+std/checked_int	Ci16.checked_neg	pub fn checked_neg(r: Self): Ci16?Checked_error	the negated value, or an error if it does not fit
+std/checked_int	Ci16.checked_sub	pub fn checked_sub(r: Self, rhs: Ci16): Ci16?Checked_error	the difference, or an error if it does not fit
+std/checked_int	Ci16.div	pub fn div(r: Self$@, rhs: Ci16): Ci16	the quotient; a 0 divisor or overflow stops the program
+std/checked_int	Ci16.mul	pub fn mul(r: Self$@, rhs: Ci16): Ci16	the product; overflow stops the program
+std/checked_int	Ci16.neg	pub fn neg(r: Self$@): Ci16	the negated value; overflow stops the program
+std/checked_int	Ci16.new	pub fn new(v: I16): Ci16	wraps a plain value
+std/checked_int	Ci16.sub	pub fn sub(r: Self$@, rhs: Ci16): Ci16	the difference; overflow stops the program
+std/checked_int	Ci16.val	pub val: I16	the plain value
+std/checked_int	Ci16:Add<|Ci16, Ci16|>	impl Ci16: Add<|Ci16, Ci16|>	so `+` can be written
+std/checked_int	Ci16:Div<|Ci16, Ci16|>	impl Ci16: Div<|Ci16, Ci16|>	so `/` can be written
+std/checked_int	Ci16:Mul<|Ci16, Ci16|>	impl Ci16: Mul<|Ci16, Ci16|>	so `*` can be written
+std/checked_int	Ci16:Neg<|Ci16|>	impl Ci16: Neg<|Ci16|>	so a leading `-` can be written
+std/checked_int	Ci16:Sub<|Ci16, Ci16|>	impl Ci16: Sub<|Ci16, Ci16|>	so `-` can be written
+std/checked_int	Ci32	pub struct Ci32	a checked `I32`
+std/checked_int	Ci32.add	pub fn add(r: Self$@, rhs: Ci32): Ci32	the sum; overflow stops the program
+std/checked_int	Ci32.checked_add	pub fn checked_add(r: Self, rhs: Ci32): Ci32?Checked_error	the sum, or an error if it does not fit
+std/checked_int	Ci32.checked_div	pub fn checked_div(r: Self, rhs: Ci32): Ci32?Checked_error	the quotient, or an error for a 0 divisor or for the minimum / -1 (overflow)
+std/checked_int	Ci32.checked_mul	pub fn checked_mul(r: Self, rhs: Ci32): Ci32?Checked_error	the product, or an error if it does not fit
+std/checked_int	Ci32.checked_neg	pub fn checked_neg(r: Self): Ci32?Checked_error	the negated value, or an error if it does not fit
+std/checked_int	Ci32.checked_sub	pub fn checked_sub(r: Self, rhs: Ci32): Ci32?Checked_error	the difference, or an error if it does not fit
+std/checked_int	Ci32.div	pub fn div(r: Self$@, rhs: Ci32): Ci32	the quotient; a 0 divisor or overflow stops the program
+std/checked_int	Ci32.mul	pub fn mul(r: Self$@, rhs: Ci32): Ci32	the product; overflow stops the program
+std/checked_int	Ci32.neg	pub fn neg(r: Self$@): Ci32	the negated value; overflow stops the program
+std/checked_int	Ci32.new	pub fn new(v: I32): Ci32	wraps a plain value
+std/checked_int	Ci32.sub	pub fn sub(r: Self$@, rhs: Ci32): Ci32	the difference; overflow stops the program
+std/checked_int	Ci32.val	pub val: I32	the plain value
+std/checked_int	Ci32:Add<|Ci32, Ci32|>	impl Ci32: Add<|Ci32, Ci32|>	so `+` can be written
+std/checked_int	Ci32:Div<|Ci32, Ci32|>	impl Ci32: Div<|Ci32, Ci32|>	so `/` can be written
+std/checked_int	Ci32:Mul<|Ci32, Ci32|>	impl Ci32: Mul<|Ci32, Ci32|>	so `*` can be written
+std/checked_int	Ci32:Neg<|Ci32|>	impl Ci32: Neg<|Ci32|>	so a leading `-` can be written
+std/checked_int	Ci32:Sub<|Ci32, Ci32|>	impl Ci32: Sub<|Ci32, Ci32|>	so `-` can be written
+std/checked_int	Ci64	pub struct Ci64	a checked `I64`
+std/checked_int	Ci64.add	pub fn add(r: Self$@, rhs: Ci64): Ci64	the sum; overflow stops the program
+std/checked_int	Ci64.checked_add	pub fn checked_add(r: Self, rhs: Ci64): Ci64?Checked_error	the sum, or an error if it does not fit
+std/checked_int	Ci64.checked_div	pub fn checked_div(r: Self, rhs: Ci64): Ci64?Checked_error	the quotient, or an error for a 0 divisor or for the minimum / -1 (overflow)
+std/checked_int	Ci64.checked_mul	pub fn checked_mul(r: Self, rhs: Ci64): Ci64?Checked_error	the product, or an error if it does not fit
+std/checked_int	Ci64.checked_neg	pub fn checked_neg(r: Self): Ci64?Checked_error	the negated value, or an error if it does not fit
+std/checked_int	Ci64.checked_sub	pub fn checked_sub(r: Self, rhs: Ci64): Ci64?Checked_error	the difference, or an error if it does not fit
+std/checked_int	Ci64.div	pub fn div(r: Self$@, rhs: Ci64): Ci64	the quotient; a 0 divisor or overflow stops the program
+std/checked_int	Ci64.mul	pub fn mul(r: Self$@, rhs: Ci64): Ci64	the product; overflow stops the program
+std/checked_int	Ci64.neg	pub fn neg(r: Self$@): Ci64	the negated value; overflow stops the program
+std/checked_int	Ci64.new	pub fn new(v: I64): Ci64	wraps a plain value
+std/checked_int	Ci64.sub	pub fn sub(r: Self$@, rhs: Ci64): Ci64	the difference; overflow stops the program
+std/checked_int	Ci64.val	pub val: I64	the plain value
+std/checked_int	Ci64:Add<|Ci64, Ci64|>	impl Ci64: Add<|Ci64, Ci64|>	so `+` can be written
+std/checked_int	Ci64:Div<|Ci64, Ci64|>	impl Ci64: Div<|Ci64, Ci64|>	so `/` can be written
+std/checked_int	Ci64:Mul<|Ci64, Ci64|>	impl Ci64: Mul<|Ci64, Ci64|>	so `*` can be written
+std/checked_int	Ci64:Neg<|Ci64|>	impl Ci64: Neg<|Ci64|>	so a leading `-` can be written
+std/checked_int	Ci64:Sub<|Ci64, Ci64|>	impl Ci64: Sub<|Ci64, Ci64|>	so `-` can be written
+std/checked_int	Ci8	pub struct Ci8	a checked `I8`
+std/checked_int	Ci8.add	pub fn add(r: Self$@, rhs: Ci8): Ci8	the sum; overflow stops the program
+std/checked_int	Ci8.checked_add	pub fn checked_add(r: Self, rhs: Ci8): Ci8?Checked_error	the sum, or an error if it does not fit
+std/checked_int	Ci8.checked_div	pub fn checked_div(r: Self, rhs: Ci8): Ci8?Checked_error	the quotient, or an error for a 0 divisor or for the minimum / -1 (overflow)
+std/checked_int	Ci8.checked_mul	pub fn checked_mul(r: Self, rhs: Ci8): Ci8?Checked_error	the product, or an error if it does not fit
+std/checked_int	Ci8.checked_neg	pub fn checked_neg(r: Self): Ci8?Checked_error	the negated value, or an error if it does not fit. In two's complement -MIN has no positive counterpart, so only -MIN (and MIN/-1) overflows; the same holds for Ci16/Ci32/Ci64.
+std/checked_int	Ci8.checked_sub	pub fn checked_sub(r: Self, rhs: Ci8): Ci8?Checked_error	the difference, or an error if it does not fit
+std/checked_int	Ci8.div	pub fn div(r: Self$@, rhs: Ci8): Ci8	the quotient; a 0 divisor or overflow stops the program
+std/checked_int	Ci8.mul	pub fn mul(r: Self$@, rhs: Ci8): Ci8	the product; overflow stops the program
+std/checked_int	Ci8.neg	pub fn neg(r: Self$@): Ci8	the negated value; overflow stops the program
+std/checked_int	Ci8.new	pub fn new(v: I8): Ci8	wraps a plain value
+std/checked_int	Ci8.sub	pub fn sub(r: Self$@, rhs: Ci8): Ci8	the difference; overflow stops the program
+std/checked_int	Ci8.val	pub val: I8	the plain value
+std/checked_int	Ci8:Add<|Ci8, Ci8|>	impl Ci8: Add<|Ci8, Ci8|>	so `+` can be written
+std/checked_int	Ci8:Div<|Ci8, Ci8|>	impl Ci8: Div<|Ci8, Ci8|>	so `/` can be written
+std/checked_int	Ci8:Mul<|Ci8, Ci8|>	impl Ci8: Mul<|Ci8, Ci8|>	so `*` can be written
+std/checked_int	Ci8:Neg<|Ci8|>	impl Ci8: Neg<|Ci8|>	so a leading `-` can be written
+std/checked_int	Ci8:Sub<|Ci8, Ci8|>	impl Ci8: Sub<|Ci8, Ci8|>	so `-` can be written
+std/checked_int	Cu16	pub struct Cu16	a checked `U16`
+std/checked_int	Cu16.add	pub fn add(r: Self$@, rhs: Cu16): Cu16	the sum; overflow stops the program
+std/checked_int	Cu16.checked_add	pub fn checked_add(r: Self, rhs: Cu16): Cu16?Checked_error	the sum, or an error if it does not fit
+std/checked_int	Cu16.checked_div	pub fn checked_div(r: Self, rhs: Cu16): Cu16?Checked_error	the quotient, or an error for a 0 divisor
+std/checked_int	Cu16.checked_mul	pub fn checked_mul(r: Self, rhs: Cu16): Cu16?Checked_error	the product, or an error if it does not fit
+std/checked_int	Cu16.checked_sub	pub fn checked_sub(r: Self, rhs: Cu16): Cu16?Checked_error	the difference, or an error if it does not fit
+std/checked_int	Cu16.div	pub fn div(r: Self$@, rhs: Cu16): Cu16	the quotient; a 0 divisor stops the program
+std/checked_int	Cu16.mul	pub fn mul(r: Self$@, rhs: Cu16): Cu16	the product; overflow stops the program
+std/checked_int	Cu16.new	pub fn new(v: U16): Cu16	wraps a plain value
+std/checked_int	Cu16.sub	pub fn sub(r: Self$@, rhs: Cu16): Cu16	the difference; overflow stops the program
+std/checked_int	Cu16.val	pub val: U16	the plain value
+std/checked_int	Cu16:Add<|Cu16, Cu16|>	impl Cu16: Add<|Cu16, Cu16|>	so `+` can be written
+std/checked_int	Cu16:Div<|Cu16, Cu16|>	impl Cu16: Div<|Cu16, Cu16|>	so `/` can be written
+std/checked_int	Cu16:Mul<|Cu16, Cu16|>	impl Cu16: Mul<|Cu16, Cu16|>	so `*` can be written
+std/checked_int	Cu16:Sub<|Cu16, Cu16|>	impl Cu16: Sub<|Cu16, Cu16|>	so `-` can be written
+std/checked_int	Cu32	pub struct Cu32	a checked `U32`
+std/checked_int	Cu32.add	pub fn add(r: Self$@, rhs: Cu32): Cu32	the sum; overflow stops the program
+std/checked_int	Cu32.checked_add	pub fn checked_add(r: Self, rhs: Cu32): Cu32?Checked_error	the sum, or an error if it does not fit
+std/checked_int	Cu32.checked_div	pub fn checked_div(r: Self, rhs: Cu32): Cu32?Checked_error	the quotient, or an error for a 0 divisor
+std/checked_int	Cu32.checked_mul	pub fn checked_mul(r: Self, rhs: Cu32): Cu32?Checked_error	the product, or an error if it does not fit
+std/checked_int	Cu32.checked_sub	pub fn checked_sub(r: Self, rhs: Cu32): Cu32?Checked_error	the difference, or an error if it does not fit
+std/checked_int	Cu32.div	pub fn div(r: Self$@, rhs: Cu32): Cu32	the quotient; a 0 divisor stops the program
+std/checked_int	Cu32.mul	pub fn mul(r: Self$@, rhs: Cu32): Cu32	the product; overflow stops the program
+std/checked_int	Cu32.new	pub fn new(v: U32): Cu32	wraps a plain value
+std/checked_int	Cu32.sub	pub fn sub(r: Self$@, rhs: Cu32): Cu32	the difference; overflow stops the program
+std/checked_int	Cu32.val	pub val: U32	the plain value
+std/checked_int	Cu32:Add<|Cu32, Cu32|>	impl Cu32: Add<|Cu32, Cu32|>	so `+` can be written
+std/checked_int	Cu32:Div<|Cu32, Cu32|>	impl Cu32: Div<|Cu32, Cu32|>	so `/` can be written
+std/checked_int	Cu32:Mul<|Cu32, Cu32|>	impl Cu32: Mul<|Cu32, Cu32|>	so `*` can be written
+std/checked_int	Cu32:Sub<|Cu32, Cu32|>	impl Cu32: Sub<|Cu32, Cu32|>	so `-` can be written
+std/checked_int	Cu64	pub struct Cu64	a checked `U64`
+std/checked_int	Cu64.add	pub fn add(r: Self$@, rhs: Cu64): Cu64	the sum; overflow stops the program
+std/checked_int	Cu64.checked_add	pub fn checked_add(r: Self, rhs: Cu64): Cu64?Checked_error	the sum, or an error if it does not fit
+std/checked_int	Cu64.checked_div	pub fn checked_div(r: Self, rhs: Cu64): Cu64?Checked_error	the quotient, or an error for a 0 divisor
+std/checked_int	Cu64.checked_mul	pub fn checked_mul(r: Self, rhs: Cu64): Cu64?Checked_error	the product, or an error if it does not fit
+std/checked_int	Cu64.checked_sub	pub fn checked_sub(r: Self, rhs: Cu64): Cu64?Checked_error	the difference, or an error if it does not fit
+std/checked_int	Cu64.div	pub fn div(r: Self$@, rhs: Cu64): Cu64	the quotient; a 0 divisor stops the program
+std/checked_int	Cu64.mul	pub fn mul(r: Self$@, rhs: Cu64): Cu64	the product; overflow stops the program
+std/checked_int	Cu64.new	pub fn new(v: U64): Cu64	wraps a plain value
+std/checked_int	Cu64.sub	pub fn sub(r: Self$@, rhs: Cu64): Cu64	the difference; overflow stops the program
+std/checked_int	Cu64.val	pub val: U64	the plain value
+std/checked_int	Cu64:Add<|Cu64, Cu64|>	impl Cu64: Add<|Cu64, Cu64|>	so `+` can be written
+std/checked_int	Cu64:Div<|Cu64, Cu64|>	impl Cu64: Div<|Cu64, Cu64|>	so `/` can be written
+std/checked_int	Cu64:Mul<|Cu64, Cu64|>	impl Cu64: Mul<|Cu64, Cu64|>	so `*` can be written
+std/checked_int	Cu64:Sub<|Cu64, Cu64|>	impl Cu64: Sub<|Cu64, Cu64|>	so `-` can be written
+std/checked_int	Cu8	pub struct Cu8	a checked `U8`
+std/checked_int	Cu8.add	pub fn add(r: Self$@, rhs: Cu8): Cu8	the sum; overflow stops the program
+std/checked_int	Cu8.checked_add	pub fn checked_add(r: Self, rhs: Cu8): Cu8?Checked_error	the sum, or an error if it does not fit
+std/checked_int	Cu8.checked_div	pub fn checked_div(r: Self, rhs: Cu8): Cu8?Checked_error	the quotient, or an error for a 0 divisor
+std/checked_int	Cu8.checked_mul	pub fn checked_mul(r: Self, rhs: Cu8): Cu8?Checked_error	the product, or an error if it does not fit
+std/checked_int	Cu8.checked_sub	pub fn checked_sub(r: Self, rhs: Cu8): Cu8?Checked_error	the difference, or an error if it does not fit
+std/checked_int	Cu8.div	pub fn div(r: Self$@, rhs: Cu8): Cu8	the quotient; a 0 divisor stops the program
+std/checked_int	Cu8.mul	pub fn mul(r: Self$@, rhs: Cu8): Cu8	the product; overflow stops the program
+std/checked_int	Cu8.new	pub fn new(v: U8): Cu8	wraps a plain value
+std/checked_int	Cu8.sub	pub fn sub(r: Self$@, rhs: Cu8): Cu8	the difference; overflow stops the program
+std/checked_int	Cu8.val	pub val: U8	the plain value
+std/checked_int	Cu8:Add<|Cu8, Cu8|>	impl Cu8: Add<|Cu8, Cu8|>	so `+` can be written
+std/checked_int	Cu8:Div<|Cu8, Cu8|>	impl Cu8: Div<|Cu8, Cu8|>	so `/` can be written
+std/checked_int	Cu8:Mul<|Cu8, Cu8|>	impl Cu8: Mul<|Cu8, Cu8|>	so `*` can be written
+std/checked_int	Cu8:Sub<|Cu8, Cu8|>	impl Cu8: Sub<|Cu8, Cu8|>	so `-` can be written
+std/checked_int	I16.cast	pub fn cast(r: Self$@): Ci16	the same value, now checked
+std/checked_int	I16:Cast<|Ci16|>	impl I16: Cast<|Ci16|>	so `Ci16::v` turns a plain value into a checked one
+std/checked_int	I32.cast	pub fn cast(r: Self$@): Ci32	the same value, now checked
+std/checked_int	I32:Cast<|Ci32|>	impl I32: Cast<|Ci32|>	so `Ci32::v` turns a plain value into a checked one
+std/checked_int	I64.cast	pub fn cast(r: Self$@): Ci64	the same value, now checked
+std/checked_int	I64:Cast<|Ci64|>	impl I64: Cast<|Ci64|>	so `Ci64::v` turns a plain value into a checked one
+std/checked_int	I8.cast	pub fn cast(r: Self$@): Ci8	the same value, now checked
+std/checked_int	I8:Cast<|Ci8|>	impl I8: Cast<|Ci8|>	so `Ci8::v` turns a plain value into a checked one. It always succeeds (a thin alias for new()); the checking happens in the operations.
+std/checked_int	U16.cast	pub fn cast(r: Self$@): Cu16	the same value, now checked
+std/checked_int	U16:Cast<|Cu16|>	impl U16: Cast<|Cu16|>	so `Cu16::v` turns a plain value into a checked one
+std/checked_int	U32.cast	pub fn cast(r: Self$@): Cu32	the same value, now checked
+std/checked_int	U32:Cast<|Cu32|>	impl U32: Cast<|Cu32|>	so `Cu32::v` turns a plain value into a checked one
+std/checked_int	U64.cast	pub fn cast(r: Self$@): Cu64	the same value, now checked
+std/checked_int	U64:Cast<|Cu64|>	impl U64: Cast<|Cu64|>	so `Cu64::v` turns a plain value into a checked one
+std/checked_int	U8.cast	pub fn cast(r: Self$@): Cu8	the same value, now checked
+std/checked_int	U8:Cast<|Cu8|>	impl U8: Cast<|Cu8|>	so `Cu8::v` turns a plain value into a checked one
+std/db	Column_kind	pub enum Column_kind	what kind of value a column of the current row holds
+std/db	Column_kind.blob	blob	raw bytes
+std/db	Column_kind.float	float	a floating-point number
+std/db	Column_kind.integer	integer	a whole number
+std/db	Column_kind.null_value	null_value	SQL's NULL
+std/db	Column_kind.text	text	text
+std/db	Db	pub struct Db	one open database, which prepares statements
+std/db	Db.exec #cfg(db)	pub fn exec(r: Self$@, sql: U8[]): Void?Db_error	prepares, steps and frees in one call, for SQL with no parameters and no rows. Use it for `CREATE TABLE` / `INSERT` / `UPDATE` / `DELETE`.
+std/db	Db.free #cfg(db)	pub fn free(r: Self$@)	closes the database and frees it. Caution: **The name must be `free`.** The use-after-free check treats a call as a release when "the receiver's type conforms to `Owned` and the method called is `free`" (get_free_call_receiver in ksplc/sema/flow/track.kspls). Under a different name, `c.free(); c.query(…);` compiles with no diagnostics ([W0108] reports it).
+std/db	Db.last_insert_rowid #cfg(db)	pub fn last_insert_rowid(r: Self$@): I64	the row id the last `INSERT` created
+std/db	Db.open #cfg(!db)	pub fn open(_path: U8[]): Db$@?Db_error	always fails with `unsupported`; `make DB=1` turns it on
+std/db	Db.open #cfg(db)	pub fn open(path: U8[]): Db$@?Db_error	opens a database, creating the file if it does not exist
+std/db	Db.prepare #cfg(db)	pub fn prepare(r: Self$@, sql: U8[]): Statement$@?Db_error	prepares one statement from SQL. Caution: The caller frees it with `stmt.free()`.
+std/db	Db:Owned #cfg(db)	impl Db: Owned	it owns its memory and releases it with `free()`
+std/db	Db_error	pub enum Db_error	why a database operation failed
+std/db	Db_error.bind_failed	bind_failed	a parameter could not be bound: an index out of range or similar
+std/db	Db_error.buffer_too_small	buffer_too_small	the buffer for a text column is shorter than `column_bytes`
+std/db	Db_error.column_type	column_type(mismatched: U8[])	the column's kind does not match the kind in the table
+std/db	Db_error.missing_column	missing_column(missing: U8[])	no column or parameter matches a field in the table. Only `bind_row` / `read_row` return this and the next error. Caution: **These two errors keep a default from being filled in silently** (the reason is in "a trait returning a table" in `../docs/DESIGN.md`).
+std/db	Db_error.open_failed	open_failed	the file could not be opened: a bad path, no permission, or similar
+std/db	Db_error.prepare_failed	prepare_failed	the SQL could not be prepared: a syntax error or similar
+std/db	Db_error.step_failed	step_failed	the step returned something other than a row or the end
+std/db	Db_error.unsupported	unsupported	the build did not use `make DB=1` (the default build)
+std/db	Statement	pub struct Statement	one prepared statement, which is bound, stepped and read
+std/db	Statement.bind_f64 #cfg(db)	pub fn bind_f64(r: Self$@, idx: I32, val: F64): Void?Db_error	binds a floating-point number to a parameter
+std/db	Statement.bind_i64 #cfg(db)	pub fn bind_i64(r: Self$@, idx: I32, val: I64): Void?Db_error	binds an integer to a parameter
+std/db	Statement.bind_null #cfg(db)	pub fn bind_null(r: Self$@, idx: I32): Void?Db_error	binds SQL's NULL to a parameter
+std/db	Statement.bind_row #cfg(db)	pub fn bind_row<|T: reflect.Reflectable|>(r: Self$@, v: T@): Void?Db_error	binds a whole table type to `:field` parameters. **It matches by name** (`:field`, and the column's name when reading). Caution: **If it matched by position, swapping two columns in the SQL would silently read the wrong one** for as long as their types agree. `v` is a `T@`: passed by value, the field offsets would point into a temporary.
+std/db	Statement.bind_text #cfg(db)	pub fn bind_text(r: Self$@, idx: I32, val: U8[]): Void?Db_error	binds text to a parameter
+std/db	Statement.column_bytes #cfg(db)	pub fn column_bytes(r: Self$@, col: I32): Sz	the length of that text column, for allocating a buffer of that size
+std/db	Statement.column_count #cfg(db)	pub fn column_count(r: Self$@): I32	how many columns a row of this statement has
+std/db	Statement.column_f64 #cfg(db)	pub fn column_f64(r: Self$@, col: I32): F64	that column of the current row, as a floating-point number
+std/db	Statement.column_i64 #cfg(db)	pub fn column_i64(r: Self$@, col: I32): I64	that column of the current row, as an integer
+std/db	Statement.column_kind #cfg(db)	pub fn column_kind(r: Self$@, col: I32): Column_kind	what kind of value that column of the current row holds
+std/db	Statement.column_text #cfg(db)	pub fn column_text(r: Self$@, col: I32, buf: U8$[]): Sz?Db_error	copies that text column out, and returns how many bytes it copied
+std/db	Statement.free #cfg(db)	pub fn free(r: Self$@)	frees the prepared statement
+std/db	Statement.read_row #cfg(db)	pub fn read_row<|T: reflect.Reflectable|>(r: Self$@, out: T$@, arena: Arena$@): Void?Db_error	reads the current row into a whole table type. **If no column matches a field, it fails** (the reason is at `Db_error`). Caution: **Copy the names into `arena`.** The names sqlite returns become invalid on the next `step()`.
+std/db	Statement.reset #cfg(db)	pub fn reset(r: Self$@): Void?Db_error	rewinds to run again, keeping the bound values
+std/db	Statement.step #cfg(db)	pub fn step(r: Self$@): Step_result?Db_error	runs to the next row, or to the end
+std/db	Statement:Owned #cfg(db)	impl Statement: Owned	it owns its memory and releases it with `free()`
+std/db	Step_result	pub enum Step_result	the result of one step of a statement
+std/db	Step_result.done	done	the statement ran to the end, and there is no current row
+std/db	Step_result.row	row	a row is ready, and its columns can be read
+std/ds	Ds_error	pub enum Ds_error	why a container lookup failed
+std/ds	Ds_error.key_not_found	key_not_found	there is no entry for that key
+std/ds	Hashable	pub trait Hashable<|Key|>	what a type must provide to be a `Map`'s key. A key type declares `impl X: ds.Hashable<|X|>`; `Map`'s type argument carries the constraint, so a type that does not meet it is diagnosed in the user's code, not inside std. `Self` cannot be written on a non-receiver parameter, so the other key arrives as `Key`.
+std/ds	Hashable.equals	fn equals(r: Self, other: Key): Bool	whether the two are the same key
+std/ds	Hashable.hash	fn hash(r: Self): U32	a value spread over the buckets; equal keys must give equal values
+std/ds	I32.equals	pub fn equals(r: Self@, other: I32): Bool	whether the two are the same number
+std/ds	I32.hash	pub fn hash(r: Self@): U32	the value spread over the buckets
+std/ds	I32:Hashable<|I32|>	impl I32: Hashable<|I32|>	so an `I32` can be a `Map`'s key. A primitive's method receives r as a pointer, so the value is r$
+std/ds	List	pub struct List<|T|>	a sequence of elements that grows as elements are pushed
+std/ds	List.arena	pub arena: Arena$@	where the elements go; null means the global heap
+std/ds	List.cap	pub cap: Sz	how many fit before it has to grow
+std/ds	List.len	pub len: Sz	how many elements it holds
+std/ds	List.ptr	pub ptr: T$@	the memory holding the elements
+std/ds	List<|T|>.at #inline	pub fn at(r: Self$@, index: Sz, file: U8[], line: Sz): T$@	the element's address, not a copy
+std/ds	List<|T|>.at_ref #inline	pub fn at_ref(r: Self@, index: Sz, file: U8[], line: Sz): T@	the element, read-only
+std/ds	List<|T|>.create	pub fn create(arena: Arena$@): List<|T|>$@	an empty list stored in the arena itself, to be passed around as a pointer
+std/ds	List<|T|>.free	pub fn free(r: Self$@)	frees the elements and the memory. Caution: **Release the elements' ownership before freeing the memory.** If T holds ARC content, assigning the zero value releases the old value; without it all the contents leak on every discard, where the caller cannot reach them. Without ARC it is a cheap write.
+std/ds	List<|T|>.get #inline	pub fn get(r: Self@, index: Sz): T	a copy of the element; out of range stops the program
+std/ds	List<|T|>.insert	pub fn insert(r: Self$@, index: Sz, item: T, file: U8[] = caller_file, line: Sz = caller_line)	inserts one element, shifting the following elements along
+std/ds	List<|T|>.new	pub fn new(arena: Arena$@ = null): List<|T|>	an empty list, which has allocated no memory yet. **`arena` is "where the elements go"**; the `List` itself is the caller's variable. Without an arena, free it with `defer xs.free()`.
+std/ds	List<|T|>.new_with_cap	pub fn new_with_cap(initial_cap: Sz, arena: Arena$@ = null): List<|T|>	an empty list with room already allocated, so it need not grow
+std/ds	List<|T|>.push #inline	pub fn push(r: Self$@, item: T)	adds one element at the end, growing if it must
+std/ds	List<|T|>.remove_at	pub fn remove_at(r: Self$@, index: Sz, file: U8[] = caller_file, line: Sz = caller_line)	removes one element, shifting the following elements back. Caution: **Overwrite the freed last slot with zero.** If T holds ARC content, that assignment releases the old value being overwritten (the same reason as in `free`); without it, every removal leaks.
+std/ds	List<|T|>.set #inline	pub fn set(r: Self$@, index: Sz, item: T)	writes one element; out of range stops the program
+std/ds	List<|T|>.slice	pub fn slice(r: Self$@): T$[]	a view of every element, for a function that takes a slice. Caution: It is borrowed: a push/insert that grows the capacity reallocates the memory and invalidates it (the same promise as Str_builder.slice's).
+std/ds	List<|T|>.sub	pub fn sub(r: Self$@, start: Sz, len: Sz): T$[]	a view of part of it; out of range gives an empty view instead of stopping. **Out of range it returns empty; it does not panic** (unlike `xs[i]`, see `Index` below). Caution: **Do not build the descriptor by hand.** `T$[]::{ .ptr = xs.ptr + s, .len = xs.len - s }` has length −1 when `xs` is empty, and code that trusts `len` reads on forever.
+std/ds	List<|T|>.sub_from	pub fn sub_from(r: Self$@, start: Sz): T$[]	a view from a position to the end
+std/ds	List<|T|>:Index<|Sz, T|>	impl<|T|> List<|T|>: Index<|Sz, T|>	so `xs[i]` reads an element. An index out of range panics: the caller can check it against len, so a failure is a bug. Map.get/remove are recoverable (V?Ds_error/Bool), since a key's presence is run-time data.
+std/ds	List<|T|>:Index_mut<|Sz, T|>	impl<|T|> List<|T|>: Index_mut<|Sz, T|>	so `xs[i] = v` writes an element
+std/ds	List<|T|>:Index_place<|Sz, T|>	impl<|T|> List<|T|>: Index_place<|Sz, T|>	so `xs[i] += v` and `xs[i]@` can be written. It makes `l[i]` an lvalue, as with a built-in slice; with only get/set a compound assignment cannot be built, and `@` would give a temporary's address.
+std/ds	List<|T|>:Index_ref<|Sz, T|>	impl<|T|> List<|T|>: Index_ref<|Sz, T|>	so `xs[i]` through a read-only pointer copies nothing. **`at` cannot be used through a read-only pointer (`xs: List<|T|>@`).** Without this impl, `xs[i]` there resolves to `get` and **copies the whole element**, even for `xs[i].f`, and `xs[i]@` is rejected.
+std/ds	List<|T|>:Owned	impl<|T|> List<|T|>: Owned	it owns its resources and releases them with `free()`.
+std/ds	Map	pub struct Map<|K: Hashable<|K|>, V|>	keys to values, held in an open-addressed table
+std/ds	Map.arena	pub arena: Arena$@	where the slots go; null means the global heap
+std/ds	Map.cap	pub cap: Sz	how many slots there are, always a power of two
+std/ds	Map.entries	pub entries: Map_entry<|K, V|>$@	the slots, `cap` of them
+std/ds	Map.len	pub len: Sz	how many live pairs it holds
+std/ds	Map.used	pub used: Sz	live slots and tombstones together, which decide a resize. **Growth is decided by this, not by len.** With len, repeated set and remove fill the table with tombstones until no insertion point can be found.
+std/ds	Map<|K, V|>.free	pub fn free(r: Self$@)	frees the pairs and the memory. As in `List.free`, the live slots' ownership is released before the memory is freed.
+std/ds	Map<|K, V|>.get	pub fn get(r: Self$@, key: K): V?Ds_error	the value for the key, or an error if absent
+std/ds	Map<|K, V|>.items	pub fn items(r: Self$@): Map_seq<|K, V|>	a chain over the live pairs (`for e in m.items()`). Caution: **Do not return a list.** It would instantiate **all of `List` for the nested element type** for every `Map`, increasing translation time and peak memory ("A function that returns every entry does not build a nested generic" in `std/docs/DESIGN.md`).
+std/ds	Map<|K, V|>.new	pub fn new(arena: Arena$@ = null): Map<|K, V|>	an empty map, which has allocated no memory yet. **`arena` is "where the elements go"** (as with `List.new`).
+std/ds	Map<|K, V|>.new_with_cap	pub fn new_with_cap(initial_cap: Sz, arena: Arena$@ = null): Map<|K, V|>	an empty map with slots already allocated, so it need not resize. The bucket is hash & (cap - 1), hence the power of two (resize() doubles from 32).
+std/ds	Map<|K, V|>.remove	pub fn remove(r: Self$@, key: K): Bool	removes a pair, leaving a tombstone; false if there was none
+std/ds	Map<|K, V|>.set	pub fn set(r: Self$@, key: K, value: V)	stores a pair, replacing any old value for the key
+std/ds	Map<|K, V|>:Index<|K, V?Ds_error|>	impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Index<|K, V?Ds_error|>	so `m[k]` reads a pair
+std/ds	Map<|K, V|>:Index_mut<|K, V|>	impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Index_mut<|K, V|>	so `m[k] = v` writes a pair
+std/ds	Map<|K, V|>:Owned	impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Owned	it owns its memory, released with `free()`
+std/ds	Map_entry	pub struct Map_entry<|K, V|>	one slot of a `Map`, live, empty or a tombstone
+std/ds	Map_entry.hash	pub hash: U32	the key's hash, kept so a resize need not compute it again
+std/ds	Map_entry.is_active	pub is_active: Bool	whether this slot holds a live pair
+std/ds	Map_entry.is_tombstone	pub is_tombstone: Bool	whether a removal left a mark here, which a lookup skips. An insertion reuses it. **Without it, a removal hides the keys after it**: a colliding key sits one slot further on, and a plain empty slot before it ends the lookup.
+std/ds	Map_entry.key	pub key: K	the key as it was passed in
+std/ds	Map_entry.value	pub value: V	the value stored for the key
+std/ds	Map_seq	pub struct Map_seq<|K: Hashable<|K|>, V|>	walks a `Map` one live pair at a time. It is the chain step that walks a `Map`. **It does not allocate** (see `items`).
+std/ds	Map_seq<|K, V|>.next	pub fn next(r: Self$@): Option<|Map_entry<|K, V|>$@|>	the next live pair, or nothing. Caution: **Skip the empty slots** (their content is undefined); a tombstone is not active.
+std/ds	Map_seq<|K, V|>:Iter<|Map_entry<|K, V|>$@|>	impl<|K: Hashable<|K|>, V|> Map_seq<|K, V|>: Iter<|Map_entry<|K, V|>$@|>	so a `for` drives it
+std/ds	Sz.equals	pub fn equals(r: Self@, other: Sz): Bool	whether the two are the same number
+std/ds	Sz.hash	pub fn hash(r: Self@): U32	the value spread over the buckets
+std/ds	Sz:Hashable<|Sz|>	impl Sz: Hashable<|Sz|>	so an `Sz` can be a `Map`'s key. `Sz` is here because keying on a pointer's address is common. Caution: **Do not put an impl that makes a built-in type a key of std's containers in the compiler**, which would invert the layers; it goes here, next to the trait that requires it.
+std/ds	fmix32	pub fn fmix32(h: U32): U32	MurmurHash3's finalizer, for a hash whose differences are in the high bits. `Map` takes the bucket from the low bits with `hash & (cap-1)`, so **a key whose differences are in the high bits** (a string through FNV, a sequential I32) runs its hash through this at the end of `hash()`. Caution: **Do not add it everywhere.** It costs extra work per lookup, and in a `hash` that runs in the innermost loop that cost outweighs the better spread (for a parser's memo key it slows self-hosting's parse by 10-20%).
+std/fs	File_info	pub struct File_info	what the OS reports about one path
+std/fs	File_info.is_dir	pub is_dir: Bool	whether it is a directory
+std/fs	File_info.mtime	pub mtime: I64	the last modification time, in Unix epoch seconds, UTC
+std/fs	File_info.size	pub size: I64	the size in bytes
+std/fs	File_lock	pub struct File_lock	a lock on a file; another process that asks for it waits. **The OS releases it when the process ends**, however it ends (flock / LockFileEx), so no lock outlives its holder, as a hand-made lock file does after a crash. The file serves only as a name: nothing is written to it, and it stays where it was created.
+std/fs	File_lock.free	pub fn free(r: Self$@)	releases the lock and closes the file
+std/fs	File_lock.take	pub fn take(path: U8[]): File_lock?Fs_error	takes the lock, waiting while another holds it
+std/fs	File_lock.try_take	pub fn try_take(path: U8[]): File_lock?Fs_error	takes the lock if free, without waiting. If someone else holds it, it throws `held_elsewhere`, so a caller can report the wait first.
+std/fs	File_lock:Move_only	impl File_lock: Move_only	copying it would release one lock twice
+std/fs	File_lock:Owned	impl File_lock: Owned	it owns its lock and releases it with `free()`
+std/fs	Fs_error	pub enum Fs_error	why a filesystem operation failed. Every failure in this file is returned as this type (the same convention as `?Io_error` in `std/io.kspls`). Only the predicates (`exists` / `is_dir`) do not fail, so they return `Bool`. Splitting `operation_failed` further would need errno passed up from the C code (ksplc/gen/runtime/hosted.c). Do not split into variants what the code cannot tell apart.
+std/fs	Fs_error.held_elsewhere	held_elsewhere	another holder has the lock (only `File_lock.try_take`, which does not wait)
+std/fs	Fs_error.invalid_path	invalid_path	a path the OS cannot take, such as one containing a NUL
+std/fs	Fs_error.mkdir_failed	mkdir_failed(at: U8[])	the segment that could not be created, as a view into the path. **Which segment it stopped at** tells a path problem from a permission problem. It is not a copy; to keep it longer than the caller's path, the caller copies it.
+std/fs	Fs_error.not_found	not_found	the named path does not exist, or could not be opened
+std/fs	Fs_error.operation_failed	operation_failed	the OS refused; it cannot tell whether it exists, permission, or no parent
+std/fs	Fs_error.too_deep	too_deep	a walk reached the depth limit (see `max_walk_depth`)
+std/fs	absolute	pub fn absolute(path: U8[], arena: Arena$@): U8[]?Fs_error	the full path from the root: a relative path joined to the working directory. **Only the text is joined**; `..` and links stay, since folding `a/link/..` into `a` names a different place when `link` points elsewhere (Rust's `std::path::absolute` keeps them too). Caution: **Pass a path for a child through this** before starting it in another directory; a relative path is resolved from the child's directory, not the caller's.
+std/fs	can_run	pub fn can_run(path: U8[]): Bool	whether it can actually be started on this system. On Windows the extension decides (the trap is at `is_executable`). A folder cannot be started on either.
+std/fs	copy_tree	pub fn copy_tree(from: U8[], to: U8[], skip_dir: fn(name: U8[]): Bool, arena: Arena$@): Void?Fs_error	copies every file under one directory to a path that does not exist yet. The relative layout is kept; only one file at a time is in memory. Caution: **It fails if the destination already exists.** A copy mixed with files left by an earlier run is not a copy of the tree, and nothing in it would show that.
+std/fs	exists	pub fn exists(path: U8[]): Bool	whether anything exists at that path
+std/fs	is_dir	pub fn is_dir(path: U8[]): Bool	whether it is a directory; a link to one counts
+std/fs	is_executable	pub fn is_executable(path: U8[]): Bool	whether the owner's execute bit is set; Windows: false. Close to Python's `os.access(p, os.X_OK)`. **Always false on Windows**, which has no execute bit. Caution: **Do not use this to decide "can it be started"**: `can_run` below answers that.
+std/fs	is_link	pub fn is_link(path: U8[]): Bool	whether it is a link, without following it. **`is_dir` cannot tell**: it follows the link. A tree walk must **first decide whether it may follow the link**. A path that does not exist gives false (the functions that create paths call this).
+std/fs	is_safe_relative	pub fn is_safe_relative(path: U8[]): Bool	whether the path's text alone cannot climb out. Caution: **This alone does not keep a path under the root.** It checks only the text, so **it cannot stop a way out through a link inside the root**. It checks segment by segment (matching `..` as a substring would also refuse `..foo`). **Do not make the answer depend on `sys.is_windows()`**, or a path that is safe on Linux becomes a hole on Windows only.
+std/fs	join	pub fn join(a: U8[], b: U8[], arena: Arena$@): U8[]	a path with a segment appended (Python's `os.path.join`). It always writes `/`, which Windows also accepts, so it never builds a mixed path; separators at the join are not doubled. To split a path, use `sys.get_dir_name` / `sys.get_file_name`.
+std/fs	max_path_len	pub const max_path_len: Sz = 4095	the longest path passed to the OS; a longer one fails. The runtime copies a path into a fixed-length buffer. Caution: **Never truncate a longer path and pass it on.** The caller would get **the result of an operation on a different path** (a remove that deletes something else).
+std/fs	mkdir	pub fn mkdir(path: U8[]): Void?Fs_error	creates one directory; fails if the path exists
+std/fs	mkdir_all	pub fn mkdir_all(path: U8[]): Void?Fs_error	creates every missing level (`mkdir -p`). A level that already exists counts as success. On a failure part way, it **stops there and throws** `mkdir_failed` with the segment it could not create.
+std/fs	mkdir_unique	pub fn mkdir_unique(base: U8[], prefix: U8[], arena: Arena$@): U8[]?Fs_error	creates a directory with a name nobody has used, and returns its path. **Creating it decides that it is new, not checking first**: `mkdir` fails on a path that exists, a link included. A used name is retried with another random suffix (Python's `mkdtemp`). **Nothing removes it.** Its creator removes it, or the directory that holds it.
+std/fs	read_dir	pub fn read_dir(path: U8[], arena: Arena$@): List<|U8[]|>?Fs_error	one directory's entries, without descending. `.` and `..` are skipped, so the list holds only the entries.
+std/fs	remove_path	pub fn remove_path(path: U8[]): Void?Fs_error	deletes a file, or an empty directory
+std/fs	rename_path	pub fn rename_path(old_path: U8[], new_path: U8[]): Void?Fs_error	renames or moves a file or a directory
+std/fs	skip_build_output	pub fn skip_build_output(name: U8[]): Bool	a `skip_dir` that leaves out `out` and `.git`. A repository's build output and git's own folder: neither holds a file anyone wrote there.
+std/fs	skip_none	pub fn skip_none(_name: U8[]): Bool	a `skip_dir` that enters every directory
+std/fs	stat	pub fn stat(path: U8[]): File_info?Fs_error	what the OS reports about a path, following links
+std/fs	stays_under	pub fn stays_under(root: U8[], rel: U8[]): Bool	whether a relative path really stays inside the root, links included. **Pass untrusted input through this.** It does both the text check (`is_safe_relative`) and the check that no segment along the way is a link. Caution: **Do not make callers call the two checks separately.** If each caller decides which one it needs, the next caller added forgets one.
+std/fs	walk_dirs	pub fn walk_dirs(path: U8[], skip_dir: fn(name: U8[]): Bool, arena: Arena$@): List<|U8[]|>?Fs_error	every directory under a path, in one flat list. The order, the prefix and `skip_dir` work as in `walk_files`, and `path` itself is **not included** (it is a list of what is inside).
+std/fs	walk_files	pub fn walk_files(path: U8[], skip_dir: fn(name: U8[]): Bool, arena: Arena$@): List<|U8[]|>?Fs_error	every file under a path, in one flat list (a narrower Python `os.walk`). Each element starts with `path` (`walk_files(".")` gives `./std/io.kspls`). **Exclude `.git` and `out`** (`skip_build_output`) in a repository, or the time and the result grow by an order of magnitude.
+std/fs	write_tree	pub fn write_tree(dir: U8[], rels: U8[][], bodies: U8[][], arena: Arena$@): Void?Fs_error	writes files under a directory, creating missing levels. `rels[i]` gets the contents `bodies[i]`; an existing file at that name is overwritten. Caution: **A name that climbs out fails before anything is written** (`is_safe_relative`). A link inside the tree is still followed.
+std/fuzz	Campaign	pub struct Campaign	one fuzz run: the program under test, the input it reads, and its report
+std/fuzz	Campaign.after	pub after: U8[][]	the arguments that come after the input file
+std/fuzz	Campaign.again	pub again: U8[]	the command that starts this fuzz run, without the two numbers
+std/fuzz	Campaign.argv	pub argv: U8[][]	the program and the arguments that come before the input file
+std/fuzz	Campaign.in_turn	pub in_turn: Bool	the kinds are taken in turn, not drawn at random
+std/fuzz	Campaign.kinds	pub kinds: Input_kind[]	the kinds of input; a trial takes one, then a seed of it (`pick`)
+std/fuzz	Campaign.reach_div	pub reach_div: Sz	at least one trial in this many must be accepted (`check_reach`)
+std/fuzz	Campaign.subject	pub subject: U8[]	the program under test, as the lines name it (`ksplc`, `std`)
+std/fuzz	Campaign.tell_kind	pub tell_kind: Bool	the kind's name goes before the input file (`<exe> <kind> <file>`)
+std/fuzz	Campaign.wait_ms	pub wait_ms: I32	a trial's first timeout (`run_trial`)
+std/fuzz	Campaign.work	pub work: U8[]	where each trial's input is written, and a failing one kept
+std/fuzz	Findings	pub struct Findings	the findings, grouped by how the trials ended
+std/fuzz	Input_kind	pub struct Input_kind	one kind of input the program under test reads
+std/fuzz	Input_kind.ext	pub ext: U8[]	the input file's ending. Caution: **Name it as the program expects for that kind**: another name can take another code path.
+std/fuzz	Input_kind.name	pub name: U8[]	the kind's name: what a seed's `kind` holds, and what the program is told
+std/fuzz	Opts	pub struct Opts	the two numbers of a fuzz run, which reproduce it
+std/fuzz	Opts.seed	pub seed: I64	the random generator's starting seed
+std/fuzz	Opts.trials	pub trials: I64	how many trials
+std/fuzz	Sample	pub struct Sample	one seed: bytes to mutate, and where they came from
+std/fuzz	Sample.built	pub built: Bool	the program's own writer made it, so the program must read it back. `check_seeds` fails when such a seed is refused; any other refused seed is dropped.
+std/fuzz	Sample.data	pub data: U8[]	its bytes, never changed (`mutate` changes a copy)
+std/fuzz	Sample.kind	pub kind: U8[]	which input kind it is passed as (`Input_kind.name`)
+std/fuzz	Sample.name	pub name: U8[]	where it came from; a finding uses this name
+std/fuzz	Setup	pub struct Setup	what a fuzz driver's command line names
+std/fuzz	Setup.again	pub again: U8[]	the command that runs the driver again, without the two numbers
+std/fuzz	Setup.dirs	pub dirs: U8[][]	the seed folders (`.` when none is named); empty for a driver taking none
+std/fuzz	Setup.exe	pub exe: U8[]	the program under test, as a full path
+std/fuzz	Setup.work	pub work: U8[]	the work folder, as a full path; it stands once `setup` returns
+std/fuzz	Trial	pub struct Trial	the outcome of one trial
+std/fuzz	Trial.got	pub got: subproc.Run_result	the run; the rerun with a longer timeout if the first timed out
+std/fuzz	Trial.slow	pub slow: Bool	it timed out the first time but ended within the longer timeout. Caution: **Report it when it is true** (`note` does): a trial near the timeout will one day look hung.
+std/fuzz	check_dirs	pub fn check_dirs(dirs: U8[][], arena: Arena$@): Void?U8[]	fails unless every seed folder stands. Caution: **A seed folder that does not exist is an error**, not a folder with no seeds: a path broken on its way here would fuzz with fewer seeds and pass.
+std/fuzz	check_seeds	pub fn check_seeds(c: Campaign@, all: List<|Sample|>@, arena: Arena$@): List<|Sample|>	has the program read every seed once, and returns those it accepted. Caution: **Do not continue silently if a seed cannot be written**: the program then reads the previous trial's input, and the input fuzzed and the finding disagree. **Drop a refused seed here, before fuzzing**, or every trial mutates a seed that is unreadable from the start.
+std/fuzz	declare	pub fn declare(p: argp.Parser$@, o: Opts$@)	adds `--trials` and `--seed` to the caller's parser. The values in `o` at the call are the defaults. **Declare both options through this**: the same names everywhere let the reproduce line of `report_all` run as printed.
+std/fuzz	findings_new	pub fn findings_new(arena: Arena$@): Findings	an empty set of findings
+std/fuzz	gather	pub fn gather(dirs: U8[][], endings: U8[][], cap: I64, arena: Arena$@): List<|Sample|>	collects the files with the given endings under the folders, as seeds. **In the order the folders are given, and within a folder in path order**, so the seeds are the same on every machine. The kind is the ending that matched; the name is the path below. Caution: **Nothing under a folder named `out` or `.git`**: a seed list that changes with the last build reproduces nothing.
+std/fuzz	mutate	pub fn mutate(src: U8[], r: Prng$@, arena: Arena$@): U8[]	returns the bytes with one random mutation applied. A bit flipped, bytes dropped, random bytes inserted, a run copied, the end cut off, or two bytes swapped. Empty input is returned unchanged.
+std/fuzz	note	pub fn note(f: Findings, t: Trial@, trial: Sz, seed_name: U8[], data: U8[], dir: U8[], ext: U8[], arena: Arena$@)	records one trial, and saves its input if it is a finding. **A trial that ended with the program's own answer is not recorded**: that is the normal end. A slow one (`Trial.slow`) is said on a line of its own.
+std/fuzz	pick	pub fn pick(all: List<|Sample|>@, kind: U8[], r: Prng$@): Sz	one seed of the given kind, or `all.len` if there is none. Caution: **It does not pick from all seeds**, or a kind with few seeds would almost never be tested; the caller picks the kind first.
+std/fuzz	report_all	pub fn report_all(f: Findings, o: Opts, subject: U8[], wait_ms: I32, again: U8[], arena: Arena$@)	prints the findings, the three check lines, and how to run it again. Caution: **Keep the three lines separate**, or the verdict cannot tell a crash from a hang. **A fuzz run with no trials is a failure**, not three passes over nothing.
+std/fuzz	run_trial	pub fn run_trial(argv: U8[][], ms: I32, arena: Arena$@): Trial	runs one trial, in the caller's working directory. **A trial that times out is run again with a longer timeout** before it counts as a hang: a busy machine can slow a finite trial past a wall-clock timeout.
+std/fuzz	scatter	pub fn scatter(c: Campaign@, seeds: List<|Sample|>@, what: U8[], o: Opts, arena: Arena$@): Void?U8[]	runs the trials, checks that they reached the program, and reports them. A kind with no seed is reported as skipped and left out of the draw.
+std/fuzz	setup	pub fn setup(p: argp.Parser$@, o: Opts$@, run_as: U8[], program: U8[], seed_dirs: Bool, arena: Arena$@): Setup?U8[]	reads `<program> <work folder> [seed folder ...]`, and makes the work folder. It declares the positional arguments and the two numbers (`declare`), so the caller declares only its own options before the call.
+std/http	Header	pub struct Header	one header, linked to the next in the order they arrived
+std/http	Header.find	pub fn find(r: Self$@, name: U8[]): Option<|U8[]|>	the first value with that name, or nothing; case is ignored
+std/http	Header.name	pub name: U8$[]	the name as it arrived; its case has no meaning
+std/http	Header.next	pub next: Header$@	the header after this one, or null
+std/http	Header.value	pub value: U8$[]	the value as it arrived, with surrounding whitespace trimmed
+std/http	Header_builder	pub struct Header_builder	builds a header list, keeping the order the headers were added in. The same "list builder that tracks head/tail by value" pattern as json.kspls's Obj_builder/Array_builder.
+std/http	Header_builder.add	pub fn add($r: Self, name: U8[], value: U8[]): Self	appends one header; the same name may be added again
+std/http	Header_builder.arena	pub arena: Arena$@	where the headers go
+std/http	Header_builder.build	pub fn build(r: Self): Header$@	the list built so far, or null if none was added
+std/http	Header_builder.head	pub head: Header$@	the first header added, or null
+std/http	Header_builder.tail	pub tail: Header$@	the last header added, so the next one is appended without a walk
+std/http	Http_error	pub enum Http_error	why a message could not be read, or cannot be trusted
+std/http	Http_error.body_too_large	body_too_large	`Content-Length` names more than the caller's body limit (HTTP's 413)
+std/http	Http_error.connection_closed	connection_closed	the peer closed before the header or body was fully read
+std/http	Http_error.head_too_large	head_too_large	the first line and the headers went over `max_head_bytes` (HTTP's 431)
+std/http	Http_error.incomplete	incomplete	the header or body has not all arrived yet
+std/http	Http_error.invalid_header	invalid_header	a header line is not `name: value`
+std/http	Http_error.invalid_line_break	invalid_line_break	a bare CR or LF was in the headers; only CRLF ends a line
+std/http	Http_error.invalid_request_line	invalid_request_line	the first line is not `METHOD target VERSION`
+std/http	Http_error.invalid_status_line	invalid_status_line	the first line is not `VERSION status reason`
+std/http	Http_error.io	io(err: net.Net_error)	the socket itself failed
+std/http	Http_error.unsupported_transfer_encoding	unsupported_transfer_encoding	the message has `Transfer-Encoding`, which is always refused. Ignoring it silently would let it disagree with Content-Length (request smuggling).
+std/http	Http_error.unsupported_version	unsupported_version	the version is not `HTTP/` plus one digit, a dot and one digit
+std/http	Request	pub struct Request	one received request, and how much of the buffer it used
+std/http	Request.body	pub body: U8$[]	the body, of the length `Content-Length` gave
+std/http	Request.consumed	pub consumed: Sz	how many bytes of the buffer this message used; the rest is the next one
+std/http	Request.headers	pub headers: Header$@	the headers in the order they arrived, or null
+std/http	Request.method	pub method: U8$[]	the method as it arrived, such as `GET`
+std/http	Request.target	pub target: U8$[]	the raw target, including the query string, such as `/foo?x=1`
+std/http	Request.version	pub version: U8$[]	the version as it arrived, such as `HTTP/1.1`
+std/http	Response	pub struct Response	one received response, and how much of the buffer it used
+std/http	Response.body	pub body: U8$[]	the body, of the length `Content-Length` gave
+std/http	Response.consumed	pub consumed: Sz	how many bytes of the buffer this message used; the rest is the next one
+std/http	Response.headers	pub headers: Header$@	the headers in the order they arrived, or null
+std/http	Response.reason	pub reason: U8$[]	the reason phrase, as the peer wrote it
+std/http	Response.status	pub status: I32	the status number
+std/http	Response.version	pub version: U8$[]	the version as it arrived, such as `HTTP/1.1`
+std/http	default_max_body_bytes	pub const default_max_body_bytes: Sz = 16 * 1024 * 1024	the body limit if the caller sets none
+std/http	format_response	pub fn format_response(b: Str_builder$@, status: I32, head: Header$@, body: U8[]): Void?Http_error	builds one whole response as bytes, for the caller to send. Appends the status line, the headers, an empty line and the body to b, **leaving the bytes to the caller**: a non-blocking socket cannot always send it all at once (see write_all in std/net.kspls), so the sender must remember how far it got and continue once writable.
+std/http	format_response_head	pub fn format_response_head(b: Str_builder$@, status: I32, head: Header$@): Void?Http_error	builds only a response's head, for a body sent piece by piece. Caution: **Do not add `Content-Length`.** That is why this function exists: a streamed body's length is not known in advance, and `format_response` adds it. **Always include `Connection: close`** (it fails without it).
+std/http	headers	pub fn headers(arena: Arena$@): Header_builder	an empty header builder
+std/http	max_head_bytes	pub const max_head_bytes: Sz = 64 * 1024	the most a message's head may take, against DoS. The head is the first line and the headers; every reader here refuses a longer one.
+std/http	parse_request	pub fn parse_request(src: U8[], max_body: Sz, arena: Arena$@): Request$@?Http_error	the one request at the start of the buffer; fails if it is incomplete. **A body over `max_body` fails as soon as the head says so**, before it arrives, and a head over `max_head_bytes` as soon as that much has arrived without its end.
+std/http	parse_response	pub fn parse_response(src: U8[], arena: Arena$@): Response$@?Http_error	the one response at the start of the buffer; fails if it is incomplete. The body limit is `default_max_body_bytes`; the head's is `max_head_bytes`.
+std/http	read_request	pub fn read_request(stream: net.Tcp_stream$@, arena: Arena$@, max_body: Sz): Request$@?Http_error	reads one whole request from a connection and splits it into its parts
+std/http	read_response	pub fn read_response(stream: net.Tcp_stream$@, arena: Arena$@, max_body: Sz): Response$@?Http_error	reads one whole response from a connection and splits it into its parts
+std/http	reason_phrase	pub fn reason_phrase(status: I32): U8[]	the standard phrase for a status number, so the two cannot disagree. RFC 9110's "reason-phrase"; empty for a number it does not know. The builders below write it from the number, so no caller passes the number and the phrase as a pair (which could say `404 Bad Request`). Caution: **Do not fill in `"unknown"`**: a phrase from nowhere stays in the receiver's log.
+std/http	write_request	pub fn write_request(stream: net.Tcp_stream$@, method: U8[], target: U8[], head: Header$@, body: U8[]): Void?Http_error	sends one whole request: the first line, the headers and the body
+std/http	write_response	pub fn write_response(stream: net.Tcp_stream$@, status: I32, head: Header$@, body: U8[]): Void?Http_error	builds one whole response and sends every byte of it
+std/io	File_stream	pub struct File_stream	one open file to write to, read from and close
+std/io	File_stream.c	pub fn c(r: Self$@, val: U8): Self$@	writes one byte and returns the stream
+std/io	File_stream.flush	pub fn flush(r: Self$@): Self$@	flushes buffered data; does not report a failure. Caution: **Check for a refusal at the flush, too.** A buffered `fwrite` reports success, and a destination that has gone away **shows up only at the flush**.
+std/io	File_stream.free	pub fn free(r: Self$@)	closes the handle; a failure while closing is not reported. That is `Owned`'s contract. Caution: **To know whether the written data arrived, call `sync()?` before freeing it.**
+std/io	File_stream.read	pub fn read(r: Self$@, buf: U8$[]): Sz?Io_error	fills the buffer; 0 means the end
+std/io	File_stream.s	pub fn s(r: Self$@, val: U8[]): Self$@	writes a string and returns the stream
+std/io	File_stream.stream	pub stream: Void$@	the C `FILE *`; null means standard output
+std/io	File_stream.sync	pub fn sync(r: Self$@): Void?Io_error	flushes buffered data and reports a failure. It does not mean the data reached the disk (the OS's own sync covers that). `Writer.flush()` returns `Self$@` for chaining, so only this method can report a failure.
+std/io	File_stream:Owned	impl File_stream: Owned	it owns the handle and releases it in `free()`
+std/io	File_stream:Reader	impl File_stream: Reader	so it can be used wherever a `Reader` is expected
+std/io	File_stream:Writer	impl File_stream: Writer	so it can be used wherever a `Writer` is expected
+std/io	Io_error	pub enum Io_error	why a read, a write or an open failed
+std/io	Io_error.close_failed	close_failed	buffered data could not be flushed on closing
+std/io	Io_error.file_not_found	file_not_found(path: U8[])	the file could not be opened for reading; names the file
+std/io	Io_error.invalid_arg	invalid_arg	an argument is invalid, such as a path containing a NUL
+std/io	Io_error.read_failed	read_failed(path: U8[])	the read was refused, or the path is a directory; names the file
+std/io	Io_error.write_failed	write_failed(path: U8[])	the write was refused or incomplete; names the file
+std/io	Reader	pub trait Reader	anything bytes can be read from
+std/io	Reader.read	fn read(r: Self, $buf: U8$[]): Sz?Io_error	fills buf; returns the count read, 0 at the end
+std/io	copy	pub fn copy($src: Reader, $dst: Writer): Sz?Io_error	reads to the end, writes it all out, and returns how much was copied
+std/io	err	pub fn err(): Writer	standard error, opened on the first call
+std/io	getchar	pub fn getchar(): I32	one byte from standard input, or negative at the end
+std/io	open	pub fn open(path: U8[], mode: U8[]): File_stream?Io_error	opens a file, handling a non-ASCII path on Windows too
+std/io	out	pub fn out(): Writer	standard output, opened on the first call
+std/io	read_file	pub fn read_file(path: U8[]): U8[]?Io_error	The whole file, on the heap; the caller frees it with `mem.dealloc(text.ptr)`. A `/proc` file that reports 0 bytes, and a pipe, are still read to the end.
+std/io	read_file_capped	pub fn read_file_capped(path: U8[], cap: Sz, arena: Arena$@): U8[]?Io_error	the file's first `cap` bytes, or the whole file if it is shorter. **It stops at `cap` however long the file grows**, so a child still writing cannot fill the memory; the buffer grows with what is read, never to the whole cap up front.
+std/io	read_stdin	pub fn read_stdin(arena: Arena$@): U8[]	the whole of standard input, read to the end
+std/io	set_line_buffered	pub fn set_line_buffered(): Void	flushes standard output at every newline from here on. A piped standard output (`| tee`) is fully buffered, so a watched run prints nothing until it ends. It avoids setvbuf(_IOLBF): `_IOLBF`'s value differs per libc, so a constant in the IR would mean another mode on Windows.
+std/io	write_file	pub fn write_file(path: U8[], data: U8[]): Void?Io_error	writes the whole file, creating or replacing it
+std/json	Array_builder	pub struct Array_builder	builds an array in the order elements are pushed
+std/json	Array_builder.build	pub fn build(r: Self): Val	the array built so far
+std/json	Array_builder.builder	pub builder: Json_builder	the builder that allocates the elements
+std/json	Array_builder.head	pub head: Node$@	the first element pushed, or null
+std/json	Array_builder.push	pub fn push($r: Self, val: Val): Array_builder	adds one element at the end
+std/json	Array_builder.tail	pub tail: Node$@	the last element pushed, so the next one is appended without a walk
+std/json	Json_builder	pub struct Json_builder	makes values, and the two builders that assemble them
+std/json	Json_builder.arena	pub arena: Arena$@	the arena every value it makes is allocated in
+std/json	Json_builder.arr	pub fn arr(r: Self$@): Array_builder	an empty array builder
+std/json	Json_builder.bool_val	pub fn bool_val(_r: Self$@, b: Bool): Val	`true` or `false`
+std/json	Json_builder.float_val	pub fn float_val(_r: Self$@, f: F64): Val	a number with a point
+std/json	Json_builder.int_val	pub fn int_val(_r: Self$@, i: I64): Val	a number with no point; wide enough for an offset. Caution: Take an I64, like Val.int_val and as_int64; with an I32 here, values could be read but not written.
+std/json	Json_builder.new	pub fn new(arena: Arena$@): Json_builder	a builder that allocates everything it makes from that arena
+std/json	Json_builder.null_val	pub fn null_val(_r: Self$@): Val	JSON's `null`
+std/json	Json_builder.obj	pub fn obj(r: Self$@): Obj_builder	an empty object builder
+std/json	Json_builder.str_val	pub fn str_val(r: Self$@, s: U8[]): Val	a string, copied into the arena
+std/json	Json_error	pub enum Json_error	why a document could not be read, or cannot be trusted
+std/json	Json_error.expected_colon	expected_colon	a member's name was not followed by `:`
+std/json	Json_error.expected_comma_or_bracket	expected_comma_or_bracket	an element was not followed by `,` or the closing mark
+std/json	Json_error.field_type	field_type(mismatched: U8[])	the kinds differ; `"<root>"` when it is not at a field
+std/json	Json_error.invalid_character	invalid_character(ch: U8)	a byte that is not allowed where it appears
+std/json	Json_error.invalid_number	invalid_number	the digits do not match JSON's number grammar
+std/json	Json_error.invalid_string	invalid_string	a string's escape or its ending is not what JSON allows
+std/json	Json_error.missing_field	missing_field(missing: U8[])	a field in the table is missing from the object. Only `into_struct` returns this one and the next. Caution: **These two keep a default from being filled in silently.** Filled with 0 or "", a sender's misspelt key would show only as "the value was 0" (see std/docs/DESIGN.md's "Known holes").
+std/json	Json_error.too_deep	too_deep	the nesting is too deep; this guards against stack exhaustion
+std/json	Json_error.trailing_comma	trailing_comma	`[1,]` or `{"a":1,}`; JSON requires an element after a comma
+std/json	Json_error.trailing_input	trailing_input	something other than whitespace follows the value
+std/json	Json_error.unexpected_eof	unexpected_eof	it ended in the middle of a value
+std/json	Node	pub struct Node	one element of an array, chained to the next
+std/json	Node.next	pub next: Node$@	the element after this one, or null
+std/json	Node.val	pub val: Val	the element's value
+std/json	Obj	pub struct Obj	an object's members, reachable only through `get` and `has_key`. `Val.obj_val`'s payload. Caution: The payload must not hold a `Member$@` directly. Code outside can bind a `pub enum`'s payload (`switch v case .obj_val(head)`), so the priv list would leak out ("Why a narrow type may not sit in a position with wide visibility" in docs/DESIGN.md). Reading an object goes through `get(key)`.
+std/json	Obj_builder	pub struct Obj_builder	builds an object; setting a key again replaces it
+std/json	Obj_builder.build	pub fn build(r: Self): Val	the object built so far
+std/json	Obj_builder.builder	pub builder: Json_builder	the builder that allocates the members
+std/json	Obj_builder.set	pub fn set($r: Self, key: U8[], val: Val): Obj_builder	adds a member; an existing key is replaced, not added again. Caution: **Replace an existing key.** If appended, `{"a":1,"a":2}` makes `get` return the first while `dump` writes both, and another parser reads a different value. The scan costs the same as `get`.
+std/json	Val	pub enum Val	one JSON value, of any of the seven kinds
+std/json	Val.arr_list	pub fn arr_list(r: Self, arena: Arena$@): List<|Val|>	an array's elements as a list; the one way to walk an array. A `Val` cannot be the subject of `for in` (a chain has no `.len`), so walk this list. Caution: When arena is null it allocates on the global heap, so the caller frees it with a `defer` (the same convention as `List.new`).
+std/json	Val.array_val	array_val(head: Node$@)	an array, as a chain of elements
+std/json	Val.as_bool	pub fn as_bool(r: Self, default_val: Bool): Bool	the boolean it holds
+std/json	Val.as_f64	pub fn as_f64(r: Self, default_val: F64): F64	the number it holds. It accepts the integer kind too, so `3` and `3.0` need no branch.
+std/json	Val.as_int	pub fn as_int(r: Self, default_val: I32): I32	the integer it holds, narrowed to `I32`
+std/json	Val.as_int64	pub fn as_int64(r: Self, default_val: I64): I64	the integer it holds, at its full width. For a value that can exceed 2GB, such as safetensors' `data_offsets`.
+std/json	Val.as_str	pub fn as_str(r: Self): U8[]	the string it holds, or empty if it is another kind
+std/json	Val.bool_val	bool_val(b: Bool)	`true` or `false`
+std/json	Val.dump	pub fn dump(r: Self, out: Str_builder$@, indent: Sz = 0)	writes the value as JSON text. **Indentation is only for files a person reads.** For data exchange keep it at 0: the whitespace is waste to the peer.
+std/json	Val.float_val	float_val(f: F64)	a number with a point or an exponent, kept separate so nothing rounds
+std/json	Val.get	pub fn get(r: Self, key: U8[]): Val	an object's member, or `null_val`; with a duplicate key, the first one. Neither the parser nor `dump` refuses a duplicate key, so a last-wins parser given the same document reads another value. **It is a linear scan.** Calling it for a list of names the peer chose makes one request O(members x names).
+std/json	Val.get_at	pub fn get_at(r: Self, index: Sz): Val	an array's element, or `null_val` when the position is past the end
+std/json	Val.has_key	pub fn has_key(r: Self, key: U8[]): Bool	whether the member exists, even if it holds `null`. Caution: **`get`'s result is no substitute**: it gives `Val.null_val` both for an absent key and for a `null` value.
+std/json	Val.int_val	int_val(i: I64)	a number written without a point or an exponent
+std/json	Val.null_val	null_val	JSON's `null`
+std/json	Val.obj_val	obj_val(o: Obj)	an object; read its members through `get`
+std/json	Val.str_val	str_val(s: U8[])	a string, already unescaped
+std/json	max_nesting_depth	pub const max_nesting_depth: Sz = 500	the deepest nesting read; deeper fails with `too_deep`. It guards against stack exhaustion, and is deep enough for ordinary JSON. `std/json_struct` holds a round trip to it too, so a document that parses does not stop part way.
+std/json	parse	pub fn parse(src: U8[], arena: Arena$@): Val?Json_error	the whole document as one value; anything left over is refused. Caution: **A document ends after one value.** Otherwise `1 2` **succeeds** as `1`, and two concatenated inputs silently pass as the first.
+std/json_struct	from_struct	pub fn from_struct<|T: reflect.Reflectable|>(v: T@, b: Json_builder$@): Val	copies a reflectable value into a JSON object. `v` is a `T@`: passed by value, the field offsets would point into a temporary.
+std/json_struct	into_struct	pub fn into_struct<|T: reflect.Reflectable|>(v: Val, out: T$@, arena: Arena$@): Void?Json_error	copies a JSON object into a reflectable value. **A field whose key is missing or of another kind is refused** (the reason is at `Json_error`). Caution: **Copy the names into `arena`.** The names inside `v` point into the parse's arena; freeing that first leaves the written value pointing at freed memory.
+std/jsonrpc	Client #cfg(!freestanding)	pub struct Client	exchanges JSON-RPC messages with a child connected by pipes
+std/jsonrpc	Client.alive #cfg(!freestanding)	pub fn alive(r: Self@): Bool	whether the child is still running
+std/jsonrpc	Client.err_tail #cfg(!freestanding)	pub fn err_tail(r: Self$@): U8[]	the end of what the server wrote to standard error. Caution: **Attach it to a failure's description**; if it is discarded, no reason remains. **It borrows the buffer**, which the next drain reallocates: **copy it at once** (`arena.text().s(c.err_tail())`).
+std/jsonrpc	Client.free #cfg(!freestanding)	pub fn free(r: Self$@)	kills the child and frees every buffer
+std/jsonrpc	Client.notify #cfg(!freestanding)	pub fn notify(r: Self$@, method: U8[], params: json.Val, arena: Arena$@): Bool	sends a notification, which expects no response
+std/jsonrpc	Client.read_msg #cfg(!freestanding)	pub fn read_msg(r: Self$@, timeout_ms: I32, arena: Arena$@): json.Val?Rpc_end	reads one frame and returns it as JSON. Caution: **Keep draining standard error while waiting too** (the reason is at `read_slice_ms`). The timeout bounds **this one call**, even when data trickles in.
+std/jsonrpc	Client.request #cfg(!freestanding)	pub fn request(r: Self$@, method: U8[], params: json.Val, timeout_ms: I32, arena: Arena$@): json.Val?Rpc_end	sends a request and reads until the response with that id arrives. Caution: **The clock bounds the wait, not a count of messages.** A server may send any number of notifications first (a language server sends one per open document), so a cap on skipped messages turns a valid burst into `broken`; a lost response still ends at the deadline.
+std/jsonrpc	Client.send_raw #cfg(!freestanding)	pub fn send_raw(r: Self$@, body: U8[]): Bool	sends one already built body, in a frame
+std/jsonrpc	Client:Owned #cfg(!freestanding)	impl Client: Owned	it owns its memory and releases it with `free()`
+std/jsonrpc	Rpc_end	pub enum Rpc_end	why a response could not be read
+std/jsonrpc	Rpc_end.broken	broken	the frame could not be read, or the response was dropped
+std/jsonrpc	Rpc_end.closed	closed	the server closed, so waiting again brings nothing
+std/jsonrpc	Rpc_end.timed_out	timed_out	no complete response arrived before the timeout
+std/jsonrpc	content_length	pub fn content_length(head: U8[], limit: Sz): Option<|Sz|>	the length the header declares, or none if it is absent or unreadable. The name matches at a line's start, in any case; the value is digits alone between spaces. The first such line decides. A value past `limit` is unreadable, so the digits never overflow.
+std/jsonrpc	encode	pub fn encode(method: U8[], params: json.Val, id: I32, arena: Arena$@): U8[]	assembles one JSON-RPC body
+std/jsonrpc	frame_into	pub fn frame_into(out: Str_builder$@, body: U8[])	writes the header and then the body to the destination. Caution: **Write the header's name only here.** If each sender writes its own, one drops the `\r\n`, the server sees no Content-Length, and "nothing comes back" gives no reason.
+std/jsonrpc	length_tag	pub const length_tag: U8[] = "Content-Length:"	the header that gives the body's length. **Do not copy the name** (the reason is at `frame_into`).
+std/jsonrpc	max_body_bytes	pub const max_body_bytes: Sz = 16 * 1024 * 1024	the largest body to wait for, so a lie ends. Caution: **Keep a bound**, or a server that declares 4GB puts this client into a wait that never completes (as with `std/http`'s body bound).
+std/jsonrpc	spawn #cfg(!freestanding)	pub fn spawn(argv: U8[][], cwd: U8[]): Client?subproc.Spawn_error	starts a child and attaches to its pipes
+std/jsonrpc	take_frame	pub fn take_frame(acc: Str_builder$@, arena: Arena$@): Option<|U8[]|>?Rpc_end	cuts out one whole frame, or nothing if none is complete yet. Caution: **Drop a broken header before returning too**, or every later read returns the same failure forever.
+std/jsonrpc	version	pub const version: U8[] = "2.0"	the protocol version written in every body
+std/lang	Add	pub trait Add<|Rhs, Output|>	what `+` desugars to
+std/lang	Add.add	fn add(r: Self, rhs: Rhs): Output	the sum
+std/lang	Callable1	pub trait Callable1<|A, Ret|>	a callable value that takes one argument, with its captures. Caution: Make the receiver a plain `Self` ("Why a trait's receiver is fixed to a bare `Self`" in docs/DESIGN.md); the implementation may take a `Self@` (the thunk bridges them). A conforming value is a trait value (`{obj, vtable}`), so it can neither cross the C boundary nor leave by `return`.
+std/lang	Callable1.call	pub fn call(r: Self, a: A): Ret	calls it
+std/lang	Callable2	pub trait Callable2<|A, B, Ret|>	a callable value that takes two arguments, with its captures
+std/lang	Callable2.call	pub fn call(r: Self, a: A, b: B): Ret	calls it
+std/lang	Cast	pub trait Cast<|Output|>	what `Output::value` desugars to where C would not allow the cast. A value cast to or from a struct is invalid C and so rejected, unless the source type implements this; then it becomes a `cast()` call (see ksplc/sema/body/postfix.kspls).
+std/lang	Cast.cast	fn cast(r: Self): Output	the value as the other type
+std/lang	Div	pub trait Div<|Rhs, Output|>	what `/` desugars to
+std/lang	Div.div	fn div(r: Self, rhs: Rhs): Output	the quotient
+std/lang	Eq	pub trait Eq<|Other|>	what `==` and `!=` desugar to
+std/lang	Eq.eq	fn eq(r: Self, other: Other): Bool	whether the two are the same
+std/lang	Eq.ne	fn ne(r: Self, other: Other): Bool	whether they differ
+std/lang	Formattable	pub trait Formattable	what `\{x\}` in a string calls. `ksplc/parse/desugar.kspls` does the desugaring.
+std/lang	Formattable.fmt	fn fmt(r: Self, w: Writer): Writer	writes the value into the destination
+std/lang	Index	pub trait Index<|Idx, Output|>	what `x[i]` desugars to when it returns a copy
+std/lang	Index.get	fn get(r: Self, index: Idx): Output	a copy of the element
+std/lang	Index_mut	pub trait Index_mut<|Idx, Val|>	what `x[i] = v` desugars to
+std/lang	Index_mut.set	fn set(r: Self, index: Idx, val: Val): Void	writes the element
+std/lang	Index_place	pub trait Index_place<|Idx, Output|>	what `x[i] += v` and `x[i]@` desugar to. It returns a mutable pointer to the element itself and takes precedence over `Index`/`Index_mut`; `at` alone covers both reading and writing.
+std/lang	Index_place.at	fn at(r: Self, index: Idx, file: U8[] = caller_file, line: Sz = caller_line): Output$@	the element's address, not a copy
+std/lang	Index_ref	pub trait Index_ref<|Idx, Output|>	what `x[i]` desugars to through a read-only receiver. **A container with immutable content can implement only this one** (`Index_place.at` returns an `Output$@`). The compiler picks "`Index_place` if the receiver is writable, this one if it is not" ("Indexing" in `../docs/SPEC-language.md`).
+std/lang	Index_ref.at_ref	fn at_ref(r: Self, index: Idx, file: U8[] = caller_file, line: Sz = caller_line): Output@	the element's read-only address, so nothing is copied
+std/lang	Iter	pub trait Iter<|T|>	a sequence that only yields items in order, with no length or index. A chain of filters or maps is an `Iter`, and `for x in` walks it (`ksplc/sema/body/for_in.kspls`). **It is separate from the `Index` family**, which requires "the i-th" item. Caution: **Write the receiver as `Self`.** The implementation may take a `Self$@` and advance the position (the thunk bridges the value and the pointer).
+std/lang	Iter.count	pub fn count(r: Self): Sz	how many elements it yields; it allocates nothing
+std/lang	Iter.next	fn next(r: Self): Option<|T|>	the next element, or nothing at the end
+std/lang	Move_only	pub trait Move_only	a value of this type must not be copied implicitly. The compiler finds it by exact FQN match (`std.lang.Move_only`); a struct that holds a Move_only field by value is Move_only too.
+std/lang	Mul	pub trait Mul<|Rhs, Output|>	what `*` desugars to
+std/lang	Mul.mul	fn mul(r: Self, rhs: Rhs): Output	the product
+std/lang	Neg	pub trait Neg<|Output|>	what a leading `-` desugars to
+std/lang	Neg.neg	fn neg(r: Self): Output	the value with its sign flipped
+std/lang	Not	pub trait Not<|Output|>	what `!` desugars to
+std/lang	Not.not	fn not(r: Self): Output	the negated value
+std/lang	Option	pub enum Option<|T|>	a value that may be absent; the `switch` forces the absent case
+std/lang	Option.none	none	there is no value
+std/lang	Option.some	some(value: T)	there is a value
+std/lang	Option<|T|>.is_none	pub fn is_none(r: Self): Bool	whether there is no value
+std/lang	Option<|T|>.is_some	pub fn is_some(r: Self): Bool	whether there is a value
+std/lang	Option<|T|>.unwrap_or	pub fn unwrap_or(r: Self, alt: T): T	the value, or the alternative; the alternative is always evaluated
+std/lang	Option<|T|>.unwrap_or_else	pub fn unwrap_or_else(r: Self, alt: fn(): T): T	the value, or the alternative, computed only if it is needed
+std/lang	Ord	pub trait Ord<|Other|>	what `<`, `<=`, `>` and `>=` desugar to
+std/lang	Ord.ge	fn ge(r: Self, other: Other): Bool	whether it is greater or equal
+std/lang	Ord.gt	fn gt(r: Self, other: Other): Bool	whether it is greater
+std/lang	Ord.le	fn le(r: Self, other: Other): Bool	whether it is less or equal
+std/lang	Ord.lt	fn lt(r: Self, other: Other): Bool	whether it is less
+std/lang	Owned	pub trait Owned	this type owns memory or a resource, and releases it with `free()`. **Without conforming, the check does not work.** A type that only has a `free()` is not tracked, so always conform a type that releases something ([W0108] names a missing one). **`free` returns no failure.** It runs on an exit path or from a `defer`, where a failure leaves the caller nothing to do. **Put clean-up whose result must be checked in its own method** (`io.File_stream`'s `sync()`).
+std/lang	Owned.free	fn free(r: Self)	releases it, reporting no failure
+std/lang	Panic_hook	pub typedef Panic_hook = fn(msg: U8$[]): Void	where a freestanding port sends a panic message. lang does not know whether a console exists, so a port that has one sets it (null, the default, stops deterministically and prints nothing).
+std/lang	Panic_info	pub struct Panic_info	what a panic in the previous run left behind, for this run to report. The stack fragment is not included (a fixed-length array cannot be returned by value); read 0 <= index < stack_len one at a time with panic_stack_word().
+std/lang	Panic_info.msg	pub msg: U8$[]	the panic's message
+std/lang	Panic_info.sp	pub sp: Sz	the stack pointer when it happened
+std/lang	Panic_info.stack_len	pub stack_len: Sz	how many words of the stack were kept, read with `panic_stack_word`
+std/lang	Panic_msg	pub struct Panic_msg	a fixed-size buffer for a panic's message, which allocates nothing. It needs no `io`; **string interpolation (`\{v\}`) cannot be used here.** Caution: Anything that does not fit `panic_msg_cap` is silently dropped (failing again in the middle of a panic leaves nothing to do). Do not use it in place of `Str_builder`.
+std/lang	Panic_msg.n	pub fn n(r: Self$@, v: Sz): Self$@	writes a number as decimal, including the minimum. Caution: **Take the absolute value as unsigned.** `-v` as an `Sz` does not fit when `v` is `Sz`'s minimum (the same reason as in `Range.new`); `U64::0 - U64::v` gives the magnitude.
+std/lang	Panic_msg.new	pub fn new(): Panic_msg	an empty buffer
+std/lang	Panic_msg.s	pub fn s(r: Self$@, t: U8[]): Self$@	writes text; anything that does not fit is dropped
+std/lang	Panic_msg.slice	pub fn slice(r: Self$@): U8$[]	what has been written, to pass to `panic`
+std/lang	Range	pub struct Range	an arithmetic sequence of integers, which a `for` walks
+std/lang	Range.asc	pub fn asc(stop: Sz): Range	0 up to but not including `stop`
+std/lang	Range.desc	pub fn desc(n: Sz): Range	`n - 1` down to 0
+std/lang	Range.get	pub fn get(r: Self$@, i: Sz): Sz	the i-th value of the sequence
+std/lang	Range.len	pub len: Sz	how many values there are, set once at construction
+std/lang	Range.new	pub fn new(start: Sz, stop: Sz, step: Sz): Range	the general form; a step of 0 or in the wrong direction gives an empty range
+std/lang	Range.start	pub start: Sz	the first value
+std/lang	Range.step	pub step: Sz	how much is added each time
+std/lang	Range:Index<|Sz, Sz|>	impl Range: Index<|Sz, Sz|>	so `for i in Range.asc(n)` can be written
+std/lang	Ref_counted	pub trait Ref_counted	the compiler counts copies and scope exits for this type. Why it is a trait rather than an attribute is in "Why ARC is expressed as a trait" in docs/DESIGN.md. Caution: Keep the methods priv (in the conforming impl too); calling them by hand adds to the automatic insertions and breaks the count. Make the conforming receiver **`r: Self@`**: the generated calls also pass addresses of immutable bindings, so a `Self$@` makes the generated C discard const.
+std/lang	Ref_counted.release	priv fn release(r: Self)	one owner fewer; only the compiler calls it
+std/lang	Ref_counted.retain	priv fn retain(r: Self)	one more owner; only the compiler calls it
+std/lang	Slice	pub struct Slice<|$T|>	a borrowed sequence: a pointer and a length, owning nothing. The type argument carries the elements' mutability: `Slice<|$U8|>` is mutable, `Slice<|U8|>` is not. **One level of weakening is allowed**, so the mutable version can be passed to an immutable parameter. `ptr` and `len` are `pub` so a slice can be built from a raw pointer (`Slice<|$U8|>::{ .ptr = p, .len = n }`).
+std/lang	Slice.len	pub len: Sz	how many elements it holds
+std/lang	Slice.ptr	pub ptr: T$@	where the sequence begins
+std/lang	Slice<|$T|>.at #inline	pub fn at(r: Self@, index: Sz, file: U8[], line: Sz): T$@	the element's address
+std/lang	Slice<|$T|>:Index_place<|Sz, T|>	impl<|T|> Slice<|$T|>: Index_place<|Sz, T|>	so an element of a writable slice can be written. **Only for the mutable version** (the `$` on the implementing type). **The receiver is a `Self@`**: it only reads the descriptor (`../docs/SPEC-language.md`'s "The receiver shape an implementation declared"). With a `Self$@`, an element of a slice in a read-only frame could not be written.
+std/lang	Slice<|T|>.at_ref #inline	pub fn at_ref(r: Self@, index: Sz, file: U8[], line: Sz): T@	the element's read-only address
+std/lang	Slice<|T|>:Index_ref<|Sz, T|>	impl<|T|> Slice<|T|>: Index_ref<|Sz, T|>	so an element can be read without copying. **For both versions** (no `$` on the implementing type): the mutable one needs it too.
+std/lang	Sub	pub trait Sub<|Rhs, Output|>	what `-` desugars to
+std/lang	Sub.sub	fn sub(r: Self, rhs: Rhs): Output	the difference
+std/lang	Writer	pub trait Writer	a destination characters can be written to. **Only the declaration is here.** The primitives' `fmt` (`impl I32: Formattable`) is in `std/strfmt`; here it would pull the whole string library into every file. Caution: **Do not add a method for writing a number or a boolean here.** The value's type decides the format (`Formattable`), and this would make two ways to do one thing.
+std/lang	Writer.c	fn c(r: Self, val: U8): Self	writes one byte and returns the destination
+std/lang	Writer.flush	fn flush(r: Self): Self	passes on what has accumulated, reporting no failure
+std/lang	Writer.s	fn s(r: Self, val: U8[]): Self	writes a string and returns the destination
+std/lang	and_then	pub fn and_then<|T, U|>(o: Option<|T|>, f: fn(x: T): Option<|U|>): Option<|U|>	chains a step that may itself return nothing
+std/lang	assert	pub fn assert(cond: Bool, msg: U8$[], file: U8[] = caller_file, line: Sz = caller_line)	stops the program unless the condition holds
+std/lang	bounds_panic #noinline	pub fn bounds_panic(func_name: U8$[], idx: Sz, len: Sz, file: U8[], line: Sz)	the one message every container stops with when an index is out of range. **Every container calls this**, so "out of range" reads the same everywhere and matches the built-in check ("Conditions that stop execution at run time" in `../docs/SPEC-language.md`). Caution: **Take the position from the caller.** With the default, this line (`std/lang`) is printed, and a user's mistake looks like a bug in std.
+std/lang	map	pub fn map<|T, U|>(o: Option<|T|>, f: fn(x: T): U): Option<|U|>	applies a function to the value, if there is one. **It is a free function, so write both type arguments** (`map<|I32, Sz|>(o, f)`). A method with its own type parameter (`fn map<|U|>`) would work as well, as `std/seq`'s `select` does ("A name on the impl that the receiver does not fix" in `../docs/DESIGN.md`).
+std/lang	panic #cfg(!freestanding) #noreturn	pub fn panic(msg: U8$[], file: U8[] = caller_file, line: Sz = caller_line)	stops the program at once, saying where and why
+std/lang	panic #cfg(freestanding) #noreturn	pub fn panic(msg: U8$[], _file: U8[] = caller_file, _line: Sz = caller_line)	stops deterministically without libc; the hook shows the message
+std/lang	panic_stack_word #cfg(freestanding)	pub fn panic_stack_word(index: Sz): Sz	one word of the kept stack
+std/lang	put	pub fn put<|W: Writer, T: Formattable|>(w: W, v: T): W	writes one value, keeping the destination's own type. Caution: **Do not take the destination as a `Writer`.** The return type would become the trait too, so one interpolation turns a `Str_builder` into a `Writer` whose `.slice()` cannot be found. `Formattable.fmt`'s return value is not used.
+std/lang	sub_count	pub fn sub_count(count: Sz, start: Sz, len: Sz): Sz	how many elements a sub-range really holds once clamped. Of `count` items, how many of the `len` items from `start` onward can actually be taken. **Check `start`'s lower bound too.** `Sz` is signed, so checking only the upper bound lets a negative `start` through and gives a view that points before the start. Caution: **Do not compare with `start + len`.** If `len` is huge, the addition itself wraps and slips past the clamp silently.
+std/lang	take_panic_record #cfg(freestanding)	pub fn take_panic_record(): Option<|Panic_info|>	the panic the previous run left, if any
+std/libc	Signal_handler	pub typedef Signal_handler = fn(sig: I32): Void	what `signal()` takes and returns. An unnamed function-pointer type in an extern declaration produces no valid C type name (the same holds for Thread_entry in std/thread.kspls).
+std/log	Level	pub enum Level	how serious a line is, and so whether it is emitted at all. Most serious first. **These are the four words of the diagnostic ladder** (the ladder in `../docs/SPEC-language.md`), so the product uses one vocabulary for severity. **The meaning still differs**: here a level decides whether the line is emitted at all.
+std/log	Level.error	error	something did not work, and the run cannot continue as asked
+std/log	Level.hint	hint	detail wanted only while tracking down a problem
+std/log	Level.information	information	a step worth seeing on an ordinary run
+std/log	Level.warning	warning	the run continued, and the result may not be what was meant
+std/log	Log	pub struct Log	a destination, the lowest level it keeps, and the fields written before a body. Caution: **This logger owns its destination.** Anything else written there lands in the middle of a line, because a line ends only when the next one starts (`at` below). This file cannot enforce that, so it is stated, not promised (Principle 8 in `../docs/DESIGN.md`).
+std/log	Log.at	pub fn at(r: Self$@, lv: Level, file: U8[] = caller_file, line: Sz = caller_line): Option<|Writer|>	where to write a line's body, or nothing when the level is filtered out
+std/log	Log.done	pub fn done(r: Self$@)	ends the open line, if there is one, and flushes. **Call it before the program exits**, or the last line is written without its line end.
+std/log	Log.new	pub fn new(dest: Writer, least: Level, tag: U8[], sep: U8[] = ": ", place: Bool = false): Log	creates a logger. **A body is written unquoted.** **Whether the place is written is chosen here, not per line**, so the columns do not shift ("The caller's position reaches `say` as a default argument" in `std/docs/DESIGN.md`).
+std/log	Log.say	pub fn say(r: Self$@, lv: Level, text: U8[], file: U8[] = caller_file, line: Sz = caller_line)	writes one whole line. **It takes text that is already built**; anything that carries a value goes through `at`. Caution: **In a wrapper of your own, do not leave the place to its default.** `caller_file` looks back one step only, so such a wrapper names itself; take the place as parameters and pass it on, as this one does ("The caller's position" in `../docs/SPEC-language.md`).
+std/log	Log.wants	pub fn wants(r: Self@, lv: Level): Bool	whether a line at that level would be emitted. `at` checks it itself; a caller uses it to skip a whole gathering step.
+std/math	cos #cfg(!freestanding)	pub fn cos(x: F64): F64	the cosine of an angle in radians
+std/math	cos #cfg(freestanding)	pub fn cos(x: F64): F64	the cosine of an angle in radians
+std/math	e	pub const e: F64 = 2.718281828459045	the base of the natural logarithm
+std/math	exp #cfg(!freestanding)	pub fn exp(x: F64): F64	e raised to the power of `x`
+std/math	exp #cfg(freestanding)	pub fn exp(x: F64): F64	e raised to the power of `x`
+std/math	log #cfg(!freestanding)	pub fn log(x: F64): F64	the natural logarithm, base e
+std/math	log #cfg(freestanding)	pub fn log(x: F64): F64	the natural logarithm, base e
+std/math	pi	pub const pi: F64 = 3.141592653589793	the ratio of a circle's circumference to its diameter
+std/math	pow #cfg(!freestanding)	pub fn pow(base: F64, exponent: F64): F64	`base` raised to the power of `exponent`
+std/math	pow #cfg(freestanding)	pub fn pow(base: F64, exponent: F64): F64	`base` raised to the power of `exponent`
+std/math	round	pub fn round(x: F64): F64	rounds to the nearest whole number, halves away from 0
+std/math	sin #cfg(!freestanding)	pub fn sin(x: F64): F64	the sine of an angle in radians
+std/math	sin #cfg(freestanding)	pub fn sin(x: F64): F64	the sine of an angle in radians
+std/math	sqrt #cfg(!freestanding)	pub fn sqrt(x: F64): F64	the non-negative square root
+std/math	sqrt #cfg(freestanding)	pub fn sqrt(x: F64): F64	the non-negative square root
+std/math	tan #cfg(!freestanding)	pub fn tan(x: F64): F64	the tangent of an angle in radians
+std/math	tan #cfg(freestanding)	pub fn tan(x: F64): F64	the tangent of an angle in radians
+std/mem	Arena	pub struct Arena	a bump allocator: everything it allocated is freed at once
+std/mem	Arena.alloc	pub fn alloc(r: Self$@, size: Sz): Void$@	allocates bytes; a fixed buffer that runs out panics instead of growing
+std/mem	Arena.alloc_as	pub fn alloc_as<|T|>(r: Self$@): T$@	arena memory for one value, with no `sizeof` written
+std/mem	Arena.create	pub fn create<|T|>(r: Self$@, init_val: T): T$@	allocates room for one value and writes it there
+std/mem	Arena.default_chunk_size	pub default_chunk_size: Sz	the largest size a chunk grows to; 0 marks a fixed buffer. from_buffer() sets 0: running out panics without calling malloc, and free() does nothing (the chunk and the Arena are the caller's memory).
+std/mem	Arena.dup_str	pub fn dup_str(r: Self$@, src: U8[]): U8$[]	a copy of the text in this arena, NUL-terminated for C
+std/mem	Arena.free	pub fn free(r: Self$@)	frees every chunk, and the arena itself
+std/mem	Arena.from_buffer	pub fn from_buffer(buf: Void$@, size: Sz): Arena	an arena over memory the caller owns, which never grows. Neither the arena nor the chunk calls malloc, so a program runs unchanged on a microcontroller that has none. **buf's start need not be aligned** (align_pad aligns it and subtracts the bytes it skipped from `size`).
+std/mem	Arena.get_total_allocated	pub fn get_total_allocated(r: Self$@): Sz	every byte in the chunks, used or not
+std/mem	Arena.get_total_used	pub fn get_total_used(r: Self$@): Sz	every byte allocated so far
+std/mem	Arena.headroom	pub fn headroom(r: Self$@): Arena_headroom	how far away the next chunk is, and how big. Caution: **Do not confuse it with `remaining`**, the sum over every chunk; `alloc` uses only the first chunk. One byte past `free` adds a chunk of `step` bytes, so peak memory **jumps there** (`make perf-log`).
+std/mem	Arena.new	pub fn new(chunk_size: Sz): Arena$@	an arena on the global heap, growing chunk by chunk
+std/mem	Arena.remaining	pub fn remaining(r: Self$@): Sz	the unused bytes summed over every chunk. A fixed buffer that runs out panics, so a caller can check here first.
+std/mem	Arena.reset	pub fn reset(r: Self$@)	empties it, keeping the last round's usage as one chunk. **For a loop that refills it each round** (a training step, a request): rewinding to a mark saved while empty returns every chunk to the OS, and the next round allocates them again, page by page. One chunk the size of the last round's use holds a round of that size, even above the limit (Zig's `ArenaAllocator.reset(.retain_capacity)`).
+std/mem	Arena.restore	pub fn restore(r: Self$@, state: Arena_state)	rewinds to a mark, freeing everything allocated since then at once
+std/mem	Arena.save	pub fn save(r: Self$@): Arena_state	a mark to rewind to later
+std/mem	Arena:Owned	impl Arena: Owned	it owns its resources and releases them with `free()`.
+std/mem	Arena_headroom	pub struct Arena_headroom	how far away the next chunk is, and how big it will be. Caution: **Do not return the two separately.** One alone does not determine the step.
+std/mem	Arena_headroom.free	pub free: Sz	how many bytes fit before a new chunk is allocated
+std/mem	Arena_headroom.step	pub step: Sz	how many bytes that new chunk will have
+std/mem	Arena_state	pub struct Arena_state	a mark to rewind the arena to
+std/mem	Arena_state.used	pub used: Sz	how much of that chunk was used at the mark
+std/mem	alloc #cfg(!freestanding)	pub fn alloc(size: Sz): Void$@	allocates raw bytes from the global heap
+std/mem	alloc #cfg(freestanding)	pub fn alloc(size: Sz): Void$@	allocates raw bytes from the free-list heap, which must already be set up
+std/mem	alloc_as	pub fn alloc_as<|T|>(): T$@	heap memory for one value, with no `sizeof` written by hand. Caution: Do not write it out as `T$@::alloc(sizeof(T))` in the caller (docs/DESIGN.md's "One means to one purpose"): nothing catches a mismatch between the two types. `alloc(<byte count>)` remains for raw bytes (`U8$@::alloc(n + 1)`), which no type describes.
+std/mem	alloc_in	pub fn alloc_in(arena: Arena$@, size: Sz): Void$@	allocates from the arena, or from the global heap if there is none
+std/mem	copy #cfg(!freestanding)	pub fn copy(dest: Void$@, src: Void$@, bytes: Sz)	copies a range of bytes; the two ranges must not overlap
+std/mem	copy #cfg(freestanding)	pub fn copy(dest: Void$@, src: Void$@, bytes: Sz)	copies a range of bytes; the two ranges must not overlap
+std/mem	dealloc #cfg(!freestanding)	pub fn dealloc(ptr: Void$@)	returns bytes to the global heap
+std/mem	dealloc #cfg(freestanding)	pub fn dealloc(ptr: Void$@)	returns bytes to the free-list heap
+std/mem	heap_capacity_bytes #cfg(freestanding)	pub fn heap_capacity_bytes(): Sz	the size of the static buffer the heap uses
+std/mem	heap_peak_used_bytes #cfg(!freestanding)	pub fn heap_peak_used_bytes(): Sz	the most bytes ever allocated at once
+std/mem	heap_peak_used_bytes #cfg(freestanding)	pub fn heap_peak_used_bytes(): Sz	the most bytes ever allocated at once
+std/mem	heap_requested_total_bytes #cfg(!freestanding)	pub fn heap_requested_total_bytes(): Sz	every byte requested since start-up; never decreases
+std/mem	heap_used_bytes #cfg(!freestanding)	pub fn heap_used_bytes(): Sz	the bytes allocated now
+std/mem	heap_used_bytes #cfg(freestanding)	pub fn heap_used_bytes(): Sz	the bytes allocated now; 0 while there is no heap
+std/mem	init_freestanding_heap #cfg(freestanding)	pub fn init_freestanding_heap(buf: U8$[])	makes a static buffer the whole heap
+std/mem	memcmp #cfg(freestanding) #export	pub fn memcmp(a: Void$@, b: Void$@, n: Sz): I32	C's `memcmp`, written here so freestanding needs no libc
+std/mem	zero #cfg(!freestanding)	pub fn zero(dest: Void$@, bytes: Sz)	sets a range of bytes to 0
+std/mem	zero #cfg(freestanding)	pub fn zero(dest: Void$@, bytes: Sz)	sets a range of bytes to 0
+std/net	Net_error	pub enum Net_error	why a socket operation failed
+std/net	Net_error.accept_failed	accept_failed	the waiting connection could not be accepted
+std/net	Net_error.addr_buffer_too_small	addr_buffer_too_small	the buffer for the address is shorter than `addr_text_max`
+std/net	Net_error.addr_not_numeric	addr_not_numeric	a name was given where an address string is required
+std/net	Net_error.bind_failed	bind_failed	the listen or bind failed: the port is in use, permission is missing, and so on
+std/net	Net_error.connect_failed	connect_failed	the address resolved, but no candidate connected
+std/net	Net_error.io_failed	io_failed	the send or receive failed (a disconnection, for example)
+std/net	Net_error.resolve_failed	resolve_failed	the host name did not resolve to an address. **Keep "it did not resolve" apart from "it did not connect"**: otherwise a wrong name and a missing peer look the same, and nobody can tell which to fix.
+std/net	Net_error.set_option_failed	set_option_failed	changing a socket option failed
+std/net	Net_error.would_block	would_block	in non-blocking mode, the socket is just not ready yet
+std/net	Peer_addr	pub struct Peer_addr	the address of the peer of a connection. The result of peer(); the address text goes into the caller's host_out.
+std/net	Peer_addr.host_len	pub host_len: Sz	how many bytes of address text were written into the caller's buffer
+std/net	Peer_addr.port	pub port: I32	the peer's port
+std/net	Tcp_listener	pub struct Tcp_listener	a socket that waits for incoming connections
+std/net	Tcp_listener.accept	pub fn accept(r: Self$@): Tcp_stream$@?Net_error	accepts the next waiting connection
+std/net	Tcp_listener.bind	pub fn bind(host: U8[], port: I32): Tcp_listener$@?Net_error	starts listening on the address and port. "0.0.0.0" listens on every IPv4 interface, "::" on every IPv6 one. **"::" does not accept IPv4 clients**, whatever the system default ("Connecting by name tries the candidates overlapped" in std/docs/DESIGN.md); to accept both, open two listeners.
+std/net	Tcp_listener.free	pub fn free(r: Self$@)	closes the listener and frees it
+std/net	Tcp_listener.raw_handle	pub fn raw_handle(r: Self$@): I64	the raw handle, the only thing `std/reactor` uses to register the socket. Only for registering; send/recv/accept still go only through this type's methods.
+std/net	Tcp_listener.set_nonblocking	pub fn set_nonblocking(r: Self$@): Void?Net_error	makes it non-blocking, for use with `std/reactor`
+std/net	Tcp_listener:Owned	impl Tcp_listener: Owned	it owns its resources and frees them with `free()`.
+std/net	Tcp_stream	pub struct Tcp_stream	one connection that can be written to and read from
+std/net	Tcp_stream.connect	pub fn connect(host: U8[], port: I32): Tcp_stream$@?Net_error	connects by name, trying the candidate addresses in overlapping attempts. The connection it returns is blocking. Why the attempts overlap is "Connecting by name tries the candidates overlapped" in `std/docs/DESIGN.md`.
+std/net	Tcp_stream.connect_nonblocking	pub fn connect_nonblocking(host: U8[], port: I32): Tcp_stream$@?Net_error	starts a connection and returns at once. The stream is not connected yet: wait until it is writable with std/reactor.kspls, then call is_connected(). **It uses only one candidate**: moving to the next one would mean waiting. To connect by name, use `connect`.
+std/net	Tcp_stream.free	pub fn free(r: Self$@)	closes the connection and frees it
+std/net	Tcp_stream.is_connected	pub fn is_connected(r: Self$@): Bool	whether the connection succeeded; if false, free it. Call it after the writable notification arrives.
+std/net	Tcp_stream.peer	pub fn peer(r: Self$@, host_out: U8$[]): Peer_addr?Net_error	the address of the peer. For a stream that `accept` returned, it is the client; for one that connected, the server.
+std/net	Tcp_stream.raw_handle	pub fn raw_handle(r: Self$@): I64	the raw handle, the only thing `std/reactor` uses to register the socket
+std/net	Tcp_stream.read	pub fn read(r: Self$@, buf: U8$[]): Sz?Net_error	receives and returns how much arrived; 0 means the peer closed
+std/net	Tcp_stream.set_nonblocking	pub fn set_nonblocking(r: Self$@): Void?Net_error	makes it non-blocking, for use with `std/reactor`
+std/net	Tcp_stream.shut_write	pub fn shut_write(r: Self$@): Void?Net_error	closes only the sending half, to signal the end. **This is not a disconnection.** The peer's `read` returns 0, while this side **can still read and wait for a response**. Caution: **Do not use it instead of closing** (only `free` releases the memory).
+std/net	Tcp_stream.write	pub fn write(r: Self$@, buf: U8[]): Sz?Net_error	sends and returns how much was sent; a partial send is normal. To send everything, use `write_all` (a separate name, as in Rust, because a missing loop silently truncates).
+std/net	Tcp_stream.write_all	pub fn write_all(r: Self$@, buf: U8[]): Void?Net_error	sends every byte in a loop; a non-blocking socket may still fail. On a non-blocking socket it throws would_block rather than spinning, and the amount already sent is lost; to resume a partial send, use write and track the progress yourself.
+std/net	Tcp_stream:Owned	impl Tcp_stream: Owned	it owns its socket and memory and frees them with `free()`
+std/net	Udp_recv_result	pub struct Udp_recv_result	one received datagram, and who sent it
+std/net	Udp_recv_result.from_host_len	pub from_host_len: Sz	how many bytes of address text were written into the caller's buffer
+std/net	Udp_recv_result.from_port	pub from_port: I32	the sender's port
+std/net	Udp_recv_result.len	pub len: Sz	the payload size in bytes
+std/net	Udp_socket	pub struct Udp_socket	a socket that sends and receives datagrams
+std/net	Udp_socket.bind	pub fn bind(host: U8[], port: I32): Udp_socket$@?Net_error	opens a socket on the address and port. The host works as in `Tcp_listener.bind`.
+std/net	Udp_socket.free	pub fn free(r: Self$@)	closes the socket and frees it
+std/net	Udp_socket.raw_handle	pub fn raw_handle(r: Self$@): I64	the raw handle, the only thing `std/reactor` uses to register the socket
+std/net	Udp_socket.recv_from	pub fn recv_from(r: Self$@, buf: U8$[], from_host_out: U8$[]): Udp_recv_result?Net_error	receives one datagram and returns its size and who sent it
+std/net	Udp_socket.send_to	pub fn send_to(r: Self$@, buf: U8[], host: U8[], port: I32): Sz?Net_error	sends one datagram and returns how much was sent. The destination must be **an address string**; resolve a name once with `resolve_one`.
+std/net	Udp_socket.set_nonblocking	pub fn set_nonblocking(r: Self$@): Void?Net_error	makes it non-blocking, for use with `std/reactor`
+std/net	Udp_socket:Owned	impl Udp_socket: Owned	it owns its socket and memory and frees them with `free()`
+std/net	addr_text_max	pub const addr_text_max: Sz = 46	a buffer size that any address in text form fits in. C's INET6_ADDRSTRLEN. **A buffer that is too small is refused, not truncated**: a truncated `2001:db8::1` reads as another address, `2001:db8:`, in logs and in matching.
+std/net	resolve_one	pub fn resolve_one(host: U8[], out: U8$[]): Sz?Net_error	resolves a name to one address string and returns its length. **You do not need to call it before connecting**: `Tcp_stream.connect` resolves by itself, and this narrows the candidates to one. It returns the resolver's first candidate.
+std/prng	Prng	pub struct Prng	a reproducible pseudo-random generator (xorshift64*)
+std/prng	Prng.below	pub fn below(r: Self$@, n: Sz): Sz	a number in [0, n); 0 when n is 0. **Every value is equally likely.** A plain remainder favours the low values, so a raw value past the last whole multiple of n is retried (as OpenBSD's `arc4random_uniform` does).
+std/prng	Prng.between	pub fn between(r: Self$@, lo: I64, hi: I64): I64	a number from lo to hi, both ends included. **Both ends can come up.** For the full range of `I64` the count does not fit in a `U64`, so the raw 64-bit value is returned.
+std/prng	Prng.chance	pub fn chance(r: Self$@, percent: Sz): Bool	true about `percent` times in 100
+std/prng	Prng.new	pub fn new(seed: U64): Prng	makes a generator from a seed
+std/prng	Prng.next_f64	pub fn next_f64(r: Self$@): F64	a uniform number in [0.0, 1.0) with 53 bits of precision
+std/prng	Prng.next_u64	pub fn next_u64(r: Self$@): U64	the next 64-bit number; advances the state
+std/prng	Prng.state	pub state: U64	the generator's whole state; saving it lets a run be replayed
+std/rand	Rand_error	pub enum Rand_error	why secure randomness could not be obtained
+std/rand	Rand_error.unavailable	unavailable	the OS randomness source could not be opened, or reading it failed
+std/rand	bytes	pub fn bytes(n: Sz, arena: Arena$@): U8[]?Rand_error	a newly allocated buffer of secure random bytes
+std/rand	fill	pub fn fill(buf: U8$[]): Void?Rand_error	fills the caller's memory from the OS randomness source
+std/rand	u64	pub fn u64(): U64?Rand_error	one secure random `U64`. For a token or a session ID.
+std/reactor	Reactor	pub struct Reactor	watches many handles at once and reports which became ready
+std/reactor	Reactor.clear	pub fn clear(r: Self$@)	drops every registration but keeps the memory already allocated. Use it to rebuild the set before each `wait()`, so no registration for a closed peer and no stale interest remains.
+std/reactor	Reactor.free	pub fn free(r: Self$@)	frees the registration lists; it owns no socket
+std/reactor	Reactor.new	pub fn new(): Reactor	a reactor with nothing registered yet
+std/reactor	Reactor.register	pub fn register(r: Self$@, handle: I64, interest: U8, token: Sz)	adds one handle to watch
+std/reactor	Reactor.unregister	pub fn unregister(r: Self$@, handle: I64)	drops the one registration for that handle. It moves the last element into the gap, so the order is not kept.
+std/reactor	Reactor.wait	pub fn wait(r: Self$@, timeout_ms: I32): List<|Ready|>?Reactor_error	waits, and returns only the handles something happened on
+std/reactor	Reactor:Owned	impl Reactor: Owned	it owns its resources and releases them with `free()`.
+std/reactor	Reactor_error	pub enum Reactor_error	why a wait failed
+std/reactor	Reactor_error.poll_failed	poll_failed	the OS refused the wait itself, not any one handle
+std/reactor	Ready	pub struct Ready	one watched handle that became ready
+std/reactor	Ready.revents	pub revents: U8	what actually happened, which may not be what was asked for
+std/reactor	Ready.token	pub token: Sz	the token the caller registered it under, to find the socket again
+std/reactor	err_or_closed	pub const err_or_closed: U8 = 0x4	the handle is unusable; only reported, never requested
+std/reactor	hangup	pub const hangup: U8 = 0x8	the peer closed its sending side; only reported, never requested. Caution: **Do not confuse it with `err_or_closed`.** `WSAPoll` returns it on the peer's FIN, where POSIX's `poll` returns only `readable`, so decide by **what `read` returns** (0, or an error).
+std/reactor	readable	pub const readable: U8 = 0x1	there is data to read, or the peer closed. Caution: **The values must match `kspl_net_poll` in `ksplc/gen/runtime/hosted_net.c`** (`make test-conventions` checks this).
+std/reactor	writable	pub const writable: U8 = 0x2	a send would not block
+std/refcount	Arc	pub struct Arc<|T|>	a shared owner counted atomically, so threads can share it. The compiler counts it as it counts `Rc<|T|>`, but atomically.
+std/refcount	Arc<|T|>.clone	pub fn clone(r: Self$@): Arc<|T|>	one more owner of the same value
+std/refcount	Arc<|T|>.downgrade	pub fn downgrade(r: Self$@): Weak_arc<|T|>	a handle that watches without owning
+std/refcount	Arc<|T|>.empty	pub fn empty(): Arc<|T|>	a handle owning nothing. Caution: As with `Rc<|T|>`, `get()` / `clone()` / `downgrade()` on an empty handle are undefined.
+std/refcount	Arc<|T|>.get	pub fn get(r: Self$@): T$@	the value itself, which stays alive while any owner does
+std/refcount	Arc<|T|>.is_empty	pub fn is_empty(r: Self$@): Bool	whether this handle owns nothing
+std/refcount	Arc<|T|>.new	pub fn new(value: T): Arc<|T|>	moves a value onto the heap and returns the first owner
+std/refcount	Arc<|T|>:Ref_counted	impl<|T|> Arc<|T|>: Ref_counted	the compiler counts it, so no call is written by hand
+std/refcount	Rc	pub struct Rc<|T|>	a shared owner counted by the compiler, for one thread. A plain assignment (`b: = a;`) or an argument shares it safely (the file header says why).
+std/refcount	Rc<|T|>.clone	pub fn clone(r: Self$@): Rc<|T|>	one more owner of the same value
+std/refcount	Rc<|T|>.downgrade	pub fn downgrade(r: Self$@): Weak_rc<|T|>	a handle that watches without owning
+std/refcount	Rc<|T|>.empty	pub fn empty(): Rc<|T|>	a handle that owns nothing. Caution: `get()` / `clone()` / `downgrade()` on an empty handle are undefined, like a null dereference. It equals `::{}`, an empty slot.
+std/refcount	Rc<|T|>.get	pub fn get(r: Self$@): T$@	the value itself, which stays alive while any owner does
+std/refcount	Rc<|T|>.is_empty	pub fn is_empty(r: Self$@): Bool	whether this handle owns nothing
+std/refcount	Rc<|T|>.new	pub fn new(value: T): Rc<|T|>	moves a value onto the heap and returns the first owner
+std/refcount	Rc<|T|>:Ref_counted	impl<|T|> Rc<|T|>: Ref_counted	the compiler counts it, so no call is written by hand. priv, because only the compiler calls it. **The zero value (ctrl == null) is an empty handle that owns nothing, and retain/release do nothing on it.** A chained release walks zeroed memory (an array's empty slots), which would otherwise crash.
+std/refcount	Weak_arc	pub struct Weak_arc<|T|>	the `Arc` version of `Weak_rc`, which threads can share. As with `Weak_rc<|T|>`, making one side of a cycle a `Weak_arc` avoids the leak; the weak count changes atomically.
+std/refcount	Weak_arc<|T|>.clone	pub fn clone(r: Self$@): Weak_arc<|T|>	one more weak handle to the same value
+std/refcount	Weak_arc<|T|>.upgrade	pub fn upgrade(r: Self$@): Arc<|T|>?Weak_error	an owner again, if the value is still alive. A plain fetch-add could raise strong from 0 to 1, so a CAS increments only a non-zero value it read, and retries when another thread changed it first.
+std/refcount	Weak_arc<|T|>:Ref_counted	impl<|T|> Weak_arc<|T|>: Ref_counted	the compiler counts it, so no call is written by hand
+std/refcount	Weak_error	pub enum Weak_error	why a weak handle could not become an owner again
+std/refcount	Weak_error.value_dropped	value_dropped	every owner had already released the value
+std/refcount	Weak_rc	pub struct Weak_rc<|T|>	a handle that does not own the value, so a cycle does not leak. downgrade() returns it. Two `Rc<|T|>` pointing at each other never reach 0 (there is no cycle-detecting GC); making one side a `Weak_rc` avoids the leak. The compiler counts it as it counts `Rc<|T|>`, but changes the weak count.
+std/refcount	Weak_rc<|T|>.clone	pub fn clone(r: Self$@): Weak_rc<|T|>	one more weak handle to the same value
+std/refcount	Weak_rc<|T|>.upgrade	pub fn upgrade(r: Self$@): Rc<|T|>?Weak_error	an owner again, if the value is still alive
+std/refcount	Weak_rc<|T|>:Ref_counted	impl<|T|> Weak_rc<|T|>: Ref_counted	the compiler counts it, so no call is written by hand
+std/reflect	Field_extra	pub struct Field_extra	what only some kinds carry; all 0 for every other kind. Caution: **Read it only for that kind.** **It cannot be `Field_kind`'s payload** (the reason is at `Field_info.nested`). Grouping it here keeps `Field_info` from growing one field per kind.
+std/reflect	Field_extra.elem	pub elem: Field_kind	a list's element kind, or an option's contents kind
+std/reflect	Field_extra.elem_size	pub elem_size: Sz	the width of one value of the `elem` kind, which is a list's stride. Its `sizeof`; **for `.list_field` it is the stride itself**.
+std/reflect	Field_extra.none_tag	pub none_tag: I32	the tag an option carries when it holds nothing
+std/reflect	Field_extra.payload_offset	pub payload_offset: Sz	where an option's contents start; the tag comes first. **Only this one cannot be found with `offsetof`**: an enum's payload sits in an anonymous C union. It comes from ksplc's layout, as `sizeof` does.
+std/reflect	Field_extra.some_tag	pub some_tag: I32	the tag an option carries when it holds a value. **Both tags are taken from the declaration.** A hard-coded "the value variant is 0" would silently flip if `Option`'s variants were reordered. A struct zeroed with `::{}` gets tag 0, so the round trip writes the tag on both branches.
+std/reflect	Field_extra.width	pub width: Sz	the width of one number in bytes, for the three numeric kinds only. It comes from the declaration's `sizeof`, so it fits `Sz` in any environment.
+std/reflect	Field_info	pub struct Field_info	one field of a struct: its name, where it sits, and what it is. The position is written with `offsetof` ("Built-in operators" in `../docs/SPEC-language.md`). Caution: **Do not drop `offset` and add up widths from `kind`.** Padding breaks the sum (in `struct { a: U8; b: I64; }`, `b` is at 8, not 1).
+std/reflect	Field_info.extra	pub extra: Field_extra	what only some kinds carry (see `Field_extra`). **`.list_field` and `.opt_field` never go into `extra.elem`**: a container of containers cannot be walked, since a kind that points at itself is blocked by the same gap.
+std/reflect	Field_info.kind	pub kind: Field_kind	what it is
+std/reflect	Field_info.name	pub name: U8[]	the name as the declaration writes it
+std/reflect	Field_info.nested	pub nested: Field_info[]	the table of a nested struct; empty for every other kind. **It is not `Field_kind`'s payload because of a gap in `--target=llvm`.** The shape it takes once that gap is filled is in "a trait returning a table" in `../docs/DESIGN.md`.
+std/reflect	Field_info.offset	pub offset: Sz	how far into the struct it sits, counting padding
+std/reflect	Field_kind	pub enum Field_kind	what one field is, as far as a round trip needs to know. **List only the kinds the round-trip functions can walk**, or a name could be written that does nothing (`../docs/DESIGN.md`'s Principle 5). A number's width is in `Field_extra.width`.
+std/reflect	Field_kind.bool_field	bool_field	a `Bool`
+std/reflect	Field_kind.float_field	float_field	floating point (`F32` / `F64`)
+std/reflect	Field_kind.int_field	int_field	a signed integer (`I8` / `I16` / `I32` / `I64`)
+std/reflect	Field_kind.list_field	list_field	a `List<|T|>`, whose element is described by `Field_info.extra`
+std/reflect	Field_kind.opt_field	opt_field	an `Option<|T|>`, whose contents are described by `Field_info.extra`
+std/reflect	Field_kind.str_field	str_field	a `U8[]`. Read as the slice it is; written as a copy into the receiver's arena.
+std/reflect	Field_kind.struct_field	struct_field	a nested struct, whose table is in `Field_info.nested`
+std/reflect	Field_kind.uint_field	uint_field	an unsigned integer (`U8` / `U16` / `U32` / `U64` / `Sz`). **It is separate from the signed kind for the reader's sake**: sign-extending a `U32`'s `0xFFFFFFFF` gives `-1`.
+std/reflect	Reflectable	pub trait Reflectable	a type that returns its own field table. **Writing the body by hand turns off the synthesis.** Do so when key names differ from the declaration, or when the synthesis cannot handle the type. Caution: **Do not let the names and positions disagree with the declaration.** No diagnostic catches it: the code reads or writes the neighbouring field.
+std/reflect	Reflectable.fields	fn fields(r: Self): Field_info[]	the table, which points at a `const` and is not built
+std/reflect	load_float	pub fn load_float(at: U8@, width: Sz): F64	reads a floating-point value of that width as an `F64`. An `F32` is widened; the round-trip formats hold only double precision.
+std/reflect	load_int	pub fn load_int(at: U8@, width: Sz): I64	reads a signed integer of that width, widened to `I64`. Caution: **Keep the per-width branching in these `load_*` / `store_*` functions only**, not in `std/json_struct` / `std/db` (Principle 6 in `../docs/DESIGN.md`). The widths are 1/2/4/8. **Read it as the type of that width, then widen** (that type decides the sign extension).
+std/reflect	load_uint	pub fn load_uint(at: U8@, width: Sz): I64	reads an unsigned integer of that width, widened without sign extension. **Keeping it separate from the signed kind is the point** (see `Field_kind`). **A `U64` with its top bit set does not fit in an `I64`**, and `I64` is the limit of both round-trip formats (JSON, sqlite).
+std/reflect	store_float	pub fn store_float(at: U8$@, width: Sz, v: F64)	writes a floating-point value, narrowed to that width. **Narrowing into an `F32` loses digits**, so a round trip can change such a value.
+std/reflect	store_int	pub fn store_int(at: U8$@, width: Sz, v: I64)	writes an integer, narrowed to that width. **Signed and unsigned share this function**: the narrowed bytes are the same.
+std/regex	Match	pub struct Match	one matched span, and what its groups captured
+std/regex	Match.end	pub end: Sz	where it ends; the span is `[start, end)`
+std/regex	Match.group	pub fn group(r: Self, n: Sz, text: U8[]): U8[]	what that group captured, or empty if it did not take part. **The result is a view into text**, using the original text's indices.
+std/regex	Match.group_count	pub fn group_count(r: Self): Sz	how many capturing groups the pattern has. **It is not the number that took part** (`(a)|b` matching `b` still has one).
+std/regex	Match.has_group	pub fn has_group(r: Self, n: Sz): Bool	whether that group took part; an empty match still counts. Caution: **Do not confuse a group that did not take part with one that matched empty.** For the first, `has_group` is false; for the second, it is true and `group` returns empty. Group 0, the whole match, is not handled here (`start` / `end` hold it).
+std/regex	Match.start	pub start: Sz	where the match begins in the text
+std/regex	Regex	pub struct Regex	one compiled pattern, matched against any number of texts
+std/regex	Regex.compile	pub fn compile(pattern: U8[]): Regex$@?Regex_error	reads a pattern once, so it can be matched many times. Caution: **On failure, free the tree before throwing.** The parse returns the whole tree even on an error (Compiler's description says why); this is the only place it is freed.
+std/regex	Regex.find	pub fn find(r: Self$@, text: U8[]): Match?Regex_error	the first matched span; fails when nothing matches
+std/regex	Regex.find_all	pub fn find_all(r: Self$@, text: U8[], arena: Arena$@): List<|Match|>?Regex_error	every matched span; the search resumes past each one. Front to back; **even an empty match advances one byte.** The budget (max_match_steps) restarts per match. An element holds a whole `Slots`. Why it is eager, and how it differs from Python's `findall`, is in "Every match is returned in a `List`. No lazy iterator is made" in `std/docs/DESIGN.md`.
+std/regex	Regex.free	pub fn free(r: Self$@)	frees the compiled tree
+std/regex	Regex.is_match	pub fn is_match(r: Self$@, text: U8[]): Bool	whether anything in the text matches
+std/regex	Regex:Owned	impl Regex: Owned	it owns its resources and frees them in `free()`.
+std/regex	Regex_error	pub enum Regex_error	why a pattern could not be compiled, or matched nothing
+std/regex	Regex_error.dangling_quantifier	dangling_quantifier	nothing quantifiable comes before `*`, `+`, `?` or `{`
+std/regex	Regex_error.invalid_escape	invalid_escape	nothing follows `\`, or an escaped letter or digit is not in the list
+std/regex	Regex_error.invalid_range	invalid_range	a range's ends are reversed, or a set such as `\d` is at a range's end
+std/regex	Regex_error.invalid_repeat	invalid_repeat	`{` has no valid count, m > n, or the count exceeds `max_repeat_count`
+std/regex	Regex_error.no_match	no_match	nothing in the text matched
+std/regex	Regex_error.too_complex	too_complex	backtracking went over budget; guards against catastrophic backtracking
+std/regex	Regex_error.too_deep	too_deep	the `(` nesting is too deep; guards against stack exhaustion at compile time
+std/regex	Regex_error.too_many_groups	too_many_groups	there are more capturing groups than `max_groups`
+std/regex	Regex_error.unmatched_bracket	unmatched_bracket	a `[` has no `]`
+std/regex	Regex_error.unmatched_paren	unmatched_paren	an opening parenthesis has no closing one, or the other way round
+std/regex	Regex_error.unsupported_backreference	unsupported_backreference	`\1`…`\9`, which refer to a captured string inside the pattern
+std/regex_node	Rx_kind	pub enum Rx_kind	what one node of a compiled pattern stands for
+std/regex_node	Rx_kind.any	any	`.`
+std/regex_node	Rx_kind.class	class	a `[...]` set
+std/regex_node	Rx_kind.end_anchor	end_anchor	`$`
+std/regex_node	Rx_kind.group	group	a `(...)`; its alternatives hang off it
+std/regex_node	Rx_kind.group_end	group_end	the mark that closes a group, so the capture's end gets recorded
+std/regex_node	Rx_kind.group_repeat	group_repeat	a whole group repeated
+std/regex_node	Rx_kind.lit	lit	one literal byte
+std/regex_node	Rx_kind.not_word_boundary	not_word_boundary	`\B`
+std/regex_node	Rx_kind.repeat	repeat	one atom repeated; `*`, `+`, `?` and `{m,n}` are all this
+std/regex_node	Rx_kind.start_anchor	start_anchor	`^`
+std/regex_node	Rx_kind.word_boundary	word_boundary	`\b`
+std/regex_node	Rx_node	pub struct Rx_node	one node of a compiled pattern; `kind` decides which fields mean something
+std/regex_node	Slots	pub struct Slots	what each capturing group caught; `-1` means it did not take part. **`-1` is not 0**: an empty match has `start == end`.
+std/regex_node	drop_repeat_step	pub fn drop_repeat_step(n: Rx_node$@)	frees one `new_repeat_step` copy, but nothing it shares. Caution: **Do not use `free_rx_node`** (it walks the shared `sub`).
+std/regex_node	free_rx_alts	pub fn free_rx_alts(alts: List<|List<|Rx_node$@|>|>$@)	frees a group's alternatives and every node under them. It frees the Lists too. Walk .alts only for the .group kind (for others it is uninitialized).
+std/regex_node	free_rx_node	pub fn free_rx_node(n: Rx_node$@)	frees one node and everything under it
+std/regex_node	max_groups	pub const max_groups: Sz = 9	how many capturing groups a pattern may have. Caution: **Refuse a pattern that exceeds it** (`too_many_groups`); otherwise the tenth group onward silently comes back empty. 9 matches `\1`…`\9` and sets the size a Match holds.
+std/regex_node	max_repeat_count	pub const max_repeat_count: Sz = 1000	the largest `{m,n}` count accepted, as in RE2 and Go. Caution: **Refuse a count that exceeds it** (`invalid_repeat`). A repeated group recurses one level per round, so a large count hits regex.kspls's max_match_depth first.
+std/regex_node	new_class_node	pub fn new_class_node(): Rx_node$@	one new `[...]` node with an empty membership table
+std/regex_node	new_group_node	pub fn new_group_node(alts: List<|List<|Rx_node$@|>|>, gidx: I32): Rx_node$@	one new group node, with its alternatives and closing mark
+std/regex_node	new_node	pub fn new_node(kind: Rx_kind): Rx_node$@	one new node; a `.group` is made with `new_group_node` instead. Caution: Make a .group only with new_group_node. Made here, its .alts stays uninitialized and free_rx_alts walks a garbage list.
+std/regex_node	new_repeat_step	pub fn new_repeat_step(from: Rx_node$@, started_at: Sz): Rx_node$@	a temporary copy that stands for this round of a repeated group. Caution: **Make it a shallow copy.** `sub` **shares** the compile-time tree; free the copy with `drop_repeat_step` (see the caution at the top of this file).
+std/regex_node	reset_slots	pub fn reset_slots(c: Slots$@, count: Sz)	marks every group as not having taken part
+std/regex_node	set_range	pub fn set_range(n: Rx_node$@, lo: U8, hi: U8)	adds every byte in a range to a `[...]` set
+std/ring	Ring	pub struct Ring<|const cap: Sz|>	a fixed-size byte queue held in memory the caller owns
+std/ring	Ring<|cap|>.clear	pub fn clear(r: Self$@)	discards everything in the queue. The next write overwrites the contents.
+std/ring	Ring<|cap|>.consume	pub fn consume(r: Self$@, n: Sz)	marks bytes that `peek` returned as read
+std/ring	Ring<|cap|>.free_space	pub fn free_space(r: Self@): Sz	how many more bytes would fit
+std/ring	Ring<|cap|>.is_empty	pub fn is_empty(r: Self@): Bool	whether the queue holds nothing
+std/ring	Ring<|cap|>.is_full	pub fn is_full(r: Self@): Bool	whether no more bytes fit
+std/ring	Ring<|cap|>.len	pub fn len(r: Self@): Sz	how many bytes the queue holds
+std/ring	Ring<|cap|>.new	pub fn new(buf: U8$@): Ring<|cap|>	makes a queue over memory the caller owns
+std/ring	Ring<|cap|>.peek	pub fn peek(r: Self@): U8[]	the bytes from the read position to the wrap, without copying. **It may not be everything in the queue**: data that crosses the wrap needs a second `peek` -> `consume` (joining would need a memmove). It is valid until `consume`; a `write` that wraps around overwrites it.
+std/ring	Ring<|cap|>.read	pub fn read(r: Self$@, dst: U8$[]): Sz	reads as much as fits in the destination, and returns how many bytes it read
+std/ring	Ring<|cap|>.read_byte	pub fn read_byte(r: Self$@): Option<|U8|>	removes and returns one byte, or none if empty
+std/ring	Ring<|cap|>.write	pub fn write(r: Self$@, src: U8[]): Sz	writes as much as fits, and returns how many bytes it stored. A partial write is normal; when everything must fit, check `free_space()` first.
+std/ring	Ring<|cap|>.write_byte	pub fn write_byte(r: Self$@, b: U8): Bool	writes one byte, or returns false if full
+std/seq	Conv	pub struct Conv<|S, T, U|>	the adapter that passes each element through a function
+std/seq	Conv<|S, T, U|>.next	pub fn next(r: Self$@): Option<|U|>	the next element, already converted, or nothing
+std/seq	Conv<|S, T, U|>.select	pub fn select<|V|>(r: Self, f: Callable1<|U, V|>): Conv<|Conv<|S, T, U|>, U, V|>	adds one more conversion to the chain; reads nothing yet
+std/seq	Conv<|S, T, U|>.to_list	pub fn to_list(r: Self, arena: Arena$@): List<|U|>	drives the chain and collects the results; the first allocation
+std/seq	Conv<|S, T, U|>.where	pub fn where(r: Self, pred: Callable1<|U, Bool|>): Keep<|Conv<|S, T, U|>, U|>	adds a condition to the chain; reads nothing yet
+std/seq	Conv<|S, T, U|>:Iter<|U|>	impl<|S: Iter<|T|>, T, U|> Conv<|S, T, U|>: Iter<|U|>	so a `for` can drive it
+std/seq	Keep	pub struct Keep<|S, T|>	the adapter that lets through only elements meeting a condition
+std/seq	Keep<|S, T|>.next	pub fn next(r: Self$@): Option<|T|>	the next element that meets the condition, or nothing
+std/seq	Keep<|S, T|>.select	pub fn select<|U|>(r: Self, f: Callable1<|T, U|>): Conv<|Keep<|S, T|>, T, U|>	adds a conversion to the chain; reads nothing yet
+std/seq	Keep<|S, T|>.to_list	pub fn to_list(r: Self, arena: Arena$@): List<|T|>	drives the chain and collects the results; the first allocation
+std/seq	Keep<|S, T|>.where	pub fn where(r: Self, pred: Callable1<|T, Bool|>): Keep<|Keep<|S, T|>, T|>	adds one more condition to the chain; reads nothing yet
+std/seq	Keep<|S, T|>:Iter<|T|>	impl<|S: Iter<|T|>, T|> Keep<|S, T|>: Iter<|T|>	so a `for` can drive it
+std/seq	List<|T|>.all	pub fn all(r: Self@, pred: Callable1<|T, Bool|>): Bool	whether every element meets it. An empty list gives true.
+std/seq	List<|T|>.any	pub fn any(r: Self@, pred: Callable1<|T, Bool|>): Bool	whether at least one element meets it
+std/seq	List<|T|>.distinct	pub fn distinct(r: Self@, eq: Callable2<|T, T, Bool|>, arena: Arena$@): List<|T|>	a new list keeping the first of each group of equal elements, in order. O(n^2); for large data with a hashable type, use a `Map`.
+std/seq	List<|T|>.first	pub fn first(r: Self@): T?Seq_error	the first element; fails when there is none
+std/seq	List<|T|>.first_where	pub fn first_where(r: Self@, pred: Callable1<|T, Bool|>): T?Seq_error	the first element that meets the condition; fails when none does
+std/seq	List<|T|>.max_by	pub fn max_by(r: Self@, cmp: Callable2<|T, T, I32|>): T?Seq_error	the largest element; fails when there is none
+std/seq	List<|T|>.min_by	pub fn min_by(r: Self@, cmp: Callable2<|T, T, I32|>): T?Seq_error	the smallest element; fails when there is none
+std/seq	List<|T|>.order_by	pub fn order_by(r: Self@, cmp: Callable2<|T, T, I32|>, arena: Arena$@): List<|T|>	a new list in ascending order; equal elements keep their order. A merge sort: stable, with O(n log n) comparisons. Short runs (16) are first sorted by insertion, as Timsort does with its short runs.
+std/seq	List<|T|>.reversed	pub fn reversed(r: Self@, arena: Arena$@): List<|T|>	a new list in the opposite order
+std/seq	List<|T|>.select	pub fn select<|U|>(r: Self@, f: Callable1<|T, U|>): Conv<|List_seq<|T|>, T, U|>	a chain of each element passed through a function (`map` elsewhere). Caution: **Do not turn it into a free function**: `U` is decided at the call site, not by the receiver ("A name on the impl that the receiver does not fix" in `../docs/DESIGN.md`).
+std/seq	List<|T|>.skip	pub fn skip(r: Self@, n: Sz, arena: Arena$@): List<|T|>	a new list of what remains after the first n elements
+std/seq	List<|T|>.take	pub fn take(r: Self@, n: Sz, arena: Arena$@): List<|T|>	a new list of the first n elements
+std/seq	List<|T|>.where	pub fn where(r: Self@, pred: Callable1<|T, Bool|>): Keep<|List_seq<|T|>, T|>	a chain of the elements that meet the condition. **It touches no element here.**
+std/seq	List_seq	pub struct List_seq<|T|>	the start of a chain; reads a `List` and advances a position. **A copy copies the position too**, and `for` and `to_list` take the receiver by value: that is what makes a chain drivable any number of times.
+std/seq	List_seq<|T|>.next	pub fn next(r: Self$@): Option<|T|>	the next element, or nothing at the end
+std/seq	List_seq<|T|>:Iter<|T|>	impl<|T|> List_seq<|T|>: Iter<|T|>	so a `for` can drive it
+std/seq	Seq_error	pub enum Seq_error	why a chain could return nothing
+std/seq	Seq_error.empty_sequence	empty_sequence	there was no element to pick from
+std/seq	Seq_error.no_match	no_match	every element was checked and none met the condition
+std/sha256	Sha256	pub struct Sha256	a running SHA-256, fed in pieces and closed at the end
+std/sha256	Sha256.finalize	pub fn finalize(r: Self$@): U8[32]	closes the hash and returns the digest
+std/sha256	Sha256.new	pub fn new(): Sha256	a new hash with nothing fed in yet
+std/sha256	Sha256.update	pub fn update(r: Self$@, data: U8[])	feeds in the next piece; pieces need not align with a block
+std/sha256	digest_size	pub const digest_size: Sz = 32	the digest is always this many bytes (256 bits)
+std/sha256	hash	pub fn hash(data: U8[]): U8[32]	the digest of all of `data`, in one call
+std/sha256	hex_len	pub const hex_len: Sz = 64	the hex text is always this many characters. The caller provides an array of this size.
+std/sha256	hmac	pub fn hmac(key: U8[], data: U8[]): U8[32]	RFC 2104's HMAC-SHA256. A key longer than the block size (64 bytes) is hashed first, as RFC 2104 requires.
+std/sha256	hmac_verify	pub fn hmac_verify(key: U8[], data: U8[], mac: U8[]): Bool	whether a MAC matches, in a time that does not reveal how much matched. Caution: **Do not compare with `hmac(..).equals(mac)`.** equals returns at the first byte that differs, so the time reveals how many leading bytes matched, and an attacker can forge a MAC one byte at a time. This loop takes the same time whichever byte differs; a different length may return early.
+std/sha256	write_hex	pub fn write_hex(digest: U8[32], out: U8$[])	writes the digest as lowercase hex, without allocating. Use it for log output and for comparisons in a test. Caution: **Do not take a `Writer`.** Importing `io` would make one digest pay for the whole string and IO library, many times the size of this file.
+std/stack_limit	Stack_limit	pub struct Stack_limit	where a walk on the calling thread stops, a margin before the end of its stack. Caution: **Create it on the thread that walks.** It holds that thread's bounds, and another thread's stack is somewhere else.
+std/stack_limit	Stack_limit.near	pub fn near(limit: Self@): Bool	whether the caller is within the margin of the stack's end. **Always false where the OS does not tell** (a freestanding build), so a walk also keeps its own depth count.
+std/stack_limit	Stack_limit.new	pub fn new(margin: Sz): Stack_limit	the limit for the calling thread. **It asks the OS, and that is not cheap** (on Linux the main thread's bounds are read from a file). Create it once per walk and keep it.
+std/str	Arena.text	pub fn text(r: Self$@): Arena_text$@	a builder for one string in this arena. The builder is in the arena too, so `.s(…)` can chain (a method's receiver must be a place).
+std/str	Arena_text	pub struct Arena_text	a short-lived builder that leaves the finished text in the arena
+std/str	Arena_text.c	pub fn c(r: Self$@, val: U8): Self$@	writes one byte and returns the builder
+std/str	Arena_text.flush	pub fn flush(r: Self$@): Self$@	does nothing, and is here to complete `Writer`
+std/str	Arena_text.s	pub fn s(r: Self$@, val: U8[]): Self$@	writes a string and returns the builder
+std/str	Arena_text.take	pub fn take(r: Self$@): U8[]	copies the text into the arena and frees the builder
+std/str	Arena_text:Writer	impl Arena_text: Writer	so it can be used anywhere a `Writer` is expected
+std/str	Str_builder	pub struct Str_builder	a buffer that grows as needed, so it needs a `free()`
+std/str	Str_builder.c #inline	pub fn c(r: Self$@, c: U8): Self$@	writes one byte, growing if needed
+std/str	Str_builder.cap	pub cap: Sz	how many bytes fit before it has to grow
+std/str	Str_builder.clear	pub fn clear(r: Self$@): Self$@	empties it, keeping the memory already allocated
+std/str	Str_builder.drop_prefix	pub fn drop_prefix(r: Self$@, n: Sz): Self$@	drops the leading bytes and moves the rest to the start. For removing a message already read from a receive buffer, which may hold the start of the next one. It frees no memory: a long-lived buffer stays at the size of the longest message.
+std/str	Str_builder.escape_and_append	pub fn escape_and_append(r: Self$@, src: U8[]): Self$@	writes a JSON string's contents; the caller writes the quotes. Caution: **Escape everything below 0x20.** JSON allows no raw control character (RFC 8259); escaping only `\n`, `\r` and `\t` makes **JSON that no other parser accepts** for a string with `0x01`. U8[]'s unescape_to_arena decodes it; changing only one breaks the round trip.
+std/str	Str_builder.flush	pub fn flush(r: Self$@): Self$@	does nothing, and is here to complete `Writer`
+std/str	Str_builder.fmt	pub fn fmt(r: Self$@, w: Writer): Writer	writes its contents to `w`
+std/str	Str_builder.free	pub fn free(r: Self$@)	frees the memory and empties it
+std/str	Str_builder.len	pub len: Sz	how many bytes have been written
+std/str	Str_builder.new	pub fn new(): Str_builder	an empty builder, which has allocated no memory yet
+std/str	Str_builder.ptr	pub ptr: U8$@	the memory holding the written bytes
+std/str	Str_builder.reserve	pub fn reserve(r: Self$@, new_cap: Sz)	makes room in advance, so a long write does not grow step by step
+std/str	Str_builder.s #inline	pub fn s(r: Self$@, s: U8[]): Self$@	writes a string, growing if needed
+std/str	Str_builder.slice	pub fn slice(r: Self$@): U8$[]	a view of what has been written, valid until it grows
+std/str	Str_builder:Formattable	impl Str_builder: Formattable	so it can be used inside an interpolation
+std/str	Str_builder:Owned	impl Str_builder: Owned	it owns its resources and frees them with `free()`.
+std/str	Str_builder:Writer	impl Str_builder: Writer	so it can be used anywhere a `Writer` is expected
+std/str	Str_error	pub enum Str_error	why a string could not be parsed
+std/str	Str_error.invalid_format	invalid_format	an escape or a form the notation does not allow
+std/str	Str_error.out_of_bounds	out_of_bounds	a position or a value out of range
+std/str	U8[].dedent	pub fn dedent(r: U8[]): Str_builder	the same lines with the common indentation removed
+std/str	U8[].equals	pub fn equals(r: U8[], b: U8[]): Bool	whether the bytes are the same; deliberately not `==`
+std/str	U8[].hash	pub fn hash(r: U8[]): U32	a hash of the contents that spreads keys over the buckets
+std/str	U8[].join	pub fn join(r: U8[], $parts: List<|U8[]|>, arena: Arena$@): U8[]	joins the pieces, with the receiver between each pair. Python's `sep.join(parts)`. `parts` is by value because a temporary's address cannot be taken; a List is a small struct.
+std/str	U8[].lines	pub fn lines(r: U8[], arena: Arena$@): List<|U8[]|>	the lines, without trailing `\r` and with no empty line after the last newline
+std/str	U8[].replace	pub fn replace(r: U8[], old: U8[], new: U8[], arena: Arena$@): U8[]	a new string with every occurrence replaced. Unlike `trim_*`, it returns a copy: the result does not exist anywhere in the original.
+std/str	U8[].replace_first	pub fn replace_first(r: U8[], old: U8[], new: U8[], arena: Arena$@): U8[]	a new string with only the first occurrence replaced
+std/str	U8[].split	pub fn split(r: U8[], delimiter: U8, arena: Arena$@): List<|U8[]|>	the pieces between the separators, as views into the original. Not a lazy iterator: the only form of iteration is `for x in <something with .len and an index>` ("Loops" in docs/SPEC-language.md). Caution: When arena is null it allocates on the global heap, so the caller frees it with a `defer` (the same convention as `List.new`).
+std/str	U8[].to_cstr	pub fn to_cstr(r: U8[]): Option<|U8$@|>	a new NUL-terminated copy, or none if r holds a NUL. Caution: The caller must `dealloc()` it. A KSPL string has a length, so it can hold a NUL, but C treats the first NUL as the end.
+std/str	U8[].unescape_to_arena	pub fn unescape_to_arena(r: U8[], arena: Arena$@): U8[]?Str_error	turns the text of a string literal back into the bytes it means. **An unknown alphanumeric escape fails** (`\x` and `\q` are `invalid_format`). Only `\n`, `\r`, `\t`, `\b`, `\f` and `\uXXXX` are decoded, and an escaped symbol is the symbol itself; the caller lists which symbols are allowed (std/json's is_json_escape). The reason is in "After `\`, an alphanumeric is accepted only in a defined escape" in std/docs/DESIGN.md.
+std/str	U8[]:ds.Hashable<|U8[]|>	impl U8[]: ds.Hashable<|U8[]|>	so a string can be a `Map`'s key. `Eq` (what `==` desugars to) is deliberately not implemented: `equals` is an O(N) comparison of contents, and written as `==` it would look the same as a pointer comparison.
+std/strfmt	Bool.fmt	pub fn fmt(r: Self, w: Writer): Writer	writes the value to w
+std/strfmt	Bool:Formattable	impl Bool: Formattable	so it can be used inside an interpolation
+std/strfmt	Char_fmt	pub struct Char_fmt	one byte written as a character rather than a number. What `\{b:c\}` desugars to; a plain `\{b\}` is a decimal number. **One byte has two readings: "as a number" and "as a character".** The format string chooses which one prints; choosing by type would make the output change just because a value passed through another type ("Notations not carried" in `docs/DESIGN.md`). It writes one byte; pass a multi-byte character as text (`U8[]`).
+std/strfmt	Char_fmt.fmt	pub fn fmt(r: Self, w: Writer): Writer	writes the value to w
+std/strfmt	Char_fmt:Formattable	impl Char_fmt: Formattable	so it can be used inside an interpolation
+std/strfmt	F32.fmt	pub fn fmt(r: Self, w: Writer): Writer	writes the value to w
+std/strfmt	F32.fmt_prec	pub fn fmt_prec(r: Self, width: Sz, zero: Bool, comma: Bool, precision: I32): Float_fmt	what `.N` in an interpolation desugars to
+std/strfmt	F32.fmt_spec	pub fn fmt_spec(r: Self, width: Sz, zero: Bool, comma: Bool): Float_fmt	what a width, a zero pad or a comma in an interpolation desugars to
+std/strfmt	F32:Formattable	impl F32: Formattable	so it can be used inside an interpolation
+std/strfmt	F64.fmt	pub fn fmt(r: Self, w: Writer): Writer	writes the value to w
+std/strfmt	F64.fmt_prec	pub fn fmt_prec(r: Self, width: Sz, zero: Bool, comma: Bool, precision: I32): Float_fmt	what `.N` in an interpolation desugars to
+std/strfmt	F64.fmt_spec	pub fn fmt_spec(r: Self, width: Sz, zero: Bool, comma: Bool): Float_fmt	what a width, a zero pad or a comma in an interpolation desugars to
+std/strfmt	F64:Formattable	impl F64: Formattable	so it can be used inside an interpolation
+std/strfmt	Float_fmt	pub struct Float_fmt	a floating-point number with its precision, width, fill and comma setting
+std/strfmt	Float_fmt.fmt	pub fn fmt(r: Self, w: Writer): Writer	writes the value to w
+std/strfmt	Float_fmt:Formattable	impl Float_fmt: Formattable	so it can be used inside an interpolation
+std/strfmt	Hex_fmt	pub struct Hex_fmt	a value written in hex, with a minimum width. Not `impl Writer { fn hex(...) }`: an extension on a trait passes sema, but genc uses the vtable, so a method missing from the declaration cannot be linked. io.out().s("addr=\{strfmt.hex(addr, 8)\}\n"); // addr=0x10000144 io.out().s("addr=\{addr:08x\}\n"); // addr=10000144 (no `0x`)
+std/strfmt	Hex_fmt.fmt	pub fn fmt(r: Self, w: Writer): Writer	writes the value to w. **The digits are not truncated.** `digits` is a minimum width, as in C's `%x`. Cutting a value to its low digits would **change the value silently** when someone mistakes the digit count for the type's size; the lost high digits would appear nowhere.
+std/strfmt	Hex_fmt:Formattable	impl Hex_fmt: Formattable	so it can be used inside an interpolation
+std/strfmt	I16.fmt	pub fn fmt(r: Self, w: Writer): Writer	writes the value to w
+std/strfmt	I16.fmt_hex	pub fn fmt_hex(r: Self, width: Sz, zero: Bool, upper: Bool): Hex_fmt	what `:x` and `:X` in an interpolation desugar to
+std/strfmt	I16.fmt_spec	pub fn fmt_spec(r: Self, width: Sz, zero: Bool, comma: Bool): Int_fmt	what a width, a zero pad or a comma in an interpolation desugars to
+std/strfmt	I16:Formattable	impl I16: Formattable	so it can be used inside an interpolation
+std/strfmt	I32.fmt	pub fn fmt(r: Self, w: Writer): Writer	writes the value to w
+std/strfmt	I32.fmt_hex	pub fn fmt_hex(r: Self, width: Sz, zero: Bool, upper: Bool): Hex_fmt	what `:x` and `:X` in an interpolation desugar to
+std/strfmt	I32.fmt_spec	pub fn fmt_spec(r: Self, width: Sz, zero: Bool, comma: Bool): Int_fmt	what a width, a zero pad or a comma in an interpolation desugars to
+std/strfmt	I32:Formattable	impl I32: Formattable	so it can be used inside an interpolation
+std/strfmt	I64.fmt	pub fn fmt(r: Self, w: Writer): Writer	writes the value to w
+std/strfmt	I64.fmt_hex	pub fn fmt_hex(r: Self, width: Sz, zero: Bool, upper: Bool): Hex_fmt	what `:x` and `:X` in an interpolation desugar to
+std/strfmt	I64.fmt_spec	pub fn fmt_spec(r: Self, width: Sz, zero: Bool, comma: Bool): Int_fmt	what a width, a zero pad or a comma in an interpolation desugars to
+std/strfmt	I64:Formattable	impl I64: Formattable	so it can be used inside an interpolation
+std/strfmt	I8.fmt	pub fn fmt(r: Self, w: Writer): Writer	writes the value to w
+std/strfmt	I8.fmt_hex	pub fn fmt_hex(r: Self, width: Sz, zero: Bool, upper: Bool): Hex_fmt	what `:x` and `:X` in an interpolation desugar to
+std/strfmt	I8.fmt_spec	pub fn fmt_spec(r: Self, width: Sz, zero: Bool, comma: Bool): Int_fmt	what a width, a zero pad or a comma in an interpolation desugars to
+std/strfmt	I8:Formattable	impl I8: Formattable	so it can be used inside an interpolation
+std/strfmt	Int_fmt	pub struct Int_fmt	a signed integer with its width, fill and comma setting
+std/strfmt	Int_fmt.fmt	pub fn fmt(r: Self, w: Writer): Writer	writes the value to w
+std/strfmt	Int_fmt:Formattable	impl Int_fmt: Formattable	so it can be used inside an interpolation
+std/strfmt	Sz.fmt	pub fn fmt(r: Self, w: Writer): Writer	writes the value to w
+std/strfmt	Sz.fmt_hex	pub fn fmt_hex(r: Self, width: Sz, zero: Bool, upper: Bool): Hex_fmt	what `:x` and `:X` in an interpolation desugar to
+std/strfmt	Sz.fmt_spec	pub fn fmt_spec(r: Self, width: Sz, zero: Bool, comma: Bool): Int_fmt	what a width, a zero pad or a comma in an interpolation desugars to
+std/strfmt	Sz:Formattable	impl Sz: Formattable	so it can be used inside an interpolation
+std/strfmt	U16.fmt	pub fn fmt(r: Self, w: Writer): Writer	writes the value to w
+std/strfmt	U16.fmt_hex	pub fn fmt_hex(r: Self, width: Sz, zero: Bool, upper: Bool): Hex_fmt	what `:x` and `:X` in an interpolation desugar to
+std/strfmt	U16.fmt_spec	pub fn fmt_spec(r: Self, width: Sz, zero: Bool, comma: Bool): Int_fmt	what a width, a zero pad or a comma in an interpolation desugars to
+std/strfmt	U16:Formattable	impl U16: Formattable	so it can be used inside an interpolation
+std/strfmt	U32.fmt	pub fn fmt(r: Self, w: Writer): Writer	writes the value to w
+std/strfmt	U32.fmt_hex	pub fn fmt_hex(r: Self, width: Sz, zero: Bool, upper: Bool): Hex_fmt	what `:x` and `:X` in an interpolation desugar to
+std/strfmt	U32.fmt_spec	pub fn fmt_spec(r: Self, width: Sz, zero: Bool, comma: Bool): Int_fmt	what a width, a zero pad or a comma in an interpolation desugars to
+std/strfmt	U32:Formattable	impl U32: Formattable	so it can be used inside an interpolation
+std/strfmt	U64.fmt	pub fn fmt(r: Self, w: Writer): Writer	writes the value to w
+std/strfmt	U64.fmt_hex	pub fn fmt_hex(r: Self, width: Sz, zero: Bool, upper: Bool): Hex_fmt	what `:x` and `:X` in an interpolation desugar to
+std/strfmt	U64.fmt_spec	pub fn fmt_spec(r: Self, width: Sz, zero: Bool, comma: Bool): Uint_fmt	what a width, a zero pad or a comma in an interpolation desugars to
+std/strfmt	U64:Formattable	impl U64: Formattable	so it can be used inside an interpolation
+std/strfmt	U8.fmt	pub fn fmt(r: Self, w: Writer): Writer	writes the value to w
+std/strfmt	U8.fmt_char	pub fn fmt_char(r: Self): Char_fmt	what `:c` desugars to; only `U8` has it. **`U8` is the only type with `fmt_char`.** Nothing else is "a byte as a character", so `:c` on another type fails at compile time with "no such method".
+std/strfmt	U8.fmt_hex	pub fn fmt_hex(r: Self, width: Sz, zero: Bool, upper: Bool): Hex_fmt	what `:x` and `:X` in an interpolation desugar to
+std/strfmt	U8.fmt_spec	pub fn fmt_spec(r: Self, width: Sz, zero: Bool, comma: Bool): Int_fmt	what a width, a zero pad or a comma in an interpolation desugars to
+std/strfmt	U8.to_hex_lower	pub fn to_hex_lower(r: Self): U8	one nibble as a hex digit, using `a`-`f`
+std/strfmt	U8.to_hex_upper	pub fn to_hex_upper(r: Self): U8	one nibble as a hex digit, using `A`-`F`
+std/strfmt	U8:Formattable	impl U8: Formattable	so it can be used inside an interpolation. Caution: **Do not copy an unsigned value into a narrower signed type**: `U32` to `I32`, or `U64` to `Sz`, turns a set high bit into `-1`. Types up to U32 widen implicitly into the I64 of `w.i`; `U64` does not fit and goes through write_uint. Do not pass `I64` through `Sz` either, which is 32-bit on some targets.
+std/strfmt	U8[].fmt	pub fn fmt(r: U8[], w: Writer): Writer	writes the value to w
+std/strfmt	U8[]:Formattable	impl U8[]: Formattable	so it can be used inside an interpolation
+std/strfmt	Uint_fmt	pub struct Uint_fmt	a `U64` with its width, fill and comma setting, kept apart from `I64`. Caution: **Do not build it on Int_fmt.** A value of 2^63 or more becomes a negative I64 as soon as it is copied and prints as `-1`. Every other unsigned integer widens to I64 correctly, so only U64 needs its own wrapper.
+std/strfmt	Uint_fmt.fmt	pub fn fmt(r: Self, w: Writer): Writer	writes the value to w
+std/strfmt	Uint_fmt:Formattable	impl Uint_fmt: Formattable	so it can be used inside an interpolation
+std/strfmt	float_max_precision	pub const float_max_precision: Sz = 19	the most digits `.N` writes after the point. An F64 holds about 17 significant decimal digits, so later digits carry no information about the value, though they are still exact.
+std/strfmt	hex	pub fn hex(val: U64, digits: Sz): Hex_fmt	hex with a leading `0x`; a value wider than `digits` is not cut
+std/strfmt	write_float	pub fn write_float(w: Writer, v: F64, precision: I32, width: Sz, fill: U8, comma: Bool): Writer	writes a floating-point number
+std/strfmt	write_float32	pub fn write_float32(w: Writer, v: F32, precision: I32, width: Sz, fill: U8, comma: Bool): Writer	writes an `F32`, whose shortest digits differ from an `F64`'s. The width of `F32` decides the shortest digits, so `0.1F32` is `"0.1"`.
+std/strfmt	write_int	pub fn write_int(w: Writer, v: I64, width: Sz = 0, fill: U8 = ' ', comma: Bool = false): Writer	writes a signed integer as decimal
+std/strfmt	write_ptr #cfg(!freestanding)	pub fn write_ptr($w: Writer, val: Void$@): Writer	writes an address like `%p`, in the host libc's format
+std/strfmt	write_ptr #cfg(freestanding)	pub fn write_ptr(w: Writer, val: Void$@): Writer	writes an address as `0x` plus lowercase hex, whatever the host does
+std/strfmt	write_uint	pub fn write_uint(w: Writer, v: U64, width: Sz, fill: U8, comma: Bool): Writer	writes an unsigned integer as decimal; its top bit is not a sign. Caution: **Do not pass an unsigned value to write_int.** A value with its high bit set (`U32`'s 4294967295, `U64` at 2^63 or more) is a negative bit pattern in I64 and prints as `-1`.
+std/strnum	Strnum_error	pub enum Strnum_error	why a string could not be read as a number. It is separate from `std/str`'s `Str_error`, which has the same two variants: using that one would make a program that only reads numbers pay for all of `std/str`, and form a cycle.
+std/strnum	Strnum_error.invalid_format	invalid_format	the text does not have the shape of a number
+std/strnum	Strnum_error.out_of_bounds	out_of_bounds	the shape is right but the value does not fit the type
+std/strnum	U8[].parse_size	pub fn parse_size(r: U8[], start: Sz = 0): Sz?Strnum_error	scans digits from a given position and stops at the first non-digit
+std/strnum	U8[].to_f64	pub fn to_f64(r: U8[]): F64?Strnum_error	the whole string as a floating-point number. The shape is JSON's number (`-12.5e-3`). **It does not use `strtod`**: freestanding has no libc, and the same value on both targets matters more than strtod's `inf`, `nan` and hex floating point, which are **not accepted** here.
+std/strnum	U8[].to_i64	pub fn to_i64(r: U8[]): I64?Strnum_error	the whole string as an integer, or a failure
+std/subproc	Child #cfg(!freestanding)	pub struct Child	a child kept running with its output going to files
+std/subproc	Child.alive #cfg(!freestanding)	pub fn alive(r: Self@): Bool	whether it is still running. **The call that returns false also reaps the child.** It stays false after that.
+std/subproc	Child.kill #cfg(!freestanding)	pub fn kill(r: Self$@)	kills it and reaps it. It returns only once the child has stopped.
+std/subproc	Child.wait #cfg(!freestanding)	pub fn wait(r: Self$@): I32	waits for it to finish, and returns the exit code
+std/subproc	Job	pub struct Job	one of many children to start
+std/subproc	Job.argv	pub argv: U8[][]	the executable and its arguments
+std/subproc	Job.cwd	pub cwd: U8[]	the working directory; empty inherits the caller's
+std/subproc	Piped_child #cfg(!freestanding)	pub struct Piped_child	a child whose standard input, output and error are pipes
+std/subproc	Piped_child.alive #cfg(!freestanding)	pub fn alive(r: Self@): Bool	whether it is still running
+std/subproc	Piped_child.close_stdin #cfg(!freestanding)	pub fn close_stdin(r: Self$@)	closes standard input, to signal the end of input. A child that answers only after reading all its input is waiting for this.
+std/subproc	Piped_child.exit_code #cfg(!freestanding)	pub fn exit_code(r: Self@): I32	the exit code, or -1 if it has not finished. -1 because 0 means "finished cleanly". **Do not call it after `kill`** (kill also does the cleanup). A child killed by a signal gives `128 + the signal number` (the shell's convention).
+std/subproc	Piped_child.kill #cfg(!freestanding)	pub fn kill(r: Self$@)	kills it, reaps it, and closes the pipes. Caution: **Call it once only.**
+std/subproc	Piped_child.read #cfg(!freestanding)	pub fn read(r: Self@, buf: U8$[], timeout_ms: I32): Sz?Read_end	reads from standard output. **The timeout is required**, so a stall returns as a value and can be diagnosed right away.
+std/subproc	Piped_child.read_err #cfg(!freestanding)	pub fn read_err(r: Self@, buf: U8$[], timeout_ms: I32): Sz?Read_end	reads from standard error, where the child says why it is silent. Caution: **Do not discard it.** Without it, nothing tells you why the response was empty.
+std/subproc	Piped_child.write #cfg(!freestanding)	pub fn write(r: Self@, data: U8$[]): Bool	writes all of it to standard input; false if the child has closed it. **It takes a mutable slice to match the C signature** (`U8 *ptr`); a `Str_builder`'s `slice()` already is one.
+std/subproc	Read_end	pub enum Read_end	why a read from a child returned no bytes
+std/subproc	Read_end.closed	closed	the child finished, so waiting again returns nothing
+std/subproc	Read_end.failed	failed	the read itself failed
+std/subproc	Read_end.timed_out	timed_out	no byte arrived in time; the child may still be running
+std/subproc	Run_error	pub enum Run_error	why a run did not produce a result. **The text in `exited` points into the arena** and cannot be read after the arena is freed.
+std/subproc	Run_error.describe #cfg(!freestanding)	pub fn describe(r: Self, what: U8[], tool: U8[])	writes to standard error why a run failed, for a tool that then stops. The heading is `<program>: <what> failed`; under it, indented, that `tool` could not be started, that it timed out, or the exit code followed by the child's standard error.
+std/subproc	Run_error.exited	exited(code: I32, err: U8[])	it exited non-zero; the text is its standard error
+std/subproc	Run_error.spawn_failed	spawn_failed	it could not start: no executable, no permission, or the fork failed
+std/subproc	Run_error.timed_out	timed_out	the time ran out, so it was killed
+std/subproc	Run_result	pub struct Run_result	the outcome of one run: how it ended, and what it wrote
+std/subproc	Run_result.exit_code	pub exit_code: I32	the child's exit code; 0 means success
+std/subproc	Run_result.spawn_failed	pub spawn_failed: Bool	if true, every other field is invalid
+std/subproc	Run_result.stderr_data	pub stderr_data: U8$[]	what it wrote to standard error, cut at the cap
+std/subproc	Run_result.stdout_data	pub stdout_data: U8$[]	what it wrote to standard output, cut at the cap. Not named stdout/stderr: MSVC UCRT's headers make those object-like macros, so a field of that name in the generated C struct fails to compile on Windows.
+std/subproc	Run_result.text	pub fn text(r: Self@, arena: Arena$@): U8[]	the child's output as one text: its standard output, then its standard error. Each `\r\n` becomes `\n`, since a child on Windows ends its text lines that way; a lone `\r` is kept. **The two are joined end to end, not interleaved**, so a run reads the same every time; the cost is that you cannot tell which stream a line came from.
+std/subproc	Run_result.timed_out	pub timed_out: Bool	if true, the child was killed, so the exit code means nothing
+std/subproc	Spawn_error	pub enum Spawn_error	why a child could not be started
+std/subproc	Spawn_error.spawn_failed	spawn_failed	no executable, no permission, or the fork failed; it cannot say which. Telling them apart would need errno passed up from the C code (as with fs.Fs_error).
+std/subproc	run	pub fn run(argv: U8[][], cwd: U8[], timeout_ms: I32, output_cap: Sz, arena: Arena$@): U8$[]?Run_error	runs one child and returns its standard output; any failure is thrown. The arguments are as for run_capture; **the failure is thrown**: "cannot start", "timed out" and "exited non-zero" all become `Run_error`, so the caller can pass them on with `?`. **When you need the exit code itself, use run_capture**; this one treats anything but 0 as a failure, which does not suit a program where a non-zero exit is normal.
+std/subproc	run_capture	pub fn run_capture(argv: U8[][], cwd: U8[], timeout_ms: I32, output_cap: Sz, arena: Arena$@): Run_result	runs one child to the end and collects both its outputs. argv[0] is the executable's absolute or relative path; stdout and stderr are collected separately, watched in one wait (`kspl_proc_poll`). **Append only what was read**: the cap is a promise ("beyond this it is cut"), not the size to allocate.
+std/subproc	run_many #cfg(!freestanding)	pub fn run_many(jobs: Job[], max_parallel: Sz, output_cap: Sz, work_dir: U8[], arena: Arena$@): List<|Run_result|>$@	runs many children, a few at a time, and collects each one's output
+std/subproc	spawn_async #cfg(!freestanding)	pub fn spawn_async(argv: U8[][], cwd: U8[]): I64?Spawn_error	starts a child with the standard I/O inherited, without waiting
+std/subproc	spawn_piped #cfg(!freestanding)	pub fn spawn_piped(argv: U8[][], cwd: U8[]): Piped_child?Spawn_error	starts a child for two-way communication over pipes
+std/subproc	spawn_reap #cfg(!freestanding)	pub fn spawn_reap(handle: I64): I32	waits for one `spawn_async` child, so no zombie is left
+std/subproc	spawn_redirect #cfg(!freestanding)	pub fn spawn_redirect(argv: U8[][], cwd: U8[], out_path: U8[], err_path: U8[]): Child?Spawn_error	starts a child without waiting, with its outputs going to files
+std/subproc	spawn_wait	pub fn spawn_wait(argv: U8[][], cwd: U8[]): I32?Spawn_error	runs one child with the standard I/O inherited, and waits for it. argv[0] is the executable's path or a name looked up in PATH; returns the exit code. Caution: **Give a third-party tool its location with `cwd` and keep the paths relative** ("Paths are held in UTF-8, and converted to the wide API on Windows" in std/docs/DESIGN.md). When argv's length is known only at run time, build a `List<|U8[]|>` and pass its `slice()`.
+std/sys	Args	pub struct Args	the arguments this process was started with; `[0]` is the program
+std/sys	Args.get	pub fn get(r: Self@, index: Sz): U8[]	one argument; an index out of range stops the program
+std/sys	Args.len	pub len: Sz	how many there are, counting the program's own name
+std/sys	Args:Index<|Sz, U8[]|>	impl Args: Index<|Sz, U8[]|>	so `args()[i]` can be written
+std/sys	args	pub fn args(): Args	the arguments this process was started with
+std/sys	cpu_count #cfg(!freestanding)	pub fn cpu_count(): Sz	how many CPUs are usable; 1 if unknown, never 0
+std/sys	cwd #cfg(!freestanding)	pub fn cwd(buf: U8$[]): U8[]	the working directory, or empty if it cannot be read or does not fit
+std/sys	exit #noreturn	pub fn exit(status: I32)	ends the process at once, without unwinding
+std/sys	get_dir_name	pub fn get_dir_name(path: U8[]): U8[]	the folder part, or empty if there is none. **A file directly under the root is in the root** (`/x` in `/`, on Windows `C:\x` in `C:\`), as Python, Go, Rust and C++ answer; the root itself is in nothing.
+std/sys	get_env #cfg(!freestanding)	pub fn get_env(name: U8[]): Option<|U8[]|>	an environment variable, or nothing when unset
+std/sys	get_file_name	pub fn get_file_name(path: U8[]): U8[]	the last segment, without the folder part
+std/sys	install_shutdown_handler	pub fn install_shutdown_handler()	makes Ctrl+C and a stop request set a flag, not kill. Call this, then poll `shutdown_requested()` in the loop. For finer control, use `libc.signal()`.
+std/sys	is_absolute	pub fn is_absolute(path: U8[]): Bool	whether it starts from the root; on Windows `C:\` counts. Caution: **Check up to the separator after the drive.** On Windows `C:name` is relative to **that drive's current working directory**, not the root; skipping the separator creates a copy that answers differently in just that case. On POSIX `C:\x` is a relative name.
+std/sys	is_path_sep	pub fn is_path_sep(c: U8): Bool	a path separator, `/` or `\`, on every OS; std/fs splits by it. Caution: Check both `/` and `\`. A path from Windows can be mixed (MSYS2 rewrites a `/tmp/...` it passes to a child process as `D:/a/_temp/...`).
+std/sys	is_windows	pub fn is_windows(): Bool	whether the OS running this is Windows. Lets a test or tool that relies on a POSIX-only path such as `/bin/echo` skip itself.
+std/sys	last_ext	pub fn last_ext(path: U8[]): U8[]	the last extension with its dot, or empty if none. **The leading `.` is included.** For a double extension, call it again yourself (`last_ext(strip_last_ext("a.tar.gz"))` gives `".tar"`). **Do not add a plural such as `suffixes` in advance** (Principle 1 in `docs/DESIGN.md`); adding one later only joins paths.
+std/sys	mono_us	pub fn mono_us(): I64	a clock that only goes forward, in microseconds. **Only a difference has meaning**; the origin is not defined. Caution: **Do not measure elapsed time with the wall clock (`time.now`).** NTP or the user can rewind it, so a difference can go negative. **It is not CPU time**: it advances while waiting.
+std/sys	print_trace	pub fn print_trace()	writes the route this thread's last failure took to standard error. Caution: **Do not use `io`.** Many files import `sys`, so importing `io` here would make all of them carry the file-I/O implementation (bare metal has no standard output). The text is built in a `Str_builder` and written with one libc `fwrite`, so it is less likely to mix with other output.
+std/sys	program_name #cfg(!freestanding)	pub fn program_name(): U8[]	this program's name for messages, without folder or extension
+std/sys	raise_signal	pub fn raise_signal(sig: I32)	sends a signal to this process itself. For a test, or to resend a signal for its default behaviour after your own clean-up.
+std/sys	root_len	pub fn root_len(path: U8[]): Sz	the length of the root a path starts from; 0 if it has none. A separator is one byte. **A drive is part of the root on Windows only**: `C:` is two and `C:\` three there, while on POSIX `C:\x` is a relative name whose first folder is `C:`. std/fs measures the root by this too, so the two cannot disagree.
+std/sys	script_env_name	pub const script_env_name: U8[] = "KSPL_SCRIPT"	how a launcher passes a script its own path. The value is "<the launched executable's path>\n<the script's path>" (see script_path). Caution: Changing the name on only one side makes script_path silently return .none.
+std/sys	script_path #cfg(!freestanding)	pub fn script_path(): Option<|U8[]|>	the script being run, if a launcher started this
+std/sys	set_env #cfg(!freestanding)	pub fn set_env(name: U8[], value: U8[]): Bool	sets an environment variable, which children inherit
+std/sys	shutdown_requested	pub fn shutdown_requested(): Bool	whether a stop was requested since the handler was installed
+std/sys	sigint	pub const sigint: I32 = 2	Ctrl+C, shared by POSIX and Windows
+std/sys	sigterm	pub const sigterm: I32 = 15	a request to exit cleanly; it can be registered on Windows too
+std/sys	sleep_ms #cfg(!freestanding)	pub fn sleep_ms(ms: I32)	waits that many milliseconds, yielding the CPU
+std/sys	strip_last_ext	pub fn strip_last_ext(path: U8[]): U8[]	the path without its last extension. **Joined with `last_ext`, it restores the original path** (`strip_last_ext(p) + last_ext(p) == p`), so there is no "which side gets the dot" to remember. Caution: Do not change only one of them.
+std/sys	timing_available	pub fn timing_available(): Bool	whether this environment has a clock at all. A working clock never returns 0, whatever its origin, so that is what is checked.
+std/sys	unset_env #cfg(!freestanding)	pub fn unset_env(name: U8[]): Bool	deletes an environment variable, which children inherit
+std/thread	Atomic_sz	pub struct Atomic_sz	a shared counter or flag that changes without taking a lock. Lock-free; it uses the same kspl_atomic_add/cas as the `Arc<T>` reference counts in std/refcount.
+std/thread	Atomic_sz.compare_and_swap	pub fn compare_and_swap(r: Self$@, expected: Sz, new_val: Sz): Bool	writes only if the value is still the one read; true if it wrote
+std/thread	Atomic_sz.fetch_add	pub fn fetch_add(r: Self$@, delta: Sz): Sz	adds, and returns the value from before the addition
+std/thread	Atomic_sz.load	pub fn load(r: Self$@): Sz	reads the value without tearing
+std/thread	Atomic_sz.new	pub fn new(initial: Sz): Atomic_sz	creates one holding the initial value
+std/thread	Atomic_sz.store	pub fn store(r: Self$@, new_val: Sz)	writes the value without tearing
+std/thread	Cond_var	pub struct Cond_var	lets a thread wait, together with a lock, until a condition holds. pthread_cond_t / CONDITION_VARIABLE, paired with a `Mutex<|T|>` (a producer-consumer queue, waiting for completion).
+std/thread	Cond_var.broadcast	pub fn broadcast(r: Self$@)	wakes every waiting thread
+std/thread	Cond_var.free	pub fn free(r: Self$@)	destroys the OS condition variable. As with `Raw_mutex.free`, the value itself has no memory to free.
+std/thread	Cond_var.new	pub fn new(): Cond_var?Thread_error	creates one through the OS
+std/thread	Cond_var.signal	pub fn signal(r: Self$@)	wakes exactly one waiting thread
+std/thread	Cond_var.wait	pub fn wait<|T|>(r: Self$@, m: Mutex<|T|>$@)	releases the lock and waits; returns holding the lock again. Caution: **A spurious wakeup is possible**, so check the condition again in a `for` and wait again if it does not hold.
+std/thread	Cond_var:Move_only	impl Cond_var: Move_only	copying it would destroy one OS object twice
+std/thread	Cond_var:Owned	impl Cond_var: Owned	it owns an OS object and releases it with `free()`
+std/thread	Mutex	pub struct Mutex<|T|>	a lock and the data it protects, kept together so neither is forgotten. The data is reachable only through lock() (like Rust's `Mutex<T>`). This is the only public mutex in KSPL (the bare Raw_mutex is priv).
+std/thread	Mutex<|T|>.free	pub fn free(r: Self$@)	destroys the OS lock
+std/thread	Mutex<|T|>.lock	pub fn lock(r: Self$@): T$@	takes the lock and returns a pointer to the data. Caution: Call `unlock()` when you are done with the data.
+std/thread	Mutex<|T|>.new	pub fn new(value: T): Mutex<|T|>?Thread_error	creates a lock around a value
+std/thread	Mutex<|T|>.unlock	pub fn unlock(r: Self$@)	releases the lock
+std/thread	Mutex<|T|>:Owned	impl<|T|> Mutex<|T|>: Owned	it owns an OS object and releases it with `free()`
+std/thread	Raw_mutex:Move_only	impl Raw_mutex: Move_only	copying it would destroy one OS object twice. `Mutex<|T|>` holds a Raw_mutex by value, so it is Move_only too. To borrow one, pass a pointer with `@`.
+std/thread	Raw_mutex:Owned	impl Raw_mutex: Owned	it owns an OS object and releases it with `free()`
+std/thread	Thread	pub struct Thread	one running OS thread, joined and freed in one call
+std/thread	Thread.join_and_free	pub fn join_and_free(r: Self$@): Void$@	waits for the thread to end and returns its result. `spawn` / `join_and_free` pair like malloc / free; this call frees `r` itself.
+std/thread	Thread.spawn	pub fn spawn<|T|>(entry: fn(arg: T$@): Void$@, arg: T$@): Thread$@?Thread_error	starts a function on a new OS thread. Caution: **Only the type is checked, not whether the data is safe to share.** Threads that touch what `arg` points at race; wrap a shared value in a `Mutex<|T|>` or an `Arc<|T|>` (the count of an `Rc<|T|>` breaks).
+std/thread	Thread:Owned	impl Thread: Owned	it owns its resources and frees them with `free()`.
+std/thread	Thread_entry	pub typedef Thread_entry = fn(arg: Void$@): Void$@	the function a thread starts running. The function passed here carries `#export`, so it links with C's callback convention and no name mangling.
+std/thread	Thread_error	pub enum Thread_error	why the OS could not create a thread or a lock
+std/thread	Thread_error.cond_create_failed	cond_create_failed	the OS failed to initialize the condition variable
+std/thread	Thread_error.mutex_create_failed	mutex_create_failed	the OS failed to initialize the mutex
+std/thread	Thread_error.spawn_failed	spawn_failed	the OS failed to create the thread (out of resources, for example)
+std/time	Datetime	pub struct Datetime	one moment as a calendar date and time, in UTC
+std/time	Datetime.day	pub day: I32	1-31
+std/time	Datetime.hour	pub hour: I32	0-23
+std/time	Datetime.minute	pub minute: I32	0-59
+std/time	Datetime.month	pub month: I32	1-12
+std/time	Datetime.second	pub second: I32	0-59
+std/time	Datetime.weekday	pub weekday: I32	0=Sunday … 6=Saturday, computed from the date
+std/time	Datetime.year	pub year: I32	the year as written, not counted from 1900
+std/time	Time_error	pub enum Time_error	why a time could not be written. It does not say which field does not fit; the caller would act the same either way.
+std/time	Time_error.out_of_range	out_of_range	a field is outside what the format can write (a year over 4 digits)
+std/time	from_epoch	pub fn from_epoch(epoch_secs: I64): Datetime	turns epoch seconds into a calendar date and time
+std/time	iso8601_len	pub const iso8601_len: Sz = 20	the length of the ISO 8601 form, which is always the same
+std/time	now	pub fn now(): I64	the seconds elapsed since 1970-01-01T00:00:00Z
+std/time	rfc1123_len	pub const rfc1123_len: Sz = 29	the length of the RFC 1123 form, which is always the same. The caller provides an array of this size.
+std/time	write_iso8601	pub fn write_iso8601(dt: Datetime, out: U8$[]): Void?Time_error	writes the ISO 8601 / RFC 3339 form, without allocating. The form is `1994-11-15T08:12:31Z`.
+std/time	write_rfc1123	pub fn write_rfc1123(dt: Datetime, out: U8$[]): Void?Time_error	writes the form HTTP uses, without allocating. The form is `Tue, 15 Nov 1994 08:12:31 GMT`, as HTTP's `Date` header expects. Caution: **Do not take a `Writer`** (the file header gives the reason).
+std/tls	Tls_error	pub enum Tls_error	why a secure connection could not be opened or used
+std/tls	Tls_error.cert_verify_failed	cert_verify_failed	the handshake succeeded, but the certificate or host name did not verify
+std/tls	Tls_error.connect_failed	connect_failed	the underlying TCP connection failed
+std/tls	Tls_error.ctx_failed	ctx_failed	OpenSSL setup failed (SSL_CTX_new, SSL_new and similar)
+std/tls	Tls_error.handshake_failed	handshake_failed	SSL_connect (the handshake) failed
+std/tls	Tls_error.io_failed	io_failed	a send or a receive failed
+std/tls	Tls_error.unsupported	unsupported	the build did not use `make TLS=1` (the default build)
+std/tls	Tls_stream	pub struct Tls_stream	a TCP connection with TLS on top, which owns its resources
+std/tls	Tls_stream.connect #cfg(!tls)	pub fn connect(_host: U8[], _port: I32): Tls_stream$@?Tls_error	always fails with `unsupported`; build with `make TLS=1` to enable it
+std/tls	Tls_stream.connect #cfg(tls)	pub fn connect(host: U8[], port: I32): Tls_stream$@?Tls_error	connects, then does the TLS handshake, verifying the certificate
+std/tls	Tls_stream.free #cfg(tls)	pub fn free(r: Self$@)	closes the connection and frees everything it owns
+std/tls	Tls_stream.read #cfg(tls)	pub fn read(r: Self$@, buf: U8$[]): Sz?Tls_error	receives and returns how much arrived; 0 means the peer closed
+std/tls	Tls_stream.write #cfg(tls)	pub fn write(r: Self$@, buf: U8[]): Sz?Tls_error	sends and returns how much was sent; a partial send is normal, so loop
+std/tls	Tls_stream:Owned #cfg(tls)	impl Tls_stream: Owned	it owns its memory and frees it with `free()`
+std/url	Query_param	pub struct Query_param	one `name=value` pair of a query string
+std/url	Query_param.name	pub name: U8$[]	the name, already decoded and copied into the arena
+std/url	Query_param.next	pub next: Query_param$@	the next pair, in the order they appear
+std/url	Query_param.value	pub value: U8$[]	the value; empty when the pair has no `=`
+std/url	Url_error	pub enum Url_error	why a piece of a URL could not be decoded
+std/url	Url_error.invalid_percent_encoding	invalid_percent_encoding	what follows a `%` is not two hex digits
+std/url	decode_component	pub fn decode_component(s: U8[], arena: Arena$@): U8[]?Url_error	percent-decodes a path piece, leaving `+` as a `+`. **"+" does not become a space.** Only application/x-www-form-urlencoded writes a space as "+"; in a URI path a "+" is just a "+" (RFC 3986). For a form, use decode_form.
+std/url	decode_form	pub fn decode_form(s: U8[], arena: Arena$@): U8[]?Url_error	percent-decodes as a form does, turning `+` into a space. Use it for the names and values of a query string, and for a form body.
+std/url	encode	pub fn encode(s: U8[], arena: Arena$@): U8[]	percent-encodes a piece of text so it can go inside a URL. An unreserved character stays as it is; any other byte becomes the hex form `%XX`.
+std/url	parse_query	pub fn parse_query(query: U8[], arena: Arena$@): Query_param$@?Url_error	splits a query string into a linked list of pairs. Each name and value is decoded with `decode_form()` and copied into the arena, in order.
+std/verdict	Run_out	pub struct Run_out	one child's run as a check reads it: how it ended, and what it wrote. **A diagnostic appears on either stdout or stderr** (by version and route), so the two are joined, and the matcher misses neither.
+std/verdict	Run_out.code	pub code: I32	the exit code; -1 where it could not start or was killed on a timeout
+std/verdict	Run_out.out	pub out: U8[]	what it wrote, one text (`Run_result.text`); where it did not end, why
+std/verdict	begin	pub fn begin(tag: U8[])	starts a run of checks, and makes the output line-buffered. Line buffering means a run that hangs shows how far it got, and a pipe shared by several runs never splits a line.
+std/verdict	check	pub fn check(name: U8[], ok: Bool, detail: U8[]): Bool	one check: prints a `pass` line if it holds, a `FAIL` line if it does not. A failure does not stop the run; it is counted, and named on the `RESULT:` line.
+std/verdict	check_list	pub fn check_list(name: U8[], seen: Sz, unit: U8[], bad: List<|U8[]|>@, tail: U8[]): Bool	reports a walk's findings as one check, with how many things it looked at. Caution: **Looking at nothing fails**: the code that reads broke, or what it reads has moved (a subject that is really empty still walks the files it looked in). Hence the count argument.
+std/verdict	default_timeout_ms	pub const default_timeout_ms: I32 = 600000	the usual limit on waiting for a child (`run_child`). Long, as insurance against a run that hangs. **Only a check whose failure is not stopping passes a shorter one.**
+std/verdict	fatal	pub fn fatal(msg: U8[]): I32	ends a run that cannot continue (for example, its input files are missing)
+std/verdict	finish	pub fn finish(): I32	ends the run with its `RESULT:` line, and returns the verdict as the exit code. Caution: **Start no line but the verdict with `RESULT:`**: the gates read that word.
+std/verdict	jobs	pub fn jobs(): Sz	how many children `run_children` runs side by side. The core count, capped at 8; `KANSO_TEST_JOBS=1` runs them one at a time (to read a failed case's output).
+std/verdict	list_verdict	pub fn list_verdict(seen: Sz, bad_len: Sz): Bool	whether a walk passes: it found nothing wrong, and it looked at something. **It is separate from the printing so tests can check it against sample inputs.**
+std/verdict	max_findings_shown	pub const max_findings_shown: Sz = 20	how many of a walk's findings one check lists. Beyond this many, a longer list tells the reader nothing more.
+std/verdict	pass	pub fn pass(desc: U8[])	reports that the test passed. **One line says one thing.** Trailing whitespace is dropped; a `desc` that contains a newline prints a blank line.
+std/verdict	run_child	pub fn run_child(argv: U8[][], cwd: U8[], timeout_ms: I32, arena: Arena$@): Run_out	runs one child to its end, and returns how it ended and what it wrote
+std/verdict	run_children #cfg(!freestanding)	pub fn run_children(items: subproc.Job[], work_dir: U8[], arena: Arena$@): List<|Run_out|>$@	runs children side by side (`jobs`), and returns their runs in order. **The results come in the input's order**, so the code that judges has one form, sequential or parallel. **There is no timeout** (`run_many`'s), so run nothing here that might not stop. Caution: **Give each run a `work_dir` of its own.** The outputs are collected there in files of fixed names (`j<number>.out`), so two runs sharing one at once read each other's.
+std/verdict	skip	pub fn skip(why: U8[])	reports that the test does not apply on this target, and why. Caution: **Do not skip it silently.** Printing nothing looks like a pass, and a degraded environment looks like "everything passed". This prints the heading's text and the reason.
+std/verdict	skip_check	pub fn skip_check(name: U8[], why: U8[])	reports a check this environment cannot run, with the reason. Caution: **Do not pass it with `check(…, true, …)`.** It would read as confirmed, and the `RESULT:` line would not name it.
+std/verdict	start	pub fn start(name: U8[])	starts a test, so a run that hangs shows where it stopped. A run that hangs stopped at **the test after the last line printed**. Caution: **Do not write the same thing in the heading and in `pass`.** The line prints the text given to `pass`; the heading's text appears only when `pass` gets an empty text.

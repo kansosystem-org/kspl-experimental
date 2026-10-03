@@ -1,0 +1,164 @@
+//< Replaces one field of an inline, a block or a style, recording the change
+//<
+//< Each function saves the old value before it writes the new one (afterwards it cannot be read).
+//< Caution: **Do not change a block directly** — unsaved, undo cannot restore that field.
+//< The recording is `keep` in [`edit.kspls`](edit.kspls): where `into` is not null the old value
+//< is added to the step, otherwise nothing is. A text argument is stored as given, so the caller
+//< passes a copy. Split off for the 1000-line-per-file cap (Principle 3).
+import "kspage/model/doc" { Block, Rect }
+import "kspage/model/paper" { Paper }
+import "kspage/model/run" { Inline }
+import "kspage/model/style" + { Sheet, Style }
+import "kspage/write/edit" + { Editor }
+import "kspage/write/record" + { Paper_op, Step }
+import "kspage/write/record" { Aside_op, Block_face_op, Frame_op, Href_op, Aim_op, Look_op, Note_op,
+  Op, Refer_op, Remark_op, Name_op, Sheet_op, Span_op, Step_op, Style_op }
+
+fn do_set_frame(e: Editor$@, into: Step$@, b: Block$@, at: Option<|Rect|>) //<
+  //< Sets a slide frame's position, recording the change
+  //<
+  //< As with text, do not change a block directly.
+  if into != null
+    if !record.last_framed(into, b)
+      op: = Frame_op::{ .block = b, .was = b.frame }
+      edit.keep(e, into, Op.frame(e.arena.create(op)))
+  b.frame = at
+
+fn do_set_step(e: Editor$@, into: Step$@, b: Block$@, at: Sz) //<
+  //< Sets the step at which a frame appears, recording the change
+  //<
+  //< 0 means "always shown" (removing the setting also gives 0).
+  //< Caution: **Keep it a separate record from moving a frame**, or setting position and step in
+  //< turn takes two undos, and neither restores its change alone.
+  if into != null
+    op: = Step_op::{ .block = b, .was = b.step }
+    edit.keep(e, into, Op.step(e.arena.create(op)))
+  b.step = at
+
+fn do_set_span(e: Editor$@, into: Step$@, cell: Block$@, rows: Sz, cols: Sz) //<
+  //< Sets a cell's merge, recording the change
+  //<
+  //< The caller removes the covered cells. **A value under 1 becomes 1** (with 0 the layout could
+  //< not count the columns to skip).
+  if cell == null
+    return
+  was_rows: = cell.span_rows
+  was_cols: = cell.span_cols
+  cell.span_rows = rows if rows > 1 else 1
+  cell.span_cols = cols if cols > 1 else 1
+  if into != null
+    op: = Span_op::{ .cell = cell, .was_rows = was_rows, .was_cols = was_cols }
+    edit.keep(e, into, Op.span(e.arena.create(op)))
+
+fn do_set_paper(e: Editor$@, into: Step$@, sheet: Sheet$@, fresh: Paper) //<
+  //< Replaces the paper settings as a whole
+  //<
+  //< It is one setting for the whole document (not a style).
+  was: Paper = sheet.paper
+  sheet.paper = fresh
+  if into != null
+    edit.keep(e, into,
+      Op.paper(e.arena.create(Paper_op::{ .sheet = sheet, .was = was })))
+
+fn do_set_look(e: Editor$@, into: Step$@, s: Style$@, fresh: Style) //<
+  //< Replaces a style's contents as a whole, recording the change
+  //<
+  //< Caution: **Do not change the style table directly.** Do not make one function per field
+  //< ("not set" is one of the settings); taken in, saved and passed on, it is one whole style.
+  //< The name does not change (`style.put_face`).
+  was: Style = s$
+  style.put_face(s, fresh)
+  if into != null
+    edit.keep(e, into, Op.look(e.arena.create(Look_op::{ .style = s, .was = was })))
+
+fn do_sheet(e: Editor$@, into: Step$@, sheet: Sheet$@, at: Sz, put_back: Bool, s: Style$@) //<
+  //< Removes a style from the table or puts it back, recording the change
+  if put_back
+    if at < 0 || at > sheet.styles.len
+      return
+    sheet.styles.insert(at, s)
+    if into != null
+      op: = Sheet_op::{ .sheet = sheet, .at = at, .put_back = false, .style = null }
+      edit.keep(e, into, Op.sheet(e.arena.create(op)))
+    return
+  if at < 0 || at >= sheet.styles.len
+    return
+  gone: = sheet.styles.get(at)
+  if into != null
+    // Caution: **Save it before removing it** (afterwards, which style it was cannot be read).
+    op: = Sheet_op::{ .sheet = sheet, .at = at, .put_back = true, .style = gone }
+    edit.keep(e, into, Op.sheet(e.arena.create(op)))
+  sheet.styles.remove_at(at)
+
+fn do_set_style(e: Editor$@, into: Step$@, n: Inline$@, name: U8[]) //<
+  //< Sets an inline's style name, recording the change
+  if into != null
+    op: = Style_op::{ .run = n, .was = n.style }
+    edit.keep(e, into, Op.style(e.arena.create(op)))
+  n.style = name
+
+fn do_set_aside(e: Editor$@, into: Step$@, b: Block$@, text: U8[]) //<
+  //< Writes the memo beside a block
+  //<
+  //< Empty removes the memo. The path points at the block itself (`run` is -1).
+  if into != null
+    op: = Aside_op::{ .block = b, .was = b.aside }
+    edit.keep(e, into, Op.aside(e.arena.create(op)))
+  b.aside = text
+
+fn do_set_aim(e: Editor$@, into: Step$@, b: Block$@, aim: U8[]) //<
+  //< Writes the source a block points at (the link to what was generated)
+  if into != null
+    op: = Aim_op::{ .block = b, .was = b.aim }
+    edit.keep(e, into, Op.aim(e.arena.create(op)))
+  b.aim = aim
+
+fn do_set_note(e: Editor$@, into: Step$@, n: Inline$@, note: U8[]) //< writes an inline's note
+  if into != null
+    op: = Note_op::{ .run = n, .was = n.note }
+    edit.keep(e, into, Op.note(e.arena.create(op)))
+  n.note = note
+
+fn do_set_remark(e: Editor$@, into: Step$@, n: Inline$@, remark: U8[], by: U8[]) //<
+  //< Writes an inline's annotation and who wrote it
+  //<
+  //< Keep the two in one record (separate, one undo restores only the words).
+  if into != null
+    op: = Remark_op::{ .run = n, .was = n.remark, .was_by = n.remark_by }
+    edit.keep(e, into, Op.remark(e.arena.create(op)))
+  n.remark = remark
+  n.remark_by = by
+
+fn do_set_name(e: Editor$@, into: Step$@, b: Block$@, name: U8[]) //<
+  //< Writes the name of one block
+  //<
+  //< Two blocks with the same name are not prevented (the first found is used; prevented, the
+  //< layout would vanish while the name is being typed).
+  if into != null
+    op: = Name_op::{ .block = b, .was = b.name }
+    edit.keep(e, into, Op.name(e.arena.create(op)))
+  b.name = name
+
+fn do_set_block_style(e: Editor$@, into: Step$@, b: Block$@, name: U8[]) //<
+  //< Writes a paragraph's style name
+  //<
+  //< It is separate from an inline's style (the layout and the marker belong to the paragraph).
+  if into != null
+    op: = Block_face_op::{ .block = b, .was = b.style }
+    edit.keep(e, into, Op.block_face(e.arena.create(op)))
+  b.style = name
+
+fn do_set_href(e: Editor$@, into: Step$@, n: Inline$@, href: U8[]) //< writes an inline's link
+  if into != null
+    op: = Href_op::{ .run = n, .was = n.href }
+    edit.keep(e, into, Op.href(e.arena.create(op)))
+  n.href = href
+
+fn do_set_refers(e: Editor$@, into: Step$@, n: Inline$@, name: U8[]) //<
+  //< Writes the name the body refers to
+  //<
+  //< The number is not written ("Figure 1" is counted at layout time; only the name is stored).
+  if into != null
+    op: = Refer_op::{ .run = n, .was = n.refers }
+    edit.keep(e, into, Op.refer(e.arena.create(op)))
+  n.refers = name

@@ -1,0 +1,791 @@
+//< The implementation of `ksplc run <script.kspl> [args...]`
+//<
+//< It runs a script in one command, calling ksplc itself as a child process to compile, with a
+//< cache in two tiers.
+
+// ==========================================
+//   tier 1: every input file's hash matches the last run -> neither ksplc nor the C compiler runs.
+//   tier 2: otherwise the generated C is split into units, and **a unit whose contents match the
+//           last run keeps its object**; if every object is reused the link is skipped too.
+// ==========================================
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext // `link_name` / `is_attribute_named`
+import "ksplc/base/cache" as base_cache
+import "ksplc/base/config_file" as base_config_file
+import "ksplc/base/core" as base_core
+import "ksplc/base/locate" as base_locate
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena, dealloc }
+import "std/str" { Str_builder }
+import "std/subproc"
+import "std/sys"
+
+priv const max_run_slots: Sz = 64 //< how many slots the cache keeps, besides those in use
+  //<
+  //< One slot is one script's executable, shared header and objects. **ksplc's own identity is in
+  //< the key, so rebuilding ksplc creates every slot anew**; the sweep removes the old ones.
+
+priv const run_slot_spare_secs: I64 = 3600 //< a slot used within this many seconds is never swept
+  //<
+  //< Caution: **Do not rely on the count alone.** One gate run creates more new slots than the cap
+  //< while a single build is still writing its own, and a count alone would remove that slot from
+  //< under it (`failed to write file: …/prog.new.h`). The cache stays over the cap for that long.
+
+priv const run_cflags: U8[] = "-std=c99" //< the flags used to compile the generated C
+  //<
+  //< For scripts, build speed comes first.
+priv const run_opt_flag: U8[] = "-O0"
+
+priv const run_section_flags: U8[][2] = ::{ "-ffunction-sections", "-fdata-sections" } //<
+  //< The compiler flags that let the link-time removal (append_dead_strip_flag) work
+  //<
+  //< Caution: **Always pass them together with the removal.** It drops whole sections, and
+  //< without these one `.c` is one section and nothing is dropped. Each element is one argv word:
+  //< no whitespace inside.
+
+priv fn strips_unused_sections(): Bool //<
+  //< Whether the removal of unreferenced sections takes effect on this target
+  //<
+  //< **They are not passed on Windows (PE).** That linker does not drop unreferenced sections, so
+  //< splitting them only makes the executable bigger. The Makefile's CFLAGS make the same decision
+  //< (a disagreement is caught by tests/suite/link_flags_test.py).
+  return !sys.is_windows()
+
+priv fn append_section_flags(list: List<|U8[]|>$@) //< run_section_flags, where the removal works
+  if strips_unused_sections()
+    for f in run_section_flags
+      list.push(f)
+
+priv fn append_compile_flags(list: List<|U8[]|>$@) //< the flags every unit is compiled with
+  //<
+  //< Caution: **The cache keys read them from here as well** (append_flags_key): a flag given to
+  //< the command alone would reuse objects compiled without it.
+  list.push(run_cflags)
+  list.push(run_opt_flag)
+  append_section_flags(list)
+
+priv fn append_flags_key(h: Str_builder$@) //< the compile flags as the cache keys spell them
+  //<
+  //< One space between flags: another separator would name every cached slot and object anew.
+  $flags: = List<|U8[]|>.new()
+  defer flags.free()
+  append_compile_flags(flags@)
+  for i in Range.asc(flags.len)
+    h.s(" " if i > 0 else "").s(flags.get(i))
+
+// ==========================================
+// Choosing the C compiler and the libraries to link
+// **The same rules** as `tests/support/link_flags.py` (used for bootstrap, before any ksplc exists)
+// and the Makefile's LDLIBS; tests/suite/link_flags_test.py catches a disagreement.
+// ==========================================
+fn cc_name(): U8[]
+  return sys.get_env("CC").unwrap_or("clang")
+
+priv fn target_triple(arena: Arena$@): U8$[] //< `CC -dumpmachine`'s output (the target triple)
+  //<
+  //< The same "clang" needs different libraries for the MSVC and the GNU target, so the choice is
+  //< made from the triple rather than the OS.
+  argv: = U8[][]::{ cc_name(), "-dumpmachine" }
+  return subproc.run(argv, "", 10000, 4096, arena) catch ""
+
+priv struct Target_kind //< the properties read from the triple that change the flags passed
+  //<
+  //< Caution: **Decide it only here.** The libraries, the section removal and the stack size share
+  //< it, and a copy would let one of them answer differently.
+  msvc: Bool
+  darwin: Bool
+  windows: Bool
+
+// The answer, cached after the first query. Uncached, **`CC -dumpmachine` runs for each of the
+// three callers**: only slower, so no gate but `tests/suite/run_test.kspls` notices.
+priv $target_known: Bool = false
+priv $target_answer: Target_kind = ::{ .msvc = false, .darwin = false, .windows = false }
+
+priv fn target_kind(arena: Arena$@): Target_kind
+  if target_known
+    return target_answer
+  triple: = target_triple(arena)
+  // Where the triple could not be read (empty), it falls back to the OS check.
+  target_answer = Target_kind::{ .msvc = triple.find_str("msvc") >= 0,
+    .darwin = triple.find_str("darwin") >= 0 || triple.find_str("apple") >= 0,
+    .windows =
+    triple.find_str("windows") >= 0 || triple.find_str("mingw") >= 0 ||
+    triple.find_str("cygwin") >= 0 || (triple.len == 0 && sys.is_windows()) }
+  target_known = true
+  return target_answer
+
+fn append_link_libs(list: List<|U8[]|>$@, arena: Arena$@) //<
+  //< It appends to list the libraries passed when linking the artifact
+  //<
+  //< * Windows: -lws2_32 always (hosted.c's whole preamble, winsock2 included, always goes in).
+  //< * MSVC: libm is part of the CRT; -lm is a link error. * macOS: pthread is in libSystem;
+  //< -lpthread is an error. * Linux: below glibc 2.34 the pthread_* need -lpthread.
+  k: = target_kind(arena)
+  if !k.msvc
+    list.push("-lm")
+  if !k.windows && !k.msvc && !k.darwin
+    list.push("-lpthread")
+  if k.windows || k.msvc
+    list.push("-lws2_32")
+    // `CommandLineToArgvW` lives here (the generated main rebuilds argv from UTF-16;
+    // `kspl_os_argv` in `gen/runtime/hosted.c`).
+    // Caution: mingw resolves it from the default import library and so builds even without it,
+    // but **MSVC needs it named**, so it stays.
+    list.push("-lshell32")
+
+priv fn append_dead_strip_flag(list: List<|U8[]|>$@, arena: Arena$@) //<
+  //< It appends to list the flags that drop unreferenced functions and data at link time
+  //<
+  //< Caution: **Do not mix them with the libraries (append_link_libs).** Those are what the link
+  //< cannot do without, and what `info link-libs` shows; this is an optimization, and mixed in it
+  //< would change what is shown. ld64 (macOS) calls it `-dead_strip`, GNU ld / lld
+  //< `--gc-sections`.
+  if !strips_unused_sections()
+    return
+  if target_kind(arena).darwin
+    list.push("-Wl,-dead_strip")
+  else
+    list.push("-Wl,--gc-sections")
+
+priv const exe_stack_msvc: U8[] = "-Wl,/STACK:8388608" //<
+  //< The stack size requested of the executable
+  //<
+  //< **The Windows linker's default reserves only 1MB**, so only there does a recursion die of real
+  //< stack exhaustion before the depth limit ("Implementation limits" in `docs/SPEC-language.md`).
+  //< The Makefile's LDLIBS and `tests/support/link_flags.py` use the same size.
+priv const exe_stack_gnu: U8[] = "-Wl,--stack,8388608"
+
+priv fn append_stack_flag(list: List<|U8[]|>$@, arena: Arena$@)
+  k: = target_kind(arena)
+  if k.msvc
+    list.push(exe_stack_msvc)
+  else if k.windows
+    list.push(exe_stack_gnu)
+
+fn append_exe_flags(list: List<|U8[]|>$@, arena: Arena$@) //<
+  //< It appends to list the options passed when building an executable from the artifact
+  //<
+  //< Caution: **Do not mix them with the libraries (append_link_libs)**, without which the link
+  //< fails. Without these it still builds, but grows and dies of stack exhaustion on Windows. This
+  //< is the list `info exe-flags` shows (so the build does not copy the decision).
+  append_section_flags(list)
+  append_dead_strip_flag(list, arena)
+  append_stack_flag(list, arena)
+
+// ==========================================
+// The input's identity (tier 1's cache check)
+// ==========================================
+
+priv fn append_file_hash(path: U8[], out: Str_builder$@): Bool //<
+  //< It adds the sha256 of path's contents into out as 64 hex characters
+  //<
+  //< It returns false where the file cannot be read.
+  data: = io.read_file(path) catch
+    return false
+  defer dealloc(Void$@::data.ptr)
+  base_cache.append_hash_hex(data, out)
+  return true
+
+priv fn shadowed_now(path: U8[]): Bool //<
+  //< Whether a path found under the given source directory is now hidden by a local copy
+  //<
+  //< **Comparing contents alone is not enough.** When a copy is placed locally, **the file the
+  //< cache names is still there, unchanged**, so the comparison passes. A copy that is removed is
+  //< caught by the comparison, since a named file disappears.
+  base: = base_locate.pkg_src_dir()
+  if base.len == 0 || !path.starts_with(base)
+    return false
+  rest: = path.sub_from(base.len)
+  if rest.len == 0 || rest[0] != '/'
+    return false
+  unit: = base_locate.package_of(rest.sub_from(1))
+  return unit.len > 0 && fs.is_dir(unit)
+
+priv fn is_absent_mark(digest: U8[]): Bool //< whether a deps line says "looked for, not there"
+  for c in digest
+    if c != '-'
+      return false
+  return true
+
+priv fn deps_are_fresh(deps_path: U8[], arena: Arena$@): Bool //<
+  //< Whether every line of the deps file (one line = `<64 hex digits> <path>`) still matches
+  //<
+  //< One unreadable or changed line makes it "stale" (when in doubt, rebuild). A line whose digits
+  //< are dashes names a settings file that was looked for and not found; it matches as long as the
+  //< file stays absent.
+  text: = io.read_file(deps_path) catch
+    return false
+  defer dealloc(Void$@::text.ptr)
+  $seen: Sz = 0
+  for line in text.lines(arena)
+    if line.len < base_cache.hash_hex_len + 2
+      return false
+    want: = line.sub(0, base_cache.hash_hex_len)
+    path: = line.sub_from(base_cache.hash_hex_len + 1)
+    if is_absent_mark(want)
+      if fs.exists(path)
+        return false
+      continue
+    $got: = Str_builder.new()
+    defer got.free()
+    if !append_file_hash(path, got@)
+      return false
+    if !want.equals(got.slice())
+      return false
+    if shadowed_now(path)
+      return false
+    seen += 1
+  return seen > 0
+
+fn write_deps_file(deps_path: U8[], loaded_files: List<|U8$[]|>$@) //<
+  //< It writes the list of the files read into the deps file (`--emit-deps=`)
+  //<
+  //< The reader is deps_are_fresh above; change both when changing the format. A failure still
+  //< leaves the compile a success: without the deps, the next run is just "stale" and rebuilds.
+  $out: = Str_builder.new()
+  defer out.free()
+  for import_path in loaded_files
+    // A name in `loaded_files` is the one its file was found under (`name_as_found` in
+    // `../base/locate.kspls`), so each has one path and nothing is looked up twice.
+    $file_path: = Str_builder.new()
+    defer file_path.free()
+    base_locate.append_file_path(import_path, import_path.reads_as_laid_out(), file_path@)
+    if !append_dep_line(file_path.slice(), out@)
+      return // where a file cannot be read, no deps file is written (an incomplete list is a lie)
+  // **So are the embedded files** — their bytes are in the output (`note_embedded` in
+  // `../base/locate.kspls`).
+  for embedded in base_locate.embedded_read()
+    if !append_dep_line(embedded, out@)
+      return
+  // **The settings files read are inputs too** — a `[package]` decides where the sources above
+  // were read from, so editing one has to make the result stale (`files_read` in
+  // `../base/config_file.kspls`).
+  for cfg in base_config_file.files_read()
+    if !append_dep_line(cfg, out@)
+      return
+  // **So is a settings file looked for and not found**: one placed there later is read instead of
+  // the one further up, so its appearance makes the result stale. Its line has dashes for a digest.
+  for cfg in base_config_file.files_missed()
+    for _i in Range.asc(base_cache.hash_hex_len)
+      out.c('-')
+    out.c(' ').s(cfg).c('\n')
+  io.write_file(deps_path, out.slice()) catch {}
+
+priv fn append_dep_line(path: U8[], out: Str_builder$@): Bool //<
+  //< It adds the deps line for path (`<64 hex digits> <path>`); false where it cannot be read
+  if !append_file_hash(path, out)
+    return false
+  out.c(' ').s(path).c('\n')
+  return true
+
+// ==========================================
+// The libraries the program names (`#link` on an `extern` block)
+// ==========================================
+
+fn write_libs_file(libs_path: U8[], root: Ast_node$@): Void?io.Io_error //<
+  //< It writes the libraries the kept `extern` blocks name into the libs file (`--emit-libs=`)
+  //<
+  //< One line of `-l<name>` words (the shape `info link-libs` answers in), empty where none is
+  //< named; the reader is append_named_libs below. **A file's names come before those of the files
+  //< it imports**, as a linker reading once from the left needs, each name once at its first place.
+  //< A block `#cfg` dropped is absent, so a library follows the flag that keeps its declarations.
+  $names: = List<|U8[]|>.new()
+  defer names.free()
+  // root holds each file's declarations together, a file after the files it imports ("dependency
+  // -> self" in `../parse/load.kspls`), so the files are walked from the last.
+  decls: = root.children
+  $end: = decls.len
+  for end > 0
+    file: = decls.get(end - 1).loc.file()
+    $start: = end - 1
+    for start > 0 && decls.get(start - 1).loc.file().equals(file)
+      start -= 1
+    for i in Range.new(start, end, 1)
+      append_link_names(decls.get(i), names@)
+    end = start
+  $out: = Str_builder.new()
+  defer out.free()
+  for i in Range.asc(names.len)
+    out.s(" " if i > 0 else "").s("-l").s(names.get(i))
+  out.c('\n')
+  io.write_file(libs_path, out.slice())?
+
+priv fn append_link_names(decl: Ast_node$@, names: List<|U8[]|>$@) //<
+  //< It adds the names in an `extern` block's `#link`s that are not yet in names
+  attrs: =
+    decl.find_child(.k_attribute_list) if decl.kind_id == .k_decl_extern_block else null
+  if attrs == null
+    return
+  for attr in attrs.children
+    name: = attr.link_name() if attr.is_attribute_named("link") else ""
+    if name.len > 0 && !has_name(names, name)
+      names.push(name)
+
+priv fn has_name(names: List<|U8[]|>@, name: U8[]): Bool //< whether it is already in the list
+  for n in names
+    if n.equals(name)
+      return true
+  return false
+
+priv fn append_named_libs(libs_path: U8[], list: List<|U8[]|>$@, arena: Arena$@): Bool //<
+  //< It appends to list the libraries the compile wrote (`--emit-libs`)
+  //<
+  //< False where the file cannot be read: the compile always writes it, and linking without it
+  //< fails on undefined names, far from the cause.
+  text: = io.read_file(libs_path) catch
+    return false
+  defer dealloc(Void$@::text.ptr)
+  for word in text.trim_spaces().split(' ', arena)
+    if word.len > 0
+      list.push(arena.dup_str(word))
+  return true
+
+priv fn exit_mkdir_failed(what: U8[], path: U8[], e: fs.Fs_error) //<
+  //< It reports and exits where the directory could not be created
+  //<
+  //< It names the one level that could not be created (`fs.Fs_error.mkdir_failed`); the whole path
+  //< alone does not tell a name problem from a permission problem.
+  $at: = Str_builder.new()
+  defer at.free()
+  switch e case .mkdir_failed(part)
+    at.s("\n  failed at: ").s(part)
+  default {}
+  io.err().s("ksplc run: cannot create the \{what\}: \{path\}\{at.slice()\}\n")
+  sys.exit(1)
+
+priv fn append_slot_key(script: U8[], out: Str_builder$@): Bool //<
+  //< The key that selects the cache slot
+  //<
+  //< The script's path, the compile settings and ksplc's own identity. Where ksplc cannot be
+  //< identified (argv[0] cannot be stat'd) it returns cacheable=false: slower beats an old binary.
+  $h: = Str_builder.new()
+  defer h.free()
+  // Caution: **Key the script by its absolute path, not as it was typed.** `tests/main.kspls`
+  // names a different file in every folder it is run from: keyed by the text, two packages' tests
+  // would share one slot, and two such runs at once would sweep away each other's objects before
+  // the link ("no such file or directory: obj/…").
+  h.s(base_locate.canonical_path(script)).c(0U8)
+  h.s(base_locate.std_dir()).c(0U8)
+  // Caution: **Put both directories into the key.** With one, a run that changed only
+  // `--pkg-src-dir=` reuses the last build, and **a program built with another package** runs.
+  h.s(base_locate.pkg_src_dir()).c(0U8)
+  append_flags_key(h@)
+  h.c(0U8)
+  h.s(cc_name()).c(0U8)
+  for d in base_core.config.defines
+    h.s(d).c(0U8)
+  cacheable: = base_cache.append_self_identity(h@)
+  base_cache.append_hash_hex(h.slice(), out)
+  return cacheable
+
+// ==========================================
+// The split build: one object per unit, and nothing unchanged is rebuilt.
+// The generated C is split into translation units **so that it can be compiled in parallel**.
+// **The splitting itself is not where the speed comes from.**
+// ==========================================
+priv fn pick_unit_count(): Sz
+  n: = sys.cpu_count()
+  return max_run_units if n > max_run_units else n
+
+priv const max_run_units: Sz = 16 //< the split count's upper bound
+  //<
+  //< Splitting far past the core count is no faster (see above); this caps many-core machines.
+
+priv struct Unit //< one unit and its object
+  src: U8[] //< the unit's `.c`
+  obj: U8[] //< the object's path (a name derived from the contents)
+  handle: I64 //< spawn_async's handle while compiling; 0 means not running
+
+priv fn has_obj(units: List<|Unit|>$@, obj: U8[]): Bool //<
+  //< Whether that object is already in the list
+  //<
+  //< Caution: **Do not list the same object twice.** A small input split many ways gives units
+  //< with the same (empty) contents, and a name hashed from the contents makes them **one file**:
+  //< `compile_units` would start several cc writing the same output. There are at most
+  //< `max_run_units`, so a linear search is enough.
+  for u in units
+    if u.obj.equals(obj)
+      return true
+  return false
+
+priv fn append_unit_path(stem: U8[], index: Sz, out: Str_builder$@) //<
+  //< It builds the names `<stem>.h` and `<stem>.<i>.c`
+  out.s(stem).c('.').s("\{index\}.c")
+
+priv fn append_obj_key(unit_src: U8[], header: U8[], out: Str_builder$@): Bool //<
+  //< The key that decides an object's name
+  //<
+  //< It includes **everything that could change this unit's compile result**.
+  //< Caution: Always include the shared header: a changed type or prototype changes the code with
+  //< the `.c` unchanged. Include the C compiler's name and flags too, or switching CC links the
+  //< previous compiler's objects.
+  $h: = Str_builder.new()
+  defer h.free()
+  h.s(cc_name()).c(0U8)
+  append_flags_key(h@)
+  h.c(0U8)
+  src_data: = io.read_file(unit_src) catch
+    return false
+  defer dealloc(Void$@::src_data.ptr)
+  hdr_data: = io.read_file(header) catch
+    return false
+  defer dealloc(Void$@::hdr_data.ptr)
+  h.s(src_data).c(0U8).s(hdr_data)
+  base_cache.append_hash_hex(h.slice(), out)
+  return true
+
+priv fn sweep_objects(obj_dir: U8[], units: List<|Unit|>$@, arena: Arena$@) //<
+  //< It removes from the directory every object this build does not use
+  //<
+  //< Caution: **Call it before starting the compile.** Called afterwards, it can remove an object
+  //< another process running the same script is about to link. It removes only names matching
+  //< `<64 hex digits>.o`.
+  names: = fs.read_dir(obj_dir, arena) catch
+    return
+  for name in names
+    if name.len != base_cache.hash_hex_len + 2 || !name.ends_with(".o")
+      continue
+    $keep: = false
+    for u in units
+      if u.obj.ends_with(name)
+        keep = true
+    if keep
+      continue
+    fs.remove_path(fs.join(obj_dir, name, arena)) catch {}
+
+priv fn under_slot(path: U8[], slot: U8[]): U8[] //<
+  //< It turns an absolute path under the slot into one relative to the slot
+  //<
+  //< Caution: **Pass every name given to the C compiler through this.** An absolute path holding
+  //< non-ASCII breaks in the compiler (the reason is "Paths are held in UTF-8, and converted to the
+  //< wide API on Windows" in std/docs/DESIGN.md); cc starts with the slot as its cwd, so a relative
+  //< path works. It strips only **a name the caller built from the slot**.
+  if !path.starts_with(slot) || path.len <= slot.len + 1
+    return path
+  return path.sub_from(slot.len + 1)
+
+priv fn compile_units(units: List<|Unit|>$@, slot: U8[], arena: Arena$@): Bool //<
+  //< It compiles the missing objects in parallel
+  //<
+  //< It returns true once they all exist.
+  //< Caution: Always reap as many as were started (see spawn_async), even on failure partway.
+  //< **Start cc with the slot as its cwd** (see under_slot).
+  $running: Sz = 0
+  for $i: Sz = 0; i < units.len; i += 1
+    u: = units.get(i)
+    if fs.exists(u.obj)
+      continue // the same contents as the last run; it is not rebuilt
+    $argv: = List<|U8[]|>.new(arena)
+    argv.push(cc_name())
+    append_compile_flags(argv@)
+    argv.push("-c")
+    argv.push(under_slot(u.src, slot))
+    argv.push("-o")
+    argv.push(under_slot(u.obj, slot))
+    handle: = subproc.spawn_async(argv.slice(), slot) catch
+      io.err().s("ksplc run: failed to start \{cc_name()\}\n")
+      fallback 0
+    $updated: = u
+    updated.handle = handle
+    units.set(i, updated)
+    if handle != 0
+      running += 1
+  if running == 0
+    return true
+  $ok: = true
+  for u in units
+    if u.handle == 0
+      continue
+    if subproc.spawn_reap(u.handle) != 0
+      ok = false
+  return ok
+
+// ==========================================
+// The body
+// ==========================================
+
+priv fn spawn_or_exit(list: List<|U8[]|>$@, what: U8[], cwd: U8[]): I32 //<
+  //< It starts list as argv and returns the exit code
+  //<
+  //< Where starting itself fails, it reports and exits. Where `cwd` is empty it inherits ksplc's
+  //< working directory (the same convention as spawn_wait).
+  return subproc.spawn_wait(list.slice(), cwd) catch
+    io.err().s("ksplc run: failed to start \{what\}\n")
+    sys.exit(1)
+    fallback 1
+
+priv fn exec_program(script: U8[], exe: U8[], script_args: List<|U8[]|>$@, arena: Arena$@): I32 //<
+  //< It starts the already-built program, passing the script's arguments unchanged
+  //<
+  //< The script's own path goes in an environment variable (script_env_name in std/sys.kspls;
+  //< Python's `__file__`), so the arguments the script receives stay unchanged.
+  //< Caution: **Write the path of the executable being started alongside it** in the value.
+  $env_val: = Str_builder.new()
+  defer env_val.free()
+  env_val.s(exe).c('\n').s(script)
+  if !sys.set_env(sys.script_env_name, env_val.slice())
+    io.err().s("ksplc run: cannot set \{sys.script_env_name\} (script_path() will report none)\n")
+  $argv: = List<|U8[]|>.new(arena)
+  argv.push(exe)
+  for a in script_args
+    argv.push(a)
+  return spawn_or_exit(argv@, exe, "")
+
+priv fn commit_path(from: U8[], to: U8[]): Bool //<
+  //< It moves the cache's working file onto the final name
+  //<
+  //< **Rename over it, never remove it first**: the name exists at every moment, so a run starting
+  //< the program in between finds no gap. Windows refuses to replace a running program (another
+  //< run of this script), so that one is renamed aside (`aside_name`), which a running program
+  //< allows, and keeps running while the new one takes the name.
+  fs.rename_path(from, to) catch
+    if !fs.exists(to)
+      return false
+    $aside: = Str_builder.new()
+    defer aside.free()
+    fs.rename_path(to, aside_name(to, aside@)) catch
+      return false
+    fs.rename_path(from, to) catch
+      return false
+  return true
+
+priv fn aside_name(path: U8[], out: Str_builder$@): U8[] //< a name no file in the slot has
+  //<
+  //< The slot's lock is held, so no other run is choosing one at the same moment.
+  $n: Sz = 0
+  out.clear().s(path).s(".old.0")
+  for fs.exists(out.slice())
+    n += 1
+    out.clear().s(path).s(".old.\{n\}")
+  return out.slice()
+
+priv fn sweep_aside(exe_path: U8[], arena: Arena$@) //< removes the programs renamed aside
+  //<
+  //< One still running cannot be removed and waits for the next build.
+  dir: = sys.get_dir_name(exe_path)
+  stem: = arena.text().s(sys.get_file_name(exe_path)).s(".old.").take()
+  names: = fs.read_dir(dir, arena) catch
+    return
+  for name in names
+    if name.starts_with(stem)
+      fs.remove_path(fs.join(dir, name, arena)) catch {}
+
+priv fn hold_slot(path: U8[]): fs.File_lock //<
+  //< The slot's lock; it reports when another run of this script holds it
+  //<
+  //< **One build at a time per slot**: the working names (`prog.new.*`, the objects swept) are the
+  //< slot's, so two builds at once would take each other's files. The OS releases it if ksplc dies.
+  lock: = fs.File_lock.try_take(path) catch e
+    switch e case .held_elsewhere
+      io.err().s("ksplc run: waiting for another run of this script to finish building it\n")
+    default
+      exit_lock_failed(path)
+    fallback fs.File_lock.take(path) catch exit_lock_failed(path)
+  return lock
+
+#noreturn
+priv fn exit_lock_failed(path: U8[]) //< it reports and exits where the slot cannot be locked
+  io.err().s("ksplc run: cannot lock the cache: \{path\}\n")
+  sys.exit(1)
+
+fn run_script(script: U8[], script_args: List<|U8[]|>$@) //<
+  //< It builds the script (where needed) and runs it
+  //<
+  //< **This function does not return**: at the end it exits with the script's exit code.
+  //< Runs of one script share its slot: the build is one at a time (`hold_slot`), and the program
+  //< runs outside the lock, so a long run blocks no other.
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+
+  if !fs.exists(script)
+    io.err().s("ksplc run: no such file: \{script\}\n")
+    sys.exit(1)
+
+  $root: = Str_builder.new()
+  defer root.free()
+  if !base_cache.append_cache_root(root@)
+    base_cache.exit_unlocated("ksplc run")
+  runs_dir: = fs.join(root.slice(), base_cache.run_kind, arena)
+  $slot_key: = Str_builder.new()
+  defer slot_key.free()
+  cacheable: = append_slot_key(script, slot_key@)
+  slot: = fs.join(runs_dir, slot_key.slice(), arena)
+  is_new_slot: = !fs.is_dir(slot)
+  fs.mkdir_all(slot) catch e
+    exit_mkdir_failed("cache directory", slot, e)
+  // Caution: **Mark it used every time.** The sweep removes the least recently used, so if a hit
+  // left no mark, the most-used slot would go first.
+  base_cache.touch_dir(slot, arena)
+  if is_new_slot
+    base_cache.prune_dirs(runs_dir, base_cache.hash_hex_len, max_run_slots, run_slot_spare_secs,
+      slot, arena)
+
+  exe_path: = fs.join(slot, "prog.exe", arena)
+  deps_path: = fs.join(slot, "deps", arena)
+  // The record of what the current prog.exe was linked from (the objects, then the libraries).
+  // All objects existing does not mean the executable was built from them (a compile passed and a
+  // link failed), and skipping the link then **runs the previous binary as a success**.
+  objs_path: = fs.join(slot, "prog.objs", arena)
+  // The paths before the commit, renamed onto the three above once the build succeeds.
+  // Caution: Keep the extension at the end (not `prog.c.new`). The C compiler picks the language
+  // by it and takes a `.new` for a linker script.
+  new_exe_path: = fs.join(slot, "prog.new.exe", arena)
+  new_c_path: = fs.join(slot, "prog.new.c", arena)
+  new_deps_path: = arena.text().s(deps_path).s(".new").take()
+  // The libraries the program names. Only the link right after reads it, so it is not committed;
+  // it goes into prog.objs's record instead.
+  libs_path: = fs.join(slot, "prog.libs", arena)
+
+  // The lock covers the check below and the build; a run waiting here finds the build done.
+  $lock: = hold_slot(fs.join(slot, "lock", arena))
+
+  // --- tier 1: where every input is the same as in the last run, the build is skipped entirely ---
+  if !(cacheable && fs.exists(exe_path) && deps_are_fresh(deps_path, arena))
+    sweep_aside(exe_path, arena)
+
+    // --- it calls ksplc itself to generate the C (calling itself avoids copying the pipeline) ---
+    $ksplc_argv: = List<|U8[]|>.new(arena)
+    cmd_args: = sys.args()
+    ksplc_argv.push(cmd_args[0])
+    // A value is joined with `=` (argp reads no other form).
+    for d in base_core.config.defines
+      ksplc_argv.push(arena.text().s("--define=").s(d).take())
+    // The std directory is always passed. The child does not inherit a `--std-dir=`, and would look
+    // for "std" from the cwd and fail.
+    $std_dir_arg: = Str_builder.new()
+    defer std_dir_arg.free()
+    std_dir_arg.s("--std-dir=").s(base_locate.std_dir())
+    ksplc_argv.push(std_dir_arg.slice())
+    // **The package source directory likewise**, but **not where none was given** — an empty
+    // one reads as "a directory was set", and the child fails with `--pkg-src-dir: expected a
+    // directory path`.
+    $pkg_src_dir_arg: = Str_builder.new()
+    defer pkg_src_dir_arg.free()
+    if base_locate.pkg_src_dir().len > 0
+      pkg_src_dir_arg.s("--pkg-src-dir=").s(base_locate.pkg_src_dir())
+      ksplc_argv.push(pkg_src_dir_arg.slice())
+    $emit_deps_arg: = Str_builder.new()
+    defer emit_deps_arg.free()
+    emit_deps_arg.s("--emit-deps=").s(new_deps_path)
+    ksplc_argv.push(emit_deps_arg.slice())
+    $emit_libs_arg: = Str_builder.new()
+    defer emit_libs_arg.free()
+    emit_libs_arg.s("--emit-libs=").s(libs_path)
+    ksplc_argv.push(emit_libs_arg.slice())
+    // It splits the generated C into translation units so that it can be compiled in parallel.
+    // **The split count is not part of the cache key.** Which unit a declaration goes to depends on
+    // the split count (ksplc/gen/c/ctx.unit_for), so sharing one cache across machines with
+    // different core counts changes the contents. An object's name comes from the unit's
+    // contents, so even then it is rebuilt correctly.
+    units_n: = pick_unit_count()
+    $split_arg: = Str_builder.new()
+    defer split_arg.free()
+    split_arg.s("--split=\{units_n\}")
+    if units_n > 1
+      ksplc_argv.push(split_arg.slice())
+    ksplc_argv.push(script)
+    ksplc_argv.push(new_c_path)
+    code: = spawn_or_exit(ksplc_argv@, "ksplc", "")
+    if code != 0
+      fs.remove_path(new_c_path) catch {}
+      fs.remove_path(new_deps_path) catch {}
+      sys.exit(code)
+    $named_libs: = List<|U8[]|>.new(arena)
+    if !append_named_libs(libs_path, named_libs@, arena)
+      io.err().s("ksplc run: the compile left no list of libraries (\{libs_path\})\n")
+      fs.remove_path(new_deps_path) catch {}
+      sys.exit(1)
+
+    // --- tier 2: per unit, an object whose contents match the last run is not rebuilt ---
+    // An object's name is hashed from its `.c`, the shared header and the C compiler with its
+    // flags, so if it exists it needs no rebuilding.
+    obj_dir: = fs.join(slot, "obj", arena)
+    fs.mkdir_all(obj_dir) catch e
+      exit_mkdir_failed("object directory", obj_dir, e)
+    $header_path: = Str_builder.new()
+    defer header_path.free()
+    header_path.s(sys.strip_last_ext(new_c_path)).s(".h")
+
+    $units: = List<|Unit|>.new(arena)
+    $all_cached: = true
+    for i in Range.asc(units_n)
+      $src: = Str_builder.new()
+      defer src.free()
+      if units_n > 1
+        append_unit_path(sys.strip_last_ext(new_c_path), i, src@)
+      else
+        src.s(new_c_path) // unsplit, there is just one
+      $key: = Str_builder.new()
+      defer key.free()
+      if !append_obj_key(src.slice(), header_path.slice(), key@)
+        io.err().s("ksplc run: cannot read the generated C (\{src.slice()\})\n")
+        sys.exit(1)
+      obj: = fs.join(obj_dir, arena.text().s(key.slice()).s(".o").take(), arena)
+      if has_obj(units@, obj)
+        continue
+      if !fs.exists(obj)
+        all_cached = false
+      unit: = Unit::{ .src = arena.dup_str(src.slice()), .obj = obj, .handle = 0 }
+      units.push(unit)
+
+    // Caution: **The libraries go into the record too.** Adding only a `#link` leaves every object
+    // unchanged, so the link would be skipped and the executable would lack the library.
+    $want_objs: = Str_builder.new()
+    defer want_objs.free()
+    for u in units
+      want_objs.s(sys.get_file_name(u.obj)).c('\n')
+    for lib in named_libs
+      want_objs.s(lib).c('\n')
+    // All objects exist and the executable was built from exactly this set: no link either.
+    have_objs: = io.read_file(objs_path) catch ""
+    linked_from_same: = have_objs.len > 0 && have_objs.equals(want_objs.slice())
+    if have_objs.len > 0
+      dealloc(Void$@::have_objs.ptr)
+    if !(all_cached && linked_from_same && fs.exists(exe_path))
+      // The sweep runs **before** the compile (see sweep_objects).
+      sweep_objects(obj_dir, units@, arena)
+      if !compile_units(units@, slot, arena)
+        // The C that failed is kept as the user's only clue; the previous set (prog.exe / deps)
+        // is left untouched, so the next run comes here again.
+        io.err()
+          .s("ksplc run: the C compiler failed on the generated code \
+            (\{sys.strip_last_ext(new_c_path)\}*.c)\n")
+        fs.remove_path(new_deps_path) catch {}
+        sys.exit(1)
+      $link_argv: = List<|U8[]|>.new(arena)
+      link_argv.push(cc_name())
+      for u in units
+        link_argv.push(under_slot(u.obj, slot))
+      link_argv.push("-o")
+      link_argv.push(under_slot(new_exe_path, slot))
+      // Libraries go after the objects, the program's own before the common ones (they may need
+      // `-lm`): GNU ld resolves from the left only.
+      for lib in named_libs
+        link_argv.push(lib)
+      append_link_libs(link_argv@, arena)
+      append_dead_strip_flag(link_argv@, arena)
+      append_stack_flag(link_argv@, arena)
+      link_code: = spawn_or_exit(link_argv@, cc_name(), slot)
+      if link_code != 0
+        io.err().s("ksplc run: linking failed\n")
+        fs.remove_path(new_exe_path) catch {}
+        fs.remove_path(new_deps_path) catch {}
+        sys.exit(link_code)
+      if !commit_path(new_exe_path, exe_path)
+        io.err().s("ksplc run: cannot update the cache: \{exe_path\}\n")
+        sys.exit(1)
+      // Caution: **Write it after swapping the executable.** Written first, a failed swap leaves
+      // a false record "built from this set", so the next run skips the link and runs the old one.
+      io.write_file(objs_path, want_objs.slice()) catch
+        fs.remove_path(objs_path) catch {}
+
+    // The exe now matches this run's input, so the deps are updated. Without them (write_deps_file
+    // writes none where a file cannot be read) the old deps are removed, and tier 1 simply misses.
+    if !commit_path(new_deps_path, deps_path)
+      fs.remove_path(deps_path) catch {}
+
+  lock.free()
+  sys.exit(exec_program(script, exe_path, script_args, arena))

@@ -1,0 +1,41 @@
+//< The three reflective sensors for line tracking on a Freenove 4WD mecanum car
+//<
+//< It packs the three readings into the three bits **left<<2 | centre<<1 | right** (**white = 0 /
+//< black = 1**).
+//<
+//< **This is the only function that reads them.** If a caller copied the packing and the
+//< left-right swap (`board.line_sensor_swapped`) were fixed in only one copy, nothing would show
+//< that the rule had split. The packed bits go unchanged into both the policy's features and the
+//< record, so a split would change what "the left is black" means on each path.
+import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/drivers/rp2040/gpio"
+
+fn init() //< sets up the three inputs
+  //<
+  //< **No pull is set** (the sensor board drives High/Low itself). All three are initialized
+  //< whether or not they are swapped, so the order does not matter here.
+  gpio.init_in(board.line_sensor_left)
+  gpio.init_in(board.line_sensor_mid)
+  gpio.init_in(board.line_sensor_right)
+
+priv fn left_pin(): U32 //<
+  //< the pins of the leftmost and rightmost sensors as the car sees them
+  //<
+  //< Caution: **Do not read `board.line_sensor_left` directly.** On a unit where left and right
+  //< are swapped, the pin with that name is on the rightmost sensor.
+  return board.line_sensor_right if board.line_sensor_swapped else board.line_sensor_left
+
+priv fn right_pin(): U32
+  return board.line_sensor_left if board.line_sensor_swapped else board.line_sensor_right
+
+fn read_bits(): U32 //< packs the three readings into left<<2 | centre<<1 | right
+  //<
+  //< **1 = black.**
+  $bits: U32 = 0
+  if gpio.read(left_pin())
+    bits |= 4
+  if gpio.read(board.line_sensor_mid)
+    bits |= 2
+  if gpio.read(right_pin())
+    bits |= 1
+  return bits

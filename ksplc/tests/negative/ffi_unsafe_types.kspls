@@ -1,0 +1,55 @@
+//< A type whose layout is Kanso's own cannot appear in an `#export`'s signature
+//<
+//< Wrapping it in a struct is the same, and the check walks inside (with the outermost layer alone
+//< it could be dodged by merely wrapping; docs/DESIGN.md §7.1).
+// EXPECT: interface values cannot cross C-FFI boundaries
+// EXPECT: enums with payloads cannot cross C-FFI boundaries
+// EXPECT: slices (T[]) cannot cross C-FFI boundaries
+// EXPECT-NOT: 'Pod'
+
+pub trait S
+  fn a(r: Self$@): I32
+
+pub struct Q
+  pub n: I32
+
+impl Q: S
+  pub fn a(r: Self$@): I32
+    return r.n
+
+pub enum Tagged
+  none
+  some(v: I32)
+
+pub struct Wrapped
+  pub items: U8[]
+
+// A plain POD and a plain integer enum pass (no diagnostic comes out on this line).
+pub struct Pod
+  pub a: I32
+  pub p: Void$@
+
+pub enum Plain
+  a
+  b
+
+#export
+pub fn takes_trait(s: S): I32
+  return s.a()
+
+#export
+pub fn takes_tagged(t: Tagged): I32
+  switch t case .some(v)
+    return v
+  default
+    return 0
+
+#export
+pub fn takes_wrapped(w: Wrapped): Sz
+  return w.items.len
+
+#export
+pub fn takes_pod(p: Pod, e: Plain): I32
+  return p.a + I32::e
+
+fn main() {}

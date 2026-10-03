@@ -1,0 +1,240 @@
+import "std/verdict"
+// Uses C's reserved words, and names the target's headers replace with `#define`, at every
+// position the generated C writes bare.
+// Caution: **Include the names the preamble headers `#define`** (`is_preamble_macro` in
+// `base/c_name.kspls`), **the ones erased with `#undef`** (`Sig_row` — from the declaration half's
+// headers, which ordering cannot avoid) and **the ones that are not escaped** (`Stat_row` — from
+// the definition half's, emitted after the generated body). Bare, each expands into a C error.
+// **Put every position into this one file**: declarations and references are emitted apart, so a
+// missing position hides a wiring mistake. Write both `.` and `->`.
+// This file alone steps outside the case convention, so [I0502] is silenced.
+##lint(I0502 = off)
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/seq"
+
+struct Rect
+  int: I32
+  float: I32
+  // The names the preamble headers define (the heading above). `NULL` is replaced everywhere,
+  // `far` on Windows.
+  far: I32
+  NULL: I32
+
+struct Stat_row //< the names only the definition half's headers replace
+  st_mtime: I32
+  S_IFDIR: I32
+  O_RDONLY: I32
+  POLLIN: I32
+  AF_INET: I32
+
+struct Sig_row //< the names the declaration half's headers `#define`
+  //<
+  //< Erased with `#undef`, they are written bare; stop erasing them and this file fails to build.
+  si_pid: I32
+  sa_handler: I32
+  sigev_notify_function: I32
+  L_tmpnam: I32
+  math_errhandling: I32
+  bool: I32 //<
+    //< The one name here that cannot be erased, so it takes a suffix
+    //<
+    //< The C has `typedef bool Bool;`. Declaration and reference must agree on the suffixed name.
+
+struct Crt_row //< the names Windows's CRT `#define`s
+  //<
+  //< **Linux cannot trigger them** (glibc's `stdin` expands to itself; the rest are not macros).
+  //< On that CRT each expands to another name (`stderr` to `(__acrt_iob_func(2))`).
+  // They are erased with `#undef`, so they are written as bare names.
+  environ: I32
+  popen: I32
+  strcasecmp: I32
+  sys_errlist: I32
+  // These three cannot be erased (the runtime reads them as `FILE*`), so they take a suffix.
+  stdin: I32
+  stdout: I32
+  stderr: I32
+
+struct Vendor_row //< the words a C compiler keeps for itself beyond the standard's list
+  //<
+  //< **The first three break on Linux too**: C11's `_Atomic` and GCC's `__thread` are keywords to
+  //< gcc and clang in every mode, and clang reads `__cdecl` as one on every target. The rest break
+  //< only where Microsoft's extensions are on (the windows-msvc job); `std/fs.kspls` uses the name
+  //< `_try`.
+  _Atomic: I32
+  __thread: I32
+  __cdecl: I32
+  __try: I32
+  _try: I32
+  _asm: I32
+  _int64: I32
+  static_assert: I32
+  L__FUNCTION__: I32
+  __cdecl_kw: I32 //<
+    //< The name `__cdecl` is renamed to, placed beside it
+    //<
+    //< It starts with `__` too and so is renamed in turn, which is why the pair is allowed; if not,
+    //< the C compiler would reject it here.
+
+enum Shape
+  circle(double: I32)
+  box(short: I32, signed: I32)
+  line(near: I32, far: I32)
+
+trait Sized
+  fn char(r: Self): I32
+
+impl Rect: Sized
+  fn char(r: Rect): I32
+    return r.int * r.float
+
+priv fn area(long: I32, union: I32): I32
+  static: I32 = long * union
+  return static
+
+priv fn span(near: I32, far: I32): I32
+  return far - near
+
+priv fn sigev(si_uid: I32, sa_sigaction: I32): I32
+  bool: = si_uid + sa_sigaction
+  return bool
+
+priv fn guarded(_leave: I32, __int64: I32): I32 //< Microsoft's words as parameters and a local
+  _finally: = _leave + __int64
+  return _finally
+
+priv fn tally(errno: I32, EOF: I32, pascal: I32): I32
+  return errno + EOF + pascal
+
+priv fn crt(environ: I32, stdout: I32): I32
+  stderr: = environ + stdout
+  return stderr
+
+priv fn apply(volatile: fn(auto: I32): I32, unsigned: I32): I32 //<
+  //< A function-pointer type's parameter name, and a parameter name inside that type
+  return volatile(unsigned)
+
+priv fn twice(auto: I32): I32
+  return auto * 2
+
+priv fn matched(n: I32): I32 //< matches a `switch` against a name spelled like a reserved word
+  //<
+  //< **Renaming it only at the declaration is not enough.**
+  //< Caution: **Test a name that gets rewritten too** (a local carrying `$`).
+  $near: = Option<|I32|>.none
+  if n > 0
+    near = Option<|I32|>.some(n)
+  $got: I32 = 0
+  if v: = near
+    got = v
+  register: = Option<|I32|>.some(got * 2)
+  if v: = register
+    return v
+  return 0
+
+fn run()
+  verdict.start("[Genc] using a C reserved word as an identifier test...")
+  assert(matched(3) == 6, "C keyword names: switch on a keyword-named local")
+  auto: Rect = ::{ .int = 3, .float = 4, .far = 9, .NULL = 5 }
+  do: I32 = area(auto.int, auto.float)
+  while: I32 = do + 1
+  // A reserved word starting with `_` too (a KSPL identifier may).
+  _Bool: I32 = while + 1
+  assert(do == 12, "C keyword names: field/param/local round-trip")
+  assert(while == 13, "C keyword names: local reference")
+  assert(_Bool == 14, "C keyword names: underscore-prefixed keyword")
+
+  // A pointer receiver comes out with `->`.
+  restrict: Rect@ = auto@
+  assert(restrict.int == 3, "C keyword names: field through a pointer")
+  assert(restrict.far == 9, "preamble macro names: field through a pointer")
+  assert(restrict.NULL == 5, "preamble macro names: libc macro as a field")
+  assert(span(2, 7) == 5, "preamble macro names: parameters")
+  assert(tally(1, 2, 3) == 6, "preamble macro names: libc and windows macros as parameters")
+
+  // An enum's payload field, in the declaration (the union) and the binding.
+  s: = Shape.box(2, 5)
+  switch s case .circle(double)
+    assert(double == 0, "C keyword names: unreachable variant")
+  case .box(short, signed)
+    assert(short * signed == 10, "C keyword names: enum payload field")
+  case .line(near, far)
+    assert(far - near == 0, "C keyword names: unreachable variant")
+
+  // A trait's method name becomes a vtable struct's member.
+  sized: Sized = auto
+  assert(sized.char() == 12, "C keyword names: trait method through a vtable")
+
+  assert(apply(twice, 3) == 6, "C keyword names: function pointer parameter")
+
+  arena: = Arena.new(4096)
+  lst: = List<|I32|>.create(arena)
+  lst.push(11)
+  lst.push(12)
+  // A C-style for's init and step, and the variable of a for over a collection.
+  for $goto: = 0; goto < 2; goto += 1
+    assert(lst.get(goto) >= 11, "C keyword names: c-style loop variable")
+  $total: I32 = 0
+  for register in lst
+    total += register
+  assert(total == 23, "C keyword names: loop-over-collection variable")
+
+  // A captured name becomes a field of the synthesized environment struct.
+  inline: I32 = 10
+  kept: = lst@.where(fn(v: I32; inline: I32): Bool {
+    return v > inline;
+  }).count()
+  assert(kept == 2, "C keyword names: closure capture field")
+  near: I32 = 11
+  over: = lst@.where(fn(v: I32; near: I32): Bool {
+    return v > near;
+  }).count()
+  assert(over == 1, "preamble macro names: closure capture field")
+  errno: I32 = 10
+  seen: = lst@.where(fn(v: I32; errno: I32): Bool {
+    return v > errno;
+  }).count()
+  assert(seen == 2, "preamble macro names: libc macro as a capture field")
+
+  // The definition half's names in a declaration (a field) and in references (a local, `.`,
+  // `->`).
+  $row: Stat_row = ::{ .st_mtime = 1, .S_IFDIR = 2, .O_RDONLY = 4, .POLLIN = 8, .AF_INET = 16 }
+  held: Stat_row@ = row@
+  st_mtime: = row.st_mtime + held.S_IFDIR + row.O_RDONLY + held.POLLIN + row.AF_INET
+  assert(st_mtime == 31, "impl-half macro names: field and local spellings agree")
+
+  // The declaration half's macros in both places (a field; a local, a parameter, `.`, `->`).
+  $sig: Sig_row = ::{ .si_pid = 1, .sa_handler = 2, .sigev_notify_function = 4, .L_tmpnam = 8,
+    .math_errhandling = 16, .bool = 32 }
+  seen_sig: Sig_row@ = sig@
+  si_pid: =
+    sig.si_pid + seen_sig.sa_handler + sig.sigev_notify_function + seen_sig.L_tmpnam + sig
+    .math_errhandling + seen_sig.bool
+  assert(si_pid == 63, "decl-half macro names: field and local spellings agree")
+  assert(sigev(1, 2) == 3, "decl-half macro names: parameters and a local")
+
+  // Windows's CRT names agree in both places too.
+  $crt_row: Crt_row = ::{ .environ = 1, .popen = 2, .strcasecmp = 4, .sys_errlist = 8, .stdin = 16,
+    .stdout = 32, .stderr = 64 }
+  seen_crt: Crt_row@ = crt_row@
+  environ: =
+    crt_row.environ + seen_crt.popen + crt_row.strcasecmp + seen_crt.sys_errlist + crt_row.stdin +
+    seen_crt.stdout + crt_row.stderr
+  assert(environ == 127, "crt macro names: field and local spellings agree")
+  assert(crt(1, 2) == 3, "crt macro names: parameters and a local")
+
+  // The words a compiler keeps for itself agree in a declaration (a field) and in references (a
+  // local, a parameter, `.`, `->`).
+  $vendor: Vendor_row = ::{ ._Atomic = 1, .__thread = 2, .__cdecl = 4, .__try = 8, ._try = 16,
+    ._asm = 32, ._int64 = 64, .static_assert = 128, .L__FUNCTION__ = 256, .__cdecl_kw = 512 }
+  held_vendor: Vendor_row@ = vendor@
+  _Atomic: =
+    vendor._Atomic + held_vendor.__thread + vendor.__cdecl + held_vendor.__try + vendor._try +
+    held_vendor._asm + vendor._int64 + held_vendor.static_assert + vendor.L__FUNCTION__ +
+    held_vendor.__cdecl_kw
+  assert(_Atomic == 1023, "compiler-kept names: field and local spellings agree")
+  assert(guarded(1, 2) == 3, "compiler-kept names: parameters and a local")
+
+  verdict
+    .pass("both the reserved words and the preamble's macros agree between the declaring side and \
+      the referring side at every position.")

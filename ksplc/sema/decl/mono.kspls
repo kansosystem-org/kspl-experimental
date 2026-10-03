@@ -1,0 +1,552 @@
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/base/mangle" as base_mangle
+import "ksplc/sema/decl/access" as sema_decl_access
+import "ksplc/sema/decl/mono_name" as sema_decl_mono_name
+import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
+import "ksplc/sema/decl/mono_target" as sema_decl_mono_target
+import "ksplc/sema/decl/registry" as sema_decl_registry
+import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/decl/subst" as sema_decl_subst
+import "ksplc/sema/decl/trait_check" as sema_decl_trait_check
+import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error, join_dotted_name }
+import "ksplc/sema/session/state" as sema_session_state
+import "ksplc/sema/type/def" as sema_type_def
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
+import "std/chars"
+import "std/ds" { List }
+import "std/str" { Str_builder }
+
+struct Mono_state_backup //<
+  //< The shared state an instantiation rewrites, saved around a nested one
+  //<
+  //< Without restoring r.generics.args / r.file_name / r.fn_ctx.impl_name, an inner instantiation
+  //< corrupts the outer one's.
+  generic_args_depth: Sz
+  file_name: U8[]
+  current_impl: U8[]
+
+priv const max_mono_depth: Sz = 128 //< the limit on instantiate_struct's recursive call depth
+  //<
+  //< A cycle hits instantiated_nodes' cache (register_inst_node); a non-cycling chain (A<|T|>
+  //< embedding B<|T|>, B embedding C, ...) does not.
+  //< Caution: **Set it to twice the depth the language guarantees** (`generic_nesting` in
+  //< `tests/suite/limits_test.kspls`).
+
+fn check_written_generic_arity(c: Sema_ctx$@, tmpl_node: Ast_node$@, args_str: U8[],
+  site: Ast_node$@) //<
+    //< Checks the number of type arguments the user **wrote** as `<|...|>` against the declaration
+    //<
+    //< **Count only the written ones:** an inferred list can be longer than the declaration's
+    //< (`f<|K|>` taking a `Map<|K, Symbol$@|>`). A short count reaches C as `unknown type name 'U'`
+    //< ("Failing fast through an exception or an ICE" in ksplc/docs/DESIGN.md).
+  if tmpl_node == null
+    return
+  params_node: = tmpl_node.find_child(.k_type_gen_params)
+  if params_node == null
+    return
+  param_count: = count_generic_params(params_node)
+  arg_count: = args_str.count_type_args()
+  if param_count == arg_count
+    return
+  name: = tmpl_node.get_decl_id_text()
+  direction: = "too many" if arg_count > param_count else "too few"
+  c.clear_scratch()
+    .s("\{direction\} type arguments for generic '\{name\}': it declares \{param_count\}, but \
+      \{arg_count\} given")
+  c.err(site, c.scratch.slice())
+
+priv fn count_generic_params(params_node: Ast_node$@): Sz //<
+  //< The number of type parameters the template declared
+  $n: Sz = 0
+  for p in params_node.children
+    if _id: = p.gen_param_id_node()
+      n += 1
+  return n
+
+fn prepare_inst_node(c: Sema_ctx$@, tmpl_node: Ast_node$@, inst_name: U8[],
+  args_list: List<|Str_builder$@|>$@): Ast_node$@
+  inst_node: = tmpl_node.clone()
+  if tmpl_node != null
+    c.set_current_file(tmpl_node.loc.file())
+    inst_node.propagate_loc_file(tmpl_node.loc.file())
+  id_node: = inst_node.find_child(.k_identifier)
+  params_node: = inst_node.find_child(.k_type_gen_params)
+
+  // Which instantiation a constraint violation belongs to, while the bindings are in force
+  // (constraint_failed in sema/session/state.kspls).
+  prev_inst_name: = c.mono.current_inst_name
+  c.mono.current_inst_name = base_core.arena.dup_str(inst_name)
+  c.bind_generic_args(params_node, args_list, true)
+  c.mono.current_inst_name = prev_inst_name
+  if params_node != null
+    params_node.morph(.k_empty, "")
+  if id_node != null
+    id_node.text = base_core.arena.dup_str(inst_name)
+  inst_node.replace_type_vars(c)
+  return inst_node
+
+impl Sema_ctx
+  // Finds a cached instance or clones the AST; on none, the caller returns inst_name unchanged.
+  fn try_prepare_instance(r: Self$@, base_name: U8[], full_inst_name: U8[], inst_name: U8[],
+    args_str: U8[]): Option<|Ast_node$@|>
+    // Caution: Look up the mangled-name key too. The literal text `Base<|args|>` varies with
+    // qualification, and the same instance created twice fails in C with `redefinition of ...`.
+    cached_inst: = r.env.instantiated_nodes.get(full_inst_name) catch (r.env.instantiated_nodes
+      .get(inst_name) catch null)
+    tmpl_node: = r.generics.templates.get(base_name) catch null
+    if cached_inst != null || tmpl_node == null
+      return Option<|Ast_node$@|>.none
+    args_list: = sema_decl_mono_name.split_args(args_str)
+    defer sema_decl_mono_name.free_args_list(args_list)
+    inst: = prepare_inst_node(r, tmpl_node, inst_name, args_list)
+    return Option<|Ast_node$@|>.some(inst)
+
+  priv fn declare_inst_trait_method(r: Self$@, inst_name: U8[], m_sym: Sema_symbol$@) //<
+    //< Adds an instantiated trait's methods to the name table as `<instantiation>.<method>`
+    //<
+    //< **Named the same way as for a non-generic trait**
+    //< Caution: declare_symbol_with_fqn cannot be used: during an expression's inference (scopes
+    //< pushed) the entry is lost when the scope is left. A `priv` method is added too; hidden here,
+    //< its return type is lost silently (check_visibility_and_mark_used handles visibility).
+    full_name: = join_dotted_name(inst_name, m_sym.name)
+    m_sym.flags.is_global = true
+    r.symtab.by_fqn.set(full_name, m_sym)
+    r.symtab.global_scope.set(base_core.pools.intern_name(full_name), m_sym)
+    // Caution: Set the back-link from the declaration node to the symbol too (as define_symbol in
+    // scope.kspls does). call.kspls reads "no sym_ptr" as a generic template, and the output calls
+    // a slot `call_<type argument>` that is not in the vtable.
+    m_sym.node.sym_ptr = Void$@::m_sym
+
+  fn slice_type_of(r: Self$@, elem_id: I32): I32 //< makes one slice type
+    //<
+    //< Caution: **Code that synthesizes a slice type must go through here** (a string literal's
+    //< type, the reflection table). **Return unknown if the instantiation fails** (it is reported).
+    $inst: =
+      r.instantiate_struct(base_core.slice_fqn, r.env.get_str(elem_id)) catch
+      return I32::sema_type_env.Builtin_type_id.unknown
+    defer inst.free()
+    return r.env.get_or_add(base_core.arena.dup_str(inst.slice()))
+
+  fn instantiate_struct(r: Self$@, base_name: U8[], args_str: U8[]): Str_builder?Sema_error
+    if sema_decl_mono_name.contains_unknown(args_str)
+      return sema_decl_mono_name.unknown_type_str()
+    // An instance with immutability at a position that declares variance **shares its C
+    // representation with the plain instance**.
+    // Caution: **Create the plain instance first**; this one uses its C name (see
+    // variance_stripped_args in `../type/env.kspls`). It is not in the output (register_inst_node).
+    $plain_args: = args_str.strip_variance_const(r.variance_mask_of(base_name))
+    defer plain_args.free()
+    shares_c_repr: = plain_args.slice().len > 0
+    if shares_c_repr
+      $plain: = r.instantiate_struct(base_name, plain_args.slice())?
+      defer plain.free()
+    $inst_name: = sema_decl_mono_name.build_mangled_inst_name(base_name, args_str)
+    $full_inst_name: = Str_builder.new()
+    defer full_inst_name.free()
+    full_inst_name.s(base_name).s("<|").s(args_str).s("|>")
+
+    $backup: = r.backup_mono_state()
+    full_inst_name_str: = full_inst_name.slice()
+    inst_name_str: = inst_name.slice()
+    prepared: = r.try_prepare_instance(base_name, full_inst_name_str, inst_name_str, args_str)
+    $inst_node: Ast_node$@ = null
+    switch prepared case .some(in_node)
+      inst_node = in_node
+    case .none
+      return inst_name
+
+    r.mono.mono_depth += 1
+    defer r.mono.mono_depth -= 1
+    if r.mono.mono_depth > max_mono_depth
+      r.err(inst_node,
+        "generic type instantiation chain too deep (possible unbounded recursive generic type)")
+      throw Sema_error.analysis_failed
+
+    arena_inst_name: = base_core.arena.dup_str(inst_name.slice())
+
+    is_trait: = inst_node.kind_id == .k_decl_trait
+    is_enum: = inst_node.kind_id == .k_decl_enum
+    sym_kind: =
+      (sema_type_scope.Sym_kind.trait_def if is_trait
+      else (sema_type_scope.Sym_kind.enum_def if is_enum
+      else sema_type_scope.Sym_kind.struct_def))
+
+    sym: = Sema_symbol.new(sym_kind, arena_inst_name, inst_node)
+    sym.vis = inst_node.get_visibility()
+    sym.flags.is_generated_instance = true
+    sym.flags.is_global = true
+    inst_node.sym_ptr = Void$@::sym
+    sym.type_id = r.env.get_or_add(arena_inst_name)
+    inst_node.type_id = sym.type_id // bind the type ID onto the AST node to resolve dependencies
+    inst_id: = base_core.pools.intern_name(arena_inst_name)
+    r.symtab.global_scope.set(inst_id, sym)
+
+    r.register_inst_node(full_inst_name.slice(), inst_name.slice(), inst_node, !shares_c_repr)
+    // Indexed here so resolve_instantiated_template_ref reads type_id -> key back at O(1).
+    r.env.inst_type_index
+      .set(sym.type_id, base_core.arena.dup_str(full_inst_name.slice()))
+
+    if is_trait
+      trait_def: = sema_type_def.Trait_def.new()
+      entry: = r.env.id_to_type.get(sym.type_id)
+      entry.info = sema_type_env.Info.trait_type(trait_def)
+
+      trait_vis: = sym.vis
+      for m_node in inst_node.children
+        // A method with a default body is handled the same way (as in registry.kspls).
+        if m_node.kind_id == .k_decl_fn_proto || m_node.kind_id == .k_decl_fn
+          m_sym: = r.add_trait_method(m_node, trait_def, trait_vis)?
+          if m_sym != null
+            r.declare_inst_trait_method(arena_inst_name, m_sym)
+    else if is_enum
+      // A generic enum: the substituted clone's variants resolve under generics.args, as a plain
+      // enum's do.
+      enum_def: = sema_type_def.Enum_def.new(r.env.get_or_add("I32"))
+      inst_node.fill_enum_variants(r, enum_def, sym.type_id, false)?
+      entry: = r.env.id_to_type.get(sym.type_id)
+      entry.info = sema_type_env.Info.enum_type(enum_def)
+      r.queue_instance_methods(sym.type_id, base_name, args_str, arena_inst_name)
+    else
+      struct_def: = sema_type_def.Struct_def.new()
+      inst_node.fill_struct_fields(r, struct_def)?
+      entry: = r.env.id_to_type.get(sym.type_id)
+      entry.info = sema_type_env.Info.struct_type(struct_def)
+      r.queue_instance_methods(sym.type_id, base_name, args_str, arena_inst_name)
+
+    r.restore_mono_state(backup@)
+    return inst_name
+
+  fn backup_mono_state(r: Self$@): Mono_state_backup
+    return Mono_state_backup::{
+      .generic_args_depth = r.generics.args.len,
+      .file_name = r.file_name,
+      .current_impl = r.fn_ctx.impl_name,
+    }
+
+  fn restore_mono_state(r: Self$@, b: Mono_state_backup$@)
+    r.set_current_file(b.file_name)
+    r.fn_ctx.impl_name = b.current_impl
+    r.generics.args.len = b.generic_args_depth
+
+  fn register_inst_node(r: Self$@, full_name: U8$[], mangled_name: U8$[], node: Ast_node$@,
+    emit: Bool) //<
+      //< Registers under both full_name (`Base<|args|>`) and the mangled name
+      //<
+      //< It pushes onto instantiated_nodes_list once: the backends emit a definition per entry.
+      //< `emit` false: it **shares its C representation with another instance** (variance), so no
+      //< definition is emitted.
+    r.env.instantiated_nodes.set(base_core.arena.dup_str(full_name), node)
+    if !mangled_name.equals(full_name)
+      r.env.instantiated_nodes.set(base_core.arena.dup_str(mangled_name), node)
+    if emit
+      r.env.instantiated_nodes_list.push(node)
+
+  fn bind_generic_args(r: Self$@, params_node: Ast_node$@,
+    args_list: List<|Str_builder$@|>$@, check_constraints: Bool) //<
+      //< Binds the type arguments.
+      //<
+      //< check_constraints says whether this is **the instantiation's first binding**.
+      //< Caution: **Pass false on a path that only rebinds**: the check's resolve_type caches its
+      //< result in the node's type_id.
+    if params_node == null
+      return
+    $p_idx: Sz = 0
+    for p in params_node.children
+      $param_id_node: Ast_node$@ = null
+      switch p.gen_param_id_node() case .some(id_node)
+        param_id_node = id_node
+      case .none
+        continue
+      $constraint_node: Ast_node$@ = null
+      $is_const_param: = false
+
+      if p.kind_id == .k_type_gen_param
+        constraint_node = p.find_child(.k_type_constraint)
+        kw_node: = p.find_child(.k_keyword)
+        is_const_param = kw_node != null && kw_node.text.equals("const")
+
+      if p_idx < args_list.len
+        k_id: = r.env.get_or_add(param_id_node.text)
+        a_str: = args_list.get(p_idx)
+        a_id: = r.env.get_or_add(a_str.slice())
+        r.generics.args
+          .push(sema_session_state.Generic_arg::{ .param_name_id = k_id, .bound_type_id = a_id,
+          .is_const = is_const_param })
+        if constraint_node != null && check_constraints
+          // While suppressed, check_type_constraint does not decide but records and returns
+          // (Pending_constraint in sema/session/state.kspls).
+          constraint_node.check_type_constraint(r, a_id) catch {}
+        p_idx += 1
+
+  priv fn record_trait_inst(r: Self$@, target_id: I32, trait_id: I32, impl_node: Ast_node$@) //<
+    //< Records an instantiated generic impl's trait conformance
+    //<
+    //< lower builds the thunks and the vtable from it (Trait_inst in sema/session/state.kspls).
+    //< The key rejects a second pair (a vtable redefinition).
+    key: = r.clear_scratch().s("\{target_id\}:\{trait_id\}").slice()
+    if r.mono.trait_inst_seen.get(key) catch false
+      return
+    r.mono.trait_inst_seen.set(base_core.arena.dup_str(key), true)
+    r.generics.trait_insts
+      .push(sema_session_state.Trait_inst::{ .target_id = target_id, .trait_id = trait_id,
+      .loc_node = impl_node })
+
+  // Registers an `impl<|T|> Foo<|T|>: Trait` against the instantiated type target_id (inst_name is
+  // its mangled name). Skipped where a constraint failed, so as not to bury the real diagnostic.
+  // Caution: **Do not defer it**: indexing, upcasting and constraints read it; deferred, `a[i]`
+  // degrades to a plain array index and an `emit_postfix_array` ICE.
+  fn register_generic_trait_impls(r: Self$@, target_id: I32, base_name: U8[], args_str: U8[],
+    inst_name: U8[], with_table: Bool): Void?Sema_error
+    // **Restore the current file on the way out**, or the caller's visibility is checked as if in
+    // the impl's file.
+    entry_file: = r.file_name
+    defer r.set_current_file(entry_file)
+    for generic_impl in r.generics.impls
+      if r.has_failed_constraint(inst_name)
+        break
+      if r.generic_impl_applies(generic_impl, base_name, args_str)
+        if trait_node: = generic_impl.get_impl_trait_node()
+          inst_trait: = trait_node.clone()
+          r.set_current_file(generic_impl.loc.file())
+          inst_trait.propagate_loc_file(generic_impl.loc.file())
+          inst_trait.replace_type_vars(r)
+          trait_id: = inst_trait.resolve_type(r) catch 0
+          if trait_id != 0 && !sema_type_env.is_unknown(trait_id)
+            r.env.add_implemented_trait(target_id, trait_id)
+            // Caution: **Record the thunks only once the table exists.** It is lower's only
+            // source for the vtable, which would name a function with no instance.
+            if with_table
+              r.verify_trait_implementation(target_id, trait_id, inst_trait)
+              r.record_trait_inst(target_id, trait_id, generic_impl)
+            // **`Index_place` promises a writable place**, confirmed per instance since a type
+            // argument can carry the immutability.
+            // Caution: **Check the literal text.** A type id's name is mangled and has no `<|`.
+            $trait_spelled: = trait_node.extract_type_name()
+            defer trait_spelled.free()
+            if trait_spelled.slice().get_generic_base_name().ends_with("Index_place")
+              r.reject_const_index_place(target_id, inst_trait)
+
+  priv fn generic_impl_applies(r: Self$@, generic_impl: Ast_node$@, base_name: U8[],
+    args_str: U8[]): Bool //<
+      //< Whether a generic impl covers the instance `base_name<|args_str|>`
+      //<
+      //< Its target must name base_name and its marks accept args_str (impl_target_rejects in
+      //< mono_target.kspls), or a mutable-only impl's methods and trait reach the immutable
+      //< instance.
+    target_node: = generic_impl.get_decl_type_node()
+    if target_node == null
+      return false
+    $raw_target_type: = target_node.extract_type_name()
+    defer raw_target_type.free()
+    // Resolve the FQN in the impl block's file, or another file's impl resolves without its
+    // import table.
+    prev_file: = r.file_name
+    r.set_current_file(generic_impl.loc.file())
+    target_fqn: = r.resolve_fqn_for_type(raw_target_type.slice().get_generic_base_name())
+    r.set_current_file(prev_file)
+    if !target_fqn.equals(base_name)
+      return false
+    return !sema_decl_mono_target.impl_target_rejects(r, generic_impl, raw_target_type.slice(),
+      args_str, r.variance_mask_of(base_name))
+
+  fn instantiate_generic_methods(r: Self$@, type_id: I32, base_name: U8[], args_str: U8[]):
+    Void?Sema_error
+    inst_nodes: = List<|Ast_node$@|>.create(base_core.arena)
+    real_id: = r.env.get_real_type(type_id)
+    t_entry: = r.env.id_to_type.get(real_id)
+    // A defer fires on a continue too.
+    for generic_impl in r.generics.impls
+      if !r.generic_impl_applies(generic_impl, base_name, args_str)
+        continue
+      impl_gen_params: = generic_impl.find_child(.k_type_gen_params)
+      for m_node in generic_impl.children
+        if m_node.kind_id != .k_decl_fn
+          continue
+        m_name: = m_node.find_text(.k_identifier)
+        if m_name.len == 0
+          continue
+        // Caution: **Do not add a method with its own type parameters to the table.** Only the
+        // call site decides `U` (instantiate_fn below, and "A type argument with nothing to bind
+        // to is rejected" in docs/DESIGN.md).
+        if sema_decl_mono_name.introduces_own_generic_param(m_node, impl_gen_params)
+          continue
+        $full_m_name_b: = Str_builder.new()
+        defer full_m_name_b.free()
+        full_m_name_b.s(base_name).s(".").s(m_name)
+        // skip_infer=true: the loop below queues the bodies on pending.
+        $inst_m_name: = r.instantiate_fn(full_m_name_b.slice(), args_str, true)?
+        defer inst_m_name.free()
+        arena_inst_m_name: = base_core.arena.dup_str(inst_m_name.slice())
+
+        m_id: = base_core.pools.intern_name(arena_inst_m_name)
+        m_sym_res: = r.symtab.global_scope.get(m_id) catch null
+        if m_sym_res == null
+          continue
+        arena_short: = base_core.arena.dup_str(m_name)
+        if t_entry != null
+          t_entry.add_method(arena_short, m_sym_res)
+        inst_nodes.push(m_sym_res.node)
+
+    impl_name: = r.env.get_str(type_id)
+
+    // Queued on pending, not inferred here (the reason is at instantiate_fn below).
+    // Caution: **Queue it at the same depth as the table** (not 0); what the body instantiates is
+    // one level deeper (inst_chain_depth in sema/session/state.kspls).
+    for inst_node in inst_nodes
+      r.queue_fn_body(inst_node, base_core.arena.dup_str(impl_name), r.generics.inst_chain_depth)
+
+  fn instantiate_fn(r: Self$@, base_name: U8[], args_str: U8[], skip_infer: Bool):
+    Str_builder?Sema_error
+    if sema_decl_mono_name.contains_unknown(args_str)
+      return sema_decl_mono_name.unknown_type_str()
+    last_dot: = base_name.rfind_char_out('.')
+    $is_method: = false
+    $struct_base: U8[] = ""
+    $method_name: U8[] = ""
+
+    if last_dot >= 0
+      is_method = true
+      struct_base = base_name.sub(0, last_dot)
+      method_name = base_name.sub_from(last_dot + 1)
+
+    // For a method with its own type parameter (map<|U|>), the caller (postfix.kspls /
+    // call.kspls) can pass base_name as an instance's mangled name plus the method name.
+    $template_base: U8[] = struct_base
+    $resolved_ref: = sema_decl_mono_name.Resolved_template_ref::{ .base_name = "", .args_str = "",
+      .found = false }
+    if is_method && (r.generics.templates.get(struct_base) catch null) == null
+      resolved_ref = sema_decl_mono_name.resolve_instantiated_template_ref(r, struct_base)
+      if resolved_ref.found
+        template_base = resolved_ref.base_name
+    // template_base arrives unqualified from inside the defining file; an instance's name is
+    // decided by where the template is defined, so it is made an FQN here, or both `Box_..._Ptr`
+    // and `c_mod_Box_..._Ptr` are created and C fails.
+    if (r.generics.templates.get(template_base) catch null) != null
+      canon: = U8$[]::r.resolve_fqn_for_type(template_base)
+      if canon.len > 0 && !canon.equals(template_base) &&
+        (r.generics.templates.get(canon) catch null) != null
+        template_base = canon
+        if !resolved_ref.found
+          struct_base = canon
+    tmpl_node_for_check: = r.generics.templates.get(template_base) catch null
+    tmpl_exists: = is_method && tmpl_node_for_check != null
+
+    $inst_name: = Str_builder.new()
+    $struct_inst_name_str: U8[] = ""
+
+    if is_method
+      if tmpl_exists
+        if resolved_ref.found
+          // struct_base is already an instance's mangled name.
+          struct_inst_name_str = struct_base
+          // The method's own type argument differs per call (map<|I32|> and map<|U8[]|> on one
+          // Option<|Person|>), so args_str goes into the mangled name.
+          $method_mangled: = sema_decl_mono_name.build_mangled_inst_name(method_name, args_str)
+          inst_name.s(struct_inst_name_str).s("_").s(method_mangled.slice())
+          method_mangled.free()
+        else
+          $tmp_b: = r.instantiate_struct(struct_base, args_str)?
+          struct_inst_name_str = base_core.arena.dup_str(tmp_b.slice())
+          tmp_b.free()
+          inst_name.s(struct_inst_name_str).s("_").s(method_name)
+      else
+        struct_inst_name_str = struct_base
+        $flat: = sema_decl_mono_name.build_mangled_inst_name(base_name, args_str)
+        inst_name.s(flat.slice())
+        flat.free()
+    else
+      $flat: = sema_decl_mono_name.build_mangled_inst_name(base_name, args_str)
+      inst_name.s(flat.slice())
+      flat.free()
+
+    // The cache key is struct_base (as the caller sees it), args_str and the method name. With
+    // template_base, `map` at one U on Option<|Person|> and Option<|I64|> would be confused.
+    $full_inst_name: = Str_builder.new()
+    defer full_inst_name.free()
+    if tmpl_exists
+      full_inst_name.s(struct_base).s("<|").s(args_str).s("|>.").s(method_name)
+    else
+      full_inst_name.s(base_name).s("<|").s(args_str).s("|>")
+
+    // try_prepare_instance searches generics.templates by the template name (template_base).
+    $template_lookup_name: U8[] = base_name
+    if tmpl_exists && resolved_ref.found
+      template_lookup_name = base_core.arena.text().s(template_base).s(".").s(method_name).take()
+
+    $backup: = r.backup_mono_state()
+    if resolved_ref.found
+      // Rebind the impl block's own T from the recovered arguments, for this call only (the
+      // struct's instantiation left generics.args long ago); restore_mono_state undoes it.
+      struct_gen_params: = tmpl_node_for_check.find_child(.k_type_gen_params)
+      if struct_gen_params != null
+        struct_args_list: = sema_decl_mono_name.split_args(resolved_ref.args_str)
+        defer sema_decl_mono_name.free_args_list(struct_args_list)
+        r.bind_generic_args(struct_gen_params, struct_args_list, false)
+    fin_s: = full_inst_name.slice()
+    in_s: = inst_name.slice()
+    prepared: = r.try_prepare_instance(template_lookup_name, fin_s, in_s, args_str)
+    $inst_node: Ast_node$@ = null
+    switch prepared case .some(in_node)
+      inst_node = in_node
+    case .none
+      return inst_name
+    // The depth of the instantiation chain. The call depth (mono_depth) cannot catch this (the
+    // reason is at inst_chain_depth in sema/session/state.kspls).
+    chain_depth: = r.generics.inst_chain_depth + 1
+    if chain_depth > max_mono_depth
+      r.err(inst_node,
+        "generic function instantiation chain too deep (possible unbounded recursive generic \
+          function)")
+      throw Sema_error.analysis_failed
+    r.register_inst_node(full_inst_name.slice(), inst_name.slice(), inst_node, true)
+
+    arena_inst_name: = base_core.arena.dup_str(inst_name.slice())
+
+    sym_kind: = sema_type_scope.Sym_kind.function(false)
+    sym: = Sema_symbol.new(sym_kind, arena_inst_name, inst_node)
+    sym.vis = inst_node.get_visibility()
+    sym.flags.is_method = is_method
+    sym.flags.is_generated_instance = true
+    sym.flags.is_global = true
+    inst_node.sym_ptr = Void$@::sym
+
+    $ret_type_node: = inst_node.find_child(.k_type_expr)
+    if ret_type_node == null
+      sig_node: = inst_node.find_child(.k_type_fn_sig)
+      if sig_node != null
+        ret_type_node = sig_node.find_child(.k_type_expr)
+    if ret_type_node != null
+      sym.type_id = ret_type_node.resolve_type(r)?
+    else
+      sym.type_id = r.env.get_or_add("Void")
+
+    inst_id: = base_core.pools.intern_name(arena_inst_name)
+    r.symtab.global_scope.set(inst_id, sym)
+
+    // Caution: **Resolve the signature's types here**, where the bindings are in force (above,
+    // only the return type). **Set `Self`'s target first:** `Self` reads `fn_ctx.impl_name`
+    // (`resolve.kspls`), and if it is unset `Self` stays in `type_id`, **which the body reads**.
+    old_impl_name: = r.fn_ctx.impl_name
+    if is_method
+      r.fn_ctx.impl_name = r.env.get_str(r.env.get_or_add(struct_inst_name_str))
+    inst_node.resolve_fn_signature_types(r) catch e
+      r.fn_ctx.impl_name = old_impl_name
+      throw e
+    r.fn_ctx.impl_name = old_impl_name
+
+    if !skip_infer
+      $impl_name_val: U8$[] = ""
+      if is_method
+        impl_name_val = r.env.get_str(r.env.get_or_add(struct_inst_name_str))
+      // Only queued on pending: inferring under the caller's symtab scopes and fn_ctx would break,
+      // so infer.kspls's worklist loop infers it after resetting the scopes.
+      r.queue_fn_body(inst_node, base_core.arena.dup_str(impl_name_val), chain_depth)
+
+    r.restore_mono_state(backup@)
+
+    return inst_name

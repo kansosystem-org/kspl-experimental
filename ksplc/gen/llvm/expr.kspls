@@ -1,0 +1,618 @@
+//< Generates LLVM IR for expressions
+//<
+//< The dispatcher, l-values, scalars and literals, binaries and unaries, and postfixes. Aggregate
+//< values are in expr_agg.kspls, calls in expr_call.kspls.
+import "ksplc/base/ast" { Ast_node, Loc }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/base/literal" as base_literal
+import "ksplc/gen/llvm/ctx" as gen_llvm_ctx + { Genllvm_ctx }
+import "ksplc/gen/llvm/expr_agg" as gen_llvm_expr_agg
+import "ksplc/gen/llvm/expr_call" as gen_llvm_expr_call
+import "ksplc/gen/llvm/types" as gen_llvm_types
+import "ksplc/sema/body/binary" as sema_body_binary
+import "ksplc/sema/body/postfix" as sema_body_postfix
+import "ksplc/sema/decl/eval" as sema_decl_eval
+import "ksplc/sema/decl/layout" as sema_decl_layout
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" { Sema_symbol }
+import "std/chars"
+import "std/str" { Str_builder }
+
+impl Ast_node
+  fn emit_llvm_lvalue(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
+    if r == null
+      return base_core.arena.dup_str("0")
+    switch r.kind_id case .k_identifier, .k_expr_path, .k_type_path, .k_generic_path
+      def_node: = r.def_node
+      name: = r.get_path_or_ident_name()
+      $is_global: = false
+      $verbatim_name: = false
+      if def_node != null && !name.starts_with("_mir_")
+        if def_node.sym_ptr != null
+          sym: = Sema_symbol$@::def_node.sym_ptr
+          is_global = sym.flags.is_global
+          verbatim_name = sym.uses_verbatim_c_name()
+          if sym.kind.is_function()
+            is_global = true
+        else if def_node.is_fn_decl() || def_node.kind_id == .k_decl_impl
+          is_global = true
+      if is_global
+        cg.clear_scratch()
+        if gen_llvm_ctx.is_kspl_prefixed_or_ext(name, verbatim_name)
+          cg.scratch.s("@").s(name)
+        else
+          cg.scratch.s("@kspl_").s(name)
+        return cg.take_scratch()
+      return cg.local_slot_name(name, def_node if def_node != null else r)
+    case .k_expr_postfix
+      op_node: = r.get_postfix_op()
+      op: = op_node.text if op_node != null else ""
+      if op.equals(".")
+        recv: = r.get_postfix_receiver()
+        member: = r.get_postfix_member()
+        recv_ptr: = emit_recv_base_ptr(recv, cg)
+        res_reg: = cg.next_reg()
+        cg.op_gep(res_reg, cg.env.receiver_base_id(recv.type_id), recv_ptr, 0, member.ival)
+        return cg.reg_str(res_reg)
+      if op.equals("$")
+        recv: = r.get_postfix_receiver()
+        return recv.emit_llvm_expr(cg)
+      if op.equals("[") || op.equals("[]")
+        recv: = r.get_postfix_receiver()
+        index: = r.get_postfix_member()
+        if op.equals("[]") || index == null || index.text.equals("]")
+          return recv.emit_llvm_expr(cg)
+
+        // A receiver can be a pointer (`a[1]` with `a: I32[4]@`); it is classified with the
+        // pointers stripped (as receiver_base_id in sema/type/env.kspls).
+        recv_base_id: = cg.env.receiver_base_id(recv.type_id)
+        // **Only fixed-length arrays reach here** (as in genc's emit_postfix_array).
+        // A slice is a struct in `std/lang`, so `../../lower/expr.kspls` rewrites the subscript
+        // into an `at(…)$` call.
+        if !cg.env.is_array(recv_base_id)
+          r.ice_panic("llvm index: indexing here is only allowed for fixed-size arrays")
+        idx_reg: = index.emit_llvm_expr(cg)
+        $res_reg: = 0
+
+        recv_ptr: = emit_recv_base_ptr(recv, cg)
+        arr_size: = cg.env.array_len(recv_base_id)
+
+        // A constant subscript inside the range gets no check (the same decision as genc's, from
+        // sema/body/postfix.kspls; if only one backend did this, the artifacts would disagree).
+        $idx_str: = emit_widen_to_i64(cg, idx_reg, index.type_id)
+        if !sema_body_postfix.index_is_static_in_range(cg.sema, index, arr_size)
+          cg.clear_scratch().s("\{arr_size\}")
+          bound_str: = cg.take_scratch()
+          safe_idx_reg: = cg.next_reg()
+          cg.s("    %\{safe_idx_reg\} = call i64 @kspl_bounds_check(i64 ").s(idx_str).s(", i64 ")
+            .s(bound_str)
+          emit_check_loc(cg, r.loc)
+          idx_str = cg.reg_str(safe_idx_reg)
+
+        res_reg = cg.next_reg()
+        cg.s("    %\{res_reg\} = getelementptr inbounds ")
+        cg.t_gep(recv_base_id).s(", ptr ").s(recv_ptr).s(", i32 0, i64 ").s(idx_str).s("\n")
+
+        return cg.reg_str(res_reg)
+    case .k_expr_primary
+      inner: = r.get_primary_inner_expr()
+      return inner.emit_llvm_lvalue(cg) if inner != null else base_core.arena.dup_str("0")
+    default {}
+
+    val_reg: = r.emit_llvm_expr(cg)
+    ptr_str: = cg.get_or_alloc_tmp_slot(Void$@::r, r.type_id)
+    cg.op_store(r.type_id, val_reg, ptr_str)
+    return ptr_str
+  fn emit_llvm_expr(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[] //<
+    //< A thin dispatcher that calls a dedicated method per expression kind
+    if r == null
+      return base_core.arena.dup_str("0")
+
+    switch r.kind_id case .k_integer
+      // Caution: eval_constexpr stops at I32, so a large I64 / U64 / Sz literal would be
+      // truncated. An integer literal is emitted from its text, as genc's emit_integer does.
+      return r.emit_llvm_integer_literal(cg)
+    case .k_literal, .k_char, .k_expr_sizeof, .k_expr_offsetof
+      return r.emit_llvm_const_int(cg)
+    case .k_float
+      return r.emit_llvm_float(cg)
+    case .k_bool
+      return base_core.arena.dup_str("1" if r.text.equals("true") else "0")
+    case .k_null
+      return base_core.arena.dup_str("null")
+    case .k_string
+      return r.emit_llvm_string(cg)
+    case .k_identifier, .k_expr_path, .k_type_path, .k_generic_path
+      return r.emit_llvm_ident(cg)
+    case .k_expr_primary
+      inner: = r.get_primary_inner_expr()
+      return inner.emit_llvm_expr(cg) if inner != null else base_core.arena.dup_str("0")
+    case .k_empty, .k_underscore
+      return base_core.arena.dup_str("0")
+    case .k_enum_init
+      return r.emit_llvm_enum_init(cg)
+    case .k_enum_init_call
+      return r.emit_llvm_enum_init_call(cg)
+    case .k_expr_upcast
+      return r.emit_llvm_upcast(cg)
+    case .k_struct_literal
+      return r.emit_llvm_struct_literal(cg)
+    case .k_result_wrap
+      return r.emit_llvm_result_wrap(cg)
+    case .k_expr
+      return r.emit_llvm_binary(cg)
+    case .k_expr_unary
+      return r.emit_llvm_unary(cg)
+    case .k_expr_postfix
+      return r.emit_llvm_postfix(cg)
+    default
+      $msg: = Str_builder.new()
+      defer msg.free()
+      msg.s("Genllvm ICE: Unhandled expr kind: ").s(r.get_kind_str())
+      r.ice_panic(msg.slice())
+      return base_core.arena.dup_str("0")
+  fn emit_llvm_integer_literal(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[] //<
+    //< It emits an integer literal as decimal (the IR accepts no 0x/0b)
+    //<
+    //< It does not use eval_constexpr, which is limited to I32.
+    //< Caution: **Keep a leading `-`.** In source `-1` is unary minus on `1`, but a const generic's
+    //< substituted value is one literal (`-3`, from replace_type_vars in sema/decl/subst.kspls).
+    // Sema has already rejected an overflowing literal.
+    digits: = u64_to_decimal(r.text.parse_int_literal_u64().value)
+    if !r.text.starts_with("-")
+      return digits
+    cg.clear_scratch().s("-").s(digits)
+    return cg.take_scratch()
+  fn emit_llvm_const_int(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[] //<
+    //< It evaluates an expression as a compile-time constant, such as a character or a sizeof
+    //<
+    //< It is limited to I32; for a large-digit I64 / U64 literal use emit_llvm_integer_literal.
+    val: = cg.sema.eval_constexpr_quiet(r, 0)
+    cg.clear_scratch().s("\{val\}")
+    return cg.take_scratch()
+
+  fn emit_llvm_float(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
+    real_id: = cg.env.get_real_type(r.type_id)
+    if real_id == (I32::sema_type_env.Builtin_type_id.f32_type)
+      // An F32 is always written in hexadecimal (the reason is at
+      // gen_llvm_ctx.format_f32_hex_literal).
+      return gen_llvm_ctx.format_f32_hex_literal(r.text)
+    cg.clear_scratch()
+    _stop: = r.text.append_clean_number(cg.scratch@, "Ff")
+    return cg.take_scratch()
+
+  fn emit_llvm_string(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
+    str_id: = cg.get_or_add_str_literal(r.text)
+    // The length is computed as for constants (module.kspls); a mismatch would mix NULs in.
+    byte_len: = r.text.literal_span().byte_len
+
+    if cg.env.is_pointer(r.type_id)
+      cg.clear_scratch().s("@.str.\{str_id\}")
+      return cg.take_scratch()
+
+    res_reg: = cg.next_reg()
+    cg.s("    %\{res_reg\} = insertvalue ")
+    cg.t(r.type_id).s(" zeroinitializer, ptr @.str.\{str_id\}, 0\n")
+
+    res2_reg: = cg.next_reg()
+    cg.s("    %\{res2_reg\} = insertvalue ")
+    cg.t(r.type_id).s(" %\{res_reg\}, i64 \{I32::byte_len\}, 1\n")
+
+    return cg.reg_str(res2_reg)
+
+  fn emit_llvm_ident(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
+    name: = r.get_path_or_ident_name()
+    is_mir: = name.starts_with("_mir_")
+
+    $is_func_symbol: = false
+    if !is_mir && r.def_node != null
+      if r.def_node.sym_ptr != null
+        sym: = Sema_symbol$@::r.def_node.sym_ptr
+        if sym.kind.is_function()
+          is_func_symbol = true
+      else if r.def_node.is_fn_decl() || r.def_node.kind_id == .k_decl_impl
+        is_func_symbol = true
+    ptr_reg: = r.emit_llvm_lvalue(cg)
+    if is_func_symbol
+      return ptr_reg // a function pointer is returned as it is, without a load
+    res_reg: = cg.next_reg()
+    cg.op_load(res_reg, r.type_id, ptr_reg)
+    return cg.reg_str(res_reg)
+
+  fn emit_llvm_shift_amount(r: Ast_node$@, cg: Genllvm_ctx$@, left_type_id: I32): U8$[] //<
+    //< The only place that emits a shift amount
+    //<
+    //< Caution: **Do not emit a shift amount unchecked.** An amount at or beyond the width, or
+    //< negative, gives poison that changes with the optimization level. It is checked at run time
+    //< in i64 and returned at the original width (both operands of a shift share one type).
+    amt_reg: = r.emit_llvm_expr(cg)
+    if !cg.env.is_integer(left_type_id) ||
+      sema_body_binary.shift_amount_is_static(cg.sema, left_type_id, r)
+      return amt_reg
+    cg.clear_scratch().s(", i64 \{cg.env.get_portable_bit_size(left_type_id)\}")
+    width_arg: = cg.take_scratch()
+    return emit_checked_operand(cg, r, amt_reg, left_type_id, "kspl_shift_check", width_arg)
+
+  fn emit_llvm_divisor(r: Ast_node$@, cg: Genllvm_ctx$@, value_type_id: I32): U8$[] //<
+    //< The only place that emits a divisor
+    //<
+    //< Caution: **Do not emit a divisor unchecked.** Dividing by 0 gives poison that changes with
+    //< the optimization level. It is checked at run time in i64 and returned at the original width.
+    div_reg: = r.emit_llvm_expr(cg)
+    if !cg.env.is_integer(value_type_id) || sema_body_binary.divisor_is_static(cg.sema, r)
+      return div_reg
+    return emit_checked_operand(cg, r, div_reg, value_type_id, "kspl_div_check", "")
+
+  fn emit_llvm_binary(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
+    op: = r.get_binary_op().text
+    left_type_id: = r.get_binary_left().type_id
+    left_reg: = r.get_binary_left().emit_llvm_expr(cg)
+
+    if takes_signed_div(cg, op, left_type_id, r.get_binary_right())
+      return emit_llvm_signed_div(cg, op, left_reg, left_type_id, r.get_binary_right(), r.loc)
+
+    right_reg: =
+      (r.get_binary_right().emit_llvm_shift_amount(cg, left_type_id)
+      if op.equals("<<") || op.equals(">>")
+      else r.get_binary_right().emit_llvm_divisor(cg, left_type_id)
+      if op.equals("/") || op.equals("%") else r.get_binary_right().emit_llvm_expr(cg))
+
+    is_float: = cg.env.is_float(left_type_id)
+    is_unsigned: = cg.env.is_unsigned(left_type_id)
+    is_ptr: =
+      cg.env.is_pointer(r.get_binary_left().type_id) ||
+      cg.env.is_fn_ptr(r.get_binary_left().type_id)
+    is_cmp: =
+      op.equals("==") || op.equals("!=") || op.equals("<") || op.equals(">") || op.equals("<=") ||
+      op.equals(">=")
+
+    if is_cmp
+      // SSA register numbers must match emission order, so allocate each register immediately
+      // before the instruction that produces it.
+      cmp_reg: = cg.next_reg() // allocated first, output first
+
+      cg.s("    %\{cmp_reg\} = ")
+      if is_float
+        // **Only `!=` is unordered (`une`)**: C's `!=` is true on a NaN (`f != f` detects one),
+        // and `one` would differ from the generated C. The rest are ordered, as in C.
+        cmp_op: =
+          ("fcmp oeq " if op.equals("==") else "fcmp une " if op.equals("!=")
+          else "fcmp olt " if op.equals("<") else "fcmp ogt " if op.equals(">")
+          else "fcmp ole " if op.equals("<=") else "fcmp oge ")
+        cg.s(cmp_op)
+      else if is_unsigned || is_ptr
+        cmp_op: =
+          ("icmp eq " if op.equals("==") else "icmp ne " if op.equals("!=")
+          else "icmp ult " if op.equals("<") else "icmp ugt " if op.equals(">")
+          else "icmp ule " if op.equals("<=") else "icmp uge ")
+        cg.s(cmp_op)
+      else
+        cmp_op: =
+          ("icmp eq " if op.equals("==") else "icmp ne " if op.equals("!=")
+          else "icmp slt " if op.equals("<") else "icmp sgt " if op.equals(">")
+          else "icmp sle " if op.equals("<=") else "icmp sge ")
+        cg.s(cmp_op)
+      cg.t(r.get_binary_left().type_id).s(" ").s(left_reg).s(", ").s(right_reg).s("\n")
+
+      res_reg: = cg.next_reg() // allocated second, output second
+      cg.s("    %\{res_reg\} = zext i1 %\{cmp_reg\} to i8\n")
+
+      return cg.reg_str(res_reg)
+    left_type: = r.get_binary_left().type_id
+    right_type: = r.get_binary_right().type_id
+    left_is_ptr: = cg.env.is_pointer(left_type)
+    right_is_ptr: = cg.env.is_pointer(right_type)
+
+    if left_is_ptr && !right_is_ptr && (op.equals("+") || op.equals("-"))
+      return emit_llvm_ptr_step(cg, left_type, left_reg, right_type, right_reg, op.equals("-"))
+    if left_is_ptr && right_is_ptr && op.equals("-")
+      base_id: = cg.env.strip_ptr(left_type)
+      elem_size: = cg.sema.type_layout(base_id).size
+
+      li: = cg.next_reg()
+      ri: = cg.next_reg()
+      cg.s("    %\{li\} = ptrtoint ptr ").s(left_reg).s(" to i64\n")
+      cg.s("    %\{ri\} = ptrtoint ptr ").s(right_reg).s(" to i64\n")
+      diff_reg: = cg.next_reg()
+      cg.s("    %\{diff_reg\} = sub i64 %\{li\}, %\{ri\}\n")
+
+      if elem_size > 1
+        res_reg: = cg.next_reg()
+        cg.s("    %\{res_reg\} = sdiv i64 %\{diff_reg\}, \{elem_size\}\n")
+        return cg.reg_str(res_reg)
+      return cg.reg_str(diff_reg)
+
+    res_reg: = cg.next_reg()
+    cg.s("    %\{res_reg\} = ")
+    instr: = llvm_arith_instr(op, is_float, is_unsigned)
+    cg.s(instr if instr.len > 0 else "fadd " if is_float else "add ")
+    cg.t(r.get_binary_left().type_id).s(" ").s(left_reg).s(", ").s(right_reg).s("\n")
+
+    return cg.reg_str(res_reg)
+
+  fn emit_llvm_unary(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
+    op: = r.get_unary_op().text
+    target_reg: = r.get_unary_target().emit_llvm_expr(cg)
+
+    if op.equals("-")
+      is_float: = cg.env.is_float(r.type_id)
+      // A negated integer literal folds to `-N` (no `sub i32 0, N`).
+      if !is_float && target_reg.len > 0 && (target_reg.ptr + 0).is_digit()
+        cg.clear_scratch().s("-").s(target_reg)
+        return cg.take_scratch()
+      res_reg: = cg.next_reg()
+      if is_float
+        cg.s("    %\{res_reg\} = fneg ").t(r.type_id).s(" ").s(target_reg).s("\n")
+      else
+        cg.s("    %\{res_reg\} = sub ").t(r.type_id).s(" 0, ").s(target_reg).s("\n")
+      return cg.reg_str(res_reg)
+
+    res_reg: = cg.next_reg()
+    if op.equals("!")
+      cg.s("    %\{res_reg\} = xor ").t(r.type_id).s(" 1, ").s(target_reg).s("\n")
+    else if op.equals("~")
+      cg.s("    %\{res_reg\} = xor ").t(r.type_id).s(" -1, ").s(target_reg).s("\n")
+    return cg.reg_str(res_reg)
+  fn emit_llvm_postfix(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[] //<
+    //< It dispatches the postfix operators (the address-taking @
+    //<
+    //< [ $ :: and the calling `(`).
+    op_node: = r.get_postfix_op()
+    op: = op_node.text if op_node != null else ""
+
+    if op.equals("@")
+      recv: = r.get_postfix_receiver()
+      return recv.emit_llvm_lvalue(cg)
+    if op.equals(".") || op.equals("[") || op.equals("[]") || op.equals("$")
+      ptr_reg: = r.emit_llvm_lvalue(cg)
+      res_reg: = cg.next_reg()
+      cg.op_load(res_reg, r.type_id, ptr_reg)
+      return cg.reg_str(res_reg)
+    if op.equals("::")
+      return r.emit_llvm_cast(cg)
+    if op.equals("(")
+      return r.emit_llvm_call(cg)
+    $msg: = Str_builder.new()
+    defer msg.free()
+    msg.s("Genllvm ICE: Unhandled postfix op: ").s(op)
+    r.ice_panic(msg.slice())
+    return base_core.arena.dup_str("0")
+  fn emit_llvm_cast(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[] //<
+    //< The '::' cast: slicing, and conversion between integers, floating points and pointers
+    recv: = r.get_postfix_receiver()
+    target_type: = r.type_id
+    recv_type: = recv.type_id
+
+    // Caution: **Recognize a slice by its spelling.** A `T[]` is a `Slice<|T|>` instance; going by
+    // the constructor builds no descriptor and stores a `[64 x i8]` into a `{ ptr, i64 }`.
+    is_target_slice: = cg.env.is_slice(target_type)
+    is_base_slice: = cg.env.is_slice(recv_type)
+    is_base_array: = cg.env.is_array(recv_type)
+
+    if is_target_slice && is_base_slice
+      recv_reg: = recv.emit_llvm_expr(cg)
+      real_target: = cg.env.get_real_type(target_type)
+      real_recv: = cg.env.get_real_type(recv_type)
+      if real_target == real_recv
+        return base_core.arena.dup_str(recv_reg)
+      ext_ptr: = cg.next_reg()
+      cg.s("    %\{ext_ptr\} = extractvalue ")
+      cg.t(recv_type).s(" ").s(recv_reg).s(", 0\n")
+
+      ext_len: = cg.next_reg()
+      cg.s("    %\{ext_len\} = extractvalue ")
+      cg.t(recv_type).s(" ").s(recv_reg).s(", 1\n")
+
+      res_slice: =
+        build_slice_value(cg, target_type, cg.reg_str(ext_ptr), cg.reg_str(ext_len))
+      return cg.reg_str(res_slice)
+    if is_target_slice && is_base_array
+      recv_ptr: = recv.emit_llvm_lvalue(cg)
+      cg.clear_scratch().s("\{cg.env.array_len(recv_type)\}")
+      len_operand: = cg.take_scratch()
+      res_slice: = build_slice_value(cg, target_type, recv_ptr, len_operand)
+      return cg.reg_str(res_slice)
+
+    recv_reg: = recv.emit_llvm_expr(cg)
+
+    is_ptr_src: = cg.env.is_pointer(recv_type) || cg.env.is_fn_ptr(recv_type)
+    is_ptr_dst: = cg.env.is_pointer(target_type) || cg.env.is_fn_ptr(target_type)
+
+    $cast_inst: = "bitcast"
+    $is_noop: = false
+
+    if is_ptr_src && !is_ptr_dst
+      cast_inst = "ptrtoint"
+    else if !is_ptr_src && is_ptr_dst
+      cast_inst = "inttoptr"
+    else if is_ptr_src && is_ptr_dst
+      is_noop = true
+    else
+      real_src_id: = cg.env.scalar_repr_id(recv_type)
+      real_dst_id: = cg.env.scalar_repr_id(target_type)
+      is_f_src: = cg.env.is_float(real_src_id)
+      is_f_dst: = cg.env.is_float(real_dst_id)
+      src_is_unsigned: = cg.env.is_unsigned(real_src_id)
+      dst_is_unsigned: = cg.env.is_unsigned(real_dst_id)
+      from_size: = cg.env.get_primitive_bit_size(real_src_id)
+      to_size: = cg.env.get_primitive_bit_size(real_dst_id)
+
+      if is_f_src && is_f_dst
+        if from_size < to_size
+          cast_inst = "fpext"
+        else if from_size > to_size
+          cast_inst = "fptrunc"
+        else
+          is_noop = true
+      else if is_f_src && !is_f_dst
+        cast_inst = "fptoui" if dst_is_unsigned else "fptosi"
+      else if !is_f_src && is_f_dst
+        cast_inst = "uitofp" if src_is_unsigned else "sitofp"
+      else
+        if from_size < to_size
+          cast_inst = "zext" if src_is_unsigned else "sext"
+        else if from_size > to_size
+          cast_inst = "trunc"
+        else
+          is_noop = true
+
+    if is_noop
+      return base_core.arena.dup_str(recv_reg)
+
+    // Caution: A recv_reg that is neither %N nor @name is a constant's text; passed through a
+    // zext/sext from the smaller type, LLVM truncates it (`sext i32 9223372036854775807 to i64`).
+    if (cast_inst.equals("zext") || cast_inst.equals("sext")) && recv_reg.len > 0 &&
+      (recv_reg.ptr + 0)$ != '%' && (recv_reg.ptr + 0)$ != '@'
+      return base_core.arena.dup_str(recv_reg)
+
+    res_reg: = cg.next_reg()
+    cg.s("    %\{res_reg\} = ").s(cast_inst).s(" ")
+    cg.t(recv_type).s(" ").s(recv_reg).s(" to ")
+    cg.t(target_type).s("\n")
+
+    return cg.reg_str(res_reg)
+priv fn build_slice_value(cg: Genllvm_ctx$@, target_type: I32, ptr_operand: U8[],
+  len_operand: U8[]): I32 //<
+    //< It builds a { ptr, len } slice value by two insertvalues into a zeroinitializer
+    //<
+    //< emit_llvm_cast's two branches (slice->slice, array->slice) share it.
+  tmp_slice: = cg.next_reg()
+  cg.s("    %\{tmp_slice\} = insertvalue ")
+  cg.t(target_type).s(" zeroinitializer, ptr ").s(ptr_operand).s(", 0\n")
+
+  res_slice: = cg.next_reg()
+  cg.s("    %\{res_slice\} = insertvalue ")
+  cg.t(target_type).s(" %\{tmp_slice\}, i64 ").s(len_operand).s(", 1\n")
+  return res_slice
+priv fn emit_recv_base_ptr(recv: Ast_node$@, cg: Genllvm_ctx$@): U8$[] //<
+  //< A pointer to the value with the receiver's pointers stripped, one `load ptr` per level
+  //<
+  //< `Foo@@` is included. `.` and `[]` share it (as receiver_base_id in sema/type/env.kspls). It
+  //< serves the shared code of a slice or array subscript (the index's i64 extension and the
+  //< bounds-check call).
+
+  is_ptr: = cg.env.is_pointer(recv.type_id)
+  $recv_ptr: = recv.emit_llvm_expr(cg) if is_ptr else recv.emit_llvm_lvalue(cg)
+  $cur_id: = recv.type_id
+  for cg.env.is_pointer(cg.env.strip_ptr(cur_id))
+    cur_id = cg.env.strip_ptr(cur_id)
+    next_reg: = cg.next_reg()
+    cg.op_load(next_reg, cur_id, recv_ptr)
+    recv_ptr = cg.reg_str(next_reg)
+  return recv_ptr
+
+fn takes_signed_div(cg: Genllvm_ctx$@, op: U8[], type_id: I32, divisor: Ast_node$@): Bool //<
+  //< Whether `/` or `%` on type_id goes through emit_llvm_signed_div rather than an instruction
+  //<
+  //< A signed minimum divided by `-1` is poison too, so signed division goes to @kspl_sdiv /
+  //< @kspl_smod, which also check 0 (so emit_llvm_divisor is skipped). `/=` `%=` ask here too.
+  return (op.equals("/") || op.equals("%")) && cg.env.is_integer(type_id) &&
+    !cg.env.is_unsigned(type_id) &&
+    !sema_body_binary.divisor_cannot_overflow(cg.sema, divisor)
+
+fn emit_llvm_signed_div(cg: Genllvm_ctx$@, op: U8[], left_reg: U8$[], value_type_id: I32,
+  right_node: Ast_node$@, loc: Loc): U8$[] //<
+    //< It sends signed division and remainder to the i64 helper (kspl_sdiv / kspl_smod)
+    //<
+    //< Caution: **Allocate the SSA numbers in emission order**: right-hand side, width
+    //< conversion, call (the caller already emitted the left).
+  right_reg: = right_node.emit_llvm_expr(cg)
+  a_reg: = emit_widen_to_i64(cg, left_reg, value_type_id)
+  b_reg: = emit_widen_to_i64(cg, right_reg, right_node.type_id)
+  helper: = "kspl_sdiv" if op.equals("/") else "kspl_smod"
+  res_reg: = cg.next_reg()
+  cg.s("    %\{res_reg\} = call i64 @\{helper\}(i64 ").s(a_reg).s(", i64 ").s(b_reg)
+  emit_check_loc(cg, loc)
+  return emit_narrow_from_i64(cg, res_reg, value_type_id)
+
+priv fn emit_checked_operand(cg: Genllvm_ctx$@, r: Ast_node$@, val_reg: U8$[], type_id: I32,
+  check: U8[], extra_args: U8[]): U8$[] //<
+    //< It passes the operand r through the run-time check `@<check>` in i64
+    //<
+    //< It returns the checked value at type_id's width.
+  wide_reg: = emit_widen_to_i64(cg, val_reg, type_id)
+  safe_reg: = cg.next_reg()
+  cg.s("    %\{safe_reg\} = call i64 @").s(check).s("(i64 ").s(wide_reg).s(extra_args)
+  emit_check_loc(cg, r.loc)
+  return emit_narrow_from_i64(cg, safe_reg, type_id)
+
+priv fn emit_check_loc(cg: Genllvm_ctx$@, loc: Loc) //<
+  //< It closes a run-time check's call with the place it reports: the file and the line
+  //<
+  //< Freestanding reports none (`ptr null, i32 0`).
+  //< Caution: **Do not emit the byte offset.** The check reads "file:line", and a byte position
+  //< would name a different place from genc's.
+  if base_core.config.is_freestanding
+    cg.s(", ptr null, i32 0)\n")
+    return
+  cg.s(", ptr @.str.\{cg.get_or_add_raw_literal(loc.file())\}, i32 \{cg.sema.line_of(loc)\})\n")
+
+priv fn emit_narrow_from_i64(cg: Genllvm_ctx$@, reg: I32, type_id: I32): U8$[] //<
+  //< It truncates the i64 register reg to type_id's width (a 64-bit type is returned as it is)
+  if cg.env.get_primitive_bit_size(type_id) >= 64
+    return cg.reg_str(reg)
+  narrow_reg: = cg.next_reg()
+  cg.s("    %\{narrow_reg\} = trunc i64 %\{reg\} to ").t(type_id).s("\n")
+  return cg.reg_str(narrow_reg)
+
+fn llvm_arith_instr(op: U8[], is_float: Bool, is_unsigned: Bool): U8[] //<
+  //< The instruction (with its trailing space) of the arithmetic binary operator op
+  //<
+  //< An operator it has none for gives "". `x op= y` asks with op's `=` removed.
+  if is_float
+    return ("fadd " if op.equals("+") else "fsub " if op.equals("-")
+      else "fmul " if op.equals("*") else "fdiv " if op.equals("/")
+      else "frem " if op.equals("%") else "")
+  return ("add " if op.equals("+") else "sub " if op.equals("-") else "mul " if op.equals("*")
+    else ("udiv " if is_unsigned else "sdiv ") if op.equals("/")
+    else ("urem " if is_unsigned else "srem ") if op.equals("%") else "and " if op.equals("&")
+    else "or " if op.equals("|") else "xor " if op.equals("^") else "shl " if op.equals("<<")
+    else ("lshr " if is_unsigned else "ashr ") if op.equals(">>") else "")
+
+fn emit_llvm_ptr_step(cg: Genllvm_ctx$@, ptr_type_id: I32, ptr_reg: U8[], amt_type_id: I32,
+  amt_reg: U8[], back: Bool): U8$[] //<
+    //< It moves the pointer ptr_reg by amt_reg elements, backwards where back is set
+    //<
+    //< Caution: **Do not add bytes to the address.** `p + i` moves by i elements, as in C.
+  $amt: = amt_reg
+  if back
+    neg_reg: = cg.next_reg()
+    cg.s("    %\{neg_reg\} = sub ").t(amt_type_id).s(" 0, ").s(amt_reg).s("\n")
+    amt = cg.reg_str(neg_reg)
+  res_reg: = cg.next_reg()
+  cg.s("    %\{res_reg\} = getelementptr inbounds ")
+  cg.t_gep(cg.env.strip_ptr(ptr_type_id)).s(", ptr ").s(ptr_reg).s(", ").t(amt_type_id).s(" ")
+    .s(amt).s("\n")
+  return cg.reg_str(res_reg)
+
+priv fn emit_widen_to_i64(cg: Genllvm_ctx$@, val_reg: U8$[], val_type_id: I32): U8$[]
+  real_id: = cg.env.get_clean_real_type(val_type_id)
+  if real_id == I32::sema_type_env.Builtin_type_id.i64_type ||
+    real_id == I32::sema_type_env.Builtin_type_id.u64_type ||
+    real_id == I32::sema_type_env.Builtin_type_id.size_type
+    return val_reg
+  cast_inst: = "zext " if cg.env.is_unsigned(val_type_id) else "sext "
+  wide: = cg.next_reg()
+  cg.s("    %\{wide\} = ").s(cast_inst).t(val_type_id).s(" ").s(val_reg).s(" to i64\n")
+  return cg.reg_str(wide)
+
+priv fn u64_to_decimal(val: U64): U8$[] //<
+  //< It turns a U64 value into a decimal string (strnum.write_int makes 2^63 and above negative)
+
+  if val == 0U64
+    return base_core.arena.dup_str("0")
+  $buf: U8[24] = ::{}
+  $idx: Sz = 0
+  $temp: = val
+  for temp > 0U64
+    (buf@ + idx)$ = U8::('0' + temp % 10U64)
+    idx += 1
+    temp /= 10U64
+  $b: = Str_builder.new()
+  defer b.free()
+  for j in Range.asc(idx)
+    b.c((buf@ + (idx - 1 - j))$)
+  return base_core.arena.dup_str(b.slice())

@@ -1,0 +1,53 @@
+//< The call hierarchy from the language server: a starting point, then its callers
+//<
+//< Not a suite; ksplc's `lsp` suite uses it on a file in its own folder, and the root's `lsp-tree`
+//< on the repository's whole tree, so what `lsp-tree` calls is `pub`.
+import "ksplc/tests/support/lsp_client"
+import "ksplc/tests/support/lsp_read" { decl_line, end_text }
+import "std/ds" { List }
+import "std/json" + { Json_builder }
+import "std/jsonrpc"
+import "std/mem" { Arena }
+
+const heavy_ms: I32 = 60000 //< the default (15 seconds) is not enough
+  //<
+  //< A didOpen analyses the document's whole import tree, as many files as a workspace query; at
+  //< the default a slow disk misses, and "no answer" cannot be told from "the timeout expired".
+
+pub struct Prepared //<
+  //< What prepareCallHierarchy gave: the first item and the raw response
+  pub found: Bool
+  pub item: json.Val
+  pub raw: U8[]
+
+pub fn prepare_fn(c: jsonrpc.Client$@, rel: U8[], text: U8[], decl: U8[], arena: Arena$@): Prepared //<
+  //< It opens `text` as the document `rel` and sends prepareCallHierarchy at `decl`'s name
+  //<
+  //< Caution: **Return the raw response too**: with no item, only it tells "the worker has no
+  //< answer" from "the timeout expired".
+  _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(rel, text, arena), arena)
+  line: = decl_line(text, decl, arena)
+  pos: = lsp_client.at_pos(rel, line, decl.len - 1, arena)
+  msg: = c.request("textDocument/prepareCallHierarchy", pos, heavy_ms, arena) catch e
+    return Prepared::{ .found = false, .item = json.Val.null_val, .raw = end_text(e) }
+  items: = msg.get("result")
+  $list: = items.arr_list(arena)
+  if list.len == 0
+    return Prepared::{ .found = false, .item = json.Val.null_val,
+      .raw = lsp_client.dump(msg, arena) }
+  return Prepared::{ .found = true, .item = list.get(0), .raw = lsp_client.dump(msg, arena) }
+
+pub struct Incoming //< the result of incomingCalls: the array of callers
+  //<
+  //< Caution: **Do not discard why it came back empty.** "It does not have it", "the timeout
+  //< expired" and "the supervisor killed the worker" are each fixed in a different place.
+  pub calls: List<|json.Val|> //< the incoming calls, empty where none came
+  pub timed_out: Bool //< whether the timeout expired before an answer
+
+pub fn incoming(c: jsonrpc.Client$@, item: json.Val, arena: Arena$@): Incoming //<
+  //< who calls `item`
+  $b: = Json_builder.new(arena)
+  params: = b.obj().set("item", item).build()
+  msg: = c.request("callHierarchy/incomingCalls", params, heavy_ms, arena) catch
+    return Incoming::{ .calls = List<|json.Val|>.new(arena), .timed_out = true }
+  return Incoming::{ .calls = msg.get("result").arr_list(arena), .timed_out = false }

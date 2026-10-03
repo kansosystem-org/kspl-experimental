@@ -1,0 +1,83 @@
+//< Which marks at a line's end or start join two physical lines into one logical line
+//<
+//< **The reader of `.kspls` and the formatter that writes it both ask here**, or a mark on only
+//< one list makes the formatter put a continuation at column 0 (Principle 6 in
+//< `../../docs/DESIGN.md`).
+//< Caution: **This file does not decide whether a word continues a line.** `catch` / `as` / `in`
+//< continue a line too, but whether a `catch` does depends on indentation only the reader knows
+//< (`ends_open_word` and `merge` in `layout.kspls`); moved here, a mistake would read a handler's
+//< first statement as the value. This file holds what the characters alone decide, a line ending
+//< in `catch` included (`ends_in_catch`).
+import "std/chars" // `is_alnum`
+import "std/str" // `equals`
+
+fn line_continues(code: U8[]): Bool //<
+  //< Whether a line whose code is `code` continues onto the line below
+  //<
+  //< `code` is the line's code, without a trailing comment or surrounding blanks
+  //<
+  //< Caution: **A label's line is not a continuation**; its `:` opens a block. **Nor is a `|>` a
+  //< comparison**: `: List<|Row|>` ends a heading, and the level below would be pulled in. Both
+  //< guards live here, since a caller that forgot one would go unnoticed.
+  if code.len == 0 || is_label_only(code)
+    return false
+  if code.len >= 2 && code[code.len - 1] == '>' && code[code.len - 2] == '|'
+    return false
+  return ends_open(code[code.len - 1])
+
+fn breaks_off_a_value(code: U8[]): Bool //<
+  //< Whether the line's code breaks off partway through a value, so the line below holds the rest
+  //<
+  //< The formatter asks: the continuation of such a line needs an indent that no level gives it.
+  //< **A `,` does not break a value off**; it closes an item, which its level indents (the caller
+  //< handles a bracket's items first).
+  return code.len > 0 && code[code.len - 1] != ',' && line_continues(code)
+
+fn is_label_only(code: U8[]): Bool //<
+  //< Whether the line is only `<name>:` (the heading of a labelled block)
+  $e: Sz = 0
+  for e < code.len && code[e].is_alnum()
+    e += 1
+  return e > 0 && e + 1 == code.len && code[e] == ':'
+
+fn ends_in_catch(code: U8[]): Bool //<
+  //< Whether the code ends in `catch` or in `catch <name>`, ignoring trailing blanks
+  //<
+  //< **The one check for that pair**: the only spelling that opens the next level without ending in
+  //< a mark (a block inside an expression). The reader asks it of a line it reads, the formatter of
+  //< the line it is writing, where a break would lose the handler's value.
+  $e: = code.len
+  for _w in Range.asc(2)
+    for e > 0 && code[e - 1] == ' '
+      e -= 1
+    $s: = e
+    for s > 0 && code[s - 1].is_alnum()
+      s -= 1
+    if s == e
+      return false
+    if code.sub(s, e - s).equals("catch")
+      return true
+    e = s
+  return false
+
+fn takes_value_on_its_line(word: U8[]): Bool //<
+  //< Whether a statement's word takes its value on its own line (`return` / `throw` / `fallback`)
+  //<
+  //< **A line holding one of them alone is a statement of its own** (a bare `return`), so a value
+  //< on a deeper line below reads as the next statement, not as its value.
+  return word.equals("return") || word.equals("throw") || word.equals("fallback")
+
+priv fn ends_open(c: U8): Bool //<
+  //< The marks that continue a line onto the next when they end it
+  //<
+  //< The last character of a two-character operator (`&&` `==` `<<`) is on this list too.
+  //< Caution: **Do not add the `?`.** At a line's end it is a rethrow (`f()?`); at a line's start,
+  //< `starts_cont` below handles it (a wrapped `T?E`).
+  return c == ',' || c == '=' || c == ':' || c == '+' || c == '-' || c == '*' || c == '/' ||
+    c == '%' || c == '|' || c == '&' || c == '^' || c == '<' || c == '>' || c == '!' || c == '~'
+
+fn starts_cont(c: U8): Bool //<
+  //< The marks that make a line continue the previous one when they start it
+  return c == '.' || c == '?' || c == ')' || c == ']' || c == ',' || c == '|' || c == '&' ||
+    c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '^' || c == '=' || c == '<' ||
+    c == '>' || c == '!' || c == '~'

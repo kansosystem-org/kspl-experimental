@@ -1,0 +1,257 @@
+//< Infers the meaning of a path expression
+//<
+//< An identifier, an alias prefix, or a type's static member. Kept apart from `resolve.kspls`.
+import "ksplc/base/ast" { Ast_node, is_anon_fn_name }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/sema/body/call" as sema_body_call
+import "ksplc/sema/decl/access" as sema_decl_access
+import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
+import "ksplc/sema/session/import_table" as sema_session_import_table
+import "ksplc/sema/type/display" as sema_type_display
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" { Sema_symbol }
+import "std/chars" // testing and slicing single characters
+import "std/str"
+
+// The type of a function used as a value without being called (its bare name passed or assigned as
+// a function pointer).
+// Caution: Without this match, a mismatched signature passes ksplc and surfaces only as clang's
+// -Wincompatible-function-pointer-types ("Failing fast through an exception or an ICE" in
+// ksplc/docs/DESIGN.md). **Exempt only the four cases below.** "Pass unless a function pointer is
+// expected" lets a function pointer through where a `Callable1` is expected (a closure's forgotten
+// `;`), and the user sees a clang error naming `_anon_fn_1`.
+priv fn fn_value_type_id(node: Ast_node$@, c: Sema_ctx$@, sym: Sema_symbol$@, expected_id: I32):
+  I32?Sema_error
+  exp_real: = c.env.get_clean_real_type(expected_id)
+  // Nothing to match against: (1) no declaration (2) no expected type (`x: = f;`) (3) a generic
+  // call's opaque marker (4) variadic arguments.
+  if sym.node == null || sema_type_env.is_unknown(exp_real) ||
+    exp_real == c.env.generic_fn_value_type_id() || sym.node.has_variadic_param()
+    return expected_id
+  // `Void$@` is accepted for the FFI, where a function pointer is just an address.
+  if exp_real == (I32::sema_type_env.Builtin_type_id.void_ptr)
+    return expected_id
+
+  // The argument types use the declaring file's import aliases, so resolve in that file, or its
+  // types read as undefined.
+  old_file: = c.file_name
+  if sym.node.loc.file().len > 0
+    c.set_current_file(sym.node.loc.file())
+  actual_id: = sema_decl_resolve.fn_signature_type_id(sym.node, c) catch e
+    c.set_current_file(old_file)
+    throw e
+  c.set_current_file(old_file)
+
+  actual_str: = c.env.get_str(actual_id)
+  // Stay silent where something is unresolved (another diagnostic names the cause).
+  if actual_id == exp_real || actual_str.find_str("Unknown") != -1
+    return expected_id
+
+  $exp: = c.env.display_str(exp_real)
+  defer exp.free()
+  $act: = c.env.display_str(actual_id)
+  defer act.free()
+  c.clear_scratch()
+  // Caution: Do not show a synthesized name (`_anon_fn_1`), which the user did not write ("A
+  // diagnostic points at 'the position the user wrote'" in ksplc/docs/DESIGN.md); name the
+  // anonymous function as the source spells it.
+  if is_anon_fn_name(sym.name)
+    c.scratch.s("this anonymous function")
+  else
+    c.scratch.s("function '\{sym.name\}'")
+  c.scratch.s(" cannot be used as '\{exp.slice()\}': its own type is '\{act.slice()\}'")
+  c.append_missing_capture_list_note(exp_real)
+  c.err(node, c.scratch.slice())
+  return expected_id
+
+fn infer_path_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error
+  len: = node.children.len
+  if len == 0 || len == 1
+    $name: = node.text
+    if len == 1
+      name = node.get_child(0).text
+    if name.equals("true") || name.equals("false")
+      return I32::sema_type_env.Builtin_type_id.bool_type
+    if name.equals("null")
+      return c.env.resolve_null_type(expected_id)
+
+    // Built-in intrinsics handled in call.kspls, not declared as symbols: Unknown keeps them from
+    // reading as undefined, and call.kspls decides the type.
+    if sema_body_call.intrinsic_of(name) != .not_intrinsic
+      return I32::sema_type_env.Builtin_type_id.unknown
+
+    // Functions and constants brought in by a selective import.
+    // Caution: Look up values here too, not only types, or `import "p" { twice };` passes and the
+    // use fails with `undefined path or identifier` (Principle 5 of docs/DESIGN.md). Locals and
+    // arguments come from symtab first.
+    $sym: = c.symtab.resolve(name) catch null
+    if sym == null
+      imported_fqn: = c.imported_symbol_fqn(name)
+      if imported_fqn.len > 0
+        sym = c.symtab.resolve(imported_fqn) catch null
+    if sym != null
+      sym.flags.is_used = true
+      node.def_node = sym.node
+      if len == 1
+        node.get_child(0).def_node = sym.node
+
+      c.check_visibility_and_mark_used(sym, node)
+      if sym.kind.is_function() && !sema_type_env.is_unknown(expected_id)
+        return fn_value_type_id(node, c, sym, expected_id)?
+      // Caution: **A type's own name is not a value.** Returning its type makes `x: = Row` emit an
+      // undefined C symbol, a C compiler error rather than a diagnostic (Principle 2). Unknown is
+      // rejected at the declaration instead; the `.` path (`Row.new()`, `infer_namespace_access`)
+      // discards the result, so it costs nothing.
+      if sym.kind.is_type()
+        return I32::sema_type_env.Builtin_type_id.unknown
+      if !sema_type_env.is_unknown(sym.type_id)
+        return sym.type_id
+    else
+      is_alias: = c.get_file_alias(c.file_name, name)
+      // Caution: **Do not let a capitalized name through as "probably a type".** A mistyped
+      // `Str_builde` becomes a genc ICE in an inferred declaration, and elsewhere a **C compiler
+      // error** (Principle 2).
+      if !is_alias && !c.is_type_name(name)
+        report_undefined_path(c, node, name, false, "", name, false)
+    return I32::sema_type_env.Builtin_type_id.unknown
+  $full_name: = node.get_full_path_str()
+  defer full_name.free()
+
+  target_name: = node.get_path_name()
+  prefix: = node.get_child(0).text
+
+  $target_file_path: = c.get_file_alias_target(c.file_name, prefix)
+  // A head brought in by a selective import resolves **the same way** as an access to that file;
+  // the head is itself a name inside the file, so joining starts from 0.
+  // Caution: Do not resolve it another way. The other path instantiates `Map<|U8[], I32|>`'s type
+  // arguments **as literal text**.
+  $seg_start: Sz = 1
+  $first_seg_name: = prefix
+  if target_file_path.len == 0
+    imported_target: = c.get_import_symbol_target(c.file_name, prefix)
+    if imported_target.len > 0
+      target_file_path = imported_target
+      first_seg_name = c.get_import_symbol_original_name(c.file_name, prefix)
+      seg_start = 0
+  is_file_access: = target_file_path.len > 0 && len >= 2
+
+  $sym_ptr: Sema_symbol$@ = null
+  // The file is known not to hold the name, so waiting for monomorphization will not help.
+  $certain: = false
+
+  if is_file_access
+    file_env: = c.env.files.get(target_file_path) catch null
+    if file_env != null
+      c.clear_scratch()
+      $is_first: = true
+      $head_name: U8[] = ""
+      for $j: = seg_start; j < len; j += 1
+        child: = node.get_child(j)
+        if child.kind_id == .k_type_args
+          continue
+        if !is_first
+          c.scratch.s(".")
+        // A selective import can rename (`{ A as B }`); look up the original name.
+        seg: = first_seg_name if j == 0 else child.text
+        if is_first
+          head_name = seg
+        c.scratch.s(seg)
+        is_first = false
+      alt_path_slice: = c.scratch.slice()
+      sym_ptr = file_env.symbols.get(alt_path_slice) catch null
+
+      if sym_ptr == null
+        alt_fqn: = c.build_mod_fqn(target_file_path, alt_path_slice)
+        if rs: = c.resolve_type_method_fqn(alt_fqn)
+          sym_ptr = rs
+      // Caution: **Check the head segment alone.** The `new` of `ds.List<|I32|>.new` is not in the
+      // table until monomorphization, so checking the whole path would reject a legitimate name;
+      // the head is known now.
+      // head_name points at the AST's string; pointed into scratch, build_mod_fqn would clobber it.
+      if sym_ptr == null && head_name.len > 0 &&
+        (file_env.symbols.get(head_name) catch null) == null &&
+        !c.file_has_type(target_file_path, head_name)
+        certain = true
+  else
+    sym_ptr = c.symtab.resolve(full_name.slice()) catch null
+    if sym_ptr == null
+      if rs: = c.resolve_type_method_fqn(full_name.slice())
+        sym_ptr = rs
+    // The last resort after the full path and the alias prefix fail: resolve the tail's type name
+    // and static member alone, rescuing deep paths whose middle fails (mod.Type<|T|>.method).
+    if sym_ptr == null && len >= 2
+      $id1: U8[] = ""
+      $id2: U8[] = ""
+      for $j: = len; j > 0; j -= 1
+        child: = node.get_child(j - 1)
+        if child.kind_id == .k_identifier
+          if id2.len == 0
+            id2 = child.text
+          else if id1.len == 0
+            id1 = child.text
+            break
+      if id1.len > 0 && id2.len > 0
+        c.clear_scratch().s("\{id1\}.\{id2\}")
+        sym_ptr = c.symtab.resolve(c.scratch.slice()) catch null
+        if sym_ptr == null
+          t_fqn: = c.resolve_fqn_for_type(id1)
+          c.clear_scratch().s("\{t_fqn\}.\{id2\}")
+          if rs: = c.resolve_type_method_fqn(c.scratch.slice())
+            sym_ptr = rs
+
+  if sym_ptr == null
+    path_str: = full_name.slice()
+    report_undefined_path(c, node, path_str, is_file_access, prefix, target_name, certain)
+    return I32::sema_type_env.Builtin_type_id.unknown
+
+  sym_ptr.flags.is_used = true
+  node.def_node = sym_ptr.node
+  if node.children.len > 0
+    last_idx: = node.children.len - 1
+    $last: = node.get_child(last_idx)
+    if last.kind_id == .k_type_args && last_idx > 0
+      last = node.get_child(last_idx - 1)
+    if last.kind_id == .k_identifier
+      last.def_node = sym_ptr.node
+  c.check_visibility_and_mark_used(sym_ptr, node)
+
+  if sym_ptr.kind.is_function()
+    if !sema_type_env.is_unknown(expected_id)
+      return fn_value_type_id(node, c, sym_ptr, expected_id)?
+    if !sema_type_env.is_unknown(sym_ptr.type_id)
+      return sym_ptr.type_id
+  else if !sema_type_env.is_unknown(sym_ptr.type_id)
+    return sym_ptr.type_id
+
+  return I32::sema_type_env.Builtin_type_id.unknown
+
+priv fn report_undefined_path(c: Sema_ctx$@, node: Ast_node$@, fqn_slice: U8[],
+  is_file_access: Bool, prefix: U8[], target_name: U8[], certain: Bool)
+  if c.has_error() || (!certain && fqn_slice.find_str("<|") != -1)
+    return
+  c.clear_scratch().s("undefined path or identifier '\{fqn_slice\}'")
+  // What could not be resolved is the head segment on a path, and the name itself on a bare name
+  // (advice pointing at `v` when `r.v`'s `r` is missing cannot be acted on).
+  unresolved_name: = prefix if prefix.len > 0 else target_name
+  // A name missing inside an anonymous function is nearly always a capture attempt, and that advice
+  // replaces the general one; a file access (a name the file does not export) is checked first.
+  if is_file_access
+    c.scratch.s("\n  Hint: '\{prefix\}' names a file, but it does not export '\{target_name\}'.")
+  else if !c.append_anon_fn_capture_note(unresolved_name) &&
+    !c.append_withheld_alias_note(unresolved_name)
+    if prefix.len > 0
+      if (c.env.type_to_id.get(prefix) catch 0) != 0
+        c.scratch
+          .s("\n  Hint: Type '\{prefix\}' exists, but has no static member '\{target_name\}'.\n  \
+            (Note: Static methods in 'impl' must be defined in the same file as the struct/enum.)")
+      else
+        c.scratch
+          .s("\n  Hint: The prefix '\{prefix\}' is neither a known import alias nor a type in the \
+            current scope.")
+    else
+      c.scratch.s("\n  Hint: Please check for typos or missing imports.")
+  c.err(node, c.scratch.slice())
+  c.note_undefined_at(node)

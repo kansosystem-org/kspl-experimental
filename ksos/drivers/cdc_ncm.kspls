@@ -1,0 +1,126 @@
+//< Builds and parses CDC-NCM frames (NTB16)
+//<
+//< NCM does not stream raw 802.3 frames over the bus; it packs them into a container called an
+//< **NTB (NCM Transfer Block)** and carries that.
+//< **NTH16's wBlockLength gives the length.**
+//< **It is independent of the hardware, so it can be tested without a device.**
+
+// ==========================================
+//   NTH16 (12 bytes)      ... "NCMH" plus this whole block's length plus the NDP's position
+//   NDP16 (16+ bytes)     ... "NCM0" plus a table of (position, length) pairs, ending in (0, 0)
+//   the datagrams         ... the 802.3 frames themselves
+// ==========================================
+
+import "std/bytes"
+import "std/chars"
+
+const nth16_len: Sz = 12 //< the NTH16's size
+  //<
+  //< This value goes into wHeaderLength too.
+const dpe16_len: Sz = 4 //< one DPE's size (a position and length pair)
+const ndp16_min_len: Sz = 16 //<
+  //< The smallest NDP16 [bytes]
+  //<
+  //< A 4-byte signature, a 2-byte length, 2 bytes for the next NDP, one real entry and one
+  //< terminator.
+// The header size of an NTB holding a single frame. The datagram starts at this offset.
+const one_datagram_overhead: Sz = 28 // nth16_len + ndp16_min_len
+
+priv fn write_sig(out: U8$[], off: Sz, d: U8) //< writes a signature
+  //<
+  //< Both are little endian, so the bytes read in order: NTH16 = "NCMH", NDP16 (with no CRC) =
+  //< "NCM0"
+  out[off] = 'N'
+  out[off + 1] = 'C'
+  out[off + 2] = 'M'
+  out[off + 3] = d
+
+priv fn has_sig(b: U8[], off: Sz, d: U8): Bool
+  return b[off] == 'N' && b[off + 1] == 'C' && b[off + 2] == 'M' && b[off + 3] == d
+
+priv fn wr16(out: U8$[], off: Sz, v: Sz) //< NCM's fields are all little endian
+  //<
+  //< The callers handle lengths and positions as Sz, so these two wrap std/bytes's U16 versions
+  //< (rather than making every call write `U16::`).
+  out.put_u16_le(off, U16::v)
+
+priv fn rd16(b: U8[], off: Sz): Sz
+  return b.get_u16_le(off)
+
+fn build_one(out: U8$[], frame: U8[], len: Sz, seq: Sz): Sz //<
+  //< Builds an NTB holding a single frame
+  //<
+  //< Caution: **Make the NDP's and the datagrams' positions multiples of 4.** GET_NTB_PARAMETERS
+  //< declares wNdpInDivisor = 4 and wNdpInAlignment = 4, so anything else breaks that promise (12
+  //< and 28 are both multiples of 4, so this layout meets it). **Reject `len > frame.len`.**
+  //< Only what is in frame can be copied, yet len is what goes into the table.
+  total: = one_datagram_overhead + len
+  if len == 0 || len > frame.len || total > out.len
+    return 0
+  write_sig(out, 0, 'H')
+  wr16(out, 4, nth16_len) // wHeaderLength
+  wr16(out, 6, seq & 0xffff) // wSequence
+  wr16(out, 8, total) // wBlockLength
+  wr16(out, 10, nth16_len) // wNdpIndex ... the NDP is right after the NTH
+
+  write_sig(out, nth16_len, '0') // with no CRC
+  wr16(out, nth16_len + 4, ndp16_min_len) // wLength
+  wr16(out, nth16_len + 6, 0) // wNextNdpIndex ... no NDP follows
+  wr16(out, nth16_len + 8, one_datagram_overhead) // the first entry's position
+  wr16(out, nth16_len + 10, len) // the first entry's length
+  // Caution: **Always write the (0, 0) terminator.** Without it the host does not know where the
+  // table ends and reads garbage as the next datagram.
+  wr16(out, nth16_len + 12, 0)
+  wr16(out, nth16_len + 14, 0)
+
+  out.copy_from(one_datagram_overhead, frame.sub(0, len))
+  return total
+
+fn block_length(b: U8[], have: Sz): Sz //<
+  //< Reads the total byte count of an NTB that is still being received
+  //<
+  //< 0 if it cannot be read yet. It also returns 0 when the signature does not match, so the
+  //< caller does not wait forever on a stream that is out of step.
+  if have < nth16_len || !has_sig(b, 0, 'H')
+    return 0
+  return rd16(b, 8)
+
+struct Datagram //< the NTB's index-th datagram (0-based)
+  ok: Bool
+  offset: Sz
+  len: Sz
+
+fn datagram_at(b: U8[], total: Sz, index: Sz): Datagram //< extracts the index-th datagram
+  //<
+  //< **The NDPs can form a chain** (wNextNdpIndex), so after reading the first table it goes on to
+  //< the next. Code that assumes one entry per NTB loses the second and later entries when the
+  //< host sends several together.
+  none: = Datagram::{ .ok = false, .offset = 0, .len = 0 }
+  if total < nth16_len || total > b.len || !has_sig(b, 0, 'H')
+    return none
+  $ndp: = rd16(b, 10)
+  $seen: Sz = 0
+  // Limit how many links of the chain are followed, so a broken NTB that points at itself
+  // cannot loop forever.
+  for _hop in Range.asc(8)
+    if ndp == 0 || ndp + ndp16_min_len > total || !has_sig(b, ndp, '0')
+      return none
+    ndp_len: = rd16(b, ndp + 4)
+    if ndp_len < ndp16_min_len || ndp + ndp_len > total
+      return none
+    // The table's entries run from after the 4-byte signature, 2-byte length and 2-byte next
+    // pointer, up to the one terminator at the end.
+    $off: = ndp + 8
+    for off + dpe16_len <= ndp + ndp_len
+      d_off: = rd16(b, off)
+      d_len: = rd16(b, off + 2)
+      if d_off == 0 || d_len == 0
+        break // the terminator
+      if seen == index
+        if d_off + d_len > total
+          return none // it runs past the end of the block
+        return Datagram::{ .ok = true, .offset = d_off, .len = d_len }
+      seen += 1
+      off += dpe16_len
+    ndp = rd16(b, ndp + 6) // on to the next table
+  return none

@@ -1,0 +1,52 @@
+import "ksai/tokenizer" as ai_tokenizer
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+fn test_tokenizer_roundtrip(arena: Arena$@)
+  verdict.start("[Tokenizer] decoding is symmetrical with encoding test...")
+  $tok: = ai_tokenizer.Tokenizer.new(arena)
+
+  tok.add_token("K", 1)
+  tok.add_token("a", 2)
+  tok.add_token("n", 3)
+  tok.add_token("s", 4)
+  tok.add_token("o", 5)
+  tok.add_token(" ", 6)
+  tok.add_token("an", 7)
+  tok.add_token("so", 8)
+  tok.add_token("Kan", 9)
+  tok.add_token("Kanso", 10)
+  tok.add_token("AI", 11)
+
+  tok.add_merge(2, 3, 7) // a + n -> an
+  tok.add_merge(4, 5, 8) // s + o -> so
+  tok.add_merge(1, 7, 9) // K + an -> Kan
+  tok.add_merge(9, 8, 10) // Kan + so -> Kanso
+  text: = "Kanso AI"
+  // Encodes with the space and AI split by hand (a real pre-pass splits at word boundaries first)
+  tokens: = tok.encode("Kanso")
+  tokens.push(6) // Space
+  tokens.push(11) // AI
+
+  assert(tok.decode(tokens).equals(text), "decode must invert encode")
+  verdict.pass("decoding a sequence encoded through the merge table gives the original text back.")
+
+fn test_tokenizer_cache_follows_additions(arena: Arena$@) //<
+  //< A text encoded again after a rule is added uses the rule, and a repeat gives the same IDs
+  //<
+  //< Caution: **Encode before the addition too**: the cache is filled by the first encoding, so a
+  //< cache kept past an addition would answer with the IDs from before it.
+  verdict.start("[Tokenizer] the cache of merged chunks follows added rules")
+  $tok: = ai_tokenizer.Tokenizer.new(arena)
+  tok.add_token("a", 1)
+  tok.add_token("b", 2)
+  tok.add_token("ab", 3)
+  before: = tok.encode("ab")
+  assert(before.len == 2, "with no rule, a and b stay apart")
+  again: = tok.encode("ab")
+  assert(again.len == 2 && again[0] == 1 && again[1] == 2, "a repeat gives the same IDs")
+  tok.add_merge(1, 2, 3)
+  after: = tok.encode("ab")
+  assert(after.len == 1 && after[0] == 3, "the rule added after an encoding is taken")
+  verdict.pass("a repeat is answered alike, and a rule added later is taken")

@@ -1,0 +1,451 @@
+//< The entry points that change a style's contents
+//<
+//< **Every entry point here acts on "style `i`"**, and **a replacement is whole**, so "whether it
+//< is set" is a separate field per setting (that keeps the inheritance intact). No state is kept
+//< here. **Do not put a slice out at the boundary** ("The restrictions on types at the FFI
+//< boundary" in the language spec).
+import "kspage/model/limit"
+import "kspage/model/marker"
+import "kspage/model/paint"
+import "kspage/model/style" + { Arrange }
+import "kspage/model/style_when"
+import "kspage/port/web/state" + { doc_arena, ed, ensure, input, input_cap, sheet }
+import "kspage/write/shape"
+import "std/chars" // tests and cuts single characters
+
+// ---- Changing the style itself ----
+
+// Writes 10 values into out for style `i`'s look (the font and the colors), "whether set" and the
+// value per field.
+// Caution: **Do not encode "whether it is set" inside the value** — italic false and black are
+// valid settings, so 0 as "unset" would confuse them.
+#export
+fn kspage_web_style_look(i: Sz, out: F32$@)
+  state.clear_out(out, 10)
+  ensure()
+  if !state.has_style(i)
+    return
+  s: = sheet.styles.get(i)
+  if v: = s.font.size_px
+    out$ = 1.0
+    (out + 1)$ = v
+  if v: = s.font.weight
+    (out + 2)$ = 1.0
+    (out + 3)$ = F32::v
+  if v: = s.font.italic
+    (out + 4)$ = 1.0
+    (out + 5)$ = 1.0 if v else 0.0
+  state.color_into(out + 6, s.ink.color)
+  state.color_into(out + 8, s.ink.background)
+
+// Writes style `i`'s font name and returns the length (0 when unset).
+#export
+fn kspage_web_style_family(i: Sz): Sz
+  ensure()
+  state.out.clear()
+  if state.has_style(i)
+    if v: = sheet.styles.get(i).font.family
+      state.out.s(v)
+  return state.out.len
+
+// Replaces style `i`'s look (the font and the colors) whole; 1 if replaced. The name is
+// `family_len` bytes from the typing arena (negative: "unset"); a color is a `0xRRGGBB` number
+// (`has_*` 0: "unset").
+// Caution: **Do not make one entry point per field** — "unset" is a setting too, and replacing the
+// whole keeps "there was none" apart from "it was 0" (as replacing a formula whole does).
+#export
+fn kspage_web_set_style_look(i: Sz, family_len: Sz, has_size: I32, size: F32, has_weight: I32,
+  weight: F32, has_italic: I32, italic: I32, has_color: I32, color: F32, has_back: I32, back: F32):
+  I32
+  ensure()
+  if !state.has_style(i) || family_len > input_cap
+    return 0
+  // Caution: **Start from the current style** — starting from empty, the fields not passed (the
+  // arrangement, a slide's size, the number format) would be dropped.
+  $fresh: style.Style = sheet.styles.get(i)$
+  fresh.font = paint.inherit_all()
+  if family_len >= 0
+    // Caution: Copy the name; the arena is rewritten on the next keystroke.
+    name: = U8[]::{ .ptr = input@, .len = family_len }
+    fresh.font.family = Option<|U8[]|>.some(doc_arena.dup_str(name))
+  if has_size != 0
+    fresh.font.size_px = Option<|F32|>.some(size)
+  if has_weight != 0
+    fresh.font.weight = Option<|U16|>.some(U16::I32::weight)
+  if has_italic != 0
+    fresh.font.italic = Option<|Bool|>.some(italic != 0)
+  fresh.ink = paint.inherit_ink()
+  if has_color != 0
+    fresh.ink.color = Option<|U32|>.some(U32::color)
+  if has_back != 0
+    fresh.ink.background = Option<|U32|>.some(U32::back)
+  ed.set_look(sheet.styles.get(i), fresh)
+  return 1
+
+// Writes five values into out for style `i`'s number format (whether decimals are fixed / how
+// many / the digit separator / the percent / the date format). The texts before and after are a
+// separate entry point (the arena carries one text).
+#export
+fn kspage_web_style_number(i: Sz, out: F32$@)
+  state.clear_out(out, 5)
+  ensure()
+  if !state.has_style(i)
+    return
+  spec: = sheet.styles.get(i).number
+  if v: = spec.places
+    out$ = 1.0
+    (out + 1)$ = F32::v
+  (out + 2)$ = 1.0 if spec.grouped else 0.0
+  (out + 3)$ = 1.0 if spec.percent else 0.0
+  (out + 4)$ = state.dating_no(spec.dated)
+
+// Writes the text style `i` puts before (`tail` 0) or after (otherwise) a number and returns the
+// length.
+#export
+fn kspage_web_style_affix(i: Sz, tail: I32): Sz
+  ensure()
+  state.out.clear()
+  if state.has_style(i)
+    spec: = sheet.styles.get(i).number
+    state.out.s(spec.suffix if tail != 0 else spec.prefix)
+  return state.out.len
+
+// Replaces style `i`'s number format whole; 1 if replaced. The before and after texts go into the
+// typing arena separated by a tab; **without a tab the whole text is the before text.**
+// Caution: **Pass the date format too** (a field not passed reverts to the default).
+#export
+fn kspage_web_set_style_number(i: Sz, affix_len: Sz, has_places: I32, places: F32, grouped: I32,
+  percent: I32, dated: I32): I32
+  ensure()
+  // Decimal places are accepted only within range too (`kspage/model/limit`); outside it the text
+  // does not change, so accepting it would make a field that does nothing.
+  // Caution: **Check it while it is still F32** — converted to an integer first, where NaN lands is
+  // undefined; as F32, NaN fails both comparisons and is refused.
+  in_range: = places >= 0.0 && places <= F32::limit.most_places
+  if !state.has_style(i) || affix_len > input_cap || (has_places != 0 && !in_range)
+    return 0
+  $fresh: style.Style = sheet.styles.get(i)$
+  fresh.number = style.plain_number()
+  if has_places != 0
+    fresh.number.places = Option<|Sz|>.some(I32::places)
+  fresh.number.grouped = grouped != 0
+  fresh.number.percent = percent != 0
+  fresh.number.dated = state.dating_at(dated)
+  if affix_len > 0
+    two: = split_kept(U8[]::{ .ptr = input@, .len = affix_len })
+    fresh.number.prefix = two.head
+    fresh.number.suffix = two.tail
+  ed.set_look(sheet.styles.get(i), fresh)
+  return 1
+
+// Adds one style named by the `len` bytes in the typing arena and returns its index; **where the
+// name exists it returns that index** (a second style of the name could never be looked up).
+// Caution: **Return the reason as a number** (the rule at `kspage_web_set_block_style` in
+// `face.kspls`): -1 "no name", **-2 "the name holds whitespace"** — with one number, the screen
+// asks for a name that was already typed.
+#export
+fn kspage_web_add_style(len: Sz): Sz
+  ensure()
+  if len <= 0 || len > input_cap
+    return -1
+  name: = U8[]::{ .ptr = input@, .len = len }
+  if !style.name_plain(name)
+    return -2
+  if made: = ed.add_style(sheet, name, Arrange.flow)
+    for $i: Sz = 0; i < sheet.styles.len; i += 1
+      if sheet.styles.get(i) == made
+        return i
+  return -1
+
+// ---- A paragraph's settings ----
+
+// Writes nine values into out for style `i`'s paragraph settings (the alignment / the line height
+// multiple / the space before / after / the indent / whether it wraps / the columns / the gap
+// between them / the padding). The alignment is `Align`'s list (0 left, 1 center, 2 right); **a
+// multiple of 0 means "unset"** (the font's height).
+#export
+fn kspage_web_style_para(i: Sz, out: F32$@)
+  state.clear_out(out, 9)
+  ensure()
+  if !state.has_style(i)
+    return
+  s: = sheet.styles.get(i)
+  out$ = state.align_no(s.align)
+  (out + 1)$ = s.line_spacing
+  (out + 2)$ = s.space_before
+  (out + 3)$ = s.space_after
+  (out + 4)$ = s.indent
+  (out + 5)$ = 1.0 if s.wrap else 0.0
+  (out + 6)$ = F32::s.columns
+  (out + 7)$ = s.column_gap
+  (out + 8)$ = s.pad
+
+// Whether style `i` "starts a new page before it"; 0 when absent.
+// Caution: **Do not add it to the paragraph-settings entry point** — a tenth argument would let a
+// caller's wrong order pass the type check (only the count is checked).
+#export
+fn kspage_web_style_breaks(i: Sz): I32
+  ensure()
+  if !state.has_style(i)
+    return 0
+  return 1 if sheet.styles.get(i).break_before else 0
+
+// Replaces style `i`'s "new page before it", **as one undo step.**
+#export
+fn kspage_web_set_style_breaks(i: Sz, on: I32): I32
+  ensure()
+  if !state.has_style(i)
+    return 0
+  $fresh: style.Style = sheet.styles.get(i)$
+  fresh.break_before = on != 0
+  ed.set_look(sheet.styles.get(i), fresh)
+  return 1
+
+// Style `i`'s "included in chapters" (default 1). **When false, it is in neither the table of
+// contents nor the chapter numbering** (a title page, a colophon).
+#export
+fn kspage_web_style_in_chapters(i: Sz): I32
+  ensure()
+  if !state.has_style(i)
+    return 1
+  return 1 if sheet.styles.get(i).in_chapters else 0
+
+// Replaces style `i`'s "included in chapters", **as one undo step.**
+#export
+fn kspage_web_set_style_in_chapters(i: Sz, on: I32): I32
+  ensure()
+  if !state.has_style(i)
+    return 0
+  $fresh: style.Style = sheet.styles.get(i)$
+  fresh.in_chapters = on != 0
+  ed.set_look(sheet.styles.get(i), fresh)
+  return 1
+
+// Replaces style `i`'s paragraph settings whole; 1 if replaced.
+#export
+fn kspage_web_set_style_para(i: Sz, align: I32, spacing: F32, before: F32, after: F32, indent: F32,
+  wrap: I32, columns: I32, gap: F32, pad: F32): I32
+  ensure()
+  // The column count is accepted only within range (`kspage/model/limit`): negative, no column
+  // width can be computed; too large, it lays out that many. 0 and 1 mean "no columns", in range.
+  if !state.has_style(i) || !limit.columns_fits(columns)
+    return 0
+  $fresh: style.Style = sheet.styles.get(i)$
+  fresh.align = state.align_at(align)
+  fresh.line_spacing = spacing
+  fresh.space_before = before
+  fresh.space_after = after
+  fresh.indent = indent
+  fresh.wrap = wrap != 0
+  fresh.columns = columns
+  fresh.column_gap = gap if gap > 0.0 else 0.0
+  // A negative padding becomes 0 (otherwise the band would be smaller than its contents).
+  fresh.pad = pad if pad > 0.0 else 0.0
+  ed.set_look(sheet.styles.get(i), fresh)
+  return 1
+
+// ---- The frame and the fill ----
+
+// Writes five values into out for style `i`'s border and fill (the line's thickness / its color /
+// whether there is a fill / the fill's color / the shape).
+#export
+fn kspage_web_style_edge(i: Sz, out: F32$@)
+  state.clear_out(out, 5)
+  ensure()
+  if !state.has_style(i)
+    return
+  s: = sheet.styles.get(i)
+  out$ = s.rule_width
+  (out + 1)$ = F32::s.rule_color
+  state.color_into(out + 2, s.fill)
+  (out + 4)$ = state.shape_no(s.shape)
+
+// Replaces style `i`'s border and fill whole; 1 if replaced. Thickness 0 removes the line,
+// `has_fill` 0 the fill (a color is a `0xRRGGBB` number).
+// Caution: **Pass the shape too** (a field not passed reverts to the default).
+#export
+fn kspage_web_set_style_edge(i: Sz, width: F32, color: F32, has_fill: I32, fill: F32, kind: I32):
+  I32
+  ensure()
+  if !state.has_style(i)
+    return 0
+  $fresh: style.Style = sheet.styles.get(i)$
+  fresh.rule_width = width if width > 0.0 else 0.0
+  fresh.rule_color = U32::color
+  fresh.fill = Option<|U32|>.some(U32::fill) if has_fill != 0 else Option<|U32|>.none
+  fresh.shape = state.shape_at(kind)
+  ed.set_look(sheet.styles.get(i), fresh)
+  return 1
+
+priv fn split_kept(both: U8[]): state.Split //<
+  //< Copies the typing arena's text, split in two at the first tab
+  //<
+  //< An entry point that needs a tab goes through `state.split_input`, which does nothing where it
+  //< cannot split.
+  //< Caution: **Copy it** — the arena is rewritten on the next keystroke, and a pointer left in it
+  //< becomes another text.
+  cut: = state.split_at_tab(both)
+  $tail: U8[] = ""
+  if cut < both.len
+    tail = doc_arena.dup_str(both.sub(cut + 1, both.len - cut - 1))
+  return state.Split::{ .found = cut < both.len,
+    .head = doc_arena.dup_str(both.sub(0, cut)), .tail = tail }
+
+// ---- The underline and the strikethrough ----
+
+// Writes four values into out for style `i`'s lines (whether the underline is set / drawn /
+// whether the strikethrough is set / drawn).
+// Caution: **Pass "whether it is set" as a separate field** — 0 as unset makes "do not draw"
+// impossible to write (the parent's underline could not be removed).
+#export
+fn kspage_web_style_decor(i: Sz, out: F32$@)
+  state.clear_out(out, 4)
+  ensure()
+  if !state.has_style(i)
+    return
+  ink: = sheet.styles.get(i).ink
+  if v: = ink.underline
+    out$ = 1.0
+    (out + 1)$ = 1.0 if v else 0.0
+  if v: = ink.strike
+    (out + 2)$ = 1.0
+    (out + 3)$ = 1.0 if v else 0.0
+
+// Replaces style `i`'s line settings whole; 1 if replaced.
+#export
+fn kspage_web_set_style_decor(i: Sz, has_under: I32, under: I32, has_strike: I32, strike: I32): I32
+  ensure()
+  if !state.has_style(i)
+    return 0
+  $fresh: style.Style = sheet.styles.get(i)$
+  fresh.ink.underline =
+    Option<|Bool|>.some(under != 0) if has_under != 0 else Option<|Bool|>.none
+  fresh.ink.strike =
+    Option<|Bool|>.some(strike != 0) if has_strike != 0 else Option<|Bool|>.none
+  ed.set_look(sheet.styles.get(i), fresh)
+  return 1
+
+// ---- The marker ----
+
+// Writes style `i`'s marker kind into `kind` (0 none, 1 a bullet, 2 a number) and its text,
+// returning the length; the text is the bullet itself or what follows the number.
+// Caution: **Do not name the output parameter `out`** — the arena is `state.out` too, and using
+// both in one function fails name resolution.
+#export
+fn kspage_web_style_mark(i: Sz, kind: F32$@): Sz
+  kind$ = 0.0
+  ensure()
+  state.out.clear()
+  if !state.has_style(i)
+    return 0
+  switch sheet.styles.get(i).marker case .bullet(glyph)
+    kind$ = 1.0
+    state.out.s(glyph)
+  case .number(after)
+    kind$ = 2.0
+    state.out.s(after)
+  case .serial(before, after)
+    // The before and after texts share the one arena, separated by a tab.
+    kind$ = 3.0
+    state.out.s(before).c('\t').s(after)
+  case .outline(sep, after)
+    kind$ = 4.0
+    state.out.s(sep).c('\t').s(after)
+  case .none {}
+  return state.out.len
+
+// Replaces style `i`'s marker whole; 1 if replaced. `kind` is 0 none, 1 a bullet, 2 a number, 3 a
+// running number, 4 a chapter number; the text is in the typing arena. **Running and chapter
+// numbers have two texts separated by a tab** (`before\tafter`; `separator\tafter`).
+#export
+fn kspage_web_set_style_mark(i: Sz, kind: I32, len: Sz): I32
+  ensure()
+  if !state.has_style(i) || len < 0 || len > input_cap
+    return 0
+  $fresh: style.Style = sheet.styles.get(i)$
+  both: = U8[]::{ .ptr = input@, .len = len }
+  // Caution: Copy the text; the arena is rewritten on the next keystroke.
+  text: = doc_arena.dup_str(both)
+  fresh.marker = marker.Marker.none
+  if kind == 1
+    fresh.marker = marker.Marker.bullet(text)
+  else if kind == 2
+    fresh.marker = marker.Marker.number(text)
+  else if kind == 3
+    two: = split_kept(both)
+    fresh.marker = marker.Marker.serial(two.head, two.tail)
+  else if kind == 4
+    two: = split_kept(both)
+    fresh.marker = marker.Marker.outline(two.head, two.tail)
+  ed.set_look(sheet.styles.get(i), fresh)
+  return 1
+
+// ---- Headings and the table of contents ----
+
+// Writes two values into out for style `i`'s heading depth (0: not a heading) and what it
+// collects (0 none, 1 a table of contents, 2 a list of notes).
+#export
+fn kspage_web_style_outline(i: Sz, out: F32$@)
+  ensure()
+  out$ = 0.0
+  (out + 1)$ = 0.0
+  if !state.has_style(i)
+    return
+  s: = sheet.styles.get(i)
+  out$ = F32::s.outline
+  // The collection number is `Collect`'s list (0 none, 1 contents, 2 notes, 3 bars, 4 lines).
+  (out + 1)$ = state.collect_no(s.collect)
+
+// Replaces style `i`'s heading depth and what it collects, whole; 1 if replaced.
+#export
+fn kspage_web_set_style_outline(i: Sz, level: Sz, gather: I32): I32
+  ensure()
+  // The depth is accepted only within range (`kspage/model/limit`): a chapter number adds digits by
+  // it, so a huge one would be used as is; a negative is refused by the same check.
+  if !state.has_style(i) || !limit.outline_fits(level)
+    return 0
+  $fresh: style.Style = sheet.styles.get(i)$
+  fresh.outline = level
+  fresh.collect = state.collect_at(gather)
+  ed.set_look(sheet.styles.get(i), fresh)
+  return 1
+
+// Writes two values into out for style `i`'s conditional look: the comparison (0 none, 1
+// "greater than", 2 "less than", 3 "equal to") and what it is compared with. The style applied is
+// given by `kspage_web_style_when_then`.
+#export
+fn kspage_web_style_when(i: Sz, out: F32$@)
+  out$ = 0.0
+  (out + 1)$ = 0.0
+  ensure()
+  if !state.has_style(i)
+    return
+  w: = sheet.styles.get(i).when
+  (out + 1)$ = w.than
+  out$ = state.compare_no(w.how)
+
+// The name of the style that style `i` applies when the condition matches (0 when none).
+#export
+fn kspage_web_style_when_then(i: Sz): Sz
+  ensure()
+  state.out.clear()
+  if state.has_style(i)
+    state.out.s(sheet.styles.get(i).when.then)
+  return state.out.len
+
+// Replaces style `i`'s condition whole (`how` as above, the name in the `len` bytes of the typing
+// arena); 1 if replaced. **A style name is applied**, never a color or thickness directly (stored
+// directly, the same look would multiply without a name).
+#export
+fn kspage_web_set_style_when(i: Sz, how: I32, than: F32, len: Sz): I32
+  ensure()
+  if !state.has_style(i) || len < 0 || len > input_cap
+    return 0
+  $fresh: style.Style = sheet.styles.get(i)$
+  fresh.when = style_when.no_when()
+  fresh.when.how = state.compare_at(how)
+  fresh.when.than = than
+  // Caution: **Copy the name**; the typing arena is rewritten on the next call.
+  fresh.when.then = doc_arena.dup_str(U8[]::{ .ptr = input@, .len = len })
+  ed.set_look(sheet.styles.get(i), fresh)
+  return 1

@@ -1,0 +1,198 @@
+//< Timeouts on waiting (a POSIX host)
+//<
+//< It checks the three ways of writing a blocking call, one at a time.
+
+// ==========================================
+// What it checks: `take_for` returns false at the timeout when nobody gives, and the clock
+// advances by exactly that much; it returns true at once when the peer gives first. `recv_for` /
+// `send_for` behave the same. When `lock_for` gives up it returns the priority it lent the holder,
+// leaving **only what the task still waiting lent**. `wait_for` giving up keeps the bits that are
+// set. `try_take` / `try_lock` answer without advancing the clock. `ms_to_ticks` converts from the
+// declared ticks per second, **rounding up**.
+// ==========================================
+
+// When a run fails, the assert names it with `panic: … at file:line` (as in every POSIX demo).
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+import "std/verdict"
+
+// Each peer task waits on its own token (start_*) before it acts. coordinator gives the token per
+// scene, so no other scene's peer ever advances the clock.
+$g_sem: sync.Sem
+$g_start_giver: sync.Sem
+
+$g_q: sync.Queue<|I32|>
+$g_qbuf: I32[2]
+$g_start_sender: sync.Sem
+
+$g_mutex: sync.Mutex
+$g_start_holder: sync.Sem
+$g_start_mid: sync.Sem
+$g_mid_got: Bool = false
+
+$g_ev: sync.Event
+$g_start_setter: sync.Sem
+
+$tcb_coord: Task
+$tcb_giver: Task
+$tcb_sender: Task
+$tcb_holder: Task
+$tcb_mid: Task
+$tcb_setter: Task
+$stack_coord: U8[65536]
+$stack_giver: U8[65536]
+$stack_sender: U8[65536]
+$stack_holder: U8[65536]
+$stack_mid: U8[65536]
+$stack_setter: U8[65536]
+
+priv const holder_prio: I32 = 1
+priv const mid_prio: I32 = 2
+priv const coord_prio: I32 = 4
+
+fn giver(_arg: Void$@): Void //< 2. Give 2 ticks after the token
+  g_start_giver.take()
+  Task.delay(2)
+  g_sem.give()
+
+fn sender(_arg: Void$@): Void //< 3. Send 2 ticks after the token
+  g_start_sender.take()
+  Task.delay(2)
+  g_q.send(7)
+
+fn holder(_arg: Void$@): Void //< 4. The low-priority holder
+  //<
+  //< It sleeps a long time while holding the mutex (meanwhile the waiters lend it their priority).
+  g_start_holder.take()
+  g_mutex.lock()
+  Task.delay(20)
+  g_mutex.unlock()
+
+fn mid_waiter(_arg: Void$@): Void //< 4. The mid-priority waiter
+  //<
+  //< It waits with no timeout (its loan is the one still in place after coordinator gives up).
+  g_start_mid.take()
+  g_mutex.lock()
+  g_mid_got = true
+  g_mutex.unlock()
+
+fn setter(_arg: Void$@): Void //< 5. Set the remaining bit 2 ticks after the token
+  g_start_setter.take()
+  Task.delay(2)
+  g_ev.set(0x2)
+
+fn coordinator(_arg: Void$@): Void
+  // --- 1. take_for where nobody gives ---
+  verdict.start("[ksos] take_for gives up at the deadline")
+  before1: = task.current_tick()
+  got1: = g_sem.take_for(5)
+  assert(!got1, "timeout: take_for returned true though nobody gave")
+  assert(task.current_tick() == before1 + 5, "timeout: take_for did not wait exactly 5 ticks")
+  verdict
+    .pass("where nobody gives it waits 5 ticks, returns false, and the clock advances exactly 5.")
+
+  // --- 2. take_for where it comes before the timeout ---
+  verdict.start("[ksos] take_for returns as soon as the resource comes")
+  g_start_giver.give()
+  before2: = task.current_tick()
+  got2: = g_sem.take_for(10)
+  assert(got2, "timeout: take_for missed a give that came before the deadline")
+  assert(task.current_tick() == before2 + 2, "timeout: take_for kept waiting after the give")
+  verdict
+    .pass("given after 2 ticks, it returns true on the spot without waiting out the 10-tick \
+      timeout.")
+
+  // --- 3. both sides of the queue ---
+  verdict.start("[ksos] recv_for / send_for")
+  before3: = task.current_tick()
+  none3: = g_q.recv_for(3)
+  assert(none3.is_none(), "timeout: recv_for returned a value from an empty queue")
+  assert(task.current_tick() == before3 + 3, "timeout: recv_for did not wait exactly 3 ticks")
+  g_q.send(1)
+  g_q.send(2)
+  sent3: = g_q.send_for(3, 3)
+  assert(!sent3, "timeout: send_for squeezed a value into a full queue")
+  assert(g_q.recv() == 1 && g_q.recv() == 2, "timeout: send_for disturbed the queued values")
+  g_start_sender.give()
+  got3: = g_q.recv_for(10)
+  assert(got3.unwrap_or(0) == 7, "timeout: recv_for missed a send before the deadline")
+  verdict
+    .pass("empty gives none at the timeout, full gives false at the timeout, and an arrival gives \
+      some on the spot.")
+
+  // --- 4. the priority when lock_for gives up ---
+  verdict.start("[ksos] lock_for returns only the priority it lent")
+  g_start_holder.give()
+  Task.delay(1) // holder takes the mutex and sleeps
+  g_start_mid.give()
+  Task.delay(1) // mid starts waiting, and holder rises to 2
+  assert(tcb_holder.get_prio() == mid_prio, "timeout: the mid waiter did not lend its priority")
+  before4: = task.current_tick()
+  got4: = g_mutex.lock_for(3)
+  assert(!got4, "timeout: lock_for took a mutex that is still held")
+  assert(task.current_tick() == before4 + 3, "timeout: lock_for did not wait exactly 3 ticks")
+  assert(tcb_holder.get_prio() == mid_prio,
+    "timeout: lock_for giving up must leave the holder at the remaining waiter's priority")
+  Task.delay(25) // holder unlocks, then mid takes the mutex and unlocks
+  assert(g_mid_got, "timeout: the mid waiter never got the mutex")
+  assert(tcb_holder.get_prio() == holder_prio,
+    "timeout: unlock did not restore the holder's priority")
+  verdict
+    .pass("only the lending of the side that gave up is returned, and the lending of the one still \
+      waiting stays (4 → 2, and 1 once it lets go).")
+
+  // --- 5. the bits stay even where wait_for gives up ---
+  verdict.start("[ksos] wait_for leaves the bits when it gives up")
+  g_ev.set(0x1)
+  none5: = g_ev.wait_for(0x3, .all, true, 3)
+  assert(none5.is_none(), "timeout: wait_for reported .all with only bit0 set")
+  assert(g_ev.get() == 0x1, "timeout: wait_for cleared bits though it gave up")
+  g_start_setter.give()
+  got5: = g_ev.wait_for(0x3, .all, true, 10)
+  assert(got5.unwrap_or(0) == 0x3, "timeout: wait_for missed the second bit")
+  assert(g_ev.get() == 0, "timeout: wait_for did not clear the bits on success")
+  verdict
+    .pass("where they do not line up it returns none and the bits stay; where they do it returns \
+      some on the spot and clears them.")
+
+  // --- 6. try_ does not advance the clock ---
+  verdict.start("[ksos] try_take / try_lock answer without waiting")
+  before6: = task.current_tick()
+  assert(!g_sem.try_take(), "timeout: try_take took from an empty semaphore")
+  g_sem.give()
+  assert(g_sem.try_take(), "timeout: try_take missed an available count")
+  assert(g_mutex.try_lock(), "timeout: try_lock failed on a free mutex")
+  assert(!g_mutex.try_lock(), "timeout: try_lock succeeded twice on the same mutex")
+  g_mutex.unlock()
+  assert(task.current_tick() == before6, "timeout: try_ calls advanced the clock")
+  verdict.pass("taken or not, it answers on the spot, and the clock does not move.")
+
+  // --- 7. ms → ticks rounds up ---
+  verdict.start("[ksos] ms_to_ticks rounds up")
+  task.declare_tick_hz(1000)
+  assert(task.ms_to_ticks(250) == 250, "timeout: 250 ms at 1000 Hz must be 250 ticks")
+  task.declare_tick_hz(100)
+  assert(task.ms_to_ticks(10) == 1, "timeout: 10 ms at 100 Hz must be 1 tick")
+  assert(task.ms_to_ticks(15) == 2, "timeout: 15 ms at 100 Hz must round up to 2 ticks")
+  assert(task.ms_to_ticks(1) == 1, "timeout: 1 ms at 100 Hz must round up to 1 tick, not 0")
+  verdict
+    .pass("at 1000 Hz, 250 ms is 250 ticks; at 100 Hz, 15 ms is 2 ticks (and 1 ms does not come to \
+      0).")
+
+fn main()
+  g_sem.init(0)
+  g_start_giver.init(0)
+  g_q.init(g_qbuf[0]@, 2)
+  g_start_sender.init(0)
+  g_mutex.init()
+  g_start_holder.init(0)
+  g_start_mid.init(0)
+  g_ev.init()
+  g_start_setter.init(0)
+  tcb_coord.create(U8$[]::stack_coord, coordinator, null, coord_prio, "coord")
+  tcb_giver.create(U8$[]::stack_giver, giver, null, 1, "giver")
+  tcb_sender.create(U8$[]::stack_sender, sender, null, 1, "sender")
+  tcb_holder.create(U8$[]::stack_holder, holder, null, holder_prio, "holder")
+  tcb_mid.create(U8$[]::stack_mid, mid_waiter, null, mid_prio, "mid")
+  tcb_setter.create(U8$[]::stack_setter, setter, null, 1, "setter")
+  task.start_scheduler()

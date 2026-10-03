@@ -1,0 +1,523 @@
+//< The size caps, and how a file near a cap is split (not the suite)
+//<
+//< **Where a file splits is decided when it comes near the cap** (Principle 3).
+//< Caution: **Do not stop at printing a notice.** Shown only on screen, the README keeps saying
+//< "no file exceeds it" while out of date, and **nobody sees that it is** (Principle 7). [H0803]
+//< checks a function's length, and `tests/suite/conventions_test.kspls` how it is written.
+import "std/chars" // judging one character's case
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/strnum"
+import "std/verdict"
+import "tests/support/conventions_scan" as scan + { Sample }
+import "tests/support/harness"
+
+priv const max_file_lines: Sz = 1000
+priv const max_fn_lines: Sz = 300
+priv const max_nest: Sz = 8
+
+priv const warn_file_lines: Sz = 900 //< the line count that marks a file as near the cap
+  //<
+  //< **It names them without failing**: the cap is a cliff crossed mid-work, where a split cuts by
+  //< line count rather than by reason (Principle 3). [H0803] does the same for a function.
+
+priv fn size_exempt(rel: U8[]): Bool //<
+  //< The test input that makes sure a depth or a length is refused at the cap
+  //<
+  //< Caution: **Do not add generated files.** ksplc writes `ksplc/seed.c`, so splitting by reason
+  //< applies to the generator. The test input for a type's depth is not listed here.
+  return rel.starts_with("ksplc/tests/negative/deep_") && rel.ends_with(".kspl") ||
+    rel.equals("ksplc/tests/lint/long_function.kspls") || rel.equals("ksplc/seed.c")
+
+// ==========================================
+// 1. The size (Principle 3)
+// ==========================================
+
+priv fn fn_name_at(line: U8[]): U8[] //<
+  //< The name of the function that line declares, or empty where it declares none
+  //<
+  //< Caution: A function ends where the depth returns to what it was before the function; with 0
+  //< instead, a method inside an `impl X { fn f() {...} }` runs to the impl's close. Count only
+  //< lines where the depth **goes up**: counting a `{` closed on the same line (`U8[]::{ … }`)
+  //< raises the depth on a line that nests nothing.
+  t: = line.trim_start()
+  $rest: = t.strip_prefix("pub ").strip_prefix("priv ").trim_start()
+  if !rest.starts_with("fn ")
+    return ""
+  rest = rest.sub_from(3)
+  $i: Sz = 0
+  for i < rest.len && (rest[i].is_alnum() || rest[i] == '_')
+    i += 1
+  return rest.sub(0, i)
+
+priv fn check_sizes(arena: Arena$@)
+  $over_file: = List<|U8[]|>.new(arena)
+  $over_fn: = List<|U8[]|>.new(arena)
+  $over_nest: = List<|U8[]|>.new(arena)
+  $near_file: = List<|U8[]|>.new(arena)
+  $files: Sz = 0
+  $fns: Sz = 0
+  // Caution: **Apply the one-file cap to hand-written C and the page's template, stylesheet and JS
+  // too**, or they grow past it unseen. A function's length and nesting are checked only in KSPL
+  // (C holds no `fn `).
+  specs: = scan.kspl_specs_with(U8[][]::{ "*.c", "*.h", "*.html", "*.css", "*.js", "*.mjs" }, arena)
+  for rel in harness.tracked_matching(specs)
+    if size_exempt(rel)
+      continue
+    files += 1
+    $lines: = harness.read_under_root(rel).lines(arena)
+    if lines.len > max_file_lines
+      over_file
+        .push(arena.text().s(rel).s(": \{lines.len\} lines (cap \{max_file_lines\})").take())
+    // Caution: **Include the files over the cap too**, or they escape without a written split.
+    if lines.len > warn_file_lines
+      near_file.push(rel)
+    if !rel.ends_with(".kspls") && !rel.ends_with(".kspl")
+      continue
+    $depth: Sz = 0
+    $fn_start: Sz = 0
+    $fn_name: U8[] = ""
+    $fn_base: Sz = 0
+    for i in Range.asc(lines.len)
+      code: = scan.strip_code(lines.get(i), arena)
+      opened: = scan.count_char(code, '{')
+      closed: = scan.count_char(code, '}')
+      if opened > closed && depth + opened - closed > max_nest
+        over_nest
+          .push(arena.text().s(rel).s(":\{i + 1\}: nested ")
+          .s("\{depth + opened - closed\} deep (cap \{max_nest\})").take())
+      if fn_start == 0
+        name: = fn_name_at(lines.get(i))
+        if name.len > 0 && opened > closed
+          fns += 1
+          fn_start = i + 1
+          fn_name = name
+          fn_base = depth
+      else if depth + opened - closed <= fn_base
+        span: = i + 1 - fn_start + 1
+        if span > max_fn_lines
+          over_fn
+            .push(arena.text().s(rel).s(":\{fn_start\}: ").s(fn_name)
+            .s(" is \{span\} lines (cap \{max_fn_lines\})").take())
+        fn_start = 0
+      depth += opened - closed
+  n1: = arena.text().s("one file within \{max_file_lines\} lines (Principle 3)").take()
+  verdict.check_list(n1, files, "files", over_file@, "")
+  n2: = arena.text().s("one function within \{max_fn_lines\} lines (Principle 3)").take()
+  verdict.check_list(n2, fns, "functions", over_fn@, "")
+  check_plans(near_file@, arena)
+  n3: = arena.text().s("a block nests within \{max_nest\} deep (Principle 3)").take()
+  verdict.check_list(n3, files, "files", over_nest@, "")
+
+// ==========================================
+// How a file near the cap splits
+// ==========================================
+
+priv const plan_head: U8[] = "Files near the limit and how they split" //<
+  //< The heading of the section that says how a file splits
+  //<
+  //< Below is the sentence that says explicitly that the section is empty. **Both are text from
+  //< the README**: change these two and the README in the same commit.
+priv fn plan_readme_of(rel: U8[], arena: Arena$@): U8[] //<
+  //< The README that says how a file splits: the one in the file's top-level folder
+  //<
+  //< For example, `ksplc/lsp/nav.kspls` is planned in `ksplc/README.md`.
+  cut: = rel.find_char('/')
+  return ("README.md" if cut < 0
+    else arena.text().s(rel.sub(0, cut)).s("/README.md").take())
+priv const none_lead: U8[] = "No file" //<
+  //< The two texts of the sentence that says the section is empty
+  //<
+  //< Caution: **Make both texts distinctive.** Matching `lines` alone hits text about the cap
+  //< itself, such as "1000 lines per file".
+priv const none_tail: U8[] = "exceeds 900 lines"
+
+priv fn claims_none(line: U8[], _arena: Arena$@): Bool //<
+  //< Whether that line says explicitly "there is no file over it here"
+  //<
+  //< **The line count itself is not checked here** (`check_plans` below does); built into the
+  //< judgment, it would make the sample table impossible to write.
+  return line.find_str(none_lead) >= 0 && line.find_str(none_tail) >= 0
+
+// The texts that hit `claims_none` and the texts that do not.
+priv const none_samples: Sample[5] = ::{
+  Sample::{ .text = "**No file in ksplc exceeds 900 lines today.** Next…", .hits = true },
+  Sample::{ .text = "No file in std exceeds 900 lines", .hits = true },
+  Sample::{ .text = "The files that exceed 900 lines are the following two", .hits = false },
+  Sample::{ .text = "There is no file near the limit", .hits = false },
+  Sample::{ .text = "1000 lines per file", .hits = false },
+}
+
+priv fn heading_depth(line: U8[]): Sz //<
+  //< The depth (the count of `#`) if that line is a heading, and 0 otherwise
+  $n: Sz = 0
+  for n < line.len && line[n] == '#'
+    n += 1
+  return 0 if n <= 0 || n >= line.len || line[n] != ' ' else n
+
+priv fn plan_body(readme: U8[], arena: Arena$@): U8[] //<
+  //< The inside of the README's splitting section
+  //<
+  //< Caution: **Do not decide it by the heading's depth.** Limited to `## `, a README that puts the
+  //< section one level deeper comes out empty, and a written split is called "not named".
+  $out: = Str_builder.new()
+  defer out.free()
+  $depth: Sz = 0
+  ls: = readme.lines(arena)
+  for ln in ls
+    d: = heading_depth(ln)
+    if d > 0
+      if depth > 0 && d <= depth
+        depth = 0
+      if ln.find_str(plan_head) >= 0
+        depth = d
+      continue
+    if depth > 0
+      out.s(ln).c('\n')
+  return arena.dup_str(out.slice())
+
+priv fn planned(readme: U8[], rel: U8[], arena: Arena$@): Bool //<
+  //< Whether that README's splitting section names that path
+  //<
+  //< It accepts a path relative to the repository or to the README's own folder.
+  body: = plan_body(readme, arena)
+  if body.len == 0
+    return false
+  if body.find_str(rel) >= 0
+    return true
+  cut: = rel.find_char('/')
+  return cut >= 0 && body.find_str(rel.sub_from(cut + 1)) >= 0
+
+priv struct Plan_sample //< the texts that hit `planned` and the texts that do not
+  //<
+  //< **A name outside the section is not a hit on its own**: that section is where the split is
+  //< written.
+  readme: U8[]
+  rel: U8[]
+  hits: Bool
+
+priv const plan_samples: Plan_sample[6] = ::{
+  Plan_sample::{ .readme = "## Files near the limit and how they split\n\n`a/b.kspl` puts X out.\n",
+    .rel = "a/b.kspl", .hits = true },
+  // **The section one level deeper** (limited to `## `, it would read as empty).
+  Plan_sample::{ .readme =
+    "## Putting a hand in\n\n### Files near the limit and how they split\n\n`a/b.kspl` splits X.\n",
+    .rel = "a/b.kspl", .hits = true },
+  // **A subheading inside the section does not end it.**
+  Plan_sample::{ .readme =
+    "### Files near the limit and how they split\n\n#### How\n\n`a/b.kspl` splits X.\n",
+    .rel = "a/b.kspl", .hits = true },
+  Plan_sample::{ .readme = "## Files near the limit and how they split\n\n`a/c.kspl` puts X out.\n",
+    .rel = "a/b.kspl", .hits = false },
+  Plan_sample::{ .readme = "## Further reading\n\nRead `a/b.kspl`.\n", .rel = "a/b.kspl",
+    .hits = false },
+  Plan_sample::{ .readme =
+    "## Files near the limit and how they split\n\n`a/b.kspl` is X.\n\n## Next\n\n`a/c.kspl`\n",
+    .rel = "a/c.kspl", .hits = false },
+}
+
+priv fn covered_by(readme_rel: U8[]): U8[] //<
+  //< From a README's path, the prefix it is responsible for (for `a/b/README.md`, `a/b/`)
+  cut: = readme_rel.rfind_char('/')
+  return "" if cut < 0 else readme_rel.sub(0, cut + 1)
+
+priv fn claim_under(line: U8[], readme_rel: U8[], arena: Arena$@): U8[] //<
+  //< The prefix one "there is no file over it" line speaks for
+  //<
+  //< Caution: **The root README's claim carries its own scope**: it covers every package, so read
+  //< by its folder the line matches no file and passes next to one over the cap (Principle 8). The
+  //< scope comes from the claim's words ("No file in kspeg exceeds 900 lines" is `kspeg/`'s); when
+  //< it names none, it is its README's folder.
+  lead: = line.find_str(none_lead)
+  tail: = line.find_str(none_tail)
+  if lead >= 0 && tail > lead
+    from: = Sz::lead + none_lead.len
+    mid: = line.sub(from, tail - from).trim_spaces()
+    if mid.starts_with("in ")
+      name: = mid.sub_from(3).trim_spaces()
+      if name.len > 0 && name.find_char(' ') < 0
+        return arena.text().s(name).s("/").take()
+  return covered_by(readme_rel)
+
+priv struct Scope_sample //< one claim, and the prefix it should speak for
+  line: U8[]
+  readme: U8[]
+  under: U8[]
+
+priv const scope_samples: Scope_sample[4] = ::{
+  Scope_sample::{ .line = "**No file in kspeg exceeds 900 lines today.**", .readme = "README.md",
+    .under = "kspeg/" },
+  // **A claim naming no folder falls back to its own folder.**
+  Scope_sample::{ .line = "No file exceeds 900 lines here.", .readme = "a/b/README.md",
+    .under = "a/b/" },
+  // **What comes between is not one word, so it names no folder.**
+  Scope_sample::{ .line = "No file of the two exceeds 900 lines", .readme = "a/b/README.md",
+    .under = "a/b/" },
+  Scope_sample::{ .line = "No file in std exceeds 900 lines", .readme = "README.md",
+    .under = "std/" },
+}
+
+priv fn check_plans(near: List<|U8[]|>@, arena: Arena$@) //<
+  //< Whether a file near the cap is named in the README with how it splits
+  //<
+  //< **Two things are checked together**: (1) the section names the file that went over; (2) under
+  //< a README saying "there is no file over it", none has. With only one, a name next to a stale
+  //< "there is none" passes green.
+  $bad: = List<|U8[]|>.new(arena)
+  for rel in near
+    readme_rel: = plan_readme_of(rel, arena)
+    readme: = harness.read_under_root(readme_rel)
+    if readme.len == 0 || !planned(readme, rel, arena)
+      bad
+        .push(arena.text().s(rel).s(" is over \{warn_file_lines\} lines and \"").s(plan_head)
+        .s("\" in ").s(readme_rel).s(" does not name it").take())
+  n1: = arena.text().s("a file over \{warn_file_lines\} lines has how it splits in the README")
+    .take()
+  verdict.check_list(n1, near.len, "files", bad@,
+    "where it splits is decided when it comes near the cap (Principle 3)")
+
+  $stale: = List<|U8[]|>.new(arena)
+  $claims: Sz = 0
+  for readme_rel in harness.tracked_matching(U8[][]::{ "*README.md" })
+    ls: = harness.read_under_root(readme_rel).lines(arena)
+    for ln in ls
+      if !claims_none(ln, arena)
+        continue
+      claims += 1
+      under: = claim_under(ln, readme_rel, arena)
+      // Caution: **Check the line count here too.** The README's number and `warn_file_lines` are
+      // written separately, so if not tied, one of them changes alone (Principle 4).
+      if ln.find_str(arena.text().s("\{warn_file_lines\}").take()) < 0
+        stale
+          .push(arena.text().s(readme_rel).s(": the \"").s(none_lead)
+          .s("\" line says a number other than \{warn_file_lines\}").take())
+      for rel in near
+        if under.len > 0 && rel.starts_with(under)
+          stale
+            .push(arena.text().s(readme_rel).s(": it says \"there is none\" and ").s(rel)
+            .s(" is over it").take())
+  verdict.check_list("a README saying \"no file is over it\" really has not one", claims, "lines",
+    stale@, "where one is over, delete that sentence and write how it splits")
+
+priv fn check_fires(arena: Arena$@)
+  $h: = scan.misjudged(Sample[]::none_samples, claims_none, arena)
+  verdict.check_list("the judgment of \"no file is over it\" can fire", none_samples.len, "samples",
+    h@, "the table of what is hit and what is not is `none_samples`")
+  $k: = List<|U8[]|>.new(arena)
+  for s in plan_samples
+    if planned(s.readme, s.rel, arena) != s.hits
+      want: = "hit" if s.hits else "not hit"
+      k
+        .push(arena.text().s("\"").s(s.rel).s("\" should be ").s(want)
+        .s(" and came out the other way").take())
+  verdict.check_list("the judgment of whether the splitting section names it can fire",
+    plan_samples.len, "samples", k@, "the table of what is hit and what is not is `plan_samples`")
+  $u: = List<|U8[]|>.new(arena)
+  for s in scope_samples
+    got: = claim_under(s.line, s.readme, arena)
+    if !got.equals(s.under)
+      u
+        .push(arena.text().s("\"").s(s.line).s("\" should speak for ").s(s.under)
+        .s(" and came out ").s(got).take())
+  verdict.check_list("the reading of what a \"there is none\" line speaks for can fire",
+    scope_samples.len, "samples", u@, "the table of claims is `scope_samples`")
+
+// ==========================================
+// A comment line is inside the source file's width **A width nobody checks drifts silently.** A
+// line past it is one the reader scrolls sideways to finish.
+// ==========================================
+
+priv const width_file: U8[] = "ksplc/fmt/style.kspls" //<
+  //< The formatter's source, where the width is read from
+  //<
+  //< **The number is the formatter's, read from its source.** `column_limit` in
+  //< `ksplc/fmt/style.kspls` is the source file's width, code and prose alike, so this check
+  //< takes it from there rather than holding a second copy (Principle 4).
+priv const width_mark: U8[] = ".column_limit = "
+
+priv fn source_width(arena: Arena$@): Sz //< the width the formatter keeps
+  //<
+  //< Where it cannot be read, 0 — and the check below fails rather than passing on a number of its
+  //< own.
+  for got in scan.find_all(harness.read_under_root(width_file), width_mark, ",", arena)
+    return got.trim_spaces().parse_size(0) catch 0
+  return 0
+
+fn disp_width(text: U8[]): Sz //< one line's width in **display** columns
+  //<
+  //< Caution: **Do not count bytes**: `✅` and CJK take two columns and three bytes. The decoding
+  //< is here, not in `std/chars` (a byte width there), since code there costs every program
+  //< (`ksplc/tests/suite/thin_use_test.kspls`).
+  $w: Sz = 0
+  $i: Sz = 0
+  for i < text.len
+    step: = text.next_codepoint(i)
+    if step <= 0
+      break
+    w += cp_width(codepoint_at(text, i, step))
+    i += step
+  return w
+
+priv fn codepoint_at(text: U8[], at: Sz, step: Sz): I32 //<
+  //< The code point at `at`, whose encoding runs `step` bytes
+  b0: = I32::(text.ptr + at)$
+  if step == 1
+    return b0
+  lead: = (b0 & 0x1F) if step == 2 else (b0 & 0x0F) if step == 3 else (b0 & 0x07)
+  $cp: = lead
+  for k in Range.asc(step - 1)
+    cp = cp * 64 + (I32::(text.ptr + at + 1 + k)$ & 0x3F)
+  return cp
+
+priv fn cp_width(cp: I32): Sz //<
+  //< How many columns a code point takes on a terminal
+  //<
+  //< **Ambiguous counts one.** A terminal shows `—` and `§` one column wide, and counting them two
+  //< would call a line wide that is not.
+  //<
+  //< The wide blocks and the marks followed by a `U+FE0F` count two, and the selector itself
+  //< counts none.
+  if cp == 0xFE0F
+    return 0
+  if cp == 0x26A0 || cp == 0x2705
+    return 2 // a mark that is Neutral by itself and two wide with the selector behind it
+  wide: =
+    (cp >= 0x1100 && cp <= 0x115F) || (cp >= 0x2E80 && cp <= 0x303E) ||
+    (cp >= 0x3041 && cp <= 0x33FF) || (cp >= 0x3400 && cp <= 0x4DBF) ||
+    (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0xA000 && cp <= 0xA4CF) ||
+    (cp >= 0xAC00 && cp <= 0xD7A3) || (cp >= 0xF900 && cp <= 0xFAFF) ||
+    (cp >= 0xFE30 && cp <= 0xFE6F) || (cp >= 0xFF00 && cp <= 0xFF60) ||
+    (cp >= 0xFFE0 && cp <= 0xFFE6) || (cp >= 0x1F300 && cp <= 0x1FAFF) ||
+    (cp >= 0x20000 && cp <= 0x3FFFD)
+  return 2 if wide else 1
+
+priv fn comment_body(line: U8[]): U8[] //<
+  //< The comment body: what comes after the `//`, without the line's own indentation
+  t: = line.trim_start()
+  return "" if !t.starts_with("//") else t.sub_from(2)
+
+priv fn width_held(line: U8[], limit: Sz): U8[] //< why a line past the width is allowed
+  //<
+  //< Empty means it is not.
+  //< Caution: **Exempt a form here only where it cannot be narrowed at all**, never because
+  //< narrowing it reads worse. Let an ordinary paragraph in and the check stops meaning anything.
+  body: = comment_body(line)
+  t: = body.trim_spaces()
+  if t.len == 0
+    return "a bare //"
+  // An aligned run (a register map, a pin list, a command table, a hanging continuation): its
+  // columns carry the meaning.
+  if body.starts_with("  ")
+    return "an aligned sub-line"
+  if t.starts_with("|")
+    return "a markdown table row"
+  if scan.is_divider(t)
+    return "a section divider"
+  // `// EXPECT:` and `// ARGS:` are read a line at a time by the gates, so wrapping one breaks it.
+  if scan.marker_head(t)
+    return "a marker a machine reads"
+  if t.starts_with("* ") || t.starts_with("- ") || numbered_head(t)
+    return "a list item (its wrap wants a hanging indent)"
+  $longest: Sz = 0
+  $at: Sz = 0
+  for at < t.len
+    for at < t.len && t[at] == ' '
+      at += 1
+    $end: = at
+    for end < t.len && t[end] != ' '
+      end += 1
+    if end > at
+      w: = disp_width(t.sub(at, end - at))
+      if w > longest
+        longest = w
+    at = end
+  indent: = line.len - line.trim_start().len
+  if indent + 3 + longest > limit
+    return "one word already crosses it"
+  // Caution: **Do not exempt a comment at Principle 7's cap from the width.** Six-line comments
+  // are a large share of the tree, so the exemption would swallow the check (Principle 8); such a
+  // comment is reworded, not widened.
+  return ""
+
+priv fn numbered_head(t: U8[]): Bool
+  $i: Sz = 0
+  for i < t.len && t[i].is_digit()
+    i += 1
+  return i > 0 && i + 1 < t.len && t[i] == '.' && t[i + 1] == ' '
+
+priv const width_floor: Sz = 30000
+
+priv fn check_width(arena: Arena$@)
+  limit: = source_width(arena)
+  $bad: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  if limit == 0
+    bad
+      .push(arena.text().s(width_file).s(": `").s(width_mark)
+      .s("` cannot be read, so the width is not known").take())
+  for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    $lines: = harness.read_under_root(rel).lines(arena)
+    $i: Sz = 0
+    for i < lines.len
+      if !lines.get(i).trim_start().starts_with("//")
+        i += 1
+        continue
+      $j: = i
+      for j < lines.len && lines.get(j).trim_start().starts_with("//")
+        j += 1
+      for k in Range.asc(j - i)
+        line: = lines.get(i + k)
+        seen += 1
+        w: = disp_width(line)
+        if w <= limit || limit == 0
+          continue
+        if width_held(line, limit).len > 0
+          continue
+        bad
+          .push(arena.text().s(rel).s(":\{i + k + 1\}: \{w\} columns (the width is \{limit\})")
+          .take())
+      i = j
+  // Caution: **Fail where the count comes out short.** Break the reading of a comment line and
+  // every line vanishes, and the check goes green having checked nothing.
+  if seen < width_floor
+    bad
+      .push(arena.text()
+      .s("read \{seen\} comment lines (the floor is \{width_floor\}) — the reading broke").take())
+  verdict.check_list("a comment line is inside the source file's width", seen, "comment lines",
+    bad@, "narrow it, or move the background to the DESIGN.md side")
+
+priv const hover_width_file: U8[] = "ksplc/lsp/spell.kspls" //<
+  //< Where the hover's one-line signature holds its own copy of the width
+  //<
+  //< The copy must agree with the formatter's width. If they differ, the hover breaks a signature
+  //< the source keeps on one line or keeps one it broke, and neither shows as a failure, only as a
+  //< hover unlike the file.
+priv const hover_width_mark: U8[] = "priv const sig_one_line_max: Sz = "
+
+priv fn check_hover_width(arena: Arena$@)
+  limit: = source_width(arena)
+  $bad: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  // **The declaration closes on the line, not on a `;`**: the default notation writes no
+  // terminator, and the `seen == 0` branch below reports "nothing read" explicitly.
+  for got in scan.find_all(harness.read_under_root(hover_width_file), hover_width_mark, "\n", arena)
+    seen += 1
+    n: = got.trim_spaces().parse_size(0) catch 0
+    if n != limit || limit == 0
+      bad
+        .push(arena.text().s(hover_width_file).s(": the hover lays out past \{n\}, the formatter ")
+        .s("wraps at \{limit\}").take())
+  if seen == 0
+    bad
+      .push(arena.text().s(hover_width_file).s(": `").s(hover_width_mark)
+      .s("` cannot be read, so the two widths cannot be held together").take())
+  verdict.check_list("the hover breaks a signature at the width the formatter wraps at", seen,
+    "widths", bad@, "move both numbers, or take the copy out")
+
+fn run(arena: Arena$@)
+  check_width(arena)
+  check_hover_width(arena)
+  check_fires(arena)
+  check_sizes(arena)

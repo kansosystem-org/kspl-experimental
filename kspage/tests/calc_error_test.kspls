@@ -1,0 +1,84 @@
+import "kspage/expr/calc"
+import "kspage/model/doc" { Doc }
+import "kspage/tests/base"
+import "kspage/tests/calc_test" as book
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// kspage: checks that a formula's error shows as a mark **inside an argument** too.
+// A function and a method pass an argument's error straight through; silently turned into a
+// number, a typo would become a value (`Day.of(x, 1, 1)` becoming some date).
+// ==========================================
+
+fn test_a_missing_paren_or_comma_is_a_syntax_error() //<
+  //< The closing `)` and the separating `,` cannot be left out
+  //<
+  //< Left out, a formula read partway would pass with another meaning.
+  verdict
+    .start("[kspage/calc] leaving out the closing bracket and the parting mark being refused \
+      test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = d.add_block("table")
+  r: = book.add_row(t)
+  book.add_cell(r, "=1.5.round(1")
+  book.add_cell(r, "=Day.of(2026, 8 18)")
+  book.add_cell(r, "=Day.of(2026, 8, 18")
+
+  calc.recalc(d, base.grid_sheet(arena))
+  assert(book.cell_text(t, 0, 0).equals("#SYNTAX!"), "leaving out a method's `)` gives #SYNTAX!")
+  assert(book.cell_text(t, 0, 1).equals("#SYNTAX!"), "leaving out an argument's `,` gives #SYNTAX!")
+  assert(book.cell_text(t, 0, 2).equals("#SYNTAX!"), "leaving out a function's `)` gives #SYNTAX!")
+  verdict
+    .pass("neither the bracket nor the parting mark can be left out, and a formula that leaves one \
+      out becomes #SYNTAX!.")
+
+fn test_a_broken_argument_of_day_of_is_carried_out() //<
+  //< Whichever of `Day.of`'s three arguments holds the error, that error comes out
+  verdict.start("[kspage/calc] a mistake in Day.of's argument coming straight out test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = d.add_block("table")
+  r0: = book.add_row(t)
+  book.add_cell(r0, "text")
+  r1: = book.add_row(t)
+  book.add_cell(r1, "=Day.of(A1, 1, 1)")
+  book.add_cell(r1, "=Day.of(2026, Z9, 1)")
+  book.add_cell(r1, "=Day.of(2026, 1, Z9)")
+
+  calc.recalc(d, base.grid_sheet(arena))
+  assert(book.cell_text(t, 1, 0).equals("#VALUE!"), "a year that is no number gives #VALUE!")
+  assert(book.cell_text(t, 1, 1).equals("#REF!"),
+    "a month pointing at a cell that is not there gives #REF!")
+  assert(book.cell_text(t, 1, 2).equals("#REF!"),
+    "a day pointing at a cell that is not there gives #REF!")
+  verdict.pass("Day.of does not make a mistaken argument a date; it puts that mistake out.")
+
+fn test_a_method_on_a_broken_value_is_carried_out() //<
+  //< A method on a value that holds an error returns that error
+  //<
+  //< This covers both rounding and the operations that read a part out of a date.
+  verdict.start("[kspage/calc] a method on a mistaken value putting that mistake out test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = d.add_block("table")
+  r0: = book.add_row(t)
+  book.add_cell(r0, "text")
+  r1: = book.add_row(t)
+  book.add_cell(r1, "=A1.round(0)")
+  book.add_cell(r1, "=A1.year()")
+  book.add_cell(r1, "=Z9.month()")
+
+  calc.recalc(d, base.grid_sheet(arena))
+  assert(book.cell_text(t, 1, 0).equals("#VALUE!"),
+    "rounding a value that is no number gives #VALUE!")
+  assert(book.cell_text(t, 1, 1).equals("#VALUE!"),
+    "the year of a value that is no number gives #VALUE!")
+  assert(book.cell_text(t, 1, 2).equals("#REF!"),
+    "the month of a cell that is not there gives #REF!")
+  verdict.pass("a method does not make a mistaken value a number; it puts that mistake out.")

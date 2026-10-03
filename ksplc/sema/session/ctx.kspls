@@ -1,0 +1,696 @@
+import "ksplc/base/ast" { Ast_node, Loc, is_anon_env_type, is_anon_fn_name }
+import "ksplc/base/core" as base_core
+import "ksplc/base/diag" as base_diag
+import "ksplc/base/lint_codes" as base_lint_codes
+import "ksplc/sema/session/c_boundary" as sema_session_c_boundary
+import "ksplc/sema/session/import_table" as sema_session_import_table
+import "ksplc/sema/session/state" { Generic_arg, Alias_info, Import_symbol_info, Pending_inst,
+  Pending_constraint, Pending_methods, Trait_inst, Diagnostic_counts, Generic_state, Mono_state,
+  Alias_state, Import_hit, Import_symbol_state, Lint_setting_entry, Type_layout, Diag_state,
+  Layout_state, Resolving_state }
+import "ksplc/sema/type/display" as sema_type_display
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
+import "std/chars"
+import "std/ds" { List, Map }
+import "std/str" { Str_builder }
+
+struct Jump_label
+  name: U8[]
+  is_loop: Bool
+  name_node: Ast_node$@ //<
+    //< The identifier naming the label where one is written, null elsewhere
+    //<
+    //< A `break` / `continue` that names it points here (the editor's jump uses it).
+  stmt: Ast_node$@ //< the statement a `break` to this level leaves (`mark_left_by_break`)
+
+struct Fn_ctx
+  name: U8[]
+  ret_id: I32
+  impl_name: U8[]
+  fallback_type: I32
+  catch_depth: Sz
+  in_fallback_value: Bool //<
+    //< True only while a `fallback`'s alternative value is analysed.
+    //<
+    //< **It limits to here the rule that lets a non-returning call (`#noreturn`) stand in a value
+    //< position** (sema/body/coerce.kspls). Widened, `return panic(…);` would pass too, and genc
+    //< would emit the C `return <Void>`.
+  catch_value_unread: Bool //<
+    //< True only while an expression whose value nobody can read is analysed
+    //<
+    //< That is a bare expression statement, or a binding whose name starts with `_`. **A catch
+    //< block there needs no `fallback`**, because the zero it would produce reaches no reader.
+    //< Caution: **The catch that reads the flag clears it.** Left set, a `catch` nested in that
+    //< expression's arguments would get the exemption, and there the value is read.
+  in_defer: Bool
+  defer_boundary: Sz
+  literal_negated: Bool //<
+    //< Whether the literal being inferred is directly under a unary minus.
+    //<
+    //< `-1` is a unary minus on the literal `1`, so without this the range check rejects a correct
+    //< minimum such as `I8 = -128`. Only the unary minus sets it, and only over a literal (saved
+    //< and restored).
+  effective_vis: sema_type_scope.Visibility //<
+    //< The effective visibility of the function being analysed
+    //<
+    //< For a method it is min(the impl's target type, the method itself). check_type_vis_leak
+    //< compares the return type's visibility with it.
+
+enum Sema_error
+  analysis_failed
+  not_constant
+  division_by_zero
+  invalid_argument
+  nesting_too_deep //<
+    //< The constant fold was stopped at the depth limit
+    //<
+    //< The limit is max_constexpr_depth in sema/decl/eval.kspls.
+    //< Caution: **Keep it apart from not_constant**, a normal result in a speculative fold. Merged
+    //< into it, the cutoff reaches the user as an unrelated diagnostic, such as a wrong array size
+    //< ("Implementation limits" in docs/SPEC-language.md).
+
+struct Sema_ctx
+  symtab: sema_type_scope.Symbol_table$@
+  fn_ctx: Fn_ctx
+  source: U8$[]
+  file_name: U8[]
+  main_file: U8[] //<
+    //< The file the lint or the compilation targets
+    //<
+    //< It is kept separately because set_current_file changes file_name.
+  env: sema_type_env.Env$@
+  generics: Generic_state
+  mono: Mono_state
+  aliases: Alias_state
+  import_symbols: Import_symbol_state
+  import_reach: Map<|U8[], Import_hit|>$@ //<
+    //< "importing file::imported file" -> the line that imports it (build_import_reach)
+    //<
+    //< Null until is_file_imported first asks, and again whenever an import line is added.
+  diags: Diag_state
+  suppress_errors: Bool
+  bodies_everywhere: Bool //<
+    //< Whether every file's function bodies are checked, or only `main_file`'s.
+  source_map: Map<|U8[], U8$[]|>$@ //< every loaded file's source by name, for a diagnostic's line
+  jump_stack: List<|Jump_label|>$@ //< the loops and labelled blocks enclosing the statement
+  scratch: Str_builder //< the one builder in which a diagnostic's message is assembled
+  priv in_generic_instance: Bool //<
+    //< Whether a monomorphized template body is being analysed
+    //<
+    //< That is while sema/body/infer.kspls's pending queue is drained. Read it only through
+    //< is_instantiating().
+  layout: Layout_state
+  resolving: Resolving_state
+  infer_expr_fn: fn(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error //<
+    //< Hands an expression's type inference to the layer above (ksplc/sema/body)
+    //<
+    //< **This is the only way decl can call body**: if decl imported body, parse would reject it
+    //< as a circular import across directories (ksplc/parse/load.kspls). Only `sizeof(<expr>)`
+    //< needs it, since decl's constant folding (an array length, an enum tag, `#align`) runs before
+    //< inference.
+    //< Caution: **Do not add more uses.** Each one blurs the layering between decl and body.
+
+impl Sema_ctx
+  fn find_generic_arg(r: Self$@, param_name: U8[]): Option<|Generic_arg|> //<
+    //< Looks up the current binding of a type variable by name
+    //<
+    //< **This is the only function that looks up a binding by name.** **Search from the end:**
+    //< instantiations nest, and the same name (`T`) is pushed once per level
+    //< (`Keep<|Keep<|List_seq<|T|>, T|>, T|>`).
+    //< Caution: **Do not copy the search elsewhere.** With two copies, a wrong direction in one
+    //< surfaces only as "the same tree resolved two ways gives different types".
+    for j in Range.desc(r.generics.args.len)
+      g_arg: = r.generics.args.get(j)
+      if r.env.get_str(g_arg.param_name_id).equals(param_name)
+        return Option<|Generic_arg|>.some(g_arg)
+    return Option<|Generic_arg|>.none
+
+  fn new(source: U8$[], file_name: U8[], env: sema_type_env.Env$@,
+    global_scope: Map<|I32, Sema_symbol$@|>$@, source_map: Map<|U8[], U8$[]|>$@): Sema_ctx
+    symtab: = sema_type_scope.Symbol_table.new(global_scope)
+    symtab.current_file = env.file_env_for(file_name)
+
+    return Sema_ctx::{
+      .symtab = symtab,
+      .fn_ctx = Fn_ctx::{ .name = "", .impl_name = "" },
+      .source = source,
+      .file_name = file_name,
+      .main_file = file_name,
+      .env = env,
+      .generics = Generic_state::{
+        .templates = base_core.arena
+          .create(Map<|U8[], Ast_node$@|>.new_with_cap(256, null)),
+        .impls = base_core.arena.create(List<|Ast_node$@|>.new()),
+        .trait_insts = List<|Trait_inst|>.create(base_core.arena),
+        .args = base_core.arena.create(List<|Generic_arg|>.new()),
+        .pending = List<|Pending_inst|>.create(base_core.arena),
+      },
+      .mono = Mono_state::{
+        .trait_inst_seen = base_core.arena
+          .create(Map<|U8[], Bool|>.new(base_core.arena)),
+        .pending_methods = List<|Pending_methods|>.create(base_core.arena),
+        .pending_constraints = List<|Pending_constraint|>.create(base_core.arena),
+        .deferred_methods = base_core.arena
+          .create(Map<|I32, Pending_methods|>.new(base_core.arena)),
+        .constraint_failed = base_core.arena
+          .create(Map<|U8[], Bool|>.new(base_core.arena)),
+        .current_inst_name = "",
+      },
+      .aliases = Alias_state::{
+        .files = base_core.arena
+          .create(Map<|U8[], Alias_info$@|>.new_with_cap(64, null)),
+        .withheld = base_core.arena.create(Map<|U8[], U8[]|>.new_with_cap(16, null)),
+      },
+      .import_symbols = Import_symbol_state::{
+        .files = base_core.arena
+          .create(Map<|U8[], Import_symbol_info$@|>.new_with_cap(64, null)),
+      },
+      .diags = Diag_state::{
+        .counts = Diagnostic_counts::{ .codes = List<|U8[]|>.create(base_core.arena) },
+        .reported = base_core.arena.create(Map<|U8[], I32|>.new_with_cap(64, null)),
+        .undefined_at = base_core.arena.create(Map<|U8[], Bool|>.new_with_cap(16, null)),
+        .lint_settings = List<|Lint_setting_entry|>.create(base_core.arena),
+        .line_starts = base_core.arena
+          .create(Map<|U8[], List<|Sz|>$@|>.new(base_core.arena)),
+      },
+      .suppress_errors = false,
+      // Every caller but the editor wants every body; the editor turns it off per document.
+      .bodies_everywhere = true,
+      .source_map = source_map,
+      .jump_stack = base_core.arena.create(List<|Jump_label|>.new()),
+      .scratch = Str_builder.new(),
+      .layout = Layout_state::{
+        .memo = base_core.arena.create(Map<|I32, Type_layout|>.new_with_cap(64, null)),
+      },
+      .resolving = Resolving_state::{
+        .aliases = base_core.arena.create(List<|U8[]|>.new()),
+        .consts = base_core.arena.create(Map<|Sz, Bool|>.new()),
+        .registries = List<|I32|>.create(base_core.arena),
+      },
+    }
+
+  fn free(r: Self$@)
+    r.symtab.free()
+    r.generics.templates.free()
+    r.generics.impls.free()
+    r.generics.args.free()
+    r.aliases.files.free()
+    r.aliases.withheld.free()
+    r.import_symbols.files.free()
+    r.drop_import_reach()
+    r.env.free()
+    r.symtab.global_scope.free()
+    // source_map's lifetime is managed by Doc_state, so it is not freed here.
+    r.resolving.aliases.free()
+    r.jump_stack.free()
+    r.diags.reported.free()
+    r.diags.undefined_at.free()
+    r.diags.lint_settings.free()
+    r.scratch.free()
+    r.layout.memo.free()
+    r.resolving.consts.free()
+
+  fn line_starts_for(r: Self$@, file: U8[], src: U8[]): List<|Sz|>$@ //<
+    //< Returns the table of line-start offsets for file
+    //<
+    //< Built on the first call and reused afterwards. This only holds the cache; how the table is
+    //< built and read is in base/core.kspls.
+    existing: = r.diags.line_starts.get(file) catch null
+    if existing != null
+      return existing
+    starts: = src.line_starts(base_core.arena)
+    r.diags.line_starts.set(base_core.arena.dup_str(file), starts)
+    return starts
+
+  fn line_of(r: Self$@, loc: Loc): Sz //< that position's line number (from 1)
+    //<
+    //< Returns 0 where it cannot be determined.
+    //< Caution: **Do not use an offset as a line number.** `Loc` holds a byte position, with no
+    //< column or line. `#line`, the boundary checks and the default argument `caller_line` all go
+    //< through here.
+    if loc.file().len == 0 || r.source_map == null
+      return 0
+    src: = base_core.source_of(r.source_map, loc.file())
+    if src.len == 0
+      return 0
+    at: = loc.offset if loc.offset <= src.len else src.len
+    return base_core.line_for_offset(r.line_starts_for(loc.file(), src), at)
+
+  fn clear_scratch(r: Self$@): Str_builder$@
+    r.scratch.clear()
+    return r.scratch@
+
+  fn has_error(r: Self$@): Bool
+    return r.diags.counts.errors > 0
+
+  fn err(r: Self$@, node: Ast_node$@, msg: U8[])
+    r.report_diagnostic(node, base_diag.Diagnostic_severity.error, msg)
+  fn warn(r: Self$@, node: Ast_node$@, msg: U8[])
+    r.report_diagnostic(node, base_diag.Diagnostic_severity.warning, msg)
+  fn information(r: Self$@, node: Ast_node$@, msg: U8[])
+    r.report_diagnostic(node, base_diag.Diagnostic_severity.information, msg)
+  fn hint(r: Self$@, node: Ast_node$@, msg: U8[])
+    r.report_diagnostic(node, base_diag.Diagnostic_severity.hint, msg)
+
+  fn make_fqn(r: Self$@, name: U8[]): U8$[] //<
+    //< The fully qualified name, qualified by the current file
+    //<
+    //< The built-in `Unknown` / `Void` are not qualified. It lives here, not in `resolve`: there,
+    //< ctx would have to import resolve and be pulled into the declarations' mutual recursion, a
+    //< large tangle since many files use ctx.
+    if r.file_name.len > 0 && !name.equals("Unknown") && !name.equals("Void")
+      return base_core.arena.dup_str(r.build_mod_fqn(r.file_name, name))
+    return base_core.arena.dup_str(name)
+
+  fn build_mod_fqn(r: Self$@, file_path: U8[], name: U8[]): U8[]
+    // name may be r.scratch's own slice (alt_path_slice in resolve_path.kspls): clearing scratch
+    // and writing file_path would overwrite it before it is read, a silent corruption through
+    // aliasing. So copy it first, then clear.
+    name_copy: = base_core.arena.dup_str(name)
+    r.clear_scratch()
+    r.scratch.s_path_as_dots(file_path)
+    r.scratch.s(".").s(name_copy)
+    return r.scratch.slice()
+
+  fn is_instantiating(r: Self$@): Bool //<
+    //< Whether a generic's instantiation (the analysis of a template body) is in progress
+    //<
+    //< Caution: Emit no diagnostic whose result depends on the type arguments during this. The
+    //< same source position is analysed once per type argument, so one instantiation's result
+    //< becomes advice that breaks the build if followed (check_unnecessary_cast in coerce.kspls and
+    //< lint_empty_block in lint_stmt.kspls hold back for this reason).
+    return r.in_generic_instance || r.generics.inst_site != null
+
+  fn set_in_generic_instance(r: Self$@, v: Bool)
+    r.in_generic_instance = v
+
+  priv fn lint_level_for_file(r: Self$@, file: U8[], code: U8[]): base_lint_codes.Lint_level //<
+    //< A code's level in `file`: its `##lint(...)` setting, else base_lint_codes.base_level_for
+    //<
+    //< **`##lint(...)` is keyed by the source's name**: the file the diagnostic's node belongs to,
+    //< which during monomorphization is not the current file.
+    for entry in r.diags.lint_settings
+      if entry.file.equals(file) && entry.code.equals(code)
+        return entry.level
+    return base_lint_codes.base_level_for(file, code)
+
+  fn is_code_off(r: Self$@, node: Ast_node$@, code: U8[]): Bool //<
+    //< Whether a diagnostic with that code at node would be dropped as switched off
+    //<
+    //< **Ask it before work done only for that diagnostic**: a check off by default (W0602) would
+    //< otherwise pay its whole cost on every declaration and print nothing. The level is decided
+    //< by lint_level_for_file alone, as in report_core.
+    switch r.lint_level_for_file(r.file_for_node(node), code) case .off
+      return true
+    default {}
+    return false
+
+  priv fn source_for_node(r: Self$@, node: Ast_node$@): U8$[] //<
+    //< Gets the source text for a diagnostic **from the file that node belongs to**
+    //<
+    //< During monomorphization the current file is the template's, so a diagnostic on a node of the
+    //< user's code (a generic's bound violation) would take its line and caret from the template's
+    //< text.
+    if node == null || node.loc.file().len == 0 || node.loc.file().equals(r.file_name)
+      return r.source
+    src: = base_core.source_of(r.source_map, node.loc.file())
+    return src if src.len > 0 else r.source
+
+  priv fn file_for_node(r: Self$@, node: Ast_node$@): U8[]
+    if node == null || node.loc.file().len == 0
+      return r.file_name
+    return node.loc.file()
+
+  fn report_diagnostic_at(r: Self$@, file: U8[], src: U8[], offset: Sz, span: Sz,
+    sev: base_diag.Diagnostic_severity, msg: U8[]) //<
+      //< Reports a diagnostic at a file's position
+      //<
+      //< **A diagnostic without a node comes here** (a misaligned indent column and the like,
+      //< found before the analysis).
+      //< Caution: **Counting and de-duplication happen in one place, the core below.** Printed any
+      //< other way, it shows on screen but not in the summary, and slips past the lint gate, which
+      //< reads the summary.
+    r.report_core(file, src, offset, span, true, sev, msg)
+
+  fn report_diagnostic(r: Self$@, node: Ast_node$@, sev: base_diag.Diagnostic_severity, msg: U8[])
+    info: = node.get_span_offset()
+    r.report_core(r.file_for_node(node), r.source_for_node(node), info.offset, info.span,
+      node != null, sev, msg)
+
+  priv fn report_core(r: Self$@, file: U8[], src: U8[], offset: Sz, span: Sz, has_pos: Bool,
+    sev: base_diag.Diagnostic_severity, msg: U8[]) //<
+      //< The diagnostic's core, **where the reports from a node and from a file's position meet**
+      //<
+      //< Caution: **Do not copy the level resolution, de-duplication, counting or printing
+      //< anywhere else** (Principle 6). `has_pos` adds the position to the de-duplication key;
+      //< without it a diagnostic is identified by its text alone.
+    if r.suppress_errors
+      return
+    // A diagnostic with a code goes through its level: off drops it, error promotes it. The
+    // promotion comes **before** the lint-mode-only filter on information and hints, since a user
+    // who asked for error wants it rejected in an ordinary build too.
+    $eff_sev: = sev
+    code: = base_diag.code_of(msg)
+    if code.len > 0
+      switch r.lint_level_for_file(file, code) case .off
+        return
+      case .error
+        eff_sev = base_diag.Diagnostic_severity.error
+      default {}
+    if !base_core.config.is_lint &&
+      (eff_sev == base_diag.Diagnostic_severity.information ||
+      eff_sev == base_diag.Diagnostic_severity.hint)
+      return
+    $key_sb: = Str_builder.new()
+    defer key_sb.free()
+    if has_pos
+      key_sb.s(file).c(':').s("\{offset\}").c(':')
+    key_sb.s(msg)
+    dup_key: = key_sb.slice()
+    already_reported: = r.diags.reported.get(dup_key) catch 0
+    if already_reported == 1
+      return
+    perm_key: = base_core.arena.dup_str(dup_key)
+    r.diags.reported.set(perm_key, 1)
+
+    if eff_sev == base_diag.Diagnostic_severity.error && r.diags.counts.errors >= 50
+      if r.diags.counts.errors == 50
+        starts: = r.line_starts_for(file, src)
+        base_diag.print_diagnostic(file, src, offset, span,
+          "Too many errors (>= 50). Further errors are suppressed.", eff_sev, starts)
+        r.diags.counts.errors += 1
+      return
+    switch eff_sev case .error
+      r.diags.counts.errors += 1
+    case .warning
+      r.diags.counts.warnings += 1
+    case .information
+      r.diags.counts.infos += 1
+    case .hint
+      r.diags.counts.hints += 1
+
+    starts: = r.line_starts_for(file, src)
+    base_diag.print_diagnostic(file, src, offset, span, msg, eff_sev, starts)
+    if code.len > 0 && base_lint_codes.is_known(code)
+      r.note_code(code)
+
+  priv fn note_code(r: Self$@, code: U8[]) //< records an emitted code, once, for the summary
+    //<
+    //< Only a code the registry knows reaches here: the summary tells the reader to run `ksplc
+    //< explain` on each, and a bracketed word that is not a code has no section to print.
+    //< Caution: **Copy it.** The code is a view into the message, and a message is often built in
+    //< the scratch buffer the next diagnostic overwrites.
+    for c in r.diags.counts.codes
+      if c.equals(code)
+        return
+    r.diags.counts.codes.push(base_core.arena.dup_str(code))
+
+  fn report_type_mismatch($r: Self$@, node: Ast_node$@, expected_id: I32, actual_id: I32)
+    // Either side Unknown means an error was already reported upstream.
+    if sema_type_env.is_unknown(expected_id) || sema_type_env.is_unknown(actual_id)
+      return
+    $exp: = r.env.display_str(expected_id)
+    $act: = r.env.display_str(actual_id)
+    defer
+      exp.free()
+      act.free()
+    r.clear_scratch().s("expected '\{exp.slice()\}', but got '\{act.slice()\}'")
+    // Where the only difference is an inner level made read-only, say **why** it is rejected:
+    // "the types differ" does not explain why one level (`U8$[]`→`U8[]`) is accepted and two are
+    // not.
+    // Caution: Put it in the error text, not a hint: a hint or an information appears only in lint
+    // mode and misses someone stuck in a build.
+    if r.env.needs_deep_const_add(actual_id, expected_id)
+      r.scratch
+        .s(": only the outermost element/pointee can be made read-only implicitly. Declare the \
+          inner stage read-only from the start ('U8[]$[]'), lend it at the descriptor stage, or \
+          cast explicitly ('\{exp.slice()\}::(...)')")
+    // An array becomes a slice only by a written cast; Rust and C convert implicitly, so a reader
+    // from either expects it to work.
+    if r.env.is_array(actual_id) && r.env.is_slice(expected_id)
+      r.scratch
+        .s("\n  Note: a fixed-length array becomes a slice only by an explicit cast: \
+          '\{exp.slice()\}::(...)'.")
+    r.append_closure_capture_note(actual_id)
+    r.err(node, r.scratch.slice())
+
+  priv fn append_closure_capture_note($r: Self$@, actual_id: I32) //<
+    //< Explains in scratch a closure's environment struct appearing in a type mismatch
+    //<
+    //< **Without this note the user sees a type name they never wrote, `_anon_env_1`.** Two cases
+    //< reach here: a captured closure (the field is `Callable1<|…|>`, but the environment struct
+    //< itself is passed) and a receiving `Callable` whose type arguments differ.
+    base_id: = r.env.strip_const_deep(r.env.strip_ptr(actual_id))
+    if !is_anon_env_type(r.env.get_str(base_id))
+      return
+    r.scratch
+      .s("\n  Hint: a closure's type is its synthesized environment, which conforms only to the \
+        exact 'Callable' in its signature. Check that the receiving parameter's type arguments \
+        match, and note that a closure cannot be captured by another closure (pass it as a \
+        parameter instead).")
+
+  fn note_undefined_at(r: Self$@, node: Ast_node$@) //<
+    //< records where an undefined name was reported
+    //<
+    //< A call's callee is resolved as a name before the call is, so its undefined head is reported
+    //< there first, and the call's own report is skipped (`undefined_reported_at`).
+    $key: = Str_builder.new()
+    defer key.free()
+    r.offset_key(node, key@)
+    r.diags.undefined_at.set(base_core.arena.dup_str(key.slice()), true)
+
+  fn undefined_reported_at(r: Self$@, node: Ast_node$@): Bool //<
+    //< whether one was reported where node starts
+    $key: = Str_builder.new()
+    defer key.free()
+    r.offset_key(node, key@)
+    return r.diags.undefined_at.get(key.slice()) catch false
+
+  priv fn offset_key(r: Self$@, node: Ast_node$@, out: Str_builder$@) //< "file:offset" of node
+    info: = node.get_span_offset()
+    out.s(r.file_for_node(node)).c(':').s("\{info.offset\}")
+
+  fn report_undefined_symbol($r: Self$@, node: Ast_node$@, name: U8[])
+    r.clear_scratch().s("undefined path or identifier '\{name\}'")
+    if !r.append_anon_fn_capture_note(name)
+      dot: = name.find_char('.')
+      r.append_withheld_alias_note(name if dot < 0 else name.sub(0, dot))
+    r.err(node, r.scratch.slice())
+
+  fn append_withheld_alias_note($r: Self$@, name: U8[]): Bool //<
+    //< Writes to scratch how to import a name that a selective import left out; true if written
+    //<
+    //< The name not found is a file's name that a selective import does not bind.
+    //< `import "p" { A }` binds only `A`, so `p.` stands for nothing (`add_withheld_alias`).
+    //< Caution: Keep the wording in this one place: name resolution has two failure points, an
+    //< undefined identifier and an undefined callee, and with a copy each only one gets fixed.
+    $key: = Str_builder.new()
+    defer key.free()
+    key.s(r.file_name).s("::").s(name)
+    path: = r.aliases.withheld.get(key.slice()) catch ""
+    if path.len == 0
+      return false
+    r.scratch
+      .s("\n  Hint: 'import \"\{path\}\" { ... }' brings in only the names listed, so '\{name\}.' \
+        cannot be written. Add a '+' to bring in the file's name as well: 'import \"\{path\}\" + { \
+        ... }'.")
+    return true
+
+  fn append_anon_fn_capture_note($r: Self$@, name: U8[]): Bool //<
+    //< Writes to scratch that an anonymous function cannot capture the name; true if written
+    //<
+    //< It applies where a name is not found in an anonymous function's body. The body is lifted to
+    //< the top level, out of reach of the enclosing function's locals, type arguments and receiver.
+    //< Caution: Keep the wording in this one place (the reason is at append_withheld_alias_note).
+    //< Put it in the error text, not an information, which appears only in lint mode.
+    if !is_anon_fn_name(r.fn_ctx.name)
+      return false
+    r.scratch
+      .s("\n  Hint: an anonymous function cannot capture '\{name\}' from the enclosing scope (its \
+        body is lifted to a top-level function). Pass it as a parameter.")
+    return true
+
+  fn append_closure_note($r: Self$@) //< writes to scratch that adding `;` makes it a closure
+    //<
+    //< Even with zero captures a `;` makes it a `Callable` ("Why capture is made explicit and
+    //< escape is forbidden" in docs/DESIGN.md). That **the presence of `;` decides the type** is
+    //< not visible in the text; unexplained, the user sees only "the types do not match, though I
+    //< just passed a function".
+    //< Caution: Keep the wording in this one place; two situations need it (a function pointer
+    //< passed to a `Callable`'s position, and a function value bound with no type annotation).
+    r.scratch
+      .s("\n  Hint: a plain function is a function pointer. A 'Callable' is produced by a closure \
+        — add ';' before the closing paren of the signature ('fn(x: I32; n: I32): Bool { … }'), \
+        even when there is nothing to capture ('fn(x: I32; )').")
+
+  fn append_missing_capture_list_note(r: Self$@, expected_id: I32) //<
+    //< Adds the explanation above only where a function pointer is passed for a `Callable`
+    if r.env.get_str(r.env.get_clean_real_type(expected_id)).find_str("Callable") < 0
+      return
+    r.append_closure_note()
+
+  fn report_redefinition($r: Self$@, node: Ast_node$@, name: U8[])
+    r.clear_scratch().s("symbol '\{name\}' is already declared in this scope")
+    r.err(node, r.scratch.slice())
+
+  fn set_current_file(r: Self$@, file_name: U8[]) //< changes the current file
+    //<
+    //< **Setting the same file does nothing** (the table lookup below is not needed).
+    //< Caution: **Report progress on each change** (`report_progress` in `base/core.kspls`). Every
+    //< pass goes through here, so no pass adds its own, and `report_progress` throttles the calls.
+    if file_name.len == 0 || r.file_name.equals(file_name)
+      return
+    base_core.report_progress()
+    r.file_name = file_name
+    src: = base_core.source_of(r.source_map, file_name)
+    if src.len > 0
+      r.source = src
+    r.symtab.current_file = r.env.file_env_for(file_name)
+
+  fn check_snake_case(r: Self$@, name: U8[], node: Ast_node$@, kind_name: U8$[])
+    if !r.suppress_errors && base_core.config.run_lint_checks && name.len > 0 &&
+      !name.starts_with("_")
+      $is_snake: = true
+      for i_s in Range.asc(name.len)
+        ch: = (name.ptr + i_s)$
+        if ch.is_upper()
+          is_snake = false
+          break
+      if !is_snake
+        r.clear_scratch().s("[I0502] \{kind_name\} '\{name\}' should use snake_case.")
+        r.information(node, r.scratch.slice())
+
+  fn declare_symbol(r: Self$@, name: U8[], sym: Sema_symbol$@, export_global: Bool): Bool
+    $target_node: = sym.node
+    if target_node != null
+      id_node: = target_node.find_child(.k_identifier)
+      if id_node != null
+        target_node = id_node
+
+    if r.check_c_keyword_collision(name, target_node)
+      return false
+
+    if r.symtab.has_in_current_scope(name)
+      r.report_redefinition(target_node, name)
+      return false
+
+    // A collision with a name brought in by `import "path" { A };` is always an error, so no
+    // implicit "first wins / last wins" arises. The implicit import (std/lang) does not count: it
+    // yields to a declaration of the same name (imported_symbol_fqn in
+    // ksplc/sema/session/import_table.kspls).
+    if r.has_explicit_import_symbol(r.file_name, name)
+      r.report_redefinition(target_node, name)
+      return false
+
+    if export_global && sym.vis != sema_type_scope.Visibility.file_private
+      id: = base_core.pools.intern_name(name)
+      existing_global: = r.symtab.global_scope.get(id) catch null
+      if existing_global != null
+        r.clear_scratch().s("global symbol '\{name\}' is already defined")
+        r.err(target_node, r.scratch.slice())
+        return false
+
+    if !r.suppress_errors && name.len > 0 && !name.starts_with("_")
+      if r.symtab.scope_stack.len > 0 && !sym.flags.is_global
+        existing_sym: = r.symtab.resolve(name) catch null
+        if existing_sym != null && !existing_sym.flags.is_global &&
+          existing_sym.kind.is_var_or_const()
+          r.clear_scratch()
+            .s("[I0501] Declaration of '\{name\}' shadows an existing declaration in an outer \
+              scope.")
+          r.information(target_node, r.scratch.slice())
+        // **A local with an imported module's name hides the module**, and KSPL reaches both
+        // with `.`: an `io.out()` below it reads the local and fails as a missing member, far from
+        // the cause. A warning, not an error: shadowing stays legal ("Scope and shadowing" in
+        // docs/SPEC-language.md). The prelude's `lang`, an import nobody wrote, is excluded.
+        named: = r.peek_file_alias(r.file_name, name)
+        if named != null && named.decl_node != null
+          r.clear_scratch()
+            .s("[W0505] '\{name\}' hides the imported module '\{name\}': from here to the end of \
+              its scope, '\{name\}.x' reads this instead. Rename it.")
+          r.warn(target_node, r.scratch.slice())
+
+      if base_core.config.run_lint_checks && !sym.flags.is_ext &&
+        !sym.flags.is_generated_instance && name.find_char('.') == -1
+        if sym.kind.is_type()
+          is_single_upper: = name.len == 1 && (name.ptr + 0).is_upper()
+          $is_cap_snake: = name.len > 0 && (name.ptr + 0).is_upper()
+          if is_cap_snake
+            for $i_c: Sz = 1; i_c < name.len; i_c += 1
+              ch: = (name.ptr + i_c)$
+              if ch.is_upper()
+                is_cap_snake = false
+                break
+          if !is_single_upper && !is_cap_snake
+            r.clear_scratch().s("[I0502] Type name '\{name\}' should use Capital_snake_case.")
+            r.information(target_node, r.scratch.slice())
+        else if sym.kind.is_value()
+          $allow_upper: = false
+          if sym.flags.is_global
+            switch sym.kind case .constant
+              allow_upper = true
+            default {}
+          if !allow_upper
+            r.check_snake_case(name, target_node, "Identifier")
+
+    r.symtab.define_symbol(name, sym, export_global)
+    if sym.node != null
+      sym.node.sym_ptr = Void$@::sym
+    return true
+
+// It releases what it owns with `free()`; see `Owned` in std/lang.kspls for why it conforms.
+impl Sema_ctx: Owned {}
+
+fn join_dotted_name(base_name: U8[], sub_name: U8[]): U8[] //<
+  //< `base_name.sub_name` on the arena: a member's name under its owner's (`Enum.variant`)
+  return base_core.arena.text().s(base_name).c('.').s(sub_name).take()
+
+impl Ast_node
+  fn collect_lint_decl(r: Ast_node$@, c: Sema_ctx$@) //<
+    //< `##lint(CODE = level, ...)`: sets the level of the codes listed, for this whole file
+    //<
+    //< Caution: The code and the level are both matched against their source in
+    //< ksplc/base/lint_codes.kspls, and an unknown one is an error. Unmatched, a typo like
+    //< `##lint(I004 = off)` quietly does nothing, and the diagnostic meant to be suppressed is not
+    //< (Principle 5 of docs/DESIGN.md).
+    for setting in r.children
+      // Caution: **This is the only place that may quietly skip anything but `CODE = level`.** What
+      // it skips is the `##`, the name and the parentheses; the argument's shape itself is knocked
+      // back before the call (`check_directive` in sema/decl/attrs.kspls). Take that away and a
+      // specification written as an expression goes through with not one of them in effect.
+      if setting.kind_id != .k_lint_setting
+        continue
+      // The `"="` of `lint_setting = Identifier "=" Identifier` stays a child, so take the first
+      // and second identifiers, not subscripts (by subscript the level comes out as `=`).
+      $code_node: Ast_node$@ = null
+      $level_node: Ast_node$@ = null
+      for part in setting.children
+        if part.kind_id != .k_identifier
+          continue
+        if code_node == null
+          code_node = part
+        else if level_node == null
+          level_node = part
+      if code_node == null || level_node == null
+        continue
+      if !base_lint_codes.is_known(code_node.text)
+        c.clear_scratch()
+          .s("unknown diagnostic code '\{code_node.text\}' (see ksplc/base/lint_codes.kspls for the \
+            full list)")
+        c.err(code_node, c.scratch.slice())
+        continue
+      switch base_lint_codes.Lint_level.parse(level_node.text) case .some(level)
+        c.diags.lint_settings
+          .push(Lint_setting_entry::{ .file = r.loc.file(), .code = code_node.text,
+          .level = level })
+        // Promoting to error also runs that check; this Pass 0 comes before every check, so it is
+        // in time.
+        switch level case .error
+          base_core.config.run_lint_checks = true
+        default {}
+      case .none
+        c.clear_scratch()
+          .s("unknown lint level '\{level_node.text\}' (expected 'off', 'on', or 'error')")
+        c.err(level_node, c.scratch.slice())

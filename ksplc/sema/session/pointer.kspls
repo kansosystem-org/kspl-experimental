@@ -1,0 +1,431 @@
+//< What a name in a comment refers to, resolved in the scope of the file holding the comment
+//<
+//< **It resolves as the code beside the comment would**: a parameter or a local where the comment
+//< is (`hidden_by_local`), the file's own declarations, its imports and the prelude, then the
+//< members of what those name. `[W0211]` and the hover's links both ask here, so the two cannot
+//< disagree (Principle 6 in `../../../docs/DESIGN.md`); so does the analysis of a `T::name`
+//< (`read_in_scope`).
+//< **Nothing here marks a name used** (`[I0401]`, `[W0206]`): a mention in a comment is not a use.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/cfg_inactive" as base_cfg_inactive
+import "ksplc/base/core" as base_core
+import "ksplc/base/locate" as base_locate
+import "ksplc/sema/session/ctx" { Sema_ctx, join_dotted_name }
+import "ksplc/sema/session/import_table" as sema_session_import_table
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" { Sema_symbol }
+import "std/chars" // testing single characters
+import "std/str" { Str_builder }
+
+enum Pointed //< what a name in backticks resolved to
+  not_a_pointer //< its head is nothing the file can see: a local, a word, another language's name
+  found(node: Ast_node$@) //< the declaration its last part names
+  missing(part: Sz) //< the parts before `part` resolved, and that one names nothing on them
+  unsure //< it passed through something whose members are not listed here
+
+struct Pointer //< one name in backticks, found in a comment's text
+  open: Sz //< the opening backtick, or the text's length where there is none
+  at: Sz //< where the name begins
+  len: Sz //< how long the name is, call brackets left off
+  end: Sz //< just past the closing backtick
+
+priv const file_words: U8[][3] = ::{ "in ", "of ", "inside " } //<
+  //< The words that tie a name to its file (`` `name` in `file` ``)
+  //<
+  //< They match the document check's spelling ("Linking documents to source" in
+  //< `../../../docs/SPEC-documents.md`).
+
+priv const file_exts: U8[][12] = ::{ "kspls", "kspl", "md", "c", "h", "txt", "cfg", "json", "html",
+  "js", "css", "mk" } //<
+    //< The endings that make a name read as a file's name
+    //<
+    //< So `edit.kspls` behind an import named `edit` reads as a file.
+    //< **Only a name that resolves to nothing is read this way** (`File_stream.c` is a method).
+
+priv fn starts_word(ch: U8): Bool
+  return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_'
+
+priv fn is_word(ch: U8): Bool
+  return starts_word(ch) || (ch >= '0' && ch <= '9')
+
+priv fn closing_tick(text: U8[], from: Sz): I64 //< the next backtick at or past `from`, or -1
+  $i: = from
+  for i < text.len
+    if text[i] == '`'
+      return i
+    i += 1
+  return -1I64
+
+priv fn skip_spaces(text: U8[], from: Sz): Sz
+  $i: = from
+  for i < text.len && text[i] == ' '
+    i += 1
+  return i
+
+priv fn read_name(text: U8[], from: Sz, close: Sz): Sz //<
+  //< How long the dotted name filling `[from, close)` is, or 0 where the span holds anything else
+  //<
+  //< **Call brackets may close it** (`io.out()`, `mem.dealloc(text.ptr)`), and then they have to
+  //< run to the span's end: `io.out().s("x")` is a fragment of code, not a name.
+  $i: = from
+  $parts: Sz = 0
+  for
+    if i >= close || !starts_word(text[i])
+      return 0
+    for i < close && is_word(text[i])
+      i += 1
+    parts += 1
+    if i < close && text[i] == '.'
+      i += 1
+      continue
+    break
+  if parts < 2
+    return 0
+  name_end: = i
+  if i < close && text[i] == '('
+    $depth: Sz = 0
+    for i < close
+      if text[i] == '('
+        depth += 1
+      else if text[i] == ')'
+        depth -= 1
+        if depth == 0
+          i += 1
+          break
+      i += 1
+  if i != close
+    return 0
+  return name_end - from
+
+priv fn is_foreign(text: U8[], open: Sz): Bool //<
+  //< Whether the name is introduced as another product's (`Python's \`json.dumps\``)
+  //<
+  //< **The house style already phrases it this way**, so such a name needs nothing more.
+  if open < 4 || text[open - 1] != ' ' || text[open - 2] != 's' || text[open - 3] != '\''
+    return false
+  $w: = open - 3
+  for w > 0 && (is_word(text[w - 1]) || text[w - 1] == '+' || text[w - 1] == '#')
+    w -= 1
+  return w < open - 3 && text[w] >= 'A' && text[w] <= 'Z'
+
+priv fn tied_to_file(text: U8[], after: Sz): Bool //<
+  //< Whether the name is followed by its file, a list of names included (`` `a` / `b` in `file` ``)
+  //<
+  //< **The document check reads that spelling**; reading it here too would make a second reader.
+  $i: = after
+  for
+    j: = skip_spaces(text, i)
+    if j >= text.len || text[j] != '/'
+      break
+    k: = skip_spaces(text, j + 1)
+    if k >= text.len || text[k] != '`'
+      break
+    shut: = closing_tick(text, k + 1)
+    if shut < 0I64
+      return false
+    i = Sz::shut + 1
+  if i + 1 < text.len && text[i] == '(' && text[i + 1] == '`'
+    return true
+  j2: = skip_spaces(text, i)
+  for word in file_words
+    if text.starts_with(word, j2) && j2 + word.len < text.len && text[j2 + word.len] == '`'
+      return true
+  return false
+
+fn next_pointer(text: U8[], from: Sz): Pointer //<
+  //< The next name in backticks at or past `from` that points at a declaration
+  //<
+  //< A pointer is a dotted name (`Owner.member`), with call brackets after it or without. **Two
+  //< spellings are skipped**: a name introduced as another product's, and a name tied to its
+  //< file, which the document check reads (`make test-docref`).
+  $i: = from
+  for i < text.len
+    if text[i] != '`'
+      i += 1
+      continue
+    shut: = closing_tick(text, i + 1)
+    if shut < 0I64
+      break
+    close: = Sz::shut
+    got: = read_name(text, i + 1, close)
+    if got > 0 && !is_foreign(text, i) && !tied_to_file(text, close + 1)
+      return Pointer::{ .open = i, .at = i + 1, .len = got, .end = close + 1 }
+    i = close + 1
+  return Pointer::{ .open = text.len, .at = text.len, .len = 0, .end = text.len }
+
+priv struct At //< what the walk stands on once a part is read
+  module: U8[] //< a module's logical name, where the part named one (empty otherwise)
+  sym: Sema_symbol$@ //< the declaration the part named, where it has a symbol
+  node: Ast_node$@ //< that declaration's node (a field and a variant carry no symbol of their own)
+  fqn: U8[] //< that declaration's qualified name
+
+priv enum Step //< the result of reading one more part
+  on //< it named a member, and the walk goes on from it
+  absent //< the owner holds no such member
+  unsure //< the owner's members are not listed here
+
+priv fn fqn_of(c: Sema_ctx$@, module: U8[], name: U8[]): U8[] //<
+  //< a qualified name, built as the analysis builds it (build_mod_fqn), kept on the arena
+  return base_core.arena.dup_str(c.build_mod_fqn(module, name))
+
+priv fn declared_in(c: Sema_ctx$@, file: U8[], name: U8[]): Option<|Sema_symbol$@|> //<
+  //< The top-level declaration `name` in `file`, whatever its visibility
+  env: = c.env.files.get(file) catch null
+  if env == null
+    return Option<|Sema_symbol$@|>.none
+  sym: = env.symbols.get(name) catch null
+  if sym == null
+    return Option<|Sema_symbol$@|>.none
+  return Option<|Sema_symbol$@|>.some(sym)
+
+priv fn on_symbol(sym: Sema_symbol$@, fqn: U8[]): At
+  return At::{ .module = "", .sym = sym, .node = sym.node, .fqn = fqn }
+
+priv fn head_of(c: Sema_ctx$@, file: U8[], head: U8[], out: At$@): Bool //<
+  //< What the first part names in `file`'s own scope
+  //<
+  //< **The file's own declaration is checked first**: a name the prelude brings in yields to one
+  //< the file declares, as in the code.
+  if own: = declared_in(c, file, head)
+    out$ = on_symbol(own, fqn_of(c, file, head))
+    return true
+  named: = c.peek_file_alias(file, head)
+  if named != null
+    out$ = At::{ .module = named.target_path, .sym = null, .node = null, .fqn = "" }
+    return true
+  info: = c.peek_import_symbol(file, head)
+  if info == null
+    return false
+  if sym: = declared_in(c, info.target_path, info.original_name)
+    out$ = on_symbol(sym, fqn_of(c, info.target_path, info.original_name))
+    return true
+  return false
+
+priv fn bare_type(spelled: U8[]): U8[] //<
+  //< a type's spelling with its arguments and marks stripped
+  $i: Sz = 0
+  for i < spelled.len
+    ch: = spelled[i]
+    if ch == '<' || ch == '$' || ch == '@' || ch == '[' || ch == '?' || ch == ' '
+      break
+    i += 1
+  return spelled.sub(0, i)
+
+priv const decl_words: U8[][6] = ::{ "fn ", "struct ", "enum ", "trait ", "typedef ", "const " } //<
+  //< The words a declaration of a function, a type or a constant opens with
+
+priv fn names_at(text: U8[], at: Sz, name: U8[]): Bool //< whether `name` is a whole word at `at`
+  if !text.starts_with(name, at)
+    return false
+  after: = at + name.len
+  return after >= text.len || !is_word(text[after])
+
+priv fn declares_in_text(text: U8[], name: U8[]): Bool //<
+  //< Whether some line of `text` declares `name`
+  //<
+  //< A function, a type or a constant counts, or a field, a variant or a variable at the start of
+  //< a line.
+  //< **Only the start of a line is read**, so a comment, which starts with `//`, never counts.
+  //< **A call written as a statement reads as a declaration here** (`name(x)`), erring toward
+  //< silence, as a warning should.
+  $at: Sz = 0
+  for at < text.len
+    $end: = at
+    for end < text.len && text[end] != '\n'
+      end += 1
+    $i: = at
+    for i < end
+      if text[i] == ' ' || text[i] == '\t' || text[i] == '$'
+        i += 1
+      else if text[i] == '#'
+        for i < end && text[i] != ' '
+          i += 1
+      else if text.starts_with("pub ", i)
+        i += 4
+      else if text.starts_with("priv ", i)
+        i += 5
+      else
+        break
+    for word in decl_words
+      if text.starts_with(word, i) && names_at(text, i + word.len, name)
+        return true
+    if names_at(text, i, name)
+      return true
+    at = end + 1
+  return false
+
+priv fn left_out_by_cfg(c: Sema_ctx$@, file: U8[], name: U8[]): Bool //<
+  //< Whether `file` declares `name` inside a range `#cfg` excluded from this compilation
+  //<
+  //< **Another configuration has it**, so a reference to it is correct even though this compilation
+  //< has no such declaration (`mem.init_freestanding_heap` exists only under `freestanding`).
+  if !base_cfg_inactive.cfg_inactive.is_init
+    return false
+  src: = base_core.source_of(c.source_map, file)
+  for region in base_cfg_inactive.cfg_inactive.list
+    if !base_locate.is_same_file(region.file, file) || region.offset + region.span > src.len
+      continue
+    if declares_in_text(src.sub(region.offset, region.span), name)
+      return true
+  return false
+
+priv fn type_member(c: Sema_ctx$@, owner: At, part: U8[], next: At$@): Step //<
+  //< The member `part` of the type `owner` names: a method, a variant, a field
+  //<
+  //< **A method another file adds is on the same table**, found while that file is compiled.
+  key: = join_dotted_name(owner.fqn, part)
+  sym: = c.symtab.by_fqn.get(key) catch null
+  if sym != null
+    next$ = on_symbol(sym, key)
+    return Step.on
+  template: = c.generics.templates.get(key) catch null
+  if template != null
+    next$ = At::{ .module = "", .sym = null, .node = template, .fqn = key }
+    return Step.on
+  $decl: = owner.node
+  if decl == null
+    decl = c.generics.templates.get(owner.fqn) catch null
+  if decl == null
+    return Step.unsure
+  for ch in decl.children
+    if ch.kind_id != .k_struct_field && ch.kind_id != .k_enum_variant &&
+      ch.kind_id != .k_decl_fn_proto && ch.kind_id != .k_decl_fn
+      continue
+    id: = ch.find_child(.k_identifier)
+    if id != null && id.text.equals(part)
+      next$ = At::{ .module = "", .sym = null, .node = ch, .fqn = key }
+      return Step.on
+  if left_out_by_cfg(c, decl.loc.file(), part)
+    return Step.unsure
+  return Step.absent
+
+priv fn member_of(c: Sema_ctx$@, cur: At, part: U8[], next: At$@): Step //<
+  //< What `part` names on what the walk stands on
+  if cur.module.len > 0
+    if (c.env.files.get(cur.module) catch null) == null
+      return Step.unsure
+    if sym: = declared_in(c, cur.module, part)
+      next$ = on_symbol(sym, fqn_of(c, cur.module, part))
+      return Step.on
+    return Step.unsure if left_out_by_cfg(c, cur.module, part) else Step.absent
+  sym: = cur.sym
+  if sym == null
+    return Step.unsure
+  // A value or an alias resolves to the type it stands for.
+  if sym.kind.is_var_or_const() || sym.kind.is_alias()
+    if sym.type_id == 0
+      return Step.unsure
+    base: = bare_type(c.env.get_str(c.env.get_real_type(sym.type_id)))
+    typed: = c.symtab.by_fqn.get(base) catch null
+    if typed == null || !typed.kind.is_type() || typed.kind.is_alias()
+      return Step.unsure
+    return type_member(c, on_symbol(typed, base), part, next)
+  if sym.kind.is_type()
+    return type_member(c, cur, part, next)
+  return Step.unsure
+
+priv fn names_a_file(part: U8[]): Bool //< whether the last part is a file's tail (`edit.kspls`)
+  for ext in file_exts
+    if part.equals(ext)
+      return true
+  return false
+
+fn pointed_at(c: Sema_ctx$@, root: Ast_node$@, file: U8[], at: Sz, name: U8[]): Pointed //<
+  //< What `name`, written in a comment at position `at` of `file`, stands for
+  //<
+  //< `root` is the compilation's tree, where the function containing `at` is found, so that its
+  //< parameters and locals are asked before the file's own names.
+  got: = read_in_scope(c, file, name)
+  switch got case .not_a_pointer
+    return got
+  default {}
+  dot: = name.find_char('.')
+  head: = name if dot < 0 else name.sub(0, dot)
+  return Pointed.not_a_pointer if hidden_by_local(root, file, at, head) else got
+
+fn read_in_scope(c: Sema_ctx$@, file: U8[], name: U8[]): Pointed //<
+  //< What the dotted `name` stands for in `file`'s own scope, with no local in the way
+  //<
+  //< **The caller knows the locals**: for a comment, the function it is in (`pointed_at`); for
+  //< the analysis, the scopes it has open (a `::` written as a path, in
+  //< `../body/postfix.kspls`).
+  $cur: = At::{ .module = "", .sym = null, .node = null, .fqn = "" }
+  $index: Sz = 0
+  $start: Sz = 0
+  for start <= name.len
+    $stop: = start
+    for stop < name.len && name[stop] != '.'
+      stop += 1
+    part: = name.sub(start, stop - start)
+    last: = stop >= name.len
+    if index == 0
+      if !head_of(c, file, part, cur@)
+        return Pointed.not_a_pointer
+    else
+      $next: = At::{ .module = "", .sym = null, .node = null, .fqn = "" }
+      switch member_of(c, cur, part, next@) case .on
+        cur = next
+      case .absent
+        if last && names_a_file(part)
+          return Pointed.not_a_pointer
+        return Pointed.missing(index)
+      case .unsure
+        return Pointed.unsure
+    if last
+      break
+    index += 1
+    start = stop + 1
+  if cur.node == null
+    return Pointed.unsure
+  return Pointed.found(cur.node)
+
+priv const max_local_depth: Sz = 256 //< how deep the search for a local goes before giving up
+  //<
+  //< **Giving up answers "not hidden"**, so a pathological nesting is reported rather than
+  //< silenced.
+
+priv fn declares_local(n: Ast_node$@, name: U8[], depth: Sz): Bool //<
+  //< Whether a variable named `name` is declared anywhere inside `n`
+  if n == null || depth > max_local_depth
+    return false
+  if n.kind_id == .k_decl_var || n.kind_id == .k_decl_var_item || n.kind_id == .k_decl_const
+    id: = n.get_var_decl_id()
+    if id != null && id.text.equals(name)
+      return true
+  for ch in n.children
+    if declares_local(ch, name, depth + 1)
+      return true
+  return false
+
+priv fn holds(n: Ast_node$@, at: Sz): Bool //< whether position `at` is inside `n`
+  sp: = n.get_span_offset()
+  return at >= sp.offset && at < sp.offset + sp.span
+
+priv fn enclosing_fn(root: Ast_node$@, file: U8[], at: Sz): Option<|Ast_node$@|> //<
+  //< The function of `file` whose text holds position `at`, a method inside an `impl` included
+  for top in root.children
+    item: = top.unwrap_top_level()
+    if item == null || !item.loc.file().equals(file) || !holds(item, at)
+      continue
+    if item.kind_id == .k_decl_fn
+      return Option<|Ast_node$@|>.some(item)
+    for ch in item.children
+      if ch.kind_id == .k_decl_fn && holds(ch, at)
+        return Option<|Ast_node$@|>.some(ch)
+  return Option<|Ast_node$@|>.none
+
+priv fn hidden_by_local(root: Ast_node$@, file: U8[], at: Sz, head: U8[]): Bool //<
+  //< Whether a parameter or a local named `head` is in scope at position `at` of `file`
+  //<
+  //< **A comment in a function is read in that function's scope**: `doc.arena` there is the
+  //< parameter's field even where the file imports a module `doc`.
+  if fn_node: = enclosing_fn(root, file, at)
+    params: = fn_node.get_fn_params()
+    if params != null
+      for p in base_ast_ext.Param_cursor.new(params, false)
+        id: = p.find_child(.k_identifier)
+        if id != null && id.text.equals(head)
+          return true
+    return declares_local(fn_node, head, 0)
+  return false

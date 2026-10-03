@@ -1,0 +1,31 @@
+//< On the LLVM backend, even a plain POD struct cannot cross the C boundary by value
+//<
+//< genllvm does not implement the per-target ABI classification C uses for structs by value, so it
+//< passes aggregates by sret/byval for internal calls alone (ksplc/docs/DESIGN.md §6.6.3). The C
+//< backend accepts this program, hence `--target=llvm`.
+// ARGS: --target=llvm
+// EXPECT: structs cannot be passed or returned by value across C-FFI boundaries on the LLVM backend
+// EXPECT-NOT: 'Wrapper'
+
+pub struct Pod
+  pub a: I32
+  pub b: I32
+
+// A struct merely being **inside** a struct is not an aggregate crossing by value, so it passes
+// (no diagnostic comes out on this line).
+pub struct Wrapper
+  pub inner: Pod
+
+#export
+pub fn takes_pod_by_value(p: Pod): I32
+  return p.a + p.b
+
+#export
+pub fn returns_pod_by_value(): Pod
+  return Pod::{ .a = 1, .b = 2 }
+
+#export
+pub fn takes_pod_by_ptr(p: Pod$@): I32
+  return p.a + p.b
+
+fn main() {}

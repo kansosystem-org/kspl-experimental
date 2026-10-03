@@ -1,0 +1,343 @@
+//< The manual that ships with kspage, written in kspage itself
+//<
+//< **This is not a sample but the real contents.** The functions that read and write replace them,
+//< so what is decided here is only "what is shown when nothing is read in".
+//< How the manual is written (the reader's words, a heading's form, what must not be typed as
+//< text) is in "How the built-in manual is written" in kspage/docs/DESIGN.md.
+
+import "kspage/content/manual_share"
+import "kspage/content/manual_table"
+import "kspage/content/manual_write"
+import "kspage/model/collect" { Collect }
+import "kspage/model/doc" { Doc, new_block }
+import "kspage/model/font" { Font }
+import "kspage/model/marker"
+import "kspage/model/paint"
+import "kspage/model/paper"
+import "kspage/model/style" + { Sheet, Align, Arrange }
+import "std/mem" { Arena }
+
+struct Made //< the assembled document, and its style table
+  //<
+  //< **The two belong together** (the reason is at `Made` in `sample.kspls`).
+  doc: Doc$@
+  sheet: Sheet$@
+
+const rule_gray: U32 = 0xccccccU32 //< the grid's lines, and a faint fill behind text
+  //<
+  //< Caution: **If you fill with it, set the text color too.** Text with no color set takes the
+  //< screen's default color, so on a dark screen light text sits on a light fill.
+const on_light: U32 = 0x1a1a1aU32
+const heading_navy: U32 = 0x1a3a5cU32
+const quiet_gray: U32 = 0x666666U32
+
+priv fn add_text_styles(sheet: Sheet$@) //< the styles for the text
+  //<
+  //< **A heading's depth is carried by `outline` alone**, so the chapter number and the contents'
+  //< indent stay in step.
+  $title: paint.Font_spec = paint.inherit_all()
+  title.size_px = Option<|F32|>.some(26.0)
+  title.weight = Option<|U16|>.some(700U16)
+  t: = sheet.add("title", title)
+  t.space_after = 4.0
+  t.ink.color = Option<|U32|>.some(heading_navy)
+
+  $sub: paint.Font_spec = paint.inherit_all()
+  sub.size_px = Option<|F32|>.some(12.0)
+  s: = sheet.add("subtitle", sub)
+  s.space_after = 18.0
+  s.ink.color = Option<|U32|>.some(quiet_gray)
+
+  // A chapter. **The number is not written** (`outline` and `Marker.outline` produce the "1.").
+  $ch: paint.Font_spec = paint.inherit_all()
+  ch.size_px = Option<|F32|>.some(18.0)
+  ch.weight = Option<|U16|>.some(700U16)
+  c: = sheet.add("chapter", ch)
+  c.outline = 1
+  c.marker = marker.Marker.outline(".", ". ")
+  c.indent = 40.0
+  c.space_before = 16.0
+  c.space_after = 5.0
+  c.ink.color = Option<|U32|>.some(heading_navy)
+
+  // A section. The depth is 2, so the number appears as "1.2".
+  $se: paint.Font_spec = paint.inherit_all()
+  se.size_px = Option<|F32|>.some(14.5)
+  se.weight = Option<|U16|>.some(700U16)
+  x: = sheet.add("section", se)
+  x.outline = 2
+  x.marker = marker.Marker.outline(".", ". ")
+  x.indent = 46.0
+  x.space_before = 11.0
+  x.space_after = 4.0
+  x.ink.color = Option<|U32|>.some(heading_navy)
+
+  // A heading outside the list of chapters ("Contents", "Notes"). **Give it a depth**, or it drops
+  // off the map of headings. `in_chapters` keeps it out of the contents and the chapter count, so
+  // the contents cannot list themselves and the next chapter's number does not shift.
+  $plain: paint.Font_spec = paint.inherit_all()
+  plain.size_px = Option<|F32|>.some(14.5)
+  plain.weight = Option<|U16|>.some(700U16)
+  small_head: = sheet.add("subheading", plain)
+  small_head.outline = 1
+  small_head.in_chapters = false
+  small_head.space_before = 16.0
+  small_head.space_after = 4.0
+  small_head.ink.color = Option<|U32|>.some(heading_navy)
+
+  // **The line height multiple applies to the typeface's own line height, not to the font size**,
+  // so a number chosen with CSS's `line-height` in mind opens wider than intended.
+  body: = sheet.add("body", paint.inherit_all())
+  body.space_after = 6.0
+
+  $bold: paint.Font_spec = paint.inherit_all()
+  bold.weight = Option<|U16|>.some(700U16)
+  sheet.add("strong", bold)
+
+  $ital: paint.Font_spec = paint.inherit_all()
+  ital.italic = Option<|Bool|>.some(true)
+  sheet.add("italic", ital)
+
+  // The text of a key. **It is a style applied to a run** (not to a paragraph).
+  $key: paint.Font_spec = paint.inherit_all()
+  key.family = Option<|U8[]|>.some("monospace")
+  k: = sheet.add("key", key)
+  k.ink.background = Option<|U32|>.some(0xeeeeeeU32)
+  k.ink.color = Option<|U32|>.some(on_light)
+
+  // How a link looks. **The run holds the target; the style holds the blue and the underline.**
+  link: = sheet.add("link", paint.inherit_all())
+  link.ink.color = Option<|U32|>.some(0x1155ccU32)
+  link.ink.underline = Option<|Bool|>.some(true)
+
+  sheet.add("underline", paint.inherit_all()).ink.underline = Option<|Bool|>.some(true)
+  sheet.add("strikethrough", paint.inherit_all()).ink.strike = Option<|Bool|>.some(true)
+
+priv fn add_para_styles(sheet: Sheet$@) //< the styles around a paragraph
+  item: = sheet.add("bullet", paint.inherit_all())
+  item.indent = 26.0
+  item.marker = marker.Marker.bullet("• ")
+  item.space_after = 3.0
+
+  // Numbered (the restart rule is at `next_ord` in `../model/style.kspls`).
+  step: = sheet.add("step", paint.inherit_all())
+  step.indent = 34.0
+  step.marker = marker.Marker.number(". ")
+  step.space_after = 3.0
+
+  // A passage that needs care. **The fill and the text color are set as a pair.**
+  warn: = sheet.add("warning", paint.inherit_all())
+  warn.pad = 8.0
+  warn.fill = Option<|U32|>.some(0xfff4e0U32)
+  warn.ink.color = Option<|U32|>.some(0x5a3d00U32)
+  warn.rule_width = 1.0
+  warn.rule_color = 0xe8c88aU32
+  warn.space_before = 6.0
+  warn.space_after = 6.0
+
+  tip: = sheet.add("hint", paint.inherit_all())
+  tip.pad = 8.0
+  tip.fill = Option<|U32|>.some(0xeaf3fbU32)
+  tip.ink.color = Option<|U32|>.some(heading_navy)
+  tip.rule_width = 1.0
+  tip.rule_color = 0xa8cbe8U32
+  tip.space_before = 6.0
+  tip.space_after = 6.0
+
+  // A block of text. **It does not wrap** (the reason is in `sample.kspls`).
+  $mono: paint.Font_spec = paint.inherit_all()
+  mono.family = Option<|U8[]|>.some("monospace")
+  mono.size_px = Option<|F32|>.some(12.0)
+  code: = sheet.add("code", mono)
+  code.wrap = false
+  code.pad = 8.0
+  code.line_spacing = 1.1
+  code.fill = Option<|U32|>.some(0xf5f5f5U32)
+  code.ink.color = Option<|U32|>.some(on_light)
+  code.rule_width = 1.0
+  code.rule_color = 0xd8d8d8U32
+  code.space_before = 8.0
+  code.space_after = 8.0
+
+  // A figure's caption. **The running number counts across the whole document.**
+  $cap: paint.Font_spec = paint.inherit_all()
+  cap.size_px = Option<|F32|>.some(11.5)
+  cap_st: = sheet.add("caption", cap)
+  cap_st.marker = marker.Marker.serial("Figure ", ". ")
+  cap_st.align = Align.center
+  cap_st.ink.color = Option<|U32|>.some(quiet_gray)
+  cap_st.space_after = 10.0
+
+  two: = sheet.add("columns", paint.inherit_all())
+  two.columns = 2
+  two.column_gap = 26.0
+  two.space_before = 10.0
+  two.space_after = 10.0
+  sheet.add("column-body", paint.inherit_all()).space_after = 8.0
+
+priv fn add_table_styles(sheet: Sheet$@) //< the styles around a table
+  //<
+  //< **The grid is carried by the cell's style** (the reason is in `sample.kspls`).
+  table: = sheet.add("table", paint.inherit_all())
+  table.arrange = Arrange.grid
+  table.space_before = 6.0
+  table.space_after = 6.0
+
+  // **One cell style is enough** (varied per cell, the row height and the frame look mismatched).
+  cell: = sheet.add("cell", paint.inherit_all())
+  cell.pad = 4.0
+  cell.rule_width = 1.0
+  cell.rule_color = rule_gray
+
+  head: = sheet.add("heading-cell", paint.inherit_all())
+  head.pad = 4.0
+  head.rule_width = 1.0
+  head.rule_color = rule_gray
+  head.fill = Option<|U32|>.some(0xf0f0f0U32)
+  head.ink.color = Option<|U32|>.some(on_light)
+
+  // The number format for an amount. **The run's style decides it**; written on the cell's style
+  // it silently has no effect. It applies only to a formula's result.
+  money: = sheet.add("amount", paint.inherit_all())
+  money.number.grouped = true
+  money.number.places = Option<|Sz|>.some(0)
+  money.number.prefix = "$"
+
+priv fn add_frame_styles(sheet: Sheet$@) //< the things that collect and list, and the slide
+  // The contents. **What is inside does not go into the document.** **The color shows it can be
+  // clicked** (on the canvas, CSS's `:hover` does not apply).
+  toc: = sheet.add("contents", paint.inherit_all())
+  toc.ink.color = Option<|U32|>.some(0x1155ccU32)
+  toc.collect = Collect.contents
+  toc.indent = 18.0
+  toc.space_after = 10.0
+  toc.line_spacing = 1.1
+
+  // The notes' list. **The numbers do not go into the document.**
+  notes: = sheet.add("footnotes", paint.inherit_all())
+  notes.collect = Collect.notes
+  notes.space_before = 8.0
+
+  // It draws bars from a table's range. **The document holds only the range.**
+  // **Always set the fill and line colors.** A bar is a fill and the axis a line, so with neither
+  // **the range is computed and nothing is drawn**, which cannot be told apart from a mistyped
+  // range.
+  bars: = sheet.add("bar-chart", paint.inherit_all())
+  bars.collect = Collect.bars
+  bars.height = 200.0
+  bars.space_before = 10.0
+  bars.space_after = 10.0
+  bars.fill = Option<|U32|>.some(0x4a80b8U32)
+  bars.rule_width = 1.0
+  bars.rule_color = quiet_gray
+
+  // A page's header and footer. **The core fixes the names** (`header` / `footer`); another name
+  // here applies to neither.
+  $band_font: paint.Font_spec = paint.inherit_all()
+  band_font.size_px = Option<|F32|>.some(11.0)
+  head_band: = sheet.add("header", band_font)
+  head_band.align = Align.center
+  head_band.ink.color = Option<|U32|>.some(quiet_gray)
+  foot_band: = sheet.add("footer", band_font)
+  foot_band.align = Align.center
+  foot_band.ink.color = Option<|U32|>.some(quiet_gray)
+
+  // A slide, which places its children at fixed positions (`sample.kspls` explains its size).
+  slide: = sheet.add("slide", paint.inherit_all())
+  slide.arrange = Arrange.absolute
+  slide.width = 640.0
+  slide.height = 260.0
+  slide.space_before = 12.0
+  slide.space_after = 12.0
+  slide.fill = Option<|U32|>.some(0xfafafaU32)
+  slide.ink.color = Option<|U32|>.some(on_light)
+  slide.rule_width = 1.0
+  slide.rule_color = 0xddddddU32
+
+  $ft: paint.Font_spec = paint.inherit_all()
+  ft.size_px = Option<|F32|>.some(19.0)
+  ft.weight = Option<|U16|>.some(700U16)
+  frame_title: = sheet.add("slide-title", ft)
+  frame_title.ink.color = Option<|U32|>.some(heading_navy)
+
+  $fb: paint.Font_spec = paint.inherit_all()
+  fb.size_px = Option<|F32|>.some(13.0)
+  sheet.add("slide-body", fb).line_spacing = 1.07
+
+  // The styles for drawing the screen inside the manual. **Do not mix them with `slide-frame`**
+  // (the text box a person places on a slide). **The core never draws these two by name** (a
+  // style is saved with each document, so an older file keeps its own definition).
+  $small: paint.Font_spec = paint.inherit_all()
+  small.size_px = Option<|F32|>.some(12.0)
+  band: = sheet.add("screen-bar", small)
+  band.shape = style.Shape.box
+  band.align = Align.center
+  band.pad = 4.0
+  band.fill = Option<|U32|>.some(0xf0f0f0U32)
+  band.ink.color = Option<|U32|>.some(on_light)
+  band.rule_width = 1.0
+  band.rule_color = 0xbbbbbbU32
+
+  area: = sheet.add("screen-area", small)
+  area.shape = style.Shape.box
+  area.align = Align.center
+  area.pad = 4.0
+  area.fill = Option<|U32|>.some(0xffffffU32)
+  area.ink.color = Option<|U32|>.some(quiet_gray)
+  area.rule_width = 1.0
+  area.rule_color = 0xbbbbbbU32
+
+  // The numbered dot. **The number is typed as text**: a paragraph's leading mark sits in the
+  // indent's space, so it cannot go inside a frame.
+  $tiny: paint.Font_spec = paint.inherit_all()
+  tiny.size_px = Option<|F32|>.some(12.0)
+  tiny.weight = Option<|U16|>.some(700U16)
+  spot: = sheet.add("number-dot", tiny)
+  spot.shape = style.Shape.ellipse
+  spot.align = Align.center
+  spot.fill = Option<|U32|>.some(heading_navy)
+  spot.ink.color = Option<|U32|>.some(0xffffffU32)
+
+  // The pointing arrow. **It is separate from the line that connects frames** (this one only
+  // shows a direction, and does not follow when frames move).
+  arrow: = sheet.add("arrow", paint.inherit_all())
+  arrow.shape = style.Shape.rise_arrow
+  arrow.rule_width = 2.0
+  arrow.rule_color = heading_navy
+
+  box: = sheet.add("slide-frame", paint.inherit_all())
+  box.shape = style.Shape.round_box
+  box.align = Align.center
+  box.pad = 8.0
+  box.fill = Option<|U32|>.some(0xeaf3fbU32)
+  box.ink.color = Option<|U32|>.some(heading_navy)
+  box.rule_width = 1.0
+  box.rule_color = 0xa8cbe8U32
+
+fn build(a: Arena$@): Made //< the document shown
+  //<
+  //< **List the chapters in reading order** (the order decides their numbers).
+  root: = Font::{ .family = "sans-serif", .size_px = 13.0, .weight = 400U16, .italic = false }
+  sheet: = Sheet.new(root, a)
+  add_text_styles(sheet)
+  add_para_styles(sheet)
+  add_table_styles(sheet)
+  add_frame_styles(sheet)
+
+  // Caution: **Set the page first.** Unset, printing becomes one long canvas and the browser
+  // breaks the pages itself, partway down a line. **Do not copy the numbers here**: the source
+  // is `a4_portrait` in [`../model/paper.kspls`](../model/paper.kspls).
+  sheet.paper = paper.a4_portrait()
+
+  doc: = Doc.new(a)
+  // It puts the page number into the footer (`{page}` and `{pages}` are replaced per page).
+  // Caution: **Replace the footer's block whole.** Adding text leaves an empty run behind, and
+  // the page's field then shows two lines (it reaches only the first).
+  foot: = new_block("footer", a)
+  foot.add_text("{page} / {pages}")
+  doc.footer = foot
+  manual_write.add_front(doc)
+  manual_write.add_chapters(doc)
+  manual_table.add_chapters(doc)
+  manual_share.add_chapters(doc)
+  return Made::{ .doc = doc, .sheet = sheet }

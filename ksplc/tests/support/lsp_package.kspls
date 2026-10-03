@@ -1,0 +1,110 @@
+//< A package that names itself, edited in an editor opened on its own folder
+//<
+//< Not a suite; part of `../suite/lsp_test.kspls`.
+//< **The folder's name differs from the package's** (`alone/` holding `mypkg`). A server naming a
+//< document by its path (`use/user`) disagrees with the pipeline's `mypkg/use/user`: the jump, the
+//< rename and the hover find nothing, and a logical-name answer points into a missing `mypkg/`.
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/lsp_client"
+import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, end_text }
+import "std/chars"
+import "std/fs"
+import "std/json" + { Json_builder }
+import "std/jsonrpc"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+priv const normal_ms: I32 = 15000 //< the read timeout (the same as the suite's)
+priv const heavy_ms: I32 = 60000 //< the first answer analyses the prelude's import tree too
+
+priv const own_top: U8[] = "alone" //< the folder the server is started in, and the package's top
+priv const own_rels: U8[][4] = ::{ "alone/ksplc.cfg", "alone/lib.kspls", "alone/use/user.kspls",
+  "alone/gated.kspls" }
+priv const own_user: U8[] = "import \"mypkg/lib\"\n\npub fn use(): I32\n  return lib.hit()\n"
+priv const own_gated: U8[] = "#cfg(probe_flag)\npub fn gated(): I32\n  return 1\n" //<
+  //< A declaration an unset flag leaves out, which a hover explains with the reason
+priv const own_bodies: U8[][4] = ::{ "[package]\nname = mypkg\n", "pub fn hit(): I32\n  return 1\n",
+  own_user, own_gated }
+priv const own_call: U8[] = "  return lib.hit()"
+
+priv fn def_uri(c: jsonrpc.Client$@, uri: U8[], arena: Arena$@): U8[] //<
+  //< Where `hit` is defined, asked from the user's document under that spelling
+  pos: = lsp_client.at_pos(uri, decl_line(own_user, own_call, arena),
+    col_in_line(own_user, own_call, "hit", arena) + 1, arena)
+  got: = c.request("textDocument/definition", pos, heavy_ms, arena) catch
+    fallback json.Val.null_val
+  return got.get("result").get("uri").as_str()
+
+priv fn marks_on(c: jsonrpc.Client$@, uri: U8[], arena: Arena$@): I32 //<
+  //< How many diagnostics a `didOpen` of the user's document reports; -1 where none came
+  _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(uri, own_user, arena), arena)
+  for _k in Range.asc(12)
+    msg: = c.read_msg(normal_ms, arena) catch
+      break
+    if !msg.get("method").as_str().equals("textDocument/publishDiagnostics")
+      continue
+    got: = msg.get("params")
+    if !got.get("uri").as_str().equals(uri)
+      continue
+    return I32::got.get("diagnostics").arr_list(arena).len
+  return -1
+
+fn run(exe: U8[], arena: Arena$@)
+  name: = "a package's own folder is worked on as the package"
+  dir: = harness.sandbox("lsp_own") catch
+    verdict.check(name, false, "cannot make a working directory")
+    return
+  fs.write_tree(dir, U8[][]::own_rels, U8[][]::own_bodies, arena) catch
+    verdict.check(name, false, "it cannot be placed in the working directory")
+    return
+  top: = arena.text().s(dir).c('/').s(own_top).take()
+  $c: =
+    lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, top, arena) catch
+    verdict.check(name, false, "the language server cannot be started")
+    return
+  defer c.free()
+  $b: = Json_builder.new(arena)
+  _ready: = c.request("initialize", b.obj().build(), normal_ms, arena) catch e
+    verdict.check(name, false, end_text(e))
+    return
+  // **Both spellings are tested** (the two a client names a document by, `lsp_client.kspls`).
+  full: = lsp_client.uri_of(top, "use/user.kspls", arena)
+  marks: = marks_on(c@, full, arena)
+  verdict.check("a sound document of its own is marked with nothing", marks == 0,
+    lsp_client.why(c@, arena.text().s("\{marks\} diagnostics (-1: none came)").take(), arena))
+  back: = def_uri(c@, full, arena)
+  want: = lsp_client.uri_of(top, "lib.kspls", arena)
+  verdict.check("asked by the file:// URI, the jump lands on the file in its folder",
+    back.equals(want),
+    lsp_client.why(c@, arena.text().s("'").s(back).s("'").take(), arena))
+  _flat_open: = c.notify("textDocument/didOpen",
+    lsp_client.did_open("use/user.kspls", own_user, arena), arena)
+  flat: = def_uri(c@, "use/user.kspls", arena)
+  verdict.check("asked by the folder-relative name, it answers by that name",
+    flat.equals("lib.kspls"),
+    lsp_client.why(c@, arena.text().s("'").s(flat).s("'").take(), arena))
+  // **The workspace walk names what it reads the same way**, or a rename splits callers from the
+  // declaration.
+  at_hit: = b.obj().set("line", b.int_val(0I64)).set("character", b.int_val(8I64)).build()
+  params: = b.obj()
+    .set("textDocument", b.obj().set("uri", b.str_val("lib.kspls")).build())
+    .set("position", at_hit).set("newName", b.str_val("tap")).build()
+  renamed: = c.request("textDocument/rename", params, heavy_ms, arena) catch
+    fallback json.Val.null_val
+  changes: = renamed.get("result").get("changes")
+  verdict.check("a rename reaches the callers in its other folders",
+    changes.has_key("lib.kspls") && changes.has_key("use/user.kspls"),
+    lsp_client.dump(changes, arena))
+  // **The range left out is recorded under the logical name**, which a copy's URI need not end
+  // with.
+  gated: = lsp_client.uri_of(top, "gated.kspls", arena)
+  _gated_open: = c.notify("textDocument/didOpen",
+    lsp_client.did_open(gated, own_gated, arena), arena)
+  why: =
+    c.request("textDocument/hover", lsp_client.at_pos(gated, 1, 8, arena), normal_ms, arena) catch
+    fallback json.Val.null_val
+  said: = lsp_client.hover_text(why)
+  verdict.check("what an unraised #cfg leaves out of it answers with the reason",
+    said.find_str("not analyzed") >= 0,
+    lsp_client.why(c@, arena.text().s("'").s(said).s("'").take(), arena))

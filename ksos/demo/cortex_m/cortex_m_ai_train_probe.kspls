@@ -1,0 +1,131 @@
+//< A probe showing the training path on Cortex-M bare metal
+//<
+//< The path is `attention_train` / LoRA.
+//< It follows cortex_m_ai_probe.kspls (inference) and likewise avoids malloc with
+//< Arena.from_buffer and uses the cfg(freestanding) panic/std.math. It runs the same check as
+//< test_attention_lora_grad in ksai/tests/lora_test.kspls (the host version) — the base weights
+//< frozen, only LoRA learning, the loss falling — on real hardware (in software floating point).
+//< It also checks that saving the learned LoRA adapters to a static byte buffer (a mock flash)
+//< with save_raw and rebuilding them into another instance with load_raw keeps what was learned
+//< (persisting a result learned on the device).
+import "ksai/attention_train" as attn_train // adds train_forward_lora/backward_lora to
+// Self_attention
+import "ksai/block_train" // adds train_forward_lora/backward_lora to Transformer_block
+import "ksai/lora"
+import "ksai/nn"
+import "ksai/tensor" { Tensor }
+import "ksos/demo/common/semihost_console" as con
+import "std/mem" { Arena }
+import "std/prng"
+
+$storage: Sz[8192] = ::{}
+$flash_sim: U8[256] = ::{} // a static byte buffer standing in for "flash/NVRAM" (for persistence)
+
+// SysTick_Handler (port.o) calls it. This probe does not use the scheduler, so it is empty.
+#export
+fn ksos_tick() {}
+
+fn tsum(t: Tensor<|F32|>): F32
+  $s: = F32::0.0
+  for i in Range.asc(t.size)
+    s = s + (t.data + i)$
+  return s
+
+#export
+fn ksos_main()
+  con.puts("=== Cortex-M AI training probe ===\n")
+  panic_hook = con.on_panic
+  $arena: = Arena.from_buffer(Void$@::storage@, sizeof(Sz) * 8192)
+
+  seqn: Sz = 3
+  d: Sz = 4
+  $att: = nn.Self_attention<|F32|>.new(d, seqn, arena@)
+  $rng: = prng.Prng.new(7U64)
+  $q_lora: = lora.Lora<|F32|>.new(d, d, 2, 4.0, rng@, arena@)
+  $v_lora: = lora.Lora<|F32|>.new(d, d, 2, 4.0, rng@, arena@)
+
+  x_shape: Sz[2] = ::{ seqn, d }
+  x: = Tensor<|F32|>.new(Sz[]::x_shape, arena@)
+  for i in Range.asc(x.size)
+    (x.data + i)$ = (F32::0.1) * (F32::i) - F32::0.5
+
+  // A snapshot of the base weights (wq) (to check they stay frozen through training)
+  wq_sum_before: = tsum(att.wq.weights)
+
+  c0: = att.train_forward_lora(x, q_lora@, v_lora@)
+  before: = tsum(c0.out)
+
+  for _step in Range.asc(20)
+    mark: = arena.save() // reset each step's temporary tensors, so they do not pile up
+    $cc: = att.train_forward_lora(x, q_lora@, v_lora@)
+    $d1: = Tensor<|F32|>.new(cc.out.shape, arena@)
+    d1.fill(F32::1.0)
+    att.backward_lora(cc@, d1, 0.01, q_lora@, v_lora@)
+    arena.restore(mark)
+
+  c1: = att.train_forward_lora(x, q_lora@, v_lora@)
+  after: = tsum(c1.out)
+
+  drift: = tsum(att.wq.weights) - wq_sum_before
+  drift_abs: = -drift if drift < F32::0.0 else drift
+
+  con.check("attention_lora_train", after < before && drift_abs < F32::1.0e-6)
+
+  // Check that saving the LoRA adapters learned on the device to a static byte buffer standing in
+  // for "flash/NVRAM" and rebuilding them (a mock read after a restart) independently of the
+  // original instances (q_lora/v_lora) keeps what was learned. save_set_into/load_set_from
+  // (safetensors plus JSON) need the global heap through Str_builder, but this probe runs on
+  // Arena.from_buffer alone, so it uses the heap-free Lora.save_raw/load_raw.
+  q_bytes: Sz = q_lora.raw_size()
+  q_lora.save_raw(Void$@::flash_sim@)
+  v_lora.save_raw(Void$@::(flash_sim@ + q_bytes))
+
+  $q_lora2: = lora.Lora<|F32|>.load_raw(Void$@::flash_sim@, d, d, 2, arena@)
+  $v_lora2: = lora.Lora<|F32|>.load_raw(Void$@::(flash_sim@ + q_bytes), d, d, 2, arena@)
+
+  c2: = att.train_forward_lora(x, q_lora2@, v_lora2@)
+  after_reload: = tsum(c2.out)
+  persist_diff: = after_reload - after
+  persist_diff_abs: = -persist_diff if persist_diff < F32::0.0 else persist_diff
+
+  con.check("lora_persist", persist_diff_abs < F32::1.0e-6)
+
+  // The variant that freezes the whole block (attention_norm/wq/wk/wv/wo/ffn_norm/fc1/fc2) and
+  // trains only the LoRA attached to Attention's Q/V and the MLP's fc1/fc2.
+  hidden: Sz = 8
+  $blk: = nn.Transformer_block<|F32|>.new(d, hidden, seqn, F32::1.0e-5, arena@)
+  $fc1_lora: = lora.Lora<|F32|>.new(d, hidden, 2, 4.0, rng@, arena@)
+  $fc2_lora: = lora.Lora<|F32|>.new(hidden, d, 2, 4.0, rng@, arena@)
+
+  blk_wq_before: = tsum(blk.attention.wq.weights)
+  blk_fc1_before: = tsum(blk.ffn.fc1.weights)
+  blk_norm_before: = tsum(blk.attention_norm.weight)
+
+  bc0: = blk.train_forward_lora(x, q_lora@, v_lora@, fc1_lora@, fc2_lora@)
+  blk_before: = tsum(bc0.out)
+
+  for _step in Range.asc(20)
+    mark: = arena.save() // reset per iteration, as above
+    $bcc: = blk.train_forward_lora(x, q_lora@, v_lora@, fc1_lora@, fc2_lora@)
+    $d2: = Tensor<|F32|>.new(bcc.out.shape, arena@)
+    d2.fill(F32::1.0)
+    blk.backward_lora(bcc@, d2, 0.01, q_lora@, v_lora@, fc1_lora@, fc2_lora@)
+    arena.restore(mark)
+
+  bc1: = blk.train_forward_lora(x, q_lora@, v_lora@, fc1_lora@, fc2_lora@)
+  blk_after: = tsum(bc1.out)
+
+  blk_wq_drift_raw: = tsum(blk.attention.wq.weights) - blk_wq_before
+  blk_wq_drift: = -blk_wq_drift_raw if blk_wq_drift_raw < F32::0.0 else blk_wq_drift_raw
+  blk_fc1_drift_raw: = tsum(blk.ffn.fc1.weights) - blk_fc1_before
+  blk_fc1_drift: = -blk_fc1_drift_raw if blk_fc1_drift_raw < F32::0.0 else blk_fc1_drift_raw
+  blk_norm_drift_raw: = tsum(blk.attention_norm.weight) - blk_norm_before
+  blk_norm_drift: = -blk_norm_drift_raw if blk_norm_drift_raw < F32::0.0 else blk_norm_drift_raw
+
+  con.check("block_lora_train",
+    blk_after < blk_before && blk_wq_drift < F32::1.0e-6 && blk_fc1_drift < F32::1.0e-6 &&
+    blk_norm_drift < F32::1.0e-6)
+
+  con.print_summary("AI training probe done")
+  con.exit()
+  for {}

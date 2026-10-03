@@ -1,0 +1,629 @@
+//< The endpoints under `/api/`
+//<
+//< To add an endpoint, add one row to `routes` and one case to `Api.queue`. How a response is
+//< queued (`conn.queue_response`) lives in `kssrv/conn.kspls`.
+//< Caution: **Do not return a listing with no cap** (see `max_list_entries`).
+//< **Do not mix the local-use endpoints (`--local`) with the outward-facing ones.** The file
+//< endpoints read and write under the root, so facing outward they **do not exist**.
+import "kssrv/conn"
+import "kssrv/model"
+import "kssrv/pilot"
+import "kssrv/proc"
+import "kssrv/worker"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/http"
+import "std/io"
+import "std/json" + { Json_builder }
+import "std/mem" { dealloc }
+import "std/str" { Str_builder }
+import "std/strnum"
+import "std/time"
+import "std/url"
+
+const api_prefix: U8[] = "/api/" //< the JSON API's prefix
+  //<
+  //< Below it a routing table answers, not static serving.
+
+const max_list_entries: Sz = 1000 //< the cap on the entries `GET /api/list` returns at once
+  //<
+  //< With no cap, one directory with many entries makes the response grow without limit.
+
+const bearer: U8[] = "Bearer " //< the prefix before the token in the `Authorization` header
+
+const part_suffix: U8[] = ".kssrv-part" //< the suffix of a partly written file
+  //<
+  //< Caution: **Put it in the same folder**, or the rename fails across file systems.
+
+fn queue_json(c: conn.Conn$@, status: I32, val: json.Val, keep: Bool) //<
+  //< Builds one JSON value and queues it as the response
+  $body: = Str_builder.new()
+  defer body.free()
+  val.dump(body@)
+  conn.queue_response(c, status, "application/json", body.slice(), body.len, keep)
+
+fn queue_json_error(c: conn.Conn$@, status: I32)
+  reason: = http.reason_phrase(status)
+  $b: = Json_builder.new(c.arena)
+  val: = b.obj().set("error", b.str_val(reason)).set("status", b.int_val(status)).build()
+  // An error response closes (the same reason as `queue_error` on the static side).
+  queue_json(c, status, val, false)
+
+fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx$@, keep: Bool) //<
+  //< `GET /api/status`: returns that it is running, and how much it has handled
+  $b: = Json_builder.new(c.arena)
+  // Caution: Read the statistics the worker copied, not the model (the reason is at `model.Stats`).
+  m: = worker.model_stats(ctx.w)
+  model_val: = b.obj().set("params", b.int_val(m.params))
+    .set("resident_bytes", b.int_val(m.int8_bytes)).set("f32_bytes", b.int_val(m.f32_bytes))
+    .set("train_cpu_ms", b.int_val(m.train_ms))
+    .set("context_bytes", b.int_val(model.ctx_len))
+    .set("adapter_params", b.int_val(m.adapter_params))
+    .set("trainings", b.int_val(m.trainings)).build()
+  // The car's steering policy does not change after `build()`, so it is read directly.
+  pilot_val: = b.obj().set("params", b.int_val(ctx.p.params))
+    .set("samples", b.int_val(ctx.p.samples))
+    .set("train_cpu_ms", b.int_val(ctx.p.train_ms))
+    .set("agreement", b.float_val(ctx.p.agreement))
+    .set("agreement_checked", b.int_val(ctx.p.checked))
+    .set("command_valid_ms", b.int_val(pilot.command_valid_ms)).build()
+  // Caution: **Say whether it is for local use.** Otherwise the page shows the local tools even
+  // where there are no file endpoints: buttons that do nothing. Without the token this is a 401,
+  // so nothing leaks.
+  val: = b.obj().set("root", b.str_val(ctx.root))
+    .set("local", b.bool_val(ctx.token.len > 0))
+    .set("uptime_s", b.int_val(time.now() - conn.stats.started_s))
+    .set("requests", b.int_val(conn.stats.requests))
+    .set("inferences", b.int_val(conn.stats.inferences))
+    .set("trainings", b.int_val(conn.stats.trainings))
+    .set("commands", b.int_val(conn.stats.commands))
+    .set("connections_total", b.int_val(conn.stats.connections_total))
+    .set("connections_open", b.int_val(conn.stats.connections_open))
+    .set("max_connections", b.int_val(conn.max_conns)).set("model", model_val)
+    .set("pilot", pilot_val).build()
+  queue_json(c, 200, val, keep)
+
+priv fn query_value(params: url.Query_param$@, name: U8[]): U8[] //<
+  //< The value of the query's `<name>=`
+  //<
+  //< Empty if there is none.
+  //< Caution: **Do not write it per endpoint.** Copied per endpoint, a name mix-up (`path` versus
+  //< `paths`) gets fixed in only one of them.
+  $p: = params
+  for p != null
+    if p.name.equals(name)
+      return p.value
+    p = p.next
+  return ""
+
+fn rel_or_refuse(c: conn.Conn$@, query: U8[], root: U8[]): Option<|U8[]|> //<
+  //< Takes the relative path under the root from `path=`
+  //<
+  //< Caution: **Run the query's value through static serving's check (`fs.stays_under`), after
+  //< the decode** ("The path is checked after the decode" in `kssrv/docs/DESIGN.md`). **Do not
+  //< write the refusal differently per endpoint**, or a new endpoint refuses another way. Empty
+  //< means no `path=`, or the root itself.
+  params: = url.parse_query(query, c.arena) catch _e
+    queue_json_error(c, 400)
+    return Option<|U8[]|>.none
+  got: = rel_under(root, query_value(params, "path"))
+  if !got.is_some()
+    queue_json_error(c, 403)
+  return got
+
+fn rel_under(root: U8[], path: U8[]): Option<|U8[]|> //<
+  //< The path with its leading `/`s dropped, if it stays under the root (`fs.stays_under`)
+  //<
+  //< Empty means the root itself. Static serving and the endpoints taking `path=` both ask this.
+  $rel: = path
+  for rel.len > 0 && rel[0] == '/'
+    rel = rel.sub_from(1)
+  if rel.len > 0 && !fs.stays_under(root, rel)
+    return Option<|U8[]|>.none
+  return Option<|U8[]|>.some(rel)
+
+fn queue_api_list(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
+  //< `GET /api/list?path=<percent-encoded>`: returns the contents of a directory under the root
+  $rel: U8[] = ""
+  switch rel_or_refuse(c, query, root) case .some(r)
+    rel = r
+  case .none
+    return
+
+  dir: = root if rel.len == 0 else fs.join(root, rel, c.arena)
+  names: = fs.read_dir(dir, c.arena) catch _e
+    queue_json_error(c, 404)
+    return
+
+  $b: = Json_builder.new(c.arena)
+  $items: = b.arr()
+  $shown: Sz = 0
+  for name in names
+    if shown >= max_list_entries
+      break
+    child: = fs.join(dir, name, c.arena)
+    info: = fs.stat(child) catch _e
+      continue // it vanished during the scan
+    entry: = b.obj().set("name", b.str_val(name)).set("is_dir", b.bool_val(info.is_dir))
+      .set("size", b.int_val(info.size)).build()
+    items = items.push(entry)
+    shown += 1
+  val: = b.obj().set("path", b.str_val(rel)).set("truncated", b.bool_val(names.len > shown))
+    .set("entries", items.build()).build()
+  queue_json(c, 200, val, keep)
+
+// ==========================================
+// The local-use endpoints (files, and whether something changed)
+// **These endpoints do not exist facing outward**: without `--local`, `queue_api` answers them
+// with a 404. `GET /api/file?path=<p>` returns that file's bytes; `PUT /api/file?path=<p>` writes
+// the body.
+// ==========================================
+fn queue_api_file(c: conn.Conn$@, t: conn.Target, req: http.Request$@, root: U8[], keep: Bool)
+  $rel: U8[] = ""
+  switch rel_or_refuse(c, t.query, root) case .some(r)
+    rel = r
+  case .none
+    return
+  if rel.len == 0
+    // The root itself is not a file; this endpoint needs a name.
+    queue_json_error(c, 400)
+    return
+  path: = fs.join(root, rel, c.arena)
+  // Only GET and PUT come here (`routes`).
+  if req.method.equals("GET")
+    queue_get_file(c, path, keep)
+  else
+    queue_put_file(c, path, req.body, keep)
+
+fn queue_get_file(c: conn.Conn$@, path: U8[], keep: Bool) //<
+  //< Queues the file at `path` as the response, typed octet-stream
+  //<
+  //< **The type is not guessed from the content**, since a receiver trusts a guessed type.
+  //< Reading it as UTF-8 is the caller's job; the server does not guess the encoding.
+  // Caution: **Check the stat first.** On some OSes `fopen` opens a folder, and the read's result
+  // alone cannot tell that from "a broken file".
+  info: = fs.stat(path) catch _e
+    queue_json_error(c, 404)
+    return
+  if info.is_dir
+    queue_json_error(c, 404)
+    return
+  body: = io.read_file(path) catch _e
+    queue_json_error(c, 500)
+    return
+  // `read_file` returns raw heap memory, which a rewind does not free, so it is freed here, after
+  // the copy into `outbuf`.
+  defer dealloc(Void$@::body.ptr)
+  conn.queue_response(c, 200, "application/octet-stream", body, body.len, keep)
+
+fn queue_put_file(c: conn.Conn$@, path: U8[], body: U8[], keep: Bool) //<
+  //< Writes `body` to the file at `path` and queues a response saying how much was written
+  //<
+  //< Caution: **Write to another name, then rename.** Written in place, a crash partway leaves it
+  //< half rewritten. The body's cap is in `kssrv/main.kspls` (a 413 never reaches here).
+  part: = c.arena.text().s(path).s(part_suffix).take()
+  io.write_file(part, body) catch _e
+    // No folder, or not writable: not a missing name, so not a 404.
+    queue_json_error(c, 500)
+    return
+  fs.rename_path(part, path) catch _e
+    // Caution: Remove the partly written file if the rename fails, or the next write starts on top
+    // of it.
+    fs.remove_path(part) catch {}
+    queue_json_error(c, 500)
+    return
+  $b: = Json_builder.new(c.arena)
+  val: = b.obj().set("wrote", b.int_val(body.len)).build()
+  queue_json(c, 200, val, keep)
+
+fn queue_api_stat(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
+  //< `GET /api/stat?path=<p>`: returns whether something changed
+  //<
+  //< Caution: **Do not return the content**, or it arrives by two paths (the file endpoint reads
+  //< it). **Nothing is missed**: it returns "how things are now", not "how many times it changed",
+  //< so it catches up however many changes happen in between.
+  $rel: U8[] = ""
+  switch rel_or_refuse(c, query, root) case .some(r)
+    rel = r
+  case .none
+    return
+  target: = root if rel.len == 0 else fs.join(root, rel, c.arena)
+  info: = fs.stat(target) catch _e
+    queue_json_error(c, 404)
+    return
+  $b: = Json_builder.new(c.arena)
+  val: = b.obj().set("size", b.int_val(info.size)).set("changed_at", b.int_val(info.mtime)).build()
+  queue_json(c, 200, val, keep)
+
+// ==========================================
+// The token
+// ==========================================
+
+fn token_matches(given: U8[], want: U8[]): Bool //<
+  //< Whether `given` is the token `want`, compared in a time that does not depend on the bytes
+  //<
+  //< Caution: **Do not return at the first differing byte**, or the response times reveal the token
+  //< one byte at a time. Another site's page in the browser can reach the loopback too.
+  if given.len != want.len
+    return false
+  $diff: U8 = 0U8
+  for i in Range.asc(want.len)
+    diff |= given[i] ^ want[i]
+  return diff == 0U8
+
+fn authorized(req: http.Request$@, token: U8[]): Bool
+  if v: = req.headers.find("Authorization")
+    given: = v
+    if !given.starts_with(bearer)
+      return false
+    return token_matches(given.sub_from(bearer.len), token)
+  return false
+
+fn queue_api_infer(c: conn.Conn$@, slot: Sz, req: http.Request$@, w: worker.Worker$@): Bool //<
+  //< `POST /api/infer`: queues the inference the body's JSON asks for on the worker
+  //<
+  //< The JSON gives the prompt and the steps. **No response is built here**: the inference runs on
+  //< another thread, and `drain_inference` builds it. False means it could not be queued, and the
+  //< error response is already queued.
+  doc: = json.parse(req.body, c.arena) catch _e
+    queue_json_error(c, 400)
+    return false
+  prompt: = doc.get("prompt").as_str()
+  if prompt.len == 0
+    queue_json_error(c, 400)
+    return false
+  steps: = doc.get("steps").as_int(32)
+  if steps <= 0 || Sz::steps > model.max_steps
+    queue_json_error(c, 400)
+    return false
+  if !worker.submit(w, worker.Job_kind.infer, slot, c.serial, prompt, steps)
+    // The job table is full.
+    // Caution: Refuse rather than make the client wait (waiting holds the waiter's state).
+    queue_json_error(c, 503)
+    return false
+  c.awaiting = true
+  conn.stats.inferences += 1I64
+  return true
+
+fn queue_api_train(c: conn.Conn$@, slot: Sz, req: http.Request$@, w: worker.Worker$@): Bool //<
+  //< `POST /api/train`: continues training the LoRA adapters on the body (the base stays frozen)
+  //<
+  //< **It goes to the same worker as inference** (the reason is at `worker.Job_kind`); inference
+  //< during training waits.
+  doc: = json.parse(req.body, c.arena) catch _e
+    queue_json_error(c, 400)
+    return false
+  text: = doc.get("text").as_str()
+  if text.len == 0 || text.len > model.max_train_bytes
+    queue_json_error(c, 400)
+    return false
+  epochs: = doc.get("epochs").as_int(4)
+  if epochs <= 0 || Sz::epochs > model.max_train_epochs
+    queue_json_error(c, 400)
+    return false
+  if !worker.submit(w, worker.Job_kind.train, slot, c.serial, text, epochs)
+    queue_json_error(c, 503)
+    return false
+  c.awaiting = true
+  conn.stats.trainings += 1I64
+  return true
+
+fn queue_api_car(c: conn.Conn$@, req: http.Request$@, p: pilot.Pilot$@, keep: Bool) //<
+  //< `POST /api/car`: takes the distance and line the car measured and returns one manoeuvre
+  //<
+  //< `{"dist_mm":250,"line":2,"seq":17}` goes in, and
+  //< `{"seq":17,"cmd":"strafe_right","lon":0,"lat":50,"rot":0,"valid_ms":500}` comes back.
+  //< **It is not passed to the worker**: a few hundred weights, read-only after `build()`.
+  //< Caution: **Return `seq` unchanged**: it is the car's only way to tell that the answer is for
+  //< its latest request.
+  doc: = json.parse(req.body, c.arena) catch _e
+    queue_json_error(c, 400)
+    return
+  // Caution: **Do not default a missing `dist_mm` to 0**, which means "it could not be measured";
+  // as a default it would turn a broken request into a valid observation.
+  dist: = doc.get("dist_mm").as_int64(-1I64)
+  line: = doc.get("line").as_int64(-1I64)
+  if dist < 0I64 || line < 0I64 || line > 7I64
+    queue_json_error(c, 400)
+    return
+  seq: = doc.get("seq").as_int64(0I64)
+  obs: = pilot.Obs::{ .dist_mm = dist, .line = line }
+  // The work uses the connection's arena, which `conn_build` rewinds per request.
+  act: = pilot.decide(p, obs, c.arena)
+  m: = pilot.maneuvers[act]
+  conn.stats.commands += 1I64
+  $b: = Json_builder.new(c.arena)
+  val: = b.obj().set("seq", b.int_val(seq)).set("cmd", b.str_val(m.name))
+    .set("lon", b.int_val(m.lon)).set("lat", b.int_val(m.lat)).set("rot", b.int_val(m.rot))
+    .set("valid_ms", b.int_val(pilot.command_valid_ms)).build()
+  queue_json(c, 200, val, keep)
+
+fn queue_api_pilot(c: conn.Conn$@, p: pilot.Pilot$@, keep: Bool) //<
+  //< `GET /api/pilot`: returns one whole steering policy as safetensors
+  //<
+  //< The policy is the weights, the manoeuvre table and the preprocessing constants. A car that
+  //< has it decides for itself without asking per observation; the same weights answer
+  //< `POST /api/car`. **The type is octet-stream** (no MIME type is registered for safetensors).
+  $blob: = pilot.export(p, c.arena)
+  defer blob.free()
+  conn.queue_response(c, 200, "application/octet-stream", blob.slice(), blob.len, keep)
+
+fn local_only(c: conn.Conn$@, ctx: conn.Ctx$@): Bool //<
+  //< whether the local-use endpoints exist
+  //<
+  //< **Facing outward there are none**: with no token, anyone who learns the address could read and
+  //< write under the root.
+  if ctx.token.len > 0
+    return true
+  queue_json_error(c, 404)
+  return false
+
+priv fn queue_api_run(c: conn.Conn$@, slot: Sz, t: conn.Target, req: http.Request$@,
+  ctx: conn.Ctx$@, keep: Bool) //<
+    //< Handles the requests under `/api/run`
+    //<
+    //< **Only the allowed combinations can be started** (the table in `kssrv/proc.kspls`).
+    //< Caution: **Check `cwd` against the root too**: starting outside the root is reading outside
+    //< it. An empty path means the root itself.
+  rest: = t.path.sub_from("/api/run".len)
+  if rest.len == 0
+    if !req.method.equals("POST")
+      queue_json_error(c, 405)
+      return
+    queue_run_start(c, req, ctx, keep)
+    return
+  if rest[0] != '/'
+    queue_json_error(c, 404)
+    return
+  tail: = rest.sub_from(1)
+  cut: = tail.find_char('/')
+  id_text: = tail if cut < 0 else tail.sub(0, cut)
+  id: = id_text.to_i64() catch 0I64
+  if id <= 0I64
+    queue_json_error(c, 404)
+    return
+  if cut >= 0 && tail.sub_from(cut).equals("/in")
+    if !req.method.equals("POST")
+      queue_json_error(c, 405)
+      return
+    if !proc.feed(ctx.procs, id, req.body)
+      queue_json_error(c, 404)
+      return
+    queue_ok(c, keep)
+    return
+  if cut >= 0
+    queue_json_error(c, 404)
+    return
+  // Caution: **Tell an unknown id from a stream someone already watches** (404 versus 409; the
+  // agreement's table), or a mistyped id reads as "someone is watching".
+  if proc.slot_of(ctx.procs, id) < 0
+    queue_json_error(c, 404)
+    return
+  if req.method.equals("DELETE")
+    if !proc.stop(ctx.procs, id)
+      queue_json_error(c, 404)
+      return
+    queue_ok(c, keep)
+    return
+  if !req.method.equals("GET")
+    queue_json_error(c, 405)
+    return
+  // **There is only one watcher** (the reason is at `proc.watch`).
+  if !proc.watch(ctx.procs, id, slot, c.serial)
+    queue_json_error(c, 409)
+    return
+  // **It keeps sending without a stated length**; closing marks the end (the last chunk is
+  // `{"exit":…}`). The page reads it as a `fetch` stream.
+  conn.queue_stream_head(c)
+
+priv fn queue_ok(c: conn.Conn$@, keep: Bool) //< returns only "it took effect"
+  //<
+  //< **A response with no content is JSON too**, so the page need not branch on the format.
+  $b: = Json_builder.new(c.arena)
+  queue_json(c, 200, b.obj().build(), keep)
+
+priv fn queue_run_missing(c: conn.Conn$@, looked: List<|U8[]|>$@) //<
+  //< Returns the failure to start, with the places it looked
+  //<
+  //< **The page writes the message** (as for the other refusals); this sends only "where it
+  //< looked" (the reason is at `proc.exe_path`).
+  $b: = Json_builder.new(c.arena)
+  $arr: = b.arr()
+  for at in looked.slice()
+    arr = arr.push(b.str_val(at))
+  val: = b.obj().set("error", b.str_val("Internal Server Error"))
+    .set("status", b.int_val(500)).set("looked", arr.build()).build()
+  queue_json(c, 500, val, false)
+
+fn queue_api_plugins(c: conn.Conn$@, ctx: conn.Ctx$@, keep: Bool) //<
+  //< `GET /api/plugins`: the plugins this server found next to itself
+  //<
+  //< **Only the names go out, never a path**: what is on the machine is not the client's to learn,
+  //< and the client starts one by sending its name back (`/api/run`). **No plugins is an empty
+  //< list, not a refusal**, so the client needs no second branch.
+  $b: = Json_builder.new(c.arena)
+  $arr: = b.arr()
+  n: = proc.plugin_count(ctx.procs)
+  for $i: Sz = 0; i < n; i += 1
+    arr = arr.push(b.str_val(proc.plugin_at(ctx.procs, i)))
+  queue_json(c, 200, b.obj().set("plugins", arr.build()).build(), keep)
+
+fn queue_api_here(c: conn.Conn$@) //<
+  //< `GET /api/here`: the page holds this connection open for as long as the page is open
+  //<
+  //< **Nothing is ever sent on it.** The connection itself is the message, and closing the tab
+  //< closes it, so the server learns the moment the page goes, with no timer.
+  //< Caution: **Do not answer and close.** Then the server would know only "someone asked a while
+  //< ago", and how long ago is the guess this avoids.
+  conn.queue_stream_head(c)
+  c.holding = true
+
+fn queue_api_stop(c: conn.Conn$@) //<
+  //< `POST /api/stop`: answers, and the server stops once the answer has gone out
+  //<
+  //< **The answer comes first**, so the asker tells "it stopped" from "the connection broke". The
+  //< accept loop does the stopping (`conn.stop_asked_by`), and the children go with it.
+  conn.stop_asked_by = c.serial
+  queue_ok(c, false)
+
+priv fn queue_run_start(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@, keep: Bool) //<
+  //< `POST /api/run`: starts one process
+  said: = json.parse(req.body, c.arena) catch _e
+    queue_json_error(c, 400)
+    return
+  cmd: = said.get("cmd").as_str()
+  // **The arguments are compared as one string**, as the table stores them.
+  $args: = Str_builder.new()
+  defer args.free()
+  $first: = true
+  $told: = said.get("args").arr_list(c.arena)
+  defer told.free()
+  for v in told.slice()
+    if !first
+      args.c(' ')
+    first = false
+    args.s(v.as_str())
+  $cwd: U8[] = ""
+  rel: = said.get("cwd").as_str()
+  if rel.len > 0
+    // Caution: **Run it through the root check** (`..` steps, an absolute path, a link inside).
+    if !fs.stays_under(ctx.root, rel)
+      queue_json_error(c, 403)
+      return
+  cwd = fs.join(ctx.root, rel, c.arena) if rel.len > 0 else ctx.root
+  $looked: = List<|U8[]|>.new(c.arena)
+  // The initial input, always passed: **a filter needs all of it before it answers**, and the row
+  // decides whether it is one.
+  id: = proc.start(ctx.procs, cmd, args.slice(), cwd, said.get("in").as_str(), looked@, c.arena)
+  if id == 0I64
+    // Caution: **Keep "it is not allowed" and "it could not be started" apart** (they are fixed
+    // differently).
+    queue_json_error(c, 403)
+    return
+  if id == -2I64
+    // Too many would be running.
+    // Caution: **Refuse rather than make the client wait** (as for the inference table).
+    queue_json_error(c, 503)
+    return
+  if id < 0I64
+    queue_run_missing(c, looked@)
+    return
+  $b: = Json_builder.new(c.arena)
+  queue_json(c, 200, b.obj().set("id", b.int_val(id)).build(), keep)
+
+// ==========================================
+// The dispatch under `/api/`, checked before static serving (a file named `api` under the root
+// loses)
+// ==========================================
+
+priv enum Api //< the endpoint a route reaches
+  file
+  stat
+  run
+  plugins
+  here
+  stop
+  status
+  list
+  infer
+  train
+  car
+  pilot
+
+priv struct Route //< one entry point under `/api/`
+  path: U8[] //< the path, or its start where `prefix` is set
+  prefix: Bool //< the path only starts with `path` (`/api/run/<id>` and below)
+  local: Bool //< it exists only for local use; facing outward it is a 404 (`local_only`)
+  methods: U8[] //< the methods it takes, each followed by a space; another one is a 405
+  api: Api //< the endpoint it reaches
+
+priv const routes: Route[12] = ::{ //<
+  //< Every entry point, with who may reach it and by which methods
+  //<
+  //< **The guards run once, here, for every row**: decided per endpoint, a new one forgets one.
+  //< `/api/file` has no `HEAD`: `/api/stat` gives the size and whether it exists (Principle 6).
+  Route::{ .path = "/api/file", .prefix = false, .local = true, .methods = "GET PUT ",
+    .api = Api.file },
+  Route::{ .path = "/api/stat", .prefix = false, .local = true, .methods = "GET ",
+    .api = Api.stat },
+  Route::{ .path = "/api/run", .prefix = true, .local = true, .methods = "GET POST DELETE ",
+    .api = Api.run },
+  Route::{ .path = "/api/plugins", .prefix = false, .local = true, .methods = "GET ",
+    .api = Api.plugins },
+  Route::{ .path = "/api/here", .prefix = false, .local = true, .methods = "GET ",
+    .api = Api.here },
+  Route::{ .path = "/api/stop", .prefix = false, .local = true, .methods = "POST ",
+    .api = Api.stop },
+  Route::{ .path = "/api/status", .prefix = false, .local = false, .methods = "GET ",
+    .api = Api.status },
+  Route::{ .path = "/api/list", .prefix = false, .local = false, .methods = "GET ",
+    .api = Api.list },
+  Route::{ .path = "/api/infer", .prefix = false, .local = false, .methods = "POST ",
+    .api = Api.infer },
+  Route::{ .path = "/api/train", .prefix = false, .local = false, .methods = "POST ",
+    .api = Api.train },
+  Route::{ .path = "/api/car", .prefix = false, .local = false, .methods = "POST ",
+    .api = Api.car },
+  Route::{ .path = "/api/pilot", .prefix = false, .local = false, .methods = "GET ",
+    .api = Api.pilot },
+}
+
+priv fn takes(r: Route, method: U8[]): Bool //< whether the route takes that method
+  $rest: = r.methods
+  for rest.len > 0
+    sp: = rest.find_char(' ')
+    if rest.sub(0, sp).equals(method)
+      return true
+    rest = rest.sub_from(sp + 1)
+  return false
+
+// It returns whether the connection now waits for an inference result.
+fn queue_api(c: conn.Conn$@, slot: Sz, t: conn.Target, req: http.Request$@, ctx: conn.Ctx$@,
+  keep: Bool): Bool
+  // **For local use, all of `/api/` needs a token**; decided per endpoint, a new one forgets it.
+  // Only static serving, which passes the token on, needs none.
+  if ctx.token.len > 0 && !authorized(req, ctx.token)
+    queue_json_error(c, 401)
+    return false
+  for r in routes
+    if !t.path.equals(r.path) && !(r.prefix && t.path.starts_with(r.path))
+      continue
+    if r.local && !local_only(c, ctx)
+      return false
+    if !takes(r, req.method)
+      queue_json_error(c, 405)
+      return false
+    return r.api.queue(c, slot, t, req, ctx, keep)
+  queue_json_error(c, 404)
+  return false
+
+impl Api
+  priv fn queue(r: Self, c: conn.Conn$@, slot: Sz, t: conn.Target, req: http.Request$@,
+    ctx: conn.Ctx$@, keep: Bool): Bool //<
+      //< Hands one request to this endpoint, once `queue_api`'s guards have passed
+    switch r case .file
+      queue_api_file(c, t, req, ctx.root, keep)
+    case .stat
+      queue_api_stat(c, t.query, ctx.root, keep)
+    case .run
+      queue_api_run(c, slot, t, req, ctx, keep)
+    case .plugins
+      queue_api_plugins(c, ctx, keep)
+    case .here
+      queue_api_here(c)
+    case .stop
+      queue_api_stop(c)
+    case .status
+      queue_api_status(c, ctx, keep)
+    case .list
+      queue_api_list(c, t.query, ctx.root, keep)
+    case .infer
+      return queue_api_infer(c, slot, req, ctx.w)
+    case .train
+      return queue_api_train(c, slot, req, ctx.w)
+    case .car
+      queue_api_car(c, req, ctx.p, keep)
+    case .pilot
+      queue_api_pilot(c, ctx.p, keep)
+    return false

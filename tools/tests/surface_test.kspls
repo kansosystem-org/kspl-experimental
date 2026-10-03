@@ -1,0 +1,161 @@
+import "std/chars" // `find_str`
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+import "tools/surface_rows" as surface
+
+// ==========================================
+// Tests the functions that read the record of the published API and compare it
+// (`tools/surface_rows.kspls`).
+//
+// Note: It is tested because **a mistake here breaks nothing visible**: `make test-surface` passes
+// on 0 differences, so a reader that keeps no row or a comparer that always returns 0 stays green
+// and silent when the API changes, and it is noticed only after shipping.
+// ==========================================
+
+fn test_reading_the_record(arena: Arena$@) //< the record's text becomes a list of rows
+  //<
+  //< The header and a broken row are dropped, and the columns are split on tabs.
+  verdict.start("[tools/surface] turning the record into a list of rows test...")
+  // Caution: **Test both the rows kept and the rows dropped**; with only one side, "keeps
+  // everything" and "keeps nothing" both pass. **Put a tab in the header sample**: the
+  // column-count check drops a row with no tab too, so without one, removing the `#` check still
+  // passes.
+  data: =
+    "# a header\twith\ttabs\n\nksplc/base/locate\tfn package_of\tfn package_of(file_path: U8[]): \
+      U8[]\nstd/ds\tstruct List\tstruct List<|T|>\na row with no tab at all\na row with one tab \
+      only\tthat is all\n"
+  $rows: = surface.rows_of(data, arena)
+  assert(rows.len == 2, "only the rows with their columns complete are picked up")
+  assert(rows.get(0).key.equals("ksplc/base/locate\tfn package_of"),
+    "the key is the logical name joined to the key")
+  assert(rows.get(0).text.equals("fn package_of(file_path: U8[]): U8[]"),
+    "the text is the third column")
+  assert(rows.get(1).key.equals("std/ds\tstruct List"),
+    "the second row's key comes out in the same shape")
+  // Caution: **Do not split on a tab inside the text**; only the first two tabs split.
+  wide: = surface.rows_of("a/b\tk\tv1\tv2\n", arena)
+  assert(wide.len == 1 && wide.get(0).text.equals("v1\tv2"),
+    "from the third column on it stays as the text")
+  verdict.pass("the header and short rows are dropped; complete rows split into a key and a text.")
+
+fn test_telling_the_difference(arena: Arena$@) //< it counts the removed, changed and added
+  //<
+  //< It compares the record with the package as it is now.
+  verdict.start("[tools/surface] counting the API's differences test...")
+  // Caution: **Keep the three marks out of the rows' text**, or `find_str` matches the sample and
+  // removing `write_row` still passes.
+  old: = "# a header\np/a\tk1\tunchanged\np/b\tk2\tbefore\np/c\tk3\tabout to go\n"
+  now: = "# a header\np/a\tk1\tunchanged\np/b\tk2\tafter\np/d\tk4\tbrand new\n"
+  $o: = surface.rows_of(old, arena)
+  $w: = surface.rows_of(now, arena)
+  $b: = Str_builder.new()
+  defer b.free()
+  n: = surface.classify(o@, w@, b@)
+  // One removed, one changed, one added; k1 is unchanged.
+  assert(n == 3, "the removed, the changed and the added are counted one each")
+  out: = b.slice()
+  assert(out.find_str("removed") >= 0 && out.find_str("changed") >= 0 &&
+    out.find_str("added") >= 0, "all three marks come out")
+  // **Removals come first** (the reason is at `surface.classify`).
+  assert(out.find_str("removed") < out.find_str("added"), "the removed side comes out first")
+  // **Two identical records give 0**; otherwise an unchanged API fails and people stop reading
+  // the marks.
+  $s1: = surface.rows_of(old, arena)
+  $s2: = surface.rows_of(old, arena)
+  b.clear()
+  assert(surface.classify(s1@, s2@, b@) == 0, "two identical records hold no difference")
+  verdict
+    .pass("removed/changed/added are counted, removed comes first, and identical records give 0.")
+
+fn test_an_entry_that_says_nothing(arena: Arena$@) //< the rows carrying no summary are counted
+
+  verdict.start("[tools/surface] the entries that say nothing of themselves test...")
+  // Caution: **Test both sides here too**: with only one side, counting every row passes as
+  // silently as counting none.
+  data: =
+    "kspeg/rule\tRule\tpub enum Rule\tone node of the rule \
+      tree\nkspeg/rule\tRule.wildcard\twildcard\nksdb/log\tLog.used\tpub fn used(r: Self$@): Sz\n"
+  $rows: = surface.rows_of(data, arena)
+  $b: = Str_builder.new()
+  defer b.free()
+  n: = surface.undocumented(rows@, b@)
+  assert(n == 2, "the two rows with no fourth column are counted, and the one with it is not")
+  out: = b.slice()
+  assert(out.find_str("Rule.wildcard") >= 0 && out.find_str("Log.used") >= 0,
+    "each one that says nothing is named")
+  // **A described entry is not listed** (or the reader looks for a sentence already there).
+  assert(out.find_str("pub enum Rule") < 0, "the entry that says what it is stays out of the list")
+  // With every entry described the count is 0, or a finished package fails and the gate gets
+  // turned off.
+  said: = "a/b\tk\tpub fn k()\twhat it does\n"
+  $ok: = surface.rows_of(said, arena)
+  b.clear()
+  assert(surface.undocumented(ok@, b@) == 0, "a record where every entry speaks holds nothing")
+  verdict.pass("the rows with no summary are counted and named, and a finished record gives 0.")
+
+fn test_taking_a_row_apart(arena: Arena$@) //< a row becomes its four fields
+  //<
+  //< **A row with no fourth column is valid**: its documentation is empty, not the declaration
+  //< run on.
+  verdict.start("[tools/surface] taking a row apart into its fields test...")
+  data: =
+    "std/argp\tParser.flag\tpub fn flag(r: Self$@)\ta switch taking no \
+      value\nstd/argp\tCmd.name\tname: U8[]\n"
+  $rows: = surface.rows_of(data, arena)
+  assert(rows.len == 2, "both rows are read")
+  a: = surface.parts_of(rows.get(0))
+  assert(a.file.equals("std/argp"), "the file's logical name comes out")
+  assert(a.key.equals("Parser.flag"), "and the key within it")
+  assert(a.text.equals("pub fn flag(r: Self$@)"), "and the spelling")
+  assert(a.doc.equals("a switch taking no value"), "and what it says of itself")
+  b: = surface.parts_of(rows.get(1))
+  assert(b.text.equals("name: U8[]"), "a row with no fourth column keeps its spelling whole")
+  assert(b.doc.len == 0, "and says nothing of itself")
+  verdict.pass("a row comes apart into its file, key, spelling and what it says.")
+
+fn test_a_part_row_is_told_from_an_entry(arena: Arena$@) //<
+  //< A parameter's row and the return value's are told apart from the declaration's
+  //<
+  //< Caution: **The record and the reference read the same rows and keep different ones.** Told
+  //< apart wrongly, the record fills with prose or the reference loses what a reader needs, and
+  //< nothing fails.
+  verdict.start("[tools/surface] telling a part's row from a declaration's test...")
+  data: =
+    "std/subproc\trun\tpub fn run(argv: U8[][])\truns one \
+      child\nstd/subproc\trun~00.argv\targv\tthe executable and its \
+      arguments\nstd/subproc\trun~~\treturn\tits standard output\n"
+  $rows: = surface.rows_of(data, arena)
+  assert(rows.len == 3, "all three rows are read")
+  assert(surface.is_declaration(rows.get(0)), "the declaration's row is one")
+  assert(!surface.is_declaration(rows.get(1)) && !surface.is_declaration(rows.get(2)),
+    "the other two are parts of it")
+
+  one: = surface.parts_of(rows.get(1))
+  assert(one.owner.equals("run"), "a parameter names the declaration it belongs to")
+  assert(one.part.equals("argv"), "and its own name, with the place it stands in taken off")
+  back: = surface.parts_of(rows.get(2))
+  assert(back.owner.equals("run"), "what comes back names its declaration too")
+  // **Empty means two things, and `owner` tells them apart.**
+  assert(back.part.len == 0, "and carries no name of its own")
+  plain: = surface.parts_of(rows.get(0))
+  assert(plain.owner.len == 0, "a declaration's row names no owner")
+  verdict.pass("a parameter's row and the return's are told from a declaration's by their owner.")
+
+fn test_what_a_file_says_of_itself(arena: Arena$@) //<
+  //< A file's own row is told apart from a declaration's, and is not a declaration
+  //<
+  //< **The mark alone is the file's row.** Read as a declaration, it would become an entry named
+  //< `~` and put the file's purpose into the record that versions are compared by.
+  verdict.start("[tools/surface] what a file says of itself test...")
+  data: =
+    "std/mem\t~\tfile\tthe arena, and the heap under it\nstd/mem\tArena\tpub struct Arena\ta bump \
+      allocator\n"
+  $rows: = surface.rows_of(data, arena)
+  first: = surface.parts_of(rows.get(0))
+  assert(first.of_file, "the row under the mark alone is the file's own")
+  assert(first.doc.equals("the arena, and the heap under it"), "and it carries the description")
+  assert(!surface.is_declaration(rows.get(0)), "it is no declaration")
+  assert(surface.is_declaration(rows.get(1)), "the one below it is")
+  assert(!surface.parts_of(rows.get(1)).of_file, "and is not the file's own")
+  verdict.pass("a file's own row is told from a declaration's, and counts as no declaration.")

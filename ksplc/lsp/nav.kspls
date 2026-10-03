@@ -1,0 +1,846 @@
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_doc" as base_ast_doc
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/base/locate" as base_locate
+import "ksplc/lsp/msg" as lsp_msg
+import "ksplc/lsp/state" { Doc_state }
+import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/session/import_table" as sema_session_import_table
+import "ksplc/sema/session/pointer" as sema_session_pointer
+import "ksplc/sema/type/def" as sema_type_def
+import "ksplc/sema/type/display" as sema_type_display
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" { Sema_symbol }
+import "std/chars"
+import "std/ds" { List }
+import "std/json" + { Json_builder }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+struct Enum_resolve_result
+  variant_node: Ast_node$@
+  enum_node: Ast_node$@
+
+const max_walk_depth: Sz = 2000 //<
+  //< The depth limit on recursive AST walks, shared with call_hier.kspls and uses.kspls
+
+fn write_full_name(name: U8[], file: U8[], out: Str_builder$@) //<
+  //< A declaration's name as the whole program knows it (its key in `symtab.by_fqn`)
+  //<
+  //< A bare name gets the module of `file`, the declaring file (an empty `file` leaves it bare).
+  //< Caution: **Prefix only a bare name.** A method is named by its owner's path
+  //< (`collect_impl_decl` in `../sema/decl/collect.kspls`), and the owner need not be in the
+  //< `impl`'s file: `impl pipeline.Compile_error` in `main.kspls` holds
+  //< `ksplc.pipeline.Compile_error.report_and_exit`, which prefixed reads `ksplc.main.ksplc.…`.
+  if name.get_generic_base_name().find_char('.') < 0
+    module: = file.strip_kspl_ext()
+    if module.len > 0
+      out.s_path_as_dots(module).c('.')
+  out.s(name)
+
+priv fn get_base_type_id(env: sema_type_env.Env$@, id: I32): I32
+  $curr: = id
+  for _d in Range.asc(100)
+    switch env.get_info(curr) case .pointer(b)
+      curr = b
+    case .result(b, _e)
+      curr = b
+    default
+      break
+  return curr
+
+priv fn is_source_text(node: Ast_node$@, src: U8[]): Bool //<
+  //< Whether that node's text is the text at its own position in the source
+  //<
+  //< **A monomorphized copy borrows the template's position** ("A diagnostic points at" in
+  //< `../docs/DESIGN.md` names the rule) while its identifier carries the internal name, so both
+  //< cover the offset; the editor asks about the one matching the text on screen.
+  if src.len == 0 || node.text.len == 0
+    return true
+  if node.loc.offset + node.text.len > src.len
+    return false
+  return src.sub(node.loc.offset, node.text.len).equals(node.text)
+
+priv fn traverse_and_find_best(node: Ast_node$@, offset: Sz, target_file: U8$[],
+  current_path: List<|Ast_node$@|>$@, best_path: List<|Ast_node$@|>$@, best_score: Sz$@,
+  best_is_src: Bool$@, src: U8[], depth: Sz)
+  // **Compiler-generated nodes are not clickable** (`made_by_compiler` in `../base/ast_ext.kspls`).
+  if node == null || depth > max_walk_depth || node.made_by_compiler()
+    return
+
+  if node.loc.file().len > 0 && !node.loc.file().equals(target_file)
+    if node.kind_id != .k_file && node.kind_id != .k_decl_import
+      return
+
+  current_path.push(node)
+
+  // A variable or constant declaration is the last resort for a click on the declarator ':',
+  // which normalization drops from the AST. Its span comes from get_span_offset(), since its
+  // text.len is the synthesized keyword's.
+  is_decl_marker: = node.kind_id == .k_decl_var || node.kind_id == .k_decl_const
+  start: = node.loc.offset
+  span: = node.get_span_offset().span if is_decl_marker else node.text.len
+  end: = start + span
+
+  if offset >= start && offset <= end
+    // The 'var' / 'let' keyword child is synthesized with decl_var's own loc and has no text in
+    // the source, so it is not a click target; the ':' goes to is_decl_marker instead.
+    is_fake_var_kw: =
+      node.kind_id == .k_keyword &&
+      (node.text.equals("var") || node.text.equals("let"))
+    // A generic method call's member name (`x.create<|T|>(...)`) is a k_generic_method.
+    is_valid: =
+      node.kind_id == .k_identifier || node.kind_id == .k_literal ||
+      (node.kind_id == .k_keyword && !is_fake_var_kw) || node.kind_id == .k_primitive_type ||
+      node.kind_id == .k_string || node.kind_id == .k_char || node.kind_id == .k_integer ||
+      node.kind_id == .k_float || node.kind_id == .k_bool || node.kind_id == .k_null ||
+      node.kind_id == .k_expr_path || node.kind_id == .k_type_path ||
+      node.kind_id == .k_generic_path || node.kind_id == .k_generic_method || is_decl_marker
+
+    if is_valid
+      $score: = span
+      // Where they overlap at a boundary, an identifier or a path is chosen over a literal.
+      if node.kind_id == .k_identifier || node.kind_id == .k_expr_path ||
+        node.kind_id == .k_type_path || node.kind_id == .k_generic_path ||
+        node.kind_id == .k_generic_method || node.kind_id == .k_primitive_type
+        // score is unsigned: a plain subtraction below 10000 wraps and inverts the preference.
+        score = score - 10000 if score >= 10000 else 0
+      here_is_src: = is_source_text(node, src)
+      // A tie still goes to the later node, except where that one is not the text on screen.
+      takes_it: =
+        score < best_score$ || (score == best_score$ && (here_is_src || !best_is_src$))
+      if takes_it
+        best_score$ = score
+        best_is_src$ = here_is_src
+        best_path.len = 0
+        for path_node in current_path
+          best_path.push(path_node)
+
+  for child in node.children
+    traverse_and_find_best(child, offset, target_file, current_path, best_path, best_score,
+      best_is_src, src, depth + 1)
+
+  current_path.len -= 1
+
+fn find_path_at_offset(root_file: Ast_node$@, sema: Sema_ctx$@, offset: Sz, target_file: U8$[],
+  path: List<|Ast_node$@|>$@)
+  if sema != null && target_file.len > 0
+    sema.set_current_file(target_file)
+
+  $best_score: Sz = 99999999
+  $best_is_src: = false
+  $src: U8[] = ""
+  if sema != null
+    held: = base_core.source_of(sema.source_map,
+      U8[]::{ .ptr = target_file.ptr, .len = target_file.len })
+    src = U8[]::{ .ptr = held.ptr, .len = held.len }
+  current_path: = base_core.arena.create(List<|Ast_node$@|>.new())
+  defer current_path.free()
+
+  if root_file != null
+    traverse_and_find_best(root_file, offset, target_file, current_path, path, best_score@,
+      best_is_src@, src, 0)
+
+  if path.len == 0 && sema != null
+    for entry in sema.generics.templates.items()
+      traverse_and_find_best(entry.value, offset, target_file, current_path, path, best_score@,
+        best_is_src@, src, 0)
+
+  // A click exactly at a declared name's end (the ':' position) takes the whole declaration,
+  // jumping to the type; a click inside the name is unaffected.
+  if path.len >= 2
+    last: = path.get(path.len - 1)
+    decl_p: = path.get(path.len - 2)
+    if last.kind_id == .k_identifier &&
+      (decl_p.kind_id == .k_decl_var || decl_p.kind_id == .k_decl_const) &&
+      decl_p.get_var_decl_id() == last && offset == last.loc.offset + last.text.len
+      path.len -= 1
+
+  if path.len > 0 && sema != null
+    target_node: = path.get(path.len - 1)
+    if target_node.loc.file().len > 0
+      sema.set_current_file(target_node.loc.file())
+
+fn find_path_at_params(state: Doc_state$@, params: json.Val): List<|Ast_node$@|>$@ //<
+  //< The AST path to the position in an LSP request's params; the caller frees its buffer
+  path: = base_core.arena.create(List<|Ast_node$@|>.new())
+  find_path_at_offset(state.root_file, state.sema, lsp_msg.offset_at(state.src_perm, params),
+    state.mod_name_perm, path)
+  return path
+
+fn handle_definition(state: Doc_state$@, params: json.Val, id_val: json.Val, arena: Arena$@) //<
+  //< It answers a jump to the definition: the place the name under the cursor is declared
+  path: = find_path_at_params(state, params)
+  defer path.free()
+  $def_node: Ast_node$@ = null
+  if path.len > 0
+    def_node = resolve_def_node(state.sema, state.root_file, path, path.get(path.len - 1)).def_node
+  if def_node == null
+    lsp_msg.send_null_response(id_val, arena)
+    return
+  // The declared name's own span, else the declaration's head.
+  id_node: = def_node.find_child(.k_identifier)
+  $t_offset: Sz = def_node.loc.offset
+  $text_len: Sz = def_node.text.len
+  if id_node != null
+    t_offset = id_node.loc.offset
+    text_len = id_node.text.len
+  if text_len == 0
+    text_len = 1
+  def_file: = def_node.loc.file()
+  def_src: = base_core.source_of(state.sema.source_map, def_file)
+  $line: Sz = 0
+  $col: Sz = 0
+  if def_src.len > 0
+    pos: = def_src.get_line_char(def_src.clamp_offset(t_offset),
+      state.sema.line_starts_for(def_file, def_src))
+    line = pos.line
+    col = pos.character
+  $b: = Json_builder.new(arena)
+  style: = base_locate.uri_style_of(state.uri_perm)
+  lsp_msg.send_response(id_val,
+    b.location(style.spell(def_file), line, col, line, col + text_len), arena)
+
+priv fn resolve_decl_type_def(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, target_node: Ast_node$@):
+  Option<|Ast_node$@|> //<
+    //< It resolves a click on a declaration's 'const' keyword or name to the type's definition
+  $p: Ast_node$@ = null
+  if target_node.kind_id == .k_keyword && target_node.text.equals("const") && path.len >= 2
+    parent: = path.get(path.len - 2)
+    p = parent if parent.kind_id == .k_decl_const else null
+  else if target_node.kind_id == .k_identifier && path.len >= 2
+    parent: = path.get(path.len - 2)
+    if (parent.kind_id == .k_decl_var || parent.kind_id == .k_decl_const) &&
+      parent.get_var_decl_id() == target_node
+      p = parent
+  if p == null
+    return Option<|Ast_node$@|>.none
+
+  type_id: = p.type_id
+  if type_id > 10
+    base_id: = get_base_type_id(c.env, type_id)
+    if base_id > 10
+      clean_name: = c.env.base_type_name(base_id)
+
+      t_sym: = c.symtab.resolve(clean_name) catch null
+      if t_sym != null
+        return Option<|Ast_node$@|>.some(t_sym.node)
+      gen_st: = c.generics.templates.get(clean_name) catch null
+      if gen_st != null
+        return Option<|Ast_node$@|>.some(gen_st)
+  return Option<|Ast_node$@|>.none
+
+struct Dot_receiver //< the receiver of a `<receiver>.<name>`, and that type's name
+  //<
+  //< **The type's name is sometimes empty.** Where a module alias (the `io` of `import "std/io" as
+  //< io`) is the receiver there is no type, so the caller looks up by the receiver's name.
+  node: Ast_node$@
+  type_name: U8[]
+
+fn dot_receiver_of(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, target_node: Ast_node$@):
+  Dot_receiver //<
+    //< The receiver of a `<receiver>.<target_node>` on the path, and its type's name
+    //<
+    //< Caution: **Do not write it twice, once to look up and once to list.** Jump-to-definition
+    //< looks up one member by name and completion lists every member, but **both start from the
+    //< same "receiver's type"** (Principle 4).
+  $recv_node: Ast_node$@ = null
+
+  for $i: = path.len; i > 0; i -= 1
+    p: = path.get(i - 1)
+    if p.kind_id == .k_method_access
+      if p.get_postfix_member() == target_node
+        recv_node = p.get_postfix_receiver()
+        break
+    else if p.kind_id == .k_expr_postfix
+      op: = p.get_postfix_op()
+      if op != null && op.text.equals(".") && p.get_postfix_member() == target_node
+        recv_node = p.get_postfix_receiver()
+        break
+  if recv_node == null
+    return Dot_receiver::{ .node = null, .type_name = "" }
+  // **A body nothing analysed keeps a lone name as a one-part path** (`xs` of `xs.get`), which
+  // sema flattens to the name when it analyses the body (a generic's, nothing instantiated).
+  if recv_node.type_id == 0 && recv_node.kind_id == .k_expr_path && recv_node.children.len == 1 &&
+    recv_node.get_child(0).kind_id == .k_identifier
+    recv_node = recv_node.get_child(0)
+
+  return Dot_receiver::{ .node = recv_node,
+    .type_name = type_name_of(c, path, recv_node, 0) }
+
+priv fn type_name_of(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, node: Ast_node$@, depth: Sz): U8[] //<
+  //< The registered type name of a receiver, or "" where it cannot be determined
+  //<
+  //< In a body sema analysed, the node carries its type. **In a generic's body nothing
+  //< instantiated it carries none**, so the type is read from the declarations: a local's, then
+  //< each field's along a chain (`r.wo.weights`), taken from the generic's own declaration —
+  //< nothing specializes one, so its instances all hold what it declares.
+  if node == null || depth > max_walk_depth
+    return ""
+  if node.type_id != 0
+    return c.env.get_str(get_base_type_id(c.env, node.type_id))
+  switch node.kind_id case .k_identifier
+    return local_type_name(c, path, node, depth)
+  case .k_expr_path
+    // A body nothing analysed keeps a name, and a name with its fields, as a path (`r.inner`).
+    return path_type_name(c, path, node, node.children.len, depth)
+  case .k_expr_postfix
+    op: = node.get_postfix_op()
+    if op != null && op.text.equals("(")
+      return call_type_name(c, path, node.get_postfix_receiver(), depth + 1)
+    if op == null || !op.text.equals(".")
+      return ""
+    owner: = type_name_of(c, path, node.get_postfix_receiver(), depth + 1)
+    return field_type_name(c, owner, node.get_postfix_member()) if owner.len > 0 else ""
+  case .k_expr_catch_chain
+    // `catch` passes on the success value, and a type read here already has its error side removed
+    // (`get_base_type_id`), since only the success value has members to follow a dot.
+    return type_name_of(c, path, node.get_catch_chain_expr(), depth + 1)
+  default
+    return ""
+
+priv fn call_type_name(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, callee: Ast_node$@, depth: Sz):
+  U8[] //<
+    //< The registered type name of what a call returns, or "" where it cannot be determined
+    //<
+    //< **The name decides which function**: with no overloading and no inheritance, a method's
+    //< name on a known type, and a function's bare name, each name one declaration. Its return
+    //< type is used where it is `Self` (the receiver's) or one sema resolved; written text alone
+    //< belongs to the declaring file, which is not in scope here, so it stops the walk.
+  if callee == null || depth > max_walk_depth
+    return ""
+  $fn_node: Ast_node$@ = null
+  $self_name: U8[] = ""
+  op: = callee.get_postfix_op()
+  if op != null && op.text.equals(".")
+    self_name = type_name_of(c, path, callee.get_postfix_receiver(), depth + 1)
+    member: = callee.get_postfix_member()
+    if self_name.len > 0 && member != null
+      switch member_of(c, self_name, member.text) case .some(m)
+        fn_node = m
+      case .none {}
+  else
+    $name: = callee
+    if callee.kind_id == .k_expr_path && callee.children.len == 1
+      name = callee.get_child(0)
+    switch function_of(c, path, name) case .some(f)
+      fn_node = f
+    case .none {}
+  if !fn_node.is_fn_decl()
+    return ""
+  ret: = fn_node.get_decl_type_node()
+  if ret == null
+    return ""
+  if ret.names_self_type()
+    return self_name
+  return declared_type_name(c, ret) if ret.type_id != 0 else ""
+
+priv fn function_of(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, name: Ast_node$@):
+  Option<|Ast_node$@|> //<
+    //< The function a bare name calls, or none where the name is a value's (a local shadows it)
+  if name == null || name.kind_id != .k_identifier
+    return Option<|Ast_node$@|>.none
+  switch local_decl_of(c, path, name) case .some(d)
+    if d.is_fn_decl()
+      return Option<|Ast_node$@|>.some(d)
+    return Option<|Ast_node$@|>.none
+  case .none {}
+  $f: Ast_node$@ = c.generics.templates.get(name.text) catch null
+  if f == null
+    sym: = c.symtab.resolve(name.text) catch null
+    if sym != null
+      f = sym.node
+  if f.is_fn_decl()
+    return Option<|Ast_node$@|>.some(f)
+  return Option<|Ast_node$@|>.none
+
+priv fn path_type_name(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, node: Ast_node$@, end: Sz,
+  depth: Sz): U8[] //<
+    //< The type of a path's first `end` names: the head's, then each field's in turn
+  $owner: = type_name_of(c, path, node.safe_get_child(0), depth + 1)
+  for $i: Sz = 1; i < end && owner.len > 0; i += 1
+    owner = field_type_name(c, owner, node.get_child(i))
+  return owner
+
+fn folded_receiver_type(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, mark: Ast_node$@): U8[] //<
+  //< The type of the names before `mark` in a path kept whole (`cc` of `cc.<mark>`), or ""
+  //<
+  //< **A body nothing analysed keeps `cc.x` as one path**, never the postfix `dot_receiver_of`
+  //< finds, so completion asks here. Only a value's name is typed: a module alias and a type's
+  //< name (`io.`, `P.`) take their own path.
+  if path.len < 2
+    return ""
+  p: = path.get(path.len - 2)
+  if p.kind_id != .k_expr_path
+    return ""
+  $at: Sz = 0
+  for at < p.children.len && p.get_child(at) != mark
+    at += 1
+  if at == 0 || at >= p.children.len
+    return ""
+  switch local_decl_of(c, path, p.get_child(0)) case .some(decl)
+    if decl.kind_id != .k_fn_param && decl.kind_id != .k_decl_var &&
+      decl.kind_id != .k_decl_const
+      return ""
+  case .none
+    return ""
+  return path_type_name(c, path, p, at, 0)
+
+priv fn local_decl_of(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, name: Ast_node$@):
+  Option<|Ast_node$@|> //<
+    //< What a name on the path is declared by, found the way the hover finds a local
+  if name == null || name.kind_id != .k_identifier
+    return Option<|Ast_node$@|>.none
+  if name.def_node != null
+    return Option<|Ast_node$@|>.some(name.def_node)
+  return resolve_fallback_parent_def(c, path, name, name.text)
+
+priv fn local_type_name(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, name: Ast_node$@, depth: Sz):
+  U8[] //<
+    //< The type a local's declaration names, or with none written, its initializer's
+    //<
+    //< Caution: **`Self` is the enclosing impl's type**, not a type of that name; so is an `r`
+    //< written with no type at all.
+  $local: Ast_node$@ = null
+  switch local_decl_of(c, path, name) case .some(d)
+    local = d
+  case .none
+    return ""
+  if local.kind_id == .k_decl_import
+    return name.text
+  t_node: = local.get_decl_type_node()
+  if t_node != null && !t_node.names_self_type()
+    return declared_type_name(c, t_node)
+  if t_node == null && (local.kind_id == .k_decl_var || local.kind_id == .k_decl_const)
+    init: = local.get_var_decl_expr()
+    // A name inside its own initializer is an outer one, never this declaration.
+    if init == null ||
+      (name.loc.offset >= init.loc.offset &&
+      name.loc.offset < init.loc.offset + init.get_span_length())
+      return ""
+    return type_name_of(c, path, init, depth + 1)
+  if t_node != null || (local.kind_id == .k_fn_param && name.text.equals("r"))
+    for $i: = path.len; i > 0; i -= 1
+      if path.get(i - 1).kind_id == .k_decl_impl
+        return declared_type_name(c, path.get(i - 1).get_decl_type_node())
+  return ""
+
+priv fn declared_type_name(c: Sema_ctx$@, t_node: Ast_node$@): U8[] //<
+  //< The registered name of the type a declaration's type node names, or its spelling
+  //<
+  //< Caution: **Prefer the resolved type over the spelling.** The spelling is the file's own
+  //< (`lora.Lora<|T|>` through the import's alias), and no member is registered under it. An
+  //< instance is identified by its registration key (`std.ds.List<|T|>`), not its internal name
+  //< (`std_ds_List_T`), with a `@` view unwrapped.
+  if t_node == null
+    return ""
+  if t_node.type_id == 0
+    return t_node.get_path_name()
+  clean_id: = c.env.get_clean_real_type(get_base_type_id(c.env, t_node.type_id))
+  return c.env.inst_type_index.get(clean_id) catch c.env.get_str(clean_id)
+
+priv fn field_type_name(c: Sema_ctx$@, owner: U8[], field: Ast_node$@): U8[] //<
+  //< The type a field of `owner`'s declaration names, or "" where it has no such field
+  if field == null || field.kind_id != .k_identifier
+    return ""
+  switch field_of(c, owner, field.text) case .some(f)
+    return declared_type_name(c, f.get_decl_type_node())
+  case .none
+    return ""
+
+fn struct_decl_of(c: Sema_ctx$@, owner: U8[]): Option<|Ast_node$@|> //<
+  //< The declaration of the struct a type's name stands for, a generic's own where it is one
+  //<
+  //< **A generic nothing instantiated has no struct entry**, so its fields are read here, by the
+  //< hover (`field_of`) and by completion alike.
+  base: = c.env.original_generic_name(owner).get_generic_base_name()
+  $decl: Ast_node$@ = c.generics.templates.get(base) catch null
+  if decl == null
+    sym: = c.symtab.resolve(base) catch null
+    if sym != null
+      decl = sym.node
+  if decl == null || decl.kind_id != .k_decl_struct
+    return Option<|Ast_node$@|>.none
+  return Option<|Ast_node$@|>.some(decl)
+
+priv fn field_of(c: Sema_ctx$@, owner: U8[], name: U8[]): Option<|Ast_node$@|> //<
+  //< The field of that name in the struct a type's name stands for
+  switch struct_decl_of(c, owner) case .some(decl)
+    for f in decl.children
+      if f.kind_id == .k_struct_field
+        id_n: = f.find_child(.k_identifier)
+        if id_n != null && id_n.text.equals(name)
+          return Option<|Ast_node$@|>.some(f)
+  case .none {}
+  return Option<|Ast_node$@|>.none
+
+priv fn member_of(c: Sema_ctx$@, raw_type: U8[], name: U8[]): Option<|Ast_node$@|> //<
+  //< What a `.name` names on a type: a method on its table, a field, or a `<type>.<name>` method
+  //<
+  //< **The hover and a call's type both ask here**, so the two cannot disagree on which
+  //< declaration a name on a type means.
+  orig_type: = c.env.original_generic_name(raw_type)
+  base_type_only: = orig_type.get_generic_base_name()
+
+  // Caution: **Ask the type table for the method by name** (`methods_of` in
+  // `../sema/type/env.kspls`), which handles both absences: no table before the type's first
+  // method, and no row for an unregistered name. Reading the field directly, a type with no
+  // method crashes the worker, and the editor silently shows nothing for `slice.len`.
+  if methods: = c.env.methods_of(raw_type)
+    method_sym: = methods.get(name) catch null
+    if method_sym != null
+      return Option<|Ast_node$@|>.some(method_sym.node)
+
+  $struct_def: sema_type_def.Struct_def$@ = null
+  $resolved_struct_name: = raw_type
+  switch c.env.get_struct_def(raw_type) case .some(sd)
+    struct_def = sd
+  case .none
+    if sd2: = c.env.get_struct_def(base_type_only)
+      struct_def = sd2
+      resolved_struct_name = base_type_only
+
+  if struct_def != null
+    struct_sym: = c.symtab.resolve(resolved_struct_name) catch null
+    if struct_sym != null && struct_sym.node != null
+      st_node: = struct_sym.node
+      for field_node in st_node.children
+        if field_node.kind_id == .k_struct_field
+          fid: = field_node.find_child(.k_identifier)
+          if fid != null && fid.text.equals(name)
+            return Option<|Ast_node$@|>.some(field_node)
+  // A generic nothing instantiated has no struct entry of its own: its fields are those its
+  // declaration holds.
+  switch field_of(c, raw_type, name) case .some(f)
+    return Option<|Ast_node$@|>.some(f)
+  case .none {}
+  $method_prefix: = Str_builder.new()
+  defer method_prefix.free()
+  method_prefix.s(base_type_only).s(".").s(name)
+  full_m_name: = method_prefix.slice()
+
+  gen_m: = c.generics.templates.get(full_m_name) catch null
+  if gen_m != null
+    return Option<|Ast_node$@|>.some(gen_m)
+
+  method_sym: = c.symtab.resolve(full_m_name) catch null
+  if method_sym != null && method_sym.node != null
+    return Option<|Ast_node$@|>.some(method_sym.node)
+  return Option<|Ast_node$@|>.none
+
+priv fn resolve_dot_access_def(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, target_node: Ast_node$@,
+  target_text: U8[]): Ast_node$@?I32
+  got: = dot_receiver_of(c, path, target_node)
+  recv_node: = got.node
+  if recv_node == null
+    throw 1
+  raw_type: = got.type_name
+  if raw_type.len > 0
+    switch member_of(c, raw_type, target_text) case .some(m)
+      return m
+    case .none {}
+  if recv_node.kind_id == .k_identifier
+    $mod_m_name: = Str_builder.new()
+    defer mod_m_name.free()
+    mod_m_name.s(recv_node.text).s(".").s(target_text)
+    mod_sym: = c.symtab.resolve(mod_m_name.slice()) catch null
+    if mod_sym != null
+      return mod_sym.node
+  return null
+
+priv fn resolve_fallback_parent_def(_c: Sema_ctx$@, path: List<|Ast_node$@|>$@,
+  target_node: Ast_node$@, target_text: U8[]): Option<|Ast_node$@|>
+  for $i: = path.len; i > 0; i -= 1
+    p: = path.get(i - 1)
+
+    switch p.kind_id case .k_decl_fn, .k_decl_fn_proto, .k_decl_struct, .k_decl_enum, .k_decl_impl,
+      .k_decl_trait, .k_decl_alias
+      gen_params: = p.find_child(.k_type_gen_params)
+      if gen_params != null
+        for param in gen_params.children
+          if param.kind_id == .k_type_gen_param
+            id_n: = param.find_child(.k_identifier)
+            if id_n != null && id_n.text.equals(target_text)
+              return Option<|Ast_node$@|>.some(param)
+          else if param.kind_id == .k_identifier && param.text.equals(target_text)
+            return Option<|Ast_node$@|>.some(param)
+    default {}
+
+    switch p.kind_id case .k_decl_fn, .k_decl_fn_proto
+      params: = p.get_fn_params()
+      if params != null
+        for param in params.children
+          if param.kind_id == .k_fn_param
+            id_n: = param.find_child(.k_identifier)
+            if id_n != null && id_n.text.equals(target_text)
+              return Option<|Ast_node$@|>.some(param)
+            if param.text.equals(target_text)
+              return Option<|Ast_node$@|>.some(param)
+    case .k_stmt_block
+      for stmt in p.children
+        if stmt.loc.offset > target_node.loc.offset
+          break
+        if stmt.kind_id == .k_decl_var || stmt.kind_id == .k_decl_const
+          id_n: = stmt.get_var_decl_id()
+          if id_n != null && id_n.text.equals(target_text)
+            return Option<|Ast_node$@|>.some(stmt)
+    case .k_match_pattern
+      for bind_var in p.children
+        if bind_var.kind_id == .k_identifier
+          if bind_var.text.equals(target_text)
+            return Option<|Ast_node$@|>.some(bind_var)
+    default {}
+  return Option<|Ast_node$@|>.none
+
+fn get_definition_node(c: Sema_ctx$@, path: List<|Ast_node$@|>$@): Option<|Ast_node$@|>
+  if c == null || path.len == 0
+    return Option<|Ast_node$@|>.none
+  target_node: = path.get(path.len - 1)
+
+  if kw_def: = resolve_decl_type_def(c, path, target_node)
+    return Option<|Ast_node$@|>.some(kw_def)
+
+  if target_node.def_node != null
+    return Option<|Ast_node$@|>.some(target_node.def_node)
+  switch target_node.kind_id case .k_keyword, .k_literal, .k_empty, .k_string, .k_char, .k_integer,
+    .k_float, .k_bool, .k_null
+    return Option<|Ast_node$@|>.none
+  default {}
+
+  if path.len >= 2
+    p: = path.get(path.len - 2)
+    // **A function's own name means its declaration**, recognized by its position. A method is in
+    // the table only as `Owner.name` and a generic one not at all until instantiated, so a lookup
+    // by the bare name would find a same-named function elsewhere (a method `put` read as the
+    // prelude's `std.lang.put`).
+    if p.is_fn_decl() && p.find_child(.k_identifier) == target_node
+      return Option<|Ast_node$@|>.some(p)
+    if p.kind_id == .k_decl_import || p.kind_id == .k_decl_embed
+      id_n: = p.find_child(.k_identifier)
+      if id_n != null && id_n == target_node
+        return Option<|Ast_node$@|>.some(p)
+
+    if p.def_node != null
+      switch p.kind_id case .k_expr_path, .k_type_path, .k_generic_path, .k_method_access,
+        .k_expr_postfix
+        return Option<|Ast_node$@|>.some(p.def_node)
+      default {}
+
+  target_text: = target_node.text.get_generic_base_name()
+
+  if path.len >= 2
+    p: = path.get(path.len - 2)
+    if p.kind_id == .k_type_path || p.kind_id == .k_expr_path
+      $sb: = Str_builder.new()
+      defer sb.free()
+      p.get_full_path_str_to(sb)
+      full_str: = sb.slice().get_generic_base_name()
+      if full_str.len > 0 && !full_str.equals(target_text)
+        fqn: = c.resolve_fqn_for_type(full_str)
+        sym: = c.symtab.resolve(fqn) catch null
+        if sym != null
+          return Option<|Ast_node$@|>.some(sym.node)
+        gen: = c.generics.templates.get(fqn) catch null
+        if gen != null
+          return Option<|Ast_node$@|>.some(gen)
+
+  $was_dot_access: = true
+  dot_def: = resolve_dot_access_def(c, path, target_node, target_text) catch
+    was_dot_access = false
+    fallback null
+  if was_dot_access
+    if dot_def != null
+      return Option<|Ast_node$@|>.some(dot_def)
+    return Option<|Ast_node$@|>.none
+
+  local_def: = target_node.def_node
+  if local_def != null
+    return Option<|Ast_node$@|>.some(local_def)
+
+  alias: = c.peek_file_alias(c.file_name, target_text)
+  if alias != null && alias.decl_node != null
+    return Option<|Ast_node$@|>.some(alias.decl_node)
+
+  sym: = c.symtab.resolve(target_text) catch null
+  if sym != null
+    return Option<|Ast_node$@|>.some(sym.node)
+
+  gen_st: = c.generics.templates.get(target_text) catch null
+  if gen_st != null
+    return Option<|Ast_node$@|>.some(gen_st)
+
+  type_id: = c.env.type_to_id.get(target_text) catch 0
+  if type_id > 10
+    base_id: = get_base_type_id(c.env, type_id)
+    t_name: = c.env.get_str(base_id)
+    t_sym: = c.symtab.resolve(t_name) catch null
+    if t_sym != null
+      return Option<|Ast_node$@|>.some(t_sym.node)
+
+  return resolve_fallback_parent_def(c, path, target_node, target_text)
+
+fn find_parent_enum(node: Ast_node$@, target: Ast_node$@): Option<|Ast_node$@|>
+  return find_parent_enum_depth(node, target, 0)
+
+priv fn find_parent_enum_depth(node: Ast_node$@, target: Ast_node$@, depth: Sz):
+  Option<|Ast_node$@|>
+  if node == null || depth > max_walk_depth
+    return Option<|Ast_node$@|>.none
+  if node.kind_id == .k_decl_enum
+    for child in node.children
+      if child == target
+        return Option<|Ast_node$@|>.some(node)
+  for child in node.children
+    if res: = find_parent_enum_depth(child, target, depth + 1)
+      return Option<|Ast_node$@|>.some(res)
+  return Option<|Ast_node$@|>.none
+
+fn declared_doc(c: Sema_ctx$@, def_node: Ast_node$@): U8[] //<
+  //< The documentation a declaration carries, read from the source it was declared in
+  //<
+  //< **One place answers this for every editor feature.** The hover and the completion list read
+  //< the same comment run that the record and the declaration file read
+  //< (`../base/ast_doc.kspls`), so no two of them can say different things about one declaration
+  //< (Principle 6 in `../../docs/DESIGN.md`).
+  if c == null || def_node == null
+    return ""
+  // The source is the declaration's own file, often not the document being edited.
+  src: = base_core.source_of(c.source_map, def_node.loc.file())
+  if src.len == 0 || def_node.loc.offset >= src.len
+    return ""
+  return base_ast_doc.doc_parted(src, def_node.loc.offset,
+    base_ast_doc.body_brace(src, def_node))
+
+priv fn place_of(c: Sema_ctx$@, node: Ast_node$@): U8[] //<
+  //< Where a declaration is, as a link an editor opens (`file:///…#L12`), or empty
+  //<
+  //< **An absolute `file://` URI, whatever URI style the client used.** The editor's Markdown
+  //< renderer opens it, and a relative name resolves against nothing there.
+  file: = node.loc.file()
+  src: = base_core.source_of(c.source_map, file)
+  if src.len == 0
+    return ""
+  $at: = node.loc.offset
+  id: = node.find_child(.k_identifier)
+  if id != null
+    at = id.loc.offset
+  if at >= src.len
+    return ""
+  line: = base_core.line_for_offset(c.line_starts_for(file, src), at)
+  style: = base_locate.Uri_style::{ .has_scheme = true, .is_absolute = true }
+  $b: = Str_builder.new()
+  defer b.free()
+  b.s(style.spell(file)).s("#L").s("\{line\}")
+  return base_core.arena.dup_str(b.slice())
+
+fn linked_doc(c: Sema_ctx$@, root: Ast_node$@, def_node: Ast_node$@): U8[] //<
+  //< The documentation a declaration carries, each name in it linked to where it is declared
+  //<
+  //< **What is linked is what `[W0211]` checks**, resolved by the same reader
+  //< (`../sema/session/pointer.kspls`) through the scope of the file the description is written in,
+  //< so a link and a warning never disagree about one name. The position given is the
+  //< declaration's own: a function's description is read in that function's scope.
+  doc: = declared_doc(c, def_node)
+  if doc.len == 0
+    return doc
+  file: = def_node.loc.file()
+  $out: = Str_builder.new()
+  defer out.free()
+  $copied: Sz = 0
+  $from: Sz = 0
+  for
+    p: = sema_session_pointer.next_pointer(doc, from)
+    if p.open >= doc.len
+      break
+    from = p.end
+    pointed: = sema_session_pointer.pointed_at(c, root, file, def_node.loc.offset,
+      doc.sub(p.at, p.len))
+    switch pointed case .found(node)
+      target: = place_of(c, node)
+      if target.len > 0
+        out.s(doc.sub(copied, p.open - copied)).c('[')
+          .s(doc.sub(p.open, p.end - p.open)).s("](").s(target).c(')')
+        copied = p.end
+    default {}
+  if copied == 0
+    return doc
+  out.s(doc.sub_from(copied))
+  return base_core.arena.dup_str(out.slice())
+
+fn scan_enum_variant(sym: Sema_symbol$@, target_node: Ast_node$@, res: Enum_resolve_result$@): Bool
+  if sym == null || sym.node == null || sym.node.kind_id != .k_decl_enum
+    return false
+  enum_node: = sym.node
+  for variant in enum_node.children
+    if variant.kind_id == .k_enum_variant
+      v_id: = variant.find_child(.k_identifier)
+      if v_id != null && v_id.text.equals(target_node.text)
+        res.enum_node = enum_node
+        res.variant_node = variant
+        return true
+  return false
+
+struct Def_resolve_result
+  def_node: Ast_node$@
+  enum_node: Ast_node$@
+
+fn resolve_def_node(sema: Sema_ctx$@, root_file: Ast_node$@, path: List<|Ast_node$@|>$@,
+  target_node: Ast_node$@): Def_resolve_result //<
+    //< The definition of a target node, an enum variant first, else the ordinary resolution
+  enum_res: = resolve_enum_variant_def(sema, root_file, path, target_node)
+  $def_node: Ast_node$@ = null
+  if enum_res.variant_node != null
+    def_node = enum_res.variant_node
+  else
+    if d: = get_definition_node(sema, path)
+      def_node = d
+  return Def_resolve_result::{ .def_node = def_node, .enum_node = enum_res.enum_node }
+
+fn resolve_enum_variant_def(sema: Sema_ctx$@, _root_file: Ast_node$@,
+  path: List<|Ast_node$@|>$@, target_node: Ast_node$@): Enum_resolve_result
+  $res: = Enum_resolve_result::{ .variant_node = null, .enum_node = null }
+  if sema == null || path.len < 2
+    return res
+  parent: = path.get(path.len - 2)
+
+  switch parent.kind_id case .k_enum_init, .k_enum_init_call, .k_expr_postfix
+    $is_target: = false
+    for child in parent.children
+      if child == target_node
+        is_target = true
+        break
+
+    if is_target && sema != null
+      type_name_node: = parent.get_child(0)
+      $type_name: = ""
+
+      if type_name_node.kind_id == .k_identifier
+        type_name = type_name_node.text
+      else if type_name_node.kind_id == .k_type_path || type_name_node.kind_id == .k_expr_path
+        if type_name_node.children.len > 0
+          last_id: = type_name_node.last_child()
+          if last_id.kind_id == .k_identifier
+            type_name = last_id.text
+
+      $type_id: I32 = 0
+      if type_name.len > 0
+        type_id = sema.env.type_to_id.get(type_name) catch 0
+      if type_id == 0 && parent.type_id != 0
+        type_id = parent.type_id
+
+      if type_id != 0
+        // Through an alias (`Form.dot`), the variants are on the enum the alias names.
+        resolved_name: = sema.env.get_str(sema.env.get_real_type(type_id))
+        sym: = sema.symtab.resolve(resolved_name) catch null
+        if scan_enum_variant(sym, target_node, res@)
+          return res
+      else if type_name.len > 0
+        sym: = sema.symtab.resolve(type_name) catch null
+        if scan_enum_variant(sym, target_node, res@)
+          return res
+  default {}
+  return res

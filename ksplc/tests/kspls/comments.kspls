@@ -1,0 +1,53 @@
+//< Where a comment stands, and that a round trip keeps it there
+//<
+//< **This is the file written with indentation.**
+//< **It must be the same program as the `comments.kspl` beside it.** `make test-kspls` compares
+//< them.
+//< Caution: **Each shape here is one a round trip can move.** The indentation notation has no
+//< closing line, so a comment written where a `}` would go has no place of its own and the
+//< rewriter must choose a side. Remove one and nothing else pins that choice down.
+import "std/io"
+
+priv struct Row
+  x: I32 //< how far along it has come
+
+impl Row
+  fn step(r: Self@): I32
+    return r.x + 1
+
+  // A comment at an impl's end. A careless round trip puts it outside the closing brace.
+
+priv $seen: I32 = 0
+
+priv fn tally(c: U8)
+  switch c case 'a'
+    seen += 1
+  case 'b', 'c' { // an empty branch carrying a note of its own
+  } default
+    // A comment at a branch's start. A careless round trip puts it inside the empty branch above.
+    seen += 2
+
+priv fn spin(n: I32): I32
+  $i: = n
+  for
+    i -= 1
+    if i <= 0
+      break // a comment on the line whose code it speaks for
+    // A comment at a loop's end. A careless round trip puts it outside the loop.
+  return i
+
+priv fn twice_of(n: I32, f: fn(v: I32): I32): I32
+  return f(f(n))
+
+fn main(): I32
+  r: Row = ::{
+    .x = 1,
+  } // a comment after a value's close, which this notation writes too
+  n: = twice_of(r.x, fn(v: I32): I32 {
+    return v + 1;
+  } // a comment after a close inside a call, which this notation writes too
+  )
+  tally('b')
+  tally('z')
+  io.out().s("step=\{r.step()\} seen=\{seen\} spin=\{spin(3)\} n=\{n\}\n")
+  return 0

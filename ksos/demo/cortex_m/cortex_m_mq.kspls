@@ -1,0 +1,47 @@
+//< ARM Cortex-M: message-queue communication under pre-emption
+//<
+//< A producer and a consumer run at the same priority and exchange values through msgq while
+//< SysTick forces task switches. A critical section (cpsid/cpsie i) protects the queue operations,
+//< so 0..7 arrive in order, with nothing lost or corrupted, even under pre-emption; a total of 28
+//< confirms it.
+import "ksos/demo/common/semihost_console" as con
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+
+$g_q: sync.Queue<|I32|>
+$g_qbuf: I32[4] // a small capacity, so the queue also fills and blocks
+
+$tcb_p: Task
+$tcb_c: Task
+$stack_p: U8[4096]
+$stack_c: U8[4096]
+fn producer(_arg: Void$@): Void //< Send 0..7; msgq_send blocks while the queue is full
+  //<
+  //< There is no yield between sends (SysTick does the switching).
+  for $i: I32 = 0; i < 8; i += 1
+    g_q.send(i)
+fn consumer(_arg: Void$@): Void //< Receive eight values, check the order and the total, and end
+  $sum: I32 = 0
+  $in_order: = true
+  for $n: I32 = 0; n < 8; n += 1
+    v: = g_q.recv()
+    sum += v
+    if v != n
+      in_order = false
+    con.putc(U8::('0' + v)) // print the digits in the order received (FIFO gives 01234567)
+  con.putc('\n')
+  con.puts("=== Kanso OS (Cortex-M) preemptive msgq ===\n")
+  con.check("received 0..7 in order under preemption", in_order)
+  con.check("nothing was lost or duplicated (sum=28)", sum == 28)
+  con.print_summary("Cortex-M preemptive msgq")
+  con.exit()
+
+#export
+fn ksos_main()
+  g_q.init(g_qbuf[0]@, 4)
+  tcb_p.create(U8$[]::stack_p, producer, null, 1, "p")
+  tcb_c.create(U8$[]::stack_c, consumer, null, 1, "c")
+  // SysTick's reload value: any value that causes pre-emption will do.
+  task.enable_preemption(50000)
+  task.start_scheduler()
+  for {}

@@ -1,0 +1,221 @@
+//< The formatter's decisions on where a space goes and where a line may break
+//<
+//< It also decides where a string literal carried onto the next line is cut.
+//<
+//< **It touches none of `Formatter`'s state.** The answer depends only on the previous token, the
+//< current token and the flags below. That keeps the dependency one way (`printer.kspls` uses
+//< this file, never the reverse), so do not add state.
+import "ksplc/base/literal" as base_literal
+import "ksplc/fmt/kinds" as fmt_kinds
+import "std/chars" // the one-character checks and matches
+import "std/str" { Str_builder }
+
+struct Fmt_flags
+  is_line_start: Bool
+  wrap_indent: Bool
+  last_was_unary_minus: Bool
+  force_next_nl: Bool
+  last_was_no_space: Bool
+  in_type_expr: Bool
+// ---------------------------------------------------------
+// Spacing & Wrapping Rules
+// ---------------------------------------------------------
+
+fn calc_spacing_requirement(last_txt: U8[], text: U8[], flags: Fmt_flags, no_space_mode: Bool):
+  Bool
+  if last_txt.len == 0 || text.len == 0
+    return false
+
+  c0: = (text.ptr + 0)$
+  is_al_num: = c0.is_alnum()
+  last_is_alnum: = (last_txt.ptr + last_txt.len - 1).is_alnum()
+  $require_space: = false
+
+  if is_al_num && last_is_alnum
+    require_space = true
+  lc: = (last_txt.ptr + last_txt.len - 1)$
+  if is_al_num && (lc == '"' || lc == '\'')
+    require_space = true
+  if (c0 == '"' || c0 == '\'') && last_is_alnum
+    require_space = true
+
+  // A space goes between a visibility keyword and the mutability marker (`pub $x: ...`), which the
+  // alphanumeric-pair rule above misses.
+  if text.equals("$") && (last_txt.equals("pub") || last_txt.equals("priv"))
+    require_space = true
+
+  is_op_current: = text.is_op()
+  is_op_last: = last_txt.is_op()
+
+  if is_op_current
+    if text.equals(">") || text.equals("<") || text.equals("*") || text.equals("&")
+      if !no_space_mode
+        require_space = true
+    else if text.equals(":") || text.equals("::")
+      require_space = false
+    else
+      require_space = true
+  if is_op_last
+    if last_txt.equals(">") || last_txt.equals("<") || last_txt.equals("*")
+      if !no_space_mode && !(flags.last_was_no_space && !is_al_num)
+        require_space = true
+    else if last_txt.equals("const") && flags.in_type_expr
+      require_space = false
+    else if last_txt.equals("::")
+      require_space = false
+    else
+      require_space = true
+
+  if last_txt.equals(",") || last_txt.equals(":") || last_txt.equals("=") || text.equals("=")
+    require_space = true
+  // An attribute is written with the `#` glued to the name (`#cfg`).
+  // Caution: Do not put a space after it, or it disagrees with the compiler's wording (`unknown
+  // attribute '#cfg'`) and the documents. A space always goes before the `#`, or the preceding
+  // declaration runs into it.
+  if text.equals("#")
+    require_space = true
+  if last_txt.equals("#")
+    require_space = false
+  if last_txt.is_space_required_keyword() || text.is_space_required_keyword()
+    require_space = true
+
+  if text.equals("{") || last_txt.equals("{") || last_txt.is_compound_sigil() ||
+    text.equals("}")
+    require_space = true
+
+  if text.equals("(") || text.equals("[") || text.is_compound_sigil()
+    if !last_txt.is_space_required_keyword() && !is_op_last && !last_txt.equals(",") &&
+      !last_txt.equals(":")
+      require_space = false
+    if last_txt.equals("?") || (last_txt.equals("|>") && flags.last_was_no_space)
+      require_space = false
+
+  if text.equals("<|") || last_txt.equals("(") || last_txt.equals("[") || last_txt.equals("<|")
+    require_space = false
+  if text.equals(")") || text.equals("]") || text.equals(";") || text.equals(",") ||
+    text.equals("|>")
+    require_space = false
+
+  if (last_txt.equals("{") || last_txt.is_compound_sigil()) && text.equals("}")
+    require_space = false
+  if text.equals(">") && no_space_mode
+    require_space = false
+
+  if last_txt.is_unary_prefix()
+    keep_space: =
+      text.equals("{") || text.is_compound_sigil() || text.equals("=") ||
+      text.is_space_required_keyword()
+    if !keep_space
+      require_space = false
+  if text.is_unary_prefix()
+    if !last_txt.is_space_required_keyword() && !is_op_last && !last_txt.equals(",") &&
+      !last_txt.equals(":") && !last_txt.equals("{") && !last_txt.equals("(") &&
+      !last_txt.equals("[")
+      require_space = false
+
+  if text.equals(".")
+    is_op_valid: = is_op_last && !(last_txt.equals(">") && flags.last_was_no_space)
+    // Only is_space_required_keyword() lists the keywords that need a space; a second list would
+    // drop the space in `else .opt` and the like.
+    require_space =
+      (true
+      if is_op_valid || last_txt.is_space_required_keyword() || last_txt.equals(",") ||
+      last_txt.equals(":") || last_txt.equals("=") || last_txt.equals("{") ||
+      last_txt.is_compound_sigil() else false)
+  else if last_txt.equals(".")
+    require_space = false
+
+  if (last_txt.equals("}") || last_txt.equals("|>")) && c0.is_alnum()
+    require_space = true
+
+  if flags.last_was_unary_minus
+    require_space = false
+
+  return require_space
+
+fn check_line_wrap(last_txt: U8[], text: U8[], require_space: Bool, current_col: Sz, space_len: Sz,
+  text_len: Sz, limit: Sz, dot_break_ok: Bool, after_catch: Bool): Bool //<
+    //< Whether the line breaks before `text`, where it passes `limit` and a break is safe there
+    //<
+    //< dot_break_ok is whether the `.` may be a wrapping candidate. It comes from
+    //< pending_dot_break_ok: a true chain, or a call with no `,` (see has_multi_dot_chain /
+    //< chain_segment_has_comma). As in clang-format, a single call wraps on its `,` before its `.`.
+  if current_col + space_len + text_len <= limit
+    return false
+  $is_safe_break: = require_space || (text.equals(".") && dot_break_ok)
+  if last_txt.equals("(") || last_txt.equals("[") || last_txt.equals("{") ||
+    last_txt.is_compound_sigil() || last_txt.equals("<|") || last_txt.equals(".") ||
+    last_txt.is_unary_prefix()
+    is_safe_break = false
+  // Caution: **Never end a line with `catch` or `catch <name>`.** In the indentation notation the
+  // next line's column decides whether a block opens or the line continues, and a break gives both
+  // the same column — the handler reads as the block's first statement, and its value is lost.
+  if after_catch
+    is_safe_break = false
+  if text.is_closing_bracket() || text.equals(";") || text.equals(",") || text.equals("{") ||
+    text.is_compound_sigil()
+    is_safe_break = false
+  return is_safe_break
+
+// ---------------------------------------------------------
+// Carrying a string literal onto the next line
+//
+// The bytes between the quotes are part of the program, so the only mark the formatter may put
+// inside a literal is the line-continuation `\`, which stands for no byte ("Escape sequences" in
+// `../../docs/SPEC-language.md`). `printer.kspls` does the writing.
+// ---------------------------------------------------------
+
+fn join_string_lines(text: U8[], out: Str_builder$@): Bool //<
+  //< It writes a literal's spelling into `out` with every line continuation taken out
+  //<
+  //< It returns false, and `out` is then to be ignored, for a literal that is not laid out at all:
+  //< a raw text (`"""`), a character literal, and one holding a line terminator of its own.
+  //< Caution: **Join before breaking, every time.** Where the text starts decides the break
+  //< points, so otherwise formatting twice gives two different results.
+  if text.len < 2 || (text.ptr + 0)$ != '"' || text.starts_with("\"\"\"")
+    return false
+  $i: Sz = 0
+  for i < text.len
+    c: = (text.ptr + i)$
+    if c == '\\' && i + 1 < text.len
+      cont: = base_literal.line_continuation_span(text, i, text.len)
+      if cont > 0
+        i += cont
+        continue
+      out.c(c).c((text.ptr + i + 1)$)
+      i += 2
+      continue
+    if c == '\n' || c == '\r'
+      return false
+    out.c(c)
+    i += 1
+  return true
+
+fn string_piece_end(text: U8[], from: Sz, budget: Sz): Sz //<
+  //< How much of a joined literal goes on this line, counted from `from`
+  //<
+  //< `text.len` where the rest fits, otherwise just past the last space leaving room for the `\`;
+  //< `from` where none fits, so a word longer than the line is written whole.
+  //< Caution: **Do not break at a space inside `\{ … \}` or in a run of spaces.** The first is part
+  //< of an expression; the second loses a space to the indent the `\` swallows (a JSON fixture).
+  if text.len - from <= budget
+    return text.len
+  last_k: = from + budget - 1
+  $depth: Sz = 0
+  $best: Sz = 0
+  $i: = from
+  for i < text.len && i <= last_k
+    c: = (text.ptr + i)$
+    if c == '\\' && i + 1 < text.len
+      n: = (text.ptr + i + 1)$
+      if n == '{'
+        depth += 1
+      else if n == '}'
+        depth = depth - 1 if depth > 0 else 0
+      i += 2
+      continue
+    if c == ' ' && depth == 0 && i > from && i + 1 < text.len && (text.ptr + i + 1)$ != ' ' &&
+      (text.ptr + i + 1)$ != '\t'
+      best = i + 1
+    i += 1
+  return best if best > from else from

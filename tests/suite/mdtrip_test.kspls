@@ -1,0 +1,197 @@
+#!/usr/bin/env -S ksplc run
+//< A document taken round through Markdown keeps its content
+//<
+//< Two things are checked: that it reaches a fixed point, and that nothing is dropped.
+
+// ==========================================
+// The two in full:
+//   1. **the fixed point** — a text taken round once and then again is the same. **Not the same
+//      as the original** (an `*` bullet becoming `-` is not content), like self-hosting's
+//      zero diff.
+//   2. **that no content is dropped** — headings, code spans, fence languages and link targets
+//      count the same before and after. **Counting catches any drop but does not say which.**
+// ==========================================
+import "kspage/tests/trip"
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+import "tests/support/harness"
+
+priv struct Tally //< the counts of one text
+  heads: Sz
+  codes: Sz
+  fences: Sz
+  links: Sz
+  rules: Sz
+  // A column alignment other than the default (centre and right); see `aligned_in` for an explicit
+  // left (`rule_align` in `kspage/share/markdown_read.kspls`).
+  aligned: Sz
+
+priv fn same_tally(a: Tally, b: Tally): Bool
+  return a.heads == b.heads && a.codes == b.codes && a.fences == b.fences && a.links == b.links &&
+    a.rules == b.rules && a.aligned == b.aligned
+
+priv fn show(t: Tally, out: Str_builder$@)
+  out.s("headings \{t.heads\} / code \{t.codes\} / fences \{t.fences\}")
+  out.s(" / links \{t.links\} / rules \{t.rules\} / aligned \{t.aligned\}")
+
+priv fn count_in(text: U8[], langs: Str_builder$@, arena: Arena$@): Tally //<
+  //< Counts the elements of a text
+  //<
+  //< Caution: **Do not count inside a fence** (a `#` there is no heading). **Collect the fence
+  //< languages too** (lose one and every tool that picks up source fences misses it).
+  $got: = Tally::{ .heads = 0, .codes = 0, .fences = 0, .links = 0, .rules = 0, .aligned = 0 }
+  $inside: = false
+  for line in text.lines(arena)
+    t: = line.trim_spaces()
+    if t.starts_with("```")
+      if !inside
+        got.fences += 1
+        langs.s(t.sub_from(3).trim_spaces()).c('|')
+      inside = !inside
+      continue
+    if inside
+      continue
+    if t.starts_with("#")
+      got.heads += 1
+    // A rule line. **One right after a paragraph is a heading's underline**, not counted.
+    if t.equals("---") || t.equals("***") || t.equals("___")
+      got.rules += 1
+    got.codes += code_spans(line)
+    got.links += links_in(line)
+    got.aligned += aligned_in(t)
+  return got
+
+priv fn aligned_in(line: U8[]): Sz //<
+  //< The count of columns with a non-default alignment, where that line is a rule line
+  //<
+  //< **An explicit left is not counted.** `:--` and `---` look the same, so becoming `---` on a
+  //< round trip drops no content.
+  if line.len < 2 || line[0] != '|'
+    return 0
+  $n: Sz = 0
+  $start: Sz = 1
+  for $i: Sz = 1; i <= line.len; i += 1
+    if i < line.len && line[i] != '|'
+      continue
+    cell: = line.sub(start, i - start).trim_spaces()
+    // Caution: **Do not count past the closing `|`** (its empty field; as the reader does).
+    if i >= line.len && cell.len == 0
+      start = i + 1
+      continue
+    if !only_rule(cell)
+      return 0
+    if cell[cell.len - 1] == ':'
+      n += 1
+    start = i + 1
+  return n
+
+priv fn only_rule(cell: U8[]): Bool //<
+  //< Whether that cell holds only the rule's characters (`-`, `:` and space)
+  $dashes: Sz = 0
+  for $i: Sz = 0; i < cell.len; i += 1
+    c: = cell[i]
+    if c == '-'
+      dashes += 1
+      continue
+    if c != ':' && c != ' '
+      return false
+  return dashes > 0
+
+priv fn code_spans(line: U8[]): Sz //< the count of code spans on that line
+  //<
+  //< **A span closes at a run of the same length** (some spans hold a `` ` `` inside).
+  $n: Sz = 0
+  $i: Sz = 0
+  for i < line.len
+    if line[i] == '\\'
+      i += 2
+      continue
+    if line[i] != '`'
+      i += 1
+      continue
+    open: = ticks_at(line, i)
+    $k: Sz = i + open
+    for k < line.len
+      if line[k] != '`'
+        k += 1
+        continue
+      run: = ticks_at(line, k)
+      if run == open
+        n += 1
+        break
+      k += run
+    if k >= line.len
+      return n
+    i = k + open
+  return n
+
+priv fn ticks_at(line: U8[], at: Sz): Sz
+  $n: Sz = 0
+  for at + n < line.len && line[at + n] == '`'
+    n += 1
+  return n
+
+priv fn links_in(line: U8[]): Sz //<
+  //< The count of links on that line (the count of `](`)
+  //<
+  //< **An image has the same form** (both hold a target).
+  $n: Sz = 0
+  for $i: Sz = 0; i + 1 < line.len; i += 1
+    if line[i] == ']' && line[i + 1] == '('
+      n += 1
+  return n
+
+fn main(): I32
+  arena: = harness.begin(512 * 1024 * 1024)
+  root: = harness.root()
+  docs: = harness.tracked() catch
+    return harness.fatal("cannot list the files git knows")
+  $moved: = Str_builder.new()
+  defer moved.free()
+  $lost: = Str_builder.new()
+  defer lost.free()
+  $seen: Sz = 0
+  for rel in docs
+    if !rel.ends_with(".md")
+      continue
+    text: = io.read_file(fs.join(root, rel, arena)) catch
+      continue
+    seen += 1
+    $one: = Str_builder.new()
+    defer one.free()
+    trip.md_trip(text, one@, arena)
+    $two: = Str_builder.new()
+    defer two.free()
+    trip.md_trip(one.slice(), two@, arena)
+    if !one.slice().equals(two.slice())
+      moved.s("\n    \{rel\}: round 1 \{one.len\} bytes -> round 2 \{two.len\} bytes")
+    $was_langs: = Str_builder.new()
+    defer was_langs.free()
+    $now_langs: = Str_builder.new()
+    defer now_langs.free()
+    was: = count_in(text, was_langs@, arena)
+    now: = count_in(one.slice(), now_langs@, arena)
+    if !same_tally(was, now) || !was_langs.slice().equals(now_langs.slice())
+      lost.s("\n    \{rel\}\n      original: ")
+      show(was, lost@)
+      lost.s("\n      round 1:  ")
+      show(now, lost@)
+      if !was_langs.slice().equals(now_langs.slice())
+        lost.s("\n      the fences' declarations: \{was_langs.slice()\} -> \{now_langs.slice()\}")
+  // Not one item means the check looks at nothing.
+  if seen == 0
+    return harness.fatal("not one .md that git knows")
+  // **Build the text before passing it** (an embedding can be written only inside a writer
+  // chain).
+  $name: = Str_builder.new()
+  defer name.free()
+  name.s("Markdown taken round becomes a fixed point (\{seen\})")
+  verdict.check(name.slice(), moved.slice().len == 0, moved.slice())
+  name.clear()
+  name.s("a round trip drops no heading, code, fence or link (\{seen\})")
+  verdict.check(name.slice(), lost.slice().len == 0, lost.slice())
+  return harness.finish()

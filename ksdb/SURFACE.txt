@@ -1,0 +1,40 @@
+# The record of the API this package publishes, written by ksplc --emit-surface.
+# Caution: Do not fix it by hand. Change the API, remake it with `make surface`, and commit the diff.
+# The columns are tab-separated: the file's logical name / the key / the text / the documentation (left off where there is none). Rows are by key, ascending.
+ksdb/log	Cursor	pub struct Cursor	a walk over the records, oldest first, kept separate from the `Log`. **It looks only up to `end`, the range `open` checked**: a half-written record may lie beyond it, so the scan must not go further.
+ksdb/log	Cursor.at	pub at: Sz	the start of the record it points at now. `Log.open` reads it to find the end of the last record.
+ksdb/log	Cursor.kind	pub kind: U16	the tag the current record was appended with
+ksdb/log	Cursor.len	pub len: U16	the current record's content length
+ksdb/log	Cursor.next	pub fn next(r: Self$@): Bool	moves to the next record; false when none is left. Caution: **It must not stop at a garbled record.** A power cut can leave one half-written record, and stopping there would make everything appended after it (in the next sector) unreadable forever. **It must not stop at an erased region either.** Appending leaves a gap at a sector's end rather than span two sectors, so stopping at that gap misses the next sector's records.
+ksdb/log	Cursor.payload_at	pub fn payload_at(r: Self$@): Sz	where the current record's content begins
+ksdb/log	Cursor.read	pub fn read(r: Self$@, dst: U8$[])	copies the current record's content out
+ksdb/log	Ksdb_error	pub enum Ksdb_error	why an append or a read failed
+ksdb/log	Ksdb_error.full	full	the medium has no room left; the log only appends, so this lasts until a `reset`.
+ksdb/log	Ksdb_error.not_found	not_found	no record of that kind exists. Caution: **Do not report "there is none" as length 0.** A record with empty content is legitimate (see the caution on `Cursor`'s `started`). An empty record would then read as "there is none": the writer wrote it, cannot read it back, and nothing shows why.
+ksdb/log	Ksdb_error.too_large	too_large	the content is longer than `max_payload`, or does not fit in one sector.
+ksdb/log	Ksdb_error.too_small	too_small	the `dst` passed to `last` is shorter than the content.
+ksdb/log	Ksdb_error.write_failed	write_failed	the medium refused a write or an erase.
+ksdb/log	Log	pub struct Log	an append-only log on one `Store` that can be read again after a power cut
+ksdb/log	Log.append	pub fn append(r: Self$@, kind: U16, payload: U8[]): Void?Ksdb_error	adds one record without crossing a sector boundary or erasing anything. **A record stays inside one sector**: if it spanned two, erasing one would leave only the header in the other. **No sector is erased here**, since erasing `tail`'s sector would take its finished records with it. A region not erased is only skipped; erasing is `reset`'s job.
+ksdb/log	Log.iter	pub fn iter(r: Self$@): Cursor	a walk over the records, oldest first. It is separate from `Log`, so appending during a scan breaks neither.
+ksdb/log	Log.last	pub fn last(r: Self$@, kind: U16, dst: U8$[]): Sz?Ksdb_error	copies out the newest record of that kind and returns its length. This is how a device keeps a policy it was sent: the same kind is appended again and again and **the newest one wins**, so a power cut mid-write leaves the old policy in force. A caller that is fine with 0 when there is none can write `catch 0`.
+ksdb/log	Log.last_equals	pub fn last_equals(r: Self$@, kind: U16, data: U8[]): Bool	whether the newest record of that kind already holds this data. false if there is none. **It lets the caller skip writing what has not changed**, since each append uses up space (a policy of a few KB fills the medium in a few dozen writes). It needs no output buffer: it reads in chunks, since a second record-sized buffer costs too much of a device's RAM.
+ksdb/log	Log.open	pub fn open(store: Store): Log	scans the medium and opens the log where it can append. **It scans on every open**: a position stored separately would be a second source of truth, and after a power cut the two would disagree. **If the scan ends where the medium is not erased, it moves to the next sector**: a half-written record cannot be written over.
+ksdb/log	Log.reset	pub fn reset(r: Self$@): Void?Ksdb_error	erases the whole medium; the records are lost. Use it before a device's first write (a device is erased when it leaves the factory, not after it has been written), and after someone has copied the records off a full log.
+ksdb/log	Log.used	pub fn used(r: Self$@): Sz	the number of bytes in use, which is where the next record goes
+ksdb/log	header_size	pub const header_size: Sz = 8	the size of a record's header, in bytes.
+ksdb/log	max_payload	pub const max_payload: Sz = 0xfffe	the largest content one record can hold. `0xFFFF` marks an empty slot, so it cannot be a content length.
+ksdb/ram_store	arm_cut	pub fn arm_cut(at: Sz, bytes: Sz)	arms one power cut; only the tests use it. The cut hits the `at`-th `program_at` call, once. **It counts calls because appending writes twice per record** (the content, then the header), so a test can move the cut one write at a time ("Where the power is cut is tried exhaustively" in `tests/ksdb_test.kspls`).
+ksdb/ram_store	make	pub fn make(buf: U8$[], sector_size: Sz): Store	a `Store` on `buf`, erased and ready to use; the caller keeps `buf` alive. Caution: `sector_size` has to divide `buf.len`. It erases `buf` before returning, as flash leaves the factory erased.
+ksdb/ram_store	tear	pub fn tear(at: Sz, len: Sz)	corrupts a finished record afterwards; only the tests use it. Makes `len` bytes from `at` look half-written (it mixes 0s in), as a power cut leaves them. Unlike `arm_cut`, it damages the record **after the write has finished**.
+ksdb/store	Erase_sector	pub typedef Erase_sector = fn(at: Sz): Bool	erases the sector holding `at` to all 1 bits. Returns true if it erased. The address need not be the start of a sector. **The erase unit is `sector_size`**, so part of a sector cannot be erased on its own.
+ksdb/store	Program_at	pub typedef Program_at = fn(at: Sz, src: U8[]): Bool	writes `src` at `at`; false means it was not written. **Most media report no failure when writing where nothing was erased**: the bits just turn to 0, and reading back gives a garbled value. So true does not mean "written correctly"; the layer above checks the erase (`ksdb/log.kspls`). false means "it was not written", not "try later"; retrying does not fix it.
+ksdb/store	Read_at	pub typedef Read_at = fn(at: Sz, dst: U8$[])	reads `dst.len` bytes from `at`; it cannot fail. Caution: **Do not pass a range past the end** (the caller checks it against `capacity`). Every medium can be read, so no failure is returned.
+ksdb/store	Store	pub struct Store	the medium a log is kept on: its three operations and its sizes
+ksdb/store	Store.capacity	pub capacity: Sz	the medium's total size in bytes.
+ksdb/store	Store.erase_sector	pub erase_sector: Erase_sector	how one sector is erased back to all 1 bits
+ksdb/store	Store.next_sector	pub fn next_sector(r: Store, at: Sz): Sz	the start of the sector after the one holding `at`. On the last sector it returns `capacity`, which is past the end of the medium.
+ksdb/store	Store.program_at	pub program_at: Program_at	how bytes are written to an area that is already erased
+ksdb/store	Store.read_at	pub read_at: Read_at	how this medium is read
+ksdb/store	Store.sector_base	pub fn sector_base(r: Store, at: Sz): Sz	the start of the sector holding `at`
+ksdb/store	Store.sector_size	pub sector_size: Sz	the erase unit's size in bytes; it must divide `capacity`. Caution: **Otherwise the last sector ends partway**, and erasing it reaches into the region beyond.

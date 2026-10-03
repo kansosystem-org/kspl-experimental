@@ -1,0 +1,61 @@
+//< The entry point that runs ksai's tests together
+//<
+//< **This is the one contract this package exports.** The tests live inside `ksai/`, so they
+//< reach what they inspect with no `pub` added just for a test ("A test inspecting the inside of a
+//< unit goes inside that unit" in `../../docs/DESIGN.md`). **Do not add an inspecting entry point
+//< here**: each one is one more contract outside.
+//< **[I0402] does not fire in this package.**
+import "ksai/tests/grad_test"
+import "ksai/tests/lora_test"
+import "ksai/tests/nn_test"
+import "ksai/tests/optim_test"
+import "ksai/tests/param_grad_test"
+import "ksai/tests/sampler_test"
+import "ksai/tests/tensor_test"
+import "ksai/tests/tokenizer_test"
+import "std/fs"
+import "std/mem" { Arena }
+
+pub fn run_ksai() //<
+  //< Runs every test, with an arena and the folder the file round trips write into
+  //<
+  //< **It takes no arguments**, so its two callers (`make debug`'s and this package's own `main`)
+  //< have no argument list that could drift apart.
+  // **Do not stop if the folder cannot be made**: the test that writes there reports it under its
+  // own name.
+  fs.mkdir_all("out/tmp") catch {}
+  arena: = Arena.new(1024 * 1024)
+  defer arena.free()
+  tokenizer_test.test_tokenizer_roundtrip(arena)
+  tokenizer_test.test_tokenizer_cache_follows_additions(arena)
+  sampler_test.test_sampler(arena)
+  grad_test.test_grad_numeric(arena)
+  grad_test.test_grad_numeric_seq(arena)
+  grad_test.test_grad_training(arena)
+  grad_test.test_nn_training(arena)
+  grad_test.test_rmsnorm_grad(arena)
+  grad_test.test_adam(arena)
+  optim_test.test_updater_pairs_states(arena)
+  grad_test.test_attention_grad(arena)
+  grad_test.test_block_grad(arena)
+  nn_test.test_init_breaks_symmetry()
+  param_grad_test.test_linear_weight_grad()
+  param_grad_test.test_rmsnorm_weight_grad()
+  param_grad_test.test_mlp_weight_grad()
+  param_grad_test.test_attention_weight_grad()
+  param_grad_test.test_block_weight_grad()
+  param_grad_test.test_lora_weight_grad()
+  param_grad_test.test_attention_lora_weight_grad()
+  param_grad_test.test_block_lora_weight_grad()
+  lora_test.test_lora_finetune(arena)
+  lora_test.test_attention_lora_grad(arena)
+  lora_test.test_block_lora_grad(arena)
+  tensor_test.test_arena_from_buffer()
+  tensor_test.test_tensor_operators(arena)
+  tensor_test.test_tensor_error_recoverable(arena)
+  tensor_test.test_view_rows(arena)
+  tensor_test.test_quantize_roundtrip(arena)
+  tensor_test.test_safetensors_roundtrip(arena)
+  tensor_test.test_safetensors_refuses_a_mismatch(arena)
+  tensor_test.test_safetensors_refuses_a_bad_range(arena)
+  lora_test.test_lora_raw_persist()

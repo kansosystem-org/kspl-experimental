@@ -1,0 +1,155 @@
+import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/boards/freenove_4wd_pico/motor"
+import "ksos/boards/freenove_4wd_pico/range"
+import "ksos/boards/freenove_4wd_pico/status"
+import "ksos/boards/freenove_4wd_pico/track"
+import "ksos/demo/rp2040/common/bringup" as boot
+import "ksos/demo/rp2040/common/console" as con
+import "ksos/demo/rp2040/common/net_client" as nc
+import "ksos/demo/rp2040/common/store"
+import "ksos/drivers/rp2040/adc"
+import "ksos/drivers/rp2040/gpio"
+import "ksos/drivers/rp2040/ir_nec" as ir
+import "ksos/drivers/rp2040/usb_cdc" as usb
+import "ksos/kernel/heap"
+import "std/http"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+// ==========================================
+// Kanso OS — **starting up and obtaining the policy**, for the car that runs on a policy
+// (`rp2040_car_pilot_probe.kspls`).
+// **It touches none of the driving state**, only its own `heap_buf` / `resp_buf`, so the main
+// file can import it one-way.
+// ==========================================
+
+const our_port: U16 = 54324
+const peer_port: U16 = 8080 // kssrv
+const our_isn: U32 = 14000 // a fixed value (a demo; real use randomizes it)
+const stage_report_interval_ms: U32 = 3000
+
+const link_timeout_ms: U32 = 5000 //< the limit on waiting for the USB network to come up
+  //<
+  //< Caution: **Keep it finite**: on battery alone it never comes up, and waiting would block
+  //< the path of starting from the record.
+
+const fetch_idle_ms: U32 = 500 //< how long to wait while downloading the policy
+  //<
+  //< The response (about 2KB) spans several segments; a read ends after this long with no data,
+  //< and another follows until the response is complete.
+const fetch_tries: U32 = 8
+
+// Global: too large for the task stack (2048).
+$heap_buf: U8[4096] // used by Str_builder (building the request)
+$resp_buf: U8[4096] // the whole downloaded response (the header plus the policy)
+
+fn stored_policy(): U8[] //< reads the policy saved in the record
+  //<
+  //< If it could be read, it returns its body.
+  //< **The result points into resp_buf**, which the weights point into (see policy.load): leave it
+  //< alone while it runs. The policy comes from the link **or** the record, never both, so the
+  //< buffer is shared.
+  return store.stored_policy(U8$[]::resp_buf)
+
+fn fetch_policy(ln: con.Line$@, arena: Arena$@): U8[] //< requests the policy once
+  //<
+  //< If it was downloaded it returns the body (a copy on the arena), otherwise empty.
+  //< Caution: **Keep reading until it is complete**: on `incomplete` from std/http, which checks
+  //< the length, it reads more.
+  $req: = Str_builder.new()
+  defer req.free()
+  req.s("GET /api/pilot HTTP/1.1\r\nHost: 192.168.137.1\r\nConnection: close\r\n\r\n")
+  if !nc.send_all(req.slice().ptr, req.len)
+    con.say(ln, "[pilot]", "FAILED to send the request")
+    return ""
+
+  // Caution: Take the buffer's length from the array itself; a hard-coded number goes stale when
+  // the array is enlarged.
+  sink: = U8$[]::resp_buf
+  $got: Sz = 0
+  for $tries: U32 = 0; tries < fetch_tries && got < sink.len; tries += 1
+    n: = nc.read_stream(U8$[]::{ .ptr = sink.ptr + got, .len = sink.len - got }, fetch_idle_ms)
+    got += n
+    if got == 0
+      continue
+    // Do not leave a failed parse on the arena, or repeated reads use it up.
+    mark: = arena.save()
+    raw: = U8[]::{ .ptr = sink.ptr, .len = got }
+    resp: = http.parse_response(raw, arena) catch
+      arena.restore(mark)
+      fallback null
+    if resp == null
+      if n == 0
+        break // nothing more is coming and it is incomplete
+      continue
+    ln.reset()
+    ln.str("[pilot] status=")
+    ln.u32(U32::resp.status)
+    ln.str(" body=")
+    ln.u32(U32::resp.body.len)
+    _sent: = ln.flush()
+    if resp.status != 200
+      return ""
+    return resp.body
+  ln.reset()
+  ln.str("[pilot] TIMEOUT recv=")
+  ln.u32(U32::got)
+  _sent2: = ln.flush()
+  return ""
+
+fn bring_up(): Bool //< starts everything from the clocks to the motors
+  //<
+  //< If anything fails to start, it reports it by the number of beeps and returns false.
+  if !boot.clocks_and_gpio()
+    return false // silent; see `boot.clocks_and_gpio`
+  track.init()
+  range.init()
+  // IR is permanently fitted, but it still has to be set up as an input.
+  ir.init(board.ir_receiver)
+  gpio.init_analog(board.battery_pin)
+  if !adc.init()
+    boot.beep(4)
+    return false
+  // Caution: **The motor's initialization must succeed**, or every command is ignored ("connected
+  // but does not move"). init leaves the wheels stopped.
+  if !motor.init()
+    boot.beep(5)
+    return false
+  // **The LED is set up after the motors and before USB**: on battery alone it is the only
+  // window. It carries on without it.
+  if !status.init(board.ws2812_pin, board.ws2812_level)
+    boot.beep(6)
+  heap.heap_init(U8$[]::heap_buf)
+  return boot.usb_up()
+
+fn connect(ln: con.Line$@): Bool //< waits for NCM's link to come up and opens one TCP connection
+  //<
+  //< true if it was opened.
+  //< Caution: **Do not treat a failure here as a halt**: with a saved policy it runs with no
+  //< link, so stopping is the caller's decision. **Do not wait for the link forever** either; on
+  //< battery alone it never comes up.
+  $waited: U32 = 0
+  $since_beep: U32 = 0
+  for !usb.ncm_is_up() && waited < link_timeout_ms
+    boot.pump(200)
+    waited += 200
+    since_beep += 200
+    status.State.starting.show(false)
+    if since_beep >= stage_report_interval_ms
+      since_beep = 0
+      boot.beep(usb.current_stage())
+  if !usb.ncm_is_up()
+    con.say(ln, "[car]", "no usb network link")
+    return false
+
+  nc.init_addrs()
+  // Sending right after the link comes up loses a frame.
+  boot.pump(500)
+  con.say(ln, "[car]", "link up, resolving peer")
+  if !nc.resolve_peer(ln)
+    con.say(ln, "[car]", "no arp reply")
+    return false
+  if !nc.open(ln, our_port, peer_port, our_isn)
+    con.say(ln, "[car]", "no tcp handshake (is kssrv listening?)")
+    return false
+  return true

@@ -1,0 +1,264 @@
+//< Reading and writing through streams: a file, and the standard three
+//<
+//< A destination is a `Writer` and a source is a `Reader`, so one call writes to a file, standard
+//< output or a `Str_builder` alike. A failure is an `Io_error` naming the file, not a crash.
+import "std/chars"
+import "std/libc"
+import "std/mem" + { Arena, dealloc }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt // lets interpolation (Formattable) write into your own Writer
+
+pub enum Io_error //< why a read, a write or an open failed
+  file_not_found(path: U8[]) //< the file could not be opened for reading; names the file
+  read_failed(path: U8[]) //< the read was refused, or the path is a directory; names the file
+  write_failed(path: U8[]) //< the write was refused or incomplete; names the file
+  close_failed //< buffered data could not be flushed on closing
+  invalid_arg //< an argument is invalid, such as a path containing a NUL
+
+pub trait Reader //< anything bytes can be read from
+  fn read(r: Self, $buf: U8$[]): Sz?Io_error //< fills buf; returns the count read, 0 at the end
+
+pub struct File_stream //< one open file to write to, read from and close
+  pub stream: Void$@ //< the C `FILE *`; null means standard output
+
+impl File_stream: Writer //< so it can be used wherever a `Writer` is expected
+  priv fn stream_of(r: Self$@): Void$@ //<
+    //< When stream is uninitialized (null), it means standard output
+    return libc.get_stdout() if r.stream == null else r.stream
+  pub fn s(r: Self$@, val: U8[]): Self$@ //< writes a string and returns the stream
+    if val.len > 0
+      wrote: = libc.fwrite(Void$@::val.ptr, 1, val.len, r.stream_of())
+      if wrote < val.len
+        kspl_io_broken_pipe()
+      if line_buffered && val.find_char('\n') >= 0
+        r.flush_if_stdout()
+    return r
+  pub fn c(r: Self$@, val: U8): Self$@ //< writes one byte and returns the stream
+    if libc.fprintf(r.stream_of(), "%c", val) < 1
+      kspl_io_broken_pipe()
+    if line_buffered && val == '\n'
+      r.flush_if_stdout()
+    return r
+  priv fn flush_if_stdout(r: Self$@) //< flushes when line buffering is on
+    //<
+    //< Only stdout; a file and stderr (unbuffered) are left alone.
+    if r.stream != null && r.stream == g_stdout.stream
+      r.flush()
+  pub fn flush(r: Self$@): Self$@ //< flushes buffered data; does not report a failure
+    //<
+    //< Caution: **Check for a refusal at the flush, too.** A buffered `fwrite` reports success,
+    //< and a destination that has gone away **shows up only at the flush**.
+    if r.stream != null && libc.fflush(r.stream) != 0
+      kspl_io_broken_pipe()
+    return r
+
+impl File_stream: Reader //< so it can be used wherever a `Reader` is expected
+  pub fn read(r: Self$@, buf: U8$[]): Sz?Io_error //< fills the buffer; 0 means the end
+    if r.stream == null
+      throw Io_error.invalid_arg
+    if buf.len == 0
+      return 0
+    return libc.fread(Void$@::buf.ptr, 1, buf.len, r.stream)
+
+impl File_stream: Owned //< it owns the handle and releases it in `free()`
+  pub fn free(r: Self$@) //< closes the handle; a failure while closing is not reported
+    //<
+    //< That is `Owned`'s contract.
+    //< Caution: **To know whether the written data arrived, call `sync()?` before freeing it.**
+    if r.stream != null
+      _res: = libc.fclose(r.stream)
+      r.stream = null
+
+impl File_stream
+  pub fn sync(r: Self$@): Void?Io_error //< flushes buffered data and reports a failure
+    //<
+    //< It does not mean the data reached the disk (the OS's own sync covers that). `Writer.flush()`
+    //< returns `Self$@` for chaining, so only this method can report a failure.
+    if r.stream == null
+      throw Io_error.invalid_arg
+    if libc.fflush(r.stream) != 0
+      throw Io_error.close_failed
+
+// Set by set_line_buffered(): a write to stdout containing a newline flushes at once.
+priv $line_buffered: Bool = false
+
+priv $g_stdout: File_stream = File_stream::{ .stream = null }
+priv $g_stderr: File_stream = File_stream::{ .stream = null }
+
+pub fn out(): Writer //< standard output, opened on the first call
+  if g_stdout.stream == null
+    g_stdout.stream = libc.get_stdout()
+  return g_stdout
+
+pub fn err(): Writer //< standard error, opened on the first call
+  if g_stderr.stream == null
+    g_stderr.stream = libc.get_stderr()
+  return g_stderr
+
+priv fn fopen_checked(path: U8[], mode: U8[]): Void$@?Io_error //<
+  //< Opens path with mode and returns the FILE*, after checking that it opened
+  //<
+  //< Caution: **Do not use `libc.fopen`.** It is the narrow (ANSI) API, so on Windows a non-ASCII
+  //< path is read in the current code page (see the top of `kspl_win_to_wide` in
+  //< `ksplc/gen/runtime/hosted.c`). `kspl_fopen_path` switches to the wide API per environment.
+  // The C side would use only the part of a path before a NUL, so such a path is not opened; the
+  // call fails instead (see str.to_cstr).
+  $path_buf: U8$@ = null
+  switch path.to_cstr() case .some(p)
+    path_buf = p
+  case .none
+    throw open_error(path, mode)
+  defer dealloc(Void$@::path_buf)
+  $mode_buf: U8$@ = null
+  switch mode.to_cstr() case .some(m)
+    mode_buf = m
+  case .none
+    throw open_error(path, mode)
+  defer dealloc(Void$@::mode_buf)
+  // On POSIX a directory opens for reading and reads as nothing; Windows refuses it. It is refused
+  // here on both, before its size is asked.
+  if mode.len > 0 && mode[0] == 'r' && is_dir_path(path)
+    throw Io_error.read_failed(path)
+  file: = kspl_fopen_cstr(path_buf, mode_buf)
+  if file == null
+    throw open_error(path, mode)
+  return file
+
+priv fn is_dir_path(path: U8[]): Bool //<
+  //< whether a directory is at path; a link to one counts
+  $size: I64 = 0
+  $dir: I32 = 0
+  $mtime: I64 = 0
+  return kspl_stat(path.ptr, path.len, size@, dir@, mtime@) && dir != 0
+
+priv fn open_error(path: U8[], mode: U8[]): Io_error //< the reason it could not be opened
+  //<
+  //< Caution: **Report read and write failures differently.** Calling a failed open for writing
+  //< "not found" hides that **the file exists but cannot be opened** (on Windows, while another
+  //< process holds it or it is marked read-only).
+  if mode.len > 0 && mode[0] == 'r'
+    return Io_error.file_not_found(path)
+  return Io_error.write_failed(path)
+
+pub fn open( //< opens a file, handling a non-ASCII path on Windows too
+  path: U8[], //< the file to open
+  mode: U8[], //< the C `fopen` mode, such as `"rb"` or `"wb"`
+): File_stream?Io_error //< the open file, which the caller frees; fails if it cannot be opened
+  return File_stream::{ .stream = fopen_checked(path, mode)? }
+
+pub fn read_file(path: U8[]): U8[]?Io_error //<
+  //< The whole file, on the heap; the caller frees it with `mem.dealloc(text.ptr)`
+  //<
+  //< A `/proc` file that reports 0 bytes, and a pipe, are still read to the end.
+  return read_upto(path, no_cap, null)
+
+pub fn read_file_capped( //< the file's first `cap` bytes, or the whole file if it is shorter
+  //<
+  //< **It stops at `cap` however long the file grows**, so a child still writing cannot fill the
+  //< memory; the buffer grows with what is read, never to the whole cap up front.
+  path: U8[], //< the file to read
+  cap: Sz, //< the most bytes it reads
+  arena: Arena$@, //< where the bytes go; null means the heap, freed with `mem.dealloc(text.ptr)`
+): U8[]?Io_error //< the bytes; fails if the file cannot be opened or read
+  return read_upto(path, cap if cap > 0 else 0, arena)
+
+priv const no_cap: Sz = -1 //< `read_upto`'s cap for the whole file, however long
+
+priv fn read_upto(path: U8[], cap: Sz, arena: Arena$@): U8[]?Io_error
+  file: = fopen_checked(path, "rb")?
+  defer libc.fclose(file)
+
+  // Caution: **Leave the size to kspl_file_size.** C's fseek / ftell use `long`, whose width
+  // differs by target (hosted.c). **The size is only a first guess**: a full read keeps reading.
+  size_i64: = kspl_file_size(file)
+  $room: Sz = Sz::size_i64 + 1 if size_i64 > 0I64 else read_step
+  if cap != no_cap && room > cap
+    room = cap
+  if room == 0
+    return U8[]::{ .ptr = null, .len = 0 }
+  $buffer: = U8$@::mem.alloc_in(arena, room)
+  $len: Sz = 0
+  for
+    len += libc.fread(buffer + len, 1, room - len, file)
+    if len < room || room == cap
+      break
+    wider: = room * 2 if cap == no_cap || room < cap / 2 else cap
+    grown: = U8$@::mem.alloc_in(arena, wider)
+    mem.copy(grown, buffer, len)
+    if arena == null
+      dealloc(Void$@::buffer)
+    buffer = grown
+    room = wider
+  // A short read means the end or a failure; only the stream can tell which.
+  if libc.ferror(file) != 0
+    if arena == null
+      dealloc(Void$@::buffer)
+    throw Io_error.read_failed(path)
+  return U8[]::{ .ptr = buffer, .len = len }
+
+priv const read_step: Sz = 64 * 1024 //< the first buffer size for a file of unknown size
+
+pub fn write_file( //< writes the whole file, creating or replacing it
+  path: U8[], //< the file to write
+  data: U8[], //< its whole new content
+): Void?Io_error
+  // "wb", like read_file's "rb": text mode converts newlines on Windows and breaks binary data.
+  file: = fopen_checked(path, "wb")?
+  defer libc.fclose(file)
+
+  if data.len > 0
+    written: = libc.fwrite(Void$@::data.ptr, 1, data.len, file)
+    if written != data.len
+      throw Io_error.write_failed(path)
+
+pub fn copy( //< reads to the end, writes it all out, and returns how much was copied
+  $src: Reader, //< where the bytes come from
+  $dst: Writer, //< where they go
+): Sz?Io_error //< the number of bytes copied; fails if a read fails
+  $buf: U8[4096] = ::{}
+  $total_bytes: Sz = 0
+  for
+    bytes_read: = src.read(U8$[]::buf)?
+    if bytes_read == 0
+      break
+    dst.s(U8$[]::{ .ptr = buf@, .len = bytes_read })
+    total_bytes += bytes_read
+  return total_bytes
+
+pub fn getchar(): I32 //< one byte from standard input, or negative at the end
+  return libc.getchar()
+
+extern "C"
+  fn kspl_fopen_cstr(path_cstr: U8@, mode_cstr: U8@): Void$@ //<
+    //< Opens a file by its NUL-terminated path and mode; `fopen_checked` is the one caller
+  fn kspl_io_broken_pipe(): Void //<
+    //< Ends the program quietly when a write failed because nothing is reading
+    //<
+    //< The definition and the rule are in "Writing when nobody is left to read it" in
+    //< `ksplc/gen/runtime/hosted.c`.
+    //< Caution: **Always call it after a write.** The runtime ignores SIGPIPE, so without it
+    //< **nobody notices that the output's destination is gone** (`prog | head -1` keeps running,
+    //< its writes silently discarded).
+  fn kspl_file_size(stream: Void$@): I64 //< an open stream's size in bytes
+    //<
+    //< It moves the position back to the start. -1 when the size cannot be read.
+  fn kspl_stat(path_ptr: U8@, path_len: Sz, size_out: I64$@, is_dir_out: I32$@, mtime_out: I64$@):
+    Bool //< Kept in step with the original declaration in `std/fs.kspls`
+pub fn set_line_buffered(): Void //< flushes standard output at every newline from here on
+  //<
+  //< A piped standard output (`| tee`) is fully buffered, so a watched run prints nothing until it
+  //< ends. It avoids setvbuf(_IOLBF): `_IOLBF`'s value differs per libc, so a constant in the IR
+  //< would mean another mode on Windows.
+  line_buffered = true
+pub fn read_stdin( //< the whole of standard input, read to the end
+  arena: Arena$@, //< the arena the text is allocated in
+): U8[] //< the text read; empty if nothing came
+  $b: = Str_builder.new()
+  for
+    c: = getchar()
+    if c < 0
+      break
+    b.c(U8::c)
+  s: = arena.dup_str(b.slice())
+  b.free()
+  return s

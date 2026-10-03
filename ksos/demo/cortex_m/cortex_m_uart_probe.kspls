@@ -1,0 +1,26 @@
+//< ARM Cortex-M bare metal: a probe showing the real UART0 (MMIO) peripheral
+//<
+//< It reads and writes the CMSDK APB UART0 (0x40004000) directly through ksos/drivers/mps2/uart,
+//< and shows that real memory-mapped I/O works without ARM semihosting (the BKPT trap, con.puts).
+//< Under QEMU (mps2-an385) both appear on the same -nographic standard output, but UART0 output
+//< goes through the actual peripheral registers, so it also works on real hardware's UART (as
+//< long as it is CMSDK IP with the same register layout).
+import "ksos/demo/common/semihost_console" as con
+import "ksos/drivers/mps2/uart"
+import "ksos/kernel/task" + { Task }
+
+$tcb_probe: Task
+$stack_probe: U8[4096]
+
+fn uart_probe_task(_arg: Void$@): Void
+  con.puts("[semihosting] Kanso OS UART0(MMIO) probe starting...\n")
+
+  uart.init()
+  uart.puts("[UART0] Hello from real memory-mapped peripheral I/O (not semihosting)!\n")
+  uart.puts("[UART0] CMSDK APB UART @ 0x40004000, verified on QEMU mps2-an385.\n")
+
+  con.puts("[semihosting] UART0(MMIO) probe done.\n")
+// The bare-metal entry called from startup.S.
+#export
+fn ksos_main()
+  task.run_single_task(tcb_probe@, U8$[]::stack_probe, uart_probe_task, "uart", con.exit)

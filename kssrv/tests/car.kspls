@@ -1,0 +1,205 @@
+import "kssrv/tests/client"
+import "kssrv/tests/pilot"
+import "std/ds" { List }
+import "std/json"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+// ==========================================
+// Tests the car downloading a policy and driving on its own (not a suite; part of
+// `kssrv/tests/main.kspls`). **The model that reads `GET /api/pilot`'s answer belongs to
+// `kssrv/tests/pilot.kspls`.** This file tests only "how the car moves on the policy it
+// received".
+// ==========================================
+// --- Downloading the policy ---
+
+priv const bad_car: U8[][5] = ::{ "{\"line\":2}", "{\"dist_mm\":100}",
+  "{\"dist_mm\":-1,\"line\":2}", "{\"dist_mm\":100,\"line\":8}", "{\"dist_mm\":100,\"line\":-1}" }
+
+fn pilot_cases(port: I32, arena: Arena$@): Option<|pilot.Blob|>?client.Http_end
+  r: = client.get(port, "/api/pilot", "", arena)?
+  ctype: = client.header(r.head, "content-type")
+  $blob: = Option<|pilot.Blob|>.none
+  if r.status == 200 && ctype.equals("application/octet-stream")
+    blob = to_blob(r.body, arena)
+  $good: = false
+  if b: = blob
+    good =
+      b.version.equals("2") && b.far_mm > 0.0 && b.man.shape.len == 2 && b.man.shape[0] == 10 &&
+      b.man.shape[1] == 3
+  d44: = arena.text().s("\{r.status\} ").s(ctype).s(" \{r.body.len\}B").take()
+  verdict.check("GET /api/pilot returns safetensors", good, d44)
+  client.check_405("POST /api/pilot is 405", client.post_empty(port, "/api/pilot", arena)?, arena)
+  return blob
+
+fn to_blob(data: U8[], arena: Arena$@): Option<|pilot.Blob|>
+  if data.len == 0
+    return Option<|pilot.Blob|>.none
+  b: = pilot.load(data, arena) catch
+    return Option<|pilot.Blob|>.none
+  return Option<|pilot.Blob|>.some(b)
+
+priv struct Car_link //< a stand-in that talks to the server the way the car does
+  //<
+  //< It reuses one connection and keeps sending observations. **The car also reuses one with
+  //< keep-alive** (a 3-way handshake per observation does not fit the control period). Without the
+  //< same pattern here, that path is never tested.
+  conn: client.Conn
+  seq: Sz
+
+impl Car_link: Owned {}
+
+impl Car_link
+  priv fn open(port: I32): Car_link?client.Http_end
+    return Car_link::{ .conn = client.Conn.open(port)?, .seq = 0 }
+
+  priv fn free(r: Self$@)
+    r.conn.free()
+
+  priv fn observe(r: Self$@, dist_mm: I64, line: I64, arena: Arena$@):
+    client.Resp?client.Http_end
+    r.seq += 1
+    body: = arena.text().s("{\"dist_mm\":\{dist_mm\},\"line\":\{line\},\"seq\":\{r.seq\}}").take()
+    r.conn.send(client.post_bytes("/api/car", body, arena))?
+    return r.conn.next(false, client.default_timeout_ms, arena)
+
+const dist_steps: Sz = 121 //< how many distance steps
+  //<
+  //< From 0mm to 3000mm in 25mm steps.
+const dist_step_mm: I64 = 25I64
+const line_count: Sz = 8
+priv const near_mm: I64 = 150I64 //< the point-blank distance (mm)
+  //<
+  //< Nearer than this it must not move forward.
+const tight_margin: F64 = 0.0001 //< the logit gap counted as a close call
+priv const max_tight: Sz = 5 //< how many points may be dropped from the verdict as a close call
+  //<
+  //< More than this is itself a fault.
+priv const min_agree_pct: Sz = 95 //< the share of manoeuvres that should match the rule (per cent)
+
+priv struct Sweep //< what the sweep collected
+  seen: Sz
+  agree: Sz
+  // The points that broke a safety property.
+  bad: List<|U8[]|>$@
+  // The points whose manoeuvre differed from the downloaded policy.
+  diff: List<|U8[]|>$@
+  // The points dropped from the verdict as a close call.
+  tight: Sz
+
+// --- The car's closed loop ---
+fn car_cases(port: I32, blob: Option<|pilot.Blob|>, arena: Arena$@): Void?client.Http_end
+  $link: = Car_link.open(port)?
+  defer link.free()
+  first: = link.observe(250I64, 2I64, arena)?
+  doc: = client.doc_of(first, arena)
+  ok45: =
+    first.status == 200 && doc.get("cmd").as_str().equals("strafe_right") &&
+    doc.get("lat").as_int(0) == 50 && doc.get("valid_ms").as_int(0) > 0
+  d46: = client.shown(first, arena)
+  verdict.check("POST /api/car returns a manoeuvre", ok45, d46)
+  ok47: = doc.get("seq").as_int(-1) == I32::link.seq
+  d48: = client.shown(first, arena)
+  verdict.check("seq comes back as it stands", ok47, d48)
+
+  sw: = sweep(link@, blob, arena)?
+  verdict.check_list("no advance is returned at an unmeasurable or point-blank distance", sw.seen,
+    "points", sw.bad, "")
+  d49: = arena.text().s("\{sw.agree\}/\{sw.seen\}").take()
+  verdict.check("the manoeuvre matches the rule 95% of the time or better",
+    sw.agree * 100 >= sw.seen * min_agree_pct, d49)
+  if blob.is_none()
+    sw.diff.push("could not read the policy handed out")
+  if sw.tight > max_tight
+    many: = arena.text().s("too many points dropped as a close call: \{sw.tight\}/\{sw.seen\}")
+      .take()
+    sw.diff.push(many)
+  verdict.check_list("the policy taken home gives the same manoeuvre as the server", sw.seen,
+    "points", sw.diff, "")
+  d51: = arena.text().s("\{link.seq\}").take()
+  verdict.check("it keeps handling observations on one connection",
+    link.seq == 1 + dist_steps * line_count, d51)
+
+  for bad in bad_car
+    r: = client.post_json(port, "/api/car", "", bad, client.default_timeout_ms, arena)?
+    nm52: = arena.text().s("a broken observation is 400: ").s(client.short(bad)).take()
+    d53: = arena.text().s("\{r.status\}").take()
+    verdict.check(nm52, r.status == 400, d53)
+  client.check_405("GET /api/car is 405", client.get(port, "/api/car", "", arena)?, arena)
+
+  status: = client.doc_of(client.get(port, "/api/status", "", arena)?, arena)
+  pl: = status.get("pilot")
+  ok54: =
+    pl.get("params").as_int(0) > 0 && pl.get("agreement").as_f64(0.0) >= 0.95 &&
+    pl.get("agreement_checked").as_int(0) > 1000 && status.get("commands").as_int(0) > 900
+  d55: = arena.text().s(client.dump_of(pl, arena))
+    .s(" commands=\{status.get("commands").as_int(0)\}").take()
+  verdict.check("status puts out the pilot policy's particulars", ok54, d55)
+  // If the counts differ, the weights served are only part of the policy (the reader uses initial
+  // values for what is missing).
+  ok56: = blob.is_some() && blob_params(blob) == Sz::pl.get("params").as_int(-1)
+  d57: = arena.text().s("\{blob_params(blob)\} vs \{pl.get("params").as_int(-1)\}").take()
+  verdict.check("the count of weights handed out matches status's declaration", ok56, d57)
+
+priv fn blob_params(blob: Option<|pilot.Blob|>): Sz
+  switch blob case .some(b)
+    return b.params
+  case .none
+    return 0
+
+priv fn sweep(link: Car_link$@, blob: Option<|pilot.Blob|>, arena: Arena$@):
+  Sweep?client.Http_end //<
+    //< Sweeps every distance and line, checking the rule match and the **safety properties**
+    //<
+    //< **The match rate alone is not enough**: never moving towards something too near must hold
+    //< even after a change that lowers the match rate (`bad` is the real target). The same sweep
+    //< checks that **the downloaded policy gives the same answer** (with no extra requests). If it
+    //< does not, the car "moves differently from when it asked the server".
+  scratch: = Arena.new(1024 * 1024)
+  defer scratch.free()
+  $sw: = Sweep::{ .seen = 0, .agree = 0, .bad = List<|U8[]|>.create(arena),
+    .diff = List<|U8[]|>.create(arena), .tight = 0 }
+  for k in Range.asc(dist_steps)
+    dist: = I64::k * dist_step_mm
+    for line in Range.asc(line_count)
+      r: = link.observe(dist, line, arena)?
+      doc: = client.doc_of(r, arena)
+      cmd: = doc.get("cmd").as_str()
+      if r.status != 200
+        why: = arena.text().s("status \{r.status\}").take()
+        sw.bad.push(at_point(dist, line, why, arena))
+        continue
+      sw.seen += 1
+      if cmd.equals(pilot.car_rule(dist, line))
+        sw.agree += 1
+      if dist == 0I64 && !cmd.equals("stop")
+        sw.bad.push(at_point(dist, line, cmd, arena))
+      if dist > 0I64 && dist < near_mm && doc.get("lon").as_int(0) > 0
+        sw.bad.push(at_point(dist, line, cmd, arena))
+      at: = at_point(dist, line, cmd, arena)
+      match_blob(sw@, blob, doc, at, Point::{ .dist = dist, .line = line }, scratch, arena)
+  return sw
+
+priv struct Point //< one point of the sweep
+  dist: I64
+  line: I64
+
+priv fn at_point(dist: I64, line: Sz, note: U8[], arena: Arena$@): U8[]
+  return arena.text().s("dist=\{dist\} line=\{line\}: ").s(note).take()
+
+priv fn match_blob(sw: Sweep$@, blob: Option<|pilot.Blob|>, doc: json.Val, where_at: U8[], p: Point,
+  scratch: Arena$@, arena: Arena$@)
+  if b: = blob
+    d: = pilot.drive(b, p.dist, p.line, scratch)
+    if d.margin < tight_margin
+      sw.tight += 1
+      return
+    if !same_drive(d, doc)
+      sw.diff
+        .push(arena.text().s(where_at).s(" -> \{d.lon\},\{d.lat\},\{d.rot\}").take())
+
+priv fn same_drive(d: pilot.Drive, doc: json.Val): Bool
+  return d.lon == doc.get("lon").as_int(-1000) && d.lat == doc.get("lat").as_int(-1000) &&
+    d.rot == doc.get("rot").as_int(-1000)

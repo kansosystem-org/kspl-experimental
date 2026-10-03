@@ -1,0 +1,126 @@
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/sema/body/call" as sema_body_call
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/query" as sema_type_query
+
+// ==========================================
+// The check that stops a frame's memory escaping outward.
+//
+// **This asks a different question from type inference**: not whether the types agree but whether
+// the lifetime holds, since a frame dies even when the types agree.
+// Caution: **Where it cannot be decided, lean to the safe side (false).** Wrongly deciding "not
+// escaped" lets a use-after-free pass with zero diagnostics.
+// ==========================================
+
+priv fn is_frame_binding(c: Sema_ctx$@, node: Ast_node$@): Bool //<
+  //< Whether the name refers to **the current frame's memory**
+  //<
+  //< A global is in the static area, so false.
+  //< Caution: **Do not copy this test.** Taking an address and returning an array both
+  //< need the same answer; fix one copy and the two disagree on which names pass.
+  sym: = c.symtab.resolve(node.get_path_or_ident_name()) catch null
+  if sym == null
+    return false
+  return !sym.flags.is_global && sym.kind.is_value()
+
+fn is_frame_storage(c: Sema_ctx$@, node: Ast_node$@): Bool //<
+  //< Whether node's storage lies in **the current frame**, so an address taken of it dies there
+  //<
+  //< A name uses is_frame_binding, a nameless struct literal is a frame temporary, and a field
+  //< follows its receiver. What lies behind a pointer is not counted: `r.buf` (`r: Self$@`) lives
+  //< where `r` points ("Why dangling is stopped only on the paths that create an invisible
+  //< pointer" in docs/DESIGN.md), and counting it would reject `Panic_msg.slice()`.
+  if node == null
+    return false
+  if node.kind_id == .k_struct_literal
+    return true
+  if node.is_path_or_ident()
+    return is_frame_binding(c, node)
+  if node.kind_id == .k_method_access ||
+    (node.kind_id == .k_expr_postfix && node.get_postfix_op().is_literal("."))
+    recv: = node.get_postfix_receiver()
+    if recv == null || c.env.is_pointer(recv.type_id)
+      return false
+    return is_frame_storage(c, recv)
+  return false
+
+fn check_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@, verb: U8[]) //<
+  //< Rejects a pointer **the compiler synthesizes** into the frame leaving by return / throw
+  //<
+  //< Two forms synthesize one, with no `@` in the source: a slice cast from a frame's array
+  //< (`U8[]::a`, `U8[]::{ … }`) and a trait upcast of a frame's value (the pair {obj, vtable},
+  //< emit_upcast_expr in gen/c/expr.kspls). KSPL has no borrow check, and `return x@;` is its
+  //< writer's responsibility (docs/DESIGN.md, the section named at is_frame_storage).
+  if expr_node == null
+    return
+  // When returning to `T?Err`, the value is inside result_wrap.
+  $target: = expr_node
+  if target.kind_id == .k_result_wrap
+    target = target.get_result_wrap_inner()
+  if target == null
+    return
+  // A field's value is checked too. **Skipping it misses the case that matters most**: a returned
+  // struct holding a closure, as a lazy chain does.
+  if target.kind_id == .k_struct_literal
+    for child in target.children
+      if child.kind_id == .k_expr_field_init && child.children.len > 0
+        check_frame_escape(c, child.last_child(), verb)
+    return
+  if target.kind_id == .k_expr_upcast
+    inner: = target.get_upcast_inner()
+    if inner == null || c.env.is_pointer(inner.type_id) || c.env.is_slice(inner.type_id) ||
+      !is_frame_storage(c, inner)
+      return
+    c.clear_scratch()
+      .s("cannot \{verb\} an interface value built from local storage: the interface value keeps a \
+        pointer to it, and this function's frame dies here (the address is synthesized by the \
+        compiler, so no '@' appears). Upcast a pointer to storage that outlives the call instead.")
+    c.err(inner, c.scratch.slice())
+    return
+  // Caution: Do not check a call's result (`b.slice()` / `arena.alloc()`). Where it points is
+  // unknown, and rejecting it would forbid legitimately returning memory it allocated.
+  if !target.is_explicit_cast() || !c.env.is_slice(target.type_id)
+    return
+  src: = target.get_postfix_receiver()
+  if src == null || !c.env.is_array(c.env.get_real_type(src.type_id))
+    return // only an array makes a new pointer (a cast between slices, say to immutable, does not)
+  if !is_frame_storage(c, src)
+    return
+  c.clear_scratch()
+    .s("cannot \{verb\} a slice built from local storage: the descriptor's pointer is synthesized \
+      by the compiler (no '@' appears in the source), and this function's frame dies here. Return \
+      storage that outlives the call (an arena or a heap allocation), or take the destination as a \
+      parameter.")
+  c.err(src, c.scratch.slice())
+
+fn check_fn_value_binding(c: Sema_ctx$@, id_node: Ast_node$@, expr_node: Ast_node$@): Bool //<
+  //< Rejects binding a function's name with no type annotation (`f: = big;`)
+  //<
+  //< **A function's name has no type here.** `f: Pred = big;` is handled by `fn_value_type_id` in
+  //< `sema/body/resolve_path.kspls`.
+  //< Caution: **Do not show a synthesized name** (`_anon_fn_1`).
+  // **Only a bare name counts**: `x: = f(1);` resolves to the same function, so without checking
+  // the node's kind every call's result would be rejected.
+  if expr_node == null
+    return false
+  is_bare_path: = expr_node.kind_id == .k_identifier || expr_node.kind_id == .k_expr_path
+  if !is_bare_path || !sema_body_call.resolves_to_named_fn(expr_node)
+    return false
+  name: = id_node.text
+  is_anon: = base_ast.is_anon_fn_name(expr_node.get_path_name())
+  c.clear_scratch()
+  if is_anon
+    c.scratch.s("cannot infer the type of '\{name\}' from this anonymous function")
+  else
+    c.scratch.s("cannot infer the type of '\{name\}' from function '\{expr_node.get_path_name()\}'")
+  c.scratch
+    .s(": a function has no type of its own\n  Hint: write the function pointer type — 'typedef \
+      Pred = fn(x: I32): Bool' then '\{name\}: Pred = …'.")
+  if is_anon
+    c.scratch.s(" A closure has one ('Callable1' / 'Callable2') and needs no annotation.")
+    c.append_closure_note()
+  c.err(id_node, c.scratch.slice())
+  return true

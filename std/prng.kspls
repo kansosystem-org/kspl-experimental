@@ -1,0 +1,69 @@
+//< A reproducible pseudo-random generator (xorshift64*) whose whole state is one number
+//<
+//< Caution: **Not for a key, a token or a nonce.** One output reveals the state, so anyone who
+//< sees it can predict the next one; use `std/rand` for those.
+
+// ==========================================
+// **Do not move it back into `std/sys`.** It imports nothing, and that is the point: model weights
+// and device demonstrations use only this file, so they do not pay for the process arguments,
+// the environment variables and the signals file.
+// ==========================================
+pub struct Prng //< a reproducible pseudo-random generator (xorshift64*)
+  pub state: U64 //< the generator's whole state; saving it lets a run be replayed
+
+impl Prng
+  pub fn new( //< makes a generator from a seed
+    seed: U64, //< where the run starts; 0 is replaced by a default, as a zero state never moves
+  ): Prng
+    return Prng::{ .state = seed if seed != 0U64 else 0x9E3779B97F4A7C15U64 }
+
+  pub fn next_u64(r: Self$@): U64 //< the next 64-bit number; advances the state
+    $x: = r.state
+    x = x ^ (x >> 12)
+    x = x ^ (x << 25)
+    x = x ^ (x >> 27)
+    r.state = x
+    return x * 0x2545F4914F6CDD1DU64
+
+  pub fn next_f64(r: Self$@): F64 //< a uniform number in [0.0, 1.0) with 53 bits of precision
+    return F64::(r.next_u64() >> 11) / 9007199254740992.0
+
+  pub fn below( //< a number in [0, n); 0 when n is 0
+    //<
+    //< **Every value is equally likely.** A plain remainder favours the low values, so a raw value
+    //< past the last whole multiple of n is retried (as OpenBSD's `arc4random_uniform` does).
+    r: Self$@,
+    n: Sz, //< how many values there are to choose from
+  ): Sz
+    return Sz::r.below_u64(U64::n)
+
+  priv fn below_u64(r: Self$@, n: U64): U64 //< `below` over the full range of `U64`
+    if n == 0U64
+      return 0U64
+    // 2^64 mod n, computed with U64 wrapping: how many low values would come up one extra time.
+    floor: = (0U64 - n) % n
+    $x: = r.next_u64()
+    for x < floor
+      x = r.next_u64()
+    return x % n
+
+  pub fn between( //< a number from lo to hi, both ends included
+    //<
+    //< **Both ends can come up.** For the full range of `I64` the count does not fit in a `U64`,
+    //< so the raw 64-bit value is returned.
+    r: Self$@,
+    lo: I64, //< the smallest possible result
+    hi: I64, //< the largest possible result; when it is at or below lo, the result is lo
+  ): I64
+    if hi <= lo
+      return lo
+    span: = U64::hi - U64::lo + 1U64
+    if span == 0U64
+      return I64::r.next_u64()
+    return lo + I64::r.below_u64(span)
+
+  pub fn chance( //< true about `percent` times in 100
+    r: Self$@,
+    percent: Sz, //< 0 means never; 100 or more means always
+  ): Bool
+    return r.below(100) < percent

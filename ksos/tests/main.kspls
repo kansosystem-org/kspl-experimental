@@ -1,0 +1,29 @@
+//< ksos's tests, run as a program of their own (`make test` in this package's folder)
+//<
+//< **This is the only way to run ksos's tests alone.** The unit tests are `all.kspls`'s; besides
+//< them it runs the two checks that need the tests' working directory and a compiler: the USB
+//< descriptors, read as text, and elf2uf2, run on ELFs it must refuse to place.
+import "ksos/tests/all"
+import "ksos/tests/elf2uf2"
+import "ksos/tests/usb_descriptors"
+import "std/io"
+import "std/mem" { Arena }
+import "std/sys"
+
+priv const usage: U8[] = "usage: ksplc run tests/main.kspls <ksplc> <work_dir>" //<
+  //< the arguments, in that order (`make test` in `ksos/Makefile` passes them)
+
+fn main(): I32
+  // Line-buffered, so a run that dies shows how far it got.
+  io.set_line_buffered()
+  arena: = Arena.new(64 * 1024 * 1024)
+  defer arena.free()
+  argv: = sys.args()
+  if argv.len != 3
+    panic(arena.dup_str(usage))
+  ksplc: = arena.dup_str(argv.get(1))
+  work: = arena.dup_str(argv.get(2))
+  all.run_ksos()
+  usb_descriptors.test_usb_descriptors(arena)
+  elf2uf2.test_elf2uf2_refuses_what_it_cannot_place(ksplc, work, arena)
+  return 0

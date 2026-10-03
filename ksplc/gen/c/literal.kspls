@@ -1,0 +1,143 @@
+//< Rewrites KSPL's literals as C strings
+//<
+//< It covers floating-point, integer, character and string literals, and each uses only spellings
+//< that read back as the same value.
+//< Caution: **Do not make a copy.** `embed` (`decl.kspls`) also writes bytes into a string literal,
+//< but it only decides where the lines break, and it takes the escaping from here.
+//< Building expressions (precedence, parentheses, calls) belongs to `ksplc/gen/c/expr.kspls`.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/literal" as base_literal
+import "ksplc/gen/c/ctx" { Genc_ctx }
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "std/chars"
+import "std/str" { Str_builder }
+
+priv fn append_hex_u64(out: Str_builder$@, v: U64) //< it appends a U64 as a C hexadecimal literal
+  //<
+  //< 0 becomes "0x0".
+  out.s("0x")
+  $started: = false
+  for $shift: I32 = 60; shift >= 0; shift -= 4
+    nib: = U8::((v >> U64::shift) & 0xfU64)
+    if nib != 0U8 || started || shift == 0
+      out.c('0' + nib if nib < 10U8 else 'a' + (nib - 10U8))
+      started = true
+
+fn append_c_string_byte(out: Str_builder$@, b: U8) //<
+  //< It appends one byte as the contents of a C string literal
+  //<
+  //< It uses only a spelling that reads back as the same byte.
+  //< The callers are `emit_string_literal` below and `emit_embed_decl` in `decl.kspls`.
+  //< Caution: **Escape the `?`**: C99 replaces trigraphs such as `??(` before lexing. **An
+  //< octal escape must always have three digits**, or C swallows the digit after it. Bytes 0x80
+  //< and above are written raw; escaping them makes the generated C several times larger.
+  switch b case '"'
+    out.s("\\\"")
+  case '\\'
+    out.s("\\\\")
+  case '?'
+    out.s("\\?")
+  case '\n'
+    out.s("\\n")
+  case '\r'
+    out.s("\\r")
+  case '\t'
+    out.s("\\t")
+  default
+    if b < 0x20U8 || b == 0x7fU8
+      out.c('\\').c('0' + ((b >> 6U8) & 7U8)).c('0' + ((b >> 3U8) & 7U8)).c('0' + (b & 7U8))
+    else
+      out.c(b)
+
+priv fn decimal_exceeds_i64_max(digits: U8[]): Bool //<
+  //< Whether a decimal constant's digits exceed I64::MAX, judged on the digits only
+  //<
+  //< C99 tries int / long / long long for a decimal constant, and one fits unless it exceeds the
+  //< 19-digit I64::MAX.
+  //< So it exceeds at 20 digits, or at 19 digits that compare above I64::MAX.
+  i64_max: U8[] = "9223372036854775807"
+  if digits.len != i64_max.len
+    return digits.len > i64_max.len
+  // At equal digit counts, a lexicographic comparison (std/str's compare, like strcmp) gives the
+  // magnitude.
+  return digits.compare(i64_max) > 0
+
+impl Ast_node
+  fn emit_float(r: Ast_node$@, c: Genc_ctx$@)
+    text_val: = r.text
+    $clean_str: = Str_builder.new()
+    defer clean_str.free()
+    // It stops at the 'F' suffix and, for an F32, attaches C's 'f' suffix.
+    stop: = text_val.append_clean_number(clean_str@, "F")
+    if stop >= 0 && text_val.starts_with("F32", stop)
+      clean_str.c('f')
+    c.s(clean_str.slice())
+
+  fn emit_integer(r: Ast_node$@, c: Genc_ctx$@)
+    $clean_str: = Str_builder.new()
+    defer clean_str.free()
+    r.text.append_clean_number(clean_str@, "UIS")
+    $hex_str: = Str_builder.new()
+    defer hex_str.free()
+    $digits: = clean_str.slice()
+    // Caution: **Do not emit a binary literal as written.** C99 has no binary literal; `0b1010`
+    // works only as a gcc/clang extension. Hexadecimal is standard and still reads as bits.
+    if digits.starts_with("0b") || digits.starts_with("0B")
+      append_hex_u64(hex_str@, digits.parse_clean_number_u64().value)
+      digits = hex_str.slice()
+    // Caution: **Take the width from the literal's type, not the value's magnitude.** C decides
+    // a constant's type from its spelling alone, so dropping the `U64` / `I64` / `Sz` mark turns
+    // `1U64 << 40` into `1 << 40`: undefined behaviour, and the result becomes 0.
+    // Only `Sz` is written as a cast: it is ptrdiff_t, and a fixed-width suffix would be wrong on
+    // a 32-bit target.
+    real_id: = c.env.get_clean_real_type(r.type_id)
+    is_size: = real_id == (I32::sema_type_env.Builtin_type_id.size_type)
+    if is_size
+      c.s("(Sz)")
+    c.s(digits)
+    // An untyped value is still judged by magnitude: a decimal past I64::MAX becomes unsigned
+    // long long with a warning ("interpreting as unsigned"). 0x/0b include unsigned types from
+    // the start.
+    if real_id == (I32::sema_type_env.Builtin_type_id.u64_type)
+      c.s("ULL")
+    else if real_id == (I32::sema_type_env.Builtin_type_id.i64_type)
+      c.s("LL")
+    else if real_id == (I32::sema_type_env.Builtin_type_id.u32_type)
+      c.s("U")
+    else if !is_size && !digits.starts_with("0x") && !digits.starts_with("0X") &&
+      !digits.starts_with("0b") && !digits.starts_with("0B") && decimal_exceeds_i64_max(digits)
+      c.s("ULL")
+
+  fn emit_char_literal(r: Ast_node$@, c: Genc_ctx$@) //<
+    //< It emits a character literal as its byte value
+    //<
+    //< Caution: **Do not pass the spelling to C's lexer** (as in emit_string_literal):
+    //< `'\b'` is 8 in C and 'b' in KSPL. Emitted as a value, it cannot be misread.
+    c.s("\{base_literal.char_literal_byte(r.text)\}")
+
+  fn emit_string_literal(r: Ast_node$@, c: Genc_ctx$@)
+    // Caution: **Do not pass the spelling to C's lexer.** The escapes differ: `\x41` is 'A' in C
+    // but 'x' plus "41" in KSPL, `\101` is 'A' in C but three characters in KSPL, so the contents
+    // and the `.len` (KSPL_STR counts with sizeof) would change through C. Every byte the literal
+    // stands for (append_literal_bytes in base/literal.kspls, which genllvm uses too) is emitted
+    // with its own C escape; a `\uXXXX` is emitted as its UTF-8 bytes, as C rejects a `\u` naming
+    // a basic character (Principle 2).
+    $bytes: = Str_builder.new()
+    defer bytes.free()
+    r.text.append_literal_bytes(bytes@)
+    $c_str: = Str_builder.new()
+    defer c_str.free()
+    c_str.s("\"")
+    for b in bytes.slice()
+      append_c_string_byte(c_str@, b)
+    c_str.s("\"")
+
+    // Immutable or not, the output is the same: C's `Const_U8_Slice` is an alias of `U8_Slice`.
+    if c.env.is_pointer(r.type_id)
+      c.s(c_str.slice())
+      return
+    // Caution: **Write it with the node's own type name.** A string's type is a `Slice<|U8|>`
+    // instance, whose C type differs from instance to instance though the fields (`ptr`, `len`)
+    // match (KSPL accepts it and C fails; Principle 2).
+    c.s("KSPL_STR(").t(r.type_id).s(", \{c_str.slice()\})")

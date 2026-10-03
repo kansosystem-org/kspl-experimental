@@ -1,0 +1,103 @@
+//< The `--style` specification and how it is read
+//<
+//< **The accepted keys and the code that reads them sit in one place.** Split apart, a key
+//< `--style` accepts but nothing reads would pass as a success (Principle 5). `printer.kspls` takes
+//< the finished `Config` and formats; it never reads the `--style` text.
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str" // `text` / `split` / `trim_spaces`
+import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
+
+struct Config //< the formatting specification
+  //<
+  //< Caution: **Add a field's key and its reading in the same change** (the reason is at
+  //< `is_known_style_key`). A trailing comma has no key: `check_line_wrap` follows the source.
+  indent_width: Sz
+  column_limit: Sz //<
+    //< **The source file's width, comments included** (not a `.md` document's).
+    //<
+    //< Caution: **Do not count a comment's width in bytes.** A check mark (`✅`) or CJK takes two
+    //< columns and three bytes, so counting bytes calls a short line too wide.
+  allow_short_blocks: Bool
+  allow_short_functions: Bool
+
+impl Config
+  fn default_fmt(): Config
+    return Config::{
+      .indent_width = 2,
+      .column_limit = 100,
+      .allow_short_blocks = false,
+      .allow_short_functions = false,
+    }
+
+// ==========================================
+// Reading `--style` into Config
+// ==========================================
+
+priv fn match_style_key(style_str: U8[], i: Sz, key: U8[]): Sz //<
+  //< Where the value after `key` at position `i` of `style_str` starts, or 0 where `key` is absent
+  if !style_str.starts_with(key, i)
+    return 0
+  $j: = i + key.len
+  for j < style_str.len && ((style_str.ptr + j)$ == ':' || (style_str.ptr + j)$ == ' ')
+    j += 1
+  return j
+
+priv fn match_style_size(style_str: U8[], i: Sz, key: U8[]): Sz?I32
+  j: = match_style_key(style_str, i, key)
+  if j == 0
+    throw 1
+  val: = style_str.parse_size(j) catch
+    throw 1
+  if val == 0
+    throw 1
+  return val
+
+priv fn match_style_bool(style_str: U8[], i: Sz, key: U8[]): Bool?I32
+  j: = match_style_key(style_str, i, key)
+  if j == 0
+    throw 1
+  return style_str.starts_with("true", j)
+
+priv fn is_known_style_key(key: U8[]): Bool //< `--style`'s known keys
+  //<
+  //< Caution: **When adding one, add `Config`'s field and its reading in the same change**, or the
+  //< key is accepted and does nothing (Principle 5). The list follows the `--style` table in
+  //< ksplc/docs/SPEC-tools.md (the check is tests/support/conventions_iface.kspls).
+  return key.equals("IndentWidth") || key.equals("ColumnLimit") ||
+    key.equals("AllowShortBlocks") || key.equals("AllowShortFunctions")
+
+priv fn check_style_keys(style_str: U8[], arena: Arena$@): U8[] //<
+  //< It splits the specification at `,` and checks that each item's key is known
+  //<
+  //< It returns "" where all are known.
+  //< Caution: **An unknown key must not be silently ignored.** apply_style tries only known keys,
+  //< so `IndentWith: 8` would match nothing and the defaults would come back as a success.
+  for item in style_str.split(',', arena)
+    colon: = item.find_char(':')
+    key: = (item if colon < 0 else item.sub(0, colon)).trim_spaces()
+    if key.len == 0
+      continue
+    if !is_known_style_key(key)
+      // Caution: Print the key as it was typed, or with several keys nobody knows which to fix.
+      msg: = arena.text()
+      msg.s("--style: unknown key '").s(key)
+        .s("' (known keys: IndentWidth, ColumnLimit, AllowShortBlocks, AllowShortFunctions)\n")
+      return msg.take()
+  return ""
+
+fn apply_style(style_str: U8[], config: Config$@, arena: Arena$@): U8[] //<
+  //< It applies the `--style` specification to Config
+  //<
+  //< **A non-empty return value is the diagnostic to print for the user** (the caller does not
+  //< build it; it sits with the accepted keys).
+  bad: = check_style_keys(style_str, arena)
+  if bad.len > 0
+    return bad
+  for i in Range.asc(style_str.len)
+    config.indent_width = match_style_size(style_str, i, "IndentWidth") catch config.indent_width
+    config.column_limit = match_style_size(style_str, i, "ColumnLimit") catch config.column_limit
+    config.allow_short_blocks = match_style_bool(style_str, i, "AllowShortBlocks") catch config.allow_short_blocks
+    config.allow_short_functions =
+      match_style_bool(style_str, i, "AllowShortFunctions") catch config.allow_short_functions
+  return ""

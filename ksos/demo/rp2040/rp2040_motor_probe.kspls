@@ -1,0 +1,73 @@
+//< The driving demo for the Freenove 4WD mecanum car (Pico W / RP2040)
+//<
+//< Caution: **Test it with the wheels off the ground** (rest the body on a box or the like).
+//< The sequence below; turning **each wheel on its own** first is the point.
+
+// ==========================================
+//   the buzzer beeps once -> turn each wheel on its own, one at a time (4 times) -> forward-back ->
+//   sideways -> diagonal -> turning -> stop -> the buzzer beeps twice and it ends (stopped from
+//   then on)
+// ==========================================
+import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/boards/freenove_4wd_pico/motor"
+import "ksos/demo/rp2040/common/bringup" as boot
+import "ksos/drivers/rp2040/timer"
+import "ksos/kernel/task" + { Task }
+
+$tcb_motor: Task
+$stack_motor: U8[2048]
+
+const step_ms: U32 = 1000 //< how long one step is held
+  //<
+  //< It is real time (it uses the TIMER after clocks.init).
+const test_speed: I32 = 30 //< the trial run's speed
+  //<
+  //< It is kept low (wheels off the ground spinning fast are dangerous).
+
+priv fn hold(longitudinal: I32, lateral: I32, rotation: I32) //<
+  //< Sends the command, holds it about a second, then stops and waits a little
+  //<
+  //< The wait leaves a pause before the next movement.
+  motor.drive(longitudinal, lateral, rotation)
+  timer.delay_ms(step_ms)
+  motor.stop()
+  timer.delay_ms(step_ms / 2)
+
+fn motor_task(_arg: Void$@): Void
+  // Before anything else. Both the PWM's divisors (board.motor_pwm_div_int/top) and the TIMER's
+  // tick assume clk_sys = 125MHz, so if this fails nothing later is right (the silence tells you).
+  if !boot.clocks_and_gpio()
+    return
+  if !motor.init()
+    boot.beep(5) // five beeps say that releasing the PWM's reset failed
+    return
+  boot.beep(1) // the start signal
+
+  // 1. Turn each wheel on its own (in the order front-left -> rear-left -> rear-right ->
+  //    front-right). This order matches board.kspls's indices.
+  for w in Range.asc(board.wheel_count)
+    motor.set_wheel(w, test_speed)
+    timer.delay_ms(step_ms)
+    motor.stop()
+    timer.delay_ms(step_ms / 2)
+
+  boot.beep(2) // the end of single wheels / the start of the combined movements
+
+  hold(test_speed, 0, 0) // forward
+  hold(-test_speed, 0, 0) // back
+  hold(0, test_speed, 0) // sideways
+  hold(0, -test_speed, 0) // sideways the other way
+  hold(test_speed, test_speed, 0) // diagonal
+  hold(0, 0, test_speed) // turning
+  hold(0, 0, -test_speed) // turning the other way
+
+  motor.stop()
+  boot.beep(2) // the end; stopped from then on
+
+// The on_idle for `task.run_single_task`: semihosting's exit is not available, so it does nothing.
+// The motors were stopped above.
+priv fn park() {}
+
+#export
+fn ksos_main()
+  task.run_single_task(tcb_motor@, U8$[]::stack_motor, motor_task, "motor", park)

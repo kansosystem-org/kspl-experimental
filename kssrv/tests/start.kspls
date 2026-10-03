@@ -1,0 +1,123 @@
+//< Starts kssrv, waits until it can answer, and keeps its output
+//<
+//< **This file knows no HTTP**: it handles the child process, its logs and the check that it came
+//< up, and nothing else, so both entry points (`kssrv/tests/main.kspls` and
+//< `kssrv/tests/copy.kspls`) start the server the same way.
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+
+struct Started //< the result of waiting for the startup
+  child: Option<|subproc.Child|>
+  why: U8[]
+
+priv const ready_line: U8[] = "kssrv: I: listening on" //<
+  //< The line kssrv prints once it is listening
+  //<
+  //< **The `I:` is the logger's level column**: `std/log`'s separator splits the tag, the level and
+  //< the text (`kssrv/prog.kspls`). With it in here, the wait fails if the line format ever
+  //< changes, instead of the line silently going unseen.
+priv const ready_timeout_us: I64 = 300000000I64 //<
+  //< The cap on waiting until it is ready (microseconds)
+  //<
+  //< Training time varies widely between environments.
+priv const ready_poll_ms: I32 = 50
+
+fn start_server(exe: U8[], root: U8[], out_log: U8[], err_log: U8[], pt: I32, flags: U8[][],
+  arena: Arena$@): Started //<
+    //< Starts kssrv and waits **until it can answer**.
+    //<
+    //< Caution: **Do not take a successful connection as ready.** kssrv binds first and then trains
+    //< the model and the manoeuvring policy (`kssrv/main.kspls`; this order reports a port clash
+    //< before training).
+    //< **Keep the output**: without it, a failed startup leaves no reason.
+  pt_text: = arena.text().s("\{pt\}").take()
+  // Caution: **Take the options as a list** (some are two words, such as `--page <file>`).
+  $argv: = List<|U8[]|>.new(arena)
+  argv.push(exe)
+  argv.push(pt_text)
+  argv.push(root)
+  for f in flags
+    argv.push(f)
+  $child: = subproc.spawn_redirect(argv.slice(), "", out_log, err_log) catch
+    return Started::{ .child = Option<|subproc.Child|>.none, .why = "it could not be started" }
+  scratch: = Arena.new(1024 * 1024)
+  defer scratch.free()
+  deadline: = sys.mono_us() + ready_timeout_us
+  for sys.mono_us() < deadline
+    mark: = scratch.save()
+    if !child.alive()
+      code: = child.wait()
+      return Started::{ .child = Option<|subproc.Child|>.none,
+        .why = arena.text().s("it ended before starting (exit code \{code\})\n")
+        .s(read_log(out_log, err_log, arena)).take() }
+    if read_log(out_log, err_log, scratch).find_str(ready_line) >= 0
+      return Started::{ .child = Option<|subproc.Child|>.some(child), .why = "ok" }
+    scratch.restore(mark)
+    sys.sleep_ms(ready_poll_ms)
+  child.kill()
+  return Started::{ .child = Option<|subproc.Child|>.none,
+    .why = arena.text().s("the wait ran out with '\{ready_line\}' never put out\n")
+    .s(read_log(out_log, err_log, arena)).take() }
+
+struct Running //< a kssrv that came up, and the two logs that say why a check on it failed
+  child: subproc.Child //< the server; `stop` ends it
+  out_log: U8[] //< its standard output
+  err_log: U8[] //< its standard error
+
+fn bring_up( //< starts kssrv with its logs under `dir`, and checks that it came up
+  exe: U8[], //< the server
+  root: U8[], //< the folder it serves
+  dir: U8[], //< where the logs go, as `<name>.out` and `<name>.err`
+  name: U8[], //< the logs' name, one per run
+  pt: I32, //< the port
+  flags: U8[][], //< the options after the root
+  what: U8[], //< the check that it came up, as the line names it
+  arena: Arena$@, //< where the paths and the text go
+): Option<|Running|> //< the server, or none once the check has failed
+  out_log: = fs.join(dir, arena.text().s(name).s(".out").take(), arena)
+  err_log: = fs.join(dir, arena.text().s(name).s(".err").take(), arena)
+  started: = start_server(exe, root, out_log, err_log, pt, flags, arena)
+  if !verdict.check(what, started.child.is_some(), started.why)
+    return Option<|Running|>.none
+  if c: = started.child
+    return Option<|Running|>
+      .some(Running::{ .child = c, .out_log = out_log, .err_log = err_log })
+  return Option<|Running|>.none
+
+impl Running
+  fn log(r: Self@, arena: Arena$@): U8[] //< the ends of its two logs (`read_log`)
+    return read_log(r.out_log, r.err_log, arena)
+
+  fn failed(r: Self@, what: U8[], why: U8[], arena: Arena$@) //<
+    //< Fails the check `what` with the reason and the ends of the logs
+    //<
+    //< Caution: **Do not let a failure end with its reason alone**: where it stopped and what the
+    //< server said would be lost.
+    verdict.check(what, false,
+      arena.text().s(why).c('\n').s(r.log(arena)).take())
+
+  fn stop(r: Self$@) //< kills the server
+    r.child.kill()
+
+priv const log_tail: Sz = 2000 //< how much of the log's end goes into the error message
+
+fn read_log(out_log: U8[], err_log: U8[], arena: Arena$@): U8[] //<
+  //< Returns the end of the standard output log, then the end of the standard error log
+  //<
+  //< **The two go to separate files.** Sent to the same file, each writes from its own position
+  //< and overwrites the other.
+  return arena.text().s(tail_of(out_log, arena)).s(tail_of(err_log, arena)).take()
+
+priv fn tail_of(path: U8[], arena: Arena$@): U8[]
+  body: = io.read_file(path) catch
+    return ""
+  text: = U8[]::arena.dup_str(body)
+  return text if text.len <= log_tail else text.sub_from(text.len - log_tail)

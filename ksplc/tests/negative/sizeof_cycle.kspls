@@ -1,0 +1,28 @@
+//< A `sizeof` whose size depends on itself is rejected
+//<
+//< Caution: **Put one item out alone:** the fold failure follows from the cycle, so the array-size
+//< error is not piled on it (the array-length branch of sema/decl/resolve.kspls checks
+//< `registry_cycle_at`). Keep the passing side: drawing from before the declaration must pass.
+// EXPECT: sizes depend on each other
+// EXPECT-NOT: array size must be a positive
+import "std/io"
+
+// The stopping side: each other's size is used as an array length.
+priv struct Ring_a
+  priv room: U8[sizeof(Ring_b)]
+
+priv struct Ring_b
+  priv room: U8[sizeof(Ring_a)]
+
+// The passing side: it can be drawn from before the declaration, as long as it does not cycle.
+priv $early: U8[sizeof(Fine)] = ::{}
+
+priv struct Fine
+  priv a: I64
+  priv b: I64
+
+fn main(): I32
+  a: Ring_a = ::{}
+  b: Ring_b = ::{}
+  io.out().s("\{early.len\}/\{a.room.len\}/\{b.room.len\}\n")
+  return 0

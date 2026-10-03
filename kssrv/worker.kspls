@@ -1,0 +1,189 @@
+//< Runs inference on a worker thread, away from the accept loop
+//<
+//< Caution: **Inference must not happen on the accepting thread.** One generation takes tens of
+//< milliseconds, and every other connection stops for that long.
+//< **The table is fixed-length**, or requests arriving faster than inference pile up without limit.
+//< When it is full, the server refuses with a 503 (`kssrv/main.kspls`).
+//< **The worker does not touch a connection**, or two threads fight over one closed mid-request.
+import "kssrv/model"
+import "std/mem" + { Arena, alloc, dealloc }
+import "std/sys"
+import "std/thread"
+
+const max_jobs: Sz = 16 //< how many jobs are held at once
+
+enum Job_kind //< the kinds of job
+  //<
+  //< **The same single worker handles both, one at a time**, so the model that training rewrites
+  //< needs no lock (a second thread would).
+  infer
+  train
+
+enum Job_state
+  empty //< a free slot
+  pending //< queued; the worker has not taken it yet
+  running //< the worker is computing
+  done //< the result is in; the accepting thread takes it
+
+struct Job
+  state: Job_state
+  kind: Job_kind
+  conn_slot: Sz //< the slot number in the connection table
+  conn_serial: I64 //< that connection's serial when the job was queued
+  steps: Sz //< for inference the byte count to make; for training the epoch count
+  prompt: U8$[] //<
+    //< raw heap memory; the accepting thread allocates it and frees it when taking the job
+  out: U8$[] //< raw heap memory; the worker allocates it and the accepting thread frees it
+  ms: I64 //< how long it took (CPU)
+  loss: F64 //< the training's result (0 for inference)
+
+struct Shared //< what the mutex protects
+  jobs: Job[max_jobs]
+  // A copy of the model's statistics.
+  // Caution: **The accepting thread reads only this copy** (the reason is at `model.Stats`).
+  stats: model.Stats
+  stop: Bool
+
+struct Worker //< what the worker thread is given
+  m: model.Model$@
+  shared: thread.Mutex<|Shared|>
+  cv: thread.Cond_var
+  priv thread_handle: thread.Thread$@
+
+// The worker thread's body. It needs `#export` (to be passed as a C function pointer).
+#export
+fn kssrv_worker_main(w: Worker$@): Void$@
+  // The computing arena is the worker's own; shared, the rewinds would cross between threads.
+  compute: = Arena.new(2 * 1024 * 1024)
+  defer compute.free()
+  compute_base: = compute.save()
+  for
+    $picked: Sz = max_jobs
+    while_locked:
+      s: = w.shared.lock()
+      defer w.shared.unlock()
+      for
+        if s.stop
+          return null
+        for i in Range.asc(max_jobs)
+          switch s.jobs[i].state case .pending
+            s.jobs[i].state = Job_state.running
+            picked = i
+          default {}
+          if picked < max_jobs
+            break
+        if picked < max_jobs
+          break
+        // Waking does not mean a job (it may be a stop request), so the condition is checked again.
+        w.cv.wait<|Shared|>(w.shared@)
+    job: = w.shared.lock().jobs[picked]
+    w.shared.unlock()
+
+    t0: = sys.mono_us()
+    $out: U8$[] = ""
+    $loss: F64 = 0.0
+    switch job.kind case .infer
+      text: = model.generate(w.m, job.prompt, job.steps, compute)
+      // Copied to the raw heap before the rewind; a view would vanish at the next job's rewind.
+      out = U8$[]::{ .ptr = U8$@::alloc(text.len), .len = text.len }
+      mem.copy(Void$@::out.ptr, Void$@::text.ptr, text.len)
+    case .train
+      loss = model.train_lora(w.m, job.prompt, job.steps, compute)
+    compute.restore(compute_base)
+    ms: = (sys.mono_us() - t0) / 1000I64
+
+    s2: = w.shared.lock()
+    s2.jobs[picked].out = out
+    s2.jobs[picked].ms = ms
+    s2.jobs[picked].loss = loss
+    s2.jobs[picked].state = Job_state.done
+    // Training changed the model, so the copy the accepting thread reads is updated too.
+    s2.stats = model.stats_of(w.m)
+    w.shared.unlock()
+
+fn start(m: model.Model$@): Worker$@?thread.Thread_error //< starts one worker
+  w: = mem.alloc_as<|Worker|>()
+  w.m = m
+  init: Shared = ::{ .stats = model.stats_of(m), .stop = false }
+  w.shared = thread.Mutex<|Shared|>.new(init)?
+  w.cv = thread.Cond_var.new()?
+  w.thread_handle = thread.Thread.spawn<|Worker|>(kssrv_worker_main, w)?
+  return w
+
+fn submit(w: Worker$@, kind: Job_kind, conn_slot: Sz, conn_serial: I64, prompt: U8[], steps: Sz):
+  Bool //<
+    //< Queues a job, or returns false if there is no room (the caller then answers 503)
+    //<
+    //< The prompt is copied, so the caller's arena may be rewound.
+  copy: = U8$[]::{ .ptr = U8$@::alloc(prompt.len), .len = prompt.len }
+  mem.copy(Void$@::copy.ptr, Void$@::prompt.ptr, prompt.len)
+  s: = w.shared.lock()
+  $placed: = false
+  for i in Range.asc(max_jobs)
+    switch s.jobs[i].state case .empty
+      s.jobs[i] = Job::{ .state = Job_state.pending, .kind = kind, .conn_slot = conn_slot,
+        .conn_serial = conn_serial, .steps = steps, .prompt = copy, .out = "", .ms = 0,
+        .loss = 0.0 }
+      placed = true
+    default {}
+    if placed
+      break
+  w.shared.unlock()
+  if !placed
+    dealloc(Void$@::copy.ptr)
+    return false
+  w.cv.signal()
+  return true
+
+fn in_flight(w: Worker$@): Sz //< how many jobs are queued (their results not yet taken)
+  //<
+  //< It decides how long the accepting thread waits in `wait`.
+  s: = w.shared.lock()
+  $n: Sz = 0
+  for i in Range.asc(max_jobs)
+    switch s.jobs[i].state case .empty {} default
+      n += 1
+  w.shared.unlock()
+  return n
+
+fn model_stats(w: Worker$@): model.Stats //<
+  //< Takes a copy of the model's statistics (the one read made under the lock)
+  s: = w.shared.lock()
+  got: = s.stats
+  w.shared.unlock()
+  return got
+
+fn take_done(w: Worker$@): Job //< takes one finished job
+  //<
+  //< Returns a Job whose state is `.empty` if there is none.
+  //< A taken Job's `prompt` and `out` are on the raw heap, and **the caller frees them**.
+  s: = w.shared.lock()
+  $got: Job = ::{ .state = Job_state.empty }
+  for i in Range.asc(max_jobs)
+    switch s.jobs[i].state case .done
+      got = s.jobs[i]
+      s.jobs[i] = Job::{ .state = Job_state.empty }
+    default {}
+    switch got.state case .empty {} default
+      break
+  w.shared.unlock()
+  return got
+
+fn stop(w: Worker$@)
+  s: = w.shared.lock()
+  s.stop = true
+  w.shared.unlock()
+  w.cv.broadcast()
+  w.thread_handle.join_and_free()
+  // Frees the raw heap memory of jobs whose results were never taken.
+  s2: = w.shared.lock()
+  for i in Range.asc(max_jobs)
+    switch s2.jobs[i].state case .empty {} default
+      if s2.jobs[i].prompt.len > 0
+        dealloc(Void$@::s2.jobs[i].prompt.ptr)
+      if s2.jobs[i].out.len > 0
+        dealloc(Void$@::s2.jobs[i].out.ptr)
+  w.shared.unlock()
+  w.shared.free()
+  w.cv.free()
+  dealloc(Void$@::w)

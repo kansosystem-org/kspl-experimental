@@ -1,0 +1,84 @@
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/font" { Font, Font_source }
+import "kspage/tests/base"
+import "std/verdict"
+
+// ==========================================
+// kspage: checks that the font-metrics interface works through a replaceable implementation.
+// **The metrics are the table of fixed values (`kspage/fixed_font`)**: a real font's answer
+// changes with the machine and the version, making "a test that fails while nothing is broken".
+// ==========================================
+
+priv fn font_at(size_px: F32): Font
+  return Font::{ .family = "sans", .size_px = size_px, .weight = 400U16, .italic = false }
+
+fn test_width_counts_ascii_as_half_an_em() //< ASCII is half an em, and everything else one em
+  verdict.start("[kspage] ASCII counting as half an em test...")
+  src: = fixed.make()
+  f: = font_at(16.0)
+  assert(base.near(src.measure_width(f, "abc"), 24.0), "3 characters = 1.5em = 24px")
+  assert(base.near(src.measure_width(f, "a"), 8.0), "1 character = 0.5em = 8px")
+  verdict.pass("one ASCII character counts as half an em.")
+
+fn test_width_counts_multibyte_as_one_em()
+  verdict.start("[kspage] a character of many bytes counting as one em test...")
+  src: = fixed.make()
+  f: = font_at(16.0)
+  // "あ" is three bytes in UTF-8.
+  // Caution: Count characters, not bytes.
+  assert(base.near(src.measure_width(f, "あ"), 16.0), "1 character = 1em = 16px")
+  assert(base.near(src.measure_width(f, "あい"), 32.0), "2 characters = 2em = 32px")
+  // Mixed, each character is counted in its own way and the widths add up.
+  assert(base.near(src.measure_width(f, "あa"), 24.0), "1em + 0.5em = 24px")
+  verdict.pass("a character of many bytes counts as one em, and adds up mixed with ASCII.")
+
+fn test_width_scales_with_size() //< the width is proportional to the em size
+  verdict.start("[kspage] the width being in proportion to the em's size test...")
+  src: = fixed.make()
+  small: = src.measure_width(font_at(16.0), "abc")
+  large: = src.measure_width(font_at(32.0), "abc")
+  assert(base.near(large, small * 2.0F32), "doubling the em doubles the width")
+  verdict.pass("doubling the em doubles the width.")
+
+fn test_empty_text_has_no_width() //< an empty text has no width
+  verdict.start("[kspage] an empty text holding no width test...")
+  src: = fixed.make()
+  assert(base.near(src.measure_width(font_at(16.0), ""), 0.0), "empty is 0px")
+  verdict.pass("an empty text is 0px.")
+
+fn test_line_height_adds_the_gap() //< a line's height is ascent + descent + line_gap
+  verdict.start("[kspage] a row's height taking the line gap in test...")
+  src: = fixed.make()
+  f: = font_at(16.0)
+  m: = src.vmetrics_of(f)
+  assert(m.ascent > 0.0 && m.descent > 0.0, "both above and below come back a positive value")
+  h: = src.line_height(f)
+  // The three added together; drop `line_gap` and the lines crowd together.
+  assert(base.near(h, m.ascent + m.descent + m.line_gap), "it is the three added")
+  assert(h > m.ascent + m.descent, "larger than ascent+descent by the line gap")
+  verdict.pass("a row's height is ascent + descent + line_gap.")
+
+fn test_line_height_scales_with_size() //< a line's height is proportional to the em size
+  verdict.start("[kspage] a row's height being in proportion to the em's size test...")
+  src: = fixed.make()
+  small: = src.line_height(font_at(16.0))
+  large: = src.line_height(font_at(32.0))
+  assert(base.near(large, small * 2.0F32), "doubling the em doubles the row's height")
+  verdict.pass("doubling the em doubles the row's height.")
+
+fn test_source_is_swappable() //<
+  //< Replacing the source does not change how the caller writes its code
+  verdict.start("[kspage] the source of the measurements being swappable test...")
+  // A source that always answers width 0, built on the spot: **the exposed structs must be enough
+  // to build one**.
+  $blank: Font_source = fixed.make()
+  blank.measure_width = zero_width
+  f: = font_at(16.0)
+  assert(base.near(blank.measure_width(f, "abc"), 0.0), "the side swapped in is called")
+  kept: = blank.line_height(f)
+  original: = fixed.make().line_height(f)
+  assert(base.near(kept, original), "the side not swapped stays as it was")
+  verdict.pass("the source can be swapped per function.")
+
+priv fn zero_width(_font: Font, _text: U8[]): F32
+  return 0.0

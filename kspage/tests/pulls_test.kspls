@@ -1,0 +1,141 @@
+import "kspage/lay/flow"
+import "kspage/lay/page" { Page }
+import "kspage/model/collect" { Collect }
+import "kspage/model/doc" { Doc }
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/paint"
+import "kspage/model/source" { Hand }
+import "kspage/model/style" { Sheet, Shape }
+import "kspage/share/store"
+import "kspage/tests/base"
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// kspage: checks the imports figure (the modules a target source imports, built at every layout).
+//
+// **Neither the boxes nor the lines go into the document**, **the same module is not drawn
+// twice**, and **the overflow is not silently cut**.
+// Caution: **Test the overflow first.** Tried only on sources that fit, a figure showing fewer
+// modules would pass, and the figure would lie.
+// ==========================================
+
+priv fn wire_sheet(arena: Arena$@): Sheet$@ //< the figure's style (the box), and its line's style
+  //<
+  //< The line's name is built from the box's name (`paint.pull_line_name`).
+  sheet: = Sheet.new(base.root_font(), arena)
+  sheet.add("body", paint.inherit_all())
+  box: = sheet.add("pulls", paint.inherit_all())
+  box.collect = Collect.imports
+  box.shape = Shape.box
+  // **The core builds the name**; pinned here as a text, so a change to it fails this test.
+  line: = sheet.add("pulls-line", paint.inherit_all())
+  line.shape = Shape.fall_arrow
+  return sheet
+
+priv fn three(file: U8[]): U8[] //< a text importing three modules (one written in two ways)
+  if !file.equals("a.kspl")
+    return ""
+  return "import \"std/io\";\nimport \"std/ds\" { List };\nimport \"std/io\" as _io;\n// import \
+    \"lie/comment\";\nimport \"kspage/model/doc\" { Block };\nfn main() {}\n"
+
+priv fn many(file: U8[]): U8[] //<
+  //< A text importing 13. **The cap is 11** (the overflow is shown as a number)
+  if !file.equals("many.kspl")
+    return ""
+  return "import \"pull/0\";\nimport \"pull/1\";\nimport \"pull/2\";\nimport \"pull/3\";\nimport \
+    \"pull/4\";\nimport \"pull/5\";\nimport \"pull/6\";\nimport \"pull/7\";\nimport \
+    \"pull/8\";\nimport \"pull/9\";\nimport \"pull/10\";\nimport \"pull/11\";\nimport \
+    \"pull/12\";\n"
+
+priv fn one_wire(arena: Arena$@, aim: U8[]): Doc$@
+  d: = Doc.new(arena)
+  b: = d.add_block("pulls")
+  b.aim = aim
+  return d
+
+priv fn boxed(page: Page$@, sb: Str_builder$@): U8[] //< the boxes' texts joined together
+  sb.clear()
+  for $i: Sz = 0; i < page.boxes.len; i += 1
+    t: = page.boxes.get(i).text
+    if t.len > 0
+      sb.s(t).c('|')
+  return sb.slice()
+
+fn test_what_it_pulls_becomes_boxes() //<
+  //< Each imported module becomes a box, and a line comes from the center
+  verdict.start("[kspage/pulls] an import becoming a box test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  d: = one_wire(arena, "src:a.kspl")
+  hand: = arena.create(Hand::{ .read = three })
+  page: = flow.layout(d, wire_sheet(arena), fixed.make(), 600.0, arena, hand)
+  $sb: = Str_builder.new()
+  defer sb.free()
+  got: = boxed(page, sb@)
+  // **Do not draw the same module twice**, even written two ways.
+  assert(got.equals("a.kspl|std/io|std/ds|kspage/model/doc|"),
+    "the middle and three partners line up")
+  // **An import inside a comment is not picked up** (only an `import` at column 0 is).
+  assert(got.find_str("lie") < 0, "what is inside a comment is no import")
+  // Three boxes + one center + three lines.
+  assert(page.frames.len == 7, "four boxes and three lines are laid")
+  verdict.pass("an import becomes a box, and the same import comes once only.")
+
+fn test_the_drawing_never_reaches_the_document() //<
+  //< Neither the boxes nor the lines go into the document
+  //<
+  //< **Inserted, they would double at the next layout.**
+  verdict.start("[kspage/pulls] the figure not going into the document test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  d: = one_wire(arena, "src:a.kspl")
+  sheet: = wire_sheet(arena)
+  hand: = arena.create(Hand::{ .read = three })
+  flow.layout(d, sheet, fixed.make(), 600.0, arena, hand)
+  assert(d.blocks.get(0).children.len == 0, "no child goes into the document")
+  // **Laid out again they must not grow.**
+  page: = flow.layout(d, sheet, fixed.make(), 600.0, arena, hand)
+  assert(page.frames.len == 7, "laid out again the count is the same")
+  $sb: = Str_builder.new()
+  defer sb.free()
+  store.save(d, sheet, sb@)
+  assert(sb.slice().find_str("std/io") < 0, "the borrowed text does not go into what is saved")
+  assert(sb.slice().find_str("src:a.kspl") >= 0, "what it points at does go into what is saved")
+  verdict
+    .pass("neither the boxes nor the lines go into the document; only what it points at is left.")
+
+fn test_the_rest_is_counted() //< the overflow is shown as a number
+  //<
+  //< **Do not cut it silently.**
+  verdict.start("[kspage/pulls] saying what spilled over as a number test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  d: = one_wire(arena, "src:many.kspl")
+  hand: = arena.create(Hand::{ .read = many })
+  page: = flow.layout(d, wire_sheet(arena), fixed.make(), 600.0, arena, hand)
+  $sb: = Str_builder.new()
+  defer sb.free()
+  got: = boxed(page, sb@)
+  assert(got.find_str("+2|") >= 0, "the two that spilled over are said as a number")
+  assert(got.find_str("pull/10|") >= 0, "up to the eleventh it becomes a box")
+  assert(got.find_str("pull/11|") < 0, "from the twelfth it becomes no box")
+  verdict.pass("what spills over is said as a number (it is not cut in silence).")
+
+fn test_without_a_hand_it_shows_what_it_aims_at() //<
+  //< Where nothing was passed in, the text of the target is shown
+  //<
+  //< Caution: **Do not make it empty** (the same rule as a window).
+  verdict
+    .start("[kspage/pulls] a figure with nothing handed over putting out what it points at test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  d: = one_wire(arena, "src:a.kspl")
+  page: = flow.layout(d, wire_sheet(arena), fixed.make(), 600.0, arena)
+  $sb: = Str_builder.new()
+  defer sb.free()
+  assert(boxed(page, sb@).equals("src:a.kspl|"), "the text of what it points at comes out")
+  assert(page.frames.len == 0, "neither a box nor a line is laid")
+  verdict.pass("a figure with nothing handed over puts out the text of what it points at.")

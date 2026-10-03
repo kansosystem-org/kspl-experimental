@@ -1,0 +1,211 @@
+import "kspage/model/collect" { Collect }
+import "kspage/model/doc" { Doc }
+import "kspage/model/paint"
+import "kspage/model/style" + { Sheet, Style }
+import "kspage/tests/base"
+import "kspage/write/edit"
+import "kspage/write/shape" as _shape
+import "kspage/write/theme"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// kspage: checks the code that applies a document's look as one set, pinned by value (a golden
+// test).
+//
+// Only colors and typefaces are applied, one undo restores it all, and a style is chosen by its
+// part, so a style with a name it does not know is themed too.
+// Caution: **Do not copy the color values themselves.** What is checked is which fields change
+// (a check that fails on a newly chosen color enforces no rule).
+// ==========================================
+
+priv fn sample_sheet(arena: Arena$@): Sheet$@ //<
+  //< A table listing the built-in names that the theme knows
+  sheet: = Sheet.new(base.root_font(), arena)
+  $big: paint.Font_spec = paint.inherit_all()
+  big.size_px = Option<|F32|>.some(28.0)
+  big.weight = Option<|U16|>.some(700U16)
+  h1: = sheet.add("h1", big)
+  h1.space_after = 8.0
+  h1.outline = 1
+  body: = sheet.add("body", paint.inherit_all())
+  body.space_after = 12.0
+  $mono: paint.Font_spec = paint.inherit_all()
+  mono.family = Option<|U8[]|>.some("monospace")
+  code: = sheet.add("code", mono)
+  code.wrap = false
+  code.rule_width = 1.0
+  code.line_spacing = 1.35
+  // A name the theme does not know. **It stays untouched** (colorless, it inherits the parent's).
+  ours: = sheet.add("my mark", paint.inherit_all())
+  ours.indent = 24.0
+  return sheet
+
+priv fn look_of(sheet: Sheet$@, name: U8[]): Style
+  if s: = sheet.find(name)
+    return s$
+  return style.plain_style("", paint.inherit_all())
+
+priv fn ink_of(s: Style): U32
+  if v: = s.ink.color
+    return v
+  return 0U32
+
+priv fn family_of(s: Style): U8[]
+  if v: = s.font.family
+    return v
+  return ""
+
+fn test_a_theme_only_changes_the_colors_and_the_faces() //<
+  //< Applied, the color and the typeface change, and the measurement fields do not
+  verdict
+    .start("[kspage/theme] a theme changing the colour and the typeface and nothing else test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("abcde")
+  sheet: = sample_sheet(arena)
+  ed: = edit.new_editor(d)
+
+  was_h1: = look_of(sheet, "h1")
+  // Number 1 is Indigo.
+  // Caution: **Do not choose by name** (the number is the position in the core's list).
+  assert(theme.at(1).name.equals("Indigo"), "number 1 is Indigo")
+  assert(theme.wear(ed, sheet, 1), "it was dressed")
+
+  now_h1: = look_of(sheet, "h1")
+  assert(ink_of(now_h1) != 0U32, "the text colour goes into the heading")
+  assert(family_of(now_h1).equals("sans-serif"), "the heading's typeface goes in")
+  // **The measurement fields do not change**, or the page count would change per theme.
+  assert(near_size(now_h1, was_h1), "the size does not move")
+  assert(now_h1.space_after == was_h1.space_after,
+    "the space before and behind does not move either")
+  assert(now_h1.outline == was_h1.outline, "the heading's depth does not move either")
+
+  now_code: = look_of(sheet, "code")
+  assert(family_of(now_code).equals("monospace"), "the lump of code stays fixed-width")
+  assert(now_code.rule_width == 1.0, "the fenced block's line thickness does not move")
+  assert(!now_code.wrap, "the setting not to wrap does not move either")
+  switch now_code.fill case .some {} case .none
+    assert(false, "a fill goes into the lump of code")
+  verdict.pass("what a theme moves is the colour and typeface fields and nothing else.")
+
+priv fn near_size(a: Style, b: Style): Bool
+  if x: = a.font.size_px
+    switch b.font.size_px case .some(y)
+      return x == y
+    case .none
+      return false
+  if _y: = b.font.size_px
+    return false
+  return true
+
+fn test_a_theme_keeps_the_drawn_colors_drawn() //<
+  //< A drawing style keeps the "drawn color" even under a theme
+  //<
+  //< Caution: **Do not give it the page's decoration color** — a bar's fill is the contents, so the
+  //< table grid's color on it makes **a picture whose values cannot be read**. **Do not copy the
+  //< color numbers**: a bar's color is not the grid's, and back on Standard it is as inserted.
+  verdict
+    .start("[kspage/theme] a theme not painting the colour drawn over with a page's dressing \
+      test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("abcde")
+  sheet: = sample_sheet(arena)
+  ed: = edit.new_editor(d)
+
+  // The style of a newly inserted chart (the same shape as `charted` in `write/insert.kspls`).
+  bars: = sheet.add("bar-chart", paint.inherit_all())
+  bars.collect = Collect.bars
+  bars.height = 120.0
+  bars.rule_width = 1.0
+  bars.fill = Option<|U32|>.some(style.drawn_color)
+  // A table's grid. **It is the same "style with a line and a fill"** (only the part differs).
+  cell: = sheet.add("cell", paint.inherit_all())
+  cell.rule_width = 1.0
+  cell.fill = Option<|U32|>.some(0xf0f0f0U32)
+
+  assert(theme.wear(ed, sheet, 1), "Indigo was dressed")
+  worn: = look_of(sheet, "bar-chart")
+  assert(fill_of(worn) != fill_of(look_of(sheet, "cell")), "a bar's fill is not the grid's fill")
+  assert(worn.rule_color != look_of(sheet, "cell").rule_color,
+    "a bar's line is not the grid's line either")
+
+  assert(theme.wear(ed, sheet, 0), "it could be put back to Standard")
+  back: = look_of(sheet, "bar-chart")
+  assert(fill_of(back) == style.drawn_color,
+    "put back to Standard it goes back to the colour it had when it was inserted")
+  assert(back.rule_color == style.drawn_color, "the line's colour comes back too")
+  verdict.pass("the colour drawn is dressed apart from a page's dressing colour.")
+
+priv fn fill_of(s: Style): U32
+  if v: = s.fill
+    return v
+  return 0U32
+
+fn test_a_theme_dresses_styles_it_was_not_told_about() //<
+  //< A theme also applies to a style a person made
+  //<
+  //< Caution: **Do not choose by name**, or a renamed style **silently keeps the old theme**.
+  //< The part decides: a depth means a heading, no wrapping means code, the rest is the body.
+  verdict.start("[kspage/theme] a theme dressing a style a person made too test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("abcde")
+  sheet: = sample_sheet(arena)
+  ed: = edit.new_editor(d)
+
+  theme.wear(ed, sheet, 2)
+  ours: = look_of(sheet, "my mark")
+  assert(!family_of(ours).equals(""), "a typeface goes into a name it does not know too")
+  assert(ours.indent == 24.0, "the indent does not move")
+  verdict.pass("a theme chooses by part and not by name, so it dresses a style a person made too.")
+
+fn test_wearing_a_theme_is_one_step_to_undo() //< one undo restores it all
+  //<
+  //< **Do not make one step per style.**
+  verdict.start("[kspage/theme] one sheet of a theme going back in one undo test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("abcde")
+  sheet: = sample_sheet(arena)
+  ed: = edit.new_editor(d)
+
+  was_h1: = look_of(sheet, "h1")
+  was_code: = look_of(sheet, "code")
+  assert(theme.wear(ed, sheet, 3), "it was dressed")
+  assert(family_of(look_of(sheet, "h1")).equals("serif"), "Serif changes the typeface")
+
+  assert(ed.undo(), "it can be put back in one")
+  back_h1: = look_of(sheet, "h1")
+  back_code: = look_of(sheet, "code")
+  assert(family_of(back_h1).equals(family_of(was_h1)), "the heading's typeface comes back")
+  assert(ink_of(back_h1) == ink_of(was_h1), "the heading's colour comes back too")
+  assert(ink_of(back_code) == ink_of(was_code), "the lump of code's colour comes back too")
+  assert(!ed.undo(), "there is no step left to go back to (the whole went back in one)")
+  verdict.pass("one sheet of a theme goes back whole in one undo.")
+
+fn test_wearing_the_same_theme_twice_records_nothing() //<
+  //< Applying the same theme twice records no step
+  //<
+  //< Caution: **Do not add an undo step that restores nothing.**
+  verdict.start("[kspage/theme] dressing the same theme twice not stacking test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("abcde")
+  sheet: = sample_sheet(arena)
+  ed: = edit.new_editor(d)
+
+  assert(theme.wear(ed, sheet, 1), "the first time it changes")
+  assert(!theme.wear(ed, sheet, 1), "the second time nothing changes")
+  assert(ed.undo(), "only one step can be gone back to")
+  assert(!ed.undo(), "there is no second step")
+  // **A number out of range is refused** (not silently applied as number 0).
+  assert(!theme.wear(ed, sheet, theme.count()), "a number that is not there is not dressed")
+  verdict.pass("dressing the same theme again stacks no step.")

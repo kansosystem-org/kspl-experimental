@@ -1,0 +1,417 @@
+//< Strings that are built and grown: `Str_builder`, and the string functions that allocate
+//<
+//< Reading and slicing a `U8[]` without allocating is in `std/chars`. A `Str_builder` grows, so it
+//< needs a `free()`; where growth is not acceptable use `std/buf`'s `Buf_writer`, and for text that
+//< lives as long as an arena, use `Arena_text`.
+import "std/chars" // classifying and converting characters, and code points as strings
+import "std/ds" + { List }
+import "std/libc"
+import "std/mem" + { Arena, alloc, dealloc }
+// Caution: **Keep this import even if nothing here seems to call it.** It brings each type's `fmt`,
+// which `\{x\}` calls, into every program that uses this file (the call is made inside `put`, which
+// needs no import); `to_hex_lower` is its only direct use.
+import "std/strfmt"
+
+pub enum Str_error //< why a string could not be parsed
+  invalid_format //< an escape or a form the notation does not allow
+  out_of_bounds //< a position or a value out of range
+
+fn from_cstr(c_str: U8$@): U8$[]
+  return U8$[]::{ .ptr = null, .len = 0 } if c_str == null else c_str.to_slice()
+
+pub struct Str_builder //< a buffer that grows as needed, so it needs a `free()`
+  pub ptr: U8$@ //< the memory holding the written bytes
+  pub len: Sz //< how many bytes have been written
+  pub cap: Sz //< how many bytes fit before it has to grow
+
+impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
+  pub fn new(): Str_builder //< an empty builder, which has allocated no memory yet
+    return Str_builder::{ .ptr = null, .len = 0, .cap = 0 }
+
+  pub fn escape_and_append( //< writes a JSON string's contents; the caller writes the quotes
+    //<
+    //< Caution: **Escape everything below 0x20.** JSON allows no raw control character (RFC 8259);
+    //< escaping only `\n`, `\r` and `\t` makes **JSON that no other parser accepts** for a string
+    //< with `0x01`. U8[]'s unescape_to_arena decodes it; changing only one breaks the round trip.
+    r: Self$@,
+    src: U8[], //< the plain text, not yet escaped
+  ): Self$@
+    for i in Range.asc(src.len)
+      c: = (src.ptr + i)$
+      switch c case '"'
+        r.s("\\\"")
+      case '\\'
+        r.s("\\\\")
+      case '\n'
+        r.s("\\n")
+      case '\r'
+        r.s("\\r")
+      case '\t'
+        r.s("\\t")
+      case 0x08U8
+        r.s("\\b")
+      case 0x0cU8
+        r.s("\\f")
+      default
+        if c < 0x20U8
+          r.s("\\u00").c((c >> 4U8).to_hex_lower()).c((c & 0xfU8).to_hex_lower())
+        else
+          r.c(c)
+    return r
+
+  pub fn clear(r: Self$@): Self$@ //< empties it, keeping the memory already allocated
+    r.len = 0
+    return r
+
+  pub fn drop_prefix( //< drops the leading bytes and moves the rest to the start
+    //<
+    //< For removing a message already read from a receive buffer, which may hold the start of the
+    //< next one. It frees no memory: a long-lived buffer stays at the size of the longest message.
+    r: Self$@,
+    n: Sz, //< how many bytes to drop; the length or more empties it, negative does nothing
+  ): Self$@
+    if n <= 0
+      return r
+    if n >= r.len
+      r.len = 0
+      return r
+    rest: = r.len - n
+    mem.copy(Void$@::r.ptr, Void$@::(r.ptr + n), rest)
+    r.len = rest
+    return r
+
+  #inline
+  pub fn s(r: Self$@, s: U8[]): Self$@ //< writes a string, growing if needed
+    if s.len > 0
+      r.reserve(r.len + s.len)
+      mem.copy(Void$@::(r.ptr + r.len), Void$@::s.ptr, s.len)
+      r.len += s.len
+    return r
+
+  #inline
+  pub fn c(r: Self$@, c: U8): Self$@ //< writes one byte, growing if needed
+    r.reserve(r.len + 1)
+    dest: U8$@ = r.ptr + r.len
+    dest$ = c
+    r.len += 1
+    return r
+
+  pub fn flush(r: Self$@): Self$@ //< does nothing, and is here to complete `Writer`
+    return r
+
+  pub fn reserve( //< makes room in advance, so a long write does not grow step by step
+    r: Self$@,
+    new_cap: Sz, //< how many bytes must fit; a smaller value does nothing
+  )
+    if r.cap >= new_cap
+      return
+    $cap: Sz = 8 if r.cap == 0 else r.cap
+    for cap < new_cap
+      doubled: = cap * 2
+      if doubled <= cap
+        // cap*2 wraps near Sz's upper bound (it can become 0), so use new_cap as it is; an
+        // absurdly large new_cap is caught by the alloc that follows.
+        cap = new_cap
+        break
+      cap = doubled
+
+    new_ptr: = U8$@::alloc(cap)
+    if r.len > 0
+      mem.copy(Void$@::new_ptr, Void$@::r.ptr, r.len)
+    // Even at len 0 an old buffer (cap > 0) would leak, so the check uses cap, not len
+    if r.cap > 0
+      dealloc(Void$@::r.ptr)
+    r.ptr = new_ptr
+    r.cap = cap
+
+  pub fn slice(r: Self$@): U8$[] //< a view of what has been written, valid until it grows
+    return U8$[]::{ .ptr = r.ptr, .len = r.len }
+
+  pub fn free(r: Self$@) //< frees the memory and empties it
+    if r.cap > 0
+      dealloc(Void$@::r.ptr)
+    r.len = 0
+    r.cap = 0
+
+impl Str_builder: Formattable //< so it can be used inside an interpolation
+  pub fn fmt(r: Self$@, w: Writer): Writer //< writes its contents to `w`
+    return w.s(r.slice())
+
+impl U8[]: ds.Hashable<|U8[]|> //< so a string can be a `Map`'s key
+  //<
+  //< `Eq` (what `==` desugars to) is deliberately not implemented: `equals` is an O(N) comparison
+  //< of contents, and written as `==` it would look the same as a pointer comparison.
+  pub fn hash(r: U8[]): U32 //< a hash of the contents that spreads keys over the buckets
+    $h: = U32::2166136261
+    for i in Range.asc(r.len)
+      h = h ^ (r.ptr + i)$
+      h = h * (U32::16777619)
+    // FNV-1a alone mixes the low bits poorly (keys with a shared prefix share a bucket).
+    return ds.fmix32(h)
+
+  pub fn equals(r: U8[], b: U8[]): Bool //< whether the bytes are the same; deliberately not `==`
+    if r.len != b.len
+      return false
+    if r.len == 0 || r.ptr == b.ptr
+      return true
+    return libc.memcmp(Void$@::r.ptr, Void$@::b.ptr, r.len) == 0
+
+priv fn write_utf8(dst: U8$@, cp: I32): Sz //<
+  //< Writes a code point in UTF-8 and returns the bytes written
+  //<
+  //< Caution: There must be room for 4 bytes.
+  //< **std/chars holds the character tables**; a copy here could drift from `next_codepoint`.
+  n: = chars.codepoint_len(cp)
+  for i in Range.asc(n)
+    (dst + i)$ = chars.codepoint_byte(cp, i)
+  return n
+
+impl U8[]
+  pub fn to_cstr(r: U8[]): Option<|U8$@|> //< a new NUL-terminated copy, or none if r holds a NUL
+    //<
+    //< Caution: The caller must `dealloc()` it. A KSPL string has a length, so it can hold a
+    //< NUL, but C treats the first NUL as the end.
+    if r.contains_nul()
+      return Option<|U8$@|>.none
+    buf: = U8$@::alloc(r.len + 1)
+    mem.copy(Void$@::buf, Void$@::r.ptr, r.len)
+    (buf + r.len)$ = 0U8
+    return Option<|U8$@|>.some(buf)
+
+  pub fn split( //< the pieces between the separators, as views into the original
+    //<
+    //< Not a lazy iterator: the only form of iteration is `for x in <something with .len and an
+    //< index>` ("Loops" in docs/SPEC-language.md).
+    //< Caution: When arena is null it allocates on the global heap, so the caller frees it with a
+    //< `defer` (the same convention as `List.new`).
+    r: U8[],
+    delimiter: U8, //< the separator byte
+    arena: Arena$@, //< where the list goes; null uses the global heap and the caller frees it
+  ): List<|U8[]|>
+    $out: = List<|U8[]|>.new(arena)
+    $start: Sz = 0
+    for i in Range.asc(r.len)
+      if (r.ptr + i)$ == delimiter
+        out.push(r.sub(start, i - start))
+        start = i + 1
+    out.push(r.sub(start, r.len - start))
+    return out
+
+  pub fn replace( //< a new string with every occurrence replaced
+    //<
+    //< Unlike `trim_*`, it returns a copy: the result does not exist anywhere in the original.
+    r: U8[],
+    old: U8[], //< the text to find; empty does nothing
+    new: U8[], //< the text to put in its place
+    arena: Arena$@, //< where the new string goes; null uses the global heap
+  ): U8[]
+    if old.len == 0
+      return arena.dup_str(r)
+    $b: = Str_builder.new()
+    defer b.free()
+    $pos: Sz = 0
+    for pos < r.len
+      rest: = r.sub_from(pos)
+      idx: = rest.find_str(old)
+      if idx < 0
+        b.s(rest)
+        break
+      b.s(rest.sub(0, idx)).s(new)
+      pos += idx + old.len
+    return arena.dup_str(b.slice())
+
+  pub fn replace_first( //< a new string with only the first occurrence replaced
+    r: U8[],
+    old: U8[], //< the text to find; empty does nothing
+    new: U8[], //< the text to put in its place
+    arena: Arena$@, //< where the new string goes; null uses the global heap
+  ): U8[]
+    idx: = r.find_str(old)
+    if old.len == 0 || idx < 0
+      return arena.dup_str(r)
+    return arena.text().s(r.sub(0, idx)).s(new).s(r.sub_from(idx + old.len)).take()
+
+  // Use this for a text file, not `split('\n', ...)`: lines of a CRLF file from Windows would keep
+  // the `\r` and not compare equal, and `"a\n"` would give two elements rather than one line.
+  pub fn lines( //< the lines, without trailing `\r` and with no empty line after the last newline
+    r: U8[],
+    arena: Arena$@, //< where the list goes; null uses the global heap and the caller frees it
+  ): List<|U8[]|>
+    $out: = List<|U8[]|>.new(arena)
+    $start: Sz = 0
+    for $i: Sz = 0; i <= r.len; i += 1
+      if i < r.len && (r.ptr + i)$ != '\n'
+        continue
+      if i == r.len && start == r.len
+        break // a trailing newline starts no new line
+      $e: = i
+      if e > start && (r.ptr + e - 1)$ == '\r'
+        e -= 1
+      out.push(U8[]::{ .ptr = r.ptr + start, .len = e - start })
+      start = i + 1
+    return out
+
+  pub fn join( //< joins the pieces, with the receiver between each pair
+    //<
+    //< Python's `sep.join(parts)`. `parts` is by value because a temporary's address cannot be
+    //< taken; a List is a small struct.
+    r: U8[],
+    $parts: List<|U8[]|>, //< the pieces, taken by value so a call's result can be passed directly
+    arena: Arena$@, //< where the joined string goes
+  ): U8[]
+    $b: = Str_builder.new()
+    defer b.free()
+    for i in Range.asc(parts.len)
+      if i > 0
+        b.s(r)
+      b.s(parts.get(i))
+    return arena.dup_str(b.slice())
+
+  pub fn unescape_to_arena( //< turns the text of a string literal back into the bytes it means
+    //<
+    //< **An unknown alphanumeric escape fails** (`\x` and `\q` are `invalid_format`). Only `\n`,
+    //< `\r`, `\t`, `\b`, `\f` and `\uXXXX` are decoded, and an escaped symbol is the symbol itself;
+    //< the caller lists which symbols are allowed (std/json's is_json_escape). The reason is in
+    //< "After `\`, an alphanumeric is accepted only in a defined escape" in std/docs/DESIGN.md.
+    r: U8[],
+    arena: Arena$@, //< where the unescaped bytes go
+  ): U8[]?Str_error
+    // The output is never longer than the input, so r.len + 1 is enough.
+    buf_ptr: = U8$@::arena.alloc(r.len + 1)
+    $w: Sz = 0
+    $i: = 0
+    for i < r.len
+      c: = (r.ptr + i)$
+      if c == '\\' && i + 1 < r.len
+        i += 1
+        ec: = (r.ptr + i)$
+        if ec == 'u'
+          cp: = r.hex4(i + 1)
+          if cp < 0
+            throw Str_error.invalid_format
+          if cp >= 0
+            $code: I32 = cp
+            $adv: I32 = 5
+            // Only a low surrogate right after a high one combines into one code point.
+            if code >= 0xD800 && code <= 0xDBFF && i + 6 < r.len && (r.ptr + i + 5)$ == '\\' &&
+              (r.ptr + i + 6)$ == 'u'
+              lo: = r.hex4(i + 7)
+              if lo >= 0xDC00 && lo <= 0xDFFF
+                code = 0x10000 + ((code - 0xD800) * 0x400) + (lo - 0xDC00)
+                adv = 11
+            // Caution: **Do not let an unpaired surrogate through.** Copied to UTF-8 it makes an
+            // invalid three-byte sequence that looks readable and fails only at a later check or
+            // in another language's string type. It is treated the same as a broken `\u`.
+            if code >= 0xD800 && code <= 0xDFFF
+              throw Str_error.invalid_format
+            w += write_utf8(buf_ptr + w, code)
+            i += adv
+            continue
+        if ec.is_alnum() && ec != 'n' && ec != 'r' && ec != 't' && ec != 'b' && ec != 'f'
+          throw Str_error.invalid_format
+        (buf_ptr + w)$ =
+          ('\n' if ec == 'n'
+          else ('\r' if ec == 'r'
+          else ('\t' if ec == 't' else (0x08U8 if ec == 'b' else (0x0cU8 if ec == 'f' else ec)))))
+      else
+        (buf_ptr + w)$ = c
+      w += 1
+      i += 1
+    (buf_ptr + w)$ = 0U8
+    return U8$[]::{ .ptr = buf_ptr, .len = w }
+
+  pub fn dedent(r: U8[]): Str_builder //< the same lines with the common indentation removed
+    $res: = Str_builder.new()
+    if r.len == 0
+      return res
+    // Pass 1: find the minimum indent width of the non-blank lines
+    $min_indent: Sz = 999999
+    $current_indent: Sz = 0
+    $is_empty_line: = true
+    $i: Sz = 0
+
+    for i < r.len
+      c: = (r.ptr + i)$
+      if c == '\n'
+        is_empty_line = true
+        current_indent = 0
+      else if c != '\r'
+        if c == ' ' || c == '\t'
+          if is_empty_line
+            current_indent += 1
+        else
+          if is_empty_line
+            if current_indent < min_indent
+              min_indent = current_indent
+            is_empty_line = false
+      i += 1
+
+    if min_indent == 999999
+      min_indent = 0
+    // Pass 2: emit each line without the minimum indent. **A whitespace-only line becomes empty**
+    // (like Python's textwrap.dedent and Java's stripIndent), not invisible trailing whitespace;
+    // its newline is kept, so a whitespace-only CRLF line becomes `\r\n`.
+    i = 0
+    is_empty_line = true
+    $skip_count: Sz = 0
+    $line_start: Sz = 0
+
+    for i < r.len
+      c: = (r.ptr + i)$
+      if c == '\n'
+        if is_empty_line
+          res.len = line_start
+        res.c('\n')
+        is_empty_line = true
+        skip_count = 0
+        line_start = res.len
+      else if c == '\r'
+        if is_empty_line
+          res.len = line_start
+        res.c('\r')
+        line_start = res.len
+      else
+        if is_empty_line && skip_count < min_indent && (c == ' ' || c == '\t')
+          skip_count += 1
+        else
+          is_empty_line = is_empty_line && (c == ' ' || c == '\t')
+          res.c(c)
+      i += 1
+    if is_empty_line
+      res.len = line_start
+    return res
+
+impl Str_builder: Owned {} //< it owns its resources and frees them with `free()`.
+
+// Caution: **Call `take()`.** Without it the builder's memory leaks (`make debug` fails at the end
+// with "Should be 0 - memory leak").
+// It remembers the arena, so the text cannot end up in the wrong place (how to choose among the
+// three write targets is in std/docs/DESIGN.md).
+//   name: = arena.text().s("layer.\{i\}.weight").take();
+pub struct Arena_text //< a short-lived builder that leaves the finished text in the arena
+  priv b: Str_builder
+  priv arena: Arena$@
+
+impl Arena_text: Writer //< so it can be used anywhere a `Writer` is expected
+  pub fn s(r: Self$@, val: U8[]): Self$@ //< writes a string and returns the builder
+    r.b.s(val)
+    return r
+
+  pub fn c(r: Self$@, val: U8): Self$@ //< writes one byte and returns the builder
+    r.b.c(val)
+    return r
+
+  pub fn flush(r: Self$@): Self$@ //< does nothing, and is here to complete `Writer`
+    return r
+
+impl Arena_text
+  pub fn take(r: Self$@): U8[] //< copies the text into the arena and frees the builder
+    out: = U8[]::r.arena.dup_str(r.b.slice())
+    r.b.free()
+    return out
+
+impl Arena
+  pub fn text(r: Self$@): Arena_text$@ //< a builder for one string in this arena
+    //<
+    //< The builder is in the arena too, so `.s(…)` can chain (a method's receiver must be a place).
+    return r.create(Arena_text::{ .b = Str_builder.new(), .arena = r })

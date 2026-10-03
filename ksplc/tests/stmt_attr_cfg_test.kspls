@@ -1,0 +1,75 @@
+//< Checks that a `#cfg` on a statement takes effect whatever the statement's kind
+//<
+//< With the flag off only that statement disappears; with it on the statement runs as usual.
+//<
+//< Caution: **Test each kind separately.** Each kind orders its children differently, and removing
+//< the attribute touches that shape; an untested kind can break unnoticed.
+import "std/buf" { Buf_writer }
+// A `#cfg` attached to an import with an alias.
+// **The alias must not be quietly lost**: the attributes among the children shift an alias read by
+// position (`get_import_alias` in `ksplc/base/ast_ext.kspls`).
+#cfg(!nope)
+import "std/math" as mathx
+import "std/verdict"
+
+priv fn side(): Sz
+  return 1
+
+fn probe(): Sz
+  $n: Sz = 0
+
+  #cfg(!nope)
+  when_on:
+    n += 1
+  #cfg(nope)
+  when_off:
+    n += 100
+
+  #cfg(!nope)
+  outer:
+    n += 2
+
+  #cfg(!nope)
+  if n > 0
+    n += 4
+  #cfg(nope)
+  if n > 0
+    n += 400
+
+  #cfg(!nope)
+  for _i in Range.asc(2)
+    n += 8
+
+  #cfg(!nope)
+  switch n case 0
+    n += 1000
+  default
+    n += 16
+
+  #cfg(!nope)
+  m: Sz = side()
+  n += m
+
+  for
+    #cfg(nope)
+    continue
+    #cfg(!nope)
+    break
+
+  #cfg(nope)
+  return 999
+  #cfg(!nope)
+  return n
+
+fn test_stmt_attr_cfg(): Void
+  got: = probe()
+  // There is nowhere to allocate, so it is built in the caller's array (std/buf's way).
+  $head: U8[64] = ::{}
+  $hw: = Buf_writer.new(U8$[]::head)
+  verdict.start(hw.s("[stmt_attr_cfg] n=\{got\}").slice())
+  assert(got == 40, "a #cfg attached to a statement takes effect per kind")
+  // Caution: **It must be callable by the alias.** If not, an import with a `#cfg` is losing it.
+  // Call something **that returns the same answer on every backend** (file or process calls
+  // degenerate on LLVM, indistinguishable from a lost alias).
+  assert(mathx.sqrt(9.0) == 3.0, "the alias of an import carrying a #cfg survives")
+  verdict.pass("`#cfg` takes effect on every kind of statement, and an import's alias survives.")

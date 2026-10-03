@@ -1,0 +1,501 @@
+//< Integer types whose operations report overflow instead of wrapping: `Ci8` through `Cu64`
+//<
+//< Up to 32 bits, the operation runs in the next wider native type, so the check cannot hit
+//< undefined behaviour. `I64`/`U64` have no 128-bit type, so they compare against the limits
+//< first: for a signed type, computing the overflowing result is itself UB.
+
+// ==========================================
+// Caution: **Do not try to merge the eight types' impls into one generic** (the grounds are in
+// "Format-specifier dispatch per type stays as an impl per type" in `std/docs/DESIGN.md`).
+// ==========================================
+pub enum Checked_error //< why an operation could not give a result
+  overflow //< the result does not fit in the type
+  div_by_zero //< the divisor was 0
+
+// ---------------------------------------------------------
+// I8 (native promotion: I16)
+// ---------------------------------------------------------
+pub struct Ci8 //< a checked `I8`
+  pub val: I8 //< the plain value
+
+impl Ci8
+  pub fn new(v: I8): Ci8 //< wraps a plain value
+    return Ci8::{ .val = v }
+  pub fn checked_add(r: Self, rhs: Ci8): Ci8?Checked_error //<
+    //< the sum, or an error if it does not fit
+    wide: I16 = r.val + rhs.val
+    if wide > I16::127 || wide < I16::(-128)
+      throw Checked_error.overflow
+    return Ci8::{ .val = I8::wide }
+  pub fn checked_sub(r: Self, rhs: Ci8): Ci8?Checked_error //<
+    //< the difference, or an error if it does not fit
+    wide: I16 = r.val - rhs.val
+    if wide > I16::127 || wide < I16::(-128)
+      throw Checked_error.overflow
+    return Ci8::{ .val = I8::wide }
+  pub fn checked_mul(r: Self, rhs: Ci8): Ci8?Checked_error //<
+    //< the product, or an error if it does not fit
+    wide: I16 = r.val * rhs.val
+    if wide > I16::127 || wide < I16::(-128)
+      throw Checked_error.overflow
+    return Ci8::{ .val = I8::wide }
+  pub fn checked_neg(r: Self): Ci8?Checked_error //<
+    //< the negated value, or an error if it does not fit
+    //<
+    //< In two's complement -MIN has no positive counterpart, so only -MIN (and MIN/-1) overflows;
+    //< the same holds for Ci16/Ci32/Ci64.
+    if r.val == I8::(-128)
+      throw Checked_error.overflow
+    return Ci8::{ .val = -r.val }
+  pub fn checked_div(r: Self, rhs: Ci8): Ci8?Checked_error //<
+    //< the quotient, or an error for a 0 divisor or for the minimum / -1 (overflow)
+    if rhs.val == 0
+      throw Checked_error.div_by_zero
+    if r.val == I8::(-128) && rhs.val == I8::(-1)
+      throw Checked_error.overflow
+    return Ci8::{ .val = r.val / rhs.val }
+
+impl Ci8: Add<|Ci8, Ci8|> //< so `+` can be written
+  pub fn add(r: Self$@, rhs: Ci8): Ci8 //< the sum; overflow stops the program
+    return r.checked_add(rhs) catch panic("Ci8 overflow (add)")
+impl Ci8: Sub<|Ci8, Ci8|> //< so `-` can be written
+  pub fn sub(r: Self$@, rhs: Ci8): Ci8 //<
+    //< the difference; overflow stops the program
+    return r.checked_sub(rhs) catch panic("Ci8 overflow (sub)")
+impl Ci8: Mul<|Ci8, Ci8|> //< so `*` can be written
+  pub fn mul(r: Self$@, rhs: Ci8): Ci8 //< the product; overflow stops the program
+    return r.checked_mul(rhs) catch panic("Ci8 overflow (mul)")
+impl Ci8: Neg<|Ci8|> //< so a leading `-` can be written
+  pub fn neg(r: Self$@): Ci8 //< the negated value; overflow stops the program
+    return r.checked_neg() catch panic("Ci8 overflow (neg)")
+impl Ci8: Div<|Ci8, Ci8|> //< so `/` can be written
+  pub fn div(r: Self$@, rhs: Ci8): Ci8 //<
+    //< the quotient; a 0 divisor or overflow stops the program
+    return r.checked_div(rhs) catch panic("Ci8 overflow or division by zero (div)")
+impl I8: Cast<|Ci8|> //< so `Ci8::v` turns a plain value into a checked one
+  //<
+  //< It always succeeds (a thin alias for new()); the checking happens in the operations.
+  pub fn cast(r: Self$@): Ci8 //< the same value, now checked
+    return Ci8.new(r$)
+
+// ---------------------------------------------------------
+// I16 (native promotion: I32)
+// ---------------------------------------------------------
+pub struct Ci16 //< a checked `I16`
+  pub val: I16 //< the plain value
+
+impl Ci16
+  pub fn new(v: I16): Ci16 //< wraps a plain value
+    return Ci16::{ .val = v }
+  pub fn checked_add(r: Self, rhs: Ci16): Ci16?Checked_error //<
+    //< the sum, or an error if it does not fit
+    wide: I32 = r.val + rhs.val
+    if wide > 32767 || wide < -32768
+      throw Checked_error.overflow
+    return Ci16::{ .val = I16::wide }
+  pub fn checked_sub(r: Self, rhs: Ci16): Ci16?Checked_error //<
+    //< the difference, or an error if it does not fit
+    wide: I32 = r.val - rhs.val
+    if wide > 32767 || wide < -32768
+      throw Checked_error.overflow
+    return Ci16::{ .val = I16::wide }
+  pub fn checked_mul(r: Self, rhs: Ci16): Ci16?Checked_error //<
+    //< the product, or an error if it does not fit
+    wide: I32 = r.val * rhs.val
+    if wide > 32767 || wide < -32768
+      throw Checked_error.overflow
+    return Ci16::{ .val = I16::wide }
+  pub fn checked_neg(r: Self): Ci16?Checked_error //<
+    //< the negated value, or an error if it does not fit
+    if r.val == I16::(-32768)
+      throw Checked_error.overflow
+    return Ci16::{ .val = -r.val }
+  pub fn checked_div(r: Self, rhs: Ci16): Ci16?Checked_error //<
+    //< the quotient, or an error for a 0 divisor or for the minimum / -1 (overflow)
+    if rhs.val == 0
+      throw Checked_error.div_by_zero
+    if r.val == I16::(-32768) && rhs.val == I16::(-1)
+      throw Checked_error.overflow
+    return Ci16::{ .val = r.val / rhs.val }
+
+impl Ci16: Add<|Ci16, Ci16|> //< so `+` can be written
+  pub fn add(r: Self$@, rhs: Ci16): Ci16 //< the sum; overflow stops the program
+    return r.checked_add(rhs) catch panic("Ci16 overflow (add)")
+impl Ci16: Sub<|Ci16, Ci16|> //< so `-` can be written
+  pub fn sub(r: Self$@, rhs: Ci16): Ci16 //<
+    //< the difference; overflow stops the program
+    return r.checked_sub(rhs) catch panic("Ci16 overflow (sub)")
+impl Ci16: Mul<|Ci16, Ci16|> //< so `*` can be written
+  pub fn mul(r: Self$@, rhs: Ci16): Ci16 //<
+    //< the product; overflow stops the program
+    return r.checked_mul(rhs) catch panic("Ci16 overflow (mul)")
+impl Ci16: Neg<|Ci16|> //< so a leading `-` can be written
+  pub fn neg(r: Self$@): Ci16 //< the negated value; overflow stops the program
+    return r.checked_neg() catch panic("Ci16 overflow (neg)")
+impl Ci16: Div<|Ci16, Ci16|> //< so `/` can be written
+  pub fn div(r: Self$@, rhs: Ci16): Ci16 //<
+    //< the quotient; a 0 divisor or overflow stops the program
+    return r.checked_div(rhs) catch panic("Ci16 overflow or division by zero (div)")
+impl I16: Cast<|Ci16|> //< so `Ci16::v` turns a plain value into a checked one
+  pub fn cast(r: Self$@): Ci16 //< the same value, now checked
+    return Ci16.new(r$)
+
+// ---------------------------------------------------------
+// I32 (native promotion: I64)
+// ---------------------------------------------------------
+pub struct Ci32 //< a checked `I32`
+  pub val: I32 //< the plain value
+
+impl Ci32
+  pub fn new(v: I32): Ci32 //< wraps a plain value
+    return Ci32::{ .val = v }
+  pub fn checked_add(r: Self, rhs: Ci32): Ci32?Checked_error //<
+    //< the sum, or an error if it does not fit
+    wide: I64 = r.val + rhs.val
+    if wide > I64::2147483647 || wide < I64::(-2147483647 - 1)
+      throw Checked_error.overflow
+    return Ci32::{ .val = I32::wide }
+  pub fn checked_sub(r: Self, rhs: Ci32): Ci32?Checked_error //<
+    //< the difference, or an error if it does not fit
+    wide: I64 = r.val - rhs.val
+    if wide > I64::2147483647 || wide < I64::(-2147483647 - 1)
+      throw Checked_error.overflow
+    return Ci32::{ .val = I32::wide }
+  pub fn checked_mul(r: Self, rhs: Ci32): Ci32?Checked_error //<
+    //< the product, or an error if it does not fit
+    wide: I64 = r.val * rhs.val
+    if wide > I64::2147483647 || wide < I64::(-2147483647 - 1)
+      throw Checked_error.overflow
+    return Ci32::{ .val = I32::wide }
+  pub fn checked_neg(r: Self): Ci32?Checked_error //<
+    //< the negated value, or an error if it does not fit
+    if r.val == -2147483647 - 1
+      throw Checked_error.overflow
+    return Ci32::{ .val = -r.val }
+  pub fn checked_div(r: Self, rhs: Ci32): Ci32?Checked_error //<
+    //< the quotient, or an error for a 0 divisor or for the minimum / -1 (overflow)
+    if rhs.val == 0
+      throw Checked_error.div_by_zero
+    if r.val == -2147483647 - 1 && rhs.val == -1
+      throw Checked_error.overflow
+    return Ci32::{ .val = r.val / rhs.val }
+
+impl Ci32: Add<|Ci32, Ci32|> //< so `+` can be written
+  pub fn add(r: Self$@, rhs: Ci32): Ci32 //< the sum; overflow stops the program
+    return r.checked_add(rhs) catch panic("Ci32 overflow (add)")
+impl Ci32: Sub<|Ci32, Ci32|> //< so `-` can be written
+  pub fn sub(r: Self$@, rhs: Ci32): Ci32 //<
+    //< the difference; overflow stops the program
+    return r.checked_sub(rhs) catch panic("Ci32 overflow (sub)")
+impl Ci32: Mul<|Ci32, Ci32|> //< so `*` can be written
+  pub fn mul(r: Self$@, rhs: Ci32): Ci32 //<
+    //< the product; overflow stops the program
+    return r.checked_mul(rhs) catch panic("Ci32 overflow (mul)")
+impl Ci32: Neg<|Ci32|> //< so a leading `-` can be written
+  pub fn neg(r: Self$@): Ci32 //< the negated value; overflow stops the program
+    return r.checked_neg() catch panic("Ci32 overflow (neg)")
+impl Ci32: Div<|Ci32, Ci32|> //< so `/` can be written
+  pub fn div(r: Self$@, rhs: Ci32): Ci32 //<
+    //< the quotient; a 0 divisor or overflow stops the program
+    return r.checked_div(rhs) catch panic("Ci32 overflow or division by zero (div)")
+impl I32: Cast<|Ci32|> //< so `Ci32::v` turns a plain value into a checked one
+  pub fn cast(r: Self$@): Ci32 //< the same value, now checked
+    return Ci32.new(r$)
+
+// ---------------------------------------------------------
+// I64 (no wider type; see the file header)
+// Caution: Keep the `I64` suffix. The expected type does not pass through a unary minus or an
+// explicit cast, so without it the literal defaults to I32 and the value silently changes.
+// ---------------------------------------------------------
+priv const i64_max: I64 = 9223372036854775807I64
+priv const i64_min: I64 = -9223372036854775807I64 - 1
+
+pub struct Ci64 //< a checked `I64`
+  pub val: I64 //< the plain value
+
+impl Ci64
+  pub fn new(v: I64): Ci64 //< wraps a plain value
+    return Ci64::{ .val = v }
+  pub fn checked_add(r: Self, rhs: Ci64): Ci64?Checked_error //<
+    //< the sum, or an error if it does not fit
+    a: = r.val
+    b: = rhs.val
+    if b > 0
+      if a > (i64_max - b)
+        throw Checked_error.overflow
+    else if b < 0
+      if a < (i64_min - b)
+        throw Checked_error.overflow
+    return Ci64::{ .val = a + b }
+  pub fn checked_sub(r: Self, rhs: Ci64): Ci64?Checked_error //<
+    //< the difference, or an error if it does not fit
+    a: = r.val
+    b: = rhs.val
+    if b < 0
+      if a > (i64_max + b)
+        throw Checked_error.overflow
+    else if b > 0
+      if a < (i64_min + b)
+        throw Checked_error.overflow
+    return Ci64::{ .val = a - b }
+  pub fn checked_mul(r: Self, rhs: Ci64): Ci64?Checked_error //<
+    //< the product, or an error if it does not fit
+    a: = r.val
+    b: = rhs.val
+    if a == 0 || b == 0
+      return Ci64::{ .val = 0 }
+    if a == -1 && b == i64_min
+      throw Checked_error.overflow
+    if b == -1 && a == i64_min
+      throw Checked_error.overflow
+    // Caution: Do not compute a * b as a signed I64: overflow is undefined behaviour, and an
+    // optimizing compiler then removes the later result/b != a check. U64 wraps by definition
+    // and gives the same bit pattern, so the product is computed there and converted back.
+    ua: = U64::a
+    ub: = U64::b
+    uresult: U64 = ua * ub
+    result: = I64::uresult
+    if result / b != a
+      throw Checked_error.overflow
+    return Ci64::{ .val = result }
+  pub fn checked_neg(r: Self): Ci64?Checked_error //<
+    //< the negated value, or an error if it does not fit
+    if r.val == i64_min
+      throw Checked_error.overflow
+    return Ci64::{ .val = -r.val }
+  pub fn checked_div(r: Self, rhs: Ci64): Ci64?Checked_error //<
+    //< the quotient, or an error for a 0 divisor or for the minimum / -1 (overflow)
+    if rhs.val == 0
+      throw Checked_error.div_by_zero
+    if r.val == i64_min && rhs.val == -1
+      throw Checked_error.overflow
+    return Ci64::{ .val = r.val / rhs.val }
+
+impl Ci64: Add<|Ci64, Ci64|> //< so `+` can be written
+  pub fn add(r: Self$@, rhs: Ci64): Ci64 //< the sum; overflow stops the program
+    return r.checked_add(rhs) catch panic("Ci64 overflow (add)")
+impl Ci64: Sub<|Ci64, Ci64|> //< so `-` can be written
+  pub fn sub(r: Self$@, rhs: Ci64): Ci64 //<
+    //< the difference; overflow stops the program
+    return r.checked_sub(rhs) catch panic("Ci64 overflow (sub)")
+impl Ci64: Mul<|Ci64, Ci64|> //< so `*` can be written
+  pub fn mul(r: Self$@, rhs: Ci64): Ci64 //<
+    //< the product; overflow stops the program
+    return r.checked_mul(rhs) catch panic("Ci64 overflow (mul)")
+impl Ci64: Neg<|Ci64|> //< so a leading `-` can be written
+  pub fn neg(r: Self$@): Ci64 //< the negated value; overflow stops the program
+    return r.checked_neg() catch panic("Ci64 overflow (neg)")
+impl Ci64: Div<|Ci64, Ci64|> //< so `/` can be written
+  pub fn div(r: Self$@, rhs: Ci64): Ci64 //<
+    //< the quotient; a 0 divisor or overflow stops the program
+    return r.checked_div(rhs) catch panic("Ci64 overflow or division by zero (div)")
+impl I64: Cast<|Ci64|> //< so `Ci64::v` turns a plain value into a checked one
+  pub fn cast(r: Self$@): Ci64 //< the same value, now checked
+    return Ci64.new(r$)
+
+// ---------------------------------------------------------
+// U8 (native promotion: U16)
+// ---------------------------------------------------------
+pub struct Cu8 //< a checked `U8`
+  pub val: U8 //< the plain value
+
+impl Cu8
+  pub fn new(v: U8): Cu8 //< wraps a plain value
+    return Cu8::{ .val = v }
+  pub fn checked_add(r: Self, rhs: Cu8): Cu8?Checked_error //<
+    //< the sum, or an error if it does not fit
+    wide: U16 = r.val + rhs.val
+    if wide > U16::255
+      throw Checked_error.overflow
+    return Cu8::{ .val = U8::wide }
+  pub fn checked_sub(r: Self, rhs: Cu8): Cu8?Checked_error //<
+    //< the difference, or an error if it does not fit
+    if rhs.val > r.val
+      throw Checked_error.overflow
+    return Cu8::{ .val = r.val - rhs.val }
+  pub fn checked_mul(r: Self, rhs: Cu8): Cu8?Checked_error //<
+    //< the product, or an error if it does not fit
+    wide: U16 = r.val * rhs.val
+    if wide > U16::255
+      throw Checked_error.overflow
+    return Cu8::{ .val = U8::wide }
+  pub fn checked_div(r: Self, rhs: Cu8): Cu8?Checked_error //<
+    //< the quotient, or an error for a 0 divisor
+    if rhs.val == 0
+      throw Checked_error.div_by_zero
+    return Cu8::{ .val = r.val / rhs.val }
+
+impl Cu8: Add<|Cu8, Cu8|> //< so `+` can be written
+  pub fn add(r: Self$@, rhs: Cu8): Cu8 //< the sum; overflow stops the program
+    return r.checked_add(rhs) catch panic("Cu8 overflow (add)")
+impl Cu8: Sub<|Cu8, Cu8|> //< so `-` can be written
+  pub fn sub(r: Self$@, rhs: Cu8): Cu8 //<
+    //< the difference; overflow stops the program
+    return r.checked_sub(rhs) catch panic("Cu8 underflow (sub)")
+impl Cu8: Mul<|Cu8, Cu8|> //< so `*` can be written
+  pub fn mul(r: Self$@, rhs: Cu8): Cu8 //< the product; overflow stops the program
+    return r.checked_mul(rhs) catch panic("Cu8 overflow (mul)")
+impl Cu8: Div<|Cu8, Cu8|> //< so `/` can be written
+  pub fn div(r: Self$@, rhs: Cu8): Cu8 //<
+    //< the quotient; a 0 divisor stops the program
+    return r.checked_div(rhs) catch panic("Cu8 division by zero (div)")
+impl U8: Cast<|Cu8|> //< so `Cu8::v` turns a plain value into a checked one
+  pub fn cast(r: Self$@): Cu8 //< the same value, now checked
+    return Cu8.new(r$)
+
+// ---------------------------------------------------------
+// U16 (native promotion: U32)
+// ---------------------------------------------------------
+pub struct Cu16 //< a checked `U16`
+  pub val: U16 //< the plain value
+
+impl Cu16
+  pub fn new(v: U16): Cu16 //< wraps a plain value
+    return Cu16::{ .val = v }
+  pub fn checked_add(r: Self, rhs: Cu16): Cu16?Checked_error //<
+    //< the sum, or an error if it does not fit
+    wide: U32 = r.val + rhs.val
+    if wide > U32::65535
+      throw Checked_error.overflow
+    return Cu16::{ .val = U16::wide }
+  pub fn checked_sub(r: Self, rhs: Cu16): Cu16?Checked_error //<
+    //< the difference, or an error if it does not fit
+    if rhs.val > r.val
+      throw Checked_error.overflow
+    return Cu16::{ .val = r.val - rhs.val }
+  pub fn checked_mul(r: Self, rhs: Cu16): Cu16?Checked_error //<
+    //< the product, or an error if it does not fit
+    wide: U32 = r.val * rhs.val
+    if wide > U32::65535
+      throw Checked_error.overflow
+    return Cu16::{ .val = U16::wide }
+  pub fn checked_div(r: Self, rhs: Cu16): Cu16?Checked_error //<
+    //< the quotient, or an error for a 0 divisor
+    if rhs.val == 0
+      throw Checked_error.div_by_zero
+    return Cu16::{ .val = r.val / rhs.val }
+
+impl Cu16: Add<|Cu16, Cu16|> //< so `+` can be written
+  pub fn add(r: Self$@, rhs: Cu16): Cu16 //< the sum; overflow stops the program
+    return r.checked_add(rhs) catch panic("Cu16 overflow (add)")
+impl Cu16: Sub<|Cu16, Cu16|> //< so `-` can be written
+  pub fn sub(r: Self$@, rhs: Cu16): Cu16 //<
+    //< the difference; overflow stops the program
+    return r.checked_sub(rhs) catch panic("Cu16 underflow (sub)")
+impl Cu16: Mul<|Cu16, Cu16|> //< so `*` can be written
+  pub fn mul(r: Self$@, rhs: Cu16): Cu16 //<
+    //< the product; overflow stops the program
+    return r.checked_mul(rhs) catch panic("Cu16 overflow (mul)")
+impl Cu16: Div<|Cu16, Cu16|> //< so `/` can be written
+  pub fn div(r: Self$@, rhs: Cu16): Cu16 //<
+    //< the quotient; a 0 divisor stops the program
+    return r.checked_div(rhs) catch panic("Cu16 division by zero (div)")
+impl U16: Cast<|Cu16|> //< so `Cu16::v` turns a plain value into a checked one
+  pub fn cast(r: Self$@): Cu16 //< the same value, now checked
+    return Cu16.new(r$)
+
+// ---------------------------------------------------------
+// U32 (native promotion: U64)
+// ---------------------------------------------------------
+pub struct Cu32 //< a checked `U32`
+  pub val: U32 //< the plain value
+
+impl Cu32
+  pub fn new(v: U32): Cu32 //< wraps a plain value
+    return Cu32::{ .val = v }
+  pub fn checked_add(r: Self, rhs: Cu32): Cu32?Checked_error //<
+    //< the sum, or an error if it does not fit
+    wide: U64 = r.val + rhs.val
+    if wide > U64::4294967295
+      throw Checked_error.overflow
+    return Cu32::{ .val = U32::wide }
+  pub fn checked_sub(r: Self, rhs: Cu32): Cu32?Checked_error //<
+    //< the difference, or an error if it does not fit
+    if rhs.val > r.val
+      throw Checked_error.overflow
+    return Cu32::{ .val = r.val - rhs.val }
+  pub fn checked_mul(r: Self, rhs: Cu32): Cu32?Checked_error //<
+    //< the product, or an error if it does not fit
+    wide: U64 = r.val * rhs.val
+    if wide > U64::4294967295
+      throw Checked_error.overflow
+    return Cu32::{ .val = U32::wide }
+  pub fn checked_div(r: Self, rhs: Cu32): Cu32?Checked_error //<
+    //< the quotient, or an error for a 0 divisor
+    if rhs.val == 0
+      throw Checked_error.div_by_zero
+    return Cu32::{ .val = r.val / rhs.val }
+
+impl Cu32: Add<|Cu32, Cu32|> //< so `+` can be written
+  pub fn add(r: Self$@, rhs: Cu32): Cu32 //< the sum; overflow stops the program
+    return r.checked_add(rhs) catch panic("Cu32 overflow (add)")
+impl Cu32: Sub<|Cu32, Cu32|> //< so `-` can be written
+  pub fn sub(r: Self$@, rhs: Cu32): Cu32 //<
+    //< the difference; overflow stops the program
+    return r.checked_sub(rhs) catch panic("Cu32 underflow (sub)")
+impl Cu32: Mul<|Cu32, Cu32|> //< so `*` can be written
+  pub fn mul(r: Self$@, rhs: Cu32): Cu32 //<
+    //< the product; overflow stops the program
+    return r.checked_mul(rhs) catch panic("Cu32 overflow (mul)")
+impl Cu32: Div<|Cu32, Cu32|> //< so `/` can be written
+  pub fn div(r: Self$@, rhs: Cu32): Cu32 //<
+    //< the quotient; a 0 divisor stops the program
+    return r.checked_div(rhs) catch panic("Cu32 division by zero (div)")
+impl U32: Cast<|Cu32|> //< so `Cu32::v` turns a plain value into a checked one
+  pub fn cast(r: Self$@): Cu32 //< the same value, now checked
+    return Cu32.new(r$)
+
+// ---------------------------------------------------------
+// U64 (no wider type; see the file header)
+// ---------------------------------------------------------
+pub struct Cu64 //< a checked `U64`
+  pub val: U64 //< the plain value
+
+impl Cu64
+  pub fn new(v: U64): Cu64 //< wraps a plain value
+    return Cu64::{ .val = v }
+  pub fn checked_add(r: Self, rhs: Cu64): Cu64?Checked_error //<
+    //< the sum, or an error if it does not fit
+    result: = r.val + rhs.val
+    if result < r.val
+      throw Checked_error.overflow
+    return Cu64::{ .val = result }
+  pub fn checked_sub(r: Self, rhs: Cu64): Cu64?Checked_error //<
+    //< the difference, or an error if it does not fit
+    if rhs.val > r.val
+      throw Checked_error.overflow
+    return Cu64::{ .val = r.val - rhs.val }
+  pub fn checked_mul(r: Self, rhs: Cu64): Cu64?Checked_error //<
+    //< the product, or an error if it does not fit
+    if r.val == 0 || rhs.val == 0
+      return Cu64::{ .val = 0 }
+    // An unsigned multiplication wraps by definition, so computing first is safe; dividing back
+    // tells whether it overflowed.
+    result: = r.val * rhs.val
+    if result / r.val != rhs.val
+      throw Checked_error.overflow
+    return Cu64::{ .val = result }
+  pub fn checked_div(r: Self, rhs: Cu64): Cu64?Checked_error //<
+    //< the quotient, or an error for a 0 divisor
+    if rhs.val == 0
+      throw Checked_error.div_by_zero
+    return Cu64::{ .val = r.val / rhs.val }
+
+impl Cu64: Add<|Cu64, Cu64|> //< so `+` can be written
+  pub fn add(r: Self$@, rhs: Cu64): Cu64 //< the sum; overflow stops the program
+    return r.checked_add(rhs) catch panic("Cu64 overflow (add)")
+impl Cu64: Sub<|Cu64, Cu64|> //< so `-` can be written
+  pub fn sub(r: Self$@, rhs: Cu64): Cu64 //<
+    //< the difference; overflow stops the program
+    return r.checked_sub(rhs) catch panic("Cu64 underflow (sub)")
+impl Cu64: Mul<|Cu64, Cu64|> //< so `*` can be written
+  pub fn mul(r: Self$@, rhs: Cu64): Cu64 //<
+    //< the product; overflow stops the program
+    return r.checked_mul(rhs) catch panic("Cu64 overflow (mul)")
+impl Cu64: Div<|Cu64, Cu64|> //< so `/` can be written
+  pub fn div(r: Self$@, rhs: Cu64): Cu64 //<
+    //< the quotient; a 0 divisor stops the program
+    return r.checked_div(rhs) catch panic("Cu64 division by zero (div)")
+impl U64: Cast<|Cu64|> //< so `Cu64::v` turns a plain value into a checked one
+  pub fn cast(r: Self$@): Cu64 //< the same value, now checked
+    return Cu64.new(r$)

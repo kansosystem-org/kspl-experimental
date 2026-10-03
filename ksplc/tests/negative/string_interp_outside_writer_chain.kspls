@@ -1,0 +1,20 @@
+//< A string interpolation is syntax for writing into a Writer and produces no value
+//<
+//< It holds no storage, so off a Writer chain the interpolation itself is reported; undiagnosed,
+//< it reaches Genc as `string_interp` and becomes an **ICE**. Desugar does not expand it where the
+//< receiver is not a `.` chain, or an argument (`take` below) shows an unwritten name, `take.s`.
+// EXPECT: string interpolation can only be written as the argument of a writer chain
+// EXPECT: Build the value with 'Str_builder' first
+import "std/io"
+
+priv fn take(s: U8[]): Sz
+  return s.len
+
+fn main(): I32
+  n: = 7
+  // the assignment position (an ICE without the check)
+  x: U8[] = "plain \{n\}"
+  // a plain function's argument position (undefined identifier 'take.s' without the check)
+  m: = take("arg \{n\}")
+  io.out().s(x).s("\{m\}").c('\n')
+  return 0

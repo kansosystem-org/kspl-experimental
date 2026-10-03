@@ -1,0 +1,332 @@
+//< Reads a `.kspeg` file's notation and builds the rule tree a parse runs on
+//<
+//< It returns a `Target` ready to parse with. This hand-written recursive descent reads
+//< `.kspeg`'s own notation; **it is not the KSPEG engine** (`kspeg/engine`).
+import "kspeg/engine"
+import "kspeg/rule" { Kspeg_signal, Rule, Rule_entry, collect_keywords, collect_references,
+  fold_keyword_choices, keyword_set_boundary, keyword_set_rule, left_recursive_rule,
+  max_parse_depth, walk_limit }
+import "std/chars"
+import "std/ds" { List, Map }
+import "std/mem" { Arena }
+import "std/stack_limit" { Stack_limit }
+import "std/str" // `equals`
+
+// `is_kspeg_escape` holds the only escapes `.kspeg` allows, `\uXXXX` among them
+// ("Escape sequences" in `kspeg/docs/SPEC-notation.md`).
+// Caution: **Reject an escape it does not know.** `unescape_to_arena` is meant for JSON and passes
+// an unknown `\X` through as the character, so `\d` would silently become `d`, showing up only as
+// a wrong match far away.
+priv const bad_escape_msg: U8[] =
+  "Unknown escape in a literal (valid: \\n \\r \\t \\\" \\' \\\\ \\[ \\] \\- \\uXXXX)"
+
+// For a `\u` that decodes to several bytes inside a character class.
+priv const wide_in_class_msg: U8[] =
+  "\\u above 007F is not allowed in a character class (a class matches one byte at a time)"
+
+priv fn is_kspeg_escape(ec: U8): Bool
+  return ec == 'n' || ec == 'r' || ec == 't' || ec == '"' || ec == '\'' || ec == '\\' || ec == '['
+    || ec == ']' || ec == '-' || ec == 'u'
+
+priv fn is_ascii_escape(raw: U8[], at: Sz): Bool //<
+  //< Whether a `\uXXXX`'s code point is 0x7F or below
+  //<
+  //< The hex need not be decoded: the first two digits are `00` and the third is 0 to 7.
+  //< Caution: **Return true when the digits are not all there**; `unescape_to_arena` then rejects
+  //< it with a readable reason.
+  if at + 4 > raw.len
+    return true
+  if (raw.ptr + at)$ != '0' || (raw.ptr + at + 1)$ != '0'
+    return false
+  hi: = (raw.ptr + at + 2)$
+  return hi >= '0' && hi <= '7'
+
+pub struct Meta //< one `.kspeg` grammar being read into rules, and how far the reader has got
+  pub source: U8[] //< the grammar's own text, not the input the rules will be applied to
+  pub pos: Sz //< how far the reader has got, in bytes from the start of the grammar
+  pub arena: Arena$@ //< the arena the rules built from the grammar are allocated from
+  depth: Sz //< parse_primary's recursion depth (see the max_parse_depth guard below)
+  stack: Stack_limit //< where that recursion stops short of the stack's end
+
+impl Meta
+  pub fn new(source: U8[], arena: Arena$@): Meta //< a grammar ready to be read from its start
+    return Meta::{ .source = source, .pos = 0, .arena = arena, .depth = 0,
+      .stack = walk_limit() }
+
+  priv fn is_eof(r: Self$@): Bool
+    return r.pos >= r.source.len
+
+  priv fn peek(r: Self$@): U8
+    return 0 if r.is_eof() else (r.source.ptr + r.pos)$
+
+  priv fn skip_ws(r: Self$@)
+    for !r.is_eof()
+      if r.peek().is_space()
+        r.pos += 1
+      else if r.source.starts_with("//", r.pos)
+        for !r.is_eof() && r.peek() != '\n'
+          r.pos += 1
+        if !r.is_eof()
+          r.pos += 1
+      else
+        break
+
+  priv fn match_str(r: Self$@, s: U8[]): Bool
+    r.skip_ws()
+    if r.source.starts_with(s, r.pos)
+      r.pos += s.len
+      return true
+    return false
+
+  priv fn parse_identifier(r: Self$@): U8[]?Kspeg_signal
+    r.skip_ws()
+    start: = r.pos
+    if r.is_eof() || !r.peek().is_alpha()
+      throw Kspeg_signal.mismatch
+
+    r.pos += 1
+    for !r.is_eof() && r.peek().is_alnum()
+      r.pos += 1
+    return r.source.sub(start, r.pos - start)
+
+  priv fn unescape_string(r: Self$@, raw: U8[], ascii_only: Bool): U8[]?Kspeg_signal //<
+    //< Checks the escapes in a quoted literal and returns it unescaped in the arena
+    //<
+    //< Caution: **Set `ascii_only` for a character class**, which is a byte-at-a-time table
+    //< (`Rule.char_class`'s `ranges`): a multi-byte `\u3042` would make a table matching any one
+    //< of its three bytes, with no diagnostic.
+    $i: Sz = 0
+    for i < raw.len
+      if (raw.ptr + i)$ == '\\'
+        if i + 1 >= raw.len || !is_kspeg_escape((raw.ptr + i + 1)$)
+          throw Kspeg_signal.fatal(bad_escape_msg)
+        if ascii_only && (raw.ptr + i + 1)$ == 'u' && !is_ascii_escape(raw, i + 2)
+          throw Kspeg_signal.fatal(wide_in_class_msg)
+        i += 2
+        continue
+      i += 1
+    return raw.unescape_to_arena(r.arena) catch
+      throw Kspeg_signal.fatal("Invalid escape in a literal")
+
+  priv fn scan_until(r: Self$@, close_ch: U8, err_msg: U8[]): U8[]?Kspeg_signal //<
+    //< parse_primary's scan of a quoted string or a character class
+    //<
+    //< It returns the raw text before close_ch, and skips close_ch.
+    start: = r.pos
+    for
+      if r.is_eof()
+        throw Kspeg_signal.fatal(err_msg)
+      if r.peek() == '\\'
+        r.pos += 2
+        continue
+      if r.peek() == close_ch
+        break
+      r.pos += 1
+    raw: = r.source.sub(start, r.pos - start)
+    r.pos += 1
+    return raw
+
+  priv fn parse_primary(r: Self$@): Rule$@?Kspeg_signal
+    // A '(' recurses parse_choice -> parse_sequence -> parse_prefix -> parse_suffix ->
+    // parse_primary, so both limits are checked here too, as in Rule.parse.
+    r.depth += 1
+    defer r.depth -= 1
+    if r.depth > max_parse_depth || r.stack.near()
+      throw Kspeg_signal.fatal("Grammar definition nested too deeply")
+
+    r.skip_ws()
+    c: = r.peek()
+    is_kw: = (c == '\'')
+
+    if c == '"' || is_kw
+      quote: = c
+      r.pos += 1
+      raw_text: = r.scan_until(quote, "Unterminated literal")?
+      unescaped: = r.unescape_string(raw_text, false)?
+      rule: = Rule.keyword_literal(unescaped) if is_kw else Rule.literal(unescaped)
+      return r.arena.create(rule)
+
+    if c == '['
+      r.pos += 1
+      raw_text: = r.scan_until(']', "Unterminated character class")?
+      unescaped: = r.unescape_string(raw_text, true)?
+      return r.arena.create(Rule.char_class(unescaped))
+
+    if c == '.'
+      r.pos += 1
+      return r.arena.create(Rule.wildcard)
+
+    // `~"…"` swallows input up to one of the bytes written, and also marks the run as lenient
+    // (`Rule.recover` in `rule.kspls`). It is a string because it holds bytes to stop at, not
+    // text to match.
+    if c == '~'
+      r.pos += 1
+      if r.pos >= r.source.len || r.source[r.pos] != '"'
+        throw Kspeg_signal.fatal("Expected a string of stopping bytes after '~'")
+      r.pos += 1
+      raw_stops: = r.scan_until('"', "Unterminated stopping-byte set")?
+      stops: = r.unescape_string(raw_stops, false)?
+      if stops.len == 0
+        throw Kspeg_signal.fatal("'~' wants at least one stopping byte")
+      return r.arena.create(Rule.recover(stops))
+
+    if c == '('
+      r.pos += 1
+      inner: = r.parse_choice()?
+      if !r.match_str(")")
+        throw Kspeg_signal.fatal("Expected closing parenthesis ')'")
+      return inner
+
+    start_pos: = r.pos
+    ident: = r.parse_identifier()?
+
+    r.skip_ws()
+    if !r.is_eof() && r.peek() == '='
+      r.pos = start_pos
+      throw Kspeg_signal.mismatch
+
+    r.pos = start_pos + ident.len
+    return r.arena.create(Rule.reference(ident))
+
+  priv fn parse_suffix(r: Self$@): Rule$@?Kspeg_signal
+    base_rule: = r.parse_primary()?
+    if r.match_str("?")
+      return r.arena.create(Rule.optional(base_rule))
+    if r.match_str("*")
+      return r.arena.create(Rule.zero_or_more(base_rule))
+    if r.match_str("+")
+      return r.arena.create(Rule.one_or_more(base_rule))
+    return base_rule
+
+  priv fn parse_prefix(r: Self$@): Rule$@?Kspeg_signal
+    if r.match_str("&")
+      return r.arena.create(Rule.and_pred(r.parse_suffix()?))
+    if r.match_str("!")
+      return r.arena.create(Rule.not_pred(r.parse_suffix()?))
+    return r.parse_suffix()
+
+  priv fn parse_sequence(r: Self$@): Rule$@?Kspeg_signal
+    rules: = List<|Rule$@|>.create(r.arena)
+    rules.push(r.parse_prefix()?)
+    for
+      saved_pos: = r.pos
+      next_rule: = r.parse_prefix() catch
+        r.pos = saved_pos
+        break
+      rules.push(next_rule)
+    return rules.get(0) if rules.len == 1 else r.arena.create(Rule.sequence(rules))
+
+  priv fn parse_choice(r: Self$@): Rule$@?Kspeg_signal
+    rules: = List<|Rule$@|>.create(r.arena)
+    rules.push(r.parse_sequence()?)
+    for r.match_str("|")
+      seq: = r.parse_sequence() catch
+        throw Kspeg_signal.fatal("Expected sequence after '|'")
+      rules.push(seq)
+    return rules.get(0) if rules.len == 1 else r.arena.create(Rule.choice(rules))
+
+  priv fn parse_definition(r: Self$@): Rule_entry$@?Kspeg_signal
+    name: = r.parse_identifier()?
+    if !r.match_str("=")
+      throw Kspeg_signal.fatal("Expected '=' in rule definition")
+
+    rule: = r.parse_choice() catch
+      throw Kspeg_signal.fatal("Invalid rule body")
+    return r.arena.create(Rule_entry::{ .name = name, .rule = rule })
+
+  pub fn parse_grammar( //< reads the whole grammar and returns a target loaded with its rules
+    r: Self$@,
+  ): engine.Target$@?Kspeg_signal
+    rules: = List<|Rule_entry$@|>.create(r.arena)
+
+    for
+      r.skip_ws()
+      if r.is_eof()
+        break
+      def_res: = r.parse_definition()?
+      rules.push(def_res)
+
+    const default_rules_str: U8[] = "\n_Space = [ \\t\\r\\n]*\n_Boundary = [A-Za-z0-9_]\n"
+    $default_meta: = Meta.new(default_rules_str, r.arena)
+    for
+      default_meta.skip_ws()
+      if default_meta.is_eof()
+        break
+      def_res: = default_meta.parse_definition()?
+
+      $found: = false
+      for i in Range.asc(rules.len)
+        if rules.get(i).name.equals(def_res.name)
+          found = true
+          break
+      if !found
+        rules.push(def_res)
+
+    keywords: = List<|U8[]|>.create(r.arena)
+    for entry in rules
+      collect_keywords(entry.rule, keywords)
+
+    // One set lookup where it can fold (keyword_set_boundary), else a choice; both match the same.
+    $boundary_rule: Rule$@ = null
+    for entry in rules
+      if entry.name.equals("_Boundary")
+        boundary_rule = entry.rule
+        break
+    $kw_rule: Rule$@ = null
+    switch keyword_set_boundary(boundary_rule, keywords) case .some(ranges)
+      kw_rule = keyword_set_rule(keywords, ranges, r.arena)
+    case .none
+      choice_rules: = List<|Rule$@|>.create(r.arena)
+      for kw in keywords
+        choice_rules.push(r.arena.create(Rule.keyword_literal(kw)))
+      kw_rule = r.arena.create(Rule.choice(choice_rules))
+
+    // A grammar's own _Keyword takes precedence, as with _Space/_Boundary above.
+    $has_user_keyword: = false
+    for entry in rules
+      if entry.name.equals("_Keyword")
+        has_user_keyword = true
+        break
+    if !has_user_keyword
+      rules.push(r.arena.create(Rule_entry::{ .name = "_Keyword", .rule = kw_rule }))
+
+    for entry in rules
+      fold_keyword_choices(entry.rule, boundary_rule, r.arena)
+
+    r.check_rule_names(rules)?
+
+    ctx: = r.arena.create(engine.Target.new(r.source, r.arena))
+    ctx.load_rules(rules)
+    // Caution: **After load_rules**, which works out what each rule can begin with.
+    switch left_recursive_rule(rules) case .some(name)
+      throw Kspeg_signal
+        .fatal(r.arena.text().s("Rule '").s(name)
+        .s("' can enter itself before reading a character (left recursion), so it never ends")
+        .take())
+    case .none {}
+    return ctx
+
+  priv fn check_rule_names(r: Self$@, rules: List<|Rule_entry$@|>$@): Void?Kspeg_signal //<
+    //< Rejects a rule defined twice, and a reference to another rule that names no rule
+    //<
+    //< A name defined twice would leave one definition silently unused, whichever won.
+    //< Caution: **Do not delay the lookup until parsing**, or an undefined name shows only when
+    //< its branch runs. **Call it after the synthesized rules are added**, or references to
+    //< `_Space`, `_Boundary` and `_Keyword` look undefined.
+    defined: = r.arena.create(Map<|U8[], Bool|>.new_with_cap(256, r.arena))
+    for entry in rules
+      if defined.get(entry.name) catch false
+        throw Kspeg_signal
+          .fatal(r.arena.text().s("Rule '").s(entry.name).s("' is defined twice").take())
+      defined.set(entry.name, true)
+    // Caution: **Also name the rule that refers to it.** The name alone may be referred to from
+    // many places, and no line and column can be given: a grammar may be embedded in an executable.
+    for entry in rules
+      refs: = List<|U8[]|>.create(r.arena)
+      collect_references(entry.rule, refs)
+      for want in refs
+        found: = defined.get(want) catch false
+        if !found
+          throw Kspeg_signal
+            .fatal(r.arena.text().s("Undefined rule '").s(want).s("' referenced from '")
+            .s(entry.name).s("'").take())

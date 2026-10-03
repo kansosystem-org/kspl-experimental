@@ -1,0 +1,781 @@
+//< The bridge to a browser
+//<
+//< Two things cross it: font metrics borrowed from JS (the canvas's `measureText`) wrapped as a
+//< `Font_source`, and the laid-out boxes, written in a form JS can read.
+//< Caution: **Do not bring layout decisions in here** — line breaking, inheritance and baseline
+//< alignment belong to `lay/flow.kspls`.
+//< **Do not put a slice out at the boundary** ("The restrictions on types at the FFI boundary" in
+//< the language spec). Split-off files follow the same rules ("The boundary between the core
+//< and the browser" in `kspage/docs/DESIGN.md`).
+import "kspage/expr/calc"
+import "kspage/lay/ask"
+import "kspage/lay/caret"
+import "kspage/lay/find"
+import "kspage/lay/flow"
+import "kspage/model/doc" { Block, Rect }
+import "kspage/model/filter"
+import "kspage/model/paint"
+import "kspage/port/web/diff" as _diff
+// **Without an import from here the style entry points are not in the wasm** — the generated C
+// holds only what is reachable from the entry point; `#export` alone is not enough.
+import "kspage/port/web/face" as _face
+import "kspage/port/web/face_edit" as _face_edit
+import "kspage/port/web/grab" as _grab
+import "kspage/port/web/inout" as _inout
+import "kspage/port/web/objects" as _objects
+import "kspage/port/web/outline" as _outline
+import "kspage/port/web/paper" as _paper
+import "kspage/port/web/review" as _review
+import "kspage/port/web/source" as _source
+import "kspage/port/web/state"
+// `out` is not imported by its own name — the entry points that write output take a parameter
+// named `out` (the buffer is written `state.out`).
+import "kspage/port/web/state" { doc, ed, ensure, in_ptr, input, input_cap, nums, nums_cap, page,
+  page_arena, sel, sheet, source }
+import "kspage/port/web/table" as _table
+import "kspage/port/web/theme" as _theme
+import "kspage/write/again"
+import "kspage/write/block"
+import "kspage/write/cells"
+import "kspage/write/insert"
+import "kspage/write/shape"
+import "kspage/write/typing"
+import "std/ds" { List }
+import "std/mem" + { Arena }
+
+priv fn row_of_caret(): Option<|Block$@|> //<
+  //< The block holding the cursor's paragraph — in a table, the row
+  //<
+  //< Outside a table it is the paragraph's parent, which a filter ignores. None at the document's
+  //< top level or with no cursor.
+  if ed.caret.inline == null
+    return Option<|Block$@|>.none
+  own: = ed.doc.owner_of(ed.caret.inline)
+  if !own.found
+    return Option<|Block$@|>.none
+  up: = ed.doc.parent_of(own.block)
+  if !up.found || up.block == null
+    return Option<|Block$@|>.none
+  return Option<|Block$@|>.some(up.block)
+
+// Lays out again at width `width` and returns the number of boxes. **The previous result is
+// freed here**; kept, resizing alone would pile up allocations.
+#export
+fn kspage_web_layout(width: F32): Sz
+  ensure()
+  // It recalculates before layout (otherwise the boxes show the cells' old text), and moves the
+  // cursor back inside (shrinking text can leave it outside).
+  // Caution: **Pass the inline being typed** — otherwise it is replaced by its value mid-formula
+  // and the typed text disappears.
+  calc.recalc(doc, sheet, ed.caret.inline)
+  ed.clamp()
+  // **The cursor's row is always laid out, whatever a filter says** (`Over.kept_row`), so a row
+  // being typed into does not vanish; only this side knows the cursor, so it is set here before
+  // every layout.
+  sheet.over.kept_row = null
+  if held: = row_of_caret()
+    sheet.over.kept_row = held
+  if page_arena != null
+    page_arena.free()
+  page_arena = Arena.new(64 * 1024)
+  // Pass the borrowing interface — otherwise a window shows only its target (the text is passed in;
+  // the core does not open files).
+  page = flow.layout(doc, sheet, source(), width, page_arena, state.hand())
+  // Caution: Mark it again at every layout — the boxes are remade, and the marks go with them.
+  caret.mark_composing(page, ed.caret)
+  sel = List<|Rect|>.create(page_arena)
+  caret.selection_rects(doc, page, ed.caret, sel)
+  return page.boxes.len
+
+// The height used; 0 before the first `kspage_web_layout` (`page` does not exist yet).
+#export
+fn kspage_web_height(): F32
+  return 0.0 if page == null else page.height
+
+// The bytes of the arena in use now, and of the whole memory — **one pair** (the remaining room
+// needs both).
+// Caution: **Do not pass them as F32** — with a 24-bit mantissa 16 MiB is the limit, so larger
+// numbers get rounded.
+#export
+fn kspage_web_heap_used(): Sz
+  return mem.heap_used_bytes()
+
+#export
+fn kspage_web_heap_room(): Sz
+  return mem.heap_capacity_bytes()
+
+// The cleanup after the arena ran out and a refusal happened; returns the bytes freed.
+// Caution: **Do not touch the document** — a refused reload leaves it untouched (`doc_arena` is
+// not touched until the read succeeds). **Drop the layout**: stopped partway it has half the boxes.
+#export
+fn kspage_web_recover(): Sz
+  was: = mem.heap_used_bytes()
+  state.drop_load()
+  if page_arena != null
+    page_arena.free()
+    page_arena = null
+  page = null
+  sel = null
+  now: = mem.heap_used_bytes()
+  return was - now
+
+// Writes 15 values into out for box `i`'s shape (x / y / w / h / the size / the weight / italic /
+// composing / whether the text color is set / that color / whether the background is set / that
+// color / underline / strikethrough / letter spacing).
+// Caution: **Pass "whether the color is set" as a separate field** — 0 as unset would make black
+// impossible to set. Unset, the text takes the screen's default and no background is painted.
+#export
+fn kspage_web_box(i: Sz, out: F32$@)
+  state.clear_out(out, 15)
+  if !state.has_box(i)
+    return
+  b: = page.boxes.get(i)
+  out$ = b.rect.x
+  (out + 1)$ = b.rect.y
+  (out + 2)$ = b.rect.w
+  (out + 3)$ = b.rect.h
+  (out + 4)$ = b.font.size_px
+  (out + 5)$ = F32::b.font.weight
+  (out + 6)$ = 1.0 if b.font.italic else 0.0
+  (out + 7)$ = 1.0 if b.composing else 0.0
+  state.color_into(out + 8, b.ink.color)
+  state.color_into(out + 10, b.ink.background)
+  (out + 12)$ = 1.0 if paint.drawn(b.ink.underline) else 0.0
+  (out + 13)$ = 1.0 if paint.drawn(b.ink.strike) else 0.0
+  // Caution: **The drawing code must add this too** (the justification's letter spacing); without
+  // it, the text is packed tight while hit tests shift right.
+  (out + 14)$ = b.spacing
+
+#export
+fn kspage_web_box_text(i: Sz): U8@
+  return null if !state.has_box(i) else page.boxes.get(i).text.ptr
+
+#export
+fn kspage_web_box_text_len(i: Sz): Sz
+  return 0 if !state.has_box(i) else page.boxes.get(i).text.len
+
+#export
+fn kspage_web_box_family(i: Sz): U8@
+  return null if !state.has_box(i) else page.boxes.get(i).font.family.ptr
+
+#export
+fn kspage_web_box_family_len(i: Sz): Sz
+  return 0 if !state.has_box(i) else page.boxes.get(i).font.family.len
+
+// ---- The cursor and editing ----
+// **The cursor survives a layout** — it points at a position in the document, whose arena the
+// layout does not free.
+
+// Moves the cursor to the clicked place; with `extend` not 0 it keeps the anchor and selects.
+#export
+fn kspage_web_click(x: F32, y: F32, extend: I32)
+  if page == null
+    return
+  ed.point_to(page, x, y, extend != 0)
+
+// The buffer the numbers are passed through. **JS asks for this before reading or writing.**
+// Caution: **Do not borrow memory below `__heap_base`** — that is C's stack, and a call inside the
+// very entry point that wrote the numbers overwrites them.
+#export
+fn kspage_web_nums(): F32$@
+  return nums@
+
+// The number of values that fit in that buffer.
+#export
+fn kspage_web_nums_cap(): Sz
+  return nums_cap
+
+// Where typed text is written. JS writes here in UTF-8 and then calls `kspage_web_type`.
+#export
+fn kspage_web_input_buffer(): U8@
+  return input@
+
+#export
+fn kspage_web_input_cap(): Sz
+  return input_cap
+
+priv fn drop_span(): Bool //< deletes the selection
+  //<
+  //< This is the only place that joins the spanned paragraphs into one (the core's `insert` and the
+  //< like delete only the text, leaving an empty paragraph and its marker).
+  return page != null && ed.delete_span(page)
+
+// Types the `len` bytes written in at the cursor.
+#export
+fn kspage_web_type(len: Sz)
+  if len <= 0 || len > input_cap
+    return
+  drop_span()
+  ed.insert(U8[]::{ .ptr = input@, .len = len })
+
+// **At a paragraph's start it joins with the paragraph before** (else a split cannot be undone by
+// deleting). Where it cannot join (a table cell, a paragraph with nested blocks) it deletes one.
+#export
+fn kspage_web_backspace()
+  if drop_span()
+    return
+  if page != null && ed.join_prev(page)
+    return
+  ed.backspace()
+
+// Deletes the character after the cursor (Delete), or the selection.
+// Caution: **Call it after layout** (whether it is in a table cell needs the layout).
+#export
+fn kspage_web_delete()
+  if page == null
+    return
+  ed.delete_ahead(page)
+
+// Splits the paragraph in two at the cursor; 1 if split.
+// Caution: **Call it after layout** (as `kspage_web_delete`).
+#export
+fn kspage_web_split_block(): I32
+  if page == null
+    return 0
+  return 1 if ed.split_block(page, sheet) else 0
+
+// One character left with `dir` negative, right with it positive.
+#export
+fn kspage_web_move(dir: I32, extend: I32)
+  if dir < 0
+    ed.move_left(extend != 0)
+  else
+    ed.move_right(extend != 0)
+
+// One line up with `dir` negative, down with it positive.
+// Caution: Call it after layout.
+#export
+fn kspage_web_move_line(dir: I32, extend: I32)
+  if page == null
+    return
+  ed.move_vertical(page, dir, extend != 0)
+
+// Moves the cursor to a line's start (`dir` negative) or end (positive), **within its container**
+// (in a table row, the cell).
+// Caution: Call it after layout.
+#export
+fn kspage_web_move_edge(dir: I32, extend: I32)
+  if page == null
+    return
+  ed.move_to_edge(page, dir, extend != 0)
+
+// Selects the whole document. 1 if there is anything to select.
+#export
+fn kspage_web_select_all(): I32
+  ensure()
+  return 1 if ed.select_all() else 0
+
+// Moves the cursor to the next cell (the previous one with `back` not 0); 1 if it moved.
+// Caution: **Call it after layout.** **It acts only inside a table** (0 outside, leaving the key
+// to the caller).
+#export
+fn kspage_web_move_cell(back: I32): I32
+  if page == null
+    return 0
+  return 1 if ed.move_cell(page, back == 0) else 0
+
+// One row down with `up` 0, up otherwise, staying in the column (Enter and Shift+Enter inside a
+// cell). Past the last row it adds one. 1 if it moved.
+#export
+fn kspage_web_move_row(up: I32): I32
+  if page == null
+    return 0
+  return 1 if ed.move_row(page, up == 0) else 0
+
+// Replaces the text being composed (not yet committed) with the `len` bytes written in.
+#export
+fn kspage_web_compose(len: Sz)
+  if len < 0 || len > input_cap
+    return
+  drop_span()
+  ed.set_preedit(U8[]::{ .ptr = input@, .len = len })
+
+// Commits the text being composed as it is.
+#export
+fn kspage_web_compose_commit()
+  ed.commit_preedit()
+
+// Deletes the text being composed.
+#export
+fn kspage_web_compose_cancel()
+  ed.cancel_preedit()
+
+// The number of rectangles that paint the selection.
+#export
+fn kspage_web_selection_count(): Sz
+  return 0 if sel == null else sel.len
+
+// Writes four values into out for rectangle `i` (x / y / w / h). Four 0s when absent.
+#export
+fn kspage_web_selection_rect(i: Sz, out: F32$@)
+  state.clear_out(out, 4)
+  if !state.has_selection(i)
+    return
+  r: = sel.get(i)
+  out$ = r.x
+  (out + 1)$ = r.y
+  (out + 2)$ = r.w
+  (out + 3)$ = r.h
+
+// Writes three values into out, "the line, the byte offset in it, whether it exists": **what back
+// and forward navigation remembers** (`api.js`'s `spotNow`). Stable numbers are assigned only on
+// save, so the position is kept as line and offset.
+#export
+fn kspage_web_caret_spot(out: F32$@)
+  ensure()
+  state.clear_out(out, 3)
+  if line: = caret_line()
+    out$ = F32::line
+    (out + 1)$ = F32::ed.caret.offset
+    (out + 2)$ = 1.0
+
+priv fn caret_line(): Option<|Sz|> //< which of the document's blocks the cursor is in
+  //<
+  //< In a text-form document that is the line number (one line per block); inside nested blocks it
+  //< gives no answer (there are no line numbers there).
+  if ed.caret.inline == null
+    return Option<|Sz|>.none
+  own: = ed.doc.owner_of(ed.caret.inline)
+  if !own.found
+    return Option<|Sz|>.none
+  at: = block_no(own.block)
+  return Option<|Sz|>.none if at >= ed.doc.blocks.len else Option<|Sz|>.some(at)
+
+// Puts the cursor at that offset on that line; 1 if it could.
+// Caution: **Put it on a character boundary** — once the text changed, the remembered offset can
+// point inside a character, and the next character typed makes a broken sequence. **The caller
+// scrolls the window** (the core does not know the screen).
+#export
+fn kspage_web_go_to(line: Sz, at: Sz): I32
+  ensure()
+  if line >= ed.doc.blocks.len
+    return 0
+  b: = ed.doc.blocks.get(line)
+  if b == null || b.inlines.len <= 0
+    return 0
+  n: = b.inlines.get(0)
+  text: = n.text()
+  $off: Sz = at if at <= text.len else text.len
+  for off > 0 && off < text.len && (text[off] & 0xc0U8) == 0x80U8
+    off -= 1
+  ed.caret = caret.at(n, off)
+  page = null
+  return 1
+
+// Undoes one step. Returns 1 if it did.
+#export
+fn kspage_web_undo(): I32
+  return 1 if ed.undo() else 0
+
+// Redoes the undone step. Returns 1 if it did.
+#export
+fn kspage_web_redo(): I32
+  return 1 if ed.redo() else 0
+
+// Repeats the last repeatable command where the cursor is now (F4); 1 if done. **It is not a
+// redo** (a redo restores an undone action where it was done). Excel and Word put both on one
+// key, so here they are two.
+// Caution: **Call it after layout** (the commands it stands in for need the page).
+#export
+fn kspage_web_again(): I32
+  if page == null
+    return 0
+  return 1 if ed.do_again(page, sheet) else 0
+
+// Writes what repeating would do and returns the length. **0 means "nothing to repeat"**, so a key
+// that refused can be told from one with nothing to act on.
+#export
+fn kspage_web_again_says(): Sz
+  state.out.clear()
+  state.out.s(ed.again_says())
+  return state.out.len
+
+// Where the cursor is and what the layout put around it. **For the debug log only.**
+// Caution: **The document's text is not included** — only which paragraph, how far in, and the
+// shape of the lines: a move that does not move records nothing else. **The number of boxes outside
+// any document matters most** — the lines a block collects, where the cursor cannot stand.
+#export
+fn kspage_web_caret_report(): Sz
+  state.out.clear()
+  if ed.caret.inline == null
+    state.out.s("the cursor stands nowhere")
+    return state.out.len
+  own: = ed.doc.owner_of(ed.caret.inline)
+  if !own.found
+    state.out.s("the cursor points at a text that is in no paragraph")
+    return state.out.len
+  state.out.s("style '\{own.block.style\}', run \{own.index\} of \{own.block.inlines.len\}")
+    .s(", byte \{ed.caret.offset\} of \{ed.caret.inline.text().len\}")
+    .s(", of \{ed.doc.blocks.len\} paragraphs at the top")
+  if caret.has_selection(ed.caret)
+    state.out.s(", something is chosen")
+  if page == null
+    state.out.s("; it has not been laid out yet")
+    return state.out.len
+  $gathered: Sz = 0
+  for $i: Sz = 0; i < page.boxes.len; i += 1
+    if page.boxes.get(i).inline == null
+      gathered += 1
+  state.out.s("; \{page.boxes.len\} boxes laid, \{gathered\} of them in no document")
+  spot: = ask.cell_of(page, ed.caret)
+  if spot.found
+    state.out.s("; in a cell at row \{spot.row\}, column \{spot.column\}")
+  cur: = caret.cursor(page, ed.caret)
+  if cur.found
+    state.out.s("; the cursor's line is at y=\{cur.y\} and \{cur.h\} tall")
+  return state.out.len
+
+// Ends the undo step, **called from outside after a pause between keystrokes** (the core has no
+// clock).
+#export
+fn kspage_web_break_undo_group()
+  ed.break_group()
+
+// ---- Changing a formula ----
+
+// 1 where the cursor's text may be replaced whole as a formula (a table cell, or an inline with a
+// formula). Not needed to create one (typing `=` first is enough).
+#export
+fn kspage_web_takes_formula(): I32
+  ensure()
+  return 1 if calc.takes_formula(doc, sheet, ed.caret.inline) else 0
+
+// Writes the typed text of the cursor's cell (the formula, if there is one) and returns the
+// length: the `Inline`'s text, not the computed value.
+#export
+fn kspage_web_typed(): Sz
+  ensure()
+  state.out.clear()
+  if ed.caret.inline != null
+    state.out.s(ed.caret.inline.text())
+  return state.out.len
+
+// Makes the `len` bytes in the typing arena the cursor's cell text. **It replaces everything**
+// (what shows is the computed result).
+#export
+fn kspage_web_set_typed(len: Sz)
+  if len < 0 || len > input_cap
+    return
+  ed.set_source(U8[]::{ .ptr = input@, .len = len })
+
+// ---- Copy, cut and paste ----
+
+// Writes the selection's text and returns the length (at `kspage_web_out_ptr`). **A paragraph
+// break is one newline.** The hidden input field is empty, so JS puts this on the clipboard for
+// copy and cut.
+#export
+fn kspage_web_selection_text(): Sz
+  ensure()
+  state.out.clear()
+  caret.selection_into(doc, ed.caret, state.out@)
+  return state.out.len
+
+// Pastes the `len` bytes in the loading arena at the cursor; 1 if pasted.
+// Caution: **Use the loading arena, not the typing arena** (`kspage_web_load_buffer`) — the typing
+// arena has a fixed size, so a long text is silently cut.
+#export
+fn kspage_web_paste(len: Sz): I32
+  if page == null || in_ptr == null || len <= 0
+    return 0
+  return 1 if ed.paste(page, U8[]::{ .ptr = in_ptr, .len = len }) else 0
+
+// ---- Find and replace ----
+
+// Finds the `len` bytes in the typing arena and selects them; 1 if found. **Past the end it wraps
+// to the start**; `back` not 0 searches backward.
+#export
+fn kspage_web_find(len: Sz, back: I32): I32
+  ensure()
+  if len <= 0 || len > input_cap
+    return 0
+  needle: = U8[]::{ .ptr = input@, .len = len }
+  return 1 if ed.find_next(needle, back != 0) else 0
+
+// How many times the `len` bytes in the typing arena appear in the whole document. **It only
+// counts** (neither the cursor nor the selection moves). Called on every keystroke, it walks the
+// document once (`count_matches` in `lay/find.kspls`). **It can differ from the number replaced**
+// (a formula's inline is found but not replaced).
+#export
+fn kspage_web_count(len: Sz): Sz
+  ensure()
+  if len <= 0 || len > input_cap
+    return 0
+  needle: = U8[]::{ .ptr = input@, .len = len }
+  return find.count_matches(ed.doc, needle)
+
+// Replaces using `the text to find\tthe replacement` in the typing arena, returning the number
+// replaced; with `all` 0, only the next one. **Without a tab it does nothing** (an empty
+// replacement and a forgotten tab look alike).
+#export
+fn kspage_web_replace(len: Sz, all: I32): Sz
+  ensure()
+  two: = state.split_input(len)
+  if !two.found
+    return 0
+  if all != 0
+    return ed.replace_all(two.head, two.tail)
+  return 1 if ed.replace_next(two.head, two.tail) else 0
+
+// ---- Inserting a table and a slide ----
+
+// Removes the whole container the cursor is in (a table, a slide, an image); 1 if removed.
+// Caution: **Call it after layout** (whether it is in a cell needs the layout).
+#export
+fn kspage_web_drop_holder(): I32
+  if page == null
+    return 0
+  return 1 if ed.drop_holder(page) else 0
+
+// Removes the cursor's frame from a slide; 1 if removed. **Only a frame inside a slide** (the whole
+// container is `kspage_web_drop_holder`); **the last frame stays** (a slide with none could not be
+// clicked into).
+#export
+fn kspage_web_drop_frame(): I32
+  ensure()
+  return 1 if ed.drop_frame(sheet) else 0
+
+// Inserts one empty table of `rows` × `cols` after the cursor's paragraph, in the style named by
+// the `len` bytes in the typing arena; 1 if inserted. **JS decides the name** (it travels with the
+// document; decided here it would drift from a reloaded document) **and the count** (the grid
+// picker belongs to the page).
+#export
+fn kspage_web_insert_table(len: Sz, rows: Sz, cols: Sz): I32
+  if page == null || len <= 0 || len > input_cap
+    return 0
+  name: = U8[]::{ .ptr = input@, .len = len }
+  return 1 if ed.insert_table(page, sheet, name, rows, cols) else 0
+
+// Inserts one slide in the style named in the same arena; 1 if inserted. `plan` gives the frames
+// inside: 0 one filling the slide, 1 a title and a body, 2 a title and two columns.
+// Caution: **The style of that name must exist first** — it sets the slide's size, and a missing
+// one is not made. The template is not kept (the document holds the frames).
+#export
+fn kspage_web_insert_surface(len: Sz, plan: I32): I32
+  if page == null || len <= 0 || len > input_cap
+    return 0
+  name: = U8[]::{ .ptr = input@, .len = len }
+  // Return the reason as a number (the rule at `kspage_web_set_block_style` in `face.kspls`): 1
+  // inserted, 0 the cursor is in no paragraph, -1 inside a table cell, -2 no slide style, -3 open
+  // read-only.
+  switch ed.insert_surface(page, sheet, name, state.sketch_at(plan)) case .done
+    return 1
+  case .nowhere
+    return 0
+  case .in_cell
+    return -1
+  case .no_style
+    return -2
+  case .shut
+    return -3
+
+// ---- The fills and the lines ----
+
+// The number of fills and lines, **after layout.**
+#export
+fn kspage_web_panel_count(): Sz
+  if page == null
+    return 0
+  return page.panels.len
+
+// Writes nine values into out for fill and line `i` (x / y / w / h / the line's thickness / the
+// line's color / whether there is a fill / the fill's color / the shape to draw); thickness 0 draws
+// no line. **They come in document order**, so drawn in order the inner ones end up on top.
+#export
+fn kspage_web_panel(i: Sz, out: F32$@)
+  state.clear_out(out, 9)
+  if page == null || i < 0 || i >= page.panels.len
+    return
+  one: = page.panels.get(i)
+  out$ = one.rect.x
+  (out + 1)$ = one.rect.y
+  (out + 2)$ = one.rect.w
+  (out + 3)$ = one.rect.h
+  (out + 4)$ = one.width
+  (out + 5)$ = F32::one.color
+  state.color_into(out + 6, one.fill)
+  (out + 8)$ = state.shape_no(one.shape)
+
+// ---- Regions ----
+
+// The number of the document's regions, **after layout** (the style decides which block is
+// which).
+#export
+fn kspage_web_region_count(): Sz
+  if page == null
+    return 0
+  return page.regions.len
+
+// Writes five values into out for region `i` (x / y / w / h / kind: 0 prose, 1 a table, 2 a slide,
+// `Arrange`'s list). Five 0s when absent (kind 0 with size 0 draws nothing).
+#export
+fn kspage_web_region(i: Sz, out: F32$@)
+  $spot: = Rect::{ .x = 0.0, .y = 0.0, .w = 0.0, .h = 0.0 }
+  $kind: F32 = 0.0
+  if page != null && i >= 0 && i < page.regions.len
+    r: = page.regions.get(i)
+    spot = r.rect
+    kind = state.arrange_no(r.kind)
+  out$ = spot.x
+  (out + 1)$ = spot.y
+  (out + 2)$ = spot.w
+  (out + 3)$ = spot.h
+  (out + 4)$ = kind
+
+// ---- The heading rows the window keeps in view ----
+
+// The number of laid-out top-level tables, each with a heading row the window can keep in view,
+// **after layout.**
+#export
+fn kspage_web_head_count(): Sz
+  if page == null
+    return 0
+  return ask.head_band_count(page)
+
+// Writes eight values into out for table `i`: its rectangle (x / y / w / h) and its first row's.
+// **The first row is the heading by position** (as the saved format and the sort treat it). Eight
+// 0s when absent. A table inside a cell is not counted (the outer table's heading is kept).
+#export
+fn kspage_web_head(i: Sz, out: F32$@)
+  state.clear_out(out, 8)
+  if page == null
+    return
+  got: = ask.head_band_at(page, i)
+  if !got.found
+    return
+  out$ = got.table.x
+  (out + 1)$ = got.table.y
+  (out + 2)$ = got.table.w
+  (out + 3)$ = got.table.h
+  (out + 4)$ = got.row.x
+  (out + 5)$ = got.row.y
+  (out + 6)$ = got.row.w
+  (out + 7)$ = got.row.h
+
+// The number of cells table `i`'s heading row shows. **A cell covered by a merge is not counted**
+// (what counts is what a person can click).
+#export
+fn kspage_web_head_cell_count(i: Sz): Sz
+  if page == null
+    return 0
+  return ask.head_cell_count(page, i)
+
+// Writes seven values into out for cell `c` of table `i`'s heading row: its rectangle (x / y / w /
+// h), the column index with merges counted, whether that column is filtered, and whether it was
+// found. Seven 0s when absent. The filter arrow is drawn from this, so the page knows nothing about
+// the columns.
+#export
+fn kspage_web_head_cell(i: Sz, c: Sz, out: F32$@)
+  state.clear_out(out, 7)
+  if page == null
+    return
+  got: = ask.head_cell_at(page, i, c)
+  if !got.found
+    return
+  out$ = got.rect.x
+  (out + 1)$ = got.rect.y
+  (out + 2)$ = got.rect.w
+  (out + 3)$ = got.rect.h
+  (out + 4)$ = F32::got.column
+  (out + 5)$ =
+    1.0 if filter.column_narrowed(sheet.over.filters, got.table, got.column) else 0.0
+  (out + 6)$ = 1.0
+
+// Writes three values into out for the heading cell over the cursor's column (the table's index,
+// the cell's index in that row, whether found). Three 0s when absent. **The cursor can be anywhere
+// in the column**, which is how the ribbon's button reaches the panel the heading arrow opens.
+#export
+fn kspage_web_head_spot(out: F32$@)
+  state.clear_out(out, 3)
+  if page == null
+    return
+  got: = ask.head_spot_of(page, ed.caret)
+  if !got.found
+    return
+  out$ = F32::got.table_at
+  (out + 1)$ = F32::got.cell_at
+  (out + 2)$ = 1.0
+
+// ---- Presenting one slide at a time ----
+
+// The number of slides in the document, **after layout** (the style decides which block is a
+// slide).
+#export
+fn kspage_web_surface_count(): Sz
+  if page == null
+    return 0
+  return page.surfaces.len
+
+// Writes four values into out for slide `i` (x / y / w / h); four 0s when absent. The screen
+// decides the slide order, the cropping and the zoom from this alone.
+#export
+fn kspage_web_surface(i: Sz, out: F32$@)
+  $spot: = Rect::{ .x = 0.0, .y = 0.0, .w = 0.0, .h = 0.0 }
+  if page != null && i >= 0 && i < page.surfaces.len
+    spot = page.surfaces.get(i).rect
+  out$ = spot.x
+  (out + 1)$ = spot.y
+  (out + 2)$ = spot.w
+  (out + 3)$ = spot.h
+
+// Moves slide `from` to slide `to`'s position; 1 if moved. **The order is only the document's
+// order** (the slide list is a layout result), so the slide index becomes the block index first.
+// **Top-level blocks only** (a slide inside a frame is not moved).
+#export
+fn kspage_web_move_surface(from: Sz, to: Sz): I32
+  ensure()
+  if page == null || from >= page.surfaces.len || to >= page.surfaces.len
+    return 0
+  at: = block_no(page.surfaces.get(from).block)
+  aim: = block_no(page.surfaces.get(to).block)
+  if at >= ed.doc.blocks.len || aim >= ed.doc.blocks.len
+    return 0
+  return 1 if ed.move_block(at, aim) else 0
+
+priv fn block_no(b: Block$@): Sz //< which of the document's blocks that block is
+  //<
+  //< When absent it returns the count itself (the caller can refuse). The document is reached
+  //< through `ed` (`doc` is a file's name in this file).
+  for $i: Sz = 0; i < ed.doc.blocks.len; i += 1
+    if ed.doc.blocks.get(i) == b
+      return i
+  return ed.doc.blocks.len
+
+// Writes the speaker's notes of slide `i` into the arena and returns the length. **It is separate
+// from `kspage_web_aside`**, which reads the cursor's container (while presenting, the cursor need
+// not be in that slide). **It does not appear in the flow** — only on the speaker's screen, neither
+// on the page nor in the HTML.
+#export
+fn kspage_web_surface_aside(i: Sz): Sz
+  ensure()
+  if page == null || i >= page.surfaces.len
+    return 0
+  state.out.clear()
+  state.out.s(page.surfaces.get(i).block.aside)
+  return state.out.len
+
+// Writes five values into out for the cursor's cell (x / y / w / h / whether found): **only which
+// cell the cursor is in.** Whether a formula may be written is `kspage_web_takes_formula` (a cell's
+// later inlines have the frame but take no formula).
+#export
+fn kspage_web_cell_frame(out: F32$@)
+  (out + 4)$ = 0.0
+  if page == null
+    return
+  if r: = caret.cell_frame(page, ed.caret)
+    out$ = r.x
+    (out + 1)$ = r.y
+    (out + 2)$ = r.w
+    (out + 3)$ = r.h
+    (out + 4)$ = 1.0
+
+// Writes four values into out for the cursor's position (x / y / height / whether it was found).
+#export
+fn kspage_web_cursor(out: F32$@)
+  if page == null
+    (out + 3)$ = 0.0
+    return
+  cur: = caret.cursor(page, ed.caret)
+  out$ = cur.x
+  (out + 1)$ = cur.y
+  (out + 2)$ = cur.h
+  (out + 3)$ = 1.0 if cur.found else 0.0

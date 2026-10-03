@@ -1,0 +1,40 @@
+//< A name in a comment is resolved as the code beside it would resolve it
+//<
+//< Where the file's scope reaches the owner and the member is gone, it is reported under the name,
+//< behind code too. Quiet: a name that is there, another product's name, a name tied to its file,
+//< a head the file does not know, and a parameter hiding a module's name.
+// EXPECT: comment_points_at_nothing.kspls:21:5: warning: [W0211]
+// EXPECT: comment_points_at_nothing.kspls:22:27: warning: [W0211]
+// EXPECT: comment_points_at_nothing.kspls:24:49: warning: [W0211]
+// EXPECT: comment_points_at_nothing.kspls:32:61: warning: [W0211]
+// EXPECT-NOT: Map.set`, and
+// EXPECT-NOT: io.out`, and
+// EXPECT-NOT: json.dumps`, and
+// EXPECT-NOT: List.order_by`, and
+// EXPECT-NOT: mem.gone`, and
+// EXPECT-NOT: r.x`, and
+import "std/ds" { List, Map }
+import "std/io"
+import "std/json"
+import "std/mem"
+
+// `Map.entry_list` is gone, and `Map.set` is there.
+// `io.out()` stands and `io.nope()` does not; `json.Val.null_val` walks two steps.
+// Python's `json.dumps` is not a KSPL name, and `List.order_by` in `std/seq` names its file.
+priv struct Pair //< two numbers, `Pair.a` and `Pair.b_gone`
+  a: I32 //< the first; `r.x` names a local nobody declared here
+  b: I32
+
+priv fn keep(mem: I32): I32 //< its `mem.gone` is the parameter's, not the module's
+  return mem
+
+pub fn main(): I32
+  arena: = mem.Arena.new(1024) // `mem.Arena.free` exists; `mem.Arena.freed` does not
+  defer arena.free()
+  $xs: = List<|I32|>.new(arena)
+  xs.push(1)
+  $m: = Map<|I32, I32|>.new(arena)
+  m.set(1, 2)
+  io.out().s(json.Val.null_val.as_str())
+  p: Pair = ::{ .a = 1, .b = 2 }
+  return keep(p.a + p.b)

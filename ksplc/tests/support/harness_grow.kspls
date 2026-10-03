@@ -1,0 +1,141 @@
+//< Builds, just before the run, the fixtures that check a depth limit rejects its input
+//<
+//< It is not a suite but a part of `tests/support/harness_expect.kspls`.
+//< Caution: **Keep the limit as a copy** (`limit`), and **change it with the original** — with
+//< `depth` below the limit it **fails immediately**, never quietly. The step count has room to
+//< spare for a small increase.
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+
+priv enum Chain //< what chain to build
+  //<
+  //< **Only how a step is written differs; the shape is the same for all.**
+  struct_field //< a struct's field embeds the next struct
+  arc_field //< the same shape, with the innermost holding an ARC-managed type
+  generic_mono //< a generic struct points at the next (the monomorphization chain)
+  type_alias //< a type alias points at the next alias
+
+priv struct Grown //< one fixture to build
+  stem: U8[] //< the file name to use (without the extension)
+  why: U8[] //< what is being confirmed (written into the fixture's header as is)
+  guard: U8[] //< where the check that rejects it is (written into the header likewise)
+  expect: U8[] //< the diagnostic that should appear
+  limit: Sz //< a **copy** of the limit the rejecting check holds
+  depth: Sz //< the steps to build.
+  // Caution: It must be deeper than the limit
+  chain: Chain
+
+// The list of fixtures to build. **This is the canonical source.**
+priv const grown: Grown[4] = ::{
+  Grown::{ .stem = "deep_struct_chain",
+    .why =
+    "that a long acyclic embedding chain of struct fields is refused as a safe error rather than a \
+      stack exhaustion at translation time",
+    .guard = "max_type_layout_depth in ksplc/sema/decl/layout.kspls",
+    .expect = "type definition nesting too deep", .limit = 1000, .depth = 1500,
+    .chain = Chain.struct_field },
+  Grown::{ .stem = "deep_arc_field_chain",
+    .why =
+    "that a chain holding an ARC-managed type deep inside is refused as a safe error rather than a \
+      stack exhaustion from the automatic insertion of retain/release",
+    .guard = "max_arc_emit_depth in ksplc/lower/arc.kspls",
+    .expect = "type nesting too deep for automatic retain/release", .limit = 1000, .depth = 1200,
+    .chain = Chain.arc_field },
+  Grown::{ .stem = "deep_generic_chain",
+    .why =
+    "that a monomorphization chain by way of differently named generic structs is refused as a safe \
+      error rather than a stack exhaustion",
+    .guard = "max_mono_depth in ksplc/sema/decl/mono.kspls",
+    .expect = "generic type instantiation chain too deep", .limit = 128, .depth = 600,
+    .chain = Chain.generic_mono },
+  Grown::{ .stem = "deep_alias_chain",
+    .why =
+    "that a long acyclic chain of type aliases is refused as a safe error rather than a stack \
+      exhaustion at translation time",
+    .guard = "max_alias_chain_depth in ksplc/sema/type/query.kspls",
+    .expect = "typedef chain too deep", .limit = 1000, .depth = 1500, .chain = Chain.type_alias },
+}
+priv fn write_head(out: Str_builder$@, g: Grown) //< the fixture's header
+  //<
+  //< Caution: **Always write the `EXPECT` line** (the runner fails a fixture with no mark). The
+  //< header also says where it was built from, to trace a file found nowhere else.
+  out.s("// It confirms ").s(g.why).s("\n")
+  out.s("// (the ").s(g.guard).s(" safety valve).\n")
+  out.s("// **This material is assembled by tests/support/harness_grow.kspls.**\n")
+  out.s("// EXPECT: ").s(g.expect).s("\n")
+
+priv fn write_struct_chain(out: Str_builder$@, depth: Sz) //< the struct chain
+  //<
+  //< Only the innermost holds an ordinary field, and the chain ends there.
+  for i in Range.asc(depth)
+    out.s("struct S\{i\} {\n  f: S\{i + 1\};\n}\n")
+  out.s("struct S\{depth\} {\n  f: I32;\n}\n\n$g: S0;\n\nfn main() {\n  _x: = g.f;\n}\n")
+
+priv fn write_arc_chain(out: Str_builder$@, depth: Sz) //<
+  //< The same shape, a chain whose innermost holds an ARC-managed type
+  //<
+  //< Caution: **Write them from the inside out**, or a field's type names something that has not
+  //< yet appeared (the chain does not rely on a forward reference).
+  out.s("import \"std/refcount\" { Rc };\n\n")
+  out.s("struct S\{depth\} {\n  inner: Rc<|I32|>;\n}\n")
+  for i in Range.desc(depth - 1)
+    out.s("struct S\{i + 1\} {\n  inner: S\{i + 2\};\n}\n")
+  out.s("\nfn use_it(_v: S1) {}\n")
+
+priv fn write_generic_chain(out: Str_builder$@, depth: Sz) //< the generic struct chain
+  //<
+  //< Each points at the next through a pointer (embedded by value, the size is not decided).
+  for i in Range.asc(depth)
+    out.s("struct G\{i\}<|T|> {\n  f: G\{i + 1\}<|T|>$@;\n}\n")
+  out.s("struct G\{depth\}<|T|> {\n  f: T;\n}\n")
+  out.s("\nfn main() {\n  x: G0<|I32|>$@ = null;\n  _y: = x;\n}\n")
+
+priv fn write_alias_chain(out: Str_builder$@, depth: Sz) //< the alias chain
+  //<
+  //< The innermost points at a real type.
+  for i in Range.asc(depth)
+    out.s("typedef A\{i\} = A\{i + 1\};\n")
+  out.s("typedef A\{depth\} = I32;\n\nfn main() {\n  x: A0 = 0;\n}\n")
+
+priv fn write_body(out: Str_builder$@, g: Grown)
+  switch g.chain case .struct_field
+    write_struct_chain(out, g.depth)
+  case .arc_field
+    write_arc_chain(out, g.depth)
+  case .generic_mono
+    write_generic_chain(out, g.depth)
+  case .type_alias
+    write_alias_chain(out, g.depth)
+
+fn write_all(dir: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< Builds the list under `dir` and returns the paths written
+  //<
+  //< What could not be built is left out (the runner fails on the count). **Where the step count
+  //< is below the limit, fail immediately**, or it fails as "the diagnostic does not appear",
+  //< hiding the relation to the limit.
+  $made: = List<|U8[]|>.new(arena)
+  for g in grown
+    if g.depth <= g.limit
+      io.err()
+        .s("harness_grow: \{g.stem\}'s step count \{g.depth\} does not exceed the limit \
+          \{g.limit\}\n")
+      continue
+    $body: = Str_builder.new()
+    defer body.free()
+    write_head(body@, g)
+    write_body(body@, g)
+    path: = fs.join(dir, arena.text().s(g.stem).s(".kspl").take(), arena)
+    io.write_file(path, body.slice()) catch
+      io.err().s("harness_grow: \{g.stem\} cannot be placed\n")
+      continue
+    made.push(path)
+  return made
+
+fn count(): Sz //< the number of fixtures to build
+  //<
+  //< The runner uses it to fail when "not one could be built".
+  return grown.len

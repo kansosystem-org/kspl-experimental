@@ -1,0 +1,109 @@
+//< The mark placed at the start of a paragraph
+//<
+//< A bullet, a number, a running number, a chapter number.
+//< **None of them goes into the document** (as text, typing could delete it; the style decides
+//< it). **Do not store the kind in two marks** (both could be set at once).
+//< Note: It is split from [`style.kspls`](style.kspls) to keep each file under 1000 lines.
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+
+enum Marker //< the mark put at a paragraph's start (a bullet or a number)
+  //<
+  //< It does not go into the document (see the file header). The number is the position among
+  //< numbered siblings, counted by the layout.
+  none
+  bullet(glyph: U8[]) //<
+    //< The bullet itself ("•"). **The text appears exactly as given** (put any wanted space in it).
+  number(after: U8[]) //< the text put after the number ("." and the like)
+  serial(before: U8[], after: U8[]) //<
+    //< A running number, with the text put before and after it
+    //<
+    //< The two texts are "Figure " and ". ", for example.
+    //< **It counts across the whole document** per style name, whatever comes between (a
+    //< figure's caption).
+  outline(sep: U8[], after: U8[]) //<
+    //< A chapter number, with the text between the depths and the text put after it
+    //<
+    //< The two texts are "." and ". ", for example.
+    //< **`Style.outline` gives the depth**, or the contents' indent and the number's parts
+    //< disagree. Depth 3 appears as "1.2.3".
+
+impl Marker
+  fn serialed(m: Self): Bool //< whether the mark counts across the whole document
+    //<
+    //< **This is the one place that decides it**, or the screen and the written HTML disagree.
+    switch m case .serial(_b, _a)
+      return true
+    case .none, .bullet, .number, .outline {}
+    return false
+
+  fn outlined(m: Self): Bool //< whether the mark builds a chapter number from a heading's depth
+    //<
+    //< **This is the one place that decides it** (the reason is at `serialed`).
+    switch m case .outline(_s, _a)
+      return true
+    case .none, .bullet, .number, .serial {}
+    return false
+
+fn outline_number_into(out: Str_builder$@, m: Marker, counts: Sz[]): Bool //<
+  //< Adds to out the chapter number's text ("1.2.3"), built from the count at each depth
+  //<
+  //< True if anything was added. **The number is built only here** (the reason is at
+  //< `serialed`). **The text after it is not written** (the reason is at `refer_into`).
+  switch m case .outline(sep, _a)
+    if counts.len <= 0
+      return false
+    for $i: Sz = 0; i < counts.len; i += 1
+      if i > 0
+        out.s(sep)
+      out.s("\{counts[i]\}")
+    return true
+  case .none, .bullet, .number, .serial {}
+  return false
+
+fn mark_outline_into(out: Str_builder$@, m: Marker, number: U8[]): Bool //<
+  //< Adds to out the chapter number shown at a paragraph's start
+  //<
+  //< True if anything was added.
+  //< **The number is not built again**: it is the text `outline_number_into` built.
+  switch m case .outline(_s, after)
+    if number.len <= 0
+      return false
+    out.s(number).s(after)
+    return true
+  case .none, .bullet, .number, .serial {}
+  return false
+
+fn mark_into(out: Str_builder$@, m: Marker, ord: Sz): Bool //<
+  //< Adds to out the text shown at a paragraph's start
+  //<
+  //< True if anything was added.
+  //< Caution: **Do not build the number's text in two places** (the reason is at `serialed`).
+  switch m case .bullet(glyph)
+    if glyph.len <= 0
+      return false
+    out.s(glyph)
+    return true
+  case .number(after)
+    // There is no number 0 (numbers start at one).
+    out.s("\{ord if ord > 0 else 1\}").s(after)
+    return true
+  case .serial(before, after)
+    out.s(before).s("\{ord if ord > 0 else 1\}").s(after)
+    return true
+  case .outline(_s, _a) {
+    // A chapter number is a list of numbers, so it goes through `mark_outline_into`.
+  } case .none {}
+  return false
+
+fn refer_into(out: Str_builder$@, m: Marker, no: Sz): Bool //<
+  //< Adds to out the text shown when the body refers to it
+  //<
+  //< True if anything was added.
+  //< **The text after it is not written**: the ". " of "Figure 1. " separates caption and body.
+  //< **Only a running number can be referred to** (a sibling number shifts with what is between).
+  switch m case .serial(before, _a)
+    out.s(before).s("\{no if no > 0 else 1\}")
+    return true
+  case .none, .bullet, .number, .outline {}
+  return false

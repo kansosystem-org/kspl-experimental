@@ -1,0 +1,355 @@
+//< The ABI pass: gives every declaration and reference its C name
+//<
+//< A method call becomes a plain call with its receiver as the first argument.
+//< It runs after the walk and the thunks (`root.kspls`, `vtable.kspls`), so by then every name
+//< the program uses, synthesized ones included, is in the tree.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/base/diag" as base_diag
+import "ksplc/base/mangle" as base_mangle
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
+import "std/chars" // the one-character tests and cuts
+import "std/str"
+fn run(r: Ast_node$@, c: Sema_ctx$@) //< the ABI conversion pass's entry point
+  //<
+  //< It overwrites names with their mangled forms in place, recursively over the whole tree.
+  base_diag.ice_assert(r != null, "abi.apply: file_node is null")
+  r.apply_abi_recursive(c)
+
+impl Ast_node
+  priv fn apply_abi_recursive(r: Ast_node$@, c: Sema_ctx$@)
+    if r == null
+      return
+    kind: = r.kind_id
+    if kind == .k_enum_init
+      // An enum_init's children are a tag's labels, not C symbol references; genc uses them
+      // unchanged, so rewriting would break the variant name.
+      return
+
+    for child in r.children
+      child.apply_abi_recursive(c)
+
+    switch kind case .k_decl_fn, .k_decl_var, .k_decl_const, .k_decl_embed, .k_decl_struct,
+      .k_decl_enum, .k_decl_alias, .k_decl_trait
+      r.transform_decl_name(c)
+    case .k_expr_postfix
+      op_node: = r.get_postfix_op()
+      if op_node != null && op_node.text.equals("(")
+        r.transform_postfix_call(c)
+    case .k_method_access
+      r.transform_method_access(c)
+    case .k_expr_path, .k_type_path, .k_generic_path
+      r.transform_path_access(c)
+    default {}
+
+  priv fn transform_decl_name(r: Ast_node$@, c: Sema_ctx$@)
+    id_node: = r.find_child(.k_identifier)
+    r.ice_assert(id_node != null, "transform_decl_name: declaration node missing identifier")
+
+    $sym: Sema_symbol$@ = null
+    switch get_global_symbol_by_def(r) case .some(s)
+      sym = s
+    case .none
+      return
+
+    is_method_name: = sym.flags.is_method || sym.name.find_char_out('.') >= 0
+
+    if is_method_name || r.is_generic_inst_node()
+      return
+
+    w: = c.clear_scratch()
+    if r.kind_id == .k_decl_struct || r.kind_id == .k_decl_enum || r.kind_id == .k_decl_alias ||
+      r.kind_id == .k_decl_trait
+      def_in: = sym.get_defined_in()
+      // Caution: **Write the file as a qualifier first (`s_path_as_dots`)**, as the type's own
+      // name is. Mangled straight from the path, a folder like `.hidden` loses its dot here but
+      // keeps it as `_` in the type's name, and the C declares one name and uses another.
+      if def_in.len > 0
+        $qual: = str.Str_builder.new()
+        defer qual.free()
+        qual.s_path_as_dots(def_in).slice().mangle_type_name_to(w).s("_")
+      sym.name.mangle_type_name_to(w)
+    else
+      get_c_identifier_for_sym_to(sym, id_node.text, w)
+
+    c_name: = w.slice()
+    id_node.text = base_core.arena.dup_str(c_name)
+
+  fn receiver_wants_ptr(r: Ast_node$@, c: Sema_ctx$@): Bool //<
+    //< Whether the method that the method access `r` calls takes its receiver by pointer
+    //<
+    //< With no definition to say, **it answers true** but for a slice: else a needed temporary is
+    //< missed and the C breaks.
+    //< Note: The code that makes the temporary (`lower/expr.kspls`) uses this, so it is not `priv`.
+    if r == null
+      return true
+    member_node: = r.get_postfix_member()
+    fn_def: = member_node.def_node if member_node != null else null
+    if fn_def != null
+      return fn_def.receiver_is_pointer(c)
+    obj_node: = r.get_postfix_receiver()
+    if obj_node != null && c.env.is_slice(obj_node.type_id)
+      return false
+    return true
+
+  fn receiver_is_pointer(r: Ast_node$@, c: Sema_ctx$@): Bool //<
+    //< Whether the function definition `r` takes its first argument (the receiver) by pointer
+    //<
+    //< True where the signature does not say, as receiver_wants_ptr answers.
+    fn_sig: = r.find_child(.k_type_fn_sig)
+    if fn_sig == null
+      return true
+    params: = fn_sig.find_child(.k_param_list)
+    if params == null || params.children.len == 0
+      return true
+    first_param: = params.get_child(0)
+    if first_param.kind_id != .k_fn_param
+      return true
+    return c.env.is_pointer(first_param.param_type_id())
+
+  priv fn transform_postfix_call(r: Ast_node$@, c: Sema_ctx$@)
+    expr_node: = r.get_postfix_receiver()
+    r.ice_assert(expr_node != null, "transform_postfix_call: postfix node must have receiver")
+
+    if expr_node.kind_id == .k_method_access || expr_node.kind_id == .k_generic_method
+      obj_node: = expr_node.get_postfix_receiver()
+      if c.env.trait_def_of_receiver(obj_node.type_id).is_none()
+        requires_ptr: = expr_node.receiver_wants_ptr(c)
+        // It adjusts the receiver's pointer depth (obj_depth) to the method's (target_depth: 1 for
+        // Self@, 0 for Self): one '@' where it is short, a '$' per extra level (Foo@@, say).
+        target_depth: = 1 if requires_ptr else 0
+        $obj_depth: = c.env.ptr_depth(obj_node.type_id)
+        $passed_obj: = obj_node
+
+        if obj_depth < target_depth
+          passed_obj = Ast_node.new(.k_expr_postfix, "@", r.loc)
+          at_literal: = Ast_node.new(.k_literal, "@", r.loc)
+          passed_obj.add_child(obj_node).add_child(at_literal)
+          passed_obj.type_id = c.env.make_ptr(obj_node.type_id)
+        else
+          for obj_depth > target_depth
+            deref_node: = Ast_node.new(.k_expr_postfix, "$", r.loc)
+            deref_literal: = Ast_node.new(.k_literal, "$", r.loc)
+            deref_node.add_child(passed_obj).add_child(deref_literal)
+            deref_node.type_id = c.env.strip_ptr(passed_obj.type_id)
+            passed_obj = deref_node
+            obj_depth -= 1
+
+        expr_node.transform_method_access(c)
+        flattened_member: = expr_node.get_postfix_member()
+        // The receiver is now the first argument, so the method_access becomes a plain
+        // Identifier of the callee, an ordinary function call from here on.
+        expr_node.morph(.k_identifier, flattened_member.text)
+
+        $args_node: = r.safe_get_child(2)
+        if args_node == null || args_node.kind_id != .k_expr_args
+          args_node = Ast_node.new(.k_expr_args, "args", r.loc)
+          if r.children.len > 2
+            r.set_child(2, args_node)
+          else
+            r.add_child(args_node)
+
+        if args_node.children.len > 0
+          args_node.insert_child(0, Ast_node.new(.k_literal, ",", r.loc))
+          args_node.insert_child(0, passed_obj)
+        else
+          args_node.add_child(passed_obj)
+        return
+
+    if expr_node.flatten_if_generic(c)
+      return
+
+    if (expr_node.kind_id == .k_expr_path || expr_node.kind_id == .k_type_path) ||
+      expr_node.kind_id == .k_identifier
+      func_part: = expr_node.get_path_name()
+      $sym: Sema_symbol$@ = null
+      if s: = get_global_symbol_by_def(expr_node.def_node)
+        sym = s
+
+      w: = c.clear_scratch()
+      get_c_identifier_for_sym_to(sym, func_part, w)
+      c_name: = w.slice()
+
+      is_kspl: = (func_part.len >= 4 && func_part.starts_with("kspl_"))
+      if is_kspl && sym == null
+        expr_node.flatten_to_identifier(func_part)
+      else
+        expr_node.flatten_to_identifier(c_name)
+
+  priv fn transform_method_access(r: Ast_node$@, c: Sema_ctx$@)
+    obj_node: = r.get_postfix_receiver()
+    member_node: = r.get_postfix_member()
+    r.ice_assert(obj_node != null && member_node != null,
+      "method_access node must have receiver and member")
+
+    if member_node.flatten_if_generic(c)
+      return
+
+    $base_id: = member_node.type_id
+    if base_id == 0 || sema_type_env.is_unknown(base_id)
+      base_id = obj_node.type_id
+      for
+        info: = c.env.get_info(base_id)
+        switch info case .pointer(inner_id)
+          base_id = inner_id
+        default
+          break
+
+    info: = c.env.get_info(c.env.get_real_type(base_id))
+    switch info case .trait_type(_d)
+      return
+    default {}
+
+    target_def: = member_node.def_node if member_node.def_node != null else r.def_node
+
+    $sym: Sema_symbol$@ = null
+    if s: = get_global_symbol_by_def(target_def)
+      sym = s
+    w: = c.clear_scratch()
+
+    if sym != null
+      get_c_identifier_for_sym_to(sym, member_node.text, w)
+      member_node.flatten_to_identifier(w.slice())
+      return
+
+    $res: = w.s("kspl_")
+    if base_id != 0
+      c.env.mangle_type_id_to(base_id, w)
+      res = w.s("_")
+
+    res.s(member_node.text)
+    member_node.flatten_to_identifier(w.slice())
+
+  priv fn transform_path_access(r: Ast_node$@, c: Sema_ctx$@)
+    if r.flatten_if_generic(c)
+      return
+
+    base_name: = r.get_path_name()
+    switch get_global_symbol_by_def(r.def_node) case .some(sym)
+      w: = c.clear_scratch()
+      get_c_identifier_for_sym_to(sym, base_name, w)
+      r.flatten_to_identifier(w.slice())
+    case .none
+      r.flatten_to_identifier(base_name)
+
+  priv fn flatten_if_generic(r: Ast_node$@, c: Sema_ctx$@): Bool
+    if r.kind_id == .k_generic_path || r.kind_id == .k_generic_method
+      if r.type_id != 0
+        flat_name: = c.env.get_str(r.type_id)
+        w: = c.clear_scratch()
+        write_kspl_prefixed_to(flat_name, w)
+        r.flatten_to_identifier(w.slice())
+        return true
+    return false
+
+  priv fn is_generic_inst_node(r: Ast_node$@): Bool
+    if r == null
+      return false
+    switch get_global_symbol_by_def(r) case .some(sym)
+      return sym.flags.is_generated_instance
+    case .none
+      return false
+
+fn get_c_identifier_for_sym_to(sym: Sema_symbol$@, base_name: U8[], w: Writer): Writer //<
+  //< It writes the C name of what sym names (base_name where sym names no value or type)
+  //<
+  //< The entry point asks it for the functions it calls outside the tree (gen/entry.kspls).
+  if sym == null || (!sym.kind.is_value() && !sym.kind.is_type())
+    return w.s(base_name)
+
+  is_method_name: = sym.flags.is_method || sym.name.find_char_out('.') >= 0
+
+  // Caution: **A method must not go through here.** A method's name is `type.method`, which is not
+  // a C identifier, and the code that emits the body (`write_c_fn_name` in `gen/c/decl.kspls`)
+  // does not use the plain name inside an impl. Pass only this through and the C, with no
+  // diagnostic, has the mangled name in the definition and the plain one in the call.
+  // A method has this option only where an `#export` was written, and `sema/decl/attrs.kspls`
+  // rejects that.
+  if !is_method_name && sym.uses_verbatim_c_name()
+    return w.s(sym.name)
+  if sym.name.equals("main") || sym.name.equals("kspl_main")
+    return w.s("kspl_main")
+  if sym.node.is_generic_inst_node()
+    return write_kspl_prefixed_to(sym.name, w)
+
+  if is_method_name
+    last_dot: = sym.name.rfind_char_out('.')
+    if last_dot >= 0
+      t_name: = sym.name.sub(0, last_dot)
+      m_name: = sym.name.sub_from(last_dot + 1)
+      return t_name.mangle_type_name_to(w.s("kspl_")).s("_\{m_name\}")
+    return sym.name.mangle_type_name_to(w.s("kspl_"))
+
+  def_in: = sym.get_defined_in()
+
+  if is_private_symbol(sym)
+    return write_priv_prefix_to(def_in, w).s(sym.name)
+
+  if def_in.len > 0
+    def_in.mangle_type_name_to(w.s("kspl_")).s("_")
+    return sym.name.mangle_type_name_to(w)
+
+  return sym.name.mangle_type_name_to(w.s("kspl_"))
+
+priv fn is_private_symbol(sym: Sema_symbol$@): Bool //<
+  //< Whether sym is a file-private value whose C name needs the file's prefix
+  //<
+  //< A file_private symbol is unique only per file, so in C's flat global namespace it can collide
+  //< with a same-named private symbol in another file.
+  //< A prefix spelling the file path makes it unique (write_priv_prefix_to).
+  //< Caution: **Do not list exceptions here.** Whether a symbol is already unique across the
+  //< program is answered by `Sema_symbol.has_program_unique_c_name`
+  //< (`sema/type/scope.kspls`).
+  if sym == null || sym.vis != sema_type_scope.Visibility.file_private
+    return false
+  return sym.kind.is_value() && !sym.has_program_unique_c_name()
+
+priv fn get_global_symbol_by_def(def_node: Ast_node$@): Option<|Sema_symbol$@|> //<
+  //< The symbol of a definition node, found through `sym_ptr` only
+  //<
+  //< Caution: **Do not search the table for it.** Every path that adds to the global table sets
+  //< `sym.node.sym_ptr` (define_symbol in `sema/decl/scope.kspls`, `sema/session/ctx.kspls`,
+  //< `sema/decl/mono.kspls`); a new path must too, or the name is emitted unmangled.
+  if def_node == null || def_node.sym_ptr == null
+    return Option<|Sema_symbol$@|>.none
+  sym: = Sema_symbol$@::def_node.sym_ptr
+  if sym.flags.is_global || sym.flags.is_method
+    return Option<|Sema_symbol$@|>.some(sym)
+  // A local variable is not mangled.
+  return Option<|Sema_symbol$@|>.none
+
+priv fn write_kspl_prefixed_to(name: U8[], w: Writer): Writer
+  if name.starts_with("kspl_")
+    return w.s(name)
+  return w.s("kspl_\{name\}")
+
+priv fn write_priv_prefix_to(fname: U8[], w: Writer): Writer
+  $res: = w.s("kspl_priv_")
+
+  // resolve_import_path joins "dir/import_str" without normalizing, so a relative import can
+  // collect several "./" / ".\" ("././sibling"); it skips them until none is left.
+  $start_idx: Sz = 0
+  for start_idx + 1 < fname.len && (fname.ptr + start_idx)$ == '.' &&
+    ((fname.ptr + start_idx + 1)$ == '/' || (fname.ptr + start_idx + 1)$ == '\\')
+    start_idx += 2
+
+  // The extension's '.' is looked for only after start_idx: counting a relative path's leading
+  // '.' empties the range and turns every priv symbol's prefix into the same string.
+  dot_idx_rel: = fname.sub_from(start_idx).find_char('.')
+  $end_idx: Sz = fname.len
+  if dot_idx_rel >= 0
+    end_idx = start_idx + dot_idx_rel
+
+  for $i: = start_idx; i < end_idx; i += 1
+    ch: = (fname.ptr + i)$
+    if ch.is_alnum()
+      res = res.c(ch)
+    else
+      res = res.c('_')
+
+  return res.s("_")

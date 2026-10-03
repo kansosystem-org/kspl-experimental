@@ -1,0 +1,171 @@
+//< Uses the RP2040's QSPI flash as a storage medium that can be erased and written
+//<
+//< The base for an append-only record inside the device: read, write where erased, erase a
+//< sector; the caller builds the rest (`Store` in `ksdb/store.kspls`).
+//< **Call `init` once before using it.** It looks up the ROM functions' addresses, and if it
+//< cannot, every later write and erase returns false.
+
+// ==========================================
+// What the boot ROM's functions require, and the rules for the window in which XIP is stopped,
+// are in "Writing Flash (`flash.kspls`)" in ksos/docs/DESIGN.md.
+// ==========================================
+
+import "ksos/kernel/task"
+import "std/bytes"
+import "std/chars" // tests on one character, and slicing
+
+priv const xip_base: U32 = 0x10000000 //< the start address where the flash is visible under XIP
+  //<
+  //< A read is a plain read from here.
+
+const page_size: Sz = 256 //< the unit of writing
+  //<
+  //< The boot ROM's program accepts only a multiple of this.
+const sector_size: Sz = 4096 //< the unit of erasing
+  //<
+  //< The boot ROM's erase accepts only a multiple of this.
+
+priv const block_size: U32 = 65536 //< the "larger erase" size passed to the boot ROM's erase
+  //<
+  //< The ROM uses 0xd8 (a 64KB block erase) where the range is aligned, else the 4KB sector erase.
+priv const block_erase_cmd: U8 = 0xd8
+
+const region_base: Sz = 0x1f0000 //< the region reserved for the record
+  //<
+  //< Caution: **It must equal the ASSERT in `ksos/port/rp2040/link.ld`** (which checks at link
+  //< time that the firmware image does not reach here). **It is at the end, so the record
+  //< survives rewriting the firmware**; a full erase (picotool erase) removes it.
+const region_size: Sz = 0x10000
+
+// --- the boot ROM's functions (the function table in the RP2040 data sheet's "Bootrom") ---
+priv const rom_func_table_at: U32 = 0x14 //<
+  //< The table addresses are stored at the start of the ROM as fixed 2-byte values
+  //<
+  //< The ROM never changes, so they are not read volatile.
+priv const rom_lookup_at: U32 = 0x18
+
+priv typedef Rom_lookup = fn(table: U32, code: U32): U32
+priv typedef Rom_void = fn(): Void
+priv typedef Rom_erase = fn(at: U32, count: Sz, block: U32, block_cmd: U8): Void
+priv typedef Rom_program = fn(at: U32, data: U8@, count: Sz): Void
+
+// The ROM functions' addresses that `init` looked up.
+// Caution: **Keep them in RAM** (as globals they are): they are read inside the window, where a
+// const in flash cannot be read.
+priv $at_connect: U32 = 0
+priv $at_exit_xip: U32 = 0
+priv $at_erase: U32 = 0
+priv $at_program: U32 = 0
+priv $at_flush: U32 = 0
+priv $at_enter_xip: U32 = 0
+priv $ready: Bool = false
+
+// The RAM page that holds the source data of a write. **Data in flash cannot be passed to a ROM
+// function directly**, so each page is copied here and then programmed.
+priv $stage: U8[256] = ::{}
+
+priv fn rom_hword(at: U32): U32
+  p: = U16@::at
+  return p$
+
+priv fn rom_func(c1: U8, c2: U8): U32 //< looks up a function in the ROM's function table
+  //<
+  //< 0 if it is not found.
+  lookup_at: = rom_hword(rom_lookup_at)
+  table: = rom_hword(rom_func_table_at)
+  if lookup_at == 0 || table == 0
+    return 0
+  lookup: = Rom_lookup::lookup_at
+  return lookup(table, U32::c1 | (U32::c2 << 8))
+
+fn init(): Bool //< looks up the ROM functions' addresses
+  //<
+  //< **true once all six are found**; with one missing the window has no way back.
+  at_connect = rom_func('I', 'F')
+  at_exit_xip = rom_func('E', 'X')
+  at_erase = rom_func('R', 'E')
+  at_program = rom_func('R', 'P')
+  at_flush = rom_func('F', 'C')
+  at_enter_xip = rom_func('C', 'X')
+  ready =
+    at_connect != 0 && at_exit_xip != 0 && at_erase != 0 && at_program != 0 && at_flush != 0 &&
+    at_enter_xip != 0
+  return ready
+
+// The window with XIP stopped. **Only this function is placed in RAM.** Call no function in
+// flash from here (only a ROM function through a function pointer can be called).
+//
+// It branches on `do_erase` because **the steps around it are the same** for erasing and
+// writing; split into two, a change to only one would go unnoticed.
+#noinline
+#section(".ram_text")
+priv fn in_window(do_erase: Bool, at: U32, data: U8@)
+  connect: = Rom_void::at_connect
+  exit_xip: = Rom_void::at_exit_xip
+  flush: = Rom_void::at_flush
+  enter_xip: = Rom_void::at_enter_xip
+  connect()
+  exit_xip()
+  if do_erase
+    erase: = Rom_erase::at_erase
+    erase(at, sector_size, block_size, block_erase_cmd)
+  else
+    program: = Rom_program::at_program
+    program(at, data, page_size)
+  flush()
+  enter_xip()
+
+priv fn run_in_window(do_erase: Bool, at: U32, data: U8@) //<
+  //< Disables interrupts around the window
+  //<
+  //< **An ISR lives in flash**: an interrupt inside the window fetches an instruction from an
+  //< unreadable address, with no way back.
+  s: = task.irq_save()
+  in_window(do_erase, at, data)
+  task.irq_restore(s)
+
+fn read_at(at: Sz, dst: U8$[]) //< reads dst.len bytes from at
+  //<
+  //< at is the offset from the start of the region.
+  //< A plain XIP read; the ROM's flush after a write drops the cache, so nothing is stale.
+  if at < 0 || dst.len < 0 || at + dst.len > region_size
+    panic("rp2040/flash: read outside the region")
+  src: = U8[]::{ .ptr = U8@::(xip_base + U32::(region_base + at)), .len = dst.len }
+  d: = dst
+  _n: = d.copy_from(0, src)
+
+fn program_at(at: Sz, src: U8[]): Bool //< writes src to at
+  //<
+  //< **true once it is written.** **It does not check that the area is erased** (the caller
+  //< does): unerased bits can only be cleared to 0, with no error. **Untouched bytes are written
+  //< as 0xFF**, which leaves a flash cell unchanged, so the same page can be added to later (the
+  //< append that writes the header last relies on this).
+  if !ready
+    return false
+  if at < 0 || src.len < 0 || at + src.len > region_size
+    return false
+  $done: Sz = 0
+  for done < src.len
+    abs: = region_base + at + done
+    page_at: = abs - (abs % page_size)
+    in_page: = abs - page_at
+    $n: Sz = page_size - in_page
+    if n > src.len - done
+      n = src.len - done
+    sv: = U8$[]::stage
+    sv.fill(0xff)
+    _w: = sv.copy_from(in_page, src.sub(done, n))
+    run_in_window(false, U32::page_at, stage[0]@)
+    done += n
+  return true
+
+fn erase_sector(at: Sz): Bool //< erases the sector that contains at
+  //<
+  //< **true once it is erased.**
+  if !ready
+    return false
+  if at < 0 || at >= region_size
+    return false
+  base: = region_base + at - ((region_base + at) % sector_size)
+  run_in_window(true, U32::base, stage[0]@)
+  return true

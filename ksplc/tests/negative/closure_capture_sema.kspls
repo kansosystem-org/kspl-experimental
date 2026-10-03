@@ -1,0 +1,34 @@
+//< The **existing checks** enforce the two restrictions on a captured closure
+//<
+//< Writing a capture fails because `call` rebinds it to an immutable local (`build_closure_src` in
+//< parse/desugar.kspls); returning it fails because the environment rides on the caller's frame
+//< (§4.3 of docs/DESIGN.md). Should this start passing, the synthesis fell out of those checks.
+
+// ==========================================
+// Caution: Always place the non-firing side alongside — a capture only read, and a closure spent
+// inside the call, have to pass.
+// ==========================================
+
+// EXPECT: cannot assign to immutable variable 'd'
+// EXPECT: cannot return an interface value built from local storage
+import "std/io"
+
+priv fn apply1(p: Callable1<|I32, Bool|>): Bool
+  return p.call(9)
+
+priv fn leak(): Callable1<|I32, Bool|>
+  e: = 1
+  return fn(x: I32; e: I32): Bool
+    return x > e
+
+fn main(): I32
+  d: = 4
+  ok: = 5
+  bad_write: = apply1(fn(x: I32; d: I32): Bool {
+    d = 1; return x > d;
+  })
+  good: = apply1(fn(x: I32; ok: I32): Bool {
+    return x > ok;
+  })
+  io.out().s("\{bad_write\}\{good\}\{leak().call(1)\}\n")
+  return 0

@@ -1,0 +1,297 @@
+//< The checks on the source's own spelling, run once the declarations are collected
+//<
+//< **They read the text as written, not the tree**: misaligned indentation columns, a `//<` that
+//< describes nothing (`[W0209]` / `[W0210]`) or whose summary is not one line of description
+//< (`[W0213]`), a comment's name that leads nowhere or a mark that is not read (`[W0211]` /
+//< `[W0212]`), and a comment the indentation notation would move (`[I0805]`). Each question is
+//< asked of the code that answers it elsewhere, never written again here.
+//< `Compiler.run_semantic_analysis` in `pipeline.kspls` calls `report_all`.
+import "kspeg/engine" as kspeg
+import "ksplc/base/as_written" as base_as_written
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_doc" as base_ast_doc
+import "ksplc/base/core" as base_core
+import "ksplc/base/diag" as base_diag
+import "ksplc/base/lines" as base_lines
+import "ksplc/fmt/style" as fmt_style
+import "ksplc/fmt/text" as fmt_text
+import "ksplc/parse/layout" as parse_layout
+import "ksplc/parse/load" as parse_load
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/session/pointer" as sema_session_pointer
+import "std/chars"
+import "std/ds" { List, Map }
+import "std/str" { Str_builder }
+
+fn report_all(loaded_files: List<|U8$[]|>$@, source_map: Map<|U8[], U8$[]|>$@,
+  root_file: Ast_node$@, parser: kspeg.Target$@, sema: Sema_ctx$@) //<
+    //< It runs every check on the source's own spelling
+    //<
+    //< Caution: **Call it after Pass 0 of the collecting, not before it.** That pass collects a
+    //< file's own `##lint(CODE = off)`, which before it would have no effect (Principle 5); the
+    //< summary the lint gate reads is counted there; and a comment's names are looked up in the
+    //< tables the collecting fills.
+  files: = read_files(loaded_files, source_map)
+  report_layout_notes(source_map, sema)
+  report_doc_marks(files@, sema)
+  report_comments(files@, root_file, sema)
+  report_displaced_comments(files@, parser, sema)
+
+priv fn report_layout_notes(source_map: Map<|U8[], U8$[]|>$@, sema: Sema_ctx$@) //<
+  //< It reports the misaligned indentation columns as diagnostics
+  //<
+  //< **This is where the two meet**: `parse/load.kspls` holds the notes and sema counts and
+  //< prints them; only this file may use both, as sema imports nothing from parse.
+  for file in parse_load.layout_noted_files(base_core.arena)
+    src: = source_map.get(file) catch
+      continue
+    if notes: = parse_load.layout_notes_for(file)
+      report_notes_of(sema, file, src, notes)
+
+priv fn report_notes_of(sema: Sema_ctx$@, file: U8[], src: U8[],
+  notes: List<|parse_layout.Note|>$@) //<
+    //< It reports one file's notes.
+    //<
+    //< **The squiggle goes on the line's first token**, since the indentation is what is wrong.
+  starts: = src.line_starts(base_core.arena)
+  for nt in notes.slice()
+    if nt.line == 0 || nt.line > starts.len
+      continue
+    at: = base_lines.skip_blanks(src, starts.get(nt.line - 1))
+    $span: Sz = 1
+    for at + span < src.len && src[at + span] != '\n' && span < 40
+      span += 1
+    switch nt.kind case .ragged(want, got)
+      // **It has no code, because a code could be switched off**, leaving two readings that
+      // run differently ("The list of diagnostic codes" in `ksplc/docs/SPEC-tools.md`).
+      $msg: = Str_builder.new()
+      defer msg.free()
+      msg
+        .s("this line sits \{got\} columns in, but its siblings sit \{want\}; it still joins the \
+          same block, so the reader and the compiler would disagree")
+      sema.report_diagnostic_at(file, src, at, span, base_diag.Diagnostic_severity.error,
+        msg.slice())
+    case .tab {
+      // **A tab gets no code**: a line at column 0 stops on a syntax error first, so a code would
+      // never fire. `tests/layout_indent_test.kspls` checks that it is found; the reason is in
+      // "The indentation notation (`.kspls`)" in `../docs/DESIGN.md`.
+    }
+
+priv struct Read_file //< one file the compile read, under the name the loader used
+  name: U8[]
+  src: U8[]
+
+priv fn read_files(loaded_files: List<|U8$[]|>$@, source_map: Map<|U8[], U8$[]|>$@):
+  List<|Read_file|> //< the files the compile read, once each
+    //<
+    //< Caution: **Walk this, not the source map's names.** The language server keeps one buffer
+    //< under several names, and only the one the loader read had its `#!` masked and stored; by
+    //< name, a mark is reported once per name and a `//<` under a `#!` continues nothing.
+  $out: = List<|Read_file|>.new(base_core.arena)
+  for name in loaded_files
+    src: = source_map.get(name) catch ""
+    out.push(Read_file::{ .name = name, .src = src })
+  return out
+
+priv fn report_doc_marks(files: List<|Read_file|>@, sema: Sema_ctx$@) //<
+  //< It reports the two ways a `//<` says nothing
+  //<
+  //< A continuation with no `//<` above it and an anchor with nothing below both describe nothing:
+  //< written but without effect (Principle 5). **The rules are asked, not written again**:
+  //< `opens_a_summary_run` and `is_bare_summary` in `base/ast_doc.kspls`, which the reader uses.
+  for f in files
+    src: U8[] = f.src
+    // Caution: **Do not build a line table here**: every file of every compile is walked.
+    // **The file's own run before its first code line is no mistake**, so the check starts after
+    // it (`file_doc_at` in `base/ast_doc.kspls`).
+    own: = base_ast_doc.file_doc_at(src)
+    if own < src.len
+      report_summary_fault(f.name, src, own, base_ast_doc.file_summary_fault(src, own), sema)
+    $at: Sz = 0 if own >= src.len else base_ast_doc.file_doc_end(src, own)
+    $opens: = false
+    // **Only a mark the lexer reads as a comment is checked**: otherwise a test that holds
+    // sample source in a string would have its runs checked against the rule.
+    $cmt: = parse_layout.next_line_comment(src, at)
+    for at < src.len
+      stop: = base_lines.line_end(src, at)
+      // Caution: **Move on from the last comment's end, never from `at`**, which may be inside a
+      // string that spans lines; the finder reads from wherever it starts.
+      for cmt < at
+        cmt = parse_layout.next_line_comment(src, base_lines.line_end(src, cmt))
+      if cmt < stop && src.sub_from(cmt).starts_with("//<")
+        report_summary_fault(f.name, src, at, base_ast_doc.summary_fault_at(src, at), sema)
+      if base_ast_doc.is_continuation_line(src, at) && !opens
+        mark: = base_lines.skip_blanks(src, at)
+        $msg: = Str_builder.new()
+        defer msg.free()
+        msg
+          .s("[W0209] This //< continues nothing. The line above it carries no //< of its own, so \
+            what is written here reaches neither the editor\'s hover nor the record.")
+        sema.report_diagnostic_at(f.name, src, mark, 3, base_diag.Diagnostic_severity.warning,
+          msg.slice())
+      // **The line below holds the anchor's whole description.** `is_continuation_line` returns
+      // false past the end, so the last line needs no case of its own.
+      if base_ast_doc.is_bare_summary(src, at) &&
+        !base_ast_doc.is_continuation_line(src, stop + 1)
+        // Caution: **Point at the start of the line, not at the mark.** This walks the source
+        // after the layout stage added `;` and braces, but reports against the file as written,
+        // so a later column is off in `.kspls`; the line start is the one place both agree on.
+        head: = base_lines.skip_blanks(src, at)
+        $msg2: = Str_builder.new()
+        defer msg2.free()
+        msg2
+          .s("[W0210] This //< carries no text and nothing continues it below, so the entry says \
+            nothing. Write the description behind the mark, or on //< lines under it.")
+        sema.report_diagnostic_at(f.name, src, head, 3, base_diag.Diagnostic_severity.warning,
+          msg2.slice())
+      opens = base_ast_doc.opens_a_summary_run(src, at)
+      at = stop + 1
+
+priv fn report_summary_fault(file: U8[], src: U8[], at: Sz, fault: base_ast_doc.Summary_fault,
+  sema: Sema_ctx$@) //<
+    //< One `[W0213]` at the start of the line at `at`, where its run's summary has a fault
+    //<
+    //< The summary is what the hover, the completion list and `ksplc doc` show, so it is
+    //< limited to one line saying what the thing is ("The documentation a declaration carries" in
+    //< `../docs/DESIGN.md`).
+  $why: = Str_builder.new()
+  defer why.free()
+  switch fault case .none
+    return
+  case .too_long(lines)
+    why
+      .s("[W0213] This //< summary runs \{lines\} lines, and the hover and `ksplc doc` show all of \
+        it. Keep it to one line, and part the rest off with a line holding only the mark.")
+  case .label
+    why
+      .s("[W0213] This //< summary opens with a Caution: or Note: label, so it says what to beware \
+        of, not what the thing is. Say that in one line, and put the label below a line holding \
+        only the mark.")
+  // Caution: **Point at the start of the line, not at the mark** (the reason is at `[W0210]`).
+  head: = base_lines.skip_blanks(src, at)
+  sema.report_diagnostic_at(file, src, head, 3, base_diag.Diagnostic_severity.warning,
+    why.slice())
+
+priv fn report_comments(files: List<|Read_file|>@, root_file: Ast_node$@, sema: Sema_ctx$@) //<
+  //< It reads every line comment once, for the warnings about a comment's marks and names
+  //<
+  //< Those are a `///` that is not read (`[W0212]`) and a name that leads nowhere (`[W0211]`).
+  //< **Each question is asked of the code that answers it for the editor too** (whether a mark
+  //< is read, `base/ast_doc.kspls`; what a name refers to, `sema/session/pointer.kspls`).
+  //< Caution: **Run it after the declarations are collected**: a member is looked up in the
+  //< tables the collecting fills, which have another file's method only once that file is loaded.
+  for f in files
+    src: U8[] = f.src
+    $at: = parse_layout.next_line_comment(src, 0)
+    for at < src.len
+      $stop: = at
+      for stop < src.len && src[stop] != '\n' && src[stop] != '\r'
+        stop += 1
+      text: = src.sub(at, stop - at)
+      // A shebang's `#!` arrives rewritten as `//`, and followed by its path it reads as `///`.
+      if base_ast_doc.is_unread_mark(text) &&
+        !(at == 0 && base_as_written.opened_with_shebang(f.name))
+        report_unread_mark(sema, f.name, src, at, stop)
+      $from: Sz = 0
+      for
+        p: = sema_session_pointer.next_pointer(text, from)
+        if p.open >= text.len
+          break
+        from = p.end
+        name: = text.sub(p.at, p.len)
+        pointed: = sema_session_pointer.pointed_at(sema, root_file, f.name, at + p.at, name)
+        switch pointed case .missing(part)
+          report_pointer(sema, f.name, src, at + p.at, stop, name, part)
+        default {}
+      at = parse_layout.next_line_comment(src, stop)
+
+priv fn report_displaced_comments(files: List<|Read_file|>@, parser: kspeg.Target$@,
+  sema: Sema_ctx$@) //<
+    //< It reports each comment that a round trip through the indentation notation moves (`[I0805]`)
+    //<
+    //< **The formatter is asked, not imitated.** Which `}` that notation leaves out is its decision
+    //< (`note_displaced` in `fmt/trivia.kspls`), so what is reported is what `ksplc fmt
+    //< --to=kspls` does.
+    //< **Only a file written with braces is checked.** One written with indentation has no closing
+    //< lines, so it holds no such comment, and the question costs a parse and a print.
+  if !base_core.config.run_lint_checks || sema.suppress_errors
+    return
+  for f in files
+    if f.name.reads_as_laid_out()
+      continue
+    $fmt: =
+      fmt_text.format_text(f.src, f.name, parser, fmt_style.Config.default_fmt(), true, false)
+      catch
+      continue
+    defer fmt.free()
+    if fmt.too_deep
+      continue
+    for at in fmt.displaced.slice()
+      $msg: = Str_builder.new()
+      defer msg.free()
+      msg
+        .s("[I0805] This comment stands behind a `}` the indentation notation leaves out, so a \
+          round trip through .kspls moves it off this line and does not bring it back. Put it on \
+          the line of the code it speaks for, or on a line of its own.")
+      sema.report_diagnostic_at(f.name, f.src, fmt_text.given_offset(fmt.src, at, f.src), 2,
+        base_diag.Diagnostic_severity.information, msg.slice())
+
+priv fn as_written_at(sema: Sema_ctx$@, file: U8[], src: U8[], pos: Sz, line_end: Sz): Sz //<
+  //< Where position `pos` of a comment is in the file as written
+  //<
+  //< Caution: **Measure from the line's end.** The layout stage puts a `;` or `}` before a trailing
+  //< comment in the indentation notation, but a comment runs to its line's end in both.
+  line_start: = base_lines.line_start(src, pos)
+  line: = base_core.line_for_offset(sema.line_starts_for(file, src), line_start)
+  written: = base_as_written.as_written_line(file, line)
+  back: = line_end - pos
+  if written.len > 0 && back <= written.len
+    return line_start + written.len - back
+  return pos
+
+priv fn report_unread_mark(sema: Sema_ctx$@, file: U8[], src: U8[], at: Sz, line_end: Sz) //<
+  //< One `[W0212]`, under the mark as the file is written, naming where the text should go
+  //<
+  //< **The two marks point in different directions in their home languages**, so each gets its
+  //< own advice: a `///` means the thing after it, a `//!` the file or the item it is inside.
+  $msg: = Str_builder.new()
+  defer msg.free()
+  if src.starts_with("//!", at)
+    msg
+      .s("[W0212] This //! is not read, so what it says reaches neither the editor's hover nor \
+        `ksplc doc`. What a file is for is said in //< lines before its first line of code, above \
+        the imports, and what a declaration is, behind it on its own line (`fn add(a: I32, b: I32): \
+        I32 //< adds two numbers`); a remark for whoever edits the code is an ordinary //.")
+  else
+    msg
+      .s("[W0212] This /// is not read, so what it says reaches neither the editor's hover nor \
+        `ksplc doc`. A description goes behind the thing it describes, on that thing's own line \
+        (`fn add(a: I32, b: I32): I32 //< adds two numbers`), and runs on below it in //< lines one \
+        step in; a remark for whoever edits the code is an ordinary //.")
+  sema.report_diagnostic_at(file, src, as_written_at(sema, file, src, at, line_end), 3,
+    base_diag.Diagnostic_severity.warning, msg.slice())
+
+priv fn report_pointer(sema: Sema_ctx$@, file: U8[], src: U8[], pos: Sz, line_end: Sz, name: U8[],
+  part: Sz) //< One `[W0211]`, placed under the name as the file is written
+  shown: = as_written_at(sema, file, src, pos, line_end)
+  // The owner is every part before the one that names nothing.
+  $cut: Sz = 0
+  $seen: Sz = 0
+  for cut < name.len && seen < part
+    if name[cut] == '.'
+      seen += 1
+    cut += 1
+  $member_end: = cut
+  for member_end < name.len && name[member_end] != '.'
+    member_end += 1
+  owner: = name.sub(0, cut - 1)
+  member: = name.sub(cut, member_end - cut)
+  $msg: = Str_builder.new()
+  defer msg.free()
+  msg
+    .s("[W0211] This comment points at `\{name\}`, and `\{owner\}` has no `\{member\}`, so the \
+      pointer leads nowhere. Point at what is there now; a name another file adds is tied to that \
+      file (`\{name\}` in `<file>`), and another language's name is introduced as its own (Python's \
+      `json.dumps`).")
+  sema.report_diagnostic_at(file, src, shown, name.len, base_diag.Diagnostic_severity.warning,
+    msg.slice())

@@ -1,0 +1,214 @@
+//< How KSPL's own source is written
+//<
+//< It is not a suite of its own; it is a part of conventions.
+//<
+//< **Each of these builds either way** (a payload nobody uses, clauses that could be folded
+//< together), so the check reads the text (Principle 5 turned round). The canonical source is
+//< `../../docs/SPEC-language.md`.
+//< `tests/suite/conventions_test.kspls` checks how a document is written, and
+//< `tests/support/conventions_match.kspls` checks where "two things written separately drift
+//< silently".
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+import "tests/support/conventions_scan" as scan
+import "tests/support/harness"
+
+priv fn empty_case_payloads(line: U8[], arena: Arena$@): List<|U8[]|>$@ //<
+  //< Picks "a payload written on a `case` with an empty body" out of one line
+  //<
+  //< Caution: **Keep the judging in this one place**, where the table showing it can fire reaches
+  //< it. A line may hold two clauses, so it returns the text picked up, not a yes or no.
+  found: = arena.create(List<|U8[]|>.new(arena))
+  // **Strings and comments are dropped first**, so this clause's own explanation is not hit.
+  code: = scan.strip_code(line, arena)
+  $at: Sz = 0
+  for at < code.len
+    hit: = code.sub(at, code.len - at).find_str("case ")
+    if hit < 0
+      break
+    head: = at + hit + 5
+    // The pattern runs to the first `{`.
+    open: = code.sub(head, code.len - head).find_str("{")
+    at = head
+    if open < 0
+      break
+    pat: = code.sub(head, open)
+    shut: = head + open + 1
+    // Only a clause with an empty body is checked (where a `{}` follows).
+    if shut < code.len && code[shut] == '}' && pat.find_str("(") >= 0
+      found.push(arena.dup_str(pat.trim_spaces()))
+    at = shut
+  return found
+
+priv fn check_empty_case_payload(arena: Arena$@) //<
+  //< A payload's brackets are not written on an empty `case`
+  //<
+  //< The rule is "Write the payload only when it is needed" in `../../docs/SPEC-language.md`.
+  //<
+  //< **List discarded names and the reader sees only "something is extracted".** When nothing is
+  //< used inside, `.variant` is enough, and the exhaustiveness check still works.
+  $seen: Sz = 0
+  $bad: = List<|U8[]|>.new(arena)
+  for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    $i: Sz = 0
+    for line in harness.read_under_root(rel).lines(arena)
+      i += 1
+      seen += 1
+      for pat in empty_case_payloads(line, arena)
+        bad
+          .push(arena.text().s(rel).s(":\{i\}: a payload is written on an empty case (").s(pat)
+          .s(")").take())
+  verdict.check_list("no payload is written on an empty case", seen, "lines", bad@,
+    "write `.variant` where it is not used inside (branches shaped apart fold with a comma)")
+
+// The samples for the judgment of an empty `case`.
+// Caution: **Check the count picked up**: a yes or no cannot notice one of two clauses missed.
+// **Include a clause with a body, and cases in a comment and a string** (the side that must not
+// hit).
+priv const payload_samples: U8[][7] = ::{ "    case .add(a, b) {}", "    case .add {}",
+  "    case .add(a) { work(); }", "    case .add(a) {} case .sub(b) {}",
+  "    // do not write case .add(a) {}", "    s: = \"case .add(a) {}\";", "    default {}" }
+priv const payload_want: Sz[7] = ::{ 1, 0, 0, 2, 0, 0, 0 } //<
+  //< The expected count for each sample
+  //<
+  //< In order: 1 / 0 (no payload) / 0 (it has a body) / 2 / 0 (a comment) / 0 (a string) / 0
+  //< (`default` is not checked)
+
+priv fn check_payload_fires(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  for i in Range.asc(payload_samples.len)
+    got: = empty_case_payloads(payload_samples[i], arena).len
+    if got != payload_want[i]
+      bad
+        .push(arena.text().s("took \{got\} out of \"").s(payload_samples[i])
+        .s("\" (it should be \{payload_want[i]\})").take())
+  verdict.check_list("the judgment of an empty case can fire", payload_samples.len, "samples", bad@,
+    "")
+
+// ==========================================
+// A function of one enum is a method in that enum's impl ("A function of one enum is its method"
+// in `../../docs/DESIGN.md`)
+// ==========================================
+
+priv fn after_visibility(line: U8[]): U8[] //< the line with a leading `pub ` or `priv ` taken off
+  if line.starts_with("pub ")
+    return line.sub_from(4)
+  if line.starts_with("priv ")
+    return line.sub_from(5)
+  return line
+
+priv fn name_at(t: U8[], at: Sz): U8[] //< the identifier starting at `at`, or empty
+  $e: = at
+  for e < t.len && (t[e].is_alnum() || t[e] == '_')
+    e += 1
+  return t.sub(at, e - at)
+
+priv fn skip_blanks(t: U8[], at: Sz): Sz
+  $i: = at
+  for i < t.len && (t[i] == ' ' || t[i] == '\t')
+    i += 1
+  return i
+
+priv fn enum_declared(line: U8[]): U8[] //< the name a top-level `enum` line declares, or empty
+  t: = after_visibility(line)
+  return name_at(t, 5) if t.starts_with("enum ") else ""
+
+priv fn enum_taken_first(line: U8[], enums: List<|U8[]|>@): U8[] //<
+  //< The enum a top-level function takes as its first parameter, where `enums` names it
+  //<
+  //< It is empty otherwise.
+  //< Caution: **Keep the judging in this one place**, where the samples below reach it. **The
+  //< first parameter's type is the whole name**: `State@`, `State[]` or `mod.State` is another
+  //< type, and an indented `fn` is already in an impl.
+  t: = after_visibility(line)
+  if !t.starts_with("fn ")
+    return ""
+  $i: = 3 + name_at(t, 3).len
+  if i >= t.len || t[i] != '('
+    return ""
+  i = skip_blanks(t, i + 1)
+  i = skip_blanks(t, i + name_at(t, i).len)
+  if i >= t.len || t[i] != ':'
+    return ""
+  i = skip_blanks(t, i + 1)
+  ty: = name_at(t, i)
+  after: = i + ty.len
+  if ty.len == 0 ||
+    after < t.len &&
+    (t[after] == '@' || t[after] == '[' || t[after] == '<' || t[after] == '.' || t[after] == '$')
+    return ""
+  return ty if scan.has(enums, ty) else ""
+
+priv fn fixture_text(rel: U8[]): Bool //< a fixture whose functions are what a test compiles
+  return rel.starts_with("ksplc/tests/negative/") || rel.starts_with("ksplc/tests/lint/") ||
+    rel.starts_with("ksplc/tests/kspls/")
+
+priv fn check_enum_functions(arena: Arena$@) //<
+  //< No top-level function takes an enum of its own file as its first parameter
+  //<
+  //< **The enum must be declared in the same file**: one from another file or package is skipped,
+  //< since its impl would then hold that package's view of it. What this misses still breaks the
+  //< rule (Principle 8 in `../../docs/DESIGN.md`).
+  $seen: Sz = 0
+  $bad: = List<|U8[]|>.new(arena)
+  for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    if fixture_text(rel)
+      continue
+    lines: = harness.read_under_root(rel).lines(arena)
+    $enums: = List<|U8[]|>.new(arena)
+    $in_raw: = false
+    for line in lines
+      was: = in_raw
+      in_raw = scan.flip_raw(line, in_raw)
+      if !(was && in_raw) && enum_declared(line).len > 0
+        enums.push(enum_declared(line))
+    if enums.len == 0
+      continue
+    in_raw = false
+    $i: Sz = 0
+    for line in lines
+      i += 1
+      seen += 1
+      was: = in_raw
+      in_raw = scan.flip_raw(line, in_raw)
+      if was && in_raw
+        continue
+      e: = enum_taken_first(line, enums@)
+      if e.len > 0
+        bad
+          .push(arena.text().s(rel).s(":\{i\}: a function takes `").s(e)
+          .s("` first; make it a method of `impl ").s(e).s("`").take())
+  verdict.check_list("a function of one enum is a method in its impl", seen, "lines", bad@,
+    "move it into the enum's impl as `fn f(x: Self, ...)` and call it as `x.f(...)`")
+
+// The samples for `enum_taken_first`, with `State` as the file's one enum.
+// Caution: **Include the side that must not hit**: a method, a pointer, a qualified name, an
+// enum taken second, a comment.
+priv const enum_samples: U8[][10] = ::{ "fn text(s: State): U8[]", "pub fn show(s: State, on: Bool)",
+  "priv fn color(s: State): U32", "fn text(s: State): U8[] {", "  fn text(s: Self): U8[]",
+  "fn at(s: State@): U8[]", "fn from(s: other.State)", "fn pair(n: I32, s: State)",
+  "fn other(s: Mode)", "// fn text(s: State)" }
+priv const enum_want: Bool[10] = ::{ true, true, true, true, false, false, false, false, false,
+  false }
+
+priv fn check_enum_functions_fire(arena: Arena$@)
+  $enums: = List<|U8[]|>.new(arena)
+  enums.push("State")
+  $bad: = List<|U8[]|>.new(arena)
+  for i in Range.asc(enum_samples.len)
+    got: = enum_taken_first(enum_samples[i], enums@).len > 0
+    if got != enum_want[i]
+      bad
+        .push(arena.text().s("\"").s(enum_samples[i]).s("\" was read as ")
+        .s("a function of the enum" if got else "fine").take())
+  verdict.check_list("the judgment of a function of one enum can fire", enum_samples.len, "samples",
+    bad@, "")
+
+fn run(arena: Arena$@)
+  check_empty_case_payload(arena)
+  check_payload_fires(arena)
+  check_enum_functions(arena)
+  check_enum_functions_fire(arena)

@@ -1,0 +1,85 @@
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena, dealloc }
+import "std/str" // `arena.text()`
+import "std/tests/sys_test"
+import "std/verdict"
+
+// ==========================================
+// std/fs: creating a scratch folder, and writing and copying a tree.
+// **Each check works in a folder that `mkdir_unique` creates for it**, so a run never sees what an
+// earlier run left. The check removes the folder best-effort at the end.
+// ==========================================
+
+priv const base: U8[] = "out/tmp/kspl_test_tree"
+
+priv fn holds(path: U8[], want: U8[]): Bool //< whether the file at path contains exactly want
+  got: = io.read_file(path) catch
+    return false
+  defer dealloc(Void$@::got.ptr)
+  return got.equals(want)
+
+fn test_fs_mkdir_unique()
+  verdict.start("[Fs] making a directory nobody took test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  a: = fs.mkdir_unique(base, "box_", arena) catch panic("mkdir_unique should make a directory")
+  b: = fs.mkdir_unique(base, "box_", arena) catch panic("mkdir_unique should make a second one")
+  assert(!a.equals(b), "two calls must not return the same directory")
+  assert(fs.is_dir(a) && fs.is_dir(b), "both places must stand as directories")
+  leaf: = a.sub_from(base.len + 1)
+  assert(leaf.starts_with("box_") && leaf.len == 4 + 16, "the name is the prefix and 16 hex digits")
+  // A base that cannot contain a directory is refused at once, without trying name after name.
+  file: = fs.join(a, "a_file", arena)
+  io.write_file(file, "x") catch panic("the probe file must be writable")
+  _refused: = fs.mkdir_unique(file, "box_", arena) catch
+    sys_test.clear_tree_best_effort(a, arena)
+    sys_test.clear_tree_best_effort(b, arena)
+    verdict.pass("Each call makes a place of its own, and a base holding a file is refused.")
+    return
+  panic("a base that is a file must be refused")
+
+fn test_fs_write_tree()
+  verdict.start("[Fs] writing a tree of files test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  dir: = fs.mkdir_unique(base, "write_", arena) catch panic("mkdir_unique should make a directory")
+  rels: = U8[][]::{ "top.txt", "a/b/deep.txt" }
+  fs.write_tree(dir, rels, U8[][]::{ "top", "deep" }, arena) catch panic("write_tree should write")
+  assert(holds(fs.join(dir, "top.txt", arena), "top"), "top.txt must hold what was written")
+  assert(holds(fs.join(dir, "a/b/deep.txt", arena), "deep"),
+    "the levels on the way must be made, and the file written")
+  // A name that climbs out of the tree is refused before anything in the list is written.
+  climbed: = U8[][]::{ "first.txt", "../escape.txt" }
+  $refused: = false
+  fs.write_tree(dir, climbed, U8[][]::{ "1", "2" }, arena) catch
+    refused = true
+  assert(refused, "a name climbing out must be refused")
+  assert(!fs.exists(fs.join(dir, "first.txt", arena)), "nothing in a refused list is written")
+  $uneven: = false
+  fs.write_tree(dir, U8[][]::{ "one.txt" }, U8[][]::{ "1", "2" }, arena) catch
+    uneven = true
+  assert(uneven, "names and contents of different counts must be refused")
+  sys_test.clear_tree_best_effort(dir, arena)
+  verdict.pass("A tree is written with its levels made, and a name climbing out writes nothing.")
+
+fn test_fs_copy_tree()
+  verdict.start("[Fs] copying a tree to a place where nothing stands test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  dir: = fs.mkdir_unique(base, "copy_", arena) catch panic("mkdir_unique should make a directory")
+  from: = fs.join(dir, "from", arena)
+  fs.write_tree(from, U8[][]::{ "a.txt", "sub/b.txt", "skipme/c.txt" },
+    U8[][]::{ "a", "b", "c" }, arena) catch panic("the tree to copy must be writable")
+  to: = fs.join(dir, "made/on/the/way/to", arena)
+  fs.copy_tree(from, to, sys_test.skip_skipme, arena) catch panic("copy_tree should copy the tree")
+  assert(holds(fs.join(to, "a.txt", arena), "a") &&
+    holds(fs.join(to, "sub/b.txt", arena), "b"), "every file keeps its place and its contents")
+  assert(!fs.exists(fs.join(to, "skipme", arena)), "a directory skip_dir names is not copied")
+  $refused: = false
+  fs.copy_tree(from, to, sys_test.skip_skipme, arena) catch
+    refused = true
+  assert(refused, "a destination that stands already must be refused")
+  sys_test.clear_tree_best_effort(dir, arena)
+  verdict.pass("A tree is copied whole to a new place, and a place that stands is refused.")

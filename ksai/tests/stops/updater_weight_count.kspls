@@ -1,0 +1,27 @@
+//< A step that gives the Updater fewer weights than the first step must stop
+//<
+//< **Otherwise the states shift**: the weights after the missing one would be moved by other
+//< weights' states, and training would go on, silently wrong.
+import "ksai/optim"
+import "ksai/tensor" { Tensor }
+import "std/io"
+import "std/mem" { Arena }
+
+fn main(): I32
+  arena: = Arena.new(4096)
+  defer arena.free()
+  shape: Sz[1] = ::{ 2 }
+  $w: = Tensor<|F32|>.new(Sz[]::shape, arena)
+  $g: = Tensor<|F32|>.new(Sz[]::shape, arena)
+  w.fill(1.0)
+  g.fill(0.5)
+  $u: = optim.Updater<|F32|>.adam(0.1)
+  defer u.free()
+  u.begin_step()
+  u.update(w, g)
+  u.update(w, g)
+  u.begin_step()
+  u.update(w, g)
+  u.begin_step() // one weight this step where the first had two
+  io.out().s("must not get here\n")
+  return 0

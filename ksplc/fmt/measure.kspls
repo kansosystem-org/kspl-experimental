@@ -1,0 +1,264 @@
+//< A node's shape and width as the printer measures them
+//<
+//< Its span and length in the source, a chain's segment and the next element's length, and
+//< whether it holds a block or ends its list with a `,`; `printer.kspls` decides the line breaks
+//< from these.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/literal" as base_literal
+import "ksplc/fmt/kinds" as fmt_kinds
+import "ksplc/fmt/source" { skip_space_from }
+import "std/chars" // the one-character checks and cuts
+import "std/str" // `equals`
+
+impl Ast_node
+  fn get_assign_op_len(r: Ast_node$@, src: U8[]): Sz
+    $op_len: Sz = 1
+    offset: = skip_space_from(src, r.loc.offset)
+    if offset + 1 < src.len
+      c0: = (src.ptr + offset)$
+      c1: = (src.ptr + offset + 1)$
+      if offset + 2 < src.len
+        c2: = (src.ptr + offset + 2)$
+        if (c0 == '<' || c0 == '>') && c1 == c0 && c2 == '='
+          op_len = 3
+      if op_len == 1 &&
+        (c0 == '+' || c0 == '-' || c0 == '*' || c0 == '/' || c0 == '%' || c0 == '&' || c0 == '|' ||
+        c0 == '^' || c0 == '!' || c0 == '=') && c1 == '='
+        op_len = 2
+    return op_len
+
+  fn is_block_like(r: Ast_node$@): Bool
+    if r == null
+      return false
+    k: = r.kind_id
+    if k == .k_struct_literal || k == .k_expr_compound || k == .k_stmt_block ||
+      k == .k_stmt_labeled_block || k == .k_stmt_match || k == .k_decl_extern_block ||
+      k == .k_stmt_if || k == .k_stmt_loop || k == .k_expr_catch
+      return true
+    for child in r.children
+      if child.kind_id != .k_empty && child.kind_id != .k_underscore
+        if child.kind_id == .k_keyword || child.kind_id == .k_literal
+          return child.text.equals("if") || child.text.equals("for") ||
+            child.text.equals("switch") || child.text.equals("catch")
+        return child.is_block_like()
+    return false
+
+  fn contains_multiline_block(r: Ast_node$@): Bool
+    if r == null
+      return false
+    k: = r.kind_id
+    if k == .k_stmt_block || k == .k_stmt_labeled_block || k == .k_stmt_match || k == .k_expr_catch
+      || k == .k_decl_struct || k == .k_decl_enum || k == .k_decl_impl || k == .k_decl_extern_block
+      || k == .k_stmt_if || k == .k_stmt_loop
+      return true
+    for child in r.children
+      if child.contains_multiline_block()
+        return true
+    return false
+
+  fn get_string_span(r: Ast_node$@, src: U8[]): Sz //<
+    //< How far the string or character literal the node opens runs in src
+    //<
+    //< The scan is `literal_end` in `../base/literal.kspls`.
+    c_start: = r.loc.offset
+    if c_start >= src.len
+      return 0
+    return base_literal.literal_end(src, c_start) - c_start
+
+  priv fn is_string_token(r: Ast_node$@): Bool //< a string or character literal, pieces and all
+    return r.kind_id == .k_string || r.kind_id == .k_string_interp || r.kind_id == .k_char
+
+  fn is_expr_statement(r: Ast_node$@): Bool //< whether it is a statement holding an expression
+    $n: = r
+    if n.kind_id == .k_stmt && n.children.len > 0
+      n = n.get_child(0)
+    return n.kind_id == .k_stmt_expr
+
+  fn is_choice(r: Ast_node$@): Bool //<
+    //< Whether it is a conditional value with its choices written (`a if c else b`)
+    //<
+    //< The grammar's `expr_ternary` also leaves a one-child wrapper around every other
+    //< expression, and that wrapper does not count.
+    return r.kind_id == .k_expr_ternary && r.children.len == 5
+
+  fn source_end(r: Ast_node$@, src: U8[]): Sz //< where the node's last token ends in the source
+    //<
+    //< Caution: **A string is one token though it holds children** (its pieces). If the walk goes
+    //< into it, the end lands on the last piece, before the closing quote.
+    $n: = r
+    for n.children.len > 0 && !n.is_string_token()
+      $last: Ast_node$@ = null
+      for $i: = I32::n.children.len - 1; i >= 0; i -= 1
+        ch: = n.get_child(i)
+        if ch.kind_id != .k_empty && ch.kind_id != .k_underscore
+          last = ch
+          break
+      if last == null
+        break
+      n = last
+    if n.is_string_token()
+      return n.loc.offset + n.get_string_span(src)
+    $e: = n.loc.offset + n.text.len
+    if e > src.len
+      e = src.len
+    for e > n.loc.offset &&
+      (src[e - 1] == ' ' || src[e - 1] == '\t' || src[e - 1] == '\n')
+      e -= 1
+    return e
+
+  fn calc_text_len(r: Ast_node$@, src: U8[]): Sz
+    if r == null
+      return 0
+    kind: = r.kind_id
+    if kind == .k_string_interp || kind == .k_string
+      return r.get_string_span(src)
+
+    // A stmt_block and the like always span several lines, so this only reports "large" (which
+    // tips the caller's wrapping decision to the safe side).
+    if kind == .k_stmt_block || kind == .k_stmt_labeled_block || kind == .k_stmt_match ||
+      kind == .k_expr_catch
+      return 10
+
+    len: = r.children.len
+    if len == 0
+      if kind == .k_assign_op || (kind == .k_literal && r.text.equals("assign_op"))
+        return r.get_assign_op_len(src)
+      if kind != .k_empty && kind != .k_underscore
+        return r.text.trim_spaces().len
+      return 0
+    $total: Sz = 0
+    for child in r.children
+      clen: = child.calc_text_len(src)
+      if clen > 0
+        if total > 0
+          total += 1
+        total += clen
+    return total
+  fn src_starts_with_dot(r: Ast_node$@, src: U8[]): Bool //<
+    //< Whether this node begins with a '.' in the source
+    //<
+    //< It finds the separators of a method/field access chain. A '::' static path, a call's '('
+    //< and a subscript's '[' do not count.
+    off: = skip_space_from(src, r.loc.offset)
+    return off < src.len && (src.ptr + off)$ == '.'
+  fn calc_chain_segment_len(r: Ast_node$@, start_idx: Sz, src: U8[]): Sz //<
+    //< A k_expr_postfix's children are a flat op run (".name" / "(args)" / "[idx]" ...)
+    //<
+    //< One segment runs from the dot access at start_idx up to the next one. Its width is
+    //< approximate (so .m(args) wraps as a unit).
+    $total: = r.get_child(start_idx).calc_text_len(src)
+    for $k: = start_idx + 1; k < r.children.len; k += 1
+      ch: = r.get_child(k)
+      if ch.src_starts_with_dot(src)
+        break
+      total += ch.calc_text_len(src)
+    return total
+
+  fn has_multi_dot_chain(r: Ast_node$@, src: U8[]): Bool //<
+    //< Whether r (a k_expr_postfix) holds two or more dot segments
+    //<
+    //< A dot segment is "a child beginning with a dot", as calc_chain_segment_len defines it.
+    //<
+    //< As in clang-format, a single `recv.method(args)` is not a chain like `a.b().c().d()`: only a
+    //< chain prefers the `.` as a wrapping candidate.
+    $count: Sz = 0
+    for $i: = 1; i < r.children.len; i += 1
+      if r.get_child(i).src_starts_with_dot(src)
+        count += 1
+        if count >= 2
+          return true
+    return false
+
+  fn chain_segment_has_comma(r: Ast_node$@, start_idx: Sz, src: U8[]): Bool //<
+    //< Whether start_idx's dot segment holds a top-level `,` that is a wrapping candidate
+    //<
+    //< The segment is the same range as calc_chain_segment_len's. Such a `,` appears in a call
+    //< with two or more arguments.
+    for $k: = start_idx + 1; k < r.children.len; k += 1
+      ch: = r.get_child(k)
+      if ch.src_starts_with_dot(src)
+        break
+      if ch.kind_id == .k_expr_args
+        for arg_ch in ch.children
+          if arg_ch.is_literal(",")
+            return true
+    return false
+
+  fn has_dot_chain(r: Ast_node$@, src: U8[]): Bool //<
+    //< Whether an assignment's right-hand side (a k_expr_postfix) holds a method/field chain
+    //<
+    //< A chain is made of `.method(...)` segments, and one segment starting with a dot is enough.
+    //< A chain wraps by calc_chain_segment_len, so a newline forced after the `=` would leave the
+    //< receiver alone on its line (`x =\n r\n .method(...)`; details in the caller's comment).
+    // The unary rules (expr_ternary / expr_or / ... / expr_cast) leave one-child wrappers; this
+    // peels them off down to k_expr_postfix.
+    $node: = r
+    for node != null && node.kind_id != .k_expr_postfix
+      $inner: Ast_node$@ = null
+      $count: Sz = 0
+      for ch in node.children
+        if ch.kind_id != .k_literal && ch.kind_id != .k_empty && ch.kind_id != .k_underscore
+          count += 1
+          if inner == null
+            inner = ch
+      if count != 1
+        return false
+      node = inner
+    if node == null
+      return false
+    for $i: = 1; i < node.children.len; i += 1
+      if node.get_child(i).src_starts_with_dot(src)
+        return true
+    return false
+
+  fn calc_next_element_len(r: Ast_node$@, start_idx: Sz, src: U8[]): Sz
+    $total: Sz = 0
+    len: = r.children.len
+    for $i: = start_idx; i < len; i += 1
+      ch: = r.get_child(i)
+      if ch.kind_id == .k_literal && ch.text.equals(",")
+        break
+      // A stmt_match holds its patterns and case bodies in one flat run ("The control flow and the
+      // statements" in ksplc/docs/DESIGN.md), so the pattern run ends at a body (a stmt_block) or
+      // the next case/default keyword; otherwise the body's length inflates it.
+      if ch.kind_id == .k_stmt_block || ch.is_keyword("case") || ch.is_keyword("default")
+        break
+      clen: = ch.calc_text_len(src)
+      if clen > 0
+        if total > 0
+          total += 1
+        total += clen
+    return total
+
+  fn has_trailing_comma(r: Ast_node$@): Bool
+    if r == null || r.children.len == 0
+      return false
+    kind_id: = r.kind_id
+
+    if fmt_kinds.rules.is_list(I32::kind_id) ||
+      fmt_kinds.rules.is_brace_container(I32::kind_id) || kind_id == .k_decl_enum
+      for $i: = I32::r.children.len - 1; i >= 0; i -= 1
+        child: = r.get_child(i)
+        if child.kind_id != .k_empty && child.kind_id != .k_underscore
+          if child.is_literal("}") || child.is_literal(")") || child.is_literal("]") ||
+            child.is_literal(">")
+            continue
+          return child.is_literal(",")
+
+    for child in r.children
+      ckind_id: = child.kind_id
+      if fmt_kinds.rules.is_list(I32::ckind_id) ||
+        fmt_kinds.rules.is_brace_container(I32::ckind_id)
+        if child.has_trailing_comma()
+          return true
+    return false
+
+  fn is_short_control_stmt(r: Ast_node$@): Bool
+    if r == null
+      return false
+    $actual: = r
+    for actual.kind_id == .k_stmt && actual.children.len > 0
+      actual = actual.get_child(0)
+    k: = actual.kind_id
+    return k == .k_stmt_break || k == .k_stmt_continue || k == .k_stmt_return || k == .k_stmt_throw
+      || k == .k_stmt_fallback

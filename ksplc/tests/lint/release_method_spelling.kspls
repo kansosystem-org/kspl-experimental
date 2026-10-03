@@ -1,0 +1,86 @@
+//< Warns about a name or contract that releases but is not tracked
+// EXPECT: [W0108] 'close' releases the receiver
+// EXPECT: [W0108] 'free' releases the receiver
+// EXPECT: [W0108] 'destroy' releases the receiver
+// EXPECT: [W0108] 'shutdown' releases the receiver
+// EXPECT: [W0108] 'dispose' releases its first parameter
+// EXPECT-NOT: [W0108] 'take'
+// EXPECT-NOT: [W0108] 'clear'
+// EXPECT-NOT: [W0108] 'deinit'
+import "std/io"
+import "std/mem" { dealloc }
+
+pub struct H
+  pub id: I32
+
+impl H
+  pub fn open(): H
+    return H::{ .id = 1 }
+
+  pub fn close(r: Self$@) //< in scope
+    //<
+    //< The name is not `free`.
+    r.id = 0
+
+  pub fn free(r: Self$@) //< in scope
+    //<
+    //< The name is `free` but H does not conform to Owned.
+    r.id = -1
+
+  pub fn take(r: Self$@, key: I32): Bool //< out of scope
+    //<
+    //< It takes an argument because it erases something else.
+    return key == r.id
+
+  pub fn clear(r: Self$@) //< out of scope
+    //<
+    //< It only throws the content away; the substance lives on.
+    r.id = 0
+
+  priv fn destroy(r: Self$@) //< in scope
+    //<
+    //< The visibility is not asked about (even a priv can conform to `Owned`).
+    r.id = -2
+
+  pub fn shutdown(r: Self$@, _reason: I32) //< in scope
+    //<
+    //< The second and later arguments are not asked about (a tool is sometimes handed to a
+    //< release).
+    r.id = -3
+
+  pub fn deinit(r: Self$@) //< out of scope
+    //<
+    //< The body releases the first argument itself, so it is tracked regardless of the name and the
+    //< conformance.
+    dealloc(Void$@::r)
+
+pub fn dispose(h: H$@) //< in scope
+  //<
+  //< A release written as a free function is looked at too. It returns the content alone, so it
+  //< does not ride road 2.
+  h.id = 0
+
+pub struct G //< nothing comes out, it having conformed
+  pub id: I32
+
+impl G
+  pub fn open(): G
+    return G::{ .id = 1 }
+
+  pub fn free(r: Self$@)
+    r.id = 0
+
+impl G: Owned {}
+
+fn main(): I32
+  $h: = H.open()
+  h.close()
+  _ok: = h.take(1)
+  h.clear()
+  h.destroy()
+  h.shutdown(1)
+  dispose(h@)
+  $g: = G.open()
+  g.free()
+  io.out().s("done\n")
+  return h.id

@@ -1,0 +1,63 @@
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+import "tools/ai_assist/fix_names" as names
+
+// ==========================================
+// Tests how the names in the training material are built (`tools/ai_assist/fix_names.kspls`).
+//
+// It is tested because **a mistake here breaks nothing visible**: a wrong name just sits in the
+// material. It shows only after training, as odd spellings in the output, when it is too late to
+// trace which run's material was bad.
+// ==========================================
+
+fn test_the_temporary_file_names(arena: Arena$@) //< a spelling per worker, so they do not collide
+  verdict.start("[tools/ai_assist] the temporary file's name test...")
+  // Caution: **Do not drop the worker's number**, or all workers write the same file and their
+  // material gets mixed.
+  assert(names.worker_stem("_efbrk", 3, arena).equals("_efbrk_3"), "the number is added on the end")
+  assert(names.worker_stem("_efbrk", 0, arena).equals("_efbrk_0"), "number 0 gets one added too")
+  assert(!names.worker_stem("_efbrk", 1, arena).equals(names.worker_stem("_efbrk", 2, arena)),
+    "a different number means a different spelling")
+  // The corpus folder and `.kspls` surround it; a diagnostic shows this path unchanged.
+  rel: = names.rel_for_stem("_efbrk_3", arena)
+  assert(rel.ends_with("/_efbrk_3.kspls"), "it comes out as a source under the place")
+  verdict
+    .pass("the spellings part per worker, and the temporary path is a `.kspls` under the place.")
+
+fn test_the_dotted_name(arena: Arena$@) //< a qualified name is the path with dots for separators
+  //<
+  //< It follows ksplc's own naming convention.
+  verdict.start("[tools/ai_assist] building a fully qualified name test...")
+  got: = names.to_dotted_file_path("ksplc/base/ast_kinds.kspls", arena)
+  assert(got.equals("ksplc.base.ast_kinds"),
+    "the separators become dots and the extension is dropped")
+  // **Do not keep the extension** (the model would learn a type name `…ast_kinds.kspls`).
+  assert(!got.ends_with(".kspl"), "the extension does not stay")
+  assert(names.to_dotted_file_path("a.kspls", arena).equals("a"),
+    "a file directly under the root is the same")
+  // **The brace spelling's extension is dropped too**: material from outside can use either, and a
+  // leftover `.kspl` becomes a dot in the qualified name.
+  assert(names.to_dotted_file_path("a.kspl", arena).equals("a"),
+    "the brace notation's extension is dropped too")
+  assert(names.to_dotted_file_path("solo.kspls", arena).equals("solo"),
+    "with no separator it stays as it is")
+  verdict.pass("the separators become dots and the extension is dropped.")
+
+fn test_which_line_is_code() //< a blank line and a comment-only line are not body lines
+  verdict.start("[tools/ai_assist] whether it is a body line test...")
+  assert(names.is_code_line("x: = 1;"), "an ordinary line is a body line")
+  assert(names.is_code_line("  x: = 1;"), "it is a body line even indented")
+  // Caution: **Do not count a blank line or a line comment as a body line**, or the tool breaks a
+  // comment and the material records "broken, yet no diagnostic".
+  assert(!names.is_code_line(""), "a blank line is not a body line")
+  assert(!names.is_code_line("   "), "a line of whitespace alone is not a body line either")
+  assert(!names.is_code_line("// an explanation"), "a line comment is not a body line")
+  assert(!names.is_code_line("  // an indented explanation"),
+    "an indented line comment is not a body line either")
+  // A line with code before its comment is a body line.
+  assert(names.is_code_line("x: = 1; // an explanation"),
+    "a comment at the line's end does not cancel the body")
+  verdict
+    .pass("blank and comment-only lines are not body lines; a trailing comment cancels nothing.")

@@ -1,0 +1,132 @@
+#!/usr/bin/env -S ksplc run
+//< Bundles the template, the texts named inside it and the wasm into one HTML file
+//<
+//< Caution: **Do not pass the texts as a list of arguments** — the day a text is added, the `make`
+//< line and the count here must both change, and changing only one passes silently.
+//< Do not do it with a replace over the whole text — `replace` swaps the mark wherever it is, so
+//< the contents also go in where a comment in the template merely mentions the mark.
+
+// ==========================================
+// Usage:
+//     ksplc run kspage/port/web/bundle.kspls <template> <wasm> <output>
+// ==========================================
+import "std/base64"
+import "std/chars"
+import "std/io"
+import "std/mem" { dealloc }
+import "std/str" { Str_builder }
+import "std/sys"
+
+priv const mark_head: U8[] = "__KSPAGE_" //< the start of every mark
+  //<
+  //< Every text starting with this is a mark, and an unknown one is refused (let through silently,
+  //< a typo shows only when the page is opened).
+priv const mark_wasm: U8[] = "__KSPAGE_WASM_BASE64__"
+priv const mark_file: U8[] = "__KSPAGE_FILE:"
+priv const mark_tail: U8[] = "__"
+
+priv enum Bundle_error
+  usage //< the argument count does not match
+  read //< the input cannot be read
+  bad_mark //< an unknown mark, or a mark that is never closed
+  bad_name //< the text's name is not safe
+  no_wasm //< the template has no place to insert the wasm
+  write //< the output cannot be written
+
+priv fn read_or_report(path: U8[]): U8[]?Bundle_error
+  return io.read_file(path) catch
+    io.err().s("bundle: cannot read: \{path\}\n")
+    throw Bundle_error.read
+
+priv fn folder_of(path: U8[]): U8[] //< the template's own folder
+  //<
+  //< It includes the trailing `/` (empty means the current folder).
+  $cut: Sz = 0
+  for $i: Sz = 0; i < path.len; i += 1
+    if path[i] == '/'
+      cut = i + 1
+  return path.sub(0, cut)
+
+priv fn safe_name(name: U8[]): Bool //< whether it is safe as a text's name
+  //<
+  //< Caution: **Do not let it leave the folder** — with `..` or `/` the template alone could bundle
+  //< a file from outside the page.
+  if name.len <= 0
+    return false
+  for $i: Sz = 0; i < name.len; i += 1
+    c: = name[i]
+    ok: =
+      (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' ||
+      c == '_' || c == '-'
+    if !ok
+      return false
+  return !(name.find_str("..") >= 0)
+
+priv fn put_mark(out: Str_builder$@, page: U8[], at: Sz, dir: U8[], blob: U8[]): Sz?Bundle_error //<
+  //< Writes out one mark's contents, and returns the length of the mark consumed
+  if page.starts_with(mark_wasm, at)
+    out.s(blob)
+    return mark_wasm.len
+  if !page.starts_with(mark_file, at)
+    io.err()
+      .s("bundle: unknown mark: \{page.sub(at, 32 if at + 32 <= page.len else page.len - at)\}\n")
+    throw Bundle_error.bad_mark
+  from: = at + mark_file.len
+  end: = page.sub_from(from).find_str(mark_tail)
+  if end < 0
+    io.err().s("bundle: the mark never shuts (no `__`)\n")
+    throw Bundle_error.bad_mark
+  name: = page.sub(from, end)
+  if !safe_name(name)
+    io.err().s("bundle: the text's name is not safe: \{name\}\n")
+    throw Bundle_error.bad_name
+  $where: = Str_builder.new()
+  defer where.free()
+  where.s(dir).s(name)
+  body: = read_or_report(where.slice())?
+  defer dealloc(Void$@::body.ptr)
+  out.s(body)
+  return from + Sz::end + mark_tail.len - at
+
+priv fn bundle(template: U8[], wasm: U8[], out: U8[]): Void?Bundle_error
+  page_raw: = read_or_report(template)?
+  defer dealloc(Void$@::page_raw.ptr)
+  blob_raw: = read_or_report(wasm)?
+  defer dealloc(Void$@::blob_raw.ptr)
+  page: = page_raw
+  // Caution: **The wasm mark must be present** — a template without it bundles fine and fails only
+  // when opened.
+  if page.find_str(mark_wasm) < 0
+    io.err().s("bundle: the template has no \{mark_wasm\}: \{template\}\n")
+    throw Bundle_error.no_wasm
+  blob: = base64.encode(blob_raw, null)
+  defer dealloc(Void$@::blob.ptr)
+  dir: = folder_of(template)
+
+  // It copies the template once from the start. An inserted text is not read again (no second
+  // replacement).
+  $built: = Str_builder.new()
+  defer built.free()
+  $at: Sz = 0
+  for at < page.len
+    step: = page.sub_from(at).find_str(mark_head)
+    if step < 0
+      built.s(page.sub_from(at))
+      break
+    next: = at + Sz::step
+    built.s(page.sub(at, step))
+    at = next + put_mark(built@, page, next, dir, blob)?
+
+  io.write_file(out, built.slice()) catch
+    io.err().s("bundle: cannot write: \{out\}\n")
+    throw Bundle_error.write
+  io.out().s("OUTPUT: \{out\} (\{built.len / 1024\} KiB, complete in one file)\n")
+
+fn main(): I32
+  $args: = sys.args()
+  if args.len != 4
+    io.err().s("usage: bundle.kspls <template> <wasm> <output>\n")
+    return 1
+  bundle(args.get(1), args.get(2), args.get(3)) catch
+    return 1
+  return 0

@@ -1,0 +1,354 @@
+//< Tests `kssrv --local`'s process endpoint (`/api/run`)
+//<
+//< Not a suite; part of `kssrv/tests/main.kspls`.
+//< **This endpoint can become a hole for running code**, so half of it checks "**that it
+//< refuses**": a combination not allowed, the outward-facing side, no token.
+//< Caution: **Do not stop at "it could be started"**; without a real exchange it proves nothing.
+//< The language server is started, an `initialize` is written to it, and the answer is awaited.
+import "kssrv/tests/client"
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/strnum"
+import "std/sys"
+import "std/verdict"
+
+priv const stream_ms: I32 = 20000 //< the timeout for reading a stream to the end
+  //<
+  //< **The language server takes a while to start** (it reads std).
+
+const missing_port: I32 = 18395 //< the port for a setup with no program to start
+  //<
+  //< Caution: **Do not reuse another gate's port** (they run in parallel).
+const spew_port: I32 = 18397 //<
+  //< The port for a setup whose program to start is the spew child
+  //<
+  //< The child is `kssrv/tests/spew.kspls`.
+
+const spew_small: I64 = 100000I64 //< how much the spew child writes
+  //<
+  //< It is passed in the working directory's name (see that file's header). **It must exceed 16
+  //< KiB**, one read (`sip_bytes` in `kssrv/proc.kspls`), or draining a finished child is untested.
+const spew_big: I64 = 3000000I64 //< an amount exceeding the buffer's cap (`pending_cap`)
+  //<
+  //< The child waits at its write while nobody watches, and the rest flows once a watcher comes.
+priv const max_procs: Sz = 4 //<
+  //< How many children can run at once (a copy of `max_procs` in `kssrv/proc.kspls`)
+  //<
+  //< Caution: **When raising that one, change this too**; otherwise the count check is off by one.
+
+priv struct Piece //< one parsed chunk
+  //<
+  //< **Split by the length** (the reason is at `put_piece` in `kssrv/proc.kspls`); the one space
+  //< after the length is the only delimiter.
+  found: Bool
+  tag: U8
+  body: U8[]
+  next: Sz
+
+priv fn piece_at(src: U8[], from: Sz): Piece
+  if from >= src.len
+    return Piece::{ .found = false, .tag = 0U8, .body = "", .next = from }
+  cut: = src.sub_from(from).find_char(' ')
+  if cut < 0
+    return Piece::{ .found = false, .tag = 0U8, .body = "", .next = src.len }
+  head: = from + cut
+  len: = src.sub(from + 1, head - from - 1).to_i64() catch
+    fallback -1I64
+  if len < 0I64 || head + 1 + Sz::len > src.len
+    return Piece::{ .found = false, .tag = 0U8, .body = "", .next = src.len }
+  return Piece::{ .found = true, .tag = src[from], .body = src.sub(head + 1, Sz::len),
+    .next = head + 1 + Sz::len }
+
+priv fn gather(src: U8[], tag: U8, out: Str_builder$@) //< collects the chunks of one stream
+  $at: Sz = 0
+  for at < src.len
+    p: = piece_at(src, at)
+    if !p.found
+      return
+    if p.tag == tag
+      out.s(p.body)
+    at = p.next
+
+fn cases(port: I32, auth: U8[], arena: Arena$@): Void?client.Http_end
+  // --- Refusals ---
+  // **A shell must not be startable**, or a token runs anything with the user's privileges.
+  bad: = client.post_json(port, "/api/run", auth, "{\"cmd\":\"sh\",\"args\":[\"-c\",\"echo x\"]}",
+    5000I32, arena)?
+  verdict.check("a command that is not allowed is not started", bad.status == 403,
+    client.shown(bad, arena))
+  // Caution: **`ksplc` must not be allowed as a whole**: `ksplc run` runs any KSPL.
+  runner: = client.post_json(port, "/api/run", auth,
+    "{\"cmd\":\"ksplc\",\"args\":[\"run\",\"x.kspl\"]}", 5000I32, arena)?
+  verdict.check("the same command with an argument not allowed is not started",
+    runner.status == 403, client.shown(runner, arena))
+  // **A prefix match must not pass** (an appended argument changes what it does).
+  more: = client.post_json(port, "/api/run", auth, "{\"cmd\":\"ksplc\",\"args\":[\"lsp\",\"--x\"]}",
+    5000I32, arena)?
+  verdict.check("an argument appended behind an allowed one is refused too", more.status == 403,
+    client.shown(more, arena))
+  // An unknown id.
+  // Caution: **Keep it apart from 409** (a stream someone already watches is a different refusal).
+  gone: = client.get(port, "/api/run/9999", auth, arena)?
+  verdict.check("a number it does not know is refused with 404", gone.status == 404,
+    client.shown(gone, arena))
+
+  // --- Start it and exchange messages ---
+  made: = client.post_json(port, "/api/run", auth, "{\"cmd\":\"ksplc\",\"args\":[\"lsp\"]}",
+    10000I32, arena)?
+  if !verdict.check("an allowed combination can be started", made.status == 200,
+    client.shown(made, arena))
+    return
+  id: = client.doc_of(made, arena).get("id").as_int(0I32)
+  verdict.check("the started child's number comes back", id > 0I32, client.shown(made, arena))
+
+  $st: = client.open_stream(port, arena.text().s("/api/run/\{id\}").take(), auth, arena)?
+  // **Write it inside an LSP frame** (delimited by `Content-Length`).
+  fed: = send_lsp(port, id, auth, lsp_initialize, arena)?
+  verdict.check("input can be written to the child", fed.status == 200,
+    client.shown(fed, arena))
+
+  // Caution: **Follow it to the end**, or each closed page leaves behind a child that cannot end.
+  // On `shutdown` the language server exits by itself.
+  _shut: = send_lsp(port, id, auth, lsp_shutdown, arena)?
+
+  got: = st.drain(stream_ms, arena)
+  // Caution: **Check the head too** (the reason is at `client.Stream.head`).
+  raw_head: = st.head(arena)
+  st.free()
+  verdict.check("the stream's head declares no length",
+    client.header(raw_head, "content-length").len == 0, raw_head)
+  verdict.check("the stream's head says the end comes by closing",
+    client.header(raw_head, "connection").equals_ignore_case("close"), raw_head)
+  all: = gather_all(got, arena)
+  // **Check that an answer comes back** (merely startable, it cannot be used).
+  d: = arena.text().s("out \{all.out.len\} / err \{all.err.len\} / end ").s(all.tail).take()
+  verdict.check("the language server's answer flows in",
+    all.out.find_str("semanticTokensProvider") >= 0, d)
+  // **The end is reported with a chunk**, or it reads as a cut connection.
+  verdict.check("the exit number comes at the end", all.tail.find_str("\"exit\"") >= 0, d)
+
+fn half_closed_cases(port: I32, auth: U8[], arena: Arena$@): Void?client.Http_end //<
+  //< A client saying only "I will send no more" must not stop the child
+  //<
+  //< **`read` returning 0 is not "the peer is gone"** (see `peer_done` in `kssrv/conn.kspls`).
+  //< Get it wrong and the page sees only "the language server does not answer".
+  made: = client.post_json(port, "/api/run", auth, "{\"cmd\":\"ksplc\",\"args\":[\"lsp\"]}",
+    10000I32, arena)?
+  if !verdict.check("a child can be started for the closing-the-write-half test",
+    made.status == 200, client.shown(made, arena))
+    return
+  id: = client.doc_of(made, arena).get("id").as_int(0I32)
+  $st: = client.open_stream(port, arena.text().s("/api/run/\{id\}").take(), auth, arena)?
+  // Caution: **Close it after the head arrives**; before that, it is not yet recorded as a
+  // watcher.
+  _head: = st.head(arena)
+  verdict.check("the write half alone can be closed", st.shut_write(),
+    "shutdown(SHUT_WR) does not go through")
+  // Caution: **Check that input is still accepted**: a stopped child's input endpoint returns 404.
+  fed: = send_lsp(port, id, auth, lsp_initialize, arena)?
+  verdict.check("the child takes input after the write half is closed", fed.status == 200,
+    client.shown(fed, arena))
+  // **Check that the answer flows back**: writing input proves nothing about the way back.
+  _shut: = send_lsp(port, id, auth, lsp_shutdown, arena)?
+  got: = st.drain(stream_ms, arena)
+  st.free()
+  out: = gather_all(got, arena).out
+  verdict.check("the answer flows in after the write half is closed",
+    out.find_str("semanticTokensProvider") >= 0,
+    arena.text().s("out \{out.len\} bytes").take())
+
+fn missing_cases(token: U8[], told: U8[], arena: Arena$@): Void?client.Http_end //<
+  //< The refusal when the program to start cannot be found
+  //<
+  //< Caution: **"Cannot start" is not enough**; the refusal must say which part of the setup is
+  //< wrong (a shell's `/c/…` path in a variable fails only on Windows).
+  auth: = client.bearer_head(token, arena)
+  said: = client.post_json(missing_port, "/api/run", auth, "{\"cmd\":\"ksplc\",\"args\":[\"lsp\"]}",
+    5000I32, arena)?
+  if !verdict.check("with no program to start, nothing is started", said.status == 500,
+    client.shown(said, arena))
+    return
+  $looked: = client.doc_of(said, arena).get("looked").arr_list(arena)
+  defer looked.free()
+  $names: = Str_builder.new()
+  defer names.free()
+  for v in looked.slice()
+    names.s(v.as_str()).c('\n')
+  verdict.check("the refusal lines the places it looked up",
+    names.slice().find_str(told) >= 0, client.shown(said, arena))
+
+priv const lsp_initialize: U8[] =
+  "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}"
+priv const lsp_shutdown: U8[] =
+  "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\",\"params\":{}}"
+
+priv fn send_lsp(port: I32, id: I32, auth: U8[], message: U8[], arena: Arena$@):
+  client.Resp?client.Http_end //<
+    //< Writes one message to the child's input, inside an LSP frame (delimited by `Content-Length`)
+  frame: = arena.text().s("Content-Length: \{message.len\}\r\n\r\n").s(message).take()
+  return client.post_json(port, arena.text().s("/api/run/\{id\}/in").take(), auth, frame, 5000I32,
+    arena)
+
+priv fn well_formed(out: U8[]): Bool //<
+  //< Whether it matches the fixed sequence (the byte at position i is `'a' + i % 26`)
+  //<
+  //< The length alone cannot show a swap.
+  for i in Range.asc(out.len)
+    if out[i] != U8::(97 + i % 26)
+      return false
+  return true
+
+priv fn delete_auth(port: I32, target: U8[], auth: U8[], arena: Arena$@):
+  client.Resp?client.Http_end //<
+    //< Sends a `DELETE` with a token.
+  got: = client.request(port, client.raw("DELETE", target, auth, "", arena), 1, 5000I32, false,
+    arena)?
+  return got.get(0)
+
+priv fn start_in(port: I32, auth: U8[], cwd: U8[], arena: Arena$@): I32?client.Http_end //<
+  //< Starts the allowed combination in that working directory, with a token
+  //<
+  //< 0 where it cannot.
+  body: = arena.text().s("{\"cmd\":\"ksplc\",\"args\":[\"lsp\"],\"cwd\":\"").s(cwd).s("\"}").take()
+  made: = client.post_json(port, "/api/run", auth, body, 10000I32, arena)?
+  if made.status != 200
+    return 0I32
+  return client.doc_of(made, arena).get("id").as_int(0I32)
+
+priv struct Gathered //< the chunks collected per stream
+  out: U8[]
+  err: U8[]
+  tail: U8[]
+
+priv fn gather_all(got: U8[], arena: Arena$@): Gathered
+  $out: = Str_builder.new()
+  defer out.free()
+  $err: = Str_builder.new()
+  defer err.free()
+  $tail: = Str_builder.new()
+  defer tail.free()
+  gather(got, 'O', out@)
+  gather(got, 'E', err@)
+  gather(got, 'X', tail@)
+  return Gathered::{ .out = arena.dup_str(out.slice()), .err = arena.dup_str(err.slice()),
+    .tail = arena.dup_str(tail.slice()) }
+
+fn spew_cases(token: U8[], arena: Arena$@): Void?client.Http_end //<
+  //< Checks `/api/run` case by case, with the spew child as the program to start
+  //<
+  //< **This shows what the language server cannot**: it neither writes more than 16 KiB at once
+  //< nor waits to be stopped, so draining, waiting at the cap, and a stopped stream's final chunk
+  //< show only with the spew child.
+  port: = spew_port
+  auth: = client.bearer_head(token, arena)
+
+  // --- A malformed request ---
+  bare: = client.get(port, "/api/run", auth, arena)?
+  verdict.check("GET /api/run with no number is 405", bare.status == 405,
+    client.shown(bare, arena))
+  alpha: = client.get(port, "/api/run/abc", auth, arena)?
+  verdict.check("a number that is not a number is 404", alpha.status == 404,
+    client.shown(alpha, arena))
+
+  // --- Checking the working directory ---
+  // Caution: **The root check must apply to `cwd` too**: starting outside it is reading outside it.
+  for bad in U8[][]::{ "../", "/", "hold/../../x" }
+    out: = client.post_json(port, "/api/run", auth,
+      arena.text().s("{\"cmd\":\"ksplc\",\"args\":[\"lsp\"],\"cwd\":\"").s(bad).s("\"}").take(),
+      5000I32, arena)?
+    verdict.check(arena.text().s("a working directory outside the root is 403: ").s(bad).take(),
+      out.status == 403, client.shown(out, arena))
+
+  // --- Draining the rest of a finished child ---
+  small_id: =
+    start_in(port, auth, arena.text().s("spew_\{spew_small\}").take(), arena)?
+  if !verdict.check("the spewing child can be started", small_id > 0I32, "could not start it")
+    return
+  $st1: = client.open_stream(port, arena.text().s("/api/run/\{small_id\}").take(), auth, arena)?
+  got1: = gather_all(st1.drain(stream_ms, arena), arena)
+  st1.free()
+  d1: = arena.text().s("out \{got1.out.len\} / err ").s(got1.err).s(" / end ").s(got1.tail).take()
+  verdict.check("no output is dropped from a child that spat past 16 KiB and ended",
+    I64::got1.out.len == spew_small && well_formed(got1.out), d1)
+  verdict.check("standard error arrives in its own container too",
+    got1.err.find_str("spew: done") >= 0, d1)
+  verdict.check("the end number is the child's own", got1.tail.find_str("\"exit\":7") >= 0, d1)
+
+  // --- Held at the cap while nobody watches; the rest flows once a watcher comes ---
+  big_id: =
+    start_in(port, auth, arena.text().s("spew_\{spew_big\}").take(), arena)?
+  if !verdict.check("a heavily spewing child can be started", big_id > 0I32, "could not start it")
+    return
+  // With nobody watching, the buffer reaches its cap and the child waits at its write.
+  sys.sleep_ms(300)
+  $st2: = client.open_stream(port, arena.text().s("/api/run/\{big_id\}").take(), auth, arena)?
+  got2: = gather_all(st2.drain(stream_ms * 3, arena), arena)
+  st2.free()
+  d2: = arena.text().s("out \{got2.out.len\} / end ").s(got2.tail).take()
+  verdict.check("what was spat before a watcher came all arrives in order once one does",
+    I64::got2.out.len == spew_big && well_formed(got2.out), d2)
+  verdict.check("a child that was holding the buffer arrives to its end too",
+    got2.tail.find_str("\"exit\":7") >= 0, d2)
+
+  // --- Stopping ---
+  hold_id: = start_in(port, auth, "hold", arena)?
+  if !verdict.check("a waiting child can be started", hold_id > 0I32, "could not start it")
+    return
+  put_resp: = client.put_file(port, arena.text().s("/api/run/\{hold_id\}").take(), auth, "", arena)?
+  verdict.check("a PUT to a number that exists is 405", put_resp.status == 405,
+    client.shown(put_resp, arena))
+  $st3: = client.open_stream(port, arena.text().s("/api/run/\{hold_id\}").take(), auth, arena)?
+  _head3: = st3.head(arena)
+  twice: = client.get(port, arena.text().s("/api/run/\{hold_id\}").take(), auth, arena)?
+  verdict.check("a stream someone is already watching is 409", twice.status == 409,
+    client.shown(twice, arena))
+  stopped: =
+    delete_auth(port, arena.text().s("/api/run/\{hold_id\}").take(), auth, arena)?
+  verdict.check("it can be stopped with DELETE", stopped.status == 200,
+    client.shown(stopped, arena))
+  // **A stopped stream must also end with the final chunk**, or the client waits for a child it
+  // stopped. Its code is -1: a stopped child's code cannot be read.
+  got3: = gather_all(st3.drain(5000I32, arena), arena)
+  st3.free()
+  verdict.check("a stopped stream closes on the end piece",
+    got3.tail.find_str("\"exit\":-1") >= 0,
+    arena.text().s("end ").s(got3.tail).take())
+  after: = client.get(port, arena.text().s("/api/run/\{hold_id\}").take(), auth, arena)?
+  verdict.check("a stopped number is 404 thereafter", after.status == 404,
+    client.shown(after, arena))
+  again: =
+    delete_auth(port, arena.text().s("/api/run/\{hold_id\}").take(), auth, arena)?
+  verdict.check("stopping a stopped number again is 404", again.status == 404,
+    client.shown(again, arena))
+
+  // --- The limit on running children ---
+  // **Refuse instead of making the client wait** (as the inference table does).
+  // Caution: **Keep it apart from "cannot start"**, or the places looked at come back and cast
+  // suspicion on the setup.
+  $ids: = List<|I32|>.new(arena)
+  for _k in Range.asc(max_procs)
+    id: = start_in(port, auth, "hold", arena)?
+    if id > 0I32
+      ids.push(id)
+  verdict.check("up to the count that can be held, it starts", ids.len == max_procs,
+    arena.text().s("started \{ids.len\}").take())
+  over: = client.post_json(port, "/api/run", auth, "{\"cmd\":\"ksplc\",\"args\":[\"lsp\"]}",
+    5000I32, arena)?
+  verdict.check("past the count it refuses with 503", over.status == 503,
+    client.shown(over, arena))
+  $freed: Sz = 0
+  for id in ids.slice()
+    r: =
+      delete_auth(port, arena.text().s("/api/run/\{id\}").take(), auth, arena)?
+    if r.status == 200
+      freed += 1
+  verdict.check("stopping frees the slot", freed == ids.len,
+    arena.text().s("stopped \{freed\}").take())
+  back: = start_in(port, auth, "hold", arena)?
+  verdict.check("it starts again in the freed slot", back > 0I32, "could not start it")
+  if back > 0I32
+    _r: =
+      delete_auth(port, arena.text().s("/api/run/\{back\}").take(), auth, arena)?

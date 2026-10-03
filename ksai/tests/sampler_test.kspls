@@ -1,0 +1,36 @@
+import "ksai/sampler" as ai_sampler
+import "ksai/tensor" { Tensor }
+import "std/mem" { Arena }
+import "std/prng"
+import "std/verdict"
+
+// ==========================================
+// ksai/sampler: tests where the next token is picked.
+//
+// **The random numbers themselves are not tested here**: that a fixed seed repeats its sequence
+// and that the OS's randomness can be read are `std`'s tests. Here the only question is whether,
+// from the same logits, the settings pick the expected token.
+// ==========================================
+fn test_sampler(arena: Arena$@)
+  verdict.start("[Sampler] argmax/temperature/top-k test...")
+  // logits = [1.0, 3.0, 2.0, 0.5] → the largest is index 1
+  shape: Sz[1] = ::{ 4 }
+  logits: = Tensor<|F32|>.new(Sz[]::shape, arena)
+  (logits.data + 0)$ = F32::1.0
+  (logits.data + 1)$ = F32::3.0
+  (logits.data + 2)$ = F32::2.0
+  (logits.data + 3)$ = F32::0.5
+
+  assert(ai_sampler.argmax(logits) == 1, "Sampler: argmax must pick the max index")
+
+  $rng: = prng.Prng.new(7U64)
+  // A temperature of 0 or below reduces to the greedy method (argmax)
+  greedy: = ai_sampler.Sample_config.greedy()
+  tok: = ai_sampler.sample(logits, greedy, rng@, arena)
+  assert(tok == 1, "Sampler: temperature<=0 must fall back to argmax")
+  // top_k=1 leaves only the largest value as a candidate → it always returns the argmax
+  top1: = ai_sampler.Sample_config::{ .temperature = 1.0, .top_k = 1, .top_p = 1.0 }
+  for _i in Range.asc(20)
+    top1_tok: = ai_sampler.sample(logits, top1, rng@, arena)
+    assert(top1_tok == 1, "Sampler: top_k=1 must always return the argmax token")
+  verdict.pass("")

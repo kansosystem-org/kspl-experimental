@@ -1,0 +1,365 @@
+//< Checks that the interfaces offered to the outside agree with the documents
+//<
+//< The entry points are the CLI, make's targets, the lists, a place on real hardware. It is not a
+//< suite of its own; it is a part of conventions.
+//< **Each of these builds either way** (Principle 5 turned round); the canonical source is the
+//< implementation. Disagreements inside ksplc (a diagnostic's code, a facade, sema's steps) are
+//< checked by `conventions_match.kspls`.
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+import "tests/support/conventions_scan" as scan
+import "tests/support/harness"
+import "tests/support/harness_text" as htext
+
+priv const spec_tools: U8[] = "ksplc/docs/SPEC-tools.md" //<
+  //< The same specification the diagnostic codes' check reads
+
+// ==========================================
+// The CLI's entry points agree between the implementation and the specification The canonical
+// source is the implementation (the declarations passed to argp).
+// Each direction checks a different range.
+// ==========================================
+priv const main_file: U8[] = "ksplc/main.kspls"
+
+priv const argp_builtin: U8[][1] = ::{ "--help" } //< the entry point argp provides by itself
+  //<
+  //< There is no declaration in `main.kspls`, but the documents' table lists them.
+
+priv const undocumented_ok: U8[][1] = ::{ "lsp-worker" } //<
+  //< What may be in the implementation and not in the documents
+  //<
+  //< Caution: Do not add one whose reason cannot be written: this is the only record of "it is not
+  //< written in the documents". `lsp-worker` is the inner process that lsp's supervisor starts.
+
+priv const cli_doc_placeholder: U8[][3] = ::{ "--name", "--foo", "--gc-sections" } //<
+  //< The forms that appear in the documents and are not ksplc's entry points
+  //<
+  //< This is not the place to silence a typo.
+
+priv fn collect_impl_cli(out: List<|U8[]|>$@, arena: Arena$@)
+  src: = harness.read_under_root(main_file)
+  for head in U8[][]::{ "p.subcommand(\"", "p.subcommand_trailing(\"", "p.command_flag(\"",
+    "p.flag(\"", "p.str_opt(\"", "p.str_list_opt(\"" }
+    for w in scan.find_all(src, head, "\"", arena)
+      scan.push_unique(out, w)
+  // The short side of a `p.short("--long", "-s")`.
+  for line in src.lines(arena)
+    at: = line.find_str("p.short(\"")
+    if at < 0
+      continue
+    rest: = line.sub_from(at)
+    second: = rest.find_str("\", \"")
+    if second < 0
+      continue
+    tail: = rest.sub_from(second + 4)
+    end: = tail.find_char('"')
+    if end > 0
+      scan.push_unique(out, tail.sub(0, end))
+
+priv fn collect_dash_words(text: U8[], out: List<|U8[]|>$@) //<
+  //< The forms `-x` / `--xxx` that appear in the documents
+  //<
+  //< Caution: **Do not pick them up between a pair of backquotes.** A code fence breaks the
+  //< pairing, and a whole section is picked up as one form.
+  $i: Sz = 0
+  for i < text.len
+    if text[i] != '-'
+      i += 1
+      continue
+    if i > 0 && (htext.is_word_at(text, i - 1) || text[i - 1] == '-')
+      i += 1
+      continue
+    $j: = i + 1
+    if j < text.len && text[j] == '-'
+      j += 1
+    if j >= text.len || !text[j].is_alpha()
+      i += 1
+      continue
+    $k: = j
+    for k < text.len && (text[k].is_alnum() || text[k] == '_' || text[k] == '-')
+      k += 1
+    scan.push_unique(out, text.sub(i, k - i))
+    i = k
+
+priv fn check_cli(arena: Arena$@)
+  spec: = harness.read_under_root(spec_tools)
+  $impl_cli: = List<|U8[]|>.new(arena)
+  collect_impl_cli(impl_cli@, arena)
+  $mentioned: = List<|U8[]|>.new(arena)
+  collect_dash_words(spec, mentioned@)
+  for w in scan.find_all(spec, "ksplc ", " ", arena)
+    scan.push_unique(mentioned@, w)
+  for w in scan.find_all(spec, "ksplc ", "`", arena)
+    scan.push_unique(mentioned@, w)
+  $bad: = List<|U8[]|>.new(arena)
+  for w in impl_cli
+    if scan.has(mentioned@, w)
+      continue
+    $ok: = false
+    for u in undocumented_ok
+      if w.equals(u)
+        ok = true
+    if !ok
+      bad
+        .push(arena.text().s("in ").s(main_file).s(" and no text in ").s(spec_tools).s(": ").s(w)
+        .take())
+  // A form listed in the table's rows (`| `-…` |`) must be in the implementation.
+  for row in scan.find_line_starts(spec, "| `-", " |", arena)
+    for w in scan.find_all(arena.text().s("`-\{row\}`").take(), "`", "`", arena)
+      opt: = cut_at_any(w, "=<\"")
+      if opt.len == 0 || !opt.starts_with("-")
+        continue
+      $known: = scan.has(impl_cli@, opt)
+      for b in argp_builtin
+        if opt.equals(b)
+          known = true
+      if !known
+        bad
+          .push(arena.text().s("in ").s(spec_tools).s("'s table and no declaration in ")
+          .s(main_file).s(": ").s(opt).take())
+  verdict.check_list("the CLI's entry points agree between the implementation and the spec",
+    impl_cli.len, "entry points", bad@, "")
+
+  // The above checks only the specification's table. **An entry point written in a design
+  // document must be usable too** (Principle 5 turned round). Only `ksplc/*.md` is checked;
+  // other folders name the linker's and other tools' options.
+  $doc_bad: = List<|U8[]|>.new(arena)
+  $doc_seen: Sz = 0
+  for rel in harness.tracked_matching(U8[][]::{ "ksplc/*.md" })
+    $words: = List<|U8[]|>.new(arena)
+    collect_dash_words(harness.read_under_root(rel), words@)
+    for w in words
+      doc_seen += 1
+      if !w.starts_with("--") || scan.has(impl_cli@, w)
+        continue
+      $ok: = false
+      for b in argp_builtin
+        if w.equals(b)
+          ok = true
+      for ph in cli_doc_placeholder
+        if w.equals(ph)
+          ok = true
+      if !ok
+        doc_bad.push(arena.text().s(rel).s(": ").s(w).take())
+  verdict.check_list("every `--option` ksplc/'s documents write stands in the implementation",
+    doc_seen, "shapes", doc_bad@, "")
+
+priv fn cut_at_any(s: U8[], seps: U8[]): U8[] //<
+  //< The text before the first separator (the trailing spaces are dropped)
+  $i: Sz = 0
+  for i < s.len
+    for c in seps
+      if s[i] == c
+        return s.sub(0, i).trim_end()
+    i += 1
+  return s.trim_end()
+
+// ==========================================
+// `--style`'s keys agree across the spec, the implementation and the reader
+// Caution: **Compare all three**, or "a key in the table, accepted, doing nothing" slips in
+// (Principle 5).
+// ==========================================
+priv const style_src: U8[] = "ksplc/fmt/style.kspls" //<
+  //< The file holding the style keys accepted
+  //<
+  //< **The accepted list and the reader are in two files.** `ksplc/fmt/style.kspls` holds the
+  //< accepted spelling and `ksplc/fmt/printer.kspls` the field the formatter reads, so one name
+  //< here would check only one of the two.
+priv const read_src: U8[] = "ksplc/fmt/printer.kspls"
+
+priv const style_keys: U8[][3] = ::{ "IndentWidth", "ColumnLimit", "AllowShortBlocks" } //<
+  //< The table's key name -> the field the formatter reads
+  //<
+  //< Caution: Add a field and add it in here too.
+priv const style_fields: U8[][3] = ::{ "indent_width", "column_limit", "allow_short_blocks" }
+
+priv fn check_style(arena: Arena$@)
+  spec: = harness.read_under_root(spec_tools)
+  src: = harness.read_under_root(style_src)
+  read: = harness.read_under_root(read_src)
+  $spec_keys: = scan.find_all(spec, "| **`", "`** |", arena)
+  $impl_keys: = scan.find_all(src, "key.equals(\"", "\")", arena)
+  $bad: = List<|U8[]|>.new(arena)
+  scan.diff_into(spec_keys@, impl_keys@,
+    arena.text().s("\{spec_tools\}'s table").take(), style_src, bad@, arena)
+  scan.diff_into(impl_keys@, spec_keys@, style_src,
+    arena.text().s("\{spec_tools\}'s table").take(), bad@, arena)
+  for i in Range.asc(3)
+    if !scan.has(impl_keys@, style_keys[i])
+      bad
+        .push(arena.text().s(style_keys[i]).s(": in this test's pairing table and not in ")
+        .s(style_src).s("'s list").take())
+      continue
+    // "The reader", apart from the declaration and the default: `r.config.<field>`.
+    want: = arena.text().s(".config.").s(style_fields[i]).take()
+    if read.find_str(want) < 0
+      bad
+        .push(arena.text().s(style_keys[i]).s(" is accepted and ").s(read_src).s(" does not read `")
+        .s(want).s("`").take())
+  verdict.check_list("`--style`'s keys agree across the spec, the code and the reader",
+    style_keys.len, "keys", bad@, "")
+
+// ==========================================
+// ksos's make targets can be walked to from the documents
+// Caution: **Do not leave a target out of the documents.** ksos records hardware confirmations
+// in the documents; with no path to the entry point that confirms, it cannot be tried again.
+// ==========================================
+priv const ksos_mk: U8[] = "ksos/Makefile"
+
+priv fn mk_var_words(text: U8[], name: U8[], out: List<|U8[]|>$@, arena: Arena$@) //<
+  //< Lists the words of a `<name> := …`
+  //<
+  //< A continuation after a `\` at a line's end is picked up too.
+  head: = arena.text().s(name).s(" :=").take()
+  $inside: = false
+  for line in text.lines(arena)
+    if !inside && !line.starts_with(head)
+      continue
+    $t: = (line.sub_from(head.len) if !inside else line).trim_spaces()
+    inside = true
+    cont: = t.ends_with("\\")
+    if cont
+      t = t.sub(0, t.len - 1)
+    for w in t.split(' ', arena)
+      if w.trim_spaces().len > 0
+        out.push(w.trim_spaces())
+    if !cont
+      return
+
+// Builds the targets of each family from its list and prefix.
+//
+// Caution: **When you add a family, add it here too**, or the gate stops seeing that family's
+// targets (a `make <target>` named in the documents still fails as "in the .md and not in
+// ksos/Makefile").
+priv const ksos_families: U8[][2][4] = ::{::{ "KSOS_POSIX_TEMPLATED", "ksos-" },
+  ::{ "KSOS_POSIX_PANIC", "ksos-" }, ::{ "KSOS_CM_DEMOS", "ksos-cm-" },
+  ::{ "KSOS_RP2040_DEMOS", "ksos-rp2040-" } }
+
+priv fn check_ksos_targets(arena: Arena$@)
+  $targets: = List<|U8[]|>.new(arena)
+  mk_text: = harness.read_under_root(ksos_mk)
+  for fam in ksos_families
+    $sufs: = List<|U8[]|>.new(arena)
+    mk_var_words(mk_text, fam[0], sufs@, arena)
+    for i in Range.asc(sufs.len)
+      scan.push_unique(targets@,
+        arena.text().s(fam[1]).s(sufs.get(i)).take())
+  for line in mk_text.lines(arena)
+    if !line.starts_with("ksos")
+      continue
+    at: = line.find_char(':')
+    if at <= 0 || (Sz::at + 1 < line.len && line[at + 1] == '=')
+      continue
+    name: = line.sub(0, at)
+    $ok: = true
+    for c in name
+      if !(c.is_alnum() || c == '_' || c == '-')
+        ok = false
+    if ok
+      scan.push_unique(targets@, name)
+  $runnable: = List<|U8[]|>.new(arena)
+  for rel in harness.tracked_matching(U8[][]::{ "*.md" })
+    text: = harness.read_under_root(rel)
+    $i: Sz = 0
+    for i + 10 <= text.len
+      at: = text.sub_from(i).find_str("make ksos")
+      if at < 0
+        break
+      p: = i + Sz::at + 5
+      $k: = p
+      for k < text.len && (text[k].is_alnum() || text[k] == '_' || text[k] == '-')
+        k += 1
+      scan.push_unique(runnable@, text.sub(p, k - p))
+      i = k
+  $bad: = List<|U8[]|>.new(arena)
+  scan.diff_into(targets@, runnable@, ksos_mk, "a document in the `make ...` shape", bad@, arena)
+  scan.diff_into(runnable@, targets@, ".md", ksos_mk, bad@, arena)
+  verdict.check_list("ksos's make targets agree with the documents", targets.len, "targets", bad@,
+    "")
+
+// ==========================================
+// std's list of files agrees with what is really there
+// ==========================================
+
+priv const std_record: U8[] = "std/SURFACE.txt" //<
+  //< The record of what std publishes, one row per declaration, the file's logical name first
+  //<
+  //< **A file that publishes nothing has no row**, and to std's users a file `ksplc doc std` does
+  //< not list does not exist. `std/` is flat, so only the `.kspls` directly under it counts, and
+  //< **`std/tests/` is not counted**: std's users do not choose from it.
+
+priv fn check_std_list(arena: Arena$@)
+  $files: = List<|U8[]|>.new(arena)
+  for rel in harness.tracked_matching(U8[][]::{ "std/*.kspls" })
+    if rel.starts_with("std/tests/")
+      continue
+    // Caution: **Strip the longer extension first**: `.kspls` does not end in `.kspl`, so the
+    // other order leaves the whole extension on and every row reads as missing.
+    files.push(rel.sub_from(4).strip_suffix(".kspls").strip_suffix(".kspl"))
+  $recorded: = List<|U8[]|>.new(arena)
+  for line in harness.read_under_root(std_record).lines(arena)
+    tab: = line.find_char('\t')
+    if line.starts_with("std/") && tab > 4
+      scan.push_unique(recorded@, line.sub(4, tab - 4))
+  $bad: = List<|U8[]|>.new(arena)
+  scan.diff_into(files@, recorded@, "what is really there", std_record, bad@, arena)
+  scan.diff_into(recorded@, files@, std_record, "what is really there", bad@, arena)
+  verdict.check_list("every std file publishes something, and the record names no other",
+    files.len, "files", bad@, "")
+
+// ==========================================
+// The Flash region reserved for the record agrees between the driver and the linker script
+// ==========================================
+
+priv const flash_drv: U8[] = "ksos/drivers/rp2040/flash.kspls" //<
+  //< The driver that holds the Flash region reserved for the record
+  //<
+  //< **When they disagree, the link passes even where the image reaches the record's region**: the
+  //< ASSERT sees only "the image does not come this far", so changing only the driver puts the
+  //< record at **a place nobody looks at**.
+priv const flash_ld: U8[] = "ksos/port/rp2040/link.ld"
+
+priv const drv_head: U8[] = "const region_base: Sz = " //<
+  //< The marker in front of the number, on each side
+  //<
+  //< Caution: **Do not hard-code the marker's length**: the column drifts on an edit and fails as
+  //< "not found", which reads like a differing value. **Do not put the visibility into the
+  //< marker**: a `pub` comes and goes; it is stripped before reading.
+priv const ld_head: U8[] = "ASSERT(_flash_image_end <= ORIGIN(FLASH) + "
+
+priv fn value_at(rest: U8[]): U8[] //< takes the number written at the start of `rest`
+  //<
+  //< **Both sides carry something behind the number** (a `//<` on the driver's, the ASSERT's rest
+  //< on the linker script's), so stopping where the number stops serves both.
+  $k: Sz = 0
+  for k < rest.len && rest[k].is_alnum()
+    k += 1
+  return rest.sub(0, k)
+
+priv fn check_flash(arena: Arena$@)
+  $drv: U8[] = ""
+  for line in harness.read_under_root(flash_drv).lines(arena)
+    bare: = line.strip_prefix("pub ").trim_spaces()
+    if bare.starts_with(drv_head)
+      drv = value_at(bare.sub_from(drv_head.len))
+  $ld: U8[] = ""
+  for line in harness.read_under_root(flash_ld).lines(arena)
+    at: = line.find_str(ld_head)
+    if at >= 0
+      ld = value_at(line.sub_from(at + ld_head.len))
+  ok: = drv.len > 0 && ld.len > 0 && drv.equals(ld)
+  why: = arena.text().s(flash_drv).s(": ").s("(not found)" if drv.len == 0 else drv).s("\n")
+    .s(flash_ld).s(": ").s("(not found)" if ld.len == 0 else ld).take()
+  verdict.check("the Flash place for the record agrees between the driver and the linker script",
+    ok, why)
+
+fn run(arena: Arena$@) //< runs every check of the entry points offered to the outside
+  check_cli(arena)
+  check_style(arena)
+  check_ksos_targets(arena)
+  check_std_list(arena)
+  check_flash(arena)

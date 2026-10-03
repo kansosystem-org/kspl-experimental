@@ -1,0 +1,50 @@
+//< The child program for testing how `kssrv --local` starts a process
+//<
+//< Not a suite; `make test` builds it and the test puts it in `KSSRV_KSPLC`.
+//< **It is started in place of the language server.** It ignores its argument (`lsp`). Its working
+//< directory decides what it does, because `cwd` is the only free value the caller can pass (`args`
+//< is limited to the allowed combinations). **Its output is a fixed sequence** (the byte at
+//< position i is `'a' + i % 26`), so the reader can check the content as well as the length: a
+//< dropped piece shows in the length, a swapped one in the content.
+import "std/chars"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strnum"
+import "std/sys"
+
+priv const chunk: Sz = 4096 //< how much is written at a time
+priv const exit_code: I32 = 7 //< the exit code once all the output is written
+  //<
+  //< Caution: **Do not make it 0**: 0 is the default, so it would not prove the code arrived.
+
+priv fn leaf(path: U8[]): U8[] //< the last folder of the working directory, such as `spew_100`
+  $cut: Sz = 0
+  for i in Range.asc(path.len)
+    if path[i] == '/' || path[i] == '\\'
+      cut = i + 1
+  return path.sub_from(cut)
+
+fn main(): I32
+  $buf: U8[4096] = ::{}
+  here: = leaf(sys.cwd(U8$[]::buf))
+  prefix: U8[] = "spew_"
+  if !here.starts_with(prefix)
+    // It waits until it is stopped: standard input stays open, so it waits by reading to EOF.
+    wait_arena: = Arena.new(4096)
+    defer wait_arena.free()
+    _rest: = io.read_stdin(wait_arena)
+    return 0
+  want: = here.sub_from(prefix.len).to_i64() catch 0I64
+  $piece: = Str_builder.new()
+  defer piece.free()
+  $at: I64 = 0I64
+  for at < want
+    piece.clear()
+    for piece.len < chunk && at < want
+      piece.c(U8::(97I64 + at % 26I64))
+      at += 1I64
+    io.out().s(piece.slice())
+  io.out().flush()
+  io.err().s("spew: done\n")
+  return exit_code

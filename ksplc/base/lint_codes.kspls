@@ -1,0 +1,228 @@
+//< The canonical source of the diagnostic codes
+//<
+//< It alone says which codes exist. A `##lint(CODE = level)` and a profile both reject a code
+//< not listed here, or a typo such as `##lint(I004 = off)` would silently do nothing
+//< (docs/DESIGN.md Principle 5). **An error-severity diagnostic gets no code**: only a code can be
+//< configured, so a project setting cannot silence a real defect. Add each new diagnostic.
+
+import "ksplc/base/config_file" as base_config_file
+import "ksplc/base/core" as base_core
+import "std/ds" { List }
+import "std/str"
+
+priv struct Global_setting //<
+  //< The level setting for every file, given on the command line (`--lint=CODE=level`)
+  //<
+  //< A per-file `##lint(...)` overrides it.
+  //< A global like base_core.config: argument parsing (main.kspls) writes it before any Ctx exists.
+  code: U8[]
+  level: Lint_level
+
+priv $global_settings: List<|Global_setting|>$@ = null
+
+fn set_global_level(code: U8[], level: Lint_level) //<
+  //< It registers one level setting from the command line
+  //<
+  //< The caller (main.kspls) rejects an unknown code or level, since the command line words that
+  //< error differently from `##lint`.
+  if global_settings == null
+    // The element buffer comes from perm_arena too: the heap (`new()`) would leak it, and the LSP
+    // rewinds base_core.arena.
+    global_settings = List<|Global_setting|>.create(base_core.perm_arena)
+  global_settings.push(Global_setting::{ .code = code, .level = level })
+
+fn base_level_for(file_path: U8[], code: U8[]): Lint_level //<
+  //< The level where there is no `##lint(...)` in the source
+  //<
+  //< Strongest first: the command line (`--lint=`) > the nearest `ksplc.cfg` > the default here.
+  //< The command line wins so CI can override. It runs only when a diagnostic is reported;
+  //< validate_config_for_file checks the file itself.
+  if global_settings != null
+    $i: = global_settings.len
+    for i > 0
+      i -= 1
+      e: = global_settings.get(i)
+      if e.code.equals(code)
+        return e.level
+  if level: = cfg_level_for(file_path, code)
+    return level
+  return Lint_level.on if is_default_on(code) else Lint_level.off
+
+priv fn cfg_level_for(file_path: U8[], code: U8[]): Option<|Lint_level|> //<
+  //< It reads the level that applies to this file from the `[lint]` section of `ksplc.cfg`
+  //<
+  //< Where the file names the same code twice, the later line wins.
+  $found: = Option<|Lint_level|>.none
+  for setting in base_config_file.settings_for_file(file_path)
+    if level: = lint_setting_level(setting)
+      if setting.key.equals(code)
+        found = Option<|Lint_level|>.some(level)
+  return found
+
+priv fn lint_setting_level(setting: base_config_file.Setting): Option<|Lint_level|> //<
+  //< If one setting is a code's level in the `[lint]` section, it returns that level
+  //<
+  //< It always checks the setting (unknown section, code or level), whatever code is asked for,
+  //< or `I0305 = maybe` passes silently where I0305 does not fire (docs/DESIGN.md Principle 5).
+  if !setting.section.equals("lint")
+    return Option<|Lint_level|>.none
+  if !is_known(setting.key)
+    base_config_file.reject(setting,
+      "unknown diagnostic code (see ksplc/base/lint_codes.kspls for the full list)")
+  level: = Lint_level.parse(setting.value)
+  if level.is_none()
+    base_config_file.reject(setting, "unknown lint level (expected 'off', 'on', or 'error')")
+  return level
+
+fn validate_config_for_file(file_path: U8[]) //<
+  //< It reads the `ksplc.cfg` that applies to this file and checks every setting
+  //<
+  //< A file with no diagnostic never calls cfg_level_for, so call this for every loaded source
+  //< before the checks run (ksplc/pipeline.kspls). **An `error` level turns the checks on**, as
+  //< the other two ways of setting a level do, or a plain build rejects nothing.
+  for setting in base_config_file.settings_for_file(file_path)
+    if level: = lint_setting_level(setting)
+      switch level case .error
+        base_core.config.run_lint_checks = true
+      default {}
+
+enum Lint_level //< the levels a user can write into a `##lint(...)`
+  off //< not reported
+  on //< reported at the default severity
+  error //< raised to an error (a setting may only add rejections, never remove them)
+
+impl Lint_level
+  fn parse(name: U8[]): Option<|Lint_level|>
+    if name.equals("off")
+      return Option<|Lint_level|>.some(Lint_level.off)
+    if name.equals("on")
+      return Option<|Lint_level|>.some(Lint_level.on)
+    if name.equals("error")
+      return Option<|Lint_level|>.some(Lint_level.error)
+    return Option<|Lint_level|>.none
+
+fn lookup(code: U8[]): Option<|Bool|> //< the list of every code: whether it is on by default
+  //<
+  //< None for a code that does not exist.
+  //< Caution: **Do not return a description.** Nothing reads one, and it would bloat the
+  //< executable.
+  //< Add a line for each new diagnostic. It is a chain of matches rather than a `const` array,
+  //< like is_known_attribute (ksplc/sema/decl/attrs.kspls), so the seed can compile it.
+  if code.equals("H0311")
+    return info(true)
+  if code.equals("H0312")
+    return info(true)
+  if code.equals("H0801")
+    return info(true)
+  if code.equals("H0802")
+    return info(true)
+  if code.equals("H0704")
+    return info(true)
+  if code.equals("H0803")
+    return info(true)
+  if code.equals("H0804")
+    return info(true)
+  if code.equals("I0501")
+    return info(true)
+  if code.equals("I0502")
+    return info(true)
+  if code.equals("I0601")
+    return info(true)
+  if code.equals("I0301")
+    return info(true)
+  if code.equals("I0302")
+    return info(true)
+  if code.equals("I0303")
+    return info(true)
+  if code.equals("I0304")
+    return info(true)
+  if code.equals("I0703")
+    return info(true)
+  if code.equals("I0805")
+    return info(true)
+  if code.equals("I0305")
+    return info(true)
+  if code.equals("I0306")
+    return info(true)
+  if code.equals("I0307")
+    return info(true)
+  if code.equals("I0308")
+    return info(true)
+  if code.equals("I0309")
+    return info(true)
+  if code.equals("W0106")
+    return info(true)
+  if code.equals("I0603")
+    return info(false)
+  if code.equals("I0401")
+    return info(true)
+  if code.equals("W0107")
+    return info(true)
+  if code.equals("W0108")
+    return info(true)
+  if code.equals("W0110")
+    return info(true)
+  if code.equals("I0310")
+    return info(true)
+  if code.equals("I0402")
+    return info(false)
+  if code.equals("W0109")
+    return info(true)
+  if code.equals("W0201")
+    return info(true)
+  if code.equals("W0701")
+    return info(true)
+  if code.equals("W0202")
+    return info(true)
+  if code.equals("W0203")
+    return info(true)
+  if code.equals("W0204")
+    return info(true)
+  if code.equals("W0205")
+    return info(true)
+  // Division or remainder by 0, a shift width exceeded, a literal out of range and an `#export`
+  // on a `priv` carry no code: an error that silently changes a value gets none (see the head).
+  if code.equals("W0101")
+    return info(true)
+  if code.equals("W0102")
+    return info(true)
+  if code.equals("W0702")
+    return info(true)
+  if code.equals("W0206")
+    return info(true)
+  if code.equals("W0207")
+    return info(true)
+  if code.equals("W0208")
+    return info(true)
+  if code.equals("W0209")
+    return info(true)
+  if code.equals("W0210")
+    return info(true)
+  if code.equals("W0211")
+    return info(true)
+  if code.equals("W0212")
+    return info(true)
+  if code.equals("W0213")
+    return info(true)
+  if code.equals("W0103")
+    return info(true)
+  if code.equals("W0602")
+    return info(false)
+  if code.equals("W0504")
+    return info(true)
+  if code.equals("W0505")
+    return info(true)
+  if code.equals("W0104")
+    return info(true)
+  return Option<|Bool|>.none
+
+priv fn info(is_default_on: Bool): Option<|Bool|>
+  return Option<|Bool|>.some(is_default_on)
+
+fn is_known(code: U8[]): Bool
+  return lookup(code).is_some()
+
+fn is_default_on(code: U8[]): Bool //< whether it is a code checked by default
+  //<
+  //< A code not in the table counts as on (the caller has already rejected it).
+  return lookup(code).unwrap_or(true)

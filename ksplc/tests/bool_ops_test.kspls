@@ -1,0 +1,36 @@
+//< The operators that apply to `Bool`, over every combination
+//<
+//< Caution: **Keep it paired with the negative test** (`tests/negative/bool_arithmetic.kspl`);
+//< alone, that one does not notice rejecting too much (it stays green if `&` is rejected too).
+//< Why these operators stay: `== != < > <= >=` match Rust's `bool: Ord`, and `& | ^` match Java's
+//< logical operators that do not short-circuit.
+import "std/verdict"
+
+priv const lefts: Bool[4] = ::{ false, false, true, true } //< every combination of true and false
+  //<
+  //< With only one side varied, swapping `&` and `|` would pass.
+priv const rights: Bool[4] = ::{ false, true, false, true }
+
+fn run()
+  verdict.start("[Genc] the operators kept on `Bool` test...")
+  for i in Range.asc(4)
+    a: = lefts[i]
+    b: = rights[i]
+    // The short-circuiting and the non-short-circuiting forms agree.
+    assert((a && b) == (a & b), "Bool ops: '&' must agree with '&&'")
+    assert((a || b) == (a | b), "Bool ops: '|' must agree with '||'")
+    assert((a ^ b) == (a != b), "Bool ops: '^' must agree with '!='")
+    // Equality and ordering. The ordering is false < true (as numbers, 0 < 1).
+    assert((a == b) == !(a != b), "Bool ops: '==' and '!=' must be opposites")
+    assert((a < b) == (!a && b), "Bool ops: '<' must order false before true")
+    assert((a > b) == (a && !b), "Bool ops: '>' must order true after false")
+    assert((a <= b) == ((a < b) || (a == b)), "Bool ops: '<=' must be '<' or '=='")
+    assert((a >= b) == ((a > b) || (a == b)), "Bool ops: '>=' must be '>' or '=='")
+    // Negation is `!` (`-` and `~` are rejected).
+    assert(!(!a) == a, "Bool ops: '!' must be its own inverse")
+    // **What to write instead of `b1 + b2`**: a conversion to a number.
+    assert(I32::a + I32::b == (1 if a else 0) + (1 if b else 0),
+      "Bool ops: 'I32::flag' must convert for counting")
+  verdict
+    .pass("the logical, the bit, the equality, the ordering, the negation and the conversion for \
+      counting are all there.")

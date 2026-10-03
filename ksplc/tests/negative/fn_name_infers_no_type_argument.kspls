@@ -1,0 +1,29 @@
+//< A generic's type argument is not inferred from a bare function name
+//<
+//< A function has no type of its own (check_fn_value_binding in `sema/body/stmt_escape.kspls`):
+//< bound to `T`, a call through the result has nothing to be checked against, nor C to spell.
+//< Caution: Keep the passing side: a written type argument, and `apply(twice, 2)` once `v` sets T.
+// EXPECT: cannot infer the type arguments of 'pass_through' from function 'twice'
+// EXPECT: then 'pass_through<|Op|>(…)'
+// EXPECT: function 'text_len' cannot be used as 'fn(I32):I32': its own type is 'fn(U8[]):I32'
+priv fn twice(a: I32): I32
+  return a * 2
+
+priv fn text_len(_s: U8[]): I32
+  return 3
+
+priv fn pass_through<|T|>(v: T): T
+  return v
+
+priv fn apply<|T|>(f: fn(x: T): T, v: T): T
+  return f(v)
+
+priv typedef Op = fn(a: I32): I32
+
+fn main(): I32
+  guessed: = pass_through(twice)
+  bad: = apply(text_len, 3)
+  // The passing side.
+  written: = pass_through<|Op|>(twice)
+  ok: I32 = written(1) + apply(twice, 2)
+  return ok

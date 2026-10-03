@@ -1,0 +1,518 @@
+//< Fuzzing: feeding broken input to a program and counting how each trial ended
+//<
+//< **A trial is one run of the program, watched from outside.** It ends with the program's own
+//< answer, with a stop it announced (`panic:`), with a silent crash, or with no end before the
+//< timeout; only the first is not a finding. **The same seed, seed files and count give the same
+//< trials**, so two numbers reproduce a finding. Why it is not coverage-guided is in "Fuzzing
+//< watches the program from outside" in `std/docs/DESIGN.md`.
+import "std/argp"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena, dealloc }
+import "std/prng" { Prng }
+import "std/str" // `arena.text()`
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+
+priv const stop_mark: U8[] = "panic:" //<
+  //< What the program prints before an announced stop
+  //<
+  //< Every announced stop prints it: `panic`, the bounds and division checks, and an arena that
+  //< runs out.
+
+priv const capture_cap: Sz = 4 * 1024 * 1024 //< how much of a trial's output is kept
+
+priv const mutation_kinds: Sz = 6 //< the number of mutations; matches the branches of `mutate`
+
+priv const bits: U8[8] = ::{ 1U8, 2U8, 4U8, 8U8, 16U8, 32U8, 64U8, 128U8 } //<
+  //< For each bit a flip can change, the byte with only that bit set
+  //<
+  //< Caution: **Not `1 << n`**, which puts a value of undecided width into a `U8`, so what
+  //< happens at the eighth bit depends on the type in use.
+
+priv const confirm_times: I32 = 5 //<
+  //< How many times longer the timeout is when a trial that timed out is run again
+  //<
+  //< **A program that never stops does not stop at any multiple**, and only those trials pay.
+
+// ==========================================
+// The options, the seeds and the mutations
+// ==========================================
+
+pub struct Opts //< the two numbers of a fuzz run, which reproduce it
+  pub trials: I64 //< how many trials
+  pub seed: I64 //< the random generator's starting seed
+
+pub fn declare( //< adds `--trials` and `--seed` to the caller's parser
+  //<
+  //< The values in `o` at the call are the defaults. **Declare both options through this**: the
+  //< same names everywhere let the reproduce line of `report_all` run as printed.
+  p: argp.Parser$@, //< the parser that holds the program's other arguments
+  o: Opts$@, //< where the two numbers are stored
+)
+  p.int_opt("--trials", o.trials@, "how many rounds to scatter")
+  p.int_opt("--seed", o.seed@, "where the generator starts; the same seed gives the same rounds")
+
+pub struct Setup //< what a fuzz driver's command line names
+  pub exe: U8[] //< the program under test, as a full path
+  pub work: U8[] //< the work folder, as a full path; it stands once `setup` returns
+  pub dirs: U8[][] //< the seed folders (`.` when none is named); empty for a driver taking none
+  pub again: U8[] //< the command that runs the driver again, without the two numbers
+
+pub fn setup( //< reads `<program> <work folder> [seed folder ...]`, and makes the work folder
+  //<
+  //< It declares the positional arguments and the two numbers (`declare`), so the caller declares
+  //< only its own options before the call.
+  p: argp.Parser$@, //< the driver's parser
+  o: Opts$@, //< where the two numbers are stored; its values at the call are the defaults
+  run_as: U8[], //< how the driver is started (`ksplc run tests/fuzz_main.kspls`)
+  program: U8[], //< how the usage names the program under test (`<reader>`)
+  seed_dirs: Bool, //< whether seed folders may follow the work folder
+  arena: Arena$@, //< where the paths and the text go
+): Setup?U8[] //< the command line; fails with the line to stop on
+  usage: = arena.text().s(program).s(" <work folder>").s(" [seed folder ...]" if seed_dirs else "")
+    .take()
+  p.positional(usage)
+  declare(p, o)
+  p.parse(sys.args(), arena) catch e
+    throw arena.text().s("\{e\}").take()
+  if p.rest.len < 2 || (!seed_dirs && p.rest.len > 2)
+    throw arena.text().s("usage: ").s(run_as).s(" ").s(usage).take()
+  exe: = fs.absolute(p.rest.get(0), arena) catch
+    throw "the working place cannot be read"
+  work: = fs.absolute(p.rest.get(1), arena) catch
+    throw "the working place cannot be read"
+  fs.mkdir_all(work) catch
+    throw "the work folder cannot be made"
+  $dirs: = List<|U8[]|>.new(arena)
+  for i in Range.asc(p.rest.len)
+    if i >= 2
+      dirs.push(p.rest.get(i))
+  if seed_dirs && dirs.len == 0
+    dirs.push(".")
+  check_dirs(dirs.slice(), arena)?
+  again: = arena.text().s(run_as)
+  for a in p.rest
+    again.s(" \"").s(a).s("\"")
+  return Setup::{ .exe = exe, .work = work, .dirs = dirs.slice(), .again = again.take() }
+
+pub fn check_dirs( //< fails unless every seed folder stands
+  //<
+  //< Caution: **A seed folder that does not exist is an error**, not a folder with no seeds: a path
+  //< broken on its way here would fuzz with fewer seeds and pass.
+  dirs: U8[][], //< the seed folders
+  arena: Arena$@, //< where the text goes
+): Void?U8[] //< fails with the line to stop on
+  for d in dirs
+    if !fs.is_dir(d)
+      throw arena.text().s("the seed folder ").s(d).s(" does not stand").take()
+
+pub struct Input_kind //< one kind of input the program under test reads
+  pub name: U8[] //< the kind's name: what a seed's `kind` holds, and what the program is told
+  pub ext: U8[] //< the input file's ending.
+    //<
+    //< Caution: **Name it as the program expects for that kind**: another name can take another
+    //< code path.
+
+pub struct Sample //< one seed: bytes to mutate, and where they came from
+  pub kind: U8[] //< which input kind it is passed as (`Input_kind.name`)
+  pub name: U8[] //< where it came from; a finding uses this name
+  pub data: U8[] //< its bytes, never changed (`mutate` changes a copy)
+  pub built: Bool //< the program's own writer made it, so the program must read it back.
+    //<
+    //< `check_seeds` fails when such a seed is refused; any other refused seed is dropped.
+
+pub fn gather( //< collects the files with the given endings under the folders, as seeds
+  //<
+  //< **In the order the folders are given, and within a folder in path order**, so the seeds are
+  //< the same on every machine. The kind is the ending that matched; the name is the path below.
+  //< Caution: **Nothing under a folder named `out` or `.git`**: a seed list that changes with the
+  //< last build reproduces nothing.
+  dirs: U8[][], //< where to look; a folder inside another one yields its files twice
+  endings: U8[][], //< the file endings to collect (`.md`, `.kspls`)
+  cap: I64, //< files of this many bytes or more are skipped
+  arena: Arena$@, //< where the list and the bytes are stored
+): List<|Sample|> //< the seeds found; a folder that cannot be walked is skipped
+  $out: = List<|Sample|>.new(arena)
+  for handed in dirs
+    dir: = handed.strip_suffix("/")
+    files: = fs.walk_files(dir, fs.skip_build_output, arena) catch
+      continue
+    for path in files
+      $kind: U8[] = ""
+      for e in endings
+        if kind.len == 0 && path.ends_with(e)
+          kind = e
+      if kind.len == 0
+        continue
+      info: = fs.stat(path) catch
+        continue
+      if info.size >= cap
+        continue
+      data: = io.read_file(path) catch
+        continue
+      kept: = arena.dup_str(data)
+      dealloc(Void$@::data.ptr)
+      name: = path.sub_from(dir.len + 1) if path.len > dir.len else path
+      out.push(Sample::{ .kind = kind, .name = name, .data = kept, .built = false })
+  return out
+
+pub fn pick( //< one seed of the given kind, or `all.len` if there is none
+  //<
+  //< Caution: **It does not pick from all seeds**, or a kind with few seeds would almost never be
+  //< tested; the caller picks the kind first.
+  all: List<|Sample|>@, //< every seed
+  kind: U8[], //< the input kind
+  r: Prng$@, //< the trial's random generator
+): Sz //< an index into `all`
+  n: = count_of(all, kind)
+  if n == 0
+    return all.len
+  $want: = r.below(n)
+  for i in Range.asc(all.len)
+    if !all.get(i).kind.equals(kind)
+      continue
+    if want == 0
+      return i
+    want -= 1
+  return all.len
+
+priv fn count_of(all: List<|Sample|>@, kind: U8[]): Sz //< how many seeds are of that kind
+  $n: Sz = 0
+  for i in Range.asc(all.len)
+    if all.get(i).kind.equals(kind)
+      n += 1
+  return n
+
+pub fn mutate( //< returns the bytes with one random mutation applied
+  //<
+  //< A bit flipped, bytes dropped, random bytes inserted, a run copied, the end cut off, or two
+  //< bytes swapped. Empty input is returned unchanged.
+  src: U8[], //< the seed; not changed
+  r: Prng$@, //< the trial's random generator
+  arena: Arena$@, //< where a changed copy is stored
+): U8[] //< the changed bytes; a view of `src` when only the end is cut off
+  if src.len == 0
+    return src
+  kind: = r.below(mutation_kinds)
+  // Cutting off the end keeps only the front, so it needs no copy.
+  if kind == 4
+    return src.sub(0, 1 + r.below(src.len))
+  $data: = List<|U8|>.new_with_cap(src.len + 16, arena)
+  for b in src
+    data.push(b)
+  if kind == 0
+    at: = r.below(data.len)
+    data.set(at, data.get(at) ^ bits[r.below(8)])
+  else if kind == 1
+    drop_bytes(data@, r)
+  else if kind == 2
+    at: = r.below(data.len + 1)
+    n: = 1 + r.below(8)
+    for k in Range.asc(n)
+      data.insert(at + k, U8::r.below(256))
+  else if kind == 3
+    duplicate_bytes(data@, r, arena)
+  else if data.len >= 2
+    i: = r.below(data.len)
+    j: = r.below(data.len)
+    was: = data.get(i)
+    data.set(i, data.get(j))
+    data.set(j, was)
+  return data.slice()
+
+priv fn drop_bytes(data: List<|U8|>$@, r: Prng$@)
+  at: = r.below(data.len)
+  room: = data.len - at
+  n: = 1 + r.below(8 if room > 8 else room)
+  for _k in Range.asc(n)
+    data.remove_at(at)
+
+priv fn duplicate_bytes(data: List<|U8|>$@, r: Prng$@, arena: Arena$@) //<
+  //< Copies a short run of the bytes and inserts the copy at a random position
+  //<
+  //< Caution: **Copy first, then insert**; inserting in front would shift the bytes not yet copied.
+  at: = r.below(data.len)
+  room: = data.len - at
+  n: = 1 + r.below(16 if room > 16 else room)
+  $chunk: = List<|U8|>.new_with_cap(n, arena)
+  for k in Range.asc(n)
+    chunk.push(data.get(at + k))
+  to: = r.below(data.len + 1)
+  for k in Range.asc(n)
+    data.insert(to + k, chunk.get(k))
+
+// ==========================================
+// A trial
+// ==========================================
+
+pub struct Trial //< the outcome of one trial
+  pub got: subproc.Run_result //< the run; the rerun with a longer timeout if the first timed out
+  pub slow: Bool //< it timed out the first time but ended within the longer timeout.
+    //<
+    //< Caution: **Report it when it is true** (`note` does): a trial near the timeout will one day
+    //< look hung.
+
+pub fn run_trial( //< runs one trial, in the caller's working directory
+  //<
+  //< **A trial that times out is run again with a longer timeout** before it counts as a hang: a
+  //< busy machine can slow a finite trial past a wall-clock timeout.
+  argv: U8[][], //< the program and its arguments
+  ms: I32, //< the first timeout
+  arena: Arena$@, //< where the output is stored
+): Trial //< the run, and whether it ended only within the longer timeout
+  first: = subproc.run_capture(argv, "", ms, capture_cap, arena)
+  if !first.timed_out || first.spawn_failed
+    return Trial::{ .got = first, .slow = false }
+  again: = subproc.run_capture(argv, "", ms * confirm_times, capture_cap, arena)
+  return Trial::{ .got = again, .slow = !again.timed_out && !again.spawn_failed }
+
+// ==========================================
+// A fuzz run
+// ==========================================
+
+pub struct Campaign //< one fuzz run: the program under test, the input it reads, and its report
+  pub subject: U8[] //< the program under test, as the lines name it (`ksplc`, `std`)
+  pub argv: U8[][] //< the program and the arguments that come before the input file
+  pub tell_kind: Bool //< the kind's name goes before the input file (`<exe> <kind> <file>`)
+  pub after: U8[][] //< the arguments that come after the input file
+  pub work: U8[] //< where each trial's input is written, and a failing one kept
+  pub kinds: Input_kind[] //< the kinds of input; a trial takes one, then a seed of it (`pick`)
+  pub in_turn: Bool //< the kinds are taken in turn, not drawn at random
+  pub wait_ms: I32 //< a trial's first timeout (`run_trial`)
+  pub reach_div: Sz //< at least one trial in this many must be accepted (`check_reach`)
+  pub again: U8[] //< the command that starts this fuzz run, without the two numbers
+
+priv fn read_once(c: Campaign@, k: Input_kind, data: U8[], arena: Arena$@): Trial?io.Io_error //<
+  //< Writes the bytes to the work folder's input file, and runs one trial on it
+  //<
+  //< The file is overwritten every trial.
+  path: = fs.join(c.work, arena.text().s("mutant").s(k.ext).take(), arena)
+  io.write_file(path, data)?
+  $argv: = List<|U8[]|>.new(arena)
+  for a in c.argv
+    argv.push(a)
+  if c.tell_kind
+    argv.push(k.name)
+  argv.push(path)
+  for a in c.after
+    argv.push(a)
+  return run_trial(argv.slice(), c.wait_ms, arena)
+
+pub fn check_seeds( //< has the program read every seed once, and returns those it accepted
+  //<
+  //< Caution: **Do not continue silently if a seed cannot be written**: the program then reads the
+  //< previous trial's input, and the input fuzzed and the finding disagree. **Drop a refused seed
+  //< here, before fuzzing**, or every trial mutates a seed that is unreadable from the start.
+  c: Campaign@, //< the fuzz run
+  all: List<|Sample|>@, //< every seed; each is of one of the run's kinds
+  arena: Arena$@, //< where the list and the text go
+): List<|Sample|> //< the seeds the program accepted
+  $live: = List<|Sample|>.new(arena)
+  $bad: = List<|U8[]|>.new(arena)
+  for i in Range.asc(all.len)
+    one: = all.get(i)
+    at: = arena.text().s(one.kind).s(": ").s(one.name)
+    $at_kind: = c.kinds.len
+    for j in Range.asc(c.kinds.len)
+      if c.kinds[j].name.equals(one.kind)
+        at_kind = j
+    if at_kind == c.kinds.len
+      bad.push(at.s(": is of no kind the run names").take())
+      continue
+    ran: = read_once(c, c.kinds[at_kind], one.data, arena) catch
+      bad.push(at.s(": cannot be written").take())
+      continue
+    if ran.got.spawn_failed || ran.got.timed_out
+      bad.push(at.s(": cannot be started, or does not end").take())
+      continue
+    if ran.got.exit_code != 0
+      if one.built
+        bad.push(at.s(": what was written cannot be read back").take())
+      continue
+    live.push(one)
+  verdict.check_list(arena.text().s(c.subject).s(" itself can read back the seeds ").s(c.subject)
+    .s(" wrote").take(), all.len, "seeds", bad@, "")
+  return live
+
+pub fn scatter( //< runs the trials, checks that they reached the program, and reports them
+  //<
+  //< A kind with no seed is reported as skipped and left out of the draw.
+  c: Campaign@, //< the fuzz run
+  seeds: List<|Sample|>@, //< the seeds to mutate (`check_seeds`, or real files as they are)
+  what: U8[], //< what is scattered, as the heading names it (`byte sequences`)
+  o: Opts, //< the two numbers of the run
+  arena: Arena$@, //< where the inputs, the outputs and the findings go
+): Void?U8[] //< fails with the line to stop on: no seed, or a trial that could not be run
+  $kinds: = List<|Input_kind|>.new(arena)
+  for k in c.kinds
+    if count_of(seeds, k.name) > 0
+      kinds.push(k)
+    else
+      verdict.skip_check(arena.text().s("scattering at the ").s(k.name).s(" input").take(),
+        "no seed of it is left under the folders the seeds come from")
+  if kinds.len == 0
+    throw "not one seed"
+  trials: = Sz::o.trials
+  io.out().s("\n# scattering broken ").s(what).s(" (\{trials\} trials, \{seeds.len\} seeds, ")
+    .s("rng seed \{o.seed\})\n")
+  $r: = Prng.new(U64::o.seed)
+  found: = findings_new(arena)
+  $read_ok: Sz = 0
+  for trial in Range.asc(trials)
+    k: = kinds.get(trial % kinds.len if c.in_turn else r.below(kinds.len))
+    one: = seeds.get(pick(seeds, k.name, r@))
+    data: = mutate(one.data, r@, arena)
+    ran: = read_once(c, k, data, arena) catch
+      throw "cannot write the broken input"
+    if ran.got.spawn_failed
+      throw arena.text().s("cannot start ").s(c.argv[0]).take()
+    if !ran.got.timed_out && ran.got.exit_code == 0
+      read_ok += 1
+    note(found, ran@, trial, one.name, data, c.work, k.ext, arena)
+  check_reach(read_ok, trials, c.reach_div, arena)
+  report_all(found, o, c.subject, c.wait_ms, c.again, arena)
+
+// ==========================================
+// Counting and reporting the findings
+// ==========================================
+
+priv enum Verdict //< how one round ended
+  ok //< the program's own answer: it accepted the input (0) or refused it (1)
+  hang //< no end within the longer timeout
+  controlled_abort //< a stop it announced, starting with `stop_mark`
+  crash //< a silent end: a break in memory safety
+
+struct Finding //< one trial that did not end with the program's own answer
+  trial: Sz //< which trial
+  seed_name: U8[] //< the seed it was mutated from
+  saved: U8[] //< where the failing input was saved
+  why: U8[] //< how it ended.
+    //<
+    //< Caution: **No exit code when it timed out**: that code comes from the kill, not the program.
+
+pub struct Findings //< the findings, grouped by how the trials ended
+  crashes: List<|Finding|>$@ //< the trials that crashed silently
+  aborts: List<|Finding|>$@ //< the trials that announced a stop
+  hangs: List<|Finding|>$@ //< the trials that did not end
+
+pub fn findings_new(arena: Arena$@): Findings //< an empty set of findings
+  return Findings::{ .crashes = List<|Finding|>.create(arena),
+    .aborts = List<|Finding|>.create(arena), .hangs = List<|Finding|>.create(arena) }
+
+priv fn classify(got: subproc.Run_result@): Verdict //< how a trial ended, seen from outside
+  //<
+  //< Caution: **Do not decide by the exit code's sign**: a signal gives 128 plus its number on
+  //< POSIX and a raw status on Windows. What holds on both is "neither of the program's answers".
+  if got.timed_out
+    return .hang
+  if got.exit_code == 0 || got.exit_code == 1
+    return .ok
+  if got.stdout_data.find_str(stop_mark) >= 0 || got.stderr_data.find_str(stop_mark) >= 0
+    return .controlled_abort
+  return .crash
+
+priv fn save_mutant(dir: U8[], kind: U8[], trial: Sz, data: U8[], ext: U8[], arena: Arena$@): U8[] //<
+  //< Saves the input that made a trial fail: a count alone cannot say which input it was
+  leaf: = arena.text().s("fuzz_").s(kind).s("_\{trial\}").s(ext).take()
+  path: = fs.join(dir, leaf, arena)
+  io.write_file(path, data) catch
+    return "(could not keep it)"
+  return path
+
+pub fn note( //< records one trial, and saves its input if it is a finding
+  //<
+  //< **A trial that ended with the program's own answer is not recorded**: that is the normal end.
+  //< A slow one (`Trial.slow`) is said on a line of its own.
+  f: Findings, //< the findings
+  t: Trial@, //< the trial
+  trial: Sz, //< which trial it was
+  seed_name: U8[], //< the seed it was mutated from
+  data: U8[], //< the input the trial read
+  dir: U8[], //< where a failing input is saved
+  ext: U8[], //< the saved file's ending, the same one the trial read it under
+  arena: Arena$@, //< where the finding is stored
+)
+  if t.slow
+    io.out().s("  trial \{trial\}: seed=").s(seed_name)
+      .s(" ran past the cap but ended once stretched\n")
+  v: = classify(t.got@)
+  if v == .ok
+    return
+  kind: = "hang" if v == .hang else ("ice" if v == .controlled_abort else "crash")
+  why: =
+    ("timed out" if v == .hang
+    else arena.text().s("exit code=\{t.got.exit_code\}").take())
+  hit: = Finding::{ .trial = trial, .seed_name = seed_name,
+    .saved = save_mutant(dir, kind, trial, data, ext, arena), .why = why }
+  if v == .hang
+    f.hangs.push(hit)
+  else if v == .controlled_abort
+    f.aborts.push(hit)
+  else
+    f.crashes.push(hit)
+
+priv fn check_reach( //< checks that some of the broken input got past the program's input check
+  //<
+  //< **Only a trial the program accepted counts**; one it refused went no further. The minimum
+  //< differs per program, so the run gives the divisor (`Campaign.reach_div`). Without this check,
+  //< a fuzz run that reached nothing would go green.
+  read_ok: Sz, //< the trials that ended with 0
+  trials: Sz, //< all trials
+  floor_div: Sz, //< at least one trial in this many must have been accepted
+  arena: Arena$@, //< where the line's text is built
+)
+  verdict.check("some of the broken input is accepted and reaches deep into the reader",
+    read_ok * floor_div >= trials,
+    arena.text().s("\{read_ok\} of \{trials\} rounds").take())
+
+priv fn report(title: U8[], items: List<|Finding|>@)
+  if items.len == 0
+    return
+  io.out().s("\n# ").s(title).s("\n")
+  shown: =
+    items.len if items.len < verdict.max_findings_shown else verdict.max_findings_shown
+  for i in Range.asc(shown)
+    f: = items.get(i)
+    io.out().s("  trial \{f.trial\}: seed=").s(f.seed_name).s(" ").s(f.why).s(" kept at=")
+      .s(f.saved).s("\n")
+  if items.len > verdict.max_findings_shown
+    io.out().s("  (and \{items.len - verdict.max_findings_shown\} more)\n")
+
+priv fn checked(what: U8[], trials: Sz, items: List<|Finding|>@, arena: Arena$@)
+  verdict.check(arena.text().s(what).s(" (\{trials\} rounds)").take(), items.len == 0,
+    arena.text().s("\{items.len\} found").take())
+
+pub fn report_all( //< prints the findings, the three check lines, and how to run it again
+  //<
+  //< Caution: **Keep the three lines separate**, or the verdict cannot tell a crash from a hang.
+  //< **A fuzz run with no trials is a failure**, not three passes over nothing.
+  f: Findings, //< the findings
+  o: Opts, //< the two numbers the fuzz run used
+  subject: U8[], //< the program under test, as the lines name it (`ksplc`, `std`)
+  wait_ms: I32, //< the first timeout of each trial
+  again: U8[], //< the command that starts this fuzz run, without the two numbers
+  arena: Arena$@, //< where the text is built
+)
+  trials: = Sz::o.trials
+  if trials <= 0
+    verdict.check(arena.text().s(subject).s(" was scattered at").take(), false,
+      "not one round was run (--trials)")
+    return
+  // **Report the longer timeout**, which the second run confirmed.
+  report(arena.text().s("suspected not to end (ran past \{wait_ms * confirm_times\} ms)").take(),
+    f.hangs)
+  report(arena.text().s("a stop it announced (").s(subject)
+    .s(" showing its insides instead of an answer)").take(), f.aborts)
+  report("a break in memory safety", f.crashes)
+  checked(arena.text().s(subject).s(" does not crash on broken input").take(), trials, f.crashes,
+    arena)
+  checked(arena.text().s(subject).s(" announces no stop on broken input").take(), trials, f.aborts,
+    arena)
+  checked(arena.text().s(subject).s(" ends on broken input").take(), trials, f.hangs, arena)
+  if f.crashes.len + f.aborts.len + f.hangs.len > 0
+    io.out().s("to reproduce: ").s(again).s(" --seed=\{o.seed\} --trials=\{o.trials\}\n")

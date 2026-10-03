@@ -1,0 +1,652 @@
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/base/mangle" as base_mangle
+import "ksplc/sema/decl/eval" as sema_decl_eval
+import "ksplc/sema/decl/mono" as sema_decl_mono
+import "ksplc/sema/decl/mono_name" as sema_decl_mono_name
+import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
+import "ksplc/sema/decl/trait_check" as sema_decl_trait_check
+import "ksplc/sema/decl/variance" as sema_decl_variance
+import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
+import "ksplc/sema/session/import_table" as sema_session_import_table
+import "ksplc/sema/type/def" as sema_type_def
+import "ksplc/sema/type/display" as sema_type_display
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" { Sema_symbol }
+import "std/chars"
+import "std/str" { Str_builder }
+import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
+impl Sema_ctx
+  fn file_has_type(r: Self$@, file_path: U8[], name: U8[]): Bool //<
+    //< Whether the file at `file_path` has a type named `name`
+    //<
+    //< A struct, an enum, an alias and a generic's template count.
+    //<
+    //< Caution: **Do not look up the name with its qualifier stripped.** Templates and symbols
+    //< are registered under the short name too (register_template_names in declare.kspls), so
+    //< `io.List<|I32|>` would count as found.
+    fqn: = r.build_mod_fqn(file_path, name)
+    return (r.symtab.resolve(fqn) catch null) != null ||
+      (r.generics.templates.get(fqn) catch null) != null ||
+      (r.env.type_to_id.get(fqn) catch 0) != 0
+
+  fn is_type_name(r: Self$@, name: U8[]): Bool //< whether that name names a type
+    //<
+    //< It answers for a short name, for `Self`, and for an alias prefix alike.
+    //< Caution: Do not replace this with "starts with a capital": a mistyped type name would pass
+    //< unreported, even in a value position.
+    return r.env.has_type_named(name) ||
+      r.env.has_type_named(r.resolve_fqn_for_type(name))
+
+  fn names_module_only(r: Self$@, name: U8[]): Bool //<
+    //< Whether `name` names an imported module in this file and no type
+    //<
+    //< It checks without marking the import used.
+    //<
+    //< Caution: **Answer from the file alone, not from the open scopes.** The type walk asks with
+    //< no function open and leaves reporting to the body analysis (`type_check.kspls`), so a local
+    //< `io` must not change the answer between the two.
+    return r.peek_file_alias(r.file_name, name) != null && !r.env.has_type_named(name) &&
+      !r.env.has_type_named(r.make_fqn(name))
+
+  fn resolve_fqn_for_type(r: Self$@, base_name: U8[]): U8[] //<
+    //< Builds the FQN by prefixing the current file's logical name
+    if base_name.equals("Self") && r.fn_ctx.impl_name.len > 0
+      return r.fn_ctx.impl_name
+
+    tid: = r.env.type_to_id.get(base_name) catch 0
+    if sema_type_env.is_builtin(tid)
+      return base_name
+    // A built-in type and what derives from one are not qualified, or an `impl U8[]` method lands
+    // on a fictional "std.io.U8[]".
+    if base_name.equals("Unknown") || base_name.equals("Void") || base_name.ends_with("[]") ||
+      base_name.ends_with("@")
+      return base_name
+
+    if g_arg: = r.find_generic_arg(base_name)
+      return r.env.get_str(g_arg.bound_type_id)
+
+    first_dot: = base_name.find_char_out('.')
+    if first_dot >= 0
+      prefix: = base_name.sub(0, first_dot)
+      target_file: = r.get_file_alias_target(r.file_name, prefix)
+      if target_file.len > 0
+        actual_base: = base_name.sub_from(first_dot + 1)
+        return base_core.arena.dup_str(r.build_mod_fqn(target_file, actual_base))
+    else
+      // A name from `import "path" { A };` is mapped to the source's FQN.
+      // Caution: Look it up before a name outside the file (Ctx.imported_symbol_fqn).
+      imported_fqn: = r.imported_symbol_fqn(base_name)
+      if imported_fqn.len > 0
+        return imported_fqn
+      sym: = r.symtab.resolve(base_name) catch null
+      if sym != null && sym.type_id != 0
+        return r.env.get_str(sym.type_id)
+      g_node: = r.generics.templates.get(base_name) catch null
+      if g_node != null
+        mod_name: = g_node.loc.file()
+        if mod_name.len > 0 && !mod_name.equals(r.file_name)
+          return base_core.arena.dup_str(r.build_mod_fqn(mod_name, base_name))
+    return base_name
+
+  fn resolve_type_method_fqn(r: Self$@, fqn: U8[]): Option<|Sema_symbol$@|>
+    last_dot: = fqn.rfind_char_out('.')
+    if last_dot >= 0
+      t_fqn: = fqn.sub(0, last_dot)
+      m_name: = fqn.sub_from(last_dot + 1)
+
+      $t_id: = r.env.type_to_id.get(t_fqn) catch 0
+      if t_id == 0
+        switch t_fqn.find_generic_bounds() case .found(start_idx, inner_start, inner_end, _end_idx)
+          local_base: = t_fqn.sub(0, start_idx)
+          fqn_base: = r.resolve_fqn_for_type(local_base)
+          // A type argument arrives **as the source's literal text**, possibly unqualified. Used as
+          // is, it creates a second instance beside the AST path's (build_resolved_type_args_str),
+          // and the generated C cannot compile.
+          $canon_args: = r
+            .canonicalize_type_args(t_fqn.sub(inner_start, inner_end - inner_start))
+          defer canon_args.free()
+          args_str: = canon_args.slice()
+          $tmp_b: = r.instantiate_struct(fqn_base, args_str) catch Str_builder.new()
+          tmp_b.free()
+          t_id = r.env.type_to_id.get(t_fqn) catch 0
+          if t_id == 0
+            r.clear_scratch().s(fqn_base).s("<|").s(args_str).s("|>")
+            t_id = r.env.type_to_id.get(r.scratch.slice()) catch 0
+        default {}
+      if t_id != 0
+        // An impl target is never immutable (collect_impl_decl rejects one), so an immutable
+        // type's methods live in its plain type's table.
+        for id in I32[]::{ t_id, r.env.get_clean_real_type(t_id) }
+          real: = r.env.get_real_type(id)
+          // Caution: **Finish building the table before the lookup** (ensure_instance_methods in
+          // mono_queue.kspls). A name that stands for an instance (`typedef Nums = List<|I32|>`)
+          // reaches here with nothing on the way that builds it, so `Nums.new` would be undefined.
+          r.ensure_instance_methods(real) catch {}
+          t_entry: = r.env.id_to_type.get(real)
+          if t_entry != null
+            if sym: = t_entry.get_method(m_name)
+              return Option<|Sema_symbol$@|>.some(sym)
+    return Option<|Sema_symbol$@|>.none
+
+  // Looks up an operator's method (Type.method) after check_operator_trait decided it is
+  // .user_defined. base_id applies the same strip_ptr only, so the checked and found types agree.
+  fn resolve_operator_method(r: Self$@, recv_type_id: I32, method_name: U8[]):
+    Option<|Sema_symbol$@|>
+    // Caution: **Finish building the receiver's table before the lookup** (ensure_instance_methods
+    // in sema/decl/mono_queue.kspls), or it is "implemented, yet the method cannot be found".
+    r.ensure_instance_methods(recv_type_id) catch {}
+    base_id: = r.env.strip_ptr(recv_type_id)
+    r.clear_scratch().s("\{r.env.base_type_name(base_id)\}.\{method_name\}")
+    return r.resolve_type_method_fqn(r.scratch.slice())
+
+  fn resolve_alias_sym(r: Self$@, sym: Sema_symbol$@): I32?Sema_error
+    if sym.type_id != 0
+      return sym.type_id
+    name: = sym.name
+    // A name seen again among the aliases being resolved is a circular definition.
+    // Caution: The pop below runs only on a normal return; a `?` leaves the name on the stack, and
+    // it counts as circular from then on.
+    for alias_name in r.resolving.aliases
+      if alias_name.equals(name)
+        r.err(sym.node, "circular typedef detected")
+        sym.type_id = 0
+        return 0
+    if r.resolving.aliases.len >= sema_type_query.max_alias_chain_depth
+      r.err(sym.node, "typedef chain too deep")
+      sym.type_id = 0
+      return 0
+    r.resolving.aliases.push(name)
+
+    $type_node: = sym.node.find_child(.k_type_expr)
+    if type_node == null
+      if sig: = sym.node.get_type_fn_sig()
+        type_node = sig
+
+    $target_id: I32 = 0
+    if type_node != null
+      target_id = type_node.resolve_type(r)?
+      type_node.resolve_all_types(r)?
+
+    // Caution: **Check the depth here too.** The stack of aliases being resolved counts only a
+    // forward chain (`A0 = A1; A1 = A2; …`); a backward one (`A1 = A0; A2 = A1; …`) does not nest.
+    if r.env.alias_chain_len(target_id) + 1 >= sema_type_query.max_alias_chain_depth
+      r.err(sym.node, "typedef chain too deep")
+      sym.type_id = 0
+      r.resolving.aliases.len -= 1
+      return 0
+
+    fqn: = r.make_fqn(name)
+    fqn_dup: = base_core.arena.dup_str(fqn)
+    alias_id: = I32::r.env.id_to_type.len
+    entry: = sema_type_def.Entry.new(sema_type_env.Info.alias_type(target_id), fqn_dup)
+    r.env.id_to_type.push(entry)
+
+    r.env.type_to_id.set(fqn_dup, alias_id)
+    name_dup: = base_core.arena.dup_str(name)
+    if !name_dup.equals(fqn_dup)
+      r.env.type_to_id.set(name_dup, alias_id)
+
+    sym.type_id = alias_id
+    sym.node.type_id = alias_id
+    r.resolving.aliases.len -= 1
+    return alias_id
+
+priv fn lookup_def_node(c: Sema_ctx$@, name: U8[]): Ast_node$@ //<
+  //< Looks up the definition node for a name
+  //<
+  //< Caution: **Look in this order:** the symbol table → a template by FQN → by plain name → this
+  //< file's aliases. In another order, a different thing with the same name is found. Null if none.
+  sym: = c.symtab.resolve(name) catch null
+  if sym != null
+    sym.flags.is_used = true
+    return sym.node
+  fqn: = c.resolve_fqn_for_type(name)
+  gen: = c.generics.templates.get(fqn) catch null
+  if gen != null
+    return gen
+  gen2: = c.generics.templates.get(name) catch null
+  if gen2 != null
+    return gen2
+  alias: = c.peek_file_alias(c.file_name, name)
+  return alias.decl_node if alias != null else null
+
+impl Ast_node
+  fn resolve_all_types(r: Self$@, c: Sema_ctx$@): Void?Sema_error
+    if r == null
+      return
+    if r.kind_id == .k_type_expr || r.kind_id == .k_type_fn_sig
+      r.type_id = r.resolve_type(c) catch r.type_id
+    else if r.kind_id == .k_decl_impl
+      target_node: = r.get_decl_type_node()
+      if target_node != null
+        target_node.resolve_type(c) catch 0
+      if trait_node: = r.get_impl_trait_node()
+        trait_node.resolve_type(c) catch 0
+    else if r.kind_id == .k_identifier || r.kind_id == .k_expr_path || r.kind_id == .k_type_path
+      if r.def_node == null
+        $path_str_b: = r.get_full_path_str()
+        name: = path_str_b.slice().get_generic_base_name()
+        if name.len > 0
+          r.def_node = lookup_def_node(c, name)
+        path_str_b.free()
+    // **A function's own name is not a reference**, so it is not looked up: by bare name, a method
+    // `put` would resolve to the prelude's `std.lang.put`, and the editor would show that.
+    $own_name: Ast_node$@ = null
+    if r.kind_id == .k_decl_fn || r.kind_id == .k_decl_fn_proto
+      own_name = r.find_child(.k_identifier)
+    for item in r.children
+      if item != own_name
+        item.resolve_all_types(c) catch {}
+
+  fn check_type_constraint(r: Ast_node$@, c: Sema_ctx$@, target_id: I32): Void?Sema_error //<
+    //< Checks a type argument's constraint
+    //<
+    //< While suppressed (inside a speculative inference) it records the constraint node and the
+    //< type-argument bindings and returns without checking.
+    //<
+    //< Caution: Never check while suppressed. The diagnostic would be discarded and the cache would
+    //< prevent a recheck, so **a constraint would hold on some paths only**. Record **a copy of the
+    //< constraint node and the bindings**, not the resolution result.
+    if r == null
+      return
+    // Caution: **Do not check while a template's types are resolved for the LSP** (the reason is at
+    // Generic_state.resolving_template_types in `../session/state.kspls`).
+    if c.generics.resolving_template_types
+      return
+    // **Defer it to the same boundary as the instantiation**, which fills the conformance table
+    // (Pending_constraint in sema/session/state.kspls); right now it is empty.
+    if c.put_off_constraint(r, target_id)
+      return
+    for path_node in r.children
+      if path_node.kind_id == .k_literal || path_node.kind_id == .k_keyword
+        continue
+      trait_id: = path_node.resolve_type(c)?
+      if trait_id == 0 || sema_type_env.is_unknown(trait_id)
+        continue
+      // The diagnostic points at the user's position that caused the instantiation, not inside
+      // the standard library.
+      site: = c.generics.inst_site if c.generics.inst_site != null else path_node
+      if !c.check_trait_implementation(target_id, trait_id, site)
+        c.mark_constraint_failed()
+        throw .analysis_failed
+
+  fn resolve_and_apply_type(r: Self$@, c: Sema_ctx$@): I32?Sema_error
+    tid: = r.resolve_type(c)?
+    r.type_id = tid
+    r.resolve_all_types(c)?
+    return tid
+
+  fn resolve_fn_signature_types(r: Ast_node$@, c: Sema_ctx$@): Void?Sema_error //<
+    //< Resolves only the types of a function declaration's **signature** (not the body)
+    //<
+    //< **Call it at instantiation** (`instantiate_fn`, `mono.kspls`), or the parameters resolve
+    //< **only while the body is inferred**.
+    //< Caution: **Do not emit diagnostics here**: there would be one per instance.
+    if r == null
+      return
+    ret_node: = r.get_decl_type_node()
+    if ret_node != null
+      ret_node.resolve_type(c)?
+    param_list: = r.get_fn_params()
+    if param_list == null
+      return
+    for item in base_ast_ext.Param_cursor.new(param_list, false)
+      t_node: = item.find_child(.k_type_expr)
+      if t_node != null
+        item.type_id = t_node.resolve_type(c)?
+
+  fn resolve_type(r: Ast_node$@, c: Sema_ctx$@): I32?Sema_error
+    if r == null
+      return 0
+    if r.type_id != 0
+      return r.type_id
+
+    if r.kind_id == .k_type_arg && r.children.len > 0
+      tid: = r.get_child(0).resolve_type(c)?
+      r.type_id = tid
+      return tid
+
+    $base_tid: = 0
+    from_atom:
+      atom: = r.find_child(.k_type_atom)
+      fn_sig_node: = atom.find_child(.k_type_fn_sig) if atom != null else null
+      // Note: The grouping parentheses of type_atom = ... | "(" type_expr ")" (ksplc/kspl.kspeg)
+      // are unwrapped. Without this branch the path_node search joins the children into a broken
+      // dotted name.
+      paren_expr_node: = atom.find_child(.k_type_expr) if atom != null else null
+      if fn_sig_node != null
+        base_tid = fn_signature_type_id(fn_sig_node, c)?
+      else if paren_expr_node != null
+        base_tid = paren_expr_node.resolve_type(c)?
+      else
+        $path_node: = r.find_child(.k_type_path)
+        if path_node == null
+          path_node = r.find_child(.k_expr_path)
+        if path_node == null && atom != null
+          path_node = atom.find_child(.k_type_path)
+          if path_node == null
+            path_node = atom.find_child(.k_expr_path)
+        if path_node == null && (r.kind_id == .k_type_path || r.kind_id == .k_expr_path)
+          path_node = r
+
+        if path_node != null && path_node.children.len == 1 &&
+          path_node.get_child(0).type_id != 0
+          base_tid = path_node.get_child(0).type_id
+        else if atom != null && atom.children.len == 0 && atom.type_id != 0
+          base_tid = atom.type_id
+        else
+          // Not immutability: apply_type_postfixes applies it per level. Applied here, `U8[]$@`
+          // and `U8$[]@` would collapse into one.
+          $tname: = Str_builder.new()
+          defer tname.free()
+
+          $type_args_node: Ast_node$@ = null
+          if path_node != null
+            type_args_node = build_type_name_and_args(path_node, tname@)
+          else if atom != null
+            type_args_node = build_type_name_and_args(atom, tname@)
+            if tname.len == 0
+              tname.s(atom.text)
+
+          if tname.len == 0 && r.text.len > 0 && r.kind_id != .k_type_postfix
+            tname.s(r.text)
+
+          t_slice: = tname.slice()
+          $final_name: = Str_builder.new()
+
+          base_name: = t_slice.get_generic_base_name()
+          fqn_base: = c.resolve_fqn_for_type(base_name)
+          sym: = c.symtab.resolve(fqn_base) catch null
+          if sym != null
+            if sym.kind.is_alias() && sym.type_id == 0
+              c.resolve_alias_sym(sym)?
+            r.def_node = sym.node
+            set_resolved_def_node(path_node, atom, sym.node)
+
+          if type_args_node != null
+            tmpl: = c.generics.templates.get(fqn_base) catch null
+            if tmpl != null
+              r.def_node = tmpl
+              set_resolved_def_node(path_node, atom, tmpl)
+
+            $args_fqn: = type_args_node.build_resolved_type_args_str(c, tmpl) catch sema_decl_mono_name.unknown_type_str()
+            defer args_fqn.free()
+
+            if tmpl != null
+              sema_decl_mono.check_written_generic_arity(c, tmpl, args_fqn.slice(), r)
+              // The user's position is recorded during the instantiation (as in call.kspls).
+              prev_inst_site: = c.generics.inst_site
+              c.generics.inst_site = r
+              defer c.generics.inst_site = prev_inst_site
+              $inst_name: = c.instantiate_struct(fqn_base, args_fqn.slice()) catch sema_decl_mono_name.unknown_type_str()
+              defer inst_name.free()
+              final_name.s(inst_name.slice())
+            else
+              final_name.s("\{fqn_base\}<|\{args_fqn.slice()\}|>")
+          else
+            // A generic type written with no type arguments reaches C as `unknown type name`
+            // ("Failing fast through an exception or an ICE" in ksplc/docs/DESIGN.md).
+            if (c.generics.templates.get(fqn_base) catch null) != null
+              c.clear_scratch()
+                .s("generic type '\{base_name\}' is used without type arguments (write them \
+                  explicitly, for example '\{base_name\}<|I32|>')")
+              c.err(r, c.scratch.slice())
+            final_name.s(fqn_base)
+
+          base_tid = c.env.get_or_add(final_name.slice())
+          final_name.free()
+
+    final_tid: = apply_type_postfixes(c, base_tid, r)?
+    r.type_id = final_tid
+    return final_tid
+
+  fn build_resolved_type_args_str(r: Ast_node$@, c: Sema_ctx$@, decl: Ast_node$@):
+    Str_builder?Sema_error //<
+      //< Turns a generic's list of actual arguments into a list of canonical names.
+      //<
+      //< Caution: **Pass `decl`.** Where it declares a `$` (`struct Slice<|$T|>`), **an unmarked
+      //< actual argument is wrapped as immutable** (`Slice<|U8|>` vs `Slice<|$U8|>`).
+    $args_fqn: = Str_builder.new()
+    $is_first: = true
+    $pos: Sz = 0
+    for arg in r.children
+      if arg.kind_id == .k_literal || arg.kind_id == .k_keyword || arg.kind_id == .k_empty
+        continue
+      if !is_first
+        args_fqn.s(base_ast.type_arg_sep)
+      if v: = const_type_arg_value(arg, c)
+        args_fqn.s("\{v\}")
+        is_first = false
+        pos += 1
+        continue
+      if holds_value_expr(arg)
+        c.err(arg,
+          "a value passed as a type argument must be a literal, a negated literal or the name of a \
+            const; declare 'const n: I32 = ...' and pass 'n'")
+        args_fqn.s("Unknown")
+        is_first = false
+        pos += 1
+        continue
+      // **An actual argument whose name is not known is made Unknown rather than resolved.**
+      // resolve_type registers an unknown name as a type, so `Box2<|t|>` would produce `Box2_t`,
+      // follow-on errors, and, in a polymorphic recursion, no end.
+      arg_id: =
+        (0 if names_unknown_type(c, arg)
+        else (sema_decl_variance.strip_arg_mut_mark(arg).resolve_type(c) catch 0))
+      if arg_id != 0 && !sema_type_env.is_unknown(arg_id)
+        args_fqn.s(c.env.get_str(c.apply_arg_mut_mark(decl, pos, arg, arg_id)))
+      else
+        args_fqn.s("Unknown")
+      is_first = false
+      pos += 1
+    return args_fqn
+
+priv fn names_unknown_type(c: Sema_ctx$@, arg: Ast_node$@): Bool //<
+  //< Whether the head name of a type argument names no type at all
+  //<
+  //< Only the head name (`mod.Box2` of `mod.Box2<|t|>$@`). `Self` (unbound in a trait) and a
+  //< leading `_` pass, as in report_type_existence_error in type_check.kspls.
+  switch type_arg_head(arg) case .some(head)
+    $spelled: = head.get_full_path_str()
+    defer spelled.free()
+    name: = spelled.slice().get_generic_base_name()
+    if name.len == 0 || name.equals("Self") || name.starts_with("_")
+      return false
+    return !c.is_type_name(name)
+  case .none
+    return false
+
+priv fn type_arg_head(node: Ast_node$@): Option<|Ast_node$@|> //<
+  //< The node holding a type argument's head name (a path or an identifier)
+  //<
+  //< none for a literal or `fn(…)`; the postfix and inner arguments are not entered.
+  if node == null
+    return Option<|Ast_node$@|>.none
+  if node.kind_id == .k_type_path || node.kind_id == .k_expr_path ||
+    node.kind_id == .k_identifier || node.kind_id == .k_primitive_type
+    return Option<|Ast_node$@|>.some(node)
+  if node.kind_id == .k_type_atom && node.children.len == 0
+    return (Option<|Ast_node$@|>.some(node) if node.text.len > 0
+      else Option<|Ast_node$@|>.none)
+  if node.kind_id == .k_integer || node.kind_id == .k_bool || node.kind_id == .k_literal ||
+    node.kind_id == .k_keyword || node.kind_id == .k_type_fn_sig
+    return Option<|Ast_node$@|>.none
+  for child in node.children
+    if child.kind_id == .k_type_args || child.kind_id == .k_type_postfix
+      continue
+    if head: = type_arg_head(child)
+      return Option<|Ast_node$@|>.some(head)
+  return Option<|Ast_node$@|>.none
+
+priv fn holds_value_expr(node: Ast_node$@): Bool //<
+  //< Whether a type argument computes a value (`2 + 1`, `a ? b : c`, `-n`) instead of naming one
+  //<
+  //< Only what const_type_arg_value folds, or a plain literal, can stand there. Let through, the
+  //< argument is read as a type, the instance takes the node's text for a name, and the C holds
+  //< `return expr;` (Principle 2).
+  //< Caution: Do not descend into a nested type argument, as in const_type_arg_value.
+  if node == null || node.kind_id == .k_type_args
+    return false
+  switch node.kind_id case .k_expr, .k_expr_ternary, .k_expr_catch_chain, .k_expr_catch, .k_expr_or,
+    .k_expr_and, .k_expr_cmp, .k_expr_add, .k_expr_mul, .k_expr_cast, .k_expr_unary, .k_expr_fn_lit,
+    .k_expr_compound
+    return true
+  default {}
+  for child in node.children
+    if holds_value_expr(child)
+      return true
+  return false
+
+priv fn const_type_arg_value(node: Ast_node$@, c: Sema_ctx$@): Option<|I32|> //<
+  //< If the type argument is **a name** or **a negated literal** that folds, returns its value
+  //<
+  //< A plain literal (`Foo<|8|>` / `Foo<|true|>`) has no type path, so it gives none. A negated
+  //< one (`Foo<|-3|>`) is a unary node whose text is the `-` alone, so it is folded here.
+  //< Caution: Do not descend into a nested type argument (the `n` of `Foo<|Bar<|n|>|>`), nor past
+  //< a name's node even if it does not fold: `mod.Foo`'s `Foo` can match another scope's const.
+  if node == null || node.kind_id == .k_type_args
+    return Option<|I32|>.none
+  if node.kind_id == .k_type_path || node.kind_id == .k_expr_path ||
+    node.kind_id == .k_identifier
+    return c.try_eval_constexpr(node)
+  if node.kind_id == .k_expr_unary && node.get_unary_op().text.equals("-") &&
+    node.get_unary_target().kind_id == .k_integer
+    return c.try_eval_constexpr(node)
+  for child in node.children
+    if v: = const_type_arg_value(child, c)
+      return Option<|I32|>.some(v)
+  return Option<|I32|>.none
+
+priv fn set_resolved_def_node(path_node: Ast_node$@, atom: Ast_node$@, target_def: Ast_node$@)
+  if path_node != null
+    path_node.def_node = target_def
+    if path_node.children.len > 0
+      last_idx: = path_node.children.len - 1
+      $last_child: = path_node.get_child(last_idx)
+      if last_child.kind_id == .k_type_args && last_idx > 0
+        last_child = path_node.get_child(last_idx - 1)
+      if last_child.kind_id == .k_identifier
+        last_child.def_node = target_def
+  else if atom != null
+    atom.def_node = target_def
+    if atom.children.len > 0
+      first: = atom.get_child(0)
+      if first.kind_id == .k_identifier
+        first.def_node = target_def
+
+fn fn_signature_type_id(node: Ast_node$@, c: Sema_ctx$@): I32?Sema_error //<
+  //< Builds the type ID of a function pointer's canonical type "fn(T1,T2):Ret"
+  //<
+  //< node is a k_type_fn_sig or a k_decl_fn. **Build both through this one function**, or the
+  //< names drift and the comparison always fails (or always succeeds).
+  $tname: = Str_builder.new()
+  defer tname.free()
+  tname.s("fn(")
+
+  param_list: = node.get_fn_params()
+  $is_first: = true
+  if param_list != null
+    for p in base_ast_ext.Param_cursor.new(param_list, false)
+      if !is_first
+        tname.s(",")
+      is_first = false
+      pt_node: = p.find_child(.k_type_expr)
+      pt_id: =
+        (pt_node.resolve_type(c)? if pt_node != null
+        else (I32::sema_type_env.Builtin_type_id.unknown))
+      tname.s(c.env.get_str(pt_id))
+  tname.s(")")
+
+  ret_node: = node.get_decl_type_node()
+  ret_id: = ret_node.resolve_type(c)? if ret_node != null else c.env.get_or_add("Void")
+  tname.s(":").s(c.env.get_str(ret_id))
+
+  return c.env.get_or_add(tname.slice())
+
+priv fn build_type_name_and_args(node_src: Ast_node$@, tname: Str_builder$@): Ast_node$@
+  $is_first_id: = true
+  for pc in node_src.children
+    if pc.kind_id == .k_type_args
+      continue
+    if !is_first_id
+      tname.c('.')
+    tname.s(pc.text)
+    is_first_id = false
+  $type_args_node: = node_src.find_child(.k_type_args)
+  if type_args_node == null && node_src.children.len > 0
+    last: = node_src.last_child()
+    if last.kind_id == .k_type_args
+      type_args_node = last
+  return type_args_node
+
+priv fn apply_type_postfixes(c: Sema_ctx$@, base_tid: I32, r: Ast_node$@): I32?Sema_error
+  $current_tid: = base_tid
+  for p in r.children
+    if p.kind_id == .k_type_postfix
+      // A `$` on the postfix makes that level's subject mutable, no mark immutable, per level, so
+      // `U8$[]@` and `U8[]$@` differ. The marker is at the head of the postfix's text (the
+      // k_type_expr normalization in parse/load.kspls).
+      has_mut_mark: = p.text.starts_with("$")
+      pt: = p.text.sub_from(1) if has_mut_mark else p.text
+      qualified: = current_tid if has_mut_mark else c.env.make_const(current_tid)
+      if pt.equals("@")
+        // No expression produces a pointer to a fixed-length array (`a@` decays, as in C), so it
+        // is rejected (Principle 5 of docs/DESIGN.md).
+        if c.env.is_array(current_tid) && !c.suppress_errors
+          $shown: = c.env.display_str(current_tid)
+          defer shown.free()
+          c.clear_scratch()
+            .s("cannot take a pointer to a fixed-size array ('\{shown.slice()\}@'): '@' on an array \
+              decays to a pointer to its first element, so no expression can produce this type. Use \
+              'T$[]' (a slice, which carries its length) or 'T$@' (a pointer to the first element).")
+          c.err(p, c.scratch.slice())
+        current_tid = c.env.make_ptr(qualified)
+      else if pt.starts_with("[")
+        // **A `$` on the type side cannot be written on a fixed-length array's elements**: they are
+        // part of the array's value, so the binding that holds it decides (unlike `T$[]`, `T$@`).
+        if has_mut_mark && p.children.len > 0 && !c.suppress_errors
+          $shown_arr: = c.env.display_str(current_tid)
+          defer shown_arr.free()
+          c.clear_scratch()
+            .s("a fixed-size array cannot carry '$' on its element type \
+              ('\{shown_arr.slice()\}[N]'): element writability comes from the binding, not the \
+              type. Write '$name: \{shown_arr.slice()\}[N]' for a writable array (a struct field is \
+              writable when its receiver is). '$' on the element stage is only for slices ('T$[]') \
+              and pointers ('T$@'), which refer to a different object.")
+          c.err(p, c.scratch.slice())
+        if p.children.len > 0
+          size_node: = p.get_child(0)
+          $actual_size: I32 = -1
+          if size_node.text.equals("_")
+            actual_size = -1
+          else
+            size_val: = c.eval_constexpr_quiet(size_node, -1)
+            actual_size = size_val
+            if size_val <= 0
+              // Stay silent if a `sizeof` cycle is recorded: this is its consequence
+              // (report_registry_cycle in sema/decl/layout.kspls reports it).
+              if !c.suppress_errors && c.resolving.registry_cycle_at == null
+                c.err(size_node, "array size must be a positive constant expression greater than 0")
+              actual_size = 1
+          current_tid = c.env.make_array(qualified, actual_size)
+        else if pt.len > 2 && (pt.ptr + 1)$ != ']'
+          // A resolved "[N]" / "[_]" text with no child (from copying a template): the size is
+          // extracted here for make_array.
+          inner: = pt.sub(1, pt.len - 2)
+          $parsed_size: I32 = -1
+          if !inner.equals("_")
+            parsed_size = I32::(inner.parse_size() catch 0)
+          current_tid = c.env.make_array(qualified, parsed_size)
+        else
+          current_tid = c.slice_type_of(qualified)
+      else if pt.starts_with("?")
+        if p.children.len > 0
+          err_id: = p.get_child(0).resolve_type(c)?
+          current_tid = c.env.make_result_with_err(current_tid, err_id)
+        else
+          current_tid = c.env.make_result(current_tid)
+  return current_tid

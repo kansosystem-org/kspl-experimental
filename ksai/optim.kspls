@@ -1,0 +1,107 @@
+//< Adam: one optimizer per parameter, tracking the direction and size of its gradient
+//<
+//< One is made per parameter and updates it in place from its gradient. Its state (the first and
+//< second moments) is allocated on the parameter's own arena when it is made, so the allocation
+//< is predictable. The plain gradient step is `Tensor.sgd_step` in `ksai/grad`, which needs no
+//< state and so no optimizer.
+import "ksai/grad" as _grad // `sgd_step` on Tensor
+import "ksai/tensor" { Tensor }
+import "std/ds" { List }
+import "std/math"
+
+pub struct Adam<|T|> //< one parameter's optimizer, tracking the direction of its gradient
+  pub m: Tensor<|T|> //< the gradient's recent direction, as a running average
+  pub v: Tensor<|T|> //< the gradient's recent size, as a running average
+  pub beta1: F64 //< how long `m` remembers; closer to 1 is longer
+  pub beta2: F64 //< how long `v` remembers; closer to 1 is longer
+  pub eps: F64 //< added to the divisor so a parameter that is not moving does not divide by zero
+  pub lr: F64 //< the learning rate
+  pub timestep: I64 //< how many steps have been taken, which the early bias correction needs
+
+impl<|T|> Adam<|T|>
+  priv fn new_like(param: Tensor<|T|>, lr: F64, beta1: F64, beta2: F64, eps: F64): Adam<|T|> //<
+    //< Makes m and v, the same shape as `param`, initialized to 0 on `param.arena`
+    $m: = Tensor<|T|>.new(param.shape, param.arena)
+    $v: = Tensor<|T|>.new(param.shape, param.arena)
+    m.fill(T::0.0)
+    v.fill(T::0.0)
+    return Adam<|T|>::{ .m = m, .v = v, .beta1 = beta1, .beta2 = beta2, .eps = eps, .lr = lr,
+      .timestep = 0 }
+  pub fn new_default( //< an optimizer with the usual settings, 0.9/0.999/1e-8
+    param: Tensor<|T|>, //< the parameter it will update; `m` and `v` take its shape and its arena
+    lr: F64, //< the learning rate
+  ): Adam<|T|>
+    return Adam<|T|>.new_like(param, lr, 0.9, 0.999, 1.0e-8)
+  pub fn step( //< one step, moving the parameter the way the gradient has been pointing
+    r: Self$@,
+    param: Tensor<|T|>, //< the parameter, changed in place
+    grad: Tensor<|T|>, //< its gradient; a size different from the parameter's is rejected
+  )
+    // As for `sgd_step` in `grad.kspls`: a `grad` smaller than `param` (and than `r.m`/`r.v`, made
+    // at its shape by `new_like`) would read past `grad.data`, as when `param` came from a
+    // corrupted or tampered adapter.
+    assert(param.size == grad.size, "Adam.step size mismatch")
+    r.timestep += 1
+    bc1: = 1.0 - math.pow(r.beta1, F64::r.timestep) // the first-moment bias correction
+    bc2: = 1.0 - math.pow(r.beta2, F64::r.timestep) // the second-moment bias correction
+    for i in Range.asc(param.size)
+      g: = (grad.data + i)$
+      m_i: = r.beta1 * (r.m.data + i)$ + (1.0 - r.beta1) * g
+      v_i: = r.beta2 * (r.v.data + i)$ + (1.0 - r.beta2) * g * g
+      (r.m.data + i)$ = T::m_i
+      (r.v.data + i)$ = T::v_i
+      mhat: = m_i / bc1
+      vhat: = v_i / bc2
+      upd: = r.lr * mhat / (math.sqrt(vhat) + r.eps)
+      (param.data + i)$ = (param.data + i)$ - T::upd
+
+pub struct Updater<|T|> //< how every weight of a model is moved by its gradient: SGD, or Adam
+  //<
+  //< A layer's `apply_grads` passes it each weight with its gradient, in the layer's own order.
+  //< **Adam keeps one state per weight, matched by position in that order**: the n-th weight in a
+  //< step gets the n-th state, made on the first step.
+  //< Caution: **Call `begin_step` before each step's weights**; a step passing more or fewer
+  //< weights than the first one stops there, instead of pairing a weight with another's state.
+  pub lr: F64 //< the learning rate
+  priv adam: Bool
+  priv states: List<|Adam<|T|>|>
+  priv at: Sz //< how many weights this step has passed so far
+  priv steps: Sz //< how many steps have begun
+
+impl<|T|> Updater<|T|>
+  pub fn sgd( //< plain gradient descent, with no state
+    lr: F64, //< the learning rate
+  ): Updater<|T|>
+    return Updater<|T|>::{ .lr = lr, .adam = false, .states = List<|Adam<|T|>|>.new(), .at = 0,
+      .steps = 0 }
+  pub fn adam( //< Adam with the usual settings, one state per weight (`Adam.new_default`)
+    lr: F64, //< the learning rate
+  ): Updater<|T|>
+    return Updater<|T|>::{ .lr = lr, .adam = true, .states = List<|Adam<|T|>|>.new(), .at = 0,
+      .steps = 0 }
+  pub fn begin_step(r: Self$@) //< marks the start of one step's weights
+    assert(r.steps < 2 || r.at == r.states.len,
+      "Updater: a step handed over another number of weights than the one before")
+    r.steps += 1
+    r.at = 0
+  pub fn update( //< moves one weight by its gradient, in place
+    r: Self$@,
+    $param: Tensor<|T|>, //< the weight, changed in place
+    grad: Tensor<|T|>, //< its gradient; a size different from the weight's is rejected
+  )
+    if !r.adam
+      param.sgd_step(grad, r.lr)
+      return
+    if r.at == r.states.len
+      assert(r.steps <= 1, "Updater: more weights than the first step handed over")
+      r.states.push(Adam<|T|>.new_default(param, r.lr))
+    // A weight paired with another's state shows here first, as a size that does not match.
+    assert(r.states[r.at].m.size == param.size, "Updater: a weight met another weight's state")
+    r.states[r.at].step(param, grad)
+    r.at += 1
+  pub fn free(r: Self$@) //< frees the list of states (the weights own the states themselves)
+    r.states.free()
+
+// Without this impl the use-after-free check does not work (`Owned` in `std/lang.kspls`; [W0108]
+// says so).
+impl<|T|> Updater<|T|>: Owned {} //< it owns its list of states and frees it with `free()`

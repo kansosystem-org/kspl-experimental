@@ -1,0 +1,127 @@
+import "kspage/lay/caret"
+import "kspage/model/doc" { Doc }
+import "kspage/model/style" { Sheet }
+import "kspage/share/trail"
+import "kspage/tests/base"
+import "kspage/write/edit"
+import "kspage/write/typing"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// kspage: checks that the change history records when, who and what changed.
+//
+// **There is one arena** (`ksdb/ram_store`), opened anew per test; do not open two at once.
+// The 1024B sector and 4096B arena are small so a test can fill the arena.
+// ==========================================
+priv const keep_bytes: Sz = 4096
+priv const sector: Sz = 1024
+priv $keep: U8[4096] = ::{}
+
+priv fn room(): U8$[]
+  return U8$[]::{ .ptr = keep@, .len = keep_bytes }
+
+priv fn deeds(tr: trail.Trail$@, sb: Str_builder$@): U8[] //<
+  //< The text the history was read out into
+  sb.clear()
+  tr.deeds_into(sb)
+  return sb.slice()
+
+fn test_a_deed_carries_when_who_and_what()
+  verdict.start("[kspage/trail] the history carrying the time, who and what test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  $sb: = Str_builder.new()
+  defer sb.free()
+  tr: = trail.open(room(), sector, "", arena)
+
+  tr.wait("Typed")
+  assert(tr.count() == 0, "it does not go into the history until it is stuck on")
+  assert(tr.stamp("2026-08-18 11:42", "Alice") == 1, "one was stacked")
+  assert(tr.count() == 1, "what was stacked can be counted")
+  got: = deeds(tr, sb@)
+  assert(got.equals("2026-08-18 11:42\tAlice\tTyped\n"),
+    "the time, who and what stand in that order")
+  verdict.pass("the history holds \"when, who and what\" on one line.")
+
+fn test_deeds_waiting_share_the_stamp()
+  verdict.start("[kspage/trail] what was held back being stuck on together test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  $sb: = Str_builder.new()
+  defer sb.free()
+  tr: = trail.open(room(), sector, "", arena)
+
+  tr.wait("Typed")
+  tr.wait("Deleted")
+  assert(tr.stamp("11:42", "Alice") == 2, "everything held back is stacked")
+  // **What was held back is emptied.** Left, the old entries would mix into the next stamp.
+  assert(tr.stamp("11:43", "Alice") == 0, "the second time there is nothing to stack")
+  got: = deeds(tr, sb@)
+  assert(got.equals("11:42\tAlice\tTyped\n11:42\tAlice\tDeleted\n"), "they stand oldest first")
+  verdict.pass("what was held back is stacked together under the next time and name stuck on.")
+
+fn test_the_trail_reopens_from_its_own_bytes()
+  verdict.start("[kspage/trail] opening afresh from the text carried out test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  $sb: = Str_builder.new()
+  defer sb.free()
+  $held: = Str_builder.new()
+  defer held.free()
+  tr: = trail.open(room(), sector, "", arena)
+  tr.wait("Typed")
+  tr.stamp("11:42", "Alice")
+  // Caution: **Copy the stored form.** It is the arena itself, so opening anew clears it.
+  held.s(tr.bytes())
+
+  back: = trail.open(room(), sector, held.slice(), arena)
+  assert(back.count() == 1, "what was stacked can be read back")
+  back.wait("Deleted")
+  back.stamp("11:50", "Alice")
+  got: = deeds(back, sb@)
+  assert(got.equals("11:42\tAlice\tTyped\n11:50\tAlice\tDeleted\n"), "it stacks on the end of it")
+  verdict.pass("the history can be opened afresh from the text carried out and carried on.")
+
+fn test_a_full_trail_counts_what_it_could_not_keep() //<
+  //< **A full arena does not drop entries silently**: what could not be stored is counted.
+  verdict.start("[kspage/trail] a full arena not being dropped in silence test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  tr: = trail.open(room(), sector, "", arena)
+
+  // Stores until the arena runs out. **The rounds are not counted** (they vary with sector use);
+  // only that what was dropped is counted.
+  for tr.lost <= 0
+    tr.wait("Typed")
+    tr.stamp("2026-08-18 11:42", "Alice")
+  assert(tr.lost > 0, "what could not be stacked can be counted")
+  assert(tr.count() > 0, "what was stacked can be read")
+  verdict.pass("full, what was stacked still reads and what was dropped is counted.")
+
+fn test_the_editor_marks_what_each_step_did() //<
+  //< The editor records what was done every time a step is closed
+  verdict.start("[kspage/trail] the place of editing holding back what it did test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  $sb: = Str_builder.new()
+  defer sb.free()
+  doc: = Doc.new(arena)
+  n: = doc.add_block("body").add_text("")
+  _sheet: = Sheet.new(base.root_font(), arena)
+  ed: = edit.new_editor(doc)
+  ed.trail = trail.open(room(), sector, "", arena)
+  ed.caret = caret.at(n, 0)
+
+  ed.insert("あ")
+  ed.break_group()
+  ed.backspace()
+  ed.break_group()
+  // **Undo is history too**, or nobody could tell where a deleted text went.
+  assert(ed.undo(), "it could be put back")
+  assert(ed.trail.stamp("11:42", "Alice") == 3, "Typed, Deleted and Undid are stacked")
+  got: = deeds(ed.trail, sb@)
+  three: = "11:42\tAlice\tTyped\n11:42\tAlice\tDeleted\n11:42\tAlice\tUndid\n"
+  assert(got.equals(three), "the three stand in that order")
+  verdict.pass("what was done is held back into the history every time a step is closed.")

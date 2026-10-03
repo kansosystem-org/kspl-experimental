@@ -1,0 +1,99 @@
+//< Rewrites a template's tree with the concrete type arguments
+//<
+//< The copying is in `sema/decl/mono.kspls`; this file only **rewrites the copied tree**.
+//< **A `const` type argument is replaced by an integer literal**, or `N` in `T[N]` cannot be
+//< evaluated as a value.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_kinds" as base_ast_kinds
+import "ksplc/base/core" as base_core
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "std/str" { Str_builder }
+
+impl Ast_node
+  fn replace_type_vars(r: Ast_node$@, c: Sema_ctx$@)
+    if r == null
+      return
+
+    if r.children.len == 0 && r.text.len > 0
+      if r.kind_id == .k_identifier || r.kind_id == .k_primitive_type ||
+        r.kind_id == .k_type_atom
+        tok_id: = c.env.type_to_id.get(r.text) catch 0
+        if tok_id != 0
+          if g_arg: = c.find_generic_arg(r.text)
+            v_id: = g_arg.bound_type_id
+            v_str: = c.env.get_str(v_id)
+            // A const generic argument (`<|const N: Sz|>`) becomes an integer or boolean literal
+            // node; if only the text were replaced, `v % N` would look up "a symbol named '10'".
+            if g_arg.is_const
+              new_kind: base_ast_kinds.Ast_kind =
+                .k_bool if v_str.equals("true") || v_str.equals("false") else .k_integer
+              r.morph(new_kind, v_str)
+            else
+              r.text = base_core.arena.dup_str(v_str)
+            r.type_id = v_id
+            return
+
+    for child in r.children
+      child.replace_type_vars(c)
+
+    if r.kind_id == .k_expr_path || r.kind_id == .k_type_path
+      // A bare `N` can be a `k_expr_path` around one `k_identifier`; where the child became a
+      // literal, the wrapper does too, or it resolves as "a path named '10'".
+      if r.children.len == 1
+        only_child: = r.get_child(0)
+        if only_child.kind_id == .k_integer || only_child.kind_id == .k_bool
+          r.morph(.k_bool if only_child.kind_id == .k_bool else .k_integer, only_child.text)
+          r.type_id = only_child.type_id
+          return
+      $path_str: = Str_builder.new()
+      defer path_str.free()
+      for i in Range.asc(r.children.len)
+        c_node: = r.get_child(i)
+        if c_node.kind_id == .k_identifier && i > 0
+          path_str.c('.')
+        path_str.s(c_node.text)
+      r.text = base_core.arena.dup_str(path_str.slice())
+    else if r.kind_id == .k_type_args
+      $s: = Str_builder.new()
+      defer s.free()
+      s.s("<|")
+      $first: = true
+      for child in r.children
+        if child.kind_id != .k_literal && child.kind_id != .k_keyword &&
+          !child.text.equals("<|") && !child.text.equals("|>") && !child.text.equals(",")
+          if !first
+            s.s(", ")
+          s.s(child.text)
+          first = false
+      s.s("|>")
+      r.text = base_core.arena.dup_str(s.slice())
+    else if r.kind_id == .k_type_expr || r.kind_id == .k_type_atom || r.kind_id == .k_type_arg ||
+      r.kind_id == .k_type_postfix
+      if r.children.len > 0
+        $s: = Str_builder.new()
+        defer s.free()
+        if r.kind_id == .k_type_postfix
+          s.s(r.text)
+        for c_node in r.children
+          if c_node.kind_id == .k_keyword &&
+            (c_node.text.equals("const") || c_node.text.equals("fn"))
+            s.s(c_node.text).c(' ')
+          else
+            s.s(c_node.text)
+        if s.len > 0
+          r.text = base_core.arena.dup_str(s.slice())
+
+    if r.type_id != 0
+      is_type_node: =
+        r.kind_id == .k_type_expr || r.kind_id == .k_type_atom ||
+        (r.kind_id == .k_expr_path || r.kind_id == .k_type_path) || r.kind_id == .k_type_args ||
+        r.kind_id == .k_type_arg || r.kind_id == .k_type_postfix
+      if is_type_node && r.text.len > 0
+        r.type_id = 0
+
+  fn propagate_loc_file(r: Ast_node$@, file_name: U8[])
+    if r == null
+      return
+    r.loc = r.loc.with_file(file_name)
+    for child in r.children
+      child.propagate_loc_file(file_name)

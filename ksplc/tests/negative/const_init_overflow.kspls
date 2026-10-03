@@ -1,0 +1,51 @@
+//< A top-level initialiser is folded and checked for overflow even when nothing uses it
+//<
+//< Caution: **Leave it to `eval_constexpr` and it passes through**: that one runs only where a
+//< value is needed (an array length, an enum tag, an index, a generic bound). An unfoldable
+//< initialiser has to pass in silence; an unsigned wrap (`mod 2^N` by the specification) is fine.
+// EXPECT: integer overflow in compile-time constant expression
+// EXPECT-NOT: [W0
+// EXPECT-NOT: is not a compile-time constant
+pub struct Foo
+  pub a: I32
+  pub b: I32
+pub enum Color
+  red
+  green
+
+priv fn hook_impl() {}
+
+// The firing side. The shape where only the middle overflows, the shape leaving the declared
+// type's container, and the variable side are all looked at.
+pub const bad_add: I32 = 2147483647 + 1
+pub const bad_mid: I32 = (2147483647 + 1) - 1
+pub const bad_mul: I32 = 100000 * 100000
+pub const bad_sub: I32 = -2147483648 - 1
+pub const bad_i8: I8 = I8::127 + I8::1
+pub $bad_var: I32 = 2147483647 + 1
+
+// Initialisers that cannot be folded. All of them must pass.
+pub const s: U8[] = "abc"
+pub const st: Foo = ::{ .a = 1, .b = 2 }
+pub const col: Color = Color.green
+pub const arr: I32[3] = ::{ 1, 2, 3 }
+pub const size_of_foo: Sz = sizeof(Foo)
+pub const hook: fn() = hook_impl
+pub $g: I32 = 7
+pub const p: I32$@ = g@
+
+// Inside the width. It must pass.
+pub const ok_add: I32 = 2147483646 + 1
+pub const ok_bit: I32 = 1 << 30
+pub const ok_min: I32 = -2147483647 - 1
+pub const ok_chain: I32 = ok_add - 1
+pub const ok_u8_wrap: U8 = U8::255 + U8::1
+pub const ok_char: U8 = 'x'
+
+fn main(): I32
+  _a: = bad_add + bad_mid + bad_mul + bad_sub + I32::bad_i8 + bad_var
+  _b: = s.len + st.a + arr[0] + size_of_foo + g + p$
+  _c: = ok_add + ok_bit + ok_min + ok_chain + I32::ok_u8_wrap + I32::ok_char
+  _d: = col
+  _e: = hook
+  return 0

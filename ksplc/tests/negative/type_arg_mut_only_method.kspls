@@ -1,0 +1,24 @@
+//< An impl with `$` on the target's type argument attaches **only to the mutable version**
+//<
+//< The form is `impl<|T|> Box<|$T|>`; from the immutable version its method is "no such method".
+//< **A method that writes goes in this shape**: in `impl<|T|> Box<|T|>` the declaration fails
+//< (`type_arg_mut_method_body.kspls`). The passing side is `ksplc/tests/variance_test.kspls`.
+// EXPECT: has no field or method named 'poke'
+import "std/io"
+
+priv struct Box<|$T|>
+  p: T$@
+
+impl<|T|> Box<|$T|>
+  fn poke(r: Self, v: T)
+    r.p$ = v
+
+$slot: I32 = 1
+
+fn main(): I32
+  m: Box<|$I32|> = ::{ .p = slot@ }
+  m.poke(1)
+  ro: Box<|I32|> = ::{ .p = slot@ }
+  ro.poke(99)
+  io.out().s("\{slot\}\n")
+  return 0

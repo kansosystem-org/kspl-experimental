@@ -1,0 +1,136 @@
+//< Checks that the heap and the atomics work on Armv6-M (stage 6d in ksos/docs/HOWTO-bring-up.md)
+//<
+//< Armv6-M has no LDREX/STREX, so ksplc's freestanding runtime does not define the atomic helpers.
+//< **Linking successfully is not enough.**
+
+// ==========================================
+//   [heap] SIO spinlock, round=N
+//   [ok]   alloc: three blocks are independent
+//   …
+//   RESULT pass=11 fail=0
+// ==========================================
+import "ksos/demo/rp2040/common/bringup" as boot
+import "ksos/demo/rp2040/common/console" as con
+import "ksos/kernel/heap"
+import "std/http"
+import "std/mem" { Arena }
+import "std/refcount" { Arc }
+import "std/str"
+import "std/thread"
+
+// Neither fits on the task stack, so they are globals.
+$heap_buf: U8[4096]
+$arena_buf: U8[2048]
+
+// A hand-written response, so `std/http.parse_response` can be exercised without running a server
+// on the PC.
+const canned_response: U8[] =
+  "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 5\r\n\r\nhello"
+
+priv $pass_count: U32 = 0
+priv $fail_count: U32 = 0
+
+priv fn check(ln: con.Line$@, name: U8[], ok: Bool) //< prints one check result as one line
+  //<
+  //< **It prints after checking, not before.** A hang happens at the moment the atomics are
+  //< touched, so "that line never appeared" means "it stopped there".
+  if ok
+    pass_count += 1
+  else
+    fail_count += 1
+  ln.reset()
+  ln.str("[ok]   " if ok else "[FAIL] ")
+  ln.str(name)
+  _sent: = ln.flush()
+  boot.pump(30) // run USB a little, until the host has taken the line
+
+priv fn run_heap(ln: con.Line$@) //< alloc's basic behaviour (= kspl_atomic_cas's spinlock)
+  //<
+  //< It starts over from heap_init every time. With the previous run's free list carried over,
+  //< the "reuse" and "coalescing" checks mean nothing from the second run on.
+  heap.heap_init(U8$[]::heap_buf)
+
+  $p1: = heap.heap_alloc(64)
+  $p2: = heap.heap_alloc(128)
+  $p3: = heap.heap_alloc(32)
+  (U8$@::p1)$ = 0xAAU8
+  (U8$@::p2)$ = 0xBBU8
+  (U8$@::p3)$ = 0xCCU8
+  check(ln, "alloc: three blocks are independent",
+    (U8$@::p1)$ == 0xAAU8 && (U8$@::p2)$ == 0xBBU8 && (U8$@::p3)$ == 0xCCU8)
+
+  // Take the address before freeing. After the free, p2 is tracked as freed and cannot be read
+  // (what is checked here is the address itself, not what it points at).
+  p2_addr: = p2
+  heap.heap_free(p2)
+  p4: = heap.heap_alloc(128)
+  check(ln, "alloc: freed block is reused", p4 == p2_addr)
+  heap.heap_free(p4)
+
+  heap.heap_free(p1)
+  heap.heap_free(p3)
+  big: = heap.heap_alloc(64 + 128 + 32)
+  check(ln, "alloc: adjacent free blocks coalesce", big != null)
+  heap.heap_free(big)
+
+priv fn run_atomics(ln: con.Line$@) //< exercises all four atomics (add/cas/load/store) directly
+  //<
+  //< Through the heap, only cas is exercised.
+  //< Caution: **Check right after each operation.** If all run first and are checked together at
+  //< the end, the load() in each check sees only the final state. After operations that rewrite
+  //< the value the expected values no longer match, and it is the check that fails, not the
+  //< implementation.
+  $a: = thread.Atomic_sz.new(0)
+  a.store(7)
+  check(ln, "atomic: store/load", a.load() == 7)
+  added: = a.fetch_add(3)
+  check(ln, "atomic: fetch_add returns the old value", added == 7 && a.load() == 10)
+  swapped: = a.compare_and_swap(10, 42)
+  check(ln, "atomic: cas succeeds on a match", swapped && a.load() == 42)
+  rejected: = a.compare_and_swap(10, 99) // it is 42 now, so this must fail
+  check(ln, "atomic: cas fails on a mismatch", !rejected && a.load() == 42)
+
+priv fn run_arc(ln: con.Line$@) //< for Arc the compiler inserts retain/release automatically
+  //<
+  //< The release runs where the block is left, so kspl_atomic_add/cas are exercised on the same
+  //< path real code takes.
+  $rc_ok: = false
+  release_on_exit:
+    $x: = Arc<|I32|>.new(42)
+    $y: = x.clone()
+    rc_ok = x.get()$ == 42 && y.get()$ == 42
+  check(ln, "Arc: new/clone/get and scope-exit release", rc_ok)
+
+priv fn run_http_parse(ln: con.Line$@) //< arena and std/http.parse_response
+  //<
+  //< Arena.alloc's growth path refers to the global heap, so without atomics it cannot link even
+  //< if it never gets there at run time.
+  $arena: = Arena.from_buffer(arena_buf@, 2048)
+  resp: = http.parse_response(canned_response, arena@) catch
+    check(ln, "std/http: parse_response on a canned 200 response", false)
+    return
+  ctype: = resp.headers.find("Content-Type").unwrap_or(U8$[]::{ .ptr = null, .len = 0 })
+  check(ln, "std/http: status line", resp.status == 200 && resp.reason.equals("OK"))
+  check(ln, "std/http: header lookup", ctype.equals("text/plain"))
+  check(ln, "std/http: body", resp.body.equals("hello"))
+
+fn run(ln: con.Line$@, round: U32)
+  pass_count = 0
+  fail_count = 0
+  ln.reset()
+  ln.str("[heap] SIO spinlock, round=")
+  ln.u32(round)
+  _hdr: = ln.flush()
+  boot.pump(30)
+
+  run_heap(ln)
+  run_atomics(ln)
+  run_arc(ln)
+  run_http_parse(ln)
+
+  ln.reset()
+  ln.str("RESULT pass=")
+  ln.u32(pass_count)
+  ln.str(" fail=")
+  ln.u32(fail_count)
+  _sent: = ln.flush()

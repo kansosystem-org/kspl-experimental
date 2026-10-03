@@ -1,0 +1,112 @@
+//< The few lines that build the LSP params sent to `ksplc lsp`
+//<
+//< Not a suite; the suites that drive the language server use it: ksplc's own, on the files they
+//< are given, and the root's, over the repository's whole tree.
+//< **The framing is not here**: `std/jsonrpc` handles the Content-Length frame, the id, standard
+//< error and the timeout. Here is only "which LSP method gets what".
+//< **It knows no harness**: the caller passes the workspace, so the root's suites can use it, and
+//< what they call is `pub`.
+//< Caution: **Start it with `KSPLC_STD_DIR` set.** The language server rejects `--std-dir=` (the
+//< analysis worker is a separate process), so only the environment tells it where std is.
+import "std/chars"
+import "std/ds" { List }
+import "std/json" + { Json_builder }
+import "std/jsonrpc"
+import "std/mem" { Arena }
+import "std/str" + { Str_builder }
+import "std/subproc"
+
+pub fn start(exe: U8[], extra: U8[][], cwd: U8[], arena: Arena$@):
+  jsonrpc.Client?subproc.Spawn_error //<
+    //< It starts `ksplc lsp`, with `extra` after the subcommand (empty for none)
+    //<
+    //< **`cwd` is the workspace**: imports, the walk and the paths returned are relative to it.
+    //< Empty inherits the caller's working directory.
+  $argv: = List<|U8[]|>.new(arena)
+  argv.push(exe)
+  argv.push("lsp")
+  for a in extra
+    argv.push(a)
+  return jsonrpc.spawn(argv.slice(), cwd)
+
+// ==========================================
+// The two spellings a client names a document by
+// Caution: **Both are in use, so test both.** An editor sends the absolute `file://` URI, other
+// clients the workspace-relative path; tested in only one, half the clients see nothing.
+// ==========================================
+pub fn uri_of(top: U8[], rel: U8[], arena: Arena$@): U8[] //<
+  //< The absolute `file://` URI of `rel`, under the workspace `top`
+  //<
+  //< Caution: **Spell the separators `/`**, as the server does (`to_absolute` in
+  //< `../../base/locate.kspls`); a Windows working directory's `\` would never equal the answer.
+  return arena.text().s("file://").s(slashed(top, arena)).c('/').s(rel).take()
+
+pub fn file_uri(path: U8[], arena: Arena$@): U8[] //<
+  //< The `file://` URI of an absolute path, its separators spelt `/` as in `uri_of`
+  return arena.text().s("file://").s(slashed(path, arena)).take()
+
+pub fn rel_of(top: U8[], uri: U8[], arena: Arena$@): U8[] //<
+  //< The workspace-relative path a returned URI names, whichever spelling it came back in
+  local: = uri.strip_prefix("file://")
+  root: = slashed(top, arena)
+  if !local.starts_with(root) || local.len <= root.len + 1
+    return arena.dup_str(local)
+  return arena.dup_str(local.sub_from(root.len + 1))
+
+priv fn slashed(path: U8[], arena: Arena$@): U8[] //< `path` with each `\` spelt `/`
+  return path.replace("\\", "/", arena)
+
+pub fn did_open(uri: U8[], text: U8[], arena: Arena$@): json.Val //<
+  //< The params of `textDocument/didOpen`
+  //<
+  //< Caution: **Choose `languageId` from the URI's extension**, as an editor does (`kspls` for the
+  //< indentation notation); a fixed one tests a value a real editor does not send.
+  $b: = Json_builder.new(arena)
+  lang: = "kspls" if uri.ends_with(".kspls") else "kspl"
+  doc: = b.obj().set("uri", b.str_val(uri)).set("languageId", b.str_val(lang))
+    .set("version", b.int_val(1I64)).set("text", b.str_val(text)).build()
+  return b.obj().set("textDocument", doc).build()
+
+fn at_doc(uri: U8[], arena: Arena$@): json.Val //<
+  //< The params pointing at only the document (`textDocument`)
+  //<
+  //< For a query that needs no position (`semanticTokens/full` and the like).
+  $b: = Json_builder.new(arena)
+  return b.obj().set("textDocument", b.obj().set("uri", b.str_val(uri)).build()).build()
+
+pub fn at_pos(uri: U8[], line: Sz, character: Sz, arena: Arena$@): json.Val //<
+  //< The params pointing at a position (`textDocument` + `position`)
+  $b: = Json_builder.new(arena)
+  doc: = b.obj().set("uri", b.str_val(uri)).build()
+  pos: = b.obj().set("line", b.int_val(line)).set("character", b.int_val(character)).build()
+  return b.obj().set("textDocument", doc).set("position", pos).build()
+
+fn hover_text(msg: json.Val): U8[] //< `result.contents.value` (the hover's body)
+  //<
+  //< Empty where there is none.
+  return msg.get("result").get("contents").get("value").as_str()
+
+// ==========================================
+// Explaining why a request failed
+// Caution: **Include the supervisor's log.** `result: null` is both "nothing at that position" and
+// "the worker crashed and the supervisor answered null"; the response cannot tell.
+// ==========================================
+pub fn why(c: jsonrpc.Client$@, msg: U8[], arena: Arena$@): U8[] //<
+  //< `msg` with the supervisor's log
+  return arena.text().s(msg).s(" | supervisor: ").s(c.err_tail()).take()
+
+pub fn dump(v: json.Val, arena: Arena$@): U8[] //< `v` as JSON text, cut to 300 bytes
+  $b: = Str_builder.new()
+  defer b.free()
+  v.dump(b@)
+  text: = b.slice()
+  keep: = 300
+  return arena.dup_str(text if text.len <= keep else text.sub(0, keep))
+
+pub fn join(items: List<|U8[]|>@, arena: Arena$@): U8[] //< the items as `[a, b, c]`
+  b: = arena.text().s("[")
+  for i in Range.asc(items.len)
+    if i > 0
+      b.s(", ")
+    b.s(items.get(i))
+  return b.s("]").take()

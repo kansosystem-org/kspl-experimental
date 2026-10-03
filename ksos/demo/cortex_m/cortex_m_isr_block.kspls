@@ -1,0 +1,53 @@
+//< ARM Cortex-M: waiting inside an interrupt handler panics
+//<
+//< It panics rather than silently stopping another task.
+//< An ISR has no task to switch to, so a `take` inside a handler would block the interrupted task
+//< instead (a failure with no diagnosis). The kernel checks the IPSR and stops at once. The demo
+//< raises IRQ0 from software with the NVIC's STIR and calls `Sem.take` in its handler. Success is
+//< the panic, so panic_hook matches the message and prints the summary.
+import "ksos/demo/common/semihost_console" as con
+import "ksos/drivers/cortex_m/scs"
+import "ksos/drivers/mmio"
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+import "std/chars"
+
+const nvic_stir: U32 = 0xE000EF00 // Software Trigger Interrupt Register: writing an IRQ number
+const irq0: U32 = 0 //< makes that IRQ pending
+const expected: U8[] = "ksos: task-only call inside an ISR"
+
+$g_sem: sync.Sem
+$tcb: Task
+$stack: U8[4096]
+
+fn on_panic(msg: U8$[]) //< Check that the panic message is the kernel's refusal, and end
+  con.puts("PANIC: ")
+  con.puts(msg)
+  con.puts("\n")
+  con.check("a blocking take inside an ISR stops with the kernel's panic",
+    msg.starts_with(expected))
+  con.print_summary("Cortex-M ISR block")
+  con.exit()
+
+// IRQ0's handler (#export overrides the vector table's weak default, the same wiring as the mps2
+// UART driver). Waiting here is the misuse; returning from it is a failure.
+#export
+fn uart0_irq0_handler()
+  g_sem.take()
+  con.check("take inside the ISR returned instead of stopping", false)
+  con.print_summary("Cortex-M ISR block")
+  con.exit()
+
+fn trigger(_arg: Void$@): Void
+  con.puts("=== Kanso OS (Cortex-M) blocking inside an ISR ===\n")
+  scs.enable_irq(irq0)
+  mmio.write32(nvic_stir, irq0) // the core enters IRQ0 within a few instructions
+  for {}
+
+#export
+fn ksos_main()
+  panic_hook = on_panic
+  g_sem.init(0)
+  tcb.create(U8$[]::stack, trigger, null, 1, "trig")
+  task.start_scheduler()
+  for {}

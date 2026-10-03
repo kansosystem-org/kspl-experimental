@@ -1,0 +1,435 @@
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/base/locate" as base_locate
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/session/state" { Alias_info, Import_hit, Import_symbol_info }
+import "ksplc/sema/type/scope" as sema_type_scope
+import "std/chars" // testing and slicing single characters
+import "std/ds" { List, Map }
+import "std/str"
+
+// ==========================================
+// The table of import lines: `import "m" as a;` (an import alias) and `import "m" { A as B };` (a
+// selective import) in one Map keyed `"file name::name"` (import_key), used to look up a name's
+// renaming.
+// Caution: **Do not put the table and the checks on it in the same place.** Every pass reads the
+// table, while the checks (unused, existence) run once at the end; mixed, the lookup layer looks
+// as if it depended on the checking layer.
+// ==========================================
+
+const lang_file_path: U8[] = "std/lang"
+
+fn lang_file(): U8[] //< `lang_file_path` under the name the file was found as
+  //<
+  //< Every file imports std/lang implicitly, so this must be the name its own declarations carry,
+  //< or a std name written in braces is looked up under another name (`name_as_found` in
+  //< `../../base/locate.kspls`).
+  return base_locate.name_as_found(lang_file_path)
+
+priv fn decl_name_of(r: Ast_node$@): U8[] //< the name of a declaration node
+  //<
+  //< A kind with no name (an impl, an extern block and so on) returns empty.
+  switch r.kind_id case .k_decl_struct, .k_decl_enum, .k_decl_trait, .k_decl_fn, .k_decl_const,
+    .k_decl_alias {} case .k_decl_var
+    item: = r.find_child(.k_decl_var_item)
+    if item != null
+      name_node: = item.find_child(.k_identifier)
+      return name_node.text if name_node != null else ""
+  default
+    return ""
+  name_node: = r.find_child(.k_identifier)
+  return name_node.text if name_node != null else ""
+
+fn import_key_name(key: U8[]): U8[] //< the name half of an import table key (`file::name`)
+  sep: = key.find_str("::")
+  return key.sub_from(sep + 2) if sep >= 0 else key
+
+fn register_implicit_lang_imports(r: Ast_node$@, c: Sema_ctx$@) //<
+  //< Adds std/lang's public names to every file as "a selective import nobody wrote"
+  //<
+  //< The import alias (`lang`) too. **Call it right after Pass 0**: Pass 1 resolves the declared
+  //< type nodes, where `Option` or `Range` would be undefined.
+  //< Caution: **Do not add them to a file that declares the same name itself**, or the user can
+  //< no longer define `Owned` there. An implicit name always loses.
+  $lang_names: = List<|U8[]|>.new()
+  defer lang_names.free()
+  $files: = List<|U8[]|>.new()
+  defer files.free()
+  $seen_file: = Map<|U8[], Bool|>.new()
+  defer seen_file.free()
+  $declared: = Map<|U8[], Bool|>.new()
+  defer declared.free()
+
+  lang_name: = lang_file()
+  for top_node in r.children
+    child: = top_node.unwrap_top_level()
+    file: = child.loc.file()
+    if file.len == 0
+      continue
+    if !(seen_file.get(file) catch false)
+      seen_file.set(base_core.arena.dup_str(file), true)
+      files.push(base_core.arena.dup_str(file))
+    name: = decl_name_of(child)
+    if name.len == 0
+      continue
+    if file.equals(lang_name)
+      if child.get_visibility() == sema_type_scope.Visibility.public
+        lang_names.push(base_core.arena.dup_str(name))
+      continue
+    declared.set(base_core.arena.dup_str(c.import_key(file, name)), true)
+
+  lang_alias: = lang_file_path.default_import_alias()
+  for file in files
+    if file.equals(lang_name)
+      continue
+    // An alias, like a name, yields to that file's own declaration. In a file that declares `fn
+    // lang()`, turning `lang.f()` into an alias prefix would silently change what is called.
+    if !(declared.get(c.import_key(file, lang_alias)) catch false)
+      c.add_implicit_file_alias(file, lang_alias, lang_name)
+    for name in lang_names
+      taken: = (declared.get(c.import_key(file, name)) catch false)
+      c.add_implicit_import_symbol(file, name, lang_name, taken)
+
+impl Alias_info
+  fn new(target_path: U8$[], decl_node: Ast_node$@): Alias_info$@
+    return base_core.arena
+      .create(Alias_info::{ .target_path = target_path, .is_used = false, .decl_node = decl_node })
+
+impl Import_hit
+  fn has_line(r: Self): Bool //< whether a line was found; the zero value is "none yet"
+    return r.alias != null || r.symbol != null
+
+impl Import_symbol_info
+  fn new(target_path: U8$[], original_name: U8$[], decl_node: Ast_node$@): Import_symbol_info$@
+    return base_core.arena
+      .create(Import_symbol_info::{ .target_path = target_path, .original_name = original_name,
+      .is_used = false, .decl_node = decl_node })
+
+impl Sema_ctx
+  priv fn import_key(r: Self$@, file: U8[], name: U8[]): U8[] //<
+    //< The table's key for `name` in `file`, built in the scratch buffer
+    //<
+    //< Caution: **Copy it before storing it**; the next use of the scratch buffer overwrites it.
+    return r.clear_scratch().s(file).s("::").s(name).slice()
+
+  fn peek_file_alias(r: Self$@, file: U8[], ali: U8[]): Alias_info$@ //<
+    //< Looks up that alias's information **without setting the used flag** (null if absent)
+    //<
+    //< Caution: **Do not reuse `find_file_alias` below for this.** That one sets is_used as soon
+    //< as it looks up, silencing the unused lint ([I0401]) on a written `as` (an LSP operation
+    //< would change it too).
+    return r.aliases.files.get(r.import_key(file, ali)) catch null
+
+  fn find_file_alias(r: Self$@, file: U8[], ali: U8[]): Option<|Alias_info$@|> //<
+    //< Looks up the alias information keyed by "file::ali", setting the used flag if found
+    //<
+    //< It serves get_file_alias and get_file_alias_target.
+    entry: = r.peek_file_alias(file, ali)
+    if entry != null
+      entry.is_used = true
+      return Option<|Alias_info$@|>.some(entry)
+    return Option<|Alias_info$@|>.none
+
+  fn get_file_alias_target($r: Self$@, file: U8[], ali: U8[]): U8[]
+    entry: = r.find_file_alias(file, ali).unwrap_or(null)
+    return entry.target_path if entry != null else ""
+
+  fn is_file_imported(r: Self$@, target_file: U8[]): Bool //<
+    //< Whether this file imports target_file
+    //<
+    //< Caution: Check both an import alias (`import "m";`) and a selective import (`import "m" {
+    //< X };`). A match gets is_used set: it is what makes this call valid, so calling it unused
+    //< would be advice that breaks the build if followed.
+    if target_file.equals(r.file_name)
+      return true
+    if r.import_reach == null
+      r.build_import_reach()
+    hit: = r.import_reach.get(r.import_key(r.file_name, target_file)) catch
+      return false
+    if hit.alias != null
+      hit.alias.is_used = true
+    else
+      hit.symbol.is_used = true
+    return true
+
+  priv fn build_import_reach(r: Self$@) //<
+    //< Indexes every import line by the file that writes it and the file it names
+    //<
+    //< **One lookup per call instead of a walk over every line of every file**: a method call on
+    //< another file's type asks, and std/lang's names alone are a line in each file.
+    //< Each pair keeps the line a walk over the slots meets first, aliases before selective
+    //< imports, so the line marked used is the one the walk per call marked.
+    reach: = base_core.arena.create(Map<|U8[], Import_hit|>.new_with_cap(64, null))
+    for i in Range.asc(r.aliases.files.cap)
+      entry: = r.aliases.files.entries + i
+      if entry.is_active
+        key: = r.reach_key(entry.key, entry.value.target_path)
+        if !(reach.get(key) catch Import_hit::{}).has_line()
+          reach.set(base_core.arena.dup_str(key), Import_hit::{ .alias = entry.value })
+    for i in Range.asc(r.import_symbols.files.cap)
+      entry: = r.import_symbols.files.entries + i
+      if entry.is_active
+        key: = r.reach_key(entry.key, entry.value.target_path)
+        if !(reach.get(key) catch Import_hit::{}).has_line()
+          reach.set(base_core.arena.dup_str(key), Import_hit::{ .symbol = entry.value })
+    r.import_reach = reach
+
+  priv fn reach_key(r: Self$@, import_key: U8[], target_path: U8[]): U8[] //<
+    //< build_import_reach's key for one line: "the file writing it::the file it names"
+    //<
+    //< Caution: **Copy it before storing it**, as with import_key.
+    sep: = import_key.find_str("::")
+    return r.import_key(import_key.sub(0, sep) if sep >= 0 else import_key, target_path)
+
+  fn drop_import_reach(r: Self$@) //< forgets the index, to be built again on the next question
+    if r.import_reach != null
+      r.import_reach.free()
+      r.import_reach = null
+
+  fn get_file_alias(r: Self$@, file: U8[], ali: U8[]): Bool
+    return r.find_file_alias(file, ali).is_some()
+
+  fn add_file_alias(r: Self$@, file: U8[], ali: U8[], target_path: U8[], decl_node: Ast_node$@)
+    arena_key: = base_core.arena.dup_str(r.import_key(file, ali))
+    arena_target: = base_core.arena.dup_str(target_path)
+    info: = Alias_info.new(arena_target, decl_node)
+    r.aliases.files.set(arena_key, info)
+    r.drop_import_reach()
+
+  fn add_withheld_alias(r: Self$@, file: U8[], ali: U8[], path: U8[]) //<
+    //< Records the file name a selective import with no `+` leaves out, for the message on its use
+    //<
+    //< `p.x` then fails as an unknown name; the note that suggests `+` reads this
+    //< (`append_withheld_alias_note`).
+    arena_key: = base_core.arena.dup_str(r.import_key(file, ali))
+    r.aliases.withheld.set(arena_key, base_core.arena.dup_str(path))
+
+  fn add_implicit_file_alias(r: Self$@, file: U8[], ali: U8[], target_path: U8[]) //<
+    //< Registers `std/lang`'s import alias in file as an import line nobody wrote
+    //<
+    //< So a file declaring the same name can still write `lang.Ref_counted`.
+    //< Caution: **If that name is already taken, do nothing.** A written import line wins. Look up
+    //< without setting is_used: find_file_alias here would silence I0401 on a written `as lang`.
+    if r.peek_file_alias(file, ali) != null
+      return
+    r.add_file_alias(file, ali, target_path, null)
+
+  fn peek_import_symbol(r: Self$@, file: U8[], local_name: U8[]): Import_symbol_info$@ //<
+    //< Looks up the selective-import information **without setting the used flag** (null if absent)
+    //<
+    //< Caution: the reason not to reuse `find_import_symbol` is at peek_file_alias.
+    return r.import_symbols.files.get(r.import_key(file, local_name)) catch null
+
+  fn find_import_symbol(r: Self$@, file: U8[], local_name: U8[]):
+    Option<|Import_symbol_info$@|> //<
+      //< Looks up the selective-import information keyed by "file::local_name"
+      //<
+      //< If found, it sets the used flag and returns it.
+    entry: = r.peek_import_symbol(file, local_name)
+    if entry != null
+      entry.is_used = true
+      return Option<|Import_symbol_info$@|>.some(entry)
+    return Option<|Import_symbol_info$@|>.none
+
+  fn mark_import_written(r: Self$@, file: U8[], name: U8[], heads_member: Bool) //<
+    //< Records that file wrote that name; heads_member: a `.member` follows it
+    //<
+    //< Caution: Decide whether an import is unused by **whether it was written**. Marking only on
+    //< resolution misses an uninstantiated template body, and the same import flips between used
+    //< and unused depending on what else is compiled.
+    if file.len == 0 || name.len == 0
+      return
+    r.find_import_symbol(file, name)
+    if heads_member
+      r.find_file_alias(file, name)
+
+  fn get_import_symbol_target(r: Self$@, file: U8[], local_name: U8[]): U8[] //<
+    //< The resolution destination (the file path) of a selectively imported symbol; empty if absent
+    entry: = r.find_import_symbol(file, local_name).unwrap_or(null)
+    return entry.target_path if entry != null else ""
+
+  fn get_import_symbol_original_name(r: Self$@, file: U8[], local_name: U8[]): U8[] //<
+    //< A selectively imported symbol's original name at the import source
+    //<
+    //< It is the original name even where the import renames it.
+    entry: = r.find_import_symbol(file, local_name).unwrap_or(null)
+    return entry.original_name if entry != null else ""
+
+  fn imported_symbol_fqn(r: Self$@, local_name: U8[]): U8[] //<
+    //< Turns a name a selective import brought in (`import "p" { A as B };`) into its FQN (`p.A`)
+    //<
+    //< Such a name is in no namespace. **Name resolution starts by looking this up.**
+    //< Caution: **Look it up before a same-named one outside the file.** That is safe: in one file
+    //< a declaration and a selective import never share a name (each rejects the other).
+    entry: = r.find_import_symbol(r.file_name, local_name).unwrap_or(null)
+    if entry == null
+      return ""
+    // **An implicit import (std/lang) always loses.** If a local binding, a formal parameter or
+    // that file's declaration of the same name is visible, yield to it.
+    // Caution: **Confirm that what it yields to is not lang itself.** lang's declarations are
+    // global, so "yield if the name resolves" turns a generic trait (`Callable1`) into the template
+    // name, which no longer matches the instantiated conformance.
+    if entry.decl_node == null
+      shadow: = r.symtab.resolve(local_name) catch null
+      if shadow != null && shadow.node != null &&
+        !shadow.node.loc.file().equals(entry.target_path)
+        return ""
+    return base_core.arena
+      .dup_str(r.build_mod_fqn(entry.target_path, entry.original_name))
+
+  fn has_explicit_import_symbol(r: Self$@, file: U8[], local_name: U8[]): Bool //<
+    //< Whether that name is taken by "a written selective import"
+    //<
+    //< An implicit import is not counted, or lang's names could not name a local binding.
+    entry: = r.peek_import_symbol(file, local_name)
+    return entry != null && entry.decl_node != null
+
+  fn add_implicit_import_symbol(r: Self$@, file: U8[], name: U8[], target_path: U8[], taken: Bool) //<
+    //< Registers `std/lang`'s names in file as a selective import nobody wrote
+    //<
+    //< **If that name is already taken, do nothing** (an implicit name always loses).
+    //< **decl_node is null**: with no written line, neither the unused lint ([I0401]) nor the
+    //< selector's existence check may apply to it.
+    if taken || r.peek_import_symbol(file, name) != null
+      return
+    arena_key: = base_core.arena.dup_str(r.import_key(file, name))
+    arena_target: = base_core.arena.dup_str(target_path)
+    arena_name: = base_core.arena.dup_str(name)
+    r.import_symbols.files
+      .set(arena_key, Import_symbol_info.new(arena_target, arena_name, null))
+    r.drop_import_reach()
+
+  fn add_import_symbol(r: Self$@, file: U8[], local_name: U8[], target_path: U8[],
+    original_name: U8[], decl_node: Ast_node$@) //<
+      //< Registers one selector of `import "path" { A, B as C };`.
+      //<
+      //< A local_name already used in the file is an ordinary redefinition error (no first-wins or
+      //< last-wins).
+    if r.symtab.has_in_current_scope(local_name)
+      r.report_redefinition(decl_node, local_name)
+      return
+    if r.peek_import_symbol(file, local_name) != null
+      r.report_redefinition(decl_node, local_name)
+      return
+    arena_key: = base_core.arena.dup_str(r.import_key(file, local_name))
+    arena_target: = base_core.arena.dup_str(target_path)
+    arena_name: = base_core.arena.dup_str(original_name)
+    info: = Import_symbol_info.new(arena_target, arena_name, decl_node)
+    r.import_symbols.files.set(arena_key, info)
+    r.drop_import_reach()
+
+impl Ast_node
+  fn collect_import_decl(r: Ast_node$@, c: Sema_ctx$@)
+    // **A path that is not a plain string is rejected here.** The grammar lets an interpolated
+    // (`import "std/\{x\}";`) or raw string through; if accepted, it is an ICE or silently reads a
+    // different file.
+    path_opt: = r.get_import_path_text()
+    if path_opt.is_none()
+      c.err(r,
+        "an import path must be a plain string literal in one pair of '\"', without '\\{...\\}' \
+          interpolation.")
+      return
+    clean_path: = path_opt.unwrap_or("")
+    file_name: = r.loc.file()
+
+    // **This is an error, not a lint.** lang's names are already in every file, so allowing it
+    // gives two ways to reach the same name ("One notation per purpose" in docs/DESIGN.md).
+    if clean_path.equals(lang_file_path)
+      c.clear_scratch().s("'\{lang_file_path\}' is imported into every file; remove this line.")
+      c.err(r, c.scratch.slice())
+      return
+
+    // Registers the symbols in braces in no namespace. **The alias is added only with a `+`**
+    // (`import "p" + { A };`).
+    // **Writing `as` also requires a `+`**: `as` names the alias while braces without `+` mean
+    // "only the bare names"; if accepted, "named it, yet `p.` cannot be written" goes unreported.
+    selector_list: = r.get_decl_import_selector_list()
+    plus: = r.has_import_plus()
+    if selector_list != null && !plus && r.get_import_alias().len > 0
+      c.err(r,
+        "'as' names the file, so the selector list needs '+': 'import \"p\" as m + { A }'. Drop the \
+          'as' to bring in only the selected names.")
+      return
+    $resolved_sb: = file_name.resolve_import_path(clean_path)
+    target_path: = resolved_sb.slice()
+    if selector_list != null
+      for selector in selector_list.children
+        if selector.kind_id != .k_decl_import_selector
+          continue
+        name_node: = selector.get_selector_name()
+        if name_node == null
+          continue
+        alias_node: = selector.get_selector_alias()
+        local_name: = alias_node.text if alias_node != null else name_node.text
+        c.add_import_symbol(file_name, local_name, target_path, name_node.text, selector)
+    if selector_list != null && !plus
+      c.add_withheld_alias(file_name, clean_path.default_import_alias(), clean_path)
+      resolved_sb.free()
+      return
+
+    // The whole file's alias.
+    // Caution: **Do not let the same alias point at another file.** A later line silently
+    // overwrites the Map entry, so `ctx.X` follows **import line order**, which `fmt` changes.
+    $alias_name: = r.get_import_alias()
+    if alias_name.len == 0
+      alias_name = clean_path.default_import_alias()
+    taken: = c.peek_file_alias(file_name, alias_name)
+    if taken != null && !taken.target_path.equals(target_path)
+      c.clear_scratch()
+        .s("import alias '\{alias_name\}' already points at '\{taken.target_path\}'; rename one \
+          with 'as'.")
+      c.err(r, c.scratch.slice())
+      resolved_sb.free()
+      return
+    c.add_file_alias(file_name, alias_name, target_path, r)
+    resolved_sb.free()
+
+  fn mark_written_imports(r: Self$@, c: Sema_ctx$@) //<
+    //< Records the identifiers written in the tree as uses of that file's imports
+    //<
+    //< **Call it before a generic's template body is discarded** (see run in
+    //< sema/body/infer.kspls); afterwards, an import used only from a template body looks unused.
+    //< Caution: Do not descend into an import declaration itself: its selectors and alias are
+    //< identifiers too, and every import would mark itself used, silencing I0401.
+    r.mark_written_under(c, false)
+
+  priv fn mark_written_under(r: Self$@, c: Sema_ctx$@, heads_member: Bool) //<
+    //< One node of mark_written_imports; heads_member: whether a `.member` follows r
+    //<
+    //< Caution: **Count a file alias only where a member follows it** (the head of `io.out` or of
+    //< `ds.List`). An alias appears nowhere else, so a field (`p.strnum`) or a function
+    //< (`strnum()`) with the same name would hide a dead import from [I0401]. A member is skipped.
+    if r == null || r.kind_id == .k_decl_import
+      return
+    if r.kind_id == .k_identifier
+      c.mark_import_written(r.loc.file(), r.text, heads_member)
+      return
+    if r.kind_id == .k_expr_path || r.kind_id == .k_type_path || r.kind_id == .k_generic_path
+      $idents: Sz = 0
+      for item in r.children
+        if item.kind_id == .k_identifier
+          idents += 1
+      $seen: Sz = 0
+      for item in r.children
+        if item.kind_id != .k_identifier
+          item.mark_written_under(c, false)
+        else
+          if seen == 0
+            item.mark_written_under(c, heads_member || idents > 1)
+          seen += 1
+      return
+    $receiver: Ast_node$@ = null
+    $member: Ast_node$@ = null
+    if r.kind_id == .k_method_access
+      receiver = r.get_postfix_receiver()
+      member = r.get_postfix_member()
+    else if r.kind_id == .k_expr_postfix
+      op: = r.get_postfix_op()
+      if op != null && op.text.equals(".")
+        receiver = r.get_postfix_receiver()
+        member = r.get_postfix_member()
+    for item in r.children
+      if item != member
+        item.mark_written_under(c, receiver != null && item == receiver)

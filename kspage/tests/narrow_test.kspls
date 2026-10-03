@@ -1,0 +1,116 @@
+import "kspage/lay/ask"
+import "kspage/lay/flow"
+import "kspage/model/doc" + { Doc }
+import "kspage/model/filter"
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/style" as _style + { Sheet }
+import "kspage/tests/base"
+import "kspage/write/cells"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// kspage: checks what one column offers to filter by — the values it shows, their order, and a
+// filter to a chosen set of them.
+// **A person reads down the list in the column's sort order**, so it is checked here, not in the
+// page. The effect on layout is [`grid_test.kspls`](grid_test.kspls); the panel is
+// `kspage/tests/browser/filter.js`.
+// ==========================================
+
+priv fn one_column(d: Doc$@): doc.Block$@ //<
+  //< A table whose one column holds a number, a text, the same text in another case, and a blank
+  //<
+  //< **The heading is not a value**; its word would sort first if counted.
+  table: = d.add_block("table")
+  h: = table.add_child("row")
+  h.add_child("cell").add_text("Aname")
+  texts: = U8[][]::{ "twenty", "10", "TWENTY", "", "10" }
+  for $i: Sz = 0; i < texts.len; i += 1
+    table.add_child("row").add_child("cell").add_text(texts[i])
+  return table
+
+fn test_a_columns_values_come_in_the_order_it_sorts_in() //<
+  //< The values offered are the distinct ones, in the column's sort order, without the heading
+  //<
+  //< **A number compares as a number** (10 before "twenty"). **Spellings that differ only by case
+  //< are one value**: the filter ignores case, so two entries would answer to one checkbox.
+  verdict.start("[kspage/narrow] the values one column offers test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = one_column(d)
+  seen: = List<|U8[]|>.create(arena)
+  got: = cells.column_values(table, 0, arena, seen)
+  assert(seen.len == 2, "the two distinct values come out, the heading and the blank left out")
+  assert(seen.get(0).equals("10"), "a number stands first")
+  assert(seen.get(1).equals("twenty"), "and the spelling met first is the one kept")
+  assert(got.blank, "the blank cell is said apart")
+  assert(!got.cut, "nothing was cut, so it does not say it was")
+  verdict.pass("a column offers its distinct values in the order it sorts in, blanks said apart.")
+
+fn test_a_chosen_set_keeps_the_rows_showing_one_of_them() //<
+  //< A set filter keeps exactly the rows whose cell shows one of the checked values
+  verdict.start("[kspage/narrow] narrowing to a chosen set test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = one_column(d)
+  sheet: = base.grid_sheet(arena)
+  sheet.over.filters = List<|filter.Filter|>.create(arena)
+  // **Each value is followed by a line break**, so an empty value is the break alone.
+  sheet.over.filters.push(filter.make_filter(table, 0, filter.Keep.one_of, "10\n"))
+  assert(shown_rows(d, sheet, arena) == 2, "the two rows showing 10 stay")
+  // Case is ignored, so one checkbox takes both spellings.
+  sheet.over.filters.len = 0
+  sheet.over.filters.push(filter.make_filter(table, 0, filter.Keep.one_of, "twenty\n"))
+  assert(shown_rows(d, sheet, arena) == 2, "one tick takes both spellings of the same value")
+  // The blank cells are the empty value.
+  sheet.over.filters.len = 0
+  sheet.over.filters.push(filter.make_filter(table, 0, filter.Keep.one_of, "\n"))
+  assert(shown_rows(d, sheet, arena) == 1, "the empty value keeps the blank cell alone")
+  // **Nothing checked keeps nothing** (unlike checking the blanks).
+  sheet.over.filters.len = 0
+  sheet.over.filters.push(filter.make_filter(table, 0, filter.Keep.one_of, ""))
+  assert(shown_rows(d, sheet, arena) == 0, "nothing ticked leaves no row under the heading")
+  verdict.pass("a chosen set keeps the rows showing one of its values, blanks and case included.")
+
+priv fn shown_rows(d: Doc$@, sheet: Sheet$@, arena: Arena$@): Sz //<
+  //< How many rows under the heading the layout shows
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  $n: Sz = 0
+  for $i: Sz = 0; i < page.cells.len; i += 1
+    c: = page.cells.get(i)
+    if c.column == 0 && c.row > 0
+      n += 1
+  return n
+
+fn test_the_heading_cells_come_out_with_their_column_numbers() //<
+  //< The heading row's cells come out in layout order, each with its column index
+  //<
+  //< **The filter arrow attaches to these**, so the page needs no notion of where columns are.
+  verdict.start("[kspage/narrow] the heading cells a narrowing hangs off test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = d.add_block("table")
+  h: = table.add_child("row")
+  h.add_child("cell").add_text("one")
+  h.add_child("cell").add_text("two")
+  body: = table.add_child("row")
+  body.add_child("cell").add_text("1")
+  body.add_child("cell").add_text("2")
+  sheet: = base.grid_sheet(arena)
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(ask.head_band_count(page) == 1, "the one table is counted")
+  assert(ask.head_cell_count(page, 0) == 2, "its heading row shows two cells")
+  first: = ask.head_cell_at(page, 0, 0)
+  second: = ask.head_cell_at(page, 0, 1)
+  assert(first.found && second.found, "both come out")
+  assert(first.column == 0 && second.column == 1, "each carries its own column's number")
+  assert(first.table == table && second.table == table, "and the table they belong to")
+  assert(second.rect.x > first.rect.x, "they come left to right")
+  assert(!ask.head_cell_at(page, 0, 2).found, "past the row's end nothing comes out")
+  assert(ask.head_cell_count(page, 1) == 0, "and there is no second table")
+  verdict.pass("a heading row's cells come out in order, each naming its column and its table.")

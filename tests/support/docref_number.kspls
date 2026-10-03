@@ -1,0 +1,86 @@
+//< Checks the numbers that headings themselves carry
+//<
+//< It finds a number's duplicates and gaps.
+//<
+//< **Only this file checks the numbering.** `docref_scan` picks up names and numbers, and
+//< `docref_cite` reads what is attached to a naming; both are about "what a reference points at".
+//< This file checks **whether the target's number is unique and consecutive**.
+//< Caution: Do not import `docref_cite` from here: the number's text is enough (imports go one
+//< way, into `docref_scan`).
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strnum"
+import "tests/support/docref_scan" as scan
+
+// ==========================================
+// A heading number's duplicates and gaps
+// ==========================================
+
+fn is_reset_heading(line: U8[]): Bool //<
+  //< Whether the line is a heading that starts the numbering again (an Appendix or a Part)
+  //<
+  //< **heading_numbers is a set, so it cannot find this.** **Only a number containing a dot is
+  //< checked.**
+  //<
+  //< Caution: **The boundary is found by the heading's own text, so it goes silent when that text
+  //< changes**: after a rename, this demands "unique across the whole text" with no boundary found,
+  //< which looks green until two numbers collide.
+  h: = scan.heading_text(line, 3)
+  return h.starts_with("Appendix ") || h.starts_with("Part ")
+
+fn heading_number_defects(rel: U8[], text: U8[], out: List<|U8[]|>$@, arena: Arena$@)
+  $seen: = List<|U8[]|>.new(arena)
+  $seen_line: = List<|Sz|>.new(arena)
+  $parents: = List<|U8[]|>.new(arena)
+  $last: = List<|Sz|>.new(arena)
+  $i: Sz = 0
+  for line in text.lines(arena)
+    i += 1
+    if is_reset_heading(line)
+      seen.len = 0
+      seen_line.len = 0
+      parents.len = 0
+      last.len = 0
+      continue
+    num: = scan.heading_number(line, arena)
+    if num.len == 0 || num.find_char('.') < 0
+      continue
+    $dup: Sz = 0
+    for k in Range.asc(seen.len)
+      if seen.get(k).equals(num)
+        dup = seen_line.get(k)
+    if dup > 0
+      out
+        .push(arena.text().s(rel).s(":\{i\}: heading number ").s(num)
+        .s(" is duplicated (it is on line \{dup\} too)").take())
+      continue
+    seen.push(num)
+    seen_line.push(i)
+    $dot: Sz = 0
+    for k in Range.asc(num.len)
+      if num[k] == '.'
+        dot = k
+    parent: = num.sub(0, dot)
+    leaf: = Sz::(num.sub_from(dot + 1).to_i64() catch 0I64)
+    $prev: Sz = 0
+    $slot: Sz = parents.len
+    for k in Range.asc(parents.len)
+      if parents.get(k).equals(parent)
+        slot = k
+        prev = last.get(k)
+    if prev == 0
+      if leaf != 1
+        out
+          .push(arena.text().s(rel).s(":\{i\}: heading number ").s(num).s(" is the first under ")
+          .s(parent).s(" yet does not begin at 1").take())
+    else if leaf != prev + 1
+      out
+        .push(arena.text().s(rel).s(":\{i\}: heading number ").s(num)
+        .s(" is not consecutive (the previous was ").s(parent).s(".\{prev\})").take())
+    if slot == parents.len
+      parents.push(parent)
+      last.push(leaf)
+    else
+      last.set(slot, leaf)

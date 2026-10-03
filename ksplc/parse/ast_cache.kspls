@@ -1,0 +1,377 @@
+//< Saves the normalized AST to disk so the next run can skip KSPEG's parse
+//<
+//< Parsing takes most of ksplc's time (more so for small inputs, since std is always read); a
+//< build parses each file once, but **every start of ksplc parses again**, and that is what this
+//< saves. The unit is one file, and the key must include ksplc's own identity
+//< (base/cache.append_self_identity).
+//< Caution: **Silently discard a broken or old-format file and parse instead.** The cache only
+//< saves time, so an unreadable one is no reason to fail.
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/ast_kinds" as base_ast_kinds
+import "ksplc/base/cache" as base_cache
+import "ksplc/base/cfg_inactive" as base_cfg_inactive
+import "ksplc/base/core" as base_core
+import "std/bytes"
+import "std/ds" { List, Map }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena, dealloc }
+import "std/str" { Str_builder }
+import "std/sys"
+
+priv const magic: U8[] = "KSAST"
+
+priv const format_version: U32 = 4 //< the format's version
+  //<
+  //< **Raise it whenever a node's fields, their order or the way the key is built change**, or a
+  //< new reader reads an old file and silently breaks. Rebuilding ksplc changes every key anyway;
+  //< this guards what would still be read (a file placed by hand, for example).
+
+priv const max_nodes: Sz = 8 * 1024 * 1024 //< the most nodes one entry can hold
+  //<
+  //< It stops a broken file's `n_nodes` from asking for a huge allocation; no real entry nears it.
+
+// A number unique to this process for the temporary file name, set at the first call.
+priv $nonce: Sz = 0
+
+priv fn temp_nonce(): Sz
+  if nonce == 0
+    nonce = Sz::sys.mono_us() | 1
+  return nonce
+
+struct Stats //< the hits and misses --stats prints
+  //<
+  //< Caution: Without it, a cache that silently goes unused cannot be noticed: things only get
+  //< slower while the results stay right (tests/suite/ast_cache_test.kspls checks it).
+  hits: Sz
+  misses: Sz
+  stores: Sz
+$stats: Stats = ::{}
+
+// ==========================================
+// The key and the file name
+// ==========================================
+
+priv fn build_paths(logical_name: U8[], src: U8[], path: Str_builder$@, key: Str_builder$@): Bool //<
+  //< It writes the cache file's path into path and the key's hexadecimal into key
+  //<
+  //< The path is `<cache directory>/ast/<64 hex digits>.ksast`.
+  //<
+  //< It returns false where the path cannot be determined (the cache is then not used).
+  $material: = Str_builder.new()
+  defer material.free()
+  material.s(magic).c(0U8).s("\{Sz::format_version\}").c(0U8)
+  material.s(logical_name).c(0U8)
+  // Caution: **Include the `--define` flags**: `#cfg()` drops declarations during normalization
+  // (parse/normalize.should_drop_by_cfg), so one source gives a different AST per flag set.
+  // `--freestanding` and `--target=llvm` add their flags to the defines, so they count too
+  // (main.kspls); a different order alone also gives another key.
+  for d in base_core.config.defines
+    material.s(d).c(0U8)
+  if !base_cache.append_self_identity(material@)
+    return false
+  material.s(src)
+  base_cache.append_hash_hex(material.slice(), key)
+
+  if !base_cache.append_generation_dir(base_cache.ast_kind, path, base_core.arena)
+    return false
+  path.c('/').s(key.slice()).s(".ksast")
+  return true
+
+// ==========================================
+// Writing out
+// ==========================================
+priv fn put_u32(out: Str_builder$@, v: U32)
+  buf: U8[4] = ::{}
+  slot: = U8$[]::buf
+  slot.put_u32_le(0, v)
+  out.s(U8$[]::buf)
+
+priv struct Str_table //< the table of the strings an entry holds
+  //<
+  //< Each string is stored only once (identifiers appear over and over).
+  ids: Map<|U8[], Sz|>$@
+  items: List<|U8[]|>$@
+
+impl Str_table
+  priv fn new(arena: Arena$@): Str_table$@
+    // Caution: Give the Map the arena as backing store too: null uses the global heap, never freed.
+    ids: = arena.create(Map<|U8[], Sz|>.new_with_cap(1024, arena))
+    items: = List<|U8[]|>.create(arena)
+    return arena.create(Str_table::{ .ids = ids, .items = items })
+
+  priv fn intern(r: Self$@, s: U8[]): Sz //<
+    //< The number of `s` in the table, adding it if new
+    //<
+    //< 0 is reserved for the empty string: empty node text is common, so it does not go in the
+    //< table.
+    if s.len == 0
+      return 0
+    existing: = r.ids.get(s) catch -1
+    if existing >= 0
+      return existing
+    id: = r.items.len + 1
+    r.items.push(s)
+    r.ids.set(s, id)
+    return id
+
+priv const u32_max: I64 = 0xFFFFFFFF //< the largest U32
+  //<
+  //< Caution: Hold it as `I64`, not `Sz`: `Sz` is ptrdiff_t, at most 2^31-1 on a 32-bit target, so
+  //< the value compared is widened to I64.
+
+priv fn write_subtree(node: Ast_node$@, tbl: Str_table$@, body: Str_builder$@, count: Sz$@): Bool //<
+  //< It writes the nodes in pre-order
+  //<
+  //< Each node is followed by its n_children subtrees, so the tree is restored without indices. A
+  //< value that does not fit in U32 returns false, and the cache is not used.
+  if node == null
+    return false
+  if node.loc.offset < 0 || I64::node.loc.offset > u32_max || I64::node.children.len > u32_max
+    return false
+  put_u32(body, U32::(I32::node.kind_id))
+  put_u32(body, U32::node.ival)
+  put_u32(body, U32::node.loc.offset)
+  put_u32(body, U32::tbl.intern(node.text))
+  put_u32(body, U32::node.children.len)
+  count$ += 1
+  for child in node.children
+    if !write_subtree(child, tbl, body, count)
+      return false
+  return true
+
+fn store(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@) //<
+  //< It saves decls (the top-level declarations this file adds to root) in the cache
+  //<
+  //< A failure is still a success for the caller: the file is just parsed again next time. **Every
+  //< node's `loc.file` must be logical_name** (one per entry, as parse_raw_ast produces); otherwise
+  //< nothing is saved, rather than a wrong file name.
+  $path: = Str_builder.new()
+  defer path.free()
+  $key: = Str_builder.new()
+  defer key.free()
+  if !build_paths(logical_name, src, path@, key@)
+    return
+
+  tbl: = Str_table.new(base_core.arena)
+  $body: = Str_builder.new()
+  defer body.free()
+  $n_nodes: Sz = 0
+  for d in decls
+    if !d.loc.file().equals(logical_name) || !write_subtree(d, tbl, body@, n_nodes@)
+      return
+
+  // The ranges a `#cfg()` dropped are the normalization's other result; the editor reads them to
+  // explain why a position is empty (`find_cfg_inactive` in `../base/cfg_inactive.kspls`).
+  // Caution: **Store them in the entry**, or a hit returns only the declarations, and whether a
+  // file shows the reason depends on whether a build cached it. Their flag's spelling goes into
+  // the string table, so collect them before the table is written.
+  $regions: = Str_builder.new()
+  defer regions.free()
+  $n_regions: Sz = 0
+  for region in base_cfg_inactive.cfg_inactive.list
+    if !region.file.equals(logical_name)
+      continue
+    put_u32(regions@, U32::region.offset)
+    put_u32(regions@, U32::region.span)
+    put_u32(regions@, U32::tbl.intern(region.flag))
+    put_u32(regions@, 1U32 if region.is_neg else 0U32)
+    n_regions += 1
+
+  $out: = Str_builder.new()
+  defer out.free()
+  out.s(magic)
+  put_u32(out@, format_version)
+  out.s(key.slice())
+  put_u32(out@, U32::n_nodes)
+  put_u32(out@, U32::decls.len)
+  put_u32(out@, U32::tbl.items.len)
+  put_u32(out@, U32::n_regions)
+  for s in tbl.items
+    put_u32(out@, U32::s.len)
+    out.s(s)
+  out.s(body.slice())
+  out.s(regions.slice())
+
+  // Another process may write the same content at once (make -j). **Write to a temporary name, then
+  // rename**, or a reader reads half-written content. The temporary name differs per process;
+  // if two clash, the key and length checks discard the entry and the next writer repairs it.
+  $tmp: = Str_builder.new()
+  defer tmp.free()
+  tmp.s(path.slice()).s(".tmp\{temp_nonce()\}")
+  io.write_file(tmp.slice(), out.slice()) catch
+    return
+  fs.rename_path(tmp.slice(), path.slice()) catch
+    fs.remove_path(tmp.slice()) catch {}
+    return
+  stats.stores += 1
+
+// ==========================================
+// Reading in
+// ==========================================
+
+priv struct Cursor //< a read cursor over an entry's bytes
+  //<
+  //< Caution: Always check the bytes remaining before reading anything.
+  data: U8[]
+  pos: Sz
+  bad: Bool
+
+impl Cursor
+  priv fn u32(r: Self$@): U32
+    if r.bad || r.pos + 4 > r.data.len
+      r.bad = true
+      return 0
+    v: = r.data.get_u32_le(r.pos)
+    r.pos += 4
+    return v
+
+  priv fn bytes(r: Self$@, len: Sz): U8[]
+    if r.bad || len < 0 || r.pos + len > r.data.len
+      r.bad = true
+      return ""
+    out: = U8[]::{ .ptr = r.data.ptr + r.pos, .len = len }
+    r.pos += len
+    return out
+
+priv fn read_subtree(cur: Cursor$@, strs: List<|U8[]|>$@, logical_name: U8[], budget: Sz$@):
+  Option<|Ast_node$@|> //<
+    //< It reads one node and its subtree in pre-order, subtracting each node read from `budget`.
+  if cur.bad || budget$ <= 0
+    cur.bad = true
+    return Option<|Ast_node$@|>.none
+  budget$ -= 1
+  kind_raw: = cur.u32()
+  ival: = cur.u32()
+  offset: = cur.u32()
+  text_id: = cur.u32()
+  n_children: = cur.u32()
+  if cur.bad
+    return Option<|Ast_node$@|>.none
+  // Caution: Keep kind_id within this ksplc's kinds, or it points past ast_kinds' pool downstream.
+  if kind_raw == 0 || I32::kind_raw >= I32::base_ast_kinds.Ast_kind.k_max
+    cur.bad = true
+    return Option<|Ast_node$@|>.none
+  $text: U8[] = ""
+  if text_id != 0
+    if Sz::text_id > strs.len
+      cur.bad = true
+      return Option<|Ast_node$@|>.none
+    text = strs.get(Sz::text_id - 1)
+  // A childless node shares the empty list rather than allocating one (base/ast.empty_child_list).
+  empty: = base_ast.empty_child_list()
+  fresh: = Ast_node::{ .kind_id = base_ast_kinds.Ast_kind::(I32::kind_raw), .ival = I32::ival,
+    .text = text, .loc = base_ast.Loc.at(logical_name, Sz::offset), .children = empty }
+  node: = base_core.arena.create(fresh)
+  if n_children == 0
+    return Option<|Ast_node$@|>.some(node)
+  kids: = base_ast.new_ast_node_list()
+  for $i: U32 = 0; i < n_children; i += 1
+    switch read_subtree(cur, strs, logical_name, budget) case .some(child)
+      kids.push(child)
+    case .none
+      return Option<|Ast_node$@|>.none
+  node.children = kids
+  return Option<|Ast_node$@|>.some(node)
+
+fn load(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@): Bool //<
+  //< True where decls could be restored from the cache
+  //<
+  //< Otherwise it adds nothing and returns false (the caller parses as usual).
+  $path: = Str_builder.new()
+  defer path.free()
+  $key: = Str_builder.new()
+  defer key.free()
+  if !build_paths(logical_name, src, path@, key@)
+    return false
+  data: = io.read_file(path.slice()) catch
+    stats.misses += 1
+    return false
+  defer dealloc(Void$@::data.ptr)
+
+  $cur: = Cursor::{ .data = data, .pos = 0, .bad = false }
+  // The key is checked inside the content too: with the name alone, another key's content saved
+  // under this name would go unnoticed.
+  if !cur.bytes(magic.len).equals(magic) || cur.u32() != format_version ||
+    !cur.bytes(base_cache.hash_hex_len).equals(key.slice())
+    stats.misses += 1
+    return false
+  n_nodes: = Sz::cur.u32()
+  n_roots: = Sz::cur.u32()
+  n_strs: = Sz::cur.u32()
+  // A dropped range is not a node, so n_nodes does not bound their count; max_nodes does.
+  n_regions: = Sz::cur.u32()
+  if cur.bad || n_nodes <= 0 || n_nodes > max_nodes || n_roots <= 0 || n_roots > n_nodes ||
+    n_strs > n_nodes || n_regions > max_nodes
+    stats.misses += 1
+    return false
+
+  // The strings point into data, freed on return; the arena's copies last until the compile ends.
+  strs: = List<|U8[]|>.create(base_core.arena)
+  for _i in Range.asc(n_strs)
+    len: = Sz::cur.u32()
+    view: = cur.bytes(len)
+    if cur.bad
+      stats.misses += 1
+      return false
+    strs.push(base_core.arena.dup_str(view))
+
+  $budget: = n_nodes
+  roots: = List<|Ast_node$@|>.create(base_core.arena)
+  for _i in Range.asc(n_roots)
+    switch read_subtree(cur@, strs, logical_name, budget@) case .some(node)
+      if cur.bad
+        stats.misses += 1
+        return false
+      roots.push(node)
+    case .none
+      stats.misses += 1
+      return false
+  // The ranges a `#cfg()` dropped, read back so that a hit answers exactly as a parse would.
+  // Caution: **Pass none on before the whole entry is checked**: a miss parses again and records
+  // them again, so a partly passed set would appear twice.
+  cached: = List<|base_cfg_inactive.Cfg_inactive|>.create(base_core.arena)
+  for _i in Range.asc(n_regions)
+    offset: = Sz::cur.u32()
+    span: = Sz::cur.u32()
+    flag_id: = Sz::cur.u32()
+    is_neg: = cur.u32()
+    if cur.bad || flag_id > strs.len
+      stats.misses += 1
+      return false
+    flag: U8[] = "" if flag_id == 0 else strs.get(flag_id - 1)
+    cached
+      .push(base_cfg_inactive.Cfg_inactive::{ .file = base_core.arena.dup_str(logical_name),
+      .offset = offset, .span = span, .flag = base_core.arena.dup_str(flag),
+      .is_neg = is_neg != 0 })
+
+  // Bytes left over, or too few, mean a format mismatch; a partial entry is never used.
+  if cur.pos != data.len || budget != 0
+    stats.misses += 1
+    return false
+
+  // A restored node goes through the parse path's layout check too: a broken cache that reaches
+  // sema / genc fails far from the cause.
+  // Caution: **Check them all before passing any on.** On a miss the caller parses the ordinary
+  // way and pushes onto this same list, so a half-filled list gives the declarations twice
+  // (`load_and_parse_file` in `load.kspls`).
+  for node in roots
+    if !node.validate_layout(src, logical_name)
+      stats.misses += 1
+      return false
+  for node in roots
+    decls.push(node)
+  for region in cached
+    base_cfg_inactive.record_cfg_inactive(logical_name, region.offset, region.span, region.flag,
+      region.is_neg)
+  stats.hits += 1
+  return true
+
+fn print_stats() //< it prints the hits and misses, only under --stats
+  //<
+  //< Caution: **Keep the string `[AST Cache] `**: `tests/suite/ast_cache_test.kspls` looks for it
+  //< in the line (the indentation may change). It is printed apart from the timing, since a count
+  //< means something even where the timing does not.
+  if base_core.config.enable_stats
+    io.out()
+      .s("    [AST Cache] \{stats.hits\} hit / \{stats.misses\} miss / \{stats.stores\} stored\n")

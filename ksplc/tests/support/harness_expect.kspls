@@ -1,0 +1,158 @@
+//< The shared way to run the fixtures that carry expectation marks (not a suite)
+//<
+//< The fixtures in [`../negative`](../negative) and [`../lint`](../lint) are one mechanism: a
+//< source whose opening comment holds `// EXPECT:` / `// EXPECT-NOT:` / `// ARGS:`, compiled once
+//< and its output matched.
+//< Caution: **Do not use one entry point split by argument.** Only the input and ksplc decide
+//< `ksplc run`'s directory, so the same script run **at the same time** with other arguments
+//< contends for it (as `make -j test-suites` does).
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/harness_grow"
+import "ksplc/tests/support/harness_markers"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/seq"
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+
+priv const fixture_exts: U8[][2] = ::{ ".kspls", ".kspl" } //< the fixtures' extensions
+  //<
+  //< Caution: **Include the indentation notation too** — a diagnostic that appears only on a
+  //< `.kspls` (the misaligned column, in `../../pipeline.kspls`) would go silent unnoticed. The
+  //< longer one comes first (the reason is at `strip_fixture_ext`).
+
+priv fn strip_fixture_ext(name: U8[]): U8[] //< drops a fixture's extension from a name
+  //<
+  //< Caution: **Try the longer one first** — strip `.kspl` from a `.kspls` and the trailing `s` is
+  //< left.
+  for ext in fixture_exts
+    if name.ends_with(ext)
+      return name.strip_suffix(ext)
+  return name
+
+priv fn fixtures(subdir: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< Gathers the sources under a folder of this package, in lexicographic order
+  dir: = fs.absolute(subdir, arena) catch
+    return List<|U8[]|>.new(arena)
+  files: = fs.walk_files(dir, fs.skip_none, arena) catch
+    return List<|U8[]|>.new(arena)
+  return files.where(fn(f: U8[]; ): Bool {
+    return strip_fixture_ext(f).len < f.len;
+  }).to_list(arena)
+
+priv fn self_contradictory(out: U8[], arena: Arena$@): U8[] //<
+  //< Searches for a diagnostic whose "expected" and "got" strings are the same
+  //<
+  //< **Such a diagnostic tells the reader nothing.** It appears where the types differ at a level
+  //< with no written notation (a type's outermost immutability and the like). A per-fixture EXPECT
+  //< cannot catch it, so every case is checked.
+  head: = "expected '"
+  mid: = "', but got '"
+  $rest: = out
+  for
+    at: = rest.find_str(head)
+    if at < 0
+      break
+    tail: = rest.sub_from(at + head.len)
+    rest = tail
+    end: = tail.find_char('\'')
+    if end < 0
+      break
+    want: = tail.sub(0, end)
+    after: = tail.sub_from(end)
+    if !after.starts_with(mid)
+      continue
+    got_all: = after.sub_from(mid.len)
+    close: = got_all.find_char('\'')
+    if close < 0
+      continue
+    if want.equals(got_all.sub(0, close))
+      return arena.text()
+        .s("a diagnostic with the same string on both sides came out: expected '\{want\}', but got \
+          '\{want\}'").take()
+  return ""
+
+priv fn fixture_argv(path: U8[], out_c: U8[], args: U8[][], lint_mode: Bool, arena: Arena$@):
+  U8[][] //<
+    //< One fixture's argv. The lint suite prefixes `lint` and does not write the generated C.
+  $list: = List<|U8[]|>.new(arena)
+  if lint_mode
+    list.push("lint")
+  for a in args
+    list.push(a)
+  list.push(path)
+  if !lint_mode
+    list.push(out_c)
+  return harness.ksplc_argv(list.slice())
+
+fn run_suite(name: U8[], subdir: U8[], want_failure: Bool, lint_mode: Bool, grow: Bool,
+  arena: Arena$@) //<
+    //< Runs one suite, the generated C kept apart per fixture
+    //<
+    //< The fixtures run side by side. `grow` adds the fixtures built just before the run.
+    //< Caution: **Fail where a fixture could not be built.** Skipped quietly, it goes green without
+    //< testing one of the limits' safety valves.
+  $files: = fixtures(subdir, arena)
+  if files.len == 0
+    verdict.check(arena.text().s("there are fixtures in \{subdir\}").take(), false,
+      "there is not one")
+    return
+  work: = harness.sandbox(arena.text().s("expect_\{name\}").take()) catch
+    verdict.check(name, false, "the workspace cannot be made")
+    return
+  if grow
+    $made: = harness_grow.write_all(work, arena)
+    if !verdict.check(arena.text().s("\{name\}: the depth material can be assembled").take(),
+      made.len == harness_grow.count(),
+      arena.text().s("\{made.len\} / \{harness_grow.count()\} items").take())
+      return
+    for path in made.slice()
+      files.push(path)
+  io.out().s("# \{name\}: \{files.len\} items (parallelism \{verdict.jobs()\})\n")
+  $cases: = List<|U8[]|>.new(arena)
+  $marks: = List<|harness_markers.Markers|>.new(arena)
+  $jobs: = List<|subproc.Job|>.new(arena)
+  for path in files
+    body: = io.read_file(path) catch
+      verdict.check(arena.text().s("\{name\}/\{sys.get_file_name(path)\}").take(), false,
+        "the fixture cannot be read")
+      continue
+    $m: = harness_markers.markers(body)
+    stem: = strip_fixture_ext(sys.get_file_name(path))
+    out_c: = fs.join(work, arena.text().s("\{stem\}.c").take(), arena)
+    jobs
+      .push(subproc.Job::{ .argv =
+      fixture_argv(path, out_c, m.args.slice(), lint_mode, arena), .cwd = work })
+    cases.push(path)
+    marks.push(m)
+  outs: = harness.run_all(jobs.slice(), name)
+  for i in Range.asc(cases.len)
+    case_name: = arena.text().s("\{name\}/\{sys.get_file_name(cases.get(i))\}").take()
+    r: = outs.get(i)
+    $m: = marks.get(i)
+    // Caution: Do not accept a fixture with no mark. A case matching nothing becomes a green line.
+    if m.expect.len == 0 && m.deny.len == 0
+      verdict.check(case_name, false, "there is no EXPECT / EXPECT-NOT mark")
+      continue
+    if want_failure && r.code == 0
+      verdict.check(case_name, false, "the compiler ended with 0 (a failure was expected)")
+      continue
+    // Caution: **In a suite that does not expect a failure, check the exit code too**, or
+    // EXPECT's string passes a fixture that stopped compiling (many diagnostics come before the
+    // body's analysis).
+    if !want_failure && r.code != 0
+      verdict.check(case_name, false,
+        arena.text().s("the compiler failed (this suite's premise is that it passes)\n\{r.out\}")
+        .take())
+      continue
+    same: = self_contradictory(r.out, arena)
+    if same.len > 0
+      verdict.check(case_name, false, same)
+      continue
+    harness_markers.check(case_name, m.expect.slice(), m.deny.slice(), r.out)

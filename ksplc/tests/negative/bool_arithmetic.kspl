@@ -1,0 +1,43 @@
+//< That ksplc refuses arithmetic, shifts and the unary `-` / `~` on a `Bool`
+//<
+//< Unstopped it breaks in silence: `b1 / b2` **falls on SIGFPE** on a false divisor, and
+//< `false - true`, `-true` and `~true` give `true`. Comparisons, `& | ^`, `&& ||` and `!` stay; a
+//< `Bool[N]` element and an alias are refused too (`is_bool` in `ksplc/sema/type/query.kspls`).
+
+// EXPECT: Operator '+' cannot be applied to 'Bool'
+// EXPECT: Operator '-' cannot be applied to 'Bool'
+// EXPECT: Operator '*' cannot be applied to 'Bool'
+// EXPECT: Operator '/' cannot be applied to 'Bool'
+// EXPECT: Operator '%' cannot be applied to 'Bool'
+// EXPECT: Operator '<<' cannot be applied to 'Bool'
+
+// EXPECT: Unary operator '-' cannot be applied to 'Bool'
+// EXPECT: Unary operator '~' cannot be applied to 'Bool'
+// EXPECT: Operator '>>' cannot be applied to 'Bool'
+// EXPECT: cannot be applied to 'ksplc.tests.negative.bool_arithmetic_kspl.Flag'
+// EXPECT-NOT: bool_arithmetic.kspl:1:1
+priv const flags: Bool[2] = ::{ true, false };
+
+// Note: **The name above carries the extension, with its `.` turned into `_`.** A logical name
+// drops the default extension alone, so material written in the other notation keeps saying which
+// one it is; a fully qualified name is cut apart at its dots, so the one the file's own name
+// carries becomes `_` (`s_path_as_dots` in `../../base/core.kspls`).
+typedef Flag = Bool;
+
+fn main() {
+  t: Bool = true;
+  f: Bool = false;
+  a: = t + f;
+  b: = t - f;
+  c: = t * f;
+  d: = t / f;
+  e: = t % f;
+  g: = t << f;
+  h: = -t;
+  i: = ~t;
+  j: = (t == f) && (t < f) && (t & f) && (t | f) && (t ^ f) && !t;
+  k: = flags[0] >> flags[1];
+  m: Flag = true;
+  n: = m * m;
+  _all: = a || b || c || d || e || g || h || i || j || k || n;
+}

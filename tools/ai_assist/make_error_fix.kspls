@@ -1,0 +1,299 @@
+#!/usr/bin/env -S ksplc run
+//< Stage 1: making error-to-fix pairs
+//<
+//< It injects one common mistake into an original that compiles on its own, checks that ksplc
+//< reports an error, and makes the triple: the broken code, the real diagnostic, the original.
+
+// ==========================================
+//       tools/ai_assist/corpus/error_fix_stats.json
+// ==========================================
+import "std/chars"
+import "std/ds" { List }
+import "std/io"
+import "std/json"
+import "std/mem" + { Arena }
+import "std/str" { Str_builder }
+import "std/sys"
+import "std/thread"
+import "tools/ai_assist/fix_names" as names
+import "tools/ai_assist/ksplc_oracle" as oracle
+
+priv const brk_stem_base: U8[] = "_efbrk"
+priv const efbase_stem_base: U8[] = "_efbase"
+priv const max_per_kind: Sz = 2 // the cap per file and per kind
+priv const num_ef_workers: Sz = 8 //<
+  //< How many thread-pool workers the files are split among, round-robin
+  //<
+  //< Each worker gets its own stem (see `Ef_worker_args`). It is fixed for the same reason as
+  //< build_corpus.kspls's num_fmt_workers.
+
+priv struct Pair
+  path: U8[]
+  kind: U8[]
+  broken: U8[]
+  diagnostic: U8[]
+  fixed: U8[]
+
+priv struct Kind_counts
+  drop_semicolon: Sz
+  drop_close_brace: Sz
+  delete_line: Sz
+  typo_type: Sz
+// ==========================================
+// Small helpers for strings and lines
+// ==========================================
+
+priv fn rejoin_replaced(lines: List<|U8[]|>$@, i: Sz, new_line: U8[], arena: Arena$@): U8[] //<
+  //< Replaces line i of `lines` with `new_line` and joins them with newlines
+  $b: = Str_builder.new()
+  defer b.free()
+  for k in Range.asc(lines.len)
+    if k > 0
+      b.c('\n')
+    b.s(new_line if k == i else lines[k])
+  return arena.dup_str(b.slice())
+
+priv fn rejoin_deleted(lines: List<|U8[]|>$@, i: Sz, arena: Arena$@): U8[] //<
+  //< Removes line i of `lines` and joins the rest with newlines
+  $b: = Str_builder.new()
+  defer b.free()
+  $first: = true
+  for k in Range.asc(lines.len)
+    if k == i
+      continue
+    if !first
+      b.c('\n')
+    first = false
+    b.s(lines[k])
+  return arena.dup_str(b.slice())
+
+// ==========================================
+// Breaking a file, the oracle's check, and whether to keep the result
+// ==========================================
+
+priv fn try_corruption(kind: U8[], broken: U8[], rec_path: U8[], fixed_code: U8[], rel: U8[],
+  dotted_rel: U8[], brk_stem: U8[], pairs: List<|Pair|>$@, arena: Arena$@): Bool //<
+    //< Compiles `broken`; if a real error comes out, adds it to `pairs` and returns true
+    //<
+    //< "Cannot be compiled" is not a real error. The temporary path in the diagnostic is replaced
+    //< with the original's.
+  res: = oracle.compile_errors(broken, brk_stem, arena)
+  if res.error_count == 0 || res.error_count == oracle.uncompilable
+    return false // not broken, or cannot be compiled: dropped (only a real error is kept)
+  raw_diag: = oracle.first_diagnostic(res.stderr_data)
+  diag: = raw_diag.replace(rel, rec_path, arena)
+  // A temporary path in another form (an enum's fully qualified name) is replaced too.
+  dotted_path: = names.to_dotted_file_path(rec_path, arena)
+  diag2: = diag.replace(dotted_rel, dotted_path, arena)
+  pairs
+    .push(Pair::{ .path = rec_path, .kind = kind, .broken = broken, .diagnostic = diag2,
+    .fixed = fixed_code })
+  return true
+
+priv fn corrupt_file(rec_path: U8[], code: U8[], rel: U8[], dotted_rel: U8[], brk_stem: U8[],
+  pairs: List<|Pair|>$@, counts: Kind_counts$@, arena: Arena$@)
+  // Caution: **Use `split('\n')`, not `lines`.** The split lines are joined back with `\n`, and
+  // `lines` gives no empty line for a trailing newline, so it is lost and the line count is off.
+  lines: = arena.create(code.split('\n', arena))
+  $seen: = Kind_counts::{ .drop_semicolon = 0, .drop_close_brace = 0, .delete_line = 0,
+    .typo_type = 0 }
+
+  // ① a missing statement-ending semicolon
+  for i in Range.asc(lines.len)
+    if seen.drop_semicolon >= max_per_kind
+      continue
+    trimmed: = lines[i].trim_end()
+    if trimmed.len == 0 || (trimmed.ptr + trimmed.len - 1)$ != ';'
+      continue
+    new_line: = trimmed.sub(0, trimmed.len - 1)
+    broken: = rejoin_replaced(lines, i, new_line, arena)
+    err: =
+      try_corruption("drop_semicolon", broken, rec_path, code, rel, dotted_rel, brk_stem, pairs,
+      arena)
+    if err
+      seen.drop_semicolon += 1
+      counts.drop_semicolon += 1
+  // ② a missing closing brace (a lone '}' line deleted)
+  for i in Range.asc(lines.len)
+    if seen.drop_close_brace >= max_per_kind
+      continue
+    if !lines[i].trim_spaces().equals("}")
+      continue
+    broken: = rejoin_deleted(lines, i, arena)
+    err: =
+      try_corruption("drop_close_brace", broken, rec_path, code, rel, dotted_rel, brk_stem, pairs,
+      arena)
+    if err
+      seen.drop_close_brace += 1
+      counts.drop_close_brace += 1
+  // ③ a code line deleted
+  for i in Range.asc(lines.len)
+    if seen.delete_line >= max_per_kind
+      continue
+    if !names.is_code_line(lines[i])
+      continue
+    broken: = rejoin_deleted(lines, i, arena)
+    err: =
+      try_corruption("delete_line", broken, rec_path, code, rel, dotted_rel, brk_stem, pairs, arena)
+    if err
+      seen.delete_line += 1
+      counts.delete_line += 1
+  // ④ a typo in a type name (causing an undefined type)
+  for i in Range.asc(lines.len)
+    if seen.typo_type >= max_per_kind
+      continue
+    if lines[i].find_str("I32") < 0
+      continue
+    new_line: = lines[i].replace_first("I32", "I33", arena)
+    broken: = rejoin_replaced(lines, i, new_line, arena)
+    err: =
+      try_corruption("typo_type", broken, rec_path, code, rel, dotted_rel, brk_stem, pairs, arena)
+    if err
+      seen.typo_type += 1
+      counts.typo_type += 1
+// ==========================================
+// The build and the output
+// ==========================================
+priv fn load_split(split_name: U8[], arena: Arena$@): json.Val$[]
+  $path: = Str_builder.new()
+  defer path.free()
+  path.s(oracle.corpus_dir).c('/').s(split_name).s(".jsonl")
+  return oracle.load_jsonl(path.slice(), arena) catch
+    io.err().s("[error] cannot read \{path.slice()\} (run build_corpus first)\n")
+    sys.exit(1)
+
+// ==========================================
+// Parallel work: each file's "compiles alone + break it + oracle check" is independent, so the
+// files are divided round-robin across a thread pool.
+// ==========================================
+
+priv struct Ef_worker_args //<
+  //< What one pair-making worker is given, and what it returns
+  //<
+  //< ksplc_oracle.compile_errors goes through a temporary file, so each worker gets its own stems
+  //< (_efbrk_0, _efbase_0, ...).
+  recs: json.Val$[] //< shared read-only (disjoint indices, no contention)
+  worker_id: Sz
+  num_workers: Sz
+  worker_arena: Arena$@ //< this worker's own (no other thread touches it)
+  out_pairs: List<|Pair|>$@ //< made in the worker's own arena (main reads it after the join)
+  out_counts: Kind_counts
+
+#export
+fn ef_worker_entry(arg: Ef_worker_args$@): Void$@ //< one worker's share of the pair-making
+  brk_stem: = names.worker_stem(brk_stem_base, arg.worker_id, arg.worker_arena)
+  efbase_stem: = names.worker_stem(efbase_stem_base, arg.worker_id, arg.worker_arena)
+  rel: = names.rel_for_stem(brk_stem, arg.worker_arena)
+  dotted_rel: = names.to_dotted_file_path(rel, arg.worker_arena)
+
+  arg.out_pairs = List<|Pair|>.create(arg.worker_arena)
+  arg.out_counts = Kind_counts::{ .drop_semicolon = 0, .drop_close_brace = 0, .delete_line = 0,
+    .typo_type = 0 }
+
+  n: = arg.recs.len
+  for $i: Sz = arg.worker_id; i < n; i += arg.num_workers
+    rec: = arg.recs[i]
+    code: = rec.get("code").as_str()
+    if oracle.compile_errors(code, efbase_stem, arg.worker_arena).error_count != 0
+      continue // an original that does not compile on its own is skipped
+    rec_path: = rec.get("path").as_str()
+    corrupt_file(rec_path, code, rel, dotted_rel, brk_stem, arg.out_pairs, arg.out_counts@,
+      arg.worker_arena)
+  return null
+
+priv fn process_split_parallel(recs: json.Val$[], pairs: List<|Pair|>$@, counts: Kind_counts$@,
+  arena: Arena$@) //<
+    //< Processes `recs` in parallel and copies the results into pairs/counts on the caller's arena
+    //<
+    //< The order may differ from `recs`; no line of error_fix.jsonl depends on it.
+  n: = recs.len
+  if n == 0
+    return
+  num_workers: = num_ef_workers if n >= num_ef_workers else n
+
+  worker_arenas: = List<|Arena$@|>.create(arena)
+  worker_args: = List<|Ef_worker_args$@|>.create(arena)
+  threads: = List<|thread.Thread$@|>.create(arena)
+  for $w: Sz = 0; w < num_workers; w += 1
+    wa: = mem.alloc_as<|Ef_worker_args|>()
+    wa.recs = recs
+    wa.worker_id = w
+    wa.num_workers = num_workers
+    wa.worker_arena = Arena.new(64 * 1024 * 1024)
+    worker_arenas.push(wa.worker_arena)
+    worker_args.push(wa)
+
+    t: = thread.Thread.spawn<|Ef_worker_args|>(ef_worker_entry, wa) catch panic("failed to spawn \
+      worker thread")
+    threads.push(t)
+  for t in threads
+    t.join_and_free()
+
+  // The results are copied into the caller's arena before the workers' arenas are freed.
+  for wa in worker_args
+    counts.drop_semicolon += wa.out_counts.drop_semicolon
+    counts.drop_close_brace += wa.out_counts.drop_close_brace
+    counts.delete_line += wa.out_counts.delete_line
+    counts.typo_type += wa.out_counts.typo_type
+    for p in wa.out_pairs
+      pair: = Pair::{
+        .path = arena.dup_str(p.path),
+        .kind = arena.dup_str(p.kind),
+        .broken = arena.dup_str(p.broken),
+        .diagnostic = arena.dup_str(p.diagnostic),
+        .fixed = arena.dup_str(p.fixed),
+      }
+      pairs.push(pair)
+  for worker_arena in worker_arenas
+    worker_arena.free()
+
+priv fn build(pairs: List<|Pair|>$@, arena: Arena$@): Kind_counts
+  train_recs: = load_split("train", arena)
+  val_recs: = load_split("val", arena)
+
+  $counts: = Kind_counts::{ .drop_semicolon = 0, .drop_close_brace = 0, .delete_line = 0,
+    .typo_type = 0 }
+  process_split_parallel(train_recs, pairs, counts@, arena)
+  process_split_parallel(val_recs, pairs, counts@, arena)
+  return counts
+
+priv fn write_pairs(pairs: List<|Pair|>$@)
+  $path: = Str_builder.new()
+  defer path.free()
+  path.s(oracle.corpus_dir).s("/error_fix.jsonl")
+  $f: = io.open(path.slice(), "w") catch panic("cannot open output file for writing")
+  $b: = Str_builder.new()
+  defer b.free()
+  for p in pairs
+    b.clear()
+    b.s("{\"path\":\"").escape_and_append(p.path).s("\",\"kind\":\"").escape_and_append(p.kind)
+      .s("\",\"broken\":\"").escape_and_append(p.broken).s("\",\"diagnostic\":\"")
+      .escape_and_append(p.diagnostic).s("\",\"fixed\":\"").escape_and_append(p.fixed).s("\"}\n")
+    f.s(b.slice())
+  oracle.close_or_die(f@, path.slice())
+
+priv fn write_stats(total: Sz, counts: Kind_counts)
+  $path: = Str_builder.new()
+  defer path.free()
+  path.s(oracle.corpus_dir).s("/error_fix_stats.json")
+  $f: = io.open(path.slice(), "w") catch panic("cannot open output file for writing")
+  f
+    .s("{\n  \"pairs\":\{total\},\n  \
+      \"by_kind\":{\"delete_line\":\{counts.delete_line\},\"drop_close_brace\":\{counts.drop_close_brace\},\"drop_semicolon\":\{counts.drop_semicolon\},\"typo_type\":\{counts.typo_type\}}\n}\n")
+  oracle.close_or_die(f@, path.slice())
+
+fn main() //< makes the error-to-fix triples, each checked against the compiler
+  arena: = Arena.new(512 * 1024 * 1024)
+  defer arena.free()
+  pairs: = List<|Pair|>.create(arena)
+  counts: = build(pairs, arena)
+
+  write_pairs(pairs)
+  write_stats(pairs.len, counts)
+
+  io.out().s("error->fix pairs: \{pairs.len\}\n")
+  io.out().s("  delete_line     : \{counts.delete_line\}\n")
+  io.out().s("  drop_close_brace: \{counts.drop_close_brace\}\n")
+  io.out().s("  drop_semicolon  : \{counts.drop_semicolon\}\n")
+  io.out().s("  typo_type       : \{counts.typo_type\}\n")
+  io.out().s("  -> tools/ai_assist/corpus/error_fix.jsonl, error_fix_stats.json\n")

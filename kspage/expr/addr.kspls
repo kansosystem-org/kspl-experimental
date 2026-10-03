@@ -1,0 +1,185 @@
+//< The text form of a cell address and of a table's name
+//<
+//< Reads and writes a position in `A1` form (the column in letters, the row counted from 1) and
+//< `<table's name>!`.
+//< Caution: **Do not separate the reader from the writer.** The formula evaluator only reads; the
+//< code that rewrites formulas when rows or columns are added or removed reads and rewrites.
+
+// ==========================================
+// Usage:
+//   $c: Reader = Reader::{ .src = "detail!A2", .pos = 0 };
+//   name: = addr.parse_table_name(c@);
+//   a: = addr.parse_addr(c@);
+// ==========================================
+import "std/chars"
+import "std/checked_int" { Ci64 }
+import "std/str" { Str_builder }
+
+struct Reader //< the position a text is read from, front to back
+  //<
+  //< **`pos` advances by what was read.** **It is not the text cursor** (that one is
+  //< [`../lay/caret.kspls`](../lay/caret.kspls)'s). Where nothing could be read, the caller puts
+  //< `pos` back (as `parse_table_name` does itself).
+  src: U8[]
+  pos: Sz
+
+fn at(c: Reader$@): U8 //< the current byte
+  //<
+  //< **Past the end it is 0** (it does not read outside the text).
+  return 0U8 if c.pos >= c.src.len else c.src[c.pos]
+
+fn at_next(c: Reader$@): U8 //< the next byte
+  //<
+  //< **For telling a two-character symbol apart** (`<=` from `<`). It does not advance.
+  return 0U8 if c.pos + 1 >= c.src.len else c.src[c.pos + 1]
+
+fn skip_ws(c: Reader$@)
+  for c.pos < c.src.len && c.src[c.pos] == ' '
+    c.pos += 1
+
+const broken_ref: U8[] = "#REF!" //< the mark for a position that can no longer be pointed at
+  //<
+  //< **It must be the same text as the mark that is shown** (`error_text` in
+  //< `expr/value.kspls`).
+
+enum Addr_kind //< a cell's position
+  //<
+  //< **It separates "could not be read" from "was too large"** (they are fixed differently).
+  unreadable //< as text it is not a position
+  out_of_range //< it reads as a position, but points at no cell
+  spot
+
+impl Addr_kind
+  fn no_addr(kind: Self): Addr //< a position that could not be read
+    return Addr::{ .row = 0, .col = 0, .kind = kind, .abs_col = false, .abs_row = false }
+
+struct Addr
+  row: Sz
+  col: Sz
+  kind: Addr_kind
+  abs_col: Bool //<
+    //< The part that has a `$`
+    //<
+    //< **It is a mark that only affects copying**: adding or removing rows or columns moves it
+    //< anyway, since the cell itself moves.
+  abs_row: Bool
+
+fn spot_at(row: Sz, col: Sz): Addr //< a position with no mark
+  return Addr::{ .row = row, .col = col, .kind = Addr_kind.spot, .abs_col = false,
+    .abs_row = false }
+
+fn is_spot(a: Addr): Bool
+  switch a.kind case .spot
+    return true
+  default {}
+  return false
+
+priv fn push_digit(acc: Option<|Sz|>, base: I64, d: I64): Option<|Sz|> //<
+  //< Adds one digit to the number
+  //<
+  //< Caution: **Return "none" once it overflows.** A signed overflow has no defined result (the
+  //< language specification's "A signed overflow at run time is undefined"), and a formula's text
+  //< puts no cap on the digits. **`Sz`'s width depends on the target**, so it is checked at 32 bits
+  //< (a number past that points at no cell anyway).
+  $v: Sz = 0
+  switch acc case .some(got)
+    v = got
+  case .none
+    return Option<|Sz|>.none
+  scaled: = Ci64.new(v).checked_mul(Ci64.new(base)) catch
+    return Option<|Sz|>.none
+  sum: = scaled.checked_add(Ci64.new(d)) catch
+    return Option<|Sz|>.none
+  if sum.val > 2147483647I64
+    return Option<|Sz|>.none
+  return Option<|Sz|>.some(Sz::sum.val)
+
+fn parse_addr(c: Reader$@): Addr //< reads a position in A1 form
+  //<
+  //< The column is in letters (A is 1, AA is 27), and the row is counted from 1.
+  //< **It is not turned into a value**, so it also serves for a range's ends.
+  // **A `$` can go on either part** (there is both `$A1` and `A$1`).
+  start: = c.pos
+  $abs_col: = false
+  if at(c) == '$'
+    abs_col = true
+    c.pos += 1
+  $col: = Option<|Sz|>.some(0)
+  $letters: Sz = 0
+  for at(c) >= 'A' && at(c) <= 'Z'
+    col = push_digit(col, 26, (at(c) - 'A') + 1)
+    c.pos += 1
+    letters += 1
+  $abs_row: = false
+  if at(c) == '$'
+    abs_row = true
+    c.pos += 1
+  $row: = Option<|Sz|>.some(0)
+  $digits: Sz = 0
+  for at(c) >= '0' && at(c) <= '9'
+    row = push_digit(row, 10, at(c) - '0')
+    c.pos += 1
+    digits += 1
+  if letters <= 0 || digits <= 0
+    // Caution: **Put the position back where nothing could be read**, or the `$` is lost when the
+    // caller copies the text byte by byte.
+    c.pos = start
+    return Addr_kind.unreadable.no_addr()
+  $r: Sz = 0
+  $n: Sz = 0
+  switch row case .some(got)
+    r = got
+  case .none
+    return Addr_kind.out_of_range.no_addr()
+  switch col case .some(got)
+    n = got
+  case .none
+    return Addr_kind.out_of_range.no_addr()
+  // A row is counted from 1, so 0 is not a position.
+  if r <= 0
+    c.pos = start
+    return Addr_kind.unreadable.no_addr()
+  $a: Addr = spot_at(r - 1, n - 1)
+  a.abs_col = abs_col
+  a.abs_row = abs_row
+  return a
+
+fn write_addr(a: Addr, out: Str_builder$@) //< writes a position in `A1` form
+  //<
+  //< Caution: **It must be text that `parse_addr` can read back.**
+  if a.abs_col
+    out.c('$')
+  $n: Sz = a.col + 1
+  $letters: U8[26] = ::{}
+  $len: Sz = 0
+  for n > 0
+    rem: = (n - 1) % 26
+    letters[len] = U8::rem + 'A'
+    len += 1
+    n = (n - 1) / 26
+  for $i: Sz = len; i > 0; i -= 1
+    out.c(letters[i - 1])
+  if a.abs_row
+    out.c('$')
+  out.s("\{a.row + 1\}")
+
+priv fn is_break(ch: U8): Bool //< a formula's separator
+  //<
+  //< **These are the only characters a table's name cannot use** (a list of allowed characters
+  //< would shut out every other script).
+  return ch == ' ' || ch == '+' || ch == '-' || ch == '*' || ch == '/' || ch == '(' || ch == ')' ||
+    ch == ',' || ch == ':' || ch == 0U8
+
+fn parse_table_name(c: Reader$@): U8[] //< reads a table's name and the `!` after it
+  //<
+  //< **Where there is no name it returns empty without moving the position** (so the `A1` of
+  //< `A1+2` is not taken for a name).
+  start: = c.pos
+  for c.pos < c.src.len && !is_break(at(c)) && at(c) != '!'
+    c.pos += 1
+  if at(c) == '!' && c.pos > start
+    name: = c.src.sub(start, c.pos - start)
+    c.pos += 1
+    return name
+  c.pos = start
+  return ""

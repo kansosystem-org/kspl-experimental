@@ -1,0 +1,86 @@
+#!/usr/bin/env -S ksplc run
+//< Runs the self-test each tool written in Python holds
+//<
+//< The tools that can only be written in Python (the pretty-printer loaded into LLDB, the
+//< converters reading Hugging Face weights) each hold a self-test.
+//< Caution: **Holding one does not make it work.** Called by nobody, it is a button that does
+//< nothing when pressed, and it stays green while the tool rots: the demangler in
+//< `tools/kspl_lldb.py` can go on looking for a name the compiler no longer emits.
+//< **There is one way to start it**: every tool self-tests when run with no argument. Keep it the
+//< same as tools are added, or this file comes to hold a branch per tool.
+//< Caution: **Print a `SKIP` line when a module a tool needs is absent.** Skipped with no line, it
+//< looks like a pass.
+import "std/chars"
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+import "tests/support/harness"
+
+priv const python: U8[] = "python3" //< the interpreter the tools run under, found on `PATH`
+
+priv const mark_ok: U8[] = "pass" //< the pass mark, read as a line's first word
+  //<
+  //< Its canonical source is the table in `tests/support/conventions_line.kspls`. Only the reader
+  //< is here, so the day the mark changes, a stale copy fails with the false reason "not one ran".
+
+priv const selftest_timeout_ms: I32 = 300000 //< how long one tool's self-test may run
+
+priv struct Tool //< one Python tool, and how it is started
+  path: U8[] //< the file, from the repository's root
+  module: U8[] //< the name to run with `python3 -m`; empty runs the file itself
+    //<
+    //< Caution: **Give a module name to a tool that imports across folders**
+    //< (`from tools.ai_assist...`). Run as a file, it fails with `No module named 'tools'`,
+    //< because only the file's own folder enters `sys.path`.
+  needs: U8[] //< a module whose absence makes the check a `SKIP`; empty if none
+
+priv const tools: Tool[4] = ::{ Tool::{ .path = "tools/kspl_lldb.py", .module = "", .needs = "" },
+  Tool::{ .path = "tools/ai_assist/export_qwen_tokenizer.py", .module = "", .needs = "" },
+  Tool::{ .path = "tools/ai_assist/lora_finetune_external.py",
+  .module = "tools.ai_assist.lora_finetune_external", .needs = "" },
+  Tool::{ .path = "tools/ai_assist/export_qwen_to_kspl.py",
+  .module = "tools.ai_assist.export_qwen_to_kspl", .needs = "numpy" } }
+
+priv fn importable(name: U8[]): Bool //< whether `python3` can import the module `name`
+  arena: = harness.arena()
+  return harness
+    .run(U8[][]::{ python, "-c", arena.text().s("import ").s(name).take() }).code == 0
+
+priv fn ran_one(out: U8[]): Bool //< whether a line of the output opens with the pass mark
+  //<
+  //< Caution: **Judge by the line's first word.** The mark is lower case, so a plain search also
+  //< hits an English word in the output or Python's `pass` statement, and passes a round where
+  //< not one self-test ran.
+  arena: = harness.arena()
+  for line in out.lines(arena)
+    sp: = line.find_char(' ')
+    first: = line if sp < 0 else line.sub(0, sp)
+    if first.equals(mark_ok)
+      return true
+  return false
+
+priv fn check_tool(t: Tool@) //< runs one tool's self-test and reports it
+  arena: = harness.arena()
+  name: = arena.text().s(t.path).s("'s self-test passes").take()
+  if t.needs.len > 0 && !importable(t.needs)
+    verdict.skip_check(name,
+      arena.text().s(t.needs).s(" is absent (put it in this environment and it runs)").take())
+    return
+  argv: =
+    (U8[][]::{ python, t.path } if t.module.len == 0
+    else U8[][]::{ python, "-m", t.module })
+  r: = harness.run_capped(argv, harness.root(), selftest_timeout_ms)
+  if r.code != 0
+    verdict.check(name, false,
+      arena.text().s("the self-test failed (exit code \{r.code\})\n").s(r.out).take())
+    return
+  // Caution: **The exit code alone is not enough.** It passes a run that returned 0 with not one
+  // self-test run (a wrong entry point printing its usage, and the like).
+  verdict.check(name, ran_one(r.out) || r.out.find_str("self-test") >= 0,
+    arena.text().s("not one self-test ran\n").s(r.out).take())
+
+fn main(): I32
+  harness.begin(1 << 20)
+  for i in Range.asc(tools.len)
+    check_tool(tools[i]@)
+  return harness.finish()

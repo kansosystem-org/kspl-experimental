@@ -1,0 +1,589 @@
+import "kspage/model/collect" { Collect }
+import "kspage/model/doc" { Axis, Doc }
+// `html.write` needs metrics (a line-height multiple scales one line's height). Why these are
+// fixed: the header of `kspage/model/fixed_font.kspls`.
+import "kspage/model/fixed_font"
+import "kspage/model/marker"
+import "kspage/model/paint"
+import "kspage/model/style" { Sheet }
+import "kspage/share/html"
+import "kspage/tests/base"
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// kspage: checks the HTML export (a golden test).
+// Only the mapping — block to element, style name to class, no field without a setting.
+// **Layout is not checked**: line breaking and collapsing spaces are the browser's job.
+// ==========================================
+
+priv fn count_in(text: U8[], part: U8[]): Sz //< how many times that text appears
+  //<
+  //< **"Whether it is there" is not always enough**: an `<a>` that should be one looks "there"
+  //< where three appeared.
+  $n: Sz = 0
+  $rest: U8[] = text
+  for rest.len > 0
+    at: = rest.find_str(part)
+    if at < 0
+      return n
+    n += 1
+    rest = rest.sub_from(at + part.len)
+  return n
+
+priv fn sample_sheet(arena: Arena$@): Sheet$@ //<
+  //< A sheet whose h1 sets only the size and the weight
+  //<
+  //< h1 inherits the typeface and italic from its parent.
+  sheet: = Sheet.new(base.root_font(), arena)
+  $big: paint.Font_spec = paint.inherit_all()
+  big.size_px = Option<|F32|>.some(28.0)
+  big.weight = Option<|U16|>.some(700U16)
+  h1: = sheet.add("h1", big)
+  h1.space_after = 8.0
+  h1.indent = 24.0
+
+  base.table_style(sheet)
+  return sheet
+
+fn test_blocks_become_elements_and_styles_become_classes()
+  verdict.start("[kspage/html] a block becoming an element and a style's name a class test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  outer: = d.add_block("h1")
+  outer.add_text("Title")
+  outer.add_child("item").add_text("child")
+
+  $sb: = Str_builder.new()
+  defer sb.free()
+  html.write(d, sample_sheet(arena), fixed_font.make(), sb@)
+  out: = sb.slice()
+  head: = base.has(out, "<div class=\"h1\">Title")
+  assert(head, "a block becomes an element, and the name a class")
+  assert(base.has(out, "<div class=\"item\">child</div>"), "the child block goes inside")
+  verdict.pass("the tree's shape becomes the elements' nesting as it stands.")
+
+fn test_runs_become_spans()
+  verdict.start("[kspage/html] a run becoming a span test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  p: = d.add_block("body")
+  p.add_text("plain and ")
+  p.add_text("strong text", "strong")
+
+  $sb: = Str_builder.new()
+  defer sb.free()
+  html.write(d, sample_sheet(arena), fixed_font.make(), sb@)
+  out: = sb.slice()
+  // An inline with no name is plain text; a span around it would be meaningless nesting.
+  wrapped: = base.has(out, ">plain and <span class=\"strong\">strong text</span></div>")
+  assert(wrapped, "only a run with a name becomes a span")
+  verdict.pass("only a run holding a style's name is wrapped in a span.")
+
+fn test_a_grid_becomes_a_table()
+  verdict.start("[kspage/html] a table becoming a table test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = d.add_block("table")
+  t.add_text("the table's caption")
+  r: = t.add_child("row")
+  r.add_child("cell").add_text("a")
+  r.add_child("cell").add_text("b")
+
+  $sb: = Str_builder.new()
+  defer sb.free()
+  html.write(d, sample_sheet(arena), fixed_font.make(), sb@)
+  out: = sb.slice()
+  assert(base.has(out, "<table class=\"table\">"), "a grid style becomes a table")
+  // Text cannot go directly inside a table, so a table's text goes into the caption.
+  assert(base.has(out, "<caption>the table's caption</caption>"),
+    "the characters a table holds go into the caption")
+  assert(base.has(out, "<tr class=\"row\">"), "the children become rows")
+  assert(base.has(out, "<td class=\"cell\">a</td>"), "the grandchildren become cells")
+  // No rule is written for the table itself (CSS's default fits the columns to the contents).
+  // Check the line's start, or it would be confused with the style rule `.table {`.
+  assert(!base.has(out, "\ntable "), "no rule is written for the table itself")
+  verdict.pass("a grid becomes table / tr / td, and the caption goes into caption.")
+
+fn test_column_widths_become_a_colgroup()
+  verdict.start("[kspage/html] a column's width becoming a colgroup test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = d.add_block("table")
+  t.set_size(Axis.column, 0, Option<|F32|>.some(80.0))
+  t.set_size(Axis.column, 1, Option<|F32|>.none)
+  t.set_size(Axis.row, 0, Option<|F32|>.some(30.0))
+  r: = t.add_child("row")
+  r.add_child("cell").add_text("a")
+  r.add_child("cell").add_text("b")
+
+  $sb: = Str_builder.new()
+  defer sb.free()
+  html.write(d, sample_sheet(arena), fixed_font.make(), sb@)
+  out: = sb.slice()
+  // Columns with no setting are written too; dropped, the ones after would shift one place forward.
+  paired: = base.has(out, "<colgroup><col style=\"width:80px\"><col></colgroup>")
+  assert(paired, "the column set and the column with no setting come out in the row as it stands")
+  // It comes before the rows. A row's height goes on `<tr>`, not in the style's rule (it belongs to
+  // the table).
+  tall: = base.has(out, "<tr class=\"row\" style=\"height:30px\">")
+  assert(tall, "a row's height comes out as tr's attribute")
+  bare: = out.find_str("<colgroup>")
+  first_row: = out.find_str("<tr")
+  assert(bare >= 0 && bare < first_row, "the colgroup comes out before the first row")
+  verdict.pass("a column's width becomes a colgroup, and comes out before the rows.")
+
+fn test_a_block_name_becomes_an_id() //< a style's name is a class, and a block's name an id
+  verdict.start("[kspage/html] a block's name becoming an id test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = d.add_block("table")
+  t.name = "detail"
+  r: = t.add_child("row")
+  r.add_child("cell").add_text("a")
+
+  $sb: = Str_builder.new()
+  defer sb.free()
+  html.write(d, sample_sheet(arena), fixed_font.make(), sb@)
+  out: = sb.slice()
+  named: = base.has(out, "<table class=\"table\" id=\"detail\">")
+  assert(named, "the name shared and the name that names come out in separate fields")
+  assert(!base.has(out, "<tr class=\"row\" id="), "no id grows on a block with no name")
+  verdict.pass("a style's name becomes a class, and a block's name an id.")
+
+fn test_a_merged_cell_becomes_a_span_attribute() //< a merge becomes colspan / rowspan
+  //<
+  //< **It is not written when it is 1** (that matches the default).
+  verdict.start("[kspage/html] a merge becoming a colspan test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = d.add_block("table")
+  r: = t.add_child("row")
+  wide: = r.add_child("cell")
+  wide.add_text("a")
+  wide.span_cols = 2
+  wide.span_rows = 3
+  r.add_child("cell").add_text("b")
+
+  $sb: = Str_builder.new()
+  defer sb.free()
+  html.write(d, sample_sheet(arena), fixed_font.make(), sb@)
+  out: = sb.slice()
+  merged: = base.has(out, "<td class=\"cell\" colspan=\"2\" rowspan=\"3\">a</td>")
+  assert(merged, "a colspan and a rowspan go on the cell merged")
+  assert(base.has(out, "<td class=\"cell\">b</td>"), "they do not go on a cell that is not merged")
+  verdict.pass("a merge becomes colspan / rowspan.")
+
+fn test_a_table_without_widths_has_no_colgroup() //<
+  //< Where no column has a setting, no colgroup is written
+  verdict.start("[kspage/html] no colgroup coming out where there is no setting test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = d.add_block("table")
+  r: = t.add_child("row")
+  r.add_child("cell").add_text("a")
+
+  $sb: = Str_builder.new()
+  defer sb.free()
+  html.write(d, sample_sheet(arena), fixed_font.make(), sb@)
+  assert(!base.has(sb.slice(), "<colgroup>"), "an empty colgroup is not written")
+  verdict.pass("no colgroup goes on a table with no setting.")
+
+fn test_unset_font_fields_are_left_out_of_the_css()
+  verdict.start("[kspage/html] a field with no setting not coming out in the CSS test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  $sb: = Str_builder.new()
+  defer sb.free()
+  html.write(Doc.new(arena), sample_sheet(arena), fixed_font.make(), sb@)
+  out: = sb.slice()
+  // Writing "no setting" would cut the inheritance there. CSS inherits the font fields from the
+  // parent too, so writing nothing already means "as the parent has it".
+  h1: = ".h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; margin-left: 24px; }"
+  assert(base.has(out, h1), "only the fields set are written")
+  // Only the inheritance's root has every field filled in.
+  body: = "body { font-family: sans-serif; font-size: 16px; font-weight: 400; font-style: normal; }"
+  assert(base.has(out, body), "the starting point becomes body's rule")
+  verdict.pass("no setting is written, and the carrying rides on the CSS side's carrying.")
+
+fn test_colors_become_css_declarations() //< a color becomes a CSS declaration
+  //<
+  //< **Dropped in the export, the page and the screen would differ in color.**
+  verdict.start("[kspage/html] a colour becoming a CSS declaration test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  $sb: = Str_builder.new()
+  defer sb.free()
+  sheet: = sample_sheet(arena)
+  ink: = sheet.find("h1").unwrap_or(null)
+  ink.ink.color = Option<|U32|>.some(0xff0000U32)
+  ink.ink.background = Option<|U32|>.some(0x00ff00U32)
+  html.write(Doc.new(arena), sheet, fixed_font.make(), sb@)
+  out: = sb.slice()
+  assert(base.has(out, "color: #ff0000;"), "the text colour becomes a declaration")
+  assert(base.has(out, "background-color: #00ff00;"),
+    "the ground's colour becomes a declaration too")
+  assert(!base.has(out, ".body { color:"), "it is not written for a style with no setting")
+  verdict.pass("a colour is written in the rule of the style that set it and nowhere else.")
+
+fn test_line_spacing_is_scaled_to_the_line_not_the_size() //<
+  //< The line-spacing multiple is written multiplied by one line's height
+  //<
+  //< **Not as it is**: CSS's `line-height` number is relative to **the font size**, this one to
+  //< **one line** (otherwise the HTML's lines would crowd). With the fixed metrics 1.5 becomes 1.8.
+  verdict.start("[kspage/html] the line-spacing multiplier acting on one row's height test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  $sb: = Str_builder.new()
+  defer sb.free()
+  sheet: = sample_sheet(arena)
+  led: = sheet.find("h1").unwrap_or(null)
+  led.line_spacing = 1.5
+  html.write(Doc.new(arena), sheet, fixed_font.make(), sb@)
+  out: = sb.slice()
+  assert(base.has(out, "line-height: 1.800;"),
+    "the number multiplied onto one row's height lines up")
+  assert(!base.has(out, "line-height: 1.50"), "the multiplier typed does not line up as it stands")
+  verdict
+    .pass("the line spacing is written after being multiplied onto one row's height, and the \
+      multiplier typed does not come out as it stands.")
+
+fn test_a_rule_and_a_fill_become_css_declarations() //<
+  //< A border and a fill become CSS declarations too
+  //<
+  //< **Write the fill before the text background.**
+  verdict.start("[kspage/html] a frame and a fill becoming CSS declarations test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  $sb: = Str_builder.new()
+  defer sb.free()
+  sheet: = sample_sheet(arena)
+  edged: = sheet.find("h1").unwrap_or(null)
+  edged.rule_width = 2.0
+  edged.rule_color = 0xccccccU32
+  edged.fill = Option<|U32|>.some(0xeeeeeeU32)
+  edged.ink.background = Option<|U32|>.some(0x00ff00U32)
+  html.write(Doc.new(arena), sheet, fixed_font.make(), sb@)
+  out: = sb.slice()
+  assert(base.has(out, "border: 2px solid #cccccc;"), "the line becomes a declaration")
+  // **Both are `background-color`, so the one written later wins.** The narrower one is on top, so
+  // the highlight comes later (as the screen draws it).
+  wide: = "background-color: #eeeeee; background-color: #00ff00;"
+  assert(base.has(out, wide), "the fill lines up before the highlight")
+  verdict
+    .pass("the line and the fill become declarations, and the highlight lines up behind the fill.")
+
+fn test_a_marker_is_written_as_text() //< a marker is written as text
+  verdict.start("[kspage/html] a row-head mark becoming a text test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = sample_sheet(arena)
+  // The marker is text that comes from the style, so **escape it**.
+  sheet.add("item", paint.inherit_all()).marker = marker.Marker.bullet("<>")
+  sheet.add("step", paint.inherit_all()).marker = marker.Marker.number(".")
+  d: = Doc.new(arena)
+  d.add_block("item").add_text("a")
+  d.add_block("step").add_text("b")
+  d.add_block("step").add_text("c")
+  // Put a paragraph without a number in between and the next is 1 again.
+  d.add_block("body").add_text("d")
+  d.add_block("step").add_text("e")
+
+  $sb: = Str_builder.new()
+  defer sb.free()
+  html.write(d, sheet, fixed_font.make(), sb@)
+  out: = sb.slice()
+  escaped: = base.has(out, "<div class=\"item\">&lt;&gt;a</div>")
+  assert(escaped, "the mark is escaped and comes out before the body")
+  assert(base.has(out, "<div class=\"step\">2.c</div>"), "the number is the siblings' order")
+  assert(base.has(out, "<div class=\"step\">1.e</div>"),
+    "after one comes in between it counts from 1 afresh")
+  verdict
+    .pass("a mark comes out as an escaped text, and the number is in the same order as the \
+      screen's.")
+
+fn test_a_serial_number_is_written_as_text() //< a running number is written as text too
+  //<
+  //< Caution: **Count it the same way as the screen** — counted separately in the export, one added
+  //< figure would put the screen and the HTML at odds.
+  verdict.start("[kspage/html] a running number becoming a text test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = sample_sheet(arena)
+  sheet.add("figure", paint.inherit_all()).marker = marker.Marker.serial("Figure ", ". ")
+  d: = Doc.new(arena)
+  d.add_block("figure").add_text("a")
+  d.add_block("body").add_text("b")
+  d.add_block("figure").add_text("c")
+
+  $sb: = Str_builder.new()
+  defer sb.free()
+  html.write(d, sheet, fixed_font.make(), sb@)
+  out: = sb.slice()
+  assert(base.has(out, "<div class=\"figure\">Figure 1. a</div>"), "the first is Figure 1")
+  assert(base.has(out, "<div class=\"figure\">Figure 2. c</div>"),
+    "it counts on even with one in between")
+  verdict.pass("a running number becomes a text counted the same way as the screen's.")
+
+fn test_lines_become_one_decoration_declaration() //<
+  //< The underline and the strikethrough become one declaration
+  //<
+  //< **Write two and the later overrides the earlier.**
+  verdict.start("[kspage/html] the lines becoming one declaration test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  $sb: = Str_builder.new()
+  defer sb.free()
+  sheet: = sample_sheet(arena)
+  both: = sheet.find("h1").unwrap_or(null)
+  both.ink.underline = Option<|Bool|>.some(true)
+  both.ink.strike = Option<|Bool|>.some(true)
+  // "Do not draw it" becomes a declaration too (it differs from no setting).
+  off: = sheet.add("plain", paint.inherit_all())
+  off.ink.underline = Option<|Bool|>.some(false)
+  html.write(Doc.new(arena), sheet, fixed_font.make(), sb@)
+  out: = sb.slice()
+  assert(base.has(out, "text-decoration-line: underline line-through;"),
+    "the two line up in one declaration")
+  assert(base.has(out, ".plain { text-decoration-line: none; }"),
+    "`do not draw it` becomes a declaration too")
+  assert(!base.has(out, ".table { text-decoration"), "it is not written for a style with no setting")
+  verdict
+    .pass("the lines line up in one declaration, and are not written for a style with no setting.")
+
+fn test_text_and_names_are_escaped()
+  verdict.start("[kspage/html] the characters and the names being escaped test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("a\"b").add_text("Title & <mark>")
+
+  $sb: = Str_builder.new()
+  defer sb.free()
+  html.write(d, sample_sheet(arena), fixed_font.make(), sb@)
+  out: = sb.slice()
+  assert(base.has(out, "Title &amp; &lt;mark&gt;"), "the body's & < > escape")
+  assert(base.has(out, "class=\"a&quot;b\""), "the \" inside an attribute escapes")
+  assert(!base.has(out, "<mark>"), "nothing is left raw")
+  verdict
+    .pass("in both the contents and the attributes, the characters that would break the text \
+      escape.")
+
+fn test_a_class_name_matches_the_rule_and_the_tag() //<
+  //< A class name is the same in the rule and in the tag
+  //<
+  //< Caution: **Check the rule and the tag together.** The rule alone can look escaped while the
+  //< tag writes the name unfolded, and **the paragraph silently has no look at all**; so the
+  //< document has a block with that name (with none, no tag is written).
+  verdict.start("[kspage/html] a class name coming out as one on both sides test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  sheet.add("2col <x>", paint.inherit_all())
+  d: = Doc.new(arena)
+  d.add_block("2col <x>").add_text("here")
+
+  $sb: = Str_builder.new()
+  defer sb.free()
+  html.write(d, sheet, fixed_font.make(), sb@)
+  out: = sb.slice()
+  // A leading digit takes the hexadecimal form, the space after it part of that escape.
+  // **The space itself is folded, not escaped** — `class` splits on it, so no escape makes it one
+  // class (`kspage/docs/DESIGN.md`'s "The mapping into HTML").
+  assert(base.has(out, ".\\32 col-\\<x\\> { }"),
+    "a leading digit and a sign escape, and the space folds")
+  assert(base.has(out, "class=\"2col-&lt;x&gt;\""), "the tag folds the space the same way")
+  assert(!base.has(out, "class=\"2col &lt;x&gt;\""), "the tag does not leave the space standing")
+  verdict.pass("the rule and the tag name one class, and a sign is not read as another rule.")
+fn test_a_link_becomes_an_anchor() //< a link becomes an `<a>` with the link
+  //<
+  //< **It is separate from the style.**
+  verdict.start("[kspage/html] a link becoming an a test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  p: = d.add_block("body")
+  p.add_text("here")
+  linked: = p.add_text("there", "em")
+  // Caution: Escape the " inside an attribute too. Unescaped, the attribute ends there.
+  linked.href = "https://example.com/?a=1&b=\"2\""
+
+  $sb: = Str_builder.new()
+  defer sb.free()
+  html.write(d, sample_sheet(arena), fixed_font.make(), sb@)
+  out: = sb.slice()
+  escaped: = base.has(out, "<a href=\"https://example.com/?a=1&amp;b=&quot;2&quot;\">")
+  assert(escaped, "the link goes into the attribute")
+  assert(base.has(out, "\"><span class=\"em\">there</span></a>"), "the style goes inside the a")
+  assert(!base.has(out, "<a href=\"\">"), "a text with no link does not become an a")
+  // **The mark pointing at a source is dropped**; kept as it is, it would be a link that does not
+  // open (the rule is `plain_href` in `kspage/model/source.kspls`).
+  linked.href = "src:kspage/model/doc.kspls#Inline.text"
+  sb.clear()
+  html.write(d, sample_sheet(arena), fixed_font.make(), sb@)
+  assert(base.has(sb.slice(), "<a href=\"kspage/model/doc.kspls\">"), "the source's mark is dropped")
+  verdict.pass("a link becomes an a outside the style, and the link is escaped too.")
+fn test_a_link_stays_one_anchor_when_its_text_changes_style() //<
+  //< Even where the styling changes mid-link, there is one `<a>`
+  //<
+  //< Caution: **Do not wrap each inline**, or one link becomes three `<a>`s: the screen shows
+  //< nothing wrong, but a screen reader says "three links", Tab stops thrice, and a copy is cut.
+  verdict.start("[kspage/html] the a staying one even where the dressing changes test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  p: = d.add_block("body")
+  head: = p.add_text("before")
+  mid: = p.add_text("bold", "em")
+  tail: = p.add_text("after")
+  head.href = "u"
+  mid.href = "u"
+  tail.href = "u"
+
+  $sb: = Str_builder.new()
+  defer sb.free()
+  html.write(d, sample_sheet(arena), fixed_font.make(), sb@)
+  out: = sb.slice()
+  assert(count_in(out, "<a href=") == 1, "the `<a>` is one")
+  assert(base.has(out, "<a href=\"u\">before<span class=\"em\">bold</span>after</a>"),
+    "the dressing swaps inside the a")
+
+  // **Do not merge too much**: where the link changes, it is another link.
+  tail.href = "v"
+  sb.clear()
+  html.write(d, sample_sheet(arena), fixed_font.make(), sb@)
+  assert(count_in(sb.slice(), "<a href=") == 2, "where the link changes the a parts too")
+  verdict.pass("a link is one even where the dressing changes mid-text.")
+
+fn test_a_link_that_would_not_open_is_not_wrapped() //<
+  //< The exported HTML does not make a link of a scheme that does not open
+  //<
+  //< **The HTML can reach anyone**: a linked `javascript:` runs in the page of whoever clicks it.
+  //< The text is kept (deleted, it could not be read).
+  verdict.start("[kspage/html] not making a link of a scheme that does not open test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  p: = d.add_block("body")
+  bad: = p.add_text("do not press")
+  bad.href = "javascript:alert(1)"
+
+  $sb: = Str_builder.new()
+  defer sb.free()
+  html.write(d, sample_sheet(arena), fixed_font.make(), sb@)
+  out: = sb.slice()
+  assert(!base.has(out, "javascript:"), "that procedure is not written out")
+  assert(!base.has(out, "<a href="), "nor is it made a link")
+  assert(base.has(out, "do not press"), "the text is left")
+  verdict.pass("a scheme that does not open comes out neither as a link nor outside the text.")
+
+fn test_a_font_name_cannot_break_out_of_the_rule() //< a font's name is written as a CSS value
+  //<
+  //< **HTML escaping has no effect inside `<style>`**: `;` and `}` pass through it, and **any rule
+  //< at all can be slipped in** through one font name.
+  verdict.start("[kspage/html] not breaking out of a rule from a font name test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  $spec: paint.Font_spec = paint.inherit_all()
+  spec.family = Option<|U8[]|>.some("a; } body { display: none } .x {")
+  sheet.add("body", spec)
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("a")
+
+  $sb: = Str_builder.new()
+  defer sb.free()
+  html.write(d, sheet, fixed_font.make(), sb@)
+  out: = sb.slice()
+  assert(!base.has(out, "display: none"), "the rule slipped in does not come out")
+  assert(!base.has(out, "} body {"), "it cannot break out of the declaration")
+  // A list of names passes as it is (only what cannot be in a font name is dropped).
+  spec.family = Option<|U8[]|>.some("Helvetica, Arial, sans-serif")
+  sheet2: = Sheet.new(base.root_font(), arena)
+  sheet2.add("body", spec)
+  sb.clear()
+  html.write(d, sheet2, fixed_font.make(), sb@)
+  assert(base.has(sb.slice(), "font-family: Helvetica, Arial, sans-serif;"),
+    "a row of names comes through")
+  verdict.pass("a font name is written as a CSS value, and cannot break out of a rule.")
+
+fn test_a_picture_becomes_an_img() //< a picture becomes an `<img>` with its size
+  //<
+  //< **Without the size written, no space is reserved until it has loaded.**
+  verdict.start("[kspage/html] a picture becoming an img test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  shot: = d.add_block("body")
+  shot.image = "fig&ure.png"
+  shot.image_w = 80.0
+  shot.image_h = 40.0
+  shot.add_text("caption")
+
+  $sb: = Str_builder.new()
+  defer sb.free()
+  html.write(d, sample_sheet(arena), fixed_font.make(), sb@)
+  out: = sb.slice()
+  drawn: = base.has(out, "<img src=\"fig&amp;ure.png\" width=\"80\" height=\"40\">")
+  assert(drawn, "both where it came from and how large it is come out")
+  assert(base.has(out, "height=\"40\">caption"), "the text carries on behind the picture")
+  assert(!base.has(out, "<img src=\"\""), "a block with no picture does not become an img")
+  verdict.pass("a picture becomes an img holding its size, and where it came from is escaped too.")
+fn test_the_contents_is_generated_in_the_html() //<
+  //< A table of contents is built from the headings in the exported HTML too
+  //<
+  //< **The contents are not in the document.**
+  verdict.start("[kspage/html] a table of contents being built in the writing out too test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = sample_sheet(arena)
+  sheet.find("h1").unwrap_or(null).outline = 1
+  toc: = sheet.add("toc", paint.inherit_all())
+  toc.collect = Collect.contents
+  toc.indent = 16.0
+  d: = Doc.new(arena)
+  d.add_block("toc")
+  d.add_block("h1").add_text("Title")
+
+  $sb: = Str_builder.new()
+  defer sb.free()
+  html.write(d, sheet, fixed_font.make(), sb@)
+  out: = sb.slice()
+  // **The items are links** (a table of contents where clicking does nothing is not exported).
+  linked: = "<div style=\"margin-left:0px\"><a href=\"#kspage-h1\">Title</a></div>"
+  assert(base.has(out, linked), "the heading comes out as a link item")
+  // **The target is built as the heading's id is** (built separately, the links would break).
+  assert(base.has(out, "class=\"h1\" id=\"kspage-h1\">Title"),
+    "the same name goes on the heading's side")
+  verdict
+    .pass("in the HTML written out too, the table of contents is built from the headings and comes \
+      out pressable.")
+fn test_notes_become_marks_and_a_list() //<
+  //< A note becomes a superscript mark in the body, and a numbered item where notes are collected
+  verdict.start("[kspage/html] a note becoming a mark and a list test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = sample_sheet(arena)
+  sheet.add("footnote", paint.inherit_all()).collect = Collect.notes
+  d: = Doc.new(arena)
+  p: = d.add_block("body")
+  p.add_text("body").note = "the note's <text>"
+  d.add_block("footnote")
+
+  $sb: = Str_builder.new()
+  defer sb.free()
+  html.write(d, sheet, fixed_font.make(), sb@)
+  out: = sb.slice()
+  assert(base.has(out, "body<sup>1</sup>"), "the mark becomes a sup behind the text")
+  listed: = base.has(out, "<div>1 the note's &lt;text&gt;</div>")
+  assert(listed, "it comes out in the list with its number, and the text escapes too")
+  verdict.pass("a note becomes a sup mark, and lines up in the list with its number.")

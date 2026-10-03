@@ -1,0 +1,69 @@
+//< The entry point to the change history
+//<
+//< The page supplies the time and the who. The core has neither a clock nor the user's name, so
+//< they are attached to the held-back "what" through here
+//< ([`../../share/trail.kspls`](../../share/trail.kspls)). No state is kept here (the state in
+//< [`state.kspls`](state.kspls) is all there is).
+//< Note: It is split from [`bridge.kspls`](bridge.kspls) for the 1000-line-per-file cap, and
+//< follows its boundary rules.
+import "kspage/port/web/state" + { ensure, in_ptr, trail }
+import "kspage/share/trail" as _trail
+import "std/chars" as _chars // tests and cuts single characters
+
+// Attaches the `when\twho` written into the typing arena to every held-back "what" and stores
+// them. Returns the number stored.
+// **Without a tab it does nothing** (an empty who and a forgotten tab cannot be told apart).
+// Caution: Call it where typing pauses (the same interval as an undo step's break). What is held
+// back is not lost until it is attached.
+#export
+fn kspage_web_trail_stamp(len: Sz): Sz
+  ensure()
+  two: = state.split_input(len)
+  if !two.found
+    return 0
+  return trail.stamp(two.head, two.tail)
+
+// Writes the history one `when\twho\twhat` line at a time, oldest first, and returns the length
+// (at `kspage_web_out_ptr`).
+#export
+fn kspage_web_trail(): Sz
+  ensure()
+  state.out.clear()
+  trail.deeds_into(state.out@)
+  return state.out.len
+
+// The number stored.
+#export
+fn kspage_web_trail_count(): Sz
+  ensure()
+  return trail.count()
+
+// The number that could not be stored because the arena was full.
+// Caution: **Report it unless it is 0.** Dropped silently, "it should be in the history" turns
+// out wrong.
+#export
+fn kspage_web_trail_lost(): Sz
+  ensure()
+  return trail.lost
+
+// Writes the history's stored form and returns the length (at `kspage_web_out_ptr`).
+// **Without saving this the history is lost.** It is not part of the document's save.
+#export
+fn kspage_web_trail_bytes(): Sz
+  ensure()
+  state.out.clear()
+  state.out.s(trail.bytes())
+  return state.out.len
+
+// Reads the `len` bytes written into the loading arena back as the history. 1 if read.
+// Caution: **Use the loading arena, not the typing arena** (`kspage_web_load_buffer`). The typing
+// arena has a fixed size, so a long text is silently cut.
+// Call it after reloading the document. Reloading resets the history to empty, so called first
+// it would be deleted.
+#export
+fn kspage_web_load_trail(len: Sz): I32
+  ensure()
+  if in_ptr == null || len <= 0
+    return 0
+  state.open_trail(U8[]::{ .ptr = in_ptr, .len = len })
+  return 1

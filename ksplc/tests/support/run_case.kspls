@@ -1,0 +1,115 @@
+//< The frame that runs one `ksplc run` case (not a suite)
+//<
+//< It makes a working directory, points the child's cache at it, writes the files, runs it, and
+//< reports one of three states.
+//< **The verdict itself is not here.** The cases in `tests/suite/run_test.kspls` decide what
+//< counts as good (the same split as `tests/support/run_cc.kspls`).
+import "ksplc/tests/support/harness"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/sys"
+import "std/verdict"
+
+const state_ok: Sz = 0 //< the verdict's three states
+  //<
+  //< Caution: Do not confuse "it cannot be confirmed in this environment" with "it failed".
+const state_failed: Sz = 1
+const state_skip: Sz = 2
+
+struct Result
+  state: Sz
+  why: U8[]
+
+fn ok_result(): Result
+  return Result::{ .state = state_ok, .why = "" }
+
+fn failed(why: U8[]): Result
+  return Result::{ .state = state_failed, .why = why }
+
+fn broke(what: U8[], out: U8[], arena: Arena$@): Result //<
+  //< It makes one failure out of "what did not happen" and the output at the time
+  return failed(arena.text().s(what).s("\n").s(out).take())
+
+fn skipped(why: U8[]): Result
+  return Result::{ .state = state_skip, .why = why }
+
+priv fn report(name: U8[], r: Result)
+  if r.state == state_skip
+    verdict.skip_check(name, r.why)
+    return
+  verdict.check(name, r.state == state_ok, r.why)
+
+// ==========================================
+// The working directory and the cache location
+// ==========================================
+
+priv fn in_sandbox(name: U8[], body: fn(work: U8[], arena: Arena$@): Result, arena: Arena$@): Result //<
+  //< It makes one working directory and runs the case with the child's cache pointed at it
+  //<
+  //< **Separate them per case**, or "was it rebuilt" passes on the previous case's artifact.
+  //< Caution: **Do not forget to point the child's cache here**, or it pollutes the developer's
+  //< real cache and passes on the last run's artifact.
+  dir: = harness.sandbox(name) catch
+    return failed("cannot make a working directory")
+  work: = dir
+  if !sys.set_env("KSPLC_CACHE_DIR", fs.join(work, "cache", arena))
+    return failed("cannot point the location at the child")
+  return body(work, arena)
+
+fn run(name: U8[], slot: U8[], body: fn(work: U8[], arena: Arena$@): Result, arena: Arena$@) //<
+  //< It runs one case and reports
+  //<
+  //< Caution: **Do not split these two into separate functions**, or reporting without a working
+  //< directory, or a directory without reporting, becomes possible: "green, confirming nothing".
+  report(name, in_sandbox(slot, body, arena))
+
+fn cache_dir(work: U8[], arena: Arena$@): U8[]
+  return fs.join(work, "cache", arena)
+
+fn run_root(work: U8[], arena: Arena$@): U8[]
+  return fs.join(cache_dir(work, arena), "run", arena)
+
+fn slots(work: U8[], arena: Arena$@): List<|U8[]|>
+  $out: = List<|U8[]|>.new(arena)
+  entries: = fs.read_dir(run_root(work, arena), arena) catch
+    return out
+  for name in entries
+    out.push(name)
+  return out
+
+fn only_slot(work: U8[], arena: Arena$@): U8[] //<
+  //< the path of the slot when there is exactly one
+  ss: = slots(work, arena)
+  if ss.len != 1
+    return ""
+  return fs.join(run_root(work, arena), ss.get(0), arena)
+
+fn helper_src(n: Sz, arena: Arena$@): U8[]
+  return arena.text().s("pub fn value(): Sz {\n  return \{n\};\n}\n").take()
+
+fn write_script(work: U8[], entry: U8[], body: U8[], n: Sz, arena: Arena$@): Bool //<
+  //< It writes the entry script and the imported file
+  helper: = helper_src(n, arena)
+  fs.write_tree(work, U8[][]::{ entry, "helper.kspl" }, U8[][]::{ body, helper }, arena) catch
+    return false
+  return true
+
+fn ksplc_run(args: U8[][], arena: Arena$@): verdict.Run_out
+  $a: = List<|U8[]|>.new(arena)
+  a.push("run")
+  for x in args
+    a.push(x)
+  return harness.run(harness.ksplc_argv(a.slice()))
+
+fn run_script(path: U8[], arena: Arena$@): verdict.Run_out //<
+  //< It runs one script (the most common case)
+  return ksplc_run(U8[][]::{ path }, arena)
+
+fn expect_out(r: verdict.Run_out, want: U8[], what: U8[], arena: Arena$@): Result
+  if r.code != 0 || r.out.find_str(want) < 0
+    return failed(arena.text().s(what).s("(code=\{r.code\})\n").s(r.out).take())
+  return ok_result()

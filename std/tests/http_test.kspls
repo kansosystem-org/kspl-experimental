@@ -1,0 +1,300 @@
+import "std/chars"
+import "std/http"
+import "std/mem" + { Arena, dealloc }
+import "std/net"
+import "std/str" { Str_builder }
+import "std/thread"
+import "std/url"
+import "std/verdict"
+
+// ==========================================
+// std/url: tests of the percent-encoding round trip and of parsing a query string.
+// ==========================================
+fn test_url_codec()
+  verdict.start("[Url] percent-encode/decode + parsing a query string test...")
+
+  enc: = url.encode("hello world/?#", null)
+  defer dealloc(Void$@::enc.ptr)
+  enc_ok: = enc.equals("hello%20world%2F%3F%23")
+  assert(enc_ok, "encode must percent-escape reserved characters")
+
+  dec: = url.decode_component(enc, null) catch panic("decode of freshly encoded data should succeed")
+  defer dealloc(Void$@::dec.ptr)
+  assert(dec.equals("hello world/?#"), "decode must round-trip encode's output")
+
+  dec_plus: = url.decode_form("a+b", null) catch panic("decode_form should succeed for '+'-as-space \
+    input")
+  defer dealloc(Void$@::dec_plus.ptr)
+  plus_ok: = dec_plus.equals("a b")
+  assert(plus_ok, "'+' must decode to a space (application/x-www-form-urlencoded convention)")
+
+  // In a path, "+" is just a "+" (a space written as "+" is a form convention); otherwise a file
+  // whose name contains "+" cannot be reached.
+  path_plus: = url.decode_component("a+b%20c", null) catch panic("decode_component should succeed")
+  defer dealloc(Void$@::path_plus.ptr)
+  path_plus_ok: = path_plus.equals("a+b c")
+  assert(path_plus_ok, "decode_component must leave '+' alone and still decode '%20'")
+
+  $bad_decode_ok: = true
+  _bad: = url.decode_component("%zz", null) catch
+    bad_decode_ok = false
+  assert(!bad_decode_ok, "decode must reject a malformed percent-escape")
+
+  arena: = Arena.new(4096)
+  defer arena.free()
+  params: = url.parse_query("?a=1&b=hello%20world&c", arena) catch panic("parse_query should \
+    succeed for well-formed input")
+  p0_ok: = params != null && params.name.equals("a") && params.value.equals("1")
+  assert(p0_ok, "first param must be a=1")
+  p1_ok: =
+    params.next != null && params.next.name.equals("b") &&
+    params.next.value.equals("hello world")
+  assert(p1_ok, "second param must decode percent-encoding")
+  p2_ok: =
+    params.next.next != null && params.next.next.name.equals("c") &&
+    params.next.next.value.equals("")
+  assert(p2_ok, "value-less param must have an empty value")
+  assert(params.next.next.next == null, "there must be exactly 3 params")
+
+  // The result is the same with or without a leading '?'.
+  bare: = url.parse_query("a=1&b=2", arena) catch panic("parse_query should accept a query string \
+    without the leading '?'")
+  bare_ok: = bare != null && bare.name.equals("a") && bare.value.equals("1")
+  assert(bare_ok, "parse_query must not require the leading '?'")
+  bare1_ok: = bare.next != null && bare.next.name.equals("b")
+  assert(bare1_ok, "parse_query without '?' must keep splitting on '&'")
+
+  // **Do not leak while refusing a malformed query.** decode_form returns a heap buffer, so if
+  // decoding the value fails after the name is decoded, the name's buffer is never freed. Anyone
+  // outside can send malformed queries without limit (to a server's `?path=`, for example), so one
+  // leak per request makes resident memory grow without end. That breaks "resident memory stays
+  // constant".
+  before: = mem.heap_used_bytes()
+  for _i in Range.asc(200)
+    _leak: = url.parse_query("name=%zz", arena) catch
+      continue
+    panic("parse_query must reject a malformed percent-escape in the value")
+  after: = mem.heap_used_bytes()
+  assert(after == before, "rejecting a malformed query must not leave anything on the heap")
+
+  verdict.pass("The percent-encode round trip and parsing a query string are confirmed.")
+
+// ==========================================
+// std/http: parsing one buffered message, request and response, with no socket.
+// ==========================================
+fn test_http_parse_buffered()
+  verdict.start("[Http] buffered parsing (parse_request/parse_response) test...")
+
+  arena: = Arena.new(4096)
+  defer arena.free()
+
+  req: =
+    http.parse_request("POST /echo?x=1 HTTP/1.1\r\nHost: example.com\r\nContent-Length: \
+      5\r\n\r\nhello", http.default_max_body_bytes, arena) catch panic("parse_request should \
+        succeed for a well-formed request")
+  assert(req.method.equals("POST"), "method must be parsed correctly")
+  assert(req.target.equals("/echo?x=1"), "target must include the raw query string")
+  assert(req.version.equals("HTTP/1.1"), "version must be parsed correctly")
+  assert(req.body.equals("hello"), "body must be sliced by Content-Length")
+
+  switch req.headers.find("host") case .some(v)
+    assert(v.equals("example.com"), "Host header lookup must be case-insensitive")
+  case .none
+    panic("Host header should be found")
+
+  resp: =
+    http.parse_response("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n", arena) catch panic("parse_response should succeed for a well-formed response")
+  reason_ok: = resp.reason.equals("Not Found")
+  assert(resp.status == 404 && reason_ok, "status/reason must be parsed correctly")
+  assert(resp.body.len == 0, "body must be empty when Content-Length is 0")
+
+  $incomplete_ok: = true
+  _r: =
+    http.parse_request("GET / HTTP/1.1\r\n", http.default_max_body_bytes, arena) catch
+    incomplete_ok = false
+  assert(!incomplete_ok, "parse_request must reject a headerless-but-truncated message")
+
+  // The body may be only partly in; sliced without a check, the view points outside the buffer.
+  $short_body_ok: = true
+  _s: =
+    http.parse_request("POST / HTTP/1.1\r\nContent-Length: 5\r\n\r\nhi",
+    http.default_max_body_bytes, arena) catch
+    short_body_ok = false
+  assert(!short_body_ok, "parse_request must report incomplete while the body is still short")
+
+  // **Both limits hold before the bytes arrive**: waiting for them is what a flood wants.
+  assert(parse_error("POST / HTTP/1.1\r\nContent-Length: 5\r\n\r\nhi", 4, arena)
+    .equals("body_too_large"), "a body over the limit is refused as soon as the head names it")
+  long_head: = arena.text().s("GET / HTTP/1.1\r\nX: ")
+  for _k in Range.asc(http.max_head_bytes)
+    long_head.c('a')
+  assert(parse_error(long_head.take(), 4, arena).equals("head_too_large"),
+    "a head past the limit with no end yet is refused, not waited for")
+  assert(parse_error("GET / HTTP/1.1\r\nX: a", 4, arena).equals("incomplete"),
+    "a short head with no end yet is waited for")
+
+  // consumed is "the number of bytes this message used", and what follows is the next message.
+  two: = "GET /a HTTP/1.1\r\n\r\nGET /b HTTP/1.1\r\n\r\n"
+  first: = http.parse_request(two, http.default_max_body_bytes, arena) catch panic("the first of \
+    two pipelined requests must parse")
+  assert(first.target.equals("/a"), "the first message must be the one parsed")
+  assert(first.consumed == 19, "consumed must cover exactly the first message")
+  second: =
+    http.parse_request(two.sub_from(first.consumed), http.default_max_body_bytes, arena) catch panic("the remainder after consumed must be the next request")
+  assert(second.target.equals("/b"), "consumed must land on the start of the next message")
+
+  // format_response builds the same bytes as write_response, leaving the sending to the caller.
+  $out: = Str_builder.new()
+  defer out.free()
+  head: = http.headers(arena).add("Content-Type", "text/plain").build()
+  http.format_response(out@, 200, head, "hi") catch panic("format_response should succeed for \
+    well-formed arguments")
+  formatted_ok: = out.slice()
+    .equals("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nhi")
+  assert(formatted_ok,
+    "format_response must emit the status line, headers, an auto Content-Length, and the body")
+
+  verdict
+    .pass("Buffered parsing of a request and a response, incomplete for a body not yet in, where \
+      consumed puts the next message, and format_response's byte sequence are all confirmed.")
+
+priv fn parse_error(src: U8[], max_body: Sz, arena: Arena$@): U8[] //<
+  //< How `parse_request` refuses src with that body limit: the error's name, or `accepted`
+  _r: = http.parse_request(src, max_body, arena) catch e
+    switch e case .incomplete
+      return "incomplete"
+    case .head_too_large
+      return "head_too_large"
+    case .body_too_large
+      return "body_too_large"
+    default
+      return "another error"
+  return "accepted"
+
+// ==========================================
+// std/http: input whose body boundary another implementation could read differently is refused.
+// Request smuggling needs only a boundary one byte off from what the front server (a reverse
+// proxy) reads, so "it can be interpreted somehow" is itself the hole.
+// ==========================================
+priv fn reject(label: U8$[], src: U8[])
+  arena: = Arena.new(1024)
+  defer arena.free()
+  $accepted: = true
+  _r: = http.parse_request(src, http.default_max_body_bytes, arena) catch
+    accepted = false
+  assert(!accepted, label)
+
+fn test_http_reject_smuggling()
+  verdict.start("[Http] refusing input whose boundary is read differently test...")
+
+  // Many implementations end a line at a bare LF. The front server sees two Content-Lengths and a
+  // 44-byte body; this parser sees one header and 0 bytes, and the 44 bytes start the next request.
+  reject("bare LF in a header line must be rejected",
+    "POST / HTTP/1.1\r\nHost: a\r\nContent-Length: 0\nContent-Length: 44\r\n\r\n")
+  reject("bare LF in the request line must be rejected", "GET / HTTP/1.1\nHost: evil\r\n\r\n")
+  reject("bare CR inside a header value must be rejected", "GET / HTTP/1.1\r\nX: a\rb\r\n\r\n")
+
+  // Whitespace before the colon, and a continuation line: the front server sees "an unknown
+  // header", this parser sees Content-Length.
+  reject("whitespace before the colon must be rejected",
+    "POST / HTTP/1.1\r\nContent-Length : 5\r\n\r\nhello")
+  reject("an obs-fold continuation line must be rejected",
+    "POST / HTTP/1.1\r\nHost: a\r\n Content-Length: 5\r\n\r\nhello")
+  reject("a header name that is not a token must be rejected", "GET / HTTP/1.1\r\nX Y: 1\r\n\r\n")
+  reject("a control character in a header value must be rejected",
+    "GET / HTTP/1.1\r\nX: a\0b\r\n\r\n")
+
+  // parse_size scans, so given the raw value it reads `5abc` as 5 and also skips the sign of `+5`.
+  reject("Content-Length with trailing garbage must be rejected",
+    "POST / HTTP/1.1\r\nContent-Length: 5abc\r\n\r\nhello")
+  reject("a signed Content-Length must be rejected",
+    "POST / HTTP/1.1\r\nContent-Length: +5\r\n\r\nhello")
+  reject("an empty Content-Length must be rejected",
+    "POST / HTTP/1.1\r\nContent-Length: \r\n\r\nhello")
+
+  reject("an empty method must be rejected", " / HTTP/1.1\r\n\r\n")
+  reject("an empty target must be rejected", "GET  HTTP/1.1\r\n\r\n")
+  reject("a malformed version must be rejected", "GET / HTTP/1.1x\r\n\r\n")
+
+  // Caution: **Include a value that wraps to a negative.** Only parse_int_core's 18-digit limit
+  // refuses it; one that wraps to a positive is caught by the body-length check even with no limit.
+  reject("a Content-Length that wraps to a negative Sz must be rejected",
+    "POST / HTTP/1.1\r\nContent-Length: 10000000000000000000\r\n\r\n hi")
+  // Empty input, and input with no line at all, must not crash.
+  reject("an empty request must be rejected", "")
+  reject("a request line with no terminator must be rejected", "GET / HTTP/1.1")
+  reject("an empty header name must be rejected", "GET / HTTP/1.1\r\n: v\r\n\r\n")
+
+  // A status not 3 digits would be silently truncated by I32:: into a different number.
+  arena: = Arena.new(1024)
+  defer arena.free()
+  $status_ok: = true
+  _resp: = http.parse_response("HTTP/1.1 4294967496 x\r\n\r\n", arena) catch
+    status_ok = false
+  assert(!status_ok, "a status code that is not 3 digits must be rejected")
+
+  // The builder goes through the same checks, so a value from outside cannot splice in a header.
+  $out: = Str_builder.new()
+  defer out.free()
+  bad_head: = http.headers(arena).add("X", "a\r\nInjected: 1").build()
+  $inject_ok: = true
+  http.format_response(out@, 200, bad_head, "") catch
+    inject_ok = false
+  assert(!inject_ok, "format_response must reject a CRLF-bearing header value")
+
+  verdict
+    .pass("A bare CR/LF, a header name that is not a token, a continuation line, a Content-Length \
+      that is not 1*DIGIT, a status that is not 3 digits, and a CRLF slipped in while building are \
+      all refused.")
+
+// ==========================================
+// std/http: the round trip of reading and writing a request and a response over a real TCP socket.
+// ==========================================
+#export
+fn http_echo_server(listener: net.Tcp_listener$@): Void$@
+  server_arena: = Arena.new(64 * 1024)
+  defer server_arena.free()
+  conn: = listener.accept() catch panic("accept should succeed once the client connects")
+  req: = http.read_request(conn, server_arena, http.default_max_body_bytes) catch panic("server \
+    read_request should succeed")
+  req_ok: =
+    req.method.equals("POST") && req.target.equals("/echo") && req.body.equals("ping")
+  assert(req_ok, "server must parse the client's request correctly")
+
+  resp_headers: = http.headers(server_arena).add("Content-Type", "text/plain").build()
+  http.write_response(conn, 200, resp_headers, "pong") catch panic("server write_response should \
+    succeed")
+  conn.free()
+  return null
+
+fn test_http_socket_roundtrip()
+  verdict
+    .start("[Http] read_request/write_response/write_request/read_response test (real loopback \
+      traffic)...")
+
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  listener: = net.Tcp_listener.bind("127.0.0.1", 17656) catch panic("bind should succeed on a fresh \
+    port")
+  t: = thread.Thread.spawn<|net.Tcp_listener|>(http_echo_server, listener) catch panic("thread \
+    spawn failed")
+
+  client: = net.Tcp_stream.connect("127.0.0.1", 17656) catch panic("connect should succeed once the \
+    listener is bound")
+  req_headers: = http.headers(arena).add("Host", "example.com").build()
+  http.write_request(client, "POST", "/echo", req_headers, "ping") catch panic("client \
+    write_request should succeed")
+  resp: = http.read_response(client, arena, http.default_max_body_bytes) catch panic("client \
+    read_response should succeed")
+  resp_ok: =
+    resp.status == 200 && resp.reason.equals("OK") && resp.body.equals("pong")
+  assert(resp_ok, "client must parse the server's response correctly")
+  switch resp.headers.find("content-type") case .some(v)
+    assert(v.equals("text/plain"), "Content-Type header must round-trip correctly")
+  case .none
+    panic("Content-Type header should be found")
+
+  client.free()
+  t.join_and_free()
+  listener.free()
+  verdict.pass("The HTTP request/response round trip over a real socket is confirmed.")

@@ -1,0 +1,78 @@
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+import "tools/ai_assist/ksplc_oracle" as oracle
+
+// ==========================================
+// tools/ai_assist/ksplc_oracle: checks the compiler oracle on 0 errors, a type error (a summary
+// line), a syntax error (no summary, stderr's line count), the temporary file's removal, and JSONL.
+// It really starts ksplc_stage1.exe (make debug depends on $(STAGE1_EXE), so it is built).
+// ==========================================
+fn test_compile_errors(arena: Arena$@) //< the count and the first diagnostic, from a real ksplc
+  verdict.start("[Oracle] ksplc_oracle.compile_errors/compiles/first_diagnostic test...")
+
+  good: = "fn main() {\n}\n"
+  good_r: = oracle.compile_errors(good, "_oracle_test_good", arena)
+  assert(good_r.error_count == 0, "valid source must compile with 0 errors")
+  kspl_left: = fs.exists("tools/ai_assist/corpus/_oracle_test_good.kspl")
+  c_left: = fs.exists("tools/ai_assist/corpus/_oracle_test_good.c")
+  assert(!kspl_left && !c_left, "compile_errors must clean up its temp .kspls/.c files")
+
+  type_err: = "fn main() {\n    x: I32 = \"not a number\";\n}\n"
+  type_r: = oracle.compile_errors(type_err, "_oracle_test_type_err", arena)
+  assert(type_r.error_count > 0 && type_r.error_count != oracle.uncompilable,
+    "a type error must be reported via the normal 'Finished with N error(s)' summary")
+  diag: = oracle.first_diagnostic(type_r.stderr_data)
+  assert(diag.find_str(": error:") >= 0, "first_diagnostic must return a real error line")
+  type_err_compiles: = oracle.compiles(type_err, "_oracle_test_type_err2", arena)
+  assert(!type_err_compiles, "compiles() must be false when compile_errors' count is nonzero")
+
+  // A syntax error puts out no summary, so stderr's ": error:" lines are counted
+  // (ksplc_oracle.compile_errors).
+  garbage: = ")))garbage{{{***\n"
+  garbage_r: = oracle.compile_errors(garbage, "_oracle_test_garbage", arena)
+  assert(garbage_r.error_count > 0 && garbage_r.error_count != oracle.uncompilable,
+    "a parse-broken source must fall back to counting stderr diagnostic lines")
+
+  // A source that passes sema and fails in code generation.
+  // Caution: **Always test this path.** A summary printed right after sema misses later errors and
+  // says "0 error(s)", counting a failure as a pass (print_diag_summary in ksplc/main.kspls).
+  // In C a fixed-length array takes two pairs of braces per level, so 97 levels reach the limit on
+  // a zero initializer.
+  $deep: = Str_builder.new()
+  defer deep.free()
+  deep.s("fn main() {\n    a: I32")
+  for _i in Range.asc(97)
+    deep.s("[1]")
+  deep.s(" = ::{};\n}\n")
+  late_r: = oracle.compile_errors(deep.slice(), "_oracle_test_late_err", arena)
+  assert(late_r.error_count > 0 && late_r.error_count != oracle.uncompilable,
+    "an error raised after sema must still reach the summary count")
+  late_compiles: = oracle.compiles(deep.slice(), "_oracle_test_late_err2", arena)
+  assert(!late_compiles, "compiles() must be false for a source that fails in codegen")
+
+  verdict
+    .pass("normal, type and syntax errors all give the right count, and the temp file was cleared.")
+
+fn test_load_jsonl(arena: Arena$@) //< a JSONL file becomes one value per line
+  verdict.start("[Oracle] ksplc_oracle.load_jsonl test...")
+
+  // **The file goes in out/tmp**, not corpus/ (which is untracked and absent in a fresh tree);
+  // `begin` in tests/debug/parts.kspls creates out/tmp.
+  fixture: = "out/tmp/oracle_load_jsonl.jsonl"
+  io.write_file(fixture,
+    "{\"path\":\"a.kspl\",\"code\":\"x\"}\n\n{\"path\":\"b.kspl\",\"code\":\"y\"}\n") catch panic("failed to write load_jsonl test fixture")
+
+  recs: = oracle.load_jsonl(fixture, arena) catch panic("load_jsonl must not fail to read a \
+    well-formed fixture")
+  // out/tmp is remade on every build, so a failed delete does not carry over.
+  fs.remove_path(fixture) catch {}
+
+  assert(recs.len == 2, "blank lines must be skipped; exactly 2 records expected")
+  assert(recs[0].get("path").as_str().equals("a.kspl"), "record 0's 'path' must round-trip")
+  assert(recs[1].get("code").as_str().equals("y"), "record 1's 'code' must round-trip")
+
+  verdict.pass("blank lines are skipped and each line's JSON is restored correctly.")

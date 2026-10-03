@@ -1,0 +1,47 @@
+//< Checks that an integer literal whose type is not yet decided fits the type actually computed
+//<
+//< **At the literal's position it cannot be checked**: the default I32 and a later wider type look
+//< alike there, so a binary's node and an unannotated declaration's initialiser decide.
+//< Caution: **Keep the non-firing side alongside**, or an unsettled literal turns `wide_ok` away.
+
+// EXPECT: literal '2147483648' is out of range for type 'I32'
+// EXPECT: literal '4294967296' is out of range for type 'I32'
+// EXPECT: literal '-2147483649' is out of range for type 'I32'
+// EXPECT: literal '8589934592' is out of range for type 'I32'
+// EXPECT: literal '-4294967296' is out of range for type 'I32'
+// EXPECT: literal '300' is out of range for type 'U8'
+import "std/io"
+
+fn main(): I32
+  silent_wrap: = 2147483648
+  silent_zero: = 4294967296
+  silent_neg: = -2147483649
+  // Even where the initialiser is an expression, it is looked at by the type computed (the
+  // default I32 here).
+  in_expr: = 8589934592 + 1
+  // A negative literal on the left of a `-` is looked at by the type computed too (no expected
+  // type, so the default I32).
+  neg_in_expr: = -4294967296 - 1
+  // Write the width and it passes. A type annotation or a suffix will do (that the errors do
+  // not grow here is pinned down too).
+  with_suffix: = 2147483648U32
+  with_annotation: I64 = 4294967296
+  at_bounds: = -2147483648
+  // An expression where the expected type descends on one side alone. Promoted it is a U64, so
+  // both literals fit.
+  wide_ok: U64 = 4294967296 + 1
+  // A literal that does not fit an I32 by default but fits the promoted U32.
+  v32: U32 = 7U32
+  hash_ok: = v32 * 0x85ebca6b
+  // The side where a binary's right-hand literal takes the left-hand side's type. The criterion
+  // being `U8`, 300 does not fit.
+  v8: U8 = 5U8
+  narrow_lit: U8 = v8 + 300
+  // It passes if it fits.
+  narrow_ok: U8 = v8 + 200
+  // The expected type differs from the left-hand side's, so it is outside the exception.
+  // Promoted to the default `I32`, 300 fits.
+  wide_from_narrow: I32 = v8 + 300
+  io.out()
+    .s("\{I64::silent_wrap\}\{I64::silent_zero\}\{I64::silent_neg\}\{I64::in_expr\}\{I64::neg_in_expr\}\{I64::with_suffix\}\{with_annotation\}\{I64::at_bounds\}\{I64::wide_ok\}\{I64::hash_ok\}\{I64::narrow_lit\}\{I64::narrow_ok\}\{I64::wide_from_narrow\}\n")
+  return 0

@@ -1,0 +1,63 @@
+//< A `Writer` that writes into memory the caller already holds and **never allocates**
+//<
+//< Writing literals needs only this file; a number in an interpolation also needs `std/strfmt`,
+//< which makes numbers `Formattable`. Where allocating is allowed, use `std/str`'s `Str_builder`.
+
+// ==========================================
+// **Do not import the allocator** (`std/mem`) or the whole string library (`std/str`) here: a
+// freestanding caller cannot avoid an import made in this file.
+//   $buf: U8[128] = ::{};
+//   $w: = Buf_writer.new(U8$[]::buf);
+//   w.s("seq=\{seq\} dist=\{mm\}");
+// ==========================================
+
+pub struct Buf_writer //< a destination that writes into memory the caller holds
+  priv buf: U8$[]
+  pub len: Sz //< how many bytes have been written so far
+  priv dropped: Sz
+
+impl Buf_writer: Writer //< so it can be used wherever a `Writer` is expected
+  pub fn new( //< creates a writer over the given destination
+    //<
+    //< Pass a fixed-length array as `U8$[]::buf`.
+    //< **Bytes that do not fit are dropped**, and only `overflowed()` reports it. Check it where
+    //< the content matters (a protocol's body). It does not panic, because a long display string
+    //< should not stop a program.
+    buf: U8$[], //< the memory to write into; the caller keeps it alive
+  ): Buf_writer
+    return Buf_writer::{ .buf = buf, .len = 0, .dropped = 0 }
+
+  pub fn s(r: Self$@, val: U8[]): Self$@ //< writes a string, dropping what does not fit
+    room: = r.buf.len - r.len
+    n: = val.len if val.len <= room else room
+    for i in Range.asc(n)
+      (r.buf.ptr + r.len + i)$ = val[i]
+    r.len += n
+    r.dropped += val.len - n
+    return r
+
+  pub fn c(r: Self$@, val: U8): Self$@ //< writes one byte, dropping it if it does not fit
+    if r.len >= r.buf.len
+      r.dropped += 1
+      return r
+    (r.buf.ptr + r.len)$ = val
+    r.len += 1
+    return r
+
+  pub fn flush(r: Self$@): Self$@ //< does nothing; it exists to complete `Writer`
+    return r
+
+  pub fn slice(r: Self@): U8[] //< what has been written so far
+    //<
+    //< Caution: It points into the caller's memory, so do not let it outlive that memory.
+    return U8$[]::{ .ptr = r.buf.ptr, .len = r.len }
+
+  pub fn overflowed(r: Self@): Bool //< whether any byte was dropped for not fitting
+    return r.dropped > 0
+
+  pub fn clear(r: Self$@): Self$@ //< rewinds to the start and forgets any dropped bytes
+    //<
+    //< Use it to reuse the same memory each cycle.
+    r.len = 0
+    r.dropped = 0
+    return r

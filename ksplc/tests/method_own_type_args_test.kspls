@@ -1,0 +1,29 @@
+import "std/verdict"
+
+// ==========================================
+// A method declaring **its own** type arguments, the only ones a call site may write.
+// Caution: **Do not confuse them with the enclosing `impl`'s type arguments.** The receiver's
+// type decides those, so a call site cannot write them
+// (`tests/negative/method_type_args_from_impl.kspls`).
+// The marker shows as writability: with `$` the body writes the pointee, without it that is
+// rejected (the reverse of `tests/negative/type_arg_mut_not_named.kspls`).
+// ==========================================
+priv struct Holder
+  n: I32
+
+impl Holder
+  fn poke<|$T|>(_r: Self, p: T$@, v: T): T
+    p$ = v
+    return p$
+
+fn test_method_own_type_args()
+  verdict.start("[Generic] a method's own type arguments test...")
+  h: Holder = ::{ .n = 0 }
+  $slot: I32 = 0
+  got: = h.poke<|$I32|>(slot@, 42)
+  assert(got == 42,
+    "method type args: a type argument declared by the method is writable from the call position")
+  assert(slot == 42, "method type args: what an actual argument marked `$` points at is writable")
+  verdict
+    .pass("a type argument a method declared itself is writable from the call position, and the \
+      mutability mark takes effect there.")

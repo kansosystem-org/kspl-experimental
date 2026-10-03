@@ -1,0 +1,59 @@
+//< The band of fill and line drawn behind a block (`Panel`), from opening to closing
+//<
+//< **It is opened before the contents are laid out, and closed after** (opened later, an inner
+//< block's band would lie under the outer one). It is split out to keep each file under 1000
+//< lines (Principle 3); [`flow.kspls`](flow.kspls) calls it.
+import "kspage/lay/line" { Pen }
+import "kspage/lay/page" { Placed, Page, Panel }
+import "kspage/model/doc" { Block, Rect }
+import "kspage/model/panel_paint" { Panel_paint }
+
+fn seal(dst: Page$@, panel: Option<|Panel$@|>, from: Placed, bottom: F32, floor: F32, pad: F32) //<
+  //< Closes an opened fill band at the height of what was laid out
+  //<
+  //< **The space before and after is not included** (or it would be painted and join paragraphs).
+  if one: = panel
+    // **A band whose lower edge is already set keeps its upper edge**, or a figure with no
+    // contents gets height 0 and vanishes.
+    if floor > 0.0
+      one.rect.h = floor - one.rect.y
+      return
+    // **Extend it upward by the inner space**, or the characters touch the band's edge.
+    one.rect.y = top_after(dst, from, bottom) - pad
+    one.rect.h = bottom - one.rect.y
+
+priv fn top_after(dst: Page$@, from: Placed, bottom: F32): F32 //<
+  //< The topmost y of what was laid out after from
+  //<
+  //< Where nothing was laid out, bottom.
+  //< **The height when it was opened cannot be used instead**: a block crossing pages is moved on
+  //< afterwards, and the band would start on the page before. Looking up to the slide is enough.
+  $top: F32 = bottom
+  for $i: Sz = from.boxes; i < dst.boxes.len; i += 1
+    top = upper_of(top, dst.boxes.get(i).rect.y)
+  for $c: Sz = from.cells; c < dst.cells.len; c += 1
+    top = upper_of(top, dst.cells.get(c).rect.y)
+  for $s: Sz = from.surfaces; s < dst.surfaces.len; s += 1
+    top = upper_of(top, dst.surfaces.get(s).rect.y)
+  for $g: Sz = from.pictures; g < dst.pictures.len; g += 1
+    top = upper_of(top, dst.pictures.get(g).rect.y)
+  return top
+
+priv fn upper_of(a: F32, b: F32): F32
+  return b if b < a else a
+
+fn hold(p: Pen$@, b: Block$@, paint: Panel_paint, left: F32, right: F32): Option<|Panel$@|> //<
+  //< Reserves one place for the fill and the line
+  //<
+  //< Caution: **Reserve it before layout**, or the outer band lies over the inner ones. **The
+  //< shape is written in afterwards.** **Nothing is reserved for an unknown name, nor with no fill
+  //< and no line** (the drawing code would count empty bands).
+  switch paint.fill case .none
+    if paint.width <= 0.0
+      return Option<|Panel$@|>.none
+  case .some {}
+  fresh: = Panel::{ .rect = Rect::{ .x = left, .y = p.y, .w = right - left, .h = 0.0 }, .block = b,
+    .width = paint.width, .color = paint.color, .fill = paint.fill, .shape = paint.shape }
+  made: = p.arena.create(fresh)
+  p.out.panels.push(made)
+  return Option<|Panel$@|>.some(made)

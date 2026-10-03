@@ -1,0 +1,134 @@
+//< Expands `for item in collection { … }` according to the subject's type
+//<
+//< The subject's type chooses the form, so parse cannot expand it ("Desugar: expanding the
+//< syntactic sugar that does not know the types" in `ksplc/docs/DESIGN.md`).
+//< Caution: **Keep the index form (a subject with `.len` and `[]`) the default.** Most subjects
+//< are an array, a slice or a `List`, and the `next()` form adds an `Option` per element.
+
+// ==========================================
+//   the two forms: by index, and by `next()`
+// ==========================================
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/core" as base_core
+import "ksplc/sema/body/expr" as sema_body_expr
+import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
+import "std/str" { Str_builder }
+
+priv $for_in_counter: Sz = 0
+
+priv const iter_trait_fqn: U8[] = "std.lang.Iter" //<
+  //< The trait whose implementers `for x in` loops over with `next()`
+
+impl Ast_node
+  fn expand_for_in(r: Self$@, c: Sema_ctx$@): Void?Sema_error //<
+    //< Expands the loop if it carries the mark (a bare identifier at the init position)
+    item_id: = r.get_loop_init()
+    if item_id == null || item_id.kind_id != .k_identifier
+      return
+    coll_ref: = r.get_loop_cond()
+    // **Infer here**: the temporary's declaration is the statement just before, so it is typed now.
+    coll_id: = coll_ref.infer_expr(c, 0)?
+    // **Check `Iter` first**, or a type that supports both silently loses the `Iter` its writer
+    // declared (Principle 5); the index form is for a subject that declares nothing.
+    if c.env.implemented_trait_key_of(coll_id, iter_trait_fqn).len > 0
+      r.build_step_loop(item_id, coll_ref)
+      return
+    r.build_index_loop(item_id, coll_ref)
+
+  priv fn build_index_loop(r: Self$@, item_id: Ast_node$@, coll_ref: Ast_node$@) //<
+    //< The form that loops by index
+    //<
+    //< `for _for_idx_N: = 0; _for_idx_N < coll.len; _for_idx_N += 1 { … }`, leaving the indexing
+    //< to sema's index path. The index is untyped: an `I32` widening to `Sz` passes both the `.len`
+    //< comparison and `get()`.
+    loc: = r.loc
+    idx_name: = next_temp_name("_for_idx")
+
+    coll_len: = Ast_node.build_field_access(coll_ref.text, 0, "len", 0, loc)
+    // The shape treeify_expr (parse/normalize_stmt.kspls) makes: [left, op, right].
+    cond_expr: = Ast_node.new(.k_expr, "expr", loc)
+      .add_child(Ast_node.build_ident(idx_name, 0, loc))
+      .add_child(Ast_node.new(.k_literal, "<", loc)).add_child(coll_len)
+
+    step_stmt: = Ast_node.new(.k_stmt_expr, "assign", loc)
+      .add_child(Ast_node.build_ident(idx_name, 0, loc))
+      .add_child(Ast_node.new(.k_assign_op, "+=", loc))
+      .add_child(Ast_node.build_int_literal(1, loc))
+
+    idx_expr: = Ast_node.new(.k_expr_postfix, "postfix", loc)
+      .add_child(Ast_node.build_ident(coll_ref.text, 0, loc))
+      .add_child(Ast_node.new(.k_literal, "[", loc))
+      .add_child(Ast_node.build_ident(idx_name, 0, loc))
+
+    idx_decl: = Ast_node.build_inferred_var_decl(idx_name, Ast_node.build_int_literal(0, loc), loc)
+    item_decl: = Ast_node.build_inferred_var_decl(item_id.text, idx_expr, loc)
+    r.replace_loop_parts(idx_decl, cond_expr, step_stmt, item_decl)
+
+  priv fn build_step_loop(r: Self$@, item_id: Ast_node$@, coll_ref: Ast_node$@) //<
+    //< The form that loops by `next()`
+    //<
+    //< Caution: **Leave the condition and the step empty**: `next()` advances, so anything there
+    //< advances twice. It folds like `if item: = coll.next()` (build_option_match in
+    //< `base/ast_ext.kspls`).
+    loc: = r.loc
+    call: = Ast_node.build_method_call(Ast_node.build_ident(coll_ref.text, 0, loc), "next", null, 0,
+      loc)
+    none_block: = Ast_node.new(.k_stmt_block, "stmt_block", loc)
+      .add_child(Ast_node.new(.k_stmt_break, "break", loc))
+    step: = Ast_node.build_option_match(call, item_id.text, r.get_loop_block(), none_block, null,
+      base_ast_ext.for_in_mark, loc)
+
+    loop_children: = base_ast.new_ast_node_list()
+    loop_children
+      .push(r.get_loop_label() if r.get_loop_label() != null
+      else Ast_node.new(.k_empty, "", loc))
+    loop_children.push(Ast_node.new(.k_empty, "", loc))
+    loop_children.push(Ast_node.new(.k_empty, "", loc))
+    loop_children.push(Ast_node.new(.k_empty, "", loc))
+    loop_children.push(Ast_node.new(.k_stmt_block, "stmt_block", loc).add_child(step))
+    r.children = loop_children
+
+  priv fn replace_loop_parts(r: Self$@, init_node: Ast_node$@, cond_node: Ast_node$@,
+    step_node: Ast_node$@, item_decl: Ast_node$@) //<
+      //< Replaces the for's five children and puts item's declaration at the head of the body.
+      //<
+      //< The five children are the label, init, condition, step and body.
+    block_node: = r.get_loop_block()
+    new_block_children: = base_ast.new_ast_node_list()
+    new_block_children.push(item_decl)
+    for i in Range.asc(block_node.children.len)
+      new_block_children.push(block_node.get_child(i))
+    block_node.children = new_block_children
+
+    loop_children: = base_ast.new_ast_node_list()
+    loop_children
+      .push(r.get_loop_label() if r.get_loop_label() != null
+      else Ast_node.new(.k_empty, "", r.loc))
+    loop_children.push(init_node)
+    loop_children.push(cond_node)
+    loop_children.push(step_node)
+    loop_children.push(block_node)
+    r.children = loop_children
+
+priv fn next_temp_name(prefix: U8[]): U8[] //< the temporary variable's name
+  //<
+  //< Numbered separately from parse's `_for_coll`.
+  for_in_counter += 1
+  $b: = Str_builder.new()
+  defer b.free()
+  b.s(prefix).s("_s").s("\{for_in_counter\}")
+  return base_core.arena.dup_str(b.slice())
+
+fn enter_fn_serial(): Sz //< starts the numbering for one function body
+  //<
+  //< Pass the value it returns to `leave_fn_serial`.
+  //< **Start from 0 per function.** With one running count, one added `for x in` shifts every later
+  //< number and bloats the generated C's diff ("Measuring where the desugaring goes" in
+  //< `ksplc/docs/DESIGN.md`); `for_in_counter` in `../../parse/desugar.kspls` does the same.
+  saved: = for_in_counter
+  for_in_counter = 0
+  return saved
+
+fn leave_fn_serial(saved: Sz) //< restores the count `enter_fn_serial` returned
+  for_in_counter = saved

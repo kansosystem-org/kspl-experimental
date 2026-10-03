@@ -1,0 +1,281 @@
+//< The queue of deferred work, and where it is drained
+//<
+//< An instantiation's method table, trait conformance and constraints are queued and built
+//< separately; this file queues and drains them. Instantiation itself is in `sema/decl/mono.kspls`.
+//<
+//< It deals only in **the order**: not what is built but when. The boundaries are in "Where the
+//< instantiation queue is drained" in `ksplc/docs/DESIGN.md`.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/core" as base_core
+import "ksplc/sema/decl/mono" as sema_decl_mono
+import "ksplc/sema/decl/mono_name" as sema_decl_mono_name
+import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
+import "ksplc/sema/session/state" as sema_session_state
+import "ksplc/sema/type/arc" as sema_type_arc
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" { Sema_symbol }
+import "std/ds" { List }
+import "std/str"
+
+priv const max_method_chain_depth: Sz = 32 //< the limit on the method-table chain
+  //<
+  //< **It is separate from `max_mono_depth` (mono.kspls)**, the call depth, which can go deep. This
+  //< counts levels of "A's table or body instantiates B, B's instantiates another…".
+  //< Caution: **Do not raise it much**: stopping a runaway would take seconds and look like a hang.
+
+priv fn empty_pending(): sema_session_state.Pending_methods //<
+  //< The "absent" value for deferred_methods lookups (a Map only has a lookup returning a default)
+  return sema_session_state.Pending_methods::{ .type_id = 0 }
+
+impl Sema_ctx
+  fn mark_constraint_failed(r: Self$@) //<
+    //< Records a type-argument constraint violation against the currently bound instantiation
+    //<
+    //< It turns off that instantiation's body check.
+    name: = r.mono.current_inst_name
+    if name.len == 0
+      return
+    r.mono.constraint_failed.set(name, true)
+
+  fn has_failed_constraint(r: Self$@, inst_name: U8[]): Bool //<
+    //< Whether that instantiation violates a type-argument constraint
+    //<
+    //< Where it does, its body is not type-checked.
+    if inst_name.len == 0
+      return false
+    return r.mono.constraint_failed.get(inst_name) catch false
+
+  fn snapshot_generic_args(r: Self$@): List<|sema_session_state.Generic_arg|>$@ //<
+    //< Copies the currently bound type arguments
+    //<
+    //< Deferred work runs after the bindings are removed, so the code that records it keeps a copy.
+    snapshot: = List<|sema_session_state.Generic_arg|>.create(base_core.arena)
+    for i in Range.asc(r.generics.args.len)
+      snapshot.push(r.generics.args.get(i))
+    return snapshot
+
+  fn queue_fn_body(r: Self$@, node: Ast_node$@, impl_name: U8[], depth: Sz) //<
+    //< Queues an instantiated body for inference **exactly once**
+    //<
+    //< The call site and the method table both queue it, in no fixed order (is_body_queued in
+    //< sema/type/scope.kspls).
+    if node == null || node.sym_ptr == null
+      return
+    sym: = Sema_symbol$@::node.sym_ptr
+    if sym.flags.is_body_queued
+      return
+    sym.flags.is_body_queued = true
+    r.generics.pending
+      .push(sema_session_state.Pending_inst::{ .node = node, .impl_name = impl_name,
+      .bound_args = r.snapshot_generic_args(), .depth = depth })
+
+  fn ensure_instance_methods(r: Self$@, type_id: I32): Void?Sema_error //<
+    //< Builds the method table of the instance type_id where its building was deferred
+    //<
+    //< Caution: **Every function that reads a table must go through here**, or the table is missing
+    //< with no diagnostic.
+    // **Strip the pointer and immutability first.** The table is under the plain
+    // instance's id, not the `Slice<|$U8|> immut` a `U8$[]@` points at
+    // (mut_slice_through_const_descriptor_ptr in tests/suite/write_perm_test.kspls).
+    real: = r.env.receiver_base_id(type_id)
+    // Drain the queue first, then take what it deferred.
+    // Caution: **Do not reverse the order**: an instance created in the same expression
+    // (`b.moved(true).get()`) would come back with no table: "there is no such method".
+    if r.is_table_pending(real)
+      r.drain_pending_instances()?
+    held: = r.mono.deferred_methods.get(real) catch empty_pending()
+    if held.type_id == 0
+      return
+    r.mono.deferred_methods.remove(real)
+    // Caution: **Clear the flag before queueing.** Left set, the drain defers it again.
+    $promoted: = held
+    promoted.awaits_pull = false
+    r.mono.pending_methods.push(promoted)
+    return r.drain_pending_instances()
+
+  fn build_entrusted_tables(r: Self$@) //<
+    //< Builds every method table deferred until a lookup, for a caller with no type to look up by
+    //<
+    //< For example, a hover asking which type has a function.
+    held: = r.mono.deferred_methods
+    if held == null || held.len == 0
+      return
+    ids: = List<|I32|>.create(base_core.arena)
+    for e in held.items()
+      ids.push(e.key)
+    // Each lookup removes its entry, so the ids are collected first, not walked as the map changes.
+    for i in Range.asc(ids.len)
+      r.ensure_instance_methods(ids.get(i)) catch {}
+
+  priv fn is_table_pending(r: Self$@, real: I32): Bool //<
+    //< Whether the work of building that type's table is still in the queue
+    for i in Range.asc(r.mono.pending_methods.len)
+      if r.env.get_real_type(r.mono.pending_methods.get(i).type_id) == real
+        return true
+    return false
+
+  fn restore_generic_args(r: Self$@, snapshot: List<|sema_session_state.Generic_arg|>$@) //<
+    //< Restores the bindings from the copy (the counterpart of snapshot_generic_args)
+    r.generics.args.len = 0
+    for i in Range.asc(snapshot.len)
+      r.generics.args.push(snapshot.get(i))
+
+  fn put_off_constraint(r: Self$@, constraint_node: Ast_node$@, target_id: I32): Bool //<
+    //< Defers a constraint check, recording a copy of the bindings; true if deferred
+    //<
+    //< It defers nothing while that queue is being drained. The caller is
+    //< check_type_constraint in sema/decl/resolve.kspls.
+    if r.mono.draining_constraints
+      return false
+    snapshot: = r.snapshot_generic_args()
+    site: = r.generics.inst_site if r.generics.inst_site != null else constraint_node
+    r.mono.pending_constraints
+      .push(sema_session_state.Pending_constraint::{ .constraint_node = constraint_node,
+      .arg_type_id = target_id, .site = site, .bound_args = snapshot,
+      .inst_name = r.mono.current_inst_name })
+    return true
+
+  fn drain_pending_constraints(r: Self$@) //<
+    //< Runs all the deferred constraint checks
+    //<
+    //< The reason for deferring them is at Pending_constraint in sema/session/state.kspls.
+    //< Call it outside error suppression, that is, at a phase boundary (pipeline.kspls).
+    r.drain_pending_constraints_for("")
+
+  fn drain_pending_constraints_for(r: Self$@, inst_name: U8[]) //<
+    //< Runs the pending constraint checks; with inst_name, only that instantiation's
+    //<
+    //< Caution: **Before building one item, drain only that instantiation's checks.** One not yet
+    //< built has an empty conformance table, and a correct type is rejected.
+    // Under suppression the queue is **discarded, not drained**: check_type_constraint would queue
+    // again, and the loop would never end.
+    if r.suppress_errors
+      r.mono.pending_constraints.len = 0
+      return
+    // Under this flag, check_type_constraint checks instead of queueing again.
+    r.mono.draining_constraints = true
+    defer r.mono.draining_constraints = false
+    kept: = List<|sema_session_state.Pending_constraint|>.create(base_core.arena)
+    defer kept.free()
+    $i: Sz = 0
+    for i < r.mono.pending_constraints.len
+      pc: = r.mono.pending_constraints.get(i)
+      i += 1
+      if inst_name.len > 0 && !pc.inst_name.equals(inst_name)
+        kept.push(pc)
+        continue
+      // Push the recorded bindings, and always remove them afterwards (left in place, they corrupt
+      // an outer resolution).
+      saved_len: = r.generics.args.len
+      for j in Range.asc(pc.bound_args.len)
+        r.generics.args.push(pc.bound_args.get(j))
+      prev_site: = r.generics.inst_site
+      prev_inst: = r.mono.current_inst_name
+      r.generics.inst_site = pc.site
+      r.mono.current_inst_name = pc.inst_name
+      pc.constraint_node.check_type_constraint(r, pc.arg_type_id) catch {}
+      r.mono.current_inst_name = prev_inst
+      r.generics.inst_site = prev_site
+      r.generics.args.len = saved_len
+    r.mono.pending_constraints.len = 0
+    for j in Range.asc(kept.len)
+      r.mono.pending_constraints.push(kept.get(j))
+
+  // Queues building an instantiation's method table and trait conformance.
+  // **It only queues; nothing is drained here**: it runs while an annotation is resolved, with
+  // the outer type arguments bound (drain_pending_instances does the building).
+  fn queue_instance_methods(r: Self$@, type_id: I32, base_name: U8[], args_str: U8[],
+    inst_name: U8[])
+    // Copied into the arena: it can come from the caller's scratch.
+    dup_base: = base_core.arena.dup_str(base_name)
+    dup_args: = base_core.arena.dup_str(args_str)
+    // The depth is one more than the current body's or table's.
+    r.mono.pending_methods
+      .push(sema_session_state.Pending_methods::{ .type_id = type_id, .base_name = dup_base,
+      .args_str = dup_args, .inst_name = inst_name, .depth = r.generics.inst_chain_depth + 1,
+      .awaits_pull = true })
+
+  fn drain_pending_instances(r: Self$@): Void?Sema_error //<
+    //< Builds the queued instances' method tables and trait conformances until the queue is empty
+    //<
+    //< The queue grows during the walk: read the raw len on every iteration (`for x in list` copies
+    //< len at the start and misses new items). On re-entry it only queues; nested, the inner run
+    //< would clobber the outer bindings.
+    // Called at every boundary, so an empty queue makes no copy.
+    if r.mono.draining_methods || r.mono.pending_methods.len == 0
+      return
+    r.mono.draining_methods = true
+    defer r.mono.draining_methods = false
+    // **Hide the outer bindings. Restoring the length is not enough** (as above).
+    outer_args: = r.snapshot_generic_args()
+    r.generics.args.len = 0
+    defer r.restore_generic_args(outer_args)
+    // The depth returns to the outer one, not 0: this can run in the middle of a body.
+    outer_depth: = r.generics.inst_chain_depth
+    defer r.generics.inst_chain_depth = outer_depth
+    $i: Sz = 0
+    for i < r.mono.pending_methods.len
+      p: = r.mono.pending_methods.get(i)
+      i += 1
+      // **The queue turns recursion into iteration, so mono_depth cannot catch this.** Without a
+      // depth count, a method returning a deeper form of its type never ends, with no diagnostic.
+      tmpl_node: = r.generics.templates.get(p.base_name) catch null
+      if p.depth > max_method_chain_depth
+        // The position is the type's declaration: the body advancing the chain is not known here.
+        r.clear_scratch()
+          .s("generic method table chain too deep: methods of '\{p.base_name\}' build their own \
+            type one level deeper each time (for example 'Chain<|S|>' making 'Chain<|Box2<|S|>|>'), \
+            and the chain was followed \{max_method_chain_depth\} levels down. It only grows where \
+            a method of the deeper type is actually called; stop the recursion there, or make the \
+            step a free generic function taking the receiver")
+        r.err(tmpl_node if tmpl_node != null else r.generics.inst_site, r.scratch.slice())
+        throw Sema_error.analysis_failed
+      r.generics.inst_chain_depth = p.depth
+      real_id: = r.env.get_real_type(p.type_id)
+      r.mono.deferred_methods.remove(real_id)
+      t_entry: = r.env.id_to_type.get(real_id)
+      if t_entry == null
+        continue
+      // Queued twice, it is not rebuilt (every annotation requests one).
+      if t_entry.methods != null && t_entry.methods.len > 0
+        continue
+      // Caution: **Drain the accumulated constraints before building this item**, or follow-on
+      // errors inside the standard library bury the violation
+      // (tests/negative/generic_constraint_in_template_body.kspls). **Not outside the loop**: an
+      // earlier iteration fills the conformance table it reads.
+      r.drain_pending_constraints_for(p.inst_name)
+      // Bind the type arguments over the same range as prepare_inst_node, a method included; the
+      // copy queued for the body is taken here, or the body is analyzed without `T` (Pending_inst
+      // in sema/session/state.kspls).
+      gen_params: = tmpl_node.find_child(.k_type_gen_params) if tmpl_node != null else null
+      if gen_params == null
+        if !r.has_failed_constraint(p.inst_name)
+          r.instantiate_generic_methods(real_id, p.base_name, p.args_str)?
+        continue
+      $backup: = r.backup_mono_state()
+      args_list: = sema_decl_mono_name.split_args(p.args_str)
+      defer
+        sema_decl_mono_name.free_args_list(args_list)
+        r.restore_mono_state(backup@)
+      r.bind_generic_args(gen_params, args_list, false)
+      // The table is built on first lookup ("Where the instantiation queue is drained" in
+      // ksplc/docs/DESIGN.md).
+      // Caution: **Complete only the conformance registration first** (indexing, upcasting and
+      // constraints read it), **after binding**, or C gets `unknown type name 'T'`.
+      if p.awaits_pull
+        r.register_generic_trait_impls(real_id, p.base_name, p.args_str, p.inst_name, false)?
+        // **Only an ARC-managed type is not deferred.** lower synthesizes its retain / release
+        // (synth_arc_stmt in lower/arc.kspls), which looks nothing up; with no table the value
+        // silently leaks.
+        if !r.env.is_arc_type(real_id)
+          r.mono.deferred_methods.set(real_id, p)
+          continue
+      // A body that violated a constraint is not checked, so as not to bury the real diagnostic
+      // (constraint_failed in sema/session/state.kspls).
+      if !r.has_failed_constraint(p.inst_name)
+        r.instantiate_generic_methods(real_id, p.base_name, p.args_str)?
+      // The conformance too, or `impl<|T|> List<|T|>: Index...` stays unattached and `for x in
+      // list` fails with "pointer indexing is forbidden" inside std.
+      r.register_generic_trait_impls(real_id, p.base_name, p.args_str, p.inst_name, true)?
+    r.mono.pending_methods.len = 0

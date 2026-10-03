@@ -1,0 +1,180 @@
+//< The entry points for pressing and dragging (a cell's border, and a slide's frame)
+//<
+//< Only entry points that hold state that lives while the pointer is pressed are here; asking is
+//< a separate entry point from grabbing.
+//< Caution: **Do not bring layout decisions in here** (the same rule as
+//< [`bridge.kspls`](bridge.kspls)).
+//< **Do not put a slice out at the boundary** ("The restrictions on types at the FFI boundary" in
+//< the language spec).
+import "kspage/lay/ask"
+import "kspage/port/web/state" { ed, ensure, page }
+import "kspage/write/block"
+import "kspage/write/shape"
+import "kspage/write/typing"
+
+// ---- Dragging a cell border ----
+
+// The border being grabbed. It lives only while pressed (a layout moves and resizes columns, so
+// it is never reused).
+priv $held: ask.Edge = ::{}
+
+// If there is a cell border at (x, y), the direction to move it (0 none, 1 a column, 2 a row).
+// It does not grab (it asks, to choose the pointer's arrow).
+#export
+fn kspage_web_edge_at(x: F32, y: F32): I32
+  if page == null
+    return 0
+  edge: = ask.edge_at(page, x, y)
+  if !edge.found
+    return 0
+  switch edge.axis case .column
+    return 1
+  case .row
+    return 2
+
+// Grabs the border at (x, y); 1 if grabbed. **It ends the undo step first**, or the drag would
+// undo together with what was typed just before.
+#export
+fn kspage_web_grab_edge(x: F32, y: F32): I32
+  if page == null
+    return 0
+  held = ask.edge_at(page, x, y)
+  if !held.found
+    return 0
+  ed.break_group()
+  return 1
+
+// Drags the grabbed border to (x, y). When nothing is grabbed, nothing happens.
+#export
+fn kspage_web_drag_edge(x: F32, y: F32)
+  if page == null
+    return
+  ed.drag_edge(page, held, x, y)
+
+// Fits the column (or row) whose border is at (x, y) to its contents; 1 if anything moved. **A
+// double-click on a border** (as in Excel and Calc): a column to its widest text, a row to its
+// natural height.
+// Caution: **Call it after layout** (it reads the laid-out boxes).
+#export
+fn kspage_web_fit_edge(x: F32, y: F32): I32
+  if page == null
+    return 0
+  edge: = ask.edge_at(page, x, y)
+  return 1 if ed.fit_edge(page, edge) else 0
+
+// Releases the border. This ends one undo step.
+#export
+fn kspage_web_release_edge()
+  held = ask.no_edge()
+  ed.break_group()
+
+// ---- Grabbing a slide's frame ----
+
+// The frame being grabbed, alive only while pressed, as with the border.
+priv $grip: ask.Grip = ::{}
+
+// If there is a frame handle at (x, y), its direction (0 none, 1 move, 2 the ↖↘ corner, 3
+// horizontal only, 4 vertical only, 5 the ↗↙ corner). It does not grab.
+// Caution: **Return the direction too** — a diagonal arrow on an edge handle promises both
+// dimensions (other products show one direction on an edge).
+#export
+fn kspage_web_grip_at(x: F32, y: F32): I32
+  if page == null
+    return 0
+  got: = ask.grip_at(page, x, y)
+  if !got.found
+    return 0
+  if !got.resize
+    return 1
+  if got.wide && got.tall
+    // A corner has two directions (↖↘ and ↗↙); one number would put the bottom-right arrow on the
+    // bottom left.
+    return 2 if got.left == got.top else 5
+  return 3 if got.wide else 4
+
+// Grabs the frame at (x, y); 1 if grabbed. It ends the undo step first (as with the border). **The
+// grabbed frame becomes the selected one** — otherwise the handles vanish on release and editing by
+// number has no target (the rule of `pick_at`).
+#export
+fn kspage_web_grab_frame(x: F32, y: F32): I32
+  if page == null
+    return 0
+  grip = ask.grip_at(page, x, y)
+  if !grip.found
+    return 0
+  ed.pick_at(page, x, y)
+  ed.break_group()
+  return 1
+
+// Moves the selected frame by (dx, dy); 1 if it moved.
+// Caution: **Pass it relative** — `kspage_web_place_frame` sets the absolute position, so nudging
+// needs this one.
+#export
+fn kspage_web_move_frames(dx: F32, dy: F32): I32
+  ensure()
+  return 1 if ed.move_picks(dx, dy) else 0
+
+// Writes nine values for the selected frame into out (x/y/w/h from the slide's top left, x/y/w/h
+// in screen coordinates, and whether there is one).
+// Caution: **Return both sets from one entry point** — editing by number needs the offset, drawing
+// the handles needs screen coordinates; split, a layout in between leaves one stale. **Screen
+// coordinates exist only after layout** (0 before).
+#export
+fn kspage_web_frame_rect(out: F32$@)
+  (out + 8)$ = 0.0
+  for $i: Sz = 0; i < 8; i += 1
+    (out + i)$ = 0.0
+  if b: = ed.frame_at()
+    switch b.frame case .some(r)
+      out$ = r.x
+      (out + 1)$ = r.y
+      (out + 2)$ = r.w
+      (out + 3)$ = r.h
+      (out + 8)$ = 1.0
+    case .none {}
+    if page != null
+      switch ask.frame_rect(page, b) case .some(seen)
+        (out + 4)$ = seen.x
+        (out + 5)$ = seen.y
+        (out + 6)$ = seen.w
+        (out + 7)$ = seen.h
+      case .none {}
+
+// The step at which the selected frame appears. **0 without a frame** (0 means "always").
+// Caution: **Do not add it to `kspage_web_frame_rect`** — that one carries the number set and the
+// handle set together, and a step is neither.
+#export
+fn kspage_web_frame_step(): Sz
+  ensure()
+  if b: = ed.frame_at()
+    return b.step
+  return 0
+
+// Sets the step at which the selected frame appears; 1 if set. 0 means "always" (it also removes
+// the setting).
+#export
+fn kspage_web_set_frame_step(at: Sz): I32
+  ensure()
+  return 1 if ed.set_step(at) else 0
+
+// Sets the selected frame's position and size by number; 1 if set.
+// Caution: **Pass the offset from the slide's top left**, not screen coordinates. A negative size
+// becomes 0 (inside out, it could not be grabbed).
+#export
+fn kspage_web_place_frame(x: F32, y: F32, w: F32, h: F32): I32
+  ensure()
+  return 1 if ed.place_frame(x, y, w, h) else 0
+
+// Drags the grabbed frame to (x, y). When nothing is grabbed, nothing happens.
+#export
+fn kspage_web_drag_frame(x: F32, y: F32, ratio: I32)
+  if page == null
+    return
+  ed.drag_frame(page, grip, x, y, ratio != 0)
+
+// Releases the frame — the end of one undo step and of the drag, **not "remove it"**
+// (`kspage_web_drop_frame`).
+#export
+fn kspage_web_release_frame()
+  grip = ask.no_grip()
+  ed.break_group()

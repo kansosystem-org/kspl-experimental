@@ -1,0 +1,19 @@
+//< A `#noreturn` call is accepted as a value only as a `catch`'s fallback
+//<
+//< Caution: **Do not widen it to the return-value position.** Even past sema, genc emits C of the
+//< form `return <Void>`, and only the C compiler falls, with zero diagnostics from KSPL. It stays
+//< where the value is known to be discarded (`#noreturn` in `../../../docs/SPEC-language.md`).
+// EXPECT: expected 'I32', but got 'Void'
+priv enum Probe_error
+  bad
+
+priv fn probe(ok: Bool): I32?Probe_error
+  if !ok
+    throw Probe_error.bad
+  return 7
+
+fn main(): I32
+  ok: = probe(true) catch panic("this one passes")
+  if ok > 0
+    return ok
+  return panic("this one is refused")

@@ -1,0 +1,232 @@
+//< The backward-pass operations a gradient is built from, added as methods on `Tensor`
+//<
+//< **There is no automatic-differentiation tape**: each forward operation has a backward method
+//< beside it, called in order. The "allocate and return" versions put an intermediate gradient on
+//< the tensor's own arena, so **the allocation is entirely predictable**; the `_into` versions
+//< take the destination from the caller.
+import "ksai/tensor" + { Tensor }
+import "std/math"
+
+priv struct Reduce_stats //<
+  //< The result of the row reduction used to make softmax / logsumexp numerically stable
+  max_v: F64 //< the largest value in the slice
+  sum_exp: F64 //< Σ exp(x_i - max_v)
+
+impl<|T|> Tensor<|T|>
+  priv fn softmax_reduce(r: Self$@, offset: Sz, n: Sz): Reduce_stats //<
+    //< Returns the max of the last-dimension slice [offset, offset+n) and the sum of exp(x - max)
+    //<
+    //< Softmax and the cross-entropy family share it.
+    $max_v: = (r.data + offset)$
+    for $i: Sz = 1; i < n; i += 1
+      v: = (r.data + offset + i)$
+      if v > max_v
+        max_v = v
+    $sum_exp: = 0.0
+    for i in Range.asc(n)
+      sum_exp += math.exp((r.data + offset + i)$ - max_v)
+    return Reduce_stats::{ .max_v = max_v, .sum_exp = sum_exp }
+  // --- The backward pass of the matrix product Y = X @ W -------
+  // Each grad has an "allocate and return" version and an `_into` one; `cfg` switches between pure
+  // KSPL (the default) and BLAS (`--define=blas`) on the `_into` one.
+
+  // dX = dY @ W^T   (self=dY:[m,n], w=W:[k,n] → out:[m,k])
+  // Caution: **Validate the shapes before the kernel**: `lda`/`ldb`/`ldc` come from them under
+  // `cfg(blas)`, so a `w` of the wrong shape (a corrupted or tampered LoRA adapter) would let
+  // `cblas_sgemm` read past `w.data`.
+  pub fn grad_matmul_input_into( //< the gradient for a matrix product's input, into `out`
+    r: Self$@,
+    w: Tensor<|T|>, //< the weights the forward pass used, [k,n]
+    out: Tensor<|T|>, //< where it is written, [m,k]; the caller prepares it and may reuse it
+  )
+    assert(r.shape.len == 2 && w.shape.len == 2, "grad_matmul_input requires 2D tensors")
+    n: = r.shape[1]
+    k: = w.shape[0]
+    assert(w.shape[1] == n, "grad_matmul_input inner dimension mismatch")
+    m: = r.shape[0]
+    tensor.transb_kernel<|T|>(out.data, r.data, w.data, m, n, k)
+  fn grad_matmul_input(r: Self$@, w: Tensor<|T|>): Tensor<|T|> //<
+    //< The "allocate and return" version (a thin wrapper over `_into`), on `r.arena`
+    $out_shape: Sz[2] = ::{ r.shape[0], w.shape[0] }
+    dx: = Tensor<|T|>.new(Sz$[]::{ .ptr = out_shape@, .len = 2 }, r.arena)
+    r.grad_matmul_input_into(w, dx)
+    return dx
+  // dW = X^T @ dY   (self=X:[m,k], dy=dY:[m,n] → out:[k,n])
+  #cfg(!blas)
+  pub fn grad_matmul_weight_into( //< the gradient for a matrix product's weights, into `out`
+    r: Self$@,
+    dy: Tensor<|T|>, //< the gradient of the product's output, [m,n]
+    $out: Tensor<|T|>, //< where it is written, [k,n]; the caller prepares it and may reuse it
+  )
+    assert(r.shape.len == 2 && dy.shape.len == 2, "grad_matmul_weight requires 2D tensors")
+    m: = r.shape[0]
+    k: = r.shape[1]
+    assert(dy.shape[0] == m, "grad_matmul_weight row mismatch")
+    n: = dy.shape[1]
+    // Loop order rr-i-j: the inner `j` runs contiguously over the dY row and the out row. The
+    // additions into out[i][j] stay in ascending rr, as in the naive version, so the result is
+    // unchanged bit for bit.
+    out.fill(0.0)
+    for rr in Range.asc(m)
+      dy_row: = dy.data + rr * n
+      for i in Range.asc(k)
+        a: = (r.data + rr * k + i)$
+        out_row: = out.data + i * n
+        for j in Range.asc(n)
+          (out_row + j)$ = (out_row + j)$ + a * (dy_row + j)$
+  // The BLAS version: dW[k,n] = X[m,k]^T @ dY[m,n] (A=X Trans, B=dY NoTrans).
+  // Validated like `grad_matmul_input_into` (blas): a `dy.shape[0]` that does not match
+  // `r.shape[0]` lets BLAS's reduction dimension (m) read past the end of `dy.data`.
+  #cfg(blas)
+  pub fn grad_matmul_weight_into( //< the gradient for a matrix product's weights, into `out`
+    r: Self$@,
+    dy: Tensor<|T|>, //< the gradient of the product's output, [m,n]
+    out: Tensor<|T|>, //< where it is written, [k,n]; the caller prepares it and may reuse it
+  )
+    assert(r.shape.len == 2 && dy.shape.len == 2, "grad_matmul_weight requires 2D tensors")
+    m: = r.shape[0]
+    k: = r.shape[1]
+    assert(dy.shape[0] == m, "grad_matmul_weight row mismatch")
+    n: = dy.shape[1]
+    tensor.blas_gemm<|T|>(112, 111, k, n, m, r.data, k, dy.data, n, out.data, n)
+  pub fn grad_matmul_weight( //< the same, but allocated on `r.arena` instead of into `out`
+    r: Self$@,
+    dy: Tensor<|T|>, //< the gradient of the product's output, [m,n]
+  ): Tensor<|T|>
+    $out_shape: Sz[2] = ::{ r.shape[1], dy.shape[1] }
+    dw: = Tensor<|T|>.new(Sz$[]::{ .ptr = out_shape@, .len = 2 }, r.arena)
+    r.grad_matmul_weight_into(dy, dw)
+    return dw
+  priv fn grad_bias(r: Self$@): Tensor<|T|> //<
+    //< The backward pass of the bias addition: dbias[j] = Σ_r dY[r,j]   (self=dY:[m,n] → dbias:[n])
+    assert(r.shape.len >= 2, "grad_bias expects >= 2D tensor")
+    n: = r.shape[r.shape.len - 1]
+    rows: = r.size / n
+
+    $out_shape: Sz[1] = ::{ n }
+    dbias: = Tensor<|T|>.new(Sz$[]::{ .ptr = out_shape@, .len = 1 }, r.arena)
+    for j in Range.asc(n)
+      $s: T = 0.0
+      for rr in Range.asc(rows)
+        s = s + (r.data + rr * n + j)$
+      (dbias.data + j)$ = s
+    return dbias
+  // --- The backward pass of the activation functions -----------
+  fn grad_silu(r: Self$@, dy: Tensor<|T|>): Tensor<|T|> //<
+    //< SiLU:  dX = dY * (s + x*s*(1-s)),  s = sigmoid(x)   (self=X, dy=dY)
+    assert(r.size == dy.size, "grad_silu size mismatch")
+    dx: = Tensor<|T|>.new(r.shape, r.arena)
+    for i in Range.asc(r.size)
+      xv: = (r.data + i)$
+      s: = 1.0 / (1.0 + math.exp(-xv))
+      deriv: = T::(s + xv * s * (1.0 - s))
+      (dx.data + i)$ = (dy.data + i)$ * deriv
+    return dx
+  fn apply_rope_grad(r: Self$@, start_pos: Sz): Tensor<|T|> //< RoPE's backward pass
+    //<
+    //< RoPE is a rotation, so the gradient is the inverse rotation (-θ), the forward matrix's
+    //< transpose (self = the upstream gradient dY_rope → dY). It reuses the forward body (the
+    //< reason is at `rope_rotate` in `ksai/tensor.kspls`).
+    assert(r.shape.len >= 2, "apply_rope_grad expects >= 2D tensor")
+    assert(r.shape[r.shape.len - 1] % 2 == 0, "RoPE requires even dimension")
+    return r.rope_rotate(start_pos, true)
+  // --- The classification loss (Softmax + cross entropy) -------
+  pub fn cross_entropy_loss( //< how wrong the last position's prediction was, in nats
+    //<
+    //< Self's final dimension is the vocabulary; L = logsumexp(logits) - logits[target]. Of several
+    //< rows it takes only the last (one step of teacher forcing); for every row, use
+    //< `cross_entropy_loss_seq`.
+    r: Self$@,
+    target: I32, //< the correct next token; a token outside the vocabulary is rejected
+  ): F64
+    assert(r.shape.len >= 1, "cross_entropy_loss expects >= 1D tensor")
+    n: = r.shape[r.shape.len - 1]
+    offset: = r.size - n
+    assert(target >= 0 && (target) < n, "cross_entropy_loss target out of range")
+
+    st: = r.softmax_reduce(offset, n)
+    log_z: = st.max_v + math.log(st.sum_exp)
+    return log_z - (r.data + offset + target)$
+  pub fn grad_softmax_cross_entropy( //< the gradient of the last position's scores
+    //<
+    //< It is softmax(logits) with 1 subtracted at [target].
+    r: Self$@,
+    target: I32, //< the correct next token; a token outside the vocabulary is rejected
+  ): Tensor<|T|>
+    assert(r.shape.len >= 1, "grad_softmax_cross_entropy expects >= 1D tensor")
+    n: = r.shape[r.shape.len - 1]
+    offset: = r.size - n
+    assert(target >= 0 && (target) < n, "grad_softmax_cross_entropy target out of range")
+
+    st: = r.softmax_reduce(offset, n)
+    dlogits: = Tensor<|T|>.new(r.shape, r.arena)
+    // Fills the leading `offset` elements with 0 and writes the gradient into the trailing n
+    for i in Range.asc(offset)
+      (dlogits.data + i)$ = 0.0
+    for i in Range.asc(n)
+      p: = math.exp((r.data + offset + i)$ - st.max_v) / st.sum_exp
+      (dlogits.data + offset + i)$ = T::p
+    ti: = offset + target
+    (dlogits.data + ti)$ = (dlogits.data + ti)$ - T::1.0
+    return dlogits
+  pub fn cross_entropy_loss_seq( //< how wrong every position's prediction was, averaged, in nats
+    //<
+    //< Every row's loss: next-token prediction, what a language model is trained on.
+    r: Self$@,
+    targets: I32$[], //< the correct next token at each position, one per row
+  ): F64
+    n: = r.shape[r.shape.len - 1]
+    rows: = r.size / n
+    assert(targets.len == rows, "cross_entropy_loss_seq row/target mismatch")
+    $total: = 0.0
+    for t in Range.asc(rows)
+      // As in `cross_entropy_loss`, `targets[t]` is a raw token ID from the training data;
+      // unchecked, `r.data + t*n + targets[t]` lands past the row, an out-of-bounds read.
+      assert(targets[t] >= 0 && targets[t] < n, "cross_entropy_loss_seq target out of range")
+      st: = r.softmax_reduce(t * n, n)
+      log_z: = st.max_v + math.log(st.sum_exp)
+      total += log_z - (r.data + t * n + targets[t])$
+    return total / (F64::rows)
+  pub fn grad_softmax_cross_entropy_seq( //< the gradient of every position's scores
+    //<
+    //< Each row is averaged by 1/rows.
+    r: Self$@,
+    targets: I32$[], //< the correct next token at each position, one per row
+  ): Tensor<|T|>
+    n: = r.shape[r.shape.len - 1]
+    rows: = r.size / n
+    assert(targets.len == rows, "grad_softmax_cross_entropy_seq row/target mismatch")
+    dlogits: = Tensor<|T|>.new(r.shape, r.arena)
+    scale: = T::(1.0 / (F64::rows))
+    for t in Range.asc(rows)
+      // As in `cross_entropy_loss_seq`: unchecked, the write below can overrun `dlogits.data`.
+      assert(targets[t] >= 0 && targets[t] < n,
+        "grad_softmax_cross_entropy_seq target out of range")
+      st: = r.softmax_reduce(t * n, n)
+      for i in Range.asc(n)
+        p: = math.exp((r.data + t * n + i)$ - st.max_v) / st.sum_exp
+        (dlogits.data + t * n + i)$ = T::((p) * scale)
+      ti: = t * n + targets[t]
+      (dlogits.data + ti)$ = (dlogits.data + ti)$ - scale
+    return dlogits
+  pub fn accumulate( //< adds another gradient into this one, in place
+    //<
+    //< self += grad. **The caller decides the order of the additions**: floating-point addition is
+    //< not associative, so a sum that must match on every run has to be taken in one fixed order.
+    r: Self$@,
+    grad: Tensor<|T|>, //< another gradient of the same weight; a different size is rejected
+  )
+    assert(r.size == grad.size, "accumulate size mismatch")
+    for i in Range.asc(r.size)
+      (r.data + i)$ = (r.data + i)$ + (grad.data + i)$
+  // --- Updating a parameter (SGD) --------------------------------
+  pub fn sgd_step( //< one plain gradient-descent step, changing the parameter in place
+    //<
+    //< self -= lr * grad
+    r: Self$@,
+    grad: Tensor<|T|>, //< the parameter's gradient; a different size is rejected
+    lr: F64, //< the learning rate
+  )
+    assert(r.size == grad.size, "sgd_step size mismatch")
+    for i in Range.asc(r.size)
+      (r.data + i)$ = (r.data + i)$ - T::(lr * (grad.data + i)$)

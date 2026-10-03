@@ -1,0 +1,30 @@
+//< Checks that a variable holding a value **copied** from an immutable one is writable
+//<
+//< In `$x: = c[i]` (`c` an immutable `const` array) the new binding is writable. If this breaks,
+//< genc writes `const T x` and C rejects the assignment **with no diagnostic on the KSPL side**
+//< (copy_value_type in `sema/type/query.kspls` decides it).
+//< Caution: **Do not test only the annotated shape.** That one uses the declared type as it is,
+//< so it would pass even with the inference path (no annotation) broken.
+import "std/str"
+import "std/verdict"
+
+priv const words: U8[][3] = ::{ "alpha", "beta", "gamma" }
+priv const left: I64[3] = ::{ 1, 2, 3 }
+priv const right: I64[3] = ::{ 10, 20, 30 }
+
+fn test_const_copy_binding()
+  verdict.start("[sema] a binding copied from an immutable value is writable test...")
+  // Make a mutable binding by inference alone, and assign to it later.
+  $w: = words[1]
+  assert(w.equals("beta"), "the copy must start as the element it was made from")
+  w = words[0]
+  assert(w.equals("alpha"), "a mutable binding copied from a const element must be assignable")
+  // A ternary assigns to a temporary from its branches, both immutable arrays.
+  pick: = words[0].len == 5
+  chosen: = left if pick else right
+  assert(chosen[0] == 1I64, "a conditional over const arrays must copy the chosen one")
+  // The copied array is writable (the owner decides its elements' immutability).
+  $mine: = left
+  mine[0] = 99I64
+  assert(mine[0] == 99I64 && left[0] == 1I64, "writing the copy must not touch the original")
+  verdict.pass("")

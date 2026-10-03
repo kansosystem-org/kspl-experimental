@@ -1,0 +1,53 @@
+import "std/stack_limit" { Stack_limit }
+import "std/thread"
+import "std/verdict"
+
+// ==========================================
+// std/stack_limit: a walk stops before its stack runs out, on the main thread and on a thread of
+// its own. **Every build that `make debug` makes runs it**, since a level's cost differs per build.
+// ==========================================
+
+priv const test_margin: Sz = 64 * 1024 //< the room kept spare below where the walk stops
+
+priv fn dig( //< how many levels deeper it goes before the limit comes near
+  limit: Stack_limit@, //< where it stops
+  levels: Sz, //< the current depth
+  above: U8$[], //< a buffer of the level above, which this level writes
+): Sz
+  // Caution: **The level above passes its buffer down and reads it after the call**, so the call
+  // is never the last thing a level does. No compiler can then turn the walk into a loop that uses
+  // no stack.
+  $pad: U8[64] = ::{}
+  above[0] = U8::(levels & 1)
+  if limit.near()
+    return levels
+  deepest: = dig(limit, levels + 1, U8$[]::pad)
+  return deepest if pad[0] <= 1U8 else -1
+
+// **The walk must go deep.** A floor read too high stops the walk at once: it does not crash, but
+// it refuses depth the stack could hold.
+priv const floor_levels: Sz = 1000 //< the walk must get at least this deep
+
+fn test_stack_limit_on_main()
+  verdict.start("[Stack] a walk that looks stops before the main thread's stack runs out...")
+  limit: = Stack_limit.new(test_margin)
+  assert(!limit.near(), "at a test's head the stack is not near its end")
+  $seed: U8[1] = ::{}
+  levels: = dig(limit@, 0, U8$[]::seed)
+  assert(levels > floor_levels, "the walk goes deeper than a thousand levels before it stops")
+  verdict.pass("")
+
+#export
+fn stack_test_walk(arg: Sz$@): Void$@
+  limit: = Stack_limit.new(test_margin)
+  $seed: U8[1] = ::{}
+  arg$ = dig(limit@, 0, U8$[]::seed)
+  return null
+
+fn test_stack_limit_on_a_thread()
+  verdict.start("[Stack] a walk that looks stops before a thread's own stack runs out...")
+  $levels: Sz = 0
+  t: = thread.Thread.spawn<|Sz|>(stack_test_walk, levels@) catch panic("thread spawn failed")
+  t.join_and_free()
+  assert(levels > floor_levels, "on a thread too the walk goes deeper than a thousand levels")
+  verdict.pass("")

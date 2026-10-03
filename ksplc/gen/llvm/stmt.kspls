@@ -1,0 +1,505 @@
+//< Generates LLVM IR for statements
+//<
+//< `emit_llvm_stmt` is a thin dispatcher that calls a dedicated method per statement kind; the
+//< switch statement is split further into collecting the cases and binding the payloads.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/gen/llvm/ctx" { Genllvm_ctx }
+import "ksplc/gen/llvm/expr" as gen_llvm_expr
+import "ksplc/gen/llvm/expr_agg" as gen_llvm_expr_agg
+import "ksplc/gen/llvm/types" as gen_llvm_types
+import "ksplc/sema/decl/eval" as sema_decl_eval
+import "ksplc/sema/type/def" as sema_type_def
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "std/chars"
+import "std/ds" { List, Map }
+import "std/str" { Str_builder }
+
+struct Case_info
+  val: I32
+  lbl: I32
+  ast_node: Ast_node$@
+  block_node: Ast_node$@
+
+struct Match_default
+  lbl: I32
+  block: Ast_node$@
+
+priv struct Match_variant_ref //<
+  //< The result of resolving an enum variant definition from a pattern node
+  //<
+  //< emit_llvm_match_payload and collect_match_cases share it; it is null where unresolved.
+  p_start: I32
+  def: sema_type_def.Enum_variant$@
+
+priv fn resolve_match_pattern_variant(pn: Ast_node$@, e_def: sema_type_def.Enum_def$@):
+  Option<|Match_variant_ref$@|> //<
+    //< It resolves, from e_def, the variant that the pattern node pn names.
+    //<
+    //< It is null where the name is unknown or the variant undefined.
+  switch pn.extract_match_variant() case .variant(v_name_node, p_start)
+    if v_name_node != null && e_def != null
+      if v_def: = e_def.get_variant(v_name_node.text)
+        mvr: = Match_variant_ref::{ .p_start = I32::p_start, .def = v_def }
+        return Option<|Match_variant_ref$@|>.some(base_core.arena.create(mvr))
+  default {}
+  return Option<|Match_variant_ref$@|>.none
+
+impl Ast_node
+  fn emit_llvm_stmt(r: Ast_node$@, cg: Genllvm_ctx$@) //<
+    //< A thin dispatcher that calls a dedicated method per statement kind
+    if r == null
+      return
+
+    k: = r.kind_id
+    if cg.is_terminated && k != .k_stmt_label && k != .k_stmt_block && k != .k_stmt_labeled_block
+      return
+
+    switch r.kind_id case .k_stmt_block, .k_loop_init, .k_loop_step
+      for child in r.children
+        child.emit_llvm_stmt(cg)
+    case .k_stmt_return
+      r.emit_llvm_return(cg)
+    case .k_stmt_throw
+      r.emit_llvm_throw(cg)
+    case .k_decl_var, .k_decl_const
+      r.emit_llvm_var_decl(cg)
+    case .k_stmt_label
+      label_node: = r.get_child(0)
+      cg.emit_str_label(label_node.text)
+    case .k_stmt_goto, .k_stmt_break, .k_stmt_continue
+      r.emit_llvm_jump(cg)
+    case .k_stmt_if
+      r.emit_llvm_if(cg)
+    case .k_stmt_loop
+      r.emit_llvm_loop(cg)
+    case .k_stmt_match
+      r.emit_llvm_match(cg)
+    case .k_stmt_expr
+      r.emit_llvm_assign(cg)
+    default
+      if r.kind_id != .k_empty && r.kind_id != .k_underscore
+        $msg: = Str_builder.new()
+        defer msg.free()
+        msg.s("Genllvm ICE: Unhandled stmt kind: ").s(r.get_kind_str())
+        r.ice_panic(msg.slice())
+
+  fn emit_llvm_return(r: Ast_node$@, cg: Genllvm_ctx$@)
+    expr: = r.get_return_expr()
+    if expr != null && expr.kind_id != .k_empty
+      val_reg: = expr.emit_llvm_expr(cg)
+      is_void: =
+        sema_type_env.is_void(cg.env.get_real_type(cg.current_ret_id)) || cg.current_ret_id == 0
+      if is_void
+        cg.s("    ret void\n")
+      else
+        cg.emit_ret_value(val_reg)
+    else
+      is_res: = cg.env.is_result(cg.current_ret_id)
+      if is_res
+        cg.emit_ret_value("zeroinitializer")
+      else
+        cg.s("    ret void\n")
+    cg.terminate()
+
+  fn emit_llvm_throw(r: Ast_node$@, cg: Genllvm_ctx$@)
+    expr: = r.get_throw_expr()
+    if expr != null
+      val_reg: = expr.emit_llvm_expr(cg)
+      is_res: = cg.env.is_result(cg.current_ret_id)
+      if is_res
+        tmp_reg1: = cg.next_reg()
+        cg.s("    %\{tmp_reg1\} = insertvalue ")
+        cg.t(cg.current_ret_id).s(" zeroinitializer, i8 1, 0\n")
+        tmp_reg2: = cg.next_reg()
+        cg.s("    %\{tmp_reg2\} = insertvalue ")
+        cg.t(cg.current_ret_id).s(" %\{tmp_reg1\}, ").t(expr.type_id).s(" ").s(val_reg).s(", 1\n")
+        cg.emit_ret_value(cg.reg_str(tmp_reg2))
+      else
+        cg.s("    call void @exit(").t(expr.type_id).s(" ").s(val_reg).s(")\n")
+        cg.s("    unreachable\n")
+    else
+      cg.s("    unreachable\n")
+    cg.terminate()
+
+  fn emit_llvm_var_decl(r: Ast_node$@, cg: Genllvm_ctx$@)
+    id_node: = r.get_var_decl_id()
+    type_id: = r.type_id
+    name: = id_node.text
+    decl: = id_node.def_node if id_node.def_node != null else r
+    is_existing: = cg.has_local_slot(name, decl)
+    ptr_name: = cg.local_slot_name(name, decl)
+
+    if !is_existing
+      cg.emit_alloca(ptr_name, type_id)
+
+    init_expr: = r.get_var_decl_expr()
+    if init_expr != null && init_expr.kind_id != .k_empty
+      // A compound literal is built directly in the declared memory. Building it in a temporary,
+      // loading it as a value and then storing it holds the aggregate three times, so a large
+      // array makes the frame three times its size, and at -O0 a huge first-class aggregate is
+      // expanded element by element ("A huge aggregate is not handled as a first-class value" in
+      // ksplc/docs/DESIGN.md). The initializer cannot read a variable before its declaration, so
+      // overwriting dest first is safe.
+      if init_expr.kind_id == .k_struct_literal || init_expr.kind_id == .k_expr_compound
+        init_expr.emit_llvm_struct_literal_into(cg, ptr_name)
+      else
+        val_reg: = init_expr.emit_llvm_expr(cg)
+        cg.op_store(type_id, val_reg, ptr_name)
+    else if r.kind_id != .k_decl_const
+      cg.emit_zero_fill(ptr_name, type_id)
+
+  fn emit_llvm_jump(r: Ast_node$@, cg: Genllvm_ctx$@)
+    label_node: = r.get_child(0) if r.children.len > 0 else null
+    if label_node != null && label_node.kind_id == .k_identifier
+      cg.s("    br label %").s(label_node.text).s("\n")
+    else
+      cg.s("    unreachable\n")
+    cg.terminate()
+
+  fn emit_llvm_if(r: Ast_node$@, cg: Genllvm_ctx$@)
+    cond_node: = r.get_if_cond()
+    then_block: = r.get_if_then_block()
+    else_block: = r.get_if_else_block()
+
+    cond_reg: = cond_node.emit_llvm_expr(cg)
+    cond_i1: = cg.next_reg()
+    cg.s("    %\{cond_i1\} = icmp ne i8 ").s(cond_reg).s(", 0\n")
+
+    then_lbl: = cg.next_label()
+    else_lbl: = cg.next_label()
+    merge_lbl: = cg.next_label()
+
+    has_else: = else_block != null && else_block.kind_id != .k_empty
+    cg.s("    br i1 %\{cond_i1\}, label %b\{then_lbl\}")
+    if has_else
+      cg.s(", label %b\{else_lbl\}\n")
+    else
+      cg.s(", label %b\{merge_lbl\}\n")
+    cg.terminate()
+
+    cg.emit_b_label(then_lbl)
+    then_block.emit_llvm_stmt(cg)
+    if !cg.is_terminated
+      cg.s("    br label %b\{merge_lbl\}\n")
+    cg.terminate()
+
+    if has_else
+      cg.emit_b_label(else_lbl)
+      else_block.emit_llvm_stmt(cg)
+      if !cg.is_terminated
+        cg.s("    br label %b\{merge_lbl\}\n")
+      cg.terminate()
+
+    cg.emit_b_label(merge_lbl)
+
+  fn emit_llvm_loop(r: Ast_node$@, cg: Genllvm_ctx$@)
+    init_node: = r.get_loop_init()
+    if init_node != null && init_node.kind_id != .k_empty
+      init_node.emit_llvm_stmt(cg)
+
+    loop_cond_lbl: = cg.next_label()
+    loop_body_lbl: = cg.next_label()
+    loop_end_lbl: = cg.next_label()
+
+    if !cg.is_terminated
+      cg.s("    br label %b\{loop_cond_lbl\}\n")
+    cg.terminate()
+
+    cg.emit_b_label(loop_cond_lbl)
+
+    cond_node: = r.get_loop_cond()
+    if cond_node != null && cond_node.kind_id != .k_empty
+      cond_reg: = cond_node.emit_llvm_expr(cg)
+      cond_i1: = cg.next_reg()
+      cg.s("    %\{cond_i1\} = icmp ne i8 ").s(cond_reg).s(", 0\n")
+      cg.s("    br i1 %\{cond_i1\}, label %b\{loop_body_lbl\}, label %b\{loop_end_lbl\}\n")
+    else
+      cg.s("    br label %b\{loop_body_lbl\}\n")
+    cg.terminate()
+
+    cg.emit_b_label(loop_body_lbl)
+
+    block_node: = r.get_loop_block()
+    if block_node != null && block_node.kind_id != .k_empty
+      block_node.emit_llvm_stmt(cg)
+
+    step_node: = r.get_loop_step()
+    if step_node != null && step_node.kind_id != .k_empty
+      step_node.emit_llvm_stmt(cg)
+
+    if !cg.is_terminated
+      cg.s("    br label %b\{loop_cond_lbl\}\n")
+    cg.terminate()
+
+    cg.emit_b_label(loop_end_lbl)
+
+  fn emit_llvm_match(r: Ast_node$@, cg: Genllvm_ctx$@)
+    cond_node: = r.get_match_cond()
+    cond_reg: = cond_node.emit_llvm_expr(cg)
+    merge_lbl: = cg.next_label()
+
+    enum_name: = cg.env.get_str(cg.env.get_real_type(cond_node.type_id))
+    e_def: = cg.env.get_enum_def(enum_name).unwrap_or(null)
+    is_scalar: = e_def == null || e_def.is_scalar()
+
+    $switch_cond_reg: = cond_reg
+    $switch_cond_type: = cond_node.type_id
+    $tmp_cond_ptr_str: U8[] = ""
+
+    if !is_scalar
+      tmp_cond_ptr: = cg.get_or_alloc_tmp_slot(Void$@::r, cond_node.type_id)
+      tmp_cond_ptr_str = tmp_cond_ptr
+      cg.s("    store ").t(cond_node.type_id).s(" ").s(cond_reg).s(", ptr ").s(tmp_cond_ptr).s("\n")
+
+      tag_ptr: = cg.next_reg()
+      cg.s("    %\{tag_ptr\} = getelementptr inbounds ")
+      cg.t_gep(cond_node.type_id).s(", ptr ").s(tmp_cond_ptr).s(", i32 0, i32 0\n")
+
+      tag_reg: = cg.next_reg()
+      cg.s("    %\{tag_reg\} = load i32, ptr %\{tag_ptr\}\n")
+
+      switch_cond_reg = cg.reg_str(tag_reg)
+      switch_cond_type = I32::sema_type_env.Builtin_type_id.i32_type // Tag is i32
+
+    cases: = List<|Case_info|>.create(base_core.arena)
+    dflt: = collect_match_cases(r, cg, e_def, cases, merge_lbl)
+    default_lbl: = dflt.lbl
+    default_block: = dflt.block
+
+    if !cg.is_terminated
+      cg.s("    switch ")
+      cg.t(switch_cond_type).s(" ").s(switch_cond_reg).s(", label %b\{default_lbl\} [\n")
+
+      for ci in cases
+        cg.s("        ")
+        cg.t(switch_cond_type).s(" \{ci.val\}, label %b\{ci.lbl\}\n")
+      cg.s("    ]\n")
+    cg.terminate()
+
+    // Several values in one case clause share the same block_lbl, so a duplicate label must be
+    // stopped here. A linear walk of the list each time is O(N^2) on a pathological switch with
+    // many case clauses, and the compile effectively hangs. A Map makes the check O(1).
+    emitted_lbls: = base_core.arena.create(Map<|I32, Bool|>.new(base_core.arena))
+
+    for ci in cases
+      already_emitted: = emitted_lbls.get(ci.lbl) catch false
+
+      if !already_emitted
+        emitted_lbls.set(ci.lbl, true)
+        cg.emit_b_label(ci.lbl)
+
+        if !is_scalar && tmp_cond_ptr_str.len > 0
+          ci.ast_node.emit_llvm_match_payload(cg, e_def, cond_node.type_id, tmp_cond_ptr_str)
+
+        if ci.block_node != null
+          ci.block_node.emit_llvm_stmt(cg)
+        if !cg.is_terminated
+          cg.s("    br label %b\{merge_lbl\}\n")
+        cg.terminate()
+
+    if default_block != null
+      cg.emit_b_label(default_lbl)
+      default_block.emit_llvm_stmt(cg)
+      if !cg.is_terminated
+        cg.s("    br label %b\{merge_lbl\}\n")
+      cg.terminate()
+    else if default_lbl != merge_lbl
+      cg.emit_b_label(default_lbl)
+      cg.s("    unreachable\n")
+      cg.terminate()
+
+    cg.emit_b_label(merge_lbl)
+  fn emit_llvm_match_payload(r: Ast_node$@, cg: Genllvm_ctx$@, e_def: sema_type_def.Enum_def$@,
+    cond_type_id: I32, tmp_cond_ptr_str: U8[]) //<
+      //< At the start of a switch's case block, it extracts the enum payload into the bindings
+      //<
+      //< r is the pattern node.
+    $p_start_idx: = 0
+    $has_payload: = false
+    $v_def: sema_type_def.Enum_variant$@ = null
+    vr: = resolve_match_pattern_variant(r, e_def)
+    if v_ref: = vr
+      if !e_def.is_scalar() && v_ref.p_start < r.children.len
+        has_payload = true
+        p_start_idx = v_ref.p_start
+        v_def = v_ref.def
+
+    if !has_payload
+      return
+
+    $field_idx: = 0
+    for $m: = p_start_idx; m < r.children.len; m += 1
+      bind_var: = r.get_child(m)
+      if bind_var.kind_id == .k_identifier && field_idx < v_def.payload_fields.len
+        field_def: = v_def.payload_fields.get(field_idx)
+        b_name: = bind_var.text
+        is_existing: = cg.has_local_slot(b_name, bind_var)
+        b_slot: = cg.local_slot_name(b_name, bind_var)
+
+        if !is_existing
+          cg.emit_alloca(b_slot, field_def.type_id)
+
+        payload_ptr: = cg.next_reg()
+        cg.s("    %\{payload_ptr\} = getelementptr inbounds ")
+        cg.t_gep(cond_type_id).s(", ptr ").s(tmp_cond_ptr_str).s(", i32 0, i32 1\n")
+
+        field_ptr: = cg.next_reg()
+        cg.s("    %\{field_ptr\} = getelementptr inbounds { ")
+        $is_first: = true
+        for pf in v_def.payload_fields
+          if !is_first
+            cg.s(", ")
+          cg.t(pf.type_id)
+          is_first = false
+        cg.s(" }, ptr %\{payload_ptr\}, i32 0, i32 \{field_idx\}\n")
+
+        field_val: = cg.next_reg()
+        cg.s("    %\{field_val\} = load ").t(field_def.type_id).s(", ptr %\{field_ptr\}\n")
+
+        cg.s("    store ").t(field_def.type_id).s(" %\{field_val\}, ptr ").s(b_slot).s("\n")
+
+        field_idx += 1
+
+  fn emit_llvm_assign(r: Ast_node$@, cg: Genllvm_ctx$@)
+    left: = r.get_assign_left()
+    right: = r.get_assign_right()
+    op_node: = r.get_assign_op()
+
+    if right == null && op_node == null
+      left.emit_llvm_expr(cg)
+    else if op_node != null
+      op: = op_node.text
+      if op.equals("=")
+        ptr_reg: = left.emit_llvm_lvalue(cg)
+        val_reg: = right.emit_llvm_expr(cg)
+        store_type_id: = left.type_id if left.type_id != 0 else right.type_id
+        cg.op_store(store_type_id, val_reg, ptr_reg)
+      else
+        ptr_reg: = left.emit_llvm_lvalue(cg)
+        left_val_reg: = cg.next_reg()
+        load_type_id: = left.type_id if left.type_id != 0 else right.type_id
+        cg.op_load(left_val_reg, load_type_id, ptr_reg)
+        div_op: = op.sub(0, 1) if op.equals("/=") || op.equals("%=") else ""
+        if gen_llvm_expr.takes_signed_div(cg, div_op, left.type_id, right)
+          res: = gen_llvm_expr.emit_llvm_signed_div(cg, div_op, cg.reg_str(left_val_reg),
+            left.type_id, right, r.loc)
+          cg.op_store(left.type_id, res, ptr_reg)
+          return
+
+        // The right-hand side of a `<<=` `>>=` is the shift amount, and of a `/=` `%=` the
+        // divisor. They go through the same check as the binary `<<` `>>` / `/` `%` (emitted
+        // unchecked, the values known only at run time would slip past it).
+        right_val: =
+          (right.emit_llvm_shift_amount(cg, left.type_id)
+          if op.equals("<<=") || op.equals(">>=")
+          else right.emit_llvm_divisor(cg, left.type_id)
+          if op.equals("/=") || op.equals("%=") else right.emit_llvm_expr(cg))
+        type_id: = left.type_id
+        is_float: = cg.env.is_float(type_id)
+        is_unsigned: = cg.env.is_unsigned(type_id)
+        // Pointer arithmetic (`p += i` / `p -= i`) moves the pointer by **a number of elements**,
+        // as the binary `+` `-` does. Sema checks that the amount is an integer (`ptr_step` in
+        // `../../sema/body/stmt.kspls`).
+        if cg.env.is_pointer(type_id)
+          if !op.equals("+=") && !op.equals("-=")
+            r.ice_panic("Genllvm ICE: Unhandled pointer assign operator")
+          res: = gen_llvm_expr.emit_llvm_ptr_step(cg, type_id, cg.reg_str(left_val_reg),
+            right.type_id, right_val, op.equals("-="))
+          cg.s("    store ptr ").s(res).s(", ptr ").s(ptr_reg).s("\n")
+        else
+          res_reg: = cg.next_reg()
+          cg.s("    %\{res_reg\} = ")
+          instr: = gen_llvm_expr.llvm_arith_instr(op.sub(0, op.len - 1), is_float, is_unsigned)
+          if instr.len == 0
+            r.ice_panic("Genllvm ICE: Unhandled assign operator")
+          cg.s(instr)
+
+          store_type_id2: = type_id if type_id != 0 else right.type_id
+          cg.t(store_type_id2).s(" %\{left_val_reg\}, ").s(right_val).s("\n")
+          cg.clear_scratch().s("%\{res_reg\}")
+          cg.op_store(store_type_id2, cg.scratch.slice(), ptr_reg)
+
+priv fn collect_match_cases(r: Ast_node$@, cg: Genllvm_ctx$@, e_def: sema_type_def.Enum_def$@,
+  cases: List<|Case_info|>$@, merge_lbl: I32): Match_default //<
+    //< It collects the Case_infos of a switch's cases and returns default's label and block.
+  $default_lbl: = merge_lbl
+  $default_block: Ast_node$@ = null
+  // Checking for a duplicate case value by walking all of cases (those collected so far) each
+  // time could be O(N^2) on a pathological switch with many case values (N comma-separated
+  // values in one case clause, say, or N case clauses), and the compile could effectively hang.
+  // A Map of the values already seen makes the check O(1).
+  seen_vals: = base_core.arena.create(Map<|I32, Bool|>.new(base_core.arena))
+
+  $i: Sz = 2
+  for i < r.children.len
+    child: = r.get_child(i)
+    if child.is_keyword("case")
+      block_lbl: = cg.next_label()
+      $block_node: Ast_node$@ = null
+      c_idx: = i + 1
+
+      for $j: = c_idx; j < r.children.len; j += 1
+        if r.get_child(j).kind_id == .k_stmt_block
+          block_node = r.get_child(j)
+          break
+        if r.get_child(j).is_keyword("case") || r.get_child(j).is_keyword("default")
+          break
+
+      for $j: = c_idx; j < r.children.len; j += 1
+        pn: = r.get_child(j)
+        if pn == block_node
+          break
+        if pn.is_keyword("case") || pn.is_keyword("default")
+          break
+
+        if pn.kind_id == .k_match_pattern ||
+          (pn.kind_id != .k_stmt_block && !pn.is_literal(","))
+          $pat_val: = 0
+          $resolved_as_variant: = false
+          vr: = resolve_match_pattern_variant(pn, e_def)
+          if v_ref: = vr
+            pat_val = v_ref.def.tag_value
+            resolved_as_variant = true
+
+          if !resolved_as_variant
+            $eval_target: = pn
+            if pn.kind_id == .k_match_pattern
+              switch pn.first_expr() case .some(fe)
+                eval_target = fe
+              case .none
+                eval_target = pn.get_child(0) if pn.children.len > 0 else null
+            pat_val = cg.sema.eval_constexpr_quiet(eval_target, 0)
+          // LLVM switch requires unique case values
+          is_dup: = seen_vals.get(pat_val) catch false
+          if !is_dup
+            seen_vals.set(pat_val, true)
+            cases
+              .push(Case_info::{ .val = pat_val, .lbl = block_lbl, .ast_node = pn,
+              .block_node = block_node })
+      i += 1
+      for i < r.children.len
+        c2: = r.get_child(i)
+        if c2 == block_node
+          i += 1
+          break
+        if c2.is_keyword("case") || c2.is_keyword("default")
+          break
+        i += 1
+      // The inner loop has already moved i to the next case/default, so running the trailing
+      // `i += 1` would skip the whole next case.
+      continue
+    if child.is_keyword("default")
+      default_lbl = cg.next_label()
+      for $j: = i + 1; j < r.children.len; j += 1
+        if r.get_child(j).kind_id == .k_stmt_block
+          default_block = r.get_child(j)
+          break
+      break
+
+    i += 1
+
+  return Match_default::{ .lbl = default_lbl, .block = default_block }

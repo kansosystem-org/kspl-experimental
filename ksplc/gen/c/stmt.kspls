@@ -1,0 +1,530 @@
+//< Generates C99 for statements
+//<
+//< It dispatches the control structures by kind_id. Expressions are in expr.kspls, declarations
+//< in decl.kspls.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/c_name" as base_c_name
+import "ksplc/base/core" as base_core
+import "ksplc/base/locate" as base_locate
+import "ksplc/base/mangle" as base_mangle
+import "ksplc/gen/c/ctx" { Genc_ctx }
+import "ksplc/gen/c/decl" as gen_c_decl
+import "ksplc/gen/c/expr" as gen_c_expr
+import "ksplc/gen/c/root" as gen_c_root
+import "ksplc/sema/body/call" as sema_body_call
+import "ksplc/sema/type/def" as sema_type_def
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" as sema_type_scope
+import "std/chars"
+import "std/str" { Str_builder }
+
+priv fn emit_assign_tail(c: Genc_ctx$@, left_node: Ast_node$@, dst_seq: Sz, op_text: U8[],
+  right_node: Ast_node$@) //<
+    //< It emits an assignment from its operator on, after the target was emitted
+    //<
+    //< For `<<=` `>>=` / `/=` `%=` it goes through the binary operators' check (emit_shift_amount
+    //< / emit_divisor / open_signed_div), or run-time values would slip past it. dst_seq names
+    //< the target's temporary (`_kspl_dst_N`), 0 the target itself.
+  div_op: =
+    op_text.sub(0, 1) if op_text.equals("/=") || op_text.equals("%=") else ""
+  if gen_c_expr.takes_signed_div(c, div_op, left_node.type_id, right_node)
+    c.s(" = ")
+    gen_c_expr.open_signed_div(c, div_op, left_node.type_id)
+    emit_assign_target(c, left_node, dst_seq)
+    right_node.close_signed_div(c)
+    return
+  c.s(" \{op_text\} ")
+  if !c.env.is_integer(left_node.type_id)
+    right_node.emit_expr(c)
+    return
+  if op_text.equals("<<=") || op_text.equals(">>=")
+    right_node.emit_shift_amount(c, left_node.type_id)
+    return
+  if op_text.equals("/=") || op_text.equals("%=")
+    right_node.emit_divisor(c, left_node.type_id)
+    return
+  right_node.emit_expr(c)
+
+priv fn emit_assign_target(c: Genc_ctx$@, left_node: Ast_node$@, dst_seq: Sz)
+  if dst_seq > 0
+    c.s("*_kspl_dst_\{dst_seq\}")
+  else
+    left_node.emit_expr(c)
+
+priv fn calls_statement_intrinsic(r: Ast_node$@): Bool //<
+  //< Whether r calls an intrinsic that returns no value or embeds raw code
+  //<
+  //< `__kspl_read_volatile` is not one: the value it reads may be discarded with `(void)()`.
+  if r == null || r.kind_id != .k_expr_postfix
+    return false
+  recv: = r.get_postfix_receiver()
+  if recv == null || recv.kind_id != .k_identifier
+    return false
+  intr: = sema_body_call.intrinsic_of(recv.text)
+  return intr != .not_intrinsic && intr != .read_volatile
+
+impl Ast_node
+  fn emit_stmt(r: Self$@, c: Genc_ctx$@)
+    if r == null
+      return
+
+    kind: = r.kind_id
+    if kind != .k_stmt_block && kind != .k_stmt_label
+      c.emit_line_directive(r)
+
+    switch kind case .k_stmt_block
+      r.emit_block_stmt(c)
+    case .k_stmt_return
+      r.emit_return_stmt(c)
+    case .k_decl_const, .k_decl_var
+      r.emit_var_decl(c)
+    case .k_stmt_if
+      r.emit_if_stmt(c)
+    case .k_stmt_expr
+      r.emit_assign_stmt(c)
+    case .k_stmt_loop
+      r.emit_loop_stmt(c)
+    case .k_stmt_match
+      r.emit_match_stmt(c)
+    case .k_stmt_break
+      r.emit_break_stmt(c)
+    case .k_stmt_continue
+      r.emit_continue_stmt(c)
+    case .k_stmt_goto
+      r.emit_goto_stmt(c)
+    case .k_stmt_label
+      r.emit_label_stmt(c)
+    case .k_stmt_throw
+      r.emit_throw_stmt(c)
+    case .k_stmt_fallback
+      r.emit_fallback_stmt(c)
+    case .k_stmt_defer
+      r.emit_defer_stmt(c)
+    default
+      r.emit_unknown_stmt(c)
+
+  priv fn emit_unknown_stmt(r: Ast_node$@, _c: Genc_ctx$@)
+    $msg: = Str_builder.new()
+    defer msg.free()
+    msg.s("emit_stmt: unhandled AST kind '").s(r.get_kind_str()).s("' reached Genc")
+    r.ice_panic(msg.slice())
+
+  priv fn emit_block_stmt(r: Ast_node$@, c: Genc_ctx$@)
+    c.s("{\n")
+    r.emit_block_inline(c)
+    c.s("}\n")
+  priv fn emit_block_inline(r: Ast_node$@, c: Genc_ctx$@) //<
+    //< It emits only the block's contents (its statements)
+    //<
+    //< The caller owns the enclosing {} (a switch's case uses it to avoid an extra nested block).
+    for child in r.children
+      child.emit(c)
+  priv fn block_ends_in_jump(r: Ast_node$@): Bool //<
+    //< Whether a block ends in an unconditional jump (return / throw / break / continue / goto)
+    //<
+    //< Then the following `break;` may be omitted.
+    for $i: = I32::r.children.len - 1; i >= 0; i -= 1
+      switch r.get_child(i).kind_id case .k_stmt_return, .k_stmt_throw, .k_stmt_break,
+        .k_stmt_continue, .k_stmt_goto
+        return true
+      case .k_empty, .k_stmt_label { // skip a trailing empty statement or label
+      } default
+        return false
+    return false
+
+  priv fn dest_has_ordered_subexpr(r: Ast_node$@): Bool //<
+    //< Whether the assignment target holds a subexpression whose evaluation order is visible
+    //<
+    //< Subscripts and call arguments must be evaluated before the right-hand side ("Evaluation
+    //< order" in docs/SPEC-language.md). A `.` or `$` only moves on to its receiver; a plain name
+    //< has nothing to fix.
+    if r == null || r.kind_id != .k_expr_postfix
+      return false
+    op: = r.get_postfix_op()
+    if op != null && (op.text.equals("[") || op.text.equals("("))
+      return true
+    return r.get_postfix_receiver().dest_has_ordered_subexpr()
+
+  priv fn emit_assign_stmt(r: Ast_node$@, c: Genc_ctx$@)
+    left_node: = r.get_assign_left()
+    right_node: = r.get_assign_right()
+    if left_node != null && left_node.kind_id == .k_empty
+      return
+
+    if right_node == null
+      // **Wrap only an expression that returns a value.** A `(void)` says "the return value is
+      // discarded"; on everything, the reader could no longer tell where that happens. An untyped
+      // expression (0) is wrapped, the safer guess.
+      real_id: = c.env.get_real_type(left_node.type_id)
+      needs_void: =
+        !calls_statement_intrinsic(left_node) && !sema_type_env.is_void(real_id)
+      if needs_void
+        c.s("(void)(")
+      left_node.emit_expr(c)
+      if needs_void
+        c.s(")")
+      c.s(";\n")
+      return
+
+    op_node: = r.get_assign_op()
+    op_text: = op_node.text if op_node != null else ""
+
+    // Caution: **Evaluate the target's subexpressions before the right-hand side.** C leaves the
+    // order open (clang takes the right first, gcc the left), so `a[i()] = v()` would depend on
+    // the compiler ("Evaluation order" in docs/SPEC-language.md). Taking the address first fixes
+    // the order.
+    if left_node.dest_has_ordered_subexpr()
+      c.assign_tmp_seq += 1
+      seq: = c.assign_tmp_seq
+      // Caution: **Do not use clear_scratch to build a name.** scratch is shared, and a caller
+      // can still be borrowing a name from it while this body is emitted.
+      // **Take the type from the memory, not the target expression**: a KSPL `I32@` can point at
+      // memory genc typed `I32 *`.
+      c.s("{ ").t(c.env.strip_const_deep(left_node.type_id)).s("* _kspl_dst_\{seq\} = &(")
+      left_node.emit_expr(c)
+      c.s("); ")
+      emit_assign_target(c, left_node, seq)
+      emit_assign_tail(c, left_node, seq, op_text, right_node)
+      c.s("; }\n")
+      return
+
+    left_node.emit_expr(c)
+    emit_assign_tail(c, left_node, 0, op_text, right_node)
+    c.s(";\n")
+
+  priv fn emit_if_stmt(r: Ast_node$@, c: Genc_ctx$@)
+    cond_node: = r.get_if_cond()
+    then_block: = r.get_if_then_block()
+    else_block: = r.get_if_else_block()
+
+    c.s("if (")
+    cond_node.emit_expr(c)
+    c.s(") ")
+
+    if then_block != null
+      then_block.emit(c)
+    c.s("\n")
+    if else_block != null
+      c.s("else ")
+      else_block.emit(c)
+
+  priv fn emit_var_decl(r: Ast_node$@, c: Genc_ctx$@)
+    is_const: = r.kind_id == .k_decl_const
+    id_node: = r.get_var_decl_id()
+    type_node: = r.get_var_decl_type_node()
+    expr_node: = r.get_var_decl_expr()
+    if id_node == null || id_node.kind_id == .k_empty
+      return
+
+    var_id: = id_node.text
+    inferred_id: =
+      (expr_node.type_id
+      if r.type_id == 0 && expr_node != null && expr_node.kind_id != .k_empty else r.type_id)
+
+    // const_goes_* (gen/c/decl.kspls) decides where C's `const` goes, shared with the forward
+    // declarations. Where the type is not known (inferred_id == 0), it goes before the type name.
+    $const_before_type: = is_const
+    const_in_declarator: = is_const && type_node.const_goes_in_declarator()
+    if is_const && inferred_id != 0
+      const_before_type = type_node.const_goes_before_type(c, inferred_id)
+
+    // A top-level definition from std is made weak (`--omit-runtime`; the reason is at
+    // emit_fn_def in gen/c/decl.kspls).
+
+    // Caution: Never put it on a local variable (a local has no linkage, so it is a C error).
+    // A `pub const` is weak under `--emit-decls` too; with one definition, nothing changes.
+    is_published_const: =
+      is_const && base_core.config.decls_path.len > 0 &&
+      r.get_visibility() == sema_type_scope.Visibility.public
+    if c.top_level_var &&
+      ((base_core.config.weak_std && base_locate.is_std_file(r.loc.file())) || is_published_const)
+      c.s("KSPL_WEAK ")
+    if const_before_type
+      c.s("const ")
+
+    r.emit_attributes(c)
+    // A name starting with '_' (generated, or deliberately unused) gets C's warning suppressed.
+    if var_id.len > 0 && (var_id.ptr + 0)$ == '_'
+      c.s("KSPL_UNUSED ")
+
+    is_typed: = type_node != null && type_node.kind_id != .k_empty
+    has_init: = expr_node != null && expr_node.kind_id != .k_empty
+
+    if is_typed
+      type_node.emit_c_decl(c, var_id, const_in_declarator)
+    else
+      r.ice_assert(inferred_id != 0, "Genc ICE: Variable type missing.")
+      c.map_c_type_to(inferred_id, c)
+      c.s(" ").nm(var_id)
+
+    if has_init
+      c.s(" = ")
+      // Caution: **Set the flag for a top-level `const`'s initializer** (the reason is at
+      // Genc_ctx.const_init_depth). A local variable's initializer is an ordinary expression.
+      in_const_init: = c.top_level_var && is_const
+      if in_const_init
+        c.const_init_depth += 1
+      expr_node.emit_expr(c)
+      if in_const_init
+        c.const_init_depth -= 1
+      c.s(";\n")
+    else if !is_const
+      c.s(" = ")
+      c.emit_zero_init(inferred_id, r)
+      c.s(";\n")
+    else
+      c.s(";\n")
+
+  priv fn emit_loop_stmt(r: Ast_node$@, c: Genc_ctx$@)
+    r.ice_assert(r.children.len >= 5, "emit_loop_stmt: stmt_loop must have 5 children")
+    init_node: = r.get_loop_init()
+    cond_node: = r.get_loop_cond()
+    step_node: = r.get_loop_step()
+    block_node: = r.get_loop_block()
+    has_init: = init_node != null && init_node.kind_id != .k_empty
+
+    if has_init
+      c.s("    {\n")
+      if init_node.kind_id == .k_loop_init
+        for child in init_node.children
+          child.emit(c)
+      else
+        init_node.emit(c)
+
+    c.s("    for (; ")
+    if cond_node != null && cond_node.kind_id != .k_empty
+      cond_node.emit_expr(c)
+    c.s("; ")
+
+    if step_node != null && step_node.kind_id != .k_empty
+      limit: = step_node.children.len if step_node.kind_id == .k_loop_step else 1
+      for i in Range.asc(limit)
+        if i > 0
+          c.s(", ")
+        step_ch: =
+          step_node.get_child(i) if step_node.kind_id == .k_loop_step else step_node
+        if step_ch.kind_id == .k_stmt_expr && step_ch.get_assign_right() != null
+          step_left: = step_ch.get_assign_left()
+          step_left.emit_expr(c)
+          op_node: = step_ch.get_assign_op()
+          op_text: = op_node.text if op_node != null else ""
+          emit_assign_tail(c, step_left, 0, op_text, step_ch.get_assign_right())
+        else
+          step_ch.emit_expr(c)
+    c.s(") ")
+
+    if block_node != null && block_node.kind_id != .k_empty
+      block_node.emit(c)
+    else
+      c.s("{}\n")
+
+    if has_init
+      c.s("    }\n")
+
+  priv fn emit_match_stmt(r: Ast_node$@, c: Genc_ctx$@)
+    cond_node: = r.get_match_cond()
+    // The switch and its payload bindings write the subject more than once, and anything but a
+    // name would come out as broken C such as `switch (.tag)`; Lower binds it to a temporary.
+    if !cond_node.is_plain_name()
+      r.ice_panic("genc: a switch's subject reached the backend as other than a plain name")
+    $cond_slice: = cond_node.get_path_or_ident_name()
+    // Caution: **Emit a name that equals a reserved word in its escaped form.** The declaration
+    // is escaped (`../../base/c_name.kspls`), so the plain name here makes **the C compiler say
+    // "undeclared"**, which is no KSPL diagnostic and does not say what is wrong: a local named
+    // `near` is declared as `near_kw`, and a `switch (near)` then fails.
+    if cond_slice.needs_c_escape()
+      $safe: = cond_slice.c_safe_name()
+      defer safe.free()
+      cond_slice = base_core.arena.dup_str(safe.slice())
+    c.s("    switch (").s(cond_slice)
+
+    enum_name: = c.env.get_str(c.env.get_real_type(cond_node.type_id))
+    $mangled_enum_name: = enum_name.mangle_c_identifier()
+    safe_enum_name: = mangled_enum_name.slice()
+
+    $enum_def_ptr: sema_type_def.Enum_def$@ = null
+    if d: = c.env.get_enum_def(enum_name)
+      enum_def_ptr = d
+    is_enum: = enum_def_ptr != null
+    is_scalar: = is_enum && enum_def_ptr.is_scalar()
+
+    if is_enum && !is_scalar
+      c.s(".tag")
+    c.s(") {\n")
+
+    $has_default: = false
+    for $i: Sz = 2; i < r.children.len; i += 1
+      child_node: = r.get_child(i)
+      if child_node.is_keyword("case")
+        i = r.emit_match_case(c, i, cond_slice, is_enum, enum_def_ptr, safe_enum_name)
+      else if child_node.is_keyword("default")
+        has_default = true
+        c.s("    default:\n")
+        $def_block: Ast_node$@ = null
+        for $k: = i + 1; k < r.children.len; k += 1
+          if r.get_child(k).kind_id == .k_stmt_block
+            def_block = r.get_child(k)
+            break
+        $def_jumps: = false
+        if def_block != null
+          def_block.emit(c)
+          def_jumps = def_block.block_ends_in_jump()
+        if !def_jumps
+          c.s("        break;\n")
+        i += 1
+    // sema (process_match_exhaustiveness) accepts an enum switch without an explicit 'default'
+    // only if it covers every variant, so this branch is never reached at run time. But a scalar
+    // enum is emitted as a plain int32_t (for readability and interoperability; see
+    // ksplc/gen/c/decl.kspls), so the C compiler does not know that. Even for an exhaustive switch
+    // it wrongly concludes "control can reach the function's end" and warns with -Wreturn-type.
+    if is_enum && !has_default
+      c.s("    default: __builtin_unreachable();\n")
+    c.s("    }\n")
+    mangled_enum_name.free()
+  priv fn emit_case_payload_bindings(r: Ast_node$@, c: Genc_ctx$@,
+    enum_def_ptr: sema_type_def.Enum_def$@, cond_slice: U8[]) //<
+      //< It emits a case's payload binding `Type name = cond.payload.variant.field;`.
+      //<
+      //< self is the first pattern (a k_match_pattern).
+    if r == null || r.kind_id != .k_match_pattern || r.children.len == 0
+      return
+    $v_name_node: Ast_node$@ = null
+    $payload_start_idx: Sz = 0
+    switch r.extract_match_variant() case .variant(vn, ps)
+      v_name_node = vn
+      payload_start_idx = ps
+    default
+      return
+    if v_name_node == null
+      return
+    variant_name: = v_name_node.text
+    $variant_def: sema_type_def.Enum_variant$@ = null
+    switch enum_def_ptr.get_variant(variant_name) case .some(d)
+      variant_def = d
+    case .none
+      return
+    $field_idx: Sz = 0
+    for $k: = payload_start_idx; k < r.children.len; k += 1
+      bind_var: = r.get_child(k)
+      if bind_var.kind_id != .k_identifier
+        continue
+      if field_idx < variant_def.payload_fields.len
+        field_def: = variant_def.payload_fields.get(field_idx)
+        bv_text: = bind_var.text
+        // A payload variable starting with '_' gets its unused warning suppressed too.
+        if bv_text.len > 0 && (bv_text.ptr + 0)$ == '_'
+          c.s("        KSPL_UNUSED ")
+        c.map_c_type_to(field_def.type_id, c)
+        c.s(" ")
+        c.nm(bv_text)
+        c.s(" = \{cond_slice\}.payload.\{variant_name\}.")
+        c.nm(field_def.name)
+        c.s(";\n")
+      field_idx += 1
+
+  priv fn emit_match_case(r: Ast_node$@, c: Genc_ctx$@, case_idx: Sz, cond_slice: U8[],
+    is_enum: Bool, enum_def_ptr: sema_type_def.Enum_def$@, safe_enum_name: U8[]): Sz
+    $pat_idx: = case_idx + 1
+    r.ice_assert(pat_idx < r.children.len, "emit_match_case: case missing pattern")
+    first_pattern: = r.get_child(pat_idx)
+
+    for pat_idx < r.children.len
+      pat_node: = r.get_child(pat_idx)
+      if pat_node.kind_id == .k_match_pattern
+        pat_node.ice_assert(pat_node.children.len > 0, "emit_match_case: empty match_pattern")
+
+        $is_v_match: = false
+        switch pat_node.extract_match_variant() case .variant(v_name_node, _p_start)
+          if is_enum && v_name_node != null
+            variant_name: = v_name_node.text
+            $mangled_variant: = variant_name.mangle_c_identifier()
+            c.s("    case kspl_\{safe_enum_name\}_\{mangled_variant.slice()\}:\n")
+            mangled_variant.free()
+            is_v_match = true
+        default {}
+
+        if !is_v_match
+          c.s("    case ")
+          $expr_node: Ast_node$@ = null
+          switch pat_node.first_expr() case .some(fe)
+            expr_node = fe
+          case .none
+            expr_node = pat_node.get_child(0)
+          expr_node.emit_expr(c)
+          c.s(":\n")
+        pat_idx += 1
+      else if pat_node.is_literal(",")
+        pat_idx += 1
+      else if pat_node.kind_id != .k_stmt_block && pat_node.kind_id != .k_keyword
+        c.s("    case ")
+        pat_node.emit_expr(c)
+        c.s(":\n")
+        pat_idx += 1
+      else
+        break
+
+    c.s("    {\n")
+    if is_enum
+      first_pattern.emit_case_payload_bindings(c, enum_def_ptr, cond_slice)
+
+    r.ice_assert(pat_idx < r.children.len, "emit_match_case: case missing block")
+    // The body goes inline inside the case's {}, not in a second block.
+    body: = r.get_child(pat_idx)
+    body.emit_block_inline(c)
+    if !body.block_ends_in_jump()
+      c.s("        break;\n")
+    c.s("    }\n")
+    return pat_idx
+
+  priv fn emit_return_stmt(r: Ast_node$@, c: Genc_ctx$@)
+    expr_node: = r.get_return_expr()
+    if expr_node != null
+      c.s("    return ")
+      expr_node.emit_expr(c)
+      c.s(";\n")
+    else
+      is_res: = c.env.is_result(c.current_ret_id)
+      if is_res
+        c.s("    return (").t(c.current_ret_id).s("){ .is_err = false };\n")
+      else
+        c.s("    return;\n")
+
+  priv fn emit_throw_stmt(r: Ast_node$@, c: Genc_ctx$@)
+    expr_node: = r.get_throw_expr()
+    if expr_node != null
+      is_res: = c.env.is_result(c.current_ret_id)
+      if is_res
+        // A new error starts the chain again; a `?`'s propagation (lower sets ival=1) extends it.
+        // Extending only would mix a handled failure's frame into the next error's trace.
+
+        c.s("    KSPL_RECORD_TRACE();\n" if r.ival == 1 else "    KSPL_START_TRACE();\n")
+        c.s("    return (").t(c.current_ret_id).s("){ .is_err = true, .error_code = ")
+        expr_node.emit_expr(c)
+        c.s(" };\n")
+      else
+        c.s("    exit(")
+        expr_node.emit_expr(c)
+        c.s(");\n")
+
+  priv fn emit_break_stmt(_r: Ast_node$@, c: Genc_ctx$@)
+    c.s("    break;\n")
+  priv fn emit_continue_stmt(_r: Ast_node$@, c: Genc_ctx$@)
+    c.s("    continue;\n")
+
+  priv fn emit_goto_stmt(r: Ast_node$@, c: Genc_ctx$@)
+    label_node: = r.get_goto_label()
+    if label_node != null
+      c.s("    goto \{label_node.text\};\n")
+
+  priv fn emit_label_stmt(r: Ast_node$@, c: Genc_ctx$@)
+    label_node: = r.get_goto_label()
+    if label_node != null
+      c.s("    \{label_node.text\}:\n        ;\n")
+
+  priv fn emit_fallback_stmt(r: Ast_node$@, _c: Genc_ctx$@)
+    r.ice_panic("Lowering missed: 'stmt_fallback' reached Genc")
+  priv fn emit_defer_stmt(r: Ast_node$@, _c: Genc_ctx$@)
+    r.ice_panic("Lowering missed: 'stmt_defer' reached Genc")

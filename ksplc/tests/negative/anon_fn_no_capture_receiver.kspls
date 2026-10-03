@@ -1,0 +1,25 @@
+//< From an anonymous function written inside a method, the receiver is not visible
+//<
+//< It is lifted to a top-level function that does not receive `Self`, so `r` is a name that is
+//< nowhere. What is named must be **the side that could not be resolved** (`r`): naming the `v` of
+//< `r.v` casts suspicion on a name that exists and gives advice that cannot be acted on.
+// EXPECT: an anonymous function cannot capture 'r' from the enclosing scope
+// EXPECT-NOT: is neither a known import alias nor a type
+import "std/io"
+
+priv struct Box
+  priv v: I32
+
+priv fn take(f: fn(x: I32): Bool): Bool
+  return f(9)
+
+impl Box
+  fn over_v(r: Self@): Bool
+    return take(fn(x: I32): Bool {
+      return x > r.v;
+    })
+
+fn main(): I32
+  b: = Box::{ .v = 7 }
+  io.out().s("\{b.over_v()\}\n")
+  return 0

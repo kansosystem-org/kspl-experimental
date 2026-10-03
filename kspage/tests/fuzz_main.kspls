@@ -1,0 +1,74 @@
+//< Feeds broken documents to kspage (`make test-fuzz`)
+//<
+//< **The fuzzed program opens a document and lays it out** ([`open_prog.kspls`](open_prog.kspls)):
+//< a huge number such as `span_cols` must not keep the layout from returning (the seeds are at
+//< `collect_seeds`).
+//< Usage: `ksplc run tests/fuzz_main.kspls <opener> <work folder> [seed folder ...]`, with
+//< `--trials` and `--seed`; the Makefile builds the opener.
+import "kspage/tests/seeds"
+import "std/argp"
+import "std/ds" { List }
+import "std/fuzz"
+import "std/mem" { Arena }
+import "std/verdict"
+
+priv const default_seed: I64 = 20260830
+priv const default_trials: I64 = 300
+
+priv const trial_timeout_ms: I32 = 10000 //<
+  //< The wait before a run counts as one that does not end
+  //<
+  //< Shorter than for ksplc: one document takes under a second on sane input.
+
+priv const max_seed_bytes: I64 = 64I64 * 1024I64 //< the size limit for a file used as a seed
+  //<
+  //< Caution: **Do not drop the small end.** A file of a few bytes has its own ways of breaking.
+
+priv const kinds: fuzz.Input_kind[4] = ::{ //<
+  //< The kinds of document the opener reads (`open_prog <kind> <file>`), and their files' endings
+  fuzz.Input_kind::{ .name = "doc", .ext = ".kspage" },
+  fuzz.Input_kind::{ .name = "md", .ext = ".md" },
+  fuzz.Input_kind::{ .name = "csv", .ext = ".csv" },
+  fuzz.Input_kind::{ .name = "txt", .ext = ".txt" },
+}
+
+priv const reach_floor_div: Sz = 10 //<
+  //< At least one round in this many must be opened and laid out, not refused
+  //<
+  //< Caution: **Do not raise it to tighten the check**: it only shows that fuzzing works.
+
+priv fn push_files(out: List<|fuzz.Sample|>$@, dirs: U8[][], ending: U8[], kind: U8[],
+  arena: Arena$@) //<
+    //< The files under `dirs` whose names end with `ending`, as seeds of that kind
+  for f in fuzz.gather(dirs, U8[][]::{ ending }, max_seed_bytes, arena)
+    out
+      .push(fuzz.Sample::{ .kind = kind, .name = f.name, .data = f.data, .built = false })
+
+priv fn collect_seeds(dirs: U8[][], arena: Arena$@): List<|fuzz.Sample|> //<
+  //< The document written on the spot, the Markdown under `dirs`, and this package's sources
+  //<
+  //< Caution: **Mix real files in** — from generated text alone, mutation misses the shapes a
+  //< person writes (tables, quotations, nesting).
+  $out: = List<|fuzz.Sample|>.new(arena)
+  seeds.built_seeds(out@, "an assembled document", arena)
+  push_files(out@, dirs, ".md", "md", arena)
+  push_files(out@, U8[][]::{ "." }, ".kspls", "txt", arena)
+  return out
+
+fn main(): I32
+  verdict.begin("fuzz")
+  arena: = Arena.new(512 * 1024 * 1024)
+  defer arena.free()
+  $o: = fuzz.Opts::{ .trials = default_trials, .seed = default_seed }
+  p: = argp.Parser.create("fuzz_main", "scatters broken documents at kspage", arena)
+  s: =
+    fuzz.setup(p, o@, "ksplc run tests/fuzz_main.kspls", "<opener>", true, arena) catch why
+    return verdict.fatal(why)
+  c: = fuzz.Campaign::{ .subject = "kspage", .argv = U8[][]::{ s.exe }, .tell_kind = true,
+    .after = U8[][]::{}, .work = s.work, .kinds = fuzz.Input_kind[]::kinds, .in_turn = false,
+    .wait_ms = trial_timeout_ms, .reach_div = reach_floor_div, .again = s.again }
+  $all: = collect_seeds(s.dirs, arena)
+  $pool: = fuzz.check_seeds(c@, all@, arena)
+  fuzz.scatter(c@, pool@, "documents", o, arena) catch why
+    return verdict.fatal(why)
+  return verdict.finish()

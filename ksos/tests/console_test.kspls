@@ -1,0 +1,39 @@
+import "ksos/demo/common/semihost_console" as con
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// ksos/demo/common/semihost_console: what the Cortex-M demos print.
+//
+// The two characters' worth of semihosting are stood in for here, so what the console writes is
+// read back on a host: `ksos_console_char` collects into `said` instead of trapping to a debugger.
+// ==========================================
+$said: U8[64] = ::{}
+$said_len: Sz = 0
+
+#export
+fn ksos_console_char(c: U8) //< the host's stand-in for semihosting's SYS_WRITEC
+  if said_len < said.len
+    said[said_len] = c
+    said_len += 1
+
+#export
+fn ksos_qemu_exit() {} //< the host's stand-in for semihosting's SYS_EXIT; nothing to end
+
+priv fn said_text(): U8[]
+  return U8[]::{ .ptr = said[0]@, .len = said_len }
+
+fn test_console_prints_i32_min() //<
+  //< The console prints I32's minimum with its own digits
+  //<
+  //< Caution: **Negating the minimum gives the minimum back**, so a printer that negates first
+  //< writes a sign and then a number that is not the value.
+  verdict.start("[ksos/console] printing I32's minimum in decimal test...")
+  min: I32 = -2147483647 - 1
+  said_len = 0
+  con.out().s("\{min\}")
+  assert(said_text().equals("-2147483648"), "I32's minimum is printed as -2147483648")
+  said_len = 0
+  con.print_summary("counts")
+  assert(said_text().equals("=== counts: 0 OK, 0 FAIL ===\n"), "the summary line keeps its shape")
+  verdict.pass("the console prints every I32, its minimum included.")

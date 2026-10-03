@@ -1,0 +1,146 @@
+//< Checks that the record in the device survives a power cut
+//<
+//< Stage 8 in `ksos/docs/HOWTO-bring-up.md`.
+//< It makes the last 64KB of the RP2040's QSPI Flash an append-only record, and **adds one entry
+//< every time the power comes back on**. If the `boot #N` shown on the line keeps growing, the
+//< record survives power cuts. **The check is "N grows".** Reading and writing within one start-up
+//< would pass on RAM too.
+
+// ==========================================
+// **The first time, it starts by erasing the region.**
+// Caution: Do not add one per round — then "did it survive a power cut" could not be told apart
+// from "did it survive a round".
+// What each line it prints confirms is in "Stage 8 — leaving a record inside the device" in
+// ksos/docs/HOWTO-bring-up.md.
+// ==========================================
+import "ksdb/log" as ksdblog
+import "ksos/demo/rp2040/common/bringup" as boot
+import "ksos/demo/rp2040/common/console" as con
+import "ksos/demo/rp2040/common/records"
+import "ksos/drivers/rp2040/flash"
+import "std/bytes"
+
+const kind_boot: U16 = 1 //< the record kinds
+  //<
+  //< The caller defines their meaning (ksdb only matches them). 0 is the marker, so it is not used
+  //< (`ksos/demo/rp2040/common/records`).
+const kind_span: U16 = 2
+
+const marker: U8[] = "ksdb1" //< the marker that identifies this writer
+  //<
+  //< Caution: **Give it a different name from the car's firmware.** They use the same region, so
+  //< with the same name each reads the other's record as its own.
+
+const span_len: Sz = 300 //< a length that crosses a page (256B)
+  //<
+  //< **Make it cross.** Without crossing, the path that programs it page by page is never
+  //< exercised.
+
+$span_buf: U8[300] = ::{}
+$read_buf: U8[300] = ::{}
+
+// The first round's result. Later rounds report it again.
+priv $opened: Bool = false
+priv $usable: Bool = false
+priv $boot: U32 = 0
+priv $span_ok: Bool = false
+
+priv fn say(ln: con.Line$@, detail: U8[])
+  ln.reset()
+  ln.str("[ksdb] ")
+  ln.str(detail)
+  _sent: = ln.flush()
+  boot.pump(20)
+
+priv fn span_byte(i: Sz): U8 //< the page-crossing record's content, derived from the position
+  //<
+  //< Caution: Do not fill it with a constant. A copy from the wrong offset would go unnoticed.
+  return U8::(U32::i * 7 + 11)
+
+priv fn bump_boot_count(ln: con.Line$@, lg: ksdblog.Log$@): U32 //<
+  //< Advances the start-up count by one
+  //<
+  //< It returns the new count (0 means it failed).
+  prev: U8[4] = ::{}
+  n: = lg.last(kind_boot, U8$[]::prev) catch 0
+  $count: U32 = 0
+  if n == 4
+    count = (U8[]::prev).get_u32_le(0)
+  count += 1
+  next: U8[4] = ::{}
+  nv: = U8$[]::next
+  nv.put_u32_le(0, count)
+  lg.append(kind_boot, U8[]::next) catch
+    say(ln, "FAIL append boot count (region full?)")
+    return 0
+  return count
+
+priv fn check_span(ln: con.Line$@, lg: ksdblog.Log$@): Bool //<
+  //< Checks that a record crossing a page makes the round trip without a single byte garbled
+  sv: = U8$[]::span_buf
+  for $i: Sz = 0; i < span_len; i += 1
+    sv[i] = span_byte(i)
+  lg.append(kind_span, U8[]::span_buf) catch
+    say(ln, "FAIL append span")
+    return false
+  n: = lg.last(kind_span, U8$[]::read_buf) catch
+    say(ln, "FAIL read span")
+    return false
+  if n != span_len
+    say(ln, "FAIL span length")
+    return false
+  for $i: Sz = 0; i < span_len; i += 1
+    if read_buf[i] != span_byte(i)
+      ln.reset()
+      ln.str("[ksdb] FAIL span byte at ")
+      ln.u32(U32::i)
+      _sent: = ln.flush()
+      return false
+  return true
+
+priv fn report(ln: con.Line$@, lg: ksdblog.Log$@)
+  $count: Sz = 0
+  $it: = lg.iter()
+  for it.next()
+    count += 1
+  ln.reset()
+  ln.str("[ksdb] boot #")
+  ln.u32(boot)
+  ln.str(" (records=")
+  ln.u32(U32::count)
+  ln.str(", used=")
+  ln.u32(U32::lg.used())
+  ln.str("/")
+  ln.u32(U32::flash.region_size)
+  ln.str(")")
+  _sent: = ln.flush()
+  boot.pump(20)
+
+priv fn open_once(ln: con.Line$@) //< writes on the first round only
+  //<
+  //< It scans the region on every open (it remembers no position, so even after a failed run it
+  //< matches the device).
+  say(ln, "claiming the flash region")
+  if !records.claim(marker)
+    say(ln, "FAIL cannot claim the flash region (boot ROM functions? erase?)")
+    return
+  if records.wiped()
+    say(ln, "no marker -> erased the region (first use, or another writer was here)")
+  lg: = records.handle()
+  boot = bump_boot_count(ln, lg)
+  if boot == 0
+    return
+  span_ok = check_span(ln, lg)
+  usable = true
+
+fn run(ln: con.Line$@)
+  if !opened
+    opened = true
+    open_once(ln)
+  if !usable
+    say(ln, "FAIL the region is unusable (the reason is in the first round)")
+    return
+  if span_ok
+    say(ln, "span ok (300B record crossing a page boundary)")
+  report(ln, records.handle())
+  say(ln, "power-cycle the board: boot # must keep going up")

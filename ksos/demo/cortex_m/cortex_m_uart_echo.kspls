@@ -1,0 +1,42 @@
+//< ARM Cortex-M bare metal: a probe showing UART0 reception (RX)
+//<
+//< It receives bytes from the CMSDK APB UART0 through ksos/drivers/mps2/uart and sends each one
+//< back (a loopback echo), until it receives a newline (\n). It shows that UART0's RX receives
+//< what the host sends (ksos/demo/cortex_m/cortex_m_uart_probe.kspls shows only TX).
+import "ksos/demo/common/semihost_console" as con
+import "ksos/drivers/mps2/uart"
+import "ksos/kernel/task" + { Task }
+
+$tcb_probe: Task
+$stack_probe: U8[4096]
+
+priv const max_idle_rounds: Sz = 12 //< how many times getc() may return nothing in a row
+  //<
+  //< Caution: **Do not reuse a wait for a peripheral as the wait for a host.**
+  //< getc()'s limit is mmio.poll_timeout_iters (an iteration count), sized for a register
+  //< that changes within a few microseconds. The interrupt version (cortex_m_uart_irq_echo) waits
+  //< on WFI with no limit and relies on the outer timeout; this one stops after a count, so it
+  //< ends even when run by hand.
+
+fn uart_echo_task(_arg: Void$@): Void
+  con.puts("[semihosting] Kanso OS UART0(RX) echo probe starting...\n")
+  uart.init()
+
+  $idle_rounds: Sz = 0
+  for
+    switch uart.getc() case .none
+      idle_rounds += 1
+      if idle_rounds >= max_idle_rounds
+        con.puts("[semihosting] UART0 getc() timed out, aborting echo.\n")
+        break
+    case .some(c)
+      idle_rounds = 0 // each received byte restarts the count (a pause partway does not give up)
+      uart.putc(c)
+      if c == '\n'
+        break
+
+  con.puts("[semihosting] UART0(RX) echo probe done.\n")
+// The bare-metal entry called from startup.S.
+#export
+fn ksos_main()
+  task.run_single_task(tcb_probe@, U8$[]::stack_probe, uart_echo_task, "uart_echo", con.exit)

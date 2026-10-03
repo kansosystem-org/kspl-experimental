@@ -1,0 +1,223 @@
+//< Splits a source's text into token roles (for coloring)
+//<
+//< It is hand-written, not a grammar of regular expressions (which other editors' users call
+//< "hard to write and hard to fix"). **Only one state crosses lines** (`Carry`).
+import "std/chars"
+import "std/str"
+
+enum Role //< a token's role
+  //<
+  //< **Add no more than these** (each one added means knowing more of the grammar).
+  plain //< text that is nothing in particular (a symbol, a space, a name)
+  comment //< from `//` to the line's end
+  text //< `"…"` and `'…'`
+  number
+  word //< that language's words (`fn` / `if` / `U8` and the like)
+
+impl Role
+  fn same_role(a: Self, b: Role): Bool //< whether the role is the same
+    //<
+    //< It compares the names, not numbers (the reason is at `same_arrange` in `style.kspls`).
+    return a.variant_name().equals(b.variant_name())
+
+  fn role_ink(r: Self, dark: Bool): Option<|U32|> //< the color for each role
+    //<
+    //< Caution: **Do not store the color in two places**: it is **chosen from the background** the
+    //< theme gave the style. A theme-side list (VS Code's tokenColors) **adds one more thing to
+    //< save**, and the two colors drift apart.
+    switch r case .plain
+      return Option<|U32|>.none
+    case .comment
+      return Option<|U32|>.some(0x6a9955U32 if dark else 0x6a737dU32)
+    case .text
+      return Option<|U32|>.some(0xce9178U32 if dark else 0x032f62U32)
+    case .number
+      return Option<|U32|>.some(0xb5cea8U32 if dark else 0x005cc5U32)
+    case .word
+      return Option<|U32|>.some(0x569cd6U32 if dark else 0xd73a49U32)
+
+// KSPL's words.
+// Caution: **This is a copy**: kspage cannot import ksplc
+// ([`../../docs/SPEC-documents.md`](../../docs/SPEC-documents.md)), and a copy drifts silently;
+// **a check fails once it drifts** (`tests/suite/conventions_test.kspls`).
+priv const kspl_words: U8[][45] = ::{ "Bool", "F32", "F64", "I16", "I32", "I64", "I8", "Sz", "U16",
+    "U32", "U64", "U8", "Void", "as", "break", "case", "catch", "const", "continue", "default",
+    "defer", "else", "embed", "enum", "extern", "fallback", "false", "fn", "for", "if", "impl",
+    "import", "in", "null", "offsetof", "priv", "pub", "return", "sizeof", "struct", "switch",
+    "throw", "trait", "true", "typedef",
+}
+
+// C's words. **Their source is the standard** (C99's keywords), outside this repository. Type
+// names (`size_t`) are not words.
+priv const c_words: U8[][37] = ::{ "auto", "break", "case", "char", "const", "continue", "default",
+    "do", "double", "else", "enum", "extern", "float", "for", "goto", "if", "inline", "int", "long",
+    "register", "restrict", "return", "short", "signed", "sizeof", "static", "struct", "switch",
+    "typedef", "union", "unsigned", "void", "volatile", "while", "_Bool", "_Complex", "_Imaginary",
+}
+
+// JavaScript's words. **Their source is a standard too** (ECMAScript's reserved words and common
+// values).
+priv const js_words: U8[][43] = ::{ "async", "await", "break", "case", "catch", "class", "const",
+    "continue", "debugger", "default", "delete", "do", "else", "export", "extends", "false",
+    "finally", "for", "function", "get", "if", "import", "in", "instanceof", "let", "new", "null",
+    "of", "return", "set", "static", "super", "switch", "this", "throw", "true", "try", "typeof",
+    "undefined", "var", "void", "while", "yield",
+}
+
+priv fn kind_of(name: U8[]): Sz //< the language's number
+  //<
+  //< **0 means "unknown"** (it does not split on a guess).
+  //< The name is the style's name: the extension, or the language a Markdown fence declared ("What
+  //< a Markdown round trip drops" in `../docs/DESIGN.md`).
+  // Both KSPL notations are colored by the same table ("The indentation notation (`.kspls`)" in
+  // `../../docs/DESIGN.md`).
+  // Caution: **List both**, or the default notation opens with no color at all.
+  if name.equals("kspls") || name.equals("kspl")
+    return 1
+  if name.equals("c") || name.equals("h")
+    return 2
+  if name.equals("js") || name.equals("mjs") || name.equals("javascript")
+    return 3
+  return 0
+
+fn colored(name: U8[]): Bool //< whether the language of that name can be colored
+  //<
+  //< **An unknown name gives false.**
+  return kind_of(name) > 0
+
+priv fn noted_across(kind: Sz): Bool //<
+  //< Whether the language has a block comment that crosses lines (`/* */`)
+  //<
+  //< **KSPL has none** (its only comment is `//`).
+  return kind >= 2
+
+priv fn quoted_across(kind: Sz): Bool //<
+  //< Whether the language has a string that crosses lines (JavaScript's `` ` ``)
+  return kind == 3
+
+priv fn worded(name: U8[], word: U8[]): Bool //< whether it is a keyword of that language
+  kind: = kind_of(name)
+  if kind == 1
+    return listed(U8[][]::kspl_words, word)
+  if kind == 2
+    return listed(U8[][]::c_words, word)
+  if kind == 3
+    return listed(U8[][]::js_words, word)
+  return false
+
+priv fn listed(words: U8[][], word: U8[]): Bool
+  for $i: Sz = 0; i < words.len; i += 1
+    if words[i].equals(word)
+      return true
+  return false
+
+priv fn named(c: U8): Bool //< whether it is a character a name can use
+  //<
+  //< **Digits are included** (they can appear from a name's second character on).
+  return c.is_alnum() || c == '_'
+
+enum Carry //< the state left at a line's end
+  //<
+  //< **This is the only thing that crosses lines.** **Do not rescan from a line's start** (that
+  //< would rescan from the document's start for every line); the layout passes on the state of the
+  //< line before (`Pen.carry` in `../lay/line.kspls`).
+  plain
+  noted //< inside `/* … */`. It is a comment until it closes
+  quoted //< inside `` ` … ` `` (JavaScript's template string). It is a string until it closes
+
+struct Token //< one piece cut off (a token)
+  //<
+  //< **`to` is where the next piece starts** (no empty piece is returned).
+  //< **It is not a selected range** (`Selection` in [`../lay/caret.kspls`](../lay/caret.kspls)).
+  to: Sz
+  role: Role
+  carry: Carry //<
+    //< The state left after this piece. **The caller passes it to the next call.**
+
+fn token_at(name: U8[], line: U8[], from: Sz, carry: Carry): Token //<
+  //< Returns one piece starting at from in line
+  //<
+  //< `carry` is the state of the piece before (the end of the line before).
+  //< Caution: **Always advance by at least one character**, or the caller loops forever (in wasm
+  //< the page freezes). **A string that does not close runs to the line's end.**
+  kind: = kind_of(name)
+  if from >= line.len
+    return Token::{ .to = line.len, .role = Role.plain, .carry = carry }
+  // A block comment continued from before. **It is a comment until it closes.**
+  switch carry case .noted
+    return closed_note(line, from)
+  case .quoted
+    return closed_tick(line, from)
+  case .plain {}
+  c: = line[from]
+  // A line comment. **It runs to the line's end.**
+  if c == '/' && from + 1 < line.len && line[from + 1] == '/'
+    return Token::{ .to = line.len, .role = Role.comment, .carry = Carry.plain }
+  // The start of a block comment.
+  // **Where it does not close on the same line, pass it on to the next.**
+  if noted_across(kind) && c == '/' && from + 1 < line.len && line[from + 1] == '*'
+    return closed_note(line, from + 2)
+  if quoted_across(kind) && c == '`'
+    return closed_tick(line, from + 1)
+  if c == '"' || c == '\''
+    return Token::{ .to = closed_at(line, from, c), .role = Role.text, .carry = Carry.plain }
+  if c.is_digit()
+    $i: Sz = from
+    // Makes `1.5F32` and `0x1f` one piece each.
+    for i < line.len && (named(line[i]) || line[i] == '.')
+      i += 1
+    return Token::{ .to = i, .role = Role.number, .carry = Carry.plain }
+  if named(c)
+    $i: Sz = from
+    for i < line.len && named(line[i])
+      i += 1
+    got: = line.sub(from, i - from)
+    return Token::{ .to = i, .role = Role.word if worded(name, got) else Role.plain,
+      .carry = Carry.plain }
+  // Everything else becomes one piece, up to the next character that has a role.
+  // Caution: **Do not return them one character at a time** (the boxes would multiply by the
+  // number of characters).
+  $i: Sz = from + 1
+  for i < line.len
+    d: = line[i]
+    if named(d) || d == '"' || d == '\'' || (quoted_across(kind) && d == '`') ||
+      (d == '/' && i + 1 < line.len && (line[i + 1] == '/' || line[i + 1] == '*'))
+      break
+    i += 1
+  return Token::{ .to = i, .role = Role.plain, .carry = Carry.plain }
+
+priv fn closed_note(line: U8[], from: Sz): Token //<
+  //< A block comment, up to where it closes (to the line's end where it does not)
+  $i: Sz = from
+  for i + 1 < line.len
+    if line[i] == '*' && line[i + 1] == '/'
+      return Token::{ .to = i + 2, .role = Role.comment, .carry = Carry.plain }
+    i += 1
+  return Token::{ .to = line.len, .role = Role.comment, .carry = Carry.noted }
+
+priv fn closed_tick(line: U8[], from: Sz): Token //<
+  //< A template string, up to where it closes (to the line's end where it does not)
+  //<
+  //< **An escaped quote does not close it** (`` \` `` is a character inside the string).
+  $i: Sz = from
+  for i < line.len
+    if line[i] == '\\'
+      i += 2
+      continue
+    if line[i] == '`'
+      return Token::{ .to = i + 1, .role = Role.text, .carry = Carry.plain }
+    i += 1
+  return Token::{ .to = line.len, .role = Role.text, .carry = Carry.quoted }
+
+priv fn closed_at(line: U8[], from: Sz, quote: U8): Sz //< the position one past a quotation's end
+  //<
+  //< **An escaped quote does not close it** (`"\""` is one text).
+  $i: Sz = from + 1
+  for i < line.len
+    if line[i] == '\\'
+      i += 2
+      continue
+    if line[i] == quote
+      return i + 1
+    i += 1
+  return line.len

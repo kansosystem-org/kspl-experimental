@@ -1,0 +1,44 @@
+//< A `catch` cannot be written on an expression that is not a Result
+//<
+//< **The same check as `?`'s is wanted on both** (sema/body/postfix.kspls, infer_catch_chain in
+//< sema/body/expr.kspls): with one alone the C compiler falls on the generated C, no diagnostic
+//< from ksplc (Principle 2). An index is trodden too, and a `catch` on a Result has to pass.
+// EXPECT: 'catch' operator can only be applied to a Result type
+// EXPECT-NOT: is_err
+import "std/ds" { Map, List }
+import "std/io"
+import "std/mem" { Arena }
+
+priv enum Probe_error
+  nope
+
+priv fn plain(x: I32): I32
+  return x + 1
+
+priv fn may_fail(x: I32): I32?Probe_error
+  if x < 0
+    throw Probe_error.nope
+  return x + 1
+
+fn main(): I32
+  ar: = Arena.new(4096)
+  $xs: = List<|I32|>.new(ar)
+  xs.push(7)
+  // The stopping side ①: a function call that does not return a Result.
+  bad_call: = plain(1) catch -1
+  // The stopping side ②: an index that returns a value.
+  bad_index: = xs[0] catch -1
+  // The passing side ①: a fallback expression on an expression returning a Result.
+  ok_expr: = may_fail(1) catch -1
+  // The passing side ②: a fallback statement on an expression returning a Result.
+  ok_block: = may_fail(-1) catch e
+    io.out().s("\{e\}\n")
+    fallback -2
+  // The passing side ③: a Result by way of a generic instantiation (`Map.get` returns
+  // `V?Ds_error`).
+  $m: = Map<|U8[], I32|>.new(ar)
+  m["k"] = 9
+  ok_map: = m["nope"] catch -3
+  io.out().s("\{bad_call\}\{bad_index\}\{ok_expr\}\{ok_block\}\{ok_map\}\n")
+  ar.free()
+  return 0

@@ -1,0 +1,367 @@
+//< Converts a string to a number: `to_i64`, `to_f64` and `parse_size`
+//<
+//< The other direction is `std/strfmt`. **The digits and the rounding form one contract**, so
+//< changing only one side breaks the round trip; `make debug`'s `test_strnum_roundtrip` pins it.
+//< **Freestanding needs no libc either**: the parser is one implementation on both targets.
+import "std/bignat" + { Bignat }
+import "std/chars" // classifying one character
+
+pub enum Strnum_error //< why a string could not be read as a number
+  //<
+  //< It is separate from `std/str`'s `Str_error`, which has the same two variants: using that one
+  //< would make a program that only reads numbers pay for all of `std/str`, and form a cycle.
+  invalid_format //< the text does not have the shape of a number
+  out_of_bounds //< the shape is right but the value does not fit the type
+
+priv const f64_mantissa_digits: Sz = 19 //<
+  //< How many decimal digits `to_f64`'s fast path takes into the significand
+  //<
+  //< Caution: Stop at 19. The 20th overflows a U64 (10^20 > 2^64); the slow path handles the rest.
+priv const f64_exp_limit: I64 = 400I64 //<
+  //< The largest power of 10 used when computing an approximation
+  //<
+  //< An F64 ends at 10^+/-308, so beyond this the value is infinity or 0; without a cap, a long
+  //< run of digits alone could make it loop for a long time.
+priv const f64_exp_digits_limit: I64 = 1000000000I64 //< the cap on the exponent part
+  //<
+  //< Caution: **Do not cap it with `f64_exp_limit`.** The 0s after the decimal point are
+  //< subtracted from the scale, so capping `0.000…1e4001`'s exponent at 400 gives a wrong value.
+priv const pow10_max: Sz = 22 //< the powers of 10 an F64 can hold **exactly**.
+  //<
+  //< **Stop at 10^22.** 10^23 does not fit an F64 exactly, and "significand x 10^n rounds
+  //< once" holds only within this range.
+priv const f64_exact_mantissa: U64 = 9007199254740992U64 //<
+  //< The fast path is exact only when the significand is below this value, 2^53
+  //<
+  //< An integer below 2^53 fits an F64 exactly.
+priv const f64_exact_digits: Sz = 768 //<
+  //< The most significant digits the slow path reads
+  //<
+  //< **768 is enough.** The midpoint between two neighbouring F64s ends within 767 decimal digits,
+  //< so later digits matter only as "not 0".
+priv const f64_refine_steps: I32 = 128 //<
+  //< The most times the slow path adjusts the value by 1 ulp
+  //<
+  //< Built 10^22 at a time, the approximation rounds at most 19 times and is off by a few dozen
+  //< ulp at most; only a bug in the algorithm goes past that.
+priv const f64_inf_bits: U64 = 0x7FF0000000000000U64
+priv const f64_mantissa_mask: U64 = 0x000FFFFFFFFFFFFFU64
+priv const f64_hidden_bit: U64 = 0x0010000000000000U64
+priv const pow10_exact: F64[_] = ::{
+  1.0,
+  1.0e1,
+  1.0e2,
+  1.0e3,
+  1.0e4,
+  1.0e5,
+  1.0e6,
+  1.0e7,
+  1.0e8,
+  1.0e9,
+  1.0e10,
+  1.0e11,
+  1.0e12,
+  1.0e13,
+  1.0e14,
+  1.0e15,
+  1.0e16,
+  1.0e17,
+  1.0e18,
+  1.0e19,
+  1.0e20,
+  1.0e21,
+  1.0e22,
+}
+
+impl U8[]
+  priv fn parse_int_core(r: U8[], start: Sz, out_is_neg: Bool$@): I64?Strnum_error
+    if start < 0 || start >= r.len
+      throw Strnum_error.out_of_bounds
+    $i: = start
+    if (r.ptr + i)$ == '-'
+      out_is_neg$ = true
+      i += 1
+    else if (r.ptr + i)$ == '+'
+      i += 1
+    digit_start: = i
+    // The digits accumulate in a U64, checked one digit at a time against the bound for the sign.
+    // Caution: **Do not accumulate in an I64**: the minimum's absolute value is 2^63 and does not
+    // fit, so `write_int`'s `-9223372036854775808` could not be read back.
+    // **Do not limit by digit count** (18 digits leaves I64::MAX unreadable); check the value.
+    // **Check before multiplying**, or the overflow wraps and slips past the check.
+    limit: U64 = 9223372036854775808U64 if out_is_neg$ else 9223372036854775807U64
+    $mag: U64 = 0
+    for i < r.len && (r.ptr + i).is_digit()
+      d: U64 = (r.ptr + i)$ - '0'
+      if mag > (limit - d) / 10U64
+        throw Strnum_error.out_of_bounds
+      mag = mag * 10U64 + d
+      i += 1
+    if i == digit_start
+      throw Strnum_error.invalid_format
+    // `0 - mag` in unsigned arithmetic gives I64's minimum even for 2^63.
+    return I64::(U64::0 - mag) if out_is_neg$ else I64::mag
+
+  pub fn parse_size( //< scans digits from a given position and stops at the first non-digit
+    r: U8[],
+    start: Sz = 0, //< the position to start scanning at
+  ): Sz?Strnum_error
+    $is_neg: = false
+    v: = r.parse_int_core(start, is_neg@)?
+    if is_neg
+      throw Strnum_error.invalid_format
+    return Sz::v
+
+  // ==========================================
+  // Converting a whole string into a number (`to_*`)
+  // ==========================================
+
+  // Unlike `parse_size`, which **scans from a position** and stops at the first non-digit, these
+  // require **the whole string to be a number**; surrounding whitespace is allowed.
+  //     "12abc".parse_size()  -> 12   (a scan; it just stopped here)
+  //     "12abc".to_i64()       -> a failure (the whole string is not a number)
+  pub fn to_i64(r: U8[]): I64?Strnum_error //< the whole string as an integer, or a failure
+    body: = r.trim_spaces()
+    if body.len == 0
+      throw Strnum_error.invalid_format
+    $i: Sz = 1 if (body.ptr + 0)$ == '-' || (body.ptr + 0)$ == '+' else 0
+    if i >= body.len
+      throw Strnum_error.invalid_format // only a sign
+    for i < body.len
+      if !(body.ptr + i).is_digit()
+        throw Strnum_error.invalid_format
+      i += 1
+    // Caution: Do not apply the sign again here. The minimum's absolute value does not fit an I64,
+    // so `-v` wraps. parse_int_core applies the sign as it accumulates.
+    $is_neg: = false
+    return body.parse_int_core(0, is_neg@)?
+
+  pub fn to_f64(r: U8[]): F64?Strnum_error //< the whole string as a floating-point number
+    //<
+    //< The shape is JSON's number (`-12.5e-3`). **It does not use `strtod`**: freestanding has no
+    //< libc, and the same value on both targets matters more than strtod's `inf`, `nan` and hex
+    //< floating point, which are **not accepted** here.
+    body: = r.trim_spaces()
+    if body.len == 0
+      throw Strnum_error.invalid_format
+    $i: Sz = 0
+    neg: = (body.ptr + 0)$ == '-'
+    if neg || (body.ptr + 0)$ == '+'
+      i = 1
+    // The significand accumulates as an integer; digits past 19 are **counted as a power of 10**
+    // in the scale, since adding them would overflow a U64.
+    $mant: U64 = 0
+    $taken: Sz = 0
+    $exp10: I64 = 0
+    $seen: Sz = 0
+    for i < body.len && (body.ptr + i).is_digit()
+      if taken < f64_mantissa_digits
+        mant = mant * 10U64 + U64::((body.ptr + i)$ - '0')
+        taken += 1
+      else
+        exp10 += 1I64
+      seen += 1
+      i += 1
+    if i < body.len && (body.ptr + i)$ == '.'
+      // Caution: Require a digit before the decimal point. Accepting `.5` would accept a broken
+      // JSON number only here, and std/json, which checks the syntax first, would disagree.
+      if seen == 0
+        throw Strnum_error.invalid_format
+      i += 1
+      frac_start: = i
+      for i < body.len && (body.ptr + i).is_digit()
+        if taken < f64_mantissa_digits
+          mant = mant * 10U64 + U64::((body.ptr + i)$ - '0')
+          taken += 1
+          exp10 -= 1I64
+        seen += 1
+        i += 1
+      if i == frac_start
+        throw Strnum_error.invalid_format // `1.` is not a number
+    if seen == 0
+      throw Strnum_error.invalid_format // only a sign and a decimal point
+    if i < body.len && ((body.ptr + i)$ == 'e' || (body.ptr + i)$ == 'E')
+      i += 1
+      esign: = i < body.len && (body.ptr + i)$ == '-'
+      if esign || (i < body.len && (body.ptr + i)$ == '+')
+        i += 1
+      exp_start: = i
+      $ev: I64 = 0
+      for i < body.len && (body.ptr + i).is_digit()
+        // Caution: Cap it. Growing ev without a cap on `1e999999999` overflows and flips the sign,
+        // and a value that should be infinity becomes 0.
+        if ev < f64_exp_digits_limit
+          ev = ev * 10I64 + I64::((body.ptr + i)$ - '0')
+        i += 1
+      if i == exp_start
+        throw Strnum_error.invalid_format
+      exp10 += -ev if esign else ev
+    if i != body.len
+      throw Strnum_error.invalid_format // there is junk at the end
+    // The fast path. If every digit was taken and both the significand and the power fit an F64
+    // exactly, the result is rounded only once.
+    fast_exact: =
+      seen == taken && mant < f64_exact_mantissa && exp10 >= -pow10_max && exp10 <= pow10_max
+    if fast_exact
+      v: =
+        (F64::mant * pow10_exact[Sz::exp10] if exp10 >= 0I64
+        else F64::mant / pow10_exact[Sz::(-exp10)])
+      return -v if neg else v
+    // Cap the scale too, or a huge exponent loops 10^22 a step (towards infinity or 0).
+    if exp10 > f64_exp_limit
+      exp10 = f64_exp_limit
+    if exp10 < -f64_exp_limit
+      exp10 = -f64_exp_limit
+    $v: = F64::mant
+    $e: I64 = exp10
+    step: I64 = pow10_max
+    for e > step
+      v *= pow10_exact[pow10_max]
+      e -= step
+    for e < -step
+      v /= pow10_exact[pow10_max]
+      e += step
+    v = v * pow10_exact[Sz::e] if e >= 0I64 else v / pow10_exact[Sz::(-e)]
+    // **The second of the two paths.** Outside the fast path's bounds the value above is only an
+    // approximation, so `refine_f64` adjusts it against the midpoint in arbitrary precision.
+    v = refine_f64(body, v)
+    return -v if neg else v
+
+priv struct Decimal_text //< the input to `to_f64`'s slow path
+  //<
+  //< The value is `digits x 10^exp10` (or slightly more, if `sticky`).
+  digits: Bignat
+  exp10: I64
+  n_digits: Sz //< how many significant digits were collected; 0 means the value is 0
+  sticky: Bool //< whether any digit not collected is non-zero
+
+priv fn collect_decimal(body: U8[]): Decimal_text //<
+  //< Collects the significant digits from the text (whose shape `to_f64` has already checked)
+  //<
+  //< Leading 0s are not counted; the decimal point goes into the scale. Past 768 digits, integer
+  //< digits go into the scale and fraction digits are discarded; a non-0 one sets `sticky`.
+  $d: Decimal_text = ::{}
+  $i: Sz = 1 if (body.ptr + 0)$ == '-' || (body.ptr + 0)$ == '+' else 0
+  $in_fraction: = false
+  // Adds nine digits at a time.
+  $chunk: U32 = 0
+  $chunk_len: Sz = 0
+  for i < body.len
+    c: = (body.ptr + i)$
+    if c == '.'
+      in_fraction = true
+      i += 1
+      continue
+    if c == 'e' || c == 'E'
+      break
+    digit: U32 = c - '0'
+    if d.n_digits == 0 && digit == 0
+      // A leading 0: in the fractional part it lowers the scale by one.
+      if in_fraction
+        d.exp10 -= 1I64
+    else if d.n_digits < f64_exact_digits
+      chunk = chunk * 10U32 + digit
+      chunk_len += 1
+      if chunk_len == 9
+        d.digits.mul_pow10(9)
+        d.digits.add_small(chunk)
+        chunk = 0
+        chunk_len = 0
+      d.n_digits += 1
+      if in_fraction
+        d.exp10 -= 1I64
+    else
+      if digit != 0
+        d.sticky = true
+      if !in_fraction
+        d.exp10 += 1I64
+    i += 1
+  if chunk_len > 0
+    d.digits.mul_pow10(chunk_len)
+    d.digits.add_small(chunk)
+  if i < body.len
+    i += 1 // 'e'
+    esign: = (body.ptr + i)$ == '-'
+    if esign || (body.ptr + i)$ == '+'
+      i += 1
+    $ev: I64 = 0
+    for i < body.len
+      if ev < f64_exp_digits_limit
+        ev = ev * 10I64 + I64::((body.ptr + i)$ - '0')
+      i += 1
+    d.exp10 += -ev if esign else ev
+  return d
+
+priv fn cmp_scaled(d: Decimal_text@, pow10: Bignat@, q: U64, t: I64): I32 //<
+  //< Compares the true value `d` with `q x 2^t` (-1 / 0 / 1)
+  //<
+  //< A negative power is multiplied into the other side (the arbitrary precision has no division).
+  //< `pow10` is `10^|d.exp10|`, which the caller keeps so it is not rebuilt on each call.
+  $left: = d.digits
+  $right: = Bignat.from_u64(q)
+  // The sign decides which side `10^|exp10|` multiplies: the value's side if positive, the power
+  // of 2's side if negative.
+  if d.exp10 > 0I64
+    left.mul(pow10)
+  else if d.exp10 < 0I64
+    right.mul(pow10)
+  if t >= 0I64
+    right.shl(Sz::t)
+  else
+    left.shl(Sz::(-t))
+  c: = left.cmp(right@)
+  // The digits not collected make the true value larger, which matters only if both look equal.
+  return 1 if c == 0 && d.sticky else c
+
+priv fn refine_f64(body: U8[], approx: F64): F64 //<
+  //< Adjusts the approximation `approx` (0 or more) to the F64 nearest the text's true value
+  //<
+  //< It is Clinger's AlgorithmR. A neighbour is the bit pattern +/-1 (IEEE 754 is ordered by
+  //< magnitude over the positives). Above the upper midpoint it moves up, below the lower one it
+  //< moves down; otherwise it is done.
+  //< Caution: **Do not move up from infinity.** The bit pattern +1 is a NaN.
+  d: = collect_decimal(body)
+  if d.n_digits == 0
+    return 0.0
+  // The range decided by the digit count and the scale alone. Below 10^-324 it does not reach half
+  // the smallest subnormal, and at or above 10^309 it is past the midpoint between the maximum and
+  // infinity.
+  magnitude: = I64::d.n_digits + d.exp10
+  if magnitude <= -324I64
+    return 0.0
+  if magnitude >= 310I64
+    return bignat.f64_from_bits(f64_inf_bits)
+  abs_exp: = Sz::(d.exp10 if d.exp10 >= 0I64 else -d.exp10)
+  $pow10: = Bignat.from_u64(1U64)
+  pow10.mul_pow10(abs_exp)
+  $bits: = bignat.f64_to_bits(approx)
+  for _step in Range.asc(f64_refine_steps)
+    exp_field: = bits >> 52U64
+    mant: = bits & f64_mantissa_mask
+    // The value is f x 2^k. A subnormal has no hidden 1, and its exponent is fixed at the minimum.
+    f: U64 = mant if exp_field == 0U64 else mant | f64_hidden_bit
+    k: I64 = -1074I64 if exp_field == 0U64 else I64::exp_field - 1075I64
+    // The midpoints are f +/- 1/2 ulp. Just above a power of 2 the gap below is half, so the lower
+    // midpoint is f - 1/4 ulp. Both can be written as integers in units of 2^(k-2).
+    at_power_of_two: = mant == 0U64 && exp_field > 1U64
+    if bits != f64_inf_bits
+      c_up: = cmp_scaled(d@, pow10@, 4U64 * f + 2U64, k - 2I64)
+      if c_up > 0
+        bits += 1U64
+        continue
+      if c_up == 0
+        if (f & 1U64) == 1U64
+          bits += 1U64
+        break
+    if bits != 0U64
+      q_low: = 4U64 * f - (1U64 if at_power_of_two else 2U64)
+      c_low: = cmp_scaled(d@, pow10@, q_low, k - 2I64)
+      if c_low < 0
+        bits -= 1U64
+        continue
+      if c_low == 0
+        if (f & 1U64) == 1U64
+          bits -= 1U64
+        break
+    break
+  return bignat.f64_from_bits(bits)

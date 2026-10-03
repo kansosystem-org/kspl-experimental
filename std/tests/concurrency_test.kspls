@@ -1,0 +1,130 @@
+import "std/mem" + { dealloc }
+import "std/refcount" { Rc }
+import "std/thread"
+import "std/verdict"
+
+// ==========================================
+// std/thread: the argument and return value of spawn/join round-trip over real OS threads, and a
+// Mutex gives mutual exclusion.
+// ==========================================
+#export
+fn thread_test_echo(arg: I32$@): Void$@
+  return Void$@::arg
+
+// thread.Mutex<|I32|> makes lock()'s return value the only way to reach the content.
+#export
+fn thread_test_increment(arg: thread.Mutex<|I32|>$@): Void$@
+  for _i in Range.asc(1000)
+    counter: = arg.lock()
+    counter$ += 1
+    arg.unlock()
+  return null
+
+// Mutex<|T|> makes a T that cannot be shared safe to share. The type does not guarantee this ("Why
+// data races are not prevented by the type system" in docs/DESIGN.md), so this test checks it.
+#export
+fn thread_test_touch_mutex_rc(arg: thread.Mutex<|Rc<|I32|>|>$@): Void$@
+  rc: = arg.lock()
+  _v: = rc.get()$
+  arg.unlock()
+  return null
+
+fn test_thread_spawn_join()
+  verdict.start("[Thread] spawn/join argument round-trip + Mutex mutual exclusion test...")
+
+  // 1. entry's return value round-trips across the thread to join()
+  $marker: I32 = 42
+  t0: = thread.Thread.spawn<|I32|>(thread_test_echo, marker@) catch panic("thread spawn failed")
+  echoed: = t0.join_and_free()
+  assert(echoed == Void$@::marker@, "join() must return exactly what entry() returned")
+
+  // 2. Two threads each add 1000 times while protecting the counter with the same Mutex<I32>
+  $mx: = thread.Mutex<|I32|>.new(0) catch panic("mutex create failed")
+  t1: =
+    thread.Thread.spawn<|thread.Mutex<|I32|>|>(thread_test_increment, mx@) catch panic("thread \
+      spawn failed")
+  t2: =
+    thread.Thread.spawn<|thread.Mutex<|I32|>|>(thread_test_increment, mx@) catch panic("thread \
+      spawn failed")
+  t1.join_and_free()
+  t2.join_and_free()
+
+  final_val: = mx.lock()
+  assert(final_val$ == 2000,
+    "mutex-protected counter must equal 2000 after 2 threads x 1000 increments")
+  mx.unlock()
+  mx.free()
+
+  // 3. Even a single-thread Rc<|I32|> is safe to use when wrapped in a Mutex
+  $g_rc: = thread.Mutex<|Rc<|I32|>|>.new(Rc<|I32|>.new(7)) catch panic("mutex<rc> create failed")
+  t3: =
+    thread.Thread.spawn<|thread.Mutex<|Rc<|I32|>|>|>(thread_test_touch_mutex_rc, g_rc@) catch panic("thread spawn failed")
+  t3.join_and_free()
+  held: = g_rc.lock()
+  assert(held.get()$ == 7, "the Rc guarded by a mutex must survive the thread round-trip")
+  g_rc.unlock()
+  g_rc.free()
+
+  verdict
+    .pass("The argument/return round trip, Mutex mutual exclusion under real parallelism \
+      (2000/2000), and Mutex<|T|> making a type that cannot be shared shareable are all confirmed.")
+// ==========================================
+// std/thread: the operations of Atomic_sz; two threads without a lock lose no addition; and
+// Cond_var's wait wakes after a signal.
+// ==========================================
+struct Atomic_test_ctx
+  counter: thread.Atomic_sz
+
+#export
+fn atomic_test_worker(arg: Atomic_test_ctx$@): Void$@
+  for _i in Range.asc(10000)
+    arg.counter.fetch_add(1)
+  return null
+
+fn test_atomic_and_cond_var()
+  verdict.start("[Thread] Atomic_sz (lock-free addition) + Cond_var (signal/wait) test...")
+
+  // 1. Atomic_sz's basic operations
+  $a: = thread.Atomic_sz.new(5)
+  assert(a.load() == 5, "Atomic_sz.load() must return the initial value")
+  old: = a.fetch_add(3)
+  assert(old == 5 && a.load() == 8, "fetch_add must return the pre-add value")
+  a.store(100)
+  assert(a.load() == 100, "store must overwrite the value")
+  ok1: = a.compare_and_swap(100, 200)
+  ok2: = a.compare_and_swap(100, 999)
+  cas_final: = a.load()
+  assert(ok1 && !ok2 && cas_final == 200,
+    "compare_and_swap must only succeed when the current value matches expected")
+
+  // 2. Two threads add 20000 times in total to the same counter, with no lock
+  ctx: = mem.alloc_as<|Atomic_test_ctx|>()
+  ctx.counter = thread.Atomic_sz.new(0)
+  t1: = thread.Thread.spawn<|Atomic_test_ctx|>(atomic_test_worker, ctx) catch panic("thread spawn \
+    failed")
+  t2: = thread.Thread.spawn<|Atomic_test_ctx|>(atomic_test_worker, ctx) catch panic("thread spawn \
+    failed")
+  t1.join_and_free()
+  t2.join_and_free()
+  counter_total: = ctx.counter.load()
+  assert(counter_total == 20000, "lock-free concurrent fetch_add must not lose any increments")
+  dealloc(Void$@::ctx)
+
+  // 3. Cond_var: wait wakes after a signal (on a Mutex<|Sz|>; Raw_mutex is priv).
+  $mx: = thread.Mutex<|Sz|>.new(0) catch panic("mutex create failed")
+  $cv: = thread.Cond_var.new() catch panic("cond create failed")
+
+  ready: = mx.lock()
+  ready$ = 1
+  cv.signal()
+  mx.unlock()
+
+  flag: = mx.lock()
+  for flag$ == 0
+    cv.wait(mx@)
+  mx.unlock()
+  mx.free()
+  cv.free()
+
+  verdict
+    .pass("Lock-free addition (20000/20000) and Cond_var's signal/wait round trip are confirmed.")

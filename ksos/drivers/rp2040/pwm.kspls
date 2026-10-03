@@ -1,0 +1,99 @@
+//< The PWM driver for the real Raspberry Pi Pico / Pico W (RP2040) chip
+//<
+//< The RP2040's PWM has 8 "slices" of 2 channels (A/B) each. **The period (DIV/TOP) is per slice
+//< and the duty (CC) per channel**, so outputs with different periods need different slices.
+//< Which slice and channel a pin uses is fixed (it cannot be chosen).
+
+// ==========================================
+// The register map, and how a pin maps to a slice and channel, are in "PWM (`pwm.kspls`)" in
+// ksos/docs/DESIGN.md.
+// ==========================================
+
+// The frequency is f = clk_sys / (DIV * (TOP+1)). DIV's integer part has only 8 bits: 500Hz at
+// 125MHz **overflows** it, so use **a large TOP** (DIV=25 / TOP=9999 in
+// ksos/boards/freenove_4wd_pico/board.kspls). The duty is set as a fraction of TOP.
+
+// QEMU has no RP2040 model: it is checked on a real Pico W (stage 3,
+// ksos/docs/HOWTO-bring-up.md).
+import "ksos/drivers/mmio"
+import "ksos/drivers/rp2040/gpio"
+import "ksos/drivers/rp2040/resets"
+
+const reset_pwm: U32 = 1U32 << 14
+
+const pwm_base: U32 = 0x40050000
+const slice_stride: U32 = 0x14
+const csr_en: U32 = 1U32 << 0
+
+const funcsel_pwm: U32 = 4 //< the GPIO FUNCSEL value that selects PWM (F4)
+
+fn slice_of(pin: U32): U32 //< the PWM slice number pin is connected to
+  //<
+  //< It is fixed per pin and cannot be chosen.
+  return (pin / 2) % 8
+
+fn is_channel_b(pin: U32): Bool //<
+  //< Whether pin is on the slice's channel B (false if on channel A)
+  return (pin % 2) == 1
+
+fn init(): Bool //< takes the PWM block out of reset
+  //<
+  //< Call it once before any other PWM operation (again is safe). The wait has a timeout.
+  return resets.unreset(reset_pwm)
+
+fn config_slice(slice: U32, div_int: U32, div_frac: U32, top: U32) //<
+  //< Sets the slice's period and starts it running
+  //<
+  //< div_int/div_frac is the divisor in 8.4 fixed point, and top the wrap value (period = TOP+1).
+  //< CC keeps its previous value, so the output is undefined until set_percent writes one.
+  base: = pwm_base + slice_stride * slice
+  mmio.write32(base, 0U32) // stop it first, then configure it
+  div_addr: = base + 0x04
+  mmio.write32(div_addr, ((div_int & 0xFF) << 4) | (div_frac & 0xF))
+  top_addr: = base + 0x10
+  mmio.write32(top_addr, top)
+  ctr_addr: = base + 0x08
+  mmio.write32(ctr_addr, 0U32)
+  mmio.write32(base, csr_en)
+
+fn init_pin(pin: U32) //<
+  //< makes pin usable as a PWM output (switches the pin's function to PWM)
+  //<
+  //< config_slice sets the slice's period separately.
+  gpio.select_function(pin, funcsel_pwm)
+
+fn cc_addr_of(pin: U32): U32 //< the address of pin's duty register (CC)
+  //<
+  //< **It exists for a path with a tight deadline** (WS2812 rewrites the duty every period); the
+  //< caller gets the address here rather than copying `pwm_base`.
+  return pwm_base + slice_stride * slice_of(pin) + 0x0C
+
+fn ctr_addr_of(pin: U32): U32 //< the address of the counter (CTR) of the slice pin belongs to
+  //<
+  //< Used like cc_addr_of; both channels of a slice give the same address.
+  return pwm_base + slice_stride * slice_of(pin) + 0x08
+
+fn set_level(pin: U32, level: U32) //< sets pin's duty as a count
+  //<
+  //< **It is the one function that writes CC** (the one place that keeps the other channel's
+  //< value). To set it as a percentage, use set_percent.
+  addr: = cc_addr_of(pin)
+  cur: = mmio.read32(addr)
+  if is_channel_b(pin)
+    mmio.write32(addr, (cur & 0x0000FFFF) | (level << 16))
+  else
+    mmio.write32(addr, (cur & 0xFFFF0000) | (level & 0xFFFF))
+
+fn set_percent(pin: U32, percent: U32, top: U32) //< sets pin's duty as a percentage (0 to 100)
+  //<
+  //< top is the value configured on that slice, so a caller keeps working when TOP changes. Over
+  //< 100 counts as 100.
+  p: = percent if percent <= 100 else 100U32
+  // 0 and 100 are special-cased, so rounding does not lose the endpoints.
+  // Only CC > TOP gives "always High", so 100% writes TOP+1.
+  $level: U32 = 0
+  if p >= 100
+    level = top + 1
+  else if p > 0
+    level = ((top + 1) * p) / 100
+  set_level(pin, level)

@@ -1,0 +1,14 @@
+//< A multi-step dereference (`pp$$`) where the middle step is a read-only pointer (`I32@`)
+//<
+//< `pp$ = g2@` is legitimate (the outer step is `$@`), but `pp$$`'s target is immutable. Should
+//< write_target_type walk only `.` and not `$`, reject_write_through_const_ptr gives up
+//< (fail-open): C still refuses by its const qualifier, but LLVM has none and the write holds.
+// EXPECT: cannot write through a read-only pointer
+$g: I32 = 1
+$g2: I32 = 2
+
+fn main()
+  $inner: I32@ = g@
+  pp: I32@$@ = inner@
+  pp$ = g2@ // legitimate: the outer step (the inner pointer's slot) is mutable
+  pp$$ = 99 // invalid: the inner step's target is read-only

@@ -1,0 +1,36 @@
+//< Builds the names that appear in the training material
+//<
+//< It is kept apart from its caller `tools/ai_assist/make_error_fix.kspls` so that a test can
+//< import it: a program holds only one `main`.
+import "std/chars" // `trim_spaces` / `strip_suffix`
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "tools/ai_assist/ksplc_oracle" as oracle
+
+fn rel_for_stem(stem: U8[], arena: Arena$@): U8[] //< the temporary path a diagnostic will name
+  //<
+  //< The shape is `corpus_dir/{stem}.kspls`, and a stem is spelled like `_efbrk_3`.
+  return arena.text().s(oracle.corpus_dir).c('/').s(stem).s(".kspls").take()
+
+fn worker_stem(base: U8[], worker_id: Sz, arena: Arena$@): U8[] //< one worker's own stem
+  //<
+  //< "_efbrk" + worker_id -> "_efbrk_3".
+  return arena.text().s(base).c('_').s("\{worker_id\}").take()
+
+fn to_dotted_file_path(rel_path: U8[], arena: Arena$@): U8[] //< the path in a name's dotted form
+  //<
+  //< A fully qualified name ("tools.ai_assist.corpus._efbrk.Ast_kind") embeds the path this way,
+  //< so it is replaced separately from a file:line:col path (`mangle_type_id_to` in
+  //< ksplc/sema/type/env.kspls).
+  // Caution: **Strip the longer suffix first**; the other order leaves the `s` of `.kspls`.
+  stem: = rel_path.strip_suffix(".kspls").strip_suffix(".kspl")
+  $b: = Str_builder.new()
+  defer b.free()
+  for i in Range.asc(stem.len)
+    ch: = (stem.ptr + i)$
+    b.c('.' if ch == '/' else ch)
+  return arena.dup_str(b.slice())
+
+fn is_code_line(ln: U8[]): Bool //< whether it is a body line; a blank and a comment are not
+  s: = ln.trim_spaces()
+  return s.len > 0 && !s.starts_with("//")

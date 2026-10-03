@@ -1,0 +1,285 @@
+import "kspage/expr/calc"
+import "kspage/lay/caret"
+import "kspage/lay/flow"
+import "kspage/lay/page" { Page, Panel }
+import "kspage/model/collect" { Collect }
+import "kspage/model/doc" { Block, Doc }
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/paint"
+import "kspage/model/style" + { Sheet }
+import "kspage/tests/base"
+import "kspage/write/edit"
+import "kspage/write/insert"
+import "kspage/write/shape" as _shape
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// kspage: checks charts (a golden test).
+// ==========================================
+
+priv fn near(a: F32, b: F32): Bool
+  d: = a - b
+  return (d if d >= 0.0 else -d) < 0.5F32
+
+priv fn chart_sheet(arena: Arena$@, kind: Collect, height: F32): Sheet$@ //<
+  //< A table's style, and a chart's style
+  sheet: = Sheet.new(base.root_font(), arena)
+  base.table_style(sheet)
+  c: = sheet.add("chart", paint.inherit_all())
+  c.collect = kind
+  c.height = height
+  c.fill = Option<|U32|>.some(0x0000ffU32)
+  c.rule_width = 1.0
+  return sheet
+
+priv fn bare_chart_sheet(arena: Arena$@, kind: Collect): Sheet$@ //<
+  //< A chart style that sets only the height, and neither a line nor a fill
+  //<
+  //< **This shape hits "nothing is drawn"**; a document not made by inserting (loaded, from
+  //< Markdown, built by hand) can have it.
+  sheet: = Sheet.new(base.root_font(), arena)
+  base.table_style(sheet)
+  c: = sheet.add("chart", paint.inherit_all())
+  c.collect = kind
+  c.height = 120.0
+  return sheet
+
+priv fn doc_with_chart(arena: Arena$@, range: U8[], a: U8[], b: U8[], c: U8[]): Doc$@ //<
+  //< A table with one column named "detail", and a chart pointing at it
+  d: = Doc.new(arena)
+  t: = d.add_block("table")
+  t.name = "detail"
+  t.add_child("").add_child("").add_text(a)
+  t.add_child("").add_child("").add_text(b)
+  t.add_child("").add_child("").add_text(c)
+  g: = d.add_block("chart")
+  g.chart = range
+  return d
+
+priv fn bands_of(page: Page$@, chart: Block$@, arena: Arena$@): List<|Panel$@|>$@ //<
+  //< Collects only the bands of the chart's block
+  out: = List<|Panel$@|>.create(arena)
+  for $i: Sz = 0; i < page.panels.len; i += 1
+    if page.panels.get(i).block == chart
+      out.push(page.panels.get(i))
+  return out
+
+priv fn laid(d: Doc$@, sheet: Sheet$@, arena: Arena$@): Page$@
+  calc.recalc(d, sheet)
+  return flow.layout(d, sheet, fixed.make(), 300.0, arena)
+
+fn test_a_bar_stands_for_each_value_in_the_range() //<
+  //< As many bars as values in the range, each as tall in proportion to its value
+  //<
+  //< **Start them from 0**; showing only the differences makes a short bar look long.
+  verdict.start("[kspage/chart] a bar standing per value test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = doc_with_chart(arena, "detail!A1:A3", "10", "20", "30")
+  sheet: = chart_sheet(arena, Collect.bars, 120.0)
+  page: = laid(d, sheet, arena)
+
+  bands: = bands_of(page, d.blocks.get(1), arena)
+  // Three bars, and one axis drawn at 0.
+  assert(bands.len == 4, "as many bands come out as there are bars")
+  low: = bands.get(0)
+  high: = bands.get(2)
+  assert(high.rect.h > low.rect.h, "the bar of the larger value is taller")
+  assert(near(high.rect.h, low.rect.h * 3.0F32), "the height is in proportion to the value")
+  assert(low.rect.x < high.rect.x, "the bars line up in the range's order")
+  // Every value is positive, so the axis at 0 is at the bars' bottom edge.
+  axis: = bands.get(3)
+  assert(near(axis.rect.h, 0.0), "the axis is a line holding no height")
+  assert(near(axis.rect.y, low.rect.y + low.rect.h), "the axis comes at the bars' bottom edge")
+  verdict.pass("a bar stands per value in the range, from 0 to the value's height.")
+
+fn test_each_value_gets_a_label_that_is_not_in_the_document() //<
+  //< A value's text appears as a box
+  //<
+  //< **It points at no text in the document** (a click cannot get inside it).
+  verdict.start("[kspage/chart] the values' texts coming out test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = doc_with_chart(arena, "detail!A1:A3", "10", "20", "30")
+  sheet: = chart_sheet(arena, Collect.bars, 120.0)
+  page: = laid(d, sheet, arena)
+
+  $labels: Sz = 0
+  for $i: Sz = 0; i < page.boxes.len; i += 1
+    box: = page.boxes.get(i)
+    if box.inline != null
+      continue
+    labels += 1
+    assert(box.text.len > 0, "a box with no text is not put out")
+  assert(labels == 3, "as many texts come out as there are values")
+  verdict.pass("a value's text comes out as a box, but becomes no place in the document.")
+
+fn test_a_line_chart_joins_the_points() //< a line joins point to point
+  //<
+  //< **With one point no line is drawn.**
+  verdict.start("[kspage/chart] a line joining the points test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = doc_with_chart(arena, "detail!A1:A3", "10", "30", "20")
+  sheet: = chart_sheet(arena, Collect.lines, 120.0)
+  page: = laid(d, sheet, arena)
+
+  bands: = bands_of(page, d.blocks.get(1), arena)
+  // Two lines (three points have two gaps) and one axis.
+  assert(bands.len == 3, "as many lines come out as there are gaps between the points")
+  assert(bands.get(0).shape.same_shape(style.Shape.rise_line), "the rising line rises to the right")
+  assert(bands.get(1).shape.same_shape(style.Shape.fall_line),
+    "the falling line falls to the right")
+  assert(bands.get(0).rect.h > 0.0, "a line holds a height")
+  verdict.pass("a line joins point to point as the band's diagonal.")
+
+fn test_a_chart_without_a_height_is_not_placed() //<
+  //< With no height set it is not laid out (as with a picture: the core infers no height)
+  verdict.start("[kspage/chart] a graph with no height test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = doc_with_chart(arena, "detail!A1:A3", "10", "20", "30")
+  sheet: = chart_sheet(arena, Collect.bars, 0.0)
+  page: = laid(d, sheet, arena)
+
+  assert(bands_of(page, d.blocks.get(1), arena).len == 0, "not one band comes out")
+  verdict.pass("a graph whose height is unsettled is not laid.")
+
+fn test_an_unreadable_range_places_nothing() //<
+  //< Even with a range that does not read, relayout does not stop
+  //<
+  //< A cell that is not a number is skipped too.
+  //< With no value only the axis appears (so fixing the range visibly brings the bars back).
+  verdict.start("[kspage/chart] a range that does not read test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = chart_sheet(arena, Collect.bars, 120.0)
+  // A range with no table name. A chart sits in the flow, so it has no table of its own.
+  bare: = doc_with_chart(arena, "A1:A3", "10", "20", "30")
+  bare_page: = laid(bare, sheet, arena)
+  bare_bands: = bands_of(bare_page, bare.blocks.get(1), arena)
+  assert(bare_bands.len == 1, "on a range with no name no bar comes out")
+  other: = doc_with_chart(arena, "nosuch!A1:A3", "10", "20", "30")
+  other_page: = laid(other, sheet, arena)
+  other_bands: = bands_of(other_page, other.blocks.get(1), arena)
+  assert(other_bands.len == 1, "on a name it does not know no bar comes out")
+  junk: = doc_with_chart(arena, "detail!A1:A3x", "10", "20", "30")
+  junk_page: = laid(junk, sheet, arena)
+  junk_bands: = bands_of(junk_page, junk.blocks.get(1), arena)
+  assert(junk_bands.len == 1, "on a text with something left unread no bar comes out")
+  mixed: = doc_with_chart(arena, "detail!A1:A3", "10", "x", "30")
+  mixed_page: = laid(mixed, sheet, arena)
+  bands: = bands_of(mixed_page, mixed.blocks.get(1), arena)
+  assert(bands.len == 3, "a cell that is no number becomes no bar")
+  verdict.pass("even on a range that does not read, laying out again does not stop.")
+
+fn test_a_formula_cell_becomes_a_bar() //< a formula's result becomes a bar too
+  //<
+  //< **The computed number is read** (a formatted text cannot be turned back into a number).
+  verdict.start("[kspage/chart] a formula's answer becoming a bar test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = doc_with_chart(arena, "detail!A1:A3", "10", "=A1*2", "30")
+  sheet: = chart_sheet(arena, Collect.bars, 120.0)
+  // Apply thousands grouping and a currency sign, and the bar's height is still the value.
+  money: = sheet.add("money", paint.inherit_all())
+  money.number.grouped = true
+  money.number.prefix = "$"
+  d.blocks.get(0).children.get(1).children.get(0).inlines.get(0).style = "money"
+  page: = laid(d, sheet, arena)
+
+  bands: = bands_of(page, d.blocks.get(1), arena)
+  assert(bands.len == 4, "a cell holding a formula becomes a bar too")
+  assert(near(bands.get(1).rect.h, bands.get(0).rect.h * 2.0F32), "the height is the answer's value")
+  verdict.pass("a formula's answer, and a cell with dressing on it, become a bar at the value.")
+
+fn test_inserting_a_chart_puts_no_content_in_the_document() //<
+  //< Insert a chart and the contents still do not go into the document
+  //<
+  //< **One undo takes it back.**
+  verdict.start("[kspage/chart] inserting a graph test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = d.add_block("table")
+  t.name = "detail"
+  t.add_child("").add_child("").add_text("7")
+  head: = d.add_block("body").add_text("body")
+  sheet: = chart_sheet(arena, Collect.bars, 120.0)
+  ed: = edit.new_editor(d)
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  ed.caret = caret.at(head, 0)
+
+  assert(ed.insert_chart(page, sheet, "chart", "detail!A1", Collect.bars), "it inserts")
+  made: = d.blocks.get(2)
+  assert(made.children.len == 0 && made.inlines.len == 0, "the contents do not go into the document")
+  assert(made.chart.equals("detail!A1"), "what it holds is the range and nothing else")
+  after: = laid(d, sheet, arena)
+  assert(bands_of(after, made, arena).len == 2, "one bar and one axis come out")
+
+  assert(ed.undo(), "it can be put back in one")
+  assert(d.blocks.len == 2, "the graph comes off")
+  verdict.pass("a graph holds the range alone, and the contents are built when it is laid.")
+
+fn test_a_chart_draws_even_when_the_style_says_no_ink() //<
+  //< It draws even with a style that sets neither a line nor a fill
+  //<
+  //< **Do not lay it out invisible**: with nothing shown the user can only think "I got the range
+  //< wrong" (Principle 5). A shape differs: its bare frame holds children, a chart none.
+  verdict.start("[kspage/chart] a style saying neither a line nor a fill test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = doc_with_chart(arena, "detail!A1:A3", "10", "20", "30")
+  sheet: = bare_chart_sheet(arena, Collect.bars)
+  page: = laid(d, sheet, arena)
+
+  bands: = bands_of(page, d.blocks.get(1), arena)
+  assert(bands.len == 4, "three bars and one axis come out")
+  // **The bars must have a color**; transparent bands leave the screen looking the same.
+  $painted: Sz = 0
+  for $i: Sz = 0; i < bands.len; i += 1
+    switch bands.get(i).fill case .some(c)
+      assert(c == style.drawn_color, "it is the same colour as the inserting side's")
+      painted += 1
+    case .none {}
+  assert(painted == 3, "the bars alone are filled (the axis is a line)")
+  assert(bands.get(3).width > 0.0, "a thickness goes into the axis")
+  verdict.pass("even on a style saying neither a line nor a fill it draws in the default colour.")
+
+fn test_inserting_a_chart_fills_in_what_the_style_lacks() //<
+  //< Inserting one adds the missing settings to the style
+  //<
+  //< Caution: **Test the case where the height and the thickness are already set too**, or the
+  //< change that adds a fill looks "unchanged" and is silently lost.
+  verdict.start("[kspage/chart] the inserting putting the settings that are wanting in test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = d.add_block("table")
+  t.name = "detail"
+  t.add_child("").add_child("").add_text("7")
+  head: = d.add_block("body").add_text("body")
+  sheet: = Sheet.new(base.root_font(), arena)
+  base.table_style(sheet)
+  // A style that already has the height, the thickness and the aggregation, but no fill.
+  c: = sheet.add("chart", paint.inherit_all())
+  c.collect = Collect.bars
+  c.height = 120.0
+  c.rule_width = 1.0
+  ed: = edit.new_editor(d)
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  ed.caret = caret.at(head, 0)
+
+  assert(ed.insert_chart(page, sheet, "chart", "detail!A1", Collect.bars), "it inserts")
+  $inked: = false
+  if got: = sheet.find("chart")
+    switch got.fill case .some(v)
+      inked = v == style.drawn_color
+    case .none {}
+  assert(inked, "the fill goes into the style")
+  verdict
+    .pass("even where the height and the thickness are there already, the fill that is wanting goes \
+      in.")

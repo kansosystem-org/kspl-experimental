@@ -1,0 +1,330 @@
+#!/usr/bin/env -S ksplc run
+//< It checks mechanically that ksplc itself rejects a write to something read-only
+//<
+//< Each read-only source is written through each path, and what ksplc accepts is compiled as C
+//< with its warnings on. **C sees only part of it:** a slice's `const` stays on its descriptor
+//< ("The output order of genc's type definitions is decided after the immutability marks are
+//< stripped" in `ksplc/docs/DESIGN.md`), so only ksplc can catch a write through a slice. A
+//< fixed-length array is the reverse: `const` reaches the elements, so it is visible here.
+
+// ==========================================
+// The verdict per case, assuming that a write C warns about is one ksplc should reject:
+//   * ksplc rejected it             -> OK (this suite asserts nothing about "should it be
+//     rejected")
+//   * ksplc passed & C silent too   -> OK (a valid write, or the explicit cast as a way out)
+//   * ksplc passed & C complains    -> **FAIL** (a gap in ksplc's checks)
+// ==========================================
+import "ksplc/tests/support/harness"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/verdict"
+
+priv struct Root //< the read-only sources
+  //<
+  //< Caution: **Keep the row as a const**; built in a function, the descriptor points at the
+  //< frame.
+  slot: U8[]
+  globals: U8[]
+  locals: U8[]
+  expr: U8[]
+
+priv struct Write //< the write's path
+  //<
+  //< The source's expression goes into `<e>`; ksplc rejects an invalid combination.
+  slot: U8[]
+  body: U8[]
+
+priv const holder_decl: U8[] =
+  """struct Holder { buf: U8[4]; n: I32; }
+impl Holder { fn bump_holder(r: Self$@) { r.n = 7; } }
+"""
+
+priv const holder2_decl: U8[] =
+  """struct Holder2 { buf: U8[4]; n: I32; }
+impl Holder2 { fn bump_holder(r: Self$@) { r.n = 7; } }
+const ro_st: Holder2 = ::{ .buf = ::{ 1, 2, 3, 4 }, .n = 0 };
+"""
+
+priv const nested_mut_locals: U8[] =
+  """$in_a: U8[4] = ::{ 1, 2, 3, 4 };
+  $sl_a: U8$[][1] = ::{ U8$[]::in_a };
+  nested: U8$[]$[] = U8$[]$[]::sl_a;"""
+
+priv const nested_ro_locals: U8[] =
+  """$sl_b: U8[][1] = ::{ "abcd" };
+  nested_ro: U8[]$[] = U8[]$[]::sl_b;"""
+
+priv fn roots(arena: Arena$@): List<|Root|>
+  $out: = List<|Root|>.new(arena)
+  out
+    .push(Root::{ .slot = "const_array", .globals = "const ro_arr: U8[4] = ::{ 1, 2, 3, 4 };",
+    .locals = "", .expr = "ro_arr" })
+  out
+    .push(Root::{ .slot = "const_slice", .globals = "const ro_sl: U8[] = \"abcd\";", .locals = "",
+    .expr = "ro_sl" })
+  out
+    .push(Root::{ .slot = "global_immut_array", .globals = "gl_arr: U8[4] = ::{ 1, 2, 3, 4 };",
+    .locals = "", .expr = "gl_arr" })
+  out
+    .push(Root::{ .slot = "local_immut_array", .globals = "",
+    .locals = "loc_arr: U8[4] = ::{ 1, 2, 3, 4 };", .expr = "loc_arr" })
+  out
+    .push(Root::{ .slot = "local_immut_slice", .globals = "", .locals = "loc_sl: U8[] = \"abcd\";",
+    .expr = "loc_sl" })
+  out
+    .push(Root::{ .slot = "ro_ptr", .globals = "const ro_arr: U8[4] = ::{ 1, 2, 3, 4 };",
+    .locals = "rp: U8@ = ro_arr[0]@;", .expr = "rp" })
+  out
+    .push(Root::{ .slot = "ro_ptr_to_ptr", .globals = "const ro_arr: U8[4] = ::{ 1, 2, 3, 4 };",
+    .locals = "rp: U8@ = ro_arr[0]@;\n  rpp: U8@@ = rp@;", .expr = "rpp" })
+  out
+    .push(Root::{ .slot = "ptr_to_ro_slice", .globals = "",
+    .locals = "loc_sl: U8[] = \"abcd\";\n  psl: U8[]@ = loc_sl@;", .expr = "psl" })
+  out
+    .push(Root::{ .slot = "ro_ptr_to_struct", .globals = holder_decl,
+    .locals = "$hv: Holder = ::{ .buf = ::{ 1, 2, 3, 4 }, .n = 0 };\n  hp: Holder@ = hv@;",
+    .expr = "hp" })
+  // A mutable binding too: even a valid write whose generated C fails (an assignment to a C struct
+  // with immutable elements, say) is ksplc's mistake.
+  out
+    .push(Root::{ .slot = "mut_binding_array", .globals = "",
+    .locals = "$mut_arr: U8[4] = ::{ 1, 2, 3, 4 };", .expr = "mut_arr" })
+  out
+    .push(Root::{ .slot = "const_struct", .globals = holder2_decl, .locals = "", .expr = "ro_st" })
+  // **Nested view types are among the sources too**, or the implicit conversion of "a slice of
+  // mutable slices" to "a slice of immutable slices" (letting the callee write a read-only value
+  // into a mutable frame) is never tested.
+  out
+    .push(Root::{ .slot = "nested_mut_slices", .globals = "", .locals = nested_mut_locals,
+    .expr = "nested" })
+  out
+    .push(Root::{ .slot = "nested_ro_slices", .globals = "", .locals = nested_ro_locals,
+    .expr = "nested_ro" })
+  return out
+
+priv fn writes(arena: Arena$@): List<|Write|>
+  $out: = List<|Write|>.new(arena)
+  out.push(Write::{ .slot = "index", .body = "<e>[0] = 9;" })
+  out.push(Write::{ .slot = "index_compound", .body = "<e>[0] += 1;" })
+  out.push(Write::{ .slot = "deref", .body = "<e>$ = 9;" })
+  out.push(Write::{ .slot = "deref_twice", .body = "<e>$$ = 9;" })
+  out.push(Write::{ .slot = "deref_after_add", .body = "(<e> + 1)$ = 9;" })
+  out.push(Write::{ .slot = "deref_after_sub", .body = "(<e> - 0)$ = 9;" })
+  out.push(Write::{ .slot = "index_through_deref", .body = "<e>$[0] = 9;" })
+  out.push(Write::{ .slot = "field", .body = "<e>.n = 9;" })
+  out.push(Write::{ .slot = "field_index", .body = "<e>.buf[0] = 9;" })
+  out.push(Write::{ .slot = "field_index_compound", .body = "<e>.buf[0] += 1;" })
+  out.push(Write::{ .slot = "pass_elem_addr_as_mut", .body = "sink_ptr(<e>[0]@);" })
+  out.push(Write::{ .slot = "pass_addr_as_mut", .body = "sink_ptr(<e>@);" })
+  out.push(Write::{ .slot = "pass_as_mut_slice", .body = "sink_slice(<e>);" })
+  out.push(Write::{ .slot = "bind_elem_addr_then_write", .body = "q: = <e>[0]@;\n  q$ = 9;" })
+  out.push(Write::{ .slot = "bind_addr_then_write", .body = "q: = <e>@;\n  q$ = 9;" })
+  out.push(Write::{ .slot = "bind_addr_then_add_write", .body = "q: = <e>@;\n  (q + 1)$ = 9;" })
+  out.push(Write::{ .slot = "pass_field_addr_as_mut", .body = "sink_ptr(<e>.buf[0]@);" })
+  out
+    .push(Write::{ .slot = "bind_field_addr_then_write", .body = "q: = <e>.buf[0]@;\n  q$ = 9;" })
+  // A receiver's address is taken implicitly: with only assignment blocked, a `Self$@` method
+  // still writes.
+  out.push(Write::{ .slot = "mut_method_on_elem", .body = "<e>[0].bump();" })
+  out.push(Write::{ .slot = "mut_method_on_place", .body = "<e>.bump_holder();" })
+  out.push(Write::{ .slot = "mut_method_via_deref", .body = "<e>$.bump();" })
+  // Weakening only the inner level to read-only: the callee puts a read-only value into the frame
+  // and the caller reads it back as mutable (the variance hole).
+  out.push(Write::{ .slot = "pass_weakening_inner", .body = "sink_nested(<e>);" })
+  out.push(Write::{ .slot = "write_nested_elem", .body = "<e>[0][0] = 9;" })
+  return out
+
+priv const prog_middle: U8[] =
+  """
+impl U8 {
+  fn bump(r: Self$@) {
+    r$ = 7;
+  }
+}
+
+priv fn sink_ptr(p: U8$@) {
+  p$ = 7;
+}
+
+priv fn sink_slice(s: U8$[]) {
+  s[0] = 7;
+}
+
+priv fn sink_nested(s: U8[]$[]) {
+  s[0] = "x";
+}
+
+fn main(): I32 {
+"""
+
+priv fn build_case(r: Root, w: Write, arena: Arena$@): U8[]
+  return arena.text().s(r.globals).s("\n").s(prog_middle).s("  ").s(r.locals).s("\n  ")
+    .s(w.body.replace("<e>", r.expr, arena)).s("\n  return 0;\n}\n").take()
+
+priv fn c_complains(out: U8[]): Bool //< the C compiler's finding
+  //<
+  //< **A warning counts as an error** (the repository is at zero warnings, and clang warns on a
+  //< discarded const qualifier).
+  return out.find_str("error:") >= 0 || out.find_str("warning:") >= 0
+
+priv fn must_accept(slot: U8[], src: U8[], dir: U8[], arena: Arena$@) //<
+  //< checks that a valid write passes
+  //<
+  //< **ksplc is right to reject every combination above**, so rejecting everything would go green;
+  //< a valid write and the explicit cast's way out catch rejecting too much.
+  name: = arena.text().s("a lawful write passes: \{slot\}").take()
+  kspl: = fs.join(dir, arena.text().s("ok_\{slot\}.kspl").take(), arena)
+  gen: = fs.join(dir, arena.text().s("ok_\{slot\}.c").take(), arena)
+  obj: = fs.join(dir, arena.text().s("ok_\{slot\}.o").take(), arena)
+  io.write_file(kspl, src) catch
+    verdict.check(name, false, "cannot write the material")
+    return
+  // Run from the working directory, as below, so the file's name is its own, not a path.
+  r: = harness.run_in(harness.ksplc_argv(U8[][]::{ kspl, gen }), dir)
+  if r.code != 0
+    verdict.check(name, false,
+      arena.text().s("ksplc refused it (excessive check)\n\{src\}--- diagnostics ---\n\{r.out\}")
+      .take())
+    return
+  cc: = harness.run_in(U8[][]::{ harness.cc(), "-std=c99", "-Wall", "-c", gen, "-o", obj }, dir)
+  verdict.check(name, cc.code == 0 && !c_complains(cc.out),
+    arena.text().s("C refused it\n\{src\}--- C's finding ---\n\{cc.out\}").take())
+
+priv const ok_mut_local_array: U8[] =
+  """fn main(): I32 {
+  $arr: U8[4] = ::{ 1, 2, 3, 4 };
+  arr[0] = 9;
+  return I32::arr[0];
+}
+"""
+
+priv const ok_mut_ptr_arith: U8[] =
+  """fn main(): I32 {
+  $arr: U8[4] = ::{ 1, 2, 3, 4 };
+  p: = arr[0]@;
+  (p + 1)$ = 9;
+  return I32::arr[1];
+}
+"""
+
+priv const ok_mut_slice_through_const_descriptor_ptr: U8[] =
+  """fn main(): I32 {
+  $arr: U8[4] = ::{ 1, 2, 3, 4 };
+  sl: U8$[] = U8$[]::arr;
+  psl: U8$[]@ = sl@;
+  psl[3] = 9;
+  return I32::arr[3];
+}
+"""
+
+priv const ok_mut_receiver_field_and_elem: U8[] =
+  """struct Holder { buf: U8[4]; n: I32; }
+
+impl Holder {
+  fn write(r: Self$@) {
+    r.n = 9;
+    r.buf[0] = 9;
+  }
+}
+
+fn main(): I32 {
+  $h: Holder = ::{ .buf = ::{ 1, 2, 3, 4 }, .n = 0 };
+  h.write();
+  return I32::h.buf[0];
+}
+"""
+
+priv const ok_whole_array_assign: U8[] =
+  """fn main(): I32 {
+  $a: U8[18] = ::{ 1 };
+  $b: U8[18] = ::{ 2 };
+  a = b;
+  return I32::a[0];
+}
+"""
+
+priv const ok_explicit_cast_escape_hatch: U8[] =
+  """const ro: U8[4] = ::{ 1, 2, 3, 4 };
+
+fn main(): I32 {
+  p: U8$@ = U8$@::(ro@);
+  p$ = 9;
+  return I32::ro[0];
+}
+"""
+
+fn main(): I32
+  arena: = harness.begin(512 * 1024 * 1024)
+  dir: = harness.sandbox("write_perm") catch
+    return harness.fatal("cannot make a working directory")
+  work: = dir
+  must_accept("mut_local_array", ok_mut_local_array, work, arena)
+  must_accept("mut_ptr_arith", ok_mut_ptr_arith, work, arena)
+  must_accept("mut_slice_through_const_descriptor_ptr", ok_mut_slice_through_const_descriptor_ptr,
+    work, arena)
+  must_accept("mut_receiver_field_and_elem", ok_mut_receiver_field_and_elem, work, arena)
+  must_accept("whole_array_assign", ok_whole_array_assign, work, arena)
+  must_accept("explicit_cast_escape_hatch", ok_explicit_cast_escape_hatch, work, arena)
+
+  // --- the combinations ---
+  rs: = roots(arena)
+  ws: = writes(arena)
+  $names: = List<|U8[]|>.new(arena)
+  $srcs: = List<|U8[]|>.new(arena)
+  $gens: = List<|U8[]|>.new(arena)
+  $jobs: = List<|subproc.Job|>.new(arena)
+  for ri in Range.asc(rs.len)
+    for wi in Range.asc(ws.len)
+      r: = rs.get(ri)
+      w: = ws.get(wi)
+      stem: = arena.text().s("c\{ri\}_\{wi\}").take()
+      kspl: = fs.join(work, arena.text().s("\{stem\}.kspl").take(), arena)
+      gen: = fs.join(work, arena.text().s("\{stem\}.c").take(), arena)
+      io.write_file(kspl, build_case(r, w, arena)) catch
+        continue
+      names.push(arena.text().s("\{r.slot\} / \{w.slot\}").take())
+      srcs.push(kspl)
+      gens.push(gen)
+      jobs
+        .push(subproc.Job::{ .argv = harness.ksplc_argv(U8[][]::{ kspl, gen }), .cwd = work })
+  io.out().s("# writes to an immutable place: \{jobs.len\} ways\n")
+  gen_outs: = harness.run_all(jobs.slice(), "write_perm_gen")
+
+  // Only what ksplc accepted is passed on to C.
+  $cc_jobs: = List<|subproc.Job|>.new(arena)
+  $cc_index: = List<|Sz|>.new(arena)
+  $rejected: Sz = 0
+  for i in Range.asc(jobs.len)
+    if gen_outs.get(i).code != 0
+      rejected += 1
+      continue
+    gen: = gens.get(i)
+    obj: = arena.text().s("\{gen\}.o").take()
+    cc_jobs
+      .push(subproc.Job::{ .argv = U8[][]::{ harness.cc(), "-std=c99", "-Wall", "-c", gen, "-o",
+      obj }, .cwd = work })
+    cc_index.push(i)
+  cc_outs: = harness.run_all(cc_jobs.slice(), "write_perm_cc")
+  $gaps: Sz = 0
+  $both_ok: Sz = 0
+  for j in Range.asc(cc_jobs.len)
+    out: = cc_outs.get(j)
+    i: = cc_index.get(j)
+    if out.code == 0 && !c_complains(out.out)
+      both_ok += 1
+      continue
+    gaps += 1
+    src: = io.read_file(srcs.get(i)) catch ""
+    verdict.check(arena.text().s("ksplc did not turn it away and C did: \{names.get(i)\}").take(),
+      false, arena.text().s("\{src\}--- C's finding ---\n\{out.out\}").take())
+  verdict.check(arena.text()
+    .s("what passed ksplc passes C without a warning too (\{jobs.len\} ways checked: ")
+    .s("ksplc refused \{rejected\} / both passed \{both_ok\})").take(), gaps == 0,
+    arena.text().s("\{gaps\} gaps in the checks").take())
+  return harness.finish()

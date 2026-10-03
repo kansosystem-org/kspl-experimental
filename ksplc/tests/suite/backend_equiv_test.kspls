@@ -1,0 +1,121 @@
+#!/usr/bin/env -S ksplc run
+//< The backend-equivalence test
+//<
+//< It builds the same program (`tests/prog/equiv.kspls`) on the C and the LLVM backend, runs both
+//< and checks that their standard output agrees.
+//< Caution: **Link through the harness's function.** List the libraries yourself and the two
+//< builds run under different conditions (Windows's stack size and the like), which shows as "a
+//< difference between the backends' output". The source is passed as a **relative path**
+//< (resolved at cwd = the root).
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/harness_build"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+priv const src: U8[] = "tests/prog/equiv.kspls"
+
+priv struct Built //< the result of building and running
+  //<
+  //< Caution: **Do not mix "it did not build" with "the output was empty".**
+  ok: Bool
+  out: U8[]
+
+priv fn built(ok: Bool, out: U8[]): Built
+  return Built::{ .ok = ok, .out = out }
+
+priv fn build_run(llvm: Bool, gen: U8[], exe: U8[], cflags: U8[][], arena: Arena$@): Built //<
+  //< It builds and runs on one of the backends
+  $args: = List<|U8[]|>.new(arena)
+  if llvm
+    args.push("--target=llvm")
+  args.push(src)
+  args.push(gen)
+  g: = harness.ksplc(args.slice())
+  if g.code != 0
+    return built(false, g.out)
+  b: =
+    (harness_build.build_llvm_exe(U8[][]::{ gen }, exe, cflags) if llvm
+    else harness_build.build_exe(U8[][]::{ gen }, exe, cflags))
+  if b.code != 0
+    return built(false, b.out)
+  // Caution: **Compare the exit code as well.** The path that turns `main`'s Result error type
+  // into the process's exit code prints nothing to standard output (`emit_numeric_to_i32` in
+  // gen/llvm/types.kspls). Compare only the output and a disagreement on that path **leaves
+  // nothing on the screen**.
+  r: = harness.run(U8[][]::{ exe })
+  return built(true, arena.text().s(r.out).s("exit=\{r.code\}\n").take())
+
+priv fn binary_literals(text: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< The binary literals left in the generated C
+  //<
+  //< Caution: **Leave no binary literal in the generated C.** C99 has no `0b1010`; it passes only
+  //< as a gcc/clang extension, where the values agree, so this checks the text.
+  $out: = List<|U8[]|>.new(arena)
+  for i in Range.asc(text.len)
+    if text[i] != '0' || i + 2 >= text.len
+      continue
+    if text[i + 1] != 'b' && text[i + 1] != 'B'
+      continue
+    if i > 0 && (text[i - 1].is_alnum() || text[i - 1] == '_')
+      continue
+    $end: = i + 2
+    for end < text.len && (text[end] == '0' || text[end] == '1')
+      end += 1
+    if end > i + 2 &&
+      !(end < text.len && (text[end].is_alnum() || text[end] == '_'))
+      out.push(text.sub(i, end - i))
+  return out
+
+priv fn first_diff(a: U8[], b: U8[], arena: Arena$@): U8[] //< the first line that disagreed
+  //<
+  //< Caution: Do not print both whole texts (a long program's output would appear twice).
+  $al: = a.lines(arena)
+  $bl: = b.lines(arena)
+  n: = al.len if al.len < bl.len else bl.len
+  for i in Range.asc(n)
+    if !al.get(i).equals(bl.get(i))
+      return arena.text().s("line \{i + 1\} differs\n  C   : ").s(al.get(i)).s("\n  LLVM: ")
+        .s(bl.get(i)).take()
+  return arena.text().s("the line counts differ (C=\{al.len\} LLVM=\{bl.len\})").take()
+
+fn main(): I32
+  arena: = harness.begin(64 * 1024 * 1024)
+  dir: = harness.sandbox("equiv") catch
+    return harness.fatal("cannot make a working directory")
+  work: = dir
+  c_gen: = fs.join(work, "c.c", arena)
+  c: =
+    build_run(false, c_gen, fs.join(work, "c.exe", arena),
+    U8[][]::harness_build.default_cflags, arena)
+  if !c.ok
+    verdict.check("the C backend's build", false, c.out)
+    return harness.finish()
+  gen_text: = io.read_file(c_gen) catch
+    return harness.fatal("cannot read the generated C")
+  $lits: = binary_literals(gen_text, arena)
+  found: = arena.text()
+  for i in Range.asc(lits.len)
+    found.s(", " if i > 0 else "").s(lits.get(i))
+  verdict.check("there is no binary literal in the generated C", lits.len == 0, found.take())
+  // genllvm's emit_thread_and_atomic_stubs puts pthread calls in every hosted program's IR with no
+  // `_WIN32` branch (hosted.c has one), so MSVC's link.exe always fails. windows-ucrt64 (MinGW)
+  // confirms the LLVM path; here it stops once the C build passes.
+  if harness.cc_target().find_str("msvc") >= 0
+    verdict.skip_check("the C and LLVM output agree",
+      "MSVC's link.exe cannot resolve the LLVM side's pthread_* (confirmed on windows-ucrt64)")
+    return harness.finish()
+  l: =
+    build_run(true, fs.join(work, "l.ll", arena), fs.join(work, "l.exe", arena),
+    U8[][]::harness_build.llvm_cflags, arena)
+  if !l.ok
+    verdict.check("the LLVM backend's build", false, l.out)
+    return harness.finish()
+  verdict.check("the C and LLVM output agree", c.out.equals(l.out),
+    first_diff(c.out, l.out, arena))
+  return harness.finish()

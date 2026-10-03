@@ -1,0 +1,85 @@
+//< The driving control for a Freenove 4WD mecanum car
+//<
+//< A speed per wheel, and a mecanum's motion (forward-back, sideways, turning). The H bridge is
+//< two PWMs per motor: the duty on one and 0 on the other, swapped for negative; both 0
+//< freewheels. Each motor's pins are **the A/B channels of one PWM slice** (shared period,
+//< separate duty; ksos/drivers/rp2040/pwm.kspls).
+import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/drivers/rp2040/pwm"
+import "ksos/drivers/rp2040/timer"
+
+const speed_max: I32 = 100 //< the limit on a requested speed (as an absolute value)
+  //<
+  //< The same scale as the duty percentage.
+
+fn init(): Bool //<
+  //< Initializes the PWM block, makes the eight motor pins PWM outputs and sets the period
+  //<
+  //< false: taking it out of reset failed, and no command takes effect. Every wheel is left
+  //< stopped (the duty is written 0 here, since config_slice does not set it).
+  if !pwm.init()
+    return false
+  for w in Range.asc(board.wheel_count)
+    a: = board.motor_pin_a[w]
+    b: = board.motor_pin_b[w]
+    pwm.init_pin(a)
+    pwm.init_pin(b)
+    // The two pins share a slice; one period setting covers both.
+    pwm.config_slice(pwm.slice_of(a), board.motor_pwm_div_int, 0, board.motor_pwm_top)
+  stop()
+  return true
+
+fn set_wheel(w: Sz, speed: I32) //< turns wheel w at speed `speed` (-100 to 100)
+  //<
+  //< board.wheel_polarity absorbs each wheel's actual direction of rotation.
+  s: = speed * board.wheel_polarity[w]
+  capped: = speed_max if s > speed_max else (-speed_max if s < -speed_max else s)
+  // **Raise it to the duty at which the wheel starts turning** (the reason is at
+  // `board.wheel_min_percent`). 0 stays 0.
+  $clamped: I32 = capped
+  if capped > 0 && capped < board.wheel_min_percent
+    clamped = board.wheel_min_percent
+  else if capped < 0 && capped > 0 - board.wheel_min_percent
+    clamped = 0 - board.wheel_min_percent
+  a: = board.motor_pin_a[w]
+  b: = board.motor_pin_b[w]
+  top: = board.motor_pwm_top
+  if clamped >= 0
+    pwm.set_percent(a, U32::clamped, top)
+    pwm.set_percent(b, 0, top)
+  else
+    pwm.set_percent(a, 0, top)
+    pwm.set_percent(b, U32::(-clamped), top)
+
+// Whether the previous command left it stopped.
+// Caution: **`stop` must update this too**, or the kick is missed after a stop.
+priv $was_stopped: Bool = true
+
+fn stop()
+  for w in Range.asc(board.wheel_count)
+    set_wheel(w, 0)
+  was_stopped = true
+
+priv fn spread(longitudinal: I32, lateral: I32, rotation: I32, gain: I32) //<
+  //< Mixes the triple and distributes it to the four wheels
+  //<
+  //< With `rotation` positive **the left two go forward and the right two back** (clockwise from
+  //< above); reversed, line following turns **the wrong way**. **The sideways direction cannot be
+  //< determined on paper** (the Arduino sample inverts its sign first).
+  set_wheel(board.wheel_front_left, (longitudinal + lateral + rotation) * gain)
+  set_wheel(board.wheel_back_left, (longitudinal - lateral + rotation) * gain)
+  set_wheel(board.wheel_back_right, (longitudinal + lateral - rotation) * gain)
+  set_wheel(board.wheel_front_right, (longitudinal - lateral - rotation) * gain)
+
+fn drive(longitudinal: I32, lateral: I32, rotation: I32) //< combines a mecanum's motion
+  //<
+  //< longitudinal **positive = forward**, lateral **positive = right**, rotation **positive =
+  //< clockwise**. A total over speed_max is clamped per wheel and the ratio is lost; normalize
+  //< first to keep it.
+  moving: = longitudinal != 0 || lateral != 0 || rotation != 0
+  // **It kicks only when starting from a standstill** (the reason is at `board.kick_gain`).
+  if moving && was_stopped
+    spread(longitudinal, lateral, rotation, board.kick_gain)
+    timer.delay_ms(board.kick_ms)
+  was_stopped = !moving
+  spread(longitudinal, lateral, rotation, 1)

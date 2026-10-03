@@ -1,0 +1,218 @@
+import "kspage/model/doc" { Doc }
+import "kspage/model/style" + { Sheet, Style }
+import "kspage/share/markdown"
+import "kspage/share/markdown_look"
+import "kspage/share/markdown_read"
+import "kspage/tests/base"
+import "kspage/write/edit"
+import "kspage/write/theme"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// kspage: checks how a document opened as Markdown is shown.
+// Only whether a look is applied — **nothing is written into the text** (no style name or
+// measurement goes into the `.md`); the round trip is `tests/suite/mdtrip_test.kspls`'s job.
+// Caution: **Do not copy the numbers themselves**, or every change to a look changes this. It
+// checks **relations** (a heading larger than the body, a fenced block with a fill).
+// ==========================================
+
+priv struct Read //< the document a text was read into, and its style table
+  doc: Doc$@
+  sheet: Sheet$@
+
+priv fn read_md(src: U8[], arena: Arena$@): Read
+  sheet: = markdown_look.sheet_for(base.root_font(), arena)
+  return Read::{ .doc = markdown_read.read(src, sheet, arena), .sheet = sheet }
+
+priv fn style_at(r: Read, i: Sz): Option<|Style$@|> //< the style applied to block `i`
+  //<
+  //< Caution: **Do not look it up by name** (the name is the display side's choice).
+  return r.sheet.find(r.doc.blocks.get(i).style)
+
+priv fn size_of(found: Option<|Style$@|>): F32 //<
+  //< The font size that style sets (0 where there is no style, or it sets none)
+  if s: = found
+    switch s.font.size_px case .some(v)
+      return v
+    case .none {}
+  return 0.0F32
+
+priv fn px_of(s: Style$@): F32 //< the font size that style sets (0 where it sets none)
+  if v: = s.font.size_px
+    return v
+  return 0.0F32
+
+priv fn dressed(found: Option<|Style$@|>): Bool //< whether a style is applied
+  if _s: = found
+    return true
+  return false
+
+priv fn after_of(found: Option<|Style$@|>): F32 //<
+  //< The space after a paragraph (0 where there is no style)
+  if s: = found
+    return s.space_after
+  return 0.0F32
+
+fn test_headings_come_out_bigger_than_the_body()
+  verdict.start("[kspage/markdown] a heading coming out larger than the body test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+
+  r: = read_md("# One\n\n## Two\n\n### Three\n\nThis is the body.\n", arena)
+  h1: = size_of(style_at(r, 0))
+  h2: = size_of(style_at(r, 1))
+  h3: = size_of(style_at(r, 2))
+  body: = style_at(r, 3)
+  assert(h1 > h2 && h2 > h3, "the deeper the smaller")
+  assert(h3 > base.root_font().size_px, "the three shallowest tiers are larger than the body")
+  // **A plain paragraph needs a style too**; with no name, its spacing has nowhere to go.
+  assert(dressed(body), "a style is laid on a plain paragraph too")
+  assert(after_of(body) > 0.0, "there is a space behind the paragraph")
+  assert(size_of(body) <= 0.0, "the body says no size (it stays as the root has it)")
+  verdict
+    .pass("a heading grows smaller tier by tier, and the body is given a space before and behind.")
+
+fn test_a_fence_is_dressed_even_when_it_names_a_language()
+  verdict.start("[kspage/markdown] a fenced block that named a language being shown too test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+
+  r: = read_md("```\nplain\n```\n\n```kspl\nfn main() {}\n```\n", arena)
+  // **Each declared language is another style** (the declaration is kept as the style's name). So
+  // if added as a plain style, a fenced block that only declared a language would get a plain look.
+  $plain: Style$@ = null
+  $named: Style$@ = null
+  for $i: Sz = 0; i < r.doc.blocks.len; i += 1
+    if s: = style_at(r, i)
+      if s.wrap
+        continue
+      if s.name.equals(markdown.plain_code_name)
+        plain = s
+      else
+        named = s
+  assert(plain != null && named != null, "naming none and naming one become different styles")
+  assert(!plain.wrap && !named.wrap, "neither of them wraps")
+  assert(px_of(named) == px_of(plain), "the size is the same")
+  assert(named.pad == plain.pad && named.rule_width == plain.rule_width,
+    "the space and the line are the same")
+  assert(same_fill(named, plain), "the fill is the same")
+  verdict
+    .pass("a fenced block that named a language is added with the same showing as one that named \
+      none.")
+
+priv fn same_fill(a: Style$@, b: Style$@): Bool //< whether two styles have the same fill
+  if x: = a.fill
+    switch b.fill case .some(y)
+      return x == y
+    case .none {}
+    return false
+  if _y: = b.fill
+    return false
+  return true
+
+fn test_every_cell_carries_the_lattice()
+  verdict.start("[kspage/markdown] every cell drawing a grid whatever it is aligned to test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+
+  r: = read_md("| left | mid | right |\n| :-- | :-: | --: |\n| a | b | c |\n", arena)
+  grid: = r.doc.blocks.get(0)
+  assert(grid.children.len == 2, "the heading row and the contents row go in")
+  row: = grid.children.get(0)
+  assert(row.children.len == 3, "three cells go in")
+  $seen: Sz = 0
+  for $i: Sz = 0; i < row.children.len; i += 1
+    if s: = r.sheet.find(row.children.get(i).style)
+      // **A left-aligned cell has a style too.** With no name it keeps the parent's, with nowhere
+      // to write the grid's lines or the padding (a block with no rules).
+      assert(s.rule_width > 0.0, "the cells are ruled")
+      assert(s.pad > 0.0, "there is a space inside the cells")
+      seen += 1
+  assert(seen == 3, "all three hold a style")
+  verdict.pass("whatever the cell is aligned to, it holds the ruling and the space inside.")
+
+priv fn ink_of(found: Option<|Style$@|>): U32 //<
+  //< The text color that style sets (0 where it sets none)
+  if s: = found
+    switch s.ink.color case .some(v)
+      return v
+    case .none {}
+  return 0U32
+
+fn test_a_link_looks_like_a_link_and_follows_the_theme()
+  verdict.start("[kspage/markdown] a link holding a look and following a theme test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+
+  r: = read_md("The text form and [a link](https://example.com) and **[bold](x)**.\n", arena)
+  b: = r.doc.blocks.get(0)
+  $linked: Sz = 0
+  $was: U32 = 0U32
+  for $i: Sz = 0; i < b.inlines.len; i += 1
+    n: = b.inlines.get(i)
+    if n.href.len <= 0
+      continue
+    if s: = r.sheet.find(n.style)
+      // One place tells them apart, on the style side (`linked` in `model/style.kspls`).
+      assert(style.linked(s), "a run holding a link is the link's style")
+      switch s.ink.color case .some(v)
+        was = v
+      case .none {}
+      linked += 1
+  assert(linked == 2, "both a plain link and a bold link hold a look")
+
+  assert(was != 0U32, "a link says a colour")
+
+  // Caution: **Under a theme it is still a color distinct from the body's**, or what can be clicked
+  // goes unseen in the text (a bar chart likewise: `draws` in `model/style.kspls`). So it checks
+  // "differs from the body", not "changed", which a change to the body's color would also pass.
+  ed: = edit.new_editor(r.doc)
+  assert(theme.wear(ed, r.sheet, 1), "the theme lies on")
+  body: = ink_of(r.sheet.find(r.doc.blocks.get(0).style))
+  $still: Sz = 0
+  for $i: Sz = 0; i < r.sheet.styles.len; i += 1
+    s: = r.sheet.styles.get(i)
+    if !style.linked(s)
+      continue
+    still += 1
+    switch s.ink.color case .some(v)
+      assert(v != body, "it is a colour apart from the body's")
+    case .none
+      assert(false, "the link's colour is not lost")
+  assert(still > 0, "with a theme too, a link is a link")
+  verdict
+    .pass("a link holds a colour and an underline, and dressed in a theme it does not become the \
+      ground's colour.")
+
+fn test_a_coloured_underlined_heading_is_not_a_link()
+  verdict
+    .start("[kspage/markdown] a heading holding a colour and an underline not being taken for a \
+      link test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+
+  r: = read_md("# Title\n\nThe body and [a link](x).\n", arena)
+  // **A color and an underline give the heading the same "look" as a link**; sorted by the style's
+  // fields alone, the heading would get the link's color here.
+  switch style_at(r, 0) case .some(head)
+    head.ink.color = Option<|U32|>.some(0x0000ffU32)
+    head.ink.underline = Option<|Bool|>.some(true)
+    assert(style.linked(head), "the look cannot be told from a link's")
+  case .none
+    assert(false, "a style is laid on the heading")
+
+  ed: = edit.new_editor(r.doc)
+  assert(theme.wear(ed, r.sheet, 1), "the theme lies on")
+  head_ink: = ink_of(style_at(r, 0))
+  $link_ink: U32 = 0U32
+  b: = r.doc.blocks.get(1)
+  for $i: Sz = 0; i < b.inlines.len; i += 1
+    n: = b.inlines.get(i)
+    if n.href.len > 0
+      link_ink = ink_of(r.sheet.find(n.style))
+  assert(link_ink != 0U32, "the link holds a colour")
+  assert(head_ink != link_ink, "the heading does not come out the link's colour")
+  verdict
+    .pass("whether it is a link is decided by the run holding a link, not by the style's look.")

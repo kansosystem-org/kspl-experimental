@@ -1,0 +1,18 @@
+//< Passing a pointer to the **inside** of an allocation to `mem.dealloc` must stop
+//<
+//< `dealloc` may receive only the exact pointer `mem.alloc` returned. `Rc.get()` points inside the
+//< control block, so 16 bytes back is not malloc's address; a field's or element's is alike.
+//< ARC itself is out of reach (`Rc` has no `free()`; `ctrl`, `retain` and `release` are `priv`).
+// EXPECT: mem.dealloc: this pointer did not come from mem.alloc
+// EXPECT-NOT: must not get here
+import "std/io"
+import "std/mem"
+import "std/refcount" { Rc }
+
+fn main(): I32
+  $r: = Rc<|I32|>.new(5)
+  inner: = r.get()
+  io.out().s("inner=\{inner$\}\n").flush()
+  mem.dealloc(Void$@::inner)
+  io.out().s("must not get here\n").flush()
+  return 0

@@ -1,0 +1,536 @@
+//< Resolves what is to the right of a `.`
+//<
+//< Three cases: a namespace, a built-in name, and a field or method.
+//< **`[]` and `as` are not here** (`ksplc/sema/body/postfix.kspls`): in one file, branching on the
+//< receiver's type would mix with branching on the name to the right. The enum-only rewrite of
+//< `\{e\}` lives here too, **so `.` is resolved in one place**.
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/base/locate" as base_locate
+import "ksplc/sema/body/resolve_path" as sema_body_resolve_path
+import "ksplc/sema/body/stmt" as sema_body_stmt
+import "ksplc/sema/decl/access" as sema_decl_access
+import "ksplc/sema/decl/mono" as sema_decl_mono
+import "ksplc/sema/decl/mono_name" as sema_decl_mono_name
+import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
+import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
+import "ksplc/sema/session/import_table" as sema_session_import_table
+import "ksplc/sema/type/def" as sema_type_def
+import "ksplc/sema/type/display" as sema_type_display
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
+import "std/chars"
+import "std/ds" { List }
+import "std/str" { Str_builder }
+
+fn try_rewrite_enum_fmt(node: Ast_node$@, left: Ast_node$@, c: Sema_ctx$@): Bool?Sema_error //<
+  //< Rewrites `\{e\}` on an enum into `w.s(e.variant_name())`
+  //<
+  //< A string interpolation `\{e\}` desugars into `put(w, e)`; it is rewritten only for an enum.
+  //< No `fmt` is synthesized on an enum, since that would give every enum a `Formattable` vtable.
+  //< Caution: **Do not rewrite if the user wrote `fmt`**, or their format is silently ignored.
+  if left == null || (left.kind_id != .k_expr_path && left.kind_id != .k_identifier)
+    return false
+  args: = node.find_child(.k_expr_args)
+  if args == null || args.children.len != 2
+    return false
+  // Caution: **Do not decide by the name `put` alone**, or a user's own `put` that takes an enum
+  // has its body silently replaced. Check that it is std/lang's `put`: first symtab, where a local
+  // or the file's own declaration wins, then imported_symbol_fqn (the order of
+  // sema/body/resolve_path.kspls).
+  if left.kind_id == .k_expr_path && left.children.len > 1
+    return false
+  callee_name: = left.get_path_name() if left.kind_id == .k_expr_path else left.text
+  if !callee_name.equals("put")
+    return false
+  if (c.symtab.resolve(callee_name) catch null) != null
+    return false
+  if !c.imported_symbol_fqn(callee_name).equals("std.lang.put")
+    return false
+  recv: = args.get_child(1)
+  // **recv must not be inferred here**: every non-enum `put(w, X)` would be inferred twice,
+  // breaking its method resolution. So only an identifier counts; for `\{x.field\}` write
+  // `\{x.field.variant_name()\}`.
+  if recv == null || (recv.kind_id != .k_expr_path && recv.kind_id != .k_identifier)
+    return false
+  recv_name: = recv.get_path_name() if recv.kind_id == .k_expr_path else recv.text
+  sym: = c.symtab.resolve(recv_name) catch null
+  if sym == null || !sym.kind.is_var_or_const() || sym.type_id == 0
+    return false
+  base_id: = c.env.get_clean_real_type(c.env.receiver_base_id(sym.type_id))
+  $is_enum: = false
+  switch c.env.get_info(base_id) case .enum_type(_def)
+    is_enum = true
+  default {}
+  if !is_enum
+    return false
+  t_entry: = c.env.id_to_type.get(base_id)
+  if t_entry == null
+    return false
+  // Caution: **Finish building the method table before the lookup.** A generic enum first
+  // instantiated in a method's signature has its table deferred (ensure_instance_methods in
+  // mono_queue.kspls); until it is built, the synthesized `variant_name` is invisible and correct
+  // code fails with "`Formattable` not implemented".
+  c.ensure_instance_methods(base_id) catch {}
+  if _user_fmt: = t_entry.get_method("fmt")
+    return false // the fmt the user wrote is respected
+  switch t_entry.get_method("variant_name") case .none
+    return false // no variant_name was synthesized (for a const generic, for example)
+  case .some {}
+
+  writer: = args.get_child(0)
+  name_call: = Ast_node.build_method_call(recv, "variant_name", null, 0, node.loc)
+  rewritten: = Ast_node.build_method_call(writer, "s", name_call, 0, node.loc)
+  node.morph(rewritten.kind_id, rewritten.text)
+  node.children = rewritten.children
+  node.type_id = 0
+  return true
+
+fn infer_namespace_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
+  sym_ptr: Sema_symbol$@, is_enum: Bool, expected_id: I32): I32?Sema_error
+  member_node: = node.get_postfix_member()
+  node.ice_assert(member_node != null, "Missing member identifier after namespace access")
+  member_name: = member_node.text
+
+  // A generic enum's variant (Option<|I32|>.some(v), mod.Option<|I32|>.some): left resolves to the
+  // template, so is_enum stays false and nothing is monomorphized. So a left with type arguments is
+  // instantiated here (instantiate_struct handles enums too); a variant found there is enum_init.
+  targs_node: = left.find_child(.k_type_args)
+  if targs_node != null
+    base_name: = left.get_path_name()
+    fqn_base: = c.resolve_fqn_for_type(base_name)
+    tmpl: = c.generics.templates.get(fqn_base) catch null
+    if tmpl != null
+      // Caution: **Suppress only the argument string's build.** The instance is cached, so an
+      // error inside it, suppressed on a first use of this shape, is never reported.
+      saved_sup: = c.suppress_errors
+      c.suppress_errors = true
+      $args_fqn: = targs_node.build_resolved_type_args_str(c, tmpl) catch sema_decl_mono_name.unknown_type_str()
+      c.suppress_errors = saved_sup
+      prev_inst_site: = c.generics.inst_site
+      c.generics.inst_site = node
+      args_fqn2: = args_fqn.slice()
+      $inst_name: = c.instantiate_struct(fqn_base, args_fqn2) catch sema_decl_mono_name.unknown_type_str()
+      c.generics.inst_site = prev_inst_site
+      cid: = c.env.get_or_add(inst_name.slice())
+      args_fqn.free()
+      inst_name.free()
+      if inst_def: = c.env.get_enum_def(c.env.get_str(cid))
+        switch inst_def.get_variant(member_name) case .some(_v)
+          node.set_kind(.k_enum_init)
+          node.type_id = cid
+          return cid
+        case .none {}
+
+  // An alias names the enum itself ("A typedef is only another name" in docs/SPEC-language.md),
+  // so `Tone.dark` is the enum's variant. It is typed by the name as written, as `Pt::{…}` is, so
+  // a diagnostic spells it as the source does.
+  if is_enum || (sym_ptr != null && sym_ptr.kind.is_alias())
+    enum_name: = c.env.get_str(c.env.get_real_type(sym_ptr.type_id))
+    $variant_def: sema_type_def.Enum_variant$@ = null
+    if enum_def: = c.env.get_enum_def(enum_name)
+      switch enum_def.get_variant(member_name) case .some(d)
+        variant_def = d
+      case .none {}
+
+    if variant_def != null
+      node.set_kind(.k_enum_init)
+      node.type_id = sym_ptr.type_id
+      return sym_ptr.type_id
+    // Not a variant: continue to the static-method resolution.
+  type_args_node: = node.get_type_args()
+
+  $new_path: = Str_builder.new()
+  new_path.s(left.text).s(".").s(member_name)
+  if type_args_node != null
+    new_path.s(type_args_node.text)
+
+  node.set_kind(.k_expr_path)
+  slice: = new_path.slice()
+  node.text = base_core.arena.dup_str(slice)
+  new_path.free()
+  flat: = base_ast.new_ast_node_list()
+  if left.kind_id == .k_identifier || left.kind_id == .k_primitive_type
+    flat.push(left)
+  else
+    for child in left.children
+      flat.push(child)
+
+  flat.push(member_node)
+  if type_args_node != null
+    flat.push(type_args_node)
+  node.children = flat
+  return sema_body_resolve_path.infer_path_expr(node, c, expected_id)?
+
+fn check_builtin_dot_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, recv_id: I32,
+  member_node: Ast_node$@): Option<|I32|> //<
+    //< Resolves a member of a built-in type: a slice's, a Result's or an array's; none for another
+    //<
+    //< recv_id is the receiver type with pointers already stripped by the caller's
+    //< receiver_base_id (this function ignores pointers entirely). The backend emits the
+    //< dereference from the receiver's pointer depth (emit_postfix_dot in gen/c/expr.kspls,
+    //< `.`'s lvalue path in gen/llvm/expr.kspls).
+  member_name_raw: = member_node.text
+  target_info: = c.env.get_info(recv_id)
+  $is_slice: = false
+  $is_result: = false
+  $result_err_id: = I32::sema_type_env.Builtin_type_id.i32_type
+  $is_array: = false
+  $base_slice_id: = recv_id
+  $arr_size: I32 = -1
+
+  slice_base: = c.env.slice_struct_elem(recv_id)
+  if slice_base != 0
+    is_slice = true
+    base_slice_id = slice_base
+  switch target_info case .result(_base_id, err_id)
+    is_result = true
+    result_err_id = err_id
+  case .array(_b, s)
+    is_array = true
+    arr_size = s
+  default {}
+
+  // Caution: **Set the type on the member too.** The editor reads it from there; without it,
+  // `.len` and `.ptr` would be the only members a hover shows nothing for.
+  if is_slice && member_name_raw.equals("len")
+    member_node.ival = 1
+    member_node.type_id = I32::sema_type_env.Builtin_type_id.size_type
+    return Option<|I32|>.some(member_node.type_id)
+  if is_slice && member_name_raw.equals("ptr")
+    member_node.ival = 0
+    member_node.type_id = c.env.make_ptr(base_slice_id)
+    return Option<|I32|>.some(member_node.type_id)
+  if is_result
+    if sema_type_query.is_result_inner_field(member_name_raw)
+      c.err(node,
+        "direct access to Result internal fields is forbidden. Use '?' or 'catch' for error \
+          handling.")
+
+      if member_name_raw.equals("is_err")
+        member_node.ival = 0
+        return Option<|I32|>.some(I32::sema_type_env.Builtin_type_id.bool_type)
+      if member_name_raw.equals("val")
+        member_node.ival = 2
+        return Option<|I32|>.some(c.env.strip_result(recv_id))
+      member_node.ival = 1 // error_code
+      return Option<|I32|>.some(result_err_id)
+  if is_array && member_name_raw.equals("len")
+    if arr_size >= 0
+      member_node.ival = arr_size
+      if base_core.config.run_lint_checks && left != null && left.has_side_effect()
+        c.warn(left,
+          "[W0102] Expression has side effects but will be discarded by compile-time array length \
+            evaluation.")
+      $sb: = Str_builder.new()
+      defer sb.free()
+      sb.s("\{arr_size\}")
+      node.morph(.k_integer, sb.slice())
+      return Option<|I32|>.some(I32::sema_type_env.Builtin_type_id.size_type)
+
+    c.err(node, "cannot get length of array with unresolved size")
+    return Option<|I32|>.some(I32::sema_type_env.Builtin_type_id.size_type)
+  return Option<|I32|>.none
+
+fn format_spec_item(method_name: U8[]): U8[] //<
+  //< Returns the format spec item whose desugaring calls method_name, or empty if there is none
+  //<
+  //< The item is the SPEC of `\{value:SPEC\}`, as the user writes it.
+  //<
+  //< Caution: **Do not hard-code the method names.** Their canonical source is `fmt_method_*` in
+  //< `ksplc/base/core.kspls`, which `ksplc/parse/format_spec.kspls` uses too.
+  if method_name.equals(base_core.fmt_method_prec)
+    return "'.N'"
+  if method_name.equals(base_core.fmt_method_hex)
+    return "'x' / 'X'"
+  if method_name.equals(base_core.fmt_method_char)
+    return "'c'"
+  if method_name.equals(base_core.fmt_method_spec)
+    return "the width / '0' / ',' items"
+  return ""
+
+priv fn reject_unimported_spec(c: Sema_ctx$@, member_node: Ast_node$@, spec_item: U8[],
+  method_name: U8[], file: U8[]) //<
+    //< Reports that a format spec's method is defined in a file this one does not import
+    //<
+    //< Caution: **Name the item as written, not only the method.** `\{v:x\}` writes no `fmt_hex`,
+    //< so a message naming only the method points at nothing in the source.
+  c.clear_scratch()
+    .s("format spec: writing \{spec_item\} calls '\{method_name\}' in '\{file\}', which this file \
+      does not import\n  Note: add 'import \"\{file\}\"' to this file")
+  c.err(member_node, c.scratch.slice())
+
+priv fn reject_slotless_trait_call(c: Sema_ctx$@, recv_id: I32, member_name_raw: U8[],
+  base_type_str: U8[], member_node: Ast_node$@) //<
+    //< Rejects a call through an interface value to a method that has no vtable slot
+    //<
+    //< base_type_str is the type as the user wrote it (for the diagnostic), recv_id the receiver
+    //< type stripped of pointers and immutability (for the lookup).
+    //< Caution: **Do not let a method with no slot pass.** A method with a default body is not in
+    //< the vtable (has_vtable_slot in `../../base/ast_ext.kspls`). **Call this on both the found
+    //< and the not-found path**; a trait value's method takes the found path.
+  switch c.env.get_info(c.env.receiver_base_id(recv_id)) case .trait_type(slot_def)
+    for m_sym in slot_def.methods_list
+      if m_sym.name.equals(member_name_raw) && !m_sym.node.has_vtable_slot()
+        c.clear_scratch()
+          .s("method '\{member_name_raw\}' of interface '\{base_type_str\}' has a default body, so \
+            it has no vtable slot and cannot be called through an interface value. Call it on the \
+            concrete type, or through a type parameter bound by the interface, where the body each \
+            implementation received is reached directly. Note that the methods an interface \
+            declares without a body are the ones it dispatches")
+        c.err(member_node, c.scratch.slice())
+        break
+  default {}
+
+fn infer_dot_access(c: Sema_ctx$@, node: Ast_node$@, _left: Ast_node$@, target_id: I32,
+  recv_id: I32, expected_id: I32): I32
+  member_node: = node.get_postfix_member()
+  node.ice_assert(member_node != null, "Missing member identifier after '.'")
+  member_name_raw: = member_node.text
+  $member_name_s: = Str_builder.new()
+  member_name_s.s(member_name_raw)
+
+  type_args_node: = node.get_type_args()
+  if type_args_node != null
+    member_name_s.s(type_args_node.text)
+
+  if fast_out: = check_builtin_dot_access(c, node, _left, recv_id, member_node)
+    member_name_s.free()
+    return fast_out
+
+  // The type as the user wrote it, for the diagnostic.
+  // Caution: **Show the sugar**: the registered name of `T[]` is `Slice<|T|>`, which the user did
+  // not write (`../type/display.kspls`).
+  $base_type_shown: = c.env.display_str(target_id)
+  defer base_type_shown.free()
+  base_type_str: = base_type_shown.slice()
+  recv_type_str: = c.env.get_str(recv_id)
+  $found: = false
+  $type_id: = I32::sema_type_env.Builtin_type_id.unknown
+  $search_types: = List<|U8[]|>.new()
+  defer search_types.free()
+
+  // Two candidates suffice: with pointers stripped, only immutability differs.
+  search_types.push(recv_type_str)
+  // The type with immutability stripped at every level finds the mutable type's methods. It is
+  // built through the type id: editing the string would confuse an immutable element with an
+  // immutable view. The reverse is not needed; collect_impl_decl rejects an immutable impl target.
+  stripped_id: = c.env.strip_const_deep(recv_id)
+  if stripped_id != recv_id
+    search_types.push(c.env.get_str(stripped_id))
+
+  for current_search_type in search_types
+    s_id: = c.env.get_or_add(current_search_type)
+    s_entry: = c.env.id_to_type.get(c.env.get_real_type(s_id))
+
+    $target_def: Ast_node$@ = null
+    $target_type_id: = I32::sema_type_env.Builtin_type_id.unknown
+    $found_sym: Sema_symbol$@ = null
+
+    if s_entry != null
+      switch s_entry.info case .struct_type(struct_def)
+        for f_idx in Range.asc(struct_def.fields_list.len)
+          field: = struct_def.fields_list.get(f_idx)
+          if !field.name.equals(member_name_raw)
+            continue
+          type_id = field.type_id
+          found = true
+          member_node.def_node = field.node
+          node.def_node = field.node
+          member_node.ival = I32::f_idx
+          if (c.symtab.resolve(current_search_type) catch null) != null
+            c.check_field_visibility(field, node)
+          break
+      default {}
+      if found
+        break
+
+      if !found
+        // **Finish building the receiver's method table before the lookup.** The type may be
+        // instantiated inside this expression (`deepen(s).tag()`), and an unbuilt table says "no
+        // such method" (`ksplc/tests/generic_queue_test.kspls`).
+        // Caution: **Do not build it before the fields**; they exist as soon as the instance does.
+        c.ensure_instance_methods(recv_id) catch {}
+        // A method whose return type is `Unknown` (a typo in a type argument) still counts;
+        // treated as absent, it would add a false "no such method" after the real error. Unknown
+        // silences later errors.
+        if sym: = s_entry.get_method(member_name_raw)
+          target_def = sym.node
+          found_sym = sym
+          target_type_id = sym.type_id
+
+    if target_def == null
+      $full_m_name_s: = Str_builder.new()
+      full_m_name_s.s("\{current_search_type\}.\{member_name_raw\}")
+      full_m_name: = full_m_name_s.slice()
+
+      $generic_fn_node: Ast_node$@ = null
+      if tmpl: = sema_decl_mono_name.lookup_method_template(c, current_search_type, member_name_raw)
+        generic_fn_node = tmpl
+      if generic_fn_node != null
+        target_def = generic_fn_node
+        // A generic method has no Sema_symbol until monomorphization (register_template_names in
+        // collect.kspls).
+        // Caution: Create one here, or the visibility and import checks below are skipped
+        // entirely (a `priv` generic method becomes callable from another file).
+        m_name: = base_core.arena.dup_str(full_m_name)
+        found_sym = Sema_symbol.new(sema_type_scope.Sym_kind.generic_fn, m_name, generic_fn_node)
+        found_sym.vis = generic_fn_node.get_visibility()
+        found_sym.flags.is_method = true
+        found_sym.apply_attributes()
+      else
+        sym: = c.symtab.resolve(full_m_name) catch null
+        if sym != null && sym.type_id != 0
+          target_def = sym.node
+          found_sym = sym
+          target_type_id = sym.type_id
+      full_m_name_s.free()
+
+    if target_def != null
+      found = true
+      member_node.def_node = target_def
+      node.def_node = target_def
+      if found_sym != null
+        found_sym.flags.is_used = true
+        clean_struct: = c.env.get_str(recv_id)
+        struct_sym: = c.symtab.resolve(clean_struct) catch null
+        $struct_file: U8[] = ""
+        if struct_sym != null
+          struct_file = struct_sym.get_defined_in()
+        else
+          g_node: = c.generics.templates.get(clean_struct) catch null
+          if g_node != null
+            struct_file = g_node.loc.file()
+
+        // **A type that no declaration names counts as `std/lang`'s** (a scalar, a slice, an
+        // array, a `Result`), which every file imports: a method another file adds to it needs
+        // that file imported, as for any type ("An extension method requires the import" in
+        // `../../../docs/SPEC-language.md`).
+        // Caution: **Do not accept it because "some file loaded it".** The call would then depend
+        // on what else the program imports, and [I0401] would call the needed import unused.
+        if c.env.is_slice(recv_id) ||
+          (struct_file.len == 0 && !is_declared_type(c, recv_id))
+          struct_file = sema_session_import_table.lang_file()
+        // **Not inside an instantiation**: the receiver's type may come from the type argument,
+        // and a generic cannot import every file that serves its bound (`put<|W, T: Formattable|>`
+        // reaches each type's `fmt` wherever its `impl` is; "While a generic is being instantiated,
+        // a diagnostic that depends on a type argument is not emitted" in `ksplc/docs/DESIGN.md`).
+        // Caution: **Still check there whether it is imported**: the check marks the import used,
+        // and [I0401] would tell the reader to delete a template's unmarked import.
+        method_file: = found_sym.get_defined_in()
+        if struct_file.len > 0 && method_file.len > 0 && !struct_file.equals(method_file)
+          if !c.is_file_imported(method_file) && !c.is_instantiating()
+            spec_item: = format_spec_item(member_name_raw)
+            if spec_item.len > 0
+              reject_unimported_spec(c, member_node, spec_item, member_name_raw, method_file)
+            else
+              c.clear_scratch()
+                .s("cannot call extension method '\{member_name_raw\}' because its defining file \
+                  '\{method_file\}' is not explicitly imported.\n  Note: add 'import \
+                  \"\{method_file\}\"' to this file")
+              c.err(member_node, c.scratch.slice())
+        c.check_visibility_and_mark_used(found_sym, node)
+      type_id = target_type_id
+      reject_slotless_trait_call(c, recv_id, member_name_raw, base_type_str, member_node)
+      node.set_kind(.k_method_access)
+      slice: = member_name_s.slice()
+      member_node.text = base_core.arena.dup_str(slice)
+      member_node.type_id = c.env.get_or_add(current_search_type)
+      break
+
+  if !found
+    if target_id != 0 && !sema_type_env.is_unknown(target_id)
+      // A trait's methods are looked up only through symtab.resolve, which filters by visibility,
+      // so a `priv` one ends up here. Report the access violation, as for an impl's priv method,
+      // not a false "no such method".
+      $vis_reported: = false
+      switch c.env.get_info(recv_id) case .trait_type(trait_def)
+        for m_sym in trait_def.methods_list
+          if m_sym.name.equals(member_name_raw)
+            c.check_visibility_and_mark_used(m_sym, member_node)
+            vis_reported = true
+            break
+      default {}
+
+      // A field of an opaque struct (a body-less declaration with `#size(N)`).
+      // Caution: **Do not stop at "there is no such field".** The value has the field; what is
+      // missing is its declaration here, so point at the artifact that defines it.
+      switch c.env.get_info(recv_id) case .struct_type(struct_def)
+        if !vis_reported && struct_def.size_attr > 0
+          c.clear_scratch()
+            .s("'\{base_type_str\}' is declared opaque here: the declaration names only its size \
+              and alignment ('#size' / '#align'), so its fields are not visible in this artifact. \
+              Reach '\{member_name_raw\}' through a function the defining artifact publishes")
+          c.err(member_node, c.scratch.slice())
+          vis_reported = true
+      default {}
+
+      spec_item: = format_spec_item(member_name_raw)
+      if !vis_reported && spec_item.len > 0
+        // Caution: **Check the import before checking the type.** A file that does not import
+        // the methods may not have loaded them at all, and then no type seems to accept anything.
+        spec_file: = base_locate.name_as_found(base_core.fmt_method_file)
+        if !c.is_file_imported(spec_file)
+          reject_unimported_spec(c, member_node, spec_item, member_name_raw, spec_file)
+        else
+          c.clear_scratch()
+            .s("format spec: type '\{base_type_str\}' does not take \{spec_item\}\n  Note: the \
+              width, '0' and ',' items apply to integers and floating point, '.N' to floating point \
+              only, 'x' / 'X' to integers only, and 'c' to 'U8' only.")
+          c.err(member_node, c.scratch.slice())
+        vis_reported = true
+
+      // A fixed-length array has no slice methods by design; the answer is the cast, not the
+      // import note (Rust and C convert implicitly, so readers expect it to work).
+      if !vis_reported && c.env.is_array(recv_id)
+        at: = base_type_str.rfind_char('[')
+        elem: = base_type_str if at < 0 else base_type_str.sub(0, at)
+        c.clear_scratch()
+          .s("type '\{base_type_str\}' has no field or method named '\{member_name_raw\}'\n  Note: \
+            a fixed-length array is not a slice, so a slice's methods are not found on it. View it \
+            as one with an explicit cast: '\{elem\}[]::(...)'.")
+        c.err(member_node, c.scratch.slice())
+        vis_reported = true
+
+      if !vis_reported
+        // Caution: **Put the guidance in the error message itself.** A `hint` appears only under
+        // lint, so a plain compilation would say only "absent" (as for an `impl` on a built-in
+        // type in another file, such as the `fmt` that `\{x\}` calls).
+        c.clear_scratch()
+          .s("type '\{base_type_str\}' has no field or method named '\{member_name_raw\}'\n  Note: \
+            an extension method is visible only where its defining file is imported. If \
+            '\{member_name_raw\}' comes from another file, import it (and check that the import is \
+            not cyclic).")
+        c.err(member_node, c.scratch.slice())
+    reject_slotless_trait_call(c, recv_id, member_name_raw, base_type_str, member_node)
+    node.set_kind(.k_method_access)
+    slice: = member_name_s.slice()
+    member_node.text = base_core.arena.dup_str(slice)
+    if !sema_type_env.is_unknown(expected_id)
+      type_id = expected_id
+
+  if node.kind_id == .k_method_access
+    new_children: = base_ast.new_ast_node_list()
+    new_children.push(node.get_postfix_receiver())
+    new_children.push(member_node)
+    if type_args_node != null
+      new_children.push(type_args_node)
+    node.children = new_children
+
+  member_name_s.free()
+  return type_id
+
+priv fn is_declared_type(c: Sema_ctx$@, type_id: I32): Bool //<
+  //< Whether a declaration names the type (struct, enum or trait), aliases and marks stripped
+  switch c.env.get_info(c.env.get_clean_real_type(type_id)) case .struct_type(_def)
+    return true
+  case .enum_type(_def)
+    return true
+  case .trait_type(_def)
+    return true
+  default {}
+  return false

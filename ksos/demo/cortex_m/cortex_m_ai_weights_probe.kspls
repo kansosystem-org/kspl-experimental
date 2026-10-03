@@ -1,0 +1,112 @@
+//< A probe showing weights embedded in the binary and run with zero copies
+//<
+//< They are real trained safetensors weights
+//< (`ksai/examples/llama_engine/mini_llama.safetensors`), put into the binary as a static array
+//< with `embed`, then loaded and used for inference on Cortex-M bare metal with no filesystem.
+//< It uses Arena.from_buffer and the cfg(freestanding) panic and std.math like
+//< cortex_m_ai_probe.kspls / cortex_m_ai_train_probe.kspls.
+//< ksai/safetensors.Safetensors.load_from_bytes does the loading itself (with no file I/O).
+import "ksai/nn"
+import "ksai/safetensors" as st
+import "ksai/tensor" { Tensor }
+import "ksos/demo/common/semihost_console" as con
+import "std/mem" { Arena }
+
+// Embed mini_llama.safetensors (3.4KB, vocab=12 dim=4 hidden=8 n_layers=2) into FLASH.
+embed "ksai/examples/llama_engine/mini_llama.safetensors" as model_bytes
+
+$storage: Sz[6144] = ::{}
+
+// SysTick_Handler (port.o) calls it. This probe does not use the scheduler, so it is empty.
+#export
+fn ksos_tick() {}
+
+fn load_tensor(sf: st.Safetensors$@, name: U8[], arena: Arena$@): Tensor<|F32|> //<
+  //< The one place for "stop if it cannot be loaded", shared by all 19 tensor loads
+  //<
+  //< (It is a freestanding probe, so the catch just calls con.exit() and loops forever — a simple
+  //< stop-on-failure helper that does not return the error to the caller.)
+  return sf.get_tensor<|F32|>(name, arena) catch
+    con.exit()
+    for {}
+
+#export
+fn ksos_main()
+  con.puts("=== Cortex-M AI embedded-weights probe ===\n")
+  panic_hook = con.on_panic
+  $arena: = Arena.from_buffer(Void$@::storage@, sizeof(Sz) * 6144)
+
+  $sf: = st.Safetensors.load_from_bytes(model_bytes, arena@) catch
+    con.puts("safetensors load FAILED\n")
+    con.exit()
+    for {}
+  con.puts("safetensors load OK (embedded, zero file I/O)\n")
+
+  $emb: = nn.Embedding<|F32|>.new(12, 4, arena@)
+  emb.weight = load_tensor(sf@, "model.embed_tokens.weight", arena@)
+
+  $blk0: = nn.Transformer_block<|F32|>.new(4, 8, 4, F32::1.0e-5, arena@)
+  blk0.attention.wq.weights = load_tensor(sf@, "model.layers.0.self_attn.wq.weight", arena@)
+  blk0.attention.wk.weights = load_tensor(sf@, "model.layers.0.self_attn.wk.weight", arena@)
+  blk0.attention.wv.weights = load_tensor(sf@, "model.layers.0.self_attn.wv.weight", arena@)
+  blk0.attention.wo.weights = load_tensor(sf@, "model.layers.0.self_attn.wo.weight", arena@)
+  blk0.ffn.fc1.weights = load_tensor(sf@, "model.layers.0.mlp.fc1.weight", arena@)
+  blk0.ffn.fc2.weights = load_tensor(sf@, "model.layers.0.mlp.fc2.weight", arena@)
+  blk0.attention_norm.weight =
+    load_tensor(sf@, "model.layers.0.input_layernorm.weight", arena@)
+  blk0.ffn_norm.weight =
+    load_tensor(sf@, "model.layers.0.post_attention_layernorm.weight", arena@)
+
+  $blk1: = nn.Transformer_block<|F32|>.new(4, 8, 4, F32::1.0e-5, arena@)
+  blk1.attention.wq.weights = load_tensor(sf@, "model.layers.1.self_attn.wq.weight", arena@)
+  blk1.attention.wk.weights = load_tensor(sf@, "model.layers.1.self_attn.wk.weight", arena@)
+  blk1.attention.wv.weights = load_tensor(sf@, "model.layers.1.self_attn.wv.weight", arena@)
+  blk1.attention.wo.weights = load_tensor(sf@, "model.layers.1.self_attn.wo.weight", arena@)
+  blk1.ffn.fc1.weights = load_tensor(sf@, "model.layers.1.mlp.fc1.weight", arena@)
+  blk1.ffn.fc2.weights = load_tensor(sf@, "model.layers.1.mlp.fc2.weight", arena@)
+  blk1.attention_norm.weight =
+    load_tensor(sf@, "model.layers.1.input_layernorm.weight", arena@)
+  blk1.ffn_norm.weight =
+    load_tensor(sf@, "model.layers.1.post_attention_layernorm.weight", arena@)
+
+  $norm: = nn.Rms_norm<|F32|>.new(4, F32::1.0e-5, arena@)
+  norm.weight = load_tensor(sf@, "model.norm.weight", arena@)
+  $lm_head: = nn.Linear<|F32|>.new(4, 12, arena@)
+  lm_head.weights = load_tensor(sf@, "lm_head.weight", arena@)
+  con.puts("all 19 tensors loaded (zero-copy into embedded FLASH data)\n")
+
+  // Run a real two-layer Transformer inference on the real trained weights.
+  h0: = emb.forward(0, arena@)
+  h1: = blk0.forward(h0, 0)
+  h2: = blk1.forward(h1, 0)
+  h3: = norm.forward(h2)
+  logits: = lm_head.forward(h3)
+
+  // The expected values are the references from the host build (with the real libm and the same
+  // embedded weights), at F64 precision.
+  ref_logits: F64[12] = ::{
+    -0.0053468383848667145,
+    0.0013997654896229506,
+    0.0097166271880269051,
+    -0.00017959251999855042,
+    -0.0034665297716856003,
+    0.013014708645641804,
+    -0.0076682139188051224,
+    -0.0040884995833039284,
+    -0.00036020990228280425,
+    -0.020720565691590309,
+    -0.021977027878165245,
+    -0.00040422432357445359,
+  }
+  $max_diff: F64 = 0.0
+  for i in Range.asc(12)
+    got: = (logits.data + i)$
+    diff: = got - (ref_logits@ + i)$
+    diff_abs: = -diff if diff < 0.0 else diff
+    if diff_abs > max_diff
+      max_diff = diff_abs
+  con.check("real_weights_inference", max_diff < 1.0e-4)
+
+  con.print_summary("AI embedded-weights probe done")
+  con.exit()
+  for {}

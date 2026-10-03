@@ -1,0 +1,157 @@
+import "std/mem" { Arena }
+import "std/prng" { Prng }
+import "std/str"
+
+fn paren(a: U8[], op: U8[], b: U8[], arena: Arena$@): U8[] //<
+  //< The spelling of `(a op b)` and `(pre(a)post)`
+  //<
+  //< Caution: Do not omit the parentheses: the backend restores them from the precedence, and that
+  //< decision is what is tested.
+  return arena.text().s("(").s(a).s(" ").s(op).s(" ").s(b).s(")").take()
+
+fn wrapped(pre: U8[], a: U8[], post: U8[], arena: Arena$@): U8[]
+  return arena.text().s(pre).s(a).s(post).take()
+
+// ==========================================
+// Random floating-point (F32 / F64) expressions (part of tests/suite/property_test.kspls).
+// Caution: **It must not know `Item`.** The suite pairs an expression with its expected value
+// (`float_edge_items` / `float_items`); done here, the reference would run both ways.
+// ==========================================
+
+// ==========================================
+// Floating point (F32 / F64)
+// ==========================================
+
+struct Float_kind
+  name: U8[]
+  bytes: Sz
+
+const float_kinds: Float_kind[2] = ::{ Float_kind::{ .name = "F32", .bytes = 4 },
+  Float_kind::{ .name = "F64", .bytes = 8 } }
+
+fn round_to(v: F64, k: Float_kind@): F64 //< it rounds to that type's width
+  return v if k.bytes == 8 else F32::v
+
+fn finite(v: F64): Bool //< whether it is neither an inf nor a NaN
+  //<
+  //< Caution: **Make neither a NaN nor an inf.** IEEE 754 does not define a NaN's mantissa, and an
+  //< inf leads to one (`inf - inf`). The model is KSPL's own arithmetic, so it catches genllvm or
+  //< the current genc differing; an error common to all three passes.
+  return v == v && v * 0.5 != v
+
+fn float_bytes(v: F64, k: Float_kind@, arena: Arena$@): U8[] //<
+  //< The same string as the generated program's output
+  //<
+  //< Decimal byte by byte, one trailing space as well.
+  //< Caution: **Compare values by their bit pattern, not by a decimal format**, whose rounding
+  //< (`std/strfmt.write_float`) hides a 1 ulp discrepancy.
+  b: = arena.text()
+  if k.bytes == 8
+    $x: F64 = v
+    p: = U8@::x@
+    for i in Range.asc(8)
+      b.s("\{(p + i)$\} ")
+  else
+    $x: = F32::v
+    p: = U8@::x@
+    for i in Range.asc(4)
+      b.s("\{(p + i)$\} ")
+  return b.take()
+
+fn flit(m: I64, k: Float_kind@, arena: Arena$@): U8[] //< an integer-valued floating-point literal
+  //<
+  //< `F32` needs the suffix, or it is rejected as "an implicit conversion between F64 and F32".
+  //< Caution: **Write only integer values as literals**, a fraction as a power-of-two division
+  //< (`(1.0 / 2.0)`); a 17-digit decimal would test the decimal-to-binary conversion instead.
+  b: = arena.text()
+  b.s("\{m\}.0")
+  if k.bytes == 4
+    b.s("F32")
+  return b.take()
+
+struct Fexpr
+  text: U8[]
+  v: F64
+
+priv const pow2_30: I64 = 1073741824 //< the factors for reaching an exponent
+  //<
+  //< **Only powers of two**: short integers, exact in binary, so no rounding happens.
+
+priv const scale_steps: Sz = 40 //<
+  //< The cap on how many times 2^30 is multiplied (divided) when reaching a random exponent
+  //<
+  //< Caution: **Size it for the widest type**: `F64` runs from 2^-1074 to 2^1024.
+
+fn leaf_float(r: Prng$@, k: Float_kind@, arena: Arena$@): Fexpr
+  m: = r.between(-4096I64, 4096I64)
+  sh: = r.below(5)
+  $text: = flit(m, k, arena)
+  $v: = round_to(F64::m, k)
+  if sh > 0
+    d: = 1I64 << I64::sh
+    dt: = flit(d, k, arena)
+    text = paren(text, "/", dt, arena)
+    v = round_to(v / F64::d, k)
+  return Fexpr::{ .text = text, .v = v }
+
+fn node_scale(r: Prng$@, depth: Sz, k: Float_kind@, arena: Arena$@): Fexpr //<
+  //< It scales the value by powers of two toward an exponent's end
+  //<
+  //< The ends are just short of inf, and a subnormal.
+  //< Caution: Do not skimp on the steps, or it stops short of the exponent's end.
+  $e: = gen_float(r, depth - 1, k, arena)
+  up: = r.chance(50)
+  factor: = flit(pow2_30, k, arena)
+  steps: = 1 + r.below(scale_steps)
+  for _i in Range.asc(steps)
+    nxt: = round_to(e.v * F64::pow2_30 if up else e.v / F64::pow2_30, k)
+    if !finite(nxt)
+      break
+    e = Fexpr::{ .text = paren(e.text, "*" if up else "/", factor, arena), .v = nxt }
+  return e
+
+priv const float_ops: U8[][4] = ::{ "+", "-", "*", "/" }
+
+fn gen_float(r: Prng$@, depth: Sz, k: Float_kind@, arena: Arena$@): Fexpr
+  if depth == 0 || r.chance(35)
+    return leaf_float(r, k, arena)
+  if r.chance(15)
+    e: = gen_float(r, depth - 1, k, arena)
+    return Fexpr::{ .text = wrapped("(-(", e.text, "))", arena), .v = -e.v }
+  if r.chance(20)
+    return node_scale(r, depth, k, arena)
+  $op: = float_ops[r.below(4)]
+  a: = gen_float(r, depth - 1, k, arena)
+  b: = gen_float(r, depth - 1, k, arena)
+  if op.equals("/") && b.v == 0.0
+    op = "+"
+  $v: F64 = 0.0
+  if op.equals("+")
+    v = a.v + b.v
+  else if op.equals("-")
+    v = a.v - b.v
+  else if op.equals("*")
+    v = a.v * b.v
+  else
+    v = a.v / b.v
+  v = round_to(v, k)
+  if !finite(v)
+    return a
+  return Fexpr::{ .text = paren(a.text, op, b.text, arena), .v = v }
+
+fn pow2_chain(exp: I64, k: Float_kind@, arena: Arena$@): Fexpr //<
+  //< The spelling and the value reaching `2^exp` from 1.0.
+  //<
+  //< Caution: Keep one step's factor within 2^30 (2^31 does not fit an `F32`). Put the fractional
+  //< step last: 2^-149 by way of 2^-150 becomes 0, with no way back.
+  up: = exp > 0I64
+  $rest: = exp if up else -exp
+  $e: = Fexpr::{ .text = flit(1I64, k, arena), .v = 1.0 }
+  for rest > 0I64
+    step: = 30I64 if rest > 30I64 else rest
+    rest -= step
+    f: = 1I64 << step
+    ft: = flit(f, k, arena)
+    e = Fexpr::{ .text = paren(e.text, "*" if up else "/", ft, arena),
+      .v = round_to(e.v * F64::f if up else e.v / F64::f, k) }
+  return e

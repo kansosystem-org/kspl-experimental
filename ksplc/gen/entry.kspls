@@ -1,0 +1,52 @@
+//< What the generated `main` does around `kspl_main`, for either backend
+//<
+//< **Both backends emit the entry point from here**, so a program behaves the same whichever
+//< backend built it: the same startup calls in the same order, the same exit code, the same
+//< message on failure (`tests/runtime/main_result_without_sys.kspls` runs it on both).
+import "ksplc/base/core" as base_core
+import "ksplc/lower/abi" as lower_abi
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "std/str" { Str_builder }
+
+const startup_calls: U8[][3] = ::{ //<
+  //< The runtime calls made after `argc` / `argv` are stored and before `kspl_main`, in order
+  //<
+  //< Each is `void (void)` and does nothing outside Windows (`runtime/hosted.c`). The console ones
+  //< set the code page, without which `--help` and the first diagnostics come out unreadable;
+  //< the binary one stops the C runtime from silently turning a `\n` written to standard output
+  //< into `\r\n` ("Standard output carries the bytes a program writes" in
+  //< `../../docs/DESIGN.md`).
+  "kspl_io_attach_console", "kspl_io_init_console", "kspl_io_set_stdio_binary",
+}
+
+const failed_with_code: U8[] = "[Kanso] Error: main() failed with code %d" //<
+  //< The failure line where `main`'s error is a number, printed with that number
+const failed: U8[] = "[Kanso] Error: main() failed." //< the failure line for any other error
+
+struct Main_plan //< how the entry point turns what `kspl_main` returns into an exit code
+  returns_result: Bool //< a Result, whose failure is handled before anything else
+  exit_is_value: Bool //< an integer (a Result's success value) is the exit code; otherwise 0
+  err_is_number: Bool //< the failure prints `failed_with_code` and exits with the code; else 1
+  trace_fn: U8[] //<
+    //< The C name of what prints the propagation trace on a failure; empty where none is called
+    //<
+    //< Only a program using `std/sys` has one.
+
+fn plan_of(env: sema_type_env.Env$@, main_type_id: I32): Main_plan //<
+  //< The plan for a `main` of this type
+  //<
+  //< Caution: **`trace_fn` is set only where the program uses `std/sys`.** The trace printer
+  //< has no definition otherwise, and calling it anyway gives a raw C compiler error or an
+  //< unresolved symbol (Principle 2).
+  $trace_fn: U8[] = ""
+  if sym: = env.find_backtrace_symbol()
+    $w: = Str_builder.new()
+    defer w.free()
+    lower_abi.get_c_identifier_for_sym_to(sym, sym.name, w@)
+    trace_fn = base_core.arena.dup_str(w.slice())
+  returns_result: = env.is_result(main_type_id)
+  return Main_plan::{ .returns_result = returns_result,
+    .exit_is_value = env.is_integer(env.strip_result(main_type_id)),
+    .err_is_number = returns_result && env.is_numeric(env.get_result_err_id(main_type_id)),
+    .trace_fn = trace_fn }

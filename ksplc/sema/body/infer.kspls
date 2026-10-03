@@ -1,0 +1,354 @@
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/core" as base_core
+import "ksplc/base/diag" as base_diag
+import "ksplc/sema/body/analyze" as sema_body_analyze
+import "ksplc/sema/body/expr" as sema_body_expr
+import "ksplc/sema/body/for_in" as sema_body_for_in
+import "ksplc/sema/body/lint_stmt" as sema_body_lint_stmt
+import "ksplc/sema/body/stmt" as sema_body_stmt
+import "ksplc/sema/decl/access" as sema_decl_access
+import "ksplc/sema/decl/attrs" as sema_decl_attrs
+import "ksplc/sema/decl/collect" as sema_decl_collect
+import "ksplc/sema/decl/eval" as sema_decl_eval
+import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
+import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/decl/trait_check" as sema_decl_trait_check
+import "ksplc/sema/session/c_boundary" as sema_session_c_boundary
+import "ksplc/sema/session/ctx" as sema_session_ctx + { Sema_ctx, Sema_error }
+import "ksplc/sema/session/import_table" as sema_session_import_table
+import "ksplc/sema/session/imports" as sema_session_imports
+import "ksplc/sema/session/prof" as sema_session_prof
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
+import "std/chars"
+import "std/str" { Str_builder }
+
+fn run(r: Ast_node$@, c: Sema_ctx$@): Void?Sema_error
+  base_diag.ice_assert(r != null, "infer: file_node is null")
+  $has_err: = false
+
+  for child_node in r.children
+    // Report progress once per declaration (report_progress in base/core.kspls), or the LSP's
+    // supervisor takes a silent but live worker for a hung one and kills it.
+    base_core.report_progress()
+    // Instances the previous declaration queued are created here.
+    c.drain_pending_instances() catch
+      has_err = true
+    child: = child_node.unwrap_top_level()
+    c.set_current_file(child.loc.file())
+    body_wanted: = c.bodies_everywhere || child.loc.file().equals(c.main_file)
+    if child.kind_id == .k_decl_fn
+      if !child.is_generic_template() && body_wanted
+        child.infer_fn(c) catch
+          has_err = true
+    else if child.kind_id == .k_decl_impl
+      if !child.is_generic_template() && body_wanted
+        child.infer_impl_decl(c) catch
+          has_err = true
+    else if child.kind_id == .k_decl_var || child.kind_id == .k_decl_const
+      expr_node: = child.get_var_decl_expr()
+      if expr_node != null && expr_node.kind_id != .k_empty
+        expected_id: = child.type_id
+        expr_id: = expr_node.infer_expr(c, expected_id)?
+
+        type_node: = child.get_var_decl_type_node()
+        child.type_id = child.resolve_inferred_array(c, expected_id, expr_id, type_node, child)
+        // Caution: **Include `const` too.** Like `var`, it becomes a file-scope initializer in C,
+        // which requires a constant expression.
+        expr_node.check_static_initializer(c)
+
+  // pending.len is re-read on every iteration: infer_fn appends new instantiations to
+  // c.generics.pending, and a fixed length would drop them (the for-in sugar re-reads coll.len,
+  // which works while pending is a pointer). From here on the bodies are monomorphized templates.
+  c.set_in_generic_instance(true)
+  defer c.set_in_generic_instance(false)
+  for pending in c.generics.pending
+    // Caution: **Drain the constraints before each body is checked.** Drained once outside the
+    // loop, a violation by an instantiation made inside some body would be known only after its
+    // method body is checked.
+    // **Drain the instantiations first**: they fill the conformance table the check reads.
+    c.drain_pending_instances() catch
+      has_err = true
+    c.drain_pending_constraints()
+    // A constraint-violating instantiation's body is not checked (for the same reason).
+    if c.has_failed_constraint(pending.impl_name)
+      continue
+    c.set_current_file(pending.node.loc.file())
+    c.symtab.scope_stack.len = 0
+    c.fn_ctx = sema_session_ctx.Fn_ctx::{ .name = "", .ret_id = 0, .impl_name = pending.impl_name,
+      .fallback_type = 0, .catch_depth = 0, .in_fallback_value = false, .in_defer = false,
+      .defer_boundary = 0 }
+
+    base_diag.ice_assert(pending.node.sym_ptr != null,
+      "infer: pending instantiation node missing sym_ptr")
+    sym: = Sema_symbol$@::pending.node.sym_ptr
+    c.fn_ctx.name = sym.name
+
+    // Restores the type-argument bindings as queued, then analyzes the body; always restore the
+    // previous ones afterwards (instantiations nest; see Pending_inst in sema/session/state.kspls).
+    saved_args_len: = c.generics.args.len
+    for j in Range.asc(pending.bound_args.len)
+      c.generics.args.push(pending.bound_args.get(j))
+    // This body's depth in the chain; an instantiation made inside it is one deeper
+    // (inst_chain_depth in sema/session/state.kspls).
+    c.generics.inst_chain_depth = pending.depth
+    pending.node.infer_fn(c) catch
+      has_err = true
+    c.generics.inst_chain_depth = 0
+    c.generics.args.len = saved_args_len
+
+  for child_node in r.children
+    child: = child_node.unwrap_top_level()
+    c.set_current_file(child.loc.file())
+    // **Only an assertion directive is evaluated** (check_directive in sema/decl/attrs.kspls
+    // rejects the others; `##lint` has nothing to fold).
+    if sema_decl_attrs.is_assertion_directive(child)
+      child.infer_compile_directive(c)
+
+  // Caution: **Mark the written imports before discarding the template bodies.** An
+  // uninstantiated body is never analyzed, so resolving never marks its imports.
+  if base_core.config.run_lint_checks
+    for child in r.children
+      child.mark_written_imports(c)
+
+  clean_children: = base_ast.new_ast_node_list()
+  for child in r.children
+    u_child: = child.unwrap_top_level()
+    if u_child.is_generic_template() && !base_core.config.is_lsp
+      continue
+    clean_children.push(child)
+
+  for inst_node in c.env.instantiated_nodes_list
+    clean_children.push(inst_node)
+  c.env.instantiated_nodes_list.len = 0
+  r.children = clean_children
+  // --- Final Pass: Post-Resolution for LSP and Linter ---
+  for child_node in r.children
+    child: = child_node.unwrap_top_level()
+    c.set_current_file(child.loc.file())
+    if base_core.config.is_lsp
+      // Caution: **Set the flag, then resolve.** These children include uninstantiated
+      // templates, whose type arguments are unbound (Generic_state.resolving_template_types in
+      // `../session/state.kspls`).
+      c.generics.resolving_template_types = true
+      child.resolve_all_types(c) catch {}
+      c.generics.resolving_template_types = false
+    child.mark_template_symbols_used(c)
+
+  c.check_import_symbols_exist()
+  c.check_redundant_import_alias()
+  c.check_unused_imports()
+  c.check_unused_symbols()
+  c.check_unit_internal_pubs()
+
+  if c.has_error() || has_err
+    throw Sema_error.analysis_failed
+
+impl Ast_node
+  priv fn infer_fn(r: Self$@, c: Sema_ctx$@): Void?Sema_error
+    // Restarts the temporary variables' numbering per body. **It nests, so restore it** (the
+    // reason is at enter_fn_serial in sema/body/for_in.kspls).
+    saved_for_in_serial: = sema_body_for_in.enter_fn_serial()
+    defer sema_body_for_in.leave_fn_serial(saved_for_in_serial)
+    name_node: = r.find_child(.k_identifier)
+    fn_name: = name_node.text if name_node != null else ""
+    if name_node != null
+      name_node.def_node = r
+    // Measures one body's elapsed time. **Save the outer count** so a body started inside another
+    // would not count twice (the reason is at nested_us in sema/session/prof.kspls).
+    prof_started: = sema_session_prof.prof.body_begin()
+    prof_nested: = sema_session_prof.prof.nested_save()
+    defer sema_session_prof.prof.body_end(fn_name, r.loc, prof_started, prof_nested)
+
+    $def_file: = r.loc.file()
+    if fn_name.len > 0
+      switch fn_name.find_generic_bounds() case .found(start_idx, _is, _ie, end_idx)
+        $tmpl_name: = Str_builder.new()
+        defer tmpl_name.free()
+        tmpl_name.s(fn_name.sub(0, start_idx))
+        if end_idx + 1 < fn_name.len
+          tmpl_name.s(fn_name.sub_from(end_idx + 1))
+        tmpl: = c.generics.templates.get(tmpl_name.slice()) catch null
+        if tmpl != null
+          def_file = tmpl.loc.file()
+      default {}
+
+    prev_file: = c.file_name
+    if def_file.len > 0
+      c.set_current_file(def_file)
+
+    type_node: = r.get_decl_type_node()
+    param_list: = r.get_fn_params()
+
+    if name_node != null
+      c.fn_ctx.name = name_node.text
+    c.fn_ctx.effective_vis = c.compute_effective_vis(r)
+
+    $is_export: = false
+    if r.sym_ptr != null
+      sym: = Sema_symbol$@::r.sym_ptr
+      if sym.flags.is_export
+        is_export = true
+
+    if type_node != null
+      c.fn_ctx.ret_id = type_node.resolve_type(c)?
+      if is_export
+        c.check_ffi_safety(c.fn_ctx.ret_id, type_node)
+    else
+      c.fn_ctx.ret_id = c.env.get_or_add("Void")
+    c.check_type_vis_leak(type_node, c.fn_ctx.effective_vis, "return type", "function")
+
+    c.symtab.enter_scope()
+    defer
+      c.symtab.exit_scope()
+      if prev_file.len > 0
+        c.set_current_file(prev_file)
+    if param_list != null
+      for item in base_ast_ext.Param_cursor.new(param_list, false)
+        p_name: = item.find_text(.k_identifier)
+        t_node: = item.find_child(.k_type_expr)
+        item.ice_assert(p_name.len > 0, "Function parameter is missing an identifier")
+
+        sym: = Sema_symbol.new(sema_type_scope.Sym_kind.variable, p_name, item)
+        // A parameter without `$` cannot be reassigned, as with `x: = ...`; a field write on a
+        // by-value receiver (`r: Self`) is rejected by enforce_mutability walking the `.`.
+        if !item.has_mut_binding_marker()
+          sym.flags.is_mut = false
+        $t_id: = c.env.get_or_add("Void")
+        if t_node != null
+          t_id = t_node.resolve_type(c)?
+          if is_export
+            c.check_ffi_safety(t_id, t_node)
+        if t_id == c.env.get_or_add("Unknown") || t_id == c.env.get_or_add("Void")
+          c.err(item, "missing type annotation for parameter")
+        sym.type_id = t_id
+        item.type_id = t_id
+        c.declare_symbol(p_name, sym, false)
+        id_node: = item.find_child(.k_identifier)
+        if id_node != null
+          id_node.def_node = item
+
+    block: = r.find_child(.k_stmt_block)
+    if base_core.config.run_lint_checks && block != null
+      r.lint_fn_length(c)
+    $has_err: = false
+    if block != null
+      block.infer_stmts(c) catch
+        has_err = true
+      if !has_err
+        // [W0106] A lock's borrow used outside the lock (lint only).
+        sema_body_lint_stmt.lint_lock_escape(c, block)
+        // [W0110] A way out between an `Owned` value's binding and the `defer` freeing it.
+        sema_body_lint_stmt.lint_defer_gap(c, block)
+      if !has_err && !c.has_error()
+        if !r.analyze_function_body(c, block)
+          has_err = true
+        else
+          base_ret_id: = c.env.strip_result(c.fn_ctx.ret_id)
+          if sema_type_env.is_void(base_ret_id) || sema_type_env.is_unknown(base_ret_id)
+            // Caution: **Do not add it to a function that declares `#noreturn`.** A `return;`
+            // under C's `__attribute__((noreturn))` triggers `-Winvalid-noreturn` (Principle 2).
+            $needs_return: = !r.has_attribute("noreturn")
+            if needs_return && block.children.len > 0
+              last: = block.last_child()
+              if last.kind_id == .k_stmt_return || last.kind_id == .k_stmt_throw ||
+                last.kind_id == .k_stmt_fallback
+                needs_return = false
+            if needs_return
+              implicit_ret: = Ast_node.new(.k_stmt_return, "return", block.loc)
+              implicit_ret.add_child(Ast_node.new(.k_keyword, "return", block.loc))
+              block.add_child(implicit_ret)
+    if has_err
+      throw Sema_error.analysis_failed
+
+  priv fn find_subtree_end_offset(r: Self$@): Sz //<
+    //< The rightmost offset in the subtree, in place of the end offset Ast_node does not store
+    //<
+    //< A dropped punctuation token can make it a few lines short, which is close enough for the
+    //< line guideline.
+    $max_end: Sz = r.loc.offset + r.text.len
+    for c in r.children
+      child_end: = c.find_subtree_end_offset()
+      if child_end > max_end
+        max_end = child_end
+    return max_end
+
+  priv fn lint_fn_length(r: Self$@, c: Sema_ctx$@) //<
+    //< [H0803] Reports a function over the guideline of 300 lines
+    //<
+    //< The guideline is Principle 3 of docs/DESIGN.md; as a guideline, it is a Hint, not an error.
+    src: = base_core.source_of(c.source_map, r.loc.file())
+    if src.len == 0
+      return
+    starts: = c.line_starts_for(r.loc.file(), src)
+    start_line: = base_core.line_for_offset(starts, r.loc.offset)
+    end_offset: = r.find_subtree_end_offset()
+    end_line: = base_core.line_for_offset(starts, end_offset)
+    line_count: = end_line - start_line + 1
+    max_fn_lines: Sz = 300
+    if line_count > max_fn_lines
+      c.clear_scratch()
+        .s("[H0803] This function spans \{line_count\} lines, over the ~\{max_fn_lines\}-line \
+          guideline (Principle 3 in docs/DESIGN.md). Consider splitting it into smaller, focused \
+          helpers.")
+      c.hint(r, c.scratch.slice())
+
+  priv fn infer_impl_decl(r: Self$@, c: Sema_ctx$@): Void?Sema_error
+    $has_err: = false
+    target_node: = r.get_decl_type_node()
+    $trait_node: Ast_node$@ = null
+    if inode: = r.get_impl_trait_node()
+      trait_node = inode
+
+    if !r.is_generic_template() && target_node != null
+      t_id: = target_node.resolve_type(c)?
+      target_type: = c.env.get_str(t_id)
+
+      old_impl: = c.fn_ctx.impl_name
+      c.fn_ctx.impl_name = target_type
+      defer c.fn_ctx.impl_name = old_impl
+
+      for m in r.children
+        if m.kind_id == .k_decl_fn && !m.is_generic_template()
+          m.infer_fn(c) catch
+            has_err = true
+
+      if trait_node != null
+        trait_id: = trait_node.resolve_type(c)?
+        if trait_id != 0 && !sema_type_env.is_unknown(trait_id)
+          if !c.verify_trait_implementation(t_id, trait_id, trait_node)
+            has_err = true
+    if has_err
+      throw Sema_error.analysis_failed
+
+  priv fn infer_compile_directive(r: Ast_node$@, c: Sema_ctx$@)
+    $expr_node: Ast_node$@ = null
+    $msg_node: Ast_node$@ = null
+    for ch in r.children
+      // Caution: **Do not take the directive name's child for the expression**, or folding the
+      // name makes the assertion always hold.
+      if ch.kind_id == .k_literal || ch.kind_id == .k_keyword ||
+        ch.kind_id == .k_directive_prefix
+        continue
+      if expr_node == null
+        expr_node = ch
+      else if msg_node == null && ch.kind_id == .k_string
+        msg_node = ch
+
+    if expr_node != null
+      val: = expr_node.eval_constexpr(c) catch 0
+      if val == 0
+        $msg_slice: U8[] = "Assertion failed"
+        if msg_node != null
+          raw_msg: = msg_node.text
+          if raw_msg.len >= 2
+            msg_slice = raw_msg.sub(1, raw_msg.len - 2)
+        // Caution: Send both through the same path as other diagnostics; printed directly, they
+        // get no position and are missing from the final count. No code is assigned: the words
+        // are the user's, and silencing them with `##lint` would void the assertion.
+        if sema_decl_attrs.directive_name(r).equals("error")
+          c.err(r, msg_slice)
+        else
+          c.warn(r, msg_slice)

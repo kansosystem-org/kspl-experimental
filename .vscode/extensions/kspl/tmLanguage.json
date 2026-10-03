@@ -1,0 +1,193 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "kspl",
+    "scopeName": "source.kspl",
+    "patterns": [
+        {
+            "include": "#comments"
+        },
+        {
+            "include": "#raw-strings"
+        },
+        {
+            "include": "#strings"
+        },
+        {
+            "include": "#characters"
+        },
+        {
+            "include": "#constants"
+        },
+        {
+            "include": "#keywords"
+        },
+        {
+            "include": "#types"
+        },
+        {
+            "include": "#functions"
+        },
+        {
+            "include": "#attributes"
+        },
+        {
+            "include": "#operators"
+        }
+    ],
+    "repository": {
+        "comments": {
+            "patterns": [
+                {
+                    "_note": "The shebang on the first line. The compiler reads it as a line comment, so the color matches that. `\\A` limits it to the first line and `#!/` to an interpreter's absolute path, because `#!` is also the notation of a directive (`##lint` and the like); the way they are told apart is the same as has_shebang in ksplc/base/core.kspls.",
+                    "name": "comment.line.shebang.kspl",
+                    "match": "\\A#!\\s*/.*$"
+                },
+                {
+                    "name": "comment.line.double-slash.kspl",
+                    "match": "//.*$"
+                }
+            ]
+        },
+        "raw-strings": {
+            "name": "string.quoted.triple.kspl",
+            "begin": "\"\"\"",
+            "end": "\"\"\""
+        },
+        "strings": {
+            "name": "string.interpolated.kspl",
+            "begin": "\"",
+            "end": "\"",
+            "patterns": [
+                {
+                    "name": "meta.embedded.line.kspl",
+                    "begin": "\\\\\\{",
+                    "beginCaptures": {
+                        "0": {
+                            "name": "punctuation.section.embedded.begin.kspl"
+                        }
+                    },
+                    "end": "\\\\\\}",
+                    "endCaptures": {
+                        "0": {
+                            "name": "punctuation.section.embedded.end.kspl"
+                        }
+                    },
+                    "patterns": [
+                        {
+                            "include": "$self"
+                        }
+                    ]
+                },
+                {
+                    "name": "constant.character.escape.kspl",
+                    "match": "\\\\[nrt\"'\\\\\\[\\]\\-]"
+                }
+            ]
+        },
+        "characters": {
+            "name": "string.quoted.single.kspl",
+            "begin": "'",
+            "end": "'",
+            "patterns": [
+                {
+                    "name": "constant.character.escape.kspl",
+                    "match": "\\\\."
+                }
+            ]
+        },
+        "constants": {
+            "patterns": [
+                {
+                    "name": "constant.numeric.float.kspl",
+                    "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*([eE][+-]?[0-9_]+)?(F32|F64)?\\b"
+                },
+                {
+                    "name": "constant.numeric.integer.hex.kspl",
+                    "match": "\\b0x[0-9a-fA-F_]+((I|U)(8|16|32|64)|Sz)?\\b"
+                },
+                {
+                    "name": "constant.numeric.integer.bin.kspl",
+                    "match": "\\b0b[01_]+((I|U)(8|16|32|64)|Sz)?\\b"
+                },
+                {
+                    "name": "constant.numeric.integer.decimal.kspl",
+                    "match": "\\b[0-9][0-9_]*((I|U)(8|16|32|64)|Sz)?\\b"
+                },
+                {
+                    "name": "constant.language.boolean.kspl",
+                    "match": "\\b(true|false|null)\\b"
+                }
+            ]
+        },
+        "keywords": {
+            "patterns": [
+                {
+                    "name": "keyword.control.kspl",
+                    "match": "\\b(if|else|for|in|break|continue|return|throw|catch|fallback|switch|case|default|defer|import|extern|embed|as)\\b"
+                },
+                {
+                    "name": "storage.type.class.kspl",
+                    "match": "\\b(struct|enum|impl|typedef|trait)\\b"
+                },
+                {
+                    "name": "storage.modifier.kspl",
+                    "match": "\\b(pub|priv|const)\\b"
+                },
+                {
+                    "name": "support.function.builtin.kspl",
+                    "match": "\\b(sizeof|offsetof)\\b"
+                }
+            ]
+        },
+        "attributes": {
+            "patterns": [
+                {
+                    "_note": "A directive that applies to the whole file. Place it before the attributes (a rule that looks at `#` alone eats it first). The notation's canonical source is decl_error / decl_warning / decl_lint in ksplc/kspl.kspeg.",
+                    "name": "keyword.control.directive.kspl",
+                    "match": "##(error|warning|lint)\\b"
+                },
+                {
+                    "name": "entity.name.function.decorator.kspl",
+                    "match": "#(align|cfg|deprecated|export|inline|interrupt|link|naked|noinline|noreturn|packed|publish_body|section|size)\\b",
+                    "_note": "The full list of attributes the compiler interprets. The canonical source is is_known_attribute in ksplc/sema/decl/attrs.kspls, and tests/suite/conventions_test.kspls watches that the two agree. No whitespace goes between `#` and the name (the formatter lines it up into this shape)."
+                },
+                {
+                    "name": "entity.name.function.decorator.kspl",
+                    "match": "#[a-zA-Z_][a-zA-Z0-9_]*",
+                    "_note": "A notation absent from the list above. The compiler makes it an unknown attribute error, so it is only colored, to show it is there."
+                }
+            ]
+        },
+        "types": {
+            "patterns": [
+                {
+                    "name": "support.type.primitive.kspl",
+                    "match": "\\b(I8|I16|I32|I64|U8|U16|U32|U64|F32|F64|Bool|Void|Sz)\\b"
+                },
+                {
+                    "name": "entity.name.type.kspl",
+                    "match": "\\b[A-Z][a-zA-Z0-9_]*\\b"
+                }
+            ]
+        },
+        "functions": {
+            "match": "\\b(fn)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+            "captures": {
+                "1": {
+                    "name": "storage.type.function.kspl"
+                },
+                "2": {
+                    "name": "entity.name.function.kspl"
+                }
+            }
+        },
+        "operators": {
+            "patterns": [
+                {
+                    "name": "keyword.operator.kspl",
+                    "match": "(<\\||\\|>|->|<<=|>>=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|==|!=|<=|>=|&&|\\|\\||<<|>>|\\+|-|\\*|/|%|<|>|!|&|\\||\\^|~|=|\\?|@)"
+                }
+            ]
+        }
+    }
+}

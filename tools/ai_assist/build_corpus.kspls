@@ -1,0 +1,243 @@
+#!/usr/bin/env -S ksplc run
+//< Stage 0 / ①: building the KSPL corpus
+//<
+//< It collects every source in the repository, optionally normalizes through ksplc fmt, drops
+//< duplicates by content hash, splits deterministically into train/val per file, and writes JSONL.
+
+// ==========================================
+// What it writes:
+//   tools/ai_assist/corpus/{train,val}.jsonl   each line {"path":..., "code":...}
+//   tools/ai_assist/corpus/stats.json
+// ==========================================
+// Usage:
+//   ./out/build_corpus.exe          build from the raw sources
+//   ./out/build_corpus.exe --fmt    normalize through ksplc fmt, then build
+// ==========================================
+import "std/argp"
+import "std/chars"
+import "std/ds" { List, Map }
+import "std/fs"
+import "std/io"
+import "std/mem" + { Arena, dealloc }
+import "std/sha256"
+import "std/str" { Str_builder }
+import "std/subproc"
+import "std/sys"
+import "std/thread"
+import "tools/ai_assist/corpus_count" as count
+import "tools/ai_assist/ksplc_oracle" as oracle
+
+priv const val_every: Sz = 10 // one file in every ten goes to validation, deterministically
+priv const fmt_timeout_ms: I32 = 60000
+priv const output_cap: Sz = 4 * 1024 * 1024
+priv const num_fmt_workers: Sz = 8 //<
+  //< How many workers normalize() runs under --fmt, each starting a ksplc child per file
+  //<
+  //< The work is mostly waiting on I/O, so it need not match the CPU core count. A fixed value
+  //< avoids adding an OS-dependent way to read the core count.
+
+priv struct Rec
+  path: U8[]
+  code: U8[]
+
+priv struct Agg
+  files: Sz
+  bytes: Sz
+  lines: Sz
+  approx_tokens: Sz
+// ==========================================
+// ① Collecting the files: every source under the roots, recursively, except ksplc/tests/negative
+// (invalid on purpose). The train/val split depends on the files' order, so the OS's listing order
+// would change it between runs.
+// ==========================================
+priv fn find_kspl_files(arena: Arena$@): List<|U8[]|>$@
+  list: = List<|U8[]|>.create(arena)
+  // The roots are in lexicographic order, so the listing equals one sorted all at once; change it
+  // and the train/val split moves.
+  roots: = U8[][]::{ "ksai/examples", "ksos", "ksplc", "std", "tests" }
+  for i in Range.asc(roots.len)
+    // A missing root is skipped silently (several roots are tried in turn).
+    files: = fs.walk_files(roots[i], count.skip_dir, arena) catch
+      continue
+    for path in files
+      // **The brace spelling (`.kspl`) is not collected**, keeping the corpus to the default
+      // spelling (mixed, it would teach two ways of writing).
+      if path.ends_with(".kspls")
+        list.push(path)
+  return list
+
+// ==========================================
+// ② Normalizing (through ksplc fmt only with --fmt; on a failure it falls back to the raw source)
+// ==========================================
+priv fn normalize(rel_path: U8[], use_fmt: Bool, arena: Arena$@): U8$[]
+  raw: = io.read_file(rel_path) catch panic("cannot read a file just found by the directory walk")
+  defer dealloc(Void$@::raw.ptr)
+  raw_copy: = arena.dup_str(raw)
+  if !use_fmt
+    return raw_copy
+
+  argv: = U8[][]::{ oracle.ksplc_path, "fmt", rel_path }
+  out: = subproc.run(argv, "", fmt_timeout_ms, output_cap, arena) catch ""
+  if out.len > 0
+    return out
+  io.err().s("  [warn] fmt failed on \{rel_path\}\n")
+  return raw_copy
+// ==========================================
+// ②' Parallel fmt: ksplc fmt is independent per file, so a thread pool runs it. The workers take
+// `files` round-robin: sorted paths put similar files side by side, so contiguous ranges could
+// give one worker all the large ones.
+// ==========================================
+priv struct Fmt_worker_args
+  files: List<|U8[]|>$@ //< shared read-only (disjoint indices, no contention)
+  use_fmt: Bool
+  worker_id: Sz
+  num_workers: Sz
+  worker_arena: Arena$@ //< this worker's own (no other thread touches it)
+  results: Rec$@ //< shared, but written only at the indices assigned
+
+#export
+fn fmt_worker_entry(arg: Fmt_worker_args$@): Void$@ //< one worker's share of the formatting
+  n: = arg.files.len
+  for $i: Sz = arg.worker_id; i < n; i += arg.num_workers
+    rel: = arg.files[i]
+    code: = normalize(rel, arg.use_fmt, arg.worker_arena)
+    (arg.results + i)$ = Rec::{ .path = rel, .code = code }
+  return null
+
+priv fn normalize_all(files: List<|U8[]|>$@, use_fmt: Bool, arena: Arena$@): List<|Rec|>$@ //<
+  //< Runs normalize() on every file in `files` (starting ksplc fmt with --fmt)
+  //<
+  //< Without --fmt it only reads files, so it runs in order (threads would cost more). The result
+  //< keeps the `files` order (the caller's dedup and train/val split depend on it).
+  result: = List<|Rec|>.create(arena)
+  n: = files.len
+  if !use_fmt || n == 0
+    for rel in files
+      code: = normalize(rel, use_fmt, arena)
+      result.push(Rec::{ .path = rel, .code = code })
+    return result
+
+  num_workers: = num_fmt_workers if n >= num_fmt_workers else n
+  results: = Rec$@::arena.alloc(n * sizeof(Rec))
+
+  worker_arenas: = List<|Arena$@|>.create(arena)
+  threads: = List<|thread.Thread$@|>.create(arena)
+  for $w: Sz = 0; w < num_workers; w += 1
+    wa: = mem.alloc_as<|Fmt_worker_args|>()
+    wa.files = files
+    wa.use_fmt = use_fmt
+    wa.worker_id = w
+    wa.num_workers = num_workers
+    wa.worker_arena = Arena.new(64 * 1024 * 1024)
+    wa.results = results
+    worker_arenas.push(wa.worker_arena)
+
+    t: = thread.Thread.spawn<|Fmt_worker_args|>(fmt_worker_entry, wa) catch panic("failed to spawn \
+      fmt worker thread")
+    threads.push(t)
+  for t in threads
+    t.join_and_free()
+
+  // `code` lives in each worker's arena, so it is copied into the caller's arena before those are
+  // freed (`path` already lives with `files`).
+  for i in Range.asc(n)
+    rec: = (results + i)$
+    result.push(Rec::{ .path = rec.path, .code = arena.dup_str(rec.code) })
+  for worker_arena in worker_arenas
+    worker_arena.free()
+  return result
+
+priv fn write_records(path: U8[], recs: List<|Rec|>$@)
+  $f: = io.open(path, "w") catch panic("cannot open output file for writing")
+  $b: = Str_builder.new()
+  defer b.free()
+  for rec in recs
+    b.clear()
+    b.s("{\"path\":\"").escape_and_append(rec.path).s("\",\"code\":\"")
+      .escape_and_append(rec.code).s("\"}\n")
+    f.s(b.slice())
+  oracle.close_or_die(f@, path)
+
+priv fn agg(recs: List<|Rec|>$@): Agg
+  $b: Sz = 0
+  $ln: Sz = 0
+  $tk: Sz = 0
+  for rec in recs
+    code: = rec.code
+    b += code.len
+    ln += count.count_lines(code)
+    tk += count.approx_tokens(code)
+  return Agg::{ .files = recs.len, .bytes = b, .lines = ln, .approx_tokens = tk }
+
+priv fn write_agg(w: Writer, a: Agg): Writer
+  return w
+    .s("{\"files\":\{a.files\},\"bytes\":\{a.bytes\},\"lines\":\{a.lines\},\"approx_tokens\":\{a.approx_tokens\}}")
+
+priv fn write_stats(use_fmt: Bool, dups: Sz, total: Agg, train: Agg, val: Agg)
+  $f: = io.open("tools/ai_assist/corpus/stats.json", "w") catch panic("cannot open stats.json for \
+    writing")
+  f.s("{\n  \"normalized_with_fmt\":\{use_fmt\},\n  \"duplicates_removed\":\{dups\},\n  \"total\":")
+  write_agg(f, total).s(",\n  \"train\":")
+  write_agg(f, train).s(",\n  \"val\":")
+  write_agg(f, val).s("\n}\n")
+  oracle.close_or_die(f@, "tools/ai_assist/corpus/stats.json")
+// ==========================================
+// main
+// ==========================================
+fn main() //< collects the repository's sources into the train/val corpus
+  arena: = Arena.new(512 * 1024 * 1024)
+  defer arena.free()
+  $use_fmt: = false
+  p: = argp.Parser
+    .create(sys.program_name(), "make a training corpus from the repository's sources", arena)
+  p.flag("--fmt", use_fmt@, "normalize through ksplc fmt before building")
+  p.parse_or_exit(sys.args(), arena)
+  if use_fmt && !fs.exists(oracle.ksplc_path)
+    io.err().s("[error] --fmt requires \{oracle.ksplc_path\} (check that make self-host has run)\n")
+    sys.exit(1)
+
+  // Creating a folder that already exists fails harmlessly, so the error is ignored.
+  fs.mkdir("tools/ai_assist") catch {}
+  fs.mkdir(oracle.corpus_dir) catch {}
+
+  files: = find_kspl_files(arena)
+  normalized: = normalize_all(files, use_fmt, arena)
+
+  $seen_hashes: = Map<|U8[], Bool|>.new(arena)
+  records: = List<|Rec|>.create(arena)
+  $dups: Sz = 0
+  for rec in normalized
+    digest: = sha256.hash(rec.code)
+    hex: U8[sha256.hex_len] = ::{}
+    sha256.write_hex(digest, U8$[]::hex)
+    hex_key: = U8$[]::hex
+
+    already_seen: = seen_hashes.get(hex_key) catch false
+    if already_seen
+      dups += 1
+      continue
+    seen_hashes.set(arena.dup_str(hex_key), true)
+    records.push(rec)
+
+  train: = List<|Rec|>.create(arena)
+  val: = List<|Rec|>.create(arena)
+  for i in Range.asc(records.len)
+    if i % val_every == val_every - 1
+      val.push(records[i])
+    else
+      train.push(records[i])
+
+  write_records("tools/ai_assist/corpus/train.jsonl", train)
+  write_records("tools/ai_assist/corpus/val.jsonl", val)
+
+  total_agg: = agg(records)
+  train_agg: = agg(train)
+  val_agg: = agg(val)
+  write_stats(use_fmt, dups, total_agg, train_agg, val_agg)
+
+  io.out()
+    .s("corpus built (fmt=\{use_fmt\}): \{total_agg.files\} files, \{total_agg.lines\} lines, \
+      \{total_agg.bytes\} bytes, ~\{total_agg.approx_tokens\} tokens (dedup removed \{dups\})\n")
+  io.out().s("  train: \{train_agg.files\} files / ~\{train_agg.approx_tokens\} tok\n")
+  io.out().s("  val  : \{val_agg.files\} files / ~\{val_agg.approx_tokens\} tok\n")
+  io.out().s("  -> tools/ai_assist/corpus/{train,val}.jsonl, stats.json\n")

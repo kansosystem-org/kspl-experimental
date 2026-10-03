@@ -1,0 +1,202 @@
+import "kspage/lay/flow"
+import "kspage/lay/page" { Page }
+import "kspage/model/code"
+import "kspage/model/doc" { Doc }
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/paint"
+import "kspage/model/style" { Sheet }
+import "kspage/tests/base"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// kspage: checks that a source text gets a color per token kind. **The document does not change**:
+// the color is decided at each layout, and written into an inline it **would go stale with every
+// keystroke**. **`tests/suite/keywords_test.kspls` checks that the words match ksplc's** (the
+// canonical source); here, the splitting and the color reaching boxes.
+// ==========================================
+
+priv fn code_sheet(arena: Arena$@): Sheet$@ //<
+  //< A table with one style that names a language and does not wrap
+  sheet: = Sheet.new(base.mono_font(), arena)
+  sheet.add("kspl", paint.inherit_all()).wrap = false
+  return sheet
+
+priv fn boxes_of(src: U8[], name: U8[], arena: Arena$@): Page$@ //<
+  //< The boxes when that text is laid out as one line
+  sheet: = Sheet.new(base.mono_font(), arena)
+  sheet.add(name, paint.inherit_all()).wrap = false
+  d: = Doc.new(arena)
+  d.add_block(name).add_text(src)
+  return flow.layout(d, sheet, fixed.make(), 800.0, arena)
+
+priv fn ink_of(page: Page$@, i: Sz): U32 //< a box's color (0 where it sets none)
+  if v: = page.boxes.get(i).ink.color
+    return v
+  return 0U32
+
+fn test_a_line_is_split_by_lexical_role()
+  verdict.start("[kspage/code-color] a text splitting by a lexeme's part test...")
+
+  // `fn` is a keyword, `"x"` a text, `12` a number and `// note` a comment.
+  line: = "fn f() { s(\"x\", 12); } // note"
+  $at: Sz = 0
+  $words: Sz = 0
+  $texts: Sz = 0
+  $numbers: Sz = 0
+  $comments: Sz = 0
+  for at < line.len
+    span: = code.token_at("kspl", line, at, code.Carry.plain)
+    assert(span.to > at, "it always goes on by one character or more")
+    switch span.role case .word
+      words += 1
+    case .text
+      texts += 1
+    case .number
+      numbers += 1
+    case .comment
+      comments += 1
+    case .plain {}
+    at = span.to
+  assert(words == 1, "the words are the one fn")
+  assert(texts == 1, "the texts are one")
+  assert(numbers == 1, "the numbers are one")
+  // **A comment runs to the end of the line** (it becomes one piece).
+  assert(comments == 1, "the comments are one")
+  verdict.pass("it splits into the four of a word, a text, a number and a comment.")
+
+fn test_the_quotes_and_comments_do_not_bleed()
+  verdict.start("[kspage/code-color] a text and a comment not bleeding test...")
+
+  // **A `//` inside a text is not a comment.**
+  a: = "s(\"http://x\")"
+  first: = code.token_at("kspl", a, 0, code.Carry.plain)
+  assert(first.role.same_role(code.Role.plain), "s is no word")
+  quote: = code.token_at("kspl", a, 2, code.Carry.plain)
+  assert(quote.role.same_role(code.Role.text), "the text starts at the quote")
+  assert(quote.to == a.len - 1,
+    "the text runs to the closing quote (the // inside it is no comment)")
+
+  // **Do not close on an escaped quote.**
+  b: = "\"a\\\"b\""
+  whole: = code.token_at("kspl", b, 0, code.Carry.plain)
+  assert(whole.to == b.len, "it does not close on an escaped quote")
+
+  // **An unclosed text runs to the end of the line** (better to split even a broken text).
+  c: = "\"does not close"
+  assert(code.token_at("kspl", c, 0, code.Carry.plain).to == c.len,
+    "a text that does not close runs to the row's end")
+  verdict.pass("a mark inside a text is no mark, and a text that does not close splits too.")
+
+fn test_only_a_named_language_is_coloured()
+  verdict.start("[kspage/code-color] only a language that is named getting a colour test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+
+  src: = "fn f() {}"
+  colored: = boxes_of(src, "kspl", arena)
+  // **Do not split for an unknown language** (split on a guess, part of a text alone would change
+  // color).
+  bare: = boxes_of(src, "code", arena)
+  assert(bare.boxes.len == 1, "a style that names none stays one box")
+  assert(colored.boxes.len > 1, "a style that names one splits by part")
+  assert(ink_of(colored, 0) != 0U32, "the first one (fn) gets a colour")
+  assert(!code.colored("code") && !code.colored(""), "a name that is not known gets no colour")
+  assert(code.colored("kspl"), "kspl gets a colour")
+  verdict.pass("what gets a colour is a style that named a language it knows, and nothing else.")
+
+fn test_the_document_is_not_touched()
+  verdict.start("[kspage/code-color] the document not changing when a colour is put on test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+
+  sheet: = code_sheet(arena)
+  d: = Doc.new(arena)
+  src: = "fn f() { return 12; } // note"
+  d.add_block("kspl").add_text(src)
+  before: = d.blocks.get(0).inlines.len
+
+  page: = flow.layout(d, sheet, fixed.make(), 800.0, arena)
+  assert(page.boxes.len > 1, "the boxes are split")
+  // **The inlines stay one**; if they grew, coloring would be changing the document.
+  assert(d.blocks.get(0).inlines.len == before, "the count of runs does not change")
+  assert(d.blocks.get(0).inlines.get(0).text().equals(src), "the text does not change either")
+  // **A box holds its inline and its first byte** (that maps a click back to the document).
+  $covered: Sz = 0
+  for $i: Sz = 0; i < page.boxes.len; i += 1
+    box: = page.boxes.get(i)
+    assert(box.inline != null, "every box points at a run")
+    assert(box.offset == covered, "which byte each starts at carries on")
+    covered += box.text.len
+  assert(covered == src.len, "the split pieces put together are the original text")
+  verdict
+    .pass("the colour is decided every time it is laid, and neither the document nor where a press \
+      lands moves.")
+fn test_a_block_comment_carries_to_the_next_line()
+  verdict.start("[kspage/code-color] a fenced comment running on to the next row test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+
+  // **KSPL has no block comment** (a comment is `//` and nothing else). C has one.
+  open: = code.token_at("kspl", "/* x", 0, code.Carry.plain)
+  assert(!open.role.same_role(code.Role.comment), "in KSPL a /* becomes no comment")
+
+  // C's `/*` continues to the next line unless it closes on the same one.
+  first: = code.token_at("c", "x = 1; /* note", 7, code.Carry.plain)
+  assert(first.role.same_role(code.Role.comment), "the comment starts at the /*")
+  assert(first.to == "x = 1; /* note".len, "unclosed it runs to the row's end")
+  switch first.carry case .noted {} default
+    assert(false, "a fenced comment that does not close runs on to the next row")
+
+  // **A continuation line is a comment whatever is written in it** (neither a keyword nor a text
+  // gets a color).
+  next: = code.token_at("c", "int x = \"x\";", 0, code.Carry.noted)
+  assert(next.role.same_role(code.Role.comment), "the row that carries on is a comment whole")
+  assert(next.to == "int x = \"x\";".len, "until it closes it runs to the row's end")
+
+  // Once it closes, what follows goes back to ordinary text.
+  shut: = code.token_at("c", " end */ int", 0, code.Carry.noted)
+  assert(shut.to == " end */".len, "the comment runs to where it closes")
+  switch shut.carry case .plain {} default
+    assert(false, "once it closes it goes back to ordinary")
+  word: = code.token_at("c", " end */ int", shut.to + 1, code.Carry.plain)
+  assert(word.role.same_role(code.Role.word), "the word behind the closing gets a colour")
+
+  // A JavaScript template literal spans lines too.
+  tick: = code.token_at("js", "const a = `x", 10, code.Carry.plain)
+  assert(tick.role.same_role(code.Role.text), "the text starts at the `")
+  switch tick.carry case .quoted {} default
+    assert(false, "a template text that does not close runs on to the next row")
+  verdict.pass("a lexeme that crosses is handed to the next row, and comes back where it closes.")
+
+fn test_the_carry_stops_at_another_language()
+  verdict.start("[kspage/code-color] a crossing state not leaking into another naming test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+
+  sheet: = Sheet.new(base.mono_font(), arena)
+  c_style: = sheet.add("c", paint.inherit_all())
+  c_style.wrap = false
+  kspl_style: = sheet.add("kspl", paint.inherit_all())
+  kspl_style.wrap = false
+
+  d: = Doc.new(arena)
+  // A block ending with C's block comment still open, and a block in another language after it.
+  d.add_block("c").add_text("/* left open")
+  d.add_block("kspl").add_text("fn f() {}")
+  page: = flow.layout(d, sheet, fixed.make(), 800.0, arena)
+
+  // **The next block's `fn` gets the keyword color**; leaked state would give it the comment's.
+  $word_ink: U32 = 0U32
+  for $i: Sz = 0; i < page.boxes.len; i += 1
+    b: = page.boxes.get(i)
+    if b.text.equals("fn")
+      if v: = b.ink.color
+        word_ink = v
+  assert(word_ink != 0U32, "the lump of another naming gets a word's colour")
+  switch code.Role.word.role_ink(false) case .some(want)
+    assert(word_ink == want, "what is on is a word's colour (not a comment's)")
+  case .none
+    assert(false, "a word's colour cannot be looked up")
+  verdict.pass("a crossing state is thrown away where the naming changes.")

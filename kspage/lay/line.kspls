@@ -1,0 +1,387 @@
+//< How one line is built
+//<
+//< **How blocks are stacked is not here but in [`flow.kspls`](flow.kspls).** This handles one line
+//< only: where it breaks, how its contents are aligned, where the baseline is lined up.
+//< **The pen's fields are rewritten from outside**: `flow.kspls` resets the alignment, the line
+//< spacing and the mark on entering each paragraph.
+//< It is split out to keep each file under 1000 lines (Principle 3).
+import "kspage/lay/page" { Placed, Page, Panel, Box, placed_of, page_break }
+import "kspage/model/code"
+import "kspage/model/doc" { Rect }
+import "kspage/model/font" { Font, Font_source }
+import "kspage/model/run" { Fit_at, Inline }
+import "kspage/model/style" { Align, Look }
+import "std/chars" as std_chars
+import "std/mem" { Arena }
+import "std/str"
+import "std/str" // provides `arena.text()`
+
+struct Pen //< the state partway through the layout
+  //<
+  //< **A line's y is not known until the line is finished** (the tallest box sets it).
+  out: Page$@
+  line_start: Sz //< where the current line starts in `out.boxes`
+  x: F32
+  y: F32 //< the top edge of the current line
+  // The largest ascent and the largest height among the boxes on the current line.
+  ascent: F32
+  height: F32
+  left: F32
+  right: F32
+  page_height: F32 //< one page's height. **0 means no page breaks.**
+  // The current paragraph's alignment, and the line height ratio.
+  // Caution: **Reset it on entering each block.** Otherwise the next paragraph with no style is
+  // laid out with the previous paragraph's alignment. **A ratio of 0 means "not set"** (the font's
+  // height).
+  align: Align
+  lead: F32
+  wrap: Bool //<
+    //< Whether the current paragraph wraps its lines
+    //<
+    //< Caution: **Reset this on entering each block too**, or the paragraph after one that does
+    //< not wrap stops wrapping as well.
+  spoken: U8[] //<
+    //< The language declared by the current paragraph's style
+    //<
+    //< It is the style's name itself ("What a Markdown round trip drops" in
+    //< `../docs/DESIGN.md`). **Reset this on entering each block too.** **Empty, or an unknown
+    //< name, gets no color** (`colored` in `../model/code.kspls`).
+  // The index of the line being laid out now; **it means something only in a document in text
+  // form** (one line is one block).
+  line_no: Sz
+  carry: code.Carry //<
+    //< The token state left at the end of the line before (inside a block comment, and the like)
+    //<
+    //< **It is the only thing that crosses lines** (rescanning from the start would scan the whole
+    //< document for one line's color). It is reset where the declared language changes
+    //< (`flow.kspls`).
+  dark: Bool //<
+    //< Whether the current paragraph's background is dark
+    //<
+    //< **Reset it on entering each block.** The text and diagnostic colors choose their pair from
+    //< this (`role_ink` in `../model/code.kspls`).
+  mark: U8[] //<
+    //< The mark put at the start of the current paragraph (a bullet or a number)
+    //<
+    //< The next field holds the left edge where the mark can be placed.
+    //< Caution: **Reset this on entering each block too**, or the next paragraph with no mark shows
+    //< the same symbol. Empty text means no mark.
+  mark_left: F32
+  rise: F32 //<
+    //< The height by which the next box is raised from the baseline (a note's mark)
+    //<
+    //< **Set it back to 0 once the box is laid out**, or the text after it floats too.
+  // Where consecutive blocks form one fence (a block of code), that fill's band.
+  // **Do not start it again mid-fence**, or the fill comes out striped. **Save it before entering
+  // a child and restore it on return** (`place_siblings` in `flow.kspls`).
+  fence: Option<|Panel$@|>
+  fence_from: Placed
+  arena: Arena$@
+fn new_pen(dst: Page$@, at: Rect, page_height: F32, arena: Arena$@): Pen$@ //<
+  //< The pen that starts laying out from `at`'s upper left
+  fresh: = Pen::{
+    .out = dst,
+    .line_start = dst.boxes.len,
+    .x = at.x,
+    .y = at.y,
+    .ascent = 0.0,
+    .height = 0.0,
+    .left = at.x,
+    .right = at.x + at.w,
+    .page_height = page_height,
+    .align = Align.left,
+    .lead = 0.0,
+    .wrap = true,
+    .spoken = "",
+    .line_no = 0,
+    .carry = code.Carry.plain,
+    .dark = false,
+    .mark = "",
+    .mark_left = at.x,
+    .rise = 0.0,
+    .fence = Option<|Panel$@|>.none,
+    .fence_from = placed_of(dst),
+    .arena = arena,
+  }
+  return arena.create(fresh)
+priv fn can_break_at(text: U8[], o: Sz): Bool //< whether the line may break at o
+  //<
+  //< o must be a character boundary. A line can break after a space and next to a non-ASCII
+  //< character (**text written without spaces can break between any two characters**).
+  if o <= 0 || o >= text.len
+    return false
+  before: = text[o - 1]
+  here: = text[o]
+  return before == 0x20U8 || (before & 0x80U8) != 0U8 || (here & 0x80U8) != 0U8
+priv fn midpoint(text: U8[], lo: Sz, hi: Sz): Sz //<
+  //< the character boundary between lo and hi
+  //<
+  //< Where the result is lo or less, or hi or more, "there is no boundary between them".
+  //< Caution: **Do not split at the exact middle** (it can land mid-character). **Neither going
+  //< back alone nor going forward alone is enough**: back alone can drop to lo and miss a boundary
+  //< between; forward alone skips one just before the middle.
+  $back: Sz = lo + (hi - lo) / 2
+  for back > lo && (text[back] & 0xc0U8) == 0x80U8
+    back -= 1
+  if back > lo
+    return back
+  $ahead: Sz = lo + (hi - lo) / 2
+  for ahead < hi && (text[ahead] & 0xc0U8) == 0x80U8
+    ahead += 1
+  return ahead
+// The last break from start that fits in avail, and the width up to it.
+// **Do not measure character by character.** It first checks whether all that is left fits, and
+// bisects only where it does not (the grounds are "How text flows" in
+// [`../docs/DESIGN.md`](../docs/DESIGN.md)). **Return both the break and the width to lay out.**
+priv fn measure_fit(src: Font_source, font: Font, text: U8[], start: Sz, avail: F32,
+  told: Option<|F32|>): Fit_at
+  // Where all that is left fits it does not search (**the vast majority**). **Return the measured
+  // width**: the text the caller lays out is exactly the one just measured.
+  // Where the caller passes a width it remembers, nothing is measured (`told`).
+  $whole: F32 = 0.0
+  switch told case .some(w)
+    whole = w
+  case .none
+    whole = src.measure_width(font, text.sub(start, text.len - start))
+  if whole <= avail
+    return Fit_at::{ .start = start, .end = text.len, .wide = whole, .whole = whole }
+  // It bisects. **lo means "fits up to here"**, with start counted as fitting without measuring
+  // (even where not one character fits, a value that advances must be returned).
+  $lo: Sz = start
+  $hi: Sz = text.len
+  for
+    mid: = midpoint(text, lo, hi)
+    if mid <= lo || mid >= hi
+      break
+    if src.measure_width(font, text.sub(start, mid - start)) > avail
+      hi = mid
+    else
+      lo = mid
+  // The last break within what fits. **Nothing is measured here** (the text alone decides it).
+  $last_ok: Sz = start
+  $i: Sz = start
+  for i < lo
+    next: = i + text.next_codepoint(i)
+    if next > lo
+      break
+    if can_break_at(text, next)
+      last_ok = next
+    i = next
+  if last_ok > start
+    return cut_at(src, font, text, start, last_ok, whole)
+  // Where there is no break, it lays out up to the next boundary even if that sticks out.
+  // Caution: **Do not break at what fits**, or the one character that follows drops to the next
+  // line (`=A1*$A$` and `1`). Sticking out is better than changing the text.
+  // `hi` is the next boundary after lo, always past start, so the line feed cannot loop forever.
+  return cut_at(src, font, text, start, hi, whole)
+
+priv fn cut_at(src: Font_source, font: Font, text: U8[], start: Sz, end: Sz, whole: F32): Fit_at //<
+  //< Builds the result once the break is decided
+  //<
+  //< Caution: **Measure the width of the text to lay out here, only once.** Measured in the
+  //< caller, a result that came from the cache would lose its width.
+  seg: = text.sub(start, end - start)
+  return Fit_at::{ .start = start, .end = end, .wide = src.measure_width(font, seg),
+    .whole = whole }
+fn close_line(p: Pen$@, stretched: Bool) //<
+  //< Closes the current line and lines up the y of its boxes on the baseline
+  //<
+  //< **A page break never splits a line.** A line that does not fit starts whole on the next page.
+  if top: = page_break(p.page_height, p.y, p.height)
+    p.y = top
+  if stretched
+    stretch_line(p)
+  shift: = slack(p)
+  for $i: Sz = p.line_start; i < p.out.boxes.len; i += 1
+    b: = p.out.boxes.get(i)
+    m: = p.out.metrics(b.font)
+    b.rect.y = p.y + (p.ascent - m.ascent) - b.rise
+    b.rect.x += shift
+  p.y += p.height
+  p.x = p.left
+  p.ascent = 0.0
+  p.height = 0.0
+  p.line_start = p.out.boxes.len
+priv fn stretch_line(p: Pen$@) //<
+  //< Shares the line's leftover width out between the characters to reach both edges (justifying)
+  //<
+  //< **It is called only when a line breaks partway** (on a paragraph's last line a few characters
+  //< would scatter across the column). A box's width runs to where its last character ends, and
+  //< the next box starts one character gap past that.
+  if !p.align.same_align(Align.justify) || p.out.boxes.len <= p.line_start
+    return
+  $chars: Sz = 0
+  for $i: Sz = p.line_start; i < p.out.boxes.len; i += 1
+    chars += p.out.boxes.get(i).text.count_codepoints()
+  if chars <= 1
+    return
+  last: = p.out.boxes.get(p.out.boxes.len - 1)
+  room: = p.right - (last.rect.x + last.rect.w)
+  if room <= 0.0
+    return
+  gap: = room / F32::(chars - 1)
+  $moved: F32 = 0.0
+  for $i: Sz = p.line_start; i < p.out.boxes.len; i += 1
+    b: = p.out.boxes.get(i)
+    n: = b.text.count_codepoints()
+    b.rect.x += moved
+    b.spacing = gap
+    if n > 0
+      b.rect.w += gap * F32::(n - 1)
+      moved += gap * F32::n
+priv fn slack(p: Pen$@): F32 //<
+  //< How far the current line's contents are shifted sideways to align them
+  //<
+  //< **Where there is no leftover nothing is shifted** (shifted by a negative amount, a wrapped
+  //< line would go outside the column). It is done when the line is closed.
+  // **Justifying does not shift**, so a paragraph's last line sits where a left-aligned one does.
+  if p.align.same_align(Align.left) || p.align.same_align(Align.justify) ||
+    p.out.boxes.len <= p.line_start
+    return 0.0
+  last: = p.out.boxes.get(p.out.boxes.len - 1)
+  room: = p.right - (last.rect.x + last.rect.w)
+  if room <= 0.0
+    return 0.0
+  half: F32 = room * 0.5F32
+  return room if p.align.same_align(Align.right) else half
+priv fn place(p: Pen$@, text: U8[], look: Look, w: F32, from: Inline$@, offset: Sz) //<
+  //< Lays one box into the current line (the y is set when the line is closed)
+  m: = p.out.metrics(look.font)
+  // **The ratio applies to the line's height only**, not the characters' size. **Compute it from
+  // the measurements**, not the typeface (which would measure again).
+  tall: = m.line_height()
+  h: = tall * p.lead if p.lead > 0.0 else tall
+  at: = Rect::{ .x = p.x, .y = 0.0, .w = w, .h = h }
+  fresh: = Box::{ .rect = at, .text = text, .font = look.font, .ink = look.ink, .inline = from,
+    .offset = offset, .composing = false, .rise = p.rise, .spacing = 0.0 }
+  p.out.boxes.push(p.arena.create(fresh))
+  p.x += w
+  if m.ascent > p.ascent
+    p.ascent = m.ascent
+  if h > p.height
+    p.height = h
+priv fn skip_spaces(text: U8[], from: Sz): Sz //< skips the spaces at a line's start
+  //<
+  //< **The space at a break stays at the end of the line before**, or left edges would not align.
+  $i: Sz = from
+  for i < text.len && text[i] == 0x20U8
+    i += 1
+  return i
+priv fn whole_width(p: Pen$@, text: U8[], look: Look, from: Inline$@): F32 //<
+  //< The width of the whole visible text
+  //<
+  //< **Only this one goes through the cache** (with two readers, one forgets to refresh). The run
+  //< holds it (`wide` in `../model/run.kspls`).
+  // **Some lines hold no run**: a line built at layout time (a table of contents, a list of notes)
+  // points at no text of the document (`gather.kspls` passes `null`), so there is nowhere to cache
+  // it; dereferencing it crashes.
+  if from != null
+    if w: = from.known_whole(look.font, 0)
+      return w
+  wide: = p.out.src.measure_width(look.font, text)
+  if from != null
+    // It does not wrap, so the break is the end and the width is the whole.
+    got: = Fit_at::{ .start = 0, .end = text.len, .wide = wide, .whole = wide }
+    from.remember_fit(look.font, wide, got)
+  return wide
+
+priv fn fit(p: Pen$@, text: U8[], look: Look, from: Inline$@, at: Sz, avail: F32): Fit_at //<
+  //< Decides one break
+  //<
+  //< **Only this one reads the cache** (a second place would return an old result). The run holds
+  //< it (`fits` in `../model/run.kspls`).
+  if from != null
+    if had: = from.known_fit(look.font, avail, at)
+      return had
+  // **"The whole width" can only be passed from a line's start.**
+  told: = from.known_whole(look.font, at) if from != null else Option<|F32|>.none
+  got: = measure_fit(p.out.src, look.font, text, at, avail, told)
+  if from != null
+    from.remember_fit(look.font, avail, got)
+  return got
+
+priv fn place_colored(p: Pen$@, text: U8[], look: Look, from: Inline$@): Bool //<
+  //< Lays out one line that does not wrap, changing the color per token role
+  //<
+  //< A box records the run and the byte, so however it is split, the cursor and a click stay put.
+  //< **Measure the width per piece** (divided up, a proportional typeface makes characters drift).
+  // **Do not color a style that declares no language** (`colored` in `../model/code.kspls`).
+  colored: = p.spoken.len > 0 && code.colored(p.spoken)
+  if text.len <= 0 || !colored
+    return false
+  $at: Sz = 0
+  for at < text.len
+    // Caution: **Always advance**, or it loops forever (as `span_at` says).
+    span: = code.token_at(p.spoken, text, at, p.carry)
+    end: = span.to if span.to > at else at + 1
+    // **Pass it to the next piece (the next line)**, or an unclosed block comment ends there.
+    p.carry = span.carry
+    part: = text.sub(at, end - at)
+    $tint: Look = look
+    if v: = span.role.role_ink(p.dark)
+      tint.ink.color = Option<|U32|>.some(v)
+    place(p, part, tint, p.out.src.measure_width(look.font, part), from, at)
+    at = end
+  return true
+
+fn place_wrapped(p: Pen$@, text: U8[], look: Look, from: Inline$@) //<
+  //< Lays out one run of text, breaking as many lines as needed
+  // Caution: **Lay out a box of width 0 for an empty text too.** The cursor can only be placed over
+  // a box (`caret.hit_test`), so without it, an empty cell or paragraph could not be clicked into.
+  // It takes one line's height, or an added line stays invisible.
+  if text.len <= 0
+    place(p, text, look, 0.0, from, 0)
+    return
+  // A paragraph that does not wrap is laid out as one whole box.
+  // Caution: **Do not break it at the column's width.** Broken, the space at the break is lost
+  // (`skip_spaces` below), so in a block of code the indent depth changes silently.
+  if !p.wrap
+    if place_colored(p, text, look, from)
+      return
+    place(p, text, look, whole_width(p, text, look, from), from, 0)
+    return
+  $at: Sz = 0
+  for at < text.len
+    avail: = p.right - p.x
+    // **Do not cache on a line with no run** (as `whole_width` above says; `fit` checks).
+    got: = fit(p, text, look, from, at, avail)
+    end: = got.end
+    // **Measure the break's width only once** (measuring is what calls across the boundary);
+    // `fit` always returns it.
+    seg: = text.sub(at, end - at) if end > at else text.sub(at, 0)
+    wide: = got.wide if end > at else 0.0F32
+    // Where not one character fits partway through a line, the line is ended and measured again.
+    if end <= at || (p.x > p.left && wide > avail)
+      close_line(p, true)
+      continue
+    place(p, seg, look, wide, from, at)
+    at = skip_spaces(text, end)
+    if at < text.len
+      close_line(p, true)
+fn place_note_mark(p: Pen$@, look: Look, no: Sz) //< lays one note's mark after that run's text
+  //<
+  //< **It is a superscript**, sized and raised from the body text (a style of its own would let
+  //< only the mark look different). **The box points at no text** (as with a bullet).
+  text: = p.arena.text().s("\{no\}").take()
+  $small: Look = look
+  small.font.size_px = look.font.size_px * 0.7F32
+  w: = p.out.src.measure_width(small.font, text)
+  // Where it does not fit in the rest of the line, only the mark drops to the next line's start.
+  if p.x > p.left && p.x + w > p.right
+    close_line(p, true)
+  p.rise = look.font.size_px * 0.3F32
+  place(p, text, small, w, null, 0)
+  p.rise = 0.0
+fn place_mark(p: Pen$@, look: Look) //<
+  //< Places the mark at a paragraph's start into the indent's space
+  //<
+  //< **The body's left edge does not move line by line**, so a bullet list's body lines up however
+  //< it wraps.
+  if p.mark.len <= 0
+    return
+  w: = p.out.src.measure_width(look.font, p.mark)
+  hang: = p.left - w
+  was: = p.x
+  p.x = hang if hang > p.mark_left else p.mark_left
+  place(p, p.mark, look, w, null, 0)
+  p.x = was

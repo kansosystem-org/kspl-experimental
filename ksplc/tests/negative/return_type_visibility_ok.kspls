@@ -1,0 +1,26 @@
+//< The counterpart of the case above
+//<
+//< Balanced visibility puts nothing out: a `priv` fn returning a `priv` type, a `priv struct`'s
+//< `pub` method (held down to the impl target), a narrow argument type (nothing leaks outward).
+//< An undefined symbol fails it on purpose; the EXPECT-NOT pins that no visibility error joins it.
+// EXPECT: undefined path or identifier 'no_such_fn'
+// EXPECT-NOT: is less visible than the
+
+priv struct Hidden
+  v: I32
+
+impl Hidden
+  // The impl target being priv, this `pub`'s effective visibility is file_private.
+  fn clone(r: Self$@): Hidden
+    return Hidden::{ .v = r.v }
+
+priv fn make(): Hidden
+  return Hidden::{ .v = 1 }
+
+pub fn consume(h: Hidden): I32
+  return h.v
+
+fn main()
+  h: = make()
+  _c: = consume(h.clone())
+  no_such_fn()

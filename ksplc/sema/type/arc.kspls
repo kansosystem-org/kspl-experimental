@@ -1,0 +1,208 @@
+//< Decides whether a type is managed by ARC (automatic reference counting)
+//<
+//< An extension to `Env` in `sema/type/env.kspls`; it does not hold the type table itself.
+//< Caution: **The decision here (`type_has_arc_content` / `type_is_managed`) and the emission in
+//< `lower/arc.kspls` (`emit_managed_op`) must always change together.** Fix only one and it breaks
+//< silently: a retain without its release, or the reverse ("The rules for implementing ARC" in
+//< `ksplc/docs/DESIGN.md`). **A caller of these methods must import this file** (importing
+//< `sema/type/env` alone does not add them to Env).
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "std/chars" // testing and slicing single characters
+import "std/ds" { List, Map }
+import "std/io"
+import "std/str"
+import "std/sys"
+
+priv const max_structural_marker_depth: Sz = 1000 //<
+  //< The safety limit on the recursion depth of is_move_only's structural derivation
+  //<
+  //< Memoization collapses repeat visits, so the depth is the chain of *distinct* embedded types
+  //< (struct S1{f:S2}, struct S2{f:S3}, ...). No node is available for a diagnostic, so, like
+  //< max_mangle_depth, it stops with io.err() + sys.exit(1).
+
+priv const arc_trait_fqn: U8[] = "std.lang.Ref_counted" //<
+  //< The FQNs of the traits the compiler knows
+  //<
+  //< Each means this declaration alone, not a same-named other (see is_arc_type).
+priv const move_only_trait_fqn: U8[] = "std.lang.Move_only"
+priv const owned_trait_fqn: U8[] = "std.lang.Owned"
+
+fn shadowed_known_trait(trait_fqn: U8[]): U8[] //<
+  //< The known trait (listed above) that trait_fqn only shares a name with, or empty
+  //<
+  //< Such a trait is a different declaration with the same name.
+  //< Returns empty if there are none. **Only these three are looked at**: a same-named operator
+  //< trait errors on its own, but these three, matched by FQN, would silently stop working.
+  known: U8[][3] = ::{ arc_trait_fqn, move_only_trait_fqn, owned_trait_fqn }
+  own_simple: = trait_fqn.sub_from(trait_fqn.rfind_char('.') + 1)
+  for k in known
+    if trait_fqn.equals(k)
+      continue
+    if own_simple.equals(k.sub_from(k.rfind_char('.') + 1))
+      return k
+  return ""
+
+impl sema_type_env.Env
+  fn is_arc_type(r: Self$@, type_id: I32): Bool //<
+    //< Whether the type_id itself is ARC-managed
+    //<
+    //< That is a struct conforming to Ref_counted in std/mem.kspls.
+    //< Decided strictly by the declaration's FQN. A match on the name's last part would let any
+    //< trait named `Ref_counted` turn ARC on, doubling a hand-kept count into a use-after-free with
+    //< no diagnostic.
+    if type_id <= 0
+      return false
+    // Caution: Strip the immutable qualifier first. `const_of(Rc<|T|>)` (an immutable array's
+    // element) is not seen as a struct, and no retain/release would be inserted.
+    bare: = r.get_clean_real_type(type_id)
+    $is_struct: = false
+    switch r.get_info(bare) case .struct_type(_def)
+      is_struct = true
+    default {}
+    if !is_struct
+      return false
+    return r.has_implemented_trait_fqn(bare, arc_trait_fqn)
+
+  priv fn owned_parts(r: Self$@, real_id: I32, out: List<|I32|>$@) //<
+    //< The types of the positions a value of real_id owns, one level down
+    //<
+    //< A struct's fields, every variant's payloads, an array's element (a zero-length array owns
+    //< none) and a Result's success payload (its error side is an error enum's tag). A pointer
+    //< or a slice borrows, and a scalar, a trait value or a function pointer holds no part.
+    //< Caution: **ARC and Move_only both walk this one list.** A position only one knows is
+    //< released without being copied safely, or copied without its release.
+    if r.is_pointer(real_id) || r.is_slice(real_id)
+      return
+    switch r.get_info(real_id) case .struct_type(def)
+      for f in def.fields_list
+        out.push(f.type_id)
+    case .enum_type(def)
+      for v in def.variants_list
+        for f in v.payload_fields
+          out.push(f.type_id)
+    case .array(base_id, size)
+      if size > 0
+        out.push(base_id)
+    case .result(base_id, _err_id)
+      out.push(base_id)
+    default {}
+
+  fn type_has_arc_content(r: Self$@, type_id: I32): Bool //<
+    //< True if what the type owns as a value holds an ARC-managed type, directly or nested
+    //<
+    //< Only owning positions are walked (`owned_parts`). Miss one and lower/arc.kspls inserts no
+    //< retain/release and the value leaks (the rules are named in this file's header).
+    $resolving: = List<|I32|>.new()
+    defer resolving.free()
+    // Caution: **If the shared memo is set, always use it** (when it is set is described on the
+    // declaration in sema/type/env.kspls). Lower asks per owning position, so rebuilding it per
+    // call is quadratic in the chain's depth.
+    if r.arc_content_memo != null
+      return r.type_has_arc_content_impl(type_id, r.arc_content_memo, resolving@)
+    $memo: = Map<|I32, I32|>.new()
+    defer memo.free()
+    return r.type_has_arc_content_impl(type_id, memo@, resolving@)
+
+  priv fn type_has_arc_content_impl(r: Self$@, type_id: I32, memo: Map<|I32, I32|>$@,
+    resolving: List<|I32|>$@): Bool //<
+      //< Whether type_id holds an ARC-managed type as a value field, at any depth
+      //<
+      //< Caution: **Do not remove the memoization** (type_id -> 0=uncomputed/1=false/2=true) —
+      //< one type is referenced from several fields, so cycle detection alone leaves fanout^d time.
+      //< **Nor add a depth limit**, which would take away calc_type_layout's diagnostic on a
+      //< legitimate chain.
+    if type_id <= 0
+      return false
+    // The immutable qualifier is stripped for the same reason as in is_arc_type.
+    real_id: = r.get_clean_real_type(type_id)
+    cached: = memo.get(real_id) catch 0
+    if cached == 1
+      return false
+    if cached == 2
+      return true
+    for seen_id in resolving
+      if seen_id == real_id
+        return false
+    resolving.push(real_id)
+    $found: = false
+    $parts: = List<|I32|>.new()
+    defer parts.free()
+    r.owned_parts(real_id, parts@)
+    for part in parts
+      if r.owns_arc_content_impl(part, memo, resolving)
+        found = true
+        break
+    resolving.len -= 1
+    memo.set(real_id, 2 if found else 1)
+    return found
+
+  priv fn owns_arc_content_impl(r: Self$@, type_id: I32, memo: Map<|I32, I32|>$@,
+    resolving: List<|I32|>$@): Bool //<
+      //< The decision for one owning position (managed itself, or holding one inside).
+    return r.is_arc_type(type_id) || r.type_has_arc_content_impl(type_id, memo, resolving)
+
+  fn type_is_managed(r: Self$@, type_id: I32): Bool //<
+    //< Whether it gets automatic retain/release
+    //<
+    //< That is an ARC-managed type itself, or an aggregate owning one by value.
+    return r.is_arc_type(type_id) || r.type_has_arc_content(type_id)
+
+  fn is_owned(r: Self$@, target_id: I32): Bool //<
+    //< Whether target_id is a type that owns an instance and releases it with `free()`
+    //<
+    //< True if there is an explicit impl for `std.lang.Owned`, **not derived structurally** as
+    //< Move_only is: an owned part brings no duty to free it (`Sema_ctx` holds a `Str_builder`).
+    return r.has_implemented_trait_fqn(r.strip_ptr_full(target_id), owned_trait_fqn)
+
+  fn is_move_only(r: Self$@, target_id: I32): Bool //<
+    //< Whether target_id is Move_only (implicit copying forbidden)
+    //<
+    //< True if there is an explicit impl for `std.lang.Move_only`. Where there is none it is
+    //< derived structurally (has_structural_marker below).
+    $memo: = Map<|I32, I32|>.new()
+    defer memo.free()
+    $resolving: = List<|I32|>.new()
+    defer resolving.free()
+    return r.has_structural_marker(target_id, memo@, resolving@, 0)
+
+  priv fn has_structural_marker(r: Self$@, target_id: I32, memo: Map<|I32, I32|>$@,
+    resolving: List<|I32|>$@, depth: Sz): Bool //<
+      //< Move_only's structural derivation.
+      //<
+      //< The positions walked are `owned_parts`' ("Worked example: forbidding copies with
+      //< `Move_only`" in docs/SPEC-language.md). **Keep the memo and break cycles with
+      //< resolving**, as type_has_arc_content_impl does.
+    cached: = memo.get(target_id) catch 0
+    if cached == 1
+      return false
+    if cached == 2
+      return true
+    // A pointer or a slice is a borrowed view; copying it adds no release duty.
+    if r.is_pointer(target_id) || r.is_slice(target_id)
+      memo.set(target_id, 1)
+      return false
+    if r.has_implemented_trait_fqn(target_id, move_only_trait_fqn)
+      memo.set(target_id, 2)
+      return true
+    for seen_id in resolving
+      if seen_id == target_id
+        return false
+    if depth >= max_structural_marker_depth
+      io.err()
+        .s("\nfatal: value nesting too deep while deriving a structural marker (possible unbounded \
+          recursive value-embedding chain).\n")
+      sys.exit(1)
+    resolving.push(target_id)
+
+    $derived: = false
+    $parts: = List<|I32|>.new()
+    defer parts.free()
+    r.owned_parts(r.get_real_type(target_id), parts@)
+    for part in parts
+      if r.has_structural_marker(part, memo, resolving, depth + 1)
+        derived = true
+        break
+    resolving.len -= 1
+    memo.set(target_id, 2 if derived else 1)
+    return derived

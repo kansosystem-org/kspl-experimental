@@ -1,0 +1,99 @@
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "std/str"
+
+// ==========================================
+// Predicates that ask of a node "is it a place, can it be passed as a receiver".
+// **They answer a different question from the accessors (the `get_*` of `ast_ext.kspls`)**:
+// whether an address may be taken, and whether the value must first be copied to a temporary.
+// `sema/decl/access.kspls` and `sema/body/write_perm.kspls` use them.
+// Caution: **Do not use `is_place_expr` to decide "may the address be taken".** It does not list
+// every place expression. `is_unaddressable_value` decides whether an `@` is allowed.
+// ==========================================
+
+impl Ast_node
+  fn is_trait_index_access(r: Self$@): Bool
+    if r == null || r.kind_id != .k_expr_postfix || r.def_node == null
+      return false
+    op: = r.get_postfix_op()
+    return op != null && op.text.equals("[")
+
+  fn spells_readonly_ptr(r: Self$@): Bool //<
+    //< Whether a type name's **outermost postfix** is a read-only pointer (`@`)
+    //<
+    //< **It reads the names; there is no type id yet.** The outermost is **the last** postfix
+    //< (`U8$[]@`: `$[]`, then `@`).
+    if r == null
+      return false
+    $last: Ast_node$@ = null
+    for p in r.children
+      if p.kind_id == .k_type_postfix
+        last = p
+    return last != null && last.text.equals("@")
+
+  fn is_path_or_ident(r: Self$@): Bool
+    if r == null
+      return false
+    k: = r.kind_id
+    return k == .k_identifier || k == .k_expr_path || k == .k_type_path || k == .k_generic_path
+
+  fn is_callable_target(r: Self$@): Bool
+    return r != null && r.is_path_or_ident()
+
+  fn is_place_expr(r: Self$@): Bool //<
+    //< Whether it is an expression that names a "place" (writable memory)
+    //<
+    //< **An `@` (taking an address) is not a place**: `x@` is C's `&x`. For a pointer value, ask
+    //< `Env.is_pointer` first. It does **not** answer "may the address be taken" (see the file
+    //< head): an expression it returns false for can still be a place (`p: U8$[]@ = sa@;`).
+    if r == null
+      return false
+    if r.is_path_or_ident()
+      return true
+    if r.kind_id == .k_expr_postfix || r.kind_id == .k_method_access
+      op_node: = r.get_postfix_op()
+      op_text: = op_node.text if op_node != null else r.text
+      if op_text.equals(".") || op_text.equals("[") || op_text.equals("]") ||
+        op_text.equals("$")
+        return true
+    if r.kind_id == .k_expr_primary && r.children.len > 0
+      first: = r.get_child(0)
+      if first.is_literal("(") && r.children.len >= 3
+        return r.get_child(1).is_place_expr()
+      return first.is_place_expr()
+    return false
+
+  fn is_unaddressable_value(r: Self$@): Bool //<
+    //< Whether an `@` on it makes the generated C `&<temporary>`, which the C compiler refuses
+    //<
+    //< It lists **only the shapes C refuses**: a call's return value (`f()@`), a numeric, boolean
+    //< or character literal (`1@`), a ternary. Listing every non-place would also reject a correct
+    //< `p: U8$[]@ = sa@;`.
+    if r == null
+      return false
+    switch r.kind_id case .k_integer, .k_float, .k_bool, .k_char, .k_expr_or, .k_expr_and,
+      .k_expr_cmp, .k_expr_add, .k_expr_mul, .k_expr_unary, .k_expr_ternary
+      return true
+    default {}
+    if r.kind_id == .k_expr_postfix || r.kind_id == .k_method_access
+      op_node: = r.get_postfix_op()
+      op_text: = op_node.text if op_node != null else r.text
+      // A call's postfix is `(`; `f().x` is a place, so **the outermost** operator alone counts.
+      return op_text.equals("(")
+    if r.kind_id == .k_expr_primary && r.children.len > 0
+      first: = r.get_child(0)
+      // Parentheses alone change nothing; the answer is the inner expression's.
+      if first.is_literal("(") && r.children.len >= 3
+        return r.get_child(1).is_unaddressable_value()
+      return first.is_unaddressable_value()
+    return false
+
+  fn receiver_needs_hoist(r: Self$@, is_ptr: Bool, is_slice: Bool): Bool //<
+    //< Whether the receiver must be copied to a temporary before its address can be taken
+    //<
+    //< Caution: **sema and lower must both ask this one function**, or genc emits `&f()` for a
+    //< shape sema accepted (a raw C error, no KSPL diagnostic). A slice is a value too, so
+    //< `is_slice` relaxes only the `is_place_expr` half.
+    if r == null || is_ptr
+      return false
+    return r.is_unaddressable_value() || (!is_slice && !r.is_place_expr())

@@ -1,0 +1,30 @@
+//< Builds the "which position in which file" argument passed to the language server
+//<
+//< It is kept apart from its caller `tools/lsp_client.kspls` so that a test can import it: a
+//< program holds only one `main`.
+import "ksplc/tests/support/lsp_client"
+import "std/mem" { Arena }
+import "std/strnum"
+import "std/sys"
+
+fn zero_based(said: U8[]): I64 //< a 0-based number, -1 where it cannot be read or is negative
+  //<
+  //< Caution: **Do not use `to_i64() catch 0`**: an unreadable string silently becomes 0, and the
+  //< reply is for a different position, with no sign of the typo.
+  //< A negative is refused too: `Sz::` converts to unsigned, so -1 becomes a huge number.
+  n: = said.to_i64() catch
+    return -1I64
+  return -1I64 if n < 0I64 else n
+
+fn uri_of(path: U8[], arena: Arena$@): U8[] //< `file://` plus an absolute path
+  //<
+  //< The URI is spelt as `lsp_client` spells one (`file_uri`, `uri_of`), the separators `/`.
+  //< Caution: **Do not pass a relative path unchanged**: the server resolves it from its own
+  //< working directory and may open a different file. Do not copy the root test either:
+  //< `is_absolute` in `std/sys` is the canonical source, and it handles the drive letter.
+  if sys.is_absolute(path)
+    return lsp_client.file_uri(path, arena)
+  buf: = U8$[]::{ .ptr = U8$@::arena.alloc(cwd_cap), .len = cwd_cap }
+  return lsp_client.uri_of(sys.cwd(buf), path, arena)
+
+priv const cwd_cap: Sz = 4096 //< the size of the buffer that receives the working directory

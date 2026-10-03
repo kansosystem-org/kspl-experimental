@@ -1,0 +1,684 @@
+//< The actions that move a block itself
+//<
+//< Splitting and joining paragraphs, deleting a selection including whole paragraphs, pasting
+//< text, removing a whole container (a table, a slide, an image), removing a slide's frame, and
+//< the settings that belong to a block itself (a paragraph's style, a frame's name, the memo
+//< beside it). What is applied to text (a style, a color, a note, an annotation, a link) is in
+//< [`shape.kspls`](shape.kspls).
+//< Note: It is split from [`shape.kspls`](shape.kspls) for the 1000-line-per-file cap.
+import "kspage/lay/caret"
+import "kspage/lay/page" { Page }
+import "kspage/model/doc" + { Block, Doc }
+import "kspage/model/run" + { Inline }
+import "kspage/model/style" + { Arrange, Sheet }
+import "kspage/write/record" { Again, Step }
+import "std/ds" { List }
+
+import "kspage/lay/ask"
+import "kspage/write/edit" + { Editor }
+import "kspage/write/field"
+import "kspage/write/typing"
+import "std/chars" // tests and cuts single characters
+
+enum Block_style_end //< the result of applying a style to a paragraph
+  //<
+  //< Caution: **Do not merge the refusals into one.** One message for four different reasons is
+  //< wrong for most of them, and the reader has no way to fix it.
+  done
+  no_paragraph //< there is no current paragraph (the cursor is not inside a paragraph)
+  no_such_style //<
+    //< There is no style of that name (as when the previous document's name is left in the field).
+  wrong_kind //< a style that makes no paragraph (a table's or a slide's container)
+
+impl Block_style_end
+  fn styled(e: Self): Bool //< whether it was applied
+    //<
+    //< Caution: **Do not use it where the reason is wanted** (the page shows a different message
+    //< per reason).
+    switch e case .done
+      return true
+    default
+      return false
+
+priv fn line_end(text: U8[], at: Sz): Sz //<
+  //< The position of the next line break (a newline), looking from `at`
+  //<
+  //< The text's end where there is none.
+  for $i: Sz = at; i < text.len; i += 1
+    if text[i] == '\n' || text[i] == '\r'
+      return i
+  return text.len
+
+priv fn next_line(text: U8[], end: Sz): Sz //< the position where the line after the break starts
+  //<
+  //< At the text's end it returns past the end, which ends the loop. `\r\n` is two bytes and one
+  //< break.
+  if end >= text.len
+    return text.len + 1
+  if text[end] == '\r' && end + 1 < text.len && text[end + 1] == '\n'
+    return end + 2
+  return end + 1
+
+priv fn holds_other(b: Block$@): Bool //<
+  //< Whether the block holds something besides text (a table, a presentation slide, an image)
+  //<
+  //< Such a block is one container: it is not joined as a paragraph, and it is deleted whole.
+  return b.children.len > 0 || b.image.len > 0
+
+priv fn landing_run(d: Doc$@, parent: Block$@, at: Sz): Option<|Inline$@|> //<
+  //< The text the cursor lands on once the block at `at` is removed
+  //<
+  //< Caution: **Look after the removed position first.** Landing before it, the cursor jumps back
+  //< above the deleted part.
+  kin: = d.kin_of(parent)
+  if at < kin.len
+    if n: = kin.get(at).first_run()
+      return Option<|Inline$@|>.some(n)
+  if at > 0
+    return kin.get(at - 1).first_run()
+  return Option<|Inline$@|>.none
+
+priv struct Frame_at //< one frame directly under a slide, and that slide
+  //<
+  //< It is not found outside a slide. It is not a laid-out frame (`Framed` in `lay/page.kspls`),
+  //< which holds screen coordinates; this is where the frame lives in the document.
+  surface: Block$@
+  index: Sz
+  found: Bool
+
+priv fn no_frame_at(): Frame_at
+  return Frame_at::{ .surface = null, .index = 0, .found = false }
+
+priv fn holder_of(d: Doc$@, b: Block$@): Frame_at //<
+  //< Goes up from `b` and returns the ancestor directly under a slide
+  //<
+  //< Even from deep down it finds the frame directly under the slide (from a table inside a frame,
+  //< the frame, not the table).
+  nest: = d.parent_of(b)
+  if !nest.found || nest.block == null
+    return no_frame_at()
+  return Frame_at::{ .surface = nest.block, .index = nest.index, .found = true }
+
+priv fn holds_frame(b: Block$@): Bool //< whether that block holds at least one frame
+  //<
+  //< Caution: **Do not call a paragraph that holds none a container** (the contents list would then
+  //< appear where there is no shape).
+  for $i: Sz = 0; i < b.children.len; i += 1
+    if _f: = b.children.get(i).frame
+      return true
+  return false
+
+priv fn after_kin(d: Doc$@, b: Block$@): Option<|Block$@|> //< the paragraph after `b`
+  //<
+  //< None where `b` is the last in its list.
+  nest: = d.parent_of(b)
+  if !nest.found
+    return Option<|Block$@|>.none
+  kin: = d.kin_of(nest.block)
+  if nest.index + 1 >= kin.len
+    return Option<|Block$@|>.none
+  return Option<|Block$@|>.some(kin.get(nest.index + 1))
+
+priv fn follows(sheet: Sheet$@, name: U8[], at_end: Bool): U8[] //<
+  //< The style of the paragraph a split creates
+  //<
+  //< The style names the one that follows it — a heading names the body, so Enter at a heading's
+  //< end continues in the body (the field Word, LibreOffice and InDesign have). No name means the
+  //< same style again. It applies only at the paragraph's end; split partway, both halves are one
+  //< paragraph cut in two.
+  if sheet == null || !at_end
+    return name
+  if s: = sheet.find(name)
+    if s.next.len > 0
+      return s.next
+  return name
+
+priv fn is_para(page: Page$@, b: Block$@): Bool //< whether that block is a paragraph
+  //<
+  //< A container and a cell are not paragraphs: a container (a table, a row, a slide, an image) is
+  //< one whole thing, and changing a cell breaks the grid. The layout says whether it is a cell
+  //< (the document does not say "it is a table").
+  return !holds_other(b) && !ask.is_cell(page, b)
+
+impl Editor
+  fn split_block(r: Self$@, page: Page$@, sheet: Sheet$@): Bool //<
+    //< Splits the paragraph in two at the cursor (Enter)
+    //<
+    //< True if split. It does not split inside a table cell (that row alone would gain a cell; "add
+    //< a row" and "add a column" add cells). **It does not split in the middle of an inline holding
+    //< a formula** (the second half would drop out of the next recalculation, keeping the old
+    //< value).
+    if r.shut()
+      return false
+    if ask.cell_of(page, r.caret).found
+      return false
+    r.break_group()
+    ok: = r.split_here(r.step(), sheet)
+    r.break_group()
+    return ok
+
+  priv fn split_here(r: Self$@, st: Step$@, sheet: Sheet$@): Bool //<
+    //< Splits the paragraph at the cursor
+    //<
+    //< The caller opens the step (a paste splits again and again within one step). **`sheet` null
+    //< keeps the style on both halves** (a paste inserts one text; it ends no paragraph). The
+    //< caller also checks whether it is inside a cell (that needs the page laid out).
+    if r.caret.inline == null
+      return false
+    here: = r.caret.inline
+    if here.is_formula() && r.caret.offset > 0 && r.caret.offset < here.text().len
+      return false
+    own: = r.doc.owner_of(here)
+    if !own.found
+      return false
+    nest: = r.doc.parent_of(own.block)
+    if !nest.found
+      return false
+    // Split the inline at the break. When split, move from the second half; when not, from the
+    // break.
+    $from: Sz = own.index
+    switch edit.split_run(r, st, here, r.caret.offset) case .some(_tail)
+      from = own.index + 1
+    case .none
+      if r.caret.offset > 0
+        from = own.index + 1
+    made: = doc.new_block(follows(sheet, own.block.style, from >= own.block.inlines.len), r.arena)
+    edit.do_block(r, st, nest.block, nest.index + 1, true, made)
+    // Caution: **Remove them from the end.** Removed from the front, the index of an inline not yet
+    // moved shifts.
+    for own.block.inlines.len > from
+      last: = own.block.inlines.len - 1
+      n: = own.block.inlines.get(last)
+      edit.do_run(r, st, own.block, last, false, null)
+      edit.do_run(r, st, made, 0, true, n)
+    // Caution: **Leave one text in each paragraph.** The cursor cannot stand in a paragraph with no
+    // text, so nobody could click into it (split at the end or the start, one half is empty).
+    if made.inlines.len <= 0
+      edit.do_run(r, st, made, 0, true, run.new_inline(here.style, r.arena))
+    if own.block.inlines.len <= 0
+      edit.do_run(r, st, own.block, 0, true, run.new_inline(here.style, r.arena))
+    r.caret = caret.at(made.inlines.get(0), 0)
+    return true
+
+  fn paste(r: Self$@, page: Page$@, text: U8[]): Bool //<
+    //< Replaces the selection with a text (a paste)
+    //<
+    //< True if pasted. **A newline splits the paragraph** (an `Inline` cannot hold a newline), so
+    //< one line becomes one paragraph; inside a table cell a newline becomes one space. **One paste
+    //< is one undo**: it splits again and again within one open step.
+    if r.shut()
+      return false
+    if r.caret.inline == null || text.len <= 0
+      return false
+    flat: = ask.cell_of(page, r.caret).found
+    r.break_group()
+    r.drop_span(r.step(), page)
+    $at: Sz = 0
+    $first: = true
+    for at <= text.len
+      end: = line_end(text, at)
+      if !first
+        // Where it does not split it continues in the same paragraph (dropped, the text would be
+        // lost).
+        if flat || !r.split_here(r.step(), null)
+          r.insert(" ")
+      r.insert(text.sub(at, end - at))
+      first = false
+      at = next_line(text, end)
+    r.break_group()
+    return true
+
+  fn join_prev(r: Self$@, page: Page$@): Bool //<
+    //< Joins with the paragraph before, from the start of the paragraph (Backspace at the start)
+    //<
+    //< True if joined. Where it cannot join it does nothing. On false the caller goes on to an
+    //< ordinary Backspace (`kspage/port/web/bridge`). **It does not join inside a table cell** (the
+    //< cell would disappear and the table would break).
+    if r.shut()
+      return false
+    if r.caret.inline == null || r.caret.offset != 0 || caret.has_selection(r.caret)
+      return false
+    if ask.cell_of(page, r.caret).found
+      return false
+    own: = r.doc.owner_of(r.caret.inline)
+    // If it is not the first inline, the cursor is not at the paragraph's start.
+    if !own.found || own.index != 0
+      return false
+    r.break_group()
+    ok: = r.join_here(r.step(), own.block)
+    r.break_group()
+    return ok
+
+  priv fn join_here(r: Self$@, st: Step$@, b: Block$@): Bool //<
+    //< Joins `b` onto the end of the paragraph before it
+    //<
+    //< The caller opens the step (deleting a selection joins in the same step as the deletion).
+    //< The caller also checks whether it is inside a cell. A container is never joined, on either
+    //< side.
+    if holds_other(b)
+      return false
+    nest: = r.doc.parent_of(b)
+    if !nest.found || nest.index <= 0
+      return false
+    prev: = r.doc.kin_of(nest.block).get(nest.index - 1)
+    if holds_other(prev)
+      return false
+    // Caution: **Read the join position before moving.** After moving, the length has changed.
+    $join: Inline$@ = null
+    $base: Sz = 0
+    if prev.inlines.len > 0
+      join = prev.inlines.get(prev.inlines.len - 1)
+      base = join.text().len
+    // Caution: **Remove them from the front and append them at the end.** The order then stays as
+    // it was.
+    $first: Inline$@ = null
+    for b.inlines.len > 0
+      n: = b.inlines.get(0)
+      if first == null
+        first = n
+      edit.do_run(r, st, b, 0, false, null)
+      edit.do_run(r, st, prev, prev.inlines.len, true, n)
+    edit.do_block(r, st, nest.block, nest.index, false, null)
+    // Place the cursor at the join, then merge the inlines (the merge moves the cursor along).
+    r.caret = caret.at(join, base) if join != null else caret.at(first, 0)
+    edit.merge_runs(r, st, prev)
+    return true
+
+  priv fn join_ahead(r: Self$@, st: Step$@): Bool //<
+    //< Joins the paragraph after the cursor's paragraph onto its end
+    //<
+    //< True if joined.
+    home: = r.doc.owner_of(r.caret.inline)
+    if !home.found
+      return false
+    switch after_kin(r.doc, home.block) case .some(next)
+      return r.join_here(st, next)
+    case .none
+      return false
+
+  fn delete_span(r: Self$@, page: Page$@): Bool //< deletes the selection
+    //<
+    //< The paragraphs it spans are joined into one. True if deleted.
+    //< **Where it spans table cells only the contents are deleted** (the table would break). Across
+    //< a list they are joined, so no marker of a deleted item is left.
+    if r.shut()
+      return false
+    if !caret.has_selection(r.caret)
+      return false
+    r.break_group()
+    ok: = r.drop_span(r.step(), page)
+    r.break_group()
+    return ok
+
+  priv fn drop_span(r: Self$@, st: Step$@, page: Page$@): Bool //<
+    //< Deletes the selection and joins the paragraphs it spans
+    //<
+    //< The caller opens the step (for a paste, everything from deleting to the end of pasting is
+    //< one step).
+    //< Caution: **Deleting and joining must be in the same step.** Separate, one undo leaves a
+    //< shape nobody wrote, with the paragraph still split.
+    if !caret.has_selection(r.caret)
+      return false
+    tail: = caret.selection(r.doc, r.caret).to
+    r.delete_selection()
+    // Caution: **Find where the joining ends by where the last inline is**, not by counting
+    // paragraphs (it stops where they cannot be joined, or where the inline was merged away).
+    $more: Bool = !ask.cell_of(page, r.caret).found
+    for more
+      seat: = r.doc.owner_of(tail)
+      home: = r.doc.owner_of(r.caret.inline)
+      more = seat.found && home.found && seat.block != home.block && r.join_ahead(st)
+    return true
+
+  fn delete_ahead(r: Self$@, page: Page$@): Bool //<
+    //< Deletes the character after the cursor (Delete)
+    //<
+    //< With a selection it deletes that range. True if deleted.
+    //< At a paragraph's end it joins the next paragraph (deleting the break).
+    if r.shut()
+      return false
+    if r.delete_span(page)
+      return true
+    if r.delete_forward()
+      return true
+    if ask.cell_of(page, r.caret).found
+      return false
+    r.break_group()
+    ok: = r.join_ahead(r.step())
+    r.break_group()
+    return ok
+
+  fn room_after_caret(r: Self$@, page: Page$@): doc.Owner //< where to insert
+    //<
+    //< It is the parent of the cursor's paragraph, and that paragraph's index. **It does not insert
+    //< inside a table cell** (that row alone would gain a cell, and the columns would get out of
+    //< step).
+    if r.caret.inline == null || ask.cell_of(page, r.caret).found
+      return doc.no_owner()
+    own: = r.doc.owner_of(r.caret.inline)
+    if !own.found
+      return doc.no_owner()
+    return r.doc.parent_of(own.block)
+
+  fn holder_at(r: Self$@, page: Page$@): Option<|Block$@|> //<
+    //< The container the cursor is in (a table, a presentation slide, an image)
+    //<
+    //< An ordinary paragraph is not a container. Inside a slide it returns the slide, not the frame
+    //< the cursor is in (removing one frame is `drop_frame`).
+    spot: = ask.cell_of(page, r.caret)
+    if spot.found
+      return Option<|Block$@|>.some(spot.table)
+    own: = r.doc.owner_of(r.caret.inline)
+    if !own.found
+      return Option<|Block$@|>.none
+    if own.block.image.len > 0
+      return Option<|Block$@|>.some(own.block)
+    nest: = r.doc.parent_of(own.block)
+    if nest.found && nest.block != null
+      return Option<|Block$@|>.some(nest.block)
+    return Option<|Block$@|>.none
+
+  fn block_style_at(r: Self$@): U8[] //< the style name of the cursor's paragraph
+    //<
+    //< Empty means the parent's. It is separate from an inline's style (`style()`); the marker and
+    //< the arrangement belong to this one.
+    own: = r.doc.owner_of(r.caret.inline)
+    if !own.found
+      return ""
+    return own.block.style
+
+  priv fn span_blocks(r: Self$@, page: Page$@, out: List<|Block$@|>$@) //<
+    //< Collects the paragraphs of the selection
+    //<
+    //< The inlines are not split. Only paragraphs are collected (`is_para`); with nothing selected,
+    //< the cursor's paragraph.
+    if r.caret.inline == null
+      return
+    sp: = caret.selection(r.doc, r.caret)
+    $n: Inline$@ = sp.from
+    $last: Block$@ = null
+    for n != null
+      // A selection ending at byte 0 of the last paragraph does not include that paragraph.
+      if n == sp.to && sp.to_offset <= 0 && n != sp.from
+        return
+      own: = r.doc.owner_of(n)
+      if own.found && own.block != last
+        last = own.block
+        if is_para(page, last)
+          out.push(last)
+      if n == sp.to
+        return
+      n = r.doc.neighbors(n).next
+
+  fn set_block_style(r: Self$@, page: Page$@, sheet: Sheet$@, name: U8[]): Block_style_end //<
+    //< Applies a style to the paragraphs of the selection
+    //<
+    //< It applies only to paragraphs. The marker (a bullet's `•`) belongs to the paragraph style,
+    //< so removing it is done here too.
+    //< Caution: **Call it after layout** (whether it is a cell cannot be told before).
+    if r.shut()
+      return Block_style_end.no_paragraph
+    if sheet == null || page == null
+      return Block_style_end.no_paragraph
+    if name.len > 0
+      switch sheet.find(name) case .some(s)
+        // Only `style.fits_block` decides, so it stays in step with the layout.
+        if !style.fits_block(s)
+          return Block_style_end.wrong_kind
+      case .none
+        return Block_style_end.no_such_style
+    blocks: = List<|Block$@|>.create(r.arena)
+    r.span_blocks(page, blocks)
+    if blocks.len <= 0
+      return Block_style_end.no_paragraph
+    // One action is one undo (a step per paragraph would take three undos for three paragraphs).
+    r.break_group()
+    face: = r.arena.dup_str(name)
+    for $i: Sz = 0; i < blocks.len; i += 1
+      field.do_set_block_style(r, r.step(), blocks.get(i), face)
+    r.break_group()
+    r.again = Again.block_style(face)
+    return Block_style_end.done
+
+  fn frame_at(r: Self$@): Option<|Block$@|> //< the current frame
+    //<
+    //< The handles, editing by number and naming all use this. A frame removed from the tree is
+    //< never returned. From a table or a list inside a frame it goes up to the outer frame.
+    near: = r.picked()
+    if near != null && r.doc.parent_of(near).found
+      return Option<|Block$@|>.some(near)
+    own: = r.doc.owner_of(r.caret.inline)
+    if !own.found
+      return Option<|Block$@|>.none
+    $b: Block$@ = own.block
+    for b != null
+      if _f: = b.frame
+        return Option<|Block$@|>.some(b)
+      up: = r.doc.parent_of(b)
+      if !up.found
+        return Option<|Block$@|>.none
+      b = up.block
+    return Option<|Block$@|>.none
+
+  priv fn named_at(r: Self$@, page: Page$@): Option<|Block$@|> //< where a name goes
+    //<
+    //< It is chosen from the inside out (a table → a slide's frame → the current paragraph). Check
+    //< the table before the frame — the frame first, in a table cell on a slide, leaves no way to
+    //< name what a formula points at (`cell_of` in `../lay/ask.kspls`).
+    //< Caution: **Do not copy the table's position here** ("A table is pointed at by name" in
+    //< `kspage/docs/DESIGN.md`), nor put the name on a cell itself — nothing reads a cell's name.
+    if page != null
+      spot: = ask.cell_of(page, r.caret)
+      if spot.found
+        return Option<|Block$@|>.some(spot.table)
+    if b: = r.frame_at()
+      return Option<|Block$@|>.some(b)
+    own: = r.doc.owner_of(r.caret.inline)
+    if !own.found
+      return Option<|Block$@|>.none
+    return Option<|Block$@|>.some(own.block)
+
+  fn name_at(r: Self$@, page: Page$@): U8[] //< the name of the current place
+    //<
+    //< Empty means no name (it can be neither a connector's end nor a reference's target).
+    if b: = r.named_at(page)
+      return b.name
+    return ""
+
+  fn set_name(r: Self$@, page: Page$@, text: U8[]): Bool //< names the current place
+    //<
+    //< It is separate from a style's name. A name applies to a table (referred to from a formula),
+    //< a slide's frame (joined by a connector), and a paragraph with a running number (referred to
+    //< from the body).
+    //< Caution: **Do not call it with `page` null** (`named_at` decides where it goes).
+    if r.shut()
+      return false
+    if b: = r.named_at(page)
+      r.break_group()
+      field.do_set_name(r, r.step(), b, r.arena.dup_str(text))
+      r.break_group()
+      return true
+    return false
+
+  fn aside_at(r: Self$@, page: Page$@): U8[] //< the memo beside the cursor's container
+    //<
+    //< Empty when not inside a container.
+    //< Caution: **Call it after layout** (whether it is inside a cell cannot be told before).
+    if b: = r.holder_at(page)
+      return b.aside
+    return ""
+
+  fn aim_at(r: Self$@, page: Page$@): U8[] //< the source the cursor's container points at
+    //<
+    //< Empty when not inside a container.
+    if b: = r.holder_at(page)
+      return b.aim
+    return ""
+
+  fn set_aim(r: Self$@, page: Page$@, text: U8[]): Bool //<
+    //< Sets what the cursor's container points at
+    //<
+    //< An empty text removes it. For a table it is "the link to the text generated" from it.
+    //< Note: With it, one can see whether the generated text is stale (`share/consts.kspls`). One
+    //< per container (widened, it would become code generation of any kind).
+    if r.shut()
+      return false
+    if b: = r.holder_at(page)
+      r.break_group()
+      field.do_set_aim(r, r.step(), b, r.arena.dup_str(text))
+      r.break_group()
+      return true
+    return false
+
+  fn set_aside(r: Self$@, page: Page$@, text: U8[]): Bool //<
+    //< Puts a memo beside the cursor's container
+    //<
+    //< An empty text removes it. **A memo does not appear in the flow** — no layout, printing or
+    //< export reads it (beside a presentation slide it is the speaker's note). Only inside a
+    //< container: beside an ordinary paragraph nothing on the screen would show it.
+    if r.shut()
+      return false
+    $held: Block$@ = null
+    switch r.holder_at(page) case .some(b)
+      held = b
+    case .none
+      return false
+    r.break_group()
+    // Caution: Copy the text. The caller's text is gone at the next call.
+    field.do_set_aside(r, r.step(), held, r.arena.dup_str(text))
+    r.break_group()
+    return true
+
+  fn drop_holder(r: Self$@, page: Page$@): Bool //< removes the cursor's whole container
+    //<
+    //< True if removed.
+    //< An ordinary paragraph is not removed (deleting its text and joining does that).
+    //< Caution: **Call it after layout** (whether it is inside a cell cannot be told before).
+    if r.shut()
+      return false
+    $held: Block$@ = null
+    switch r.holder_at(page) case .some(b)
+      held = b
+    case .none
+      return false
+    nest: = r.doc.parent_of(held)
+    if !nest.found
+      return false
+    r.break_group()
+    edit.do_block(r, r.step(), nest.block, nest.index, false, null)
+    // Caution: **Move the cursor out of the removed tree.** Typing there adds characters to a
+    // deleted text that is nowhere in the document.
+    switch landing_run(r.doc, nest.block, nest.index) case .some(n)
+      r.caret = caret.at(n, 0)
+    case .none
+      r.caret = caret.nowhere()
+    r.break_group()
+    return true
+
+  fn framer_at(r: Self$@): Option<|Block$@|> //<
+    //< The current container (the block holding the frames)
+    //<
+    //< It is not only slides: the contents list shows this container's children. **Even outside a
+    //< frame, a paragraph holding frames counts**, or the list disappears when the body is clicked.
+    if b: = r.frame_at()
+      got: = holder_of(r.doc, b)
+      if got.found
+        return Option<|Block$@|>.some(got.surface)
+    own: = r.doc.owner_of(r.caret.inline)
+    if own.found && holds_frame(own.block)
+      return Option<|Block$@|>.some(own.block)
+    return Option<|Block$@|>.none
+
+  fn pick_nth(r: Self$@, at: Sz): Bool //< selects frame number `at` of the current container
+    //<
+    //< True if selected. The cursor is not moved — a shape has nowhere to stand, and clicking the
+    //< list must not change where typing goes (moving to the click is `pick_at`).
+    if face: = r.framer_at()
+      if at >= face.children.len
+        return false
+      r.pick_only(face.children.get(at))
+      return true
+    return false
+
+  fn raise_frame(r: Self$@, up: Bool): Bool //<
+    //< Moves the selected frames one step forward or back in the stacking order
+    //<
+    //< True if moved. The stacking order is the document's order (a later child is drawn on top); a
+    //< separate field would say it twice. At either end it does not move and returns false. `up`
+    //< true moves it up (toward the back), false down (toward the front).
+    if r.shut()
+      return false
+    $moved: Block$@ = null
+    switch r.frame_at() case .some(b)
+      moved = b
+    case .none
+      return false
+    got: = holder_of(r.doc, moved)
+    if !got.found
+      return false
+    if up && got.index + 1 >= got.surface.children.len
+      return false
+    if !up && got.index <= 0
+      return false
+    to: = got.index + 1 if up else got.index - 1
+    r.break_group()
+    st: = r.step()
+    // Caution: **Remove it, then insert it.** The other way round, the removal position shifts.
+    edit.do_block(r, st, got.surface, got.index, false, null)
+    edit.do_block(r, st, got.surface, to, true, moved)
+    // Select it again (once off the tree `frame_at` drops it, and the handles disappear).
+    r.pick_only(moved)
+    r.break_group()
+    return true
+
+  fn drop_picked(r: Self$@, sheet: Sheet$@): Bool //<
+    //< Removes the selected frame, if it holds neither a text nor children
+    //<
+    //< A frame holding a text is not removed — Delete and Backspace are typing there. `drop_frame`
+    //< removes one together with its text.
+    one: = r.picked()
+    if one == null || !r.doc.parent_of(one).found
+      return false
+    if one.inlines.len > 0 || one.children.len > 0
+      return false
+    r.break_group()
+    gone: = r.dropped(sheet, Option<|Block$@|>.some(one))
+    r.pick_only(null)
+    r.break_group()
+    return gone
+
+  fn drop_frame(r: Self$@, sheet: Sheet$@): Bool //<
+    //< Removes the current frame from its container, one at a time
+    //<
+    //< Only a frame is removed (the whole container is `drop_holder`). The selected frame comes
+    //< first (`frame_at`).
+    if r.shut()
+      return false
+    r.break_group()
+    done: = r.dropped(sheet, r.frame_at())
+    r.break_group()
+    return done
+
+  priv fn dropped(r: Self$@, sheet: Sheet$@, what: Option<|Block$@|>): Bool //<
+    //< The work of removing one frame
+    //<
+    //< The caller opens the step (removing several is one action, one undo).
+    $from: Block$@ = null
+    switch what case .some(b)
+      from = b
+    case .none
+      return false
+    got: = holder_of(r.doc, from)
+    if !got.found
+      return false
+    // A slide (a style placing each child at its own position) keeps its last frame.
+    if sheet.arrange_of(got.surface.style).same_arrange(Arrange.absolute) &&
+      got.surface.children.len <= 1
+      return false
+    edit.do_block(r, r.step(), got.surface, got.index, false, null)
+    // Caution: **Move the cursor to a remaining frame** (the same reason as in `drop_holder`).
+    switch landing_run(r.doc, got.surface, got.index) case .some(n)
+      r.caret = caret.at(n, 0)
+    case .none
+      r.caret = caret.nowhere()
+    return true

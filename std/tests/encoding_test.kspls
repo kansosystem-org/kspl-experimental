@@ -1,0 +1,495 @@
+import "std/base64"
+import "std/chars"
+import "std/json" + { Json_builder }
+import "std/mem" { Arena, dealloc }
+import "std/sha256"
+import "std/str" { Str_builder }
+import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
+import "std/verdict"
+
+// ==========================================
+// std/sha256: SHA-256 (one block and several) and HMAC-SHA256 against sha256sum / openssl values.
+// ==========================================
+fn test_sha256_hmac()
+  verdict.start("[Sha256] SHA-256 + HMAC-SHA256 test (agreement with known test vectors)...")
+
+  hex: U8[sha256.hex_len] = ::{}
+
+  d1: = sha256.hash("abc")
+  sha256.write_hex(d1, U8$[]::hex)
+  abc_ok: = (U8$[]::hex).equals("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+  assert(abc_ok, "SHA-256(\"abc\") must match the known NIST test vector")
+
+  d2: = sha256.hash("")
+  sha256.write_hex(d2, U8$[]::hex)
+  empty_ok: = (U8$[]::hex)
+    .equals("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+  assert(empty_ok, "SHA-256(\"\") must match the well-known empty-string digest")
+
+  // Input spanning the 64-byte block boundary
+  d3: = sha256
+    .hash("The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog \
+      again and again to make sure this spans multiple 64-byte blocks for testing purposes.")
+  sha256.write_hex(d3, U8$[]::hex)
+  multi_ok: = (U8$[]::hex)
+    .equals("bb0149e6eae4e21bb464612ea6c7afaf313baee0cb648230b0c68a81a2b91107")
+  assert(multi_ok, "multi-block SHA-256 input must match sha256sum's independently computed digest")
+
+  // The same input fed in pieces that straddle the block boundary, an empty one among them, gives
+  // the same digest as one call.
+  long: U8[] =
+    "The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog again \
+      and again to make sure this spans multiple 64-byte blocks for testing purposes."
+  cuts: Sz[_] = ::{ 1, 62, 0, 1, 64, 70 }
+  $h: = sha256.Sha256.new()
+  $at: Sz = 0
+  for n in cuts
+    h.update(long.sub(at, n))
+    at += n
+  h.update(long.sub_from(at))
+  sha256.write_hex(h.finalize(), U8$[]::hex)
+  pieces_ok: = (U8$[]::hex)
+    .equals("bb0149e6eae4e21bb464612ea6c7afaf313baee0cb648230b0c68a81a2b91107")
+  assert(pieces_ok, "SHA-256 fed in pieces must match the digest of one call")
+
+  d4: = sha256.hmac("key", "The quick brown fox jumps over the lazy dog")
+  sha256.write_hex(d4, U8$[]::hex)
+  hmac_ok: = (U8$[]::hex).equals("f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8")
+  assert(hmac_ok, "HMAC-SHA256(\"key\", ...) must match openssl's independently computed digest")
+
+  // The comparison goes through hmac_verify (equals' early return leaks how many leading bytes
+  // agreed). Only the answer is tested here; the constant time is checked by eye.
+  msg: = "The quick brown fox jumps over the lazy dog"
+  good: = sha256.hmac("key", msg)
+  ok_same: = sha256.hmac_verify("key", msg, U8[]::good)
+  assert(ok_same, "hmac_verify must accept the MAC that hmac produced for the same key and data")
+  ok_wrong_key: = sha256.hmac_verify("kex", msg, U8[]::good)
+  assert(!ok_wrong_key, "hmac_verify must reject a MAC computed under a different key")
+  ok_wrong_data: = sha256.hmac_verify("key", "the quick brown fox", U8[]::good)
+  assert(!ok_wrong_data, "hmac_verify must reject a MAC computed over different data")
+
+  // Caution: Do not accept a MAC that agrees only in its first bytes; a MAC off in the first byte
+  // and one off in the last are both refused.
+  $tweaked: U8[32] = good
+  tweaked[31] = tweaked[31] ^ 0x01U8
+  ok_last_byte: = sha256.hmac_verify("key", msg, U8[]::tweaked)
+  assert(!ok_last_byte, "a MAC differing only in its last byte must be rejected")
+  tweaked[31] = tweaked[31] ^ 0x01U8
+  tweaked[0] = tweaked[0] ^ 0x80U8
+  ok_first_byte: = sha256.hmac_verify("key", msg, U8[]::tweaked)
+  assert(!ok_first_byte, "a MAC differing only in its first byte must be rejected")
+
+  // A different length may return early (it is no secret), but must not be accepted.
+  short_mac: = (U8[]::good).sub(0, 31)
+  ok_short: = sha256.hmac_verify("key", msg, short_mac)
+  assert(!ok_short, "a MAC that is not 32 bytes long must be rejected")
+
+  verdict
+    .pass("Single- and multi-block SHA-256, one call or fed in pieces, and HMAC-SHA256 agree with \
+      the known values, and hmac_verify dropped a wrong key, wrong data, one byte off and a wrong \
+      length.")
+// ==========================================
+// std/base64: the vectors of Wikipedia's base64 article, 1 and 2 bytes of padding, the round trip,
+// and the error on an invalid length.
+// ==========================================
+priv fn check_base64_encode(input: U8[], expected: U8[])
+  enc: = base64.encode(input, null)
+  defer dealloc(Void$@::enc.ptr)
+  assert(enc.equals(expected), "base64.encode output must match the known test vector")
+
+priv fn check_base64_roundtrip(input: U8[])
+  enc: = base64.encode(input, null)
+  defer dealloc(Void$@::enc.ptr)
+  dec: = base64.decode(enc, null) catch panic("base64.decode should succeed for freshly encoded \
+    data")
+  defer dealloc(Void$@::dec.ptr)
+  assert(dec.equals(input), "base64 round-trip must reproduce the original bytes")
+
+fn test_base64_codec()
+  verdict.start("[Base64] encode/decode test (known test vectors + the round trip)...")
+
+  check_base64_encode("", "")
+  check_base64_encode("f", "Zg==")
+  check_base64_encode("fo", "Zm8=")
+  check_base64_encode("foo", "Zm9v")
+  check_base64_encode("foob", "Zm9vYg==")
+  check_base64_encode("fooba", "Zm9vYmE=")
+  check_base64_encode("foobar", "Zm9vYmFy")
+  check_base64_encode("Man", "TWFu")
+  check_base64_encode("any carnal pleasure.", "YW55IGNhcm5hbCBwbGVhc3VyZS4=")
+
+  check_base64_roundtrip("")
+  check_base64_roundtrip("f")
+  check_base64_roundtrip("fo")
+  check_base64_roundtrip("foo")
+  check_base64_roundtrip("The quick brown fox jumps over the lazy dog")
+
+  base64.decode("abc", null) catch
+    verdict
+      .pass("The known encodings, the round trip, and the refusal of an invalid length are \
+        confirmed.")
+    return
+  panic("base64.decode should throw Base64_error.invalid_length for a non-multiple-of-4 input")
+// ==========================================
+// std/json: how the way a number is written maps to Val's variants.
+// Caution: **Keep an integer and a fraction in separate variants.** F64 alone silently rounds an
+// integer beyond 53 bits (an offset in a safetensors file); integers alone cannot hold a fraction.
+// ==========================================
+priv fn dumped(v: json.Val, out: Str_builder$@): U8[]
+  out.clear()
+  v.dump(out)
+  return out.slice()
+
+priv fn round_trip(src: U8[], want: U8[], arena: Arena$@, out: Str_builder$@)
+  v: = json.parse(src, arena) catch panic("json: a well-formed number must parse")
+  round_ok: = dumped(v, out).equals(want)
+  assert(round_ok, "json: number round-trip must keep both the value and the kind")
+
+priv fn parsed(s: U8[]): F64 //< tries `to_f64` once
+  return s.to_f64() catch
+    return -987654.0
+
+priv fn rejects(s: U8[]): Bool //< true if the string is not accepted
+  _v: = s.to_f64() catch
+    return true
+  return false
+
+priv struct Loose_case //< a string whose power of 10 goes beyond ±22, and its correct value
+  text: U8[]
+  want: F64
+
+priv const loose_cases: Loose_case[_] = ::{
+  ::{ .text = "1e23", .want = 1.0e23 },
+  ::{ .text = "1e50", .want = 1.0e50 },
+  ::{ .text = "1e100", .want = 1.0e100 },
+  ::{ .text = "1e300", .want = 1.0e300 },
+  ::{ .text = "1e-23", .want = 1.0e-23 },
+  ::{ .text = "1e-100", .want = 1.0e-100 },
+  ::{ .text = "1e-300", .want = 1.0e-300 },
+}
+
+fn test_to_f64() //< the conversion from a string to F64
+  //<
+  //< **The same implementation runs in a freestanding build too**, so `std/json` and `std/argp`
+  //< return the same value on a microcontroller.
+  verdict.start("[Str] the conversion from a string to F64 test...")
+
+  // Within 19 digits and 10^±22 it agrees with the literal **bit for bit**.
+  assert(parsed("0.0") == 0.0, "to_f64: 0.0")
+  assert(parsed("1.0") == 1.0, "to_f64: 1.0")
+  assert(parsed("-1.0") == -1.0, "to_f64: -1.0")
+  assert(parsed("42") == 42.0, "to_f64: an integer spelling is a number too")
+  assert(parsed("  2.5  ") == 2.5, "to_f64: surrounding spaces are allowed")
+  assert(parsed("0.1") == 0.1, "to_f64: 0.1 must land on the same F64 as the literal")
+  assert(parsed("0.3") == 0.3, "to_f64: 0.3")
+  assert(parsed("1e10") == 1.0e10, "to_f64: a lower-case exponent")
+  assert(parsed("1E10") == 1.0e10, "to_f64: an upper-case exponent")
+  assert(parsed("-2.5e-3") == -0.0025, "to_f64: a signed exponent")
+  assert(parsed("2.5e+3") == 2500.0, "to_f64: an explicit plus in the exponent")
+  long_digits: = parsed("123456789.123456789")
+  assert(long_digits == 123456789.123456789, "to_f64: 18 significant digits must be exact")
+  assert(parsed("1e22") == 1.0e22, "to_f64: the largest exactly representable power")
+  assert(parsed("1e-22") == 1.0e-22, "to_f64: the smallest exactly representable power")
+  // Beyond 10^±22 the answer is still the correctly rounded value.
+  // Caution: **Compare for exact equality.** The expected value is a literal the C compiler rounds.
+  for c in loose_cases
+    assert(parsed(c.text) == c.want, "to_f64: an exponent past the exact table must round correctly")
+  assert(parsed("1.7976931348623157e308") == 1.7976931348623157e308,
+    "to_f64: the largest F64 must come back exactly")
+  assert(parsed("2.2250738585072014e-308") == 2.2250738585072014e-308,
+    "to_f64: the smallest normal F64 must come back exactly")
+  // Either side of the midpoint between the largest value and infinity (1.797693134862315807…e308).
+  assert(parsed("1.7976931348623158e308") == 1.7976931348623157e308,
+    "to_f64: just below the midpoint past the largest F64 must round down to it")
+  above_max: = parsed("1.7976931348623159e308")
+  assert(above_max > 1.7976931348623157e308 && above_max - above_max != 0.0,
+    "to_f64: just above that midpoint must be infinity")
+  // The smallest subnormal (4.94…e-324), and either side of half of it.
+  assert(parsed("4.9e-324") == 4.9e-324, "to_f64: the smallest subnormal must come back")
+  assert(parsed("2.4703282292062327e-324") == 0.0,
+    "to_f64: just below half of the smallest subnormal rounds to zero")
+  assert(parsed("2.4703282292062328e-324") == 4.9e-324,
+    "to_f64: just above half of the smallest subnormal rounds up to it")
+  assert(parsed("2.2250738585072011e-308") == 2.2250738585072011e-308,
+    "to_f64: the value that once hung other parsers must round correctly")
+  // An exact midpoint goes to the even mantissa (2^53 + 1).
+  assert(parsed("9007199254740993") == 9007199254740992.0,
+    "to_f64: an exact tie must round to the even neighbour")
+  assert(parsed("9007199254740993.0000000000000001") == 9007199254740994.0,
+    "to_f64: a hair above the tie must round up")
+  // **A digit past the 19th changes the answer too**: the midpoint after 1 has 55 digits.
+  assert(parsed("1.00000000000000011102230246251565404236316680908203125") == 1.0,
+    "to_f64: the exact midpoint after 1 (55 digits) ties to even, which is 1")
+  assert(parsed("1.000000000000000111022302462515654042363166809082031251") == 1.0000000000000002,
+    "to_f64: one more digit past the midpoint must round up to the next F64")
+  assert(parsed("0.1000000000000000055511151231257827021181583404541015625") == 0.1,
+    "to_f64: the exact decimal expansion of 0.1 must come back as 0.1")
+  // The shortest 17-digit form reads back to the same value (the round trip with the writer).
+  assert(parsed("0.30000000000000004") == 0.1 + 0.2,
+    "to_f64: the 17-digit spelling of 0.1 + 0.2 must land on that F64")
+  assert(parsed("1e23") == 1.0e23,
+    "to_f64: 1e23 is not exact in F64 and must round like the literal")
+  assert(parsed("-0.0") == 0.0 && 1.0 / parsed("-0.0") < 0.0, "to_f64: -0.0 keeps its sign")
+  // Out of range ends at infinity or 0, without a long loop over many digits.
+  assert(parsed("1e400") > 1.0e308, "to_f64: overflow must reach infinity")
+  assert(parsed("1e999999999") > 1.0e308, "to_f64: an absurd exponent must not hang")
+  assert(parsed("1e-400") == 0.0, "to_f64: underflow must reach zero")
+  assert(parsed("1e-999999999") == 0.0, "to_f64: an absurd negative exponent must not hang")
+
+  // The whole must be a number; do not silently drop trailing garbage.
+  bad: U8[][_] = ::{ "", " ", "-", "+", ".", "1.", ".5", "-.5", "1e", "1e+", "1.5abc", "abc",
+    "1..2", "1 2", "--1", "0x10", "inf", "nan", "1e2e3" }
+  for b in bad
+    assert(rejects(b), "to_f64: a malformed spelling must be rejected")
+
+  verdict.pass("Fractions, exponents, the boundaries and malformed strings are all as expected.")
+
+priv fn check_json_escape(src: U8[], want: U8[]) //<
+  //< Reads one `\uXXXX` and checks that it becomes the expected byte sequence
+  arena: = Arena.new(4 * 1024)
+  defer arena.free()
+  v: = json.parse(src, arena) catch panic("json: a well-formed \\u escape must parse")
+  assert(v.as_str().equals(want), "json: \\u escapes must decode to the same bytes as UTF-8")
+
+fn test_json_escapes(arena: Arena$@) //< std/json: a string holding `\uXXXX`
+  //<
+  //< **Refuse a `\u` whose hex is not four digits**, or a different byte sequence comes out as if
+  //< it were read. Combine a surrogate pair, or an emoji splits into invalid UTF-8.
+  verdict.start("[Json] a string holding \\uXXXX test...")
+  // An unpaired surrogate is refused as well (the reason is at `unescape_to_arena` in
+  // `std/str.kspls`).
+  bad: U8[][6] = ::{ "\"\\u00\"", "\"\\u\"", "\"\\uZZZZ\"", "\"\\uD800\"", "\"\\uDC00\"",
+    "\"\\uD800x\"" }
+  for src in bad
+    $ok: = true
+    _v: = json.parse(src, arena) catch
+      ok = false
+      fallback json.Val.null_val
+    assert(!ok, "json: a malformed \\u escape must be rejected, not passed through as text")
+  check_json_escape("\"a\\u0041b\"", "aAb")
+  check_json_escape("\"\\u3042\"", "あ")
+  check_json_escape("\"\\ud83d\\ude00\"", "😀")
+  verdict
+    .pass("A malformed \\u is refused, and a well-formed string and a surrogate pair fold to UTF-8.")
+
+fn test_json_numbers(arena: Arena$@)
+  verdict.start("[Json] reading and writing integers and fractions test...")
+  $b: = Str_builder.new()
+  defer b.free()
+
+  // A fraction and an exponent read back. A whole value keeps its decimal point, or reading it
+  // again gives the integer variant.
+  round_trip("[1.5]", "[1.5]", arena, b@)
+  round_trip("[1e3]", "[1000.0]", arena, b@)
+  round_trip("[-0.25]", "[-0.25]", arena, b@)
+  round_trip("[1E-3]", "[0.001]", arena, b@)
+  round_trip("[1.0]", "[1.0]", arena, b@)
+  round_trip("[0.30000000000000004]", "[0.30000000000000004]", arena, b@)
+  round_trip("[1e300]", "[1e+300]", arena, b@)
+  round_trip("[2.5e-7]", "[2.5e-7]", arena, b@)
+  round_trip("[3]", "[3]", arena, b@)
+  round_trip("[-7]", "[-7]", arena, b@)
+  // An integer does not pass through F64, so nothing is lost beyond 53 bits.
+  round_trip("[9007199254740993]", "[9007199254740993]", arena, b@)
+  // I64's edges.
+  // Caution: **Test the 19 digits of the largest and the smallest.** A digit-count check one short
+  // turns these into a float that looks the same, while `as_int64` returns its default.
+  round_trip("[9223372036854775807]", "[9223372036854775807]", arena, b@)
+  round_trip("[-9223372036854775808]", "[-9223372036854775808]", arena, b@)
+  edge: =
+    json.parse("[9223372036854775807, -9223372036854775808, 9223372036854775808, -0]", arena) catch panic("json: the I64 edge values must parse")
+  assert(edge.get_at(0).as_int64(0I64) == 9223372036854775807I64,
+    "json: I64::MAX must stay an integer")
+  assert(edge.get_at(1).as_int64(0I64) == -9223372036854775807I64 - 1I64,
+    "json: I64::MIN must stay an integer")
+  assert(edge.get_at(2).as_int64(0I64) == 0I64 &&
+    edge.get_at(2).as_f64(-1.0) == 9223372036854775808.0,
+    "json: one past I64::MAX must become the float variant")
+  assert(edge.get_at(3).as_int64(-1I64) == 0I64, "json: -0 is the integer 0")
+
+  // A string that is malformed as a JSON number is not accepted.
+  bad_numbers: U8[][4] = ::{ "[1.]", "[1e]", "[.5]", "[--1]" }
+  for bad in bad_numbers
+    $ok: = true
+    _v: = json.parse(bad, arena) catch
+      ok = false
+      fallback json.Val.null_val
+    assert(!ok, "json: a malformed number must be rejected")
+
+  // The builder: everything that can be read can also be written.
+  $jb: = Json_builder.new(arena)
+  built: = jb.obj().set("i", jb.int_val(9007199254740993I64)).set("f", jb.float_val(0.5)).build()
+  built_ok: = dumped(built, b@).equals("{\"i\":9007199254740993,\"f\":0.5}")
+  assert(built_ok, "json: the builder must be able to write both kinds of number")
+
+  // Reading a number gives the same answer for either variant.
+  nums: = json.parse("[2, 2.5]", arena) catch panic("json: an array of numbers must parse")
+  assert(nums.get_at(0).as_f64(-1.0) == 2.0, "json: as_f64 must accept an integer variant")
+  assert(nums.get_at(1).as_f64(-1.0) == 2.5, "json: as_f64 must return the float value")
+  assert(nums.get_at(0).as_int(-1) == 2, "json: as_int must still read integers")
+
+  verdict
+    .pass("Fractions, exponents, large integers, malformed strings, building and as_f64 are all as \
+      expected.")
+
+fn test_json_string_escapes(arena: Arena$@) //<
+  //< A string's escapes must decode to the actual byte sequence
+  //<
+  //< Caution: **Always test `\uXXXX`.** Python's `json.dumps` escapes non-ASCII this way by
+  //< default; passed straight through, `あ` becomes `u3042`, which looks read but is broken.
+  //< The expected values are written as UTF-8; only control characters are checked as bytes.
+  verdict.start("[Json] decoding a string's escapes test...")
+  expect_str("{\"t\":\"\\u0041\\u0042\"}", "AB", arena)
+  expect_str("{\"t\":\"\\u00e9\"}", "é", arena)
+  expect_str("{\"t\":\"\\u3042\\u3044\"}", "あい", arena)
+  // A surrogate pair combines into one code point (U+1F600).
+  expect_str("{\"t\":\"\\ud83d\\ude00\"}", "😀", arena)
+  // A `\u` short of four hex digits is refused (test_json_escapes).
+  expect_str("{\"t\":\"\\n\\t\\\\\"}", "\n\t\\", arena)
+
+  // `\b` and `\f` have no visible character, so they are checked as bytes.
+  ctrl: = json.parse("{\"t\":\"a\\bb\\fc\"}", arena) catch panic("json: the control-escape fixture \
+    must parse")
+  cs: = ctrl.get("t").as_str()
+  assert(cs.len == 5, "json: backspace and formfeed must each decode to one byte")
+  assert(cs[1] == 0x08U8 && cs[3] == 0x0cU8,
+    "json: backspace and formfeed must decode to their bytes")
+
+  // Caution: **Do not write anything below 0x20 raw**, or it builds JSON no other parser reads.
+  ctrl_bytes: U8[6] = ::{ 'a', 0x01U8, 0x08U8, 0x0cU8, 0x1fU8, 'b' }
+  raw: = U8[]::ctrl_bytes
+  $jb: = Json_builder.new(arena)
+  built: = jb.obj().set("t", jb.str_val(raw)).build()
+  $ob: = Str_builder.new()
+  defer ob.free()
+  built.dump(ob@)
+  written: = ob.slice()
+  escaped_ok: = written.equals("{\"t\":\"a\\u0001\\b\\f\\u001fb\"}")
+  assert(escaped_ok, "json: every byte below 0x20 must be escaped on the way out")
+  // Reading back what was written must give the original byte sequence.
+  back: = json.parse(written, arena) catch panic("json: what we wrote must parse")
+  round_ok: = back.get("t").as_str().equals(raw)
+  assert(round_ok, "json: escaping and unescaping must round-trip")
+  // A key is a string too: written raw, `"a\"b"` would end the key early.
+  keyed: = json.parse("{\"a\\\"b\\n\":1}", arena) catch panic("json: the key fixture must parse")
+  ob.clear()
+  keyed.dump(ob@)
+  assert(ob.slice().equals("{\"a\\\"b\\n\":1}"), "json: a key is escaped on the way out")
+  key_back: = json.parse(ob.slice(), arena) catch panic("json: a dumped key must parse again")
+  assert(key_back.get("a\"b\n").as_int(0) == 1, "json: an escaped key round-trips")
+
+  verdict
+    .pass("The BMP, a surrogate pair, control characters, malformed strings and the write round \
+      trip are all as expected.")
+
+priv fn expect_str(src: U8[], want: U8[], arena: Arena$@)
+  v: = json.parse(src, arena) catch panic("json: the escape fixture must parse")
+  got: = v.get("t").as_str()
+  assert(got.equals(want), "json: an escaped string must decode to its bytes")
+
+priv fn json_parses(src: U8[], arena: Arena$@): Bool //<
+  //< Whether it parses
+  _v: = json.parse(src, arena) catch
+    return false
+  return true
+
+priv fn json_rejects_as_trailing_comma(src: U8[], arena: Arena$@): Bool //<
+  //< Whether it was refused as a trailing comma
+  //<
+  //< Caution: Check the name, or calling a `}` in a key's position `invalid_string` passes.
+  _v: = json.parse(src, arena) catch e
+    switch e case .trailing_comma
+      return true
+    default
+      return false
+  return false
+
+fn test_json_malformed_input(arena: Arena$@) //<
+  //< std/json: malformed input must not be accepted silently
+  //<
+  //< Caution: **Test what is refused and what is accepted as a pair**, or refusing everything
+  //< passes.
+  verdict.start("[Json] refusing malformed input test...")
+  // Refused: anything after the value, an escape JSON does not have (the `\` would vanish), a
+  // digit after a leading 0 (RFC 8259 §6), a raw control character in a string (RFC 8259 §7), and
+  // closing after a comma, by name.
+  bad: U8[][13] = ::{ "1 2", "{\"a\":1}{\"b\":2}", "[1][2]", "\"a\" x", "\"\\x41\"", "\"\\q\"", "01",
+    "-01", "[00]", "\"a\nb\"", "\"a\tb\"", "[1,]", "{\"a\":1,}" }
+  for src in bad
+    assert(!json_parses(src, arena), "json: malformed input must be rejected")
+  assert(json_rejects_as_trailing_comma("[1,]", arena), "json: `[1,]` is named a trailing comma")
+  assert(json_rejects_as_trailing_comma("{\"a\":1,}", arena),
+    "json: `{\"a\":1,}` is named a trailing comma")
+  // The matching cases, which must be accepted.
+  good: U8[][9] = ::{ "  {\"a\":1}  \n", "0", "-0", "0.5", "\"\\/\"", "[0,1]", "\"a\\nb\\tc\"", "[]",
+    "{}" }
+  for src in good
+    assert(json_parses(src, arena), "json: well-formed input must still parse")
+  verdict
+    .pass("Anything left over, a non-JSON escape, a leading 0, a raw control character and a \
+      trailing comma are refused, and well-formed strings go through.")
+
+fn test_json_duplicate_keys(arena: Arena$@) //<
+  //< std/json: pins the behaviour when a key is duplicated
+  //<
+  //< Caution: **Test the fact itself that the parser and the builder behave differently.**
+  //< Parsing keeps the duplicate and reads first-wins, while building replaces; if either
+  //< changes, this repository and the receiver read different values.
+  verdict.start("[Json] a duplicated key test...")
+  $out: = Str_builder.new()
+  defer out.free()
+  dup: = json.parse("{\"a\":1,\"a\":2}", arena) catch panic("json: duplicate keys must still parse")
+  assert(dup.get("a").as_int(-1) == 1, "json: a duplicated key must read as the first one")
+  // The duplicate is kept, so a document passed on stays the same.
+  assert(dumped(dup, out@).equals("{\"a\":1,\"a\":2}"), "json: dumping must keep both members")
+
+  // The builder replaces; appending would write a value hidden behind first-wins.
+  $jb: = Json_builder.new(arena)
+  twice: = jb.obj().set("a", jb.int_val(1I64)).set("a", jb.int_val(2I64)).build()
+  assert(dumped(twice, out@).equals("{\"a\":2}"), "json: set must replace an existing key")
+  assert(twice.get("a").as_int(-1) == 2, "json: the replaced value must be the one read back")
+
+  // Replacing keeps the built order, which a diff relies on.
+  order: = jb.obj().set("x", jb.int_val(1I64)).set("y", jb.int_val(2I64))
+    .set("x", jb.int_val(3I64)).build()
+  assert(dumped(order, out@).equals("{\"x\":3,\"y\":2}"), "json: replacing must keep the order")
+  verdict
+    .pass("Parsing keeps the duplicate and reads first-wins, and building replaces while keeping \
+      the order.")
+// ==========================================
+// std/json: writing out with indentation.
+// ==========================================
+
+fn test_json_indent(arena: Arena$@) //<
+  //< That JSON written out with indentation has the expected shape
+  //<
+  //< Caution: **Always test that the default (0) stays on one line**, or spaces silently enter
+  //< the strings sent to others. **Keep an empty `{}` and `[]` on one line**, as others do. The
+  //< expected values come from Python's `json.dumps(indent=2)`.
+  verdict.start("[Json] writing out with indentation test...")
+  $out: = Str_builder.new()
+  defer out.free()
+  src: U8[] = "{\"a\":{\"b\":1},\"e\":{},\"f\":[],\"g\":[1,[2]]}"
+  v: = json.parse(src, arena) catch panic("json: the fixture must parse")
+
+  // The default is one line, so no caller has to change.
+  assert(dumped(v, out@).equals(src), "json: the default must stay on one line")
+
+  out.clear()
+  v.dump(out@, 2)
+  want: U8[] =
+    "{\n  \"a\": {\n    \"b\": 1\n  },\n  \"e\": {},\n  \"f\": [],\n  \"g\": [\n    1,\n    \
+      [\n      2\n    ]\n  ]\n}"
+  indented: = out.slice().equals(want)
+  assert(indented, "json: indent=2 must match the spelling other implementations produce")
+
+  // The caller chooses the indent width. 0 or less is "no indentation"; there is no negative width.
+  out.clear()
+  v.dump(out@, 0)
+  assert(out.slice().equals(src), "json: indent=0 must be the compact form")
+  out.clear()
+  v.dump(out@, -1)
+  assert(out.slice().equals(src), "json: a non-positive indent must be the compact form")
+  verdict
+    .pass("The default stays on one line, and indentation gives the same strings as other \
+      implementations.")

@@ -1,0 +1,498 @@
+//< Lowers an expression: what a C expression cannot hold is hoisted before its statement
+//<
+//< A short-circuit `&&` / `||`, a `?`, a `catch` chain with its `fallback`, a user operator or
+//< cast, and a conditional value each become temporaries and plain statements in `pre_stmts`.
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/lower/abi" as lower_abi
+import "ksplc/lower/arc" as lower_arc
+import "ksplc/lower/ctx" { Lowering_ctx }
+import "ksplc/lower/defer" as lower_defer
+import "ksplc/lower/root" as lower_root
+import "ksplc/sema/body/call_defaults" as sema_body_call_defaults
+import "ksplc/sema/body/stmt" as sema_body_stmt
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "std/str"
+
+struct Unwrap_ctx
+  res_name: U8[]
+  res_type_id: I32
+  val_type_id: I32
+  err_type_id: I32
+  is_void: Bool
+  is_err_expr: Ast_node$@
+  then_block: Ast_node$@
+
+priv fn setup_result_unwrap(lhs: Ast_node$@, val_type_id: I32, lctx: Lowering_ctx$@,
+  loc: base_ast.Loc): Unwrap_ctx
+  lhs.lower(lctx)
+  res_type_id: = lhs.type_id
+  err_type_id: = lctx.sema.env.get_result_err_id(res_type_id)
+  res_name: = lhs.hoist_to_tmp(lctx, loc).text
+
+  bool_id: = I32::sema_type_env.Builtin_type_id.bool_type
+  is_err_expr: = Ast_node.build_field_access(res_name, res_type_id, "is_err", bool_id, loc)
+  then_block: = Ast_node.new(.k_stmt_block, "stmt_block", loc)
+
+  return Unwrap_ctx::{ .res_name = res_name, .res_type_id = res_type_id, .val_type_id = val_type_id,
+    .err_type_id = err_type_id,
+    .is_void = (sema_type_env.is_void(val_type_id) || val_type_id == 0), .is_err_expr = is_err_expr,
+    .then_block = then_block }
+
+fn build_linked_method_call(recv: Ast_node$@, method_node: Ast_node$@, args: Ast_node$@,
+  res_type_id: I32, loc: base_ast.Loc): Ast_node$@
+  method_name: = method_node.get_decl_id_text()
+  call_node: = Ast_node.build_method_call(recv, method_name, args, res_type_id, loc)
+  m_acc: = call_node.get_child(0)
+  m_acc.def_node = method_node
+  m_acc.get_child(1).def_node = method_node
+  return call_node
+fn gen_result_placeholder(lctx: Lowering_ctx$@, type_id: I32, is_void: Bool, loc: base_ast.Loc):
+  U8$[] //<
+    //< It declares the temporary that holds the expression's result
+    //<
+    //< Where the expression is void, it declares nothing and returns an unused empty string.
+  if is_void
+    return ""
+  name: = lctx.gen_tmp_name()
+  // The branches assign to this temporary, so its type is writable even for a read-only
+  // expression (with const, C rejects the assignment). A fixed-length array drops its **element**
+  // qualifier too (as binding_value_type does).
+  decl_type_id: = lctx.sema.env.copy_value_type(type_id)
+  empty_node: = Ast_node.new(.k_empty, "", loc)
+  let_decl: = lctx.build_let_decl(name, decl_type_id, empty_node, loc)
+  lctx.pre_stmts.push(let_decl)
+  return name
+fn append_result_or_expr(block: Ast_node$@, name: U8$[], type_id: I32, value_node: Ast_node$@,
+  is_void: Bool, loc: base_ast.Loc) //<
+    //< It evaluates a void expression as a stmt_expr and assigns any other into the temporary
+    //<
+    //< Caution: **Never turn a call that does not return into an assignment.** The fallback of
+    //< `x: = f() catch panic(…)` stays Void (is_noreturn_call in sema/body/coerce.kspls), and as
+    //< an assignment it gives C that reads `T x = <Void>`.
+  if is_void || sema_type_env.is_void(value_node.type_id)
+    block.add_child(Ast_node.new(.k_stmt_expr, "expr", loc).add_child(value_node))
+  else
+    ident: = Ast_node.build_ident(name, type_id, loc)
+    block.add_child(Ast_node.build_assign_stmt(ident, value_node, loc))
+
+priv fn lower_into_block(lctx: Lowering_ctx$@, node: Ast_node$@, loc: base_ast.Loc): Ast_node$@ //<
+  //< It lowers node and returns a new block holding the statements that lowering hoisted
+  start: = lctx.pre_stmts.len
+  node.lower(lctx)
+  block: = Ast_node.new(.k_stmt_block, "stmt_block", loc)
+  lctx.flush_pre_stmts_to_node(start, block)
+  return block
+
+impl Ast_node
+  fn finish_call_as_tmp(r: Self$@, lctx: Lowering_ctx$@, tmp_name: U8$[], recv: Ast_node$@,
+    method_node: Ast_node$@, args: Ast_node$@, res_type_id: I32, loc: base_ast.Loc) //<
+      //< It synthesizes a method call, binds it to a temporary and turns into a reference to it
+      //<
+      //< lower_postfix_index_operator, lower_user_operator and lower_user_cast share it.
+      //< The caller passes tmp_name in: the order of temporary numbering shows in the C output, so
+      //< the caller decides it.
+    call_node: = build_linked_method_call(recv, method_node, args, res_type_id, loc)
+    lctx.pre_stmts.push(lctx.build_let_decl(tmp_name, res_type_id, call_node, loc))
+    r.morph(.k_identifier, tmp_name)
+    r.type_id = res_type_id
+
+  fn finalize_or_void(r: Self$@, name: U8$[], type_id: I32, is_void: Bool) //<
+    //< It turns itself into an empty node where void, else into a reference to the temporary
+    if is_void
+      r.morph(.k_empty, "")
+      r.type_id = I32::sema_type_env.Builtin_type_id.void_type
+    else
+      r.morph(.k_identifier, name)
+      r.type_id = type_id
+
+  fn lower_logical_op(r: Self$@, lctx: Lowering_ctx$@, is_and: Bool)
+    lhs: = r.get_binary_left()
+    rhs: = r.get_binary_right()
+    loc: = r.loc
+    bool_id: = I32::sema_type_env.Builtin_type_id.bool_type
+    tmp_name: = lctx.gen_tmp_name()
+
+    lhs.lower(lctx)
+    lctx.pre_stmts.push(lctx.build_let_decl(tmp_name, bool_id, lhs, loc))
+
+    then_block: = lower_into_block(lctx, rhs, loc)
+    $cond_expr: = Ast_node.build_ident(tmp_name, bool_id, loc)
+    if !is_and
+      cond_expr = Ast_node.build_unary_expr("!", cond_expr, bool_id, loc)
+
+    then_ident: = Ast_node.build_ident(tmp_name, bool_id, loc)
+    then_block.add_child(Ast_node.build_assign_stmt(then_ident, rhs, loc))
+
+    lctx.pre_stmts.push(Ast_node.build_if_stmt(cond_expr, then_block, null, loc))
+    r.morph(.k_identifier, tmp_name)
+    r.type_id = bool_id
+
+  fn lower_try_op(r: Self$@, lctx: Lowering_ctx$@)
+    loc: = r.loc
+    u: = setup_result_unwrap(r.get_postfix_receiver(), r.type_id, lctx, loc)
+
+    if lctx.has_cleanups(0)
+      start_defer: = lctx.pre_stmts.len
+      lctx.inject_cleanups(0)
+      lctx.flush_pre_stmts_to_node(start_defer, u.then_block)
+
+    err_field: = Ast_node.build_field_access(u.res_name, u.res_type_id, "error_code",
+      u.err_type_id, loc)
+    throw_node: = Ast_node.new(.k_stmt_throw, "throw", loc)
+    // Caution: Set ival=1 (propagation). Without it genc starts the chain again as "a new error",
+    // so only the last level of the `?` trace remains (the meaning of ival in base/ast.kspls).
+    throw_node.ival = 1
+    throw_node.add_child(Ast_node.new(.k_keyword, "throw", loc))
+    throw_node.add_child(err_field)
+    u.then_block.add_child(throw_node)
+    lctx.pre_stmts.push(Ast_node.build_if_stmt(u.is_err_expr, u.then_block, null, loc))
+
+    if u.is_void
+      r.morph(.k_empty, "")
+      r.type_id = I32::sema_type_env.Builtin_type_id.void_type
+    else
+      if lctx.sema.env.is_result(u.val_type_id)
+        r.morph(.k_identifier, u.res_name)
+      else
+        val: = Ast_node.build_field_access(u.res_name, u.res_type_id, "val", u.val_type_id, loc)
+        r.morph(.k_expr_postfix, ".")
+        for ch in val.children
+          r.add_child(ch)
+      r.type_id = u.val_type_id
+
+  fn lower_expr_catch_chain(r: Self$@, lctx: Lowering_ctx$@)
+    loc: = r.loc
+    recv_node: = r.get_catch_chain_expr()
+    catch_node: = r.get_catch_chain_catch()
+    u: = setup_result_unwrap(recv_node, r.type_id, lctx, loc)
+    val_name: = gen_result_placeholder(lctx, u.val_type_id, u.is_void, loc)
+
+    $target_block: Ast_node$@ = null
+    $target_expr: Ast_node$@ = null
+    $err_id_text: = "_e"
+    $err_id_node: Ast_node$@ = null
+
+    if catch_node != null
+      for c_node in catch_node.children
+        if c_node.kind_id == .k_stmt_block
+          target_block = c_node
+        else if c_node.kind_id == .k_identifier
+          err_id_text = c_node.text
+          err_id_node = c_node
+        else if c_node.kind_id != .k_keyword && c_node.kind_id != .k_literal
+          target_expr = c_node
+
+    if target_block != null
+      get_err_code: = Ast_node.build_field_access(u.res_name, u.res_type_id, "error_code",
+        u.err_type_id, loc)
+      err_decl: = lctx.build_let_decl(err_id_text, u.err_type_id, get_err_code, loc)
+      if err_id_node != null
+        err_decl.sym_ptr = err_id_node.sym_ptr
+        err_decl.def_node = err_id_node.def_node
+        id_node: = err_decl.get_var_decl_id()
+        if id_node != null
+          id_node.sym_ptr = err_id_node.sym_ptr
+          id_node.def_node = err_id_node.def_node
+      u.then_block.add_child(err_decl)
+
+    start_catch: = lctx.pre_stmts.len
+    label_catch: = lctx.gen_label_name()
+    old_fb: = lctx.fb
+
+    lctx.fb.target = val_name if !u.is_void else ""
+    lctx.fb.label = label_catch
+    lctx.fb.label_used = false
+    lctx.fb.depth = lctx.cleanup_stack.len
+
+    if target_block != null
+      target_block.lower(lctx)
+    if target_expr != null
+      target_expr.lower(lctx)
+
+    is_label_used: = lctx.fb.label_used
+    lctx.fb = old_fb
+
+    lctx.flush_pre_stmts_to_node(start_catch, u.then_block)
+
+    if target_block != null
+      for child in target_block.children
+        u.then_block.add_child(child)
+    else if target_expr != null
+      append_result_or_expr(u.then_block, val_name, u.val_type_id, target_expr, u.is_void, loc)
+
+    if (target_block != null || target_expr != null) && is_label_used
+      u.then_block.add_child(Ast_node.build_label_stmt(label_catch, loc))
+
+    $else_block: Ast_node$@ = null
+    if !u.is_void
+      else_block = Ast_node.new(.k_stmt_block, "stmt_block", loc)
+      right_val: =
+        (Ast_node.build_ident(u.res_name, u.res_type_id, loc)
+        if lctx.sema.env.is_result(u.val_type_id)
+        else Ast_node.build_field_access(u.res_name, u.res_type_id, "val", u.val_type_id, loc))
+      val_ident: = Ast_node.build_ident(val_name, u.val_type_id, loc)
+      else_block.add_child(Ast_node.build_assign_stmt(val_ident, right_val, loc))
+
+    if_node: = Ast_node.build_if_stmt(u.is_err_expr, u.then_block, else_block, loc)
+    lctx.pre_stmts.push(if_node)
+    r.finalize_or_void(val_name, u.val_type_id, u.is_void)
+
+  fn lower_fallback_stmt(r: Ast_node$@, lctx: Lowering_ctx$@) //<
+    //< A `fallback` inside a catch's body: it stores the value and jumps to the catch chain's label
+    //<
+    //< The value goes into the temporary the catch chain set up (`lctx.fb`). The cleanups down to
+    //< the chain's depth run before the jump.
+    expr_node: = r.get_fallback_expr()
+    if expr_node != null
+      expr_node.lower(lctx)
+
+    r.morph(.k_empty, "")
+    r.type_id = I32::sema_type_env.Builtin_type_id.void_type
+
+    // Caution: **Never turn a call that does not return into an assignment** (the reason is at
+    // append_result_or_expr); as a statement, the `__attribute__((noreturn))` call stops there.
+    if expr_node != null && lctx.fb.target.len > 0 &&
+      !sema_type_env.is_void(expr_node.type_id)
+      fb_ident: = Ast_node.build_ident(lctx.fb.target, expr_node.type_id, r.loc)
+      assign_stmt: = Ast_node.build_assign_stmt(fb_ident, expr_node, r.loc)
+      lctx.pre_stmts.push(assign_stmt)
+    else if expr_node != null
+      lctx.pre_stmts
+        .push(Ast_node.new(.k_stmt_expr, "expr", r.loc).add_child(expr_node))
+
+    lctx.inject_cleanups(lctx.fb.depth)
+    if lctx.fb.label.len > 0
+      lctx.pre_stmts.push(Ast_node.build_goto_stmt(lctx.fb.label, r.loc))
+      lctx.fb.label_used = true
+
+  fn lower_stmt_expr(r: Ast_node$@, lctx: Lowering_ctx$@)
+    left: = r.get_assign_left()
+    right: = r.get_assign_right()
+
+    // ARC's retain/release is decided before lower_default changes the expression's shape (the
+    // same reason as in lower_arc_var_decl).
+    r.lower_arc_assign(lctx)
+
+    if right != null && left != null && left.kind_id == .k_expr_postfix
+      op_node: = left.get_postfix_op()
+      op_text: = op_node.text if op_node != null else left.text
+
+      // A place-returning subscript (operator.Index_place) is not made a `set`: its `at(i)$` is an
+      // lvalue, so lower_default treats it as an ordinary (or compound) assignment.
+      if op_text.equals("[") && left.def_node.is_fn_decl() &&
+        !lctx.sema.env.is_place_index_node(left)
+        loc: = r.loc
+        method_node: = left.def_node
+        recv_node: = left.get_postfix_receiver()
+        index_node: = left.get_postfix_member()
+
+        recv_node.lower(lctx)
+        index_node.lower(lctx)
+        right.lower(lctx)
+
+        args: = Ast_node.new(.k_expr_args, "args", loc).add_child(index_node).add_child(right)
+        call_node: =
+          build_linked_method_call(recv_node, method_node, args, left.type_id, loc)
+        r.clear_children()
+        r.add_child(call_node)
+        return
+    r.lower_default(lctx)
+
+  fn lower_postfix_index_operator(r: Ast_node$@, lctx: Lowering_ctx$@)
+    loc: = r.loc
+    res_type_id: = r.type_id
+    method_node: = r.def_node
+
+    $expr_node: = r.get_postfix_receiver()
+    next_op: = r.get_postfix_member()
+    is_place: = lctx.sema.env.is_place_index_node(r)
+
+    // Caution: **Put a receiver that has no address in a slot first**, as for a method call (only
+    // `receiver_needs_hoist` decides). `sys.args()[1]` otherwise emits `&f()`, a C compiler error
+    // rather than a KSPL diagnostic. Only for `get`, which returns a copy: a place taken inside a
+    // slot would be written where nobody reads it.
+    if !is_place &&
+      expr_node.receiver_needs_hoist(lctx.sema.env.is_pointer(expr_node.type_id),
+      lctx.sema.env.is_slice(expr_node.type_id))
+      expr_node = expr_node.hoist_complex_expr(lctx, true)
+    else
+      expr_node.lower(lctx)
+    next_op.lower(lctx)
+
+    if is_place
+      // It rewrites an `a[i]` as `a.at(i)$`, dereferenced at once, so reads, assignments and
+      // `a[i]@` take the built-in slice's path. The `get` case copies into a temporary (below).
+      args: = Ast_node.new(.k_expr_args, "args", loc).add_child(next_op)
+      // Caution: **Fill in the default values here.** A subscript passes only the receiver and
+      // the index, not any further parameter (the caller's position, say).
+      sema_body_call_defaults.fill_operator_defaults(lctx.sema, args, method_node, 2)
+      ptr_res_id: = lctx.sema.env.make_ptr(res_type_id)
+      call_node: = build_linked_method_call(expr_node, method_node, args, ptr_res_id, loc)
+      r.clear_children()
+      r.add_child(call_node)
+      r.add_child(Ast_node.new(.k_literal, "$", loc))
+      r.type_id = res_type_id
+      return
+
+    // Caution: **Stop where it is not handled as a place but the return value is a pointer.**
+    // Otherwise, with no KSPL diagnostic, the C compiler reports a type mismatch far from the
+    // cause. A `get` returning a pointer **as a value** passes: the node's type equals it.
+    ret_node: = method_node.get_decl_type_node() if method_node != null else null
+    if ret_node != null && lctx.sema.env.is_pointer(ret_node.type_id) &&
+      ret_node.type_id != res_type_id
+      r
+        .ice_panic("lower_postfix_index_operator: the index method returns a pointer but the node \
+          is not a place; sema/type/query.kspls is_place_index_node and sema/body/postfix.kspls \
+          disagree")
+    tmp_name: = lctx.gen_tmp_name()
+    r.finish_call_as_tmp(lctx, tmp_name, expr_node, method_node, next_op, res_type_id, loc)
+
+  fn lower_expr_postfix(r: Ast_node$@, lctx: Lowering_ctx$@)
+    if r.children.len >= 2
+      op_node: = r.get_child(1)
+      op_text: = op_node.text
+
+      // Caution: **Copy a slice receiver of a subscript to a temporary.** `at(r: Self@, …)` needs
+      // the receiver's address, and genc would emit `&f()` (see `receiver_needs_hoist`;
+      // Principle 2). An array has no descriptor and needs none.
+      if op_text.equals("[")
+        index_recv: = r.get_child(0)
+        if index_recv != null && index_recv.has_side_effect() &&
+          lctx.sema.env.is_slice(lctx.sema.env.receiver_base_id(index_recv.type_id))
+          new_recv: = index_recv.hoist_complex_expr(lctx)
+          if new_recv != null
+            r.set_child(0, new_recv)
+
+      if op_text.equals("?")
+        r.lower_try_op(lctx)
+        return
+
+      if op_text.equals("::") && r.def_node.is_fn_decl()
+        r.lower_user_cast(lctx)
+        return
+
+      if op_text.equals("[") && r.def_node.is_fn_decl()
+        r.lower_postfix_index_operator(lctx)
+        return
+
+      if op_text.equals("(")
+        r.lower_arc_call_arg_retains(lctx)
+        recv_node: = r.get_child(0)
+        if recv_node.kind_id == .k_method_access
+          obj_node: = recv_node.get_postfix_receiver()
+          if obj_node != null
+            is_trait: = lctx.sema.env.trait_def_of_receiver(obj_node.type_id).is_some()
+            if is_trait && obj_node.has_side_effect()
+              // genc writes a vtable call's receiver twice (vtable pointer, self argument), so
+              // one with a side effect is copied into a temporary.
+              new_obj: = obj_node.hoist_complex_expr(lctx)
+              recv_node.set_child(0, new_obj)
+            else if !is_trait &&
+              obj_node.receiver_needs_hoist(lctx.sema.env.is_pointer(obj_node.type_id),
+              lctx.sema.env.is_slice(obj_node.type_id)) &&
+              recv_node.receiver_wants_ptr(lctx.sema)
+              // Caution: **Put it in a slot before taking the address** (`receiver_needs_hoist`
+              // decides, as in sema/body/call.kspls). The slot lives as if the writer had bound
+              // `x: = f();`.
+              new_obj: = obj_node.hoist_complex_expr(lctx, true)
+              recv_node.set_child(0, new_obj)
+    r.lower_default(lctx)
+
+  fn lower_expr_upcast(r: Self$@, lctx: Lowering_ctx$@)
+    if r.children.len > 0
+      inner: = r.get_upcast_inner()
+      if !inner.is_path_or_ident()
+        new_inner: = inner.hoist_complex_expr(lctx)
+        if new_inner != null
+          r.set_child(0, new_inner)
+      else
+        inner.lower(lctx)
+
+  fn lower_user_operator(r: Ast_node$@, lctx: Lowering_ctx$@)
+    loc: = r.loc
+    res_type_id: = r.type_id
+    method_node: = r.def_node
+
+    for child in r.children
+      child.lower(lctx)
+
+    tmp_name: = lctx.gen_tmp_name()
+    args_node: = Ast_node.new(.k_expr_args, "args", loc)
+    $recv_node: Ast_node$@ = null
+
+    if r.kind_id == .k_expr
+      recv_node = r.get_child(0)
+      args_node.add_child(r.get_child(2))
+    else
+      recv_node = r.get_child(1)
+
+    // The ABI layer (ksplc/lower/abi.kspls) may take an operator receiver's address for `Self@`,
+    // and a call receiver (`Foo.new(x)`) would give `&f()`, so it is copied into a temporary. It
+    // decides as hoist_complex_expr would, but by hand: it is already lowered just above.
+    if recv_node.has_side_effect()
+      recv_node = recv_node.hoist_to_tmp(lctx, loc)
+
+    r.finish_call_as_tmp(lctx, tmp_name, recv_node, method_node, args_node, res_type_id, loc)
+  fn lower_user_cast(r: Ast_node$@, lctx: Lowering_ctx$@) //<
+    //< It turns a cast resolved through operator.Cast (`Dest::src_expr`) into a cast() call
+    //<
+    //< The cast is the prefix form, with the children [receiver, "::", type].
+    loc: = r.loc
+    res_type_id: = r.type_id
+    method_node: = r.def_node
+
+    $recv_node: = r.get_postfix_receiver()
+    recv_node.lower(lctx)
+
+    if !recv_node.is_path_or_ident()
+      recv_node = recv_node.hoist_to_tmp(lctx, loc)
+
+    tmp_name: = lctx.gen_tmp_name()
+    args_node: = Ast_node.new(.k_expr_args, "args", loc)
+    r.finish_call_as_tmp(lctx, tmp_name, recv_node, method_node, args_node, res_type_id, loc)
+
+  fn lower_expr_ternary(r: Self$@, lctx: Lowering_ctx$@)
+    cond_node: = r.get_ternary_cond()
+    true_node: = r.get_ternary_true()
+    false_node: = r.get_ternary_false()
+    loc: = r.loc
+    type_id: = r.type_id
+    is_void: = sema_type_env.is_void(type_id) || type_id == 0
+
+    tmp_name: = gen_result_placeholder(lctx, type_id, is_void, loc)
+
+    cond_node.lower(lctx)
+
+    then_block: = lower_into_block(lctx, true_node, loc)
+    append_result_or_expr(then_block, tmp_name, type_id, true_node, is_void, loc)
+
+    else_block: = lower_into_block(lctx, false_node, loc)
+    append_result_or_expr(else_block, tmp_name, type_id, false_node, is_void, loc)
+
+    lctx.pre_stmts.push(Ast_node.build_if_stmt(cond_node, then_block, else_block, loc))
+
+    r.finalize_or_void(tmp_name, type_id, is_void)
+
+  fn lower_expr_node(r: Ast_node$@, lctx: Lowering_ctx$@)
+    if r.def_node.is_fn_decl()
+      r.lower_user_operator(lctx)
+      return
+    if r.children.len == 3
+      op_node: = r.get_child(1)
+      if op_node.is_literal("&&")
+        r.lower_logical_op(lctx, true)
+        return
+      if op_node.is_literal("||")
+        r.lower_logical_op(lctx, false)
+        return
+    r.lower_default(lctx)
+
+  fn lower_expr_unary(r: Ast_node$@, lctx: Lowering_ctx$@)
+    if r.def_node.is_fn_decl()
+      r.lower_user_operator(lctx)
+      return
+    r.lower_default(lctx)

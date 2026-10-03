@@ -1,0 +1,69 @@
+//< Measures one training step: the three matrix products it reduces to
+//<
+//< They are fwd `Y=X@W`, bwd `dW=Xᵀ@dY` and `dX=dY@Wᵀ`, into reused output buffers (the `*_into`
+//< API). Pure KSPL by default; `--define=blas` hands off to BLAS. It measures wall-clock time
+//< (`mono_us` in `std/sys`) and keeps the smallest of `repeats` runs, the least disturbed one, so
+//< it holds up on a shared machine.
+
+// ==========================================
+//   A build example (`ksai/benches/run_bench.kspls` automates it; under `--define=blas` the libs
+//   file names OpenBLAS):
+//     out/ksplc_stage1.exe [--define=blas] --emit-libs=out/bt.libs \
+//       ksai/benches/bench_train.kspls out/bt.c
+//     clang -std=c99 -O3 out/bt.c @out/bt.libs -lm -o out/bt.exe
+// ==========================================
+import "ksai/grad"
+import "ksai/tensor" { Tensor }
+import "std/io"
+import "std/mem" { Arena }
+import "std/sys"
+
+priv fn new2d(a: Arena$@, r: Sz, c: Sz): Tensor<|F32|>
+  shape: Sz[2] = ::{ r, c }
+  return Tensor<|F32|>.new(Sz[]::shape, a)
+
+priv fn min_step_us(m: Sz, k: Sz, n: Sz, iters: Sz, repeats: Sz, arena: Arena$@): I64 //<
+  //< The three training matrix products of m×k @ k×n, `iters` times
+  //<
+  //< The outputs y/dw/dx are reused. Returns the min μs/step.
+  $x: = new2d(arena, m, k)
+  x.fill(F32::0.5)
+  $w: = new2d(arena, k, n)
+  w.fill(F32::0.1)
+  $dy: = new2d(arena, m, n)
+  dy.fill(F32::0.1)
+  y: = new2d(arena, m, n)
+  dw: = new2d(arena, k, n)
+  dx: = new2d(arena, m, k)
+
+  // The warm-up (keeps BLAS's thread-pool start-up and cache filling out of the measurement)
+  for _i in Range.asc(3)
+    x.matmul_into(w, y) catch panic("bench: matmul_into shape mismatch")
+    x.grad_matmul_weight_into(dy, dw)
+    dy.grad_matmul_input_into(w, dx)
+  // Divide last; dividing each round first turns a round shorter than the clock tick into 0.
+  $best_us: I64 = 0
+  for rep in Range.asc(repeats)
+    t0: = sys.mono_us()
+    for _it in Range.asc(iters)
+      x.matmul_into(w, y) catch
+        panic("bench: matmul_into shape mismatch")
+      // fwd
+      x.grad_matmul_weight_into(dy, dw) // bwd dW
+      dy.grad_matmul_input_into(w, dx) // bwd dX
+    batch: = sys.mono_us() - t0
+    if rep == 0 || batch < best_us
+      best_us = batch
+  return best_us / I64::iters
+
+priv fn one(label: U8[], m: Sz, k: Sz, n: Sz, iters: Sz, arena: Arena$@)
+  us: = min_step_us(m, k, n, iters, 7, arena)
+  io.out().s(label).s(" M=\{I32::m\} K=\{I32::k\} N=\{I32::n\}  min=\{I32::us\}us/step\n")
+
+fn main() //< times one training step, three matrix products, at each size
+  arena: = Arena.new(1024 * 1024 * 512)
+  defer arena.free()
+  one("[step]", 32, 128, 512, 500, arena)
+  one("[step]", 64, 256, 1024, 200, arena)
+  one("[step]", 64, 512, 2048, 60, arena)
+  one("[step]", 512, 512, 512, 40, arena) // larger (where thread parallelism pays off)

@@ -1,0 +1,269 @@
+import "ksai/block_train" as ai_block_train // Transformer_block's train_forward/backward
+import "ksai/grad" as _ai_grad // Tensor's loss/gradient operations
+import "ksai/lora_set" as ai_lora_set // applying an externally fine-tuned adapter (a bundle per block) at inference
+import "ksai/model_file" as ai_file
+import "ksai/nn" as ai_nn
+import "ksai/nn_grad" as ai_nn_grad // each layer's backward and its gradients
+import "ksai/optim" as ai_optim
+import "ksai/safetensors" as ai_safetensors
+import "ksai/tensor" { Tensor }
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+import "std/prng"
+import "std/str" { Str_builder }
+
+struct Mini_llama<|T|>
+  priv token_embed: ai_nn.Embedding<|T|>
+  priv blocks: ai_nn.Transformer_block<|T|>$[]
+  priv norm: ai_nn.Rms_norm<|T|>
+  lm_head: ai_nn.Linear<|T|> //< referenced by main.kspls (the same directory)
+
+priv struct Train_fwd<|T|> //<
+  //< The intermediate values of the training forward pass (every cache the backward pass needs)
+  priv logits: Tensor<|T|> //< [n, vocab]
+  priv norm_h: Tensor<|T|> //< the final RMSNorm output [n, dim]
+  priv h: Tensor<|T|> //< the final block's output [n, dim]
+  priv caches: ai_block_train.Block_train<|T|>$@ //< each block's intermediate values
+  priv nblk: Sz
+
+struct Model_grads<|T|> //< every weight's gradient: one sequence's, or a batch's summed
+  priv token_embed: Tensor<|T|>
+  priv blocks: ai_block_train.Block_grads<|T|>$@ //< one per block
+  priv nblk: Sz
+  priv norm: ai_nn_grad.Rms_norm_grads<|T|>
+  priv head: ai_nn_grad.Linear_grads<|T|>
+
+struct Seq_grads<|T|> //< what one sequence of a batch leaves: its loss, and its gradients
+  loss: F64 //< the mean cross-entropy over its positions
+  grads: Model_grads<|T|>
+
+struct Seq_loss //< a sequence's mean cross-entropy in nats: over every position, and its tail's
+  whole: F64
+  tail: F64
+
+impl<|T|> Model_grads<|T|>
+  fn accumulate(r: Self$@, o: Self$@) //< another sequence's gradients added in, in place
+    r.token_embed.accumulate(o.token_embed)
+    for b in Range.asc(r.nblk)
+      (r.blocks + b).accumulate(o.blocks + b)
+    r.norm.accumulate(o.norm@)
+    r.head.accumulate(o.head@)
+
+impl<|T|> Mini_llama<|T|>
+  fn new(vocab_size: Sz, dim: Sz, hidden: Sz, n_layers: Sz, max_seq_len: Sz, model_arena: Arena$@):
+    Mini_llama<|T|> //<
+      //< Initializes the model (every weight is allocated on model_arena)
+    blocks_ptr: =
+      ai_nn.Transformer_block<|T|>$@::model_arena
+      .alloc(n_layers * sizeof(ai_nn.Transformer_block<|T|>))
+    for i in Range.asc(n_layers)
+      (blocks_ptr + i)$ = ai_nn.Transformer_block<|T|>
+        .new(dim, hidden, max_seq_len, T::1.0e-5, model_arena)
+
+    return Mini_llama<|T|>::{ .token_embed = ai_nn.Embedding<|T|>
+      .new(vocab_size, dim, model_arena),
+      .blocks = ai_nn.Transformer_block<|T|>$[]::{ .ptr = blocks_ptr, .len = n_layers },
+      .norm = ai_nn.Rms_norm<|T|>.new(dim, T::1.0e-5, model_arena),
+      .lm_head = ai_nn.Linear<|T|>.new(dim, vocab_size, model_arena) }
+  fn randomize(r: Self$@, rng: prng.Prng$@) //<
+    //< The random initialization for training from scratch (breaking the symmetry)
+    //<
+    //< Matrix weights get uniform random values and the normalization weights 1.0, for training
+    //< without a safetensors file.
+    // Caution: **Do not list the weight tensors one by one** (the reason is at
+    // `Linear.init_uniform` in `ksai/nn.kspls`). With a list, forgetting one when a layer is added
+    // raises no error, and that layer alone keeps a constant value.
+    r.token_embed.init_uniform(rng, 0.1)
+    r.lm_head.init_uniform(rng, 0.1)
+    for i in Range.asc(r.blocks.len)
+      r.blocks[i].init_uniform(rng, 0.1)
+  fn load_weights(r: Self$@, $st: ai_safetensors.Safetensors, arena: Arena$@):
+    Void?ai_safetensors.Safetensors_error //<
+      //< Loads the real weights from a safetensors file, as a zero-copy mapping
+      //<
+      //< **A file whose shapes do not match the dimensions `new` built is rejected here** (the
+      //< reason is at `map_into` in `ksai/safetensors.kspls`).
+    io.err().s("\n[Model] Zero-copy mapping weights from Safetensors...\n")
+
+    st.map_into<|F32|>("model.embed_tokens.weight", r.token_embed.weight@, arena)?
+    st.map_into<|F32|>("model.norm.weight", r.norm.weight@, arena)?
+    st.map_into<|F32|>("lm_head.weight", r.lm_head.weights@, arena)?
+
+    $b: = Str_builder.new()
+    defer b.free()
+
+    for i in Range.asc(r.blocks.len)
+      k_wq: = key(b@, i, ".self_attn.wq.weight")
+      st.map_into<|F32|>(k_wq, r.blocks[i].attention.wq.weights@, arena)?
+      k_wk: = key(b@, i, ".self_attn.wk.weight")
+      st.map_into<|F32|>(k_wk, r.blocks[i].attention.wk.weights@, arena)?
+      k_wv: = key(b@, i, ".self_attn.wv.weight")
+      st.map_into<|F32|>(k_wv, r.blocks[i].attention.wv.weights@, arena)?
+      k_wo: = key(b@, i, ".self_attn.wo.weight")
+      st.map_into<|F32|>(k_wo, r.blocks[i].attention.wo.weights@, arena)?
+      k_fc1: = key(b@, i, ".mlp.fc1.weight")
+      st.map_into<|F32|>(k_fc1, r.blocks[i].ffn.fc1.weights@, arena)?
+      k_fc2: = key(b@, i, ".mlp.fc2.weight")
+      st.map_into<|F32|>(k_fc2, r.blocks[i].ffn.fc2.weights@, arena)?
+      k_an: = key(b@, i, ".input_layernorm.weight")
+      st.map_into<|F32|>(k_an, r.blocks[i].attention_norm.weight@, arena)?
+      k_fn: = key(b@, i, ".post_attention_layernorm.weight")
+      st.map_into<|F32|>(k_fn, r.blocks[i].ffn_norm.weight@, arena)?
+    io.err().s("[Model] Weight mapping completed successfully!\n\n")
+  fn save(r: Self$@, path: U8[]): Void?ai_safetensors.Safetensors_error //<
+    //< Writes the trained weights to a safetensors file (the same naming as load_weights)
+    $w: = ai_safetensors.Safetensors_writer.new()
+    w.add("model.embed_tokens.weight", r.token_embed.weight)
+    w.add("model.norm.weight", r.norm.weight)
+    w.add("lm_head.weight", r.lm_head.weights)
+    $b: = Str_builder.new()
+    defer b.free()
+    for i in Range.asc(r.blocks.len)
+      k_wq: = key(b@, i, ".self_attn.wq.weight")
+      w.add(k_wq, r.blocks[i].attention.wq.weights)
+      k_wk: = key(b@, i, ".self_attn.wk.weight")
+      w.add(k_wk, r.blocks[i].attention.wk.weights)
+      k_wv: = key(b@, i, ".self_attn.wv.weight")
+      w.add(k_wv, r.blocks[i].attention.wv.weights)
+      k_wo: = key(b@, i, ".self_attn.wo.weight")
+      w.add(k_wo, r.blocks[i].attention.wo.weights)
+      k_fc1: = key(b@, i, ".mlp.fc1.weight")
+      w.add(k_fc1, r.blocks[i].ffn.fc1.weights)
+      k_fc2: = key(b@, i, ".mlp.fc2.weight")
+      w.add(k_fc2, r.blocks[i].ffn.fc2.weights)
+      k_an: = key(b@, i, ".input_layernorm.weight")
+      w.add(k_an, r.blocks[i].attention_norm.weight)
+      k_fn: = key(b@, i, ".post_attention_layernorm.weight")
+      w.add(k_fn, r.blocks[i].ffn_norm.weight)
+    ai_file.save_safetensors(w@, path)?
+  // Reads externally fine-tuned LoRA adapters (one per block) named
+  // "blocks.{i}.attn.{q,v}.lora_{a,b,scale}"; the implementation is in `ksai/model_file.kspls`.
+  // **Do not make these three (`load_lora_set` / `save_lora_set` / `forward_with_lora`)
+  // `priv`.** No caller in this package uses them yet, but `priv` would have
+  // `../qwen_infer/main.kspls` copy the same one-line delegation.
+  fn load_lora_set(r: Self$@, path: U8[], arena: Arena$@):
+    ai_lora_set.Qkv_lora<|T|>$@?ai_safetensors.Safetensors_error
+    return ai_file.load_qkv_lora_set<|T|>(path, r.blocks.len, arena)
+  fn save_lora_set(r: Self$@, adapters: ai_lora_set.Qkv_lora<|T|>$@, path: U8[], arena: Arena$@):
+    Void?ai_safetensors.Safetensors_error //<
+      //< Saves the adapters to `path`, as load_lora_set's inverse
+      //<
+      //< It is used for verification, and for saving an on-device training result.
+    return ai_file.save_qkv_lora_set<|T|>(adapters, r.blocks.len, path, arena)
+  fn forward_hidden(r: Self$@, token_id: I32, start_pos: Sz, compute_arena: Arena$@): Tensor<|T|> //<
+    //< The forward pass up to just before the LM head
+    //<
+    //< It returns the normalized hidden state (norm_h), the lm_head input LoRA fine-tuning needs.
+    return r.forward_hidden_lora(token_id, start_pos, null, compute_arena)
+  priv fn forward_hidden_lora(r: Self$@, token_id: I32, start_pos: Sz,
+    adapters: ai_lora_set.Qkv_lora<|T|>$@, compute_arena: Arena$@): Tensor<|T|> //<
+      //< forward_hidden with the adapters applied, one Qkv_lora per block
+      //<
+      //< A null `adapters` gives the same as a plain forward_hidden.
+    $h: = r.token_embed.forward(token_id, compute_arena)
+    for i in Range.asc(r.blocks.len)
+      if adapters == null
+        h = r.blocks[i].forward(h, start_pos)
+      else
+        h = r.blocks[i]
+          .forward_lora(h, start_pos, (adapters + i).q@, (adapters + i).v@)
+    return r.norm.forward(h)
+  fn forward(r: Self$@, token_id: I32, start_pos: Sz, compute_arena: Arena$@): Tensor<|T|> //<
+    //< The forward pass (every intermediate tensor is allocated on compute_arena)
+    return r.lm_head.forward(r.forward_hidden(token_id, start_pos, compute_arena))
+  fn forward_with_lora(r: Self$@, token_id: I32, start_pos: Sz,
+    adapters: ai_lora_set.Qkv_lora<|T|>$@, compute_arena: Arena$@): Tensor<|T|> //<
+      //< The forward pass with the LoRA adapters applied.
+    hidden: = r.forward_hidden_lora(token_id, start_pos, adapters, compute_arena)
+    return r.lm_head.forward(hidden)
+  priv fn embed_sequence(r: Self$@, tokens: List<|I32|>$@, arena: Arena$@): Tensor<|T|> //<
+    //< Converts a token sequence into the embedding matrix X:[n, dim] (for training)
+    dim: = r.token_embed.weight.shape[1]
+    n: = tokens.len
+    shp: Sz[2] = ::{ n, dim }
+    x: = Tensor<|T|>.new(Sz[]::shp, arena)
+    for i in Range.asc(n)
+      e: = r.token_embed.forward(tokens[i], arena) // [1, dim]
+      for j in Range.asc(dim)
+        (x.data + i * dim + j)$ = (e.data + j)$
+    return x
+  priv fn train_forward(r: Self$@, tokens: List<|I32|>$@, arena: Arena$@): Train_fwd<|T|> //<
+    //< The training forward pass from the embedding to lm_head (the whole sequence, causal)
+    $h: = r.embed_sequence(tokens, arena) // [n, dim]
+    nblk: = r.blocks.len
+    caches: =
+      ai_block_train.Block_train<|T|>$@::arena
+      .alloc(nblk * sizeof(ai_block_train.Block_train<|T|>))
+    for b in Range.asc(nblk)
+      (caches + b)$ = r.blocks[b].train_forward(h)
+      h = (caches + b).out
+    norm_h: = r.norm.forward(h) // [n, dim]
+    return Train_fwd<|T|>::{ .logits = r.lm_head.forward(norm_h), .norm_h = norm_h, .h = h,
+      .caches = caches, .nblk = nblk }
+  priv fn grads_of(r: Self$@, cache: Train_fwd<|T|>$@, tokens: List<|I32|>$@,
+    dlogits: Tensor<|T|>, arena: Arena$@): Model_grads<|T|> //<
+      //< Back-propagates dlogits through lm_head → norm → blocks (in reverse) → embedding
+    $g: Model_grads<|T|> = ::{ .nblk = cache.nblk }
+    dnorm_h: = r.lm_head.backward_grads(cache.norm_h, dlogits, g.head@)
+    $dh: = r.norm.backward_grads(cache.h, dnorm_h, g.norm@)
+    g.blocks =
+      ai_block_train.Block_grads<|T|>$@::arena
+      .alloc(cache.nblk * sizeof(ai_block_train.Block_grads<|T|>))
+    for b in Range.desc(cache.nblk)
+      dh = r.blocks[b].backward_grads((cache.caches + b), dh, g.blocks + b)
+    g.token_embed = r.token_embed.backward_seq_grads(tokens.slice(), tokens.len, dh)
+    return g
+  fn apply_grads(r: Self$@, g: Model_grads<|T|>$@, u: ai_optim.Updater<|T|>$@) //<
+    //< Moves every weight by `g`, as one step of `u`
+    //<
+    //< **Every gradient first, then every step**: an optimizer with memory (Adam) sees each
+    //< weight once per step, in the same order every step (`Updater`'s pairing).
+    u.begin_step()
+    u.update(r.token_embed.weight, g.token_embed)
+    for b in Range.asc(g.nblk)
+      r.blocks[b].apply_grads(g.blocks + b, u)
+    r.norm.apply_grads(g.norm@, u)
+    r.lm_head.apply_grads(g.head@, u)
+  fn train_step(r: Self$@, tokens: List<|I32|>$@, target: I32, lr: F64, arena: Arena$@): F64 //<
+    //< One step of end-to-end training (teacher forcing, predicting the final position)
+    //<
+    //< Every layer back-propagated with SGD so the sequence's next token becomes target; it returns
+    //< the cross-entropy loss.
+    $cache: = r.train_forward(tokens, arena)
+    loss: = cache.logits.cross_entropy_loss(target)
+    $u: = ai_optim.Updater<|T|>.sgd(lr)
+    defer u.free()
+    $g: = r.grads_of(cache@, tokens, cache.logits.grad_softmax_cross_entropy(target), arena)
+    r.apply_grads(g@, u@)
+    return loss
+  fn loss_seq(r: Self$@, tokens: List<|I32|>$@, targets: I32$[], from: Sz, arena: Arena$@):
+    Seq_loss //<
+      //< The mean cross-entropy over every position, and over those from `from` on
+      //<
+      //< The weights stay untouched (a held-out measure). **One forward pass gives both**: the tail
+      //< is the part a caller asks the model to write (a FIM sequence's middle); the whole also
+      //< includes what it was only given.
+    assert(from < targets.len, "loss_seq: the tail starts past the sequence")
+    $cache: = r.train_forward(tokens, arena)
+    $tail: = cache.logits.view_rows(from, targets.len - from, arena) catch
+      panic("loss_seq: the logits are not a row per position")
+    return Seq_loss::{ .whole = cache.logits.cross_entropy_loss_seq(targets),
+      .tail = tail
+      .cross_entropy_loss_seq(I32$[]::{ .ptr = targets.ptr + from, .len = targets.len - from }) }
+  fn grads_seq(r: Self$@, tokens: List<|I32|>$@, targets: I32$[], arena: Arena$@): Seq_grads<|T|> //<
+    //< Every position trained at once (`targets[t]` follows `tokens[t]`); the weights are only read
+    //<
+    //< **It writes only to `arena`**, so each thread can take one sequence of a batch; the batch's
+    //< gradient is their sum via `accumulate`.
+    $cache: = r.train_forward(tokens, arena)
+    loss: = cache.logits.cross_entropy_loss_seq(targets)
+    dlogits: = cache.logits.grad_softmax_cross_entropy_seq(targets)
+    return Seq_grads<|T|>::{ .loss = loss,
+      .grads = r.grads_of(cache@, tokens, dlogits, arena) }
+
+priv fn key(b: Str_builder$@, i: Sz, suffix: U8[]): U8[] //<
+  //< Builds a safetensors weight key ("model.layers.{i}{suffix}")
+  //<
+  //< It has the same role as the same-named helper in ksai/examples/qwen_infer/main.kspls.
+  return b.clear().s("model.layers.\{I32::i\}").s(suffix).slice()

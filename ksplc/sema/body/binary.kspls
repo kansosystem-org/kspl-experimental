@@ -1,0 +1,417 @@
+//< Types the binary operators, and the checks that apply only to them
+//<
+//< Covers numeric promotion, which pointer arithmetic is allowed, bare bit operations, and constant
+//< divisors and shift amounts. Dispatch on an expression's kind stays in expr.kspls.
+//< **This file and `expr.kspls` import each other.** expr.kspls dispatches into here, and an
+//< operand's own inference calls back out to `infer_expr`, so the dependency cannot go one way
+//< (as in `ksplc/gen/c/expr.kspls`).
+//< The split is "a rule about one operator" versus "dispatch on an expression's kind". The
+//< reasoning is in "Files near the limit and how they split" in `../../README.md`.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
+import "ksplc/base/core" as base_core
+import "ksplc/sema/body/coerce" as sema_body_coerce
+import "ksplc/sema/body/expr" as sema_body_expr
+import "ksplc/sema/body/literal" as sema_body_literal
+import "ksplc/sema/decl/eval" as sema_decl_eval
+import "ksplc/sema/decl/trait_check" as sema_decl_trait_check
+import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
+import "ksplc/sema/type/display" as sema_type_display
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "std/str"
+
+priv struct Op_traits
+  method_name: U8[]
+  trait_name: U8[]
+
+priv fn get_op_traits(op: U8[]): Op_traits
+  if op.equals("+")
+    return Op_traits::{ .method_name = "add", .trait_name = "Add" }
+  if op.equals("-")
+    return Op_traits::{ .method_name = "sub", .trait_name = "Sub" }
+  if op.equals("*")
+    return Op_traits::{ .method_name = "mul", .trait_name = "Mul" }
+  if op.equals("/")
+    return Op_traits::{ .method_name = "div", .trait_name = "Div" }
+  if op.equals("==")
+    return Op_traits::{ .method_name = "eq", .trait_name = "Eq" }
+  if op.equals("!=")
+    return Op_traits::{ .method_name = "ne", .trait_name = "Eq" }
+  if op.equals("<")
+    return Op_traits::{ .method_name = "lt", .trait_name = "Ord" }
+  if op.equals("<=")
+    return Op_traits::{ .method_name = "le", .trait_name = "Ord" }
+  if op.equals(">")
+    return Op_traits::{ .method_name = "gt", .trait_name = "Ord" }
+  if op.equals(">=")
+    return Op_traits::{ .method_name = "ge", .trait_name = "Ord" }
+  return Op_traits::{ .method_name = "", .trait_name = "" }
+
+priv fn const_divisor(ctx: Sema_ctx$@, right_node: Ast_node$@): Option<|I32|> //<
+  //< The divisor's value if it is known at translation time, .none if not
+  //<
+  //< Caution: Keep it an Option. Collapsed to a default of 0, a divisor that really folds to 0
+  //< cannot be told apart from a run-time value. A value too wide for I32 (`4294967296I64`) becomes
+  //< .none (eval_constexpr's narrowing); that only sends a non-zero divisor to the run-time check.
+  return Option<|I32|>.none if right_node == null else ctx.try_eval_constexpr(right_node)
+
+fn check_const_divisor(ctx: Sema_ctx$@, left_type_id: I32, right_node: Ast_node$@) //<
+  //< Checks whether the divisor is 0, for both `/` `%` and `/=` `%=`
+  //<
+  //< **This is an error, not a lint**, and carries no code: dividing by 0 is undefined in both C
+  //< and LLVM, and a coded diagnostic can be silenced by a project setting (base/lint_codes.kspls).
+  //< **Floating point is not checked**: IEEE 754 defines the result (`±inf` / `NaN`).
+  if !ctx.env.is_integer(left_type_id)
+    return
+  if divisor: = const_divisor(ctx, right_node)
+    if divisor == 0
+      ctx.err(right_node, "division or modulo by zero")
+
+fn divisor_is_static(ctx: Sema_ctx$@, right_node: Ast_node$@): Bool //<
+  //< Whether the divisor is known at translation time and is not 0.
+  //<
+  //< **Only when this is true may the code generator omit the run-time check.**
+  //< When it is true, the generator must not insert one: the generated C's top-level initializer
+  //< must be a C constant expression, and a call turns it into `initializer element is not a
+  //< compile-time constant`.
+  switch const_divisor(ctx, right_node) case .some(divisor)
+    return divisor != 0
+  case .none
+    return false
+
+fn divisor_cannot_overflow(ctx: Sema_ctx$@, right_node: Ast_node$@): Bool //<
+  //< Whether a signed division or remainder may be emitted as a plain instruction
+  //<
+  //< Caution: **Exclude `-1`.** A type's minimum divided by `-1` does not fit the type. C and LLVM
+  //< leave that undefined while the specification defines it as `mod 2^N`, so such a form must go
+  //< to the run-time function that takes both operands. `0` is excluded as in divisor_is_static.
+  switch const_divisor(ctx, right_node) case .some(divisor)
+    return divisor != 0 && divisor != -1
+  case .none
+    return false
+
+priv fn shift_amount_in_range(ctx: Sema_ctx$@, amount: I32, left_type_id: I32): Bool //<
+  //< Whether the value is a valid shift amount
+  //<
+  //< Caution: **Keep this test in this one place.** The diagnostic (check_const_shift_amount) and
+  //< the omission of the run-time check (shift_amount_is_static) must agree; with a copy, one goes
+  //< stale when a width changes. The widths come from Env's single table (get_primitive_bit_size)
+  //< for the same reason.
+  return amount >= 0 && amount < ctx.env.get_portable_bit_size(left_type_id)
+
+fn check_const_shift_amount(ctx: Sema_ctx$@, left_type_id: I32, right_node: Ast_node$@) //<
+  //< Whether the shift amount is outside the left-hand side's width (`<<` `>>` and `<<=` `>>=`)
+  //<
+  //< **This is an error, not a lint**: clang reports `left shift count >= width of type` too, so
+  //< without it the error comes from clang, not ksplc ("Failing fast through an exception or an
+  //< ICE" in ksplc/docs/DESIGN.md). No code, as for the division above.
+  if right_node == null || ctx.is_instantiating()
+    return
+  // Caution: Keep it an Option. With a default of -1, an amount that really folds to `-1` cannot be
+  // told apart from a run-time value.
+  if shift_val: = ctx.try_eval_constexpr(right_node)
+    if !shift_amount_in_range(ctx, shift_val, left_type_id)
+      max_bits: = ctx.env.get_portable_bit_size(left_type_id)
+      type_name: = ctx.env.get_str(left_type_id)
+      ctx.clear_scratch()
+        .s("shift count \{shift_val\} is out of range for the left-hand side type '\{type_name\}' \
+          (must be 0..\{max_bits - 1\})")
+      ctx.err(right_node, ctx.scratch.slice())
+
+fn shift_amount_is_static(ctx: Sema_ctx$@, left_type_id: I32, right_node: Ast_node$@): Bool //<
+  //< Whether the shift amount is known at translation time and within the width
+  //<
+  //< False in a generic's template body even for a constant amount, since the width changes with
+  //< the type argument. When true, no run-time check may be inserted (as in divisor_is_static).
+  if right_node == null
+    return false
+  switch ctx.try_eval_constexpr(right_node) case .some(shift_val)
+    return shift_amount_in_range(ctx, shift_val, left_type_id)
+  case .none
+    return false
+
+priv fn is_bare_bitwise(n: Ast_node$@): Bool //<
+  //< Whether it is an unparenthesized `&` / `|` / `^` binary expression
+  if n == null || n.kind_id != .k_expr || n.children.len != 3 || n.was_parenthesized()
+    return false
+  op: = n.get_binary_op()
+  if op == null
+    return false
+  return op.text.equals("&") || op.text.equals("|") || op.text.equals("^")
+
+priv fn is_bool_arith_operand(ctx: Sema_ctx$@, left_id: I32, right_id: I32, op_text: U8[],
+  is_shift: Bool): Bool //<
+    //< Whether arithmetic or a shift is about to be applied to a `Bool` operand.
+    //<
+    //< Caution: **List the operators explicitly.** Written as "not a comparison, logical or
+    //< bitwise operator", it catches a new operator the day a compound assignment reaches here.
+  is_arith: =
+    op_text.equals("+") || op_text.equals("-") || op_text.equals("*") || op_text.equals("/") ||
+    op_text.equals("%")
+  if !is_arith && !is_shift
+    return false
+  return ctx.env.is_bool(left_id) || ctx.env.is_bool(right_id)
+
+fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32?Sema_error
+  node.ice_assert(node.children.len == 3, "Binary expression node must have exactly 3 children")
+
+  left_node: = node.get_binary_left()
+  op_node: = node.get_binary_op()
+  op_text: = op_node.text
+  right_node: = node.get_binary_right()
+
+  is_cmp: =
+    op_text.equals("==") || op_text.equals("!=") || op_text.equals("<") || op_text.equals("<=") ||
+    op_text.equals(">") || op_text.equals(">=")
+  is_logical: = op_text.equals("&&") || op_text.equals("||")
+  // `&` `|` `^` require the operands' types to match exactly (they do not promote).
+  // Caution: **Do not include a shift here.** `a << b` has **the left-hand side's type alone**;
+  // with shifts included, the `1` of `x: I64 = 1 << 40;` takes the default I32 and shifts to 0, and
+  // `x: U64 = 1 << 20;` is rejected as "an implicit conversion between I32 and U64".
+  is_strict_bitwise: =
+    op_text.equals("&") || op_text.equals("|") || op_text.equals("^")
+  is_shift: = op_text.equals("<<") || op_text.equals(">>")
+
+  $pass_left_id: = expected_id
+  if is_cmp || is_logical || is_strict_bitwise
+    pass_left_id = I32::sema_type_env.Builtin_type_id.unknown
+  // **The outer expected type is not passed down to a `-`'s left-hand side**; once the side is
+  // known to be a number, the type is reapplied below, so the width does not change.
+  // Caution: **Pass it down for a literal only.** A literal has no type to promote from, so the
+  // left of `x: I64 = 4294967296 - 1;` would take the default I32 and be rejected as out of range.
+  defer_left: =
+    op_text.equals("-") && !sema_body_literal.is_untyped_int_literal(ctx, left_node)
+  if defer_left
+    pass_left_id = I32::sema_type_env.Builtin_type_id.unknown
+  $left_type_id: = left_node.infer_expr(ctx, pass_left_id)?
+  if defer_left && !ctx.env.is_pointer(left_type_id)
+    left_type_id = left_node.settle_expected(ctx, left_type_id, expected_id)?
+
+  // Detects a meaningless comparison `a == a`. A bare variable reference is a k_expr_path after
+  // normalization, so is_path_or_ident accepts both.
+  // Caution: **Check it after the left-hand side has its type.** Checked by name alone, a
+  // floating-point `f != f` (IEEE 754's only test for NaN) would get a warning.
+  if base_core.config.run_lint_checks && is_cmp && !ctx.env.is_float(left_type_id) &&
+    left_node.is_path_or_ident() && right_node.is_path_or_ident() && left_node.text.len > 0 &&
+    left_node.text.equals(right_node.text)
+    always_val: =
+      "true." if op_text.equals("==") || op_text.equals("<=") || op_text.equals(">=") else "false."
+    ctx.clear_scratch()
+      .s("[W0204] Meaningless comparison: '\{left_node.text\} \{op_text\} \{right_node.text\}' is \
+        always \{always_val\}")
+    ctx.warn(node, ctx.scratch.slice())
+
+  // [W0109] KSPL ranks `&` `|` `^` with `*` ("The operator list and precedence" in
+  // docs/SPEC-language.md), C below comparison, so the same text parses differently. **Neither
+  // types nor the run time catch it**: only the answer changes (`6 & 4 == 4` is true in KSPL only).
+  if base_core.config.run_lint_checks && is_cmp &&
+    (is_bare_bitwise(left_node) || is_bare_bitwise(right_node))
+    ctx.clear_scratch()
+      .s("[W0109] '&', '|' and '^' bind tighter than comparison in KSPL (they sit with '*'), so the \
+        bitwise operand groups first. C groups the same spelling the other way round. Add \
+        parentheses to state the grouping in the source.")
+    ctx.warn(node, ctx.scratch.slice())
+
+  op_traits: = get_op_traits(op_text)
+  method_name: = op_traits.method_name
+  trait_name: = op_traits.trait_name
+  if method_name.len > 0
+    resolved: = ctx.resolve_operator_call(left_type_id, trait_name, method_name, "Operator",
+      op_text, node)
+    switch resolved case .user(method_sym)
+      node.def_node = method_sym.node
+      right_node.infer_expr(ctx, I32::sema_type_env.Builtin_type_id.unknown)?
+      node.type_id = method_sym.type_id
+      return method_sym.type_id
+    case .failed
+      return I32::sema_type_env.Builtin_type_id.unknown
+    case .builtin {}
+
+  $pass_right_id: = left_type_id
+  $is_left_enum: = false
+  $left_real: = ctx.env.get_real_type(left_type_id)
+
+  if left_real != 0 && !sema_type_env.is_unknown(left_real)
+    switch ctx.env.get_info(left_real) case .enum_type(_d)
+      is_left_enum = true
+    default {}
+
+  if !is_left_enum && (ctx.env.is_numeric(left_type_id) || is_cmp)
+    pass_right_id = I32::sema_type_env.Builtin_type_id.unknown
+  if is_logical || ctx.env.is_pointer(left_type_id) || ctx.env.is_fn_ptr(left_type_id)
+    pass_right_id = I32::sema_type_env.Builtin_type_id.unknown
+
+  // **Pass the left-hand side's type only to an integer literal with no fixed type**, and only
+  // where the outer expected type equals it: other operands are promoted to the wider side by the
+  // assignment above, but a literal has no type of its own to promote.
+  // Caution: **Do not include a shift.** The amount's type is independent of the left-hand side's
+  // ("Shifts are outside the exception" in docs/SPEC-language.md).
+  if ctx.env.is_integer(left_type_id) && !is_logical && !is_shift &&
+    ctx.env.get_real_type(expected_id) == ctx.env.get_real_type(left_type_id) &&
+    sema_body_literal.is_untyped_int_literal(ctx, right_node)
+    pass_right_id = left_type_id
+
+  right_type_id: = right_node.infer_expr(ctx, pass_right_id)?
+
+  // Caution: **Do not let a binary operation on a slice pass.** The generated C would operate on
+  // the `ptr`+`len` structs, and the user would get the C compiler's `invalid operands to binary
+  // expression` instead of KSPL's diagnostic (Principle 5). Pointers are excluded: `(p + i)$` and
+  // `q - p` are forms KSPL has.
+  if ctx.env.is_slice(left_type_id) || ctx.env.is_slice(right_type_id)
+    bad_id: = left_type_id if ctx.env.is_slice(left_type_id) else right_type_id
+    // Caution: Show the sugar the user wrote, not the internal name (`U8 immut[]` /
+    // `std_lang_Slice_U8_Const`; `../type/display.kspls`).
+    $shown: = ctx.env.display_str(bad_id)
+    defer shown.free()
+    ctx.clear_scratch()
+      .s("Operator '\{op_text\}' cannot be applied to slice type '\{shown.slice()\}'; ")
+      .s("slices have no arithmetic or ordering (compare contents with 'equals', read elements with \
+        '[]')")
+    ctx.err(node, ctx.scratch.slice())
+    return I32::sema_type_env.Builtin_type_id.unknown
+
+  // Caution: **Do not let arithmetic or shifts on a `Bool` pass.** They become integer operations
+  // on C's `_Bool` and silently give wrong answers; `b1 / b2` **crashes with SIGFPE** when the
+  // divisor is false (`kspl_sdiv`'s zero check applies to numeric types only). Allowed are
+  // `== != < > <= >=` (Rust has `bool: Ord` too) and `& | ^` (logic without short-circuiting).
+  if is_bool_arith_operand(ctx, left_type_id, right_type_id, op_text, is_shift)
+    bad_id: = left_type_id if ctx.env.is_bool(left_type_id) else right_type_id
+    $shown: = ctx.env.display_str(bad_id)
+    defer shown.free()
+    ctx.clear_scratch().s("Operator '\{op_text\}' cannot be applied to '\{shown.slice()\}'; ")
+      .s("convert first ('I32::flag') for arithmetic and bit operations, or use ")
+      .s("'&&' / '||' for logic ('&' / '|' / '^' when both sides must be evaluated)")
+    ctx.err(node, ctx.scratch.slice())
+    return I32::sema_type_env.Builtin_type_id.unknown
+
+  // Caution: **Check the divisor and the shift amount after inferring the right-hand side.**
+  // Folding takes the width and the sign from the operands' `type_id` (eval_binary in
+  // sema/decl/eval.kspls); a compound assignment (sema/body/stmt.kspls) also calls here after it.
+  if op_text.equals("/") || op_text.equals("%")
+    check_const_divisor(ctx, left_type_id, right_node)
+  if is_shift
+    check_const_shift_amount(ctx, left_type_id, right_node)
+
+  // An integer literal with no fixed type must fit the type the operation is computed in.
+  // Caution: Measure against **the type after promotion**. When the other side is such a literal
+  // too, its type is the default I32, which would reject a correct `x: U64 = 4294967296 + 1;`.
+  // report_diagnostic merges a repeated report.
+  if !ctx.is_instantiating()
+    operand_id: = ctx.env.get_promoted_numeric_type(left_type_id, right_type_id)
+    sema_body_literal.check_operand_literal_bounds(ctx, left_node, operand_id)
+    sema_body_literal.check_operand_literal_bounds(ctx, right_node, operand_id)
+
+  if base_core.config.run_lint_checks && (op_text.equals("==") || op_text.equals("!="))
+    if left_type_id == (I32::sema_type_env.Builtin_type_id.bool_type) &&
+      right_type_id == (I32::sema_type_env.Builtin_type_id.bool_type)
+      left_is_lit: = left_node.kind_id == .k_bool
+      right_is_lit: = right_node.kind_id == .k_bool
+      if left_is_lit || right_is_lit
+        ctx.information(node,
+          "[I0302] Unnecessary boolean comparison. Use the boolean value directly or negate it with \
+            '!'.")
+
+  if base_core.config.run_lint_checks && is_logical
+    left_is_lit: = left_node.kind_id == .k_bool
+    right_is_lit: = right_node.kind_id == .k_bool
+    if left_is_lit || right_is_lit
+      ctx.information(node, "[I0303] Redundant logical operation with a boolean literal.")
+
+  // Pointer arithmetic has three forms: `p + i` / `p - i` (a pointer that many elements further)
+  // and `p - q` (the same pointee type; an `Sz` count of elements).
+  // Caution: **Reject anything else**, or KSPL says nothing and the user gets the C compiler's
+  // `invalid operands to binary expression`, or LLVM IR that does not build (Principle 5).
+  if !is_cmp && !is_logical &&
+    (ctx.env.is_pointer(left_type_id) || ctx.env.is_pointer(right_type_id)) &&
+    !pointer_arith_ok(ctx, op_text, left_type_id, right_type_id)
+    report_bad_pointer_arith(ctx, node, op_text, left_type_id, right_type_id)
+    return I32::sema_type_env.Builtin_type_id.unknown
+
+  $type_id: = left_type_id
+
+  if ctx.env.is_numeric(left_type_id) && ctx.env.is_numeric(right_type_id)
+    $calc_type: = ctx.env.get_promoted_numeric_type(left_type_id, right_type_id)
+    if is_shift
+      calc_type = left_type_id
+
+    // A literal with no fixed type directly under a unary minus is given the promoted type itself.
+    // Caution: **Do not wrap it in a cast**: that negates at I32, then widens a truncated value
+    // (settle_negated_literal in sema/body/literal.kspls). Shifts are left out: the amount's type
+    // is independent, and a negative amount is rejected separately.
+    $left_src: = left_type_id
+    $right_src: = right_type_id
+    if !is_shift
+      if sema_body_literal.settle_negated_literal(ctx, left_node, calc_type)
+        left_src = calc_type
+      if sema_body_literal.settle_negated_literal(ctx, right_node, calc_type)
+        right_src = calc_type
+
+    left_real = ctx.env.get_real_type(left_src)
+    calc_real: = ctx.env.get_real_type(calc_type)
+    if left_real != calc_real
+      left_node.wrap_implicit_cast(ctx, left_src, calc_type)
+
+    right_real: = ctx.env.get_real_type(right_src)
+    if right_real != calc_real
+      right_node.wrap_implicit_cast(ctx, right_src, calc_type)
+
+    type_id = calc_type
+
+  // **Subtracting one pointer from another gives not a pointer** but a count of elements, `Sz`
+  // (C's `ptrdiff_t`). Typed as the left-hand side, the result could be stored in a pointer; the
+  // user would then get C's `incompatible integer to pointer conversion` (Principle 5), and on
+  // LLVM a `ptrtoint` of an integer, **IR that does not build**.
+  if op_text.equals("-") && ctx.env.is_pointer(left_type_id) &&
+    ctx.env.is_pointer(right_type_id)
+    if !points_to_same(ctx, left_type_id, right_type_id)
+      $l_shown: = ctx.env.display_str(left_type_id)
+      defer l_shown.free()
+      $r_shown: = ctx.env.display_str(right_type_id)
+      defer r_shown.free()
+      ctx.clear_scratch().s("cannot subtract '\{r_shown.slice()\}' from '\{l_shown.slice()\}'; ")
+        .s("two pointers can be subtracted only when they point to the same type ")
+        .s("(the answer counts elements, so the element size must be one)")
+      ctx.err(node, ctx.scratch.slice())
+      return I32::sema_type_env.Builtin_type_id.unknown
+    type_id = I32::sema_type_env.Builtin_type_id.size_type
+
+  if is_cmp || is_logical
+    type_id = I32::sema_type_env.Builtin_type_id.bool_type
+  return type_id
+
+priv fn pointer_arith_ok(ctx: Sema_ctx$@, op_text: U8[], left_id: I32, right_id: I32): Bool //<
+  //< Whether pointer arithmetic is in an allowed form
+  //<
+  //< **A form whose left side is not a pointer is not allowed**: C's `i + p` is a second spelling
+  //< of one meaning (Principle 6).
+  if !ctx.env.is_pointer(left_id)
+    return false
+  if op_text.equals("+")
+    return !ctx.env.is_pointer(right_id) && ctx.env.is_integer(right_id)
+  if op_text.equals("-")
+    return ctx.env.is_pointer(right_id) || ctx.env.is_integer(right_id)
+  return false
+
+priv fn report_bad_pointer_arith(ctx: Sema_ctx$@, node: Ast_node$@, op_text: U8[], left_id: I32,
+  right_id: I32) //<
+    //< Rejects a disallowed form and lists the three allowed forms.
+  $l_shown: = ctx.env.display_str(left_id)
+  defer l_shown.free()
+  $r_shown: = ctx.env.display_str(right_id)
+  defer r_shown.free()
+  ctx.clear_scratch().s("operator '\{op_text\}' cannot be applied to '\{l_shown.slice()\}' and ")
+    .s("'\{r_shown.slice()\}'. Pointer arithmetic has three forms: 'p + i' and 'p - i' step by ")
+    .s("elements and give a pointer, and 'p - q' (same pointee type) counts the elements between ")
+  ctx.scratch.s("them")
+  ctx.err(node, ctx.scratch.slice())
+
+priv fn points_to_same(ctx: Sema_ctx$@, left_id: I32, right_id: I32): Bool //<
+  //< Whether two pointers point at the same type
+  //<
+  //< Caution: **Compare with the immutable mark dropped.** Of two pointers into the same array,
+  //< one alone can be a read-only view (`U8 immut@`).
+  l: = ctx.env.get_clean_real_type(ctx.env.strip_ptr(left_id))
+  r: = ctx.env.get_clean_real_type(ctx.env.strip_ptr(right_id))
+  return l == r

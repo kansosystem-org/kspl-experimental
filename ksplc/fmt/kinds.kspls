@@ -1,0 +1,112 @@
+//< Which node kinds and which token spellings the printer treats alike
+//<
+//< `rules` sorts the node kinds (a block, a bracketed container, a list, a statement or a
+//< declaration); the checks on `U8[]` sort a token's spelling (an operator, a bracket, a keyword
+//< that needs a space after it).
+import "ksplc/base/ast_kinds" as base_ast_kinds
+import "ksplc/base/core" as base_core
+import "std/str" // `equals`
+
+priv const f_flag_block_kind: I32 = 1
+priv const f_flag_brace_container: I32 = 2
+priv const f_flag_list_kind: I32 = 4
+priv const f_flag_stmt_or_decl: I32 = 8
+
+struct Fmt_rules
+  flags: I32[base_core.max_ast_kinds]
+  is_init: Bool
+
+$rules: Fmt_rules = ::{}
+
+impl Fmt_rules
+  priv fn set_flag(r: Self$@, kind_id: base_ast_kinds.Ast_kind, flag: I32)
+    if kind_id >= 0 && Sz::kind_id < r.flags.len
+      r.flags[kind_id] = r.flags[kind_id] | flag
+
+  fn init(r: Self$@)
+    if r.is_init
+      return
+    r.is_init = true
+
+    for i in Range.asc(r.flags.len)
+      r.flags[i] = 0
+
+    r.set_flag(.k_stmt_block, f_flag_block_kind)
+    r.set_flag(.k_stmt_labeled_block, f_flag_block_kind | f_flag_stmt_or_decl)
+    r.set_flag(.k_decl_struct, f_flag_block_kind | f_flag_stmt_or_decl)
+    r.set_flag(.k_decl_enum, f_flag_block_kind | f_flag_stmt_or_decl)
+    r.set_flag(.k_decl_trait, f_flag_block_kind | f_flag_stmt_or_decl)
+    r.set_flag(.k_decl_impl, f_flag_block_kind | f_flag_stmt_or_decl)
+    r.set_flag(.k_stmt_match, f_flag_block_kind)
+    r.set_flag(.k_decl_extern_block, f_flag_block_kind | f_flag_stmt_or_decl)
+
+    r.set_flag(.k_expr_compound, f_flag_brace_container)
+    r.set_flag(.k_struct_literal, f_flag_brace_container)
+    r.set_flag(.k_type_fn_sig, f_flag_brace_container)
+    r.set_flag(.k_type_args, f_flag_brace_container)
+    r.set_flag(.k_type_gen_params, f_flag_brace_container)
+    r.set_flag(.k_decl_import, f_flag_brace_container | f_flag_stmt_or_decl)
+    r.set_flag(.k_expr_postfix, f_flag_brace_container)
+    r.set_flag(.k_type_postfix, f_flag_brace_container)
+    r.set_flag(.k_enum_variant, f_flag_brace_container | f_flag_stmt_or_decl)
+    r.set_flag(.k_string_expr, f_flag_brace_container)
+
+    r.set_flag(.k_expr_args, f_flag_list_kind)
+    r.set_flag(.k_param_list, f_flag_list_kind)
+    r.set_flag(.k_identifier_list, f_flag_list_kind)
+    r.set_flag(.k_enum_payload, f_flag_list_kind)
+    r.set_flag(.k_enum_field, f_flag_list_kind)
+    // An attribute list (`#a #b`) has no commas, so no f_flag_list_kind: the comma rule would cut
+    // into it.
+
+    r.set_flag(.k_stmt, f_flag_stmt_or_decl)
+    r.set_flag(.k_top_level_item, f_flag_stmt_or_decl)
+    r.set_flag(.k_decl_top, f_flag_stmt_or_decl)
+    r.set_flag(.k_decl_extern, f_flag_stmt_or_decl)
+    r.set_flag(.k_decl_fn, f_flag_stmt_or_decl)
+    r.set_flag(.k_decl_const, f_flag_stmt_or_decl)
+    r.set_flag(.k_decl_alias, f_flag_stmt_or_decl)
+    r.set_flag(.k_decl_var, f_flag_stmt_or_decl)
+    r.set_flag(.k_struct_field, f_flag_stmt_or_decl)
+
+  priv fn has_flag(r: Self$@, kind_id: I32, flag: I32): Bool
+    return kind_id >= 0 && kind_id < r.flags.len && (r.flags[kind_id] & flag) != 0
+  fn is_block(r: Self$@, kind_id: I32): Bool
+    return r.has_flag(kind_id, f_flag_block_kind)
+  fn is_brace_container(r: Self$@, kind_id: I32): Bool
+    return r.has_flag(kind_id, f_flag_brace_container)
+  fn is_list(r: Self$@, kind_id: I32): Bool
+    return r.has_flag(kind_id, f_flag_list_kind)
+  fn is_stmt_or_decl(r: Self$@, kind_id: I32): Bool
+    return r.has_flag(kind_id, f_flag_stmt_or_decl)
+
+impl U8[]
+  fn is_space_required_keyword(r: Self): Bool
+    return r.equals("return") || r.equals("throw") || r.equals("fallback") || r.equals("case") ||
+      r.equals("default") || r.equals("else") || r.equals("switch") || r.equals("catch") ||
+      r.equals("as") || r.equals("import") || r.equals("embed") || r.equals("extern") ||
+      r.equals("impl") || r.equals("trait") || r.equals("if") || r.equals("for") ||
+      r.equals("defer")
+
+  fn is_op(r: Self): Bool
+    return r.equals("=") || r.equals("==") || r.equals("!=") || r.equals("<=") ||
+      r.equals(">=") || r.equals("<") || r.equals(">") || r.equals("+") || r.equals("-") ||
+      r.equals("*") || r.equals("/") || r.equals("%") || r.equals("&&") || r.equals("||") ||
+      r.equals("!") || r.equals("~") || r.equals("+=") || r.equals("-=") || r.equals("*=") ||
+      r.equals("/=") || r.equals("%=") || r.equals("<<=") || r.equals(">>=") || r.equals("&=") ||
+      r.equals("|=") || r.equals("^=") || r.equals("|") || r.equals("&") || r.equals("^") ||
+      r.equals("<<") || r.equals(">>") || r.equals("catch") || r.equals("::") ||
+      r.equals("assign_op") || r.equals(":") || r.equals("->")
+
+  fn is_unary_prefix(r: Self): Bool
+    return r.equals("!") || r.equals("~")
+
+  fn is_closing_bracket(r: Self): Bool
+    return r.equals(")") || r.equals("]") || r.equals("}") || r.equals("|>")
+  fn is_compound_sigil(r: Self): Bool //<
+    //< A compound literal's opening sigil (the old ".{" / the prefixed "::{")
+    return r.equals(".{") || r.equals("::{")
+
+  fn is_opening_bracket(r: Self): Bool
+    return r.equals("(") || r.equals("[") || r.equals("{") || r.is_compound_sigil() ||
+      r.equals("<|")

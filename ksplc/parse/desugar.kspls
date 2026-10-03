@@ -1,0 +1,386 @@
+//< The desugaring that needs no types: one post-order walk over a file's normalized tree
+//<
+//< `run` is the one entry point and `desugar_node` the one walk. A `for x in`, a binding `if`, a
+//< string's interpolation, an anonymous function or closure (`desugar_closure.kspls`) and a written
+//< slice type (`desugar_slice.kspls`) are each expanded on the way; what needs types is Sema's
+//< ("Which sugar belongs to which layer (the list)" in `../docs/DESIGN.md`).
+import "kspeg/engine" as kspeg
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/core" as base_core
+import "ksplc/base/diag" as base_diag
+import "ksplc/parse/desugar_closure" as parse_desugar_closure
+import "ksplc/parse/desugar_slice" as parse_desugar_slice
+import "ksplc/parse/format_spec" as parse_format_spec
+import "std/ds" { List, Map }
+import "std/str" { Str_builder }
+
+// The number that keeps a for-in expansion's temporaries (the collection's cache and the index)
+// apart from those of other loops and from a user variable of the same name. **It resets to 0 at
+// the start of each function** (the reason is at desugar_node).
+priv $for_in_counter: Sz = 0
+
+const closure_empty_field: U8[] = "_empty" //<
+  //< The field name of the padding in an environment with zero captures (C99 has no empty struct)
+
+struct Desugar_ctx //<
+  //< What the walk carries from node to node
+  //<
+  //< That is the closure synthesis's parser and serials, the statements to put before the current
+  //< one, and whether a diagnostic was reported.
+  parser: kspeg.Target$@ //<
+    //< The parser for a synthesized declaration (it shares only the grammar; its state is fresh)
+  source_map: Map<|U8[], U8$[]|>$@ //<
+    //< The table for looking up a source line for a diagnostic (file name -> source).
+  lifted: List<|Ast_node$@|>$@ //< the synthesized declarations to add to the top level
+  hoisted: List<|Ast_node$@|>$@ //<
+    //< The statements inserted **before** the statement being handled now
+    //<
+    //< They are the temporaries binding a closure's value. Only an lvalue can be passed to a
+    //< trait, so a `::{}`'s result cannot be placed directly in an argument.
+  gen_params: List<|U8[]|>$@ //<
+    //< The type argument names of the enclosing declarations, innermost last
+    //<
+    //< They are pushed during the walk (an `fn f<|U|>` inside an `impl<|T|>` holds both). Those a
+    //< closure's signature uses are copied to its synthesized declarations.
+  anon_serials: Map<|U8[], Sz|>$@ //<
+    //< The **per-file** serial for naming the declaration an anonymous function is lifted into
+  block_depth: Sz //<
+    //< How many levels of block it is inside now
+    //<
+    //< At 0 there is nowhere to insert a statement (desugar_closure checks it).
+  ok: Bool //< false once `desugar_err` has reported a diagnostic; `run` returns it
+
+fn run(root: Ast_node$@, parser: kspeg.Target$@, source_map: Map<|U8[], U8$[]|>$@): Bool
+  base_diag.ice_assert(root != null, "desugar.run: root is null")
+  serials: = Map<|U8[], Sz|>.new(base_core.arena)
+  cc: = Desugar_ctx::{ .parser = parser, .source_map = source_map,
+    .lifted = base_ast.new_ast_node_list(), .hoisted = base_ast.new_ast_node_list(),
+    .gen_params = List<|U8[]|>.create(base_core.arena),
+    .anon_serials = base_core.arena.create(serials), .block_depth = 0, .ok = true }
+  ctx: = base_core.arena.create(cc)
+  lifted: = ctx.lifted
+  root.desugar_node(ctx)
+  // A lifted function is added at the end of the top level. Both C and LLVM emit a function's
+  // forward declaration first (emit_function_prototypes in gen/c/decl.kspls), so the definition may
+  // come after the position that uses it.
+  for fn_decl in lifted
+    root.add_child(fn_decl)
+  return ctx.ok
+
+impl Ast_node
+  priv fn desugar_node(r: Ast_node$@, ctx: Desugar_ctx$@)
+    if r == null
+      return
+    // It first expands a slice made from a list of elements (`T[]::{ v1, v2, … }`); the walk below
+    // descends into the result.
+    // Caution: **Do this before the slice type is folded.** Its check looks at the postfix `[]`;
+    // once that is rewritten to `Slice<|T|>`, the elements read as the descriptor's fields (`too
+    // many initializers for struct`).
+    if r.kind_id == .k_struct_literal
+      r.desugar_slice_elems()
+    // It rewrites a written `T[]` into `Slice<|$T|>`.
+    // Caution: **Finish it before descending into the children.** It folds the run of postfixes, so
+    // with the children walked first the inner level would look doubled.
+    if r.kind_id == .k_type_expr
+      r.fold_slice_postfixes()
+    // A block walks its children itself: a closure's temporaries go **before** their statement, so
+    // walking and flushing alternate per statement. Walked here like any node, a nested block's
+    // temporaries would come out before the first statement and capture a name not yet declared.
+    if r.kind_id == .k_stmt_block
+      r.desugar_stmt_block(ctx)
+      return
+
+    // Caution: **Reset it to 0 per function.** As one running count, a `for x in …` added early
+    // would shift every later number and inflate the generated C's diff (`ksplc/seed.c` is in git).
+    // Numbers repeat only across functions, where C's locals do not collide.
+    if r.kind_id == .k_decl_fn
+      for_in_counter = 0
+
+    // It adds the enclosing declaration's type arguments only while walking inside it.
+    gen_depth: = ctx.gen_params.len
+    r.push_gen_params(ctx)
+
+    // Post-order traversal: the child nodes are expanded first.
+    for child in r.children
+      child.desugar_node(ctx)
+    ctx.gen_params.len = gen_depth
+
+    if r.kind_id == .k_expr_postfix
+      r.desugar_expr_postfix(ctx)
+    else if r.kind_id == .k_expr_fn_lit
+      r.desugar_fn_lit(ctx)
+
+  priv fn desugar_slice_elems(r: Ast_node$@) //<
+    //< It expands a `T[]::{ v1, v2, … }` (elements without field names) into a slice over an array
+    //<
+    //< The result is `T[]::(T[_]::{ v1, v2, … })`: a slice of an array made from the elements.
+    //<
+    //< **Field names tell it apart from building a descriptor** (`T[]::{ .ptr = p, .len = n }`). An
+    //< empty `T[]::{}` is left alone: a descriptor of length 0.
+    ty: = r.get_child(0) if r.children.len > 0 else null
+    if ty == null || ty.kind_id != .k_type_expr
+      return
+    last: = ty.last_child()
+    if last == null || last.kind_id != .k_type_postfix || !last.text.equals("[]")
+      return
+    $elems: Sz = 0
+    for child in r.children
+      if child.kind_id != .k_expr_field_init
+        continue
+      if child.get_field_init_name().is_some() || child.get_field_init_index().is_some()
+        return // names or indices: building a descriptor
+      elems += 1
+    if elems == 0
+      return
+    inner_ty: = ty.clone()
+    inner_ty.last_child().text = "[_]"
+    inner_children: = base_ast.new_ast_node_list()
+    inner_children.push(inner_ty)
+    for $i: = 1; i < r.children.len; i += 1
+      inner_children.push(r.get_child(i))
+    inner: = Ast_node.new(r.kind_id, r.text, r.loc)
+    inner.children = inner_children
+
+    cast: = base_ast.new_ast_node_list()
+    cast.push(inner)
+    cast.push(Ast_node.new(.k_literal, "::", r.loc))
+    cast.push(ty)
+    r.morph(.k_expr_postfix, "::")
+    r.children = cast
+
+  priv fn desugar_stmt_block(r: Ast_node$@, ctx: Desugar_ctx$@)
+    ctx.block_depth += 1
+    defer ctx.block_depth -= 1
+    new_children: = base_ast.new_ast_node_list()
+    for stmt in r.children
+      // It expands this statement's subtree first; a closure's temporaries go onto ctx.hoisted.
+      // Caution: **Flush only what this statement pushed.** ctx.hoisted is shared, so flushing from
+      // `0` lets a nested block (a closure's body is one) take the outer statement's temporaries.
+      start: = ctx.hoisted.len
+      stmt.desugar_node(ctx)
+      // **Insert them before that statement**: binding inside the same statement does not put an
+      // lvalue in the argument's place.
+      for $hi: = start; hi < ctx.hoisted.len; hi += 1
+        new_children.push(ctx.hoisted.get(hi))
+      ctx.hoisted.len = start
+
+      // `for item in collection { ... }`, marked by the bare k_identifier normalize_loop
+      // (parse/normalize_stmt.kspls) leaves at loop_init. It becomes two statements (the
+      // collection's cache plus a C-style for), so it is handled here, where the statement list
+      // can be rebuilt.
+      if stmt.kind_id == .k_stmt_loop
+        init_node: = stmt.get_loop_init()
+        if init_node != null && init_node.kind_id == .k_identifier
+          stmt.desugar_for_in_loop(new_children)
+          continue
+
+      // `if v: = X { … }`: where the condition's position is a k_if_bind it is an Option binding.
+      if stmt.kind_id == .k_stmt_if
+        cond_node: = stmt.get_if_cond()
+        if cond_node != null && cond_node.kind_id == .k_if_bind
+          new_children.push(stmt.desugar_if_bind())
+          continue
+
+      new_children.push(stmt)
+    r.children = new_children
+
+  priv fn desugar_for_in_loop(r: Ast_node$@, new_children: List<|Ast_node$@|>$@) //<
+    //< It copies a `for … in`'s collection into a temporary and leaves the expansion to sema
+    //<
+    //< _for_coll_N: = collection; for item; _for_coll_N; ; { ...the original body... }   <- item is
+    //< the marker; sema expands it
+    loc: = r.loc
+    coll_expr: = r.get_loop_cond()
+
+    for_in_counter += 1
+    $suffix: = Str_builder.new()
+    defer suffix.free()
+    suffix.s("\{for_in_counter\}")
+    // Caution: build_temp_name's copy into the arena is required: `suffix.slice()` points into the
+    // builder's buffer, which is gone after `defer suffix.free()`.
+    coll_name: = build_temp_name("_for_coll", suffix.slice())
+
+    // The collection expression is copied into a temporary.
+    // Caution: **Copy it here**, or an expression with side effects runs again every iteration;
+    // only this layer, which rebuilds the statement list, can insert it.
+    new_children.push(Ast_node.build_inferred_var_decl(coll_name, coll_expr, loc))
+
+    // **The loop itself is not expanded here**: an index or `next()` depends on the collection's
+    // type, which this layer does not know (`ksplc/sema/body/for_in.kspls` expands it). The
+    // condition becomes the temporary, and item's identifier stays at init as the marker.
+    loop_children: = base_ast.new_ast_node_list()
+    loop_children
+      .push(r.get_loop_label() if r.get_loop_label() != null
+      else Ast_node.new(.k_empty, "", loc))
+    loop_children.push(r.get_loop_init())
+    loop_children.push(Ast_node.build_ident(coll_name, 0, loc))
+    loop_children.push(Ast_node.new(.k_empty, "", loc))
+    loop_children.push(r.get_loop_block())
+    r.children = loop_children
+    new_children.push(r)
+
+  priv fn desugar_expr_postfix(r: Ast_node$@, ctx: Desugar_ctx$@)
+    // A call whose first argument is an interpolated string (one holding a \{expr\}).
+    if r.children.len < 3
+      return
+    op_node: = r.get_postfix_op()
+    if op_node == null || !op_node.text.equals("(")
+      return
+
+    args_node: = r.safe_get_child(2)
+    if args_node == null || args_node.kind_id != .k_expr_args || args_node.children.len == 0
+      return
+
+    first_arg: = args_node.get_child(0)
+    if first_arg.kind_id != .k_string_interp
+      return
+    // Caution: **Expand only a call on a `.` chain.** The expansion splices `.s(...)` / `.fmt(...)`
+    // onto the receiver as a Writer, so on `f("...\{x\}")` it would report an unwritten `f.s`; left
+    // alone, sema reports at the interpolation itself (k_string_interp in sema/body/expr.kspls).
+    recv: = r.get_postfix_receiver()
+    recv_op: =
+      recv.get_postfix_op() if recv != null && recv.kind_id == .k_expr_postfix else null
+    if recv_op == null || !recv_op.text.equals(".")
+      return
+    // It expands an interpolated string's call into a method chain.
+    r.desugar_string_call(first_arg, ctx)
+
+  priv fn desugar_string_call(r: Ast_node$@, string_node: Ast_node$@, ctx: Desugar_ctx$@)
+    loc: = r.loc
+    m_access: = r.get_postfix_receiver()
+    // Desugar runs before Sema, so the receiver has been parsed as a .k_expr_postfix.
+    op_node: =
+      m_access.get_postfix_op() if m_access != null && m_access.kind_id == .k_expr_postfix else null
+    $current_recv: =
+      (m_access.get_postfix_receiver()
+      if op_node != null && op_node.text.equals(".") && m_access.get_postfix_receiver() != null
+      else m_access)
+
+    // The chain starts with a `.s(…)` on the receiver, an empty one where the text opens `\{…\}`.
+    // Caution: **Do not omit this empty write.** Only a method's receiver takes its address
+    // implicitly, and the receiver can be a value (`$b: = Str_builder.new()`): a `put` at the head
+    // would write into a copy of `b`.
+    $has_parts: = false
+    first_part: = string_node.get_child(0) if string_node.children.len > 0 else null
+    if first_part != null && first_part.kind_id == .k_string_expr
+      empty_node: = Ast_node.new(.k_string, "\"\"", loc)
+      current_recv = Ast_node.build_method_call(current_recv, "s", empty_node, 0, loc)
+      has_parts = true
+    for part in string_node.children
+      if part.kind_id == .k_string_content
+        $str_text: = Str_builder.new()
+        str_text.s("\"").s(part.text).s("\"")
+        str_slice: = str_text.slice()
+        str_node: = Ast_node.new(.k_string, base_core.arena.dup_str(str_slice), part.loc)
+        str_text.free()
+
+        current_recv = Ast_node.build_method_call(current_recv, "s", str_node, 0, part.loc)
+        has_parts = true
+      else if part.kind_id == .k_string_expr
+        if expr_node: = part.first_expr()
+          spec_text: = part.find_text(.k_format_spec)
+          $fmt_recv: = expr_node
+          if spec_text.len > 0
+            $rest: U8[] = ""
+            if !parse_format_spec.is_complete(spec_text, rest@)
+              part.format_spec_err(ctx, spec_text, rest)
+            $bad: U8[] = ""
+            $owner: U8[] = ""
+            if !parse_format_spec.combination_is_valid(spec_text, bad@, owner@)
+              part.format_spec_combo_err(ctx, spec_text, bad, owner)
+            // Caution: **Do not map names to methods here** (the canonical source is build_call in
+            // `ksplc/parse/format_spec.kspls`).
+            call: = parse_format_spec.build_call(spec_text, part.loc)
+            fmt_recv = Ast_node.build_method_call(expr_node, call.method, call.args, 0, part.loc)
+
+          // Caution: **Do not make it `fmt_recv.fmt(current_recv)`.** `Formattable.fmt` returns the
+          // trait `Writer`, losing `Str_builder` and its `.slice()` further along the chain; `put`
+          // returns the destination in the type it was given (std/lang.kspls).
+          put_args: = Ast_node.new(.k_expr_args, "args", part.loc)
+          put_args.add_child(current_recv)
+          put_args.add_child(fmt_recv)
+          current_recv = Ast_node.build_fn_call("put", put_args, part.loc)
+          has_parts = true
+
+    if !has_parts
+      str_node: = Ast_node.new(.k_string, "\"\"", loc)
+      current_recv = Ast_node.build_method_call(current_recv, "s", str_node, 0, loc)
+    // It overwrites the original call node with the transformed AST chain.
+    r.morph(current_recv.kind_id, current_recv.text)
+    r.children = current_recv.children
+
+impl Ast_node
+  fn desugar_err(r: Ast_node$@, ctx: Desugar_ctx$@, msg: U8[]) //<
+    //< It reports an error the desugaring found at the position the user wrote
+    //<
+    //< **It is the only function here that reports.**
+    //< Caution: **Set `ctx.ok` to false.** The desugaring rewrites the tree rather than returning a
+    //< value, so otherwise the error reaches sema as a distant diagnostic about a synthesized name.
+    src: = ctx.source_map.get(r.loc.file()) catch ""
+    starts: = src.line_starts(base_core.arena)
+    base_diag.print_diagnostic(r.loc.file(), src, r.loc.offset, 1, msg, .error, starts)
+    ctx.ok = false
+
+  fn format_spec_err(r: Ast_node$@, ctx: Desugar_ctx$@, spec: U8[], rest: U8[]) //<
+    //< It reports text left over that cannot be read as a format specification
+    $m: = Str_builder.new()
+    defer m.free()
+    m
+      .s("unrecognized format spec ':\{spec\}'; could not read '\{rest\}'. The order is fixed: \
+        zero-pad, width, ',', then '.precision' (for example '08.2')")
+    r.desugar_err(ctx, m.slice())
+
+  fn format_spec_combo_err(r: Ast_node$@, ctx: Desugar_ctx$@, spec: U8[], bad: U8[], owner: U8[]) //<
+    //< It reports a format specification whose items cannot be combined
+    $m: = Str_builder.new()
+    defer m.free()
+    m.s("format spec ':\{spec\}' combines '\{bad\}' with '\{owner\}', which has nothing to apply ")
+      .s("it to. ")
+      .s("'c' takes nothing else (it writes one byte as a character)" if owner.equals("c")
+      else "Hex takes only zero-pad and width (for example '08x')")
+    r.desugar_err(ctx, m.slice())
+
+  priv fn desugar_if_bind(r: Ast_node$@): Ast_node$@ //<
+    //< It folds `if v: = X { A } else { B }` into `switch X case .some(v) { A } case .none { B }`
+    //<
+    //< Sema, which knows the types, rejects anything but `Option`; this side only builds the shape
+    //< (`../sema/body/match.kspls` reads the mark it leaves). The grounds are in "Branching" in
+    //< `../../docs/SPEC-language.md`.
+    //< Caution: **Keep it to `Option`.** On a user's enum, a variant added later makes a branch
+    //< that silently passes through; `Option` always has exactly two.
+    //< The original `loc` is kept, so a diagnostic points at the line the user wrote.
+    loc: = r.loc
+    bind: = r.get_if_cond()
+    name_node: = bind.get_child(0)
+    subject: = bind.get_child(1)
+    then_block: = r.get_if_then_block()
+    else_block: = r.get_if_else_block()
+
+    none_block: =
+      else_block if else_block != null else Ast_node.new(.k_stmt_block, "stmt_block", loc)
+    return Ast_node.build_option_match(subject, name_node.text, then_block, none_block,
+      r.safe_get_child(0), base_ast_ext.if_bind_mark, loc)
+
+fn next_anon_serial(ctx: Desugar_ctx$@, file: U8[]): Sz //<
+  //< The next per-file number for the declaration an anonymous function is lifted into
+  //<
+  //< Caution: **Count it per file, never per function** (unlike `for_in_counter`): the lifted
+  //< declaration is a top-level `priv`, and `write_priv_prefix_to` in `lower/abi.kspls` makes its C
+  //< name unique by the file path.
+  n: = (ctx.anon_serials.get(file) catch 0) + 1
+  ctx.anon_serials.set(file, n)
+  return n
+
+fn build_temp_name(prefix: U8[], suffix: U8[]): U8[] //<
+  //< It joins the prefix and a running number into a temporary's name, copied into the arena
+  return base_core.arena.text().s(prefix).s(suffix).take()
+
+fn serial_str(serial: Sz): U8[]
+  return base_core.arena.text().s("\{serial\}").take()
+
+fn build_path_ref(name: U8[], loc: base_ast.Loc): Ast_node$@ //<
+  //< A reference to a plain name (one `Identifier` under an `expr_path`)
+  //<
+  //< This is the only shape lower/abi.kspls mangles (the reason is at desugar_fn_lit).
+  return Ast_node.new(.k_expr_path, name, loc).add_child(Ast_node.build_ident(name, 0, loc))

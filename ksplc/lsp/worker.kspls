@@ -1,0 +1,472 @@
+//< The worker: analyses and answers the requests the supervisor forwards, one at a time
+//<
+//< The supervisor (`server.kspls`) owns the stdio with the editor; a worker that crashes or hangs
+//< is restarted and the open documents replayed into it. **Every method is routed in one place**
+//< (`dispatch`), each named once, with the state it is answered from built in its own branch: the
+//< document's (`document_state`) or the workspace's (`workspace_state`).
+import "kspeg/engine" as kspeg
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/cfg_inactive" as base_cfg_inactive
+import "ksplc/base/core" as base_core
+import "ksplc/base/diag" as base_diag
+import "ksplc/base/package" as base_package
+import "ksplc/lsp/call_hier" as lsp_call_hier
+import "ksplc/lsp/complete" as lsp_complete
+import "ksplc/lsp/hover" as lsp_hover
+import "ksplc/lsp/msg" as lsp_msg
+import "ksplc/lsp/nav" as lsp_nav
+import "ksplc/lsp/semtok" as lsp_semtok
+import "ksplc/lsp/state" { Doc_state, Server }
+import "ksplc/lsp/uses" as lsp_uses
+import "ksplc/lsp/workspace" as lsp_workspace
+import "ksplc/parse/layout" as parse_layout
+import "ksplc/parse/load" as parse_load
+import "ksplc/pipeline"
+import "std/chars"
+import "std/ds" { List, Map }
+import "std/io"
+import "std/json" + { Json_builder }
+import "std/mem" { Arena, dealloc }
+import "std/str" { Str_builder }
+import "std/sys"
+
+priv const layout_scratch_bytes: Sz = 8 * 1024 * 1024 //<
+  //< The scratch area for converting the indentation notation
+  //<
+  //< Caution: **Make it well larger than one document.** The converted text is copied into the
+  //< store and into Doc_state, so this is discarded each round.
+
+priv fn doc_name(uri: U8[]): U8[] //<
+  //< The logical name the compiler knows a document or a walked file by
+  //<
+  //< Inside a package that declares its name it is `<name>/<path from the package root>`, wherever
+  //< the editor was opened (`name_entry` in `../base/package.kspls`).
+  //< Caution: **Every lookup names a file through here.** The source map, the document's own
+  //< nodes, the workspace walk and the layout notes find one file by this name; if one named it
+  //< differently, the compiler would read the disk instead of the buffer, or load one file twice.
+  return base_package.name_entry(uri.strip_file_uri())
+
+priv fn doc_path(uri: U8[]): U8[] //<
+  //< A document's path in the form the pipeline takes an entry file, without the default extension
+  //<
+  //< Caution: **Give the pipeline this, never `doc_name`.** The pipeline names what it is given
+  //< itself, as with a path from the command line, and a name read as a path again gets the
+  //< package's name twice (`mypkg/mypkg/lib`).
+  return uri.strip_file_uri().strip_kspl_ext()
+
+priv fn populate_source_map_from_store(server: Server$@,
+  source_map: Map<|U8[], U8$[]|>$@)
+  for entry in server.docs.map.items()
+    // Caution: Skip a closed document. The entry remains, so reading it would put an empty
+    // source over the file.
+    if !entry.value.is_open
+      continue
+    doc_uri: = entry.key
+    doc_local: = doc_name(doc_uri)
+    perm_doc_local: = base_core.arena.dup_str(doc_local)
+    doc_src: = entry.value.text.slice()
+    perm_doc_src: = base_core.arena.dup_str(doc_src)
+    source_map.set(perm_doc_local, perm_doc_src)
+
+    if perm_doc_local.has_kspl_ext()
+      no_ext: = perm_doc_local.strip_kspl_ext()
+      perm_no_ext: = base_core.arena.dup_str(no_ext)
+      source_map.set(perm_no_ext, perm_doc_src)
+
+priv fn init_doc_compiler(server: Server$@, ptr: Doc_state$@): pipeline.Compiler$@
+  // Caution: **The URI becomes the one logical name here** (`doc_name` above). The AST records a
+  // file by its logical name; with only the scheme stripped an absolute URI would not match it, so
+  // `traverse_and_find_best` rejects every node of the open document and the editor shows nothing.
+  ptr.mod_name_perm = base_core.arena.dup_str(doc_name(ptr.uri_perm).strip_kspl_ext())
+
+  compiler: = pipeline.Compiler.new(server.base_parser)
+  populate_source_map_from_store(server, compiler.source_map)
+  compiler.parse_file(doc_path(ptr.uri_perm), ptr.src_perm, false) catch {}
+  return compiler
+
+priv fn search_word(hint: U8[], src: U8[], params: json.Val): U8[] //<
+  //< The name used to pre-filter the files to read
+  //<
+  //< Where `hint` is empty it is taken from the source at `params`' position. **The source holds
+  //< only the bare identifier**, so the fully qualified name the call hierarchy sends is cut to
+  //< its last part; searched whole it matches no file. Off a name the answer is empty, and only
+  //< the entry file's import tree is read.
+  if hint.len > 0
+    dot: = hint.rfind_char('.')
+    return hint.sub_from(dot + 1) if dot >= 0 else hint
+  switch params.get("position") case .null_val
+    return ""
+  default {}
+  return word_at(src, lsp_msg.offset_at(src, params))
+
+priv fn word_at(src: U8[], at: Sz): U8[] //< the identifier at that position
+  //<
+  //< Caution: **Do not narrow what counts as a name** — narrowed, a cursor on a name yields no
+  //< search word, and it answers without reading the file that should have matched.
+  if at >= src.len
+    return ""
+  $from: Sz = at
+  for from > 0 && src[from - 1].is_alnum()
+    from -= 1
+  $to: Sz = at
+  for to < src.len && src[to].is_alnum()
+    to += 1
+  return src.sub(from, to - from)
+
+priv fn mended_from_disk(path: U8[], raw: U8[]): U8[] //<
+  //< A source read straight from disk, normalized and, where needed, converted
+  //<
+  //< It is converted where its name says it is in the indentation notation.
+  //<
+  //< **Every path that reads the disk itself goes through here.** `pipeline.Compiler.parse_file`
+  //< takes what it is given as is (`../parse/load.kspls` normalizes and converts only what it
+  //< opened), so a path skipping this parses nothing, or reads a Windows checkout's files as
+  //< another program. The conversion's notes are dropped: a file's indentation problems are
+  //< reported through its own entry point (`record_layout_notes`).
+  $notes: = List<|parse_layout.Note|>.new(base_core.arena)
+  return parse_layout.mend(raw, path.is_laid_out(), notes@, base_core.arena).code
+
+priv fn build_workspace_state(server: Server$@, target_uri: U8[], search_hint: U8[],
+  params: json.Val): Doc_state$@
+  arena_state: = base_core.arena.save()
+  uri_perm: = base_core.arena.dup_str(target_uri)
+  ptr: = base_core.arena.create(Doc_state::{ .arena_state = arena_state, .uri_perm = uri_perm })
+
+  $target_src: U8[] = ""
+  switch server.docs.open_text(target_uri) case .some(text)
+    target_src = text
+  default {}
+
+  if target_src.len == 0
+    $file_path: = Str_builder.new()
+    defer file_path.free()
+    file_path.s(target_uri.strip_file_uri())
+    file_path.ensure_kspl_ext()
+    src: = io.read_file(file_path.slice()) catch U8$[]::{ .ptr = null, .len = 0 }
+    if src.ptr != null
+      target_src = base_core.arena.dup_str(mended_from_disk(file_path.slice(), src))
+      dealloc(Void$@::src.ptr)
+
+  ptr.src_perm = base_core.arena.dup_str(target_src)
+  old_name: = search_word(search_hint, ptr.src_perm, params)
+  compiler: = init_doc_compiler(server, ptr)
+
+  // The "already loaded" check reads a local Map kept in sync with `compiler.loaded_files` (one
+  // load can add several entries through imports): amortized O(1), where walking the list per
+  // file would be O(N*M).
+  loaded_set: = base_core.arena.create(Map<|U8[], I32|>.new(base_core.arena))
+  $synced_len: Sz = 0
+
+  // **Every source under the root is read once, matched or not** — the filter looks at the text —
+  // and on slow storage one read can take hundreds of milliseconds, so progress is reported per
+  // file (`report_progress` does the rate limiting).
+  // Caution: **Do not rate-limit by count.** One entry's cost varies by orders of magnitude between
+  // environments, so counting lets only the slow environments go past the watchdog's window.
+  ws_files: = lsp_workspace.workspace_kspl(base_core.arena)
+  for file_path in ws_files
+    base_core.report_progress()
+    logical: = doc_name(file_path).strip_kspl_ext()
+
+    for synced_len < compiler.loaded_files.len
+      loaded_set.set(compiler.loaded_files.get(synced_len), 1)
+      synced_len += 1
+    already_loaded: = (loaded_set.get(logical) catch 0) != 0
+
+    if !already_loaded
+      src_text: = io.read_file(file_path) catch U8$[]::{ .ptr = null, .len = 0 }
+      if src_text.ptr != null
+        // **Narrow by the whole identifier, not by a substring.** `at` occurs inside `that`, `data`
+        // and `validate`, and every file hit that way is parsed and analysed for nothing. It is the
+        // compiler's own rule (`mentions_ident` in `../base/ast_spell.kspls`).
+        if base_ast_spell.mentions_ident(src_text, old_name)
+          // Caution: **Pass the text read here.** `source_map` already holds the open documents'
+          // buffers, and for a file the walk only passes through one can be stale (the editor may
+          // have saved the file without saying so); the disk is newer, and a stale text puts the
+          // positions on the wrong lines. Read here, so converted here (`mended_from_disk`).
+          perm_src: = base_core.arena.dup_str(mended_from_disk(file_path, src_text))
+          compiler.parse_file(doc_path(file_path), perm_src, true) catch {}
+        dealloc(Void$@::src_text.ptr)
+
+  // Caution: **Check every file's bodies here.** The references, the renaming and the call
+  // hierarchy rely on this state, and a call site lives inside a body — limited to the one
+  // document, they come back empty.
+  compiler.run_semantic_analysis(doc_path(ptr.uri_perm), false, true, true) catch {}
+  ptr.root_file = compiler.root_file
+  ptr.sema = compiler.sema
+  ptr.source_map = compiler.source_map
+  ptr.is_valid = compiler.is_valid
+  return ptr
+
+priv fn build_document_state(server: Server$@, src: U8[], uri: U8[], send_diag: Bool): Doc_state$@
+  arena_state: = base_core.arena.save()
+  uri_perm: = base_core.arena.dup_str(uri)
+  src_perm: = base_core.arena.dup_str(src)
+  ptr: = base_core.arena
+    .create(Doc_state::{ .arena_state = arena_state, .uri_perm = uri_perm, .src_perm = src_perm })
+
+  // Caution: Discard the pair with the document. Left over, the previous document's dropped ranges
+  // would give the old reason at the same position in another file. `wind_back` clears them too,
+  // for its own reason (their memory is on the arena it rewinds); neither backs up the other.
+  base_diag.lsp_diags.clear()
+  base_cfg_inactive.cfg_inactive.clear()
+  compiler: = init_doc_compiler(server, ptr)
+
+  if send_diag && compiler.has_load_error
+    lsp_msg.send_diagnostics_list(uri, base_diag.lsp_diags.list@)
+    return ptr
+
+  // **A recovered tree reports nothing it finds.** The later stages would find only the chain of
+  // errors one missing bracket sets off, so the parse's report is the only one ("Do not put a
+  // diagnostic out from a recovered result" in `../docs/DESIGN.md`).
+  // Caution: Not `has_load_error` — that means the file did not load at all, and the branch above
+  // returns on it, which takes away the tree and every answer.
+  quiet: = compiler.has_load_error || parse_load.recovered()
+
+  // **Only this document's bodies are checked.** The hover, the jump, the colouring and this
+  // document's diagnostics rely on this state, and none looks inside another file's body (the
+  // grounds are "A `didOpen` checks one document's bodies" in `../docs/DESIGN.md`).
+  compiler.run_semantic_analysis(doc_path(ptr.uri_perm), true, quiet, false) catch {}
+  if send_diag
+    if !compiler.is_valid && base_diag.lsp_diags.list.len == 0
+      lsp_msg.send_single_diagnostic(uri, base_diag.Diagnostic_severity.error, 0, 0, 0,
+        "Semantic Error")
+    else
+      lsp_msg.send_diagnostics_list(uri, base_diag.lsp_diags.list@)
+
+  ptr.root_file = compiler.root_file
+  ptr.sema = compiler.sema
+  ptr.source_map = compiler.source_map
+  ptr.is_valid = compiler.is_valid
+
+  return ptr
+
+impl Server
+  fn dispatch(r: Self$@, method: U8[], params: json.Val, id_val: json.Val, arena: Arena$@) //<
+    //< It routes one message to its handler
+    //<
+    //< **Each method is named once, here**, with the state it is answered from built in its own
+    //< branch. `initialize`'s capabilities are just below, so what is declared and what is routed
+    //< can be read side by side.
+    //< Caution: **Do not route by a second list kept elsewhere.** Two lists naming the same methods
+    //< drift, and a method on only one gets "not found" with nothing saying why.
+    if method.equals("initialize")
+      answer_initialize(id_val, arena)
+    else if method.equals("textDocument/didOpen") || method.equals("textDocument/didChange")
+      r.handle_did_open_change(method, params)
+    else if method.equals("textDocument/didClose")
+      r.handle_did_close(params)
+    else if method.equals("textDocument/completion")
+      r.handle_completion_req(params, id_val, arena)
+    else if method.equals("textDocument/hover")
+      if st: = r.document_state(params, id_val, arena)
+        lsp_hover.handle(st, params, id_val, arena)
+    else if method.equals("textDocument/definition")
+      if st: = r.document_state(params, id_val, arena)
+        lsp_nav.handle_definition(st, params, id_val, arena)
+    else if method.equals("textDocument/prepareCallHierarchy")
+      if st: = r.document_state(params, id_val, arena)
+        lsp_call_hier.prepare_call_hierarchy(st, params, id_val, arena)
+    else if method.equals("textDocument/semanticTokens/full")
+      if st: = r.document_state(params, id_val, arena)
+        lsp_semtok.handle(st, id_val, arena)
+    else if method.equals("textDocument/rename") || method.equals("textDocument/references")
+      ws: = r.workspace_state(params)
+      defer ws.discard()
+      lsp_uses.handle(ws, method, params, id_val, arena)
+    else if method.equals("callHierarchy/incomingCalls") ||
+      method.equals("callHierarchy/outgoingCalls")
+      ws: = r.workspace_state(params)
+      defer ws.discard()
+      is_incoming: = method.equals("callHierarchy/incomingCalls")
+      lsp_call_hier.handle_calls(ws, params, id_val, is_incoming, arena)
+    else
+      answer_unknown(id_val, arena)
+
+  priv fn document_state(r: Self$@, params: json.Val, id_val: json.Val, arena: Arena$@):
+    Option<|Doc_state$@|> //<
+      //< The analysed state of the document a request names
+      //<
+      //< Where that document is not open, it answers null itself and returns none.
+    uri: = params.get("textDocument").get("uri").as_str()
+    r.ensure_latest_state(uri)
+    if r.latest_state != null && r.latest_state.uri_perm.equals(uri)
+      return Option<|Doc_state$@|>.some(r.latest_state)
+    lsp_msg.send_null_response(id_val, arena)
+    return Option<|Doc_state$@|>.none
+
+  priv fn workspace_state(r: Self$@, params: json.Val): Doc_state$@ //<
+    //< The workspace analysed for one request; the caller discards it (`Doc_state.discard`)
+    //<
+    //< Caution: **Do not ask the client for the filter's search word.** The server holds the
+    //< position and the source; asking would keep the same thing in two places. Only the call
+    //< hierarchy has no position, so its search word is the `item.data` the server returned.
+    uri_node: = params.get("textDocument")
+    $has_doc: = true
+    switch uri_node case .null_val
+      has_doc = false
+    default {}
+    uri: =
+      (uri_node.get("uri").as_str() if has_doc
+      else params.get("item").get("uri").as_str())
+    target_fqn: = "" if has_doc else lsp_call_hier.item_fqn(params)
+    return build_workspace_state(r, uri, target_fqn, params)
+
+  priv fn handle_completion_req(r: Self$@, params: json.Val, id_val: json.Val, arena: Arena$@) //<
+    //< It answers a completion request
+    //<
+    //< **Analyse again with the half-typed word replaced by a synthesized name** — half-typed
+    //< text does not parse (the heading of `lsp/complete.kspls`), so `latest_state`, built from
+    //< that text, holds no tree and is not used.
+    //< Caution: **Always discard the built state and rewind**, or the arena grows with every
+    //< keystroke.
+    uri: = params.get("textDocument").get("uri").as_str()
+    $text: U8[] = ""
+    switch r.docs.open_text(uri) case .some(t)
+      text = t
+    default
+      lsp_complete.send_none(id_val, arena)
+      return
+    swapped: = lsp_complete.swap_in_mark(text, lsp_msg.offset_at(text, params), arena)
+    // Caution: **Swap the state only through `reset_current_state`.** A hand-written save/restore
+    // leaves the names added to the name pool (`base_core.pools`) during the build past the
+    // rewind, and **a later request reads freed memory**.
+    r.reset_current_state()
+    state: = build_document_state(r, swapped.text, uri, false)
+    lsp_complete.handle_completion(state, swapped, id_val, arena)
+    // Caution: **Do not keep the state of the text holding the synthesized name**, or the next
+    // hover or jump-to-definition answers about **the text holding `Ksplc_pick_here`**. Discarded,
+    // it is rebuilt by the next request (`ensure_latest_state`).
+    r.latest_state = state
+    r.reset_current_state()
+
+  fn ensure_latest_state(r: Self$@, uri: U8[])
+    if r.latest_state != null && r.latest_state.uri_perm.equals(uri)
+      return
+    switch r.docs.open_text(uri) case .some(text)
+      r.reset_current_state()
+      r.latest_state = build_document_state(r, text, uri, false)
+    default {}
+
+  fn handle_did_open_change(r: Self$@, method: U8[], params: json.Val)
+    text_doc: = params.get("textDocument")
+    uri: = text_doc.get("uri").as_str()
+    $src_val: = json.Val.null_val
+
+    if method.equals("textDocument/didOpen")
+      src_val = text_doc.get("text")
+    else
+      // textDocumentSync=Full (see answer_initialize below): one entry always carries the whole
+      // text, so index 0 is enough.
+      changes: = params.get("contentChanges")
+      src_val = changes.get_at(0).get("text")
+
+    sent: = src_val.as_str()
+    // The indentation notation is converted into braces here (`parse/layout.kspls`).
+    // Caution: **Convert it just once, at the entry point** (the other one is `parse/load.kspls`,
+    // which reads the disk). **The store holds the converted text too**: the other open documents'
+    // sources come from it (`populate_source_map_from_store`), and raw ones fail to analyse.
+    scratch: = Arena.new(layout_scratch_bytes)
+    defer scratch.free()
+    // The indentation problems found while converting are **collected, not reported here** (the
+    // reason is at `parse_load.layout_notes`); `pipeline.kspls` reports them once sema starts.
+    $laid_notes: = List<|parse_layout.Note|>.new(scratch)
+    src: = parse_layout.mend(sent, uri.is_laid_out(), laid_notes@, scratch).code
+    if uri.len > 0 && src.len > 0
+      // A reopened document lands here too (the entry is kept; see `Doc_cache`).
+      r.docs.put(uri, src)
+      r.reset_current_state()
+      // Caution: **Record the notes after the rewind, never before.** `reset_current_state`
+      // rewinds `base_core.arena` and clears the pool with it (`wind_back` in `lsp/state.kspls`),
+      // losing a list recorded earlier. **Copy them out of `scratch`**: it is freed at the end of
+      // this function while the pool still holds the pointer.
+      if laid_notes.len > 0
+        kept: = List<|parse_layout.Note|>.create(base_core.arena)
+        for nt in laid_notes.slice()
+          kept.push(nt)
+        parse_load.record_layout_notes(doc_name(uri).strip_kspl_ext(), kept)
+      r.latest_state = build_document_state(r, src, uri, true)
+
+  fn handle_did_close(r: Self$@, params: json.Val)
+    uri: = params.get("textDocument").get("uri").as_str()
+    if uri.len > 0
+      r.docs.close(uri)
+      if r.latest_state != null && r.latest_state.uri_perm.equals(uri)
+        r.reset_current_state()
+
+priv fn answer_initialize(id_val: json.Val, arena: Arena$@)
+  $b: = Json_builder.new(arena)
+  // For stability CodeAction and InlayHint are disabled.
+  // textDocumentSync=1 (Full): didChange's contentChanges[0].text is the whole document, so
+  // handle_did_open_change looks only at index 0.
+  cap: = b.obj().set("textDocumentSync", b.int_val(1)).set("hoverProvider", b.bool_val(true))
+    .set("definitionProvider", b.bool_val(true)).set("renameProvider", b.bool_val(true))
+    .set("referencesProvider", b.bool_val(true)).set("codeActionProvider", b.bool_val(false))
+    .set("inlayHintProvider", b.bool_val(false))
+    .set("callHierarchyProvider", b.bool_val(true))
+  // The colouring of names. **It is not a substitute for the grammar's colouring** — it is layered
+  // over the editor's own colouring (the heading of `semtok.kspls`).
+  .set("semanticTokensProvider", lsp_semtok.provider(b@))
+    .set("completionProvider", completion_options(b)).build()
+
+  result: = b.obj().set("capabilities", cap).build()
+  lsp_msg.send_response(id_val, result, arena)
+
+priv fn completion_options($b: Json_builder): json.Val //<
+  //< The completion capability's options
+  //<
+  //< Caution: **Do not declare `triggerCharacters`.** Only the editor, which watches the typing,
+  //< can decide when to show it; declare a `.` and **the list pops up unasked**, the most common
+  //< complaint about this feature. It answers only when asked.
+  return b.obj().build()
+
+priv fn answer_unknown(id_val: json.Val, arena: Arena$@) //<
+  //< A method this server does not handle: an error to a request, nothing to a notification
+  switch id_val case .null_val {} default
+    lsp_msg.send_error_response(id_val, -32601, "Method not found", arena)
+
+fn run_lsp_worker(base_parser: kspeg.Target$@): Void
+  base_core.config.is_lsp = true
+  // **The one place that turns the recovery branches on.** Turned on anywhere the compiler runs,
+  // input that should be rejected would be accepted (the grounds are "Only the editor's parse
+  // recovers from a syntax error" in `../docs/DESIGN.md`).
+  base_core.config.recover_syntax = true
+  // Caution: **Tie the lower layer's progress to the liveness marker.** The supervisor detects a
+  // hang by how long silence lasts, so otherwise a heavy didOpen (hundreds of files plus the
+  // analysis) is silent throughout: a live worker is killed and the document quarantined.
+  base_core.progress_hook = lsp_msg.send_worker_alive
+  server: = Server.new(base_parser)
+  defer server.free()
+
+  msg_arena: = Arena.new(8 * 1024 * 1024)
+  defer msg_arena.free()
+  init_state: = msg_arena.save()
+  $payload: = Str_builder.new()
+  defer payload.free()
+
+  for
+    msg_arena.restore(init_state)
+    lsp_msg.read_message(payload@) catch
+      break
+
+    // Caution: **End every message with the marker, a rejected one too.** The supervisor relays
+    // nothing until it arrives, so without it the answer is held back and the worker seems hung.
+    doc: = json.parse(payload.slice(), msg_arena) catch
+      lsp_msg.send_error_response(json.Val.null_val, -32700, "Parse error", msg_arena)
+      lsp_msg.send_worker_done()
+      continue
+
+    method: = doc.get("method").as_str()
+    // Test hooks for the supervisor's crash / hang recovery. A real client sends nothing in the
+    // $/ksplTest* namespace, so they are harmless in production.
+    if method.equals("$/ksplTestCrash")
+      panic("injected test crash")
+    if method.equals("$/ksplTestHang")
+      for
+        sys.mono_us()
+
+    if method.equals("shutdown")
+      lsp_msg.send_null_response(doc.get("id"), msg_arena)
+      lsp_msg.send_worker_done()
+      break
+    server.dispatch(method, doc.get("params"), doc.get("id"), msg_arena)
+    lsp_msg.send_worker_done()

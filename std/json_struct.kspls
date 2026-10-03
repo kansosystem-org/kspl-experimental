@@ -1,0 +1,226 @@
+//< Round-trips a whole struct to and from JSON by walking `std/reflect`'s field table
+//<
+//< **The key names are written nowhere**: a key is the field's own name (the grounds are in
+//< "a trait returning a table" in `../docs/DESIGN.md`).
+
+// ==========================================
+// **Kept apart from `std/json`**, which is JSON itself, so a client that never round-trips does
+// not import `std/reflect`.
+// ==========================================
+import "std/ds" { List }
+import "std/json" { Json_builder, Val, Obj_builder, Array_builder, Json_error, max_nesting_depth }
+import "std/mem" { Arena }
+import "std/reflect"
+
+priv const list_ptr_off: Sz = offsetof(List<|U8|>, ptr) //< the positions inside a `List<|T|>`
+  //<
+  //< **They do not depend on T**, so the ones for `U8` serve for all. The check is
+  //< `tests/reflect_test.kspls`'s "reflect: a container's ptr position does not depend on the
+  //< element's type", and the same for `len` (`make debug`).
+priv const list_len_off: Sz = offsetof(List<|U8|>, len)
+priv const list_cap_off: Sz = offsetof(List<|U8|>, cap)
+priv const list_arena_off: Sz = offsetof(List<|U8|>, arena)
+
+pub fn from_struct<|T: reflect.Reflectable|>( //< copies a reflectable value into a JSON object
+  //<
+  //< `v` is a `T@`: passed by value, the field offsets would point into a temporary.
+  v: T@, //< the value to read; pointed at, not copied
+  b: Json_builder$@, //< holds the object being built
+): Val //< the object; a field nested too deep becomes null
+  return obj_of(U8@::v, v.fields(), b, 0)
+
+priv fn obj_of(base: U8@, tbl: reflect.Field_info[], b: Json_builder$@, depth: Sz): Val //<
+  //< Walks one table and builds one object
+  //<
+  //< **Nesting is handled by calling itself**; a nested struct arrives as bytes and a table, not as
+  //< a type.
+  if depth > max_nesting_depth
+    return Val.null_val
+  $ob: Obj_builder = b.obj()
+  for f in tbl
+    switch f.kind case .list_field
+      ob = ob.set(f.name, arr_of(base + f.offset, f, b, depth + 1))
+    case .opt_field
+      // **`.none` writes no key**, or "absent" would have two forms (see the file header).
+      if opt_is_some(base + f.offset, f)
+        at: = base + f.offset + f.extra.payload_offset
+        inner: = scalar_of(at, f.extra.elem, f.extra.elem_size, f, b, depth + 1)
+        ob = ob.set(f.name, inner)
+    default
+      // `scalar_of` reads every other kind in one place. **The caller passes the width**:
+      // `extra.width` here, `extra.elem_size` for a list element or an option's contents.
+      got: = scalar_of(base + f.offset, f.kind, f.extra.width, f, b, depth + 1)
+      ob = ob.set(f.name, got)
+  return ob.build()
+
+priv fn opt_is_some(at: U8@, f: reflect.Field_info): Bool //<
+  //< Whether an `Option<|T|>`'s tag says it holds a value
+  tag: = I32@::at
+  return tag$ == f.extra.some_tag
+
+priv fn scalar_of(at: U8@, kind: reflect.Field_kind, width: Sz, f: reflect.Field_info,
+  b: Json_builder$@, depth: Sz): Val //<
+    //< Reads one value by its kind. It never receives a container (see `../std/reflect.kspls`).
+  switch kind case .int_field
+    return b.int_val(reflect.load_int(at, width))
+  case .uint_field
+    // Caution: **Read an unsigned value through its own function**, or a `U32`'s `0xFFFFFFFF` is
+    // written as `-1` (`../std/reflect.kspls`'s `load_uint`).
+    return b.int_val(reflect.load_uint(at, width))
+  case .float_field
+    return b.float_val(reflect.load_float(at, width))
+  case .bool_field
+    p: = Bool@::at
+    return b.bool_val(p$)
+  case .str_field
+    p: U8[]@ = (U8[]@)::at
+    return b.str_val(p$)
+  case .struct_field
+    return obj_of(at, f.nested, b, depth)
+  default {}
+  return Val.null_val
+
+priv fn arr_of(at: U8@, f: reflect.Field_info, b: Json_builder$@, depth: Sz): Val //<
+  //< Copies a `List<|T|>` into a JSON array
+  //<
+  //< Caution: **Advance the elements by the stride** (`elem_size`).
+  if depth > max_nesting_depth
+    return Val.null_val
+  ptr_slot: Void@@ = (Void@@)::(at + list_ptr_off)
+  len_slot: = Sz@::(at + list_len_off)
+  elems: = U8@::ptr_slot$
+  $ar: Array_builder = b.arr()
+  for $i: Sz = 0; i < len_slot$; i += 1
+    cell: = elems + i * f.extra.elem_size
+    // The synthesis refuses a container of containers (see `../std/reflect.kspls`'s Field_info);
+    // one would just become `null`.
+    ar = ar.push(scalar_of(cell, f.extra.elem, f.extra.elem_size, f, b, depth + 1))
+  return ar.build()
+
+pub fn into_struct<|T: reflect.Reflectable|>( //< copies a JSON object into a reflectable value
+  //<
+  //< **A field whose key is missing or of another kind is refused** (the reason is at
+  //< `Json_error`).
+  //< Caution: **Copy the names into `arena`.** The names inside `v` point into the parse's arena;
+  //< freeing that first leaves the written value pointing at freed memory.
+  v: Val, //< the object to read from
+  out: T$@, //< the value to write into, field by field
+  arena: Arena$@, //< where the names are copied to, so they outlive the parse
+): Void?Json_error
+  fill_from(U8$@::out, out.fields(), v, arena, 0)?
+
+priv fn fill_from(base: U8$@, tbl: reflect.Field_info[], v: Val, arena: Arena$@, depth: Sz):
+  Void?Json_error //<
+    //< Walks one table and writes from one object; it calls itself for nesting.
+  if depth > max_nesting_depth
+    throw Json_error.too_deep
+  switch v case .obj_val {} default
+    throw Json_error.field_type("<root>")
+  for f in tbl
+    got: = v.get(f.name)
+    // **For an `Option` field, an absent key is itself the answer**, so it is handled first.
+    switch f.kind case .opt_field
+      fill_opt(base + f.offset, f, v, arena, depth)?
+      continue
+    default {}
+    // Caution: **Tell "the key is absent" apart from "the key is present with `null`".** `get`
+    // returns `Val.null_val` for both, so ask `has_key`; if the two were merged, a `null` that was
+    // sent would be reported as absent.
+    switch got case .null_val
+      throw (Json_error.missing_field(f.name) if !v.has_key(f.name)
+        else Json_error.field_type(f.name))
+    default {}
+    switch f.kind case .list_field
+      switch got case .array_val {} default
+        throw Json_error.field_type(f.name)
+      fill_list(base + f.offset, f, got, arena, depth + 1)?
+    case .opt_field { // handled first above (this branch exists only for exhaustiveness).
+    } default
+      // `fill_scalar` writes every other kind in one place (the inverse of `obj_of`).
+      fill_scalar(base + f.offset, f.kind, f.extra.width, f, got, arena, depth + 1)?
+
+priv fn fill_opt(at: U8$@, f: reflect.Field_info, v: Val, arena: Arena$@, depth: Sz):
+  Void?Json_error //<
+    //< Fills an option field from v, depending on whether v has its key
+    //<
+    //< **No key means `.none`; a key means `.some`.** An explicit `null` is refused as a kind
+    //< mismatch, not taken as a second spelling of "absent" (see the file header).
+  tag_slot: = I32$@::at
+  if !v.has_key(f.name)
+    // Caution: Touch nothing but the tag; the tag alone decides `.none`.
+    tag_slot$ = f.extra.none_tag
+    return
+  got: = v.get(f.name)
+  switch got case .null_val
+    throw Json_error.field_type(f.name)
+  default {}
+  tag_slot$ = f.extra.some_tag
+  fill_scalar(at + f.extra.payload_offset, f.extra.elem, f.extra.elem_size, f, got, arena, depth + 1)?
+
+// Writes one value by its kind. It never receives a container (see `fill_opt` and `fill_list`).
+priv fn fill_scalar(at: U8$@, kind: reflect.Field_kind, width: Sz, f: reflect.Field_info, got: Val,
+  arena: Arena$@, depth: Sz): Void?Json_error
+  // **Signed and unsigned share one path** (`../std/reflect.kspls`'s `store_int`).
+  switch kind case .int_field, .uint_field
+    reflect.store_int(at, width, int_of(got, f.name)?)
+  case .float_field
+    // Caution: Accept the integer variant too, or success depends on the sender's decimal point.
+    switch got case .float_val(fv)
+      reflect.store_float(at, width, fv)
+    case .int_val(iv)
+      reflect.store_float(at, width, F64::iv)
+    default
+      throw Json_error.field_type(f.name)
+  case .bool_field
+    p: = Bool$@::at
+    switch got case .bool_val(bv)
+      p$ = bv
+    default
+      throw Json_error.field_type(f.name)
+  case .str_field
+    p: U8[]$@ = (U8[]$@)::at
+    switch got case .str_val(sv)
+      p$ = arena.dup_str(sv)
+    default
+      throw Json_error.field_type(f.name)
+  case .struct_field
+    switch got case .obj_val {} default
+      throw Json_error.field_type(f.name)
+    fill_from(at, f.nested, got, arena, depth)?
+  default
+    throw Json_error.field_type(f.name)
+
+priv fn fill_list(at: U8$@, f: reflect.Field_info, v: Val, arena: Arena$@, depth: Sz):
+  Void?Json_error //<
+    //< Copies a JSON array into a `List<|T|>`.
+    //<
+    //< Caution: **Allocate the elements' space from `arena`.** Writing the four `pub` fields at the
+    //< field's position then yields an ordinary `List` (`../std/ds.kspls`).
+  if depth > max_nesting_depth
+    throw Json_error.too_deep
+  items: = v.arr_list(arena)
+  count: = items.len
+  room: = arena.alloc(count * f.extra.elem_size) if count > 0 else null
+  ptr_slot: Void$@$@ = (Void$@$@)::(at + list_ptr_off)
+  len_slot: = Sz$@::(at + list_len_off)
+  cap_slot: = Sz$@::(at + list_cap_off)
+  arena_slot: Arena$@$@ = (Arena$@$@)::(at + list_arena_off)
+  ptr_slot$ = room
+  len_slot$ = count
+  cap_slot$ = count
+  arena_slot$ = arena
+  $i: Sz = 0
+  for e in items
+    cell: = (U8$@::room) + i * f.extra.elem_size
+    i += 1
+    // As in `arr_of`, the synthesis refuses a container of containers; one would be refused with
+    // the field name attached.
+    fill_scalar(cell, f.extra.elem, f.extra.elem_size, f, e, arena, depth + 1)?
+
+priv fn int_of(got: Val, name: U8[]): I64?Json_error //< reads it as an integer
+  //<
+  //< Another kind is refused with the name attached, not read as 0.
+  switch got case .int_val(i)
+    return i
+  default {}
+  throw Json_error.field_type(name)

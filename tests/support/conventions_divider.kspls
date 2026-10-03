@@ -1,0 +1,57 @@
+//< A section divider stands on a line of its own (not the suite)
+//<
+//< **A divider opens a block**, so glued to the end of a line of code it is read as that line's
+//< trailing remark and the block below loses its top rule. The verdict is held to the samples below
+//< (Principle 5 in `../../docs/DESIGN.md`).
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+import "tests/support/conventions_scan" as scan
+import "tests/support/harness"
+
+fn glued(line: U8[]): Bool //< whether that line carries code in front of a section divider
+  //<
+  //< **A line with a quote before the `//` is skipped**: the `//` may be inside a string, and
+  //< telling the two apart here would be a second parser beside `strip_code` (which cuts the
+  //< comment off). Skipping can miss a glued divider, never invent one.
+  at: = line.find_str("//")
+  if at <= 0 || !scan.is_divider(line.sub_from(at + 2))
+    return false
+  before: = line.sub(0, at)
+  return before.trim_spaces().len > 0 && before.find_char('"') < 0
+
+priv const samples: U8[][5] = ::{ "} // ==========================================",
+  "// ==========================================", "  // ------------------------------",
+  "  x: = 1; // the count", "  \"} // ===========\"," }
+priv const want: Bool[5] = ::{ true, false, false, false, false }
+
+priv fn check_fires(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  for i in Range.asc(samples.len)
+    if glued(samples[i]) != want[i]
+      bad
+        .push(arena.text().s("\"").s(samples[i].trim_spaces()).s("\" was read the other way").take())
+  verdict.check_list("the verdict on a divider glued to code can fire", samples.len, "samples",
+    bad@, "")
+
+priv fn check_lines(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    $no: Sz = 0
+    $in_raw: = false
+    for line in harness.read_under_root(rel).lines(arena)
+      no += 1
+      seen += 1
+      raw_here: = in_raw
+      in_raw = scan.flip_raw(line, in_raw)
+      if !raw_here && glued(line)
+        bad.push(arena.text().s(rel).c(':').s("\{no\}").take())
+  verdict.check_list("a section divider stands on a line of its own", seen, "lines", bad@,
+    "put the rule on the next line, so the block below it opens with one")
+
+fn run(arena: Arena$@)
+  check_fires(arena)
+  check_lines(arena)

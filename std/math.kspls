@@ -1,0 +1,235 @@
+//< The math functions: square root, powers, logarithms, sine, cosine and tangent
+//<
+//< A hosted build passes `sqrt` / `exp` / `log` / `sin` / `cos` / `tan` / `pow` straight to libm. A
+//< freestanding build has no libm, so it uses software implementations with no dependencies
+//< (Newton's method, the Taylor and atanh series, range reduction). **The two must agree**: a
+//< model's softmax, rmsnorm and RoPE depend on these, and one model must give the same answer
+//< whether it runs hosted or embedded.
+#cfg(!freestanding)
+import "std/libc"
+
+pub const pi: F64 = 3.141592653589793 //< the ratio of a circle's circumference to its diameter
+pub const e: F64 = 2.718281828459045 //< the base of the natural logarithm
+
+#cfg(!freestanding)
+pub fn sqrt(x: F64): F64 //< the non-negative square root
+  return libc.sqrt(x)
+
+#cfg(!freestanding)
+pub fn exp(x: F64): F64 //< e raised to the power of `x`
+  return libc.exp(x)
+
+#cfg(!freestanding)
+pub fn log(x: F64): F64 //< the natural logarithm, base e
+  return libc.log(x)
+
+#cfg(!freestanding)
+pub fn pow(base: F64, exponent: F64): F64 //< `base` raised to the power of `exponent`
+  return libc.pow(base, exponent)
+
+#cfg(!freestanding)
+pub fn sin(x: F64): F64 //< the sine of an angle in radians
+  return libc.sin(x)
+
+#cfg(!freestanding)
+pub fn cos(x: F64): F64 //< the cosine of an angle in radians
+  return libc.cos(x)
+
+#cfg(!freestanding)
+pub fn tan(x: F64): F64 //< the tangent of an angle in radians
+  return libc.tan(x)
+
+priv fn is_already_integral_or_non_finite(x: F64): Bool //<
+  //< Whether x is a NaN or +/-Infinity, or so large (2^52 or more) that it is already an integer
+  return !(x - x == 0.0) || x >= 4503599627370496.0 || x <= -4503599627370496.0
+
+// It needs only the integer cast, so hosted and freestanding builds share it.
+pub fn round(x: F64): F64 //< rounds to the nearest whole number, halves away from 0
+  // Caution: For a NaN, an Infinity or a value outside I64's range, the I64::(...) cast below is
+  // undefined behaviour in C. From 2^52 up an F64 is already an integer, so x is returned uncast.
+  if is_already_integral_or_non_finite(x)
+    return x
+  return F64::(I64::(x + 0.5)) if x >= 0.0 else -(F64::(I64::(-x + 0.5)))
+
+// ==========================================
+// cfg(freestanding): the dependency-free software implementations
+// ==========================================
+
+priv const max_reduce_iters: Sz = 1100 //<
+  //< The iteration limit, which covers F64's exponent range with room to spare
+  //<
+  //< For +Infinity, "v >= 4.0" (sqrt_reduce) and "m >= 2.0" (log) stay true forever, so the
+  //< reduction would never end (the x<0.0 check lets +Infinity pass).
+
+// Scales x into [1,4); returns v and sets scale so that sqrt(x) = sqrt(v) * scale.
+#cfg(freestanding)
+priv fn sqrt_reduce(x: F64, $scale_out: F64$@): F64
+  $v: = x
+  $scale: = 1.0
+  for $i: Sz = 0; v >= 4.0; i += 1
+    if i >= max_reduce_iters
+      panic("math.sqrt: argument is not finite")
+    v /= 4.0
+    scale *= 2.0
+  for $i: Sz = 0; v < 1.0; i += 1
+    if i >= max_reduce_iters
+      panic("math.sqrt: argument is not finite")
+    v *= 4.0
+    scale /= 2.0
+  scale_out$ = scale
+  return v
+
+// Newton's method, y_{n+1} = (y_n + v/y_n)/2: with v in [1,4) the correct digits double each step,
+// so 8 steps reach F64's precision with room to spare.
+#cfg(freestanding)
+pub fn sqrt(x: F64): F64 //< the non-negative square root
+  if x < 0.0
+    panic("math.sqrt: negative argument")
+  if x == 0.0
+    return 0.0
+  $scale: = 1.0
+  v: = sqrt_reduce(x, scale@)
+  $y: = (1.0 + v) / 2.0 // within 2x for v in [1,4)
+  for _i in Range.asc(8)
+    y = (y + v / y) / 2.0
+  return y * scale
+
+// The Taylor series of exp(r) for |r| <= ln(2)/2: 20 terms by Horner's method reach F64 precision.
+#cfg(freestanding)
+priv fn exp_taylor_small(r: F64): F64
+  $acc: = 1.0
+  for $n: = 20; n >= 1; n -= 1
+    acc = 1.0 + r * acc / (F64::n)
+  return acc
+// Whether v is finite and within I64's range, which exp() and sincos_reduce() check before their
+// I64::(...) casts.
+#cfg(freestanding)
+priv fn is_safe_round_to_i64(v: F64): Bool
+  return (v - v == 0.0) && v < 9.0e18 && v > -9.0e18
+
+// 2^k (k a whole number) by repeated squaring, to undo the range reduction in exp().
+#cfg(freestanding)
+priv fn pow2_int(k: F64): F64
+  neg: = k < 0.0
+  $n: = I64::(-k) if neg else I64::k
+  $base: = 2.0
+  $result: = 1.0
+  for n > 0
+    if n % 2 == 1
+      result *= base
+    base *= base
+    n /= 2
+  return (1.0 / result) if neg else result
+// exp(x) = 2^k * exp(r)   (x = k*ln2 + r, r∈[-ln2/2, ln2/2])
+#cfg(freestanding)
+pub fn exp(x: F64): F64 //< e raised to the power of `x`
+  ln2: = 0.6931471805599453
+  scaled: = ((x / ln2) + 0.5) if x >= 0.0 else ((x / ln2) - 0.5)
+  // Caution: For a NaN, an Infinity or a value outside I64's range, the I64::(...) cast below is
+  // undefined behaviour in C, so those values panic as "not finite".
+  if !is_safe_round_to_i64(scaled)
+    panic("math.exp: argument is not finite")
+  rounded: = I64::scaled
+  k: = F64::rounded
+  r: = x - k * ln2
+  return exp_taylor_small(r) * pow2_int(k)
+
+// log(m) for m in [1,2): with t=(m-1)/(m+1) in [0,1/3), log(m)=2*atanh(t)=2*sum t^(2i+1)/(2i+1);
+// 18 terms reach F64 precision.
+#cfg(freestanding)
+priv fn log_atanh_small(m: F64): F64
+  t: = (m - 1.0) / (m + 1.0)
+  t2: = t * t
+  $acc: = 0.0
+  for $i: = 18; i >= 0; i -= 1
+    acc = 1.0 / (2.0 * (F64::i) + 1.0) + t2 * acc
+  return 2.0 * t * acc
+// log(x) = e*ln2 + log(m)   (x = m*2^e, m∈[1,2))
+#cfg(freestanding)
+pub fn log(x: F64): F64 //< the natural logarithm, base e
+  if x <= 0.0
+    panic("math.log: non-positive argument")
+  ln2: = 0.6931471805599453
+  $m: = x
+  $e_exp: = 0.0
+  // Caution: For +Infinity "m >= 2.0" stays true forever; max_reduce_iters cuts it off.
+  for $i: Sz = 0; m >= 2.0; i += 1
+    if i >= max_reduce_iters
+      panic("math.log: argument is not finite")
+    m /= 2.0
+    e_exp += 1.0
+  for $i: Sz = 0; m < 1.0; i += 1
+    if i >= max_reduce_iters
+      panic("math.log: argument is not finite")
+    m *= 2.0
+    e_exp -= 1.0
+  return e_exp * ln2 + log_atanh_small(m)
+
+// RoPE and similar uses always have base>0 (theta=10000.0, for example). base<=0 is not
+// supported.
+#cfg(freestanding)
+pub fn pow(base: F64, exponent: F64): F64 //< `base` raised to the power of `exponent`
+  if base <= 0.0
+    panic("math.pow: the freestanding version carries base>0 only")
+  return exp(exponent * log(base))
+
+// The Taylor series of sin(r) and cos(r) for |r| <= pi/4: 10 terms reach F64 precision.
+#cfg(freestanding)
+priv fn sin_taylor_small(r: F64): F64
+  r2: = r * r
+  $acc: = 1.0
+  for $n: = 10; n >= 1; n -= 1
+    acc = 1.0 - r2 * acc / ((2.0 * (F64::n)) * (2.0 * (F64::n) + 1.0))
+  return r * acc
+#cfg(freestanding)
+priv fn cos_taylor_small(r: F64): F64
+  r2: = r * r
+  $acc: = 1.0
+  for $n: = 10; n >= 1; n -= 1
+    acc = 1.0 - r2 * acc / ((2.0 * (F64::n) - 1.0) * (2.0 * (F64::n)))
+  return acc
+// sin/cos by quadrant: x = k*(pi/2) + r with r in [-pi/4,pi/4]; the quadrant is k mod 4.
+#cfg(freestanding)
+priv fn sincos_reduce(x: F64, $sin_out: F64$@, $cos_out: F64$@)
+  half_pi: = pi / 2.0
+  scaled: = (x / half_pi + 0.5) if x >= 0.0 else (x / half_pi - 0.5)
+  // Caution: A non-finite or huge x makes the I64::(...) cast below undefined behaviour (as in
+  // exp()); sin/cos/tan all panic here.
+  if !is_safe_round_to_i64(scaled)
+    panic("math.sin/cos/tan: argument is not finite")
+  k: = I64::scaled
+  r: = x - (F64::k) * half_pi
+  s: = sin_taylor_small(r)
+  c: = cos_taylor_small(r)
+  quadrant: = k % 4
+  q: = quadrant + 4 if quadrant < 0 else quadrant // into [0,4)
+  switch q case 0
+    sin_out$ = s
+    cos_out$ = c
+  case 1
+    sin_out$ = c
+    cos_out$ = -s
+  case 2
+    sin_out$ = -s
+    cos_out$ = -c
+  default
+    sin_out$ = -c
+    cos_out$ = s
+#cfg(freestanding)
+pub fn sin(x: F64): F64 //< the sine of an angle in radians
+  $s: = 0.0
+  $c: = 0.0
+  sincos_reduce(x, s@, c@)
+  return s
+#cfg(freestanding)
+pub fn cos(x: F64): F64 //< the cosine of an angle in radians
+  $s: = 0.0
+  $c: = 0.0
+  sincos_reduce(x, s@, c@)
+  return c
+#cfg(freestanding)
+pub fn tan(x: F64): F64 //< the tangent of an angle in radians
+  $s: = 0.0
+  $c: = 0.0
+  sincos_reduce(x, s@, c@)
+  return s / c

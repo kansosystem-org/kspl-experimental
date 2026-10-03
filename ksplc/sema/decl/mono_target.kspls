@@ -1,0 +1,71 @@
+//< Decides whether a generic impl handles a given instantiation
+//<
+//< Matches the type arguments on the impl's target against the instance's, position by position.
+//< The instantiation itself is in `sema/decl/mono.kspls`; this file **only decides**, touching no
+//< table. **The dependency is one-way:** do not call mono.kspls from here.
+import "ksplc/base/ast" { Ast_node, variance_names_mut }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/core" as base_core
+import "ksplc/sema/decl/mono_name" as sema_decl_mono_name
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "std/chars"
+import "std/str"
+
+fn impl_target_rejects(r: Sema_ctx$@, impl_node: Ast_node$@, target_name: U8[], args_str: U8[],
+  mask: I32): Bool //<
+    //< Whether the type arguments on the impl's target fail to match the instance's arguments
+    //<
+    //< **Two checks per position.** (1) **The name**: the impl's own type parameter (the `T` of
+    //< `impl<|T|> Box<|$T|>`) binds to anything; a concrete type must match. (2) **Mutability**:
+    //< `$` accepts only a mutable instance; unmarked accepts either ("Making a single instantiation
+    //< the target of an impl" in `../../../docs/DESIGN.md`).
+  t_args: = target_name.generic_args_str()
+  n: = t_args.count_type_args()
+  if n == 0 || n != args_str.count_type_args()
+    return false
+  gen_params: = impl_node.find_child(.k_type_gen_params)
+  // A concrete type's name is seen from the impl's file; normalize it there to an FQN.
+  prev_file: = r.file_name
+  r.set_current_file(impl_node.loc.file())
+  defer r.set_current_file(prev_file)
+  for $i: Sz = 0; i < n; i += 1
+    written: = t_args.nth_type_arg(i)
+    actual: = args_str.nth_type_arg(i)
+    wants_mut: = written.starts_with("$")
+    if wants_mut && actual.ends_with(base_core.immut_mark)
+      return true
+    core: = written.sub_from(1) if wants_mut else written
+    if names_impl_gen_param(gen_params, core)
+      continue
+    if !concrete_arg_matches(r, core, actual, variance_names_mut(mask, i) && !wants_mut)
+      return true
+  return false
+
+priv fn concrete_arg_matches(r: Sema_ctx$@, core: U8[], actual: U8[], weakens: Bool): Bool //<
+  //< Whether a concrete type written at a position is the same type as the instance's argument
+  //<
+  //< weakens: a position asking for immutable accepts a mutable instance too (one level).
+  $canon: = r.canonicalize_one_type_arg(core)
+  defer canon.free()
+  w: = canon.slice()
+  if w.equals(actual)
+    return true
+  if weakens && actual.ends_with(base_core.immut_mark)
+    return actual.sub(0, actual.len - base_core.immut_mark.len).equals(w)
+  return false
+
+priv fn names_impl_gen_param(gen_params: Ast_node$@, name: U8[]): Bool //<
+  //< Whether this name is a type parameter the impl itself introduced (it binds to anything)
+  if gen_params == null
+    return false
+  for gp in gen_params.children
+    if gp.gen_param_name().equals(name)
+      return true
+  return false
+
+impl Sema_ctx
+  fn variance_mask_of(r: Self$@, base_name: U8[]): I32 //<
+    //< The list of variances the generic base declared
+    //<
+    //< Caution: **Look it up by the base's name** (the instance's name does not find it).
+    return r.env.variance_masks.get(base_name) catch 0

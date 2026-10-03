@@ -1,0 +1,746 @@
+import "ksplc/base/ast" { Ast_node, Loc }
+import "ksplc/base/ast_kinds" as base_ast_kinds
+import "std/chars" // the one-character tests and cuts
+import "std/ds" { List }
+import "std/str"
+
+// unwrap_top_level / get_decl_type_node / get_fn_params, like the find_child family in
+// ksplc/base/ast.kspls, are tree-walking primitives used everywhere that promise to return null.
+##lint(H0704 = off)
+
+const if_bind_mark: U8[] = "stmt_match_if_bind" //<
+  //< The mark on a `switch` synthesized to unwrap an `Option`
+  //<
+  //< Caution: **Keep it apart from an ordinary switch's "stmt_match", with one mark per kind of
+  //< synthesis.** A diagnostic names what the user wrote, and one shared mark would say
+  //< `if <name>: = <expr>` on a `for x in` line.
+const for_in_mark: U8[] = "stmt_match_for_in"
+
+priv const compiler_made: I32 = 1 //<
+  //< The mark in `ival` on a declaration the compiler made rather than one the user wrote
+  //<
+  //< `made_by_compiler` below reads it.
+
+priv const left_by_break: I32 = 1 //<
+  //< The mark in `ival` on a `for` / `if` / `switch` / labelled block that a `break` leaves
+  //<
+  //< `mark_left_by_break` sets it, `is_left_by_break` reads it.
+  //< Caution: **Here 0 is not the safe value**: a missing mark reads a loop as endless. So a
+  //< `break` that sema builds (the `Iter` shape of `for x in`) is inferred like a written one.
+
+priv const library_file_suffixes: U8[][6] = ::{ ".a", ".so", ".dylib", ".tbd", ".lib", ".dll" } //<
+  //< The endings that turn a library's name into a file name
+  //<
+  //< The linker adds the one its platform wants (`-lopenblas` finds `libopenblas.so`, `.a`,
+  //< `.dylib` or `openblas.lib`), so a name that ends in one names a file that does not exist.
+
+priv fn is_library_name(s: U8[]): Bool //< whether it names a library as `-l` takes one
+  //<
+  //< Caution: **A name, never a flag or a path.** It reaches a build script's shell as one word
+  //< (`$(cat prog.libs)`), so only letters, digits and `_ + . -`. `:` asks GNU ld for a file
+  //< (`-l:libx.so`) and `/` `\` name a folder; where to look is left to the environment.
+  if s.len == 0 || !s[0].is_alnum()
+    return false
+  for ch in s
+    if !(ch.is_alnum() || ch == '+' || ch == '.' || ch == '-')
+      return false
+  for suffix in library_file_suffixes
+    if s.ends_with(suffix)
+      return false
+  return true
+
+struct Param_cursor //< a cursor that returns the parameters one at a time
+  //<
+  //< Caution: **Do not copy this walk elsewhere.** A `k_param_list`'s children include the
+  //< `Literal`s `(` `,` `)`. Use `for p in Param_cursor.new(list, false)`; `skip_receiver` skips a
+  //< method's receiver.
+  list: Ast_node$@
+  at: Sz
+
+impl Param_cursor: Iter<|Ast_node$@|>
+  fn new(list: Ast_node$@, skip_receiver: Bool): Param_cursor
+    $cur: = Param_cursor::{ .list = list, .at = 0 }
+    if skip_receiver
+      cur.next()
+    return cur
+
+  fn count(list: Ast_node$@): Sz //< how many formal parameters the list holds
+    $n: Sz = 0
+    for _p in Param_cursor.new(list, false)
+      n += 1
+    return n
+
+  fn next(r: Self$@): Option<|Ast_node$@|> //< the next `k_fn_param`
+    //<
+    //< `.none` when there are no more.
+    for r.list != null && r.at < r.list.children.len
+      p_node: = r.list.get_child(r.at)
+      r.at += 1
+      if p_node.kind_id == .k_fn_param
+        return Option<|Ast_node$@|>.some(p_node)
+    return Option<|Ast_node$@|>.none
+
+impl Ast_node
+  fn made_by_compiler(r: Ast_node$@): Bool //<
+    //< Whether it is a declaration the compiler made, which the user never wrote
+    //<
+    //< An example is the per-enum `variant_name` (`../parse/load.kspls`).
+    //<
+    //< Caution: **An editor's walk by position skips it** (colours, hover, go-to, references):
+    //< it sits at the position of what it was made for, so treated as written it doubles that
+    //< name or lands on unrelated text.
+    return r != null && (r.kind_id == .k_decl_impl || r.kind_id == .k_decl_fn) &&
+      r.ival == compiler_made
+
+  fn place_as_made(r: Ast_node$@, origin: Loc) //<
+    //< It moves a declaration the compiler made to `origin`, marking it and its methods
+    //<
+    //< **Every node points at what it was made for**: parsed from a string, its positions are
+    //< the string's, and read in the file they land on unrelated text (a diagnostic or a jump
+    //< into the file's first lines). Only declarations get the mark; `ival` means other things on
+    //< other kinds.
+    if r == null
+      return
+    r.loc = origin
+    if r.kind_id == .k_decl_impl || r.kind_id == .k_decl_fn
+      r.ival = compiler_made
+    for child in r.children
+      child.place_as_made(origin)
+
+  fn mark_left_by_break(r: Ast_node$@) //<
+    //< Records that a `break` leaves this statement, as sema resolved the `break`'s target
+    //<
+    //< **Only sema's resolution sets it** (`infer_stmt_break_continue` in
+    //< `../sema/body/stmt.kspls`): which construct an unlabelled `break` leaves, through any
+    //< `switch` or `if` between, is decided there once, and the flow checks read the answer.
+    if r != null
+      r.ival = left_by_break
+
+  fn is_left_by_break(r: Ast_node$@): Bool //<
+    //< Whether a `break` leaves this statement, so control can continue after it
+    //<
+    //< It is true whatever the inside does: `blk: { if c { break blk; } return 1; }` can still end.
+    return r != null && r.ival == left_by_break &&
+      (r.kind_id == .k_stmt_loop || r.kind_id == .k_stmt_if || r.kind_id == .k_stmt_match ||
+      r.kind_id == .k_stmt_labeled_block)
+
+  fn is_endless_loop(r: Ast_node$@): Bool //<
+    //< Whether this `for` never ends: it has no condition, and no `break` leaves it
+    //<
+    //< **The one judgement of a loop's end**, read by the missing-return check and the catch
+    //< block's (`is_guaranteed_to_leave` in `../sema/body/analyze.kspls`) and by [W0201]
+    //< (`df_stmt_loop` in `../sema/flow/stmt.kspls`). `continue` does not leave the loop. A
+    //< condition that is constant `true` still counts as a condition, which [W0205] asks to
+    //< drop.
+    if r == null || r.kind_id != .k_stmt_loop || r.is_left_by_break()
+      return false
+    cond: = r.get_loop_cond()
+    return cond == null || cond.kind_id == .k_empty
+
+  fn has_vtable_slot(r: Ast_node$@): Bool //<
+    //< Whether a trait's method holds a vtable slot (one with a default body does not)
+    //<
+    //< **This is the canonical source.** A default body is copied per implementation and has no
+    //< slot, so a trait value cannot reach it; only a concrete type or a type parameter calls it.
+    return r != null && r.kind_id == .k_decl_fn_proto
+
+  fn build_option_match(subject: Ast_node$@, bind_name: U8[], some_block: Ast_node$@,
+    none_block: Ast_node$@, label_slot: Ast_node$@, mark: U8[], loc: Loc): Ast_node$@ //<
+      //< It builds `switch <subject> case .some(<name>) { some_block } case .none { none_block }`
+      //<
+      //< Caution: **Build it in the normalized shape.** It is built after normalization, so the
+      //< `.` stays a child and the bindings are a flat list without `identifier_list`. **Fill the
+      //< label's slot**: left out, the children shift by one and the compiler crashes.
+    some_pat: = Ast_node.new(.k_match_pattern, "match_pattern", loc)
+      .add_child(Ast_node.new(.k_literal, ".", loc))
+      .add_child(Ast_node.build_ident("some", 0, loc))
+      .add_child(Ast_node.build_ident(bind_name, 0, loc))
+    none_pat: = Ast_node.new(.k_match_pattern, "match_pattern", loc)
+      .add_child(Ast_node.new(.k_literal, ".", loc))
+      .add_child(Ast_node.build_ident("none", 0, loc))
+    return Ast_node.new(.k_stmt_match, mark, loc)
+      .add_child(label_slot if label_slot != null else Ast_node.new(.k_empty, "", loc))
+      .add_child(subject).add_child(Ast_node.new(.k_keyword, "case", loc)).add_child(some_pat)
+      .add_child(some_block).add_child(Ast_node.new(.k_keyword, "case", loc)).add_child(none_pat)
+      .add_child(none_block)
+
+  fn synthesized_option_spelling(r: Ast_node$@): U8[] //<
+    //< The construct the user wrote, from a synthesized `switch`'s mark
+    //<
+    //< Empty where it is not synthesized.
+    //< **A diagnostic's wording is decided here.** Add each new mark here too, or that synthesis
+    //< silently accepts "a subject that is not an Option" (`../sema/body/match.kspls`).
+    if r.text.equals(if_bind_mark)
+      return "if <name>: = <expr>"
+    if r.text.equals(for_in_mark)
+      return "for <name> in <expr>"
+    return ""
+
+  fn attribute_name(r: Ast_node$@): U8[] //< the attribute's name without the `#`
+    //<
+    //< **Empty where there is none.** **`Attribute_prefix` holds the name as one token** with the
+    //< `#` (a rule whose name starts with a capital); no child holds the name alone.
+    if r == null
+      return ""
+    prefix: = r.find_child(.k_attribute_prefix)
+    if prefix == null || prefix.text.len <= 1
+      return ""
+    return prefix.text.sub_from(1)
+
+  fn is_attribute_named(r: Ast_node$@, attr_name: U8[]): Bool //<
+    //< Whether an `attribute` node has the given name
+    if r == null || r.kind_id != .k_attribute
+      return false
+    return r.attribute_name().equals(attr_name)
+
+  fn get_attribute(r: Ast_node$@, attr_name: U8[]): Option<|Ast_node$@|>
+    if r == null
+      return Option<|Ast_node$@|>.none
+    $attr_list: = r.find_child(.k_attribute_list)
+    if attr_list == null
+      proto: = r.find_child(.k_decl_fn_proto)
+      if proto != null
+        attr_list = proto.find_child(.k_attribute_list)
+
+    if attr_list != null
+      for attr in attr_list.children
+        if attr.is_attribute_named(attr_name)
+          return Option<|Ast_node$@|>.some(attr)
+    return Option<|Ast_node$@|>.none
+  fn has_attribute(r: Ast_node$@, attr_name: U8[]): Bool
+    return r.get_attribute(attr_name).is_some()
+  fn has_keyword(r: Ast_node$@, kw: U8[]): Bool
+    if r == null
+      return false
+    for c in r.children
+      if c.kind_id == .k_keyword && c.text.equals(kw)
+        return true
+    return false
+  fn has_literal_child(r: Ast_node$@, text: U8[]): Bool
+    if r == null
+      return false
+    for c in r.children
+      if c.is_literal(text)
+        return true
+    return false
+  fn has_mut_binding_marker(r: Ast_node$@): Bool //< whether a binding is mutable
+    //<
+    //< Unmarked is immutable ("The two axes of mutability" in docs/SPEC-language.md), so it looks
+    //< for a `$` before the identifier: one level down on a local variable (`k_decl_var_item`),
+    //< directly on a parameter.
+    for c in r.children
+      if c.kind_id == .k_identifier
+        return false
+      if c.is_literal("$")
+        return true
+      if c.kind_id == .k_decl_var_item
+        return c.has_mut_binding_marker()
+    return false
+
+  fn get_param_default(r: Self$@): Ast_node$@ //<
+    //< A parameter's default value (the `2` of `b: I32 = 2`)
+    //<
+    //< null where there is none.
+    //< Caution: **Read it as the child after the `=`.** A closure's parameter may have no type, so
+    //< the position alone does not decide it. `is_trivia_node` in `parse/normalize.kspls` keeps it.
+    $after_eq: = false
+    for ch in r.children
+      if after_eq
+        return ch
+      if ch.is_literal("=")
+        after_eq = true
+    return null
+
+  fn is_const_param_default(r: Self$@): Bool //< whether it is a shape allowed as a default value
+    //<
+    //< The same set `--emit-decls` copies with `render_const_value`, except the caller positions
+    //< (`caller_file` / `caller_line`), which **the caller replaces with a literal**
+    //< (fill_default_args in sema/body/call.kspls).
+    switch r.kind_id case .k_integer, .k_float, .k_bool, .k_char, .k_string, .k_null
+      return true
+    default {}
+    return r.caller_loc_kind().len > 0
+
+  fn caller_loc_kind(r: Self$@): U8[] //<
+    //< Whether it is a default value pointing at the caller's position
+    //<
+    //< `"caller_file"` / `"caller_line"`, or empty.
+    //< **They are accepted only as a default value, on purpose**: that position takes no other
+    //< identifier, so these never hide a user's name.
+    switch r.kind_id case .k_identifier, .k_expr_path {} default
+      return ""
+    if r.text.equals("caller_file") || r.text.equals("caller_line")
+      return r.text
+    return ""
+
+  fn get_var_decl_id(r: Self$@): Ast_node$@
+    return r.safe_get_child(2)
+  fn get_var_decl_type_node(r: Self$@): Ast_node$@
+    return r.safe_get_child(3)
+  fn get_var_decl_expr(r: Self$@): Ast_node$@
+    return r.safe_get_child(4)
+
+  fn get_if_label(r: Self$@): Ast_node$@
+    return r.get_non_empty_child(0)
+  fn get_if_cond(r: Self$@): Ast_node$@
+    return r.safe_get_child(1)
+  fn get_if_then_block(r: Self$@): Ast_node$@
+    return r.safe_get_child(2)
+  fn get_if_else_block(r: Self$@): Ast_node$@
+    return r.get_non_empty_child(3)
+
+  fn get_loop_label(r: Self$@): Ast_node$@
+    return r.get_non_empty_child(0)
+  fn get_loop_init(r: Self$@): Ast_node$@
+    return r.safe_get_child(1)
+  fn get_loop_cond(r: Self$@): Ast_node$@
+    return r.safe_get_child(2)
+  fn get_loop_step(r: Self$@): Ast_node$@
+    return r.safe_get_child(3)
+  fn get_loop_block(r: Self$@): Ast_node$@
+    return r.safe_get_child(4)
+
+  fn get_binary_left(r: Self$@): Ast_node$@
+    return r.safe_get_child(0)
+  fn get_binary_op(r: Self$@): Ast_node$@
+    return r.safe_get_child(1)
+  fn get_binary_right(r: Self$@): Ast_node$@
+    return r.safe_get_child(2)
+
+  fn get_unary_op(r: Self$@): Ast_node$@
+    return r.safe_get_child(0)
+  fn get_unary_target(r: Self$@): Ast_node$@
+    return r.safe_get_child(1)
+
+  fn cfg_flag_name(r: Self$@, is_neg: Bool$@): U8[] //<
+    //< It extracts the flag name from a `#cfg(...)` node's argument
+    //<
+    //< Any negation (`!`) is written into is_neg.
+    //<
+    //< Caution: **Do not read a name out of any other shape.** Taking the first identifier makes
+    //< `cfg(all(a, b))` the flag `all`, and the declaration **disappears silently**, with no hint
+    //< of the AND the writer meant.
+    is_neg$ = false
+    $arg: = r.sole_argument()
+    if arg != null && arg.kind_id == .k_expr_unary
+      op: = arg.get_unary_op()
+      if op == null || !op.text.equals("!")
+        return ""
+      is_neg$ = true
+      arg = arg.get_unary_target()
+    // A lone identifier is an expr_path with one child; `m.flag` has more and is rejected here.
+    if arg == null || arg.kind_id != .k_expr_path || arg.children.len != 1
+      return ""
+    id: = arg.get_child(0)
+    return id.text if id != null && id.kind_id == .k_identifier else ""
+
+  fn link_name(r: Self$@): U8[] //<
+    //< The library name a `#link("...")` node's argument names, without the quotes
+    //<
+    //< **Empty unless the argument is one plain string holding a name** (not `"-lopenblas"`, a
+    //< path, a file, two arguments, an identifier); `check_link_attribute` in
+    //< `ksplc/sema/decl/attrs.kspls` rejects an empty one.
+    arg: = r.sole_argument()
+    if arg == null || arg.kind_id != .k_string || arg.text.len < 2
+      return ""
+    name: = arg.text.sub(1, arg.text.len - 2)
+    return name if arg.text[0] == '"' && is_library_name(name) else ""
+
+  priv fn sole_argument(r: Self$@): Ast_node$@ //<
+    //< An attribute's only argument; null where it has none, or two or more
+    //<
+    //< Caution: **Do not count the separator tokens.** Before normalization the `(` `)` `,` are
+    //< Literal children; both parse and sema call it, so it answers the same in either shape.
+    if r == null
+      return null
+    $arg: Ast_node$@ = null
+    for $i: = 1; i < r.children.len; i += 1
+      c: = r.get_child(i)
+      if c == null || c.kind_id == .k_literal
+        continue
+      if arg != null
+        return null // there are two arguments or more (`cfg(a, b)` and the like)
+      arg = c
+    return arg
+
+  fn get_assign_left(r: Self$@): Ast_node$@
+    return r.safe_get_child(0)
+  fn get_assign_op(r: Self$@): Ast_node$@
+    return r.safe_get_child(1)
+  fn get_assign_right(r: Self$@): Ast_node$@
+    return r.safe_get_child(2)
+
+  fn get_postfix_receiver(r: Self$@): Ast_node$@
+    return r.safe_get_child(0)
+  fn get_postfix_op(r: Self$@): Ast_node$@
+    return r.safe_get_child(1) if r.kind_id == .k_expr_postfix else null
+  fn get_postfix_member(r: Self$@): Ast_node$@
+    return r.safe_get_child(1) if r.kind_id == .k_method_access else r.safe_get_child(2)
+
+  fn get_return_expr(r: Self$@): Ast_node$@
+    return r.safe_get_child(1)
+  fn get_throw_expr(r: Self$@): Ast_node$@
+    return r.safe_get_child(1)
+  fn get_fallback_expr(r: Self$@): Ast_node$@
+    return r.safe_get_child(1)
+  fn get_import_path(r: Self$@): Ast_node$@
+    return r.find_child(.k_string)
+  fn get_decl_import_selector_list(r: Self$@): Ast_node$@
+    return r.find_child(.k_decl_import_selector_list)
+  fn has_import_plus(r: Self$@): Bool //< whether the `+` of `import "p" + { A };` was written
+    //<
+    //< **With it, the alias comes in too**; without, only the selected names ("Which names an
+    //< import brings in" in `../../docs/SPEC-language.md`).
+    return r.find_child(.k_decl_import_plus) != null
+
+  fn get_import_alias(r: Self$@): U8[] //<
+    //< `import "p" as m;`'s `m` (empty where it was not written)
+    //<
+    //< Caution: **Do not return the default alias.** [I0310] asks here whether an `as` was
+    //< written. **Do not find it by position**: a `#cfg(...)` on the import shifts it by one.
+    got: = r.find_child(.k_identifier)
+    return "" if got == null else got.text
+  fn get_selector_name(r: Self$@): Ast_node$@ //<
+    //< The source symbol name of a decl_import_selector (`A`, or `A as B`)
+    //<
+    //< It is the leading Identifier, always present.
+    return r.safe_get_child(0)
+  fn get_selector_alias(r: Self$@): Ast_node$@ //<
+    //< A decl_import_selector's new name (null without `as B`: the source name is used)
+    return r.safe_get_child(1)
+  fn get_embed_path(r: Self$@): Ast_node$@
+    return r.find_child(.k_string)
+  fn get_embed_id(r: Self$@): Ast_node$@
+    return r.find_child(.k_identifier)
+  fn get_goto_label(r: Self$@): Ast_node$@
+    return r.find_child(.k_identifier)
+
+  fn get_jump_label(r: Self$@): Ast_node$@
+    c: = r.safe_get_child(1)
+    return c if c != null && c.kind_id == .k_identifier else null
+
+  fn get_primary_inner_expr(r: Self$@): Ast_node$@
+    return (r.safe_get_child(1)
+      if r.children.len >= 3 && r.get_child(0).is_literal("(") else r.safe_get_child(0))
+
+  fn has_parentheses(r: Self$@): Bool
+    return r.children.len >= 3 && r.get_child(0).is_literal("(")
+  fn was_parenthesized(r: Self$@): Bool //<
+    //< Whether normalization (elide_node) removed parentheses around it
+    //<
+    //< The mark it leaves is the inner node's ival (-1, -2, ... per layer).
+    //< The k_expr_primary is gone by then, so this is the lint's only clue. True for any count.
+    return r != null && r.ival < 0
+  fn has_redundant_extra_parens(r: Self$@): Bool //<
+    //< Whether it is wrapped in two or more layers of parentheses
+    //<
+    //< The outer layer is always unwanted, even where precedence needs the inner one: it changes
+    //< neither the meaning nor the safety.
+    return r != null && r.ival <= -2
+  fn is_postfix_safe_kind(r: Self$@): Bool //<
+    //< Whether it can be a postfix operator's operand without parentheses
+    //<
+    //< (`.` `[` `(` `@` `$` `::` `?`). The grammar starts an expr_postfix at an expr_primary
+    //< only, so a binary, unary, ternary, catch, sizeof or upcast is not included.
+    if r == null
+      return false
+    k: = r.kind_id
+    return k == .k_expr_postfix || k == .k_identifier || k == .k_expr_path || k == .k_literal ||
+      k == .k_integer || k == .k_float || k == .k_bool || k == .k_null || k == .k_char ||
+      k == .k_string || k == .k_string_interp || k == .k_primitive_type ||
+      k == .k_expr_implicit_dot || k == .k_expr_compound || k == .k_expr_primary ||
+      k == .k_method_access || k == .k_generic_method || k == .k_generic_path || k == .k_enum_init
+      || k == .k_enum_init_call || k == .k_implicit_enum || k == .k_struct_literal
+  fn is_fn_decl(r: Self$@): Bool //< whether it declares a function (with or without a body)
+    return r != null && (r.kind_id == .k_decl_fn || r.kind_id == .k_decl_fn_proto)
+  fn is_plain_name(r: Self$@): Bool //< whether it is spelled as one name
+    //<
+    //< An identifier or a path of one segment. A switch's subject has to be one (genc writes it
+    //< more than once), so Lower binds any other to a temporary.
+    k: = r.kind_id
+    return k == .k_identifier || k == .k_type_path || k == .k_generic_path ||
+      (k == .k_expr_path && r.children.len <= 1)
+  fn is_member_access(r: Self$@): Bool //<
+    //< Whether it is a member-access node kind (lsp/hover.kspls asks it in several places)
+    return r.kind_id == .k_expr_postfix || r.kind_id == .k_method_access
+  fn is_prefix_cast_result(r: Self$@): Bool //<
+    //< Whether a cast was written prefixed, "Type::(value)"
+    //<
+    //< Normalization gives it the same shape as a postfix "value::Type" ([value, "::", Type]).
+    //< The prefix form is not an expr_primary, so a following postfix operation (.field) needs
+    //< parentheses; the postfix one does not.
+    return r != null && r.kind_id == .k_expr_postfix && r.text.equals("::") &&
+      r.children.len == 3 && r.loc.offset != r.get_child(0).loc.offset
+  fn is_explicit_cast(r: Self$@): Bool //<
+    //< Whether it is an explicit cast's result
+    //<
+    //< A prefix `Type::(v)` and a postfix `v::Type` are both normalized to a postfix `::`.
+    //< It decides whether the value may escape immutability.
+    if r == null || r.kind_id != .k_expr_postfix || r.children.len < 2
+      return false
+    op: = r.safe_get_child(1)
+    return op != null && op.text.equals("::")
+  fn has_explicit_cast_in_chain(r: Self$@): Bool //<
+    //< Whether there is an explicit cast anywhere on a postfix chain
+    //<
+    //< `is_explicit_cast` looks at **only the first operator**; a chain is flat (`[receiver,
+    //< operator, operand, ...]`), so it misses the `::` of `a.b::C`.
+    if r == null || r.kind_id != .k_expr_postfix
+      return false
+    for $i: = 1; i < r.children.len; i += 1
+      if r.get_child(i).text.equals("::")
+        return true
+    return false
+  fn get_match_cond(r: Self$@): Ast_node$@
+    return r.safe_get_child(1)
+  fn get_sizeof_target(r: Self$@): Ast_node$@
+    return r.safe_get_child(1)
+  fn get_offsetof_type(r: Self$@): Ast_node$@ //< the `T` of `offsetof(T, f)`
+    //<
+    //< The same position as `get_sizeof_target`'s, but a separate accessor: that one accepts
+    //< `sizeof(<expression>)` too.
+    return r.safe_get_child(1)
+  fn get_offsetof_field(r: Self$@): Ast_node$@ //< the `f` of `offsetof(T, f)`
+    //<
+    //< The child after the type; the `k_expr_unary` branch in `parse/normalize_stmt.kspls` drops
+    //< the marks.
+    return r.safe_get_child(2)
+  fn get_implicit_enum_variant(r: Self$@): Ast_node$@
+    return r.safe_get_child(0)
+  fn get_enum_field_name_node(r: Self$@): Ast_node$@
+    n: = r.safe_get_child(0)
+    return n if n != null && n.kind_id == .k_identifier else null
+  fn get_enum_field_type_node(r: Self$@): Ast_node$@
+    return r.safe_get_child(1)
+  fn get_type_args(r: Self$@): Ast_node$@
+    return r.find_child(.k_type_args)
+  fn get_implicit_enum_args(r: Self$@): Ast_node$@
+    return r.safe_get_child(1)
+  fn get_labeled_block_label(r: Self$@): Ast_node$@
+    return r.safe_get_child(0)
+  fn get_labeled_block_inner(r: Self$@): Ast_node$@
+    return r.safe_get_child(1)
+  fn get_catch_chain_expr(r: Self$@): Ast_node$@
+    return r.safe_get_child(0)
+  fn get_catch_chain_catch(r: Self$@): Ast_node$@
+    return r.safe_get_child(1)
+  fn get_upcast_inner(r: Self$@): Ast_node$@
+    return r.safe_get_child(0)
+  fn get_result_wrap_inner(r: Self$@): Ast_node$@
+    return r.safe_get_child(0)
+  fn get_ternary_cond(r: Self$@): Ast_node$@
+    return r.safe_get_child(0)
+  fn get_ternary_true(r: Self$@): Ast_node$@
+    return r.safe_get_child(1)
+  fn get_ternary_false(r: Self$@): Ast_node$@
+    return r.safe_get_child(2)
+  fn get_struct_literal_type(r: Self$@): Ast_node$@
+    return r.safe_get_child(0)
+
+  fn get_defer_block(r: Self$@): Option<|Ast_node$@|> //<
+    //< A `defer { ... }`'s body block (stmt_defer's children are the keyword and the stmt_block)
+    for c in r.children
+      if c.kind_id != .k_keyword
+        return Option<|Ast_node$@|>.some(c)
+    return Option<|Ast_node$@|>.none
+
+  fn get_match_label(r: Self$@): Ast_node$@
+    return r.get_non_empty_child(0)
+
+  fn get_field_init_name(r: Self$@): Option<|Ast_node$@|>
+    if r.children.len > 1
+      first: = r.get_child(0)
+      if first.is_literal(".")
+        return Option<|Ast_node$@|>.some(r.get_child(1))
+    return Option<|Ast_node$@|>.none
+
+  fn get_field_init_index(r: Self$@): Option<|Ast_node$@|>
+    $has_eq: = false
+    for c in r.children
+      if c.is_literal("=")
+        has_eq = true
+        break
+    if has_eq && r.children.len > 0
+      first: = r.get_child(0)
+      if !first.is_literal(".") && first.kind_id != .k_identifier
+        return Option<|Ast_node$@|>.some(first)
+    return Option<|Ast_node$@|>.none
+
+  fn get_field_init_expr(r: Self$@): Ast_node$@
+    return r.last_child() if r.children.len > 0 else null
+
+  fn unwrap_top_level(r: Self$@): Ast_node$@
+    if r == null
+      return null
+    $current: = r
+    for current.kind_id == .k_top_level_item || current.kind_id == .k_decl_top
+      $found: = false
+      for tc in current.children
+        if tc.kind_id != .k_keyword && tc.kind_id != .k_literal && tc.kind_id != .k_attribute &&
+          tc.kind_id != .k_attribute_list
+          current = tc
+          found = true
+          break
+      if !found
+        break
+    return current
+  fn is_generic_template(r: Self$@): Bool
+    if r == null
+      return false
+    for c in r.children
+      if c.kind_id == .k_type_gen_params
+        return true
+      if (c.kind_id == .k_type_expr || c.kind_id == .k_type_fn_sig) &&
+        c.find_child(.k_type_gen_params) != null
+        return true
+    return false
+
+  fn gen_param_id_node(r: Self$@): Option<|Ast_node$@|> //<
+    //< The identifier node of a `type_gen_params` child that stands for one type argument
+    //<
+    //< Caution: **Decide what counts as one type argument here and nowhere else.** If the counting
+    //< (check_written_generic_arity in sema/decl/mono.kspls), the binding and a closure's synthesis
+    //< (parse/desugar.kspls) each decided it, the count could disagree with the binding.
+    if r == null
+      return Option<|Ast_node$@|>.none
+    if r.kind_id == .k_identifier
+      return Option<|Ast_node$@|>.some(r)
+    if r.kind_id == .k_type_gen_param
+      id_node: = r.find_child(.k_identifier)
+      if id_node != null
+        return Option<|Ast_node$@|>.some(id_node)
+    return Option<|Ast_node$@|>.none
+
+  fn gen_param_name(r: Self$@): U8[] //< one type parameter's name
+    //<
+    //< Empty where there is none.
+    //< Caution: **Read the name only through this** (built on `gen_param_id_node`); a copy
+    //< elsewhere is left behind when `k_type_gen_param`'s shape changes.
+    switch r.gen_param_id_node() case .some(id_node)
+      return id_node.text
+    case .none
+      return ""
+
+  fn get_decl_type_node(r: Self$@): Ast_node$@
+    if r == null
+      return null
+    $type_node: = r.find_child(.k_type_expr)
+    if type_node == null
+      type_node = r.find_child(.k_type_path)
+    if type_node == null
+      sig: = r.find_child(.k_type_fn_sig)
+      if sig != null
+        type_node = sig.find_child(.k_type_expr)
+    return type_node
+
+  fn param_type_id(r: Self$@): I32 //< a parameter's type
+    //<
+    //< Its annotation's, else the one inferred onto the k_fn_param itself.
+    type_node: = r.get_decl_type_node()
+    return type_node.type_id if type_node != null else r.type_id
+
+  fn get_impl_trait_node(r: Self$@): Option<|Ast_node$@|>
+    if r == null
+      return Option<|Ast_node$@|>.none
+    target_node: = r.get_decl_type_node()
+    if target_node == null
+      return Option<|Ast_node$@|>.none
+    $found_target: = false
+    for c_node in r.children
+      if c_node == target_node
+        found_target = true
+      else if found_target
+        if c_node.kind_id == .k_expr_path || c_node.kind_id == .k_type_path ||
+          c_node.kind_id == .k_identifier
+          return Option<|Ast_node$@|>.some(c_node)
+        if c_node.kind_id == .k_decl_fn
+          break
+    return Option<|Ast_node$@|>.none
+
+  fn get_fn_params(r: Self$@): Ast_node$@
+    if r == null
+      return null
+    sig: = r.find_child(.k_type_fn_sig)
+    if sig != null
+      return sig.find_child(.k_param_list)
+    return r.find_child(.k_param_list)
+
+  fn has_variadic_param(r: Self$@): Bool
+    params: = r.get_fn_params()
+    if params == null
+      return false
+    for p in params.children
+      if p.text.equals("...")
+        return true
+    return false
+
+  fn bare_type_path(r: Self$@): Option<|Ast_node$@|> //<
+    //< The path of a type written bare (`Arena`, `mem.Arena`, `List<|I32|>`, `io`)
+    //<
+    //< A mark after it (`Arena@`, `U8[]`) or a primitive gives no such path.
+    if r == null || r.kind_id != .k_type_expr || r.children.len != 1
+      return Option<|Ast_node$@|>.none
+    atom: = r.get_child(0)
+    if atom.kind_id != .k_type_atom || atom.children.len != 1 ||
+      atom.get_child(0).kind_id != .k_expr_path || atom.get_child(0).children.len == 0
+      return Option<|Ast_node$@|>.none
+    return Option<|Ast_node$@|>.some(atom.get_child(0))
+
+  fn get_type_fn_sig(r: Self$@): Option<|Ast_node$@|>
+    if r == null
+      return Option<|Ast_node$@|>.none
+    if r.kind_id == .k_type_fn_sig
+      return Option<|Ast_node$@|>.some(r)
+    $sig: = r.find_child(.k_type_fn_sig)
+    if sig != null
+      return Option<|Ast_node$@|>.some(sig)
+    if r.children.len > 0
+      atom: = r.get_child(0)
+      if atom != null && atom.kind_id == .k_type_atom
+        sig = atom.find_child(.k_type_fn_sig)
+        if sig != null
+          return Option<|Ast_node$@|>.some(sig)
+        if atom.children.len > 1 && atom.get_child(1).kind_id == .k_type_fn_sig
+          return Option<|Ast_node$@|>.some(atom.get_child(1))
+        if atom.children.len > 0 && atom.get_child(0).kind_id == .k_type_fn_sig
+          return Option<|Ast_node$@|>.some(atom.get_child(0))
+    return Option<|Ast_node$@|>.none
+  fn push_or_default(r: Self$@, list: List<|Ast_node$@|>$@, node: Ast_node$@,
+    def_kind: base_ast_kinds.Ast_kind, def_text: U8[])
+    list.push(node if node != null else Ast_node.new(def_kind, def_text, r.loc))
+
+  fn push_or_empty(r: Self$@, list: List<|Ast_node$@|>$@, node: Ast_node$@)
+    r.push_or_default(list, node, .k_empty, "")
+
+  fn get_arg_at(r: Self$@, index: Sz): Option<|Ast_node$@|>
+    if r == null || r.children.len == 0
+      return Option<|Ast_node$@|>.none
+    $count: Sz = 0
+    for ch in r.children
+      if !ch.is_literal(",")
+        if count == index
+          return Option<|Ast_node$@|>.some(ch)
+        count += 1
+    return Option<|Ast_node$@|>.none
+
+  fn gen_param_variance_mask(r: Self$@): I32 //<
+    //< The bits at the positions of a generic's mutable type parameters (`struct Box<|$T|>`)
+    //<
+    //< **Only those positions are special**; the rest stay immutable. The mark is the Literal
+    //< before the identifier (as in `has_mut_binding_marker`).
+    if r == null
+      return 0
+    params: = r.find_child(.k_type_gen_params)
+    if params == null
+      return 0
+    $mask: I32 = 0
+    $pos: I32 = 0
+    for p in params.children
+      if p.kind_id != .k_type_gen_param
+        continue
+      if pos >= 32
+        break
+      if p.has_mut_binding_marker()
+        mask = mask | (1 << pos)
+      pos += 1
+    return mask

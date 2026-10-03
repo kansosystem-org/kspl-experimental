@@ -1,0 +1,22 @@
+//< A Tensor whose shape's product overflows Sz must not be created
+//<
+//< **The wrapped product can land inside the cap**: 1e8 has factors of 2 only up to 2^8, so a
+//< wrapped product can be any multiple of 256. Multiplying first and then checking the cap
+//< allocates 256 elements for a huge shape, and indexing by the shape writes outside them. The cap
+//< is checked before multiplying (the caution inside `Tensor.new` in ksai/tensor.kspls). 1e8 *
+//< 28999941890838049 wraps past 2^64 to 256; an Sz literal holds only 32 bits, so it is built at
+//< run time.
+import "ksai/tensor" { Tensor }
+import "std/io"
+import "std/mem" { Arena }
+
+fn main(): I32
+  arena: = Arena.new(1024 * 1024)
+  defer arena.free()
+  wrapping: = Sz::(28999941I64 * 1000000000I64 + 890838049I64)
+  $shape: Sz[2] = ::{ 0, 100000000 }
+  shape[0] = wrapping
+  io.out().s("about to build a tensor of shape[0]=\{shape[0]\}\n")
+  t: = Tensor<|F32|>.new(Sz[]::shape, arena)
+  io.out().s("must not get here: size=\{t.size\}\n")
+  return 0

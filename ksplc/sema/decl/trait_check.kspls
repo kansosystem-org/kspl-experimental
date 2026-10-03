@@ -1,0 +1,419 @@
+//< Checks whether an `impl T: Trait` meets the trait's requirements
+//<
+//< Name resolution is elsewhere (`sema/decl/resolve.kspls`); this only matches one declaration
+//< against another, method by method, by argument count and types and the return type.
+//< Caution: **A mismatch must say where**: which argument, or the return value
+//< (`report_sig_mismatch` shows the position and the types).
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/sema/decl/access" as sema_decl_access
+import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/decl/trait_default" as sema_decl_trait_default
+import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
+import "ksplc/sema/type/arc" as sema_type_arc
+import "ksplc/sema/type/def" as sema_type_def
+import "ksplc/sema/type/display" as sema_type_display
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
+import "std/chars"
+import "std/str" { Str_builder }
+
+enum Op_trait_status
+  not_applicable
+  user_defined
+  error
+
+enum Op_method //< an operator trait's resolution result
+  //<
+  //< Caution: The caller must handle all three: without `builtin` the built-in operations vanish;
+  //< without `failed`, follow-on errors appear. Only `resolve_operator_call` below creates it.
+  user(sym: Sema_symbol$@) //< the user's implementation was found
+  builtin //< not implemented: the built-in operation applies
+  failed //< already diagnosed (an unimplemented error, or implemented but not found)
+
+impl Sema_ctx
+  fn add_trait_method(r: Self$@, m_node: Ast_node$@, trait_def: sema_type_def.Trait_def$@,
+    trait_vis: sema_type_scope.Visibility): Sema_symbol$@?Sema_error //<
+      //< Builds the symbol for a trait method's prototype and registers it in trait_def
+      //<
+      //< It also resolves the prototype's types. registry and mono read the result.
+    m_name_node: = m_node.find_child(.k_identifier)
+    if m_name_node == null
+      return null
+    m_kind: = sema_type_scope.Sym_kind.function(false)
+    m_sym: = Sema_symbol.new(m_kind, m_name_node.text, m_node)
+    m_sym.flags.is_method = true
+    // A method inherits the trait's visibility unless it states its own (`priv fn release(...);`,
+    // the grammar rule decl_trait); ignoring that would let it be written with no effect.
+    m_sym.vis = m_node.get_visibility() if m_node.has_explicit_visibility() else trait_vis
+    // A trait's methods are requirements, called by the conformance check and by Lower's synthesis
+    // (retain/release), never from the source; if not marked used, a priv one gets a false [W0206].
+    // An unused trait is still reported on the trait symbol.
+    m_sym.flags.is_used = true
+
+    param_list: = m_node.get_fn_params()
+    if param_list != null
+      $param_ordinal: Sz = 0
+      for param in base_ast_ext.Param_cursor.new(param_list, false)
+        p_type: = param.get_decl_type_node()
+        // `Self` cannot be written on a formal parameter other than the receiver: a thunk passes
+        // the fat pointer into a concrete-type position, and C fails with KSPL saying nothing.
+        // Use a type parameter instead (`trait Eq<|Other|>`). A `Self` return is legitimate.
+        if param_ordinal >= 1 && p_type != null && p_type.mentions_self_type()
+          r.err(p_type,
+            "'Self' cannot be used for a parameter other than the receiver; the interface thunk \
+              would pass the interface value where the implementation expects its own concrete \
+              type. Take a type parameter instead (see 'trait Eq<|Other|>' in std/lang)")
+        // Only a bare `Self` can be the receiver: `Self$@` would not bind the implementing type
+        // (a thunk bridges value and pointer) but tighten the caller's lvalue check, unseen in
+        // the text ("Why a trait's receiver is fixed to a bare `Self`" in docs/DESIGN.md).
+        if param_ordinal == 0 && p_type != null && p_type.mentions_self_type()
+          $extracted: = p_type.extract_type_name()
+          defer extracted.free()
+          if !extracted.slice().equals("Self")
+            r.err(p_type,
+              "interface method receivers must be written as plain 'Self'. The '@' / '$' form does \
+                not constrain implementations (the thunk bridges value and pointer, so an impl may \
+                still take 'Self$@' and mutate the receiver) — it only forbids callers from using \
+                a temporary as the receiver. Write 'Self'")
+        param_ordinal += 1
+        if p_type != null
+          param.type_id = p_type.resolve_and_apply_type(r)?
+          // An omitted annotation (`fn draw(r);`) is an "Unknown" type_expr, not null: check the
+          // resolved type ID, as infer_fn in infer.kspls does.
+          if param.type_id == r.env.get_or_add("Unknown") ||
+            param.type_id == r.env.get_or_add("Void")
+            r.err(param, "missing type annotation for parameter")
+
+    type_node: = m_node.get_decl_type_node()
+    if type_node != null
+      m_sym.type_id = type_node.resolve_and_apply_type(r)?
+      // infer_fn's check, for a prototype with no body. The impl does not cover it: a `priv`
+      // target makes it `priv`, and the type leaks through a `pub trait`.
+      r.check_type_vis_leak(type_node, m_sym.vis, "return type", "interface method")
+    else
+      m_sym.type_id = r.env.get_or_add("Void")
+
+    trait_def.methods_list.push(m_sym)
+    return m_sym
+  priv fn report_sig_mismatch(r: Self$@, m_name: U8[], kind: U8[], trait_tid: I32, impl_tid: I32,
+    err_node: Ast_node$@) //<
+      //< Reports a type mismatch between a trait's and an impl's method
+      //<
+      //< kind is "argument N" or "return".
+    trait_type_str: = r.env.get_str(r.env.get_real_type(trait_tid))
+    impl_type_str: = r.env.get_str(r.env.get_real_type(impl_tid))
+    $e: = Str_builder.new()
+    defer e.free()
+    e
+      .s("method '\{m_name\}': \{kind\} type mismatch (interface expects '\{trait_type_str\}', impl \
+        has '\{impl_type_str\}')")
+    r.err(err_node, e.slice())
+  priv fn check_trait_method_sig(r: Self$@, req_m: Sema_symbol$@, impl_m: Sema_symbol$@,
+    real_trait: I32, real_target: I32, err_node: Ast_node$@): Bool //<
+      //< Compares a trait method's signature with an impl method's
+      //<
+      //< Arguments are compared strictly by position, skipping the receiver (value/pointer may
+      //< differ); generics bound to Self map to the target, and other types must match at the base.
+    req_params: = req_m.node.get_fn_params()
+    impl_params: = impl_m.node.get_fn_params()
+    if req_params == null || impl_params == null
+      return true
+    // **A default value belongs only to the trait's declaration.** A second one on the impl would
+    // make a call's value depend on the path, invisible in the text (C++'s inherited defaults).
+    for ip in base_ast_ext.Param_cursor.new(impl_params, false)
+      d: = ip.get_param_default()
+      // **Skip the copied defaults** (`trait_default.kspls`); the flag is `ival`, 0 where written.
+      if d != null && d.ival != sema_decl_trait_default.inherited_default
+        r.err(d,
+          "a trait implementation cannot give a parameter a default value: a call through the trait \
+            resolves to the trait's declaration, which does not see it. Write it on the interface \
+            declaration instead")
+    unknown: = I32::sema_type_env.Builtin_type_id.unknown
+    $ok: = true
+    $param_ordinal: Sz = 0
+    $impl_cur: = base_ast_ext.Param_cursor.new(impl_params, false)
+    for rp in base_ast_ext.Param_cursor.new(req_params, false)
+      $ip: Ast_node$@ = null
+      if got: = impl_cur.next()
+        ip = got
+      if ip == null
+        break
+      if param_ordinal >= 1
+        bi: = r.env.trait_cmp_base(rp.type_id, real_trait, real_target)
+        bp: = r.env.trait_cmp_base(ip.type_id, real_target, real_target)
+        // An unresolved type (Unknown, a generic parameter) is not compared.
+        if bi != unknown && bp != unknown &&
+          (bi != bp ||
+          r.env.is_pointer(rp.type_id) != r.env.is_pointer(ip.type_id))
+          $kind: = Str_builder.new()
+          defer kind.free()
+          kind.s("argument \{param_ordinal\}")
+          kind_slice: = kind.slice()
+          r.report_sig_mismatch(req_m.name, kind_slice, rp.type_id, ip.type_id, err_node)
+          ok = false
+      param_ordinal += 1
+    return ok && r.check_trait_method_ret(req_m, impl_m, real_trait, real_target, err_node)
+  // Compares the return types by base type only: the thunk bridges value and pointer.
+  priv fn check_trait_method_ret(r: Self$@, req_m: Sema_symbol$@, impl_m: Sema_symbol$@,
+    real_trait: I32, real_target: I32, err_node: Ast_node$@): Bool
+    // Symbol.type_id holds the return type resolved at collect time (Void by default).
+    unknown: = I32::sema_type_env.Builtin_type_id.unknown
+    // Caution: A trait returning `Self` needs the implementation to return `Self$@`: the thunk
+    // repacks it into the fat pointer, and a value return is C's `&temporary`, failing in C with
+    // no KSPL diagnostic.
+    req_ret_node: = req_m.node.get_decl_type_node()
+    // **`Self` itself and `Self` in a type argument differ**, with opposite fixes; one diagnostic
+    // would send the latter down **a path that cannot work**: "return it by pointer".
+    if req_ret_node != null && req_ret_node.mentions_self_type() &&
+      !req_ret_node.names_self_type()
+      $spelled: = req_ret_node.extract_type_name()
+      defer spelled.free()
+      r.clear_scratch()
+        .s("method '\{req_m.name\}' of interface '\{r.env.get_str(real_trait)\}' has 'Self' inside \
+          its return type ('\{spelled.slice()\}'), not as the whole of it. That cannot be an \
+          interface method: without a body its vtable slot would need a different type for every \
+          implementor, and a default body, which holds no slot, leaves that 'Self' unresolved when \
+          copied into a generic implementation. Returning a pointer does not help — what varies \
+          is the type itself. Write the method on the concrete type instead (`impl<|...|> Keep<|S, \
+          T|> { ... }`), or give the interface a type parameter for the result and return that (see \
+          'trait Cast<|Output|>' in std/lang).")
+      r.err(err_node, r.scratch.slice())
+      return false
+    if req_ret_node != null && req_ret_node.mentions_self_type() &&
+      !r.env.is_pointer(impl_m.type_id)
+      r.clear_scratch()
+        .s("method '\{req_m.name\}' of interface '\{r.env.get_str(real_trait)\}' returns 'Self', so \
+          this implementation must return '\{r.env.get_str(real_target)\}$@' (a pointer), not a \
+          value. Dispatch re-wraps the result into an interface value and needs an address for it; \
+          a returned value has no home that outlives the call. Note the caller receives \
+          '\{r.env.get_str(real_trait)\}', never a raw pointer — that is why the interface spells \
+          it plain 'Self', exactly as it does for the receiver. To return your own type by value, \
+          give the interface a type parameter and return that instead (see 'trait Cast<|Output|>' \
+          in std/lang)")
+      r.err(err_node, r.scratch.slice())
+      return false
+    bi: = r.env.trait_cmp_base(req_m.type_id, real_trait, real_target)
+    bp: = r.env.trait_cmp_base(impl_m.type_id, real_target, real_target)
+    if bi == unknown || bp == unknown || bi == bp
+      return true
+    r.report_sig_mismatch(req_m.name, "return", req_m.type_id, impl_m.type_id, err_node)
+    return false
+
+  fn verify_trait_implementation(r: Self$@, target_id: I32, trait_id: I32, err_node: Ast_node$@):
+    Bool
+    real_trait: = r.env.get_real_type(trait_id)
+    trait_info: = r.env.get_info(real_trait)
+    $trait_def: sema_type_def.Trait_def$@ = null
+    switch trait_info case .trait_type(d)
+      trait_def = d
+    default
+      $sb: = Str_builder.new()
+      sb.s("'\{r.env.get_str(trait_id)\}' is not an interface")
+      r.err(err_node, sb.slice())
+      sb.free()
+      return false
+
+    r.warn_shadowed_known_trait(r.env.get_str(real_trait), err_node)
+
+    // Immutability is ignored in the trait comparison (see the note on implements_trait in
+    // sema/type/env.kspls).
+    real_target: = r.env.strip_const_deep(r.env.get_real_type(target_id))
+    target_str: = r.env.get_str(real_target)
+
+    t_entry: = r.env.id_to_type.get(real_target)
+    $success: = true
+
+    for req_m in trait_def.methods_list
+      $impl_m: Sema_symbol$@ = null
+      if im: = t_entry.get_method(req_m.name)
+        impl_m = im
+
+      if impl_m == null
+        $err_sb: = Str_builder.new()
+        defer err_sb.free()
+        err_sb
+          .s("Type '\{target_str\}' does not implement required method '\{req_m.name\}' of \
+            interface '\{r.env.get_str(trait_id)\}'")
+        r.err(err_node, err_sb.slice())
+        success = false
+      else
+        req_params: = req_m.node.get_fn_params()
+        impl_params: = impl_m.node.get_fn_params()
+        $req_count: Sz = 0
+        $impl_count: Sz = 0
+        if req_params != null
+          req_count = req_params.children.len
+        if impl_params != null
+          impl_count = impl_params.children.len
+        if req_count != impl_count
+          $err_sb: = Str_builder.new()
+          err_sb
+            .s("method '\{req_m.name\}' argument count mismatch in interface implementation. \
+              Expected \{req_count\}, got \{impl_count\}")
+          r.err(err_node, err_sb.slice())
+          err_sb.free()
+          success = false
+        else if !r.check_trait_method_sig(req_m, impl_m, real_trait, real_target, err_node)
+          success = false
+    return success
+
+  priv fn warn_shadowed_known_trait(r: Self$@, trait_fqn: U8[], err_node: Ast_node$@) //<
+    //< [W0504] Warns where the trait conformed to only shares a known trait's name
+    //<
+    //< **ARC, the move check and release tracking silently stop working**: known traits are matched
+    //< by FQN, so the fix is a `lang.` prefix ("Automatic reference counting via `Ref_counted`
+    //< conformance" in docs/SPEC-language.md).
+    if err_node == null
+      return
+    known: = sema_type_arc.shadowed_known_trait(trait_fqn)
+    if known.len == 0
+      return
+    simple: = known.sub_from(known.rfind_char('.') + 1)
+    r.clear_scratch()
+      .s("[W0504] '\{trait_fqn\}' shadows the compiler-known '\{known\}'. Conforming to this \
+        declaration does not enable the built-in behavior, and nothing else reports it. Write \
+        'lang.\{simple\}' to target the real one.")
+    r.warn(err_node, r.scratch.slice())
+
+  fn check_trait_implementation(r: Self$@, target_id: I32, trait_id: I32, err_node: Ast_node$@):
+    Bool //<
+      //< Whether target_id implements trait_id, reporting at err_node where it does not
+      //<
+      //< A trait itself satisfies that trait's constraint (`io.out()`'s Writer into
+      //< `f<|W: Writer|>(w: W)`).
+      //< Caution: Do not move this into `implements_trait`: ARC and the move check use it, and a
+      //< trait value would become subject to retain/release.
+    if r.env.get_real_type(target_id) == r.env.get_real_type(trait_id)
+      return true
+    if r.env.implements_trait(target_id, trait_id)
+      return true
+    if err_node != null
+      // Caution: **Do not show an internal name** such as `get_str`'s `std_ds_Hashable_K` (the head
+      // top of `../type/display.kspls`).
+      $target_shown: = r.env.display_str(r.env.get_real_type(target_id))
+      defer target_shown.free()
+      $trait_shown: = r.env.display_str(trait_id)
+      defer trait_shown.free()
+      r.clear_scratch()
+        .s("type '\{target_shown.slice()\}' does not explicitly implement interface \
+          '\{trait_shown.slice()\}'")
+      r.err(err_node, r.scratch.slice())
+      r.clear_scratch()
+        .s("If the implementation exists in another file, check for circular imports or ensure the \
+          defining file is explicitly imported.")
+      r.hint(err_node, r.scratch.slice())
+    return false
+
+  fn resolve_operator_call(r: Self$@, type_id: I32, trait_name: U8[], method_name: U8[],
+    err_prefix: U8[], op: U8[], err_node: Ast_node$@): Op_method //<
+      //< Resolves an operator trait: **"is it implemented" and "which method" in one answer**
+      //<
+      //< Caution: Split, each caller must handle "`user_defined` but not found", and easily reverts
+      //< silently to the built-in meaning (Principle 5). The contradiction is reported here.
+    switch r.check_operator_trait(type_id, trait_name, err_prefix, op, err_node) case .error
+      return .failed
+    case .user_defined
+      switch r.resolve_operator_method(type_id, method_name) case .some(sym)
+        return Op_method.user(sym)
+      case .none
+        r.report_operator_method_missing(type_id, trait_name, method_name, err_node)
+        return .failed
+    default {}
+    return .builtin
+
+  fn report_operator_method_missing(r: Self$@, type_id: I32, trait_name: U8[], method_name: U8[],
+    err_node: Ast_node$@) //<
+      //< Reports "the trait is implemented, yet the method cannot be found by name"
+    type_str: = r.env.get_str(r.env.strip_ptr(type_id))
+    r.clear_scratch()
+      .s("type '\{type_str\}' implements '\{trait_name\}' but its '\{method_name\}' method could \
+        not be resolved")
+    r.err(err_node, r.scratch.slice())
+
+  fn index_param_id_for(r: Self$@, recv_type_id: I32, method_name: U8[]): I32 //<
+    //< Looks up the index operator's method from the receiver's type and returns its index type
+    //<
+    //< `Sz` if it cannot be found.
+    switch r.resolve_operator_method(recv_type_id, method_name) case .some(sym)
+      return r.operator_index_param_id(sym)
+    case .none
+      return I32::sema_type_env.Builtin_type_id.size_type
+
+  fn operator_index_param_id(r: Self$@, method_sym: Sema_symbol$@): I32 //<
+    //< The index type an index operator (`Index_place.at` / `Index.get` / `Index_mut.set`) receives
+    //<
+    //< Caution: **Do not hard-code the index type as `Sz`**, or `Map<|U8[], I32|>`'s `m["k"]` fails
+    //< with "expected 'Sz', but got 'U8[]'". The declaration is authoritative; `Sz` is a fallback.
+    fallback_id: = I32::sema_type_env.Builtin_type_id.size_type
+    if method_sym == null || method_sym.node == null
+      return fallback_id
+    p_list: = method_sym.node.get_fn_params()
+    if p_list == null
+      return fallback_id
+    $seen: Sz = 0
+    for ch in base_ast_ext.Param_cursor.new(p_list, false)
+      seen += 1
+      if seen == 2 // the first is the receiver
+        return r.index_param_type_of(ch, fallback_id)
+    return fallback_id
+
+  priv fn index_param_type_of(r: Self$@, param_node: Ast_node$@, fallback_id: I32): I32 //<
+    //< Gets the type from a formal-parameter node
+    //<
+    //< Caution: **Do not rely on the `type_id` copy.** An instance's parameter can have it empty,
+    //< making a `Map<|U8[], I32|>`'s key `Sz`; it is resolved again in the declaring file.
+    t_node: = param_node.get_decl_type_node()
+    if t_node == null
+      return fallback_id
+    old_file: = r.file_name
+    if t_node.loc.file().len > 0
+      r.set_current_file(t_node.loc.file())
+    resolved: = t_node.resolve_type(r) catch 0
+    r.set_current_file(old_file)
+    if resolved != 0 && !sema_type_env.is_unknown(resolved)
+      return resolved
+    return t_node.type_id if t_node.type_id != 0 else fallback_id
+
+  priv fn check_operator_trait(r: Self$@, type_id: I32, trait_name: U8[], err_prefix: U8[],
+    op: U8[], err_node: Ast_node$@): Op_trait_status
+    base_id: = r.env.strip_ptr(type_id)
+    if r.env.has_implemented_operator_trait(base_id, trait_name)
+      return .user_defined
+
+    // Caution: **Exclude a slice by its spelling.** As a `Slice<|T|>` instance it would get the
+    // unfixable advice "implement `Add`" (`../body/binary.kspls` rejects it).
+    if !r.env.is_pointer(type_id) && !r.env.is_slice(type_id) && !r.env.is_array(type_id) &&
+      !r.env.is_fn_ptr(type_id)
+      clean_type: = r.env.base_type_name(base_id)
+      clean_id: = r.env.get_or_add(clean_type)
+      real_type: = r.env.get_real_type(clean_id)
+      if real_type == 0 || sema_type_env.is_unknown(real_type)
+        return .not_applicable
+
+      is_builtin: =
+        r.env.is_numeric(real_type) ||
+        real_type == (I32::sema_type_env.Builtin_type_id.bool_type)
+      // Caution: **Only a simple enum is built in.** A tagged union is a struct in C, so `==` on
+      // it would reach the C compiler as `invalid operands to binary expression` (Principle 2).
+      $is_simple_enum: = false
+      $is_tagged: = false
+      entry: = r.env.id_to_type.get(real_type)
+      if entry != null
+        switch entry.info case .enum_type(def)
+          is_simple_enum = def.is_scalar()
+          is_tagged = !is_simple_enum
+        default {}
+      if !is_builtin && !is_simple_enum
+        r.clear_scratch()
+          .s("\{err_prefix\} '\{op\}' requires '\{clean_type\}' to implement '\{trait_name\}' \
+            interface")
+        if is_tagged
+          r.scratch
+            .s(": its variants carry data, so it has no built-in '\{op\}'; take it apart with \
+              'switch'")
+        r.err(err_node, r.scratch.slice())
+        return .error
+    return .not_applicable

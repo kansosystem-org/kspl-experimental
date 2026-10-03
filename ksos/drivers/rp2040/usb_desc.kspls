@@ -1,0 +1,225 @@
+//< The descriptors the RP2040's USB device identifies itself with
+//<
+//< Kept apart from the driver (`usb_cdc.kspls`): **bytes only**, with no procedures at all.
+//<
+//< Caution: **Count the length byte yourself and write it.** If a descriptor's length byte does
+//< not match its length, the host gives up partway through enumeration and the device sees no
+//< error. A string descriptor is UTF-16LE, so its length is `2 + 2 × the character count`.
+
+// ==========================================
+// The descriptors
+// ==========================================
+
+// The VID/PID is **0x1209/0x0002** (a pid.codes test pair). For a product, obtain your own.
+const desc_device: U8[18] = ::{
+  18,
+  1, // bLength, DEVICE
+  0x00,
+  0x02, // bcdUSB 2.00
+  // This is a composite device, so it is Miscellaneous / Common Class / IAD (0xEF,0x02,0x01).
+  // Left as CDC (0x02), the host sees "one function" and does not find the NCM behind it.
+  0xef,
+  0x02,
+  0x01,
+  64, // EP0's maximum packet length
+  0x09,
+  0x12, // idVendor  0x1209
+  // Caution: **Change the PID too whenever the set of functions changes.** Windows remembers the
+  // driver per VID/PID, so "the COM port appears but the network adapter does not".
+  0x02,
+  0x00, // idProduct 0x0002
+  0x00,
+  0x01, // bcdDevice 1.00
+  1,
+  2,
+  0, // iManufacturer, iProduct, iSerialNumber (0 = none)
+  1, // bNumConfigurations
+}
+
+// The configuration descriptor.
+// **Each function needs an IAD (Interface Association Descriptor) before it.** Without them the
+// host reads the four interfaces as one function and neither driver attaches.
+//   function 1 = CDC-ACM (IF 0,1) ... the debug console on real hardware
+//   function 2 = CDC-NCM (IF 2,3) ... what the PC sees as a USB LAN adapter
+const desc_config: U8[160] = ::{
+  // CONFIGURATION (9): 160 in all, 4 interfaces, value 1, bus powered, 100mA
+  9,
+  2,
+  160,
+  0,
+  4,
+  1,
+  0,
+  0x80,
+  50,
+  // --- function 1: CDC-ACM (the console) ---
+  8,
+  11,
+  0,
+  2,
+  2,
+  2,
+  1,
+  0, // IAD (8): two from IF0, CDC/ACM/AT
+  9,
+  4,
+  0,
+  0,
+  1,
+  2,
+  2,
+  1,
+  0, // INTERFACE 0 (9): communications, 1 endpoint
+  5,
+  0x24,
+  0,
+  0x10,
+  0x01, // Header (5): CDC 1.10
+  5,
+  0x24,
+  1,
+  0,
+  1, // Call Management (5): no call management, data IF=1
+  4,
+  0x24,
+  2,
+  2, // ACM (4): it handles SET_LINE_CODING and the like
+  5,
+  0x24,
+  6,
+  0,
+  1, // Union (5): control IF=0, subordinate IF=1
+  7,
+  5,
+  0x81,
+  3,
+  8,
+  0,
+  16, // EP1 IN (7): interrupt, 8 bytes, 16ms
+  9,
+  4,
+  1,
+  0,
+  2,
+  10,
+  0,
+  0,
+  0, // INTERFACE 1 (9): data, 2 endpoints
+  7,
+  5,
+  0x02,
+  2,
+  64,
+  0,
+  0, // EP2 OUT (7): bulk, 64 bytes
+  7,
+  5,
+  0x82,
+  2,
+  64,
+  0,
+  0, // EP2 IN  (7): bulk, 64 bytes
+  // --- function 2: CDC-NCM (the network) ---
+  8,
+  11,
+  2,
+  2,
+  2,
+  0x0d,
+  0,
+  0, // IAD (8): two from IF2, CDC/NCM
+  9,
+  4,
+  2,
+  0,
+  1,
+  2,
+  0x0d,
+  0,
+  0, // INTERFACE 2 (9): communications (NCM), 1 endpoint
+  5,
+  0x24,
+  0,
+  0x10,
+  0x01, // Header (5): CDC 1.10
+  5,
+  0x24,
+  6,
+  2,
+  3, // Union (5): control IF=2, subordinate IF=3
+  // Ethernet Networking (13): iMACAddress=string 3, no statistics,
+  // wMaxSegmentSize=1514, multicast filters 0, power filters 0
+  13,
+  0x24,
+  0x0f,
+  3,
+  0,
+  0,
+  0,
+  0,
+  0xea,
+  0x05,
+  0,
+  0,
+  0,
+  6,
+  0x24,
+  0x1a,
+  0x00,
+  0x01,
+  0, // NCM (6): NCM 1.00, no extra features
+  7,
+  5,
+  0x83,
+  3,
+  16,
+  0,
+  16, // EP3 IN (7): interrupt, 16 bytes, 16ms
+  9,
+  4,
+  3,
+  0,
+  0,
+  10,
+  0,
+  1,
+  0, // INTERFACE 3 alt 0 (9): data, no endpoints
+  9,
+  4,
+  3,
+  1,
+  2,
+  10,
+  0,
+  1,
+  0, // INTERFACE 3 alt 1 (9): data, 2 endpoints
+  7,
+  5,
+  0x04,
+  2,
+  64,
+  0,
+  0, // EP4 OUT (7): bulk, 64 bytes
+  7,
+  5,
+  0x84,
+  2,
+  64,
+  0,
+  0, // EP4 IN  (7): bulk, 64 bytes
+}
+
+const desc_lang: U8[4] = ::{ 4, 3, 0x09, 0x04 } // English (United States)
+const desc_manufacturer: U8[12] = ::{ 12, 3, 'K', 0, 'a', 0, 'n', 0, 's', 0, 'o', 0 }
+const desc_product: U8[18] = ::{ 18, 3, 'k', 0, 's', 0, 'o', 0, 's', 0, ' ', 0, 'C', 0, 'D', 0, 'C',
+  0 } //<
+    //< The product name, "ksos CDC"
+    //<
+    //< 8 characters, so the length is 18; a longer bLength makes the host read the spare bytes as
+    //< a NUL (ksos/tests/usb_descriptors.kspls).
+// The MAC address the Ethernet Networking descriptor points at. **It is the MAC the host uses for
+// its own end, not this device's MAC.** It is 12 hex characters in UTF-16LE (26 bytes).
+// Caution: Make the first octet 0x02 (locally administered, unicast); a real vendor's range
+// collides when that vendor's device is on the same LAN.
+const desc_mac: U8[26] = ::{ 26, 3, '0', 0, '2', 0, '0', 0, '0', 0, '0', 0, '0', 0, '0', 0, '0', 0,
+  '0', 0, '0', 0, '0', 0, '2', 0 }

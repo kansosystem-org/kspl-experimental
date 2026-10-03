@@ -1,0 +1,29 @@
+//< A trait method cannot hold `Self` **at a type argument's position** in its return type
+//<
+//< The type of the vtable's slot changes per implementation, so nothing settles what fills it.
+//< Caution: **Do not mix it with returning `Self` itself**, which passes as a pointer, and whose
+//< wording and mend differ (check_trait_method_ret in `ksplc/sema/decl/trait_check.kspls`).
+// EXPECT: has 'Self' inside its return type
+// EXPECT-NOT: so this implementation must return
+
+priv struct Wrap<|S|>
+  priv inner: S
+
+priv trait Chain<|T|>
+  fn next(r: Self): Option<|T|>
+
+  fn wrapped(r: Self): Wrap<|Self|>
+    return Wrap<|Self|>::{ .inner = r }
+
+priv struct Src
+  priv i: I32
+
+impl Src: Chain<|I32|>
+  priv fn next(r: Self$@): Option<|I32|>
+    if r.i >= 2
+      return Option<|I32|>.none
+    r.i += 1
+    return Option<|I32|>.some(r.i)
+
+fn main()
+  _w: = Src::{ .i = 0 }.wrapped()

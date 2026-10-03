@@ -1,0 +1,33 @@
+//< One subject per file, with one function for each case
+//<
+//< The file's marks are every case's marks gathered at the head. The same mark written N times
+//< must match N places.
+// EXPECT: attributes '#inline' and '#noinline' contradict each other
+// EXPECT: attribute '#export' has no effect on a 'priv' declaration
+
+// `#inline` and `#noinline` say opposite things. Which wins where both can be written appears
+// nowhere in the code, so the loser is left believed to be in effect as well (Principle 5).
+#inline
+#noinline
+priv fn twice(a: U32): U32
+  return a * 2
+
+fn case_attr_inline_noinline_conflict(): I32
+  return I32::twice(2)
+
+// `priv` is the setting that nobody outside this file can use it, and a free function becomes
+// `static` (internal linkage) in the generated C too. Put the name out plainly and it still
+// cannot be joined from outside (it does not appear at the exit on wasm either). It is a spelling
+// where nothing happens when written, so it is refused (Principle 5).
+// To put it out to C or
+// wasm, unspecified is enough; `pub` is for putting it out to KSPL's other packages.
+#export
+priv fn hidden_but_exported(): I32
+  return 1
+
+fn case_export_priv(): I32
+  return hidden_but_exported() - 1
+
+fn main()
+  case_attr_inline_noinline_conflict()
+  case_export_priv()

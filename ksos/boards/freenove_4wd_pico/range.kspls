@@ -1,0 +1,48 @@
+//< How the car senses the distance ahead (an HC-SR04)
+//<
+//< The raw reading, and the steady reading passed to the dodging decision.
+//<
+//< **This is the only function that reads it.** If a caller copied the reading and only one copy
+//< were fixed, "the same distance" would mean something different on each path.
+//< **One measurement blocks for up to 36ms, and settle_us (36ms) is needed between
+//< measurements.** Do not call it from inside a fast loop.
+import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/drivers/rp2040/hcsr04" as sonar
+
+const out_of_range_mm: U32 = 3000 //< the distance in mm reported when no reflection comes back
+  //<
+  //< Caution: **Do not use 0** — 0 means "could not be measured", which is different (the reader
+  //< takes this as "nothing there", not as "the sensor does not answer").
+
+fn init()
+  sonar.init(board.ultrasonic_trig, board.ultrasonic_echo)
+
+fn read_mm(): U32 //< measures once
+  //<
+  //< **0 means "could not be measured"** (ECHO never went High, so suspect the wiring).
+  d: = sonar.measure(board.ultrasonic_trig, board.ultrasonic_echo)
+  if !d.ok
+    return 0
+  return out_of_range_mm if d.timed_out else d.mm
+
+// The last three readings.
+$recent: U32[3] = ::{ 0, 0, 0 }
+$recent_at: Sz = 0
+
+priv fn median3(a: U32, b: U32, c: U32): U32
+  if (a <= b && b <= c) || (c <= b && b <= a)
+    return b
+  if (b <= a && a <= c) || (c <= a && a <= b)
+    return a
+  return c
+
+fn steady_mm(raw: U32): U32 //< takes one reading and returns **the median** of the last three
+  //<
+  //< **It exists so the car does not dodge on a single reading.** **Call it every loop** — skip
+  //< one and the median lags behind.
+  //< Caution: **Do not use it for the very-close-range timeout.** That one uses the raw reading (a
+  //< false alarm is on the safe side, and waiting for three readings to agree notices a close
+  //< obstacle too late).
+  recent[recent_at] = raw
+  recent_at = (recent_at + 1) % 3
+  return median3(recent[0], recent[1], recent[2])

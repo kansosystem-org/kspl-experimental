@@ -1,0 +1,156 @@
+//< Log lines that carry a level, so a run can keep only the lines serious enough to matter
+//<
+//< **It imports nothing.** The destination is a `Writer` and nothing else is used, so the same
+//< call works on a host and on a microcontroller with no libc — `std/io`'s `out()` is a
+//< `Writer`, and so is a device console's line buffer. **A line below the threshold is never
+//< built**, so a line that is not emitted costs nothing to assemble.
+
+// ==========================================
+// Caution: **Do not use `std/time` to timestamp a line.** It needs libc, which would exclude a
+// device with no debugger, where a log matters most. A destination that wants a time writes one.
+// The reasons are in "A line that is not emitted is not built" in `std/docs/DESIGN.md`.
+// ==========================================
+pub enum Level //< how serious a line is, and so whether it is emitted at all
+  //<
+  //< Most serious first. **These are the four words of the diagnostic ladder** (the ladder in
+  //< `../docs/SPEC-language.md`), so the product uses one vocabulary for severity. **The meaning
+  //< still differs**: here a level decides whether the line is emitted at all.
+  error //< something did not work, and the run cannot continue as asked
+  warning //< the run continued, and the result may not be what was meant
+  information //< a step worth seeing on an ordinary run
+  hint //< detail wanted only while tracking down a problem
+
+impl Level
+  priv fn rank(r: Self): I32 //< its severity as a number, 0 being the most serious
+    switch r case .error
+      return 0
+    case .warning
+      return 1
+    case .information
+      return 2
+    default // .hint
+      return 3
+
+  priv fn pressing(r: Self): Bool //<
+    //< Whether a line at this level is flushed as soon as it ends, instead of waiting in a buffer
+    //<
+    //< **Only the two most serious levels**: a killed run loses its buffered tail, which is where
+    //< the failure was reported ("Error and warning lines are flushed at once" in
+    //< `std/docs/DESIGN.md`).
+    return r.rank() <= Level.warning.rank()
+
+  priv fn word(r: Self): U8[] //< the mark written on the line
+    //<
+    //< **One letter, so the column has the same width on every row**, for the eye and for a filter.
+    switch r case .error
+      return "E"
+    case .warning
+      return "W"
+    case .information
+      return "I"
+    default // .hint
+      return "H"
+
+priv fn put_num(w: Writer, v: Sz) //< writes a number as decimal
+  //<
+  //< Caution: **Do not use `std/strfmt`'s `Formattable` numbers here**: this file promises to
+  //< import nothing.
+  if v >= 10
+    put_num(w, v / 10)
+  w.c('0' + U8::(v % 10))
+
+pub struct Log //< a destination, the lowest level it keeps, and the fields written before a body
+  //<
+  //< Caution: **This logger owns its destination.** Anything else written there lands in the
+  //< middle of a line, because a line ends only when the next one starts (`at` below). This file
+  //< cannot enforce that, so it is stated, not promised (Principle 8 in `../docs/DESIGN.md`).
+  priv dest: Writer
+  priv least: Level
+  priv tag: U8[]
+  priv sep: U8[]
+  priv place: Bool //< whether the caller's file and line go on every line
+  priv open: Bool //< whether a line is open, waiting for its end
+  priv hurry: Bool //<
+    //< Whether the open line is flushed instead of left in a buffer
+
+impl Log
+  pub fn new( //< creates a logger
+    //<
+    //< **A body is written unquoted.** **Whether the place is written is chosen here, not per
+    //< line**, so the columns do not shift ("The caller's position reaches `say` as a default
+    //< argument" in `std/docs/DESIGN.md`).
+    dest: Writer, //< where the lines go; owned by this logger, not to be shared mid-line
+    least: Level, //< the least serious level still kept; anything below it is not built
+    tag: U8[], //< the name written before every line, or empty for none
+    sep: U8[] = ": ", //< the separator between fields; `","` gives a spreadsheet one column each
+    place: Bool = false, //< whether every line carries the caller's file and line
+  ): Log
+    return Log::{ .dest = dest, .least = least, .tag = tag, .sep = sep, .place = place,
+      .open = false, .hurry = false }
+
+  pub fn wants(r: Self@, lv: Level): Bool //< whether a line at that level would be emitted
+    //<
+    //< `at` checks it itself; a caller uses it to skip a whole gathering step.
+    return lv.rank() <= r.least.rank()
+
+  // **Write any line that carries a value through this function**: interpolation streams into a
+  // writer, so `"conn #\{n\}"` goes here, and the body does not run when the level is off ("A line
+  // that is not emitted is not built" in `std/docs/DESIGN.md`).
+  //   if w: = log.at(.hint) { w.s("x=\{heavy()\}"); }
+  pub fn at( //< where to write a line's body, or nothing when the level is filtered out
+    r: Self$@,
+    lv: Level, //< the level of the line being started
+    file: U8[] = caller_file, //< keep the default unless this is called from a wrapper
+    line: Sz = caller_line, //< keep the default unless this is called from a wrapper
+  ): Option<|Writer|>
+    if !r.wants(lv)
+      return Option<|Writer|>.none
+    r.open_line(lv, file, line)
+    return Option<|Writer|>.some(r.dest)
+
+  pub fn say( //< writes one whole line
+    //<
+    //< **It takes text that is already built**; anything that carries a value goes through `at`.
+    //< Caution: **In a wrapper of your own, do not leave the place to its default.** `caller_file`
+    //< looks back one step only, so such a wrapper names itself; take the place as parameters and
+    //< pass it on, as this one does ("The caller's position" in `../docs/SPEC-language.md`).
+    r: Self$@,
+    lv: Level, //< the level of the line
+    text: U8[], //< the body, already built
+    file: U8[] = caller_file, //< keep the default unless this is called from a wrapper
+    line: Sz = caller_line, //< keep the default unless this is called from a wrapper
+  )
+    if w: = r.at(lv, file, line)
+      w.s(text)
+    r.end_line()
+
+  pub fn done(r: Self$@) //< ends the open line, if there is one, and flushes
+    //<
+    //< **Call it before the program exits**, or the last line is written without its line end.
+    r.end_line()
+    r.dest.flush()
+
+  priv fn open_line(r: Self$@, lv: Level, file: U8[], line: Sz) //<
+    //< Ends any open line and writes the fields that go before a body
+    r.end_line()
+    if r.tag.len > 0
+      r.dest.s(r.tag).s(r.sep)
+    r.dest.s(lv.word()).s(r.sep)
+    if r.place
+      r.dest.s(file).s(r.sep)
+      put_num(r.dest, line)
+      r.dest.s(r.sep)
+    r.open = true
+    r.hurry = lv.pressing()
+
+  priv fn end_line(r: Self$@) //< ends the open line
+    //<
+    //< It does nothing when no line is open, so calling it twice is safe.
+    //< Caution: **A serious line is flushed here, not by the caller**, or an `error` on a new path
+    //< waits unseen in a buffer and is lost with the tail (Principle 8 in `../docs/DESIGN.md`).
+    if !r.open
+      return
+    r.dest.c('\n')
+    r.open = false
+    if r.hurry
+      r.dest.flush()

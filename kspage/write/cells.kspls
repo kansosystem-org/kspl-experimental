@@ -1,0 +1,643 @@
+//< The actions that move a table's cells themselves
+//<
+//< Adding and removing rows and columns, merging and splitting cells, copying from the current
+//< cell (autofill), sorting rows. Each single change is in the `do_*` functions in
+//< [`edit.kspls`](edit.kspls); here they are combined so one action is one undo.
+//< These are `Editor` methods too. An extension method is visible only where it is imported, so
+//< a caller imports both `write/edit.kspls` and this file.
+//< Note: It is split from [`shape.kspls`](shape.kspls) for the 1000-line-per-file cap.
+import "kspage/expr/shift"
+import "kspage/lay/ask" + { Cell_at }
+import "kspage/lay/caret"
+import "kspage/lay/page" { Page }
+import "kspage/model/day"
+import "kspage/model/doc" + { Axis, Block, Tile }
+import "kspage/write/edit" + { Editor }
+import "kspage/write/field"
+import "kspage/write/record" { Again, Step }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/seq"
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/strnum"
+
+priv struct Key //< the sort key
+  //<
+  //< **A number compares as a number, a date as the day it names, and everything else as text** (as
+  //< text, "10" comes before "9"). A date is read as formulas read it (`day.day_of`).
+  //< In `rank`, 0 is a number, 1 a text and 2 empty. Empty is always last, even in reverse order.
+  rank: Sz
+  num: F64
+  text: U8[]
+
+priv fn key_of(tiles: List<|Tile|>$@, row: Sz, column: Sz, arena: Arena$@): Key
+  t: = tile_at(tiles, row, column)
+  $text: U8[] = ""
+  if t.block != null && t.block.inlines.len > 0
+    // Caution: **Copy it.** The text moves elsewhere as it is edited.
+    text = arena.dup_str(t.block.inlines.get(0).showing())
+  if text.len <= 0
+    return Key::{ .rank = 2, .num = 0.0, .text = text }
+  v: = text.to_f64() catch
+    if days: = day.day_of(text)
+      return Key::{ .rank = 0, .num = F64::days, .text = text }
+    return Key::{ .rank = 1, .num = 0.0, .text = text }
+  return Key::{ .rank = 0, .num = v, .text = text }
+
+priv fn folded_compare(a: U8[], b: U8[]): I32 //< compares texts letter by letter, ignoring case
+  //<
+  //< "apple" comes before "Zebra", as in Excel and Calc (Sheets puts every capital first). With the
+  //< same start, the shorter comes first. Texts that differ only by case are the same key and keep
+  //< their order. Beyond ASCII the bytes compare as they are (code point order; an accented capital
+  //< is not folded).
+  for $i: Sz = 0; i < a.len && i < b.len; i += 1
+    x: = a[i].to_lower()
+    y: = b[i].to_lower()
+    if x != y
+      return -1 if x < y else 1
+  return 0 if a.len == b.len else (-1 if a.len < b.len else 1)
+
+priv fn key_order(a: Key, b: Key, down: Bool): I32 //< < 0, 0 or > 0 as `a` sorts ahead or not
+  //<
+  //< Caution: **Return 0 for equal keys**, so the stable sort keeps their order.
+  //< Empty is always last, even in reverse; the rest reverses (a text before a number).
+  if a.rank == 2 || b.rank == 2
+    return 0 if a.rank == b.rank else (1 if a.rank == 2 else -1)
+  $got: I32 = 0
+  if a.rank != b.rank
+    got = -1 if a.rank < b.rank else 1
+  else if a.rank == 0
+    got = -1 if a.num < b.num else (1 if b.num < a.num else 0)
+  else
+    got = folded_compare(a.text, b.text)
+  return -got if down else got
+
+priv fn sorted_order(keys: List<|Key|>$@, down: Bool, arena: Arena$@): List<|Sz|> //<
+  //< Makes the sorted order from the list of keys
+  //<
+  //< Counting from the start, each entry names which original entry goes there.
+  //< Caution: **Keep equal keys in their original order** (`order_by` is stable), or sorting on
+  //< another column destroys the earlier order.
+  at: = List<|Sz|>.create(arena)
+  for $i: Sz = 0; i < keys.len; i += 1
+    at.push(i)
+  return at.order_by(fn(a: Sz, b: Sz; keys: List<|Key|>$@, down: Bool): I32 {
+    return key_order(keys.get(a), keys.get(b), down);
+  }, arena)
+
+priv const values_cap: Sz = 1000 //< the most distinct values one column's list holds
+  //<
+  //< Values beyond it are reported, not silently dropped.
+
+struct Column_values //< what one column shows, collected so a set of values can be chosen from it
+  //<
+  //< The values go into the list passed in. Empty cells are not among them — they are `blank`,
+  //< which the picker shows as "(the blanks)".
+  blank: Bool //< some cell under the heading shows nothing
+  cut: Bool //< there were more than `values_cap` distinct values, so the list is incomplete
+
+fn column_values(table: Block$@, column: Sz, arena: Arena$@, out: List<|U8[]|>$@): Column_values //<
+  //< Collects the distinct texts one column shows, in the order that column sorts in
+  //<
+  //< The order is the sort's own (`key_order`). **Two texts that differ only by case are one
+  //< value**, spelled as first seen — the filter ignores case, so two rows would answer to one
+  //< checkbox. The heading (row 0) is not a value.
+  tiles: = table.tiles_of(arena)
+  keys: = List<|Key|>.create(arena)
+  $blank: = false
+  $cut: = false
+  for $i: Sz = 0; i < tiles.len; i += 1
+    t: = tiles.get(i)
+    if t.column != column || t.row == 0
+      continue
+    k: = key_of(tiles, t.row, column, arena)
+    if k.rank == 2
+      blank = true
+      continue
+    if held(out, k.text)
+      continue
+    if out.len >= values_cap
+      cut = true
+      continue
+    $at: Sz = out.len
+    for at > 0 && key_order(k, keys.get(at - 1), false) < 0
+      at -= 1
+    keys.insert(at, k)
+    out.insert(at, k.text)
+  return Column_values::{ .blank = blank, .cut = cut }
+
+priv fn held(out: List<|U8[]|>$@, text: U8[]): Bool //< whether that value is already in the list
+  for $i: Sz = 0; i < out.len; i += 1
+    if out.get(i).equals_ignore_case(text)
+      return true
+  return false
+
+enum Sort_end //< the result of sorting a table's rows
+  //<
+  //< Caution: **Do not merge the refusals into one** — one message would name the wrong cause
+  //< ("click inside a cell" for a merge; the same rule as `Block_style_end`).
+  done
+  outside //< the cursor is not inside a table cell
+  shut //< the document is open read-only
+  merged //< a cell merged downward is among the rows to be sorted
+  too_few //< there are not two rows under the heading to sort
+  in_order //< the rows are already in that order
+
+impl Sort_end
+  fn sorted(e: Self): Bool //< whether the rows were sorted
+    //<
+    //< It answers only yes or no (where the reason is wanted, switch on the result).
+    switch e case .done
+      return true
+    default
+      return false
+
+enum Merge_end //< the result of merging the selected cells
+  //<
+  //< Caution: **Do not merge the refusals into one** (the same rule as `Sort_end`); each is fixed
+  //< differently.
+  done
+  outside //< the selection is not inside a table cell, or it spans two tables
+  shut //< the document is open read-only
+  alone //< only one cell is selected, so there is nothing to merge it with
+  ragged //< an already merged cell extends outside the selection
+
+impl Merge_end
+  fn merged_cells(e: Self): Bool //< whether the cells were merged
+    switch e case .done
+      return true
+    default
+      return false
+
+priv fn same_order(order: List<|Sz|>$@): Bool //< whether a sort would leave the order unchanged
+  //<
+  //< Where it is unchanged, do nothing (or an undo would restore nothing).
+  for $i: Sz = 0; i < order.len; i += 1
+    if order.get(i) != i
+      return false
+  return true
+
+priv fn tile_at(tiles: List<|Tile|>$@, row: Sz, column: Sz): Tile //<
+  //< The cell at (`row`, `column`) in the table
+  //<
+  //< Only a merge's top-left cell is found. Where `block` is null, no cell is there.
+  for $i: Sz = 0; i < tiles.len; i += 1
+    t: = tiles.get(i)
+    if t.row == row && t.column == column
+      return t
+  return Tile::{ .row = row, .column = column, .rows = 0, .cols = 0, .block = null }
+
+priv fn index_in(row: Block$@, cell: Block$@): Sz //< which child of the row that cell is
+  //<
+  //< -1 where it is not one.
+  for $i: Sz = 0; i < row.children.len; i += 1
+    if row.children.get(i) == cell
+      return i
+  return -1
+
+priv fn cells_before(tiles: List<|Tile|>$@, row: Sz, column: Sz): Sz //<
+  //< The number of cells in that row before `column`
+  //<
+  //< It is the index a restored cell is inserted at.
+  $n: Sz = 0
+  for $i: Sz = 0; i < tiles.len; i += 1
+    t: = tiles.get(i)
+    if t.row == row && t.column < column
+      n += 1
+  return n
+
+priv fn after_along(spot: Cell_at, t: Tile, axis: Axis): Bool //<
+  //< Whether that cell is further along `axis` than the current cell
+  //<
+  //< Only within the same column (or row).
+  switch axis case .row
+    return t.column == spot.column && t.row > spot.row
+  case .column
+    return t.row == spot.row && t.column > spot.column
+
+priv fn line_total(table: Block$@, axis: Axis, arena: Arena$@): Sz //<
+  //< How many rows (or columns) a table has
+  //<
+  //< For columns it counts the grid's, merges included. `line_count` counts a row's children,
+  //< which is too few when every row has a merge, and would refuse a column that is not the last.
+  switch axis case .row
+    return table.children.len
+  case .column
+    return table.grid_columns(arena)
+
+priv fn index_on(spot: Cell_at, axis: Axis): Sz
+  switch axis case .row
+    return spot.row
+  case .column
+    return spot.column
+
+impl Editor
+  fn add_line(r: Self$@, page: Page$@, axis: Axis): Bool //<
+    //< Adds one row (or column) at the cell the cursor is in
+    //<
+    //< True if added. It is added after the cursor's row (or column).
+    //< Caution: **Call it after layout** (the layout tells which cell the cursor is in).
+    if r.shut()
+      return false
+    spot: = ask.cell_of(page, r.caret)
+    if !spot.found
+      return false
+    if !r.add_line_at(spot.table, axis, index_on(spot, axis) + 1)
+      return false
+    // The command itself declares that it can be repeated, rather than the key working it out from
+    // the record (`Again` in `record.kspls`).
+    r.again = Again.add_line(axis)
+    return true
+
+  priv fn add_line_at(r: Self$@, table: Block$@, axis: Axis, at: Sz): Bool //<
+    //< Adds one empty row (or column) to `table` at `at`, in one step
+    //<
+    //< It makes an empty row or column and inserts it. The formulas after it shift
+    //< (`shift_formulas`). The button and a move past the table's end both go through here (one
+    //< undo either way).
+    r.break_group()
+    st: = r.step()
+    made: = table.fresh_line(axis, r.arena)
+    // The spans are empty because the column is new, so a merged cell widens (`Block.attach_line`).
+    edit.do_line(r, st, table, axis, at, true, made, List<|Sz|>.create(r.arena),
+      Option<|F32|>.none)
+    edit.shift_formulas(r, st, table, axis, at, 1)
+    r.break_group()
+    return true
+
+  fn set_line_size(r: Self$@, page: Page$@, axis: Axis, v: Option<|F32|>): Bool //<
+    //< Sets the width of the cursor's column (or the height of its row) to a number
+    //<
+    //< Call it after layout (the same reason as `add_line`). `none` removes the setting, fitting
+    //< that column (row) to its contents.
+    //< Caution: **Do not use 0 for "not set"** — width 0 is a valid setting, and it is written as 0
+    //< (`lay/grid.kspls`).
+    if r.shut()
+      return false
+    spot: = ask.cell_of(page, r.caret)
+    if !spot.found
+      return false
+    r.break_group()
+    edit.do_set_size(r, r.step(), spot.table, axis, index_on(spot, axis), v)
+    r.break_group()
+    return true
+
+  fn fill_along(r: Self$@, page: Page$@, axis: Axis): Bool //<
+    //< Copies the current cell's text to the cells further along (autofill)
+    //<
+    //< The references inside a formula shift (the `$` part does not move); a text is copied as is.
+    //< Caution: **Call it after layout** (the same reason as `add_line`). A covered cell is
+    //< skipped.
+    if r.shut()
+      return false
+    spot: = ask.cell_of(page, r.caret)
+    if !spot.found
+      return false
+    tiles: = spot.table.tiles_of(r.arena)
+    mine: = tile_at(tiles, spot.row, spot.column)
+    if mine.block == null || mine.block.inlines.len <= 0
+      return false
+    src: = r.arena.dup_str(mine.block.inlines.get(0).text())
+    r.break_group()
+    st: = r.step()
+    $done: = false
+    // The cells are counted to the edge (`tiles_of`, merges included).
+    for $i: Sz = 0; i < tiles.len; i += 1
+      t: = tiles.get(i)
+      if !after_along(spot, t, axis)
+        continue
+      dr: = t.row - spot.row
+      dc: = t.column - spot.column
+      r.fill_cell(st, t.block, src, dr, dc)
+      done = true
+    r.break_group()
+    return done
+
+  priv fn fill_cell(r: Self$@, st: Step$@, cell: Block$@, src: U8[], dr: Sz, dc: Sz) //<
+    //< Rewrites one cell with the source text shifted by `dr` rows and `dc` columns
+    if cell == null || cell.inlines.len <= 0
+      return
+    $sb: = Str_builder.new()
+    defer sb.free()
+    // Only a formula is shifted (a text form holds no references).
+    if src.len > 0 && src[0] == '='
+      shift.offset_refs(src, dr, dc, sb@)
+    else
+      sb.s(src)
+    // Caution: **Go through the function that replaces a formula** (`edit.replace_source`), which
+    // first restores the formula from the shown value, or the texts get mixed up on undo.
+    edit.replace_source(r, st, cell.inlines.get(0), sb.slice())
+
+  priv fn shift_row(r: Self$@, st: Step$@, row: Block$@, dr: Sz) //<
+    //< Shifts the references in a row's formulas by `dr` rows
+    for $i: Sz = 0; i < row.children.len; i += 1
+      cell: = row.children.get(i)
+      if cell.inlines.len <= 0
+        continue
+      // Only a formula is shifted (a text form holds no references).
+      if !cell.inlines.get(0).is_formula()
+        continue
+      src: = cell.inlines.get(0).text()
+      $sb: = Str_builder.new()
+      defer sb.free()
+      shift.offset_refs(src, dr, 0, sb@)
+      edit.replace_source(r, st, cell.inlines.get(0), sb.slice())
+
+  fn sort_rows(r: Self$@, page: Page$@, down: Bool): Sort_end //<
+    //< Sorts the rows under the heading by the column the cursor is in
+    //<
+    //< The first row is the heading and never moves (GFM treats it so by position); the cursor only
+    //< chooses the column. **A formula's references shift by as much as its row moved** (as in a
+    //< copy).
+    //< Caution: **Call it after layout** (the same reason as `add_line`).
+    if r.shut()
+      return Sort_end.shut
+    spot: = ask.cell_of(page, r.caret)
+    if !spot.found
+      return Sort_end.outside
+    table: = spot.table
+    first: Sz = 1
+    if table.children.len - first < 2
+      return Sort_end.too_few
+    tiles: = table.tiles_of(r.arena)
+    for $i: Sz = 0; i < tiles.len; i += 1
+      t: = tiles.get(i)
+      if t.rows > 1 && t.row + t.rows > first
+        return Sort_end.merged
+    keys: = List<|Key|>.create(r.arena)
+    for $i: Sz = first; i < table.children.len; i += 1
+      keys.push(key_of(tiles, i, spot.column, r.arena))
+    $order: = sorted_order(keys, down, r.arena)
+    if same_order(order@)
+      return Sort_end.in_order
+    r.break_group()
+    r.reorder_rows(r.step(), table, first, order@)
+    r.break_group()
+    return Sort_end.done
+
+  priv fn reorder_rows(r: Self$@, st: Step$@, table: Block$@, first: Sz, order: List<|Sz|>$@) //<
+    //< Rearranges the rows from `first` downwards into `order`'s order
+    //<
+    //< Caution: **The caller opens the step** (one sort is one undo).
+    // Saved before moving (once removed, which row was which cannot be read).
+    rows: = List<|Block$@|>.create(r.arena)
+    sizes: = List<|Option<|F32|>|>.create(r.arena)
+    for $i: Sz = first; i < table.children.len; i += 1
+      rows.push(table.children.get(i))
+      sizes.push(table.size_of(Axis.row, i))
+    // Caution: **Remove them from the end**, or the index of a row not yet removed shifts.
+    $i: Sz = table.children.len
+    for i > first
+      i -= 1
+      edit.do_line(r, st, table, Axis.row, i, false, null, null, Option<|F32|>.none)
+    // Caution: **Restore them with contents** (`fresh` false), or an empty row reaches the peer.
+    for $k: Sz = 0; k < order.len; k += 1
+      one: = List<|Block$@|>.create(r.arena)
+      one.push(rows.get(order.get(k)))
+      edit.do_line(r, st, table, Axis.row, first + k, true, one, null,
+        sizes.get(order.get(k)))
+    // Caution: **Change the formulas once the rows are in place**, or they mix with unmoved rows.
+    for $k: Sz = 0; k < order.len; k += 1
+      was: = order.get(k)
+      if k != was
+        r.shift_row(st, rows.get(was), k - was)
+
+  fn merge_cell(r: Self$@, page: Page$@, axis: Axis): Bool //<
+    //< Merges the current cell with the neighbouring cell
+    //<
+    //< The absorbed cell is removed; one undo restores it.
+    //< Caution: **Call it after layout** (the same reason as `add_line`).
+    if r.shut()
+      return false
+    spot: = ask.cell_of(page, r.caret)
+    if !spot.found
+      return false
+    tiles: = spot.table.tiles_of(r.arena)
+    mine: = tile_at(tiles, spot.row, spot.column)
+    if mine.block == null
+      return false
+    $next: Tile = tile_at(tiles, spot.row, spot.column + mine.cols)
+    $rows: Sz = mine.rows
+    $cols: Sz = mine.cols
+    switch axis case .column
+      if next.block == null || next.rows != mine.rows
+        return false
+      cols += next.cols
+    case .row
+      next = tile_at(tiles, spot.row + mine.rows, spot.column)
+      if next.block == null || next.cols != mine.cols
+        return false
+      rows += next.rows
+    row: = spot.table.children.get(next.row)
+    at: = index_in(row, next.block)
+    if at < 0
+      return false
+    r.break_group()
+    st: = r.step()
+    field.do_set_span(r, st, mine.block, rows, cols)
+    edit.do_block(r, st, row, at, false, null)
+    r.break_group()
+    return true
+
+  fn merge_range(r: Self$@, page: Page$@): Merge_end //<
+    //< Merges every cell the selection covers into its top-left cell
+    //<
+    //< This is Excel's merge: select a rectangle and click once; one undo restores it all.
+    //< Caution: **Keep only the top-left cell's text** (undo restores the rest).
+    //< Call it after layout (the layout tells which cells are selected).
+    if r.shut()
+      return Merge_end.shut
+    span: = ask.cell_range(page, r.caret)
+    if !span.found
+      return Merge_end.outside
+    if span.rows <= 1 && span.cols <= 1
+      return Merge_end.alone
+    tiles: = span.table.tiles_of(r.arena)
+    head: = tile_at(tiles, span.row, span.column)
+    if head.block == null
+      return Merge_end.outside
+    // Caution: **Refuse where a merge inside extends outside**, or the cell sticking out loses its
+    // columns and every row below shifts by one.
+    for $y: Sz = span.row; y < span.row + span.rows; y += 1
+      for $x: Sz = span.column; x < span.column + span.cols; x += 1
+        one: = tile_at(tiles, y, x)
+        if one.block == null
+          continue
+        if y + one.rows > span.row + span.rows || x + one.cols > span.column + span.cols
+          return Merge_end.ragged
+    r.break_group()
+    st: = r.step()
+    field.do_set_span(r, st, head.block, span.rows, span.cols)
+    // Remove them from the end (going forward, the second one on would be the wrong cell).
+    $y: Sz = span.row + span.rows
+    for y > span.row
+      y -= 1
+      row: = span.table.children.get(y)
+      $x: Sz = span.column + span.cols
+      for x > span.column
+        x -= 1
+        one: = tile_at(tiles, y, x)
+        if one.block == null || one.block == head.block
+          continue
+        at: = index_in(row, one.block)
+        if at < 0
+          continue
+        edit.do_block(r, st, row, at, false, null)
+    // Caution: **Put the cursor in the remaining cell.** Left where it was, it points at an inline
+    // outside the tree, and what is typed next appears nowhere on the screen.
+    if n: = head.block.first_run()
+      r.caret = caret.at(n, 0)
+    else
+      r.caret = caret.nowhere()
+    r.break_group()
+    return Merge_end.done
+
+  fn split_cell(r: Self$@, page: Page$@): Bool //< splits the merge of the current cell
+    //<
+    //< True if split.
+    //< Caution: **Put empty cells back where it was covering**, or that row is short and the cells
+    //< to its right shift one column left.
+    if r.shut()
+      return false
+    spot: = ask.cell_of(page, r.caret)
+    if !spot.found
+      return false
+    tiles: = spot.table.tiles_of(r.arena)
+    mine: = tile_at(tiles, spot.row, spot.column)
+    if mine.block == null || (mine.rows <= 1 && mine.cols <= 1)
+      return false
+    r.break_group()
+    st: = r.step()
+    field.do_set_span(r, st, mine.block, 1, 1)
+    for $dr: Sz = 0; dr < mine.rows; dr += 1
+      row_at: = mine.row + dr
+      if row_at >= spot.table.children.len
+        continue
+      row: = spot.table.children.get(row_at)
+      // The top-left cell is already there, so that row alone counts from one less.
+      $at: Sz = cells_before(tiles, row_at, mine.column) + (1 if dr == 0 else 0)
+      $dc: Sz = 1 if dr == 0 else 0
+      for dc < mine.cols
+        // An empty cell gets one text too (without one the cursor cannot stand there).
+        made: = doc.new_block(mine.block.style, r.arena)
+        made.add_text("")
+        edit.do_block(r, st, row, at, true, made)
+        at += 1
+        dc += 1
+    r.break_group()
+    return true
+
+  fn move_cell(r: Self$@, page: Page$@, forward: Bool): Bool //< moves the cursor to the next cell
+    //<
+    //< It goes right, and at a row's end to the start of the next row. **Past the table's end it
+    //< adds a row** and moves into its first cell, as Word, Docs and Writer do (`grown_row`).
+    //< Backwards, before the first cell, it stops.
+    if r.shut()
+      return false
+    spot: = ask.cell_of(page, r.caret)
+    if !spot.found
+      return false
+    tiles: = spot.table.tiles_of(r.arena)
+    $at: Sz = -1
+    for $i: Sz = 0; i < tiles.len && at < 0; i += 1
+      t: = tiles.get(i)
+      if t.row == spot.row && t.column == spot.column
+        at = i
+    if at < 0
+      return false
+    // A cell with no text is skipped (no box to stand on), as is a row a filter hides.
+    $k: Sz = at + 1 if forward else at - 1
+    for k >= 0 && k < tiles.len
+      t: = tiles.get(k)
+      if ask.row_laid(page, spot.table, t.row)
+        if n: = t.block.first_run()
+          r.break_group()
+          r.caret = caret.at(n, 0)
+          return true
+      k = k + 1 if forward else k - 1
+    if !forward
+      return false
+    return r.grown_row(spot, 0)
+
+  fn move_row(r: Self$@, page: Page$@, down: Bool): Bool //<
+    //< Moves the cursor one row down (or up), staying in its column
+    //<
+    //< It is Excel's Enter, and Shift+Enter goes to the cell above. **Past the last row it adds
+    //< one**, as Tab does; above the first it does nothing. A merged cell is stepped over whole,
+    //< and so is a row a filter hides (`ask.row_laid`).
+    if r.shut()
+      return false
+    spot: = ask.cell_of(page, r.caret)
+    if !spot.found
+      return false
+    tiles: = spot.table.tiles_of(r.arena)
+    mine: = tile_at(tiles, spot.row, spot.column)
+    span: = mine.rows if mine.block != null && mine.rows > 0 else 1
+    if !down
+      $up: Sz = spot.row
+      for up > 0
+        up -= 1
+        if ask.row_laid(page, spot.table, up)
+          return r.stand_in(tiles, up, spot.column)
+      return false
+    $want: Sz = spot.row + span
+    for want < spot.table.line_count(Axis.row) && !ask.row_laid(page, spot.table, want)
+      want += 1
+    if want >= spot.table.line_count(Axis.row)
+      return r.grown_row(spot, spot.column)
+    return r.stand_in(tiles, want, spot.column)
+
+  priv fn stand_in(r: Self$@, tiles: List<|Tile|>$@, row: Sz, column: Sz): Bool //<
+    //< Puts the cursor in the cell covering (`row`, `column`)
+    //<
+    //< A covered position puts it in the merge's own cell.
+    for $i: Sz = 0; i < tiles.len; i += 1
+      t: = tiles.get(i)
+      if t.row <= row && row < t.row + t.rows && t.column <= column &&
+        column < t.column + t.cols
+        if n: = t.block.first_run()
+          r.break_group()
+          r.caret = caret.at(n, 0)
+          return true
+        return false
+    return false
+
+  priv fn grown_row(r: Self$@, spot: ask.Cell_at, column: Sz): Bool //<
+    //< Adds a row at the table's end and puts the cursor in that row's cell at `column`
+    //<
+    //< It goes through `add_line_at` (one undo; the cells take the first row's style). **It goes at
+    //< the end, not after the cursor's row** — after it, a new row could land inside a cell merged
+    //< downward.
+    at: = spot.table.children.len
+    if !r.add_line_at(spot.table, Axis.row, at)
+      return false
+    row: = spot.table.children.get(at)
+    if row.children.len == 0
+      return false
+    c: = column if column < row.children.len else row.children.len - 1
+    if n: = row.children.get(c).first_run()
+      r.caret = caret.at(n, 0)
+      return true
+    return false
+
+  fn drop_line(r: Self$@, page: Page$@, axis: Axis): Bool //<
+    //< Deletes one row (or column) at the cell the cursor is in
+    //<
+    //< True if deleted. The last one is not deleted (nothing would be left to click to add one).
+    if r.shut()
+      return false
+    spot: = ask.cell_of(page, r.caret)
+    if !spot.found || line_total(spot.table, axis, r.arena) <= 1
+      return false
+    r.break_group()
+    st: = r.step()
+    at: = index_on(spot, axis)
+    edit.do_line(r, st, spot.table, axis, at, false, null, null, Option<|F32|>.none)
+    edit.shift_formulas(r, st, spot.table, axis, at, -1)
+    // What the cursor pointed at is gone. Do not use it until it is placed again.
+    r.caret = caret.nowhere()
+    r.again = Again.drop_line(axis)
+    r.break_group()
+    return true

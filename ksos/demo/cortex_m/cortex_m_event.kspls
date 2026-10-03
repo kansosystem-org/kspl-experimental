@@ -1,0 +1,53 @@
+//< ARM Cortex-M: barrier synchronization with event flags (pre-emptive)
+//<
+//< `coordinator` (high priority) waits for all three workers' bits (bit0|bit1|bit2 = 0x7).
+//< Each worker sets its own bit once and then loops forever without yielding, so under
+//< cooperative scheduling the first worker would hog the CPU and the rest could not run. SysTick's
+//< pre-emption switches to every worker in turn, each sets its bit, and once all are set
+//< coordinator wakes and ends. A critical section protects the event's updates, so no bit is lost
+//< under pre-emption.
+import "ksos/demo/common/semihost_console" as con
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+import "std/chars" // U8$[].sub_mut
+
+priv const all_bits: U32 = 0x7 // bit0|bit1|bit2 = 3 workers
+
+$g_ev: sync.Event
+$g_bits: U32[3] // each worker's bit (passed by pointer, in place of an id)
+
+$tcb_co: Task
+$tcbs: Task[3]
+$stack_co: U8[4096]
+$wstacks: U8[12288] // 3 * 4096
+fn worker(arg: Void$@): Void //<
+  //< Set its own bit once, then spin without yielding
+  //<
+  //< SysTick switches to the other tasks.
+  mybit: = (U32$@::arg)$
+  g_ev.set(mybit)
+  for {}
+fn coordinator(_arg: Void$@): Void //<
+  //< Wait for all workers' bits (the AND), check the bits and end QEMU
+  bits: = g_ev.wait(all_bits, .all, true)
+  con.puts("=== Kanso OS (Cortex-M) event flags ===\n")
+  con.check("all 3 event bits set under preemption", (bits & all_bits) == all_bits)
+  con.check("wait(.all, clear_on_exit) cleared the bits", g_ev.get() == 0)
+  con.print_summary("Cortex-M event flags")
+  con.exit()
+
+#export
+fn ksos_main()
+  g_ev.init()
+  // coordinator has the higher priority (2), so it runs first and blocks on the unmet condition.
+  tcb_co.create(U8$[]::stack_co, coordinator, null, 2, "co")
+  all_stacks: = U8$[]::wstacks
+  for i in Range.asc(3)
+    g_bits[i] = U32::(1 << i)
+    tcbs[i].create(all_stacks.sub_mut(i * 4096, 4096), worker, Void$@::g_bits[i]@, 1, "w")
+  // SysTick's reload value: any value that causes pre-emption will do.
+  task.enable_preemption(50000)
+  task.start_scheduler()
+  // Unlike the other Cortex-M probes, con.exit() is not called here: the workers never yield, so
+  // start_scheduler() never returns (coordinator calls con.exit() itself).
+  for {}

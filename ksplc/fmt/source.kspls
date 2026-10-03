@@ -1,0 +1,100 @@
+//< Reads the original text around a position
+//<
+//< A line's indent, whether a line or a stretch holds a comment, and where the marks the
+//< indentation reader inserted (` {` / `;` / ` }`) end. It reads the text alone, never the tree.
+import "ksplc/base/lines" { line_end, next_line_start, skip_blanks }
+import "ksplc/base/literal" as base_literal
+import "std/chars" // the one-character checks and cuts
+import "std/str" as _str // for `equals` / `starts_with`
+
+priv fn line_indent_at(src: U8[], at: Sz): Sz //<
+  //< The column of the first non-blank character on the line starting at `at`
+  return skip_blanks(src, at) - at
+
+fn is_comment_line(src: U8[], at: Sz): Bool //<
+  //< Whether the line starting at `at` holds a line comment and nothing else
+  i: = at + line_indent_at(src, at)
+  return i + 1 < src.len && src[i] == '/' && src[i + 1] == '/'
+
+priv fn is_blank_line(src: U8[], at: Sz): Bool //<
+  //< Whether the line starting at `at` holds nothing but whitespace
+  i: = at + line_indent_at(src, at)
+  return i >= src.len || src[i] == '\n' || src[i] == '\r'
+
+fn body_indent_after(src: U8[], brace_at: Sz, limit: Sz): Sz //<
+  //< The column of a block's members, read from the first line of code after its `{`
+  //<
+  //< It tells whether a comment at a block's end belongs to that block or to the level outside.
+  //< Caution: **Where the block has no member, return a column no line can have.** The caller reads
+  //< "at this column or deeper", so a real column would claim every comment in sight. A line that
+  //< starts with the `}` itself is not a member; what follows it belongs to the level outside.
+  $i: = next_line_start(src, brace_at)
+  for i < limit && i < src.len
+    if !is_blank_line(src, i) && !is_comment_line(src, i)
+      return src.len if i + line_indent_at(src, i) >= limit else line_indent_at(src, i)
+    i = next_line_start(src, i)
+  return src.len
+
+fn past_mended_marks(src: U8[], at: Sz): Sz //<
+  //< The first position after `at` that holds none of the marks the indentation reader inserts
+  //<
+  //< Several levels close at one position, so a run of `}` and `;` can stand between a block's last
+  //< code and what was written after it.
+  $i: = at + 1
+  for i < src.len &&
+    (src[i] == ' ' || src[i] == '\t' || src[i] == '}' || src[i] == ';')
+    i += 1
+  return i
+
+fn tail_comment_end(src: U8[], close_at: Sz, after_marks: Sz, body: Sz): Sz //<
+  //< Where the comment lines below the `}` at `close_at` that belong to its block end, or 0
+  //<
+  //< They are the comment lines written for the block whose members sit at column `body`.
+  //< `after_marks` is `past_mended_marks`'s answer for that `}`.
+  //<
+  //< A blank line between two comments does not end the run; code, or a comment shallower than the
+  //< members, does. **A heading after the `}` claims everything below it**: under `} else {` and
+  //< `} case … {` the comment was written in the next block.
+  c: U8 = src[after_marks] if after_marks < src.len else '\n'
+  opens_comment: = c == '/' && after_marks + 1 < src.len && src[after_marks + 1] == '/'
+  if c != '\n' && c != '\r' && !opens_comment
+    return 0
+  $end: Sz = 0
+  $line: = next_line_start(src, close_at)
+  for line < src.len
+    if is_blank_line(src, line)
+      line = next_line_start(src, line)
+      continue
+    if !is_comment_line(src, line) || line_indent_at(src, line) < body
+      break
+    end = line_end(src, line)
+    line = next_line_start(src, line)
+  return end
+
+fn has_comment_in(src: U8[], from: Sz, to: Sz): Bool //<
+  //< Whether src's [from, to) holds any comment (`//`)
+  //<
+  //< It skips string and character literals. **Where the comment sits on the line does not
+  //< matter**: packing displaces both a comment that starts a line and one that trails an element.
+  $end: = to
+  if end > src.len
+    end = src.len
+  $i: = from
+  for i + 1 < end
+    c: = (src.ptr + i)$
+    if c == '"' || c == '\''
+      i = base_literal.literal_end(src, i)
+      continue
+    if c == '/' && (src.ptr + i + 1)$ == '/'
+      return true
+    i += 1
+  return false
+
+fn skip_space_from(src: U8[], start: Sz): Sz //<
+  //< The first position at or after start that is not whitespace (is_space)
+  //<
+  //< get_assign_op_len and src_starts_with_dot use it.
+  $off: = start
+  for off < src.len && (src.ptr + off).is_space()
+    off += 1
+  return off

@@ -1,0 +1,537 @@
+//< Where a source comes from, and the logical name it is known by
+//<
+//< It covers std's folder and the folder given for packages, the packages that named themselves,
+//< the path helpers, and mapping a logical name back to the file it is read from.
+//< **The dependency goes one way**: this file imports `core.kspls`, never the reverse.
+//< std's folder is found beside the executable unless set. Environment variables are the main way
+//< to set them: they reach the LSP's separate analysis process (lsp-worker), which command-line
+//< arguments do not.
+import "ksplc/base/cache" as base_cache
+import "ksplc/base/core" as base_core
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena, dealloc }
+import "std/str" { Str_builder }
+import "std/sys"
+
+const std_dir_env_name: U8[] = "KSPLC_STD_DIR"
+priv const default_std_dir: U8[] = "std"
+
+const pkg_src_dir_env_name: U8[] = "KSPLC_PKG_SRC_DIR" //<
+  //< Where a package other than `std` (of the shape `ksdb/…`) is looked for
+  //<
+  //< Caution: **Do not merge it with `std`'s.** The standard library ships with the compiler, so
+  //< it can live apart from the other packages (`/usr/local/lib/kspl/std` versus the repository).
+
+priv const std_prefix: U8[] = "std/" //< the logical prefix `import "std/..."` reserves
+  //<
+  //< Only this prefix is resolved by std_dir() instead of a search order, in which the project's
+  //< `std/` folder would silently hide the real standard library (or the reverse). Rust, Go and
+  //< Zig treat `std` specially too.
+
+fn is_std_file(file_path: U8[]): Bool //< whether that definition comes from std
+  //<
+  //< It reads the import's string (`std/mem.kspls`), not where `--std-dir` points.
+  return file_path.starts_with(std_prefix)
+
+fn std_name(rest: U8[]): U8[] //< the logical name of the file at `rest` under std's folder
+  $out: = Str_builder.new()
+  defer out.free()
+  out.s(std_prefix).s(rest)
+  return base_core.arena.dup_str(out.slice())
+
+fn package_of(file_path: U8[]): U8[] //< the name of the package that file belongs to
+  //<
+  //< The logical name up to its first separator; empty if there is none (the project's top files
+  //< are one package). **Default visibility covers this unit** (`sema/decl/access.kspls`), not a
+  //< folder: `ksai/tensor` is in `ksai`, `std/str` in `std`. **An absolute name is in none.**
+  if sys.is_absolute(file_path)
+    // Caution: **Use `sys.is_absolute`, not a check for a leading `/`.** A file no package claims
+    // keeps its path as its name (`to_project_relative` below); on Windows `C:/…` would become a
+    // package `C:`, with the package folder put in front (`deps/C:/Users/…/s.kspl`, not found).
+    return ""
+  slash: = file_path.find_char('/')
+  return "" if slash < 0 else file_path.sub(0, slash)
+
+priv const std_abi_tag_len: Sz = 12 //<
+  //< The version inserted into std's symbols under `--omit-runtime`
+  //<
+  //< It is computed from **all of std's paths and contents**.
+  //< Caution: **Not from the used files only**, or the same std would differ between artifacts
+  //< that use different parts, and the copies would not fold into one.
+priv $std_abi_tag_cache: U8[] = ""
+
+fn std_abi_tag(): U8[]
+  if std_abi_tag_cache.len > 0
+    return std_abi_tag_cache
+  $dir: = std_dir()
+  // Drop the trailing separator to match the paths fs.walk_files returns (as fs.join does).
+  for dir.len > 1 && (dir[dir.len - 1] == '/' || dir[dir.len - 1] == '\\')
+    dir = dir.sub(0, dir.len - 1)
+  arena: = Arena.new(std_abi_walk_arena_size)
+  defer arena.free()
+  files: = fs.walk_files(dir, fs.skip_none, arena) catch
+    io.err().s("ksplc: --omit-runtime: cannot read the standard library at '").s(dir).s("'\n")
+    sys.exit(1)
+  $material: = Str_builder.new()
+  defer material.free()
+  for path in files
+    // Sources only, so a README or an editor's leftovers do not make two equal std differ.
+    if !path.has_kspl_ext()
+      continue
+    body: = io.read_file(path) catch
+      io.err().s("ksplc: --omit-runtime: cannot read '").s(path).s("'\n")
+      sys.exit(1)
+    defer dealloc(Void$@::body.ptr)
+    // Both the paths and the contents, or two std whose file names are only swapped would match.
+    // Caution: Take the paths only below std_dir(); moving the folder must not change the version.
+    material.s(path.sub_from(dir.len)).c(0U8).s(body).c(0U8)
+  std_abi_tag_cache = base_core.perm_arena.dup_str(abi_tag_of(material.slice()))
+  return std_abi_tag_cache
+
+fn abi_tag_of(material: U8[]): U8[] //<
+  //< It computes, from the input, the version to insert into a symbol name
+  //<
+  //< **The width and the method are defined here and nowhere else**, so std's version and that of
+  //< a generic that publishes its body (`#publish_body`) look alike in a symbol name.
+  $hex: = Str_builder.new()
+  defer hex.free()
+  base_cache.append_hash_hex(material, hex@)
+  return base_core.arena.dup_str(hex.slice().sub(0, std_abi_tag_len))
+
+priv const std_abi_walk_arena_size: Sz = 64 * 1024 //< the arena walk_files puts the paths on
+  //<
+  //< It holds one std's file list only, so a few growths are enough.
+
+fn std_dir(): U8[] //< the standard library's folder, resolved once (`SPEC-tools.md` §2.9.1)
+  if base_core.config.std_dir.len > 0
+    return base_core.config.std_dir
+  if v: = sys.get_env(std_dir_env_name)
+    if v.len > 0
+      // get_env returns a view into libc's static buffer, so it is copied (see std/sys.get_env).
+      // Caution: **Allocate the copy from perm_arena.** It goes into config, which lives as long as
+      // the process; from the arena, config.std_dir dangles after the LSP's first rewind, and every
+      // later import resolution reads it (see base_core.perm_arena).
+      base_core.config.std_dir = base_core.perm_arena.dup_str(v)
+      return base_core.config.std_dir
+  beside: = std_beside_exe()
+  base_core.config.std_dir = default_std_dir if beside.len == 0 else beside
+  return base_core.config.std_dir
+
+extern "C"
+  fn kspl_exe_path(buf: U8$@, cap: Sz): Sz //< this executable's path, links resolved; 0 if unknown
+
+priv const std_beside: U8[][2] = ::{ "std", "../lib/kspl/std" } //<
+  //< Where std is looked for from the executable's folder, in order
+  //<
+  //< An unpacked release zip holds it beside the executable; `make install` puts it under the
+  //< prefix (`<prefix>/bin/ksplc`, `<prefix>/lib/kspl/std`).
+
+priv const std_landmark: U8[] = "lang.kspls" //< the file that says a folder holds std
+  //<
+  //< Every program reads `std/lang` (`lang_file_path` in `sema/session/import_table.kspls`), so
+  //< every std holds it.
+  //< Caution: **Do not take a folder named `std` for one**: a project's own `std/` beside a copied
+  //< executable would then hide the real library.
+
+priv fn std_beside_exe(): U8[] //< the std standing beside this executable; empty where none does
+  //<
+  //< Caution: **Do not take the executable from argv[0]** (the reason is at `kspl_exe_path` in
+  //< `gen/runtime/hosted_spawn.c`).
+  $buf: U8[os_path_bytes] = ::{}
+  n: = kspl_exe_path(buf[0]@, os_path_bytes)
+  if n == 0
+    return ""
+  // `/` throughout, as cwd() below does, so `info std-dir` names it in one spelling.
+  $exe: = Str_builder.new()
+  defer exe.free()
+  for c in U8[]::{ .ptr = buf[0]@, .len = n }
+    exe.c('/' if sys.is_path_sep(c) else c)
+  dir: = sys.get_dir_name(exe.slice())
+  for rel in std_beside
+    // The links are resolved, so folding `bin/..` by spelling names the folder it reaches.
+    at: = fold_dots(fs.join(dir, rel, base_core.arena))
+    if fs.exists(fs.join(at, std_landmark, base_core.arena))
+      // Caution: **Keep it on perm_arena**, as the variable's copy above.
+      return base_core.perm_arena.dup_str(at)
+  return ""
+
+fn pkg_src_dir(): U8[] //< the folder where a package other than `std` is looked for
+  //<
+  //< **Empty is a valid answer** (the current folder only); `pkg_src_dir_known` says whether it is
+  //< resolved.
+  if base_core.config.pkg_src_dir_known
+    return base_core.config.pkg_src_dir
+  base_core.config.pkg_src_dir_known = true
+  if base_core.config.pkg_src_dir.len > 0
+    return base_core.config.pkg_src_dir
+  if v: = sys.get_env(pkg_src_dir_env_name)
+    if v.len > 0
+      // A copy of get_env's view, as in std_dir().
+      // Caution: **Allocate it from perm_arena**; on the arena the LSP rewinds, it dangles on the
+      // next request.
+      base_core.config.pkg_src_dir = base_core.perm_arena.dup_str(v)
+  return base_core.config.pkg_src_dir
+
+// The packages whose folder is decided, and the path prefixed to each, **so the lookup is not
+// repeated per file** (package_root below). A list, not a map: they are too few for a key to pay.
+priv $package_named: List<|U8[]|>$@ = null
+priv $package_bases: List<|U8[]|>$@ = null
+
+priv fn package_root(unit: U8[]): U8[] //<
+  //< The path to put before that package's files; empty for the current folder
+  //<
+  //< It says whether that package comes from the current folder or from `pkg_src_dir`.
+  //< **It is decided once per package.** The not-found diagnostic names the path really opened.
+  //< An empty `pkg_src_dir` costs no stat.
+  base: = pkg_src_dir()
+  if base.len == 0 || unit.len == 0
+    return ""
+  if package_named == null
+    package_named = List<|U8[]|>.create(base_core.perm_arena)
+    package_bases = List<|U8[]|>.create(base_core.perm_arena)
+  for i in Range.asc(package_named.len)
+    if package_named.get(i).equals(unit)
+      return package_bases.get(i)
+  root: = "" if fs.is_dir(unit) else base
+  package_named.push(base_core.perm_arena.dup_str(unit))
+  package_bases.push(root)
+  return root
+
+// The packages that named themselves in their folder's `ksplc.cfg`, and each one's folder. **A
+// declared package is read from its own folder, whatever that folder is called** (the naming
+// belongs to `ksplc/base/package.kspls`).
+priv $declared_names: List<|U8[]|>$@ = null
+priv $declared_roots: List<|U8[]|>$@ = null
+
+fn declare_package(name: U8[], root: U8[]) //<
+  //< Records that the package `name` is read from `root` (empty: the current folder)
+  //<
+  //< **The first call wins**, as `package_root` decides once: no package is half from each place.
+  if declared_at(name) >= 0
+    return
+  if declared_names == null
+    declared_names = List<|U8[]|>.create(base_core.perm_arena)
+    declared_roots = List<|U8[]|>.create(base_core.perm_arena)
+  declared_names.push(base_core.perm_arena.dup_str(name))
+  declared_roots.push(base_core.perm_arena.dup_str(root))
+
+priv fn declared_at(name: U8[]): I32 //< that package's index in the table, or -1
+  if declared_names == null || name.len == 0
+    return -1
+  for i in Range.asc(declared_names.len)
+    if declared_names.get(i).equals(name)
+      return I32::i
+  return -1
+
+fn disk_name(logical: U8[]): U8[] //<
+  //< The path a declared package's file is read from; any other logical name as it is
+  //<
+  //< **A diagnostic and a `#line` use this name**, so a package worked on from its own folder
+  //< names the path that opens there.
+  unit: = package_of(logical)
+  at: = declared_at(unit)
+  if at < 0
+    return logical
+  root: = declared_roots.get(at)
+  // In a folder with its own name (the repository's root) the path is the logical name, and
+  // `#line` calls this once per line.
+  if root.equals(unit)
+    return logical
+  rest: = logical.sub_from(unit.len + 1)
+  if root.len == 0
+    return rest
+  $out: = Str_builder.new()
+  defer out.free()
+  out.s(root).c('/').s(rest)
+  return base_core.arena.dup_str(out.slice())
+
+fn package_dir(unit: U8[]): U8[] //<
+  //< The folder a package's files are read from
+  //<
+  //< Its own folder if declared, else the current folder or one under `--pkg-src-dir`
+  //< (`package_root` above).
+  at: = declared_at(unit)
+  if at >= 0
+    return declared_roots.get(at)
+  root: = package_root(unit)
+  if root.len == 0
+    return unit
+  $out: = Str_builder.new()
+  defer out.free()
+  out.s(root).c('/').s(unit)
+  return base_core.arena.dup_str(out.slice())
+
+priv const os_path_bytes: Sz = 4096 //<
+  //< The size of the temporary buffer a path the OS reports is copied into
+  //<
+  //< That is the working directory and the executable. **Where it does not fit, the path is not
+  //< made relative** (see cwd below), **and no std is looked for beside the executable**.
+
+priv fn one_name(path: U8[]): U8[] //<
+  //< It normalizes a relative path into one logical name
+  //<
+  //< Caution: **One file must not have two logical names.** Named `./hw` and `hw`, or
+  //< `sub/../lib/n` and `lib/n`, one file becomes two modules in two units, each with its own
+  //< globals. So separators become `/` (a command line's keep the OS's), `.` levels are dropped,
+  //< and each `x/..` folds by spelling, as the walk up to a package reads it (`fold_dots` below).
+  keep: = path.find_str("..") >= 0 && placed_elsewhere(first_part(path))
+  return fold_dots(path, keep)
+
+fn fold_dots(path: U8[], keep_first: Bool = false): U8[] //<
+  //< The path with `.` dropped, each `x/..` folded by spelling only, and `/` as separators
+  //<
+  //< **It does not consult the filesystem**, so `a/link/..` reads as `a` wherever `link` points,
+  //< the same trade-off Go's `filepath.Clean` makes. A leading `..` of a relative path stays (it
+  //< names the folder above); one at the root is dropped (the root's parent is itself).
+  //< With `keep_first`, a `..` that would fold away the first part stays too (`one_name` above).
+  $head: Sz = 0 // the root it keeps: `//` (a Windows share), or std/sys's (`C:/` on Windows only)
+  if path.len >= 2 && sys.is_path_sep(path[0]) && sys.is_path_sep(path[1])
+    head = 2
+  else if sys.is_absolute(path)
+    head = sys.root_len(path)
+  $parts: = List<|U8[]|>.new()
+  defer parts.free()
+  $at: = head
+  for at < path.len
+    $end: = at
+    for end < path.len && !sys.is_path_sep(path[end])
+      end += 1
+    part: = path.sub(at, end - at)
+    at = end + 1
+    if part.len == 0 || part.equals(".")
+      continue
+    folds: = parts.len > 0 && !parts.get(parts.len - 1).equals("..")
+    if part.equals("..") && folds && !(keep_first && parts.len == 1)
+      parts.len -= 1
+      continue
+    if part.equals("..") && head > 0
+      continue
+    parts.push(part)
+  $out: = Str_builder.new()
+  defer out.free()
+  for i in Range.asc(head)
+    out.c('/' if sys.is_path_sep(path[i]) else path[i])
+  for i in Range.asc(parts.len)
+    out.s("/" if i > 0 else "").s(parts.get(i))
+  // **Where there is nothing to fold, do not copy.** A walk passes most folders on unchanged, and
+  // a logical name passes the same string through many times.
+  return path if out.slice().equals(path) else base_core.arena.dup_str(out.slice())
+
+priv fn first_part(path: U8[]): U8[] //< the first part of a relative path, skipping `.` levels
+  $at: Sz = 0
+  for at < path.len
+    $end: = at
+    for end < path.len && !sys.is_path_sep(path[end])
+      end += 1
+    part: = path.sub(at, end - at)
+    if part.len > 0 && !part.equals(".")
+      return part
+    at = end + 1
+  return ""
+
+priv fn placed_elsewhere(unit: U8[]): Bool //<
+  //< Whether a name's first part is a package read from a folder of its own
+  //<
+  //< That is std's folder, a package that named itself, or one under `--pkg-src-dir`, rather than
+  //< a local folder with that name.
+  //<
+  //< A `..` that climbs out of such a package stays in the name (`one_name` above): its folder
+  //< need not be at its name, so `ksdb/../x` folded to `x` would name another file. Under `std/`
+  //< it is rejected where it is imported (`refused_use` in `package.kspls`).
+  if unit.len == 0 || unit.equals("..")
+    return false
+  return unit.equals(std_prefix.sub(0, std_prefix.len - 1)) ||
+    !package_dir(unit).equals(unit)
+
+fn cwd(): U8[] //< the working directory with `/` separators; empty where it cannot be read
+  //<
+  //< Caution: **Do not mix the separators.** The OS spells it with its own, so a plain join gives
+  //< `C:\a\b/c/d.kspls`; every one becomes `/`. **Do not use `one_name`**: dropping the `.` levels
+  //< also drops a rooted path's leading empty level, which makes it relative.
+  $buf: U8[os_path_bytes] = ::{}
+  root: = sys.cwd(U8$[]::{ .ptr = buf[0]@, .len = os_path_bytes })
+  $out: = Str_builder.new()
+  defer out.free()
+  for c in root
+    out.c('/' if sys.is_path_sep(c) else c)
+  return base_core.arena.dup_str(out.slice())
+
+fn to_absolute(path: U8[]): U8[] //<
+  //< The absolute path as seen from the working directory, for a diagnostic
+  //<
+  //< **Not for a logical name** (see `to_project_relative` below). **Without a working directory,
+  //< it returns the path unchanged.**
+  if sys.is_absolute(path)
+    return path
+  here: = cwd()
+  if here.len == 0
+    return path
+  sep: = "" if here.ends_with("/") else "/"
+  return base_core.arena.text().s(here).s(sep).s(path).take()
+
+fn canonical_path(path: U8[]): U8[] //<
+  //< The absolute path with `.` and `..` folded (`fold_dots`), for comparing where two files are
+  return fold_dots(to_absolute(path))
+
+fn to_project_relative(path: U8[]): U8[] //<
+  //< It turns a path into one relative to the project root (= the working directory)
+  //<
+  //< A path outside the root is returned unchanged.
+  //< Caution: **An absolute path must not enter a file's logical name**, which feeds the mangling,
+  //< the diagnostics and `#line`: with one in it, the mangled names differ from machine to machine.
+  //< **Nor may a relative path pass unnormalized**: `./main.kspls` and `main.kspls` are one file,
+  //< so the logical name must be one too (`one_name` above).
+  if !sys.is_absolute(path)
+    return one_name(path)
+  $buf: U8[os_path_bytes] = ::{}
+  root: = sys.cwd(U8$[]::{ .ptr = buf[0]@, .len = os_path_bytes })
+  rest: = rest_under(path, root)
+  // A logical name is written `/`-separated.
+  return path if rest.len == 0 else one_name(rest)
+
+fn rest_under(path: U8[], dir: U8[]): U8[] //<
+  //< What follows `dir` and a separator in `path`; empty where `path` is not under it
+  //<
+  //< `/` and `\` match each other (Windows mixes them); nothing else is normalized, so write both
+  //< from the same root.
+  if dir.len == 0 || path.len <= dir.len + 1 || !sys.is_path_sep((path.ptr + dir.len)$)
+    return ""
+  for i in Range.asc(dir.len)
+    a: = (path.ptr + i)$
+    b: = (dir.ptr + i)$
+    if a != b && !(sys.is_path_sep(a) && sys.is_path_sep(b))
+      return ""
+  return path.sub_from(dir.len + 1)
+
+priv fn ends_with_at_boundary(full: U8[], suffix: U8[]): Bool //<
+  //< Whether a path ends with suffix at a separator boundary
+  //<
+  //< A plain ends_with would match `myfoo.kspl` to `foo.kspl`.
+  if !full.ends_with(suffix)
+    return false
+  if full.len == suffix.len
+    return true
+  return sys.is_path_sep((full.ptr + (full.len - suffix.len - 1))$)
+
+fn is_same_file(a: U8[], b: U8[]): Bool //< whether they point at the same file
+  //<
+  //< **Equal names are not required**: a diagnostic says `std/tests/tls_test`, the LSP
+  //< `file:///c:/…/tls_test.kspls`. With the scheme and extension dropped, one must end the other
+  //< at a boundary.
+  a2: = a.strip_file_uri().strip_kspl_ext()
+  b2: = b.strip_file_uri().strip_kspl_ext()
+  return a2.equals(b2) || ends_with_at_boundary(a2, b2) || ends_with_at_boundary(b2, a2)
+
+struct Uri_style //< how one client writes a document URI, read from one it sent
+  //<
+  //< Caution: **Answer in the form the request used.** A logical name is project-relative
+  //< (`to_project_relative` above), and any one fixed form breaks every client that writes it the
+  //< other way: an editor sends `file:///home/me/proj/std/lang.kspls`, the extension and kspage's
+  //< page send `std/lang.kspls`.
+  has_scheme: Bool //< the `file://` was present
+  is_absolute: Bool //< the path started from the root
+
+fn uri_style_of(uri: U8[]): Uri_style //<
+  //< It keeps the client's form instead of choosing one, as clangd's `URIForFile` does
+  return Uri_style::{ .has_scheme = uri.starts_with(base_core.file_uri_scheme),
+    .is_absolute = sys.is_absolute(uri.strip_file_uri()) }
+
+impl Uri_style
+  fn spell(r: Self, name: U8[]): U8[] //<
+    //< A file's logical name written as a document URI in this form
+    //<
+    //< **It names the file where it is read from** (`append_file_path` below): from ksdb's own
+    //< folder, `ksdb/log` is the `log.kspls` there, and `std/lang` is the one in std's folder.
+    $named: = Str_builder.new()
+    defer named.free()
+    append_file_path(name, base_core.default_is_laid_out(), named@)
+    $out: = Str_builder.new()
+    defer out.free()
+    if r.has_scheme
+      out.s(base_core.file_uri_scheme)
+    out.s(to_absolute(named.slice()) if r.is_absolute else named.slice())
+    return base_core.arena.dup_str(out.slice())
+
+fn append_file_path(import_path: U8[], laid_out: Bool, out: Str_builder$@) //<
+  //< It writes into out the file path to read for an import path (a file's logical name)
+  //<
+  //< Caution: Do not mix a logical name (`std/io`) with the file's path. An absolute path in the
+  //< logical name makes mangled names differ per machine and breaks seed.c's byte-for-byte match
+  //< ("The bootstrap, and keeping the seed in step" in ksplc/docs/DESIGN.md).
+  append_disk_path(import_path, out)
+  // `laid_out` picks the extension for a bare logical name; the name already says which file it
+  // is (`name_as_found` below), so the disk is not checked again.
+  if !out.slice().has_kspl_ext()
+    out.s(base_core.laid_out_ext if laid_out else base_core.source_ext)
+
+fn embed_disk_path(logical: U8[]): U8[] //< the path an embedded file is read from
+  //<
+  //< **The same path as a source's** (`append_disk_path` below), with nothing added: an embedded
+  //< file's name includes its own extension.
+  $out: = Str_builder.new()
+  defer out.free()
+  append_disk_path(logical, out@)
+  return base_core.arena.dup_str(out.slice())
+
+// The embedded files this compilation read, by path. **They are sources too** (their bytes go
+// into the output), so `--emit-deps` lists them. Kept per run, like `files_read` in
+// `config_file.kspls`.
+priv $embedded_paths: List<|U8[]|>$@ = null
+
+fn note_embedded(path: U8[]) //< records an embedded file as read, once
+  if embedded_paths == null
+    embedded_paths = List<|U8[]|>.create(base_core.perm_arena)
+  for p in embedded_paths.slice()
+    if p.equals(path)
+      return
+  embedded_paths.push(base_core.perm_arena.dup_str(path))
+
+fn embedded_read(): List<|U8[]|>$@ //< the embedded files this compilation read
+  if embedded_paths == null
+    embedded_paths = List<|U8[]|>.create(base_core.perm_arena)
+  return embedded_paths
+
+priv fn append_disk_path(import_path: U8[], out: Str_builder$@) //<
+  //< Where a logical name's file is: under std's folder, in a package's own folder, or locally
+  if import_path.starts_with(std_prefix)
+    out.s(std_dir()).c('/').s(import_path.sub_from(std_prefix.len))
+  else if declared_at(package_of(import_path)) >= 0
+    // **A package that named itself is read from its own folder** (`disk_name` above).
+    out.s(disk_name(import_path))
+  else
+    // **A folder can be given for packages other than `std` too** (`--pkg-src-dir=`;
+    // `package_root` above).
+    // With none given, it returns empty: relative to the current folder.
+    root: = package_root(package_of(import_path))
+    if root.len > 0
+      out.s(root).c('/')
+    out.s(import_path)
+
+fn name_as_found(logical: U8[]): U8[] //<
+  //< The name used from here on for a logical name that has no extension
+  //<
+  //< The default notation's name, or, where only the other notation's file exists, the name with
+  //< that extension: a logical name is the file's identity, so it must name a file that opens.
+  //<
+  //< Caution: **Decide it here and nowhere else.** The reader and the analyser both go through
+  //< `resolve_import_path` (`base/ast.kspls`), and two names for one file split its symbols.
+  if logical.has_kspl_ext()
+    return logical
+  // The only place that probes the disk; affordable, as it runs once per import name, not per read.
+  $preferred: = Str_builder.new()
+  defer preferred.free()
+  append_file_path(logical, base_core.default_is_laid_out(), preferred@)
+  if fs.exists(preferred.slice())
+    return logical
+  $other: = Str_builder.new()
+  defer other.free()
+  append_file_path(logical, !base_core.default_is_laid_out(), other@)
+  if !fs.exists(other.slice())
+    return logical
+  $named: = Str_builder.new()
+  defer named.free()
+  named.s(logical).s(base_core.spelt_out_ext())
+  return base_core.arena.dup_str(named.slice())

@@ -1,0 +1,205 @@
+//< Helpers for opening one TCP connection from this end, over USB Ethernet (CDC-NCM)
+//<
+//< **One connection at a time**: the memory (one NTB, one `conn`) holds only one.
+//< Caution: **Keep calling `usb.poll_once()` while waiting too**, or the host detaches the device.
+//< **The addresses are fixed** (no DHCP): Windows' internet sharing puts the PC at
+//< 192.168.137.1; otherwise change `peer_ip`.
+import "ksos/demo/rp2040/common/console" as con
+import "ksos/drivers/rp2040/timer"
+import "ksos/drivers/rp2040/usb_cdc" as usb
+import "ksos/net/link" as netlink
+import "ksos/net/mini_ipv4" as net
+import "ksos/net/tcp_conn" as tcpc
+
+const wait_frame_ms: U32 = 2000 //< the limit on waiting for the peer's answer
+
+// Global: too large for the task stack (2048); Tcp_conn alone is over 3KB.
+$conn: tcpc.Tcp_conn
+$tx_buf: U8[1536] // where a frame is built; once built, call send_now(len)
+$rx_buf: U8[1536] // where next_frame puts the frame it received
+// For reading and discarding.
+// Caution: Keep it separate from the caller's answer buffer, or discarding overwrites the answer.
+priv $scratch: U8[512]
+
+// The counters that tell "not arriving" from "skipped", which look alike.
+$rx_frames: U32 = 0
+$arp_frames: U32 = 0
+$last_ethertype: U16 = 0
+$last_arp_sender: U32 = 0
+
+struct Addrs //< this device's and the peer's addresses
+  //<
+  //< The MAC is the driver's; a second one would disagree with the descriptor, and the host would
+  //< ignore the answer.
+  our_ip: U32
+  peer_ip: U32
+  our_mac_hi: U32
+  our_mac_lo: U32
+  peer_mac_hi: U32 //< resolve_peer fills it in
+  peer_mac_lo: U32
+$addrs: Addrs = ::{}
+
+fn link(): netlink.Link
+  return netlink.Link::{ .send_frame = usb.send_frame, .rx_available = usb.rx_available,
+    .recv_frame = usb.recv_frame }
+
+fn init_addrs() //< fills in this device's addresses
+  //<
+  //< Caution: Call it once USB's initialization is done (the MAC comes from the driver).
+  addrs.our_ip = net.ip4(192, 168, 137, 50)
+  addrs.peer_ip = net.ip4(192, 168, 137, 1)
+  addrs.our_mac_hi = net.get_mac_hi(U8[]::usb.mac_addr, 0)
+  addrs.our_mac_lo = net.get_mac_lo(U8[]::usb.mac_addr, 0)
+  addrs.peer_mac_hi = 0
+  addrs.peer_mac_lo = 0
+
+fn drain_tx() //< runs USB until the send buffer is empty
+  //<
+  //< Caution: **Always call it before sending two frames in a row.** NCM has one NTB buffer, so
+  //< the second is silently dropped (tx_dropped grows; send_frame returns false) and retried.
+  for $i: U32 = 0; i < 200 && usb.ncm_tx_busy(); i += 1
+    usb.poll_once()
+    timer.delay_us(1000)
+
+fn send_now(len: Sz): Bool //< sends the first len bytes of tx_buf
+  //<
+  //< It waits for room before sending, and **returns whether it sent**.
+  //< Caution: Do not call the raw send_frame directly; a drop would go unnoticed.
+  // 0 is mini_ipv4's "could not be built" (it did not fit), so it counts as not sent.
+  if len == 0
+    return false
+  for $i: U32 = 0; i < 5; i += 1
+    drain_tx()
+    if usb.send_frame(U8[]::tx_buf, len)
+      return true
+  return false
+
+fn send_all(buf: U8@, len: Sz): Bool //< sends all len bytes through tcp_conn
+  //<
+  //< tcp_stream_send may send part, so **pass the rest again** (0 means "not now").
+  $off: Sz = 0
+  for $i: U32 = 0; off < len && i < 50; i += 1
+    drain_tx()
+    n: = tcpc.tcp_stream_send(Void$@::conn@, buf + off, len - off)
+    if n > 0
+      off += n
+  return off == len
+
+fn next_frame(budget_ms: U32$@): Sz //<
+  //< Reads one received frame into rx_buf and returns its length, waiting at most budget_ms
+  //<
+  //< It runs USB while it waits. 0 means the remaining budget ran out.
+  //< Caution: **The caller must repeat this until the budget runs out.** On real hardware mDNS,
+  //< LLMNR and IPv6 frames arrive constantly and bury the answer, which QEMU's `-nic socket`
+  //< never shows.
+  for budget_ms$ > 0
+    usb.poll_once()
+    if usb.rx_available()
+      n: = usb.recv_frame(U8$[]::rx_buf)
+      if n > 0
+        rx_frames += 1
+        last_ethertype = net.frame_ethertype(U8[]::rx_buf, n)
+        probe: = net.probe_arp(U8[]::rx_buf, n)
+        if probe.is_arp
+          arp_frames += 1
+          last_arp_sender = probe.sender_ip
+        return n
+    timer.delay_us(1000)
+    budget_ms$ -= 1
+  return 0
+
+fn resolve_peer(ln: con.Line$@): Bool //<
+  //< Asks for the peer's MAC with ARP, and stores it in addrs.peer_mac_*
+  for $attempt: U32 = 0; attempt < 10; attempt += 1
+    arp_len: = net.build_arp_request(U8$[]::tx_buf, addrs.our_mac_hi, addrs.our_mac_lo,
+      addrs.our_ip, addrs.peer_ip)
+    if !send_now(arp_len)
+      continue // it could not send; the next attempt sends it again
+    $budget: U32 = wait_frame_ms
+    for
+      rx_len: = next_frame(budget@)
+      if rx_len == 0
+        break // the budget ran out; send the request again
+      reply: = net.parse_arp_reply(U8[]::rx_buf, rx_len, addrs.peer_ip)
+      if reply.ok
+        addrs.peer_mac_hi = reply.sender_mac_hi
+        addrs.peer_mac_lo = reply.sender_mac_lo
+        return true
+      // Another frame: check the next **within the same budget** (nothing is resent).
+  con.say(ln, "[arp]", "TIMEOUT: peer never answered")
+  return false
+
+fn open(ln: con.Line$@, our_port: U16, peer_port: U16, isn: U32): Bool //<
+  //< Opens a connection with SYN → SYN-ACK → ACK, and sets up `conn` once it succeeds
+  //<
+  //< Caution: resolve_peer must be done first (the peer's MAC is needed).
+  for $attempt: U32 = 0; attempt < 10; attempt += 1
+    syn_len: = net.build_tcp_segment(U8$[]::tx_buf, addrs.peer_mac_hi, addrs.peer_mac_lo,
+      addrs.our_mac_hi, addrs.our_mac_lo, addrs.our_ip, addrs.peer_ip, our_port, peer_port, isn, 0,
+      net.tcp_flag_syn, "")
+    if !send_now(syn_len)
+      continue // it could not send; the next attempt sends it again
+    $budget: U32 = wait_frame_ms
+    for
+      rx_len: = next_frame(budget@)
+      if rx_len == 0
+        break // the budget ran out; send the SYN again
+      seg: = net.parse_tcp_segment(U8[]::rx_buf, rx_len, addrs.peer_ip, peer_port, our_port)
+      want: U8 = net.tcp_flag_syn | net.tcp_flag_ack
+      if seg.ok && (seg.flags & want) == want && seg.ack == isn + 1
+        // The handshake's final ACK.
+        ack_len: = net.build_tcp_segment(U8$[]::tx_buf, addrs.peer_mac_hi, addrs.peer_mac_lo,
+          addrs.our_mac_hi, addrs.our_mac_lo, addrs.our_ip, addrs.peer_ip, our_port, peer_port,
+          isn + 1, seg.seq + 1, net.tcp_flag_ack, "")
+        // If it is not sent, the handshake is incomplete; start again from the SYN.
+        if !send_now(ack_len)
+          break
+        lk: = link()
+        conn = tcpc.make(lk, addrs.peer_mac_hi, addrs.peer_mac_lo, addrs.our_mac_hi,
+          addrs.our_mac_lo, addrs.our_ip, addrs.peer_ip, our_port, peer_port, isn + 1, seg.seq + 1)
+        return true
+      // An unrelated frame. Check the next within the same budget (for the same reason as in
+      // resolve_peer).
+  con.say(ln, "[tcp]", "TIMEOUT: no SYN-ACK")
+  return false
+
+fn read_stream(out: U8$[], ms: U32): Sz //<
+  //< Repeats tcp_conn's recv while running USB, and packs the received bytes into out
+  //<
+  //< An answer can span segments, so it reads until ms pass with nothing.
+  $total: Sz = 0
+  $idle: U32 = 0
+  for idle < ms && total < out.len
+    usb.poll_once()
+    n: = tcpc.tcp_stream_recv(Void$@::conn@, out[total]@, out.len - total)
+    if n > 0
+      total += n
+      idle = 0
+      continue
+    timer.delay_us(1000)
+    idle += 1
+  return total
+
+fn drain_stream(ms: U32): Sz //<
+  //< reads the rest, discards it, and returns how many bytes were discarded
+  //<
+  //< Caution: **Do not stop reading partway and send a FIN**, or the peer's connection is closed
+  //< with unsent data left.
+  $total: Sz = 0
+  $idle: U32 = 0
+  for idle < ms
+    usb.poll_once()
+    n: = tcpc.tcp_stream_recv(Void$@::conn@, scratch[0]@, 512)
+    if n > 0
+      total += n
+      idle = 0
+      continue
+    timer.delay_us(1000)
+    idle += 1
+  return total
+
+fn close_conn() //< closes the open connection with a FIN
+  fin_len: = net.build_tcp_segment(U8$[]::tx_buf, conn.peer_mac_hi, conn.peer_mac_lo,
+    conn.our_mac_hi, conn.our_mac_lo, conn.our_ip, conn.peer_ip, conn.our_port, conn.peer_port,
+    conn.our_seq, conn.peer_seq, net.tcp_flag_fin | net.tcp_flag_ack, "")
+  _fin_ok: = send_now(fin_len)

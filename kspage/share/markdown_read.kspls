@@ -1,0 +1,774 @@
+//< Builds a document from Markdown text
+//<
+//< The writer decides the text's format; the two are split for the per-file line cap
+//< (Principle 3). Reading makes a new document, and an opened `.md` is written back into that
+//< text ("Markdown is edited as itself" in `../docs/DESIGN.md`).
+import "kspage/model/collect" + { Collect }
+import "kspage/model/doc" + { Doc, Block }
+import "kspage/model/fence"
+import "kspage/model/style" + { Sheet }
+import "kspage/share/markdown_fenced" as fenced
+import "kspage/share/markdown_style" { accent_style, body_style, cell_style, code_style,
+  chart_style, slide_style, divider_style, frame_style, grid_style, heading_style, link_style,
+  list_style, notes_style }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+priv const image_w: F32 = 320.0 //< the size a picture is laid out at
+  //<
+  //< The text does not hold a size, so it is fixed here (the core cannot measure a picture). Left
+  //< at 0 the picture is not laid out, and it silently goes unseen.
+priv const image_h: F32 = 240.0
+
+priv struct Def //< a note's definition (`[^1]: text`)
+  tag: U8[]
+  text: U8[]
+
+priv struct Src //< the position reached while reading
+  text: U8[]
+  pos: Sz
+
+priv struct Into //< everything being built
+  doc: Doc$@
+  sheet: Sheet$@
+  defs: List<|Def|>$@
+  arena: Arena$@
+  stack: List<|Block$@|>$@ //<
+    //< The open list items, stacked in order of depth.
+    //<
+    //< A child belongs to the item before it.
+  para: Block$@ //<
+    //< The current paragraph. It ends at an empty line (Markdown's paragraph break).
+  listed: Bool //<
+    //< Whether the notes-list block has been added. There is only one, not one per definition line.
+
+priv struct Draft //< the state of the inline being built
+  //<
+  //< Caution: **Keep the text and its emphasis together** (kept apart, the emphasis is lost the
+  //< moment a mark is read).
+  sb: Str_builder$@
+  bold: Bool
+  italic: Bool
+  href: U8[] //< the link. **Where it is not empty, every inline added points there.**
+
+// ---- Cutting the lines ----
+
+priv fn line_end(text: U8[], at: Sz): Sz //<
+  //< The end of the line starting at `at` (the line break is not included)
+  $i: Sz = at
+  for i < text.len
+    if text[i] == '\n' || text[i] == '\r'
+      return i
+    i += 1
+  return i
+
+priv fn past_break(text: U8[], at: Sz): Sz //< the position just past the line break
+  //<
+  //< A `\r\n` is two bytes and one break.
+  $i: Sz = at
+  if i < text.len && text[i] == '\r'
+    i += 1
+  if i < text.len && text[i] == '\n'
+    i += 1
+  return i
+
+priv fn take_line(c: Src$@): U8[] //< takes one line and moves on
+  end: = line_end(c.text, c.pos)
+  got: = c.text.sub(c.pos, end - c.pos)
+  c.pos = past_break(c.text, end)
+  return got
+
+priv fn peek_line(c: Src$@): U8[] //< peeks at the next line without moving on
+  //<
+  //< Empty when the text has run out.
+  end: = line_end(c.text, c.pos)
+  return c.text.sub(c.pos, end - c.pos)
+
+priv fn spaces_at(line: U8[]): Sz //< how many spaces start the line
+  $i: Sz = 0
+  for i < line.len && line[i] == ' '
+    i += 1
+  return i
+
+priv fn seek(text: U8[], from: Sz, c: U8): Sz //< where `c` first appears after `from`
+  //<
+  //< -1 where it does not appear.
+  for $i: Sz = from; i < text.len; i += 1
+    if text[i] == c
+      return i
+  return -1
+
+// ---- Looking at the text's shape ----
+
+priv fn heading_level(line: U8[], from: Sz): Sz //< a heading's depth
+  //<
+  //< A space must follow the `#`. It stops at six levels.
+  $n: Sz = 0
+  for from + n < line.len && line[from + n] == '#'
+    n += 1
+  if n <= 0 || n > 6 || from + n >= line.len || line[from + n] != ' '
+    return 0
+  return n
+
+priv fn bullet_len(line: U8[], from: Sz): Sz //< the length of a bullet's marker
+  //<
+  //< A space must follow the marker.
+  if from + 1 >= line.len || line[from + 1] != ' '
+    return 0
+  c: = line[from]
+  return 2 if c == '-' || c == '*' || c == '+' else 0
+
+priv fn number_len(line: U8[], from: Sz): Sz //< the length of a number's marker
+  //<
+  //< The digits are followed by a `.` or a `)` and a space.
+  $n: Sz = 0
+  for from + n < line.len && line[from + n] >= '0' && line[from + n] <= '9'
+    n += 1
+  if n <= 0 || from + n + 1 >= line.len
+    return 0
+  tail: = line[from + n]
+  if tail != '.' && tail != ')'
+    return 0
+  return n + 2 if line[from + n + 1] == ' ' else 0
+
+priv fn fence_len(line: U8[], from: Sz): Sz //< the length of a fence's mark
+  //<
+  //< Three or more (two is a mark inside the text).
+  $n: Sz = 0
+  for from + n < line.len && line[from + n] == '`'
+    n += 1
+  return n if n >= 3 else 0
+
+priv fn divider_len(line: U8[], from: Sz): Sz //<
+  //< Whether it is a divider line (`---` / `***` / `___`)
+  //<
+  //< Three or more, with no other character (spaces may be mixed in). A setext heading underline
+  //< is not recognized: only `#` headings are read, and if not read as a divider, a `---` would
+  //< join the paragraph before as text.
+  if from >= line.len
+    return 0
+  mark: = line[from]
+  if mark != '-' && mark != '*' && mark != '_'
+    return 0
+  $n: Sz = 0
+  for $i: Sz = from; i < line.len; i += 1
+    c: = line[i]
+    if c == mark
+      n += 1
+      continue
+    if c != ' ' && c != '\t' && c != '\r'
+      return 0
+  return n if n >= 3 else 0
+
+priv fn is_row(line: U8[], from: Sz): Bool //< whether it is a table row
+  return from < line.len && line[from] == '|'
+
+priv fn is_rule_row(line: U8[], from: Sz): Bool //< whether it is a table's separator row
+  //<
+  //< At least one `-` is needed (a row of only `|` and spaces is not a separator).
+  if !is_row(line, from)
+    return false
+  $dashes: Sz = 0
+  for $i: Sz = from; i < line.len; i += 1
+    c: = line[i]
+    if c == '-'
+      dashes += 1
+      continue
+    if c != '|' && c != ':' && c != ' '
+      return false
+  return dashes > 0
+
+priv fn is_def(line: U8[], from: Sz): Bool //< whether it is a note's definition (`[^1]: text`)
+  return line.starts_with("[^", from) && seek(line, from, ']') > from + 1
+
+// ---- Reading inside the text ----
+
+priv fn collect_defs(src: U8[], arena: Arena$@): List<|Def|>$@ //<
+  //< Collects the notes' definitions from the whole text
+  //<
+  //< Caution: **Collect them before the body** — a mark (`[^1]`) comes before its definition.
+  out: = List<|Def|>.create(arena)
+  $c: = Src::{ .text = src, .pos = 0 }
+  for c.pos < c.text.len
+    line: = take_line(c@)
+    from: = spaces_at(line)
+    if !is_def(line, from)
+      continue
+    close: = seek(line, from, ']')
+    $rest: Sz = close + 1
+    if rest < line.len && line[rest] == ':'
+      rest += 1
+    tag: = line.sub(from + 2, close - from - 2)
+    text: = line.sub_from(rest).trim_spaces()
+    out.push(Def::{ .tag = arena.dup_str(tag), .text = arena.dup_str(text) })
+  return out
+
+priv fn def_text(defs: List<|Def|>$@, tag: U8[]): U8[] //< the text of the note `tag`
+  //<
+  //< Empty where there is none (a mark with no definition has no text).
+  for $i: Sz = 0; i < defs.len; i += 1
+    if defs.get(i).tag.equals(tag)
+      return defs.get(i).text
+  return ""
+
+priv fn dest_of(text: U8[], from: Sz, end: Sz): U8[] //< the contents of `(link)`
+  //<
+  //< Where it is fenced in `<>`, those are removed.
+  got: = text.sub(from, end - from).trim_spaces()
+  if got.len >= 2 && got[0] == '<' && got[got.len - 1] == '>'
+    return got.sub(1, got.len - 2)
+  return got
+
+priv fn flush_run(t: Into$@, b: Block$@, d: Draft$@) //< turns the text held into one inline
+  //<
+  //< Empty text is not added (an inline with nothing to type into would pile up).
+  if d.sb.slice().len <= 0
+    return
+  // An inline holding a link takes the link's style (the emphasis goes over it), or nobody can see
+  // where to click.
+  name: =
+    (link_style(t.sheet, d.bold, d.italic, t.arena) if d.href.len > 0
+    else accent_style(t.sheet, d.bold, d.italic, t.arena))
+  n: = b.add_text(d.sb.slice(), name)
+  n.href = d.href
+  d.sb.clear()
+
+priv fn add_code_run(t: Into$@, b: Block$@, text: U8[], d: Draft$@) //<
+  //< Adds inline code (text fenced in `` ` ``) as one inline.
+  //<
+  //< The inside is not escaped. The emphasis and the link are outside (`` **`x`** ``,
+  //< `` [`x`](url) ``), so they are applied as they are.
+  name: = code_style(t.sheet, "", d.bold, d.italic, t.arena)
+  n: = b.add_text(text, name)
+  n.href = d.href
+
+priv fn trimmed_text(text: U8[]): U8[] //< the text without leading and trailing spaces
+  //<
+  //< A fence's declaration drops the trailing space (it would become part of the name).
+  $a: Sz = 0
+  $b: Sz = text.len
+  for a < b && (text[a] == ' ' || text[a] == '\t')
+    a += 1
+  for b > a && (text[b - 1] == ' ' || text[b - 1] == '\t' || text[b - 1] == '\r')
+    b -= 1
+  return text.sub(a, b - a)
+
+priv struct Ticked //< where inline code lies
+  //<
+  //< Without a closing fence it is not a mark (the characters are ordinary text).
+  found: Bool
+  from: Sz //< the start and end of the contents (inside the fence)
+  to: Sz
+  next: Sz //< just past the fence
+
+priv fn ticked_at(text: U8[], at: Sz): Ticked //< reads the inline code starting at `at`
+  //<
+  //< Caution: **Close with the same number of backticks** — a text holding a `` ` `` is written
+  //< with a longer fence. Drop exactly one space at each end (`` ` x ` `` is `x`).
+  none: = Ticked::{ .found = false, .from = 0, .to = 0, .next = at }
+  $open: Sz = 0
+  for at + open < text.len && text[at + open] == '`'
+    open += 1
+  $i: Sz = at + open
+  for i < text.len
+    if text[i] != '`'
+      i += 1
+      continue
+    $run: Sz = 0
+    for i + run < text.len && text[i + run] == '`'
+      run += 1
+    if run == open
+      return trimmed(text, at + open, i, i + run)
+    i += run
+  return none
+
+priv fn trimmed(text: U8[], from: Sz, to: Sz, next: Sz): Ticked //<
+  //< Makes the range inside the fence, with one space dropped at each end
+  $a: Sz = from
+  $b: Sz = to
+  if b > a + 1 && text[a] == ' ' && text[b - 1] == ' ' && !all_spaces(text, a, b)
+    a += 1
+    b -= 1
+  return Ticked::{ .found = true, .from = a, .to = b, .next = next }
+
+priv fn all_spaces(text: U8[], from: Sz, to: Sz): Bool
+  for $i: Sz = from; i < to; i += 1
+    if text[i] != ' '
+      return false
+  return true
+
+priv fn add_inlines(t: Into$@, b: Block$@, text: U8[], href: U8[], bold: Bool, italic: Bool) //<
+  //< Adds a text as a list of inlines
+  //<
+  //< An escaped character is that character itself. A picture belongs to the block; its caption
+  //< goes into an inline.
+  //< Caution: **Carry the outer emphasis through.** A link can sit inside emphasis
+  //< (`**[text](link)**`); starting from false drops the outer `**`.
+  $sb: = Str_builder.new()
+  defer sb.free()
+  $d: = Draft::{ .sb = sb@, .bold = bold, .italic = italic, .href = href }
+  $i: Sz = 0
+  for i < text.len
+    c: = text[i]
+    if c == '`'
+      span: = ticked_at(text, i)
+      if span.found
+        flush_run(t, b, d@)
+        add_code_run(t, b, text.sub(span.from, span.to - span.from), d@)
+        i = span.next
+        continue
+    if c == '\\' && i + 1 < text.len
+      sb.c(text[i + 1])
+      i += 2
+      continue
+    if c == '*'
+      flush_run(t, b, d@)
+      if i + 1 < text.len && text[i + 1] == '*'
+        d.bold = !d.bold
+        i += 2
+      else
+        d.italic = !d.italic
+        i += 1
+      continue
+    used: = mark_at(t, b, text, i, d@)
+    if used > i
+      i = used
+      continue
+    sb.c(c)
+    i += 1
+  flush_run(t, b, d@)
+
+priv fn mark_at(t: Into$@, b: Block$@, text: U8[], i: Sz, d: Draft$@): Sz //<
+  //< Reads the mark at `i` (a picture, a link, a note)
+  //<
+  //< Returns the position after it once read, and `i` where it cannot be read.
+  c: = text[i]
+  if c == '!' && i + 1 < text.len && text[i + 1] == '['
+    return image_at(t, b, text, i, d)
+  if c != '['
+    return i
+  if text.starts_with("[^", i)
+    return note_at(t, b, text, i, d)
+  // A link inside a link is not read (Markdown has no such form).
+  if d.href.len > 0
+    return i
+  close: = seek(text, i + 1, ']')
+  if close < 0 || close + 1 >= text.len || text[close + 1] != '('
+    return i
+  // A link with no text is plain text (there is nothing to click).
+  if close == i + 1
+    return i
+  end: = seek(text, close + 2, ')')
+  if end < 0
+    return i
+  flush_run(t, b, d)
+  dest: = t.arena.dup_str(dest_of(text, close + 2, end))
+  add_inlines(t, b, text.sub(i + 1, close - i - 1), dest, d.bold, d.italic)
+  return end + 1
+
+priv fn image_at(t: Into$@, b: Block$@, text: U8[], i: Sz, d: Draft$@): Sz //<
+  //< Reads `![caption](source)`
+  //<
+  //< The source belongs to the block (a picture is not an inline).
+  //< One block holds one picture. A second is left as text (overwritten, the first would be
+  //< silently lost).
+  if b.image.len > 0
+    return i
+  close: = seek(text, i + 2, ']')
+  if close < 0 || close + 1 >= text.len || text[close + 1] != '('
+    return i
+  end: = seek(text, close + 2, ')')
+  if end < 0
+    return i
+  flush_run(t, b, d)
+  b.image = t.arena.dup_str(dest_of(text, close + 2, end))
+  b.image_w = image_w
+  b.image_h = image_h
+  add_inlines(t, b, text.sub(i + 2, close - i - 2), d.href, d.bold, d.italic)
+  return end + 1
+
+priv fn note_at(t: Into$@, b: Block$@, text: U8[], i: Sz, d: Draft$@): Sz //< reads `[^1]`
+  //<
+  //< The note belongs to the inline before it (the mark comes after that inline's text). A mark
+  //< with no definition stays text, so nothing is lost.
+  close: = seek(text, i + 2, ']')
+  if close < 0
+    return i
+  got: = def_text(t.defs, text.sub(i + 2, close - i - 2))
+  if got.len <= 0
+    return i
+  // Caution: **Add the text held first**, or the text before the mark goes to the inline after it.
+  flush_run(t, b, d)
+  if b.inlines.len > 0
+    b.inlines.get(b.inlines.len - 1).note = got
+  return close + 1
+
+// ---- Building the lumps ----
+
+priv fn parent_at(t: Into$@, depth: Sz): Option<|Block$@|> //< where a block at `depth` goes
+  //<
+  //< With a depth it is a child of the item before; with no item open, the document.
+  if depth <= 0 || t.stack.len <= 0
+    return Option<|Block$@|>.none
+  at: = depth if depth < t.stack.len else t.stack.len
+  return Option<|Block$@|>.some(t.stack.get(at - 1))
+
+priv fn keep_apart(t: Into$@, depth: Sz, name: U8[]) //<
+  //< Inserts a divider before a fence of `name` that follows the same fence
+  //<
+  //< Only where the style is the same (a different style already ends the fence; `fence_end` in
+  //< `../model/fence.kspls`).
+  kin: = kin_at(t, depth)
+  if kin == null || kin.len <= 0
+    return
+  last: = kin.get(kin.len - 1)
+  if last == null || !last.style.equals(name) || fence.divides(t.sheet, last)
+    return
+  add_block(t, depth, divider_style(t.sheet, false, t.arena))
+
+priv fn kin_at(t: Into$@, depth: Sz): List<|Block$@|>$@ //< the list that is added to at `depth`
+  if parent: = parent_at(t, depth)
+    return parent.children
+  return t.doc.blocks
+
+priv fn add_block(t: Into$@, depth: Sz, name: U8[]): Block$@ //< adds one block
+  if parent: = parent_at(t, depth)
+    return parent.add_child(name)
+  return t.doc.add_block(name)
+
+priv fn read_fence(t: Into$@, c: Src$@, mark: Sz, depth: Sz, info: U8[]) //< reads a fence
+  //<
+  //< The text inside is not escaped. Where the text runs out unclosed, what there is is the fence.
+  //< Caution: **Do not drop the declared language (` ```kspl `)** — every tool that collects
+  //< source fences breaks there. It is kept as the style's name (`plain_code_name` in
+  //< `markdown.kspls`).
+  name: = code_style(t.sheet, info, false, false, t.arena)
+  for c.pos < c.text.len
+    line: = take_line(c)
+    from: = spaces_at(line)
+    if fence_len(line, from) >= mark
+      return
+    // Caution: **Strip only the list level's spaces** (a fence inside a list is indented by the
+    // level); spaces deeper than that are the text's own indent.
+    cut: = depth * 2 if from >= depth * 2 else from
+    add_block(t, depth, name).add_text(line.sub_from(cut))
+
+priv fn add_row(t: Into$@, grid: Block$@, line: U8[], from: Sz,
+  aligns: List<|style.Align|>$@) //<
+    //< Adds one row of a table.
+    //<
+    //< Cells are separated by an unescaped `|` (a `\|` is text). The row gets no style name (the
+    //< text gives none); each cell takes the cell style of its column's alignment (`cell_style`).
+  row: = grid.add_child("")
+  $start: Sz = from + 1
+  $i: Sz = start
+  $col: Sz = 0
+  for i <= line.len
+    if i < line.len && line[i] == '\\'
+      i += 2
+      continue
+    if i < line.len && line[i] != '|'
+      i += 1
+      continue
+    // No cell is made after the closing `|` (an empty field would pile up).
+    field: = line.sub(start, i - start).trim_spaces()
+    if i < line.len || field.len > 0
+      // The alignment is set per column. Past the number of columns it is left as it is.
+      want: = aligns.get(col) if col < aligns.len else style.Align.left
+      add_inlines(t, row.add_child(cell_style(t.sheet, want, t.arena)), field, "", false, false)
+      col += 1
+    i += 1
+    start = i
+
+priv fn rule_align(line: U8[], from: Sz, to: Sz): style.Align //<
+  //< The alignment the separator row gives for that column
+  //<
+  //< An explicit left alignment (`:--`) is kept as the default: only center and right lose
+  //< information when dropped.
+  $left: = false
+  $right: = false
+  for $i: Sz = from; i < to; i += 1
+    if line[i] != ':'
+      continue
+    // It is decided by which side of the `-` the `:` is on (both means center).
+    if i + 1 < to && line[i + 1] == '-'
+      left = true
+    else
+      right = true
+  if left && right
+    return style.Align.center
+  return style.Align.right if right else style.Align.left
+
+priv fn rule_aligns(line: U8[], from: Sz, arena: Arena$@): List<|style.Align|>$@ //<
+  //< Turns the separator row into a list of alignments, one per column
+  out: = List<|style.Align|>.create(arena)
+  $start: Sz = from + 1
+  $i: Sz = start
+  for i <= line.len
+    if i < line.len && line[i] != '|'
+      i += 1
+      continue
+    if i < line.len || i > start
+      out.push(rule_align(line, start, i))
+    i += 1
+    start = i
+  return out
+
+priv fn read_table(t: Into$@, c: Src$@, first: U8[], from: Sz, depth: Sz): Bool //< reads a table
+  //<
+  //< Caution: **Do not throw away the separator row's alignments** — center and right can be
+  //< written nowhere else ("What a Markdown round trip drops" in
+  //< `../docs/DESIGN.md`). The document has no "heading row".
+  ahead: = peek_line(c)
+  if !is_rule_row(ahead, spaces_at(ahead))
+    return false
+  aligns: = rule_aligns(ahead, spaces_at(ahead), t.arena)
+  take_line(c)
+  grid: = add_block(t, depth, grid_style(t.sheet, t.arena))
+  add_row(t, grid, first, from, aligns)
+  for c.pos < c.text.len
+    ahead2: = peek_line(c)
+    at: = spaces_at(ahead2)
+    if !is_row(ahead2, at)
+      return true
+    add_row(t, grid, take_line(c), at, aligns)
+  return true
+
+priv fn skip_comment(t: Into$@, c: Src$@, line: U8[], from: Sz) //< skips over an HTML comment
+  //<
+  //< Caution: **Skip until it closes** (it can span many lines).
+  //< The mark for contents Markdown cannot write (`<!-- kspage: … -->`) is one; they cannot be
+  //< recovered.
+  t.para = null
+  if line.sub_from(from).find_str("-->") >= 0
+    return
+  for c.pos < c.text.len
+    if take_line(c).find_str("-->") >= 0
+      return
+
+// ---- A slide's fence ----
+
+priv fn fence_line(line: U8[], depth: Sz): U8[] //<
+  //< One line of a fence's contents, with the fence's own level of spaces removed
+  //<
+  //< Caution: **Remove the level's spaces and no more** (as `read_fence`): the deeper indent is
+  //< what tells a frame's text from a frame's line.
+  from: = spaces_at(line)
+  cut: = depth * 2 if from >= depth * 2 else from
+  return line.sub_from(cut)
+
+priv fn laid_in(text: U8[]): Bool //<
+  //< Whether that line is an indented line of contents rather than a line of its own
+  for $i: Sz = 0; i < fenced.step; i += 1
+    if i >= text.len || text[i] != ' '
+      return false
+  return true
+
+priv struct Fenced //< where a fence's contents start and end
+  body: U8[]
+  next: Sz //<
+    //< The position after the closing line.
+    //<
+    //< Reading does not move, so the caller can still fall back to a code block.
+
+priv fn fenced_body(c: Src$@, mark: Sz): Fenced //<
+  //< The contents of the fence starting at `c`, without moving `c`
+  //<
+  //< Where the text runs out unclosed, what there is is the fence (as `read_fence`).
+  start: = c.pos
+  $i: Sz = c.pos
+  for i < c.text.len
+    head: = i
+    stop: = line_end(c.text, i)
+    line: = c.text.sub(i, stop - i)
+    i = past_break(c.text, stop)
+    if fence_len(line, spaces_at(line)) >= mark
+      return Fenced::{ .body = c.text.sub(start, head - start), .next = i }
+  return Fenced::{ .body = c.text.sub_from(start), .next = c.text.len }
+
+priv fn slide_reads(body: U8[], depth: Sz): Bool //< whether every line of a slide's fence reads
+  //<
+  //< The whole fence is checked before anything is built — half read, nobody can see which line
+  //< failed — so a failing fence falls back whole to a code block.
+  $seen: = false
+  $i: Sz = 0
+  for i < body.len
+    stop: = line_end(body, i)
+    text: = fence_line(body.sub(i, stop - i), depth)
+    i = past_break(body, stop)
+    if text.trim_spaces().len <= 0
+      continue
+    if laid_in(text)
+      // An indented line before any frame does not read (there is no frame for it to go in).
+      if !seen
+        return false
+      continue
+    if fenced.frame_of(text).found
+      seen = true
+      continue
+    if !fenced.tie_of(text).found
+      return false
+  return true
+
+priv fn build_slide(t: Into$@, head: fenced.Head, body: U8[], depth: Sz) //<
+  //< Builds a slide whose every line has read
+  //<
+  //< Caution: **A contents line continues the frame before it** (joined by a space); made a block
+  //< of its own, it counts as dropped when written out and the round trip breaks.
+  face: = add_block(t, depth, slide_style(t.sheet, head.w, head.h, t.arena))
+  face.name = head.name
+  $frame: Block$@ = null
+  $i: Sz = 0
+  for i < body.len
+    stop: = line_end(body, i)
+    text: = fence_line(body.sub(i, stop - i), depth)
+    i = past_break(body, stop)
+    if text.trim_spaces().len <= 0
+      continue
+    if laid_in(text)
+      if frame != null
+        if frame.inlines.len > 1
+          frame.add_text(" ")
+        add_inlines(t, frame, text.sub_from(fenced.step), "", false, false)
+      continue
+    got: = fenced.frame_of(text)
+    if got.found
+      frame = doc.add_framed_child(face, frame_style(t.sheet, got.style, t.arena), got.at)
+      frame.name = got.name
+      // Add one empty inline, or the frame has nowhere for a cursor to stand.
+      frame.add_text("")
+      continue
+    tied: = fenced.tie_of(text)
+    line: = face.add_child(frame_style(t.sheet, tied.style, t.arena))
+    line.tie_from = tied.from
+    line.tie_to = tied.to
+    frame = null
+
+priv fn build_chart(t: Into$@, drawn: fenced.Chart, body: U8[], depth: Sz): Bool //<
+  //< Builds a chart whose declaration has read
+  //<
+  //< If the contents are not one range it does not read, and the fence stays a code block. An
+  //< unknown aggregation is refused here: the core decides which names are a chart's.
+  what: = collect.collect_from(drawn.kind)
+  if !what.same_collect(Collect.bars) && !what.same_collect(Collect.lines)
+    return false
+  $range: U8[] = ""
+  $i: Sz = 0
+  for i < body.len
+    stop: = line_end(body, i)
+    text: = fence_line(body.sub(i, stop - i), depth).trim_spaces()
+    i = past_break(body, stop)
+    if text.len <= 0
+      continue
+    if range.len > 0
+      return false
+    range = text
+  if range.len <= 0
+    return false
+  made: = add_block(t, depth, chart_style(t.sheet, what, drawn.height, t.arena))
+  made.name = drawn.name
+  made.chart = range
+  return true
+
+priv fn read_item(t: Into$@, line: U8[], from: Sz, skip: Sz, kind: Sz, depth: Sz) //<
+  //< Adds one list item
+  //<
+  //< The number is not taken from the text; it is counted at layout time (`style.next_ord`).
+  b: = add_block(t, depth, list_style(t.sheet, kind, t.arena))
+  if t.stack.len > depth
+    t.stack.len = depth
+  t.stack.push(b)
+  add_inlines(t, b, line.sub_from(from + skip), "", false, false)
+  // A continuation line goes into this item's text.
+  t.para = b
+
+priv fn read_line(t: Into$@, c: Src$@, line: U8[]) //< reads one line
+  //<
+  //< Caution: **Check the forms in order** — without taking the fence first, a `#` inside it
+  //< becomes a heading.
+  from: = spaces_at(line)
+  depth: = from / 2
+  if from >= line.len
+    t.para = null
+    return
+  if line.starts_with("<!--", from)
+    skip_comment(t, c, line, from)
+    return
+  mark: = fence_len(line, from)
+  if mark > 0
+    t.para = null
+    info: = trimmed_text(line.sub_from(from + mark))
+    // A slide's fence. It is tried before the code block, and falls back to one if any line does
+    // not read.
+    made: = fenced.head_of(info)
+    if made.found
+      got: = fenced_body(c, mark)
+      if slide_reads(got.body, depth)
+        build_slide(t, made, got.body, depth)
+        c.pos = got.next
+        return
+    drawn: = fenced.chart_of(info)
+    if drawn.found
+      got: = fenced_body(c, mark)
+      if build_chart(t, drawn, got.body, depth)
+        c.pos = got.next
+        return
+    // Caution: **Where the block before is the same fence, insert a divider first**, or two fences
+    // separated by one empty line become one block. Nothing is written into the text for it.
+    keep_apart(t, depth, code_style(t.sheet, info, false, false, t.arena))
+    read_fence(t, c, mark, depth, info)
+    return
+  // A divider line. The paragraph ends here.
+  if divider_len(line, from) > 0
+    t.para = null
+    add_block(t, depth, divider_style(t.sheet, true, t.arena))
+    return
+  level: = heading_level(line, from)
+  if level > 0
+    t.para = null
+    b: = add_block(t, depth, heading_style(t.sheet, level, t.arena))
+    add_inlines(t, b, line.sub_from(from + level + 1), "", false, false)
+    return
+  if is_row(line, from) && read_table(t, c, line, from, depth)
+    t.para = null
+    return
+  // The notes list builds the definition's text, so this line does not go into the document (it
+  // would appear twice).
+  if is_def(line, from)
+    t.para = null
+    if !t.listed
+      add_block(t, 0, notes_style(t.sheet, t.arena))
+      t.listed = true
+    return
+  bullet: = bullet_len(line, from)
+  if bullet > 0
+    read_item(t, line, from, bullet, 1, depth)
+    return
+  number: = number_len(line, from)
+  if number > 0
+    read_item(t, line, from, number, 2, depth)
+    return
+  // A continuation line goes into the same paragraph, joined by a space.
+  if t.para != null
+    t.para.add_text(" ")
+    add_inlines(t, t.para, line.sub_from(from), "", false, false)
+    return
+  t.para = add_block(t, depth, body_style(t.sheet, t.arena))
+  add_inlines(t, t.para, line.sub_from(from), "", false, false)
+
+fn read(src: U8[], sheet: Sheet$@, arena: Arena$@): Doc$@ //<
+  //< Makes one document out of Markdown text
+  //<
+  //< The styles needed are added to the style table (looked up by shape, added where none).
+  //< Caution: **Put the document and the style table on the same arena** — a style's name is a
+  //< pointer, not a copy, and dangles once the other arena is freed. Any text reads, even one of
+  //< only paragraphs.
+  d: = Doc.new(arena)
+  $t: = Into::{ .doc = d, .sheet = sheet, .defs = collect_defs(src, arena), .arena = arena,
+    .stack = List<|Block$@|>.create(arena), .para = null, .listed = false }
+  $c: = Src::{ .text = src, .pos = 0 }
+  for c.pos < c.text.len
+    read_line(t@, c@, take_line(c@))
+  return d

@@ -1,0 +1,174 @@
+name: Release
+
+# Fires on a pushed version tag (v*), or a manual trigger naming the tag. It attaches standalone
+# ksplc binaries, built per OS from the seed (ksplc/seed.c) up to the stage2 `make install` ships,
+# to that tag's GitHub Release; no binary is kept under git, so they cannot drift from the source.
+#
+# `import "std/io"` resolves relative to the current directory, not the exe's place, so ksplc alone
+# leaves std/ unfound: the zip bundles the whole of std/, and the user runs ksplc inside it.
+#
+# On a manual trigger, action-gh-release creates the tag named in tag_name if it does not exist.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "the release tag to create (for example: v0.1.0)"
+        required: true
+        default: "v0.1.0"
+
+permissions:
+  contents: write
+
+# The shared tag name, so the version can go into the zip/vsix file names (referenced by every job).
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  # The distributed files for three platforms, in one matrix: only the runner, the artifact's name,
+  # the shell, and Windows's MSYS2 setup and zip making differ.
+  #
+  # Caution: Do not write the flags or libraries here. The Makefile's SHIP_CFLAGS and LDLIBS hold
+  # them for `make install` and this alike; written twice, one gets fixed and the other forgotten.
+  build:
+    strategy:
+      # One platform's failure does not cut the others short (a release wants every result).
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, slug: linux-x64, exe: ksplc, shell: bash }
+          - { os: macos-latest, slug: macos-arm64, exe: ksplc, shell: bash }
+          # **Windows builds on MSYS2 UCRT64**, the toolchain Windows is developed on (why:
+          # "15.4 The Windows executable is built on UCRT64" in docs/DESIGN.md).
+          - { os: windows-latest, slug: windows-x64, exe: ksplc.exe, shell: "msys2 {0}" }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: UCRT64
+          # Caution: **Do not add `update: true`**, as in ci.yml: a full upgrade moves the tools on a
+          # day nobody touched the sources.
+          cache: true
+          # The Makefile's tools by their unversioned names, as in ci.yml; llvm for `llvm-readobj`,
+          # which the DLL check below reads the imports with.
+          install: >-
+            git make python findutils diffutils grep coreutils tar
+            mingw-w64-ucrt-x86_64-clang
+            mingw-w64-ucrt-x86_64-llvm
+      - name: Build ksplc as make install does
+        # **Ship stage2, not the seed**: the seed is the compiler as of its last re-bake. The output
+        # goes under dist/: a "ksplc" at the repository's root collides with the ksplc/ directory.
+        run: |
+          set -e
+          make out/ksplc_ship.exe
+          mkdir -p dist
+          cp out/ksplc_ship.exe "dist/${{ matrix.exe }}"
+      - name: Refuse a DLL that only MSYS2 carries (Windows only)
+        # A user's Windows has none of MSYS2's DLLs (`libwinpthread-1.dll` and the like), so an
+        # import found under the UCRT64 tree means a ksplc.exe that will not start once unpacked.
+        if: runner.os == 'Windows'
+        run: |
+          set -e
+          imports=$(llvm-readobj --coff-imports "dist/${{ matrix.exe }}" | tr -d '\r' | sed -n 's/^  Name: //p')
+          echo "DLLs imported:" $imports
+          bad=""
+          for dll in $imports; do
+            if [ -e "/ucrt64/bin/$dll" ]; then bad="$bad $dll"; fi
+          done
+          if [ -n "$bad" ]; then
+            echo "ksplc.exe imports a DLL only MSYS2 carries:$bad"
+            exit 1
+          fi
+      - name: Collect the bundled files
+        # dist/.vscode/ and dist/kspl_lldb.py are bundled so the unpacked folder, opened in VS Code,
+        # builds and debugs with LLDB at once (the extension is package-vscode-ext's .vsix).
+        run: |
+          set -e
+          cp -r std dist/std
+          mkdir -p dist/.vscode
+          cp tools/release-assets/vscode/*.json dist/.vscode/
+          cp tools/kspl_lldb.py dist/kspl_lldb.py
+          # **Bundle at least one document**: nothing else in the zip can be read, so one page names
+          # where you get stuck first (import's rules and the like), as the way in to
+          # docs/SPEC-language.md.
+          cp tools/release-assets/README.md dist/README.md
+          # The licence travels with the files it covers. THIRD-PARTY-NOTICES.md stays behind: the
+          # files owing a notice are under ksos/, which no artifact carries.
+          cp LICENSE.md dist/LICENSE.md
+      # The zip is made per platform: Git Bash has no `zip`, and `zip -r` keeps the executable bit
+      # that means nothing on Windows.
+      - name: Archive (Unix)
+        if: runner.os != 'Windows'
+        run: (cd dist && zip -r "../ksplc-${TAG}-${{ matrix.slug }}.zip" .)
+      - name: Archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/* -DestinationPath "ksplc-${env:TAG}-${{ matrix.slug }}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ksplc-${{ env.TAG }}-${{ matrix.slug }}.zip
+          path: ksplc-${{ env.TAG }}-${{ matrix.slug }}.zip
+
+  # Packages .vscode/extensions/kspl (highlighting + LSP) into one .vsix carrying all three
+  # platforms' ksplc as the LSP server "ksplc_server.exe" (as the Makefile's install-lsp does), so
+  # one `code --install-extension` works on any OS. .vscode/extensions/kspeg becomes a .vsix the
+  # same way, with no server to embed.
+  package-vscode-ext:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+      - name: Embed per-platform ksplc into the extension's bundled LSP server dir
+        # download-artifact@v4 unpacks under a directory named after the artifact: <name>/<name>.
+        run: |
+          set -e
+          embed() { # <slug> <the exe's name inside the zip> <VS Code's platform name>
+            local zip="ksplc-${TAG}-$1.zip"
+            mkdir -p ".vscode/extensions/kspl/bin/$3"
+            unzip -p "$zip/$zip" "$2" > ".vscode/extensions/kspl/bin/$3/ksplc_server.exe"
+          }
+          embed linux-x64 ksplc linux
+          embed macos-arm64 ksplc darwin
+          embed windows-x64 ksplc.exe win32
+          chmod +x .vscode/extensions/kspl/bin/linux/ksplc_server.exe
+          chmod +x .vscode/extensions/kspl/bin/darwin/ksplc_server.exe
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Package .vsix
+        # vsce packs the folder's LICENSE.md into the .vsix and without one only warns; copying it
+        # in keeps one LICENSE.md to edit.
+        run: |
+          set -e
+          for ext in kspl kspeg; do
+            cp LICENSE.md ".vscode/extensions/$ext/LICENSE.md"
+            (cd ".vscode/extensions/$ext" && npx --yes @vscode/vsce package \
+              --allow-missing-repository -o "${{ github.workspace }}/$ext-${TAG}.vsix")
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vsix
+          path: "*.vsix"
+
+  release:
+    needs: [build, package-vscode-ext]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          target_commitish: ${{ github.sha }}
+          files: |
+            ksplc-*/ksplc-*.zip
+            vsix/*.vsix
+          generate_release_notes: true

@@ -1,0 +1,318 @@
+//< Normalizes a statement's raw tree into the slots later layers read, and folds expressions
+//<
+//< `if`, `for`, `switch`, `defer` and an `if` binding take their fixed children here, called by
+//< kind from `normalize_by_kind` in `normalize.kspls`; `treeify_expr` folds a run of binary
+//< operators and a postfix chain into a left-associative tree.
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "std/str"
+
+priv struct Jump_label_info
+  label: Ast_node$@
+  start_idx: Sz
+
+priv enum Loop_phase
+  init
+  cond
+  step
+
+impl Ast_node
+  fn normalize_if_stmt(r: Ast_node$@)
+    r.text = "if"
+    info: = r.extract_jump_label("if")
+    flat: = base_ast.new_ast_node_list()
+    r.push_or_empty(flat, info.label)
+
+    $cond_node: Ast_node$@ = null
+    $then_node: Ast_node$@ = null
+    $else_node: Ast_node$@ = null
+
+    for $j: = info.start_idx; j < r.children.len; j += 1
+      c: = r.get_child(j)
+      if c.is_keyword("else")
+        continue
+      if cond_node == null
+        cond_node = c
+      else if then_node == null
+        then_node = c
+      else if else_node == null
+        else_node = c
+
+    r.push_or_empty(flat, cond_node)
+    r.push_or_empty(flat, then_node)
+    r.push_or_empty(flat, else_node)
+    r.children = flat
+
+  fn normalize_defer_stmt(r: Ast_node$@) //<
+    //< It gives a one-statement `defer` (`defer buf.free()`) the block form's shape
+    //<
+    //< That shape is just the keyword and a block, so every later stage sees one form.
+    //<
+    //< Caution: **Keep an attribute list at the end**, where a statement's attributes go
+    //< (`elide_attributed_stmt`); moved into the block it would attach to the cleanup instead.
+    $kw: Ast_node$@ = null
+    $attrs: Ast_node$@ = null
+    parts: = base_ast.new_ast_node_list()
+    for c in r.children
+      if c.kind_id == .k_keyword && kw == null
+        kw = c
+      else if c.kind_id == .k_attribute_list
+        attrs = c
+      else if !c.is_literal(";")
+        parts.push(c)
+    if parts.len == 0 || (parts.len == 1 && parts.get(0).kind_id == .k_stmt_block)
+      return
+    $stmt: = parts.get(0)
+    if parts.len > 1 || stmt.kind_id != .k_stmt_expr
+      stmt = Ast_node.new(.k_stmt_expr, "expr", parts.get(0).loc)
+      for p in parts
+        stmt.add_child(p)
+    block: = Ast_node.new(.k_stmt_block, "stmt_block", stmt.loc)
+    block.add_child(stmt)
+    flat: = base_ast.new_ast_node_list()
+    r.push_or_empty(flat, kw)
+    flat.push(block)
+    if attrs != null
+      flat.push(attrs)
+    r.children = flat
+
+  fn normalize_if_bind(r: Ast_node$@) //< the binding of `if v: = X`
+    //<
+    //< Caution: **Drop the `:` and the `=`, leaving [name, expression]**, or the desugaring
+    //< mistakes the `:` for the expression and sema gets the type "unknown".
+    r.text = "if_bind"
+    flat: = base_ast.new_ast_node_list()
+    for $j: Sz = 0; j < r.children.len; j += 1
+      c: = r.get_child(j)
+      if c.is_literal(":") || c.is_literal("=")
+        continue
+      flat.push(c)
+    r.children = flat
+
+  fn normalize_match_stmt(r: Ast_node$@)
+    r.text = "switch"
+    info: = r.extract_jump_label("switch")
+    flat: = base_ast.new_ast_node_list()
+    r.push_or_empty(flat, info.label)
+
+    for $j: = info.start_idx; j < r.children.len; j += 1
+      c: = r.get_child(j)
+      if c.kind_id == .k_match_pattern
+        c.normalize_match_pattern()
+      flat.push(c)
+    r.children = flat
+
+  fn normalize_match_pattern(r: Ast_node$@)
+    flat: = base_ast.new_ast_node_list()
+    for c in r.children
+      if c.kind_id == .k_literal &&
+        (c.text.equals("(") || c.text.equals(")") || c.text.equals(","))
+        continue
+      if c.kind_id == .k_identifier_list
+        for ic in c.children
+          if ic.kind_id == .k_identifier
+            flat.push(ic)
+        continue
+      flat.push(c)
+    r.children = flat
+
+  fn normalize_loop(r: Ast_node$@)
+    r.text = "for"
+    info: = r.extract_jump_label("for")
+
+    $is_c_style: = false
+    for $j: = info.start_idx; j < r.children.len; j += 1
+      if r.get_child(j).is_literal(";")
+        is_c_style = true
+        break
+
+    flat: = base_ast.new_ast_node_list()
+    r.push_or_empty(flat, info.label)
+
+    if is_c_style
+      $init_node: Ast_node$@ = null
+      $cond_node: Ast_node$@ = null
+      $step_node: Ast_node$@ = null
+      $block_node: Ast_node$@ = null
+      $phase: = Loop_phase.init
+
+      for $j: = info.start_idx; j < r.children.len; j += 1
+        c: = r.get_child(j)
+        if c.is_literal(";")
+          switch phase case .init
+            phase = .cond
+          case .cond
+            phase = .step
+          default {}
+          continue
+        if c.kind_id == .k_stmt_block
+          block_node = c
+          break
+
+        switch phase case .init
+          if init_node == null
+            init_node = Ast_node.new(.k_loop_init, "init", c.loc)
+          init_node.add_child(c)
+        case .cond
+          cond_node = c
+        case .step
+          if step_node == null
+            step_node = Ast_node.new(.k_loop_step, "step", c.loc)
+          // The grammar's loop_step (stmt_expr ("," stmt_expr)*) keeps its commas as children; left
+          // in, genc writes invalid C such as `i += 1, ,, j -= 1`.
+          if c.kind_id == .k_loop_step
+            for sc in c.children
+              if !sc.is_literal(",")
+                step_node.add_child(sc)
+          else if !c.is_literal(",")
+            step_node.add_child(c)
+
+      // Only a single init loses its loop_init wrapper; a multi-variable one, already split by
+      // flatten_var_decl_lists, keeps it for genc / sema.
+      if init_node != null && init_node.children.len == 1
+        init_node = init_node.get_child(0)
+      if step_node != null && step_node.children.len == 1
+        step_node = step_node.get_child(0)
+
+      r.push_or_empty(flat, init_node)
+      r.push_or_empty(flat, cond_node)
+      r.push_or_empty(flat, step_node)
+      r.push_or_empty(flat, block_node)
+    else if r.children.len == info.start_idx + 4 &&
+      r.get_child(info.start_idx).kind_id == .k_identifier &&
+      r.get_child(info.start_idx + 1).is_keyword("in")
+      // `for item in collection { ... }`, not yet expanded: the bare item identifier at loop_init
+      // is the marker, kept until sema (an ordinary init is never a bare k_identifier).
+      r.push_or_empty(flat, r.get_child(info.start_idx))
+      r.push_or_empty(flat, r.get_child(info.start_idx + 2))
+      r.push_or_empty(flat, null)
+      r.push_or_empty(flat, r.get_child(info.start_idx + 3))
+    else
+      $cond_node: Ast_node$@ = null
+      $block_node: Ast_node$@ = null
+
+      if r.children.len > info.start_idx + 1
+        cond_node = r.get_child(info.start_idx)
+        block_node = r.get_child(info.start_idx + 1)
+      else if r.children.len > info.start_idx
+        block_node = r.get_child(info.start_idx)
+
+      r.push_or_empty(flat, null)
+      r.push_or_empty(flat, cond_node)
+      r.push_or_empty(flat, null)
+      r.push_or_empty(flat, block_node)
+    r.children = flat
+
+  priv fn extract_jump_label(r: Ast_node$@, kw: U8$[]): Jump_label_info //<
+    //< The label a jump or loop statement writes, and where the children after it start
+    //<
+    //< A label comes as a k_label node (branch 1), as [identifier, ':', keyword...] on an if / for
+    //< (branch 2), and as [identifier, keyword...] on a switch, whose ':' is dropped as trivia
+    //< (is_flatten_target in parse/normalize.kspls; branch 3).
+    $info: = Jump_label_info::{ .label = null, .start_idx = 0 }
+    if r.children.len > 0
+      first: = r.get_child(0)
+      if first.kind_id == .k_label
+        info.label = first.find_child(.k_identifier)
+        info.start_idx = 1
+      else if r.children.len > 1 && r.get_child(1).is_literal(":")
+        info.label = r.get_child(0)
+        info.start_idx = 2
+      else if r.get_child(0).kind_id == .k_identifier && r.children.len > 1 &&
+        r.get_child(1).is_keyword(kw)
+        info.label = r.get_child(0)
+        info.start_idx = 2
+    if info.start_idx < r.children.len && r.get_child(info.start_idx).is_keyword(kw)
+      info.start_idx += 1
+    return info
+  // --- Expression Treeification ---
+  fn treeify_expr(r: Ast_node$@): Ast_node$@
+    id: = r.kind_id
+    if id == .k_expr_or || id == .k_expr_and || id == .k_expr_cmp || id == .k_expr_add ||
+      id == .k_expr_mul
+      if r.children.len >= 3
+        $left: = r.get_child(0)
+        for $j: = 1; j + 1 < r.children.len; j += 2
+          left = Ast_node.new(.k_expr, "expr", left.loc).add_child(left)
+            .add_child(r.get_child(j)).add_child(r.get_child(j + 1))
+        return left
+
+    if id == .k_expr_unary && r.children.len > 0
+      op: = r.get_child(0)
+      r.text = op.text
+      flat: = base_ast.new_ast_node_list()
+      flat.push(op)
+
+      // Caution: **Drop the comma too**: `offsetof(T, f)` is the only two-child unary, and a
+      // comma left in breaks counting by position downstream (a deeper comma is a child of
+      // `expr_args` and never reaches here).
+      for $i: = 1; i < r.children.len; i += 1
+        c: = r.get_child(i)
+        if !c.is_literal("(") && !c.is_literal(")") && !c.is_literal(",")
+          flat.push(c)
+      r.children = flat
+
+    if id == .k_expr_postfix && r.children.len > 0
+      return r.treeify_postfix_chain()
+    return r
+
+  priv fn treeify_postfix_chain(r: Ast_node$@): Ast_node$@ //<
+    //< It rebuilds a flat postfix run (`a.b(c)[d]@`) into a left-associative tree
+    //<
+    //< Caution: **Advance k by the number of children consumed**, or it reads a child twice or
+    //< skips one and the tree's shape silently changes. **Stop when too few children remain**:
+    //< input that ends partway (`a.`) returns the tree so far, leaving the diagnostic to sema.
+    ch_len: = r.children.len
+    $left: = r.get_child(0)
+    $k: Sz = 1
+    for k < ch_len
+      c: = r.get_child(k)
+      op_node: = Ast_node.new(.k_expr_postfix, "postfix", r.loc).add_child(left)
+      if c.kind_id != .k_literal && c.kind_id != .k_keyword
+        k += 1
+        left = op_node
+        continue
+      op_node.add_child(c)
+      if c.text.equals(".")
+        if k + 1 >= ch_len
+          break
+        op_node.add_child(r.get_child(k + 1))
+        k += 2
+        if k < ch_len && r.get_child(k).kind_id == .k_type_args
+          op_node.add_child(r.get_child(k))
+          k += 1
+      else if c.text.equals("[")
+        if k + 2 >= ch_len
+          break
+        op_node.add_child(r.get_child(k + 1)).add_child(r.get_child(k + 2))
+        k += 3
+      else if c.text.equals("(")
+        consumed: = r.attach_call_args(op_node, k, ch_len, c.loc)
+        if consumed == 0
+          break
+        k += consumed
+      else if c.text.equals("@") || c.text.equals("?") || c.text.equals("$")
+        op_node.text = c.text
+        k += 1
+      else
+        k += 1
+      left = op_node
+    return left
+
+  priv fn attach_call_args(r: Ast_node$@, op_node: Ast_node$@, k: Sz, ch_len: Sz,
+    loc: base_ast.Loc): Sz //<
+      //< It attaches what follows the `(` to `op_node` and returns how many children it consumed
+      //<
+      //< The count includes the `(`; 0 means too few children remain. A `()` gets an empty
+      //< k_expr_args (so the children line up with the shape that has arguments).
+    if k + 1 >= ch_len
+      return 0
+    next_c: = r.get_child(k + 1)
+    if next_c.kind_id == .k_literal && next_c.text.equals(")")
+      args_node: = Ast_node.new(.k_expr_args, "args", loc)
+      op_node.add_child(args_node).add_child(next_c)
+      return 2
+    if k + 2 >= ch_len
+      return 0
+    op_node.add_child(next_c).add_child(r.get_child(k + 2))
+    return 3

@@ -1,0 +1,742 @@
+//< Generates C99 declarations
+//<
+//< The output order of the forward declarations (prototypes, structs / composite types / extern /
+//< embed) and the shared helpers for parameter lists and C declarators (function pointers
+//< included). root.kspls calls emit_forward_declarations / emit_function_prototypes; statements
+//< and expressions are in stmt.kspls / expr.kspls.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/base/locate" as base_locate
+import "ksplc/gen/c/ctx" { Genc_ctx }
+import "ksplc/gen/c/expr" as gen_c_expr
+import "ksplc/gen/c/literal" as gen_c_literal
+import "ksplc/gen/c/root" as gen_c_root
+import "ksplc/gen/embed" as gen_embed
+import "ksplc/lower/prune" as lower_prune
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
+import "std/chars"
+import "std/ds" { Map, List }
+import "std/mem" { dealloc }
+import "std/str" { Str_builder }
+import "std/strfmt"
+
+priv const max_alias_dep_depth: Sz = 64 //<
+  //< The depth limit for walking an alias's dependencies
+  //<
+  //< The same idea as max_type_layout_depth in sema/decl/layout.kspls.
+
+priv fn write_c_fn_name($w: Writer, fn_name: U8[], s_impl: U8[], verbatim_name: Bool): Writer //<
+  //< The one place that mangles an impl method's C function name
+  //<
+  //< The name is kspl_<Impl>_<fn_name>, without doubling the prefix on an fn_name that already
+  //< starts with <Impl>_. It takes a Writer because `--omit-runtime`'s assembler name
+  //< (emit_single_func_proto) needs the same name in another buffer.
+  if s_impl.len > 0
+    w = w.s("kspl_")
+    skip_prefix: =
+      fn_name.len > s_impl.len && (fn_name.ptr + s_impl.len)$ == '_' &&
+      fn_name.starts_with(s_impl)
+    if !skip_prefix
+      w = w.s(s_impl).s("_")
+    return w.s(fn_name)
+  is_kspl: = fn_name.starts_with("kspl_")
+  if verbatim_name || is_kspl
+    return w.s(fn_name)
+  return w.s("kspl_").s(fn_name)
+
+priv fn wants_std_abi_label(decl_file: U8[], sym_ptr: Void$@): Bool //<
+  //< Whether a std symbol gets an assembler name versioned by std's name (`--omit-runtime`)
+  //<
+  //< Only the assembler name changes; the C compiler gives the first declaration's name to every
+  //< reference, so the definition and the callers agree without other changes.
+  if !base_core.config.weak_std || !base_locate.is_std_file(decl_file)
+    return false
+  if sym_ptr != null
+    sym: = Sema_symbol$@::sym_ptr
+    if sym.flags.is_ext || sym.flags.is_export
+      return false
+  return true
+
+priv fn is_published_instance(r: Ast_node$@): Bool //<
+  //< Whether it is an instance of a generic that publishes its body (`#publish_body`)
+  //<
+  //< The same body appears in both artifacts, so it is made weak and folded. The template's
+  //< attribute is on the instance too (clone in sema/decl/mono.kspls).
+  return r != null && r.has_attribute("publish_body")
+
+priv fn abi_label_tag(r: Ast_node$@): U8[] //<
+  //< The version put into this declaration's symbol name (none where empty)
+  //<
+  //< Caution: **Compute a published generic's version from the instantiated tree.** Both
+  //< artifacts then get the same value, and a changed body becomes a different symbol (never
+  //< silently folded).
+  if wants_std_abi_label(r.loc.file(), r.sym_ptr)
+    return base_locate.std_abi_tag()
+  if !is_published_instance(r)
+    return ""
+  $material: = Str_builder.new()
+  defer material.free()
+  r.append_subtree_material(material@, 0)
+  return base_locate.abi_tag_of(material.slice())
+
+priv fn emit_abi_label(cg: Genc_ctx$@, tag: U8[], c_name: U8[]) //<
+  //< It writes the assembler name, with the version in it, between the declarator and the `;`
+  //<
+  //< Caution: **Call it in exactly one place, that symbol's first declaration.** If later
+  //< declarations carry it too and the names disagree, the C compiler silently takes the first.
+  cg.s(" __asm__(\"").s(tag).s("_").s(c_name).s("\")")
+
+impl Ast_node
+  priv fn has_file_local_c_symbol(r: Ast_node$@): Bool //<
+    //< Whether this declaration's C symbol may be local to its translation unit
+    //<
+    //< That is whether `genc` adds `static` and emits the prototype only into the owning unit.
+    //<
+    //< Caution: **Do not decide by `get_visibility() == file_private` alone.** Make a program-wide
+    //< name (`Sema_symbol.has_program_unique_c_name`) local and a synthesized call from another
+    //< unit fails to link.
+    if r == null || r.get_visibility() != sema_type_scope.Visibility.file_private
+      return false
+    if r.sym_ptr == null
+      return true
+    sym: = Sema_symbol$@::r.sym_ptr
+    return !sym.has_program_unique_c_name()
+  fn emit_attributes(r: Self$@, cg: Genc_ctx$@)
+    if r == null
+      return
+    if r.has_attribute("noreturn")
+      cg.s("__attribute__((noreturn)) ")
+    if r.has_attribute("interrupt")
+      cg.s("__attribute__((interrupt)) ")
+    if r.has_attribute("naked")
+      cg.s("__attribute__((naked)) ")
+    // **A function with a `#section` needs this** (`ksplc/sema/decl/attrs.kspls` requires the
+    // pair). Inlined, nothing would remain in the named section.
+    if r.has_attribute("noinline")
+      cg.s("__attribute__((noinline)) ")
+    if align_attr: = r.get_attribute("align")
+      arg_node: = align_attr.safe_get_child(1)
+      if arg_node != null
+        cg.s("__attribute__((aligned(")
+        arg_node.emit_expr(cg)
+        cg.s("))) ")
+    if section_attr: = r.get_attribute("section")
+      switch section_attr.find_deep_child(.k_string) case .some(str_node)
+        cg.s("KSPL_SECTION(").s(str_node.text).s(") ")
+      case .none {}
+
+  fn emit_resolved_type(r: Self$@, cg: Genc_ctx$@, is_return_type: Bool) //<
+    //< It emits the C spelling of this type node's resolved type
+    //<
+    //< is_return_type is true for a function's or function pointer's return type. The const
+    //< qualifier is then left out through Ctx.t_ret (the reason is in Ctx.t_ret's comment).
+    if r == null
+      return
+    $t_id: = r.type_id
+    if t_id == 0
+      $extracted: = r.extract_type_name()
+      t_id = cg.env.get_or_add(extracted.slice())
+      extracted.free()
+    if is_return_type
+      cg.t_ret(t_id)
+    else
+      cg.t(t_id)
+
+  fn emit_c_decl(r: Self$@, cg: Genc_ctx$@, name: U8[], is_const_binding: Bool) //<
+    //< It emits one declarator
+    //<
+    //< `is_const_binding`: a KSPL `const` whose C `const` goes inside the declarator (decided by
+    //< Genc_ctx.const_goes_in_declarator). The caller writes a `const` before the type name itself.
+    if r.is_type_fn_ptr()
+      $fn_sig: Ast_node$@ = null
+      if sig: = r.get_type_fn_sig()
+        fn_sig = sig
+      ret_node: = fn_sig.find_child(.k_type_expr) if fn_sig != null else null
+      if ret_node != null
+        ret_node.emit_resolved_type(cg, true)
+      else
+        cg.s("void")
+      // The `const` goes between the `*` and the name; in front, it lands on the return type.
+      cg.s(" (*")
+      if is_const_binding
+        cg.s("const ")
+      cg.nm(name).s(")(")
+      if fn_sig != null
+        fn_sig.emit_param_list(cg)
+      cg.s(")")
+    else
+      r.emit_resolved_type(cg, false)
+      cg.s(" ").nm(name)
+
+  fn emit_param_list(r: Self$@, cg: Genc_ctx$@) //<
+    //< It emits a function's parameter list in C
+    //<
+    //< Note: emit_trait_decl in gen/c/types.kspls has a similar walk (the reason they stay apart is
+    //< there).
+    r.ice_assert(r != null, "emit_param_list: proto is null")
+    param_list: = r if r.kind_id == .k_param_list else r.get_fn_params()
+
+    if param_list != null
+      $is_first: = true
+      for item in param_list.children
+        if item.kind_id == .k_fn_param
+          if !is_first
+            cg.s(", ")
+          p_name: = item.get_decl_id_text()
+          t_node: = item.get_decl_type_node()
+          if p_name.starts_with("_")
+            cg.s("KSPL_UNUSED ")
+
+          if t_node != null && t_node.kind_id != .k_empty && !t_node.text.equals("Unknown")
+            t_node.emit_c_decl(cg, p_name, false)
+          else if !sema_type_env.is_unknown(item.type_id) &&
+            !sema_type_env.is_void(item.type_id)
+            cg.t(item.type_id).s(" ").nm(p_name)
+          else
+            cg.s("void* ").nm(p_name)
+          is_first = false
+        else if item.kind_id == .k_literal && item.text.equals("...")
+          if !is_first
+            cg.s(", ")
+          cg.s("...")
+          is_first = false
+
+  priv fn alias_target_node(r: Self$@): Ast_node$@ //< the type node of an alias's right-hand side
+    //<
+    //< A `typedef F = fn(I32): I32;` is a k_type_fn_sig and everything else a k_type_expr.
+    //< Caution: Keep this distinction in this one place (emission and dependency walk both use it).
+    t_node: = r.find_child(.k_type_expr)
+    return t_node if t_node != null else r.find_child(.k_type_fn_sig)
+
+  fn emit_forward_declarations(r: Self$@, cg: Genc_ctx$@)
+    r.ice_assert(r != null, "emit_forward_declarations: node is null")
+    for raw in r.children
+      child: = raw.unwrap_top_level()
+      if !child.is_emittable()
+        continue
+      child.emit_struct_enum_fwd(cg)
+    emit_complex_types_fwd(cg)
+    r.emit_fwd_aliases(cg)
+    r.emit_fwd_externs_and_embeds(cg)
+    r.emit_fwd_extern_decls(cg)
+
+  priv fn proto_belongs_here(r: Ast_node$@, cg: Genc_ctx$@, owner_file: U8[]): Bool //<
+    //< Whether a prototype goes into this unit
+    //<
+    //< Caution: **Decide it with the same predicate as `static`** (has_file_local_c_symbol), with
+    //< `owner_file` **the same name as for the body**. Otherwise some unit gets only the `static`
+    //< declaration.
+    if r.has_file_local_c_symbol()
+      return cg.writes_bodies() && cg.owns_file(owner_file)
+    return cg.writes_decls()
+
+  fn emit_function_prototypes(r: Self$@, cg: Genc_ctx$@)
+    r.ice_assert(r != null, "emit_function_prototypes: node is null")
+    for raw in r.children
+      child: = raw.unwrap_top_level()
+      if !child.is_emittable()
+        continue
+
+      if child.kind_id == .k_decl_fn
+        if child.proto_belongs_here(cg, child.loc.file())
+          child.emit_single_func_proto(cg, 0)
+      else if child.kind_id == .k_decl_impl
+        target_node: = child.find_child(.k_type_expr)
+        $t_id: = 0
+        if target_node != null
+          t_id = target_node.type_id
+        for m in child.children
+          if m.kind_id == .k_decl_fn && m.is_emittable() &&
+            m.proto_belongs_here(cg, child.loc.file())
+            m.emit_single_func_proto(cg, t_id)
+
+  priv fn emit_fwd_extern_decls(r: Ast_node$@, cg: Genc_ctx$@)
+    for raw in r.children
+      child: = raw.unwrap_top_level()
+      if child.kind_id == .k_decl_extern || child.kind_id == .k_decl_extern_block
+        if !child.is_alive_for_backend()
+          continue
+        for item in child.children
+          if !item.is_alive_for_backend()
+            continue
+
+          switch item.kind_id case .k_decl_var
+            id: = item.get_decl_id_text()
+            type_node: = item.get_decl_type_node()
+            cg.s("extern ")
+            item.emit_attributes(cg)
+            if type_node != null
+              type_node.emit_c_decl(cg, id, false)
+            else
+              cg.s("int32_t \{id\}")
+            cg.s(";\n")
+          case .k_decl_extern_struct
+            id: = item.find_text(.k_identifier)
+            if id.len > 0
+              cg.s("typedef struct \{id\} \{id\};\n")
+          case .k_decl_fn_proto
+            // Under hosted, the standard headers already declare a std/libc function, so it is
+            // not emitted here, to avoid a double declaration (a disagreement over variadics and
+            // the like). But freestanding does not include the standard headers
+            // (ksplc/gen/c/ctx.kspls), so even an unused one becomes an "implicit declaration"
+            // compile error. --gc-sections can drop an uncalled one at the final link, so it is
+            // emitted to get the compile through first.
+            if !item.loc.file().equals("std/libc") || base_core.config.is_freestanding
+              cg.s("extern ")
+              item.emit_single_func_proto(cg, 0)
+          default {}
+
+  fn emit_fn_def(r: Self$@, cg: Genc_ctx$@)
+    // Caution: **Do not write a definition for a declaration without a body (a `pub fn f():
+    // I32;`).** The body is in another artifact and emit_forward_declarations has declared it; a
+    // definition without a body stops the C compiler.
+    if r.find_child(.k_stmt_block) == null
+      return
+    cg.emit_line_directive(r)
+    fn_name: = r.get_decl_id_text()
+    type_node: = r.get_decl_type_node()
+    block: = r.find_child(.k_stmt_block)
+    is_priv_fn: = r.has_file_local_c_symbol()
+
+    r.ice_assert(fn_name.len > 0, "emit_node: fn_def missing identifier")
+    if type_node != null
+      cg.current_ret_id = type_node.type_id
+      if cg.current_ret_id == 0
+        cg.current_ret_id = I32::sema_type_env.Builtin_type_id.void_type
+    else
+      cg.current_ret_id = I32::sema_type_env.Builtin_type_id.void_type
+
+    $is_inline: = false
+    $verbatim_name: = false
+    if r.sym_ptr != null
+      sym: = Sema_symbol$@::r.sym_ptr
+      is_inline = sym.flags.is_inline
+      verbatim_name = sym.uses_verbatim_c_name()
+
+    if is_priv_fn
+      // A `static` always gets KSPL_UNUSED: whether it is called **depends on the user's
+      // program**, so -Wunused-function would be a false alarm. KSPL loses no diagnostic by it.
+      cg.s("static KSPL_UNUSED ")
+    // A definition from std is made weak (`--omit-runtime`), so artifacts sharing std link
+    // statically with the duplicates folded. An instance for a user's type counts too (its loc is
+    // the template's file). A `static` is already invisible outside its unit.
+    if !is_priv_fn &&
+      ((base_core.config.weak_std && base_locate.is_std_file(r.loc.file())) ||
+      is_published_instance(r))
+      cg.s("KSPL_WEAK ")
+    if is_inline
+      cg.s("inline ")
+
+    r.emit_attributes(cg)
+    // **On wasm this mark is itself the list of exported functions.** Without it `--gc-sections`
+    // drops the function, and a forgotten `--export=` passes silently.
+    // Elsewhere it expands to nothing.
+    if verbatim_name && r.has_attribute("export")
+      cg.s("KSPL_EXPORT(").s(fn_name).s(") ")
+
+    if fn_name.equals("main")
+      cg.t_ret(cg.current_ret_id).s(" kspl_main(")
+      r.emit_param_list(cg)
+      cg.s(") ")
+    else
+      cg.t_ret(cg.current_ret_id).s(" ")
+      write_c_fn_name(cg, fn_name, cg.current_impl_name, verbatim_name)
+      cg.s("(")
+      r.emit_param_list(cg)
+      cg.s(") ")
+
+    if block != null
+      block.emit(cg)
+    cg.s("\n\n")
+
+  fn emit_embed_decl(r: Self$@, cg: Genc_ctx$@)
+    cg.emit_line_directive(r)
+    path_node: = r.get_embed_path()
+    id_node: = r.get_embed_id()
+    r.ice_assert(path_node != null, "emit_node: embed_decl missing &U8[] path")
+    r.ice_assert(id_node != null, "emit_node: embed_decl missing Identifier")
+
+    id: = id_node.text
+    $file_data: U8[] = ""
+    switch gen_embed.read(r, cg.source_map) case .some(d)
+      file_data = d
+    default
+      cg.had_error = true
+      return
+
+    is_text: = is_text_data(file_data)
+
+    if is_text
+      cg.s("static const uint8_t kspl_embed_data_\{id\}[] ")
+      r.emit_attributes(cg)
+      cg.s("=\n    \"")
+      $col: Sz = 4
+      // Caution: **Do not copy the byte escaping here.** Its canonical source is
+      // `append_c_string_byte` in `literal.kspls` (a copy is left behind when that is fixed).
+      // The literal is split roughly every 100 columns, never before a UTF-8 continuation byte.
+      $esc: = Str_builder.new()
+      defer esc.free()
+      for bi in Range.asc(file_data.len)
+        b: = (file_data.ptr + bi)$
+        if b == '\n'
+          // It always breaks at a newline, so the generated C can be read line by line.
+          cg.s("\\n\"\n    \"")
+          col = 4
+          continue
+        esc.len = 0
+        gen_c_literal.append_c_string_byte(esc@, b)
+        cg.s(esc.slice())
+        col += esc.len
+
+        if col >= 100 && bi + 1 < file_data.len
+          next_b: = (file_data.ptr + bi + 1)$
+          if (next_b & 0xC0) != 0x80
+            cg.s("\"\n    \"")
+            col = 4
+      cg.s("\";\nconst ").t(r.type_id).s(" \{id\} ")
+      r.emit_attributes(cg)
+      cg
+        .s("= { .ptr = (uint8_t*)kspl_embed_data_\{id\}, .len = sizeof(kspl_embed_data_\{id\}) - 1 \
+          };\n\n")
+    else
+      cg.s("static const uint8_t kspl_embed_data_\{id\}[] ")
+      r.emit_attributes(cg)
+      cg.s("= {\n    ")
+      for bi in Range.asc(file_data.len)
+        b: = (file_data.ptr + bi)$
+        cg.s("0x").c((b >> 4).to_hex_upper()).c((b & 15U8).to_hex_upper()).s(", ")
+        if (bi + 1) % 16 == 0
+          cg.s("\n    ")
+      cg.s("\n};\nconst ").t(r.type_id).s(" \{id\} ")
+      r.emit_attributes(cg)
+      cg
+        .s("= { .ptr = (uint8_t*)kspl_embed_data_\{id\}, .len = sizeof(kspl_embed_data_\{id\}) \
+          };\n\n")
+    if file_data.ptr != null
+      dealloc(Void$@::file_data.ptr)
+
+  priv fn is_type_fn_ptr(r: Ast_node$@): Bool
+    switch r.get_type_fn_sig() case .some(_found)
+      return true
+    case .none
+      return false
+
+  fn const_goes_in_declarator(r: Ast_node$@): Bool //<
+    //< Whether C's `const` goes **inside** this type's declarator (`I32 (* const p)(I32)`)
+    //<
+    //< It is asked for a KSPL `const` declaration.
+    //< Caution: **Decide it from the same input (this type node) as the shape emit_c_decl really
+    //< chooses.** By the resolved type ID, `typedef Op = fn(a: I32): I32` is a function pointer,
+    //< but emit_c_decl writes the typedef name, which has no inside to put it in.
+    return r != null && r.kind_id != .k_empty && r.is_type_fn_ptr()
+
+  fn const_goes_before_type(r: Ast_node$@, cg: Genc_ctx$@, type_id: I32): Bool //<
+    //< Whether, for a KSPL `const` declaration, C's `const` goes before the type name
+    //<
+    //< Where no type is written (`r == null`), the type ID alone decides it.
+    if cg.type_name_carries_const(type_id)
+      return false
+    return !r.const_goes_in_declarator()
+
+  priv fn emit_struct_enum_fwd(r: Ast_node$@, cg: Genc_ctx$@)
+    name: = r.get_decl_id_text()
+    if name.len == 0
+      return
+
+    switch r.kind_id case .k_decl_struct
+      cg.s("typedef struct \{name\} \{name\};\n")
+    case .k_decl_enum
+      if cg.env.is_scalar_enum(r.type_id)
+        cg.s("typedef int32_t \{name\};\n")
+      else
+        cg.s("typedef struct \{name\} \{name\};\n")
+    case .k_decl_trait
+      cg.s("typedef struct kspl_vtable_\{name\} kspl_vtable_\{name\};\n")
+      cg.s("typedef struct \{name\} \{name\};\n")
+    default {}
+
+  priv fn emit_fwd_externs_and_embeds(r: Ast_node$@, cg: Genc_ctx$@)
+    for raw in r.children
+      child: = raw.unwrap_top_level()
+      if !child.is_emittable()
+        continue
+
+      switch child.kind_id case .k_decl_embed
+        id: = child.get_decl_id_text()
+        if id.len > 0
+          cg.s("extern const ").t(child.type_id).s(" \{id\}")
+          embed_tag: = abi_label_tag(child)
+          if embed_tag.len > 0
+            emit_abi_label(cg, embed_tag, id)
+          cg.s(";\n")
+      case .k_decl_var, .k_decl_const
+        id: = child.get_decl_id_text()
+        type_node: = child.get_decl_type_node()
+        cg.s("extern ")
+
+        is_const_decl: = child.kind_id == .k_decl_const
+        $t_id: = child.type_id
+        if t_id == 0 && type_node != null
+          t_id = type_node.type_id
+        // const_goes_* decides where C's `const` goes (shared with the definitions in
+        // gen/c/stmt.kspls).
+        in_declarator: = is_const_decl && type_node.const_goes_in_declarator()
+        if is_const_decl && type_node.const_goes_before_type(cg, t_id)
+          cg.s("const ")
+        child.emit_attributes(cg)
+        if type_node != null
+          type_node.emit_c_decl(cg, id, in_declarator)
+        else
+          cg.s("int32_t \{id\}")
+        var_tag: = abi_label_tag(child)
+        if var_tag.len > 0
+          emit_abi_label(cg, var_tag, id)
+        cg.s(";\n")
+      default {}
+
+  priv fn emit_fwd_aliases(r: Ast_node$@, cg: Genc_ctx$@) //<
+    //< It emits every alias's `typedef`, each after the aliases it refers to
+    //<
+    //< Caution: **Emit the aliases that are referred to first.** C's `typedef` requires the
+    //< right-hand side's type name to be defined earlier. Emitted in source order, a
+    //< `typedef A = B;` refers to a `B` defined after it and becomes `unknown type name`, with no
+    //< ksplc diagnostic (Principle 2). It uses the same work list as the top-level definitions
+    //< (emit_top_level_vars in gen/c/root.kspls).
+    $pending: = List<|Ast_node$@|>.new()
+    defer pending.free()
+    $emitted: = List<|Bool|>.new()
+    defer emitted.free()
+    for raw in r.children
+      child: = raw.unwrap_top_level()
+      if child.kind_id == .k_decl_alias && child.is_emittable() && child.type_id != 0 &&
+        child.alias_target_node() != null
+        pending.push(child)
+        emitted.push(false)
+
+    $left: = pending.len
+    for left > 0
+      $waiting: = Map<|I32, Bool|>.new()
+      defer waiting.free()
+      for i in Range.asc(pending.len)
+        if !emitted.get(i)
+          waiting.set(pending.get(i).type_id, true)
+      $progress: = false
+      for i in Range.asc(pending.len)
+        child: = pending.get(i)
+        t_node: = child.alias_target_node()
+        if emitted.get(i) || alias_refs_waiting(cg, t_node, waiting@)
+          continue
+        cg.clear_scratch()
+        cg.env.mangle_type_id_to(child.type_id, cg.scratch)
+        cg.s("typedef ")
+        t_node.emit_c_decl(cg, cg.scratch.slice(), false)
+        cg.s(";\n")
+        emitted.set(i, true)
+        left -= 1
+        progress = true
+      if !progress
+        // A cycle: what is left is emitted as it is (sema reports it in resolve_alias_sym).
+        for i in Range.asc(pending.len)
+          if emitted.get(i)
+            continue
+          child: = pending.get(i)
+          cg.clear_scratch()
+          cg.env.mangle_type_id_to(child.type_id, cg.scratch)
+          cg.s("typedef ")
+          child.alias_target_node().emit_c_decl(cg, cg.scratch.slice(), false)
+          cg.s(";\n")
+          emitted.set(i, true)
+        left = 0
+
+  priv fn emit_single_func_proto(r: Ast_node$@, cg: Genc_ctx$@, impl_id: I32)
+    r.ice_assert(r != null, "emit_single_func_proto: fn_node is null")
+    if r.has_file_local_c_symbol()
+      cg.s("static ")
+
+    fn_name: = r.get_decl_id_text()
+    type_node: = r.get_decl_type_node()
+    // Where it is not empty, the assembler name to give this declarator (`--omit-runtime` /
+    // `#publish_body`).
+    // Caution: Build the name the same way as the C name (write_c_fn_name), or it disagrees with
+    // the definition.
+    $label: = Str_builder.new()
+    defer label.free()
+    tag: = abi_label_tag(r)
+
+    if fn_name.equals("main")
+      if type_node != null
+        type_node.emit_resolved_type(cg, true)
+      else
+        cg.s("void")
+      cg.s(" kspl_main(")
+    else
+      if type_node != null
+        type_node.emit_resolved_type(cg, true)
+        cg.s(" ")
+      else
+        cg.s("void ")
+
+      $verbatim_name: = r.kind_id == .k_decl_fn_proto
+      if r.sym_ptr != null
+        sym: = Sema_symbol$@::r.sym_ptr
+        if sym.uses_verbatim_c_name()
+          verbatim_name = true
+
+      $s_impl: U8$[] = ""
+      if impl_id != 0
+        cg.clear_scratch()
+        cg.env.mangle_type_id_to(impl_id, cg.scratch)
+        s_impl = cg.scratch.slice()
+      write_c_fn_name(cg, fn_name, s_impl, verbatim_name)
+      if tag.len > 0
+        write_c_fn_name(label@, fn_name, s_impl, verbatim_name)
+      cg.s("(")
+    r.emit_param_list(cg)
+    cg.s(")")
+    if label.slice().len > 0
+      emit_abi_label(cg, tag, label.slice())
+    cg.s(";\n")
+
+fn emit_single_complex_type(cg: Genc_ctx$@, type_id: I32)
+  info: = cg.env.get_info(type_id)
+  cg.clear_scratch()
+  cg.env.mangle_type_id_to(type_id, cg.scratch)
+  m_str: = cg.scratch.slice()
+
+  switch info case .array(base_id, size)
+    // The version with immutable elements has no definition (it is an alias sharing the struct tag
+    // with the plain type, already typedef'd in emit_complex_types_fwd).
+    if size != -1 && !cg.env.is_const(base_id)
+      // C does not allow a zero-length array (`data[0]` is a GNU extension). A zero-element array
+      // type comes only from an empty literal (`T[_]::{}`; sema rejects a written `T[0]`), so one
+      // element here cannot be observed (.len is 0 and no subscript passes the bounds check).
+      c_size: = 1 if size == 0 else size
+      cg.s("struct \{m_str\} {\n    ")
+      cg.t(base_id).s(" data[\{c_size\}];\n};\n")
+  case .result(base_id, err_id)
+    cg.s("struct kspl_\{m_str\} {\n    bool is_err;\n    ")
+    cg.t(err_id).s(" error_code;\n")
+    if !sema_type_env.is_void(base_id)
+      cg.s("    ").t(base_id).s(" val;\n")
+    cg.s("};\n\n")
+  case .fn_type(sig)
+    // A function pointer has a C name only through a typedef; a declarator alone cannot appear
+    // where a type is written by name (a generic's field, a return, an inferred local).
+    name: = base_core.arena.dup_str(m_str)
+    cg.s("typedef ").t_ret(sig.ret_id).s(" (*").s(name).s(")(")
+    if sig.params.len == 0
+      cg.s("void")
+    for i in Range.asc(sig.params.len)
+      if i > 0
+        cg.s(", ")
+      cg.t(sig.params.get(i))
+    cg.s(");\n")
+  default {}
+
+priv fn emit_complex_types_fwd(cg: Genc_ctx$@)
+  $seen: = sema_type_env.Mangle_seen.new(cg.env)
+  defer seen.free()
+
+  for type_id in cg.env.complex_types
+    info: = cg.env.get_info(type_id)
+    cg.clear_scratch()
+    cg.env.mangle_type_id_to(type_id, cg.scratch)
+    m_slice: = cg.scratch.slice()
+    if seen.admit(type_id)
+      switch info case .array(_base_id, _size)
+        if _size != -1
+          // An array with immutable elements is emitted as an alias sharing **the same struct
+          // tag** as the plain type (the same reason as a slice's; see the comment above). As a
+          // separate struct it would be a different type in C, and a value copy (a return value,
+          // an assignment) would fail with "the types differ". The declaration's `const ` makes it
+          // read-only (map_c_type_to_impl in gen/c/ctx.kspls). **Every level is stripped**
+          // (`strip_const_deep`).
+          plain_arr_id: = cg.env.strip_const_deep(type_id)
+          if plain_arr_id != type_id
+            $plain_arr_b: = Str_builder.new()
+            defer plain_arr_b.free()
+            cg.env.mangle_type_id_to(plain_arr_id, plain_arr_b)
+            cg.s("typedef struct \{plain_arr_b.slice()\} \{m_slice\};\n")
+          else
+            cg.s("typedef struct \{m_slice\} \{m_slice\};\n")
+      case .result(_base_id, _err_id)
+        cg.s("typedef struct kspl_\{m_slice\} kspl_\{m_slice\};\n")
+      default {}
+
+priv fn is_text_data(data: U8[]): Bool //< whether this run may be printed as a C string literal
+  //<
+  //< 1. no control characters, 2. valid UTF-8. **Without the second, the generated C gets an
+  //< `illegal character encoding` warning** for correct contents (Principle 2).
+  $i: Sz = 0
+  for i < data.len
+    b: = (data.ptr + i)$
+    if b < 32 && b != '\n' && b != '\r' && b != '\t'
+      return false
+    // The number of continuation bytes. A UTF-8 leading byte encodes it.
+    $follow: Sz = 0
+    if b >= 0xF0
+      follow = 3
+    else if b >= 0xE0
+      follow = 2
+    else if b >= 0xC0
+      follow = 1
+    else if b >= 0x80
+      return false // a continuation byte appeared on its own
+    if i + follow >= data.len
+      return false
+    for k in Range.asc(follow)
+      if ((data.ptr + i + k + 1)$ & 0xC0) != 0x80
+        return false
+    i += follow + 1
+  return true
+priv fn alias_refs_waiting(cg: Genc_ctx$@, t_node: Ast_node$@, waiting: Map<|I32, Bool|>$@): Bool //<
+  //< Whether an alias's right-hand side refers by name to an alias not yet emitted
+  //<
+  //< It walks the type emitted as that right-hand side.
+  //< It decides by the **type id**, as `emit_resolved_type` builds the name from it, not the text.
+  if t_node == null
+    return false
+  $queue: = List<|Ast_node$@|>.new()
+  defer queue.free()
+  queue.push(t_node)
+  $q_idx: Sz = 0
+  for q_idx < queue.len
+    curr: = queue.get(q_idx)
+    q_idx += 1
+    if curr == null
+      continue
+    if type_mentions_waiting(cg, curr.type_id, waiting, 0)
+      return true
+    for child in curr.children
+      queue.push(child)
+  return false
+
+priv fn type_mentions_waiting(cg: Genc_ctx$@, type_id: I32, waiting: Map<|I32, Bool|>$@, depth: Sz):
+  Bool //<
+    //< Whether type_id leads to an alias in waiting, looking through the wrappers
+    //<
+    //< It strips pointers, slices, arrays, Results, immutability qualifiers and aliases (the `B` of
+    //< `typedef A = B@;` counts).
+
+  if type_id == 0 || depth > max_alias_dep_depth
+    return false
+  if waiting.get(type_id) catch false
+    return true
+  switch cg.env.get_info(type_id) case .pointer(base_id)
+    return type_mentions_waiting(cg, base_id, waiting, depth + 1)
+  case .array(base_id, _size)
+    return type_mentions_waiting(cg, base_id, waiting, depth + 1)
+  case .const_of(base_id)
+    return type_mentions_waiting(cg, base_id, waiting, depth + 1)
+  case .alias_type(base_id)
+    return type_mentions_waiting(cg, base_id, waiting, depth + 1)
+  case .result(base_id, err_id)
+    if type_mentions_waiting(cg, base_id, waiting, depth + 1)
+      return true
+    return type_mentions_waiting(cg, err_id, waiting, depth + 1)
+  default
+    return false

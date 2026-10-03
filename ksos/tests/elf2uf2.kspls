@@ -1,0 +1,128 @@
+//< Checks that elf2uf2 refuses to build a UF2 from an ELF whose load address is unknown
+//<
+//< The tool runs the way the demos run it, through the given compiler, from this package's
+//< folder (`make test` in `ksos/Makefile` runs the tests there).
+
+// ==========================================
+// What it checks:
+//   * it does not convert an ELF whose targetAddr exceeds 32 bits (`U32::` silently truncates it,
+//     and a UF2 whose load address wrapped passes verify too)
+//   * it does not convert an ELF whose e_phentsize is not ELF32's 32 bytes
+//   * a valid ELF converts (so the two above are not "always refuse")
+// ==========================================
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/verdict"
+
+priv const elf2uf2: U8[] = "port/rp2040/elf2uf2.kspls"
+
+priv const convert_wait_ms: I32 = 120000 //< the cap on one conversion (the first builds the tool)
+priv const said_cap: Sz = 1024 * 1024 //< how much of the tool's output is kept
+
+priv const phentsize: Sz = 32 //<
+  //< The size of one ELF32 program header, and the size of the ELF header
+priv const ehsize: Sz = 0x34
+
+priv const flash_base: U64 = 0x10000000U64 //< the start of the RP2040's Flash
+
+priv fn zeros(out: List<|U8|>$@, n: Sz)
+  for _k in Range.asc(n)
+    out.push(0U8)
+
+priv fn set_u16(out: List<|U8|>$@, at: Sz, v: Sz)
+  out.set(at, U8::(v & 0xFF))
+  out.set(at + 1, U8::((v >> 8) & 0xFF))
+
+priv fn set_u32(out: List<|U8|>$@, at: Sz, v: U64)
+  for k in Range.asc(4)
+    out.set(at + k, U8::((v >> U64::(k * 8)) & 0xFFU64))
+
+priv fn program_header(out: List<|U8|>$@, p_offset: U64, p_paddr: U64, p_filesz: U64) //<
+  //< One ELF32 program header (32 bytes)
+  //<
+  //< Always PT_LOAD.
+  at: = out.len
+  zeros(out, phentsize)
+  set_u32(out, at + 0x00, 1U64) // p_type = PT_LOAD
+  set_u32(out, at + 0x04, p_offset)
+  set_u32(out, at + 0x08, p_paddr) // p_vaddr
+  set_u32(out, at + 0x0C, p_paddr)
+  set_u32(out, at + 0x10, p_filesz)
+  set_u32(out, at + 0x14, p_filesz) // p_memsz
+
+priv fn elf32(p_paddr: U64, p_filesz: Sz, phent: Sz, phnum: Sz, arena: Arena$@): U8[] //<
+  //< The smallest ELF32 holding a single PT_LOAD (little-endian)
+  $out: = List<|U8|>.new(arena)
+  zeros(out@, ehsize)
+  out.set(0, 0x7FU8)
+  out.set(1, 'E')
+  out.set(2, 'L')
+  out.set(3, 'F')
+  out.set(4, 1U8) // EI_CLASS = ELF32
+  out.set(5, 1U8) // EI_DATA = little-endian
+  out.set(6, 1U8) // EI_VERSION
+  set_u16(out@, 0x10, 2) // e_type = ET_EXEC
+  set_u16(out@, 0x12, 0x28) // e_machine = ARM
+  set_u32(out@, 0x14, 1U64) // e_version
+  set_u32(out@, 0x1C, U64::ehsize) // e_phoff
+  set_u16(out@, 0x28, ehsize) // e_ehsize
+  set_u16(out@, 0x2A, phent)
+  set_u16(out@, 0x2C, phnum)
+  // The payload's offset follows the size of the header actually written, not the declared entry
+  // size (so that phentsize=0 can be tried, the two differ).
+  program_header(out@, U64::(ehsize + phentsize), p_paddr, U64::p_filesz)
+  for _k in Range.asc(p_filesz)
+    out.push(0xA5U8)
+  return out.slice()
+
+priv struct Converted //< how one conversion ended, and all the tool's output
+  code: I32
+  said: U8[]
+
+priv fn convert(ksplc: U8[], tmp: U8[], name: U8[], blob: U8[], arena: Arena$@): Converted //<
+  //< Writes the blob as an ELF and runs elf2uf2 on it
+  elf: = fs.join(tmp, arena.text().s("\{name\}.elf").take(), arena)
+  uf2: = fs.join(tmp, arena.text().s("\{name\}.uf2").take(), arena)
+  io.write_file(elf, blob) catch
+    return Converted::{ .code = -1, .said = "could not place the ELF" }
+  r: = subproc.run_capture(U8[][]::{ ksplc, "run", elf2uf2, elf, uf2 }, "", convert_wait_ms,
+    said_cap, arena)
+  if r.spawn_failed || r.timed_out
+    return Converted::{ .code = -1, .said = "elf2uf2 could not be run to its end" }
+  return Converted::{ .code = r.exit_code,
+    .said = arena.text().s(r.stdout_data).s(r.stderr_data).take() }
+
+priv fn detail(r: Converted, arena: Arena$@): U8$[]
+  return U8$[]::arena.text().s("code=\{r.code\}\n").s(r.said).take()
+
+fn test_elf2uf2_refuses_what_it_cannot_place(ksplc: U8[], work: U8[], arena: Arena$@) //<
+  //< The three conversions, the valid one first
+  tmp: = fs.join(work, "elf2uf2", arena)
+  fs.mkdir_all(tmp) catch
+    panic(U8$[]::arena.text().s("cannot create the working directory: \{tmp\}").take())
+  // The valid one first, or the two refusals pass even when conversion is broken entirely.
+  verdict.start("[ksos/elf2uf2] an ELF of sound provenance becomes a UF2")
+  sane: =
+    convert(ksplc, tmp, "sane", elf32(flash_base, 0x180, phentsize, 1, arena), arena)
+  assert(sane.code == 0 && sane.said.find_str("format verified") >= 0, detail(sane, arena))
+  verdict.pass("")
+  // 0x200 bytes at 0xffffff00: the wrap case listed at the top of this file.
+  verdict.start("[ksos/elf2uf2] an ELF whose load target goes past 32 bits is not converted")
+  wrap: =
+    convert(ksplc, tmp, "wrap", elf32(0xFFFFFF00U64, 0x200, phentsize, 1, arena), arena)
+  assert(wrap.code != 0 && wrap.said.find_str("load_address_out_of_range") >= 0,
+    detail(wrap, arena))
+  verdict.pass("")
+  // e_phentsize=0 would read the same entry e_phnum times over.
+  verdict.start("[ksos/elf2uf2] an ELF whose e_phentsize is not 32 is not converted")
+  phent0: =
+    convert(ksplc, tmp, "phent0", elf32(flash_base, 0x100, 0, 64, arena), arena)
+  assert(phent0.code != 0 && phent0.said.find_str("bad_program_header_size") >= 0,
+    detail(phent0, arena))
+  verdict.pass("")

@@ -1,0 +1,220 @@
+//< A probe showing that the car's prediction network can really learn on bare metal
+//<
+//< The net is `ksos/demo/common/car_model`, on soft float. **What it checks is not "the loss fell"
+//< but the predictions beating "the same as the previous round"**, with the floor's rules hidden
+//< from the net. Also: the weights survive a save and a load, and a mismatched scale is rejected.
+import "ksos/demo/common/car_model" as model
+import "ksos/demo/common/semihost_console" as con
+import "std/bytes" // U8$[].put_u16_le's extension impl
+import "std/mem" { Arena }
+
+$storage: Sz[8192] = ::{}
+
+priv const drive_cap: U32 = 30 //< the scale for normalizing the manoeuvre
+  //<
+  //< Caution: It must equal the cap applied to the wheels.
+
+priv const warmup_steps: U32 = 40 //< the number of learning steps
+  //<
+  //< **One round is one step**, minutes of the car's run. **Made shorter, it cannot beat "the same
+  //< as the previous round".**
+priv const total_steps: U32 = 1500
+priv const probe_line: U32 = 6 //<
+  //< The fixed question asked before saving and after loading (left and middle black)
+
+// SysTick_Handler (port.o) calls it; it is empty, as this probe has no scheduler.
+#export
+fn ksos_tick() {}
+
+priv fn pos_of(line: U32): I32 //<
+  //< Where on the sensor the line is, as -3 to 3 (positive = right as seen from the car)
+  //<
+  //< Packed like `track.read_bits` (left << 2 | middle << 1 | right; 1 = black). **Lost (0) counts
+  //< as 3**, whichever side it left by.
+  if line == 4U32
+    return -2
+  if line == 6U32
+    return -1
+  if line == 2U32
+    return 0
+  if line == 3U32
+    return 1
+  if line == 1U32
+    return 2
+  return 3
+
+priv fn enc_of(pos: I32): U32 //< turns a position back into three bits
+  //<
+  //< Past either end it is lost (0).
+  if pos == -2
+    return 4U32
+  if pos == -1
+    return 6U32
+  if pos == 0
+    return 2U32
+  if pos == 1
+    return 3U32
+  if pos == 2
+    return 1U32
+  return 0U32
+
+priv fn next_line(t: U32, line: U32, lon: I32, lat: I32, rot: I32): U32 //<
+  //< The stand-in for the floor
+  //<
+  //< **The net cannot see which way the bend goes** (`t` is not passed), so the error never
+  //< reaches 0: **the bar is beating "the same as the previous round".** No forward, no change.
+  if lon <= 0
+    return line
+  span: = I32::drive_cap
+  bend: = 1 if t % 16 < 10 else -1
+  correction: = (rot + rot + lat) / span // a positive rot (clockwise) brings the line back left
+  return enc_of(pos_of(line) + bend - correction)
+
+priv fn probe_answer(dst: F32$[], arena: Arena$@) //< copies out the answer to the fixed question
+  //<
+  //< Caution: **Do not compare the packed 0 to 7** (too coarse). **Ask the same question twice**:
+  //< the input includes the previous bits, which a single pass would leave to chance.
+  for _pass in Range.asc(2)
+    model.forget()
+    mark: = arena.save()
+    _p: = model.step(probe_line, I32::drive_cap, 0, 0, arena)
+    arena.restore(mark)
+  for i in Range.asc(model.line_bits)
+    dst[i] = model.raw_bit(i)
+
+priv fn same(a: F32[], b: F32[]): Bool //< whether the three raw values are equal, one by one
+  for i in Range.asc(model.line_bits)
+    if a[i] != b[i]
+      return false
+  return true
+
+priv fn pick(t: U32, line: U32, out_lat: I32$@, out_rot: I32$@): I32 //<
+  //< Chooses one manoeuvre to send
+  //<
+  //< It steers towards the line, with sideways movement mixed in while centred.
+  //< Caution: **Vary the manoeuvre per round** (one alone teaches only one band). **Always move
+  //< forward**, or all it learns is "stopped, nothing changes".
+  out_lat$ = 0
+  out_rot$ = 0
+  cap: = I32::drive_cap
+  p: = pos_of(line)
+  if p > 0
+    out_rot$ = cap if t % 3 != 0 else cap / 2
+  else if p < 0
+    out_rot$ = 0 - cap if t % 3 != 0 else 0 - cap / 2
+  else if t % 4 == 1
+    out_lat$ = cap if t % 8 < 4 else 0 - cap
+  return cap
+
+#export
+fn ksos_main()
+  con.puts("=== Cortex-M car forward-model probe ===\n")
+  panic_hook = con.on_panic
+  $arena: = Arena.from_buffer(Void$@::storage@, sizeof(Sz) * 8192)
+
+  con.check("init", model.init(drive_cap, arena@))
+  // Caution: Reset to a point **after** the weights are allocated, or they vanish in round one.
+  work: = arena.save()
+
+  $line: U32 = 2
+  $err_early: U32 = 0
+  $last_pred: I32 = model.no_prediction
+  for $t: U32 = 0; t < total_steps; t += 1
+    $lat: I32 = 0
+    $rot: I32 = 0
+    lon: = pick(t, line, lat@, rot@)
+    last_pred = model.step(line, lon, lat, rot, arena@)
+    arena.restore(work)
+    if t == warmup_steps
+      err_early = model.err_permille()
+    line = next_line(t, line, lon, lat, rot)
+  err_late: = model.err_permille()
+  base_late: = model.base_permille()
+  // Caution: **Print how much it shrank as numbers**; 400‰ to 390‰ is not learning.
+  con.out().s("missed bits: \{err_early\} -> \{err_late\} per mille (no-change: \{base_late\})\n")
+
+  // Every round counts a step (nothing here cancels one).
+  con.check("learned_every_round", model.steps_done() == total_steps - 1)
+  // The main point: the missed bits shrank below "the same as the previous round".
+  con.check("error_shrank", err_late < err_early && err_early > 0)
+  con.check("beats_no_change", err_late < base_late)
+  // The prediction is three bits (a negative means "not answered yet").
+  con.check("prediction_in_range", last_pred >= 0 && last_pred <= 7)
+
+  // Caution: **A stopped round must ask no question**, or on a stand it **looks trained while
+  // having learned nothing** (the reason is at `step` in `car_model`). It still answers the
+  // previous, moving round's question, so the step count grows by one.
+  stop_steps: = model.steps_done()
+  smark: = arena.save()
+  stop_pred: = model.step(line, 0, 0, 0, arena@)
+  arena.restore(smark)
+  con.check("stopped_round_answers_the_previous_one", model.steps_done() == stop_steps + 1)
+  // A stopped round returns no prediction.
+  con.check("stopped_round_has_no_prediction", stop_pred == model.no_prediction)
+  // **The round after a stopped one must not learn**: no question was asked to answer.
+  after_stop: = model.steps_done()
+  nmark: = arena.save()
+  _np: = model.step(line, I32::drive_cap, 0, 0, arena@)
+  arena.restore(nmark)
+  con.check("round_after_stop_is_not_learned", model.steps_done() == after_stop)
+
+  // Caution: The round after a cancellation must not learn, or it pairs a command with bits read
+  // long after.
+  before_steps: = model.steps_done()
+  model.forget()
+  fmark: = arena.save()
+  _p: = model.step(line, I32::drive_cap, 0, 0, arena@)
+  arena.restore(fmark)
+  con.check("forget_skips_one", model.steps_done() == before_steps)
+  // The cancellation lasts for one round only.
+  fmark2: = arena.save()
+  _p2: = model.step(line, I32::drive_cap, 0, 0, arena@)
+  arena.restore(fmark2)
+  con.check("forget_is_one_shot", model.steps_done() == before_steps + 1)
+
+  // Learning survives a power cycle.
+  // Caution: **It must give the same answer before saving and after loading.**
+  // **Call `forget` before checking**, or `step` learns one step first and the weights differ.
+  steps_before: = model.steps_done()
+  err_before: = model.err_permille()
+  base_before: = model.base_permille()
+  blob: U8[model.state_bytes] = ::{}
+  con.check("save", model.save(U8$[]::blob))
+  before: F32[3] = ::{}
+  drifted: F32[3] = ::{}
+  after: F32[3] = ::{}
+  probe_answer(F32$[]::before, arena@)
+  // Caution: **Change the weights before loading**, or they match even if `load` did nothing.
+  $l2: U32 = probe_line
+  for $k: U32 = 0; k < 60; k += 1
+    kmark: = arena.save()
+    _q: = model.step(l2, I32::drive_cap, 0, 0, arena@)
+    arena.restore(kmark)
+    l2 = next_line(k, l2, I32::drive_cap, 0, 0)
+  probe_answer(F32$[]::drifted, arena@)
+  moved: = !same(F32[]::drifted, F32[]::before)
+  con.check("weights_moved", moved && model.steps_done() > steps_before)
+
+  con.check("load", model.load(U8[]::blob))
+  // Caution: **The progress must be restored too** (the step count; the fractions within their
+  // 1‰ rounding).
+  con.check("persist_steps", model.steps_done() == steps_before)
+  err_now: = model.err_permille()
+  con.check("persist_err", err_now + 1 >= err_before && err_now <= err_before + 1)
+  base_now: = model.base_permille()
+  con.check("persist_base", base_now + 1 >= base_before && base_now <= base_before + 1)
+  probe_answer(F32$[]::after, arena@)
+  con.check("persist_exact", same(F32[]::after, F32[]::before))
+
+  // Caution: Weights with a mismatched scale must be rejected; with the right shape, they would go
+  // silently wrong.
+  bl: = U8$[]::blob
+  bl[3] = U8::(drive_cap + 1)
+  con.check("reject_other_cap", !model.load(U8[]::blob))
+  bl[3] = U8::drive_cap
+  bl.put_u16_le(0, 0xffffU16)
+  con.check("reject_other_version", !model.load(U8[]::blob))
+
+  con.print_summary("car forward-model probe done")
+  con.exit()
+  for {}

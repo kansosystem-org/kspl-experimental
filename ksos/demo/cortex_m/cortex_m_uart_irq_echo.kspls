@@ -1,0 +1,38 @@
+//< ARM Cortex-M (mps2-an385) bare metal: a probe showing an interrupt-driven UART0 RX echo
+//<
+//< What it verifies: the `wait-with-wfi` loop never returns, and hangs, if the NVIC/ISR does not
+//< work (WFI really halts the core, and there is no busy-polling fallback). Like the other
+//< Cortex-M demos it runs as one task on ksos/kernel/task's scheduler (so that the link includes
+//< the ksos_tick that SysTick_Handler needs), but it uses no blocking synchronization such as a
+//< semaphore on purpose (the reason is at the top of ksos/drivers/mps2/uart_irq.kspls).
+import "ksos/demo/common/semihost_console" as con
+import "ksos/drivers/mps2/uart_irq" as uart
+import "ksos/kernel/task" + { Task }
+import "std/strfmt" as _strfmt // `:02x`
+
+extern "C"
+  fn ksos_port_wfi()
+
+$tcb_probe: Task
+$stack_probe: U8[4096]
+
+fn uart_irq_echo_task(_arg: Void$@): Void
+  con.puts("[semihosting] Kanso OS UART0 interrupt-driven RX echo probe starting...\n")
+
+  uart.init()
+  con.puts("[IRQ] waiting for a byte via WFI (real interrupt-driven wait; hangs forever\n")
+  con.puts("[IRQ] here if NVIC/ISR is not actually wired correctly)...\n")
+
+  for !uart.has_byte()
+    ksos_port_wfi()
+  byte: = uart.take_byte()
+
+  con.out().s("[IRQ] received byte: 0x\{byte:02x\} (ISR fire count: \{uart.irq_count()\})\n")
+  con.puts("[IRQ] echoing it back...\n")
+  uart.putc(byte)
+
+  con.puts("[semihosting] UART0 interrupt-driven RX echo probe done.\n")
+// The bare-metal entry called from startup.S.
+#export
+fn ksos_main()
+  task.run_single_task(tcb_probe@, U8$[]::stack_probe, uart_irq_echo_task, "uart-irq", con.exit)

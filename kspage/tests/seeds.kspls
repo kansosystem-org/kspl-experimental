@@ -1,0 +1,87 @@
+//< Builds the seeds the fuzzer starts from ([`fuzz_main.kspls`](fuzz_main.kspls) calls it)
+//<
+//< **All it does is "write it out in kspage's formats".**
+//< Caution: **Include one of every shape.** Mutated bytes cannot reach a field missing from the
+//< seed — a merged table, a heading's depth, columns and a number format each read another
+//< number. `store.save` writes the saved format itself, so it does not go stale.
+import "kspage/model/collect" { Collect }
+import "kspage/model/doc" { Doc }
+import "kspage/model/paint"
+import "kspage/model/style" { Arrange, Sheet }
+import "kspage/share/markdown"
+import "kspage/share/store"
+import "kspage/tests/base"
+import "kspage/write/csv"
+import "std/ds" { List }
+import "std/fuzz"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+priv struct Made
+  doc: Doc$@
+  sheet: Sheet$@
+
+priv fn built(arena: Arena$@): Made
+  sheet: = Sheet.new(base.root_font(), arena)
+  head: = sheet.add("heading1", paint.inherit_all())
+  head.outline = 1
+  head.collect = Collect.contents
+  // The style the next paragraph continues in. **It is a field to fuzz too**, and keeps this
+  // document editable: without it, Enter at the first line's end makes a second collecting heading.
+  head.next = "The column set"
+  deep: = sheet.add("heading2", paint.inherit_all())
+  deep.outline = 2
+  deep.next = "The column set"
+  band: = sheet.add("The column set", paint.inherit_all())
+  band.columns = 2
+  money: = sheet.add("amount", paint.inherit_all())
+  money.number.places = Option<|Sz|>.some(2)
+  money.number.grouped = true
+  table: = sheet.add("table", paint.inherit_all())
+  table.arrange = Arrange.grid
+
+  d: = Doc.new(arena)
+  d.add_block("heading1").add_text("Title")
+  d.add_block("The column set")
+    .add_text("The body inside a column. A sentence long enough to wrap is laid here.")
+  d.add_block("heading2").add_text("Section")
+  d.add_block("amount").add_text("1234.5")
+  grid: = d.add_block("table")
+  r0: = grid.add_child("line")
+  wide: = r0.add_child("cell")
+  wide.add_text("covering")
+  // Caution: **Remove the covered cell** (a merge is the two as one).
+  wide.span_cols = 2
+  r1: = grid.add_child("line")
+  // **One cell holds a multi-byte character on purpose**; with all text ASCII, stepping back over a
+  // character's continuation bytes is never reached.
+  r1.add_child("cell").add_text("é")
+  r1.add_child("cell").add_text("b")
+  return Made::{ .doc = d, .sheet = sheet }
+
+pub fn built_seeds(out: List<|fuzz.Sample|>$@, name: U8[], arena: Arena$@) //<
+  //< Saves the built document as Markdown and as CSV, and adds them as seeds
+  got: = built(arena)
+  d: = got.doc
+  sheet: = got.sheet
+  $sb: = Str_builder.new()
+  defer sb.free()
+  store.save(d, sheet, sb@)
+  out
+    .push(fuzz.Sample::{ .kind = "doc", .name = name, .data = arena.dup_str(sb.slice()),
+    .built = true })
+  sb.clear()
+  markdown.write(d, sheet, sb@)
+  out
+    .push(fuzz.Sample::{ .kind = "md", .name = name, .data = arena.dup_str(sb.slice()),
+    .built = true })
+  // Caution: **Find one table.** CSV holds only a table, so the whole document is no seed.
+  for $i: Sz = 0; i < d.blocks.len; i += 1
+    b: = d.blocks.get(i)
+    if b.children.len > 0 && b.children.get(0).children.len > 0
+      sb.clear()
+      csv.write_table(b, sb@, arena)
+      out
+        .push(fuzz.Sample::{ .kind = "csv", .name = name,
+        .data = arena.dup_str(sb.slice()), .built = true })
+      return

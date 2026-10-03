@@ -1,0 +1,433 @@
+import "ksai/model_file" as ai_file
+import "ksai/quant"
+import "ksai/safetensors" as ai_st
+import "ksai/tensor" { Tensor }
+import "std/buf" { Buf_writer }
+import "std/bytes" as std_bytes
+import "std/mem" + { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// Arena.from_buffer: an Arena running on a fixed static buffer the caller owns, which lets ksai run
+// on a microcontroller with no malloc.
+// ==========================================
+fn test_arena_from_buffer()
+  verdict.start("[Arena] from_buffer: allocating from a static buffer, free of malloc...")
+  storage: Sz[8192] = ::{} // 64KB. An Sz array, so it aligns naturally to an 8-byte boundary
+  $sa: = Arena.from_buffer(Void$@::storage@, sizeof(Sz) * 8192)
+
+  heap_before: = mem.heap_requested_total_bytes()
+  p1: = sa.alloc(1024)
+  p2: = sa.alloc(2048)
+  assert(p1 != null && p2 != null, "Arena.from_buffer: alloc must succeed within capacity")
+  after_alloc: = mem.heap_requested_total_bytes()
+  assert(after_alloc == heap_before, "Arena.from_buffer: alloc must never call libc.malloc")
+
+  x_shape: Sz[2] = ::{ 2, 3 }
+  $x: = Tensor<|F32|>.new(Sz[]::x_shape, sa@)
+  x.fill(F32::2.0)
+  w_shape: Sz[2] = ::{ 3, 2 }
+  $w: = Tensor<|F32|>.new(Sz[]::w_shape, sa@)
+  w.fill(F32::0.5)
+  y: = x.matmul(w) catch // [2,2], each element = Σ_3(2.0*0.5) = 3.0
+    panic("matmul shape mismatch")
+  for i in Range.asc(y.size)
+    diff: = (y.data + i)$ - 3.0
+    ad: = -diff if diff < 0.0 else diff
+    assert(ad < 1.0e-6, "Arena.from_buffer: ksai matmul must work on a static buffer")
+  after_ops: = mem.heap_requested_total_bytes()
+  assert(after_ops == heap_before, "Arena.from_buffer: ksai tensor ops must never call libc.malloc")
+
+  // free() is a no-op on caller-owned memory, but the usage is read before it: the use-after-free
+  // check treats `.free()` as a release by its name and cannot know this one is a no-op.
+  used_bytes: = I32::sa.get_total_used()
+  sa.free()
+  after_free: = mem.heap_requested_total_bytes()
+  assert(after_free == heap_before, "Arena.from_buffer: free() must be a no-op")
+  // Not built into `sa`: free() was just called on it (the use-after-free check).
+  $tail: U8[96] = ::{}
+  $tw: = Buf_writer.new(U8$[]::tail)
+  verdict
+    .pass(tw.s("(used \{used_bytes\}/\{I32::(sizeof(Sz) * 8192)\} bytes, 0 libc.malloc calls)")
+    .slice())
+  test_from_buffer_unaligned()
+
+fn test_from_buffer_unaligned() //<
+  //< Checks that an arena over an unaligned buffer still hands out aligned addresses
+  //<
+  //< Caution: **Given a buffer at an unaligned address, the addresses it hands out must still be
+  //< aligned.** The naturally aligned `Sz[8192]` above cannot tell who does the aligning. If this
+  //< breaks, a Cortex-M's alignment fault loops in the default handler: it hangs with no sign.
+  verdict.start("[Arena] from_buffer: an unaligned head still deals out aligned addresses...")
+  bytes: U8[512] = ::{}
+  $sa: = Arena.from_buffer(Void$@::((U8$@::bytes@) + 1), 511)
+  for i in Range.asc(8)
+    p: = sa.alloc(1 + i * 3)
+    assert(p != null, "Arena.from_buffer: alloc must succeed on an unaligned buffer")
+    assert(Sz::p % 8 == 0, "Arena.from_buffer: must align the buffer it was handed")
+  verdict.pass("")
+// ==========================================
+// Tensor's operator overloading (`+`/`-`/`*`/`[]` by way of std/ops) through real operator syntax,
+// not a method call. The subscript is an `Index_place` (it returns a place), so reading,
+// assigning, compound assigning and taking the address are all tested.
+// ==========================================
+fn test_tensor_operators(arena: Arena$@)
+  verdict.start("[Tensor] operator overload (+, -, *, []) test...")
+  shape: Sz[1] = ::{ 3 }
+  // **Do not put a `$` on it.** `Tensor`'s `at` declares its receiver `Self@` (it reads the
+  // descriptor and returns the mutable pointer inside), so it needs no writable receiver; with a
+  // `$` here, a loosened rule would not make this fail.
+  a: = Tensor<|F32|>.new(Sz[]::shape, arena)
+  b: = Tensor<|F32|>.new(Sz[]::shape, arena)
+  a[0] = F32::2.0
+  a[1] = F32::4.0
+  a[2] = F32::6.0
+  b[0] = F32::1.0
+  b[1] = F32::3.0
+  b[2] = F32::5.0
+
+  sum: = a + b
+  diff: = a - b
+  prod: = a * b
+
+  expected_sum: F32[3] = ::{ 3.0, 7.0, 11.0 }
+  expected_diff: F32[3] = ::{ 1.0, 1.0, 1.0 }
+  expected_prod: F32[3] = ::{ 2.0, 12.0, 30.0 }
+
+  for i in Range.asc(3)
+    assert(sum[i] == expected_sum[i], "Tensor '+' operator produced a wrong result")
+    assert(diff[i] == expected_diff[i], "Tensor '-' operator produced a wrong result")
+    assert(prod[i] == expected_prod[i], "Tensor '*' operator produced a wrong result")
+
+  // Compound assignment and taking the address cannot be built from a `get` and `set` that pass
+  // values, so they prove the subscript returns a place.
+  sum[0] += F32::10.0
+  assert(sum[0] == F32::13.0, "'t[i] += v' did not update the element in place")
+  slot: = sum[1]@
+  slot$ = F32::99.0
+  assert(sum[1] == F32::99.0, "writing through 't[i]@' did not reach the element")
+
+  // Writing into a destination received by value (as `matmul_into`'s `out` is). If this were
+  // rejected, `(t.data + i)$ = v` would write the element while `t[i] = v` could not.
+  fill_first(sum, F32::7.0)
+  assert(sum[0] == F32::7.0, "writing 't[i]' through a by-value parameter did not reach it")
+  verdict.pass("`a + b` / `a - b` / `a * b` / `t[i]` all work via real operator syntax.")
+priv fn fill_first(t: Tensor<|F32|>, val: F32) //<
+  //< Writes into an element of a `Tensor` received by value
+  //<
+  //< **No `$` is written on the receiver.** It is the same way ksai's `matmul_into` /
+  //< `grad_matmul_input_into` receive a destination.
+  t[0] = val
+// ==========================================
+// A shape mismatch is thrown as a recoverable `Tensor_error`, not a panic, and the caller
+// continues with a catch.
+// ==========================================
+fn test_tensor_error_recoverable(arena: Arena$@)
+  verdict.start("[Tensor] shape mismatch is a catchable Tensor_error, not a panic...")
+
+  // matmul: [2,3] * [4,2] must fail, since the inner dimensions do not match
+  a_shape: Sz[2] = ::{ 2, 3 }
+  b_shape: Sz[2] = ::{ 4, 2 }
+  $a: = Tensor<|F32|>.new(Sz[]::a_shape, arena)
+  $b: = Tensor<|F32|>.new(Sz[]::b_shape, arena)
+  a.fill(F32::1.0)
+  b.fill(F32::1.0)
+
+  $matmul_caught: = false
+  _bad: = a.matmul(b) catch
+    matmul_caught = true
+    fallback a
+  assert(matmul_caught, "matmul shape mismatch must throw a catchable Tensor_error")
+
+  // checked_add: two tensors of different element counts must fail
+  c_shape: Sz[1] = ::{ 3 }
+  d_shape: Sz[1] = ::{ 5 }
+  $c: = Tensor<|F32|>.new(Sz[]::c_shape, arena)
+  d: = Tensor<|F32|>.new(Sz[]::d_shape, arena)
+
+  $add_caught: = false
+  _bad_sum: = c.checked_add(d) catch
+    add_caught = true
+    fallback c
+  assert(add_caught, "checked_add size mismatch must throw a catchable Tensor_error")
+
+  verdict
+    .pass("Shape mismatches propagate as Tensor_error and are handled without crashing the process.")
+fn test_view_rows(arena: Arena$@) //< a view of rows from any row, and a rejection past the end
+  verdict.start("[Tensor] view_rows sees the rows asked for, from any row, without copying...")
+  shape: Sz[2] = ::{ 4, 3 }
+  $t: = Tensor<|F32|>.new(Sz[]::shape, arena)
+  for i in Range.asc(t.size)
+    (t.data + i)$ = F32::i
+  tail: = t.view_rows(1, 3, arena) catch panic("view_rows refused rows that stand")
+  assert(tail.shape[0] == 3 && tail.shape[1] == 3 && tail.size == 9,
+    "view_rows: the view is the rows asked for")
+  assert(tail.data$ == F32::3.0, "view_rows: the view starts at its first row")
+  (t.data + 11)$ = F32::-1.0
+  assert((tail.data + 8)$ == F32::-1.0, "view_rows: the view shares the elements, not a copy")
+  $refused: = false
+  _past: = t.view_rows(2, 3, arena) catch
+    refused = true
+    fallback t
+  assert(refused, "view_rows: rows past the end are refused")
+  verdict.pass("view_rows views rows from any row, shares them, and refuses rows past the end")
+
+// ==========================================
+// ksai/quant: the symmetric int8 quantization of weights per row (quantize) and the expansion back
+// (dequantize).
+// ==========================================
+fn test_quantize_roundtrip(arena: Arena$@)
+  verdict.start("[Quant] int8 quantization of weights per row (quantize/dequantize) test...")
+
+  w_shape: Sz[2] = ::{ 2, 4 }
+  $w: = Tensor<|F32|>.new(Sz[]::w_shape, arena)
+  (w.data + 0)$ = 1.0
+  (w.data + 1)$ = -2.0
+  (w.data + 2)$ = 0.5
+  (w.data + 3)$ = -0.25
+  (w.data + 4)$ = 10.0
+  (w.data + 5)$ = -10.0
+  (w.data + 6)$ = 0.0
+  (w.data + 7)$ = 5.0
+
+  $qw: = w.quantize(arena) catch panic("quantize failed unexpectedly on a valid 2D tensor")
+  assert(qw.rows == 2, "quantize: rows must match the source tensor")
+  assert(qw.cols == 4, "quantize: cols must match the source tensor")
+
+  dw: = qw.dequantize<|F32|>(arena)
+  // The largest absolute value is 10.0, so the error stays within about half a scale step
+  tol: = (10.0 / 127.0) * 0.6
+  for i in Range.asc(w.size)
+    orig: = F64::(w.data + i)$
+    got: = F64::(dw.data + i)$
+    diff: = -(orig - got) if (orig - got) < 0.0 else (orig - got)
+    assert(diff <= tol, "quantize/dequantize roundtrip error must stay within one scale step")
+
+  // A matrix product on weights quantized and expanded back stays close to the unquantized result
+  x_shape: Sz[2] = ::{ 1, 2 }
+  $x: = Tensor<|F32|>.new(Sz[]::x_shape, arena)
+  (x.data + 0)$ = 2.0
+  (x.data + 1)$ = 3.0
+  y_ref: = x.matmul(w) catch panic("reference matmul failed unexpectedly")
+  y_quant: = x.matmul(dw) catch panic("matmul on dequantized weights failed unexpectedly")
+  for i in Range.asc(y_ref.size)
+    orig: = F64::(y_ref.data + i)$
+    got: = F64::(y_quant.data + i)$
+    diff: = -(orig - got) if (orig - got) < 0.0 else (orig - got)
+    assert(diff <= 1.0, "matmul on dequantized weights must stay close to the unquantized result")
+
+  // A one-dimensional tensor is rejected as rank_mismatch (only two dimensions are supported)
+  bad_shape: Sz[1] = ::{ 4 }
+  $bad: = Tensor<|F32|>.new(Sz[]::bad_shape, arena)
+  $caught: = false
+  _bad_q: = bad.quantize(arena) catch
+    caught = true
+    fallback quant.Quantized_tensor::{
+      .data = null,
+      .scales = null,
+      .rows = 0,
+      .cols = 0,
+      .arena = null,
+    }
+  assert(caught, "quantize on a 1D tensor must throw rank_mismatch")
+
+  verdict.pass("int8 quantizing per row keeps both the values and the matrix product close.")
+
+// ==========================================
+// The round trip of writing safetensors out then reading it back.
+// Caution: **Send reading and writing through one path.** A check on one side passes where both
+// are wrong the same way (the format is also shared with tools/ai_assist/safetensors_io.py).
+// ==========================================
+fn test_safetensors_roundtrip(arena: Arena$@)
+  verdict.start("[Safetensors] the write-out then read-back round trip test...\n")
+  path: = "out/tmp/kspl_test_debug_roundtrip.safetensors"
+
+  w_shape: Sz[2] = ::{ 2, 3 }
+  w: = Tensor<|F32|>.new(Sz[]::w_shape, arena)
+  for i in Range.asc(w.size)
+    (w.data + i)$ = F32::i + F32::0.5
+
+  $writer: = ai_st.Safetensors_writer.new()
+  writer.add("w", w)
+  ai_file.save_safetensors(writer@, path) catch panic("save_safetensors should succeed for a \
+    writable out/ path")
+
+  $loaded: = ai_file.load_safetensors(path, arena) catch panic("load_safetensors should read back \
+    the file just written")
+  defer loaded.free()
+  got: = loaded.get_tensor<|F32|>("w", arena) catch panic("get_tensor should find the tensor that \
+    was added before save")
+  assert(got.size == w.size, "safetensors roundtrip must preserve the element count")
+  for i in Range.asc(w.size)
+    assert((got.data + i)$ == (w.data + i)$,
+      "safetensors roundtrip must preserve every element bit-for-bit")
+
+  verdict.pass("not one element is garbled over the header length, header and data round trip.")
+// ==========================================
+// The range a file declares for itself (`data_offsets` and `shape`) is not trusted.
+// Caution: **Nothing goes wrong at the moment it returns**: it breaks only when the data is
+// touched, so removing one rejection still passes at the time.
+// ==========================================
+
+priv fn blob_of(header: U8[], payload_len: Sz, arena: Arena$@): U8[] //<
+  //< Builds a whole safetensors byte sequence from a header and the data part's length
+  //<
+  //< **Pad with spaces up to an 8-byte boundary** (as the writer does;
+  //< `Safetensors_writer.finish`).
+  $hdr: = Str_builder.new()
+  defer hdr.free()
+  hdr.s(header)
+  for (hdr.len + 8) % 8 != 0
+    hdr.s(" ")
+  len_bytes: U8[8] = ::{}
+  len_slice: = U8$[]::len_bytes
+  len_slice.put_u64_le(0, U64::hdr.len)
+  $blob: = Str_builder.new()
+  defer blob.free()
+  blob.s(U8$[]::len_bytes).s(hdr.slice())
+  for _i in Range.asc(payload_len)
+    blob.c(0U8)
+  return arena.dup_str(blob.slice())
+
+priv fn refuses(what: U8$[], header: U8[], payload_len: Sz, arena: Arena$@) //<
+  //< That the declared range is rejected
+  //<
+  //< **Rejecting up front and rejecting later both count as rejected** (neither returns a view).
+  data: = blob_of(header, payload_len, arena)
+  $st: = ai_st.Safetensors.load_from_bytes(data, arena) catch
+    return
+  $refused: = false
+  st.get_tensor<|F32|>("w", arena) catch
+    refused = true
+  assert(refused, what)
+
+fn test_safetensors_refuses_a_bad_range(arena: Arena$@)
+  verdict.start("[Safetensors] refusing a weight whose named range is wrong test...\n")
+  // First checks that **a correctly declared one gets through**. Without that, everything below
+  // would pass on "it always rejects" and prove nothing.
+  good: = "{\"w\":{\"dtype\":\"F32\",\"shape\":[2,3],\"data_offsets\":[0,24]}}"
+  ok_data: = blob_of(good, 24, arena)
+  $ok: = ai_st.Safetensors.load_from_bytes(ok_data, arena) catch
+    panic("a correctly named weight has to be readable")
+  got: = ok.get_tensor<|F32|>("w", arena) catch
+    panic("a correctly named weight has to get through")
+  assert(got.size == 6, "a correctly named weight has to come out as 2x3, 6 elements")
+
+  // "The shape is wider than the declared range" is tested by
+  // `test_safetensors_refuses_a_mismatch` below; this one adds the broken ranges that one skips.
+  refuses("a named end outside the file has to be refused",
+    "{\"w\":{\"dtype\":\"F32\",\"shape\":[2,3],\"data_offsets\":[0,40]}}", 24, arena)
+  refuses("a negative start has to be refused",
+    "{\"w\":{\"dtype\":\"F32\",\"shape\":[2,3],\"data_offsets\":[-4,24]}}", 24, arena)
+  refuses("an end before the start has to be refused",
+    "{\"w\":{\"dtype\":\"F32\",\"shape\":[2,3],\"data_offsets\":[24,0]}}", 24, arena)
+  refuses("a negative dimension in the form has to be refused",
+    "{\"w\":{\"dtype\":\"F32\",\"shape\":[2,-3],\"data_offsets\":[0,24]}}", 24, arena)
+  // Caution: **Also reject a size whose product overflows.** Each dimension may pass alone
+  // while their product wraps and slips past the range check as a small number.
+  refuses("a form whose product wraps the digits has to be refused",
+    "{\"w\":{\"dtype\":\"F32\",\"shape\":[3000000000,3000000000],\"data_offsets\":[0,24]}}", 24,
+    arena)
+  refuses("an unknown dtype has to be refused",
+    "{\"w\":{\"dtype\":\"Q4_0\",\"shape\":[2,3],\"data_offsets\":[0,24]}}", 24, arena)
+  // The case where the header length is longer than the file. **Only this one is built
+  // differently** (the length's 8 bytes are written by hand).
+  $big_len: = Str_builder.new()
+  defer big_len.free()
+  huge: U8[8] = ::{}
+  huge_slice: = U8$[]::huge
+  huge_slice.put_u64_le(0, 100000U64)
+  big_len.s(U8$[]::huge).s("{}")
+  $opened: = false
+  ai_st.Safetensors.load_from_bytes(arena.dup_str(big_len.slice()), arena) catch
+    opened = true
+  assert(opened, "a header length longer than the file has to be refused")
+
+  verdict.pass("no view is returned whichever of the named range, the form or the dtype is broken.")
+fn test_safetensors_refuses_a_mismatch(arena: Arena$@) //<
+  //< Checks that the reader rejects a file whose shape or dtype does not match
+  //<
+  //< The content is plain bytes, so a wrong load fails only in **some matmul much later**, with no
+  //< hint of which tensor is wrong.
+  verdict.start("[Safetensors] refusing a weight whose form or dtype does not fit test...\n")
+  path: = "out/tmp/kspl_test_debug_mismatch.safetensors"
+
+  src_shape: Sz[2] = ::{ 2, 3 }
+  $src: = Tensor<|F32|>.new(Sz[]::src_shape, arena)
+  src.fill(F32::1.0)
+  $writer: = ai_st.Safetensors_writer.new()
+  writer.add("w", src)
+  ai_file.save_safetensors(writer@, path) catch panic("save_safetensors should succeed for a \
+    writable out/ path")
+  $loaded: = ai_file.load_safetensors(path, arena) catch panic("load_safetensors should read back \
+    the file just written")
+  defer loaded.free()
+
+  // A shape other than the expected one is rejected. **Do not modify `dst` when rejecting**
+  // (half-loaded is harder to trace than not loaded).
+  other_shape: Sz[2] = ::{ 3, 2 }
+  $dst: = Tensor<|F32|>.new(Sz[]::other_shape, arena)
+  dst.fill(F32::7.0)
+  $refused: = false
+  loaded.map_into<|F32|>("w", dst@, arena) catch
+    refused = true
+  assert(refused, "a tensor whose shape differs from the destination must be refused")
+  assert((dst.data + 0)$ == F32::7.0, "a refused mapping must leave the destination alone")
+
+  // The same shape gets through (so the rejection above is not "it always rejects").
+  $ok_dst: = Tensor<|F32|>.new(Sz[]::src_shape, arena)
+  loaded.map_into<|F32|>("w", ok_dst@, arena) catch panic("map_into must accept a tensor whose \
+    shape matches the destination")
+  assert((ok_dst.data + 0)$ == F32::1.0, "an accepted mapping must point at the file's data")
+
+  // Reading it as an element type of another width is rejected.
+  // Caution: **Try it with a type narrower than the file's.** An F32 file read as F64 overruns
+  // the file, so the range check catches it even with the dtype check removed, and the test would
+  // not fail. Safetensors_writer writes F32 only, so this one is built by hand.
+  $hdr: = Str_builder.new()
+  defer hdr.free()
+  hdr.s("{\"w\":{\"dtype\":\"F64\",\"shape\":[2],\"data_offsets\":[0,16]}}")
+  for (hdr.len + 8) % 8 != 0
+    hdr.s(" ")
+  len_bytes: U8[8] = ::{}
+  len_slice: = U8$[]::len_bytes
+  len_slice.put_u64_le(0, U64::hdr.len)
+  payload: U8[16] = ::{}
+  $blob: = Str_builder.new()
+  defer blob.free()
+  blob.s(U8$[]::len_bytes).s(hdr.slice()).s(U8[]::payload)
+  $f64_file: = ai_st.Safetensors.load_from_bytes(blob.slice(), arena) catch panic("the hand-built \
+    safetensors blob must parse")
+  $narrow: = false
+  f64_file.get_tensor<|F32|>("w", arena) catch
+    narrow = true
+    fallback Tensor<|F32|>::{}
+  assert(narrow, "reading an F64 tensor as F32 must be refused")
+
+  // The header contradicts itself. **Do not take the size from `shape` alone** (the reason is at
+  // `ai_st.Safetensors.get_tensor`).
+  $bad_hdr: = Str_builder.new()
+  defer bad_hdr.free()
+  bad_hdr
+    .s("{\"a\":{\"dtype\":\"F32\",\"shape\":[4],\"data_offsets\":[0,8]},\"b\":{\"dtype\":\"F32\",\"shape\":[2],\"data_offsets\":[8,16]}}")
+  for (bad_hdr.len + 8) % 8 != 0
+    bad_hdr.s(" ")
+  bad_len: U8[8] = ::{}
+  bad_len_slice: = U8$[]::bad_len
+  bad_len_slice.put_u64_le(0, U64::bad_hdr.len)
+  $neighbor: F32[4] = ::{ 1.0F32, 2.0F32, 99.0F32, 98.0F32 }
+  neighbor_head: = neighbor[0]@
+  neighbor_bytes: = U8[]::{ .ptr = U8$@::neighbor_head, .len = 16 }
+  $bad_blob: = Str_builder.new()
+  defer bad_blob.free()
+  bad_blob.s(U8$[]::bad_len).s(bad_hdr.slice()).s(neighbor_bytes)
+  $inconsistent: = ai_st.Safetensors.load_from_bytes(bad_blob.slice(), arena) catch panic("the \
+    hand-built safetensors blob must parse")
+  $refused_span: = false
+  inconsistent.get_tensor<|F32|>("a", arena) catch
+    refused_span = true
+    fallback Tensor<|F32|>::{}
+  assert(refused_span, "a shape that claims more bytes than data_offsets must be refused")
+
+  verdict.pass("a differing form, a differing width and a range disagreement are all refused.")

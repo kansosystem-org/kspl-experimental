@@ -1,0 +1,63 @@
+//< Checks the type-argument constraints of a template that is never instantiated
+//<
+//< Not a suite; part of `../suite/lsp_test.kspls`.
+//< Checked at the template, it always fails as **not satisfying a constraint it declared itself** —
+//< a template's `K` is bound to nothing, so the conformance table is empty. **It is a file of its
+//< own for its subject**, "a diagnostic that appears only while editing".
+import "ksplc/tests/support/lsp_client"
+import "std/chars"
+import "std/jsonrpc"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+priv const normal_ms: I32 = 15000 //<
+  //< The read timeout (the same as the suite's `normal_ms`)
+
+priv const bound_src: U8[] =
+  """pub trait Hashable<|Key|> {
+  fn hash(r: Self): U32;
+  fn equals(r: Self, other: Key): Bool;
+}
+
+pub struct Box<|K: Hashable<|K|>|> {
+  priv k: K;
+}
+
+pub struct Seq<|K: Hashable<|K|>|> {
+  priv b: Box<|K|>$@;
+}
+
+impl<|K: Hashable<|K|>|> Box<|K|> {
+  pub fn items(r: Self$@): Seq<|K|> {
+    return Seq<|K|>::{ .b = r };
+  }
+}
+"""
+
+priv const bound_uri: U8[] = "file:///bound_probe.kspl"
+
+fn check_template_bound(c: jsonrpc.Client$@, arena: Arena$@)
+  _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(bound_uri, bound_src, arena), arena)
+  $found: = false
+  $count: Sz = 0
+  $first: U8[] = ""
+  for _k in Range.asc(8)
+    msg: = c.read_msg(normal_ms, arena) catch
+      break
+    if !msg.get("method").as_str().equals("textDocument/publishDiagnostics")
+      continue
+    p: = msg.get("params")
+    if !p.get("uri").as_str().ends_with("bound_probe.kspl")
+      continue
+    found = true
+    got: = p.get("diagnostics").arr_list(arena)
+    count = got.len
+    if count > 0
+      first = got.get(0).get("message").as_str()
+    break
+  seen_text: =
+    arena.text().s("\{count\}: \{first\}").take() if found else "(no publishDiagnostics came)"
+  verdict.check("a template raises no diagnostic on a type constraint it declared itself",
+    found && count == 0, lsp_client.why(c, seen_text, arena))

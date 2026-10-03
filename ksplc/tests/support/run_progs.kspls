@@ -1,0 +1,200 @@
+//< The programs the `ksplc run` suite writes out (not a suite)
+//<
+//< **This file holds only "what to run"**; `tests/suite/run_test.kspls` gives the verdict.
+//< They are not files: `import "helper"` resolves only inside the working directory, and `bad_src`
+//< **deliberately does not compile**, which `make lint` and `make test-fmt-tree` would pick up.
+
+const script_src: U8[] =
+  """import "std/io";
+import "helper";
+
+fn main(): I32 {
+  v: = helper.value();
+  io.out().s("v=\{v\}").c('\n');
+  return 0;
+}
+"""
+
+// The smallest input, importing nothing, **so splitting makes empty units** whose names, decided
+// from the content, collide.
+const empty_src: U8[] = """fn main() {}
+"""
+
+const args_src: U8[] =
+  """import "std/io";
+import "std/subproc";
+import "std/sys";
+
+fn main(): I32 {
+  a: = sys.args();
+  for $i: Sz = 1; i < a.len; i += 1 {
+    io.out().s("[").s(a[i]).s("]");
+  }
+  io.out().c('\n');
+  return 0;
+}
+"""
+
+// It says which of two `#cfg` bodies it was built with.
+const define_src: U8[] =
+  """import "std/io";
+
+#cfg(greet)
+fn word(): U8[] {
+  return "on";
+}
+#cfg(!greet)
+fn word(): U8[] {
+  return "off";
+}
+
+fn main(): I32 {
+  io.out().s("cfg=").s(word()).c('\n');
+  return 0;
+}
+"""
+
+// The stand-in for the C compiler, recording its argv, with a `CALL` line starting each call.
+// **Exit with 0, and leave an empty file where `-o` points**, or the build stops before the link.
+// Caution: **Open the record with "ab" (binary append).** In text mode ("a") Windows turns `\n`
+// into `\r\n`.
+const cc_probe_src: U8[] =
+  """import "std/io";
+import "std/str" { Str_builder };
+import "std/sys";
+
+fn main(): I32 {
+  a: = sys.args();
+  $b: = Str_builder.new();
+  defer b.free();
+  b.s("CALL\n");
+  $made: U8[] = "";
+  for $i: Sz = 1; i < a.len; i += 1 {
+    b.s("ARG:").s(a[i]).c('\n');
+    if a[i].equals("-o") && i + 1 < a.len {
+      made = a[i + 1];
+    }
+  }
+  io.out().s(b.slice());
+  if made.len > 0 {
+    io.write_file(made, "") catch {};
+  }
+  path: = sys.get_env("KSPL_CC_LOG").unwrap_or("");
+  if path.len > 0 {
+    $f: = io.open(path, "ab") catch {
+      return 0;
+    };
+    f.s(b.slice());
+    f.free();
+  }
+  return 0;
+}
+"""
+
+// A program naming a library on an `extern` block (`#link`); the stand-in links nothing, so it need
+// not exist. **Replace the name with one as long, on the same line**, so the C differs only by it.
+const link_src: U8[] =
+  """import "std/io";
+
+#link("ksprobea")
+extern "C" {
+  fn ks_probe(): I32;
+}
+
+fn main(): I32 {
+  io.out().s("ran\n");
+  return 0;
+}
+"""
+
+const exit_src: U8[] = """import "std/sys";
+
+fn main(): I32 {
+  sys.exit(7);
+  return 0;
+}
+"""
+
+// The return value of `fn main(): I32` becomes the process's exit code (the contract is "The entry
+// point" in docs/SPEC-language.md).
+// Caution: Both backends must keep it, and a change to only one goes unnoticed, so both C and LLVM
+// are run.
+const main_ret_src: U8[] =
+  """import "std/io";
+
+fn main(): I32 {
+  io.out().s("ran\n");
+  return 7;
+}
+"""
+
+// The shebang line (`#!/usr/bin/env -S ksplc run`) is for the OS; ksplc reads it as a line comment
+// (`ksplc/base/core.kspls`).
+const shebang_src: U8[] =
+  """#!/usr/bin/env -S ksplc run
+import "std/io";
+
+fn main(): I32 {
+  io.out().s("shebang ok\n");
+  return 0;
+}
+"""
+
+const shebang_line: U8[] = "#!/usr/bin/env -S ksplc run"
+
+const bad_src: U8[] = """import "std/io";
+
+fn main(): I32 {
+  nope();
+}
+"""
+
+const small_src: U8[] =
+  """import "std/io";
+import "std/fs";
+
+fn main(): I32 {
+  d: = fs.is_dir(".");
+  io.out().s("\{d\}").c('\n');
+  return 0;
+}
+"""
+
+// `sys.script_path()` relies on an environment variable, which a grandchild inherits; the argv[0]
+// stored with it is compared, so another process the script started sees `.none`.
+const child_src: U8[] =
+  """import "std/io";
+import "std/sys";
+
+fn main(): I32 {
+  switch sys.script_path() case .some(p) {
+    io.out().s("child=").s(p).c('\n');
+  } case .none {
+    io.out().s("child=none\n");
+  }
+  return 0;
+}
+"""
+
+const parent_src: U8[] =
+  """import "std/io";
+import "std/sys";
+import "std/subproc";
+import "std/ds";
+import "std/mem";
+
+fn main(): I32 {
+  switch sys.script_path() case .some(p) {
+    io.out().s("parent=").s(p).c('\n');
+  } case .none {
+    io.out().s("parent=none\n");
+  }
+  arena: = mem.Arena.new(4096);
+  defer arena.free();
+  $argv: = ds.List<|U8[]|>.new(arena);
+  $a: = sys.args();
+  argv.push(a.get(1));
+  _rc: = subproc.spawn_wait(argv.slice(), "") catch 1;
+  return 0;
+}
+"""

@@ -1,0 +1,181 @@
+//< Converts between a table and CSV text
+//<
+//< Fields are separated by `,` and lines by a newline. A text holding a `,`, a `"` or a newline is
+//< quoted in `"`, and a `"` inside is doubled as `""` (the rule of RFC 4180).
+//< Caution: **The reader and the writer must share this rule**, or it cannot read what it wrote.
+//< The shown text is written out (not the formula; saving as a document keeps that).
+//< A loaded text goes into the cell as it is.
+import "kspage/lay/caret"
+import "kspage/lay/page" { Page }
+import "kspage/model/doc" + { Block, Tile }
+import "kspage/model/style" { Arrange, Sheet, Style }
+import "kspage/write/block"
+import "kspage/write/edit" + { Editor }
+import "kspage/write/shape"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+priv const quote: U8 = '"'
+
+priv fn tricky(text: U8[]): Bool //< whether the text has to be quoted
+  for $i: Sz = 0; i < text.len; i += 1
+    c: = text[i]
+    if c == ',' || c == quote || c == '\n' || c == '\r'
+      return true
+  return false
+
+priv fn field_into(out: Str_builder$@, text: U8[]) //< writes one cell to `out`
+  if !tricky(text)
+    out.s(text)
+    return
+  out.c(quote)
+  for $i: Sz = 0; i < text.len; i += 1
+    if text[i] == quote
+      out.c(quote)
+    out.c(text[i])
+  out.c(quote)
+
+fn write_table(t: Block$@, out: Str_builder$@, arena: Arena$@) //< writes one table as CSV text
+  //<
+  //< A cell's position is counted with the merges included (`Block.tiles_of`, the one count); a
+  //< covered cell is an empty field. A newline follows the last line too.
+  if t == null
+    return
+  tiles: = t.tiles_of(arena)
+  cols: = t.grid_columns(arena)
+  for $r: Sz = 0; r < t.children.len; r += 1
+    for $c: Sz = 0; c < cols; c += 1
+      if c > 0
+        out.c(',')
+      field_into(out, cell_text(tiles, r, c))
+    out.c('\n')
+
+priv fn cell_text(tiles: List<|Tile|>$@, row: Sz, column: Sz): U8[] //<
+  //< The shown text of the cell at row `row`, column `column`
+  //<
+  //< A covered cell is empty.
+  for $i: Sz = 0; i < tiles.len; i += 1
+    one: = tiles.get(i)
+    if one.row == row && one.column == column && one.block != null &&
+      one.block.inlines.len > 0
+      return one.block.inlines.get(0).showing()
+  return ""
+
+priv struct Reader //< the position reached while reading
+  //<
+  //< It is not the text cursor (that one is in `lay/caret.kspls`).
+  //< Note: The formula reader has the same shape (`Reader` in `expr/addr.kspls`).
+  src: U8[]
+  pos: Sz
+
+priv fn plain_field(c: Reader$@, out: Str_builder$@) //< reads an unquoted field
+  //<
+  //< Caution: **Stop before the separator and the newline** (those belong to the next field).
+  for c.pos < c.src.len
+    ch: = c.src[c.pos]
+    if ch == ',' || ch == '\n' || ch == '\r'
+      return
+    out.c(ch)
+    c.pos += 1
+
+priv fn quoted_field(c: Reader$@, out: Str_builder$@) //<
+  //< Reads a field quoted in `"`
+  //<
+  //< A `""` inside is one `"`. Unclosed, what there is so far is the field (a broken text that
+  //< still loads is easier to fix).
+  c.pos += 1
+  for c.pos < c.src.len
+    ch: = c.src[c.pos]
+    if ch != quote
+      out.c(ch)
+      c.pos += 1
+      continue
+    if c.pos + 1 < c.src.len && c.src[c.pos + 1] == quote
+      out.c(quote)
+      c.pos += 2
+      continue
+    c.pos += 1
+    return
+
+priv fn read_row(c: Reader$@, out: List<|U8[]|>$@, arena: Arena$@): Bool //<
+  //< Reads one line and appends the fields' texts to `out`
+  //<
+  //< Returns true once read. An empty line is one empty field. A `\r\n` is one line break.
+  if c.pos >= c.src.len
+    return false
+  out.len = 0
+  $more: = true
+  for more
+    $sb: = Str_builder.new()
+    defer sb.free()
+    if c.pos < c.src.len && c.src[c.pos] == quote
+      quoted_field(c, sb@)
+    else
+      plain_field(c, sb@)
+    out.push(arena.dup_str(sb.slice()))
+    more = c.pos < c.src.len && c.src[c.pos] == ','
+    if more
+      c.pos += 1
+  if c.pos < c.src.len && c.src[c.pos] == '\r'
+    c.pos += 1
+  if c.pos < c.src.len && c.src[c.pos] == '\n'
+    c.pos += 1
+  return true
+
+fn read_table(src: U8[], name: U8[], arena: Arena$@): Option<|Block$@|> //<
+  //< Builds a table block from CSV text
+  //<
+  //< If no line reads, no table is made. **The rows are padded to the longest** (otherwise the
+  //< column count is undefined). The rows and cells get no style name (the screen offers no way to
+  //< choose one).
+  rows: = List<|List<|U8[]|>$@|>.create(arena)
+  $wide: Sz = 0
+  $c: = Reader::{ .src = src, .pos = 0 }
+  one: = List<|U8[]|>.create(arena)
+  for read_row(c@, one, arena)
+    kept: = List<|U8[]|>.create(arena)
+    for $i: Sz = 0; i < one.len; i += 1
+      kept.push(one.get(i))
+    if kept.len > wide
+      wide = kept.len
+    rows.push(kept)
+  if rows.len <= 0 || wide <= 0
+    return Option<|Block$@|>.none
+  made: = doc.new_block(name, arena)
+  for $r: Sz = 0; r < rows.len; r += 1
+    row: = made.add_child("")
+    got: = rows.get(r)
+    for $i: Sz = 0; i < wide; i += 1
+      text: = got.get(i) if i < got.len else ""
+      row.add_child("").add_text(text)
+  return Option<|Block$@|>.some(made)
+
+impl Editor
+  fn insert_csv(r: Self$@, page: Page$@, sheet: Sheet$@, name: U8[], src: U8[]): Bool //<
+    //< Inserts one table from CSV text after the paragraph the cursor is in
+    //<
+    //< Returns true once inserted. The style decides the layout (as `insert_table`). **Nothing is
+    //< inserted inside a table cell** (that row alone would gain a cell).
+    if r.shut()
+      return false
+    room: = r.room_after_caret(page)
+    if !room.found || src.len <= 0
+      return false
+    r.break_group()
+    st: = r.step()
+    $s: Style$@ = null
+    switch r.styled(st, sheet, name, Arrange.grid) case .some(got)
+      s = got
+    case .none
+      return false
+    $made: Block$@ = null
+    switch read_table(src, s.name, r.arena) case .some(got)
+      made = got
+    case .none
+      return false
+    edit.do_block(r, st, room.block, room.index + 1, true, made)
+    head: = made.children.get(0).children.get(0)
+    r.caret = caret.at(head.inlines.get(0), 0)
+    r.break_group()
+    return true

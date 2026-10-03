@@ -1,0 +1,721 @@
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/sema/body/coerce" as sema_body_coerce
+import "ksplc/sema/flow/release" as sema_flow_release
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/arc" as sema_type_arc
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "std/chars" // testing and slicing single characters
+import "std/ds" { List, Map }
+import "std/str"
+
+fn lint_constant_condition(c: Sema_ctx$@, cond_node: Ast_node$@, is_loop: Bool) //<
+  //< [W0205] Detects an if or for whose condition is a boolean literal
+  if !base_core.config.run_lint_checks || cond_node == null || cond_node.kind_id != .k_bool
+    return
+  if is_loop
+    if cond_node.text.equals("true")
+      c.warn(cond_node,
+        "[W0205] Loop with 'true' condition. Use an unconditional 'for { ... }' instead.")
+    else
+      c.warn(cond_node, "[W0205] Loop with 'false' condition. This loop will never execute.")
+  else
+    c.warn(cond_node,
+      "[W0205] Condition is a boolean literal. This block will either always or never execute.")
+fn find_last_leaf(node: Ast_node$@): Ast_node$@ //<
+  //< The last leaf under node, whose text is real source
+  //<
+  //< A built node's text, such as a k_expr_postfix's "postfix", is only the kind's name and
+  //< cannot measure a line span.
+  if node.children.len == 0
+    return node
+  last_child: = node.get_child(node.children.len - 1)
+  return find_last_leaf(last_child)
+
+fn spans_multiple_lines(c: Sema_ctx$@, node: Ast_node$@): Bool
+  // Caution: **Do not measure a node with no children.** The `()` of `f()` holds the kind's name
+  // as placeholder `text`, so its length covers **bytes at an unrelated position**, and a newline
+  // there reads as "it wraps". A single token has nothing to wrap.
+  if node.children.len == 0
+    return false
+  last_leaf: = find_last_leaf(node)
+  end_offset: = last_leaf.loc.offset + last_leaf.text.len
+  if end_offset <= node.loc.offset || end_offset > c.source.len
+    return false
+  return c.source.sub(node.loc.offset, end_offset - node.loc.offset).find_char('\n') != -1
+
+fn lint_multiline_call_subject(c: Sema_ctx$@, node: Ast_node$@, label: U8$[]) //<
+  //< [H0804] Detects a switch or if whose subject is a call with an argument list spanning lines
+  //<
+  //< For example `switch x.foo(a, b,\n c) case ...`.
+  //< Only a wrap inside the argument list counts: a chained-call wrap (`x.method()\n .chain()`)
+  //< is legitimate and not reported.
+  if !base_core.config.run_lint_checks || node == null || node.kind_id != .k_expr_postfix
+    return
+  op: = node.get_postfix_op()
+  if op == null || !op.text.equals("(")
+    return
+  args_node: = node.safe_get_child(2)
+  if args_node == null || !spans_multiple_lines(c, args_node)
+    return
+  c.clear_scratch()
+    .s("[H0804] This '\{label\}' directly wraps a call whose argument list spans multiple lines. \
+      Consider extracting the call into a named temporary variable first, then \{label\} on that \
+      variable, so the wrapping doesn't get tangled with the call's own argument list.")
+  c.hint(node, c.scratch.slice())
+
+fn subtree_has_multiline_call(c: Sema_ctx$@, node: Ast_node$@): Bool //<
+  //< Whether node's subtree holds a call **whose own argument list wraps**
+  //<
+  //< Caution: **Do not count an inner call that fits on one line.** Only a wrap inside a wrap
+  //< tangles.
+  if node == null
+    return false
+  if node.kind_id == .k_expr_postfix
+    op: = node.get_postfix_op()
+    if op != null && op.text.equals("(")
+      inner_args: = node.safe_get_child(2)
+      if inner_args != null && spans_multiple_lines(c, inner_args)
+        return true
+  for child in node.children
+    if subtree_has_multiline_call(c, child)
+      return true
+  return false
+
+fn lint_multiline_nested_call(c: Sema_ctx$@, node: Ast_node$@): Bool //<
+  //< [H0802] Detects a wrapping argument list with another wrapping call nested inside it
+  //<
+  //< For example `a.push(b.create(x,\n y, z))`.
+  if !base_core.config.run_lint_checks || node == null
+    return false
+  k: = node.kind_id
+  if k == .k_stmt_block || k == .k_stmt_labeled_block || k == .k_stmt_if || k == .k_stmt_loop ||
+    k == .k_stmt_match || k == .k_stmt_defer || k == .k_loop_init || k == .k_loop_step
+    return false
+  if k == .k_expr_postfix
+    op: = node.get_postfix_op()
+    if op != null && op.text.equals("(")
+      args: = node.safe_get_child(2)
+      if args != null && spans_multiple_lines(c, args) && subtree_has_multiline_call(c, args)
+        c.hint(node,
+          "[H0802] This call passes another call as an argument and its argument list wraps across \
+            lines. Extract the inner call into a named temporary variable first, then pass that \
+            variable, so the statement splits cleanly instead of the wrapping getting tangled.")
+        return true
+  for child in node.children
+    if lint_multiline_nested_call(c, child)
+      return true
+  return false
+
+priv struct Lock_borrow //<
+  //< [W0106] One tracked borrow from Mutex.lock(), to catch its use outside the lock
+  borrow: U8[] //< the local name bound to g.lock()'s return value
+  guard: U8[] //< the name of the guard the lock came from (g)
+  released: Bool //< whether g.unlock() was seen since this borrow was taken
+  reported: Bool //< whether it was already reported, to avoid a double report
+
+priv struct Lock_site //<
+  //< [W0107] One tracked lock, to catch "took a lock and did not release it"
+  guard: U8[] //< the name of what the lock was taken on (the g of g.lock())
+  node: Ast_node$@ //< the diagnostic's position (the statement holding lock())
+  settled: Bool //< an unlock or defer was seen, or tracking stopped at a branch
+
+priv fn settle_sites_for(sites: List<|Lock_site$@|>$@, guard: U8[]) //<
+  //< Marks every tracked site with that guard as resolved
+  for s in sites
+    if s.guard.equals(guard)
+      s.settled = true
+
+priv fn settle_all_sites(sites: List<|Lock_site$@|>$@) //<
+  //< Stops tracking every site at a branch, a loop or similar (erring towards no false report)
+  for s in sites
+    s.settled = true
+
+priv fn has_open_site(sites: List<|Lock_site$@|>$@, guard: U8[]): Bool //<
+  //< Whether an unresolved site for guard exists (so one lock is not reported twice)
+  for s in sites
+    if !s.settled && s.guard.equals(guard)
+      return true
+  return false
+
+priv fn lock_call_guard(c: Sema_ctx$@, node: Ast_node$@, method_name: U8[], require_ptr: Bool):
+  U8[] //<
+    //< The name of recv, where node is a method_name() call on a plain identifier receiver recv
+    //<
+    //< require_ptr also requires a pointer return (a borrow T@ as `Mutex<|T|>.lock()` returns,
+    //< not a plain lock returning Void). It checks that shape, not a type name, so a user-defined
+    //< guard type counts too.
+  if node == null || node.kind_id != .k_expr_postfix
+    return ""
+  op: = node.get_postfix_op()
+  if op == null || !op.text.equals("(")
+    return ""
+  if require_ptr && !c.env.is_pointer(node.type_id)
+    return ""
+  // child[0] is `g.lock`, a method_access or an unmorphed expr_postfix; both getters accept either.
+  left: = node.get_postfix_receiver()
+  if left == null
+    return ""
+  member: = left.get_postfix_member()
+  if member == null || !member.text.equals(method_name)
+    return ""
+  recv: = left.get_postfix_receiver()
+  if recv == null || !recv.is_path_or_ident()
+    return ""
+  return recv.get_path_or_ident_name()
+
+priv fn stmt_unlock_guard(c: Sema_ctx$@, stmt: Ast_node$@): U8[] //<
+  //< The guard's name where stmt is a g.unlock() call, or empty
+  //<
+  //< It accepts both a stmt_expr wrapper and a folded bare expression.
+  e: = stmt.safe_get_child(0) if stmt.kind_id == .k_stmt_expr else stmt
+  return lock_call_guard(c, e, "unlock", false)
+
+priv fn set_released_for(borrows: List<|Lock_borrow$@|>$@, guard: U8[], released: Bool) //<
+  //< Sets released on every borrow in borrows whose guard name is guard
+  //<
+  //< released is true on an unlock and false on a re-lock.
+  for e in borrows
+    if e.guard.equals(guard)
+      e.released = released
+
+priv fn track_borrow_alias(stmt: Ast_node$@, borrows: List<|Lock_borrow$@|>$@) //<
+  //< On `q: = p;` with p a tracked borrow, tracks q too, with p's guard and released state
+  //<
+  //< A later unlock or re-lock names the same guard, so it reaches both.
+  //<
+  //< Caution: **Alias only when `rhs.text` equals the last segment.** A qualified path like `m.p`
+  //< has the text "m.p" but the last segment "p".
+  rhs: = stmt.get_var_decl_expr()
+  if rhs == null || !rhs.is_path_or_ident()
+    return
+  rhs_name: = rhs.get_path_or_ident_name()
+  if !rhs.text.equals(rhs_name)
+    return
+  for e in borrows
+    if !e.borrow.equals(rhs_name)
+      continue
+    id: = stmt.get_var_decl_id()
+    if id != null
+      lb: = base_core.arena
+        .create(Lock_borrow::{ .borrow = id.text, .guard = e.guard, .released = e.released,
+        .reported = false })
+      borrows.push(lb)
+    return
+
+impl Ast_node
+  fn contains_unlock_of(r: Self$@, c: Sema_ctx$@, guard: U8[]): Bool //<
+    //< Whether the subtree holds a `guard.unlock()` call
+    //<
+    //< For [W0107], a defer body holding one resolves the site.
+    if r == null || guard.len == 0
+      return false
+    if lock_call_guard(c, r, "unlock", false).equals(guard)
+      return true
+    for child in r.children
+      if child.contains_unlock_of(c, guard)
+        return true
+    return false
+
+  fn refs_ident(r: Self$@, name: U8[]): Bool //<
+    //< Whether the subtree references name as an identifier or path (a borrow's "use")
+    if r == null
+      return false
+    if r.is_path_or_ident() && r.get_path_or_ident_name().equals(name)
+      return true
+    for child in r.children
+      if child.refs_ident(name)
+        return true
+    return false
+
+fn lint_lock_escape($c: Sema_ctx$@, block: Ast_node$@) //<
+  //< Runs the two extra lock checks in one straight-line walk of the function body
+  //<
+  //< [W0106] A borrow from Mutex.lock() used while the lock is not held (a data race). Both checks
+  //< stop tracking at a branch, loop or nested block; lifetimes are not followed, so they catch
+  //< only typical mistakes.
+  if !base_core.config.run_lint_checks
+    return
+  $borrows: = List<|Lock_borrow$@|>.new()
+  defer borrows.free()
+  $sites: = List<|Lock_site$@|>.new()
+  defer sites.free()
+  for stmt in block.children
+    k: = stmt.kind_id
+    if k == .k_stmt_defer
+      for s in sites
+        if !s.settled && stmt.contains_unlock_of(c, s.guard)
+          s.settled = true
+      borrows.len = 0
+      continue
+    if k == .k_stmt_if || k == .k_stmt_loop || k == .k_stmt_match || k == .k_stmt_block ||
+      k == .k_stmt_labeled_block
+      borrows.len = 0
+      settle_all_sites(sites@)
+      continue
+    if k == .k_decl_var
+      g: = lock_call_guard(c, stmt.get_var_decl_expr(), "lock", true)
+      if g.len > 0
+        set_released_for(borrows@, g, false)
+        if !has_open_site(sites@, g)
+          site: = base_core.arena
+            .create(Lock_site::{ .guard = g, .node = stmt, .settled = false })
+          sites.push(site)
+        id: = stmt.get_var_decl_id()
+        if id != null
+          lb: = base_core.arena
+            .create(Lock_borrow::{ .borrow = id.text, .guard = g, .released = false,
+            .reported = false })
+          borrows.push(lb)
+        continue
+      track_borrow_alias(stmt, borrows@)
+    if k == .k_stmt_return
+      lint_lock_return_escape(c, stmt, borrows@)
+      // A return ends the straight-line walk, so [W0107]'s tracking stops too.
+      settle_all_sites(sites@)
+      continue
+    ug: = stmt_unlock_guard(c, stmt)
+    if ug.len > 0
+      set_released_for(borrows@, ug, true)
+      settle_sites_for(sites@, ug)
+      continue
+    // An unbound `g.lock();` counts for [W0107] too.
+    lock_target: = stmt.safe_get_child(0) if stmt.kind_id == .k_stmt_expr else stmt
+    bare_lock: = lock_call_guard(c, lock_target, "lock", true)
+    if bare_lock.len > 0 && !has_open_site(sites@, bare_lock)
+      site: = base_core.arena
+        .create(Lock_site::{ .guard = bare_lock, .node = stmt, .settled = false })
+      sites.push(site)
+    for e in borrows
+      if e.released && !e.reported && stmt.refs_ident(e.borrow)
+        c.clear_scratch()
+          .s("[W0106] Local '\{e.borrow\}' borrows into '\{e.guard\}' via .lock(), but is used here \
+            after '\{e.guard\}.unlock()'. The lock is no longer held, so another thread may access \
+            the data concurrently. Use it before unlock(), or re-lock first.")
+        c.warn(stmt, c.scratch.slice())
+        e.reported = true
+  // Reports the locks still held when leaving the block.
+  for s in sites
+    if !s.settled
+      c.clear_scratch()
+        .s("[W0107] '\{s.guard\}' is locked here but never unlocked before leaving this scope, so \
+          every thread that later takes this lock will block forever. Call '\{s.guard\}.unlock()' \
+          when done, or register 'defer \{s.guard\}.unlock()' right after locking so it is released \
+          on every exit path.")
+      c.warn(s.node, c.scratch.slice())
+
+fn lint_defer_gap(c: Sema_ctx$@, node: Ast_node$@) //<
+  //< [W0110] An exit between an `Owned` value's binding and the `defer` that frees it
+  //<
+  //< A `?`, `return`, `throw`, `break` or `continue` there leaves before the `defer` is registered,
+  //< so the value leaks on that path. Every block of the body is walked, a closure's included; the
+  //< check reads the code as written, so a generic's instantiations are skipped.
+  if !base_core.config.run_lint_checks || node == null || c.is_instantiating()
+    return
+  if node.kind_id == .k_stmt_block
+    lint_block_defer_gap(c, node)
+  for child in node.children
+    lint_defer_gap(c, child)
+
+priv fn lint_block_defer_gap(c: Sema_ctx$@, block: Ast_node$@) //<
+  //< Checks each binding of an `Owned` value in one block against the exits before its `defer`
+  for i in Range.asc(block.children.len)
+    stmt: = block.get_child(i)
+    id: = stmt.get_var_decl_id() if stmt.kind_id == .k_decl_var else null
+    if id == null || !c.env.is_owned(stmt.type_id)
+      continue
+    // Caution: **Check only where a `defer` later in the same block frees it.** A value freed by
+    // hand, passed on or kept is a different case, and reporting it as a leak would be wrong.
+    $at: Sz = 0
+    for j in Range.new(i + 1, block.children.len, 1)
+      later: = block.get_child(j)
+      if later.kind_id == .k_stmt_defer && later.frees_local(c, id.text)
+        at = j
+        break
+    for j in Range.new(i + 1, at, 1)
+      between: = block.get_child(j)
+      // A statement that frees it on its own path (`if bad { x.free(); return }`) leaks nothing.
+      if between.frees_local(c, id.text)
+        continue
+      if way: = between.way_out(id.text, false)
+        report_defer_gap(c, way, id.text, c.line_of(stmt.loc),
+          c.line_of(block.get_child(at).loc))
+        break
+
+priv fn report_defer_gap(c: Sema_ctx$@, way: Ast_node$@, name: U8[], bound: Sz, freed: Sz) //<
+  //< Reports [W0110] at the exit, naming the line to move the `defer` to
+  $what: U8[] = "?"
+  k: = way.kind_id
+  if k == .k_stmt_return
+    what = "return"
+  else if k == .k_stmt_throw
+    what = "throw"
+  else if k == .k_stmt_break
+    what = "break"
+  else if k == .k_stmt_continue
+    what = "continue"
+  c.clear_scratch()
+    .s("[W0110] '\{name\}' leaks if this '\{what\}' leaves: its 'defer \{name\}.free()' is \
+      registered only on line \{freed\}. Put the defer on the line after '\{name\}' is bound (line \
+      \{bound\}), so it runs on every way out.")
+  c.warn(way, c.scratch.slice())
+
+impl Ast_node
+  priv fn frees_local(r: Self$@, c: Sema_ctx$@, name: U8[]): Bool //<
+    //< Whether the subtree holds `name.free()` on an `Owned` value
+    //<
+    //< It looks in a `defer`'s body, or at a hand-written free along the way.
+    if r == null
+      return false
+    // The call `x.free()` has two levels; the member access under the "(" is the one checked.
+    if r.kind_id == .k_method_access
+      if receiver: = r.get_free_call_receiver(c)
+        if receiver.is_path_or_ident() && receiver.get_path_or_ident_name().equals(name)
+          return true
+    for child in r.children
+      if child.frees_local(c, name)
+        return true
+    return false
+
+  priv fn way_out(r: Self$@, name: U8[], in_loop: Bool): Option<|Ast_node$@|> //<
+    //< The first node in the subtree that leaves the block holding it
+    //<
+    //< That is a `?`, a `return` that does not pass `name` on, a `throw`, or a `break` or
+    //< `continue` that targets no loop inside the subtree.
+    //< A closure's body is its own function, so an exit there leaves only the closure.
+    if r == null || r.kind_id == .k_expr_fn_lit
+      return Option<|Ast_node$@|>.none
+    k: = r.kind_id
+    if k == .k_expr_postfix
+      op: = r.get_postfix_op()
+      if op != null && op.text.equals("?")
+        return Option<|Ast_node$@|>.some(r)
+    if k == .k_stmt_return
+      e: = r.get_return_expr()
+      if e == null || !e.refs_ident(name)
+        return Option<|Ast_node$@|>.some(r)
+      return Option<|Ast_node$@|>.none
+    if k == .k_stmt_throw || ((k == .k_stmt_break || k == .k_stmt_continue) && !in_loop)
+      return Option<|Ast_node$@|>.some(r)
+    nested: = in_loop || k == .k_stmt_loop
+    for child in r.children
+      if way: = child.way_out(name, nested)
+        return Option<|Ast_node$@|>.some(way)
+    return Option<|Ast_node$@|>.none
+
+priv fn lint_lock_return_escape($c: Sema_ctx$@, stmt: Ast_node$@,
+  borrows: List<|Lock_borrow$@|>$@)
+  e: = stmt.get_return_expr()
+  if e == null
+    return
+  $flagged: = lock_call_guard(c, e, "lock", true).len > 0
+  if !flagged && e.is_path_or_ident()
+    nm: = e.get_path_or_ident_name()
+    for entry in borrows
+      if entry.borrow.equals(nm)
+        flagged = true
+        break
+  if flagged
+    c.clear_scratch()
+      .s("[W0106] Returning a pointer obtained from Mutex.lock() lets the caller use the data with \
+        the lock released (a data race). Copy the needed value out while the lock is held and \
+        return the copy instead.")
+    c.warn(stmt, c.scratch.slice())
+fn lint_empty_block($c: Sema_ctx$@, node: Ast_node$@, kind_name: U8[], action: U8[]) //<
+  //< [I0307] Detects a stmt_block with nothing inside (action is the advice for the context)
+  //<
+  //< Skipped while instantiating a generic: a branch on a type argument (`if sizeof(T) == 4`) folds
+  //< and one side looks empty though the source is not (the same reason as check_unnecessary_cast
+  //< in coerce.kspls).
+  if c.is_instantiating()
+    return
+  if base_core.config.run_lint_checks
+    c.clear_scratch().s("[I0307] Empty '\{kind_name\}' block has no effect. \{action\}")
+    c.information(node, c.scratch.slice())
+
+fn lint_if_stmt(c: Sema_ctx$@, r: Ast_node$@, then_block: Ast_node$@, else_block: Ast_node$@)
+  if !base_core.config.run_lint_checks || then_block == null
+    return
+  if then_block.children.len == 0
+    if else_block == null || else_block.kind_id == .k_empty
+      lint_empty_block(c, r, "if", "Consider removing it.")
+    else if else_block.kind_id != .k_empty && else_block.children.len > 0
+      lint_empty_block(c, r, "if",
+        "Consider inverting the condition with '!' and removing the 'else' block.")
+  else if else_block != null && else_block.kind_id != .k_empty
+    if then_block.children.len == 1 && else_block.children.len == 1
+      t_stmt: = then_block.get_child(0)
+      e_stmt: = else_block.get_child(0)
+      if t_stmt.kind_id == .k_stmt_return && e_stmt.kind_id == .k_stmt_return
+        t_ret: = t_stmt.get_return_expr()
+        e_ret: = e_stmt.get_return_expr()
+        if t_ret != null && e_ret != null && t_ret.kind_id == .k_bool && e_ret.kind_id == .k_bool
+          c.information(r,
+            "[I0308] Redundant if-return for boolean. Consider returning the condition directly.")
+    last_stmt: = then_block.last_child()
+    k: = last_stmt.kind_id
+    if k == .k_stmt_return || k == .k_stmt_throw || k == .k_stmt_break || k == .k_stmt_continue
+      c.hint(r,
+        "[H0801] The 'if' block unconditionally exits. Consider removing 'else' and unindenting its \
+          contents (Guard clause pattern).")
+    if else_block.children.len == 0
+      lint_empty_block(c, else_block, "else", "Consider removing it.")
+
+fn lint_loop_stmt(c: Sema_ctx$@, block_node: Ast_node$@, label_name: U8[], has_cond: Bool)
+  if !base_core.config.run_lint_checks || block_node == null
+    return
+  // A bare `for { }` is the deliberate "wait here forever" idiom (a halt after a semihosting exit);
+  // only `for cond { }`, checking a condition and doing nothing, suggests a forgotten body.
+  if block_node.children.len == 0 && has_cond
+    lint_empty_block(c, block_node, "for",
+      "This may cause an infinite hang. Consider adding a body or a break condition.")
+  else
+    last_stmt: = block_node.last_child()
+    if last_stmt.kind_id == .k_stmt_continue
+      t_lbl: = last_stmt.get_jump_label()
+      if t_lbl == null || (label_name.len > 0 && t_lbl.text.equals(label_name))
+        c.information(last_stmt, "[I0306] Redundant 'continue' at the end of a loop block.")
+priv fn unwrap_cast(node: Ast_node$@): Ast_node$@ //<
+  //< Strips implicit or explicit casts (`expr::Type`) and returns the node beneath
+  //<
+  //< A literal combined with an I64 variable is wrapped in an implicit cast, hiding the pattern.
+  $result: = node
+  for result != null && result.kind_id == .k_expr_postfix
+    op: = result.get_postfix_op()
+    if op == null || !op.text.equals("::")
+      break
+    result = result.get_postfix_receiver()
+  return result
+priv fn is_mul_by_ident_lit(node: Ast_node$@, name: U8[]): Bool //<
+  //< Whether a binary expression has the form `name * <integer literal>`
+  n: = unwrap_cast(node)
+  if n == null || n.kind_id != .k_expr
+    return false
+  l: = n.get_binary_left()
+  op: = n.get_binary_op()
+  r: = unwrap_cast(n.get_binary_right())
+  return l != null && op != null && r != null && op.text.equals("*") && l.is_path_or_ident() &&
+    l.text.equals(name) && r.kind_id == .k_integer
+priv fn contains_leftmost_mul(node: Ast_node$@, name: U8[]): Bool //<
+  //< Walks a left-associative `+` / `-` chain to its left end, looking for `name * <literal>`
+  //<
+  //< The literal is an integer, so `val * 10 + d - '0'` counts as well as `val * 10 + d`.
+  $n: = unwrap_cast(node)
+  for n != null && n.kind_id == .k_expr
+    if is_mul_by_ident_lit(n, name)
+      return true
+    op: = n.get_binary_op()
+    if op == null || !(op.text.equals("+") || op.text.equals("-"))
+      return false
+    n = unwrap_cast(n.get_binary_left())
+  return false
+priv fn accumulator_var_name(node: Ast_node$@): U8[] //<
+  //< The variable a digit-accumulating assignment accumulates into, or an empty string
+  //<
+  //< The assignment has the shape `x = x * <integer literal> + <expr>`.
+  if node == null || node.kind_id != .k_stmt_expr
+    return ""
+  left: = node.get_assign_left()
+  op_node: = node.get_assign_op()
+  right: = node.get_assign_right()
+  if left == null || op_node == null || right == null || !op_node.text.equals("=") ||
+    !left.is_path_or_ident() || left.text.len == 0
+    return ""
+  if contains_leftmost_mul(right, left.text)
+    return left.text
+  return ""
+priv fn compound_mul_var_name(node: Ast_node$@): U8[] //<
+  //< The variable a compound assignment `x *= <expr>` accumulates into, or an empty string
+
+  if node == null || node.kind_id != .k_stmt_expr
+    return ""
+  left: = node.get_assign_left()
+  op_node: = node.get_assign_op()
+  right: = node.get_assign_right()
+  if left == null || op_node == null || right == null || !op_node.text.equals("*=") ||
+    !left.is_path_or_ident() || left.text.len == 0
+    return ""
+  return left.text
+priv fn collect_idents(node: Ast_node$@, out: Map<|U8[], Bool|>$@) //<
+  //< Collects into out every identifier and path name under node
+  //<
+  //< It does refs_ident's work for all names in one walk.
+  if node == null
+    return
+  if node.is_path_or_ident()
+    nm: = node.get_path_or_ident_name()
+    if nm.len > 0
+      out.set(nm, true)
+  for child in node.children
+    collect_idents(child, out)
+priv fn collect_if_cond_idents(node: Ast_node$@, out: Map<|U8[], Bool|>$@) //<
+  //< Collects into out, in one walk, the names that the if conditions inside a loop body reference
+  //<
+  //< Caution: **Do not re-walk the body per accumulation candidate.** O(candidates × body size)
+  //< lets one huge body hang the compilation; one walk plus O(1) lookups keeps it O(body size).
+  if node == null
+    return
+  if node.kind_id == .k_stmt_if
+    collect_idents(node.get_if_cond(), out)
+  for child in node.children
+    collect_if_cond_idents(child, out)
+priv fn resolved_real_type(c: Sema_ctx$@, name: U8[]): I32 //<
+  //< Returns the real type id of name once its symbol is resolved (-1 if it cannot be resolved)
+  sym_opt: = c.symtab.resolve(name) catch null
+  if sym_opt == null
+    return -1
+  return c.env.get_real_type(sym_opt.type_id)
+priv fn is_signed_int_symbol(c: Sema_ctx$@, name: U8[]): Bool //<
+  //< Whether the accumulating variable is a signed integer type
+  //<
+  //< An unsigned one is often a deliberate wraparound, as in an FNV hash.
+  real_id: = resolved_real_type(c, name)
+  return real_id == (I32::sema_type_env.Builtin_type_id.i8_type) ||
+    real_id == (I32::sema_type_env.Builtin_type_id.i16_type) ||
+    real_id == (I32::sema_type_env.Builtin_type_id.i32_type) ||
+    real_id == (I32::sema_type_env.Builtin_type_id.i64_type)
+priv fn is_integer_symbol(c: Sema_ctx$@, name: U8[]): Bool //<
+  //< Whether the variable of a multiplying compound assignment (`*=`) is any integer type
+  //<
+  //< Signed and unsigned both count: an unsigned product such as a shape's size can lead straight
+  //< to an out-of-bounds write.
+  if is_signed_int_symbol(c, name)
+    return true
+  real_id: = resolved_real_type(c, name)
+  return real_id == (I32::sema_type_env.Builtin_type_id.u8_type) ||
+    real_id == (I32::sema_type_env.Builtin_type_id.u16_type) ||
+    real_id == (I32::sema_type_env.Builtin_type_id.u32_type) ||
+    real_id == (I32::sema_type_env.Builtin_type_id.u64_type) ||
+    real_id == (I32::sema_type_env.Builtin_type_id.size_type)
+fn contains_throw_guard(node: Ast_node$@): Bool //<
+  //< Whether an if's then block holds a throw or return (an early exit checked before a loop)
+  //<
+  //< Caution: Do not re-walk the siblings per loop statement. That becomes O(loops × statements).
+  if node == null
+    return false
+  if node.kind_id == .k_stmt_if
+    then_block: = node.get_if_then_block()
+    $has_guard: = false
+    if _found: = then_block.find_deep_child(.k_stmt_throw)
+      has_guard = true
+    if !has_guard
+      if _found: = then_block.find_deep_child(.k_stmt_return)
+        has_guard = true
+    if has_guard
+      return true
+  for child in node.children
+    if contains_throw_guard(child)
+      return true
+  return false
+priv fn find_accumulator_assigns($c: Sema_ctx$@, node: Ast_node$@,
+  guarded_names: Map<|U8[], Bool|>$@, has_preceding_bound_check: Bool) //<
+    //< [W0103] Detects a digit-accumulating loop with no upper-bound check.
+    //<
+    //< A nested for has its own lint_accumulator_overflow call, so it is not descended into.
+    //< guarded_names holds the names the loop's if conditions reference (see
+    //< collect_if_cond_idents).
+  if node == null || node.kind_id == .k_stmt_loop
+    return
+  digit_name: = accumulator_var_name(node)
+  mul_name: = compound_mul_var_name(node)
+  is_candidate: =
+    (digit_name.len > 0 && is_signed_int_symbol(c, digit_name)) ||
+    (mul_name.len > 0 && is_integer_symbol(c, mul_name))
+  name: = digit_name if digit_name.len > 0 else mul_name
+  if is_candidate
+    has_guard: = guarded_names.get(name) catch false
+    if !has_guard && !has_preceding_bound_check
+      c.clear_scratch()
+        .s("[W0103] Accumulating into '\{name\}' with no upper-bound check in this loop; this may \
+          overflow on untrusted input.")
+      c.warn(node, c.scratch.slice())
+  for child in node.children
+    find_accumulator_assigns(c, child, guarded_names, has_preceding_bound_check)
+fn lint_accumulator_overflow(c: Sema_ctx$@, loop_node: Ast_node$@, has_preceding_bound_check: Bool) //<
+  //< [W0103] Reports a digit-accumulating loop with no upper-bound check
+  //<
+  //< has_preceding_bound_check says whether such a check came before the loop (for example one
+  //< that counts the digits and throws). The caller computes it (infer_stmt_block in stmt.kspls).
+  if !base_core.config.run_lint_checks
+    return
+  loop_block: = loop_node.get_loop_block()
+  if loop_block == null
+    return
+  $guarded_names: = Map<|U8[], Bool|>.new()
+  defer guarded_names.free()
+  collect_if_cond_idents(loop_block, guarded_names@)
+  find_accumulator_assigns(c, loop_block, guarded_names@, has_preceding_bound_check)
+
+fn lint_repeated_type(c: Sema_ctx$@, type_node: Ast_node$@, expr_node: Ast_node$@, declared_id: I32,
+  expr_id: I32) //<
+    //< [H0312] Reports a local's type written again at the start of its initializer
+    //<
+    //< Or `Bool` written on `true` / `false`. **Only where deleting the annotation keeps the
+    //< type**: the initializer already has the declared type with nothing wrapped round it (a
+    //< conversion, an upcast or a Result wrap, none of which names a type here). **Only where the
+    //< text still shows the type**: `count: Sz = items.len` names none, so there the annotation is
+    //< the only place a reader without hover sees it ("A type is redundant only where it is written
+    //< twice" in `docs/DESIGN.md`).
+  if !base_core.config.run_lint_checks || type_node.kind_id != .k_type_expr ||
+    sema_type_env.is_unknown(declared_id) || expr_id != declared_id
+    return
+  if expr_node.kind_id == .k_bool
+    if type_node.text.equals("Bool")
+      c.hint(type_node,
+        "[H0312] Unnecessary type annotation. 'true' and 'false' are always 'Bool'.")
+    return
+  named: = named_type_text(c, expr_node, declared_id)
+  if named.len > 0 && named.equals(type_node.text)
+    c.hint(type_node,
+      "[H0312] Unnecessary type annotation. The initializer already names the type.")
+
+priv fn named_type_text(c: Sema_ctx$@, expr: Ast_node$@, declared_id: I32): U8[] //<
+  //< The type an initializer names at its start, spelled as a `type_expr` spells it, or empty
+  switch expr.kind_id case .k_struct_literal
+    if expr.children.len > 0 && expr.get_child(0).kind_id == .k_type_expr
+      return expr.get_child(0).text
+  case .k_enum_init
+    return expr.get_child(0).text
+  case .k_enum_init_call
+    return named_type_text(c, expr.get_child(0), declared_id)
+  case .k_expr_postfix
+    if expr.ival != 1 && expr.text.equals("::") && expr.children.len == 3
+      return cast_target_text(c, expr, declared_id)
+    // Caution: **Not while instantiating.** A call's type is decided by its callee, and an impl
+    // for one instance can give that instance's callee another return type.
+    if expr.children.len > 1 && expr.get_child(1).is_literal("(") && !c.is_instantiating()
+      return callee_owner_text(expr.get_child(0))
+  default {}
+  return ""
+
+priv fn cast_target_text(c: Sema_ctx$@, cast: Ast_node$@, declared_id: I32): U8[] //<
+  //< An explicit cast's type, or empty where [I0301] asks to drop the cast instead
+  //<
+  //< Caution: **Back off where the cast only widens.** There [I0301] says to delete the cast and
+  //< keep the annotation that drives the conversion; deleting both leaves the value's own type.
+  //< While instantiating, [I0301] says nothing, so the two cannot conflict.
+  value: = cast.get_child(0)
+  real_src: = c.env.get_real_type(value.type_id)
+  real_dst: = c.env.get_real_type(declared_id)
+  if !c.is_instantiating() && value.type_id != 0 && real_src != real_dst
+    kind: = sema_body_coerce.implicit_cast_kind(c, real_src, real_dst, value.type_id, declared_id)
+    switch kind case .none {} default
+      return ""
+  return cast.get_child(2).text
+
+priv fn callee_owner_text(callee: Ast_node$@): U8[] //<
+  //< The type a call is made through, or empty where the callee is not one member past a type
+  //<
+  //< For example `Point` of `Point.origin`, or `List<|I32|>` of `List<|I32|>.new`.
+  if callee.kind_id == .k_generic_path && callee.children.len == 3
+    // [the name, the type arguments, the member]: a `type_expr` joins the first two the same way.
+    return base_core.arena.text().s(callee.get_child(0).text).s(callee.get_child(1).text).take()
+  if callee.kind_id == .k_expr_path
+    dot: = callee.text.rfind_char('.')
+    if dot > 0
+      return callee.text.sub(0, dot)
+  return ""

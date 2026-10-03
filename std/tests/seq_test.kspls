@@ -1,0 +1,148 @@
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/seq"
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// std/seq: tests of the collection combinators.
+// ==========================================
+struct Seq_person
+  name: U8[]
+  age: I32
+
+fn test_seq_combinators(arena: Arena$@)
+  verdict.start("[Seq] where/order_by/distinct/sum and the rest test...")
+
+  // std/seq takes them as `Callable1` / `Callable2`.
+  // Caution: Write the `;` even when nothing is captured; without it an anonymous function is a
+  // function pointer and cannot be passed.
+  is_adult: = fn(p: Seq_person; ): Bool
+    return p.age >= 18
+  cmp_age: = fn(a: Seq_person, b: Seq_person; ): I32
+    return a.age - b.age
+
+  $people: = List<|Seq_person|>.new(arena)
+  people.push(Seq_person::{ .name = "Alice", .age = 30 })
+  people.push(Seq_person::{ .name = "Bob", .age = 15 })
+  people.push(Seq_person::{ .name = "Carol", .age = 25 })
+  people.push(Seq_person::{ .name = "Dave", .age = 15 })
+  people.push(Seq_person::{ .name = "Eve", .age = 42 })
+
+  // `where` and `select` are lazy. There are three terminals: `to_list`, `count` and `for x in`.
+  assert(people.where(is_adult).count() == 3, "where: expected 3 adults")
+  adults: = people.where(is_adult).to_list(arena)
+  assert(adults.len == 3, "where: to_list should keep the same 3")
+
+  age_of: = fn(p: Seq_person; ): I32
+    return p.age
+  ages: = people.select(age_of).to_list(arena)
+  assert(ages.len == 5, "select: expected 5 entries")
+  assert(ages.get(0) == 30, "select: first age wrong")
+
+  // A chain builds no intermediate list.
+  $adult_ages: I32 = 0
+  for a in people.where(is_adult).select(age_of)
+    adult_ages += a
+  assert(adult_ages == 30 + 25 + 42, "where+select: sum of adult ages")
+
+  // **Iterating the same chain twice starts from the beginning both times**: the receiver is taken
+  // by value (unlike a Python generator, it does not run empty).
+  chain: = people.where(is_adult).select(age_of)
+  assert(chain.count() == 3, "restartable: first pass")
+  assert(chain.count() == 3, "restartable: second pass sees the same 3")
+
+  sorted: = people.order_by(cmp_age, arena)
+  assert(sorted.get(0).age == 15, "order_by: min should be 15")
+  assert(sorted.get(4).age == 42, "order_by: max should be 42")
+  assert(sorted.get(0).age <= sorted.get(1).age, "order_by: not sorted at 0/1")
+
+  uniq_ages: = ages.distinct(fn(a: I32, b: I32; ): Bool {
+    return a == b;
+  }, arena)
+  assert(uniq_ages.len == 4, "distinct: expected 4 unique ages (30,15,25,42)")
+
+  first: = people.first() catch panic("first() should not throw on non-empty list")
+  assert(first.name.equals("Alice"), "first() should be Alice")
+
+  first_adult: = people.first_where(is_adult) catch panic("first_where should find an adult")
+  assert(first_adult.name.equals("Alice"), "first_where: Alice should be the first adult")
+
+  youngest: = people.min_by(cmp_age) catch panic("min_by failed")
+  oldest: = people.max_by(cmp_age) catch panic("max_by failed")
+  assert(youngest.age == 15, "min_by wrong")
+  assert(oldest.age == 42, "max_by wrong")
+
+  assert(people.any(is_adult), "any: should have an adult")
+  assert(!people.all(is_adult), "all: not everyone is an adult")
+
+  $top2: = sorted.take(2, arena)
+  assert(top2.len == 2 && top2.get(0).age == 15 && top2.get(1).age == 15, "take wrong")
+  rest: = sorted.skip(2, arena)
+  assert(rest.len == 3, "skip wrong")
+  rev: = sorted.reversed(arena)
+  assert(rev.get(0).age == 42, "reversed wrong")
+
+  $empty: = List<|Seq_person|>.new(arena)
+  $empty_threw: = false
+  empty.first() catch e
+    switch e case .empty_sequence
+      empty_threw = true
+    case .no_match
+      panic("wrong error variant for first() on empty list")
+  assert(empty_threw, "first() on empty list should throw empty_sequence")
+
+  verdict.pass("The collection operations work as expected.")
+
+fn test_seq_two_element_types(arena: Arena$@) //<
+  //< That a chain of adapters works with two or more element types
+  //<
+  //< Caution: **Use two or more element types.** Each adapter of a chain (`Keep` / `Conv`) binds
+  //< `T` once, so a lookup in the wrong direction finds the outer adapter's type
+  //< (`find_generic_arg` in `ksplc/sema/session/ctx.kspls`); one type alone shows nothing.
+  verdict.start("[Seq] a chain goes through with two or more element types test...")
+  $words: = List<|U8[]|>.new(arena)
+  words.push("a")
+  words.push("bcd")
+  long_ones: = words.where(fn(w: U8[]; ): Bool {
+    return w.len > 1;
+  }).count()
+  $nums: = List<|I32|>.new(arena)
+  nums.push(1)
+  nums.push(9)
+  lens: = words.select(fn(w: U8[]; ): Sz {
+    return w.len;
+  }).to_list(arena)
+  big: = nums.where(fn(x: I32; ): Bool {
+    return x > 4;
+  }).count()
+  assert(long_ones == 1, "the U8[] side")
+  assert(big == 1, "the I32 side")
+  assert(lens.len == 2 && lens.get(1) == 3, "select is instantiated per element type too")
+  verdict.pass("Two chains of differing element types do not tread on each other's type arguments.")
+
+struct Seq_tagged //< a key to sort by, and its position before sorting
+  key: I32
+  was: Sz
+
+fn test_seq_order_by_stable(arena: Arena$@) //<
+  //< That order_by sorts long lists and keeps equal keys in their original order
+  //<
+  //< Caution: **Go past the insertion-sort run length** (16). Below it no merge runs, so lengths up
+  //< to 16 test no merging. The equal keys show whether a tie is reversed.
+  verdict.start("[Seq] order_by sorts long lists and keeps equals in order test...")
+  by_key: = fn(a: Seq_tagged, b: Seq_tagged; ): I32
+    return a.key - b.key
+  for n in U8[]::{ 0, 1, 16, 17, 33, 200 }
+    $xs: = List<|Seq_tagged|>.new(arena)
+    // Only 7 keys, so every length past 7 has equal keys whose order must be kept.
+    for i in Range.asc(n)
+      xs.push(Seq_tagged::{ .key = I32::((i * 5) % 7), .was = i })
+    got: = xs.order_by(by_key, arena)
+    assert(got.len == Sz::n, "order_by: the length changed")
+    for $i: Sz = 1; i < got.len; i += 1
+      prev: = got.get(i - 1)
+      here: = got.get(i)
+      assert(prev.key <= here.key, "order_by: out of order")
+      assert(prev.key < here.key || prev.was < here.was, "order_by: equals turned around")
+  verdict.pass("order_by sorts past its insertion runs and keeps equal keys in their order.")

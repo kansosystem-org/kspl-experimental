@@ -1,0 +1,33 @@
+//< The permanent number that identifies the same thing (`Block.id`)
+//<
+//< **It is the key for matching "the same thing" across two texts.**
+//< Caution: **Never give out a number twice, and never reuse one**; the rest follows from that.
+//< **Numbers are given out at the entry point to saving and nowhere else**, so only a saved
+//< document carries numbers (harmless for a diff).
+import "kspage/model/doc" { Block, Doc }
+
+fn number_new(d: Doc$@) //<
+  //< Gives a number to every block without one, and sets the next number above all numbers seen
+  //<
+  //< **A block that already has a number is left alone** (so no number is given out twice).
+  //< Caution: **Set the next number above the numbers seen**, or a block read back with its
+  //< number shares it with a different thing. **It is called at the entry point to saving** (see
+  //< the file header); calling it again changes nothing.
+  if d == null
+    return
+  for $i: Sz = 0; i < d.blocks.len; i += 1
+    number_into(d, d.blocks.get(i))
+
+priv fn number_into(d: Doc$@, b: Block$@) //<
+  //< Gives a number to b and every block below it, and keeps the next number above them
+  //<
+  //< The bands at the top and bottom have no number: they are not in the flow, so neither a path
+  //< nor a number points at them. The diff matches the bands directly (there is one of each).
+  if b == null
+    return
+  if b.id == 0
+    b.id = d.next_id
+  if b.id >= d.next_id
+    d.next_id = b.id + 1
+  for $i: Sz = 0; i < b.children.len; i += 1
+    number_into(d, b.children.get(i))

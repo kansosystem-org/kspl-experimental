@@ -1,0 +1,138 @@
+//< Checks that the fix-up pass finds a misaligned column in the indentation notation
+//<
+//< **This calls a function inside the compiler directly**: the note is not a diagnostic yet
+//< (that waits on "The indentation notation (`.kspls`)" in `../../docs/DESIGN.md`), so the C
+//< output cannot show it. `parse/layout.kspls` imports only std, so the compiler stays out.
+
+import "ksplc/parse/layout" as parse_layout
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/verdict"
+
+priv struct Seen //< the number of notes, and the content of the first one
+  //<
+  //< **The line number is checked too**; if it were wrong, the note would lie.
+  count: Sz
+  ragged: Sz
+  tab: Sz
+  first_line: Sz
+  want: Sz
+  got: Sz
+
+priv fn look(src: U8[], arena: Arena$@): Seen
+  $notes: = List<|parse_layout.Note|>.new(arena)
+  _fixed: = parse_layout.to_braces(src, notes@, arena)
+  $out: Seen = ::{}
+  out.count = notes.len
+  for nt in notes.slice()
+    if out.first_line == 0
+      out.first_line = nt.line
+    switch nt.kind case .ragged(want, got)
+      out.ragged += 1
+      if out.want == 0
+        out.want = want
+        out.got = got
+    case .tab
+      out.tab += 1
+  return out
+
+fn test_ragged_sibling_is_seen()
+  verdict.start("[layout] a sibling in the same block not lining its column up is found test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+
+  // **This passes with zero diagnostics**: `if` at column 2, body at 6, and a line at 4 joins the
+  // block as "deeper than the heading" (only the heading's column is stacked).
+  ragged: =
+    look("""fn main()
+  if 1 < 0
+      io.out().s("A")
+    io.out().s("B")
+  io.out().s("C")
+""",
+    arena)
+  assert(ragged.ragged == 1,
+    "a sibling at a column that matches no enclosing block must be reported")
+  assert(ragged.first_line == 4, "the note must name the line the author wrote")
+  assert(ragged.want == 6 && ragged.got == 4,
+    "the note must carry both the sibling column and this one")
+
+  // Aligned, it says nothing. **The indent width is not fixed**, so a block aligned at width 4
+  // must be silent too.
+  tidy: =
+    look("""fn main()
+  if 1 < 0
+      io.out().s("A")
+      io.out().s("B")
+  io.out().s("C")
+""",
+    arena)
+  assert(tidy.count == 0, "a block whose siblings line up must stay silent, whatever the width")
+
+  verdict.pass("it named the shallowed sibling alone, with its line and its column.")
+
+fn test_mixed_width_stays_silent()
+  verdict.start("[layout] differing widths per block stay silent test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+
+  // **The width is deliberately left free** (`Frame` in `parse/layout.kspls`): each block aligned
+  // in itself is not misaligned.
+  mixed: =
+    look("""fn main()
+  if 1 < 0
+      io.out().s("a 4-column block")
+  if 1 < 0
+    io.out().s("a 2-column block")
+""",
+    arena)
+  assert(mixed.count == 0,
+    "different widths in different blocks are allowed; only ragged siblings are not")
+
+  verdict.pass("a width-4 block and a width-2 block side by side were not called a disorder.")
+
+fn test_tab_indent_is_seen()
+  verdict.start("[layout] a line indented with a tab is found test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+
+  // **A tab is not counted as a column**, so this line is treated as column 0 and leaves the
+  // enclosing block.
+  tabbed: = look("fn main()\n  io.out().s(\"A\")\n\tio.out().s(\"B\")\n", arena)
+  assert(tabbed.tab == 1,
+    "a line indented with a tab must be reported: the tab is not counted as a column")
+  assert(tabbed.first_line == 3, "the note must name the line the author wrote")
+
+  // A tab-only line is a blank line: **say nothing**.
+  blank: = look("fn main()\n  io.out().s(\"A\")\n\t\n  io.out().s(\"B\")\n", arena)
+  assert(blank.count == 0,
+    "a whitespace-only line is blank; reporting it would name a line with nothing to fix")
+
+  verdict
+    .pass("it named the tab lines holding content alone, and did not count the tab-only blank line.")
+
+fn test_carried_string_leaves_the_lines_below()
+  verdict
+    .start("[layout] a string carried onto the next line does not move the lines below test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+
+  // A `\` at a line's end carries a string onto the next line, so the string is still open there
+  // -- but the **physical line ends where the file's does**.
+  // Caution: **Check the note's line number, not the count.** Skipping the line terminator after
+  // the `\` makes every line below one short, and the count alone passes green.
+  carried: =
+    look("""fn main()
+  s: = "one \
+    two"
+  if 1 < 0
+      io.out().s("A")
+    io.out().s("B")
+  io.out().s(s)
+""",
+    arena)
+  assert(carried.ragged == 1, "the shallowed sibling must still be reported")
+  assert(carried.first_line == 6,
+    "the note must name the line the author wrote, counting the carried line as its own")
+
+  verdict.pass("the line below a carried string kept its number.")

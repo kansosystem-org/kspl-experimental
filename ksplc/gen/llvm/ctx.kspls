@@ -1,0 +1,375 @@
+//< The `Ctx` at the centre of LLVM IR generation
+//<
+//< It owns the output buffer, the register / label numbering, the scratch string and the local
+//< variable slots.
+//< It is the LLVM version of gen/c/ctx.kspls; the other gen/llvm/*.kspl files write the IR
+//< through this Ctx's methods.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/core" as base_core
+import "ksplc/base/literal" as base_literal
+import "ksplc/gen/entry" as gen_entry
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/env" as sema_type_env
+import "std/chars"
+import "std/ds" { List, Map }
+import "std/libc"
+import "std/mem"
+import "std/str" { Str_builder }
+import "std/strfmt"
+struct Str_pool //<
+  //< The interned string literals
+  //<
+  //< It keeps a list in order of appearance plus a string-to-ID map for deduplication.
+  list: List<|U8[]|>$@ //< the string literals in order of appearance
+  map: Map<|U8[], I32|>$@ //< string -> ID
+enum Emit_target //< where the output goes
+  direct //< straight to the output (outside a function body)
+  alloca //< the alloca group at the function's start (Emit_state.alloca_out)
+  body //< the function body (Emit_state.body_out)
+
+struct Emit_state //< where a function body's output goes
+  alloca_out: Str_builder //< the alloca group at the function's start
+  body_out: Str_builder //< the function body
+  target: Emit_target //< the current output destination
+
+struct Param_list_opts //<
+  //< The output shape of Ast_node.emit_llvm_param_list (in gen/llvm/types.kspls)
+  //<
+  //< A function definition, a `declare` and a variadic call share it, so the options are passed
+  //< by name rather than as a row of booleans.
+  with_names: Bool //<
+    //< True for the `<type> %<name>` form (a function definition's parameters)
+    //<
+    //< False emits only the types (a type list).
+  emit_variadic: Bool //< whether the variadic marker (...) is emitted too
+  kspl_abi: Bool //<
+    //< Whether to use the internal ABI
+    //<
+    //< True passes aggregates as a plain `ptr` (a pointer to the copy the caller made; see
+    //< emit_agg_param_type in gen/llvm/types.kspls).
+    //< At the C boundary of an `#ext` / `#export` it is false and the plain type is emitted, to
+    //< agree with the C compiler's classification.
+  emitted_before: Bool //<
+    //< Whether something was already emitted before (an sret argument and the like)
+    //<
+    //< True puts a ", " in front.
+
+struct Genllvm_ctx
+  priv out: Writer
+  sema: Sema_ctx$@
+  env: sema_type_env.Env$@
+  source_map: Map<|U8[], U8$[]|>$@
+  scratch: Str_builder
+  reg_counter: I32
+  label_counter: I32
+  local_var_ids: Map<|Sz, I32|>$@
+  var_counter: I32
+  str_pool: Str_pool
+  current_ret_id: I32
+  current_ret_is_sret: Bool //<
+    //< Whether the function being emitted returns its value through a hidden `sret` pointer
+    //<
+    //< ret_needs_sret in gen/llvm/types.kspls decides it. Every place that emits a `ret`
+    //< (stmt.kspls's return/throw, decl.kspls's implicit return) must read this flag. Calling
+    //< ret_needs_sret again in each place makes the definition and the `ret` disagree on an
+    //< `#ext` / `#export` function that keeps the C ABI.
+  is_terminated: Bool
+  emit: Emit_state
+  had_error: Bool //< whether code generation hit a fatal error, such as an unreadable embed
+  trait_method_idx_cache: Map<|Sz, Map<|U8[], I32|>$@|>$@ //<
+    //< The cached "method name -> vtable index" table per trait implementation
+    //<
+    //< It is keyed by a Trait_def@'s pointer value. get_or_build_trait_method_idx in
+    //< gen/llvm/expr_call.kspls uses it (a linear walk of methods_list per method call would be
+    //< O(calls × methods)).
+  extern_declared: Map<|U8[], I32|>$@ //<
+    //< The names already emitted as a `declare` from an `extern "C"`, or defined by the module
+    //<
+    //< Even where two files declare the same function (`kspl_stat` is in both std/io and
+    //< std/fs), it may appear in the IR only once: C allows repeated prototypes, but LLVM
+    //< rejects a second `declare` of the same name, or one beside a `define`, as a redefinition.
+
+impl Genllvm_ctx
+  fn new(out: Writer, sema: Sema_ctx$@, source_map: Map<|U8[], U8$[]|>$@): Genllvm_ctx$@
+    scratch: = Str_builder.new()
+    local_var_ids: = base_core.arena.create(Map<|Sz, I32|>.new(base_core.arena))
+    str_pool_list: = List<|U8[]|>.create(base_core.arena)
+    str_pool_map: = base_core.arena.create(Map<|U8[], I32|>.new_with_cap(2048, null))
+    alloca_out: = Str_builder.new()
+    body_out: = Str_builder.new()
+    trait_method_idx_cache: = base_core.arena
+      .create(Map<|Sz, Map<|U8[], I32|>$@|>.new(base_core.arena))
+    extern_declared: = base_core.arena.create(Map<|U8[], I32|>.new(base_core.arena))
+    return base_core.arena
+      .create(Genllvm_ctx::{ .out = out, .sema = sema, .env = sema.env, .source_map = source_map,
+      .scratch = scratch, .reg_counter = 1, .label_counter = 1, .local_var_ids = local_var_ids,
+      .var_counter = 1, .str_pool = Str_pool::{ .list = str_pool_list, .map = str_pool_map },
+      .current_ret_id = 0, .current_ret_is_sret = false, .is_terminated = false,
+      .emit = Emit_state::{ .alloca_out = alloca_out, .body_out = body_out, .target = .direct },
+      .had_error = false, .trait_method_idx_cache = trait_method_idx_cache,
+      .extern_declared = extern_declared })
+
+  fn get_or_add_raw_literal(r: Self$@, text: U8[]): I32 //<
+    //< It adds a raw name (a file name and the like) to the string pool
+    //<
+    //< Caution: **Wrap it in `"""`.** The pool holds a literal's spelling, and emit_string_pool in
+    //< `module.kspls` strips the outer quotes with literal_span in base/literal.kspls; without
+    //< them, one character is lost at each end.
+    //< Triple quotes keep the `\` from being read as an escape (a Windows path looks like
+    //< `C:\foo`). literal_span treats a triple-quoted string as raw.
+    r.clear_scratch().s("\"\"\"").s(text).s("\"\"\"")
+    return r.get_or_add_str_literal(r.take_scratch())
+
+  fn get_or_add_str_literal(r: Self$@, text: U8[]): I32
+    existing: = r.str_pool.map.get(text) catch -1
+    if existing != -1
+      return existing
+    id: = I32::r.str_pool.list.len
+    perm_text: = base_core.arena.dup_str(text)
+    r.str_pool.list.push(perm_text)
+    r.str_pool.map.set(perm_text, id)
+    return id
+
+  fn free(r: Self$@)
+    r.scratch.free()
+    if r.local_var_ids != null
+      r.local_var_ids.free()
+    if r.str_pool.map != null
+      r.str_pool.map.free()
+    r.emit.alloca_out.free()
+    r.emit.body_out.free()
+
+  fn clear_scratch(r: Self$@): Str_builder$@
+    r.scratch.len = 0
+    return r.scratch@
+  fn take_scratch(r: Self$@): U8$[] //<
+    //< It copies scratch into the AST arena and returns the copy
+    //<
+    //< scratch is a reused temporary buffer, so a value to keep must be copied out of it.
+    return base_core.arena.dup_str(r.scratch.slice())
+
+  fn reset_fn_state(r: Self$@)
+    r.reg_counter = 1
+    r.label_counter = 1
+    r.var_counter = 1
+    r.current_ret_is_sret = false
+    if r.local_var_ids != null
+      r.local_var_ids.free()
+    r.local_var_ids = base_core.arena.create(Map<|Sz, I32|>.new(base_core.arena))
+
+  fn has_local_var_id(r: Self$@, def_node: Void$@): Bool
+    if def_node == null
+      return false
+    key: = Sz::def_node
+    id: = r.local_var_ids.get(key) catch 0
+    return id != 0
+
+  fn get_or_add_local_var_id(r: Self$@, def_node: Void$@): I32
+    if def_node == null
+      return 0
+    // It gives a stable serial number keyed on the pointer address.
+    key: = Sz::def_node
+    id: = r.local_var_ids.get(key) catch 0
+    if id != 0
+      return id
+
+    new_id: = r.var_counter
+    r.var_counter += 1
+    r.local_var_ids.set(key, new_id)
+    return new_id
+
+  fn has_local_slot(r: Self$@, name: U8[], decl: Ast_node$@): Bool //<
+    //< Whether the local that decl declares already has its alloca (never for an MIR temporary)
+    if name.starts_with("_mir_")
+      return false
+    return r.has_local_var_id(local_slot_key(decl))
+
+  fn local_slot_name(r: Self$@, name: U8[], decl: Ast_node$@): U8$[] //<
+    //< The slot of the local named name that decl declares: `%v_<name>_<id>`
+    //<
+    //< **Every declaration and every reference names a slot through here**, or the two disagree
+    //< and the IR reads an undefined register. An MIR temporary is already unique: `%v_<name>`.
+    r.clear_scratch().s("%v_").s(name)
+    if !name.starts_with("_mir_")
+      r.scratch.s("_\{r.get_or_add_local_var_id(local_slot_key(decl))\}")
+    return r.take_scratch()
+
+  fn next_reg(r: Self$@): I32
+    res: = r.reg_counter
+    r.reg_counter += 1
+    return res
+
+  fn next_label(r: Self$@): I32
+    res: = r.label_counter
+    r.label_counter += 1
+    return res
+
+  fn emit_b_label(r: Self$@, id: I32): Self$@
+    if !r.is_terminated
+      r.s("    br label %b\{id\}\n")
+    r.s("b\{id\}:\n")
+    r.is_terminated = false
+    return r
+
+  fn emit_str_label(r: Self$@, lbl: U8[]): Self$@
+    if !r.is_terminated
+      r.s("    br label %").s(lbl).s("\n")
+    r.s(lbl).s(":\n")
+    r.is_terminated = false
+    return r
+
+  fn terminate(r: Self$@)
+    r.is_terminated = true
+  fn emit_llvm_str_body(r: Self$@, s: U8[]) //<
+    //< It emits the body of a string literal s in LLVM's c"..." escape form
+    //<
+    //< The quotes and the trailing \00 are not included. String constants and inline asm templates
+    //< share it, so the escape rules exist once. The bytes are the ones the literal stands for
+    //< (append_literal_bytes in base/literal.kspls, which genc uses too).
+    $bytes: = Str_builder.new()
+    defer bytes.free()
+    s.append_literal_bytes(bytes@)
+    for b in bytes.slice()
+      r.emit_llvm_str_byte(b)
+
+  fn emit_llvm_str_byte(r: Self$@, b: U8) //<
+    //< it emits one byte as part of the contents of LLVM's c"..."
+    //<
+    //< A `"` and a `\` would break the string, so they are always escaped. Anything else can be
+    //< written raw (the high bytes included).
+    switch b case '\n'
+      r.s("\\0A")
+    case '\r'
+      r.s("\\0D")
+    case '\t'
+      r.s("\\09")
+    case '"'
+      r.s("\\22")
+    case '\\'
+      r.s("\\5C")
+    case 0
+      r.s("\\00")
+    default
+      r.c(b)
+
+  priv fn emit_buf(r: Self$@): Option<|Str_builder$@|> //<
+    //< The current output buffer (alloca / body)
+    //<
+    //< Direct mode is none. The routing of the output lives here only.
+    switch r.emit.target case .alloca
+      return Option<|Str_builder$@|>.some(r.emit.alloca_out@)
+    case .body
+      return Option<|Str_builder$@|>.some(r.emit.body_out@)
+    case .direct
+      return Option<|Str_builder$@|>.none
+
+impl Genllvm_ctx: Writer
+  fn s(r: Self$@, val: U8[]): Genllvm_ctx$@
+    switch r.emit_buf() case .some(buf)
+      buf.s(val)
+    case .none
+      r.out = r.out.s(val)
+    return r
+  fn s_mangled(r: Self$@, type_id: I32): Genllvm_ctx$@ //<
+    //< It mangles a type_id and appends it to the output (through scratch; chainable)
+    r.clear_scratch()
+    r.env.mangle_type_id_to(type_id, r.scratch)
+    return r.s(r.scratch.slice())
+  fn c(r: Self$@, val: U8): Genllvm_ctx$@
+    switch r.emit_buf() case .some(buf)
+      buf.c(val)
+    case .none
+      r.out = r.out.c(val)
+    return r
+  fn flush(r: Self$@): Genllvm_ctx$@
+    switch r.emit_buf() case .some {} case .none
+      r.out = r.out.flush()
+    return r
+
+priv fn local_slot_key(decl: Ast_node$@): Void$@ //<
+  //< What a local's slot ID is keyed on: its symbol, which survives a node's address changing
+  //<
+  //< Without one, decl's own def_node's symbol, and last decl itself.
+  if decl.sym_ptr != null
+    return decl.sym_ptr
+  if decl.def_node != null && decl.def_node.sym_ptr != null
+    return decl.def_node.sym_ptr
+  return Void$@::decl
+
+fn format_f32_hex_literal(text: U8[]): U8$[] //<
+  //< It writes an F32 literal as the hex bit pattern that LLVM's float constants accept
+  //<
+  //< In decimal, LLVM can reject it as "floating point constant invalid for type": LLVM requires
+  //< the decimal form to round-trip exactly, and many ordinary values such as 0.1 do not.
+  //<
+  //< It takes the literal as written: `_` separators and the type suffix are removed here, where
+  //< `strtod` would otherwise stop at them and read `1_000.5` as 1.
+  $clean: = Str_builder.new()
+  defer clean.free()
+  _stop: = text.append_clean_number(clean@, "Ff")
+  clean.c(0U8)
+  parsed: = libc.strtod(Void$@::clean.slice().ptr, null)
+
+  as_f32: = F32::parsed
+  widened: F64 = as_f32
+  // Caution: **Do not reinterpret a type through a pointer.** A `(U64$@::widened@)$` breaks strict
+  // aliasing: at higher optimization the store into widened is removed and the bits change (gcc
+  // -O2 flags it with -Wstrict-aliasing). The bytes are copied instead.
+  $bits: U64 = 0U64
+  mem.copy(Void$@::bits@, Void$@::widened@, sizeof(U64))
+
+  $out: = Str_builder.new()
+  defer out.free()
+  out.s("0x")
+  for i in Range.asc(16)
+    shift: = (15 - i) * 4
+    nib: = U8::((bits >> shift) & 0xF)
+    out.c(nib.to_hex_upper())
+  return base_core.arena.dup_str(out.slice())
+
+struct Preamble_fn //< a function that hosted's preamble emits itself
+  name: U8[]
+  ret: U8[] //< the return type of its `declare`; empty where the preamble defines it
+  params: U8[] //< the parameter types of its `declare`
+
+const preamble_fns: Preamble_fn[6] = ::{ //<
+  //< What hosted's preamble declares or defines besides the entry point's startup calls
+  //<
+  //< **The `declare`s and the skipping of `std`'s own declare both come from this table**
+  //< (`is_preamble_fn`): two `declare`s of one name make LLVM fail with `invalid redefinition`.
+  //< An entry with no `ret` is defined by hand in `module.kspls`; `make test-conventions` keeps
+  //< the two in step.
+  Preamble_fn::{ .name = "abort", .ret = "void" },
+  Preamble_fn::{ .name = "fprintf", .ret = "i32", .params = "ptr, ptr, ..." },
+  Preamble_fn::{ .name = "fflush", .ret = "i32", .params = "ptr" },
+  Preamble_fn::{ .name = "get_stdout", .ret = "ptr" },
+  Preamble_fn::{ .name = "get_stderr", .ret = "ptr" },
+  Preamble_fn::{ .name = "kspl_os_argv", .ret = "ptr", .params = "i32, ptr" },
+}
+
+fn is_preamble_fn(name: U8[]): Bool //< whether hosted's preamble emits this name itself
+  for f in preamble_fns
+    if f.name.equals(name)
+      return true
+  for call in gen_entry.startup_calls
+    if call.equals(name)
+      return true
+  return false
+
+const sret_param_name: U8[] = "%kspl.sret" //<
+  //< The register name of the hidden return-value pointer of a function returning an aggregate
+  //<
+  //< See ret_needs_sret in gen/llvm/types.kspls.
+  //< It contains a `.` so no KSPL identifier can spell it: a parameter is emitted as
+  //< `%<argument name>`, so a name such as `_sret` would silently collide as soon as a user
+  //< declared an argument with that name.
+
+fn is_kspl_prefixed_or_ext(name: U8[], is_ext: Bool): Bool //<
+  //< Whether a global symbol name should be emitted as `@name` unchanged
+  //<
+  //< A symbol marked extern/export, or a name that already has a kspl_ / priv_ prefix, is used
+  //< unchanged (otherwise the caller builds @kspl_<name>, avoiding a double prefix). Several
+  //< places in decl.kspls / expr.kspls / expr_call.kspls share this answer.
+  return is_ext || name.starts_with("kspl_") || name.starts_with("priv_")
+
+impl Genllvm_ctx: Owned {}

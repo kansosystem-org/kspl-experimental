@@ -1,0 +1,25 @@
+//< The inner levels must not be implicitly weakened to read-only as well
+//<
+//< **A `const` may be added only at the outermost step.** Weaken a mutable slot's content and the
+//< callee can put a string literal (ROM) there for the caller to write. A wholly read-only road is
+//< refused too: C gets another struct and no conversion. One step passes (`U8$[]` → `U8[]`).
+// EXPECT: only the outermost element/pointee can be made read-only implicitly
+// EXPECT: only the outermost element/pointee can be made read-only implicitly
+
+priv fn fills(dst: U8[]$[])
+  dst[0] = "abc" // puts a slice that is in ROM into the slot
+
+priv fn lends_all(all: U8[][]) {}
+
+priv fn takes_ro(s: U8[]) {}
+
+fn main(): I32
+  $in_a: U8[4] = ::{ 1, 2, 3, 4 }
+  $sl_a: U8$[][1] = ::{ U8$[]::{ .ptr = in_a[0]@, .len = 4 } }
+  $slots: U8$[]$[] = U8$[]$[]::{ .ptr = sl_a[0]@, .len = 1 }
+
+  fills(slots) // weakens across a mutable slot (unsound)
+  lends_all(slots) // makes it all read-only (sound, but codegen does not handle it)
+
+  takes_ro(sl_a[0]) // one step passes as before
+  return I32::slots[0][0]

@@ -1,0 +1,529 @@
+//< The cursor
+//<
+//< The cursor is stored as "which `Inline`, and which byte" ([`doc.kspls`](doc.kspls)).
+//< **This does not change the document.**
+//< **Finding what to grab at a coordinate is not here.**
+//< Caution: **Call every one of them after layout.** A box's position is not known until it is
+//< laid out, and after a new layout an old answer is stale.
+
+// ==========================================
+// Usage:
+//   c: = caret.hit_test(page, 120.0, 30.0);
+//   cur: = caret.cursor(page, c);
+// ==========================================
+import "kspage/lay/page" { Box, Page }
+import "kspage/model/doc" { Block, Doc, Rect }
+import "kspage/model/font" { Font_source }
+import "kspage/model/run" { Inline }
+import "std/chars"
+import "std/ds" { List }
+import "std/str" { Str_builder }
+
+struct Caret //< a position in the document
+  //<
+  //< **`Caret` and `Cursor` in this file are two things; merge neither into the other.** This one
+  //< is **the position** (which run, which byte, what is being composed, where a selection
+  //< starts); `Cursor` below is **the vertical bar drawn for it** (x, y, height).
+  inline: Inline$@ //<
+    //< The run the cursor is in
+    //<
+    //< **Null means "pointing nowhere".** Clicking an empty document gives that, and neither
+    //< typing nor deleting does anything.
+  offset: Sz //<
+    //< The byte position within `inline`'s text
+    //<
+    //< Caution: **It must be a character boundary.**
+  preedit: Sz //<
+    //< The byte count of the text being composed (IME)
+    //<
+    //< It goes into the document as the `preedit` bytes before `offset` (kept separately, wrapping
+    //< and inheritance would need a second path).
+    //< **Until it is committed it can vanish at any moment.** **Setting this to 0 is enough only
+    //< when moving.**
+  anchor: Inline$@ //<
+    //< Where a selection starts
+    //<
+    //< **Where it points at the same position as `inline`/`offset`, nothing is selected.**
+    //< Only the `inline`/`offset` end moves; the selection's direction is which end comes first.
+  anchor_offset: Sz
+  goal: Option<|F32|> //<
+    //< The goal column for ↑ and ↓ (the screen's x); none means the current column
+    //<
+    //< It is remembered so that passing through a short line does not pull the column in.
+    //< Caution: **Forget it after a sideways move** (`collapse`). Left remembered, ↑ and ↓ after
+    //< moving left or right would jump to the old column.
+  at_line_start: Bool //<
+    //< Whether a wrap position is read as "the next line's start" (false: the line before's end)
+    //<
+    //< It is decided by **how the cursor got there** (clicking that line's start, or coming down
+    //< from above, means the next line's start). **Not told apart, ↓ sticks at a wrap.**
+
+fn at(inline: Inline$@, offset: Sz): Caret //<
+  //< The cursor pointing at inline's byte offset (nothing selected)
+  //<
+  //< Caution: **Go through this when setting a position.** Rewrite the fields directly and the
+  //< goal column and the wrap reading keep their old values.
+  return Caret::{ .inline = inline, .offset = offset, .preedit = 0, .anchor = inline,
+    .anchor_offset = offset, .goal = Option<|F32|>.none, .at_line_start = false }
+
+fn nowhere(): Caret //< the cursor pointing nowhere
+  return at(null, 0)
+
+fn has_selection(c: Caret): Bool //< whether anything is selected
+  return c.inline != null && (c.anchor != c.inline || c.anchor_offset != c.offset)
+
+fn collapse(c: Caret$@) //< the cleanup after a move
+  //<
+  //< Caution: **Always call it after the text has moved.** With only `offset` moved and the start
+  //< left behind, it counts as a selection though nothing was selected, and the next typed text
+  //< deletes that range. **The goal column is forgotten here too** (only `step_vertical` keeps it).
+  c.anchor = c.inline
+  c.anchor_offset = c.offset
+  c.goal = Option<|F32|>.none
+  c.at_line_start = false
+
+priv fn after_move(c: Caret$@, extend: Bool) //< the cleanup after a move that may extend
+  //<
+  //< Where extend, the start is kept; otherwise it is collapsed. **The goal column is forgotten
+  //< even while extending.**
+  if !extend
+    collapse(c)
+    return
+  c.goal = Option<|F32|>.none
+  c.at_line_start = false
+
+priv fn away(v: F32): F32
+  return -v if v < 0.0 else v
+
+priv fn width_to(src: Font_source, b: Box$@, offset: Sz): F32 //<
+  //< The width from the box's start to byte offset
+  //<
+  //< Caution: **Do not divide it by the byte count.** ASCII is one byte per half an em and a
+  //< multi-byte script three bytes per em, so on a mixed line a divided position lands
+  //< mid-character. **Add the justifying letter spacing too** (`Box.spacing`).
+  wide: = src.measure_width(b.font, b.text.sub(0, offset))
+  if b.spacing <= 0.0
+    return wide
+  return wide + b.spacing * F32::b.text.sub(0, offset).count_codepoints()
+
+priv fn nearest_offset(src: Font_source, b: Box$@, x: F32): Sz //<
+  //< Which of the box's character boundaries x is nearest to (the byte position in the box's text)
+  //<
+  //< Caution: **Do not return a position mid-character.** Text inserted mid-character breaks.
+  $best: Sz = 0
+  $best_d: F32 = away(x - b.rect.x)
+  $i: Sz = 0
+  for i < b.text.len
+    i += b.text.next_codepoint(i)
+    d: = away(x - (b.rect.x + width_to(src, b, i)))
+    if d < best_d
+      best_d = d
+      best = i
+  return best
+
+fn hit_test(page: Page$@, x: F32, y: F32): Caret //<
+  //< The position in the document nearest to the click
+  //<
+  //< **A click outside any box snaps to the nearest box.** Returning "pointing nowhere" for a
+  //< click on the margin would make a screen where clicking does nothing.
+  $best: Box$@ = null
+  $best_d: F32 = -1.0
+  for $i: Sz = 0; i < page.boxes.len; i += 1
+    b: = page.boxes.get(i)
+    // Caution: **Skip a box that is not in the document.** A bullet list's mark is not text, so a
+    // click there would compute a position inside the mark's text and report it as a position in
+    // the body.
+    if b.inline == null
+      continue
+    // Caution: **Weight vertical distance above horizontal.** Weighted the same, the edge of the
+    // neighbouring line comes out nearer and the cursor jumps to a line other than the one clicked.
+    $dy: F32 = 0.0
+    if y < b.rect.y
+      dy = b.rect.y - y
+    else if y > b.rect.y + b.rect.h
+      dy = y - (b.rect.y + b.rect.h)
+    $dx: F32 = 0.0
+    if x < b.rect.x
+      dx = b.rect.x - x
+    else if x > b.rect.x + b.rect.w
+      dx = x - (b.rect.x + b.rect.w)
+    d: = dy * 1000.0F32 + dx
+    if best_d < 0.0 || d < best_d
+      best_d = d
+      best = b
+  if best == null
+    return nowhere()
+  // **It does not stop inside a computed value** (what is shown is not the typed text). At the end
+  // of the typed text, the formula shows at the next layout.
+  if best.inline.shows_value()
+    return at(best.inline, best.inline.text().len)
+  into: = nearest_offset(page.src, best, x)
+  // **Composing does not carry over.** Carried to the clicked position, nobody could tell where
+  // the text being composed is.
+  $found: Caret = at(best.inline, best.offset + into)
+  // Where the box's start was clicked, it goes to that line's start. **Where `best.offset` is 0 it
+  // is a run boundary, not a wrap** (either reading gives the same line).
+  found.at_line_start = into == 0 && best.offset > 0
+  return found
+
+fn inline_under(page: Page$@, x: F32, y: F32): Option<|Inline$@|> //<
+  //< The text of the box that (x, y) is exactly on
+  //<
+  //< **It does not snap to the nearest** (outside a box, there is none).
+  for $i: Sz = 0; i < page.boxes.len; i += 1
+    b: = page.boxes.get(i)
+    // **Skip a box that is not in the document** (the reason is at `hit_test`).
+    if b.inline == null
+      continue
+    if b.rect.holds(x, y)
+      return Option<|Inline$@|>.some(b.inline)
+  return Option<|Inline$@|>.none
+
+fn carry_tail(c: Caret$@, n: Inline$@, at: Sz, tail: Inline$@) //<
+  //< Carries along a cursor that has moved into the second half of a split
+  //<
+  //< Caution: **Leave a cursor exactly at the split on the near side.** The run before stays, so
+  //< it points at the same position either way, but moved past, the selection's end would point at
+  //< a run outside the range (the applied style could no longer be read).
+  if c.inline == n && c.offset > at
+    c.inline = tail
+    c.offset -= at
+  if c.anchor == n && c.anchor_offset > at
+    c.anchor = tail
+    c.anchor_offset -= at
+
+fn carry_all(c: Caret$@, gone: Inline$@, to: Inline$@, base: Sz) //<
+  //< Moves a cursor that pointed at a removed run to where it was joined
+  //<
+  //< Caution: **The whole run goes, so move byte 0 too.** Left behind, typed text goes into a run
+  //< not in the list and appears nowhere on the screen.
+  if c.inline == gone
+    c.inline = to
+    c.offset += base
+  if c.anchor == gone
+    c.anchor = to
+    c.anchor_offset += base
+
+fn step_to_prev(d: Doc$@, c: Caret$@): Bool //< moves to the end of the inline before
+  //<
+  //< True where it could.
+  nb: = d.neighbors(c.inline)
+  if nb.prev == null
+    return false
+  c.inline = nb.prev
+  c.offset = nb.prev.text().len
+  return true
+
+fn prev_boundary(text: U8[], offset: Sz): Sz //< the start of the character before offset
+  //<
+  //< It steps back over UTF-8 continuation bytes (top two bits `10`).
+  $i: Sz = offset - 1
+  for i > 0 && (text[i] & 0xc0U8) == 0x80U8
+    i -= 1
+  return i
+
+fn next_boundary(text: U8[], offset: Sz): Sz //< the start of the character after offset
+  //<
+  //< Caution: **Always advance by at least one byte.** Unmoved, the deleting code deletes 0 bytes
+  //< and stays in place.
+  $i: Sz = offset + 1
+  for i < text.len && (text[i] & 0xc0U8) == 0x80U8
+    i += 1
+  return i if i < text.len else text.len
+
+fn step_left(d: Doc$@, c: Caret$@, extend: Bool) //< the cursor one character to the left
+  //<
+  //< **At a start it moves to the previous inline's end.** It stops only at the document's start.
+  if c.inline == null
+    return
+  if c.offset > 0
+    c.offset = prev_boundary(c.inline.text(), c.offset)
+  else
+    step_to_prev(d, c)
+  after_move(c, extend)
+
+fn step_right(d: Doc$@, c: Caret$@, extend: Bool) //< the cursor one character to the right
+  //<
+  //< **At an end it moves to the next inline's start.** It stops only at the document's end.
+  if c.inline == null
+    return
+  t: = c.inline.text()
+  if c.offset < t.len
+    c.offset += t.next_codepoint(c.offset)
+    after_move(c, extend)
+    return
+  nb: = d.neighbors(c.inline)
+  if nb.next != null
+    c.inline = nb.next
+    c.offset = 0
+  after_move(c, extend)
+
+struct Cursor //< the vertical bar for drawing the cursor (x / y / height)
+  //<
+  //< **It is the position in the current layout.** After a new layout, compute it again.
+  x: F32
+  y: F32
+  h: F32
+  found: Bool //< false where it points at nothing, or not in that layout
+
+priv fn row_beyond(page: Page$@, y: F32, h: F32, dir: I32): Option<|F32|> //<
+  //< The vertical middle of the next line beyond the line at y..y+h
+  //<
+  //< **It looks through the laid-out lines; it guesses no distance.** Step by the line's own
+  //< height and nothing taller than half a line (a heading's space, a picture) can be crossed:
+  //< `hit_test` pulls the landing back to the line it started from, and ↓ stays put.
+  //< **A line entirely clear of the current one is another line** (the split `same_row` makes).
+  $near: Box$@ = null
+  for $i: Sz = 0; i < page.boxes.len; i += 1
+    b: = page.boxes.get(i)
+    // Caution: **Skip a box that is not in the document** (the reason is at `hit_test`). That
+    // makes a collected block one step rather than a wall.
+    if b.inline == null
+      continue
+    if dir > 0
+      if b.rect.y < y + h
+        continue
+      if near != null && near.rect.y <= b.rect.y
+        continue
+    else
+      if b.rect.y + b.rect.h > y
+        continue
+      if near != null && near.rect.y + near.rect.h >= b.rect.y + b.rect.h
+        continue
+    near = b
+  if near == null
+    return Option<|F32|>.none
+  // **Of that line, the lowest box is returned.** On a line mixing sizes the small box's middle is
+  // inside the big box but not the other way round, so aiming at the big box's middle, the small
+  // text on that line could not be reached.
+  $best: Box$@ = near
+  for $i: Sz = 0; i < page.boxes.len; i += 1
+    b: = page.boxes.get(i)
+    if b.inline != null && same_row(near, b) && b.rect.y > best.rect.y
+      best = b
+  return Option<|F32|>.some(best.rect.y + best.rect.h * 0.5F32)
+
+fn step_vertical(page: Page$@, c: Caret$@, dir: I32, extend: Bool) //<
+  //< The cursor one line up (dir negative) or down (dir positive)
+  //<
+  //< It keeps the goal column, and acts as if that column were clicked on the next line.
+  cur: = cursor(page, c$)
+  if !cur.found
+    return
+  // The goal column is set where the vertical move started. **It does not narrow even where a
+  // line on the way is short**; recomputed, it would shrink and not come back.
+  $goal: F32 = cur.x
+  if v: = c.goal
+    goal = v
+  $to: F32 = 0.0
+  switch row_beyond(page, cur.y, cur.h, dir) case .some(mid)
+    to = mid
+  // **Where there is no line that way, it does not move** (the document's first and last lines).
+  case .none
+    return
+  moved: = hit_test(page, goal, to)
+  if moved.inline == null
+    return
+  c.inline = moved.inline
+  c.offset = moved.offset
+  c.preedit = 0
+  after_move(c, extend)
+  // Caution: **Remember it again after it is forgotten.** `after_move` forgets it, so swapping the
+  // order makes it have no effect.
+  c.goal = Option<|F32|>.some(goal)
+  c.at_line_start = moved.at_line_start
+
+priv fn same_row(a: Box$@, b: Box$@): Bool //< whether box a and box b lie on the same line
+  //<
+  //< **It is judged by vertical overlap** (compared at the top edge, a line mixing sizes would look
+  //< like two lines).
+  return b.rect.y < a.rect.y + a.rect.h && a.rect.y < b.rect.y + b.rect.h
+
+fn step_to_edge(d: Doc$@, page: Page$@, c: Caret$@, dir: I32, extend: Bool) //<
+  //< To the line's start (dir negative) or its end (positive)
+  //<
+  //< **It does not leave the paragraph or the cell.**
+  //< On a wrapped line it is that line's edge (not the paragraph's).
+  at: = box_index(page, c$, c.at_line_start)
+  if at < 0
+    return
+  own: = d.owner_of(c.inline)
+  if !own.found
+    return
+  $edge: Sz = at
+  $k: Sz = at
+  $more: = true
+  for more
+    k = k - 1 if dir < 0 else k + 1
+    more = k >= 0 && k < page.boxes.len
+    if more
+      b: = page.boxes.get(k)
+      more =
+        b.inline != null && own.block.holds(b.inline) &&
+        same_row(page.boxes.get(edge), b)
+    if more
+      edge = k
+  b: = page.boxes.get(edge)
+  c.inline = b.inline
+  c.offset = b.offset if dir < 0 else b.offset + b.text.len
+  c.preedit = 0
+  after_move(c, extend)
+  // Caution: **Read it as "the next line's start" once it has moved to the start.** Otherwise a
+  // wrapped line's start shows as the end of the line before (the cursor appears one line up).
+  c.at_line_start = dir < 0
+
+fn step_to_point(page: Page$@, c: Caret$@, x: F32, y: F32, extend: Bool) //<
+  //< Moves to the clicked position
+  //<
+  //< Where extend, the start is kept (that is how selecting by dragging works).
+  found: = hit_test(page, x, y)
+  if found.inline == null
+    return
+  c.inline = found.inline
+  c.offset = found.offset
+  c.preedit = 0
+  after_move(c, extend)
+  c.at_line_start = found.at_line_start
+
+struct Selection //< the selected range (start to end in document order)
+  from: Inline$@
+  from_offset: Sz
+  to: Inline$@
+  to_offset: Sz
+
+fn selection(d: Doc$@, c: Caret): Selection //<
+  //< Returns the current selection, ordered in document order
+  //<
+  //< **Which of the start and the current position comes first is not fixed** (it depends on the
+  //< drag's direction). Unordered, deleting would run back to front and do nothing.
+  same: = c.anchor == c.inline
+  anchor_first: =
+    (c.anchor_offset <= c.offset if same
+    else d.index_of(c.anchor) <= d.index_of(c.inline))
+  if anchor_first
+    return Selection::{ .from = c.anchor, .from_offset = c.anchor_offset, .to = c.inline,
+      .to_offset = c.offset }
+  return Selection::{ .from = c.inline, .from_offset = c.offset, .to = c.anchor,
+    .to_offset = c.anchor_offset }
+
+fn selection_into(d: Doc$@, c: Caret, sb: Str_builder$@) //< appends the selected text to sb
+  //<
+  //< **A paragraph break is one newline** (the paste code turns it back into a paragraph); an
+  //< `Inline` holds none, so a newline appears only where a paragraph was crossed. **No copy is
+  //< made** (it writes straight into the builder).
+  if !has_selection(c)
+    return
+  sp: = selection(d, c)
+  if sp.from == sp.to
+    sb.s(sp.from.text().sub(sp.from_offset, sp.to_offset - sp.from_offset))
+    return
+  head: = sp.from.text()
+  sb.s(head.sub(sp.from_offset, head.len - sp.from_offset))
+  $owner: Block$@ = d.owner_of(sp.from).block
+  $n: Inline$@ = d.neighbors(sp.from).next
+  for n != null && n != sp.to
+    owner = run_into(d, n, owner, sb)
+    n = d.neighbors(n).next
+  if sp.to != null
+    if d.owner_of(sp.to).block != owner
+      sb.s("\n")
+    sb.s(sp.to.text().sub(0, sp.to_offset))
+
+priv fn run_into(d: Doc$@, n: Inline$@, owner: Block$@, sb: Str_builder$@): Block$@ //<
+  //< Appends one run and returns the block holding that run
+  here: = d.owner_of(n).block
+  if here != owner
+    sb.s("\n")
+  sb.s(n.text())
+  return here
+
+fn selection_rects(d: Doc$@, page: Page$@, c: Caret, out: List<|Rect|>$@) //<
+  //< Collects into out the rectangles for painting the selection
+  //<
+  //< **It is not one per box**: it measures to the selection's edge and cuts the rectangle there.
+  //< Caution: **Compute them again after every layout.** A new layout rebuilds the boxes.
+  if !has_selection(c)
+    return
+  sp: = selection(d, c)
+  from_i: = d.index_of(sp.from)
+  to_i: = d.index_of(sp.to)
+  for $i: Sz = 0; i < page.boxes.len; i += 1
+    b: = page.boxes.get(i)
+    bi: = d.index_of(b.inline)
+    if bi < from_i || bi > to_i
+      continue
+    // The selected range within the text. It is narrowed only at the end inlines.
+    lo: = sp.from_offset if bi == from_i else 0
+    hi: = sp.to_offset if bi == to_i else b.offset + b.text.len
+    // Clip it to the box.
+    start: = lo - b.offset if lo > b.offset else 0
+    stop: = hi - b.offset if hi < b.offset + b.text.len else b.text.len
+    if start >= stop
+      continue
+    x0: = b.rect.x + width_to(page.src, b, start)
+    x1: = b.rect.x + width_to(page.src, b, stop)
+    out.push(Rect::{ .x = x0, .y = b.rect.y, .w = x1 - x0, .h = b.rect.h })
+
+fn mark_composing(page: Page$@, c: Caret) //<
+  //< Marks the boxes that overlap the text being composed
+  //<
+  //< **Call it after every layout** (the boxes are rebuilt, so the mark does not persist). Every
+  //< overlapping box is marked, since the text being composed can cross a wrap.
+  if c.inline == null || c.preedit <= 0
+    return
+  start: = c.offset - c.preedit
+  for $i: Sz = 0; i < page.boxes.len; i += 1
+    b: = page.boxes.get(i)
+    if b.inline != c.inline
+      continue
+    if b.offset < c.offset && b.offset + b.text.len > start
+      b.composing = true
+
+priv fn box_index(page: Page$@, c: Caret, prefer_last: Bool): Sz //<
+  //< Returns the index of the box the cursor is in (**-1 where there is none**)
+  //<
+  //< Where prefer_last, the last matching box is returned (reading a wrap position as "the next
+  //< line's start"). **A box includes its end**; otherwise a position at a line's end would be in
+  //< no box and the cursor would vanish.
+  if c.inline == null
+    return -1
+  $found: Sz = -1
+  for $i: Sz = 0; i < page.boxes.len; i += 1
+    b: = page.boxes.get(i)
+    if b.inline != c.inline || c.offset < b.offset || c.offset > b.offset + b.text.len
+      continue
+    found = i
+    if !prefer_last
+      return found
+  return found
+
+priv fn cursor_in(page: Page$@, c: Caret, prefer_last: Bool): Cursor
+  at: = box_index(page, c, prefer_last)
+  if at < 0
+    return Cursor::{ .x = 0.0, .y = 0.0, .h = 0.0, .found = false }
+  b: = page.boxes.get(at)
+  into: = c.offset - b.offset
+  x: = b.rect.x + width_to(page.src, b, into)
+  return Cursor::{ .x = x, .y = b.rect.y, .h = b.rect.h, .found = true }
+
+fn cursor(page: Page$@, c: Caret): Cursor //< where the cursor is now
+  //<
+  //< The cursor remembers how a wrap position is read.
+  return cursor_in(page, c, c.at_line_start)
+
+fn cell_frame(page: Page$@, c: Caret): Option<|Rect|> //<
+  //< the rectangle of the cell the cursor is in
+  //<
+  //< Outside a table, none.
+  //< Caution: **A cell's shape comes from the column width and the row height** (the box around
+  //< the contents cannot be used instead). **It returns the innermost cell**: searched from the
+  //< end, since `Page.cells` has the outer ones first.
+  if c.inline == null
+    return Option<|Rect|>.none
+  $i: Sz = page.cells.len
+  for i > 0
+    i -= 1
+    cell: = page.cells.get(i)
+    if cell.block.holds(c.inline)
+      return Option<|Rect|>.some(cell.rect)
+  return Option<|Rect|>.none

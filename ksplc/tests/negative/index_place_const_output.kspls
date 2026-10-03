@@ -1,0 +1,24 @@
+//< A container whose elements are immutable cannot implement `Index_place`
+//<
+//< Immutability riding on a type argument (6.1 of `docs/SPEC-language.md`) is invisible in the
+//< declaration, so unchecked per substance it passes and the C **holds a write** with a "discards
+//< const" warning (Principle 2). Put `$` on the target (`ksplc/tests/slice_struct_test.kspls`).
+// EXPECT: cannot implement 'Index_place'
+// EXPECT-NOT: discards qualifiers
+import "std/io"
+
+priv struct Ro<|$T|>
+  p: T$@
+  len: Sz
+
+impl<|T|> Ro<|T|>: Index_place<|Sz, T|>
+  fn at(r: Self@, index: Sz, _f: U8[], _l: Sz): T$@
+    return r.p + index
+
+$buf: I32[2] = ::{ 1, 2 }
+
+fn main(): I32
+  s: Ro<|I32|> = ::{ .p = buf[0]@, .len = 2 }
+  s[0] = 9
+  io.out().s("\{buf[0]\}\n")
+  return 0

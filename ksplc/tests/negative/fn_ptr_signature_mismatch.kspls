@@ -1,0 +1,35 @@
+//< Sema catches a signature mismatch when a function is passed as a value
+//<
+//< A function pointer is a plain address in C, so a mismatch let through reaches the generated code
+//< and is caught only by clang's -Wincompatible-function-pointer-types. A return value differing
+//< alone is the worst: the caller reads a value that was never returned.
+// EXPECT: function 'ret_differs' cannot be used as 'fn(I32):Bool'
+// EXPECT: function 'param_differs' cannot be used as 'fn(I32):Bool'
+// EXPECT: function 'arity_differs' cannot be used as 'fn(I32):Bool'
+
+pub typedef Cb = fn(x: I32): Bool
+
+pub struct Holder
+  pub cb: Cb
+
+priv fn ret_differs(_x: I32) {}
+
+priv fn param_differs(_x: U8): Bool
+  return true
+
+priv fn arity_differs(_x: I32, _y: I32): Bool
+  return true
+
+priv fn matches(_x: I32): Bool
+  return true
+
+priv fn takes_cb(_cb: Cb) {}
+
+fn main(): I32
+  h: = Holder::{ .cb = ret_differs }
+  takes_cb(param_differs)
+  ok: = Holder::{ .cb = arity_differs }
+
+  // This one passes (the same signature).
+  good: = Holder::{ .cb = matches }
+  return 1 if h.cb(0) || ok.cb(0) || good.cb(0) else 0

@@ -1,0 +1,320 @@
+import "ksai/attention_train" as ai_attn_train
+import "ksai/block_train" as ai_block_train
+import "ksai/grad" as ai_grad
+import "ksai/nn" as ai_nn
+import "ksai/nn_grad" as ai_nn_grad
+import "ksai/optim" as ai_optim
+import "ksai/sampler" as ai_sampler
+import "ksai/tensor" { Tensor }
+import "ksai/tests/common_test"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+priv fn make_logits(a: F32, b: F32, c: F32, d: F32, arena: Arena$@): Tensor<|F32|>
+  shape: Sz[1] = ::{ 4 }
+  t: = Tensor<|F32|>.new(Sz[]::shape, arena)
+  (t.data + 0)$ = a
+  (t.data + 1)$ = b
+  (t.data + 2)$ = c
+  (t.data + 3)$ = d
+  return t
+// ==========================================
+// The cross-entropy loss's analytic gradient against a finite difference
+// ==========================================
+fn test_grad_numeric(arena: Arena$@)
+  verdict.start("[Grad] numerical gradient check (cross-entropy)...")
+  target: I32 = 2
+  $base: = make_logits(F32::0.5, -(F32::1.0), F32::2.0, F32::0.3, arena)
+  // the analytic gradient = softmax(logits) - onehot(target)
+  g: = base.grad_softmax_cross_entropy(target)
+
+  eps: = 1.0e-3
+  for i in Range.asc(4)
+    saved: = (base.data + i)$
+    (base.data + i)$ = saved + F32::eps
+    l_plus: = base.cross_entropy_loss(target)
+    (base.data + i)$ = saved - F32::eps
+    l_minus: = base.cross_entropy_loss(target)
+    (base.data + i)$ = saved // restores it
+    numeric: = (l_plus - l_minus) / (2.0 * eps)
+    analytic: = (g.data + i)$
+    diff: = numeric - analytic
+    abs_diff: = -diff if diff < 0.0 else diff
+    assert(abs_diff < 1.0e-2, "Grad: analytic gradient must match finite difference")
+  verdict.pass("")
+// ==========================================
+// The numerical check of the sequence version's gradient.
+// Caution: **The per-row mean, 1/rows, enters here**, so this one can be wrong where the
+// single-position version is right: drop the coefficient and **the gradient becomes rows times
+// too large**, while the loss keeps going down and nobody notices.
+// ==========================================
+fn test_grad_numeric_seq(arena: Arena$@)
+  verdict
+    .start("[Grad] the sequence version's cross-entropy gradient matches a finite difference...")
+  rows: Sz = 3
+  n: Sz = 4
+  shape: Sz[2] = ::{ rows, n }
+  $logits: = Tensor<|F64|>.new(Sz[]::shape, arena)
+  for i in Range.asc(logits.size)
+    (logits.data + i)$ = 0.31 * (F64::((i * 5) % 7)) - 0.9
+  targets: I32[3] = ::{ 2, 0, 3 }
+  tv: = I32$[]::targets
+  g: = logits.grad_softmax_cross_entropy_seq(tv)
+
+  eps: = 1.0e-6
+  for k in Range.asc(logits.size)
+    saved: = (logits.data + k)$
+    (logits.data + k)$ = saved + eps
+    l_plus: = logits.cross_entropy_loss_seq(tv)
+    (logits.data + k)$ = saved - eps
+    l_minus: = logits.cross_entropy_loss_seq(tv)
+    (logits.data + k)$ = saved
+    d: = (l_plus - l_minus) / (2.0 * eps) - (g.data + k)$
+    ad: = -d if d < 0.0 else d
+    assert(ad < 1.0e-6, "Grad: the sequence version's gradient has to match a finite difference")
+  verdict.pass("")
+// ==========================================
+// End-to-end training: trains a one-layer linear classifier by SGD and checks the loss decreases
+// ==========================================
+fn test_grad_training(arena: Arena$@)
+  verdict.start("[Grad] end-to-end training (linear + SGD)...")
+  in_dim: Sz = 3
+  vocab: Sz = 4
+  target: I32 = 2
+  x_shape: Sz[2] = ::{ 1, in_dim }
+  $x: = Tensor<|F32|>.new(Sz[]::x_shape, arena)
+  (x.data + 0)$ = F32::0.5
+  (x.data + 1)$ = -(F32::0.2)
+  (x.data + 2)$ = F32::0.8
+  // initializes the weights W:[3,4] to 0 (deterministic)
+  w_shape: Sz[2] = ::{ in_dim, vocab }
+  $w: = Tensor<|F32|>.new(Sz[]::w_shape, arena)
+  w.fill(F32::0.0)
+
+  $loss0: = 0.0
+  for step in Range.asc(100)
+    $logits: = x.matmul(w) catch // the forward pass [1,4]
+      panic("matmul shape mismatch")
+    loss: = logits.cross_entropy_loss(target)
+    if step == 0
+      loss0 = loss
+    // the backward pass: dlogits → dW, then the SGD update
+    dlogits: = logits.grad_softmax_cross_entropy(target)
+    dw: = x.grad_matmul_weight(dlogits)
+    w.sgd_step(dw, 0.5)
+  // the prediction after training matches target, and the loss has dropped far enough
+  $final_logits: = x.matmul(w) catch panic("matmul shape mismatch")
+  loss_final: = final_logits.cross_entropy_loss(target)
+  pred: = ai_sampler.argmax(final_logits)
+  assert(pred == target, "Grad: trained classifier must predict the target class")
+  assert(loss_final < loss0 * 0.2, "Grad: training must significantly reduce the loss")
+  verdict
+    .pass(arena.text().s("linear + SGD training runs end to end and the loss falls ")
+    .s("(loss \{loss0\} -> \{loss_final\})").take())
+// ==========================================
+// End-to-end training of the nn layers: trains an MLP classifier by SGD (checking nn_grad)
+// ==========================================
+fn test_nn_training(arena: Arena$@)
+  verdict.start("[NN] end-to-end MLP training (fc1->silu->fc2 + backward)...")
+  in_dim: Sz = 3
+  hidden: Sz = 5
+  out_dim: Sz = 4
+  target: I32 = 3
+  x_shape: Sz[2] = ::{ 1, in_dim }
+  x: = Tensor<|F32|>.new(Sz[]::x_shape, arena)
+  (x.data + 0)$ = F32::0.6
+  (x.data + 1)$ = -(F32::0.4)
+  (x.data + 2)$ = F32::0.9
+
+  $mlp: = ai_nn.Mlp<|F32|>.new(in_dim, hidden, out_dim, arena)
+
+  $loss0: = 0.0
+  for step in Range.asc(200)
+    $logits: = mlp.forward(x) // [1,4]
+    loss: = logits.cross_entropy_loss(target)
+    if step == 0
+      loss0 = loss
+    dlogits: = logits.grad_softmax_cross_entropy(target)
+    mlp.backward(x, dlogits, 0.2) // the backward pass + the online SGD update
+  $final_logits: = mlp.forward(x)
+  loss_final: = final_logits.cross_entropy_loss(target)
+  pred: = ai_sampler.argmax(final_logits)
+  assert(pred == target, "NN: trained MLP must predict the target class")
+  assert(loss_final < loss0 * 0.5, "NN: MLP training must reduce the loss")
+  verdict
+    .pass(arena.text()
+    .s("an fc1->silu->fc2 MLP trains, backward pass included, and the loss falls ")
+    .s("(loss \{loss0\} -> \{loss_final\})").take())
+// ==========================================
+// RMSNorm's backward pass: dX against a finite difference, with L = Σ y_i so dy = 1.
+// ==========================================
+priv fn rmsnorm_sum(rn: ai_nn.Rms_norm<|F32|>$@, x: Tensor<|F32|>): F64
+  y: = rn.forward(x)
+  $s: = 0.0
+  for i in Range.asc(y.size)
+    s += (y.data + i)$
+  return s
+
+fn test_rmsnorm_grad(arena: Arena$@)
+  verdict.start("[NN] RMSNorm backward numerical gradient check...")
+  n: Sz = 4
+  $rn: = ai_nn.Rms_norm<|F32|>.new(n, F32::1.0e-5, arena)
+  // Non-uniform weights make the test stricter
+  (rn.weight.data + 0)$ = F32::1.0
+  (rn.weight.data + 1)$ = F32::0.5
+  (rn.weight.data + 2)$ = F32::1.5
+  (rn.weight.data + 3)$ = F32::0.8
+  x_shape: Sz[2] = ::{ 1, n }
+  x: = Tensor<|F32|>.new(Sz[]::x_shape, arena)
+  (x.data + 0)$ = F32::0.5
+  (x.data + 1)$ = -(F32::1.2)
+  (x.data + 2)$ = F32::0.9
+  (x.data + 3)$ = F32::0.3
+  // dy = 1 (L = Σ y)
+  $dy: = Tensor<|F32|>.new(Sz[]::x_shape, arena)
+  dy.fill(F32::1.0)
+  // lr=0 leaves the weights frozen and gives dX
+  dx: = rn.backward(x, dy, 0.0)
+
+  eps: = 1.0e-3
+  for k in Range.asc(n)
+    saved: = (x.data + k)$
+    (x.data + k)$ = saved + F32::eps
+    l_plus: = rmsnorm_sum(rn@, x)
+    (x.data + k)$ = saved - F32::eps
+    l_minus: = rmsnorm_sum(rn@, x)
+    (x.data + k)$ = saved
+    numeric: = (l_plus - l_minus) / (2.0 * eps)
+    analytic: = (dx.data + k)$
+    d: = numeric - analytic
+    ad: = -d if d < 0.0 else d
+    assert(ad < 1.0e-2, "NN: RMSNorm dX must match finite difference")
+  verdict.pass("")
+// ==========================================
+// The Adam optimizer: trains a linear classifier by Adam and checks that it converges
+// ==========================================
+fn test_adam(arena: Arena$@)
+  verdict.start("[Optim] Adam optimizer training...")
+  in_dim: Sz = 3
+  vocab: Sz = 4
+  target: I32 = 1
+  x_shape: Sz[2] = ::{ 1, in_dim }
+  $x: = Tensor<|F32|>.new(Sz[]::x_shape, arena)
+  (x.data + 0)$ = F32::0.3
+  (x.data + 1)$ = F32::0.9
+  (x.data + 2)$ = -(F32::0.6)
+  w_shape: Sz[2] = ::{ in_dim, vocab }
+  $w: = Tensor<|F32|>.new(Sz[]::w_shape, arena)
+  w.fill(F32::0.0)
+
+  $opt: = ai_optim.Adam<|F32|>.new_default(w, 0.1)
+  $loss0: = 0.0
+  for step in Range.asc(100)
+    $logits: = x.matmul(w) catch panic("matmul shape mismatch")
+    loss: = logits.cross_entropy_loss(target)
+    if step == 0
+      loss0 = loss
+    dlogits: = logits.grad_softmax_cross_entropy(target)
+    dw: = x.grad_matmul_weight(dlogits)
+    opt.step(w, dw) // the Adam update
+  $final_logits: = x.matmul(w) catch panic("matmul shape mismatch")
+  loss_final: = final_logits.cross_entropy_loss(target)
+  pred: = ai_sampler.argmax(final_logits)
+  assert(pred == target, "Optim: Adam must reach the target class")
+  assert(loss_final < loss0 * 0.2, "Optim: Adam must reduce the loss")
+  verdict
+    .pass(arena.text()
+    .s("training runs under Adam and the loss falls (loss \{loss0\} -> \{loss_final\})").take())
+// ==========================================
+// Self-Attention's backward pass in F64: with L = Σ out (dout=1), the training forward's input
+// gradient dX against a finite difference, then L decreasing under SGD.
+// ==========================================
+fn test_attention_grad(arena: Arena$@)
+  verdict.start("[Attn] Self-Attention backward numerical gradient check (F64)...")
+  seqn: Sz = 3
+  d: Sz = 4
+  $att: = ai_nn.Self_attention<|F64|>.new(d, seqn, arena)
+  x_shape: Sz[2] = ::{ seqn, d }
+  x: = Tensor<|F64|>.new(Sz[]::x_shape, arena)
+  for i in Range.asc(x.size)
+    (x.data + i)$ = 0.1 * (F64::i) - 0.5 // a deterministic input that varies
+  // the analytic gradient (lr=0 freezes the weights)
+  $c: = att.train_forward(x)
+  $dout: = Tensor<|F64|>.new(c.out.shape, arena)
+  dout.fill(1.0)
+  dx: = att.backward(c@, dout, 0.0)
+
+  eps: = 1.0e-5
+  for k in Range.asc(x.size)
+    saved: = (x.data + k)$
+    (x.data + k)$ = saved + eps
+    cp: = att.train_forward(x)
+    l_plus: = common_test.tsum_f64(cp.out)
+    (x.data + k)$ = saved - eps
+    cm: = att.train_forward(x)
+    l_minus: = common_test.tsum_f64(cm.out)
+    (x.data + k)$ = saved
+    numeric: = (l_plus - l_minus) / (2.0 * eps)
+    analytic: = (dx.data + k)$
+    diff: = numeric - analytic
+    ad: = -diff if diff < 0.0 else diff
+    assert(ad < 1.0e-4, "Attn: dX must match finite difference")
+  // L=Σout decreases under gradient descent (backward pass and update together)
+  before: = common_test.tsum_f64(att.train_forward(x).out)
+  for _step in Range.asc(20)
+    $cc: = att.train_forward(x)
+    $d1: = Tensor<|F64|>.new(cc.out.shape, arena)
+    d1.fill(1.0)
+    att.backward(cc@, d1, 0.01)
+  after: = common_test.tsum_f64(att.train_forward(x).out)
+  assert(after < before, "Attn: SGD must reduce the sum-of-outputs loss")
+  verdict
+    .pass(arena.text().s("Self-Attention's backward pass matches numerical differentiation (F64) ")
+    .s("(Σout \{before\} -> \{after\})").take())
+// ==========================================
+// Transformer_block's backward pass in F64: residual×2 + RMSNorm×2 + Attention + MLP composed,
+// against a finite difference and under gradient descent.
+// ==========================================
+fn test_block_grad(arena: Arena$@)
+  verdict.start("[Block] Transformer_block backward numerical gradient check (F64)...")
+  seqn: Sz = 3
+  d: Sz = 4
+  hidden: Sz = 8
+  $blk: = ai_nn.Transformer_block<|F64|>.new(d, hidden, seqn, 1.0e-5, arena)
+  x_shape: Sz[2] = ::{ seqn, d }
+  x: = Tensor<|F64|>.new(Sz[]::x_shape, arena)
+  for i in Range.asc(x.size)
+    (x.data + i)$ = 0.07 * (F64::i) - 0.4
+  // the analytic gradient (lr=0 freezes every layer)
+  $c: = blk.train_forward(x)
+  $dout: = Tensor<|F64|>.new(c.out.shape, arena)
+  dout.fill(1.0)
+  dx: = blk.backward(c@, dout, 0.0)
+
+  eps: = 1.0e-5
+  for k in Range.asc(x.size)
+    saved: = (x.data + k)$
+    (x.data + k)$ = saved + eps
+    l_plus: = common_test.tsum_f64(blk.train_forward(x).out)
+    (x.data + k)$ = saved - eps
+    l_minus: = common_test.tsum_f64(blk.train_forward(x).out)
+    (x.data + k)$ = saved
+    numeric: = (l_plus - l_minus) / (2.0 * eps)
+    analytic: = (dx.data + k)$
+    diff: = numeric - analytic
+    ad: = -diff if diff < 0.0 else diff
+    assert(ad < 1.0e-3, "Block: dX must match finite difference")
+  // Σout decreases under gradient descent (the whole block's training)
+  before: = common_test.tsum_f64(blk.train_forward(x).out)
+  for _step in Range.asc(20)
+    $cc: = blk.train_forward(x)
+    $d1: = Tensor<|F64|>.new(cc.out.shape, arena)
+    d1.fill(1.0)
+    blk.backward(cc@, d1, 0.01)
+  after: = common_test.tsum_f64(blk.train_forward(x).out)
+  assert(after < before, "Block: SGD must reduce the sum-of-outputs loss")
+  verdict
+    .pass(arena.text()
+    .s("Transformer_block's backward pass matches numerical differentiation (F64) ")
+    .s("(Σout \{before\} -> \{after\})").take())

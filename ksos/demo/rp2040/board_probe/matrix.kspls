@@ -1,0 +1,141 @@
+//< The I2C LED matrix (VK16K33) (stage 5c in ksos/docs/HOWTO-bring-up.md)
+//<
+//< **Unplug the ultrasonic module and plug in the LED matrix before looking at this.**
+//< GPIO 4/5 share one connector between the two, and they cannot be plugged in at once.
+//< **Scan the bus first, and print every address found.**
+
+// ==========================================
+//   [i2c] scan: 0x71
+//   [i2c] using 0x71
+//   [i2c] matrix init: ok
+//   [i2c] frame    0 to=0x71 scan=0x71 init=ok fails=0 why=none
+// ==========================================
+import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/demo/rp2040/common/bringup" as boot
+import "ksos/demo/rp2040/common/console" as con
+import "ksos/drivers/ht16k33" as matrix
+import "ksos/drivers/rp2040/i2c"
+
+const frame_interval_ms: U32 = 500
+const frames_per_run: U32 = 8
+
+const scan_first: U32 = 0x08 //< the range scanned
+  //<
+  //< 0x00 to 0x07 and 0x78 to 0x7f are reserved by the standard.
+const scan_last: U32 = 0x77
+
+priv $ready: Bool = false
+priv $target: U32 = 0
+priv $scan_found: U32 = 0
+priv $ok_init: Bool = false
+priv $fails: U32 = 0
+priv $phase: U32 = 0
+
+fn init(): Bool //< starts it
+  //<
+  //< Caution: Call it after `clocks.init()`. false means the I2C block did not start.
+  ready = i2c.init(board.i2c_sda, board.i2c_scl)
+  return ready
+
+priv fn scan_bus(ln: con.Line$@): U32 //<
+  //< Scans the bus and prints the addresses found together on one line
+  //<
+  //< It returns the first address found (0 if there is none).
+  $found: U32 = 0
+  $count: U32 = 0
+  ln.reset()
+  ln.str("[i2c] scan:")
+  for $a: U32 = scan_first; a <= scan_last; a += 1
+    if i2c.present(a)
+      count += 1
+      if found == 0
+        found = a
+      ln.str(" 0x")
+      ln.hex2(a)
+  if count == 0
+    ln.str(" (none)")
+  _sent: = ln.flush()
+  return found
+
+priv fn append_i2c_reason(ln: con.Line$@) //< appends the reason for the latest I2C failure
+  //<
+  //< "It could not write" alone tells nothing apart, so it shows whether the device is absent, or
+  //< present but not accepting.
+  if i2c.last_was_timeout()
+    ln.str("timeout")
+    return
+  a: = i2c.last_abort()
+  if a == 0
+    ln.str("none")
+    return
+  ln.str("0x")
+  ln.hex2(a & 0xff)
+  if (a & 1U32) != 0
+    ln.str(" addr-nack (nobody is there)")
+  else if (a & (1U32 << 3)) != 0
+    ln.str(" data-nack (it is there but does not take it)")
+
+priv fn make_frame(out: U16$@, phase: U32) //< makes one picture of eight rows
+  //<
+  //< As phase advances it becomes a band moving downwards. The picture must visibly move: a still
+  //< one cannot tell "it wrote once and stopped" from "it keeps running".
+  for $r: U32 = 0; r < 8; r += 1
+    // A band shifted one bit per row. It is 16 columns wide, so it is masked with 0xffff.
+    shift: = (phase + r) % 16
+    (out + Sz::r)$ = U16::((0x000fU32 << shift) & 0xffff)
+
+priv fn attach(ln: con.Line$@, want: U32) //<
+  //< Starts the matrix if the target changed, or if it has not started yet
+  if want == target && ok_init
+    return
+  target = want
+  ln.reset()
+  ln.str("[i2c] using 0x")
+  ln.hex2(target)
+  if scan_found == 0
+    // Try the default even if nothing was found, to rule out a failure of the scan alone.
+    ln.str(" (nothing answered; trying anyway)")
+  _u: = ln.flush()
+
+  ok_init = matrix.init(target, 8)
+  ln.reset()
+  ln.str("[i2c] matrix init: ")
+  ln.str("ok" if ok_init else "NG why=")
+  if !ok_init
+    append_i2c_reason(ln)
+  _i: = ln.flush()
+
+fn run(ln: con.Line$@)
+  if !ready
+    con.say(ln, "[i2c]", "init failed (the block did not leave reset)")
+    return
+  // Scan again each round. The swap happens while it runs, so remembering the first round's result
+  // would keep writing to the old device after the swap.
+  scan_found = scan_bus(ln)
+  attach(ln, scan_found if scan_found != 0 else matrix.default_addr)
+  // The picture **that keeps moving** is the sign of life.
+  for _i in Range.asc(Sz::frames_per_run)
+    $frame: U16[8] = ::{}
+    make_frame(frame[0]@, phase)
+    if !matrix.draw(target, frame[0]@)
+      fails += 1
+    ln.reset()
+    ln.str("[i2c] frame ")
+    ln.u32_pad(phase, 4)
+    ln.str(" to=0x")
+    ln.hex2(target)
+    ln.str(" scan=")
+    if scan_found == 0
+      ln.str("none")
+    else
+      ln.str("0x")
+      ln.hex2(scan_found)
+    ln.str(" init=")
+    ln.str("ok" if ok_init else "NG")
+    ln.str(" fails=")
+    ln.u32(fails)
+    ln.str(" why=")
+    append_i2c_reason(ln)
+    _s: = ln.flush()
+    phase += 1
+    boot.pump(frame_interval_ms)

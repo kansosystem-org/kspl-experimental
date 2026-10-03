@@ -1,0 +1,109 @@
+//< A `Store` in RAM that imitates flash's constraints exactly
+//<
+//< For testing `ksdb/log` without a device: a write only turns bits to 0, so reading back what
+//< was never erased gives what flash would. Writes and erases are counted, so a test can catch a
+//< needless erase. **Only one store exists at a time**: after a second `make`, only the later one
+//< works.
+
+// ==========================================
+// Caution: **Do not loosen it.** If this let RAM be overwritten freely, code that passes here
+// would break on real flash.
+// ==========================================
+import "ksdb/store" { Store }
+import "std/bytes" as std_bytes
+import "std/chars" // classifying and extracting one character
+
+// Only one buffer is held, because `Store` carries no context pointer.
+priv $cell: U8$[] = ""
+
+// How many times it wrote and erased. **The tests check that it erases no more than it has to**,
+// since an erase is flash's most expensive operation and wears the flash out.
+pub $programs: Sz = 0
+pub $erases: Sz = 0
+
+// The armed power cut: which call it hits and how many bytes that call writes. Only the tests use
+// it (see `arm_cut`).
+priv $cut_at: Sz = 0
+priv $cut_bytes: Sz = 0
+// How many times `program_at` has been called, counted only to find the armed call.
+priv $calls: Sz = 0
+
+priv fn read_at(at: Sz, dst: U8$[])
+  for $i: Sz = 0; i < dst.len; i += 1
+    dst[i] = cell[at + i]
+
+priv fn program_at(at: Sz, src: U8[]): Bool //<
+  //< Writes by turning bits to 0 only (`&=`)
+  //<
+  //< A plain assignment would be looser than flash.
+  calls += 1
+  if cut_at != 0 && calls == cut_at
+    // **Disarm it after one cut.** A real device restarts after a power cut, so it never
+    // happens twice in one run.
+    cut_at = 0
+    $n: Sz = cut_bytes
+    if n > src.len
+      n = src.len
+    for $i: Sz = 0; i < n; i += 1
+      cell[at + i] = cell[at + i] & src[i]
+    // Caution: **Do not count it as a write.** Counted, it would throw off the tests that check
+    // for needless erases.
+    return false
+  for $i: Sz = 0; i < src.len; i += 1
+    cell[at + i] = cell[at + i] & src[i]
+  programs += 1
+  return true
+
+priv fn erase_sector_at(at: Sz): Bool
+  base: = at - (at % sector)
+  v: = cell.sub_mut(base, sector)
+  v.fill(0xff)
+  erases += 1
+  return true
+
+priv $sector: Sz = 0
+
+pub fn make( //< a `Store` on `buf`, erased and ready to use; the caller keeps `buf` alive
+  //<
+  //< Caution: `sector_size` has to divide `buf.len`.
+  //< It erases `buf` before returning, as flash leaves the factory erased.
+  buf: U8$[], //< the memory itself; the store keeps no copy of it
+  sector_size: Sz, //< the erase unit; it must divide `buf.len`
+): Store //< the store, reading and writing `buf` in place
+  cell = buf
+  sector = sector_size
+  programs = 0
+  erases = 0
+  cut_at = 0
+  cut_bytes = 0
+  calls = 0
+  buf.fill(0xff)
+  return Store::{
+    .read_at = read_at,
+    .program_at = program_at,
+    .erase_sector = erase_sector_at,
+    .capacity = buf.len,
+    .sector_size = sector_size,
+  }
+
+pub fn arm_cut( //< arms one power cut; only the tests use it
+  //<
+  //< The cut hits the `at`-th `program_at` call, once. **It counts calls because appending writes
+  //< twice per record** (the content, then the header), so a test can move the cut one write at a
+  //< time ("Where the power is cut is tried exhaustively" in `tests/ksdb_test.kspls`).
+  at: Sz, //< the `program_at` call to cut, counting from 1; 0 means "do not arm"
+  bytes: Sz, //< how many bytes of that write land before the cut
+)
+  cut_at = at
+  cut_bytes = bytes
+  calls = 0
+
+pub fn tear( //< corrupts a finished record afterwards; only the tests use it
+  //<
+  //< Makes `len` bytes from `at` look half-written (it mixes 0s in), as a power cut leaves them.
+  //< Unlike `arm_cut`, it damages the record **after the write has finished**.
+  at: Sz,
+  len: Sz, //< how many bytes from `at` are mixed with 0s
+)
+  for $i: Sz = 0; i < len; i += 1
+    cell[at + i] = cell[at + i] & 0x0fU8

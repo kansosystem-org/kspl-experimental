@@ -1,0 +1,833 @@
+//< Checks that ksplc can read the indentation notation (`.kspls`) directly
+//<
+//< **1. The twins become the same program.** Only `#line` and the arguments carrying a position may
+//< differ, since the twins differ in line count (the braced file has closing lines).
+//< Caution: **The brace notation cannot confirm it**, since it skips a `\r` as whitespace; the
+//< indentation notation **counts lines**, so once a `\r` is read as a character a blank line is
+//< not blank, and the terminator and the brace land after the `\r`.
+//< **It reads only this package's own folder**: the twins in `../kspls/`, the grammar and the
+//< code that rewrites the indentation. The root's `kspls-trip` round-trips the whole tree.
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/kspls_crlf"
+import "ksplc/tests/support/kspls_doc"
+import "ksplc/tests/support/lsp_client"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/json"
+import "std/jsonrpc"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/sys"
+import "std/verdict"
+
+priv const pair_dir: U8[] = "tests/kspls" //< where the twins are placed
+  //<
+  //< A `<name>.kspls` pairs with the `<name>.kspl` beside it.
+
+priv const normal_ms: I32 = 15000
+
+// ---------------------------------------------------------
+// 1. The twins become the same program
+// ---------------------------------------------------------
+
+priv fn without_line_marks(c: U8[], arena: Arena$@): List<|U8[]|> //< it drops the `#line` lines
+  //<
+  //< The twins differ in line count, so these always disagree.
+  $out: = List<|U8[]|>.new(arena)
+  for line in c.lines(arena)
+    if line.starts_with("#line ")
+      continue
+    out.push(line)
+  return out
+
+priv fn same_program(name: U8[], a: U8[], b: U8[], stem: U8[], arena: Arena$@): Bool //<
+  //< It compares the generated C
+  //<
+  //< **What may differ is only the lines that carry a position** — the bounds, shift and division
+  //< checks take the source's name and **line number**, so the name in a line tells them apart.
+  $left: = without_line_marks(a, arena)
+  $right: = without_line_marks(b, arena)
+  $bad: = List<|U8[]|>.new(arena)
+  if left.len != right.len
+    bad
+      .push(arena.text().s("the line counts differ (\{left.len\} and \{right.len\})").take())
+  n: = left.len if left.len < right.len else right.len
+  for i in Range.asc(n)
+    l: = left.get(i)
+    r: = right.get(i)
+    if l.equals(r)
+      continue
+    if l.find_str(stem) >= 0 && r.find_str(stem) >= 0
+      continue // a line carrying a position: only the source's name and line number differ
+    bad.push(arena.text().s("line \{i + 1\}: ").s(l).take())
+  return verdict.check_list(arena.text().s(name).s(": the C put out agrees").take(), n, "lines",
+    bad@, "")
+
+priv fn check_pair(work: U8[], stem: U8[], arena: Arena$@) //< it checks one pair of twins
+  //<
+  //< Caution: **Give them the same name in the same directory**; symbol names are made from it.
+  braced: = pair_path(stem, ".kspl", arena)
+  laid: = pair_path(stem, ".kspls", arena)
+  in_braced: = fs.join(work, arena.text().s(stem).s(".kspl").take(), arena)
+  in_laid: = fs.join(work, arena.text().s(stem).s(".kspls").take(), arena)
+  gen_a: = fs.join(work, "braced.c", arena)
+  gen_b: = fs.join(work, "laid.c", arena)
+  if !copy_into(braced, in_braced, stem, arena) || !copy_into(laid, in_laid, stem, arena)
+    return
+  ra: = harness.ksplc(U8[][]::{ in_braced, gen_a })
+  if !verdict.check(arena.text().s(stem).s(": the brace side builds").take(), ra.code == 0, ra.out)
+    return
+  // Caution: **Do not put it through a tool.** ksplc reading `.kspls` directly is the property.
+  rb: = harness.ksplc(U8[][]::{ in_laid, gen_b })
+  if !verdict.check(arena.text().s(stem).s(": the indentation side builds directly").take(),
+    rb.code == 0, rb.out)
+    return
+  a: = harness.read_generated(gen_a)
+  b: = harness.read_generated(gen_b)
+  same_program(stem, a, b, stem, arena)
+
+priv fn pair_path(stem: U8[], ext: U8[], arena: Arena$@): U8[]
+  return fs.join(pair_dir, arena.text().s(stem).s(ext).take(), arena)
+
+priv fn copy_into(from: U8[], to: U8[], stem: U8[], arena: Arena$@): Bool
+  src: = io.read_file(from) catch
+    return verdict.check(arena.text().s(stem).s(": the twins can be read").take(), false, from)
+  io.write_file(to, src) catch
+    return verdict.check(arena.text().s(stem).s(": they can be copied to the working directory")
+      .take(), false, to)
+  return true
+
+priv fn pair_stems(arena: Arena$@): List<|U8[]|> //< it collects the twins' names
+  //<
+  //< Caution: **Do not keep a list of names** — a pair added later would be missed. The folder is
+  //< the list.
+  $out: = List<|U8[]|>.new(arena)
+  names: = fs.read_dir(pair_dir, arena) catch
+    return out
+  for leaf in names
+    if leaf.ends_with(".kspls")
+      out.push(arena.dup_str(leaf.strip_suffix(".kspls")))
+  return out
+
+// ---------------------------------------------------------
+// 2. It can be used from an editor
+// ---------------------------------------------------------
+
+priv const probe_uri: U8[] = "file:///laid_probe.kspls" //<
+  //< The URI of the probe document
+  //<
+  //< Caution: **Make it a source whose lines and columns can be counted.** The test checks that
+  //< positions do not drift, so a reader must see which line and column holds what.
+priv const probe_src: U8[] =
+  """import "std/io"
+
+priv fn twice(n: I32): I32
+  return n * 2
+
+fn main(): I32
+  v: = twice(21)
+  io.out().s("v=\{v\}\n")
+  bad: I32 = nowhere
+  return 0
+"""
+
+priv const bad_line: I64 = 8I64 //< the line and column `nowhere` is at (0-based)
+  //<
+  //< **It is a value counted from the source** (the `bad:` line of `probe_src`).
+priv const bad_col: I64 = 13I64
+priv const bind_line_at: Sz = 6 //<
+  //< The line and column of `v`'s binding and `twice`'s call (0-based; the `v: =` line)
+  //<
+  //< **Passing a position takes `Sz`**; the two above are compared with the response (JSON's I64).
+priv const bind_col_at: Sz = 2
+priv const call_col_at: Sz = 7
+priv const decl_line: I64 = 2I64 //< the line `twice`'s declaration is on (0-based)
+  //<
+  //< It is the `priv fn twice` line of `probe_src`.
+
+priv fn is_missing(v: json.Val): Bool
+  switch v case .null_val
+    return true
+  default {}
+  return false
+
+priv fn check_diagnostics(c: jsonrpc.Client$@, arena: Arena$@) //< the squiggles
+  //<
+  //< **The returned URI must be `.kspls`**, or the editor puts squiggles on a different file.
+  _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(probe_uri, probe_src, arena), arena)
+  $found: = false
+  $line: I64 = -1I64
+  $col: I64 = -1I64
+  $count: Sz = 0
+  for _k in Range.asc(8)
+    msg: = c.read_msg(normal_ms, arena) catch
+      break
+    if !msg.get("method").as_str().equals("textDocument/publishDiagnostics")
+      continue
+    p: = msg.get("params")
+    if !p.get("uri").as_str().ends_with("laid_probe.kspls")
+      continue
+    found = true
+    $diags: = p.get("diagnostics").arr_list(arena)
+    count = diags.len
+    if count > 0
+      start: = diags.get(0).get("range").get("start")
+      line = start.get("line").as_int64(-1I64)
+      col = start.get("character").as_int64(-1I64)
+    break
+  seen: = arena.text().s("arrived=\{found\} count=\{count\} line=\{line\} col=\{col\}").take()
+  verdict.check("a squiggle points at the indentation notation's line and column",
+    found && count == 1 && line == bad_line && col == bad_col, seen)
+
+priv fn check_hover(c: jsonrpc.Client$@, arena: Arena$@) //< the hovers
+  //<
+  //< Caution: **Check the content**; with the position drifted, something still comes back.
+  got: =
+    c.request("textDocument/hover",
+    lsp_client.at_pos(probe_uri, bind_line_at, bind_col_at, arena), normal_ms, arena) catch
+    fallback json.Val.null_val
+  text: = got.get("result").get("contents").get("value").as_str()
+  // Caution: **Check the name too.** The type alone passes with the position drifted to another
+  // `I32`.
+  verdict.check("a hover answers with the name and the type under the indentation notation",
+    text.find_str("v: I32") >= 0,
+    arena.text().s("returned=").s(lsp_client.dump(got, arena)).take())
+
+priv fn check_definition(c: jsonrpc.Client$@, arena: Arena$@) //< jumping to a definition
+  //<
+  //< **The destination's line must be the indentation notation's line.**
+  got: =
+    c.request("textDocument/definition",
+    lsp_client.at_pos(probe_uri, bind_line_at, call_col_at, arena), normal_ms, arena) catch
+    fallback json.Val.null_val
+  res: = got.get("result")
+  $line: I64 = -1I64
+  $uri: U8[] = ""
+  if is_missing(res)
+    verdict.check("the jump-to-definition destination points at the indentation notation's line",
+      false, lsp_client.dump(got, arena))
+    return
+  one: = res if is_missing(res.get_at(0)) else res.get_at(0)
+  uri = one.get("uri").as_str()
+  line = one.get("range").get("start").get("line").as_int64(-1I64)
+  seen: = arena.text().s("destination=\{uri\} line=\{line\}").take()
+  verdict.check("the jump-to-definition destination points at the indentation notation's line",
+    line == decl_line && uri.ends_with("laid_probe.kspls"), seen)
+
+// ---------------------------------------------------------
+// 3. The indentation notation imports the indentation notation
+// ---------------------------------------------------------
+
+// **An import written with no extension must resolve.** `import "helper"` opens `helper.kspls`
+// first (`name_as_found` in `ksplc/base/locate.kspls`); otherwise `.kspls` is a one-file notation.
+priv const helper_src: U8[] =
+  """priv const step: I32 = 7
+
+fn bumped(n: I32): I32
+  return n + step
+"""
+priv const user_src: U8[] =
+  """import "std/io"
+import "helper"
+
+fn main(): I32
+  io.out().s("v=\{helper.bumped(1)\}\n")
+  return 0
+"""
+
+priv fn check_import(work: U8[], arena: Arena$@)
+  dir: = fs.join(work, "laid_pair", arena)
+  fs.mkdir_all(dir) catch
+    verdict.check("the indentation notation can import the indentation notation", false,
+      "the place cannot be made")
+    return
+  io.write_file(fs.join(dir, "helper.kspls", arena), helper_src) catch
+    verdict.check("the indentation notation can import the indentation notation", false,
+      "the imported file cannot be written")
+    return
+  user: = fs.join(dir, "user.kspls", arena)
+  io.write_file(user, user_src) catch
+    verdict.check("the indentation notation can import the indentation notation", false,
+      "the importing file cannot be written")
+    return
+  r: = harness.ksplc(U8[][]::{ "run", user })
+  verdict.check("the indentation notation can import the indentation notation",
+    r.code == 0 && r.out.find_str("v=8") >= 0, r.out)
+
+// The brace notation behind an import with no extension, faulty on purpose: the diagnostic must
+// name the file it was found under.
+priv const braced_helper_src: U8[] =
+  """priv const step: I32 = 7;
+
+fn bumped(n: I32): I32 {
+  return n + nowhere;
+}
+"""
+
+priv fn check_import_braced(work: U8[], arena: Arena$@) //<
+  //< `import "helper"` finds no `helper.kspls`, so it opens `helper.kspl` under that name
+  //<
+  //< **The diagnostic has to name the file that is on the disk**, not a `helper.kspls` that never
+  //< existed, and the symbols must match a build from that file (`name_as_found` in
+  //< `ksplc/base/locate.kspls`).
+  name: = "an import with no extension names the notation it found"
+  dir: = fs.join(work, "braced_pair", arena)
+  fs.mkdir_all(dir) catch
+    verdict.check(name, false, "the place cannot be made")
+    return
+  io.write_file(fs.join(dir, "helper.kspl", arena), braced_helper_src) catch
+    verdict.check(name, false, "the imported file cannot be written")
+    return
+  user: = fs.join(dir, "user.kspls", arena)
+  io.write_file(user, user_src) catch
+    verdict.check(name, false, "the importing file cannot be written")
+    return
+  r: = harness.ksplc(U8[][]::{ "run", user })
+  verdict.check(name,
+    r.code != 0 && r.out.find_str("helper.kspl:") >= 0 && r.out.find_str("helper.kspls") < 0,
+    r.out)
+
+// The same helper, without the fault, and two users: one spelling the extension out, one
+// importing both twins.
+priv const braced_ok_src: U8[] =
+  """priv const step: I32 = 7;
+
+fn bumped(n: I32): I32 {
+  return n + step;
+}
+"""
+priv const spelt_user_src: U8[] =
+  """import "std/io"
+import "helper.kspl"
+
+fn main(): I32
+  io.out().s("v=\{helper.bumped(1)\}\n")
+  return 0
+"""
+priv const twin_user_src: U8[] =
+  """import "helper.kspl"
+import "helper"
+
+fn main(): I32
+  return helper.bumped(1)
+"""
+
+priv fn check_import_spelt(work: U8[], arena: Arena$@) //<
+  //< It checks an import spelling the extension out is called by its stem
+  //<
+  //< Both twins imported at once are rejected by name.
+  //< Caution: **Test both.** With the extension left in the alias, the first fails with "undefined
+  //< path or identifier 'helper'" and the second passes saying nothing.
+  stem: = "an import spelling the extension is called by the stem"
+  twin: = "two files parting on the extension alone want an alias apiece"
+  dir: = fs.join(work, "spelt_pair", arena)
+  fs.mkdir_all(dir) catch
+    verdict.check(stem, false, "the place cannot be made")
+    return
+  io.write_file(fs.join(dir, "helper.kspl", arena), braced_ok_src) catch
+    verdict.check(stem, false, "the imported file cannot be written")
+    return
+  user: = fs.join(dir, "user.kspls", arena)
+  io.write_file(user, spelt_user_src) catch
+    verdict.check(stem, false, "the importing file cannot be written")
+    return
+  r: = harness.ksplc(U8[][]::{ "run", user })
+  verdict.check(stem, r.code == 0 && r.out.find_str("v=8") >= 0, r.out)
+  io.write_file(fs.join(dir, "helper.kspls", arena), helper_src) catch
+    verdict.check(twin, false, "the twin cannot be written")
+    return
+  both: = fs.join(dir, "both.kspls", arena)
+  io.write_file(both, twin_user_src) catch
+    verdict.check(twin, false, "the importing file cannot be written")
+    return
+  t: = harness.ksplc(U8[][]::{ "run", both })
+  verdict.check(twin,
+    t.code != 0 && t.out.find_str("import alias 'helper' already points at") >= 0, t.out)
+
+priv const labelled_block_src: U8[] = //< a block carrying a label
+  """import "std/io";
+
+fn main(): I32 {
+  while_locked: {
+    io.out().s("inside\\n");
+  }
+  return 0;
+}
+"""
+
+priv fn check_labelled_block_kept(work: U8[], arena: Arena$@) //<
+  //< A block carrying a label goes through `--to=kspls` with the label kept
+  //<
+  //< **A bare one never reaches here** — it does not parse (pinned by
+  //< `ksplc/tests/negative/bare_block_without_label.kspl`); this checks that the valid shape is not
+  //< rejected along with it.
+  name: = "fmt --to=kspls keeps a block's label"
+  dir: = fs.join(work, "labelled_block", arena)
+  fs.mkdir_all(dir) catch
+    verdict.check(name, false, "the place cannot be made")
+    return
+  labelled: = fs.join(dir, "labelled.kspl", arena)
+  io.write_file(labelled, labelled_block_src) catch
+    verdict.check(name, false, "the material cannot be written")
+    return
+  yes: = harness.ksplc_bare(U8[][]::{ "fmt", "--to=kspls", labelled })
+  verdict.check(name, yes.code == 0 && yes.out.find_str("while_locked:") >= 0,
+    arena.text().s("labelled=\{yes.code\}\n\{yes.out\}").take())
+
+// ---------------------------------------------------------
+// 4. A doc comment keeps its place in the other notation
+// ---------------------------------------------------------
+
+priv const doc_src: U8[] =
+  """// A struct, a trait, an impl and a function each carrying a doc comment.
+priv struct Row { //< one row of the table
+  //<
+  //< What a row stands for, written out in a sentence.
+  text: U8[]; //< the text as the writer typed it
+    //< It is the writer\'s bytes as they came in, with neither end trimmed.
+  hits: Bool; //< whether this row matched
+}
+
+priv enum Verdict { //< how a row came out
+  //<
+  //< The two answers a row can give.
+  kept; //< it stays in the table
+  dropped; //< it falls out of the table
+    //< Nothing is written back to the row; it is only how the count came out.
+}
+
+priv trait Sayable { //< anything that can name itself
+  //<
+  //< One name per row, for the report.
+  fn say(r: Self): U8[]; //< the name to print
+}
+
+impl Row: Sayable { //< Row names itself by its text
+  //<
+  //< The text is the name, so nothing is built here.
+  fn say(r: Self$@): U8[] { //< the text as it stands
+    return r.text;
+  }
+}
+
+priv fn count( //< how many rows matched
+  rows: Row[1], //< the table to walk
+    //< It is walked once, in the order the rows were put in.
+  want: Bool, //< the answer being counted
+): Sz { //< the number of rows that gave `want`
+  // Walks the table once and counts.
+  $n: Sz = 0;
+  for one in rows {
+    if one.hits == want {
+      n += 1;
+    }
+  }
+  return n;
+}
+
+priv fn say_len(v: Verdict): I32 {
+  switch v case .kept {
+    return 0;
+  } default {
+    return 1;
+  }
+}
+
+fn main(): I32 {
+  rows: Row[1] = ::{ Row::{ .text = "a", .hits = true } };
+  v: = Verdict.kept;
+  return I32::count(rows, true) - 1 + say_len(v);
+}
+"""
+
+priv fn spell_step(work: U8[], step: Sz, body: U8[], from_ext: U8[], to: U8[], arena: Arena$@):
+  U8[] //<
+    //< It writes one source and then converts it into the `to` notation
+    //<
+    //< It returns empty if it cannot (a source is always one byte or more).
+    //< Caution: **Tell the notations apart by extension.** `ksplc` decides the notation by it, so
+    //< the indentation notation under a `.kspl` name is read as braces.
+  path: = fs.join(work, arena.text().s("trip\{step\}.\{from_ext\}").take(), arena)
+  io.write_file(path, body) catch
+    return ""
+  r: = harness
+    .ksplc_bare(U8[][]::{ "fmt", arena.text().s("--to=\{to\}").take(), path })
+  return "" if r.code != 0 else r.out
+
+priv fn check_doc_comments(work: U8[], arena: Arena$@) //<
+  //< The doc comment comes back unchanged from the round trip
+  //<
+  //< It checks the placement (`../support/kspls_doc.kspls` checks reading them as documentation),
+  //< with a run below a `//<` on a field, on a parameter and at a block's end.
+  name: = "a doc comment stands in the same place after a round trip"
+  laid: = spell_step(work, 1, doc_src, "kspl", "kspls", arena)
+  if laid.len == 0
+    verdict.check(name, false, "it cannot be put out into the indentation notation")
+    return
+  back: = spell_step(work, 2, laid, "kspls", "kspl", arena)
+  verdict.check(name, back.equals(doc_src),
+    arena.text().s("the round trip differs\n--- expected ---\n\{doc_src\}--- actual ---\n\{back\}")
+    .take())
+  verdict.check("not one doc comment is lost on the way to the indentation notation",
+    doc_marks(laid, arena) == doc_marks(doc_src, arena),
+    arena.text().s("\{doc_marks(doc_src, arena)\} became \{doc_marks(laid, arena)\}\n\{laid\}")
+    .take())
+
+priv fn doc_marks(src: U8[], arena: Arena$@): Sz //<
+  //< The number of doc comments (`//<` and `///`) in one source
+  $n: Sz = 0
+  for line in src.lines(arena)
+    if line.find_str("//<") >= 0 || line.find_str("///") >= 0
+      n += 1
+  return n
+
+// ---------------------------------------------------------
+// 5. The grammar and the indentation rewriter's copy are tied together
+// ---------------------------------------------------------
+
+// "Which symbol the indentation notation replaces by a level" is **knowledge the grammar holds**,
+// copied as heading words in `ksplc/parse/layout.kspls`.
+// Caution: **Untied, a block-opening notation added to the grammar silently leaves the rewriter
+// out of date** (Principle 4).
+
+priv fn end_of_quoted(src: U8[], at: Sz, quote: U8): Sz //<
+  //< The end of a string starting with `"` or `'`
+  //<
+  //< **If it is not skipped, a `=` or `"` inside reads as a heading or a separator.**
+  $j: = at + 1
+  for j < src.len
+    if src[j] == '\\' && j + 1 < src.len
+      j += 2
+      continue
+    if src[j] == quote
+      return j + 1
+    j += 1
+  return src.len
+
+priv struct Rule //< one rule of the grammar
+  name: U8[]
+  body: U8[]
+
+priv fn rule_head(line: U8[]): U8[] //<
+  //< If the line is a rule's heading (`name =`), it returns that name, else empty
+  if line.len == 0 || !(line[0].is_alnum() || line[0] == '_')
+    return ""
+  $e: Sz = 0
+  for e < line.len && (line[e].is_alnum() || line[e] == '_')
+    e += 1
+  $j: = e
+  for j < line.len && line[j] == ' '
+    j += 1
+  if j >= line.len || line[j] != '='
+    return ""
+  return line.sub(0, e)
+
+priv fn without_line_comment(line: U8[]): U8[] //< it drops a line comment from a line
+  //<
+  //< **A `//` inside a quote is not a comment** (`_Line_comment = "//" ...`).
+  $i: Sz = 0
+  for i < line.len
+    if line[i] == '"'
+      i = end_of_quoted(line, i, '"')
+      continue
+    if line.starts_with("//", i)
+      return line.sub(0, i)
+    i += 1
+  return line
+
+priv fn split_rules(src: U8[], arena: Arena$@): List<|Rule|> //<
+  //< It splits the grammar into "name -> body"
+  //<
+  //< Caution: **Do not split by line** — a body runs to the next heading or a blank line
+  //< (`decl_trait` spans two lines).
+  $out: = List<|Rule|>.new(arena)
+  $name: U8[] = ""
+  $body: = Str_builder.new()
+  defer body.free()
+  for line in src.lines(arena)
+    head: = rule_head(line)
+    if head.len > 0
+      if name.len > 0
+        out.push(Rule::{ .name = name, .body = arena.dup_str(body.slice()) })
+      name = head
+      body.clear()
+      body.s(without_line_comment(line.sub_from(head.len)))
+      continue
+    if name.len == 0
+      continue
+    trimmed: = line.trim_spaces()
+    if trimmed.len == 0 || trimmed.starts_with("//")
+      out.push(Rule::{ .name = name, .body = arena.dup_str(body.slice()) })
+      name = ""
+      continue
+    body.c('\n').s(without_line_comment(line))
+  if name.len > 0
+    out.push(Rule::{ .name = name, .body = arena.dup_str(body.slice()) })
+  return out
+
+priv fn marker_names(src: U8[], tag: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< It collects the `// [mark] name name ...` lines of the grammar's header, merging equal marks
+  $out: = List<|U8[]|>.new(arena)
+  $lead: = Str_builder.new()
+  defer lead.free()
+  lead.s("// [").s(tag).s("] ")
+  for line in src.lines(arena)
+    if !line.starts_with(lead.slice())
+      continue
+    for word in line.sub_from(lead.len).split(' ', arena)
+      if word.trim_spaces().len > 0
+        out.push(word.trim_spaces())
+  return out
+
+priv fn quoted_words(body: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< It collects the `'word'` appearing in a body
+  $out: = List<|U8[]|>.new(arena)
+  $i: Sz = 0
+  for i < body.len
+    if body[i] == '"'
+      i = end_of_quoted(body, i, '"')
+      continue
+    if body[i] == '\''
+      e: = end_of_quoted(body, i, '\'')
+      if e > i + 2
+        out.push(body.sub(i + 1, e - i - 2))
+      i = e
+      continue
+    i += 1
+  return out
+
+priv fn layout_heads(src: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< It reads the words listed in `block_heads` in `ksplc/parse/layout.kspls`
+  //<
+  //< Caution: **Stop at the literal's closing `}`, not at a `;`.** `block_heads` is declared in the
+  //< indentation notation, with no terminator, so a scan for `;` takes in the words declared next
+  //< (`head_skips`' `pub` and `priv`). A value's `::{ … }` keeps its braces in either notation.
+  $out: = List<|U8[]|>.new(arena)
+  at: = src.find_str("block_heads:")
+  if at < 0
+    return out
+  after: = src.sub_from(at)
+  opens: = after.find_str("{")
+  if opens < 0
+    return out
+  $i: Sz = at + opens
+  for i < src.len && src[i] != '}'
+    if src[i] == '"'
+      e: = end_of_quoted(src, i, '"')
+      out.push(src.sub(i + 1, e - i - 2))
+      i = e
+      continue
+    i += 1
+  return out
+
+priv const not_head_words: U8[][2] = ::{ "catch", "in" } //<
+  //< Words appearing in a rule that opens a block but that do not start a line
+  //<
+  //< **`catch` alone opens a level at a line's end** (`ends_in_catch` in
+  //< `ksplc/parse/line_cont.kspls`); **`in` is part of `for`'s heading** (`for x in xs`).
+
+priv const label_mark: U8[] = "label:" //< the mark for a word that is not a heading word
+  //<
+  //< A `:` goes into no name, so it collides with no real word.
+
+priv fn has_word(xs: List<|U8[]|>@, want: U8[]): Bool
+  for one in xs
+    if one.equals(want)
+      return true
+  return false
+
+priv fn named_in(xs: U8[][], want: U8[]): Bool
+  for one in xs
+    if one.equals(want)
+      return true
+  return false
+
+priv fn same_set(tag: U8[], want: List<|U8[]|>@, got: List<|U8[]|>@, bad: List<|U8[]|>$@,
+  arena: Arena$@) //<
+    //< Whether the lists agree as sets, adding the names that differ to `bad`
+  for one in want
+    if !has_word(got, one)
+      bad
+        .push(arena.text().s("[").s(tag).s("] not in the grammar: ").s(one).take())
+  for one in got
+    if !has_word(want, one)
+      bad
+        .push(arena.text().s("[").s(tag).s("] not in the opening header: ").s(one).take())
+
+priv const grammar_file: U8[] = "kspl.kspeg" //< the grammar, from the package's top
+priv const layout_file: U8[] = "parse/layout.kspls" //< the code that rewrites the indentation
+
+priv const role_rules: U8[][3] = ::{ "Block_open", "Block_close", "Stmt_end" } //<
+  //< The three rules that define the role itself
+  //<
+  //< Caution: **Leave them out of the count**, or the definition enters its own list.
+
+priv fn check_grammar_link(arena: Arena$@)
+  grammar: = io.read_file(grammar_file) catch
+    verdict.check("the grammar can be read", false, grammar_file)
+    return
+  rules: = split_rules(grammar, arena)
+  $opens: = List<|U8[]|>.new(arena)
+  $values: = List<|U8[]|>.new(arena)
+  $uses: = List<|U8[]|>.new(arena)
+  $terms: = List<|U8[]|>.new(arena)
+  $keeps: = List<|U8[]|>.new(arena)
+  for one in rules
+    if named_in(U8[][]::role_rules, one.name)
+      continue
+    if one.body.find_str("Block_open") >= 0
+      opens.push(one.name)
+    if one.body.find_str("\"{\"") >= 0
+      values.push(one.name)
+    if one.body.find_str("stmt_block") >= 0 && !one.name.equals("stmt_block")
+      uses.push(one.name)
+    if one.body.find_str("Stmt_end") >= 0
+      terms.push(one.name)
+    if one.body.find_str("\";\"") >= 0
+      keeps.push(one.name)
+
+  $bad: = List<|U8[]|>.new(arena)
+  want_opens: = marker_names(grammar, "opens", arena)
+  want_values: = marker_names(grammar, "value", arena)
+  want_uses: = marker_names(grammar, "uses", arena)
+  want_terms: = marker_names(grammar, "ends", arena)
+  want_keeps: = marker_names(grammar, "keeps", arena)
+  same_set("opens", want_opens@, opens@, bad@, arena)
+  same_set("value", want_values@, values@, bad@, arena)
+  same_set("uses", want_uses@, uses@, bad@, arena)
+  same_set("ends", want_terms@, terms@, bad@, arena)
+  same_set("keeps", want_keeps@, keeps@, bad@, arena)
+  verdict.check_list("the grammar's opening header list agrees with the grammar's content",
+    rules.len, "rules", bad@, "mend the five lists in `ksplc/kspl.kspeg`'s opening header")
+
+priv fn check_head_words(arena: Arena$@)
+  grammar: = io.read_file(grammar_file) catch
+    verdict.check("the grammar can be read", false, grammar_file)
+    return
+  rules: = split_rules(grammar, arena)
+  $named: = marker_names(grammar, "opens", arena)
+  uses: = marker_names(grammar, "uses", arena)
+  for one in uses
+    named.push(one)
+  $from_grammar: = List<|U8[]|>.new(arena)
+  for one in rules
+    if !has_word(named@, one.name)
+      continue
+    for word in quoted_words(one.body, arena)
+      from_grammar.push(word)
+  layout: = io.read_file(layout_file) catch
+    verdict.check("the indentation-mending side can be read", false, layout_file)
+    return
+  heads: = layout_heads(layout, arena)
+
+  $bad: = List<|U8[]|>.new(arena)
+  for word in heads
+    if word.equals(label_mark)
+      continue
+    if !has_word(from_grammar@, word)
+      bad
+        .push(arena.text().s("a heading the grammar no longer opens: ").s(word).take())
+  for word in from_grammar
+    if has_word(heads@, word) || named_in(U8[][]::not_head_words, word)
+      continue
+    bad
+      .push(arena.text().s("a heading the mending side does not know: ").s(word).take())
+  verdict.check_list("the indentation-mending side's heading words are in step with the grammar",
+    heads.len, "words", bad@,
+    "mend `block_heads` in `ksplc/parse/layout.kspls` (the exceptions are in this section's list)")
+
+// ---------------------------------------------------------
+// 6. The diagnostic shows the line as it was typed
+// Caution: **Do not print the line after rewriting to braces.** The inserted `;` and `}` put **a
+// mark nobody typed** on the writer's screen (`as_written_line` in
+// [`../../base/as_written.kspls`](../../base/as_written.kspls) gives the line before rewriting).
+priv const shown_src: U8[] = """fn main(): I32
+  n: I32 = 1
+  return n.nope
+"""
+
+priv fn check_shown_line(work: U8[], arena: Arena$@)
+  path: = fs.join(work, "shown.kspls", arena)
+  io.write_file(path, shown_src) catch
+    verdict.check("the source for looking at the line the diagnostic prints can be placed", false,
+      path)
+    return
+  r: = harness.ksplc(U8[][]::{ path, fs.join(work, "shown.c", arena) })
+  verdict.check("the diagnostic prints the line typed as it is",
+    r.out.find_str("3 |   return n.nope\n") >= 0, r.out)
+  // Caution: **Check "the mark is not printed" too**, or printing the rewritten line passes on a
+  // prefix match.
+  verdict.check("the diagnostic does not print the marks added by mending",
+    r.out.find_str("return n.nope;") < 0, r.out)
+
+// ---------------------------------------------------------
+// 7. A string carried onto the next line is rewritten like any other
+// A `\` at a line's end leaves a string open there: it must be rewritten, compile, and print the
+// line the author wrote. **The note's own line number is pinned elsewhere**
+// (`test_carried_string_leaves_the_lines_below` in `../layout_indent_test.kspls`).
+priv const carried_src: U8[] =
+  """fn main(): I32
+  s: = "one \
+    two three"
+  n: I32 = 1
+  return I32::s.len + n.nope
+"""
+
+priv fn check_carried_line(work: U8[], arena: Arena$@)
+  path: = fs.join(work, "carried.kspls", arena)
+  io.write_file(path, carried_src) catch
+    verdict.check("the source for a string carried onto the next line can be placed", false, path)
+    return
+  r: = harness.ksplc(U8[][]::{ path, fs.join(work, "carried.c", arena) })
+  verdict.check("a string carried onto the next line mends, builds and prints its own line",
+    r.out.find_str("5 |   return I32::s.len + n.nope\n") >= 0, r.out)
+
+fn main(): I32
+  arena: = harness.begin(64 * 1024 * 1024)
+  work: = harness.sandbox("kspls") catch
+    return harness.fatal("cannot make a working directory")
+  $stems: = pair_stems(arena)
+  if stems.len == 0
+    return harness.fatal("not one pair of twins")
+  io.out()
+    .s("# matching the indentation notation against the brace notation (\{stems.len\} pairs)\n")
+  for s in stems.slice()
+    check_pair(work, s, arena)
+    kspls_crlf.check_crlf(work, s, arena)
+
+  kspls_crlf.check_crlf_raw_text(work, arena)
+  kspls_crlf.check_crlf_fmt(work, arena)
+  check_import(work, arena)
+  check_import_braced(work, arena)
+  check_import_spelt(work, arena)
+  check_labelled_block_kept(work, arena)
+  check_shown_line(work, arena)
+  check_carried_line(work, arena)
+
+  check_doc_comments(work, arena)
+
+  io.out().s("\n# tying the grammar and the copy\n")
+  check_grammar_link(arena)
+  check_head_words(arena)
+
+  io.out().s("\n# using it from an editor\n")
+  // Start it with the server left running (the reason is in `../support/lsp_client.kspls`).
+  _std_dir: = sys.set_env("KSPLC_STD_DIR", harness.std_dir())
+  $c: =
+    lsp_client.start(harness.ksplc_exe(), U8[][]::{ .ptr = null, .len = 0 }, "", arena) catch
+    return harness.fatal("the language server cannot be started")
+  defer c.free()
+  init: =
+    c.request("initialize", lsp_client.at_doc(probe_uri, arena), normal_ms, arena) catch
+    return harness.fatal("initialize does not return")
+  if !verdict.check("the language server comes up", !is_missing(init.get("result")),
+    lsp_client.dump(init, arena))
+    return harness.finish()
+  check_diagnostics(c@, arena)
+  check_hover(c@, arena)
+  check_definition(c@, arena)
+  kspls_doc.run(c@, arena)
+  return harness.finish()

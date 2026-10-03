@@ -1,0 +1,112 @@
+//< Checks that a copy of the pilot policy kept elsewhere still drives like the one served here
+//<
+//< **This server does not know where copies are kept.** Whoever keeps one names it (`make
+//< check-pilot-copy COPY=<file>` in `kssrv/Makefile`); this starts the server, fetches the policy
+//< it serves, and compares the copy with it at every point the car's sweep visits.
+//< **It compares the manoeuvre, not the bytes.** The weights are trained again at every start, so
+//< their lowest bits change with the optimiser or with FMA contraction, while the answer should
+//< change only when the policy does.
+import "kssrv/tests/car"
+import "kssrv/tests/client"
+import "kssrv/tests/pilot"
+import "kssrv/tests/start" { bring_up }
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena, dealloc }
+import "std/str" // `arena.text()`
+import "std/strfmt" as _strfmt
+import "std/sys"
+import "std/verdict"
+
+priv const usage: U8[] = "usage: ksplc run tests/copy.kspls <kssrv> <copy> <work_dir>" //<
+  //< the arguments, in order (`make check-pilot-copy` in `kssrv/Makefile` passes them)
+
+priv const copy_port: I32 = 18398 //< the port the server listens on for this check
+  //<
+  //< Caution: **Keep it different from the ports in `kssrv/tests/main.kspls`**: that suite may be
+  //< running at the same time.
+
+fn main(): I32
+  verdict.begin("kssrv")
+  arena: = Arena.new(64 * 1024 * 1024)
+  defer arena.free()
+  argv: = sys.args()
+  if argv.len != 4
+    panic(arena.dup_str(usage))
+  exe: = arena.dup_str(argv.get(1))
+  copy_path: = arena.dup_str(argv.get(2))
+  work: = arena.dup_str(argv.get(3))
+  root: = fs.join(work, "www", arena)
+  fs.mkdir_all(root) catch
+    panic("cannot create the working directory")
+  if served: = fetch(exe, root, work, arena)
+    compare(served, copy_path, arena)
+  return verdict.finish()
+
+priv fn fetch(exe: U8[], root: U8[], work: U8[], arena: Arena$@): Option<|pilot.Blob|> //<
+  //< The policy the server serves; the server is stopped before this returns
+  started: =
+    bring_up(exe, root, work, "kssrv", copy_port, U8[][]::{},
+    "kssrv comes into a state where it can answer", arena)
+  if got: = started
+    $srv: = got
+    r: = client.get(copy_port, "/api/pilot", "", arena) catch e
+      srv.failed("GET /api/pilot is answered", e.reason(), arena)
+      srv.stop()
+      return Option<|pilot.Blob|>.none
+    srv.stop()
+    blob: = car.to_blob(r.body, arena)
+    verdict.check("the policy handed out can be read", r.status == 200 && blob.is_some(),
+      client.shown(r, arena))
+    return blob
+  return Option<|pilot.Blob|>.none
+
+priv fn compare(served: pilot.Blob, copy_path: U8[], arena: Arena$@) //<
+  //< Compares the copy with the served policy: first its version, then its manoeuvre at every point
+  //<
+  //< Caution: **Matching manoeuvres are not enough; the versions must match too**
+  //< (`__metadata__.kspl_pilot`). The version names the order of the features and the meaning of
+  //< the manoeuvre table, which no tensor shows, and a reader refuses a version it does not know.
+  //< So a copy whose manoeuvres match exactly still does not run under another version.
+  fresh: = arena.text().s("take a fresh copy: curl -s -o \{copy_path\} localhost:<port>/api/pilot")
+    .take()
+  $found: = List<|U8[]|>.new(arena)
+  copy: = read_blob(copy_path, arena)
+  if c: = copy
+    if c.version.len == 0 || !c.version.equals(served.version)
+      gap: = arena.text().s("the version differs: copy '\{c.version\}'")
+        .s(" / server '\{served.version\}'").take()
+      found.push(gap)
+    sweep(served, c, found@, arena)
+  else
+    found.push(arena.text().s("could not read \{copy_path\}").take())
+  verdict.check_list("the copy has not gone stale", car.dist_steps * car.line_count, "points",
+    found@, fresh)
+
+priv fn read_blob(path: U8[], arena: Arena$@): Option<|pilot.Blob|> //< the copy, read as a policy
+  body: = io.read_file(path) catch
+    return Option<|pilot.Blob|>.none
+  data: = U8[]::arena.dup_str(body)
+  dealloc(body.ptr)
+  return car.to_blob(data, arena)
+
+priv fn sweep(served: pilot.Blob, copy: pilot.Blob, found: List<|U8[]|>$@, arena: Arena$@) //<
+  //< Every point where the copy's manoeuvre differs from the served one
+  //<
+  //< **A close call is left out of the verdict**: where the served policy barely prefers one
+  //< manoeuvre, the two computations can disagree for that reason alone (`car.tight_margin`).
+  scratch: = Arena.new(1024 * 1024)
+  defer scratch.free()
+  for k in Range.asc(car.dist_steps)
+    dist: = I64::k * car.dist_step_mm
+    for line in Range.asc(car.line_count)
+      mark: = scratch.save()
+      want: = pilot.drive(served, dist, line, scratch)
+      got: = pilot.drive(copy, dist, line, scratch)
+      if want.margin >= car.tight_margin &&
+        (want.lon != got.lon || want.lat != got.lat || want.rot != got.rot)
+        at: = arena.text().s("dist=\{dist\} line=\{line\}: \{got.lon\},\{got.lat\},\{got.rot\}")
+          .s(" where the server hands out \{want.lon\},\{want.lat\},\{want.rot\}").take()
+        found.push(at)
+      scratch.restore(mark)

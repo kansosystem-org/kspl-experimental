@@ -1,0 +1,287 @@
+//< The actions that edit the text at the cursor
+//<
+//< Typing, deleting, composing, moving the cursor, undoing.
+//< The document is changed only through the `do_*` functions in [`edit.kspls`](edit.kspls),
+//< which alone add to the undo record.
+//< These are `Editor` methods too. An extension method is visible only where it is imported, so
+//< a caller imports both `write/edit.kspls` and this file.
+//< Note: It is split from [`edit.kspls`](edit.kspls) for the 1000-line-per-file cap.
+import "kspage/lay/ask"
+import "kspage/lay/caret"
+import "kspage/lay/page" { Page }
+import "kspage/model/run" { Inline }
+import "kspage/write/edit" + { Editor }
+import "std/chars"
+
+priv fn snap(n: Inline$@, offset: Sz): Sz //<
+  //< The offset moved onto a character boundary inside the text
+  //<
+  //< Caution: **Move it back, not forward.** Moved forward, it can end up past the text's end.
+  if n == null || offset <= 0
+    return 0
+  text: = n.text()
+  $o: Sz = text.len if offset > text.len else offset
+  for o > 0 && o < text.len && (text[o] & 0xC0U8) == 0x80U8
+    o -= 1
+  return o
+
+impl Editor
+  fn delete_selection(r: Self$@): Bool //< deletes the selected range
+    //<
+    //< True if something was deleted.
+    //< Paragraphs are not joined (that is `delete_span` in [`shape.kspls`](shape.kspls), which
+    //< needs the page laid out).
+    if r.shut()
+      return false
+    if !caret.has_selection(r.caret)
+      return false
+    st: = r.step()
+    sp: = caret.selection(r.doc, r.caret)
+    if sp.from == sp.to
+      edit.do_remove(r, st, sp.from, sp.from_offset, sp.to_offset - sp.from_offset)
+    else
+      head: = sp.from.text().len
+      edit.do_remove(r, st, sp.from, sp.from_offset, head - sp.from_offset)
+      $n: Inline$@ = r.doc.neighbors(sp.from).next
+      for n != null && n != sp.to
+        edit.do_remove(r, st, n, 0, n.text().len)
+        n = r.doc.neighbors(n).next
+      edit.do_remove(r, st, sp.to, 0, sp.to_offset)
+    r.caret.inline = sp.from
+    r.caret.offset = sp.from_offset
+    r.caret.preedit = 0
+    caret.collapse(r.caret@)
+    return true
+
+  fn insert(r: Self$@, s: U8[]) //< types at the cursor
+    if r.shut()
+      return
+    if r.caret.inline == null || s.len <= 0
+      return
+    // Typing while composing commits that text first, or it is left behind with nothing in the
+    // record.
+    // Caution: **Do not commit when not composing** — a commit ends an undo step, so typing would
+    // undo one keystroke at a time.
+    if r.caret.preedit > 0
+      r.commit_preedit()
+    r.delete_selection()
+    st: = r.step()
+    edit.do_insert(r, st, r.caret.inline, r.caret.offset, s)
+    r.caret.offset += s.len
+    caret.collapse(r.caret@)
+
+  fn backspace(r: Self$@) //< deletes the character before the cursor
+    if r.shut()
+      return
+    c: = r.caret@
+    if c.inline == null
+      return
+    if c.preedit > 0
+      r.cancel_preedit()
+      return
+    if r.delete_selection()
+      return
+    if c.offset <= 0
+      // Caution: **Do not cross a paragraph break**, or an unjoined paragraph, or the next cell,
+      // loses a character out of sight, and nobody notices. The caller joins paragraphs
+      // (`join_prev` in `write/block.kspls`). Deleting forward is the same (`delete`).
+      own: = r.doc.owner_of(c.inline)
+      if !own.found
+        return
+      // An inline that refers to something is removed whole (it holds no text; what shows is a
+      // number counted at layout time), whether it is the inline clicked or the one before.
+      if c.inline.refers.len > 0
+        edit.do_run(r, r.step(), own.block, own.index, false, null)
+        r.clamp()
+        return
+      // An empty inline is skipped.
+      $at: Sz = own.index
+      for at > 0
+        at -= 1
+        back: = own.block.inlines.get(at)
+        if back.refers.len > 0
+          edit.do_run(r, r.step(), own.block, at, false, null)
+          r.clamp()
+          return
+        if back.text().len > 0
+          c.inline = back
+          c.offset = back.text().len
+          break
+      if c.offset <= 0
+        return
+    start: = caret.prev_boundary(c.inline.text(), c.offset)
+    edit.do_remove(r, r.step(), c.inline, start, c.offset - start)
+    c.offset = start
+    caret.collapse(c)
+
+  fn delete_forward(r: Self$@): Bool //< deletes the character after the cursor (Delete)
+    //<
+    //< True if something was deleted. It does not cross a paragraph break: at a paragraph's end it
+    //< returns false and the caller joins (`delete_ahead` in [`block.kspls`](block.kspls)). Empty
+    //< inlines are skipped.
+    if r.shut()
+      return false
+    c: = r.caret@
+    if c.inline == null || c.preedit > 0
+      return false
+    own: = r.doc.owner_of(c.inline)
+    if !own.found
+      return false
+    $at: Sz = c.offset
+    for $i: Sz = own.index; i < own.block.inlines.len; i += 1
+      n: = own.block.inlines.get(i)
+      text: = n.text()
+      if at < text.len
+        end: = caret.next_boundary(text, at)
+        edit.do_remove(r, r.step(), n, at, end - at)
+        r.caret = caret.at(n, at)
+        return true
+      at = 0
+    return false
+
+  fn set_preedit(r: Self$@, s: U8[]) //< replaces the text being composed
+    //<
+    //< The text being composed goes into neither the record nor the peer until committed
+    //< ([`../docs/DESIGN.md`](../docs/DESIGN.md)'s "The text being composed goes into the document
+    //< too"); recorded, a cancelled composition would leave an undo that restores nothing.
+    //< `commit_preedit` records it.
+    if r.shut()
+      return
+    c: = r.caret@
+    if c.inline == null
+      return
+    if c.preedit <= 0
+      // Deleting the selected range does go through the record (cancelling the composition does not
+      // restore it; undo does).
+      r.delete_selection()
+    if c.preedit > 0
+      edit.do_remove(r, null, c.inline, c.offset - c.preedit, c.preedit)
+      c.offset -= c.preedit
+      c.preedit = 0
+      caret.collapse(c)
+    if s.len <= 0
+      return
+    edit.do_insert(r, null, c.inline, c.offset, s)
+    c.offset += s.len
+    c.preedit = s.len
+    caret.collapse(c)
+
+  fn commit_preedit(r: Self$@) //< ends composing and keeps the text
+    //<
+    //< Only here does the text enter the record (while composing, it is not recorded). Here the
+    //< undo step is closed (a commit ends an undo step).
+    //< When not composing, it only closes the step (so it can be called before any move).
+    if r.shut()
+      return
+    c: = r.caret@
+    if c.preedit > 0
+      at: = c.offset - c.preedit
+      edit.keep_insert(r, r.step(), c.inline, at, c.inline.text().sub(at, c.preedit))
+      c.preedit = 0
+    r.break_group()
+
+  fn cancel_preedit(r: Self$@) //< cancels composing
+    //<
+    //< Nothing is left in the record except the deletion of the selected range that started it.
+    c: = r.caret@
+    if c.inline == null || c.preedit <= 0
+      return
+    edit.do_remove(r, null, c.inline, c.offset - c.preedit, c.preedit)
+    c.offset -= c.preedit
+    c.preedit = 0
+    caret.collapse(c)
+
+  fn move_left(r: Self$@, extend: Bool = false) //<
+    //< Moves the cursor one step left; with `extend`, the selection grows
+    //<
+    //< Commit before moving. Without the step closed, typing at two separate places would undo as
+    //< one. A composition is committed too (closing alone would leave its text outside the record).
+    r.commit_preedit()
+    caret.step_left(r.doc, r.caret@, extend)
+
+  fn move_right(r: Self$@, extend: Bool)
+    r.commit_preedit()
+    caret.step_right(r.doc, r.caret@, extend)
+
+  fn move_to_edge(r: Self$@, page: Page$@, dir: I32, extend: Bool = false) //<
+    //< Moves to the start of the line (`dir` negative) or its end (positive)
+    //<
+    //< It does not leave its container (in a table row, that is the cell).
+    //< Caution: **Call it after layout** (the layout decides where the line ends).
+    r.commit_preedit()
+    caret.step_to_edge(r.doc, page, r.caret@, dir, extend)
+
+  fn select_all(r: Self$@): Bool //< selects the whole document
+    //<
+    //< True if there is something to select.
+    //< From the document's start to its end (not only the page shown). A block with no text is
+    //< skipped (the cursor cannot stand there). Nothing is added to the undo record.
+    $head: Inline$@ = null
+    for $i: Sz = 0; i < r.doc.blocks.len && head == null; i += 1
+      if n: = r.doc.blocks.get(i).first_run()
+        head = n
+    $tail: Inline$@ = null
+    $k: Sz = r.doc.blocks.len
+    for k > 0 && tail == null
+      k -= 1
+      if n: = r.doc.blocks.get(k).last_run()
+        tail = n
+    if head == null || tail == null
+      return false
+    // Commit before placing the cursor again (the same reason as `move_left`).
+    r.commit_preedit()
+    r.caret = caret.at(head, 0)
+    r.caret.inline = tail
+    r.caret.offset = tail.text().len
+    return true
+
+  fn move_vertical(r: Self$@, page: Page$@, dir: I32, extend: Bool = false)
+    r.commit_preedit()
+    caret.step_vertical(page, r.caret@, dir, extend)
+
+  fn point_to(r: Self$@, page: Page$@, x: F32, y: F32, extend: Bool)
+    r.commit_preedit()
+    // Each click chooses the selected frame anew, Shift or not (Shift extends the text selection).
+    r.pick_at(page, x, y)
+    caret.step_to_point(page, r.caret@, x, y, extend)
+
+  fn pick_at(r: Self$@, page: Page$@, x: F32, y: F32) //< selects the frame that was clicked
+    //<
+    //< It is decided anew on every click (outside a frame the selection is cleared); see
+    //< `Editor.pick` in [`edit.kspls`](edit.kspls). One frame at a time.
+    switch ask.frame_under(page, x, y) case .some(b)
+      r.pick_only(b)
+    case .none
+      r.pick_only(null)
+
+  fn set_source(r: Self$@, s: U8[]) //< replaces the text of the cursor's inline with `s`
+    //<
+    //< This is what changes a formula: the source text (`Inline.text`), not the shown result, is
+    //< replaced whole; a text starting with `=` becomes a formula at the next recalculation. It
+    //< goes through the undo record too.
+    if r.shut()
+      return
+    n: = r.caret.inline
+    if n == null
+      return
+    r.commit_preedit()
+    edit.replace_source(r, r.step(), n, s)
+    r.caret.offset = s.len
+    caret.collapse(r.caret@)
+    r.break_group()
+
+  fn clamp(r: Self$@) //<
+    //< Fits the cursor back into a text changed from outside
+    //<
+    //< It is called from `recalc` in `expr/calc.kspls` and the like.
+    //< It moves the cursor onto a character boundary inside the text (the text may have shrunk).
+    //< Caution: **Do not drop the composition mark.** This is called at every cursor placement;
+    //< dropped, the text being composed is not replaced and piles up.
+    r.caret.offset = snap(r.caret.inline, r.caret.offset)
+    r.caret.anchor_offset = snap(r.caret.anchor, r.caret.anchor_offset)
+    if r.caret.preedit > r.caret.offset
+      r.caret.preedit = r.caret.offset
+
+  // Goes one step back. True if it went back.
+  //
+  // The inverse of the applied inverse (`apply_inverse`) becomes the redo step.

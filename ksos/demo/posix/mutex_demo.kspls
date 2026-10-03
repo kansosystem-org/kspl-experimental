@@ -1,0 +1,43 @@
+//< Mutual exclusion with a mutex (a POSIX host)
+//<
+//< Two workers add to a shared counter by "read, yield, write back". Because they yield between
+//< the read and the write, without mutual exclusion the other worker reads the same value and an
+//< addition is lost (a lost update). With the mutex, the other worker's lock blocks while it is
+//< held, so each addition is indivisible and the final value is exactly 10 (2 workers × 5 times).
+//< The POSIX port is cooperative, so priority inheritance does not act here, but lock/unlock and
+//< waiting and waking can be verified (make ksos-cm-pi shows priority inheritance on Cortex-M).
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+import "std/io"
+
+$g_mutex: sync.Mutex
+$shared: I32 = 0 // the shared counter under protection
+$g_id_a: I32 = 1
+$g_id_b: I32 = 2
+
+$tcb_a: Task
+$tcb_b: Task
+$stack_a: U8[65536]
+$stack_b: U8[65536]
+
+fn worker(arg: Void$@): Void
+  id: = (I32$@::arg)$ // the worker's id (1 or 2)
+  for _i in Range.asc(5)
+    g_mutex.lock()
+    tmp: = shared // read
+    Task.yield() // yield while holding the lock: unprotected, the other worker would run here
+    shared = tmp + 1 // write back
+    io.out().s("[worker \{id\}] shared=\{shared\}\n")
+    g_mutex.unlock()
+    Task.yield() // yield outside the lock, so the other worker can take it (they alternate)
+
+fn main()
+  io.out().s("=== Kanso OS (POSIX port) — mutex mutual-exclusion demo ===\n")
+  g_mutex.init()
+  // Round-robin both at the same priority, so they contend for the lock (alternating) every time.
+  tcb_a.create(U8$[]::stack_a, worker, Void$@::g_id_a@, 1, "A")
+  tcb_b.create(U8$[]::stack_b, worker, Void$@::g_id_b@, 1, "B")
+  task.start_scheduler()
+  assert(shared == 10, "mutex: a lost update slipped through the lock")
+  io.out().s("[main] final shared=10 -> mutual exclusion held\n")
+  io.out().s("=== scheduler finished (all tasks done) ===\n")

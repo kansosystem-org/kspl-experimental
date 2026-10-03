@@ -1,0 +1,329 @@
+//< The pass that registers struct / enum / trait **contents** in the type table
+//<
+//< collect records what is declared; this resolves the contents, which need every name to exist,
+//< so the order is always collect → registry.
+//< Caution: **Do not register the same type twice.** Instantiations bring the same base name many
+//< times; registered again, the fields and the layout double.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/sema/decl/access" as sema_decl_access
+import "ksplc/sema/decl/declare" as sema_decl_declare
+import "ksplc/sema/decl/eval" as sema_decl_eval
+import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/decl/trait_check" as sema_decl_trait_check
+import "ksplc/sema/session/c_boundary" as sema_session_c_boundary
+import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error, join_dotted_name }
+import "ksplc/sema/type/arc" as sema_type_arc
+import "ksplc/sema/type/def" as sema_type_def
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
+import "std/chars"
+import "std/ds" { Map }
+
+enum Reg_type_res //< the result of trying to register a type
+  //<
+  //< `invalid`: the name could not be registered (the caller reports it).
+  ok(name: U8[], fqn: U8[], type_id: I32)
+  invalid
+
+impl Ast_node
+  fn register_type_sym(r: Ast_node$@, c: Sema_ctx$@, top_vis: sema_type_scope.Visibility,
+    sym_kind_normal: sema_type_scope.Sym_kind, sym_kind_gen: sema_type_scope.Sym_kind): Reg_type_res
+    name_node: = r.find_child(.k_identifier)
+    if name_node == null
+      return .invalid
+
+    name: = name_node.text
+    name_node.def_node = r
+    fqn: = c.make_fqn(name)
+    has_gen: = (r.find_child(.k_type_gen_params) != null)
+
+    if has_gen
+      sema_decl_declare.register_template_names(c, fqn, name, r)
+
+    $sym_kind: = sym_kind_normal
+    if has_gen
+      sym_kind = sym_kind_gen
+
+    sym: = Sema_symbol.new(sym_kind, name, r)
+    sym.vis = top_vis
+    sym.type_id = c.env.get_or_add(fqn)
+    r.type_id = sym.type_id
+    sym.apply_attributes()
+    c.declare_symbol_with_fqn(name, fqn, sym)
+
+    if has_gen
+      return .invalid
+    return .ok(name, fqn, sym.type_id)
+
+  fn get_registry_target(r: Ast_node$@, c: Sema_ctx$@): Reg_type_res
+    if r.find_child(.k_type_gen_params) != null
+      return .invalid
+    name_node: = r.find_child(.k_identifier)
+    if name_node == null
+      return .invalid
+    name: = name_node.text
+    fqn: = c.make_fqn(name)
+    return .ok(name, fqn, 0)
+
+  fn build_trait_registry(r: Ast_node$@, c: Sema_ctx$@): Void?Sema_error
+    switch r.get_registry_target(c) case .ok(target_name, target_fqn, _id)
+      $trait_def: sema_type_def.Trait_def$@ = null
+      switch c.env.get_trait_def(target_fqn) case .some(id)
+        trait_def = id
+      case .none
+        return
+
+      trait_vis: = r.get_visibility()
+      c.fn_ctx.impl_name = target_fqn
+
+      for m_node in r.children
+        // Caution: **Register a method with a default body the same way**: it is a `decl_fn`
+        // (decl_trait in `kspl.kspeg`), and if missed it is not in the vtable.
+        if m_node.kind_id == .k_decl_fn_proto || m_node.kind_id == .k_decl_fn
+          m_name_node: = m_node.find_child(.k_identifier)
+          if m_name_node != null
+            m_name: = m_name_node.text
+            c.check_snake_case(m_name, m_node, "Method")
+
+            m_sym: = c.add_trait_method(m_node, trait_def, trait_vis)?
+
+            local_full_name: = join_dotted_name(target_name, m_name)
+            fqn_full_name: = join_dotted_name(target_fqn, m_name)
+            c.declare_symbol_with_fqn(local_full_name, fqn_full_name, m_sym)
+      c.fn_ctx.impl_name = ""
+    default {}
+
+  fn build_type_registry(r: Ast_node$@, c: Sema_ctx$@): Void?Sema_error //<
+    //< Dispatches on the declaration's kind to fill it in
+    //<
+    //< Caution: **Code that needs a declaration filled in calls this**, so no caller misses a kind.
+    switch r.kind_id case .k_decl_struct
+      r.build_struct_registry(c)?
+    case .k_decl_enum
+      r.build_enum_registry(c)?
+    default {}
+
+  fn build_struct_registry(r: Ast_node$@, c: Sema_ctx$@): Void?Sema_error
+    switch r.get_registry_target(c) case .ok(_name, target_fqn, _id)
+      $struct_def: sema_type_def.Struct_def$@ = null
+      switch c.env.get_struct_def(target_fqn) case .some(sd)
+        struct_def = sd
+      case .none
+        return
+      // Caution: **Clear it before resolving the fields.** A field's type can request the layout
+      // (`f: U8[sizeof(S)]`), and clearing it later fills the declaration in twice.
+      if struct_def.pending_decl == null
+        return // already filled in (when the layout was requested)
+      struct_def.pending_decl = null
+      // Caution: **Record "filling in" only here.** collect's Pass 3 calls this directly; recorded
+      // by the caller instead, a `sizeof` cycle is missed (Resolving_state.registries in
+      // sema/session/state.kspls).
+      c.resolving.registries.push(c.env.get_or_add(target_fqn))
+      defer c.resolving.registries.len -= 1
+      c.fn_ctx.impl_name = target_fqn
+      r.fill_struct_fields(c, struct_def)?
+      r.lint_manual_owner_struct(c, struct_def, target_fqn)
+      c.fn_ctx.impl_name = ""
+    default {}
+
+  fn fill_struct_fields(r: Ast_node$@, c: Sema_ctx$@, struct_def: sema_type_def.Struct_def$@):
+    Void?Sema_error //<
+      //< Resolves a struct declaration's (self's) layout attributes and fields into struct_def
+      //<
+      //< build_struct_registry and a generic struct's instantiation (instantiate_struct in
+      //< mono.kspls) both fill through here, so an instance is checked as a plain struct is.
+    if r.has_attribute("packed")
+      struct_def.is_packed = true
+    // sema/decl/attrs.kspls checks the value's form; only usable values reach here.
+    // Caution: **Do not copy that check here** (fix only one and the messages disagree).
+    align_val: = c.eval_attribute_arg(r, "align")
+    if align_val > 0
+      struct_def.align_attr = align_val
+    size_val: = c.eval_attribute_arg(r, "size")
+    if size_val > 0
+      struct_def.size_attr = size_val
+
+    // This map finds duplicates: get_field per field is O(n^2) and hangs on a huge struct.
+    $seen_fields: = Map<|U8[], Bool|>.new()
+    defer seen_fields.free()
+
+    struct_vis: = r.get_visibility()
+
+    for c_node in r.children
+      if c_node.kind_id == .k_struct_field
+        f_vis: = c_node.get_visibility()
+        f_id_node: = c_node.find_child(.k_identifier)
+        f_name: = f_id_node.text if f_id_node != null else ""
+        if f_id_node != null
+          f_id_node.def_node = c_node
+        f_type_node: = c_node.get_decl_type_node()
+
+        if f_name.len > 0 && f_type_node != null
+          c.check_snake_case(f_name, c_node, "Field")
+          f_type_id: = f_type_node.resolve_type(c)?
+          f_eff_vis: = sema_decl_access.narrower_vis(struct_vis, f_vis)
+          c.check_type_vis_leak(f_type_node, f_eff_vis, "field type", "field")
+          real_f_type: = c.env.get_real_type(f_type_id)
+          if sema_type_env.is_void(real_f_type)
+            c.err(f_type_node, "struct fields cannot be of type 'Void'")
+
+          switch c.env.get_info(real_f_type) case .array(_b, s)
+            if s == -1
+              c.err(f_type_node, "array size cannot be inferred for struct fields.")
+          default {}
+
+          // An array field's elements are made mutable: **the binding holding it** decides
+          // writing, as for other fields ("The two axes of mutability" in
+          // `docs/SPEC-language.md`).
+          // Caution: Write it back to the type node too; genc emits the type name from there.
+          eff_f_type: = c.binding_value_type(f_type_id, true)
+          f_type_node.type_id = eff_f_type
+
+          field_def: = sema_type_def.Struct_field.new(f_name, eff_f_type, f_vis, c_node)
+
+          is_dup: = seen_fields.get(f_name) catch false
+          if is_dup
+            c.clear_scratch().s("field '\{f_name\}' is already defined in struct")
+            c.err(f_id_node, c.scratch.slice())
+          else if !c.check_c_keyword_collision_field(f_name, f_id_node, seen_fields@)
+            seen_fields.set(f_name, true)
+            struct_def.fields_list.push(field_def)
+
+  priv fn lint_manual_owner_struct(r: Ast_node$@, c: Sema_ctx$@,
+    struct_def: sema_type_def.Struct_def$@, target_fqn: U8[]) //<
+      //< [I0603] Suggests a reference-counted type for a struct that manages ownership by hand
+      //<
+      //< Such a struct is non-ARC and has a raw pointer and its own 'free'. std/ is not checked:
+      //< its primitives are what ARC is built on.
+      //< Caution: Do not add a two-way switch such as per-diagnostic state here. Only
+      //< off-by-default codes can be switched ("lint is configured per diagnostic code, not by a
+      //< group name" in ksplc/docs/DESIGN.md).
+    if c.env.is_arc_type(c.env.get_or_add(target_fqn)) ||
+      r.loc.file().starts_with("std/")
+      return
+    $has_ptr_field: = false
+    for f in struct_def.fields_list
+      if c.env.is_pointer(f.type_id)
+        has_ptr_field = true
+        break
+    if !has_ptr_field
+      return
+    t_id: = c.env.get_or_add(target_fqn)
+    t_entry: = c.env.id_to_type.get(c.env.get_real_type(t_id))
+    if t_entry == null
+      return
+    $has_free: = false
+    if _found: = t_entry.get_method("free")
+      has_free = true
+    if !has_free
+      return
+    name_node: = r.find_child(.k_identifier)
+    c.clear_scratch()
+      .s("[I0603] Struct '\{target_fqn\}' owns a raw pointer field and defines its own 'free' \
+        method (hand-rolled ownership). In managed mode, consider using a reference-counted handle \
+        (Rc<|T|>/Arc<|T|>) for automatic lifetime management instead.")
+    c.information(name_node if name_node != null else r, c.scratch.slice())
+
+  priv fn scan_payload_fields(r: Ast_node$@, c: Sema_ctx$@,
+    variant_def: sema_type_def.Enum_variant$@, enum_vis: sema_type_scope.Visibility):
+    Void?Sema_error //<
+      //< Resolves an enum variant's (self's) payload fields and registers them in variant_def.
+      //<
+      //< enum_vis is the enum's own visibility: a payload field has none of its own (public below).
+    for f_list in r.children
+      if f_list.kind_id != .k_enum_payload
+        continue
+      for f_node in f_list.children
+        if f_node.kind_id != .k_enum_field
+          continue
+        f_name_node: = f_node.get_enum_field_name_node()
+        f_name: = f_name_node.text if f_name_node != null else ""
+        c.check_snake_case(f_name, f_node, "Field")
+        // genc avoids a payload's field names too (the same treatment as a struct's fields).
+        f_type_node: = f_node.get_enum_field_type_node()
+        f_type_id: = f_type_node.resolve_type(c)? if f_type_node != null else 0
+        // The same leak as a struct's pub field: `switch e case .some(x)` binds it from outside.
+        c.check_type_vis_leak(f_type_node, enum_vis, "payload type", "variant")
+        f_node.type_id = f_type_id
+        if f_name_node != null
+          f_name_node.def_node = f_node
+          f_name_node.type_id = f_type_id
+        field_def: = sema_type_def.Struct_field
+          .new(f_name, f_type_id, sema_type_scope.Visibility.public, f_node)
+        variant_def.payload_fields.push(field_def)
+
+  fn build_enum_registry(r: Ast_node$@, c: Sema_ctx$@): Void?Sema_error
+    switch r.get_registry_target(c) case .ok(_name, target_fqn, _id)
+      $enum_def: sema_type_def.Enum_def$@ = null
+      switch c.env.get_enum_def(target_fqn) case .some(d)
+        enum_def = d
+      case .none
+        return
+      // For the same reason as at the matching point in build_struct_registry.
+      if enum_def.pending_decl == null
+        return // already filled in
+      enum_def.pending_decl = null
+      c.resolving.registries.push(c.env.get_or_add(target_fqn))
+      defer c.resolving.registries.len -= 1
+      c.fn_ctx.impl_name = target_fqn
+      r.fill_enum_variants(c, enum_def, c.env.get_or_add(target_fqn), true)?
+      c.fn_ctx.impl_name = ""
+    default {}
+
+  fn fill_enum_variants(r: Ast_node$@, c: Sema_ctx$@, enum_def: sema_type_def.Enum_def$@,
+    type_id: I32, declare_syms: Bool): Void?Sema_error //<
+      //< Resolves an enum declaration's (self's) base type and variants into enum_def
+      //<
+      //< The counterpart of fill_struct_fields. `declare_syms` adds each variant to the name table
+      //< as `Enum.variant`; a generic enum's instance passes false and is reached through its type.
+    $base_type_id: = c.env.get_or_add("I32")
+    base_type_node: = r.get_decl_type_node()
+    if base_type_node != null
+      base_type_id = base_type_node.resolve_type(c)?
+    enum_def.base_type_id = base_type_id
+    $current_tag: I32 = 0
+    enum_name: = r.get_decl_id_text()
+    enum_vis: = r.get_visibility()
+    enum_fqn: = c.make_fqn(enum_name) if declare_syms else ""
+
+    // A local map, for the same reason as fill_struct_fields's.
+    $seen_variants: = Map<|U8[], Bool|>.new()
+    defer seen_variants.free()
+
+    for v_node in r.children
+      if v_node.kind_id != .k_enum_variant
+        continue
+      v_id_node: = v_node.find_child(.k_identifier)
+      if v_id_node == null
+        continue
+      v_name: = v_id_node.text
+      v_id_node.def_node = v_node
+      v_node.type_id = type_id
+      c.check_snake_case(v_name, v_id_node, "Enum variant")
+
+      variant_def: = sema_type_def.Enum_variant.new(v_name, current_tag, v_node)
+      for f_node in v_node.children
+        if f_node.kind_id == .k_expr || f_node.kind_id == .k_integer ||
+          f_node.kind_id == .k_expr_unary
+          variant_def.tag_value = f_node.eval_constexpr(c) catch 0
+      current_tag = variant_def.tag_value + 1
+
+      if declare_syms
+        arena_full_name: = join_dotted_name(enum_name, v_name)
+        v_kind: = sema_type_scope.Sym_kind.enum_variant(variant_def.tag_value)
+        v_sym: = Sema_symbol.new(v_kind, arena_full_name, v_node)
+        v_sym.type_id = type_id
+        v_sym.vis = enum_vis
+        c.declare_symbol_with_fqn(arena_full_name, join_dotted_name(enum_fqn, v_name), v_sym)
+
+      v_node.scan_payload_fields(c, variant_def, enum_vis)?
+      is_dup: = seen_variants.get(v_name) catch false
+      if is_dup
+        c.clear_scratch().s("variant '\{v_name\}' is already defined in enum")
+        c.err(v_id_node, c.scratch.slice())
+      else
+        seen_variants.set(v_name, true)
+        enum_def.variants_list.push(variant_def)

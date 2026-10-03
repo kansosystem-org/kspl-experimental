@@ -1,0 +1,124 @@
+//< Fine-tuning through LoRA: a low-rank pair trained in place of a frozen linear layer
+//<
+//< It adds the delta of the low-rank matrices A·B to a frozen base layer's output. **Only A and B
+//< are trained**, so the device itself can fine-tune with few parameters; every intermediate value
+//< lives on an arena, so the allocation is predictable.
+
+// ==========================================
+// The shapes:  A:[in, r],  B:[r, out],  delta = (x·A·B) * scale
+// Initialization: A=small random values, B=0 → the initial delta=0 (it does not disturb the base
+// output).
+// ==========================================
+import "ksai/grad" as _grad // uses Tensor's grad_* operations
+import "ksai/tensor" { Tensor }
+import "std/mem" + { Arena }
+import "std/prng"
+
+pub struct Grads<|T|> //< the gradients of A and B, ready to pass to an optimizer
+  //<
+  //< Caution: **`backward_grads` allocates the tensors on `x.arena`**, so use them before rewinding
+  //< `x`'s arena.
+  pub da: Tensor<|T|> //< the gradient of A, shaped [in, rank]
+  pub db: Tensor<|T|> //< the gradient of B, shaped [rank, out]
+
+pub struct Lora<|T|> //< the pair of low-rank matrices trained in place of a frozen linear layer
+  pub a: Tensor<|T|> //< the matrix the input meets first, shaped [in, rank]
+  pub b: Tensor<|T|> //< the matrix that widens the rank back out, shaped [rank, out]
+  pub scale: T //< how much of the delta reaches the output, alpha / rank
+
+impl<|T|> Lora<|T|>
+  pub fn new( //< an adapter whose delta starts at zero, so the base output is untouched at first
+    in_dim: Sz, //< the input width of the base layer
+    out_dim: Sz, //< the output width of the base layer
+    rank: Sz, //< the inner width of the two matrices; the adapter's whole size depends on it
+    alpha: F64, //< the requested strength, divided by `rank` to give `scale`
+    rng: prng.Prng$@, //< where A's small random starting values come from
+    arena: Arena$@, //< the arena A and B are allocated from
+  ): Lora<|T|>
+    a_shape: Sz[2] = ::{ in_dim, rank }
+    b_shape: Sz[2] = ::{ rank, out_dim }
+    a: = Tensor<|T|>.new(Sz[]::a_shape, arena)
+    $b: = Tensor<|T|>.new(Sz[]::b_shape, arena)
+    // A fixed 0.02, independent of the fan-in: B=0 makes the initial delta 0, so A's scale need
+    // not follow `in_dim`.
+    for i in Range.asc(a.size)
+      (a.data + i)$ = T::((rng.next_f64() * 2.0 - 1.0) * 0.02)
+    b.fill(0.0)
+    return Lora<|T|>::{ .a = a, .b = b, .scale = T::(alpha / F64::rank) }
+  pub fn forward( //< the delta (x·A·B) * scale, which the caller adds to the base output
+    //<
+    //< The result is allocated on `x`'s arena.
+    r: Self$@,
+    $x: Tensor<|T|>, //< the same input the base layer was given, [m, in]
+  ): Tensor<|T|>
+    $xa: = x.matmul(r.a) catch // [m, rank]
+      panic("Lora.forward: matmul shape mismatch")
+    $xab: = xa.matmul(r.b) catch // [m, out]
+      panic("Lora.forward: matmul shape mismatch")
+    return xab.scale(r.scale)
+  pub fn backward_grads( //< writes the gradients of A and B to `g`; returns the input's gradient
+    //<
+    //< **It does not update**, so the caller picks the optimizer (SGD / Adam); `backward` below is
+    //< built on it. It returns `dx` so a LoRA in an intermediate layer can be summed with the base
+    //< path's dx and passed further back.
+    r: Self$@,
+    $x: Tensor<|T|>, //< the input the forward pass was given, needed again here
+    $dy: Tensor<|T|>, //< the gradient of the output
+    g: Grads<|T|>$@, //< where the two gradients are written
+  ): Tensor<|T|>
+    $xa: = x.matmul(r.a) catch // the intermediate value recomputed [m, rank]
+      panic("Lora.backward_grads: matmul shape mismatch")
+    $dxab: = dy.scale(r.scale) // d/d(xab) = dy * scale
+    g.db = xa.grad_matmul_weight(dxab) // xa^T · dxab  [rank, out]
+    $dxa: = dxab.grad_matmul_input(r.b) // dxab · B^T   [m, rank]
+    g.da = x.grad_matmul_weight(dxa) // x^T · dxa    [in, rank]
+    return dxa.grad_matmul_input(r.a) // dxa · A^T   [m, in]
+  pub fn backward( //< one SGD step on A and B with the base frozen; returns the input's gradient
+    r: Self$@,
+    x: Tensor<|T|>, //< the input the forward pass was given
+    dy: Tensor<|T|>, //< the gradient of the output
+    lr: F64, //< the learning rate
+  ): Tensor<|T|>
+    $g: Grads<|T|> = ::{}
+    dx: = r.backward_grads(x, dy, g@)
+    r.a.sgd_step(g.da, lr)
+    r.b.sgd_step(g.db, lr)
+    return dx
+  pub fn raw_size(r: Self$@): Sz //< how many bytes `save_raw` writes
+    //<
+    //< The bundle (`save_set_into` / `load_set_from` in `ksai/lora_set`) goes through safetensors
+    //< and JSON, which need the global heap (`mem.alloc`): **on bare metal, call
+    //< `mem.init_freestanding_heap()` first**, or an arena-only build panics. This is the smallest
+    //< heap-free format: A's and B's raw bytes and `scale` back to back, for an embedded target's
+    //< flash or NVRAM (restoring assumes the caller knows the shapes).
+    return (r.a.size + r.b.size + 1) * sizeof(T)
+  pub fn save_raw( //< copies A, B and `scale` out contiguously, without using the heap
+    r: Self$@,
+    dest: Void$@, //< a buffer of at least `raw_size()` bytes
+  )
+    p: = U8$@::dest
+    a_bytes: = r.a.size * sizeof(T)
+    b_bytes: = r.b.size * sizeof(T)
+    mem.copy(Void$@::p, Void$@::r.a.data, a_bytes)
+    mem.copy(Void$@::(p + a_bytes), Void$@::r.b.data, b_bytes)
+    scale_buf: T = r.scale
+    mem.copy(Void$@::(p + a_bytes + b_bytes), Void$@::scale_buf@, sizeof(T))
+  pub fn load_raw( //< rebuilds the adapter from what `save_raw` wrote, given the shapes again
+    src: Void$@, //< the bytes `save_raw` produced
+    in_dim: Sz, //< the input width of the saved A
+    out_dim: Sz, //< the output width of the saved B
+    rank: Sz, //< the rank of the saved pair
+    arena: Arena$@, //< the arena A and B are allocated from
+  ): Lora<|T|>
+    a_shape: Sz[2] = ::{ in_dim, rank }
+    b_shape: Sz[2] = ::{ rank, out_dim }
+    a: = Tensor<|T|>.new(Sz[]::a_shape, arena)
+    b: = Tensor<|T|>.new(Sz[]::b_shape, arena)
+    p: = U8$@::src
+    a_bytes: = a.size * sizeof(T)
+    b_bytes: = b.size * sizeof(T)
+    mem.copy(Void$@::a.data, Void$@::p, a_bytes)
+    mem.copy(Void$@::b.data, Void$@::(p + a_bytes), b_bytes)
+    scale_buf: T = 0.0
+    mem.copy(Void$@::scale_buf@, Void$@::(p + a_bytes + b_bytes), sizeof(T))
+    return Lora<|T|>::{ .a = a, .b = b, .scale = scale_buf }

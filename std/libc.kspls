@@ -1,0 +1,70 @@
+//< The C standard library's declarations, written in KSPL
+//<
+//< **This is the only file that declares libc.** A hosted program gets `malloc`, `fprintf` or
+//< `signal` from here, so one declaration serves every backend.
+//< Caution: **Nothing that uses C's `long` goes here** (`fseek` / `ftell` / `clock`).
+//< Its width differs by platform, so one declaration would be right on one and wrong on another.
+pub typedef Signal_handler = fn(sig: I32): Void //< what `signal()` takes and returns.
+  //<
+  //< An unnamed function-pointer type in an extern declaration produces no valid C type name (the
+  //< same holds for Thread_entry in std/thread.kspls).
+
+extern "C"
+  pub fn fprintf(stream: Void$@, fmt: Void@, ...): I32 //<
+    //< C's fprintf: writes text formatted by fmt to stream
+    //<
+    //< **Take the format as a `Void@`, not a `U8@`.** C's format is a plain `char*`, and KSPL's
+    //< `U8` is unsigned ("Primitive types" in docs/SPEC-language.md). A `U8@` mismatches on hosted
+    //< and freestanding targets and triggers -Wpointer-sign (Principle 2 in `docs/DESIGN.md`).
+  pub fn snprintf(str: Void$@, size: Sz, format: Void@, ...): I32
+  pub fn get_stdout(): Void$@
+  pub fn get_stderr(): Void$@
+  // --- Memory ---
+  pub fn malloc(size: Sz): U8$@
+  pub fn free(ptr: Void$@)
+  pub fn memcpy(dest: Void$@, src: Void$@, n: Sz): Void$@
+  pub fn memset(dest: Void$@, c: I32, n: Sz): Void$@
+  pub fn memcmp(buf1: Void$@, buf2: Void$@, n: Sz): I32
+  // --- Process & Args ---
+  argc: I32
+  argv: U8$@$@
+  pub fn exit(status: I32): Void
+  pub fn abort(): Void
+  // --- File System ---
+  pub fn fopen(filename: Void$@, mode: Void$@): Void$@ //<
+    //< C's fopen: opens the file named filename, or returns null
+    //<
+    //< Caution: **Do not use it to pass a path.** On Windows it is the narrow API, so a non-ASCII
+    //< path is read in the current code page. It stays only as the companion of `fclose` / `fread`.
+  pub fn fclose(stream: Void$@): I32
+  pub fn fread(ptr: Void$@, size: Sz, nmemb: Sz, stream: Void$@): Sz
+  pub fn fwrite(ptr: Void$@, size: Sz, nmemb: Sz, stream: Void$@): Sz
+  pub fn ferror(stream: Void$@): I32 //< nonzero after a read or write fails; not at end of file
+  pub fn rename(old_path: Void$@, new_path: Void$@): I32 //<
+    //< C's rename: moves old_path to new_path
+    //<
+    //< Caution: **Do not use it** (same reason as `fopen`). To rename a file, use `std/fs`'s
+    //< `rename_path`.
+
+  pub fn getchar(): I32
+  pub fn fflush(stream: Void$@): I32
+  // --- Environment ---
+  pub fn getenv(name: Void$@): Void$@ //<
+    //< C's getenv: the value of the environment variable name, or null
+    //<
+    //< Caution: **Do not use it to read characters on Windows** (same reason as `fopen`).
+    //< Use `std/sys`'s `get_env` instead.
+  // --- Signals ---
+  pub fn signal(sig: I32, handler: Signal_handler): Signal_handler
+  pub fn raise(sig: I32): I32
+  // --- Wall-clock time ---
+  pub fn time(dst: I64$@): I64
+  // --- Math ---
+  pub fn strtod(nptr: Void$@, endptr: Void$@): F64
+  pub fn sqrt(x: F64): F64
+  pub fn exp(x: F64): F64
+  pub fn log(x: F64): F64
+  pub fn pow(base: F64, exp: F64): F64
+  pub fn sin(x: F64): F64
+  pub fn cos(x: F64): F64
+  pub fn tan(x: F64): F64

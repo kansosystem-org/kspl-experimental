@@ -1,0 +1,26 @@
+//< A field whose visibility is in balance with its type draws no visibility diagnostic
+//<
+//< A `priv` field is stopped from outside by the visibility check, and a `priv struct`'s `pub`
+//< field is held down to the struct's visibility, so neither leaks. The program fails on purpose
+//< for another reason (an undefined symbol), beside which the EXPECT-NOT finds no visibility one.
+// EXPECT: undefined path or identifier 'no_such_fn'
+// EXPECT-NOT: is less visible than the
+
+priv struct Hidden
+  v: I32
+
+pub struct Holder
+  priv slot: Hidden
+
+priv struct Inner_holder
+  slot: Hidden
+
+impl Holder
+  pub fn sum(r: Self$@): I32
+    return r.slot.v
+
+fn main()
+  h: = Holder::{ .slot = Hidden::{ .v = 1 } }
+  i: = Inner_holder::{ .slot = Hidden::{ .v = 2 } }
+  _s: = h.sum() + i.slot.v
+  no_such_fn()

@@ -1,0 +1,396 @@
+//< Assembles the record of the public API (`--emit-surface=`)
+//<
+//< **Its purpose differs from `--emit-decls`'s**, so it reads **only the raw tree and the source
+//< text** (no sema). Text cut out unchanged keeps the `$`, a type argument's constraints and a
+//< default argument, which a type id loses. **One entry per line**: the comparing side looks lines
+//< up by key.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_doc" { Param_doc, body_brace, brace_at, doc_of, end_of, file_doc, joined,
+  param_docs, return_doc }
+import "ksplc/base/ast_ext" // `is_fn_decl`
+import "ksplc/base/core" as base_core
+import "std/chars" // `trim_spaces`
+import "std/ds" { List }
+import "std/seq"
+import "std/str" { Str_builder }
+import "std/strfmt"
+
+struct Line //< one record line
+  //<
+  //< The key and the text are kept apart for sorting; `ksplc doc` reads the same lines
+  //< (`tools/doc.kspls`), so the record and the reference cannot disagree.
+  key: U8[]
+  text: U8[]
+  doc: U8[]
+
+priv const col: U8 = '\t' //< the field separator
+  //<
+  //< Not whitespace, which appears inside the text.
+
+priv fn flat(src: U8[], from: Sz, to: Sz): U8[] //< it folds the text onto one line
+  //<
+  //< A run of whitespace becomes one space, and line comments are dropped.
+  //< Caution: **Do not fold inside a string.** A default argument's literal holds whitespace and
+  //< `//` as text, so inside quotes it is copied unchanged, escapes (`\`) included.
+  $out: = Str_builder.new()
+  defer out.free()
+  $i: = from
+  $gap: = false
+  // The comma held back until the next letter is seen. **A trailing comma is formatting, not
+  // API** (it keeps a signature one parameter per line); kept, adding a description to a parameter
+  // would show as a change.
+  $held_comma: = false
+  for i < to
+    ch: = src[i]
+    if ch == '/' && i + 1 < to && src[i + 1] == '/'
+      for i < to && src[i] != '\n'
+        i += 1
+      gap = true
+      continue
+    if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r'
+      gap = true
+      i += 1
+      continue
+    closes: = ch == ')' || ch == ']'
+    if held_comma
+      held_comma = false
+      if closes
+        gap = false
+      else
+        out.c(',')
+    if ch == ','
+      held_comma = true
+      gap = false
+      i += 1
+      continue
+    // The whitespace around a bracket is formatting too, so one line and one parameter per line
+    // read the same.
+    had: = out.slice()
+    opened: = had.len > 0 && (had[had.len - 1] == '(' || had[had.len - 1] == '[')
+    if gap && had.len > 0 && !closes && !opened
+      out.c(' ')
+    gap = false
+    if ch != '"' && ch != '\''
+      out.c(ch)
+      i += 1
+      continue
+    out.c(ch)
+    i += 1
+    for i < to
+      c2: = src[i]
+      out.c(c2)
+      i += 1
+      if c2 == '\\' && i < to
+        out.c(src[i])
+        i += 1
+        continue
+      if c2 == ch
+        break
+  return base_core.arena.dup_str(out.slice())
+
+priv fn vis_of(item: Ast_node$@, src: U8[]): U8[] //<
+  //< It reads the visibility word from a `top_level_item`'s / `decl_impl`'s children
+  //<
+  //< Empty where none is written ("visible only within the package", not API).
+  for c in item.children
+    if c.kind_id == .k_visibility
+      return flat(src, c.loc.offset, end_of(c))
+  return ""
+
+priv fn attrs_of(item: Ast_node$@, src: U8[]): U8[] //<
+  //< The spelling of the attributes put on a `top_level_item`
+  //<
+  //< Empty where there are none.
+  for c in item.children
+    if c.kind_id == .k_attribute_list
+      return flat(src, c.loc.offset, end_of(c))
+  return ""
+
+priv fn decl_of(item: Ast_node$@): Ast_node$@ //<
+  //< The declaration a `top_level_item` holds
+  //<
+  //< Not `unwrap_top_level`, which on a raw tree reads `visibility` as the declaration.
+  $cur: = item
+  for cur != null && (cur.kind_id == .k_top_level_item || cur.kind_id == .k_decl_top)
+    $next: Ast_node$@ = null
+    for c in cur.children
+      if c.kind_id != .k_keyword && c.kind_id != .k_literal && c.kind_id != .k_attribute &&
+        c.kind_id != .k_attribute_list && c.kind_id != .k_visibility
+        next = c
+        break
+    cur = next
+  return cur
+
+priv fn name_of(n: Ast_node$@): U8[] //< the declaration's name
+  //<
+  //< An `fn`'s name is inside its `decl_fn_proto`.
+  $target: = n
+  if n.kind_id == .k_decl_fn
+    proto: = n.find_child(.k_decl_fn_proto)
+    if proto != null
+      target = proto
+  id_node: = target.find_child(.k_identifier)
+  return id_node.text if id_node != null else ""
+
+priv fn add(lines: List<|Line|>$@, key: U8[], text: U8[], doc: U8[]) //< it adds one line
+  //<
+  //< The trailing `;` is dropped: some declarations take one, so kept, one shape looks two ways.
+  if key.len == 0 || text.len == 0
+    return
+  $body: = text
+  if body[body.len - 1] == ';'
+    body = body.sub(0, body.len - 1)
+  lines.push(Line::{ .key = key, .text = body, .doc = doc })
+
+priv fn key_of(owner: U8[], name: U8[], attrs: U8[]): U8[] //<
+  //< It builds the key `<enclosure>.<name> <attributes>`
+  //<
+  //< Where the enclosure is empty, just the name.
+  //< **The attributes go into the key.** `#cfg` can declare the same name twice, and without them
+  //< two entries would share a key and the comparing side could not tell which it compares.
+  if name.len == 0
+    return ""
+  $s: = Str_builder.new()
+  defer s.free()
+  if owner.len > 0
+    s.s(owner).c('.')
+  s.s(name)
+  if attrs.len > 0
+    s.c(' ').s(attrs)
+  return base_core.arena.dup_str(s.slice())
+
+priv struct Held //< the marks carried across a body's members
+  //<
+  //< **Inside an `impl` or `trait`, the attributes and the visibility are the method's siblings**
+  //< (a `struct`'s fields hold them as children), so what was read just before belongs to it.
+  attrs: U8[]
+  vis: U8[]
+
+priv const part_mark: U8 = '~' //<
+  //< What separates a declaration's key from the part of it a row describes
+  //<
+  //< **It appears in no name**, so a key holding one is a part. A parameter is
+  //< `<the key>~<its position>.<its name>`, the position padded so it sorts in order; the return
+  //< value is `<the key>~~`.
+  //< **A part does not sort right after its own declaration**: `~` sorts after the letters, so
+  //< `sub`'s parts land after `sub_from`. **The reader finds the owner from the key.**
+
+priv const file_key: U8[] = "~" //<
+  //< The key for the file's own description
+  //<
+  //< **The mark alone is no declaration's key**, so the row cannot be mistaken for one. It is not
+  //< in the record either: what a file is for is not compared between versions.
+
+priv fn param_key(key: U8[], at: Sz, name: U8[]): U8[] //< the key of one parameter
+  if key.len == 0
+    return ""
+  $s: = Str_builder.new()
+  defer s.free()
+  s.s(key).c(part_mark).s("\{at:02\}").c('.').s(name)
+  return base_core.arena.dup_str(s.slice())
+
+priv fn return_key(key: U8[]): U8[] //< the key of a declaration's return value
+  //<
+  //< **It sorts after every parameter** (a second `~` sorts after a digit), as in the signature.
+  if key.len == 0
+    return ""
+  $s: = Str_builder.new()
+  defer s.free()
+  s.s(key).c(part_mark).c(part_mark)
+  return base_core.arena.dup_str(s.slice())
+
+priv fn add_parts(lines: List<|Line|>$@, key: U8[], n: Ast_node$@, src: U8[]) //<
+  //< The descriptions the parameters and the return value carry
+  //<
+  //< **One row each, like any entry**: packed into one column they would need a separator no
+  //< description can contain, and there is none. A part with no description is left out.
+  //< **These are for the reference, not for comparing two versions** — so the record
+  //< (`SURFACE.txt`) drops them and `ksplc doc` shows them.
+  params: = List<|Param_doc|>.create(base_core.arena)
+  param_docs(src, n, params)
+  for $i: Sz = 0; i < params.len; i += 1
+    one: = params.get(i)
+    if one.doc.len > 0
+      add(lines, param_key(key, i, one.name), one.name, one.doc)
+  back: = return_doc(src, n)
+  if back.len > 0
+    add(lines, return_key(key), "return", back)
+
+priv fn add_fn(lines: List<|Line|>$@, owner: U8[], held: Held, n: Ast_node$@, src: U8[]) //<
+  //< One `fn`
+  //<
+  //< Up to just before the body for a `decl_fn`, and whole for a `decl_fn_proto`.
+  $proto: = n
+  if n.kind_id == .k_decl_fn
+    proto = n.find_child(.k_decl_fn_proto)
+    if proto == null
+      return
+  key: = key_of(owner, name_of(n), held.attrs)
+  add(lines, key, joined(held.vis, flat(src, proto.loc.offset, end_of(proto))),
+    doc_of(src, proto.loc.offset, body_brace(src, n)))
+  add_parts(lines, key, proto, src)
+
+priv fn published(vis: U8[]): Bool //<
+  //< whether a declaration carrying that word goes into the record
+  //<
+  //< **At the `all` scope every word does** (`--surface-scope=all`): an application's files use
+  //< one another without `pub`, and the record would be empty (`Config.surface_all` in
+  //< [`../base/core.kspls`](../base/core.kspls)).
+  //< Caution: **Ask it here and nowhere else.** The word is read in three places (a top-level
+  //< declaration, a field, a method), and one missed would record a type but not its fields.
+  return base_core.config.surface_all || vis.equals("pub")
+
+priv fn methods_into(lines: List<|Line|>$@, owner: U8[], n: Ast_node$@, src: U8[], pub_only: Bool,
+  outer: U8[]) //<
+    //< It adds the methods inside an `impl` / `trait`.
+    //<
+    //< **In a `trait` a `priv` requirement is API too** (the reason is at `add_trait`).
+    //< Caution: **Add the enclosing block's attributes (outer) to the key.** `#cfg` on the
+    //< enclosing `impl` splits methods that would otherwise share a key (`Db.open` in
+    //< `std/db.kspls`).
+  $held: = Held::{ .attrs = "", .vis = "" }
+  for m in n.children
+    if m.kind_id == .k_attribute_list
+      held.attrs = flat(src, m.loc.offset, end_of(m))
+      continue
+    if m.kind_id == .k_visibility
+      held.vis = flat(src, m.loc.offset, end_of(m))
+      continue
+    if m.is_fn_decl()
+      if !pub_only || published(held.vis)
+        add_fn(lines, owner,
+          Held::{ .attrs = joined(outer, held.attrs), .vis = held.vis }, m, src)
+      held = Held::{ .attrs = "", .vis = "" }
+
+priv fn add_struct(lines: List<|Line|>$@, held: Held, n: Ast_node$@, src: U8[]) //< a `struct`
+  //<
+  //< The heading on one line, each `pub` field on one line; **a field that is not `pub` is not
+  //< API**. A field takes no attribute, so the key carries only the `struct`'s.
+  name: = name_of(n)
+  add(lines, key_of("", name, held.attrs),
+    joined(held.vis, flat(src, n.loc.offset, brace_at(n))),
+    doc_of(src, n.loc.offset, body_brace(src, n)))
+  for f in n.children
+    if f.kind_id != .k_struct_field || !published(vis_of(f, src))
+      continue
+    add(lines, key_of(name, name_of(f), held.attrs), flat(src, f.loc.offset, end_of(f)),
+      doc_of(src, f.loc.offset, body_brace(src, f)))
+
+priv fn add_enum(lines: List<|Line|>$@, held: Held, n: Ast_node$@, src: U8[]) //< an `enum`
+  //<
+  //< **Every variant is recorded**: a `switch` takes an `enum` apart, so the variants and tag
+  //< values are API. A variant takes no attribute either.
+  name: = name_of(n)
+  add(lines, key_of("", name, held.attrs),
+    joined(held.vis, flat(src, n.loc.offset, brace_at(n))),
+    doc_of(src, n.loc.offset, body_brace(src, n)))
+  for v in n.children
+    if v.kind_id != .k_enum_variant
+      continue
+    add(lines, key_of(name, name_of(v), held.attrs), flat(src, v.loc.offset, end_of(v)),
+      doc_of(src, v.loc.offset, body_brace(src, v)))
+
+priv fn add_trait(lines: List<|Line|>$@, held: Held, n: Ast_node$@, src: U8[]) //< a `trait`
+  //<
+  //< **A `priv` requirement is recorded too.** It cannot be called, but the conforming side must
+  //< have that method, so removing it breaks the other side.
+  name: = name_of(n)
+  add(lines, key_of("", name, held.attrs),
+    joined(held.vis, flat(src, n.loc.offset, brace_at(n))),
+    doc_of(src, n.loc.offset, body_brace(src, n)))
+  methods_into(lines, name, n, src, false, held.attrs)
+
+priv fn add_impl(lines: List<|Line|>$@, held: Held, n: Ast_node$@, src: U8[]) //< an `impl`
+  //<
+  //< The key's enclosure is the target type's spelling (`Box<|T|>` and `Box<|I32|>` are different
+  //< APIs). **The visibility is the method's sibling** (see `Held`). A trait conformance is a line
+  //< too: if it disappears, the other side's call breaks.
+  target_node: = n.find_child(.k_type_expr)
+  if target_node == null
+    return
+  owner: = flat(src, target_node.loc.offset, end_of(target_node))
+  trait_node: = n.find_child(.k_type_path)
+  if trait_node != null
+    named: = base_core.arena.text().s(owner).c(':')
+      .s(flat(src, trait_node.loc.offset, end_of(trait_node))).take()
+    add(lines, key_of("", named, held.attrs), flat(src, n.loc.offset, brace_at(n)),
+      doc_of(src, n.loc.offset, body_brace(src, n)))
+  methods_into(lines, owner, n, src, true, held.attrs)
+
+priv fn collect_item(item: Ast_node$@, src: U8[], lines: List<|Line|>$@) //<
+  //< It adds one top-level entry to the record
+  n: = decl_of(item)
+  if n == null
+    return
+  held: = Held::{ .attrs = attrs_of(item, src), .vis = vis_of(item, src) }
+  if n.kind_id == .k_decl_impl
+    add_impl(lines, held, n, src)
+    return
+  if !published(held.vis)
+    return
+  switch n.kind_id case .k_decl_fn, .k_decl_fn_proto
+    add_fn(lines, "", held, n, src)
+  case .k_decl_struct
+    add_struct(lines, held, n, src)
+  case .k_decl_enum
+    add_enum(lines, held, n, src)
+  case .k_decl_trait
+    add_trait(lines, held, n, src)
+  case .k_decl_const, .k_decl_alias
+    add(lines, key_of("", name_of(n), held.attrs),
+      joined(held.vis, flat(src, n.loc.offset, end_of(n))),
+      doc_of(src, n.loc.offset, body_brace(src, n)))
+  default {}
+
+fn is_file_row(key: U8[]): Bool //< whether the line is the file's own description
+  return key.equals(file_key)
+
+fn owner_of(key: U8[]): U8[] //<
+  //< The key of the declaration a part's line describes; empty where the line is no part
+  mark: = key.find_char(part_mark)
+  return "" if mark <= 0 else key.sub(0, mark)
+
+fn part_name_of(key: U8[]): U8[] //<
+  //< A parameter's name; **empty for the return value**, and for a line that is no part
+  //<
+  //< **A parameter has its position in front of its name** (`param_key`), so the name starts
+  //< after the `.`; the return value has the mark a second time and no name.
+  mark: = key.find_char(part_mark)
+  if mark <= 0
+    return ""
+  rest: = key.sub_from(mark + 1)
+  dot: = rest.find_char('.')
+  return "" if dot < 0 else rest.sub_from(dot + 1)
+
+fn surface_lines(raw_root: Ast_node$@, src: U8[]): List<|Line|> //<
+  //< One file's lines, in ascending key order
+  //<
+  //< **The file's own description goes under the bare mark** (see `file_key`); the reader decides
+  //< what to do with it. A file with no description gets no line.
+  $lines: = List<|Line|>.new(base_core.arena)
+  if raw_root != null && src.len > 0
+    said: = file_doc(src)
+    if said.len > 0
+      add(lines@, file_key, "file", said)
+    for item in raw_root.children
+      collect_item(item, src, lines@)
+  return lines.order_by(fn(a: Line, b: Line; ): I32 {
+    return a.key.compare(b.key);
+  }, base_core.arena)
+
+fn render_surface(raw_root: Ast_node$@, src: U8[], file: U8[]): U8[] //<
+  //< It builds one file's API record
+  //<
+  //< A line is `<logical name> <key> <spelling>` and, where there is one, `<documentation>`
+  //< (tab-separated), in ascending key order. **No heading**: `make surface` writes one once.
+  lines: = surface_lines(raw_root, src)
+  $out: = Str_builder.new()
+  defer out.free()
+  for l in lines
+    out.s(file).c(col).s(l.key).c(col).s(l.text)
+    // **The column is left off where there is no documentation**, or every such entry carries a
+    // trailing separator.
+    if l.doc.len > 0
+      out.c(col).s(l.doc)
+    out.c('\n')
+  return base_core.arena.dup_str(out.slice())

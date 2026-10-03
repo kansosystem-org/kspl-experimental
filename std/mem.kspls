@@ -1,0 +1,602 @@
+//< Memory: the heap, and the `Arena` that frees a whole region at once
+//<
+//< An `Arena` holds a batch of short-lived values: nothing is freed one at a time, and resetting
+//< the arena frees them all at once. **The heap's usage can be read at any moment**
+//< (`heap_used_bytes`, and the peak and running total next to it), so a leak shows up as a number
+//< the program itself can see, not only in a separate tool's output.
+#cfg(!freestanding)
+import "std/libc"
+
+// `fh_lock`'s spin wait is correct with an empty body ([I0307] does not apply).
+##lint(I0307 = off)
+
+extern "C"
+  fn kspl_atomic_cas(ptr: Sz$@, expected: Sz, new_val: Sz): Sz //<
+    //< Stores new_val if the value at ptr equals expected, and returns the old value
+    //<
+    //< **This declaration must match the one in `std/thread.kspls`.** Each std file declares the C
+    //< symbol itself, so importing just one of them is enough (as with `kspl_stat`).
+
+pub fn alloc_as<|T|>(): T$@ //< heap memory for one value, with no `sizeof` written by hand
+  //<
+  //< Caution: Do not write it out as `T$@::alloc(sizeof(T))` in the caller (docs/DESIGN.md's
+  //< "One means to one purpose"): nothing catches a mismatch between the two types.
+  //< `alloc(<byte count>)` remains for raw bytes (`U8$@::alloc(n + 1)`), which no type describes.
+  return T$@::alloc(sizeof(T))
+
+// The two more atomic operations the hosted counters need, declared as `std/thread.kspls` does.
+// Freestanding never calls them: an Armv6-M core has none (`ksplc/gen/runtime/core.c`).
+#cfg(!freestanding)
+extern "C"
+  fn kspl_atomic_add(ptr: Sz$@, delta: Sz): Sz
+  fn kspl_atomic_load(ptr: Sz$@): Sz
+
+// The counters for hosted builds (the libc.malloc version).
+// Caution: **Keep them priv, and touch them only through the atomic operations.** Only
+// heap_used_bytes and the functions next to it read them (freestanding counts elsewhere, so a
+// direct read would be written for each build). Threads allocate at once, and a plain `+=` loses
+// updates, so `heap_used_bytes` drifts and never returns to its start.
+priv $heap_current: Sz = 0
+priv $heap_peak: Sz = 0
+priv $heap_total: Sz = 0
+const alloc_header_size: Sz = 16 //< the header size, which keeps C's 16-byte alignment
+const max_align: Sz = 8 //< the alignment of every address returned
+  //<
+  //< 8 meets the requirements of `Sz`, a pointer and F64 on both 32-bit and 64-bit.
+
+priv fn align_pad(ptr: U8$@): Sz //<
+  //< How many bytes to add to round an address up to a multiple of max_align
+  //<
+  //< **The start of a passed-in buffer need not be aligned** (`std/docs/DESIGN.md`'s "The receiver
+  //< aligns the start of a buffer it is given").
+  rem: = (Sz::ptr) % max_align
+  return 0 if rem == 0 else max_align - rem
+const alloc_owner_offset: Sz = sizeof(Sz) //<
+  //< The offset in the header where the block records its own address
+  //<
+  //< **`dealloc` accepts only the exact pointer `alloc` returned.** The address sits in the
+  //< header's unused bytes. It is **the block's own address**, not a constant, so a stale copied
+  //< header or arena content that holds the same value does not match.
+
+#cfg(!freestanding)
+pub fn alloc( //< allocates raw bytes from the global heap
+  size: Sz, //< how many bytes to allocate
+): Void$@ //< the bytes, freed with `dealloc`; running out of memory stops the program
+  if size < 0
+    panic("alloc size must be non-negative")
+  alloc_size: = size + alloc_header_size
+  ptr: = libc.malloc(alloc_size)
+  if ptr == null
+    panic("Out of memory")
+  size_ptr: = Sz$@::ptr
+  size_ptr$ = size
+  owner_ptr: = (U8$@$@)::((ptr) + alloc_owner_offset)
+  owner_ptr$ = ptr
+
+  raise_peak(kspl_atomic_add(heap_current@, size) + size)
+  kspl_atomic_add(heap_total@, size)
+  data_ptr: = ptr + alloc_header_size
+  return Void$@::data_ptr
+// A compare-and-swap loop, so a thread holding a lower value can never write it over a higher one.
+// Cost: one atomic read while the peak stays above, as it does once a program warms up.
+#cfg(!freestanding)
+priv fn raise_peak(now: Sz)
+  $seen: = kspl_atomic_load(heap_peak@)
+  for seen < now
+    was: = kspl_atomic_cas(heap_peak@, seen, now)
+    if was == seen
+      return
+    seen = was
+// Before initialization it panics deterministically: a clear cause, instead of a "malloc not
+// provided" link error.
+#cfg(freestanding)
+pub fn alloc( //< allocates raw bytes from the free-list heap, which must already be set up
+  size: Sz, //< how many bytes to allocate
+): Void$@ //< the bytes, freed with `dealloc`; running out stops the program
+  if _fh.ready
+    return freestanding_heap_alloc(size)
+  panic("mem.alloc: no global heap under freestanding — call mem.init_freestanding_heap() first, \
+    or pass an Arena (see Arena.from_buffer)")
+  return null // unreachable; satisfies the type check
+
+#cfg(!freestanding)
+pub fn dealloc( //< returns bytes to the global heap
+  ptr: Void$@, //< what `alloc` returned; null does nothing
+)
+  if ptr != null
+    real_ptr: = (U8$@::ptr) - alloc_header_size
+    // **Check where it came from before passing it to `libc.free`.**
+    owner_ptr: = (U8$@$@)::(real_ptr + alloc_owner_offset)
+    if owner_ptr$ != real_ptr
+      panic("mem.dealloc: this pointer did not come from mem.alloc, or was already freed. Arena \
+        memory is released by Arena.free(), and a pointer into the middle of an allocation cannot \
+        be freed at all")
+    // Clearing the recorded address also catches a second free, until the memory is reused.
+    owner_ptr$ = null
+    size_ptr: = Sz$@::real_ptr
+
+    kspl_atomic_add(heap_current@, -size_ptr$)
+    libc.free(Void$@::real_ptr)
+// Before initialization it panics, like alloc().
+#cfg(freestanding)
+pub fn dealloc( //< returns bytes to the free-list heap
+  ptr: Void$@, //< what `alloc` returned; null does nothing
+)
+  if ptr != null
+    if _fh.ready
+      freestanding_heap_dealloc(ptr)
+      return
+    panic("mem.dealloc: no global heap under freestanding")
+
+// ==========================================
+// The heap for freestanding (a free list that merges adjacent blocks)
+// ==========================================
+
+priv struct Fh_block //<
+  //< The header before each block of the freestanding heap
+  //<
+  //< Once the caller (normally the start-up code) passes one static buffer to
+  //< init_freestanding_heap(), alloc/dealloc work. It is a free list in ascending address order,
+  //< first fit, and merges neighbours on dealloc.
+  //< Caution: The wait time is not deterministic, so a real-time path needs a configuration with no
+  //< Arc/Rc.
+  size: Sz //< The data region's size in bytes, not counting this header
+  next: Fh_block$@ //<
+    //< The next free block while in the free list, and **the block itself** while in use
+    //<
+    //< Pointing at itself is the in-use mark that `dealloc` checks, and it costs no bytes. Unlike a
+    //< constant, its own address does not match arena content that happens to hold the same value.
+
+// A remainder smaller than one header plus this is not split off, so tiny free blocks do not
+// fragment the heap.
+#cfg(freestanding)
+priv const fh_min_useful_bytes: Sz = 16
+
+priv struct _Fh_state
+  free_list: Fh_block$@
+  lock: Sz
+  ready: Bool
+  base: U8$@ //< The start of the buffer passed to init_freestanding_heap (never changes)
+  total: Sz //< The total size of the buffer passed to init_freestanding_heap (never changes)
+  used: Sz //< The bytes currently allocated, after rounding
+  peak_used: Sz //< the highest value used has reached
+#cfg(freestanding)
+priv $_fh: _Fh_state = ::{ .free_list = null, .lock = 0, .ready = false, .base = null, .total = 0,
+  .used = 0, .peak_used = 0 }
+
+#cfg(freestanding)
+priv fn fh_lock()
+  for kspl_atomic_cas(_fh.lock@, 0, 1) != 0 {}
+#cfg(freestanding)
+priv fn fh_unlock()
+  _fh.lock = 0
+// Rounds up to a multiple of sizeof(Fh_block), which meets the header's own alignment.
+#cfg(freestanding)
+priv fn fh_round_up(size: Sz): Sz
+  unit: = sizeof(Fh_block)
+  rem: = size % unit
+  return size if rem == 0 else size + (unit - rem)
+#cfg(freestanding)
+priv fn fh_data_ptr(hdr: Fh_block$@): Void$@
+  return Void$@::((U8$@::hdr) + sizeof(Fh_block))
+#cfg(freestanding)
+priv fn fh_header_of(ptr: Void$@): Fh_block$@
+  return Fh_block$@::((U8$@::ptr) - sizeof(Fh_block))
+#cfg(freestanding)
+priv fn fh_block_end(hdr: Fh_block$@): U8$@
+  return (U8$@::hdr) + sizeof(Fh_block) + hdr.size
+
+// Caution: Call it once for the whole program; a second call discards the whole previous buffer.
+#cfg(freestanding)
+pub fn init_freestanding_heap( //< makes a static buffer the whole heap
+  buf: U8$[], //< memory the caller owns, which the heap then allocates from
+)
+  // Caution: **Align the start before using it** (align_pad). fh_round_up rounds sizes to a
+  // multiple of sizeof(Fh_block), so once the start is aligned, every block is aligned.
+  pad: = align_pad(buf.ptr)
+  assert(buf.len > pad + sizeof(Fh_block),
+    "mem.init_freestanding_heap: buffer too small for a single block header")
+  start: = buf.ptr + pad
+  len: = buf.len - pad
+  hdr: = Fh_block$@::start
+  hdr.size = len - sizeof(Fh_block)
+  hdr.next = null
+  _fh.free_list = hdr
+  _fh.ready = true
+  _fh.base = start
+  _fh.total = len
+  _fh.used = 0
+  _fh.peak_used = 0
+
+#cfg(freestanding)
+priv fn freestanding_heap_alloc(size: Sz): Void$@
+  need: = fh_round_up(size)
+  fh_lock()
+
+  $prev: Fh_block$@ = null
+  $cur: = _fh.free_list
+  for cur != null && cur.size < need
+    prev = cur
+    cur = cur.next
+  if cur == null
+    fh_unlock()
+    panic("mem.alloc: out of memory (freestanding heap)")
+    return null // unreachable
+
+  leftover: = cur.size - need
+  if leftover >= sizeof(Fh_block) + fh_min_useful_bytes
+    // The first need bytes of cur are allocated; the rest takes cur's place in the free list.
+    new_hdr: = Fh_block$@::((U8$@::fh_data_ptr(cur)) + need)
+    new_hdr.size = leftover - sizeof(Fh_block)
+    new_hdr.next = cur.next
+    cur.size = need
+    if prev != null
+      prev.next = new_hdr
+    else
+      _fh.free_list = new_hdr
+  else if prev != null
+    prev.next = cur.next
+  else
+    _fh.free_list = cur.next
+
+  // Count cur.size, not need: without a split it is larger, and used/peak_used would be too low.
+  _fh.used += cur.size
+  if _fh.used > _fh.peak_used
+    _fh.peak_used = _fh.used
+  // Caution: **Set the mark after removing it from the free list.** Writing it before the branch
+  // above has read `cur.next` breaks the removed free block's links.
+  cur.next = cur
+  fh_unlock()
+  return fh_data_ptr(cur)
+
+#cfg(freestanding)
+priv fn freestanding_heap_dealloc(ptr: Void$@)
+  // **Check where it came from before accepting it.** Linking in a bogus header **corrupts the
+  // free list with no report** (a later `alloc` hands out live data), and arena and static
+  // pointers share the type `T$@`. The address range detects a pointer outside the heap; the
+  // in-use mark detects one into the middle of a block.
+  p: = U8$@::ptr
+  if _fh.base == null || p < _fh.base || p >= (_fh.base + _fh.total)
+    panic("mem.dealloc: this pointer is outside the freestanding heap (an arena allocation, a \
+      static buffer, or automatic storage). Arena memory is released by Arena.free()")
+  $hdr: = fh_header_of(ptr)
+  if hdr.next != hdr
+    panic("mem.dealloc: this pointer did not come from mem.alloc, or was already freed. A pointer \
+      into the middle of an allocation cannot be freed")
+  freed_size: = hdr.size // save the freed size before merging rewrites hdr.size
+  fh_lock()
+
+  // Finds the insertion position (between prev and cur), keeping ascending address order.
+  $prev: Fh_block$@ = null
+  $cur: = _fh.free_list
+  for cur != null && (U8$@::cur) < (U8$@::hdr)
+    prev = cur
+    cur = cur.next
+
+  // If the next free block cur is directly after it in memory, cur is merged into hdr.
+  if cur != null && fh_block_end(hdr) == (U8$@::cur)
+    hdr.size += sizeof(Fh_block) + cur.size
+    hdr.next = cur.next
+  else
+    hdr.next = cur
+
+  // If the previous free block prev is directly before it in memory, hdr is merged into prev.
+  if prev != null && fh_block_end(prev) == (U8$@::hdr)
+    prev.size += sizeof(Fh_block) + hdr.size
+    prev.next = hdr.next
+  else if prev != null
+    prev.next = hdr
+  else
+    _fh.free_list = hdr
+
+  _fh.used -= freed_size
+  fh_unlock()
+
+// ============================ The heap's usage ============================ The only way to
+// ask how much of the global heap is in use now.
+// Caution: **Do not read the counter variables directly.** Where the counting happens differs by
+// build: the free-list allocator on freestanding, the libc.malloc wrapper on hosted.
+// **"How big is the whole heap" exists on one build only.**
+
+#cfg(freestanding)
+pub fn heap_used_bytes(): Sz //< the bytes allocated now; 0 while there is no heap
+  return _fh.used
+#cfg(!freestanding)
+pub fn heap_used_bytes(): Sz //< the bytes allocated now
+  return kspl_atomic_load(heap_current@)
+
+#cfg(freestanding)
+pub fn heap_peak_used_bytes(): Sz //< the most bytes ever allocated at once
+  return _fh.peak_used
+#cfg(!freestanding)
+pub fn heap_peak_used_bytes(): Sz //< the most bytes ever allocated at once
+  return kspl_atomic_load(heap_peak@)
+
+// Only freestanding has a capacity.
+#cfg(freestanding)
+pub fn heap_capacity_bytes(): Sz //< the size of the static buffer the heap uses
+  return _fh.total
+
+// **It is not the allocation limit.** It shows whether `libc.malloc` was called at all during a
+// span, to verify work that should use only an arena.
+#cfg(!freestanding)
+pub fn heap_requested_total_bytes(): Sz //< every byte requested since start-up; never decreases
+  return kspl_atomic_load(heap_total@)
+
+pub fn alloc_in( //< allocates from the arena, or from the global heap if there is none
+  arena: Arena$@, //< where to allocate from; null means the global heap
+  size: Sz, //< how many bytes to allocate
+): Void$@ //< the bytes; with no arena, the caller frees them with `dealloc`
+  return arena.alloc(size) if arena != null else alloc(size)
+// Caution: **A container whose elements can be ARC zeroes newly allocated memory with this
+// before using it.** Assigning to an element releases the old value, so following garbage as ARC
+// crashes; zero means "an empty handle that owns nothing" (see `Rc<|T|>`).
+#cfg(!freestanding)
+pub fn zero( //< sets a range of bytes to 0
+  dest: Void$@, //< where the range begins
+  bytes: Sz, //< how long it is
+)
+  if bytes < 0
+    panic("zero bytes must be non-negative")
+  // Caution: **Return on 0 bytes without calling libc.** memset / memcpy declare their arguments
+  // `nonnull`, so null is undefined behavior even at length 0, and an empty slice's `.ptr` is
+  // null (`reader.read(<empty buffer>)` ends up here).
+  if bytes == 0
+    return
+  libc.memset(dest, 0, bytes)
+// Its own implementation, for the same reason as copy.
+#cfg(freestanding)
+pub fn zero( //< sets a range of bytes to 0
+  dest: Void$@, //< where the range begins
+  bytes: Sz, //< how long it is
+)
+  if bytes < 0
+    panic("zero bytes must be non-negative")
+  d: = U8$@::dest
+  for i in Range.asc(bytes)
+    (d + i)$ = 0
+#cfg(!freestanding)
+pub fn copy( //< copies a range of bytes; the two ranges must not overlap
+  dest: Void$@, //< where the bytes go
+  src: Void$@, //< where they come from
+  bytes: Sz, //< how many
+)
+  if bytes < 0
+    panic("copy bytes must be non-negative")
+  // The same reason as in zero: a 0-byte call passes no null to libc.
+  if bytes == 0
+    return
+  libc.memcpy(dest, src, bytes)
+// A simple byte loop, which avoids linking libgcc/newlib; slower, but embedded copies are small.
+#cfg(freestanding)
+pub fn copy( //< copies a range of bytes; the two ranges must not overlap
+  dest: Void$@, //< where the bytes go
+  src: Void$@, //< where they come from
+  bytes: Sz, //< how many
+)
+  if bytes < 0
+    panic("copy bytes must be non-negative")
+  d: = U8$@::dest
+  s: = U8$@::src
+  for i in Range.asc(bytes)
+    (d + i)$ = (s + i)$
+// std/chars and std/str call libc.memcmp, which freestanding lacks. #export emits this under the C
+// name "memcmp", which satisfies libc.kspls's extern declaration without changing the callers.
+#cfg(freestanding)
+#export
+pub fn memcmp( //< C's `memcmp`, written here so freestanding needs no libc
+  a: Void$@, //< one range
+  b: Void$@, //< the other
+  n: Sz, //< how many bytes to compare
+): I32 //< 0 when equal, else the first differing byte of `a` minus that of `b`
+  pa: = U8$@::a
+  pb: = U8$@::b
+  for i in Range.asc(n)
+    da: = (pa + i)$
+    db: = (pb + i)$
+    if da != db
+      return da - db
+  return 0
+// clang emits AAPCS runtime calls (__aeabi_memclr4 and similar) when it turns a struct's
+// zero-initialization or copy into a 4/8-byte aligned call. They are implemented in
+// ksplc/gen/runtime/freestanding.c (the C preamble always embedded into every freestanding
+// compilation).
+// ==========================================
+// ==========================================
+
+priv struct Arena_chunk
+  next: Arena_chunk$@
+  cap: Sz
+  used: Sz
+// The distance from a chunk's start to its data region.
+// Caution: **Always use this for the distance, and do not write `sizeof(Arena_chunk)` directly.**
+// On a 32-bit target the header is 12 bytes, so every allocation after it is 4 bytes off an
+// 8-byte boundary, and F64 / I64 / U64 there are undefined behavior (AAPCS).
+priv const arena_chunk_header_size: Sz =
+  ((sizeof(Arena_chunk) + max_align - 1) / max_align) * max_align
+pub struct Arena //< a bump allocator: everything it allocated is freed at once
+  priv head: Arena_chunk$@
+  pub default_chunk_size: Sz //< the largest size a chunk grows to; 0 marks a fixed buffer.
+    //<
+    //< from_buffer() sets 0: running out panics without calling malloc, and free() does nothing
+    //< (the chunk and the Arena are the caller's memory).
+const arena_initial_chunk: Sz = 256 * 1024 //< the first chunk's capacity; later ones grow from it
+  //<
+  //< A smaller default_chunk_size takes precedence.
+
+pub struct Arena_headroom //< how far away the next chunk is, and how big it will be
+  //<
+  //< Caution: **Do not return the two separately.** One alone does not determine the step.
+  pub free: Sz //< how many bytes fit before a new chunk is allocated
+  pub step: Sz //< how many bytes that new chunk will have
+
+pub struct Arena_state //< a mark to rewind the arena to
+  priv chunk: Arena_chunk$@
+  pub used: Sz //< how much of that chunk was used at the mark
+
+impl Arena
+  pub fn new( //< an arena on the global heap, growing chunk by chunk
+    chunk_size: Sz, //< the largest size one chunk grows to
+  ): Arena$@
+    ptr: = alloc_as<|Arena|>()
+    ptr.head = null
+    ptr.default_chunk_size = chunk_size
+    return ptr
+  pub fn from_buffer( //< an arena over memory the caller owns, which never grows
+    //<
+    //< Neither the arena nor the chunk calls malloc, so a program runs unchanged on a
+    //< microcontroller that has none.
+    //< **buf's start need not be aligned** (align_pad aligns it and subtracts the bytes it skipped
+    //< from `size`).
+    buf: Void$@, //< the buffer, which becomes the only chunk
+    size: Sz, //< its size in bytes
+  ): Arena
+    pad: = align_pad(U8$@::buf)
+    assert(size > pad + arena_chunk_header_size,
+      "Arena.from_buffer: buffer too small for a chunk header")
+    chunk: = Arena_chunk$@::((U8$@::buf) + pad)
+    chunk.cap = size - pad - arena_chunk_header_size
+    chunk.used = 0
+    chunk.next = null
+    return Arena::{ .head = chunk, .default_chunk_size = 0 }
+  priv fn next_chunk_cap(r: Self$@, alloc_size: Sz): Sz //< decides the new chunk's capacity
+    //<
+    //< It doubles from a small first chunk up to default_chunk_size, so a small workload does not
+    //< over-allocate and a large one reaches big chunks quickly. An allocation above the limit
+    //< gets a chunk of its own size.
+    $step: = arena_initial_chunk if r.head == null else r.head.cap * 2
+    if step > r.default_chunk_size
+      step = r.default_chunk_size
+    return alloc_size if alloc_size > step else step
+
+  pub fn alloc( //< allocates bytes; a fixed buffer that runs out panics instead of growing
+    r: Self$@,
+    size: Sz, //< how many bytes to allocate
+  ): Void$@
+    if size < 0
+      panic("Arena alloc size must be non-negative")
+    // Round up to a multiple of 8 bytes
+    alloc_size: = ((size + 7) / 8) * 8
+
+    if r.head != null
+      head_chunk: = r.head
+      remaining: = head_chunk.cap - head_chunk.used
+      if remaining >= alloc_size
+        ptr: = (U8$@::head_chunk) + arena_chunk_header_size + head_chunk.used
+        head_chunk.used += alloc_size
+        return Void$@::ptr
+
+    // from_buffer()'s fixed buffer: stop deterministically, with no hidden allocation.
+    if r.default_chunk_size == 0
+      panic("Arena.from_buffer: static buffer exhausted (no growth allowed)")
+
+    new_cap: = r.next_chunk_cap(alloc_size)
+    total_size: = arena_chunk_header_size + new_cap
+    new_chunk: = Arena_chunk$@::alloc(total_size)
+
+    new_chunk.cap = new_cap
+    new_chunk.used = alloc_size
+    new_chunk.next = r.head
+
+    r.head = new_chunk
+    data_start: = (U8$@::new_chunk) + arena_chunk_header_size
+    return Void$@::data_start
+
+  pub fn save(r: Self$@): Arena_state //< a mark to rewind to later
+    return Arena_state::{ .chunk = r.head, .used = r.head.used if r.head != null else 0 }
+  pub fn restore( //< rewinds to a mark, freeing everything allocated since then at once
+    r: Self$@,
+    state: Arena_state, //< what `save()` returned
+  )
+    $curr: = r.head
+    // Free the chunks allocated after the save point
+    for curr != state.chunk && curr != null
+      next_chunk: = curr.next
+      dealloc(Void$@::curr)
+      curr = next_chunk
+    r.head = state.chunk
+    if r.head != null
+      r.head.used = state.used
+
+  pub fn reset(r: Self$@) //< empties it, keeping the last round's usage as one chunk
+    //<
+    //< **For a loop that refills it each round** (a training step, a request): rewinding to a mark
+    //< saved while empty returns every chunk to the OS, and the next round allocates them again,
+    //< page by page. One chunk the size of the last round's use holds a round of that size, even
+    //< above the limit (Zig's `ArenaAllocator.reset(.retain_capacity)`).
+    if r.head == null || r.head.next == null
+      if r.head != null
+        r.head.used = 0 // a fixed buffer stops here; its one chunk belongs to the caller
+      return
+    $need: Sz = 0
+    $curr: = r.head
+    for curr != null
+      next_chunk: = curr.next
+      need += curr.used
+      dealloc(Void$@::curr)
+      curr = next_chunk
+    one: = Arena_chunk$@::alloc(arena_chunk_header_size + need)
+    one.cap = need
+    one.used = 0
+    one.next = null
+    r.head = one
+
+  pub fn dup_str( //< a copy of the text in this arena, NUL-terminated for C
+    r: Self$@,
+    src: U8[], //< the text to copy
+  ): U8$[]
+    ptr: = U8$@::r.alloc(src.len + 1)
+    copy(Void$@::ptr, Void$@::src.ptr, src.len)
+    (ptr + src.len)$ = 0U8
+    return U8$[]::{ .ptr = ptr, .len = src.len }
+
+  pub fn get_total_allocated(r: Self$@): Sz //< every byte in the chunks, used or not
+    $total: Sz = 0
+    $curr: = r.head
+    for curr != null
+      total += curr.cap + arena_chunk_header_size
+      curr = curr.next
+    return total
+
+  pub fn get_total_used(r: Self$@): Sz //< every byte allocated so far
+    $total: Sz = 0
+    $curr: = r.head
+    for curr != null
+      total += curr.used + arena_chunk_header_size
+      curr = curr.next
+    return total
+
+  pub fn free(r: Self$@) //< frees every chunk, and the arena itself
+    if r.default_chunk_size == 0
+      return // from_buffer(): both the chunk and the Arena itself are the caller's static memory
+    $curr: = r.head
+    for curr != null
+      next_chunk: = curr.next
+      // One allocation per chunk
+      dealloc(Void$@::curr)
+      curr = next_chunk
+    dealloc(Void$@::r)
+  pub fn remaining(r: Self$@): Sz //< the unused bytes summed over every chunk
+    //<
+    //< A fixed buffer that runs out panics, so a caller can check here first.
+    return r.get_total_allocated() - r.get_total_used()
+
+  pub fn headroom(r: Self$@): Arena_headroom //< how far away the next chunk is, and how big
+    //<
+    //< Caution: **Do not confuse it with `remaining`**, the sum over every chunk; `alloc` uses only
+    //< the first chunk. One byte past `free` adds a chunk of `step` bytes, so peak memory **jumps
+    //< there** (`make perf-log`).
+    free: = r.head.cap - r.head.used if r.head != null else 0
+    return Arena_headroom::{ .free = free, .step = r.next_chunk_cap(0) }
+
+  pub fn alloc_as<|T|>(r: Self$@): T$@ //< arena memory for one value, with no `sizeof` written
+    return T$@::r.alloc(sizeof(T))
+
+  pub fn create<|T|>( //< allocates room for one value and writes it there
+    r: Self$@,
+    init_val: T, //< the value to write
+  ): T$@
+    ptr: = r.alloc_as<|T|>()
+    ptr$ = init_val
+    return ptr
+impl Arena: Owned {} //< it owns its resources and releases them with `free()`.

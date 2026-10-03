@@ -1,0 +1,244 @@
+//< Measures which of the decisions written in the source the tests actually enforce
+//<
+//< Not a suite; a tool.
+//< **Drop one guard, run the tests, and see whether they fail** — a guard no test misses is "a
+//< decision that is only written down, which nobody confirms". **This is not a gate**: survivors
+//< are no failure, since there are hundreds of decisions and no way to cover them all at once; it
+//< fails only **when the tool itself cannot measure**. **The original tree is not touched** —
+//< only a copy is broken.
+//< Caution: **Pass the tests on an unchanged copy first.** On a copy that does not pass,
+//< everything looks "killed" whatever was broken, and the result says the opposite: that the
+//< coverage is there.
+
+// ==========================================
+// Caution: **Cap the time**: a guard is also a way out of a loop, and without it the loop can run
+// forever. **The range is given by name**; each item takes seconds, so the whole tree would
+// become "a report nobody reads" (a known complaint about other products' mutation testing).
+// Usage: `make test-mutants FILE=kspage/write/typing.kspls [MAX=30]`.
+// ==========================================
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/strnum"
+import "std/sys"
+import "std/verdict"
+import "tests/support/harness"
+
+priv struct Gate //< one dropped guard
+  // The line number of the guard's `if` (counted from 1).
+  line: Sz
+  // The guard's `if` line, trimmed, for the report.
+  text: U8[]
+  // The whole source after the guard was dropped.
+  body: U8[]
+
+priv enum Verdict //< the result of one measurement
+  // The tests killed it (the decision is enforced).
+  killed
+  // The tests did not kill it (nobody confirms the decision).
+  lived
+  // It does not build (say, the guard is the only way back). **This is not about the tests.**
+  broke
+
+priv fn skip_dir(name: U8[]): Bool //< the directories the copy does not descend into
+  //<
+  //< **The output and the history are not copied** (with them, the copy is hundreds of MB).
+  return fs.skip_build_output(name) || name.equals("__pycache__")
+
+priv fn is_exit(t: U8[]): Bool //< whether it is a line that can be a guard's body
+  //<
+  //< **Only the ways out of a loop or a function**, in both notations (`return;` and `return`).
+  w: = t.strip_suffix(";")
+  return w.starts_with("return ") || w.equals("return") || w.equals("continue") ||
+    w.equals("break") || w.starts_with("throw ") || w.starts_with("panic(")
+
+priv fn indent_of(l: U8[]): Sz //< the count of spaces at the start of a line
+  $k: Sz = 0
+  for k < l.len && l[k] == ' '
+    k += 1
+  return k
+
+priv fn guard_len(lines: List<|U8[]|>$@, i: Sz): Sz //<
+  //< The line count of the guard whose `if` is line i: 3, 2, or 0 where none starts there
+  //<
+  //< **Only a body of one exit is taken**; a two-line condition or two-statement body could mean
+  //< something else once dropped. The brace notation closes in three lines (`if … {`, the exit,
+  //< `}`); the indentation notation in two, followed by a line no deeper than the `if` that is no
+  //< `else` of it.
+  head: = lines.get(i)
+  ht: = head.trim_start()
+  if !ht.starts_with("if ") || i + 1 >= lines.len ||
+    !is_exit(lines.get(i + 1).trim_start())
+    return 0
+  if ht.ends_with(" {")
+    closes: =
+      i + 2 < lines.len && lines.get(i + 2).trim_start().equals("}") &&
+      indent_of(lines.get(i + 2)) == indent_of(head)
+    return 3 if closes else 0
+  if ht.ends_with("{") || indent_of(lines.get(i + 1)) <= indent_of(head)
+    return 0
+  if i + 2 < lines.len
+    after: = lines.get(i + 2)
+    if after.trim_start().len > 0 &&
+      (indent_of(after) > indent_of(head) || after.trim_start().starts_with("else"))
+      return 0
+  return 2
+
+priv fn gates_of(src: U8[], arena: Arena$@): List<|Gate|> //<
+  //< Finds the guards guard_len accepts, each with the source it leaves when dropped
+  $out: = List<|Gate|>.new(arena)
+  $lines: = List<|U8[]|>.new(arena)
+  for l in src.lines(arena)
+    lines.push(l)
+  for i in Range.asc(lines.len)
+    n: = guard_len(lines@, i)
+    if n == 0
+      continue
+    // Build the source without the guard.
+    $sb: = arena.text()
+    for k in Range.asc(lines.len)
+      if k >= i && k < i + n
+        continue
+      sb = sb.s(lines.get(k)).s("\n")
+    out
+      .push(Gate::{ .line = i + 1, .text = lines.get(i).trim_start(), .body = sb.take() })
+  return out
+
+priv fn ask_link(topic: U8[], into: List<|U8[]|>$@, arena: Arena$@): Bool //<
+  //< Appends ksplc's answer to `info <topic>` (`link-libs`, `exe-flags`); false where it failed
+  //<
+  //< Caution: **Do not type the libraries here**: they differ per platform (`-lpthread` is an error
+  //< on macOS), and ksplc holds them.
+  r: = harness.run(U8[][]::{ harness.ksplc_exe(), "info", topic })
+  if r.code != 0
+    return false
+  for w in r.out.trim_spaces().split(' ', arena)
+    if w.len > 0
+      into.push(w)
+  return true
+
+priv fn run_suite(work: U8[], link: U8[][], arena: Arena$@): Verdict //<
+  //< Builds the tests from the copy's source, runs them, and sees whether they kill the mutant
+  //<
+  //< `link` is what ksplc says a build passes after the sources (`ask_link`).
+  //< Caution: **Keep "it does not build" apart from "it was killed"**, or a guard that does not
+  //< build reads as "the decision is enforced". **Build on the copy, run on the real root**: the
+  //< broken source is **inside the executable**, so where it runs does not matter.
+  gen_argv: = U8[][]::{ harness.ksplc_exe(), "--std-dir=std", "--emit-libs=out/tmp/mut.libs",
+    "tests/debug/main.kspls", "out/tmp/mut.c" }
+  gen: = harness.run_capped(gen_argv, work, 300000)
+  if gen.code != 0
+    return Verdict.broke
+  $cc_argv: = List<|U8[]|>.new(arena)
+  for a in U8[][]::{ harness.cc(), "-std=c99", "-w", "-g", "-O0", "out/tmp/mut.c",
+    "@out/tmp/mut.libs" }
+    cc_argv.push(a)
+  for a in link
+    cc_argv.push(a)
+  cc_argv.push("-o")
+  cc_argv.push("out/tmp/mut.exe")
+  built: = harness.run_capped(cc_argv.slice(), work, 300000)
+  if built.code != 0
+    return Verdict.broke
+  exe: = fs.join(work, "out/tmp/mut.exe", arena)
+  ran: = harness.run_capped(U8[][]::{ exe }, harness.root(), 120000)
+  return Verdict.killed if ran.code != 0 else Verdict.lived
+
+fn main(): I32
+  arena: = harness.begin(1 << 22)
+  $args: = sys.args()
+  if args.len < 2
+    io.out().s("RESULT: SOME FAILED (1) -> hand FILE=<path> over (the range is received by name)\n")
+    return 1
+  rel: = args.get(1)
+  $max: Sz = 12
+  if args.len >= 3
+    got: = args.get(2)
+    if got.len > 0
+      max = Sz::(got.to_i64() catch {
+        fallback 12I64;
+      })
+
+  src_path: = fs.join(harness.root(), rel, arena)
+  src: = io.read_file(src_path) catch
+    io.out().s("RESULT: SOME FAILED (1) -> \{rel\} cannot be read\n")
+    return 1
+  $gates: = gates_of(src, arena)
+  io.out().s("# \{rel\}: \{gates.len\} guards whose body is one exit (cap \{max\})\n")
+  if gates.len <= 0
+    io.out().s("RESULT: MEASURED (there is no guard that can be dropped)\n")
+    return 0
+
+  // A fresh folder every run: a copy mixed with an earlier run's leftovers is not the tree.
+  box: = harness.sandbox("mutants") catch
+    io.out().s("RESULT: SOME FAILED (1) -> no place to copy the tree to\n")
+    return 1
+  work: = fs.join(box, "tree", arena)
+  io.out().s("# copying the tree (the output and the history excluded)...\n")
+  fs.copy_tree(harness.root(), work, skip_dir, arena) catch
+    io.out().s("RESULT: SOME FAILED (1) -> the tree could not be copied\n")
+    return 1
+  fs.mkdir_all(fs.join(work, "out/tmp", arena)) catch {}
+  work_src: = fs.join(work, rel, arena)
+
+  $link: = List<|U8[]|>.new(arena)
+  if !ask_link("link-libs", link@, arena) || !ask_link("exe-flags", link@, arena)
+    io.out().s("RESULT: SOME FAILED (1) -> ksplc could not be asked how to link\n")
+    harness.remove_tree(work)
+    return 1
+
+  // Caution: **Pass on an unchanged copy first** (the reason is in the header).
+  io.out().s("# confirming the tests pass on a plain copy...\n")
+  base: = run_suite(work, link.slice(), arena)
+  switch base case .killed
+    io.out()
+      .s("RESULT: SOME FAILED (1) -> the tests failed on a plain copy (this tool cannot measure)\n")
+    harness.remove_tree(work)
+    return 1
+  case .broke
+    io.out()
+      .s("RESULT: SOME FAILED (1) -> the plain copy did not build (this tool cannot measure)\n")
+    harness.remove_tree(work)
+    return 1
+  case .lived {}
+
+  $lived: = List<|U8[]|>.new(arena)
+  $killed: Sz = 0
+  $broke: Sz = 0
+  $ran: Sz = 0
+  for i in Range.asc(gates.len)
+    if ran >= max
+      continue
+    g: = gates.get(i)
+    ran += 1
+    io.write_file(work_src, g.body) catch
+      io.out().s("RESULT: SOME FAILED (1) -> could not write to the copy\n")
+      harness.remove_tree(work)
+      return 1
+    switch run_suite(work, link.slice(), arena) case .killed
+      killed += 1
+      // Caution: **Leave the line's format to harness** (the canonical source is
+      // `tests/support/conventions_line.kspls`); built here, the mark and spacing go stale.
+      _told: = verdict.check(arena.text().s(rel).s(":\{g.line\} \{g.text\}").take(), true, "")
+    case .lived
+      lived.push(arena.text().s(rel).s(":\{g.line\} ").s(g.text).take())
+      io.out().s("LIVE \{rel\}:\{g.line\} \{g.text\}\n")
+    case .broke
+      broke += 1
+      io.out().s("--   \{rel\}:\{g.line\} \{g.text\} (does not build)\n")
+  // **Restore the source before cleaning up** (so the next use of the same folder does not break).
+  io.write_file(work_src, src) catch {}
+  harness.remove_tree(work)
+
+  io.out().s("\n# felled \{killed\} / not felled \{lived.len\} / does not build \{broke\}")
+  io.out().s(" / not turned \{gates.len - ran\}\n")
+  if lived.len > 0
+    io.out().s("# the decisions nobody confirms:\n")
+    for i in Range.asc(lived.len)
+      io.out().s("    \{lived.get(i)\}\n")
+  io.out().s("RESULT: MEASURED (felled \{killed\} / not felled \{lived.len\})\n")
+  return 0

@@ -1,0 +1,500 @@
+//< Asks the laid-out boxes "what is at this coordinate"
+//<
+//< **Only the operations that find what can be grabbed at the clicked position are here.** They
+//< do not change the document. **Where an answer's `found` is false, do not read the rest.**
+//< Caution: **Call every one of them after layout.** A box's position is not known until it is
+//< laid out, and after a new layout an old answer is stale (so none is cached).
+
+// ==========================================
+// Usage:
+//   edge: = ask.edge_at(page, 120.0, 30.0);
+//   grip: = ask.grip_at(page, 120.0, 30.0);
+// ==========================================
+import "kspage/lay/caret" + { Caret }
+import "kspage/lay/page" { Cell, Framed, Page }
+import "kspage/model/doc" { Axis, Block, Rect }
+import "kspage/model/run" { Inline }
+
+struct Edge //< the cell border being dragged
+  //<
+  //< The coordinate is not stored (`edge_origin` computes it again).
+  table: Block$@
+  axis: Axis
+  index: Sz //< the index of the column (or row) being moved
+  found: Bool
+
+fn no_edge(): Edge
+  return Edge::{ .table = null, .axis = Axis.column, .index = 0, .found = false }
+
+fn edge_origin(page: Page$@, edge: Edge): Option<|F32|> //<
+  //< That column's left edge (or the row's top edge)
+  //<
+  //< Caution: **Compute it again after every layout** (a drag can move the columns before it).
+  for $i: Sz = 0; i < page.cells.len; i += 1
+    cell: = page.cells.get(i)
+    if cell.table != edge.table
+      continue
+    switch edge.axis case .column
+      if cell.column == edge.index
+        return Option<|F32|>.some(cell.rect.x)
+    case .row
+      if cell.row == edge.index
+        return Option<|F32|>.some(cell.rect.y)
+  return Option<|F32|>.none
+
+priv const edge_reach: F32 = 4.0 //< the distance within which a border is grabbed
+  //<
+  //< **Too thin and it cannot be grabbed; too thick and a narrow cell cannot be.**
+
+priv fn within(v: F32, edge_at: F32): Bool
+  return v >= edge_at - edge_reach && v <= edge_at + edge_reach
+
+fn edge_at(page: Page$@, x: F32, y: F32): Edge //<
+  //< The right or bottom border of the cell at (x, y)
+  //<
+  //< It returns **the column or row on the near side** (the one a drag widens). **The right border
+  //< is checked first**, or at a corner the grab would waver. **It is the innermost table** (an
+  //< outer cell's border can be at the same place).
+  $i: Sz = page.cells.len
+  for i > 0
+    i -= 1
+    cell: = page.cells.get(i)
+    r: = cell.rect
+    inside_y: = y >= r.y && y <= r.y + r.h
+    inside_x: = x >= r.x && x <= r.x + r.w
+    if inside_y && within(x, r.x + r.w)
+      return Edge::{ .table = cell.table, .axis = Axis.column, .index = cell.column,
+        .found = true }
+    if inside_x && within(y, r.y + r.h)
+      return Edge::{ .table = cell.table, .axis = Axis.row, .index = cell.row, .found = true }
+  return no_edge()
+
+struct Cell_at //< the cell the cursor is in
+  table: Block$@
+  row: Sz
+  column: Sz
+  found: Bool
+
+fn cell_of(page: Page$@, c: Caret): Cell_at //< looks for the cell the cursor is in
+  if c.inline != null
+    $i: Sz = page.cells.len
+    for i > 0
+      i -= 1
+      cell: = page.cells.get(i)
+      if cell.block.holds(c.inline)
+        return Cell_at::{ .table = cell.table, .row = cell.row, .column = cell.column,
+          .found = true }
+  return Cell_at::{ .table = null, .row = 0, .column = 0, .found = false }
+
+struct Cell_range //< the rectangle of cells the selection covers
+  //<
+  //< **It is computed from the selection's two ends and stored nowhere** (stored, it would go
+  //< stale the moment a row was added). **`row`/`column` are the near corner**, so the caller need
+  //< not compare. A range of one cell is the ordinary case, not a rejection.
+  table: Block$@
+  rows: Sz //< how many rows it covers (1 or more)
+  cols: Sz //< how many columns it covers (1 or more)
+  row: Sz //< the top row
+  column: Sz //< the left column
+  found: Bool
+
+fn no_range(): Cell_range
+  return Cell_range::{ .table = null, .rows = 0, .cols = 0, .row = 0, .column = 0, .found = false }
+
+fn cell_range(page: Page$@, c: Caret): Cell_range //< the cells the selection covers
+  //<
+  //< **Where nothing is selected it is the one cell the cursor is in.**
+  //< Caution: **Both ends must be in the same table**; otherwise it names no rectangle and is
+  //< rejected rather than guessed.
+  here: = cell_of(page, c)
+  if !here.found
+    return no_range()
+  $there: Cell_at = here
+  if c.anchor != null && c.anchor != c.inline
+    there =
+      cell_of(page,
+      Caret::{ .inline = c.anchor, .offset = 0, .preedit = 0, .anchor = null,
+      .at_line_start = false })
+    if !there.found || there.table != here.table
+      return no_range()
+  top: = here.row if here.row < there.row else there.row
+  left: = here.column if here.column < there.column else there.column
+  low: = here.row if here.row > there.row else there.row
+  right: = here.column if here.column > there.column else there.column
+  return Cell_range::{ .table = here.table, .rows = low - top + 1, .cols = right - left + 1,
+    .row = top, .column = left, .found = true }
+
+fn is_cell(page: Page$@, b: Block$@): Bool //< whether that block is a table's cell
+  //<
+  //< A cell is part of a table's structure, so the command that turns it into a paragraph is
+  //< disabled here.
+  for $i: Sz = 0; i < page.cells.len; i += 1
+    if page.cells.get(i).block == b
+      return true
+  return false
+
+fn row_laid(page: Page$@, table: Block$@, r: Sz): Bool //< whether row `r` is in the layout
+  //<
+  //< It is when a cell of it was laid out; a row a filter hides has none (the heading and the
+  //< cursor's row are always laid out).
+  for $i: Sz = 0; i < page.cells.len; i += 1
+    cell: = page.cells.get(i)
+    if cell.table == table && cell.row == r
+      return true
+  return false
+
+// ---- The heading rows the window can keep in view ----
+
+struct Head_band //< one top-level table's heading row, as the window can keep it in view
+  //<
+  //< `table` is the laid-out table's rectangle and `row` its first row's (the heading by position,
+  //< as saving and sorting treat it).
+  table: Rect
+  row: Rect
+  found: Bool
+
+fn no_head_band(): Head_band
+  none: = Rect::{ .x = 0.0, .y = 0.0, .w = 0.0, .h = 0.0 }
+  return Head_band::{ .table = none, .row = none, .found = false }
+
+priv fn nested_table(page: Page$@, table: Block$@): Bool //< whether that table lies inside a cell
+  //<
+  //< The outer table's heading is the one the window keeps (two bands at one edge would overlap).
+  for $i: Sz = 0; i < page.cells.len; i += 1
+    cell: = page.cells.get(i)
+    if cell.table == table
+      continue
+    for $k: Sz = 0; k < cell.block.children.len; k += 1
+      if cell.block.children.get(k) == table
+        return true
+  return false
+
+priv fn joined(a: Rect, b: Rect): Rect //< the smallest rectangle holding both
+  x: = a.x if a.x < b.x else b.x
+  y: = a.y if a.y < b.y else b.y
+  right: = a.x + a.w if a.x + a.w > b.x + b.w else b.x + b.w
+  bottom: = a.y + a.h if a.y + a.h > b.y + b.h else b.y + b.h
+  return Rect::{ .x = x, .y = y, .w = right - x, .h = bottom - y }
+
+priv fn band_of(page: Page$@, table: Block$@): Head_band //< one table's band
+  //<
+  //< The row's height is the smallest among the first row's cells (the band belongs to the row,
+  //< not to a merge).
+  $got: Head_band = no_head_band()
+  $row_h: F32 = 0.0
+  for $i: Sz = 0; i < page.cells.len; i += 1
+    cell: = page.cells.get(i)
+    if cell.table != table
+      continue
+    got.table = cell.rect if !got.found else joined(got.table, cell.rect)
+    got.found = true
+    if cell.row == 0
+      if row_h <= 0.0 || cell.rect.h < row_h
+        row_h = cell.rect.h
+      got.row = cell.rect if got.row.w <= 0.0 else joined(got.row, cell.rect)
+  got.row.h = row_h
+  return got
+
+priv fn opens_table(page: Page$@, cell: Cell$@): Bool //< whether that cell is a table's first
+  //<
+  //< **A table's first laid-out cell is its top-left one** (`grid.place_rows`), so each table is
+  //< counted once there. A table inside a cell is left out (`nested_table`).
+  return cell.row == 0 && cell.column == 0 && !nested_table(page, cell.table)
+
+fn head_band_count(page: Page$@): Sz //< how many top-level tables the page holds
+  $n: Sz = 0
+  for $i: Sz = 0; i < page.cells.len; i += 1
+    if opens_table(page, page.cells.get(i))
+      n += 1
+  return n
+
+priv fn table_at(page: Page$@, i: Sz): Option<|Block$@|> //< the i-th top-level table
+  //<
+  //< The tables come in document order.
+  $n: Sz = 0
+  for $k: Sz = 0; k < page.cells.len; k += 1
+    cell: = page.cells.get(k)
+    if !opens_table(page, cell)
+      continue
+    if n == i
+      return Option<|Block$@|>.some(cell.table)
+    n += 1
+  return Option<|Block$@|>.none
+
+fn head_band_at(page: Page$@, i: Sz): Head_band //< the i-th top-level table's heading band
+  if table: = table_at(page, i)
+    return band_of(page, table)
+  return no_head_band()
+
+struct Head_cell //< one cell of a top-level table's heading row
+  //<
+  //< `column` counts merges (a tile's column), the index that a filter on that column uses.
+  table: Block$@
+  rect: Rect
+  column: Sz
+  found: Bool
+
+fn no_head_cell(): Head_cell //< the answer where there is no such cell
+  return Head_cell::{ .table = null,
+    .rect = Rect::{ .x = 0.0, .y = 0.0, .w = 0.0, .h = 0.0 }, .column = 0, .found = false }
+
+fn head_cell_count(page: Page$@, i: Sz): Sz //< how many cells the i-th table's heading row shows
+  //<
+  //< **A cell covered by a merge is not counted** (only what can be clicked is counted).
+  $n: Sz = 0
+  if table: = table_at(page, i)
+    for $k: Sz = 0; k < page.cells.len; k += 1
+      cell: = page.cells.get(k)
+      if cell.table == table && cell.row == 0
+        n += 1
+  return n
+
+fn head_cell_at(page: Page$@, i: Sz, c: Sz): Head_cell //< the c-th cell of that heading row
+  //<
+  //< They come left to right.
+  if table: = table_at(page, i)
+    $n: Sz = 0
+    for $k: Sz = 0; k < page.cells.len; k += 1
+      cell: = page.cells.get(k)
+      if cell.table != table || cell.row != 0
+        continue
+      if n == c
+        return Head_cell::{ .table = table, .rect = cell.rect, .column = cell.column,
+          .found = true }
+      n += 1
+  return no_head_cell()
+
+struct Head_spot //< the heading cell of the cursor's own column
+  //<
+  //< **The cursor can be anywhere in the column**, so the ribbon can reach the panel that the
+  //< heading's arrow opens.
+  table_at: Sz //< the table's index among the top-level ones
+  cell_at: Sz //< the cell's index along that heading row
+  found: Bool
+
+fn head_spot_of(page: Page$@, c: Caret): Head_spot //< the heading cell of the cursor's column
+  spot: = cell_of(page, c)
+  if !spot.found
+    return Head_spot::{ .table_at = 0, .cell_at = 0, .found = false }
+  for $i: Sz = 0; i < head_band_count(page); i += 1
+    for $k: Sz = 0; k < head_cell_count(page, i); k += 1
+      got: = head_cell_at(page, i, k)
+      if got.table == spot.table && got.column == spot.column
+        return Head_spot::{ .table_at = i, .cell_at = k, .found = true }
+  return Head_spot::{ .table_at = 0, .cell_at = 0, .found = false }
+
+// ---- Grabbing a slide's frame ----
+
+struct Grip //< the frame being grabbed
+  //<
+  //< The coordinate is not stored (a slide's position can change at every layout).
+  block: Block$@
+  resize: Bool //<
+    //< Whether it resizes (true) or moves (false)
+    //<
+    //< True means a corner or edge handle was grabbed; false means the inside was grabbed.
+  // The grabbed corner. **The opposite corner does not move.**
+  left: Bool
+  top: Bool
+  wide: Bool //<
+    //< Which dimension moves. **An edge handle moves only one** (a corner, both).
+  tall: Bool
+  // The offset between the grabbed point and the frame's upper left. **Without it the frame jumps
+  // the moment it is grabbed.**
+  dx: F32
+  dy: F32
+  found: Bool
+
+fn no_grip(): Grip
+  return Grip::{ .block = null, .resize = false, .left = false, .top = false, .wide = false,
+    .tall = false, .dx = 0.0, .dy = 0.0, .found = false }
+
+priv fn grip_in(one: Framed$@, x: F32, y: F32): Grip //< one frame's handle
+  //<
+  //< **There are eight handles.**
+  //< Caution: **Do not decide "inside a figure" by whether characters are drawn there.** Another
+  //< frame's characters can lie under it, and only part of the figure would be grabbable.
+  switch one.block.frame case .none
+    return no_grip()
+  case .some {}
+  r: = one.rect
+  left: = within(x, r.x)
+  right: = within(x, r.x + r.w)
+  top: = within(y, r.y)
+  bottom: = within(y, r.y + r.h)
+  // The handle at an edge's midpoint. **Not anywhere along the edge**: a frame with contents can
+  // be moved only by its edge.
+  mid_x: = within(x, r.x + r.w / 2.0F32)
+  mid_y: = within(y, r.y + r.h / 2.0F32)
+  if (left || right) && (top || bottom)
+    return Grip::{ .block = one.block, .resize = true, .left = left, .top = top, .wide = true,
+      .tall = true, .dx = 0.0, .dy = 0.0, .found = true }
+  if (left || right) && mid_y
+    return Grip::{ .block = one.block, .resize = true, .left = left, .top = false, .wide = true,
+      .tall = false, .dx = 0.0, .dy = 0.0, .found = true }
+  if (top || bottom) && mid_x
+    return Grip::{ .block = one.block, .resize = true, .left = false, .top = top, .wide = false,
+      .tall = true, .dx = 0.0, .dy = 0.0, .found = true }
+  if !r.holds(x, y)
+    return no_grip()
+  hollow: = one.block.inlines.len <= 0 && one.block.children.len <= 0
+  if !hollow && !left && !right && !top && !bottom
+    return no_grip()
+  return Grip::{ .block = one.block, .resize = false, .left = false, .top = false, .wide = false,
+    .tall = false, .dx = x - r.x, .dy = y - r.y, .found = true }
+
+fn grip_at(page: Page$@, x: F32, y: F32): Grip //< the handle of the frame at (x, y)
+  //<
+  //< **It is the innermost frame** (`page.frames` has the outer ones first, so it searches from the
+  //< end).
+  $i: Sz = page.frames.len
+  for i > 0
+    i -= 1
+    got: = grip_in(page.frames.get(i), x, y)
+    if got.found
+      return got
+  return no_grip()
+
+fn frame_under(page: Page$@, x: F32, y: F32): Option<|Block$@|> //<
+  //< The innermost frame containing (x, y)
+  //<
+  //< **It is separate from a handle**: over a character too, it is inside that frame. It selects a
+  //< frame the cursor cannot point at (a figure holds no text).
+  $i: Sz = page.frames.len
+  for i > 0
+    i -= 1
+    got: = page.frames.get(i)
+    if got.rect.holds(x, y)
+      return Option<|Block$@|>.some(got.block)
+  return Option<|Block$@|>.none
+
+fn frame_rect(page: Page$@, b: Block$@): Option<|Rect|> //<
+  //< Where b was laid out (screen coordinates)
+  for $i: Sz = 0; i < page.frames.len; i += 1
+    got: = page.frames.get(i)
+    if got.block == b
+      return Option<|Rect|>.some(got.rect)
+  return Option<|Rect|>.none
+
+fn grip_surface(page: Page$@, grip: Grip): Option<|Rect|> //<
+  //< The position of the slide holding the grabbed frame
+  for $i: Sz = 0; i < page.frames.len; i += 1
+    got: = page.frames.get(i)
+    if got.block == grip.block
+      return Option<|Rect|>.some(got.surface.rect)
+  return Option<|Rect|>.none
+// ---- The container that holds a figure ----
+
+struct Framer //< the container at the clicked position
+  //<
+  //< One shape for a slide, a cell and a paragraph alike.
+  //< Caution: **Do not split it three ways in the caller**, or a frame's position comes from three
+  //< sources that can disagree.
+  block: Block$@
+  rect: Rect //<
+    //< The container's rectangle (screen coordinates); a frame's position is from its top left.
+  found: Bool
+
+fn no_framer(): Framer
+  return Framer::{ .block = null, .rect = Rect::{ .x = 0.0, .y = 0.0, .w = 0.0, .h = 0.0 },
+    .found = false }
+
+fn framer_of(page: Page$@, c: Caret): Framer //< the innermost container the cursor is in
+  //<
+  //< It is `framer_under` at the cursor's own position (the page's column, the slide, or the cell),
+  //< for something inserted beside the cursor's paragraph that must know the width it gets.
+  cur: = caret.cursor(page, c)
+  if !cur.found
+    return no_framer()
+  return framer_under(page, cur.x, cur.y)
+
+fn framer_under(page: Page$@, x: F32, y: F32): Framer //< the innermost container holding (x, y)
+  //<
+  //< Caution: **Check the slides first**: a figure clicked onto a cell inside a slide is the
+  //< slide's child. **Search from the end** (the inner ones are laid out later).
+  $i: Sz = page.surfaces.len
+  for i > 0
+    i -= 1
+    got: = page.surfaces.get(i)
+    if got.rect.holds(x, y)
+      return Framer::{ .block = got.block, .rect = got.rect, .found = true }
+  $c: Sz = page.cells.len
+  for c > 0
+    c -= 1
+    cell: = page.cells.get(c)
+    if cell.rect.holds(x, y)
+      return Framer::{ .block = cell.block, .rect = cell.rect, .found = true }
+  $h: Sz = page.holders.len
+  for h > 0
+    h -= 1
+    one: = page.holders.get(h)
+    if one.rect.holds(x, y)
+      return Framer::{ .block = one.block, .rect = one.rect, .found = true }
+  return no_framer()
+
+// ---- Fitting a column or a row to its contents ----
+
+struct Fit //< what a column or row would be if fitted to its contents
+  //<
+  //< **`size` is `none` where fitting means "remove the setting".** A row with no set height is
+  //< already laid out to its contents, so fitting a row removes the setting; a column with no set
+  //< width takes an equal share of the region instead, so a column's fitting carries a size.
+  size: Option<|F32|>
+  found: Bool
+
+fn no_fit(): Fit
+  return Fit::{ .size = Option<|F32|>.none, .found = false }
+
+priv const fit_pad: F32 = 12.0 //< the space left beside the widest text
+  //<
+  //< **Without it the text touches the rule** (the cell's own padding is inside the width).
+priv const fit_least: F32 = 24.0 //< the narrowest column a fitting makes
+  //<
+  //< **An empty column must still be grabbable** (so its border can be found and dragged back).
+
+priv fn run_width(page: Page$@, n: Inline$@): F32 //< how wide that run was laid out, all boxes
+  //<
+  //< **Every box of that run is added up** (a wrapped run's unwrapped width).
+  $wide: F32 = 0.0
+  for $i: Sz = 0; i < page.boxes.len; i += 1
+    b: = page.boxes.get(i)
+    if b.inline == n
+      wide += b.rect.w
+  return wide
+
+priv fn block_width(page: Page$@, b: Block$@): F32 //< how wide that paragraph would be unwrapped
+  //<
+  //< **The runs are added up, and for the children the widest is taken.**
+  if b == null
+    return 0.0
+  $wide: F32 = 0.0
+  for $i: Sz = 0; i < b.inlines.len; i += 1
+    wide += run_width(page, b.inlines.get(i))
+  for $k: Sz = 0; k < b.children.len; k += 1
+    got: = block_width(page, b.children.get(k))
+    if got > wide
+      wide = got
+  return wide
+
+fn fit_at(page: Page$@, edge: Edge): Fit //< that border's column or row fitted to its contents
+  //<
+  //< **A row's fitting removes the setting** (the reason is at `Fit`). A column's is the widest
+  //< text in it.
+  //< **A merged cell is skipped** (counted, one column would be as wide as the pair).
+  if !edge.found || edge.table == null
+    return no_fit()
+  if edge.axis == Axis.row
+    return Fit::{ .size = Option<|F32|>.none, .found = true }
+  $wide: F32 = 0.0
+  for $i: Sz = 0; i < page.cells.len; i += 1
+    cell: = page.cells.get(i)
+    if cell.table != edge.table || cell.column != edge.index
+      continue
+    if cell.block != null && cell.block.span_cols > 1
+      continue
+    got: = block_width(page, cell.block)
+    if got > wide
+      wide = got
+  size: = wide + fit_pad
+  return Fit::{ .size = Option<|F32|>.some(size if size > fit_least else fit_least),
+    .found = true }

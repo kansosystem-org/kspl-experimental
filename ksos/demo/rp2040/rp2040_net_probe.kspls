@@ -1,0 +1,288 @@
+//< Checks the Freenove 4WD car's (Pico W's) USB Ethernet in one run
+//<
+//< Stages 6a / 6b / 6c in `ksos/docs/HOWTO-bring-up.md`.
+//< Raw 802.3 frames cross the bus, so it fits `Link` in `ksos/net/link.kspls` as it is ("The
+//< candidates for a link layer" in `ksos/docs/DESIGN.md`): the upper layers built on QEMU's
+//< LAN9118 switch over through only three functions (`net_client.link`).
+
+// ==========================================
+// What the three stages do, and the setup the PC side needs on the first run, are in "What the
+// USB-Ethernet probe does, and what it needs on the PC" in ksos/docs/DESIGN.md.
+// ==========================================
+
+// How to use it: `make ksos-rp2040-net` → copy the UF2 with BOOTSEL → Serial Monitor (115200).
+import "ksos/demo/rp2040/common/bringup" as boot
+import "ksos/demo/rp2040/common/console" as con
+import "ksos/demo/rp2040/common/net_client" as nc
+import "ksos/drivers/rp2040/usb_cdc" as usb
+import "ksos/kernel/task" + { Task }
+import "ksos/net/mini_ipv4" as ip4
+import "ksos/net/mini_mqtt" as mqtt
+import "std/chars"
+
+$tcb: Task
+$stack: U8[2048]
+$ln: con.Line
+
+const resp_cap: Sz = 1024 //< the limit on how much of the response is kept
+  //<
+  //< Room for the status line and the end of the header; nc.drain_stream discards the rest.
+
+// Global: too large for the task stack (2048).
+$resp_buf: U8[resp_cap]
+$mqtt_buf: U8[256]
+
+const our_port_http: U16 = 54321
+const our_port_mqtt: U16 = 54322
+const peer_port_http: U16 = 8080 // `python -m http.server 8080`
+const peer_port_mqtt: U16 = 1883 // MQTT's default
+const our_isn_http: U32 = 7000 // a fixed value (a demo; real use randomizes it)
+const our_isn_mqtt: U32 = 9000
+const request: U8[] = "GET / HTTP/1.1\r\nHost: 192.168.137.1\r\nConnection: close\r\n\r\n"
+const mqtt_client_id: U8[] = "kanso-pico"
+const mqtt_topic: U8[] = "kanso/pico"
+const mqtt_payload: U8[] = "hello from Kanso OS on RP2040"
+
+const line_interval_ms: U32 = 1000
+
+// (c)'s results, appended to (b)'s line every second.
+priv $arp_ok: Bool = false
+priv $http_ok: Bool = false
+priv $mqtt_ok: Bool = false
+// How many (b) answered.
+priv $arp_answered: U32 = 0
+priv $ping_answered: U32 = 0
+priv $tx_fail: U32 = 0
+
+priv fn run_http(): Bool //< the HTTP stage
+  //<
+  //< true if it succeeded.
+  if !nc.open(ln@, our_port_http, peer_port_http, our_isn_http)
+    return false
+  con.say(ln@, "[tcp]", "handshake ok (http)")
+
+  // A real run of tcp_conn.tcp_stream_send; nc.send_all resends after a partial send.
+  sent_ok: = nc.send_all(request.ptr, request.len)
+  ln.reset()
+  ln.str("[http] sent=")
+  ln.u32(U32::request.len if sent_ok else 0)
+  _s1: = ln.flush()
+  if !sent_ok
+    con.say(ln@, "[http]", "FAILED to send the request")
+    nc.close_conn()
+    return false
+
+  got: = nc.read_stream(U8$[]::resp_buf, nc.wait_frame_ms)
+  if got == 0
+    con.say(ln@, "[http]", "TIMEOUT: no response body")
+    nc.close_conn()
+    return false
+  ln.reset()
+  ln.str("[http] recv=")
+  ln.u32(U32::got)
+  _s2: = ln.flush()
+
+  // Only the status line is read, by hand: the question is whether TCP works (parsing on real
+  // hardware is covered by ksos/demo/rp2040/board_probe/heap.kspls).
+  resp_bytes: = U8[]::{ .ptr = resp_buf[0]@, .len = got }
+  status_ok: =
+    resp_bytes.starts_with("HTTP/1.1 200") || resp_bytes.starts_with("HTTP/1.0 200")
+  body_at: = resp_bytes.find_str("\r\n\r\n")
+  ln.reset()
+  ln.str("[http] status200=")
+  ln.u32(1 if status_ok else 0)
+  ln.str(" head=")
+  ln.u32(U32::body_at)
+  _s3: = ln.flush()
+
+  // It closes **only after the rest has been read** (the reason is at nc.drain_stream). This is
+  // where **a response spanning several segments** tests tcp_stream_recv's seq tracking.
+  total: = got + nc.drain_stream(nc.wait_frame_ms)
+  ln.reset()
+  ln.str("[http] total=")
+  ln.u32(U32::total)
+  ln.str(" segs>1=")
+  ln.u32(1 if total > got else 0)
+  _s4: = ln.flush()
+  nc.close_conn()
+  return status_ok && body_at > 0
+
+priv fn run_mqtt(): Bool //< the MQTT stage
+  //<
+  //< With no broker there, open times out, and the line shows it as "unconfirmed".
+  if !nc.open(ln@, our_port_mqtt, peer_port_mqtt, our_isn_mqtt)
+    return false
+  con.say(ln@, "[tcp]", "handshake ok (mqtt)")
+
+  conn_len: = mqtt.build_connect(U8$[]::mqtt_buf, mqtt_client_id, 60)
+  // 0 means "it did not fit"; send_all(.., 0) succeeds sending nothing, and "no CONNACK" follows.
+  if conn_len == 0 || !nc.send_all(mqtt_buf[0]@, conn_len)
+    con.say(ln@, "[mqtt]", "FAILED to send CONNECT")
+    nc.close_conn()
+    return false
+
+  got: = nc.read_stream(U8$[]::resp_buf, nc.wait_frame_ms)
+  if got == 0
+    con.say(ln@, "[mqtt]", "TIMEOUT: no CONNACK")
+    nc.close_conn()
+    return false
+  ack: = mqtt.parse_connack(U8[]::resp_buf, 0, got)
+  ln.reset()
+  ln.str("[mqtt] connack ok=")
+  ln.u32(1 if ack.ok else 0)
+  ln.str(" rc=")
+  ln.u32(ack.return_code)
+  _s1: = ln.flush()
+  if !ack.ok || ack.return_code != 0
+    nc.close_conn()
+    return false
+
+  pub_len: = mqtt.build_publish(U8$[]::mqtt_buf, mqtt_topic, mqtt_payload)
+  pub_ok: = pub_len > 0 && nc.send_all(mqtt_buf[0]@, pub_len)
+  dis_len: = mqtt.build_disconnect(U8$[]::mqtt_buf)
+  _dis_ok: = dis_len > 0 && nc.send_all(mqtt_buf[0]@, dis_len)
+  if !pub_ok
+    con.say(ln@, "[mqtt]", "FAILED to send PUBLISH")
+    nc.close_conn()
+    return false
+  con.say(ln@, "[mqtt]", "published + disconnected")
+  nc.close_conn()
+  return true
+
+priv fn wait_link_up() //< (a) Prints the state every second until the link comes up
+  //<
+  //< alt stuck at 0: SET_INTERFACE is not arriving (the descriptors). alt=1 with link=down: the
+  //< notification (EP3 IN) is not being sent.
+  $ticks: U32 = 0
+  for !usb.ncm_is_up()
+    ticks += 1
+    ln.reset()
+    ln.str("ncm t=")
+    ln.u32(ticks)
+    ln.str(" stage=")
+    ln.u32(usb.current_stage())
+    ln.str(" alt=")
+    ln.u32(usb.ncm_alt_setting())
+    ln.str(" link=down")
+    _sent: = ln.flush()
+    boot.pump(line_interval_ms)
+  con.say(ln@, "[ncm]", "link=up")
+
+priv fn say_peer_mac()
+  ln.reset()
+  ln.str("[arp] peer mac ")
+  ln.hex2(nc.addrs.peer_mac_hi >> 8)
+  ln.str(":")
+  ln.hex2(nc.addrs.peer_mac_hi)
+  ln.str(":")
+  ln.hex2(nc.addrs.peer_mac_lo >> 24)
+  ln.str(":")
+  ln.hex2(nc.addrs.peer_mac_lo >> 16)
+  ln.str(":")
+  ln.hex2(nc.addrs.peer_mac_lo >> 8)
+  ln.str(":")
+  ln.hex2(nc.addrs.peer_mac_lo)
+  _s: = ln.flush()
+
+priv fn run_upper() //< (c) Runs once
+  nc.init_addrs()
+  // Sending right after the link comes up can lose a frame, so run USB a little while the host
+  // gets its side ready.
+  boot.pump(500)
+  con.say(ln@, "[net]", "link up, resolving peer")
+  arp_ok = nc.resolve_peer(ln@)
+  if arp_ok
+    say_peer_mac()
+    http_ok = run_http()
+    boot.pump(500)
+    mqtt_ok = run_mqtt()
+  // The buzzer counts the stages that passed (3 = all, 2 = HTTP only, 1 = up to ARP).
+  boot.beep(3 if http_ok && mqtt_ok else (2 if http_ok else 1))
+
+priv fn answer(n: Sz) //< (b) Answers one received frame
+  //<
+  //< Caution: Check ARP first; without it the peer has no MAC for the ping.
+  a: = nc.addrs
+  $reply: = ip4.build_arp_reply(U8$[]::nc.tx_buf, U8[]::nc.rx_buf, n, a.our_ip, a.our_mac_hi,
+    a.our_mac_lo)
+  if reply > 0
+    arp_answered += 1
+  else
+    reply = ip4.build_icmp_echo_reply(U8$[]::nc.tx_buf, U8[]::nc.rx_buf, n, a.our_ip, a.our_mac_hi,
+      a.our_mac_lo)
+    if reply > 0
+      ping_answered += 1
+  // Caution: Check whether it could send, or ARP / ping answers vanish silently.
+  if reply > 0 && !nc.send_now(reply)
+    tx_fail += 1
+
+priv fn status_line(ticks: U32) //< the line printed each second
+  //<
+  //< rx without arp: the IP settings differ. arp without ping: the ICMP side. drop counts retries
+  //< too; answers are lost when txf grows. With upper arp=NG, rx=0 means **nothing arrives** (the
+  //< PC's sharing); arpf=0 means not a single ARP came.
+  ln.reset()
+  ln.str("net t=")
+  ln.u32(ticks)
+  ln.str(" rx=")
+  ln.u32(nc.rx_frames)
+  ln.str(" arp=")
+  ln.u32(arp_answered)
+  ln.str(" ping=")
+  ln.u32(ping_answered)
+  ln.str(" drop=")
+  ln.u32(usb.tx_dropped())
+  ln.str(" txf=")
+  ln.u32(tx_fail)
+  ln.str(" upper arp=")
+  ln.str("ok" if arp_ok else "NG")
+  ln.str(" http=")
+  ln.str("ok" if http_ok else "NG")
+  ln.str(" mqtt=")
+  ln.str("ok" if mqtt_ok else "NG")
+  ln.str(" arpf=")
+  ln.u32(nc.arp_frames)
+  ln.str(" et=")
+  ln.hex2(nc.last_ethertype >> 8)
+  ln.hex2(nc.last_ethertype)
+  ln.str(" from=")
+  ln.u32(nc.last_arp_sender >> 24)
+  ln.str(".")
+  ln.u32((nc.last_arp_sender >> 16) & 0xFF)
+  ln.str(".")
+  ln.u32((nc.last_arp_sender >> 8) & 0xFF)
+  ln.str(".")
+  ln.u32(nc.last_arp_sender & 0xFF)
+  _sent: = ln.flush()
+
+priv fn answer_forever() //< (b) Never returns
+  //<
+  //< The lines **that keep flowing** are the sign of life.
+  $ticks: U32 = 0
+  for
+    $budget: U32 = line_interval_ms
+    for
+      n: = nc.next_frame(budget@)
+      if n == 0
+        break // this second's budget ran out
+      answer(n)
+    ticks += 1
+    status_line(ticks)
+
+fn net_task(_arg: Void$@): Void
+  if !boot.clocks_and_gpio()
+    return
+  if !boot.usb_up()
+    return
+  // **Do not give up**: the host can take dozens of seconds to enumerate.
+  _configured: = boot.wait_configured(0)
+  wait_link_up()
+  run_upper()
+  answer_forever()
+
+// The on_idle for `task.run_single_task`: semihosting's exit is not available, so it does nothing.
+priv fn park() {}
+
+#export
+fn ksos_main()
+  task.run_single_task(tcb@, U8$[]::stack, net_task, "net", park)

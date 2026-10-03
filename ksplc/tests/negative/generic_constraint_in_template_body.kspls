@@ -1,0 +1,25 @@
+//< A type-argument constraint broken **inside a template's body** reports the real error first
+//<
+//< Bodies come off a pending queue, so a violation by an instantiation inside a body is known only
+//< after that instantiation's method bodies are checked. An `if`'s condition tries constant folding
+//< under suppression, so the constraint check goes to the queue there: hence this path.
+// EXPECT: does not explicitly implement interface
+// EXPECT-NOT: std/ds.kspls
+import "std/ds" { Map }
+
+// It holds no hash/equals, so it does not satisfy ds.Hashable.
+struct Bad
+  x: I32
+
+struct Wrap<|T|>
+  v: T
+
+impl<|T|> Wrap<|T|>
+  fn go(r: Self@): I32
+    if Map<|Bad, I32|>.new().len == 0
+      return 1
+    return I32::r.v
+
+fn main(): I32
+  w: Wrap<|I32|> = ::{ .v = 1 }
+  return w.go()

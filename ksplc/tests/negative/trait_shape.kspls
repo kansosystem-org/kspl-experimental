@@ -1,0 +1,88 @@
+//< One subject per file, with one function for each case
+//<
+//< The file's marks are every case's marks gathered at the head. The same mark written N times
+//< must match N places.
+// EXPECT: return type 'Hidden' is less visible than the interface method exposing it
+// EXPECT: interface method receivers must be written as plain 'Self'
+// EXPECT: interface method receivers must be written as plain 'Self'
+// EXPECT: returns 'Self', so this implementation must return 'I8$@' (a pointer)
+// EXPECT: never a raw pointer
+// EXPECT: cannot access symbol
+
+// Where a `pub trait`'s method returns a `priv` type, a side receiving the trait value can get
+// hold of a value of that type with `d.get()`. The return-value check on the conforming impl's
+// side alone is not enough: where the `impl` target type is `priv` the method's effective
+// visibility becomes `priv` and it passes through, so the prototype side is checked too
+// (docs/DESIGN.md §6.2).
+priv struct Hidden
+  v: I32
+
+pub trait I
+  fn get(r: Self$@): Hidden
+
+fn case_trait_proto_less_visible() {}
+
+// A trait method's receiver can only be written as a plain `Self`.
+// A `Self$@` would carry a meaning that cannot be read from the characters. The implementation
+// side is not bound (a thunk bridges value↔pointer, so even declared as `Self` the implementation
+// can receive `Self$@` and rewrite the receiver), while the caller's lvalue check is made
+// strict, forbidding the spelling that puts a temporary in the receiver, as in `io.out().s("x")`.
+// The option itself is removed (docs/DESIGN.md §3.1).
+pub trait Mutating
+  fn bump(r: Self$@): I32
+
+pub trait Reading
+  fn peek(r: Self@): I32
+
+pub struct S
+  pub n: I32
+
+impl S: Mutating
+  pub fn bump(r: Self$@): I32
+    r.n += 1
+    return r.n
+
+impl S: Reading
+  pub fn peek(r: Self$@): I32
+    return r.n
+
+fn case_trait_receiver_must_be_plain_self(): I32
+  s: S = ::{ .n = 0 }
+  return s.bump() + s.peek()
+
+// Where a trait declares that it returns `Self`, the implementation side has to return a pointer
+// (`Self$@`). A thunk repacks the return value into the trait's fat pointer so it wants the
+// target's address, and returned by value the trait value would point at a temporary. Without
+// refusing it, the generated C became `&a temporary` with no diagnostic from KSPL and a raw C
+// compiler error reached the user.
+import "std/io"
+
+pub trait Zeroed
+  fn zero(r: Self): Self
+
+impl I8: Zeroed
+  pub fn zero(_r: Self$@): I8
+    return 0I8
+
+fn case_trait_self_return_by_value(): I32
+  io.out().s("this impl cannot be lowered\n")
+  return 0
+
+// A trait's methods inherit the trait's own visibility by default, but write `priv` per method
+// and that takes precedence. `Ref_counted` is a pub trait while retain/release are priv, so they
+// cannot be called even by upcasting to a trait value.
+// Without this shut, a concrete type's priv method (whose direct call is refused) could be called
+// by dodging through an upcast, doubling up with what is inserted automatically and writing into
+// freed memory (use-after-free).
+import "std/refcount" { Rc }
+
+fn case_trait_method_priv_upcast()
+  $a: = Rc<|I32|>.new(1)
+  d: Ref_counted = a
+  d.release()
+
+fn main()
+  case_trait_proto_less_visible()
+  case_trait_receiver_must_be_plain_self()
+  case_trait_self_return_by_value()
+  case_trait_method_priv_upcast()

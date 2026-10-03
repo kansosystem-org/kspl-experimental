@@ -1,0 +1,29 @@
+//< A call's arguments are checked even when a `typedef` names the function pointer type
+//<
+//< The call reads the parameters off the function type an alias chain ends at (fn_sig_of in
+//< sema/type/env.kspls), so **however many links stand between, count and types are checked**.
+//< Caution: Always place the non-firing side alongside: a correct call passes at one step and four.
+// EXPECT: argument count mismatch. Expected 1, but got 3
+// EXPECT: expected 'I32', but got 'U8[]'
+import "std/io"
+
+priv fn twice(a: I32): I32
+  return a * 2
+
+priv typedef A1 = fn(a: I32): I32
+priv typedef A2 = A1
+priv typedef A3 = A2
+priv typedef A4 = A3
+
+priv struct Slot
+  priv op: A4
+
+fn main(): I32
+  one: A1 = twice
+  four: A4 = twice
+  bad_count: = four(1, 2, 3)
+  bad_type: = four("nope")
+  // The passing side: it can be called at one step and at four, and across a struct's field.
+  s: = Slot::{ .op = twice }
+  io.out().s("\{one(1)\} \{four(2)\} \{s.op(3)\} \{bad_count\} \{bad_type\}\n")
+  return 0

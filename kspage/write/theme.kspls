@@ -1,0 +1,176 @@
+//< Applies a document's look as one set (a theme)
+//<
+//< A theme holds only colors and typefaces.
+//< Only the styles are touched: no "role" field is added to a style, which would hold the same
+//< color in two ways (Principle 6).
+//< A document that is already open is not restyled unless asked.
+import "kspage/model/doc" { Block }
+import "kspage/model/style" + { Sheet, Style }
+import "kspage/share/store"
+import "kspage/write/edit" { Editor }
+import "kspage/write/field"
+import "std/ds" { List }
+import "std/str"
+
+struct Theme //< one set for a document's look
+  //<
+  //< Every field is a color or a typeface (do not let it hold a measurement).
+  //< An unset color is the screen's (on paper, black on white).
+  name: U8[]
+  face: U8[] //< the body's typeface, the headings' typeface and the monospaced typeface
+  head_face: U8[]
+  mono_face: U8[]
+  ink: Option<|U32|> //< the body text color, and the headings' text color
+  head_ink: Option<|U32|>
+  code_fill: Option<|U32|> //<
+    //< A code block (the fill, the text, the fence's line).
+    //<
+    //< The line's width is not touched.
+  code_ink: Option<|U32|>
+  code_rule: U32
+  line: U32 //< a table's lines, and the fill of a heading cell
+  head_fill: Option<|U32|>
+  drawn: U32 //<
+    //< The color of what is drawn to be seen (bars, a line, figures, a diagram's boxes).
+    //<
+    //< Caution: **Keep it separate from a table's lines** — those decorate the page, and this is
+    //< the contents itself (`draws` in `../model/style.kspls`).
+  link: U32 //<
+    //< A link's color.
+    //<
+    //< Keep it separate from the body's color, or a link cannot be seen in the text (`linked` in
+    //< `../model/style.kspls`).
+
+priv fn tint(v: U32): Option<|U32|>
+  return Option<|U32|>.some(v)
+
+priv fn plain(): Option<|U32|>
+  return Option<|U32|>.none
+
+fn count(): Sz //< how many themes can be chosen
+  //<
+  //< Caution: **Do not copy the number into the caller** (it would go stale when a theme is added).
+  return 4
+
+fn at(i: Sz): Theme //< the theme at index `i`
+  //<
+  //< Number 0 is "Standard" (the way back to the starting look). Each name says the most visible
+  //< difference.
+  if i == 1
+    return Theme::{ .name = "Indigo", .face = "sans-serif", .head_face = "sans-serif",
+      .mono_face = "monospace", .ink = tint(0x1b1f2aU32), .head_ink = tint(0x1f3a93U32),
+      .code_fill = tint(0xeef2fbU32), .code_ink = tint(0x1b2437U32), .code_rule = 0xc7d4eeU32,
+      .line = 0xc7d4eeU32, .head_fill = tint(0xe4ebf8U32), .drawn = 0x2f62c8U32,
+      .link = 0x1f4fbfU32 }
+  if i == 2
+    return Theme::{ .name = "Vermilion", .face = "sans-serif", .head_face = "sans-serif",
+      .mono_face = "monospace", .ink = tint(0x241c1aU32), .head_ink = tint(0xa8322dU32),
+      .code_fill = tint(0xfaf1eeU32), .code_ink = tint(0x2b211fU32), .code_rule = 0xe8cec8U32,
+      .line = 0xe0cbc6U32, .head_fill = tint(0xf6e6e2U32), .drawn = 0xc0554dU32,
+      .link = 0xa8322dU32 }
+  if i == 3
+    return Theme::{ .name = "Serif", .face = "serif", .head_face = "serif",
+      .mono_face = "monospace", .ink = tint(0x1a1a1aU32), .head_ink = tint(0x111111U32),
+      .code_fill = tint(0xf4f2ecU32), .code_ink = tint(0x1a1a1aU32), .code_rule = 0xd9d4c8U32,
+      .line = 0xcfcabcU32, .head_fill = tint(0xeceadfU32), .drawn = 0x5a5a5aU32,
+      .link = 0x33527aU32 }
+  // Standard. The same colors as the styles a new document starts with.
+  return Theme::{ .name = "Standard", .face = "sans-serif", .head_face = "sans-serif",
+    .mono_face = "monospace", .ink = plain(), .head_ink = plain(),
+    .code_fill = tint(0xf5f5f5U32), .code_ink = tint(0x1a1a1aU32), .code_rule = 0xd8d8d8U32,
+    .line = 0xccccccU32, .head_fill = tint(0xf0f0f0U32), .drawn = style.drawn_color,
+    .link = 0x0969daU32 }
+
+priv fn dressed(fresh: Style$@, t: Theme, wears_link: Bool): Bool //<
+  //< The style with the theme applied
+  //<
+  //< Caution: **Do not choose by the style's name.** A list of names silently breaks the day a name
+  //< changes (one style keeps the old theme's color). Theme a style with no name too; by name, a
+  //< style a person made escapes the theme.
+  // A link. Check it before headings, or a link inside a heading takes the heading's color and
+  // cannot be seen. The underline is left as it is.
+  if wears_link
+    fresh.ink.color = Option<|U32|>.some(t.link)
+    return true
+  // A heading. It is recognized by its depth (not its name).
+  if fresh.outline > 0
+    fresh.font.family = Option<|U8[]|>.some(t.head_face)
+    fresh.ink.color = t.head_ink
+    return true
+  // A block that does not wrap is code (only code is set so; `wrap` in `../model/style.kspls`).
+  if !fresh.wrap
+    fresh.font.family = Option<|U8[]|>.some(t.mono_face)
+    fresh.ink.color = t.code_ink
+    fresh.fill = t.code_fill
+    fresh.rule_color = t.code_rule
+    return true
+  fresh.font.family = Option<|U8[]|>.some(t.face)
+  fresh.ink.color = t.ink
+  // Caution: **Do not give a drawing style the page's decoration color.** Bars, lines, figures and
+  // a diagram's boxes are the contents itself; in the grid's color they make a picture whose values
+  // cannot be read. `draws` in `../model/style.kspls` tells them apart.
+  paints: = style.draws(fresh)
+  // A style with a fill gets the theme's fill too. **Set the fill and the text color as a pair**
+  // (one alone can make it unreadable). No fill is added to a style without one.
+  if _had: = fresh.fill
+    fresh.fill = tint(t.drawn) if paints else t.head_fill
+  // A style that draws a line gets the line color too (a table's grid and the like).
+  if fresh.rule_width > 0.0F32
+    fresh.rule_color = t.drawn if paints else t.line
+  return true
+
+priv fn gather_links(b: Block$@, out: List<|U8[]|>$@) //<
+  //< Collects the names of the styles used by the inlines that hold a link
+  //<
+  //< It walks into the children.
+  //< The style cannot tell whether something is a link — the inline holds that ("A link: the
+  //< run holds where it points, and the style holds the look" in
+  //< [`../docs/DESIGN.md`](../docs/DESIGN.md)). Names may repeat.
+  if b == null
+    return
+  for $i: Sz = 0; i < b.inlines.len; i += 1
+    n: = b.inlines.get(i)
+    if n.href.len > 0 && n.style.len > 0
+      out.push(n.style)
+  for $k: Sz = 0; k < b.children.len; k += 1
+    gather_links(b.children.get(k), out)
+
+priv fn named_in(names: List<|U8[]|>$@, want: U8[]): Bool //<
+  //< Whether that name is among those collected
+  if want.len <= 0
+    return false
+  for $i: Sz = 0; i < names.len; i += 1
+    if names.get(i).equals(want)
+      return true
+  return false
+
+fn wear(ed: Editor$@, sheet: Sheet$@, i: Sz): Bool //< applies theme number `i` to the style table
+  //<
+  //< Returns true if anything changed.
+  //< One undo must take it all back (a step is opened only at the two ends). **Applying the same
+  //< colors again records nothing** (no undo step that restores nothing).
+  if ed.shut()
+    return false
+  if ed == null || sheet == null || i >= count()
+    return false
+  t: = at(i)
+  ed.break_group()
+  // Caution: **Walk the document first** (walked per style, it would be walked once per style).
+  $links: = List<|U8[]|>.new()
+  defer links.free()
+  for $b: Sz = 0; b < ed.doc.blocks.len; b += 1
+    gather_links(ed.doc.blocks.get(b), links@)
+  $worn: = false
+  for $k: Sz = 0; k < sheet.styles.len; k += 1
+    s: = sheet.styles.get(k)
+    if s == null
+      continue
+    $fresh: Style = s$
+    if !dressed(fresh@, t, named_in(links@, s.name))
+      continue
+    if store.same_style(s, fresh@)
+      continue
+    field.do_set_look(ed, ed.step(), s, fresh)
+    worn = true
+  ed.break_group()
+  return worn

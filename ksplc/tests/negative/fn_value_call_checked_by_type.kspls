@@ -1,0 +1,35 @@
+//< A call through a function value is checked against the value's own type, whatever holds it
+//<
+//< The signature is read off the type (infer_value_call_args in `sema/body/call_args.kspls`), so a
+//< value from a generic's field, a list or a call's result is checked as a local is, never as Void.
+//< Caution: Always place the passing side alongside; a check refusing every call must not pass.
+// EXPECT: argument count mismatch. Expected 1, but got 2
+// EXPECT: argument count mismatch. Expected 1, but got 2
+// EXPECT: expected 'I32', but got 'U8[]'
+// EXPECT: expected 'I32', but got '(fn(I32):I32)@'
+// EXPECT-NOT: 'Void'
+import "std/ds" { List }
+
+priv fn twice(a: I32): I32
+  return a * 2
+
+priv fn pick(): fn(a: I32): I32
+  return twice
+
+priv struct Box<|T|>
+  priv v: T
+
+fn main(): I32
+  b: = Box<|fn(a: I32): I32|>::{ .v = twice }
+  $ops: = List<|fn(a: I32): I32|>.new()
+  defer ops.free()
+  ops.push(twice)
+  too_many: = b.v(1, 2)
+  too_many_again: = pick()(1, 2)
+  wrong_type: = ops.get(0)("nope")
+  held: fn(a: I32): I32 = twice
+  not_a_number: I32 = held@
+  // The passing side: each shape called as its type says, its result used as an I32.
+  found: = pick()
+  ok: I32 = b.v(1) + ops.get(0)(2) + pick()(3) + found(4)
+  return ok

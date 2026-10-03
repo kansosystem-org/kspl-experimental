@@ -1,0 +1,243 @@
+//< Normalizes a declaration's raw tree into the slots later layers read
+//<
+//< An `extern` block's items, an `impl`'s target, an enum variant, and a declaration naming several
+//< variables split into one per name; `normalize_by_kind` in `normalize.kspls` calls each by kind.
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/parse/normalize" as parse_normalize
+import "std/ds" { List }
+import "std/str"
+
+priv enum Var_decl_phase
+  id
+  type_expr
+  init_expr
+
+impl Ast_node
+  fn normalize_extern_decl(r: Ast_node$@)
+    // A block (`extern "C" { … }`, holding the ABI name's string) or a single `extern` declaration.
+    // Caution: **Do not look children up by index.** Attributes come first among the children
+    // ("The top-level declarations" in ksplc/docs/DESIGN.md) and shift `get_child(1)`; a block
+    // mistaken for a single declaration loses every declaration inside.
+    $is_block: = r.kind_id == .k_decl_extern_block
+    for $i: Sz = 0; i + 1 < r.children.len; i += 1
+      if r.get_child(i).is_keyword("extern")
+        is_block = is_block || r.get_child(i + 1).kind_id == .k_string
+        break
+    flat: = base_ast.new_ast_node_list()
+
+    if is_block
+      r.set_kind(.k_decl_extern_block)
+      r.text = "extern_block"
+      for child in r.children
+        if child.is_keyword("extern") || child.kind_id == .k_literal ||
+          child.kind_id == .k_string
+          continue
+        decl_node: =
+          child.process_extern_item().unwrap_or(null) if child.kind_id == .k_decl_extern else child
+        if decl_node != null
+          flat.push(decl_node)
+    else
+      if decl_node: = r.process_extern_item()
+        extern_kw: = r.find_child(.k_keyword)
+        if extern_kw != null
+          flat.push(extern_kw)
+        flat.push(decl_node)
+    r.children = flat
+
+  fn normalize_impl_decl(r: Ast_node$@)
+    r.set_kind(.k_decl_impl)
+    r.text = "impl"
+    flat: = base_ast.new_ast_node_list()
+    for child in r.children
+      if child.kind_id != .k_literal
+        flat.push(child)
+    r.children = flat
+
+  fn flatten_var_decl_lists(r: Ast_node$@)
+    if r == null
+      return
+    final_children: = base_ast.new_ast_node_list()
+    $has_list: = false
+
+    for child in r.children
+      if child.kind_id == .k_decl_var || child.kind_id == .k_decl_const
+        has_list = true
+        child.process_var_decl_group(final_children)
+      else
+        final_children.push(child)
+
+    if has_list
+      r.children = final_children
+
+  priv fn process_var_decl_group(r: Ast_node$@, final_children: List<|Ast_node$@|>$@)
+    items: = base_ast.new_ast_node_list()
+    mods: = base_ast.new_ast_node_list()
+    $kw_node: Ast_node$@ = null
+
+    for child in r.children
+      if child.is_modifier()
+        mods.push(child)
+      else if child.kind_id == .k_keyword && kw_node == null
+        kw_node = child
+      else if child.kind_id == .k_decl_var_item
+        items.push(child)
+
+    if items.len == 0
+      if r.is_already_normalized_var_decl()
+        final_children.push(r)
+        return
+      items.push(r)
+
+    // Only a decl_var lacks a keyword (its ':' shows the declaration); a decl_const holds 'const'.
+    if kw_node == null
+      kw_node = Ast_node.new(.k_keyword, "var", r.loc)
+
+    for single_item in items
+      item_parts: = single_item.normalize_var_item()
+      // An item without the mutability marker `$` (`x: = ...`) cannot be reassigned, which is
+      // `let`'s meaning, so its keyword becomes `let` and later stages check only `let`
+      // (is_mut=false; C emits const).
+      $item_kw: = kw_node
+      if kw_node.text.equals("var") && !single_item.has_mut_binding_marker()
+        item_kw = Ast_node.new(.k_keyword, "let", kw_node.loc)
+      new_decl: = Ast_node.new(r.kind_id, item_kw.text, single_item.loc)
+
+      // Caution: **Move the `attribute_list`'s contents, not the list itself**: moved whole into
+      // `mods` it nests (`attribute_list > attribute_list > attribute`), and `get_attribute`
+      // (base/ast_ext.kspls), which looks one level deep, silently misses it.
+      mods_node: = Ast_node.new(.k_attribute_list, "mods", r.loc)
+      for mod in mods
+        if mod.kind_id == .k_attribute_list
+          for attr in mod.children
+            mods_node.add_child(attr.clone())
+        else
+          mods_node.add_child(mod.clone())
+      if item_parts.len > 3
+        item_attrs: = item_parts.get(3)
+        for attr in item_attrs.children
+          mods_node.add_child(attr.clone())
+      if mods_node.children.len == 0
+        mods_node.morph(.k_empty, "")
+
+      new_decl.add_child(mods_node)
+      new_decl.add_child(item_kw.clone())
+      new_decl.add_child(item_parts.get(0))
+      new_decl.add_child(item_parts.get(1))
+      new_decl.add_child(item_parts.get(2))
+
+      final_children.push(new_decl)
+
+  priv fn is_already_normalized_var_decl(r: Ast_node$@): Bool //<
+    //< Whether r is a decl_var already normalized, to be passed through
+    //<
+    //< Note: normalize_by_kind (parse/normalize.kspls) runs flatten_var_decl_lists() on a
+    //< k_stmt_loop both before normalize_loop() and after, so a single init unwrapped from
+    //< loop_init comes back as an already normalized decl_var; this passes it through instead of
+    //< handling it twice.
+    if !r.has_keyword("var") && !r.has_keyword("let") && !r.has_keyword("const")
+      return false
+    return r.children.len >= 4 && !r.has_literal_child(":") && !r.has_literal_child("=") &&
+      r.find_child(.k_assign_op) == null
+  fn normalize_enum_variant(r: Ast_node$@)
+    $v_id_node: Ast_node$@ = null
+    payload_group: = Ast_node.new(.k_enum_payload, "enum_payload", r.loc)
+    $expr_node: Ast_node$@ = null
+    mods: = base_ast.new_ast_node_list()
+    $attr_node: Ast_node$@ = null
+
+    for vc in r.children
+      if vc.kind_id == .k_attribute_list
+        attr_node = vc
+      else if vc.is_modifier()
+        mods.push(vc)
+      else if vc.kind_id == .k_identifier && v_id_node == null
+        v_id_node = vc
+      else if vc.kind_id == .k_enum_field
+        f_name_node: = vc.get_enum_field_name_node()
+        vc.text = f_name_node.text if f_name_node != null else "unknown"
+        payload_group.add_child(vc)
+      else if vc.kind_id == .k_expr || vc.kind_id == .k_integer
+        expr_node = vc
+
+    r.text = v_id_node.text if v_id_node != null else "unknown"
+    new_vc: = base_ast.new_ast_node_list()
+    for mod in mods
+      new_vc.push(mod)
+    if v_id_node != null
+      new_vc.push(v_id_node)
+    if payload_group.children.len > 0
+      new_vc.push(payload_group)
+    if expr_node != null
+      new_vc.push(expr_node)
+    if attr_node != null
+      new_vc.push(attr_node)
+    r.children = new_vc
+
+  priv fn process_extern_item(r: Ast_node$@): Option<|Ast_node$@|>
+    mods: = base_ast.new_ast_node_list()
+    $decl_node: Ast_node$@ = null
+    for inner in r.children
+      if inner.kind_id == .k_literal || inner.kind_id == .k_string ||
+        inner.is_keyword("extern")
+        continue
+      if inner.is_modifier()
+        mods.push(inner)
+      else if inner.kind_id == .k_decl_fn_proto || inner.kind_id == .k_decl_var ||
+        inner.kind_id == .k_decl_extern_struct
+        decl_node = inner
+    if decl_node != null
+      decl_node.prepend_children(mods)
+      return Option<|Ast_node$@|>.some(decl_node)
+    return Option<|Ast_node$@|>.none
+
+  priv fn normalize_var_item(r: Ast_node$@): List<|Ast_node$@|>$@
+    flat: = base_ast.new_ast_node_list()
+    $id_node: Ast_node$@ = null
+    $type_node: Ast_node$@ = null
+    $expr_node: Ast_node$@ = null
+    $attr_list_node: Ast_node$@ = null
+    $phase: = Var_decl_phase.id
+
+    $has_colon_or_eq: = false
+    for cc in r.children
+      if cc.is_literal(":") || cc.is_literal("=") || cc.kind_id == .k_assign_op
+        has_colon_or_eq = true
+        break
+
+    if !has_colon_or_eq && r.children.len >= 3
+      // No ':' / '=' means the item is already flat (id / type / expr alone) and passes through.
+      for child in r.children
+        flat.push(child)
+      return flat
+
+    for c in r.children
+      if c.kind_id == .k_attribute_list
+        attr_list_node = c
+        continue
+      if c.is_literal(":")
+        phase = .type_expr
+        continue
+      if c.is_literal("=") || (c.kind_id == .k_assign_op && c.text.equals("="))
+        phase = .init_expr
+        continue
+      if c.is_literal(",") || c.is_literal(";")
+        continue
+      if c.is_modifier() || c.is_keyword("var") || c.is_keyword("let") || c.is_keyword("const")
+        continue
+
+      switch phase case .id
+        if id_node == null && c.kind_id == .k_identifier
+          id_node = c
+      case .type_expr
+        if type_node == null
+          type_node = c
+      case .init_expr
+        if expr_node == null
+          expr_node = c
+
+    r.push_or_default(flat, id_node, .k_identifier, "unknown")
+    r.push_or_empty(flat, type_node)
+    r.push_or_empty(flat, expr_node)
+    r.push_or_empty(flat, attr_list_node)
+    return flat

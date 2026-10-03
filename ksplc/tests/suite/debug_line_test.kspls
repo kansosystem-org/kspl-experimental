@@ -1,0 +1,220 @@
+#!/usr/bin/env -S ksplc run
+//< The test that pins down that debug position information keeps pointing at the source's line
+//<
+//< ksplc writes `#line <line> "<file>.kspl"` into the generated C (`ksplc/gen/c/ctx.kspls`), so
+//< lldb's stepping and the C compiler's errors point at the original source. **This mapping can
+//< break silently**, so both ends are pinned down here.
+
+// ==========================================
+// **It is C-backend only.** The LLVM backend emits no debug information at all (`ksplc/gen/llvm`
+// generates no DILocation / DISubprogram / !dbg). Not checking LLVM here is not cutting a corner:
+// it **does not check a feature that does not exist**. llvm-dwarfdump is not used.
+// Caution: Search for **only the file name**. DWARF v5 holds the directory and the file name
+// separately, so the concatenated string `tests/prog/debug_line.kspls` does not appear inside the
+// executable.
+// ==========================================
+// The two ends:
+//   1. ksplc's side ... the generated C's `#line` points at **the actual line** of each statement
+//   2. the executable's side ... the source's file name is left in a `-g` artefact's debug info
+// ==========================================
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/harness_build"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/seq"
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/strnum"
+import "std/sys"
+import "std/verdict"
+
+priv const fixture: U8[] = "tests/prog/debug_line.kspls"
+
+priv const imported: U8[] = "std/io.kspls" //< the file the fixture imports
+  //<
+  //< The imported file's lines need a mapping too (under split compilation it breaks first).
+
+priv const mark_tag: U8[] = "// MARK:"
+
+priv struct Directive //< one `#line` line of the generated C
+  line: Sz
+  path: U8[]
+
+priv fn is_ident(s: U8[]): Bool //< whether the text is a valid name
+  //<
+  //< Caution: **Do not loosen this.** If it picks up a `// MARK:<name>` inside prose, the mapping
+  //< check demands lines that have nothing to do with the body.
+  if s.len == 0 || !(s[0].is_alpha() || s[0] == '_')
+    return false
+  for i in Range.asc(s.len)
+    if !(s[i].is_alnum() || s[i] == '_')
+      return false
+  return true
+
+priv fn mark_lines(body: U8[], arena: Arena$@): List<|Sz|> //<
+  //< It collects the lines `// MARK:<name>` is actually on (only a line ending in a name)
+  $out: = List<|Sz|>.new(arena)
+  $n: Sz = 0
+  for raw in body.lines(arena)
+    n += 1
+    at: = raw.find_str(mark_tag)
+    if at < 0
+      continue
+    if is_ident(raw.sub_from(at + mark_tag.len).trim_end())
+      out.push(n)
+  return out
+
+priv fn directives(text: U8[], arena: Arena$@): List<|Directive|> //<
+  //< It collects the `#line <number> "<path>"` directives at the start of a line
+  head: = "#line "
+  $out: = List<|Directive|>.new(arena)
+  for raw in text.lines(arena)
+    if !raw.starts_with(head)
+      continue
+    rest: = raw.sub_from(head.len)
+    quote: = rest.find_str(" \"")
+    if quote < 0
+      continue
+    n: = rest.sub(0, quote).to_i64() catch
+      continue
+    path: = rest.sub_from(quote + 2)
+    close: = path.find_char('"')
+    if close < 0
+      continue
+    out.push(Directive::{ .line = Sz::n, .path = path.sub(0, close) })
+  return out
+
+// ==========================================
+// A package that names itself, compiled from its own folder
+// **The folder's name differs from the package's** (`alone/` holding `mypkg`): a `#line` naming
+// `mypkg/lib.kspls`, relative to the folder the C compiler ran in, sends a debugger nowhere.
+// ==========================================
+priv const own_rels: U8[][3] = ::{ "alone/ksplc.cfg", "alone/lib.kspls", "alone/probe/main.kspls" }
+priv const own_bodies: U8[][3] = ::{ "[package]\nname = mypkg\n", "pub fn hit(): I32\n  return 7\n",
+  "import \"mypkg/lib\"\n\nfn main(): I32\n  return lib.hit() - 7\n" }
+
+priv fn case_own_folder(dir: U8[], arena: Arena$@) //<
+  //< Every `#line` of the package's own files opens from the folder the C was generated in
+  name: = "a declared package's #line opens from its own folder"
+  fs.write_tree(dir, U8[][]::own_rels, U8[][]::own_bodies, arena) catch
+    verdict.check(name, false, "the package cannot be placed")
+    return
+  top: = fs.join(dir, "alone", arena)
+  gen: = fs.join(dir, "own.c", arena)
+  r: = harness.run_in(harness.ksplc_argv(U8[][]::{ "probe/main.kspls", gen }), top)
+  if r.code != 0
+    verdict.check(name, false, r.out)
+    return
+  text: = io.read_file(gen) catch
+    verdict.check(name, false, "the generated C cannot be read")
+    return
+  $own: Sz = 0
+  $lost: = ""
+  for d in directives(text, arena)
+    if d.path.starts_with("std/")
+      continue
+    own += 1
+    if lost.len == 0 && !fs.exists(fs.join(top, d.path, arena))
+      lost = d.path
+  // **Seeing none of the package's is a failure, not a pass** — the check below would test nothing.
+  verdict.check(name, own > 0 && lost.len == 0,
+    arena.text().s("\{own\} of the package's; the first that does not open: '\{lost\}'").take())
+
+priv fn has_nul_string(blob: U8[], want: U8[], arena: Arena$@): Bool //<
+  //< It splits the executable on NUL and checks whether the string is present in it
+  return blob.split(0U8, arena).any(fn(part: U8[]; want: U8[]): Bool {
+    return part.equals(want);
+  })
+
+fn main(): I32
+  arena: = harness.begin(256 * 1024 * 1024)
+  dir: = harness.sandbox("debug_line") catch
+    return harness.fatal("cannot make a working directory")
+  io.out().s("# debug position information\n")
+  body: = io.read_file(fixture) catch
+    return harness.fatal("the fixture cannot be read")
+  marks: = mark_lines(body, arena)
+  verdict.check("the fixture has MARKs", marks.len >= 4,
+    arena.text().s("\{marks.len\} MARKs were found").take())
+
+  gen: = fs.join(dir, "gen.c", arena)
+  r: = harness.ksplc(U8[][]::{ fixture, gen })
+  if r.code != 0
+    verdict.check("the fixture's C generation", false, r.out)
+    return harness.finish()
+  text: = io.read_file(gen) catch
+    return harness.fatal("the generated C cannot be read")
+  dirs: = directives(text, arena)
+  verdict.check("#line comes out in the generated C", dirs.len > 0, "")
+
+  // It must point at a KSPL source; pointing at the generated C makes the debugger show the
+  // generated lines.
+  $non_kspl: = ""
+  $fixture_lines: = List<|Sz|>.new(arena)
+  $saw_imported: = false
+  for d in dirs
+    if !d.path.ends_with(".kspls") && !d.path.ends_with(".kspl") && non_kspl.len == 0
+      non_kspl = d.path
+    if d.path.equals(fixture)
+      fixture_lines.push(d.line)
+    if d.path.equals(imported)
+      saw_imported = true
+  verdict.check("#line points at nothing but a KSPL source", non_kspl.len == 0, non_kspl)
+
+  $missing: Sz = 0
+  for want in marks
+    $found: = false
+    for j in Range.asc(fixture_lines.len)
+      if fixture_lines.get(j) == want
+        found = true
+    if !found
+      missing += 1
+  verdict.check("each MARK's line appears in a #line", missing == 0,
+    arena.text().s("\{missing\} lines did not appear").take())
+  // The imported file must get a mapping too.
+  verdict.check("the imported source appears in a #line too", saw_imported, imported)
+  case_own_folder(dir, arena)
+
+  // --- the executable: the file name stays in an artefact built with `-g` --- **From here on it is
+  // checked only on Linux.** macOS leaves `-g`'s DWARF in the `.o` and `.dSYM` files (the
+  // executable holds only a debug map), so no source name is inside the executable.
+  if harness.cc_target().find_str("linux") < 0
+    verdict.skip_check("the executable-side check",
+      "it is Linux only (the reason is the caution at the top of the source)")
+    return harness.finish()
+  fixture_name: = sys.get_file_name(fixture)
+  imported_name: = sys.get_file_name(imported)
+  exe_g: = fs.join(dir, "with_g.exe", arena)
+  with_g: = harness_build.build_exe(U8[][]::{ gen }, exe_g,
+    U8[][]::{ "-std=c99", "-g", "-O0", "-w" })
+  if with_g.code != 0
+    verdict.check("the build with -g", false, with_g.out)
+    return harness.finish()
+  blob: = io.read_file(exe_g) catch
+    return harness.fatal("the built executable cannot be read")
+  verdict.check("-g's artefact keeps its own source name",
+    has_nul_string(blob, fixture_name, arena), fixture_name)
+  verdict.check("-g's artefact keeps the imported source name",
+    has_nul_string(blob, imported_name, arena), imported_name)
+
+  // Without this contrast the two above **check nothing** (the string might always be there); they
+  // mean something only if the name disappears without `-g`.
+  exe_nog: = fs.join(dir, "no_g.exe", arena)
+  no_g: = harness_build.build_exe(U8[][]::{ gen }, exe_nog,
+    U8[][]::{ "-std=c99", "-O0", "-w" })
+  if no_g.code != 0
+    verdict.check("the build without -g", false, no_g.out)
+  else
+    plain: = io.read_file(exe_nog) catch
+      return harness.fatal("the built executable cannot be read")
+    verdict.check("without -g no source name is left (proof the check answers to -g)",
+      !has_nul_string(plain, fixture_name, arena), fixture_name)
+
+  // The fixture itself is not broken (alpha=11, beta=22 -> 33).
+  out: = harness.run(U8[][]::{ exe_g })
+  verdict.check("the fixture works as expected",
+    out.code == 0 && out.out.find_str("dl=33") >= 0, out.out)
+  return harness.finish()

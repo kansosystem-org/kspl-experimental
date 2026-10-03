@@ -1,0 +1,136 @@
+import "std/net"
+import "std/reactor"
+import "std/thread"
+import "std/verdict"
+
+// ==========================================
+// std/reactor: watching several TCP connections for readiness, would_block on a nonblocking read,
+// and the writable notification of a nonblocking connect.
+// ==========================================
+#export
+fn reactor_multi_echo_server(listener: net.Tcp_listener$@): Void$@
+  for _i in Range.asc(3)
+    conn: = listener.accept() catch panic("accept should succeed once a client connects")
+    $buf: U8[64] = ::{}
+    n: = conn.read(U8$[]::buf) catch panic("server read should succeed")
+    conn.write(U8$[]::{ .ptr = buf@, .len = n }) catch panic("server write should succeed")
+    conn.free()
+  return null
+
+fn test_reactor_multi_connection()
+  verdict
+    .start("[Reactor] register/wait/unregister over several connections test (real loopback \
+      traffic)...")
+
+  listener: = net.Tcp_listener.bind("127.0.0.1", 17657) catch panic("bind should succeed on a fresh \
+    port")
+  t: =
+    thread.Thread.spawn<|net.Tcp_listener|>(reactor_multi_echo_server, listener) catch panic("thread spawn failed")
+
+  $r: = reactor.Reactor.new()
+  defer r.free()
+  c0: = net.Tcp_stream.connect("127.0.0.1", 17657) catch panic("connect should succeed once the \
+    listener is bound")
+  c1: = net.Tcp_stream.connect("127.0.0.1", 17657) catch panic("connect should succeed once the \
+    listener is bound")
+  c2: = net.Tcp_stream.connect("127.0.0.1", 17657) catch panic("connect should succeed once the \
+    listener is bound")
+  c0.set_nonblocking() catch panic("set_nonblocking should succeed on a connected socket")
+  c1.set_nonblocking() catch panic("set_nonblocking should succeed on a connected socket")
+  c2.set_nonblocking() catch panic("set_nonblocking should succeed on a connected socket")
+  r.register(c0.raw_handle(), reactor.readable, 0)
+  r.register(c1.raw_handle(), reactor.readable, 1)
+  r.register(c2.raw_handle(), reactor.readable, 2)
+
+  // Nothing has been sent yet, so no connection should be readable.
+  $empty_ready: = r.wait(200) catch panic("wait should succeed even with nothing ready")
+  assert(empty_ready.len == 0, "nothing should be ready before any request is sent")
+  empty_ready.free()
+
+  // A nonblocking read with no data throws would_block, not io_failed, so the caller can retry.
+  probe_buf: U8[8] = ::{}
+  $would_block_seen: = false
+  c0.read(U8$[]::probe_buf) catch e
+    switch e case .would_block
+      would_block_seen = true
+    default
+      panic("expected Net_error.would_block for a nonblocking socket with no data yet")
+  assert(would_block_seen, "reading a nonblocking socket with no data must throw would_block")
+
+  // All three send; then every ready connection is handled in one pass, in no particular order.
+  c1.write("second") catch panic("client write should succeed")
+  c2.write("third!") catch panic("client write should succeed")
+  c0.write("first") catch panic("client write should succeed")
+
+  $handled: U8[3] = ::{[0] = 0, [1] = 0, [2] = 0 }
+  $handled_count: Sz = 0
+  for handled_count < 3
+    $ready: = r.wait(5000) catch panic("wait should succeed while connections are still pending")
+    for item in ready
+      assert((item.revents & reactor.readable) != 0, "ready item must report readable")
+      stream: = c0 if item.token == 0 else c1 if item.token == 1 else c2
+      buf: U8[64] = ::{}
+      n: = stream.read(U8$[]::buf) catch panic("stream read should succeed once reactor reports \
+        readable")
+      assert(n > 0, "should have received the echoed bytes")
+      handled[item.token] = 1
+      r.unregister(stream.raw_handle())
+      handled_count += 1
+    ready.free()
+  assert(handled[0] == 1 && handled[1] == 1 && handled[2] == 1,
+    "all three connections must have been handled exactly once")
+
+  // The registration set is rebuilt each time, as a server does. After a clear nothing is watched,
+  // so wait returns empty when it times out.
+  r.register(c0.raw_handle(), reactor.readable, 0)
+  r.clear()
+  $after_clear: = r.wait(0) catch panic("wait should succeed with an empty registration set")
+  assert(after_clear.len == 0, "clear must leave nothing registered")
+  after_clear.free()
+
+  c0.free()
+  c1.free()
+  c2.free()
+  t.join_and_free()
+  listener.free()
+  verdict
+    .pass("Watching several connections for readiness at once, telling would_block apart, and \
+      rebuilding the registration set with clear are all confirmed.")
+
+#export
+fn reactor_accept_once(listener: net.Tcp_listener$@): Void$@
+  conn: = listener.accept() catch panic("accept should succeed once the client connects")
+  conn.write("hi") catch panic("server write should succeed")
+  conn.free()
+  return null
+
+fn test_reactor_nonblocking_connect()
+  verdict
+    .start("[Reactor] connect_nonblocking + the writable notification test (real loopback \
+      traffic)...")
+
+  listener: = net.Tcp_listener.bind("127.0.0.1", 17658) catch panic("bind should succeed on a fresh \
+    port")
+  t: =
+    thread.Thread.spawn<|net.Tcp_listener|>(reactor_accept_once, listener) catch panic("thread \
+      spawn failed")
+
+  client: = net.Tcp_stream.connect_nonblocking("127.0.0.1", 17658) catch panic("connect_nonblocking \
+    should return immediately with a pending stream")
+
+  $r: = reactor.Reactor.new()
+  defer r.free()
+  r.register(client.raw_handle(), reactor.writable, 7)
+  $ready: = r.wait(5000) catch panic("wait should succeed while the connection completes")
+  ready_token: = ready.get(0).token
+  assert(ready.len == 1 && ready_token == 7,
+    "the connecting socket must become writable once connected")
+  ready.free()
+  connected: = client.is_connected()
+  assert(connected, "is_connected must report success after writable notification")
+  r.unregister(client.raw_handle())
+
+  client.free()
+  t.join_and_free()
+  listener.free()
+  verdict.pass("A nonblocking connect's writable notification and its success check are confirmed.")

@@ -1,0 +1,141 @@
+//< The compiler oracle (shared)
+//<
+//< The smallest checker behind the main measure, "how often ksplc accepts the source with the
+//< completion inserted". ksplc writes the diagnostics to stderr and the summary "Finished with N
+//< error(s)" to stdout.
+//< Caution: **Do not turn the lint off for the whole package**: the decision is to keep `pub` out
+//< of every other file (`tools/ksplc.cfg`).
+##lint(I0402 = off)
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/json"
+import "std/mem" { Arena, dealloc }
+import "std/seq"
+import "std/str" { Str_builder }
+import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
+import "std/subproc"
+import "std/sys"
+
+const ksplc_path: U8[] = "out/ksplc_stage1.exe" //< the compiler every measure here uses
+const corpus_dir: U8[] = "tools/ai_assist/corpus" //< where the temporary source is written
+
+fn close_or_die(f: io.File_stream$@, path: U8[]) //< closes a file, or stops the run if it cannot
+  //<
+  //< Caution: **Do not swallow a close failure.** Writer's `s()` ignores fwrite's return value (so
+  //< that writes can chain), so **a write failure shows only at the close**. For a tool run once,
+  //< stopping and running it again is cheaper.
+  f.sync() catch
+    io.err().s("error: could not finish writing '\{path\}' (the file is incomplete)\n")
+    sys.exit(1)
+  f.free()
+pub const uncompilable: I32 = 999 //< the compiler could not be run at all (a timeout, say)
+
+priv const compile_timeout_ms: I32 = 60000
+priv const output_cap: Sz = 1024 * 1024
+
+pub struct Compile_result //< what one run of the compiler said
+  pub error_count: I32 //< how many errors, or `uncompilable` if the compiler never ran
+  stderr_data: U8$[] //< the diagnostic text as printed, empty where the run never started.
+    //<
+    //< Not `stderr`, which is a macro in the Windows (MSVC UCRT) headers (see std/sys.Run_result).
+
+fn load_jsonl(path: U8[], arena: Arena$@): json.Val$[]?io.Io_error //< one JSON record per line
+  //<
+  //< Shared by the corpus tools. A blank line is skipped, but broken JSON panics, so a broken
+  //< corpus is noticed at once.
+  data: = io.read_file(path)?
+  defer dealloc(Void$@::data.ptr)
+
+  $list: = List<|json.Val|>.new(arena)
+  for raw_line in data.lines(arena)
+    line: = U8$[]::raw_line.trim_spaces()
+    if line.len == 0
+      continue
+    val: = json.parse(line, arena) catch panic("load_jsonl: invalid JSON line")
+    list.push(val)
+  return list.slice()
+
+priv fn parse_error_summary(stdout_data: U8[]): Option<|I32|> //<
+  //< Reads N from stdout's "Finished with N error(s), M warning(s)" summary line
+  //<
+  //< `.none` where a parse or syntax error exits with no summary (see ksplc/main.kspls).
+  $lines: = stdout_data.lines(null)
+  defer lines.free()
+  for line in lines
+    if line.find_str("error(s)") < 0
+      continue
+    with_pos: = line.find_str("with")
+    if with_pos < 0
+      continue
+    after_with: = line.sub_from(with_pos + 4)
+    err_pos: = after_with.find_str("error")
+    if err_pos < 0
+      continue
+    num_str: = U8$[]::after_with.sub(0, err_pos).trim_spaces()
+    n: = num_str.parse_size() catch
+      continue
+    return Option<|I32|>.some(I32::n)
+  return Option<|I32|>.none
+
+pub fn compile_errors( //< runs one source through ksplc and counts the errors it reports
+  //<
+  //< The temporary source is `corpus_dir/{stem}.kspls`, and it is deleted before this returns.
+  source: U8[], //< the program to compile; it is written to a file unchanged
+  stem: U8[], //< names the temporary file, so two callers running at once do not collide
+  arena: Arena$@, //< where the captured output is allocated
+): Compile_result //< the error count and the messages; `uncompilable` if it never ran
+  $src_path: = Str_builder.new()
+  defer src_path.free()
+  src_path.s(corpus_dir).c('/').s(stem).s(".kspls")
+  $out_path: = Str_builder.new()
+  defer out_path.free()
+  out_path.s(corpus_dir).c('/').s(stem).s(".c")
+
+  fs.mkdir(corpus_dir) catch {} // fails harmlessly if it already exists
+
+  io.write_file(src_path.slice(), source) catch
+    return Compile_result::{ .error_count = uncompilable, .stderr_data = "" }
+
+  argv: = U8[][]::{ ksplc_path, src_path.slice(), out_path.slice() }
+  // Caution: **Do not replace this with `subproc.run`.** A nonzero exit is what is counted here;
+  // thrown as an error, every input meant to be counted would end up in the catch.
+  r: = subproc.run_capture(argv, "", compile_timeout_ms, output_cap, arena)
+
+  // Deleting a file that was never made (the compile failed) fails harmlessly.
+  fs.remove_path(src_path.slice()) catch {}
+  fs.remove_path(out_path.slice()) catch {}
+
+  if r.spawn_failed || r.timed_out
+    return Compile_result::{ .error_count = uncompilable, .stderr_data = "" }
+
+  // Caution: **Check the exit code too.** The summary is trusted only where the count is positive
+  // or the exit code is 0. "0" with a failed exit means the run was cut off (code generation's
+  // `sys.exit` safety valve) and reads as "passed", so it falls through to counting stderr.
+  if n: = parse_error_summary(r.stdout_data)
+    if n > 0 || r.exit_code == 0
+      return Compile_result::{ .error_count = n, .stderr_data = r.stderr_data }
+
+  // No summary: a parse or syntax error exited partway; count stderr's diagnostic lines.
+  $err_lines: = r.stderr_data.lines(arena)
+  $n: = I32::err_lines.where(fn(line: U8[]; ): Bool {
+    return line.find_str(": error:") >= 0;
+  }).count()
+  if n == 0 && r.exit_code != 0
+    n = uncompilable // an abnormal exit with no diagnostic either = unusable (a timeout or a crash)
+  return Compile_result::{ .error_count = n, .stderr_data = r.stderr_data }
+
+pub fn compiles(source: U8[], stem: U8[], arena: Arena$@): Bool //< whether it compiles cleanly
+  return compile_errors(source, stem, arena).error_count == 0
+
+fn first_diagnostic(stderr_data: U8[]): U8[] //<
+  //< the first `error:` line, empty where there is none
+  //<
+  //< The format is `file:line:col: error: ...`, as ksplc writes it.
+  $lines: = stderr_data.lines(null)
+  defer lines.free()
+  for line in lines
+    if line.find_str(": error:") >= 0
+      return line.trim_spaces()
+  return ""

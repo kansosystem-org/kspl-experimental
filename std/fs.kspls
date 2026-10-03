@@ -1,0 +1,544 @@
+//< The file tree itself: listing a directory, metadata, deleting, renaming, creating
+//<
+//< `std/io` handles a file's contents; this module handles the tree around them. `read_dir` returns
+//< one level in the filesystem's order, while `walk_files` and `walk_dirs` descend and sort, so
+//< two walks over the same tree give the same result.
+
+// ==========================================
+// Listing a directory and reading metadata (kspl_dir_*/kspl_stat/kspl_mkdir) use entirely
+// different APIs on POSIX and Windows, so the per-OS glue code is in
+// ksplc/gen/runtime/hosted_fs.c (the LLVM builds link the same C runtime, so the result does
+// not change with the backend).
+// ==========================================
+import "std/chars"
+import "std/ds" { List }
+import "std/io"
+import "std/mem" + { Arena, alloc_in, dealloc }
+import "std/rand"
+import "std/seq" // `List.order_by`
+import "std/str" { Str_builder }
+import "std/strfmt" // `:x` in the interpolation of the random name suffix
+import "std/sys"
+
+extern "C"
+  pub fn kspl_dir_open(path_ptr: U8@, path_len: Sz): I64
+  pub fn kspl_dir_read(handle: I64, buf: U8$@, cap: Sz): I32
+  pub fn kspl_dir_close(handle: I64)
+  pub fn kspl_stat(path_ptr: U8@, path_len: Sz, size_out: I64$@, is_dir_out: I32$@,
+    mtime_out: I64$@): Bool
+  pub fn kspl_is_exec(path_ptr: U8@, path_len: Sz): Bool
+  pub fn kspl_is_link(path_ptr: U8@, path_len: Sz): I32 //< 1=a link, 0=not a link, -1=cannot tell
+    //<
+    //< Caution: **Do not make it a Bool**: turning "cannot tell" into false lets an unreadable
+    //< segment pass as "not a link" (has_link_on_path below).
+  pub fn kspl_mkdir(path_ptr: U8@, path_len: Sz): I32
+  pub fn kspl_remove_path(path_ptr: U8@, path_len: Sz): I32
+  pub fn kspl_lock_open(path_ptr: U8@, path_len: Sz): I64
+  pub fn kspl_lock_take(handle: I64, wait: I32): I32 //< 0=taken, 1=held elsewhere, -1=failed
+  pub fn kspl_lock_close(handle: I64)
+  pub fn kspl_rename_cstr(old_cstr: U8@, new_cstr: U8@): I32 //<
+    //< Renames the NUL-terminated path old_cstr to new_cstr
+    //<
+    //< Caution: **Do not use `libc.rename`.** It is the narrow (ANSI) API, so on Windows a
+    //< non-ASCII path is read in the current code page (see the top of `kspl_win_to_wide` in
+    //< `ksplc/gen/runtime/hosted.c`).
+
+pub enum Fs_error //< why a filesystem operation failed
+  //<
+  //< Every failure in this file is returned as this type (the same convention as `?Io_error` in
+  //< `std/io.kspls`). Only the predicates (`exists` / `is_dir`) do not fail, so they return
+  //< `Bool`. Splitting `operation_failed` further would need errno passed up from the C code
+  //< (ksplc/gen/runtime/hosted.c). Do not split into variants what the code cannot tell apart.
+  not_found //< the named path does not exist, or could not be opened
+  invalid_path //< a path the OS cannot take, such as one containing a NUL
+  operation_failed //< the OS refused; it cannot tell whether it exists, permission, or no parent
+  too_deep //< a walk reached the depth limit (see `max_walk_depth`)
+  held_elsewhere //< another holder has the lock (only `File_lock.try_take`, which does not wait)
+  mkdir_failed(at: U8[]) //< the segment that could not be created, as a view into the path.
+    //<
+    //< **Which segment it stopped at** tells a path problem from a permission problem. It is not a
+    //< copy; to keep it longer than the caller's path, the caller copies it.
+
+pub struct File_info //< what the OS reports about one path
+  pub size: I64 //< the size in bytes
+  pub is_dir: Bool //< whether it is a directory
+  pub mtime: I64 //< the last modification time, in Unix epoch seconds, UTC
+
+pub const max_path_len: Sz = 4095 //< the longest path passed to the OS; a longer one fails
+  //<
+  //< The runtime copies a path into a fixed-length buffer.
+  //< Caution: **Never truncate a longer path and pass it on.** The caller would get **the result
+  //< of an operation on a different path** (a remove that deletes something else).
+
+priv fn check_path(path: U8[]): Void?Fs_error //< refuses what the OS cannot take as a path
+  //<
+  //< It checks only the length and an inner NUL, which C reads as the end (each operation checks
+  //< whether the path exists). The runtime refuses both as well; this names the cause.
+  if path.len > max_path_len || path.contains_nul()
+    throw Fs_error.invalid_path
+
+pub fn stat(path: U8[]): File_info?Fs_error //< what the OS reports about a path, following links
+  check_path(path)?
+  $size: I64 = 0
+  $is_dir_flag: I32 = 0
+  $mtime: I64 = 0
+  ok: = kspl_stat(path.ptr, path.len, size@, is_dir_flag@, mtime@)
+  if !ok
+    throw Fs_error.not_found
+  return File_info::{ .size = size, .is_dir = is_dir_flag != 0, .mtime = mtime }
+
+pub fn is_executable(path: U8[]): Bool //< whether the owner's execute bit is set; Windows: false
+  //<
+  //< Close to Python's `os.access(p, os.X_OK)`. **Always false on Windows**, which has no execute
+  //< bit.
+  //< Caution: **Do not use this to decide "can it be started"**: `can_run` below answers that.
+  return kspl_is_exec(path.ptr, path.len)
+
+priv const run_exts: U8[][4] = ::{ ".exe", ".com", ".bat", ".cmd" } //<
+  //< The extensions that can be started on Windows
+  //<
+  //< Caution: **Do not read `PATHEXT`**: whoever can change it can get something else started
+  //< (**do not trust a path the environment points to**, as with `PATH`).
+
+pub fn can_run(path: U8[]): Bool //< whether it can actually be started on this system
+  //<
+  //< On Windows the extension decides (the trap is at `is_executable`). A folder cannot be
+  //< started on either.
+  info: = stat(path) catch
+    return false
+  if info.is_dir
+    return false
+  if !sys.is_windows()
+    return is_executable(path)
+  ext: = sys.last_ext(path)
+  for e in run_exts
+    if ext.equals_ignore_case(e)
+      return true
+  return false
+
+pub fn exists(path: U8[]): Bool //< whether anything exists at that path
+  stat(path) catch
+    return false
+  return true
+
+pub fn is_dir(path: U8[]): Bool //< whether it is a directory; a link to one counts
+  info: = stat(path) catch
+    return false
+  return info.is_dir
+
+pub fn is_link(path: U8[]): Bool //< whether it is a link, without following it
+  //<
+  //< **`is_dir` cannot tell**: it follows the link. A tree walk must **first decide whether it may
+  //< follow the link**. A path that does not exist gives false (the functions that create paths
+  //< call this).
+  check_path(path) catch
+    return true
+  return kspl_is_link(path.ptr, path.len) != 0
+
+pub fn mkdir(path: U8[]): Void?Fs_error //< creates one directory; fails if the path exists
+  check_path(path)?
+  if kspl_mkdir(path.ptr, path.len) != 0
+    throw Fs_error.operation_failed
+
+pub fn remove_path(path: U8[]): Void?Fs_error //< deletes a file, or an empty directory
+  check_path(path)?
+  if kspl_remove_path(path.ptr, path.len) != 0
+    throw Fs_error.operation_failed
+
+pub fn rename_path( //< renames or moves a file or a directory
+  old_path: U8[], //< its current path
+  new_path: U8[], //< its new path
+): Void?Fs_error
+  check_path(old_path)?
+  check_path(new_path)?
+  // check_path refused a NUL already; to_cstr's `.none` is the same refusal.
+  $old_buf: U8$@ = null
+  switch old_path.to_cstr() case .some(p)
+    old_buf = p
+  case .none
+    throw Fs_error.invalid_path
+  defer dealloc(Void$@::old_buf)
+  $new_buf: U8$@ = null
+  switch new_path.to_cstr() case .some(p)
+    new_buf = p
+  case .none
+    throw Fs_error.invalid_path
+  defer dealloc(Void$@::new_buf)
+  if kspl_rename_cstr(old_buf, new_buf) != 0
+    throw Fs_error.operation_failed
+
+priv const max_entry_name_len: Sz = 1024
+
+pub fn read_dir( //< one directory's entries, without descending
+  //<
+  //< `.` and `..` are skipped, so the list holds only the entries.
+  path: U8[], //< the directory to read
+  arena: Arena$@, //< where the names go; null uses the global heap and the caller frees each
+): List<|U8[]|>?Fs_error //< the bare names, in no fixed order; fails if it cannot be opened
+  check_path(path)?
+  h: = kspl_dir_open(path.ptr, path.len)
+  if h == 0
+    throw Fs_error.not_found
+  defer kspl_dir_close(h)
+  $out: = List<|U8[]|>.new(arena)
+  for
+    $name_buf: U8[1024] = ::{}
+    n: = kspl_dir_read(h, name_buf@, max_entry_name_len)
+    if n <= 0
+      break
+    len: Sz = n
+    copy: = U8$@::alloc_in(arena, len)
+    mem.copy(Void$@::copy, Void$@::name_buf@, len)
+    out.push(U8[]::{ .ptr = copy, .len = len })
+  return out
+
+// ==========================================
+// Assembling a path, and recursive operations
+// ==========================================
+
+pub fn join( //< a path with a segment appended (Python's `os.path.join`)
+  //<
+  //< It always writes `/`, which Windows also accepts, so it never builds a mixed path; separators
+  //< at the join are not doubled. To split a path, use `sys.get_dir_name` / `sys.get_file_name`.
+  a: U8[], //< the leading part
+  b: U8[], //< the segment to append
+  arena: Arena$@, //< where the joined path is allocated
+): U8[] //< the joined path; if one side is empty, a copy of the other
+  if a.len == 0
+    return arena.dup_str(b)
+  if b.len == 0
+    return arena.dup_str(a)
+  $left: = a
+  for left.len > 1 && sys.is_path_sep(left[left.len - 1])
+    left = left.sub(0, left.len - 1)
+  $right: = b
+  for right.len > 0 && sys.is_path_sep(right[0])
+    right = right.sub_from(1)
+  return arena.text().s(left).c('/').s(right).take()
+
+priv fn is_dos_device(seg: U8[]): Bool //< whether it is a name Windows opens as a device
+  //<
+  //< It is a device even with an extension, and case does not matter.
+  //< **It is a device at any level**: `www/CON` opens the console, and a read or write on an
+  //< unconnected `COM1` never returns, stalling a single-loop server.
+  dot: = seg.find_char('.')
+  base: = seg.sub(0, dot) if dot >= 0 else seg
+  if base.equals_ignore_case("con") || base.equals_ignore_case("prn") ||
+    base.equals_ignore_case("aux") || base.equals_ignore_case("nul")
+    return true
+  if base.len != 4 || !base[3].is_digit()
+    return false
+  return base.sub(0, 3).equals_ignore_case("com") ||
+    base.sub(0, 3).equals_ignore_case("lpt")
+
+priv fn is_safe_segment(seg: U8[]): Bool //<
+  //< Whether one segment of a path is safe as a name under the root
+  //<
+  //< Caution: **Do not let through a path the OS reinterprets.** Windows drops a trailing `.` and
+  //< space (`secret.key.` is `secret.key`), and a `:` starts an NTFS stream name
+  //< (`secret.key::$DATA` gives the contents). A lone `.` is also caught by this rule, as `..` is.
+  if seg.len == 0
+    return true // a repeated separator (`a//b`)
+  if seg.equals("..") || seg[seg.len - 1] == '.' || seg[seg.len - 1] == ' '
+    return false
+  for i in Range.asc(seg.len)
+    // A control character breaks the display of a log or terminal; `:` marks a drive or a stream.
+    if seg[i] == ':' || seg[i] < ' '
+      return false
+  return !is_dos_device(seg)
+
+pub fn absolute( //< the full path from the root: a relative path joined to the working directory
+  //<
+  //< **Only the text is joined**; `..` and links stay, since folding `a/link/..` into `a` names
+  //< a different place when `link` points elsewhere (Rust's `std::path::absolute` keeps them too).
+  //< Caution: **Pass a path for a child through this** before starting it in another directory;
+  //< a relative path is resolved from the child's directory, not the caller's.
+  path: U8[], //< the path; empty and `.` both mean the working directory
+  arena: Arena$@, //< where the path goes
+): U8[]?Fs_error //< the absolute path; fails if the working directory cannot be read
+  if path.len > 0 && sys.is_absolute(path)
+    return arena.dup_str(path)
+  $buf: U8[4096] = ::{}
+  here: = sys.cwd(U8$[]::buf)
+  if here.len == 0
+    throw Fs_error.operation_failed
+  if path.len == 0 || path.equals(".")
+    return arena.dup_str(here)
+  return join(here, path, arena)
+
+pub fn is_safe_relative(path: U8[]): Bool //< whether the path's text alone cannot climb out
+  //<
+  //< Caution: **This alone does not keep a path under the root.** It checks only the text, so
+  //< **it cannot stop a way out through a link inside the root**. It checks segment by segment
+  //< (matching `..` as a substring would also refuse `..foo`).
+  //< **Do not make the answer depend on `sys.is_windows()`**, or a path that is safe on Linux
+  //< becomes a hole on Windows only.
+  if path.len == 0
+    return false
+  if sys.is_path_sep(path[0])
+    return false
+  $start: Sz = 0
+  for start <= path.len
+    end: = segment_end(path, start)
+    if !is_safe_segment(path.sub(start, end - start))
+      return false
+    start = end + 1
+  return true
+
+priv fn segment_end(path: U8[], from: Sz): Sz //< where the segment starting at `from` ends
+  //<
+  //< The next separator at or after `from`, or the path's length; every walk over a path's
+  //< segments steps by this, so all of them split alike.
+  $i: = from
+  for i < path.len && !sys.is_path_sep(path[i])
+    i += 1
+  return i
+
+priv fn has_link_on_path(root: U8[], rel: U8[]): Bool //<
+  //< Whether any segment along `root/rel` is a link
+  //<
+  //< A segment it cannot check counts as a link. **The root itself is not checked**: a root that
+  //< is a link is normal (macOS's `/tmp`).
+  //< Caution: **Check every segment.** Checking only the last lets a link in the middle through.
+  $sb: = Str_builder.new()
+  defer sb.free()
+  sb.s(root)
+  $start: Sz = 0
+  for start <= rel.len
+    end: = segment_end(rel, start)
+    seg: = rel.sub(start, end - start)
+    start = end + 1
+    if seg.len == 0
+      continue
+    sb.c('/').s(seg)
+    if is_link(sb.slice())
+      return true
+  return false
+
+pub fn stays_under( //< whether a relative path really stays inside the root, links included
+  //<
+  //< **Pass untrusted input through this.** It does both the text check (`is_safe_relative`)
+  //< and the check that no segment along the way is a link.
+  //< Caution: **Do not make callers call the two checks separately.** If each caller decides which
+  //< one it needs, the next caller added forgets one.
+  root: U8[], //< the directory the path must not climb out of
+  rel: U8[], //< the given path, which may come from anyone
+): Bool //< true only when neither the text nor a link climbs out
+  return is_safe_relative(rel) && !has_link_on_path(root, rel)
+
+pub fn mkdir_all(path: U8[]): Void?Fs_error //< creates every missing level (`mkdir -p`)
+  //<
+  //< A level that already exists counts as success. On a failure part way, it **stops there and
+  //< throws** `mkdir_failed` with the segment it could not create.
+  if path.len == 0
+    throw Fs_error.invalid_path
+  // The root (`sys.root_len`) is assumed to exist: `mkdir("D:")` always fails on Windows.
+  $from: = sys.root_len(path)
+  for from <= path.len
+    // At each separator, take the prefix up to it; the last prefix is the whole path.
+    end: = segment_end(path, from)
+    from = end + 1
+    prefix: = path.sub(0, end)
+    if is_dir(prefix)
+      continue
+    // Caution: **Losing the race to another process counts as success.** Of two processes making
+    // the same tree at once (parallel suites sharing `ksplc run`'s cache), one gets "already
+    // exists". A file at that path, or no permission, leaves `is_dir` false, and it fails.
+    if !made(prefix) && !is_dir(prefix)
+      throw Fs_error.mkdir_failed(prefix)
+
+priv fn made(path: U8[]): Bool
+  mkdir(path) catch
+    return false
+  return true
+
+pub fn walk_files( //< every file under a path, in one flat list (a narrower Python `os.walk`)
+  //<
+  //< Each element starts with `path` (`walk_files(".")` gives `./std/io.kspls`).
+  //< **Exclude `.git` and `out`** (`skip_build_output`) in a repository, or the time and the result
+  //< grow by an order of magnitude.
+  path: U8[], //< where the walk starts
+  skip_dir: fn(name: U8[]): Bool, //< true for a directory not to enter; it gets only the name
+  arena: Arena$@, //< where the paths are allocated
+): List<|U8[]|>?Fs_error //< the file paths in sorted order; fails if a directory cannot be read
+  return walk_collect(path, skip_dir, arena, false)
+
+pub fn walk_dirs( //< every directory under a path, in one flat list
+  //<
+  //< The order, the prefix and `skip_dir` work as in `walk_files`, and `path` itself is **not
+  //< included** (it is a list of what is inside).
+  path: U8[], //< where the walk starts
+  skip_dir: fn(name: U8[]): Bool, //< true for a directory not to enter; it gets only the name
+  arena: Arena$@, //< where the paths are allocated
+): List<|U8[]|>?Fs_error //< the directory paths in sorted order; fails if one cannot be read
+  return walk_collect(path, skip_dir, arena, true)
+
+pub fn skip_none(_name: U8[]): Bool //< a `skip_dir` that enters every directory
+  return false
+
+pub fn skip_build_output(name: U8[]): Bool //< a `skip_dir` that leaves out `out` and `.git`
+  //<
+  //< A repository's build output and git's own folder: neither holds a file anyone wrote there.
+  return name.equals("out") || name.equals(".git")
+
+priv const max_walk_depth: Sz = 512 //< the maximum number of levels a walk descends
+  //<
+  //< Each level is one native stack frame, so a deep tree (or a link cycle) would exhaust the
+  //< stack; `too_deep` lets the caller report the cause.
+
+priv fn walk_collect(path: U8[], skip_dir: fn(name: U8[]): Bool, arena: Arena$@, want_dirs: Bool):
+  List<|U8[]|>?Fs_error
+  $out: = List<|U8[]|>.new(arena)
+  walk_into(path, skip_dir, arena, out@, want_dirs, 0)?
+  return out.order_by(fn(a: U8[], b: U8[]; ): I32 {
+    return a.compare(b);
+  }, arena)
+
+priv fn walk_into(dir: U8[], skip_dir: fn(name: U8[]): Bool, arena: Arena$@,
+  out: List<|U8[]|>$@, want_dirs: Bool, depth: Sz): Void?Fs_error //<
+    //< Collects the files, or the directories, below dir into out
+    //<
+    //< With want_dirs it collects only directories, otherwise only files; one function keeps the
+    //< pruning rule in one place.
+  if depth >= max_walk_depth
+    throw Fs_error.too_deep
+  entries: = read_dir(dir, arena)?
+  for name in entries
+    if name.equals(".") || name.equals("..")
+      continue
+    full: = join(dir, name, arena)
+    if !is_dir(full)
+      if !want_dirs
+        out.push(full)
+      continue
+    if skip_dir(name)
+      continue
+    if want_dirs
+      out.push(full)
+    walk_into(full, skip_dir, arena, out, want_dirs, depth + 1)?
+
+// ==========================================
+// Making a scratch directory, and writing and copying a tree
+// ==========================================
+// **This module does not remove trees.** Checking whether an entry is a link and then descending
+// is a race; closing it needs removal relative to a directory kept open ("Making a directory
+// refuses an existing name, and removing a tree is not offered" in `std/docs/DESIGN.md`).
+
+priv const max_unique_tries: Sz = 16 //< how many names `mkdir_unique` tries before giving up
+
+pub fn mkdir_unique( //< creates a directory with a name nobody has used, and returns its path
+  //<
+  //< **Creating it decides that it is new, not checking first**: `mkdir` fails on a path that
+  //< exists, a link included. A used name is retried with another random suffix (Python's
+  //< `mkdtemp`). **Nothing removes it.** Its creator removes it, or the directory that holds it.
+  base: U8[], //< where it goes; missing parent levels are created
+  prefix: U8[], //< the start of its name
+  arena: Arena$@, //< where the path goes
+): U8[]?Fs_error //< the new directory's path; fails if it cannot be created
+  mkdir_all(base)?
+  for _try in Range.asc(max_unique_tries)
+    tail: = rand.u64() catch
+      throw Fs_error.operation_failed
+    path: =
+      join(base, arena.text().s(prefix).s("\{tail:016x\}").take(), arena)
+    if made(path)
+      return path
+    // Caution: **Retry only if the name was taken.** If it failed for any other reason (no
+    // permission, a file where `base` should be), every name would fail the same way.
+    if !exists(path)
+      throw Fs_error.operation_failed
+  throw Fs_error.operation_failed
+
+pub fn write_tree( //< writes files under a directory, creating missing levels
+  //<
+  //< `rels[i]` gets the contents `bodies[i]`; an existing file at that name is overwritten.
+  //< Caution: **A name that climbs out fails before anything is written**
+  //< (`is_safe_relative`). A link inside the tree is still followed.
+  dir: U8[], //< the top of the tree
+  rels: U8[][], //< each file's name under `dir`, with `/` between its levels
+  bodies: U8[][], //< each file's contents, in the same order
+  arena: Arena$@, //< where the joined paths go
+): Void?Fs_error
+  if rels.len != bodies.len
+    throw Fs_error.invalid_path
+  for rel in rels
+    if !is_safe_relative(rel)
+      throw Fs_error.invalid_path
+  for i in Range.asc(rels.len)
+    path: = join(dir, rels[i], arena)
+    parent: = sys.get_dir_name(path)
+    if parent.len > 0
+      mkdir_all(parent)?
+    io.write_file(path, bodies[i]) catch
+      throw Fs_error.operation_failed
+
+pub fn copy_tree( //< copies every file under one directory to a path that does not exist yet
+  //<
+  //< The relative layout is kept; only one file at a time is in memory.
+  //< Caution: **It fails if the destination already exists.** A copy mixed with files left by an
+  //< earlier run is not a copy of the tree, and nothing in it would show that.
+  from: U8[], //< the tree to copy
+  to: U8[], //< where the copy goes; its parent is created if missing
+  skip_dir: fn(name: U8[]): Bool, //< true for a directory not to copy; it gets only the name
+  arena: Arena$@, //< where the paths go
+): Void?Fs_error
+  parent: = sys.get_dir_name(to)
+  if parent.len > 0
+    mkdir_all(parent)?
+  mkdir(to)?
+  for path in walk_files(from, skip_dir, arena)?
+    $k: = from.len
+    for k < path.len && sys.is_path_sep(path[k])
+      k += 1
+    dest: = join(to, path.sub_from(k), arena)
+    mkdir_all(sys.get_dir_name(dest))?
+    copy_file(path, dest)?
+
+priv fn copy_file(from_path: U8[], to_path: U8[]): Void?Fs_error //< copies one file's contents
+  body: = io.read_file(from_path) catch
+    throw Fs_error.operation_failed
+  defer dealloc(Void$@::body.ptr)
+  io.write_file(to_path, body) catch
+    throw Fs_error.operation_failed
+
+// ==========================================
+// A lock on a file, shared between processes
+// ==========================================
+
+pub struct File_lock //< a lock on a file; another process that asks for it waits
+  //<
+  //< **The OS releases it when the process ends**, however it ends (flock / LockFileEx), so no lock
+  //< outlives its holder, as a hand-made lock file does after a crash. The file serves only as a
+  //< name: nothing is written to it, and it stays where it was created.
+  priv handle: I64
+
+impl File_lock
+  priv fn open(path: U8[]): I64?Fs_error //< opens the file for locking, creating it if missing
+    check_path(path)?
+    h: = kspl_lock_open(path.ptr, path.len)
+    if h == 0
+      throw Fs_error.operation_failed
+    return h
+
+  priv fn held(h: I64, wait: I32): File_lock?Fs_error //< takes the lock on `h`, or closes `h`
+    got: = kspl_lock_take(h, wait)
+    if got == 0
+      return File_lock::{ .handle = h }
+    kspl_lock_close(h)
+    if got == 1
+      throw Fs_error.held_elsewhere
+    throw Fs_error.operation_failed
+
+  pub fn take(path: U8[]): File_lock?Fs_error //< takes the lock, waiting while another holds it
+    return File_lock.held(File_lock.open(path)?, 1)
+
+  pub fn try_take(path: U8[]): File_lock?Fs_error //< takes the lock if free, without waiting
+    //<
+    //< If someone else holds it, it throws `held_elsewhere`, so a caller can report the wait first.
+    return File_lock.held(File_lock.open(path)?, 0)
+
+  pub fn free(r: Self$@) //< releases the lock and closes the file
+    kspl_lock_close(r.handle)
+
+impl File_lock: Move_only {} //< copying it would release one lock twice
+impl File_lock: Owned {} //< it owns its lock and releases it with `free()`

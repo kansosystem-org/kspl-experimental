@@ -1,0 +1,78 @@
+//< `ksplc explain <code>`: one diagnostic code's section of the tools specification
+//<
+//< The text is `ksplc/docs/SPEC-tools.md` itself, embedded at build time, with no second copy to
+//< drift. The codes come from `ksplc/base/lint_codes.kspls`; `case_explain` in
+//< `tests/suite/cli_test.kspls` checks that each has a section.
+import "std/chars"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+embed "ksplc/docs/SPEC-tools.md" as tools_spec
+
+priv const spec_name: U8[] = "ksplc/docs/SPEC-tools.md" //< the document the text is taken from
+
+struct Explanation //< one code's section, and the chapter it is in
+  text: U8[] //< from the `#### [CODE]` heading to the line before the next heading
+  chapter: U8[] //< the `###` heading above it, without the marks (`5.5 The list of warnings (W)`)
+
+fn canonical_code(raw: U8[], arena: Arena$@): U8[] //< the code as the table spells it
+  //<
+  //< A code is a capital letter and four digits, so normalizing it only upper-cases the letter.
+  b: = arena.text()
+  for c in raw
+    b.c(c - 'a' + 'A' if c >= 'a' && c <= 'z' else c)
+  return b.take()
+
+priv fn heading_level(line: U8[]): Sz //< how many `#` start a heading, 0 if the line is not one
+  //<
+  //< Caution: **A heading needs a space after its marks**: `#cfg(freestanding)` in an example is
+  //< not a heading, and would cut the section short.
+  $n: Sz = 0
+  for n < line.len && n < 6 && line[n] == '#'
+    n += 1
+  return n if n > 0 && n < line.len && line[n] == ' ' else 0
+
+priv fn is_fence(line: U8[]): Bool //< whether the line opens or closes a code block
+  return line.trim_start().starts_with("```")
+
+fn section_of(code: U8[], arena: Arena$@): Explanation //< the code's section; empty text if none
+  //<
+  //< A section runs to the next heading of any level outside a code block, and its trailing blank
+  //< lines and a trailing `---` are dropped.
+  head: = arena.text().s("#### [").s(code).s("]").take()
+  $chapter: U8[] = ""
+  $in_fence: = false
+  $taking: = false
+  $body: = Str_builder.new()
+  defer body.free()
+  $kept: Sz = 0 // the length of `body` up to its last line that is neither blank nor `---`
+  for line in tools_spec.lines(arena)
+    if is_fence(line)
+      in_fence = !in_fence
+    level: = 0 if in_fence else heading_level(line)
+    if taking && level > 0
+      break
+    if level == 3
+      chapter = line.sub_from(4)
+    if !taking && level == 4 &&
+      (line.starts_with(head) && (line.len == head.len || line[head.len] == ' '))
+      taking = true
+    if !taking
+      continue
+    body.s(line).c('\n')
+    t: = line.trim_spaces()
+    if t.len > 0 && !t.equals("---")
+      kept = body.len
+  return Explanation::{ .text = arena.dup_str(body.slice().sub(0, kept)), .chapter = chapter }
+
+fn print_explanation(code: U8[], arena: Arena$@): Bool //< it prints the section; false if none
+  //<
+  //< The Markdown is printed as written, as `rustc --explain` does, followed by its source: its
+  //< links are relative to `ksplc/docs/`, and a bare section number refers to that document.
+  e: = section_of(code, arena)
+  if e.text.len == 0
+    return false
+  io.out().s(e.text).s("\nFrom \"").s(e.chapter).s("\" in ").s(spec_name)
+    .s(" (its links count from ksplc/docs/).\n")
+  return true

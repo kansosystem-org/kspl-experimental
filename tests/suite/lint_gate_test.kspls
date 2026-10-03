@@ -1,0 +1,61 @@
+#!/usr/bin/env -S ksplc run
+//< `make lint`'s gate itself fails on an information diagnostic
+//<
+//< Caution: checking that each diagnostic fires (the compiler's own `make test-lint`) still lets
+//< CI pass when **the code turning a diagnostic into a verdict**, this repository's lint target, is
+//< broken. This suite checks that verdict itself, on a probe holding one information diagnostic.
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" // `arena.text()` and `replace`
+import "std/strfmt" as _strfmt
+import "std/verdict"
+import "tests/support/harness"
+
+priv const information_probe: U8[] =
+  """import "std/io";
+
+fn main(): I32 {
+    x: = 1;
+    if x == 1 {
+    }
+    io.out().s("hi\n");
+    return 0;
+}
+"""
+
+priv fn check_lint_gate(arena: Arena$@)
+  name: = "the lint gate knocks an information diagnostic back"
+  dir: = harness.sandbox("lint_gate") catch
+    verdict.check(name, false, "the workspace cannot be made")
+    return
+  // Caution: Pass the path relative to the root. make reads `LINT_TARGETS`, so a path starts at
+  // the root. The workspace's name changes every run, so the path is cut from the one returned
+  // rather than built.
+  root: = harness.root()
+  rel: = arena.text().s("\{dir.sub_from(root.len + 1)\}/information_probe.kspl").take()
+  io.write_file(fs.join(dir, "information_probe.kspl", arena), information_probe) catch
+    verdict.check(name, false, "the material cannot be written")
+    return
+  r: = harness
+    .make(U8[][]::{ "LOGGING=1", "lint",
+    arena.text().s("LINT_TARGETS=\{rel\}").take() })
+  // **Delete the lint log too.** Its name is built from the target's path (`mk/lint.mk`), so a
+  // throwaway target leaves a log under a new name every run. The next run deletes the workspace,
+  // but not that log.
+  log: = fs.join(harness.root(),
+    arena.text().s("out/log/lint_").s(rel.replace("/", "_", arena)).s(".log").take(), arena)
+  fs.remove_path(log) catch {}
+  if r.code == 0
+    verdict.check(name, false,
+      harness.arena().text()
+      .s("there is one information diagnostic yet the lint gate ended with 0\n\{r.out\}").take())
+    return
+  verdict.check(name, r.out.find_str("LINT FAILED") >= 0,
+    arena.text().s("it did fail but LINT FAILED did not come out\n\{r.out\}").take())
+
+fn main(): I32
+  arena: = harness.begin(64 * 1024 * 1024)
+  check_lint_gate(arena)
+  return harness.finish()

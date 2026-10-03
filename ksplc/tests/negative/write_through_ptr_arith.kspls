@@ -1,0 +1,19 @@
+//< A write through pointer arithmetic on a read-only pointer is rejected
+//<
+//< `p + 1` keeps `p`'s pointer type, but a road check (write_target_type) walking only `.` / `$` /
+//< `[` returns unknown on a binary operation and gives up (fail-open). The gap hides because
+//< **handing it as an argument** (`wants_mut(p + 1)`) is refused while a direct write slips by.
+// EXPECT: cannot write through a read-only pointer
+// EXPECT: cannot write through a read-only pointer
+
+const ro: U8[4] = ::{ 1, 2, 3, 4 }
+
+// p: U8@ is the promise "I do not write to the target".
+priv fn breaks_promise(p: U8@)
+  (p + 1)$ = 9
+
+fn main(): I32
+  q: = ro@ // U8@
+  (q + 1)$ = 9
+  breaks_promise(ro@)
+  return I32::ro[1]

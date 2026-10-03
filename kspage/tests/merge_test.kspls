@@ -1,0 +1,195 @@
+import "kspage/model/doc" { Doc }
+import "kspage/share/compare" + { Kind }
+import "kspage/share/store"
+import "kspage/tests/base"
+import "kspage/write/edit"
+import "kspage/write/merge"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// kspage: checks the code that takes one block from an earlier version (a golden test).
+//
+// **A block only in the other version goes to the right place**, and **all else is refused**.
+// Caution: **Test the refusing side first.** Tried only on blocks that can be taken, taking what
+// must not be taken would pass, and a change on either side would be lost.
+// ==========================================
+
+priv fn joined(d: Doc$@, sb: Str_builder$@): U8[] //<
+  //< The texts of the top-level blocks joined together
+  //<
+  //< What is inside a container is not counted.
+  sb.clear()
+  for $i: Sz = 0; i < d.blocks.len; i += 1
+    b: = d.blocks.get(i)
+    for $k: Sz = 0; k < b.inlines.len; k += 1
+      sb.s(b.inlines.get(k).text())
+  return sb.slice()
+
+fn test_a_node_only_they_have_lands_where_they_put_it() //<
+  //< A block only in the other version goes to the same position in the list as there
+  //<
+  //< **Do not add it at the end**, or a block inserted in the middle would end up at the end.
+  verdict.start("[kspage/merge] their part going into the place of the same row test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  sheet: = base.body_sheet(arena)
+  mine: = base.three(arena, "mark")
+  $sb: = Str_builder.new()
+  defer sb.free()
+  // The other version: a copy with one block added in the middle.
+  theirs: = base.round_trip(mine, sheet, arena).doc
+  fresh: = theirs.add_block("body")
+  fresh.add_text("z")
+  theirs.blocks.len -= 1
+  theirs.blocks.insert(1, fresh)
+  // Caution: **Assign the numbers in the other version too** (otherwise they stay 0: refused).
+  $their_sb: = Str_builder.new()
+  defer their_sb.free()
+  store.save(theirs, sheet, their_sb@)
+
+  ed: = edit.new_editor(mine)
+  assert(merge.take(ed, theirs, fresh), "it was taken")
+  $out: = Str_builder.new()
+  defer out.free()
+  assert(joined(mine, out@).equals("azbc"), "it goes into the same place as theirs")
+  // **One undo must take it back.**
+  assert(ed.undo(), "it goes back in one")
+  assert(joined(mine, out@).equals("abc"), "put back, the row is as it was")
+  verdict.pass("a part in theirs alone goes into the place of the same row, and goes back in one.")
+
+fn test_a_node_on_both_sides_is_refused() //< a block in both versions is not taken
+  //<
+  //< **This is the "limited" in a limited merge**: with no common ancestor, nothing decides which
+  //< is newer, and taking it would silently lose a change on either side.
+  verdict.start("[kspage/merge] not taking a part that is on both sides test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  sheet: = base.body_sheet(arena)
+  mine: = base.three(arena, "mark")
+  $sb: = Str_builder.new()
+  defer sb.free()
+  theirs: = base.round_trip(mine, sheet, arena).doc
+  // The other side typed the middle part over (the number stays the same).
+  theirs.blocks.get(1).inlines.get(0).insert(0, "!")
+
+  ed: = edit.new_editor(mine)
+  assert(!merge.take(ed, theirs, theirs.blocks.get(1)), "a part on both sides is not taken")
+  $out: = Str_builder.new()
+  defer out.free()
+  assert(joined(mine, out@).equals("abc"), "the document does not move")
+  assert(!ed.undo(), "no undo break is stacked either")
+  verdict.pass("a part on both sides is not taken (neither the document nor the record moves).")
+
+fn test_another_origin_is_refused() //<
+  //< Nothing is taken from two documents with different origin marks
+  //<
+  //< Caution: **Do not match by number alone.** Documents made separately assign numbers
+  //< separately, so the same number is a different block.
+  verdict.start("[kspage/merge] not taking from another source test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  sheet: = base.body_sheet(arena)
+  mine: = base.three(arena, "here")
+  $sb: = Str_builder.new()
+  defer sb.free()
+  store.save(mine, sheet, sb@)
+  // Made separately: the same numbers 1, 2 and 3, but different marks.
+  theirs: = base.three(arena, "there")
+  $their_sb: = Str_builder.new()
+  defer their_sb.free()
+  store.save(theirs, sheet, their_sb@)
+  fresh: = theirs.add_block("body")
+  fresh.add_text("z")
+  their_sb.clear()
+  store.save(theirs, sheet, their_sb@)
+
+  ed: = edit.new_editor(mine)
+  assert(!merge.take(ed, theirs, fresh), "where the marks differ nothing is taken")
+  $out: = Str_builder.new()
+  defer out.free()
+  assert(joined(mine, out@).equals("abc"), "the document does not move")
+  verdict.pass("nothing is taken from another source.")
+
+fn test_a_node_without_a_number_is_refused() //< a block with no number is not taken
+  //<
+  //< **Whether it is the same block cannot be decided.**
+  verdict.start("[kspage/merge] not taking a part with no number test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  sheet: = base.body_sheet(arena)
+  mine: = base.three(arena, "mark")
+  $sb: = Str_builder.new()
+  defer sb.free()
+  theirs: = base.round_trip(mine, sheet, arena).doc
+  // A block that was never saved (its number is 0).
+  fresh: = theirs.add_block("body")
+  fresh.add_text("z")
+
+  ed: = edit.new_editor(mine)
+  assert(fresh.id == 0, "before saving it holds no number")
+  assert(!merge.take(ed, theirs, fresh), "a part with no number is not taken")
+  verdict.pass("a part that holds no number is not taken.")
+
+fn test_what_was_taken_leaves_the_difference() //<
+  //< A taken block drops out of the difference at the next comparison
+  //<
+  //< **This is what the number is worth**: matched by it, the block is the same one (by the text,
+  //< it would stay as `added`).
+  verdict.start("[kspage/merge] the part taken going out of the difference test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  sheet: = base.body_sheet(arena)
+  mine: = base.three(arena, "mark")
+  $sb: = Str_builder.new()
+  defer sb.free()
+  theirs: = base.round_trip(mine, sheet, arena).doc
+  fresh: = theirs.add_block("body")
+  fresh.add_text("z")
+  $their_sb: = Str_builder.new()
+  defer their_sb.free()
+  store.save(theirs, sheet, their_sb@)
+
+  was: = compare.compare(theirs, sheet, mine, sheet, arena)
+  assert(compare.count_of(was, Kind.removed) == 1, "before taking it there is one `removed`")
+  ed: = edit.new_editor(mine)
+  assert(merge.take(ed, theirs, fresh), "it was taken")
+  now: = compare.compare(theirs, sheet, mine, sheet, arena)
+  assert(compare.count_of(now, Kind.removed) == 0, "after taking it, it goes out of the difference")
+  assert(now.diffs.len == 0, "no other difference comes out either")
+  // Caution: **Do not take the same block twice** (the number already exists, so it is refused).
+  assert(!merge.take(ed, theirs, fresh), "it is not taken twice")
+  verdict.pass("the part taken goes out of the difference, and cannot be taken twice.")
+
+fn test_a_node_inside_a_holder_goes_into_the_same_holder() //<
+  //< Where the other version's block is inside a container, it goes into the same place inside it
+  //<
+  //< **Where the parent is not in the document, nothing is taken** (it would take the parent too)
+  verdict.start("[kspage/merge] a part inside a holder going into the same holder test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  sheet: = base.body_sheet(arena)
+  mine: = Doc.new(arena, "mark")
+  mine.add_block("body").add_text("a")
+  table: = mine.add_block("table")
+  table.add_child("row").add_child("cell").add_text("cell")
+  $sb: = Str_builder.new()
+  defer sb.free()
+  theirs: = base.round_trip(mine, sheet, arena).doc
+  // The other version added one row to the table.
+  their_table: = theirs.blocks.get(1)
+  row: = their_table.add_child("row")
+  row.add_child("cell").add_text("added")
+  $their_sb: = Str_builder.new()
+  defer their_sb.free()
+  store.save(theirs, sheet, their_sb@)
+
+  ed: = edit.new_editor(mine)
+  assert(merge.take(ed, theirs, row), "the row was taken")
+  assert(mine.blocks.get(1).children.len == 2, "it goes into the table")
+  cell: = mine.blocks.get(1).children.get(1).children.get(0)
+  assert(cell.inlines.get(0).text().equals("added"), "the contents are copied too")
+  assert(ed.undo(), "it goes back in one")
+  assert(mine.blocks.get(1).children.len == 1, "put back, the row goes too")
+  verdict.pass("a part inside a holder goes into the same holder.")

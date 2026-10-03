@@ -1,0 +1,167 @@
+//< A breakdown of the time sema takes
+//<
+//< **It is a tool, not a diagnostic**: nothing passes or fails on it (CI's check watches peak
+//< memory; `tests/tools/perf_guard.kspls`).
+//< **The per-phase total alone is not enough**: it does not name the declaration to fix, so each
+//< body is timed too (see "Profiling where Sema's time goes" in
+//< `ksplc/docs/DESIGN.md`). **Measure only under `--stats`**: bodies are many, and always-on timing
+//< adds every clock read.
+import "ksplc/base/ast" as base_ast
+import "ksplc/base/core" as base_core
+import "std/ds" { List, Map }
+import "std/io"
+import "std/seq"
+import "std/str" { Str_builder }
+import "std/strfmt"
+import "std/sys"
+
+struct Body_prof_entry //< the tally for one declaration
+  //<
+  //< **It is grouped by the position where it is written** (file plus offset). By name,
+  //< **same-named methods of different types** (`new` / `free`) would merge into one line; by
+  //< position, a generic's instantiations **share one line** and `calls` counts them.
+  name: U8[]
+  file: U8[]
+  offset: Sz
+  self_us: I64 //< its own time with the nested time subtracted (see `nested_us` below)
+  calls: I64
+
+struct Sema_prof
+  collect_us: I64
+  infer_us: I64
+  constraints_us: I64
+  layouts_us: I64
+  priv by_pos: Map<|U8[], Body_prof_entry$@|>
+  priv bodies: List<|Body_prof_entry$@|>
+  priv nested_us: I64 //<
+    //< The total time of the bodies nested inside the one being measured
+    //<
+    //< **Subtracting it keeps a body started inside another from counting twice.** No body
+    //< nests in the analysis as it stands: the drain between statements
+    //< (`drain_pending_instances` in `../decl/mono_queue.kspls`) builds method tables and infers
+    //< no body, and the template bodies run one after another after the main walk. Without it, a
+    //< nested body would put the body that called it at the top.
+  body_count: I64
+
+$prof: Sema_prof = ::{}
+
+priv fn timing_on(): Bool //< whether to measure
+  //<
+  //< **On a target without a usable clock, per-body timing is off** (`sys.timing_available`
+  //< false makes every figure 0); the count is still meaningful and is kept separately.
+  return base_core.config.enable_stats && sys.timing_available()
+
+impl Sema_prof
+  fn init(r: Self$@)
+    r.collect_us = 0
+    r.infer_us = 0
+    r.constraints_us = 0
+    r.layouts_us = 0
+    r.nested_us = 0
+    r.body_count = 0
+    // Caution: **Recreate both buffers; do not just reset a length to 0.** They live in
+    // `base_core.arena`, which the LSP rewinds per request (`wind_back` in ksplc/lsp/state.kspls),
+    // so an old buffer points into freed memory, and the first push under `--stats` writes there.
+    r.by_pos = Map<|U8[], Body_prof_entry$@|>.new(base_core.arena)
+    r.bodies = List<|Body_prof_entry$@|>.new(base_core.arena)
+
+  fn body_begin(r: Self$@): I64 //< starts timing one body
+    //<
+    //< Pass what it and nested_save return to `body_end` unchanged. Without `--stats` it returns 0.
+    // The count is kept separate from the clock (see timing_on).
+    if !base_core.config.enable_stats
+      return 0
+    r.body_count += 1
+    if !sys.timing_available()
+      return 0
+    return sys.mono_us()
+
+  fn nested_save(r: Self$@): I64 //< saves the outer nested time
+    //<
+    //< Caution: **Always call it together with `body_begin`** (the body's own time needs it).
+    saved: = r.nested_us
+    r.nested_us = 0
+    return saved
+
+  fn body_end(r: Self$@, name: U8[], loc: base_ast.Loc, started_us: I64, saved_nested: I64)
+    if !timing_on()
+      return
+    elapsed: = sys.mono_us() - started_us
+    self_us: = elapsed - r.nested_us
+    // Seen from outside, all of this body counts as "nested".
+    r.nested_us = saved_nested + elapsed
+    if name.len == 0
+      return
+    key: = base_core.arena.text().s(loc.file()).c(':').s("\{loc.offset\}").take()
+    hit: = r.by_pos.get(key) catch null
+    if hit != null
+      hit.self_us += self_us
+      hit.calls += 1
+      return
+    e: = base_core.arena
+      .create(Body_prof_entry::{ .name = name, .file = loc.file(), .offset = loc.offset,
+      .self_us = self_us, .calls = 1 })
+    r.by_pos.set(key, e)
+    r.bodies.push(e)
+
+  fn print_phases(r: Self$@) //< prints the per-phase breakdown
+    //<
+    //< Caution: **Print it right after the total (`Sema`)**, so the sum can be checked.
+    if !base_core.config.enable_stats
+      return
+    if !sys.timing_available()
+      io.out().s("  - Collect / Infer / Constraints / Layouts: N/A\n")
+      io.out().s("  - Bodies analyzed: \{Sz::r.body_count:,\}\n")
+      return
+    $sb: = Str_builder.new()
+    defer sb.free()
+    sb.s("  - Collect:     \{Sz::(r.collect_us / 1000):6,\} ms\n")
+      .s("  - Infer:       \{Sz::(r.infer_us / 1000):6,\} ms")
+      .s(" (\{Sz::r.body_count:,\} bodies)\n")
+      .s("  - Constraints: \{Sz::(r.constraints_us / 1000):6,\} ms\n")
+      .s("  - Layouts:     \{Sz::(r.layouts_us / 1000):6,\} ms\n")
+    io.out().s(sb.slice())
+
+  fn print_bodies(r: Self$@) //< lists the heaviest declarations first
+    //<
+    //< Caution: **Print `calls` alongside.** A body that is heavy once and a light body
+    //< instantiated dozens of times need different fixes.
+    if !timing_on() || r.bodies.len == 0
+      return
+    ranked: = r.bodies
+      .order_by(fn(a: Body_prof_entry$@, b: Body_prof_entry$@; ): I32 {
+      if a.self_us == b.self_us {
+        return 0;
+      } return -1 if a.self_us > b.self_us else 1;
+    }, base_core.arena)
+    $head: = Str_builder.new()
+    defer head.free()
+    head.s("\n[Sema Body / by self time] \{Sz::r.body_count:,\} bodies analyzed, ")
+      .s("\{r.bodies.len:,\} distinct declarations (Top 20)\n")
+    io.out().s(head.slice())
+    r.print_rows(ranked, "      self us      calls  declaration\n", 20)
+
+    // **Rank them by the number of instantiations too**: what adds up in KSPL is **one template
+    // instantiated dozens of times** (the document is named in this file's header).
+    by_calls: = r.bodies
+      .order_by(fn(a: Body_prof_entry$@, b: Body_prof_entry$@; ): I32 {
+      if a.calls == b.calls {
+        return 0;
+      } return -1 if a.calls > b.calls else 1;
+    }, base_core.arena)
+    io.out().s("\n[Sema Body / by instantiations] (Top 10)\n")
+    r.print_rows(by_calls, "      self us      calls  declaration\n", 10)
+
+  priv fn print_rows(_r: Self$@, ranked: List<|Body_prof_entry$@|>, header: U8[], want: Sz) //<
+    //< Prints header and then at most want of the ranked rows
+    //<
+    //< **The name is that of one instantiation** (grouped by position, a line with `calls` of 2 or
+    //< more shows one of them); the position is what identifies it.
+    io.out().s(header)
+    limit: = want if ranked.len > want else ranked.len
+    for i in Range.asc(limit)
+      e: = ranked.get(i)
+      $sb: = Str_builder.new()
+      defer sb.free()
+      sb.s("      \{Sz::e.self_us:7,\}\{Sz::e.calls:11,\}  \{e.name\}  (\{e.file\}:\{e.offset\})\n")
+      io.out().s(sb.slice())

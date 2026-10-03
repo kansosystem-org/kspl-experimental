@@ -1,0 +1,50 @@
+//< A generic call's arguments are checked against the parameter types after instantiation too
+//<
+//< **At the call they cannot be checked**: `T`/`U` are bound to nothing, so the expected type is
+//< `unknown`. Right after the instantiation is the one chance (check_args_against_instance in
+//< sema/body/call.kspls); skipped, the generated C fails with a raw C error (Principle 2).
+
+// ==========================================
+// A difference in write permission (`T@` into a `T$@`'s position) is not exposed in the
+// generated C, genc attaching no `const` to an immutable local, so only the KSPL side sees it.
+// Caution: Always place the non-firing side alongside — a correct type, a numeric widening, and a
+// function handed over as a value all have to pass.
+// ==========================================
+
+// EXPECT: expected 'I32', but got 'U8[]'
+// EXPECT: expected 'Sz$@', but got 'Sz@'
+// EXPECT-NOT: passing
+import "std/io"
+
+priv fn take<|T|>(_v: T, n: I32): I32
+  return n
+
+priv fn bump<|T|>(_v: T, slot: Sz$@)
+  slot$ += 1
+
+priv fn widen<|T|>(_v: T, n: I64): I64
+  return n
+
+priv fn apply<|T|>(v: T, f: fn(x: T): T): T
+  return f(v)
+
+priv fn twice(x: I32): I32
+  return x * 2
+
+fn main(): I32
+  ro: Sz = 0
+  $rw: Sz = 0
+  // The stopping side ①: a different type is handed to a concrete parameter.
+  bad_type: = take<|I32|>(1, "wrong")
+  // The stopping side ②: a read-only pointer is handed to a parameter that writes.
+  bump<|I32|>(1, ro@)
+  // The passing side ①: the correct type.
+  ok_type: = take<|I32|>(1, 2)
+  // The passing side ②: a conversion that may pass (an I32 -> I64 widening).
+  ok_widen: = widen<|I32|>(1, 3)
+  // The passing side ③: a writable place.
+  bump<|I32|>(1, rw@)
+  // The passing side ④: a named function handed to a function-pointer argument.
+  ok_fn: = apply<|I32|>(5, twice)
+  io.out().s("\{bad_type\}\{ok_type\}\{I32::ok_widen\}\{rw\}\{ok_fn\}\n")
+  return 0

@@ -1,0 +1,430 @@
+#!/usr/bin/env -S ksplc run
+//< The test of what is demanded of "a thin user that uses just one of std's APIs"
+//<
+//< It checks that **the compilation passes** and **how much one std file brings along**. The
+//< repository's own programs use std widely, so they always reach an instantiation another way too.
+//< Caution: Add a shape where a std function returns a concrete generic type (`ds.List<|U8[]|>` and
+//< the like) and add one entry here. It checks only compiling with zero errors (it is not run).
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/harness_build"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+priv const case_split: U8[] =
+  """import "std/str";
+import "std/io";
+
+fn main(): I32 {
+  $lines: = "a,b,c".split(',', null);
+  defer lines.free();
+  $n: Sz = 0;
+  for line in lines {
+    n += line.len;
+  }
+  io.out().s("\{I64::n\}\n");
+  return 0;
+}
+"""
+
+priv const case_read_dir: U8[] =
+  """import "std/fs";
+import "std/mem";
+import "std/io";
+
+fn main(): I32 {
+  a: = mem.Arena.new(4096);
+  defer a.free();
+  entries: = fs.read_dir(".", a) catch {
+    return 1;
+  };
+  for name in entries {
+    io.out().s(name).s("\n");
+  }
+  return 0;
+}
+"""
+
+priv const case_json_arr: U8[] =
+  """import "std/json";
+import "std/mem";
+import "std/io";
+
+fn main(): I32 {
+  a: = mem.Arena.new(4096);
+  defer a.free();
+  v: = json.parse("[1, 2]", a) catch {
+    return 1;
+  };
+  $sum: I64 = 0;
+  for item in v.arr_list(a) {
+    sum += item.as_int(0);
+  }
+  io.out().s("\{sum\}\n");
+  return 0;
+}
+"""
+
+priv const case_jsonrpc_frame: U8[] =
+  """import "std/jsonrpc";
+import "std/mem" { Arena };
+import "std/str" { Str_builder };
+import "std/io";
+
+fn main(): I32 {
+  a: = Arena.new(4096);
+  defer a.free();
+  $acc: = Str_builder.new();
+  defer acc.free();
+  jsonrpc.frame_into(acc@, "{}");
+  got: = jsonrpc.take_frame(acc@, a) catch {
+    return 1;
+  };
+  switch got case .some(body) {
+    io.out().s(body).s("\n");
+  } case .none {
+    return 1;
+  }
+  return 0;
+}
+"""
+
+priv const case_map_entries: U8[] =
+  """import "std/ds";
+import "std/mem";
+import "std/io";
+
+fn main(): I32 {
+  a: = mem.Arena.new(4096);
+  defer a.free();
+  $m: = ds.Map<|I32, I32|>.new(a);
+  m.set(1, 10);
+  $sum: I32 = 0;
+  for e in m.items() {
+    sum += e.value;
+  }
+  io.out().s("\{I64::sum\}\n");
+  return 0;
+}
+"""
+
+// The predicate is a closure: `where` takes a `Callable1`, not a function pointer, and a `;` is
+// needed even with no capture ("Why capture is made explicit and escape is forbidden" in
+// `docs/DESIGN.md`).
+// Caution: **Do not call `find_all`.** It instantiates `List<|Match|>`, hiding the tested shape:
+// "only the `T?E` of an uncalled `pub fn`'s return value remains".
+priv const case_regex_thin: U8[] =
+  """
+import "std/io";
+import "std/regex" { Regex };
+
+fn main(): I32 {
+  $rx: = Regex.compile("[a-z]+") catch {
+    return 1;
+  };
+  io.out().s("ok\n" if rx.is_match("abc") else "no\n");
+  rx.free();
+  return 0;
+}
+"""
+
+priv const case_seq_where: U8[] =
+  """import "std/ds";
+import "std/seq" as _seq;
+import "std/mem";
+import "std/io";
+
+fn main(): I32 {
+  a: = mem.Arena.new(4096);
+  defer a.free();
+  $l: = ds.List<|I32|>.new(a);
+  l.push(1);
+  l.push(2);
+  io.out().s("\{I64::l.where(fn(x: I32; ): Bool { return x % 2 == 0; }).count()\}\n");
+  return 0;
+}
+"""
+
+priv const small_c_max_lines: Sz = 9000 //< the cap on the generated C's line count
+  //<
+  //< **The compilation succeeds even when it fails to drop them**; the generated C only grows
+  //< several times over. The cap is about 1.5 times the current value, failing when the order of
+  //< magnitude changes; the current value is shown on passing.
+
+priv const base_files: U8[][2] = ::{ "std/lang", "std/libc" } //<
+  //< The base: the files that go into every program
+  //<
+  //< Each `List<|X|>` instantiated brings, through `where` / `select`'s signatures, the **type
+  //< declarations** of `List_seq<|X|>` / `Keep<|...|>` / `Option<|X|>` / `Callable1<|X, Bool|>`.
+  //< **A type that appears only in a signature is dropped after that function is**: dead-code
+  //< removal runs for functions, then types (`../../lower/prune.kspls`).
+priv const base_max_lines: Sz = 720 //<
+  //< The cap on the base's line count
+  //<
+  //< One line is `#cfg(!freestanding)`'s directive, not code in the generated C (a freestanding
+  //< build imports one **fewer**)
+  //< **Nothing counted by this cap can be placed anywhere but `std/lang`.**
+  //< Caution: **Raise it for this reason only in a change that translates a file into English, or
+  //< that brings it back inside the width after that.**
+
+priv const ext: U8[] = ".kspls" //<
+  //< **Hold the extension in one place**
+
+// The files that bring nothing but themselves besides BASE. An import under `#cfg` counts:
+// `std/chars` is not here, as a freestanding build brings `std/mem` along for `memcmp`.
+priv const leaf_files: U8[][12] = ::{ "std/bytes", "std/math", "std/checked_int", "std/mem",
+  "std/time", "std/buf", "std/reflect", "std/ring", "std/prng", "std/bignat", "std/log",
+  "std/stack_limit" }
+
+priv const heaviest: U8[] = "std/str" //< the heaviest unit
+  //<
+  //< **`std/io` is not in here.** Writer / Formattable are in std/lang, so string handling pays for
+  //< no file I/O (io still brings str along).
+
+priv const core_max_lines: Sz = 4059 //<
+  //< The cap on the line count of the chunk the heaviest unit reaches
+  //<
+  //< **An added line costs every program that uses strings**, such as a format's field padding
+  //< that even programs not using it pay for.
+  //< Caution: **Update it to the current value whenever it changes, up or down.** Left loose, it
+  //< can silently grow by the slack, with no run that fails.
+
+priv struct Std_file
+  name: U8[]
+  lines: Sz
+
+priv struct Edge //< an import's edge
+  //<
+  //< "The source's index" and "the target's name", avoiding nested generics.
+  from: Sz
+  to: U8[]
+
+priv fn index_of(files: List<|Std_file|>@, name: U8[]): I32
+  for i in Range.asc(files.len)
+    if files.get(i).name.equals(name)
+      return I32::i
+  return -1
+
+priv fn has_name(names: List<|U8[]|>@, name: U8[]): Bool
+  for i in Range.asc(names.len)
+    if names.get(i).equals(name)
+      return true
+  return false
+
+priv fn imported_std_name(line: U8[]): U8[] //<
+  //< It returns the imported logical name from an `import "std/..."` line (empty if it is not one)
+  head: = "import \""
+  t: = line.trim_start()
+  if !t.starts_with(head)
+    return ""
+  rest: = t.sub_from(head.len)
+  if !rest.starts_with("std/")
+    return ""
+  close: = rest.find_char('"')
+  return "" if close < 0 else rest.sub(0, close)
+
+priv fn collect_std(files: List<|Std_file|>$@, edges: List<|Edge|>$@, arena: Arena$@): Bool //<
+  //< It gathers the `.kspls` files of the `std` the compiler reads, each named as it is imported
+  std: = harness.std_dir()
+  found: = fs.walk_files(std, fs.skip_build_output, arena) catch
+    return false
+  for path in found
+    if !path.ends_with(ext) || path.len <= std.len
+      continue
+    rel: = arena.text().s("std/").s(path.sub_from(std.len + 1)).take()
+    text: = io.read_file(path) catch
+      continue
+    // Caution: **Do not trim by length.** A changed extension leaves a name with a trailing `.`.
+    files
+      .push(Std_file::{ .name = rel.strip_suffix(ext), .lines = text.count_str("\n") })
+    idx: = files.len - 1
+    for line in text.lines(arena)
+      to: = imported_std_name(line)
+      if to.len > 0
+        edges.push(Edge::{ .from = idx, .to = to })
+  return files.len > 0
+
+priv fn closure(files: List<|Std_file|>@, edges: List<|Edge|>@, name: U8[], arena: Arena$@):
+  List<|U8[]|> //<
+    //< The names of the std files reached by walking imports from name (including name and BASE).
+  $seen: = List<|U8[]|>.new(arena)
+  $stack: = List<|U8[]|>.new(arena)
+  stack.push(name)
+  for b in base_files
+    stack.push(b)
+  for stack.len > 0
+    cur: = stack.get(stack.len - 1)
+    stack.len -= 1
+    if has_name(seen@, cur)
+      continue
+    at: = index_of(files, cur)
+    if at < 0
+      continue
+    seen.push(cur)
+    for e in edges
+      if e.from == Sz::at
+        stack.push(e.to)
+  return seen
+
+priv fn sum_lines(files: List<|Std_file|>@, names: List<|U8[]|>@): Sz
+  $total: Sz = 0
+  for i in Range.asc(names.len)
+    at: = index_of(files, names.get(i))
+    if at >= 0
+      total += files.get(at).lines
+  return total
+
+priv fn thin_case(slot: U8[], name: U8[], src: U8[], arena: Arena$@) //<
+  //< Checks that a thin user compiles as one file
+  //<
+  //< cwd is the working directory and std is given by `--std-dir=` (as `harness.ksplc` does); from
+  //< the repository root the default "std" would match.
+  dir: = harness.sandbox(arena.text().s("thin_\{slot\}").take()) catch
+    verdict.check(name, false, "cannot make a working directory")
+    return
+  io.write_file(fs.join(dir, "thin.kspl", arena), src) catch
+    verdict.check(name, false, "cannot write the material")
+    return
+  r: = harness.run_in(harness.ksplc_argv(U8[][]::{ "thin.kspl", "thin.c" }), dir)
+  if !verdict.check(name, r.code == 0 && r.out.find_str("error:") < 0, r.out)
+    return
+  // Caution: **Build the generated C too.** A thin user fails as "zero diagnostics yet the C does
+  // not build" (an uncalled `pub fn`'s `T?E` with its inner type undeclared), reaching the user as
+  // **a raw C compiler error** that no other test sees.
+  b: = harness_build.build_exe(U8[][]::{ fs.join(dir, "thin.c", arena) },
+    fs.join(dir, "thin.exe", arena), U8[][]::harness_build.default_cflags)
+  verdict.check(arena.text().s(name).s(": the C put out builds").take(), b.code == 0, b.out)
+
+priv fn solo_case(name: U8[], arena: Arena$@) //<
+  //< Whether a program that imports **just** one file of std builds
+  //<
+  //< **The stage table does not check this**: it measures the closure of the written `import`s,
+  //< but an extension method on a built-in type (`s.sub()` / `c.is_digit()`) makes **a dependency
+  //< in no import**. It checks only "is it complete with that one file" (an empty `main`).
+  dir: = harness.sandbox("solo") catch
+    verdict.check(name, false, "cannot make a working directory")
+    return
+  src: = arena.text().s("import \"").s(name).s("\";\n\nfn main(): I32 {\n  return 0;\n}\n").take()
+  io.write_file(fs.join(dir, "solo.kspl", arena), src) catch
+    verdict.check(name, false, "cannot write the material")
+    return
+  r: = harness.run_in(harness.ksplc_argv(U8[][]::{ "solo.kspl", "solo.c" }), dir)
+  verdict.check(arena.text().s("\{name\} is closed with one file").take(),
+    r.out.find_str("has no field or method") < 0, r.out)
+
+priv fn check_no_unused_stage_types(gen: U8[], arena: Arena$@) //<
+  //< Checks that a program with no chain has no stage type of `std/seq` left in it
+  //<
+  //< **It is needed besides the line-count cap.** A test may match text; the compiler need not.
+  //< `Seq_error` (a bare enum, `std/fs` using `order_by`) **rightly remains**.
+  name: = "a program writing no chain has no stage type left"
+  stage_names: U8[][3] = ::{ "std_seq_List_seq", "std_seq_Keep", "std_seq_Conv" }
+  for stage in stage_names
+    if gen.find_str(stage) >= 0
+      verdict.check(name, false,
+        arena.text().s("'\{stage\}' is left in the generated C. ")
+        .s("a generic's body nobody names cannot be dropped (ksplc/lower/prune.kspls)").take())
+      return
+  verdict.check(name, true, "")
+
+fn main(): I32
+  arena: = harness.begin(256 * 1024 * 1024)
+  io.out().s("# single use\n")
+  thin_case("split", "str.split", case_split, arena)
+  thin_case("read_dir", "fs.read_dir", case_read_dir, arena)
+  thin_case("json", "json.Val.arr_list", case_json_arr, arena)
+  thin_case("jsonrpc", "jsonrpc.take_frame", case_jsonrpc_frame, arena)
+  thin_case("map", "ds.Map.entries", case_map_entries, arena)
+  thin_case("seq", "seq combinator on ds.List", case_seq_where, arena)
+  thin_case("regex", "regex.is_match (find_all is not called)", case_regex_thin, arena)
+
+  // -- no function unreachable from a root is left in the generated C -- A generic makes every
+  // method on each instantiation, `std/seq`'s additions to `List<|T|>` included;
+  // `ksplc/lower/prune.kspls` drops what no root reaches.
+  small_name: = arena.text()
+    .s("a small program's generated C is within \{small_c_max_lines\} lines").take()
+  dir: = harness.sandbox("thin_small") catch
+    return harness.fatal("cannot make a working directory")
+  io.write_file(fs.join(dir, "small.kspl", arena), case_read_dir) catch
+    return harness.fatal("cannot write the material")
+  r: = harness.run_in(harness.ksplc_argv(U8[][]::{ "small.kspl", "small.c" }), dir)
+  if r.code != 0
+    verdict.check(small_name, false, r.out)
+  else
+    gen: = io.read_file(fs.join(dir, "small.c", arena)) catch ""
+    n: = gen.count_str("\n")
+    verdict.check(small_name, n <= small_c_max_lines,
+      arena.text().s("the generated C went to \{n\} lines, over the cap \{small_c_max_lines\}. ")
+      .s("removal of functions unreachable from a root may not be taking effect").take())
+    check_no_unused_stage_types(gen, arena)
+
+  // -- how much comes along when one std is imported --
+  $files: = List<|Std_file|>.new(arena)
+  $edges: = List<|Edge|>.new(arena)
+  if !collect_std(files@, edges@, arena)
+    return harness.fatal("std's files cannot be gathered")
+  $base_names: = List<|U8[]|>.new(arena)
+  for b in base_files
+    base_names.push(b)
+  base_lines: = sum_lines(files@, base_names@)
+  verdict.check(arena.text().s("the \{base_files.len\} files that go into every program are ")
+    .s("\{base_max_lines\} lines or under (now \{base_lines\} lines)").take(),
+    base_lines <= base_max_lines,
+    "std/lang has swelled. It is every program's minimum, so what is added here nobody can avoid")
+
+  // The leaves: files that bring nothing but themselves besides BASE.
+  $leaves: = List<|U8[]|>.new(arena)
+  for i in Range.asc(files.len)
+    name: = files.get(i).name
+    if has_name(base_names@, name)
+      continue
+    reach: = closure(files@, edges@, name, arena)
+    if reach.len == base_names.len + 1
+      leaves.push(name)
+  $extra: = ""
+  for i in Range.asc(leaves.len)
+    $known: = false
+    for k in leaf_files
+      if leaves.get(i).equals(k)
+        known = true
+    if !known && extra.len == 0
+      extra = leaves.get(i)
+  verdict.check(arena.text().s("\{leaf_files.len\} bring along nothing but themselves besides BASE")
+    .take(), leaves.len == leaf_files.len && extra.len == 0,
+    arena.text().s("the row of leaves changed: \{extra\}").take())
+
+  // **No file of std may be in a cycle**, or the stages collapse into one chunk. A cycle is a path
+  // back to itself over one edge or more. BASE's two are not counted: `std/lang` goes into every
+  // file, so `libc` always gets back through lang.
+  $looped: = ""
+  for i in Range.asc(files.len)
+    name: = files.get(i).name
+    if has_name(base_names@, name)
+      continue
+    for e in edges
+      if e.from != i || looped.len > 0
+        continue
+      if has_name(base_names@, e.to)
+        continue
+      back: = closure(files@, edges@, e.to, arena)
+      if has_name(back@, name)
+        looped = arena.text().s(name).s(" <-> ").s(e.to).take()
+  verdict.check("std has no import cycle", looped.len == 0,
+    arena.text().s("there is a cycle: \{looped\} (the stages collapse into a chunk. ")
+    .s("Cut the edge with the smallest reason)").take())
+
+  for i in Range.asc(files.len)
+    solo_case(files.get(i).name, arena)
+
+  core_reach: = closure(files@, edges@, heaviest, arena)
+  core_lines: = sum_lines(files@, core_reach@)
+  verdict.check(arena.text()
+    .s("the chunk's amount is \{core_max_lines\} lines or under (now \{core_lines\} lines)").take(),
+    core_lines <= core_max_lines,
+    "the chunk has swelled. What is added to a chunk file, every program that uses it pays for")
+  return harness.finish()

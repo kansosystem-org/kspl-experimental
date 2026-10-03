@@ -1,0 +1,57 @@
+import "std/verdict"
+
+// ==========================================
+// Tests the accepted shapes sitting **right next to** the shapes `tests/negative/` rejects.
+// **The negative tests alone are not enough**: they cannot show rejecting too much, so these must
+// **run correctly**.
+// Caution: For a new boundary, pair the rejected shape (`tests/negative/`) with the accepted one
+// (here). A function value taken as an argument may be wrapped in a struct and returned.
+// **This is the shape of a lazy chain**: the middle holds a predicate and allocates nothing.
+// ==========================================
+priv struct Bind_where
+  src: I32[]
+  pred: Callable1<|I32, Bool|>
+priv struct Bind_map
+  inner: Bind_where
+  f: Callable1<|I32, I32|>
+
+impl Bind_where
+  priv fn map_with(r: Self, f: Callable1<|I32, I32|>): Bind_map
+    return Bind_map::{ .inner = r, .f = f }
+
+impl Bind_map
+  priv fn total(r: Self@): I32 //< the terminal
+    $s: I32 = 0
+    for i in Range.asc(r.inner.src.len)
+      v: = r.inner.src[i]
+      if r.inner.pred.call(v)
+        s += r.f.call(v)
+    return s
+
+priv fn keep_where(src: I32[], p: Callable1<|I32, Bool|>): Bind_where
+  return Bind_where::{ .src = src, .pred = p }
+
+fn test_closure_wrapped_in_struct()
+  verdict.start("[Lang] a function value taken as an argument can be wrapped and returned test...")
+  xs: I32[8] = ::{ 1, 5, 2, 9, 3, 7, 4, 8 }
+  sl: = I32[]::xs
+  bound: = 4
+  factor: = 10
+  chained: = keep_where(sl, fn(x: I32; bound: I32): Bool {
+    return x > bound;
+  }).map_with(fn(x: I32; factor: I32): I32 {
+    return x * factor;
+  })
+  // Caution: **Call another function after building the chain.** If the environment were on the
+  // callee's frame, this call would overwrite it and the answer would change.
+  spacer: = keep_where(sl, fn(x: I32; bound: I32): Bool {
+    return x < bound;
+  }).map_with(fn(x: I32; factor: I32): I32 {
+    return x + factor;
+  })
+  assert(spacer.total() == 36,
+    "the disturber's side: under 4 is 1,2,3, and 10 added to each makes 36")
+  assert(chained.total() == 290, "(5+9+7+8)*10 = 290. The environment lives on the caller's frame")
+  verdict
+    .pass("a function value taken as an argument keeps its environment alive even wrapped in a \
+      struct and returned (the lazy-chain shape).")

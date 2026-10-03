@@ -1,0 +1,286 @@
+#!/usr/bin/env -S ksplc run
+//< The test that pins down that the normalised AST's disk cache is "faster and nothing more"
+//<
+//< ksplc caches the normalised AST per file and skips KSPEG's parse next time
+//< (`ksplc/parse/ast_cache.kspls`). **An artefact that differs with and without the cache would be
+//< a lie**, so it always compares "cold vs warm, byte for byte", and the hit and miss counts
+//< (`--stats`'s `[AST Cache]` line): without them a cache that quietly stopped working goes
+//< unnoticed (the result is right, only slower).
+//< **This test uses a cache directory of its own** (`KSPLC_CACHE_DIR`).
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/lsp_client"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/json" + { Json_builder }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/strnum"
+import "std/sys"
+import "std/verdict"
+
+priv const fixture: U8[] = "tests/prog/ast_cache.kspls"
+priv const stats_head: U8[] = "[AST Cache] "
+
+priv const lsp_ms: I32 = 60000 //<
+  //< The wide wait: with nothing cached the language server reads the whole of std
+
+priv struct Counts //< `--stats`'s hits and misses
+  //<
+  //< If it cannot be read, ok is false.
+  ok: Bool
+  hits: Sz
+  misses: Sz
+  stores: Sz
+
+priv struct Built //< the result of one generation
+  ok: Bool
+  gen: U8[]
+  counts: Counts
+  out: U8[]
+
+priv fn parse_counts(out: U8[], arena: Arena$@): Counts //<
+  //< It reads `[AST Cache] 3 hit / 4 miss / 4 stored`
+  bad: = Counts::{ .ok = false, .hits = 0, .misses = 0, .stores = 0 }
+  $line: U8[] = ""
+  for one in out.lines(arena)
+    shown: = one.trim_start() // `--stats` indents its lines
+    if shown.starts_with(stats_head)
+      line = shown.sub_from(stats_head.len)
+      break
+  $nums: = List<|I64|>.new(arena)
+  for word in line.split(' ', arena)
+    n: = word.to_i64() catch
+      continue
+    nums.push(n)
+  if nums.len < 3
+    return bad
+  return Counts::{ .ok = true, .hits = Sz::nums.get(0), .misses = Sz::nums.get(1),
+    .stores = Sz::nums.get(2) }
+
+priv fn build(dir: U8[], cache: U8[], stem: U8[], src: U8[], extra: U8[][], arena: Arena$@): Built //<
+  //< It builds src and returns the generated C's content and the hits and misses
+  gen: = fs.join(dir, arena.text().s("\{stem\}.c").take(), arena)
+  $args: = List<|U8[]|>.new(arena)
+  args.push("--stats")
+  for e in extra
+    args.push(e)
+  args.push(src)
+  args.push(gen)
+  sys.set_env("KSPLC_CACHE_DIR", cache)
+  r: = harness.ksplc(args.slice())
+  if r.code != 0
+    return Built::{ .ok = false, .gen = "",
+      .counts = Counts::{ .ok = false, .hits = 0, .misses = 0, .stores = 0 }, .out = r.out }
+  text: = io.read_file(gen) catch ""
+  return Built::{ .ok = true, .gen = text, .counts = parse_counts(r.out, arena), .out = r.out }
+
+priv const key_at: Sz = 9 //<
+  //< Where the key's hexadecimal starts in an entry, behind the magic and the format's version
+  //<
+  //< Those two are `magic` and `format_version` in `../../parse/ast_cache.kspls`.
+  //< **Written here so the second half fails the key check**, not both the version check.
+
+priv fn break_entries(cache: U8[], arena: Arena$@): Sz //<
+  //< It breaks every entry, writing each back to its own place
+  //<
+  //< Caution: **Break all of them.** Break only some and, when those belong to another key
+  //< (another `--define`, another generation), everything hits and the check tests nothing.
+  files: = fs.walk_files(cache, fs.skip_none, arena) catch
+    return 0
+  $broken: Sz = 0
+  for f in files
+    path: = f
+    if !path.ends_with(".ksast")
+      continue
+    data: = io.read_file(path) catch
+      continue
+    text: = data
+    if broken % 2 == 0
+      // It fails the length check.
+      io.write_file(path, text.sub(0, 20 if text.len > 20 else text.len)) catch
+        continue
+    else
+      // It fails the key check.
+      b: = arena.text()
+      b.s(text.sub(0, key_at if text.len > key_at else text.len))
+      for _i in Range.asc(16)
+        b.c('0')
+      if text.len > key_at + 16
+        b.s(text.sub_from(key_at + 16))
+      io.write_file(path, b.take()) catch
+        continue
+    broken += 1
+  return broken
+
+priv fn cfg_probe_line(src: U8[]): Sz //<
+  //< The line the dropped `cfg_probe` is on, counted from the `#cfg()` above it
+  //<
+  //< **The number is not written here**; written twice, it drifts with nothing saying so.
+  at: = src.find_str("#cfg(ac_cache_probe)")
+  if at < 0
+    return 0
+  $n: Sz = 0
+  for $i: Sz = 0; i < at; i += 1
+    if src[i] == '\n'
+      n += 1
+  return n + 1
+
+priv fn cfg_reason(cache: U8[], arena: Arena$@): U8[] //<
+  //< What the editor answers at the range a `#cfg()` dropped, with `cache` as the cache directory
+  //<
+  //< The reason is the normalization's other result, read by the editor (`send_cfg_inactive_hover`
+  //< in `../../lsp/hover.kspls`). **A hit that returns only the declarations is exactly the lie
+  //< this file rejects.**
+  _set: = sys.set_env("KSPLC_CACHE_DIR", cache)
+  src: = io.read_file(fixture) catch
+    return ""
+  // The workspace is the package's top, where the suite runs (an empty path inherits it).
+  $c: =
+    lsp_client.start(harness.ksplc_exe(), U8[][]::{ .ptr = null, .len = 0 }, "", arena) catch
+    return ""
+  defer c.free()
+  $b: = Json_builder.new(arena)
+  _init: = c.request("initialize", b.obj().build(), lsp_ms, arena) catch
+    fallback json.Val.null_val
+  // **The buffer is the file's own bytes.** The key covers the source's whole content, so one
+  // byte off makes it a miss and the check tests the parse twice.
+  _open: = c.notify("textDocument/didOpen", lsp_client.did_open(fixture, src, arena), arena)
+  got: =
+    c.request("textDocument/hover",
+    lsp_client.at_pos(fixture, cfg_probe_line(src), 9, arena), lsp_ms, arena) catch
+    fallback json.Val.null_val
+  return lsp_client.hover_text(got)
+
+priv fn other_spelling(exe: U8[]): U8[] //< it points at the same executable by a different path
+  //<
+  //< `argv[0]`'s path, size and time decide the generation's key, so another path makes **a new
+  //< generation in the same directory** with no copy of the executable.
+  return harness.arena().text().s("\{sys.get_dir_name(exe)\}/./\{sys.get_file_name(exe)\}").take()
+
+fn main(): I32
+  arena: = harness.begin(256 * 1024 * 1024)
+  dir: = harness.sandbox("ast_cache") catch
+    return harness.fatal("cannot make a working directory")
+  work: = dir
+  // Caution: **Start from an empty cache.** With the last run's left behind, "it builds cold"
+  // measures the warm case; the working directory is new every run, so a cache under it is empty.
+  cache: = fs.join(work, "cache", arena)
+  io.out().s("# the AST cache\n")
+
+  cold: = build(work, cache, "ac_cold", fixture, U8[][]::{}, arena)
+  verdict.check("it builds cold (with no cache)", cold.ok, cold.out)
+  if !cold.ok
+    return harness.finish()
+  verdict.check("the hit and miss line comes out in --stats", cold.counts.ok, cold.out)
+  if !cold.counts.ok
+    return harness.finish()
+  verdict.check("cold, not one hits, and as many are written out as were read",
+    cold.counts.hits == 0 && cold.counts.stores > 0,
+    arena.text().s("hit=\{cold.counts.hits\} miss=\{cold.counts.misses\} ")
+    .s("stored=\{cold.counts.stores\}").take())
+
+  warm: = build(work, cache, "ac_warm", fixture, U8[][]::{}, arena)
+  verdict.check("it builds warm (with a cache)", warm.ok, warm.out)
+  if !warm.ok
+    return harness.finish()
+  verdict.check("the generated C matches byte for byte cold and warm",
+    cold.gen.equals(warm.gen),
+    arena.text().s("cold \{cold.gen.len\} bytes / warm \{warm.gen.len\} bytes").take())
+  verdict.check("warm, as many hit as cold wrote out",
+    warm.counts.hits == cold.counts.stores,
+    arena.text().s("warm hit=\{warm.counts.hits\} / cold wrote out=\{cold.counts.stores\}").take())
+
+  // --- the reason a `#cfg()` gives comes through the cache as well ---
+  // The editor's reading of an entry, too, must be indistinguishable from a parse.
+  cold_reason: = cfg_reason(fs.join(work, "cfg_cold", arena), arena)
+  verdict.check("with nothing cached, what a `#cfg()` dropped carries the reason",
+    cold_reason.find_str("not analyzed") >= 0, cold_reason)
+  warm_reason: = cfg_reason(cache, arena)
+  verdict.check("the same reason comes out where the tree came from the cache",
+    warm_reason.equals(cold_reason),
+    arena.text().s("cold '").s(cold_reason).s("' / warm '").s(warm_reason).s("'").take())
+
+  // --- changing only the content makes it rebuild ---
+  // Without this, the checks above pass on a cache that always hits (returns the old result).
+  // Caution: **Rewrite the file at the same path.** A copy under another name changes the file name
+  // in the key instead, so it passes even with the key blind to the content.
+  marker: = "io.out().s(\"ac="
+  src: = io.read_file(fixture) catch
+    return harness.fatal("the fixture cannot be read")
+  verdict.check("the fixture has exactly one mark to rewrite", src.count_str(marker) == 1,
+    arena.text().s("\{src.count_str(marker)\} places").take())
+  // **The copy keeps the fixture's own extension**, which decides the notation.
+  same: = fs.join(work, "ac_same.kspls", arena)
+  io.write_file(same, src) catch
+    return harness.fatal("the material cannot be copied")
+  before: = build(work, cache, "ac_same_before", same, U8[][]::{}, arena)
+  verdict.check("the version before rewriting builds", before.ok, before.out)
+  io.write_file(same, src.replace(marker, "io.out().s(\"AC=", arena)) catch
+    return harness.fatal("the material cannot be rewritten")
+  after: = build(work, cache, "ac_same_after", same, U8[][]::{}, arena)
+  verdict.check("the rewritten version builds", after.ok, after.out)
+  if before.ok && after.ok
+    verdict.check("change the content at the same path and the generated C changes too (no old AST)",
+      after.gen.find_str("AC=") >= 0 && !before.gen.equals(after.gen), "")
+
+  // --- each `--define` flag gives a different result ---
+  // `#cfg()` works inside normalisation, so **the same source gives a different AST per flag set**;
+  // without the flags in the key, a freestanding build picks up the hosted entry and fails to link.
+  plain: = build(work, cache, "ac_nodef", fixture, U8[][]::{}, arena)
+  with_def: =
+    build(work, cache, "ac_withdef", fixture, U8[][]::{ "--define=ac_cache_probe" }, arena)
+  verdict.check("it builds with --define too", with_def.ok, with_def.out)
+  if plain.ok && with_def.ok
+    verdict.check("with and without --define the generated C changes (the flags are in the key)",
+      !plain.gen.equals(with_def.gen),
+      arena.text().s("identical \{plain.gen.len\} bytes").take())
+
+  // --- a broken entry is silently discarded and the parse runs instead ---
+  broken_count: = break_entries(cache, arena)
+  verdict.check("the entries are placed as .ksast", broken_count > 0,
+    arena.text().s("\{broken_count\}").take())
+  if broken_count > 0
+    broken: = build(work, cache, "ac_broken", fixture, U8[][]::{}, arena)
+    verdict.check("it builds even with a broken entry", broken.ok, broken.out)
+    verdict.check("the generated C does not change even when broken",
+      broken.gen.equals(cold.gen),
+      arena.text().s("broken version \{broken.gen.len\} bytes").take())
+    verdict.check("a broken entry is counted as a miss",
+      broken.counts.ok && broken.counts.misses > 0, broken.out)
+
+  // --- the generations do not keep growing ---
+  // Rebuilding ksplc changes the key and wastes a generation at once, so generations over the cap
+  // are swept. The sweep touches only names of 16 hex digits, so the fake generations use them.
+  ast_dir: = fs.join(cache, "ast", arena)
+  real: = fs.read_dir(ast_dir, arena) catch
+    return harness.fatal("the generations' place cannot be read")
+  verdict.check("a generation directory has come about", real.len >= 1,
+    arena.text().s("\{real.len\}").take())
+  for i in Range.asc(12)
+    fake: = fs.join(ast_dir,
+      arena.text().s("00000000000000\{i / 10\}\{i % 10\}").take(), arena)
+    fs.mkdir_all(fake) catch
+      continue
+    io.write_file(fs.join(fake, "x.ksast", arena), "junk") catch {}
+  // It makes the real generation the newest (the sweep erases oldest first): with no way to set a
+  // time directly, writing a file inside advances the directory's.
+  for i in Range.asc(real.len)
+    io.write_file(fs.join(fs.join(ast_dir, real.get(i), arena), "used", arena), "") catch {}
+  gens_before: = fs.read_dir(ast_dir, arena) catch
+    return harness.fatal("the generations' place cannot be read")
+  // It makes a new generation: the sweep runs only then, not on a build in an existing one.
+  sys.set_env("KSPLC_CACHE_DIR", cache)
+  other: = harness
+    .run(U8[][]::{ other_spelling(harness.ksplc_exe()),
+    arena.text().s("--std-dir=\{harness.std_dir()\}").take(), fixture,
+    fs.join(work, "ac_other.c", arena) })
+  gens_after: = fs.read_dir(ast_dir, arena) catch
+    return harness.fatal("the generations' place cannot be read")
+  verdict.check("making a new generation sweeps the old generations",
+    other.code == 0 && gens_after.len < gens_before.len,
+    arena.text().s("before the sweep \{gens_before.len\} -> after \{gens_after.len\} ")
+    .s("(code=\{other.code\})\n").s(other.out).take())
+  return harness.finish()

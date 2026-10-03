@@ -1,0 +1,274 @@
+//< Filtering and transforming a `List<|T|>` without building intermediate lists
+//<
+//< **`where` and `select` are lazy**: they touch no element until `for x in` (it declares `Iter`),
+//< `to_list` or `count` drives the chain. **A chain can be driven any number of times**, and must
+//< be built and consumed in the same frame. `std/docs/DESIGN.md` explains why the adapters cannot
+//< be merged, why only those two go on the chain, and why a predicate is a `Callable1`.
+
+import "std/chars" as _chars // brings in the methods that classify and slice characters
+import "std/ds" { List }
+import "std/mem" { Arena }
+
+//   for x in xs.where(odd).select(tenx) { … }       // zero allocation
+//   got: = xs.where(odd).to_list(arena);            // one allocation, the only one, made here
+priv const sort_run: Sz = 16 //< the run length `order_by` sorts by insertion before merging
+
+pub enum Seq_error //< why a chain could return nothing
+  empty_sequence //< there was no element to pick from
+  no_match //< every element was checked and none met the condition
+
+pub struct List_seq<|T|> //< the start of a chain; reads a `List` and advances a position
+  //<
+  //< **A copy copies the position too**, and `for` and `to_list` take the receiver by value: that
+  //< is what makes a chain drivable any number of times.
+  priv xs: List<|T|>@
+  priv i: Sz
+
+impl<|T|> List_seq<|T|>: Iter<|T|> //< so a `for` can drive it
+  pub fn next(r: Self$@): Option<|T|> //< the next element, or nothing at the end
+    if r.i >= r.xs.len
+      return Option<|T|>.none
+    v: = r.xs.get(r.i)
+    r.i += 1
+    return Option<|T|>.some(v)
+
+pub struct Keep<|S, T|> //< the adapter that lets through only elements meeting a condition
+  priv src: S
+  priv pred: Callable1<|T, Bool|>
+
+impl<|S: Iter<|T|>, T|> Keep<|S, T|>: Iter<|T|> //< so a `for` can drive it
+  pub fn next(r: Self$@): Option<|T|> //< the next element that meets the condition, or nothing
+    for
+      if v: = r.src.next()
+        if r.pred.call(v)
+          return Option<|T|>.some(v)
+      else
+        return Option<|T|>.none
+
+pub struct Conv<|S, T, U|> //< the adapter that passes each element through a function
+  priv src: S
+  priv f: Callable1<|T, U|>
+
+impl<|S: Iter<|T|>, T, U|> Conv<|S, T, U|>: Iter<|U|> //< so a `for` can drive it
+  pub fn next(r: Self$@): Option<|U|> //< the next element, already converted, or nothing
+    if v: = r.src.next()
+      return Option<|U|>.some(r.f.call(v))
+    return Option<|U|>.none
+
+// Caution: **Write the same three methods for each adapter**; only then can they be called from any
+// adapter (as free functions, calls read inside out). `count` is `Iter`'s default body
+// (`lang.kspls`). Each new kind of adapter multiplies the code. The receiver is a value, so a chain
+// driven twice runs from the start both times.
+impl<|S: Iter<|T|>, T|> Keep<|S, T|>
+  pub fn where( //< adds one more condition to the chain; reads nothing yet
+    r: Self,
+    pred: Callable1<|T, Bool|>, //< the condition an element must meet to pass
+  ): Keep<|Keep<|S, T|>, T|>
+    return Keep<|Keep<|S, T|>, T|>::{ .src = r, .pred = pred }
+
+  pub fn select<|U|>( //< adds a conversion to the chain; reads nothing yet
+    r: Self,
+    f: Callable1<|T, U|>, //< what each element becomes
+  ): Conv<|Keep<|S, T|>, T, U|>
+    return Conv<|Keep<|S, T|>, T, U|>::{ .src = r, .f = f }
+
+  pub fn to_list( //< drives the chain and collects the results; the first allocation
+    r: Self,
+    arena: Arena$@, //< the arena the new list is allocated in
+  ): List<|T|>
+    $out: = List<|T|>.new(arena)
+    for v in r
+      out.push(v)
+    return out
+
+impl<|S: Iter<|T|>, T, U|> Conv<|S, T, U|>
+  pub fn where( //< adds a condition to the chain; reads nothing yet
+    r: Self,
+    pred: Callable1<|U, Bool|>, //< the condition an element must meet to pass
+  ): Keep<|Conv<|S, T, U|>, U|>
+    return Keep<|Conv<|S, T, U|>, U|>::{ .src = r, .pred = pred }
+
+  pub fn select<|V|>( //< adds one more conversion to the chain; reads nothing yet
+    r: Self,
+    f: Callable1<|U, V|>, //< what each element becomes
+  ): Conv<|Conv<|S, T, U|>, U, V|>
+    return Conv<|Conv<|S, T, U|>, U, V|>::{ .src = r, .f = f }
+
+  pub fn to_list( //< drives the chain and collects the results; the first allocation
+    r: Self,
+    arena: Arena$@, //< the arena the new list is allocated in
+  ): List<|U|>
+    $out: = List<|U|>.new(arena)
+    for v in r
+      out.push(v)
+    return out
+
+// Caution: Make the receiver `Self@` (read-only). Nothing here modifies it, and `Self$@` would
+// force a `$` on the caller's binding, which would be a lie in the source.
+impl<|T|> List<|T|>
+  pub fn where( //< a chain of the elements that meet the condition
+    //<
+    //< **It touches no element here.**
+    r: Self@,
+    pred: Callable1<|T, Bool|>, //< the condition an element must meet to pass
+  ): Keep<|List_seq<|T|>, T|>
+    return Keep<|List_seq<|T|>, T|>::{ .src = List_seq<|T|>::{ .xs = r, .i = 0 }, .pred = pred }
+
+  pub fn select<|U|>( //< a chain of each element passed through a function (`map` elsewhere)
+    //<
+    //< Caution: **Do not turn it into a free function**: `U` is decided at the call site, not by
+    //< the receiver ("A name on the impl that the receiver does not fix" in `../docs/DESIGN.md`).
+    r: Self@,
+    f: Callable1<|T, U|>, //< what each element becomes
+  ): Conv<|List_seq<|T|>, T, U|>
+    return Conv<|List_seq<|T|>, T, U|>::{ .src = List_seq<|T|>::{ .xs = r, .i = 0 }, .f = f }
+
+  priv fn copy_range(r: Self@, from: Sz, to: Sz, arena: Arena$@): List<|T|> //<
+    //< A new list copying [from, to), for take/skip
+    //<
+    //< Caution: The caller clamps from/to to len before passing them.
+    $out: = List<|T|>.new(arena)
+    for $i: Sz = from; i < to; i += 1
+      out.push((r.ptr + i)$)
+    return out
+
+  pub fn take( //< a new list of the first n elements
+    r: Self@,
+    n: Sz, //< the most to take; more than the length gives all of them
+    arena: Arena$@, //< the arena the new list is allocated in
+  ): List<|T|>
+    return r.copy_range(0, n if n < r.len else r.len, arena)
+
+  pub fn skip( //< a new list of what remains after the first n elements
+    r: Self@,
+    n: Sz, //< how many to skip; the length or more gives an empty list
+    arena: Arena$@, //< the arena the new list is allocated in
+  ): List<|T|>
+    return r.copy_range(n if n < r.len else r.len, r.len, arena)
+
+  pub fn reversed(r: Self@, arena: Arena$@): List<|T|> //< a new list in the opposite order
+    $out: = List<|T|>.new(arena)
+    for $i: Sz = r.len; i > 0; i -= 1
+      out.push((r.ptr + i - 1)$)
+    return out
+
+  pub fn any(r: Self@, pred: Callable1<|T, Bool|>): Bool //< whether at least one element meets it
+    for i in Range.asc(r.len)
+      if pred.call((r.ptr + i)$)
+        return true
+    return false
+
+  pub fn all(r: Self@, pred: Callable1<|T, Bool|>): Bool //< whether every element meets it
+    //<
+    //< An empty list gives true.
+    for i in Range.asc(r.len)
+      if !pred.call((r.ptr + i)$)
+        return false
+    return true
+
+  pub fn first(r: Self@): T?Seq_error //< the first element; fails when there is none
+    if r.len == 0
+      throw Seq_error.empty_sequence
+    return (r.ptr + 0)$
+
+  pub fn first_where( //< the first element that meets the condition; fails when none does
+    r: Self@,
+    pred: Callable1<|T, Bool|>, //< the condition the wanted element meets
+  ): T?Seq_error
+    for i in Range.asc(r.len)
+      item: = (r.ptr + i)$
+      if pred.call(item)
+        return item
+    throw Seq_error.no_match
+
+  pub fn distinct( //< a new list keeping the first of each group of equal elements, in order
+    //<
+    //< O(n^2); for large data with a hashable type, use a `Map`.
+    r: Self@,
+    eq: Callable2<|T, T, Bool|>, //< what counts as the same element
+    arena: Arena$@, //< the arena the new list is allocated in
+  ): List<|T|>
+    $out: = List<|T|>.new(arena)
+    for i in Range.asc(r.len)
+      item: = (r.ptr + i)$
+      $seen: = false
+      for j in Range.asc(out.len)
+        if eq.call(item, (out.ptr + j)$)
+          seen = true
+          break
+      if !seen
+        out.push(item)
+    return out
+
+  pub fn order_by( //< a new list in ascending order; equal elements keep their order
+    //<
+    //< A merge sort: stable, with O(n log n) comparisons. Short runs (16) are first sorted by
+    //< insertion, as Timsort does with its short runs.
+    r: Self@,
+    cmp: Callable2<|T, T, I32|>, //< < 0, 0 or > 0 as `a` is below, equal to or above `b`
+    arena: Arena$@, //< the arena the new list is allocated in
+  ): List<|T|>
+    $out: = List<|T|>.new_with_cap(r.len if r.len > 0 else 1, arena)
+    for i in Range.asc(r.len)
+      out.push((r.ptr + i)$)
+    n: = out.len
+    for $lo: Sz = 0; lo < n; lo += sort_run
+      hi: = (lo + sort_run) if lo + sort_run < n else n
+      for $i: Sz = lo + 1; i < hi; i += 1
+        item: = out.get(i)
+        $j: = i
+        for j > lo && cmp.call(out.get(j - 1), item) > 0
+          out.set(j, out.get(j - 1))
+          j -= 1
+        out.set(j, item)
+    if n <= sort_run
+      return out
+    // Caution: **Take from the right run only when it is strictly smaller**; taking it on a tie
+    // reverses equal elements, and the sort is no longer stable.
+    $spare: = List<|T|>.new_with_cap(n, arena)
+    for i in Range.asc(n)
+      spare.push(out.get(i))
+    $from: = out
+    $to: = spare
+    for $width: Sz = sort_run; width < n; width *= 2
+      for $lo: Sz = 0; lo < n; lo += 2 * width
+        mid: = (lo + width) if lo + width < n else n
+        hi: = (lo + 2 * width) if lo + 2 * width < n else n
+        $a: = lo
+        $b: = mid
+        for $k: = lo; k < hi; k += 1
+          if b < hi && (a >= mid || cmp.call(from.get(b), from.get(a)) < 0)
+            to.set(k, from.get(b))
+            b += 1
+          else
+            to.set(k, from.get(a))
+            a += 1
+      held: = from
+      from = to
+      to = held
+    return from
+
+  priv fn pick_extreme(r: Self@, cmp: Callable2<|T, T, I32|>, want_max: Bool): T?Seq_error //<
+    //< min_by and max_by in one (want_max picks the maximum)
+    if r.len == 0
+      throw Seq_error.empty_sequence
+    $best: = (r.ptr + 0)$
+    for $i: Sz = 1; i < r.len; i += 1
+      item: = (r.ptr + i)$
+      better: =
+        (cmp.call(item, best) > 0) if want_max else (cmp.call(item, best) < 0)
+      if better
+        best = item
+    return best
+
+  pub fn min_by( //< the smallest element; fails when there is none
+    r: Self@,
+    cmp: Callable2<|T, T, I32|>, //< < 0, 0 or > 0 as `a` is below, equal to or above `b`
+  ): T?Seq_error
+    return r.pick_extreme(cmp, false)?
+
+  pub fn max_by( //< the largest element; fails when there is none
+    r: Self@,
+    cmp: Callable2<|T, T, I32|>, //< < 0, 0 or > 0 as `a` is below, equal to or above `b`
+  ): T?Seq_error
+    return r.pick_extreme(cmp, true)?

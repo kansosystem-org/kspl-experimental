@@ -1,0 +1,59 @@
+#!/usr/bin/env -S ksplc run
+//< The tool that adds the padding and the checksum to the RP2040's stage 2 bootloader
+//<
+//< The boot ROM takes the last 4 of the flash's first 256 bytes as the checksum over the first 252
+//< (on a mismatch, it does not boot). **Its CRC32 has the bit order reversed from the standard**;
+//< CRC32 is in `std/bytes`, and only the reversal is here ("Why it holds `crc32`" in
+//< `std/docs/DESIGN.md`).
+import "std/bytes"
+import "std/chars" // tests on one character, and slicing
+import "std/io"
+import "std/sys"
+
+priv const pad: Sz = 256
+// The output buffer.
+// Caution: It must be the same length as pad (the last 4 bytes are the checksum).
+priv $buf: U8[256]
+
+priv fn bitrev(x: U32, bits: Sz): U32 //< reverses the low `bits` bits
+  //<
+  //< Both the input bytes (8 bits) and the result (32 bits) are reversed, hence the parameter.
+  $r: U32 = 0
+  $v: U32 = x
+  for _i in Range.asc(bits)
+    r = (r << 1) | (v & 1)
+    v = v >> 1
+  return r
+
+fn main(): I32
+  $args: = sys.args()
+  if args.len != 3
+    io.err().s("usage: pad_checksum <in.bin> <out.bin>\n")
+    return 1
+  in_path: = args.get(1)
+  src: = io.read_file(in_path) catch e
+    io.err().s("pad_checksum: cannot read \{in_path\}: \{e\}\n")
+    return 1
+  if src.len > pad - 4
+    io.err().s("pad_checksum: stage2 too large: \{src.len\} bytes (max \{pad - 4\})\n")
+    return 1
+
+  // 1. Apply CRC32 to the 252 bit-reversed bytes (the unused tail is zero-filled; reversed, it is
+  // still 0).
+  out: = U8$[]::buf
+  out.fill(0)
+  for i in Range.asc(src.len)
+    out[i] = U8::bitrev(src[i], 8)
+  all: = U8[]::buf
+  ck: = bitrev(all.sub(0, pad - 4).crc32(0xffffffff), 32)
+
+  // 2. The output is the data **before** reversing, plus the checksum in little endian.
+  out.fill(0)
+  _n: = out.copy_from(0, src)
+  out.put_u32_le(pad - 4, ck)
+
+  out_path: = args.get(2)
+  io.write_file(out_path, all) catch e
+    io.err().s("pad_checksum: cannot write \{out_path\}: \{e\}\n")
+    return 1
+  return 0

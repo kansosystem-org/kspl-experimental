@@ -1,0 +1,105 @@
+//< Watches the battery
+//<
+//< Caution: **Do not copy it into the demos.** It stops a running car, and with two copies only
+//< one gets fixed.
+//< **Start the ADC first** (`adc.init()`; either the demo itself or `common/pilot_boot.kspls`).
+//< `look` returns only what to do this round; how the car stops, and what it restores on coming
+//< back, stay with the caller, so each demo halts in its own way without a copy of the rule.
+
+// ==========================================
+//   switch watch.look(halted) case .go { … } case .low { halt(…) } case .back { … } default {}
+// ==========================================
+import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/demo/rp2040/common/console" as con
+import "ksos/drivers/rp2040/adc"
+
+const low_rounds: U32 = 5 //< the battery's minimum must be seen **several rounds in a row**
+  //<
+  //< Not one reading: the motors' inrush dips the voltage for an instant on every start.
+
+const absent_mv: U32 = 3000 //< the voltage below which the battery counts as "off" [mV]
+  //<
+  //< **It tells "a person switched it off" from "it dipped under load"**: switched off, the divider
+  //< floats to **around 0.07V**, while two lithium cells stay in the 5V range even when drained.
+
+const back_note: U8[] = "battery back — re-armed, deciding again" //<
+  //< The one line printed when it comes back
+  //<
+  //< Caution: **Do not copy the string into the caller**, where it would go stale.
+
+enum Verdict //< what to do this round
+  go //< a decision may be made
+  hold //< skip this round
+  low //< it just fell below the minimum (the caller stops the car)
+  back //< a person switched it off and on (the caller resets the flags and the budget)
+
+struct Watch //< the watch's state
+  priv low_seen: U32
+  priv saw_absent: Bool
+  // Whether the battery's minimum is what stopped it.
+  // Caution: **Do not mix it with the other reasons**, which the switch does not fix.
+  on_battery: Bool
+  // The measured value at the moment of stopping [mV].
+  // Kept apart from the report's bat=, which is a reading from another moment.
+  halt_mv: U32
+  // The raw reading while stopped [mV], showing whether the switch reached the car.
+  now_mv: U32
+  // The last reading while running [mV].
+  // Caution: **Do not read it again at reporting time**, or one line mixes two moments.
+  last_mv: U32
+
+priv fn read_mv(): U32 //< the battery's voltage [mV]
+  //<
+  //< 0 if it cannot be measured.
+  bat: = adc.read_pin_avg(board.battery_pin, board.battery_samples)
+  return board.battery_mv(bat.value) if bat.ok else 0
+
+// One per machine, like the battery. **Do not create one in the caller**; only here does the
+// counting state stay `priv`.
+$watch: Watch = ::{}
+
+impl Watch
+  fn look(r: Self$@, halted: Bool): Verdict //<
+    //< Checks for one round and returns what to do this round
+    //<
+    //< For `halted`, the caller passes "is it stopped for any reason at all".
+    //< Caution: **Call it while stopped too**, or it misses the switch going off and on: the Pico
+    //< runs on USB, so the battery switch does not reset it, and this is the only way out.
+    mv: = read_mv()
+    if halted
+      if !r.on_battery
+        return Verdict.hold // stops for reasons other than the battery do not recover here
+      r.now_mv = mv
+      if mv > 0 && mv < absent_mv
+        r.saw_absent = true
+      if !r.saw_absent || mv < board.battery_low_mv
+        return Verdict.hold
+      r.on_battery = false
+      r.saw_absent = false
+      r.low_seen = 0
+      r.halt_mv = 0
+      r.now_mv = 0
+      return Verdict.back
+    r.last_mv = mv
+    if mv > 0 && mv < board.battery_low_mv
+      r.low_seen += 1
+      if r.low_seen >= low_rounds
+        r.on_battery = true
+        r.halt_mv = mv
+        return Verdict.low
+    else
+      r.low_seen = 0
+    return Verdict.go
+
+  fn halt_note(r: Self@, ln: con.Line$@, reason: U8[]) //< appends ` HALTED: <reason>` to a report
+    //<
+    //< Where the battery's minimum stopped it, the two voltages follow; only the current one shows
+    //< the switch turned off and on, so they are printed separately.
+    ln.str(" HALTED: ")
+    ln.str(reason)
+    if r.on_battery
+      ln.str(" (")
+      ln.u32_milli(r.halt_mv)
+      ln.str("V, now ")
+      ln.u32_milli(r.now_mv)
+      ln.str("V)")

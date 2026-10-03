@@ -1,0 +1,93 @@
+#!/usr/bin/env -S ksplc run
+//< Reads one byte sequence from outside through a ksai reader, then uses what it read
+//<
+//< **ksai receives two things from outside**: the weights file (safetensors) and the tokenizer's
+//< vocabulary.
+//< Caution: **Do not stop after reading.** Failures happen where the data is **used**
+//< (`get_tensor` returns a view onto raw bytes, so a range mistake does not show until an element
+//< is read).
+//< **The exit code is the only result.**
+
+// ==========================================
+// Usage:
+//   read_prog <kind> <file>      (the kind is `safetensors` or `vocab`)
+// ==========================================
+import "ksai/safetensors" as st
+import "ksai/tensor" { Tensor }
+import "ksai/tokenizer" as tok
+import "std/io"
+import "std/mem" { Arena, dealloc }
+import "std/str"
+import "std/sys"
+
+priv const tensor_names: U8[][3] = ::{ "w", "b", "big" } //<
+  //< The names the fuzzer puts into a seed
+  //<
+  //< Caution: **Keep them in step with the fuzzer**: otherwise every attempt is rejected with "no
+  //< such name" and the range check is never reached.
+
+// Where each value read is mixed in. **Do not make it a plain sum** (a sum does not mix the
+// digits).
+priv $used: F64 = 0.0
+
+priv fn use_tensor<|T|>(t: Tensor<|T|>)
+  for i in Range.asc(t.size)
+    used += F64::(t.data + i)$
+  for i in Range.asc(t.shape.len)
+    used += F64::t.shape[i]
+
+priv fn read_safetensors(path: U8[], arena: Arena$@): I32 //< reads the weights file
+  //<
+  //< **Each name is looked up as both F32 and F64**, so both the path that rejects a width
+  //< mismatch (`dtype_mismatch`) and the path that reads an element are exercised.
+  raw: = io.read_file(path) catch
+    return 1
+  defer dealloc(Void$@::raw.ptr)
+  $s: = st.Safetensors.load_from_bytes(raw, arena) catch
+    return 1
+  $ok: = 0
+  for name in tensor_names
+    t32: = s.get_tensor<|F32|>(name, arena) catch
+      continue
+    use_tensor<|F32|>(t32)
+    ok += 1
+  for name in tensor_names
+    t64: = s.get_tensor<|F64|>(name, arena) catch
+      continue
+    use_tensor<|F64|>(t64)
+    ok += 1
+  return 0 if ok > 0 else 1
+
+priv fn read_vocab(path: U8[], arena: Arena$@): I32 //< reads the vocabulary
+  //<
+  //< Caution: **Pass the same file as both the vocabulary and the merges.** Separate seeds would
+  //< make the fuzzer build two mutations, with **fewer combinations of damage**; both readers skip
+  //< a line they cannot read, so one text through both changes nothing else.
+  $t: = tok.Tokenizer.new(arena)
+  t.load(path, path) catch
+    return 1
+  ids: = t.encode("Kanso café ✓ 12 <unk>")
+  used += F64::ids.len
+  back: = t.decode(ids)
+  used += F64::back.len
+  return 0
+
+fn main(): I32
+  args: = sys.args()
+  if args.len < 3
+    io.err().s("usage: read_prog <safetensors|vocab> <file>\n")
+    return 2
+  arena: = Arena.new(64 * 1024 * 1024)
+  defer arena.free()
+  $code: = 2
+  if args[1].equals("safetensors")
+    code = read_safetensors(args[2], arena)
+  else if args[1].equals("vocab")
+    code = read_vocab(args[2], arena)
+  else
+    io.err().s("unknown kind\n")
+    return 2
+  // Prints what was read on one line. **A value that is discarded can be removed at translation
+  // time**, so always use it.
+  io.out().s("used=\{used\}\n")
+  return code

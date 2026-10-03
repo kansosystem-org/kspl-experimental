@@ -1,0 +1,283 @@
+//< SHA-256 (FIPS 180-4) and HMAC-SHA256 (RFC 2104), in pure KSPL
+//<
+//< It uses only bit operations and no OS-dependent library. Input is fed in pieces through
+//< `update` and closed at the end, so a file larger than memory needs no buffer of its own.
+import "std/bytes"
+import "std/chars" // classifying one character
+import "std/strfmt" // the hex string (`to_hex_lower`)
+
+priv const block_size: Sz = 64 // 512bit
+pub const digest_size: Sz = 32 //< the digest is always this many bytes (256 bits)
+
+pub struct Sha256 //< a running SHA-256, fed in pieces and closed at the end
+  priv h: U32[8]
+  priv buf: U8[64] //< holds the trailing bytes that do not yet fill a block
+  priv buf_len: Sz //< how many bytes in buf are valid (0..63)
+  priv total_len: U64 //< every byte update() has taken so far (for the padding's length field)
+
+priv fn rotr32(x: U32, n: U32): U32
+  return (x >> n) | (x << (32U32 - n))
+
+// The round constants (FIPS 180-4's K).
+// Caution: **Do not move it into `compress`.** Declared there, it would **rebuild a 64-element
+// table for every 64-byte block**.
+// **Do not put a constant table inside a function elsewhere either.** This code runs very often
+// (ksplc keys its AST cache with it).
+priv const round_k: U32[64] = ::{
+  0x428a2f98,
+  0x71374491,
+  0xb5c0fbcf,
+  0xe9b5dba5,
+  0x3956c25b,
+  0x59f111f1,
+  0x923f82a4,
+  0xab1c5ed5,
+  0xd807aa98,
+  0x12835b01,
+  0x243185be,
+  0x550c7dc3,
+  0x72be5d74,
+  0x80deb1fe,
+  0x9bdc06a7,
+  0xc19bf174,
+  0xe49b69c1,
+  0xefbe4786,
+  0x0fc19dc6,
+  0x240ca1cc,
+  0x2de92c6f,
+  0x4a7484aa,
+  0x5cb0a9dc,
+  0x76f988da,
+  0x983e5152,
+  0xa831c66d,
+  0xb00327c8,
+  0xbf597fc7,
+  0xc6e00bf3,
+  0xd5a79147,
+  0x06ca6351,
+  0x14292967,
+  0x27b70a85,
+  0x2e1b2138,
+  0x4d2c6dfc,
+  0x53380d13,
+  0x650a7354,
+  0x766a0abb,
+  0x81c2c92e,
+  0x92722c85,
+  0xa2bfe8a1,
+  0xa81a664b,
+  0xc24b8b70,
+  0xc76c51a3,
+  0xd192e819,
+  0xd6990624,
+  0xf40e3585,
+  0x106aa070,
+  0x19a4c116,
+  0x1e376c08,
+  0x2748774c,
+  0x34b0bcb5,
+  0x391c0cb3,
+  0x4ed8aa4a,
+  0x5b9cca4f,
+  0x682e6ff3,
+  0x748f82ee,
+  0x78a5636f,
+  0x84c87814,
+  0x8cc70208,
+  0x90befffa,
+  0xa4506ceb,
+  0xbef9a3f7,
+  0xc67178f2,
+}
+
+impl Sha256
+  priv fn compress(r: Self$@, block: U8[]) //<
+    //< Runs one block of exactly 64 bytes through the compression function and updates h
+    $w: U32[64] = ::{}
+    for i in Range.asc(16)
+      w[i] = block.get_u32_be(i * 4)
+    for i in Range.new(16, 64, 1)
+      s0: =
+        rotr32(w[i - 15], 7U32) ^ rotr32(w[i - 15], 18U32) ^ (w[i - 15] >> 3U32)
+      s1: =
+        rotr32(w[i - 2], 17U32) ^ rotr32(w[i - 2], 19U32) ^ (w[i - 2] >> 10U32)
+      w[i] = w[i - 16] + s0 + w[i - 7] + s1
+
+    $a: = r.h[0]
+    $b: = r.h[1]
+    $c: = r.h[2]
+    $d: = r.h[3]
+    $e: = r.h[4]
+    $f: = r.h[5]
+    $g: = r.h[6]
+    $hh: = r.h[7]
+
+    for i in Range.asc(64)
+      s1: = rotr32(e, 6U32) ^ rotr32(e, 11U32) ^ rotr32(e, 25U32)
+      ch: = (e & f) ^ (~e & g)
+      temp1: = hh + s1 + ch + round_k[i] + w[i]
+      s0: = rotr32(a, 2U32) ^ rotr32(a, 13U32) ^ rotr32(a, 22U32)
+      maj: = (a & b) ^ (a & c) ^ (b & c)
+      temp2: = s0 + maj
+      hh = g
+      g = f
+      f = e
+      e = d + temp1
+      d = c
+      c = b
+      b = a
+      a = temp1 + temp2
+
+    r.h[0] += a
+    r.h[1] += b
+    r.h[2] += c
+    r.h[3] += d
+    r.h[4] += e
+    r.h[5] += f
+    r.h[6] += g
+    r.h[7] += hh
+
+  pub fn new(): Sha256 //< a new hash with nothing fed in yet
+    h: U32[8] = ::{
+      0x6a09e667,
+      0xbb67ae85,
+      0x3c6ef372,
+      0xa54ff53a,
+      0x510e527f,
+      0x9b05688c,
+      0x1f83d9ab,
+      0x5be0cd19,
+    }
+    return Sha256::{ .h = h, .buf = ::{}, .buf_len = 0, .total_len = 0U64 }
+
+  pub fn update( //< feeds in the next piece; pieces need not align with a block
+    r: Self$@,
+    data: U8[], //< the bytes to add, of any length
+  )
+    r.total_len += U64::data.len
+    $pos: Sz = 0
+
+    // 1. If bytes are left in the buffer from the last call, fill it first
+    if r.buf_len > 0
+      need: = block_size - r.buf_len
+      take: = data.len if data.len < need else need
+      for i in Range.asc(take)
+        r.buf[r.buf_len + i] = data[i]
+      r.buf_len += take
+      pos += take
+      if r.buf_len == block_size
+        r.compress(U8$[]::r.buf)
+        r.buf_len = 0
+      else
+        return // there is not yet a whole block
+
+    // 2. Compress whole 64-byte blocks directly, without copying them into the buffer
+    for pos + block_size <= data.len
+      r.compress(data.sub(pos, block_size))
+      pos += block_size
+
+    // 3. Copy the rest into the buffer (the next update() or finalize() handles it)
+    for pos < data.len
+      r.buf[r.buf_len] = data[pos]
+      r.buf_len += 1
+      pos += 1
+
+  pub fn finalize(r: Self$@): U8[32] //< closes the hash and returns the digest
+    bit_len: = r.total_len * 8U64
+
+    r.buf[r.buf_len] = 0x80U8
+    r.buf_len += 1
+
+    // If no room is left for the 8-byte length field, zero-fill and compress this block first
+    if r.buf_len > 56
+      for r.buf_len < block_size
+        r.buf[r.buf_len] = 0U8
+        r.buf_len += 1
+      r.compress(U8$[]::r.buf)
+      r.buf_len = 0
+    for r.buf_len < 56
+      r.buf[r.buf_len] = 0U8
+      r.buf_len += 1
+
+    // Write the whole input's length in bits into the last 8 bytes, big endian
+    buf_slice: = U8$[]::r.buf
+    buf_slice.put_u64_be(56, bit_len)
+    r.compress(U8$[]::r.buf)
+
+    out: U8[32] = ::{}
+    out_slice: = U8$[]::out
+    for i in Range.asc(8)
+      out_slice.put_u32_be(i * 4, r.h[i])
+    return out
+
+pub fn hash(data: U8[]): U8[32] //< the digest of all of `data`, in one call
+  $hasher: = Sha256.new()
+  hasher.update(data)
+  return hasher.finalize()
+
+pub fn hmac( //< RFC 2104's HMAC-SHA256
+  //<
+  //< A key longer than the block size (64 bytes) is hashed first, as RFC 2104 requires.
+  key: U8[], //< the shared secret, of any length
+  data: U8[], //< the message to sign
+): U8[32] //< the 32-byte MAC, by value
+  $key_block: U8[64] = ::{}
+  if key.len > block_size
+    digest: = hash(key)
+    for i in Range.asc(digest_size)
+      key_block[i] = digest[i]
+  else
+    for i in Range.asc(key.len)
+      key_block[i] = key[i]
+
+  $ipad: U8[64] = ::{}
+  $opad: U8[64] = ::{}
+  for i in Range.asc(block_size)
+    ipad[i] = key_block[i] ^ 0x36U8
+    opad[i] = key_block[i] ^ 0x5cU8
+
+  $inner: = Sha256.new()
+  inner.update(U8$[]::ipad)
+  inner.update(data)
+  inner_digest: = inner.finalize()
+
+  $outer: = Sha256.new()
+  outer.update(U8$[]::opad)
+  outer.update(U8$[]::inner_digest)
+  return outer.finalize()
+
+pub fn hmac_verify( //< whether a MAC matches, in a time that does not reveal how much matched
+  //<
+  //< Caution: **Do not compare with `hmac(..).equals(mac)`.** equals returns at the first byte
+  //< that differs, so the time reveals how many leading bytes matched, and an attacker can forge a
+  //< MAC one byte at a time. This loop takes the same time whichever byte differs; a different
+  //< length may return early.
+  key: U8[], //< the shared secret
+  data: U8[], //< the message the MAC claims to cover
+  mac: U8[], //< the MAC received, which may come from anyone
+): Bool //< true when it matches; a wrong length returns false at once
+  if mac.len != digest_size
+    return false
+  expected: = hmac(key, data)
+  $diff: U8 = 0
+  for i in Range.asc(digest_size)
+    diff |= expected[i] ^ mac[i]
+  return diff == 0U8
+
+pub const hex_len: Sz = 64 //< the hex text is always this many characters.
+  //<
+  //< The caller provides an array of this size.
+
+pub fn write_hex( //< writes the digest as lowercase hex, without allocating
+  //<
+  //< Use it for log output and for comparisons in a test.
+  //< Caution: **Do not take a `Writer`.** Importing `io` would make one digest pay for the whole
+  //< string and IO library, many times the size of this file.
+  digest: U8[32], //< what `finalize` or `hash` returned
+  out: U8$[], //< the destination, whose leading `hex_len` bytes are written
+)
+  assert(out.len >= hex_len, "sha256.write_hex: out is shorter than hex_len")
+  for i in Range.asc(digest_size)
+    byte: = digest[i]
+    out[i * 2] = (byte >> 4U8).to_hex_lower()
+    out[i * 2 + 1] = (byte & 0x0fU8).to_hex_lower()

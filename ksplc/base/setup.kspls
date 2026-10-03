@@ -1,0 +1,44 @@
+//< Starts and ends the base layer, each in one call
+//<
+//< **The one file that knows every base container that owns heap**: the shared arenas, the name
+//< pools, the AST's shared state, the diagnostics and the ranges a `#cfg()` dropped. It stays out
+//< of `core.kspls`, which every one of them imports, so no base file imports back up to it. `main`
+//< calls the pair.
+import "ksplc/base/ast" as base_ast
+import "ksplc/base/ast_kinds" as base_ast_kinds
+import "ksplc/base/cfg_inactive" as base_cfg_inactive
+import "ksplc/base/core" as base_core
+import "ksplc/base/diag" as base_diag
+import "std/mem" { Arena }
+
+fn init() //< the base layer's initialization in one go
+  //<
+  //< It sets up the shared arena, the pools, the AST's shared state and the two containers an
+  //< editor reads back. Every later layer depends on them.
+  if base_core.arena != null
+    return
+  base_core.arena = Arena.new(1024 * 1024 * 64) // the shared arena first (the later inits use it)
+  base_core.perm_arena = Arena.new(1024 * 1024)
+  base_core.pools.init()
+  // Caution: **The kinds go in first, in the enum's order**, so each one's number in the pool is
+  // its own (`Ast_node.peek_kind_id` reads it back by name).
+  for $i: = 1; i < I32::base_ast_kinds.Ast_kind.k_max; i += 1
+    base_core.pools.intern_kind((base_ast_kinds.Ast_kind::i).builtin_name())
+  base_ast.shared.init()
+  base_diag.lsp_diags.init()
+  base_cfg_inactive.cfg_inactive.init()
+
+fn fin() //< it frees the base layer in one go, in the reverse of init's order
+  //<
+  //< shared.empty_list goes away with arena.free(). The pools and the two containers own heap, so
+  //< they are freed explicitly.
+  if base_core.arena == null
+    return
+  base_diag.lsp_diags.free()
+  base_cfg_inactive.cfg_inactive.free()
+  base_core.pools.free()
+  base_core.arena.free()
+  base_core.arena = null
+  if base_core.perm_arena != null
+    base_core.perm_arena.free()
+    base_core.perm_arena = null

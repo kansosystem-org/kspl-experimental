@@ -1,0 +1,293 @@
+//< The small network the car uses to predict the result of its own movement
+//<
+//< It also learns as it runs. **Read it together with `base_permille`**: how often "the same as the
+//< previous round" misses over the same window.
+
+// ==========================================
+//   model.init(drive_cap, arena@);                   // once, before entering the loop
+//   _ = model.load(stored);                          // resume from the previous start-up (may be
+//                                                    // absent)
+//   pred: = model.step(line, lon, lat, rot, arena@); // each round, after driving the wheels
+// ==========================================
+import "ksai/nn"
+import "ksai/nn_grad" // brings in Mlp.backward (the gradient plus SGD)
+import "ksai/tensor" { Tensor }
+import "std/bytes"
+import "std/mem" + { Arena }
+import "std/prng"
+
+const line_bits: Sz = 3 //< the net's shape
+  //<
+  //< **Without the previous reading, all it can learn is "it does not change"**: a still line and
+  //< one passing by give the same input, and it ties with `base_permille`. Two rounds show the
+  //< direction. **The distance is not an input**: it depends on where on the course, not the car.
+priv const in_dim: Sz = 9
+priv const hidden: Sz = 8
+priv const out_dim: Sz = 3
+
+const no_prediction: I32 = -1 //< the marker for "no prediction was made"
+  //<
+  //< **0 cannot be used** — it is the valid prediction "all three bits white".
+
+priv const weight_seed: U64 = 20260814U64 //< the seed for randomizing the weights
+  //<
+  //< **Not one value for all** (every unit would get the same gradient and act as one). It is a
+  //< constant, so a firmware always starts the same way.
+priv const weight_scale: F64 = 0.5
+
+priv const learning_rate: F64 = 0.02 //< the learning step size
+  //<
+  //< **One step per round** (online SGD), so too large a value lets one outlier wreck the net.
+
+priv const err_window: F32 = 32.0 //< the window for the error's moving average [steps]
+  //<
+  //< Caution: **Use a moving average, not a plain average**, which keeps dragging the first clumsy
+  //< predictions along. **Match it to the step interval** (100ms steps: 3.2 seconds).
+
+priv const state_version: U16 = 6 //< the version of the saved layout
+  //<
+  //< **Raise it whenever the net's shape, how the features are made, or what is predicted
+  //< changes.**
+priv const header_bytes: Sz = 16 //< the header [bytes]; the weights follow it
+  //<
+  //< 0..2 the version, 2 the hidden count, 3 the speed cap, 4..8 the steps learned, 8..12 the
+  //< net's miss rate [‰], 12..16 the baseline's miss rate [‰].
+priv const param_count: Sz = in_dim * hidden + hidden + hidden * out_dim + out_dim //<
+  //< How many weights
+const state_bytes: Sz = header_bytes + param_count * sizeof(F32) //<
+  //< The size of one saved state [bytes]
+  //<
+  //< Caution: **The buffer passed to `save` / `load` must be this size.**
+
+priv $mlp: nn.Mlp<|F32|> = ::{}
+priv $ready: Bool = false
+// The normalization scale, **saved with the weights**, whose meaning it defines.
+priv $drive_cap: U32 = 0
+
+// The previous round's question.
+// Caution: **Keep it as plain values, not as a tensor**; the arena is reset every round.
+priv $prev: F32[in_dim] = ::{}
+priv $prev_asked: Bool = false
+priv $prev_pred: F32[out_dim] = ::{}
+// The three bits of the question's round and of the round before. **`prev_line` feeds the
+// baseline**; `hist_line` gives the net the direction.
+priv $prev_line: U32 = 0
+priv $hist_line: U32 = 0
+priv $have_hist: Bool = false
+
+// The steps learned, and the moving average of the fraction of bits missed [‰].
+// Caution: **Keep it per mille**: near 60‰, per cent hides the net's gap to the baseline.
+priv $steps: U32 = 0
+priv $err_ema: F32 = 0.0
+priv $base_ema: F32 = 0.0
+
+fn init(cap: U32, arena: Arena$@): Bool //< sets up the net
+  //<
+  //< **true if it could be set up.** cap normalizes the manoeuvre: **the wheels' cap**.
+  //< Caution: **Pass an arena that is not reset**: call it **before** taking the per-round reset
+  //< point (`save`), since the weights stay for the whole run.
+  ready = false
+  prev_asked = false
+  steps = 0
+  err_ema = 0.0
+  base_ema = 0.0
+  have_hist = false
+  // The cap is saved in one byte; a larger one is rejected, not truncated into a false match.
+  if cap == 0 || cap > 255
+    return false
+  mlp = nn.Mlp<|F32|>.new(in_dim, hidden, out_dim, arena)
+  $rng: = prng.Prng.new(weight_seed)
+  // Randomize them uniformly (the reason is at `Linear.init_uniform` in `ksai/nn.kspls`).
+  mlp.init_uniform(rng@, weight_scale)
+  drive_cap = cap
+  ready = true
+  return true
+
+fn forget() //< cancels the pending question
+  //<
+  //< **If it is not called, it learns from a mismatched pair**: when the command that moved the
+  //< car is not the one asked about, or across a jump in time (a stopped stretch).
+  prev_asked = false
+
+fn steps_done(): U32 //< the steps learned
+  return steps
+
+fn version(): U32 //< the version of the saved layout
+  //<
+  //< Caution: **Put it in the report**; an older layout's numbers still look plausible.
+  return state_version
+
+fn err_permille(): U32 //< the fraction of bits the net missed [‰]
+  //<
+  //< **While the step count is 0 it means nothing** (no answer has been checked yet).
+  return U32::err_ema if err_ema > 0.0 else 0
+
+fn base_permille(): U32 //<
+  //< The fraction missed by answering "the same as the previous round" [‰]
+  //<
+  //< **The baseline** — only `err_permille` below this means "learning"; a drop alone may just be
+  //< an easier stand.
+  return U32::base_ema if base_ema > 0.0 else 0
+
+fn raw_bit(i: Sz): F32 //< the raw value of the latest forward pass (index 0 = left)
+  //<
+  //< **Not used for driving** — the decision is the 0 to 7 that `step` returns.
+  //< Caution: **Compare these to see whether the weights were restored**; 0 to 7 is too coarse.
+  return prev_pred[i] if i < out_dim else 0.0
+
+priv fn bit_of(line: U32, i: Sz): F32 //<
+  //< Returns the i-th of the three bits (0 = left) as 0.0 / 1.0
+  //<
+  //< The packing is the same as `track.read_bits`'s (left << 2 | middle << 1 | right; 1 = black).
+  shift: = U32::(line_bits - 1 - i)
+  return 1.0 if ((line >> shift) & 1U32) == 1U32 else 0.0
+
+priv fn drive_norm(v: I32): F32 //< turns one axis of the manoeuvre into -1.0 to 1.0
+  return F32::(F64::v / F64::drive_cap)
+
+priv fn pct(wrong: U32): F32 //< turns the count of missed bits into a fraction [‰]
+  total: = U32::out_dim
+  return F32::(F64::(wrong * 1000U32) / F64::total)
+
+priv fn base_wrong(line: U32): U32 //<
+  //< How many bits are missed by answering "the same as the previous one"
+  d: = (line ^ prev_line) & 7U32
+  return ((d >> 2U32) & 1U32) + ((d >> 1U32) & 1U32) + (d & 1U32)
+
+priv fn to_tensor(src: F32[in_dim], compute: Arena$@): Tensor<|F32|> //<
+  //< Makes one tensor from plain values
+  shape: Sz[2] = ::{ 1, in_dim }
+  x: = Tensor<|F32|>.new(Sz[]::shape, compute)
+  for i in Range.asc(in_dim)
+    x[i] = src[i]
+  return x
+
+priv fn packed(v: F32[out_dim]): I32 //< packs the three predicted bits into 0 to 7
+  //<
+  //< Caution: **Threshold at 0.5** (fc2 is linear, so values also fall outside 0 to 1).
+  $bits: I32 = 0
+  for i in Range.asc(line_bits)
+    bits = bits + bits
+    if v[i] >= 0.5
+      bits += 1
+  return bits
+
+priv fn learn(line: U32, compute: Arena$@) //<
+  //< Checks the previous round's question against its answer, and learns one step
+  //<
+  //< The loss is the squared error (gradient `2 * (the prediction - the measurement)`). **The
+  //< three are independent**, not cross entropy's one-of-many: all three can turn black at once.
+  x: = to_tensor(prev, compute)
+  shape: Sz[2] = ::{ 1, out_dim }
+  dy: = Tensor<|F32|>.new(Sz[]::shape, compute)
+  $wrong: U32 = 0
+  for i in Range.asc(out_dim)
+    target: = bit_of(line, i)
+    diff: = prev_pred[i] - target
+    dy[i] = diff + diff
+    // **What is counted is the thresholded decision's miss**, not the residual.
+    hard: = 1.0 if prev_pred[i] >= 0.5 else 0.0
+    if hard != target
+      wrong += 1
+  _dx: = mlp.backward(x, dy, learning_rate)
+  // Caution: **Do not average the first step**; starting from 0 it looks better than it is for
+  // dozens of steps. **Feed the net and the baseline in on the same step.**
+  e: = pct(wrong)
+  b: = pct(base_wrong(line))
+  err_ema = e if steps == 0 else err_ema + (e - err_ema) / err_window
+  base_ema = b if steps == 0 else base_ema + (b - base_ema) / err_window
+  steps += 1
+
+fn step(line: U32, lon: I32, lat: I32, rot: I32, compute: Arena$@): I32 //<
+  //< advances one step
+  //<
+  //< **Call it each round, after driving the wheels.** `line` answers the last question and joins
+  //< the next. It returns **the next round's three bits (0 to 7)**, or **`no_prediction` until it
+  //< has learned once**.
+  if !ready
+    return no_prediction
+  if prev_asked
+    learn(line & 7U32, compute)
+  // **A round with the wheels stopped asks no question**: stopped, there is no movement to
+  // predict. On a stand it would learn "stopped, nothing changes" and **look trained while having
+  // learned nothing**, and a bit that changes while stopped is an outside touch, noise to the net.
+  if lon == 0 && lat == 0 && rot == 0
+    prev_asked = false
+    return no_prediction
+  bits: = line & 7U32
+  // **The first round has no previous one**; the same value stands in ("not moved").
+  hist: = hist_line if have_hist else bits
+  for i in Range.asc(line_bits)
+    prev[i] = bit_of(bits, i)
+    prev[line_bits + i] = bit_of(hist, i)
+  prev[line_bits + line_bits] = drive_norm(lon)
+  prev[line_bits + line_bits + 1] = drive_norm(lat)
+  prev[line_bits + line_bits + 2] = drive_norm(rot)
+  prev_asked = true
+  hist_line = bits
+  have_hist = true
+  prev_line = bits
+  x: = to_tensor(prev, compute)
+  out: = mlp.forward(x)
+  for i in Range.asc(out_dim)
+    prev_pred[i] = out[i]
+  if steps == 0
+    return no_prediction
+  return packed(prev_pred)
+
+fn save(dst: U8$[]): Bool //< copies the weights and the scale as they are into dst
+  //<
+  //< **true if they were copied.**
+  //< Caution: **Keep the layout in step with `load`'s** (if they diverge, the weights written and
+  //< the weights read silently drift apart).
+  if !ready || dst.len < state_bytes
+    return false
+  dst.put_u16_le(0, state_version)
+  dst[2] = U8::hidden
+  dst[3] = U8::drive_cap
+  // Caution: **Save the progress too**; only it tells, at the next start-up, what the run on the
+  // battery learned.
+  dst.put_u32_le(4, steps)
+  dst.put_u32_le(8, err_permille())
+  dst.put_u32_le(12, base_permille())
+  $off: Sz = header_bytes
+  off += copy_out(dst, off, mlp.fc1.weights)
+  off += copy_out(dst, off, mlp.fc1.bias)
+  off += copy_out(dst, off, mlp.fc2.weights)
+  _last: = copy_out(dst, off, mlp.fc2.bias)
+  return true
+
+priv fn copy_out(dst: U8$[], off: Sz, t: Tensor<|F32|>): Sz //<
+  //< Copies one tensor to dst at off, and returns the size copied [bytes]
+  n: = t.size * sizeof(F32)
+  mem.copy(Void$@::(dst.ptr + off), Void$@::t.data, n)
+  return n
+
+priv fn copy_in(src: U8[], off: Sz, t: Tensor<|F32|>): Sz //<
+  //< Copies from src at off into one tensor, and returns the size copied [bytes]
+  n: = t.size * sizeof(F32)
+  mem.copy(Void$@::t.data, Void$@::(src.ptr + off), n)
+  return n
+
+fn load(src: U8[]): Bool //< reads the weights the previous start-up saved
+  //<
+  //< **true if they were read.**
+  //< Caution: **Reject anything whose scale disagrees** (the version, the hidden count, the cap);
+  //< the right shape would go silently wrong. It then continues with the initial values.
+  if !ready || src.len < state_bytes
+    return false
+  if src.get_u16_le(0) != state_version || Sz::src[2] != hidden
+    return false
+  if U32::src[3] != drive_cap
+    return false
+  $off: Sz = header_bytes
+  off += copy_in(src, off, mlp.fc1.weights)
+  off += copy_in(src, off, mlp.fc1.bias)
+  off += copy_in(src, off, mlp.fc2.weights)
+  _last: = copy_in(src, off, mlp.fc2.bias)
+  // Caution: **Restore the step count too**, or a trained net's predictions are discarded until
+  // its first step. The 1‰ rounding of the fraction is enough for a moving average.
+  steps = src.get_u32_le(4)
+  err_ema = F32::src.get_u32_le(8)
+  base_ema = F32::src.get_u32_le(12)
+  return true

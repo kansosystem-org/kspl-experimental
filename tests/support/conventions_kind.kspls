@@ -1,0 +1,140 @@
+//< The kind of a document is its name (not the suite)
+//<
+//< Two things are checked: **that every document carries one of the names in the specification's
+//< closed list**, and **that a heading naming a roadmap stands only in a `PLAN.md`**; whether a
+//< passage belongs to another kind is left to the reader.
+//< Note: The convention itself is "Document naming" in `docs/SPEC-documents.md`; this file **only
+//< turns it into a check**.
+import "std/chars" // `to_lower` / `trim_spaces`
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" // `find_str` / `starts_with`
+import "std/strfmt" as _strfmt
+import "std/sys"
+import "std/verdict"
+import "tests/support/conventions_scan" as scan + { Sample }
+import "tests/support/harness"
+
+priv const kind_names: U8[][4] = ::{ "README.md", "TOUR.md", "DESIGN.md", "PLAN.md" } //<
+  //< the kinds a folder holds at most one of
+priv const kind_heads: U8[][2] = ::{ "SPEC-", "HOWTO-" } //< the kinds that carry a subject
+priv const outside_names: U8[][4] = ::{ "CONTRIBUTING.md", "LICENSE.md", "THIRD-PARTY-NOTICES.md",
+  "SECURITY.md" } //<
+    //< The document names fixed from outside
+    //<
+    //< The table is "Documents whose name is fixed from outside" in `docs/SPEC-documents.md`.
+    //< Caution: **Add a name here only with a row in that table.** A document that no outside tool
+    //< looks for takes one of the six kinds' names.
+
+fn is_kind_name(name: U8[], _arena: Arena$@): Bool //< whether one file name is a kind's, or fixed
+  for k in kind_names
+    if name.equals(k)
+      return true
+  for h in kind_heads
+    if name.starts_with(h) && name.ends_with(".md") && name.len > h.len + 3
+      return true
+  for o in outside_names
+    if name.equals(o)
+      return true
+  return false
+
+priv const name_samples: Sample[8] = ::{
+  Sample::{ .text = "README.md", .hits = true },
+  Sample::{ .text = "SPEC-language.md", .hits = true },
+  Sample::{ .text = "HOWTO-bring-up.md", .hits = true },
+  Sample::{ .text = "CONTRIBUTING.md", .hits = true },
+  // **The kind alone with no subject is not a name.** `SPEC-.md` says nothing.
+  Sample::{ .text = "SPEC-.md", .hits = false },
+  Sample::{ .text = "RATIONALE.md", .hits = false },
+  Sample::{ .text = "readme.md", .hits = false },
+  Sample::{ .text = "OVERVIEW.md", .hits = false },
+}
+
+priv fn check_names(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  // `private/` is left out of the published copy and names its own documents (the comparisons
+  // among them), so the published copy's kinds do not apply to it.
+  own: = harness.private_docs()
+  for rel in harness.tracked_matching(U8[][]::{ "*.md", ":!private" })
+    seen += 1
+    name: = sys.get_file_name(rel)
+    $is_own: = false
+    for o in own
+      is_own = is_own || name.equals(o)
+    if !is_kind_name(name, arena) && !is_own
+      bad
+        .push(arena.text().s(rel).s(": `").s(name).s("` is none of the six kinds").take())
+  verdict.check_list("every document carries one of the six kinds' names (docs/SPEC-documents.md)",
+    seen, "files", bad@, "README / TOUR / HOWTO-<task> / SPEC-<subject> / DESIGN / PLAN")
+
+// ==========================================
+// A heading that names a roadmap stands only in a `PLAN.md`
+// ==========================================
+
+priv const plan_words: U8[][6] = ::{ "roadmap", "milestone", "not started", "what is left",
+  "what is to be added", "next step" } //<
+    //< The words a heading uses when it opens a plan, folded to lower case
+    //<
+    //< Caution: **List only words that open a plan and nothing else**: a word that also
+    //< describes a decision ("not settled") would push the grounds out of `DESIGN.md` too.
+
+fn plan_heading(line: U8[], arena: Arena$@): U8[] //<
+  //< The plan word that heading holds, or empty where it is not a heading or holds none
+  if !line.starts_with("#")
+    return ""
+  b: = arena.text()
+  for c in line
+    b.c(c.to_lower())
+  low: = b.take()
+  for w in plan_words
+    if low.find_str(w) >= 0
+      return w
+  return ""
+
+priv fn plan_hits(text: U8[], arena: Arena$@): Bool
+  return plan_heading(text, arena).len > 0
+
+priv const plan_samples: Sample[6] = ::{
+  Sample::{ .text = "## The roadmap", .hits = true },
+  Sample::{ .text = "### Stage 4 — the milestones", .hits = true },
+  Sample::{ .text = "## Not started (known, but not yet touched)", .hits = true },
+  // **Prose is not a heading.** The rule's own text names the words.
+  Sample::{ .text = "A heading that names a roadmap stands only in a PLAN.md", .hits = false },
+  Sample::{ .text = "## Whether `pub` is needed is not settled by walking the references",
+    .hits = false },
+  Sample::{ .text = "## Where the plan is written, and how it is marked done", .hits = false },
+}
+
+priv fn check_plan_headings(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  for rel in harness.tracked_matching(U8[][]::{ "*.md", ":!*PLAN.md" })
+    $i: Sz = 0
+    for line in harness.read_under_root(rel).lines(arena)
+      i += 1
+      if !line.starts_with("#")
+        continue
+      seen += 1
+      w: = plan_heading(line, arena)
+      if w.len > 0
+        bad
+          .push(arena.text().s(rel).s(":\{i\}: \"").s(w).s("\"  ").s(line.trim_spaces()).take())
+  verdict.check_list("a heading that names a roadmap stands only in a PLAN.md \
+    (docs/SPEC-documents.md)", seen, "headings", bad@,
+    "what is left goes to its package's docs/PLAN.md; what is done is deleted")
+
+priv fn check_fires(arena: Arena$@)
+  $n: = scan.misjudged(Sample[]::name_samples, is_kind_name, arena)
+  verdict.check_list("the judgment of a kind's name can fire", name_samples.len, "samples", n@,
+    "the table of what is hit and what is not is `name_samples`")
+  $p: = scan.misjudged(Sample[]::plan_samples, plan_hits, arena)
+  verdict.check_list("the judgment of a roadmap heading can fire", plan_samples.len, "samples", p@,
+    "the table of what is hit and what is not is `plan_samples`")
+
+fn run(arena: Arena$@) //< this section's entry point
+  //<
+  //< Caution: **Call it from `suite/conventions_test.kspls`'s `main`** (there is one suite).
+  check_fires(arena)
+  check_names(arena)
+  check_plan_headings(arena)

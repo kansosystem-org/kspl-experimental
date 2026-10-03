@@ -1,0 +1,970 @@
+#!/usr/bin/env -S ksplc run
+//< The test that pins down `ksplc fmt`'s formatting result
+//<
+//< The formatter **rewrites the whole repository**, so a defect adds a mass of unrelated
+//< differences and review stops working.
+
+// ==========================================
+//   1. **idempotence**: the first and second outputs agree (or every `make fmt` makes a difference)
+//   2. **the space between tokens**: telling apart look-alikes such as a unary and a binary "-"
+// ==========================================
+import "ksplc/tests/support/harness"
+import "std/chars" // classifying and extracting single characters
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" // `arena.text()`
+import "std/sys"
+import "std/verdict"
+
+// The formatted shape.
+// Caution: It is also the expected value, so format it by hand.
+priv const src_unary: U8[] =
+  """pub fn g(x: I32): I32 {
+  return x;
+}
+
+pub fn f(c: Bool): I32 {
+  a: I32$[2] = ::{ -1, -2 };
+  b: = -1 if c else -2;
+  d: = (-1);
+  k: = g(-1);
+  if -1 < 0 {
+    return -1;
+  }
+  for $i: I32 = -1; -1 < i; i += 1 {}
+  return -3;
+}
+"""
+
+priv const src_binary: U8[] =
+  """pub fn f(v: I32$[2]): I32 {
+  m: = 3 - 1;
+  n: = v[0] - 1;
+  return m - n;
+}
+"""
+
+priv const src_empty_block: U8[] =
+  """pub fn e1() {}
+
+pub fn e2(c: Bool) {
+  if c {}
+  for c {}
+}
+"""
+
+// One attribute per line: joined into `#export #cfg(x)` they cannot be read one at a time, and
+// adding one changes the whole line in a difference.
+priv const src_attrs: U8[] =
+  """#export
+#cfg(hosted)
+pub fn f(a: I32): I32 {
+  return a;
+}
+
+#align(8)
+#export
+pub struct S {
+  pub n: I32;
+}
+"""
+
+// The input for a character literal written with a backslash and a brace.
+//
+// Caution: **Do not read it as the start of an interpolation.** Read that way, the closing `'`
+// counts as "a quote inside an interpolation", the span runs to the file's end, and the formatter
+// loses the character (get_string_span in `ksplc/fmt/measure.kspls`). An interpolation opens only
+// inside double quotes.
+priv const src_brace_char: U8[] =
+  """pub fn f(): U8 {
+  a: U8 = '\{';
+  b: U8 = '\}';
+  return a + b;
+}
+"""
+
+// The input for a comment inside the braces.
+// Caution: **Include both a branch with an empty body and a comment at the body's end.** With only
+// the empty branch, a comment just before the `}` moving one level out passes unnoticed.
+priv const src_inner_comment_in: U8[] =
+  """pub fn f(c: Bool, d: Bool): I32 {
+  if c {
+    // the reason it is left empty.
+    // this is the second line.
+  }
+  $n: = 0;
+  if d {
+    n += 1;
+    // the comment placed at the body's end.
+  }
+  return n;
+}
+"""
+
+// The input for blank lines.
+// Caution: **Always include a blank line after `}`.** A block's two ends test only "dropping",
+// so also dropping a paragraph's separator passes unnoticed.
+priv const src_blank_in: U8[] =
+  """pub fn f(c: Bool): I32 {
+
+  $n: = 0;
+  if c {
+
+    n += 1;
+
+  }
+
+  n += 2;
+  return n;
+
+}
+"""
+
+// The above's expected value: only the blank lines at the block's head and tail go.
+priv const src_blank_out: U8[] =
+  """pub fn f(c: Bool): I32 {
+  $n: = 0;
+  if c {
+    n += 1;
+  }
+
+  n += 2;
+  return n;
+}
+"""
+
+// The input for `import`'s reordering.
+// Caution: **Always include a heading, a comment right above, an attribute and a second set.**
+// With only a flat list, a heading moving into the middle of a set passes unnoticed.
+priv const src_imports_in: U8[] =
+  """// the file's heading. this must not move.
+#cfg(db)
+import "std/str" as _str;
+// this comment belongs to the import below and moves with it.
+import "std/io" as io;
+#cfg(tls)
+import "std/tls" as _tls;
+import "std/ds" { List };
+
+// the second set's heading. it stays at the set's head even under reordering.
+#cfg(db)
+import "std/sys" as _sys;
+import "std/fs" as _fs;
+
+pub fn main(): I32 {
+  return 0;
+}
+"""
+
+// The above's expected value: no reordering across sets, and the heading stays.
+// Caution: **An attribute moves with its import, the first of a set's too**: left behind it
+// would bind to whichever import comes to stand under it.
+priv const src_imports_out: U8[] =
+  """// the file's heading. this must not move.
+import "std/ds" { List };
+// this comment belongs to the import below and moves with it.
+import "std/io" as io;
+#cfg(db)
+import "std/str" as _str;
+#cfg(tls)
+import "std/tls" as _tls;
+
+// the second set's heading. it stays at the set's head even under reordering.
+import "std/fs" as _fs;
+#cfg(db)
+import "std/sys" as _sys;
+
+pub fn main(): I32 {
+  return 0;
+}
+"""
+
+// The input for `AllowShortBlocks: true`.
+// Caution: **Always include a branch with a comment.** Without one, folding a comment in (its first
+// line onto the `{` line, the rest across the brace) passes unnoticed.
+priv const src_short_in: U8[] =
+  """pub fn f(n: I32): I32 {
+  if n < 0 {
+    return -1;
+  }
+  if n == 0 {
+    // 0 is not treated as a number.
+    return 0;
+  }
+  return n;
+}
+"""
+
+// The above's expected value: only the branch with no comment is folded.
+priv const src_short_out: U8[] =
+  """pub fn f(n: I32): I32 {
+  if n < 0 { return -1; }
+  if n == 0 {
+    // 0 is not treated as a number.
+    return 0;
+  }
+  return n;
+}
+"""
+
+// The input for `AllowShortFunctions: true`.
+// Caution: **Always include the four shapes that are not folded.** With only shapes that fold,
+// folding what must not be folded passes unnoticed.
+priv const src_short_fn_in: U8[] =
+  """pub fn one(x: I32): I32 {
+  return x + 1;
+}
+
+pub fn two(x: I32): I32 {
+  y: = x + 1;
+  return y;
+}
+
+pub fn noted(x: I32): I32 {
+  // add 1.
+  return x + 1;
+}
+
+pub fn guarded(n: I32): I32 {
+  if n < 0 {
+    return -1;
+  }
+  return n;
+}
+
+pub fn wide_enough_that_the_folded_form_would_not_fit(first: I32, second: I32): I32 {
+  return first * second + first - second + second * first + first - second;
+}
+
+pub struct S {
+  n: I32;
+}
+
+impl S {
+  fn get(r: Self@): I32 {
+    return r.n;
+  }
+}
+"""
+
+// The above's expected value: only `one` and `S.get` fold. **The one-statement `if` inside
+// `guarded` stays too** — this setting covers only a `fn`'s body; a control structure's block
+// belongs to AllowShortBlocks.
+priv const src_short_fn_out: U8[] =
+  """pub fn one(x: I32): I32 { return x + 1; }
+
+pub fn two(x: I32): I32 {
+  y: = x + 1;
+  return y;
+}
+
+pub fn noted(x: I32): I32 {
+  // add 1.
+  return x + 1;
+}
+
+pub fn guarded(n: I32): I32 {
+  if n < 0 {
+    return -1;
+  }
+  return n;
+}
+
+pub fn wide_enough_that_the_folded_form_would_not_fit(first: I32, second: I32): I32 {
+  return first * second + first - second + second * first + first - second;
+}
+
+pub struct S {
+  n: I32;
+}
+
+impl S {
+  fn get(r: Self@): I32 { return r.n; }
+}
+"""
+
+// A closure's `;` separates its parameters from its captures and stays on the signature's line,
+// even with no capture after it.
+// Caution: **A closure bound to a name is the case to keep.** A call's argument list already keeps
+// newlines out, so only a closure as a statement's value shows the difference.
+priv const src_closure_sep: U8[] =
+  """pub fn f(): I32 {
+  bound: = 2;
+  by_rank: = fn(a: I32, b: I32; ): I32 {
+    return a - b;
+  };
+  over: = fn(x: I32; bound: I32): Bool {
+    return x > bound;
+  };
+  return 0;
+}
+"""
+
+priv const src_closure_sep_layout: U8[] =
+  """pub fn f(): I32
+  bound: = 2
+  by_rank: = fn(a: I32, b: I32; ): I32
+    return a - b
+  over: = fn(x: I32; bound: I32): Bool
+    return x > bound
+  return 0
+"""
+
+// Idempotence means something only from a broken input (a formatted shape does not move at all),
+// hence the newline in an empty block and the space in a unary minus.
+priv const src_messy: U8[] =
+  """pub fn f( c : Bool ) : I32 {
+  a : I32$[2] = ::{ - 1 , - 2 } ;
+  b : = - 1 if c else - 2 ;
+  if c {
+  }
+  for $i : I32 = - 1 ; i < 0 ; i += 1 {
+  }
+  return - 3 ;
+}
+"""
+
+// A value too long for its line, where a line break alone would not be read back.
+// **The three shapes split three ways.** A conditional value outside every bracket gets
+// parentheses and breaks between its choices (never after its `if`); one below its `=` too; a
+// `return`'s value stays on its line, with a string carried on.
+priv const src_choice_in: U8[] =
+  """pub fn rank(op: I32): I32 {
+  return 10 if op == 42 || op == 47 || op == 37 else 9 if op == 43 || op == 45 else 8 if op == 60 || op == 62 else 7 if op == 61 else 0;
+}
+
+pub fn long_choice(a: I32, b: I32): I32 {
+  total: = a * 1000000 + b * 1000 + a * b + 123456789 + a * a * 7 if a > b else b * 1000000 + a * 1000 + 987654321 + b * b * 3;
+  return total;
+}
+
+pub fn message(): U8[] {
+  return
+    "a message written out long enough that the formatter has to carry it onto the next line at a space";
+}
+"""
+
+priv const src_choice_out: U8[] =
+  """pub fn rank(op: I32): I32 {
+  return (10 if op == 42 || op == 47 || op == 37 else 9 if op == 43 || op == 45
+    else 8 if op == 60 || op == 62 else 7 if op == 61 else 0);
+}
+
+pub fn long_choice(a: I32, b: I32): I32 {
+  total: =
+    (a * 1000000 + b * 1000 + a * b + 123456789 + a * a * 7 if a > b
+    else b * 1000000 + a * 1000 + 987654321 + b * b * 3);
+  return total;
+}
+
+pub fn message(): U8[] {
+  return "a message written out long enough that the formatter has to carry it onto the next line \
+    at a space";
+}
+"""
+
+// The same program in the indentation notation, where the parentheses are what lets it break.
+priv const src_choice_layout: U8[] =
+  """pub fn rank(op: I32): I32
+  return (10 if op == 42 || op == 47 || op == 37 else 9 if op == 43 || op == 45
+    else 8 if op == 60 || op == 62 else 7 if op == 61 else 0)
+
+pub fn long_choice(a: I32, b: I32): I32
+  total: =
+    (a * 1000000 + b * 1000 + a * b + 123456789 + a * a * 7 if a > b
+    else b * 1000000 + a * 1000 + 987654321 + b * b * 3)
+  return total
+
+pub fn message(): U8[]
+  return "a message written out long enough that the formatter has to carry it onto the next line \
+    at a space"
+"""
+
+// An arm after an empty one, on a line too long to hold both, goes to the header's own column.
+// **One level in, it is not the next arm** but a statement of the block above, and the
+// indentation notation fails to parse.
+priv const src_arm_after_empty_layout: U8[] =
+  """priv enum Pick
+  near
+  far
+
+priv fn far_enough_to_break_the_line(p: Pick, metres: I32): Pick
+  return p if metres > 0 else Pick.far
+
+pub fn is_near(p: Pick, how_far_it_is_in_metres: I32, metres_still_to_go: I32): Bool
+  switch far_enough_to_break_the_line(p, how_far_it_is_in_metres + metres_still_to_go) case .near {}
+  default
+    return false
+  return true
+"""
+
+// A `defer` holding one statement is written bare, whatever block it was typed in.
+// Caution: **Test the two blocks that stay too.** A block of two statements and one holding a
+// comment keep their braces; unwrapped, the comment would lose the line it describes.
+// **A statement ending in a block is still one statement** (`defer f() catch {}`).
+priv const src_defer_in: U8[] =
+  """pub fn f(): I32 {
+  $a: = 1;
+  defer { a = 0; }
+  $b: = 2;
+  defer {
+    b = 0;
+  }
+  defer {
+    a = 1;
+    b = 1;
+  }
+  defer {
+    // put back last
+    a = 2;
+  }
+  defer risky() catch {};
+  if a > 0 {
+    a = 3;
+  }
+  defer cleanup() catch e {
+    a = 4;
+  };
+  return a + b;
+}
+"""
+
+priv const src_defer_out: U8[] =
+  """pub fn f(): I32 {
+  $a: = 1;
+  defer a = 0;
+  $b: = 2;
+  defer b = 0;
+  defer {
+    a = 1;
+    b = 1;
+  }
+  defer {
+    // put back last
+    a = 2;
+  }
+  defer risky() catch {};
+  if a > 0 {
+    a = 3;
+  }
+  defer cleanup() catch e {
+    a = 4;
+  };
+  return a + b;
+}
+"""
+
+priv const src_defer_layout: U8[] =
+  """pub fn f(): I32
+  $a: = 1
+  defer a = 0
+  $b: = 2
+  defer b = 0
+  defer
+    a = 1
+    b = 1
+  defer
+    // put back last
+    a = 2
+  defer risky() catch {}
+  if a > 0
+    a = 3
+  defer cleanup() catch e
+    a = 4
+  return a + b
+"""
+
+priv fn fmt(path: U8[]): verdict.Run_out //< the formatting's result
+  //<
+  //< On failure, code is non-zero and out holds that output.
+  return harness.run(U8[][]::{ harness.ksplc_exe(), "fmt", path })
+
+priv fn write_src(slot: U8[], name: U8[], body: U8[], arena: Arena$@): U8[] //<
+  //< It returns the path of the working directory holding one input file, or empty on failure
+  dir: = harness.sandbox(arena.text().s("fmt_\{slot\}").take()) catch
+    return ""
+  path: = fs.join(dir, name, arena)
+  io.write_file(path, body) catch
+    return ""
+  return path
+
+priv fn differs(want: U8[], got: U8[], arena: Arena$@): U8[] //<
+  //< Why one formatting result is not the expected one, with both shapes shown
+  //<
+  //< **One sentence for every case**, rather than a wrapping call ([H0802]) at each.
+  return arena.text()
+    .s("the formatting differs from what was expected\n--- expected ---\n\{want\}--- actual \
+      ---\n\{got\}").take()
+
+priv fn case_stable(slot: U8[], file: U8[], name: U8[], src: U8[], arena: Arena$@) //<
+  //< Checks that formatting an already formatted shape changes nothing
+  //<
+  //< The file's name (`a.kspl` or `a.kspls`) decides the notation.
+  path: = write_src(slot, file, src, arena)
+  if path.len == 0
+    verdict.check(name, false, "cannot place the material")
+    return
+  r: = fmt(path)
+  if r.code != 0
+    verdict.check(name, false, arena.text().s("fmt failed\n\{r.out\}").take())
+    return
+  verdict.check(name, r.out.equals(src), differs(src, r.out, arena))
+
+priv fn case_idempotent(arena: Arena$@) //<
+  //< Checks that even a broken input changes nothing on the second pass
+  name: = "the second formatting changes nothing (idempotent)"
+  path: = write_src("messy", "a.kspl", src_messy, arena)
+  if path.len == 0
+    verdict.check(name, false, "cannot place the material")
+    return
+  first: = fmt(path)
+  if first.code != 0
+    verdict.check(name, false,
+      arena.text().s("the first fmt failed\n\{first.out\}").take())
+    return
+  second_path: = fs.join(sys.get_dir_name(path), "b.kspl", arena)
+  io.write_file(second_path, first.out) catch
+    verdict.check(name, false, "the first result cannot be written")
+    return
+  second: = fmt(second_path)
+  if second.code != 0
+    verdict.check(name, false,
+      arena.text().s("the second fmt failed\n\{second.out\}").take())
+    return
+  verdict.check(name, first.out.equals(second.out),
+    harness.arena().text()
+    .s("it changed on the second\n--- first ---\n\{first.out\}--- second ---\n\{second.out\}")
+    .take())
+
+// A comment between the elements of a compound literal keeps its line and its level. **The broken
+// shape is idempotent too.** **A row whose own text holds a `//` is data**; read as a comment, it
+// forces a multi-line layout. A comment after a row is included too: it is as easily displaced.
+
+priv const src_list_comment: U8[] =
+  """priv struct Row {
+  text: U8[];
+  hits: Bool;
+}
+
+priv const rows: Row[3] = ::{
+  // Why the first row is here, written out long enough that packing cannot fold it away.
+  Row::{ .text = "the first row's value, long enough to stand on its own line", .hits = true },
+  // \u26a0\ufe0f A row whose own text holds a `// comment` and a `{`. It is data, not a comment.
+  Row::{ .text = "// a { is masked", .hits = false },
+  Row::{ .text = "the third", .hits = true } // trailing on the row, not opening a line
+};
+
+fn main(): I32 {
+  return 0;
+}
+"""
+
+// A comment above a **short** element of a compound literal keeps its line.
+// Caution: **Being short is the whole point.** The formatter displaces a comment only where it
+// packs the elements, and it packs only what fits: `src_list_comment`'s rows are too long for that.
+priv const src_list_short: U8[] =
+  """priv const rows: U8[][4] = ::{
+  // The first reason.
+  "aaaa/bbbb/cccc.kspl:first",
+  // The second reason.
+  "aaaa/bbbb/cccc.kspl:second",
+  // The third reason, covering the two that follow.
+  "aaaa/bbbb/cccc.kspl:third", "aaaa/bbbb/cccc.kspl:fourth"
+};
+
+fn main(): I32 {
+  return I32::rows.len;
+}
+"""
+
+// A signature broken one parameter per line keeps its indentation.
+// **The trailing comma keeps one parameter per line**; without it the parameters pack onto one
+// line and their comments have nowhere to go. The return's comment sits on the `{` line, the
+// shape a round trip through the indentation notation gives.
+priv const src_doc_params: U8[] =
+  """priv fn demangle( //< strips the mangling off a symbol
+  raw: U8[], //< the mangled symbol as genc wrote it
+  file: U8[], //< the source this symbol came from
+): U8[] { //< the original name, or the input unchanged
+  // Works back from "kspl_<mod>_<func>" to the name the writer gave it.
+  _ = file;
+  return raw;
+}
+
+fn main(): I32 {
+  return I32::demangle("a", "b").len - 1;
+}
+"""
+
+// A string literal too long for the line, written out on one line.
+priv const src_carried_in: U8[] =
+  """import "std/io";
+fn main(): I32 {
+  long: U8[] = "a message written out at a length no line can hold, so the formatter carries it onto the next line at the seam of a space, the mark standing for no byte at all";
+  runs: U8[] = "a run of spaces must never be cut in the middle of itself:      six of them stand there, and the seam goes behind the last";
+  tight: U8[] = "a_word_far_longer_than_the_whole_column_limit_with_nowhere_at_all_in_it_for_a_seam_to_be_put";
+  io.out().s("an interpolation holds \{ 1 + 2 \} and the spaces inside it are an expression's, so no seam may be put among them\n");
+  return I32::(long.len + runs.len + tight.len) - 373;
+}
+"""
+
+// The expected result.
+// Caution: **Test the three shapes that must not break, beside the one that must.** A break inside
+// a run of spaces loses one to the indent the mark swallows, one inside `\{ … \}` lands in code,
+// and a word longer than the line has nowhere to break and is written as is. The continuation is
+// one level in from the line that opened it.
+priv const src_carried_string: U8[] =
+  """import "std/io";
+fn main(): I32 {
+  long: U8[] =
+    "a message written out at a length no line can hold, so the formatter carries it onto the next \
+      line at the seam of a space, the mark standing for no byte at all";
+  runs: U8[] =
+    "a run of spaces must never be cut in the middle of itself:      six of them stand there, and \
+      the seam goes behind the last";
+  tight: U8[] =
+    "a_word_far_longer_than_the_whole_column_limit_with_nowhere_at_all_in_it_for_a_seam_to_be_put";
+  io.out()
+    .s("an interpolation holds \{ 1 + 2 \} and the spaces inside it are an expression's, so no seam \
+      may be put among them\n");
+  return I32::(long.len + runs.len + tight.len) - 373;
+}
+"""
+
+// A value that starts on the line below its `=`, with the declaration's summary after the `=`.
+// **The value keeps its one level of indent.** At column 0 the indentation notation reads it as a
+// declaration of its own (`breaks_off_a_value` in `ksplc/parse/line_cont.kspls`).
+priv const src_value_below: U8[] =
+  """const record_head: U8[] = //< the record\'s header
+  "a header long enough that it is not folded back onto the line that opened it";
+
+fn main(): I32 {
+  return I32::record_head.len - 78;
+}
+"""
+
+// A description too long for its line, and the three that must not move: one short enough, one
+// already carrying its description below, and one after a return type on the line where a wrapped
+// head ends (it describes the return; moved below, it would read as the declaration's own).
+priv const src_summary_in: U8[] =
+  """priv struct Row { //< one row
+  text: U8[]; //< the text as the writer typed it, kept exactly as it came in with neither end trimmed
+  hits: Bool; //< short enough, so it stays
+}
+
+priv fn already(a: Sz): Sz { //<
+  //< it carries its description below already, and this line must not move
+  return a;
+}
+
+priv fn wrapped(a: Sz, b: Sz, c: Sz, d: Sz, e: Sz, f: Sz, g: Sz, h: Sz, i: Sz, j: Sz, k: Sz, l: Sz):
+  Sz { //< what comes back, described on the line a wrapped head closes, and long with it
+  return a + b + c + d + e + f + g + h + i + j + k + l;
+}
+
+fn main(): I32 {
+  r: Row = ::{ .text = "a", .hits = true };
+  return I32::(r.text.len + already(0) + wrapped(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) - 1;
+}
+"""
+
+// The expected result: the one over the width leaves its mark and moves its text one level in;
+// the other three stay.
+priv const src_summary_out: U8[] =
+  """priv struct Row { //< one row
+  text: U8[]; //<
+    //< the text as the writer typed it, kept exactly as it came in with neither end trimmed
+  hits: Bool; //< short enough, so it stays
+}
+
+priv fn already(a: Sz): Sz { //<
+  //< it carries its description below already, and this line must not move
+  return a;
+}
+
+priv fn wrapped(a: Sz, b: Sz, c: Sz, d: Sz, e: Sz, f: Sz, g: Sz, h: Sz, i: Sz, j: Sz, k: Sz, l: Sz):
+  Sz { //< what comes back, described on the line a wrapped head closes, and long with it
+  return a + b + c + d + e + f + g + h + i + j + k + l;
+}
+
+fn main(): I32 {
+  r: Row = ::{ .text = "a", .hits = true };
+  return I32::(r.text.len + already(0) + wrapped(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) - 1;
+}
+"""
+
+priv fn case_summary_below(arena: Arena$@) //<
+  //< A description too long for its line leaves the mark and moves one level in
+  //<
+  //< **The three unmoved shapes test the other half**: a formatter moving every trailing mark down
+  //< would pass the first alone, and the run after a return type would quietly become the
+  //< declaration's own.
+  name: = "a description too long for its line stands below the mark"
+  path: = write_src("below", "a.kspl", src_summary_in, arena)
+  if path.len == 0
+    verdict.check(name, false, "cannot place the material")
+    return
+  r: = fmt(path)
+  if r.code != 0
+    verdict.check(name, false, arena.text().s("fmt failed\n\{r.out\}").take())
+    return
+  verdict.check(name, r.out.equals(src_summary_out), differs(src_summary_out, r.out, arena))
+
+priv fn case_carried_string(arena: Arena$@) //<
+  //< A string too long for the line is carried onto the next one, at a space
+  //<
+  //< **The input is the one-line shape, not the answer**: given the carried shape, a formatter
+  //< that copies a literal's spelling unchanged passes.
+  name: = "a string too long for the line is carried onto the next one"
+  path: = write_src("carried", "a.kspl", src_carried_in, arena)
+  if path.len == 0
+    verdict.check(name, false, "cannot place the material")
+    return
+  r: = fmt(path)
+  if r.code != 0
+    verdict.check(name, false, arena.text().s("fmt failed\n\{r.out\}").take())
+    return
+  verdict.check(name, r.out.equals(src_carried_string),
+    differs(src_carried_string, r.out, arena))
+  again: = write_src("carried2", "a.kspl", r.out, arena)
+  if again.len == 0
+    verdict.check("a carried string does not move on the second formatting", false,
+      "cannot place the material")
+    return
+  second: = fmt(again)
+  verdict.check("a carried string does not move on the second formatting",
+    second.code == 0 && second.out.equals(r.out),
+    arena.text().s("--- first ---\n\{r.out\}--- second ---\n\{second.out\}").take())
+
+priv fn case_split_value(arena: Arena$@) //<
+  //< A value too long for its line breaks only where the break is read back as the same value
+  //<
+  //< **The input is the one-line shape, not the answer**, as with a carried string.
+  name: = "a value too long for its line takes parentheses or stays on the `return` line"
+  path: = write_src("choice", "a.kspl", src_choice_in, arena)
+  if path.len == 0
+    verdict.check(name, false, "cannot place the material")
+    return
+  r: = fmt(path)
+  if r.code != 0
+    verdict.check(name, false, arena.text().s("fmt failed\n\{r.out\}").take())
+    return
+  verdict.check(name, r.out.equals(src_choice_out), differs(src_choice_out, r.out, arena))
+
+priv fn case_bare_defer(arena: Arena$@) //< a `defer` holding one statement is written bare
+  name: = "a defer holding one statement is written without its block"
+  path: = write_src("defer", "a.kspl", src_defer_in, arena)
+  if path.len == 0
+    verdict.check(name, false, "cannot place the material")
+    return
+  r: = fmt(path)
+  if r.code != 0
+    verdict.check(name, false, arena.text().s("fmt failed\n\{r.out\}").take())
+    return
+  verdict.check(name, r.out.equals(src_defer_out), differs(src_defer_out, r.out, arena))
+
+priv fn case_inner_comment(arena: Arena$@) //<
+  //< A comment inside the braces is written unbroken at the right level
+  //<
+  //< **Both are idempotent, so `test-fmt-tree` does not catch them**: the expected value is written
+  //< here.
+  name: = "a comment inside the braces is put out unbroken at the right level"
+  path: = write_src("innercmt", "a.kspl", src_inner_comment_in, arena)
+  if path.len == 0
+    verdict.check(name, false, "cannot place the material")
+    return
+  r: = fmt(path)
+  if r.code != 0
+    verdict.check(name, false, arena.text().s("fmt failed\n\{r.out\}").take())
+    return
+  verdict.check(name, r.out.equals(src_inner_comment_in),
+    differs(src_inner_comment_in, r.out, arena))
+
+priv fn case_blank_lines(arena: Arena$@) //<
+  //< It drops a blank line with nothing to separate above from below
+  //<
+  //< Caution: **Check that the blank line after `}` is kept.** It is the writer's paragraph
+  //< separator; dropped, functions and methods run into one another.
+  name: = "the blank lines at a block's two ends are dropped and the one after `}` is kept"
+  path: = write_src("blank", "a.kspl", src_blank_in, arena)
+  if path.len == 0
+    verdict.check(name, false, "cannot place the material")
+    return
+  r: = fmt(path)
+  if r.code != 0
+    verdict.check(name, false, arena.text().s("fmt failed\n\{r.out\}").take())
+    return
+  verdict.check(name, r.out.equals(src_blank_out), differs(src_blank_out, r.out, arena))
+
+priv fn case_import_order(arena: Arena$@) //< it sorts the `import` lines by name
+  //<
+  //< Caution: **Check that the file's heading does not move.** It sits right above the first
+  //< import, so "a comment right above belongs to the import below" would move it along.
+  name: = "the imports are sorted by name (the heading does not move)"
+  path: = write_src("imports", "a.kspl", src_imports_in, arena)
+  if path.len == 0
+    verdict.check(name, false, "cannot place the material")
+    return
+  r: = fmt(path)
+  if r.code != 0
+    verdict.check(name, false, arena.text().s("fmt failed\n\{r.out\}").take())
+    return
+  verdict.check(name, r.out.equals(src_imports_out), differs(src_imports_out, r.out, arena))
+
+// A block on one line in the indentation notation: its last `;` goes, and comes back in braces.
+priv const src_bare_line_in: U8[] =
+  """pub fn one(x: I32): I32 { return x + 1; }
+
+pub fn f(n: I32): I32
+  if n < 0 { return -1 }
+  return n
+"""
+
+priv const src_bare_line_out: U8[] =
+  """pub fn one(x: I32): I32 { return x + 1 }
+
+pub fn f(n: I32): I32
+  if n < 0 { return -1 }
+  return n
+"""
+
+priv const src_bare_line_braced: U8[] =
+  """pub fn one(x: I32): I32 { return x + 1; }
+
+pub fn f(n: I32): I32 {
+  if n < 0 { return -1; }
+  return n;
+}
+"""
+
+priv fn case_bare_line(arena: Arena$@) //<
+  //< A block written on one line leaves out its last `;` only in the indentation notation
+  //<
+  //< Caution: **Test the brace notation too.** Only the indentation reader supplies the `;`
+  //< (`supply_block_end` in `ksplc/parse/layout.kspls`); dropped in braces, a terminator is lost.
+  name: = "a one-line block leaves its last `;` out in the indentation notation"
+  back: = "a one-line block's last `;` comes back in the brace notation"
+  path: = write_src("bareline", "a.kspls", src_bare_line_in, arena)
+  if path.len == 0
+    verdict.check(name, false, "cannot place the material")
+    return
+  style: = "--style=AllowShortFunctions: true, AllowShortBlocks: true"
+  exe: = harness.ksplc_exe()
+  laid: = harness.run(U8[][]::{ exe, "fmt", style, path })
+  braced: = harness.run(U8[][]::{ exe, "fmt", style, "--to=kspl", path })
+  if laid.code != 0 || braced.code != 0
+    verdict.check(name, false,
+      arena.text().s("fmt failed\n\{laid.out\}\{braced.out\}").take())
+    return
+  verdict.check(name, laid.out.equals(src_bare_line_out),
+    differs(src_bare_line_out, laid.out, arena))
+  verdict.check(back, braced.out.equals(src_bare_line_braced),
+    differs(src_bare_line_braced, braced.out, arena))
+
+priv fn case_short_blocks(arena: Arena$@) //<
+  //< `AllowShortBlocks: true` folds only a one-statement block with no comment
+  //<
+  //< Caution: **Check that a branch with a comment is not folded.** Folded, the comment breaks
+  //< across the brace, and so does the round trip back.
+  name: = "AllowShortBlocks folds only a one-statement block with no comment"
+  path: = write_src("short", "a.kspl", src_short_in, arena)
+  if path.len == 0
+    verdict.check(name, false, "cannot place the material")
+    return
+  r: = harness
+    .run(U8[][]::{ harness.ksplc_exe(), "fmt", "--style=AllowShortBlocks: true", path })
+  if r.code != 0
+    verdict.check(name, false, arena.text().s("fmt failed\n\{r.out\}").take())
+    return
+  verdict.check(name, r.out.equals(src_short_out), differs(src_short_out, r.out, arena))
+
+priv fn case_short_functions(arena: Arena$@) //<
+  //< `AllowShortFunctions: true` folds the body of a `fn` only when it is one statement
+  //<
+  //< Caution: **Test the bodies that are not folded too.** Folding a two-statement body, one with
+  //< a comment, or one over the column width breaks the comment or the width setting.
+  name: = "AllowShortFunctions folds the body of a one-statement fn"
+  path: = write_src("shortfn", "a.kspl", src_short_fn_in, arena)
+  if path.len == 0
+    verdict.check(name, false, "cannot place the material")
+    return
+  r: = harness
+    .run(U8[][]::{ harness.ksplc_exe(), "fmt", "--style=AllowShortFunctions: true", path })
+  if r.code != 0
+    verdict.check(name, false, arena.text().s("fmt failed\n\{r.out\}").take())
+    return
+  verdict.check(name, r.out.equals(src_short_fn_out), differs(src_short_fn_out, r.out, arena))
+
+priv fn case_unknown_style_key(arena: Arena$@) //<
+  //< Checks that an unknown `--style` key is not silently ignored
+  //<
+  //< Ignored, a typo formats with the default and reports success, so it must fail naming the key.
+  name: = "an unknown `--style` key is rejected"
+  path: = write_src("style", "a.kspl", "fn f(): I32 {\n  return 1;\n}\n", arena)
+  if path.len == 0
+    verdict.check(name, false, "cannot place the material")
+    return
+  exe: = harness.ksplc_exe()
+  bad: = harness.run(U8[][]::{ exe, "fmt", "--style=IndentWith: 8", path })
+  if bad.code == 0
+    verdict.check(name, false,
+      arena.text().s("the mistyped 'IndentWith' passed\n\{bad.out\}").take())
+    return
+  if bad.out.find_str("IndentWith") < 0
+    verdict.check(name, false,
+      harness.arena().text()
+      .s("the rejected key is not in the output, so which is bad cannot be traced\n\{bad.out\}")
+      .take())
+    return
+  // Caution: A correct key must pass. If everything were rejected, the case above would pass too.
+  good: = harness.run(U8[][]::{ exe, "fmt", "--style=IndentWidth: 8", path })
+  verdict.check(name, good.code == 0,
+    arena.text().s("the correct 'IndentWidth' was rejected\n\{good.out\}").take())
+
+fn main(): I32
+  arena: = harness.begin(64 * 1024 * 1024)
+  io.out().s("# ksplc fmt\n")
+  case_stable("unary", "a.kspl", "no space is put into a unary minus", src_unary, arena)
+  case_stable("binary", "a.kspl", "a space is put before and after a binary minus", src_binary,
+    arena)
+  case_stable("empty", "a.kspl", "an empty block is folded with no space in it", src_empty_block,
+    arena)
+  case_stable("attrs", "a.kspl", "one attribute per line", src_attrs, arena)
+  case_stable("brace", "a.kspl",
+    "a brace in a character literal is not read as an interpolation opening", src_brace_char, arena)
+  case_stable("listcmt", "a.kspl",
+    "a comment between a compound literal's elements keeps its line and level", src_list_comment,
+    arena)
+  case_stable("listshort", "a.kspl",
+    "a comment above a short element of a compound literal keeps its line", src_list_short, arena)
+  case_stable("docparams", "a.kspl",
+    "a signature broken one parameter per line keeps its indentation", src_doc_params, arena)
+  case_stable("valuebelow", "a.kspl", "a value opening below its `=` keeps its indentation",
+    src_value_below, arena)
+  case_stable("closure", "a.kspl", "a closure's `;` stays on its signature's line", src_closure_sep,
+    arena)
+  case_stable("closurel", "a.kspls", "a closure's `;` stays on its signature's line (indentation)",
+    src_closure_sep_layout, arena)
+  case_carried_string(arena)
+  case_split_value(arena)
+  case_bare_defer(arena)
+  case_stable("deferl", "a.kspls", "a bare defer and the blocks that stay do not move (indentation)",
+    src_defer_layout, arena)
+  case_stable("choicebr", "a.kspl", "a split value in parentheses does not move", src_choice_out,
+    arena)
+  case_stable("choicel", "a.kspls", "a split value in parentheses does not move (indentation)",
+    src_choice_layout, arena)
+  case_stable("armafter", "a.kspls",
+    "an arm after an empty one that does not fit goes to the header's column (indentation)",
+    src_arm_after_empty_layout, arena)
+  case_summary_below(arena)
+  case_inner_comment(arena)
+  case_blank_lines(arena)
+  case_import_order(arena)
+  case_short_blocks(arena)
+  case_idempotent(arena)
+  case_short_functions(arena)
+  case_bare_line(arena)
+  case_unknown_style_key(arena)
+  return harness.finish()

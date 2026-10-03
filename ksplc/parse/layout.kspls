@@ -1,0 +1,638 @@
+//< Rewrites the indentation notation (`.kspls`) into the brace notation for the analyser
+//<
+//< **The two notations differ in three marks only**: indenting, outdenting and a newline stand
+//< for `{`, `}` and `;`. No lines are added: the `{` goes at the end of the heading line and the
+//< `}` at the end of the block's last line.
+//< **Only blocks and terminators disappear** (what remains is `T::{ … }`, `import … { … }`, a
+//< string's interpolation, a block's braces where it fits on one line, and the `;` of a C-style
+//< loop heading, of a closure's captures, and between two statements on one line).
+import "ksplc/base/lines" as base_lines
+import "ksplc/parse/line_cont" { ends_in_catch, is_label_only, line_continues, starts_cont }
+import "ksplc/parse/source_fix" as parse_source_fix
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+struct Note //< a problem found in the indentation
+  //<
+  //< **No diagnostic is printed here**, so that no second reporter states a syntax error before
+  //< the analyser does (Principle 6): what it finds is returned as a value and reported once sema
+  //< starts (`report_layout_notes` in `../source_checks.kspls`).
+  kind: Note_kind
+  line: Sz //<
+    //< Which line it is (1-based)
+    //<
+    //< **A line, because line numbers are the same before and after the conversion** (inserted
+    //< text goes at a line's end, or replaces a space).
+    //< Caution: **Do not report a column** — it would need the inserted text added back, and every
+    //< user manages with a line.
+
+enum Note_kind
+  ragged(want: Sz, got: Sz) //<
+    //< Siblings on the same level are not aligned to one column.
+    //<
+    //< Caution: **The conversion hides it silently** — only the heading's column is pushed, so any
+    //< deeper line joins the level whatever its column (see `to_braces`).
+  tab //<
+    //< A tab is used for indentation.
+    //<
+    //< **A tab is not counted in the column** (the walk below counts only spaces), so that line is
+    //< treated as column 0 and ends up outside the level around it.
+
+priv const tab_byte: U8 = '\t' //< one level of indentation
+  //<
+  //< Caution: **Do not guess its width.** Levels are told apart only by deeper or shallower; a
+  //< fixed width would mistake a line continued by indentation for a level.
+
+priv const cr_byte: U8 = '\r' //< the `\r` at the end of a line (CRLF)
+  //<
+  //< **Do not treat it as a character** — a CRLF blank line would read as not blank, and a
+  //< terminator or brace put after the `\r` breaks the text. **Do not drop a `\r` inside a string**
+  //< — `open_str` keeps that one, and dropping it would change the newline a raw string holds.
+
+// The block-opening headings that need no `;` after the block closes; **any other gets one** (the
+// `r: = f() catch` kind, a block inside an expression). `"label:"` is a marker: no name contains a
+// `:`.
+priv const block_heads: U8[][14] = ::{ "fn", "struct", "enum", "trait", "impl", "extern", "if",
+  "else", "for", "switch", "case", "default", "defer", "label:" }
+
+priv const head_skips: U8[][2] = ::{ "pub", "priv" } //<
+  //< The words that can come before a heading without being the heading
+
+priv struct Phys //< one physical line
+  line: Sz //< which line it is (1-based)
+  indent: Sz //< the number of leading spaces
+  code_start: Sz //< the first non-whitespace (line_end where there is no code)
+  code_end: Sz //< just after the last non-whitespace, the line comment excluded
+  line_end: Sz //< the newline's position (src.len where there is none)
+  blank: Bool //< no code (a blank line, or a line comment alone)
+  inner: Bool //< the line's start is inside a bracket, or inside a raw string
+
+priv struct Logical //< one logical line (= one statement or declaration)
+  line: Sz //< which line it is (1-based), kept only for reporting a note
+  indent: Sz
+  head: U8[] //< the leading word (after skipping the visibility and the label)
+  code_start: Sz //< the first non-whitespace
+  code_end: Sz //< the `{` `;` `}` are inserted here
+  attr: Bool //< a line holding only an attribute (`#name`); it takes no terminator
+
+priv struct Insert //< one insertion
+  //<
+  //< Caution: **Do not reorder by position** — the order of several insertions at the same
+  //< position (`; }`, `} }`) matters.
+  at: Sz
+  text: U8[]
+  drop: Sz //<
+    //< How many source bytes from `at` it replaces (0 = a pure insertion)
+    //<
+    //< **A one-line block's `;` replaces the space before its `}`**, so no column moves
+    //< (diagnostics and the editor read positions from the converted text).
+
+priv const max_line_opens: Sz = 32 //< how many brackets one physical line may hold open at once
+
+priv struct Line_open //< a bracket opened on the physical line being walked
+  at: Sz
+  kind: U8 //<
+    //< `(` `[`, `{` for a block's brace, `v` for a value's (`T::{ … }`, `import … { … }`)
+  stmt_from: Sz //< where the block's last statement began: just past the `{` or its last `;`
+
+// The walk: it skips strings, characters and line comments, counts bracket depth and splits the
+// source into physical lines.
+// Caution: **Count braces as brackets too.** The only braces left in a `.kspls` are values
+// (`T::{ … }`, `import … { … }`, interpolation), so a value spanning lines stays one logical line.
+// ---------------------------------------------------------
+priv fn begins_anew(c: U8): Bool //<
+  //< Whether a line starting with this byte starts something new
+  //<
+  //< Otherwise it continues what the line above left open.
+  //<
+  //< **A closing bracket continues**: a value written over several lines puts its `}` at column 0,
+  //< and reading that as a new start breaks valid source.
+  return c != ')' && c != ']' && c != '}' && c != ',' && c != '\n' && c != '\r'
+
+priv fn scan_phys(src: U8[], notes: List<|Note|>$@, semis: List<|Insert|>$@, arena: Arena$@):
+  List<|Phys|>
+  $out: = List<|Phys|>.new(arena)
+  $depth: Sz = 0
+  $opens: Line_opens = ::{}
+  // A string left open: 0 = none, 1 = a raw string (`"""`), 2 = a plain string. **A plain string
+  // can cross lines too**: `String_content` accepts a newline, so a `= "` may close lines later
+  // with `";` (`make test-place`).
+  $open_str: Sz = 0
+  $i: Sz = 0
+  for i < src.len
+    line_start: = i
+    $indent: Sz = 0
+    $look: = i
+    for look < src.len && src[look] == ' ' && open_str == 0
+      indent += 1
+      look += 1
+    // **An open bracket ends at a line that starts something new** (`begins_anew`), or one
+    // unclosed `(` would read the rest of the file as its arguments.
+    // Caution: **A string left open is not cut off** — a raw string holds its own lines, and one
+    // of them may start at column 0.
+    if indent == 0 && open_str == 0 && look < src.len && begins_anew(src[look])
+      depth = 0
+    inner: = depth > 0 || open_str > 0
+    i = look
+    code_start: = i
+    opens.n = 0
+    import_line: =
+      src.starts_with("import", i) && (i + 6 >= src.len || !src[i + 6].is_alnum())
+    // Caution: **Note a tab only on a line with contents** — a line of only tabs is blank, and a
+    // note on it leaves nothing to fix.
+    tab_at: = i if i < src.len && src[i] == tab_byte && open_str == 0 else -1
+    $code_end: = i
+    $done: = false
+    for !done && i < src.len
+      c: = src[i]
+      if open_str > 0
+        if open_str == 1 && c == '"' && src.starts_with("\"\"\"", i)
+          open_str = 0
+          i += 3
+          code_end = i
+          continue
+        // Caution: **A `\` at a line's end does not skip the newline.** It continues the text with
+        // the string still open; skipping it would join two physical lines and shift every line
+        // number below.
+        if open_str == 2 && c == '\\' && i + 1 < src.len && src[i + 1] != '\n' &&
+          src[i + 1] != '\r'
+          i += 2
+          code_end = i
+          continue
+        if open_str == 2 && c == '"'
+          open_str = 0
+          i += 1
+          code_end = i
+          continue
+        if c == '\n'
+          done = true
+          continue
+        i += 1
+        code_end = i
+        continue
+      if c == '\n'
+        done = true
+        continue
+      if c == '/' && i + 1 < src.len && src[i + 1] == '/'
+        // A line comment; code_end does not move.
+        i = base_lines.line_end(src, i)
+        continue
+      if c == '"'
+        i = skip_string(src, i, open_str@)
+        code_end = i
+        continue
+      if c == '\''
+        i = skip_char(src, i)
+        code_end = i
+        continue
+      opens.step(src, i, import_line, semis)
+      if c == '(' || c == '['
+        depth += 1
+      else if c == ')' || c == ']'
+        depth = depth - 1 if depth > 0 else 0
+      else if c == '{'
+        depth += 1
+      else if c == '}'
+        depth = depth - 1 if depth > 0 else 0
+      else if c == '<' && i + 1 < src.len && src[i + 1] == '|'
+        depth += 1
+        i += 1
+        code_end = i + 1
+      else if c == '|' && i + 1 < src.len && src[i + 1] == '>'
+        depth = depth - 1 if depth > 0 else 0
+        i += 1
+        code_end = i + 1
+      i += 1
+      if c != ' ' && c != tab_byte && c != cr_byte
+        code_end = i
+    line_end: = i
+    if i < src.len
+      i += 1 // skip the newline
+    blank: = code_end <= code_start
+    no: = out.len + 1
+    if tab_at >= 0 && !blank
+      notes.push(Note::{ .kind = Note_kind.tab, .line = no })
+    out
+      .push(Phys::{ .line = no, .indent = indent, .code_start = code_start, .code_end = code_end,
+      .line_end = line_end, .blank = blank, .inner = inner })
+    _unused: = line_start
+  return out
+
+priv struct Line_opens //< the brackets held open on the physical line being walked
+  items: Line_open[max_line_opens]
+  n: Sz //< how many are open; past `max_line_opens` the ones beyond are counted, not kept
+
+impl Line_opens
+  fn step(r: Self$@, src: U8[], i: Sz, import_line: Bool, semis: List<|Insert|>$@) //<
+    //< It processes the byte at `i`: a bracket opening or closing, or a statement's `;`
+    //<
+    //< The `;` ends a statement of the block it stands in.
+    c: = src[i]
+    if c == '(' || c == '[' || c == '{'
+      if r.n < max_line_opens
+        value: =
+          c == '{' && (import_line || (i >= 2 && src[i - 1] == ':' && src[i - 2] == ':'))
+        r.items[r.n] = Line_open::{ .at = i, .kind = 'v' if value else c, .stmt_from = i + 1 }
+      r.n += 1
+    else if c == ')' || c == ']' || c == '}'
+      if r.n > 0
+        r.n -= 1
+        if c == '}' && r.n < max_line_opens && r.items[r.n].kind == '{'
+          supply_block_end(src, r.items[r.n], i, semis)
+    else if c == ';' && r.n > 0 && r.n <= max_line_opens && r.items[r.n - 1].kind == '{'
+      r.items[r.n - 1].stmt_from = i + 1
+
+priv fn supply_block_end(src: U8[], o: Line_open, close: Sz, semis: List<|Insert|>$@) //<
+  //< It inserts the missing `;` after the last statement of a block opened and closed on one line
+  //<
+  //< It follows the same rule as a line's end: a statement ending in `}` takes one unless its
+  //< heading opens a block.
+  $last: = close - 1
+  for last > o.at && (src[last] == ' ' || src[last] == tab_byte)
+    last -= 1
+  if last == o.at || src[last] == ';'
+    return
+  if src[last] == '}' &&
+    is_block_head(heading_of(src, skip_spaces(src, o.stmt_from, last), last + 1))
+    return
+  if src[close - 1] == ' '
+    semis.push(Insert::{ .at = close - 1, .text = ";", .drop = 1 })
+    return
+  semis.push(Insert::{ .at = close, .text = ";" })
+
+priv fn skip_string(src: U8[], at: Sz, open_str: Sz$@): Sz //<
+  //< It skips a string starting with a `"`
+  //<
+  //< Left open at the line's end, it sets `open_str` (1 raw, 2 plain) and returns at the newline.
+  raw: = src.starts_with("\"\"\"", at)
+  $j: = at + 3 if raw else at + 1
+  for j < src.len
+    if raw
+      if src[j] == '"' && src.starts_with("\"\"\"", j)
+        return j + 3
+    else
+      // A `\` at a line's end is left to the newline below (the caution in `scan_phys`).
+      if src[j] == '\\' && j + 1 < src.len && src[j + 1] != '\n' && src[j + 1] != '\r'
+        j += 2
+        continue
+      if src[j] == '"'
+        return j + 1
+    if src[j] == '\n'
+      open_str$ = 1 if raw else 2
+      return j
+    j += 1
+  open_str$ = 1 if raw else 2
+  return src.len
+
+priv fn skip_char(src: U8[], at: Sz): Sz
+  $j: = at + 1
+  for j < src.len
+    if src[j] == '\\' && j + 1 < src.len
+      j += 2
+      continue
+    if src[j] == '\'' || src[j] == '\n'
+      return j + 1
+    j += 1
+  return src.len
+
+priv fn string_goes_on(src: U8[], at: Sz, open_str: Sz$@): Sz //<
+  //< It continues a string left open on an earlier line, from `at` to its close or the line's end
+  //<
+  //< It uses the walk's own rules (`scan_phys` above).
+  $j: = at
+  for j < src.len
+    if open_str$ == 1
+      if src[j] == '"' && src.starts_with("\"\"\"", j)
+        open_str$ = 0
+        return j + 3
+    else
+      if src[j] == '\\' && j + 1 < src.len && src[j + 1] != '\n' && src[j + 1] != '\r'
+        j += 2
+        continue
+      if src[j] == '"'
+        open_str$ = 0
+        return j + 1
+    if src[j] == '\n'
+      return j
+    j += 1
+  open_str$ = 0
+  return src.len
+
+fn next_line_comment(src: U8[], from: Sz): Sz //<
+  //< Where the next line comment at or past `from` starts (`src.len` where none does)
+  //<
+  //< **It skips string and character literals**, raw ones across lines too, so a `//` inside a URL
+  //< or inside program text held in a string is not taken for a comment.
+  //< Caution: **Start it on code, never inside a string.** It reads from wherever it starts.
+  $i: = from
+  for i < src.len
+    c: = src[i]
+    if c == '/' && i + 1 < src.len && src[i + 1] == '/'
+      return i
+    if c == '"'
+      $open_str: Sz = 0
+      i = skip_string(src, i, open_str@)
+      for open_str > 0 && i < src.len
+        i = string_goes_on(src, i + 1, open_str@)
+      continue
+    if c == '\''
+      i = skip_char(src, i)
+      continue
+    i += 1
+  return src.len
+
+// ---------------------------------------------------------
+// Whether a line continues: **indentation alone is not enough**, since KSPL's formatting wraps a
+// long expression, so a deeper indentation can mean "a level" or "a continuation". The marks are in
+// `line_cont.kspls`, which the formatter asks too; this is the half that depends on the line's own
+// indentation.
+// ---------------------------------------------------------
+
+priv const cont_words: U8[][3] = ::{ "as", "in", "catch" } //<
+  //< The words that continue a line onto the next when they end it
+  //<
+  //< **A word that also stands alone does not continue a value.** A conditional value's `if` /
+  //< `else` and a `return` / `throw` / `fallback` are not here: a line starting or ending with one
+  //< also reads as a statement, so a value split there goes in parentheses (the rule is "The
+  //< indentation notation (`.kspls`)" in `../../docs/DESIGN.md`).
+
+priv fn ends_open_word(word: U8[]): Bool //< whether the word at the end of a line continues it
+  for w in cont_words
+    if word.equals(w)
+      return true
+  return false
+
+priv const lead_cont_words: U8[][1] = ::{ "catch" } //<
+  //< The words that continue the previous line when they start a line
+  //<
+  //< No statement begins with one.
+  //< Caution: **Do not add `defer`.** At a line's start it is a heading that opens a block; read as
+  //< a continuation, its whole block moves one statement earlier.
+
+// ---------------------------------------------------------
+// Gathering into logical lines
+// ---------------------------------------------------------
+priv fn merge(src: U8[], phys: List<|Phys|>@, arena: Arena$@): List<|Logical|>
+  $out: = List<|Logical|>.new(arena)
+  $i: Sz = 0
+  for i < phys.len
+    p: = phys.get(i)
+    if p.blank && !p.inner
+      i += 1
+      continue
+    indent: = p.indent
+    head: = heading_of(src, p.code_start, p.code_end)
+    $code_end: = p.code_end
+    $j: = i + 1
+    for j < phys.len
+      q: = phys.get(j)
+      if q.inner
+        if !q.blank
+          code_end = q.code_end
+        j += 1
+        continue
+      // Caution: **Do not cut at a comment line.** A comment may stand partway through a wrapped
+      // expression (the run of `.set(…)` in `ksplc/lsp/worker.kspls`); the next line with code
+      // decides.
+      if q.blank
+        $k: = j
+        for k < phys.len && phys.get(k).blank && !phys.get(k).inner
+          k += 1
+        if k >= phys.len || !starts_cont(src[phys.get(k).code_start])
+          break
+        j = k
+        continue
+      if ends_in_catch(src.sub(0, code_end)) && q.indent > indent
+        break // the level after a `catch` is a block, not a continuation
+      if !continues(src, code_end, p.code_start, q.code_start)
+        break
+      code_end = q.code_end
+      j += 1
+    out
+      .push(Logical::{ .line = p.line, .indent = indent, .head = head, .code_start = p.code_start,
+      .code_end = code_end, .attr = is_attribute(head) })
+    i = j
+  return out
+
+priv fn continues(src: U8[], code_end: Sz, code_start: Sz, next_start: Sz): Bool //<
+  //< Whether the line at `code_start`..`code_end` continues onto the next line (`next_start`)
+  if line_continues(src.sub(code_start, code_end - code_start)) ||
+    starts_cont(src[next_start])
+    return true
+  lead: = next_word(src, next_start, src.len)
+  for w in lead_cont_words
+    if lead.equals(w)
+      return true
+  $s: = code_end
+  for s > code_start && src[s - 1].is_alnum()
+    s -= 1
+  return ends_open_word(src.sub(s, code_end - s))
+
+priv fn head_word(src: U8[], from: Sz, to: Sz): U8[] //< a logical line's leading word
+  //<
+  //< The visibility (`pub` / `priv`) and a label (`<name>:`) are skipped.
+  if is_label_only(src.sub(from, to - from))
+    return "label:"
+  $s: = from
+  $word: U8[] = ""
+  // Caution: **Limit the number of rounds.** Only the visibility and a label are skipped, so
+  // anything beyond that is broken source (rejecting it is the compiler's job).
+  for _k in Range.asc(head_skips.len + 2)
+    $e: = s
+    for e < to && src[e].is_alnum()
+      e += 1
+    word = src.sub(s, e - s)
+    if word.len == 0
+      // Caution: **Return the word after the `#` too.** The `#` alone makes an attribute
+      // (`#cfg(…)`) and a directive (`##lint(…)`) look alike, and `is_attribute` below cannot tell
+      // them apart.
+      if s < to && src[s] == '#'
+        $h: = s
+        for h < to && src[h] == '#'
+          h += 1
+        for h < to && src[h].is_alnum()
+          h += 1
+        return src.sub(s, h - s)
+      return src.sub(s, 1 if s < to else 0)
+    // A label (`outer: for …`) is skipped.
+    // Caution: **Tell it apart from `x: T = …`** — after a label there is always a word that
+    // opens a block.
+    if e < to && src[e] == ':' && is_block_head(next_word(src, e + 1, to))
+      s = skip_spaces(src, e + 1, to)
+      continue
+    $skip: = false
+    for h in head_skips
+      if word.equals(h)
+        skip = true
+    if !skip
+      return word
+    s = skip_spaces(src, e, to)
+  return word
+
+priv fn skip_spaces(src: U8[], from: Sz, to: Sz): Sz
+  $s: = from
+  for s < to && (src[s] == ' ' || src[s] == tab_byte)
+    s += 1
+  return s
+
+priv fn next_word(src: U8[], from: Sz, to: Sz): U8[]
+  s: = skip_spaces(src, from, to)
+  $e: = s
+  for e < to && src[e].is_alnum()
+    e += 1
+  return src.sub(s, e - s)
+
+priv fn is_block_head(word: U8[]): Bool
+  for h in block_heads
+    if word.equals(h)
+      return true
+  return false
+
+fn heads_a_block(code: U8[]): Bool //<
+  //< Whether a line's leading word, after `pub` / `priv`, opens a block, or the line is a label
+  //<
+  //< The syntax messages ask it too (`syntax_msg.kspls`), so both use one list.
+  return is_block_head(head_word(code, 0, code.len))
+
+priv fn is_attribute(head: U8[]): Bool //< whether the line is an attribute (`#name`)
+  //<
+  //< **A directive (`##name(…)`) is not** — that one ends in a `;`.
+  return head.len > 0 && head[0] == '#' && !head.starts_with("##")
+
+// ---------------------------------------------------------
+// The assembly
+// ---------------------------------------------------------
+
+priv struct Frame //< one level on the stack of open levels
+  //<
+  //< **Remember each level's column, not the indent width** (indenting by two and by four work the
+  //< same).
+  //< Caution: **Do not keep the closing position per level.** Every level closes at "the end of the
+  //< logical line last seen"; kept per level, only the inner one moves forward and the outer one
+  //< closes at its heading.
+  indent: Sz
+  head: U8[]
+  body: Sz //<
+    //< The column of this level's first child. 0 = not seen yet.
+    //<
+    //< **Kept only to report whether siblings align; do not close levels by it**, or the rule above
+    //< (the column, not the width) breaks.
+
+struct Mended //< a source as an entry point read it, made ready for the parser
+  written: U8[] //< the text as written, normalized (`settle` in `source_fix.kspls`)
+  code: U8[] //< that text in the brace notation; `written` itself where it is in braces
+
+fn mend(raw: U8[], laid_out: Bool, notes: List<|Note|>$@, arena: Arena$@): Mended //<
+  //< The bytes an entry point read, normalized and, where `laid_out`, converted into braces
+  //<
+  //< **Every entry point for a source goes through here**: the loader for what it opens, the
+  //< formatter, and the language server for what the editor sends and what it reads from disk.
+  //< Caution: **Mend only the bytes you read yourself.** Converted a second time, the `{` the first
+  //< conversion inserted count as brackets and the text breaks.
+  written: = parse_source_fix.settle(raw, arena)
+  code: = to_braces(written, notes, arena) if laid_out else written
+  return Mended::{ .written = written, .code = code }
+
+fn to_braces(src: U8[], notes: List<|Note|>$@, arena: Arena$@): U8[] //<
+  //< It converts `src` into the brace notation
+  //<
+  //< **Pass `notes` empty**: it only appends the problems found, and never reads them.
+  $ins: = List<|Insert|>.new(arena)
+  phys: = scan_phys(src, notes, ins@, arena)
+  $lines: = merge(src, phys@, arena)
+  $stack: = List<|Frame|>.new(arena)
+  $last_end: Sz = 0
+  for n in Range.asc(lines.len)
+    cur: = lines.get(n)
+    // Caution: **Close levels at the same column too.** A sibling's line is at the same column as
+    // the heading, so comparing with `<` would push the next heading while the level is still open.
+    for stack.len > 0 && cur.indent <= stack.get(stack.len - 1).indent
+      top: = stack.get(stack.len - 1)
+      stack.len -= 1
+      close_block(ins@, top, last_end)
+    // Whether the siblings are aligned; by here `cur` is a direct child of the top level.
+    // Caution: **Check after closing** — before it, the comparison would be against a
+    // level already left.
+    if stack.len > 0
+      $top_now: = stack.get(stack.len - 1)
+      if top_now.body == 0
+        top_now.body = cur.indent
+        stack.set(stack.len - 1, top_now)
+      else if top_now.body != cur.indent
+        notes
+          .push(Note::{ .kind = Note_kind.ragged(top_now.body, cur.indent), .line = cur.line })
+    next_deeper: = n + 1 < lines.len && lines.get(n + 1).indent > cur.indent
+    if next_deeper
+      ins.push(Insert::{ .at = cur.code_end, .text = " {" })
+      stack.push(Frame::{ .indent = cur.indent, .head = cur.head, .body = 0 })
+    else if !cur.attr && !closes_inline_block(src, cur)
+      ins.push(Insert::{ .at = cur.code_end, .text = ";" })
+    last_end = cur.code_end
+  for stack.len > 0
+    top: = stack.get(stack.len - 1)
+    stack.len -= 1
+    close_block(ins@, top, last_end)
+  return splice(src, ins@, arena)
+
+priv const defer_statement: U8[] = "defer statement" //<
+  //< The head word for a `defer` holding one statement (`defer buf.free()`)
+  //<
+  //< It opens no level of its own.
+  //<
+  //< The space keeps it from matching any written word, as with `"label:"`.
+
+priv fn heading_of(src: U8[], from: Sz, to: Sz): U8[] //<
+  //< The line's head word, telling apart a `defer` that holds one statement
+  //<
+  //< Caution: **Only a `defer` alone or before a `{` opens its own level.** Treated as one,
+  //< `defer f() catch {}` would end in the block's `}` and get no terminator, and a `catch` level
+  //< below `defer f() catch e` would close without one; the next statement would be read into it.
+  head: = head_word(src, from, to)
+  if !head.equals("defer")
+    return head
+  $s: = from + 5
+  for s < to && src[s] == ' '
+    s += 1
+  return head if s >= to || src[s] == '{' else defer_statement
+
+priv fn closes_inline_block(src: U8[], cur: Logical): Bool //<
+  //< Whether the line opens and closes a block on itself
+  //<
+  //< That is `fn f() {}` / `for {}` / `case .x {}` / `defer { … }`.
+  //<
+  //< Caution: **Add no terminator**: `fn f() {};` is not in the grammar. The heading word tells it
+  //< apart, as an `x: = T::{ … }` ends in a `}` too but is a value and needs one.
+  return cur.code_end > 0 && src[cur.code_end - 1] == '}' && is_block_head(cur.head)
+
+priv fn close_block(ins: List<|Insert|>$@, top: Frame, at: Sz) //<
+  //< It closes a block, with a `;` after unless its heading word is in `block_heads`
+  ins.push(Insert::{ .at = at, .text = " }" if is_block_head(top.head) else " };" })
+
+priv fn splice(src: U8[], ins: List<|Insert|>@, arena: Arena$@): U8[] //<
+  //< it applies the insertions, keeping the order of those at the same position (see `Insert`)
+  $order: = List<|Sz|>.new(arena)
+  for k in Range.asc(ins.len)
+    order.push(k)
+  // Stably, by ascending position (a plain insertion sort; the count is the line count).
+  for a in Range.asc(order.len)
+    $b: = a
+    for b > 0 && ins.get(order.get(b - 1)).at > ins.get(order.get(b)).at
+      x: = order.get(b - 1)
+      order.set(b - 1, order.get(b))
+      order.set(b, x)
+      b -= 1
+  $out: = Str_builder.new()
+  defer out.free()
+  $at: Sz = 0
+  for k in Range.asc(order.len)
+    one: = ins.get(order.get(k))
+    if one.at > at
+      out.s(src.sub(at, one.at - at))
+      at = one.at
+    out.s(one.text)
+    at += one.drop
+  if at < src.len
+    out.s(src.sub_from(at))
+  return arena.dup_str(out.slice())

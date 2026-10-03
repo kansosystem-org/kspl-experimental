@@ -1,0 +1,22 @@
+//< Move_only's structural derivation also walks a Result's success payload
+//<
+//< A `Handle?E` holds the handle by value, as `Option<|Handle|>` does. Copied in silence, two
+//< places would each own it and free it twice.
+// EXPECT: was moved out of and cannot be used again
+priv struct Handle
+  v: I32
+
+impl Handle: Move_only {}
+
+priv enum Open_error
+  missing
+
+priv fn open(): Handle?Open_error
+  return Handle::{ .v = 1 }
+
+priv fn take(_r: Handle?Open_error) {}
+
+fn main()
+  r: = open()
+  take(r)
+  take(r)

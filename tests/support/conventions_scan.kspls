@@ -1,0 +1,206 @@
+//< The file-walking helpers the convention checks use
+//<
+//< It is not a suite of its own; it is a part of conventions.
+//<
+//< Caution: **Do not put a judgment in here.** Mix "what is checked" into the tools, and fixing one
+//< convention changes a tool, which silently changes the other judgments. Only what means the
+//< same to every judgment belongs here.
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+
+fn find_all(text: U8[], head: U8[], tail: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< Picks up every text between head and tail, one at a time
+  //<
+  //< **Ignore whether the brackets pair**: only "is that text there" matters; parsing the syntax
+  //< is ksplc's job.
+  $out: = List<|U8[]|>.new(arena)
+  $i: Sz = 0
+  for i + head.len <= text.len
+    if !text.sub(i, head.len).equals(head)
+      i += 1
+      continue
+    $j: = i + head.len
+    for j + tail.len <= text.len && !text.sub(j, tail.len).equals(tail)
+      if text[j] == '\n'
+        break
+      j += 1
+    if j + tail.len <= text.len && text.sub(j, tail.len).equals(tail)
+      out.push(text.sub(i + head.len, j - i - head.len))
+      i = j + tail.len
+      continue
+    i += head.len
+  return out
+
+fn has(xs: List<|U8[]|>@, want: U8[]): Bool
+  for i in Range.asc(xs.len)
+    if xs.get(i).equals(want)
+      return true
+  return false
+
+fn push_unique(out: List<|U8[]|>$@, want: U8[])
+  if !has(out, want)
+    out.push(want)
+
+fn diff_into(a: List<|U8[]|>@, b: List<|U8[]|>@, a_name: U8[], b_name: U8[],
+  out: List<|U8[]|>$@, arena: Arena$@) //<
+    //< Lists what is in a and not in b.
+  for i in Range.asc(a.len)
+    if !has(b, a.get(i))
+      out
+        .push(arena.text().s(a.get(i)).s(": in ").s(a_name).s(" and not in ").s(b_name).take())
+
+fn find_line_starts(text: U8[], head: U8[], tail: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< Picks up the matches only at the start of a line (to count a table's rows and headings)
+  $out: = List<|U8[]|>.new(arena)
+  for line in text.lines(arena)
+    if !line.starts_with(head)
+      continue
+    rest: = line.sub_from(head.len)
+    at: = rest.find_str(tail)
+    if at >= 0
+      out.push(rest.sub(0, at))
+  return out
+
+// ==========================================
+// The lists of extensions, kept in this one place
+// Kept per check, the same gap would open in several places.
+// Caution: **Write both `*.kspl` and `*.kspls`**: the first does not match the second, so with
+// only one an indentation-notation file silently drops out of the checks.
+// ==========================================
+
+// The files walked: what Kanso writes in its own words, which the vocabulary and register checks
+// read.
+// Caution: **Do not add `.yml` or `.js` here**: their prose uses other products' words and would
+// fail the vocabulary check wrongly. The history check (Principle 7) reads the wider `all_ext`.
+const text_ext: U8[][8] = ::{ "*.kspl", "*.kspls", "*.md", "*.py", "*.mk", "*.kspeg", "*.cfg",
+  "Makefile" }
+
+// Every file a person writes: a history or a label can appear anywhere.
+const all_ext: U8[][20] = ::{ "*.kspl", "*.kspls", "*.md", "*.py", "*.mk", "*.kspeg", "*.cfg",
+  "Makefile", "*.yml", "*Dockerfile", "*.c", "*.h", "*.js", "*.mjs", "*.css", "*.html", "*.S",
+  "*.ld", "*.gitignore", "*.gitattributes" }
+
+// Of the files a person writes, the source and the build steps.
+// **Do not drop `.yml`, Dockerfile or `.py`**: a workflow and an image are "how it is built" too,
+// and gates are written in Python (`ksos/tests/*.py`).
+// Caution: **Drop one extension and those files silently leave the checks.** When adding one,
+// check every list.
+const build_ext: U8[][15] = ::{ "*.kspl", "*.kspls", "*.mk", "Makefile", "*.yml", "*Dockerfile",
+  "*.c", "*.h", "*.js", "*.mjs", "*.py", "*.css", "*.html", "*.S", "*.ld" }
+
+const kspl_specs: U8[][2] = ::{ "*.kspl", "*.kspls" } //<
+  //< The path specs matching every KSPL source
+  //<
+  //< **Both are needed** (the reason is in this section's header).
+
+fn kspl_specs_with(extra: U8[][], arena: Arena$@): U8[][] //<
+  //< `kspl_specs` followed by further path specs (an exclusion and so on)
+  //<
+  //< The list lives in the arena, so the returned slice stays valid for the caller.
+  $out: = List<|U8[]|>.new(arena)
+  for one in kspl_specs
+    out.push(one)
+  for one in extra
+    out.push(one)
+  return out.slice()
+
+fn text_skip(rel: U8[]): Bool //< whether the file is generated
+  //<
+  //< Its canonical source is checked instead.
+  return rel.equals("ksplc/seed.c")
+
+fn strip_code(line: U8[], arena: Arena$@): U8[] //<
+  //< Drops the string literals and the line comment from a line
+  //<
+  //< This keeps the brackets from being miscounted.
+  b: = arena.text()
+  $i: Sz = 0
+  for i < line.len
+    if i + 1 < line.len && line[i] == '/' && line[i + 1] == '/'
+      break
+    if line[i] != '"'
+      b.c(line[i])
+      i += 1
+      continue
+    b.s("\"\"")
+    i += 1
+    for i < line.len && line[i] != '"'
+      i += 2 if line[i] == '\\' else 1
+    i += 1
+  return b.take()
+
+fn count_char(line: U8[], c: U8): Sz
+  $n: Sz = 0
+  for b in line
+    if b == c
+      n += 1
+  return n
+
+fn marker_head(t: U8[]): Bool //<
+  //< Whether the line is one a gate reads rather than prose
+  //<
+  //< That is `EXPECT:` / `ARGS:` and the like: an upper-case name of three letters or more followed
+  //< by a colon.
+  $i: Sz = 0
+  for i < t.len &&
+    (t[i].is_upper() || t[i].is_digit() || t[i] == '_' || t[i] == '-')
+    i += 1
+  return i >= 3 && i < t.len && t[i] == ':' && t[0].is_upper()
+
+fn is_divider(body: U8[]): Bool //<
+  //< A section divider: a comment whose text starts with three or more `-` or `=`
+  //<
+  //< It marks the start of something new, so it ends the comment it stands in.
+  t: = body.trim_spaces()
+  return t.len >= 3 &&
+    (t[0] == '-' && t[1] == '-' && t[2] == '-' || t[0] == '=' && t[1] == '=' && t[2] == '=')
+
+// Whether the line after this one is inside a `"""` string. **Two on one line cancel out.**
+// Caution: **A `"""` inside a comment opens nothing**; if counted, a comment naming the fence
+// turns every line below into "inside a string", silently skipped.
+fn flip_raw(line: U8[], now: Bool): Bool
+  if !now && line.trim_start().starts_with("//")
+    return false
+  $at: Sz = 0
+  $inside: = now
+  for at + 3 <= line.len
+    found: = line.sub_from(at).find_str("\"\"\"")
+    if found < 0
+      break
+    inside = !inside
+    at = at + Sz::found + 3
+  return inside
+
+// ==========================================
+// A check shows it can fire
+// A convention's check is "green where the repository is clean", so **it is also green when the
+// check is broken.** So a rule's judgment is a function taking one text, and the table of hits and
+// misses lives **in the same file as the rule** (the decision, and how other products handle it,
+// is Principle 5 in `docs/DESIGN.md`).
+// ==========================================
+
+// Caution: **List both sides.** Only hits pass a judgment that always returns true; only misses,
+// one that always returns false.
+// **Do not put the samples in a separate file**: excluding that file then needs extra machinery,
+// and where the exclusion leaks, the real check fails.
+struct Sample
+  text: U8[]
+  hits: Bool
+
+// Runs the judgment over the table and returns the samples it got wrong.
+//
+// Caution: **`decide` must be a pure function of one text**: if it also reads a file, the samples
+// can no longer be passed in.
+fn misjudged(samples: Sample[], decide: fn(text: U8[], arena: Arena$@): Bool, arena: Arena$@):
+  List<|U8[]|>
+  $bad: = List<|U8[]|>.new(arena)
+  for s in samples
+    got: = decide(s.text, arena)
+    if got != s.hits
+      want: = "hit" if s.hits else "not hit"
+      bad
+        .push(arena.text().s("\"").s(s.text).s("\" should be ").s(want)
+        .s(" and came out the other way").take())
+  return bad

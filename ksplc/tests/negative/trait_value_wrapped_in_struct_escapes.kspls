@@ -1,0 +1,26 @@
+//< A trait value built from local storage is rejected when carried out on a struct
+//<
+//< Returning it bare is `trait_upcast_returns_local.kspls`. Without this, a struct holding a
+//< closure escapes and is called with its environment dead. The passing side is held by
+//< **running correctly** (test_closure_wrapped_in_struct in `ksplc/tests/lang_limits_test.kspls`).
+// EXPECT: cannot return an interface value built from local storage
+// EXPECT: cannot throw an interface value built from local storage
+
+priv struct Holder
+  pred: Callable1<|I32, Bool|>
+
+priv fn wrapped_return(n: I32): Holder
+  return Holder::{ .pred = fn(x: I32; n: I32): Bool {
+    return x > n;
+  } }
+
+priv fn wrapped_throw(n: I32): I32?Holder
+  throw Holder::{ .pred = fn(x: I32; n: I32): Bool {
+    return x > n;
+  } }
+
+fn main()
+  a: = wrapped_return(1)
+  b: = wrapped_throw(1) catch
+    fallback 0
+  _x: = b if a.pred.call(2) else 0

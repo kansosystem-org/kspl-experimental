@@ -1,0 +1,178 @@
+//< Checks the round trip between the two notations on every tracked source
+//<
+//< Every tracked source goes into the other notation and back, byte for byte. **It reads the whole
+//< tree**, so it lives here; ksplc's own `kspls` suite tests the notation itself.
+//< Caution: **Samples alone are not enough**: the question is whether the repository's sources
+//< survive the round trip (Principle 8). **The steps run as batches** (`harness.run_all`); one
+//< process at a time is far too slow.
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/subproc"
+import "std/verdict"
+import "tests/support/harness"
+
+priv struct Trip //< one tracked source on its round trip
+  rel: U8[]
+  laid: Bool //< written by indentation, so its own notation is `kspls`
+  src: U8[]
+
+priv fn trip_path(work: U8[], step: Sz, index: Sz, ext: U8[], arena: Arena$@): U8[] //<
+  //< The file names that hold a source during the round trip, one per source per step
+  //<
+  //< Caution: **Keep each notation's extension**; under a `.kspl` name the indentation notation
+  //< is read as braces.
+  return fs.join(work, arena.text().s("trip\{step\}_\{index\}.\{ext\}").take(), arena)
+
+priv fn spell_job(path: U8[], to: U8[], arena: Arena$@): subproc.Job //<
+  //< The child that writes `path` in the `to` notation
+  $argv: = List<|U8[]|>.new(arena)
+  argv.push(harness.ksplc_exe())
+  argv.push("fmt")
+  argv.push(arena.text().s("--to=\{to\}").take())
+  argv.push(path)
+  return subproc.Job::{ .argv = argv.slice(), .cwd = harness.root() }
+
+priv fn spell_all(work: U8[], step: Sz, todo: List<|Sz|>@, bodies: U8[][], from_ext: U8[][],
+  to: U8[][], arena: Arena$@): List<|U8[]|> //<
+    //< Runs one step for every trip in `todo` side by side, returning the outputs in order
+    //<
+    //< An output is empty where its file could not be written or was refused (a source never is).
+  $out: = List<|U8[]|>.new(arena)
+  $jobs: = List<|subproc.Job|>.new(arena)
+  $placed: = List<|Bool|>.new(arena)
+  for k in Range.asc(todo.len)
+    i: = todo.get(k)
+    path: = trip_path(work, step, i, from_ext[k], arena)
+    $ok: = true
+    io.write_file(path, bodies[k]) catch
+      ok = false
+    placed.push(ok)
+    jobs.push(spell_job(path, to[k], arena))
+  rs: = harness.run_all(jobs.slice(), arena.text().s("kspls_trip\{step\}").take())
+  for k in Range.asc(todo.len)
+    r: = rs.get(k)
+    out.push("" if !placed.get(k) || r.code != 0 else r.out)
+  return out
+
+priv fn first_difference(a: U8[], b: U8[]): Sz //<
+  //< The first line (1-based) where two texts differ, or 0 where they are the same
+  $line: Sz = 1
+  for i in Range.asc(a.len if a.len < b.len else b.len)
+    if a[i] != b[i]
+      return line
+    if a[i] == '\n'
+      line += 1
+  return 0 if a.len == b.len else line
+
+priv fn line_of(text: U8[], n: Sz, arena: Arena$@): U8[] //<
+  //< line `n` (1-based), empty past the end
+  $k: Sz = 1
+  for line in text.lines(arena)
+    if k == n
+      return line
+    k += 1
+  return ""
+
+priv struct Parting //< a pair showing that the verdict on where two texts differ can fire
+  a: U8[]
+  b: U8[]
+  line: Sz
+
+// Caution: **List pairs that differ beside the pair that does not**, or a verdict answering "the
+// same" to everything passes (Principle 5 in `../../docs/DESIGN.md`). The third differs only in
+// its last line end.
+priv const partings: Parting[4] = ::{
+  Parting::{ .a = "x: = 1\n", .b = "x: = 1\n", .line = 0 },
+  Parting::{ .a = "a\n} // c\n", .b = "a // c\n}\n", .line = 1 },
+  Parting::{ .a = "a\nb\n", .b = "a\nb", .line = 2 },
+  Parting::{ .a = "a\nb\nc\n", .b = "a\nb\nd\n", .line = 3 },
+}
+
+priv fn check_parting(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  for p in partings
+    got: = first_difference(p.a, p.b)
+    if got != p.line
+      bad.push(arena.text().s("line \{got\} where \{p.line\} was wanted").take())
+  verdict.check_list("the verdict on where two texts part can fire", partings.len, "pairs", bad@, "")
+
+// ==========================================
+// Every tracked source comes back byte for byte from a round trip
+// ==========================================
+
+priv const trip_specs: U8[][4] = ::{ "*.kspl", "*.kspls", ":!ksplc/tests/negative/",
+  ":!ksplc/tests/lint/" } //<
+    //< The sources put through the round trip
+    //<
+    //< Caution: **Leave out the deliberately broken files** (`ksplc/tests/negative/` unreadable,
+    //< `ksplc/tests/lint/` misaligned on purpose, which a round trip **realigns**), as the
+    //< formatting gate does in `mk/lint.mk`.
+
+priv fn check_round_trip(work: U8[], arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  $trips: = List<|Trip|>.new(arena)
+  for rel in harness.tracked_matching(U8[][]::trip_specs)
+    trips
+      .push(Trip::{ .rel = rel, .laid = rel.ends_with(".kspls"),
+      .src = harness.read_under_root(rel) })
+  seen: = trips.len
+  // Step 1: into the other notation. Step 2: back into its own.
+  $all: = List<|Sz|>.new(arena)
+  $own: = List<|U8[]|>.new(arena)
+  $other: = List<|U8[]|>.new(arena)
+  $srcs: = List<|U8[]|>.new(arena)
+  for i in Range.asc(seen)
+    t: = trips.get(i)
+    all.push(i)
+    own.push("kspls" if t.laid else "kspl")
+    other.push("kspl" if t.laid else "kspls")
+    srcs.push(t.src)
+  firsts: =
+    spell_all(work, 1, all@, srcs.slice(), own.slice(), other.slice(), arena)
+  $todo2: = List<|Sz|>.new(arena)
+  $firsts2: = List<|U8[]|>.new(arena)
+  $own2: = List<|U8[]|>.new(arena)
+  $other2: = List<|U8[]|>.new(arena)
+  for i in Range.asc(seen)
+    if firsts.get(i).len == 0
+      bad
+        .push(arena.text().s(trips.get(i).rel)
+        .s(": it cannot be put out into the \{other.get(i)\} notation").take())
+      continue
+    todo2.push(i)
+    firsts2.push(firsts.get(i))
+    own2.push(own.get(i))
+    other2.push(other.get(i))
+  backs: =
+    spell_all(work, 2, todo2@, firsts2.slice(), other2.slice(), own2.slice(), arena)
+  // Caution: **Compare with the source itself, not with a second round trip**; a wrong reading
+  // is as stable as a right one, so a fixed point passes a moved comment.
+  for k in Range.asc(todo2.len)
+    i: = todo2.get(k)
+    t: = trips.get(i)
+    back: = backs.get(k)
+    if back.len == 0
+      bad
+        .push(arena.text().s(t.rel).s(": it cannot be brought back to the \{own.get(i)\} notation")
+        .take())
+      continue
+    at: = first_difference(t.src, back)
+    if at > 0
+      bad
+        .push(arena.text().s(t.rel).s(":\{at\}: it comes back as `")
+        .s(line_of(back, at, arena)).s("`").take())
+  verdict.check_list("a source comes back byte for byte from a round trip", seen, "sources", bad@,
+    "apply `ksplc fmt --to=kspls <file>` and `--to=kspl` in turn and look at the diff; `ksplc lint` \
+      names a comment the indentation notation has no line for ([I0805])")
+
+fn main(): I32
+  arena: = harness.begin(64 * 1024 * 1024)
+  work: = harness.sandbox("kspls_trip") catch
+    return harness.fatal("cannot make a working directory")
+  check_parting(arena)
+  check_round_trip(work, arena)
+  return harness.finish()

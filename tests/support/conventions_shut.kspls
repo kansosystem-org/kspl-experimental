@@ -1,0 +1,111 @@
+//< Kspage's read-only: a function in `kspage/write/` opening a step asks `shut()` (not the suite)
+//<
+//< The rule is at `Editor.shut` in `kspage/write/edit.kspls`: a path that forgets it changes a
+//< document opened read-only. The verdict is held to the samples below (Principle 5 in
+//< `../../docs/DESIGN.md`).
+//< Caution: **It sees only the step opened in the function's own text** (`.step()`). A change made
+//< through a helper, or with a step opened elsewhere, escapes it and is still a violation; the
+//< whole rule is held by `kspage/tests/read_only_test.kspls`.
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+import "tests/support/harness"
+
+priv fn indent_of(line: U8[]): Sz //< how many spaces the line opens with
+  $n: Sz = 0
+  for n < line.len && line[n] == ' '
+    n += 1
+  return n
+
+priv fn code_of(line: U8[]): U8[] //< the line with its comment cut off
+  //<
+  //< A `//` inside a string is not a comment (`"https://…"`).
+  $quoted: = false
+  for $i: Sz = 0; i < line.len; i += 1
+    c: = line[i]
+    if quoted && c == '\\'
+      i += 1
+    else if c == '"'
+      quoted = !quoted
+    else if !quoted && c == '/' && i + 1 < line.len && line[i + 1] == '/'
+      return line.sub(0, i)
+  return line
+
+priv fn name_of(head: U8[]): U8[] //< the function's name, from its `fn` line
+  t: = head.trim_start()
+  rest: = t.sub_from(3)
+  stop: = rest.find_char('(')
+  return rest if stop < 0 else rest.sub(0, stop)
+
+fn unguarded_in(text: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< The names of the public functions in `text` that open a step and never ask `shut()`
+  //<
+  //< A function runs from its `fn` line to the next line indented no deeper. **A `priv fn` is not
+  //< judged**: it is a helper whose public caller asks.
+  $out: = List<|U8[]|>.new(arena)
+  lines: = text.lines(arena)
+  for $i: Sz = 0; i < lines.len; i += 1
+    head: = lines.get(i)
+    if !head.trim_start().starts_with("fn ")
+      continue
+    depth: = indent_of(head)
+    $opens: = code_of(head).find_str(".step()") >= 0
+    $asks: = false
+    for $k: Sz = i + 1; k < lines.len; k += 1
+      line: = lines.get(k)
+      if line.trim_spaces().len > 0 && indent_of(line) <= depth
+        break
+      code: = code_of(line)
+      opens = opens || code.find_str(".step()") >= 0
+      asks = asks || code.find_str(".shut()") >= 0
+    if opens && !asks
+      out.push(name_of(head))
+  return out
+
+// The samples: a file's text and the names it should give, joined by spaces.
+// Caution: **Keep a guarded function beside an unguarded one**, a `priv fn`, a step only named in
+// a comment, and a `shut()` only named in a comment; each is a way for the verdict to go wrong.
+priv const shut_samples: U8[][6] = ::{ "priv fn helper(r: Editor$@)\n  st: = r.step()\n",
+    "impl E\n  fn a(r: E)\n    if r.shut()\n      return\n    r.step()\n  fn b(r: E)\n    r.step()",
+    "fn wear(ed: Editor$@): Bool\n  field.do_set_look(ed, ed.step(), s, fresh)\n  return true\n",
+    "fn plain(r: Editor$@)\n  // the caller opens r.step()\n  r.caret = at\n",
+    "fn hidden(r: Editor$@)\n  st: = r.step() // not r.shut() here\n",
+    "fn given(r: Editor$@, st: Step$@)\n  edit.do_remove(r, st, n, 0, 1)\nfn next()\n  r.step()\n",
+}
+priv const shut_want: U8[][6] = ::{ "", "b", "wear", "", "hidden", "next" }
+
+priv fn joined(names: List<|U8[]|>@, arena: Arena$@): U8[]
+  out: = arena.text()
+  for $i: Sz = 0; i < names.len; i += 1
+    if i > 0
+      out.c(' ')
+    out.s(names.get(i))
+  return out.take()
+
+priv fn check_shut_fires(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  for i in Range.asc(shut_samples.len)
+    names: = unguarded_in(shut_samples[i], arena)
+    got: = joined(names@, arena)
+    if !got.equals(shut_want[i])
+      bad
+        .push(arena.text().s("sample \{i\} gave \"").s(got).s("\" (should be \"").s(shut_want[i])
+        .s("\")").take())
+  verdict.check_list("the verdict on a step opened without asking shut() can fire",
+    shut_samples.len, "samples", bad@, "")
+
+priv fn check_shut_files(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  for rel in harness.tracked_matching(U8[][]::{ "kspage/write/*.kspls" })
+    seen += 1
+    for name in unguarded_in(harness.read_under_root(rel), arena)
+      bad.push(arena.text().s(rel).s(": ").s(name).take())
+  verdict.check_list("every function in kspage/write that opens a step asks shut() first", seen,
+    "files", bad@, "put `if r.shut()` and a return at the function's head, before anything else")
+
+fn run(arena: Arena$@)
+  check_shut_fires(arena)
+  check_shut_files(arena)

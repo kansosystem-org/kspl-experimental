@@ -1,0 +1,207 @@
+import "kspage/expr/calc"
+import "kspage/model/day" + { Dating }
+import "kspage/model/doc" { Block, Doc }
+import "kspage/model/paint"
+import "kspage/model/style" { Sheet }
+// The helper that builds a table lives there.
+// Caution: **Do not make a copy** (the same sample would be maintained in two places).
+import "kspage/tests/base"
+import "kspage/tests/calc_test" as book
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// kspage: checks dates (a golden test): the calendar arithmetic, reading and writing the text,
+// and a date in a table's arithmetic.
+// ==========================================
+
+priv fn shown_of(days: I64, how: Dating): U8[] //< makes a date's text from a day count
+  $sb: = Str_builder.new()
+  day.write_day(sb@, days, how)
+  return sb.slice()
+
+priv fn day_num(text: U8[]): I64
+  if v: = day.day_of(text)
+    return v
+  return -999999I64
+
+fn test_the_epoch_is_the_first_day_of_1970() //<
+  //< The epoch is 1970-01-01; moved, every date in every saved document would shift
+  verdict.start("[kspage/day] the origin day test...")
+  assert(day_num("1970-01-01") == 0I64, "the origin day is 0")
+  assert(day_num("1970-01-02") == 1I64, "the next day is 1")
+  assert(day_num("1969-12-31") == -1I64, "before the origin is negative")
+  c: = day.civil_of(0I64)
+  assert(c.year == 1970I64 && c.month == 1I64 && c.day == 1I64, "0 comes back to the origin day")
+  back: = day.civil_of(-1I64)
+  assert(back.year == 1969I64 && back.month == 12I64 && back.day == 31I64,
+    "a negative comes back too")
+  verdict.pass("a date is the count of days from the origin day.")
+
+fn test_leap_years_follow_the_hundred_and_four_hundred_rule() //<
+  //< A multiple of 100 is not a leap year, and a multiple of 400 is
+  verdict.start("[kspage/day] the leap year test...")
+  assert(day.leap(2024I64), "a multiple of 4 is a leap year")
+  assert(!day.leap(1900I64), "a multiple of 100 is not a leap year")
+  assert(day.leap(2000I64), "a multiple of 400 is a leap year")
+  assert(day.month_days(2024I64, 2I64) == 29I64, "February in a leap year is 29 days")
+  assert(day.month_days(2023I64, 2I64) == 28I64, "February in another year is 28 days")
+  assert(day.month_days(2024I64, 4I64) == 30I64, "April is 30 days")
+  assert(day.month_days(2024I64, 13I64) == 0I64, "there is no month 13")
+  // Across the leap day: the day after February 29 is March 1.
+  leap_gap: = day_num("2024-03-01") - day_num("2024-02-28")
+  assert(leap_gap == 2I64, "in a leap year February 28 and March 1 lie 2 days apart")
+  assert(day_num("2023-03-01") - day_num("2023-02-28") == 1I64, "in another year it is 1 day")
+  verdict.pass("it counts by the leap year's rule.")
+
+fn test_a_day_survives_the_round_trip() //<
+  //< A day survives the round trip between a day count and a year-month-day
+  //<
+  //< Caution: **Check it at a year's boundary and a month's boundary.**
+  verdict.start("[kspage/day] the count of days and year-month-day round trip test...")
+  // Every 97 days, from long before the epoch to about 2024.
+  for $n: I64 = -40000I64; n < 20000I64; n += 97I64
+    c: = day.civil_of(n)
+    switch day.days_of(c.year, c.month, c.day) case .some(back)
+      assert(back == n, "the round trip gives the same count of days")
+    case .none
+      assert(false, "the year-month-day it came back as is in the calendar")
+    assert(c.month >= 1I64 && c.month <= 12I64, "the month is 1 to 12")
+    assert(c.day >= 1I64 && c.day <= day.month_days(c.year, c.month), "the day is in that month")
+  verdict.pass("a count of days and a year-month-day point at the same day from either side.")
+
+fn test_a_date_that_the_calendar_does_not_have_is_refused() //<
+  //< A date the calendar lacks does not become a value (a 0 would turn a typo into the epoch)
+  verdict.start("[kspage/day] the date the calendar does not hold test...")
+  assert(day.days_of(2026I64, 2I64, 30I64).is_none(), "there is no February 30")
+  assert(day.days_of(2023I64, 2I64, 29I64).is_none(),
+    "there is no February 29 in a year that is not a leap year")
+  assert(day.days_of(2026I64, 13I64, 1I64).is_none(), "there is no month 13")
+  assert(day.days_of(2026I64, 4I64, 31I64).is_none(), "there is no April 31")
+  assert(day.days_of(2026I64, 1I64, 0I64).is_none(), "there is no day 0")
+  assert(day.days_of(2024I64, 2I64, 29I64).is_some(), "February 29 in a leap year is there")
+  verdict.pass("a date the calendar does not hold is refused.")
+
+fn test_only_the_two_written_forms_are_read() //< only the two forms it writes can be read
+  //<
+  //< A text with anything left unread is not a date.
+  verdict.start("[kspage/day] the reading a date's text test...")
+  assert(day_num("2026-08-18") == day_num("18 August 2026"), "the two shapes are the same day")
+  assert(day.day_of("2026-08").is_none(), "a text with no day is no date")
+  assert(day.day_of("2026-08-18x").is_none(), "a text with anything left unread is no date")
+  assert(day.day_of("2026/08/18").is_none(), "a parting mark it does not write out is not read")
+  assert(day.day_of("").is_none(), "an empty text is no date")
+  assert(day.day_of("18").is_none(), "one number alone is no date")
+  assert(day.day_of("2026-13-01").is_none(), "a month the calendar does not hold is no date")
+  // Without a digit limit an I64 overflows.
+  assert(day.day_of("999999-01-01").is_none(), "a year of too many digits is not read")
+  // **A month's name is read whole**; matched by prefix, unwritten `18 Jun 2026` would read.
+  assert(day.day_of("18 Aug 2026").is_none(), "a month's name cut short is no date")
+  assert(day.day_of("18 Augustx 2026").is_none(), "a month's name run on is no date")
+  assert(day.day_of("18 August").is_none(), "a text with no year is no date")
+  verdict.pass("only the shapes it writes out are read.")
+
+fn test_a_day_is_written_in_the_form_the_style_asks_for() //<
+  //< `plain` pads to two digits, and `long` does not
+  verdict.start("[kspage/day] the writing a date test...")
+  n: = day_num("2026-08-05")
+  assert(shown_of(n, Dating.plain).equals("2026-08-05"), "the month and the day pad to two")
+  written_out: = shown_of(n, Dating.long)
+  assert(written_out.equals("5 August 2026"), "a date written out carries no leading zero")
+  assert(shown_of(n, Dating.none).len == 0, "nothing is written where it is not shown as a date")
+  // **What is written out reads back**; fix only one side and the shown form cannot be typed.
+  assert(day_num(written_out) == n, "what was written out reads back as the same day")
+  verdict.pass("a date is written the way it is shown.")
+
+priv fn dated_sheet(arena: Arena$@, how: Dating): Sheet$@ //<
+  //< The style with a date format set
+  //<
+  //< **The text's own style applies** (it is not inherited).
+  sheet: = base.grid_sheet(arena)
+  d: = sheet.add("date", paint.inherit_all())
+  d.number.dated = how
+  return sheet
+
+priv fn add_dated(row: Block$@, text: U8[])
+  row.add_child("").add_text(text, "date")
+
+fn test_a_dated_cell_reads_the_text_that_was_typed() //<
+  //< A text is read as a date, and subtracting gives the difference in days
+  //<
+  //< **The typed text is not rewritten**, or it would turn into a date mid-typing.
+  verdict.start("[kspage/calc] the typed date riding on the arithmetic test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = d.add_block("table")
+  r: = book.add_row(t)
+  add_dated(r, "2026-08-18")
+  add_dated(r, "2026-08-25")
+  book.add_cell(r, "=B1-A1")
+
+  calc.recalc(d, dated_sheet(arena, Dating.plain))
+  assert(book.cell_text(t, 0, 0).equals("2026-08-18"),
+    "the text that was typed stays as it was typed")
+  assert(book.cell_text(t, 0, 2).equals("7"), "subtracting gives the difference in days")
+  verdict.pass("a text with a date's way of showing on it reads as a date.")
+
+fn test_a_formula_shows_its_value_as_a_date() //<
+  //< A formula's result is shown as a date in the form that text's style sets
+  verdict.start("[kspage/calc] the formula's answer coming out as a date test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = d.add_block("table")
+  r: = book.add_row(t)
+  add_dated(r, "2026-08-18")
+  add_dated(r, "=A1+7")
+  add_dated(r, "=Day.of(2027, 1, 1)")
+
+  calc.recalc(d, dated_sheet(arena, Dating.plain))
+  assert(book.cell_text(t, 0, 1).equals("2026-08-25"),
+    "the days that were added come out as a date")
+  assert(book.cell_text(t, 0, 2).equals("2027-01-01"), "DATE makes a date")
+  verdict.pass("a formula's answer is seen as a date too.")
+
+fn test_a_plain_cell_does_not_read_a_date() //<
+  //< A text not formatted as a date is not read as one (one meant as a number would change)
+  verdict.start("[kspage/calc] the text with no way of showing being no date test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = d.add_block("table")
+  r: = book.add_row(t)
+  book.add_cell(r, "2026-08-18")
+  book.add_cell(r, "=A1+0")
+
+  calc.recalc(d, dated_sheet(arena, Dating.plain))
+  // `2026-08-18` does not read as a subtraction (a text is not a formula).
+  got: = book.cell_text(t, 0, 1)
+  assert(got.equals("#VALUE!"), "it is not read as a date, so it is no number either")
+  verdict.pass("a date is read as one only where the way of showing says so.")
+
+fn test_the_parts_of_a_day_come_out_as_numbers() //<
+  //< `YEAR` / `MONTH` / `DAY` extract the calendar values from a day count
+  //<
+  //< **The result is a number, not a date.**
+  verdict.start("[kspage/calc] getting the year, the month and the day test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = d.add_block("table")
+  r: = book.add_row(t)
+  add_dated(r, "2026-08-18")
+  book.add_cell(r, "=A1.year()")
+  book.add_cell(r, "=A1.month()")
+  book.add_cell(r, "=A1.day()")
+  bad: = book.add_row(t)
+  book.add_cell(bad, "=Day.of(2026, 2, 30)")
+
+  calc.recalc(d, dated_sheet(arena, Dating.plain))
+  assert(book.cell_text(t, 0, 1).equals("2026"), "the year comes out")
+  assert(book.cell_text(t, 0, 2).equals("8"), "the month comes out")
+  assert(book.cell_text(t, 0, 3).equals("18"), "the day comes out")
+  assert(book.cell_text(t, 1, 0).equals("#VALUE!"),
+    "a date the calendar does not hold becomes a mark")
+  verdict.pass("the year, the month and the day can be worked out from a count of days.")

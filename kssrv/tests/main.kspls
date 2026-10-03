@@ -1,0 +1,793 @@
+//< Starts a real kssrv (Kanso Server) and pins down the behaviour visible from outside
+//<
+//< **No other test checks the serving path's safety.**
+//< It uses the socket directly (no dependence on curl).
+//< `make test` runs it and passes what it starts: the server and the spew child it built, the
+//< `ksplc` whose language server is started through the process endpoint, and a working directory.
+//< **On Windows the firewall prompt appears every time, and that is normal.** kssrv listens on
+//< 0.0.0.0, so Windows Defender asks permission for incoming connections.
+import "kssrv/tests/car"
+import "kssrv/tests/client"
+import "kssrv/tests/load"
+import "kssrv/tests/local"
+import "kssrv/tests/run"
+import "kssrv/tests/start" { Running, bring_up, read_log, start_server }
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/seq"
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+
+priv const usage: U8[] =
+  "usage: ksplc run tests/main.kspls <kssrv> <spew> <ksplc> <work_dir> [<run>] | --runs" //<
+    //< the arguments, in order (`make test` in `kssrv/Makefile` passes them)
+    //<
+    //< With a run's name only that run goes; `--runs` prints the names, one a line, so a caller
+    //< that starts the runs side by side (`tests/suite/race_test.kspls`) holds no copy of them.
+
+priv const runs: U8[][7] = ::{ "outward", "local", "missing", "spew", "page", "idle", "stop" } //<
+  //< The server runs, each a process of its own on its own port (`ports_apart`)
+
+priv const port: I32 = 18391 //< the port the outward-facing run listens on
+  //<
+  //< **It is fixed**, and the runs happen beside other tests, so each uses a port no other uses.
+priv const page_port: I32 = 18396 //< the port for the run that tests `--page`
+  //<
+  //< Caution: **Keep it different from the others**, so a server left over from cleanup cannot
+  //< collide.
+priv const page_rel: U8[] = "ui/app.html" //< the page placed outside the root
+  //<
+  //< **Not under the root** (that is the case being tested).
+priv const page_body: U8[] = "<title>outside page</title>\n"
+
+// The files served. `console.js` is the file that could not be served if the device-name check
+// used a partial match.
+priv const doc_rels: U8[][6] = ::{ "index.html", "style.css", "sub/one.txt", "sub/index.html",
+  "a+b c.txt", "console.js" }
+priv const doc_bodies: U8[][6] = ::{ "root index\n", "body{}\n", "one\n", "sub index\n",
+  "plus and space\n", "// console\n" }
+priv const link_escapes: U8[][3] = ::{ "/link.txt", "/dlink/secret.txt", "/dlink/" } //<
+  //< The paths that reach outside the root through a link inside it
+  //<
+  //< What they reach is placed **outside** the root, so reaching it is an escape.
+  //< Caution: **Try a link mid-path too**: an implementation that checks only the last step misses
+  //< a folder link.
+
+priv const outside_rels: U8[][1] = ::{ "secret.txt" }
+priv const outside_bodies: U8[][1] = ::{ "secret\n" }
+
+priv fn make_link(root: U8[], name: U8[], target: U8[], arena: Arena$@): Bool //<
+  //< A link inside the root pointing outside
+  //<
+  //< **A name check alone cannot block it**: `link.txt` is a legitimate name, so looking for `..`
+  //< misses it. False where it cannot be made, and the case becomes a `skip` (Windows has no
+  //< `ln -s`, and `mklink` needs privileges).
+  at: = fs.join(root, name, arena)
+  r: = subproc.run_capture(U8[][]::{ "ln", "-s", target, at }, "", 10000, 4096, arena)
+  return !r.spawn_failed && r.exit_code == 0 && fs.exists(at)
+
+// **Decode first, check after**, or `%2e%2e` passes the check and becomes `..`; testing a bare
+// `..` alone would not notice.
+priv const escapes: U8[][6] = ::{ "/../secret.txt", "/%2e%2e/secret.txt", "/%2E%2E/secret.txt",
+  "/..%2Fsecret.txt", "/%2e%2e%2Fsecret.txt", "/sub/../../secret.txt" }
+
+// A name spelled differently that opens the same file slips past every check by name. Windows
+// drops a trailing `.`/` `, reads past a `:` as an NTFS stream, and opens `CON`/`COM1` as a device
+// in any folder (`COM1` never returns, stopping this one-loop server). Every OS must answer alike.
+priv const reinterpreted: U8[][8] = ::{ "/index.html%00.txt", // what follows a NUL is not passed on
+  "/index.html.", "/index.html%20", "/index.html::$DATA", "/CON", "/con.txt", "/sub/COM1",
+    "/./index.html", // a `.` step is removed, like `..`
+}
+
+priv const infer_expect: U8[] = "is small and fast. servee file" //<
+  //< **It follows from the training text (`corpus` in kssrv/model.kspls)**; change it, update this.
+priv const infer_body: U8[] = "{\"prompt\":\"the server \",\"steps\":30}"
+
+priv const bad_infer: U8[][4] = ::{ "{\"steps\":4}", "{\"prompt\":\"\",\"steps\":4}",
+  "{\"prompt\":\"x\",\"steps\":0}", "{\"prompt\":\"x\",\"steps\":100000}" }
+priv const bad_train: U8[][4] = ::{ "{\"epochs\":2}", "{\"text\":\"\",\"epochs\":2}",
+  "{\"text\":\"abc\",\"epochs\":0}", "{\"text\":\"abc\",\"epochs\":999}" }
+
+priv fn lesson(arena: Arena$@): U8[] //< the text it is trained on
+  //<
+  //< `mecanum` is not in the start-up text (its appearance shows the training worked).
+  return arena.text().s("the mecanum car drives forward and turns. ")
+    .s("the car reports its sensors to the server. the mecanum car is small. ").take()
+
+priv const too_long_text: Sz = 9000 //< a length over the text cap
+  //<
+  //< Caution: Do not copy the cap's value (anything over it is enough).
+priv const over_outward_body: Sz = 70 * 1024 //< a length over the outward-facing body cap
+  //<
+  //< This one hits the cap on the request's body itself.
+
+fn main(): I32
+  verdict.begin("kssrv")
+  arena: = Arena.new(256 * 1024 * 1024)
+  defer arena.free()
+  argv: = sys.args()
+  if argv.len == 2 && argv.get(1).equals("--runs")
+    for r in runs
+      io.out().s(r).c('\n')
+    return 0
+  if argv.len != 5 && argv.len != 6
+    panic(arena.dup_str(usage))
+  only: = arena.dup_str(argv.get(5)) if argv.len == 6 else ""
+  if only.len > 0 && !known_run(only)
+    panic(arena
+      .dup_str(arena.text().s("no run is named '").s(only).s("'\n").s(usage).take()))
+  exe: = arena.dup_str(argv.get(1))
+  spew: = arena.dup_str(argv.get(2))
+  ksplc: = arena.dup_str(argv.get(3))
+  tmp: = arena.dup_str(argv.get(4))
+  root: = fs.join(tmp, "www", arena)
+  fs.mkdir_all(root) catch
+    panic("the place for the distributed files cannot be made")
+  fs.write_tree(root, U8[][]::doc_rels, U8[][]::doc_bodies, arena) catch
+    panic("the distributed files cannot be placed")
+  fs.write_tree(tmp, U8[][]::outside_rels, U8[][]::outside_bodies, arena) catch
+    panic("the file outside the root cannot be placed")
+  verdict.check("every run of this suite listens on a port of its own", ports_apart(), "")
+  at: = Placed::{ .exe = exe, .spew = spew, .ksplc = ksplc, .root = root, .tmp = tmp }
+  for r in runs
+    if only.len == 0 || only.equals(r)
+      serve_run(r, at, arena)
+  return verdict.finish()
+
+priv fn known_run(name: U8[]): Bool //< whether `runs` holds the name
+  for r in runs
+    if r.equals(name)
+      return true
+  return false
+
+priv fn ports_apart(): Bool //< whether no two of this suite's runs share a port
+  //<
+  //< Caution: **Add a run's port here with the run**: a server left from one run answers the next
+  //< on the same port, and its checks pass or fail on the wrong server.
+  ports: I32[7] = ::{ port, local.local_port, run.missing_port, run.spew_port, page_port, idle_port,
+    stop_port }
+  for i in Range.asc(ports.len)
+    for j in Range.asc(i)
+      if ports[i] == ports[j]
+        return false
+  return true
+
+priv struct Placed //< what the runs start, and where they work
+  exe: U8[]
+  spew: U8[]
+  ksplc: U8[]
+  root: U8[]
+  tmp: U8[]
+
+priv fn link_cases(root: U8[], arena: Arena$@): Void?client.Http_end //<
+  //< Checks that a link from inside the root to outside it cannot be followed
+  //<
+  //< **It needs the root, so `serve_cases` (HTTP only) cannot call it.**
+  // The check that blocks it is `stays_under` in `std/fs`. **Static serving needs no token, so
+  // this is the only defence.**
+  if make_link(root, "link.txt", "../secret.txt", arena) &&
+    make_link(root, "dlink", "..", arena)
+    for target in link_escapes
+      r: = client.get(port, target, "", arena)?
+      nm_l: = arena.text().s("a link inside the root cannot get outside: \{target\}").take()
+      ok_l: = r.status == 403 && r.body.find_str("secret") < 0
+      d_l: = client.shown(r, arena)
+      verdict.check(nm_l, ok_l, d_l)
+    // Caution: **Check that a legitimate file still passes**, or refusing everything would pass.
+    fine: = client.get(port, "/index.html", "", arena)?
+    verdict.check("an ordinary file passes even with links turned away", fine.status == 200,
+      client.shown(fine, arena))
+  else
+    verdict.skip_check("a link inside the root cannot get outside",
+      "a link cannot be made with `ln -s` in this environment")
+
+priv fn serve_run(name: U8[], at: Placed, arena: Arena$@) //< runs the server run `name` (`runs`)
+  //<
+  //< Caution: **Each mode is a server of its own**: the mode is fixed at start, and each run
+  //< listens on its own port, so a leftover from one cannot answer another.
+  if name.equals("outward")
+    serve_outward_and_check(at, arena)
+  else if name.equals("local")
+    serve_local_and_check(at, arena)
+  else if name.equals("missing")
+    serve_missing_and_check(at.exe, at.root, at.tmp, arena)
+  else if name.equals("spew")
+    serve_spew_and_check(at.exe, at.spew, at.tmp, arena)
+  else if name.equals("page")
+    serve_page_and_check(at.exe, at.root, at.tmp, arena)
+  else if name.equals("idle")
+    serve_idle_and_check(at.exe, at.root, at.tmp, arena)
+  else if name.equals("stop")
+    serve_stop_and_check(at.exe, at.root, at.tmp, arena)
+
+priv fn serve_outward_and_check(at: Placed, arena: Arena$@) //< the outward-facing server's checks
+  started: =
+    bring_up(at.exe, at.root, at.tmp, "kssrv", port, U8[][]::{},
+    "kssrv comes into a state where it can answer", arena)
+  if got: = started
+    $srv: = got
+    run_cases(arena) catch e
+      srv.failed("kssrv goes on answering requests", e.reason(), arena)
+    link_cases(at.root, arena) catch e2
+      srv.failed("kssrv answers the link's request", e2.reason(), arena)
+    srv.stop()
+
+priv const idle_port: I32 = 18394 //< the port of the server told to stop when idle
+  //<
+  //< Caution: **Keep it different from the others** (`ports_apart` checks the ones here).
+
+priv const idle_seconds: U8[] = "3" //< how long that one waits with nothing holding it
+
+priv const held_ms: I32 = 6000 //< how long it is held for, twice the wait above
+
+priv const gone_ms: I32 = 30000 //< the cap on waiting for it to exit once nothing holds it
+
+priv const gone_poll_ms: I32 = 100
+
+priv fn serve_idle_and_check(exe: U8[], root: U8[], tmp: U8[], arena: Arena$@) //<
+  //< Checks that the server stops itself once no page holds it, and not before
+  //<
+  //< **Both halves are needed**: checking the stop alone passes a server that never stayed up, and
+  //< staying up alone one that never stops ("Keeping the server alive while a page is open" in
+  //< `../../docs/SPEC-local-server.md`).
+  flags: = U8[][]::{ "--local", arena.text().s("--idle=\{idle_seconds\}").take() }
+  started: =
+    bring_up(exe, root, tmp, "kssrv-idle", idle_port, flags,
+    "it comes into a state where it can answer under --idle", arena)
+  if got: = started
+    $srv: = got
+    token: = token_from(srv.out_log, arena)
+    if token.len == 0
+      verdict.check("--idle puts the token out too", false, srv.log(arena))
+      srv.stop()
+      return
+    $hold: =
+      client.open_stream(idle_port, "/api/here", client.bearer_head(token, arena), arena) catch e
+      srv.failed("GET /api/here is answered", e.reason(), arena)
+      srv.stop()
+      return
+    // **The head is read with a timeout, not until the close.** The close must not come, so
+    // reading to it would take the whole wait.
+    _first: = hold.drain(head_wait_ms, arena)
+    verdict.check("GET /api/here answers with a head that names no length",
+      hold.head(arena).find_str("200") >= 0, hold.head(arena))
+    sys.sleep_ms(held_ms)
+    verdict.check("a page holding it keeps it up past the wait", srv.child.alive(),
+      srv.log(arena))
+    hold.free()
+    stopped: = wait_gone(srv.child@)
+    verdict.check("it stops itself once nothing holds it", stopped, srv.log(arena))
+    if !stopped
+      srv.stop()
+
+priv const stop_port: I32 = 18399 //< the port of the server asked to stop
+  //<
+  //< Caution: **Keep it different from the others** (`ports_apart` checks the ones here).
+
+priv fn serve_stop_and_check(exe: U8[], root: U8[], tmp: U8[], arena: Arena$@) //<
+  //< Checks that the server stops when asked with the token, and not when asked without it
+  //<
+  //< **Both halves are needed**: refusing every stop passes the first, and stopping on any request
+  //< the second ("Stopping it when asked" in `../../docs/SPEC-local-server.md`).
+  started: =
+    bring_up(exe, root, tmp, "kssrv-stop", stop_port, U8[][]::{ "--local" },
+    "it comes into a state where it can answer before it is asked to stop", arena)
+  if got: = started
+    $srv: = got
+    token: = token_from(srv.out_log, arena)
+    if token.len == 0
+      verdict.check("the server to be stopped puts the token out", false, srv.log(arena))
+    else
+      stop_cases(token, srv@, arena) catch e
+        srv.failed("it goes on answering until it is asked to stop", e.reason(), arena)
+    // `alive` reaps a server that is gone, so only one still running is killed.
+    if srv.child.alive()
+      srv.stop()
+
+priv fn stop_cases(token: U8[], srv: Running$@, arena: Arena$@): Void?client.Http_end
+  auth: = client.bearer_head(token, arena)
+  // Caution: **A stop without the token is refused, and the server stays up**, or any page in the
+  // browser could end it.
+  bare: = client.post_empty(stop_port, "/api/stop", arena)?
+  verdict.check("POST /api/stop without the token is a 401", bare.status == 401,
+    client.shown(bare, arena))
+  wrong: = client.post_json(stop_port, "/api/stop", "Authorization: Bearer deadbeef\r\n", "",
+    client.default_timeout_ms, arena)?
+  verdict.check("POST /api/stop with a token that does not match is a 401", wrong.status == 401,
+    client.shown(wrong, arena))
+  client.check_405("GET /api/stop is 405", client.get(stop_port, "/api/stop", auth, arena)?, arena)
+  st: = client.get(stop_port, "/api/status", auth, arena)?
+  verdict.check("a refused stop leaves it answering", st.status == 200 && srv.child.alive(),
+    client.shown(st, arena))
+  // **The answer comes before it stops**, so the asker can tell a stop from a broken connection.
+  asked: = client.post_json(stop_port, "/api/stop", auth, "", client.default_timeout_ms, arena)?
+  verdict.check("POST /api/stop with the token is answered", asked.status == 200,
+    client.shown(asked, arena))
+  verdict.check("it stops once it has answered", wait_gone(srv.child@), srv.log(arena))
+
+priv const head_wait_ms: I32 = 500 //< how long the head is waited for (it arrives at once)
+
+priv fn wait_gone(srv: subproc.Child$@): Bool //< whether it exited by itself within the cap
+  //<
+  //< **`alive` reaps the child on the call that returns false**, so no `kill` follows a true.
+  deadline: = sys.mono_us() + I64::gone_ms * 1000I64
+  for sys.mono_us() < deadline
+    if !srv.alive()
+      return true
+    sys.sleep_ms(gone_poll_ms)
+  return false
+
+priv fn serve_missing_and_check(exe: U8[], root: U8[], tmp: U8[], arena: Arena$@) //<
+  //< Starts kssrv with no program to start, and checks that the refusal says where it looked
+  //<
+  //< **The variable naming the location can be wrong too**; a bare "cannot start" does not say
+  //< which part of the setup is wrong.
+  told: = fs.join(tmp, "no-such-ksplc.exe", arena)
+  _exe_env: = sys.set_env("KSSRV_KSPLC", told)
+  started: =
+    bring_up(exe, root, tmp, "kssrv-missing", run.missing_port, U8[][]::{ "--local" },
+    "it comes into a state where it can answer even with no body placed", arena)
+  if got: = started
+    $srv: = got
+    token: = token_from(srv.out_log, arena)
+    if token.len > 0
+      run.missing_cases(token, told, arena) catch e
+        srv.failed("it answers requests even with no body placed", e.reason(), arena)
+    srv.stop()
+
+priv fn serve_spew_and_check(exe: U8[], spew: U8[], tmp: U8[], arena: Arena$@) //<
+  //< Starts kssrv with the spew child as the program to start, and checks how it copes
+  //<
+  //< It checks that no output is lost, the buffer's cap, stopping, and the limit on children.
+  //< **The root is made separately**: the child reads its task from its working directory's name
+  //< (see its header), and such folders under the served root would change the listing count.
+  root: = fs.join(tmp, "spew_root", arena)
+  for name in U8[][]::{ "hold", "spew_100000", "spew_3000000" }
+    fs.mkdir_all(fs.join(root, name, arena)) catch
+      verdict.check("the spewing child's workplace can be made", false, name)
+      return
+  _exe_env: = sys.set_env("KSSRV_KSPLC", spew)
+  started: =
+    bring_up(exe, root, tmp, "kssrv-spew", run.spew_port, U8[][]::{ "--local" },
+    "it comes into a state where it can answer with the spewing child as the body", arena)
+  if got: = started
+    $srv: = got
+    token: = token_from(srv.out_log, arena)
+    if token.len > 0
+      run.spew_cases(token, arena) catch e
+        srv.failed("it goes on answering with the spewing child as the body", e.reason(), arena)
+    srv.stop()
+
+priv fn serve_page_and_check(exe: U8[], root: U8[], tmp: U8[], arena: Arena$@) //<
+  //< Checks serving a page from outside the root at `/` (`--page`)
+  //<
+  //< Caution: **Check both that the page comes from outside the root and that nothing else outside
+  //< is reachable.** One alone misses a client pointing outside ("Where it listens" in
+  //< `../../docs/SPEC-local-server.md`).
+  page: = fs.join(tmp, page_rel, arena)
+  fs.mkdir_all(fs.join(tmp, "ui", arena)) catch
+    verdict.check("a page can be placed outside the root", false, "the container cannot be made")
+    return
+  io.write_file(page, page_body) catch
+    verdict.check("a page can be placed outside the root", false, page)
+    return
+  started: =
+    bring_up(exe, root, tmp, "kssrv-page", page_port,
+    U8[][]::{ arena.text().s("--page=\{page\}").take() },
+    "it comes into a state where it can answer under --page", arena)
+  if got: = started
+    $srv: = got
+    // Caution: **Log one line naming the page**, the only way to see which file is returned.
+    said: = srv.log(arena)
+    verdict.check("--page puts one line out for the page named",
+      said.find_str("kssrv: I: page=") >= 0, said)
+    page_cases(arena) catch e
+      srv.failed("--page answers requests", e.reason(), arena)
+    srv.stop()
+  else
+    return
+  // **Naming a missing page must stop the start**; a later 404 leaves a blank page unexplained
+  // (the same section of the agreement).
+  gone: = fs.join(tmp, "ui/no-such-page.html", arena)
+  out2: = fs.join(tmp, "kssrv-page-missing.out", arena)
+  err2: = fs.join(tmp, "kssrv-page-missing.err", arena)
+  missing: =
+    start_server(exe, root, out2, err2, page_port,
+    U8[][]::{ arena.text().s("--page=\{gone\}").take() }, arena)
+  told: = read_log(out2, err2, arena)
+  verdict.check("naming a page that is not there does not come up",
+    !missing.child.is_some() && told.find_str("no such page") >= 0, told)
+  if c2: = missing.child
+    $bad: = c2
+    bad.kill()
+
+priv fn page_cases(arena: Arena$@): Void?client.Http_end //<
+  //< The answers when `--page` is given
+  slash: = client.get(page_port, "/", "", arena)?
+  ok: = slash.status == 200 && slash.body.equals(page_body)
+  verdict.check("--page: GET / returns the page named", ok, client.shown(slash, arena))
+  named: = client.get(page_port, "/index.html", "", arena)?
+  ok2: = named.status == 200 && named.body.equals(page_body)
+  verdict.check("--page: GET /index.html returns the same page too", ok2,
+    client.shown(named, arena))
+  // **Only the two at the root are replaced** (not a subfolder's index).
+  sub: = client.get(page_port, "/sub/", "", arena)?
+  ok3: = sub.status == 200 && sub.body.equals("sub index\n")
+  verdict.check("--page: a lower level's index.html is not swapped", ok3,
+    client.shown(sub, arena))
+  other: = client.get(page_port, "/style.css", "", arena)?
+  ok4: = other.status == 200 && other.body.equals("body{}\n")
+  verdict.check("--page: other files under the root stay as they are", ok4,
+    client.shown(other, arena))
+  // **The client must not reach that page by its path**; only whoever starts the server names it.
+  by_path: = client.get(page_port, "/ui/app.html", "", arena)?
+  verdict.check("--page: the client cannot reach it by that path", by_path.status == 404,
+    client.shown(by_path, arena))
+  up: = client.get(page_port, "/../ui/app.html", "", arena)?
+  verdict.check("--page: a path climbing upward is turned away", up.status == 403,
+    client.shown(up, arena))
+
+priv fn serve_local_and_check(at: Placed, arena: Arena$@) //<
+  //< Starts it for local use and checks the file endpoints
+  // Where the process endpoint's program is, **set before starting** (a child inherits the
+  // environment when it starts). ksplc is not next to the built kssrv, hence `KSSRV_KSPLC`
+  // (`kssrv/proc.kspls`); its `std` is inherited from this run.
+  _exe_env: = sys.set_env("KSSRV_KSPLC", at.ksplc)
+  started: =
+    bring_up(at.exe, at.root, at.tmp, "kssrv-local", local.local_port, U8[][]::{ "--local" },
+    "it comes into a state where it can answer under --local", arena)
+  if got: = started
+    $srv: = got
+    token: = token_from(srv.out_log, arena)
+    // **The token is printed only once, at start**; no endpoint returns it on request.
+    shown: = verdict.check("--local puts the token out as the opened URL's fragment",
+      token.len > 0, srv.log(arena))
+    if shown
+      local.cases(token, arena) catch e
+        srv.failed("--local goes on answering requests", e.reason(), arena)
+    srv.stop()
+
+priv const token_line: U8[] = "#t=" //< the marker before the token in the output
+  //<
+  //< Caution: **Keep it matching kssrv's output** (`kssrv/main.kspls`): the token is the URL's
+  //< fragment, from `#t=` to the line's end.
+
+priv fn token_from(out_log: U8[], arena: Arena$@): U8[] //< extracts the token from the output
+  //<
+  //< Empty if there is none.
+  //< Caution: **Do not read only the end.** The token is printed before the model's statistics, so
+  //< taking the log's tail drops it.
+  body: = io.read_file(out_log) catch
+    return ""
+  // `lines` drops the `\r` at a line's end, which a child's output on Windows has.
+  text: = U8[]::arena.dup_str(body)
+  for line in text.lines(arena)
+    at: = line.find_str(token_line)
+    if at >= 0
+      return line.sub_from(at + token_line.len)
+  return ""
+
+priv fn run_cases(arena: Arena$@): Void?client.Http_end
+  serve_cases(arena)?
+  api_cases(arena)?
+  infer_cases(arena)?
+  blob: = car.pilot_cases(port, arena)?
+  car.car_cases(port, blob, arena)?
+  train_cases(arena)?
+  keepalive_cases(arena)?
+
+// --- static serving, percent-decoding, escaping outside the root ---
+priv fn serve_cases(arena: Arena$@): Void?client.Http_end
+  slash: = client.get(port, "/", "", arena)?
+  ok2: = slash.status == 200 && slash.body.equals("root index\n")
+  d3: = client.shown(slash, arena)
+  verdict.check("GET / returns index.html", ok2, d3)
+  ctype: = client.header(slash.head, "content-type")
+  verdict.check("the Content-Type is chosen from the extension", ctype.starts_with("text/html"),
+    ctype)
+  sub: = client.get(port, "/sub", "", arena)?
+  ok4: = sub.status == 200 && sub.body.equals("sub index\n")
+  d5: = client.shown(sub, arena)
+  verdict.check("a directory returns the index.html below it", ok4, d5)
+
+  // Look the file up after decoding, or a name with %20 cannot be reached.
+  enc: = client.get(port, "/a%2Bb%20c.txt", "", arena)?
+  ok6: = enc.status == 200 && enc.body.equals("plus and space\n")
+  d7: = client.shown(enc, arena)
+  verdict.check("a file can be fetched by its name with %XX resolved", ok6, d7)
+  // A "+" in a path is not a space (a "+" for a space is only a form-encoding convention).
+  plus: = client.get(port, "/a+b%20c.txt", "", arena)?
+  ok8: = plus.status == 200 && plus.body.equals("plus and space\n")
+  d9: = client.shown(plus, arena)
+  verdict.check("a '+' in a path stays a '+'", ok8, d9)
+  broken: = client.get(port, "/%zz", "", arena)?
+  d10: = arena.text().s("\{broken.status\}").take()
+  verdict.check("a broken %XX is a 400", broken.status == 400, d10)
+
+  for target in escapes
+    r: = client.get(port, target, "", arena)?
+    nm11: = arena.text().s("it cannot get outside the root: \{target\}").take()
+    ok12: = r.status == 403 && r.body.find_str("secret") < 0
+    d13: = client.shown(r, arena)
+    verdict.check(nm11, ok12, d13)
+  // A double encoding is resolved only once (`%252e` is a name `%2e`, not a `.`).
+  twice: = client.get(port, "/%252e%252e/secret.txt", "", arena)?
+  ok14: = twice.status == 404 && twice.body.find_str("secret") < 0
+  d15: = client.shown(twice, arena)
+  verdict.check("a double encoding is not resolved (a 404, not a 200)", ok14, d15)
+
+  for target in reinterpreted
+    r: = client.get(port, target, "", arena)?
+    nm16: = arena.text().s("a name the OS rereads is not taken: \{target\}").take()
+    ok17: = r.status == 403 && r.body.find_str("root index") < 0
+    d18: = client.shown(r, arena)
+    verdict.check(nm16, ok17, d18)
+  // Only a step that is exactly a device name is refused; a partial match would refuse console.js.
+  js: = client.get(port, "/console.js", "", arena)?
+  ok19: = js.status == 200 && js.body.equals("// console\n")
+  d20: = client.shown(js, arena)
+  verdict.check("an ordinary file merely starting with a device name is distributed", ok19, d20)
+
+// --- the JSON API and the methods ---
+priv fn api_cases(arena: Arena$@): Void?client.Http_end
+  st: = client.get(port, "/api/status", "", arena)?
+  doc: = client.doc_of(st, arena)
+  ok21: =
+    st.status == 200 &&
+    client.header(st.head, "content-type").equals("application/json") &&
+    doc.get("max_connections").as_int(0) > 0 && doc.get("requests").as_int(0) > 0
+  d22: = client.shown(st, arena)
+  verdict.check("GET /api/status returns JSON", ok21, d22)
+
+  ls: = client.get(port, "/api/list", "", arena)?
+  $names: = List<|U8[]|>.new(arena)
+  $dir_flag: = false
+  for e in client.doc_of(ls, arena).get("entries").arr_list(arena)
+    name: = e.get("name").as_str()
+    names.push(name)
+    if name.equals("sub") && e.get("is_dir").as_bool(false)
+      dir_flag = true
+  ok23: =
+    ls.status == 200 && client.has_name(names@, "index.html") &&
+    client.has_name(names@, "sub")
+  d24: = client.shown(ls, arena)
+  verdict.check("GET /api/list returns the root's content", ok23, d24)
+  verdict.check("is_dir comes with it", dir_flag, client.shown(ls, arena))
+
+  down: = client.get(port, "/api/list?path=sub", "", arena)?
+  under: = client.list_names(down, arena)
+  ok25: = down.status == 200 && client.has_name(under@, "one.txt")
+  d26: = client.shown(down, arena)
+  verdict.check("GET /api/list?path= returns a lower level", ok25, d26)
+
+  // A query's value goes through the same check, or the same hole opens through another endpoint.
+  for q in U8[][]::{ "path=..", "path=%2e%2e", "path=sub/../.." }
+    r: = client.get(port, arena.text().s("/api/list?\{q\}").take(), "", arena)?
+    nm27: = arena.text().s("/api/list turns outside the root away too: \{q\}").take()
+    d28: = client.shown(r, arena)
+    verdict.check(nm27, r.status == 403, d28)
+
+  // Caution: **Say whether it is for local use**, or the page can only find out by probing.
+  told: = client.doc_of(client.get(port, "/api/status", "", arena)?, arena)
+  verdict.check("the outward status says it is not local-facing",
+    !told.get("local").as_bool(false), client.dump_of(told, arena))
+
+  // Caution: **Without a token there are no file endpoints**, or anyone who learns the address
+  // could read and write under the root. It must be **404**, not 405 or 401 (a 401 says "an
+  // endpoint that works with a token is here"). **The same for the process endpoint**: it **can
+  // run anything with the user's privileges**.
+  for target in U8[][]::{ "/api/file?path=sub/one.txt", "/api/stat?path=sub/one.txt", "/api/run/1" }
+    r: = client.get(port, target, "", arena)?
+    nm: = arena.text().s("without a token there is no endpoint: ").s(target).take()
+    verdict.check(nm, r.status == 404, client.shown(r, arena))
+  spawned: = client.post_json(port, "/api/run", "", "{\"cmd\":\"ksplc\",\"args\":[\"lsp\"]}",
+    5000I32, arena)?
+  verdict.check("under the shape with no token a process cannot be started", spawned.status == 404,
+    client.shown(spawned, arena))
+  // Facing outward there is no token to protect a stop, so there is no stop: the checks after this
+  // one show the server still answering.
+  halt: = client.post_empty(port, "/api/stop", arena)?
+  verdict.check("without a token there is no stopping it", halt.status == 404,
+    client.shown(halt, arena))
+  wrote: = client.put_file(port, "/api/file?path=sub/hack.txt", "", "x", arena)?
+  verdict.check("under the shape with no token it cannot write", wrote.status == 404,
+    client.shown(wrote, arena))
+  // Caution: **Check the folder after the refusal**, or a write after the refusal goes unnoticed.
+  after: = client.get(port, "/api/list?path=sub", "", arena)?
+  left: = client.list_names(after, arena)
+  verdict.check("a refused write makes no file", !client.has_name(left@, "hack.txt"),
+    client.shown(after, arena))
+
+  // Caution: **Do not silently truncate a body over the cap**, or the server handles half of what
+  // it received. It is checked once the request is parsed, for every endpoint, so one is tried.
+  over: = client.put_file(port, "/api/file?path=sub/big.txt", "",
+    client.filler(over_outward_body, arena), arena)?
+  verdict.check("a body past the cap is a 413", over.status == 413, client.shown(over, arena))
+
+  nope: = client.get(port, "/api/nope", "", arena)?
+  ok29: =
+    nope.status == 404 && client.doc_of(nope, arena).get("status").as_int(0) == 404
+  d30: = client.shown(nope, arena)
+  verdict.check("an unknown API is a JSON 404", ok29, d30)
+  // **Every entry point names its methods**, the reading ones too.
+  client.check_405("POST /api/status is 405", client.post_empty(port, "/api/status", arena)?, arena)
+  client.check_405("POST /api/list is 405", client.post_empty(port, "/api/list", arena)?, arena)
+
+  client.check_405("anything but GET/HEAD is a 405",
+    client.post_empty(port, "/index.html", arena)?, arena)
+  head: = client.request(port, client.raw("HEAD", "/style.css", "", "", arena), 1,
+    client.default_timeout_ms, true, arena)?
+  hd: = head.get(0)
+  // A HEAD has no body, but the Content-Length gives the body's length (with 0, the client takes
+  // it as "an empty file").
+  ok31: =
+    hd.status == 200 && hd.body.len == 0 &&
+    client.header(hd.head, "content-length").equals("7")
+  d32: = client.shown(hd, arena)
+  verdict.check("a HEAD names the body's length with no body", ok31, d32)
+
+priv const burst_count: Sz = 30 //< the number of connections opened at once
+  //<
+  //< Make it large enough relative to the time one generation takes.
+priv const infer_workers: Sz = 6 //< the number of load threads and the requests each sends
+priv const infer_reps: Sz = 10
+priv const train_workers: Sz = 3
+priv const train_reps: Sz = 2
+
+// --- inference ---
+priv fn infer_cases(arena: Arena$@): Void?client.Http_end
+  // Generation is greedy, so the same request always gets the same response. If it does not,
+  // something in the model, the quantisation or the generation has changed.
+  first: = client.post_json(port, "/api/infer", "", infer_body, client.job_timeout_ms, arena)?
+  d1: = client.doc_of(first, arena)
+  ok33: = first.status == 200 && d1.get("completion").as_str().equals(infer_expect)
+  d34: = client.shown(first, arena)
+  verdict.check("POST /api/infer returns the continuation", ok33, d34)
+  again: = client.post_json(port, "/api/infer", "", infer_body, client.job_timeout_ms, arena)?
+  d2: = client.doc_of(again, arena)
+  // `cpu_ms` is not compared: it is measured CPU time; the generation, not its time, is
+  // deterministic.
+  ok35: =
+    d2.get("completion").as_str().equals(d1.get("completion").as_str()) &&
+    d2.get("steps").as_int(-1) == d1.get("steps").as_int(-1)
+  d36: = client.shown(again, arena)
+  verdict.check("the same request gets the same response (greedy generation)", ok35, d36)
+
+  for bad in bad_infer
+    r: = client.post_json(port, "/api/infer", "", bad, client.job_timeout_ms, arena)?
+    nm37: = arena.text().s("a broken inference request is a 400: ").s(client.short(bad)).take()
+    d38: = arena.text().s("\{r.status\}").take()
+    verdict.check(nm37, r.status == 400, d38)
+  client.check_405("GET /api/infer is a 405", client.get(port, "/api/infer", "", arena)?, arena)
+
+  // **The server must keep answering other requests during inference**, or it is computing on
+  // the listening thread.
+  heavy: = load.measure(port, "/api/infer", "{\"prompt\":\"kanso is \",\"steps\":256}",
+    infer_workers, infer_reps, arena)
+  load.check_keeps_up("static distribution does not stall even with inference jammed", heavy, arena)
+
+  // When the table is full it refuses requests instead of making them wait.
+  codes: =
+    burst_codes("/api/infer", "{\"prompt\":\"kspl \",\"steps\":256}", burst_count, arena)?
+  ok_n: = count_code(codes@, 200)
+  busy_n: = count_code(codes@, 503)
+  d39: = arena.text().s("200=\{ok_n\} 503=\{busy_n\}").take()
+  verdict.check("piling too many on at once turns them away with a 503 (no waiting)",
+    ok_n > 0 && busy_n > 0, d39)
+
+  md: = client.doc_of(client.get(port, "/api/status", "", arena)?, arena).get("model")
+  // int8 should be about 1/4 of F32; if not, it means "quantised, but the F32 weights were not
+  // dropped" (without dropping them the resident size does not shrink).
+  ok40: =
+    md.get("resident_bytes").as_int64(0I64) > 0I64 &&
+    md.get("resident_bytes").as_int64(0I64) * 3I64 < md.get("f32_bytes").as_int64(0I64)
+  d41: = client.dump_of(md, arena)
+  verdict.check("only the quantised weights are resident (under 1/3 of F32)", ok40, d41)
+  ok42: =
+    md.get("params").as_int64(0I64) > 10000I64 && md.get("context_bytes").as_int(0) == 8
+  d43: = client.dump_of(md, arena)
+  verdict.check("the model's particulars come out", ok42, d43)
+
+priv fn count_code(codes: List<|I32|>@, want: I32): Sz
+  return codes.where(fn(c: I32; want: I32): Bool {
+    return c == want;
+  }).count()
+
+priv fn burst_codes(target: U8[], body: U8[], count: Sz, arena: Arena$@):
+  List<|I32|>?client.Http_end //<
+    //< Opens `count` connections, sends the same request on all at once, and returns the codes
+    //<
+    //< The status codes are in connection order.
+    //< Caution: **Send only after every connection is open**, or arrivals spread out with the
+    //< connect times and "that many at once" never happens.
+  raw: = client.post_bytes(target, body, arena)
+  $conns: = List<|client.Conn$@|>.new(arena)
+  for _k in Range.asc(count)
+    conns.push(client.Conn.open_in(port, arena)?)
+  for c in conns.slice()
+    c.send(raw)?
+  $codes: = List<|I32|>.new(arena)
+  for c in conns.slice()
+    r: = c.next(false, client.job_timeout_ms, arena)?
+    codes.push(r.status)
+  for c in conns.slice()
+    c.free()
+  return codes
+
+// --- continued training --- **From here on the server's state changes.**
+priv fn train_cases(arena: Arena$@): Void?client.Http_end //<
+  //< The continued-training checks, run after the determinism checks since they change the model
+  text: = lesson(arena)
+  body: = arena.text().s("{\"text\":\"").s(text).s("\",\"epochs\":2}").take()
+  first: = client.post_json(port, "/api/train", "", body, client.job_timeout_ms, arena)?
+  d1: = client.doc_of(first, arena)
+  ok58: =
+    first.status == 200 && d1.get("adapter_params").as_int(0) > 0 &&
+    d1.get("loss").as_f64(0.0) > 0.0
+  d59: = client.shown(first, arena)
+  verdict.check("POST /api/train returns the loss", ok58, d59)
+  more: = arena.text().s("{\"text\":\"").s(text).s("\",\"epochs\":8}").take()
+  second: = client.post_json(port, "/api/train", "", more, client.job_timeout_ms, arena)?
+  d2: = client.doc_of(second, arena)
+  ok60: =
+    second.status == 200 &&
+    d2.get("loss").as_f64(1.0e308) < d1.get("loss").as_f64(0.0) &&
+    d2.get("trainings").as_int(0) == 2
+  d61: = client.shown(second, arena)
+  verdict.check("piling the learning up lowers the loss", ok60, d61)
+
+  // The trained text's continuation must come out (see `lesson`).
+  learned: = client.post_json(port, "/api/infer", "", "{\"prompt\":\"mecanum \",\"steps\":12}",
+    client.job_timeout_ms, arena)?
+  d3: = client.doc_of(learned, arena)
+  ok62: =
+    learned.status == 200 && d3.get("completion").as_str().starts_with("car is small")
+  d63: = client.shown(learned, arena)
+  verdict.check("it comes to return the continuation of the learnt body", ok62, d63)
+
+  for bad in bad_train
+    r: = client.post_json(port, "/api/train", "", bad, client.job_timeout_ms, arena)?
+    nm64: = arena.text().s("a broken learning request is a 400: ").s(client.short(bad)).take()
+    d65: = arena.text().s("\{r.status\}").take()
+    verdict.check(nm64, r.status == 400, d65)
+  long_body: = arena.text().s("{\"text\":\"").s(client.filler(too_long_text, arena))
+    .s("\",\"epochs\":1}").take()
+  long_r: = client.post_json(port, "/api/train", "", long_body, client.job_timeout_ms, arena)?
+  nm66: = arena.text().s("a broken learning request is a 400: ").s(client.short(long_body)).take()
+  d67: = arena.text().s("\{long_r.status\}").take()
+  verdict.check(nm66, long_r.status == 400, d67)
+  client.check_405("GET /api/train is a 405", client.get(port, "/api/train", "", arena)?, arena)
+
+  // Training runs on the single inference worker (it rewrites the model); the listening thread
+  // does not stop, so static serving does not stall.
+  heavy: = load.measure(port, "/api/train", more, train_workers, train_reps, arena)
+  load.check_keeps_up("static distribution does not stall during the learning either", heavy, arena)
+
+  md: = client.doc_of(client.get(port, "/api/status", "", arena)?, arena).get("model")
+  ok68: =
+    md.get("trainings").as_int(0) >= 2 && md.get("adapter_params").as_int(0) > 0
+  d69: = client.dump_of(md, arena)
+  verdict.check("status puts the learning count and the adapter's size out", ok68, d69)
+
+// --- keep-alive ---
+priv fn keepalive_cases(arena: Arena$@): Void?client.Http_end
+  raw: = arena.text().s(client.raw("GET", "/style.css", "", "", arena))
+    .s(client.raw("GET", "/sub/one.txt", "", "", arena))
+    .s(client.raw("GET", "/", "Connection: close\r\n", "", arena)).take()
+  got: = client.request(port, raw, 3, client.default_timeout_ms, false, arena)?
+  ok70: =
+    got.len == 3 && got.get(0).status == 200 && got.get(1).status == 200 &&
+    got.get(2).status == 200 && got.get(1).body.equals("one\n")
+  d71: = arena.text().s("\{got.get(0).status\} \{got.get(1).status\} \{got.get(2).status\} ")
+    .s(got.get(1).body).take()
+  verdict.check("one connection handles three in order", ok70, d71)
+  keep: = client.header(got.get(0).head, "connection")
+  verdict.check("it says keep-alive", keep.equals("keep-alive"), keep)
+  closed: = client.header(got.get(2).head, "connection")
+  verdict.check("a Connection: close gets a close back", closed.equals("close"), closed)

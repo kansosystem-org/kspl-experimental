@@ -1,0 +1,96 @@
+//< The program for the check on split compilation (`--split=`)
+//<
+//< It lists the shapes that pass in one translation unit but can break once the units are split:
+//< a generic instantiation (the definition lands in the template's file); a trait and its thunks
+//< (a vtable holds addresses in its initialiser, so the declarations come first); a `priv fn`
+//< (`static` in the generated C); an ARC-managed type (retain/release are `priv fn` elsewhere and
+//< the call is synthesised into the user's file); a top-level global (the definition in the owning
+//< unit, the `extern` in the shared header); and an `embed` (a `static` array plus a slice
+//< pointing at it).
+//< Caution: Do not copy "the answer" here — tests/suite/split_test.kspls checks that the output
+//< agrees with the single-TU build, and with two copies only one gets fixed.
+import "std/ds" { List }
+import "std/io"
+import "std/refcount" { Rc }
+
+embed "ksplc/tests/prog/split.kspls" as self_src
+
+$g_hits: Sz = 0
+priv $g_priv_hits: Sz = 0
+// An upcast to a trait makes a pair of {obj, vtable}. Here it points at static storage.
+priv $g_box: Box = ::{ .w = 3, .h = 4 }
+priv $g_disk: Disk = ::{ .rr = 5 }
+
+priv trait Shape
+  fn area(r: Self): Sz
+
+priv struct Box
+  w: Sz
+  h: Sz
+
+impl Box: Shape
+  fn area(r: Self@): Sz
+    g_hits += 1
+    return r.w * r.h
+
+priv struct Disk
+  rr: Sz
+
+impl Disk: Shape
+  fn area(r: Self@): Sz
+    g_hits += 1
+    return 3 * r.rr * r.rr
+
+priv fn fold(acc: Sz, v: Sz): Sz //< it becomes `static` in the generated C
+  //<
+  //< Unless it is emitted into the same unit as the caller, the link fails.
+  g_priv_hits += 1
+  return acc * 31 + v
+
+priv struct Pair<|T|>
+  a: T
+  b: T
+
+impl<|T|> Pair<|T|>
+  fn sum_with(r: Self@, f: fn(x: T, y: T): T): T
+    return f(r.a, r.b)
+
+priv fn add_sz(x: Sz, y: Sz): Sz
+  return x + y
+
+priv fn rc_round(): Sz //< it takes an ARC-managed type through one full cycle
+  //<
+  //< Caution: **Test both the copy and the scope exit.** A copy synthesises the retain and leaving
+  //< the scope the release, and both name a `priv fn` in `std/refcount`.
+  $a: = Rc<|Sz|>.new(9)
+  $b: = a
+  return b.get()$ + a.get()$
+
+fn main(): I32
+  $total: Sz = 0
+
+  $shapes: = List<|Shape|>.new()
+  defer shapes.free()
+  shapes.push(g_box@)
+  shapes.push(g_disk@)
+  for s in shapes
+    total = fold(total, s.area())
+
+  p_sz: = Pair<|Sz|>::{ .a = 7, .b = 11 }
+  total = fold(total, p_sz.sum_with(add_sz))
+
+  // It instantiates the same generic with a different type argument (both definitions go into this
+  // file's unit).
+  p_i32: = Pair<|I32|>::{ .a = 2, .b = 5 }
+  total = fold(total, p_i32.sum_with(add_i32))
+
+  total = fold(total, rc_round())
+  total = fold(total, self_src.len)
+  total = fold(total, g_hits)
+  total = fold(total, g_priv_hits)
+
+  io.out().s("units=\{total\}\n")
+  return 0
+
+priv fn add_i32(x: I32, y: I32): I32
+  return x + y

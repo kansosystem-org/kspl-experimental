@@ -1,0 +1,401 @@
+#!/usr/bin/env -S ksplc run
+//< Carves one package out of the repository into a read-only copy of its own
+//<
+//< The copy holds the package's folder as its root and **only the history that touched it** (`git
+//< subtree split`), with one commit on top: the references leaving the package re-pointed at this
+//< repository's pages as they were when it last changed (`tests/support/carve_refs.kspls`), and
+//< the repository's `.gitattributes` cut to what applies there. **Nothing is sent anywhere**:
+//< publishing is a person's decision ("How it would be split, if it were" in `docs/DESIGN.md`).
+//< **Carve into the same destination again to publish a newer state**: the copy only moves
+//< forward, so a clone pulls without a conflict.
+
+// ==========================================
+// Usage:
+//     make carve PKG=ksdb [DEST=out/carve/ksdb] [URL=https://github.com/<owner>/<repository>]
+//     ./out/ksplc_seed.exe run tests/tools/carve.kspls ksdb out/carve/ksdb
+// ==========================================
+import "std/argp"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/sys"
+import "tests/support/carve_refs" as carve
+import "tests/support/harness"
+import "tests/support/harness_refs" as refs
+
+priv const repo_url: U8[] = "https://github.com/kansosystem-org/kspl-experimental" //<
+  //< where the references point
+  //<
+  //< A re-pointed reference opens this repository's page for its file, at the package's last
+  //< commit.
+  //< Caution: **Keep this the only place the address is written** (`URL=` overrides it for one
+  //< run); a second copy drifts unseen. **Carve from a clone of the published repository**: the
+  //< commit a reference opens at is the clone's own.
+
+priv const capture_cap: Sz = 64 * 1024 * 1024 //< the cap on what one git writes (a whole file)
+priv const git_timeout_ms: I32 = 600000
+
+priv enum Carve_error //< this tool's failures, each reported before it is thrown
+  refused //< the carving would not be what was asked
+  git //< git exited with a non-zero code, could not start, or timed out
+
+priv fn git(what: U8[], argv: U8[][], arena: Arena$@): U8$[]?Carve_error //<
+  //< Runs one git and returns its standard output
+  //<
+  //< **A failure is reported here and then thrown** (the caller passes it on with `?`; `what`
+  //< names the call).
+  return subproc.run(argv, "", git_timeout_ms, capture_cap, arena) catch e
+    e.describe(what, "git")
+    throw Carve_error.git
+
+priv fn git_line(what: U8[], argv: U8[][], arena: Arena$@): U8[]?Carve_error //<
+  //< The same, returning only the last line of its output, trimmed
+  out: U8[] = git(what, argv, arena)?
+  lines: = out.trim_end().lines(arena)
+  return "" if lines.len == 0 else lines.get(lines.len - 1).trim_spaces()
+
+priv fn git_ok(argv: U8[][], arena: Arena$@): Bool //< whether git answers yes (exits with 0)
+  r: = subproc.run_capture(argv, "", git_timeout_ms, capture_cap, arena)
+  return !r.spawn_failed && !r.timed_out && r.exit_code == 0
+
+priv fn refuse(msg: U8[]): Carve_error //< reports why the carving stops, and returns the failure
+  io.err().s("\{sys.program_name()\}: \{msg\}\n")
+  return Carve_error.refused
+
+// ==========================================
+// What the package is carved from
+// ==========================================
+
+struct Source //< the package, and the commit its content comes from
+  pkg: U8[]
+  pin: U8[] //< the last commit that touched the package: its pages are what references open
+  split: U8[] //< the tip of the package's own history, rooted at its folder
+  base: U8[] //< the repository's address the references point at
+
+priv fn source_of(pkg: U8[], base: U8[], arena: Arena$@): Source?Carve_error //<
+  //< Finds the package and the commit its content comes from, and splits its history out
+  //<
+  //< Caution: **Pin the references to the last commit that touched the package, not to `HEAD`.**
+  //< At `HEAD`, an unrelated commit changes every address and adds a commit to the copy per
+  //< carving. The package's content is the same at both, and the check below enforces that.
+  if pkg.len == 0 || pkg.find_char('/') >= 0 || pkg.starts_with(".")
+    throw refuse(arena.text().s("'\{pkg\}' is not a folder at the repository's top").take())
+  prefix: =
+    git_line("`git rev-parse --show-prefix`", U8[][]::{ "git", "rev-parse", "--show-prefix" }, arena)?
+  if prefix.len > 0
+    throw refuse(arena.text().s("run it from the repository's top (it is run from '\{prefix\}')")
+      .take())
+  spec: = arena.text().s("HEAD:\{pkg\}").take()
+  if !git_ok(U8[][]::{ "git", "cat-file", "-e", spec }, arena)
+    throw refuse(arena.text().s("the repository's HEAD holds no folder '\{pkg\}'").take())
+  kind: =
+    git_line("`git cat-file -t` (the package)", U8[][]::{ "git", "cat-file", "-t", spec }, arena)?
+  if !kind.equals("tree")
+    throw refuse(arena.text().s("'\{pkg\}' is a file at the repository's top, not a folder").take())
+  pin: =
+    git_line("`git rev-list` (the last commit touching the package)",
+    U8[][]::{ "git", "rev-list", "-1", "HEAD", "--", pkg }, arena)?
+  if pin.len == 0
+    throw refuse(arena.text().s("no commit in reach touched '\{pkg\}'").take())
+  now: =
+    git_line("`git rev-parse` (the package at HEAD)", U8[][]::{ "git", "rev-parse", spec }, arena)?
+  then: =
+    git_line("`git rev-parse` (the package at its last commit)",
+    U8[][]::{ "git", "rev-parse", arena.text().s("\{pin\}:\{pkg\}").take() }, arena)?
+  if !now.equals(then)
+    throw refuse(arena.text().s("'\{pkg\}' at HEAD is not what its last commit \{pin\} holds")
+      .take())
+  cache: =
+    git_line("`git rev-parse --git-path`",
+    U8[][]::{ "git", "rev-parse", "--git-path", "subtree-cache" }, arena)?
+  before: = fs.read_dir(cache, arena) catch List<|U8[]|>.new(arena)
+  made: =
+    git_line("`git subtree split`",
+    U8[][]::{ "git", "subtree", "split", "-q",
+    arena.text().s("--prefix=\{pkg\}").take(), pin }, arena)
+  sweep_cache(cache, before@, arena)
+  split: U8[] = made?
+  if split.len == 0
+    throw refuse(arena.text().s("`git subtree split` gave no commit for '\{pkg\}'").take())
+  return Source::{ .pkg = pkg, .pin = pin, .split = split, .base = base }
+
+priv fn sweep_cache(cache: U8[], before: List<|U8[]|>@, arena: Arena$@) //<
+  //< Removes what `git subtree split` left in its cache during this run
+  //<
+  //< It keeps a folder per run and never removes it, so a gate carving on every run piles them up
+  //< in `.git`. **Only folders created during this run are removed**; an older one is another's.
+  after: = fs.read_dir(cache, arena) catch
+    return
+  for name in after
+    $old: = false
+    for i in Range.asc(before.len)
+      if before.get(i).equals(name)
+        old = true
+    if !old
+      harness.remove_tree(fs.join(cache, name, arena))
+
+// ==========================================
+// What the copy holds on top of the history
+// ==========================================
+
+struct Rewrite //< one file of the copy whose content the carving changes
+  path: U8[] //< its path in the copy
+  text: U8[]
+
+priv fn rewrites_of(s: Source@, moved: Sz$@, arena: Arena$@): List<|Rewrite|>?Carve_error //<
+  //< The package's files whose references leave it, re-pointed, and the cut `.gitattributes`
+  //<
+  //< Every file is read from the commit, never from the working tree.
+  listing: U8[] =
+    git("`git ls-tree` (the repository at the commit)",
+    U8[][]::{ "git", "ls-tree", "-r", "--name-only", "-z", s.pin }, arena)?
+  $paths: = List<|U8[]|>.new(arena)
+  for p in listing.split(0x00U8, arena)
+    if p.len > 0
+      paths.push(p)
+  tree: = carve.tree_of(paths.slice(), "", arena)
+  dirs: = carve.picked_dirs(tree@, arena)
+  inside: = arena.text().s("\{s.pkg\}/").take()
+  $out: = List<|Rewrite|>.new(arena)
+  for i in Range.asc(paths.len)
+    rel: = paths.get(i)
+    if !rel.starts_with(inside) || !refs.is_scanned(rel)
+      continue
+    text: U8[] =
+      git(arena.text().s("`git cat-file` (\{rel\})").take(),
+      U8[][]::{ "git", "cat-file", "blob", arena.text().s("\{s.pin\}:\{rel\}").take() }, arena)?
+    c: = carve.carve_text(rel, text, s.pkg, s.pin, s.base, tree@, dirs, arena)
+    if c.moved > 0
+      out.push(Rewrite::{ .path = rel.sub_from(inside.len), .text = c.text })
+      moved$ += c.moved
+  if carve.has_file(tree@, ".gitattributes")
+    root: U8[] =
+      git("`git cat-file` (.gitattributes)",
+      U8[][]::{ "git", "cat-file", "blob",
+      arena.text().s("\{s.pin\}:.gitattributes").take() }, arena)?
+    out
+      .push(Rewrite::{ .path = ".gitattributes",
+      .text = cut_attributes(root, s.pkg, arena) })
+  return out
+
+priv fn cut_attributes(root: U8[], pkg: U8[], arena: Arena$@): U8[] //<
+  //< The repository's `.gitattributes` cut to the lines that apply inside the package
+  //<
+  //< Each line kept is written relative to the package's folder.
+  //<
+  //< A pattern with no `/`, or starting with `**/`, applies at any depth and is kept as it is; one
+  //< under the package's folder is kept with that folder removed from its start; any other names
+  //< another folder and is dropped, with the comment lines right above it.
+  //< Caution: **Do not leave it out**, or a clone's line ends follow each machine's settings and
+  //< a Windows checkout stops matching the repository's.
+  b: = arena.text()
+  b.s("# The Kanso repository's .gitattributes, cut by the carving to the lines that apply here.\n")
+  $held: = arena.text()
+  under: = arena.text().s("\{pkg\}/").take()
+  for line in root.lines(arena)
+    t: = line.trim_spaces()
+    if t.starts_with("#")
+      held.s(line).c('\n')
+      continue
+    if t.len == 0
+      b.s(held.take()).c('\n')
+      held = arena.text()
+      continue
+    cut: = t.find_char(' ')
+    pattern: = t if cut < 0 else t.sub(0, cut)
+    if pattern.find_char('/') < 0 || pattern.starts_with("**/")
+      b.s(held.take()).s(line).c('\n')
+    else if pattern.starts_with(under)
+      b.s(held.take()).s(line.trim_spaces().sub_from(under.len)).c('\n')
+    else
+      held.take()
+    held = arena.text()
+  b.s(held.take())
+  return arena.text().s(b.take().trim_end()).c('\n').take()
+
+// ==========================================
+// Landing it in the destination
+// ==========================================
+
+priv fn open_place(dest: U8[], pkg: U8[], arena: Arena$@): Void?Carve_error //<
+  //< Makes the destination a repository, or reuses one an earlier carving of the package made
+  //<
+  //< Caution: **Refuse a destination holding anything else, and a copy changed by hand**, before
+  //< writing (on another package's carving, one branch would join two histories).
+  if fs.exists(fs.join(dest, ".git", arena))
+    status: U8[] =
+      git("`git status` (the place)",
+      U8[][]::{ "git", "-C", dest, "status", "--porcelain" }, arena)?
+    if status.trim_spaces().len > 0
+      throw refuse(arena.text()
+        .s("'\{dest\}' holds changes of its own; a copy is never changed where it stands").take())
+    verify: = U8[][]::{ "git", "-C", dest, "rev-parse", "-q", "--verify", "refs/heads/main" }
+    if git_ok(verify, arena)
+      held: =
+        git_line("`git log` (what the place holds)",
+        U8[][]::{ "git", "-C", dest, "log", "-1", "--format=%s", "refs/heads/main" }, arena)?
+      if !held.starts_with(arena.text().s("Carve \{pkg\} from ").take())
+        throw refuse(arena.text().s("'\{dest\}' holds something other than a carving of \{pkg\}")
+          .take())
+    return
+  if fs.exists(dest)
+    entries: = fs.read_dir(dest, arena) catch
+      throw refuse(arena.text().s("'\{dest\}' cannot be read").take())
+    if entries.len > 0
+      throw refuse(arena.text().s("'\{dest\}' is neither empty nor a copy a carving made").take())
+  fs.mkdir_all(dest) catch
+    throw refuse(arena.text().s("'\{dest\}' cannot be made").take())
+  git("`git init` (the place)", U8[][]::{ "git", "init", "-q", dest }, arena)?
+  git("`git symbolic-ref` (the place's branch)",
+    U8[][]::{ "git", "-C", dest, "symbolic-ref", "HEAD", "refs/heads/main" }, arena)?
+
+priv const split_ref: U8[] = "refs/carve/split" //< where the history waits in the destination
+  //<
+  //< Caution: **Do not make it a branch**; a clone of the copy would carry it.
+
+priv fn tree_with(dest: U8[], rewrites: List<|Rewrite|>@, arena: Arena$@): U8[]?Carve_error //<
+  //< The history's last tree with the rewritten files put in, made on a throwaway index
+  //<
+  //< Each file goes in byte for byte (`--no-filters`), whatever the machine's line-end settings.
+  //< **The index's path is always cleared on leaving.**
+  git_dir: = fs.absolute(fs.join(dest, ".git", arena), arena) catch
+    throw refuse(arena.text().s("'\{dest\}' cannot be found from here").take())
+  index: = fs.join(git_dir, "carve-index", arena)
+  blob_file: = fs.join(git_dir, "carve-blob", arena)
+  if !sys.set_env("GIT_INDEX_FILE", index)
+    throw refuse("the throwaway index cannot be set")
+  defer sys.unset_env("GIT_INDEX_FILE")
+  defer fs.remove_path(index) catch {}
+  defer fs.remove_path(blob_file) catch {}
+  git("`git read-tree` (the history's last tree)",
+    U8[][]::{ "git", "-C", dest, "read-tree", split_ref }, arena)?
+  for i in Range.asc(rewrites.len)
+    w: = rewrites.get(i)
+    io.write_file(blob_file, w.text) catch
+      throw refuse("the throwaway blob cannot be written")
+    blob: =
+      git_line(arena.text().s("`git hash-object` (\{w.path\})").take(),
+      U8[][]::{ "git", "-C", dest, "hash-object", "-w", "--no-filters", blob_file }, arena)?
+    listed: =
+      git_line(arena.text().s("`git ls-tree` (\{w.path\}'s mode)").take(),
+      U8[][]::{ "git", "-C", dest, "ls-tree", split_ref, "--", w.path }, arena)?
+    cut: = listed.find_char(' ')
+    mode: = "100644" if cut <= 0 else listed.sub(0, cut)
+    git(arena.text().s("`git update-index` (\{w.path\})").take(),
+      U8[][]::{ "git", "-C", dest, "update-index", "--add", "--cacheinfo",
+      arena.text().s("\{mode\},\{blob\},\{w.path\}").take() }, arena)?
+  return git_line("`git write-tree`", U8[][]::{ "git", "-C", dest, "write-tree" }, arena)?
+
+priv fn land(s: Source@, dest: U8[], rewrites: List<|Rewrite|>@, arena: Arena$@):
+  U8[]?Carve_error //<
+    //< Puts the carving in the destination and returns the copy's `main`
+    //<
+    //< `main` is unchanged if the copy already held this carving. It is dated and signed as the
+    //< package's source commit, so one state gives one commit anywhere.
+  open_place(dest, s.pkg, arena)?
+  pushed: = arena.text().s("+\{s.split\}:\{split_ref\}").take()
+  git("`git push` (the history into the place)",
+    U8[][]::{ "git", "-c", "push.negotiate=false", "push", "-q", dest, pushed }, arena)?
+  $prev: U8[] = ""
+  if git_ok(U8[][]::{ "git", "-C", dest, "rev-parse", "-q", "--verify", "refs/heads/main" }, arena)
+    prev =
+      git_line("`git rev-parse` (the place's main)",
+      U8[][]::{ "git", "-C", dest, "rev-parse", "refs/heads/main" }, arena)?
+  tree: = tree_with(dest, rewrites, arena)?
+  if prev.len > 0
+    prev_tree: =
+      git_line("`git rev-parse` (the place's tree)",
+      U8[][]::{ "git", "-C", dest, "rev-parse",
+      arena.text().s("\{prev\}^{tree}").take() }, arena)?
+    holds: =
+      git_ok(U8[][]::{ "git", "-C", dest, "merge-base", "--is-ancestor", split_ref, prev }, arena)
+    if holds && prev_tree.equals(tree)
+      git("`git update-ref -d`",
+        U8[][]::{ "git", "-C", dest, "update-ref", "-d", split_ref }, arena)?
+      return prev
+  who: =
+    git("`git log` (who made the package's last commit)",
+    U8[][]::{ "git", "log", "-1", "--format=%cn%n%ce%n%ct %cz", s.pin }, arena)?
+  parts: = who.trim_end().lines(arena)
+  if parts.len != 3
+    throw refuse(arena.text().s("the last commit \{s.pin\} names no committer").take())
+  for role in U8[][]::{ "AUTHOR", "COMMITTER" }
+    sys.set_env(arena.text().s("GIT_\{role\}_NAME").take(), parts.get(0))
+    sys.set_env(arena.text().s("GIT_\{role\}_EMAIL").take(), parts.get(1))
+    sys.set_env(arena.text().s("GIT_\{role\}_DATE").take(), parts.get(2))
+  msg: = arena.text()
+    .s("Carve \{s.pkg\} from \{s.base\} at \{s.pin\}\n\nThe references that leave the package open \
+      that commit's pages there, and\nthe repository's .gitattributes is cut to the lines that \
+      apply here.\n").take()
+  $argv: = List<|U8[]|>.new(arena)
+  for a in U8[][]::{ "git", "-C", dest, "commit-tree", "--no-gpg-sign", tree }
+    argv.push(a)
+  if prev.len > 0
+    argv.push("-p")
+    argv.push(prev)
+  argv.push("-p")
+  argv.push(split_ref)
+  argv.push("-m")
+  argv.push(msg)
+  made: = git_line("`git commit-tree`", argv.slice(), arena)
+  for role in U8[][]::{ "AUTHOR", "COMMITTER" }
+    for field in U8[][]::{ "NAME", "EMAIL", "DATE" }
+      sys.unset_env(arena.text().s("GIT_\{role\}_\{field\}").take())
+  commit: U8[] = made?
+  $update: = List<|U8[]|>.new(arena)
+  for a in U8[][]::{ "git", "-C", dest, "update-ref", "refs/heads/main", commit }
+    update.push(a)
+  if prev.len > 0
+    update.push(prev)
+  git("`git update-ref` (the place's main)", update.slice(), arena)?
+  git("`git update-ref -d`", U8[][]::{ "git", "-C", dest, "update-ref", "-d", split_ref }, arena)?
+  git("`git reset` (the place's files)",
+    U8[][]::{ "git", "-C", dest, "reset", "-q", "--hard" }, arena)?
+  return commit
+
+fn main(): I32 //< carves the named package into the named destination
+  arena: = Arena.new(16 * 1024 * 1024)
+  defer arena.free()
+  // Caution: **Do not read the arguments by hand.** Refusing an unknown `--name` is `std/argp`'s.
+  p: = argp.Parser
+    .create(sys.program_name(), "carve one package out into a read-only copy of its own", arena)
+  p.positional("<package> <place> [<address>]")
+  p.parse_or_exit(sys.args(), arena)
+  if p.rest.len < 2 || p.rest.len > 3
+    p.print_usage()
+    return 1
+  pkg: U8[] = p.rest.get(0)
+  dest: U8[] = p.rest.get(1)
+  given: U8[] = p.rest.get(2) if p.rest.len == 3 else ""
+  base: = (repo_url if given.len == 0 else given).strip_suffix("/")
+  s: = source_of(pkg, base, arena) catch
+    return 1
+  $moved: Sz = 0
+  rewrites: = rewrites_of(s@, moved@, arena) catch
+    return 1
+  $before: U8[] = ""
+  if fs.exists(fs.join(dest, ".git", arena)) &&
+    git_ok(U8[][]::{ "git", "-C", dest, "rev-parse", "-q", "--verify", "refs/heads/main" }, arena)
+    before =
+      git_line("`git rev-parse` (the place's main before)",
+      U8[][]::{ "git", "-C", dest, "rev-parse", "refs/heads/main" }, arena) catch ""
+  commit: = land(s@, dest, rewrites@, arena) catch
+    return 1
+  if commit.equals(before)
+    io.out().s("\{dest\} already holds this carving of \{pkg\} (main \{commit\})\n")
+    return 0
+  count: =
+    git_line("`git rev-list --count`",
+    U8[][]::{ "git", "-C", dest, "rev-list", "--count", "HEAD^2" if before.len > 0 else "HEAD^" },
+    arena) catch "?"
+  io.out().s("carved \{pkg\} into \{dest\}: main \{commit\}\n")
+  io.out().s("  the history: \{count\} commits that touched \{pkg\}, through \{s.pin\}\n")
+  io.out().s("  re-pointed: \{moved\} references leaving the package, at \{base\}\n")
+  // Caution: **Say how to publish it, but do not publish** (a person's decision).
+  io.out().s("  to publish it: git -C \{dest\} push <remote> main\n")
+  return 0

@@ -1,0 +1,33 @@
+//< Verifies that an immutable `F32` array can hold the values as written
+//<
+//< **An LLVM `float` constant must round-trip exactly through its decimal form.** Many "ordinary"
+//< decimals such as `0.85` do not, so written in decimal `clang` rejects them with "floating
+//< point constant invalid for type" — **with no diagnostic on the KSPL side**, and only the LLVM
+//< build fails (format_f32_hex_literal in gen/llvm/ctx.kspls builds the hexadecimal form).
+//< **Test it in an array's element.** An element's type is not `F32` but `const_of(F32)`, so a
+//< check that does not strip the immutable qualifier does not match f32, and **a plain `F32`
+//< constant never reaches that case** (emit_llvm_const_float in gen/llvm/decl.kspls).
+//< Caution: **Do not list only values that round-trip** (`1.0` and `0.5` pass in decimal too).
+import "std/verdict"
+
+priv const scales: F32[6] = ::{ 2.0, 1.5, 1.25, 1.0, 0.875, 0.85 } //<
+  //< Values that round-trip and values that do not, mixed
+priv struct Pair //< an F32 inside a struct is the same route
+  a: F32
+  b: F32
+priv const pairs: Pair[2] = ::{ Pair::{ .a = 0.1, .b = 0.85 }, Pair::{ .a = 0.5, .b = 3.14 } }
+priv const separated: F32[2] = ::{ 1_000.5, 2_500.25F32 } //<
+  //< A `_` separator and a type suffix are removed before the value is read
+
+fn test_a_const_float_array_keeps_its_values()
+  verdict.start("[genllvm] an immutable F32 array keeps its values test...")
+  // Caution: **Compare against the value rounded to F32** (compared as F64, 0.85 does not match).
+  assert(scales[0] == 2.0F32 && scales[3] == 1.0F32, "a round-tripping value stays as it is")
+  assert(scales[4] == 0.875F32, "a fraction that is a power of two stays as it is")
+  assert(scales[5] == F32::0.85, "a value that does not round-trip is held as written too")
+  assert(scales[1] > scales[2] && scales[2] > scales[3], "the order is not broken")
+  assert(pairs[0].b == F32::0.85 && pairs[1].b == F32::3.14, "the same holds inside a struct")
+  assert(pairs[0].a == F32::0.1, "0.1 is held as written too")
+  assert(separated[0] == 1000.5F32 && separated[1] == 2500.25F32,
+    "a separator or a suffix does not cut the value short")
+  verdict.pass("an F32 that does not round-trip in decimal is held as the value written too.")

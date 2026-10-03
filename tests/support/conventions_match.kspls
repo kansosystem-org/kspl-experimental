@@ -1,0 +1,681 @@
+//< Catches two things written in separate places that drift apart unnoticed (not the suite)
+//<
+//< **Each of these builds either way.** A diagnostic's code missing from the specification, or an
+//< implementation deleted while the specification still names it: nothing fails (Principle 5
+//< turned round).
+//< `tests/suite/conventions_test.kspls` checks how it is written (size, phrasing, register).
+//< Note: `tests/support/conventions_ci.kspls` checks the workflow's jobs and shards (split off
+//< because what it checks is outside ksplc).
+import "std/chars" // `trim_spaces`
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/verdict"
+import "tests/support/conventions_ci" as cci
+import "tests/support/conventions_lsp" as clsp
+import "tests/support/conventions_scan" as scan + { Sample }
+import "tests/support/harness"
+import "tests/support/harness_text" as htext
+import "tools/code_rows"
+
+// ==========================================
+// The diagnostic codes' list, and the material that holds them
+// ==========================================
+priv const registry: U8[] = code_rows.registry_path
+priv const spec_tools: U8[] = code_rows.spec_path
+
+priv fn is_code(s: U8[], _arena: Arena$@): Bool //< whether it is one of `EWIH` plus four digits
+  //<
+  //< Caution: **Keep it a function of one text**, or the samples below can no longer be passed to
+  //< it and a broken judgment fails for nobody ("Showing that a check can fire" in
+  //< `../docs/HOWTO-write-a-suite.md`).
+  if s.len != 5
+    return false
+  if s[0] != 'E' && s[0] != 'W' && s[0] != 'I' && s[0] != 'H'
+    return false
+  for i in Range.new(1, 5, 1)
+    if !s[i].is_digit()
+      return false
+  return true
+
+// The samples for the judgment above.
+// Caution: **Include a text with each of the three guards removed in turn** (the length, the
+// leading letter, the four digits); a table with only one cannot notice which guard is gone.
+priv const code_samples: Sample[10] = ::{
+  Sample::{ .text = "E0001", .hits = true },
+  Sample::{ .text = "W0207", .hits = true },
+  Sample::{ .text = "I0402", .hits = true },
+  Sample::{ .text = "H0802", .hits = true },
+  Sample::{ .text = "E001", .hits = false },
+  Sample::{ .text = "E00012", .hits = false },
+  Sample::{ .text = "", .hits = false },
+  Sample::{ .text = "X0001", .hits = false },
+  Sample::{ .text = "e0001", .hits = false },
+  Sample::{ .text = "E000a", .hits = false },
+}
+
+priv fn check_code_fires(arena: Arena$@)
+  $bad: = scan.misjudged(Sample[]::code_samples, is_code, arena)
+  verdict.check_list("the judgment of a diagnostic code's text can fire", code_samples.len,
+    "samples", bad@, "the table of what is hit and what is not is `code_samples`")
+
+priv fn codes_only(xs: List<|U8[]|>@, arena: Arena$@): List<|U8[]|>
+  $out: = List<|U8[]|>.new(arena)
+  for i in Range.asc(xs.len)
+    if is_code(xs.get(i), arena)
+      scan.push_unique(out@, xs.get(i))
+  return out
+
+priv fn check_codes(arena: Arena$@): List<|U8[]|>
+  reg: = harness.read_under_root(registry)
+  spec: = harness.read_under_root(spec_tools)
+  $raw_impl: = scan.find_all(reg, "code.equals(\"", "\")", arena)
+  $raw_detail: = scan.find_line_starts(spec, "#### [", "]", arena)
+  $codes: = codes_only(raw_impl@, arena)
+  $detail: = codes_only(raw_detail@, arena)
+  $gaps: = List<|U8[]|>.new(arena)
+  detail_name: = arena.text().s("\{spec_tools\}'s sections").take()
+  scan.diff_into(codes@, detail@, registry, detail_name, gaps@, arena)
+  scan.diff_into(detail@, codes@, detail_name, registry, gaps@, arena)
+  verdict.check_list("the diagnostic codes agree between the implementation and the spec",
+    codes.len, "codes", gaps@, "")
+  // The table lists the sections, so with the sections matching the registry it matches too.
+  verdict.check("the table of codes is what the code sections give",
+    code_rows.with_table(spec, reg, arena).equals(spec),
+    arena.text().s(spec_tools).s("'s table differs from its sections: run `make code-table`").take())
+  return codes
+
+priv fn check_fixtures(codes: List<|U8[]|>@, arena: Arena$@) //<
+  //< Checks that each code has test input that shows it is reported
+  //<
+  //< The list and the specification alone cannot notice it stopped firing (Principle 5).
+  //<
+  //< The input is in `ksplc/tests/lint/` (it is reported) or `ksplc/tests/negative/` (it fails).
+  $all: = Str_builder.new()
+  defer all.free()
+  for rel in harness.tracked_matching(U8[][]::{ "ksplc/tests/lint", "ksplc/tests/negative" })
+    // Caution: **Read the indentation notation too** — some diagnostics are reported only in a
+    // `.kspls`.
+    if rel.ends_with(".kspl") || rel.ends_with(".kspls")
+      all.s(harness.read_under_root(rel))
+  text: = all.slice()
+  $bad: = List<|U8[]|>.new(arena)
+  for i in Range.asc(codes.len)
+    if text.find_str(codes.get(i)) < 0
+      bad.push(codes.get(i))
+  verdict.check_list("every diagnostic code has material holding it", codes.len, "codes", bad@,
+    "add a source holding `// EXPECT: [CODE] ...` under ksplc/tests/lint/")
+
+// ==========================================
+// The LLVM side holds no body for a `kspl_*` Only the C runtime (`ksplc emit-runtime`) holds an
+// OS-touching `kspl_*`'s body; the IR `declare`s it from `std/`'s `extern "C"` (the start of
+// "The backends (Genc / Genllvm) and the runtime ABI" in `../../ksplc/docs/DESIGN.md`).
+// ==========================================
+priv const llvm_module: U8[] = "ksplc/gen/llvm/module.kspls"
+priv const llvm_ctx: U8[] = "ksplc/gen/llvm/ctx.kspls"
+
+// The `kspl_*` the IR may hold its own translation unit's copy of.
+// Caution: **To add one, the C side must be `static inline` too.**
+priv const llvm_inline_ok: U8[][5] = ::{ "kspl_bounds_check", "kspl_div_check", "kspl_sdiv",
+  "kspl_smod", "kspl_shift_check" }
+
+priv fn is_inline_ok(name: U8[]): Bool
+  for e in llvm_inline_ok
+    if name.equals(e)
+      return true
+  return false
+
+priv fn collect_declared(out: List<|U8[]|>$@, arena: Arena$@) //<
+  //< The names of the `kspl_*` that an `extern "C"` in `std/` and the like declares
+  //<
+  //< A block is read in either notation: to its `}` after an `extern "C" {`, and to the first
+  //< line indented no deeper than a bare `extern "C"` in `.kspls`. A block under a `#cfg(...)` is
+  //< read too, since either backend may build it.
+  specs: = scan.kspl_specs_with(U8[][]::{ ":!tests/" }, arena)
+  for rel in harness.tracked_matching(specs)
+    text: = harness.read_under_root(rel)
+    $lines: = text.lines(arena)
+    $in_block: = false
+    $braced: = false
+    $depth: Sz = 0
+    for i in Range.asc(lines.len)
+      raw: = lines.get(i)
+      line: = raw.trim_spaces()
+      if in_block
+        $ends: = line.starts_with("}")
+        if !braced
+          ends = line.len > 0 && raw.len - raw.trim_start().len <= depth
+        if !ends
+          sig: = line.strip_prefix("pub ")
+          if sig.starts_with("fn kspl_")
+            rest: = sig.sub_from(3)
+            at: = rest.find_char('(')
+            if at > 0
+              scan.push_unique(out, rest.sub(0, at))
+          continue
+        in_block = false
+        if braced
+          continue
+      if line.starts_with("extern \"C\"")
+        in_block = true
+        braced = line.ends_with("{")
+        depth = raw.len - raw.trim_start().len
+
+priv fn collect_module_symbols(defined: List<|U8[]|>$@, declared: List<|U8[]|>$@, arena: Arena$@) //<
+  //< The names of the symbols a `define` / `declare` at a line's start in `module.kspls` emits
+  //<
+  //< Each name is taken from after the `@`, up to the `(`. The `llvm.*` built-ins are not counted.
+  for line in harness.read_under_root(llvm_module).lines(arena)
+    t: = line.trim_spaces()
+    is_def: = t.starts_with("define ")
+    if !is_def && !t.starts_with("declare ")
+      continue
+    at: = t.find_str("@")
+    if at < 0
+      continue
+    rest: = t.sub_from(at + 1)
+    open: = rest.find_char('(')
+    if open <= 0
+      continue
+    name: = rest.sub(0, open)
+    if name.starts_with("llvm.")
+      continue
+    scan.push_unique(defined if is_def else declared, name)
+
+priv const preamble_head: U8[] = "const preamble_fns:" //<
+  //< The line that starts `ctx.kspls`'s table of what the preamble emits itself
+  //<
+  //< One entry per line follows it, up to a line holding only `}`.
+
+priv fn collect_preamble(named: List<|U8[]|>$@, by_hand: List<|U8[]|>$@, arena: Arena$@): Bool //<
+  //< The names the table holds, and among them those with no `.ret`
+  //<
+  //< Those are emitted by hand in `module.kspls`. It returns false where the table is not found.
+  $in_table: = false
+  $found: = false
+  for line in harness.read_under_root(llvm_ctx).lines(arena)
+    t: = line.trim_spaces()
+    if !in_table
+      in_table = t.starts_with(preamble_head)
+      found = found || in_table
+      continue
+    if t.equals("}")
+      break
+    names: = scan.find_all(t, ".name = \"", "\"", arena)
+    if names.len == 0
+      continue
+    named.push(names.get(0))
+    if t.find_str(".ret = ") < 0
+      by_hand.push(names.get(0))
+  return found && named.len > 0
+
+priv fn push_unheld(put_out: List<|U8[]|>@, verb: U8[], std_declared: List<|U8[]|>@,
+  by_hand: List<|U8[]|>@, bad: List<|U8[]|>$@, arena: Arena$@) //<
+    //< Lists what `module.kspls` emits by hand under a name `std` declares
+    //<
+    //< It lists only a name the table does not leave to it.
+  for n in put_out
+    if scan.has(std_declared, n) && !scan.has(by_hand, n)
+      bad
+        .push(arena.text().s(n).s(": ").s(llvm_module).s(" ").s(verb).s(" it by hand and ")
+        .s(llvm_ctx).s("'s preamble_fns does not hold it without a .ret").take())
+
+priv fn check_facade(arena: Arena$@)
+  $std_declared: = List<|U8[]|>.new(arena)
+  $defined: = List<|U8[]|>.new(arena)
+  $declared: = List<|U8[]|>.new(arena)
+  collect_declared(std_declared@, arena)
+  collect_module_symbols(defined@, declared@, arena)
+
+  // (1) The only `kspl_*` bodies in the IR are the ones that are `static inline` on the C side.
+  $bad: = List<|U8[]|>.new(arena)
+  for n in defined
+    if n.starts_with("kspl_") && !is_inline_ok(n)
+      bad
+        .push(arena.text().s(n).s(": there is a body in the IR (the C runtime alone holds a body)")
+        .take())
+  verdict.check_list("there is no kspl_* body on the LLVM side", defined.len, "symbols", bad@,
+    "put the body under ksplc/gen/runtime/ and leave the IR to std's extern \"C\" declare")
+
+  // (2) What `module.kspls` emits by hand under a name `std` also declares is in the table with
+  // no `.ret`, so `decl.kspls` skips `std`'s declare; and each such entry is emitted there. One
+  // alone is an `invalid redefinition` or an unresolved symbol, **failing far from the cause**
+  // (assembling the `.ll`, unseen until `make LLVM=1`). The table's own `declare`s and the
+  // skipping come from one list and need no matching.
+  $named: = List<|U8[]|>.new(arena)
+  $by_hand: = List<|U8[]|>.new(arena)
+  // Caution: **Fail where it is not found.** Continue with an empty list and the check goes green
+  // having checked nothing.
+  if !collect_preamble(named@, by_hand@, arena)
+    verdict.check(arena.text().s("\{llvm_ctx\}'s preamble_fns can be read").take(), false,
+      "the table is not found")
+    return
+  $bad2: = List<|U8[]|>.new(arena)
+  push_unheld(defined@, "defines", std_declared@, by_hand@, bad2@, arena)
+  push_unheld(declared@, "declares", std_declared@, by_hand@, bad2@, arena)
+  for n in by_hand
+    if !scan.has(defined@, n) && !scan.has(declared@, n)
+      bad2
+        .push(arena.text().s(n).s(": ").s(llvm_ctx).s("'s preamble_fns leaves it to ")
+        .s(llvm_module).s(", which does not put it out (it becomes an unresolved symbol)").take())
+  verdict.check_list("what LLVM's preamble puts out by hand lines up with preamble_fns", named.len,
+    "names", bad2@, "")
+
+// ==========================================
+// An import's alias agrees with its path The alias of an `import "ksplc/a/b/c" as alias;` must be
+// `a_b_c` (the `_` prefix for an extension method is allowed).
+// Caution: **Do not shorten it**: with sema in five folders, `sema_env` for `sema/type/env` hides
+// which layer it is.
+// ==========================================
+
+priv const test_entry_path: U8[] = "tests/all" //<
+  //< **Only the tests' entry point is named after the package**
+  //<
+  //< Each package's `<package>/test/all` would otherwise give `test_all`, and two cannot share one
+  //< file. This check enforces it on `ksplc/`; the other packages use the same form.
+priv const test_entry_alias: U8[] = "ksplc_all"
+
+priv fn alias_of(t: U8[]): U8[] //< the alias an `import "ksplc/…" as …;` line names
+  //<
+  //< Empty where the line names none.
+  //< Caution: **Cut at the space before stripping the `;`**: a `+` list (`as m + { A };`) follows
+  //< the alias, and a commented line does not end in `;`, so stripping first reads `as m; // why`
+  //< as `m;` and rejects a correct line.
+  if !t.starts_with("import \"ksplc/")
+    return ""
+  rest: = t.sub_from(8)
+  as_at: = rest.find_str("\" as ")
+  if rest.find_char('"') < 0 || as_at < 0
+    return ""
+  $name_as: = rest.sub_from(as_at + 5)
+  space_at: = name_as.find_char(' ')
+  if space_at >= 0
+    name_as = name_as.sub(0, space_at)
+  return name_as.strip_suffix(";")
+
+// The forms the reader must tell apart: plain / with a chosen list / with a comment after it /
+// both / not an import at all.
+priv const alias_samples: U8[][5] = ::{ "import \"ksplc/a/b\" as a_b;",
+  "import \"ksplc/a/b\" as a_b + { C };", "import \"ksplc/a/b\" as _a_b; // why",
+  "import \"ksplc/a/b\" as a_b + { C }; // why", "import \"std/io\" as io;" }
+priv const alias_want: U8[][5] = ::{ "a_b", "a_b", "_a_b", "a_b", "" }
+
+priv fn check_alias_fires(arena: Arena$@) //<
+  //< Checks that the reading of an import's alias can fire
+  //<
+  //< **A failed read looks exactly like "the alias agrees"**: a broken reader returns every line
+  //< empty, green having compared nothing.
+  $bad: = List<|U8[]|>.new(arena)
+  for i in Range.asc(alias_samples.len)
+    got: = alias_of(alias_samples[i])
+    if !got.equals(alias_want[i])
+      bad
+        .push(arena.text().s("read `").s(alias_samples[i]).s("` as `").s(got).s("` (it should be `")
+        .s(alias_want[i]).c('`').c(')').take())
+  verdict.check_list("the reading of an import's alias can fire", alias_samples.len, "samples",
+    bad@, "the table of what is read and how is `alias_samples`")
+
+priv fn check_alias(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    for line in harness.read_under_root(rel).lines(arena)
+      t: = line.trim_start()
+      if !t.starts_with("import \"ksplc/")
+        continue
+      seen += 1
+      rest: = t.sub_from(8)
+      end: = rest.find_char('"')
+      name_as: = alias_of(t)
+      if end < 0 || name_as.len == 0
+        continue
+      path: = rest.sub(0, end).sub_from(6)
+      if path.find_char('/') < 0
+        continue
+      us: = "_" if name_as.starts_with("_") else ""
+      want: =
+        (test_entry_alias if path.equals(test_entry_path)
+        else arena.text().s(us).s(path.replace("/", "_", arena)).take())
+      if !name_as.equals(want)
+        bad
+          .push(arena.text().s(rel).s(": ").s(name_as).s(" -> ").s(want).take())
+  verdict.check_list("an import's alias agrees with its path", seen, "aliases", bad@, "")
+
+// ==========================================
+// No kind that "nobody makes and nobody checks" builds up in `Ast_kind` **The grammar's
+// synchronisation check (`ksplc/main.kspls`) checks one side only**: "in `kspl.kspeg` and not in
+// `Ast_kind`". A member neither a grammar rule nor tested as a kind anywhere goes unchecked.
+// ==========================================
+priv const ast_kinds: U8[] = "ksplc/base/ast_kinds.kspls"
+priv const kspeg: U8[] = "ksplc/kspl.kspeg"
+
+priv fn check_ast_kinds(arena: Arena$@)
+  src: = harness.read_under_root(ast_kinds)
+  $members: = List<|U8[]|>.new(arena)
+  for line in src.lines(arena)
+    if !line.starts_with("  k_")
+      continue
+    // **An enum member ends with its line** (the default notation writes no terminator; the
+    // `strip_suffix` is for braces). `word_only` rejects a line with a value (`k_unknown = 0`).
+    n: = line.trim_end().strip_suffix(";").sub_from(2)
+    if !word_only(n)
+      continue
+    members.push(n)
+  // The string `builtin_name` returns is the value compared with a grammar rule's name.
+  $kinds: = List<|U8[]|>.new(arena)
+  $names: = List<|U8[]|>.new(arena)
+  $lines: = src.lines(arena)
+  for i in Range.asc(lines.len)
+    t: = lines.get(i).trim_spaces()
+    // The default notation opens a `case`'s block by indentation, so no `{` is required (the
+    // `strip_suffix` is for braces).
+    if !t.starts_with("case .k_")
+      continue
+    kind: = t.sub_from(5).strip_suffix(" {").trim_spaces()
+    if i + 1 >= lines.len
+      continue
+    nxt: = lines.get(i + 1).trim_spaces()
+    if !nxt.starts_with("return \"")
+      continue
+    spelled: = nxt.sub_from(8)
+    end: = spelled.find_char('"')
+    if end < 0
+      continue
+    kinds.push(kind)
+    names.push(spelled.sub(0, end))
+  // A grammar rule's name (`name = …`). The line comments are dropped.
+  $rules: = List<|U8[]|>.new(arena)
+  for line in harness.read_under_root(kspeg).lines(arena)
+    if line.starts_with("//")
+      continue
+    at: = line.find_char('=')
+    if at <= 0
+      continue
+    head: = line.sub(0, at).trim_spaces()
+    if head.len == 0 || !(head[0].is_alpha() || head[0] == '_')
+      continue
+    $ok: = true
+    for c in head
+      if !(c.is_alnum() || c == '_')
+        ok = false
+    if ok
+      rules.push(head)
+  $sources: = Str_builder.new()
+  defer sources.free()
+  for rel in harness.tracked_matching(U8[][]::{ "ksplc/**/*.kspls", "ksplc/*.kspls" })
+    sources.s(harness.read_under_root(rel))
+  all: = sources.slice()
+  $bad: = List<|U8[]|>.new(arena)
+  for k in members
+    if k.equals("k_unknown") || k.equals("k_max")
+      continue
+    at: = find_sig_name(kinds@, k)
+    spelled: = "" if at == 0 else names.get(at - 1)
+    if spelled.len > 0 && scan.has(rules@, spelled)
+      continue
+    if mentions_kind(all, k)
+      continue
+    bad
+      .push(arena.text().s(k).s(" (text: ").s("?" if spelled.len == 0 else spelled).s(")").take())
+  verdict.check_list("there is no remnant in Ast_kind", members.len, "kinds", bad@,
+    "take it out of both the enum and builtin_name")
+
+priv fn word_only(s: U8[]): Bool
+  for c in s
+    if !(c.is_alnum() || c == '_')
+      return false
+  return s.len > 0
+
+priv fn find_sig_name(xs: List<|U8[]|>@, want: U8[]): Sz
+  for i in Range.asc(xs.len)
+    if xs.get(i).equals(want)
+      return i + 1
+  return 0
+
+priv fn mentions_kind(text: U8[], kind: U8[]): Bool //<
+  //< Whether it appears in a kind test as a `.k_xxx` (checked at a word boundary)
+  $i: Sz = 0
+  for i + kind.len + 1 <= text.len
+    at: = text.sub_from(i).find_str(kind)
+    if at < 0
+      return false
+    p: = i + Sz::at
+    i = p + kind.len
+    if p == 0 || text[p - 1] != '.'
+      continue
+    if p + kind.len >= text.len || !htext.is_word_at(text, p + kind.len)
+      return true
+  return false
+
+// ==========================================
+// The attributes' list agrees across the compiler, the specification and the editor **Neither the
+// specification's table nor the colouring's list goes through a build or a test**, so a forgotten
+// update shows only as "an attribute not in the specification works" or "one has another colour".
+// ==========================================
+priv const attrs_file: U8[] = "ksplc/sema/decl/attrs.kspls"
+priv const tm_language: U8[] = ".vscode/extensions/kspl/tmLanguage.json"
+priv const spec_lang: U8[] = "docs/SPEC-language.md"
+
+priv fn names_in(src: U8[], head: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< The names the function that `head` opens in src compares against, each once
+  //<
+  //< Caution: **Search only inside the function**: `attrs.kspls` holds the directives' list too,
+  //< and mixing the two passes neither check.
+  $out: = List<|U8[]|>.new(arena)
+  at: = src.find_str(head)
+  if at < 0
+    return out
+  rest: = src.sub_from(at)
+  body: = rest.sub(0, body_end(rest))
+  // Caution: **Count one per name.** Counting by occurrence swings with how the implementation is
+  // written, and the comparison with the specification stops meaning anything.
+  for w in scan.find_all(body, "name.equals(\"", "\")", arena)
+    scan.push_unique(out@, w)
+  return out
+
+priv fn body_end(rest: U8[]): Sz //<
+  //< Where the declaration at the start of `rest` ends
+  //<
+  //< That is the first line after it starting at column 0 (a `}` closing a brace-written body is
+  //< such a line too), or the end.
+  //<
+  //< Caution: **Do not search for a `\n}`** — the default notation writes none, so a scan for one
+  //< runs to the end of the file and takes every later declaration's names with it.
+  $i: Sz = 0
+  for i < rest.len && rest[i] != '\n'
+    i += 1
+  for i < rest.len
+    i += 1
+    if i >= rest.len
+      break
+    c: = rest[i]
+    if c != ' ' && c != '\t' && c != '\n'
+      return i
+    for i < rest.len && rest[i] != '\n'
+      i += 1
+  return rest.len
+
+priv fn check_attrs(arena: Arena$@)
+  src: = harness.read_under_root(attrs_file)
+  $canon: = names_in(src, "fn is_known_attribute(", arena)
+  tm: = harness.read_under_root(tm_language)
+  $listed: = List<|U8[]|>.new(arena)
+  // The colouring's list is one `"match": "#(align|cfg|…)\\b"` line; a directive (`##`) is not hit,
+  // as no `(` follows its `"#`.
+  for group in scan.find_all(tm, "\"match\": \"#(", ")\\\\b\"", arena)
+    for w in group.split('|', arena)
+      scan.push_unique(listed@, w)
+  // The `#name` at the start of a table's row; a directive (`##error`) is not included, since its
+  // second character is `#`.
+  $spec: = List<|U8[]|>.new(arena)
+  for line in harness.read_under_root(spec_lang).lines(arena)
+    if !line.starts_with("| `#")
+      continue
+    rest: = line.sub_from(4)
+    $i: Sz = 0
+    for i < rest.len && (rest[i].is_alnum() || rest[i] == '_')
+      i += 1
+    if i > 0
+      scan.push_unique(spec@, rest.sub(0, i))
+  $bad_tm: = List<|U8[]|>.new(arena)
+  scan.diff_into(canon@, listed@, attrs_file, tm_language, bad_tm@, arena)
+  scan.diff_into(listed@, canon@, tm_language, attrs_file, bad_tm@, arena)
+  verdict.check_list("the attributes' list agrees between the code and the colouring", canon.len,
+    "attributes", bad_tm@, "")
+  $bad_spec: = List<|U8[]|>.new(arena)
+  scan.diff_into(canon@, spec@, attrs_file, spec_lang, bad_spec@, arena)
+  scan.diff_into(spec@, canon@, spec_lang, attrs_file, bad_spec@, arena)
+  verdict.check_list("the attributes' list agrees between the code and the spec", canon.len,
+    "attributes", bad_spec@, "")
+  check_directives(src, arena)
+
+priv const dir_list_head: U8[] = "directive_names: U8[] = \"" //<
+  //< A directive (`##name`) is compared across the same three
+  //<
+  //< **The grammar holds no name**, so a forgotten update shows only in the code, the
+  //< specification, the colouring and the list carried with a diagnostic.
+
+priv fn check_directives(src: U8[], arena: Arena$@)
+  $canon: = names_in(src, "fn directive_shape(", arena)
+  $tm: = List<|U8[]|>.new(arena)
+  for group in scan.find_all(harness.read_under_root(tm_language), "\"match\": \"##(", ")\\\\b\"",
+    arena)
+    for w in group.split('|', arena)
+      scan.push_unique(tm@, w)
+  $spec: = List<|U8[]|>.new(arena)
+  for w in scan.find_all(harness.read_under_root(spec_lang), "| `##", "(", arena)
+    scan.push_unique(spec@, w)
+  // The list carried with a diagnostic is the same string (`##error ##warning ##lint`).
+  $msg: = List<|U8[]|>.new(arena)
+  at: = src.find_str(dir_list_head)
+  if at >= 0
+    rest: = src.sub_from(at + dir_list_head.len)
+    end: = rest.find_char('"')
+    list: = rest if end < 0 else rest.sub(0, end)
+    for w in list.split(' ', arena)
+      if w.starts_with("##")
+        scan.push_unique(msg@, w.sub_from(2))
+  $bad: = List<|U8[]|>.new(arena)
+  scan.diff_into(canon@, tm@, attrs_file, tm_language, bad@, arena)
+  scan.diff_into(tm@, canon@, tm_language, attrs_file, bad@, arena)
+  scan.diff_into(canon@, spec@, attrs_file, spec_lang, bad@, arena)
+  scan.diff_into(spec@, canon@, spec_lang, attrs_file, bad@, arena)
+  scan.diff_into(canon@, msg@, attrs_file, dir_list_head, bad@, arena)
+  scan.diff_into(msg@, canon@, dir_list_head, attrs_file, bad@, arena)
+  verdict.check_list("the directives' list agrees across code, spec, colouring and diagnostic",
+    canon.len, "directives", bad@, "")
+
+// ==========================================
+// The reactor's token marks agree between the KSPL side and the C side **The marks are in two
+// places.** The `pub const` in `std/reactor.kspls`, and the bits `kspl_net_poll` builds.
+// `std/net.kspls` holds the one it asks for itself, so its marks are among the C side's too.
+// ==========================================
+priv const reactor_kspl: U8[] = "std/reactor.kspls"
+priv const reactor_user: U8[] = "std/net.kspls"
+priv const reactor_c: U8[] = "ksplc/gen/runtime/hosted_net.c"
+priv const reactor_kspl_mark: U8[] = ": U8 = 0x"
+priv const reactor_c_mark: U8[] = "rv |= 0x"
+
+priv fn bits_after(text: U8[], mark: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< Pushes the one digit right after `mark`
+  $out: = List<|U8[]|>.new(arena)
+  for line in text.lines(arena)
+    at: = line.find_str(mark)
+    if at < 0
+      continue
+    rest: = line.sub_from(at + mark.len)
+    if rest.len > 0 && rest.ptr.is_digit()
+      out.push(rest.sub(0, 1))
+  return out
+
+priv fn check_reactor_bits(arena: Arena$@)
+  $ours: = bits_after(harness.read_under_root(reactor_kspl), reactor_kspl_mark, arena)
+  $theirs: = bits_after(harness.read_under_root(reactor_c), reactor_c_mark, arena)
+  $bad: = List<|U8[]|>.new(arena)
+  for b in ours.slice()
+    if !has_bit(theirs@, b)
+      bad
+        .push(arena.text().s("0x").s(b).s(" is not in ").s(reactor_c).take())
+  for b in theirs.slice()
+    if !has_bit(ours@, b)
+      bad
+        .push(arena.text().s("0x").s(b).s(" is not in ").s(reactor_kspl).take())
+  $users: = bits_after(harness.read_under_root(reactor_user), reactor_kspl_mark, arena)
+  for b in users.slice()
+    if !has_bit(theirs@, b)
+      bad
+        .push(arena.text().s("0x").s(b).s(" in ").s(reactor_user).s(" is not in ").s(reactor_c)
+        .take())
+  verdict.check_list("the reactor's token marks agree between the KSPL side and the C side",
+    ours.len, "marks", bad@,
+    "to add a mark, add it on both sides (the origin is the pub const in `std/reactor.kspls`)")
+
+priv fn has_bit(bits: List<|U8[]|>$@, want: U8[]): Bool
+  for b in bits.slice()
+    if b.equals(want)
+      return true
+  return false
+
+// ==========================================
+// The page prints its marks with the name the gate cuts on **The `file://` side dumps its DOM only
+// at the end, so a run cut before that leaves no mark.** The page also prints every mark on
+// `console`, and the gate cuts them out of the browser's stderr by that leading name alone:
+// changed on one side, the gate says "the page said nothing" on the very run the trace was needed.
+// ==========================================
+priv const said_page: U8[] = "kspage/tests/browser/probe.js"
+priv const said_gate: U8[] = "kspage/Makefile"
+// Each side sets the name in one place, so the two are read and compared.
+// Caution: **Do not merely check whether the gate holds the name somewhere.** The name appears in
+// three other places that read it, so breaking the place that cuts stays green.
+priv const said_page_mark: U8[] = "console.log(\""
+priv const said_gate_mark: U8[] = "KSPAGE_SAID := "
+priv const said_flag: U8[] = "--enable-logging=stderr" //<
+  //< Without this nothing the page prints is seen at all, so it is the other half of the agreement
+
+priv fn word_after(text: U8[], mark: U8[], arena: Arena$@): U8[] //<
+  //< The text from `mark` to the end of its line, the spaces cut
+  //<
+  //< Empty where there is none.
+  for line in text.lines(arena)
+    at: = line.find_str(mark)
+    if at >= 0
+      return line.sub_from(at + mark.len).trim_spaces()
+  return ""
+
+priv fn check_the_name_it_speaks_with(arena: Arena$@)
+  page: = harness.read_under_root(said_page)
+  gate: = harness.read_under_root(said_gate)
+  // The page starts with `<name>: `, so it is cut at the closing quote, not at the line end.
+  said: = scan.find_all(page, said_page_mark, "\"", arena)
+  spoken: = said[0] if said.len > 0 else ""
+  cut: = word_after(gate, said_gate_mark, arena)
+  $bad: = List<|U8[]|>.new(arena)
+  if spoken.len == 0 || cut.len == 0
+    bad
+      .push(arena.text().s("the name cannot be picked up (page `").s(spoken).s("`, gate `").s(cut)
+      .s("`)").take())
+  else if !spoken.equals(arena.text().s(cut).s(": ").take())
+    bad
+      .push(arena.text().s("the page opens `").s(spoken).s("` and the gate cuts on `").s(cut)
+      .s(": `").take())
+  if gate.find_str(said_flag) < 0
+    bad
+      .push(arena.text().s(said_gate).s(" does not hand `").s(said_flag)
+      .s("` over, so nothing the page says is heard").take())
+  verdict.check_list("the page speaks its marks with the name the gate cuts on", 1, "openings",
+    bad@, "each side decides it once (`tests/support/conventions_match.kspls` names both places)")
+
+fn run(arena: Arena$@) //< runs every check that "two things written apart agree"
+  check_reactor_bits(arena)
+  check_the_name_it_speaks_with(arena)
+  check_code_fires(arena)
+  check_alias_fires(arena)
+  $codes: = check_codes(arena)
+  check_fixtures(codes@, arena)
+  check_facade(arena)
+  check_alias(arena)
+  check_ast_kinds(arena)
+  check_attrs(arena)
+  cci.run(arena)
+  clsp.run(arena)

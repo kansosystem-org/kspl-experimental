@@ -1,0 +1,75 @@
+//< One subject per file, with one function for each case
+//<
+//< The file's marks are every case's marks gathered at the head. The same mark written N times
+//< must match N places.
+// EXPECT: operator '+' cannot be applied to 'Sz' and 'I32@'
+// EXPECT: operator '-' cannot be applied to 'Sz' and 'I32@'
+// EXPECT: operator '+' cannot be applied to 'I32@' and 'I32@'
+// EXPECT: operator '*' cannot be applied to 'I32@' and 'I32'
+// EXPECT: operator '*=' cannot be applied to the pointer type 'I32@'
+// EXPECT: the step of '+=' on the pointer type 'I32@' must be an integer
+// EXPECT: cannot subtract 'U8@' from 'I32@'
+// EXPECT: point to the same type
+// EXPECT: cannot take the address of a call result, literal, or computed value
+// EXPECT: Bind it first
+// EXPECT: cannot take a pointer to a fixed-size array
+
+// The shapes it does not hold, among the arithmetic taking a pointer as an operand.
+// The three shapes that can be written are in "6.2 Pointer arithmetic and implicit
+// dereferencing" in `../../../docs/SPEC-language.md`.
+priv fn op(n: Sz): Sz
+  return n
+
+fn case_ptr_arith_bad_forms(): I32
+  a: I32[4] = ::{ 1, 2, 3, 4 }
+  $p: = a[0]@
+  q: = a[2]@
+  x1: Sz = op(1) + p
+  x2: Sz = op(1) - p
+  x3: Sz = Sz::(p + q)
+  x4: Sz = Sz::(p * 2)
+  p *= 2
+  p += q
+  return (I32)::(x1 + x2 + x3 + x4)
+
+// A subtraction between pointers whose target types differ.
+// **The answer being "how many elements", it cannot subtract unless the element size is settled
+// to one** ("6.2 Pointer arithmetic and implicit dereferencing" in
+// `../../../docs/SPEC-language.md`). Let it through without refusing and KSPL's diagnostics are
+// zero, with only the C compiler's `invalid operands to binary expression` coming out.
+fn case_ptr_diff_mismatched(): I32
+  a: I32 = 1
+  b: U8 = 2
+  d: = a@ - b@
+  return (I32)::d
+
+// Put `@` on an expression that is not a place (a function's return value) and the generated C
+// becomes `&a temporary`. Without refusing here, what reaches the user is a raw C compiler error
+// rather than KSPL's diagnostic.
+import "std/ds" { List }
+import "std/mem" { Arena }
+
+fn take(l: List<|U8[]|>$@): Sz
+  return l.len
+
+fn make(arena: Arena$@): List<|U8[]|>
+  return List<|U8[]|>.new(arena)
+
+fn case_addr_of_rvalue(): I32
+  a: = Arena.new(4096)
+  defer a.free()
+  return I32::take(make(a)@)
+
+// A pointer to a fixed-length array. It can be written as a type, but no expression making that
+// value exists (`a@` decays to a pointer to the first element, as in C). So as not to leave a
+// type that can be declared while only an assignment cannot, it is refused at the type-checking
+// step (docs/DESIGN.md Principle 5).
+fn case_pointer_to_fixed_array()
+  $a: I32[3] = ::{ 1, 2, 3 }
+  _p: I32[3]@ = a@
+
+fn main()
+  case_ptr_arith_bad_forms()
+  case_ptr_diff_mismatched()
+  case_addr_of_rvalue()
+  case_pointer_to_fixed_array()

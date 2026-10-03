@@ -1,0 +1,241 @@
+//< Rewrites a formula's references when rows or columns are inserted or deleted
+//<
+//< **A reference is an absolute position.**
+//< Caution: **Look at the whole document** (a named table can be pointed at from anywhere).
+//< **Nothing is rewritten here.**
+
+// ==========================================
+// Usage:
+//   plans: = List<|shift.Shift|>.create(arena);
+//   shift.plan_shift(doc, table, Axis.row, at, 1, plans, arena);
+// ==========================================
+import "kspage/expr/addr" + { Addr, Addr_kind, Reader, broken_ref }
+import "kspage/model/doc" { Axis, Doc, Block }
+import "kspage/model/run" { Inline }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+priv enum How //< how a position is moved
+  //<
+  //< The two ways of moving share one reader, so one formula is never read in two ways.
+  line(axis: Axis, at: Sz, delta: Sz) //<
+    //< Adding or removing a row or column. **It moves even with a `$`** (the cell itself moves).
+  copy(dr: Sz, dc: Sz) //<
+    //< Copying. **The part with a `$` does not move** (this is the only place the mark has effect).
+
+impl How
+  priv fn moves(how: Self, name: U8[], target: U8[], bare_hits: Bool): Bool //<
+    //< Whether that reference is moved
+    //<
+    //< **A copy moves references to any table.**
+    switch how case .copy(_r, _c)
+      return true
+    case .line {}
+    if name.len > 0
+      return target.len > 0 && name.equals(target)
+    return bare_hits
+
+priv fn moved($a: Addr, dr: Sz, dc: Sz): Addr //< the position shifted by a copy
+  //<
+  //< **Before the start it is "cannot be pointed at"** (clamping to 0 would hit another cell).
+  if !a.abs_row
+    a.row += dr
+  if !a.abs_col
+    a.col += dc
+  if a.row < 0 || a.col < 0
+    a.kind = Addr_kind.out_of_range
+  return a
+
+priv fn index_on(a: Addr, axis: Axis): Sz //< the position's index along axis
+  switch axis case .column
+    return a.col
+  case .row
+    return a.row
+
+priv fn with_index($a: Addr, axis: Axis, i: Sz): Addr
+  switch axis case .column
+    a.col = i
+  case .row
+    a.row = i
+  return a
+
+priv fn span_lo(lo: Sz, line: Sz, delta: Sz): Sz //< the new value for the range's start
+  //<
+  //< **Where it is the removed row or column, it is not moved** (the next one moves up into it).
+  if lo > line || (lo == line && delta > 0)
+    return lo + delta
+  return lo
+
+priv fn span_hi(hi: Sz, line: Sz, delta: Sz): Sz //< the new value for the range's end
+  //<
+  //< **Where it is the removed row or column, it is pulled in by one** (a `#REF!` would lose the
+  //< total of the remaining cells).
+  return hi + delta if hi >= line else hi
+
+priv fn put_addr(a: Addr, how: How, out: Str_builder$@) //<
+  //< Rewrites one position for the insertion or deletion, and writes it to out
+  //<
+  //< It is read as a range whose two ends coincide; pointing at what was removed, it is "removed".
+  //< Caution: **Do not close up the numbers**, or it silently points at the neighbouring cell.
+  switch how case .copy(dr, dc)
+    got: = moved(a, dr, dc)
+    if !addr.is_spot(got)
+      out.s(broken_ref)
+      return
+    addr.write_addr(got, out)
+    return
+  case .line(axis, line, delta)
+    i: = index_on(a, axis)
+    if span_lo(i, line, delta) > span_hi(i, line, delta)
+      out.s(broken_ref)
+      return
+    addr.write_addr(with_index(a, axis, span_hi(i, line, delta)), out)
+
+priv fn put_span(a: Addr, b: Addr, how: How, out: Str_builder$@) //<
+  //< Rewrites a range's two ends for the insertion or deletion, and writes them to out
+  //<
+  //< **The order of the ends does not matter** (`A3:A1` is a range too): the lower is treated as
+  //< the start, and they are written back in the order read.
+  $axis: = Axis.row
+  $line: Sz = 0
+  $delta: Sz = 0
+  switch how case .copy(_dr, _dc)
+    // A copy does not swap the ends (both shift as they are).
+    put_addr(a, how, out)
+    out.c(':')
+    put_addr(b, how, out)
+    return
+  case .line(got_axis, got_line, got_delta)
+    axis = got_axis
+    line = got_line
+    delta = got_delta
+  ai: = index_on(a, axis)
+  bi: = index_on(b, axis)
+  up: = ai <= bi
+  lo: = span_lo(ai if up else bi, line, delta)
+  hi: = span_hi(bi if up else ai, line, delta)
+  if lo > hi
+    out.s(broken_ref)
+    return
+  addr.write_addr(with_index(a, axis, lo if up else hi), out)
+  out.c(':')
+  addr.write_addr(with_index(b, axis, hi if up else lo), out)
+
+priv fn walk_refs(src: U8[], how: How, target: U8[], bare_hits: Bool, out: Str_builder$@): Bool //<
+  //< Reads a formula's text and rewrites only the positions, by the way of moving
+  //<
+  //< True if the text changed. Anything that is not a position is copied as it is, byte by byte.
+  start: = out.len
+  $c: = Reader::{ .src = src, .pos = 0 }
+  for c.pos < src.len
+    mark: = c.pos
+    name: = addr.parse_table_name(c@)
+    named: = c.pos - mark
+    a: = addr.parse_addr(c@)
+    if addr.is_spot(a) && how.moves(name, target, bare_hits)
+      out.s(src.sub(mark, named))
+      b: = read_span_end(c@)
+      if addr.is_spot(b)
+        put_span(a, b, how, out)
+      else
+        put_addr(a, how, out)
+      continue
+    // Caution: **Advance by one byte and copy.** Skipping what was read in one go misses a
+    // position inside it.
+    c.pos = mark
+    out.c(src[c.pos])
+    c.pos += 1
+  made: = out.slice()
+  return !made.sub(start, made.len - start).equals(src)
+
+fn shift_refs(src: U8[], target: U8[], bare_hits: Bool, axis: Axis, line: Sz, delta: Sz,
+  out: Str_builder$@): Bool //<
+    //< Rewrites the positions in a formula for rows (or columns) inserted or deleted at line
+    //<
+    //< It appends the text to out. True if the text changed (it is appended either way). **Only
+    //< references to target's table move**: by the written name, or, without one, by `bare_hits`.
+  return walk_refs(src, How.line(axis, line, delta), target, bare_hits, out)
+
+fn offset_refs(src: U8[], dr: Sz, dc: Sz, out: Str_builder$@): Bool //<
+  //< Shifts the positions in a formula by dr rows and dc columns and appends the result to out
+  //<
+  //< True if the text changed. **The part with a `$` does not move.** **Which table it points at
+  //< is ignored.**
+  return walk_refs(src, How.copy(dr, dc), "", false, out)
+
+priv fn read_span_end(c: Reader$@): Addr //< reads a range's end
+  //<
+  //< Where it is not a range it puts the position back and returns "no position". **A table's
+  //< name applies to the whole range**, so the end of `Table!A2:A3` moves with the start.
+  if addr.at(c) != ':'
+    return Addr_kind.unreadable.no_addr()
+  mark: = c.pos
+  c.pos += 1
+  b: = addr.parse_addr(c)
+  if !addr.is_spot(b)
+    c.pos = mark
+  return b
+
+struct Shift //< one formula to rewrite
+  //<
+  //< **The text is copied into arena** (the original changes with the rewriting).
+  inline: Inline$@
+  source: U8[]
+
+priv struct Plan //< the state partway through the collecting walk
+  table: Block$@ //< the table whose rows or columns were inserted or deleted
+  axis: Axis
+  line: Sz
+  delta: Sz
+  out: List<|Shift|>$@
+  buf: Str_builder$@
+  arena: Arena$@
+
+priv fn plan_one(pl: Plan$@, n: Inline$@, bare: Bool) //<
+  //< Looks at one formula and, where something needs rewriting, keeps it for later
+  //<
+  //< bare means "does a position with no written name point at this table".
+  // **The typed text is what is looked at** (a computed value holds no position).
+  if !n.is_formula()
+    return
+  src: = n.text()
+  pl.buf.clear()
+  if !shift_refs(src, pl.table.name, bare, pl.axis, pl.line, pl.delta, pl.buf)
+    return
+  pl.out.push(Shift::{ .inline = n, .source = pl.arena.dup_str(pl.buf.slice()) })
+
+priv fn plan_block(pl: Plan$@, b: Block$@) //< walks one block
+  //<
+  //< **Only a cell's first inline belongs to its own table** (the same reading as `show_prose`).
+  for $i: Sz = 0; i < b.inlines.len; i += 1
+    plan_one(pl, b.inlines.get(i), false)
+  if b != pl.table
+    for $i: Sz = 0; i < b.children.len; i += 1
+      plan_block(pl, b.children.get(i))
+    return
+  for $r: Sz = 0; r < b.children.len; r += 1
+    row: = b.children.get(r)
+    for $i: Sz = 0; i < row.inlines.len; i += 1
+      plan_one(pl, row.inlines.get(i), false)
+    for $c: Sz = 0; c < row.children.len; c += 1
+      cell: = row.children.get(c)
+      for $i: Sz = 0; i < cell.inlines.len; i += 1
+        plan_one(pl, cell.inlines.get(i), i == 0)
+      for $k: Sz = 0; k < cell.children.len; k += 1
+        plan_block(pl, cell.children.get(k))
+
+fn plan_shift(d: Doc$@, table: Block$@, axis: Axis, line: Sz, delta: Sz, out: List<|Shift|>$@,
+  arena: Arena$@) //<
+    //< Collects into out the formulas to rewrite when table's rows (or columns) change
+    //<
+    //< Row (or column) number line changes by delta. **Applying them is `write/edit.kspls`'s
+    //< job**, so the undo record holds it.
+    //< Caution: **Look at the whole document** (the file header says why).
+  $buf: = Str_builder.new()
+  defer buf.free()
+  $pl: = Plan::{ .table = table, .axis = axis, .line = line, .delta = delta, .out = out,
+    .buf = buf@, .arena = arena }
+  for $i: Sz = 0; i < d.blocks.len; i += 1
+    plan_block(pl@, d.blocks.get(i))

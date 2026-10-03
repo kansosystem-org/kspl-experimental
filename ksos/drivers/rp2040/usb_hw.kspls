@@ -1,0 +1,117 @@
+import "ksos/drivers/mmio"
+
+// ==========================================
+// Kanso OS — the RP2040 USB controller's register and DPRAM addresses, and the basic operations
+// on them, kept apart from the driver itself (`usb_cdc.kspls`).
+//
+// **It holds no state at all**: every result depends only on the arguments and the addresses, so
+// `usb_cdc.kspls` can import it one-way. Do not add state, and do not move EP0 handling here (it
+// rewrites `stage_*` and `ncm_alt`).
+// The bytes it uses to describe itself are in `usb_desc.kspls`.
+// ==========================================
+const reset_usbctrl: U32 = 1U32 << 24
+
+const dpram: U32 = 0x50100000
+const dpram_setup: U32 = 0x50100000
+const dpram_ep_ctrl: U32 = 0x50100008 // starts at EP1 IN. EPn dir's control = +8*(n-1)+4*dir
+const dpram_buf_ctrl: U32 = 0x50100080 // starts at EP0 IN. EPn dir's buffer control = +8*n+4*dir
+const dpram_ep0_buf: U32 = 0x50100100
+
+const regs_addr_endp: U32 = 0x50110000
+const regs_main_ctrl: U32 = 0x50110040
+const regs_sie_ctrl: U32 = 0x5011004c
+const regs_sie_status: U32 = 0x50110050
+const regs_buff_status: U32 = 0x50110058
+const regs_ep_stall_arm: U32 = 0x50110068
+const regs_muxing: U32 = 0x50110074
+const regs_pwr: U32 = 0x50110078
+
+const main_ctrl_controller_en: U32 = 1U32 << 0
+const sie_ctrl_ep0_int_1buf: U32 = 1U32 << 29
+const sie_ctrl_pullup_en: U32 = 1U32 << 16
+const sie_status_setup_rec: U32 = 1U32 << 17
+const sie_status_bus_reset: U32 = 1U32 << 19
+const muxing_to_phy: U32 = 1U32 << 0
+const muxing_softcon: U32 = 1U32 << 3
+const pwr_vbus_detect: U32 = 1U32 << 2
+const pwr_vbus_detect_override_en: U32 = 1U32 << 3
+
+const buf_ctrl_full: U32 = 1U32 << 15
+const buf_ctrl_last: U32 = 1U32 << 14
+const buf_ctrl_data1_pid: U32 = 1U32 << 13
+const buf_ctrl_stall: U32 = 1U32 << 11
+const buf_ctrl_avail: U32 = 1U32 << 10
+
+const stall_arm_ep0_in: U32 = 1U32 << 0
+const stall_arm_ep0_out: U32 = 1U32 << 1
+
+const ep_ctrl_enable: U32 = 1U32 << 31
+const ep_ctrl_int_per_buf: U32 = 1U32 << 29
+const ep_type_control: U32 = 0
+const ep_type_bulk: U32 = 2
+const ep_type_interrupt: U32 = 3
+
+// The endpoints this driver uses, and where their buffers are in DPRAM.
+// EP0 uses 0x100. The other buffers start at 0x180, in steps of 64 bytes.
+const ep1_in_buf: U32 = 0x50100180 // ACM's notification (unused, but the standard requires it)
+const ep2_out_buf: U32 = 0x501001c0 // the console: host to device
+const ep2_in_buf: U32 = 0x50100200 // the console: device to host
+const ep3_in_buf: U32 = 0x50100240 // NCM's notification (without it the link does not come up)
+const ep4_out_buf: U32 = 0x50100280 // NCM: host to device (an NTB)
+const ep4_in_buf: U32 = 0x501002c0 // NCM: device to host (an NTB)
+const max_packet: U32 = 64
+// ==========================================
+// The low-level parts
+// ==========================================
+fn buf_ctrl_addr(ep: U32, is_in: Bool): U32
+  return dpram_buf_ctrl + 8 * ep + (0U32 if is_in else 4U32)
+
+fn ep_ctrl_addr(ep: U32, is_in: Bool): U32
+  return dpram_ep_ctrl + 8 * (ep - 1) + (0U32 if is_in else 4U32)
+
+fn copy_to_dpram(dst: U32, src: U8@, len: U32) //<
+  //< Copies len bytes from src into DPRAM at dst
+  //<
+  //< The descriptors are fixed-length arrays (U8[N]), passed as **a pointer to the first element
+  //< plus a length** (a fixed-length array has no .slice()).
+  for $i: U32 = 0; i < len; i += 1
+    a: = dst + i
+    mmio.write8(a, (src + Sz::i)$)
+
+fn copy_from_dpram(src: U32, dst: U8$[], at: Sz, len: Sz)
+  for i in Range.asc(len)
+    a: = src + U32::i
+    dst[at + i] = mmio.read8(a)
+
+fn recv_len(ep: U32): Sz //< how many bytes actually arrived in the last reception
+  //<
+  //< The hardware writes it into the buffer control's low 10 bits: **read it after completion**.
+  addr: = buf_ctrl_addr(ep, false)
+  return Sz::(mmio.read32(addr) & 0x3ff)
+
+fn enable_ep(ep: U32, is_in: Bool, ep_type: U32, buf: U32) //< enables an endpoint
+  //<
+  //< buf is an absolute DPRAM address; the register takes its offset.
+  addr: = ep_ctrl_addr(ep, is_in)
+  mmio.write32(addr, ep_ctrl_enable | ep_ctrl_int_per_buf | (ep_type << 26) | (buf - dpram))
+
+fn send(ep: U32, buf: U32, data: U8@, len: U32, pid: U32) //<
+  //< Arms one packet to send (device to host)
+  //<
+  //< len must be 64 or less.
+  copy_to_dpram(buf, data, len)
+  $v: U32 = len | buf_ctrl_avail | buf_ctrl_full | buf_ctrl_last
+  if pid != 0
+    v = v | buf_ctrl_data1_pid
+  addr: = buf_ctrl_addr(ep, true)
+  mmio.write32(addr, v)
+
+fn arm_recv(ep: U32, pid: U32, len: U32) //< arms one packet to receive (host to device)
+  //<
+  //< len is the most that can be received. To wait for the status stage (a zero-length OUT),
+  //< pass len = 0.
+  $v: U32 = len | buf_ctrl_avail
+  if pid != 0
+    v = v | buf_ctrl_data1_pid
+  addr: = buf_ctrl_addr(ep, false)
+  mmio.write32(addr, v)

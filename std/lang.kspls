@@ -1,0 +1,523 @@
+//< The parts the language itself needs, imported into every file without an import line
+//<
+//< **`import "std/lang"` cannot be written.** Every file already imports it, so allowing it would
+//< open a second way to reach one name. A local binding with the same name, the file's own
+//< declarations and an explicit import are all looked up before it, so you can redefine any name
+//< here in your own file.
+
+// ==========================================
+// Caution: **Do not import anything but `std/libc`.** Every program includes this file, so
+// importing `io` makes every program pay for the whole string and IO library, and also creates
+// the cycle `lang -> io -> mem -> lang`.
+// ==========================================
+#cfg(!freestanding)
+import "std/libc"
+
+// ============================ Panic ============================
+
+pub typedef Panic_hook = fn(msg: U8$[]): Void //< where a freestanding port sends a panic message.
+  //<
+  //< lang does not know whether a console exists, so a port that has one sets it (null, the
+  //< default, stops deterministically and prints nothing).
+pub $panic_hook: Panic_hook = Panic_hook::null
+
+priv const panic_msg_cap: Sz = 128 //<
+  //< The most bytes of a panic's message that its record keeps
+  //<
+  //< A panic's record stays in `.noinit_panic` (RAM that is not zeroed at start-up, which a port's
+  //< linker script reserves). After a warm reset without power loss, take_panic_record() can read
+  //< it on the next start-up. It does not cause the reset itself; triggering one (a watchdog or
+  //< similar) is the caller's responsibility.
+priv const panic_stack_words: Sz = 16
+priv const panic_magic: U32 = 0x4B505243 // ASCII "KPRC"
+
+priv struct _Panic_record
+  magic: U32
+  msg_len: Sz
+  msg: U8[128]
+  sp: Sz
+  stack: Sz[16]
+#cfg(freestanding)
+#section(".noinit_panic")
+priv $_panic_rec: _Panic_record = ::{}
+
+// Caution: Do not remove `#cfg(freestanding)`. Every program includes lang, so a host target would
+// get the declaration too, and it would collide with a runtime that defines the same name.
+#cfg(freestanding)
+extern "C"
+  fn kspl_get_sp(): Sz
+
+#cfg(freestanding)
+priv fn record_panic($msg: U8$[])
+  _panic_rec.msg_len = msg.len if msg.len < panic_msg_cap else panic_msg_cap
+  msg_dst: = _panic_rec.msg[0]@
+  for i in Range.asc(_panic_rec.msg_len)
+    (msg_dst + i)$ = msg[i]
+  sp: = kspl_get_sp()
+  _panic_rec.sp = sp
+  // Caution: **Do not read the stack where the SP comes back as 0.** The helper that reads the SP
+  // is assembly for each architecture, and an architecture without it returns 0
+  // (`ksplc/gen/runtime/freestanding.c`). Reading 0 as an address **crashes inside the code that
+  // keeps the record**, so no word about why it stopped is left (wasm is such a target;
+  // `../std/docs/DESIGN.md`).
+  if sp != 0
+    sp_ptr: = Sz$@::sp
+    stack_dst: = _panic_rec.stack[0]@
+    for i in Range.asc(panic_stack_words)
+      (stack_dst + i)$ = (sp_ptr + i)$
+  _panic_rec.magic = panic_magic
+
+pub struct Panic_info //< what a panic in the previous run left behind, for this run to report
+  //<
+  //< The stack fragment is not included (a fixed-length array cannot be returned by value); read
+  //< 0 <= index < stack_len one at a time with panic_stack_word().
+  pub msg: U8$[] //< the panic's message
+  pub sp: Sz //< the stack pointer when it happened
+  pub stack_len: Sz //< how many words of the stack were kept, read with `panic_stack_word`
+
+// It clears the record as it reads it; otherwise it is reported again on the next start.
+#cfg(freestanding)
+pub fn take_panic_record(): Option<|Panic_info|> //< the panic the previous run left, if any
+  if _panic_rec.magic != panic_magic
+    return Option<|Panic_info|>.none
+  // Caution: **Report a missing fragment as a length of 0** (the stack was not read, so claiming
+  // a fragment makes the reader see stale values).
+  words: = panic_stack_words if _panic_rec.sp != 0 else 0
+  info: = Panic_info::{ .msg = U8$[]::{ .ptr = _panic_rec.msg[0]@, .len = _panic_rec.msg_len },
+    .sp = _panic_rec.sp, .stack_len = words }
+  _panic_rec.magic = 0
+  return Option<|Panic_info|>.some(info)
+
+#cfg(freestanding)
+pub fn panic_stack_word( //< one word of the kept stack
+  index: Sz, //< which word, below `Panic_info.stack_len`
+): Sz //< the word; an `index` out of range is not caught
+  base: = _panic_rec.stack[0]@
+  return (base + index)$
+
+// Caution: **Write the output directly with libc.** Going through `io` makes lang pull in the
+// whole library. Interpolation needs `str`, so the message is written as the caller built it.
+#cfg(!freestanding)
+#noreturn
+pub fn panic( //< stops the program at once, saying where and why
+  msg: U8$[], //< the message to show, already built
+  file: U8[] = caller_file, //< keep the default unless this is called from a wrapper
+  line: Sz = caller_line, //< keep the default unless this is called from a wrapper
+)
+  // Caution: **Flush before abort().** A piped stdout (`| tee`) is fully buffered, so aborting
+  // without flushing loses the program's own output, and the log does not end at the crash site.
+  // null means every stream.
+  libc.fflush(null)
+  err: = libc.get_stderr()
+  libc.fwrite(Void$@::"panic: ".ptr, 1, 7, err)
+  libc.fwrite(Void$@::msg.ptr, 1, msg.len, err)
+  $at: = Panic_msg.new()
+  at.at_caller(file, line)
+  where: = at.slice()
+  libc.fwrite(Void$@::where.ptr, 1, where.len, err)
+  libc.fwrite(Void$@::"\n".ptr, 1, 1, err)
+  libc.fflush(err)
+  libc.abort()
+  // abort() returns if SIGABRT is caught or ignored; control must not reach the caller.
+  for
+    libc.abort()
+// The freestanding version does not use libc at all. It makes no hidden fprintf/malloc call and
+// stops deterministically (as kspl_bounds_check in ksplc/gen/runtime/freestanding.c does).
+#cfg(freestanding)
+#noreturn
+pub fn panic( //< stops deterministically without libc; the hook shows the message
+  msg: U8$[], //< the message passed to the hook
+  _file: U8[] = caller_file,
+  _line: Sz = caller_line,
+)
+  // **The position does not go into the record.** The record is fixed at `panic_msg_cap`, so a path
+  // **would cut the message short**, and where nothing can be printed the record is all that is
+  // left. The position parameters stay so `assert` can forward to either version.
+  record_panic(msg)
+  if panic_hook != null
+    panic_hook(msg)
+  for {}
+
+pub fn assert( //< stops the program unless the condition holds
+  cond: Bool, //< what must hold
+  msg: U8$[], //< the message shown if it does not
+  file: U8[] = caller_file, //< keep the default unless this is called from a wrapper
+  line: Sz = caller_line, //< keep the default unless this is called from a wrapper
+)
+  if !cond
+    panic(msg, file, line)
+
+pub struct Panic_msg //< a fixed-size buffer for a panic's message, which allocates nothing
+  //<
+  //< It needs no `io`; **string interpolation (`\{v\}`) cannot be used here.**
+  //< Caution: Anything that does not fit `panic_msg_cap` is silently dropped (failing again in the
+  //< middle of a panic leaves nothing to do). Do not use it in place of `Str_builder`.
+  priv buf: U8[panic_msg_cap]
+  priv len: Sz
+
+impl Panic_msg
+  pub fn new(): Panic_msg //< an empty buffer
+    return Panic_msg::{ .buf = ::{}, .len = 0 }
+
+  priv fn put(r: Self$@, c: U8)
+    if r.len < panic_msg_cap
+      r.buf[r.len] = c
+      r.len += 1
+
+  pub fn s(r: Self$@, t: U8[]): Self$@ //< writes text; anything that does not fit is dropped
+    for i in Range.asc(t.len)
+      r.put(t[i])
+    return r
+
+  pub fn n(r: Self$@, v: Sz): Self$@ //< writes a number as decimal, including the minimum
+    //<
+    //< Caution: **Take the absolute value as unsigned.** `-v` as an `Sz` does not fit when `v` is
+    //< `Sz`'s minimum (the same reason as in `Range.new`); `U64::0 - U64::v` gives the magnitude.
+    $mag: U64 = U64::0 - U64::v if v < 0 else U64::v
+    if v < 0
+      r.put('-')
+    if mag == 0U64
+      r.put('0')
+      return r
+    $tmp: U8[24] = ::{}
+    $i: Sz = 0
+    for
+      if mag == 0U64
+        break
+      tmp[i] = U8::(mag % 10U64) + '0'
+      mag = mag / 10U64
+      i += 1
+    for j in Range.desc(i)
+      r.put(tmp[j])
+    return r
+
+  pub fn slice(r: Self$@): U8$[] //< what has been written, to pass to `panic`
+    return U8$[]::{ .ptr = r.buf[0]@, .len = r.len }
+
+  priv fn at_caller( //< writes ` at <file>:<line>`, and returns the buffer
+    //<
+    //< Does nothing if there is no position.
+    //< **Use the same string as the built-in bounds check** (`kspl_bounds_check` in
+    //< `ksplc/gen/runtime/hosted.h`).
+    //< Caution: **Do not make it return only the appended part.** Returning the same `Self$@`, as
+    //< `s` does, is what makes it impossible to write code that appends the result a second time
+    //< (`b.s(msg).s(b.at_caller(…))`).
+    r: Self$@,
+    file: U8[], //< the file to name
+    line: Sz, //< the line to name
+  ): Self$@
+    if file.len == 0
+      return r
+    return r.s(" at ").s(file).s(":").n(line)
+
+// ============================ Option ============================ Puts "is there a value or not"
+// in the type. Only a switch can take the value out, and the exhaustiveness check makes a missing
+// "absent" case a compile error.
+// For shared ownership use Rc/Arc (std/refcount); to propagate a failure use `?E`.
+pub enum Option<|T|> //< a value that may be absent; the `switch` forces the absent case
+  some(value: T) //< there is a value
+  none //< there is no value
+
+impl<|T|> Option<|T|>
+  pub fn is_some(r: Self): Bool //< whether there is a value
+    switch r case .some(_)
+      return true
+    case .none
+      return false
+
+  pub fn is_none(r: Self): Bool //< whether there is no value
+    return !r.is_some()
+
+  pub fn unwrap_or( //< the value, or the alternative; the alternative is always evaluated
+    r: Self,
+    alt: T, //< what is returned if there is no value
+  ): T
+    switch r case .some(v)
+      return v
+    case .none
+      return alt
+
+  pub fn unwrap_or_else( //< the value, or the alternative, computed only if it is needed
+    r: Self,
+    alt: fn(): T, //< a plain function pointer, which captures nothing
+  ): T
+    switch r case .some(v)
+      return v
+    case .none
+      return alt()
+
+pub fn map<|T, U|>( //< applies a function to the value, if there is one
+  //<
+  //< **It is a free function, so write both type arguments** (`map<|I32, Sz|>(o, f)`). A method
+  //< with its own type parameter (`fn map<|U|>`) would work as well, as `std/seq`'s `select` does
+  //< ("A name on the impl that the receiver does not fix" in `../docs/DESIGN.md`).
+  o: Option<|T|>, //< the value that may be absent
+  f: fn(x: T): U, //< what the value becomes, if there is one
+): Option<|U|> //< `f`'s result, or none if `o` is none
+  switch o case .some(v)
+    return Option<|U|>.some(f(v))
+  case .none
+    return Option<|U|>.none
+
+pub fn and_then<|T, U|>( //< chains a step that may itself return nothing
+  o: Option<|T|>, //< the value that may be absent
+  f: fn(x: T): Option<|U|>, //< the next step, which may also return nothing
+): Option<|U|> //< what `f` returns, or none if `o` is none
+  switch o case .some(v)
+    return f(v)
+  case .none
+    return Option<|U|>.none
+
+// ============================ A subsequence's length ============================
+pub fn sub_count( //< how many elements a sub-range really holds once clamped
+  //<
+  //< Of `count` items, how many of the `len` items from `start` onward can actually be taken.
+  //< **Check `start`'s lower bound too.** `Sz` is signed, so checking only the upper bound lets a
+  //< negative `start` through and gives a view that points before the start.
+  //< Caution: **Do not compare with `start + len`.** If `len` is huge, the addition itself wraps
+  //< and slips past the clamp silently.
+  count: Sz, //< how many items there are in all
+  start: Sz, //< where the range begins; a negative value gives 0
+  len: Sz, //< the length asked for; anything past the end is cut off
+): Sz //< the count that can be taken; 0 if `start` is past the end
+  if start < 0 || start >= count
+    return 0
+  remaining: = count - start
+  safe_len: Sz = 0 if len < 0 else len
+  return safe_len if safe_len < remaining else remaining
+
+// ============================ Range ============================
+pub struct Range //< an arithmetic sequence of integers, which a `for` walks
+  pub start: Sz //< the first value
+  pub step: Sz //< how much is added each time
+  pub len: Sz //< how many values there are, set once at construction
+
+impl Range: Index<|Sz, Sz|> //< so `for i in Range.asc(n)` can be written
+  pub fn get(r: Self$@, i: Sz): Sz //< the i-th value of the sequence
+    return r.start + i * r.step
+
+impl Range
+  pub fn new( //< the general form; a step of 0 or in the wrong direction gives an empty range
+    start: Sz, //< the first value
+    stop: Sz, //< where it stops; this is not itself a value
+    step: Sz, //< how much is added each time
+  ): Range
+    // Caution: **Take the difference of the two ends as unsigned.** `stop - start` as an Sz is
+    // signed overflow (undefined behavior) at Sz's extremes, and no wider integer exists; once the
+    // order is known, the unsigned subtraction gives the magnitude. `-step` is unsigned for the
+    // same reason (it does not fit an Sz when step is Sz's minimum).
+    $len: Sz = 0
+    if step > 0 && stop > start
+      span: U64 = U64::stop - U64::start
+      st: = U64::step
+      len = Sz::((span + st - 1U64) / st)
+    else if step < 0 && stop < start
+      span: U64 = U64::start - U64::stop
+      st: U64 = U64::0 - U64::step
+      len = Sz::((span + st - 1U64) / st)
+    return Range::{ .start = start, .step = step, .len = len }
+
+  pub fn asc( //< 0 up to but not including `stop`
+    stop: Sz, //< where it stops
+  ): Range
+    return Range.new(0, stop, 1)
+
+  pub fn desc( //< `n - 1` down to 0
+    n: Sz, //< where it starts from; this is not itself a value
+  ): Range
+    return Range.new(n - 1, -1, -1)
+
+// ============================ The operator traits ============================
+// The compiler looks these up by exact match on `std.lang.<name>` (has_implemented_operator_trait
+// in ksplc/sema/type/env.kspls); a prefix match would mix up `Index_` and `Index_place_`.
+
+pub trait Add<|Rhs, Output|> //< what `+` desugars to
+  fn add(r: Self, rhs: Rhs): Output //< the sum
+
+pub trait Sub<|Rhs, Output|> //< what `-` desugars to
+  fn sub(r: Self, rhs: Rhs): Output //< the difference
+
+pub trait Mul<|Rhs, Output|> //< what `*` desugars to
+  fn mul(r: Self, rhs: Rhs): Output //< the product
+
+pub trait Div<|Rhs, Output|> //< what `/` desugars to
+  fn div(r: Self, rhs: Rhs): Output //< the quotient
+
+pub trait Neg<|Output|> //< what a leading `-` desugars to
+  fn neg(r: Self): Output //< the value with its sign flipped
+
+pub trait Not<|Output|> //< what `!` desugars to
+  fn not(r: Self): Output //< the negated value
+
+pub trait Eq<|Other|> //< what `==` and `!=` desugar to
+  fn eq(r: Self, other: Other): Bool //< whether the two are the same
+  fn ne(r: Self, other: Other): Bool //< whether they differ
+
+pub trait Ord<|Other|> //< what `<`, `<=`, `>` and `>=` desugar to
+  fn lt(r: Self, other: Other): Bool //< whether it is less
+  fn le(r: Self, other: Other): Bool //< whether it is less or equal
+  fn gt(r: Self, other: Other): Bool //< whether it is greater
+  fn ge(r: Self, other: Other): Bool //< whether it is greater or equal
+
+pub trait Index<|Idx, Output|> //< what `x[i]` desugars to when it returns a copy
+  fn get(r: Self, index: Idx): Output //< a copy of the element
+
+pub trait Index_mut<|Idx, Val|> //< what `x[i] = v` desugars to
+  fn set(r: Self, index: Idx, val: Val): Void //< writes the element
+
+pub trait Index_place<|Idx, Output|> //< what `x[i] += v` and `x[i]@` desugar to
+  //<
+  //< It returns a mutable pointer to the element itself and takes precedence over
+  //< `Index`/`Index_mut`; `at` alone covers both reading and writing.
+  fn at( //< the element's address, not a copy
+    r: Self,
+    index: Idx, //< which element
+    file: U8[] = caller_file, //< the caller's position, for an out-of-range message
+    line: Sz = caller_line, //< the caller's position, for an out-of-range message
+  ): Output$@
+
+pub trait Index_ref<|Idx, Output|> //< what `x[i]` desugars to through a read-only receiver
+  //<
+  //< **A container with immutable content can implement only this one** (`Index_place.at`
+  //< returns an `Output$@`). The compiler picks "`Index_place` if the receiver is writable, this
+  //< one if it is not" ("Indexing" in `../docs/SPEC-language.md`).
+  fn at_ref( //< the element's read-only address, so nothing is copied
+    r: Self,
+    index: Idx, //< which element
+    file: U8[] = caller_file, //< the caller's position, for an out-of-range message
+    line: Sz = caller_line, //< the caller's position, for an out-of-range message
+  ): Output@
+
+pub trait Iter<|T|> //< a sequence that only yields items in order, with no length or index
+  //<
+  //< A chain of filters or maps is an `Iter`, and `for x in` walks it
+  //< (`ksplc/sema/body/for_in.kspls`). **It is separate from the `Index` family**, which requires
+  //< "the i-th" item.
+  //< Caution: **Write the receiver as `Self`.** The implementation may take a `Self$@` and
+  //< advance the position (the thunk bridges the value and the pointer).
+  fn next(r: Self): Option<|T|> //< the next element, or nothing at the end
+
+  pub fn count(r: Self): Sz //< how many elements it yields; it allocates nothing
+    $n: Sz = 0
+    for _v in r
+      n += 1
+    return n
+
+// Kept out of line so that `List.at` stays small enough to be inlined ("Indexing costs one
+// comparison, and the stop is called out of line" in `std/docs/DESIGN.md`).
+#noinline
+pub fn bounds_panic( //< the one message every container stops with when an index is out of range
+  //<
+  //< **Every container calls this**, so "out of range" reads the same everywhere and matches the
+  //< built-in check ("Conditions that stop execution at run time" in `../docs/SPEC-language.md`).
+  //< Caution: **Take the position from the caller.** With the default, this line (`std/lang`)
+  //< is printed, and a user's mistake looks like a bug in std.
+  func_name: U8$[], //< the method that was called, so the container can be identified
+  idx: Sz, //< the index that was requested
+  len: Sz, //< how many elements there were
+  file: U8[], //< the caller's position, which the container passes on
+  line: Sz, //< the caller's position, which the container passes on
+)
+  $m: = Panic_msg.new()
+  m.s("index out of bounds in ").s(func_name).s(" (idx: ").n(idx).s(", len: ").n(len).s(")")
+  panic(m.slice(), file, line)
+
+pub struct Slice<|$T|> //< a borrowed sequence: a pointer and a length, owning nothing
+  //<
+  //< The type argument carries the elements' mutability: `Slice<|$U8|>` is mutable, `Slice<|U8|>`
+  //< is not. **One level of weakening is allowed**, so the mutable version can be passed to an
+  //< immutable parameter. `ptr` and `len` are `pub` so a slice can be built from a raw pointer
+  //< (`Slice<|$U8|>::{ .ptr = p, .len = n }`).
+  pub ptr: T$@ //< where the sequence begins
+  pub len: Sz //< how many elements it holds
+
+impl<|T|> Slice<|$T|>: Index_place<|Sz, T|> //< so an element of a writable slice can be written
+  //<
+  //< **Only for the mutable version** (the `$` on the implementing type).
+  //< **The receiver is a `Self@`**: it only reads the descriptor (`../docs/SPEC-language.md`'s
+  //< "The receiver shape an implementation declared"). With a `Self$@`, an element of a slice in a
+  //< read-only frame could not be written.
+  #inline
+  pub fn at(r: Self@, index: Sz, file: U8[], line: Sz): T$@ //< the element's address
+    if index < 0 || index >= r.len
+      bounds_panic("Slice.at", index, r.len, file, line)
+    return r.ptr + index
+
+impl<|T|> Slice<|T|>: Index_ref<|Sz, T|> //< so an element can be read without copying
+  //<
+  //< **For both versions** (no `$` on the implementing type): the mutable one needs it too.
+  #inline
+  pub fn at_ref(r: Self@, index: Sz, file: U8[], line: Sz): T@ //< the element's read-only address
+    if index < 0 || index >= r.len
+      bounds_panic("Slice.at_ref", index, r.len, file, line)
+    return r.ptr + index
+
+pub trait Cast<|Output|> //< what `Output::value` desugars to where C would not allow the cast
+  //<
+  //< A value cast to or from a struct is invalid C and so rejected, unless the source type
+  //< implements this; then it becomes a `cast()` call (see ksplc/sema/body/postfix.kspls).
+  fn cast(r: Self): Output //< the value as the other type
+
+// ============================ The marker traits ============================
+pub trait Ref_counted //< the compiler counts copies and scope exits for this type
+  //<
+  //< Why it is a trait rather than an attribute is in "Why ARC is expressed as a trait" in
+  //< docs/DESIGN.md.
+  //< Caution: Keep the methods priv (in the conforming impl too); calling them by hand adds to
+  //< the automatic insertions and breaks the count. Make the conforming receiver
+  //< **`r: Self@`**: the generated calls also pass addresses of immutable bindings, so a `Self$@`
+  //< makes the generated C discard const.
+  priv fn retain(r: Self) //< one more owner; only the compiler calls it
+  priv fn release(r: Self) //< one owner fewer; only the compiler calls it
+
+pub trait Move_only { //< a value of this type must not be copied implicitly.
+  //<
+  //< The compiler finds it by exact FQN match (`std.lang.Move_only`); a struct that holds a
+  //< Move_only field by value is Move_only too.
+}
+
+pub trait Owned //< this type owns memory or a resource, and releases it with `free()`
+  //<
+  //< **Without conforming, the check does not work.** A type that only has a `free()` is not
+  //< tracked, so always conform a type that releases something ([W0108] names a missing one).
+  //< **`free` returns no failure.** It runs on an exit path or from a `defer`, where a failure
+  //< leaves the caller nothing to do.
+  //< **Put clean-up whose result must be checked in its own method** (`io.File_stream`'s `sync()`).
+  fn free(r: Self) //< releases it, reporting no failure
+
+pub trait Writer //< a destination characters can be written to
+  //<
+  //< **Only the declaration is here.** The primitives' `fmt` (`impl I32: Formattable`) is in
+  //< `std/strfmt`; here it would pull the whole string library into every file.
+  //< Caution: **Do not add a method for writing a number or a boolean here.** The value's type
+  //< decides the format (`Formattable`), and this would make two ways to do one thing.
+  fn s(r: Self, val: U8[]): Self //< writes a string and returns the destination
+  fn c(r: Self, val: U8): Self //< writes one byte and returns the destination
+  fn flush(r: Self): Self //< passes on what has accumulated, reporting no failure
+
+pub trait Formattable //< what `\{x\}` in a string calls
+  //<
+  //< `ksplc/parse/desugar.kspls` does the desugaring.
+  fn fmt(r: Self, w: Writer): Writer //< writes the value into the destination
+
+pub fn put<|W: Writer, T: Formattable|>( //< writes one value, keeping the destination's own type
+  //<
+  //< Caution: **Do not take the destination as a `Writer`.** The return type would become the
+  //< trait too, so one interpolation turns a `Str_builder` into a `Writer` whose `.slice()` cannot
+  //< be found. `Formattable.fmt`'s return value is not used.
+  w: W, //< the destination, returned as its own type, not as a `Writer`
+  v: T, //< the value to write
+): W //< the same destination, for chaining
+  v.fmt(w)
+  return w
+
+pub trait Callable1<|A, Ret|> //< a callable value that takes one argument, with its captures
+  //<
+  //< Caution: Make the receiver a plain `Self` ("Why a trait's receiver is fixed to a bare `Self`"
+  //< in docs/DESIGN.md); the implementation may take a `Self@` (the thunk bridges them). A
+  //< conforming value is a trait value (`{obj, vtable}`), so it can neither cross the C boundary
+  //< nor leave by `return`.
+  pub fn call(r: Self, a: A): Ret //< calls it
+
+pub trait Callable2<|A, B, Ret|> //< a callable value that takes two arguments, with its captures
+  pub fn call(r: Self, a: A, b: B): Ret //< calls it

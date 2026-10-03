@@ -1,0 +1,655 @@
+//< The state of one page, and the small helpers the entry-point files share
+//<
+//< **No `#export` entry point is here.** The exported entry points are in
+//< [`bridge.kspls`](bridge.kspls) and [`face.kspls`](face.kspls); this holds only which document
+//< is being edited now.
+//< Caution: **Do not keep two states.** The document, the cursor and the arena are this one set
+//< (imported by name with `import "kspage/port/web/state" { doc, sheet, … }`).
+import "kspage/content/sample"
+import "kspage/lay/page" { Page }
+import "kspage/model/collect" + { Collect }
+import "kspage/model/day"
+import "kspage/model/doc" { Block, Doc, Rect }
+import "kspage/model/filter"
+import "kspage/model/font" { Font, Vmetrics, Font_source }
+import "kspage/model/over"
+import "kspage/model/source" { Hand }
+import "kspage/model/style" + { Sheet }
+import "kspage/model/style_when"
+import "kspage/share/compare"
+// Caution: **Import it under another name**, or `state.trail` (the history) is taken for it.
+import "kspage/share/trail" as trailing
+import "kspage/write/edit" + { Editor }
+import "kspage/write/insert"
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" + { Arena }
+import "std/str" { Str_builder }
+
+// The functions JS provides. They are wasm imports themselves, with no C implementation.
+extern "C"
+  // The width measured by the canvas's `measureText`. `text` is a UTF-8 byte sequence.
+  fn kspage_js_measure(family: U8@, family_len: Sz, size_px: F32, weight: I32, italic: I32,
+    text: U8@, text_len: Sz): F32
+  // Writes three vertical metrics into out (ascent / descent / line_gap).
+  // Not a return value: a struct cannot cross the FFI boundary, so the address is passed.
+  fn kspage_js_vmetrics(family: U8@, family_len: Sz, size_px: F32, weight: I32, italic: I32,
+    out: F32$@)
+  fn kspage_js_gave_up(msg: U8@, msg_len: Sz) //<
+    //< When memory is used up, it throws the reason for stopping back to JS
+    //<
+    //< **It does not return.** JS throws, and the exception passes through the wasm frames up to
+    //< the caller. Only JS can throw (wasm has no way to raise one).
+
+priv fn give_up(msg: U8$[]) //< the one place called when stopping
+  //<
+  //< It does not return from here (`kspage_js_gave_up` above).
+  //< Caution: **Do not clean up here** — the arena is half-built. The caller frees it with
+  //< `kspage_web_recover`.
+  kspage_js_gave_up(msg.ptr, msg.len)
+
+const heap_bytes: Sz = 32 * 1024 * 1024 //<
+  //< The size of the static buffer that stands in for the heap
+  //<
+  //< Wasm has neither libc nor malloc. Allocation uses a free list over a static buffer
+  //< (`mem.init_freestanding_heap`).
+  //< Caution: **Refuse once it is used up** (`doc_limit` below) — a failed allocation stops the
+  //< whole wasm. Enlarging it alone does not fix that (the limit only moves further away).
+$heap: U8[32*1024*1024] = ::{}
+const room_per_byte: Sz = 20 //<
+  //< The heap bytes that one byte of document needs while it is edited
+  //<
+  //< The editing arena is never returned. It is zero-filled static memory, so enlarging it does not
+  //< grow the .wasm.
+  //< Caution: **Leave room to spare** (once opened, it must still take typing). The three levels of
+  //< refusal are in `../../docs/DESIGN.md`'s "Where memory runs short it refuses rather than
+  //< crashing".
+const room_spare: Sz = 8 * 1024 * 1024
+
+const room_per_flow: Sz = 512 //< the arena needed to lay out one block and write it back
+  //<
+  //< Caution: **Do not give a grid and a flow the same value.** A grid (a table) costs several
+  //< times a flow, so one value either **cuts the cap for prose** or overruns the limit on a table.
+  //< Err toward the value where the cost levels off (more columns cost little more).
+const room_per_grid: Sz = 2048
+
+fn doc_limit(): Sz //< the largest document, in bytes, that can be opened in this arena
+  //<
+  //< Caution: **It must be available before reading** — found short afterwards, the open document
+  //< is lost. The cap follows the arena. **Passing this does not mean it fits** (`room_for`).
+  return (heap_bytes - room_spare) / room_per_byte
+
+priv fn blocks_in(b: Block$@): Sz //<
+  //< Counts the blocks only (inside a grid, the whole grid counts as grid)
+  $n: Sz = 1
+  for $i: Sz = 0; i < b.children.len; i += 1
+    n += blocks_in(b.children.get(i))
+  return n
+
+priv fn need_in(sh: Sheet$@, b: Block$@): Sz //<
+  //< The arena needed to lay this document out and write it back
+  //<
+  //< Once inside a grid, count everything under it as grid (resolving the column widths costs on
+  //< every row and cell).
+  //< Caution: **Count the nesting and the page bands too** (each costs a layout).
+  if sh.arrange_of(b.style).same_arrange(style.Arrange.grid)
+    return blocks_in(b) * room_per_grid
+  $n: Sz = room_per_flow
+  for $i: Sz = 0; i < b.children.len; i += 1
+    n += need_in(sh, b.children.get(i))
+  return n
+
+fn place_need(d: Doc$@, sh: Sheet$@): Sz
+  $n: Sz = need_in(sh, d.header) + need_in(sh, d.footer)
+  for $i: Sz = 0; i < d.blocks.len; i += 1
+    n += need_in(sh, d.blocks.get(i))
+  return n
+
+fn room_for(d: Doc$@, sh: Sheet$@, letting_go: Arena$@): Bool //<
+  //< Whether the loaded document fits in the arena once `letting_go` is freed
+  //<
+  //< The refusal is a separate result from "cannot be read".
+  //< Caution: **Ask after reading and before replacing** — found short after the replacement, the
+  //< open document is lost. **Subtract what is freed**, or reloading a document of the same size is
+  //< refused. Leave room to spare (`room_spare`).
+  freed: = 0 if letting_go == null else letting_go.get_total_allocated()
+  after: = mem.heap_used_bytes() - freed
+  return after + place_need(d, sh) + room_spare <= heap_bytes
+
+const keep_bytes: Sz = 64 * 1024 //< the change history's arena
+  //<
+  //< Caution: **Allocate it statically** (a history outlives the document's arena). The sector is
+  //< much larger than one item, since `ksdb` does not write across a sector.
+const keep_sector: Sz = 4096
+$keep: U8[64*1024] = ::{}
+
+$doc_arena: Arena$@ = null
+$page_arena: Arena$@ = null
+// The arena used while reloading.
+// Caution: **Make it global.** A local is lost in the unwinding, and the half-built chunk eats the
+// arena unseen (see `kspage_web_recover` in `bridge.kspls`).
+// Move it into `doc_arena` once it is read, and clear this (or it is freed twice).
+$load_arena: Arena$@ = null
+$doc: Doc$@ = null
+$sheet: Sheet$@ = null
+$page: Page$@ = null
+// The rectangles that paint the selection. They are rebuilt at every layout.
+$sel: List<|Rect|>$@ = null
+
+// Where `kspage_js_vmetrics` writes. It is overwritten on every call (do not keep it).
+$vm: F32[3] = ::{}
+
+const nums_cap: Sz = 18 //< the buffer the numbers are passed through
+  //<
+  //< Caution: **Do not size the buffer in JS.** Below `__heap_base` is C's stack, and a deep call
+  //< silently overwrites the numbers. **Size it for the entry point that writes the most** (a box's
+  //< shape is 18).
+$nums: F32[18] = ::{}
+
+priv fn italic_flag(font: Font): I32
+  return 1 if font.italic else 0
+
+priv fn measure_width(font: Font, text: U8[]): F32
+  italic: = italic_flag(font)
+  return kspage_js_measure(font.family.ptr, font.family.len, font.size_px, font.weight, italic,
+    text.ptr, text.len)
+
+priv fn vmetrics_of(font: Font): Vmetrics
+  italic: = italic_flag(font)
+  kspage_js_vmetrics(font.family.ptr, font.family.len, font.size_px, font.weight, italic, vm@)
+  return Vmetrics::{ .ascent = vm[0], .descent = vm[1], .line_gap = vm[2] }
+
+fn source(): Font_source //< the source of metrics, borrowed from the canvas
+  return Font_source::{ .measure_width = measure_width, .vmetrics_of = vmetrics_of }
+
+fn ensure()
+  if doc_arena != null
+    return
+  mem.init_freestanding_heap(U8$[]::{ .ptr = heap@, .len = heap_bytes })
+  // Caution: **It must be set up** (before or after the arena), or the page freezes when the arena
+  // runs out (the header of `kspage_js_gave_up` above).
+  panic_hook = give_up
+  fresh: = Arena.new(64 * 1024)
+  made: = sample.build(fresh)
+  show(fresh, made.doc, made.sheet)
+  slots[0].used = true
+  slot_at = 0
+
+priv fn show(arena: Arena$@, d: Doc$@, sh: Sheet$@) //< makes `d` the document shown now
+  //<
+  //< The editing state and the history are made anew, and the layout is dropped (it points at the
+  //< boxes of a document no longer shown). Nothing is freed here.
+  doc_arena = arena
+  doc = d
+  sheet = sh
+  new_edit()
+  // Caution: **Open the history again too** — it belongs to a document, and continued on another
+  // it tells another document's story. `kspage_web_load_trail` brings that document's history back.
+  open_trail("")
+  page = null
+  sel = null
+
+fn adopt(arena: Arena$@, d: Doc$@, sh: Sheet$@) //< replaces the document shown now with `d`
+  //<
+  //< `d` and `sh` live in `arena`, which is taken over, and the old document's arena is freed. The
+  //< viewer's overrides carry over (`over.carried`). Where `arena` is `load_arena`, that is
+  //< cleared (two pointers to one chunk would free it twice).
+  //< Caution: **Call it only once `room_for` has passed** — after it the old document is gone.
+  held: = over.carried(sheet.over)
+  // The comparison's result goes too: a difference points at the old document's blocks.
+  forget_diff()
+  doc_arena.free()
+  if load_arena == arena
+    load_arena = null
+  sh.over = held
+  show(arena, d, sh)
+
+fn drop_load() //< frees the loading arena, as when a load is refused
+  if load_arena != null
+    load_arena.free()
+    load_arena = null
+
+// ---- The list of open documents ---- **Rule: the one shown now lives in the globals.**
+struct Slot //<
+  //< The saved copy of one open document that is not being shown
+  //<
+  //< Only documents not being shown live in the list (otherwise every entry point would have to
+  //< carry "which document").
+  //<
+  //< Switching copies the globals out and one copy back in (`slot_use`).
+  used: Bool
+  arena: Arena$@
+  doc: Doc$@
+  sheet: Sheet$@
+  ed: Editor$@
+  read_only: Bool
+  // The change history's copy, and its arena. The history has only one static arena, so it is
+  // copied out and back (`stash` / `restore`), or it would add to another document's history.
+  // Caution: **Make a new arena per copy** (or it grows on every switch).
+  trail_image: U8[]
+  trail_arena: Arena$@
+  was_arena: Arena$@ //<
+    //< The version to compare with (the earlier version).
+    //<
+    //< This is per document too, or a comparison would match another document's version.
+  was: Doc$@
+  was_sheet: Sheet$@
+
+const max_slots: Sz = 8
+$slots: Slot[8] = ::{}
+$slot_at: Sz = 0
+
+fn slot_count(): Sz //< the number of open documents
+  $n: Sz = 0
+  for $i: Sz = 0; i < max_slots; i += 1
+    if slots[i].used
+      n += 1
+  return n
+
+fn slot_now(): Sz //< the index of the document shown now
+  return slot_at
+
+fn slot_open(i: Sz): Bool //< whether that index is open
+  return i < max_slots && slots[i].used
+
+priv fn stash() //< copies the current globals into the current index's saved copy
+  slots[slot_at].used = true
+  slots[slot_at].arena = doc_arena
+  slots[slot_at].doc = doc
+  slots[slot_at].sheet = sheet
+  slots[slot_at].ed = ed
+  slots[slot_at].read_only = read_only
+  slots[slot_at].was_arena = was_arena
+  slots[slot_at].was = was
+  slots[slot_at].was_sheet = was_sheet
+  // Caution: **Copy the history out** (there is only one static arena).
+  if slots[slot_at].trail_arena != null
+    slots[slot_at].trail_arena.free()
+  image: = trail.bytes() if trail != null else ""
+  slots[slot_at].trail_arena = Arena.new(image.len + 4096)
+  slots[slot_at].trail_image = slots[slot_at].trail_arena.dup_str(image)
+
+priv fn restore(i: Sz) //< brings a saved copy back into the globals
+  doc_arena = slots[i].arena
+  doc = slots[i].doc
+  sheet = slots[i].sheet
+  ed = slots[i].ed
+  read_only = slots[i].read_only
+  was_arena = slots[i].was_arena
+  was = slots[i].was
+  was_sheet = slots[i].was_sheet
+  // Caution: **Drop the layout result**, or it points at another document's boxes.
+  page = null
+  sel = null
+  diffs = null
+  open_trail(slots[i].trail_image)
+
+fn slot_use(i: Sz): Bool //< shows document `i`
+  //<
+  //< True if switched.
+  if i >= max_slots || !slots[i].used || i == slot_at
+    return false
+  stash()
+  restore(i)
+  slot_at = i
+  return true
+
+fn slot_new(): Sz //< makes a blank document in a free slot and shows it
+  //<
+  //< Returns the index (-1 if full). **It must be blank**: "New" uses it too, so a sample here
+  //< would put the sample's paragraphs in front of someone who started from a blank page. If
+  //< loading into it fails, the caller must close it (`slot_drop`), or a blank one stays.
+  $free: Sz = max_slots
+  for $i: Sz = 0; i < max_slots; i += 1
+    if !slots[i].used
+      free = i
+      break
+  if free >= max_slots
+    return max_slots
+  stash()
+  // The comparison went into the saved copy with the rest, so it is dropped here, not freed.
+  read_only = false
+  was_arena = null
+  was = null
+  was_sheet = null
+  diffs = null
+  fresh: = Arena.new(64 * 1024)
+  made: = sample.blank(fresh)
+  show(fresh, made.doc, made.sheet)
+  slots[free].used = true
+  slots[free].trail_arena = null
+  slot_at = free
+  return free
+
+fn slot_drop(i: Sz): Bool //< closes document `i`
+  //<
+  //< True if closed.
+  //< Caution: **Do not close the last one** (there would be nothing to show). **Free its arena
+  //< too**, or closing does not reduce memory.
+  if i >= max_slots || !slots[i].used || slot_count() <= 1
+    return false
+  if i == slot_at
+    // To close the one being shown, move to a neighbour first.
+    $next: Sz = max_slots
+    for $k: Sz = 0; k < max_slots; k += 1
+      if k != i && slots[k].used
+        next = k
+        break
+    if next >= max_slots
+      return false
+    // The current state is being dropped, so it moves without being copied into a saved copy.
+    held: = doc_arena
+    restore(next)
+    slot_at = next
+    slots[i].used = false
+    held.free()
+  else
+    if slots[i].arena != null
+      slots[i].arena.free()
+    // Caution: **Free the compared version's arena too.**
+    if slots[i].was_arena != null
+      slots[i].was_arena.free()
+      slots[i].was_arena = null
+    slots[i].used = false
+  if slots[i].trail_arena != null
+    slots[i].trail_arena.free()
+    slots[i].trail_arena = null
+  return true
+
+fn new_edit() //< makes the editing state anew
+  //<
+  //< This is the one place that makes it. Read-only belongs to the viewer (as `sheet.over` does);
+  //< if the caller copied it on every remake, it would be lost on opening.
+  ed = edit.new_editor(doc)
+  ed.read_only = read_only
+
+// Whether it is open read-only. It is not stored in the document (neither the saved text nor the
+// HTML) — stored, a copy would claim "read-only" while anyone can edit it.
+$read_only: Bool = false
+
+fn open_trail(image: U8[]) //< opens the history again and attaches it to the editing state
+  //<
+  //< An empty `image` starts a new history.
+  //< Caution: **Call this too once the document is reloaded**, or the "when, who and what" is added
+  //< to another document's story. The arena is static, but the binding is allocated from the
+  //< document's arena (remade on each reload).
+  room: = U8$[]::{ .ptr = keep@, .len = keep_bytes }
+  trail = trailing.open(room, keep_sector, image, doc_arena)
+  ed.trail = trail
+
+$ed: Editor$@ = null
+// The change history, **the same one as the editing state's** (`ed.trail`); reading it starts
+// here.
+$trail: trailing.Trail$@ = null
+
+const input_cap: Sz = 256 //< the buffer that JS writes typed text into
+  //<
+  //< Longer input is cut off.
+$input: U8[256] = ::{}
+
+// The buffer for exported text, reused by every export.
+$out: Str_builder = ::{}
+// The number of things dropped from the Markdown just written, reused likewise. If it is not 0,
+// writing that text back to the original file deletes something.
+$md_dropped: Sz = 0
+// The result of laying out a page's header and footer, **separate from the document's boxes**
+// (coordinates from the page's top left).
+// Caution: **Keep its arena separate too** — the document's arena is freed at every layout, and a
+// layout between printing two pages would leave the band pointing at nothing.
+$chrome: Page$@ = null
+$chrome_arena: Arena$@ = null
+// The arena for the text to load, and its length.
+$in_arena: Arena$@ = null
+$in_ptr: U8@ = null
+
+// ---- Source text a person passed in ---- **The boundary remembers it** (the core opens no file).
+// Caution: **Pass in only the files that are pointed at** (ask with `kspage_web_window_*`), or
+// unread text piles up in the wasm. Not in the document's arena (freed on each reload).
+
+struct Lent
+  name: U8[]
+  text: U8[]
+
+$lent_arena: Arena$@ = null
+$lent: List<|Lent|>$@ = null
+
+fn lent_text(file: U8[]): U8[] //< the text passed in under that name
+  //<
+  //< Empty when not passed in (the display tells empty from absent).
+  if lent == null
+    return ""
+  for $i: Sz = 0; i < lent.len; i += 1
+    one: = lent.get(i)
+    if one.name.equals(file)
+      return one.text
+  return ""
+
+// The borrowing interface. This is what the layout receives (not the text itself).
+// Caution: **Do not allocate it from the arena**, or every redraw piles one up. One lives in fixed
+// memory (when nothing is passed in, it returns empty).
+$one_hand: Hand = ::{}
+
+fn hand(): Hand$@
+  one_hand.read = lent_text
+  return one_hand@
+
+fn keep_source(file: U8[], text: U8[]) //< remembers one text passed in
+  //<
+  //< Caution: **Copy it** (its arena is rewritten at the next input). **Replace an entry with the
+  //< same name**, or the older text is found first.
+  if lent_arena == null
+    lent_arena = Arena.new(64 * 1024)
+    lent = List<|Lent|>.create(lent_arena)
+  kept: = Lent::{ .name = lent_arena.dup_str(file), .text = lent_arena.dup_str(text) }
+  for $i: Sz = 0; i < lent.len; i += 1
+    if lent.get(i).name.equals(file)
+      lent.set(i, kept)
+      return
+  lent.push(kept)
+
+fn drop_sources() //< forgets all the text passed in
+  //<
+  //< Caution: **Free the arena with it** (repeated replacing would pile it up).
+  if lent_arena == null
+    return
+  lent_arena.free()
+  lent_arena = null
+  lent = null
+
+// ---- The version compared with (the earlier version), and the matched list ----
+// Caution: **Put it in an arena separate from the current document's**, or it piles up until the
+// document is closed.
+
+$was_arena: Arena$@ = null
+$was: Doc$@ = null
+$was_sheet: Sheet$@ = null
+// The matched list. **It points at the two documents' blocks** (the text is not copied).
+// Caution: **Once either document is freed, drop this list too** (`forget_diff`).
+$diffs: List<|compare.Diff|>$@ = null
+// Whether the two were matched by number (false: by text), to tell the viewer.
+$diff_by_id: Bool = false
+
+fn forget_diff() //< drops the comparison's result
+  //<
+  //< Caution: **Call it once the document is reloaded** (the list points into the old arena). The
+  //< other version's arena is freed here too.
+  diffs = null
+  diff_by_id = false
+  was = null
+  was_sheet = null
+  if was_arena != null
+    was_arena.free()
+    was_arena = null
+
+// ---- The shape values are passed in at the boundary ----
+// Two files of entry points share it, so it is here rather than copied.
+
+fn color_into(out: F32$@, v: Option<|U32|>) //<
+  //< Writes one color as two values: "whether it is set" and the value
+  //<
+  //< Caution: **Do not encode "whether it is set" inside the value** (0 as "unset" loses black). A
+  //< 24-bit color passes as a number (`0xRRGGBB` is exact in an F32).
+  out$ = 0.0
+  (out + 1)$ = 0.0
+  if rgb: = v
+    out$ = 1.0
+    (out + 1)$ = F32::rgb
+
+// The lists passed at the boundary. **These lists are the canonical source** (the screen reads the
+// same lists).
+// Caution: **Do not move an existing entry.** A saved document is read by name, but this bridge
+// passes by number, so moving one gets out of step with a window left open
+// ([`DESIGN.md`](../../docs/DESIGN.md)'s "The boundary between the core and the browser").
+priv const shape_order: U8[] =
+  "box\tellipse\tfall_line\trise_line\tfall_arrow\trise_arrow\tfall_arrow_back\trise_arrow_back\tround_box\ttriangle\tdiamond"
+priv const dating_order: U8[] = "none\tplain\tlong"
+priv const collect_order: U8[] = "none\tcontents\tnotes\tbars\tlines\tsource\timports"
+priv const sketch_order: U8[] = "whole\ttitled\thalved"
+priv const keep_order: U8[] = "is\tis_not\tholds\tabove\tbelow\tblank\tfilled" //<
+  //< How a filter matches a cell (`Keep` in `../../model/filter.kspls`)
+priv const diff_order: U8[] = "added\tremoved\tmoved\tedited\trestyled\treframed\tresheeted" //<
+  //< A difference's kind
+  //<
+  //< Caution: **Do not move an existing entry** (the page reads by number).
+
+priv fn no_of(order: U8[], name: U8[]): F32 //< the position within the list
+  //<
+  //< 0 when absent (a name left out of the list falls back to the default).
+  $at: Sz = 0
+  $no: Sz = 0
+  for at < order.len
+    end: = at + split_at_tab(order.sub_from(at))
+    if order.sub(at, end - at).equals(name)
+      return F32::no
+    at = end + 1
+    no += 1
+  return 0.0
+
+priv fn name_of(order: U8[], n: I32): U8[] //< the name at that number
+  //<
+  //< Out of range it is the first (it is the reverse of `no_of`).
+  $at: Sz = 0
+  $left: I32 = n
+  for at < order.len && left > 0
+    at = at + split_at_tab(order.sub_from(at)) + 1
+    left -= 1
+  if at >= order.len
+    return order.sub(0, split_at_tab(order))
+  rest: = order.sub_from(at)
+  return rest.sub(0, split_at_tab(rest))
+
+fn shape_no(s: style.Shape): F32
+  return no_of(shape_order, s.variant_name())
+
+fn shape_at(n: I32): style.Shape
+  return style.shape_from(name_of(shape_order, n))
+
+fn dating_no(d: day.Dating): F32
+  return no_of(dating_order, d.variant_name())
+
+fn dating_at(n: I32): day.Dating
+  return day.dating_from(name_of(dating_order, n))
+
+fn diff_no(k: compare.Kind): F32 //< the number of a difference's kind
+  //<
+  //< No reverse mapping is needed (only the core decides a kind).
+  return no_of(diff_order, k.variant_name())
+
+fn collect_no(c: Collect): F32
+  return no_of(collect_order, c.variant_name())
+
+fn collect_at(n: I32): Collect
+  return collect.collect_from(name_of(collect_order, n))
+
+fn sketch_at(n: I32): insert.Sketch
+  return insert.sketch_from(name_of(sketch_order, n))
+
+fn keep_at(n: I32): filter.Keep
+  return filter.keep_from(name_of(keep_order, n))
+
+// ---- The functions that turn a list of names into numbers as they are ----
+fn align_no(a: style.Align): F32 //<
+  //< This is where they differ from the four above.
+  //<
+  //< Caution: **Make the list's last entry the cap** (a number past it makes the next kind the
+  //< default). `make test-conventions` checks that, and that the screen has the same list.
+  return F32::Sz::a
+
+fn align_at(n: I32): style.Align //<
+  //< The alignment that the screen's number `n` stands for
+  //<
+  //< An unknown number gives the default (the numbers come from the screen, so out-of-range ones do
+  //< arrive).
+  if n <= 0 || n > Sz::style.Align.justify
+    return style.Align.left
+  return style.Align::n
+
+fn compare_no(c: style_when.Compare): F32
+  return F32::Sz::c
+
+fn compare_at(n: I32): style_when.Compare
+  if n <= 0 || n > Sz::style_when.Compare.equal
+    return style_when.Compare.none
+  return style_when.Compare::n
+
+fn arrange_no(a: style.Arrange): F32
+  return F32::Sz::a
+
+fn split_at_tab(both: U8[]): Sz //< the position of the separating tab
+  //<
+  //< Absent, it returns the text's length (the whole text is the first part). Two texts share one
+  //< arena, separated by a tab, so a tab itself cannot be passed.
+  for $k: Sz = 0; k < both.len; k += 1
+    if both[k] == '\t'
+      return k
+  return both.len
+
+struct Split //< the two texts passed separated by a tab
+  //<
+  //< Where `found` is false, do nothing.
+  found: Bool
+  head: U8[]
+  tail: U8[]
+
+fn split_input(len: Sz): Split //< splits the typing arena's `len` bytes in two at the first tab
+  //<
+  //< Caution: **Call `ensure` first** (the arena exists after setup). **Without a tab it is
+  //< "absent"**, and the caller does nothing — rewriting with empty text would treat a failed
+  //< handover as "remove it". Length 0 is refused too.
+  if len <= 0 || len > input_cap
+    return no_split()
+  both: = U8[]::{ .ptr = input@, .len = len }
+  cut: = split_at_tab(both)
+  if cut >= len
+    return no_split()
+  return Split::{ .found = true, .head = both.sub(0, cut),
+    .tail = both.sub(cut + 1, len - cut - 1) }
+
+priv fn no_split(): Split
+  return Split::{ .found = false, .head = "", .tail = "" }
+
+fn clear_out(out: F32$@, n: Sz) //<
+  //< Fills the first `n` slots of the number buffer with 0
+  //<
+  //< Caution: **Fill it even where nothing is returned** — the reader always reads `n`, and the
+  //< previous call's numbers would pass as current.
+  for $k: Sz = 0; k < n; k += 1
+    (out + k)$ = 0.0
+
+fn has_style(i: Sz): Bool //< whether style `i` exists
+  //<
+  //< The number comes from the screen, so expect it to be out of range.
+  //< Caution: **Call `ensure` first** (`sheet` exists after setup).
+  return i >= 0 && i < sheet.styles.len
+
+fn has_box(i: Sz): Bool //< whether box `i` exists
+  //<
+  //< `page` is null until the first `kspage_web_layout`.
+  //< **`Sz` is signed** ("Primitive types" in `../../../docs/SPEC-language.md`). JS can pass -1, so
+  //< refuse negative values too.
+  return page != null && i >= 0 && i < page.boxes.len
+
+fn has_selection(i: Sz): Bool //< whether selection rectangle `i` exists
+  //<
+  //< With nothing selected `sel` is null.
+  return sel != null && i >= 0 && i < sel.len

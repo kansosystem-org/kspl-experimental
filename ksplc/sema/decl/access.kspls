@@ -1,0 +1,547 @@
+//< The checks on "may this operation be done here"
+//<
+//< **Import this file to use it**: `sema/session` alone does not add these methods to Ctx.
+
+// ==========================================
+//   * **Mutability**: may that place be written to (`place_denies_write` / `place_is_readonly` /
+//     `root_binding_is_immutable` / `check_const_decl_storage`).
+//   * **Visibility**: may that name be seen from here (`check_visibility_and_mark_used` /
+//     `check_type_vis_leak` / `check_unused_imports`).
+// ==========================================
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/locate" as base_locate
+import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/def" { Struct_field }
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
+import "std/chars" // for its single-character methods
+import "std/ds" { List }
+import "std/str"
+
+fn vis_rank(v: sema_type_scope.Visibility): I32 //<
+  //< A visibility's breadth (narrowest first, file_private < internal < public)
+  //<
+  //< The enum's numbers follow declaration order, not breadth.
+  if v == sema_type_scope.Visibility.file_private
+    return 0
+  return 1 if v == sema_type_scope.Visibility.internal else 2
+
+fn narrower_vis(outer: sema_type_scope.Visibility, inner: sema_type_scope.Visibility):
+  sema_type_scope.Visibility //<
+    //< The narrower of two visibilities
+    //<
+    //< An outer declaration (an impl's target type, a struct) caps its members' reach.
+  return outer if vis_rank(outer) < vis_rank(inner) else inner
+
+fn contains_node(list: List<|Ast_node$@|>$@, node: Ast_node$@): Bool
+  for item in list
+    if item == node
+      return true
+  return false
+
+enum Index_route //< what a subscript (`a[i]`) resolves to
+  //<
+  //< **Only `index_route` decides which** (see there); the names live here so that the read path
+  //< and the assignment path share them.
+  place //< `Index_place.at` — it returns a **writable** place
+  ref_place //< `Index_ref.at_ref` — it returns a **read-only** place
+  by_value //<
+    //< `Index.get` / `Index_mut.set`, passing values
+    //<
+    //< A fixed-length array also uses it: it implements none of the traits, so it takes the
+    //< built-in path.
+
+impl Index_route
+  fn index_route_trait(route: Self): U8[] //<
+    //< The trait that provides that route, for diagnostics
+    switch route case .place
+      return "Index_place"
+    case .ref_place
+      return "Index_ref"
+    case .by_value
+      return "Index"
+
+  fn index_route_method(route: Self): U8[] //< that route's method name
+    //<
+    //< **`Index_place`'s and `Index_ref`'s differ on purpose**: the resolution looks up the name
+    //< (resolve_operator_method in sema/decl/resolve.kspls), so one name would leave a type
+    //< implementing both undecided.
+    switch route case .place
+      return "at"
+    case .ref_place
+      return "at_ref"
+    case .by_value
+      return "get"
+
+impl Sema_ctx
+  fn compute_effective_vis(r: Self$@, fn_node: Ast_node$@): sema_type_scope.Visibility //<
+    //< The "effective visibility" of the function being analysed
+    //<
+    //< A method reaches no wider than its impl's target type (a `pub fn f` on a `priv struct S`
+    //< cannot be called from where S cannot be named), so the narrower of the two is taken.
+    $v: = sema_type_scope.Visibility.internal
+    if fn_node != null && fn_node.sym_ptr != null
+      v = (Sema_symbol$@::fn_node.sym_ptr).vis
+    if r.fn_ctx.impl_name.len > 0
+      base: = r.fn_ctx.impl_name.get_generic_base_name()
+      target: = r.symtab.resolve_fqn(base) catch null
+      if target != null && target.kind.is_type()
+        v = narrower_vis(target.vis, v)
+    return v
+
+  fn place_denies_write(r: Self$@, node: Ast_node$@): Bool //<
+    //< Whether that place's write permission **cannot be confirmed**
+    //<
+    //< It is true where a read-only pointer is crossed or the type cannot be followed
+    //< (fail-closed).
+    //< Both the check on writes (sema/body/stmt.kspls) and whether `x@` becomes read-only
+    //< (sema/body/postfix.kspls) use it: blocking only the assignment would let the same place's
+    //< address escape as a mutable pointer.
+    if node == null || node.kind_id != .k_expr_postfix || node.children.len < 2
+      return false // a bare variable, a literal: no pointer is crossed
+    op_node: = node.get_postfix_op()
+    if op_node == null
+      return false
+    op: = op_node.text
+    if !op.equals("$") && !op.equals("[") && !op.equals(".")
+      return false // a call, a cast: the caller's other checks handle it
+    recv: = node.get_postfix_receiver()
+    if recv == null || recv.is_explicit_cast()
+      return false
+    if op.equals("[")
+      // **A subscript through a user-defined `at` stops at the pointer it returns**: **that
+      // pointer's type**, not the path's root, decides the permission (the `.` levels stop the
+      // same way, which is why an `x.s.ptr$` in the same frame passes). A fixed-length array
+      // returns no pointer, so the walk descends.
+      if r.index_stops_permission_walk(recv.type_id)
+        return false
+      return r.place_denies_write(recv)
+    recv_tid: = recv.type_id
+    if r.env.is_pointer(recv_tid)
+      return r.env.is_const(r.env.strip_ptr(recv_tid))
+    if op.equals("$")
+      return true // `$` on a non-pointer: the type could not be followed
+    return r.place_denies_write(recv)
+
+  fn place_crosses_const_elem(r: Self$@, node: Ast_node$@): Bool //<
+    //< Whether an **array/slice of immutable elements** is crossed anywhere on the path
+    //<
+    //< Not only the outermost postfix counts.
+    //<
+    //< Caution: **Apply it to all three operations**: blocking only the assignment leaves two
+    //< holes, taking the place's address as a mutable pointer and calling a `Self$@` method. An
+    //< explicit cast needs no special case (the check reads the receiver's type).
+    if node == null || node.kind_id != .k_expr_postfix
+      return false
+    op_node: = node.get_postfix_op()
+    recv: = node.get_postfix_receiver()
+    if op_node == null || recv == null
+      return false
+    if op_node.text.equals("[") && r.env.const_elem_of(recv.type_id)
+      return true
+    return r.place_crosses_const_elem(recv)
+
+  fn binding_value_type(r: Self$@, type_id: I32, is_mut: Bool): I32 //<
+    //< The type a mutable binding (`$a: …`) holds
+    //<
+    //< It holds a **copy**, so its type is what the copy can write (details: copy_value_type in
+    //< `sema/type/query.kspls`). A fixed-length array's elements follow the `$` before the name
+    //< ("The two axes of mutability" in docs/SPEC-language.md); a slice's or a pointer's contents
+    //< are **separate memory**, so the postfix level (`U8$[]` / `U8$@`) carries their permission.
+    if !is_mut
+      return type_id
+    return r.env.copy_value_type(type_id)
+
+  fn index_route(r: Self$@, recv_node: Ast_node$@, recv_id: I32): Index_route //<
+    //< Decides which route an `a[i]` resolves to
+    //<
+    //< Caution: **Keep the decision in this one function.** If the read path (infer_postfix_array
+    //< in sema/body/postfix.kspls) and the assignment path (sema/body/stmt.kspls) decided
+    //< separately, one could take `at` and the other `get`/`set`, and `xs[0] = 5` would become
+    //< broken C calling the two-argument `get` with three, with zero diagnostics from ksplc.
+    base_id: = r.env.strip_ptr(recv_id)
+    writable: = recv_node == null || !r.place_is_readonly(recv_node)
+    if r.env.has_implemented_operator_trait(base_id, "Index_place") &&
+      (writable || !r.index_place_wants_writable(base_id))
+      return Index_route.place
+    if r.env.has_implemented_operator_trait(base_id, "Index_ref")
+      return Index_route.ref_place
+    return Index_route.by_value
+
+  fn index_only_reads(r: Self$@, route: Index_route, recv_id: I32): Bool //<
+    //< Whether the subscript can only return a read-only place (`Index_ref` without `Index_mut`)
+    //<
+    //< Only the assignment's diagnostics use it; with `Index_mut` the error is "assigned into a
+    //< read-only receiver".
+    $is_ref: = false
+    switch route case .ref_place
+      is_ref = true
+    default {}
+    if !is_ref
+      return false
+    return !r.env.has_implemented_operator_trait(r.env.strip_ptr(recv_id), "Index_mut")
+
+  fn reject_const_index_place(r: Self$@, target_id: I32, err_node: Ast_node$@) //<
+    //< Rejects an `Index_place` whose `at` returns **an unwritable place**
+    //<
+    //< **A container with immutable elements can implement only `Index_ref`** ("Indexing" in
+    //< `../../../docs/SPEC-language.md`). Where the immutability comes from a type argument
+    //< (`Slice<|T|>`) the declaration cannot show it, so each instance is checked. If not rejected,
+    //< the generated C only warns about the discarded const and **the write succeeds** (Principle
+    //< 2).
+    if sym: = r.resolve_operator_method(target_id, "at")
+      if sym.node == null
+        return
+      ret_node: = sym.node.get_decl_type_node()
+      if ret_node == null
+        return
+      ret_id: = ret_node.type_id
+      if !r.env.is_pointer(ret_id) || !r.env.is_const(r.env.strip_ptr(ret_id))
+        return
+      r.err(err_node,
+        "a type whose elements are immutable cannot implement 'Index_place': its 'at' must return a \
+          writable place, but here it returns a read-only one. Implement 'Index_ref' instead, or \
+          put 'Index_place' on the mutable spelling only (write the impl target as 'Name<|$T|>')")
+
+  priv fn index_place_wants_writable(r: Self$@, base_id: I32): Bool //<
+    //< Whether an `Index_place` implementation wants **a writable receiver**
+    //<
+    //< Only `at(r: Self@, …)` does not: it merely reads the descriptor and returns the pointer
+    //< inside (a borrowed view). `at(r: Self$@, …)` modifies it (a container it owns).
+    if sym: = r.resolve_operator_method(base_id, "at")
+      if sym.node == null
+        return true
+      p_list: = sym.node.get_fn_params()
+      if p_list == null
+        return true
+      for p in base_ast_ext.Param_cursor.new(p_list, false)
+        return !p.get_decl_type_node().spells_readonly_ptr()
+    return true
+
+  fn index_stops_permission_walk(r: Self$@, recv_id: I32): Bool //<
+    //< Whether the subscript **ends the permission walk there**
+    //<
+    //< Caution: **Both places that walk the path must call this** (place_denies_write below, and
+    //< enforce_mutability in `../body/write_perm.kspls`).
+    base_id: = r.env.strip_ptr(recv_id)
+    if !r.env.has_implemented_operator_trait(base_id, "Index_place")
+      return false
+    return !r.index_place_wants_writable(base_id)
+
+  fn place_is_readonly(r: Self$@, node: Ast_node$@): Bool //<
+    //< True where that place cannot be written to
+    //<
+    //< 1. the path crosses a read-only pointer or cannot be followed (place_denies_write); 2. the
+    //< place's own type is immutable (a `const ro: U8[4]`'s `ro[0]` is `U8 immut`); 3. the root
+    //< binding reached with no pointer/slice crossed is immutable (`v: S`, `const cs`).
+    //< Caution: **Use it where an address is taken implicitly too** (a `Self$@` receiver), or `cs.n
+    //< = 9` is rejected while `cs.bump()` writes to ROM; rule 3 is why a writing method needs a `$`
+    //< binding.
+    if node == null
+      return false
+    if r.place_denies_write(node)
+      return true
+    // Caution: **Apply the assignment's check on immutable elements here too**, or a `Self$@`
+    // method called on the place of a rejected `b.imm[0].v = 1` could still write.
+    if r.place_crosses_const_elem(node)
+      return true
+    // Not for a pointer-typed node: its "place" is **the variable holding** the pointer, whatever
+    // it points at (a `$p: U8@`'s `p@` may be a mutable pointer rewriting `p`).
+    if !r.env.is_pointer(node.type_id) && r.env.is_const(node.type_id)
+      return true
+    // A receiver that is itself a read-only pointer (`hp: Holder@`): a method call's receiver is
+    // not in the argument list, so the argument type matching misses it.
+    if r.env.is_pointer(node.type_id) &&
+      r.env.is_const(r.env.strip_ptr(node.type_id))
+      return true
+    // Rule 3 does not apply where this level is a pointer or a slice: what is written is **the
+    // pointee or the element**, which the type decides. Applied, `buf.fill(0)` on a `buf: U8$[]`
+    // would demand `$buf` while `buf[0] = 0` would not ("The two axes of mutability" in
+    // docs/SPEC-language.md). `x@` **must not take** this shortcut (see root_binding_is_immutable).
+    if r.env.is_pointer(node.type_id) || r.env.is_slice(node.type_id)
+      return false
+    return r.root_binding_is_immutable(node, false)
+
+  fn root_binding_is_immutable(r: Self$@, node: Ast_node$@, const_only: Bool): Bool //<
+    //< Whether the root binding reached without crossing a pointer or slice is immutable
+    //<
+    //< **This level's own type is not checked**, or an immutable `s: U8[]`'s `s@` would become a
+    //< `U8[]$@` writable through an output parameter. The recursion stops where a receiver is a
+    //< pointer; stopping on the outermost type is place_is_readonly's job.
+    if node == null
+      return false
+    if node.kind_id == .k_identifier || node.kind_id == .k_expr_path
+      name: = node.get_path_or_ident_name()
+      dot: = name.find_char('.')
+      root: = name.sub(0, dot) if dot >= 0 else name
+      if root.len == 0
+        return false
+      sym: = r.symtab.resolve(root) catch null
+      if sym == null
+        return false
+      if const_only
+        switch sym.kind case .constant
+          return true
+        default
+          return false
+      return !sym.flags.is_mut
+    if node.kind_id != .k_expr_postfix || node.children.len < 2
+      return false
+    op: = node.get_postfix_op()
+    if op == null || (!op.text.equals(".") && !op.text.equals("["))
+      return false // `$` descends to the pointee, which the type decides
+    recv: = node.get_postfix_receiver()
+    if recv == null || r.env.is_pointer(recv.type_id)
+      return false // a pointer was crossed
+    if op.text.equals("[")
+      // A fixed-length array's elements are part of the value itself (a `const cs: H`'s
+      // `cs.buf[0]` is in ROM), so it descends; a slice's elements are separate memory.
+      if !r.env.is_array(r.env.get_real_type(recv.type_id))
+        return false
+    return r.root_binding_is_immutable(recv, const_only)
+
+  fn check_const_decl_storage(r: Self$@, type_id: I32, name: U8[], loc: Ast_node$@) //<
+    //< Checks that a `const` declaration holds no "writable element"
+    //<
+    //< A `const`'s value is immutable and at top level sits in `.rodata` (ROM), so a `$` on its
+    //< elements can write nothing (Principle 5). If allowed, C fails to compile the generated code
+    //< and LLVM fails at run time. It descends into neither **a struct's fields** nor a pointer,
+    //< whose target can be in RAM (`const p: I32$@ = ram@;` is legitimate).
+    $seen: = List<|I32|>.new()
+    defer seen.free()
+    if !r.find_mut_in_const_storage(type_id, seen@)
+      return
+    // The `$` is always on a slice level: a fixed-length array cannot have one on its element ("The
+    // two axes of mutability" in docs/SPEC-language.md).
+    r.clear_scratch()
+      .s("const '\{name\}' declares writable elements, but a const is immutable and is placed in \
+        read-only memory; drop the '$' from the slice stage (write 'T[]', not 'T$[]')")
+    r.err(loc, r.scratch.slice())
+
+  priv fn find_mut_in_const_storage(r: Self$@, type_id: I32, seen: List<|I32|>$@): Bool //<
+    //< Walks inside the value and returns true once it finds a mutable element
+    //<
+    //< Array and slice levels only (as above). seen stops it on a self-reference by value (a
+    //< `struct S { pub f: S; }` passes at present).
+    id: = r.env.get_clean_real_type(type_id)
+    for v in seen
+      if v == id
+        return false
+    seen.push(id)
+    // Caution: **Recognize a slice by its spelling.** A `T$[]` is a `Slice<|$T|>` instance, so
+    // classifying by the constructor cannot tell it from a plain struct, and a `const sl: U8$[]`
+    // would get through (is_slice_like in `../type/query.kspls`).
+    slice_elem: = r.env.slice_struct_elem(id)
+    if slice_elem != 0
+      return r.elem_is_mut_or_deeper(slice_elem, seen)
+    switch r.env.get_info(id) case .array(base_id, _size)
+      return r.elem_is_mut_or_deeper(base_id, seen)
+    default
+      return false
+
+  priv fn elem_is_mut_or_deeper(r: Self$@, base_id: I32, seen: List<|I32|>$@): Bool
+    if !r.env.is_const(base_id)
+      return true
+    return r.find_mut_in_const_storage(base_id, seen)
+
+  fn check_type_vis_leak(r: Self$@, node: Ast_node$@, owner_vis: sema_type_scope.Visibility,
+    position: U8[], owner: U8[]) //<
+      //< Checks that a type exposed outside is no less visible than its position.
+      //<
+      //< Such a type is a return value or a struct's field. owner_vis is the position's
+      //< **effective visibility**, from the caller: min(impl target, function) for a method,
+      //< min(struct, field) for a field; without it a closed type's `pub` members all read as
+      //< leaks. Argument positions and non-`pub` fields are not checked (the value does not go
+      //< outside).
+    if node == null
+      return
+    owner_rank: = vis_rank(owner_vis)
+    if owner_rank == 0
+      return // there is no visibility narrower than file_private
+    $seen: = List<|Ast_node$@|>.new()
+    defer seen.free()
+    r.check_type_node_vis(node, owner_rank, position, owner, seen@)
+
+  fn is_bound_generic_type(r: Self$@, sym: Sema_symbol$@): Bool //<
+    //< Whether sym is itself the generic type argument currently bound
+    //<
+    //< check_visibility_and_mark_used and check_type_node_vis both stop here, for one reason:
+    //< fix only one and a generic trait such as `std.lang.Index<|Idx, Output|>` reads as a leak
+    //< in the implementing type's file (`Output` bound to `Jump_label` and the like).
+    if sym.type_id == 0 || !sym.kind.is_type()
+      return false
+    base_type_id: = r.env.get_real_type(sym.type_id)
+    for arg in r.generics.args
+      if r.env.get_real_type(arg.bound_type_id) == base_type_id
+        return true
+    return false
+  priv fn check_type_node_vis(r: Self$@, node: Ast_node$@, owner_rank: I32, position: U8[],
+    owner: U8[], seen: List<|Ast_node$@|>$@) //<
+      //< Walks a type expression's subtree, checking the visibility of each declaration it names
+      //<
+      //< seen merges the type_expr / type_path / type_atom levels, which name the same declaration,
+      //< into one. **The AST is walked, not the type id**: a monomorphized type id holds only an
+      //< internal name, while resolve_type's def_node reaches the declaration as written even in a
+      //< generic.
+    if node == null
+      return
+    def: = node.def_node
+    if def != null && def.sym_ptr != null && !contains_node(seen, def)
+      seen.push(def)
+      sym: = Sema_symbol$@::def.sym_ptr
+      if sym.kind.is_type() && vis_rank(sym.vis) < owner_rank && !r.is_bound_generic_type(sym)
+        // Keep function and field names out of the message: a generic reaches here once per
+        // instance, and differing internal names slip past report_diagnostic's de-duplication (the
+        // file:offset:msg key), giving N entries for one line.
+        r.clear_scratch()
+          .s("\{position\} '\{sym.name\}' is less visible than the \{owner\} exposing it, so code \
+            that cannot name the type still receives a value of it. Widen the type's visibility to \
+            match, or narrow the \{owner\}.")
+        r.err(node, r.scratch.slice())
+    for child in node.children
+      r.check_type_node_vis(child, owner_rank, position, owner, seen)
+
+  priv fn is_exempt_generic_reference(r: Self$@, sym: Sema_symbol$@, defined_in: U8[]): Bool //<
+    //< Whether the reference only looks like "a name from an outside file" because of a generic
+    //<
+    //< A monomorphized template's type variable holds a type from the instantiating file.
+    //<
+    //< Caution: **Stop every visibility-based diagnostic here** (the reason is at
+    //< is_bound_generic_type).
+    if r.is_bound_generic_type(sym)
+      return true
+    for arg in r.generics.args
+      arg_base_id: = r.env.get_real_type(arg.bound_type_id)
+      clean_arg_str: = r.env.base_type_name(arg_base_id)
+      if clean_arg_str.len > 0
+        if sym.name.starts_with(clean_arg_str)
+          if sym.name.len > clean_arg_str.len && (sym.name.ptr + clean_arg_str.len)$ == '.'
+            return true
+        arg_sym: = r.symtab.resolve(clean_arg_str) catch null
+        if arg_sym != null && arg_sym.get_defined_in().len > 0
+          if defined_in.equals(arg_sym.get_defined_in())
+            return true
+    return false
+
+  priv fn vis_allows_here(r: Self$@, vis: sema_type_scope.Visibility, defined_in: U8[]): Bool //<
+    //< Whether the visibility level makes that declaration visible in the file being analysed
+    //<
+    //< **This is the one place that defines the three levels' meaning** (see "Structs (`struct`)"
+    //< in docs/SPEC-language.md); a stale copy would let an invisible name pass on one path.
+    if vis == sema_type_scope.Visibility.file_private
+      return false
+    if vis == sema_type_scope.Visibility.internal
+      return base_locate.package_of(defined_in).equals(base_locate.package_of(r.file_name))
+    return true
+
+  fn is_symbol_visible_here(r: Self$@, sym: Sema_symbol$@): Bool //<
+    //< Whether sym can be named from this position
+    //<
+    //< **It neither reports nor marks anything**, for asking without a diagnostic
+    //< (sema/body/struct_literal.kspls, on the fields a `::{ … }` omitted).
+    defined_in: = sym.get_defined_in()
+    if defined_in.len == 0 || defined_in.equals(r.file_name)
+      return true
+    if r.is_exempt_generic_reference(sym, defined_in)
+      return true
+    return r.vis_allows_here(sym.vis, defined_in)
+
+  fn is_field_visible_here(r: Self$@, field: Struct_field$@): Bool //<
+    //< is_symbol_visible_here for a struct field, which has no symbol of its own
+    return r.is_symbol_visible_here(field_symbol(field))
+
+  fn check_field_visibility(r: Self$@, field: Struct_field$@, loc: Ast_node$@) //<
+    //< check_visibility_and_mark_used for a struct field read or written at loc
+    r.check_visibility_and_mark_used(field_symbol(field), loc)
+
+  fn check_visibility_and_mark_used(r: Self$@, sym: Sema_symbol$@, loc: Ast_node$@)
+    if sym.flags.is_deprecated
+      r.clear_scratch().s("[W0702] Symbol '\{sym.name\}' is deprecated.")
+      r.warn(loc, r.scratch.slice())
+
+    defined_in: = sym.get_defined_in()
+    if defined_in.len == 0 || defined_in.equals(r.file_name)
+      return
+    if r.is_exempt_generic_reference(sym, defined_in)
+      return
+
+    // Caution: **Count only a reference that got past the exemption as "used from outside".** A
+    // generic's body is analysed in its template's file, so an exempted reference looks "called
+    // from `std/ds`"; if counted, a `pub` used only inside its unit escapes [I0402].
+    if !base_locate.package_of(defined_in).equals(base_locate.package_of(r.file_name))
+      sym.flags.is_used_outside_unit = true
+
+    if !r.vis_allows_here(sym.vis, defined_in)
+      r.clear_scratch().s("cannot access symbol '\{sym.name\}'\n(defined in \{defined_in\})")
+      r.err(loc, r.scratch.slice())
+
+priv fn field_symbol(field: Struct_field$@): Sema_symbol$@ //<
+  //< A struct field seen as a symbol, so the visibility rules read it as they read a declaration
+  sym: = Sema_symbol.new(sema_type_scope.Sym_kind.variable, field.name, field.node)
+  sym.vis = field.vis
+  return sym
+
+// ==========================================
+// The visibility written on a member must be no wider than the enclosing declaration's
+// (Principle 5): **the extra width widens nothing, even where it can be written.**
+// ==========================================
+
+priv fn check_one_member(c: Sema_ctx$@, member: Ast_node$@, limit: I32, kind: U8[], owner: U8[]) //<
+  //< Reports one member whose written visibility is wider than limit
+  if !member.has_explicit_visibility() || vis_rank(member.get_visibility()) <= limit
+    return
+  c.clear_scratch()
+    .s("this visibility is wider than '\{owner\}' itself, so it widens nothing: the \{kind\} cannot \
+      be reached from anywhere '\{owner\}' cannot be named. Drop it, or widen '\{owner\}'")
+  c.err(member, c.scratch.slice())
+
+fn impl_target_symbol(c: Sema_ctx$@, impl_node: Ast_node$@): Option<|Sema_symbol$@|> //<
+  //< An `impl`'s target type's declaration (none for a built-in or extern target)
+  //<
+  //< Caution: **Look it up by name.** The target's type node gets its type id only in body
+  //< analysis, so while declarations are collected it is still 0 (collect_impl_decl looks it up
+  //< the same way).
+  target_node: = impl_node.get_decl_type_node()
+  if target_node == null
+    return Option<|Sema_symbol$@|>.none
+  $raw: = target_node.extract_type_name()
+  defer raw.free()
+  fqn: = c.resolve_fqn_for_type(raw.slice().get_generic_base_name())
+  sym: = c.symtab.resolve_fqn(fqn) catch null
+  if sym == null || !sym.kind.is_type()
+    return Option<|Sema_symbol$@|>.none
+  return Option<|Sema_symbol$@|>.some(sym)
+
+fn check_member_visibility_width(root: Ast_node$@, c: Sema_ctx$@) //< checks every member's width
+  //<
+  //< Caution: **Call it after all types are registered** (an `impl`'s target is looked up by
+  //< name).
+  for top_node in root.children
+    n: = top_node.unwrap_top_level()
+    c.set_current_file(n.loc.file())
+    $owner_rank: I32 = -1
+    $owner: = ""
+    $kind: = "method"
+    switch n.kind_id case .k_decl_struct
+      owner_rank = vis_rank(n.get_visibility())
+      owner = n.get_decl_id_text()
+      kind = "field"
+    case .k_decl_trait
+      owner_rank = vis_rank(n.get_visibility())
+      owner = n.get_decl_id_text()
+    case .k_decl_impl
+      // An `impl` has no name, so the message names its target type.
+      if sym: = impl_target_symbol(c, n)
+        owner_rank = vis_rank(sym.vis)
+        owner = sym.name
+    default {}
+    if owner_rank < 0
+      continue
+    for member in n.children
+      switch member.kind_id case .k_struct_field, .k_decl_fn, .k_decl_fn_proto
+        check_one_member(c, member, owner_rank, kind, owner)
+      default {}

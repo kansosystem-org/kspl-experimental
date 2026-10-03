@@ -1,0 +1,223 @@
+//< Lays out the collected things, listed in order
+//<
+//< A table of contents, a list of notes, a chart, a window, the figure of what a source imports.
+//< **The contents do not go into the document.** Each is built from what was collected at layout
+//< time (written in, one changed heading would leave what follows stale, and nobody would see it).
+//< **The document's children are not laid out.**
+//< **The entry point is not here but [`flow.kspls`](flow.kspls).**
+//< It is split out to keep each file under 1000 lines (Principle 3).
+import "kspage/lay/absolute"
+import "kspage/lay/chart"
+import "kspage/lay/line" + { Pen }
+import "kspage/lay/page" + { placed_of, page_break, rewind }
+import "kspage/model/collect" { Collect }
+import "kspage/model/doc" + { Block, Rect }
+import "kspage/model/marker"
+import "kspage/model/paint"
+import "kspage/model/source"
+import "kspage/model/style" { Look, Sheet }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+fn place_notes(p: Pen$@, look: Look) //< lays out the collected notes in order
+  //<
+  //< **The number is the position in the list** (counted any other way, the mark disagrees).
+  //< Caution: **End the line after each note**, or the notes run onto one line. One space goes
+  //< between the number and the text.
+  for $i: Sz = 0; i < p.out.notes.len; i += 1
+    $sb: = Str_builder.new()
+    defer sb.free()
+    sb.s("\{i + 1\}").c(' ').s(p.out.notes.get(i).text)
+    p.x = p.left
+    p.line_start = p.out.boxes.len
+    was: = p.y
+    line.place_wrapped(p, p.arena.dup_str(sb.slice()), look, null)
+    if p.out.boxes.len > p.line_start
+      line.close_line(p, false)
+    // **Remember where the line is** (the same reason as the table of contents).
+    p.out.note_lines.push(page.Note_line::{ .top = was, .bottom = p.y, .note = i })
+
+fn place_source(p: Pen$@, b: Block$@, look: Look) //<
+  //< Lays out a window (cuts the pointed-at symbol from the borrowed text and lays it out)
+  //<
+  //< **The text does not go into the document.**
+  //< Caution: **Do not show nothing where nothing was provided.** The link itself is laid out as
+  //< one line; empty, nobody could tell "not provided yet" from "nothing there". **Not wrapping is
+  //< the style's job** (`Style.wrap`); this lays out one line at a time.
+  aim: = source.aim_of(b.aim)
+  $text: U8[] = ""
+  if p.out.hand != null && aim.found
+    text = p.out.hand.read(aim.file)
+  spot: = source.symbol_at(text, aim.name)
+  if !spot.found
+    place_line(p, b.aim, look)
+    return
+  cut: = text.sub(spot.at, spot.len)
+  $from: Sz = 0
+  for from <= cut.len
+    $end: Sz = from
+    for end < cut.len && (cut.ptr + end)$ != '\n'
+      end += 1
+    // **Do not let the final newline add an empty line.**
+    if end > from || from < cut.len
+      place_line(p, cut.sub(from, end - from), look)
+    from = end + 1
+
+priv const pull_columns: Sz = 3 //< how the figure of imports is laid out
+  //<
+  //< **It is fixed** (it cannot be moved by hand, so it does not go stale).
+priv const pull_lines: F32 = 2.0
+priv const pull_gap: F32 = 0.6
+priv const pull_most: Sz = 11 //< the cap on the number of boxes
+  //<
+  //< Caution: **Show the overflow as a number** (the reason is where it is used below).
+
+fn place_imports(p: Pen$@, b: Block$@, sheet: Sheet$@, look: Look) //<
+  //< Lays out the figure of what the source imports
+  //<
+  //< It builds the boxes and the lines from the borrowed text's `import`s.
+  //< **Neither the boxes nor the lines go into the document.** Once built they are passed to the
+  //< absolute-coordinate layout, which decides a connecting line's direction and arrow. **Where
+  //< nothing was provided it behaves like a window.**
+  aim: = source.aim_of(b.aim)
+  $text: U8[] = ""
+  if p.out.hand != null && aim.found
+    text = p.out.hand.read(aim.file)
+  if text.len <= 0
+    place_line(p, b.aim, look)
+    return
+  pulls: = List<|U8[]|>.create(p.arena)
+  source.pulls_of(text, pulls)
+  tall: = p.out.metrics(look.font).line_height() * pull_lines
+  step: = tall * (1.0F32 + pull_gap)
+  room: = p.right - p.left
+  wide: = room / F32::pull_columns - tall * pull_gap
+  shown: = pulls.len if pulls.len <= pull_most else pull_most
+  rows: = (shown + pull_columns - 1) / pull_columns
+  high: = step * F32::(rows + 1)
+  holder: = pulled(b, aim, pulls, shown, wide, tall, step, p.arena)
+  absolute.hang_framed(p.out, holder, sheet,
+    Rect::{ .x = p.left, .y = p.y, .w = room, .h = high }, look, p.arena)
+  p.y += high
+  p.x = p.left
+  p.line_start = p.out.boxes.len
+
+priv fn pulled(b: Block$@, aim: source.Aim, pulls: List<|U8[]|>$@, shown: Sz, wide: F32, tall: F32,
+  step: F32, arena: Arena$@): Block$@ //<
+    //< Builds the figure's boxes and lines
+    //<
+    //< Caution: **Make them in the layout's arena** (in the document, they would be saved and show
+    //< up in a diff). The name is a number, which a connecting line refers to. **The centre is 0.**
+  holder: = doc.new_block(b.style, arena)
+  $sb: = Str_builder.new()
+  defer sb.free()
+  line_style: = arena.dup_str(paint.pull_line_name(b.style, sb@))
+  mid: = (F32::pull_columns - 1.0F32) / 2.0F32 * (wide + tall * pull_gap)
+  boxed(holder, b.style, aim.file, Rect::{ .x = mid, .y = 0.0, .w = wide, .h = tall }, "0", arena)
+  for $i: Sz = 0; i < shown; i += 1
+    at: = Rect::{ .x = F32::(i % pull_columns) * (wide + tall * pull_gap),
+      .y = step * F32::(i / pull_columns + 1), .w = wide, .h = tall }
+    $no: = Str_builder.new()
+    defer no.free()
+    no.s("\{i + 1\}")
+    name: = arena.dup_str(no.slice())
+    boxed(holder, b.style, pulls.get(i), at, name, arena)
+    tie: = holder.add_child(line_style)
+    tie.frame = Option<|Rect|>.some(at)
+    tie.tie_from = "0"
+    tie.tie_to = name
+  // Caution: **Show the overflow as a number.** Cut silently, the imports would look fewer.
+  if pulls.len > shown
+    $rest: = Str_builder.new()
+    defer rest.free()
+    rest.s("+\{pulls.len - shown\}")
+    at: = Rect::{ .x = F32::(shown % pull_columns) * (wide + tall * pull_gap),
+      .y = step * F32::(shown / pull_columns + 1), .w = wide, .h = tall }
+    boxed(holder, b.style, rest.slice(), at, "", arena)
+  return holder
+
+priv fn boxed(holder: Block$@, style_name: U8[], text: U8[], at: Rect, name: U8[], arena: Arena$@) //<
+  //< Adds one box
+  //<
+  //< Caution: **Copy the text into the arena too** (a borrowed text moves when borrowed again).
+  one: = holder.add_child(style_name)
+  one.frame = Option<|Rect|>.some(at)
+  one.name = name
+  one.add_text(arena.dup_str(text))
+
+priv fn place_line(p: Pen$@, text: U8[], look: Look) //< lays out one line and ends it
+  //<
+  //< **Not ended, the next text would continue on the same line.**
+  p.x = p.left
+  p.line_start = p.out.boxes.len
+  // An empty line gets one box too (`line.place_wrapped`), **so it keeps its height** and the
+  // source's blank line is kept.
+  line.place_wrapped(p, text, look, null)
+  line.close_line(p, false)
+
+priv fn collected(sheet: Sheet$@, b: Block$@): Bool //<
+  //< Whether that heading is listed in the table of contents
+  //<
+  //< **An unknown name is listed** (a typo does not silently empty the table of contents). It
+  //< depends on `Style.in_chapters` alone.
+  if s: = sheet.find(b.style)
+    return s.in_chapters
+  return true
+
+fn place_contents(p: Pen$@, sheet: Sheet$@, look: Look, step: F32) //<
+  //< Lays out the table of contents' entries
+  //<
+  //< Caution: **End the line after each entry**, or entries of different depths run onto one
+  //< line. One depth's indent is the contents style's indent.
+  base: = p.left
+  // The buffer that builds the chapter numbers.
+  // **Write them the same way as the body's headings**, or the number's format differs between
+  // the table of contents and the body.
+  $mk: = Str_builder.new()
+  defer mk.free()
+  for $i: Sz = 0; i < p.out.headings.len; i += 1
+    h: = p.out.headings.get(i)
+    // **Some headings are not listed** (the contents' own heading; `in_chapters`). The index (`i`)
+    // is used as it is: `toc_lines` points at the heading's index, so closing up the gaps would
+    // jump to another heading.
+    if !collected(sheet, h.block)
+      continue
+    p.left = base + step * F32::(h.level - 1)
+    p.x = p.left
+    p.line_start = p.out.boxes.len
+    was: = p.y
+    mk.clear()
+    if s: = sheet.find(h.block.style)
+      marker.mark_outline_into(mk@, s.marker, h.number)
+    if mk.len > 0
+      // Caution: **Copy the text into the arena.** The builder is reused on the next line, so
+      // uncopied **every box points at the last number**.
+      line.place_wrapped(p, p.arena.dup_str(mk.slice()), look, null)
+    line.place_wrapped(p, h.text, look, null)
+    if p.out.boxes.len > p.line_start
+      line.close_line(p, false)
+    // **Remember where the line is**: it is the only way from a click back to the heading.
+    p.out.toc_lines.push(page.Toc_line::{ .top = was, .bottom = p.y, .head = i })
+  p.left = base
+  p.x = base
+
+fn place_chart(p: Pen$@, b: Block$@, sheet: Sheet$@, look: Look, kind: Collect) //< lays one chart
+  //<
+  //< **The style decides the height** (`Style.height`). **A chart is not split**: where it does
+  //< not fit it moves whole to the next page. [`chart.kspls`](chart.kspls) builds the contents.
+  at: = Rect::{ .x = p.left, .y = p.y, .w = p.right - p.left, .h = 0.0 }
+  tall: = chart.place(p.out, b, sheet, at, look, kind, p.arena)
+  if tall <= 0.0
+    return
+  if top: = page_break(p.page_height, p.y, tall)
+    // Caution: **Lay it out again if it moves** (a bar once laid out cannot be moved).
+    back: = placed_of(p.out)
+    rewind(p.out, back)
+    p.y = top
+    moved: = Rect::{ .x = p.left, .y = p.y, .w = p.right - p.left, .h = 0.0 }
+    chart.place(p.out, b, sheet, moved, look, kind, p.arena)
+  p.y += tall
+  p.x = p.left
+  p.line_start = p.out.boxes.len

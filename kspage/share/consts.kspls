@@ -1,0 +1,112 @@
+//< Writes a table out as KSPL constants (the table is the canonical source; one narrow job)
+//<
+//< The output is top-level `pub const` lines in the default notation (where the two notations
+//< differ only by `;`). Write where the output came from into it, once per file, not per symbol.
+//< **Do not grow it into a general code generator** — once people edit the output by hand,
+//< regenerating it silently throws their edits away.
+//< Caution: **Count the refused rows**, or a table row silently goes missing from the output.
+import "kspage/model/doc" { Block, Tile }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+struct Made //< the result of writing a table out
+  //<
+  //< Caution: **Return the number refused too**, so nothing is skipped silently.
+  rows: Sz
+  refused: Sz
+
+priv fn named(s: U8[]): Bool //< whether the text is usable as a name
+  //<
+  //< It must be a KSPL identifier, or the generated text does not build.
+  if s.len <= 0
+    return false
+  if !s[0].is_alpha()
+    return false
+  for $i: Sz = 1; i < s.len; i += 1
+    if !s[i].is_alnum()
+      return false
+  return true
+
+priv fn taken(seen: List<|U8[]|>$@, name: U8[]): Bool
+  for $i: Sz = 0; i < seen.len; i += 1
+    if seen.get(i).equals(name)
+      return true
+  return false
+
+priv fn cell_at(tiles: List<|Tile|>$@, row: Sz, column: Sz): Option<|Block$@|> //<
+  //< The cell at row `row`, column `column`
+  //<
+  //< A covered cell is none (only the top-left cell of a merge holds a value).
+  for $i: Sz = 0; i < tiles.len; i += 1
+    one: = tiles.get(i)
+    if one.row == row && one.column == column && one.block != null
+      return Option<|Block$@|>.some(one.block)
+  return Option<|Block$@|>.none
+
+priv fn quoted(out: Str_builder$@, text: U8[]) //< writes a text as a quoted KSPL text
+  //<
+  //< Caution: **Escape `"` and `\`**, or the text never closes.
+  out.c('"')
+  for $i: Sz = 0; i < text.len; i += 1
+    c: = text[i]
+    if c == '"' || c == '\\'
+      out.c('\\')
+    out.c(c)
+  out.c('"')
+
+fn write(t: Block$@, whence: U8[], out: Str_builder$@, arena: Arena$@): Made //<
+  //< Writes one table as a list of constants
+  //<
+  //< The first row is the heading. A cell holding a number (a formula's result too) is written as
+  //< a number, everything else as a text. `whence` names where the table came from; an empty one
+  //< still writes, but then **nobody can trace where the output came from**.
+  if t == null
+    return Made::{ .rows = 0, .refused = 0 }
+  out.s("// Caution: **This text is what was made. Do not direct it by hand.**\n")
+  out.s("// It comes from ")
+  if t.name.len > 0
+    out.s("the table \"").s(t.name).s("\"")
+  else
+    out.s("a table")
+  out.s(" in ")
+  out.s(whence if whence.len > 0 else "a place not named")
+  out.s(".\n\n")
+  tiles: = t.tiles_of(arena)
+  seen: = List<|U8[]|>.create(arena)
+  $made: = Made::{ .rows = 0, .refused = 0 }
+  // Skip the first row (it is the heading).
+  for $r: Sz = 1; r < t.children.len; r += 1
+    $key: Block$@ = null
+    if got: = cell_at(tiles, r, 0)
+      key = got
+    if key == null || key.inlines.len <= 0
+      continue
+    name: = key.inlines.get(0).showing().trim_spaces()
+    if !named(name) || taken(seen, name)
+      made.refused += 1
+      continue
+    seen.push(name)
+    out.s("pub const ").s(name)
+    switch cell_at(tiles, r, 1) case .some(val)
+      wrote_value(out, val)
+    case .none
+      // A missing cell becomes an empty text (the row is kept).
+      out.s(": U8[] = \"\"\n")
+    made.rows += 1
+  return made
+
+priv fn wrote_value(out: Str_builder$@, val: Block$@) //< writes the value
+  //<
+  //< A cell with no text becomes an empty text too (the row is kept).
+  if val.inlines.len <= 0
+    out.s(": U8[] = \"\"\n")
+    return
+  cell: = val.inlines.get(0)
+  if num: = cell.figure()
+    out.s(": F64 = \{num\}\n")
+    return
+  out.s(": U8[] = ")
+  quoted(out, cell.showing())
+  out.c('\n')

@@ -1,0 +1,391 @@
+import "ksos/net/link" as netlink
+import "ksos/net/mini_ipv4" as net
+import "ksos/net/mini_mqtt" as mqtt
+import "ksos/net/tcp_conn" as tcpc
+import "std/bytes"
+import "std/chars" // tests on one character, and slicing
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// ksos/net/tcp_conn: tracking one TCP connection's seq/ack.
+//
+// **It only runs for real on an RP2040 over USB CDC-NCM (`ksos-rp2040-net`)**, which QEMU has no
+// model of, so the regression is reproduced on a host: a fake ksos/net/link.Link returns one
+// prepared frame instead of hardware.
+// ==========================================
+const peer_ip: U32 = 0x0A000001 // 10.0.0.1
+const our_ip: U32 = 0x0A000005 // 10.0.0.5
+const our_port: U16 = 40000
+const peer_port: U16 = 80
+const peer_isn: U32 = 5000
+const our_isn: U32 = 1000
+
+// The fake link layer. It holds one frame and returns it once.
+$fake_frame: U8[1600] = ::{}
+$fake_len: Sz = 0
+$fake_ready: Bool = false
+$sent_count: U32 = 0
+
+// Whether sending succeeds can be set (on real hardware a failure cannot be chosen).
+$fake_send_ok: Bool = true
+
+priv fn fake_send_frame(_frame: U8[], _len: Sz): Bool
+  if !fake_send_ok
+    return false
+  sent_count += 1
+  return true
+
+priv fn fake_rx_available(): Bool
+  return fake_ready
+
+priv fn fake_recv_frame(out: U8$[]): Sz
+  if !fake_ready
+    return 0
+  $n: = fake_len
+  if n > out.len
+    n = out.len
+  for i in Range.asc(n)
+    out[i] = fake_frame[i]
+  fake_ready = false
+  return n
+
+priv fn fake_link(): netlink.Link
+  return netlink.Link::{ .send_frame = fake_send_frame, .rx_available = fake_rx_available,
+    .recv_frame = fake_recv_frame }
+
+priv fn stage_segment($payload: U8$[], seq: U32) //<
+  //< Puts a data segment of payload.len bytes on the fake link
+  for i in Range.asc(payload.len)
+    payload[i] = U8::(i % 251) // a prime, so the period does not line up with the buffer
+  fake_len = net.build_tcp_segment(U8$[]::fake_frame, 0x0000, 0x00000002, 0x0000, 0x00000001,
+    peer_ip, our_ip, peer_port, our_port, seq, our_isn + 1, net.tcp_flag_ack | net.tcp_flag_psh,
+    payload)
+  fake_ready = true
+
+$conn: tcpc.Tcp_conn
+$payload_buf: U8[1200] = ::{}
+$got: U8[1200] = ::{}
+
+fn test_tcp_conn_segment_larger_than_buffer() //<
+  //< A segment larger than the caller's buffer is returned in parts, not truncated
+  //<
+  //< Caution: **Do not truncate a segment to the caller's buffer size**, or the connection can
+  //< never be read again (the reason is at `rx_pending_off` in ksos/net/tcp_conn.kspls).
+  verdict
+    .start("[ksos/net] splitting a segment larger than the buffer and handing it over (not \
+      truncating) test...")
+
+  stage_segment(U8$[]::payload_buf, peer_isn + 1)
+  link: = fake_link()
+  conn = tcpc.make(link, 0x0000, 0x00000002, 0x0000, 0x00000001, our_ip, peer_ip, our_port,
+    peer_port, our_isn + 1, peer_isn + 1)
+
+  // The buffer is 500 bytes. A 1200-byte segment should come out as 500 + 500 + 200.
+  $total: Sz = 0
+  $calls: U32 = 0
+  for total < 1200 && calls < 10
+    n: = tcpc.tcp_stream_recv(Void$@::conn@, got[total]@, 500)
+    calls += 1
+    if n <= 0
+      break
+    total += n
+
+  assert(total == 1200,
+    "a 1200-byte segment must be delivered in full across several calls, not truncated")
+  assert(calls == 3, "500 + 500 + 200 must take exactly three calls")
+  // Caution: Check the content too: the lengths can match with the order swapped.
+  $mismatch: Sz = 0
+  for i in Range.asc(1200)
+    if got[i] != payload_buf[i]
+      mismatch += 1
+  assert(mismatch == 0, "the reassembled bytes must match the segment payload exactly")
+  // Once everything is returned, it must equal the peer's next seq.
+  assert(conn.peer_seq == peer_isn + 1 + 1200,
+    "peer_seq must advance by the whole payload once it has all been handed over")
+
+  verdict
+    .pass("even where one segment does not fit the buffer, the remainder is carried over and all of \
+      it handed over in order.")
+
+fn test_tcp_conn_rejects_wrong_seq() //<
+  //< A segment whose seq differs from the expected one is dropped
+  //<
+  //< Reordering is out of scope by design. It also checks that dropping it leaves the kept state
+  //< clean.
+  verdict
+    .start("[ksos/net] throwing a segment whose seq does not match away (not dirtying the state) \
+      test...")
+
+  link: = fake_link()
+  conn = tcpc.make(link, 0x0000, 0x00000002, 0x0000, 0x00000001, our_ip, peer_ip, our_port,
+    peer_port, our_isn + 1, peer_isn + 1)
+
+  stage_segment(U8$[]::payload_buf, peer_isn + 999) // a seq that differs from the expected one
+  n_bad: = tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500)
+  assert(n_bad < 0, "a segment with an unexpected seq must be reported as want-read")
+  assert(conn.peer_seq == peer_isn + 1, "a rejected segment must not advance peer_seq")
+
+  // Next, one with the right seq must be readable.
+  stage_segment(U8$[]::payload_buf, peer_isn + 1)
+  n_ok: = tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500)
+  assert(n_ok == 500, "the next in-order segment must still be readable")
+
+  verdict.pass("throwing a wrong order away does not dirty the carried-over state.")
+
+fn test_tcp_conn_send_is_partial() //< sending is one frame per call
+  //<
+  //< A request over the limit (1400) becomes a partial send (send_t's contract).
+  verdict.start("[ksos/net] a send request over the ceiling becoming a partial send test...")
+
+  link: = fake_link()
+  conn = tcpc.make(link, 0x0000, 0x00000002, 0x0000, 0x00000001, our_ip, peer_ip, our_port,
+    peer_port, our_isn + 1, peer_isn + 1)
+  sent_count = 0
+  n: = tcpc.tcp_stream_send(Void$@::conn@, payload_buf[0]@, 1200)
+  assert(n == 1200, "1200 bytes fit under the 1400-byte per-frame limit")
+  assert(sent_count == 1, "one call must put exactly one frame on the link")
+  assert(conn.our_seq == our_isn + 1 + 1200, "our_seq must advance by what was sent")
+
+  verdict.pass("one frame per call, and seq advances by exactly that much.")
+fn test_tcp_conn_send_failure_does_not_advance_seq() //<
+  //< **our_seq must not advance when it could not send**
+  //<
+  //< The reason is at `tcp_stream_send` in ksos/net/tcp_conn.kspls. A single-buffer link (the
+  //< RP2040's USB NCM) hits it all the time.
+  verdict.start("[ksos/net] not advancing seq where it could not send test...")
+
+  link: = fake_link()
+  conn = tcpc.make(link, 0x0000, 0x00000002, 0x0000, 0x00000001, our_ip, peer_ip, our_port,
+    peer_port, our_isn + 1, peer_isn + 1)
+  sent_count = 0
+  fake_send_ok = false
+  n_fail: = tcpc.tcp_stream_send(Void$@::conn@, payload_buf[0]@, 100)
+  assert(n_fail == 0, "a link that cannot send right now must be reported as 0 bytes sent")
+  assert(conn.our_seq == our_isn + 1, "a failed send must not advance our_seq")
+  assert(sent_count == 0, "nothing must have been counted as sent")
+
+  // Called again with the same data, it sends and seq advances.
+  fake_send_ok = true
+  n_ok: = tcpc.tcp_stream_send(Void$@::conn@, payload_buf[0]@, 100)
+  assert(n_ok == 100, "retrying the same bytes must succeed once the link is free")
+  assert(conn.our_seq == our_isn + 1 + 100, "our_seq must advance only for what was sent")
+
+  verdict.pass("a round that could not send returns 0 and does not advance seq.")
+
+fn test_frame_builders_pad_to_min() //<
+  //< A built frame is padded with 0 to the minimum length (60 bytes)
+  //<
+  //< Caution: **An Ethernet frame under 60 bytes breaks the standard** (see pad_to_min in
+  //< ksos/net/mini_ipv4.kspls). An ARP request (42 bytes) and an empty UDP/TCP are below it.
+  verdict
+    .start("[ksos/net] an assembled frame being filled with 0 to the smallest length (60) test...")
+
+  buf: U8[128] = ::{}
+  empty: = U8[]::{ .ptr = null, .len = 0 }
+  b: = U8$[]::buf
+  view: = U8[]::buf
+
+  // Refill with non-zero before each call, or a 0 left by the previous call hides a missed fill.
+  b.fill(0xEE)
+  arp_len: = net.build_arp_request(b, 0x0000, 0x00000001, our_ip, peer_ip)
+  assert(arp_len == 60, "a 42-byte ARP request must be padded out to the 60-byte minimum")
+  check_zero_tail(view, 42, arp_len,
+    "ARP request: the padding up to the minimum frame must be zero")
+
+  b.fill(0xEE)
+  udp_len: = net.build_udp_packet(b, 0x0000, 0x00000002, 0x0000, 0x00000001, our_ip, peer_ip,
+    our_port, peer_port, empty)
+  assert(udp_len == 60, "an empty UDP packet (42 bytes) must be padded out to 60")
+  check_zero_tail(view, 42, udp_len, "UDP packet: the padding up to the minimum frame must be zero")
+
+  b.fill(0xEE)
+  tcp_len: = net.build_tcp_segment(b, 0x0000, 0x00000002, 0x0000, 0x00000001, our_ip, peer_ip,
+    our_port, peer_port, our_isn, peer_isn, net.tcp_flag_ack, empty)
+  assert(tcp_len == 60, "an empty TCP segment (54 bytes) must be padded out to 60")
+  check_zero_tail(view, 54, tcp_len,
+    "TCP segment: the padding up to the minimum frame must be zero")
+
+  verdict
+    .pass("an ARP request, an empty UDP and an empty TCP are all filled with 0 to 60 bytes and \
+      returned.")
+
+priv fn check_zero_tail(buf: U8[], from: Sz, to: Sz, msg: U8$[]) //<
+  //< Checks that [from, to) is all 0 (an unfilled gap leaks what was there before)
+  for $i: Sz = from; i < to; i += 1
+    assert(buf[i] == 0, msg)
+fn test_frame_builders_refuse_a_small_buffer() //<
+  //< **A building function returns 0 if the frame does not fit the buffer**
+  //<
+  //< The reason is at `fits` in ksos/net/mini_ipv4.kspls.
+  verdict.start("[ksos/net] not assembling a frame that does not fit the buffer test...")
+
+  tiny: U8[40] = ::{} // not even enough for the smallest frame (60)
+  t: = U8$[]::tiny
+  empty: = U8[]::{ .ptr = null, .len = 0 }
+  arp_len: = net.build_arp_request(t, 0x0000, 0x00000001, our_ip, peer_ip)
+  assert(arp_len == 0,
+    "an ARP request must not be built into a buffer smaller than the minimum frame")
+  udp_len: = net.build_udp_packet(t, 0x0000, 0x00000002, 0x0000, 0x00000001, our_ip, peer_ip,
+    our_port, peer_port, empty)
+  assert(udp_len == 0, "a UDP packet must not be built into a too-small buffer")
+  tcp_len: = net.build_tcp_segment(t, 0x0000, 0x00000002, 0x0000, 0x00000001, our_ip, peer_ip,
+    our_port, peer_port, our_isn, peer_isn, net.tcp_flag_ack, empty)
+  assert(tcp_len == 0, "a TCP segment must not be built into a too-small buffer")
+
+  // A buffer big enough for the minimum frame but too small for the payload is the same.
+  small: U8[64] = ::{}
+  s: = U8$[]::small
+  body: U8[32] = ::{}
+  big_len: = net.build_tcp_segment(s, 0x0000, 0x00000002, 0x0000, 0x00000001, our_ip, peer_ip,
+    our_port, peer_port, our_isn, peer_isn, net.tcp_flag_ack, U8[]::body)
+  assert(big_len == 0, "a 54+32-byte segment must not be built into a 64-byte buffer")
+
+  verdict.pass("where it does not fit the buffer it returns 0 without writing.")
+
+fn test_mqtt_build_refuses_a_small_buffer() //<
+  //< **MQTT building also returns 0 if the packet does not fit**
+  //<
+  //< A string whose length is written but whose content does not fit makes the receiver read the
+  //< following bytes as the string.
+  //< An index out of range panics, and on real hardware the device stops there.
+  verdict.start("[ksos/net] not assembling an MQTT packet that does not fit the buffer test...")
+
+  // In a buffer it fits, the content of the stated length follows as it is.
+  big: U8[256] = ::{}
+  view: = U8[]::big
+  pub_len: = mqtt.build_publish(U8$[]::big, "kanso/pico", "hello")
+  // The fixed header (1) + Remaining Length (1) + 2+10 (the Topic Name) + 5 (the payload).
+  assert(pub_len == 19, "a PUBLISH with a 10-byte topic and a 5-byte payload must be 19 bytes")
+  assert(view.get_u16_be(2) == 10, "the topic length prefix must name the topic's real length")
+  topic_ok: = view.sub(4, 10).equals("kanso/pico")
+  assert(topic_ok, "the named length must be followed by exactly that many bytes")
+
+  tiny: U8[12] = ::{} // the length prefix fits but the topic does not
+  tiny_pub: = mqtt.build_publish(U8$[]::tiny, "kanso/pico", "hello")
+  assert(tiny_pub == 0, "build_publish must refuse a buffer that cannot hold the whole topic")
+  tiny_conn: = mqtt.build_connect(U8$[]::tiny, "kanso-pico", 60)
+  assert(tiny_conn == 0, "build_connect must refuse a small buffer instead of panicking")
+  four: U8[4] = ::{} // too small for the building work area (content_start=5)
+  tiny_dis: = mqtt.build_disconnect(U8$[]::four)
+  assert(tiny_dis == 0, "build_disconnect must refuse a buffer smaller than the working area")
+
+  // The limit is "the work area plus the content", not the finished length (19; see `fits` in
+  // ksos/net/mini_mqtt.kspls).
+  exact: U8[22] = ::{}
+  exact_pub: = mqtt.build_publish(U8$[]::exact, "kanso/pico", "hello")
+  assert(exact_pub == 19, "a buffer of exactly content_start + content_len must still build")
+  short1: U8[21] = ::{}
+  short_pub: = mqtt.build_publish(U8$[]::short1, "kanso/pico", "hello")
+  assert(short_pub == 0, "one byte less than the working area needs must be refused")
+
+  verdict
+    .pass("rather than let the naming and the content disagree it does not assemble, and it looks \
+      at the boundary's exact byte too.")
+fn test_tcp_parse_ignores_ethernet_padding() //<
+  //< **Ethernet's zero padding must not be counted as payload**
+  //<
+  //< A pure ACK is 54 bytes padded to 60 (the reason is at `parse_tcp_segment` in
+  //< ksos/net/mini_ipv4.kspls).
+  verdict.start("[ksos/net] not reading an ACK filled with 0 to 60 as data test...")
+
+  buf: U8[128] = ::{}
+  empty: = U8[]::{ .ptr = null, .len = 0 }
+  n: = net.build_tcp_segment(U8$[]::buf, 0x0000, 0x00000002, 0x0000, 0x00000001, peer_ip, our_ip,
+    peer_port, our_port, peer_isn + 1, our_isn + 1, net.tcp_flag_ack, empty)
+  assert(n == 60, "an empty segment is padded out to the 60-byte minimum")
+
+  seg: = net.parse_tcp_segment(U8[]::buf, n, peer_ip, peer_port, our_port)
+  assert(seg.ok, "a padded pure ACK is still a valid segment")
+  assert(seg.payload_len == 0, "the padding must not be counted as payload")
+
+  // The layer above too: peer_seq must not move when there is no readable data.
+  link: = fake_link()
+  conn = tcpc.make(link, 0x0000, 0x00000002, 0x0000, 0x00000001, our_ip, peer_ip, our_port,
+    peer_port, our_isn + 1, peer_isn + 1)
+  fake_len = n
+  for i in Range.asc(n)
+    fake_frame[i] = buf[i]
+  fake_ready = true
+  got_n: = tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500)
+  assert(got_n < 0, "a pure ACK carries no data, so the stream must report want-read")
+  assert(conn.peer_seq == peer_isn + 1, "a pure ACK must not advance peer_seq")
+
+  verdict.pass("it does not mistake the 0 filling for payload, and does not move peer_seq either.")
+priv fn parses(buf: U8[], len: Sz): Bool //<
+  //< Whether it parses as a segment addressed to this connection
+  //<
+  //< The expected value is not an argument, so each caller's line says what it expects.
+  return net.parse_tcp_segment(buf, len, peer_ip, peer_port, our_port).ok
+fn test_tcp_parse_rejects_malformed_headers() //< the lengths the peer declares are not trusted
+  //<
+  //< **Drop a segment whose declared lengths are too short, or whose data has not arrived.**
+  verdict.start("[ksos/net] throwing a segment whose naming is broken away test...")
+
+  $buf: U8[128] = ::{}
+  body: U8[20] = ::{}
+  b: = U8$[]::buf
+  base: = net.build_tcp_segment(b, 0x0000, 0x00000002, 0x0000, 0x00000001, peer_ip, our_ip,
+    peer_port, our_port, peer_isn + 1, our_isn + 1, net.tcp_flag_ack | net.tcp_flag_psh,
+    U8[]::body)
+  intact: = net.parse_tcp_segment(U8[]::buf, base, peer_ip, peer_port, our_port)
+  assert(intact.payload_len == 20, "the unmodified segment must parse with its real payload length")
+
+  // The data offset is under 5. If accepted, the TCP header itself would be returned as payload.
+  buf[46] = 0x40 // data offset = 4 words (16 bytes)
+  short_offset: = parses(U8[]::buf, base)
+  assert(!short_offset, "a TCP data offset below the 20-byte minimum must be rejected")
+  buf[46] = 0x50
+
+  // A version other than IPv4, which the EtherType alone would let through.
+  buf[14] = 0x65
+  wrong_version: = parses(U8[]::buf, base)
+  assert(!wrong_version, "a header that does not say version 4 must be rejected")
+  buf[14] = 0x45
+
+  // A fragment (the MF bit): nothing reassembles it, so it must not be read.
+  b.put_u16_be(20, 0x2000)
+  fragment: = parses(U8[]::buf, base)
+  assert(!fragment, "an IPv4 fragment must be rejected (there is no reassembly)")
+  b.put_u16_be(20, 0)
+
+  // The declared length has not arrived; if accepted, the payload would point outside the buffer.
+  truncated: = parses(U8[]::buf, base - 4)
+  assert(!truncated, "a frame shorter than its own IP total length must be rejected")
+  restored: = parses(U8[]::buf, base)
+  assert(restored,
+    "restoring every field must make it parse again (the checks above are the only difference)")
+
+  verdict.pass("the data offset, the version, a fragment and a cut-off tail are all thrown away.")
+fn test_tcp_parse_follows_ip_options() //<
+  //< The payload is found even on a header with IP options
+  //<
+  //< Caution: **Compute the TCP header's position from IHL.** If it is fixed at 20 bytes, a
+  //< peer's IP options are read as the port number.
+  verdict.start("[ksos/net] not losing the payload even on a header with IP options test...")
+
+  $buf: U8[128] = ::{}
+  body: U8[20] = ::{}
+  b: = U8$[]::buf
+  base: = net.build_tcp_segment(b, 0x0000, 0x00000002, 0x0000, 0x00000001, peer_ip, our_ip,
+    peer_port, our_port, peer_isn + 1, our_isn + 1, net.tcp_flag_ack | net.tcp_flag_psh,
+    U8[]::body)
+  assert(base == 74, "14 + 20 + 20 + 20 = 74 bytes, above the padding threshold")
+
+  // A 4-byte option (three NOPs plus the terminator) is inserted right after the IP header.
+  // Caution: Update IHL and Total Length to match.
+  // The checksum stops matching, but parse_tcp_segment does not verify it.
+  _moved: = b.copy_from(38, (U8[]::buf).sub(34, 40))
+  buf[34] = 0x01
+  buf[35] = 0x01
+  buf[36] = 0x01
+  buf[37] = 0x00
+  buf[14] = 0x46 // version 4, IHL = 6 words (24 bytes)
+  b.put_u16_be(16, 64) // Total Length = 24 + 20 + 20
+
+  seg: = net.parse_tcp_segment(U8[]::buf, base + 4, peer_ip, peer_port, our_port)
+  assert(seg.ok, "a segment with IP options is still a valid segment")
+  assert(seg.payload_off == 58, "the payload starts after the options and the TCP header")
+  assert(seg.payload_len == 20, "the payload length must not change because of the options")
+
+  verdict.pass("the payload can be read from the position shifted by the options' worth.")

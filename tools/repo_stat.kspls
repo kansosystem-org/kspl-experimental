@@ -1,0 +1,244 @@
+#!/usr/bin/env -S ksplc run
+//< A development tool that writes the repository's size on one page of text
+//<
+//< Neither the build nor CI calls it.
+//< **The line-count cap is not checked here**: `make test-conventions` checks the cap on a file's
+//< line count, and a copy would keep the number in two places.
+
+// ==========================================
+// Usage, and what it writes:
+//     ./out/ksplc_stage1.exe run tools/repo_stat.kspls [output folder]   # default out
+//   <out>/repo_stat.txt  the line count and comment rate per file, and the total per extension
+// ==========================================
+import "std/argp"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena, dealloc }
+import "std/seq"
+import "std/str" { Str_builder }
+import "std/strfmt"
+import "std/subproc"
+import "std/sys"
+import "tools/repo_stat_path" as path_kind + { Block_marks }
+
+priv const default_out: U8[] = "out"
+
+priv struct Stat //< one file's breakdown
+  //<
+  //< **`body` is "a line that is neither blank nor a comment line"** (imports and declarations
+  //< included). `trail`, a `body` line ending in a comment, is reported separately, or comments
+  //< are undercounted.
+  files: Sz
+  marked: Sz //< how many files have an extension with a comment mark (line or block)
+  lines: Sz
+  body: Sz
+  comment: Sz
+  blank: Sz
+  trail: Sz
+
+impl Stat //< adding one file's breakdown into a running total
+  fn add(r: Self$@, o: Stat)
+    r.files += o.files
+    r.marked += o.marked
+    r.lines += o.lines
+    r.body += o.body
+    r.comment += o.comment
+    r.blank += o.blank
+    r.trail += o.trail
+
+priv fn stat_file(path: U8[], marker: U8[], block: Block_marks): Stat //<
+  //< The counting follows `str.lines` (an unterminated last line counts too, unlike `wc -l`)
+  //<
+  //< Counted by hand, a difference from str.lines at the edge would go unnoticed. **`files == 0`
+  //< means "it could not be counted"** (it holds a NUL: binary), not an extension list, which
+  //< untracked executables always make stale. **A block's lines after the first are comments**,
+  //< including a block opened after code (`path_kind.opening` skips what a string holds).
+  body_bytes: = io.read_file(path) catch
+    return Stat::{ .files = 1 }
+  defer dealloc(Void$@::body_bytes.ptr)
+  if body_bytes.contains_nul()
+    return Stat::{}
+  $ls: = body_bytes.lines(null)
+  defer ls.free()
+  $st: = Stat::{ .files = 1, .marked = 1 if marker.len > 0 || block.open.len > 0 else 0,
+    .lines = ls.len }
+  $open: = false
+  for ln in ls
+    t: = ln.trim_spaces()
+    carried: = open
+    op: = path_kind.opening(ln, marker, block, open)
+    open = op.open
+    if t.len == 0
+      st.blank += 1
+    else if carried || (marker.len > 0 && t.starts_with(marker)) ||
+      (block.open.len > 0 && t.starts_with(block.open))
+      st.comment += 1
+    else
+      st.body += 1
+      if op.at >= 0
+        st.trail += 1
+  return st
+
+priv struct Ext_row //< the total per extension
+  //<
+  //< The extensions arrive in no order, and a `List` searched linearly is enough (a few dozen).
+  ext: U8[]
+  st: Stat
+
+priv fn bump_ext(rows: List<|Ext_row|>$@, ext: U8[], st: Stat)
+  for i in Range.asc(rows.len)
+    if rows.get(i).ext.equals(ext)
+      rows[i].st.add(st)
+      return
+  rows.push(Ext_row::{ .ext = ext, .st = st })
+
+priv const header: U8[] = "   lines    body comment   blank    cmt%   trail  "
+
+priv fn write_pct(b: Str_builder$@, st: Stat) //< the comment rate [%] to one decimal place
+  //<
+  //< Caution: **Leave blank lines out of the denominator**, or it changes with a writing habit.
+  den: = st.comment + st.body
+  if st.marked == 0 || den == 0
+    b.s("       -        -")
+    return
+  permille: = st.comment * 1000 / den
+  b.s("\{permille / 10:6\}.\{permille % 10\}%\{st.trail:8\}")
+
+priv fn write_cols(b: Str_builder$@, st: Stat) //< writes only the number columns
+  //<
+  //< **The caller writes the name after it** (a string is built only as a chain of writes).
+  b.s("\{st.lines:8\}\{st.body:8\}")
+  b.s("\{st.comment:8\}\{st.blank:8\}")
+  write_pct(b, st)
+  b.s("  ")
+
+priv const git_timeout_ms: I32 = 60000 //< how long one `git ls-files` may run
+priv const git_list_cap: Sz = 1 << 24 //< the most of a list kept; the repository's is far under it
+
+priv fn git_list(args: U8[][], arena: Arena$@): U8[]?fs.Fs_error //< what `git <args>` prints
+  //<
+  //< A git that is missing or refuses is an error, never an empty count.
+  $argv: = List<|U8[]|>.new(arena)
+  argv.push("git")
+  for a in args
+    argv.push(a)
+  r: = subproc.run_capture(argv.slice(), "", git_timeout_ms, git_list_cap, arena)
+  if r.spawn_failed || r.timed_out || r.exit_code != 0
+    io.err().s("\{sys.program_name()\}: git cannot list the files here\n").s(r.stderr_data)
+    throw fs.Fs_error.operation_failed
+  return r.stdout_data
+
+priv fn write_files(b: Str_builder$@, exts: List<|Ext_row|>$@, arena: Arena$@): Void?fs.Fs_error //<
+  //< 1. The line count per file
+  //<
+  //< Grouped by top-level folder, with a subtotal after each group and the total last. The files
+  //< are git's: the tracked and the untracked that are not ignored (`path_kind.listed`).
+  tracked: = git_list(U8[][]::{ "ls-files" }, arena)?
+  others: = git_list(U8[][]::{ "ls-files", "--others", "--exclude-standard" }, arena)?
+  files: = path_kind.listed(tracked, others, arena)
+  $rootb: = Str_builder.new()
+  defer rootb.free()
+  $sub: = Stat::{}
+  $root: = Stat::{}
+  $total: = Stat::{}
+  $gen: = Stat::{}
+  $top: U8[] = ""
+  b.s("== 1. per file ==\n\n\{header\}path\n")
+  for path in files
+    marker: = path_kind.comment_marker(path)
+    st: = stat_file(path, marker, path_kind.block_marks(path))
+    if st.files == 0
+      continue // binary
+    bump_ext(exts,
+      "(generated)" if path_kind.is_generated(path) else path_kind.ext_of(path), st)
+    if path_kind.is_generated(path)
+      gen.add(st)
+      continue // a generated file is in neither the subtotal nor the total (it is shown apart)
+    total.add(st)
+    cur: = path_kind.top_of(path)
+    if cur.len == 0
+      // **Collect the files directly under the root before writing them**: sorted, they fall
+      // between the folders and would split a group.
+      write_cols(rootb@, st)
+      rootb.s("\{path\}\n")
+      root.add(st)
+      continue
+    // Caution: **Write the subtotal before the next group's first line**, or it is one line off.
+    // Comparing with the previous group is enough: `listed` sorts, so a folder's files are
+    // consecutive.
+    if !cur.equals(top)
+      if top.len > 0
+        write_cols(b, sub)
+        b.s("\{top\}/ subtotal\n\n")
+      top = cur
+      sub = Stat::{}
+    write_cols(b, st)
+    b.s("\{path\}\n")
+    sub.add(st)
+  if top.len > 0
+    write_cols(b, sub)
+    b.s("\{top\}/ subtotal\n\n")
+  b.s(rootb.slice())
+  write_cols(b, root)
+  b.s("(files directly under the root) subtotal\n\n")
+  write_cols(b, total)
+  b.s("total (hand-written)\n")
+  write_cols(b, gen)
+  b.s("ksplc/seed.c (generated. not in the total above)\n\n")
+
+priv fn write_exts(b: Str_builder$@, exts: List<|Ext_row|>$@, arena: Arena$@) //<
+  //< 2. The total per extension
+  //<
+  //< **The rate is shown only for extensions that have a comment mark** (`.md`'s 0% would be
+  //< misread as "no comments").
+  b.s("== 2. per extension ==\n\n   files\{header\}ext\n")
+  sorted: = exts.order_by(fn(x: Ext_row, y: Ext_row; ): I32 {
+    return I32::(y.st.lines - x.st.lines);
+  }, arena)
+  for e in sorted
+    b.s("\{e.st.files:8\}")
+    write_cols(b, e.st)
+    b.s("\{e.ext\}\n")
+  b.c('\n')
+
+priv fn write_stat(out_dir: U8[], arena: Arena$@): Void?fs.Fs_error
+  $b: = Str_builder.new()
+  defer b.free()
+  $exts: = List<|Ext_row|>.new(arena)
+  write_files(b@, exts@, arena)?
+  write_exts(b@, exts@, arena)
+  save(out_dir, "repo_stat.txt", b.slice(), arena)?
+
+priv fn save(out_dir: U8[], name: U8[], data: U8[], arena: Arena$@): Void?fs.Fs_error
+  path: = fs.join(out_dir, name, arena)
+  io.write_file(path, data) catch
+    throw fs.Fs_error.operation_failed
+  io.out().s("wrote \{path\} (\{data.len\} bytes)\n")
+
+fn main(): I32 //< writes the repository's size on one page of text
+  arena: = Arena.new(64 * 1024 * 1024)
+  defer arena.free()
+  // Caution: **Do not parse the arguments by hand.** `std/argp` refuses an unknown `--name` and an
+  // undeclared positional (by hand, `repo_stat --bogus` makes a folder `--bogus/`).
+  p: = argp.Parser
+    .create(sys.program_name(), "put the repository's size into one sheet of text", arena)
+  p.positional("[output folder] the default is out/")
+  p.parse_or_exit(sys.args(), arena)
+  // Caution: **Do not silently drop an extra positional argument**; argp does not count them, so
+  // the maximum is checked here.
+  if p.rest.len > 1
+    io.err()
+      .s("\{sys.program_name()\}: there is only one output folder (\{p.rest.len\} were passed)\n")
+    return 1
+  out_dir: = p.rest.get(0) if p.rest.len > 0 else default_out
+
+  fs.mkdir_all(out_dir) catch e
+    io.err().s("\{sys.program_name()\}: cannot create \{out_dir\}: \{e\}\n")
+    return 1
+
+  write_stat(out_dir, arena) catch e
+    io.err().s("\{sys.program_name()\}: failed: \{e\}\n")
+    return 1
+  return 0

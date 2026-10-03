@@ -1,0 +1,74 @@
+//< The program for the check on the normalised AST's disk cache (ksplc/parse/ast_cache.kspls)
+//<
+//< The cache writes out what each node holds and reads it back, so a gap opens for any kind of
+//< node left untested. Here several std files are imported while declarations of many kinds sit
+//< side by side.
+//< `../suite/ast_cache_test.kspls` rewrites the marker string in the last output to check "is it
+//< rebuilt when the source changes". Do not delete it or split it up.
+//< Caution: **Do not copy that string into this comment.** The test rewrites the first place it
+//< finds, so if it hits the comment first, the code stays unchanged although a change was meant,
+//< and the check goes green having checked nothing.
+import "std/ds" { List }
+import "std/io"
+// Caution: **Keep the aliases even where they are not used.** This checks "a unit that imports
+// several std files", so the import declarations themselves are what goes into the cache (`_`
+// marks an alias that is not used).
+import "std/str" { Str_builder }
+
+priv enum Color //<
+  //< An enum has a `variant_name()` synthesised (parse/load.append_enum_variant_names)
+  //<
+  //< What is synthesised goes into the cache's unit too, so this exercises it.
+  red
+  green
+  payload(v: Sz)
+
+impl Color
+  priv fn describe(c: Self): U8[]
+    switch c case .red
+      return "r"
+    case .green
+      return "g"
+    case .payload(_v)
+      return "p"
+
+priv struct Point
+  x: Sz
+  y: Sz
+
+priv const scale: Sz = 7
+
+impl Point
+  fn norm1(r: Self@): Sz
+    return r.x + r.y
+
+// The normalisation decides whether a `#cfg()` is kept or dropped, so the same source gives a
+// different AST under different flags. `../suite/ast_cache_test.kspls` uses this to check that
+// the generated C changes with and without `--define=ac_cache_probe` (without the `--define` in
+// the key, the result would be the same).
+#cfg(ac_cache_probe)
+priv fn cfg_probe(): Sz
+  return 1
+
+#cfg(!ac_cache_probe)
+priv fn cfg_probe(): Sz
+  return 2
+
+fn main(): I32
+  p: = Point::{ .x = 3, .y = 4 }
+  $acc: Sz = p.norm1() * scale + cfg_probe()
+
+  $list: = List<|Sz|>.new()
+  defer list.free()
+  for i in Range.asc(4)
+    list.push(i * i)
+  for v in list
+    acc += v
+
+  $sb: = Str_builder.new()
+  defer sb.free()
+  sb.s(Color.red.describe()).s(Color.green.describe()).s(Color.payload(1).describe())
+  sb.s(Color.green.variant_name())
+
+  io.out().s("ac=\{acc\}/\{sb.slice()\}\n")
+  return 0

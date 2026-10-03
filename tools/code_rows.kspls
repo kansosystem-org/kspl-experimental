@@ -1,0 +1,94 @@
+//< Builds the table of diagnostic codes in `ksplc/docs/SPEC-tools.md` from the sections below it
+//<
+//< **The table is generated, never written by hand**: each row is one `#### [CODE] Name` heading,
+//< in the order the headings stand. Whether a code is off by default comes from
+//< `ksplc/base/lint_codes.kspls`, the codes' canonical source. `make code-table` writes the table,
+//< and `make test-conventions` refuses one that differs from what this file builds.
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+pub const spec_path: U8[] = "ksplc/docs/SPEC-tools.md" //< the document holding the table
+pub const registry_path: U8[] = "ksplc/base/lint_codes.kspls" //< the codes' canonical source
+
+priv const table_head: U8[] = "| The code | The name |" //< the line that opens the table
+priv const section_head: U8[] = "#### [" //< how a code's section heading opens
+
+priv fn is_fence(line: U8[]): Bool //< whether the line opens or closes a code block
+  return line.trim_start().starts_with("```")
+
+priv fn is_off(registry: U8[], code: U8[], arena: Arena$@): Bool //<
+  //< whether the code is off by default
+  //<
+  //< The registry answers with `info(false)` on the line after the code's `code.equals("…")`.
+  //< Caution: **Read the registry's text, not a copy of its answer**: `ksplc/` publishes nothing,
+  //< so its `is_default_on` cannot be called from here.
+  needle: = arena.text().s("code.equals(\"").s(code).s("\")").take()
+  $after: = false
+  for line in registry.lines(arena)
+    if after
+      return line.find_str("info(false)") >= 0
+    after = line.find_str(needle) >= 0
+  return false
+
+priv fn row_name(title: U8[], arena: Arena$@): U8[] //< a heading's title as a cell
+  //<
+  //< The first letter goes to lower case, as a cell continues the column's heading. **A `|` is
+  //< escaped**: a bare one splits the cell (`Option<|T|>` in H0704's title).
+  b: = arena.text()
+  for i in Range.asc(title.len)
+    c: = title[i]
+    if i == 0 && c >= 'A' && c <= 'Z' &&
+      !(title.len > 1 && title[1] >= 'A' && title[1] <= 'Z')
+      b.c(c - 'A' + 'a')
+    else if c == '|'
+      b.s("\\|")
+    else
+      b.c(c)
+  return b.take()
+
+priv fn rows_of(spec: U8[], registry: U8[], arena: Arena$@): U8[] //<
+  //< the table's body rows, each line ending in `\n`
+  b: = arena.text()
+  $in_fence: = false
+  for line in spec.lines(arena)
+    if is_fence(line)
+      in_fence = !in_fence
+    if in_fence || !line.starts_with(section_head)
+      continue
+    close: = line.find_char(']')
+    if close < 0
+      continue
+    code: = line.sub(section_head.len, close - section_head.len)
+    title: = line.sub_from(close + 1).trim_spaces()
+    b.s("| ").s(code).s(" | ").s(row_name(title, arena))
+    if is_off(registry, code, arena)
+      b.s(" (off by default)")
+    b.s(" |\n")
+  return b.take()
+
+pub fn with_table(spec: U8[], registry: U8[], arena: Arena$@): U8[] //<
+  //< The document with its table rebuilt
+  //<
+  //<
+  //< The rows run from the line after the table's rule (`| :-- | :-- |`) to the first line that
+  //< does not open with `|`. A document without the table comes back unchanged.
+  $out: = Str_builder.new()
+  defer out.free()
+  $state: I32 = 0 // 0 before the table, 1 at its rule, 2 in its rows, 3 after it
+  for line in spec.lines(arena)
+    if state == 2 && !line.starts_with("|")
+      out.s(rows_of(spec, registry, arena))
+      state = 3
+    if state == 2
+      continue
+    out.s(line).c('\n')
+    if state == 1
+      state = 2
+    if state == 0 && line.equals(table_head)
+      state = 1
+  if state == 2
+    out.s(rows_of(spec, registry, arena))
+  text: = out.slice()
+  // `lines` drops the final newline's empty line, so the copy keeps the document's own ending.
+  return arena.dup_str(text if spec.ends_with("\n") else text.sub(0, text.len - 1))

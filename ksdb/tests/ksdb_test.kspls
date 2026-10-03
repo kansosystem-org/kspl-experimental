@@ -1,0 +1,570 @@
+import "ksdb/log" as ksdblog
+import "ksdb/ram_store" as ram
+import "std/bytes"
+import "std/prng"
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// ksdb: checks that append-only records can still be read after a power cut.
+//
+// The medium is the RAM implementation (`ksdb/ram_store`), which **imitates flash's constraints**
+// (a write where nothing was erased only turns bits to 0).
+// ==========================================
+
+priv const sector: Sz = 256 //< a 256B sector × 4 = 1KB
+  //<
+  //< Small, so the tests can reach full and a sector's end; the logic does not depend on the size.
+priv $store_buf: U8[1024]
+
+priv const kind_sample: U16 = 1
+priv const kind_policy: U16 = 2
+
+fn test_append_and_replay() //< that it appends, reads back, and keeps the order
+  verdict.start("[ksdb] an appended record reads again, oldest first, test...")
+  store: = ram.make(U8$[]::store_buf, sector)
+  $lg: = ksdblog.Log.open(store)
+  assert(lg.used() == 0, "opening an erased place can write from the head")
+
+  lg.append(kind_sample, "one") catch panic("append should succeed on an empty store")
+  lg.append(kind_sample, "two") catch panic("append should succeed")
+  lg.append(kind_policy, "policy-blob") catch panic("append should succeed")
+
+  // Caution: Check by opening again; reusing the same `Log` passes even when the scan reads its
+  // own state instead of the medium.
+  $reopened: = ksdblog.Log.open(store)
+  assert(reopened.used() == lg.used(), "opening again points at the same position")
+
+  $seen: Sz = 0
+  $buf: U8[32] = ::{}
+  $it: = reopened.iter()
+  for it.next()
+    it.read(U8$[]::buf)
+    got: = U8[]::{ .ptr = buf[0]@, .len = it.len }
+    if seen == 0
+      assert(it.kind == kind_sample && got.equals("one"), "the first is one")
+    if seen == 1
+      assert(it.kind == kind_sample && got.equals("two"), "the second is two")
+    if seen == 2
+      assert(it.kind == kind_policy && got.equals("policy-blob"), "the third is policy-blob")
+    seen += 1
+  assert(seen == 3, "all three read")
+  verdict
+    .pass("It reads again in the order appended, and opening again points at the same position.")
+
+fn test_last_of_kind() //< the newest record of each kind
+  verdict.start("[ksdb] adding the same kind over and over and taking the last test...")
+  store: = ram.make(U8$[]::store_buf, sector)
+  $lg: = ksdblog.Log.open(store)
+
+  $dst: U8[32] = ::{}
+  $missing: = false
+  _none: = lg.last(kind_policy, U8$[]::dst) catch e
+    missing = e == ksdblog.Ksdb_error.not_found
+    fallback 0
+  assert(missing, "with not one record it returns not_found")
+
+  lg.append(kind_policy, "v1") catch panic("append v1")
+  lg.append(kind_sample, "noise") catch panic("append noise")
+  lg.append(kind_policy, "v2-longer") catch panic("append v2")
+
+  n: = lg.last(kind_policy, U8$[]::dst) catch panic("last should find the newest policy")
+  got: = U8[]::{ .ptr = dst[0]@, .len = n }
+  assert(got.equals("v2-longer"), "the policy added last is the one taken")
+
+  // A short output buffer is reported, not silently truncated.
+  tiny: U8[2] = ::{}
+  $too_small: = false
+  _ignored: = lg.last(kind_policy, U8$[]::tiny) catch e
+    too_small = e == ksdblog.Ksdb_error.too_small
+    fallback 0
+  assert(too_small, "a short output returns too_small (it does not truncate)")
+
+  // **Do not confuse an empty record with "there is none".** Both are 0 bytes, so telling them
+  // apart by length answers "there is none" although a record was appended.
+  kind_empty: U16 = 7
+  lg.append(kind_empty, "") catch panic("append an empty record")
+  empty_n: = lg.last(kind_empty, U8$[]::dst) catch panic("one empty record has to be found")
+  assert(empty_n == 0, "one empty record is taken as 0 bytes")
+  verdict
+    .pass("It takes the last of a kind, refuses a short output, and keeps one empty record apart \
+      from \"there is none\".")
+
+fn test_last_equals() //< that the newest record can be compared without an output buffer
+  //<
+  //< It decides whether an unchanged value is skipped, so it must be false for a different length,
+  //< for one byte off, and when there is none.
+  verdict.start("[ksdb] matching the last one up with no output buffer test...")
+  store: = ram.make(U8$[]::store_buf, sector)
+  $lg: = ksdblog.Log.open(store)
+
+  assert(!lg.last_equals(kind_policy, "v1"), "false where there is none")
+
+  lg.append(kind_policy, "v1") catch panic("append v1")
+  assert(lg.last_equals(kind_policy, "v1"), "true where it is the same")
+  assert(!lg.last_equals(kind_policy, "v2"), "false at one byte off")
+  assert(!lg.last_equals(kind_policy, "v1x"), "false at a differing length")
+  assert(!lg.last_equals(kind_sample, "v1"), "false at a differing kind")
+
+  // Caution: Go past one chunk (64B): a comparison that skips a boundary answers "the same".
+  big: U8[200] = ::{}
+  bv: = U8$[]::big
+  bv.fill('a')
+  lg.append(kind_policy, U8[]::big) catch panic("append big")
+  assert(lg.last_equals(kind_policy, U8[]::big), "true where it is the same beyond 64B")
+  bv[199] = 'b'
+  assert(!lg.last_equals(kind_policy, U8[]::big), "one byte off at the tail is caught too")
+  bv[199] = 'a'
+  bv[64] = 'b'
+  assert(!lg.last_equals(kind_policy, U8[]::big), "one byte off just past a boundary is caught too")
+  verdict
+    .pass("A difference in length, content or kind is all false, and it crosses the 64B boundary.")
+
+fn test_last_after_a_big_record() //<
+  //< That the newest record of each kind is found even with small records after a large one
+  //<
+  //< **This is the layout on a device**: a marker, a policy of a few KB, then many 8B readings.
+  verdict.start("[ksdb] finding the small records stored after a large one test...")
+  store: = ram.make(U8$[]::store_buf, sector)
+  $lg: = ksdblog.Log.open(store)
+
+  lg.append(0, "mk") catch panic("append marker")
+  big: U8[200] = ::{}
+  bv: = U8$[]::big
+  bv.fill('p')
+  lg.append(kind_policy, U8[]::big) catch panic("append policy")
+  for $i: Sz = 0; i < 10; i += 1
+    sample: U8[8] = ::{}
+    sv: = U8$[]::sample
+    sv.fill(U8::(0x40 + i))
+    lg.append(kind_sample, U8[]::sample) catch panic("append sample")
+
+  // Caution: Check by opening again (as after a power cut).
+  $reopened: = ksdblog.Log.open(store)
+  $got: U8[8] = ::{}
+  n: = reopened.last(kind_sample, U8$[]::got) catch panic("last(sample) should not fail")
+  assert(n == 8, "the 8-byte observation is taken at its own length")
+  assert(got[0] == 0x49, "what is taken is the one added last (0x40+9)")
+  // The large record is found too, not hidden behind the small ones.
+  $policy_back: U8[200] = ::{}
+  pn: = reopened.last(kind_policy, U8$[]::policy_back) catch panic("last(policy) should not fail")
+  assert(pn == 200 && policy_back[199] == 'p', "the large one is taken at its own length too")
+  verdict.pass("Both the small records beyond a large one and that large one itself are taken.")
+
+fn test_torn_write_truncates() //< a power cut in the middle of a write
+  //<
+  //< Everything before the half-written record is kept.
+  verdict.start("[ksdb] a half-written record is not read test...")
+  store: = ram.make(U8$[]::store_buf, sector)
+  $lg: = ksdblog.Log.open(store)
+  lg.append(kind_sample, "kept") catch panic("append kept")
+  good_used: = lg.used()
+
+  // Makes the next record half-written (half of its header damaged).
+  ram.tear(good_used, 6)
+
+  $reopened: = ksdblog.Log.open(store)
+  $seen: Sz = 0
+  $buf: U8[32] = ::{}
+  $it: = reopened.iter()
+  for it.next()
+    it.read(U8$[]::buf)
+    got: = U8[]::{ .ptr = buf[0]@, .len = it.len }
+    assert(got.equals("kept"), "what stays is the one finished record alone")
+    seen += 1
+  assert(seen == 1, "the half-written part is not read")
+  // Nothing is appended over a half-written record; the new one goes to the next sector.
+  assert(reopened.used() >= sector,
+    "it does not write over a half-written part; it goes to the next sector")
+  verdict.pass("A half-written part is not returned, and nothing is appended over it.")
+
+fn test_torn_payload_still_appends() //<
+  //< A power cut after the content was written but before the header
+  //<
+  //< **`append` writes the content first**, so this is the likeliest case. The header still looks
+  //< erased; unless the sector is abandoned, every later append fails until a reset.
+  verdict
+    .start("[ksdb] appending still works after a power cut with only the content written test...")
+  store: = ram.make(U8$[]::store_buf, sector)
+  $lg: = ksdblog.Log.open(store)
+  lg.append(kind_sample, "kept") catch panic("append kept")
+  good_used: = lg.used()
+  // The header (header_size bytes) is left erased, and only the content area is damaged.
+  ram.tear(good_used + ksdblog.header_size, 8)
+
+  $reopened: = ksdblog.Log.open(store)
+  skipped_sector: = reopened.used() >= sector
+  assert(skipped_sector,
+    "the sector holding a half-written part is given up and it writes from the next")
+  reopened.append(kind_sample, "after-crash") catch panic("appending has to work after a power cut \
+    (fail here and the record never grows again)")
+
+  // Records from before the cut and records appended after it must both be readable.
+  $seen: Sz = 0
+  $buf: U8[32] = ::{}
+  $it: = reopened.iter()
+  for it.next()
+    it.read(U8$[]::buf)
+    got: = U8[]::{ .ptr = buf[0]@, .len = it.len }
+    in_order: = got.equals("kept") if seen == 0 else got.equals("after-crash")
+    assert(in_order, "the records from before and after the power cut read oldest first")
+    seen += 1
+  assert(seen == 2, "the half-written part is not returned, and only the two around it read")
+  verdict
+    .pass("After a power cut before the header, it abandons the sector and appending carries on.")
+
+fn test_corruption_is_detected() //< a record with garbled content is rejected
+  verdict.start("[ksdb] the CRC catches one flipped bit test...")
+  store: = ram.make(U8$[]::store_buf, sector)
+  $lg: = ksdblog.Log.open(store)
+  lg.append(kind_sample, "first") catch panic("append first")
+  lg.append(kind_sample, "second") catch panic("append second")
+
+  // Clears one bit of the second record's content (flash can only garble 1 into 0).
+  ram.tear(ksdblog.header_size + ksdblog.header_size + 8, 1)
+
+  $reopened: = ksdblog.Log.open(store)
+  $seen: Sz = 0
+  $it: = reopened.iter()
+  for it.next()
+    seen += 1
+  assert(seen == 1,
+    "a record whose CRC does not fit is not read (the rest of that sector is given up)")
+  verdict.pass("The CRC catches one flipped bit and does not hand that record on.")
+
+fn test_a_corrupt_header_is_detected() //<
+  //< a record with a garbled header is rejected too
+  //<
+  //< Caution: **The CRC has to cover `len` and `kind` too** (`ksdb/docs/DESIGN.md`); the test
+  //< above garbles only the content.
+  verdict.start("[ksdb] the CRC catches a garbled head (len / kind) too test...")
+  // Garbles one header byte with `program_at` (turning bits to 0). **`tear` is not enough**: it
+  // clears only the top four bits, which a small value does not have.
+  zero: U8[1] = ::{ 0x00 }
+  offsets: Sz[2] = ::{ 0, 2 } // len and kind inside the header
+  for $k: Sz = 0; k < offsets.len; k += 1
+    store: = ram.make(U8$[]::store_buf, sector)
+    $lg: = ksdblog.Log.open(store)
+    lg.append(kind_sample, "first") catch panic("append first")
+    second_at: = lg.used()
+    lg.append(kind_policy, "second") catch panic("append second")
+    store.program_at(second_at + offsets[k], U8[]::zero)
+
+    $reopened: = ksdblog.Log.open(store)
+    $seen: Sz = 0
+    $it: = reopened.iter()
+    for it.next()
+      seen += 1
+    assert(seen == 1,
+      "a record whose header was garbled is not returned (the rest of that sector is abandoned)")
+    // Reading it as a policy must not return it either.
+    $dst: U8[32] = ::{}
+    $missing: = false
+    _ignored: = reopened.last(kind_policy, U8$[]::dst) catch e
+      missing = e == ksdblog.Ksdb_error.not_found
+      fallback 0
+    assert(missing, "a record whose head was garbled does not come out of `last` either")
+  verdict.pass("The CRC catches a garbled `len` and `kind` too, and does not hand that record on.")
+
+fn test_full_is_reported_not_overwritten() //< a full log is reported, not silently overwritten
+  verdict.start("[ksdb] full does not overwrite silently test...")
+  store: = ram.make(U8$[]::store_buf, sector)
+  $lg: = ksdblog.Log.open(store)
+
+  // One record is 8 + 24 = 32B, so 32 of them fill the 1KB medium.
+  $wrote: Sz = 0
+  $hit_full: = false
+  for $i: Sz = 0; i < 100; i += 1
+    lg.append(kind_sample, "0123456789abcdefghijklmn") catch e
+      hit_full = e == ksdblog.Ksdb_error.full
+      break
+    wrote += 1
+  assert(hit_full, "once nothing fits it returns full")
+  assert(wrote == 32, "32 fit without straddling a sector")
+
+  // Once it is full, every record written so far still reads.
+  $reopened: = ksdblog.Log.open(store)
+  $seen: Sz = 0
+  $it: = reopened.iter()
+  for it.next()
+    seen += 1
+  assert(seen == wrote, "even once full, everything finished reads")
+
+  // reset empties it again.
+  lg.reset() catch panic("reset should succeed")
+  $after: = ksdblog.Log.open(store)
+  assert(after.used() == 0, "after a reset it can write from the head")
+  verdict.pass("Full comes back as full, and reset puts it back while everything finished is kept.")
+
+fn test_record_never_crosses_a_sector() //< content that does not fit in one sector is rejected
+  //<
+  //< The reason is at `ksdblog.Log.append`.
+  verdict.start("[ksdb] no record straddling a sector is built test...")
+  store: = ram.make(U8$[]::store_buf, sector)
+  $lg: = ksdblog.Log.open(store)
+
+  $too_big: = false
+  big: U8[512] = ::{}
+  v: = U8$[]::big
+  v.fill('x')
+  lg.append(kind_sample, U8[]::big) catch e
+    too_big = e == ksdblog.Ksdb_error.too_large
+  assert(too_big, "content that does not fit in one sector is too_large")
+
+  // Near a sector's end, a record does not span two sectors but starts at the next sector.
+  // At 8 + 120 = 128B, two fill a sector and the third goes to the next.
+  lg.append(kind_sample, "a") catch panic("append a")
+  mid: U8[120] = ::{}
+  mv: = U8$[]::mid
+  mv.fill('y')
+  lg.append(kind_sample, U8[]::mid) catch panic("append mid")
+  before: = lg.used()
+  lg.append(kind_sample, U8[]::mid) catch panic("append crossing")
+  after: = lg.used()
+  assert(after - before > ksdblog.header_size + 120,
+    "a record that looks like straddling begins from the next sector's head (leaving a gap between)")
+  last_byte: = store.sector_base(after - 1)
+  first_byte: = store.sector_base(after - 128)
+  assert(last_byte == first_byte, "the record written sits inside one sector")
+  verdict
+    .pass("Content that does not fit a sector is refused, and what looks like straddling goes to \
+      the next.")
+
+fn test_open_when_the_last_record_ends_near_the_end() //<
+  //< That reopening does not read past the medium's end when the last record ends near it
+  //<
+  //< A record **can end short of a sector's end** (by 4 bytes here), and checking whether the
+  //< next header is erased would then read past the end.
+  verdict.start("[ksdb] a record that ended near the end opens again test...")
+  store: = ram.make(U8$[]::store_buf, sector)
+  $lg: = ksdblog.Log.open(store)
+
+  // At 8 + 244 = 252B, one per sector: the fourth ends 4 bytes before the medium's end.
+  big: U8[244] = ::{}
+  bv: = U8$[]::big
+  bv.fill('z')
+  for $i: Sz = 0; i < 4; i += 1
+    lg.append(kind_sample, U8[]::big) catch panic("append should fit")
+  used: = lg.used()
+  assert(used == store.capacity - 4, "the last record ends 4 bytes before the end")
+
+  $reopened: = ksdblog.Log.open(store)
+  assert(reopened.used() == lg.used(), "opening again points at the same position")
+  $seen: Sz = 0
+  $it: = reopened.iter()
+  for it.next()
+    seen += 1
+  assert(seen == 4, "all four read")
+
+  // Not even a header fits in the 4 bytes left, so appending throws full.
+  $hit_full: = false
+  reopened.append(kind_sample, "x") catch e
+    hit_full = e == ksdblog.Ksdb_error.full
+  assert(hit_full, "a remainder with no room for a head is refused as full")
+  verdict.pass("A record that ended near the end opens again without reading outside the place.")
+
+fn test_program_failure_is_surfaced() //<
+  //< Nothing is written where the medium is not erased (even when the medium reports no failure)
+  verdict.start("[ksdb] a place's write failure is not swallowed test...")
+  store: = ram.make(U8$[]::store_buf, sector)
+  $lg: = ksdblog.Log.open(store)
+  ram.arm_cut(1, 0)
+  $failed: = false
+  lg.append(kind_sample, "nope") catch e
+    failed = e == ksdblog.Ksdb_error.write_failed
+  assert(failed, "where the place returns false it returns write_failed")
+  verdict.pass("A place's failure comes back to the caller as it stands.")
+
+fn test_append_does_not_erase() //< that it erases no more than it has to (see `ram.erases`)
+  verdict.start("[ksdb] appending erases no sector test...")
+  store: = ram.make(U8$[]::store_buf, sector)
+  $lg: = ksdblog.Log.open(store)
+  erases_before: = ram.erases
+  for $i: Sz = 0; i < 10; i += 1
+    lg.append(kind_sample, "abcd") catch panic("append should succeed")
+  assert(ram.erases == erases_before, "appending erases not one sector")
+  verdict.pass("Appending brings no erase with it (only reset erases a sector).")
+
+fn test_keeps_appending_after_a_power_loss() //<
+  //< That records can still be appended after a power cut
+  //<
+  //< **This is what not stopping at a garbled record buys.**
+  verdict.start("[ksdb] appending and reading carry on after a half-written part appears test...")
+  store: = ram.make(U8$[]::store_buf, sector)
+  $lg: = ksdblog.Log.open(store)
+  lg.append(kind_sample, "before") catch panic("append before")
+  torn_at: = lg.used()
+  ram.tear(torn_at, 6) // a power cut left one record half-written
+
+  // It restarts after the cut and appends again.
+  $after_loss: = ksdblog.Log.open(store)
+  assert(after_loss.used() == sector,
+    "the half-written sector is given up and it writes from the next")
+  after_loss.append(kind_sample, "after") catch panic("append after")
+  after_loss.append(kind_policy, "fresh-policy") catch panic("append policy")
+
+  // Caution: **Records from before and after the cut must both read**; a scan that stops at a
+  // garbled record never reads the later ones.
+  $reopened: = ksdblog.Log.open(store)
+  $seen: Sz = 0
+  $buf: U8[32] = ::{}
+  $it: = reopened.iter()
+  for it.next()
+    it.read(U8$[]::buf)
+    got: = U8[]::{ .ptr = buf[0]@, .len = it.len }
+    if seen == 0
+      assert(got.equals("before"), "the record from before the power cut stays")
+    if seen == 1
+      assert(got.equals("after"), "the record appended after the power cut reads too")
+    if seen == 2
+      assert(got.equals("fresh-policy"), "the one after that reads too")
+    seen += 1
+  assert(seen == 3, "the half-written part is skipped and the three around it read")
+
+  // The policy read is the new one, written after the cut.
+  $dst: U8[32] = ::{}
+  n: = reopened.last(kind_policy, U8$[]::dst) catch panic("last should find the policy written \
+    after the loss")
+  policy: = U8[]::{ .ptr = dst[0]@, .len = n }
+  assert(policy.equals("fresh-policy"), "the policy written after the power cut is the one read")
+  verdict
+    .pass("The half-written part is skipped, and the records before and after the power cut both \
+      read.")
+
+// ==========================================
+// Where the power is cut is tried exhaustively.
+// Caution: **Cut each write in turn and check that the guarantee holds wherever it lands** (as
+// littlefs's power-loss and SQLite's crash tests do); some defects show at one position only.
+// ==========================================
+
+priv const cut_payloads: U8[][6] = ::{ "a0", "", "c222", "d3333", "eeeeeeeeeeee", "f5" } //<
+  //< The contents appended in the exhaustive run, each record differing in text and length
+  //<
+  //< Caution: **Repeated text would miss a swap in order**, and equal lengths never test padding.
+  //< **Keep one empty record**: its header-only write leaves the single unerased byte that reveals
+  //< an off-by-one erase check, and nothing else does. **Keep one length that crosses a sector**
+  //< (`cut_sector` below), or a cut just after a sector's start never happens.
+
+priv const cut_bytes_modes: Sz[3] = ::{ 0, 1, 4 } //< the byte count written when the power is cut
+  //<
+  //< **A value larger than the write's own size is clamped** (`ram_store.arm_cut`).
+
+priv const cut_sector: Sz = 64 //< a small sector used only by the exhaustive run
+  //<
+  //< Caution: **Always exercise a record that moves to the next sector.** In a 256B sector the six
+  //< never cause a cut just after such a move, which leaves a half-written record that `open` does
+  //< not check.
+
+priv fn count_programs(): Sz //< appends once without a cut and counts the writes
+  //<
+  //< **Counted, not hard-coded**: the number of writes per record is an implementation detail.
+  store: = ram.make(U8$[]::store_buf, cut_sector)
+  $lg: = ksdblog.Log.open(store)
+  for p in cut_payloads
+    lg.append(kind_sample, p) catch panic("count_programs: append should succeed")
+  return ram.programs
+
+fn test_every_power_cut_keeps_what_was_written()
+  verdict.start("[ksdb] whichever write the power cut hits, everything finished reads test...")
+  n: = count_programs()
+  assert(n > 0, "not one write happening would be wrong")
+  $checked: Sz = 0
+  for $cut: Sz = 1; cut <= n; cut += 1
+    // The cases differ in **how many bytes of the cut write land**.
+    // Caution: **Do not test only "no byte was written"**: on a device the bytes written stay,
+    // so a partial write is the likeliest. **Keep the one-byte case**: only it reveals an erase
+    // check that is one byte off.
+    for $mode: Sz = 0; mode < cut_bytes_modes.len; mode += 1
+      store: = ram.make(U8$[]::store_buf, cut_sector)
+      $lg: = ksdblog.Log.open(store)
+      ram.arm_cut(cut, cut_bytes_modes[mode])
+      $done: Sz = 0
+      $alive: = true
+      for $i: Sz = 0; alive && i < cut_payloads.len; i += 1
+        lg.append(kind_sample, cut_payloads[i]) catch
+          alive = false
+        if alive
+          done += 1
+      // It restarts after the cut.
+      // Caution: **Do not reuse the same `Log`**: the check must read the medium, not the log's
+      // own state.
+      $again: = ksdblog.Log.open(store)
+      $seen: Sz = 0
+      $buf: U8[32] = ::{}
+      $it: = again.iter()
+      for it.next()
+        assert(seen < done, "a record not finished must not read")
+        it.read(U8$[]::buf)
+        got: = U8[]::{ .ptr = buf[0]@, .len = it.len }
+        assert(got.equals(cut_payloads[seen]), "everything finished has to read in order")
+        seen += 1
+      assert(seen == done, "not one of the finished records may be missing")
+      // **It must keep appending after the cut too**, or a device that lost power once keeps
+      // nothing until a `reset`, and nobody notices.
+      // Caution: **Do not stop at one record.** With the half-written record in a sector beyond
+      // `tail`'s, the next record still fits; the one after it runs into it.
+      for $k: Sz = 0; k < 3; k += 1
+        again.append(kind_policy, "after") catch panic("appending has to go on after a power cut")
+      checked += 1
+  // Caution: **Compare the number of cases seen with the count**, or a run that saw none passes
+  // (Principle 8).
+  assert(checked == n * cut_bytes_modes.len, "not one way of cutting the power was skipped")
+  verdict
+    .pass("Under each write × each of the 3 ways of cutting the power, everything finished reads \
+      in order and appending carries on after.")
+
+// ==========================================
+// Opening a garbled medium does not crash, does not stop, and returns nothing that was not written.
+// **Vary the position and the width.** The garbling goes through `program_at` (turning bits to 0).
+// Caution: **Do not set arbitrary values by assignment**: garbling that flash cannot produce
+// proves nothing.
+// ==========================================
+priv const scramble_trials: Sz = 200
+priv const scramble_payloads: U8[][4] = ::{ "alpha", "b", "gamma-33", "" }
+
+priv fn is_one_of(got: U8[]): Bool //< that the content read back is one of the contents written
+  for p in scramble_payloads
+    if got.equals(p)
+      return true
+  return false
+
+fn test_a_scrambled_store_is_survivable()
+  verdict
+    .start("[ksdb] wherever the medium is garbled, it does not crash, does not stop, and returns \
+      nothing unwritten test...")
+  $rng: = prng.Prng.new(20260906U64)
+  $noise: U8[16] = ::{}
+  $buf: U8[64] = ::{}
+  $seen_any: Sz = 0
+  for $trial: Sz = 0; trial < scramble_trials; trial += 1
+    store: = ram.make(U8$[]::store_buf, sector)
+    $lg: = ksdblog.Log.open(store)
+    for p in scramble_payloads
+      lg.append(kind_sample, p) catch panic("scramble: append should succeed on an empty store")
+    // Garbles somewhere in the medium.
+    // Caution: **Also hit a sector's start and its end**, where the scan jumps sectors.
+    width: = 1 + Sz::(rng.next_u64() % U64::noise.len)
+    at: = Sz::(rng.next_u64() % U64::(store.capacity - width))
+    for $i: Sz = 0; i < width; i += 1
+      noise[i] = U8::(rng.next_u64() % 256U64)
+    store.program_at(at, U8[]::{ .ptr = noise[0]@, .len = width })
+
+    $again: = ksdblog.Log.open(store)
+    $it: = again.iter()
+    for it.next()
+      assert(Sz::it.len <= buf.len, "no record longer than any written may come out")
+      it.read(U8$[]::buf)
+      got: = U8[]::{ .ptr = buf[0]@, .len = it.len }
+      assert(is_one_of(got), "no unwritten content may come out")
+      // Caution: **Check the kind too**, or a record with only its kind garbled reaches the
+      // policy's reader.
+      assert(it.kind == kind_sample, "no unwritten kind may come out")
+      seen_any += 1
+    // The search must not crash either; **finding none is normal** here.
+    _ignored: = again.last(kind_sample, U8$[]::buf) catch 0
+  // Caution: **It must not pass having read no record at all**, when no check above ran
+  // (Principle 8).
+  assert(seen_any > 0, "not one record reading through the garbling would be wrong")
+  verdict
+    .pass("Garbling with the place and width scattered, the scan ends and nothing but the content \
+      written is returned.")

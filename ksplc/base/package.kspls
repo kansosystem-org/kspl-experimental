@@ -1,0 +1,212 @@
+//< Where a package is, when its folder's `ksplc.cfg` names it, and what it says it uses
+//<
+//< **A package that names itself is found by its name, not by the current folder.** Its files
+//< import each other as `<name>/…`, so a run from its own folder, whatever it is called, gives the
+//< same logical names as a run from the repository's root.
+//< **The same section lists what it imports besides itself and `std`**; an import of any other
+//< package is rejected where it is written. `std` lists nothing: the language closes it to itself.
+
+// ==========================================
+//     [package]
+//     name = ksos
+//     uses = ksai ksdb
+// ==========================================
+
+import "ksplc/base/config_file" as base_config_file
+import "ksplc/base/core" as base_core
+import "ksplc/base/lines" { skip_blanks }
+import "ksplc/base/locate" as base_locate
+import "std/chars"
+import "std/ds" { List }
+import "std/str" { Str_builder }
+import "std/sys"
+
+struct Package_decl //< one folder's own `[package]`
+  name: U8[] //< empty where the folder names no package
+  uses: List<|U8[]|>$@ //< the packages it imports besides itself and `std`
+  file: U8[] //< the `ksplc.cfg` that says so, for a rejection to point at
+
+// The declarations already read, per folder, so each folder's file is read once per run.
+// Caution: **Allocate them from perm_arena.** The language server rewinds `base_core.arena` per
+// request, and a table kept past that would dangle (as `config_file`'s would). **Always read
+// through this table**: the server names every workspace file per request, and each read stays.
+priv $read_dirs: List<|U8[]|>$@ = null
+priv $read_decls: List<|Package_decl|>$@ = null
+
+priv fn is_segment(name: U8[]): Bool //< whether a name can stand as an import's first segment
+  //<
+  //< One folder name: not empty, no separator or space, no leading `.` (a relative path).
+  if name.len == 0 || name[0] == '.'
+    return false
+  for c in name
+    if c == '/' || c == '\\' || c == ' ' || c == '\t'
+      return false
+  return true
+
+priv fn words_of(value: U8[]): List<|U8[]|>$@ //< the names a `uses` value lists, split at spaces
+  out: = List<|U8[]|>.create(base_core.perm_arena)
+  $at: Sz = 0
+  for at < value.len
+    at = skip_blanks(value, at)
+    $end: = at
+    for end < value.len && value[end] != ' ' && value[end] != '\t'
+      end += 1
+    if end > at
+      out.push(base_core.perm_arena.dup_str(value.sub(at, end - at)))
+    at = end
+  return out
+
+priv fn decl_in(dir: U8[]): Package_decl //<
+  //< The package that dir's own `ksplc.cfg` names, checked; an empty name where it names none
+  //<
+  //< **Only that one file counts**: a `[package]` further out is the top of another package.
+  //< Caution: **Reject on reading, not on use**, or a typo nobody reads silently does nothing
+  //< (Principle 5).
+  file: = base_config_file.file_in(dir)
+  $decl: = Package_decl::{ .name = "",
+    .uses = List<|U8[]|>.create(base_core.perm_arena), .file = file }
+  $header: = base_config_file.Setting::{ .section = "", .key = "", .value = "", .file = file,
+    .line = 1 }
+  $has_header: = false
+  for s in base_config_file.settings_in(dir)
+    if !s.section.equals(base_config_file.package_section)
+      continue
+    if s.key.len == 0
+      header = s
+      has_header = true
+    else if s.key.equals("name")
+      if decl.name.len > 0
+        base_config_file.reject(s, "'name' is given twice")
+      if !is_segment(s.value) || s.value.equals("std")
+        base_config_file.reject(s, "a package's name is one folder name, and not 'std'")
+      decl.name = s.value
+    else if s.key.equals("uses")
+      for u in words_of(s.value)
+        if !is_segment(u) || u.equals("std")
+          base_config_file.reject(s, "'uses' lists package names; 'std' is used without it")
+        decl.uses.push(u)
+    else
+      base_config_file.reject(s, "unknown key in [package] (known keys: 'name', 'uses')")
+  if has_header && decl.name.len == 0
+    base_config_file.reject(header, "a [package] section names its package: 'name = <package>'")
+  for u in decl.uses
+    if u.equals(decl.name)
+      base_config_file.reject(header, "'uses' names the package itself")
+  return decl
+
+priv fn decl_at(dir: U8[]): Package_decl //<
+  //< The declaration in dir's own `ksplc.cfg`, read once
+  if read_dirs == null
+    read_dirs = List<|U8[]|>.create(base_core.perm_arena)
+    read_decls = List<|Package_decl|>.create(base_core.perm_arena)
+  for i in Range.asc(read_dirs.len)
+    if read_dirs.get(i).equals(dir)
+      return read_decls.get(i)
+  decl: = decl_in(dir)
+  read_dirs.push(base_core.perm_arena.dup_str(dir))
+  read_decls.push(decl)
+  return decl
+
+priv fn decl_of(unit: U8[]): Package_decl //<
+  //< The declaration of the package reached by the name `unit`
+  //<
+  //< Caution: **A folder reached under one name that names itself another is rejected**, or one
+  //< package answers to two names.
+  decl: = decl_at(base_locate.package_dir(unit))
+  if decl.name.len > 0 && !decl.name.equals(unit)
+    $why: = Str_builder.new()
+    defer why.free()
+    why.s("this folder is reached as the package '\{unit\}' but names itself ").s("'\{decl.name\}'")
+    base_config_file.reject(name_line(decl.file), why.slice())
+  return decl
+
+priv fn name_line(file: U8[]): base_config_file.Setting //< the setting a rejection points at
+  for s in base_config_file.settings_in(sys.get_dir_name(file))
+    if s.key.equals("name")
+      return s
+  return base_config_file.Setting::{ .section = "", .key = "", .value = "", .file = file,
+    .line = 1 }
+
+fn name_entry(path: U8[]): U8[] //<
+  //< The logical name of a file given by its path (an entry point, or an editor's document)
+  //<
+  //< In a package that names itself, it is `<name>/<the path from its top>`, found by walking up
+  //< **past the current folder**, so `cd ksdb/tests && ksplc run all.kspls` gives the same name as
+  //< from the root. Under std's folder it is `std/<the rest>`; elsewhere the project-relative name
+  //< (`to_project_relative` in `locate.kspls`).
+  plain: = base_locate.to_project_relative(path)
+  // Caution: **Cut the rest from the path the walk read.** The package's top is found with `..`
+  // folded (`fold_dots` in `locate.kspls`), so a path that still holds one would name its file
+  // from a top it is not under.
+  abs_file: = base_locate.canonical_path(plain)
+  // **A file under std's folder belongs to std**, whatever the current folder: named the way its
+  // imports name it, it is read once, checked as std, and mapped back to where it is on disk
+  // (`Uri_style.spell` in `locate.kspls`).
+  // Caution: **Compare the folded absolute paths.** An editor passes a document outside its
+  // workspace spelled with `..`, and std's folder may be given either way.
+  in_std: = base_locate.rest_under(abs_file,
+    base_locate.canonical_path(base_locate.std_dir()))
+  if in_std.len > 0
+    return base_locate.std_name(in_std)
+  top: = base_config_file.package_top(sys.get_dir_name(abs_file))
+  if top.len == 0 || abs_file.len <= top.len + 1
+    return plain
+  decl: = decl_at(top)
+  // The package's folder as diagnostics name it: relative to the current folder, empty if equal.
+  $root: = base_locate.to_project_relative(top)
+  if base_locate.cwd().equals(top)
+    root = ""
+  base_locate.declare_package(decl.name, root)
+  // The rest is normalized like a relative path (`to_project_relative` in `locate.kspls`), so
+  // the OS's separators name the same file as `/`.
+  $out: = Str_builder.new()
+  defer out.free()
+  out.s(decl.name).c('/')
+    .s(base_locate.to_project_relative(abs_file.sub_from(top.len + 1)))
+  return base_core.arena.dup_str(out.slice())
+
+priv fn climbs(logical: U8[]): Bool //< whether a logical name holds a `..` segment
+  return logical.find_str("/../") >= 0 || logical.ends_with("/..")
+
+fn refused_use(importer: U8[], target: U8[]): U8[] //<
+  //< Why a file may not import that target; empty where it may
+  //<
+  //< A package that names itself imports itself, `std` and its `uses`; one that names nothing has
+  //< no list to keep to. **`std` is closed** ("import syntax and path resolution" in
+  //< docs/SPEC-language.md). A `..` is checked first, since `std/../x` starts like a std name.
+  if base_locate.is_std_file(target) && climbs(target)
+    return base_core.arena.text()
+      .s("'\{target\}' climbs out of the standard library: a name under 'std/' is one of its ")
+      .s("files, and holds no '..'").take()
+  if base_locate.is_std_file(importer) && !base_locate.is_std_file(target)
+    return base_core.arena.text()
+      .s("the standard library reaches only its own files, and '\{target\}' is not one of them")
+      .take()
+  if base_locate.is_std_file(target)
+    return ""
+  from: = base_locate.package_of(importer)
+  to: = base_locate.package_of(target)
+  // **The target's own declaration is read on the way**, so a misnamed folder is rejected even
+  // for an importer that names no package.
+  if to.len > 0
+    _target: = decl_of(to)
+  if from.len == 0 || to.equals(from)
+    return ""
+  decl: = decl_of(from)
+  if decl.name.len == 0
+    return ""
+  for u in decl.uses
+    if u.equals(to)
+      return ""
+  $why: = Str_builder.new()
+  defer why.free()
+  why.s("the package '\{from\}' does not say it uses '\{to\}' (add it to 'uses' in the [package] ")
+    .s("section of \{decl.file\})")
+  return base_core.arena.dup_str(why.slice())
+
+fn here(): Package_decl //< the package the current folder is in (`ksplc info package`)
+  top: = base_config_file.package_top(base_locate.cwd())
+  if top.len == 0
+    return Package_decl::{ .name = "",
+      .uses = List<|U8[]|>.create(base_core.perm_arena), .file = "" }
+  return decl_at(top)

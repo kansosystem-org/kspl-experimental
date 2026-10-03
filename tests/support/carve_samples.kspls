@@ -1,0 +1,107 @@
+//< Samples showing that a carving re-points each form of reference correctly
+//<
+//< They also show that its check can fire ("Showing that a check can fire" in
+//< ../docs/HOWTO-write-a-suite.md).
+//< The samples live in a tree this table builds itself (a package `pk` beside the repository's
+//< folders), so every naming here is **data**, and the reference check reads it as data
+//< (`read_as_data` in `harness_refs.kspls`).
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "tests/support/carve_refs" as carve
+
+priv const sample_paths: U8[][9] = ::{ "docs/SPEC.md", "docs/sub/a.md", "std/io.kspls",
+  "ksplc/base/x.kspls", "pk/README.md", "pk/docs/DESIGN.md", "pk/log.kspls", "pk/tests/all.kspls",
+  "pk/ksplc.cfg" }
+priv const sample_base: U8[] = "https://example.invalid/kanso"
+priv const sample_pin: U8[] = "c0ffee"
+
+struct Carve_sample //< one file of the sample package, and what its copy holds
+  rel: U8[]
+  text: U8[]
+  want: U8[] //< what the copy holds; empty means the file is left as it stands
+
+// Caution: **List the forms that must stay as well as those that move**: a table of moves alone
+// passes a carving that rewrites everything, including a string a program reads.
+priv const carve_samples: Carve_sample[16] = ::{
+  // A link's target leaving the package is replaced, its anchor kept.
+  Carve_sample::{ .rel = "pk/README.md", .text = "See [the rules](../docs/SPEC.md#rules).\n",
+    .want = "See [the rules](https://example.invalid/kanso/blob/c0ffee/docs/SPEC.md#rules).\n" },
+  // A link inside the package stays.
+  Carve_sample::{ .rel = "pk/README.md", .text = "[design](docs/DESIGN.md)\n", .want = "" },
+  // A naming in prose becomes a link with its words kept; a code span becomes the link's words.
+  Carve_sample::{ .rel = "pk/README.md", .text = "Read docs/SPEC.md first.\n",
+    .want = "Read [docs/SPEC.md](https://example.invalid/kanso/blob/c0ffee/docs/SPEC.md) first.\n" },
+  Carve_sample::{ .rel = "pk/README.md", .text = "Read `docs/SPEC.md` first.\n",
+    .want = "Read [`docs/SPEC.md`](https://example.invalid/kanso/blob/c0ffee/docs/SPEC.md) first.\n" },
+  // A link's words stay whatever they name; its target is what moves.
+  Carve_sample::{ .rel = "pk/README.md", .text = "[`docs/SPEC.md`](../docs/SPEC.md)\n",
+    .want = "[`docs/SPEC.md`](https://example.invalid/kanso/blob/c0ffee/docs/SPEC.md)\n" },
+  Carve_sample::{ .rel = "pk/README.md",
+    .text = "[`docs/SPEC.md`](https://example.invalid/elsewhere)\n", .want = "" },
+  // Code stays: a fenced block, a span holding more than the naming.
+  Carve_sample::{ .rel = "pk/README.md", .text = "```\ncat docs/SPEC.md\n```\n", .want = "" },
+  Carve_sample::{ .rel = "pk/README.md", .text = "Run `cat docs/SPEC.md` now.\n", .want = "" },
+  // A naming led by the package's own name lands inside it, as its imports do.
+  Carve_sample::{ .rel = "pk/docs/DESIGN.md", .text = "The record is `pk/log.kspls`.\n",
+    .want = "" },
+  // The package's own folder is the copy's root.
+  Carve_sample::{ .rel = "pk/docs/DESIGN.md", .text = "[the package](..)\n", .want = "" },
+  // A naming that lands nowhere is the reference check's to report, not the carving's to move.
+  Carve_sample::{ .rel = "pk/README.md", .text = "See docs/NOPE.md.\n", .want = "" },
+  // A link's definition is a link: its target is replaced, not wrapped.
+  Carve_sample::{ .rel = "pk/README.md", .text = "[rules]: ../docs/SPEC.md\n",
+    .want = "[rules]: https://example.invalid/kanso/blob/c0ffee/docs/SPEC.md\n" },
+  // A folder opens as a folder.
+  Carve_sample::{ .rel = "pk/README.md", .text = "[the rest](../docs/sub)\n",
+    .want = "[the rest](https://example.invalid/kanso/tree/c0ffee/docs/sub)\n" },
+  // A source's comment takes the page's address; its code keeps its spelling.
+  Carve_sample::{ .rel = "pk/tests/all.kspls", .text = "//< the unit in `../../docs/SPEC.md`\n",
+    .want = "//< the unit in `https://example.invalid/kanso/blob/c0ffee/docs/SPEC.md`\n" },
+  Carve_sample::{ .rel = "pk/log.kspls", .text = "x: = \"std/io.kspls\" // reads std/io.kspls\n",
+    .want =
+    "x: = \"std/io.kspls\" // reads https://example.invalid/kanso/blob/c0ffee/std/io.kspls\n" },
+  Carve_sample::{ .rel = "pk/ksplc.cfg", .text = "# see ksplc/base/x.kspls\nname = pk\n",
+    .want = "# see https://example.invalid/kanso/blob/c0ffee/ksplc/base/x.kspls\nname = pk\n" },
+}
+
+fn sample_count(): Sz //< how many samples the table holds
+  return carve_samples.len
+
+fn carve_sample_failures(arena: Arena$@): List<|U8[]|> //< the samples whose copy is wrong
+  t: = carve.tree_of(U8[][]::sample_paths, "", arena)
+  dirs: = carve.picked_dirs(t@, arena)
+  $out: = List<|U8[]|>.new(arena)
+  for s in carve_samples
+    want: = s.text if s.want.len == 0 else s.want
+    got: = carve
+      .carve_text(s.rel, s.text, "pk", sample_pin, sample_base, t@, dirs, arena).text
+    if !got.equals(want)
+      out
+        .push(arena.text().s("\{s.rel\}: \{s.text.trim_end()\}\n      became \{got.trim_end()\}")
+        .take())
+  return out
+
+fn landing_fires(arena: Arena$@): Bool //<
+  //< Whether the landing check tells a reference left pointing out of the copy from one that lands
+  //<
+  //< The copy is read at its place in the repository (its files under `pk/`): a link left as
+  //< written lands nowhere, while a re-pointed one is an address, not a naming.
+  whole: = carve.tree_of(U8[][]::sample_paths, "", arena)
+  held: = carve.tree_of(U8[][]::{ "README.md", "docs/DESIGN.md" }, "pk/", arena)
+  dirs: = carve.picked_dirs(whole@, arena)
+  left: = "See [the rules](../docs/SPEC.md).\n"
+  inside: = "See [the design](docs/DESIGN.md).\n"
+  $caught: = false
+  for r in carve.refs_of("pk/README.md", left, dirs, arena)
+    there: = carve.lands(r@, "pk/README.md", left, whole@, arena)
+    here: = carve.lands(r@, "pk/README.md", left, held@, arena)
+    caught = there.len > 0 && !here.equals(there)
+  $passed: = false
+  for r in carve.refs_of("pk/README.md", inside, dirs, arena)
+    there: = carve.lands(r@, "pk/README.md", inside, whole@, arena)
+    here: = carve.lands(r@, "pk/README.md", inside, held@, arena)
+    passed = there.len > 0 && here.equals(there)
+  return caught && passed

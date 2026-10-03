@@ -1,0 +1,656 @@
+//< A table's arithmetic
+//<
+//< **A text starting with `=` is a formula.**
+//< The value itself is computed on every run (other cells point at it).
+//< Caution: **Call it before layout.** The shown text changes, so after layout the boxes point at
+//< old values.
+
+// ==========================================
+// Usage:
+//   calc.recalc(doc, sheet, ed.caret.inline);
+//   ed.clamp();
+//   page: = flow.layout(doc, sheet, src, width, arena);
+// ==========================================
+import "kspage/expr/addr" + { Addr, Reader, broken_ref }
+import "kspage/expr/shown"
+import "kspage/expr/value" { Cell_error, Fold, Value, fn_kind, folded, number, rounded, take }
+import "kspage/model/day" + { Dating }
+import "kspage/model/doc" { Doc, Block }
+import "kspage/model/run" { Inline }
+import "kspage/model/style" + { Arrange, Number_spec, Sheet }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/strnum"
+
+priv const unvisited: U8 = 0U8 //< a cycle is detected by whether a cell is being computed
+priv const working: U8 = 1U8
+priv const settled: U8 = 2U8
+
+priv struct Grid //< one table, laid out so that it can be looked up by row × column
+  table: Block$@
+  rows: Sz
+  cols: Sz
+  state: List<|U8|>$@ //< how far each cell is computed, and its value, in row × column order
+  value: List<|Value|>$@
+  anchor: List<|Block$@|>$@ //<
+    //< From a cell's position (row × column) to that cell's block. **Null where it is covered.**
+  book: Book$@ //<
+    //< The same document's tables, for references across tables.
+  arena: Arena$@
+
+priv struct Book //< the document's tables together
+  //<
+  //< Caution: **Keep it alive through one whole recalculation.** A cycle across tables is detected
+  //< only while both tables' computing states are visible at once.
+  grids: List<|Grid$@|>$@
+  sheet: Sheet$@ //<
+    //< The style table, for looking up how a number is shown.
+  arena: Arena$@ //<
+    //< The arena for one recalculation only, thrown away when computing is done.
+  kept: Arena$@ //<
+    //< The arena the computed values go in (the document's arena)
+    //<
+    //< **Not the arena above**: a value put there would point at freed memory. It is reused per
+    //< run, so it does not keep growing.
+  editing: Inline$@ //<
+    //< The run being typed in now
+    //<
+    //< **No value is shown here** (the user could not edit it without seeing the typed text); the
+    //< value is still computed for the other cells.
+
+priv fn new_book(sheet: Sheet$@, arena: Arena$@, kept: Arena$@, editing: Inline$@): Book$@
+  grids: = List<|Grid$@|>.create(arena)
+  return arena
+    .create(Book::{ .grids = grids, .sheet = sheet, .arena = arena, .kept = kept,
+    .editing = editing })
+
+priv fn find_grid(book: Book$@, name: U8[]): Option<|Grid$@|> //< the table a name points at
+  //<
+  //< **Where two have the same name it is the earlier one in document order.**
+  for $i: Sz = 0; i < book.grids.len; i += 1
+    g: = book.grids.get(i)
+    if g.table.name.len > 0 && g.table.name.equals(name)
+      return Option<|Grid$@|>.some(g)
+  return Option<|Grid$@|>.none
+
+priv fn new_grid(table: Block$@, book: Book$@): Grid$@
+  arena: = book.arena
+  rows: = table.children.len
+  cols: = table.grid_columns(arena)
+  g: = Grid::{
+    .table = table,
+    .rows = rows,
+    .cols = cols,
+    .state = List<|U8|>.create(arena),
+    .value = List<|Value|>.create(arena),
+    .anchor = List<|Block$@|>.create(arena),
+    .book = book,
+    .arena = arena,
+  }
+  for $i: Sz = 0; i < rows * cols; i += 1
+    g.state.push(unvisited)
+    g.value.push(Cell_error.no_cell.failed())
+    g.anchor.push(null)
+  // **A cell's position counts merges** (`Block.tiles_of`). Counted separately, the address in a
+  // merged table would disagree with where it is laid out. A covered address holds no cell.
+  tiles: = table.tiles_of(arena)
+  for $i: Sz = 0; i < tiles.len; i += 1
+    t: = tiles.get(i)
+    if t.row < rows && t.column < cols
+      g.anchor.set(t.row * cols + t.column, t.block)
+  return arena.create(g)
+
+priv fn cell_inline(g: Grid$@, r: Sz, c: Sz): Option<|Inline$@|> //<
+  //< The inline holding cell (r, c)'s text
+  //<
+  //< **Only a merge's upper-left cell holds a value.**
+  if r < 0 || r >= g.rows || c < 0 || c >= g.cols
+    return Option<|Inline$@|>.none
+  cell: = g.anchor.get(r * g.cols + c)
+  if cell == null || cell.inlines.len <= 0
+    return Option<|Inline$@|>.none
+  return Option<|Inline$@|>.some(cell.inlines.get(0))
+
+// ---- Computing a formula ----
+
+priv struct P //< the state partway through reading a formula
+  //<
+  //< **A position is read with `addr.Reader`** (a second parser here would disagree with the
+  //< rewriting code).
+  c: Reader
+  book: Book$@
+  g: Grid$@ //<
+    //< The table it is in; null for a formula in the body.
+
+priv fn parse_number(p: P$@): Value //< reads a number
+  //<
+  //< Only digits and one decimal point (the sign belongs to unary minus). **One decimal point**:
+  //< accept a second and the `.` of `5.0.round(2)` is swallowed.
+  start: = p.c.pos
+  $dot: = false
+  for p.c.pos < p.c.src.len &&
+    ((addr.at(p.c@) >= '0' && addr.at(p.c@) <= '9') || (addr.at(p.c@) == '.' && !dot))
+    if addr.at(p.c@) == '.'
+      dot = true
+    p.c.pos += 1
+  text: = p.c.src.sub(start, p.c.pos - start)
+  v: = text.to_f64() catch
+    return Cell_error.syntax.failed()
+  return number(v)
+
+priv const met_round: Sz = 0 //<
+  //< The methods that can follow a value
+  //<
+  //< **They cannot be used on a range** (only folding takes one: `fn_kind` in
+  //< `expr/value.kspls`).
+priv const met_year: Sz = 1
+priv const met_month: Sz = 2
+priv const met_day: Sz = 3
+
+priv fn method_of(name: U8[]): Sz //< the names of the methods that can follow a value
+  //<
+  //< **An unknown name is rejected** (skipped over, a typo would pass silently).
+  if name.equals("round")
+    return met_round
+  if name.equals("year")
+    return met_year
+  if name.equals("month")
+    return met_month
+  if name.equals("day")
+    return met_day
+  return -1
+
+priv fn take_span(g: Grid$@, f: Fold$@, a: Addr, b: Addr) //< folds the cells from a to b
+  //<
+  //< The order of the ends does not matter (A3:A1 is the same as A1:A3).
+  r0: = a.row if a.row <= b.row else b.row
+  r1: = b.row if a.row <= b.row else a.row
+  c0: = a.col if a.col <= b.col else b.col
+  c1: = b.col if a.col <= b.col else a.col
+  if r0 < 0 || c0 < 0 || r1 >= g.rows || c1 >= g.cols
+    f.broken = true
+    f.err = Cell_error.no_cell
+    return
+  for $r: Sz = r0; r <= r1; r += 1
+    for $c: Sz = c0; c <= c1; c += 1
+      take(f, value_at(g, r, c))
+
+priv fn eat(p: P$@, c: U8): Bool //< advances where the next character is c
+  //<
+  //< **Skip spaces first** (`IF(A1 , 1, 2)` is the same formula).
+  addr.skip_ws(p.c@)
+  if addr.at(p.c@) != c
+    return false
+  p.c.pos += 1
+  return true
+
+priv fn parse_word(p: P$@): U8[] //< reads a run of letters
+  //<
+  //< Caution: **Put the position back where nothing could be read** (`A1`'s `A` is a letter too).
+  start: = p.c.pos
+  // Letters only: `_` is no letter here (`c.is_alpha()` would take it in).
+  for addr.at(p.c@).is_lower() || addr.at(p.c@).is_upper()
+    p.c.pos += 1
+  return p.c.src.sub(start, p.c.pos - start)
+
+priv fn word(p: P$@, w: U8[]): Bool //< advances where the next word is w
+  //<
+  //< **Where more letters follow, it is another word** (`ifx` is not `if`).
+  addr.skip_ws(p.c@)
+  mark: = p.c.pos
+  if parse_word(p).equals(w)
+    return true
+  p.c.pos = mark
+  return false
+
+priv fn parse_day_of(p: P$@): Value //< `Day.of(year, month, day)`
+  //<
+  //< **A date that does not exist on the calendar is not a value** (2026-02-30). This is how a
+  //< date is written inside a formula (`2026-08-18` is a subtraction).
+  y: = parse_pick(p)
+  if !eat(p, ',')
+    return Cell_error.syntax.failed()
+  m: = parse_pick(p)
+  if !eat(p, ',')
+    return Cell_error.syntax.failed()
+  d: = parse_pick(p)
+  if !eat(p, ')')
+    return Cell_error.syntax.failed()
+  if !y.ok
+    return y
+  if !m.ok
+    return m
+  if !d.ok
+    return d
+  if n: = day.days_of(I64::y.num, I64::m.num, I64::d.num)
+    return number(F64::n)
+  return Cell_error.not_number.failed()
+
+priv fn parse_fold(p: P$@, g: Grid$@, a: Addr, b: Addr): Value //<
+  //< Folds `[<table's name>!]<position>:<position>`
+  //<
+  //< **A range with no folding function is not a value** (`A1:A3` alone). **The folding
+  //< functions take no argument** (a sum over gaps is written with `+`).
+  if !eat(p, '.')
+    return Cell_error.syntax.failed()
+  kind: = fn_kind(parse_word(p))
+  // A value's method on a range is rejected too (mixed, what cannot fold would look foldable).
+  if kind < 0
+    return Cell_error.no_name.failed()
+  if !eat(p, '(') || !eat(p, ')')
+    return Cell_error.syntax.failed()
+  $f: = Fold::{ .kind = kind, .acc = 0.0, .seen = 0, .broken = false, .err = Cell_error.syntax }
+  take_span(g, f@, a, b)
+  return folded(f@)
+
+priv fn parse_place(p: P$@): Value //< a position or a range
+  //<
+  //< **It is a range where a `:` follows the position.** **A name applies to the whole range**
+  //< (`Table2!A1:A3`), not per end. **A formula in the body cannot point at a position with no
+  //< name** (it has no table of its own).
+  $g: Grid$@ = p.g
+  name: = addr.parse_table_name(p.c@)
+  if name.len > 0
+    switch find_grid(p.book, name) case .some(other)
+      g = other
+    case .none
+      // An unknown name is rejected: taken as its own table, it would silently give another cell.
+      return Cell_error.no_name.failed()
+  a: = addr.parse_addr(p.c@)
+  switch a.kind case .unreadable
+    return Cell_error.syntax.failed()
+  case .out_of_range
+    // **The text did parse.** A number too large is the same "there is no cell" as `=A999` (one
+    // mistake, one mark, whatever the number's size).
+    return Cell_error.no_cell.failed()
+  case .spot {}
+  if addr.at(p.c@) != ':'
+    if g == null
+      return Cell_error.no_cell.failed()
+    return value_at(g, a.row, a.col)
+  p.c.pos += 1
+  b: = addr.parse_addr(p.c@)
+  switch b.kind case .unreadable
+    return Cell_error.syntax.failed()
+  case .out_of_range
+    return Cell_error.no_cell.failed()
+  case .spot {}
+  if g == null
+    return Cell_error.no_cell.failed()
+  return parse_fold(p, g, a, b)
+
+priv fn parse_primary(p: P$@): Value //< one value
+  //<
+  //< **Methods are not read here** (the loop outside reads them).
+  addr.skip_ws(p.c@)
+  c: = addr.at(p.c@)
+  if c == '('
+    p.c.pos += 1
+    v: = parse_pick(p)
+    if !eat(p, ')')
+      return Cell_error.syntax.failed()
+    return v
+  if (c >= '0' && c <= '9') || c == '.'
+    return parse_number(p)
+  // **A broken reference's mark can be written inside a formula.** Deleting a row or column
+  // rewrites a removed position to this (closed up, it would silently point at the next cell).
+  if c == '#'
+    if p.c.src.len - p.c.pos >= broken_ref.len &&
+      p.c.src.sub(p.c.pos, broken_ref.len).equals(broken_ref)
+      p.c.pos += broken_ref.len
+      return Cell_error.no_cell.failed()
+    return Cell_error.syntax.failed()
+  // A value made from a type. **`Day` is a type's name, so it cannot be a table's name.**
+  if c.is_lower() || c.is_upper()
+    mark: = p.c.pos
+    if parse_word(p).equals("Day")
+      if !eat(p, '.') || !word(p, "of") || !eat(p, '(')
+        return Cell_error.syntax.failed()
+      return parse_day_of(p)
+    p.c.pos = mark
+  // The rest is text pointing at a cell. **A table name starting with a non-letter comes here
+  // too**, so do not branch on letters alone.
+  return parse_place(p)
+
+priv fn parse_method(p: P$@, v: Value): Value //< one method following a value
+  //<
+  //< It is called after the `.`. **The `(` and the `)` cannot be omitted** (the same form as
+  //< KSPL). **An unknown name is rejected.**
+  kind: = method_of(parse_word(p))
+  if kind < 0
+    return Cell_error.no_name.failed()
+  if !eat(p, '(')
+    return Cell_error.syntax.failed()
+  if kind == met_round
+    places: = parse_pick(p)
+    if !eat(p, ')')
+      return Cell_error.syntax.failed()
+    if !v.ok
+      return v
+    return places if !places.ok else rounded(v.num, places.num)
+  if !eat(p, ')')
+    return Cell_error.syntax.failed()
+  if !v.ok
+    return v
+  // **It takes a count of days**, whatever the date format (the format belongs to the text).
+  c: = day.civil_of(I64::v.num)
+  if kind == met_year
+    return number(F64::c.year)
+  if kind == met_month
+    return number(F64::c.month)
+  return number(F64::c.day)
+
+priv fn parse_factor(p: P$@): Value
+  addr.skip_ws(p.c@)
+  if addr.at(p.c@) == '-'
+    p.c.pos += 1
+    v: = parse_factor(p)
+    return v if !v.ok else number(-v.num)
+  $v: Value = parse_primary(p)
+  // **Any number of methods can follow** (`A1.round(0).day()`).
+  for v.ok && addr.at(p.c@) == '.'
+    p.c.pos += 1
+    v = parse_method(p, v)
+  return v
+
+priv fn parse_term(p: P$@): Value
+  $left: Value = parse_factor(p)
+  addr.skip_ws(p.c@)
+  for addr.at(p.c@) == '*' || addr.at(p.c@) == '/'
+    c: = addr.at(p.c@)
+    p.c.pos += 1
+    right: = parse_factor(p)
+    if !left.ok
+      return left
+    if !right.ok
+      return right
+    if c == '*'
+      left = number(left.num * right.num)
+    else
+      // A division by 0 is not a number (an infinity or a NaN written as text cannot be read).
+      if right.num == 0.0
+        return Cell_error.not_number.failed()
+      left = number(left.num / right.num)
+    addr.skip_ws(p.c@)
+  return left
+
+priv fn parse_expr(p: P$@): Value
+  $left: Value = parse_term(p)
+  addr.skip_ws(p.c@)
+  for addr.at(p.c@) == '+' || addr.at(p.c@) == '-'
+    c: = addr.at(p.c@)
+    p.c.pos += 1
+    right: = parse_term(p)
+    if !left.ok
+      return left
+    if !right.ok
+      return right
+    left = number(left.num + right.num if c == '+' else left.num - right.num)
+    addr.skip_ws(p.c@)
+  return left
+
+// ---- Comparing ----
+priv const cmp_none: Sz = 0 //<
+  //< The ways of comparing; this first one means no comparison follows
+  //<
+  //< **Only numbers can be compared** (a text cell gives "not a number").
+  //< The result is 1 (true) or 0 (false). Multiply for "and"; add and test > 0 for "or".
+priv const cmp_eq: Sz = 1
+priv const cmp_ne: Sz = 2
+priv const cmp_lt: Sz = 3
+priv const cmp_le: Sz = 4
+priv const cmp_gt: Sz = 5
+priv const cmp_ge: Sz = 6
+
+priv fn compare_op(p: P$@): Sz //< reads the comparison operator that comes next
+  //<
+  //< **Check the two-character ones first** (or `<=` is split into `<` and `=`).
+  addr.skip_ws(p.c@)
+  c: = addr.at(p.c@)
+  next: = addr.at_next(p.c@)
+  if c == '<' && next == '='
+    p.c.pos += 2
+    return cmp_le
+  if c == '<' && next == '>'
+    p.c.pos += 2
+    return cmp_ne
+  if c == '>' && next == '='
+    p.c.pos += 2
+    return cmp_ge
+  if c == '<' || c == '>' || c == '='
+    p.c.pos += 1
+    return cmp_lt if c == '<' else (cmp_gt if c == '>' else cmp_eq)
+  return cmp_none
+
+priv fn compared(op: Sz, a: F64, b: F64): Bool
+  if op == cmp_eq
+    return a == b
+  if op == cmp_ne
+    return a != b
+  if op == cmp_lt
+    return a < b
+  if op == cmp_le
+    return a <= b
+  if op == cmp_gt
+    return a > b
+  return a >= b
+
+priv fn parse_compare(p: P$@): Value //<
+  //< Reads an expression and at most one comparison after it
+  //<
+  //< **It compares only once.** `A1<B1<C1` cannot be written (the first 1 or 0 would be compared
+  //< with the next operand, which is not what it looks like).
+  left: = parse_expr(p)
+  op: = compare_op(p)
+  if op == cmp_none
+    return left
+  right: = parse_expr(p)
+  if !left.ok
+    return left
+  if !right.ok
+    return right
+  return number(1.0 if compared(op, left.num, right.num) else 0.0)
+
+priv fn parse_pick(p: P$@): Value //< `<value where true> if <condition> else <value where false>`
+  //<
+  //< **Both sides are computed**, so the same formula touches the same cells every time; the
+  //< error on the side not chosen is discarded (`0 if A1 == 0 else 1/A1` is 0 where A1 is 0). It
+  //< chains to the right (`a if c else b if d else e`).
+  yes: = parse_compare(p)
+  if !word(p, "if")
+    return yes
+  cond: = parse_compare(p)
+  if !word(p, "else")
+    return Cell_error.syntax.failed()
+  no: = parse_pick(p)
+  if !cond.ok
+    return cond
+  return yes if cond.num != 0.0 else no
+
+priv fn literal_of(text: U8[], spec: Number_spec): Value //< reads a text as a number
+  //<
+  //< **A text that does not parse is not a number** (it is not the same as 0).
+  //< **It is read as a date only where the text's style sets a date format** (read every text as a
+  //< date and a text meant as a number would become one too); otherwise as a number.
+  if text.len <= 0
+    return Cell_error.not_number.failed()
+  if !spec.dated.same_dating(Dating.none)
+    if n: = day.day_of(text)
+      return number(F64::n)
+  v: = text.to_f64() catch
+    return Cell_error.not_number.failed()
+  return number(v)
+
+priv fn eval(src: U8[], book: Book$@, g: Grid$@): Value //< computes one text as a formula
+  //<
+  //< **The leading `=` marks a formula; it is not part of it.** g is as in `P.g`.
+  $p: = P::{ .c = Reader::{ .src = src, .pos = 1 }, .book = book, .g = g }
+  v: = parse_pick(p@)
+  addr.skip_ws(p.c@)
+  // Anything left unread fails it; otherwise a typo would pass silently.
+  // **Do not overwrite an error already set** (the first reason is closer to the fix).
+  if v.ok && p.c.pos < p.c.src.len
+    return Cell_error.syntax.failed()
+  return v
+
+priv fn compute(g: Grid$@, r: Sz, c: Sz): Value
+  $n: Inline$@ = null
+  switch cell_inline(g, r, c) case .some(v)
+    n = v
+  case .none
+    return Cell_error.no_cell.failed()
+  if !n.is_formula()
+    return literal_of(n.text(), shown_as(g.book.sheet, n.style))
+  return eval(n.text(), g.book, g)
+
+priv fn value_at(g: Grid$@, r: Sz, c: Sz): Value //< cell (r, c)'s value
+  //<
+  //< **Coming back into a cell being computed means a cycle.**
+  if r < 0 || r >= g.rows || c < 0 || c >= g.cols
+    return Cell_error.no_cell.failed()
+  i: = r * g.cols + c
+  st: = g.state.get(i)
+  if st == settled
+    return g.value.get(i)
+  if st == working
+    return Cell_error.circular.failed()
+  g.state.set(i, working)
+  v: = compute(g, r, c)
+  g.value.set(i, v)
+  g.state.set(i, settled)
+  return v
+
+// ---- Writing a value into a text ----
+
+priv fn shown_as(sheet: Sheet$@, name: U8[]): Number_spec //<
+  //< The number format that the text's style sets
+  //<
+  //< **It is not inherited** (only the text's own style; an unknown name stays plain).
+  if sheet != null
+    if s: = sheet.find(name)
+      return s.number
+  return style.plain_number()
+
+priv fn show(n: Inline$@, v: Value, book: Book$@, out: Str_builder$@) //<
+  //< Sets the resulting value as the text to show
+  //<
+  //< **The typed text is not rewritten** (it would disagree with the undo record's positions).
+  //< Caution: **Clear the value of a text that is not a formula.** Otherwise the old value still
+  //< shows after the formula is typed over. **Nothing is set on the run being typed in.**
+  // A number is set on every cell, formula or not: **a chart reads it**.
+  num: = Option<|F64|>.some(v.num) if v.ok else Option<|F64|>.none
+  if !n.is_formula() || n == book.editing
+    // Caution: **Clear only the text and set the number** (a chart reads this cell too).
+    n.show_value("", num, book.kept)
+    return
+  out.clear()
+  if v.ok
+    shown.write_shown(out, v.num, shown_as(book.sheet, n.style))
+  else
+    out.s(v.err.error_text())
+  n.show_value(out.slice(), num, book.kept)
+
+// ---- Recomputing a table ----
+
+priv fn recalc_grid(g: Grid$@, out: Str_builder$@)
+  for $r: Sz = 0; r < g.rows; r += 1
+    for $c: Sz = 0; c < g.cols; c += 1
+      v: = value_at(g, r, c)
+      // Caution: **Let every cell through** (`show` clears an old value from a non-formula cell).
+      if n: = cell_inline(g, r, c)
+        show(n, v, g.book, out)
+
+priv fn show_free(n: Inline$@, book: Book$@, out: Str_builder$@) //< one text in the body
+  //<
+  //< Where it is a formula, it is computed and its value set as the text to show.
+  if !n.is_formula()
+    // **No number is set either** (a chart never reads a text outside a cell).
+    n.show_value("", Option<|F64|>.none, book.kept)
+    return
+  show(n, eval(n.text(), book, null), book, out)
+
+priv fn show_prose(b: Block$@, sheet: Sheet$@, book: Book$@, out: Str_builder$@) //<
+  //< Computes the body's formulas
+  //<
+  //< **A cell's first inline is not computed here** (its table does that, knowing its own table).
+  //< The runs from the second on, and a table's or row's own texts, count as the body.
+  for $i: Sz = 0; i < b.inlines.len; i += 1
+    show_free(b.inlines.get(i), book, out)
+  if !sheet.arrange_of(b.style).same_arrange(Arrange.grid)
+    for $i: Sz = 0; i < b.children.len; i += 1
+      show_prose(b.children.get(i), sheet, book, out)
+    return
+  for $r: Sz = 0; r < b.children.len; r += 1
+    row: = b.children.get(r)
+    for $i: Sz = 0; i < row.inlines.len; i += 1
+      show_free(row.inlines.get(i), book, out)
+    for $c: Sz = 0; c < row.children.len; c += 1
+      cell: = row.children.get(c)
+      // Index 0 is the cell the table computes.
+      for $i: Sz = 1; i < cell.inlines.len; i += 1
+        show_free(cell.inlines.get(i), book, out)
+      for $k: Sz = 0; k < cell.children.len; k += 1
+        show_prose(cell.children.get(k), sheet, book, out)
+
+priv fn collect(b: Block$@, sheet: Sheet$@, book: Book$@) //<
+  //< Finds the tables and collects them into book
+  //<
+  //< A table inside a cell counts as another table.
+  //< Caution: **Collect them all before computing.** Otherwise a formula pointing at a table not
+  //< yet collected reads "unknown name", and the result depends on the order written.
+  if sheet.arrange_of(b.style).same_arrange(Arrange.grid)
+    book.grids.push(new_grid(b, book))
+  for $i: Sz = 0; i < b.children.len; i += 1
+    collect(b.children.get(i), sheet, book)
+
+fn takes_formula(d: Doc$@, sheet: Sheet$@, n: Inline$@): Bool //<
+  //< Whether n's text may be replaced whole as a formula
+  //<
+  //< Any inline takes a formula when `=` is typed; this entry point is for **editing** one whose
+  //< visible text has become its value. **In the body it opens only where a formula already
+  //< exists** (otherwise one key press could replace a whole paragraph).
+  if n == null
+    return false
+  if n.is_formula()
+    return true
+  for $i: Sz = 0; i < d.blocks.len; i += 1
+    if seek_cell(d.blocks.get(i), sheet, n)
+      return true
+  return false
+
+priv fn seek_cell(b: Block$@, sheet: Sheet$@, n: Inline$@): Bool
+  if sheet.arrange_of(b.style).same_arrange(Arrange.grid)
+    for $r: Sz = 0; r < b.children.len; r += 1
+      row: = b.children.get(r)
+      for $c: Sz = 0; c < row.children.len; c += 1
+        cell: = row.children.get(c)
+        if cell.inlines.len > 0 && cell.inlines.get(0) == n
+          return true
+  for $i: Sz = 0; i < b.children.len; i += 1
+    if seek_cell(b.children.get(i), sheet, n)
+      return true
+  return false
+
+fn recalc(d: Doc$@, sheet: Sheet$@, editing: Inline$@ = null) //<
+  //< Recomputes the document's tables
+  //<
+  //< Caution: **Call it before layout**: the texts change, so the boxes would point at old ones.
+  //< **Also move the cursor back in bounds** (`Editor.clamp` in `write/typing.kspls`): a shrunk
+  //< text leaves it outside. **Build the tables' structure here and throw it away here**; in the
+  //< document's arena it would pile up at every keystroke.
+  $out: = Str_builder.new()
+  defer out.free()
+  scratch: = Arena.new(16 * 1024)
+  defer scratch.free()
+  book: = new_book(sheet, scratch, d.arena, editing)
+  for $i: Sz = 0; i < d.blocks.len; i += 1
+    collect(d.blocks.get(i), sheet, book)
+  // Caution: **Compute under the same book**, or a cycle across tables is not detected.
+  for $i: Sz = 0; i < book.grids.len; i += 1
+    recalc_grid(book.grids.get(i), out@)
+  // **The body is computed after the tables** (it points at their cells by name).
+  for $i: Sz = 0; i < d.blocks.len; i += 1
+    show_prose(d.blocks.get(i), sheet, book, out@)

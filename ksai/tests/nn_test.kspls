@@ -1,0 +1,58 @@
+import "ksai/nn" as ai_nn
+import "ksai/tensor" { Tensor }
+import "std/mem" { Arena }
+import "std/prng"
+import "std/verdict"
+
+// ==========================================
+// Initializing a layer.
+// **`nn.*.new`'s default is the same value in every element** (0.1 for `Linear`, 0.01 for
+// `Embedding`); trained from there, every output unit gets the same gradient and the units stay
+// identical forever, while **the loss still goes down**, so nothing shows it. So the test holds
+// `init_uniform` to **randomize every weight in the layer**; only the weights listed below are
+// checked (Principle 8).
+// Caution: **A weight added to a layer is listed here in the same commit as in `init_uniform`.**
+// ==========================================
+
+priv fn all_same(t: Tensor<|F64|>): Bool //< is every element the same value?
+  if t.size == 0
+    return true
+  first: = (t.data + 0)$
+  for i in Range.asc(t.size)
+    if (t.data + i)$ != first
+      return false
+  return true
+
+fn test_init_breaks_symmetry()
+  verdict.start("[NN] init_uniform spreads every last weight in a layer...")
+  work: = Arena.new(1024 * 1024)
+  defer work.free()
+  $blk: = ai_nn.Transformer_block<|F64|>.new(4, 8, 2, 1.0e-5, work)
+  // First pins that the default is one repeated value. If that breaks, the checks below pass
+  // without proving anything.
+  assert(all_same(blk.attention.wq.weights),
+    "NN: new's default has to be the same value in every element")
+  assert(all_same(blk.ffn.fc1.weights),
+    "NN: new's default has to be the same value in every element")
+
+  $rng: = prng.Prng.new(7U64)
+  blk.init_uniform(rng@, 0.1)
+  assert(!all_same(blk.attention.wq.weights), "NN: init_uniform has to spread wq")
+  assert(!all_same(blk.attention.wk.weights), "NN: init_uniform has to spread wk")
+  assert(!all_same(blk.attention.wv.weights), "NN: init_uniform has to spread wv")
+  assert(!all_same(blk.attention.wo.weights), "NN: init_uniform has to spread wo")
+  assert(!all_same(blk.ffn.fc1.weights), "NN: init_uniform has to spread fc1")
+  assert(!all_same(blk.ffn.fc2.weights), "NN: init_uniform has to spread fc2")
+  // **Do not randomize the normalization's weights.** Their initial value for training is 1.0
+  // (randomizing them makes the scale right after normalizing vary from unit to unit).
+  assert(all_same(blk.attention_norm.weight) &&
+    (blk.attention_norm.weight.data + 0)$ == 1.0,
+    "NN: init_uniform must not touch the normalization's weights")
+  assert(all_same(blk.ffn_norm.weight) && (blk.ffn_norm.weight.data + 0)$ == 1.0,
+    "NN: init_uniform must not touch the normalization's weights")
+
+  $emb: = ai_nn.Embedding<|F64|>.new(6, 4, work)
+  assert(all_same(emb.weight), "NN: Embedding's default is the same value in every element too")
+  emb.init_uniform(rng@, 0.1)
+  assert(!all_same(emb.weight), "NN: init_uniform has to spread the embedding")
+  verdict.pass("")

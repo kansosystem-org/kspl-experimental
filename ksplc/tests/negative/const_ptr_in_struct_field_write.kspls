@@ -1,0 +1,18 @@
+//< A write into the target of a read-only pointer (`T@`) held as a struct's field
+//<
+//< A step that is "a pointer beyond a field access" has its immutability forced just the same.
+//< It easily passes sema and falls on the generated C's `const`: for a field chain the root alone
+//< is inferred, then the type side is walked (write_target_type in sema/body/stmt.kspls).
+// EXPECT: cannot write through a read-only pointer
+
+struct S
+  p: I32@
+
+fn write_through_field(s: S$@)
+  s.p$ = 1
+
+fn main(): I32
+  $v: I32 = 0
+  s: = S::{ .p = v@ }
+  s@.write_through_field()
+  return v

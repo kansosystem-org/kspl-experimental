@@ -1,0 +1,31 @@
+import "std/verdict"
+
+// ==========================================
+// Where a generic's instantiation crosses a vtable.
+//
+// **A method called only through a trait value must have a definition too.** It is never called
+// by name, so "built when used" would leave a hole in the vtable **with no diagnostic**
+// (`ksplc/lower/vtable.kspls`).
+// Caution: **Make the body depend on the type argument** (`sizeof(T)`), or definitions collapsed
+// into one pass unseen.
+// ==========================================
+priv trait Sized_say
+  fn say(r: Self): Sz
+
+priv struct Say_box<|T|>
+  v: T
+
+impl<|T|> Say_box<|T|>: Sized_say
+  priv fn say(_r: Self): Sz //< this name is never written as `b.say()` directly from anywhere
+    return sizeof(T)
+
+fn test_generic_vtable_only_method()
+  verdict.start("[Generic] a method called only through a trait value is generated test...")
+  small: = Say_box<|U8|>::{ .v = 1 }
+  wide: = Say_box<|I64|>::{ .v = 1 }
+  s1: Sized_say = small
+  s2: Sized_say = wide
+  assert(s1.say() == 1, "the U8 instantiation returns 1")
+  assert(s2.say() == 8, "the I64 instantiation returns 8")
+  assert(s1.say() != s2.say(), "each instantiation is a separate function (not merged into one)")
+  verdict.pass("a generic method called only through a trait value is generated per instantiation.")

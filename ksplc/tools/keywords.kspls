@@ -1,0 +1,96 @@
+import "kspeg/engine" as kspeg
+import "ksplc/base/core" as base_core
+import "std/chars" // the one-character checks and cuts
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+import "std/seq"
+import "std/str"
+
+priv struct Keyword_group
+  label: U8[]
+  keywords: List<|U8[]|>$@
+
+priv fn first_underscore_len(name: U8[]): Sz //<
+  //< The length up to the first "_" (the whole length where there is no "_")
+  at: = name.find_char('_')
+  return name.len if at < 0 else at
+
+priv fn rule_group_label(name: U8[], all_names: List<|U8[]|>@): U8[] //<
+  //< A rule name's prefix before its first "_" ("stmt_return" -> "stmt") as a rough label
+  //<
+  //< Where no other rule shares the prefix ("Primitive" against "Primitive_type"), the whole name.
+  //< all_names is only read, so it is `@`: `$@` would force a `$` onto the caller's binding ("The
+  //< receiver of a read-only method is `Self@`" in docs/DESIGN.md).
+  prefix_len: = first_underscore_len(name)
+  if prefix_len == name.len
+    return name
+  prefix: = name.sub(0, prefix_len)
+  $sibling_count: = 0
+  for other in all_names
+    other_prefix_len: = first_underscore_len(other)
+    if other.sub(0, other_prefix_len).equals(prefix)
+      sibling_count += 1
+  return prefix if sibling_count >= 2 else name
+
+priv fn find_or_create_group(groups: List<|Keyword_group$@|>$@, label: U8[], arena: Arena$@):
+  Keyword_group$@
+  for g in groups
+    if g.label.equals(label)
+      return g
+  kg: = Keyword_group::{ .label = label, .keywords = List<|U8[]|>.create(arena) }
+  new_group: = arena.create(kg)
+  groups.push(new_group)
+  return new_group
+
+fn run_keyword_dump(parser: kspeg.Target$@) //<
+  //< It lists the grammar's keywords on standard output, grouped by the prefix of their rules
+  //<
+  //< The grammar is ksplc/kspl.kspeg, and totals are printed too (ksplc info keywords).
+  //<
+  //< Groups come in order of first appearance, and the keywords within each alphabetically.
+  by_rule: = parser.keywords_by_rule()
+  // The total sums each rule's own keywords, duplicates removed.
+  // Caution: Do not count by looking inside the synthesized `_Keyword`; its shape is the engine's
+  // choice.
+  every_name: = List<|U8[]|>.create(base_core.arena)
+  for entry in by_rule
+    for kw in entry.keywords
+      every_name.push(kw)
+  total_names: = every_name.distinct(fn(a: U8[], b: U8[]; ): Bool {
+    return a.equals(b);
+  }, base_core.arena)
+
+  // A leading "_" marks a meta or transparent rule (_Space / _Boundary) by ksplc/kspl.kspeg's own
+  // convention, which the general engine kspeg/ does not know, so the check is made here.
+  // Caution: **Collect it with `to_list` here.** Used twice, the chain would rerun the predicate
+  // per element in the `for` below.
+  content_rules: = by_rule.where(fn(e: kspeg.Rule_keywords$@; ): Bool {
+    return !e.rule_name.starts_with("_");
+  }).to_list(base_core.arena)
+  all_names: = content_rules.select(fn(e: kspeg.Rule_keywords$@; ): U8[] {
+    return e.rule_name;
+  }).to_list(base_core.arena)
+
+  groups: = List<|Keyword_group$@|>.create(base_core.arena)
+  for entry in content_rules
+    if entry.keywords.len == 0
+      continue
+    label: = rule_group_label(entry.rule_name, all_names@)
+    group: = find_or_create_group(groups, label, base_core.arena)
+    for kw in entry.keywords
+      group.keywords.push(kw)
+
+  for g in groups
+    // deduplicated, since several rules in a group share a keyword
+    uniq: = g.keywords
+      .distinct(fn(a: U8[], b: U8[]; ): Bool {
+      return a.equals(b);
+    }, base_core.arena)
+    sorted: = uniq.order_by(fn(a: U8[], b: U8[]; ): I32 {
+      return a.compare(b);
+    }, base_core.arena)
+    io.out().s(g.label).s(" (\{sorted.len\}):\n")
+    for kw in sorted
+      io.out().s("  ").s(kw).s("\n")
+  io.out().s("\nTotal: \{total_names.len\} unique keyword(s) across \{groups.len\} group(s)\n")

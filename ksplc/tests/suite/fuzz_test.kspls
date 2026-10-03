@@ -1,0 +1,100 @@
+//< Feeds broken source to the compiler's front end (lexing, parsing, semantic analysis)
+//<
+//< **Real sources in both notations are the seeds**: those under the folders named after the two
+//< paths every suite is given (this folder where none is named; the repository names its root),
+//< and the `std` the compiler reads. Each round breaks one (`std/fuzz`), and the check is that
+//< **the compiler ends with its own answer** (a rejection is normal, if not every time). The
+//< timeout uses real time, so a slow compilation on a busy machine can look endless: a failing
+//< case is rerun alone.
+import "ksplc/tests/support/harness"
+import "std/argp"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/fuzz"
+import "std/mem" { Arena }
+import "std/str" // `arena.text()`
+import "std/strfmt" as _strfmt
+
+priv const default_seed: I64 = 20260719
+priv const default_trials: I64 = 200
+
+priv const trial_timeout_ms: I32 = 15000 //< a round's first timeout
+
+priv const max_seed_bytes: I64 = 64I64 * 1024I64 //<
+  //< The cap that keeps a round short
+  //<
+  //< Caution: **Do not drop the small side.** A file of a few bytes has its ways of breaking too.
+
+priv const notations: fuzz.Input_kind[2] = ::{ //<
+  //< Both notations are seeds (nothing else reaches the reader of the indentation notation)
+  //<
+  //< Caution: **They are taken in turn, not by the ratio of the counts.** One notation has far
+  //< fewer seeds, so drawn from one pool it is hardly reached.
+  fuzz.Input_kind::{ .name = ".kspl", .ext = ".kspl" },
+  fuzz.Input_kind::{ .name = ".kspls", .ext = ".kspls" },
+}
+
+priv const reach_floor_div: Sz = 20 //<
+  //< At least one round in this many must compile, not be refused
+  //<
+  //< Caution: **Do not raise it to tighten the check**: it only shows that fuzzing works.
+
+priv fn under_one(path: U8[], dirs: List<|U8[]|>@): Bool //< whether a folder already holds path
+  for d in dirs
+    if path.equals(d) || path.starts_with(d) && path.len > d.len && path[d.len] == '/'
+      return true
+  return false
+
+priv fn seed_dirs(named: List<|U8[]|>@, arena: Arena$@): List<|U8[]|>?fs.Fs_error //<
+  //< The folders the seeds come from: those named, or this one, and the `std` the compiler reads
+  //<
+  //< Caution: **Do not leave `std` out**: it uses `#cfg`, `extern "C"`, attributes and generics
+  //< most, and syntax absent from the seeds is out of reach. It is left out only where a named
+  //< folder already holds it.
+  $out: = List<|U8[]|>.new(arena)
+  for d in named
+    out.push(fs.absolute(d, arena)?)
+  if out.len == 0
+    out.push(fs.absolute(".", arena)?)
+  if !under_one(harness.std_dir(), out@)
+    out.push(harness.std_dir())
+  return out
+
+priv const usage: U8[] = "[seed folder ...]"
+
+fn main(): I32
+  arena: = harness.begin(512 * 1024 * 1024)
+  $o: = fuzz.Opts::{ .trials = default_trials, .seed = default_seed }
+  p: = argp.Parser
+    .create("fuzz_test", "scatters broken source at the compiler's front end", arena)
+  p.positional(usage)
+  fuzz.declare(p, o@)
+  $more: = List<|U8[]|>.new(arena)
+  for a in harness.more_args()
+    more.push(a)
+  p.parse_list(more@) catch e
+    return harness.fatal(arena.text().s("\{e\}").take())
+  fuzz.check_dirs(p.rest.slice(), arena) catch why
+    return harness.fatal(why)
+  $dirs: = seed_dirs(p.rest, arena) catch
+    return harness.fatal("the working directory cannot be read")
+  work: = harness.sandbox("fuzz") catch
+    return harness.fatal("cannot make a working directory")
+  // The command that reruns it from this folder, with the same compiler, scratch and seed folders.
+  again: = arena.text().s("ksplc run tests/suite/fuzz_test.kspls \"").s(harness.ksplc_exe())
+    .s("\" \"").s(harness.tmp_dir()).c('"')
+  for d in p.rest
+    again.s(" \"").s(d).c('"')
+  // **The broken source is named in its seed's notation**: the name decides how it is read.
+  c: = fuzz.Campaign::{ .subject = "ksplc", .argv = harness.ksplc_argv(U8[][]::{}),
+    .tell_kind = false, .after = U8[][]::{ fs.join(work, "out.c", arena) }, .work = work,
+    .kinds = fuzz.Input_kind[]::notations, .in_turn = true, .wait_ms = trial_timeout_ms,
+    .reach_div = reach_floor_div, .again = again.take() }
+  $endings: = List<|U8[]|>.new(arena)
+  for n in notations
+    endings.push(n.ext)
+  seeds: = fuzz.gather(dirs.slice(), endings.slice(), max_seed_bytes, arena)
+  fuzz.scatter(c@, seeds@, "source", o, arena) catch why
+    return harness.fatal(why)
+  return harness.finish()

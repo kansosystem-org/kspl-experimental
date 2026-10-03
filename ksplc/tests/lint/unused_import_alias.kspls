@@ -1,0 +1,16 @@
+//< Whether an import alias is unused is decided within **that one file**
+//<
+//< Whether another file uses the same target has nothing to do with it. `std/math` is never written
+//< in this file (another file of this compilation unit does use it). `strfmt` is written, so it
+//< must not sound (pinning down the suppressing side).
+// EXPECT: [I0401] Unused import alias 'mth'
+// EXPECT-NOT: [I0401] Unused import alias 'strfmt'
+import "std/io"
+import "std/math" as mth
+import "std/strfmt"
+
+fn main(): I32
+  // Choose a function called with the alias in front: it pins the alias being written, where a
+  // method call would pin the import that makes the call hold.
+  strfmt.write_int(io.out(), 0, 1).c('\n')
+  return 0

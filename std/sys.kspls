@@ -1,0 +1,367 @@
+//< The process itself: its arguments, its environment, the clock, signals and the error trace
+//<
+//< The path helpers are here too (`get_dir_name`, `last_ext`, `is_absolute` and the rest), because
+//< they read a path as text and never touch the filesystem; operations on the tree are in `std/fs`.
+//< **`panic` and `assert` are not here** but in `std/lang`: here, `mem` and `ds` would have to
+//< import `sys`, and the base layer could not be split into stages.
+import "std/chars"
+import "std/libc"
+// **An import used on only one build carries the same `#cfg` on its import line**; without it,
+// `dealloc` is reported as unused on the freestanding build ([I0401]).
+#cfg(!freestanding)
+import "std/mem" { dealloc }
+import "std/str" + { Str_builder }
+
+// ==========================================
+// The error trace
+// ==========================================
+
+extern "C"
+  pub fn kspl_error_trace_depth(): I32
+  pub fn kspl_get_trace_frame_info(index: I32, out_file: U8@$@, out_func: U8@$@, out_line: I32$@)
+
+priv fn demangle_fn_name(raw_func: U8[], file_path: U8[]): U8[] //<
+  //< The original function name from genc's symbol, "kspl_[priv_]<mod_with_underscores>_<func>"
+  $func_name: = raw_func
+  if func_name.starts_with("kspl_priv_")
+    func_name = func_name.strip_prefix("kspl_priv_")
+  else
+    func_name = func_name.strip_prefix("kspl_")
+
+  $mod_prefix: = Str_builder.new()
+  defer mod_prefix.free()
+  for k in Range.asc(file_path.len)
+    ch: = (file_path.ptr + k)$
+    mod_prefix.c('_' if ch == '.' else ch)
+  mod_prefix.s("_")
+
+  return (func_name.sub_from(mod_prefix.len) if func_name.starts_with(mod_prefix.slice())
+    else func_name)
+
+pub fn print_trace() //< writes the route this thread's last failure took to standard error
+  //<
+  //< Caution: **Do not use `io`.** Many files import `sys`, so importing `io` here would make all
+  //< of them carry the file-I/O implementation (bare metal has no standard output). The text is
+  //< built in a `Str_builder` and written with one libc `fwrite`, so it is less likely to mix with
+  //< other output.
+  depth: = kspl_error_trace_depth()
+  if depth > 0
+    $out: = Str_builder.new()
+    defer out.free()
+    out.s("stack backtrace:\n")
+    $frame_idx: I32 = 0
+    for $i: = depth - 1; i >= 0; i -= 1
+      $file_ptr: U8@ = null
+      $func_ptr: U8@ = null
+      $line: I32 = 0
+      kspl_get_trace_frame_info(i, file_ptr@, func_ptr@, line@)
+
+      raw_func: = str.from_cstr(U8$@::func_ptr)
+      raw_file: = str.from_cstr(U8$@::file_ptr)
+
+      out.s("  ")
+      if frame_idx < 10
+        out.s(" ")
+      out.s("\{frame_idx\}: ")
+      frame_idx += 1
+
+      if raw_func.equals("kspl_main")
+        out.s("main at \{raw_file\}:\{line\}\n")
+        continue
+
+      // **Cutting at `.kspl` handles both notations** (`.kspls` starts with it). If narrowed to
+      // `.kspls`, a file written in braces would keep its extension and the prefix would not match.
+      $file_path: = Str_builder.new()
+      defer file_path.free()
+      for k in Range.asc(raw_file.len)
+        if raw_file.starts_with(".kspl", k)
+          break
+        ch: = (raw_file.ptr + k)$
+        file_path.c('.' if ch == '/' || ch == '\\' else ch)
+
+      func_name: = demangle_fn_name(raw_func, file_path.slice())
+      out.s("\{file_path.slice()\}.\{func_name\} at \{raw_file\}:\{line\}\n")
+    text: = out.slice()
+    err: = libc.get_stderr()
+    libc.fwrite(Void$@::text.ptr, 1, text.len, err)
+    libc.fflush(err)
+// ==========================================
+// Managing the process and its arguments
+// ==========================================
+
+pub struct Args //< the arguments this process was started with; `[0]` is the program
+  pub len: Sz //< how many there are, counting the program's own name
+
+impl Args: Index<|Sz, U8[]|> //< so `args()[i]` can be written
+  pub fn get(r: Self@, index: Sz): U8[] //< one argument; an index out of range stops the program
+    assert(index < r.len, "args: index out of bounds")
+    return (libc.argv + index).to_slice()
+
+pub fn args(): Args //< the arguments this process was started with
+  return ::{ .len = libc.argc }
+
+#noreturn
+pub fn exit( //< ends the process at once, without unwinding
+  status: I32, //< what the parent sees; 0 means success
+)
+  libc.exit(status)
+
+// ==========================================
+// Environment variables
+// ==========================================
+
+// Caution: **The result is a view into an internal static buffer**, valid only until the next
+// read or change of an environment variable (on POSIX and the CRT alike); copy it to keep it.
+// **It exists only on the `#cfg(!freestanding)` side**, like `set_env` / `unset_env`.
+#cfg(!freestanding)
+pub fn get_env(name: U8[]): Option<|U8[]|> //< an environment variable, or nothing when unset
+  // The C side would cut a name at a NUL, so such a name gives .none (see str.to_cstr).
+  $name_buf: U8$@ = null
+  switch name.to_cstr() case .some(p)
+    name_buf = p
+  case .none
+    return Option<|U8[]|>.none
+  defer dealloc(Void$@::name_buf)
+  // Caution: **Do not use `libc.getenv`.** Windows's narrow API returns the current code page, so
+  // passing its result straight into a path mixes two encodings ("Paths are held in UTF-8, and
+  // converted to the wide API on Windows" in `std/docs/DESIGN.md`).
+  val: = kspl_get_env(name_buf)
+  if val == null
+    return Option<|U8[]|>.none
+  return Option<|U8[]|>.some(str.from_cstr(U8$@::val))
+
+#cfg(!freestanding)
+extern "C"
+  fn kspl_set_env(name: U8@, value: U8@): Bool
+  fn kspl_unset_env(name: U8@): Bool
+  fn kspl_cpu_count(): I32
+  fn kspl_cwd(buf: U8$@, cap: Sz): Sz
+  fn kspl_get_env(name: U8@): U8@
+
+// **The separator is the OS's own** (`\` on Windows). **No trailing separator is added** (except
+// for the root `/`). **When the path does not fit in buf, it returns empty**, not a truncated path
+// that points somewhere else.
+#cfg(!freestanding)
+pub fn cwd( //< the working directory, or empty if it cannot be read or does not fit
+  buf: U8$[], //< where the path is written; the result is a view into it
+): U8[] //< the path, as a view into `buf`
+  n: = kspl_cwd(buf.ptr, buf.len)
+  return U8[]::{ .ptr = buf.ptr, .len = n }
+
+// For "how many to run in parallel": more than this is no faster, only more overhead.
+#cfg(!freestanding)
+pub fn cpu_count(): Sz //< how many CPUs are usable; 1 if unknown, never 0
+  n: = kspl_cpu_count()
+  return 1 if n < 1 else n
+
+pub const script_env_name: U8[] = "KSPL_SCRIPT" //< how a launcher passes a script its own path.
+  //<
+  //< The value is "<the launched executable's path>\n<the script's path>" (see script_path).
+  //< Caution: Changing the name on only one side makes script_path silently return .none.
+
+// Overwrites an existing value; true if it was set. **A value set here is inherited by child
+// processes, and by grandchildren too**, so it does not apply to this launch only. **An empty value
+// is not set, and false is returned.** Windows's CRT treats an empty assignment as "delete", so the
+// same call would do different things per OS. To delete, call `unset_env`.
+#cfg(!freestanding)
+pub fn set_env( //< sets an environment variable, which children inherit
+  name: U8[], //< the variable's name
+  value: U8[], //< the value; empty is refused, since `unset_env` is what deletes
+): Bool //< true when it was set; false for an empty value or a failure
+  // **This is the only place that refuses.** Refusing in the per-OS layer would let one OS turn it
+  // into "delete" as soon as only the other OS's layer was changed.
+  if value.len <= 0
+    return false
+  $name_buf: U8$@ = null
+  switch name.to_cstr() case .some(p)
+    name_buf = p
+  case .none
+    return false
+  defer dealloc(Void$@::name_buf)
+  $val_buf: U8$@ = null
+  switch value.to_cstr() case .some(p)
+    val_buf = p
+  case .none
+    return false
+  defer dealloc(Void$@::val_buf)
+  return kspl_set_env(name_buf, val_buf)
+
+// **This is the only way to delete** (see `set_env`). **A deletion is inherited by child
+// processes, and by grandchildren too**: it cleans up a variable passed along temporarily.
+#cfg(!freestanding)
+pub fn unset_env(name: U8[]): Bool //< deletes an environment variable, which children inherit
+  $name_buf: U8$@ = null
+  switch name.to_cstr() case .some(p)
+    name_buf = p
+  case .none
+    return false
+  defer dealloc(Void$@::name_buf)
+  return kspl_unset_env(name_buf)
+
+// The equivalent of Python's `__file__`, so a script can find files beside it (with
+// `get_dir_name`). **It decides by matching argv[0].** The environment variable is inherited by
+// grandchildren too, so the value also carries the path of the executable the launcher started.
+#cfg(!freestanding)
+pub fn script_path(): Option<|U8[]|> //< the script being run, if a launcher started this
+  $raw: U8[] = ""
+  switch get_env(script_env_name) case .some(v)
+    raw = v
+  case .none
+    return Option<|U8[]|>.none
+  sep: = raw.find_char('\n')
+  if sep < 0
+    return Option<|U8[]|>.none
+  $a: = args()
+  if a.len == 0 || !raw.sub(0, sep).equals(a.get(0))
+    return Option<|U8[]|>.none
+  return Option<|U8[]|>.some(raw.sub_from(sep + 1))
+
+// The running program's **path as typed** (without the folder).
+// Caution: **Do not keep two paths**: argp uses the same `prog` for the usage and for errors, so
+// splitting them makes the wording differ within one tool.
+// **Do not use `caller_file` instead**: it embeds the absolute path of the machine that built it.
+#cfg(!freestanding)
+pub fn program_name(): U8[] //< this program's name for messages, without folder or extension
+  switch script_path() case .some(p)
+    return get_file_name(p)
+  case .none {}
+  $a: = args()
+  if a.len == 0
+    return ""
+  return strip_last_ext(get_file_name(a.get(0)))
+
+// ==========================================
+// Handling signals
+// ==========================================
+pub const sigint: I32 = 2 //< Ctrl+C, shared by POSIX and Windows
+pub const sigterm: I32 = 15 //< a request to exit cleanly; it can be registered on Windows too
+
+// A signal handler may only do async-signal-safe work (no allocation, no lock, few KSPL calls), so
+// it sets a flag with one volatile write; the code polling shutdown_requested() cleans up.
+priv $shutdown_flag: U32 = 0
+
+priv fn handle_shutdown_signal(_sig: I32)
+  __kspl_write_volatile(shutdown_flag@, 1U32)
+
+pub fn install_shutdown_handler() //< makes Ctrl+C and a stop request set a flag, not kill
+  //<
+  //< Call this, then poll `shutdown_requested()` in the loop. For finer control, use
+  //< `libc.signal()`.
+  libc.signal(sigint, handle_shutdown_signal)
+  libc.signal(sigterm, handle_shutdown_signal)
+
+pub fn shutdown_requested(): Bool //< whether a stop was requested since the handler was installed
+  return __kspl_read_volatile(shutdown_flag@) != 0U32
+
+pub fn raise_signal(sig: I32) //< sends a signal to this process itself
+  //<
+  //< For a test, or to resend a signal for its default behaviour after your own clean-up.
+  libc.raise(sig)
+
+// ==========================================
+// The filesystem
+// ==========================================
+
+priv fn last_path_sep(path: U8[]): I32 //<
+  //< Returns the position of the last separator in path (-1 if there is none)
+  for $i: = I32::path.len - 1; i >= 0; i -= 1
+    if is_path_sep(path[i])
+      return i
+  return -1
+
+pub fn is_absolute(path: U8[]): Bool //< whether it starts from the root; on Windows `C:\` counts
+  //<
+  //< Caution: **Check up to the separator after the drive.** On Windows `C:name` is relative to
+  //< **that drive's current working directory**, not the root; skipping the separator creates a
+  //< copy that answers differently in just that case. On POSIX `C:\x` is a relative name.
+  n: = root_len(path)
+  return n > 0 && is_path_sep(path[n - 1])
+
+pub fn is_path_sep(c: U8): Bool //< a path separator, `/` or `\`, on every OS; std/fs splits by it
+  //<
+  //< Caution: Check both `/` and `\`. A path from Windows can be mixed (MSYS2 rewrites a
+  //< `/tmp/...` it passes to a child process as `D:/a/_temp/...`).
+  return c == '/' || c == '\\'
+
+pub fn root_len(path: U8[]): Sz //< the length of the root a path starts from; 0 if it has none
+  //<
+  //< A separator is one byte. **A drive is part of the root on Windows only**: `C:` is two and
+  //< `C:\` three there, while on POSIX `C:\x` is a relative name whose first folder is `C:`. std/fs
+  //< measures the root by this too, so the two cannot disagree.
+  if path.len > 0 && is_path_sep(path[0])
+    return 1
+  if !is_windows() || path.len < 2 || path[1] != ':'
+    return 0
+  return 3 if path.len >= 3 && is_path_sep(path[2]) else 2
+
+pub fn get_dir_name(path: U8[]): U8[] //< the folder part, or empty if there is none
+  //<
+  //< **A file directly under the root is in the root** (`/x` in `/`, on Windows `C:\x` in `C:\`),
+  //< as Python, Go, Rust and C++ answer; the root itself is in nothing.
+  last_slash: = last_path_sep(path)
+  if last_slash == -1
+    return ""
+  // Caution: **Do not return empty for a file under the root.** Empty means the current directory,
+  // so a search beside `/x` would search beside the working directory instead, and a file there
+  // would pick up the settings of wherever the compiler was started.
+  top: = root_len(path)
+  if Sz::last_slash < top
+    return "" if path.len == top else path.sub(0, top)
+  return path.sub(0, last_slash)
+
+pub fn get_file_name(path: U8[]): U8[] //< the last segment, without the folder part
+  last_slash: = last_path_sep(path)
+  return path if last_slash == -1 else path.sub(last_slash + 1, path.len - last_slash - 1)
+
+priv fn ext_dot(path: U8[]): I32 //<
+  //< The position of the extension's leading `.` (-1 if there is none)
+  //<
+  //< **A filename's leading `.` is not an extension** (`.bashrc` has none).
+  dot: = path.rfind_char('.')
+  if dot < 0
+    return -1
+  return -1 if dot <= last_path_sep(path) + 1 else dot
+
+pub fn strip_last_ext(path: U8[]): U8[] //< the path without its last extension
+  //<
+  //< **Joined with `last_ext`, it restores the original path** (`strip_last_ext(p) + last_ext(p)
+  //< == p`), so there is no "which side gets the dot" to remember.
+  //< Caution: Do not change only one of them.
+  dot: = ext_dot(path)
+  return path if dot < 0 else path.sub(0, dot)
+
+pub fn last_ext(path: U8[]): U8[] //< the last extension with its dot, or empty if none
+  //<
+  //< **The leading `.` is included.** For a double extension, call it again yourself
+  //< (`last_ext(strip_last_ext("a.tar.gz"))` gives `".tar"`). **Do not add a plural such as
+  //< `suffixes` in advance** (Principle 1 in `docs/DESIGN.md`); adding one later only joins paths.
+  dot: = ext_dot(path)
+  return "" if dot < 0 else path.sub_from(dot)
+
+extern "C"
+  fn kspl_mono_us(): I64
+  fn kspl_is_windows(): Bool
+  fn kspl_sleep_ms(ms: I32)
+
+pub fn mono_us(): I64 //< a clock that only goes forward, in microseconds
+  //<
+  //< **Only a difference has meaning**; the origin is not defined.
+  //< Caution: **Do not measure elapsed time with the wall clock (`time.now`).** NTP or the user can
+  //< rewind it, so a difference can go negative. **It is not CPU time**: it advances while waiting.
+  return kspl_mono_us()
+
+pub fn timing_available(): Bool //< whether this environment has a clock at all
+  //<
+  //< A working clock never returns 0, whatever its origin, so that is what is checked.
+  return mono_us() != 0
+
+pub fn is_windows(): Bool //< whether the OS running this is Windows
+  //<
+  //< Lets a test or tool that relies on a POSIX-only path such as `/bin/echo` skip itself.
+  return kspl_is_windows()
+
+// Caution: **Do not wait with a busy spin.** It uses a whole core for the entire wait and slows
+// every other job. Where a read with a timeout (`Piped_child.read`) can do the waiting, prefer it.
+#cfg(!freestanding)
+pub fn sleep_ms(ms: I32) //< waits that many milliseconds, yielding the CPU
+  kspl_sleep_ms(ms)

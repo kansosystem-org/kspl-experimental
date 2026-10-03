@@ -1,0 +1,51 @@
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str" // `strip_prefix`
+import "std/sys"
+import "std/verdict"
+import "tools/lsp_place" as place
+
+// ==========================================
+// Tests how the position and the file passed to the language server are built
+// (`tools/lsp_place.kspls`).
+//
+// It is tested because **a mistake here breaks nothing visible**: a wrong position gets a
+// well-formed answer for the wrong position, and a wrong file gets another file, resolved from the
+// server's working directory. Both look like "a response arrived".
+// ==========================================
+
+fn test_reading_a_position() //< an unreadable spelling and a negative both come back as -1
+  verdict.start("[tools/lsp_place] reading a position test...")
+  assert(place.zero_based("0") == 0I64, "0 is 0")
+  assert(place.zero_based("12") == 12I64, "an ordinary number stays as it is")
+  // An unreadable spelling must not become 0 (the reason is at `place.zero_based`).
+  assert(place.zero_based("abc") == -1I64, "an unreadable spelling is -1")
+  assert(place.zero_based("") == -1I64, "an empty spelling is -1 too")
+  assert(place.zero_based("1x") == -1I64, "a spelling with a letter after the number is -1 too")
+  // Caution: **A negative is refused too** (the reason is at `place.zero_based`).
+  assert(place.zero_based("-1") == -1I64, "a negative is refused")
+  assert(place.zero_based("-5") == -1I64, "every negative is refused")
+  verdict.pass("an unreadable spelling and a negative both become -1, not mistaken for 0.")
+
+fn test_pointing_at_a_file(arena: Arena$@) //< `file://` plus an absolute path, relative or not
+  verdict.start("[tools/lsp_place] how a file is pointed at test...")
+  got: = place.uri_of("/a/b/c.kspl", arena)
+  assert(got.equals("file:///a/b/c.kspl"), "an absolute path just gets the prefix added")
+  // A drive letter (`C:/…`) is a root on Windows only; elsewhere it is a folder's name.
+  won: = place.uri_of("C:/a/b.kspl", arena)
+  assert(won.equals("file://C:/a/b.kspl") == sys.is_windows(),
+    "one with a drive letter is absolute on Windows alone")
+  // A relative path gets the working directory in front (the reason is at `place.uri_of`).
+  rel: = place.uri_of("a/b.kspl", arena)
+  assert(rel.ends_with("/a/b.kspl"), "the spelling pointed at stays at the end")
+  // Caution: **Do not assume how the working directory is spelled.** A check for `file:///` fails
+  // on Windows (`C:\…` leaves two slashes); the test asks only "the prefix begins at the root".
+  assert(sys.is_absolute(rel.strip_prefix("file://")),
+    "what is prefixed is a path beginning at the root")
+  assert(!rel.equals("file://a/b.kspl"), "it does not come out as a plain join")
+  // Caution: **Do not treat a drive with no separator after it as absolute**: `C:name` is relative
+  // to that drive's working directory, so without the prefix it opens a different file.
+  drv: = place.uri_of("C:name.kspl", arena)
+  assert(!drv.equals("file://C:name.kspl"), "a drive-relative path is not handed over as it stands")
+  verdict
+    .pass("absolute as it stands, relative prefixed with the working place, both via `file://`.")

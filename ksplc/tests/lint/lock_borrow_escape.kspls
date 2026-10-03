@@ -1,0 +1,38 @@
+//< [W0106] Finds uses of a borrow taken from a lock after the lock is released
+//<
+//< After unlock another thread may rewrite that region at the same time. Both (A) a use after
+//< unlock and (B) a return of the borrow must be findings, and a use while holding the lock not.
+// ==========================================
+// EXPECT: [W0106] Local 'p' borrows into 'mx' via .lock()
+// EXPECT: [W0106] Returning a pointer obtained from Mutex.lock()
+// **The line number below names the `mx.lock()` line** of the use while holding the lock.
+// Move a line above it and mend it here.
+// EXPECT-NOT: lock_borrow_escape.kspls:31
+// ==========================================
+import "std/io"
+import "std/thread"
+
+priv fn use_after_unlock() //< (A) using the borrow after unlock (a finding)
+  $mx: = thread.Mutex<|I32|>.new(0) catch
+    return
+  p: = mx.lock()
+  mx.unlock()
+  io.out().s("\{p$\}\n")
+
+priv fn returns_borrow(): I32$@ //< (B) returning the borrow as it stands (a finding)
+  $mx: = thread.Mutex<|I32|>.new(0) catch
+    return null
+  p: = mx.lock()
+  return p
+
+priv fn uses_while_locked() //< a use while holding the lock (not a finding)
+  $mx: = thread.Mutex<|I32|>.new(0) catch
+    return
+  p: = mx.lock()
+  p$ += 1
+  mx.unlock()
+
+fn main()
+  use_after_unlock()
+  _q: = returns_borrow()
+  uses_while_locked()

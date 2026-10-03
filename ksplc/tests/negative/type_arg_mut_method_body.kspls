@@ -1,0 +1,22 @@
+//< An immutable type argument at a declared position cannot be written even in a method's body
+//<
+//< Unlike the built-in slice, whose `impl U8$[]` body an immutable slice can call and which fails
+//< at run time, the generic body is instantiated per type argument, so its immutable version is
+//< refused at translation time.
+// EXPECT: cannot write through a read-only pointer
+import "std/io"
+
+priv struct Box<|$T|>
+  p: T$@
+
+impl<|T|> Box<|T|>
+  fn poke(r: Self, v: T)
+    r.p$ = v
+
+$slot: I32 = 1
+
+fn main(): I32
+  ro: Box<|I32|> = ::{ .p = slot@ }
+  ro.poke(99)
+  io.out().s("\{slot\}\n")
+  return 0

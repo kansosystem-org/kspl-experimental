@@ -1,0 +1,230 @@
+//< The car's face (the eyes' expression, shown on an 8×16 LED matrix)
+//<
+//< **The matrix is on the same pins as the ultrasonic (GPIO 4/5).**
+//< **A picture is one pair of left and right eyes.**
+//< **The display is mounted rotated 90 degrees.**
+//< **The frame timing does not depend on the caller's loop period.**
+
+// ==========================================
+//   if !face.init() { … }        // start I2C and the matrix
+//   face.set(face.Look.blink);
+//   face.show();                 // every loop
+// ==========================================
+import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/drivers/ht16k33" as matrix
+import "ksos/drivers/rp2040/i2c"
+import "ksos/drivers/rp2040/timer"
+
+priv const brightness: U32 = 4 //< the brightness, 0 to 15.
+  //<
+  //< Caution: **Do not raise it too far.** There are 128 LEDs, so it drains the battery by itself
+  //< (and the driving decision watches the battery).
+
+enum Look //< the expressions it can show
+  //<
+  //< **Refer to them by name, not by number.** Once more are added, numbers say nothing.
+  off
+  rotate
+  blink
+  smile
+  cry
+
+impl Look
+  fn set(l: Self) //< changes the expression
+    //<
+    //< **Reset the frame to the first.** Otherwise it starts from a frame partway through the
+    //< previous expression.
+    look = l
+    frame = 0
+    next_us = 0
+
+  priv fn frames_of(l: Self): Sz //< the frame count per expression
+    switch l case .rotate
+      return rotate_frames
+    case .blink
+      return blink_frames
+    case .smile
+      return smile_frames
+    case .cry
+      return cry_frames
+    default {}
+    return 0
+
+  priv fn step_ms_of(l: Self): U32 //< one frame's length in ms, per expression
+    switch l case .rotate
+      return 150
+    case .blink
+      return 100
+    case .smile
+      return 200
+    case .cry
+      return 200
+    default {}
+    return 1000
+
+  priv fn row_of(l: Self, f: Sz, y: Sz): U16 //<
+    //< builds frame f's left and right eyes into one row
+    //<
+    //< **The left eye is the low byte and the right the high byte.**
+    switch l case .rotate
+      return turned_row(rotate_l[f], y) | (turned_row(rotate_r[f], y) << 8U16)
+    case .blink
+      return turned_row(blink_lr[f], y) | (turned_row(blink_lr[f], y) << 8U16)
+    case .smile
+      return turned_row(smile_lr[f], y) | (turned_row(smile_lr[f], y) << 8U16)
+    case .cry
+      return turned_row(cry_lr[f], y) | (turned_row(cry_lr[f], y) << 8U16)
+    default {}
+    return 0U16
+
+priv const rotate_frames: Sz = 8 //< the number of frames, and one frame's length in ms
+  //<
+  //< **They differ per expression.** Make them all the same and the blink is too fast, or the
+  //< eyes' rotation looks stopped.
+priv const blink_frames: Sz = 5
+priv const smile_frames: Sz = 2
+priv const cry_frames: Sz = 5
+
+// A picture is **one frame = one U64**.
+// **Do not make it a byte array.** The formatter puts one element per line, and the eight-row
+// shape of the picture becomes unreadable. The top byte is row 0 (the topmost).
+//
+// The eyes roll clockwise (the left eye). 1 is lit, and bit0 is column 0.
+priv const rotate_l: U64[8] = ::{
+  0x1824727242422418U64,
+  0x183C5A4242422418U64,
+  0x18244E4E42422418U64,
+  0x1824424E4E422418U64,
+  0x182442424E4E2418U64,
+  0x18244242425A3C18U64,
+  0x1824424272722418U64,
+  0x1824427272422418U64,
+}
+// The right eye of the same rotation.
+// Caution: **Do not use the same frames as the left.** The start is shifted; with identical frames
+// both eyes roll while staring the same way.
+priv const rotate_r: U64[8] = ::{
+  0x18244E4E42422418U64,
+  0x183C5A4242422418U64,
+  0x1824727242422418U64,
+  0x1824427272422418U64,
+  0x1824424272722418U64,
+  0x18244242425A3C18U64,
+  0x182442424E4E2418U64,
+  0x1824424E4E422418U64,
+}
+// The blink. The same frames serve both left and right.
+priv const blink_lr: U64[5] = ::{
+  0x1824425A5A422418U64,
+  0x0000007E5A422418U64,
+  0x00000000007E2418U64,
+  0x0000007E5A422418U64,
+  0x00000000007E2418U64,
+}
+priv const smile_lr: U64[2] = ::{ //< a smile (narrowed eyes swaying up and down)
+  0x0000003C42420000U64,
+  0x00003C4242000000U64,
+}
+priv const cry_lr: U64[5] = ::{ //< a cry (a tear falling from downcast eyes)
+  0x7E423C0000000000U64,
+  0x7E423C1818000000U64,
+  0x7E423C0018180000U64,
+  0x7E423C0000181800U64,
+  0x7E423C0000001818U64,
+}
+
+priv const addr_first: U32 = 0x70 //<
+  //< the HT16K33's address is one of 0x70 to 0x77, set by strapping
+  //<
+  //< **Do not hard-code the default** (see `matrix.default_addr`). The scan is only eight writes,
+  //< so once at start-up is enough.
+priv const addr_last: U32 = 0x77
+
+priv $addr: U32 = 0
+priv $ready: Bool = false
+priv $look: Look = Look.off
+priv $frame: Sz = 0
+priv $next_us: U32 = 0
+
+fn init(): Bool //< starts I2C and the matrix
+  //<
+  //< **true once they are running.**
+  //< Caution: **The caller must keep working on false too** (only the face is missing).
+  if !i2c.init(board.i2c_sda, board.i2c_scl)
+    return false
+  addr = 0
+  for $a: U32 = addr_first; a <= addr_last; a += 1
+    if addr == 0 && i2c.present(a)
+      addr = a
+  if addr == 0
+    return false
+  ready = matrix.init(addr, brightness)
+  if ready
+    _ok: = matrix.clear(addr)
+  return ready
+
+fn available(): Bool
+  return ready
+
+fn address(): U32 //< the address that was found
+  //<
+  //< Caution: **Put it in the report.** 0 means nothing answered (not plugged in, or the wrong
+  //< pins).
+  return addr
+
+fn next() //< switches to the next expression
+  //<
+  //< Caution: **Step through the expressions by name** (stepping by number breaks when one is
+  //< added).
+  switch look case .off
+    Look.rotate.set()
+  case .rotate
+    Look.blink.set()
+  case .blink
+    Look.smile.set()
+  case .smile
+    Look.cry.set()
+  case .cry
+    Look.off.set()
+
+priv fn raw_row(frame_bits: U64, y: Sz): U16 //< takes row y's raw bits out of one frame (a U64)
+  //<
+  //< The top byte is row 0.
+  shift: = U64::(56 - y * 8)
+  return U16::((frame_bits >> shift) & 0xFFU64)
+
+priv fn turned_row(frame_bits: U64, y: Sz): U16 //<
+  //< Row y of the picture turned 90 degrees anticlockwise
+  //<
+  //< **Do not store the picture rotated.** The rotation is the board's concern, so the picture is
+  //< stored upright and rotated here just before it is shown. Stored rotated, whoever adds a
+  //< frame hits the same trap every time. What lands at (row y, column x) after rotating is (row
+  //< x, column 7 - y) before it.
+  $v: U16 = 0
+  for x in Range.asc(8)
+    if ((raw_row(frame_bits, x) >> U16::(7 - y)) & 1U16) == 1U16
+      v = v | (1U16 << U16::x)
+  return v
+
+fn show() //< keeps the face updated
+  //<
+  //< **It may be called every loop** — before the interval has passed it sends nothing.
+  //< Caution: **Also send the blank state once.** Otherwise the previous expression stays in the
+  //< display RAM.
+  if !ready
+    return
+  now: = timer.now_us()
+  if next_us != 0 && now < next_us
+    return
+  next_us = now + look.step_ms_of() * 1000
+  n: = look.frames_of()
+  if n == 0
+    _cleared: = matrix.clear(addr)
+    return
+  $rows: U16[8] = ::{}
+  for y in Range.asc(matrix.rows)
+    rows[y] = look.row_of(frame, y)
+  _drawn: = matrix.draw(addr, rows[0]@)
+  frame += 1
+  if frame >= n
+    frame = 0

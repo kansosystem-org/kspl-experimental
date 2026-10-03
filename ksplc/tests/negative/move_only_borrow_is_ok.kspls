@@ -1,0 +1,18 @@
+//< The counterpart of the case above: a borrow by `@` and a method call are not moves
+//<
+//< Should these be wrongly treated as moves, `Mutex<|T|>` becomes unusable in earnest (even lock()
+//< could be called only once). It is made to fail deliberately for a different reason (an undefined
+//< symbol), and an EXPECT-NOT pins down that not one move-related diagnostic comes out.
+// EXPECT: undefined path or identifier 'no_such_worker'
+// EXPECT-NOT: was moved out of
+import "std/thread"
+
+fn main()
+  $mx: = thread.Mutex<|I32|>.new(0) catch
+    return
+  p: = mx.lock()
+  p$ += 1
+  mx.unlock()
+  _t: = thread.Thread.spawn<|thread.Mutex<|I32|>|>(no_such_worker, mx@) catch
+    return
+  mx.free()

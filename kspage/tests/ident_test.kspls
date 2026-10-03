@@ -1,0 +1,200 @@
+import "kspage/lay/flow"
+import "kspage/model/doc" { Doc }
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/ident"
+import "kspage/model/style" { Sheet }
+import "kspage/share/store"
+import "kspage/tests/base"
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// kspage: checks that the number identifying a block does not change (a golden test).
+// Caution: **Do not copy the numbers' own values into the check**: it checks that the same block
+// keeps its number, not which is number 1 (otherwise a change in adding order would fail it).
+// ==========================================
+
+priv fn sample_sheet(arena: Arena$@): Sheet$@
+  return Sheet.new(base.root_font(), arena)
+
+priv fn sample_doc(arena: Arena$@, origin: U8[]): Doc$@ //<
+  //< A document of two paragraphs, one of which has one child
+  d: = Doc.new(arena, origin)
+  d.add_block("body").add_text("a")
+  two: = d.add_block("body")
+  two.add_text("b")
+  two.add_child("item").add_text("c")
+  return d
+
+priv fn saved(d: Doc$@, sheet: Sheet$@, sb: Str_builder$@): U8[] //<
+  //< Writes the saved text into `sb` and returns it
+  //<
+  //< **The caller owns the buffer** (the returned text points into it).
+  sb.clear()
+  store.save(d, sheet, sb)
+  return sb.slice()
+
+fn test_saving_numbers_every_block_once() //<
+  //< Saving assigns numbers, and none of them clashes within the tree
+  verdict.start("[kspage/ident] saving handing the numbers out test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  sheet: = sample_sheet(arena)
+  d: = sample_doc(arena, "mark")
+  // **Before saving it has no number** (one is needed only where two texts are matched).
+  assert(d.blocks.get(0).id == 0, "before saving it holds no number")
+  $sb: = Str_builder.new()
+  defer sb.free()
+  text: = saved(d, sheet, sb@)
+
+  one: = d.blocks.get(0).id
+  two: = d.blocks.get(1).id
+  kid: = d.blocks.get(1).children.get(0).id
+  assert(one != 0 && two != 0 && kid != 0, "all three are given a number")
+  assert(one != two && two != kid && one != kid, "no number is there twice")
+  // Caution: **Do not search for it packed**: one value per line, one space after the key
+  // (`spacing` in `kspage/share/store.kspls`).
+  assert(text.find_str("\"id\": ") >= 0, "the numbers go into the text too")
+  assert(text.find_str("\"origin\": \"mark\"") >= 0, "the mark of where it came from goes in too")
+  assert(text.find_str("\"next_id\": ") >= 0, "the next number goes in too")
+  verdict.pass("saving hands the numbers out, and they do not clash.")
+
+fn test_saving_twice_keeps_the_numbers() //< saved again, the numbers do not change
+  //<
+  //< **This is the case Word's numbers do not hold** (Word is reported to reassign them per save).
+  verdict.start("[kspage/ident] the numbers not moving when it is saved again test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  sheet: = sample_sheet(arena)
+  d: = sample_doc(arena, "mark")
+  $one_sb: = Str_builder.new()
+  defer one_sb.free()
+  $two_sb: = Str_builder.new()
+  defer two_sb.free()
+  first: = saved(d, sheet, one_sb@)
+  was: = d.blocks.get(1).id
+  second: = saved(d, sheet, two_sb@)
+  assert(d.blocks.get(1).id == was, "the numbers are the same at the second saving")
+  assert(first.equals(second), "the text does not change by one character either")
+  verdict.pass("saved again, the numbers are not handed out afresh.")
+
+fn test_the_numbers_survive_a_round_trip() //<
+  //< Read back, the numbers are the same, and only an added block gets a new number
+  verdict.start("[kspage/ident] the numbers being the same when it is read back test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  sheet: = sample_sheet(arena)
+  d: = sample_doc(arena, "mark")
+  $sb: = Str_builder.new()
+  defer sb.free()
+  text: = saved(d, sheet, sb@)
+  was_one: = d.blocks.get(0).id
+  was_two: = d.blocks.get(1).id
+
+  got: = store.load(text, arena) catch _e
+    panic("the text just written cannot be read")
+  back: = got.doc
+  assert(back.origin.equals("mark"), "the mark of where it came from comes back")
+  assert(back.blocks.get(0).id == was_one, "the first number comes back")
+  assert(back.blocks.get(1).id == was_two, "the second number comes back too")
+  assert(back.blocks.get(1).children.get(0).id != 0, "the child's number comes back too")
+
+  fresh: = back.add_block("body")
+  fresh.add_text("d")
+  $again: = Str_builder.new()
+  defer again.free()
+  saved(back, sheet, again@)
+  assert(fresh.id != 0, "the block added is given a number")
+  assert(fresh.id != was_one && fresh.id != was_two, "it does not clash with a number read")
+  verdict.pass("read back the numbers are the same, and only what was added is new.")
+
+fn test_a_dropped_number_is_never_reused() //<
+  //< Delete and then add, and the removed number is not used again
+  //<
+  //< **Without this the difference breaks**: the deleted block remains in the other text, so a
+  //< reused number would match another block as "the same".
+  verdict.start("[kspage/ident] the number that went not being used again test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  sheet: = sample_sheet(arena)
+  d: = sample_doc(arena, "mark")
+  $sb: = Str_builder.new()
+  defer sb.free()
+  saved(d, sheet, sb@)
+  last: = d.blocks.get(1).id
+  // The last block, holding the largest number, is removed.
+  d.blocks.len = 1
+  saved(d, sheet, sb@)
+  fresh: = d.add_block("body")
+  fresh.add_text("e")
+  saved(d, sheet, sb@)
+  assert(fresh.id != last, "the number that went is not used again")
+  assert(fresh.id > last, "the next number is larger than the number that went")
+  verdict.pass("the number that went is not used again.")
+
+fn test_laying_out_does_not_mint_numbers() //<
+  //< Laid out again any number of times, the numbers do not grow
+  //<
+  //< **The header and footer bands make a block at every layout**; numbered there, they would grow
+  //< with every redraw (so only saving assigns numbers).
+  verdict.start("[kspage/ident] the numbers not growing when it is laid out again test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  sheet: = sample_sheet(arena)
+  d: = sample_doc(arena, "mark")
+  $one_sb: = Str_builder.new()
+  defer one_sb.free()
+  $two_sb: = Str_builder.new()
+  defer two_sb.free()
+  first: = saved(d, sheet, one_sb@)
+  flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  second: = saved(d, sheet, two_sb@)
+  assert(first.equals(second), "the text is the same with a laying-out in between")
+  verdict.pass("laying out again hands no numbers out.")
+
+fn test_an_old_text_without_numbers_still_loads() //< an old text with no numbers loads too
+  //<
+  //< **Then the numbers are not trusted** (there is no origin mark either).
+  verdict.start("[kspage/ident] a text with no numbers reading too test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  old: U8[] =
+    "{\"kspage\":6,\"sheet\":{\"root\":{\"family\":\"sans-serif\",\"size_px\":16.0,\"weight\":400,\"italic\":false},\"styles\":[]},\"blocks\":[{\"style\":\"body\",\"inlines\":[{\"text\":\"a\",\"style\":\"\"}]}]}"
+  got: = store.load(old, arena) catch _e
+    panic("a text with no numbers cannot be read")
+  assert(got.doc.blocks.len == 1, "the block reads")
+  assert(got.doc.blocks.get(0).id == 0, "it holds no number")
+  assert(got.doc.origin.len == 0, "it holds no mark of where it came from either")
+  // Saving assigns numbers. **No mark is added** (making the mark is the caller's job).
+  sheet: = sample_sheet(arena)
+  $sb: = Str_builder.new()
+  defer sb.free()
+  saved(got.doc, sheet, sb@)
+  assert(got.doc.blocks.get(0).id != 0, "saving hands a number out")
+  assert(got.doc.origin.len == 0, "no mark goes on of its own accord")
+  verdict.pass("a text with no numbers reads too, and saving hands the numbers out.")
+
+fn test_a_borrowed_number_pushes_the_counter() //<
+  //< When a block holding a number arrives, the next number is made larger than it
+  //<
+  //< **A block read back brings the number the file held**; if the counter were not raised, this
+  //< side would give the same number to another block.
+  verdict.start("[kspage/ident] making the next number larger than one that arrived test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena, "mark")
+  came: = d.add_block("body")
+  came.add_text("p")
+  // A number the file held, read back.
+  came.id = 40
+  ident.number_new(d)
+  fresh: = d.add_block("body")
+  fresh.add_text("q")
+  ident.number_new(d)
+  assert(came.id == 40, "a number that arrived is not handed out afresh")
+  assert(fresh.id > 40, "the next number is larger than the number that arrived")
+  verdict.pass("the next number is made larger than one that arrived.")

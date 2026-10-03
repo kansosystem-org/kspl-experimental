@@ -1,0 +1,351 @@
+//< The entry point of LLVM IR generation
+//<
+//< `run`, the counterpart of genc's gen/c/root.kspls, builds the whole LLVM module in output order.
+//< **The IR holds only the language's core.** Only the C runtime has the bodies of the `kspl_*`
+//< functions that touch the OS; the IR `declare`s them and links against `ksplc emit-runtime`'s
+//< output ("The backends (Genc / Genllvm) and the runtime ABI" in ksplc/docs/DESIGN.md).
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/base/literal" as base_literal
+import "ksplc/gen/entry" as gen_entry
+import "ksplc/gen/llvm/ctx" as gen_llvm_ctx + { Genllvm_ctx }
+import "ksplc/gen/llvm/decl" as gen_llvm_decl
+import "ksplc/gen/llvm/types" as gen_llvm_types
+import "ksplc/gen/runtime" as gen_runtime
+import "ksplc/lower/prune" as lower_prune
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" { Sema_symbol }
+import "std/ds" { Map }
+import "std/str" { Str_builder }
+fn run(root: Ast_node$@, cg: Genllvm_ctx$@, file_name: U8[]) //< runs the LLVM backend's phases
+  //<
+  //< The counterpart of genc's emit_file_node; it reads in output order (types -> globals ->
+  //< functions -> runtime -> strings).
+  if root == null
+    return
+  cg.s("; ==========================================\n")
+  cg.s("; Kanso LLVM IR Generator\n")
+  cg.s("; ==========================================\n")
+  cg.s("source_filename = \"").s(file_name).s("\"\n\n")
+  gen_llvm_types.emit_complex_types(cg)
+  emit_type_decls(root, cg)
+  emit_globals(root, cg)
+  emit_fn_defs(root, cg)
+  emit_instantiated_fns(cg)
+  emit_runtime_and_main(cg)
+  emit_string_pool(cg)
+  cg.s("; End of LLVM IR\n")
+
+priv fn emit_type_decls(root: Ast_node$@, cg: Genllvm_ctx$@)
+  for raw in root.children
+    child: = raw.unwrap_top_level()
+    if child.is_emittable()
+      child.emit_llvm_type_decl(cg)
+  cg.s("\n")
+
+priv fn emit_globals(root: Ast_node$@, cg: Genllvm_ctx$@)
+  mark_defined_c_names(root, cg)
+  for raw in root.children
+    child: = raw.unwrap_top_level()
+    if !child.is_emittable()
+      continue
+    if child.kind_id == .k_decl_extern_block || child.kind_id == .k_decl_extern
+      child.emit_llvm_extern_block(cg)
+    else if child.kind_id == .k_decl_var || child.kind_id == .k_decl_const
+      child.emit_llvm_global_var(cg)
+    else if child.kind_id == .k_decl_embed
+      child.emit_llvm_embed_decl(cg)
+  cg.s("\n")
+
+priv fn mark_defined_c_names(root: Ast_node$@, cg: Genllvm_ctx$@) //<
+  //< Enters every function this module defines under its own C name (an `#export`) as declared
+  //<
+  //< An `extern "C"` block may name a function the program itself defines, as a host stand-in
+  //< for a port's C does. Its `define` serves as the declaration; a `declare` beside it is a
+  //< redefinition to LLVM, though C allows a prototype next to the body.
+  for raw in root.children
+    child: = raw.unwrap_top_level()
+    if !child.is_emittable() || child.kind_id != .k_decl_fn || child.sym_ptr == null
+      continue
+    if child.find_child(.k_stmt_block) != null &&
+      (Sema_symbol$@::child.sym_ptr).uses_verbatim_c_name()
+      cg.extern_declared.set(child.get_decl_id_text(), 1)
+
+priv fn emit_fn_defs(root: Ast_node$@, cg: Genllvm_ctx$@)
+  for raw in root.children
+    child: = raw.unwrap_top_level()
+    if !child.is_emittable()
+      continue
+    if child.kind_id == .k_decl_fn
+      child.emit_llvm_fn_def(cg, 0)
+    else if child.kind_id == .k_decl_impl
+      $owner_type_id: I32 = 0
+      target_node: = child.get_decl_type_node()
+      if target_node != null
+        owner_type_id = target_node.type_id
+      for m in child.children
+        if m.kind_id == .k_decl_fn && m.is_emittable()
+          m.emit_llvm_fn_def(cg, owner_type_id)
+
+priv fn build_inst_owner_index(cg: Genllvm_ctx$@): Map<|Sz, I32|>$@ //<
+  //< It builds the index that finds an instantiated method's receiver type id
+  //<
+  //< It walks all of id_to_type (M types) once, reading the type table's methods.
+  //< A walk per instantiated node would be O(N*M); the index makes each lookup O(1).
+  idx: = base_core.arena.create(Map<|Sz, I32|>.new(base_core.arena))
+  for $j: = 0; j < I32::cg.env.id_to_type.len; j += 1
+    entry: = cg.env.id_to_type.get(j)
+    if entry != null && entry.methods != null
+      // A list is fine: a type has few methods and the index is built once (not the
+      // innermost-loop case that entry_list in ds.kspls warns about).
+      for m_entry in entry.methods.items()
+        if m_entry.value != null && m_entry.value.node != null
+          idx.set(Sz::m_entry.value.node, j)
+  return idx
+
+priv fn emit_instantiated_fns(cg: Genllvm_ctx$@) //<
+  //< It emits the bodies of the generic functions and methods instantiated from a template
+  owner_idx: = build_inst_owner_index(cg)
+  for inst_node in cg.env.instantiated_nodes_list
+    if inst_node.kind_id == .k_decl_fn && inst_node.is_alive_for_backend()
+      owner_type_id: = owner_idx.get(Sz::inst_node) catch 0
+      inst_node.emit_llvm_fn_def(cg, owner_type_id)
+
+priv fn emit_runtime_decls(cg: Genllvm_ctx$@) //<
+  //< The declarations the IR itself holds in hosted's preamble
+  //<
+  //< **No `kspl_*` bodies go here.** Everything that touches the OS is in the C runtime
+  //< (`ksplc emit-runtime`'s output), and the `declare`s come from `std/`'s `extern "C"`
+  //< (gen/llvm/decl.kspls), which skips what is emitted here (`is_preamble_fn` in `ctx.kspls`).
+  for f in gen_llvm_ctx.preamble_fns
+    if f.ret.len > 0
+      cg.s("declare ").s(f.ret).s(" @").s(f.name).s("(").s(f.params).s(")\n")
+  for call in gen_entry.startup_calls
+    cg.s("declare void @").s(call).s("()\n")
+  cg.s("declare void @llvm.memset.p0.i64(ptr, i8, i64, i1 immarg)\n")
+  // The version symbol. As with C's `--omit-runtime`, an undefined symbol stops a C runtime of a
+  // different version (paired with write_abi_ref in gen/runtime.kspls). The reference goes into
+  // `@llvm.used`: a plain declaration is dropped as unreferenced, and a mismatched runtime would
+  // pass.
+  $sym: = Str_builder.new()
+  defer sym.free()
+  gen_runtime.append_abi_symbol(sym@)
+  cg.s("declare void @").s(sym.slice()).s("()
+")
+  cg.s("@llvm.used = appending global [1 x ptr] [ptr @").s(sym.slice())
+    .s("], section \"llvm.metadata\"
+
+")
+
+priv fn emit_private_fmt(cg: Genllvm_ctx$@, name: U8[], body: U8[])
+  cg.s("@.").s(name).s(" = private unnamed_addr constant [\{body.len + 2\} x i8] c\"").s(body)
+    .s("\\0A\\00\"\n")
+
+priv fn emit_runtime_check_fns(cg: Genllvm_ctx$@) //< the run-time checks
+  //<
+  //< In C they are `static inline` in hosted.h, copied into each translation unit, so the IR has
+  //< its own copy too (the head of gen/runtime/core.h defines what they mean).
+  //< Caution: **Flush stdout before the abort** (the same reason as in C: with stdout on a pipe,
+  //< all output up to that point is lost).
+  emit_private_fmt(cg, "bounds_panic_fmt",
+    "panic: index out of bounds in array (idx: %ld, len: %ld) at %s:%d")
+  emit_private_fmt(cg, "shift_panic_fmt",
+    "panic: shift amount out of range (amount: %ld, width: %ld) at %s:%d")
+  emit_private_fmt(cg, "div_panic_fmt", "panic: division by zero at %s:%d")
+  cg
+    .s("""
+
+define i64 @kspl_bounds_check(i64 %idx, i64 %len, ptr %file, i32 %line) {
+entry:
+    %cmp1 = icmp slt i64 %idx, 0
+    %cmp2 = icmp sge i64 %idx, %len
+    %cmp = or i1 %cmp1, %cmp2
+    br i1 %cmp, label %panic, label %ok
+panic:
+    %stdout_ptr = call ptr @get_stdout()
+    %flushed = call i32 @fflush(ptr %stdout_ptr)
+    %stderr_ptr = call ptr @get_stderr()
+    call i32 (ptr, ptr, ...) @fprintf(ptr %stderr_ptr, ptr @.bounds_panic_fmt, i64 %idx, i64 %len, ptr %file, i32 %line)
+    call void @abort()
+    unreachable
+ok:
+    ret i64 %idx
+}
+
+; Signed division and remainder.
+; Caution: **Do not put them out as plain sdiv / srem.** Divide a type's
+; minimum value by -1 and the answer does not fit the type, and LLVM makes that poison. The
+; specification defines the answer as mod 2^N, so `a / -1` is -a wrapped (= a) and `a % -1` is 0.
+; Paired with genc's kspl_sdiv / kspl_smod.
+define i64 @kspl_sdiv(i64 %a, i64 %b, ptr %file, i32 %line) {
+entry:
+    %safe = call i64 @kspl_div_check(i64 %b, ptr %file, i32 %line)
+    %is_neg1 = icmp eq i64 %safe, -1
+    br i1 %is_neg1, label %negate, label %divide
+negate:
+    %neg = sub i64 0, %a
+    ret i64 %neg
+divide:
+    %q = sdiv i64 %a, %safe
+    ret i64 %q
+}
+
+define i64 @kspl_smod(i64 %a, i64 %b, ptr %file, i32 %line) {
+entry:
+    %safe = call i64 @kspl_div_check(i64 %b, ptr %file, i32 %line)
+    %is_neg1 = icmp eq i64 %safe, -1
+    br i1 %is_neg1, label %zero, label %remainder
+zero:
+    ret i64 0
+remainder:
+    %m = srem i64 %a, %safe
+    ret i64 %m
+}
+
+define i64 @kspl_div_check(i64 %divisor, ptr %file, i32 %line) {
+entry:
+    %cmp = icmp eq i64 %divisor, 0
+    br i1 %cmp, label %panic, label %ok
+panic:
+    %stdout_ptr = call ptr @get_stdout()
+    %flushed = call i32 @fflush(ptr %stdout_ptr)
+    %stderr_ptr = call ptr @get_stderr()
+    call i32 (ptr, ptr, ...) @fprintf(ptr %stderr_ptr, ptr @.div_panic_fmt, ptr %file, i32 %line)
+    call void @abort()
+    unreachable
+ok:
+    ret i64 %divisor
+}
+
+define i64 @kspl_shift_check(i64 %amount, i64 %width, ptr %file, i32 %line) {
+entry:
+    %cmp1 = icmp slt i64 %amount, 0
+    %cmp2 = icmp sge i64 %amount, %width
+    %cmp = or i1 %cmp1, %cmp2
+    br i1 %cmp, label %panic, label %ok
+panic:
+    %stdout_ptr = call ptr @get_stdout()
+    %flushed = call i32 @fflush(ptr %stdout_ptr)
+    %stderr_ptr = call ptr @get_stderr()
+    call i32 (ptr, ptr, ...) @fprintf(ptr %stderr_ptr, ptr @.shift_panic_fmt, i64 %amount, i64 %width, ptr %file, i32 %line)
+    call void @abort()
+    unreachable
+ok:
+    ret i64 %amount
+}
+
+""")
+
+priv fn emit_runtime_and_main(cg: Genllvm_ctx$@) //< hosted's preamble and `main`
+  //<
+  //< Under freestanding nothing is emitted (the bare-metal side provides the runtime).
+  if !base_core.config.is_freestanding
+    emit_runtime_decls(cg)
+    emit_runtime_check_fns(cg)
+    emit_main_wrapper(cg)
+
+priv fn emit_main_wrapper(cg: Genllvm_ctx$@) //<
+  //< it emits the wrapper equivalent to C's int main
+  //<
+  //< A Result from kspl_main is checked, traced and turned into an exit code.
+  $main_sym: Sema_symbol$@ = null
+  switch cg.env.find_main_symbol() case .some(ms)
+    main_sym = ms
+  case .none
+    return
+  // The plan, the startup calls and the messages are shared with the C backend (`gen/entry.kspls`).
+  plan: = gen_entry.plan_of(cg.env, main_sym.type_id)
+  if plan.returns_result
+    emit_private_fmt(cg, "main_err_fmt",
+      gen_entry.failed_with_code if plan.err_is_number else gen_entry.failed)
+  // `argc` / `argv` live in the C runtime (hosted.c).
+  cg.s("define i32 @main(i32 %argc, ptr %argv) {\n")
+  cg.s("entry_block:\n")
+  cg.s("    store i32 %argc, ptr @argc\n")
+  cg.s("    %argv_os = call ptr @kspl_os_argv(i32 %argc, ptr %argv)\n")
+  cg.s("    store ptr %argv_os, ptr @argv\n")
+  for call in gen_entry.startup_calls
+    cg.s("    call void @").s(call).s("()\n")
+  // check_main_signature in sema/body/analyze.kspls limits the types a main may return.
+  val_id: = cg.env.strip_result(main_sym.type_id)
+  if !plan.returns_result
+    if plan.exit_is_value
+      ret_val: = cg.next_reg()
+      cg.s("    %\{ret_val\} = call ")
+      cg.t(main_sym.type_id).s(" @kspl_main()\n")
+      i32_reg: = cg.emit_numeric_to_i32(cg.reg_str(ret_val), main_sym.type_id)
+      cg.s("    ret i32 ").s(i32_reg).s("\n")
+    else
+      cg.s("    call void @kspl_main()\n")
+      cg.s("    ret i32 0\n")
+    cg.s("}\n\n")
+    return
+  // kspl_main's Result is an aggregate, so under the internal ABI it comes back through a hidden
+  // return-value pointer (ret_needs_sret in gen/llvm/types.kspls).
+  // This is hand-written IR, so the alloca for the destination is written here too.
+  cg.s("    %retslot = alloca ")
+  cg.t(main_sym.type_id).s("\n")
+  cg.s("    call void @kspl_main(")
+  cg.emit_agg_param_type().s(" %retslot)\n")
+  tmp_res: = cg.next_reg()
+  cg.s("    %\{tmp_res\} = load ")
+  cg.t(main_sym.type_id).s(", ptr %retslot\n")
+  err_flag: = cg.next_reg()
+  cg.s("    %\{err_flag\} = extractvalue ")
+  cg.t(main_sym.type_id).s(" %\{tmp_res\}, 0\n")
+  cond_i1: = cg.next_reg()
+  cg.s("    %\{cond_i1\} = icmp ne i8 %\{err_flag\}, 0\n")
+  then_lbl: = cg.next_label()
+  merge_lbl: = cg.next_label()
+  cg.s("    br i1 %\{cond_i1\}, label %b\{then_lbl\}, label %b\{merge_lbl\}\n")
+  cg.emit_b_label(then_lbl)
+  err_id: = cg.env.get_result_err_id(main_sym.type_id)
+  err_out: = cg.next_reg()
+  cg.s("    %\{err_out\} = call ptr @get_stderr()\n")
+  if plan.err_is_number
+    code_val: = cg.next_reg()
+    cg.s("    %\{code_val\} = extractvalue ")
+    cg.t(main_sym.type_id).s(" %\{tmp_res\}, 1\n")
+    msg_code: = cg.emit_numeric_to_i32(cg.reg_str(code_val), err_id)
+    // Caution: **Allocate a number even for a call whose return value is discarded**, or LLVM
+    // uses an implicit one and the later `%N`s disagree.
+    put1: = cg.next_reg()
+    cg
+      .s("    %\{put1\} = call i32 (ptr, ptr, ...) @fprintf(ptr %\{err_out\}, ptr @.main_err_fmt, \
+        i32 ").s(msg_code).s(")\n")
+    if plan.trace_fn.len > 0
+      cg.s("    call void @").s(plan.trace_fn).s("()\n")
+    cg.s("    ret i32 ").s(msg_code).s("\n")
+  else
+    put2: = cg.next_reg()
+    cg
+      .s("    %\{put2\} = call i32 (ptr, ptr, ...) @fprintf(ptr %\{err_out\}, ptr @.main_err_fmt)\n")
+    if plan.trace_fn.len > 0
+      cg.s("    call void @").s(plan.trace_fn).s("()\n")
+    cg.s("    ret i32 1\n")
+  // **Where a `ret` was emitted directly, call `terminate()`**, or the next emit_b_label adds a
+  // `br` that LLVM numbers as a new block, and every later `%N` disagrees.
+  cg.terminate()
+  cg.emit_b_label(merge_lbl)
+  if plan.exit_is_value
+    // A Result is the struct { is_err, error_code, val } (gen/llvm/types.kspls). It returns the
+    // success case's val.
+    ok_val: = cg.next_reg()
+    cg.s("    %\{ok_val\} = extractvalue ")
+    cg.t(main_sym.type_id).s(" %\{tmp_res\}, 2\n")
+    ok_i32: = cg.emit_numeric_to_i32(cg.reg_str(ok_val), val_id)
+    cg.s("    ret i32 ").s(ok_i32).s("\n")
+  else
+    cg.s("    ret i32 0\n")
+  cg.s("}\n\n")
+
+priv fn emit_string_pool(cg: Genllvm_ctx$@)
+  for str_i in Range.asc(cg.str_pool.list.len)
+    s: = cg.str_pool.list.get(str_i)
+    array_len: = s.literal_span().byte_len + 1
+    cg.s("@.str.\{str_i\} = private unnamed_addr constant [\{I32::array_len\} x i8] c")
+    cg.s("\"")
+    cg.emit_llvm_str_body(s)
+    cg.s("\\00\"\n")

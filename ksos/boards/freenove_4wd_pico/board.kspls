@@ -1,0 +1,145 @@
+//< The board definition for a Freenove 4WD mecanum car plus a Raspberry Pi Pico W
+//<
+//< Which pin has what connected, by name. The sources for the wiring, every peripheral and the
+//< conversion formulas are in ksos/docs/SPEC-board.md.
+//<
+//< Put **only what is actually used** here, added with each stage of ksos/docs/HOWTO-bring-up.md;
+//< a value nobody reads is never noticed to be wrong (Principle 5).
+
+const buzzer_pin: U32 = 2 //< a passive buzzer
+  //<
+  //< Direct current does not sound it; it needs an audible square wave (the Arduino sample: 2kHz).
+
+// ---------------------------------------------------------
+// The motors (four wheels, mecanum)
+// ---------------------------------------------------------
+
+const wheel_front_left: Sz = 0 //< the wheel order
+  //<
+  //< The index into each table below.
+const wheel_back_left: Sz = 1
+const wheel_back_right: Sz = 2
+const wheel_front_right: Sz = 3
+const wheel_count: Sz = 4
+
+const motor_pin_a: U32[4] = ::{ 18, 21, 7, 9 } //< the H bridge's two pins per wheel
+  //<
+  //< **On the right side the pin names and forward/back are reversed**: `RIGHT1/2` (GPIO 7/6) is
+  //< the **rear** right, `RIGHT3/4` (GPIO 9/8) the **front** (ksos/docs/SPEC-board.md). If they
+  //< were ordered by symmetry, straight moves would look right while diagonals and turns break.
+const motor_pin_b: U32[4] = ::{ 19, 20, 6, 8 }
+
+const wheel_polarity: I32[4] = ::{ -1, -1, -1, -1 } //<
+  //< The polarity per wheel, matched to this unit's wiring (-1 reverses it)
+  //<
+  //< The wiring differs from unit to unit. It is a table that is always read, not the Arduino
+  //< version's commented-out REVERSE_MOTOR1..4, whose state reading cannot show (Principle 5).
+
+const wheel_min_percent: I32 = 18 //< the duty in % at which a wheel actually starts turning
+  //<
+  //< **A command below it would be a lie**; raising it distorts the ratio less than a wheel that
+  //< stays still. **It depends on the unit and the floor** (lower `rp2040_motor_probe`'s
+  //< `test_speed` to find it).
+
+const kick_gain: I32 = 3 //< the brief push for starting from a standstill
+  //<
+  //< **Static friction is greater than rolling friction.** **Keep it short**, or the start jumps
+  //< past the line and the distance. It depends on the unit and the floor.
+const kick_ms: U32 = 40
+
+const motor_pwm_div_int: U32 = 25 //< the PWM's period
+  //<
+  //< **It assumes clk_sys = 125MHz** (after clocks.init). 500Hz = 125MHz / (25 * 10000): DIV's
+  //< integer part is 8 bits, so TOP supplies the rest (and gives the duty 0.01% steps).
+const motor_pwm_top: U32 = 9999
+
+// ---------------------------------------------------------
+// The sensor inputs. The three reflective sensors for line tracking: **White = 0 / black = 1**,
+// named as the header's PIN_TRACKING_LEFT / _CENTER / _RIGHT. **Only `track.kspls` reads them.**
+// ---------------------------------------------------------
+const line_sensor_left: U32 = 12
+const line_sensor_mid: U32 = 11
+const line_sensor_right: U32 = 10
+
+const line_sensor_swapped: Bool = false //<
+  //< Whether on this unit left and right are wired swapped relative to the header's names
+  //<
+  //< Caution: **Cover them one at a time to check it**; a hand over all three hides a swap
+  //< (on `ksos-rp2040-board`'s `line=B.W.B`, cover **only the leftmost** and watch the left one).
+
+const light_sensor_left: U32 = 28 //< the two light sensors (ADC)
+  //<
+  //< **The left has the larger GPIO number** (28 left, 27 right; the header's
+  //< Left_/Right_PHOTOSENSITIVE_PIN).
+const light_sensor_right: U32 = 27
+
+const battery_pin: U32 = 26 //< the battery voltage (ADC)
+  //<
+  //< Two 18650 lithium cells in series, with full charge taken as 8.4V.
+
+const battery_samples: U32 = 5 //<
+  //< how many readings are averaged to measure the battery voltage (one varies by a few LSB)
+
+fn battery_mv(raw: U32): U32 //< converts a raw ADC value to the battery voltage in mV
+  //<
+  //< **It assumes 12 bits (0 to 4095)**; the Arduino sample's 10-bit formula or threshold, copied
+  //< here, is off by a factor of four. mV = raw * 3300 * 4 / 4095 (divider 4, reference 3.3V).
+  return raw * 13200 / 4095
+
+const ultrasonic_trig: U32 = 4 //< the HC-SR04 ultrasonic
+  //<
+  //< **The same connector as the LED matrix's I2C** (TRIG = SDA on 4, ECHO = SCL on 5); only one
+  //< module can be plugged in. Do not use the ultrasonic and I2C at the same time.
+const ultrasonic_echo: U32 = 5
+
+const i2c_sda: U32 = 4 //< the VK16K33 LED matrix's I2C
+  //<
+  //< **The same pins as the ultrasonic** (see above), named separately so the code says which
+  //< module it assumes.
+const i2c_scl: U32 = 5
+
+const ir_receiver: U32 = 3 //< the IR receiver module
+  //<
+  //< Permanently fitted.
+
+// ---------------------------------------------------------
+// The servo (swinging the ultrasonic's head)
+// ---------------------------------------------------------
+
+const servo_head_pin: U32 = 13 //< the head-swinging servo's pin
+  //<
+  //< **14 and 15 are unconnected, so they are not listed** (Principle 5). The PWM slice is 6
+  //< ((13/2)%8), overlapping neither the motors (1 to 4) nor WS2812 (0).
+
+const servo_pwm_div_int: U32 = 250 //< the servo's PWM
+  //<
+  //< **50Hz = 125MHz / (250 × 10000)** (assuming clk_sys = 125MHz).
+  //< Caution: **It must use a different slice from the motors** (500Hz). The period is per slice,
+  //< so sharing one is certain to break one of them.
+const servo_pwm_top: U32 = 9999
+
+const servo_angle_min: U32 = 30 //< the head swing's range of motion in degrees
+  //<
+  //< Caution: **Do not widen it.** Beyond it the mechanism collides with itself.
+const servo_angle_max: U32 = 150
+const servo_angle_center: U32 = 90 //< straight ahead
+  //<
+  //< **Return here every time the mode changes**, or the distance is measured off to the side.
+
+const ws2812_pin: U32 = 16 //< the WS2812 data line, and how many LEDs are daisy-chained on it
+  //<
+  //< **Permanently fitted.** It is PWM slice 0 channel A, which the driver uses for the waveform
+  //< (`ksos/drivers/rp2040/ws2812`); slice 0 has no other use.
+const ws2812_count: Sz = 8
+
+const ws2812_level: U32 = 16 //<
+  //< The brightness for showing the state, 0 to 255. **It is for signalling, not for lighting.**
+  //<
+  //< Caution: **Do not light them all brightly.** Eight at full white draw 0.5A and themselves trip
+  //< the `battery_low_mv` stop; one colour draws `20mA × level / 255`. **Too low and the colour
+  //< cannot be told** (at 8, yellow looks white).
+
+const battery_low_mv: U32 = 6774 //< the low-voltage threshold
+  //<
+  //< The Arduino sample's raw 525 (10-bit): 525 / 1023 * 3.3 * 4 = 6.774V.
+  //< Caution: Keep it as a voltage, not a raw value, whose meaning changes with the resolution.

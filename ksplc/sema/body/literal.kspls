@@ -1,0 +1,191 @@
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/literal" as base_literal
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "std/chars" // testing and slicing single characters
+import "std/str"
+
+// ==========================================
+// A numeric literal's type and range: which type an unannotated integer literal is given, and
+// whether the value fits in it.
+// ==========================================
+
+fn infer_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
+  type_id: = literal_type_id(node, c, expected_id)
+  if node.kind_id == .k_integer
+    check_integer_literal_width(c, node)
+    // **Only literals whose type is known get the range check.** An unknown one defaults to I32
+    // but may sit in U32 arithmetic (`v * 0x85ebca6b`; the right-hand side gets no expected type:
+    // see pass_right_id in infer_binary_expr in `binary.kspls`), so correct code would fail.
+    type_is_known: =
+      !sema_type_env.is_unknown(int_suffix_type_id(c, node.text)) ||
+      (!sema_type_env.is_unknown(expected_id) && c.env.is_integer(expected_id))
+    // **Not while a generic is being instantiated**: the fit changes with the type argument, and
+    // as an error it would forbid a template merely because T=U8 exists ("While a generic is being
+    // instantiated, a diagnostic that depends on a type argument is not emitted" in
+    // ksplc/docs/DESIGN.md).
+    if type_is_known && !c.is_instantiating()
+      check_literal_bounds(c, node, type_id, c.fn_ctx.literal_negated)
+  return type_id
+
+fn is_untyped_int_literal(c: Sema_ctx$@, node: Ast_node$@): Bool //<
+  //< Whether it is an integer literal with no type suffix
+  //<
+  //< **Such a literal takes the expected type when one is passed down.**
+  //< Caution: Decide the suffix through int_suffix_type_id alone; a copied suffix table goes stale
+  //< when an integer type is added.
+  lit: = literal_under_minus(node)
+  return lit.node != null &&
+    sema_type_env.is_unknown(int_suffix_type_id(c, lit.node.text))
+
+priv fn int_suffix_type_id(c: Sema_ctx$@, txt: U8[]): I32 //<
+  //< The type a numeric literal's suffix (the `U8` of `300U8`) names, or unknown
+  //<
+  //< It is unknown where there is no suffix.
+  //<
+  //< Caution: Keep this test in this one place, or the type check and the range check disagree
+  //< on the suffix.
+  if txt.ends_with("Sz")
+    return I32::sema_type_env.Builtin_type_id.size_type
+  if txt.ends_with("U8")
+    return I32::sema_type_env.Builtin_type_id.u8_type
+  if txt.ends_with("I8")
+    return c.env.get_or_add("I8")
+  if txt.ends_with("U16")
+    return c.env.get_or_add("U16")
+  if txt.ends_with("I16")
+    return c.env.get_or_add("I16")
+  if txt.ends_with("U32")
+    return c.env.get_or_add("U32")
+  if txt.ends_with("I32")
+    return I32::sema_type_env.Builtin_type_id.i32_type
+  if txt.ends_with("U64")
+    return c.env.get_or_add("U64")
+  if txt.ends_with("I64")
+    return I32::sema_type_env.Builtin_type_id.i64_type
+  return I32::sema_type_env.Builtin_type_id.unknown
+
+priv fn literal_type_id(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
+  if node.kind_id == .k_bool
+    return I32::sema_type_env.Builtin_type_id.bool_type
+  if node.kind_id == .k_null
+    return c.env.resolve_null_type(expected_id)
+
+  txt: = node.text
+  suffix_id: = int_suffix_type_id(c, txt)
+  if !sema_type_env.is_unknown(suffix_id)
+    return suffix_id
+  if txt.ends_with("F32")
+    return I32::sema_type_env.Builtin_type_id.f32_type
+  if txt.ends_with("F64")
+    return I32::sema_type_env.Builtin_type_id.f64_type
+
+  if !sema_type_env.is_unknown(expected_id) && c.env.is_numeric(expected_id)
+    return expected_id
+  if node.kind_id == .k_float
+    return I32::sema_type_env.Builtin_type_id.f64_type
+  return I32::sema_type_env.Builtin_type_id.i32_type
+
+priv fn check_integer_literal_width(c: Sema_ctx$@, node: Ast_node$@) //<
+  //< Reports an integer literal too long to fit any integer type
+  //<
+  //< **This is an error, not a lint.** The text goes to C / LLVM IR as written, and the C
+  //< compiler's `integer literal is too large` is far from the KSPL source ("Failing fast through
+  //< an exception or an ICE" in ksplc/docs/DESIGN.md). It does not depend on the type, so it
+  //< applies even while a generic is instantiated.
+  if !node.text.parse_int_literal_u64().overflow
+    return
+  c.clear_scratch()
+    .s("integer literal '\{node.text\}' is too large to be represented in any integer type (the \
+      widest is 64 bits)")
+  c.err(node, c.scratch.slice())
+
+fn check_operand_literal_bounds(c: Sema_ctx$@, node: Ast_node$@, other_id: I32) //<
+  //< Checks the range of an untyped integer literal on one side against the other side's type
+  //<
+  //< It applies to a binary operation.
+  //< A suffixed literal is left to the ordinary type check (report_type_mismatch).
+  lit: = literal_under_minus(node)
+  if lit.node == null ||
+    !sema_type_env.is_unknown(int_suffix_type_id(c, lit.node.text))
+    return
+  check_literal_bounds(c, lit.node, other_id, lit.is_neg)
+
+fn settle_negated_literal(c: Sema_ctx$@, node: Ast_node$@, operand_id: I32): Bool //<
+  //< Gives a negated, untyped literal in a binary operation the type after promotion
+  //<
+  //< The literal is directly under a unary minus, on one side of the operation.
+  //< Caution: **The width to negate at must be the promoted type.** Where no expected type is
+  //< passed down (both sides of a comparison, arithmetic whose outer expected type differs from the
+  //< left-hand side) the literal is inferred at the default I32, but the generated code computes
+  //< the unary minus at that node's type (emit_unary_expr in gen/c/expr.kspls).
+  lit: = literal_under_minus(node)
+  if lit.node == null || !lit.is_neg || !c.env.is_integer(operand_id) ||
+    !sema_type_env.is_unknown(int_suffix_type_id(c, lit.node.text))
+    return false
+  lit.node.type_id = operand_id
+  node.type_id = operand_id
+  return true
+
+priv struct Signed_literal //<
+  //< An integer literal, or an integer literal directly under a unary minus
+  //<
+  //< node is null where it is neither.
+  node: Ast_node$@
+  is_neg: Bool
+
+priv fn literal_under_minus(node: Ast_node$@): Signed_literal
+  $lit: = node
+  $is_neg: = false
+  if lit != null && lit.kind_id == .k_expr_unary && lit.get_unary_op().text.equals("-")
+    is_neg = true
+    lit = lit.get_unary_target()
+  if lit == null || lit.kind_id != .k_integer
+    return Signed_literal::{ .node = null, .is_neg = false }
+  return Signed_literal::{ .node = lit, .is_neg = is_neg }
+
+fn check_inferred_decl_literal(c: Sema_ctx$@, expr_node: Ast_node$@, final_id: I32) //<
+  //< Checks the range of an integer literal initializing an unannotated declaration
+  //<
+  //< For example `x: = 2147483648;`. The range is checked against the final type.
+  //< **Not at the literal itself**, where the default I32 might still widen (type_is_known in
+  //< infer_literal_expr). An expression initializer (`x: = 2147483648 + 1;`) is not checked.
+  if expr_node == null || c.is_instantiating()
+    return
+  lit: = literal_under_minus(expr_node)
+  if lit.node == null
+    return
+  check_literal_bounds(c, lit.node, final_id, lit.is_neg)
+
+priv fn check_literal_bounds(c: Sema_ctx$@, node: Ast_node$@, type_id: I32, is_neg: Bool) //<
+  //< Checks that the literal fits the range of that type
+  //<
+  //< **This is an error, not a lint.** An out-of-range literal's value changes silently (`I32 =
+  //< 2147483648` becomes -2147483648).
+  //< Caution: **Take bit width and sign from Env's single source (get_primitive_bit_size /
+  //< is_unsigned).** A per-type table here would let a forgotten width go unnoticed.
+  if !c.env.is_integer(type_id)
+    return
+  lit: = node.text.parse_int_literal_u64()
+  if lit.overflow
+    return // a literal too long for any type is already an error (check_integer_literal_width)
+  // The bits for the absolute value (a signed type spends one on the sign).
+  value_bits: =
+    c.env.get_portable_bit_size(type_id) - (0 if c.env.is_unsigned(type_id) else 1)
+  $out_of_range: = false
+  if is_neg
+    // No negative fits an unsigned type; a signed one goes down to -(2^value_bits).
+    out_of_range =
+      c.env.is_unsigned(type_id) || lit.value > (U64::1 << U64::value_bits)
+  else if value_bits < 64
+    out_of_range = lit.value > ((U64::1 << U64::value_bits) - U64::1)
+  if out_of_range
+    sign: = "-" if is_neg else ""
+    type_name: = c.env.get_str(type_id)
+    c.clear_scratch()
+      .s("literal '\{sign\}\{node.text\}' is out of range for type '\{type_name\}', so its value \
+        would change silently. Use a wider type, or cast explicitly \
+        ('\{type_name\}::\{node.text\}') if the truncation is intended")
+    c.err(node, c.scratch.slice())

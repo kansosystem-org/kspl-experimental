@@ -1,0 +1,56 @@
+//< Tests of the TLS client
+//<
+//< Like the other net tests, they use only the loopback, no internet. Only the `#cfg(tls)` tests
+//< open a socket.
+
+// Caution: **Put the same cfg on the import lines too.** The default build drops the declarations
+// entirely, so without it these imports are unused.
+#cfg(tls)
+import "std/net"
+#cfg(tls)
+import "std/thread"
+import "std/tls"
+import "std/verdict"
+#cfg(tls)
+#export
+fn tls_plain_tcp_peer(listener: net.Tcp_listener$@): Void$@
+  conn: = listener.accept() catch panic("accept should succeed once a client connects")
+  // Reads and discards the client's ClientHello, acting as a peer that speaks no TLS.
+  buf: U8[256] = ::{}
+  conn.read(U8$[]::buf) catch {}
+  conn.free()
+  return null
+
+#cfg(tls)
+fn test_tls_handshake_failure_against_non_tls_peer()
+  verdict.start("[Tls] the handshake failing and cleaning up against a non-TLS peer test...")
+
+  listener: = net.Tcp_listener.bind("127.0.0.1", 17659) catch panic("bind should succeed on a fresh \
+    port")
+  t: = thread.Thread.spawn<|net.Tcp_listener|>(tls_plain_tcp_peer, listener) catch panic("thread \
+    spawn failed")
+
+  $failed_as_expected: = false
+  tls.Tls_stream.connect("127.0.0.1", 17659) catch e
+    switch e case .handshake_failed
+      failed_as_expected = true
+    default
+      panic("expected Tls_error.handshake_failed against a non-TLS peer")
+  assert(failed_as_expected, "TLS handshake against a plain TCP peer must fail cleanly")
+
+  t.join_and_free()
+  listener.free()
+  verdict.pass("Against a non-TLS peer it becomes handshake_failed correctly and cleans up.")
+
+// On TLS=0 (the default build) std/tls always returns unsupported.
+#cfg(!tls)
+fn test_tls_handshake_failure_against_non_tls_peer()
+  verdict.start("[Tls] the handshake failing and cleaning up against a non-TLS peer test...")
+  $unsupported_seen: = false
+  tls.Tls_stream.connect("127.0.0.1", 1) catch e
+    switch e case .unsupported
+      unsupported_seen = true
+    default
+      panic("expected Tls_error.unsupported in a default (TLS=0) build")
+  assert(unsupported_seen, "default (TLS=0) build must report Tls_error.unsupported")
+  verdict.pass("On the default build (TLS=0) unsupported comes back.")

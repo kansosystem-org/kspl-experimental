@@ -1,0 +1,403 @@
+import "ksos/drivers/cdc_ncm" as ncm
+import "ksos/net/mini_ipv4" as ip4
+import "std/bytes"
+import "std/verdict"
+
+// ==========================================
+// ksos/drivers/cdc_ncm: building and parsing NTB16.
+//
+// **Testing this on a host is why the framework is independent of the hardware**: a failing USB
+// only says "not recognized", so byte-layout mistakes are caught here.
+// ==========================================
+
+fn test_ncm_build() //<
+  //< Checks the built NTB byte by byte against the layout the specification gives
+  verdict.start("[NCM] assembling an NTB16 test...")
+  frame: U8[6] = ::{ 0xde, 0xad, 0xbe, 0xef, 0x01, 0x02 }
+  buf: U8[64] = ::{}
+  n: = ncm.build_one(U8$[]::buf, U8[]::frame, 6, 0x1234)
+  assert(n == ncm.one_datagram_overhead + 6,
+    "the NTB's total length is the 28-byte header plus the frame's length")
+
+  assert(buf[0] == 'N' && buf[1] == 'C' && buf[2] == 'M' && buf[3] == 'H',
+    "the NTH16's signature is NCMH")
+  assert(buf[4] == 12 && buf[5] == 0, "wHeaderLength is 12")
+  assert(buf[6] == 0x34 && buf[7] == 0x12, "wSequence goes in little endian")
+  assert(buf[8] == U8::n && buf[9] == 0, "wBlockLength agrees with the total length")
+  assert(buf[10] == 12 && buf[11] == 0, "wNdpIndex is right after the NTH (12)")
+
+  assert(buf[12] == 'N' && buf[13] == 'C' && buf[14] == 'M' && buf[15] == '0',
+    "the NDP16's signature is NCM0 (with no CRC)")
+  assert(buf[16] == 16 && buf[17] == 0, "wLength is 16 (one real entry plus one terminator)")
+  assert(buf[18] == 0 && buf[19] == 0, "wNextNdpIndex is 0 (the chain's end)")
+  assert(buf[20] == 28 && buf[21] == 0, "the first entry's position is 28")
+  assert(buf[22] == 6 && buf[23] == 0, "the first entry's length is the frame's length")
+  // The (0,0) terminator (the reason is at `ncm.build_one`).
+  assert(buf[24] == 0 && buf[25] == 0 && buf[26] == 0 && buf[27] == 0,
+    "the table ends with the (0, 0) terminator")
+  for i in Range.asc(6)
+    assert(buf[28 + i] == frame[i], "the datagram's content goes in as it stands")
+
+  // The NDP's and the datagram's positions are multiples of 4 (as GET_NTB_PARAMETERS declares).
+  assert(12 % 4 == 0 && 28 % 4 == 0, "the NDP's and the datagram's positions are multiples of 4")
+
+  verdict.pass("it can assemble the byte run the specification says.")
+
+fn test_ncm_build_rejects_overflow() //<
+  //< If it does not fit, it returns 0 without writing a single byte
+  verdict.start("[NCM] turning a request that does not fit away test...")
+  frame: U8[8] = ::{ 1, 2, 3, 4, 5, 6, 7, 8 }
+  small: U8[32] = ::{} // 28 + 8 = 36 > 32
+  too_big: = ncm.build_one(U8$[]::small, U8[]::frame, 8, 0)
+  assert(too_big == 0, "where it does not fit it returns 0")
+  assert(small[0] == 0, "where it turned it away it does not rewrite anything")
+  // A zero-length frame cannot be expressed (it would look like the (0,0) terminator).
+  ok_buf: U8[64] = ::{}
+  zero_len: = ncm.build_one(U8$[]::ok_buf, U8[]::frame, 0, 0)
+  assert(zero_len == 0, "it does not assemble a length of 0")
+
+  // Caution: Reject a len longer than frame, or the previous frame's leftovers go out as a valid
+  // datagram.
+  $reuse: U8[64] = ::{}
+  first: = ncm.build_one(U8$[]::reuse, U8[]::frame, 8, 1)
+  assert(first == 36, "the first one can be assembled")
+  short: U8[2] = ::{ 0xaa, 0xbb }
+  over: = ncm.build_one(U8$[]::reuse, U8[]::short, 8, 2)
+  assert(over == 0, "a len longer than frame is turned away")
+  assert(reuse[28] == 1 && reuse[35] == 8,
+    "where it turned it away it does not rewrite the previous content")
+
+  verdict
+    .pass("a request that does not fit, a length of 0 and a len longer than frame are turned away.")
+
+fn test_ncm_roundtrip() //< it can parse what it built itself (the round trip)
+  verdict.start("[NCM] the assemble-then-parse round trip test...")
+  frame: U8[14] = ::{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x02, 0, 0, 0, 0, 1, 0x08, 0x06 }
+  buf: U8[64] = ::{}
+  n: = ncm.build_one(U8$[]::buf, U8[]::frame, 14, 7)
+
+  assert(ncm.block_length(U8[]::buf, n) == n, "block_length returns the total length")
+  assert(ncm.block_length(U8[]::buf, 4) == 0, "before the header is complete it returns 0")
+
+  d: = ncm.datagram_at(U8[]::buf, n, 0)
+  assert(d.ok && d.offset == 28 && d.len == 14, "the first entry can be taken out")
+  for i in Range.asc(14)
+    assert(buf[d.offset + i] == frame[i], "the original frame is at the position taken out")
+  assert(!ncm.datagram_at(U8[]::buf, n, 1).ok, "there is no second entry")
+  verdict.pass("what was assembled can be parsed again.")
+
+fn test_ncm_parse_multiple() //< the host packs several frames into one NTB
+  //<
+  //< Read only the first entry and the rest are lost ("packets sometimes disappear").
+  verdict.start("[NCM] the case of several in one NTB test...")
+  // The NTH (12), the NDP (20: two entries plus the terminator) and two datagrams, written by hand.
+  b: U8[64] = ::{
+    'N',
+    'C',
+    'M',
+    'H',
+    12,
+    0,
+    0,
+    0,
+    44,
+    0,
+    12,
+    0, // NTH16
+    'N',
+    'C',
+    'M',
+    '0',
+    20,
+    0,
+    0,
+    0, // NDP16: wLength=20, no NDP follows
+    32,
+    0,
+    4,
+    0, // the first entry: position 32, length 4
+    36,
+    0,
+    8,
+    0, // the second entry: position 36, length 8
+    0,
+    0,
+    0,
+    0, // the terminator
+    0xa0,
+    0xa1,
+    0xa2,
+    0xa3, // datagram 1
+    0xb0,
+    0xb1,
+    0xb2,
+    0xb3,
+    0xb4,
+    0xb5,
+    0xb6,
+    0xb7
+  }
+
+  d0: = ncm.datagram_at(U8[]::b, 44, 0)
+  assert(d0.ok && d0.offset == 32 && d0.len == 4, "the first entry can be taken out")
+  d1: = ncm.datagram_at(U8[]::b, 44, 1)
+  assert(d1.ok && d1.offset == 36 && d1.len == 8, "the second entry can be taken out too")
+  assert(!ncm.datagram_at(U8[]::b, 44, 2).ok, "there is no third entry")
+  assert(b[d1.offset] == 0xb0, "the second entry's content is right")
+  verdict.pass("several datagrams are not dropped.")
+
+fn test_ncm_rejects_broken() //<
+  //< A broken NTB is rejected
+  //<
+  //< Caution: Do not read outside the buffer on a broken NTB. Bytes the peer (the host) built must
+  //< not be trusted as they are.
+  verdict.start("[NCM] turning a broken NTB away test...")
+  good: U8[64] = ::{}
+  src: U8[4] = ::{ 1, 2, 3, 4 }
+  n: = ncm.build_one(U8$[]::good, U8[]::src, 4, 0)
+
+  // the signature is wrong
+  $bad_sig: U8[64] = ::{}
+  for i in Range.asc(n)
+    bad_sig[i] = good[i]
+  bad_sig[0] = 'X'
+  assert(!ncm.datagram_at(U8[]::bad_sig, n, 0).ok,
+    "where the NTH's signature differs it is turned away")
+  assert(ncm.block_length(U8[]::bad_sig, n) == 0,
+    "where the signature differs the length is not believed either")
+
+  // the datagram runs past the end of the block
+  $overrun: U8[64] = ::{}
+  for i in Range.asc(n)
+    overrun[i] = good[i]
+  overrun[22] = 0xff // set the first entry's length to 0xff
+  assert(!ncm.datagram_at(U8[]::overrun, n, 0).ok,
+    "a length that sticks out of the frame is turned away")
+
+  // the NDP points at itself (the chain loops)
+  loopy: U8[64] = ::{
+    'N',
+    'C',
+    'M',
+    'H',
+    12,
+    0,
+    0,
+    0,
+    32,
+    0,
+    12,
+    0,
+    'N',
+    'C',
+    'M',
+    '0',
+    16,
+    0,
+    12,
+    0, // wNextNdpIndex = 12 ... itself
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  }
+  assert(!ncm.datagram_at(U8[]::loopy, 32, 0).ok, "it stops even where the chain turns")
+
+  // the declared total length is larger than the buffer
+  beyond: = ncm.datagram_at(U8[]::good, 1000, 0)
+  assert(!beyond.ok, "where the total length goes past the buffer it is turned away")
+  verdict.pass("it does not read outside the frame on a broken NTB.")
+
+// ==========================================
+// ksos/net/mini_ipv4: the answering side (the ARP reply, the ICMP echo reply).
+// `ping` from the PC is the simplest proof that the device's network is alive; its bytes are
+// checked here first.
+// ==========================================
+
+priv fn arp_reject($work: U8$[], orig: U8[], off: Sz, v: U8, our_ip: U32, msg: U8$[]) //<
+  //< Checks that it does not answer a frame with one byte of the original changed
+  //<
+  //< It restores the bytes each time, so the checks do not inherit each other's changes.
+  out: U8[64] = ::{}
+  for i in Range.asc(orig.len)
+    work[i] = orig[i]
+  work[off] = v
+  n: = ip4.build_arp_reply(U8$[]::out, work, 60, our_ip, 0x0002, 0x00000002)
+  assert(n == 0, msg)
+
+fn test_arp_reply() //<
+  //< It answers an ARP request addressed to it
+  //<
+  //< Caution: Answer only an ARP request addressed to it, or traffic on the segment breaks.
+  verdict.start("[NET] the ARP answer test...")
+  our_ip: = ip4.ip4(192, 168, 137, 50)
+  // The requester: MAC aa:bb:cc:dd:ee:ff, IP 192.168.137.1
+  req: U8[60] = ::{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x08,
+    0x06, 0x00, 0x01, 0x08, 0x00, 6, 4, 0x00, 0x01, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 192, 168,
+    137, 1, 0, 0, 0, 0, 0, 0, 192, 168, 137, 50 }
+  out: U8[64] = ::{}
+  n: = ip4.build_arp_reply(U8$[]::out, U8[]::req, 60, our_ip, 0x0002, 0x00000002)
+  assert(n == 60, "it fills to the smallest frame length and returns")
+  assert(out[0] == 0xaa && out[5] == 0xff, "the destination is the requester's MAC")
+  assert(out[12] == 0x08 && out[13] == 0x06, "the EtherType is ARP")
+  assert(out[20] == 0 && out[21] == 2, "oper is the answer (2)")
+  assert(out[28] == 192 && out[31] == 50, "the sender IP is its own")
+  assert(out[38] == 192 && out[41] == 1, "the target IP is the requester's")
+
+  // It does not answer a request addressed to another host.
+  $other: U8[60] = ::{}
+  for i in Range.asc(60)
+    other[i] = req[i]
+  other[41] = 99 // the target IP to 192.168.137.99
+  for_other: = ip4.build_arp_reply(U8$[]::out, U8[]::other, 60, our_ip, 0x0002, 0x00000002)
+  assert(for_other == 0, "it does not answer an ARP addressed to somebody else")
+  // It does not answer a reply (oper=2) (answering would cause an ARP storm).
+  other[41] = 50
+  other[21] = 2
+  to_reply: = ip4.build_arp_reply(U8$[]::out, U8[]::other, 60, our_ip, 0x0002, 0x00000002)
+  assert(to_reply == 0, "it does not answer an ARP answer")
+
+  // The offsets hold only at hwlen=6 / protolen=4 (the reason is at `build_arp_reply` in
+  // ksos/net/mini_ipv4.kspls).
+  other[21] = 1
+  arp_reject(U8$[]::other, U8[]::req, 18, 1, our_ip,
+    "it does not answer an ARP whose hwlen is not 6")
+  arp_reject(U8$[]::other, U8[]::req, 19, 16, our_ip,
+    "it does not answer an ARP whose protolen is not 4")
+  arp_reject(U8$[]::other, U8[]::req, 15, 99, our_ip,
+    "it does not answer an ARP whose hwtype is not Ethernet")
+  arp_reject(U8$[]::other, U8[]::req, 17, 0xdd, our_ip,
+    "it does not answer an ARP whose ptype is not IPv4")
+  verdict
+    .pass("it answers only an ARP request addressed to it, and drops those whose naming does not \
+      line up.")
+
+priv fn icmp_reject($work: U8$[], orig: U8[], off: Sz, v: U8, our_ip: U32, msg: U8$[]) //<
+  //< The ICMP version of arp_reject
+  out: U8[64] = ::{}
+  for i in Range.asc(orig.len)
+    work[i] = orig[i]
+  work[off] = v
+  n: = ip4.build_icmp_echo_reply(U8$[]::out, work, 60, our_ip, 0x0002, 0x00000002)
+  assert(n == 0, msg)
+
+fn test_icmp_echo_reply() //<
+  //< It answers an ICMP echo request (a ping)
+  //<
+  //< Caution: The identifier, the sequence and the payload must come back unchanged (the reason is
+  //< at `ip4.build_icmp_echo_reply`).
+  verdict.start("[NET] the ICMP echo answer test...")
+  our_ip: = ip4.ip4(192, 168, 137, 50)
+  // Ethernet (14) + IPv4 (20) + the ICMP echo request (8 plus a 4-byte payload) = 46
+  $req: U8[60] = ::{
+    0x02,
+    0,
+    0,
+    0,
+    0,
+    2,
+    0xaa,
+    0xbb,
+    0xcc,
+    0xdd,
+    0xee,
+    0xff,
+    0x08,
+    0x00, // eth
+    0x45,
+    0x00,
+    0x00,
+    0x20,
+    0x12,
+    0x34,
+    0x00,
+    0x00,
+    64,
+    1,
+    0x00,
+    0x00, // IPv4 (total=32)
+    192,
+    168,
+    137,
+    1, // src
+    192,
+    168,
+    137,
+    50, // dst
+    8,
+    0,
+    0x00,
+    0x00,
+    0xab,
+    0xcd,
+    0x00,
+    0x07, // ICMP: type=8, id=0xabcd, seq=7
+    0xde,
+    0xad,
+    0xbe,
+    0xef
+  }
+  out: U8[64] = ::{}
+  n: = ip4.build_icmp_echo_reply(U8$[]::out, U8[]::req, 60, our_ip, 0x0002, 0x00000002)
+  assert(n == 60, "it fills to the smallest frame length and returns (the body is 14 + 32 = 46)")
+  assert(out[0] == 0xaa && out[5] == 0xff, "the destination is the sender's MAC")
+  assert(out[26] == 192 && out[29] == 50, "the src IP is its own")
+  assert(out[30] == 192 && out[33] == 1, "the dst IP is the original sender's")
+  assert(out[22] == 64, "the TTL starts again at 64")
+  assert(out[34] == 0, "the ICMP type is the echo answer (0)")
+  assert(out[38] == 0xab && out[39] == 0xcd, "the identifier is returned as it stands")
+  assert(out[40] == 0x00 && out[41] == 0x07, "the sequence is returned as it stands")
+  assert(out[42] == 0xde && out[45] == 0xef, "the payload is returned as it stands")
+
+  // With a wrong checksum ping does not get through. A one's-complement sum over the whole header,
+  // checksum field included, gives 0.
+  view: = U8[]::out
+  $ip_sum: U32 = 0
+  for $i: Sz = 0; i < 20; i += 2
+    ip_sum += view.get_u16_be(14 + i)
+  for (ip_sum >> 16) != 0
+    ip_sum = (ip_sum & 0xffff) + (ip_sum >> 16)
+  assert(ip_sum == 0xffff, "the IP header's checksum gets through verification")
+  $ic_sum: U32 = 0
+  for $i: Sz = 0; i < 12; i += 2
+    ic_sum += view.get_u16_be(34 + i)
+  for (ic_sum >> 16) != 0
+    ic_sum = (ic_sum & 0xffff) + (ic_sum >> 16)
+  assert(ic_sum == 0xffff, "the ICMP checksum gets through verification")
+
+  // A ping addressed to another host gets no answer.
+  $other: U8[60] = ::{}
+  for i in Range.asc(60)
+    other[i] = req[i]
+  other[33] = 99
+  ping_other: = ip4.build_icmp_echo_reply(U8$[]::out, U8[]::other, 60, our_ip, 0x0002, 0x00000002)
+  assert(ping_other == 0, "it does not answer a ping addressed to somebody else")
+
+  // A fragment, or a version other than 4, must not be answered (the reason is at
+  // `build_icmp_echo_reply` in ksos/net/mini_ipv4.kspls).
+  other[33] = 50
+  icmp_reject(U8$[]::other, U8[]::req, 20, 0x20, our_ip, "it does not answer a fragment with MF up")
+  icmp_reject(U8$[]::other, U8[]::req, 21, 0x01, our_ip,
+    "it does not answer one whose fragment offset is not 0")
+  icmp_reject(U8$[]::other, U8[]::req, 14, 0x65, our_ip,
+    "it does not answer one whose version field is not 4")
+  verdict
+    .pass("it answers a ping with an answer that gets through verification, and drops a fragment \
+      and a wrong version.")
+
+fn test_ncm()
+  test_ncm_build()
+  test_ncm_build_rejects_overflow()
+  test_ncm_roundtrip()
+  test_ncm_parse_multiple()
+  test_ncm_rejects_broken()
+  test_arp_reply()
+  test_icmp_echo_reply()

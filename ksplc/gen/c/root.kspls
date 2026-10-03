@@ -1,0 +1,642 @@
+//< The C backend's single entry point
+//<
+//< Like gen_llvm_module.run, it takes "the flattened AST root plus the context" and only emits
+//< C99. Declarations and composite types go to decl.kspls / types.kspls, expressions and
+//< statements to expr.kspls / stmt.kspls; this file only builds the output's skeleton (forward
+//< declarations -> the top level in dependency order -> function bodies -> main).
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/base/mangle" as base_mangle
+import "ksplc/gen/c/ctx" { Genc_ctx }
+import "ksplc/gen/c/decl" as gen_c_decl
+import "ksplc/gen/c/stmt" as gen_c_stmt
+import "ksplc/gen/c/types" as gen_c_types
+import "ksplc/gen/entry" as gen_entry
+import "ksplc/gen/runtime" as gen_runtime
+import "ksplc/lower/prune" as lower_prune
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "std/chars" // the one-character tests and cuts
+import "std/ds" { List, Map }
+import "std/str"
+fn run(root: Ast_node$@, cg: Genc_ctx$@)
+  if root == null
+    return
+  if cg.writes_decls()
+    gen_runtime.write_decls(cg)
+  else
+    // A unit holds no declarations of its own; it takes them from the shared header.
+    cg.s("#include \"\{cg.split.shared_header\}\"\n")
+  // The runtime's body half goes in one unit only (it holds non-static functions). Under
+  // `--omit-runtime` none is emitted and the versioned symbols come from outside.
+  owns_runtime: = cg.writes_bodies() && cg.owns_singleton()
+  if owns_runtime && base_core.config.runtime_extern
+    gen_runtime.write_abi_ref(cg)
+  root.emit(cg)
+  // Caution: **Put the body half after the generated body.** It includes `<sys/stat.h>` through
+  // `<netinet/in.h>`, whose **macros would replace the generated body's names** (a field `st_mtime`
+  // gives the user C's `expected member name`, not a KSPL diagnostic; Principle 5). The body calls
+  // it through the declaration half's externs.
+  if owns_runtime && !base_core.config.runtime_extern
+    gen_runtime.write_impl(cg)
+
+priv fn emit_main_error_return(cg: Genc_ctx$@, plan: gen_entry.Main_plan) //<
+  //< The failure path where `main` returns a Result
+  //<
+  //< It prints the message and the propagation trace, and returns the exit code.
+  if plan.err_is_number
+    cg.s("  fprintf(get_stderr(), \"").s(gen_entry.failed_with_code).s("\\n\", _res.error_code);\n")
+  else
+    cg.s("  fprintf(get_stderr(), \"").s(gen_entry.failed).s("\\n\");\n")
+  if plan.trace_fn.len > 0
+    cg.s("    ").s(plan.trace_fn).s("();\n")
+  cg.s("  return _res.error_code;\n}\n" if plan.err_is_number else "  return 1;\n}\n")
+
+impl Ast_node
+  fn emit(r: Self$@, cg: Genc_ctx$@)
+    if r == null
+      return
+
+    switch r.kind_id case .k_file
+      r.emit_file_node(cg)
+    case .k_decl_enum
+      r.emit_enum_decl(cg)
+    case .k_decl_impl
+      r.emit_impl_decl(cg)
+    case .k_decl_fn
+      r.emit_fn_def(cg)
+    case .k_decl_struct
+      r.emit_struct_decl(cg)
+    case .k_decl_embed
+      r.emit_embed_decl(cg)
+    case .k_decl_trait
+      r.emit_trait_decl(cg)
+    default
+      r.emit_stmt(cg)
+
+  priv fn emit_file_node(r: Self$@, cg: Genc_ctx$@)
+    if cg.writes_decls()
+      r.emit_forward_declarations(cg)
+
+      $pending_ast: = List<|Ast_node$@|>.new()
+      defer pending_ast.free()
+      $pending_complex: = List<|I32|>.new()
+      defer pending_complex.free()
+
+      r.collect_pending_nodes(cg, pending_ast@, pending_complex@)
+      r.resolve_pending_queues(cg, pending_ast@, pending_complex@)
+
+    // A static prototype goes to its owning unit, the rest to the shared header
+    // (emit_single_func_proto decides).
+    r.emit_function_prototypes(cg)
+    r.emit_top_level_vars(cg)
+    r.emit_functions_and_impls(cg)
+    r.emit_main_function(cg)
+
+  priv fn collect_pending_nodes(r: Ast_node$@, cg: Genc_ctx$@,
+    pending_ast: List<|Ast_node$@|>$@, pending_complex: List<|I32|>$@)
+    for child_node in r.children
+      child: = child_node.unwrap_top_level()
+      k: = child.kind_id
+      if k == .k_decl_struct || k == .k_decl_enum || k == .k_decl_trait
+        if child.is_emittable()
+          pending_ast.push(child)
+
+    $seen: = sema_type_env.Mangle_seen.new(cg.env)
+    defer seen.free()
+    for t_id in cg.env.complex_types
+      // A slice needs no forward declaration. **Only what passed the filter is recorded**
+      // (`Mangle_seen`).
+      $skip: = false
+      switch cg.env.get_info(t_id) case .array(_b, s)
+        if s == -1
+          skip = true
+      default {}
+      if !skip && seen.admit(t_id)
+        pending_complex.push(t_id)
+
+  // It emits declarations in dependency order (Kahn's algorithm); what is left at the end is a
+  // cycle and is emitted anyway.
+  // Caution: **Do not retry everything left each round**: a straight chain makes it O(N^2).
+  // Each item remembers **only one key it is blocked on** (a type ID, else an identifier name) and
+  // is retried when that key is emitted, so an emitted item must be subtracted from pending's
+  // count, or the items after it stay blocked.
+  priv fn resolve_pending_queues(_r: Ast_node$@, cg: Genc_ctx$@,
+    pending_ast: List<|Ast_node$@|>$@, pending_complex: List<|I32|>$@)
+    n_ast: = pending_ast.len
+    total: = n_ast + pending_complex.len
+    if total == 0
+      return
+
+    $type_pending: = Map<|I32, I32|>.new()
+    defer type_pending.free()
+    $name_pending: = Map<|U8[], I32|>.new()
+    defer name_pending.free()
+    for i in Range.asc(n_ast)
+      p_node: = pending_ast.get(i)
+      if p_node != null && p_node.type_id > 0
+        real_id: = c_order_id(cg, p_node.type_id)
+        type_pending.set(real_id, (type_pending.get(real_id) catch 0) + 1)
+      name_node: = p_node.find_child(.k_identifier) if p_node != null else null
+      if name_node != null && name_node.text.len > 0
+        name_pending.set(name_node.text, (name_pending.get(name_node.text) catch 0) + 1)
+    for i in Range.asc(pending_complex.len)
+      real_id: = c_order_id(cg, pending_complex.get(i))
+      type_pending.set(real_id, (type_pending.get(real_id) catch 0) + 1)
+
+    // The wait queue is a singly-linked list threaded through the items, not a List per key.
+    // Caution: Store the indices 1-based. 0 means "not waiting".
+    $done: = List<|Bool|>.new()
+    defer done.free()
+    $wait_next: = List<|Sz|>.new()
+    defer wait_next.free()
+    for _i in Range.asc(total)
+      done.push(false)
+      wait_next.push(0)
+    $wait_id: = Map<|I32, Sz|>.new()
+    defer wait_id.free()
+    $wait_name: = Map<|U8[], Sz|>.new()
+    defer wait_name.free()
+    $ready: = List<|Sz|>.new()
+    defer ready.free()
+
+    for i in Range.asc(total)
+      park_pending_item(cg, i, n_ast, pending_ast, pending_complex, type_pending@, name_pending@,
+        wait_next@, wait_id@, wait_name@, ready@)
+
+    // Caution: Take from the front (FIFO); from the back, the output loses declaration order and
+    // the diff becomes unreadable.
+    $cursor: Sz = 0
+    for cursor < ready.len
+      i: = ready.get(cursor)
+      cursor += 1
+      if done.get(i)
+        continue
+      done.set(i, true)
+      emit_pending_item(cg, i, n_ast, pending_ast, pending_complex)
+      release_pending_item(cg, i, n_ast, pending_ast, pending_complex, type_pending@, name_pending@,
+        wait_next@, wait_id@, wait_name@, ready@, done@)
+
+    // Only cycles remain; their forward declarations are already emitted, so emit them as they are.
+    for i in Range.asc(total)
+      if !done.get(i) && i >= n_ast
+        done.set(i, true)
+        emit_pending_item(cg, i, n_ast, pending_ast, pending_complex)
+    for i in Range.asc(total)
+      if !done.get(i)
+        done.set(i, true)
+        emit_pending_item(cg, i, n_ast, pending_ast, pending_complex)
+
+  priv fn emit_top_level_vars(r: Ast_node$@, cg: Genc_ctx$@) //<
+    //< The **definitions** of globals, constants and embed data
+    //<
+    //< emit_fwd_externs_and_embeds writes the shared header's `extern`s; this writes the
+    //< definitions into the owning unit.
+    //< Caution: **Emit the constants an initializer refers to first**, as C's static initializers
+    //< require.
+    if !cg.writes_bodies()
+      return
+    $pending: = List<|Ast_node$@|>.new()
+    defer pending.free()
+    $emitted: = List<|Bool|>.new()
+    defer emitted.free()
+    for child_node in r.children
+      child: = child_node.unwrap_top_level()
+      k: = child.kind_id
+      if k == .k_decl_const || k == .k_decl_var || k == .k_decl_embed
+        if child.is_alive_for_backend() && cg.owns_file(child.loc.file())
+          pending.push(child)
+          emitted.push(false)
+
+    // The names of declarations not yet emitted; a reference to one postpones the item.
+    // Caution: **Do not retry everything left each round** (O(N^2), as for types in
+    // resolve_pending_queues). Each item remembers **only the one name it is blocked on** and is
+    // retried only when that name is emitted.
+    $waiting: = Map<|U8[], I32|>.new()
+    defer waiting.free()
+    for i in Range.asc(pending.len)
+      collect_decl_name_counts(pending.get(i), waiting@)
+    $wait_next: = List<|Sz|>.new()
+    defer wait_next.free()
+    for _i in Range.asc(pending.len)
+      wait_next.push(0)
+    $wait_head: = Map<|U8[], Sz|>.new()
+    defer wait_head.free()
+    $ready: = List<|Sz|>.new()
+    defer ready.free()
+    for i in Range.asc(pending.len)
+      park_top_level_var(i, pending@, waiting@, wait_next@, wait_head@, ready@)
+
+    $cursor: Sz = 0
+    for cursor < ready.len
+      i: = ready.get(cursor)
+      cursor += 1
+      if emitted.get(i)
+        continue
+      emitted.set(i, true)
+      cg.top_level_var = true
+      pending.get(i).emit(cg)
+      cg.top_level_var = false
+      release_top_level_var(i, pending@, waiting@, wait_next@, wait_head@, ready@, emitted@)
+
+    // A cycle: what is left is emitted as it is, as for types (sema's check_static_initializer
+    // reports it).
+    for i in Range.asc(pending.len)
+      if !emitted.get(i)
+        emitted.set(i, true)
+        cg.top_level_var = true
+        pending.get(i).emit(cg)
+        cg.top_level_var = false
+
+  priv fn emit_functions_and_impls(r: Ast_node$@, cg: Genc_ctx$@)
+    if !cg.writes_bodies()
+      return
+    for child_node in r.children
+      child: = child_node.unwrap_top_level()
+      k: = child.kind_id
+      if k == .k_decl_fn || k == .k_decl_impl
+        if child.is_emittable() && cg.owns_file(child.loc.file())
+          child.emit(cg)
+
+  priv fn emit_main_function(_r: Ast_node$@, cg: Genc_ctx$@)
+    if !cg.writes_bodies() || !cg.owns_singleton()
+      return
+    if main_sym: = cg.env.find_main_symbol()
+      if !base_core.config.is_freestanding
+        // The plan, the startup calls and the messages are shared with the LLVM backend
+        // (`../entry.kspls`); check_main_signature in sema/body/analyze.kspls limits the types.
+        plan: = gen_entry.plan_of(cg.env, main_sym.type_id)
+        cg
+          .s("""
+int main(int _argc, char **_argv) {
+    argc = _argc;
+    argv = (uint8_t **)kspl_os_argv(_argc, _argv);
+""")
+        for call in gen_entry.startup_calls
+          cg.s("    ").s(call).s("();\n")
+        if plan.returns_result
+          cg.s("    ").t(main_sym.type_id).s(" _res = kspl_main();\n")
+          cg.s("""
+    if (_res.is_err) {
+""")
+          emit_main_error_return(cg, plan)
+          cg.s("    return (int)_res.val;\n}\n" if plan.exit_is_value else "    return 0;\n}\n")
+        else if plan.exit_is_value
+          cg.s("    return (int)kspl_main();\n}\n")
+        else
+          cg.s("    kspl_main();\n    return 0;\n}\n")
+
+  priv fn first_waiting_name(r: Ast_node$@, waiting: Map<|U8[], I32|>$@): U8[] //<
+    //< A name the initializer refers to that is not emitted yet, or empty
+    //<
+    //< Caution: Do not look at the type annotation: sema has already folded the `n` of an array
+    //< length (`U8[n]`), and it is emitted to C as a number.
+    init_node: = r.get_var_decl_expr()
+    if init_node == null || init_node.kind_id == .k_empty
+      return ""
+    $queue: = List<|Ast_node$@|>.new()
+    defer queue.free()
+    queue.push(init_node)
+    $q_idx: Sz = 0
+    for q_idx < queue.len
+      curr: = queue.get(q_idx)
+      q_idx += 1
+      if curr == null
+        continue
+      if curr.text.len > 0 && (waiting.get(curr.text) catch 0) > 0
+        return curr.text
+      for child in curr.children
+        queue.push(child)
+    return ""
+
+  priv fn decl_block(r: Ast_node$@, cg: Genc_ctx$@, type_pending: Map<|I32, I32|>$@,
+    name_pending: Map<|U8[], I32|>$@, self_real_type: I32, self_name: U8[]): Dep_block //<
+      //< It returns the key declaration r is blocked on (both empty where it is not blocked).
+    $dep_queue: = List<|Ast_node$@|>.new()
+    defer dep_queue.free()
+    dep_queue.push(r)
+    $q_idx: Sz = 0
+
+    for q_idx < dep_queue.len
+      curr: = dep_queue.get(q_idx)
+      q_idx += 1
+      if curr == null
+        continue
+
+      if curr.kind_id == .k_type_expr || curr.kind_id == .k_type_atom
+        blk: = node_block(curr, cg, type_pending, name_pending, self_real_type, self_name)
+        if blk.id > 0 || blk.name.len > 0
+          return blk
+        continue
+
+      for child in curr.children
+        dep_queue.push(child)
+    return no_block()
+
+priv fn c_order_id(cg: Genc_ctx$@, type_id: I32): I32 //<
+  //< The type id used in the generated C's reordering
+  //<
+  //< Caution: **Pass it through `Env.c_repr_type_id`.** Types that differ only in immutability
+  //< fold into one C struct; with the plain type id the dependency is missed and C fails with
+  //< `field has incomplete type`.
+
+  return cg.env.c_repr_type_id(cg.env.get_real_type(type_id))
+
+priv fn node_block(curr: Ast_node$@, cg: Genc_ctx$@, type_pending: Map<|I32, I32|>$@,
+  name_pending: Map<|U8[], I32|>$@, self_real_type: I32, self_name: U8[]): Dep_block
+  t_id: = curr.type_id
+  fn_blk: = fn_typedef_block(cg, t_id, type_pending, self_real_type)
+  if fn_blk.id > 0
+    return fn_blk
+  $is_value_dep: = true
+  $dep_ids: I32[4] = ::{}
+  $dep_ids_len: Sz = 0
+
+  if t_id != 0
+    info: = cg.env.get_info(t_id)
+    // A pointer needs only a forward declaration, so it is no dependency; a slice, array, result
+    // and the like embedded by value need the element's complete definition first.
+    switch info case .pointer(_base_id)
+      is_value_dep = false
+    case .array(base_id, _size_str)
+      is_value_dep = true
+      dep_ids[0] = base_id
+      dep_ids[1] = t_id
+      dep_ids_len = 2
+    case .result(base_id, err_id)
+      is_value_dep = true
+      dep_ids[0] = base_id
+      dep_ids[1] = err_id
+      dep_ids[2] = t_id
+      dep_ids_len = 3
+    default
+      dep_ids[0] = t_id
+      dep_ids_len = 1
+  else
+    $extracted: = curr.extract_type_name()
+    t_str: = extracted.slice()
+    if t_str.ends_with("]") || t_str.ends_with("@")
+      is_value_dep = false
+    extracted.free()
+
+  if is_value_dep
+    // Each pending_ast element holds its own type_id, so def_node's goes into the count map with
+    // the other dep_ids (through get_real_type, like them), without a walk by pointer identity.
+    if curr.def_node != null && curr.def_node.type_id > 0
+      dep_ids[dep_ids_len] = curr.def_node.type_id
+      dep_ids_len += 1
+
+    for j in Range.asc(dep_ids_len)
+      real_dep_id: = c_order_id(cg, dep_ids[j])
+      if is_real_type_pending(type_pending, real_dep_id, self_real_type)
+        return Dep_block::{ .id = real_dep_id, .name = "" }
+
+    if t_id == 0
+      $extracted: = curr.extract_type_name()
+      clean_type: = extracted.slice().get_clean_base_type()
+      found: = clean_type.len > 0 && is_name_pending(name_pending, clean_type, self_name)
+      // Caution: Copy the key into the arena; extracted is freed right after this.
+      key: = base_core.arena.dup_str(clean_type) if found else ""
+      extracted.free()
+      if found
+        return Dep_block::{ .id = 0, .name = key }
+  return no_block()
+
+priv fn emit_pending_item(cg: Genc_ctx$@, i: Sz, n_ast: Sz,
+  pending_ast: List<|Ast_node$@|>$@, pending_complex: List<|I32|>$@) //<
+    //< It emits item i.
+    //<
+    //< The indices cover "the AST declarations first, then the composite types".
+  if i < n_ast
+    node: = pending_ast.get(i)
+    if node != null
+      node.emit(cg)
+    return
+  gen_c_decl.emit_single_complex_type(cg, pending_complex.get(i - n_ast))
+
+priv fn park_pending_item(cg: Genc_ctx$@, i: Sz, n_ast: Sz,
+  pending_ast: List<|Ast_node$@|>$@, pending_complex: List<|I32|>$@,
+  type_pending: Map<|I32, I32|>$@, name_pending: Map<|U8[], I32|>$@, wait_next: List<|Sz|>$@,
+  wait_id: Map<|I32, Sz|>$@, wait_name: Map<|U8[], Sz|>$@, ready: List<|Sz|>$@) //<
+    //< It puts item i on ready, or on the wait queue of the key it is blocked on
+  $blk: = Dep_block::{ .id = 0, .name = "" }
+  if i < n_ast
+    node: = pending_ast.get(i)
+    if node != null
+      self_real: = c_order_id(cg, node.type_id) if node.type_id > 0 else 0
+      self_name_node: = node.find_child(.k_identifier)
+      self_name: = self_name_node.text if self_name_node != null else ""
+      blk = node.decl_block(cg, type_pending, name_pending, self_real, self_name)
+  else
+    t_id: = pending_complex.get(i - n_ast)
+    blk = complex_block(cg, t_id, type_pending, c_order_id(cg, t_id))
+  if blk.id > 0
+    wait_next.set(i, wait_id.get(blk.id) catch 0)
+    wait_id.set(blk.id, i + 1)
+    return
+  if blk.name.len > 0
+    wait_next.set(i, wait_name.get(blk.name) catch 0)
+    wait_name.set(blk.name, i + 1)
+    return
+  ready.push(i)
+
+priv fn release_pending_item(cg: Genc_ctx$@, i: Sz, n_ast: Sz,
+  pending_ast: List<|Ast_node$@|>$@, pending_complex: List<|I32|>$@,
+  type_pending: Map<|I32, I32|>$@, name_pending: Map<|U8[], I32|>$@, wait_next: List<|Sz|>$@,
+  wait_id: Map<|I32, Sz|>$@, wait_name: Map<|U8[], Sz|>$@, ready: List<|Sz|>$@,
+  done: List<|Bool|>$@) //<
+    //< The cleanup after item i is emitted
+    //<
+    //< It decrements the count and retries what was waiting on a key whose count reached 0.
+  $own_id: I32 = 0
+  $own_name: U8[] = ""
+  if i < n_ast
+    node: = pending_ast.get(i)
+    if node != null
+      own_id = c_order_id(cg, node.type_id) if node.type_id > 0 else 0
+      name_node: = node.find_child(.k_identifier)
+      own_name = name_node.text if name_node != null else ""
+  else
+    own_id = c_order_id(cg, pending_complex.get(i - n_ast))
+  if own_id > 0
+    left: = (type_pending.get(own_id) catch 0) - 1
+    type_pending.set(own_id, left)
+    if left <= 0
+      head: = wait_id.get(own_id) catch 0
+      wait_id.set(own_id, 0)
+      wake_waiters(cg, head, n_ast, pending_ast, pending_complex, type_pending, name_pending,
+        wait_next, wait_id, wait_name, ready, done)
+  if own_name.len > 0
+    left: = (name_pending.get(own_name) catch 0) - 1
+    name_pending.set(own_name, left)
+    if left <= 0
+      head: = wait_name.get(own_name) catch 0
+      wait_name.set(own_name, 0)
+      wake_waiters(cg, head, n_ast, pending_ast, pending_complex, type_pending, name_pending,
+        wait_next, wait_id, wait_name, ready, done)
+
+priv fn wake_waiters(cg: Genc_ctx$@, head: Sz, n_ast: Sz, pending_ast: List<|Ast_node$@|>$@,
+  pending_complex: List<|I32|>$@, type_pending: Map<|I32, I32|>$@,
+  name_pending: Map<|U8[], I32|>$@, wait_next: List<|Sz|>$@, wait_id: Map<|I32, Sz|>$@,
+  wait_name: Map<|U8[], Sz|>$@, ready: List<|Sz|>$@, done: List<|Bool|>$@) //<
+    //< It walks the wait queue (the 1-based indices linked by wait_next) and re-parks each item.
+    //<
+    //< Caution: Detach the key's queue head before walking. park_pending_item can put the item back
+    //< on the same key.
+  $cur: = head
+  for cur != 0
+    j: = cur - 1
+    cur = wait_next.get(j)
+    wait_next.set(j, 0)
+    if !done.get(j)
+      park_pending_item(cg, j, n_ast, pending_ast, pending_complex, type_pending, name_pending,
+        wait_next, wait_id, wait_name, ready)
+
+priv struct Dep_block //< the key an item is blocked on
+  //<
+  //< id > 0 is a type ID, a non-empty name an identifier. **Both empty means "not blocked".** The
+  //< key is returned so the item waits on it rather than being retried with everything left.
+  id: I32
+  name: U8[]
+
+priv fn no_block(): Dep_block
+  return Dep_block::{ .id = 0, .name = "" }
+
+priv fn is_real_type_pending(type_pending: Map<|I32, I32|>$@, real_target: I32, self_real_type: I32):
+  Bool //<
+    //< Whether a body of the real type real_target, other than self's own, is still pending
+    //<
+    //< It reads, in O(1), the pending set's counts per real type ID (pending_ast plus
+    //< pending_complex, counted once per round). self_real_type is self's own real type.
+  if real_target <= 0
+    return false
+  count: = type_pending.get(real_target) catch 0
+  adjusted: = count - (1 if real_target == self_real_type else 0)
+  return adjusted > 0
+
+priv fn collect_decl_name_counts(decl: Ast_node$@, out: Map<|U8[], I32|>$@) //<
+  //< It counts the names one declaration introduces
+  //<
+  //< There can be several, as in `const a, b: I32 = ...`.
+  if decl == null
+    return
+  for child in decl.children
+    if child.kind_id == .k_identifier && child.text.len > 0
+      out.set(child.text, (out.get(child.text) catch 0) + 1)
+
+priv fn park_top_level_var(i: Sz, pending: List<|Ast_node$@|>$@,
+  waiting: Map<|U8[], I32|>$@, wait_next: List<|Sz|>$@, wait_head: Map<|U8[], Sz|>$@,
+  ready: List<|Sz|>$@) //<
+    //< It puts item i on ready, or on the wait queue of the name it is blocked on
+    //<
+    //< Caution: The indices are 1-based, as in resolve_pending_queues.
+  name: = pending.get(i).first_waiting_name(waiting)
+  if name.len == 0
+    ready.push(i)
+    return
+  wait_next.set(i, wait_head.get(name) catch 0)
+  wait_head.set(name, i + 1)
+
+priv fn release_top_level_var(i: Sz, pending: List<|Ast_node$@|>$@,
+  waiting: Map<|U8[], I32|>$@, wait_next: List<|Sz|>$@, wait_head: Map<|U8[], Sz|>$@,
+  ready: List<|Sz|>$@, emitted: List<|Bool|>$@) //<
+    //< The cleanup after top-level variable i is emitted
+    //<
+    //< It removes the names it introduced from the waiting list and retries what was waiting on
+    //< a name whose count reached 0.
+  decl: = pending.get(i)
+  if decl == null
+    return
+  for child in decl.children
+    if child.kind_id != .k_identifier || child.text.len == 0
+      continue
+    left: = (waiting.get(child.text) catch 0) - 1
+    waiting.set(child.text, left)
+    if left > 0
+      continue
+    // Caution: Detach the head before walking. park can put the item back on the same name.
+    $cur: = wait_head.get(child.text) catch 0
+    wait_head.set(child.text, 0)
+    for cur != 0
+      j: = cur - 1
+      cur = wait_next.get(j)
+      wait_next.set(j, 0)
+      if !emitted.get(j)
+        park_top_level_var(j, pending, waiting, wait_next, wait_head, ready)
+
+priv fn is_name_pending(name_pending: Map<|U8[], I32|>$@, target_name: U8[], self_name: U8[]): Bool
+  if target_name.len == 0
+    return false
+  count: = name_pending.get(target_name) catch 0
+  adjusted: = count - (1 if self_name.len > 0 && target_name.equals(self_name) else 0)
+  return adjusted > 0
+
+priv fn decl_identity_of(cg: Genc_ctx$@, type_id: I32): I32 //<
+  //< A component type's identity as a declaration
+  //<
+  //< Unstripped, it does not match the pending set (the declarations' type IDs): a `Row[2]`'s
+  //< element is a `const_of(Row)`, the wrapper is emitted first, and C fails with `array has
+  //< incomplete element type`, with no KSPL diagnostic ("The output order of genc's type
+  //< definitions is decided after the immutability marks are stripped" in ksplc/docs/DESIGN.md).
+
+  return c_order_id(cg, cg.env.strip_const_deep(type_id))
+
+priv fn complex_block(cg: Genc_ctx$@, type_id: I32, type_pending: Map<|I32, I32|>$@,
+  self_real_type: I32): Dep_block
+  info: = cg.env.get_info(type_id)
+  switch info case .array(base_id, _size_str)
+    real_base: = decl_identity_of(cg, base_id)
+    if is_real_type_pending(type_pending, real_base, self_real_type)
+      return Dep_block::{ .id = real_base, .name = "" }
+    return fn_typedef_block(cg, base_id, type_pending, self_real_type)
+  case .result(base_id, err_id)
+    real_base: = decl_identity_of(cg, base_id)
+    if !sema_type_env.is_void(real_base) && real_base != 0
+      if is_real_type_pending(type_pending, real_base, self_real_type)
+        return Dep_block::{ .id = real_base, .name = "" }
+    real_err: = decl_identity_of(cg, err_id)
+    if real_err != 0
+      if is_real_type_pending(type_pending, real_err, self_real_type)
+        return Dep_block::{ .id = real_err, .name = "" }
+    blk: = fn_typedef_block(cg, base_id, type_pending, self_real_type)
+    if blk.id > 0
+      return blk
+    return fn_typedef_block(cg, err_id, type_pending, self_real_type)
+  case .fn_type(sig)
+    // Only another function type's typedef is needed first: a struct or composite named in the
+    // signature is declared earlier (C lets a declarator name an incomplete type).
+    for p_id in sig.params
+      blk: = fn_typedef_block(cg, p_id, type_pending, self_real_type)
+      if blk.id > 0
+        return blk
+    return fn_typedef_block(cg, sig.ret_id, type_pending, self_real_type)
+  default {}
+  return no_block()
+
+priv fn fn_typedef_named_by(cg: Genc_ctx$@, type_id: I32): I32 //<
+  //< The function type whose typedef the C spelling of type_id names; 0 for none
+  //<
+  //< It looks through pointers and immutability marks (`fn_I32*`). A pointer to a struct needs only
+  //< the struct's forward declaration, but a pointer to a function type needs its typedef, which
+  //< has no forward form.
+  $cur: = type_id
+  for _depth in Range.asc(64)
+    switch cg.env.get_info(cur) case .pointer(b), .const_of(b)
+      cur = b
+    case .fn_type(_sig)
+      return cur
+    default
+      return 0
+  return 0
+
+priv fn fn_typedef_block(cg: Genc_ctx$@, type_id: I32, type_pending: Map<|I32, I32|>$@,
+  self_real_type: I32): Dep_block //< blocked on the function typedef type_id names, if pending
+  fn_id: = fn_typedef_named_by(cg, type_id)
+  if fn_id == 0
+    return no_block()
+  real_fn: = decl_identity_of(cg, fn_id)
+  if is_real_type_pending(type_pending, real_fn, self_real_type)
+    return Dep_block::{ .id = real_fn, .name = "" }
+  return no_block()

@@ -1,0 +1,105 @@
+//< Formats a number as text
+//<
+//< **How a number is shown changes only the text; rounding changes the value itself.** Do not mix
+//< one into the other, or changing the decimal places on the screen would change the total
+//< ([`calc.kspls`](calc.kspls)'s `ROUND` is this file's `round_to`).
+//< **Rounding multiplies by 10 to the number of places and then converts to a whole number**, so
+//< the larger the number, the fewer decimal places can appear (on overflow, the result wraps).
+//< Pure functions: **they know neither the document nor the cell.**
+import "kspage/model/day" + { Dating }
+import "kspage/model/style" { Number_spec }
+import "std/str" { Str_builder }
+
+// 10 to the n. **It is capped at 9** (above that an I64 multiplication overflows).
+priv const tens: I64[10] = ::{ 1I64, 10I64, 100I64, 1000I64, 10000I64, 100000I64, 1000000I64,
+  10000000I64, 100000000I64, 1000000000I64 }
+
+priv fn pow10(n: Sz): I64
+  return tens[0] if n < 0 else tens[n if n < 10 else 9]
+
+priv fn write_whole(out: Str_builder$@, whole: I64, grouped: Bool) //< writes the whole part
+  //<
+  //< **It is grouped every three digits** (counted from the lowest digit).
+  if !grouped || whole < 1000I64
+    out.s("\{whole\}")
+    return
+  write_whole(out, whole / 1000I64, true)
+  out.c(',')
+  rest: = whole % 1000I64
+  // Caution: **Pad the lower group to three digits.** Unpadded, 1000 comes out as "1,0".
+  if rest < 100I64
+    out.c('0')
+  if rest < 10I64
+    out.c('0')
+  out.s("\{rest\}")
+
+priv const loose_places: Sz = 6 //< the decimal places written where none are set
+
+priv fn write_fraction(out: Str_builder$@, rest: I64, unit: I64, trim: Bool) //<
+  //< Writes the decimal part
+  //<
+  //< Caution: **Write the leading 0s too** (drop them and 1.05 comes out as "1.5").
+  //< Where trim is true, trailing 0s are dropped (otherwise 42 is "42.000000"), and where only 0s
+  //< remain, the decimal point too.
+  if unit <= 1I64
+    return
+  start: = out.len
+  out.c('.')
+  $left: I64 = rest
+  for $step: I64 = unit / 10I64; step >= 1I64; step /= 10I64
+    out.c(U8::(48I64 + left / step))
+    left = left % step
+  if !trim
+    return
+  for out.len > start + 1 && (out.ptr + out.len - 1)$ == '0'
+    out.len -= 1
+  if out.len <= start + 1
+    out.len = start
+
+priv fn safe_places(n: F64, want: Sz): Sz //<
+  //< The decimal places that still fit an I64 after scaling by 10 to that power
+  //<
+  //< **On overflow the result wraps** (the file header says why). At that size the decimals are
+  //< not visible anyway.
+  $p: Sz = want
+  for p > 0 && n * F64::pow10(p) > 9.0e18
+    p -= 1
+  return p
+
+fn write_shown(out: Str_builder$@, v: F64, spec: Number_spec) //<
+  //< Writes a number the way it is shown
+  //<
+  //< **The sign comes before the symbol** (`-$1,200`). **Round before dividing**, or `0.999` to one
+  //< place comes out as "0.10".
+  //< Caution: **Do not truncate**: 1.23 would come out as "1.229999" (an F64's 1.23 is slightly
+  //< less).
+  // Where a date format applies, it is a date (a count of days from the origin day). **The number
+  // formatting is not read**, and **the decimals are dropped**.
+  if !spec.dated.same_dating(Dating.none)
+    day.write_day(out, I64::v, spec.dated)
+    return
+  $n: F64 = v * 100.0 if spec.percent else v
+  if n < 0.0
+    out.c('-')
+    n = -n
+  out.s(spec.prefix)
+  // Where the places are set, trailing 0s appear too (for alignment); otherwise they are dropped.
+  $want: Sz = loose_places
+  $trim: = true
+  if p: = spec.places
+    want = p
+    trim = false
+  unit: = pow10(safe_places(n, want))
+  scaled: = I64::(n * F64::unit + 0.5)
+  write_whole(out, scaled / unit, spec.grouped)
+  write_fraction(out, scaled % unit, unit, trim)
+  out.s(spec.suffix)
+
+fn round_to(v: F64, places: Sz): F64 //< the value rounded to places decimals
+  //<
+  //< **A half rounds away from 0** (`-0.5` is `-1`). **A value too large is not rounded** (the
+  //< reason is in the file header).
+  size: = v if v >= 0.0 else -v
+  unit: = F64::pow10(safe_places(size, places))
+  half: = 0.5 if v >= 0.0 else -0.5
+  return F64::I64::(v * unit + half) / unit

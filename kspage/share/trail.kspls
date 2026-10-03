@@ -1,0 +1,112 @@
+//< The change history
+//<
+//< Typing between `Trail.wait` and `Trail.stamp` loses nothing: every "what" held back is stored
+//< under the next time and name.
+
+// ==========================================
+// Usage:
+//   $keep: U8[65536] = ::{};
+//   tr: = trail.open(U8$[]::keep, 4096, "", arena);   // an empty text starts a new history
+//   tr.wait("Typed");                       // holds back what was done (edit.kspls calls it)
+//   tr.stamp("2026-08-18 11:42", "Alice");  // adds the time and who, and stores it
+//   tr.deeds_into(sb);                      // "time\twho\twhat", one line each, oldest first
+// ==========================================
+import "ksdb/log" as ksdblog
+import "ksdb/ram_store" as ram
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+const kind_deed: U16 = 1 //< the record's kind
+  //<
+  //< `ksdb` does not read the contents, so the meaning is defined here. When adding a kind, do not
+  //< change this number (stored records would stop reading).
+
+priv const gap: U8 = 0x09 //< the field separator
+  //<
+  //< Caution: **It must be a byte that never appears in the contents** (a user's name goes in);
+  //< the line separator is a newline.
+
+struct Trail
+  priv log: ksdblog.Log$@
+  priv keep: U8$[] //<
+    //< The arena. **The caller keeps it alive** (this holds no copy).
+  priv waiting: List<|U8[]|>$@ //< the "what" entries that have no time and who yet
+  priv line: Str_builder //<
+    //< The buffer one entry is built in, reused.
+  lost: Sz //<
+    //< How many could not be stored (a full arena refuses), so none is lost silently.
+
+fn open(keep: U8$[], sector: Sz, image: U8[], arena: Arena$@): Trail$@ //<
+  //< Opens a history with `keep` as its arena
+  //<
+  //< An empty `image` starts a new history; otherwise it restores that one and appends to its end.
+  //< Caution: **`image` must be the text `bytes` returned**, or `ksdb` stops reading partway (a CRC
+  //< mismatch) and nothing after that point reads. `sector` must divide `keep.len` (a rule of
+  //< `ksdb/store.kspls`).
+  store: = ram.make(keep, sector)
+  // `ram.make` clears the arena, so copy the image in after it.
+  for $i: Sz = 0; i < image.len && i < keep.len; i += 1
+    keep[i] = (image.ptr + i)$
+  lg: = ksdblog.Log.open(store)
+  tr: = Trail::{
+    .log = arena.create(lg),
+    .keep = keep,
+    .waiting = List<|U8[]|>.create(arena),
+    .line = Str_builder.new(),
+    .lost = 0,
+  }
+  return arena.create(tr)
+
+impl Trail
+  fn wait(r: Self$@, what: U8[]) //< holds back one "what was done"
+    //<
+    //< An empty text is not held back (that step changed nothing).
+    //< The text lives in the caller's arena; keep it alive until `stamp`.
+    if what.len <= 0
+      return
+    r.waiting.push(what)
+
+  fn stamp(r: Self$@, when: U8[], who: U8[]): Sz //<
+    //< Adds the time and who to everything held back and stores it
+    //<
+    //< Returns how many were stored. What could not be stored is counted into `lost`. What was held
+    //< back is emptied either way (left in place, it would mix into the next call).
+    $put: Sz = 0
+    for $i: Sz = 0; i < r.waiting.len; i += 1
+      r.line.clear()
+      r.line.s(when).c(gap).s(who).c(gap).s(r.waiting.get(i))
+      r.log.append(kind_deed, r.line.slice()) catch _e
+        r.lost += 1
+        continue
+      put += 1
+    r.waiting.len = 0
+    return put
+
+  fn count(r: Self$@): Sz //< how many are stored
+    //<
+    //< What is held back is not counted (it is not history until `stamp` adds it).
+    $n: Sz = 0
+    $it: = r.log.iter()
+    for it.next()
+      if it.kind == kind_deed
+        n += 1
+    return n
+
+  fn deeds_into(r: Self$@, sb: Str_builder$@) //<
+    //< Writes "time\twho\twhat", one line each, oldest first
+    //<
+    //< Caution: **Separate them with newlines** (the field separator is a tab). The reader takes
+    //< the text whole (the arena caps its size).
+    $it: = r.log.iter()
+    for it.next()
+      if it.kind != kind_deed
+        continue
+      sb.s(r.keep.sub(it.payload_at(), it.len)).c(0x0aU8)
+
+  fn bytes(r: Self$@): U8[] //< the stored form
+    //<
+    //< It is the used part of the arena as it stands; passed to `open`, it appends straight to the
+    //< end.
+    return U8[]::{ .ptr = r.keep.ptr, .len = r.log.used() }

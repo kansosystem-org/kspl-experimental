@@ -1,0 +1,570 @@
+//< Parsing, building and writing out JSON values
+//<
+//< The arena-backed `Json_builder` / `Array_builder` / `Obj_builder` build a head-and-tail chain
+//< by value, so nothing is copied twice. Parsing limits the nesting depth. An integer stays an
+//< integer, so one wider than 53 bits does not round on the way through.
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt"
+import "std/strnum" // `to_f64`
+
+pub enum Val //< one JSON value, of any of the seven kinds
+  null_val //< JSON's `null`
+  bool_val(b: Bool) //< `true` or `false`
+  int_val(i: I64) //< a number written without a point or an exponent
+  float_val(f: F64) //< a number with a point or an exponent, kept separate so nothing rounds
+  str_val(s: U8[]) //< a string, already unescaped
+  array_val(head: Node$@) //< an array, as a chain of elements
+  obj_val(o: Obj) //< an object; read its members through `get`
+
+pub struct Node //< one element of an array, chained to the next
+  pub val: Val //< the element's value
+  pub next: Node$@ //< the element after this one, or null
+
+priv struct Member
+  key: U8[]
+  val: Val
+  next: Member$@
+
+pub struct Obj //< an object's members, reachable only through `get` and `has_key`
+  //<
+  //< `Val.obj_val`'s payload.
+  //< Caution: The payload must not hold a `Member$@` directly. Code outside can bind a `pub enum`'s
+  //< payload (`switch v case .obj_val(head)`), so the priv list would leak out ("Why a narrow type
+  //< may not sit in a position with wide visibility" in docs/DESIGN.md). Reading an object goes
+  //< through `get(key)`.
+  priv head: Member$@
+
+priv fn append_node(head: Node$@$@, tail: Node$@$@, node: Node$@) //<
+  //< The append shared by Array_builder.push and parse_array
+  if head$ == null
+    head$ = node
+  else
+    tail.next = node
+  tail$ = node
+
+priv fn append_member(head: Member$@$@, tail: Member$@$@, m: Member$@)
+  if head$ == null
+    head$ = m
+  else
+    tail.next = m
+  tail$ = m
+// ---------------------------------------------------------
+// The Json_builder API (for building JSON safely)
+// ---------------------------------------------------------
+pub struct Json_builder //< makes values, and the two builders that assemble them
+  pub arena: Arena$@ //< the arena every value it makes is allocated in
+
+pub struct Array_builder //< builds an array in the order elements are pushed
+  pub builder: Json_builder //< the builder that allocates the elements
+  pub head: Node$@ //< the first element pushed, or null
+  pub tail: Node$@ //< the last element pushed, so the next one is appended without a walk
+
+pub struct Obj_builder //< builds an object; setting a key again replaces it
+  pub builder: Json_builder //< the builder that allocates the members
+  priv head: Member$@
+  priv tail: Member$@
+
+impl Json_builder
+  pub fn new( //< a builder that allocates everything it makes from that arena
+    arena: Arena$@, //< the arena for the values
+  ): Json_builder
+    return Json_builder::{ .arena = arena }
+  pub fn null_val(_r: Self$@): Val //< JSON's `null`
+    return Val.null_val
+  pub fn bool_val(_r: Self$@, b: Bool): Val //< `true` or `false`
+    return Val.bool_val(b)
+  pub fn int_val(_r: Self$@, i: I64): Val //< a number with no point; wide enough for an offset
+    //<
+    //< Caution: Take an I64, like Val.int_val and as_int64; with an I32 here, values could be read
+    //< but not written.
+    return Val.int_val(i)
+  pub fn float_val(_r: Self$@, f: F64): Val //< a number with a point
+    return Val.float_val(f)
+  pub fn str_val(r: Self$@, s: U8[]): Val //< a string, copied into the arena
+    return Val.str_val(r.arena.dup_str(s) if s.len > 0 else "")
+  pub fn arr(r: Self$@): Array_builder //< an empty array builder
+    return Array_builder::{ .builder = r$, .head = null, .tail = null }
+  pub fn obj(r: Self$@): Obj_builder //< an empty object builder
+    return Obj_builder::{ .builder = r$, .head = null, .tail = null }
+
+impl Array_builder
+  pub fn push( //< adds one element at the end
+    $r: Self,
+    val: Val, //< the element to add
+  ): Array_builder
+    n: = r.builder.arena.create(Node::{ .val = val })
+    append_node(r.head@, r.tail@, n)
+    return r
+
+  pub fn build(r: Self): Val //< the array built so far
+    return Val.array_val(r.head)
+
+impl Obj_builder
+  pub fn set( //< adds a member; an existing key is replaced, not added again
+    //<
+    //< Caution: **Replace an existing key.** If appended, `{"a":1,"a":2}` makes `get` return the
+    //< first while `dump` writes both, and another parser reads a different value. The scan costs
+    //< the same as `get`.
+    $r: Self,
+    key: U8[], //< the member's name, copied into the arena
+    val: Val, //< the value stored under it
+  ): Obj_builder
+    $m: = r.head
+    for m != null
+      if m.key.equals(key)
+        m.val = val
+        return r
+      m = m.next
+    k_str: U8$[] = r.builder.arena.dup_str(key) if key.len > 0 else ""
+    fresh: = r.builder.arena.create(Member::{ .key = k_str, .val = val })
+    append_member(r.head@, r.tail@, fresh)
+    return r
+
+  pub fn build(r: Self): Val //< the object built so far
+    return Val.obj_val(Obj::{ .head = r.head })
+// ---------------------------------------------------------
+// Parsing & Dumping
+// ---------------------------------------------------------
+pub enum Json_error //< why a document could not be read, or cannot be trusted
+  unexpected_eof //< it ended in the middle of a value
+  invalid_character(ch: U8) //< a byte that is not allowed where it appears
+  invalid_string //< a string's escape or its ending is not what JSON allows
+  invalid_number //< the digits do not match JSON's number grammar
+  expected_colon //< a member's name was not followed by `:`
+  expected_comma_or_bracket //< an element was not followed by `,` or the closing mark
+  trailing_comma //< `[1,]` or `{"a":1,}`; JSON requires an element after a comma
+  too_deep //< the nesting is too deep; this guards against stack exhaustion
+  trailing_input //< something other than whitespace follows the value
+  missing_field(missing: U8[]) //< a field in the table is missing from the object.
+    //<
+    //< Only `into_struct` returns this one and the next.
+    //< Caution: **These two keep a default from being filled in silently.** Filled with 0 or "", a
+    //< sender's misspelt key would show only as "the value was 0" (see std/docs/DESIGN.md's
+    //< "Known holes").
+  field_type(mismatched: U8[]) //< the kinds differ; `"<root>"` when it is not at a field
+
+priv struct Parse_ctx
+  src: U8[]
+  pos: Sz
+  arena: Arena$@
+  depth: Sz
+
+pub const max_nesting_depth: Sz = 500 //< the deepest nesting read; deeper fails with `too_deep`
+  //<
+  //< It guards against stack exhaustion, and is deep enough for ordinary JSON. `std/json_struct`
+  //< holds a round trip to it too, so a document that parses does not stop part way.
+
+priv fn enter_nesting(ctx: Parse_ctx$@): Void?Json_error
+  ctx.depth += 1
+  if ctx.depth > max_nesting_depth
+    throw Json_error.too_deep
+
+priv fn exit_nesting(ctx: Parse_ctx$@)
+  ctx.depth -= 1
+
+priv fn skip_ws(ctx: Parse_ctx$@)
+  for ctx.pos < ctx.src.len && (ctx.src.ptr + ctx.pos).is_space()
+    ctx.pos += 1
+
+priv fn match_str(ctx: Parse_ctx$@, s: U8$[]): Bool
+  if ctx.src.starts_with(s, ctx.pos)
+    ctx.pos += s.len
+    return true
+  return false
+
+priv fn is_json_escape(ec: U8): Bool //< the escapes JSON accepts (RFC 8259 §7)
+  //<
+  //< **This list is the canonical source.**
+  //< `unescape_to_arena` (std/str), which does the decoding, is a shared decoder: it passes a
+  //< symbol escape (`\[` and `\-`, used in a grammar's character class) through **as the character
+  //< itself**. So the caller decides which escapes are accepted. Without the refusal here, `"\-"`
+  //< would silently pass as `-`, and a notation JSON does not have would be accepted.
+  return ec == '"' || ec == '\\' || ec == '/' || ec == 'b' || ec == 'f' || ec == 'n' || ec == 'r' ||
+    ec == 't' || ec == 'u'
+
+priv fn parse_string(ctx: Parse_ctx$@): U8[]?Json_error
+  if ctx.pos >= ctx.src.len || (ctx.src.ptr + ctx.pos)$ != '"'
+    throw Json_error.invalid_string
+  ctx.pos += 1
+  start: = ctx.pos
+  for ctx.pos < ctx.src.len
+    c: = (ctx.src.ptr + ctx.pos)$
+    // **A raw control character is refused (RFC 8259 §7).** Passed through raw, it breaks a peer
+    // that splits input by lines (JSON-RPC's framing, a per-line log).
+    if c < 0x20U8
+      throw Json_error.invalid_string
+    if c == '\\'
+      if ctx.pos + 1 >= ctx.src.len || !is_json_escape((ctx.src.ptr + ctx.pos + 1)$)
+        throw Json_error.invalid_string
+      ctx.pos += 2
+      continue
+    if c == '"'
+      raw_str: = U8[]::{ .ptr = ctx.src.ptr + start, .len = ctx.pos - start }
+      ctx.pos += 1
+      // A broken `\u` is not accepted as a string (the reason is in str.kspls's
+      // unescape_to_arena).
+      return raw_str.unescape_to_arena(ctx.arena) catch
+        throw Json_error.invalid_string
+    ctx.pos += 1
+  throw Json_error.unexpected_eof
+
+priv fn parse_number(ctx: Parse_ctx$@): Val?Json_error //< reads one number
+  //<
+  //< int_val for integer notation; float_val with a point or an exponent.
+  //< Caution: **Do not store an integer as an F64.** An integer over 53 bits (safetensors' offsets)
+  //< rounds silently.
+  start_pos: = ctx.pos
+  if ctx.pos < ctx.src.len && (ctx.src.ptr + ctx.pos)$ == '-'
+    ctx.pos += 1
+  int_start: = ctx.pos
+  for ctx.pos < ctx.src.len && (ctx.src.ptr + ctx.pos).is_digit()
+    ctx.pos += 1
+  if ctx.pos == int_start
+    throw Json_error.invalid_number
+  // Caution: **Do not allow digits after a leading 0 (RFC 8259 §6).** Reading `01` as `1`
+  // disagrees with a peer that reads it as octal.
+  if ctx.pos - int_start > 1 && (ctx.src.ptr + int_start)$ == '0'
+    throw Json_error.invalid_number
+  // A fractional or exponent part makes it floating point.
+  $is_float: = false
+  if ctx.pos < ctx.src.len && (ctx.src.ptr + ctx.pos)$ == '.'
+    is_float = true
+    ctx.pos += 1
+    frac_start: = ctx.pos
+    for ctx.pos < ctx.src.len && (ctx.src.ptr + ctx.pos).is_digit()
+      ctx.pos += 1
+    if ctx.pos == frac_start
+      throw Json_error.invalid_number // "1." is not a number in JSON
+  if ctx.pos < ctx.src.len
+    e: = (ctx.src.ptr + ctx.pos)$
+    if e == 'e' || e == 'E'
+      is_float = true
+      ctx.pos += 1
+      if ctx.pos < ctx.src.len
+        sgn: = (ctx.src.ptr + ctx.pos)$
+        if sgn == '+' || sgn == '-'
+          ctx.pos += 1
+      exp_start: = ctx.pos
+      for ctx.pos < ctx.src.len && (ctx.src.ptr + ctx.pos).is_digit()
+        ctx.pos += 1
+      if ctx.pos == exp_start
+        throw Json_error.invalid_number
+  text: = ctx.src.sub(start_pos, ctx.pos - start_pos)
+  if !is_float
+    // An integer stays an I64.
+    // Caution: **Do not accumulate the digits here.** The range check belongs to `std/strnum`'s
+    // `to_i64`, and a copy would miss it at one end. The shape is already checked, so a refusal
+    // here only means it does not fit in an I64.
+    $fits: = true
+    v: = text.to_i64() catch
+      fits = false
+      fallback 0I64
+    if fits
+      return Val.int_val(v)
+  // A fraction, or an integer too big for an I64: the lost precision shows in the type, not as a
+  // truncated value.
+  f: = text.to_f64() catch
+    throw Json_error.invalid_number
+  return Val.float_val(f)
+
+priv fn check_comma_or_end(ctx: Parse_ctx$@, end_char: U8): Bool?Json_error
+  skip_ws(ctx)
+  if ctx.pos >= ctx.src.len
+    throw Json_error.unexpected_eof
+  c: = (ctx.src.ptr + ctx.pos)$
+  if c == end_char
+    ctx.pos += 1
+    return true
+  if c == ','
+    ctx.pos += 1
+    return false
+  throw Json_error.expected_comma_or_bracket
+
+priv fn parse_value(ctx: Parse_ctx$@): Val?Json_error
+  skip_ws(ctx)
+  if ctx.pos >= ctx.src.len
+    throw Json_error.unexpected_eof
+  c: = (ctx.src.ptr + ctx.pos)$
+  switch c case '{'
+    return parse_object(ctx)?
+  case '['
+    return parse_array(ctx)?
+  case '"'
+    s: = parse_string(ctx)?
+    return Val.str_val(s)
+  case 't'
+    // A failed match leaves the switch and reaches the invalid_character below (shared by t/f/n).
+    if match_str(ctx, "true")
+      return Val.bool_val(true)
+  case 'f'
+    if match_str(ctx, "false")
+      return Val.bool_val(false)
+  case 'n'
+    if match_str(ctx, "null")
+      return Val.null_val
+  default
+    if c == '-' || c.is_digit()
+      return parse_number(ctx)?
+  throw Json_error.invalid_character(c)
+
+priv fn parse_object(ctx: Parse_ctx$@): Val?Json_error
+  enter_nesting(ctx)?
+  ctx.pos += 1
+  skip_ws(ctx)
+  if ctx.pos < ctx.src.len && (ctx.src.ptr + ctx.pos)$ == '}'
+    ctx.pos += 1
+    exit_nesting(ctx)
+    return Val.obj_val(Obj::{ .head = null })
+  $head: Member$@ = null
+  $tail: Member$@ = null
+  for
+    skip_ws(ctx)
+    // A close after a comma is refused as trailing_comma, not as an `invalid_string` key.
+    if ctx.pos < ctx.src.len && (ctx.src.ptr + ctx.pos)$ == '}'
+      throw Json_error.trailing_comma
+    key: = parse_string(ctx)?
+
+    skip_ws(ctx)
+    if ctx.pos >= ctx.src.len || (ctx.src.ptr + ctx.pos)$ != ':'
+      throw Json_error.expected_colon
+    ctx.pos += 1
+    val: = parse_value(ctx)?
+
+    node: = ctx.arena.create(Member::{ .key = key, .val = val })
+    append_member(head@, tail@, node)
+
+    if check_comma_or_end(ctx, '}')?
+      break
+  exit_nesting(ctx)
+  return Val.obj_val(Obj::{ .head = head })
+
+priv fn parse_array(ctx: Parse_ctx$@): Val?Json_error
+  enter_nesting(ctx)?
+  ctx.pos += 1
+  skip_ws(ctx)
+  if ctx.pos < ctx.src.len && (ctx.src.ptr + ctx.pos)$ == ']'
+    ctx.pos += 1
+    exit_nesting(ctx)
+    return Val.array_val(null)
+  $head: Node$@ = null
+  $tail: Node$@ = null
+  for
+    skip_ws(ctx)
+    if ctx.pos < ctx.src.len && (ctx.src.ptr + ctx.pos)$ == ']'
+      throw Json_error.trailing_comma
+    val: = parse_value(ctx)?
+
+    node: = ctx.arena.create(Node::{ .val = val })
+    append_node(head@, tail@, node)
+
+    if check_comma_or_end(ctx, ']')?
+      break
+  exit_nesting(ctx)
+  return Val.array_val(head)
+
+pub fn parse( //< the whole document as one value; anything left over is refused
+  //<
+  //< Caution: **A document ends after one value.** Otherwise `1 2` **succeeds** as `1`, and two
+  //< concatenated inputs silently pass as the first.
+  src: U8[], //< the text to read
+  arena: Arena$@, //< the arena the values are allocated in
+): Val?Json_error //< the value; fails on bad syntax or on text after it
+  $ctx: = Parse_ctx::{ .src = src, .pos = 0, .arena = arena, .depth = 0 }
+  v: = parse_value(ctx@)?
+  skip_ws(ctx@)
+  if ctx.pos < src.len
+    throw Json_error.trailing_input
+  return v
+
+priv fn write_break(out: Str_builder$@, indent: Sz, depth: Sz) //< a newline with indentation
+  if indent <= 0
+    return
+  out.c('\n')
+  for _i in Range.asc(indent * depth)
+    out.c(' ')
+
+priv fn write_json_float(out: Str_builder$@, f: F64) //< writes a fraction
+  //<
+  //< **It writes the shortest form that round-trips** (a negative precision to `std/strfmt`'s
+  //< `write_float`). An integral value gets a `.0`, so it reads back as a float; below 10^-6 and
+  //< from 10^21 up it uses the `1e+21` form, which JSON allows (RFC 8259 §6).
+  strfmt.write_float(out, f, -1, 0, ' ', false)
+
+impl Val
+  pub fn arr_list( //< an array's elements as a list; the one way to walk an array
+    //<
+    //< A `Val` cannot be the subject of `for in` (a chain has no `.len`), so walk this list.
+    //< Caution: When arena is null it allocates on the global heap, so the caller frees it with a
+    //< `defer` (the same convention as `List.new`).
+    r: Self,
+    arena: Arena$@, //< the arena for the list; null means the global heap, freed by the caller
+  ): List<|Val|>
+    $out: = List<|Val|>.new(arena)
+    $curr: = r.arr_head()
+    for curr != null
+      out.push(curr.val)
+      curr = curr.next
+    return out
+
+  priv fn arr_head(r: Self): Node$@ //< the head of the array's linked list
+    //<
+    //< null if it is not an array. `dump`/`get_at` walk it without needing an arena for a list.
+    switch r case .array_val(head)
+      return head
+    default
+      return null
+
+  priv fn obj_head(r: Self): Member$@ //< the head of the object's member list
+    //<
+    //< null if it is not an object.
+    switch r case .obj_val(o)
+      return o.head
+    default
+      return null
+  pub fn dump( //< writes the value as JSON text
+    //<
+    //< **Indentation is only for files a person reads.** For data exchange keep it at 0: the
+    //< whitespace is waste to the peer.
+    r: Self,
+    out: Str_builder$@, //< where the text is built
+    indent: Sz = 0, //< columns per level; 0 gives the exchange form, with no whitespace
+  )
+    r.dump_at(out, indent, 0)
+
+  priv fn dump_at(r: Self, out: Str_builder$@, indent: Sz, depth: Sz)
+    switch r case .null_val
+      out.s("null")
+    case .bool_val(b)
+      out.s("\{b\}")
+    case .int_val(i)
+      out.s("\{i\}")
+    case .float_val(f)
+      // JSON has no NaN or Infinity; null is better than writing something that does not parse.
+      if f != f || f > 1.0e308 || f < -1.0e308
+        out.s("null")
+      else
+        write_json_float(out, f)
+    case .str_val(s)
+      out.c('"').escape_and_append(s).c('"')
+    case .array_val
+      out.c('[')
+      $curr: = r.arr_head()
+      $first: = true
+      for curr != null
+        if !first
+          out.c(',')
+        first = false
+        write_break(out, indent, depth + 1)
+        curr.val.dump_at(out, indent, depth + 1)
+        curr = curr.next
+      // Caution: **Keep an empty sequence on one line**, as the `[]` other implementations write.
+      if !first
+        write_break(out, indent, depth)
+      out.c(']')
+    case .obj_val
+      out.c('{')
+      $m: = r.obj_head()
+      $first: = true
+      for m != null
+        if !first
+          out.c(',')
+        first = false
+        write_break(out, indent, depth + 1)
+        out.c('"').escape_and_append(m.key).s("\":")
+        if indent > 0
+          out.c(' ')
+        m.val.dump_at(out, indent, depth + 1)
+        m = m.next
+      if !first
+        write_break(out, indent, depth)
+      out.c('}')
+  pub fn get( //< an object's member, or `null_val`; with a duplicate key, the first one
+    //<
+    //< Neither the parser nor `dump` refuses a duplicate key, so a last-wins parser given the same
+    //< document reads another value.
+    //< **It is a linear scan.** Calling it for a list of names the peer chose makes one request
+    //< O(members x names).
+    r: Self,
+    key: U8[], //< the member's name
+  ): Val
+    $m: = r.obj_head()
+    for m != null
+      if m.key.equals(key)
+        return m.val
+      m = m.next
+    return Val.null_val
+  pub fn has_key( //< whether the member exists, even if it holds `null`
+    //<
+    //< Caution: **`get`'s result is no substitute**: it gives `Val.null_val` both for an absent key
+    //< and for a `null` value.
+    r: Self,
+    key: U8[], //< the member's name
+  ): Bool
+    $m: = r.obj_head()
+    for m != null
+      if m.key.equals(key)
+        return true
+      m = m.next
+    return false
+
+  pub fn get_at( //< an array's element, or `null_val` when the position is past the end
+    r: Self,
+    index: Sz, //< which element, counting from 0
+  ): Val
+    $curr: = r.arr_head()
+    $i: Sz = 0
+    for curr != null
+      if i == index
+        return curr.val
+      i += 1
+      curr = curr.next
+    return Val.null_val
+
+  pub fn as_str(r: Self): U8[] //< the string it holds, or empty if it is another kind
+    switch r case .str_val(s)
+      return s
+    default {}
+    return ""
+
+  pub fn as_bool( //< the boolean it holds
+    r: Self,
+    default_val: Bool, //< the result when it is another kind
+  ): Bool
+    switch r case .bool_val(b)
+      return b
+    default {}
+    return default_val
+
+  pub fn as_int( //< the integer it holds, narrowed to `I32`
+    r: Self,
+    default_val: I32, //< the result when it is another kind
+  ): I32
+    switch r case .int_val(i)
+      return I32::i
+    default {}
+    return default_val
+  pub fn as_f64( //< the number it holds
+    //<
+    //< It accepts the integer kind too, so `3` and `3.0` need no branch.
+    r: Self,
+    default_val: F64, //< the result when it is not a number
+  ): F64
+    switch r case .float_val(f)
+      return f
+    case .int_val(i)
+      return F64::i
+    default {}
+    return default_val
+  pub fn as_int64( //< the integer it holds, at its full width
+    //<
+    //< For a value that can exceed 2GB, such as safetensors' `data_offsets`.
+    r: Self,
+    default_val: I64, //< the result when it is another kind
+  ): I64
+    switch r case .int_val(i)
+      return i
+    default {}
+    return default_val

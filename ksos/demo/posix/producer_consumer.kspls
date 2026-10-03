@@ -1,0 +1,48 @@
+//< A classic producer/consumer with two tasks (a producer and a consumer) and a counting semaphore
+//<
+//< It shows priority, blocking and delay. On the POSIX port the context switches are real ones on
+//< Linux.
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+import "std/io"
+
+$g_items: sync.Sem // counts the items available
+$g_buffer: I32[8]
+$g_head: Sz = 0 // the producer's write position
+$g_tail: Sz = 0 // the consumer's read position
+
+$tcb_p: Task
+$tcb_c: Task
+$stack_p: U8[65536]
+$stack_c: U8[65536]
+
+fn producer(_arg: Void$@): Void
+  for $i: I32 = 1; i <= 5; i += 1
+    v: = i * 10
+    g_buffer[g_head % 8] = v
+    g_head += 1
+    io.out().s("[producer] produce \{v\} (tick=\{I32::task.current_tick()\})\n")
+    g_items.give()
+    Task.delay(2)
+  io.out().s("[producer] done\n")
+
+fn consumer(_arg: Void$@): Void
+  for $n: I32 = 1; n <= 5; n += 1
+    g_items.take()
+    v: = g_buffer[g_tail % 8]
+    g_tail += 1
+    io.out().s("[consumer] consume \{v\} (tick=\{I32::task.current_tick()\})\n")
+    // If the semaphore counts the items made correctly, the consumer reads them in the order
+    // they were made.
+    assert(v == n * 10, "sem: consumer read an item the producer had not made yet")
+  io.out().s("[consumer] done\n")
+
+fn main()
+  io.out().s("=== Kanso OS (POSIX port) — producer/consumer demo ===\n")
+  g_items.init(0)
+  // The consumer has priority 2 and the producer 1. The consumer runs first and waits on the
+  // empty semaphore.
+  tcb_c.create(U8$[]::stack_c, consumer, null, 2, "consumer")
+  tcb_p.create(U8$[]::stack_p, producer, null, 1, "producer")
+  task.start_scheduler()
+  io.out().s("=== scheduler finished (all tasks done) ===\n")

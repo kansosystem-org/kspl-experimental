@@ -1,0 +1,103 @@
+//< A regression test for an argument passed at its expression's type
+//<
+//< The defect is in "Both a store and an actual argument are emitted at 'the receiver's type'" in
+//< ksplc/docs/DESIGN.md. A KSPL integer literal is inferred as I32 by default.
+//< This test **fails only on Win64**.
+
+// ==========================================
+//   build_with_f64(a, b, c, alpha, x, y) -> the argument run [ret, a, b, c, alpha, x, y]
+//       …alpha (double 4.0) takes the stack's first slot
+//   build_probe(p0, a, b, c, y)          -> the argument run [ret, p0, a, b, c, y]
+//       …c takes that same slot
+// ==========================================
+import "std/io"
+import "std/verdict"
+
+priv struct Two_sizes
+  a: Sz
+  b: Sz
+
+priv const max_probe_elems: Sz = 1024 //<
+  //< The largest dimension count that can be expected, so a broken value stops it
+
+priv fn product_of(shape: Sz$[]): Sz //< the callee
+  //<
+  //< Shaped as Tensor.new: parameters on a slice, the product from the trailing dimension with the
+  //< limit checked each time.
+  $size: Sz = 1
+  for $i: = I32::shape.len - 1; i >= 0; i -= 1
+    size *= shape[i]
+    if size > max_probe_elems
+      panic("win64 arg abi: a dimension came back far out of range (corrupted argument?)")
+  return size
+
+priv fn build_with_f64(a: Sz, b: Sz, c: Sz, alpha: F64, x: Void$@, y: Void$@): Two_sizes //<
+  //< The shape where alpha (F64) takes the stack's first argument slot
+  $shape_ac: Sz[2] = ::{ a, c }
+  $shape_cb: Sz[2] = ::{ c, b }
+  // alpha is always read, so nothing can delete it as unused.
+  if alpha < 0.0 || x != y
+    return Two_sizes::{ .a = 0, .b = 0 }
+  return Two_sizes::{ .a = product_of(Sz$[]::{ .ptr = shape_ac@, .len = 2 }),
+    .b = product_of(Sz$[]::{ .ptr = shape_cb@, .len = 2 }) }
+
+struct Sized_pair<|T|> //< the shape where c (Sz) takes "the same slot alpha took"
+  //<
+  //< The caller passes an integer literal; if it is not passed at the parameter's type, 4.0's
+  //< upper four bytes stay.
+  //< Caution: **It must be a generic**: infer_call_args leaves the expected type unknown there, so
+  //< the literal stays I32 against the `Sz` parameter.
+  a: Sz
+  b: Sz
+  seed: T
+
+impl<|T|> Sized_pair<|T|>
+  fn probe(p0: Void$@, a: Sz, b: Sz, c: Sz, seed: T$@): Sized_pair<|T|> //<
+    //< The same run as Lora<|T|>.load_raw (a leading pointer + three Sz + a pointer)
+    //<
+    //< The hidden return pointer goes first, so `c` takes Win64's first stack slot.
+    $shape_ac: Sz[2] = ::{ a, c }
+    $shape_cb: Sz[2] = ::{ c, b }
+    if p0 != null
+      return Sized_pair<|T|>::{ .a = 0, .b = 0, .seed = seed$ }
+    return Sized_pair<|T|>::{ .a = product_of(Sz$[]::{ .ptr = shape_ac@, .len = 2 }),
+      .b = product_of(Sz$[]::{ .ptr = shape_cb@, .len = 2 }), .seed = seed$ }
+
+priv fn check(label: U8[], got: Two_sizes, want_a: Sz, want_b: Sz)
+  ok: = got.a == want_a && got.b == want_b
+  // Caution: **Do not print the passing checks.** Only the failing check's line, with the panic
+  // after it, shows which way it went.
+  if !ok
+    io.out().s("    ").s(label).s(": a=\{got.a\} b=\{got.b\} (want a=\{want_a\} b=\{want_b\})\n")
+  assert(ok, "win64 arg abi: an argument passed in a stack slot came back corrupted")
+
+fn test_win64_arg_abi()
+  verdict.start("[Win64] a stack-passed actual argument arrives at the parameter's type test...")
+
+  seed: F32 = 1.0
+
+  // First 4.0 is placed in the stack's first argument slot (a=4, c=2 -> 8 / c=2, b=6 -> 12).
+  check("seed-f64-slot", build_with_f64(4, 6, 2, 4.0, null, null), 8, 12)
+
+  // Then an integer literal goes to that slot through a generic call: the subject.
+  p1: = Sized_pair<|F32|>.probe(null, 4, 6, 2, F32$@::seed@)
+  check("literal-into-slot", Two_sizes::{ .a = p1.a, .b = p1.b }, 8, 12)
+
+  // Repeated, whatever the slot held before.
+  check("seed-again", build_with_f64(4, 6, 2, 4.0, null, null), 8, 12)
+  p2: = Sized_pair<|F32|>.probe(null, 4, 6, 2, F32$@::seed@)
+  check("literal-again", Two_sizes::{ .a = p2.a, .b = p2.b }, 8, 12)
+
+  // The same with the caller's frame over 32KB, so that a stack probe is inserted in between.
+  big: Sz[4096] = ::{}
+  $sum: Sz = 0
+  for $i: Sz = 0; i < 4096; i += 8
+    sum += big[i]
+  assert(sum == 0, "win64 arg abi: large local array must start zeroed")
+  check("big-frame", build_with_f64(4, 6, 2, 4.0, null, null), 8, 12)
+  p3: = Sized_pair<|F32|>.probe(null, 4, 6, 2, F32$@::seed@)
+  check("big-frame-literal", Two_sizes::{ .a = p3.a, .b = p3.b }, 8, 12)
+
+  verdict
+    .pass("an actual argument riding a Win64 stack slot arrives at the parameter's type without \
+      picking up the previous call's remains.")

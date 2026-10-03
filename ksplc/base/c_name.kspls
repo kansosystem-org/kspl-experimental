@@ -1,0 +1,93 @@
+//< The names in the generated C that cannot be used as they are
+//<
+//< **This file is the canonical source of the list and of how a name is escaped.**
+//< Only local variables, parameters and struct fields (and an enum's payload, a trait's method
+//< names and a closure's captures) are emitted under their plain names. Type names and function
+//< names carry the file path as a prefix, so they never collide. The LLVM backend renames a local
+//< to `%v_<name>_<serial>`, so it is unaffected.
+import "std/str" { Str_builder }
+
+const c_name_suffix: U8[] = "_kw" //<
+  //< The suffix added in the generated C to a name that equals a C reserved word
+  //<
+  //< Caution: **Keep the rule as "just add it".** If it searched for a free name instead, every
+  //< reference would have to repeat the same search. Where the escaped name is already taken, sema
+  //< rejects the declaration.
+
+impl U8[]
+  fn is_c_keyword(r: U8[]): Bool //< whether it is a C99 reserved word
+    //<
+    //< **It is allowed as a KSPL identifier** (only the generated C escapes it).
+    //< Caution: **Do not leave out a single word.** The generated C is compiled with `-std=c99`, so
+    //< a missing word is emitted under its plain name and becomes a C compiler error instead of a
+    //< KSPL diagnostic. A word starting with `_`, such as `_Bool`, is a reserved word too.
+    return r.equals("auto") || r.equals("break") || r.equals("case") || r.equals("char") ||
+      r.equals("const") || r.equals("continue") || r.equals("default") || r.equals("do") ||
+      r.equals("double") || r.equals("else") || r.equals("enum") || r.equals("extern") ||
+      r.equals("float") || r.equals("for") || r.equals("goto") || r.equals("if") ||
+      r.equals("inline") || r.equals("int") || r.equals("long") || r.equals("register") ||
+      r.equals("restrict") || r.equals("return") || r.equals("short") || r.equals("signed") ||
+      r.equals("sizeof") || r.equals("static") || r.equals("struct") || r.equals("switch") ||
+      r.equals("typedef") || r.equals("union") || r.equals("unsigned") || r.equals("void") ||
+      r.equals("volatile") || r.equals("while") || r.equals("_Bool") || r.equals("_Complex") ||
+      r.equals("_Imaginary")
+
+  fn is_preamble_macro(r: U8[]): Bool //<
+    //< Whether it is a name the declaration-half header defines as an **object-form macro**
+    //<
+    //< Caution: **Do not merge it into `is_c_keyword`** (that is the standard's list; a gap could
+    //< no longer be spotted). **Add each new one to `ksplc/tests/c_keyword_names.kspls`.**
+    //< **It holds the names `#undef` cannot remove** (`bool`, `NULL` / `EOF` / `errno`, the `std*`
+    //< streams, and `far` / `near` / `pascal`).
+    return r.equals("NULL") || r.equals("EOF") || r.equals("errno") || r.equals("far") ||
+      r.equals("near") || r.equals("pascal") || r.equals("bool") || r.equals("stdin") ||
+      r.equals("stdout") || r.equals("stderr")
+
+  fn is_reserved_for_compiler(r: U8[]): Bool //<
+    //< Whether it opens with `__`, or with `_` and a capital (C99 7.1.3's implementation space)
+    //<
+    //< **A rule, not a list**: MSVC's `__try` and `__int64`, clang's `__cdecl` (a keyword even on
+    //< Linux), GCC's `__thread` and C11's `_Atomic` all match it, and so will future ones. The
+    //< suffix moves a name out of every keyword list, though not out of the reserved space.
+    //< The escaped name starts the same way and is escaped in turn, so `__x` and `__x_kw` never
+    //< meet and sema has no clash to reject.
+    return r.len >= 2 && r[0] == '_' && (r[1] == '_' || (r[1] >= 'A' && r[1] <= 'Z'))
+
+  fn is_microsoft_keyword(r: U8[]): Bool //<
+    //< Whether Microsoft's compilers read it as a keyword, outside the space above
+    //<
+    //< Their extensions are on unless switched off, and they add one-underscore synonyms (`_try`
+    //< for `__try`), `static_assert` and `L__FUNCSIG__`. **No rule catches these**: C99 reserves a
+    //< name starting with `_` only at file scope, and a plain emitted name never stands there.
+    //< The list is MSVC's C keyword page plus clang's `KEYMS` / `KEYMSCOMPAT` entries
+    //< (`clang/include/clang/Basic/TokenKinds.def`). **Add each new one to
+    //< `ksplc/tests/c_keyword_names.kspls`.**
+    return r.equals("_asm") || r.equals("_based") || r.equals("_cdecl") ||
+      r.equals("_declspec") || r.equals("_except") || r.equals("_fastcall") ||
+      r.equals("_finally") || r.equals("_forceinline") || r.equals("_inline") ||
+      r.equals("_int8") || r.equals("_int16") || r.equals("_int32") || r.equals("_int64") ||
+      r.equals("_leave") || r.equals("_multiple_inheritance") || r.equals("_ptr32") ||
+      r.equals("_ptr64") || r.equals("_restrict") || r.equals("_stdcall") ||
+      r.equals("_thiscall") || r.equals("_try") || r.equals("_unaligned") || r.equals("_uptr") ||
+      r.equals("_uuidof") || r.equals("_vectorcall") || r.equals("_virtual_inheritance") ||
+      r.equals("_w64") || r.equals("static_assert") || r.equals("L__FUNCTION__") ||
+      r.equals("L__FUNCSIG__")
+
+  fn needs_c_escape(r: U8[]): Bool //<
+    //< Whether a name cannot be emitted into the generated C as it is
+    //<
+    //< **Only this function decides whether to escape.** There are four reasons but one way to
+    //< escape, so they fold into one answer.
+    return r.is_c_keyword() || r.is_preamble_macro() || r.is_reserved_for_compiler() ||
+      r.is_microsoft_keyword()
+
+  fn c_safe_name(r: U8[]): Str_builder //< the name as emitted into C
+    //<
+    //< It adds the suffix where the name is a reserved word. Many places emit a name inside a
+    //< string interpolation, so a form that takes no Writer is needed too (`nm` in gen/c/ctx.kspls
+    //< is the Writer version).
+    $res: = Str_builder.new()
+    res.s(r)
+    if r.needs_c_escape()
+      res.s(c_name_suffix)
+    return res

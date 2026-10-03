@@ -1,0 +1,38 @@
+//< How the mutability mark on a type argument is accepted (the `$` of a `Slice<|$U8|>`)
+//<
+//< At a position the declaration names (`struct Slice<|$T|>`), **an unmarked actual argument is
+//< wrapped as immutable**: immutable is the default, so the mutable side carries the mark (the
+//< reasoning is "Why the mutability marker on a type argument is prefix" in
+//< `../../../docs/DESIGN.md`). The one level of weakening such a position allows is decided in
+//< the type comparison (generic_arg_weakens in `../type/query.kspls`), not here.
+import "ksplc/base/ast" { Ast_node, variance_names_mut }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/sema/session/ctx" { Sema_ctx }
+
+fn arg_names_mut(arg: Ast_node$@): Bool //<
+  //< Whether the actual argument holds the mutability mark (the `$` of a `Slice<|$U8|>`)
+  //<
+  //< The parser wraps a marked argument in a `k_type_arg` with a Literal at the head.
+  return arg != null && arg.kind_id == .k_type_arg && arg.has_literal_child("$")
+
+fn strip_arg_mut_mark(arg: Ast_node$@): Ast_node$@ //< the argument with the mark stripped
+  if !arg_names_mut(arg)
+    return arg
+  inner: = arg.find_child(.k_type_expr)
+  return inner if inner != null else arg
+
+impl Sema_ctx
+  fn apply_arg_mut_mark(r: Self$@, decl: Ast_node$@, pos: Sz, arg: Ast_node$@, arg_id: I32): I32 //<
+    //< Decides the argument type at that position from the declaration and the argument's mark
+    //<
+    //< Whether the declaration names the position is matched against the argument's mark.
+    //< **A mark at a position the declaration does not name is rejected**, or `List<|$U8|>` would
+    //< silently equal `List<|U8|>` while the writer believes the elements are mutable.
+    marked: = arg_names_mut(arg)
+    if !variance_names_mut(decl.gen_param_variance_mask(), pos)
+      if marked
+        r.err(arg,
+          "'$' on a type argument is only allowed where the declaration names it (write 'struct \
+            Name<|$T|>' to name it). Without the name, the argument has no writability to weaken")
+      return arg_id
+    return arg_id if marked else r.env.make_const(arg_id)

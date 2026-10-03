@@ -1,0 +1,24 @@
+//< When the holder locks the mutex again, the kernel panics instead of waiting forever
+//<
+//< If re-entry waited silently, the task would wait for itself to let go: a hang with no
+//< diagnosis.
+//< Success is the panic, so `ksos-mutex-relock` greps the output for it.
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+import "std/io"
+
+$g_mutex: sync.Mutex
+$tcb: Task
+$stack: U8[65536]
+
+fn relocker(_arg: Void$@): Void
+  io.out().s("=== Kanso OS (POSIX) mutex re-lock by the holder ===\n")
+  g_mutex.lock()
+  io.out().s("[relock] holding; locking again must stop here\n")
+  g_mutex.lock()
+  io.out().s("[relock] returned from the second lock without a panic\n")
+
+fn main()
+  g_mutex.init()
+  tcb.create(U8$[]::stack, relocker, null, 1, "relock")
+  task.start_scheduler()

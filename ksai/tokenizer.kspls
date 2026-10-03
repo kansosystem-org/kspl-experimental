@@ -1,0 +1,279 @@
+//< A byte-level BPE tokenizer: text to a token-ID sequence and back
+//<
+//< `encode` and `decode` are the conversions, and the pre-trained `vocab.txt` / `merges.txt` are
+//< loaded from here. **Training the tokenizer is not here**: a separate tool produces the BPE
+//< merge rules, and this file only loads and uses them.
+import "std/chars"
+import "std/ds" + { List, Map }
+import "std/io"
+import "std/mem" { Arena, dealloc }
+import "std/str" { Str_builder }
+import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
+
+priv fn hex_byte(hi: U8, lo: U8): U8 //< two hex digits -> one byte
+  //<
+  //< Restores vocab.txt's byte sequences; an invalid character reads as 0 (vocab.txt is not
+  //< strictly validated). The digit decoding itself is `U8.hex_val` in str.
+  h: = hi.hex_val()
+  l: = lo.hex_val()
+  return U8::(((h if h >= 0 else 0) << 4) | (l if l >= 0 else 0))
+
+priv struct Bpe_key
+  val: U64
+
+impl Bpe_key: ds.Hashable<|Bpe_key|> //< so a pair of token IDs can stand as a map's key
+  //<
+  //< The two hashes below skip `ds.fmix32`: token IDs are consecutive numbers whose low bits are
+  //< already spread, so mixing would only add an operation to each BPE merge lookup.
+  fn hash(r: Self@): U32
+    v: = r.val
+    return U32::(v ^ (v >> 32))
+  fn equals(r: Self@, other: Bpe_key): Bool
+    return r.val == other.val
+
+priv struct Token_key
+  val: I32
+
+impl Token_key: ds.Hashable<|Token_key|> //< so a token ID can stand as a map's key
+  fn hash(r: Self@): U32
+    return U32::r.val
+  fn equals(r: Self$@, other: Token_key): Bool
+    return r.val == other.val
+
+priv fn char_class(c: U8): I32 //<
+  //< The character classes used in the GPT-2/Qwen family's pre-splitting (the pretokenizer)
+  //<
+  //< ASCII-based (0=space, 1=letter, 2=digit, 3=other), since KSPL's code and prompts are mostly
+  //< ASCII; a non-ASCII byte is "other". "_" is a Punctuation_Connector, not a letter, so snake
+  //< case's "_" becomes a chunk of its own, as in a real GPT-2-family tokenizer.
+  if c.is_space()
+    return 0
+  // Not `is_alpha` in str, which counts `_` among the letters (the Punctuation_Connector above).
+  if c.is_lower() || c.is_upper()
+    return 1
+  if c.is_digit()
+    return 2
+  return 3
+
+priv fn pretokenize(text: U8[], arena: Arena$@): List<|U8[]|>$@ //<
+  //< The core of GPT-2's regular-expression splitting (a reduced ASCII version)
+  //<
+  //< In a run of spaces, the last one is held back to join the next chunk as its leading space
+  //< (for example " foo" -> [" ", " foo"]).
+  //<
+  //< Otherwise a run of letters, of digits, or of other bytes makes one chunk; English
+  //< contractions ("'s") get no special handling (it matters little for code completion).
+  chunks: = List<|U8[]|>.create(arena)
+  n: = text.len
+  $i: Sz = 0
+  for i < n
+    if (text.ptr + i).is_space()
+      $j: = i
+      for j < n && (text.ptr + j).is_space()
+        j += 1
+      if j == n // trailing spaces become one chunk as they are
+        chunks.push(text.sub(i, j - i))
+        i = j
+        continue
+      if j - i > 1 // holds the last one back and makes the rest a space chunk
+        chunks.push(text.sub(i, j - i - 1))
+        i = j - 1
+      // here `i` is the one space held back (it becomes the next chunk's leading space)
+    // `start` uses the `i` that the space-run handling updated (which keeps the ranges from
+    // overlapping)
+    start: = i
+    $body: = i
+    if body < n && (text.ptr + body).is_space()
+      body += 1 // includes the single leading space
+    if body >= n
+      chunks.push(text.sub(start, n - start))
+      break
+    cls: = char_class((text.ptr + body)$)
+    $j: = body
+    for j < n && char_class((text.ptr + j)$) == cls
+      j += 1
+    chunks.push(text.sub(start, j - start))
+    i = j
+  return chunks
+
+pub struct Tokenizer //< the vocabulary and merge rules that turn text into token IDs
+  pub vocab: Map<|U8[], I32|>$@ //< each word's byte sequence, mapped to its ID
+  priv vocab_rev: Map<|Token_key, U8[]|>$@ //< for decode: an ID -> its byte sequence
+  priv merges: Map<|Bpe_key, I32|>$@
+  priv merge_rank: Map<|Bpe_key, I32|>$@ //< a pair -> its rank (0 is first); true BPE needs it
+  pub next_rank: I32 //< the rank the next `add_merge` gets; the call order is the rank
+  pub arena: Arena$@ //< the arena for every word and for what `encode` and `decode` return
+  priv chunk_cache: Map<|U8[], I32$[]|>$@ //< a chunk merged before -> its IDs
+    //<
+    //< **A text repeats its words**, and merging one again gives the same IDs; GPT-2's encoder
+    //< keeps the same cache. **It holds only while nothing is added** (`edits`).
+  priv edits: Sz //< how many times a word or a rule was added; any change restarts the cache
+  priv cache_edits: Sz //< `edits` when the cache was started
+
+priv const chunk_cache_cap: Sz = 65536 //< how many chunks the cache holds at most
+
+impl Tokenizer
+  pub fn new( //< an empty tokenizer, to be filled by `load` or by `add_token` / `add_merge`
+    arena: Arena$@, //< the arena for the four maps and everything put into them
+  ): Tokenizer
+    vocab: = arena.create(Map<|U8[], I32|>.new(arena))
+    vocab_rev: = arena.create(Map<|Token_key, U8[]|>.new(arena))
+    merges: = arena.create(Map<|Bpe_key, I32|>.new(arena))
+    merge_rank: = arena.create(Map<|Bpe_key, I32|>.new(arena))
+    return Tokenizer::{ .vocab = vocab, .vocab_rev = vocab_rev, .merges = merges,
+      .merge_rank = merge_rank, .next_rank = 0, .arena = arena,
+      .chunk_cache = arena.create(Map<|U8[], I32$[]|>.new(arena)), .edits = 0, .cache_edits = 0 }
+
+  pub fn add_token( //< adds one word to the vocabulary, looked up in both directions from then on
+    r: Self$@,
+    token: U8[], //< the word's byte sequence; it is copied onto the arena
+    id: I32, //< the ID it maps to
+  )
+    perm_token: = r.arena.dup_str(token)
+    r.vocab.set(perm_token, id)
+    r.vocab_rev.set(Token_key::{ .val = id }, perm_token)
+    r.edits += 1
+
+  pub fn add_merge( //< adds one merge rule: this pair, when adjacent, becomes that one word
+    //<
+    //< Caution: **The call order is the rank**, so the rules must arrive in priority order
+    //< (`load()` and `train_bpe.py`'s merges.txt already do).
+    r: Self$@,
+    id1: I32, //< the left ID
+    id2: I32, //< the right ID
+    merged_id: I32, //< the ID the two merge into
+  )
+    key_val: = ((U64::id1) << 32) | (U64::id2)
+    key: = Bpe_key::{ .val = key_val }
+    r.merges.set(key, merged_id)
+    r.merge_rank.set(key, r.next_rank)
+    r.next_rank += 1
+    r.edits += 1
+
+  // One entry per line: vocab.txt "<id>\t<hex>" (the word's bytes; id 0's <unk> is empty) and
+  // merges.txt "<id1> <id2> <merged_id>", loaded through `add_token`/`add_merge` into
+  // encode/decode's representation (a 1-byte base + merges).
+  pub fn load( //< loads the vocabulary and merge rules that `train_bpe.py` wrote
+    r: Self$@,
+    vocab_path: U8[], //< the vocabulary file, one word per line
+    merges_path: U8[], //< the merge rules, in priority order
+  ): Void?io.Io_error
+    vocab_data: = io.read_file(vocab_path)?
+    defer dealloc(Void$@::vocab_data.ptr)
+    $vocab_lines: = vocab_data.lines(null)
+    defer vocab_lines.free()
+    for line in vocab_lines
+      tab: = line.find_char('\t')
+      if tab < 0
+        continue
+      id: = I32::(line.sub(0, tab).parse_size() catch {
+        continue;
+      })
+      hex: = line.sub_from(((tab + 1)))
+      $b: = Str_builder.new()
+      for $i: Sz = 0; i + 1 < hex.len; i += 2
+        b.c(hex_byte(hex[i], hex[i + 1]))
+      r.add_token(b.slice(), id)
+      b.free()
+
+    merges_data: = io.read_file(merges_path)?
+    defer dealloc(Void$@::merges_data.ptr)
+    $merges_lines: = merges_data.lines(null)
+    defer merges_lines.free()
+    for line in merges_lines
+      sp1: = line.find_char(' ')
+      if sp1 < 0
+        continue
+      rest: = line.sub_from(((sp1 + 1)))
+      sp2: = rest.find_char(' ')
+      if sp2 < 0
+        continue
+      id1: = I32::(line.parse_size() catch {
+        continue;
+      })
+      id2: = I32::(rest.parse_size() catch {
+        continue;
+      })
+      id3: = I32::(rest.parse_size(((sp2 + 1))) catch {
+        continue;
+      })
+      r.add_merge(id1, id2, id3)
+
+  pub fn encode( //< the token IDs for a text, allocated on the tokenizer's arena
+    //<
+    //< Splits into chunks (pretokenize) and within each chunk merges the pair of the smallest rank
+    //< every time; no merge crosses a chunk, as during training.
+    r: Self$@,
+    text: U8[], //< the text; any byte sequence works, since every byte has a token
+  ): List<|I32|>$@
+    tokens: = List<|I32|>.create(r.arena)
+    chunks: = pretokenize(text, r.arena)
+    for c in Range.asc(chunks.len)
+      r.bpe_chunk(chunks[c], tokens)
+    return tokens
+
+  priv fn bpe_chunk(r: Self$@, chunk: U8[], out: List<|I32|>$@) //<
+    //< Merges one pre-split chunk by BPE, smallest rank first, and appends its token IDs to `out`
+    // Otherwise a word or rule added since the cache started could merge a cached chunk anew.
+    if r.cache_edits != r.edits
+      r.chunk_cache = r.arena.create(Map<|U8[], I32$[]|>.new(r.arena))
+      r.cache_edits = r.edits
+    // A chunk is never empty, so its IDs never are: an empty answer is a miss.
+    seen: = r.chunk_cache.get(chunk) catch I32$[]::{ .ptr = null, .len = 0 }
+    if seen.len > 0
+      for id in seen
+        out.push(id)
+      return
+    ids: = List<|I32|>.create(r.arena)
+    for i in Range.asc(chunk.len)
+      b: = U8[]::{ .ptr = chunk.ptr + i, .len = 1 }
+      ids.push(r.vocab.get(b) catch 0)
+    for
+      if ids.len < 2
+        break
+      $best_rank: I32 = -1
+      $best_i: Sz = 0
+      for $i: Sz = 0; i < ids.len - 1; i += 1
+        key: = Bpe_key::{ .val = ((U64::ids[i]) << 32) | (U64::ids[i + 1]) }
+        rank: = r.merge_rank.get(key) catch -1
+        if rank != -1 && (best_rank == -1 || rank < best_rank)
+          best_rank = rank
+          best_i = i
+      if best_rank == -1
+        break
+      key: = Bpe_key::{ .val = ((U64::ids[best_i]) << 32) | (U64::ids[best_i + 1]) }
+      merged_id: = r.merges.get(key) catch -1
+      ids[best_i] = merged_id
+      for $j: Sz = best_i + 1; j < ids.len - 1; j += 1
+        ids[j] = ids[j + 1]
+      ids.len -= 1
+    for i in Range.asc(ids.len)
+      out.push(ids[i])
+    // Caution: **Stop filling at the cap** instead of growing forever: a tokenizer kept for a
+    // server's lifetime sees an endless stream of new words.
+    if r.chunk_cache.len < chunk_cache_cap
+      r.chunk_cache.set(r.arena.dup_str(chunk), ids.slice())
+
+  pub fn decode( //< the text for the IDs, allocated on the tokenizer's arena
+    r: Self$@,
+    tokens: List<|I32|>$@, //< the IDs; an ID not in the vocabulary contributes nothing
+  ): U8[]
+    $b: = Str_builder.new()
+    for id in tokens
+      s: = r.vocab_rev.get(Token_key::{ .val = id }) catch ""
+      b.s(s)
+    result: = r.arena.dup_str(b.slice())
+    b.free()
+    return result
+
+  pub fn decode_one( //< the text for one ID, for printing each generated token as it comes
+    //<
+    //< Sugar for calling `decode()` on a one-element list.
+    r: Self$@,
+    id: I32, //< the single ID
+  ): U8[]
+    arena: = Arena.new(1024)
+    defer arena.free()
+    list: = List<|I32|>.create(arena)
+    list.push(id)
+    return r.decode(list)

@@ -1,0 +1,192 @@
+//< The entry points that compare with an earlier version
+//<
+//< It compares with "the earlier version".
+//< Caution: **Do not split the views (prose, shapes, look) here** — the matching is done once and
+//< the page filters (the header of [`../../share/compare.kspls`](../../share/compare.kspls)).
+//< Differences after typing are stale; the page compares again.
+//< It is split from [`bridge.kspls`](bridge.kspls) for the 1000-line-per-file cap.
+import "kspage/lay/caret"
+import "kspage/model/doc" { Block }
+import "kspage/port/web/state"
+import "kspage/port/web/state" { diff_by_id, diffs, doc, ed, ensure, in_ptr, sheet, was, was_arena,
+  was_sheet }
+import "kspage/share/compare"
+import "kspage/share/store"
+import "kspage/write/merge"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+const diff_nums: Sz = 8 //< the number of values in one difference
+  //<
+  //< Caution: **It must match the page's count** (change both when adding one).
+
+// Reads the `len` bytes in the loading arena as "the earlier version" and matches them against
+// the current document; 1 if read. The current document does not change. **If unreadable, the
+// earlier result is dropped too** (left, it would look like differences despite the refusal). The
+// count is `kspage_web_diff_count` (0 means "no difference", not a refusal).
+#export
+fn kspage_web_compare(len: Sz): I32
+  ensure()
+  state.forget_diff()
+  if in_ptr == null || len <= 0
+    return 0
+  fresh: = Arena.new(len + 64 * 1024)
+  got: = store.load(U8[]::{ .ptr = in_ptr, .len = len }, fresh) catch _e
+    fresh.free()
+    return 0
+  was_arena = fresh
+  was = got.doc
+  was_sheet = got.sheet
+  // Caution: **Put the list into the other version's arena** — in the document's arena it piles up
+  // with every comparison until the document is closed.
+  found: = compare.compare(was, was_sheet, doc, sheet, fresh)
+  diffs = found.diffs
+  diff_by_id = found.by_id
+  return 1
+
+// The number of differences. 0 when nothing was compared.
+#export
+fn kspage_web_diff_count(): Sz
+  ensure()
+  if diffs == null
+    return 0
+  return diffs.len
+
+// Whether the two were matched by number; **0 means by text** (an old text or a different
+// origin), which the viewer is told — falling back to text silently, a mismatch reads as changes.
+#export
+fn kspage_web_diff_by_id(): I32
+  ensure()
+  return 1 if diff_by_id else 0
+
+// Drops the comparison's result. The other version's arena is freed here too.
+#export
+fn kspage_web_diff_drop()
+  ensure()
+  state.forget_diff()
+
+priv fn row(i: Sz): compare.Diff
+  return diffs.get(i)
+
+priv fn text_into(b: Block$@, sb: Str_builder$@) //<
+  //< Writes the text of whichever side has text into `sb`
+  //<
+  //< It is the typed text (a computed value is not the document).
+  sb.clear()
+  if b != null
+    compare.plain_into(b, sb)
+
+priv fn framed(d: compare.Diff): Bool //< whether either side has a frame
+  //<
+  //< This is what the shapes view filters by (a table's or a slide's frames).
+  return has_frame(d.was) || has_frame(d.now)
+
+priv fn has_frame(b: Block$@): Bool
+  if b == null
+    return false
+  if _r: = b.frame
+    return true
+  return false
+
+// Writes eight values for difference `i` into out: the kind / whether the left exists / whether
+// the right exists / whether it has a frame / the number / where the change starts / the left's
+// length / the right's length.
+// Caution: **Do not move an existing value** (the page reads by position). The change's position
+// is in bytes, moved by the core to a character boundary.
+#export
+fn kspage_web_diff(i: Sz, out: F32$@)
+  ensure()
+  state.clear_out(out, diff_nums)
+  if diffs == null || i < 0 || i >= diffs.len
+    return
+  d: = row(i)
+  out$ = state.diff_no(d.kind)
+  (out + 1)$ = 1.0 if d.was != null else 0.0
+  (out + 2)$ = 1.0 if d.now != null else 0.0
+  (out + 3)$ = 1.0 if framed(d) else 0.0
+  $id: Sz = 0
+  if d.now != null
+    id = d.now.id
+  (out + 4)$ = F32::id
+  $before: = Str_builder.new()
+  defer before.free()
+  $after: = Str_builder.new()
+  defer after.free()
+  text_into(d.was, before@)
+  text_into(d.now, after@)
+  span: = compare.middle_of(before.slice(), after.slice())
+  (out + 5)$ = F32::span.head
+  (out + 6)$ = F32::span.was_len
+  (out + 7)$ = F32::span.now_len
+
+// Writes one side of difference `i`'s text and returns the length (`which` 0 left, 1 right). **The
+// missing side is empty** (an added block has no left); a style-table difference is empty on both
+// (`kspage_web_diff_name` names it).
+#export
+fn kspage_web_diff_text(i: Sz, which: I32): Sz
+  ensure()
+  state.out.clear()
+  if diffs == null || i < 0 || i >= diffs.len
+    return 0
+  d: = row(i)
+  side: = d.now if which != 0 else d.was
+  if side != null
+    compare.plain_into(side, state.out@)
+  return state.out.len
+
+// Writes difference `i`'s style name and returns the length. **Empty means a block's
+// difference.** A style is shared by name, so neither a number nor a path points at it.
+#export
+fn kspage_web_diff_name(i: Sz): Sz
+  ensure()
+  state.out.clear()
+  if diffs == null || i < 0 || i >= diffs.len
+    return 0
+  state.out.s(row(i).style)
+  return state.out.len
+
+// Writes the style of difference `i`'s block itself and returns the length, to show "which
+// style's paragraph". With no right side it is the left's style.
+#export
+fn kspage_web_diff_style(i: Sz): Sz
+  ensure()
+  state.out.clear()
+  if diffs == null || i < 0 || i >= diffs.len
+    return 0
+  d: = row(i)
+  side: = d.now if d.now != null else d.was
+  if side != null
+    state.out.s(side.style)
+  return state.out.len
+
+// Takes difference `i`'s block from the earlier version into the current document; 1 if taken.
+// Only a block that exists only in the earlier version can be taken. Differences after taking are
+// stale; the page compares again.
+#export
+fn kspage_web_diff_take(i: Sz): I32
+  ensure()
+  if diffs == null || !diff_by_id || i < 0 || i >= diffs.len
+    return 0
+  d: = row(i)
+  // A block on the right is not taken (the current document already has it).
+  if d.was == null || d.now != null
+    return 0
+  return 1 if merge.take(ed, was, d.was) else 0
+
+// Moves the cursor to difference `i`'s place; 1 if it moved. Only on the current document's side
+// (a removed block gives 0), and not into a block with no text (a table itself or a shape).
+#export
+fn kspage_web_diff_go(i: Sz): I32
+  ensure()
+  if diffs == null || i < 0 || i >= diffs.len
+    return 0
+  side: = row(i).now
+  if side == null || side.inlines.len <= 0
+    return 0
+  // Caution: **Check that it is still in the tree** — in a block deleted after the comparison, the
+  // cursor would type into a dangling place.
+  spot: = doc.path_of_block(side, -1)
+  if !spot.found
+    return 0
+  ed.caret = caret.at(side.inlines.get(0), 0)
+  return 1

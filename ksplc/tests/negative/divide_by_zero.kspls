@@ -1,0 +1,34 @@
+//< A divisor known to be 0 at translation time is rejected
+//<
+//< **An error, not a lint**: C and LLVM leave it undefined, so no project setting may silence it
+//< (the opening of ksplc/base/lint_codes.kspls).
+//< Caution: **Not the literal `0` alone**: a `const`, a fold and `/=` count, unsigned too.
+
+// EXPECT: division or modulo by zero
+// EXPECT-NOT: [W0
+import "std/io"
+
+const zero: I32 = 0
+
+fn main(): I32
+  by_literal: I32 = 7 / 0
+  by_const: I32 = 7 / zero
+  by_folded: I32 = 7 % (3 - 3)
+  $compound: I32 = 7
+  compound /= 0
+  compound %= zero
+  // A divisor that folds to 0 unsigned. Read as signed it is 1 / -1 = -1 and does not look like
+  // 0.
+  by_unsigned: U32 = 7U32 / (1U32 / (0U32 - 1U32))
+  // A non-zero divisor passes (that the errors do not grow here is pinned down at the same
+  // time).
+  ok_div: I32 = 7 / 2
+  ok_mod: I32 = 7 % 2
+  // A divisor that is not 0 unsigned. Read as signed it is -292 / 649 = 0 and is wrongly
+  // refused.
+  ok_unsigned: U32 = 100U32 / ((0U32 - 292U32) / 649U32)
+  // Floating point is outside this rule.
+  ok_float: F64 = 1.0 / 0.0
+  io.out()
+    .s("\{I64::by_literal\}\{I64::by_const\}\{I64::by_folded\}\{I64::compound\}\{I64::by_unsigned\}\{I64::ok_div\}\{I64::ok_mod\}\{I64::ok_unsigned\}\{ok_float\}\n")
+  return 0

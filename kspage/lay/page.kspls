@@ -1,0 +1,310 @@
+//< The shape of the result once layout is done
+//<
+//< **There is no procedure here.** It is split from the layout code (`kspage/lay/flow.kspls` and
+//< the three other strategies) **so that the readers need no procedure** (drawing, searching and
+//< moving the cursor look only at the result), and so that `flow` and `line` do not import each
+//< other. **`Page` is made by `new_page` and nothing else**, or a field added later is left unset.
+import "kspage/model/doc" { Block, Rect }
+import "kspage/model/font" { Font, Font_source, Vmetrics }
+import "kspage/model/number" { Heading, Note, Serial }
+import "kspage/model/paint" { Ink }
+import "kspage/model/run" { Inline }
+import "kspage/model/source"
+import "kspage/model/style" + { Arrange }
+import "std/ds" { List }
+import "std/mem" { Arena }
+
+struct Box //< a character whose position is set
+  rect: Rect //<
+    //< **`rect.y` is the box's top edge, not the baseline** (compute that from `font`).
+  text: U8[]
+  font: Font
+  ink: Ink //<
+    //< The color at drawing time, **kept separate from the font**
+    //<
+    //< The font is the key for measuring, which a color does not change (`Ink` in
+    //< `model/style.kspls`).
+  // Which `Inline`, and from which byte, the box came from: **how a click finds its way back to
+  // the document.**
+  inline: Inline$@
+  offset: Sz
+  rise: F32 //<
+    //< The height raised from the baseline (only a superscript mark has one)
+    //<
+    //< It goes into `rect.y` when the line is closed, so neither drawing nor a click reads it.
+  composing: Bool //<
+    //< Whether it lies on the text being composed (IME)
+    //<
+    //< **The layout does not set it**: `mark_composing` in `lay/caret.kspls` does, at every
+    //< layout.
+  spacing: F32 //<
+    //< The space added after each character (the letter spacing of justifying)
+    //<
+    //< **`rect.w` does not include the last character's space**; the next box starts one such
+    //< space past it.
+    //< Caution: **Both the drawing code and the hit-testing code must add this**; without it, the
+    //< visible characters and the clicked position drift apart along the line.
+
+struct Cell //< one cell laid out in a grid
+  //<
+  //< **The contents' boxes cannot be used instead** (narrower than the column; none if empty).
+  rect: Rect
+  block: Block$@
+  // Which table, and which row and column, for grabbing a cell's border (a `Block` does not point
+  // at its parent).
+  table: Block$@
+  row: Sz
+  column: Sz
+
+struct Surface //< one slide laid out at absolute coordinates (one presentation slide)
+  //<
+  //< **It is needed to show slides one at a time** (which block is a slide is known after layout).
+  rect: Rect //< where it was laid out and how large (screen coordinates)
+  block: Block$@
+
+struct Framed //< one frame laid out on a slide
+  //<
+  //< **It is needed to grab a frame and move it** (its position is from the slide's upper left).
+  //< A child with no position is kept too, as a frame over the whole slide.
+  rect: Rect //< where it was laid out (screen coordinates)
+  block: Block$@
+  surface: Surface$@ //<
+    //< The slide holding it. **Do not copy its size.**
+
+struct Figure //< one value that a chart reads
+  //<
+  //< Caution: **Collect them before layout**, like the headings and notes: a range searches the
+  //< whole document for a table by name. [`chart.kspls`](chart.kspls) collects them.
+  block: Block$@ //< which chart it belongs to (a document holds any number)
+  value: F64
+  label: U8[] //<
+    //< The text shown in that cell (a value cannot be turned back into its formatted text).
+
+struct Picture //< one picture laid out
+  //<
+  //< **Where it came from is not copied** (read `block.image`).
+  rect: Rect //< where it was laid out and how large (screen coordinates)
+  block: Block$@
+
+struct Region //< one region in the document
+  //<
+  //< **It is a run of top-level blocks**, here only to show which tool the band is for.
+  //< Caution: **Do not give it another name**: the layout the style names and the region's kind
+  //< could then disagree without anyone noticing.
+  rect: Rect
+  kind: Arrange
+
+struct Panel //< what is drawn behind one block (the fill, and the line around it)
+  //<
+  //< Caution: **Keep it separate from the boxes.** A box exists only where there is text, so an
+  //< empty paragraph and an empty cell could not be painted. **A line holds only the width and the
+  //< color**: all four edges are drawn (neighbouring edges overlap).
+  rect: Rect
+  block: Block$@ //<
+    //< Which block it belongs to, for evening out a cell's height once the row is laid out.
+  width: F32
+  color: U32
+  fill: Option<|U32|>
+  shape: style.Shape //<
+    //< The shape drawn (`style.Shape`); a line and an arrow run along the band's diagonal.
+
+struct Page //< the layout's result
+  boxes: List<|Box$@|>$@
+  cells: List<|Cell$@|>$@ //<
+    //< The cells laid out in a grid
+    //<
+    //< **The outer ones go in first**, so the innermost cell is found by searching from the end.
+  surfaces: List<|Surface$@|>$@ //<
+    //< The slides laid out at absolute coordinates, in document order.
+  holders: List<|Surface$@|>$@ //<
+    //< The rectangle of each top-level block, for drawing a figure at the clicked position
+    //<
+    //< It is read by `ask.framer_under`. **A region cannot be used instead** (it merges a run of
+    //< blocks into one).
+    //< **It is filled only when the whole document is laid out**, like `regions`.
+  frames: List<|Framed$@|>$@ //<
+    //< The frames laid out at absolute coordinates. **As in `cells`, the outer ones go in first.**
+  regions: List<|Region$@|>$@ //<
+    //< The document's regions
+    //<
+    //< **They are filled only when the whole document is laid out** (`layout`): the top-level
+    //< blocks decide a region.
+  panels: List<|Panel$@|>$@ //<
+    //< The fills and the lines, in document order (the inner ones lie over the outer).
+  pictures: List<|Picture$@|>$@ //<
+    //< The pictures laid out, in document order
+    //<
+    //< Drawing them happens outside (the core cannot read a picture).
+  notes: List<|Note|>$@ //<
+    //< This document's notes, read at layout time like the headings
+    //<
+    //< The order is the number itself, and the mark and the list both read it here (counted
+    //< twice, they would drift apart).
+  serials: List<|Serial|>$@ //<
+    //< This document's running numbers (the caption of a figure or a table)
+    //<
+    //< **They are filled only when the whole document is laid out** (`layout`); in a
+    //< measuring-only layout they start from 1.
+  headings: List<|Heading|>$@ //<
+    //< This document's headings, read at layout time (like `src`)
+    //<
+    //< **They are not a layout result.** **They are filled only when the whole document is laid
+    //< out** (`layout`); in a measuring-only layout (`place_blocks`) a table of contents shows no
+    //< entries.
+  toc_lines: List<|Toc_line|>$@ //<
+    //< The laid-out lines of the table of contents, to tell which heading a click was on
+    //<
+    //< The box points at no text of the document, so the line's position is recorded separately.
+    //< Note: `place_contents` in [`gather.kspls`](gather.kspls) adds them one line at a time.
+  note_lines: List<|Note_line|>$@
+  figures: List<|Figure|>$@ //<
+    //< The values the charts read, collected before layout like the headings (`layout`)
+    //<
+    //< In a measuring-only layout, a chart shows no bars.
+  height: F32 //< the height used
+  filled: F32 //<
+    //< The height at which the contents end
+    //<
+    //< **`height` cannot be used instead**: it includes the space after the last block
+    //< (`space_after`) too, so a document that exactly fills one page would count as two and **a
+    //< blank page would appear at the end**. `paper_count` does the counting.
+  src: Font_source //<
+    //< Where the measurements used for layout came from, **to compute the cursor's position**
+    //<
+    //< Where characters are split inside a box cannot be computed from the byte count.
+  vm_fonts: Font[metric_slots] //<
+    //< The cached vertical measurements
+    //<
+    //< The calls across the boundary drop from one per box to one per typeface. **Once it is full,
+    //< it just stops caching** (evicting an old one would make the next box measure again).
+  vm_metrics: Vmetrics[metric_slots]
+  vm_len: Sz
+  hand: source.Hand$@ //<
+    //< The handle for borrowing the source text that a window points at
+    //<
+    //< It is read at layout time, like `src`. **Null means nothing is provided** (a window shows
+    //< its own text). **Nothing is provided in a measuring-only layout**, so a window in a cell
+    //< sizes its column by its own text, not the borrowed text (like a chart in a cell).
+
+const metric_slots: Sz = 32 //< how many typefaces are cached
+  //<
+  //< **It is a fixed value**, well above the number of styles a document has.
+
+impl Page
+  fn metrics(dst: Page$@, font: Font): Vmetrics //< font's vertical measurements
+    //<
+    //< **Get vertical measurements through this one** (using `src` directly bypasses the cache).
+    //< The typeface is matched by address and number (the name's text is not read).
+    for $i: Sz = 0; i < dst.vm_len; i += 1
+      had: = dst.vm_fonts[i]
+      if had.family.ptr == font.family.ptr && had.family.len == font.family.len &&
+        had.size_px == font.size_px && had.weight == font.weight && had.italic == font.italic
+        return dst.vm_metrics[i]
+    m: = dst.src.vmetrics_of(font)
+    if dst.vm_len < metric_slots
+      dst.vm_fonts[dst.vm_len] = font
+      dst.vm_metrics[dst.vm_len] = m
+      dst.vm_len += 1
+    return m
+
+struct Toc_line //<
+  //< One laid-out line of the table of contents, and the index of the heading it points at
+  //<
+  //< **It points at the heading's index** (not the block), an index into `headings`.
+  top: F32
+  bottom: F32
+  head: Sz
+
+struct Note_line //< one line of the list of notes, and which note it is
+  //<
+  //< **For the same reason as `Toc_line`**: it is the only way from a click back to the note.
+  top: F32
+  bottom: F32
+  note: Sz
+
+fn new_page(src: Font_source, arena: Arena$@): Page$@ //< makes one empty layout
+  //<
+  //< **It is also used for measuring-only layouts** (`kspage/grid`'s column widths), so the
+  //< discarded layout and the kept layout take the same path.
+  fresh: = Page::{
+    .boxes = List<|Box$@|>.create(arena),
+    .cells = List<|Cell$@|>.create(arena),
+    .surfaces = List<|Surface$@|>.create(arena),
+    .holders = List<|Surface$@|>.create(arena),
+    .frames = List<|Framed$@|>.create(arena),
+    .regions = List<|Region$@|>.create(arena),
+    .panels = List<|Panel$@|>.create(arena),
+    .pictures = List<|Picture$@|>.create(arena),
+    .headings = List<|Heading|>.create(arena),
+    .toc_lines = List<|Toc_line|>.create(arena),
+    .note_lines = List<|Note_line|>.create(arena),
+    .figures = List<|Figure|>.create(arena),
+    .notes = List<|Note|>.create(arena),
+    .serials = List<|Serial|>.create(arena),
+    .height = 0.0,
+    .filled = 0.0,
+    .src = src,
+    .vm_fonts = Font[metric_slots]::{},
+    .vm_metrics = Vmetrics[metric_slots]::{},
+    .vm_len = 0,
+    // **Nothing is provided here**; only `layout` passes the borrowing entry point.
+    .hand = null,
+  }
+  return arena.create(fresh)
+
+// ---- Splitting into pages ----
+fn page_top(page_height: F32, y: F32): F32 //<
+  //< The top edge of the page that y lies on (**pages follow with no gap**, so by division)
+  //<
+  //< **Pages are split during layout.** Shifted afterwards, the cells, the slides and the frames
+  //< would all have to move together, and a forgotten move would go unnoticed.
+  //< **Do not make it `priv`**: `flow.kspls` asks it whether the page changed mid-paragraph.
+  return F32::I64::(y / page_height) * page_height
+
+fn page_break(page_height: F32, y: F32, height: F32): Option<|F32|> //<
+  //< Returns the next page's top edge where height from y does not fit on this page
+  //<
+  //< Where it fits, none.
+  //< Caution: **Do not move it when it is already at the top of a page.** A block taller than a
+  //< page would loop forever; sticking out visibly is easier to fix than vanishing.
+  if page_height <= 0.0
+    return Option<|F32|>.none
+  top: = page_top(page_height, y)
+  if y - top <= 0.001 || y + height <= top + page_height
+    return Option<|F32|>.none
+  return Option<|F32|>.some(top + page_height)
+
+struct Placed //< a snapshot of how much has been laid out
+  //<
+  //< Caution: **Record every list** (restoring only the boxes leaves the cells, the slides, the
+  //< frames, the fills and the pictures). **It is not a mark**: `Marker` in
+  //< `model/marker.kspls` is a bullet list's mark. **The regions are not in it.**
+  boxes: Sz
+  cells: Sz
+  surfaces: Sz
+  holders: Sz
+  frames: Sz
+  panels: Sz
+  pictures: Sz
+
+fn placed_of(dst: Page$@): Placed
+  return Placed::{ .boxes = dst.boxes.len, .cells = dst.cells.len, .surfaces = dst.surfaces.len,
+    .holders = dst.holders.len, .frames = dst.frames.len, .panels = dst.panels.len,
+    .pictures = dst.pictures.len }
+
+fn rewind(dst: Page$@, m: Placed) //<
+  //< throws away what was laid out and goes back to before it
+  //<
+  //< Whether a block crossed a page is known only after layout; where it did, it is rolled back
+  //< here and laid out again from the top of the next page.
+  dst.boxes.len = m.boxes
+  dst.cells.len = m.cells
+  dst.surfaces.len = m.surfaces
+  dst.holders.len = m.holders
+  dst.frames.len = m.frames
+  dst.panels.len = m.panels
+  dst.pictures.len = m.pictures
+
+// Lays out the texts this block holds directly, from the current position.
+//
+// The mark is laid out here too, so it moves with a paragraph moved to another page.

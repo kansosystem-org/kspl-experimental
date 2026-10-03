@@ -1,0 +1,51 @@
+//< kspage's tests, run as a program of their own (`make test` in this package's folder)
+//<
+//< **This is the only way kspage's tests run on their own.** `all.kspls` holds them; this file
+//< gives them a `main` and what they need from the runner: a way to have the compiler read a text
+//< they wrote (`builds`, passed to `run_kspage`).
+import "kspage/tests/all"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" // `arena.text()`
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/sys"
+
+priv const usage: U8[] = "usage: ksplc run tests/main.kspls <ksplc> <working-dir>" //<
+  //< what it is given, in that order (`make test` in `kspage/Makefile` passes them)
+
+priv const compile_wait_ms: I32 = 60000 //< the time limit for compiling one text the tests wrote
+priv const said_cap: Sz = 1024 * 1024 //< how much of the compiler's output is kept
+
+priv $compiler: U8[] = "" //< the ksplc passed in; `main` sets it before any test runs
+priv $work_dir: U8[] = "" //< the directory `builds` writes a text into for it to read
+
+fn main(): I32
+  // Line by line, so a run that dies shows how far it got.
+  io.set_line_buffered()
+  arena: = Arena.new(1024 * 1024)
+  defer arena.free()
+  argv: = sys.args()
+  if argv.len != 3
+    panic(arena.dup_str(usage))
+  compiler = arena.dup_str(argv.get(1))
+  work_dir = arena.dup_str(argv.get(2))
+  fs.mkdir_all(work_dir) catch
+    panic(U8$[]::arena.text().s("the working directory cannot be made: \{work_dir\}").take())
+  all.run_kspage(builds)
+  return 0
+
+priv fn builds(src: U8[], arena: Arena$@): Bool //< whether the given ksplc reads `src` cleanly
+  //<
+  //< **Where it does not, its output is printed** — the test's own line only says that it failed.
+  path: = fs.join(work_dir, "made.kspls", arena)
+  io.write_file(path, src) catch
+    io.out().s("could not write \{path\}\n")
+    return false
+  argv: = U8[][]::{ compiler, path, fs.join(work_dir, "made.c", arena) }
+  r: = subproc.run_capture(argv, "", compile_wait_ms, said_cap, arena)
+  ok: = !r.spawn_failed && !r.timed_out && r.exit_code == 0
+  if !ok
+    io.out().s(r.stdout_data).s(r.stderr_data).s("\n")
+  return ok

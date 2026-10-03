@@ -1,0 +1,183 @@
+//< The drawing attributes of a character, and reading and writing a color as text
+//<
+//< Caution: **Build a style's name in one place only**: the code that inserts text and the code
+//< that lays it out both build it, and the two looks disagree once only one of them is changed.
+//< **Do not name the file `ink`**: with the natural variable `ink: Ink`, `ink.drawn(…)` would be
+//< read as a method of the variable.
+import "kspage/model/font" { Font }
+import "std/chars"
+import "std/str" { Str_builder }
+import "std/strfmt"
+
+struct Font_spec //< the font settings
+  //<
+  //< **Every field can be "not set".** A field that is not set comes from the parent.
+  family: Option<|U8[]|>
+  size_px: Option<|F32|>
+  weight: Option<|U16|>
+  italic: Option<|Bool|>
+
+fn inherit_all(): Font_spec //< sets nothing (everything stays as the parent's)
+  return Font_spec::{
+    .family = Option<|U8[]|>.none,
+    .size_px = Option<|F32|>.none,
+    .weight = Option<|U16|>.none,
+    .italic = Option<|Bool|>.none,
+  }
+
+struct Ink //< the decoration applied at drawing time
+  //<
+  //< **A color is `0xRRGGBB`, with no transparency.** "Not set" is `.none` (black is a real
+  //< setting). **They do not go into `Font`**, the key for measuring (none of these changes the
+  //< size). A paragraph's fill is `Style.fill`.
+  color: Option<|U32|>
+  background: Option<|U32|>
+  // An underline and a strikethrough. **`false` is the setting "draw none"**, or the parent's
+  // underline could not be removed.
+  underline: Option<|Bool|>
+  strike: Option<|Bool|>
+
+fn inherit_ink(): Ink //<
+  //< Sets nothing (everything stays as the parent's)
+  //<
+  //< The characters keep the screen's color, no background is painted, and no line is drawn.
+  return Ink::{ .color = Option<|U32|>.none, .background = Option<|U32|>.none,
+    .underline = Option<|Bool|>.none, .strike = Option<|Bool|>.none }
+
+struct Accent //< the emphasis applied without a style name (bold and italic)
+  //<
+  //< **They cannot go into `Ink`**: both change the measurements. **`false` is the setting "not
+  //< bold" or "not italic"**, or a run inside a bold paragraph could not be made normal weight.
+  bold: Option<|Bool|>
+  italic: Option<|Bool|>
+
+fn inherit_accent(): Accent //< sets neither (they stay as the parent's)
+  return Accent::{ .bold = Option<|Bool|>.none, .italic = Option<|Bool|>.none }
+
+const bold_weight: U16 = 700U16 //< the weight written for bold
+  //<
+  //< Caution: **Write the normal weight too** (drop the setting and the parent's bold remains).
+const plain_weight: U16 = 400U16
+
+fn accent_into(spec: Font_spec, accent: Accent): Font_spec //<
+  //< Copies the emphasis onto a style's font settings
+  //<
+  //< **The typeface and the size are not touched** (an emphasis sets only the weight and italic).
+  $out: Font_spec = spec
+  out.weight = Option<|U16|>.none
+  if v: = accent.bold
+    out.weight = Option<|U16|>.some(bold_weight if v else plain_weight)
+  out.italic = accent.italic
+  return out
+
+fn resolve_ink(spec: Ink, parent: Ink): Ink //< the decoration with spec laid over parent
+  $out: Ink = parent
+  if v: = spec.color
+    out.color = Option<|U32|>.some(v)
+  if v: = spec.background
+    out.background = Option<|U32|>.some(v)
+  if v: = spec.underline
+    out.underline = Option<|Bool|>.some(v)
+  if v: = spec.strike
+    out.strike = Option<|Bool|>.some(v)
+  return out
+
+fn drawn(spec: Option<|Bool|>): Bool //< whether the setting is present and `true`
+  //<
+  //< **Not set draws none** (by default, characters have no line).
+  if v: = spec
+    return v
+  return false
+
+fn color_from(text: U8[]): Option<|U32|> //< reads `#rrggbb`
+  //<
+  //< **Anything but six digits is "not set"** (not a partial black). The `#` may be left out.
+  at: Sz = 1 if text.len > 0 && text[0] == '#' else 0
+  if text.len - at != 6
+    return Option<|U32|>.none
+  $v: U32 = 0U32
+  for $i: Sz = at; i < text.len; i += 1
+    d: = text[i].hex_val()
+    if d < 0
+      return Option<|U32|>.none
+    v = (v << 4U32) | U32::d
+  return Option<|U32|>.some(v)
+
+fn hex_into(v: U32, sb: Str_builder$@) //< writes a color in six hex digits
+  //<
+  //< Caution: **Pad it to six digits** (neither CSS nor `<input type="color">` reads fewer).
+  for $shift: Sz = 20; shift >= 0; shift -= 4
+    nib: = U8::((v >> U32::shift) & 0xfU32)
+    sb.c(nib.to_hex_lower())
+
+fn color_into(v: U32, sb: Str_builder$@) //< writes a color as `#rrggbb`
+  sb.c('#')
+  hex_into(v, sb)
+
+fn any_ink(ink: Ink): Bool //< whether the decoration sets anything at all
+  if _v: = ink.color
+    return true
+  if _v: = ink.background
+    return true
+  if _v: = ink.underline
+    return true
+  if _v: = ink.strike
+    return true
+  return false
+
+fn pull_line_name(base: U8[], out: Str_builder$@): U8[] //<
+  //< The name of a figure's line style (built from the box style's name)
+  //<
+  //< Caution: **Build it in one place only** (see the file header), or the line is drawn in the
+  //< box's shape. The name becomes a class, so it stays readable (`pulls-line`).
+  out.clear()
+  out.s(base).s("-line")
+  return out.slice()
+
+fn span_name(ink: Ink, accent: Accent, out: Str_builder$@): Bool //<
+  //< Builds a style name from the settings of the decoration and the emphasis
+  //<
+  //< **The same settings must give the same name**, or the style table grows at every layout.
+  //< Caution: **Do not change the order of the fields**, and **add any new field at the end**, or
+  //< a name made earlier no longer matches.
+  if !any_ink(ink) && !any_accent(accent)
+    return false
+  out.s("decoration")
+  if v: = ink.color
+    out.s("-c")
+    hex_into(v, out)
+  if v: = ink.background
+    out.s("-b")
+    hex_into(v, out)
+  if v: = ink.underline
+    out.s("-u1" if v else "-u0")
+  if v: = ink.strike
+    out.s("-s1" if v else "-s0")
+  if v: = accent.bold
+    out.s("-w1" if v else "-w0")
+  if v: = accent.italic
+    out.s("-i1" if v else "-i0")
+  return true
+
+fn any_accent(accent: Accent): Bool //< whether the emphasis sets anything
+  if _v: = accent.bold
+    return true
+  if _v: = accent.italic
+    return true
+  return false
+
+fn resolve(spec: Font_spec, parent: Font, ratio: F32): Font //<
+  //< the font with spec laid over parent
+  //<
+  //< ratio scales the characters for the reader (1.0 is unscaled). **It takes a `Font_spec`, not
+  //< a name**, or a typo passes silently as "not set"; looking a name up is `Sheet.find`'s job.
+  $out: Font = parent
+  if v: = spec.family
+    out.family = v
+  if v: = spec.size_px
+    out.size_px = v * ratio
+  if v: = spec.weight
+    out.weight = v
+  if v: = spec.italic
+    out.italic = v
+  return out

@@ -1,0 +1,326 @@
+//< The shape of the undo record
+//<
+//< The operation that undoes one change (`Op`), and the unit one undo takes back (`Step`).
+//< This file does not change the document.
+//< Every kind of change is held in one list, style table changes included (the style table is
+//< saved with the document).
+import "kspage/lay/caret" { Caret }
+import "kspage/model/doc" { Axis, Block, Rect }
+import "kspage/model/paper" { Paper }
+import "kspage/model/run" { Inline }
+import "kspage/model/style" { Sheet, Style }
+import "std/ds" { List }
+import "std/mem" { Arena }
+
+struct Text_op //< the operation that undoes one text change
+  //<
+  //< Inserting and deleting are each other's inverse, stored in the same shape.
+  inline: Inline$@
+  at: Sz
+  put_back: Bool //< true restores the text (it was deleted); false deletes it (it was inserted)
+  text: List<|U8|>$@ //<
+    //< The text to restore.
+    //<
+    //< Caution: **Copy it before deleting.** After deleting it cannot be read.
+    //< A computed value does not change the text, so the restored text is the formula
+    //< (`Inline.show_value`).
+  len: Sz
+
+struct Size_op //< the operation that restores a column's width (or a row's height)
+  //<
+  //< Caution: **Also record "it was not set"**, or restored as 0 a size that followed its contents
+  //< becomes fixed.
+  table: Block$@
+  axis: Axis
+  index: Sz
+  was: Option<|F32|>
+
+struct Span_op //< the operation that changes a cell's merge
+  //<
+  //< Caution: **Keep the old extent** (that is the value restored).
+  cell: Block$@
+  was_rows: Sz
+  was_cols: Sz
+
+struct Line_op //< the operation that adds or removes one table row (or column)
+  //<
+  //< Caution: **Keep the removed block.** What is restored is the same object; made anew, the
+  //< record's other operations point at another block, and undoing its text dangles.
+  //< For a row, `blocks` is that row; for a column, the cell removed from each row.
+  table: Block$@
+  axis: Axis
+  at: Sz
+  put_back: Bool //< true restores it (it was removed); false removes it (it was added)
+  blocks: List<|Block$@|>$@
+  spans: List<|Sz|>$@ //<
+    //< For a column being restored, how many columns each row's cell spanned before.
+    //<
+    //< 0 where it had no cell there. Empty where the column is a new one.
+    //< Caution: **It cannot be recomputed from the table** — a cell narrowed from two columns looks
+    //< like one that spanned one, so the rows would get out of step.
+  size: Option<|F32|> //<
+    //< The size setting of that row or column. Restore it with the row or column.
+
+struct Run_op //< the operation that adds or removes one inline
+  //<
+  //< For splitting and joining inlines when a style is applied. Keep the removed inline (the same
+  //< reason as `Line_op`).
+  block: Block$@
+  at: Sz
+  put_back: Bool //< true restores it (it was removed); false removes it (it was added)
+  run: Inline$@
+
+struct Block_op //< the operation that adds or removes one block
+  //<
+  //< For splitting and joining a paragraph.
+  //< Caution: **Keep the removed block.** What is restored is the same object (the same reason as
+  //< `Line_op`). Where `parent` is null it is at the top level of the document.
+  parent: Block$@
+  at: Sz
+  put_back: Bool //< true restores it (it was removed); false removes it (it was added)
+  block: Block$@
+
+struct Style_op //< the operation that restores an inline's style name
+  run: Inline$@
+  was: U8[]
+
+struct Href_op //< the operation that restores an inline's link
+  //<
+  //< Caution: **Record it separately from the style name.** In one operation, when two windows set
+  //< an inline's style and link separately, undoing the later also reverts the other.
+  run: Inline$@
+  was: U8[]
+
+struct Note_op //< the operation that restores an inline's note
+  //<
+  //< Caution: **Record it separately from the style name** (the same reason as `Href_op`).
+  run: Inline$@
+  was: U8[]
+
+struct Remark_op //< the operation that restores an inline's annotation
+  //<
+  //< Caution: **Record the text and who wrote it together**, or one undo leaves an annotation with
+  //< no way to tell whose it is.
+  run: Inline$@
+  was: U8[]
+  was_by: U8[]
+
+struct Block_face_op //< the operation that restores a paragraph's style name
+  //<
+  //< Caution: **Record it separately from an inline's style** (the same reason as `Href_op`).
+  block: Block$@
+  was: U8[]
+
+struct Refer_op //< the operation that restores what the body refers to
+  //<
+  //< The number is not kept (a number is counted at layout time).
+  run: Inline$@
+  was: U8[]
+
+struct Name_op //< the operation that restores one block's name
+  block: Block$@
+  was: U8[]
+
+struct Aside_op //< the operation that restores the memo beside a block
+  block: Block$@
+  was: U8[]
+
+struct Step_op //< the operation that restores the step at which a frame appears
+  block: Block$@
+  was: Sz
+
+struct Aim_op //<
+  //< The operation that restores the source a block points at (the link to what was generated)
+  block: Block$@
+  was: U8[]
+
+struct Look_op //< the operation that restores a style's font settings
+  //<
+  //< Caution: **Record it whole rather than per field**, or "there was none" and "it was 0" look
+  //< the same.
+  style: Style$@
+  was: Style //<
+    //< The whole contents before the change (the name does not change).
+    //<
+    //< Caution: **Do not save it per field** — a newly added field is silently missed, and that
+    //< field alone is not restored.
+
+struct Sheet_op //< the operation that adds or removes one style in the style table
+  //<
+  //< Caution: **Keep the removed style.** What is restored is the same object (the same reason as
+  //< `Line_op`).
+  sheet: Sheet$@
+  at: Sz
+  put_back: Bool //< true restores it (it was removed); false removes it (it was added)
+  style: Style$@
+
+struct Paper_op //< the operation that restores the paper settings
+  //<
+  //< Caution: **Record it whole rather than per field** (the same reason as `Look_op`; on paper,
+  //< 0 means "do not split", "the container's width" or "no limit").
+  sheet: Sheet$@
+  was: Paper
+
+struct Frame_op //< the operation that restores a slide frame's position
+  //<
+  //< Caution: **Also record "no position was set".** A frame with none covers the whole slide;
+  //< restored as a rectangle of 0 it can no longer be seen.
+  block: Block$@
+  was: Option<|Rect|>
+
+enum Op //< the operation that undoes one change
+  text(t: Text_op$@)
+  size(s: Size_op$@)
+  line(l: Line_op$@)
+  run(r: Run_op$@)
+  block(b: Block_op$@)
+  style(s: Style_op$@)
+  frame(f: Frame_op$@)
+  look(l: Look_op$@)
+  paper(p: Paper_op$@)
+  sheet(s: Sheet_op$@)
+  span(s: Span_op$@)
+  href(h: Href_op$@)
+  note(n: Note_op$@)
+  remark(r: Remark_op$@)
+  name(n: Name_op$@)
+  refer(f: Refer_op$@)
+  block_face(f: Block_face_op$@)
+  aside(a: Aside_op$@)
+  aim(a: Aim_op$@)
+  step(s: Step_op$@)
+
+enum Again //< the last command that can be repeated ("do it again", F4)
+  //<
+  //< The command is remembered, not read back from the record. Working a command back out of its
+  //< edits is guesswork, the source of "it does not repeat what I did".
+  //< Caution: **Keep what the command needs, not where it acted.** Repeating acts where the cursor
+  //< is now, so an axis and a name are kept and a row number is not.
+  none
+  add_line(axis: Axis) //< insert a row (or column)
+  drop_line(axis: Axis) //< remove a row (or column)
+  style(name: U8[]) //< apply a character style
+  block_style(name: U8[]) //< apply a paragraph style
+
+impl Again
+  fn again_word(a: Self): U8[] //< what repeating would do, for the status bar
+    //<
+    //< Caution: **Say the name of what would happen** (a key that silently does nothing draws the
+    //< most complaints).
+    switch a case .none
+      return ""
+    case .add_line(axis)
+      return line_word(axis, false)
+    case .drop_line(axis)
+      return line_word(axis, true)
+    case .style(_n)
+      return "Laid a style on"
+    case .block_style(_n)
+      return "Changed a paragraph style"
+
+struct Step //< the unit one undo takes back
+  ops: List<|Op|>$@
+  before: Caret
+  after: Caret
+
+fn new_step(before: Caret, arena: Arena$@): Step$@
+  st: = Step::{
+    .ops = List<|Op|>.create(arena),
+    .before = before,
+    .after = before,
+  }
+  return arena.create(st)
+
+fn push_op(into: Step$@, arena: Arena$@, n: Inline$@, at: Sz, put_back: Bool, len: Sz, gone: U8[]) //<
+  //< Records one text change
+  buf: = List<|U8|>.create(arena)
+  for $i: Sz = 0; i < gone.len; i += 1
+    buf.push((gone.ptr + i)$)
+  op: = Text_op::{ .inline = n, .at = at, .put_back = put_back, .text = buf, .len = len }
+  into.ops.push(Op.text(arena.create(op)))
+
+fn summary_of(st: Step$@): U8[] //< the short text of what the step did
+  //<
+  //< A step that changed nothing is empty (the caller stops adding there).
+  //< Caution: **Decide by the last operation** (a replace deletes and then inserts: "typed", not
+  //< "deleted"). The typed text itself is not included (text meant to be deleted would stay in
+  //< the history). The result is a constant text; it need not be copied.
+  if st.ops.len <= 0
+    return ""
+  switch st.ops.get(st.ops.len - 1) case .text(t)
+    return "Deleted" if t.put_back else "Typed"
+  case .size(s)
+    return size_word(s.axis)
+  case .line(l)
+    return line_word(l.axis, l.put_back)
+  case .run(_r)
+    return "Cut a text"
+  case .block(b)
+    return "Joined paragraphs" if b.put_back else "Cut a paragraph"
+  case .style(_s)
+    return "Laid a style on"
+  case .frame(_f)
+    return "Moved a figure"
+  case .paper(_p)
+    return "Changed the paper"
+  case .look(_l)
+    return "Changed a style"
+  case .sheet(h)
+    return "Deleted a style" if h.put_back else "Added a style"
+  case .span(_p)
+    return "Merged cells"
+  case .href(_e)
+    return "Changed a link"
+  case .note(_o)
+    return "Changed a footnote"
+  case .remark(_r)
+    return "Changed a comment"
+  case .name(_n)
+    return "Changed a name"
+  case .refer(_f)
+    return "Changed what is called"
+  case .block_face(_f)
+    return "Changed a paragraph style"
+  case .aside(_a)
+    return "Changed a note"
+  case .aim(_a)
+    return "Changed the source pointed at"
+  case .step(_s)
+    return "Changed the step shown"
+
+priv fn size_word(axis: Axis): U8[]
+  switch axis case .row
+    return "Changed a row's height"
+  case .column
+    return "Changed a column's width"
+
+fn line_word(axis: Axis, put_back: Bool): U8[] //<
+  //< What adding or removing a row (or column) is called
+  switch axis case .row
+    return "Deleted a row" if put_back else "Put a row in"
+  case .column
+    return "Deleted a column" if put_back else "Put a column in"
+
+fn last_moved(into: Step$@, table: Block$@, axis: Axis, index: Sz): Bool //<
+  //< Whether the step ends with a move of the same position in the same table
+  //<
+  //< While dragging, the first setting saved is enough to undo.
+  if into.ops.len <= 0
+    return false
+  switch into.ops.get(into.ops.len - 1) case .size(s)
+    return s.table == table && s.axis == axis && s.index == index
+  case .text, .line, .run, .block, .style, .frame, .look, .paper, .sheet, .span, .href, .note,
+    .remark, .name, .block_face, .aside, .aim, .refer, .step {}
+  return false
+
+fn last_framed(into: Step$@, b: Block$@): Bool //<
+  //< Whether the step ends with a move of the same frame
+  //<
+  //< No record is added while it is being dragged (the same reason as `last_moved`).
+  if into.ops.len <= 0
+    return false
+  switch into.ops.get(into.ops.len - 1) case .frame(f)
+    return f.block == b
+  case .text, .size, .line, .run, .block, .style, .look, .paper, .sheet, .span, .href, .note,
+    .remark, .name, .block_face, .aside, .aim, .refer, .step {}
+  return false

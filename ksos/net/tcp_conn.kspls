@@ -1,0 +1,123 @@
+//< Sends and receives bytes while keeping one TCP connection's seq/ack state
+//<
+//< Built on `build_tcp_segment` / `parse_tcp_segment` in `ksos/net/mini_ipv4.kspls`, which hold
+//< no state; this file holds it. send's and recv's signatures match mbedtls_ssl_send_t's and
+//< mbedtls_ssl_recv_t's, so they can be passed to mbedtls_ssl_set_bio as they are (no trampoline).
+import "ksos/net/link" as netlink
+import "ksos/net/mini_ipv4" as net
+import "std/bytes"
+import "std/chars"
+
+const mbedtls_err_ssl_want_read: I32 = -0x6900 //<
+  //< The constant mbedtls_ssl_recv_t uses to say "there is no data to read right now"
+  //<
+  //< It is MBEDTLS_ERR_SSL_WANT_READ, from mbedtls/ssl.h; the caller reads again later. This file
+  //< includes none of mbedTLS's headers.
+
+const max_frame_payload: Sz = 1400 //<
+  //< The limit on a send payload that fits one Ethernet frame
+  //<
+  //< It is the MTU of 1500 minus the headers, with a margin.
+  //< Beyond it, tcp_stream_send sends part (send_t allows it) and the caller calls again.
+
+struct Tcp_conn
+  // Where frames go in and out. The upper layers touch the hardware nowhere else.
+  link: netlink.Link
+  peer_mac_hi: U32
+  peer_mac_lo: U32
+  our_mac_hi: U32
+  our_mac_lo: U32
+  our_ip: U32
+  peer_ip: U32
+  our_port: U16
+  peer_port: U16
+  our_seq: U32 //< the sequence number of the next byte to send
+  peer_seq: U32 //< the sequence number of the byte expected next from the peer (= the ack value)
+  tx_scratch: U8[1500]
+  rx_scratch: U8[1500]
+  // The payload left in rx_scratch because it did not fit the caller's buffer.
+  // Caution: **Do not truncate a segment to the buffer's size.** Losing the rest makes every later
+  // segment fail the seq check, and the connection can never be read again; so the rest is kept
+  // here for the next call.
+  rx_pending_off: Sz
+  rx_pending_len: Sz
+
+fn make(link: netlink.Link, peer_mac_hi: U32, peer_mac_lo: U32, our_mac_hi: U32, our_mac_lo: U32,
+  our_ip: U32, peer_ip: U32, our_port: U16, peer_port: U16, our_seq: U32, peer_seq: U32): Tcp_conn //<
+    //< Builds the state right after the 3-way handshake
+    //<
+    //< The caller resolves ARP and does the handshake with `ksos/net/mini_ipv4.kspls` (see
+    //< `ksos/demo/rp2040/rp2040_net_probe.kspls`).
+    //< Pass our_seq and peer_seq as they are after each side's SYN has used one.
+  return Tcp_conn::{
+    .link = link,
+    .peer_mac_hi = peer_mac_hi,
+    .peer_mac_lo = peer_mac_lo,
+    .our_mac_hi = our_mac_hi,
+    .our_mac_lo = our_mac_lo,
+    .our_ip = our_ip,
+    .peer_ip = peer_ip,
+    .our_port = our_port,
+    .peer_port = peer_port,
+    .our_seq = our_seq,
+    .peer_seq = peer_seq,
+    .tx_scratch = ::{},
+    .rx_scratch = ::{},
+    .rx_pending_off = 0,
+    .rx_pending_len = 0,
+  }
+
+// Compatible with mbedtls_ssl_send_t: ctx is taken as a Tcp_conn@. It sends buf[0..min(len,1400))
+// as a PSH|ACK segment and returns how many bytes it actually sent (a partial send is allowed).
+// **If the link cannot send right now it returns 0**, and the caller calls again with the same
+// data.
+#export
+fn tcp_stream_send(ctx: Void$@, buf: U8@, len: Sz): I32
+  conn: = Tcp_conn$@::ctx
+  n: Sz = len if len <= max_frame_payload else max_frame_payload
+  payload: = U8[]::{ .ptr = buf, .len = n }
+  seg_len: = net.build_tcp_segment(U8$[]::conn.tx_scratch, conn.peer_mac_hi, conn.peer_mac_lo,
+    conn.our_mac_hi, conn.our_mac_lo, conn.our_ip, conn.peer_ip, conn.our_port, conn.peer_port,
+    conn.our_seq, conn.peer_seq, net.tcp_flag_ack | net.tcp_flag_psh, payload)
+  // Caution: **If it could not send, do not advance our_seq**, or it claims bytes the peer can
+  // never ACK, and with no retransmit the connection breaks silently. A build that returns 0 (it
+  // does not fit the scratch buffer) is treated the same way.
+  if seg_len == 0 || !conn.link.send_frame(U8[]::conn.tx_scratch, seg_len)
+    return 0
+  conn.our_seq += U32::n
+  return I32::n
+
+priv fn take_pending(conn: Tcp_conn$@, buf: U8$@, len: Sz): Sz //<
+  //< Returns as much of the payload left in rx_scratch as fits the buffer
+  //<
+  //< It keeps the rest for later.
+  //< peer_seq advances **only by what was actually returned**.
+  // copy_from truncates what does not fit and returns how many it copied; the caller's raw
+  // pointer is wrapped in a view first.
+  dst: = U8$[]::{ .ptr = buf, .len = len }
+  src: = U8[]::conn.rx_scratch
+  n: = dst.copy_from(0, src.sub(conn.rx_pending_off, conn.rx_pending_len))
+  conn.rx_pending_off += n
+  conn.rx_pending_len -= n
+  conn.peer_seq += U32::n
+  return n
+
+// Compatible with mbedtls_ssl_recv_t: ctx is taken as a Tcp_conn@. It receives one frame and, if
+// it is this connection's next data segment, copies it into buf[0..min(len,payload_len)) and
+// returns that count; otherwise it returns mbedtls_err_ssl_want_read at once.
+#export
+fn tcp_stream_recv(ctx: Void$@, buf: U8$@, len: Sz): I32
+  conn: = Tcp_conn$@::ctx
+  // Leftover data goes out before a new frame is read, or the stream's order would be swapped.
+  if conn.rx_pending_len > 0
+    return I32::take_pending(conn, buf, len)
+  if !conn.link.rx_available()
+    return mbedtls_err_ssl_want_read
+  rx_len: = conn.link.recv_frame(U8$[]::conn.rx_scratch)
+  seg: = net.parse_tcp_segment(U8[]::conn.rx_scratch, rx_len, conn.peer_ip, conn.peer_port,
+    conn.our_port)
+  if !seg.ok || seg.payload_len == 0 || seg.seq != conn.peer_seq
+    return mbedtls_err_ssl_want_read
+  conn.rx_pending_off = seg.payload_off
+  conn.rx_pending_len = seg.payload_len
+  return I32::take_pending(conn, buf, len)

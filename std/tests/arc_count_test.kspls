@@ -1,0 +1,162 @@
+import "std/verdict"
+// ==========================================
+// Tests that std/mem's Rc / Arc / Weak_rc / Weak_arc balance their reference counts with no manual
+// retain/release: heap_used_bytes() must return to its starting value. Arc and Weak_arc also run
+// on real OS threads. **Only the balance is tested here**; where the compiler inserts a
+// retain/release belongs to the compiler's tests.
+// ==========================================
+
+import "std/mem"
+import "std/refcount" { Rc, Arc, Weak_rc, Weak_arc }
+import "std/thread"
+
+// ==========================================
+// std/mem: Rc<T> is shared by plain assignment and freed by the release inserted as the scope ends.
+// ==========================================
+priv fn rc_shared_body()
+  $a: = Rc<|I32|>.new(42)
+  $b: = a // plain assignment -> shared by an automatic retain (count 2)
+  assert(a.get()$ == 42 && b.get()$ == 42, "both handles must read the shared value")
+  b.get()$ = 100
+  assert(a.get()$ == 100, "writing through one handle must be visible through the other")
+  // Leaving the scope releases a and b; once the last owner is gone, the value is freed.
+
+fn test_rc_refcount()
+  verdict.start("[Rc] ARC automatic reference counting (shared by plain assignment) test...")
+  heap_before: = mem.heap_used_bytes()
+  rc_shared_body()
+  heap_after: = mem.heap_used_bytes()
+  assert(heap_after == heap_before,
+    "Rc must be auto-freed once all owners leave scope (no leak, no double-free)")
+  verdict.pass("It is shared by plain assignment and freed automatically as the scope is left.")
+// ==========================================
+// std/mem: Arc<T>'s count stays atomic under concurrent copying and destruction on real OS
+// threads; a clone inside the loop is released as each iteration ends.
+// ==========================================
+#export
+fn arc_test_clone_storm(arg: Arc<|I32|>$@): Void$@
+  for _i in Range.asc(5000)
+    _c: = arg.clone() // atomic +1; c is released automatically (-1) as this iteration ends
+  return null
+
+priv fn arc_storm_body()
+  $shared: = Arc<|I32|>.new(7)
+  t1: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_clone_storm, shared@) catch panic("thread spawn \
+    failed")
+  t2: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_clone_storm, shared@) catch panic("thread spawn \
+    failed")
+  t3: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_clone_storm, shared@) catch panic("thread spawn \
+    failed")
+  t4: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_clone_storm, shared@) catch panic("thread spawn \
+    failed")
+  t1.join_and_free()
+  t2.join_and_free()
+  t3.join_and_free()
+  t4.join_and_free()
+  assert(shared.get()$ == 7, "value must survive the clone storm intact")
+  // shared is released automatically as the scope ends -> 0 -> freed.
+
+fn test_arc_refcount_concurrent()
+  verdict.start("[Arc] ARC concurrent copy/destroy atomicity storm test (4 threads x 5000)...")
+  heap_before: = mem.heap_used_bytes()
+  arc_storm_body()
+  heap_after: = mem.heap_used_bytes()
+  assert(heap_after == heap_before,
+    "refcount must return to the pre-test heap baseline (no leak, no double-free)")
+  verdict
+    .pass("The value survives simultaneous copying and automatic destruction on 4 threads, and is \
+      freed exactly when every owner is gone.")
+// ==========================================
+// std/mem: Weak_rc<T>. upgrade succeeds while a strong reference lives, fails once every Rc has
+// left its scope, and everything is freed once the weak one is gone too.
+// ==========================================
+priv fn weak_alive_body()
+  $rc: = Rc<|I32|>.new(42)
+  $w: = rc.downgrade()
+  $up: = w.upgrade() catch panic("upgrade() must succeed while a strong Rc<T> is still alive")
+  assert(up.get()$ == 42, "upgraded handle must read the shared value")
+  // up, w and rc are all released automatically as the scope ends.
+
+priv fn make_dropped_weak(): Weak_rc<|I32|> //<
+  //< Creates an rc inside the scope and returns a Weak_rc downgraded from it
+  //<
+  //< rc's release takes strong to 0, but the weak remains, so _Rc_ctrl is not freed.
+  $rc: = Rc<|I32|>.new(42)
+  w: = rc.downgrade()
+  return w
+
+priv fn weak_after_drop_body()
+  $w: = make_dropped_weak() // strong=0, weak=1
+  $upgrade_failed: = false
+  $ph: = w.upgrade() catch
+    upgrade_failed = true
+    fallback Rc<|I32|>.new(0) // an unrelated stand-in, only to satisfy the type (auto-freed)
+  assert(upgrade_failed, "upgrade() after the last strong owner is gone must fail")
+  assert(ph.get()$ == 0, "fallback placeholder must be usable")
+  // ph and w are released as the scope ends; everything is freed once weak reaches 0 too.
+
+fn test_weak_upgrade()
+  verdict.start("[Weak_rc] ARC downgrade/upgrade + avoiding a reference-cycle leak test...")
+  heap_before: = mem.heap_used_bytes()
+  weak_alive_body()
+  weak_after_drop_body()
+  heap_after: = mem.heap_used_bytes()
+  assert(heap_after == heap_before,
+    "heap must return to the baseline once both strong and weak reach zero")
+  verdict
+    .pass("upgrade succeeds while alive, fails once every strong is gone, and everything is freed \
+      automatically.")
+// ==========================================
+// std/mem: Weak_arc<T> under concurrent downgrade/upgrade on real OS threads. upgrade's CAS loop
+// keeps a freed value from coming back to life.
+// ==========================================
+#export
+fn arc_test_weak_storm(arg: Arc<|I32|>$@): Void$@
+  for _i in Range.asc(5000)
+    $w: = arg.downgrade() // weak atomic +1 (automatic -1 as the iteration ends)
+    _up: = w.upgrade() catch // strong atomic +1 (CAS) (automatic -1 as the iteration ends)
+      panic("upgrade() must succeed while the original Arc<T> is still alive")
+  return null
+
+priv fn weak_arc_storm_body()
+  $shared: = Arc<|I32|>.new(7)
+  t1: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_weak_storm, shared@) catch panic("thread spawn \
+    failed")
+  t2: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_weak_storm, shared@) catch panic("thread spawn \
+    failed")
+  t3: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_weak_storm, shared@) catch panic("thread spawn \
+    failed")
+  t4: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_weak_storm, shared@) catch panic("thread spawn \
+    failed")
+  t1.join_and_free()
+  t2.join_and_free()
+  t3.join_and_free()
+  t4.join_and_free()
+  assert(shared.get()$ == 7, "value must survive the downgrade/upgrade storm intact")
+
+priv fn make_dropped_weak_arc(): Weak_arc<|I32|>
+  $a: = Arc<|I32|>.new(7)
+  w: = a.downgrade()
+  return w
+
+priv fn weak_arc_after_drop_body()
+  $w: = make_dropped_weak_arc()
+  $upgrade_failed: = false
+  $ph: = w.upgrade() catch
+    upgrade_failed = true
+    fallback Arc<|I32|>.new(0)
+  assert(upgrade_failed, "upgrade() after the last Arc<T> owner is gone must fail")
+  assert(ph.get()$ == 0, "fallback placeholder must be usable")
+
+fn test_weak_arc_concurrent()
+  verdict
+    .start("[Weak_arc] ARC concurrent downgrade/upgrade atomicity storm test (4 threads x 5000)...")
+  heap_before: = mem.heap_used_bytes()
+  weak_arc_storm_body()
+  weak_arc_after_drop_body()
+  heap_after: = mem.heap_used_bytes()
+  assert(heap_after == heap_before,
+    "heap must return to the baseline after the storm + after-drop scenario")
+  verdict
+    .pass("The value survives simultaneous downgrade/upgrade on 4 threads and is freed \
+      automatically in the end, with no leak.")

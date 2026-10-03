@@ -1,0 +1,37 @@
+//< The diagnostics for mistyping a closure's capture list (`fn(x: I32; n: I32): Bool { … }`)
+//<
+//< Caution: Always place the non-firing side alongside. A correctly written closure has to pass.
+//< Nothing behind the `;` (`fn(x: I32; )`) is rejected by the grammar (capture_list), so no check
+//< for it sits on the desugaring side: an unreachable check "can be written yet does not work".
+// EXPECT: capture 'a' needs a type annotation
+// EXPECT: a capture cannot be marked '$': captures are read-only
+// EXPECT: a closure with captures must take exactly 1 or 2 parameters
+import "std/io"
+
+priv fn apply1(p: Callable1<|I32, Bool|>): Bool
+  return p.call(9)
+
+fn main(): I32
+  a: = 1
+  $b: = 2
+  c: = 3
+  ok: = 5
+  // A capture with the type omitted. A declaration written in a signature must have a type
+  // annotation (`../../../docs/SPEC-language.md` §4.1).
+  bad_no_type: = apply1(fn(x: I32; a): Bool {
+    return x > a;
+  })
+  // A capture is read-only, so a `$` cannot be attached.
+  bad_mut: = apply1(fn(x: I32; $b: I32): Bool {
+    return x > b;
+  })
+  // Zero arguments. It hits neither Callable1 nor Callable2.
+  bad_arity: = apply1(fn(; c: I32): Bool {
+    return c > 0;
+  })
+  // The passing side.
+  good: = apply1(fn(x: I32; ok: I32): Bool {
+    return x > ok;
+  })
+  io.out().s("\{bad_no_type\}\{bad_mut\}\{bad_arity\}\{good\}\n")
+  return 0

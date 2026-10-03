@@ -1,0 +1,288 @@
+//< Tests on one byte or one character, and functions that only read or slice a `U8[]`
+//<
+//< **Nothing here allocates**, so it can be used from anywhere, including a freestanding build
+//< with no heap. The functions that allocate and build new strings are in `std/str`.
+
+// ==========================================
+// Caution: **Put only code that does not allocate here** (the axis of the split, and what cannot
+// be moved, are in "String functions are split by whether they allocate" in
+// `std/docs/DESIGN.md`).
+// Anything that needs an `Arena`, a `List` or a `Str_builder` belongs in `std/str`.
+// ==========================================
+import "std/libc"
+// Caution: **Keep this import on a freestanding build.** `starts_with` and `ends_with` call
+// `libc.memcmp`, which there is the one `std/mem` defines: importing only this file fails to link.
+#cfg(freestanding)
+import "std/mem" as _mem
+
+// The reading methods.
+// Caution: **Make the target a slice of immutable elements.** With a `$`, a `U8[]` could not call
+// these methods. Without one, a mutable slice still reaches them by one level of weakening
+// (`../docs/DESIGN.md`'s "Making a single instantiation the target of an impl").
+impl U8[]
+  pub fn next_codepoint( //< how far to step to the next code point; 0 when offset is past the end
+    r: U8[],
+    offset: Sz, //< where the code point begins; a truncated tail steps only to the end
+  ): Sz
+    // offset < 0 too: Sz is signed, and a negative offset would read before r.ptr.
+    if offset < 0 || offset >= r.len
+      return 0
+    c: = (r.ptr + offset)$
+    // A lead byte's high bits (0xxxxxxx/110xxxxx/1110xxxx/11110xxx) give the width
+    width: Sz =
+      (1 if (c & 0x80) == 0 else 2 if (c & 0xE0) == 0xC0 else 3 if (c & 0xF0) == 0xE0
+      else 4 if (c & 0xF8) == 0xF0 else 1)
+    // A sequence cut off at the end steps only to the end; otherwise `i += step` runs past `len`.
+    remain: = r.len - offset
+    return width if width <= remain else remain
+
+  pub fn hex4( //< four hex digits as a number, or -1 when there are not four
+    //<
+    //< Four, because every `\uXXXX` that uses it (JSON, KSPL, KSPEG) has four.
+    r: U8[],
+    at: Sz, //< where the four digits begin
+  ): I32
+    if at < 0 || at + 4 > r.len
+      return -1
+    $v: I32 = 0
+    for k in Range.asc(4)
+      d: = (r.ptr + at + k).hex_val()
+      if d < 0
+        return -1
+      v = v * 16 + d
+    return v
+
+  pub fn count_codepoints(r: U8[]): Sz //< how many code points it holds
+    //<
+    //< **It is not the byte count**: it counts only lead bytes, not `10xxxxxx`. **It does not stop
+    //< even on a broken string.**
+    $n: Sz = 0
+    for $i: Sz = 0; i < r.len; i += 1
+      if ((r.ptr + i)$ & 0xc0) != 0x80
+        n += 1
+    return n
+
+  pub fn contains_nul(r: U8[]): Bool //< whether a NUL byte appears anywhere in it
+    //<
+    //< The check to run before passing a string across the C boundary (see `to_cstr`).
+    for i in Range.asc(r.len)
+      if (r.ptr + i)$ == 0U8
+        return true
+    return false
+
+  pub fn compare(r: U8[], b: U8[]): I32 //< -1, 0 or 1 by bytes, for sorting
+    //<
+    //< Like C's strcmp, it compares bytes, not a locale's collation; pass it to `seq.order_by`.
+    //< `U8[]` has no `<`, since `<` would not say whether it compares contents or pointers.
+    n: = r.len if r.len < b.len else b.len
+    for i in Range.asc(n)
+      x: = (r.ptr + i)$
+      y: = (b.ptr + i)$
+      if x != y
+        return -1 if x < y else 1
+    return 0 if r.len == b.len else (-1 if r.len < b.len else 1)
+
+  pub fn equals_ignore_case(r: U8[], b: U8[]): Bool //< the same text, ignoring ASCII case
+    //<
+    //< For a name whose case is not fixed, such as an HTTP header name. ASCII only: no Unicode
+    //< folding (ß→ss).
+    if r.len != b.len
+      return false
+    for i in Range.asc(r.len)
+      if (r.ptr + i).to_lower() != (b.ptr + i).to_lower()
+        return false
+    return true
+
+  pub fn starts_with( //< whether the text appears at that position
+    //<
+    //< **Omitting `offset` and writing `0` call the same function** (a default argument; the rule
+    //< is "A default argument is allowed only for a foldable constant" in docs/DESIGN.md).
+    r: U8[],
+    prefix: U8[], //< the text to look for
+    offset: Sz = 0, //< where to look; omitted, the start
+  ): Bool
+    // offset < 0 too: Sz is signed, and a negative offset would make memcmp read before r.ptr.
+    if offset < 0 || offset + prefix.len > r.len
+      return false
+    if prefix.len == 0
+      return true
+    return libc.memcmp(Void$@::(r.ptr + offset), Void$@::prefix.ptr, prefix.len) == 0
+
+  pub fn ends_with(r: U8[], suffix: U8[]): Bool //< whether the text appears at the end
+    if r.len < suffix.len
+      return false
+    if suffix.len == 0
+      return true
+    start: = r.len - suffix.len
+    return libc.memcmp(Void$@::(r.ptr + start), Void$@::suffix.ptr, suffix.len) == 0
+
+  pub fn strip_prefix(r: U8[], prefix: U8[]): U8[] //< a view past the prefix, or the whole string
+    //<
+    //< Python's `str.removeprefix`. Use it instead of `x.sub_from(7)`, whose count silently goes
+    //< wrong when the string changes.
+    return r.sub_from(prefix.len) if r.starts_with(prefix) else r
+
+  pub fn strip_suffix(r: U8[], suffix: U8[]): U8[] //< a view without the suffix, or all of it
+    return r.sub(0, r.len - suffix.len) if r.ends_with(suffix) else r
+
+  pub fn find_char(r: U8[], ch: U8): I32 //< where the byte first appears, or -1
+    for i in Range.asc(r.len)
+      if (r.ptr + i)$ == ch
+        return I32::i
+    return -1
+
+  pub fn rfind_char(r: U8[], ch: U8): I32 //< where the byte last appears, or -1
+    for $i: = I32::r.len - 1; i >= 0; i -= 1
+      if (r.ptr + i)$ == ch
+        return i
+    return -1
+
+  pub fn find_str(r: U8[], target: U8[]): I32 //< where the text first appears, or -1
+    if target.len == 0
+      return 0
+    if r.len < target.len
+      return -1
+    for $i: = 0; i <= r.len - target.len; i += 1
+      if r.starts_with(target, i)
+        return i
+    return -1
+
+  pub fn count_str( //< how many times the text appears, without overlaps
+    //<
+    //< **It counts from the start, and each match steps past itself** (the same places `std/str`'s
+    //< `replace` replaces), so `"aaaa"` holds `"aa"` twice. **An empty text counts as zero**, as
+    //< `replace` replaces none.
+    r: U8[],
+    target: U8[], //< the text to count
+  ): Sz
+    if target.len == 0
+      return 0
+    $seen: Sz = 0
+    $i: Sz = 0
+    for i + target.len <= r.len
+      if r.starts_with(target, i)
+        seen += 1
+        i += target.len
+      else
+        i += 1
+    return seen
+
+  pub fn trim_start(r: U8[]): U8[] //< a view past the leading whitespace
+    //<
+    //< All three return a **view**, valid as long as `r` is, and share `U8.is_space`.
+    $s: Sz = 0
+    for s < r.len && (r.ptr + s).is_space()
+      s += 1
+    return "" if s >= r.len else U8[]::{ .ptr = r.ptr + s, .len = r.len - s }
+
+  pub fn trim_end(r: U8[]): U8[] //< a view without the trailing whitespace
+    $e: = r.len
+    for e > 0 && (r.ptr + e - 1).is_space()
+      e -= 1
+    return "" if e == 0 else U8[]::{ .ptr = r.ptr, .len = e }
+
+  pub fn trim_spaces(r: U8[]): U8[] //< a view with the whitespace at both ends dropped
+    return r.trim_start().trim_end()
+
+impl U8
+  pub fn is_space(r: Self): Bool //< a space, a tab, a newline or a carriage return
+    return r == ' ' || r == '\t' || r == '\n' || r == '\r'
+  pub fn is_digit(r: Self): Bool //< `0`-`9`
+    return (r >= '0') && (r <= '9')
+  pub fn is_alpha(r: Self): Bool //< an ASCII letter or `_`, so it can start an identifier
+    //<
+    //< Unlike C's isalpha, it counts '_' as a letter.
+    return r.is_lower() || r.is_upper() || r == '_'
+  pub fn is_alnum(r: Self): Bool //< `is_alpha` or `is_digit`
+    return r.is_alpha() || r.is_digit()
+
+  pub fn is_upper(r: Self): Bool //< `A`-`Z` only; `_` does not count
+    //<
+    //< **The range differs from `is_alpha`'s.** Use it where a capital first letter marks a type
+    //< name.
+    return (r >= 'A') && (r <= 'Z')
+  pub fn is_lower(r: Self): Bool //< `a`-`z` only; `_` does not count
+    return (r >= 'a') && (r <= 'z')
+
+  pub fn to_lower(r: Self): U8 //< the lower-case letter, or the byte unchanged
+    //<
+    //< ASCII only.
+    return U8::(r + 32) if r.is_upper() else r
+
+  pub fn hex_val(r: Self): I32 //< the value of one hex digit, or -1 if it is not one
+    //<
+    //< An `I32`, so -1 can be told apart.
+    if r.is_digit()
+      return r - '0'
+    if r >= 'a' && r <= 'f'
+      return (r - 'a') + 10
+    if r >= 'A' && r <= 'F'
+      return (r - 'A') + 10
+    return -1
+
+  priv fn cstr_len(r: Self$@): Sz //< the length of a NUL-terminated run starting here
+    $len: Sz = 0
+    for (r + len)$ != 0U8
+      len += 1
+    return len
+
+  fn to_slice(r: Self$@): U8$[]
+    return U8$[]::{ .ptr = r, .len = r.cstr_len() }
+
+pub fn codepoint_len( //< how many bytes a code point takes in UTF-8, 1 to 4
+  //<
+  //< **The count has its own function**, to get a `\uXXXX`'s length with no buffer to write to.
+  //< **Refuse a surrogate (D800-DFFF) and anything over 10FFFF before passing it**; otherwise an
+  //< invalid sequence is written and fails only later.
+  //< Caution: `codepoint_byte`'s `i` must be less than this (beyond it, the last byte is returned).
+  cp: I32, //< the code point; the caller has already checked it is valid
+): Sz //< the byte count; anything from 10000 up counts as 4
+  return 1 if cp < 0x80 else 2 if cp < 0x800 else 3 if cp < 0x10000 else 4
+
+pub fn codepoint_byte( //< one byte of a code point's UTF-8 encoding
+  cp: I32, //< the code point; the caller has already checked it is valid
+  i: Sz, //< which byte; below `codepoint_len`
+): U8 //< the byte at `i`; past the end, the last byte
+  n: = codepoint_len(cp)
+  k: = i if i > 0 && i < n else (0 if i <= 0 else n - 1)
+  lead: I32 = 0xc0 if n == 2 else 0xe0 if n == 3 else 0xf0
+  return (U8::cp if n == 1 else U8::(lead + (cp >> ((n - 1) * 6))) if k == 0
+    else U8::(0x80 + ((cp >> ((n - 1 - k) * 6)) & 0x3f)))
+
+// A zero-copy view, **one method for every element type** (`std/seq`'s `take` / `skip` copy into
+// a `List`). Out of range, it returns empty.
+// Caution: **Do not build the descriptor by hand.** `sub_count` keeps the clamping in one place.
+impl<|T|> T[]
+  pub fn sub( //< a view of part of it, without copying; out of range gives empty
+    r: T[],
+    start: Sz, //< where the part begins
+    len: Sz, //< the most it covers; anything past the end is cut
+  ): T[]
+    n: = sub_count(r.len, start, len)
+    return (T[]::{ .ptr = null, .len = 0 } if n == 0
+      else T[]::{ .ptr = r.ptr + start, .len = n })
+
+  pub fn sub_from( //< a view from a position to the end, without copying
+    //<
+    //< Caution: **Do not delegate to `sub`.** For a `U8[]$[]` receiver (what `List<|U8[]|>.slice()`
+    //< returns), the `T` resolved inside disagrees and it fails with "expected 'U8[]$[]', but got
+    //< 'U8[][]'". The clamping stays in `sub_count`.
+    r: T[],
+    start: Sz, //< where the part begins
+  ): T[]
+    n: = sub_count(r.len, start, r.len - start if start >= 0 && start < r.len else 0)
+    return (T[]::{ .ptr = null, .len = 0 } if n == 0
+      else T[]::{ .ptr = r.ptr + start, .len = n })
+
+// The mutable version, for **writing** into the slice.
+// Caution: **Put `$` on the target.** Without it, a mutable view could be made from an
+// immutable receiver ("`impl<|T|> T$[]` is an ordinary generic impl" in `../docs/DESIGN.md`).
+impl<|T|> T$[]
+  pub fn sub_mut( //< a writable view of part of it, without copying
+    r: T$[],
+    start: Sz, //< where the part begins
+    len: Sz, //< the most it covers; anything past the end is cut
+  ): T$[]
+    n: = sub_count(r.len, start, len)
+    return (T$[]::{ .ptr = null, .len = 0 } if n == 0
+      else T$[]::{ .ptr = r.ptr + start, .len = n })

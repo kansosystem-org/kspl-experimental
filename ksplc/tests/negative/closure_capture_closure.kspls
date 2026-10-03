@@ -1,0 +1,28 @@
+//< A closure cannot capture another closure
+//<
+//< The capture's field is the type written (`Callable1<|…|>`), while the synthesised environment
+//< struct comes over, so without the note the user reads `_anon_env_1`, a type they did not write
+//< (anon_env_prefix in ksplc/base/ast.kspls). Handing it over as an **argument** has to pass.
+// EXPECT: a closure's type is its synthesized environment
+// EXPECT: a closure cannot be captured by another closure
+import "std/io"
+
+priv fn app(a: I32, f: Callable1<|I32, I32|>): I32
+  return f.call(a)
+
+priv fn app2(a: I32, g: Callable1<|I32, I32|>, f: Callable2<|I32, I32, I32|>): I32
+  return f.call(a, g.call(a))
+
+fn main(): I32
+  inner: = fn(x: I32; ): I32
+    return x * 3
+  // The stopping side: it tries to capture the inner closure.
+  bad: = app(4, fn(x: I32; inner: Callable1<|I32, I32|>): I32 {
+    return inner.call(x) + 1;
+  })
+  // The passing side: handed over as an argument, they can be combined.
+  ok: = app2(4, inner, fn(_x: I32, gx: I32; ): I32 {
+    return gx + 1;
+  })
+  io.out().s("\{bad\}/\{ok\}\n")
+  return 0

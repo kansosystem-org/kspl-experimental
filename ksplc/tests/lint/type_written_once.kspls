@@ -1,0 +1,54 @@
+//< Annotations that do work, or are the one place the type shows: none is a type written twice
+//<
+//< Deleting any of these would change the variable's type or leave the reader without it. The
+//< widening cast is [I0301]'s alone: deleting the annotation as well would leave the value's own
+//< type. A call in a generic is left alone, its return type being the callee's to settle.
+// EXPECT: [I0301] Unnecessary '::' cast. This numeric conversion is safe and happens implicitly.
+// EXPECT-NOT: [H0312]
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+
+struct Point
+  x: I32
+  y: I32
+
+typedef Spot = Point
+
+enum Kind
+  small
+  big(n: I32)
+
+priv fn is_small(k: Kind): Bool //< whether it is `small` (a tagged union has no built-in `==`)
+  switch k case .small
+    return true
+  default
+    return false
+
+origin: Point = Point::{ .x = 0, .y = 0 }
+
+priv fn gather<|T|>(arena: Arena$@, v: T): List<|T|>
+  $out: List<|T|> = List<|T|>.new(arena)
+  out.push(v)
+  return out
+
+fn main(): I32
+  arena: = Arena.new(4096)
+  defer arena.free()
+  $i: Sz = 0
+  f: F32 = 1.5
+  small: I32 = 7
+  wide: I64 = small
+  widened: I64 = I64::small
+  buf: U8$[] = arena.dup_str("kanso")
+  view: U8[] = buf
+  count: Sz = view.len
+  spot: Spot = Point::{ .x = 1, .y = 2 }
+  near: Point = ::{ .x = 3, .y = 4 }
+  k: Kind = .small
+  flag: Bool = count > 2
+  i += 1
+  got: = gather<|I32|>(arena, small)
+  if flag && is_small(k)
+    io.out().s("\{i\} \{f\} \{wide + widened\} \{spot.x + near.y + origin.x\} \{got.len\}").c('\n')
+  return 0

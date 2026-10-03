@@ -1,0 +1,436 @@
+#!/usr/bin/env -S ksplc run
+//< The tests that start threads, built with ThreadSanitizer, run with no data race reported
+//<
+//< **This stands where a type-system check does not** ("5.1 Why data races are not prevented by
+//< the type system" in `docs/DESIGN.md`): it finds the races the tests reach, never the ones they
+//< miss. A report fails the gate, the runtime's and libc's included, and nothing is suppressed.
+//< **Mandatory where `KANSO_REQUIRE_TSAN=1`** (`mk/test.mk` sets it on Linux, whose image holds the
+//< sanitizer); elsewhere a C compiler without it gives a `SKIP` line, never a silent pass.
+//< Caution: **A file that starts a thread is compiled into a program here or named in `left_out`**,
+//< so a new one cannot stay outside the gate unseen.
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+import "tests/support/harness"
+
+// -O1, as ThreadSanitizer advises for its speed; `-g` and the frame pointer keep a report's stack
+// readable down to the `.kspls` line.
+priv const tsan_cflags: U8[][5] = ::{ "-std=c99", "-O1", "-g", "-fno-omit-frame-pointer",
+  "-fsanitize=thread" }
+
+priv const self_path: U8[] = "tests/suite/race_test.kspls"
+priv const race_stack_kib: U8[] = "4096" //< the stack limit every raced run starts under, in KiB
+  //<
+  //< **The sanitizer, not the program, sets it**: past about 8 MiB of the main thread's stack,
+  //< ThreadSanitizer crashes inside itself in a third to half of runs (measured; 7 MiB never), and
+  //< std's stack test walks to the end of whatever limit it is given, which the shell that starts
+  //< the gate settles (CI's container gives more than 8 MiB).
+priv const report_head: U8[] = "WARNING: ThreadSanitizer:" //< the line that opens one report
+
+struct Left_out //< a file that starts threads and that no program here runs, with why
+  path: U8[]
+  why: U8[]
+
+priv const left_out: Left_out[4] = ::{
+  Left_out::{ .path = "tools/ai_assist/build_corpus.kspls", .why = "a tool no gate runs" },
+  Left_out::{ .path = "tools/ai_assist/make_error_fix.kspls", .why = "a tool no gate runs" },
+  Left_out::{ .path = "ksplc/tests/negative/move_only_borrow_is_ok.kspls",
+    .why = "compiled to be refused or accepted, never run" },
+  Left_out::{ .path = "ksplc/tests/suite/emit_runtime_test.kspls",
+    .why = "it only reads the runtime's text for the name" },
+}
+
+// The race written on purpose: two threads add to one global with no lock.
+priv const racy_source: U8[] =
+  """
+import "std/thread"
+
+priv $shared: I32 = 0
+
+#export
+fn bump(arg: I32$@): Void$@
+  shared += arg$
+  return null
+
+fn main(): I32
+  $one: I32 = 1
+  t: = thread.Thread.spawn<|I32|>(bump, one@) catch
+    return 2
+  shared += 1
+  t.join_and_free()
+  return 0
+"""
+
+priv const summary_head: U8[] = "SUMMARY: ThreadSanitizer: " //< the line that closes one
+priv const global_head: U8[] = "  Location is global '" //< where the report names the variable
+
+priv fn races_in(text: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< One line per report in a sanitizer's log: its summary, and the global it names
+  //<
+  //< **The global goes with it**: an error's trace records at a `?`, so a summary alone points
+  //< at the `?` and not at what raced. **A pure function of one text** (`report_samples`).
+  $out: = List<|U8[]|>.new(arena)
+  $open: = false
+  $on: U8[] = ""
+  for line in text.lines(arena)
+    if line.starts_with(report_head)
+      if open
+        out.push(report_head)
+      open = true
+      on = ""
+    else if open && line.starts_with(global_head)
+      rest: = line.sub_from(global_head.len)
+      on = rest.sub(0, rest.find_char('\''))
+    else if open && line.starts_with(summary_head)
+      what: = line.sub_from(summary_head.len)
+      out
+        .push(what if on.len == 0
+        else arena.text().s(what).s(" (on `").s(on).s("`)").take())
+      open = false
+  if open
+    out.push(report_head)
+  return out
+
+priv fn tallied(races: List<|U8[]|>@, arena: Arena$@): U8[] //<
+  //< Each distinct report once, with how many times it came, the root's prefix cut off its paths
+  $seen: = List<|U8[]|>.new(arena)
+  $counts: = List<|Sz|>.new(arena)
+  prefix: = arena.text().s(harness.root()).c('/').take()
+  for k in Range.asc(races.len)
+    short: = races.get(k).replace(prefix, "", arena)
+    $at: Sz = -1
+    for i in Range.asc(seen.len)
+      if seen.get(i).equals(short)
+        at = i
+    if at < 0
+      seen.push(short)
+      counts.push(1)
+    else
+      counts.set(at, counts.get(at) + 1)
+  out: = arena.text()
+  for i in Range.asc(seen.len)
+    out.s("\{counts.get(i)\}x ").s(seen.get(i)).c('\n')
+  return out.take()
+
+struct Sample
+  text: U8[]
+  races: Sz
+
+priv const report_samples: Sample[4] = ::{
+  Sample::{ .text =
+    "==1==\nWARNING: ThreadSanitizer: data race (pid=1)\n  Write of size 4\n\n  Location is global \
+      'n' of size 4\nSUMMARY: ThreadSanitizer: data race a.kspls:3 in f\n", .races = 1 },
+  Sample::{ .text =
+    "WARNING: ThreadSanitizer: data race\nWARNING: ThreadSanitizer: lock-order-inversion\n",
+    .races = 2 },
+  // A forked child's leftover count, with no report of its own.
+  Sample::{ .text = "ThreadSanitizer: reported 17 warnings\n", .races = 0 },
+  Sample::{ .text = "", .races = 0 },
+}
+
+priv fn check_reading_fires(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  for s in report_samples
+    if races_in(s.text, arena).len != s.races
+      bad.push(arena.text().s("misread: ").s(s.text).take())
+  verdict.check_list("a sanitizer's report is read as one race each", report_samples.len, "samples",
+    bad@, "the table is `report_samples`")
+
+struct Built //< an executable, or why it was not built
+  exe: U8[]
+  why: U8[]
+  deps: U8[] //< the sources it was compiled from, one whole path a line
+
+priv fn words_of(topic: U8[], out: List<|U8[]|>$@, arena: Arena$@): Bool //<
+  //< Appends what `ksplc info <topic>` answers, word by word
+  //<
+  //< Caution: **Do not copy the link words here**; ksplc knows them.
+  r: = harness.run(U8[][]::{ harness.ksplc_exe(), "info", topic })
+  if r.code != 0
+    return false
+  for w in r.out.trim_spaces().split(' ', arena)
+    if w.len > 0
+      out.push(w)
+  return true
+
+priv fn build(dir: U8[], entry: U8[], exe: U8[], arena: Arena$@): Built //<
+  //< Compiles entry (from the folder dir) to C and links it with the sanitizer into exe
+  c: = arena.text().s(exe).s(".c").take()
+  libs: = arena.text().s(exe).s(".libs").take()
+  deps: = arena.text().s(exe).s(".deps").take()
+  gen: = harness.run_in(U8[][]::{ harness.ksplc_exe(),
+    arena.text().s("--std-dir=").s(harness.std_dir()).take(),
+    arena.text().s("--pkg-src-dir=").s(harness.root()).take(),
+    arena.text().s("--emit-libs=").s(libs).take(),
+    arena.text().s("--emit-deps=").s(deps).take(), entry, c }, dir)
+  if gen.code != 0
+    return Built::{ .why = arena.text().s("ksplc cannot compile it:\n").s(gen.out).take() }
+  $argv: = List<|U8[]|>.new(arena)
+  argv.push(harness.cc())
+  for f in tsan_cflags
+    argv.push(f)
+  argv.push(c)
+  argv.push(arena.text().c('@').s(libs).take())
+  if !words_of("exe-flags", argv@, arena) || !words_of("link-libs", argv@, arena)
+    return Built::{ .why = "the link words cannot be asked of ksplc" }
+  argv.push("-o")
+  argv.push(exe)
+  linked: = harness.run(argv.slice())
+  if linked.code != 0
+    return Built::{ .why = arena.text().s("it does not link:\n").s(linked.out).take() }
+  listed: = io.read_file(deps) catch
+    fallback ""
+  // A package's own files are listed from its folder; each path is made whole here.
+  whole: = arena.text()
+  for line in listed.lines(arena)
+    at: = line.find_char(' ')
+    if at > 0
+      path: = line.sub_from(at + 1)
+      whole.s(path if sys.is_absolute(path) else fs.join(dir, path, arena)).c('\n')
+  return Built::{ .exe = exe, .deps = whole.take() }
+
+priv fn reports_in(log_dir: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< Every race the sanitizer logged under log_dir, one process's log per `tsan.<pid>`
+  $out: = List<|U8[]|>.new(arena)
+  names: = fs.read_dir(log_dir, arena) catch
+    return out
+  for name in names
+    if name.starts_with("tsan.")
+      text: = io.read_file(fs.join(log_dir, name, arena)) catch
+        fallback ""
+      for r in races_in(text, arena)
+        out.push(r)
+  return out
+
+struct Raced //< one sanitized run: the check it reports to, where it runs, and what
+  name: U8[] //< the check; several runs may share one, and it fails if any of them does
+  dir: U8[] //< the working directory
+  argv: U8[][] //< the program and its arguments
+  log_dir: U8[] //< the folder its processes' sanitizer logs go to, one per check
+  env: U8[][] //< `NAME=value` pairs for this run alone
+
+priv fn run_all_raced(runs: List<|Raced|>@, work: U8[], arena: Arena$@) //<
+  //< Runs every run side by side, then reports one check per name, in the order first named
+  //<
+  //< **The parts run at once**: under the sanitizer one kssrv server run takes about a minute,
+  //< and there are seven. **Each process writes its own log** (`tsan.<pid>`), so a child the
+  //< program starts (kssrv's server) is heard too. **Each check has its own log folder**, set
+  //< per run through `env`, so a report lands on the check whose run made it. A run also fails on
+  //< its exit code: the sanitizer exits 66 on a report.
+  //< Caution: **Give each run that writes files a folder of its own**: they run at once.
+  $jobs: = List<|subproc.Job|>.new(arena)
+  for i in Range.asc(runs.len)
+    r: = runs.get(i)
+    fs.mkdir_all(r.log_dir) catch {}
+    $argv: = List<|U8[]|>.new(arena)
+    for w in U8[][]::{ "sh", "-c", "ulimit -s \"$0\" && exec \"$@\"", race_stack_kib, "env" }
+      argv.push(w)
+    argv
+      .push(arena.text().s("TSAN_OPTIONS=log_path=").s(fs.join(r.log_dir, "tsan", arena)).take())
+    for e in r.env
+      argv.push(e)
+    for a in r.argv
+      argv.push(a)
+    jobs.push(subproc.Job::{ .argv = argv.slice(), .cwd = r.dir })
+  outs: = verdict.run_children(jobs.slice(), fs.join(work, "jobs", arena), arena)
+  for i in Range.asc(runs.len)
+    name: = runs.get(i).name
+    $first: = true
+    for j in Range.asc(i)
+      first = first && !runs.get(j).name.equals(name)
+    if !first
+      continue
+    races: = reports_in(runs.get(i).log_dir, arena)
+    why: = arena.text().s(tallied(races@, arena))
+    $ended: = true
+    for j in Range.asc(runs.len)
+      if runs.get(j).name.equals(name) && outs.get(j).code != 0
+        ended = false
+        if races.len == 0
+          why.s("it ended with \{outs.get(j).code\} and no report:\n").s(outs.get(j).out)
+    if races.len > 0
+      why.s("the whole reports are in ").s(runs.get(i).log_dir)
+    verdict.check(name, races.len == 0 && ended, why.take())
+
+priv fn sanitizer_runs(work: U8[], arena: Arena$@): U8[] //<
+  //< Empty where the C compiler builds and runs a program with the sanitizer; else what it said
+  c: = fs.join(work, "probe.c", arena)
+  exe: = fs.join(work, "probe.exe", arena)
+  io.write_file(c, "int main(void) { return 0; }\n") catch
+    return "cannot write the probe"
+  built: = harness.run(U8[][]::{ harness.cc(), "-fsanitize=thread", c, "-o", exe })
+  if built.code != 0
+    return built.out
+  ran: = harness.run(U8[][]::{ exe })
+  return ("" if ran.code == 0
+    else arena.text().s("it builds but does not run:\n").s(ran.out).take())
+
+priv fn check_fires(work: U8[], arena: Arena$@) //<
+  //< The race written on purpose is reported, through the same build and run as the tests
+  src: = fs.join(work, "racy.kspls", arena)
+  io.write_file(src, racy_source) catch
+    verdict.check("a race written on purpose is reported", false, "cannot write it")
+    return
+  b: = build(work, src, fs.join(work, "racy.exe", arena), arena)
+  if b.exe.len == 0
+    verdict.check("a race written on purpose is reported", false, b.why)
+    return
+  log_dir: = fs.join(work, "racy_log", arena)
+  fs.mkdir_all(log_dir) catch {}
+  sys.set_env("TSAN_OPTIONS",
+    arena.text().s("log_path=").s(fs.join(log_dir, "tsan", arena)).take())
+  harness.run_in(U8[][]::{ b.exe }, work)
+  sys.unset_env("TSAN_OPTIONS")
+  verdict.check("a race written on purpose is reported", reports_in(log_dir, arena).len > 0,
+    "the program built with the sanitizer ran and nothing was reported")
+
+priv fn race_debug(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena: Arena$@) //<
+  //< Every package's own tests in one program, as `make debug` runs them
+  name: = "the tests `make debug` runs run with no data race"
+  root: = harness.root()
+  b: =
+    build(root, fs.join(root, "tests/debug/main.kspls", arena),
+    fs.join(work, "debug_tests.exe", arena), arena)
+  if b.exe.len == 0
+    verdict.check(name, false, b.why)
+    return
+  deps.s(b.deps)
+  runs
+    .push(Raced::{ .name = name, .dir = root, .argv = kept(U8[][]::{ b.exe }, arena),
+    .log_dir = fs.join(work, "debug_log", arena), .env = kept(U8[][]::{}, arena) })
+
+priv fn kept(words: U8[][], arena: Arena$@): U8[][] //< the words, copied onto the arena
+  //<
+  //< Caution: **A run keeps its words past the call that names them**, so a literal list (on that
+  //< call's frame) is copied here first.
+  $out: = List<|U8[]|>.new(arena)
+  for w in words
+    out.push(w)
+  return out.slice()
+
+priv fn pkg_env(arena: Arena$@): U8[][] //<
+  //< What a package's tests that start a child compiler, or name another package, find them by
+  return kept(U8[][]::{ arena.text().s("KSPLC_STD_DIR=").s(harness.std_dir()).take(),
+    arena.text().s("KSPLC_PKG_SRC_DIR=").s(harness.root()).take() }, arena)
+
+priv fn build_all(name: U8[], pkg: U8[], entries: U8[][], work: U8[], deps: Str_builder$@,
+  arena: Arena$@): List<|U8[]|> //<
+    //< Builds each entry (named from the root) in the package's folder; empty where one fails
+  $exes: = List<|U8[]|>.new(arena)
+  dir: = fs.join(harness.root(), pkg, arena)
+  for i in Range.asc(entries.len)
+    stem: = arena.text().s(pkg).s("_\{i\}.exe").take()
+    b: =
+      build(dir, fs.join(harness.root(), entries[i], arena), fs.join(work, stem, arena), arena)
+    if b.exe.len == 0
+      verdict.check(name, false, b.why)
+      return List<|U8[]|>.new(arena)
+    deps.s(b.deps)
+    exes.push(b.exe)
+  return exes
+
+priv fn race_kssrv(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena: Arena$@) //<
+  //< kssrv's tests and the server they start, all sanitized (`kssrv/Makefile`'s `test`)
+  //<
+  //< **One run per server run**, each in a folder of its own, the names asked of the tests
+  //< (`--runs`) rather than copied here.
+  name: = "kssrv's tests and the server they start run with no data race"
+  exes: =
+    build_all(name, "kssrv",
+    U8[][]::{ "kssrv/main.kspls", "kssrv/tests/spew.kspls", "kssrv/tests/main.kspls" }, work, deps,
+    arena)
+  if exes.len == 0
+    return
+  listed: = harness.run(U8[][]::{ exes.get(2), "--runs" })
+  if listed.code != 0
+    verdict.check(name, false,
+      arena.text().s("its runs cannot be asked of it:\n").s(listed.out).take())
+    return
+  for one in listed.out.lines(arena)
+    if one.trim_spaces().len == 0
+      continue
+    run_name: = arena.dup_str(one.trim_spaces())
+    tmp: = fs.join(work, arena.text().s("kssrv_work_").s(run_name).take(), arena)
+    argv: =
+      kept(U8[][]::{ exes.get(2), exes.get(0), exes.get(1), harness.ksplc_exe(), tmp, run_name },
+      arena)
+    dir: = fs.join(harness.root(), "kssrv", arena)
+    log_dir: = fs.join(work, "kssrv_log", arena)
+    runs
+      .push(Raced::{ .name = name, .dir = dir, .argv = argv, .log_dir = log_dir,
+      .env = pkg_env(arena) })
+
+priv fn race_ksai(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena: Arena$@) //<
+  //< ksai's examples and the tests that run them (`ksai/Makefile`'s `test`)
+  //<
+  //< fim_coder trains on two threads there.
+  name: = "ksai's examples and their tests run with no data race"
+  exes: =
+    build_all(name, "ksai",
+    U8[][]::{ "ksai/examples/llama_engine/main.kspls", "ksai/examples/qwen_infer/main.kspls",
+    "ksai/examples/fim_coder/main.kspls", "ksai/tests/examples_main.kspls" }, work, deps, arena)
+  if exes.len == 0
+    return
+  tmp: = fs.join(work, "ksai_work", arena)
+  argv: =
+    kept(U8[][]::{ exes.get(3), exes.get(0), exes.get(1), exes.get(2), tmp }, arena)
+  dir: = fs.join(harness.root(), "ksai", arena)
+  log_dir: = fs.join(work, "ksai_log", arena)
+  runs
+    .push(Raced::{ .name = name, .dir = dir, .argv = argv, .log_dir = log_dir,
+    .env = pkg_env(arena) })
+
+priv fn check_covered(deps: U8[], arena: Arena$@) //<
+  //< Every tracked source that starts a thread is compiled into a program above, or left out
+  read: = deps.lines(arena)
+  $seen: Sz = 0
+  $bad: = List<|U8[]|>.new(arena)
+  for rel in harness.tracked_matching(U8[][]::{ "*.kspls" })
+    text: = harness.read_under_root(rel)
+    // This file's own spawn is the race written on purpose, raced by `check_fires`.
+    if rel.equals(self_path) ||
+      (text.find_str("Thread.spawn") < 0 && text.find_str("kspl_thread_spawn") < 0)
+      continue
+    seen += 1
+    full: = fs.join(harness.root(), rel, arena)
+    $held: = false
+    for p in read
+      held = held || p.equals(full)
+    for l in left_out
+      held = held || l.path.equals(rel)
+    if !held
+      bad.push(rel)
+  verdict.check_list("every source that starts a thread is raced or named as left out", seen,
+    "files", bad@, "compile it into a program in this suite, or add it to `left_out` with why")
+
+fn main(): I32
+  arena: = harness.begin(64 * 1024 * 1024)
+  check_reading_fires(arena)
+  work: = harness.sandbox("race") catch
+    return harness.fatal("cannot make a working directory")
+  said: = sanitizer_runs(work, arena)
+  if said.len > 0
+    if sys.get_env("KANSO_REQUIRE_TSAN").unwrap_or("").equals("1")
+      verdict.check("the C compiler builds with ThreadSanitizer", false,
+        arena.text().s("required here, as the image holds it (`.devcontainer/Dockerfile`):\n")
+        .s(said).take())
+    else
+      verdict.skip_check("the tests that start threads, raced",
+        arena.text().s("the C compiler cannot build with ThreadSanitizer: ").s(said).take())
+    return harness.finish()
+  check_fires(work, arena)
+  $deps: = Str_builder.new()
+  defer deps.free()
+  $runs: = List<|Raced|>.new(arena)
+  race_debug(work, deps@, runs@, arena)
+  race_kssrv(work, deps@, runs@, arena)
+  race_ksai(work, deps@, runs@, arena)
+  run_all_raced(runs@, work, arena)
+  check_covered(deps.slice(), arena)
+  return harness.finish()

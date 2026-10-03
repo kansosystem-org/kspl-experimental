@@ -1,0 +1,292 @@
+import "std/io"
+import "std/net"
+import "std/str"
+import "std/thread"
+import "std/verdict"
+
+// ==========================================
+// std/net: real loopback traffic over TCP and UDP. The TCP server accept()s on a separate thread
+// and echoes what it receives.
+// ==========================================
+#export
+fn net_tcp_echo_server(listener: net.Tcp_listener$@): Void$@
+  conn: = listener.accept() catch panic("accept should succeed once the client connects")
+  // accept's peer is the client (the loopback, on an ephemeral port).
+  $peer_host: U8[64] = ::{}
+  p: = conn.peer(U8$[]::peer_host) catch panic("peer should succeed on an accepted stream")
+  host: = U8[]::{ .ptr = peer_host[0]@, .len = p.host_len }
+  assert(host.equals("127.0.0.1"), "accepted peer host must be the loopback")
+  assert(p.port > 0, "accepted peer port must be the client's ephemeral port")
+  $buf: U8[64] = ::{}
+  n: = conn.read(U8$[]::buf) catch panic("server read should succeed")
+  conn.write(U8$[]::{ .ptr = buf@, .len = n }) catch panic("server write should succeed")
+  conn.free()
+  return null
+
+// Accepts one connection and closes it (test_tcp_echo checks the data sent back and forth).
+#export
+fn net_accept_once(listener: net.Tcp_listener$@): Void$@
+  conn: = listener.accept() catch panic("accept should succeed once the client connects")
+  conn.free()
+  return null
+
+// ==========================================
+// Connecting by name, and the size of the buffer that receives an address.
+// ==========================================
+
+fn test_net_names() //<
+  //< That connecting by name, resolving a name, and the address buffer's size all work
+  //<
+  //< Caution: **Do not test with an address string alone**: that passes even when name resolution
+  //< is missing. **Do not assume which address `localhost` resolves to**; the listener binds the
+  //< resolved address (the details are beside the bind below).
+  verdict.start("[Net] connecting by name, resolving to an address, and the holder's width test...")
+  $addr: U8[64] = ::{}
+  n: = net.resolve_one("127.0.0.1", U8$[]::addr) catch panic("resolve_one should accept a literal")
+  literal: = U8[]::{ .ptr = addr[0]@, .len = n }
+  assert(literal.equals("127.0.0.1"), "an address string comes back as it stands")
+  ln: = net.resolve_one("localhost", U8$[]::addr) catch panic("resolve_one should resolve localhost")
+  assert(ln > 0, "localhost resolves to an address")
+
+  $bogus: = false
+  _b: = net.resolve_one("no-such-host.invalid", U8$[]::addr) catch e
+    bogus = e == net.Net_error.resolve_failed
+    fallback 0
+  assert(bogus, "a name that does not resolve is refused as resolve_failed")
+
+  // **An empty string is not a name.** Linux reports "no such name" but Windows returns every
+  // address the machine has, so it is refused here.
+  $blank: = false
+  _n: = net.resolve_one("", U8$[]::addr) catch e
+    blank = e == net.Net_error.resolve_failed
+    fallback 0
+  assert(blank, "an empty string is not resolved as a name")
+
+  // **A name too long to copy is refused, not truncated.** C reads this one as `127.0.0.1`, so a
+  // truncated copy would resolve to the loopback.
+  $long_name: U8[300] = ::{}
+  loopback: = "127.0.0.1"
+  for i in Range.asc(loopback.len)
+    long_name[i] = loopback[i]
+  $too_long: = false
+  _l: = net.resolve_one(U8[]::long_name, U8$[]::addr) catch e
+    too_long = e == net.Net_error.resolve_failed
+    fallback 0
+  assert(too_long, "a name longer than the resolver's holder is refused rather than truncated")
+  // **A name holding a NUL is refused, not cut at it.** C would read this one as `127.0.0.1`.
+  $nul_name: U8[11] = ::{}
+  for i in Range.asc(loopback.len)
+    nul_name[i] = loopback[i]
+  nul_name[10] = 'x'
+  $cut: = false
+  _z: = net.resolve_one(U8[]::nul_name, U8$[]::addr) catch e
+    cut = e == net.Net_error.resolve_failed
+    fallback 0
+  assert(cut, "a name holding a NUL is refused rather than cut at the NUL")
+
+  $small: U8[8] = ::{}
+  $narrow: = false
+  _s: = net.resolve_one("127.0.0.1", U8$[]::small) catch e
+    narrow = e == net.Net_error.addr_buffer_too_small
+    fallback 0
+  assert(narrow, "a holder short of addr_text_max is refused rather than truncated")
+
+  // Caution: **Bind the listener to the address `localhost` resolves to.** If it is fixed to
+  // `127.0.0.1` and `localhost` resolves to IPv6 first, the name reaches a different port.
+  $home: U8[64] = ::{}
+  hn: = net.resolve_one("localhost", U8$[]::home) catch panic("resolve_one should resolve localhost")
+  local: = U8[]::{ .ptr = home[0]@, .len = hn }
+  listener: = net.Tcp_listener.bind(local, 17660) catch panic("bind should succeed on a fresh port")
+  t: = thread.Thread.spawn<|net.Tcp_listener|>(net_accept_once, listener) catch panic("thread spawn \
+    failed")
+  client: = net.Tcp_stream.connect("localhost", 17660) catch panic("connect by name should reach \
+    the loopback listener")
+  $peer_host: U8[64] = ::{}
+  p: = client.peer(U8$[]::peer_host) catch panic("peer should succeed on a connected stream")
+  host: = U8[]::{ .ptr = peer_host[0]@, .len = p.host_len }
+  // Caution: **Do not merge the two into one condition**, or the log does not say which differed.
+  assert(host.equals(local), "the address a name connected to is the waiting port's address")
+  assert(p.port == 17660, "the port a name connected to is the waiting port's port")
+  $tight: U8[8] = ::{}
+  $tight_refused: = false
+  _p: = client.peer(U8$[]::tight) catch e
+    tight_refused = e == net.Net_error.addr_buffer_too_small
+    fallback net.Peer_addr::{ .host_len = 0, .port = 0 }
+  assert(tight_refused, "peer refuses a holder that is short too")
+  client.free()
+  t.join_and_free()
+  listener.free()
+
+  $missing: = false
+  _c: = net.Tcp_stream.connect("no-such-host.invalid", 80) catch e
+    missing = e == net.Net_error.resolve_failed
+    fallback null
+  assert(missing,
+    "a connect to a name that does not resolve is refused under a name other than connect_failed")
+
+  $empty: = false
+  _e: = net.Tcp_stream.connect("", 80) catch e
+    empty = e == net.Net_error.resolve_failed
+    fallback null
+  assert(empty, "trying to connect with an empty string is refused as resolving in no environment")
+
+  u: = net.Udp_socket.bind("127.0.0.1", 0) catch panic("udp client bind should succeed")
+  $named: = false
+  _u: = u.send_to("x", "localhost", 17661) catch e
+    named = e == net.Net_error.addr_not_numeric
+    fallback 0
+  assert(named,
+    "writing a name as send_to's destination is refused (it will not look a name up per message)")
+  u.free()
+  verdict
+    .pass("It connects by both a name and an address string, and refuses a name that does not \
+      resolve and a holder that is short, each by name.")
+
+// ==========================================
+// The IPv6 loopback. **It is skipped in an environment with no IPv6** (`socket(AF_INET6)` returns
+// EAFNOSUPPORT).
+// ==========================================
+fn test_tcp_ipv6()
+  verdict.start("[Net] connecting over the IPv6 loopback and peer() test...")
+  listener: = net.Tcp_listener.bind("::1", 17662) catch
+    verdict.skip("this machine has no IPv6 loopback")
+    return
+  t: = thread.Thread.spawn<|net.Tcp_listener|>(net_accept_once, listener) catch panic("thread spawn \
+    failed")
+  client: = net.Tcp_stream.connect("::1", 17662) catch panic("connect should succeed on the IPv6 \
+    loopback")
+  $peer_host: U8[64] = ::{}
+  p: = client.peer(U8$[]::peer_host) catch panic("peer should succeed on a connected stream")
+  host: = U8[]::{ .ptr = peer_host[0]@, .len = p.host_len }
+  assert(host.equals("::1") && p.port == 17662, "an IPv6 address round-trips as text")
+  client.free()
+  t.join_and_free()
+  listener.free()
+  verdict.pass("It connects over the IPv6 loopback, and peer() returns `::1`.")
+
+// ==========================================
+// The overlapped attempts, over candidates where one refuses and one accepts. `connect_over` takes
+// them as given, since what a name resolves to differs per machine.
+// ==========================================
+fn connect_peer(candidates: U8[][], port: I32, peer_host: U8$[]): U8[] //<
+  //< Connects over the candidates and returns the address text of the one that won
+  client: = net.connect_over(candidates, port) catch panic("connect_over should reach the one \
+    candidate that accepts")
+  p: = client.peer(peer_host) catch panic("peer should succeed on a connected stream")
+  client.free()
+  return U8[]::{ .ptr = peer_host.ptr, .len = p.host_len }
+
+priv fn expect_winner(got: U8[], want: U8[]) //<
+  //< names the candidate that won when it is not `want`
+  //<
+  //< The assert after it stops the run; this line says which one won, which the assert cannot.
+  if !got.equals(want)
+    io.err().s("[Net] the overlapped attempts: ").s(got).s(" won where ").s(want).s(" should\n")
+
+fn test_tcp_overlapped()
+  verdict
+    .start("[Net] overlapped attempts: a refusing candidate does not keep the accepting one from \
+      winning...")
+  $peer_host: U8[64] = ::{}
+  // Nothing listens on 127.0.0.2: it refuses on Linux, and on a machine whose loopback holds only
+  // 127.0.0.1 it never answers, which the next attempt overtakes. Either way 127.0.0.1 wins.
+  v4: = net.Tcp_listener.bind("127.0.0.1", 17663) catch panic("bind should succeed on a fresh port")
+  t4: = thread.Thread.spawn<|net.Tcp_listener|>(net_accept_once, v4) catch panic("thread spawn \
+    failed")
+  won4: =
+    connect_peer(U8[][]::{ "127.0.0.2", "127.0.0.1" }, 17663, U8$[]::peer_host)
+  expect_winner(won4, "127.0.0.1")
+  assert(won4.equals("127.0.0.1"), "the accepting candidate wins over a refusing one before it")
+  t4.join_and_free()
+  // The IPv6 loopback refuses, or cannot be opened where there is none: skipped, not a failure.
+  t4b: = thread.Thread.spawn<|net.Tcp_listener|>(net_accept_once, v4) catch panic("thread spawn \
+    failed")
+  won4b: = connect_peer(U8[][]::{ "::1", "127.0.0.1" }, 17663, U8$[]::peer_host)
+  expect_winner(won4b, "127.0.0.1")
+  assert(won4b.equals("127.0.0.1"), "the IPv4 candidate wins over an IPv6 one that refuses")
+  t4b.join_and_free()
+  v4.free()
+
+  $nobody: = false
+  _n: = net.connect_over(U8[][]::{ "127.0.0.1" }, 17665) catch e
+    nobody = e == net.Net_error.connect_failed
+    fallback null
+  assert(nobody, "candidates that all refuse fail as connect_failed")
+  verdict
+    .pass("A candidate that accepts wins over one that refuses or never answers before it, and \
+      candidates that all refuse fail as connect_failed.")
+
+fn test_tcp_overlapped_ipv6()
+  verdict
+    .start("[Net] overlapped attempts: an IPv6 candidate that accepts wins over a refusing IPv4 \
+      one...")
+  $peer_host: U8[64] = ::{}
+  v6: = net.Tcp_listener.bind("::1", 17664) catch
+    verdict.skip("this machine has no IPv6 loopback")
+    return
+  t6: = thread.Thread.spawn<|net.Tcp_listener|>(net_accept_once, v6) catch panic("thread spawn \
+    failed")
+  won6: = connect_peer(U8[][]::{ "127.0.0.1", "::1" }, 17664, U8$[]::peer_host)
+  expect_winner(won6, "::1")
+  assert(won6.equals("::1"), "the accepting IPv6 candidate wins over a refusing IPv4 one before it")
+  t6.join_and_free()
+  v6.free()
+  verdict.pass("The IPv6 candidate that accepts wins over an IPv4 one that refuses before it.")
+
+fn test_tcp_echo()
+  verdict.start("[Net] TCP listener/accept/connect/read/write test (real loopback traffic)...")
+
+  listener: = net.Tcp_listener.bind("127.0.0.1", 17654) catch panic("bind should succeed on a fresh \
+    port")
+  t: =
+    thread.Thread.spawn<|net.Tcp_listener|>(net_tcp_echo_server, listener) catch panic("thread \
+      spawn failed")
+
+  client: = net.Tcp_stream.connect("127.0.0.1", 17654) catch panic("connect should succeed once the \
+    listener is bound")
+  // The client's peer is the server, at the address given to bind.
+  $peer_host: U8[64] = ::{}
+  p: = client.peer(U8$[]::peer_host) catch panic("peer should succeed on a connected stream")
+  host: = U8[]::{ .ptr = peer_host[0]@, .len = p.host_len }
+  assert(host.equals("127.0.0.1") && p.port == 17654, "connected peer must be the server we dialed")
+  sent: = client.write("ping") catch panic("client write should succeed")
+  assert(sent == 4, "client should send exactly 4 bytes")
+
+  $recv_buf: U8[64] = ::{}
+  got: = client.read(U8$[]::recv_buf) catch panic("client read should succeed")
+  echoed: = U8$[]::{ .ptr = recv_buf@, .len = got }
+  assert(got == 4 && echoed.equals("ping"), "server must echo back exactly what was sent")
+
+  client.free()
+  t.join_and_free()
+  listener.free()
+  verdict
+    .pass("The echo round trip over a TCP loopback connection, and peer()'s address on both sides, \
+      are confirmed.")
+
+fn test_udp_echo()
+  verdict.start("[Net] UDP bind/send_to/recv_from test (real loopback traffic)...")
+
+  server: = net.Udp_socket.bind("127.0.0.1", 17655) catch panic("udp bind should succeed on a fresh \
+    port")
+  client: = net.Udp_socket.bind("127.0.0.1", 0) catch panic("udp client bind (ephemeral port) \
+    should succeed")
+
+  sent: = client.send_to("hello-udp", "127.0.0.1", 17655) catch panic("udp send_to should succeed")
+  assert(sent == 9, "should send exactly 9 bytes")
+
+  $recv_buf: U8[64] = ::{}
+  $from_host_buf: U8[64] = ::{}
+  result: = server.recv_from(U8$[]::recv_buf, U8$[]::from_host_buf) catch panic("udp recv_from \
+    should succeed")
+  payload: = U8$[]::{ .ptr = recv_buf@, .len = result.len }
+  from_host: = U8$[]::{ .ptr = from_host_buf@, .len = result.from_host_len }
+  payload_matches: = payload.equals("hello-udp")
+  assert(result.len == 9 && payload_matches, "received payload must match what was sent")
+  assert(from_host.equals("127.0.0.1"), "sender address must be reported correctly")
+
+  client.free()
+  server.free()
+  verdict
+    .pass("Sending and receiving over UDP loopback traffic, and reporting the sender's address, are \
+      confirmed.")

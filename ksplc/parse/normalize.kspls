@@ -1,0 +1,607 @@
+//< Normalizes the raw syntax tree from kspeg into the AST shape
+//<
+//< The entry point for loading and parsing is in `parse/load.kspls`.
+//< **Sema assumes a tree that has been through here.** Removing wrappers, moving modifiers and
+//< folding a type's postfixes (`@` / `$@` / `[]`) all happen here; a sema branch for the raw shape
+//< would hide a gap in the normalization.
+//< **The decision what `#cfg` drops is here too** (`should_drop_by_cfg`); a dropped declaration
+//< is invisible to every later stage.
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_kinds" as base_ast_kinds
+import "ksplc/base/cfg_inactive" as base_cfg_inactive
+import "ksplc/base/core" as base_core
+import "ksplc/parse/normalize_decl" as parse_normalize_decl
+import "ksplc/parse/normalize_stmt" as parse_normalize_stmt
+import "std/ds" { List }
+import "std/io"
+import "std/str" { Str_builder }
+import "std/sys"
+
+const max_parse_tree_depth: Sz = 2000 //<
+  //< The depth guard of normalize_ast and of the raw tree's reader (`to_ast_node` in `load.kspls`)
+  //<
+  //< Both recurse as deep as KSPEG's guard (max_parse_depth in kspeg/rule.kspls) lets the tree
+  //< nest, and walk it before any later guard such as validate_layout (the reason is at
+  //< clone_with / validate_layout_impl in base/ast.kspls).
+
+fn is_expr_wrapper_kind(kind_id: base_ast_kinds.Ast_kind): Bool //<
+  //< The expression kinds whose one-child node only wraps its child, so `elide_node` removes it
+  //<
+  //< **The raw tree's reader never creates them** (`to_ast_node` in `load.kspls`); it asks this
+  //< one list. A statement's wrapper is not on it: its raw child count still changes (the `;` is
+  //< dropped), so the reader and `is_pass_through` would disagree about it.
+  switch kind_id case .k_expr_ternary, .k_expr_catch_chain, .k_expr_or, .k_expr_and, .k_expr_cmp,
+    .k_expr_add, .k_expr_mul, .k_expr_cast, .k_expr_unary, .k_expr_postfix, .k_expr,
+    .k_expr_primary, .k_assign_op, .k_type_arg, .k_string_part, .k_literal
+    return true
+  default
+    return false
+
+impl Ast_node
+  priv fn should_drop_by_cfg(r: Ast_node$@): Bool
+    if r == null
+      return false
+    switch r.get_attribute("cfg") case .some(attr)
+      $is_neg: = false
+      target_str: = attr.cfg_flag_name(is_neg@)
+      // Caution: **Do not drop a shape other than `cfg(flag)` / `cfg(!flag)`**; kept, sema's
+      // check_attributes reports it with a position (see cfg_flag_name in base/ast_ext.kspls).
+      if target_str.len == 0
+        return false
+      $found: = false
+      if base_core.config.defines != null
+        for defined_flag in base_core.config.defines
+          if defined_flag.equals(target_str)
+            found = true
+            break
+      drop: = found if is_neg else !found
+      if drop
+        // Caution: **Take the range before the morph**: a dropped node becomes `empty` and loses
+        // its extent, and the LSP uses this range to explain why nothing shows there.
+        span: = r.get_span_length()
+        base_cfg_inactive.record_cfg_inactive(r.loc.file(), r.loc.offset, span, target_str, is_neg)
+      return drop
+    case .none
+      return false
+
+  fn normalize_ast(r: Ast_node$@, src: U8$[], depth: Sz): Option<|Ast_node$@|>
+    if r == null
+      return Option<|Ast_node$@|>.none
+    if depth >= max_parse_tree_depth
+      io.err()
+        .s("\nfatal: AST nesting too deep to normalize (possible unbounded recursive construct).\n")
+      sys.exit(1)
+    // **Move the attributes onto the declaration first, then decide `#cfg`.** Written before the
+    // declaration, they parse as children of the enclosing node (an `impl` block, say); in the
+    // other order, the `impl` reads "a `#cfg` is on me" and the whole block disappears.
+    r.apply_modifiers_to_targets()
+    if r.should_drop_by_cfg()
+      r.morph(.k_empty, "")
+      return Option<|Ast_node$@|>.some(r)
+    // In place (destructively), saving the allocation of new lists.
+    $write_idx: Sz = 0
+    for $i: = 0; i < r.children.len; i += 1
+      if norm_child: = r.get_child(i).normalize_ast(src, depth + 1)
+        r.children.set(write_idx, norm_child)
+        write_idx += 1
+    r.children.len = write_idx
+
+    switch r.elide_node() case .some(elided)
+      if elided != r
+        return Option<|Ast_node$@|>.some(elided)
+
+      treeified: = elided.treeify_expr()
+      if treeified != null
+        return Option<|Ast_node$@|>.some(treeified.normalize_by_kind())
+      return Option<|Ast_node$@|>.none
+    case .none
+      return Option<|Ast_node$@|>.none
+
+  fn is_modifier(r: Ast_node$@): Bool
+    if r == null
+      return false
+    // Caution: Include the attribute list, which parses onto the wrapper (see normalize_ast);
+    // without it apply_modifiers_to_targets leaves it there and the `#cfg` silently does nothing.
+    if r.kind_id == .k_attribute_list
+      return true
+    if r.kind_id == .k_visibility
+      return true
+    return ((r.text.equals("pub") || r.text.equals("priv"))
+      if r.kind_id == .k_keyword || r.kind_id == .k_literal else false)
+
+  priv fn is_decl_or_stmt(r: Ast_node$@): Bool
+    if r == null
+      return false
+    switch r.kind_id case .k_stmt, .k_top_level_item, .k_decl_top, .k_loop_init, .k_loop_step,
+      .k_stmt_return, .k_stmt_throw, .k_stmt_fallback, .k_stmt_expr, .k_decl_extern,
+      .k_decl_extern_block, .k_decl_extern_struct, .k_decl_var, .k_decl_const, .k_stmt_break,
+      .k_stmt_labeled_block, .k_stmt_continue, .k_decl_embed, .k_decl_alias
+      return true
+    default
+      return false
+
+  priv fn is_pass_through(r: Ast_node$@): Bool //<
+    //< Whether a one-child node only wraps its child
+    //<
+    //< It is a statement's or a declaration's wrapper, or an expression's (`is_expr_wrapper_kind`).
+    if r == null
+      return false
+    switch r.kind_id case .k_empty, .k_stmt, .k_top_level_item, .k_decl_top, .k_loop_init,
+      .k_loop_step
+      return true
+    default
+      return is_expr_wrapper_kind(r.kind_id)
+
+  priv fn is_modifier_target(r: Ast_node$@): Bool //<
+    //< Whether the attributes and visibility are moved onto this node
+    //<
+    //< **Not a statement** (`stmt_if` and the like): parse/normalize_stmt.kspls picks its children
+    //< by kind into fixed positions, and an attribute list placed first would be taken for another
+    //< child. Its attributes stay on the `stmt` wrapper until elide_attributed_stmt moves them to
+    //< the end.
+    if r == null
+      return false
+    switch r.kind_id case .k_decl_extern, .k_decl_extern_block, .k_decl_extern_struct, .k_decl_var,
+      .k_decl_const, .k_decl_embed, .k_decl_alias, .k_decl_struct, .k_decl_enum, .k_decl_trait,
+      .k_decl_fn, .k_decl_fn_proto, .k_decl_impl, .k_decl_import, .k_decl_directive
+      return true
+    default
+      return false
+
+  priv fn elide_attributed_stmt(r: Ast_node$@): Option<|Ast_node$@|> //<
+    //< It handles the attributes put on a statement and removes the `stmt` wrapper
+    //<
+    //< Its one meaningful attribute, `#cfg`, is already applied (`should_drop_by_cfg`).
+    //< Caution: **Discard nothing but `#cfg`**, or an attribute with no effect on a statement
+    //< passes with no diagnostic (Principle 5).
+    if r.kind_id != .k_stmt
+      return Option<|Ast_node$@|>.none
+    // **Check for attributes before allocating a new list** (the reason is at
+    // `clean_and_classify_stmt`).
+    if r.find_child(.k_attribute_list) == null
+      return Option<|Ast_node$@|>.none
+    $inner: Ast_node$@ = null
+    kept: = base_ast.new_ast_node_list()
+    $saw_attrs: = false
+    for c in r.children
+      if c.kind_id == .k_attribute_list
+        saw_attrs = true
+        for attr in c.children
+          if !attr.is_attribute_named("cfg")
+            kept.push(attr)
+      else if inner == null
+        inner = c
+      else
+        return Option<|Ast_node$@|>.none
+    if inner == null || !saw_attrs
+      return Option<|Ast_node$@|>.none
+    if kept.len > 0
+      leftover: = Ast_node.new(.k_attribute_list, "attribute_list", r.loc)
+      for attr in kept
+        leftover.add_child(attr)
+      inner.add_child(leftover)
+    return Option<|Ast_node$@|>.some(inner)
+
+  priv fn is_flatten_target(r: Ast_node$@): Bool
+    if r == null
+      return false
+    switch r.kind_id case .k_decl_extern_struct, .k_decl_struct, .k_decl_enum, .k_decl_trait,
+      .k_expr_implicit_dot, .k_implicit_enum, .k_stmt_break, .k_stmt_continue, .k_decl_embed,
+      .k_decl_alias, .k_decl_fn, .k_decl_fn_proto, .k_decl_impl, .k_decl_import,
+      .k_decl_import_selector_list, .k_decl_import_selector, .k_decl_directive, .k_stmt_match,
+      .k_expr_args, .k_identifier_list, .k_type_gen_params, .k_type_args, .k_expr_compound,
+      .k_expr_field_init, .k_param_list, .k_fn_param, .k_type_constraint, .k_stmt_block,
+      .k_struct_field, .k_enum_variant, .k_enum_field, .k_string, .k_string_expr, .k_attribute_list,
+      .k_attribute, .k_capture_list
+      return true
+    default
+      return false
+
+  priv fn is_trivia_node(r: Ast_node$@, parent_kind: U8$[]): Bool
+    if r.kind_id == .k_keyword && r.text.equals("as")
+      return true
+    if r.kind_id == .k_literal
+      t: = r.text
+      if t.len == 1
+        c: = (t.ptr + 0)$
+        if c == '.' &&
+          (parent_kind.equals("expr_implicit_dot") || parent_kind.equals("implicit_enum"))
+          return true
+        // Two parents keep the `=`, both reading "the child next to the `=` is the value": an
+        // `expr_field_init` (`.a = 1`) and an `fn_param`'s default argument (`b: I32 = 2`).
+        keep_eq: = parent_kind.equals("expr_field_init") || parent_kind.equals("fn_param")
+        return (false if c == '=' && keep_eq
+          else c == ';' || c == ':' || c == ',' || c == '{' || c == '}' || c == '=' || c == '(' ||
+          c == ')' || c == '<' || c == '>' || c == '[' || c == ']' || c == '&' || c == '+' ||
+          c == '"' || c == '#')
+      if t.len == 2
+        return t.equals("\\{") || t.equals("\\}") || t.equals("<|") || t.equals("|>")
+      if t.len == 3
+        return t.equals("::{")
+    return false
+
+  priv fn wants_inline(r: Ast_node$@, c: Ast_node$@): Bool //<
+    //< Whether `c` is a child whose contents are lifted into `r`
+    //<
+    //< Caution: **Do not copy this check**: the scanning round and the building round share it,
+    //< and a copy silently drifts when one of them is changed.
+    return (c.kind_id == .k_decl_fn_proto && r.kind_id == .k_decl_fn) || c.kind_id == .k_empty
+
+  priv fn flatten_inline_nodes(r: Ast_node$@) //<
+    //< Where there is a child to lift, it splices that child's children into its own list
+    //<
+    //< Caution: **Do not allocate the new list first** (the reason is at
+    //< `clean_and_classify_stmt`): the scan only reads and stops at the first hit.
+    $has_inline: = false
+    for c in r.children
+      if r.wants_inline(c)
+        has_inline = true
+        break
+    if !has_inline
+      return
+    flat: = base_ast.new_ast_node_list()
+    for c in r.children
+      if r.wants_inline(c)
+        for gc in c.children
+          flat.push(gc)
+      else
+        flat.push(c)
+    r.children = flat
+
+  priv fn elide_type_paths(r: Ast_node$@)
+    if r.kind_id == .k_expr_path || r.kind_id == .k_type_path
+      flat: = base_ast.new_ast_node_list()
+      $s: = Str_builder.new()
+      defer s.free()
+      $is_first_id: = true
+      for child in r.children
+        if child.kind_id == .k_literal
+          continue
+        if child.kind_id == .k_type_args
+          s.s(child.text)
+          flat.push(child)
+        else
+          if !is_first_id
+            s.c('.')
+          s.s(child.text)
+          flat.push(child)
+          is_first_id = false
+      r.children = flat
+      slice: = s.slice()
+      r.text = base_core.arena.dup_str(slice)
+      if r.kind_id == .k_type_path
+        r.set_kind(.k_expr_path)
+
+  priv fn normalize_type_args_text(r: Ast_node$@)
+    $s: = Str_builder.new()
+    defer s.free()
+    s.s("<|")
+    $is_first: = true
+    for c in r.children
+      if c.kind_id == .k_literal || c.kind_id == .k_keyword
+        continue
+      if !is_first
+        s.s(", ")
+      // Caution: **Leave the mutability mark on the name.** Dropped, `Box<|$T|>` becomes `Box<|T|>`
+      // and an impl only for the mutable version applies to the immutable one too
+      // (impl_target_rejects in `../sema/decl/mono_target.kspls`).
+      // The last non-Literal child holds the contents; a one-child `type_expr` may already be
+      // removed.
+      if c.kind_id == .k_type_arg
+        $inner_text: U8[] = c.text
+        for ic in c.children
+          if ic.kind_id != .k_literal && ic.kind_id != .k_keyword
+            inner_text = ic.text
+        s.s("$").s(inner_text)
+      else
+        s.s(c.text)
+      is_first = false
+    s.s("|>")
+    slice: = s.slice()
+    r.text = base_core.arena.dup_str(slice)
+  fn prepend_children(r: Ast_node$@, items: List<|Ast_node$@|>$@) //<
+    //< It inserts `items` at the head of r's children, keeping their order
+    //<
+    //< Note: parse/normalize_decl.kspls also uses it for the modifier list.
+    for $m: = items.len; m > 0; m -= 1
+      r.insert_child(0, items.get(m - 1))
+
+  priv fn apply_modifiers_to_targets(r: Ast_node$@) //<
+    //< It moves the modifiers (visibility and attributes) to the start of the next declaration
+    //<
+    //< Caution: **Do not allocate the new list first** (as in `flatten_inline_nodes`).
+    $has_mod: = false
+    for c in r.children
+      if c.is_modifier()
+        has_mod = true
+        break
+    if !has_mod
+      return
+    pushed_children: = base_ast.new_ast_node_list()
+    pending_mods: = base_ast.new_ast_node_list()
+
+    for c in r.children
+      is_mod: = c.is_modifier()
+      if is_mod && c.kind_id == .k_literal
+        c.set_kind(.k_keyword)
+
+      if is_mod
+        pending_mods.push(c)
+      else
+        if pending_mods.len > 0
+          target_node: =
+            c.get_child(0) if c.kind_id == .k_decl_top && c.children.len > 0 else c
+          if target_node.is_modifier_target()
+            target_node.prepend_children(pending_mods)
+          else
+            for mod_node in pending_mods
+              pushed_children.push(mod_node)
+          pending_mods.len = 0
+        pushed_children.push(c)
+    for mod_node in pending_mods
+      pushed_children.push(mod_node)
+    r.children = pushed_children
+
+  priv fn clean_and_classify_stmt(r: Ast_node$@)
+    // Caution: **Do not rebuild the list when there is nothing to drop.** A rebuild leaves the
+    // contents the same while the old list stays in the arena (the arena is not freed). Most
+    // statements hold no `;`.
+    if r.has_literal_child(";")
+      clean: = base_ast.new_ast_node_list()
+      for c in r.children
+        if !c.is_literal(";")
+          clean.push(c)
+      r.children = clean
+    if r.children.len > 0
+      $first_idx: Sz = 0
+      for first_idx < r.children.len && r.get_child(first_idx).is_modifier()
+        first_idx += 1
+      if first_idx < r.children.len
+        first: = r.get_child(first_idx)
+        if first.kind_id == .k_literal || first.kind_id == .k_keyword
+          switch map_keyword_to_decl_kind(first.text) case .valid(k, t)
+            r.set_kind(k)
+            r.text = t
+          default {}
+
+  priv fn normalize_type_atom(r: Ast_node$@)
+    if r.kind_id == .k_type_atom && r.children.len > 0
+      child: = r.get_child(0)
+      if child.kind_id == .k_expr_path || child.kind_id == .k_type_path ||
+        child.kind_id == .k_primitive_type || child.kind_id == .k_type_atom
+        r.text = child.text
+
+  priv fn elide_node(r: Ast_node$@): Option<|Ast_node$@|>
+    if r == null
+      return Option<|Ast_node$@|>.none
+
+    if r.kind_id == .k_visibility && r.children.len > 0
+      vis: = r.get_child(0)
+      vis.set_kind(.k_keyword)
+      return Option<|Ast_node$@|>.some(vis)
+
+    if r.kind_id == .k_type_args || r.kind_id == .k_type_gen_params
+      r.normalize_type_args_text()
+
+    // Caution: Modifiers are moved down once, at the start of normalize_ast; a second round here
+    // would pick the moved attributes up again as the enclosing node's children.
+
+    if r.is_decl_or_stmt()
+      r.clean_and_classify_stmt()
+
+    if stmt_node: = r.elide_attributed_stmt()
+      return Option<|Ast_node$@|>.some(stmt_node)
+
+    if r.kind_id == .k_expr_primary && r.children.len == 3 &&
+      r.get_child(0).is_literal("(")
+      // A parenthesized expr_primary is replaced by its inner node; ival counts the removed layers
+      // as -1, -2, ... for sema's unwanted-parenthesis check (other ival uses are non-negative).
+      inner: = r.get_child(1)
+      inner.ival = (inner.ival - 1) if inner.ival < 0 else -1
+      return Option<|Ast_node$@|>.some(inner)
+    if r.children.len == 1 && r.is_pass_through()
+      return Option<|Ast_node$@|>.some(r.get_child(0))
+    // A prefixed cast (three children, type_expr "::" expr_unary) becomes the k_expr_postfix shape
+    // [receiver, "::", type] that every later stage already handles.
+    if r.kind_id == .k_expr_cast && r.children.len == 3
+      type_node: = r.get_child(0)
+      colon_node: = r.get_child(1)
+      value_node: = r.get_child(2)
+      postfix: = Ast_node.new(.k_expr_postfix, "::", r.loc)
+      postfix.add_child(value_node).add_child(colon_node).add_child(type_node)
+      return Option<|Ast_node$@|>.some(postfix)
+
+    r.elide_type_paths()
+    r.normalize_type_atom()
+    r.flatten_inline_nodes()
+    // A decl_var / decl_const wraps decl_var_items, which hold the cfg attributes. With every item
+    // dropped the wrapper remains empty; left that way, apply_modifiers_to_targets moves just the
+    // visibility into it and sema's W0206 reports a symbol named "unknown".
+    if (r.kind_id == .k_decl_var || r.kind_id == .k_decl_const) && r.children.len == 0
+      r.morph(.k_empty, "")
+    return Option<|Ast_node$@|>.some(r)
+
+  priv fn normalize_type_postfix(r: Ast_node$@)
+    $has_inner: = false
+    $inner_node: Ast_node$@ = null
+    $is_err: = false
+    $is_at: = false
+    $is_slice_or_array: = false
+    $is_mut_mark: = false // the postfix `$` (`T$[]` / `T$@`): the target/element is writable
+    // Reusing flatten_inline_nodes avoids a second copy of the empty-child expansion
+    r.flatten_inline_nodes()
+    for c in r.children
+      if c.kind_id == .k_literal
+        is_err = is_err || c.text.equals("?")
+        is_at = is_at || c.text.equals("@")
+        is_slice_or_array = is_slice_or_array || c.text.equals("[")
+        is_mut_mark = is_mut_mark || c.text.equals("$")
+      else if c.kind_id != .k_empty && c.kind_id != .k_underscore && !c.text.equals("]")
+        has_inner = true
+        inner_node = c
+
+    clean: = base_ast.new_ast_node_list()
+    if is_err
+      if has_inner
+        r.text = wrap_child_text("?", inner_node.text, "")
+        clean.push(inner_node)
+      else
+        r.text = "?"
+    else if is_at
+      r.text = "@"
+    else if is_slice_or_array
+      if !has_inner
+        r.text = "[]"
+      else
+        r.text = wrap_child_text("[", inner_node.text, "]")
+        clean.push(inner_node)
+    // The mutability marker `$` starts the postfix's text and is moved up to the k_type_expr:
+    // apply_type_postfixes in sema/decl/resolve.kspls applies the qualifier per level (unmarked is
+    // immutable), and fmt restores the `$` from it.
+    if is_mut_mark
+      r.text = wrap_child_text("$", r.text, "")
+    r.children = clean
+
+  priv fn rename_keywords_and_statements(r: Ast_node$@)
+    for $j: = 0; j < r.children.len; j += 1
+      c: = r.get_child(j)
+      if c.kind_id == .k_keyword
+        c.set_kind(.k_keyword)
+        if j == 0
+          r.loc = c.loc
+          r.text = c.text
+          if c.text.equals("return")
+            r.set_kind(.k_stmt_return)
+          else if c.text.equals("throw")
+            r.set_kind(.k_stmt_throw)
+          else if c.text.equals("fallback")
+            r.set_kind(.k_stmt_fallback)
+
+    if r.kind_id == .k_expr_unary
+      if r.text.equals("sizeof")
+        r.set_kind(.k_expr_sizeof)
+      else if r.text.equals("offsetof")
+        r.set_kind(.k_expr_offsetof)
+
+  priv fn normalize_implicit_enum(r: Ast_node$@)
+    if r.kind_id == .k_expr_primary && r.children.len >= 2 &&
+      r.get_child(0).is_literal(".")
+      r.set_kind(.k_implicit_enum)
+      r.text = "implicit_enum"
+
+  priv fn normalize_by_kind(r: Ast_node$@): Ast_node$@
+    switch r.kind_id case .k_expr_args
+      r.text = "args"
+    case .k_match_pattern
+      r.normalize_match_pattern()
+    case .k_decl_extern, .k_decl_extern_block
+      r.normalize_extern_decl()
+    case .k_decl_impl
+      r.normalize_impl_decl()
+    case .k_expr_ternary
+      if r.children.len == 5
+        flat: = base_ast.new_ast_node_list()
+        flat.push(r.get_child(2))
+        flat.push(r.get_child(0))
+        flat.push(r.get_child(4))
+        r.children = flat
+    case .k_stmt_loop
+      // A multi-variable init (`for i: = 0, j: = 10; ...`) is split before normalize_loop bundles
+      // it into loop_init, keeping five children; the later flatten does not reach inside
+      // loop_init.
+      r.flatten_var_decl_lists()
+      r.normalize_loop()
+    case .k_if_bind
+      r.normalize_if_bind()
+    case .k_stmt_if
+      r.normalize_if_stmt()
+    case .k_stmt_defer
+      r.normalize_defer_stmt()
+    case .k_enum_variant
+      r.normalize_enum_variant()
+    default {}
+
+    r.rename_keywords_and_statements()
+    r.normalize_implicit_enum()
+
+    if r.is_flatten_target()
+      current_kind_str: = r.get_kind_str()
+      // **Do not rebuild the list when there is nothing to drop** (the reason is at
+      // `clean_and_classify_stmt`).
+      $has_trivia: = false
+      for c in r.children
+        if c.is_trivia_node(current_kind_str)
+          has_trivia = true
+          break
+      if has_trivia
+        flat_children: = base_ast.new_ast_node_list()
+        for c in r.children
+          if !c.is_trivia_node(current_kind_str)
+            flat_children.push(c)
+        r.children = flat_children
+      if r.kind_id == .k_expr_compound
+        r.set_kind(.k_struct_literal)
+        r.text = "struct_literal"
+      else if r.kind_id == .k_fn_param && r.children.len == 1
+        id_node: = r.get_child(0)
+        if id_node.kind_id == .k_identifier
+          r.add_child(Ast_node.new(.k_type_expr, "Unknown", r.loc))
+
+    if r.kind_id == .k_string
+      $has_interp: = false
+      for c in r.children
+        if c.kind_id == .k_string_expr
+          has_interp = true
+          break
+      if has_interp
+        r.set_kind(.k_string_interp)
+      else
+        r.children = base_ast.new_ast_node_list()
+
+    if r.kind_id == .k_type_postfix
+      r.normalize_type_postfix()
+
+    if r.kind_id == .k_type_expr
+      // The postfixes' texts keep their `$` (`"$[]"` / `"$@"`; see normalize_type_postfix).
+      $s: = Str_builder.new()
+      defer s.free()
+      for c in r.children
+        s.s(c.text)
+      r.text = base_core.arena.dup_str(s.slice())
+
+    r.flatten_var_decl_lists()
+    if r.kind_id == .k_stmt_match
+      r.normalize_match_stmt()
+
+    return r
+
+priv fn wrap_child_text(prefix: U8[], inner_text: U8[], suffix: U8[]): U8$[]
+  $s: = Str_builder.new()
+  defer s.free()
+  s.s(prefix).s(inner_text).s(suffix)
+  slice: = s.slice()
+  return base_core.arena.dup_str(slice)
+
+priv enum Decl_kind_info
+  valid(kind: base_ast_kinds.Ast_kind, text: U8[])
+  invalid
+
+priv fn map_keyword_to_decl_kind(t: U8[]): Decl_kind_info //<
+  //< It decides what declaration or statement a wrapper node really is, from its leading keyword
+  //<
+  //< The wrapper is a `stmt` / `decl_top` and the like.
+  //<
+  //< **Only syntax beginning with a keyword goes here**: one beginning with a mark (`##error`)
+  //< takes the grammar rule's name as its kind (kspl.kspeg); adding it here would decide it twice.
+  return (.valid(.k_decl_var, t) if t.equals("var") || t.equals("let")
+    else .valid(.k_decl_const, t) if t.equals("const")
+    else .valid(.k_decl_fn_proto, "decl_fn_proto") if t.equals("fn")
+    else .valid(.k_decl_extern, t) if t.equals("extern")
+    else .valid(.k_decl_embed, t) if t.equals("embed")
+    else .valid(.k_stmt_break, t) if t.equals("break")
+    else .valid(.k_stmt_continue, t) if t.equals("continue")
+    else .valid(.k_stmt_defer, t) if t.equals("defer")
+    else .valid(.k_stmt_return, t) if t.equals("return")
+    else .valid(.k_stmt_throw, t) if t.equals("throw")
+    else .valid(.k_stmt_fallback, t) if t.equals("fallback") else .invalid)

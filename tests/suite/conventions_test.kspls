@@ -1,0 +1,823 @@
+#!/usr/bin/env -S ksplc run
+//< Checks the documented conventions a machine can check
+//<
+//< The conventions are "Development Principles" in `docs/DESIGN.md` and the rules in
+//< `docs/SPEC-documents.md`; `tests/suite/docref_test.kspls` checks reference directions and
+//< section numbers.
+import "std/chars" // judging a character's case
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/strnum"
+import "std/verdict"
+import "tests/support/conventions_bound" as cbound
+import "tests/support/conventions_divider" as cdiv
+import "tests/support/conventions_fixture" as cfixture
+import "tests/support/conventions_hand" as chand
+import "tests/support/conventions_iface" as ciface
+import "tests/support/conventions_kind" as ckind
+import "tests/support/conventions_line" as cline
+import "tests/support/conventions_manual" as cmanual
+import "tests/support/conventions_match" as cmatch
+import "tests/support/conventions_merge" as cmerge
+import "tests/support/conventions_notice" as cnotice
+import "tests/support/conventions_now" as cnow
+import "tests/support/conventions_prose" as prose
+import "tests/support/conventions_rule" as crule
+import "tests/support/conventions_scan" as scan + { Sample }
+import "tests/support/conventions_shut" as cshut
+import "tests/support/conventions_size" as csize
+import "tests/support/conventions_spell" as cspell
+import "tests/support/conventions_theme" as ctheme
+import "tests/support/conventions_verdict" as cverdict
+import "tests/support/conventions_win" as cwin
+import "tests/support/conventions_zip" as czip
+import "tests/support/harness"
+import "tests/support/harness_text" as htext
+
+priv const max_comment_lines: Sz = 6
+
+priv const max_header_lines: Sz = 10 //<
+  //< The cap on a file's opening header, wider than a body comment's
+  //<
+  //< It is still a cap, not a header of any length (Principle 7 in docs/DESIGN.md).
+
+priv fn is_header_lead(line: U8[]): Bool //<
+  //< The header at a file's start has its own, wider cap
+  //<
+  //< **Until the first declaration, it is the header** (it may come after the shebang or the
+  //< imports). Only the first block gets the wider cap. A shebang is a `#!` followed by a `/`.
+  t: = line.trim_start()
+  return t.starts_with("import ") ||
+    t.starts_with("#!") && t.sub_from(2).trim_start().starts_with("/")
+
+priv fn check_comments(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    seen += 1
+    $lines: = harness.read_under_root(rel).lines(arena)
+    $run_len: Sz = 0
+    $start: Sz = 0
+    $seen_decl: = false
+    // **A `//` inside a `\"\"\"` string is not this file's comment.** genc carries whole C
+    // preambles in one, and counting their lines here would apply KSPL's cap to the emitted C.
+    $in_raw: = false
+    // Whether the run being walked has passed its separator (what follows is its detail).
+    $in_detail: = false
+    for i in Range.asc(lines.len + 1)
+      text: = "" if i >= lines.len else lines.get(i).trim_spaces()
+      raw_here: = in_raw
+      if i < lines.len
+        in_raw = scan.flip_raw(lines.get(i), in_raw)
+      if i < lines.len && raw_here
+        continue
+      // A run's separator ends with the run; kept, the next run would count as its detail.
+      if !text.starts_with("//<")
+        in_detail = false
+      // A comment is ended by a line of code, or by a section divider saying something new starts.
+      // Caution: **A blank line ends nothing.** Otherwise the cap limits a paragraph rather than a
+      // comment: anything over it passes by adding a blank line in the middle.
+      $closed: = false
+      if i < lines.len && text.starts_with("//")
+        // **A `//<` belongs to the line above, not to the code below**, so it ends the run
+        // instead of counting into it.
+        // Caution: **What comes after the separator counts.** A run's detail takes the place of an
+        // explanation; if it counted nowhere, turning every explanation into a detail would
+        // silently remove every cap.
+        if text.starts_with("//<")
+          if text.len == 3
+            in_detail = true
+            run_len = 0
+          else if in_detail
+            if run_len == 0
+              start = i + 1
+            run_len += 1
+          else
+            run_len = 0
+          continue
+        // **A machine-read marker is not prose** (`EXPECT:` is a fixture's assertion).
+        if !scan.marker_head(text.sub_from(2).trim_spaces())
+          if run_len == 0
+            start = i + 1
+          run_len += 1
+        if !scan.is_divider(text.sub_from(2))
+          continue
+        closed = true
+      if !closed && i < lines.len && text.len == 0 && run_len > 0
+        continue
+      if run_len > max_comment_lines
+        // The first run over the body cap before any declaration is the header (the wider cap).
+        cap: = max_comment_lines if seen_decl else max_header_lines
+        if run_len > cap
+          bad
+            .push(arena.text().s(rel).s(":\{start\}: \{run_len\} lines ").s("(cap \{cap\})").take())
+        seen_decl = true
+      run_len = 0
+      if !closed && i < lines.len && text.len > 0 && !is_header_lead(lines.get(i))
+        seen_decl = true
+  n: = arena.text().s("a comment is within \{max_comment_lines\} lines to the next code line, a ")
+    .s("file's header within \{max_header_lines\} (Principle 7 in docs/DESIGN.md)").take()
+  verdict.check_list(n, seen, "files", bad@, "long background belongs on the DESIGN.md side")
+priv fn check_summary_inside(arena: Arena$@) //<
+  //< A declaration that carries braces keeps its description inside them
+  //<
+  //< Left below a `{}`, the run is outside the thing it describes. Without braces (a `typedef`, a
+  //< `const`, an interface requirement) the run goes below, indented one level; the formatter
+  //< decides that form (`ksplc/docs/SPEC-tools.md`).
+  $bad: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    seen += 1
+    $lines: = harness.read_under_root(rel).lines(arena)
+    $in_raw: = false
+    for i in Range.asc(lines.len)
+      line: = lines.get(i)
+      raw_here: = in_raw
+      in_raw = scan.flip_raw(line, in_raw)
+      if raw_here || i + 1 >= lines.len
+        continue
+      mark: = line.find_str("//")
+      code: = line if mark < 0 else line.sub(0, mark)
+      if !code.trim_spaces().ends_with("{}")
+        continue
+      next: = lines.get(i + 1)
+      if next.trim_start().starts_with("//<")
+        bad
+          .push(arena.text().s(rel).s(":\{i + 2\}: the run belongs inside the braces").take())
+  n: = "a description that runs on stands inside the braces where the declaration has them"
+  verdict.check_list(n, seen, "files", bad@,
+    "open the `{}` and put the `//<` lines between the braces")
+
+// ==========================================
+// 4. `lang.` is written only in a file that declares the same name `std/lang`'s import alias is
+// implicitly in every file too, so `lang.Option` can be written anywhere. Written in a file that
+// does not declare the same name, `Option` gets two spellings (Principle 6). The only file that
+// needs the qualification is one whose own declaration has taken the unqualified name.
+// ==========================================
+priv const decl_heads: U8[][6] = ::{ "struct ", "enum ", "trait ", "typedef ", "fn ", "const " }
+
+priv fn declares(src: U8[], name: U8[], arena: Arena$@): Bool //<
+  //< whether that file declares `name`
+  for line in src.lines(arena)
+    t: = line.trim_start().strip_prefix("pub ").strip_prefix("priv ")
+    for h in decl_heads
+      if !t.starts_with(h)
+        continue
+      rest: = t.sub_from(h.len)
+      if rest.starts_with(name) &&
+        (rest.len == name.len || !htext.is_word_at(rest, name.len))
+        return true
+  return false
+
+priv fn check_lang_prefix(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  $files: Sz = 0
+  specs: = scan.kspl_specs_with(U8[][]::{ ":!ksplc/tests/negative/" }, arena)
+  for rel in harness.tracked_matching(specs)
+    files += 1
+    src: = harness.read_under_root(rel)
+    $i: Sz = 0
+    for line in src.lines(arena)
+      i += 1
+      body: = scan.strip_code(line, arena)
+      $at: Sz = 0
+      for at + 5 <= body.len
+        found: = body.sub_from(at).find_str("lang.")
+        if found < 0
+          break
+        p: = at + Sz::found
+        at = p + 5
+        // When an identifier or a `.` comes before, it is something else (a string such as
+        // `std.lang.Ref_counted`).
+        if p > 0 && (htext.is_word_before(body, p) || body[p - 1] == '.')
+          continue
+        $k: = p + 5
+        if k >= body.len || !(body[k].is_alpha() || body[k] == '_')
+          continue
+        for k < body.len && htext.is_word_at(body, k)
+          k += 1
+        name: = body.sub(p + 5, k - p - 5)
+        if declares(src, name, arena)
+          continue
+        bad
+          .push(arena.text().s(rel).s(":\{i\}: lang.").s(name).s(" -> ").s(name).take())
+  verdict.check_list("`lang.` is written only where the unqualified letter is blocked", files,
+    "files", bad@,
+    "that file does not declare the same name, so the unqualified letter points at the same thing")
+
+// ==========================================
+// The language has `T[]::arr` ("Type conversion (`::`) and implicit casts" in
+// `docs/SPEC-language.md`).
+// Only a hand-built descriptor over a whole array at its declared length is reported (the form
+// stays for reinterpreting bytes).
+priv const descriptor_exempt: U8[][4] = ::{ "ksplc/tests/negative/deep_const_weakening.kspls",
+  "ksplc/tests/negative/write_elem_through_const_ptr.kspls", "ksplc/tests/win64_arg_abi_test.kspls",
+  "ksplc/tests/prog/equiv.kspls" }
+
+priv fn array_sizes(src: U8[], names: List<|U8[]|>$@, sizes: List<|Sz|>$@, arena: Arena$@) //<
+  //< From a `name: type[count]` declaration, collects the size per name
+  //<
+  //< A name declared at two sizes is not judged (which one it points at is unknown).
+  for raw in src.lines(arena)
+    // Caution: **Check with the strings and the annotations dropped** (so as not to pick up a
+    // declaration inside a table of samples).
+    line: = scan.strip_code(raw, arena)
+    $i: Sz = 0
+    for i < line.len
+      if line[i] != ':' || i == 0
+        i += 1
+        continue
+      $s: = i
+      for s > 0 && htext.is_word_at(line, s - 1)
+        s -= 1
+      name: = line.sub(s, i - s)
+      i += 1
+      if name.len == 0 || !(name[0].is_lower() || name[0] == '_')
+        continue
+      // The `[count]` inside the type on the same line.
+      open: = line.sub_from(i).find_char('[')
+      if open < 0
+        continue
+      p: = i + Sz::open + 1
+      $k: = p
+      for k < line.len && line[k].is_digit()
+        k += 1
+      if k == p || k >= line.len || line[k] != ']'
+        continue
+      size: = Sz::(line.sub(p, k - p).to_i64() catch 0I64)
+      $seen: Sz = 0
+      for j in Range.asc(names.len)
+        if names.get(j).equals(name)
+          seen = j + 1
+      if seen == 0
+        names.push(name)
+        sizes.push(size)
+      else if sizes.get(seen - 1) != size
+        sizes.set(seen - 1, 0) // a name whose sizes do not agree is not judged
+
+priv fn hand_descriptor(raw: U8[], names: List<|U8[]|>@, sizes: List<|Sz|>@, arena: Arena$@): Bool //<
+  //< Whether a line's `[]::{ .ptr = <name>@, .len = <count> }` carries the declared length
+  // Caution: **Check with the strings and the annotations dropped** (so as not to hit a string
+  // inside a table of samples).
+  line: = scan.strip_code(raw, arena)
+  $i: Sz = 0
+  for i + 5 <= line.len
+    at: = line.sub_from(i).find_str("[]::{")
+    if at < 0
+      return false
+    p: = i + Sz::at
+    i = p + 5
+    rest: = line.sub_from(i).trim_start()
+    if !rest.starts_with(".ptr")
+      continue
+    eq: = rest.find_char('=')
+    if eq < 0
+      continue
+    $tail: = rest.sub_from(eq + 1).trim_start()
+    $k: Sz = 0
+    for k < tail.len && htext.is_word_at(tail, k)
+      k += 1
+    name: = tail.sub(0, k)
+    tail = tail.sub_from(k).strip_prefix("[0]")
+    if !tail.starts_with("@")
+      continue
+    len_at: = tail.find_str(".len")
+    if len_at < 0
+      continue
+    $num: = tail.sub_from(len_at + 4).trim_start().strip_prefix("=").trim_start()
+    $d: Sz = 0
+    for d < num.len && num[d].is_digit()
+      d += 1
+    if d == 0
+      continue
+    want: = Sz::(num.sub(0, d).to_i64() catch 0I64)
+    for j in Range.asc(names.len)
+      if names.get(j).equals(name) && sizes.get(j) == want && want > 0
+        return true
+  return false
+
+// Caution: **Declare the same name twice at different sizes** (`mixed`). Nothing else exercises
+// the branch that leaves such a name unjudged.
+priv const descriptor_src: U8[] =
+  """fn probe() {
+  four: I32[4] = ::{ 0, 0, 0, 0 };
+  two: I32[2] = ::{ 0, 0 };
+  mixed: I32[4] = ::{ 0, 0, 0, 0 };
+}
+
+fn again() {
+  mixed: I32[8] = ::{ 0, 0, 0, 0, 0, 0, 0, 0 };
+}
+"""
+
+// **Report only the declared length** (a shorter view is correct, and has no fix).
+// `.len = 40` catches a read stopping at one digit.
+priv const descriptor_samples: U8[][8] = ::{ "  s: = I32[]::{ .ptr = four@, .len = 4 };",
+  "  s: = I32[]::{ .ptr = four@, .len = 2 };", "  s: = I32[]::{ .ptr = four[0]@, .len = 4 };",
+  "  s: = I32[]::{ .ptr = other@, .len = 4 };", "  s: = I32[]::{ .ptr = mixed@, .len = 4 };",
+  "  s: = I32[]::{ .ptr = four@, .len = 40 };",
+  "  a: = I32[]::{ .ptr = two@, .len = 1 }; b: = I32[]::{ .ptr = four@, .len = 4 };",
+  "  a: = I32[]::{ 1, 2 }; b: = I32[]::{ .ptr = four@, .len = 4 };" }
+priv const descriptor_want: Bool[8] = ::{ true, false, true, false, false, false, true, true } //<
+  //< The expected answer for each line of the descriptor samples
+  //<
+  //< In order: it hits / a shorter view / a form with a `[0]` in between / a name with no
+  //< declaration / a name whose sizes do not agree / a form with the digits misread / two on one
+  //< line where the second hits / a non-descriptor before it; the last two catch a read stopping
+  //< at the first
+
+priv fn check_descriptor_fires(arena: Arena$@)
+  $names: = List<|U8[]|>.new(arena)
+  $sizes: = List<|Sz|>.new(arena)
+  array_sizes(descriptor_src, names@, sizes@, arena)
+  $bad: = List<|U8[]|>.new(arena)
+  for i in Range.asc(descriptor_samples.len)
+    got: = hand_descriptor(descriptor_samples[i], names@, sizes@, arena)
+    if got != descriptor_want[i]
+      bad
+        .push(arena.text().s("\"").s(descriptor_samples[i].trim_spaces())
+        .s("\" was read as \{got\}").take())
+  verdict.check_list("the verdict on a hand-assembled descriptor can fire", descriptor_samples.len,
+    "samples", bad@, "")
+
+priv fn check_descriptors(arena: Arena$@)
+  $seen: Sz = 0
+  $bad: = List<|U8[]|>.new(arena)
+  for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    seen += 1
+    $skip: = false
+    for e in descriptor_exempt
+      if rel.equals(e)
+        skip = true
+    if skip
+      continue
+    src: = harness.read_under_root(rel)
+    $names: = List<|U8[]|>.new(arena)
+    $sizes: = List<|Sz|>.new(arena)
+    array_sizes(src, names@, sizes@, arena)
+    $i: Sz = 0
+    for line in src.lines(arena)
+      i += 1
+      if hand_descriptor(line, names@, sizes@, arena)
+        bad
+          .push(arena.text().s(rel).s(":\{i\}: ").s(line.trim_spaces()).take())
+  verdict.check_list("no descriptor is hand-assembled for a slice over a whole fixed array", seen,
+    "lines", bad@, "bring it to `T[]::arr` (the length enters from the type)")
+
+// ==========================================
+// 7. A folder taking keys from outside does not use `Map` (std/docs/DESIGN.md) `ds.Map` is open
+// addressing plus linear probing, and has no way to pass a seed to `Hashable`'s `hash`.
+// Note: If it fails, do not stop using `Map` — design the seed in the form `std/docs/DESIGN.md`
+// decides.
+// ==========================================
+priv const untrusted_key_dirs: U8[][3] = ::{ "kssrv/", "ksdb/", "kspage/" }
+
+priv fn check_map_at_boundary(arena: Arena$@)
+  $seen: Sz = 0
+  $bad: = List<|U8[]|>.new(arena)
+  for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    $inside: = false
+    for d in untrusted_key_dirs
+      if rel.starts_with(d)
+        inside = true
+    if !inside
+      continue
+    $i: Sz = 0
+    for line in harness.read_under_root(rel).lines(arena)
+      seen += 1
+      i += 1
+      at: = line.find_str("Map<|")
+      if at >= 0 && (at == 0 || !htext.is_word_before(line, at))
+        bad
+          .push(arena.text().s(rel).s(":\{i\}: ").s(line.trim_spaces()).take())
+  verdict.check_list("a folder taking keys from outside does not use Map (kssrv/ksdb/kspage)", seen,
+    "lines", bad@,
+    "design the seed before putting it in (the Map line under std/docs/DESIGN.md's 'Known holes')")
+
+// ==========================================
+// 10. The strings by which the compiler names std really exist ksplc finds std's declarations by
+// **a fully-qualified-name string** such as `"std.lang.Move_only"`. Only "is that name in that
+// file" is checked. What each is used for is in "Why compiler-known traits are confined to
+// `std/lang`" in `docs/DESIGN.md` (a copy would drift).
+// ==========================================
+priv fn check_compiler_named_std(arena: Arena$@)
+  $seen: Sz = 0
+  $bad: = List<|U8[]|>.new(arena)
+  // Only the compiler: its tests quote editor text (`std.lang.Owned.free`) naming no declaration.
+  for rel in harness.tracked_matching(U8[][]::{ "ksplc/*.kspls", ":!ksplc/tests/" })
+    $i: Sz = 0
+    for line in harness.read_under_root(rel).lines(arena)
+      seen += 1
+      i += 1
+      // Caution: **Do not read the comments.** A line explaining "write it this way and it
+      // breaks" mentions an imaginary FQN (`"std.io.U8[]"` in `sema/decl/resolve.kspl`).
+      code: = line.sub(0, line.find_str("//")) if line.find_str("//") >= 0 else line
+      for fqn in std_fqns_in(code, arena)
+        // `std.lang.Add` -> file `lang`, declaration `Add`.
+        rest: = fqn.sub_from(4)
+        cut: = rest.find_char('.')
+        if cut < 0
+          continue
+        // `std/` uses the default extension (`default_ext` in `../../ksplc/base/core.kspls`).
+        file: = arena.text().s("std/").s(rest.sub(0, cut)).s(".kspls").take()
+        name: = rest.sub_from(cut + 1)
+        if !declares_name(harness.read_under_root(file), name, arena)
+          bad
+            .push(arena.text().s(rel).s(":\{i\}: ").s(fqn).s(" is not in ").s(file).take())
+  verdict.check_list("the letters by which the compiler names std really exist", seen, "lines",
+    bad@, "rename and mend ksplc's letters too (docs/DESIGN.md's 3.2.4)")
+
+priv fn std_fqns_in(line: U8[], arena: Arena$@): List<|U8[]|>$@ //<
+  //< Picks up the `std.<lower>.<Upper-first>` strings in one line
+  //<
+  //< A generic (`std.lang.Add<|...|>`) is cut before the `<`.
+  found: = arena.create(List<|U8[]|>.new(arena))
+  $at: Sz = 0
+  for at < line.len
+    hit: = line.sub_from(at).find_str("\"std.")
+    if hit < 0
+      break
+    start: = at + Sz::hit + 1
+    $end: Sz = start
+    for end < line.len &&
+      (line[end].is_alpha() || line[end].is_digit() || line[end] == '_' || line[end] == '.')
+      end += 1
+    word: = line.sub(start, end - start)
+    // Only strings complete down to the name (not a prefix such as `"std.lang."`).
+    if word.count_str(".") >= 2 && !word.ends_with(".")
+      found.push(arena.dup_str(word))
+    at = end
+  return found
+
+priv fn declares_name(src: U8[], name: U8[], arena: Arena$@): Bool //<
+  //< Whether that file declares `name`
+  //<
+  //< Caution: Check only the declaring lines (count the using lines and it answers "it is there"
+  //< even when the name is gone).
+  for line in src.lines(arena)
+    t: = line.trim_spaces()
+    for kw in U8[][]::{ "pub trait ", "pub struct ", "pub enum ", "pub typedef ", "pub fn ",
+        "trait ", "struct ", "enum ", "typedef ", "fn ",
+    }
+      if !t.starts_with(kw)
+        continue
+      rest: = t.sub_from(kw.len)
+      if !rest.starts_with(name)
+        continue
+      tail: = rest.sub_from(name.len)
+      if tail.len == 0 ||
+        !tail[0].is_alpha() && !tail[0].is_digit() && tail[0] != '_'
+        return true
+  return false
+
+priv fn check_runtime_check_location(arena: Arena$@) //<
+  //< That the position passed to a run-time check is the pair of a file name and a line number
+  //<
+  //< Caution: **Do not print `loc.offset` as the line number.** `Loc` holds a byte position;
+  //< the one function that counts lines is `line_of` in `ksplc/sema/session/ctx.kspls`. **List the
+  //< allowed forms**: searching for the printing code misses an offset stored in a variable first.
+  //< An offset is correct only when passed to a diagnostic (`print_diagnostic` counts the lines).
+  $seen: Sz = 0
+  $bad: = List<|U8[]|>.new(arena)
+  for rel in harness
+    .tracked_matching(U8[][]::{ "ksplc/gen/c/*.kspls", "ksplc/gen/llvm/*.kspls" })
+    $i: Sz = 0
+    for line in harness.read_under_root(rel).lines(arena)
+      seen += 1
+      i += 1
+      if line.find_str("loc.offset") >= 0 && line.find_str("print_diagnostic") < 0
+        bad
+          .push(arena.text().s(rel).s(":\{i\}: it puts loc.offset where the line number goes")
+          .take())
+  verdict.check_list("what is handed to a run-time check is the file and line number pair", seen,
+    "lines", bad@, "loc.offset is not a line number (put it through sema's line_of)")
+
+priv fn panic_off(line: U8[], _arena: Arena$@): Bool //<
+  //< Whether the run-time stop message's prefix breaks the rule
+  //<
+  //< Caution: **Keep the verdict in this one place** (inside the runtime the sample table cannot
+  //< reach it). Breaking it means a capital prefix, or a capital after `panic: `.
+  if line.find_str("Panic: ") >= 0
+    return true
+  at: = line.find_str("panic: ")
+  return at >= 0 && at + 7 < line.len && line[at + 7].is_upper()
+
+priv fn check_panic_spelling(arena: Arena$@) //<
+  //< Keeps the run-time stop message to one form
+  //<
+  //< The prefix is `panic: ` and what follows starts lower case (see
+  //< "Every stop has one notation" in `../../docs/SPEC-language.md`). **Split between the code
+  //< generator and std, one event gets two strings to grep for.** `ksplc/tests/runtime/`'s EXPECT
+  //< sees only checks that have a test, so a new check is caught here.
+  $seen: Sz = 0
+  $bad: = List<|U8[]|>.new(arena)
+  for rel in harness
+    .tracked_matching(U8[][]::{ "ksplc/gen/runtime/*", "ksplc/gen/llvm/*.kspls", "std/lang.kspls" })
+    $i: Sz = 0
+    for line in harness.read_under_root(rel).lines(arena)
+      seen += 1
+      i += 1
+      if panic_off(line, arena)
+        bad
+          .push(arena.text().s(rel).s(":\{i\}: ").s(line.trim_spaces()).take())
+  verdict.check_list("the letter when it stops at run time is one", seen, "lines", bad@,
+    "the prefix is 'panic: ' and what follows is lower case (§13 of docs/SPEC-language.md)")
+
+priv const result_forms: U8[][] = U8[][]::{ "ALL PASS", "SOME FAILED", "SKIPPED", "MEASURED" } //<
+  //< The wordings a gate's closing verdict line may take
+  //<
+  //< **A wording per gate makes CI grep for each**, and a wrong one drifts silently: **it passes
+  //< green even when a gate fails** (Principle 5). The source is `finish` in `std/verdict.kspls`.
+
+priv fn result_form_ok(rest: U8[], _arena: Arena$@): Bool
+  for i in Range.asc(result_forms.len)
+    if rest.starts_with(result_forms[i])
+      return true
+  return false
+
+// The samples showing that the verdict can fire (the pattern is "A check shows it can fire" in
+// `../support/conventions_scan.kspls`).
+// Caution: **Include all four forms, and the parenthesised one too.** Drop one and that form
+// failing as "an unknown string" goes unnoticed.
+priv const result_samples: Sample[9] = ::{
+  Sample::{ .text = "ALL PASS", .hits = true },
+  Sample::{ .text = "ALL PASS (12 files already formatted)", .hits = true },
+  Sample::{ .text = "SOME FAILED (3)", .hits = true },
+  Sample::{ .text = "SKIPPED (no ARM toolchain)", .hits = true },
+  Sample::{ .text = "MEASURED (felled 0)", .hits = true },
+  Sample::{ .text = "PASS", .hits = false },
+  Sample::{ .text = "FAIL (echoed bytes did not switch)", .hits = false },
+  Sample::{ .text = "ALL TESTS PASSED", .hits = false },
+  Sample::{ .text = "3 FAILURES", .hits = false },
+}
+
+// **Both ways of breaking it are sampled** (the prefix's capital and the next word's); one alone
+// lets the other pass. A miscounted `at + 7` hits `panic: ok`.
+priv const panic_samples: Sample[6] = ::{
+  Sample::{ .text = "io.err().s(\"Panic: out of memory\\n\");", .hits = true },
+  Sample::{ .text = "io.err().s(\"panic: Out of memory\\n\");", .hits = true },
+  Sample::{ .text = "io.err().s(\"panic: out of memory\\n\");", .hits = false },
+  // Caution: **Keep the non-ASCII sample.** `is_upper()` is byte-wise, so a UTF-8 lead byte must
+  // not be read as a capital.
+  Sample::{ .text = "io.err().s(\"panic: 範囲の外\\n\");", .hits = false },
+  Sample::{ .text = "// the panic: prefix is lower case", .hits = false },
+  Sample::{ .text = "kspl_panic(msg);", .hits = false }
+}
+
+// **Pick up only an FQN inside a string**: after a double quote, two or more steps, no final dot.
+priv const fqn_samples: U8[][6] = ::{ "want: = \"std.lang.Add\";", "want: = \"std.lang.\";",
+  "want: = \"std.lang\";", "out: = std.io.out();",
+  "two: = \"std.ds.List\" ; \"std.str.Str_builder\";", "// about std.lang.Add" }
+priv const fqn_want: Sz[6] = ::{ 1, 0, 0, 0, 2, 0 } //<
+  //< How many FQNs each of the samples holds
+  //<
+  //< In order: 1 / 0 (ends in a dot) / 0 (too few steps) / 0 (outside a string) / 2 / 0 (outside a
+  //< string)
+
+// **The name must match exactly** (by prefix `Add` hits `Adder`, and a rename slips past). **A
+// `priv` does not hit**: ksplc names only what is public, so a hidden one would mask a lost `pub`.
+priv const declares_src: U8[] =
+  """pub struct Adder {
+}
+
+fn take(): I32 {
+  return 0;
+}
+
+priv fn hidden(): I32 {
+  return 0;
+}
+
+pub trait Add {
+}
+"""
+priv const declares_names: U8[][6] = ::{ "Add", "Adder", "take", "hidden", "Missing", "Adde" } //<
+  //< The names looked up in `declares_src`
+  //<
+  //< **`Adde` does not hit**; without checking the name's end it hits the start of `Adder`, and
+  //< **a name removed by a rename is answered as "there"**. `Adder` and `Add` check both hit.
+priv const declares_want: Bool[6] = ::{ true, true, true, false, false, false }
+
+priv fn check_named_std_fires(arena: Arena$@)
+  $a: = scan.misjudged(Sample[]::panic_samples, panic_off, arena)
+  verdict.check_list("the verdict on the letter when it stops can fire", panic_samples.len,
+    "samples", a@, "the letters that hit and do not are the table `panic_samples`")
+
+  $b: = List<|U8[]|>.new(arena)
+  for i in Range.asc(fqn_samples.len)
+    got: = std_fqns_in(fqn_samples[i], arena).len
+    if got != fqn_want[i]
+      b
+        .push(arena.text().s("\"").s(fqn_samples[i])
+        .s("\" gave \{got\} (should be \{fqn_want[i]\})").take())
+  verdict.check_list("the place picking a std FQN out of a letter can fire", fqn_samples.len,
+    "samples", b@, "")
+
+  $c: = List<|U8[]|>.new(arena)
+  for i in Range.asc(declares_names.len)
+    got: = declares_name(declares_src, declares_names[i], arena)
+    if got != declares_want[i]
+      c
+        .push(arena.text().s("\"").s(declares_names[i]).s("\" was read as \{got\}").take())
+  verdict.check_list("the place hunting a declaration's name can fire", declares_names.len,
+    "samples", c@, "")
+
+// Whether the line opens a `"""` string, read from outside one (the comment cap relies on it).
+priv fn opens_raw(text: U8[], arena: Arena$@): Bool
+  _: = arena
+  return scan.flip_raw(text, false)
+
+// Caution: **Keep both sides in**, or a judgment answering always true (or always false) passes.
+priv const raw_samples: Sample[6] = ::{ Sample::{ .text = "  w = w.s(\"\"\"", .hits = true },
+  Sample::{ .text = "priv const q: U8[] = \"\"\"", .hits = true },
+  Sample::{ .text = "// a raw string is fenced by `\"\"\"`", .hits = false },
+  Sample::{ .text = "  // Note: the `\"\"\"` fence closes it", .hits = false },
+  Sample::{ .text = "  let x = 1;", .hits = false },
+  Sample::{ .text = "  w = w.s(\"\"\"one line\"\"\");", .hits = false } }
+
+priv fn check_raw_fires(arena: Arena$@)
+  $bad: = scan.misjudged(Sample[]::raw_samples, opens_raw, arena)
+  verdict.check_list("the reading of where a `\"\"\"` text opens can fire", raw_samples.len,
+    "samples", bad@, "the lines that hit and do not are the table `raw_samples`")
+
+priv fn check_result_fires(arena: Arena$@)
+  $bad: = scan.misjudged(Sample[]::result_samples, result_form_ok, arena)
+  verdict.check_list("the verdict on the verdict line's letter can fire", result_samples.len,
+    "samples", bad@, "the letters that hit and do not are the table `result_samples`")
+
+priv fn check_result_line(arena: Arena$@)
+  $seen: Sz = 0
+  $bad: = List<|U8[]|>.new(arena)
+  for rel in harness.tracked_matching(U8[][]::scan.build_ext)
+    $i: Sz = 0
+    for line in harness.read_under_root(rel).lines(arena)
+      seen += 1
+      i += 1
+      at: = line.find_str("RESULT: ")
+      if at < 0
+        continue
+      // **This file (it lists the forms) and the browser's `BROWSER-RESULT:` are left out.**
+      if rel.equals("tests/suite/conventions_test.kspls") || rel.equals("std/verdict.kspls") ||
+        rel.equals("docs/SPEC-gates.md") || (at >= 8 && line[at - 1] == '-')
+        continue
+      if !result_form_ok(line.sub_from(at + 8), arena)
+        bad.push(arena.text().s(rel).s(":\{i\}: \{line.trim_spaces()\}").take())
+  hint: = arena.text().s("after 'RESULT: ' comes ALL PASS / SOME FAILED / SKIPPED / MEASURED ")
+    .s("(\"How a run is read\" in docs/SPEC-gates.md)").take()
+  verdict.check_list("the letter of a gate's verdict line is one", seen, "lines", bad@, hint)
+
+// That a single test's line is not written by hand (hand-written lines always diverge): none of
+// `-> Passed!`, `-> Skipped` or the three-line `"\n[..."` comes back.
+// Caution: **Having added a package, add it here too.**
+priv const case_line_globs: U8[][10] = ::{ "ksai/tests/*.kspls", "ksdb/tests/*.kspls",
+  "kspage/tests/*.kspls", "kspeg/tests/*.kspls", "ksos/tests/*.kspls", "ksplc/tests/*.kspls",
+  "kssrv/tests/*.kspls", "std/tests/*.kspls", "tools/ai_assist/tests/*.kspls",
+  "tools/tests/*.kspls" }
+
+priv fn check_case_line(arena: Arena$@)
+  $seen: Sz = 0
+  $bad: = List<|U8[]|>.new(arena)
+  for rel in harness.tracked_matching(U8[][]::case_line_globs)
+    $i: Sz = 0
+    for line in harness.read_under_root(rel).lines(arena)
+      seen += 1
+      i += 1
+      if line.find_str("-> Passed!") >= 0 || line.find_str("-> Skipped") >= 0 ||
+        line.find_str("io.out().s(\"\\n[") >= 0
+        bad.push(arena.text().s(rel).s(":\{i\}: \{line.trim_spaces()\}").take())
+  verdict.check_list("a package's tests do not write a single test's line by hand", seen, "lines",
+    bad@, "go through verdict.start / verdict.pass / verdict.skip (see std/verdict.kspls)")
+
+// That the slice's type name is not written directly.
+// Caution: **Writing it directly rots silently**: a second copy drifts from core's with no sign.
+// Only the source itself is left out (this check is in `tests/`, out of scope).
+priv fn check_slice_name(arena: Arena$@)
+  $seen: Sz = 0
+  $bad: = List<|U8[]|>.new(arena)
+  for rel in harness.tracked_matching(U8[][]::{ "ksplc/*.kspls" })
+    if rel.equals("ksplc/base/core.kspls")
+      continue
+    $i: Sz = 0
+    for line in harness.read_under_root(rel).lines(arena)
+      seen += 1
+      i += 1
+      if line.find_str("\"Slice\"") >= 0 || line.find_str("\"std.lang.Slice\"") >= 0
+        bad.push(arena.text().s(rel).s(":\{i\}: \{line.trim_spaces()\}").take())
+  verdict.check_list("the slice's type name is not written directly", seen, "lines", bad@,
+    "go through core.slice_fqn / core.slice_ident()")
+
+priv fn check_file_summary_first(arena: Arena$@) //<
+  //< A file that describes itself starts with that description
+  //<
+  //< **The eye lands on the first line**, and a banner above pushes the purpose off the screen.
+  //< Caution: **Test whether the line continues a run before testing whether it is a comment.** A
+  //< `//<` starts with `//` too, so the looser test done first skips every run and the check goes
+  //< green having found none (`file_doc_at` in `../../ksplc/base/ast_doc.kspls`, likewise).
+  $seen: Sz = 0
+  $bad: = List<|U8[]|>.new(arena)
+  for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    seen += 1
+    $over: Sz = 0
+    $i: Sz = 0
+    for line in harness.read_under_root(rel).lines(arena)
+      i += 1
+      t: = line.trim_spaces()
+      if t.starts_with("//<")
+        if over > 0
+          bad
+            .push(arena.text().s(rel).s(":\{i\}: line \{over\} stands over it").take())
+        break
+      // A blank line does not end the search; the first code line does.
+      if t.len == 0
+        continue
+      if !t.starts_with("//")
+        break
+      if over <= 0
+        over = i
+  verdict.check_list("a file that describes itself opens with that description", seen, "files",
+    bad@, "move the //< run to the head, and leave the banner for whoever edits it below")
+
+priv const plural_names: U8[][6] = ::{ "test", "tool", "doc", "app", "board", "driver" } //<
+  //< The singular names a folder holding many of a kind must not take
+  //<
+  //< ("A folder's name is plural where it names its contents" in `docs/SPEC-documents.md`.) A name
+  //< that is not such a noun (`parse`, `sema`, `model`) names an aspect of its package, and stays.
+
+priv fn check_folder_names(arena: Arena$@) //<
+  //< A folder holding many of a kind is named in the plural
+  //<
+  //< Caution: **It reads the folders git knows, not the disk**; `out/` holds names nobody wrote.
+  $seen: Sz = 0
+  $bad: = List<|U8[]|>.new(arena)
+  $said: = List<|U8[]|>.new(arena)
+  files: = harness.tracked() catch
+    harness.fatal("cannot list the files git knows")
+    return
+  for rel in files
+    $at: Sz = 0
+    for at < rel.len
+      cut: = rel.sub_from(at).find_char('/')
+      if cut < 0
+        break
+      part: = rel.sub(at, cut)
+      at += cut + 1
+      seen += 1
+      for one in U8[][]::plural_names
+        if !part.equals(one)
+          continue
+        where: = rel.sub(0, at - 1)
+        $had: = false
+        for w in said
+          if w.equals(where)
+            had = true
+        if had
+          continue
+        said.push(arena.dup_str(where))
+        bad
+          .push(arena.text().s(where).s(": name it `").s(part).s("s`").take())
+  verdict.check_list("a folder holding many of a kind is named in the plural", seen, "folder names",
+    bad@, "rename it, and mend what named it (`make test-docref` counts those)")
+
+fn main(): I32
+  arena: = harness.begin(1024 * 1024 * 1024)
+  cspell.run(arena)
+  check_runtime_check_location(arena)
+  check_panic_spelling(arena)
+  check_named_std_fires(arena)
+  check_raw_fires(arena)
+  check_result_fires(arena)
+  check_result_line(arena)
+  check_case_line(arena)
+  check_slice_name(arena)
+  check_compiler_named_std(arena)
+  csize.run(arena)
+  ctheme.run(arena)
+  cshut.run(arena)
+  cmanual.run(arena)
+  check_comments(arena)
+  check_summary_inside(arena)
+  check_file_summary_first(arena)
+  check_folder_names(arena)
+  cnow.run(arena)
+  cnotice.run(arena)
+  cverdict.run(arena)
+  cline.run(arena)
+  crule.run(arena)
+  ckind.run(arena)
+  cfixture.run(arena)
+  cmatch.run(arena)
+  cbound.run(arena)
+  chand.run(arena)
+  ciface.run(arena)
+  check_lang_prefix(arena)
+  check_descriptors(arena)
+  check_descriptor_fires(arena)
+  prose.run(arena)
+  check_map_at_boundary(arena)
+  cdiv.run(arena)
+  cmerge.run(arena)
+  cwin.run(arena)
+  czip.run(arena)
+  return harness.finish()

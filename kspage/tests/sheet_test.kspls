@@ -1,0 +1,101 @@
+//< Tests the style table itself (what looks a style up by name)
+//<
+//< **It does not test how a style is applied** ([`style_test.kspls`](style_test.kspls)): only
+//< which style a name returns. The lookup remembers the last one found (the reason is "A style is
+//< looked up by name once" in `../../kspage/docs/DESIGN.md`).
+import "kspage/model/paint"
+import "kspage/model/style" { Sheet }
+import "kspage/tests/base"
+import "std/mem" { Arena }
+import "std/verdict"
+
+fn test_a_name_finds_the_same_style_wherever_it_sits() //<
+  //< The name lookup remembers the last one found
+  //<
+  //< **The answer is pinned**: a change in the returned style would silently change the applied
+  //< style, with the text unchanged.
+  verdict
+    .start("[kspage/style] the answer looked up by name not changing with the place in the table \
+      test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  sheet.add("z", paint.inherit_all()).indent = 1.0
+  sheet.add("a", paint.inherit_all()).indent = 2.0
+  sheet.add("m", paint.inherit_all()).indent = 3.0
+  // Caution: **Look them up out of order**, or only the case where the memo hits is tried.
+  for _round in Range.asc(2)
+    switch sheet.find("m") case .some(s)
+      assert(base.near(s.indent, 3.0), "the middle name is found")
+    case .none
+      assert(false, "m is not found")
+    switch sheet.find("z") case .some(s)
+      assert(base.near(s.indent, 1.0), "the first name is found")
+    case .none
+      assert(false, "z is not found")
+    switch sheet.find("a") case .some(s)
+      assert(base.near(s.indent, 2.0), "the last name is found")
+    case .none
+      assert(false, "a is not found")
+  verdict.pass("remembering or not, the style found is decided by the name.")
+
+fn test_two_styles_with_one_name_keep_the_first() //<
+  //< **Where the same name was added twice, the one added first is the answer.**
+  verdict
+    .start("[kspage/style] the earlier one being found where the same name is there twice test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  sheet.add("body", paint.inherit_all()).indent = 7.0
+  sheet.add("body", paint.inherit_all()).indent = 9.0
+  switch sheet.find("body") case .some(s)
+    assert(base.near(s.indent, 7.0), "the one added first is found")
+  case .none
+    assert(false, "body is not found")
+  verdict.pass("the one added first is the answer.")
+
+fn test_a_missing_name_is_found_after_it_is_added() //<
+  //< A missing name is found once it is added
+  //<
+  //< Caution: **Do not remember "there was none".** Remembered, a style added later could never be
+  //< found.
+  verdict.start("[kspage/style] a name that was missed being found once it is added later test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  sheet.add("body", paint.inherit_all()).indent = 1.0
+  if _s: = sheet.find("added later")
+    assert(false, "a name not there yet is found all the same")
+  sheet.add("added later", paint.inherit_all()).indent = 5.0
+  switch sheet.find("added later") case .some(s)
+    assert(base.near(s.indent, 5.0), "it is found after it is added")
+  case .none
+    assert(false, "added and yet it is not found (the miss is remembered)")
+  verdict.pass("a miss is not remembered, so a style added later is found.")
+fn test_a_shrunk_sheet_does_not_break_the_memo() //<
+  //< Looking a style up still works after the style table shrinks
+  //<
+  //< **The style table shrinks** on an undo (`remove_at` in `../../kspage/write/edit.kspls`, `len
+  //< -= 1` in `../../kspage/write/shape.kspls`), so the remembered index can point past its end.
+  //<
+  //< Read there, it panics — **and in wasm the page freezes** (the panic ends in `for {}`).
+  verdict.start("[kspage/style] being found even where the style table shrinks test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  sheet: = Sheet.new(base.root_font(), arena)
+  sheet.add("a", paint.inherit_all()).indent = 1.0
+  sheet.add("b", paint.inherit_all()).indent = 2.0
+  // The last style is looked up, so it is remembered.
+  switch sheet.find("b") case .some(s)
+    assert(base.near(s.indent, 2.0), "it is found before remembering")
+  case .none
+    assert(false, "b is not found")
+  // The state after an undo has removed the style it added.
+  sheet.styles.len -= 1
+  switch sheet.find("a") case .some(s)
+    assert(base.near(s.indent, 1.0), "the style left over is found")
+  case .none
+    assert(false, "a is not found after the shrinking")
+  if _s: = sheet.find("b")
+    assert(false, "a style that is gone is found all the same")
+  verdict.pass("the table shrinking only means the remembering does not hit.")

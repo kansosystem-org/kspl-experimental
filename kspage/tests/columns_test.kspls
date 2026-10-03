@@ -1,0 +1,141 @@
+import "kspage/lay/flow"
+import "kspage/model/doc" { Doc }
+import "kspage/model/fixed_font" as fixed
+// `html.write` needs metrics (a line-height multiple scales one line's height). Why these are
+// fixed: the header of `kspage/model/fixed_font.kspls`.
+import "kspage/model/paint"
+import "kspage/model/style" { Sheet }
+import "kspage/share/html"
+import "kspage/tests/base"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// kspage: checks columns.
+// **Columns are one block**, not a break between sections, so their range is its children. **The
+// heights are balanced** (filled in order, the right column would be empty for short contents).
+// The metrics are fixed (`kspage/model/fixed_font`): ASCII 8px, a line 19.2px.
+// ==========================================
+
+priv fn column_sheet(arena: Arena$@): Sheet$@ //<
+  //< A two-column style, and the style of a paragraph not in columns
+  //<
+  //< **The gap is 10px**, so in a region of width 210 one column is 100px.
+  sheet: = Sheet.new(base.root_font(), arena)
+  two: = sheet.add("two", paint.inherit_all())
+  two.columns = 2
+  two.column_gap = 10.0
+  sheet.add("body", paint.inherit_all())
+  return sheet
+
+priv fn filled(doc: Doc$@, n: Sz) //< puts `n` one-line children into the column block
+  b: = doc.add_block("two")
+  for $i: Sz = 0; i < n; i += 1
+    b.add_child("body").add_text("ab")
+
+fn test_children_split_into_columns()
+  verdict.start("[kspage/columns] the children parting into columns test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  doc: = Doc.new(arena)
+  filled(doc, 4)
+
+  page: = flow.layout(doc, column_sheet(arena), fixed.make(), 210.0, arena)
+  assert(page.boxes.len == 4, "all four children are laid")
+  assert(base.near(page.boxes.get(0).rect.x, 0.0), "the first is in the left column")
+  assert(base.near(page.boxes.get(1).rect.x, 0.0), "the second is in the left column too")
+  assert(base.near(page.boxes.get(2).rect.x, 110.0),
+    "the third is in the right column (width 100 + gap 10)")
+  assert(base.near(page.boxes.get(3).rect.x, 110.0), "the fourth is in the right column too")
+  assert(base.near(page.boxes.get(2).rect.y, page.boxes.get(0).rect.y),
+    "every column starts from the same top")
+  assert(base.near(page.height, 38.4), "the height is the tallest column's (two rows)")
+  verdict.pass("four children are evened across two columns.")
+
+fn test_one_child_stays_in_the_first_column() //<
+  //< **It is still columns with fewer children than columns**
+  //<
+  //< Collapsed, applying columns would show nothing.
+  verdict.start("[kspage/columns] laying it at the column's width even with one child test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  doc: = Doc.new(arena)
+  filled(doc, 1)
+
+  page: = flow.layout(doc, column_sheet(arena), fixed.make(), 210.0, arena)
+  assert(page.boxes.len == 1, "there is one box")
+  assert(base.near(page.boxes.get(0).rect.x, 0.0), "it is in the left column")
+  assert(base.near(page.height, 19.2), "the height is one row")
+  verdict.pass("the column left over stays empty, and the column's width does not change.")
+
+fn test_measuring_leaves_nothing_behind() //<
+  //< What was laid out to measure the heights is not left on the screen
+  //<
+  //< Caution: **Do not leave the measured layout on the screen.** Measuring the heights is "lay
+  //< out, measure, roll back", so a missed rollback shows the same text twice.
+  verdict.start("[kspage/columns] what was laid to measure the height not being left test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  doc: = Doc.new(arena)
+  filled(doc, 3)
+
+  page: = flow.layout(doc, column_sheet(arena), fixed.make(), 210.0, arena)
+  assert(page.boxes.len == 3,
+    "there are as many boxes as children (what was laid to measure is not left)")
+  verdict.pass("what was laid in order to measure is wound back.")
+
+fn test_without_columns_nothing_changes() //<
+  //< **A style without columns lays out as before**
+  //<
+  //< Splitting even one style without a column count would change how existing documents look.
+  verdict.start("[kspage/columns] a style with no count of columns not changing test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  doc: = Doc.new(arena)
+  b: = doc.add_block("body")
+  b.add_child("body").add_text("ab")
+  b.add_child("body").add_text("cd")
+
+  page: = flow.layout(doc, column_sheet(arena), fixed.make(), 210.0, arena)
+  assert(page.boxes.len == 2, "there are two boxes")
+  assert(base.near(page.boxes.get(1).rect.x, 0.0), "the second starts from the left edge too")
+  assert(base.near(page.boxes.get(1).rect.y, 19.2), "the second is below the first")
+  verdict.pass("a style with no count of columns written on it only stacks them.")
+
+fn test_columns_survive_store()
+  verdict.start("[kspage/columns] the columns being left through a putting out and in test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  doc: = Doc.new(arena)
+  filled(doc, 2)
+
+  back: = base.round_trip(doc, column_sheet(arena), arena)
+  switch back.sheet.find("two") case .some(s)
+    assert(s.columns == 2, "the count of columns is left")
+    assert(base.near(s.column_gap, 10.0), "the gap between the columns is left too")
+  case .none
+    panic("kspage_columns: the style 'two' cannot be read back")
+  switch back.sheet.find("body") case .some(s)
+    assert(s.columns == 0, "a style with nothing written on it is not in columns (the default)")
+  case .none
+    panic("kspage_columns: the style 'body' cannot be read back")
+  verdict.pass("the count of columns and the gap are left through a round trip of JSON.")
+
+fn test_html_writes_column_count() //<
+  //< **The column's width is not written** (the count and the gap decide it)
+  verdict.start("[kspage/columns] the HTML written out holding the count of columns test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  doc: = Doc.new(arena)
+  filled(doc, 2)
+
+  $out: = Str_builder.new()
+  defer out.free()
+  html.write(doc, column_sheet(arena), fixed.make(), out@)
+  text: = out.slice()
+  assert(base.has(text, "column-count: 2;"), "the count of columns comes out")
+  assert(base.has(text, "column-gap: 10px;"), "the gap between the columns comes out too")
+  assert(!base.has(text, "column-width"),
+    "the column's width does not come out (it is decided by the count and the gap)")
+  verdict.pass("columns map straight onto CSS's columns.")

@@ -1,0 +1,75 @@
+#!/usr/bin/env -S ksplc run
+//< It pins down that spelling the entry file's path differently does not change a logical name
+//<
+//< The logical name is used in name mangling, diagnostics and the generated C's `#line`. The test
+//< program is two files, as one file does not exercise declarations without a visibility marker.
+
+// ==========================================
+//   1. an absolute path, and one spelt through `..`, pass too — main uses lib's **unmarked**
+//      declarations, seen only inside the one package
+//   2. the generated C does not differ by one byte — no spelling leaks into the mangled name
+// The files belong to this package, so their name is `ksplc/…` read from the package's top, and
+// the top is found with `..` folded ("A path's `..` is resolved by its spelling" in
+// `../../../docs/DESIGN.md`).
+// ==========================================
+import "ksplc/tests/support/harness"
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+priv const rel_entry: U8[] = "tests/filepath/main.kspls"
+priv const dotted_entry: U8[] = "tests/filepath/../filepath/main.kspls" //<
+  //< The same file through a folder and back out of it
+
+priv fn diff_detail(a: U8[], b: U8[], arena: Arena$@): U8[] //<
+  //< It returns the bytes around the first position where the generated C in a and b disagree
+  //<
+  //< It returns empty where they are the same.
+  //< Caution: **Compare the bytes rather than a line count or a count of marks.** A spelling that
+  //< leaks in neither grows nor shrinks anything, so counts cannot notice a changed name.
+  if a.equals(b)
+    return ""
+  $d: = Str_builder.new()
+  defer d.free()
+  d.s("relative \{a.len\} bytes / the other \{b.len\} bytes")
+  shorter: = a.len if a.len < b.len else b.len
+  for $i: Sz = 0; i < shorter; i += 1
+    if a[i] != b[i]
+      from: = i - 60 if i > 60 else 0
+      d.s("\nthe first difference: ")
+        .s(a.sub(from, i + 60 - from if i + 60 <= a.len else a.len - from))
+      break
+  return arena.dup_str(d.slice())
+
+priv fn same_c(name: U8[], entry: U8[], rel: U8[], dir: U8[], arena: Arena$@) //<
+  //< It compiles the files through another spelling and checks the C equals the relative one's
+  gen: = arena.text().s("\{dir\}/\{name\}.c").take()
+  r: = harness.ksplc(U8[][]::{ entry, gen })
+  if !verdict.check(arena.text().s("it compiles with the \{name\} entry path too").take(),
+    r.code == 0, r.out)
+    return
+  b: = io.read_file(gen) catch
+    fallback ""
+  verdict.check(arena.text().s("the \{name\} entry path gives the same C").take(),
+    rel.len > 0 && rel.equals(b), diff_detail(rel, b, arena))
+
+fn main(): I32
+  arena: = harness.begin(1 << 22)
+  dir: = harness.sandbox("filepath") catch
+    return harness.fatal("cannot make the place")
+  rel_c: = arena.text().s("\{dir\}/rel.c").take()
+  abs_entry: = fs.absolute(rel_entry, arena) catch
+    return harness.fatal("the working directory cannot be read")
+
+  r1: = harness.ksplc(U8[][]::{ rel_entry, rel_c })
+  if !verdict.check("it compiles with a relative entry path", r1.code == 0, r1.out)
+    return harness.finish()
+  a: = io.read_file(rel_c) catch
+    fallback ""
+  same_c("absolute-path", abs_entry, a, dir, arena)
+  same_c("dotted", dotted_entry, a, dir, arena)
+  return harness.finish()

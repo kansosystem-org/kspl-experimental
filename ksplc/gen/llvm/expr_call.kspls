@@ -1,0 +1,387 @@
+//< Generates LLVM IR for function and method calls, kept in a file of its own
+//<
+//< The postfix `(`.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/core" as base_core
+import "ksplc/gen/llvm/ctx" as gen_llvm_ctx + { Genllvm_ctx }
+import "ksplc/gen/llvm/expr" as gen_llvm_expr
+import "ksplc/gen/llvm/types" as gen_llvm_types
+import "ksplc/sema/body/call" as sema_body_call
+import "ksplc/sema/type/def" as sema_type_def
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" { Sema_symbol }
+import "std/chars" // the one-character tests and cuts
+import "std/ds" { List, Map }
+import "std/str"
+
+impl Genllvm_ctx
+  fn get_or_build_trait_method_idx(r: Self$@, d: sema_type_def.Trait_def$@, name: U8[]): I32 //<
+    //< A trait method's vtable index by name, from a table built once per trait
+    //<
+    //< A linear walk of methods_list per call site would be O(N*M). The table is built once per
+    //< trait and stored in cg.trait_method_idx_cache, so later calls are O(1).
+    cache_key: = Sz::d
+    $idx_map: = r.trait_method_idx_cache.get(cache_key) catch null
+    if idx_map == null
+      idx_map = base_core.arena.create(Map<|U8[], I32|>.new(base_core.arena))
+      for im in Range.asc(d.methods_list.len)
+        idx_map.set(d.methods_list.get(im).name, I32::im)
+      r.trait_method_idx_cache.set(cache_key, idx_map)
+    return idx_map.get(name) catch -1
+
+priv fn emit_llvm_intrinsic_call(cg: Genllvm_ctx$@, call_node: Ast_node$@,
+  intr: sema_body_call.Intrinsic, args_node: Ast_node$@): U8$[] //<
+    //< It turns compiler intrinsics, such as a volatile read or write, into LLVM instructions.
+  if intr == .read_volatile
+    $ptr_reg: = ""
+    $val_type: = 0
+    if args_node != null
+      if arg1: = args_node.get_arg_at(0)
+        ptr_reg = arg1.emit_llvm_expr(cg)
+        val_type = cg.env.strip_ptr(arg1.type_id)
+    res_reg: = cg.next_reg()
+    cg.s("    %\{res_reg\} = load volatile ")
+    cg.t(val_type).s(", ptr ").s(ptr_reg).s("\n")
+    return cg.reg_str(res_reg)
+  if intr == .write_volatile
+    $ptr_reg: = ""
+    $val_reg: = ""
+    $val_type: = 0
+    if args_node != null
+      arg1: = args_node.get_arg_at(0).unwrap_or(null)
+      arg2: = args_node.get_arg_at(1).unwrap_or(null)
+      if arg1 != null && arg2 != null
+        ptr_reg = arg1.emit_llvm_expr(cg)
+        val_reg = arg2.emit_llvm_expr(cg)
+        val_type = cg.env.strip_ptr(arg1.type_id)
+    cg.s("    store volatile ")
+    cg.t(val_type).s(" ").s(val_reg).s(", ptr ").s(ptr_reg).s("\n")
+    return base_core.arena.dup_str("0")
+  if intr == .asm_volatile
+    // It converts inline asm without operands (hlt / nop / wfi and the like) into an LLVM inline
+    // asm expression. A form with constrained operands cannot be converted mechanically into
+    // LLVM's constraint syntax, so sema rejects it for the LLVM target. Several template strings
+    // are joined with newlines.
+    cg.s("    call void asm sideeffect \"")
+    $first: = true
+    if args_node != null
+      for ch in args_node.children
+        if ch.kind_id == .k_string
+          if !first
+            cg.s("\\0A")
+          cg.emit_llvm_str_body(ch.text)
+          first = false
+    cg.s("\", \"\"()\n")
+    return base_core.arena.dup_str("0")
+  // __kspl_inline_c embeds C source, which LLVM IR cannot hold: sema refuses it for this target.
+  call_node.ice_panic("Genllvm ICE: __kspl_inline_c reached genllvm")
+  return base_core.arena.dup_str("0")
+
+// The callee's parameter type IDs in declaration order (receiver included); empty if unresolved.
+// Caution: An argument is passed in **the parameter's type**, not the argument expression's
+// (emit_numeric_coerce's rule: a store is emitted in the destination's type). KSPL's integer
+// literals infer to I32, so an I32 passed to an Sz parameter is common. In the argument's type,
+// `call void @f(..., i32 4, ...)` disagrees with `define void @f(..., i64 %n, ...)`, yet LLVM
+// takes a call's signature from the instruction itself, so even the verifier accepts it.
+priv fn callee_param_type_ids(cg: Genllvm_ctx$@, recv: Ast_node$@, is_trait: Bool,
+  trait_method_idx: I32, fn_def_node: Ast_node$@): List<|I32|>$@
+  out: = List<|I32|>.create(base_core.arena)
+
+  $decl_node: Ast_node$@ = null
+  if is_trait
+    // It reads the trait's method declarations (the thunks are generated in this run too).
+    switch cg.env.trait_def_of_receiver(recv.get_postfix_receiver().type_id) case .some(d)
+      if trait_method_idx >= 0 && Sz::trait_method_idx < d.methods_list.len
+        m_sym: = d.methods_list.get(trait_method_idx)
+        if m_sym != null
+          decl_node = m_sym.node
+    default {}
+  else if fn_def_node != null
+    decl_node = fn_def_node
+  else
+    // A call through a function value: the parameters are its type's, as sema matched them
+    // (infer_value_call_args in sema/body/call_args.kspls).
+    if sig: = cg.env.fn_sig_of(recv.type_id)
+      return sig.params
+  if decl_node == null
+    return out
+
+  params: = decl_node.get_fn_params()
+  if params == null
+    return out
+  for p in params.children
+    if p.kind_id == .k_fn_param
+      p_type: = p.get_decl_type_node()
+      out.push(p_type.type_id if p_type != null else 0)
+  return out
+
+priv fn variadic_value_id(cg: Genllvm_ctx$@, arg_id: I32): I32 //<
+  //< The value's type as used to decide the promotion
+  //<
+  //< An enum is decided by its base integer.
+  //< Caution: **Do not keep the enum's type id.** Its width reads as the default 32, so no
+  //< conversion seems needed and no instruction is emitted, while the IR uses `i32` (LLVM rejects
+  //< that at once).
+  id: = cg.env.get_clean_real_type(arg_id)
+  switch cg.env.get_info(id) case .enum_type(def)
+    return cg.env.get_clean_real_type(def.base_type_id)
+  default {}
+  return id
+
+priv fn variadic_promoted_id(cg: Genllvm_ctx$@, id: I32): I32 //<
+  //< The "default argument promotion" for an argument passed to C's variadic part (`...`)
+  //<
+  //< **Without it, the width disagrees with what the callee reads.** A `Bool` and an enum both
+  //< promote to `int` in C. Checked by width, they take the same branch.
+  bits: = cg.env.get_primitive_bit_size(id)
+  if cg.env.is_float(id)
+    return I32::sema_type_env.Builtin_type_id.f64_type if bits < 64 else 0
+  if (cg.env.is_integer(id) || cg.env.is_bool(id)) && bits < 32
+    return I32::sema_type_env.Builtin_type_id.i32_type
+  return 0
+
+impl Ast_node
+  fn emit_llvm_call(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
+    recv: = r.get_postfix_receiver()
+    args_node: = r.safe_get_child(2)
+
+    is_method: = recv.kind_id == .k_method_access || recv.kind_id == .k_generic_method
+
+    $is_trait: = false
+    $trait_method_idx: I32 = -1
+
+    if is_method
+      switch cg.env.trait_def_of_receiver(recv.get_postfix_receiver().type_id) case .some(d)
+        is_trait = true
+        member_node: = recv.get_postfix_member()
+        trait_method_idx = cg.get_or_build_trait_method_idx(d, member_node.text)
+      default {}
+
+    if !is_method && recv.kind_id == .k_identifier
+      intr: = sema_body_call.intrinsic_of(recv.text)
+      if intr != .not_intrinsic
+        return emit_llvm_intrinsic_call(cg, r, intr, args_node)
+
+    $callee_operand: = ""
+    $obj_reg: = ""
+    $obj_type_id: = 0
+
+    // Whether the callee's name is emitted as `@<name>` unchanged (unmangled).
+    $verbatim_name: = false
+    // Whether the callee uses the C ABI. If true, aggregates are not passed or returned through
+    // pointers.
+    $callee_uses_c_abi: = false
+    $is_variadic: = false
+    $fn_def_node: Ast_node$@ = null
+
+    // Caution: **Take the callee's symbol only where a name calls a function** (sema decides this
+    // once). A call's result also carries its own callee's declaration, so `pick()(21)` would
+    // take `pick`'s parameters and ABI.
+    if !is_method && sema_body_call.resolves_to_named_fn(recv) && recv.def_node.sym_ptr != null
+      sym: = Sema_symbol$@::recv.def_node.sym_ptr
+      fn_def_node = recv.def_node
+      verbatim_name = sym.uses_verbatim_c_name()
+      callee_uses_c_abi = sym.uses_c_abi()
+      switch sym.kind case .function(v)
+        is_variadic = v
+      default {}
+
+    if is_method
+      obj: = recv.get_postfix_receiver()
+
+      if is_trait
+        $trait_val: = obj.emit_llvm_expr(cg)
+        is_ptr: = cg.env.is_pointer(obj.type_id)
+
+        // So that automatic dereferencing works on a multi-level pointer too (MyTrait@@, say), the
+        // extra levels are loaded away one at a time before the extraction code below, which
+        // assumes depth 1 (at depth 0 or 1 the loop runs zero times).
+        $depth: = cg.env.ptr_depth(obj.type_id)
+        $cur_id: = obj.type_id
+        for depth > 1
+          cur_id = cg.env.strip_ptr(cur_id)
+          next_reg: = cg.next_reg()
+          cg.op_load(next_reg, cur_id, trait_val)
+          trait_val = cg.reg_str(next_reg)
+          depth -= 1
+
+        $obj_ptr: = ""
+        $vtable_ptr: = ""
+
+        if is_ptr
+          obj_ptr_addr: = cg.next_reg()
+          cg.s("    %\{obj_ptr_addr\} = getelementptr inbounds { ptr, ptr }, ptr ").s(trait_val)
+            .s(", i32 0, i32 0\n")
+          obj_ptr_reg: = cg.next_reg()
+          cg.s("    %\{obj_ptr_reg\} = load ptr, ptr %\{obj_ptr_addr\}\n")
+          obj_ptr = cg.reg_str(obj_ptr_reg)
+
+          vtable_ptr_addr: = cg.next_reg()
+          cg.s("    %\{vtable_ptr_addr\} = getelementptr inbounds { ptr, ptr }, ptr ").s(trait_val)
+            .s(", i32 0, i32 1\n")
+          vtable_ptr_reg: = cg.next_reg()
+          cg.s("    %\{vtable_ptr_reg\} = load ptr, ptr %\{vtable_ptr_addr\}\n")
+          vtable_ptr = cg.reg_str(vtable_ptr_reg)
+        else
+          obj_ptr_reg: = cg.next_reg()
+          cg.s("    %\{obj_ptr_reg\} = extractvalue ")
+          cg.t(obj.type_id).s(" ").s(trait_val).s(", 0\n")
+          obj_ptr = cg.reg_str(obj_ptr_reg)
+
+          vtable_ptr_reg: = cg.next_reg()
+          cg.s("    %\{vtable_ptr_reg\} = extractvalue ")
+          cg.t(obj.type_id).s(" ").s(trait_val).s(", 1\n")
+          vtable_ptr = cg.reg_str(vtable_ptr_reg)
+
+        obj_base_id: = cg.env.strip_ptr_full(obj.type_id)
+        cg.clear_scratch()
+        cg.env.mangle_type_id_to(cg.env.get_real_type(obj_base_id), cg.scratch)
+        m_trait_str: = cg.take_scratch()
+
+        fn_ptr_addr: = cg.next_reg()
+        cg.s("    %\{fn_ptr_addr\} = getelementptr inbounds %kspl_vtable_").s(m_trait_str)
+          .s(", ptr ").s(vtable_ptr).s(", i32 0, i32 \{trait_method_idx\}\n")
+        fn_ptr: = cg.next_reg()
+        cg.s("    %\{fn_ptr\} = load ptr, ptr %\{fn_ptr_addr\}\n")
+
+        callee_operand = cg.reg_str(fn_ptr)
+
+        obj_reg = obj_ptr
+        obj_type_id = cg.env.make_ptr(I32::sema_type_env.Builtin_type_id.void_type)
+    else
+      callee_operand = recv.emit_llvm_expr(cg)
+
+    arg_regs: = List<|U8[]|>.create(base_core.arena)
+    arg_types: = List<|I32|>.create(base_core.arena)
+
+    // The callee's parameter types. An argument is always passed in this type (the reason is at
+    // callee_param_type_ids). For a call that cannot be resolved the list is empty, and only then
+    // is the argument's own type used.
+    param_type_ids: =
+      callee_param_type_ids(cg, recv, is_trait, trait_method_idx, fn_def_node)
+    $param_idx: Sz = 0
+
+    if is_method
+      arg_regs.push(obj_reg)
+      arg_types.push(obj_type_id)
+      // A trait's method declaration counts the receiver (`r: Self$@`) as a parameter too, so the
+      // arguments' positions shift by one as well.
+      param_idx += 1
+
+    if args_node != null
+      for arg in args_node.children
+        if !arg.is_literal(",")
+          $val_reg: = arg.emit_llvm_expr(cg)
+          $slot_type_id: = arg.type_id
+          if param_idx < param_type_ids.len
+            p_id: = param_type_ids.get(param_idx)
+            // Only numeric scalars are converted to the parameter's type. An aggregate is passed
+            // by pointer, so no named type appears in the call instruction, and every pointer is a
+            // `ptr`, so width matters only for numbers. Conversely, using the parameter's type for
+            // an aggregate gives a "same structure, different name" mismatch: a `%U8_Slice` value
+            // stored as a `%Const_U8_Slice` (LLVM requires named types to agree, so it errors).
+            if p_id != 0 && cg.env.is_numeric(p_id) && cg.env.is_numeric(arg.type_id)
+              val_reg = cg.emit_numeric_coerce(val_reg, arg.type_id, p_id)
+              slot_type_id = p_id
+          else if is_variadic && param_type_ids.len > 0
+            // Past the named parameters is the variadic part.
+            // Caution: **Do not promote on a call whose signature is unknown (the parameter list
+            // is empty).** There the named arguments take the same branch, so it would widen
+            // arguments the promotion does not apply to.
+            src_id: = variadic_value_id(cg, arg.type_id)
+            prom_id: = variadic_promoted_id(cg, src_id)
+            if prom_id != 0
+              val_reg = cg.emit_numeric_coerce(val_reg, src_id, prom_id)
+              slot_type_id = prom_id
+          param_idx += 1
+          arg_regs.push(val_reg)
+          arg_types.push(slot_type_id)
+
+    real_ret_id: = cg.env.get_real_type(r.type_id)
+    is_void: = sema_type_env.is_void(real_ret_id) || r.type_id == 0
+
+    // The internal ABI (ret_needs_sret in gen/llvm/types.kspls). Only a call to a C function (an
+    // `#ext` / `#export`) keeps the C ABI. sema's check_ffi_safety lets no aggregate pass or
+    // return by value through the C boundary, so "the caller uses the internal ABI, the definition
+    // the C ABI" cannot happen.
+    use_kspl_abi: = !callee_uses_c_abi
+
+    // An aggregate argument is passed by pointer. Here it is a value register, so before the call
+    // it is stored into a temporary slot for this call only and replaced by that pointer (each
+    // call has its own slot, so it stays by-value even if the callee writes to it).
+    arg_by_ptr: = List<|Bool|>.create(base_core.arena)
+    for $i: = 0; i < arg_regs.len; i += 1
+      a_type_id: = arg_types.get(i)
+      needs_ptr: = use_kspl_abi && cg.is_llvm_aggregate(a_type_id)
+      arg_by_ptr.push(needs_ptr)
+      if needs_ptr
+        slot: = cg.alloc_tmp_slot(a_type_id)
+        cg.s("    store ").t(a_type_id).s(" ").s(arg_regs.get(i)).s(", ptr ").s(slot).s("\n")
+        arg_regs.set(i, slot)
+
+    use_sret: = !is_void && use_kspl_abi && cg.ret_needs_sret(r.type_id)
+    $sret_slot: = ""
+    if use_sret
+      sret_slot = cg.alloc_tmp_slot(r.type_id)
+
+    $res_reg: I32 = 0
+    if !is_void && !use_sret
+      res_reg = cg.next_reg()
+      cg.s("    %\{res_reg\} = ")
+    else
+      cg.s("    ")
+
+    cg.s("call ")
+    if use_sret
+      cg.s("void ")
+    else
+      cg.t(r.type_id).s(" ")
+
+    if is_variadic
+      // Only an `#ext` declaration can be variadic (KSPL code cannot write one), so it always
+      // uses the C ABI.
+      cg.s("(")
+      emitted_params: = fn_def_node.get_fn_params()
+        .emit_llvm_param_list(cg,
+        gen_llvm_ctx.Param_list_opts::{ .with_names = false, .emit_variadic = false,
+        .kspl_abi = false, .emitted_before = false })
+      if emitted_params
+        cg.s(", ")
+      cg.s("...) ")
+
+    if callee_operand.starts_with("%") || callee_operand.starts_with("@")
+      cg.s(callee_operand)
+    else if verbatim_name
+      cg.s("@").s(callee_operand)
+    else if callee_operand.equals("main") || callee_operand.equals("kspl_main")
+      cg.s("@kspl_main")
+    else if gen_llvm_ctx.is_kspl_prefixed_or_ext(callee_operand, false)
+      cg.s("@").s(callee_operand)
+    else
+      cg.s("@kspl_").s(callee_operand)
+
+    cg.s("(")
+    $emitted_any: = false
+    if use_sret
+      cg.emit_agg_param_type().s(" ").s(sret_slot)
+      emitted_any = true
+    for i in Range.asc(arg_regs.len)
+      if emitted_any
+        cg.s(", ")
+      emitted_any = true
+      if arg_by_ptr.get(i)
+        cg.emit_agg_param_type()
+      else
+        cg.t(arg_types.get(i))
+      cg.s(" ").s(arg_regs.get(i))
+    cg.s(")\n")
+
+    if is_void
+      return base_core.arena.dup_str("0")
+    if use_sret
+      load_reg: = cg.next_reg()
+      cg.s("    %\{load_reg\} = load ").t(r.type_id).s(", ptr ").s(sret_slot).s("\n")
+      return cg.reg_str(load_reg)
+    return cg.reg_str(res_reg)

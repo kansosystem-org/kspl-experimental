@@ -1,0 +1,564 @@
+//< The actions that combine `edit`'s tools
+//<
+//< Applying things to text (a style, a color, a note, an annotation, a link), changing and adding
+//< styles, dragging a cell's size and a slide's frame, find and replace.
+//< Note: The operations that move a block itself are in [`block.kspls`](block.kspls), and the
+//< insert operations in [`insert.kspls`](insert.kspls).
+//< These are `Editor` methods too. The document is changed only through `edit`'s `do_*`.
+import "kspage/lay/ask" + { Edge, Grip }
+import "kspage/lay/caret" + { Caret }
+import "kspage/lay/find"
+import "kspage/lay/page" { Page }
+import "kspage/model/doc" { Block, Rect }
+import "kspage/model/paint"
+import "kspage/model/paper" { Paper }
+import "kspage/model/run" { Inline }
+import "kspage/model/style" + { Arrange, Sheet, Style }
+import "kspage/share/store"
+// The current frame is decided in one place (`frame_at`).
+import "kspage/write/block"
+import "kspage/write/edit" + { Editor }
+import "kspage/write/field"
+import "kspage/write/record" { Again, Step }
+import "kspage/write/typing"
+import "std/ds" { List }
+import "std/str" { Str_builder }
+
+priv fn swappable(c: Caret): Bool //< whether the text there may be replaced
+  //<
+  //< A formula's text is not replaced — changing it changes what the formula points at and means
+  //< (changing the formula itself is `Editor.set_source`).
+  if c.inline == null || c.anchor == null
+    return false
+  return !c.inline.is_formula() && !c.anchor.is_formula()
+
+priv fn link_ink(): paint.Ink //< a link's look
+  //<
+  //< The link itself is not part of the look (shared by name, it would split the style by where
+  //< each link points).
+  $ink: paint.Ink = paint.inherit_ink()
+  ink.color = Option<|U32|>.some(0x0000eeU32)
+  ink.underline = Option<|Bool|>.some(true)
+  return ink
+
+priv fn dragged(now: Rect, grip: Grip, px: F32, py: F32, ratio: Bool): Rect //<
+  //< The shape of a frame grabbed and dragged to (`px`, `py`)
+  //<
+  //< `px` and `py` are relative to the container's top left. The opposite corner stays fixed.
+  //< Moving keeps the offset from the point grabbed (otherwise the top left jumps to the pointer).
+  $to: Rect = now
+  if !grip.resize
+    to.x = px - grip.dx
+    to.y = py - grip.dy
+    return to
+  right: = now.x + now.w
+  bottom: = now.y + now.h
+  if grip.wide
+    if grip.left
+      to.x = px if px < right else right
+      to.w = right - to.x
+    else
+      wide: = px - now.x
+      to.w = wide if wide > 0.0 else 0.0F32
+  if grip.tall
+    if grip.top
+      to.y = py if py < bottom else bottom
+      to.h = bottom - to.y
+    else
+      tall: = py - now.y
+      to.h = tall if tall > 0.0 else 0.0F32
+  return kept(now, to, grip) if ratio && grip.wide && grip.tall else to
+
+priv fn kept(now: Rect, to: Rect, grip: Grip): Rect //<
+  //< The shape with the current height-to-width ratio kept
+  //<
+  //< Only when a corner is grabbed (with an edge handle the other side would move; no other product
+  //< keeps it there either). It follows whichever side moved more. The opposite corner stays fixed.
+  if now.w <= 0.0 || now.h <= 0.0
+    return to
+  share: = now.h / now.w
+  $fit: Rect = to
+  if to.w * share > to.h
+    fit.h = to.w * share
+  else
+    fit.w = to.h / share
+  if grip.left
+    fit.x = now.x + now.w - fit.w
+  if grip.top
+    fit.y = now.y + now.h - fit.h
+  return fit
+
+impl Editor
+  fn set_style(r: Self$@, name: U8[]): Bool //< applies a style name to the selected range
+    //<
+    //< A style is a name (no weight or size is stored directly). An empty name, or one not in the
+    //< table, looks like the parent. With nothing selected it applies to the whole inline the
+    //< cursor is in; otherwise the inline is split at the selection's ends.
+    if r.shut()
+      return false
+    if r.caret.inline == null
+      return false
+    r.break_group()
+    r.apply_style(r.step(), name)
+    r.break_group()
+    // The name is stored, not where it was applied (repeating applies it where the cursor is now).
+    r.again = Again.style(r.arena.dup_str(name))
+    return true
+
+  priv fn apply_style(r: Self$@, st: Step$@, name: U8[]) //<
+    //< Writes a name onto the selection (with nothing selected, the whole current inline)
+    //<
+    //< The caller opens the step. Applying a color is "prepare the style and apply it", and split
+    //< into two steps it would take two undos.
+    // Caution: Copy the name. The caller's text is gone at the next call.
+    kept: = r.arena.dup_str(name)
+    runs: = List<|Inline$@|>.create(r.arena)
+    r.span_runs(st, runs)
+    for $i: Sz = 0; i < runs.len; i += 1
+      field.do_set_style(r, st, runs.get(i), kept)
+    r.tidy(st, runs)
+
+  priv fn apply_href(r: Self$@, st: Step$@, href: U8[]) //<
+    //< Writes a link onto the selection (with nothing selected, the whole current inline)
+    to: = r.arena.dup_str(href)
+    runs: = List<|Inline$@|>.create(r.arena)
+    r.span_runs(st, runs)
+    for $i: Sz = 0; i < runs.len; i += 1
+      field.do_set_href(r, st, runs.get(i), to)
+    r.tidy(st, runs)
+
+  priv fn tidy(r: Self$@, st: Step$@, runs: List<|Inline$@|>$@) //<
+    //< Joins the inlines again in the parents of the inlines written to
+    //<
+    //< Caution: **Call it every time an inline is written to.** Without it, applying and removing
+    //< keeps adding inlines. Every parent is collected, since a selection can span blocks.
+    seen: = List<|Block$@|>.create(r.arena)
+    for $i: Sz = 0; i < runs.len; i += 1
+      own: = r.doc.owner_of(runs.get(i))
+      if !own.found
+        continue
+      $known: = false
+      for $k: Sz = 0; k < seen.len; k += 1
+        if seen.get(k) == own.block
+          known = true
+      if !known
+        seen.push(own.block)
+    for $i: Sz = 0; i < seen.len; i += 1
+      edit.merge_runs(r, st, seen.get(i))
+
+  fn set_chrome(r: Self$@, n: Inline$@, s: U8[]) //<
+    //< Replaces the whole text of the page's header or footer band
+    //<
+    //< Caution: **Record it in the same record as typing** (changed directly, undo does not work).
+    //< It is not sent to the peer's window (no path points there, so it would be silently lost).
+    if r.shut()
+      return
+    if n == null
+      return
+    r.break_group()
+    st: = r.step()
+    had: = n.text().len
+    if had > 0
+      edit.do_remove(r, st, n, 0, had)
+    if s.len > 0
+      edit.do_insert(r, st, n, 0, s)
+    r.break_group()
+
+  fn paint_span(r: Self$@, sheet: Sheet$@, ink: paint.Ink, accent: paint.Accent): Bool //<
+    //< Applies a color and emphasis to the selection
+    //<
+    //< They are not stored on the inline directly: a name is built from the settings, and that
+    //< style is prepared and applied. The same settings give the same name, so styles do not pile
+    //< up. Both are replaced whole.
+    if r.shut()
+      return false
+    if r.caret.inline == null || sheet == null
+      return false
+    r.break_group()
+    done: = r.paint_ink(r.step(), sheet, ink, accent)
+    r.break_group()
+    return done
+
+  priv fn paint_ink(r: Self$@, st: Step$@, sheet: Sheet$@, ink: paint.Ink, accent: paint.Accent):
+    Bool //<
+      //< The contents a color style gets.
+      //<
+      //< The caller opens the step (the same reason as `apply_style`).
+    $sb: = Str_builder.new()
+    defer sb.free()
+    if !paint.span_name(ink, accent, sb@)
+      r.apply_style(st, "")
+      return true
+    name: = r.arena.dup_str(sb.slice())
+    if s: = r.styled(st, sheet, name, Arrange.flow)
+      // The contents are set again every time (a person may have made a style with the same name
+      // and another look). The typeface and the size are not touched.
+      $fresh: Style = s$
+      fresh.ink = ink
+      fresh.font = paint.accent_into(fresh.font, accent)
+      field.do_set_look(r, st, s, fresh)
+      r.apply_style(st, name)
+      return true
+    return false
+
+  fn set_note(r: Self$@, text: U8[]): Bool //< puts a note at the cursor
+    //<
+    //< An empty text removes it. True if a note was set. The mark appears at the cursor: the inline
+    //< is split there and the note set on the first half. No number is set (it is counted where
+    //< notes are listed).
+    if r.shut()
+      return false
+    if r.caret.inline == null
+      return false
+    r.break_group()
+    st: = r.step()
+    $on: Inline$@ = r.caret.inline
+    // At the start of the text it goes on the inline before (a split would leave the first half
+    // empty).
+    if r.caret.offset <= 0
+      nb: = r.doc.neighbors(on)
+      if nb.prev != null
+        on = nb.prev
+    else
+      switch edit.split_run(r, st, on, r.caret.offset) case .some, .none {}
+    field.do_set_note(r, st, on, r.arena.dup_str(text))
+    r.break_group()
+    return true
+
+  fn set_remark(r: Self$@, text: U8[], by: U8[]): Bool //<
+    //< Puts an annotation on the selection
+    //<
+    //< An empty text removes it. True if set. An annotation applies to a range (like a link), so it
+    //< stays on both sides of a split. The caller passes who wrote it (the core has no user name).
+    if r.shut()
+      return false
+    if r.caret.inline == null
+      return false
+    r.break_group()
+    st: = r.step()
+    words: = r.arena.dup_str(text)
+    // Where the text is empty, who wrote it is cleared too.
+    who: = r.arena.dup_str(by) if text.len > 0 else ""
+    runs: = List<|Inline$@|>.create(r.arena)
+    r.span_runs(st, runs)
+    for $i: Sz = 0; i < runs.len; i += 1
+      field.do_set_remark(r, st, runs.get(i), words, who)
+    r.tidy(st, runs)
+    r.break_group()
+    return true
+
+  fn link_span(r: Self$@, sheet: Sheet$@, href: U8[]): Bool //< makes the selection a link
+    //<
+    //< An empty link removes it. True if applied.
+    //< Caution: **Apply the link and the look in the same step.** Separate, one undo leaves text
+    //< that is merely blue, or a link with no look. Removing the link restores the look too.
+    if r.shut()
+      return false
+    if r.caret.inline == null || sheet == null
+      return false
+    r.break_group()
+    st: = r.step()
+    r.apply_href(st, href)
+    ink: = link_ink() if href.len > 0 else paint.inherit_ink()
+    done: = r.paint_ink(st, sheet, ink, paint.inherit_accent())
+    r.break_group()
+    return done
+
+  priv fn span_runs(r: Self$@, st: Step$@, out: List<|Inline$@|>$@) //<
+    //< Collects the inlines to write into
+    //<
+    //< They are split so that the whole selection is included. With nothing selected it is the
+    //< whole inline the cursor is in. It writes nothing (the callers write a style or a link).
+    if !caret.has_selection(r.caret)
+      out.push(r.caret.inline)
+      return
+    sp: = caret.selection(r.doc, r.caret)
+    $from: Inline$@ = sp.from
+    $to: Inline$@ = sp.to
+    $to_offset: Sz = sp.to_offset
+    // Split at the start. After the split, the selection starts at the second half.
+    if tail: = edit.split_run(r, st, from, sp.from_offset)
+      if to == from
+        to = tail
+        to_offset -= sp.from_offset
+      from = tail
+    // Split at the end. The second half is not selected, so it is not collected.
+    switch edit.split_run(r, st, to, to_offset) case .some, .none {}
+    out.push(from)
+    if to == from
+      return
+    $n: Inline$@ = r.doc.neighbors(from).next
+    for n != null && n != to
+      out.push(n)
+      n = r.doc.neighbors(n).next
+    // A selection ending at byte 0 of the end inline does not include that inline.
+    if to_offset > 0
+      out.push(to)
+
+  fn drag_edge(r: Self$@, page: Page$@, edge: Edge, x: F32, y: F32) //<
+    //< Drags the grabbed boundary to (`x`, `y`)
+    //<
+    //< Caution: **Call it after layout.** A size is measured from the column's left (the row's top)
+    //< edge, otherwise from the layout before. It is called again and again while dragging, without
+    //< growing the record.
+    if r.shut()
+      return
+    if !edge.found
+      return
+    $to: F32 = x
+    switch edge.axis case .column
+      to = x
+    case .row
+      to = y
+    if from: = ask.edge_origin(page, edge)
+      // Do not let it go past the near edge (negative, the next column or row overlaps).
+      v: = to - from if to > from else 0.0F32
+      edit.do_set_size(r, r.step(), edge.table, edge.axis, edge.index, Option<|F32|>.some(v))
+
+  fn fit_edge(r: Self$@, page: Page$@, edge: Edge): Bool //<
+    //< Fits the column (or row) at that boundary to its contents. True if anything moved
+    //<
+    //< Fitting a row removes the setting, fitting a column sets a width — the reason is at `Fit` in
+    //< [`../lay/ask.kspls`](../lay/ask.kspls).
+    //< End the undo step on both sides (a fit is one click, separate from typing).
+    if r.shut()
+      return false
+    got: = ask.fit_at(page, edge)
+    if !got.found
+      return false
+    r.break_group()
+    edit.do_set_size(r, r.step(), edge.table, edge.axis, edge.index, got.size)
+    r.break_group()
+    return true
+
+  fn set_look(r: Self$@, s: Style$@, fresh: Style) //< replaces a style's contents whole
+    //<
+    //< There is no function that changes it field by field — "not set" is one of the settings, and
+    //< field by field "there was none" and "it was 0" get mixed up. **Changing one changes every
+    //< place that uses that name.**
+    if r.shut()
+      return
+    $copy: Style = fresh
+    if s == null || store.same_style(s, copy@)
+      return
+    r.break_group()
+    field.do_set_look(r, r.step(), s, fresh)
+    r.break_group()
+
+  fn set_paper(r: Self$@, sheet: Sheet$@, fresh: Paper) //< replaces the paper settings whole
+    //<
+    //< Replacing with the same settings does nothing (`store.same_paper`): the screen passes every
+    //< field whichever one is touched, and each would record an undo that restores nothing.
+    if r.shut()
+      return
+    if sheet == null || store.same_paper(sheet.paper, fresh)
+      return
+    r.break_group()
+    field.do_set_paper(r, r.step(), sheet, fresh)
+    r.break_group()
+
+  fn styled(r: Self$@, st: Step$@, sheet: Sheet$@, name: U8[], how: Arrange): Option<|Style$@|> //<
+    //< Prepares the style with that name and that arrangement
+    //<
+    //< Adds one where there is none; returns none where the arrangement does not match. The caller
+    //< opens the step (adding the style and the change undo together).
+    if sheet == null || name.len <= 0
+      return Option<|Style$@|>.none
+    if got: = sheet.find(name)
+      // An existing name's arrangement is not changed (every place using that name would change).
+      if !got.arrange.same_arrange(how)
+        return Option<|Style$@|>.none
+      return Option<|Style$@|>.some(got)
+    // Caution: Copy the name. The caller's text is gone at the next call.
+    made: = sheet.add(r.arena.dup_str(name), paint.inherit_all())
+    made.arrange = how
+    // Put the added style through the record (`Sheet.add` appends it at the end).
+    sheet.styles.len -= 1
+    field.do_sheet(r, st, sheet, sheet.styles.len, true, made)
+    return Option<|Style$@|>.some(made)
+
+  fn add_style(r: Self$@, sheet: Sheet$@, name: U8[], how: Arrange): Option<|Style$@|> //<
+    //< Adds one style and returns it
+    //<
+    //< An existing name is returned without adding, and the arrangement is set only when adding.
+    //< **Reject a name holding whitespace, here and only here** — this keeps names and HTML classes
+    //< one to one ("The mapping into HTML" in `../docs/DESIGN.md`).
+    //< Caution: **Do not move the check into `styled`**, whose callers build their name from one
+    //< already in the table — a document holding such a name would refuse every insertion.
+    if r.shut() || !style.name_plain(name)
+      return Option<|Style$@|>.none
+    r.break_group()
+    got: = r.styled(r.step(), sheet, name, how)
+    r.break_group()
+    return got
+
+  fn drag_frame(r: Self$@, page: Page$@, grip: Grip, x: F32, y: F32, ratio: Bool) //<
+    //< Drags the grabbed frame to (`x`, `y`)
+    //<
+    //< Caution: **Call it after layout.** A frame's position is from the slide's top left,
+    //< otherwise from the layout before. It is called again and again while dragging: the step
+    //< stays open until release (`break_group`), one undo, and the record does not grow.
+    if r.shut()
+      return
+    if !grip.found
+      return
+    $now: = Rect::{ .x = 0.0, .y = 0.0, .w = 0.0, .h = 0.0 }
+    switch grip.block.frame case .some(f)
+      now = f
+    case .none
+      return
+    if surface: = ask.grip_surface(page, grip)
+      to: = dragged(now, grip, x - surface.x, y - surface.y, ratio)
+      field.do_set_frame(r, r.step(), grip.block, Option<|Rect|>.some(to))
+      // Moving moves everything selected by the same amount. Only the grabbed frame changes size —
+      // resized one by one, even the gaps between them change (other products draw complaints for
+      // it).
+      if !grip.resize
+        r.slid(grip.block, to.x - now.x, to.y - now.y)
+
+  fn move_picks(r: Self$@, dx: F32, dy: F32): Bool //<
+    //< Moves the selected frame by (`dx`, `dy`)
+    //<
+    //< True if moved. One undo takes it back, through the same path as dragging.
+    if r.picked() == null
+      return false
+    r.break_group()
+    done: = r.slid(null, dx, dy)
+    r.break_group()
+    return done
+
+  priv fn slid(r: Self$@, but: Block$@, dx: F32, dy: F32): Bool //<
+    //< Moves the selected frame by (`dx`, `dy`), skipping `but`
+    //<
+    //< True if moved. `but` is the frame already moved (or null). A frame with no position is not
+    //< moved (it covers the whole slide).
+    one: = r.picked()
+    if one == null || one == but || !r.doc.parent_of(one).found
+      return false
+    if f: = one.frame
+      to: = Rect::{ .x = f.x + dx, .y = f.y + dy, .w = f.w, .h = f.h }
+      field.do_set_frame(r, r.step(), one, Option<|Rect|>.some(to))
+      return true
+    return false
+
+  fn place_frame(r: Self$@, x: F32, y: F32, w: F32, h: F32): Bool //<
+    //< Sets the current frame's position and size by numbers from the slide's top left
+    //<
+    //< It makes no negative size (inside out, it could not be grabbed). One undo takes it back. It
+    //< acts on the same frame as dragging (`frame_at`).
+    if r.shut()
+      return false
+    $b: Block$@ = null
+    switch r.frame_at() case .some(got)
+      b = got
+    case .none
+      return false
+    switch b.frame case .none
+      return false
+    case .some {}
+    r.break_group()
+    to: = Rect::{ .x = x, .y = y, .w = w if w > 0.0 else 0.0F32, .h = h if h > 0.0 else 0.0F32 }
+    field.do_set_frame(r, r.step(), b, Option<|Rect|>.some(to))
+    r.break_group()
+    return true
+
+  fn move_block(r: Self$@, from: Sz, to: Sz): Bool //<
+    //< Moves one top-level block from index `from` to index `to`
+    //<
+    //< Caution: **Make the removal and the insertion one action** (a step break only before and
+    //< after), or an undo leaves the block removed. Insert at the index after the removal
+    //< (everything after it has moved one place forward).
+    if r.shut()
+      return false
+    if from >= r.doc.blocks.len || to >= r.doc.blocks.len || from == to
+      return false
+    moved: = r.doc.blocks.get(from)
+    r.break_group()
+    edit.do_block(r, r.step(), null, from, false, null)
+    edit.do_block(r, r.step(), null, to, true, moved)
+    r.break_group()
+    // Caution: **Make the cursor anew.** The `Inline` has not moved, but the remembered path now
+    // points at another block.
+    r.caret = caret.at(null, 0)
+    return true
+
+  fn set_step(r: Self$@, at: Sz): Bool //< sets the step at which the current frame appears
+    //<
+    //< True if set. 0 means "always shown" (and removes the setting). One undo takes it back; it
+    //< acts on the same frame as dragging (`frame_at`).
+    if r.shut()
+      return false
+    $b: Block$@ = null
+    switch r.frame_at() case .some(got)
+      b = got
+    case .none
+      return false
+    // Caution: **Refuse it where it is not a frame.** A step on a paragraph in the flow has no
+    // effect (only absolute-coordinate layout reads it).
+    switch b.frame case .none
+      return false
+    case .some {}
+    r.break_group()
+    field.do_set_step(r, r.step(), b, at)
+    r.break_group()
+    return true
+
+  fn find_next(r: Self$@, needle: U8[], back: Bool = false): Bool //< finds a text and selects it
+    //<
+    //< True if found.
+    //< Caution: **Select it.** Moving the cursor alone leaves the match unseen. At the end it wraps
+    //< to the start. Called again it goes on to the next.
+    // Start from the end of the selection (from the cursor, searching backwards finds the same
+    // place again).
+    was: = caret.selection(r.doc, r.caret)
+    got: =
+      (find.prev_match(r.doc, needle, was.from, was.from_offset, true) if back
+      else find.next_match(r.doc, needle, was.to, was.to_offset, true))
+    if sp: = got
+      r.break_group()
+      r.caret = caret.at(sp.from, sp.from_offset)
+      r.caret.inline = sp.to
+      r.caret.offset = sp.to_offset
+      return true
+    return false
+
+  fn replace_next(r: Self$@, needle: U8[], with: U8[]): Bool //< replaces one match
+    //<
+    //< True if replaced. It selects and then types over, so one replacement is one undo.
+    if r.shut()
+      return false
+    if !r.find_next(needle)
+      return false
+    if !swappable(r.caret)
+      return false
+    r.break_group()
+    r.insert(with)
+    r.break_group()
+    return true
+
+  fn replace_all(r: Self$@, needle: U8[], with: U8[]): Sz //< replaces every match in the document
+    //<
+    //< Returns the number replaced.
+    //< Caution: **Do not wrap around at the end**, or the replaced text is found again forever ("a"
+    //< into "aa"). Skip a match that cannot be replaced and go on. One undo takes it all back.
+    if r.shut()
+      return 0
+    $done: Sz = 0
+    $at: Inline$@ = null
+    $offset: Sz = 0
+    r.break_group()
+    $more: = true
+    for more
+      more = false
+      if sp: = find.next_match(r.doc, needle, at, offset, false)
+        more = true
+        r.caret = caret.at(sp.from, sp.from_offset)
+        r.caret.inline = sp.to
+        r.caret.offset = sp.to_offset
+        if swappable(r.caret)
+          r.insert(with)
+          done += 1
+        at = r.caret.inline
+        offset = r.caret.offset
+    r.break_group()
+    return done

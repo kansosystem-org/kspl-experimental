@@ -1,0 +1,182 @@
+//< Turns a type into text to show a person
+//<
+//< Caution: **Keep the knowledge of the surface notation in this file alone.** Mutability's
+//< marking is reversed between the internal form (a postfix immut) and the surface (a `$` before
+//< the sigil), so a stale copy shows a wrong type.
+//< **A caller of these methods must import this file**, as with `sema/type/arc.kspls`.
+import "ksplc/base/ast" as base_ast
+import "ksplc/base/core" as base_core
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "std/chars"
+import "std/str" { Str_builder }
+
+priv const max_generic_key_depth: Sz = 8 //< expand_generic_key_to's recursion limit
+  //<
+  //< It also stops a key that reads back as containing itself.
+
+priv fn find_generic_close(key: U8[], open_at: Sz): Sz //<
+  //< Returns, from a `<|`'s position, the position of the matching `|>` (key.len if none)
+  $depth: I32 = 0
+  $i: = open_at
+  for i + 1 < key.len
+    if key.starts_with("<|", i)
+      depth += 1
+      i += 2
+      continue
+    if key.starts_with("|>", i)
+      depth -= 1
+      if depth == 0
+        return i
+      i += 2
+      continue
+    i += 1
+  return key.len
+
+impl sema_type_env.Env
+  fn original_generic_name(r: Self$@, type_str: U8[]): U8[] //<
+    //< Reads an internal type name from monomorphization back to its registration key
+    //<
+    //< For example `ds_List_I32` reads back as `List<|I32|>`.
+    //< A full walk of the intern table, O(cap). **A caller that has the type id must not use
+    //< it** — display_type_to looks `inst_type_index` up at O(1). This is for
+    //< name-only callers (`display_str_named`, the LSP's completion).
+    for i in Range.asc(r.instantiated_nodes.cap)
+      entry: = r.instantiated_nodes.entries + i
+      if entry.is_active && entry.value != null
+        id_node: = entry.value.find_child(.k_identifier)
+        if id_node != null && id_node.text.equals(type_str)
+          return entry.key
+    return type_str
+
+  priv fn expand_generic_key_to(r: Self$@, key: U8[], depth: Sz, w: Writer): Writer //<
+    //< Writes an instance's registration key (`base<|actual arguments|>`) in the source notation
+    //<
+    //< Caution: **The type arguments must not be copied as characters.** The key holds the
+    //< internal form, and copying shows `List<|U8 immut[]|>` or
+    //< `List<|std_ds_List_U8_Const_Slice|>`.
+    $res: = w
+    $i: Sz = 0
+    for i < key.len
+      if key.starts_with("<|", i)
+        close: = find_generic_close(key, i)
+        if close >= key.len
+          res = res.c((key.ptr + i)$) // a broken key with no close; copied as characters
+          i += 1
+          continue
+        res = res.s("<|")
+        // The variance list is looked up by the base's name before the `<|`, **not by the name as
+        // written**, where `/` has become `.`.
+        mask: = r.variance_masks.get(key.sub(0, i)) catch 0
+        res = r.display_generic_args_to(key.sub(i + 2, close - (i + 2)), mask, depth, res)
+        res = res.s("|>")
+        i = close + 2
+        continue
+      c: = (key.ptr + i)$
+      res = res.c('.' if c == '/' || c == '\\' else c)
+      i += 1
+    return res
+
+  priv fn display_generic_args_to(r: Self$@, args: U8[], mask: I32, depth: Sz, w: Writer): Writer //<
+    //< Writes the actual arguments one at a time
+    $res: = w
+    for pos in Range.asc(args.count_type_args())
+      if pos > 0
+        res = res.s(", ")
+      names_mut: = base_ast.variance_names_mut(mask, pos)
+      res = r.display_generic_arg_to(args.nth_type_arg(pos), names_mut, depth, res)
+    return res
+
+  priv fn display_generic_arg_to(r: Self$@, arg: U8[], names_mut_pos: Bool, depth: Sz, w: Writer):
+    Writer //<
+      //< Writes one type argument in the surface notation.
+      //<
+      //< A registered type is sent to display_type_to.
+      //< **At a position where the declaration declared mutability (`struct Box<|$T|>`), restore
+      //< the mark here** (the surface reverses the internal marking).
+    a: = arg.trim_spaces()
+    id: = r.type_to_id.get(a) catch 0
+    $res: = w
+    if names_mut_pos &&
+      !(r.is_const(id) if id != 0 else a.ends_with(base_core.immut_mark))
+      res = res.c('$')
+    if id != 0 && depth < max_generic_key_depth
+      return r.display_type_to(id, depth + 1, res)
+    return r.expand_generic_key_to(a, depth + 1, res)
+
+  priv fn display_suffix_base_to(r: Self$@, id: I32, depth: Sz, w: Writer): Writer //<
+    //< Writes the type a postfix applies to, a function type in brackets as it is written
+    //<
+    //< That is `(fn(I32):I32)@`, not a function returning `I32@`.
+    switch r.get_info(id) case .fn_type(_sig)
+      return r.display_type_to(id, depth, w.c('(')).c(')')
+    default
+      return r.display_type_to(id, depth, w)
+
+  priv fn display_type_to(r: Self$@, id: I32, depth: Sz, w: Writer): Writer //<
+    //< Writes a type out in KSPL's surface notation
+    //<
+    //< Unmarked is immutable, a `$` before the sigil mutable (`U8[]` / `U8$[]` / `U8$@`). depth
+    //< counts round trips through a generic key, not structural recursion.
+    if id < 0 || id >= r.id_to_type.len
+      return w.s("Unknown")
+    $res: = w
+    switch r.get_info(id) case .pointer(b)
+      res = r.display_suffix_base_to(r.strip_const(b), depth, res)
+      return res.s("@" if r.is_const(b) else "$@")
+    case .array(b, s)
+      res = r.display_suffix_base_to(r.strip_const(b), depth, res)
+      if !r.is_const(b)
+        res = res.s("$")
+      return res.s("[\{s\}]") if s >= 0 else res.s("[_]")
+    case .result(b, e)
+      res = r.display_suffix_base_to(b, depth, res).s("?")
+      if e != (I32::sema_type_env.Builtin_type_id.i32_type)
+        res = r.display_type_to(e, depth, res)
+      return res
+    case .fn_type(sig)
+      res = res.s("fn(")
+      for i in Range.asc(sig.params.len)
+        if i > 0
+          res = res.c(',')
+        res = r.display_type_to(sig.params.get(i), depth, res)
+      res = res.s("):")
+      return r.display_type_to(sig.ret_id, depth, res)
+    case .const_of(b)
+      // An immutable view descriptor (what `U8$[]@` points at) or a bare immutable value: both
+      // are unmarked, so the base is written as is (the enclosing `@` writes `$@`).
+      return r.display_type_to(b, depth, res)
+    default
+      // An instance of `Slice<|T|>` was written `T[]`.
+      // Caution: **Write it in the sugared form**, or the diagnostic shows a type name the user did
+      // not write (`../../parse/desugar_slice.kspls`). The mark follows the element's
+      // immutability, as in the `.slice(b)` arm above.
+      slice_elem: = r.slice_struct_elem(id)
+      if slice_elem != 0
+        res = r.display_type_to(r.strip_const(slice_elem), depth, res)
+        return res.s("[]" if r.is_const(slice_elem) else "$[]")
+      // An instantiated type is written from its registration key, found by type_id (not the
+      // O(cap) walk by name).
+      // Caution: **Do not resolve an alias before writing.** An alias is exactly the name the user
+      // wrote (the `Names` of `typedef Names = List<|U8[]|>;`).
+      key: = r.inst_type_index.get(id) catch ""
+      return r.expand_generic_key_to(r.get_str(id) if key.len == 0 else key, depth, res)
+
+  fn display_str(r: Self$@, id: I32): Str_builder
+    b: = Str_builder.new()
+    r.display_type_to(id, 0, b)
+    return b
+
+  fn display_str_named(r: Self$@, name: U8[]): Str_builder //<
+    //< The display text from a name rather than a type id
+    //<
+    //< For callers holding no type id (a struct field's parent type name).
+    //< Caution: Do not duplicate the notation logic here. Pass a found id to display_type_to.
+    b: = Str_builder.new()
+    id: = r.type_to_id.get(name) catch 0
+    if id != 0
+      r.display_type_to(id, 0, b)
+      return b
+    // Not registered as a type: only what the read-back by name finds is corrected.
+    r.expand_generic_key_to(r.original_generic_name(name), 0, b)
+    return b

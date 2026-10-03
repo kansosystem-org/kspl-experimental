@@ -1,0 +1,74 @@
+//< The ranges a `#cfg()` left out, kept so the editor can say why nothing is there
+//<
+//< The normalization records each range (`../parse/normalize.kspls`), the AST cache carries them
+//< across a compile (`../parse/ast_cache.kspls`), and a hover and the pointer check read them
+//< back. They live on base_core.arena, so the LSP's rewind of that arena forgets them too.
+import "ksplc/base/core" as base_core
+import "ksplc/base/locate" as base_locate
+import "std/ds" { List }
+
+struct Cfg_inactive //< a range left unanalysed because its `#cfg()` did not hold
+  //<
+  //< A dropped declaration is gone from the AST, so a hover asks here why nothing shows.
+  file: U8$[]
+  offset: Sz
+  span: Sz
+  flag: U8$[]
+  is_neg: Bool
+
+struct Cfg_inactive_manager
+  list: List<|Cfg_inactive|>
+  is_init: Bool
+$cfg_inactive: Cfg_inactive_manager = ::{}
+
+impl Cfg_inactive_manager
+  fn init(r: Self$@) //<
+    //< It creates the list, or empties the existing one
+    //<
+    //< `init` in `setup.kspls` calls it, as a compile never reaches `clear`.
+    if !r.is_init
+      r.list = List<|Cfg_inactive|>.new()
+      r.is_init = true
+    else
+      r.clear()
+
+  fn clear(r: Self$@) //< it is called every time a document is rebuilt
+    if r.is_init
+      r.list.len = 0
+
+  fn free(r: Self$@)
+    if r.is_init
+      r.list.free()
+      r.is_init = false
+
+fn record_cfg_inactive(file: U8[], offset: Sz, span: Sz, flag: U8[], is_neg: Bool) //<
+  //< It stores a dropped range
+  //<
+  //< The strings live on base_core.arena, for the document's lifetime (like print_diagnostic's).
+  //<
+  //< Caution: **A compile collects them too**, though it reads none: the editor reads back the AST
+  //< cache entry a compile wrote (`../parse/ast_cache.kspls`), which would otherwise hold none.
+  if !cfg_inactive.is_init
+    return
+  region: = Cfg_inactive::{ .file = base_core.arena.dup_str(file), .offset = offset, .span = span,
+    .flag = base_core.arena.dup_str(flag), .is_neg = is_neg }
+  cfg_inactive.list.push(region)
+
+fn find_cfg_inactive(file: U8[], offset: Sz): Option<|Cfg_inactive|> //<
+  //< It returns the dropped range that holds offset
+  //<
+  //< Where ranges nest, it returns **the innermost** (the declaration pointed at, not its `impl`).
+  if !cfg_inactive.is_init
+    return Option<|Cfg_inactive|>.none
+  $best: Cfg_inactive = ::{ .file = "", .offset = 0, .span = 0, .flag = "", .is_neg = false }
+  $found: = false
+  for region in cfg_inactive.list
+    if !base_locate.is_same_file(region.file, file) || offset < region.offset ||
+      offset >= region.offset + region.span
+      continue
+    if !found || region.span < best.span
+      best = region
+      found = true
+  return Option<|Cfg_inactive|>.some(best) if found else Option<|Cfg_inactive|>.none
+
+impl Cfg_inactive_manager: Owned {}

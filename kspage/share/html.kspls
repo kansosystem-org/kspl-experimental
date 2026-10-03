@@ -1,0 +1,589 @@
+//< Writes HTML
+//<
+//< It cannot be read back. The mapping is mechanical. Where a thing is placed (`frame`) is not
+//< written, so it may not be laid out in the same places. The column widths are written
+//< (in a `<colgroup>`).
+import "kspage/model/doc" { Axis, Doc, Block }
+import "kspage/model/font" { Font, Font_source }
+import "kspage/model/marker"
+import "kspage/model/number"
+import "kspage/model/paint" + { Font_spec, Ink }
+import "kspage/model/paper" { Paper }
+import "kspage/model/run"
+import "kspage/model/source"
+import "kspage/model/style" + { Arrange, Sheet, Style }
+import "std/chars"
+import "std/ds" { List }
+import "std/str" { Str_builder }
+import "std/strfmt"
+
+priv fn px(out: Str_builder$@, v: F32) //< writes a px value
+  //<
+  //< A value with no fraction is written as a whole number (`f_prec` would give "24.00").
+  whole: = I64::v
+  if F32::whole == v
+    out.s("\{whole\}px")
+    return
+  out.s("\{v:.2\}px")
+
+priv fn escape_html(out: Str_builder$@, s: U8[]) //<
+  //< Writes a text that is safe both as HTML contents and as an attribute value
+  for $i: Sz = 0; i < s.len; i += 1
+    c: = s[i]
+    switch c case '&'
+      out.s("&amp;")
+    case '<'
+      out.s("&lt;")
+    case '>'
+      out.s("&gt;")
+    case '"'
+      out.s("&quot;")
+    default
+      out.c(c)
+
+priv fn css_ident(out: Str_builder$@, name: U8[]) //< writes a CSS name
+  //<
+  //< Escape everything but letters, digits, `-` and `_` (an unescaped `.` starts another rule).
+  //< Caution: **Fold whitespace rather than escaping it, and fold it the same way in the tag**
+  //< (`class_attr` below).
+  for $i: Sz = 0; i < name.len; i += 1
+    c: = style.class_byte(name[i])
+    if c >= '0' && c <= '9'
+      if i == 0
+        out.s("\\3").c(c).c(' ')
+      else
+        out.c(c)
+      continue
+    plain: =
+      (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '-' || c == '_' || c >= 0x80U8
+    if plain
+      out.c(c)
+      continue
+    out.c('\\').c(c)
+
+priv fn class_attr(out: Str_builder$@, name: U8[]) //<
+  //< Writes the style's name as the `class` attribute's contents
+  //<
+  //< Fold whitespace here too, as `css_ident` does, or the attribute splits into several classes
+  //< and the paragraph has no look at all in the written HTML on its own. The escape table is not
+  //< repeated: `escape_html` gets one byte at a time, so a character added to it is not missed.
+  for $i: Sz = 0; i < name.len; i += 1
+    if style.class_byte(name[i]) != name[i]
+      out.c('-')
+      continue
+    escape_html(out, name.sub(i, 1))
+
+priv fn spec_of(f: Font): Font_spec //< a font spec with every field filled in
+  //<
+  //< It turns where inheritance starts into a CSS rule.
+  return Font_spec::{
+    .family = Option<|U8[]|>.some(f.family),
+    .size_px = Option<|F32|>.some(f.size_px),
+    .weight = Option<|U16|>.some(f.weight),
+    .italic = Option<|Bool|>.some(f.italic),
+  }
+
+priv fn css_value(out: Str_builder$@, s: U8[]) //< writes a CSS value
+  //<
+  //< Caution: **Do not pass it through `escape_html`** — inside a `<style>` it has no effect.
+  //< Drop the characters that can end a declaration, or a font name like `a; } body { display:
+  //< none } .x {` slips any rule into the written HTML (a `url()` sends requests outside). A real
+  //< font name passes through.
+  for $i: Sz = 0; i < s.len; i += 1
+    c: = s[i]
+    if c < ' '
+      continue
+    switch c case ';', '{', '}', '(', ')', '"', '\'', '\\', '<', '>', '@', ':'
+      continue
+    default
+      out.c(c)
+
+priv fn write_font_props(out: Str_builder$@, spec: Font_spec) //<
+  //< Only named fields are written (CSS inherits the rest; writing one cuts the inheritance there)
+  if v: = spec.family
+    out.s("font-family: ")
+    css_value(out, v)
+    out.s("; ")
+  if v: = spec.size_px
+    out.s("font-size: ")
+    px(out, v)
+    out.s("; ")
+  if v: = spec.weight
+    out.s("font-weight: \{v\}; ")
+  if v: = spec.italic
+    out.s("font-style: italic; " if v else "font-style: normal; ")
+
+priv fn write_ink_props(out: Str_builder$@, ink: Ink) //<
+  //< Only named fields are written (the same reason as for the font)
+  //<
+  //< `background-color` is not inherited, but written on the elements that hold the style it paints
+  //< the same places as the core's inheritance.
+  if v: = ink.color
+    out.s("color: ")
+    paint.color_into(v, out)
+    out.s("; ")
+  if v: = ink.background
+    out.s("background-color: ")
+    paint.color_into(v, out)
+    out.s("; ")
+  write_lines_prop(out, ink)
+
+priv fn write_lines_prop(out: Str_builder$@, ink: Ink) //< the underline and the strikethrough
+  //<
+  //< The two share one declaration (written separately, the later wins). A CSS line cannot be
+  //< removed by a child, so only here does the look differ from the canvas.
+  under: = paint.drawn(ink.underline)
+  through: = paint.drawn(ink.strike)
+  if !under && !through
+    // "Not named" and "do not draw one" are written the same way (writing the former would cut the
+    // inheritance).
+    switch ink.underline case .some(_u)
+      out.s("text-decoration-line: none; ")
+    case .none
+      if _s: = ink.strike
+        out.s("text-decoration-line: none; ")
+    return
+  out.s("text-decoration-line:")
+  if under
+    out.s(" underline")
+  if through
+    out.s(" line-through")
+  out.s("; ")
+
+priv fn write_len_prop(out: Str_builder$@, name: U8[], v: F32) //<
+  //< Writes one length declaration if it is not 0.
+  if v == 0.0
+    return
+  out.s(name).s(": ")
+  px(out, v)
+  out.s("; ")
+
+priv fn diagonal(s: Style$@): Bool //< whether the band's shape is a line or an arrow
+  //<
+  //< Neither is written out — the ends are a frame's corners, which are not written. An ellipse is
+  //< written by rounding the corners.
+  switch s.shape case .fall_line
+    return true
+  case .rise_line
+    return true
+  case .fall_arrow
+    return true
+  case .rise_arrow
+    return true
+  case .fall_arrow_back
+    return true
+  case .rise_arrow_back
+    return true
+  case .box, .round_box, .ellipse, .triangle, .diamond {}
+  return false
+
+priv fn write_style_rule(out: Str_builder$@, sheet: Sheet$@, s: Style$@, src: Font_source)
+  out.c('.')
+  css_ident(out, s.name)
+  out.s(" { ")
+  write_font_props(out, s.font)
+  drawn: = !diagonal(s)
+  // The shape: only the corner rounding and the clipping (a line and an arrow are not written).
+  // A triangle and a diamond are clipped as polygons.
+  switch s.shape case .round_box
+    out.s("border-radius: 8px; ")
+  case .ellipse
+    out.s("border-radius: 50%; ")
+  case .triangle
+    out.s("clip-path: polygon(50% 0, 100% 100%, 0 100%); ")
+  case .diamond
+    out.s("clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); ")
+  case .box, .fall_line, .rise_line, .fall_arrow, .rise_arrow, .fall_arrow_back, .rise_arrow_back {}
+  // Caution: **Write it before the text background.** Both are `background-color` and the later
+  // wins, as the text background does on the canvas.
+  if v: = s.fill
+    if drawn
+      out.s("background-color: ")
+      paint.color_into(v, out)
+      out.s("; ")
+  write_ink_props(out, s.ink)
+  // The core inherits neither the alignment nor the line height, though CSS inherits both;
+  // "not named" need not be written.
+  // Caution: **A paragraph that does not wrap must keep its spaces too.** With `nowrap` alone HTML
+  // collapses runs of spaces, and the indent depth changes.
+  if !s.wrap
+    out.s("white-space: pre; ")
+
+  // Caution: **Copy the page break too**, or printed HTML starts a chapter somewhere other than the
+  // screen does. No `page-break-before` for old browsers is added.
+  if s.break_before
+    out.s("break-before: page; ")
+  switch s.align case .center
+    out.s("text-align: center; ")
+  case .right
+    out.s("text-align: right; ")
+  case .justify
+    out.s("text-align: justify; ")
+  case .left {}
+  if s.rule_width != 0.0 && drawn
+    out.s("border: ")
+    px(out, s.rule_width)
+    out.s(" solid ")
+    paint.color_into(s.rule_color, out)
+    out.s("; ")
+  if s.line_spacing != 0.0
+    // Caution: **Do not write the ratio as it is** — CSS's `line-height` is relative to the font
+    // size, this side's to the font's line height ("The mapping into HTML" in `../docs/DESIGN.md`).
+    // Resolve the typeface from this one style, or the ratio is resolved against the root style.
+    // Do not apply the reader's text size (ratio 1.0), or the written HTML changes with the
+    // settings of whoever wrote it out.
+    look: = style.resolve_look(s, style.root_look(sheet.root, 1.0F32))
+    if look.font.size_px > 0.0
+      tall: = src.line_height(look.font)
+      out.s("line-height: \{s.line_spacing * tall / look.font.size_px:.3\}; ")
+  // The column layout. A column's width is not written (the count and the gaps decide it). The
+  // browser also balances the heights, as the screen does.
+  if s.columns > 1
+    out.s("column-count: \{s.columns\}; ")
+    write_len_prop(out, "column-gap", s.column_gap)
+  // The space before and after a paragraph and the indent are inherited on neither side.
+  write_len_prop(out, "margin-top", s.space_before)
+  write_len_prop(out, "margin-bottom", s.space_after)
+  write_len_prop(out, "margin-left", s.indent)
+  // The padding of the fill and the line. `box-sizing` is left alone (`content-box` adds it
+  // outward, as the screen does).
+  write_len_prop(out, "padding", s.pad)
+  out.s("}\n")
+
+priv fn write_paper_css(out: Str_builder$@, paper: Paper) //<
+  //< Copies the paper settings into CSS
+  //<
+  //< Caution: **Put the margins inside the body, not in `@page`**, or the two margins add up; the
+  //< page's margin is 0. The body's width applies only where no page size is set (the rule is
+  //< `Paper.reading` in [`../model/style.kspls`](../model/style.kspls)).
+  if paper.width > 0.0 && paper.height > 0.0
+    out.s("@page { size: ")
+    px(out, paper.width)
+    out.s(" ")
+    px(out, paper.height)
+    out.s("; margin: 0 }\n")
+  out.s("body { margin: 0; padding: ")
+  px(out, paper.top)
+  out.s(" ")
+  px(out, paper.right)
+  out.s(" ")
+  px(out, paper.bottom)
+  out.s(" ")
+  px(out, paper.left)
+  out.s("; ")
+  if paper.reading > 0.0 && paper.width <= 0.0
+    out.s("max-width: ")
+    px(out, paper.reading)
+    // Split the remaining space equally left and right, as the layout does.
+    out.s("; margin-left: auto; margin-right: auto; ")
+  out.s("}\n")
+
+priv fn write_css(out: Str_builder$@, sheet: Sheet$@, src: Font_source)
+  // Caution: **Write the paper settings first.** Written after, they would override the margins
+  // of the `body` rule below.
+  write_paper_css(out, sheet.paper)
+  out.s("body { ")
+  write_font_props(out, spec_of(sheet.root))
+  out.s("}\n")
+  // No rule is written for the table itself: the core handles CSS's own table layout. No border
+  // either (the core has none).
+  for $i: Sz = 0; i < sheet.styles.len; i += 1
+    write_style_rule(out, sheet, sheet.styles.get(i), src)
+
+priv fn indent(out: Str_builder$@, depth: Sz)
+  for $i: Sz = 0; i < depth; i += 1
+    out.s("  ")
+
+priv fn open_tag(out: Str_builder$@, tag: U8[], class_name: U8[], name: U8[],
+  height: Option<|F32|>, b: Block$@, heads: List<|number.Heading|>$@ = null, head: Sz = 0) //<
+    //< Writes one start tag.
+    //<
+    //< `height` is passed only for a row and is not made a style rule (every row of the style would
+    //< get that height). A merge becomes `colspan` / `rowspan`, which is not written when it is 1.
+  out.c('<').s(tag)
+  if class_name.len > 0
+    out.s(" class=\"")
+    class_attr(out, class_name)
+    out.c('"')
+  if name.len > 0
+    out.s(" id=\"")
+    escape_html(out, name)
+    out.c('"')
+  else if heads != null && head < heads.len
+    // A heading gets an id. It is where the table of contents links to.
+    out.s(" id=\"")
+    write_head_id(out, heads.get(head), head)
+    out.c('"')
+  if b != null && b.span_cols > 1
+    out.s(" colspan=\"\{b.span_cols\}").c('"')
+  if b != null && b.span_rows > 1
+    out.s(" rowspan=\"\{b.span_rows\}").c('"')
+  if v: = height
+    out.s(" style=\"height:")
+    px(out, v)
+    out.c('"')
+  out.c('>')
+
+priv fn write_aim(out: Str_builder$@, b: Block$@) //<
+  //< Writes a window as "a link to what it points at"
+  //<
+  //< The text is not copied along — a copy goes stale and nobody can see it.
+  if b.aim.len <= 0
+    return
+  // Caution: **Do not make a link of a scheme that cannot be opened** (`safe_href` in
+  // `model/source.kspls`). Only the name is written.
+  aimed: = source.plain_href(b.aim)
+  if !source.safe_href(aimed)
+    escape_html(out, source.aim_of(b.aim).name)
+    return
+  out.s("<a href=\"")
+  escape_html(out, aimed)
+  out.s("\">")
+  escape_html(out, source.aim_of(b.aim).name)
+  out.s("</a>")
+
+priv fn write_one_inline(out: Str_builder$@, n: run.Inline$@) //< writes one inline's text
+  //<
+  //< Only an inline with a style is wrapped in a `<span>`.
+  if n.style.len > 0
+    open_tag(out, "span", n.style, "", Option<|F32|>.none, null)
+    escape_html(out, n.showing())
+    out.s("</span>")
+  else
+    escape_html(out, n.showing())
+
+priv fn same_link(a: run.Inline$@, b: run.Inline$@): Bool //<
+  //< Whether consecutive inlines are in the same link
+  //<
+  //< Caution: **Do not look at the style** — where the look changes the inline is split, but the
+  //< link stays one.
+  return a.href.equals(b.href)
+
+priv fn write_inlines(out: Str_builder$@, notes: List<|number.Note|>$@, b: Block$@) //<
+  //< Writes a block's inlines as HTML, with their links and note marks.
+  //<
+  //< Caution: **Do not wrap each inline in its own `<a>`**, or one link becomes three: a screen
+  //< reader says "three links" and Tab stops three times (the Markdown side is `group_into` in
+  //< [`markdown.kspls`](markdown.kspls)).
+  $i: Sz = 0
+  for i < b.inlines.len
+    n: = b.inlines.get(i)
+    // Caution: **Do not make a link of a scheme that cannot be opened** (`source.safe_href`): the
+    // HTML can reach anyone, and a `javascript:` link runs there.
+    linked: = n.href.len > 0 && source.safe_href(source.plain_href(n.href))
+    $end: Sz = i + 1
+    // They are grouped only inside a link, or a note's mark comes away from its inline.
+    if linked
+      for end < b.inlines.len && same_link(n, b.inlines.get(end))
+        end += 1
+    if linked
+      out.s("<a href=\"")
+      // Caution: **Drop the mark that points at a source** (`src:` does not open outside the
+      // screen); it is written as a file path (`plain_href` in [`source.kspls`](source.kspls)).
+      escape_html(out, source.plain_href(n.href))
+      out.s("\">")
+    for $k: Sz = i; k < end; k += 1
+      write_one_inline(out, b.inlines.get(k))
+    if linked
+      out.s("</a>")
+    // A note's mark. The number comes from the list, as in the layout. Put it outside the link.
+    for $k: Sz = i; k < end; k += 1
+      one: = b.inlines.get(k)
+      if one.note.len > 0
+        no: = number.note_number(notes, one)
+        if no > 0
+          out.s("<sup>\{no\}</sup>")
+    i = end
+
+priv fn write_columns(out: Str_builder$@, b: Block$@, depth: Sz) //<
+  //< Writes the column widths in a `<colgroup>`
+  //<
+  //< If no column width is set, nothing is written.
+  //< Caution: **Write a `<col>` for a column without a width too**, or the columns after it shift
+  //< one place forward.
+  if b.column_widths.len <= 0
+    return
+  indent(out, depth + 1)
+  out.s("<colgroup>")
+  for $i: Sz = 0; i < b.column_widths.len; i += 1
+    switch b.column_widths.get(i) case .some(v)
+      out.s("<col style=\"width:")
+      px(out, v)
+      out.s("\">")
+    case .none
+      out.s("<col>")
+  out.s("</colgroup>\n")
+
+priv fn write_mark(out: Str_builder$@, sheet: Sheet$@, heads: List<|number.Heading|>$@,
+  serials: List<|number.Serial|>$@, b: Block$@, ord: Sz) //<
+    //< Writes the marker at the start of a line as text.
+    //<
+    //< No CSS counter or `::before`: they cannot restart where the screen does, and the numbers
+    //< would disagree.
+    //< Caution: **Escape it** (the bullet comes from the style and may hold a `<`).
+  if s: = sheet.find(b.style)
+    $mk: = Str_builder.new()
+    defer mk.free()
+    // A running number is not a sibling index (it comes from the layout's list).
+    no: = number.serial_number(serials, b) if s.marker.serialed() else ord
+    if s.marker.outlined()
+      marker.mark_outline_into(mk@, s.marker, number.heading_number(heads, b))
+    else
+      marker.mark_into(mk@, s.marker, no)
+    if mk.slice().len > 0
+      escape_html(out, mk.slice())
+
+priv fn write_head_id(out: Str_builder$@, h: number.Heading, at: Sz) //<
+  //< The id text of a heading
+  //<
+  //< Caution: **Build it the same way for the table of contents and the heading**, or clicking
+  //< a contents link does nothing. A heading with a name uses that name.
+  if h.block.name.len > 0
+    escape_html(out, h.block.name)
+    return
+  out.s("kspage-h\{at + 1\}")
+
+priv fn head_at(heads: List<|number.Heading|>$@, b: Block$@): Sz //< which heading that block is
+  //<
+  //< -1 if it is not a heading.
+  for $i: Sz = 0; i < heads.len; i += 1
+    if heads.get(i).block == b
+      return i
+  return -1
+
+priv fn write_contents(out: Str_builder$@, sheet: Sheet$@, heads: List<|number.Heading|>$@,
+  step: F32) //<
+    //< Writes the table of contents.
+    //<
+    //< Caution: **Write the chapter numbers too**, as the screen does (`marker.mark_outline_into`).
+    //< One level's depth is the contents style's indent.
+  $mk: = Str_builder.new()
+  defer mk.free()
+  for $i: Sz = 0; i < heads.len; i += 1
+    h: = heads.get(i)
+    out.s("<div style=\"margin-left:")
+    px(out, step * F32::(h.level - 1))
+    out.s("\"><a href=\"#")
+    write_head_id(out, h, i)
+    out.s("\">")
+    mk.clear()
+    if s: = sheet.find(h.block.style)
+      marker.mark_outline_into(mk@, s.marker, h.number)
+    if mk.slice().len > 0
+      escape_html(out, mk.slice())
+    escape_html(out, h.text)
+    out.s("</a></div>")
+
+priv fn write_notes(out: Str_builder$@, notes: List<|number.Note|>$@) //< writes the list of notes
+  //<
+  //< The number is the row's position, as in the layout.
+  for $i: Sz = 0; i < notes.len; i += 1
+    out.s("<div>\{i + 1\}").c(' ')
+    escape_html(out, notes.get(i).text)
+    out.s("</div>")
+
+priv fn write_image(out: Str_builder$@, b: Block$@) //< writes one picture
+  //<
+  //< Caution: **Write the size too**, or what follows shifts the moment it loads.
+  if b.image.len <= 0
+    return
+  out.s("<img src=\"")
+  escape_html(out, b.image)
+  // `width` and `height` are plain numbers (no unit).
+  out.s("\" width=\"\{I64::b.image_w\}\" height=\"\{I64::b.image_h\}\">")
+
+priv fn write_block(out: Str_builder$@, sheet: Sheet$@, heads: List<|number.Heading|>$@,
+  notes: List<|number.Note|>$@, serials: List<|number.Serial|>$@, b: Block$@, tag: U8[], depth: Sz,
+  height: Option<|F32|>, ord: Sz) //<
+    //< Writes one block.
+    //<
+    //< The parent chooses `tag` (a table's child is a row, a row's child is a cell). `height` is a
+    //< row's height from the table. `ord` is the index among the siblings (`style.next_ord`).
+  grid: = sheet.arrange_of(b.style).same_arrange(Arrange.grid)
+  own: = "table" if grid else tag
+  indent(out, depth)
+  // The collected headings list decides whether it is a heading.
+  at: = head_at(heads, b)
+  open_tag(out, own, b.style, b.name, height, b, heads if at >= 0 else null, at if at >= 0 else 0)
+
+  // It is not written directly inside the table. A table's text goes into the caption, so the mark
+  // goes there too.
+  if !grid
+    write_mark(out, sheet, heads, serials, b, ord)
+  write_image(out, b)
+  if s: = sheet.find(b.style)
+    // A graph is not written out: it is built at layout time and cannot be copied into CSS.
+    switch s.collect case .contents
+      write_contents(out, sheet, heads, s.indent)
+    case .notes
+      write_notes(out, notes)
+    case .bars, .lines {} case .source
+      write_aim(out, b)
+    case .imports
+      // A figure writes no text either (it is built at layout time, as a graph is).
+      write_aim(out, b)
+    case .none {}
+  if b.inlines.len > 0
+    // No text can go directly inside a table: it goes into the `<caption>`, before the rows, as in
+    // the core.
+    if grid
+      out.s("<caption>")
+      write_inlines(out, notes, b)
+      out.s("</caption>")
+    else
+      write_inlines(out, notes, b)
+
+  if b.children.len > 0
+    $child_tag: U8[] = "div"
+    if grid
+      child_tag = "tr"
+    else if tag.equals("tr")
+      child_tag = "td"
+    out.c('\n')
+    // Caution: **Write it before the rows.** A `<colgroup>` cannot come after the first `<tr>`.
+    if grid
+      write_columns(out, b, depth)
+    $child_ord: Sz = 0
+    for $i: Sz = 0; i < b.children.len; i += 1
+      // Only a table passes a row height.
+      $row_h: = Option<|F32|>.none
+      if grid
+        row_h = b.size_of(Axis.row, i)
+      child: = b.children.get(i)
+      child_ord = style.next_ord(sheet, child.style, child_ord)
+      write_block(out, sheet, heads, notes, serials, child, child_tag, depth + 1, row_h, child_ord)
+    indent(out, depth)
+  out.s("</").s(own).s(">\n")
+
+fn write(d: Doc$@, sheet: Sheet$@, src: Font_source, out: Str_builder$@) //<
+  //< Writes the document and the styles as one HTML file that opens as it is
+  //<
+  //< It needs a way to measure the typeface: the line height's ratio is relative to the font's own
+  //< line height (see `write_style_rule`).
+  out.s("<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n")
+  write_rules(sheet, src, out)
+  out.s("</style>\n")
+  write_body(d, sheet, out)
+
+fn write_rules(sheet: Sheet$@, src: Font_source, out: Str_builder$@) //<
+  //< Copies only the style table into CSS rules
+  //<
+  //< The `<style>` element is not written (whoever builds the enclosing page writes it).
+  write_css(out, sheet, src)
+
+fn write_body(d: Doc$@, sheet: Sheet$@, out: Str_builder$@) //< writes only the body
+  //<
+  //< Neither the doctype nor the `<style>` is written.
+  //< Caution: **Do not build it separately from `write`** (Principle 4), or the numbers are
+  //< assigned differently with the `<style>` and without.
+  // The numbers are assigned before any of the body is written. `number.number_all` decides the
+  // order, the one the layout uses.
+  heads: = List<|number.Heading|>.create(d.arena)
+  notes: = List<|number.Note|>.create(d.arena)
+  serials: = List<|number.Serial|>.create(d.arena)
+  number.number_all(d.blocks, sheet, heads, notes, serials, d.arena, d.arena)
+  $ord: Sz = 0
+  for $i: Sz = 0; i < d.blocks.len; i += 1
+    b: = d.blocks.get(i)
+    ord = style.next_ord(sheet, b.style, ord)
+    write_block(out, sheet, heads, notes, serials, b, "div", 0, Option<|F32|>.none, ord)

@@ -1,0 +1,282 @@
+import "kspage/lay/caret"
+import "kspage/lay/flow"
+import "kspage/model/doc" { Doc }
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/marker"
+import "kspage/model/paint"
+import "kspage/model/style" { Arrange, Sheet }
+import "kspage/model/style_when"
+import "kspage/tests/base"
+import "kspage/write/block"
+import "kspage/write/edit"
+import "kspage/write/shape"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// kspage: checks the style applied to a paragraph itself, and the style that switches by value
+// (a golden test).
+// **A paragraph style does not split the text inside it**; an inline style does
+// ([`style_test.kspls`](style_test.kspls)). **A conditional style only adds a look on top.**
+// ==========================================
+
+// ---- changing the look by value (a style with a condition) ----
+
+priv fn alert_sheet(arena: Arena$@): Sheet$@ //< a style table with a style called "risky"
+  //<
+  //< That style has a color and a fill and nothing else.
+  sheet: = Sheet.new(base.root_font(), arena)
+  hot: = sheet.add("risky", paint.inherit_all())
+  hot.ink.color = Option<|U32|>.some(0xff0000U32)
+  hot.fill = Option<|U32|>.some(0xffeeeeU32)
+  cell: = sheet.add("cell", paint.inherit_all())
+  cell.when.how = style_when.Compare.above
+  cell.when.than = 100.0
+  cell.when.then = "risky"
+  return sheet
+
+fn test_a_value_above_the_bound_is_drawn_with_the_other_style() //<
+  //< Only where a value matches the rule is it drawn in the applied style's color
+  verdict.start("[kspage/style] the look changing by the value test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("cell").add_text("120")
+  d.add_block("cell").add_text("80")
+  // A text that does not read as a number (an empty cell, a heading word) does not match.
+  d.add_block("cell").add_text("Total")
+  page: = flow.layout(d, alert_sheet(arena), fixed.make(), 200.0, arena)
+
+  assert(page.boxes.len == 3, "all three become boxes")
+  hot: = page.boxes.get(0).ink.color.unwrap_or(0U32)
+  assert(hot == 0xff0000U32, "a value the rule fits is drawn in the colour laid over")
+  assert(page.boxes.get(1).ink.color.is_none(), "a value it does not fit stays plain")
+  assert(page.boxes.get(2).ink.color.is_none(), "a text that is no number stays plain too")
+  verdict.pass("only a value the rule fits is drawn in the style laid over.")
+
+fn test_the_fill_is_layered_field_by_field() //< the fill is applied on top too
+  //<
+  //< **Apply it field by field**: a field the rule does not set stays as it was.
+  verdict.start("[kspage/style] a fill lying over field by field test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = alert_sheet(arena)
+  // The plain cell's thin line stays, since the rule sets no line.
+  if s: = sheet.find("cell")
+    s.rule_width = 2.0
+    s.rule_color = 0x808080U32
+  d.add_block("cell").add_text("120")
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+
+  assert(page.panels.len == 1, "one band comes out")
+  one: = page.panels.get(0)
+  assert(one.fill.unwrap_or(0U32) == 0xffeeeeU32, "the rule's fill lies over")
+  kept: = base.near(one.width, 2.0) && one.color == 0x808080U32
+  assert(kept, "the line the rule does not hold stays plain")
+  verdict.pass("what is laid behind lies over field by field.")
+
+fn test_a_condition_does_not_move_the_layout() //<
+  //< The rule changes only the look
+  //<
+  //< Neither the spacing nor the indent changes (a row height that changed by value could not be
+  //< read).
+  verdict.start("[kspage/style] the rule not moving where things are laid test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = alert_sheet(arena)
+  // A large spacing and an indent on the applied style still change nothing.
+  if s: = sheet.find("risky")
+    s.space_before = 40.0
+    s.indent = 40.0
+  d.add_block("cell").add_text("120")
+  d.add_block("cell").add_text("80")
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+
+  assert(base.near(page.boxes.get(0).rect.x, 0.0), "fitting, the indent does not move")
+  assert(base.near(page.boxes.get(0).rect.y, 0.0), "fitting, the space before does not move")
+  assert(page.boxes.get(1).rect.y > page.boxes.get(0).rect.y, "the next row carries on below it")
+  verdict.pass("what the rule changes is the look and nothing else.")
+// ---- the style applied to a paragraph itself ----
+
+priv fn one_item(d: Doc$@, arena: Arena$@): Sheet$@ //<
+  //< A document with only one list item, and its style table
+  sheet: = Sheet.new(base.root_font(), arena)
+  item: = sheet.add("item", paint.inherit_all())
+  item.indent = 24.0
+  item.marker = marker.Marker.bullet("• ")
+  d.add_block("item").add_text("abc")
+  return sheet
+
+fn test_taking_the_paragraph_style_off_removes_the_mark() //<
+  //< Remove a paragraph's style and its marker goes too
+  //<
+  //< **Deleting the text leaves the marker**: the paragraph's style shows it, not the text.
+  verdict.start("[kspage/shape] the mark going when a paragraph's style is taken off test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = one_item(d, arena)
+  n: = d.blocks.get(0).inlines.get(0)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 0)
+
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(page.boxes.len == 2, "the mark's box and the body's box are laid")
+  assert(ed.block_style_at().equals("item"), "the style of the paragraph one is in reads")
+
+  assert(ed.set_block_style(page, sheet, "").styled(), "it could be taken off")
+  assert(ed.block_style_at().len == 0, "the style goes back to empty")
+  bare: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(bare.boxes.len == 1, "the mark's box goes")
+  assert(bare.boxes.get(0).text.equals("abc"), "what is left is the body alone")
+  verdict.pass("what deletes the mark is taking the paragraph's style off.")
+
+fn test_a_plain_paragraph_takes_the_item_style() //<
+  //< Applied to a plain paragraph the marker appears, and one undo removes it
+  verdict.start("[kspage/shape] a plain paragraph becoming a bullet list test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = Sheet.new(base.root_font(), arena)
+  item: = sheet.add("item", paint.inherit_all())
+  item.indent = 24.0
+  item.marker = marker.Marker.bullet("• ")
+  n: = d.add_block("").add_text("abc")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 0)
+
+  bare: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(ed.set_block_style(bare, sheet, "item").styled(), "it was laid on")
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(page.boxes.len == 2, "the mark's box grows")
+  assert(page.boxes.get(0).text.equals("• "), "the first box is the mark")
+
+  // One undo takes it back; applying it is one action.
+  assert(ed.undo(), "it can be put back")
+  assert(ed.block_style_at().len == 0, "the style goes back to empty")
+  back: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(back.boxes.len == 1, "the mark goes too")
+  verdict.pass("it lies on a plain paragraph, and goes back in one.")
+
+fn test_a_paragraph_refuses_a_style_arranged_another_way() //<
+  //< A style with a different arrangement is not applied
+  //<
+  //< Applied, the paragraph's text would wait for cells or frames and have nowhere to go.
+  verdict.start("[kspage/shape] refusing a style arranged differently test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = one_item(d, arena)
+  n: = d.blocks.get(0).inlines.get(0)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 0)
+  grid: = ed.add_style(sheet, "table", Arrange.grid).unwrap_or(null)
+  assert(grid != null, "the grid style can be made")
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+
+  // Caution: **Check the reason for the refusal too.** Merge the reasons and the page shows the
+  // wrong message.
+  wrong: = ed.set_block_style(page, sheet, "table").variant_name()
+  assert(wrong.equals("wrong_kind"),
+    "the grid style does not lie on, and the reason is how it is arranged")
+  assert(ed.block_style_at().equals("item"), "the paragraph refused is as it was")
+  // A style that does not exist is not applied either (it would point at a name that is nowhere).
+  missing: = ed.set_block_style(page, sheet, "nowhere to be found").variant_name()
+  named: = missing.equals("no_such_style")
+  assert(named, "a name not on the table does not lie on, and the reason is the name")
+  assert(ed.block_style_at().equals("item"), "this one is as it was too")
+  verdict.pass("only a flowing style lies on a paragraph.")
+
+priv fn three_items(d: Doc$@, arena: Arena$@): Sheet$@ //<
+  //< A document of three list items in a row, and its style table
+  sheet: = Sheet.new(base.root_font(), arena)
+  item: = sheet.add("item", paint.inherit_all())
+  item.indent = 24.0
+  item.marker = marker.Marker.bullet("• ")
+  d.add_block("item").add_text("abc")
+  d.add_block("item").add_text("def")
+  d.add_block("item").add_text("ghi")
+  return sheet
+
+fn test_a_paragraph_style_covers_every_selected_paragraph() //<
+  //< It applies to every paragraph in the selection
+  //<
+  //< **Not only one**: an inline style applies to a range, and the same menu must do the same.
+  verdict.start("[kspage/block] lying on every paragraph selected test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = three_items(d, arena)
+  head: = d.blocks.get(0).inlines.get(0)
+  last: = d.blocks.get(2).inlines.get(0)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(head, 0)
+  ed.caret.inline = last
+  ed.caret.offset = last.text().len
+
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(page.boxes.len == 6, "three marks' and three bodies' boxes are laid")
+  assert(ed.set_block_style(page, sheet, "").styled(), "it could be taken off")
+  for $i: Sz = 0; i < 3; i += 1
+    assert(d.blocks.get(i).style.len == 0, "every paragraph selected has its style back to empty")
+  bare: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(bare.boxes.len == 3, "all three marks' boxes go")
+
+  // **One undo takes it back**, not three.
+  assert(ed.undo(), "it can be put back")
+  for $i: Sz = 0; i < 3; i += 1
+    assert(d.blocks.get(i).style.equals("item"), "all three come home in one step")
+  verdict.pass("it lies on every paragraph selected, and goes back in one.")
+
+priv fn text_around_table(d: Doc$@, arena: Arena$@): Sheet$@ //<
+  //< A document of a paragraph, a table and a paragraph in a row, and its style table
+  sheet: = Sheet.new(base.root_font(), arena)
+  item: = sheet.add("item", paint.inherit_all())
+  item.indent = 24.0
+  item.marker = marker.Marker.bullet("• ")
+  base.table_style(sheet)
+  cell: = sheet.add("cell", paint.inherit_all())
+  cell.rule_width = 1.0
+  cell.rule_color = 0xccccccU32
+  d.add_block("body").add_text("before")
+  table: = d.add_block("table")
+  row: = table.add_child("row")
+  row.add_child("cell").add_text("a")
+  row.add_child("cell").add_text("b")
+  d.add_block("body").add_text("after")
+  return sheet
+
+fn test_a_paragraph_style_leaves_the_table_alone() //<
+  //< Selected across a table, it does not apply to the cells or the table itself
+  //<
+  //< Applied, the grid would turn into flow and the table would break.
+  verdict.start("[kspage/block] not lying on the cells even across a table test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = text_around_table(d, arena)
+  head: = d.blocks.get(0).inlines.get(0)
+  last: = d.blocks.get(2).inlines.get(0)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(head, 0)
+  ed.caret.inline = last
+  ed.caret.offset = last.text().len
+
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(page.cells.len == 2, "two cells are laid")
+  assert(ed.set_block_style(page, sheet, "item").styled(), "it was laid on")
+  assert(d.blocks.get(0).style.equals("item"), "it lies on the paragraph in front")
+  assert(d.blocks.get(2).style.equals("item"), "it lies on the paragraph behind too")
+  assert(d.blocks.get(1).style.equals("table"), "the table itself is as it was")
+  row: = d.blocks.get(1).children.get(0)
+  assert(row.children.get(0).style.equals("cell"), "the cells are as they were too")
+  assert(row.children.get(1).style.equals("cell"), "the neighbouring cell is as it was too")
+
+  after: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(after.cells.len == 2, "the table is laid as cells still")
+  assert(after.panels.len == 2, "the cells' bands stay two too")
+  assert(base.near(after.panels.get(0).width, 1.0), "the grid's lines are left too")
+  verdict.pass("what it lies on is the paragraphs alone, and the table's shape does not move.")

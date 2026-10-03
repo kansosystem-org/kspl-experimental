@@ -1,0 +1,44 @@
+#!/usr/bin/env -S ksplc run
+//< Writes one sample document to open by double-clicking (`make kspage` calls it)
+//<
+//< Caution: **Do not write out the startup sample (`kspage/content/sample.kspls`).** It shows when
+//< nothing is loaded, so a load that worked and one that failed look the same. The seed used here
+//< holds one of every shape (`kspage/tests/seeds.kspls`), so anything lost on the way shows.
+
+// ==========================================
+//     ./out/ksplc_stage1.exe run tools/kspage_doc.kspls out/sample.kspage
+// ==========================================
+import "kspage/tests/seeds" { built_seeds }
+import "std/argp"
+import "std/ds" { List }
+import "std/fuzz"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/sys"
+
+fn main(): I32 //< writes the one sample document
+  arena: = Arena.new(1024 * 1024)
+  defer arena.free()
+  // Caution: **Do not parse the arguments by hand.** `std/argp` refuses an unknown `--name` (by
+  // hand, `--foo` would become the output path) and builds the usage text.
+  p: = argp.Parser.create(sys.program_name(), "write one sample .kspage out", arena)
+  p.positional("<the destination (.kspage)>")
+  p.parse_or_exit(sys.args(), arena)
+  if p.rest.len != 1
+    p.print_usage()
+    return 1
+  out_path: = p.rest.get(0)
+  $made: = List<|fuzz.Sample|>.new(arena)
+  built_seeds(made@, "sample", arena)
+  for $i: Sz = 0; i < made.len; i += 1
+    one: = made.get(i)
+    if !one.kind.equals("doc")
+      continue
+    io.write_file(out_path, one.data) catch e
+      io.err().s("\{sys.program_name()\}: cannot write: \{out_path\} (\{e\})\n")
+      return 1
+    io.out().s("# built -> \{out_path\} (\{one.data.len\} bytes)\n")
+    return 0
+  io.err().s("\{sys.program_name()\}: there is no .kspage among the seeds built\n")
+  return 1

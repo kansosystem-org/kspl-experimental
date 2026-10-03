@@ -1,0 +1,561 @@
+//< What to say when the syntax cannot be parsed
+//<
+//< **This file only guesses from the text that could not be parsed.** Loading and analysis belong
+//< to `load.kspls`; this file reads only `kspeg`'s list of expectations and the source text (**one
+//< way**: it does not import `load.kspls`). Each guess targets one known shape.
+
+import "kspeg/engine" as kspeg
+import "kspeg/expected" { Expected }
+import "ksplc/base/core" as base_core
+import "ksplc/base/lines" { line_end, line_start }
+import "ksplc/base/literal" { literal_end }
+import "ksplc/parse/layout" { heads_a_block }
+import "ksplc/parse/line_cont" { takes_value_on_its_line }
+import "std/chars"
+import "std/str" { Str_builder }
+
+priv fn skip_space_back(src: U8[], pos: Sz): Sz
+  $i: = pos - 1
+  for i >= 0 && (src[i] == ' ' || src[i] == '\t' || src[i] == '\n' || src[i] == '\r')
+    i -= 1
+  return i
+
+priv fn enclosing_block_head(src: U8[], pos: Sz): U8[] //<
+  //< The heading word (`enum` / `struct` / `fn` …) of the level enclosing the failure position
+  //<
+  //< Empty where none is found. **Comments and strings are not skipped**: a `{` in one can shift
+  //< the result, but the answer only chooses a note, never a verdict.
+  $depth: Sz = 0
+  $i: = pos - 1
+  for i >= 0
+    if src[i] == '}'
+      depth += 1
+    else if src[i] == '{'
+      if depth == 0
+        break
+      depth -= 1
+    i -= 1
+  if i < 0
+    return ""
+  start: = line_start(src, i)
+  return first_word_after_visibility(src.sub(start, i - start))
+
+priv fn first_word_after_visibility(head: U8[]): U8[] //<
+  //< The first word on the heading line, skipping the visibility (`pub` / `priv`)
+  $s: = word_start(head, 0)
+  $e: = word_end(head, s)
+  if head.sub(s, e - s).equals("pub") || head.sub(s, e - s).equals("priv")
+    s = word_start(head, e)
+    e = word_end(head, s)
+  return head.sub(s, e - s)
+
+priv fn word_start(head: U8[], at: Sz): Sz //<
+  //< Where the first word at or after `at` begins
+  $j: = at
+  for j < head.len && !head[j].is_alnum()
+    j += 1
+  return j
+
+priv fn word_end(head: U8[], at: Sz): Sz //< the end of the word running from `at`
+  $e: = at
+  for e < head.len && head[e].is_alnum()
+    e += 1
+  return e
+
+priv fn starts_a_statement(src: U8[], pos: Sz): Bool //<
+  //< Whether a statement begins at that position
+  //<
+  //< **The start of a body counts too**, so the first statement of a function is one.
+  before: = skip_space_back(src, pos)
+  return (true if before < 0
+    else src[before] == ';' || src[before] == '{' || src[before] == '}')
+
+priv fn forbidden_spelling_hint(src: U8[], pos: Sz): U8[] //<
+  //< The sentence explaining a spelling **the specification chose not to have**, or empty
+  //<
+  //< The expected set alone (`expected 'pub', 'priv', …`) does not say a decision exists. Each
+  //< shape is recognized by looking at both sides of the failure position.
+  if pos < 0 || pos > src.len
+    return ""
+  // A bare block (`{ … }` as a statement of its own): `stmt` does not include `stmt_block`
+  // (`../kspl.kspeg`), so the failure lands on the `{`.
+  // Caution: **Ask what stands before it.** A valid `{` (`if cond {`, `T::{ … }`) has a name
+  // or a mark in front; only one where a statement begins is bare.
+  if pos < src.len && src[pos] == '{' && starts_a_statement(src, pos)
+    return "\n  Note: a bare block carries a label. Name what that level is there for \
+      ('while_locked: { ... }'); a block with no heading cannot be told from a continuation of the \
+      statement before it."
+  // The range syntax `a..b` / the slice syntax `a[i..j]`: the failure lands on the second `.`.
+  if pos >= 1 && pos < src.len && src[pos] == '.' && src[pos - 1] == '.'
+    return "\n  Note: KSPL has no range syntax ('a..b'). Write the bounds in the loop header ('for \
+      $i: = a; i < b; i += 1'), and take sub-slices with 'x.sub(start, len)'."
+  prev: = skip_space_back(src, pos)
+  // A trailing closure (`count_over(xs) fn(x: I32; ): Bool`, Swift's and Kotlin's shape). Nothing
+  // in KSPL puts a `fn` right after a call's `)`, so the failure lands on the `fn`.
+  if prev >= 0 && src[prev] == ')' && src.starts_with("fn", pos) &&
+    word_end(src, pos) == pos + 2
+    return "\n  Note: KSPL has no trailing closure. Pass the closure inside the call's parentheses \
+      ('f(xs, fn(x: I32; ): Bool { return x > 0 })'), or bind it to a name first and pass the name."
+  // A Result's error type omitted (`fn f(): T? {`): the text before the failure position ends
+  // with a `?`.
+  if prev >= 0 && src[prev] == '?'
+    return "\n  Note: the error type of a Result cannot be omitted. Write 'T?E' (for example \
+      'I32?Io_error'); there is no 'T?' shorthand."
+  // A postfixed `if` (`return x if cond;` / `return if cond;`): an unmatched ternary's shape.
+  // Caution: A ternary (`a if cond else b`) exists, so do not say "an `if` cannot be written"; what
+  // is missing is a branch.
+  if statement_has_if_without_else(src, pos)
+    return "\n  Note: 'if' as an expression needs all three parts ('a if cond else b'). KSPL has no \
+      postfix condition ('x if cond'); to branch without a value, write 'if cond { ... }' first."
+  // An enum's values separated by `,`. **The expected set alone does not make it clear**: its
+  // `';'` does not read as "a `;`, not a `,`".
+  if pos < src.len && src[pos] == ',' && enclosing_block_head(src, pos).equals("enum")
+    return "\n  Note: an enum value stands on its own, as a struct field does. ',' parts no two of \
+      them — it only separates the fields inside a payload ('mid(level: I32, tone: U8)')."
+  return ""
+
+priv fn odd_indent_name(src: U8[], pos: Sz): U8[] //<
+  //< The name of what starts the failing line looking like whitespace but is not, or empty
+  //<
+  //< Caution: **Text can look like indentation without counting as it.** Only the ASCII space
+  //< counts (`layout.kspls`), so such a line is at column 0 and the error says "a declaration
+  //< ought to come". **Check for the fullwidth space first.**
+  if pos < 0 || pos > src.len
+    return ""
+  $s: = line_start(src, pos)
+  for s < src.len && src[s] == ' '
+    s += 1
+  if s >= src.len
+    return ""
+  if src.starts_with("\u3000", s)
+    return "an ideographic space (U+3000)"
+  if src.starts_with("\u00A0", s)
+    return "a no-break space (U+00A0)"
+  if src[s] == '\t'
+    return "a tab"
+  if src[s] == 0x0cU8
+    return "a form feed (U+000C)"
+  if src[s] == 0x0bU8
+    return "a vertical tab (U+000B)"
+  return ""
+
+priv fn block_head_without_body(src: U8[], pos: Sz): Bool //<
+  //< Whether the failing line is a heading that opens a level with no deeper line after it
+  //<
+  //< **An empty level and one holding only comments are both this**: a comment line makes no level.
+  //< It looks only at whether the next line with contents is deeper.
+  if pos < 0 || pos > src.len
+    return false
+  s: = line_start(src, pos)
+  $head_indent: Sz = 0
+  for s + head_indent < src.len && src[s + head_indent] == ' '
+    head_indent += 1
+  $i: = line_end(src, s)
+  // It looks for the next line with contents, skipping blank lines and comment-only lines.
+  for i < src.len
+    i += 1
+    $n: Sz = 0
+    for i + n < src.len && src[i + n] == ' '
+      n += 1
+    at: = i + n
+    if at >= src.len
+      return true
+    if src[at] == '\n' || src.starts_with("//", at)
+      i = line_end(src, at)
+      continue
+    return n <= head_indent
+  return true
+
+priv struct Code_line //< one line's code, without the comment or surrounding blanks
+  indent: Sz
+  code: U8[]
+  next_at: Sz //< where the line after it begins
+
+priv fn code_line(src: U8[], at: Sz): Code_line //< the line beginning at `at`
+  e: = line_end(src, at)
+  $b: = at
+  for b < e && src[b] == ' '
+    b += 1
+  $c: = b
+  for c < e
+    if src[c] == '"' || src[c] == '\''
+      c = literal_end(src, c)
+      continue
+    if src.starts_with("//", c)
+      break
+    c += 1
+  if c > e
+    c = e
+  return Code_line::{ .indent = b - at, .code = drop_mended_tail(src.sub(b, c - b)),
+    .next_at = e + 1 }
+
+priv fn drop_mended_tail(code: U8[]): U8[] //<
+  //< The line's own text, without the marks the indentation reader added after it
+  //<
+  //< The text read here is the parser's, whose lines end in that reader's ` {` / `;` / ` }`
+  //< (`to_braces` in `layout.kspls`).
+  $n: = code.len
+  for n > 0
+    if code[n - 1] == ' ' || code[n - 1] == '\r' || code[n - 1] == ';'
+      n -= 1
+    else if n >= 2 && code[n - 2] == ' ' && (code[n - 1] == '{' || code[n - 1] == '}')
+      n -= 2
+    else
+      break
+  return code.sub(0, n)
+
+priv fn next_code_line(src: U8[], after: Code_line): Code_line //<
+  //< The first line after `after` holding code
+  //<
+  //< Blank lines and comment lines are skipped, as the indentation notation skips them.
+  $l: = code_line(src, after.next_at)
+  for l.code.len == 0 && l.next_at <= src.len
+    l = code_line(src, l.next_at)
+  return l
+
+priv fn ends_with_word(code: U8[], w: U8[]): Bool //< whether the code's last word is `w`
+  if code.len < w.len || !code.sub_from(code.len - w.len).equals(w)
+    return false
+  return code.len == w.len || !code[code.len - w.len - 1].is_alnum()
+
+priv fn starts_with_word(code: U8[], w: U8[]): Bool //< whether the code's first word is `w`
+  return code.starts_with(w) && (code.len == w.len || !code[w.len].is_alnum())
+
+priv fn append_split_value_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
+  //< It writes the sentence naming the parentheses a value split onto a deeper line needs
+  //<
+  //< It does so where the failing line continues a value onto a deeper line in a way the
+  //< indentation notation does not accept.
+  //<
+  //< Two shapes: a conditional value broken at its `if` / `else`, and a value below a lone `return`
+  //< / `throw` / `fallback` (the rule is "The indentation notation (`.kspls`)" in
+  //< `../../docs/DESIGN.md`).
+  if pos < 0 || pos > src.len
+    return false
+  cur: = code_line(src, line_start(src, pos))
+  next: = next_code_line(src, cur)
+  if cur.code.len == 0 || next.indent <= cur.indent || next.code.len == 0
+    return false
+  if takes_value_on_its_line(cur.code)
+    w: = cur.code
+    msg.s("\n  Note: a '").s(w)
+      .s("' takes its value on the same line; a deeper line below a lone '").s(w)
+      .s("' is not read as its value. Start the value on the '").s(w)
+      .s("' line, and put a long one in parentheses to split it across lines.")
+    return true
+  split_choice: =
+    ((ends_with_word(cur.code, "if") || ends_with_word(cur.code, "else")) &&
+    cur.code.find_char(' ') >= 0) || starts_with_word(next.code, "if") ||
+    starts_with_word(next.code, "else")
+  if !split_choice || heads_a_block(cur.code)
+    return false
+  msg
+    .s("\n  Note: a conditional value split across lines goes in parentheses ('(a if c' on one line \
+      and 'else b)' on the next). Outside them a line with 'if' or 'else' at its head or its end \
+      reads as a statement.")
+  return true
+
+priv fn append_trailing_defer_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
+  //< It writes the sentence saying a `defer` must start its own statement, where it fails on one
+  //<
+  //< The sentence includes the line to write: the call as written, or, for a bare call, with the
+  //< declared name in front.
+  //<
+  //< A `defer` that starts a statement parses, so failing on one means it follows another
+  //< (`buf: = Str_builder.new() defer .free()`, or after the `}` of a `catch` block).
+  if pos < 0 || !src.starts_with("defer", pos) || word_end(src, pos) != pos + 5
+    return false
+  name: = declared_name(src, statement_start(src, pos))
+  call: = code_line(src, pos + 5).code
+  msg.s("\n  Note: a 'defer' is a statement of its own and cannot trail another. ")
+  if name.len > 0 && call.starts_with(".")
+    msg.s("Put 'defer ").s(name).s(call).s("' on the next line.")
+  else if call.len > 0 && !call.starts_with(".")
+    msg.s("Put 'defer ").s(call).s("' on the next line.")
+  else
+    msg.s("Put it on the next line, naming what it cleans up ('defer x.free()').")
+  return true
+
+priv const other_typedef_words: U8[][4] = ::{ "alias", "type", "typealias", "using" } //<
+  //< The words other languages use to give a type another name, where KSPL writes `typedef`
+  //<
+  //< They are D's; Rust's, Go's and Python's; Swift's and Kotlin's; C++'s.
+
+priv fn append_typedef_spelling_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
+  //< It writes the `typedef` line to use instead of another language's or C's type alias
+  //<
+  //< It does so where the failing line gives a type another name with another language's keyword
+  //< or in C's order.
+  //<
+  //< `alias Id = I32` fails on the `Id`: the word reads as a variable's name needing a `:`. C's
+  //< `typedef I32 Id` fails on the `I32`, and `typedef U8[] Bytes` on the `[`.
+  if pos < 0 || pos > src.len
+    return false
+  code: = code_line(src, line_start(src, pos)).code
+  $s: Sz = 0
+  first: = code.sub(0, word_end(code, 0))
+  if first.equals("pub") || first.equals("priv")
+    s = word_start(code, first.len)
+  e: = word_end(code, s)
+  word: = code.sub(s, e - s)
+  after: = code.sub_from(e).trim_spaces()
+  if word.equals("typedef")
+    $k: = after.len
+    for k > 0 && after[k - 1].is_alnum()
+      k -= 1
+    if after.find_char('=') >= 0 || k == 0 || k == after.len || !after[k].is_alpha()
+      return false
+    msg.s("\n  Note: 'typedef' puts the new name first, the type after '=': '")
+      .s(code.sub(0, s)).s("typedef ").s(after.sub_from(k)).s(" = ")
+      .s(after.sub(0, k).trim_spaces()).s("'.")
+    return true
+  rest: = after.sub_from(word_end(after, 0)).trim_spaces()
+  if word_end(after, 0) == 0 || !rest.starts_with("=") || rest.starts_with("==")
+    return false
+  for w in other_typedef_words
+    if word.equals(w)
+      msg.s("\n  Note: another name for a type is declared with 'typedef': '")
+        .s(code.sub(0, s)).s("typedef ").s(after).s("'.")
+      return true
+  return false
+
+priv fn statement_start(src: U8[], pos: Sz): Sz //<
+  //< Where the statement holding `pos` starts
+  //<
+  //< That is after the `;` or the opening bracket before it; a bracket closed along the way is
+  //< skipped whole.
+  //<
+  //< **Comments and strings are not skipped**, as in `enclosing_block_head`; the answer only
+  //< affects what a note suggests.
+  $depth: Sz = 0
+  $i: = pos - 1
+  for i >= 0
+    ch: = src[i]
+    if ch == '}' || ch == ')' || ch == ']'
+      depth += 1
+    else if ch == '{' || ch == '(' || ch == '['
+      if depth == 0
+        break
+      depth -= 1
+    else if ch == ';' && depth == 0
+      break
+    i -= 1
+  return i + 1
+
+priv fn declared_name(src: U8[], from: Sz): U8[] //<
+  //< The name a statement beginning at `from` declares (`buf` of `$buf: = …`), or empty
+  //<
+  //< **A `::` is not a declaration's `:`.** `T::{ … }` and a cast hold one after a name.
+  $s: = from
+  for s < src.len &&
+    (src[s] == ' ' || src[s] == '\t' || src[s] == '\n' || src[s] == '\r')
+    s += 1
+  if s < src.len && src[s] == '$'
+    s += 1
+  e: = word_end(src, s)
+  if e == s || src[s].is_digit()
+    return ""
+  $c: = e
+  for c < src.len && src[c] == ' '
+    c += 1
+  if c >= src.len || src[c] != ':' || src.starts_with("::", c)
+    return ""
+  return src.sub(s, e - s)
+
+priv fn statement_has_if_without_else(src: U8[], pos: Sz): Bool //<
+  //< Whether the statement before `pos` (back to a `;` `{` `}`) has an `if` and no `else`
+  $start: = pos - 1
+  for start >= 0 && src[start] != ';' && src[start] != '{' && src[start] != '}'
+    start -= 1
+  span: = src.sub(start + 1, pos - start - 1)
+  return span.find_str(" if") >= 0 && span.find_str(" else") < 0
+
+priv const max_open: Sz = 64 //< how many brackets may be open before the count below gives up
+
+priv fn append_unclosed_bracket_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
+  //< It writes the sentence naming where an unclosed `(` or `[` around the failure opened
+  //<
+  //< The rule is "What a syntax error names" in `../docs/DESIGN.md`.
+  //<
+  //< **"Never closed" is checked over the rest of the text**: a bracket closed further on means the
+  //< mistake is inside it (a missing `,`), and naming the bracket would mislead the author.
+  //< **A `{` is left out**: in the brace notation it may be a block's rather than a value's.
+  at: = innermost_open(src, pos)
+  if at < 0 || src[at] == '{'
+    return false
+  closer: = ')' if src[at] == '(' else ']'
+  if pos < src.len && (src[pos] == ')' || src[pos] == ']') && src[pos] != closer
+    msg.s("\n  Note: this '").c(src[pos]).s("' cannot close the '").c(src[at]).s("' at ")
+    append_place(msg, src, at)
+    msg.s("; only a '").c(closer).s("' can.")
+    return true
+  $depth: Sz = 0
+  $j: = pos
+  for j < src.len
+    c: = src[j]
+    if c == '(' || c == '[' || c == '{'
+      depth += 1
+    else if is_closer(c)
+      if depth == 0
+        if c == closer
+          return false
+        break
+      depth -= 1
+    j = text_step(src, j)
+  msg.s("\n  Note: the '").c(src[at]).s("' at ")
+  append_place(msg, src, at)
+  msg
+    .s(" is never closed, so what follows it was read as its contents. Close it where its contents \
+      end.")
+  return true
+
+priv fn innermost_open(src: U8[], pos: Sz): Sz //<
+  //< Where the innermost bracket still open at `pos` opened, or -1 where none is
+  //<
+  //< It is also -1 where they nest deeper than `max_open`.
+  $open: Sz[max_open] = ::{}
+  $n: Sz = 0
+  $i: Sz = 0
+  for i < pos && i < src.len
+    c: = src[i]
+    if c == '(' || c == '[' || c == '{'
+      if n == max_open
+        return -1
+      open[n] = i
+      n += 1
+    else if is_closer(c) && n > 0
+      n -= 1
+    i = text_step(src, i)
+  return open[n - 1] if n > 0 else -1
+
+priv fn append_missing_comma_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
+  //< It writes the sentence naming a `,` that may be missing between two items of a list
+  //<
+  //< It does so where two items stand side by side inside a list's brackets ("What a syntax
+  //< error names" in `../docs/DESIGN.md`).
+  //<
+  //< **Only a list's brackets**: a call's or a signature's `(`, which has a name or a closing
+  //< bracket right in front of it, and a value's `::{`. Grouping parentheses hold one value.
+  at: = innermost_open(src, pos)
+  if at < 1 || pos >= src.len || !starts_item(src, pos)
+    return false
+  before: = src[at - 1]
+  call: =
+    src[at] == '(' && (before.is_alnum() || before == ')' || before == ']' || before == '>')
+  value: = src[at] == '{' && at >= 2 && before == ':' && src[at - 2] == ':'
+  prev: = skip_space_back(src, pos)
+  if !(call || value) || prev <= at || prev + 1 == pos || !ends_item(src[prev])
+    return false
+  e: = word_end(src, pos)
+  msg.s("\n  Note: a ',' may be missing before ")
+  if e > pos
+    msg.s("'").s(src.sub(pos, e - pos)).s("'")
+  else
+    msg.s("this item")
+  msg.s("; the items of a list are parted by ','.")
+  return true
+
+priv fn starts_item(src: U8[], at: Sz): Bool //<
+  //< Whether an item of a list can begin at `at`
+  //<
+  //< That is a name, a number, a literal, a bracket, an enum's `.value` or a parameter's `$`, and
+  //< none of `carrying_words`.
+  c: = src[at]
+  if !(c.is_alnum() || c == '"' || c == '\'' || c == '(' || c == '.' || c == '$')
+    return false
+  w: = src.sub(at, word_end(src, at) - at)
+  for k in carrying_words
+    if w.equals(k)
+      return false
+  return true
+
+priv const carrying_words: U8[][5] = ::{ "as", "in", "catch", "if", "else" } //<
+  //< The words that stand between two values and continue the first, rather than starting an item
+
+priv fn ends_item(c: U8): Bool //< whether an item of a list can end with the byte
+  return c.is_alnum() || c == '"' || c == '\'' || c == ')' || c == ']' || c == '}'
+
+priv fn is_closer(c: U8): Bool //< whether the byte closes a bracket
+  return c == ')' || c == ']' || c == '}'
+
+priv fn append_place(msg: Str_builder$@, src: U8[], at: Sz) //<
+  //< It writes `line L, column C` for a position, counted as the diagnostic's heading counts
+  //<
+  //< `get_line_info` in `../base/core.kspls` does the count.
+  info: = src.get_line_info(at, src.line_starts(base_core.arena))
+  msg.s("line \{info.line\}, column \{info.disp_col\}")
+
+priv fn text_step(src: U8[], i: Sz): Sz //<
+  //< Where a walk over the text continues after `i`
+  //<
+  //< That is past a literal or a line comment starting there, or one byte further.
+  c: = src[i]
+  if c == '"' || c == '\''
+    return literal_end(src, i)
+  if src.starts_with("//", i)
+    return line_end(src, i)
+  return i + 1
+
+priv fn append_expected(msg: Str_builder$@, e: Expected) //< it writes one expected item
+  //<
+  //< A name goes in quotes and a kind in a readable phrasing. **Do not quote a kind**:
+  //< `'Primitive_type'` reads as text to type, not the name of what can come there.
+  //< Caution: **Do not make a table of phrasings.** The grammar (`ksplc/kspl.kspeg`) owns the
+  //< rule's name, and a copy silently drifts when it is renamed.
+  if !e.is_rule
+    msg.s("'\{e.text\}'")
+    return
+  head: = e.text[0].to_lower()
+  msg.s("an " if head == 'a' || head == 'i' || head == 'u' || head == 'e' || head == 'o' else "a ")
+  for i in Range.asc(e.text.len)
+    c: = e.text[i]
+    msg.c(' ' if c == '_' else c.to_lower())
+
+fn build_parse_error_msg(target_parser: kspeg.Target$@, src: U8[], pos: Sz, laid_out: Bool):
+  Str_builder //<
+    //< It builds the message for the syntax error at `pos`
+    //<
+    //< Caution: **Take `laid_out`.** In the indentation notation a heading line holds no `{`, so
+    //< the guess that "the ternary's `if` is not matched" would fire wrongly (on an empty level, or
+    //< one holding only comments). This is the one place where the wording differs by notation.
+  $msg: = Str_builder.new()
+  msg.s("expected ")
+  if target_parser.fail.expected_label_count > 0
+    for i in Range.asc(target_parser.fail.expected_label_count)
+      if i > 0
+        if i == target_parser.fail.expected_label_count - 1
+          // **With two labels the separator needs the leading space too**, as `", or "` has, or
+          // it reads `a floator ')'`.
+          msg.s(" or " if target_parser.fail.expected_label_count == 2 else ", or ")
+        else
+          msg.s(", ")
+      append_expected(msg@, (target_parser.fail.expected_labels + i)$)
+  else
+    msg.s("valid syntax")
+  odd: = odd_indent_name(src, pos)
+  if odd.len > 0
+    msg.s("\n  Note: this line is indented with ").s(odd)
+      .s(". Only the plain space (U+0020) counts as a column, so the line is read as if it began at \
+        column 0 and left the block that encloses it. Indent with spaces.")
+    return msg
+  if append_unclosed_bracket_hint(msg@, src, pos)
+    return msg
+  if append_missing_comma_hint(msg@, src, pos)
+    return msg
+  // **Narrow it to "a `{` was expected".** "The next line is not deeper" alone holds for nearly
+  // every line and would fire on unrelated errors; the expected set says if a level is needed.
+  if laid_out && append_split_value_hint(msg@, src, pos)
+    return msg
+  wants_block: = msg.slice().find_str("'{'") >= 0
+  if laid_out && wants_block && block_head_without_body(src, pos)
+    msg
+      .s("\n  Note: a block with no body cannot be written by indentation alone — there is no \
+        deeper line to open it. Keep the braces for an empty block ('if cond {}'), and note that a \
+        body of only comments is the same case: comment lines do not open a block.")
+    return msg
+  if append_trailing_defer_hint(msg@, src, pos)
+    return msg
+  if append_typedef_spelling_hint(msg@, src, pos)
+    return msg
+  msg.s(forbidden_spelling_hint(src, pos))
+  return msg

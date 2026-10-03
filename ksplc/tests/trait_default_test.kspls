@@ -1,0 +1,91 @@
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/verdict"
+
+// ==========================================
+// Checks that the **default body** written on a trait's declaration is copied to an
+// implementation that did not write it (`ksplc/sema/decl/trait_default.kspls`).
+//
+// **It is copied into the impl's block**, where `Self` and the impl's type arguments take effect
+// as they are.
+// ==========================================
+priv trait Seqish<|E|>
+  fn head(r: Self): Option<|E|>
+
+  fn head_or(r: Self, alt: E): E //< the default body
+    //<
+    //< It calls a declaration-only method (`head`), which must resolve to the receiver's
+    //< implementation.
+    if v: = r.head()
+      return v
+    return alt
+
+priv struct One<|A|>
+  priv v: A
+
+impl<|A|> One<|A|>: Seqish<|A|>
+  priv fn head(r: Self): Option<|A|>
+    return Option<|A|>.some(r.v)
+
+priv struct Pair<|X, Y|> //< the trait's `E` is `Y` in the impl
+  priv a: X
+  priv b: Y
+
+impl<|X, Y|> Pair<|X, Y|>: Seqish<|Y|>
+  priv fn head(r: Self): Option<|Y|>
+    return Option<|Y|>.some(r.b)
+
+priv struct Blank //< an implementation that overrides the default with its own
+  priv unused: I32
+
+impl Blank: Seqish<|I32|>
+  priv fn head(_r: Self): Option<|I32|>
+    return Option<|I32|>.none
+
+  priv fn head_or(_r: Self, _alt: I32): I32
+    return -1
+
+priv trait Bagish<|E|> //<
+  //< A generic trait whose type argument an impl fills with a built-in name
+  //<
+  //< The `E` inside the copied body is replaced by the name the impl gave, so a name **built in
+  //< yet with a large id**, such as `Sz` / `I64` / `F64`, goes there.
+  //<
+  //< The built-in range must not be a written number (is_builtin in `ksplc/sema/type/env.kspls`).
+  fn one(r: Self): E
+
+  fn pair(r: Self, arena: Arena$@): List<|E|>
+    $out: = List<|E|>.new(arena)
+    out.push(r.one())
+    out.push(r.one())
+    return out
+
+priv struct Counted
+  priv v: Sz
+
+impl Counted: Bagish<|Sz|>
+  priv fn one(r: Self): Sz
+    return r.v
+
+priv struct Weighed
+  priv v: F64
+
+impl Weighed: Bagish<|F64|>
+  priv fn one(r: Self): F64
+    return r.v
+
+fn test_trait_default_body()
+  verdict.start("[Trait] the default body is copied to the implementing side test...")
+  assert(One<|I32|>::{ .v = 7 }.head_or(0) == 7, "it is copied to a generic implementation")
+  // The `E` → `Y` replacement; if wrong, it is `X` (U8[]) and the types disagree.
+  assert(Pair<|U8[], I64|>::{ .a = "x", .b = 9 }.head_or(0) == 9,
+    "the declaration's type argument turns into the actual argument")
+  assert(Blank::{ .unused = 0 }.head_or(5) == -1, "the side that wrote its own wins")
+  arena: = Arena.new(4096)
+  defer arena.free()
+  szs: = Counted::{ .v = 3 }.pair(arena)
+  assert(szs.len == 2 && szs.get(0) == 3, "the built-in `Sz` is copied as a type argument too")
+  ws: = Weighed::{ .v = 1.5 }.pair(arena)
+  assert(ws.len == 2 && ws.get(1) == 1.5, "the built-in `F64` is copied as a type argument too")
+  verdict
+    .pass("a default body is copied to the implementations that did not write one, and no further.")

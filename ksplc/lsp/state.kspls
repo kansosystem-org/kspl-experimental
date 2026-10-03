@@ -1,0 +1,146 @@
+//< What the language server keeps between requests
+//<
+//< That is the open documents' texts, and the analysed state a request is answered from.
+//<
+//< **Every file that answers requests reads `Doc_state` from here, and nothing here imports one**,
+//< so the answers and the dispatch (`worker.kspls`) import in one direction.
+import "kspeg/engine" as kspeg
+import "ksplc/base/as_written" as base_as_written
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/cfg_inactive" as base_cfg_inactive
+import "ksplc/base/core" as base_core
+import "ksplc/base/diag" as base_diag
+import "ksplc/parse/load" as parse_load
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "std/ds" { Map }
+import "std/mem" + { Arena, dealloc }
+import "std/str" { Str_builder }
+
+struct Doc_state //< one analysis: a document's own, or the workspace's for one request
+  is_valid: Bool
+  arena_state: mem.Arena_state
+  root_file: Ast_node$@
+  sema: Sema_ctx$@
+  source_map: Map<|U8[], U8$[]|>$@
+  uri_perm: U8$[]
+  src_perm: U8$[]
+  mod_name_perm: U8$[]
+
+impl Doc_state
+  fn free(r: Self$@)
+    if r.sema != null
+      r.sema.free()
+    if r.source_map != null
+      r.source_map.free()
+
+  fn discard(r: Self$@) //<
+    //< It frees a state built for one request and rewinds the arena to before it was built
+    //<
+    //< Caution: **Read nothing from it afterwards** — the state itself lives on the rewound arena,
+    //< so a field read after this reads freed memory, even if it happens to look intact.
+    mark: = r.arena_state
+    r.free()
+    wind_back(mark)
+
+struct Doc_cache //< one open document's text
+  //<
+  //< **An entry is not removed even on didClose**, or the store would have to own and free the uri
+  //< key itself. is_open says it is closed; the memory is bounded by the distinct uris opened.
+  text: Str_builder
+  is_open: Bool
+
+struct Doc_store //< the open documents' texts, by uri
+  //<
+  //< **The worker and the supervisor each hold one**: the worker analyses from it, the supervisor
+  //< replays to a restarted worker from it. One implementation, so the two cannot differ on a
+  //< reopened or closed document.
+  //< Caution: **Do not allocate the text on the arena.** didChange sends the whole text
+  //< (textDocumentSync=Full), so each keystroke would add one document's worth for good. The
+  //< arena holds the keys and the entries; the text buffer is on the heap and reused.
+  map: Map<|U8[], Doc_cache$@|>$@
+  arena: Arena$@
+
+impl Doc_store
+  fn new(): Doc_store
+    a: = Arena.new(1024 * 1024)
+    return Doc_store::{ .map = a.create(Map<|U8[], Doc_cache$@|>.new(a)), .arena = a }
+
+  fn free(r: Self$@)
+    // Caution: Free the buffers before the arena, which holds the entries and their ptr.
+    for e in r.map.items()
+      e.value.text.free()
+    r.arena.free()
+
+  fn put(r: Self$@, uri: U8[], text: U8[]) //< it stores `text` as the document's, reopening it
+    existing: = r.map.get(uri) catch null
+    if existing != null
+      // The capacity is kept: the next whole text is about the same size (a reopened document
+      // starts from cap 0).
+      existing.text.len = 0
+      existing.text.s(text)
+      existing.is_open = true
+      return
+    fresh: = r.arena.create(Doc_cache::{ .text = Str_builder.new(), .is_open = true })
+    fresh.text.s(text)
+    r.map.set(r.arena.dup_str(uri), fresh)
+
+  fn close(r: Self$@, uri: U8[]) //< it releases a document's text
+    //<
+    //< The entry stays (see Doc_cache): only the buffer is freed, and the key and the entry are
+    //< reused on a reopen.
+    existing: = r.map.get(uri) catch null
+    if existing != null
+      existing.text.free()
+      existing.is_open = false
+
+  fn open_text(r: Self$@, uri: U8[]): Option<|U8[]|> //< an open document's text
+    //<
+    //< Caution: **A closed document is none, not an empty text.** Its entry remains, so reading it
+    //< as text would put an empty source over the file.
+    existing: = r.map.get(uri) catch null
+    if existing == null || !existing.is_open
+      return Option<|U8[]|>.none
+    return Option<|U8[]|>.some(existing.text.slice())
+
+struct Server
+  base_parser: kspeg.Target$@
+  docs: Doc_store //< the open documents, as converted into the brace notation
+  latest_state: Doc_state$@
+  base_arena_state: mem.Arena_state
+
+fn wind_back(mark: mem.Arena_state) //<
+  //< It rewinds base_core.arena to `mark` and discards everything on it
+  //<
+  //< Caution: **Do not call `base_core.arena.restore` from anywhere else.** What the compiler keeps
+  //< in module-level variables — the text as written (base/as_written.kspls), the indentation
+  //< notes (parse/load.kspls), the diagnostics (base/diag.kspls), the ranges a `#cfg()` dropped
+  //< (base/cfg_inactive.kspls) — lives on that arena, so a bare rewind leaves those pointers
+  //< dangling.
+  base_as_written.forget_as_written()
+  parse_load.forget_layout_notes()
+  base_diag.lsp_diags.clear()
+  base_cfg_inactive.cfg_inactive.clear()
+  base_core.arena.restore(mark)
+
+impl Server
+  fn new(base_parser: kspeg.Target$@): Server$@
+    s: = mem.alloc_as<|Server|>()
+    s$ = Server::{ .base_parser = base_parser, .docs = Doc_store.new(), .latest_state = null,
+      .base_arena_state = base_core.arena.save() }
+    return s
+
+  fn free(r: Self$@)
+    r.docs.free()
+    r.reset_current_state()
+    dealloc(Void$@::r)
+
+  fn reset_current_state(r: Self$@)
+    if r.latest_state != null
+      r.latest_state.free()
+    wind_back(r.base_arena_state)
+    r.latest_state = null
+
+// It owns memory and releases it with `free()` (why it must conform: `Owned` in std/lang.kspls).
+impl Doc_state: Owned {}
+impl Doc_store: Owned {}
+impl Server: Owned {}

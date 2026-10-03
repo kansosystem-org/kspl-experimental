@@ -1,0 +1,101 @@
+//< Fixes up the source's spelling before passing it to the analyser
+//<
+//< **This handles the file's own spelling, not the program's**: the shebang line (which the OS uses
+//< to start a script), the BOM (the encoding's mark) and the line terminator, each dropped or
+//< rewritten here rather than added to the grammar.
+//< **Some keep the length and some cannot.** The shebang's two bytes are rewritten to `//`, so
+//< every later offset, line and column stays the same.
+//< Caution: **Treat it as a shebang only where a `/` follows (ignoring whitespace)**: the OS starts
+//< only an absolute path.
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str"
+
+fn has_shebang(src: U8[]): Bool
+  if src.len < 3 || (src.ptr + 0)$ != '#' || (src.ptr + 1)$ != '!'
+    return false
+  $i: Sz = 2
+  for i < src.len && ((src.ptr + i)$ == ' ' || (src.ptr + i)$ == '\t')
+    i += 1
+  return i < src.len && (src.ptr + i)$ == '/'
+
+fn strip_bom(src: U8[]): U8[] //<
+  //< It returns `src` without a leading BOM (U+FEFF; EF BB BF in UTF-8), or `src` unchanged
+  //<
+  //< Caution: **Left in, it breaks the first line** — a BOM is not whitespace, so a syntax error
+  //< that names no cause ("a declaration ought to come") lands at `1:1`. **Do not replace it with
+  //< whitespace** (unlike the shebang), and **drop only a leading one**: elsewhere it is content.
+  if src.starts_with("\uFEFF", 0)
+    return src.sub_from(3)
+  return src
+
+fn mask_shebang(src: U8$[]) //<
+  //< Where has_shebang, it rewrites the leading two bytes to `//` (only on an owned copy)
+  //<
+  //< A `#!` past the first line is left alone.
+  if has_shebang(src)
+    (src.ptr + 0)$ = '/'
+    (src.ptr + 1)$ = '/'
+
+fn unmask_shebang(src: U8$[]) //< the inverse of mask_shebang
+  //<
+  //< It puts `#!` back before a formatting result is written to the file; forgotten, the script no
+  //< longer starts.
+  if src.len >= 2 && (src.ptr + 0)$ == '/' && (src.ptr + 1)$ == '/'
+    (src.ptr + 0)$ = '#'
+    (src.ptr + 1)$ = '!'
+
+fn has_crlf(src: U8[]): Bool //< whether the file's lines end with `\r\n`
+  //<
+  //< **The first terminator decides for the whole file**, as clang-format's `LineEnding: DeriveLF`
+  //< and rustfmt's `newline_style = Auto` do, so a file with mixed terminators comes back with one.
+  $i: Sz = 0
+  for i < src.len
+    if (src.ptr + i)$ == '\n'
+      return i > 0 && (src.ptr + i - 1)$ == '\r'
+    i += 1
+  return false
+
+fn to_lf(src: U8[], arena: Arena$@): U8[] //<
+  //< The text with every `\r\n` turned into `\n`, or the text itself where it has none
+  //<
+  //< **The line terminator is the file's, not the program's.** Kept as is, one source would be two
+  //< programs: a raw text holds its terminators as bytes, so one checkout measures 18 where another
+  //< measures 20. C (translation phase 1), Java's text block, C#'s raw string and Swift's multiline
+  //< literal also normalize it before analysis.
+  //< **A lone `\r` is kept**: it ends no line, so it is content.
+  if src.find_str("\r\n") < 0
+    return src
+  out: = arena.text()
+  $i: Sz = 0
+  for i < src.len
+    c: = (src.ptr + i)$
+    if c == '\r' && i + 1 < src.len && (src.ptr + i + 1)$ == '\n'
+      i += 1
+      continue
+    out.c(c)
+    i += 1
+  return out.take()
+
+fn settle(raw: U8[], arena: Arena$@): U8[] //<
+  //< The file's text, normalized before anything reads it
+  //<
+  //< The leading BOM is removed and every `\r\n` becomes `\n`.
+  //<
+  //< **Every entry point for a source reaches it** through `mend` in `layout.kspls`. Normalized at
+  //< only one, another would answer about a different program from the one a compile sees (the
+  //< reasons are at `strip_bom` and `to_lf`).
+  return to_lf(strip_bom(raw), arena)
+
+fn to_crlf(src: U8[], arena: Arena$@): U8[] //<
+  //< The text with every `\n` turned into `\r\n`, to give a file back the terminator it came with
+  //<
+  //< Caution: **Only after `to_lf`**: on text still holding `\r\n` it makes `\r\r\n`, which every
+  //< reader shows as a blank line between lines.
+  out: = arena.text()
+  for $i: Sz = 0; i < src.len; i += 1
+    c: = (src.ptr + i)$
+    if c == '\n'
+      out.c('\r')
+    out.c(c)
+  return out.take()

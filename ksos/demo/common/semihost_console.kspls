@@ -1,0 +1,69 @@
+//< The console attached over ARM semihosting
+//<
+//< **It is in `common/` because every port uses it.**
+//< Caution: Do not name it after a chip. What makes it work is the mechanism, not the chip, and
+//< semihosting needs **a debugger attached**.
+import "std/strfmt" as _strfmt // `\{}` on a number: the primitives' `Formattable`
+
+extern "C"
+  fn ksos_console_char(c: U8) //< semihosting SYS_WRITEC (write one character)
+  fn ksos_qemu_exit() //< semihosting SYS_EXIT (end the run)
+fn puts(s: U8[]) //< writes a string over semihosting, one character at a time
+  for c in s
+    ksos_console_char(c)
+fn putc(c: U8) //< writes one character
+  ksos_console_char(c)
+
+struct Out //< the console as a `Writer`, so a number is printed with `\{}` (`out().s("n=\{n\}")`)
+  priv none: U8
+
+impl Out: Writer
+  fn s(r: Self$@, val: U8[]): Self$@ //< writes a string
+    puts(val)
+    return r
+  fn c(r: Self$@, val: U8): Self$@ //< writes one character
+    putc(val)
+    return r
+  fn flush(r: Self$@): Self$@ //< does nothing: every character goes out as it is written
+    return r
+
+$the_out: Out = ::{}
+
+fn out(): Out$@ //< the console to write an interpolated string to
+  return the_out@
+fn exit() //< ends the run (halts QEMU / tells the debugger it is over)
+  //<
+  //< Caution: **If any check() was used, do not exit without printing the summary.** The gate
+  //< reads the outcome from the marks in the log (ksos_run_gate in `ksos/Makefile`), so a demo
+  //< that left partway has no failure mark, and "no check ran" would look the same as "all passed".
+  if ok_count + fail_count > 0 && !summary_printed
+    puts("[FAIL] exited before the summary\n")
+    fail_count += 1
+    print_summary("exited early")
+  ksos_qemu_exit()
+fn on_panic(msg: U8$[]) //<
+  //< The panic handler set on panic_hook (shared by every Cortex-M demo)
+  puts("PANIC: ")
+  puts(msg)
+  puts("\n")
+
+// Prints a named check's outcome and counts it (the counters several probes share). The gate
+// reads these marks, not free text a demo prints.
+$ok_count: I32 = 0
+$fail_count: I32 = 0
+// Whether the summary was printed, so that exit() catches "it counted but left without
+// reporting".
+$summary_printed: Bool = false
+fn check(name: U8[], cond: Bool)
+  if cond
+    puts("[OK] ")
+    ok_count += 1
+  else
+    puts("[FAIL] ")
+    fail_count += 1
+  puts(name)
+  putc('\n')
+fn print_summary(label: U8[]) //<
+  //< prints check()'s totals together ("=== {label}: N OK, M FAIL ===\n")
+  summary_printed = true
+  out().s("=== \{label\}: \{ok_count\} OK, \{fail_count\} FAIL ===\n")

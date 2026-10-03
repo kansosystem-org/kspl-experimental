@@ -1,0 +1,224 @@
+//< One connection's state, and how a response is queued
+//<
+//< **Every socket is non-blocking**, so a send may be partial and `Conn` records how far it got.
+//< **The code here only builds responses**; the accept loop in `kssrv/main.kspls` sends them.
+//< **`Rc<|Conn|>` manages only the memory's lifetime.** `conn_close` frees the socket, the arena
+//< and the two buffers explicitly.
+import "kssrv/pilot"
+import "kssrv/proc"
+import "kssrv/worker"
+import "std/chars"
+import "std/http"
+import "std/log" { Level, Log }
+import "std/mem" { Arena }
+import "std/net"
+import "std/refcount" { Rc }
+import "std/str" { Str_builder }
+
+const max_conns: Sz = 128 //< the cap on connections open at once
+  //<
+  //< The table is fixed-length; a free slot is an ARC handle's zero value (`Rc.empty()`).
+
+const conn_arena_chunk: Sz = 16 * 1024 //< how far each connection's working arena grows
+  //<
+  //< It is rewound per request, so the size of the largest single request is enough.
+
+// ==========================================
+// The counters reported by `/api/status`.
+//
+// **No lock is needed** (they are written and read only inside the same loop).
+// ==========================================
+struct Stats
+  started_s: I64 //< wall-clock time (sys.clock is CPU time, so it cannot measure uptime)
+  requests: I64
+  inferences: I64
+  trainings: I64
+  commands: I64 //< how many manoeuvres were returned to the car
+  connections_total: I64
+  connections_open: I64
+$stats: Stats = ::{}
+
+$stop_asked_by: I64 = 0I64 //< the serial of the connection that asked the server to stop
+  //<
+  //< **0 while nobody has asked** (`POST /api/stop`). The accept loop stops once that connection is
+  //< gone (`open_serial`), so the answer has gone out first.
+
+// ==========================================
+// Everything needed to handle a request; the accept loop holds one and passes it down.
+// Caution: **Do not put per-connection state here**, only the read-only references every connection
+// shares; the partial read, the partial send and the serial belong to `Conn`.
+// ==========================================
+struct Ctx
+  root: U8[]
+  // The run's one logger, made in `main`. **Every line written while serving goes through it.**
+  // Caution: **Only the accepting thread uses it.** The worker writes nothing (`kssrv/worker.kspls`
+  // returns its results through the job table), so no lock is needed. Passed to a second thread,
+  // a line would be cut in two.
+  lg: Log$@
+  // The token for local use. **Empty means the server faces outward**, with no file endpoints
+  // either (one decision; `--local` in `kssrv/main.kspls`).
+  token: U8[]
+  w: worker.Worker$@ //< the worker that handles inference and continued training
+  p: pilot.Pilot$@ //< the policy that chooses the manoeuvre returned to the car
+  // The child processes held. **Only local use touches them** (facing outward, no endpoint does).
+  procs: proc.Procs$@
+  // The file returned for `/` and `/index.html`. **Empty means the `index.html` under the root.**
+  // Only whoever starts the server names it (`--page` in `kssrv/main.kspls`; the agreement is
+  // "Where it listens" in `docs/SPEC-local-server.md`).
+  page: U8[]
+
+// ==========================================
+// One connection's state.
+// Caution: Do not put a field holding an ARC by value here. `Rc<|T|>` does not release an ARC
+// inside T, so it leaks silently (see `Rc<|T|>` in std/refcount.kspls).
+// ==========================================
+struct Conn
+  stream: net.Tcp_stream$@
+  arena: Arena$@
+  // The partly read request. drop_prefix discards what each finished parse used.
+  inbuf: Str_builder
+  // The built, partly sent response. `sent` is the length already sent.
+  outbuf: Str_builder
+  sent: Sz
+  // Closes once it is all sent (on `Connection: close`, and for an error response).
+  close_after_send: Bool
+  // This connection's serial. **The slot number alone is not enough**: if the client hangs up while
+  // waiting for inference, the slot may go to another connection, which gets someone else's reply.
+  serial: I64
+  // It is waiting for an inference result and reads nothing meanwhile (two responses would mix).
+  awaiting: Bool
+  // The peer closed **only its sending side** (our read hit EOF).
+  // Caution: **Do not take this as "the connection is over".** The peer is waiting for the
+  // response; **a stream (`/api/run/<id>`) always does**. When set: do not read (`conn_pump`), do
+  // not watch for reading (`rebuild_interests`), and close once there is nothing left to send
+  // (`sweep_done`).
+  peer_done: Bool
+  // A page holds this connection open to say it is still there (`GET /api/here`). **Nothing more
+  // is ever sent on it**; closing the tab ends it.
+  // Caution: **Do not sweep it away for having nothing to send.** It has nothing to send by
+  // design, so the sweep's usual reason does not apply (`sweep_done` in `kssrv/main.kspls`).
+  holding: Bool
+
+struct Conn_table //< the connection table
+  //<
+  //< Caution: **Put the array in a struct's field.** `@` on an array makes a pointer to the first
+  //< element, which cannot be subscripted. Through the struct, `t.slots[i]` stays a place
+  //< expression and overwriting a slot releases the old value.
+  slots: Rc<|Conn|>[max_conns]
+
+fn conn_new(stream: net.Tcp_stream$@, serial: I64): Rc<|Conn|>
+  fresh: Conn = ::{
+    .stream = stream,
+    .arena = Arena.new(conn_arena_chunk),
+    .inbuf = Str_builder.new(),
+    .outbuf = Str_builder.new(),
+    .sent = 0,
+    .close_after_send = false,
+    .serial = serial,
+    .awaiting = false,
+    .peer_done = false,
+    .holding = false,
+  }
+  return Rc<|Conn|>.new(fresh)
+
+fn conn_close(c: Conn$@) //< frees a connection's resources
+  //<
+  //< Caution: Call it before emptying the slot, or the socket and the buffers leak.
+  c.stream.free()
+  c.arena.free()
+  c.inbuf.free()
+  c.outbuf.free()
+
+fn any_holding(t: Conn_table$@): Bool //< whether a page is holding the server open
+  //<
+  //< **This is what "someone is using me" means**; stopping when nobody is depends on it alone
+  //< ("Keeping the server alive while a page is open" in `../docs/SPEC-local-server.md`).
+  for i in Range.asc(max_conns)
+    if !t.slots[i].is_empty() && t.slots[i].get().holding
+      return true
+  return false
+
+fn open_serial(t: Conn_table$@, serial: I64): Bool //< whether that connection is still open
+  //<
+  //< **A connection is dropped only once its answer is sent or it broke** (`conn_send` in
+  //< `kssrv/main.kspls`), so false means nothing is left to send on it.
+  for i in Range.asc(max_conns)
+    if !t.slots[i].is_empty() && t.slots[i].get().serial == serial
+      return true
+  return false
+
+fn table_find_free(t: Conn_table$@): Sz //< looks for a free slot
+  //<
+  //< -1 if there is none.
+  for i in Range.asc(max_conns)
+    if t.slots[i].is_empty()
+      return i
+  return -1
+
+fn table_drop(t: Conn_table$@, slot: Sz, lg: Log$@) //< closes a slot's connection and empties it
+  if t.slots[slot].is_empty()
+    return
+  serial: = t.slots[slot].get().serial
+  conn_close(t.slots[slot].get())
+  // Assigning the empty value releases the stored handle.
+  t.slots[slot] = Rc<|Conn|>.empty()
+  stats.connections_open -= 1I64
+  // The close is logged under the open's serial, to match the accept line.
+  if ln: = lg.at(Level.information)
+    ln.s("conn #\{serial\} closed (open \{stats.connections_open\})")
+
+fn queue_response(c: Conn$@, status: I32, ctype: U8[], body: U8[], content_length: Sz, keep: Bool) //<
+  //< **The socket must not be written here** (the reason is in this file's header)
+  $len_buf: = Str_builder.new()
+  defer len_buf.free()
+  len_buf.s("\{content_length\}")
+  head: = http.headers(c.arena).add("Content-Type", ctype)
+    .add("Content-Length", len_buf.slice()).add("Connection", "keep-alive" if keep else "close")
+    .build()
+  http.format_response(c.outbuf@, status, head, body) catch _e
+    // A CRLF in a header or similar is the builder's mistake, so it closes without sending.
+    c.outbuf.clear()
+    c.close_after_send = true
+    return
+  if !keep
+    c.close_after_send = true
+
+fn queue_stream_head(c: Conn$@) //<
+  //< The head of a response that keeps sending without a stated length
+  //<
+  //< **Closing the connection marks the end** (the only way when the length is not known).
+  //< `kssrv/proc.kspls` queues the content, chunk by chunk.
+  //< Caution: **Do not make it `keep-alive`.** With no length, only the close tells the client
+  //< where the response ends.
+  head: = http.headers(c.arena).add("Content-Type", "application/octet-stream")
+    .add("Connection", "close").build()
+  // **Do not write it with the function that sets a length.** `format_response` fills in
+  // `Content-Length: 0`, and a client that follows the protocol then reads not one byte of the
+  // body.
+  http.format_response_head(c.outbuf@, 200, head) catch _e
+    c.outbuf.clear()
+    c.close_after_send = true
+
+fn queue_error(c: Conn$@, status: I32)
+  $b: = Str_builder.new()
+  defer b.free()
+  b.s("\{status\} ").s(http.reason_phrase(status)).s("\n")
+  // An error response always closes: after a broken request, there is no telling where the next
+  // one starts in the remaining bytes.
+  queue_response(c, status, "text/plain; charset=utf-8", b.slice(), b.len, false)
+
+struct Target //< splits the request target (`/a/b?x=1#f`) into the path part and the query part
+  //<
+  //< Both are still raw, not yet percent-decoded.
+  path: U8[] //< with the leading `/` (`/a/b`)
+  query: U8[] //< without the `?` (`x=1`); empty if there is none
+
+fn split_target(target: U8[]): Target
+  $t: = target
+  h: = t.find_char('#')
+  if h >= 0
+    t = t.sub(0, h) // a fragment should not reach the server; one that does is dropped
+  q: = t.find_char('?')
+  if q < 0
+    return Target::{ .path = t, .query = "" }
+  return Target::{ .path = t.sub(0, q), .query = t.sub_from(q + 1) }

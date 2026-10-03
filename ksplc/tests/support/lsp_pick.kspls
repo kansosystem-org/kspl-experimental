@@ -1,0 +1,241 @@
+//< Checks completion (not a suite; part of `../suite/lsp_test.kspls`)
+//<
+//< Caution: **Test that the replacement works with half-written text** — tested with text that
+//< parses, it stays green with the replacement removed.
+//< **Test the three kinds of head separately**: `p.` (a receiver's type), `io.` (an import's alias)
+//< and a bare name take different paths (the reason is at `pick_tails`).
+import "ksplc/tests/support/lsp_client"
+import "std/chars"
+import "std/ds" { List }
+import "std/json" { Json_builder }
+import "std/jsonrpc"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+priv const heavy_ms: I32 = 60000 //<
+  //< The default (15 seconds) is not enough: the replaced text is analysed again, std and all
+
+// The sample files.
+// Caution: **Keep what is missing to only one place.** Without recovery from a syntax error only
+// one missing name can be handled, so two open places **return empty for both** — hence one file
+// per kind of head.
+priv const pick_head: U8[] =
+  """import "std/io";
+
+pub struct Cup { //< a container a drink goes in
+  water: I32; //< how much water it holds
+  milk: I32;
+}
+
+fn twice(v: I32): I32 { //< the number doubled
+  return v * 2;
+}
+
+"""
+
+// The three kinds of head. **The language server handles each by a different path** (the postfix
+// clause, the path clause, the enclosing scope); testing one lets the others silently go empty.
+priv const pick_tails: U8[][3] = ::{ """fn drink(cup: Cup): I32 {
+  y: = cup.;
+  return 0;
+}
+""",
+  """fn drink(cup: Cup): I32 {
+  z: = io.;
+  return 0;
+}
+""",
+  """fn drink(cup: Cup): I32 {
+  return twi;
+}
+""" }
+
+priv const pick_lines: Sz[3] = ::{ 12, 12, 12 } //< where to look (line and column)
+  //<
+  //< **It is the position with `pick_head`'s line count added** (the head is 11 lines).
+priv const pick_cols: Sz[3] = ::{ 11, 10, 12 }
+priv const pick_uris: U8[][3] = ::{ "lsp_pick_field.kspl", "lsp_pick_mod.kspl",
+  "lsp_pick_name.kspl" }
+
+priv struct Row //< one candidate as the list returned it
+  //<
+  //< **The description comes back in the same response as the name**, costing no second request.
+  label: U8[]
+  doc: U8[]
+  detail: U8[]
+
+priv fn picks_at(c: jsonrpc.Client$@, which: Sz, arena: Arena$@): List<|Row|> //<
+  //< It sends completion at one of the three places and lists the candidates returned
+  $text: = arena.text()
+  text = text.s(pick_head).s(pick_tails[which])
+  return picks_in(c, pick_uris[which], text.take(), pick_lines[which], pick_cols[which], arena)
+
+priv fn picks_in(c: jsonrpc.Client$@, uri: U8[], text: U8[], line: Sz, character: Sz,
+  arena: Arena$@): List<|Row|> //<
+    //< It opens that text and sends completion at (line, character)
+  _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(uri, text, arena), arena)
+  $b: = Json_builder.new(arena)
+  pos: = b.obj().set("line", b.int_val(I32::line))
+    .set("character", b.int_val(I32::character)).build()
+  params: = b.obj()
+    .set("textDocument", b.obj().set("uri", b.str_val(uri)).build()).set("position", pos).build()
+  msg: = c.request("textDocument/completion", params, heavy_ms, arena) catch
+    return List<|Row|>.new(arena)
+  $items: = msg.get("result").arr_list(arena)
+  $out: = List<|Row|>.new(arena)
+  for i in Range.asc(items.len)
+    it: = items.get(i)
+    out
+      .push(Row::{ .label = it.get("label").as_str(),
+      .doc = it.get("documentation").get("value").as_str(),
+      .detail = it.get("detail").as_str() })
+  return out
+
+priv fn holds(rows: List<|Row|>@, want: U8[]): Bool
+  for i in Range.asc(rows.len)
+    if rows.get(i).label.equals(want)
+      return true
+  return false
+
+priv fn doc_of(rows: List<|Row|>@, want: U8[]): U8[] //< what that candidate says of itself
+  //<
+  //< Empty where the name is absent or carries nothing.
+  for i in Range.asc(rows.len)
+    if rows.get(i).label.equals(want)
+      return rows.get(i).doc
+  return ""
+
+priv fn det_of(rows: List<|Row|>@, want: U8[]): U8[] //< what is shown beside that name
+  //<
+  //< Empty as with `doc_of`.
+  for i in Range.asc(rows.len)
+    if rows.get(i).label.equals(want)
+      return rows.get(i).detail
+  return ""
+
+priv fn said(c: jsonrpc.Client$@, doc: U8[], arena: Arena$@): U8[] //<
+  //< A description as the list gave it, for a failure's message
+  return lsp_client.why(c, arena.text().s("'").s(doc).s("'").take(), arena)
+
+priv fn labels(rows: List<|Row|>@, arena: Arena$@): List<|U8[]|> //<
+  //< Only the names, for the failure's message
+  $out: = List<|U8[]|>.new(arena)
+  for i in Range.asc(rows.len)
+    out.push(rows.get(i).label)
+  return out
+
+priv fn in_order(rows: List<|Row|>@): Bool //< whether the list is sorted by name
+  for $i: Sz = 1; i < rows.len; i += 1
+    if rows.get(i - 1).label.compare(rows.get(i).label) > 0
+      return false
+  return true
+
+fn check_completion(c: jsonrpc.Client$@, arena: Arena$@)
+  $fields: = picks_at(c, 0, arena)
+  $f_names: = labels(fields@, arena)
+  d1: = lsp_client.why(c, lsp_client.join(f_names@, arena), arena)
+  verdict.check("a receiver type's fields are returned",
+    holds(fields@, "water") && holds(fields@, "milk"), d1)
+  // **No unrelated name may be mixed in**, such as the enclosing scope's despite a head.
+  verdict.check("no name from the enclosing step is mixed into a receiver type's fields",
+    !holds(fields@, "twice"), d1)
+  verdict.check("the fields line up in name order", in_order(fields@), d1)
+  // **The list is where a caller looks first**, before the hover, so each path is tested for the
+  // description — wired on only one, the others go silent without anything saying so.
+  f_doc: = doc_of(fields@, "water")
+  verdict.check("a receiver type's field carries what it says of itself",
+    f_doc.find_str("how much water it holds") >= 0, said(c, f_doc, arena))
+  // **The shape is shown beside the name too** (a field's is its type), needed before choosing.
+  f_det: = det_of(fields@, "water")
+  verdict.check("a receiver type's field shows its type", f_det.equals("I32"),
+    said(c, f_det, arena))
+
+  $mods: = picks_at(c, 1, arena)
+  $m_names: = labels(mods@, arena)
+  d2: = lsp_client.why(c, lsp_client.join(m_names@, arena), arena)
+  verdict.check("the names beyond a step's alias are returned",
+    holds(mods@, "out") && holds(mods@, "err"), d2)
+  // Caution: **Do not list what cannot be called from outside** (a C declaration, an inner
+  // container): choosing it leads to an error.
+  verdict.check("no name uncallable from outside is mixed in beyond a step",
+    !holds(mods@, "g_stdout"), d2)
+  m_doc: = doc_of(mods@, "out")
+  verdict.check("a name beyond a step carries what it says of itself",
+    m_doc.find_str("standard output") >= 0, said(c, m_doc, arena))
+  m_det: = det_of(mods@, "getchar")
+  verdict.check("a name beyond a step shows its signature", m_det.equals("(): I32"),
+    said(c, m_det, arena))
+  // **A type gets none**: the `kind` beside it already says it.
+  t_det: = det_of(mods@, "Reader")
+  verdict.check("a type beyond a step shows no signature", t_det.len == 0,
+    said(c, t_det, arena))
+
+  $names: = picks_at(c, 2, arena)
+  $n_names: = labels(names@, arena)
+  d3: = lsp_client.why(c, lsp_client.join(n_names@, arena), arena)
+  verdict.check("a bare name is returned on a prefix match", holds(names@, "twice"), d3)
+  // **A prefix match and nothing more**, or unrelated candidates come to the top.
+  verdict.check("a name that no prefix matches is not returned", !holds(names@, "drink"), d3)
+  n_doc: = doc_of(names@, "twice")
+  verdict.check("a bare name carries what it says of itself",
+    n_doc.find_str("the number doubled") >= 0, said(c, n_doc, arena))
+  n_det: = det_of(names@, "twice")
+  verdict.check("a bare name shows its signature", n_det.equals("(v: I32): I32"),
+    said(c, n_det, arena))
+
+// ==========================================
+// Completion in a generic's body that nothing instantiates
+// ==========================================
+
+// **Nothing here instantiates a generic**, so the body is never analysed: a lone name before the
+// dot stays one path with the mark (`cc.<mark>`), which read as a type's name would give nothing,
+// and a generic has no struct entry, so after a chain of fields the list would hold only methods;
+// a local set from a call (`t` of `t.`) is typed by the call's declared return type.
+priv const generic_src: U8[] =
+  """struct Cell4<|T|> {
+  v: T;
+}
+
+impl<|T|> Cell4<|T|> {
+  fn peek(r: Self@): T {
+    return r.v;
+  }
+
+  fn twin(r: Self@): Self {
+    return Cell4<|T|>::{ .v = r.v };
+  }
+}
+
+struct Pair4<|T|> {
+  left: Cell4<|T|>;
+}
+
+fn count<|T|>(cc: Cell4<|T|>@, pp: Pair4<|T|>@): Sz {
+  _w: = cc.;
+  _q: = pp.left.;
+  t: = cc.twin();
+  _z: = t.;
+  return 0;
+}
+"""
+
+priv const generic_lines: U8[][3] = ::{ "  _w: = cc.", "  _q: = pp.left.", "  _z: = t." } //<
+  //< where to ask
+priv const generic_names: U8[][3] = ::{ "after a lone parameter", "after a chain of fields",
+  "after a local set from a call" }
+
+fn check_completion_generic(c: jsonrpc.Client$@, arena: Arena$@)
+  for i in Range.asc(generic_lines.len)
+    line: = generic_lines[i]
+    $at: Sz = 0
+    for got in generic_src.lines(arena)
+      if got.starts_with(line)
+        break
+      at += 1
+    $rows: = picks_in(c, "lsp_pick_generic.kspl", generic_src, at, line.len, arena)
+    $names: = labels(rows@, arena)
+    verdict.check(arena.text().s("in an uninstantiated generic, completion ").s(generic_names[i])
+      .s(" returns the fields and the methods").take(),
+      holds(rows@, "v") && holds(rows@, "peek"),
+      lsp_client.why(c, lsp_client.join(names@, arena), arena))

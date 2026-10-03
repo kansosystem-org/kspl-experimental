@@ -1,0 +1,607 @@
+//< The actions that insert
+//<
+//< Adding one table, one presentation slide, one shape, one image, or one collected list.
+//< **Each action is one undo**, a style it creates included (the step is opened here; each
+//< single change is in the `do_*` functions in [`edit.kspls`](edit.kspls)).
+//< These are `Editor` methods too. An extension method is visible only where it is imported, so
+//< a caller imports both `write/edit.kspls` and this file.
+//< Note: It is split from [`shape.kspls`](shape.kspls) for the 1000-line-per-file cap.
+import "kspage/lay/ask"
+import "kspage/lay/caret"
+import "kspage/lay/flow"
+import "kspage/lay/page" { Page }
+import "kspage/model/collect" { Collect }
+import "kspage/model/doc" + { Axis, Block, Rect }
+import "kspage/model/number"
+import "kspage/model/paint"
+import "kspage/model/run"
+import "kspage/model/style" + { Arrange, Sheet, Shape, Style }
+import "kspage/share/markdown_look" as look
+import "kspage/write/block"
+import "kspage/write/edit" + { Editor }
+import "kspage/write/field"
+import "kspage/write/record" { Step }
+import "kspage/write/shape"
+import "std/str" { Str_builder }
+
+enum Surface_end //< the result of inserting a slide
+  //<
+  //< Caution: **Do not merge the refusals into one**, or the reader looks for the wrong cause (the
+  //< same rule as `Block_style_end` in `block.kspls`).
+  done
+  shut //< the document is open read-only
+  in_cell //< the cursor is inside a table cell, where a slide cannot go
+  nowhere //< the cursor is not inside a paragraph
+  no_style //< the document has no style that arranges its children on a slide with a size
+
+impl Surface_end
+  fn surfaced(e: Self): Bool //< whether the slide was inserted
+    //<
+    //< It answers only yes or no (where the reason is wanted, switch on the result).
+    switch e case .done
+      return true
+    default
+      return false
+
+enum Sketch //< a slide's layout sketch
+  //<
+  //< How many frames go where when a slide is inserted. It is stored in neither the document nor
+  //< the styles: it acts once, and the frames made belong to the document. It chooses no style.
+  //< Caution: **Do not rename a variant**: the screen chooses by its name (`sketch_order` in
+  //< [`../port/web/state.kspls`](../port/web/state.kspls); `make test` pins every one).
+  whole //< one frame filling the slide
+  titled //< a title above, and the body below it
+  halved //< a title above, and two frames below it, left and right
+
+fn sketch_from(name: U8[]): Sketch //< gets a sketch from a name
+  //<
+  //< An unknown name gives one frame filling the slide (there must always be one frame).
+  if name.equals("titled")
+    return Sketch.titled
+  if name.equals("halved")
+    return Sketch.halved
+  return Sketch.whole
+
+priv const pad_share: F32 = 0.0625F32 //< the margin around a frame, and the title's height
+  //<
+  //< Both are a fraction of the slide's size (in px, a frame would stick out when the size
+  //< changes).
+priv const title_share: F32 = 0.2F32
+
+priv fn role_of(sheet: Sheet$@, how: Arrange, sized: Bool): Option<|Style$@|> //<
+  //< The first of the styles with that arrangement
+  //<
+  //< Caution: **Do not look it up by name.** A hard-coded name silently breaks the day the
+  //< document renames the style (the rule `dressed` in `theme.kspls` follows), so it is found by
+  //< part. Where there is none, the caller makes one by name.
+  if sheet == null
+    return Option<|Style$@|>.none
+  for $i: Sz = 0; i < sheet.styles.len; i += 1
+    one: = sheet.styles.get(i)
+    if !one.arrange.same_arrange(how)
+      continue
+    // Only a style with a size counts as a slide (without one, a frame's size is undefined).
+    if sized && (one.width <= 0.0F32 || one.height <= 0.0F32)
+      continue
+    return Option<|Style$@|>.some(one)
+  return Option<|Style$@|>.none
+
+priv fn fitting(sheet: Sheet$@, name: U8[], how: Arrange, sized: Bool): Option<|Style$@|> //<
+  //< Returns the style of that name if it fits the shape wanted
+  //<
+  //< Null where it does not fit — an existing name's arrangement is not changed (the rule
+  //< `styled` in `shape.kspls` follows).
+  if sheet == null || name.len <= 0
+    return Option<|Style$@|>.none
+  if got: = sheet.find(name)
+    if !got.arrange.same_arrange(how)
+      return Option<|Style$@|>.none
+    if sized && (got.width <= 0.0F32 || got.height <= 0.0F32)
+      return Option<|Style$@|>.none
+    return Option<|Style$@|>.some(got)
+  return Option<|Style$@|>.none
+
+priv fn named_collector(sheet: Sheet$@, name: U8[], what: Collect): Option<|Style$@|> //<
+  //< Returns the style of that name if it fits the collection wanted
+  if sheet == null || name.len <= 0
+    return Option<|Style$@|>.none
+  if got: = sheet.find(name)
+    if got.collect.same_collect(what)
+      return Option<|Style$@|>.some(got)
+  return Option<|Style$@|>.none
+
+priv fn collector_of(sheet: Sheet$@, what: Collect): Option<|Style$@|> //<
+  //< The style found by what it collects
+  //<
+  //< Not by its arrangement (a collecting block flows too, like the body).
+  if sheet == null
+    return Option<|Style$@|>.none
+  for $i: Sz = 0; i < sheet.styles.len; i += 1
+    one: = sheet.styles.get(i)
+    if one.collect.same_collect(what)
+      return Option<|Style$@|>.some(one)
+  return Option<|Style$@|>.none
+
+priv fn sketched(made: Block$@, plan: Sketch, wide: F32, high: F32) //<
+  //< Places a sketch's frames on the slide
+  //<
+  //< Caution: **Place at least one frame** (a child with no frame cannot be grabbed). **Put one
+  //< text in each** (the cursor stands only on a box, and a box comes only from a text).
+  //< Only the frame filling the slide has no margin.
+  pad_x: = wide * pad_share
+  pad_y: = high * pad_share
+  title_h: = high * title_share
+  body_y: = pad_y + title_h + pad_y
+  body_h: = high - body_y - pad_y
+  inner: = wide - pad_x - pad_x
+  switch plan case .whole
+    framed(made, 0.0, 0.0, wide, high)
+  case .titled
+    framed(made, pad_x, pad_y, inner, title_h)
+    framed(made, pad_x, body_y, inner, body_h)
+  case .halved
+    framed(made, pad_x, pad_y, inner, title_h)
+    column: = (inner - pad_x) / 2.0F32
+    framed(made, pad_x, body_y, column, body_h)
+    framed(made, pad_x + column + pad_x, body_y, column, body_h)
+
+priv fn framed(made: Block$@, x: F32, y: F32, w: F32, h: F32) //< a frame holding one text
+  //<
+  //< A frame's position is from the slide's top left (not screen coordinates).
+  at: = Rect::{ .x = x, .y = y, .w = w, .h = h }
+  doc.add_framed_child(made, "", at).add_text("")
+
+priv fn holds_frames(sheet: Sheet$@, name: U8[]): Bool //< whether the style can hold frames
+  //<
+  //< A grid and a collected block cannot (a shape drawn over a table belongs to the cell). A slide
+  //< needs a size (a frame's position comes from it). An unknown name flows.
+  if room: = sheet.find(name)
+    if room.arrange.same_arrange(Arrange.absolute)
+      return room.width > 0.0 && room.height > 0.0
+    if room.arrange.same_arrange(Arrange.grid)
+      return false
+    return room.collect.same_collect(Collect.none)
+  return true
+
+priv fn first_spot(sheet: Sheet$@, holder: Block$@): Rect //<
+  //< The frame's position and size when it is inserted from the menu
+  //<
+  //< A frame's position is from the container's top left (not screen coordinates). A slide and the
+  //< flow decide it differently: on a slide, half its size, centered; in the flow (no size), a
+  //< fixed size a little inside the top left.
+  if room: = sheet.find(holder.style)
+    if room.arrange.same_arrange(Arrange.absolute) && room.width > 0.0 && room.height > 0.0
+      return Rect::{ .x = room.width / 4.0F32, .y = room.height / 4.0F32,
+        .w = room.width / 2.0F32, .h = room.height / 2.0F32 }
+  return Rect::{ .x = 8.0, .y = 8.0, .w = 120.0, .h = 80.0 }
+
+impl Editor
+  priv fn cell_styled(r: Self$@, st: Step$@, sheet: Sheet$@): U8[] //<
+    //< The name of the style a new table's cells get
+    //<
+    //< It is found by the part the Markdown reader uses to recognize a cell (`cell_like`), so a
+    //< table typed in and one read from text share a style. **Where there is none it is made
+    //< through the record** (one undo), styled by `dress_cell`.
+    //< Caution: **A style that already has the name is used as it is**, whatever its look —
+    //< restyling it would move every cell already using it.
+    for $i: Sz = 0; i < sheet.styles.len; i += 1
+      s: = sheet.styles.get(i)
+      if style.cell_like(s) && s.align.same_align(style.Align.left)
+        return s.name
+    if had: = sheet.find(look.cell_names[0])
+      return had.name
+    switch r.styled(st, sheet, look.cell_names[0], Arrange.flow) case .some(made)
+      $want: Style = made$
+      look.dress_cell(want@, style.Align.left)
+      field.do_set_look(r, st, made, want)
+      return made.name
+    case .none
+      return ""
+
+  priv fn table_room(r: Self$@, page: Page$@, s: Style$@): F32 //<
+    //< The width a new table of style `s`, inserted after the cursor's paragraph, is laid out to
+    //<
+    //< The cursor's container (`ask.framer_of`) minus the table style's indent, counted as the flow
+    //< counts it (`flow.contents_width`). 0 when it is in no laid-out container.
+    got: = ask.framer_of(page, r.caret)
+    if !got.found
+      return 0.0F32
+    w: = flow.contents_width(got.rect.w, s.indent, s.pad)
+    return w if w > 0.0F32 else 0.0F32
+
+  fn insert_table(r: Self$@, page: Page$@, sheet: Sheet$@, name: U8[], rows: Sz, cols: Sz): Bool //<
+    //< Inserts one empty table of `rows` × `cols` after the paragraph the cursor is in
+    //<
+    //< The style decides the arrangement, and the click decides the count (the grid picker caps it,
+    //< not this function); a size with no cell is refused. **The cells get the cell style**
+    //< (`cell_styled`); without it, text would touch text with no visible edge.
+    //< Caution: **Put one text in every cell.** The cursor stands only on a box, and a box appears
+    //< only where a text is.
+    if r.shut() || rows < 1 || cols < 1
+      return false
+    room: = r.room_after_caret(page)
+    if !room.found
+      return false
+    r.break_group()
+    st: = r.step()
+    // The order is name → part → make by name. By name alone it silently breaks when the document
+    // renames the style; by part alone, two styles with the same part leave neither choosable.
+    $s: Style$@ = null
+    switch fitting(sheet, name, Arrange.grid, false) case .some(by_name)
+      s = by_name
+    case .none
+      if got: = role_of(sheet, Arrange.grid, false)
+        s = got
+    if s == null
+      switch r.styled(st, sheet, name, Arrange.grid) case .some(made_style)
+        s = made_style
+      case .none
+        return false
+    made: = doc.new_block(s.name, r.arena)
+    // A row gets no style name (the rule of the saved format).
+    cell_name: = r.cell_styled(st, sheet)
+    for $y: Sz = 0; y < rows; y += 1
+      row: = made.add_child("")
+      for $x: Sz = 0; x < cols; x += 1
+        row.add_child(cell_name).add_text("")
+    // The columns get equal shares of the table's laid-out width (`table_room`), so a column keeps
+    // its width while typing wraps inside it; unset, the columns follow their contents. Read the
+    // width before the cursor moves.
+    across: = r.table_room(page, s)
+    edit.do_block(r, st, room.block, room.index + 1, true, made)
+    if across > 0.0F32
+      share: = across / F32::cols
+      for $c: Sz = 0; c < cols; c += 1
+        edit.do_set_size(r, st, made, Axis.column, c, Option<|F32|>.some(share))
+    head: = made.children.get(0).children.get(0)
+    r.caret = caret.at(head.inlines.get(0), 0)
+    r.break_group()
+    return true
+
+  fn insert_surface(r: Self$@, page: Page$@, sheet: Sheet$@, name: U8[], plan: Sketch): Surface_end //<
+    //< Inserts one presentation slide after the paragraph the cursor is in
+    //<
+    //< Caution: **The slide's style must exist first** (the style sets the size, not the core).
+    //< **Neither the width nor the height may be 0** (a width of 0 means "the container's width",
+    //< unknown before layout). The frames inside come from the sketch (`Sketch`).
+    if r.shut()
+      return Surface_end.shut
+    // Say which of the two stopped it (the reason is at `Surface_end`).
+    if ask.cell_of(page, r.caret).found
+      return Surface_end.in_cell
+    room: = r.room_after_caret(page)
+    if !room.found
+      return Surface_end.nowhere
+    // Nothing creates one here (the core does not decide the size).
+    $s: Style$@ = null
+    switch fitting(sheet, name, Arrange.absolute, true) case .some(by_name)
+      s = by_name
+    case .none
+      switch role_of(sheet, Arrange.absolute, true) case .some(got)
+        s = got
+      case .none
+        return Surface_end.no_style
+    r.break_group()
+    st: = r.step()
+    made: = doc.new_block(s.name, r.arena)
+    sketched(made, plan, s.width, s.height)
+    edit.do_block(r, st, room.block, room.index + 1, true, made)
+    box: = made.children.get(0)
+    r.caret = caret.at(box.inlines.get(0), 0)
+    r.break_group()
+    return Surface_end.done
+
+  fn insert_gathered(r: Self$@, page: Page$@, sheet: Sheet$@, name: U8[], what: Collect): Bool //<
+    //< Inserts a table of contents or a list of notes after the paragraph the cursor is in
+    //<
+    //< The contents are not inserted. A missing style of that name is made; for an existing one
+    //< only what it collects is changed.
+    if r.shut()
+      return false
+    room: = r.room_after_caret(page)
+    if !room.found
+      return false
+    r.break_group()
+    st: = r.step()
+    $done: = false
+    $found: Option<|Style$@|> = named_collector(sheet, name, what)
+    switch found case .none
+      found = collector_of(sheet, what)
+    case .some {}
+    switch found case .none
+      found = r.styled(st, sheet, name, Arrange.flow)
+    case .some {}
+    if s: = found
+      if !s.collect.same_collect(what)
+        $fresh: Style = s$
+        fresh.collect = what
+        field.do_set_look(r, st, s, fresh)
+      made: = doc.new_block(s.name, r.arena)
+      edit.do_block(r, st, room.block, room.index + 1, true, made)
+      done = true
+    r.break_group()
+    return done
+
+  fn insert_image(r: Self$@, page: Page$@, src: U8[], w: F32, h: F32): Bool //<
+    //< Inserts one image after the paragraph the cursor is in
+    //<
+    //< True if inserted. The caller decides the size (the core cannot read an image). It does not
+    //< hold the image itself, only its source. It gets one text, for a caption.
+    if r.shut()
+      return false
+    room: = r.room_after_caret(page)
+    if !room.found || src.len <= 0 || w <= 0.0 || h <= 0.0
+      return false
+    r.break_group()
+    st: = r.step()
+    made: = doc.new_block("", r.arena)
+    // Caution: Copy the source. What is passed in is the input field's current text.
+    made.image = r.arena.dup_str(src)
+    made.image_w = w
+    made.image_h = h
+    made.add_text("")
+    edit.do_block(r, st, room.block, room.index + 1, true, made)
+    r.caret = caret.at(made.inlines.get(0), 0)
+    r.break_group()
+    return true
+
+  fn insert_chart(r: Self$@, page: Page$@, sheet: Sheet$@, name: U8[], range: U8[], what: Collect):
+    Bool //<
+      //< Inserts one chart after the paragraph the cursor is in; true if it did.
+      //<
+      //< The range needs the table's name (`detail!C2:C4`; a chart in the flow has no table). The
+      //< contents are not inserted (they are built from the range at layout time). A missing style
+      //< is made; for an existing one only what it collects and its height are changed.
+    if r.shut()
+      return false
+    room: = r.room_after_caret(page)
+    if !room.found || range.len <= 0 || !what.charted()
+      return false
+    r.break_group()
+    st: = r.step()
+    $done: = false
+    if s: = r.styled(st, sheet, name, Arrange.flow)
+      r.charted(st, s, what)
+      made: = doc.new_block(s.name, r.arena)
+      // Caution: Copy the range. The caller's text is gone at the next call.
+      made.chart = r.arena.dup_str(range)
+      edit.do_block(r, st, room.block, room.index + 1, true, made)
+      done = true
+    r.break_group()
+    return done
+
+  fn insert_window(r: Self$@, page: Page$@, sheet: Sheet$@, name: U8[], aim: U8[]): Bool //<
+    //< Inserts one window after the paragraph the cursor is in
+    //<
+    //< True if inserted. The contents are not inserted (they are cut from the borrowed source at
+    //< every layout). The target is `src:<file>#<symbol>` (`href_of` in `model/source.kspls` builds
+    //< it).
+    if r.shut()
+      return false
+    room: = r.room_after_caret(page)
+    if !room.found || aim.len <= 0
+      return false
+    r.break_group()
+    st: = r.step()
+    $done: = false
+    if s: = r.styled(st, sheet, name, Arrange.flow)
+      r.sourced(st, s)
+      made: = doc.new_block(s.name, r.arena)
+      // Caution: Copy the target. The caller's text is gone at the next call.
+      made.aim = r.arena.dup_str(aim)
+      edit.do_block(r, st, room.block, room.index + 1, true, made)
+      done = true
+    r.break_group()
+    return done
+
+  fn insert_pulls(r: Self$@, page: Page$@, sheet: Sheet$@, name: U8[], aim: U8[]): Bool //<
+    //< Inserts one figure of what the source imports, after the paragraph the cursor is in
+    //<
+    //< True if inserted. Neither the boxes nor the lines are inserted (they are built from the
+    //< borrowed source's `import` at every layout). Two styles are made; the line style's name is
+    //< built from the box style's (`paint.pull_line_name`).
+    //< Caution: **Do not keep two places that build the name**; the layout builds it the same way.
+    if r.shut()
+      return false
+    room: = r.room_after_caret(page)
+    if !room.found || aim.len <= 0
+      return false
+    r.break_group()
+    st: = r.step()
+    $done: = false
+    if s: = r.styled(st, sheet, name, Arrange.flow)
+      r.pulled(st, s)
+      $sb: = Str_builder.new()
+      defer sb.free()
+      switch r.styled(st, sheet, paint.pull_line_name(s.name, sb@), Arrange.flow) case .some(line)
+        r.arrowed(st, line)
+      case .none {}
+      made: = doc.new_block(s.name, r.arena)
+      made.aim = r.arena.dup_str(aim)
+      edit.do_block(r, st, room.block, room.index + 1, true, made)
+      done = true
+    r.break_group()
+    return done
+
+  priv fn pulled(r: Self$@, st: Step$@, s: Style$@) //< the style of the figure's boxes
+    //<
+    //< An existing setting is not changed. Where there is neither a line nor a fill, a line is
+    //< added (otherwise the boxes cannot be seen).
+    $fresh: Style = s$
+    fresh.collect = Collect.imports
+    fresh.shape = Shape.box
+    if fresh.rule_width <= 0.0
+      fresh.rule_width = 1.0F32
+      fresh.rule_color = style.drawn_color
+    if s.collect.same_collect(Collect.imports) && fresh.rule_width == s.rule_width
+      return
+    field.do_set_look(r, st, s, fresh)
+
+  priv fn arrowed(r: Self$@, st: Step$@, s: Style$@) //< the style of the figure's lines
+    //<
+    //< Caution: **Make it an arrow** — the direction is part of the figure's contents (an import
+    //< goes one way only).
+    $fresh: Style = s$
+    fresh.shape = Shape.fall_arrow
+    if fresh.rule_width <= 0.0
+      fresh.rule_width = 1.0F32
+      fresh.rule_color = style.drawn_color
+    if fresh.rule_width == s.rule_width && s.shape.same_shape(Shape.fall_arrow)
+      return
+    field.do_set_look(r, st, s, fresh)
+
+  priv fn sourced(r: Self$@, st: Step$@, s: Style$@) //<
+    //< Makes a window's style "collect the source"
+    //<
+    //< An existing setting is not changed. Unset, it is set not to wrap (wrapping drops whitespace
+    //< and indents) and to a fixed-width font (otherwise the columns do not line up).
+    $fresh: Style = s$
+    fresh.collect = Collect.source
+    fresh.wrap = false
+    switch fresh.font.family case .none
+      fresh.font.family = Option<|U8[]|>.some("monospace")
+    case .some {}
+    if !fresh.wrap == !s.wrap && s.collect.same_collect(Collect.source)
+      return
+    field.do_set_look(r, st, s, fresh)
+
+  priv fn charted(r: Self$@, st: Step$@, s: Style$@, what: Collect) //<
+    //< Makes a chart's style collect that way
+    //<
+    //< Caution: **Count the settings added.** Judged only by the height, the thickness and what it
+    //< collects, **a change that added a fill looks "unchanged" and is silently lost**.
+    $fresh: Style = s$
+    fresh.collect = what
+    $moved: Bool = !s.collect.same_collect(what)
+    if fresh.height <= 0.0
+      fresh.height = 120.0F32
+      moved = true
+    if fresh.rule_width <= 0.0
+      fresh.rule_width = 1.0F32
+      moved = true
+    switch fresh.fill case .none
+      fresh.fill = Option<|U32|>.some(style.drawn_color)
+      moved = true
+    case .some {}
+    if !moved
+      return
+    field.do_set_look(r, st, s, fresh)
+
+  priv fn dressed(r: Self$@, st: Step$@, s: Style$@, what: Shape) //<
+    //< Makes a shape's style that shape
+    //<
+    //< Where there is neither a line nor a fill, a line is added (otherwise the shape is
+    //< invisible).
+    //< Caution: **Set that line's color in the same place.** The default black is the background of
+    //< a dark screen (and a color set as a number gets out of step with the screen's).
+    $fresh: Style = s$
+    fresh.shape = what
+    switch fresh.fill case .none
+      if fresh.rule_width <= 0.0
+        fresh.rule_width = 2.0F32
+        fresh.rule_color = style.drawn_color
+    case .some {}
+    if fresh.rule_width == s.rule_width && s.shape.same_shape(what)
+      return
+    field.do_set_look(r, st, s, fresh)
+
+  fn insert_shape(r: Self$@, page: Page$@, sheet: Sheet$@, name: U8[], what: Shape): Bool //<
+    //< Adds one shape to the container the cursor is in
+    //<
+    //< A missing style is made; for an existing one only the shape is changed. **Inside a slide,
+    //< add it to the slide itself** (a shape is the frame's sibling); elsewhere to the block that
+    //< holds the text (a paragraph, a cell).
+    if r.shut()
+      return false
+    $slide: Block$@ = null
+    if b: = r.holder_at(page)
+      switch sheet.find(b.style) case .some(room)
+        if room.arrange.same_arrange(Arrange.absolute)
+          slide = b
+      case .none {}
+    if slide == null
+      own: = r.doc.owner_of(r.caret.inline)
+      if !own.found
+        return false
+      slide = own.block
+    return r.shaped(sheet, name, what, slide, first_spot(sheet, slide))
+
+  fn draw_shape(r: Self$@, page: Page$@, sheet: Sheet$@, name: U8[], what: Shape, x: F32, y: F32,
+    w: F32, h: F32): Bool //<
+      //< Draws one shape of size `w` × `h` at screen position (`x`, `y`)
+      //<
+      //< It goes into the container where the pointer was pressed. It ignores the cursor (the
+      //< person is looking at the drag).
+    if r.shut()
+      return false
+    if page == null || w <= 0.0 || h <= 0.0
+      return false
+    got: = ask.framer_under(page, x, y)
+    if !got.found
+      return false
+    spot: = Rect::{ .x = x - got.rect.x, .y = y - got.rect.y, .w = w, .h = h }
+    return r.shaped(sheet, name, what, got.block, spot)
+
+  priv fn shaped(r: Self$@, sheet: Sheet$@, name: U8[], what: Shape, slide: Block$@, spot: Rect):
+    Bool //<
+      //< Adds one shape as a child of the container.
+      //<
+      //< This is the only place shapes are added, so creating the style and selecting stay
+      //< together.
+      //< Caution: **Check that the container can hold them** (`holds_frames`); in a block that does
+      //< not lay out children, the shape is never visible.
+    if slide == null || !holds_frames(sheet, slide.style)
+      return false
+    r.break_group()
+    st: = r.step()
+    $done: = false
+    if s: = r.styled(st, sheet, name, Arrange.flow)
+      r.dressed(st, s, what)
+      made: = doc.new_block(s.name, r.arena)
+      made.frame = Option<|Rect|>.some(spot)
+      // Caution: **Add it at the end** (what comes later in the document is drawn on top).
+      edit.do_block(r, st, slide, slide.children.len, true, made)
+      // Leave the added shape selected, or the handles and number fields point at another frame and
+      // it cannot be moved right away (holding no text, it cannot take the cursor).
+      r.pick_only(made)
+      done = true
+    r.break_group()
+    return done
+
+  fn insert_refer(r: Self$@, page: Page$@, sheet: Sheet$@, name: U8[]): Bool //<
+    //< Inserts, at the cursor, one inline that refers from the body to what `name` names
+    //<
+    //< Only a block with a running number can be referred to.
+    //< Caution: **Call it after layout** (the number comes from the layout's result). The inline is
+    //< split before inserting (it can go mid-text). Backspace removes it whole.
+    if r.shut()
+      return false
+    if r.caret.inline == null || page == null
+      return false
+    own: = r.doc.owner_of(r.caret.inline)
+    if !own.found
+      return false
+    // First check that it can be referred to. The built text is not used.
+    $sb: = Str_builder.new()
+    defer sb.free()
+    if !number.refer_into(sb@, sheet, page.serials, page.headings, name)
+      return false
+    r.break_group()
+    st: = r.step()
+    here: = r.caret.inline
+    // Split the inline where the cursor is. If it does not split, the cursor is at an end — at the
+    // start it goes before, at the end after.
+    $at: Sz = own.index + 1
+    switch edit.split_run(r, st, here, r.caret.offset) case .some {} case .none
+      if r.caret.offset <= 0
+        at = own.index
+    // No text is inserted: the number is counted anew at every layout (`number.number_refs`) and
+    // only the name is stored. A number stored as text goes stale when one figure is added.
+    made: = run.new_inline(here.style, r.arena)
+    edit.do_run(r, st, own.block, at, true, made)
+    // Caution: **Write the target with `do_set_refers`.** Written directly, it reaches neither the
+    // record nor the peer's window.
+    field.do_set_refers(r, st, made, r.arena.dup_str(name))
+    r.caret = caret.at(made, 0)
+    r.break_group()
+    return true

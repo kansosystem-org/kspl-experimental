@@ -1,0 +1,55 @@
+//< The reader's own overrides (settings that do not go into the document)
+//<
+//< Note: It is split from [`style.kspls`](style.kspls) to keep each file under 1000 lines
+//< (Principle 3); it is not a style, so the split is clean.
+import "kspage/model/doc" { Block }
+import "kspage/model/filter" { Filter }
+import "std/ds" { List }
+
+struct Over //< the reader's overrides
+  //<
+  //< **It is not saved** (neither into the text nor the HTML), so one document can be read at
+  //< different widths in different windows. **Only fields that change how it is laid out belong
+  //< here**; the color is the page's.
+  reading: F32 //<
+    //< The width beyond which the body does not widen
+    //<
+    //< **0 overrides nothing** (the document's own setting applies).
+  size_px: F32 //<
+    //< The size of the body text (pixels)
+    //<
+    //< **It is not a zoom but "read the body at this size"** ("Whether the browser or the page
+    //< holds the zoom" in `../docs/DESIGN.md`).
+  reveal: Option<|Sz|> //<
+    //< The step to show now
+    //<
+    //< **`none` limits to no step** (all of them show, so printing shows everything). It applies
+    //< only while they are shown one at a time.
+  dark: Bool //<
+    //< Whether the page's background is dark
+    //<
+    //< It decides the text color where the style sets no fill (`dark_ground` in
+    //< [`style.kspls`](style.kspls)). **By default it is light.**
+  filters: List<|Filter|>$@ //<
+    //< The conditions that filter the tables' rows ([`filter.kspls`](filter.kspls))
+    //<
+    //< **`null` means no filter.** It points at the document's tables, so it does not carry over
+    //< to another document (`carried`).
+  kept_row: Block$@ //<
+    //< The row the cursor is in, laid out even where a filter would hide it
+    //<
+    //< **The page sets it before every layout** (`kspage_web_layout`); `null` keeps no row. It
+    //< points at the document's row, so it does not carry over either.
+
+fn no_over(): Over //< overrides nothing
+  return Over::{ .reading = 0.0, .size_px = 0.0, .reveal = Option<|Sz|>.none, .dark = false,
+    .filters = null, .kept_row = null }
+
+fn carried(o: Over): Over //< the overrides that carry over to another document
+  //<
+  //< They belong to the viewer, so opening another document keeps them, all but the two that point
+  //< into the old document (`filters` and `kept_row`), which dangle once its arena is freed.
+  $kept: = o
+  kept.filters = null
+  kept.kept_row = null
+  return kept

@@ -1,0 +1,28 @@
+//< An anonymous function does not capture the outer locals
+//<
+//< The body is lifted to a top-level function (desugar_fn_lit in ksplc/parse/desugar.kspls), so the
+//< outer locals are not visible; **the reason is stated**, and two sides that pass stand beside it.
+//< Caution: Only one capture is placed: an unresolved path is reported only at the first one.
+// EXPECT: an anonymous function cannot capture 'n' from the enclosing scope
+// EXPECT-NOT: Please check for typos
+import "std/io"
+
+const g_limit: I32 = 4
+
+priv fn take(f: fn(x: I32): Bool): Bool
+  return f(9)
+
+fn main(): I32
+  n: = 5
+  bad_local: = take(fn(x: I32): Bool {
+    return x > n;
+  })
+  // The passing side: looking only at its own arguments / looking at a top-level const.
+  ok_param: = take(fn(x: I32): Bool {
+    return x > 0;
+  })
+  ok_global: = take(fn(x: I32): Bool {
+    return x > g_limit;
+  })
+  io.out().s("\{bad_local\}\{ok_param\}\{ok_global\}\n")
+  return 0

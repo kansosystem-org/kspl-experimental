@@ -1,0 +1,25 @@
+//< A function pointer cannot be passed where a `Callable` is expected
+//<
+//< **ksplc must stop it.** Let through, it reaches generation (in C a function pointer is a plain
+//< address) and clang reports a synthesised name and lines of std (ksplc/docs/DESIGN.md 2.1).
+//< No synthesised name goes in a diagnostic (ksplc/docs/DESIGN.md §11.3): it names the call.
+// EXPECT: this anonymous function cannot be used as
+// EXPECT: add ';' before the closing paren of the signature
+// EXPECT-NOT: _anon_fn_
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+import "std/seq" as _seq
+
+pub fn main(): I32
+  arena: = Arena.new(4096)
+  defer arena.free()
+  $xs: = List<|Sz|>.new()
+  defer xs.free()
+  xs.push(1)
+  xs.push(9)
+  got: = xs@.where(fn(v: Sz): Bool {
+    return v > 4;
+  }).to_list(arena)
+  io.out().s("unreachable \{got.len\}").c('\n')
+  return 0

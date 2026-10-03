@@ -1,0 +1,279 @@
+import "ksplc/base/core" as base_core
+import "std/argp"
+import "std/chars"
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" + { Str_builder }
+import "std/sys"
+
+// ==========================================
+// Where the usage and the help text are printed, apart from `main.kspls`.
+// **The table of which options apply to which subcommand (`flag_faces`) is here and nowhere
+// else**; a combination that is silently ignored goes against Principle 5.
+// Caution: **Do not list the options by hand** (see `print_faces_and_flags`).
+// ==========================================
+enum Info_topic //< the subjects `ksplc info` answers
+  //<
+  //< **A subject is named after its variant**, with `_` written `-` (`std_dir` is `std-dir`), so
+  //< the usage, the parser and the message that rejects a wrong one use one spelling.
+  std_dir //<
+    //< The resolved folder of the standard library (like `rustc --print sysroot`)
+    //<
+    //< The LSP, an editor extension and a build script then share the CLI's resolution.
+  pkg_src_dir //<
+    //< The resolved folder of packages other than `std`
+    //<
+    //< **Empty is a valid answer** (with nothing given, only the current folder is searched); the
+    //< caller must accept an empty line.
+  link_libs //<
+    //< The libraries needed to link the artifact
+    //<
+    //< ksplc/tools/run.kspls is the canonical source of the answer, and
+    //< tests/suite/link_flags_test.py compares it with the build script's copy to check that they
+    //< agree.
+  exe_flags //<
+    //< The options ksplc itself passes when building an executable
+    //<
+    //< They are separate from the libraries: without those the build fails, while dropping these
+    //< changes the conditions it builds under.
+  cache_dir //<
+    //< The folder of the disk cache (ksplc/base/cache.kspls), in the OS's cache area
+    //<
+    //< It is hidden there, so **its growth cannot be checked** without this answer.
+  keywords //<
+    //< The reserved words the grammar collected; the only subject that needs the grammar built.
+  package //<
+    //< The package the current folder is in: its name, then what it uses
+    //<
+    //< **Two empty lines are a valid answer too** (no folder above names one), so a script need not
+    //< read `ksplc.cfg` itself.
+
+impl Info_topic
+  fn info_topic_name(t: Self): U8[] //< a subject as the command line writes it
+    return t.variant_name().replace("_", "-", base_core.arena)
+
+const info_topic_order: Info_topic[7] = ::{ Info_topic.std_dir, Info_topic.pkg_src_dir,
+  Info_topic.link_libs, Info_topic.exe_flags, Info_topic.cache_dir, Info_topic.keywords,
+  Info_topic.package } //<
+    //< The subjects in the order the usage lists them
+    //<
+    //< Caution: **Add a new subject here too.** Otherwise `ksplc info` rejects it and the usage
+    //< does not list it, though the enum and the answering `switch` have it.
+
+fn info_topics(): U8[] //< every subject, separated by spaces, in the usage's order
+  $b: = Str_builder.new()
+  defer b.free()
+  for t in info_topic_order
+    if b.len > 0
+      b.c(' ')
+    b.s(t.info_topic_name())
+  return base_core.arena.dup_str(b.slice())
+
+fn parse_info_topic(name: U8[]): Info_topic //< it reads the subject's name
+  //<
+  //< Where the name is unknown, it exits with the list appended to the message.
+  for t in info_topic_order
+    if t.info_topic_name().equals(name)
+      return t
+  error_exit(base_core.arena.text()
+    .s("ksplc info: unknown subject '\{name\}'. The usable ones are: \{info_topics()\}\n").take())
+  return .std_dir
+
+const clean_topics: U8[] = "cache"
+
+fn flag_faces(flag: U8[]): U8[] //< the subcommands an option applies to
+  //<
+  //< **The table is here and nowhere else.** `--lint` applies to compiling too, whose diagnostics
+  //< it can silence as well.
+  if flag.equals("--style") || flag.equals("--in-place")
+    return "fmt"
+  // Caution: **Make it apply to lint too**, or a package built only freestanding (`kspage/`'s
+  // browser entry point) misses the `#cfg(freestanding)` declarations and cannot be linted.
+  if flag.equals("--freestanding")
+    return "compile emit-runtime lint"
+  if flag.equals("--std-dir") || flag.equals("--pkg-src-dir")
+    return "compile run lint info doc"
+  // `info link-libs` / `info exe-flags` answer per target (append_link_libs in
+  // ksplc/tools/run.kspls); without the option, a caller would get C's answer for an LLVM artifact.
+  if flag.equals("--target")
+    return "compile info"
+  if flag.equals("--define")
+    return "compile run lint"
+  // `doc` reads it as the record does: `all` shows what a package keeps to itself too.
+  if flag.equals("--surface-scope")
+    return "compile doc"
+  if flag.equals("--lint") || flag.equals("--diagnostic-format")
+    return "compile lint"
+  if flag.equals("--stats") || flag.equals("--split") || flag.equals("--omit-runtime") ||
+    flag.equals("--emit-deps") || flag.equals("--emit-libs") || flag.equals("--emit-decls") ||
+    flag.equals("--emit-surface")
+    return "compile"
+  return ""
+
+fn faces_include(faces: U8[], face: U8[]): Bool //<
+  //< Whether the name is a whole entry of the whitespace-separated list
+  //<
+  //< Caution: Do not use a substring match ("run" would match "emit-runtime").
+  $i: Sz = 0
+  for i < faces.len
+    if !faces.starts_with(face, i)
+      i += 1
+      continue
+    before_ok: = i == 0 || (faces.ptr + (i - 1))$ == ' '
+    j: = i + face.len
+    if before_ok && (j >= faces.len || (faces.ptr + j)$ == ' ')
+      return true
+    i += 1
+  return false
+
+fn check_flag_faces(p: argp.Parser$@, face: U8[]) //<
+  //< It rejects an option that does not apply to this subcommand
+  //<
+  //< The error names the subcommands the option applies to.
+  arena: = Arena.new(4096)
+  defer arena.free()
+  $names: = List<|U8[]|>.new(arena)
+  defer names.free()
+  p.append_names(names@)
+  for name in names
+    faces: = flag_faces(name)
+    if !p.saw(name) || faces.len == 0 || faces_include(faces, face)
+      continue
+    $m: = Str_builder.new()
+    defer m.free()
+    m
+      .s("ksplc \{face\}: '\{name\}' does not take effect on this subcommand (it takes effect on: \
+        \{faces\})\n")
+    error_exit(m.slice())
+
+fn refuse_empty_values(p: argp.Parser$@) //<
+  //< It rejects an option given with nothing after its `=` (`--emit-deps=`)
+  //<
+  //< **No option of ksplc means anything by an empty value**: taken, it would read as the default
+  //< or be ignored, and the writer would believe it took effect.
+  arena: = Arena.new(4096)
+  defer arena.free()
+  $names: = List<|U8[]|>.new(arena)
+  defer names.free()
+  p.append_names(names@)
+  for name in names
+    if p.saw_empty(name)
+      error_exit(base_core.arena.text().s("Error: \{argp.Argp_error.missing_value(name)\}\n").take())
+
+fn help_with_topics(head: U8[], topics: U8[]): U8[] //<
+  //< It appends the list of subjects to a subcommand's description
+  //<
+  //< Caution: **Copy it to the arena**; the parser keeps it, and `--help` reads it later.
+  $b: = Str_builder.new()
+  defer b.free()
+  b.s(head).s(" (").s(topics).c(')')
+  return base_core.arena.dup_str(b.slice())
+
+fn usage_for_topics(face: U8[], topics: U8[]): U8[] //<
+  //< The usage of a subcommand that takes a subject
+  return base_core.arena.text()
+    .s("usage: ksplc \{face\} <\{topics.replace(" ", "|", base_core.arena)\}>\n").take()
+
+// The argument Parser, for the usage list.
+// Caution: Set it right after Mode.new builds it; if left null, no option is listed.
+$cli: argp.Parser$@ = null
+
+fn print_words(words: List<|U8[]|>@) //< the usage's description
+  //<
+  //< Caution: **Do not write each option's one-line description**; cli.print_usage below prints
+  //< them from the declarations. **Print the queries' answers in this form**: they go straight to
+  //< the shell's word splitting.
+  for i in Range.asc(words.len)
+    io.out().s(" " if i > 0 else "").s(words.get(i))
+  io.out().c('\n')
+
+priv struct Face //< a subcommand and the command line it takes
+  name: U8[] //< the name `flag_faces` uses; `compile` is the default, typed with no name
+  form: U8[] //< its command line, as its usage line writes it
+
+priv const faces: Face[10] = ::{ Face::{ .name = "compile",
+  .form = "ksplc [options...] <input.kspl> <output.c>" },
+  Face::{ .name = "run", .form = "ksplc run [options...] <script.kspl> [args...]" },
+  Face::{ .name = "fmt", .form = "ksplc fmt [options...] <input.kspl>..." },
+  Face::{ .name = "lint", .form = "ksplc lint [options...] <input.kspl>" },
+  Face::{ .name = "lsp", .form = "ksplc lsp" },
+  Face::{ .name = "info", .form = "ksplc info <subject>" },
+  Face::{ .name = "clean", .form = "ksplc clean <subject>" },
+  Face::{ .name = "emit-runtime", .form = "ksplc emit-runtime [options...] <output.c>" },
+  Face::{ .name = "explain", .form = "ksplc explain <code>" },
+  Face::{ .name = "doc", .form = "ksplc doc <file>[.<name>] | <folder>" } } //<
+    //< The subcommands the usage lists, each with its command line
+    //<
+    //< Caution: **List the options per subcommand** (`print_faces_and_flags`); in one flat list, a
+    //< reader cannot tell which applies where without trying.
+
+fn usage_of(face: U8[]): U8[] //< the one usage line of a subcommand, for refusing its arguments
+  for f in faces
+    if f.name.equals(face)
+      return base_core.arena.text().s("usage: ").s(f.form).c('\n').take()
+  return base_core.arena.text().s("usage: ksplc ").s(face).c('\n').take()
+
+fn print_usage()
+  for i in Range.asc(faces.len)
+    io.out().s("usage: " if i == 0 else "       ").s(faces[i].form)
+    if i == 0
+      io.out().s("          compile (the default subcommand)")
+    io.out().c('\n')
+  $usage: =
+    """
+
+        `run` builds the script and runs it, leaving the result in $KSPLC_CACHE_DIR (the OS's
+        cache region by default). Place ksplc's own options before the script's path; what comes
+        after it is handed to the script uninterpreted.
+
+        The standard library (`import "std/..."`) is the first of these, strongest first:
+        --std-dir=DIR, the environment variable KSPLC_STD_DIR, the std/ beside the ksplc
+        executable, ../lib/kspl/std from the executable's folder, and then "std" in the current
+        folder. `ksplc info std-dir` names the one taken.
+        """
+    .dedent()
+  defer usage.free()
+  io.out().s(usage.slice())
+  print_topics("info", info_topics())
+  print_topics("clean", clean_topics)
+  if cli != null
+    print_faces_and_flags(cli)
+    io.out().c('\n')
+    cli.print_options()
+
+fn print_topics(face: U8[], topics: U8[])
+  io.out().s("\n").s(face).s("'s subjects: ").s(topics).c('\n')
+
+fn print_faces_and_flags(p: argp.Parser$@) //<
+  //< It lists the options that apply, per subcommand
+  //<
+  //< Caution: **Build the list from `flag_faces`**; a list written by hand drifts silently.
+  arena: = Arena.new(4096)
+  defer arena.free()
+  $names: = List<|U8[]|>.new(arena)
+  defer names.free()
+  p.append_names(names@)
+  io.out()
+    .s("\nThe options that take effect per subcommand (an option not here is an error on that \
+      subcommand):\n")
+  for face in faces
+    $line: = Str_builder.new()
+    defer line.free()
+    line.s("  ").s(face.name).c(':')
+    for name in names
+      f: = flag_faces(name)
+      if f.len > 0 && faces_include(f, face.name)
+        line.c(' ').s(name)
+    io.out().s(line.slice()).c('\n')
+  io.out().s("  on every subcommand: --help\n")
+
+fn usage_exit(): Void //< it prints the usage as an argument error and exits
+  print_usage()
+  sys.exit(1)
+
+fn error_exit(msg: U8[]): Void //< it prints one message and exits
+  //<
+  //< Caution: **Make the exit code non-zero**, or a calling script carries on unaware of the error.
+  io.out().s(msg)
+  sys.exit(1)

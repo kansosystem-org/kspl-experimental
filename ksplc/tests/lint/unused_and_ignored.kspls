@@ -1,0 +1,31 @@
+//< Checks that the five diagnostics for "written but never read" can fire
+//<
+//< Caution: Keep one fixed-length array around — [W0207] looks at the reading, not at the name
+//< appearing, so it comes out on an array used only through `.len`.
+//< Keep one import around — the private-declaration check draws the file by name.
+// EXPECT: [W0701] Result of type
+// EXPECT: [W0202] Expression result of type
+// EXPECT: [W0206] Unused private
+// EXPECT: [W0207] Nothing reads local variable or parameter
+// EXPECT: a fixed array's '.len' folds at compile time
+// EXPECT: [W0208] Variable
+import "std/io"
+
+enum Probe_error
+  failed
+
+priv fn may_fail(): I32?Probe_error
+  return 1
+
+priv fn never_called(): I32 //< a private declaration that is not called
+  return 0
+
+pub fn probe(used: I32, unread_param: I32): I32
+  may_fail()
+  used + 1
+  never_read: I32 = 5
+  $assigned_only: I32 = 0
+  assigned_only = used
+  len_only: Sz[3] = ::{ 1, 2, 3 }
+  io.out().s("probe \{len_only.len\}\n")
+  return used

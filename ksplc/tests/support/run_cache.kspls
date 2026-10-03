@@ -1,0 +1,96 @@
+//< Reads what is inside `ksplc run`'s cache location (not a suite)
+//<
+//< The location is in the OS's cache area, so **"was it rebuilt" is measured only by the
+//< artifacts' count and time**, read here.
+//< **The verdict itself is not here** (the same split as `tests/support/run_cc.kspls`).
+import "ksplc/tests/support/run_case"
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt"
+import "std/sys"
+
+struct Objs //<
+  //< The count of objects for this script, the newest time, and the count made since `since`
+  //<
+  //< It assumes there is only one slot.
+  count: Sz
+  newest: I64
+  fresh: Sz
+
+fn obj_state(work: U8[], since: I64, arena: Arena$@): Objs
+  $out: = Objs::{ .count = 0, .newest = 0, .fresh = 0 }
+  slot: = run_case.only_slot(work, arena)
+  if slot.len == 0
+    return out
+  dir: = fs.join(slot, "obj", arena)
+  entries: = fs.read_dir(dir, arena) catch
+    return out
+  for name in entries
+    if !name.ends_with(".o")
+      continue
+    st: = fs.stat(fs.join(dir, name, arena)) catch
+      continue
+    out.count += 1
+    if st.mtime > out.newest
+      out.newest = st.mtime
+    if st.mtime >= since
+      out.fresh += 1
+  return out
+
+const wait_limit_us: I64 = 5000000 //< the longest wait_for_mtime_tick waits, in microseconds
+
+fn wait_for_mtime_tick(probe: U8[], after: I64): I64 //<
+  //< It waits until a file's time passes after and returns the time it reached
+  //<
+  //< It returns 0 where the time does not pass it within wait_limit_us.
+  //< **`fs.stat`'s mtime is in seconds**, so two builds in a row show **everything rebuilt as "left
+  //< alone"**. The file's own clock decides the wait; a monotonic second is not its tick.
+  start: = sys.mono_us()
+  for sys.mono_us() - start <= wait_limit_us
+    io.write_file(probe, "x") catch
+      return 0I64
+    st: = fs.stat(probe) catch
+      return 0I64
+    if st.mtime > after
+      return st.mtime
+  return 0I64
+
+fn fake_slot_name(i: Sz, arena: Arena$@): U8[] //<
+  //< A fake slot name of the same shape as a real slot (64 hex characters)
+  //<
+  //< Anything but that shape is outside what the sweep touches.
+  b: = arena.text()
+  for _k in Range.asc(62)
+    b.c('0')
+  b.c((U8::((i / 16) % 16)).to_hex_lower())
+  b.c((U8::(i % 16)).to_hex_lower())
+  return b.take()
+
+fn place_fake_slot(root: U8[], i: Sz, used_at: I64, arena: Arena$@): Bool //<
+  //< It creates fake slot i under root, marked as last used at used_at (seconds)
+  //<
+  //< It returns false where it cannot.
+  //< The mark copies what touch_dir in `ksplc/base/cache.kspls` writes: a file `used` holding the
+  //< seconds. A real slot holds an obj/ too, which a one-level sweep leaves behind.
+  fake: = fs.join(root, fake_slot_name(i, arena), arena)
+  mark: = arena.text().s("\{used_at\}").take()
+  fs.write_tree(fake, U8[][]::{ "prog.exe", "obj/x.o", "used" },
+    U8[][]::{ "junk", "junk", mark }, arena) catch
+    return false
+  return true
+
+fn same_place(reported: U8[], want: U8[], arena: Arena$@): Bool //<
+  //< Whether the path ksplc reported and the path passed to it point at the same directory
+  //<
+  //< Caution: **Do not compare the path strings.** MSYS2 rewrites a child's `/tmp/…` into
+  //< `D:/a/_temp/msys64/tmp/…`; a mark placed here is searched for from the reported path instead.
+  line: = reported.trim_spaces()
+  if line.len == 0 || !fs.is_dir(line)
+    return false
+  mark: = "kanso_same_place.txt"
+  io.write_file(fs.join(want, mark, arena), "x") catch
+    return false
+  return fs.exists(fs.join(line, mark, arena))

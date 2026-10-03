@@ -1,0 +1,223 @@
+//< The C runtime that completes both backends' output, as text that ksplc supplies
+//<
+//< **Both backends take the runtime from here** (the C backend writes it around the generated
+//< body, the LLVM backend references its version symbol, `ksplc emit-runtime` writes it alone), so
+//< neither backend imports the other for it.
+import "ksplc/base/cache" as base_cache
+import "ksplc/base/core" as base_core
+import "std/chars"
+import "std/str" { Str_builder }
+// The C runtime preamble (the type definitions, the tracing machinery, the panic and bounds checks,
+// the process isolation), kept in .c files and built into the compiler with embed.
+//
+// Each target splits it in two, "the declaration half (`.h`)" and "the body half (`.c`)".
+// **The declaration half goes into every translation unit, and the body half into only one.**
+// Unsplit, the body half in every translation unit makes the non-static functions and the
+// initialized globals duplicate definitions at link time (under a split compile). Each file's
+// head says which half it is.
+embed "ksplc/gen/runtime/core.h" as rt_core_decls
+embed "ksplc/gen/runtime/core.c" as rt_core_impl
+embed "ksplc/gen/runtime/freestanding.h" as rt_freestanding_decls
+embed "ksplc/gen/runtime/freestanding.c" as rt_freestanding_impl
+embed "ksplc/gen/runtime/hosted.h" as rt_hosted_decls
+// **hosted's body half is split into files, yet joined into one translation unit in this order.**
+// They cannot be compiled separately (the later ones use the first file's includes and static
+// helpers). `write_impl` below keeps the order.
+// Caution: **An added file not listed there breaks silently** (only that file's functions become
+// undefined). The split follows std's own subjects.
+embed "ksplc/gen/runtime/hosted.c" as rt_hosted_impl
+embed "ksplc/gen/runtime/hosted_proc.c" as rt_hosted_proc
+embed "ksplc/gen/runtime/hosted_thread.c" as rt_hosted_thread
+embed "ksplc/gen/runtime/hosted_fs.c" as rt_hosted_fs
+embed "ksplc/gen/runtime/hosted_spawn.c" as rt_hosted_spawn
+embed "ksplc/gen/runtime/hosted_net.c" as rt_hosted_net
+embed "ksplc/gen/runtime/hosted_tls.c" as rt_hosted_tls
+
+fn write_decls($w: Writer): Writer //<
+  //< The runtime's declaration half (the system headers plus the `.h` side)
+  //<
+  //< Caution: **Every object-like macro the includes `#define` must be removed by the `#undef`
+  //< below** (`si_pid`, `L_tmpnam`, `math_errhandling`, ...): where KSPL emits the same name
+  //< unprefixed (a local, a parameter, a field), the macro expands.
+  w = w
+    .s("""
+#define _POSIX_C_SOURCE 200809L
+// Caution: **On macOS, always raise _DARWIN_C_SOURCE too.** Apple's headers hide "what is not in
+// POSIX.1" where `_POSIX_C_SOURCE` is defined. What hides includes sysconf's _SC_NPROCESSORS_ONLN
+// (an extension) and even the BSD type aliases <sys/*.h> uses internally (u_int / u_char /
+// u_short). Define nothing and macOS's default is the equivalent of _DARWIN_C_SOURCE, so this is
+// the setting that "goes back to the default" (only the declarations multiply; the ABI does
+// not change).
+// Caution: **Place it ahead of the includes.** Defined afterwards it does not take effect, because
+// the include guards of the headers already read are raised.
+// glibc publishes these unconditionally, so **dropping it passes on Linux and surfaces on
+// macOS alone**.
+#if defined(__APPLE__)
+#define _DARWIN_C_SOURCE
+#endif
+// The oldest Windows the runtime is written for is Windows 10, whose C runtime is UCRT: state it
+// rather than take the headers' default, which differs per SDK. An older MinGW's is Windows 7,
+// and it hides GetCurrentThreadStackLimits (Windows 8) from kspl_stack_floor.
+// Caution: **Raise WINVER with it**: some headers gate on WINVER alone. A higher one given with
+// -D stays, as the headers then only declare more.
+#if defined(_WIN32) && (!defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0A00)
+#undef _WIN32_WINNT
+#define _WIN32_WINNT 0x0A00
+#endif
+#if defined(_WIN32) && (!defined(WINVER) || WINVER < 0x0A00)
+#undef WINVER
+#define WINVER 0x0A00
+#endif
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdarg.h>
+""")
+  if !base_core.config.is_freestanding
+    w = w
+      .s("""
+#include <stdio.h>
+// The premise for std/rand.kspls's CSPRNG (kspl_rand_fill, hosted.c) using rand_s() on Windows.
+// #defined after stdlib.h it is ignored by the header guard (where that has already been
+// included), so it has to be defined ahead of here (stdlib.h's first include) without fail. On
+// POSIX/macOS it is an unrelated macro name and harmless.
+#define _CRT_RAND_S
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <math.h>
+#include <signal.h>
+
+/* These are object-like macros the headers above `#define`, of the same names as KSPL's
+   identifiers. Unremoved, they are expanded at the positions that come out bare (a local
+   variable, a formal parameter, a struct field) and become a C compiler error. The runtime reads
+   none of them.
+   Caution: The names removed differ per target: si_* / sa_* / sigev_* come from POSIX's
+   <signal.h>, and environ / popen / strcasecmp / sys_errlist and the like from Windows's CRT.
+   An #undef of an undefined macro is correct C, so both lists can stay and pass on either
+   target. */
+#undef L_ctermid
+#undef L_tmpnam
+#undef environ
+#undef math_errhandling
+#undef matherr
+#undef onexit_t
+#undef pclose
+#undef popen
+#undef sa_handler
+#undef sa_sigaction
+#undef si_addr
+#undef si_addr_lsb
+#undef si_arch
+#undef si_band
+#undef si_call_addr
+#undef si_fd
+#undef si_int
+#undef si_lower
+#undef si_overrun
+#undef si_pid
+#undef si_pkey
+#undef si_ptr
+#undef si_status
+#undef si_stime
+#undef si_syscall
+#undef si_timerid
+#undef si_uid
+#undef si_upper
+#undef si_utime
+#undef si_value
+#undef sigev_notify_attributes
+#undef sigev_notify_function
+#undef strcasecmp
+#undef strncasecmp
+#undef sys_errlist
+#undef sys_nerr
+#undef wcswcs
+#undef wpopen
+""")
+  w = w.s(rt_core_decls)
+  if base_core.config.is_freestanding
+    w = w.s(rt_freestanding_decls)
+  else
+    w = w.s(rt_hosted_decls)
+  return w
+
+const impl_half_mark: U8[] = "/* ---- kspl runtime implementation half ---- */\n" //<
+  //< The mark at the start of the body half
+  //<
+  //< Caution: **Do not change it.** It appears both in `emit-runtime`'s output and in the
+  //< generated C, where the program's body sits between the two halves, and
+  //< `tests/suite/emit_runtime_test.kspls` cuts both there to compare them.
+
+fn write_impl($w: Writer): Writer //< the runtime's body half (the `.c` side)
+  //<
+  //< It goes into only one translation unit.
+  w = w.s(impl_half_mark).s(rt_core_impl)
+  if base_core.config.is_freestanding
+    w = w.s(rt_freestanding_impl)
+  else
+    w = w.s(rt_hosted_impl).s(rt_hosted_proc).s(rt_hosted_thread).s(rt_hosted_fs).s(rt_hosted_spawn)
+      .s(rt_hosted_net).s(rt_hosted_tls)
+  return w
+
+priv const abi_hash_len: Sz = 16 //< the length of the version in the version symbol
+  //<
+  //< The version is computed from **the runtime's whole source**.
+  //< Caution: **Do not compute it from the declaration half only**, or a runtime whose bodies
+  //< alone changed would pass. genllvm matches on the same symbol (the IR always links the runtime
+  //< from outside).
+
+fn append_abi_symbol(out: Str_builder$@)
+  $text: = Str_builder.new()
+  defer text.free()
+  write_impl(write_decls(text@))
+  $hex: = Str_builder.new()
+  defer hex.free()
+  base_cache.append_hash_hex(text.slice(), hex@)
+  out.s("kspl_runtime_abi_").s(hex.slice().sub(0, abi_hash_len))
+
+fn write_unit($w: Writer): Writer //<
+  //< It writes only the runtime, as one translation unit (`emit-runtime`)
+  //<
+  //< The version symbol's body goes at the end.
+  //< Caution: **Use the same function as the preamble.** Built separately, the name embedded in
+  //< an artifact and the name in the shipped runtime could disagree, with both passing unnoticed.
+  w = write_impl(write_decls(w))
+  $sym: = Str_builder.new()
+  defer sym.free()
+  append_abi_symbol(sym@)
+  // Caution: **Do not put anything before it.** tests/suite/emit_runtime_test.kspls cuts "the
+  // runtime itself" out of the emitted file at this line.
+  w = w.s("\nvoid ").s(sym.slice()).s("(void) {}\n")
+  return w
+
+fn write_abi_ref($w: Writer): Writer //<
+  //< The reference to the version symbol that `--omit-runtime`'s generated C contains
+  //<
+  //< The symbol's body is in the separately built runtime.
+  //< Caution: **`used` alone is not enough on ELF**: `--gc-sections` drops the whole section.
+  //< **Nor is `__has_attribute(retain)` alone**: it says the compiler knows the attribute, not
+  //< that the object format honors it. **Make it `static`**, so `--split`'s units do not collide.
+  $sym: = Str_builder.new()
+  defer sym.free()
+  append_abi_symbol(sym@)
+  w = w.s("extern void ").s(sym.slice()).s("(void);\n")
+  w = w
+    .s("""
+#if defined(__ELF__)
+#if !defined(__has_attribute) || !__has_attribute(retain)
+#error "--omit-runtime needs __attribute__((retain)) on ELF: without it the version guard is
+#stripped without a word"
+#endif
+__attribute__((used, retain))
+#elif defined(__MACH__)
+__attribute__((used))
+#elif defined(_WIN32)
+__attribute__((used))
+#else
+#error "--omit-runtime needs a way to keep the version reference; only ELF, Mach-O and PE are known
+#to honor one, so the guard would be stripped without a word"
+#endif
+""")
+  w = w.s("static void (* const kspl_runtime_abi_ref)(void) = ").s(sym.slice()).s(";\n\n")
+  return w

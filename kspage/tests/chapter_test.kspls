@@ -1,0 +1,266 @@
+import "kspage/lay/caret"
+import "kspage/lay/flow"
+import "kspage/lay/page" { Page }
+import "kspage/model/doc" + { Doc }
+import "kspage/model/fixed_font" as fixed
+// `html.write` needs metrics (a line-height multiple scales one line's height). Why these are
+// fixed: the header of `kspage/model/fixed_font.kspls`.
+import "kspage/model/fixed_font"
+import "kspage/model/marker"
+import "kspage/model/number"
+import "kspage/model/paint"
+import "kspage/model/style" { Sheet }
+import "kspage/share/html"
+import "kspage/share/store"
+import "kspage/tests/base"
+import "kspage/write/edit"
+import "kspage/write/insert"
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// kspage: checks chapter numbers, and references to a heading from the body (cross-references).
+// **The number is not stored in the document**: the "1.2" shown is counted from the depth at each
+// layout; written in, one added heading would leave every number and reference after it stale.
+// **The style gives the depth (`Style.outline`), the marker the text's format
+// (`Marker.outline`)**; storing the depth on the marker too would put the contents' indent out
+// of step with the number's digits.
+// ==========================================
+
+priv fn outlined_sheet(arena: Arena$@): Sheet$@ //<
+  //< The styles of headings down to depth 3. Every one of them assigns a chapter number
+  sheet: = Sheet.new(base.root_font(), arena)
+  for $lv: Sz = 1; lv <= 3; lv += 1
+    name: = arena.text().s("heading\{lv\}").take()
+    st: = sheet.add(name, paint.inherit_all())
+    st.outline = lv
+    st.marker = marker.Marker.outline(".", ". ")
+  return sheet
+
+priv fn add_head(d: Doc$@, level: Sz, text: U8[], name: U8[], arena: Arena$@) //< adds one heading
+  //<
+  //< Give it a name and it can be referred to from the body.
+  b: = d.add_block(arena.text().s("heading\{level\}").take())
+  b.name = name
+  b.add_text(text)
+
+priv fn number_of(page: Page$@, d: Doc$@, at: Sz): U8[] //<
+  //< Reads that heading's chapter number from the layout result
+  return number.heading_number(page.headings, d.blocks.get(at))
+
+// ---- assigning chapter numbers ----
+
+fn test_chapter_numbers_follow_the_outline_depth() //<
+  //< Go deeper and a level is added; come back up and the deeper levels restart
+  verdict.start("[kspage/flow] a chapter number following a heading's depth test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = outlined_sheet(arena)
+  add_head(d, 1, "Start", "", arena)
+  add_head(d, 2, "One", "", arena)
+  add_head(d, 3, "Detail", "", arena)
+  add_head(d, 2, "Two", "", arena)
+  add_head(d, 1, "Next", "", arena)
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(number_of(page, d, 0).equals("1"), "depth 1 is 1")
+  assert(number_of(page, d, 1).equals("1.1"), "depth 2 is 1.1")
+  assert(number_of(page, d, 2).equals("1.1.1"), "depth 3 is 1.1.1")
+  assert(number_of(page, d, 3).equals("1.2"), "the next at the same depth is 1.2")
+  // **Restart the deeper levels.** Otherwise a number like 2.3 would appear.
+  assert(number_of(page, d, 4).equals("2"),
+    "back at depth 1 it is 2, and the deeper places are dropped")
+  verdict
+    .pass("the depth decides the places, and back at a shallower one the deeper places are counted \
+      afresh.")
+
+fn test_a_skipped_depth_shows_as_zero() //<
+  //< **A skipped depth shows as 0.** Collapsed, the skip could not be seen in the number
+  verdict.start("[kspage/flow] a depth skipped coming out as 0 test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = outlined_sheet(arena)
+  add_head(d, 1, "Start", "", arena)
+  add_head(d, 3, "Deep at once", "", arena)
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(number_of(page, d, 1).equals("1.0.1"), "skipping depth 2 gives 1.0.1")
+  verdict.pass("a depth skipped is seen as 0.")
+
+fn test_an_unnumbered_heading_still_counts_its_depth() //<
+  //< A heading whose marker is not a chapter number has no text
+  //<
+  //< **The depth is counted all the same.**
+  verdict.start("[kspage/flow] a heading with no number still counting the depth test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = outlined_sheet(arena)
+  // Depth 1 alone assigns no number.
+  switch sheet.find("heading1") case .some(top)
+    top.marker = marker.Marker.none
+  case .none
+    assert(false, "the heading1 is there")
+  add_head(d, 1, "Start", "", arena)
+  add_head(d, 2, "One", "", arena)
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(number_of(page, d, 0).len == 0, "a heading with no number holds no text")
+  // With that level suppressed, it counts from 1.
+  assert(number_of(page, d, 1).equals("1.1"), "depth 2 stays 1.1")
+  verdict.pass("it puts no text out, but the depth is counted.")
+
+fn test_the_number_shows_at_the_head_of_the_paragraph() //<
+  //< A chapter number appears at the start of a paragraph
+  //<
+  //< **The text set beside it appears with it.**
+  verdict.start("[kspage/flow] a chapter number coming out at a paragraph's head test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = outlined_sheet(arena)
+  add_head(d, 1, "Start", "", arena)
+  add_head(d, 2, "One", "", arena)
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  // A marker's box points at no document (its `inline` is null); that is what makes it a marker.
+  $marks: = Str_builder.new()
+  defer marks.free()
+  for $i: Sz = 0; i < page.boxes.len; i += 1
+    bx: = page.boxes.get(i)
+    if bx.inline == null
+      marks.s(bx.text).c('|')
+  assert(marks.slice().equals("1. |1.1. |"), "the row-head marks are `1. ` and `1.1. `")
+  verdict.pass("a chapter number comes out at the head when it is laid.")
+
+// ---- referring to a heading from the body ----
+
+fn test_a_reference_to_a_heading_shows_its_chapter_number() //<
+  //< Name a heading, refer to it from the body, and its chapter number is shown
+  verdict.start("[kspage/flow] a heading being callable from the body test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = outlined_sheet(arena)
+  sheet.add("body", paint.inherit_all())
+  add_head(d, 1, "Start", "", arena)
+  add_head(d, 2, "One", "target", arena)
+  body: = d.add_block("body")
+  body.add_text("here")
+  run: = body.inlines.get(0)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(run, run.text().len)
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(ed.insert_refer(page, sheet, "target"), "it was called")
+  called: = body.inlines.get(1)
+  assert(called.refers.equals("target"), "what the document holds is the name of what it points at")
+  assert(called.text().len == 0, "the number does not go in as a text")
+  flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  // **A chapter number is only the number** (no text like the "Figure " of "Figure 2"); the words
+  // around it belong to the referring body.
+  assert(called.showing().equals("1.1"), "called, it is seen as 1.1")
+
+  // **Add a chapter before it and the number changes too**; else it would stay stale as typed.
+  head: = doc.new_block("heading1", arena)
+  head.add_text("cut in")
+  d.blocks.insert(0, head)
+  flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(called.showing().equals("2.1"), "a chapter going in in front makes it 2.1")
+  verdict
+    .pass("it holds the name it calls and nothing else, and the number is counted afresh every \
+      laying.")
+
+fn test_a_reference_to_a_missing_heading_shows_a_question_mark() //<
+  //< Where the target is gone, a `?` is shown
+  //<
+  //< Showing a removed chapter's old number as it is, the reader could not notice.
+  verdict.start("[kspage/flow] a ? coming out where a heading that has gone is called test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = outlined_sheet(arena)
+  sheet.add("body", paint.inherit_all())
+  add_head(d, 1, "Start", "target", arena)
+  body: = d.add_block("body")
+  body.add_text("here")
+  run: = body.inlines.get(0)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(run, run.text().len)
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(ed.insert_refer(page, sheet, "target"), "it was called")
+  called: = body.inlines.get(1)
+
+  d.blocks.get(0).name = ""
+  flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(called.showing().equals("?"), "where what it points at is not there a ? comes out")
+  verdict.pass("calling a heading that has gone puts a ? out.")
+
+// ---- exporting and saving ----
+
+fn test_html_shows_the_same_chapter_numbers() //<
+  //< The chapter numbers in the exported HTML match the screen
+  //<
+  //< **It checks that the counting happens in one place.**
+  verdict
+    .start("[kspage/html] the chapter numbers in the HTML written out matching the screen test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = outlined_sheet(arena)
+  sheet.add("body", paint.inherit_all())
+  add_head(d, 1, "Start", "", arena)
+  add_head(d, 2, "One", "target", arena)
+  add_head(d, 1, "Next", "", arena)
+  body: = d.add_block("body")
+  body.add_text("here")
+  run: = body.inlines.get(0)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(run, run.text().len)
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(ed.insert_refer(page, sheet, "target"), "it was called")
+
+  $out: = Str_builder.new()
+  defer out.free()
+  html.write(d, sheet, fixed_font.make(), out@)
+  // **A marker comes right before the text, so search for it with the opening bracket**: `1. `
+  // alone matches inside `1.1. ` too, and would pass with no marker shown.
+  body_html: = out.slice()
+  assert(body_html.find_str(">1. Start<") >= 0, "1. comes out at depth 1's head")
+  assert(body_html.find_str(">1.1. One<") >= 0, "1.1. comes out at depth 2's head")
+  assert(body_html.find_str(">2. Next<") >= 0, "2. comes out at the next chapter's head")
+  assert(body_html.find_str(">here1.1<") >= 0, "1.1 comes out where it was called")
+  // A named heading gets an `id` (the exported HTML can link to it).
+  assert(body_html.find_str("id=\"target\"") >= 0, "the heading called gets an id")
+  verdict.pass("the HTML written out counts from the same place.")
+
+fn test_the_outline_marker_survives_store() //< the marker itself is saved and read back
+  //<
+  //< **Both the separator and the text after it must be kept.**
+  verdict.start("[kspage/store] the chapter number's mark being left through saving test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = outlined_sheet(arena)
+  add_head(d, 1, "Start", "", arena)
+  $out: = Str_builder.new()
+  defer out.free()
+  store.save(d, sheet, out@)
+
+  back: = store.load(out.slice(), arena) catch
+    assert(false, "it reads back")
+    return
+  switch back.sheet.find("heading1") case .some(s)
+    assert(s.outline == 1, "the depth is left")
+    $sb: = Str_builder.new()
+    defer sb.free()
+    assert(s.marker.outlined(), "it is a chapter number's mark")
+    assert(marker.mark_outline_into(sb@, s.marker, "1.2"), "the head's text can be built")
+    assert(sb.slice().equals("1.2. "), "the parting and the text behind are left")
+  case .none
+    assert(false, "the heading1 is there")
+  verdict.pass("a chapter number's mark saves and reads back.")

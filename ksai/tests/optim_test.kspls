@@ -1,0 +1,55 @@
+//< Tests the `Updater` against the optimizers it gives each weight
+//<
+//< **What is tested is the pairing**: under Adam, the n-th weight passed in a step keeps the n-th
+//< state across steps, so the weights end up where one `Adam` per weight would move them.
+import "ksai/grad" as _grad // `sgd_step` on Tensor
+import "ksai/optim"
+import "ksai/tensor" { Tensor }
+import "std/mem" { Arena }
+import "std/verdict"
+
+priv fn filled(n: Sz, v: F32, arena: Arena$@): Tensor<|F32|> //< a vector of n, every element v
+  shape: Sz[1] = ::{ n }
+  $t: = Tensor<|F32|>.new(Sz[]::shape, arena)
+  t.fill(v)
+  return t
+
+priv fn same(a: Tensor<|F32|>, b: Tensor<|F32|>): Bool //< element for element, bit for bit
+  for i in Range.asc(a.size)
+    if (a.data + i)$ != (b.data + i)$
+      return false
+  return true
+
+fn test_updater_pairs_states(arena: Arena$@) //<
+  //< Two weights of different sizes, three steps, gradients differing by step and weight
+  //<
+  //< Caution: **Keep the gradients differing**: with one gradient for all, a weight moved by
+  //< another's state still comes out right.
+  verdict.start("[Optim] the Updater keeps each weight's own Adam state across steps")
+  a: = filled(3, 1.0, arena)
+  b: = filled(5, -1.0, arena)
+  a_ref: = filled(3, 1.0, arena)
+  b_ref: = filled(5, -1.0, arena)
+  $u: = optim.Updater<|F32|>.adam(0.1)
+  defer u.free()
+  $adam_a: = optim.Adam<|F32|>.new_default(a_ref, 0.1)
+  $adam_b: = optim.Adam<|F32|>.new_default(b_ref, 0.1)
+  for step in Range.asc(3)
+    ga: = filled(3, F32::(F64::(step + 1) * 0.5), arena)
+    gb: = filled(5, F32::(F64::(step + 1) * -0.25), arena)
+    u.begin_step()
+    u.update(a, ga)
+    u.update(b, gb)
+    adam_a.step(a_ref, ga)
+    adam_b.step(b_ref, gb)
+  assert(same(a, a_ref) && same(b, b_ref), "the Updater's Adam must move each weight as its own")
+  s: = filled(3, 1.0, arena)
+  $s_ref: = filled(3, 1.0, arena)
+  $sgd: = optim.Updater<|F32|>.sgd(0.1)
+  defer sgd.free()
+  g: = filled(3, 0.5, arena)
+  sgd.begin_step()
+  sgd.update(s, g)
+  s_ref.sgd_step(g, 0.1)
+  assert(same(s, s_ref), "the Updater's SGD must be sgd_step")
+  verdict.pass("each weight keeps its own Adam state across steps, and SGD is sgd_step")

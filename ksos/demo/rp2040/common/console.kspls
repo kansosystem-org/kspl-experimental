@@ -1,0 +1,121 @@
+//< Text output on the real RP2040 (over USB CDC)
+//<
+//< Caution: **For a line that must not be dropped, ask `can_flush()` first**; `flush` discards a
+//< line that does not fit.
+
+// ==========================================
+//   $ln: Line = ::{};
+//   ln.reset();
+//   ln.str("bat="); ln.u32(mv); ln.str("mV");
+//   _sent: = ln.flush();   // add CR LF at the end and queue it
+// ==========================================
+import "ksos/drivers/rp2040/usb_cdc" as usb
+import "std/buf" { Buf_writer }
+import "std/str" as _str
+import "std/strfmt" as _strfmt // `\{}` on a number, and its `:02x` / `:03`
+
+const line_max: Sz = 200 //<
+  //< The limit on one line (the character count, not counting the CR LF at the end)
+  //<
+  //< Beyond it the line is truncated, which is more useful in a log than failing.
+
+const line_bytes_max: Sz = line_max + 2 //< the largest byte count passed to the send queue
+  //<
+  //< Caution: **Count the CR LF**, or a full line loses two bytes.
+
+struct Line
+  // Room for the CR LF (see flush) beyond `line_max`.
+  priv buf: U8[line_bytes_max]
+  priv len: Sz
+  // Whether bytes were dropped beyond the limit (shown as a `~` at the end).
+  priv truncated: Bool
+
+impl Line
+  fn new(): Line //< an empty line
+    //<
+    //< The fields are private, so `Line::{}` cannot be written from outside.
+    return Line::{}
+
+  fn reset(r: Self$@)
+    r.len = 0
+    r.truncated = false
+
+  fn byte(r: Self$@, b: U8)
+    if r.len >= line_max
+      r.truncated = true
+      return
+    r.buf[r.len] = b
+    r.len += 1
+
+  fn str(r: Self$@, s: U8[])
+    for i in s
+      r.byte(i)
+
+  fn u32(r: Self$@, v: U32) //< appends in decimal
+    r.u32_pad(v, 0)
+
+  fn i32(r: Self$@, v: I32) //< appends in decimal, with a sign
+    //<
+    //< Caution: **Pass values that can be negative through here**; through `u32`, `-45` comes out
+    //< as `4294967251`.
+    $digits: U8[11] = ::{}
+    $w: = Buf_writer.new(U8$[]::digits)
+    r.str(w.s("\{v\}").slice())
+
+  fn u32_pad(r: Self$@, v: U32, width: Sz) //<
+    //< Appends right-aligned to width digits (padded with spaces)
+    $digits: U8[10] = ::{}
+    $w: = Buf_writer.new(U8$[]::digits)
+    w.s("\{v\}")
+    for $i: Sz = w.len; i < width; i += 1
+      r.byte(' ')
+    r.str(w.slice())
+
+  fn hex2(r: Self$@, v: U32) //< appends the low byte as two hex digits
+    //<
+    //< For a value **conventionally written in hex** (an I2C address), to match the documents.
+    $digits: U8[2] = ::{}
+    $w: = Buf_writer.new(U8$[]::digits)
+    r.str(w.s("\{v & 0xff:02x\}").slice())
+
+  fn u32_milli(r: Self$@, v: U32) //<
+    //< Appends a value in thousandths as `12.345` (integers only)
+    //<
+    //< For example: u32_milli(6774) → `6.774`
+    $digits: U8[14] = ::{}
+    $w: = Buf_writer.new(U8$[]::digits)
+    r.str(w.s("\{v / 1000\}.\{v % 1000:03\}").slice())
+
+  fn flush(r: Self$@): Bool //< adds CR LF at the end and queues the line for sending
+    //<
+    //< Caution: Use CR LF (the Arduino Serial Monitor runs LF lines together). **false means "that
+    //< line is lost"**; for one that must not be dropped, wait with `can_flush()`. **Before USB is
+    //< configured it is always false, and it is not even counted in `usb.tx_dropped()`**.
+    if r.truncated
+      // Mark the truncation in the line, or the reader cannot notice it.
+      r.len = line_max - 1
+      r.buf[r.len] = '~'
+      r.len += 1
+    // Caution: **Write the CR LF without `byte`**, which stops at `line_max`: a full line would
+    // lose its end and run into the next.
+    r.buf[r.len] = '\r'
+    r.buf[r.len + 1] = '\n'
+    sent: = usb.write(U8[]::{ .ptr = r.buf[0]@, .len = r.len + 2 })
+    r.reset()
+    return sent
+
+fn say(ln: Line$@, tag: U8[], detail: U8[]) //< prints progress as one line (`[tag] detail`)
+  //<
+  //< Print one per stage: the Serial Monitor is the only way to see which stage failed.
+  ln.reset()
+  ln.str(tag)
+  ln.str(" ")
+  ln.str(detail)
+  _sent: = ln.flush()
+
+fn can_flush(): Bool //< whether one line fits in the send queue
+  //<
+  //< Caution: **Ask before `flush`**, which discards a line that does not fit. A waiter calls
+  //< `usb.poll_once()` until this is true; put a limit on the wait, since with no reader the queue
+  //< never empties.
+  return usb.has_room(line_bytes_max)

@@ -1,0 +1,33 @@
+//< A cast to a slice that changes the element size is rejected
+//<
+//< Caution: **Place the shapes that should pass too.** A same-size reread (`U8[]` ↔ `I8[]`,
+//< `U32[]` ↔ `I32[]`, equal-size structs) keeps the element count, so it is allowed. For a byte
+//< run, assemble the descriptor yourself (docs/SPEC-language.md 6.2.1).
+// EXPECT: the element size changes (1 -> 4 bytes)
+// EXPECT: the element size changes (4 -> 1 bytes)
+// EXPECT: the element size changes (8 -> 1 bytes)
+import "std/io"
+
+priv struct Pair
+  pub a: I32
+  pub b: I32
+
+priv struct Wide
+  pub v: I64
+
+fn main(): I32
+  small: U8[8] = ::{ 1, 2, 3, 4, 5, 6, 7, 8 }
+  w32: I32[4] = ::{ 1, 2, 3, 4 }
+  pairs: Pair[2] = ::{}
+  // It should be refused: the element size changes.
+  grow: = I32[]::small
+  shrink: = U8[]::w32
+  flatten: = U8[]::pairs
+  // It should pass: the size is the same.
+  same_1: = I8[]::small
+  same_4: = U32[]::w32
+  same_8: = Wide[]::pairs
+  same_id: = U8[]::small
+  io.out()
+    .s("\{grow.len\}\{shrink.len\}\{flatten.len\}\{same_1.len\}\{same_4.len\}\{same_8.len\}\{same_id.len\}\n")
+  return 0

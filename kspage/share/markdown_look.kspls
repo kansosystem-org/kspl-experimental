@@ -1,0 +1,186 @@
+//< How a document opened as Markdown is shown, without changing it
+//<
+//< This is the only place that decides the look apart from the text (without it a heading has
+//< the body's size).
+//< Caution: **Give each part exactly one style**, or the table's order decides which one the
+//< reader takes.
+import "kspage/model/collect" { Collect }
+import "kspage/model/font" { Font }
+import "kspage/model/marker" { Marker }
+import "kspage/model/paint"
+import "kspage/model/style" { Sheet, Style, Align, Arrange }
+import "kspage/share/markdown"
+import "std/mem" { Arena }
+
+priv const gap: F32 = 16.0 //<
+  //< The space before and after a paragraph, and one indent step (GitHub's look)
+priv const step_indent: F32 = 32.0
+priv const line_color: U32 = 0xd0d7deU32 //< the rule lines and the fill
+  //<
+  //< Caution: **Where a fill is set, set the text color too**, or on a dark screen light text sits
+  //< on a light fill.
+priv const code_fill: U32 = 0xf6f8faU32
+priv const dark_ink: U32 = 0x1a1a1aU32
+priv const faint_ink: U32 = 0x656d76U32 //<
+  //< Only the deepest heading level is pale (as GitHub's `h6`)
+priv const link_color: U32 = 0x0969daU32 //< a link's color
+  //<
+  //< It goes with the underline (`linked` in [`../model/style.kspls`](../model/style.kspls)).
+
+priv const head_scale: F32[6] = ::{ 2.0, 1.5, 1.25, 1.0, 0.875, 0.85 } //<
+  //< The sizes of the six heading levels (multiples of the parent's)
+  //<
+  //< There are six levels (Markdown has no deeper heading).
+
+// The style names, per part.
+// **This is the only place that holds the names.** The reader
+// ([`markdown_style.kspls`](markdown_style.kspls)) uses the same names even for a part not in
+// this table, or one document gets different names depending on how it was opened (Principle 4).
+const head_names: U8[][6] = ::{ "heading1", "heading2", "heading3", "heading4", "heading5",
+  "heading6" }
+const body_name: U8[] = "body"
+const item_name: U8[] = "bullet"
+const step_name: U8[] = "numbered"
+const grid_name: U8[] = "table"
+const slide_name: U8[] = "slide" //< a slide
+  //<
+  //< The size is not here (the reader makes one style per size).
+const chart_prefix: U8[] = "chart-" //< a chart
+  //<
+  //< The name matches the one the page writes (`chart-<the aggregation>`).
+const notes_name: U8[] = "footnote"
+const cell_names: U8[][3] = ::{ "cell", "cell-center", "cell-right" }
+priv const link_name: U8[] = "link" //<
+  //< The style name for a link
+  //<
+  //< Only the link uses it here (the reader looks up by part, and where there is none uses the
+  //< emphasis alone)
+const divider_name: U8[] = "divider" //< the divider's style names
+  //<
+  //< The divider that draws a line and the one that does not are separate styles. **Only the
+  //< divider is told apart by name** (`divider_named` in `markdown_style.kspls`).
+const apart_name: U8[] = "divider-bare"
+
+priv fn spaced(s: Style$@, before: F32, after: F32) //<
+  //< Sets the space before and after a paragraph
+  //<
+  //< It is separate so a fence and a table can have more space than the body.
+  s.space_before = before
+  s.space_after = after
+
+priv fn add_heads(sheet: Sheet$@, root: Font) //< the six heading levels
+  //<
+  //< Caution: **Always set the depth (`outline`)** — the table of contents and the reader collect
+  //< headings by it.
+  for $i: Sz = 0; i < 6; i += 1
+    $spec: paint.Font_spec = paint.inherit_all()
+    spec.size_px = Option<|F32|>.some(root.size_px * head_scale[i])
+    spec.weight = Option<|U16|>.some(700U16)
+    h: = sheet.add(head_names[i], spec)
+    h.outline = i + 1
+    // Caution: **Leave more space above**, or nobody can tell which paragraph a heading heads.
+    spaced(h, gap * 1.5F32, gap * 0.5F32)
+    if i == 5
+      h.ink.color = Option<|U32|>.some(faint_ink)
+
+priv fn add_paras(sheet: Sheet$@) //< a paragraph, a bullet list and a numbered list
+  //<
+  //< Caution: **Name the plain paragraph too** (the reason is at `body_style` in
+  //< `markdown_style.kspls`).
+  body: = sheet.add(body_name, paint.inherit_all())
+  spaced(body, 0.0, gap)
+  body.line_spacing = 1.5
+
+  // A bullet list. The bullet sits in the indent.
+  item: = sheet.add(item_name, paint.inherit_all())
+  item.indent = step_indent
+  item.marker = Marker.bullet("• ")
+  spaced(item, 0.0, gap * 0.25F32)
+  item.line_spacing = 1.5
+
+  // A numbered list. **Where a paragraph without a number comes in between, the count restarts
+  // from 1.**
+  step: = sheet.add(step_name, paint.inherit_all())
+  step.indent = step_indent
+  step.marker = Marker.number(". ")
+  spaced(step, 0.0, gap * 0.25F32)
+  step.line_spacing = 1.5
+
+  // The list of notes. The number is not stored in the document.
+  notes: = sheet.add(notes_name, paint.inherit_all())
+  notes.collect = Collect.notes
+  spaced(notes, gap * 1.5F32, 0.0)
+
+priv fn add_code(sheet: Sheet$@, root: Font) //< a code block and inline code
+  //<
+  //< A block (a ``` fence) and inline code (a `` ` `` fence) share one style (`code_style` in
+  //< [`markdown_style.kspls`](markdown_style.kspls)).
+  //< `markdown.kspls` decides the name, which reads back as "declares no language"; any other name
+  //< declares a language.
+  $mono: paint.Font_spec = paint.inherit_all()
+  mono.family = Option<|U8[]|>.some("monospace")
+  mono.size_px = Option<|F32|>.some(root.size_px * 0.85F32)
+  code: = sheet.add(markdown.plain_code_name, mono)
+  // It does not wrap (wrapping loses the space at the break and changes the indent depth).
+  code.wrap = false
+  spaced(code, gap, gap)
+  // The fence's padding.
+  // Caution: **Do not fake it with the line height's ratio** (`pad` in `../model/style.kspls`).
+  code.pad = gap
+  code.line_spacing = 1.45
+  code.fill = Option<|U32|>.some(code_fill)
+  code.ink.color = Option<|U32|>.some(dark_ink)
+  code.rule_width = 1.0
+  code.rule_color = line_color
+
+priv fn add_table(sheet: Sheet$@) //< a table
+  //<
+  //< The cell styles hold the grid; styles do not inherit, so each alignment's cell carries the
+  //< line and the padding.
+  grid: = sheet.add(grid_name, paint.inherit_all())
+  grid.arrange = Arrange.grid
+  spaced(grid, gap, gap)
+
+  add_cell(sheet, cell_names[0], Align.left)
+  add_cell(sheet, cell_names[1], Align.center)
+  add_cell(sheet, cell_names[2], Align.right)
+
+priv fn add_cell(sheet: Sheet$@, name: U8[], want: Align) //< one cell
+  dress_cell(sheet.add(name, paint.inherit_all()), want)
+
+fn dress_cell(cell: Style$@, want: Align) //<
+  //< Sets a cell's default look: the padding, and the line the grid is drawn with
+  //<
+  //< Caution: **Always set the padding** — it is what marks a style as a cell (`cell_like` in
+  //< `../model/style.kspls`). A divider draws a line too, but has no padding.
+  //< This is the one place the look is written; inserting a table from the screen uses it too.
+  cell.align = want
+  cell.pad = 6.0
+  cell.rule_width = 1.0
+  cell.rule_color = line_color
+
+priv fn add_marks(sheet: Sheet$@) //< a divider and a link
+  rule: = sheet.add(divider_name, paint.inherit_all())
+  rule.rule_width = 1.0
+  rule.rule_color = line_color
+  spaced(rule, gap * 1.5F32, gap * 1.5F32)
+  // A divider that draws no line. It sets no look at all.
+  sheet.add(apart_name, paint.inherit_all())
+
+  // A link. The color and the underline go together (`linked` in `../model/style.kspls`).
+  link: = sheet.add(link_name, paint.inherit_all())
+  link.ink.color = Option<|U32|>.some(link_color)
+  link.ink.underline = Option<|Bool|>.some(true)
+
+fn sheet_for(root: Font, arena: Arena$@): Sheet$@ //<
+  //< The style table passed in when Markdown is read
+  //<
+  //< Caution: **Pass it in before reading.** Applied afterwards, it misses the styles the
+  //< reader added (a fence declaring a language); passed first, the reader uses these parts as is.
+  sheet: = Sheet.new(root, arena)
+  add_paras(sheet)
+  add_heads(sheet, root)
+  add_code(sheet, root)
+  add_table(sheet)
+  add_marks(sheet)
+  return sheet

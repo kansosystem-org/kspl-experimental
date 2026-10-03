@@ -1,0 +1,381 @@
+#!/usr/bin/env -S ksplc run
+//< CI performance guard: checks whether memory use has grown markedly over the baseline
+//<
+//< It compares the "Compile time" / "AST Arena usage" / "AST Arena headroom" / "System Peak Memory"
+//< lines that ksplc prints to the log when self-hosting against tests/tools/perf_baseline.json.
+//< Caution: **There are two verdicts. Do not remove either.** The peak (`System Peak Memory`)
+//< covers **everything coarsely**, in steps of one chunk; the usage (the left of `AST Arena usage`)
+//< covers **only the AST, finely**, with no steps. The peak alone misses a 30% rise hidden under a
+//< step; the usage alone misses a regression outside the AST (a `List`, a `Map`).
+import "std/argp"
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/json"
+import "std/json_struct"
+import "std/mem" { Arena, dealloc }
+import "std/reflect"
+import "std/regex"
+import "std/str" { Str_builder }
+import "std/strfmt"
+import "std/sys"
+
+priv const mem_threshold: F64 = 1.3 //< the multiple allowed for the peak
+  //<
+  //< **It cannot be tighter than a step.** The AST's arena grows a chunk at a time (`Arena` in
+  //< `std/mem.kspls`), so one step is a large fraction of the peak.
+  //< Caution: **Where only the peak fails, suspect a step first** — a rise of about one `arena
+  //< carry` chunk while `AST bytes` passes is a step (then run `--update`). **Do not lower this
+  //< baseline to today's value**: the slack is lost, and the next run in which a chunk grows fails.
+
+priv const ast_threshold: F64 = 1.05 //< the multiple allowed for the usage
+  //<
+  //< Caution: **Do not give it the peak's value**: this count has no steps to absorb. Tighter than
+  //< 5%, the baseline would need a new measurement at every intended feature addition.
+
+priv const time_pattern: U8[] = "Compile time\\s*:\\s*([\\d,]+) ms" //<
+  //< The patterns picked out of the log
+  //<
+  //< **The canonical source is the lines `ksplc/main.kspls` prints**; change them and change this.
+  //< `[\d,]+` includes the grouping comma (`7,052`). `Compile time` is `N/A` on backends other
+  //< than C and so is not picked up (`make perf-log` measures on C).
+priv const peak_pattern: U8[] = "System Peak Memory:\\s*([\\d,]+) bytes" //<
+  //< The pattern for the peak memory
+  //<
+  //< **The build time is not used for the verdict**; only its ratio against the baseline is
+  //< recorded.
+  //< On the same tree and machine, cold time varies by nearly a factor of two while the peak memory
+  //< stays the same — time measures the machine and its load, not the work. A loose bound buries a
+  //< real regression; a tight one fails on noise. `--stats` adds the per-stage breakdown; to
+  //< investigate time, compare the minimum of several runs on a quiet machine.
+priv const ast_pattern: U8[] = "AST Arena usage\\s*:\\s*([\\d,]+) /" //<
+  //< The memory the AST occupies
+  //<
+  //< Caution: **Capture the usage (the left), not the capacity (right of the `/`)**, which is the
+  //< sum of the chunks and steps like the peak. **Both memory figures are our own count, not
+  //< RSS** (the peak is the most bytes `std/mem.kspls` held from malloc at once).
+// **Capture the distance to the next step and the step's size in one pattern**; either alone
+// cannot tell "where the peak goes if it takes the step".
+priv const headroom_pattern: U8[] =
+  "AST Arena headroom:\\s*([\\d,]+) bytes before next chunk \\(\\+([\\d,]+) bytes\\)"
+
+priv enum Guard_error //< the tool failed
+  //<
+  //< Caution: **Do not add variants.** The code that finds the problem prints the reason, and the
+  //< caller returns exit code 2 for any; only "something went wrong" is carried.
+  failed
+
+priv struct Metrics
+  compile_ms: I64
+  peak_bytes: I64
+  ast_bytes: I64
+
+priv struct Headroom //<
+  //< the distance to the carry (the AST's arena growing by one more chunk)
+  //<
+  //< Caution: **Do not merge it into `Metrics`**, the baseline JSON's format: a new key makes every
+  //< existing baseline unreadable. This is read from the log each time.
+  free: I64
+  step: I64
+
+priv struct Shapes //< the sizes of the types the tree is built from
+  //<
+  //< Caution: **Do not merge it into `Metrics`.** That holds per-machine values, while this is
+  //< **fixed, the same on any 64-bit machine** — there, `--update` would silently rewrite a fixed
+  //< value.
+  node: I64
+  kids: I64
+
+priv const want_node_bytes: I64 = 64I64 //<
+  //< The fixed sizes of the tree's two types (64-bit: `Sz` and a pointer are 8 bytes)
+  //<
+  //< Caution: **When it fails, do not change these numbers first.** 8 bytes more each is tens of MB
+  //< over the tree, yet `ast_threshold` absorbs it — **`AST bytes` passes while it gains weight**.
+priv const want_kids_bytes: I64 = 32I64
+priv const node_pattern: U8[] = "AST Node bytes\\s*:\\s*([\\d,]+)"
+priv const kids_pattern: U8[] = "AST Kids bytes\\s*:\\s*([\\d,]+)"
+
+priv struct Baseline //< holds cold and warm together
+  //<
+  //< Caution: **Do not allow a form that holds only one**; split, the missing side passes
+  //< unchecked.
+  cold: Metrics
+  warm: Metrics
+
+// The round trip with JSON. **A key is the field name itself**; ksplc builds the table and
+// `fields()` from the declarations, nesting included ("The compiler writes the table only" in
+// `../../docs/DESIGN.md`).
+impl Baseline: reflect.Reflectable {}
+
+priv const value_ceiling: I64 = 1_000_000_000_000_000I64 //< the cap on a readable value
+  //<
+  //< It is a petabyte, or thirty thousand years in ms; no indicator reaches it.
+  //< Caution: **Never let an overflow pass silently.** An overflowed I64 becomes "a small positive
+  //< number", so a regression passes as an "improvement"; the cap stops before the next digit.
+
+priv fn digits_value(s: U8[]): I64 //< drops the grouping commas and returns an integer
+  //<
+  //< It returns -1 past the cap. The capture is `[\d,]+`, so the comma is the only non-digit.
+  $v: I64 = 0
+  for i in Range.asc(s.len)
+    if !s[i].is_digit()
+      continue
+    v = v * 10I64 + I64::(s[i] - '0')
+    if v > value_ceiling
+      return -1I64
+  return v
+
+priv fn max_capture(text: U8[], pattern: U8[], path: U8[], arena: Arena$@): I64?Guard_error //<
+  //< The largest number the pattern captures across the whole log
+  //<
+  //< Caution: **Take the worst value.** One log holds stage1 and stage2; the first or the average
+  //< dilutes the bad side. **Finding none is a failure too** — read as 0, an indicator that stops
+  //< being printed records an "improvement".
+  re: = regex.Regex.compile(pattern) catch
+    io.err().s("[perf_guard] the pattern cannot be read: ").s(pattern).s("\n")
+    throw Guard_error.failed
+  defer re.free()
+  ms: = re.find_all(text, arena) catch
+    io.err().s("[perf_guard] the scan was cut short: ").s(pattern).s("\n")
+    throw Guard_error.failed
+  if ms.len == 0
+    io.err().s("[perf_guard] no metrics found in ").s(path).s("\n")
+    throw Guard_error.failed
+  $best: I64 = 0
+  for m in ms
+    v: = digits_value(m.group(1, text))
+    if v < 0I64
+      io.err().s("[perf_guard] the value is too large: ").s(m.group(1, text)).s("\n")
+      throw Guard_error.failed
+    if v > best
+      best = v
+  return best
+
+priv fn parse_headroom(text: U8[], path: U8[], arena: Arena$@): Headroom?Guard_error //<
+  //< Reads the distance to the carry from the log
+  //<
+  //< Caution: **Take the value nearest the edge**; with several measurements, the far one reads as
+  //< "there is still slack".
+  re: = regex.Regex.compile(headroom_pattern) catch
+    io.err().s("[perf_guard] the pattern cannot be read: ").s(headroom_pattern).s("\n")
+    throw Guard_error.failed
+  defer re.free()
+  ms: = re.find_all(text, arena) catch
+    io.err().s("[perf_guard] the scan was cut short: ").s(headroom_pattern).s("\n")
+    throw Guard_error.failed
+  if ms.len == 0
+    io.err().s("[perf_guard] no arena headroom found in ").s(path).s("\n")
+    throw Guard_error.failed
+  $out: = Headroom::{ .free = value_ceiling, .step = 0I64 }
+  for m in ms
+    free: = digits_value(m.group(1, text))
+    step: = digits_value(m.group(2, text))
+    if free < 0I64 || step < 0I64
+      io.err().s("[perf_guard] the value is too large: ").s(m.group(1, text)).s("\n")
+      throw Guard_error.failed
+    if free < out.free
+      out = Headroom::{ .free = free, .step = step }
+  return out
+
+priv struct Reading //< everything read out of one log
+  //<
+  //< Caution: **Do not read a log twice**; read separately, one could come from an old log.
+  metrics: Metrics
+  head: Headroom
+  shapes: Shapes
+
+priv fn parse_log(path: U8[], arena: Arena$@): Reading?Guard_error //<
+  //< Reads the indicators and the distance to the carry from one log
+  text: = io.read_file(path) catch
+    io.err().s("[perf_guard] the log cannot be read: ").s(path).s("\n")
+    throw Guard_error.failed
+  defer dealloc(Void$@::text.ptr)
+  return Reading::{ .metrics = Metrics::{ .compile_ms =
+    max_capture(text, time_pattern, path, arena)?,
+    .peak_bytes = max_capture(text, peak_pattern, path, arena)?,
+    .ast_bytes = max_capture(text, ast_pattern, path, arena)? },
+    .head = parse_headroom(text, path, arena)?,
+    .shapes = Shapes::{ .node = max_capture(text, node_pattern, path, arena)?,
+    .kids = max_capture(text, kids_pattern, path, arena)? } }
+
+priv fn baseline_path(arena: Arena$@): U8[] //< the baseline's path
+  //<
+  //< Caution: **Do not derive it from cwd.** It is called from outside `make` too, so it looks
+  //< next to the script (`tests/`); only when the script path is unknown does it assume the root.
+  script: = sys.script_path().unwrap_or("")
+  if script.len == 0
+    return "tests/tools/perf_baseline.json"
+  return fs.join(sys.get_dir_name(script), "perf_baseline.json", arena)
+
+priv fn write_baseline(path: U8[], cur: Baseline, arena: Arena$@): Bool //<
+  //< Writes the baseline
+  //<
+  //< Caution: **Do not build the JSON by hand.** Write with `dump` in `std/json` (a second
+  //< writer drifts in escaping and number form), two-space indent so `git diff` shows which value
+  //< moved. `--update` rewrites all three keys; to add one key alone, write it by hand.
+  $jb: = json.Json_builder.new(arena)
+  // Keys are not listed here; the function that walks the table and its nesting builds them.
+  $out: = Str_builder.new()
+  defer out.free()
+  json_struct.from_struct(cur@, jb@).dump(out@, 2)
+  out.c('\n')
+  io.write_file(path, out.slice()) catch
+    io.err().s("[perf_guard] the baseline cannot be written: ").s(path).s("\n")
+    return false
+  return true
+
+priv fn read_baseline(path: U8[], arena: Arena$@): Baseline?Guard_error //<
+  //< Reads the baseline, which differs per machine
+  //<
+  //< The time varies with the machine and its load, and the two memory figures move when a `#cfg`
+  //< branch changes.
+  //<
+  //< Taken on the Linux CI's devcontainer image (used as they are on macOS, they raise false
+  //< alarms; "note 21" in `docs/SPEC-gates.md`). The memory figures repeat exactly for one source.
+  text: = io.read_file(path) catch
+    io.err().s("[perf_guard] the baseline cannot be read: ").s(path).s("\n")
+    throw Guard_error.failed
+  defer dealloc(Void$@::text.ptr)
+  root: = json.parse(text, arena) catch
+    io.err().s("[perf_guard] the baseline does not resolve as JSON: ").s(path).s("\n")
+    throw Guard_error.failed
+  // **A missing key or a wrong kind is refused, not filled with a default** (filled in, an old
+  // baseline shows only as "the value was 0").
+  // Caution: **Print the name the error carries as it is**: folded into "something went wrong",
+  // the only remedy is to measure again; with the name printed, the key to add is known.
+  $out: Baseline = ::{}
+  json_struct.into_struct(root, out@, arena) catch e
+    io.err().s("[perf_guard] the baseline cannot be read: ")
+    switch e case .missing_field(name)
+      io.err().s("the key '\{name\}' is absent")
+    case .field_type(name)
+      // `<root>`: the content is not an object (Json_error in std/json.kspls).
+      if name.equals("<root>")
+        io.err().s("it is not an object")
+      else
+        io.err().s("the key '\{name\}' is of the wrong kind")
+    default
+      io.err().s("it does not resolve as JSON")
+    io.err()
+      .s(". Add --update to `make perf-log`'s recipe and take the measurements again, or delete ")
+      .s("tests/tools/perf_baseline.json and run it again\n")
+    throw Guard_error.failed
+  return out
+
+priv fn ratio_text(base: I64, cur: I64, arena: Arena$@): U8[] //< the ratio against the baseline
+  //<
+  //< Where the baseline is 0 it cannot divide, so it returns `n/a`.
+  return ("n/a" if base == 0I64
+    else arena.text().s("x\{F64::cur / F64::base:.2\}").take())
+
+priv fn report(kind: U8[], base: Metrics, cur: Reading, arena: Arena$@): Bool //<
+  //< Prints one measurement and returns whether both memory figures are within their limits
+  //<
+  //< Caution: **Do not write `RECORDED` on the time's line.** Beside the baseline it **reads as
+  //< though the baseline were rewritten** (only `--update` writes it); say it is not used for the
+  //< verdict.
+  ratio: = ratio_text(base.compile_ms, cur.metrics.compile_ms, arena)
+  io.out().s("[perf_guard] ").s(kind).s(" compile time: \{cur.metrics.compile_ms:,\} (baseline ")
+    .s("\{base.compile_ms:,\}, ").s(ratio).s(") -> NOT GATED\n")
+  limit: = I64::(F64::base.peak_bytes * mem_threshold)
+  peak_ok: = cur.metrics.peak_bytes <= limit
+  io.out().s("[perf_guard] ").s(kind).s(" peak memory: \{cur.metrics.peak_bytes:,\} (baseline ")
+    .s("\{base.peak_bytes:,\}, limit \{limit:,\}) -> ").s("PASS" if peak_ok else "FAIL").s("\n")
+  ast_limit: = I64::(F64::base.ast_bytes * ast_threshold)
+  ast_ok: = cur.metrics.ast_bytes <= ast_limit
+  io.out().s("[perf_guard] ").s(kind).s(" AST bytes: \{cur.metrics.ast_bytes:,\} (baseline ")
+    .s("\{base.ast_bytes:,\}, limit \{ast_limit:,\}) -> ").s("PASS" if ast_ok else "FAIL").s("\n")
+  report_headroom(kind, limit, cur)
+  return peak_ok && ast_ok
+
+priv fn report_headroom(kind: U8[], limit: I64, cur: Reading) //<
+  //< Prints the distance to the carry
+  //<
+  //< Caution: **Do not return a verdict.** Being near the edge is not a regression; the reader asks
+  //< "if it takes the next step, does this guard still pass" against today's limit. `IT WOULD FAIL
+  //< THIS GATE` means the slack is under one step — raise the baseline now, not after it fails.
+  free: = cur.head.free
+  next_peak: = cur.metrics.peak_bytes + cur.head.step
+  share: =
+    (0.0 if cur.metrics.peak_bytes == 0I64
+    else 100.0 * F64::free / F64::cur.metrics.peak_bytes)
+  io.out().s("[perf_guard] ").s(kind).s(" arena carry: \{free:,\} bytes (\{share:.1\}% of peak) ")
+    .s("before the next chunk of \{cur.head.step:,\} bytes\n")
+  io.out().s("[perf_guard] ").s(kind).s(" arena carry: peak would become \{next_peak:,\} ")
+    .s("(limit \{limit:,\}) -> ")
+    .s("BASELINE ABSORBS IT" if next_peak <= limit else "IT WOULD FAIL THIS GATE").s("\n")
+
+priv fn report_shapes(cold: Shapes, warm: Shapes): Bool //<
+  //< whether the types' sizes match the fixed values
+  //<
+  //< Caution: **Do not compare by ratio**: a size is fixed, so one byte off means a type changed.
+  //< **Compare the two logs with each other** — the same executable printed them, so a difference
+  //< means an old log is being read.
+  fresh: = cold.node == warm.node && cold.kids == warm.kids
+  node_ok: = fresh && cold.node == want_node_bytes
+  kids_ok: = fresh && cold.kids == want_kids_bytes
+  io.out().s("[perf_guard] Ast_node bytes: \{cold.node\} (want \{want_node_bytes\}) -> ")
+    .s("PASS" if node_ok else "FAIL").s("\n")
+  io.out().s("[perf_guard] child list bytes: \{cold.kids\} (want \{want_kids_bytes\}) -> ")
+    .s("PASS" if kids_ok else "FAIL").s("\n")
+  if !fresh
+    io.out().s("[perf_guard] the types' sizes differ between cold and warm: cold ")
+      .s("\{cold.node\}/\{cold.kids\} vs warm \{warm.node\}/\{warm.kids\}")
+      .s(" (one of them is an old log)\n")
+  return node_ok && kids_ok
+
+fn main(): I32 //<
+  //< Compares a build's cost against the baseline
+  //<
+  //< Usage: `make perf-log` (the proper entry point), or `ksplc run tests/tools/perf_guard.kspls
+  //< --cold=<log> --warm=<log> [--update]`
+  //<
+  //< Caution: **Let `make perf-log` produce the logs.** It measures on an empty cache (cold) and
+  //< again on the same cache (warm), **against separate baselines** — whether the AST disk cache
+  //< (`ksplc/parse/ast_cache.kspls`) hits changes time and peak memory several-fold, so one
+  //< baseline for both leaves one side unchecked.
+  arena: = Arena.new(1024 * 1024)
+  defer arena.free()
+  $update: = false
+  $cold_log: U8[] = ""
+  $warm_log: U8[] = ""
+  p: = argp.Parser.create("perf_guard", "compare a build's cost against the baseline", arena)
+  p.str_required("--cold", cold_log@, "the log of the build on an empty cache")
+  p.str_required("--warm", warm_log@, "the log of the build on the same cache again")
+  p.flag("--update", update@, "rewrite the baseline with these measurements")
+  p.parse_or_exit(sys.args(), arena)
+  cold: = parse_log(cold_log, arena) catch
+    return 2
+  warm: = parse_log(warm_log, arena) catch
+    return 2
+  cur: = Baseline::{ .cold = cold.metrics, .warm = warm.metrics }
+
+  // Caution: **Run this check on a baseline rewrite too.** `--update` measures the values again,
+  // but a type's size is fixed — let through on a rewrite, a change to a fixed value is recorded
+  // nowhere.
+  shapes_ok: = report_shapes(cold.shapes, warm.shapes)
+  if !shapes_ok
+    io.out().s("RESULT: SOME FAILED (1) -> a tree type changed size (--update does not fix this; ")
+      .s("if the growth is intended, change want_node_bytes / want_kids_bytes in this script)\n")
+    return 1
+
+  path: = baseline_path(arena)
+  if update || !fs.exists(path)
+    if !write_baseline(path, cur, arena)
+      return 2
+    io.out().s("[perf_guard] baseline written: cold \{cur.cold.compile_ms:,\} ms / ")
+      .s("\{cur.cold.peak_bytes:,\} peak / \{cur.cold.ast_bytes:,\} ast, warm ")
+      .s("\{cur.warm.compile_ms:,\} ms / \{cur.warm.peak_bytes:,\} peak / ")
+      .s("\{cur.warm.ast_bytes:,\} ast\n")
+    return 0
+  base: = read_baseline(path, arena) catch
+    return 2
+  // Caution: **Always print both**; a short circuit on a cold failure leaves warm out of the log.
+  cold_ok: = report("cold", base.cold, cold, arena)
+  warm_ok: = report("warm", base.warm, warm, arena)
+  if !cold_ok || !warm_ok
+    io.out().s("RESULT: SOME FAILED (1) -> memory regression (if this increase is intentional, ")
+      .s("refresh the baseline by re-running this with --update)\n")
+    return 1
+  io.out().s("RESULT: ALL PASS\n")
+  return 0

@@ -1,0 +1,91 @@
+import "kspage/model/collect"
+import "kspage/model/day"
+import "kspage/model/filter"
+import "kspage/model/style"
+import "kspage/model/style_when"
+import "kspage/share/compare" { Kind }
+import "kspage/write/insert"
+import "std/io"
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// kspage: pins the names a saved text, or the page, reads an enum's value by (a golden test).
+// **Each name is the variant's own** (`variant_name`), so a renamed variant would change what is
+// saved and what the page reads, in silence; here it fails instead.
+// Caution: **List a new variant's name here with the variant**, spelled as it is saved.
+// ==========================================
+
+priv const arranges: U8[][3] = ::{ "flow", "grid", "absolute" }
+priv const shapes: U8[][11] = ::{ "box", "round_box", "ellipse", "triangle", "diamond", "fall_line",
+  "rise_line", "fall_arrow", "rise_arrow", "fall_arrow_back", "rise_arrow_back" }
+priv const aligns: U8[][4] = ::{ "left", "center", "right", "justify" }
+priv const collects: U8[][7] = ::{ "none", "contents", "notes", "bars", "lines", "source",
+  "imports" }
+priv const compares: U8[][4] = ::{ "none", "above", "below", "equal" }
+priv const datings: U8[][3] = ::{ "none", "plain", "long" }
+priv const keeps: U8[][8] = ::{ "is", "is_not", "holds", "above", "below", "blank", "filled",
+  "one_of" }
+priv const sketches: U8[][3] = ::{ "whole", "titled", "halved" }
+priv const kind_names: U8[][7] = ::{ "added", "removed", "moved", "edited", "restyled", "reframed",
+  "resheeted" }
+priv const kinds: Kind[7] = ::{ Kind.added, Kind.removed, Kind.moved, Kind.edited, Kind.restyled,
+  Kind.reframed, Kind.resheeted }
+
+priv fn arrange_back(name: U8[]): U8[]
+  return style.arrange_from(name).variant_name()
+
+priv fn shape_back(name: U8[]): U8[]
+  return style.shape_from(name).variant_name()
+
+priv fn align_back(name: U8[]): U8[]
+  return style.align_from(name).variant_name()
+
+priv fn collect_back(name: U8[]): U8[]
+  return collect.collect_from(name).variant_name()
+
+priv fn compare_back(name: U8[]): U8[]
+  return style_when.compare_from(name).variant_name()
+
+priv fn dating_back(name: U8[]): U8[]
+  return day.dating_from(name).variant_name()
+
+priv fn keep_back(name: U8[]): U8[]
+  return filter.keep_from(name).variant_name()
+
+priv fn sketch_back(name: U8[]): U8[]
+  return insert.sketch_from(name).variant_name()
+
+priv fn read_back(what: U8[], names: U8[][], back: fn(name: U8[]): U8[]): Bool //<
+  //< Whether every name reads back as the variant of that very name, saying which does not
+  $all: = true
+  for name in names
+    got: = back(name)
+    if !got.equals(name)
+      io.out().s(what).s(": \"").s(name).s("\" reads back as \"").s(got).s("\"\n")
+      all = false
+  return all
+
+fn test_every_saved_name_reads_back_as_its_variant() //<
+  //< Each name a saved text or the page holds reads back as the variant spelled the same
+  //<
+  //< **Both sides are checked at once**: the reader (`*_from`) and the writer (`variant_name`).
+  verdict.start("[kspage/names] every saved name reading back as its own variant test...")
+  assert(read_back("Arrange", U8[][]::arranges, arrange_back), "a way of laying out reads back")
+  assert(read_back("Shape", U8[][]::shapes, shape_back), "a shape reads back")
+  assert(read_back("Align", U8[][]::aligns, align_back), "an alignment reads back")
+  assert(read_back("Collect", U8[][]::collects, collect_back), "a way of collecting reads back")
+  assert(read_back("Compare", U8[][]::compares, compare_back), "a way of comparing reads back")
+  assert(read_back("Dating", U8[][]::datings, dating_back), "a way of showing a date reads back")
+  assert(read_back("Keep", U8[][]::keeps, keep_back), "a filter's kind reads back")
+  assert(read_back("Sketch", U8[][]::sketches, sketch_back), "a slide's sketch reads back")
+  verdict.pass("each name read back is the variant spelled the same.")
+
+fn test_every_kind_of_difference_keeps_its_name() //<
+  //< A difference's kind, which the page places by name, is spelled as listed
+  verdict.start("[kspage/names] a difference's kinds keeping their names test...")
+  for $i: Sz = 0; i < kinds.len; i += 1
+    if !kinds[i].variant_name().equals(kind_names[i])
+      io.out().s("Kind: \"").s(kinds[i].variant_name()).s("\" is not \"").s(kind_names[i]).s("\"\n")
+      assert(false, "a difference's kind keeps its name")
+  verdict.pass("every kind of difference is spelled as the page reads it.")

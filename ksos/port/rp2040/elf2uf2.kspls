@@ -1,0 +1,201 @@
+#!/usr/bin/env -S ksplc run
+//< The ELF to UF2 conversion tool (RP2040 / Raspberry Pi Pico and Pico W)
+//<
+//< To write a UF2, copy it to the drive that appears when USB is plugged in with BOOTSEL held.
+
+// ==========================================
+//   +0x00 magicStart0 = 0x0A324655   +0x10 payloadSize
+//   +0x04 magicStart1 = 0x9E5D5157   +0x14 blockNo
+//   +0x08 flags                      +0x18 numBlocks
+//   +0x0C targetAddr                 +0x1C familyID (when flags has familyID present)
+// ==========================================
+import "std/bytes"
+import "std/chars" // tests on one character, and slicing
+import "std/ds" { List, Map }
+import "std/io"
+import "std/mem" { Arena }
+import "std/seq"
+import "std/strfmt"
+import "std/sys"
+
+priv const magic_start0: U32 = 0x0a324655
+priv const magic_start1: U32 = 0x9e5d5157
+priv const magic_end: U32 = 0x0ab16f30
+priv const flag_family_id_present: U32 = 0x00002000
+priv const rp2040_family_id: U32 = 0xe48bff56
+priv const payload_size: Sz = 256
+priv const block_size: Sz = 512
+priv const data_area: Sz = 476
+priv const pt_load: U32 = 1
+priv const phentsize32: Sz = 32 //< the size of one ELF32 program header
+  //<
+  //< Nothing else is handled: the reads below **use fixed offsets** (p_offset=+4 / p_paddr=+12),
+  //< so a different entry size would read a different field.
+priv const max_load_addr: U32 = 0xffffffff //< the largest load address
+  //<
+  //< UF2's targetAddr is 32-bit, so the limit has that type.
+
+enum Uf2_error //< why the conversion fails
+  //<
+  //< The variant's name is the diagnostic (`\{e\}`), so make it mean something to the reader.
+  not_an_elf
+  not_32bit
+  not_little_endian
+  bad_program_header_size //< e_phentsize is not ELF32's 32 bytes
+  load_address_out_of_range //< the load address does not fit in the 32-bit address space
+  truncated_program_header
+  truncated_segment
+  no_loadable_segment
+  read_back_failed
+  bad_magic
+  wrong_family_id
+  inconsistent_block_numbering
+  payload_not_256
+  target_addr_not_aligned
+  blocks_not_ascending
+
+priv struct Page //< one page written to the flash
+  //<
+  //< Caution: addr must be a multiple of payload_size.
+  addr: U32
+  data: U8[256]
+
+priv fn load_pages(data: U8[], arena: Arena$@): List<|Page|>?Uf2_error //<
+  //< Spreads the ELF's loadable segments over 256-byte-aligned pages, in ascending address order
+  //<
+  //< Caution: **Do not cut each segment into 256-byte pieces.** targetAddr must be a multiple of
+  //< 256 and payloadSize 256, and segments meet off a page boundary (`.isr_vector` and `.text`), so
+  //< cutting makes short, unaligned blocks that the boot ROM **ignores with no error**.
+  if data.len < 0x34 || data[0] != 0x7f || data[1] != 'E' || data[2] != 'L' || data[3] != 'F'
+    throw .not_an_elf
+  if data[4] != 1
+    throw .not_32bit
+  if data[5] != 1
+    throw .not_little_endian
+  e_phoff: = Sz::data.get_u32_le(0x1c)
+  e_phentsize: = Sz::data.get_u16_le(0x2a)
+  e_phnum: = Sz::data.get_u16_le(0x2c)
+  if e_phentsize != phentsize32
+    throw .bad_program_header_size
+
+  $pages: = List<|Page|>.new(arena)
+  // Maps a page's start address to its index in pages (several segments can share a page).
+  $slot_of: = Map<|Sz, Sz|>.new(arena)
+  for i in Range.asc(e_phnum)
+    // The range is checked after multiplying. **That is safe only because this is a host tool**
+    // (`Sz` is 64-bit and both terms fit in 33 bits).
+    // Caution: **Do not use the same pattern on the target.** A 32-bit `Sz` overflows (undefined)
+    // and a small `base` gets through.
+    base: = e_phoff + i * e_phentsize
+    if base + 20 > data.len
+      throw .truncated_program_header
+    if data.get_u32_le(base) != pt_load || data.get_u32_le(base + 16) == 0
+      continue
+    p_offset: = Sz::data.get_u32_le(base + 4)
+    p_paddr: = Sz::data.get_u32_le(base + 12)
+    p_filesz: = Sz::data.get_u32_le(base + 16)
+    if p_offset + p_filesz > data.len
+      throw .truncated_segment
+    // Caution: **Reject a load address that does not fit in 32 bits.** `U32::` silently truncates
+    // it (0xffffff00 + 0x200 becomes address 0, and passes verify too), and overwriting boot2 at 0
+    // stops the chip from booting.
+    if p_paddr > Sz::max_load_addr - p_filesz
+      throw .load_address_out_of_range
+    // A page at a time; a gap within a page stays 0.
+    $off: Sz = 0
+    for off < p_filesz
+      a: = p_paddr + off
+      page_base: = a - a % payload_size
+      start: = a - page_base
+      room: = payload_size - start
+      n: = room if room < p_filesz - off else p_filesz - off
+      slot: = slot_of.get(page_base) catch
+        pages.push(Page::{ .addr = U32::page_base, .data = ::{} })
+        slot_of.set(page_base, pages.len - 1)
+        fallback pages.len - 1
+      dst: = U8$[]::pages[slot].data
+      _n: = dst.copy_from(start, data.sub(p_offset + off, n))
+      off += n
+  if pages.len == 0
+    throw .no_loadable_segment
+  return pages.order_by(fn(a: Page, b: Page; ): I32 {
+    return -1 if a.addr < b.addr else (1 if a.addr > b.addr else 0);
+  }, arena)
+
+priv fn verify(path: U8[], blocks: Sz): Void?Uf2_error //<
+  //< Reads back the UF2 just written and checks the format's invariants
+  //<
+  //< Caution: If the format is wrong, the boot ROM **ignores it silently, with no error**, so it is
+  //< read back and fails here rather than on the device.
+  data: = io.read_file(path) catch
+    throw .read_back_failed
+  if data.len != blocks * block_size
+    throw .inconsistent_block_numbering
+  $prev_end: U32 = 0
+  for i in Range.asc(blocks)
+    b: = data.sub(i * block_size, block_size)
+    if b.get_u32_le(0) != magic_start0 || b.get_u32_le(4) != magic_start1 ||
+      b.get_u32_le(block_size - 4) != magic_end
+      throw .bad_magic
+    if b.get_u32_le(8) != flag_family_id_present || b.get_u32_le(0x1c) != rp2040_family_id
+      throw .wrong_family_id
+    if Sz::b.get_u32_le(0x14) != i || Sz::b.get_u32_le(0x18) != blocks
+      throw .inconsistent_block_numbering
+    // The check that matters: a block without both payloadSize=256 and a 256-byte-aligned address
+    // is silently ignored.
+    if Sz::b.get_u32_le(0x10) != payload_size
+      throw .payload_not_256
+    addr: = b.get_u32_le(0x0c)
+    if addr % U32::payload_size != 0
+      throw .target_addr_not_aligned
+    if i > 0 && addr <= prev_end - U32::payload_size
+      throw .blocks_not_ascending
+    prev_end = addr + U32::payload_size
+
+priv fn convert(in_path: U8[], out_path: U8[], arena: Arena$@): Void?Uf2_error
+  elf: = io.read_file(in_path) catch
+    throw .not_an_elf
+  $pages: = load_pages(elf, arena)?
+
+  // The bytes around the payload must be 0 (fill makes sure of it each time).
+  blk: U8[512] = ::{}
+  blk_out: = U8$[]::blk
+  blk_view: = U8[]::blk
+  $out: = io.open(out_path, "wb") catch
+    throw .read_back_failed
+  for i in Range.asc(pages.len)
+    blk_out.fill(0)
+    blk_out.put_u32_le(0, magic_start0)
+    blk_out.put_u32_le(4, magic_start1)
+    blk_out.put_u32_le(8, flag_family_id_present)
+    blk_out.put_u32_le(0x0c, pages[i].addr)
+    blk_out.put_u32_le(0x10, U32::payload_size)
+    blk_out.put_u32_le(0x14, U32::i)
+    blk_out.put_u32_le(0x18, U32::pages.len)
+    blk_out.put_u32_le(0x1c, rp2040_family_id)
+    _n: = blk_out.copy_from(32, U8[]::pages[i].data)
+    blk_out.put_u32_le(32 + data_area, magic_end)
+    out.s(blk_view)
+  out.sync() catch
+    throw .read_back_failed
+  out.free()
+
+  verify(out_path, pages.len)?
+  low: = pages[0].addr
+  high: = pages[pages.len - 1].addr + U32::payload_size
+  io.out()
+    .s("# UF2: \{pages.len\} blocks, \{pages.len * block_size\} bytes, load \
+      \{strfmt.hex(low, 8)\}-\{strfmt.hex(high, 8)\} -> \{out_path\} (format verified)\n")
+
+fn main(): I32
+  $args: = sys.args()
+  if args.len != 3
+    io.err().s("Usage: elf2uf2 <input.elf> <output.uf2>\n")
+    return 1
+  arena: = Arena.new(1024 * 1024)
+  defer arena.free()
+  in_path: = args.get(1)
+  convert(in_path, args.get(2), arena) catch e
+    io.err().s("elf2uf2: \{in_path\}: \{e\}\n")
+    return 1
+  return 0

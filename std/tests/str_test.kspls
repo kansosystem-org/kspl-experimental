@@ -1,0 +1,317 @@
+import "std/bignat"
+import "std/buf" { Buf_writer }
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt"
+import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
+import "std/verdict"
+
+// ==========================================
+// Tests of std/str's string operations.
+//
+// Caution: Do not mix up what returns a view (trim_*), which cannot outlive the original, with
+// what returns a copy (replace/join). Each boundary (empty, all spaces, no match) has one case.
+// ==========================================
+fn test_str_ops(arena: Arena$@)
+  verdict.start("[str] replace/trim/join/lines test...")
+
+  // --- replace: replaces every occurrence ---
+  assert("a.b.c".replace(".", "-", arena).equals("a-b-c"), "replace: replaces all")
+  assert("aa".replace("a", "xy", arena).equals("xyxy"), "replace: the new text is longer")
+  no_hit: = "abc".replace("z", "-", arena)
+  assert(no_hit.equals("abc"), "replace: unchanged when there is no hit")
+  assert("aaa".replace("aa", "b", arena).equals("ba"),
+    "replace: overlapping candidates go left first")
+  // An empty old does nothing (Python inserts at every character); this prevents an endless loop.
+  assert("abc".replace("", "-", arena).equals("abc"), "replace: an empty old does nothing")
+  assert("".replace("a", "b", arena).len == 0, "replace: an empty string")
+
+  assert("a.b.c".replace_first(".", "-", arena).equals("a-b.c"), "replace_first: only the first")
+  no_hit_first: = "abc".replace_first("z", "-", arena)
+  assert(no_hit_first.equals("abc"), "replace_first: unchanged when there is no hit")
+
+  // --- count_str: counts the places that replace would change ---
+  assert("a.b.c".count_str(".") == 2, "count_str: every place")
+  assert("aaaa".count_str("aa") == 2 && "aaa".count_str("aa") == 1,
+    "count_str: a find steps past itself, so two never overlap")
+  assert("abab".count_str("ab") == 2, "count_str: a place at the very end counts")
+  assert("abc".count_str("z") == 0 && "ab".count_str("abc") == 0, "count_str: no hit is 0")
+  assert("abc".count_str("") == 0 && "".count_str("") == 0,
+    "count_str: an empty text counts as none, as replace swaps none")
+
+  // --- trim: a view with the spaces dropped ---
+  assert("  x  ".trim_start().equals("x  "), "trim_start")
+  assert("  x  ".trim_end().equals("  x"), "trim_end")
+  assert("  x  ".trim_spaces().equals("x"), "trim_spaces")
+  assert("   ".trim_spaces().len == 0, "trim_spaces: empty when it is all spaces")
+  assert("   ".trim_start().len == 0, "trim_start: empty when it is all spaces")
+  assert("   ".trim_end().len == 0, "trim_end: empty when it is all spaces")
+  assert("x".trim_spaces().equals("x"), "trim_spaces: there is nothing to drop")
+
+  // --- join: round-trips with split ---
+  assert(", ".join("a,b,c".split(',', arena), arena).equals("a, b, c"), "join")
+  assert(",".join("a,b,c".split(',', arena), arena).equals("a,b,c"), "join: a round trip with split")
+  one: = "-".join("x".split(',', arena), arena)
+  assert(one.equals("x"), "join: no separator when there is one element")
+  assert("".join("a,b".split(',', arena), arena).equals("ab"), "join: an empty separator")
+
+  // --- lines: drops a \r at a line's end and does not make an empty line from a trailing newline
+  // ---
+  $l_lf: = "a\nb\n".lines(arena)
+  assert(l_lf.len == 2, "lines: a trailing newline makes no empty line")
+  assert(l_lf.get(0).equals("a") && l_lf.get(1).equals("b"), "lines: the content of each line")
+  $l_crlf: = "a\r\nb\r\n".lines(arena)
+  assert(l_crlf.len == 2, "lines: the line count is the same under CRLF")
+  assert(l_crlf.get(0).equals("a"), "lines: drops the \r at a line's end")
+  assert("".lines(arena).len == 0, "lines: an empty string is 0 lines")
+  assert("a".lines(arena).len == 1, "lines: 1 line when there is no newline")
+  $l_blank: = "a\n\nb".lines(arena)
+  assert(l_blank.len == 3 && l_blank.get(1).len == 0, "lines: an empty line in the middle stays")
+
+  // --- sub / sub_mut: a view's mutability ---
+  // `sub`/`sub_from`/`split`/`lines` return an immutable view (`U8[]`).
+  view: U8[] = "abcdef".sub(1, 3)
+  assert(view.equals("bcd"), "sub: cuts out an immutable view")
+  assert("abcdef".sub(4, 99).equals("ef"), "sub: len is clamped to the length left")
+  assert("abcdef".sub(9, 1).len == 0, "sub: a start out of range is empty")
+  assert("abcdef".sub(1, -1).len == 0, "sub: a negative len is empty")
+  assert("abcdef".sub_from(4).equals("ef"), "sub_from: an immutable view")
+
+  // strip_prefix/strip_suffix return the original where it is not there (Python's removeprefix).
+  assert("--out=x".strip_prefix("--out=").equals("x"), "strip_prefix: drops the prefix")
+  kept: = "--out=x".strip_prefix("--in=")
+  assert(kept.equals("--out=x"), "strip_prefix: unchanged when it does not match")
+  assert("abc".strip_prefix("abc").len == 0, "strip_prefix: a whole match becomes empty")
+  assert("ab".strip_prefix("abc").equals("ab"), "strip_prefix: a prefix longer than the original")
+  assert("a.kspl".strip_suffix(".kspl").equals("a"), "strip_suffix: drops the suffix")
+  assert("a.kspl".strip_suffix(".c").equals("a.kspl"),
+    "strip_suffix: unchanged when it does not match")
+  assert("ab".strip_suffix("xab").equals("ab"), "strip_suffix: a suffix longer than the original")
+  assert("abc".strip_prefix("").equals("abc"), "strip_prefix: an empty prefix leaves the original")
+
+  // The mutable form writes back into the original buffer.
+  buf: U8[4] = ::{ 'a', 'b', 'c', 'd' }
+  whole: = U8$[]::buf
+  tail: = whole.sub_mut(2, 2)
+  (tail.ptr + 0)$ = 'X'
+  assert(whole.equals("abXd"), "sub_mut: a write into the cut-out part reaches the original")
+  assert(whole.sub_mut(9, 1).len == 0, "sub_mut: a start out of range is empty")
+
+  // --- a method can be called through a pointer to an immutable view too (`.` auto-derefs) ---
+  pv: U8[]@ = view@
+  assert(pv.equals("bcd"), "auto-deref: a method can be called on a U8[]@")
+
+  // --- drop_prefix: discards only the parsed prefix and moves the rest to the front ---
+  $b: = Str_builder.new()
+  defer b.free()
+  b.s("msg1|msg2")
+  b.drop_prefix(5)
+  assert(b.slice().equals("msg2"), "drop_prefix: the rest is packed forward to the head")
+  b.drop_prefix(0)
+  assert(b.slice().equals("msg2"), "drop_prefix: 0 does nothing")
+  b.drop_prefix(-3)
+  assert(b.slice().equals("msg2"), "drop_prefix: a negative does nothing")
+  b.drop_prefix(99)
+  assert(b.len == 0, "drop_prefix: len or more throws everything away")
+  b.s("again")
+  assert(b.slice().equals("again"), "drop_prefix: more can be appended after throwing away")
+
+  // Caution: **Do not confuse the number of code points with the byte count** (a Japanese
+  // character is 3 bytes).
+  assert("abc".count_codepoints() == 3, "count_codepoints: ASCII is 1 byte per character")
+  assert("あいう".count_codepoints() == 3,
+    "count_codepoints: Japanese is counted per character too")
+  assert("aあb".count_codepoints() == 3, "count_codepoints: mixed, it still counts characters")
+  assert("".count_codepoints() == 0, "count_codepoints: empty is 0")
+  // Caution: **Test a sequence cut off at the end.** Returning the lead byte's width unchecked
+  // makes a loop on `i += step` run past the length.
+  cut: U8[2] = ::{ 0xe3U8, 0x81U8 } // only the first 2 bytes of "あ" (e3 81 82)
+  assert("あ".next_codepoint(0) == 3, "next_codepoint: a 3-byte character is 3")
+  assert((U8[]::cut).next_codepoint(0) == 2,
+    "next_codepoint: a sequence cut off at the end goes to the length left")
+  assert("a".next_codepoint(1) == 0, "next_codepoint: a position past the end is 0")
+  verdict
+    .pass("Replacing, trimming, joining, splitting lines and sub-views work as expected, boundaries \
+      included.")
+// ==========================================
+// std/str's unescape_to_arena and dedent.
+// ==========================================
+
+fn test_unescape_and_dedent(arena: Arena$@) //<
+  //< **Refuse an unknown alphanumeric escape**, or `\x41` silently becomes `x41`
+  //<
+  //< An escaped symbol stands for itself (a grammar's `\[` and `\-` rely on that).
+  //< **Turn a line of only spaces into an empty line.** Otherwise the dedented document gets
+  //< trailing spaces that nobody can see.
+  verdict.start("[str] unescape_to_arena's escapes and dedent test...")
+  known: = "a\\nb\\tc\\u3042".unescape_to_arena(arena) catch panic("str: known escapes must decode")
+  assert(known.equals("a\nb\tcあ"), "unescape: `\\n` `\\t` `\\uXXXX` are undone")
+  symbols: = "\\[\\-\\/\\\"".unescape_to_arena(arena) catch panic("str: symbol escapes must decode")
+  assert(symbols.equals("[-/\""), "unescape: an escaped symbol is that symbol itself")
+  $rejected: = false
+  _x: = "\\x41".unescape_to_arena(arena) catch
+    rejected = true
+    fallback ""
+  assert(rejected, "unescape: the unknown alphanumeric escape `\\x` is refused")
+  rejected = false
+  _q: = "\\q".unescape_to_arena(arena) catch
+    rejected = true
+    fallback ""
+  assert(rejected, "unescape: `\\q` is refused too")
+
+  $d: = "  a\n   \n  b\n".dedent()
+  defer d.free()
+  assert(d.slice().equals("a\n\nb\n"),
+    "dedent: a line of nothing but spaces becomes empty and does not decide the smallest indent")
+  $d2: = "    x\n  \t\n      y".dedent()
+  defer d2.free()
+  assert(d2.slice().equals("x\n\n  y"),
+    "dedent: a line of nothing but spaces becomes empty even when longer than the smallest indent")
+  $d3: = "  a\n  b  ".dedent()
+  defer d3.free()
+  assert(d3.slice().equals("a\nb  "), "dedent: spaces behind a character stay")
+  $d4: = "  a\r\n   \r\n  b\r\n".dedent()
+  defer d4.free()
+  assert(d4.slice().equals("a\r\n\r\nb\r\n"),
+    "dedent: under CRLF, a line of nothing but spaces becomes `\\r\\n`")
+  verdict.pass("An unknown escape is refused, and a line of nothing but spaces is made empty.")
+
+// ==========================================
+// std/strnum's write-then-read round trip, and the strings that must be refused.
+// ==========================================
+
+fn test_strnum_roundtrip() //<
+  //< That a number survives the round trip through text, and that bad text is refused
+  //<
+  //< **Use the boundary values**: if `to_i64` cannot read a value that `write_int` writes, a saved
+  //< setting breaks only at the largest value.
+  //< Caution: **Include the refusals too**, or a reader that accepts everything passes.
+  verdict.start("[strnum] a number's round trip and refusal test...")
+  $b: = Str_builder.new()
+  defer b.free()
+
+  vals: I64[_] = ::{ 0I64, 1I64, -1I64, 42I64, -42I64, 2147483647I64, -2147483648I64,
+    9223372036854775807I64, -9223372036854775807I64 - 1I64 }
+  for v in vals
+    b.clear().s("\{v\}")
+    got: = b.slice().to_i64() catch
+      fallback 0I64
+    assert(got == v, "the string written reads back")
+
+  bads: U8[][_] = ::{ "", "   ", "abc", "12abc", "-", "+", "1.5", "0x10", "9223372036854775808",
+    "-9223372036854775809", "99999999999999999999999" }
+  for bad in bads
+    $rejected: = false
+    bad.to_i64() catch
+      rejected = true
+      fallback 0I64
+    assert(rejected, "a string that is not a number, and one out of range, are refused")
+  // **Out of range is its own reason** (`out_of_bounds`), apart from a shape that is not a number.
+  for big in U8[][]::{ "9223372036854775808", "-9223372036854775809", "99999999999999999999999" }
+    $why_big: = ""
+    big.to_i64() catch e
+      switch e case .out_of_bounds
+        why_big = "range"
+      default
+        why_big = "shape"
+      fallback 0I64
+    assert(why_big.equals("range"), "a number out of range is refused as out of bounds")
+  $why_abc: = ""
+  shape: U8[] = "12abc"
+  shape.to_i64() catch e
+    switch e case .invalid_format
+      why_abc = "shape"
+    default
+      why_abc = "range"
+    fallback 0I64
+  assert(why_abc.equals("shape"), "a string that is not a number is refused as its shape")
+
+  // Only surrounding spaces are allowed.
+  spaced: = "  -7  ".to_i64() catch
+    fallback 0I64
+  assert(spaced == -7, "spaces around it are allowed")
+
+  // Caution: **Test the round trip for a float too.** The writer's digits and the reader's
+  // rounding are one contract; changing only one breaks the round trip. Tested at default and 17.
+  fvals: F64[_] = ::{ 0.0, 1.0, -1.0, 0.5, 0.1, 0.3, -0.0025, 123456789.123456789, 1.0e10, 1.0e-5 }
+  for fv in fvals
+    b.clear().s("\{fv:.17\}")
+    fgot: = b.slice().to_f64() catch
+      fallback -999.0
+    assert(fgot == fv, "the float string written reads back")
+    // The default format (the shortest form of `\{x\}`) round-trips too.
+    b.clear().s("\{fv\}")
+    sgot: = b.slice().to_f64() catch
+      fallback -999.0
+    assert(sgot == fv, "the default format reads back")
+
+  verdict
+    .pass("Integers round-trip to their smallest and largest, floats at 17 digits, and what is out \
+      of range or not a number is refused.")
+
+fn test_float_bits() //< reading an F32's bits and back is a copy, not a conversion
+  //<
+  //< **Include the patterns arithmetic would change**: -0, a subnormal and a NaN's payload
+  //< survive only if the bits are copied.
+  verdict.start("[bignat] an F32's bits and back test...")
+  assert(bignat.f32_from_bits(0x3F800000U32) == 1.0F32, "0x3F800000 is 1.0")
+  assert(bignat.f32_from_bits(0xC0000000U32) == -2.0F32, "0xC0000000 is -2.0")
+  assert(bignat.f32_to_bits(0.1F32) == 0x3DCCCCCDU32, "0.1 is 0x3DCCCCCD")
+  patterns: U32[_] = ::{ 0U32, 0x80000000U32, 0x00000001U32, 0x7F800000U32, 0xFF800000U32,
+    0x7FC00001U32, 0x3F800000U32 }
+  for p in patterns
+    assert(bignat.f32_to_bits(bignat.f32_from_bits(p)) == p, "an F32's bits come back unchanged")
+  verdict
+    .pass("Known patterns read as their values, and -0, a subnormal, infinities and a NaN's payload \
+      come back bit for bit.")
+
+fn test_arena_text(arena: Arena$@) //< a writer that allocates and returns the result
+  //<
+  //< What is written lives as long as the arena, and take() releases the builder.
+  //< Caution: **Test that it cannot cross arenas.** A builder that does not remember its arena
+  //< copies into the wrong one.
+  verdict.start("[str] a write target that allocates and returns (arena.text) test...")
+  i: = 3
+  name: = arena.text().s("layer.\{i\}.weight").take()
+  assert(name.equals("layer.3.weight"),
+    "a chain with interpolation in it becomes a string in one expression")
+  // Building one text after another does not break the earlier one (the builder is not reused).
+  a: = arena.text().s("a\{i\}").take()
+  b: = arena.text().s("b\{i + 1\}").take()
+  assert(a.equals("a3") && b.equals("b4"), "strings built one after another both stay")
+  // The empty case works too.
+  assert(arena.text().take().len == 0, "length 0 when nothing is written")
+  verdict.pass("It stays for the arena's lifetime, and two of them do not break each other.")
+
+// ==========================================
+// A Writer that writes into the caller's memory.
+// ==========================================
+
+fn test_buf_writer() //<
+  //< That Buf_writer, the writer that allocates nothing, works when full and when reused
+  //<
+  //< Caution: **Always test the overflow case**, or a writer that does not count drops passes.
+  //< **Test reuse as well**: a clear() keeping the drop record reports "overflowing" from then on.
+  verdict.start("[str] Buf_writer (a write target that does not allocate) test...")
+  n: = 7
+  // The buffer needs `$`; without it the C declaration gains a `const`, and the write goes to
+  // read-only memory.
+  $buf: U8[32] = ::{}
+  $w: = Buf_writer.new(U8$[]::buf)
+  written: = w.s("n=\{n\}").slice()
+  assert(written.equals("n=7"),
+    "slice() can be called at the end of a chain with interpolation in it")
+  assert(!w.overflowed(), "nothing overflows when it all fits")
+  assert(w.len == 3, "it advances by just what was written")
+
+  // A string longer than the buffer writes what fits and drops the rest.
+  $small: U8[4] = ::{}
+  $v: = Buf_writer.new(U8$[]::small)
+  assert(v.s("0123456789").slice().equals("0123"), "it writes what fits")
+  assert(v.overflowed(), "it is known when something was dropped")
+  // The one-byte-at-a-time method counts the same way.
+  assert(!v.clear().overflowed(), "clear() wipes the record of what was dropped too")
+  v.c('a').c('b').c('c').c('d').c('e')
+  assert(v.slice().equals("abcd") && v.overflowed(), "c() counts an overflow too")
+  verdict.pass("The case that fits, the case that overflows, and reuse are all confirmed.")

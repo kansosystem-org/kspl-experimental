@@ -1,0 +1,693 @@
+import "kspage/lay/caret"
+import "kspage/lay/flow"
+import "kspage/lay/page" { Page }
+import "kspage/model/doc" { Doc }
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/paint"
+import "kspage/model/run"
+import "kspage/model/style" + { Arrange, Sheet }
+import "kspage/tests/base"
+import "kspage/write/edit"
+import "kspage/write/shape"
+import "kspage/write/typing"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// kspage: checks applying a style, and changing a style itself (a golden test).
+//
+// **The metrics are fixed (`kspage/model/fixed_font`)**: em 16px, ASCII 8px, anything else 16px.
+// One inline has one style, so applying one splits the inline; changing one style changes every
+// place that uses that name.
+// ==========================================
+
+priv fn runs_of(d: Doc$@): List<|run.Inline$@|>$@ //<
+  //< One body block, and the list of inlines inside it
+  return d.blocks.get(0).inlines
+
+priv fn run_text(d: Doc$@, i: Sz): U8[]
+  return runs_of(d).get(i).text()
+
+priv fn run_style(d: Doc$@, i: Sz): U8[]
+  return runs_of(d).get(i).style
+
+fn test_a_style_splits_the_run_at_the_selection() //<
+  //< The inline splits at the ends of the selection, and the style applies only to its middle
+  verdict.start("[kspage/edit] a style parting the run at what was chosen test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("abcdef")
+  ed: = edit.new_editor(d)
+  // It selects "cd".
+  ed.caret = caret.at(n, 2)
+  ed.caret.inline = n
+  ed.caret.offset = 4
+
+  assert(ed.set_style("strong"), "it was laid on")
+  assert(runs_of(d).len == 3, "the run parts into three")
+  assert(run_text(d, 0).equals("ab") && run_style(d, 0).equals(""), "the front stays the parent's")
+  assert(run_text(d, 1).equals("cd") && run_style(d, 1).equals("strong"),
+    "it lies on what was chosen")
+  assert(run_text(d, 2).equals("ef") && run_style(d, 2).equals(""),
+    "the part after it stays the parent's too")
+  verdict.pass("a style parts the run at the ends of the range chosen and lies on it.")
+
+fn test_clearing_a_style_merges_the_runs_back() //<
+  //< Apply it and remove it and the inline goes back to one
+  //<
+  //< Not joined, the inlines would multiply at every click.
+  verdict.start("[kspage/edit] the runs coming back together when it is taken off test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("abcdef")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 2)
+  ed.caret.offset = 4
+  ed.set_style("strong")
+  assert(runs_of(d).len == 3, "for a moment it is three")
+
+  // The middle inline is selected whole again and the style removed.
+  mid: = runs_of(d).get(1)
+  ed.caret = caret.at(mid, 0)
+  ed.caret.offset = mid.text().len
+  assert(ed.set_style(""), "it was taken off")
+  assert(runs_of(d).len == 1, "the run comes back to one")
+  assert(run_text(d, 0).equals("abcdef"), "the text is as it was")
+  verdict.pass("neighbouring runs of the same style come together into one.")
+
+fn test_a_style_undoes_in_one_step() //<
+  //< Splitting, applying and joining are all undone in one step
+  verdict.start("[kspage/edit] a style being put back in one test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("abcdef")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 2)
+  ed.caret.offset = 4
+  ed.set_style("strong")
+
+  assert(ed.undo(), "it can be put back in one")
+  assert(runs_of(d).len == 1, "the run that parted returns")
+  assert(run_text(d, 0).equals("abcdef"), "the text returns too")
+  assert(run_style(d, 0).equals(""), "the style returns too")
+  assert(ed.redo() && runs_of(d).len == 3, "done again, it parts afresh")
+  assert(run_style(d, 1).equals("strong"), "the style lies on it afresh too")
+  verdict.pass("a style puts the parting, the laying on and the coming together back in one.")
+
+fn test_without_a_selection_the_whole_run_takes_the_style() //<
+  //< With nothing selected, it applies to the whole inline the cursor is in
+  verdict.start("[kspage/edit] laying it on with nothing chosen taking the whole run test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  body: = d.add_block("body")
+  body.add_text("abc")
+  second: = body.add_text("def", "em")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(second, 1)
+
+  assert(ed.set_style("strong"), "it was laid on")
+  assert(runs_of(d).len == 2, "the run does not part")
+  assert(run_style(d, 1).equals("strong"), "it lies on the whole run it stands in")
+  assert(run_style(d, 0).equals(""), "the run beside does not move")
+  verdict.pass("with nothing chosen, it lies on the whole run it stands in.")
+
+fn test_a_run_with_a_formula_is_not_split() //< an inline holding a formula is not split
+  //<
+  //< Split, the second half would drop out of the next recalculation and keep an old value.
+  verdict.start("[kspage/edit] a run holding a formula not being parted test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  body: = d.add_block("body")
+  n: = body.add_text("=1+1")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 1)
+  ed.caret.offset = 3
+
+  assert(ed.set_style("strong"), "it was laid on")
+  assert(runs_of(d).len == 1, "the run does not part")
+  assert(run_style(d, 0).equals("strong"), "it lies on the whole")
+  assert(runs_of(d).get(0).text().equals("=1+1"), "the formula is left")
+  verdict.pass("a run holding a formula is not parted, and it lies on the whole.")
+
+fn test_a_style_crosses_paragraphs() //< it applies to a selection across paragraphs too
+  verdict.start("[kspage/edit] a style crossing the paragraphs test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  first: = d.add_block("body").add_text("abcd")
+  next: = d.add_block("body").add_text("efgh")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(first, 2)
+  ed.caret.inline = next
+  ed.caret.offset = 2
+
+  assert(ed.set_style("strong"), "it was laid on")
+  head: = d.blocks.get(0).inlines
+  tail: = d.blocks.get(1).inlines
+  head_split: = head.len == 2 && head.get(1).style.equals("strong")
+  assert(head_split, "the paragraph in front takes it on its back half")
+  tail_split: = tail.len == 2 && tail.get(0).style.equals("strong")
+  assert(tail_split, "the paragraph beyond takes it on its front half")
+  assert(tail.get(1).style.equals(""), "what was not chosen does not move")
+  verdict.pass("a style lies on a choice across the paragraphs too.")
+
+fn test_the_caret_follows_a_merged_run() //<
+  //< A cursor that pointed at a joined inline follows it to where it was joined
+  verdict.start("[kspage/edit] the cursor following where it was joined test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  body: = d.add_block("body")
+  body.add_text("ab")
+  second: = body.add_text("cd", "strong")
+  ed: = edit.new_editor(d)
+  // The second inline's style is removed, so it joins the first.
+  ed.caret = caret.at(second, 0)
+  ed.caret.offset = 2
+
+  assert(ed.set_style(""), "it was taken off")
+  assert(runs_of(d).len == 1, "the runs come together into one")
+  // Left pointing at the removed inline, typing would go into the document but show nowhere.
+  assert(ed.caret.inline == runs_of(d).get(0), "the cursor points at where they came together")
+  assert(ed.caret.anchor_offset == 2 && ed.caret.offset == 4, "the range chosen follows too")
+  ed.insert("X")
+  assert(run_text(d, 0).equals("abX"), "what was typed swaps out the range chosen")
+  verdict.pass("the cursor that pointed at a run brought together moves to where it was joined.")
+
+// ---- applying a color to the selection ----
+
+fn test_painting_a_span_makes_one_style_and_applies_it() //<
+  //< A color applied without a name creates one style named from the settings, and applies it
+  verdict.start("[kspage/edit] laying a decoration on what was chosen test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("abcdef")
+  sheet: = Sheet.new(base.root_font(), arena)
+  ed: = edit.new_editor(d)
+  // It selects "cd".
+  ed.caret = caret.at(n, 2)
+  ed.caret.offset = 4
+  $red: paint.Ink = paint.inherit_ink()
+  red.color = Option<|U32|>.some(0xff0000U32)
+
+  assert(ed.paint_span(sheet, red, paint.inherit_accent()), "it was laid on")
+  assert(sheet.styles.len == 1, "one style comes of it")
+  // The same settings give the same name.
+  assert(sheet.styles.get(0).name.equals("decoration-cff0000"),
+    "the name is built out of the naming")
+  assert(runs_of(d).len == 3, "the run parts at the ends chosen")
+  assert(run_style(d, 1).equals("decoration-cff0000"), "it lies on what was chosen alone")
+  assert(run_style(d, 0).equals("") && run_style(d, 2).equals(""), "outside stays the parent's")
+
+  // **Applying the same settings again does not add styles.**
+  ed.caret = caret.at(runs_of(d).get(2), 0)
+  ed.caret.offset = 2
+  assert(ed.paint_span(sheet, red, paint.inherit_accent()), "it can be laid on again")
+  assert(sheet.styles.len == 1, "the styles do not grow")
+
+  // **One undo must take it back** (creating the style and applying it are the same step).
+  assert(ed.undo(), "it can be put back in one")
+  assert(sheet.styles.len == 1, "put back, only what was added comes off")
+  assert(ed.undo(), "it can be put back once more")
+  assert(sheet.styles.len == 0, "the sheet of styles returns too")
+  assert(runs_of(d).len == 1, "the run comes back to one too")
+  verdict.pass("a decoration lies on it as a style whose name is built out of the naming.")
+
+fn test_painting_nothing_clears_the_look() //<
+  //< With nothing set at all, the applied color is removed
+  verdict.start("[kspage/edit] taking a decoration off test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("abcd")
+  sheet: = Sheet.new(base.root_font(), arena)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 0)
+  ed.caret.offset = 4
+  $both: paint.Ink = paint.inherit_ink()
+  both.background = Option<|U32|>.some(0x00ff00U32)
+  both.underline = Option<|Bool|>.some(true)
+  assert(ed.paint_span(sheet, both, paint.inherit_accent()), "it was laid on")
+  assert(run_style(d, 0).equals("decoration-b00ff00-u1"),
+    "the name stands in the order of the fields")
+
+  // It is selected again, and applied again with nothing set.
+  ed.caret = caret.at(runs_of(d).get(0), 0)
+  ed.caret.offset = 4
+  assert(ed.paint_span(sheet, paint.inherit_ink(), paint.inherit_accent()), "it was taken off")
+  assert(run_style(d, 0).equals(""), "the style's name goes back to empty")
+  verdict.pass("with nothing named, the decoration comes off.")
+
+fn test_bold_and_italic_apply_without_a_name() //<
+  //< Bold and italic can be applied without a name
+  //<
+  //< **The weight and the italic change the metrics**, so they go into the style's font part.
+  //< **`Not so` is a setting too** (an inline can be made not bold inside a bold paragraph).
+  verdict.start("[kspage/style] laying bold and italic on test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("abcd")
+  sheet: = Sheet.new(base.root_font(), arena)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 0)
+  ed.caret.offset = 4
+
+  $bold: paint.Accent = paint.inherit_accent()
+  bold.bold = Option<|Bool|>.some(true)
+  assert(ed.paint_span(sheet, paint.inherit_ink(), bold), "bold could be laid on")
+  assert(run_style(d, 0).equals("decoration-w1"), "the name carries on behind the decoration")
+  // The style holds the weight; the typeface and the size are not touched.
+  switch sheet.find("decoration-w1") case .some(made)
+    switch made.font.weight case .some(v)
+      assert(v == paint.bold_weight, "the weight of the bold side goes in")
+    case .none
+      assert(false, "the weight's naming goes in")
+    if _f: = made.font.family
+      assert(false, "the face is not touched")
+  case .none
+    assert(false, "a style of that name comes of it")
+
+  // Applied together with a color, both go into one name, fields in their order.
+  ed.caret = caret.at(runs_of(d).get(0), 0)
+  ed.caret.offset = 4
+  $red: paint.Ink = paint.inherit_ink()
+  red.color = Option<|U32|>.some(0xff0000U32)
+  $slant: paint.Accent = paint.inherit_accent()
+  slant.italic = Option<|Bool|>.some(true)
+  assert(ed.paint_span(sheet, red, slant), "it can be laid on together with a decoration")
+  assert(run_style(d, 0).equals("decoration-cff0000-i1"),
+    "the strengthening stands behind the decoration")
+
+  // `Not bold` is a setting too, distinct from nothing set.
+  ed.caret = caret.at(runs_of(d).get(0), 0)
+  ed.caret.offset = 4
+  $plain: paint.Accent = paint.inherit_accent()
+  plain.bold = Option<|Bool|>.some(false)
+  assert(ed.paint_span(sheet, paint.inherit_ink(), plain), "not-bold can be laid on")
+  assert(run_style(d, 0).equals("decoration-w0"), "the not-so side has a name of its own too")
+  switch sheet.find("decoration-w0") case .some(made)
+    switch made.font.weight case .some(v)
+      assert(v == paint.plain_weight, "the weight of the thin side goes in")
+    case .none
+      assert(false, "the weight's naming goes in")
+  case .none
+    assert(false, "a style of that name comes of it")
+  verdict.pass("both bold and italic lie on it as a style whose name is built out of the naming.")
+
+// ---- changing a style itself ----
+
+priv fn sheet_with(name: U8[], arena: Arena$@): style.Sheet$@
+  sheet: = Sheet.new(base.root_font(), arena)
+  s: = sheet.add(name, paint.inherit_all())
+  s.font.size_px = Option<|F32|>.some(28.0)
+  return sheet
+
+fn test_changing_a_style_moves_everything_with_that_name() //<
+  //< Change one style and every place that uses that name changes
+  verdict.start("[kspage/edit] changing a style moving everything of that name test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("h1").add_text("a")
+  d.add_block("h1").add_text("b")
+  sheet: = sheet_with("h1", arena)
+  ed: = edit.new_editor(d)
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(base.near(page.boxes.get(0).font.size_px, 28.0), "the size it had")
+  h1: = sheet.find("h1").unwrap_or(null)
+  $fresh: style.Style = h1$
+  fresh.font.size_px = Option<|F32|>.some(40.0)
+  ed.set_look(h1, fresh)
+
+  after: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(base.near(after.boxes.get(0).font.size_px, 40.0), "the first comes out the new size")
+  assert(base.near(after.boxes.get(1).font.size_px, 40.0), "the second moves by the same")
+  // **Applying the same settings again records nothing**, or an undo that restores nothing appears
+  // (a click that changes one field goes through the untouched fields' entry points).
+  ed.set_look(h1, h1$)
+  assert(ed.undo(), "in one step it returns to the size it had")
+  again: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(base.near(again.boxes.get(0).font.size_px, 28.0),
+    "where it goes back to is before the changing")
+  verdict.pass("a style is shared by name, so changing it moves them all.")
+
+fn test_asking_whether_a_look_changed_takes_no_room() //<
+  //< Applying the same look or the same paper again leaves the document's arena as it was
+  //<
+  //< Caution: **Compare in an arena of its own.** In the document's, every press on the ribbon
+  //< grows an arena that is never given back (on the page, a fixed one).
+  verdict.start("[kspage/edit] asking whether a look changed taking no room test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("h1").add_text("a")
+  sheet: = sheet_with("h1", arena)
+  ed: = edit.new_editor(d)
+  h1: = sheet.find("h1").unwrap_or(null)
+  before: = arena.get_total_used()
+  ed.set_look(h1, h1$)
+  ed.set_paper(sheet, sheet.paper)
+  assert(arena.get_total_used() == before, "the document's arena does not grow")
+  verdict.pass("asking whether a look or the paper changed takes nothing from the document.")
+
+// ---- color ----
+
+fn test_colors_are_inherited_like_the_font() //<
+  //< A color is inherited as the font is, and the inline's setting beats the paragraph's
+  verdict.start("[kspage/style] a colour being inherited as the font is test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  b: = d.add_block("h1")
+  b.add_text("a")
+  b.add_text("b", "mark")
+  sheet: = sheet_with("h1", arena)
+  h1: = sheet.find("h1").unwrap_or(null)
+  h1.ink.color = Option<|U32|>.some(0xff0000U32)
+  h1.ink.background = Option<|U32|>.some(0x00ff00U32)
+  mark: = sheet.add("mark", paint.inherit_all())
+  // Only the text color is set; the background is inherited from the paragraph.
+  mark.ink.color = Option<|U32|>.some(0x0000ffU32)
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(color_is(page, 0, 0xff0000U32), "the paragraph's colour reaches the text")
+  assert(back_is(page, 0, 0x00ff00U32), "the ground's colour reaches it too")
+  assert(color_is(page, 1, 0x0000ffU32), "the run's naming beats the paragraph's")
+  // Without inheritance, the paragraph's background would be missing inside the inline.
+  assert(back_is(page, 1, 0x00ff00U32), "a ground not named is inherited from the paragraph")
+  verdict.pass("a colour is inherited, and the run's naming beats the parent's.")
+
+fn test_lines_are_inherited_and_can_be_turned_off() //<
+  //< The underline and the strikethrough are inherited as a color is
+  //<
+  //< `false` removes the parent's line.
+  verdict.start("[kspage/style] the underline being inherited, and being rubbed out test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  b: = d.add_block("h1")
+  b.add_text("a")
+  b.add_text("b", "plain")
+  b.add_text("c", "gone")
+  sheet: = sheet_with("h1", arena)
+  h1: = sheet.find("h1").unwrap_or(null)
+  h1.ink.underline = Option<|Bool|>.some(true)
+  // **`false` means "do not draw"**; stored as nothing set, the parent's line could not be removed.
+  sheet.add("plain", paint.inherit_all()).ink.underline = Option<|Bool|>.some(false)
+  sheet.add("gone", paint.inherit_all()).ink.strike = Option<|Bool|>.some(true)
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(paint.drawn(page.boxes.get(0).ink.underline), "the paragraph's underline reaches the text")
+  assert(!paint.drawn(page.boxes.get(1).ink.underline), "the underline can be rubbed out on a run")
+  // A line is not part of the font, so the width and the height do not change.
+  assert(base.near(page.boxes.get(0).rect.w, page.boxes.get(1).rect.w),
+    "a line does not change the width")
+  assert(paint.drawn(page.boxes.get(2).ink.strike), "the strike-through reaches it too")
+  // An inline that set the strikethrough still inherits the underline from the parent.
+  kept: = paint.drawn(page.boxes.get(2).ink.underline)
+  assert(kept, "a line not named is inherited from the parent")
+  verdict.pass("a line is inherited as a colour is, and can be rubbed out by naming it.")
+
+priv fn color_is(page: Page$@, i: Sz, want: U32): Bool
+  if v: = page.boxes.get(i).ink.color
+    return v == want
+  return false
+
+priv fn back_is(page: Page$@, i: Sz, want: U32): Bool
+  if v: = page.boxes.get(i).ink.background
+    return v == want
+  return false
+
+fn test_an_unset_color_stays_unset_in_the_box() //<
+  //< An unset color reaches the box as `not set`
+  //<
+  //< Filled with black, it would be unreadable where the screen is dark.
+  verdict.start("[kspage/style] a colour not named reaching the box unnamed test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("a")
+  page: = flow.layout(d, Sheet.new(base.root_font(), arena), fixed.make(), 300.0, arena)
+  switch page.boxes.get(0).ink.color case .none {} case .some(_v)
+    assert(false, "a text colour not named is unnamed")
+  switch page.boxes.get(0).ink.background case .none {} case .some(_v)
+    assert(false, "a ground not named is unnamed too")
+  verdict.pass("a colour not named reaches unnamed, not filled with what stands.")
+
+fn test_a_color_reads_back_from_its_spelling() //< a color's text survives the round trip
+  //<
+  //< **A text that is not six hex digits is `not set`** (it is not let through as black).
+  verdict.start("[kspage/style] a colour's text going round the trip test...")
+  $sb: = Str_builder.new()
+  defer sb.free()
+  paint.color_into(0xff8000U32, sb@)
+  assert(sb.slice().equals("#ff8000"), "it is written in six lower-case figures")
+  sb.clear()
+  // A leading 0 is kept; dropped, it would become an unreadable text like `#0`.
+  paint.color_into(0x000010U32, sb@)
+  assert(sb.slice().equals("#000010"), "the 0 in the top figure is written too")
+  assert(read_color("#ff8000") == 0xff8000U32, "it comes back from the text to the colour it was")
+  assert(read_color("ff8000") == 0xff8000U32, "it reads with no `#` too")
+  assert(is_unset("#ff80"), "a text of too few figures is unnamed")
+  assert(is_unset("#gg8000"), "a text that is not hexadecimal is unnamed too")
+  assert(is_unset(""), "an empty text is unnamed too")
+  verdict.pass("a colour is written in six figures, and a text it cannot read becomes unnamed.")
+
+priv fn read_color(text: U8[]): U32
+  if v: = paint.color_from(text)
+    return v
+  return 0xffffffffU32
+
+priv fn is_unset(text: U8[]): Bool
+  switch paint.color_from(text) case .none
+    return true
+  case .some(_v)
+    return false
+
+fn test_a_style_field_can_go_back_to_unspecified() //<
+  //< A field reverts to `not set`; reverted to 0, a value would appear where it was inherited
+  verdict.start("[kspage/edit] a style being put back to unnamed test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("h1").add_text("a")
+  sheet: = sheet_with("h1", arena)
+  ed: = edit.new_editor(d)
+
+  bare: = sheet.find("h1").unwrap_or(null)
+  $plain: style.Style = bare$
+  plain.font = paint.inherit_all()
+  ed.set_look(bare, plain)
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  // The parent's (the root's) size is 16px.
+  assert(base.near(page.boxes.get(0).font.size_px, 16.0), "it returns to the parent's size")
+  verdict.pass("put back to unnamed, it is inherited from the parent.")
+
+fn test_a_style_change_undoes_in_one_step() //< one undo restores what was changed
+  //<
+  //< The style table is saved with the document.
+  verdict.start("[kspage/edit] a style's changing being put back in one test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("h1").add_text("a")
+  sheet: = sheet_with("h1", arena)
+  ed: = edit.new_editor(d)
+
+  head: = sheet.find("h1").unwrap_or(null)
+  $fresh: style.Style = head$
+  fresh.font.weight = Option<|U16|>.some(700U16)
+  ed.set_look(head, fresh)
+  bold: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(bold.boxes.get(0).font.weight == 700U16, "it comes out bold")
+
+  assert(ed.undo(), "it can be put back in one")
+  back: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(back.boxes.get(0).font.weight == 400U16, "it returns to the weight it had")
+  assert(ed.redo() && ed.undo(), "done again, it can be put back")
+  verdict.pass("a style's changing is put back in one too.")
+
+fn test_a_new_style_can_be_added_once() //< a style can be created
+  //<
+  //< The same name is not created twice (the later one could never be looked up).
+  verdict.start("[kspage/edit] a style being made test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = sheet_with("h1", arena)
+  ed: = edit.new_editor(d)
+
+  made: = ed.add_style(sheet, "note", Arrange.flow).unwrap_or(null)
+  assert(made != null && made.name.equals("note"), "the style with the name given comes back")
+  assert(sheet.styles.len == 2, "the sheet grows by one")
+  again: = ed.add_style(sheet, "note", Arrange.flow).unwrap_or(null)
+  assert(again == made, "with the same name the one that is there comes back")
+  assert(sheet.styles.len == 2, "it does not come to two")
+
+  assert(ed.undo(), "it can be put back in one")
+  assert(sheet.styles.len == 1, "the style made comes off the sheet")
+  assert(ed.redo() && sheet.styles.len == 2, "done again, it comes back")
+  verdict.pass("a style can be made, and put back in one.")
+
+fn test_a_typed_style_name_holding_a_space_is_refused() //<
+  //< The function where a person names a style rejects a name holding whitespace
+  //<
+  //< **Only that function rejects it**: `Sheet.add` still accepts one, since a name read from a
+  //< text goes into the table as it is and the export folds it (`kspage/docs/DESIGN.md`'s "The
+  //< mapping into HTML").
+  verdict.start("[kspage/edit] a style's name holding a space being turned away test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = sheet_with("h1", arena)
+  ed: = edit.new_editor(d)
+
+  spaced: = ed.add_style(sheet, "page break", Arrange.flow).unwrap_or(null)
+  assert(spaced == null, "a name with a space in it comes back as nothing")
+  tabbed: = ed.add_style(sheet, "page\tbreak", Arrange.flow).unwrap_or(null)
+  assert(tabbed == null, "a name with a tab in it comes back as nothing too")
+  assert(sheet.styles.len == 1, "neither is left on the sheet")
+  hyphened: = ed.add_style(sheet, "page-break", Arrange.flow).unwrap_or(null)
+  assert(hyphened != null, "the same name joined with a hyphen goes in")
+  assert(sheet.styles.len == 2, "and the sheet grows by that one")
+
+  // Caution: **The model itself does not reject it.** Moved down there, a loaded document with such
+  // a name would silently refuse every insertion.
+  sheet.add("read in", paint.inherit_all())
+  assert(sheet.find("read in").unwrap_or(null) != null, "a name out of a text still goes on")
+  verdict
+    .pass("the entry point a person names a style at turns whitespace away, and the model does not.")
+
+fn test_a_style_keeps_the_arrangement_it_was_made_with() //<
+  //< The arrangement is set when the style is created and at no other time
+  verdict.start("[kspage/edit] the arrangement being fixed when it is made test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = sheet_with("h1", arena)
+  ed: = edit.new_editor(d)
+
+  grid: = ed.add_style(sheet, "table", Arrange.grid).unwrap_or(null)
+  assert(grid != null, "a grid style can be made")
+  same: = ed.add_style(sheet, "table", Arrange.grid).unwrap_or(null)
+  assert(same == grid, "with the same arrangement the one that is there comes back")
+  // Another arrangement is refused: every place using that name would be arranged another way.
+  other: = ed.add_style(sheet, "table", Arrange.absolute).unwrap_or(null)
+  assert(other == null, "with another arrangement nothing comes back")
+  assert(sheet.styles.len == 2, "no second one is made either")
+  verdict.pass("the arrangement is fixed when it is made, and does not change later.")
+priv fn run_href(d: Doc$@, i: Sz): U8[]
+  return runs_of(d).get(i).href
+
+fn test_a_link_marks_the_span_and_paints_it() //< the selection becomes a link
+  //<
+  //< **The target and the look are applied in the same step.**
+  verdict.start("[kspage/edit] making what was chosen a link test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("abcdef")
+  sheet: = Sheet.new(base.root_font(), arena)
+  ed: = edit.new_editor(d)
+  // It selects "cd".
+  ed.caret = caret.at(n, 2)
+  ed.caret.offset = 4
+
+  assert(ed.link_span(sheet, "https://example.com/"), "it was laid on")
+  assert(runs_of(d).len == 3, "the run parts at the ends chosen")
+  assert(run_href(d, 1).equals("https://example.com/"),
+    "the destination goes on what was chosen alone")
+  assert(run_href(d, 0).len == 0 && run_href(d, 2).len == 0, "no destination goes on outside it")
+  // The look is a color style. **The target itself is not part of the name** (styles with the same
+  // look are shared).
+  assert(run_style(d, 1).equals("decoration-c0000ee-u1"), "a blue underlined decoration lies on it")
+
+  // **One undo takes it back** (in two steps, merely blue text could be left).
+  assert(ed.undo(), "it can be put back in one")
+  assert(runs_of(d).len == 1, "the run comes back to one")
+  assert(run_href(d, 0).len == 0 && run_style(d, 0).len == 0,
+    "neither the destination nor the look is left")
+  verdict.pass("a link lays the destination and the look on in one step, and comes off in one.")
+
+fn test_an_empty_destination_clears_the_link() //< with an empty target the link is removed
+  //<
+  //< **The look is restored with it.**
+  verdict.start("[kspage/edit] taking a link off test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("abcd")
+  sheet: = Sheet.new(base.root_font(), arena)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 0)
+  ed.caret.offset = 4
+  assert(ed.link_span(sheet, "https://example.com/"), "it was laid on")
+
+  ed.caret = caret.at(runs_of(d).get(0), 0)
+  ed.caret.offset = 4
+  assert(ed.link_span(sheet, ""), "it was taken off")
+  assert(run_href(d, 0).len == 0, "the destination goes")
+  assert(run_style(d, 0).len == 0, "the look goes back to the parent's too")
+  verdict.pass("with an empty destination, both the destination and the look come off.")
+
+fn test_neighbouring_links_with_different_destinations_stay_apart() //<
+  //< Neighbouring inlines with different targets are not joined
+  //<
+  //< Joined, two links would become one target.
+  verdict.start("[kspage/edit] runs of differing destinations not coming together test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("abcd")
+  sheet: = Sheet.new(base.root_font(), arena)
+  ed: = edit.new_editor(d)
+  // The first half gets the first target.
+  ed.caret = caret.at(n, 0)
+  ed.caret.offset = 2
+  assert(ed.link_span(sheet, "https://example.com/a"), "it was laid on the front half")
+  // The second half gets another target; the look is the same style, so only that separates them.
+  ed.caret = caret.at(runs_of(d).get(1), 0)
+  ed.caret.offset = 2
+  assert(ed.link_span(sheet, "https://example.com/b"), "it was laid on the back half")
+
+  assert(runs_of(d).len == 2, "neighbouring or not, they do not become one")
+  first: = run_href(d, 0)
+  assert(first.equals("https://example.com/a"), "the front half's destination is as it was")
+  assert(run_href(d, 1).equals("https://example.com/b"),
+    "the back half points at another destination")
+  verdict.pass("where the destinations differ, neighbouring runs do not come together.")
+fn test_a_run_carrying_a_note_is_not_merged_away() //<
+  //< An inline with a note is not joined either
+  //<
+  //< The mark appears after that inline's text, so joining would move the mark.
+  verdict.start("[kspage/edit] a run carrying a note not coming together test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("abcd")
+  ed: = edit.new_editor(d)
+  // The note goes after "ab", and the inline splits there (the mark's position).
+  ed.caret = caret.at(n, 2)
+  assert(ed.set_note("the note's text"), "the note could be put on")
+  assert(runs_of(d).len == 2, "the run parts where the note is put on")
+
+  // Applied and removed: **removing goes through the joining again**, so a moving note would show.
+  ed.caret = caret.at(runs_of(d).get(0), 0)
+  ed.caret.offset = 2
+  assert(ed.set_style("strong"), "it was laid on")
+  assert(ed.set_style(""), "it was taken off")
+
+  assert(runs_of(d).len == 2, "a run carrying a note does not come together with the one beside")
+  assert(run_text(d, 0).equals("ab"), "the mark's place is the text's break as it was")
+  assert(runs_of(d).get(0).note.equals("the note's text"), "the note is left on that run")
+  verdict.pass("a run carrying a note does not come together, and the mark's place does not move.")

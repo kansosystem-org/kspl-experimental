@@ -1,0 +1,189 @@
+//< The dataflow analysis, statement by statement
+//<
+//< Tracking expressions and bindings is in `sema/flow/track.kspls`; this file handles only
+//< **branching and merging**, per statement kind. How to merge (intersection or union) is decided
+//< by `Df_set.merge_is_intersect`.
+//< Caution: **Every path must set its state at the end**, or the merge includes a path that should
+//< not have been taken.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/sema/decl/eval" as sema_decl_eval
+import "ksplc/sema/flow/track" as sema_flow_track
+import "std/ds" { List }
+import "std/str"
+
+impl Ast_node
+  fn df_stmt_if(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@)
+    cond: = r.get_if_cond()
+    cond.analyze_df_node(c, state)
+    then_block: = r.get_if_then_block()
+    else_block: = r.get_if_else_block()
+
+    state_then: = state.clone()
+    then_block.analyze_df_node(c, state_then)
+
+    state_else: = state.clone()
+    if else_block != null && else_block.kind_id != .k_empty
+      else_block.analyze_df_node(c, state_else)
+
+    // **If the condition is constant, take only the taken branch's state.** infer_if_stmt in
+    // sema/body/stmt.kspls emptied the other branch; intersecting with it would wrongly reject
+    // `if true { a = 0; } else { a = 1; }` as uninitialized.
+    if v: = c.sema.try_eval_constexpr(cond)
+      state.apply_merged_state(state_then if v != 0 else state_else)
+      return
+
+    state.apply_merged_state(sema_flow_track.intersect_states(state_then, state_else))
+
+  fn bind_pattern_payload(r: Self$@, c: sema_flow_track.Df_ctx$@,
+    case_state: sema_flow_track.Df_state$@, bound_names: List<|U8[]|>$@, payload_start: Sz) //<
+      //< Registers the identifiers appearing in `case .A(x)`'s payload as locals of this case.
+      //<
+      //< Caution: **Use `bound_names` to avoid registering twice**, or `case .A(x), .B(x)` gets the
+      //< unused diagnostic twice.
+    for $pidx: = payload_start; pidx < r.children.len; pidx += 1
+      pchild: = r.get_child(pidx)
+      if pchild.kind_id != .k_identifier
+        continue
+      $is_dup: = false
+      for bound_name in bound_names
+        if bound_name.equals(pchild.text)
+          is_dup = true
+          break
+      if is_dup
+        continue
+      bound_names.push(pchild.text)
+      c.locals
+        .push(sema_flow_track.Local_state::{ .node = pchild, .is_read = false,
+        .is_reassigned = false, .is_mutated = false })
+      case_state.add(pchild)
+
+  fn process_df_match_case(r: Self$@, c: sema_flow_track.Df_ctx$@,
+    state: sema_flow_track.Df_state$@, start_idx: Sz): sema_flow_track.Df_state$@
+    $block_node: Ast_node$@ = null
+    case_state: = state.clone()
+    // one registration for `case .A(x), .B(x)`
+    bound_names: = List<|U8[]|>.create(base_core.arena)
+
+    for $j: = start_idx; j < r.children.len; j += 1
+      case_child: = r.get_child(j)
+      if case_child.kind_id == .k_stmt_block
+        block_node = case_child
+        break
+      if case_child.is_keyword("case") || case_child.is_keyword("default")
+        break
+      if case_child.kind_id == .k_match_pattern
+        switch case_child.extract_match_variant() case .variant(_v_node, payload_start)
+          case_child.bind_pattern_payload(c, case_state, bound_names, payload_start)
+        default {}
+        case_child.analyze_df_node(c, case_state)
+      else
+        case_child.analyze_df_node(c, case_state)
+    if block_node != null
+      block_node.analyze_df_node(c, case_state)
+    return case_state
+
+  fn df_stmt_match(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@)
+    cond: = r.get_match_cond()
+    cond.analyze_df_node(c, state)
+    $merged_state: sema_flow_track.Df_state$@ = null
+    $has_default: = false
+
+    for i in Range.asc(r.children.len)
+      child: = r.get_child(i)
+      if child.is_keyword("case") || child.is_keyword("default")
+        if child.is_keyword("default")
+          has_default = true
+
+        case_state: = r.process_df_match_case(c, state, i + 1)
+
+        if merged_state == null
+          merged_state = case_state
+        else
+          merged_state = sema_flow_track.intersect_states(merged_state, case_state)
+    if merged_state != null
+      if !has_default
+        merged_state = sema_flow_track.intersect_states(merged_state, state)
+      state.apply_merged_state(merged_state)
+
+  fn df_stmt_labeled_block(r: Self$@, c: sema_flow_track.Df_ctx$@,
+    state: sema_flow_track.Df_state$@) //<
+      //< Walks a labeled block, restoring the reachability from before it afterwards
+      //<
+      //< A `break <label>` can leave the block, so the reachability after it is that from before
+      //< entering, not the inside's "returns on every path".
+    prev_reachable: = state.reachable
+    if r.children.len > 1
+      r.get_labeled_block_inner().analyze_df_node(c, state)
+    state.reachable = prev_reachable
+
+  fn df_stmt_loop(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@)
+    init_node: = r.get_loop_init()
+    cond_node: = r.get_loop_cond()
+    step_node: = r.get_loop_step()
+    block_node: = r.get_loop_block()
+    if init_node != null
+      init_node.analyze_df_node(c, state)
+    loop_state: = state.clone()
+    if cond_node != null
+      cond_node.analyze_df_node(c, loop_state)
+    // step is reachable even if the body "returns or throws on every path" (a break or continue
+    // may reach it), so the reachability after cond is restored first.
+    step_reachable: = loop_state.reachable
+    if block_node != null
+      block_node.analyze_df_node(c, loop_state)
+    loop_state.reachable = step_reachable
+    if step_node != null
+      step_node.analyze_df_node(c, loop_state)
+    // What follows a loop that never ends is unreachable ([W0201]), by the judgement the
+    // missing-return check reads too.
+    if r.is_endless_loop()
+      state.reachable = false
+
+  fn df_stmt_defer(r: Self$@, c: sema_flow_track.Df_ctx$@, _state: sema_flow_track.Df_state$@) //<
+    //< A defer body is not analyzed here
+    //<
+    //< Caution: **It must not be analyzed against the state at registration.** It runs when the
+    //< scope is left, so `b.free();` after `defer b.free()` would pass with zero diagnostics.
+    if def_block: = r.get_defer_block()
+      if c.pending_defers != null
+        c.pending_defers.push(def_block)
+      else
+        // A defer not wrapped in a block (not expected) is analyzed immediately.
+        def_block.analyze_df_node(c, _state)
+
+  fn df_stmt_block_scope(r: Self$@, c: sema_flow_track.Df_ctx$@,
+    state: sema_flow_track.Df_state$@) //<
+      //< Walks the block, then analyzes its defer bodies LIFO against the state at exit
+      //<
+      //< That is the order they run in. `reachable` is set meanwhile (a defer runs even after a
+      //< return).
+    saved: = c.pending_defers
+    $mine: = List<|Ast_node$@|>.new()
+    defer mine.free()
+    c.pending_defers = mine@
+    for child in r.children
+      child.analyze_df_node(c, state)
+    c.pending_defers = saved
+
+    if mine.len == 0
+      return
+    was_reachable: = state.reachable
+    state.reachable = true
+    for $i: = mine.len; i > 0; i -= 1
+      mine.get(i - 1).analyze_df_node(c, state)
+    state.reachable = was_reachable
+
+  fn df_stmt_return_like(r: Self$@, c: sema_flow_track.Df_ctx$@,
+    state: sema_flow_track.Df_state$@)
+    k: = r.kind_id
+    expr: Ast_node$@ =
+      (r.get_return_expr() if k == .k_stmt_return
+      else (r.get_throw_expr() if k == .k_stmt_throw
+      else (r.get_fallback_expr() if k == .k_stmt_fallback else null)))
+
+    if expr != null
+      expr.analyze_df_node(c, state)
+    state.reachable = false

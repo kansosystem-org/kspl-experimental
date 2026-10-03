@@ -1,0 +1,90 @@
+import "kspage/lay/caret"
+import "kspage/lay/flow"
+import "kspage/model/doc" { Block, Doc }
+import "kspage/model/fixed_font" as fixed
+import "kspage/tests/base"
+import "kspage/write/csv"
+import "kspage/write/edit"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// kspage: checks converting between a table and CSV text (a golden test): one quoting rule for
+// reading and writing, rows of equal length, and an insertion undone in one step.
+// ==========================================
+
+priv fn cell_text(t: Block$@, r: Sz, c: Sz): U8[]
+  return t.children.get(r).children.get(c).inlines.get(0).text()
+
+fn test_a_field_with_commas_and_quotes_survives_the_round_trip() //<
+  //< The quoting rule is shared by the reader and the writer
+  //<
+  //< With two rules, it could not read what it wrote itself.
+  verdict.start("[kspage/csv] a fenced field going round test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  src: = "a,\"b,c\",\"d\"\"e\"\n1,2,3\n"
+  $made: Block$@ = null
+  if got: = csv.read_table(src, "table", arena)
+    made = got
+  assert(made != null, "the table builds")
+  assert(made.children.len == 2, "there are two rows")
+  assert(cell_text(made, 0, 1).equals("b,c"), "the parting mark inside a fence is text")
+  assert(cell_text(made, 0, 2).equals("d\"e"), "doubled quotes become one")
+
+  $out: = Str_builder.new()
+  defer out.free()
+  csv.write_table(made, out@, arena)
+  assert(out.slice().equals(src), "written out it goes back to the original text")
+  verdict.pass("a fenced field goes round under the same quoting.")
+
+fn test_short_rows_are_padded_to_the_widest() //< the rows come out as long as the longest row
+  //<
+  //< Not padded, the cell count differs row by row and the column count is undefined.
+  verdict.start("[kspage/csv] short rows coming out even test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  $made: Block$@ = null
+  if got: = csv.read_table("a\nb,c,d\ne,f\n", "table", arena)
+    made = got
+  assert(made != null, "the table builds")
+  assert(made.children.get(0).children.len == 3,
+    "a short row too comes out the length of the longest")
+  assert(cell_text(made, 0, 2).len == 0, "the cells wanting are empty")
+  assert(cell_text(made, 2, 1).equals("f"), "the text of the row behind stays as it was")
+  verdict.pass("the rows come out the length of the longest row.")
+
+fn test_an_empty_source_makes_no_table() //< an empty text makes no table
+  //<
+  //< A table with no rows has no column count.
+  verdict.start("[kspage/csv] an empty text making no table test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  if _got: = csv.read_table("", "table", arena)
+    assert(false, "no table is built from an empty text")
+  verdict.pass("no table is built from an empty text.")
+
+fn test_inserting_a_csv_table_undoes_as_one_step() //<
+  //< It inserts after the paragraph the cursor is in
+  verdict.start("[kspage/csv] inserting a table from CSV test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  n: = d.add_block("body").add_text("here")
+  sheet: = base.grid_sheet(arena)
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(n, 0)
+  assert(ed.insert_csv(page, sheet, "table", "x,y\n1,2\n"), "it inserts")
+  assert(d.blocks.len == 2, "the table goes in behind the paragraph")
+  made: = d.blocks.get(1)
+  assert(made.style.equals("table"), "the grid style is laid on")
+  assert(cell_text(made, 1, 1).equals("2"), "the cells' text goes in")
+  // The cursor is in the first cell (typing can continue right away).
+  head: = made.children.get(0).children.get(0).inlines.get(0)
+  assert(ed.caret.inline == head, "the cursor stands in the first cell")
+  assert(ed.undo(), "it goes back in one")
+  assert(d.blocks.len == 1, "the table comes off whole")
+  verdict.pass("a table inserted from CSV comes off in one undo.")

@@ -1,0 +1,178 @@
+#!/usr/bin/env -S ksplc run
+//< The rules for places, and for whether they may be touched, run as programs
+//<
+//< The rules are "Places, and the rules for when they may be written" in
+//< `docs/SPEC-language.md`.
+//< Caution: **Test the shapes that should pass together with them**, or rejecting everything goes
+//< green too. `tests/negative/` holds one fixture per syntax (`.f` / `[i]` / `$` / a capture /
+//< defer) for the paths; here are the rules themselves.
+import "ksplc/tests/support/harness"
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// The common part of each program: five kinds of target, mutable and immutable receivers, and a
+// function taking a mutable pointer.
+// Caution: **Do not drop the level that holds a struct as an element.** With only plain elements
+// (`I32[]`), no path reaching **a field inside** an element (`b.si[0].n`) is taken.
+priv const head: U8[] =
+  "priv struct Cell { n: I32; }
+impl Cell {
+  fn bumpc(r: Self$@) {
+    r.n += 1;
+  }
+}
+impl I32 {
+  fn bump32(r: Self$@) {
+    r$ += 1;
+  }
+}
+priv struct Box { n: I32; imm: I32[]; mut: I32$[]; si: Cell[]; sm: Cell$[]; }
+impl Box {
+  fn bump(r: Self$@) {
+    r.n += 1;
+  }
+  fn peek(r: Self@): I32 {
+    return r.n;
+  }
+}
+priv fn takes_mut(p: I32$@) {
+  p$ = 9;
+}
+priv fn make_box(): Box {
+  return Box::{};
+}
+impl I32$[] {
+  fn zero_all(r: Self@) {
+    for $i: Sz = 0; i < r.len; i += 1 {
+      r[i] = 0;
+    }
+  }
+  fn same(r: Self@): I32$[] {
+    return r$;
+  }
+}
+"
+
+priv const tail: U8[] = "
+fn main(): I32 {
+  return 0;
+}
+"
+
+priv struct Case
+  rule: U8[] //< the rule being broken (empty in the control)
+  op: U8[] //< the operation's name
+  body: U8[]
+
+priv const deny: Case[] = Case[]::{ //< every one is a shape that **should be rejected**
+  // route: it reaches through the read-only pointer Box@.
+  Case::{ .rule = "route", .op = "write", .body = "priv fn t(b: Box@) { b.n = 1; }" },
+  Case::{ .rule = "route", .op = "address", .body = "priv fn t(b: Box@) { takes_mut(b.n@); }" },
+  Case::{ .rule = "route", .op = "mutable receiver", .body = "priv fn t(b: Box@) { b.bump(); }" },
+  // root: the binding is immutable (no `$` in front of the name).
+  Case::{ .rule = "root", .op = "write", .body = "priv fn t() { b: Box = ::{}; b.n = 1; }" },
+  Case::{ .rule = "root", .op = "address",
+    .body = "priv fn t() { b: Box = ::{}; takes_mut(b.n@); }" },
+  Case::{ .rule = "root", .op = "mutable receiver",
+    .body = "priv fn t() { b: Box = ::{}; b.bump(); }" },
+  // step's type: the element touched is immutable (the root is mutable, no pointer crossed).
+  Case::{ .rule = "step's type", .op = "write",
+    .body = "priv fn t() { $b: Box = ::{}; b.imm[0] = 1; }" },
+  Case::{ .rule = "step's type", .op = "address",
+    .body = "priv fn t() { $b: Box = ::{}; takes_mut(b.imm[0]@); }" },
+  Case::{ .rule = "step's type", .op = "mutable receiver",
+    .body = "priv fn t() { $b: Box = ::{}; b.si[0].bumpc(); }" },
+  // The step's type, touching **a field inside** an element (the subscript not outermost). All
+  // three operations, since blocking one leaves the rest as a way around.
+  Case::{ .rule = "step's type, inside an element", .op = "write",
+    .body = "priv fn t() { $b: Box = ::{}; b.si[0].n = 1; }" },
+  Case::{ .rule = "step's type, inside an element", .op = "address",
+    .body = "priv fn t() { $b: Box = ::{}; takes_mut(b.si[0].n@); }" },
+  Case::{ .rule = "step's type, inside an element", .op = "mutable receiver",
+    .body = "priv fn t() { $b: Box = ::{}; b.si[0].n.bump32(); }" },
+  // a temporary: a write vanishes into the temporary copy, so **only the writing receiver** is
+  // rejected (the reading one passes under allow below).
+  Case::{ .rule = "a temporary", .op = "mutable receiver",
+    .body = "priv fn t() { make_box().bump(); }" },
+}
+
+// Shapes that break none of the rules, so rejecting everything is not green.
+priv const allow: Case[] = Case[]::{
+  Case::{ .rule = "", .op = "write", .body = "priv fn t() { $b: Box = ::{}; b.n = 1; }" },
+  Case::{ .rule = "", .op = "address", .body = "priv fn t() { $b: Box = ::{}; takes_mut(b.n@); }" },
+  Case::{ .rule = "", .op = "mutable receiver",
+    .body = "priv fn t() { $b: Box = ::{}; b.bump(); }" },
+  Case::{ .rule = "", .op = "a write to a mutable element",
+    .body = "priv fn t() { $b: Box = ::{}; b.mut[0] = 1; }" },
+  Case::{ .rule = "", .op = "a write inside a mutable element",
+    .body = "priv fn t() { $b: Box = ::{}; b.sm[0].n = 1; }" },
+  Case::{ .rule = "", .op = "an address inside a mutable element",
+    .body = "priv fn t() { $b: Box = ::{}; takes_mut(b.sm[0].n@); }" },
+  Case::{ .rule = "", .op = "a mutable receiver on a mutable element",
+    .body = "priv fn t() { $b: Box = ::{}; b.sm[0].bumpc(); }" },
+  Case::{ .rule = "", .op = "a mutable receiver inside a mutable element",
+    .body = "priv fn t() { $b: Box = ::{}; b.sm[0].n.bump32(); }" },
+  // The way out: an explicit cast states intent and must pass.
+  Case::{ .rule = "", .op = "immutability taken off by an explicit cast",
+    .body = "priv fn t() { $b: Box = ::{}; (Cell$[]::b.si)[0].n = 1; }" },
+  Case::{ .rule = "", .op = "an immutable receiver can be called even read-only",
+    .body = "priv fn t(b: Box@): I32 { return b.peek(); }" },
+  Case::{ .rule = "", .op = "across a pointer the root's `$` is not wanted",
+    .body = "priv fn t(p: Box$@) { p.n = 1; p.bump(); takes_mut(p.n@); }" },
+  // **A reading receiver on a temporary passes.** lower stores it in the call's block frame, as
+  // though bound by `x: = make_box();`.
+  Case::{ .rule = "", .op = "a reading receiver on a temporary",
+    .body = "priv fn t(): I32 { return make_box().peek(); }" },
+  // **If `Self` is a mutable slice, the writing receiver takes a temporary too.** The receiver is
+  // `Self@` and the write reaches **what the descriptor points at**: the caller's memory changes.
+  Case::{ .rule = "", .op = "a write to a temporary's slice",
+    .body = "priv fn t() { $b: Box = ::{}; b.mut.same().zero_all(); }" },
+}
+
+priv struct Verdict //< the result of building one program and only compiling it
+  //<
+  //< It holds "did it pass" and the first error line.
+  compiled: Bool
+  first_error: U8[]
+
+priv fn compile_only(dir: U8[], index: Sz, body: U8[], arena: Arena$@): Verdict
+  $nb: = Str_builder.new()
+  defer nb.free()
+  nb.s("p\{index\}")
+  stem: = nb.slice()
+  src: = fs.join(dir, arena.text().s("\{stem\}.kspl").take(), arena)
+  gen: = fs.join(dir, arena.text().s("\{stem\}.c").take(), arena)
+  $sb: = Str_builder.new()
+  defer sb.free()
+  sb.s(head).s(body).s(tail)
+  io.write_file(src, sb.slice()) catch
+    return Verdict::{ .compiled = false, .first_error = "cannot write the material" }
+  r: = harness.ksplc(U8[][]::{ src, gen })
+  if r.code == 0
+    return Verdict::{ .compiled = true, .first_error = "" }
+  for ln in r.out.lines(arena)
+    if ln.find_str("error:") >= 0
+      return Verdict::{ .compiled = false, .first_error = ln.trim_spaces() }
+  return Verdict::{ .compiled = false, .first_error = r.out.trim_end() }
+
+fn main(): I32
+  arena: = harness.begin(32 * 1024 * 1024)
+  dir: = harness.sandbox("place") catch
+    return harness.fatal("cannot make a working directory")
+
+  for i in Range.asc(deny.len)
+    c: = deny[i]
+    v: = compile_only(dir, i, c.body, arena)
+    name: = arena.text().s("[\{c.rule\}] \{c.op\} is refused").take()
+    verdict.check(name, !v.compiled, "it passes")
+  for i in Range.asc(allow.len)
+    c: = allow[i]
+    v: = compile_only(dir, deny.len + i, c.body, arena)
+    name: = arena.text().s("[control] \{c.op\}").take()
+    why: = arena.text().s("refused: \{v.first_error\}").take()
+    verdict.check(name, v.compiled, why)
+  return harness.finish()

@@ -1,0 +1,44 @@
+//< Checks that a one-line block in the indentation notation gets back the `;` it leaves out
+//<
+//< **This calls a function inside the compiler directly** (`to_braces` in `parse/layout.kspls`),
+//< so it checks the rewritten text itself: where the `;` lands, and what is left alone.
+
+import "ksplc/parse/layout" as parse_layout
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+priv fn mend(src: U8[], arena: Arena$@): U8[]
+  $notes: = List<|parse_layout.Note|>.new(arena)
+  return parse_layout.to_braces(src, notes@, arena)
+
+fn test_one_line_block_gets_its_semicolon()
+  verdict.start("[layout] a block written on one line gets back the `;` it leaves out test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+
+  // **The `;` stands where the space before the `}` was**, so no column after it moves.
+  assert(mend("fn f(): I32 { return 1 }\n", arena).equals("fn f(): I32 { return 1;}\n"),
+    "a one-line body's last statement must get its `;` in place of the space")
+  assert(mend("fn t(): I32 {return 1}\n", arena).equals("fn t(): I32 {return 1;}\n"),
+    "with no space before the `}`, the `;` is inserted")
+  // A statement ending in a block gets none, and one ending in a value's `}` gets one: the same
+  // rule as at a line's end.
+  assert(mend("fn g(c: Bool) { if c { note() } }\n", arena)
+    .equals("fn g(c: Bool) { if c { note();} }\n"),
+    "an `if` ending the outer block takes no `;`, its own body's statement does")
+  assert(mend("fn h(): P { return P::{ .a = 1 } }\n", arena)
+    .equals("fn h(): P { return P::{ .a = 1 };}\n"),
+    "a statement ending in a value's `}` takes a `;`")
+  assert(mend("fn w() { a(); b() }\n", arena).equals("fn w() { a(); b();}\n"),
+    "the `;` between two statements stays and the last one gets its own")
+
+  // Left alone: a `;` already there, an empty block, and the braces of a value or an import list.
+  assert(mend("fn k(): I32 { return 1; }\n", arena).equals("fn k(): I32 { return 1; }\n"),
+    "a `;` already written is kept as it is")
+  assert(mend("fn e() {}\n", arena).equals("fn e() {}\n"), "an empty block takes no `;`")
+  assert(mend("import \"std/ds\" { List }\n", arena).equals("import \"std/ds\" { List };\n"),
+    "an import's list is not a block; only the statement's own terminator comes")
+
+  verdict.pass("a one-line block got its last `;` back, a value's and an import's braces did not.")

@@ -1,0 +1,479 @@
+import "kspage/lay/ask"
+import "kspage/lay/caret"
+import "kspage/lay/flow"
+import "kspage/lay/page" { Page }
+import "kspage/model/doc" { Axis, Block, Doc }
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/style" + { Sheet }
+import "kspage/tests/base"
+import "kspage/write/again"
+import "kspage/write/block"
+import "kspage/write/cells"
+import "kspage/write/edit"
+import "kspage/write/insert"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// kspage: checks the cells themselves (merging, the frame of the current cell, inserting a table)
+// (a golden test).
+// **The metrics are fixed (`kspage/model/fixed_font`)** (measure a real font and the answer
+// changes with the machine and the version).
+// Note: [`grid_test.kspls`](grid_test.kspls) covers how column and row sizes are decided; this
+// one, what a cell covers and which cell the cursor is in.
+// ==========================================
+
+// ---- merging cells ----
+
+fn test_a_merged_cell_spans_its_columns() //<
+  //< A cell merged across is as wide as the columns it covers put together
+  verdict.start("[kspage/tile] the breadth of a cell merged across test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = base.two_by_two(d)
+  // The first cell of the first row is merged to the right and the covered cell removed (one set).
+  head: = table.children.get(0)
+  head.children.get(0).span_cols = 2
+  head.children.remove_at(1)
+
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
+  assert(page.cells.len == 3, "the cell covered is not laid")
+  wide: = page.cells.get(0).rect
+  assert(base.near(wide.x, 0.0) && base.near(wide.w, 16.0), "it comes to the width of two columns")
+  // The second row is not merged, so the column widths do not change.
+  assert(base.near(page.cells.get(2).rect.x, 8.0),
+    "the second column of the row below is where it was")
+  verdict.pass("a merge across comes to the breadth of the columns it covers put together.")
+
+fn test_a_merged_cell_spans_its_rows() //<
+  //< A cell merged downward is as tall as the rows it covers put together
+  verdict.start("[kspage/tile] the height of a cell merged downwards test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = base.two_by_two(d)
+  // The first cell of the first row is merged downward over the second row's first column.
+  table.children.get(0).children.get(0).span_rows = 2
+  table.children.get(1).children.remove_at(0)
+
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
+  assert(page.cells.len == 3, "the cell covered is not laid")
+  tall: = page.cells.get(0).rect
+  assert(base.near(tall.y, 0.0) && base.near(tall.h, 38.4), "it comes to the height of two rows")
+  // The cell left in the second row is laid out right of the covered column.
+  low: = page.cells.get(2).rect
+  assert(base.near(low.x, 8.0) && base.near(low.y, 19.2),
+    "the cell of the row below goes into the right column")
+  verdict.pass("a merge downwards comes to the height of the rows it covers put together.")
+
+fn test_a_merged_cell_does_not_widen_its_columns() //<
+  //< A merged cell does not decide a column's width
+  //<
+  //< **Otherwise the narrow columns would all widen at once.**
+  verdict.start("[kspage/tile] a merged cell not widening a column test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = base.two_by_two(d)
+  head: = table.children.get(0)
+  wide: = head.children.get(0)
+  wide.span_cols = 2
+  head.children.remove_at(1)
+  // With a long text in it, the column stays at the width of the row below's one ASCII character.
+  wide.inlines.get(0).insert(1, "bcdefgh")
+
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
+  assert(base.near(page.cells.get(1).rect.w, 8.0),
+    "the first column of the row below does not widen")
+  assert(base.near(page.cells.get(0).rect.w, 16.0), "the merged cell stays two columns wide")
+  verdict.pass("a merged cell does not decide a column's width.")
+
+fn test_merging_absorbs_the_next_cell_and_undoes_in_one_step() //<
+  //< It absorbs the neighbour, merges, and undoes in one step
+  verdict.start("[kspage/tile] merging cells and going back in one test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = base.two_by_two(d)
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  ed.caret = caret.at(table.children.get(0).children.get(0).inlines.get(0), 0)
+
+  assert(ed.merge_cell(page, Axis.column), "it can be merged with the right neighbour")
+  head: = table.children.get(0)
+  assert(head.children.len == 1, "the cell taken in comes off")
+  assert(head.children.get(0).span_cols == 2, "it covers two columns")
+  after: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(after.cells.len == 3, "the cells laid drop by one too")
+
+  assert(ed.undo(), "it can be put back in one")
+  assert(head.children.len == 2, "the cell taken off comes back")
+  assert(head.children.get(0).span_cols == 1, "the merge can be parted too")
+  assert(head.children.get(1).inlines.get(0).text().equals("b"), "it goes back with its text")
+  verdict.pass("a merge takes the neighbour in, and one step puts it back.")
+
+fn test_splitting_puts_the_covered_cells_back() //<
+  //< Split the merge and an empty cell comes back where it was covering
+  verdict.start("[kspage/tile] the cells coming back when a merge is parted test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = base.two_by_two(d)
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  ed.caret = caret.at(table.children.get(0).children.get(0).inlines.get(0), 0)
+  ed.merge_cell(page, Axis.row)
+  assert(table.children.get(1).children.len == 1, "the cell of the row below comes off")
+
+  laid: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(ed.split_cell(laid), "it can be parted")
+  assert(table.children.get(0).children.get(0).span_rows == 1, "the covering goes back to one row")
+  assert(table.children.get(1).children.len == 2, "a cell comes back where it was covering")
+  // The cell comes back empty (the record restores its text).
+  back: = table.children.get(1).children.get(0)
+  assert(back.inlines.len == 1 && back.inlines.get(0).text().len == 0,
+    "the cell that comes back is empty")
+  verdict.pass("parted, an empty cell comes back where it was covering.")
+
+fn test_the_frame_marks_the_cell_the_caret_is_in() //<
+  //< The cell the cursor is in, and only that cell, gets the frame
+  verdict.start("[kspage/tile] the frame pointing at the cell the cursor is in test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("outside")
+  base.two_by_two(d)
+
+  // The boxes come as "outside", a, b, c, d; the table starts one line lower.
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
+  in_c: = caret.cell_frame(page, caret.at(page.boxes.get(3).inline, 0))
+  switch in_c case .some(r)
+    assert(base.near(r.x, 0.0) && base.near(r.y, 38.4),
+      "it is the place of the second row's first column")
+    assert(base.near(r.w, 8.0) && base.near(r.h, 19.2),
+      "it is that column's width and that row's height")
+  case .none
+    assert(false, "inside a cell the frame comes out")
+
+  // Outside a table there is none.
+  outside: = caret.cell_frame(page, caret.at(page.boxes.get(0).inline, 0))
+  if _r: = outside
+    assert(false, "on the body no frame comes out")
+  verdict.pass("the frame fences the cell the cursor is in and nothing else.")
+
+fn test_the_frame_is_the_innermost_cell() //<
+  //< In a table within a table, the inner cell gets the frame
+  verdict.start("[kspage/tile] the frame becoming the inner cell test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  outer: = d.add_block("table")
+  row: = outer.add_child("row")
+  left: = row.add_child("cell")
+  inner: = left.add_child("table")
+  ir: = inner.add_child("row")
+  ir.add_child("cell").add_text("a")
+  ir.add_child("cell").add_text("b")
+  row.add_child("cell").add_text("z")
+
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
+  // The outer cell comes first and the inner one after.
+  assert(page.cells.len == 4, "two outside and two inside")
+  outer_w: = page.cells.get(0).rect.w
+  assert(base.near(outer_w, 16.0), "what comes in first is the outer cell holding the inner table")
+
+  // "a" is inside both cells; the outer one's 16px would be the wrong answer.
+  frame: = caret.cell_frame(page, caret.at(page.boxes.get(0).inline, 0))
+  switch frame case .some(r)
+    assert(base.near(r.w, 8.0), "it is the inner first column's width")
+  case .none
+    assert(false, "the frame comes out inside a nesting too")
+  verdict.pass("in a nesting the innermost cell becomes the frame.")
+fn test_a_cell_does_not_split_into_paragraphs() //< inside a cell no paragraph is split
+  //<
+  //< Split, that row alone would gain a cell and the table's shape would break.
+  verdict.start("[kspage/tile] not splitting a paragraph inside a cell test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = base.two_by_two(d)
+  ed: = edit.new_editor(d)
+
+  sheet: = base.grid_sheet(arena)
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  ed.caret = caret.at(page.boxes.get(0).inline, 0)
+  assert(!ed.split_block(page, sheet), "it does not split")
+  assert(!ed.join_prev(page), "it does not join onto the cell before either")
+  assert(table.line_count(Axis.row) == 2, "the rows stay two")
+  assert(table.children.get(0).children.len == 2, "the first row's cells stay two too")
+  verdict.pass("pressed inside a cell no paragraph splits, and the table's shape does not change.")
+fn test_a_table_is_inserted_after_the_caret() //<
+  //< An empty table can be inserted after the paragraph the cursor is in
+  //<
+  //< **Where there is no grid style it makes one**, or the table would be laid out as paragraphs.
+  verdict.start("[kspage/tile] a table being insertable test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  head: = d.add_block("body").add_text("body")
+  d.add_block("body").add_text("after")
+  // It starts from a table with no grid style yet.
+  sheet: = Sheet.new(base.root_font(), arena)
+  ed: = edit.new_editor(d)
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  ed.caret = caret.at(head, 0)
+
+  assert(ed.insert_table(page, sheet, "table", 2, 2), "it inserts")
+  assert(d.blocks.len == 3, "one grows behind the paragraph the cursor is in")
+  table: = d.blocks.get(1)
+  assert(table.line_count(Axis.row) == 2, "there are two rows")
+  assert(table.children.get(0).children.len == 2, "there are two cells to a row")
+  first: = table.children.get(0).children.get(0).inlines.get(0)
+  assert(ed.caret.inline == first && ed.caret.offset == 0, "the cursor goes into the first cell")
+
+  // They are laid out as cells.
+  after: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(after.cells.len == 4, "four cells are laid")
+  // Inside a cell of the inserted table, it does not insert again.
+  assert(!ed.insert_table(after, sheet, "table", 2, 2), "inside a cell it does not insert")
+
+  // **The cells get a cell style**; without it, they have no padding and no line, text touching
+  // text. It is made through the record, so the same undo removes it together with the table.
+  first_cell: = table.children.get(0).children.get(0)
+  assert(first_cell.style.len > 0, "a fresh cell carries a style name")
+  switch sheet.find(first_cell.style) case .some(cs)
+    assert(style.cell_like(cs), "the cell's style has a cell's part (an inner space, no mark)")
+    assert(cs.rule_width > 0.0, "the cell's style draws the grid's line")
+  case .none
+    assert(false, "the cell's style is on the table")
+
+  assert(ed.undo(), "it can be put back in one")
+  assert(d.blocks.len == 2, "the table and the styles made come off together")
+  assert(sheet.styles.len == 0, "the style table goes back too")
+  verdict.pass("a table goes in behind the cursor's paragraph, and goes back in one.")
+
+fn test_a_table_takes_the_size_pressed() //<
+  //< The size is the click's: three rows and four columns give three rows of four cells
+  //<
+  //< Below one row or one column nothing is inserted (there is no table without cells).
+  verdict.start("[kspage/tile] the size pressed test...")
+  arena: = Arena.new(1024 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  head: = d.add_block("body").add_text("body")
+  sheet: = Sheet.new(base.root_font(), arena)
+  ed: = edit.new_editor(d)
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  ed.caret = caret.at(head, 0)
+  assert(!ed.insert_table(page, sheet, "table", 0, 4), "no rows inserts nothing")
+  assert(!ed.insert_table(page, sheet, "table", 3, 0), "no columns inserts nothing")
+  assert(d.blocks.len == 1, "a refused size leaves the document as it was")
+  assert(ed.insert_table(page, sheet, "table", 3, 4), "three by four inserts")
+  table: = d.blocks.get(1)
+  assert(table.line_count(Axis.row) == 3, "there are three rows")
+  for $y: Sz = 0; y < 3; y += 1
+    assert(table.children.get(y).children.len == 4, "every row holds four cells")
+  after: = flow.layout(d, sheet, fixed.make(), 400.0, arena)
+  assert(after.cells.len == 12, "twelve cells are laid")
+  verdict.pass("a table takes the size pressed, and refuses a size with nothing in it.")
+
+fn test_a_fresh_table_spans_the_text() //<
+  //< A new table's columns get equal shares of the width it is laid out to
+  //<
+  //< So it spans the text and keeps that width when the page is laid out wider. The table's indent
+  //< and padding narrow what the columns share, as the flow narrows any block.
+  verdict.start("[kspage/tile] a fresh table's width test...")
+  arena: = Arena.new(1024 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  head: = d.add_block("body").add_text("body")
+  sheet: = Sheet.new(base.root_font(), arena)
+  t: = base.table_style(sheet)
+  t.indent = 10.0
+  t.pad = 4.0
+  ed: = edit.new_editor(d)
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  ed.caret = caret.at(head, 0)
+  assert(ed.insert_table(page, sheet, "table", 2, 4), "two by four inserts")
+  table: = d.blocks.get(1)
+  // The text is 200 wide; the indent takes 10 and the padding 4 on each side.
+  $sum: F32 = 0.0
+  for $c: Sz = 0; c < 4; c += 1
+    switch table.size_of(Axis.column, c) case .some(v)
+      assert(base.near(v, 45.5), "every column is named the same quarter")
+      sum += v
+    case .none
+      assert(false, "a column was left unnamed")
+  assert(base.near(sum, 182.0), "together they fill the width the table is laid to")
+  wide: = flow.layout(d, sheet, fixed.make(), 400.0, arena)
+  first: = wide.cells.get(0)
+  last: = wide.cells.get(3)
+  assert(base.near(first.rect.x, 14.0), "the grid starts behind the indent and the inner space")
+  assert(base.near(last.rect.x + last.rect.w, 196.0),
+    "and ends where the text it was put into ended, not where the wider page does")
+  assert(ed.undo() && d.blocks.len == 1, "one undo takes the table and its widths back")
+  verdict.pass("a fresh table spans the text it was put into, and holds that width.")
+
+fn test_the_heading_band_is_the_first_row() //<
+  //< Every top-level table gives a band: its rectangle and its first row's
+  //<
+  //< A table inside a cell gives none.
+  //<
+  //< It is what the window keeps in view while the table scrolls under the tools.
+  verdict.start("[kspage/tile] the heading band test...")
+  arena: = Arena.new(1024 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("above")
+  outer: = d.add_block("table")
+  r0: = outer.add_child("row")
+  r0.add_child("cell").add_text("a")
+  r0.add_child("cell").add_text("b")
+  r1: = outer.add_child("row")
+  r1.add_child("cell").add_text("c")
+  holder: = r1.add_child("cell")
+  holder.add_text("d")
+  inner: = holder.add_child("table")
+  inner.add_child("row").add_child("cell").add_text("x")
+  sheet: = base.grid_sheet(arena)
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(ask.head_band_count(page) == 1, "the outer table alone names a band")
+  band: = ask.head_band_at(page, 0)
+  assert(band.found, "the band is found")
+  first: = page.cells.get(0)
+  assert(base.near(band.row.y, first.rect.y) && base.near(band.row.h, first.rect.h),
+    "the band's row is the first row")
+  assert(base.near(band.table.y, first.rect.y), "the table's rectangle starts at the first row")
+  assert(band.table.h > band.row.h, "and reaches below it")
+  $foot: F32 = 0.0
+  for $i: Sz = 0; i < page.cells.len; i += 1
+    c: = page.cells.get(i)
+    if c.table == outer && c.rect.y + c.rect.h > foot
+      foot = c.rect.y + c.rect.h
+  assert(base.near(band.table.y + band.table.h, foot), "down to the last row's foot")
+  assert(!ask.head_band_at(page, 1).found, "past the last table there is none")
+  verdict.pass("each outermost table names its heading band, and a nested one names none.")
+
+// ---- inserting and removing a column where a merge is in the way ----
+
+priv fn merged_head(d: Doc$@): Block$@ //<
+  //< A table whose first row is one cell covering two columns, and whose second row is two cells
+  //<
+  //< **It separates "which column" from "which child"**: the first row has one child and two
+  //< columns.
+  table: = d.add_block("table")
+  r0: = table.add_child("row")
+  wide: = r0.add_child("cell")
+  wide.add_text("wide")
+  wide.span_cols = 2
+  r1: = table.add_child("row")
+  r1.add_child("cell").add_text("a")
+  r1.add_child("cell").add_text("b")
+  return table
+
+fn test_a_column_past_the_end_reaches_the_merged_row_too() //<
+  //< A column added past the grid's end goes into the merged row as well
+  verdict.start("[kspage/grid] a column put in past the end reaching the merged row test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = merged_head(d)
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+
+  page: = flow.layout(d, sheet, fixed.make(), 400.0, arena)
+  // The cursor into the last column's "b", so the column is added past the grid's end.
+  ed.caret = caret.at(table.children.get(1).children.get(1).inlines.get(0), 1)
+  assert(ed.add_line(page, Axis.column), "it was added")
+  // **Counted by child index, the first row has 1 and the wanted column is 2, so it would be
+  // skipped** and the rows would get out of step.
+  assert(table.children.get(0).children.len == 2, "the merged row gains a cell as well")
+  assert(table.children.get(1).children.len == 3, "the plain row gains one too")
+  assert(table.grid_columns(arena) == 3, "the grid is three columns across")
+
+  assert(ed.undo(), "it can be put back in one")
+  assert(table.children.get(0).children.len == 1, "the merged row goes back to what it was")
+  assert(table.children.get(1).children.len == 2, "and so does the plain row")
+  verdict.pass("a column put in past the end reaches the row holding a merge too.")
+
+fn test_a_column_over_a_merge_widens_it() //<
+  //< A column landing on a cell that spans more than one column widens that cell
+  verdict.start("[kspage/grid] a column put in over a merge widening it test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = merged_head(d)
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+
+  page: = flow.layout(d, sheet, fixed.make(), 400.0, arena)
+  // The cursor into the merged cell, so the column lands on the merge.
+  ed.caret = caret.at(table.children.get(0).children.get(0).inlines.get(0), 0)
+  assert(ed.add_line(page, Axis.column), "it was added")
+  // **The merge is those columns held as one**, so the column widens it rather than cutting it
+  // (Excel's answer too).
+  assert(table.children.get(0).children.get(0).span_cols == 3, "the merge grows by one column")
+  assert(table.children.get(0).children.len == 1, "and no cell goes into that row")
+  assert(table.children.get(1).children.len == 3, "the plain row gains a cell")
+  assert(table.grid_columns(arena) == 3, "so both rows are three columns across")
+
+  assert(ed.undo(), "it can be put back in one")
+  assert(table.children.get(0).children.get(0).span_cols == 2, "the merge narrows back")
+  assert(table.children.get(1).children.len == 2, "and the plain row gives its cell up")
+  verdict.pass("a column put in over a merge widens the merge, and one undo narrows it back.")
+
+fn test_dropping_a_column_narrows_a_merge_and_comes_home() //<
+  //< Removing a column narrows the cell that spans it, and one undo restores the span
+  verdict.start("[kspage/grid] taking a column off narrowing a merge test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = merged_head(d)
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+
+  page: = flow.layout(d, sheet, fixed.make(), 400.0, arena)
+  ed.caret = caret.at(table.children.get(0).children.get(0).inlines.get(0), 0)
+  assert(ed.drop_line(page, Axis.column), "it was deleted")
+  assert(table.children.get(0).children.get(0).span_cols == 1, "the merge loses one column")
+  assert(table.children.get(1).children.len == 1, "the plain row loses its first cell")
+
+  // **A cell narrowed to one column cannot be told from one that always spanned one**, so the
+  // record keeps each row's span; read from the table, undo would put a cell into the merged row.
+  assert(ed.undo(), "it can be put back in one")
+  assert(table.children.get(0).children.len == 1, "the merged row holds one cell still")
+  assert(table.children.get(0).children.get(0).span_cols == 2, "and its span comes home")
+  assert(table.children.get(1).children.len == 2, "the plain row gets its cell back")
+  verdict.pass("taking a column off narrows the merge, and one undo puts the span back.")
+
+// ---- repeating the last command ----
+
+fn test_doing_it_again_puts_another_column_in() //<
+  //< F4 runs the last command again, where the cursor is now
+  verdict.start("[kspage/tile] doing the last command again test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = base.two_by_two(d)
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+
+  $page: Page$@ = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  // **Nothing has been done yet**, so there is nothing to repeat and it says nothing.
+  assert(!ed.do_again(page, sheet), "with nothing done yet it does nothing")
+  assert(ed.again_says().len == 0, "and it has nothing to say it would do")
+
+  ed.caret = caret.at(page.boxes.get(0).inline, 0)
+  assert(ed.add_line(page, Axis.column), "a column goes in")
+  assert(ed.again_says().equals("Put a column in"), "it says what doing it again would do")
+  // **The command runs again, rather than restoring the edits** (a redo needs an undo before it).
+  page = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  ed.caret = caret.at(page.boxes.get(0).inline, 0)
+  assert(ed.do_again(page, sheet), "doing it again puts another column in")
+  assert(table.children.get(0).children.len == 4, "the first row holds four cells")
+  assert(table.children.get(1).children.len == 4, "and so does the second")
+  verdict.pass("doing it again runs the last command afresh where the cursor stands.")

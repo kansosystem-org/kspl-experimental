@@ -1,0 +1,208 @@
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// When the instantiation queue must have been drained.
+//
+// **An instantiated type's method is called inside the same body**, so draining only at function
+// entry gives "no such method" ("Where the instantiation queue is drained" in
+// `ksplc/docs/DESIGN.md`).
+// Caution: **Test it inside a generic's body too.** It is drained with the outer type argument
+// still bound, so a same-named type variable nested twice resolves to the outer one.
+// ==========================================
+priv struct Cell<|T|>
+  priv v: T
+
+impl<|T|> Cell<|T|>
+  priv fn get(r: Self): T
+    return r.v
+
+  priv fn width(_r: Self): Sz //<
+    //< The size of the type argument
+    //<
+    //< Caution: Make it depend on the type argument, or instances collapsed into one pass unseen.
+    return sizeof(T)
+
+priv fn cell_size<|T|>(x: T): Sz //<
+  //< It builds a Cell of T inside, while its own T stays bound
+  inner: = Cell<|T|>::{ .v = x }
+  marker: = Cell<|I64|>::{ .v = 7 }
+  return inner.width() + Sz::marker.get()
+
+fn test_queue_drained_within_one_body()
+  verdict.start("[Generic] the instantiation queue is drained inside the same body test...")
+  // The statement right after the declaration uses that instantiation's method.
+  a: = Cell<|I32|>::{ .v = 3 }
+  assert(a.get() == 3, "a method of a type instantiated in the same body resolves")
+  b: = Cell<|U8[]|>::{ .v = "abc" }
+  assert(b.get().len == 3, "it does not come one step shallower even with a slice element")
+  verdict.pass("a method of a type instantiated inside one body resolves inside that body.")
+
+fn test_queue_drained_under_outer_binding()
+  verdict.start("[Generic] the queue is drained under an outer type argument too test...")
+  assert(cell_size(U8::1) == 1 + 7, "the inner instantiation resolves under U8")
+  assert(cell_size(I64::1) == 8 + 7, "the same under I64")
+  verdict
+    .pass("the inner instantiation's method resolves even with an outer type argument still bound.")
+
+priv struct Box2<|S|> //<
+  //< A struct with a method that returns itself one step deeper
+  //<
+  //< Building every entry per instantiation, called or not, never empties the queue. Built on
+  //< demand, it goes only as deep as it is used.
+  priv inner: S
+
+priv struct Chain<|S|>
+  priv v: S
+  priv n: I32
+
+impl<|S|> Chain<|S|>
+  priv fn deeper(r: Self): Chain<|Box2<|S|>|>
+    return Chain<|Box2<|S|>|>::{ .v = Box2<|S|>::{ .inner = r.v }, .n = r.n }
+
+  priv fn tag(r: Self): I32
+    return r.n
+
+priv fn deepen<|S|>(c: Chain<|S|>): Chain<|Box2<|S|>|> //<
+  //< The same shape can be written as a free function taking the receiver as its first argument
+  return Chain<|Box2<|S|>|>::{ .v = Box2<|S|>::{ .inner = c.v }, .n = c.n }
+
+fn test_method_returns_deeper_self()
+  verdict.start("[Generic] a method returning a self one step deeper can be written test...")
+  c: = Chain<|I32|>::{ .v = 1, .n = 5 }
+  assert(c.tag() == 5, "the plain step resolves")
+  assert(c.deeper().tag() == 5, "a method returning a self one step deeper calls")
+  assert(c.deeper().deeper().tag() == 5, "the steps can be stacked")
+  assert(deepen(deepen(c)).tag() == 5, "the same in the free-function shape")
+  assert(deepen(deepen(c)).v.inner.inner == 1, "the wrapped content reaches all the way")
+  verdict
+    .pass("the shape returning a self one step deeper goes through as a method and as a free \
+      function alike.")
+
+priv trait Tagged //<
+  //< **The steps continue for a type that also conforms to a trait**
+  //<
+  //< An iterator does this (`xs.filter(p).map(f)`).
+  //< Defer the conformance registration too and a subscript turns into a plain array subscript, or
+  //< a vtable names a function with no definition.
+  fn tag(r: Self): I32
+
+priv struct Chain_src
+  priv n: I32
+
+priv struct Step<|S|>
+  priv inner: S
+  priv add: I32
+
+impl<|S|> Step<|S|>: Tagged
+  priv fn tag(r: Self): I32
+    return r.add
+
+impl<|S|> Step<|S|>
+  priv fn step(r: Self, k: I32): Step<|Step<|S|>|>
+    return Step<|Step<|S|>|>::{ .inner = r, .add = r.add + k }
+
+fn test_trait_type_chain()
+  verdict.start("[Generic] the steps run on for a type giving itself as a trait too test...")
+  base: = Step<|Chain_src|>::{ .inner = Chain_src::{ .n = 1 }, .add = 10 }
+  chained: = base.step(1).step(2).step(3)
+  assert(chained.tag() == 16, "10+1+2+3 = 16")
+  // Caution: It must be generated through a trait value too. Leave the table to later and the
+  // vtable names a function with no definition.
+  t: Tagged = chained
+  assert(t.tag() == 16, "the same answer comes out of a trait value too")
+  verdict
+    .pass("a method returning a self one step deeper can be run on for a type giving itself as a \
+      trait too.")
+
+priv struct Box_of<|T|> //<
+  //< **A method introducing its own type argument** `U` stays off the method table
+  //<
+  //< The call site instantiates it ("A type argument with nothing to bind to is rejected" in
+  //< `docs/DESIGN.md`).
+  priv v: T
+
+impl<|T|> Box_of<|T|>
+  priv fn moved<|U|>(_r: Self, u: U): Box_of<|U|>
+    return Box_of<|U|>::{ .v = u }
+
+  priv fn get(r: Self): T
+    return r.v
+
+// **A closure's type is the synthesized environment (`_anon_env_N`)**, so against `Callable1<|T,
+// U|>` the type arguments come from its `Callable1` conformance (implemented_trait_key_of in
+// `ksplc/sema/type/env.kspls`).
+impl<|T|> Box_of<|T|>
+  priv fn conv<|U|>(r: Self, f: Callable1<|T, U|>): Box_of<|U|>
+    return Box_of<|U|>::{ .v = f.call(r.v) }
+
+fn test_closure_infers_output_type()
+  verdict.start("[Generic] a closure's output type is inferred test...")
+  b: = Box_of<|I32|>::{ .v = 4 }
+  tenx: = fn(x: I32; ): I64
+    return x * 10
+  // Caution: Do not write the type argument. Written out, it leaves this test checking nothing.
+  assert(b.conv(tenx).get() == 40, "U is inferred from Callable1's second type argument")
+  verdict
+    .pass("even handing a closure over directly, the output type argument is inferred through \
+      Callable.")
+
+priv struct Nest<|S|> //<
+  //< A struct with a method that only builds itself one step deeper in its body
+  //<
+  //< Building every entry named in a body would build `Chain<|Box2<|Box2<|I32|>|>|>` and onward,
+  //< never returning. Built when used, this function, which only reads `x.n`, goes no deeper.
+  priv v: S
+  priv n: I32
+
+impl<|S|> Nest<|S|>
+  priv fn count_deeper(r: Self): I32
+    x: = Nest<|Box2<|S|>|>::{ .v = Box2<|S|>::{ .inner = r.v }, .n = r.n + 1 }
+    return x.n
+
+fn test_method_body_building_deeper_self()
+  verdict
+    .start("[Generic] a method only building a self one step deeper in its body goes through \
+      test...")
+  c: = Nest<|I32|>::{ .v = 1, .n = 5 }
+  assert(c.count_deeper() == 6, "a field of the value built one step deeper reads")
+  verdict
+    .pass("only building a self one step deeper in a body builds none of that step's methods, and \
+      the translation returns.")
+
+priv enum Maybe<|T|> //<
+  //< **A generic enum first named in a signature, used in an interpolation**
+  //<
+  //< Deferred, the table hides the synthesized `variant_name` from `\{o\}`, which is then rejected
+  //< as not `Formattable` (try_rewrite_enum_fmt in sema/body/dot.kspls builds it first).
+  none
+  some(v: T)
+
+impl<|S|> Nest<|S|>
+  priv fn maybe(r: Self): Maybe<|Nest<|S|>|>
+    return Maybe<|Nest<|S|>|>.some(r)
+
+fn test_enum_born_in_a_signature_formats()
+  verdict
+    .start("[Generic] a generic enum born in a signature can be written into an interpolation \
+      test...")
+  c: = Nest<|I32|>::{ .v = 1, .n = 5 }
+  o: = c.maybe()
+  $b: = Str_builder.new()
+  defer b.free()
+  b.s("\{o\}")
+  assert(b.slice().equals("some"), "the variant name comes out")
+  verdict
+    .pass("interpolation puts the variant name out even for a generic enum appearing only in a \
+      method's signature.")
+
+fn test_method_own_type_param()
+  verdict.start("[Generic] a method can introduce its own type argument test...")
+  b: = Box_of<|I32|>::{ .v = 1 }
+  assert(b.moved(true).get(), "U is inferred from the actual argument")
+  assert(b.moved<|Sz|>(7).get() == 7, "it is taken from a written type argument too")
+  // The receiver's type argument stays put. Only U moves.
+  assert(b.get() == 1, "the receiver is as it was")
+  verdict
+    .pass("a generic type's method can introduce its own type argument, instantiated at the call \
+      position.")

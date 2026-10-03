@@ -1,0 +1,49 @@
+//< Tests the tool that writes the language tour (`tools/tour_page.kspls`)
+//<
+//< **A mistake here gives a page that says less than the program does** (a step dropped, a block
+//< cut short), and `make test-docs` stays green, since the page matches the same broken writer.
+import "std/chars" // `find_str`
+import "std/mem" { Arena }
+import "std/str" // `equals`
+import "std/verdict"
+import "tools/tour_page" as page
+
+priv const laid_sample: U8[] =
+  "import \"std/io\"\n\npriv const limit: Sz = 4 //< a name for a value\n  //<\n  //< it cannot be \
+    assigned to.\n\npriv fn twice_of<|T|>(v: T): T //< generics\n  //<\n  //< a type the caller \
+    picks.\n  return v\n\npriv fn helper(): I32\n  return 0\n\npriv $seen: Sz = 0 //< a \
+    global\n\nfn main(): I32\n  return 0\n"
+
+fn test_a_step_per_described_declaration(arena: Arena$@) //<
+  //< One step per top-level `//<`, with its name, its prose and its code
+  verdict.start("[tools/tour] the walk's steps test...")
+  steps: = page.walk_steps(laid_sample, arena)
+  assert(steps.len == 3, "the three that carry a description, and not the helper")
+  assert(steps.get(0).name.equals("limit"), "a `const` names the word after the keyword")
+  assert(steps.get(0).title.equals("a name for a value"), "the title is the words after the mark")
+  assert(steps.get(0).prose.equals("it cannot be assigned to."),
+    "the prose is the run below the parting, joined into one paragraph")
+  assert(steps.get(0).code.equals("priv const limit: Sz = 4"), "the code carries no `//<`")
+  assert(steps.get(1).code.equals("priv fn twice_of<|T|>(v: T): T\n  return v"),
+    "a body comes with its declaration, and the prose does not")
+  // A top-level mutable starts with its own name (see `page.declared_name`).
+  assert(steps.get(2).name.equals("seen"), "a global's name is its own first word")
+  verdict.pass("a described top-level declaration becomes one step, code and prose apart.")
+
+fn test_the_page_holds_the_three(arena: Arena$@) //<
+  //< The page carries a section per step, the brace spelling, and the printout
+  verdict.start("[tools/tour] the page's shape test...")
+  braced: = "priv fn shade_name(): I32 { //< reading an enum\n  return 0;\n}\n"
+  text: = page.render(laid_sample, braced, "hello", arena)
+  // **The link that climbs out of docs/ is checked by its shape, not written out whole**
+  // (`make test-docref` would resolve it from this file, not from the page).
+  assert(text.find_str("[`../README") >= 0, "a link climbs out of docs/ first")
+  assert(text.find_str("](SPEC-language.md)") >= 0, "a link inside docs/ keeps its bare name")
+  assert(text.find_str("\n## a name for a value\n") >= 0, "a heading per step")
+  assert(text.find_str("```kspls\npriv const limit: Sz = 4\n```") >= 0,
+    "the step's own code in its fence")
+  assert(text.find_str("```kspl\npriv fn shade_name(): I32 {\n  return 0;\n}\n```") >= 0,
+    "the brace spelling closed on its own `}`")
+  assert(text.find_str("```\nhello\n```") >= 0,
+    "the printout in a plain fence, closed on its own line")
+  verdict.pass("the page holds a section per step, the other spelling, and the printout.")

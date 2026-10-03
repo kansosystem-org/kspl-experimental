@@ -1,0 +1,98 @@
+//< Keeps what the car must remember across a power cut
+//<
+//< The policy that was handed out, and the weights it learned itself — into and out of the record
+//< on the board (ksdb).
+//< **The record kinds' numbers are set here and nowhere else.** Assigned in two places, one number
+//< would get a second meaning, and what the previous start-up wrote would be read as another type.
+//< **Every one of them is on the "keep running even if it cannot be saved" side.** When the
+//< record is full or a write fails, neither driving nor deciding stops (the caller shows in the
+//< report how many times it could save).
+import "ksos/demo/common/car_model" as cmodel
+import "ksos/demo/rp2040/common/console" as con
+import "ksos/demo/rp2040/common/records"
+
+const kind_policy: U16 = 1 //< the record kinds
+  //<
+  //< 0 is the marker, so it is not used (`records.kind_marker`).
+const kind_sample: U16 = 2
+const kind_model: U16 = 3
+
+$saves: U32 = 0
+
+fn models_saved(): U32 //< how many times the learned weights were saved in the record
+  //<
+  //< **While it is 0, the next start-up does not resume where this one left off.**
+  return saves
+
+fn wipe(marker: U8[], blob: U8[]): Bool //<
+  //< Erases the record, and writes back only the marker and the policy
+  //<
+  //< **true if they were written back.**
+  //< Caution: **Do not erase the policy too.** It is in the same region, so a naive erase leaves
+  //< the car unable to move at all on the next start-up with no PC there. **The observations and
+  //< the learned weights do go** (the weights are learned again while driving).
+  if !records.ok()
+    return false
+  lg: = records.handle()
+  lg.reset() catch
+    return false
+  lg.append(records.kind_marker, marker) catch
+    return false
+  saves = 0
+  if blob.len == 0
+    return true
+  lg.append(kind_policy, blob) catch
+    return false
+  return true
+
+fn save_policy(ln: con.Line$@, blob: U8[]) //< saves the downloaded policy
+  //<
+  //< **If it is the same one, it is not rewritten.** The record only appends, so a rewrite uses up
+  //< that much room (one file is 2KB, so writing every time fills it in a few dozen start-ups).
+  if !records.ok()
+    return
+  lg: = records.handle()
+  if lg.last_equals(kind_policy, blob)
+    con.say(ln, "[car]", "policy unchanged — kept the stored one")
+    return
+  lg.append(kind_policy, blob) catch e
+    // Print the reason too. Full (expected) and a failed write (something wrong with the region)
+    // are different things.
+    ln.reset()
+    ln.str("[car] FAILED to store the policy: ")
+    ln.str(e.variant_name())
+    _sent: = ln.flush()
+    return
+  con.say(ln, "[car]", "policy stored on board")
+
+fn stored_policy(buf: U8$[]): U8[] //<
+  //< Reads the policy saved in the record into `buf`, and if it could be read returns its body
+  //<
+  //< **The result is a slice pointing into `buf`.** The policy's weights point straight into it
+  //< (see load in ksos/demo/common/pilot_policy.kspls), so leave `buf` alone while it runs.
+  if !records.ok()
+    return ""
+  n: = records.read_last(kind_policy, buf)
+  if n == 0
+    return ""
+  return U8[]::{ .ptr = buf.ptr, .len = n }
+
+fn save_model(buf: U8$[]) //< saves the learned weights in the record
+  //<
+  //< Caution: **It returns silently even when it fails.** It is called again and again inside the
+  //< loop, so messages here would flood the lines while it runs.
+  if !records.ok() || !cmodel.save(buf)
+    return
+  records.handle().append(kind_model, U8[]::{ .ptr = buf.ptr, .len = buf.len }) catch
+    return
+  saves += 1
+
+fn load_model(buf: U8$[]): Bool //< reads the weights the previous start-up saved
+  //<
+  //< **true if they were read.**
+  //< **They can be rejected** (after the scale or the net's shape changes). Then it runs with the
+  //< initial values and learns again.
+  n: = records.read_last(kind_model, buf)
+  if n != buf.len
+    return false
+  return cmodel.load(U8[]::{ .ptr = buf.ptr, .len = n })

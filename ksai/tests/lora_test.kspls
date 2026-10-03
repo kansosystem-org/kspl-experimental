@@ -1,0 +1,236 @@
+import "ksai/attention_train" as ai_attn_train
+import "ksai/block_train" as ai_block_train
+import "ksai/grad" as ai_grad
+import "ksai/lora" as ai_lora
+import "ksai/nn" as ai_nn
+import "ksai/sampler" as ai_sampler
+import "ksai/tensor" { Tensor }
+import "ksai/tests/common_test"
+import "std/mem" + { Arena }
+import "std/prng"
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// LoRA fine-tuning: freezes the base linear layer and trains only the low-rank adapter
+// ==========================================
+fn test_lora_finetune(arena: Arena$@)
+  verdict.start("[LoRA] frozen base + low-rank adapter fine-tuning...")
+  in_dim: Sz = 4
+  out_dim: Sz = 4
+  target: I32 = 0
+  x_shape: Sz[2] = ::{ 1, in_dim }
+  x: = Tensor<|F32|>.new(Sz[]::x_shape, arena)
+  (x.data + 0)$ = F32::0.7
+  (x.data + 1)$ = F32::0.2
+  (x.data + 2)$ = -(F32::0.5)
+  (x.data + 3)$ = F32::0.4
+  // the base linear layer to freeze (initialized to 0.1)
+  $base: = ai_nn.Linear<|F32|>.new(in_dim, out_dim, arena)
+  $base_sum_before: = 0.0
+  for i in Range.asc(base.weights.size)
+    base_sum_before += (base.weights.data + i)$
+  // the LoRA adapter (rank=2)
+  $rng: = prng.Prng.new(123U64)
+  $lora: = ai_lora.Lora<|F32|>.new(in_dim, out_dim, 2, 4.0, rng@, arena)
+
+  $loss0: = 0.0
+  for step in Range.asc(300)
+    base_out: = base.forward(x) // the frozen base [1,4]
+    delta: = lora.forward(x) // the adapter's contribution [1,4]
+    $logits: = base_out + delta
+    loss: = logits.cross_entropy_loss(target)
+    if step == 0
+      loss0 = loss
+    dlogits: = logits.grad_softmax_cross_entropy(target)
+    lora.backward(x, dlogits, 0.3) // only A and B updated (the base stays frozen)
+  // What is checked: the base weights unchanged, the loss lower, the prediction matching target
+  $base_sum_after: = 0.0
+  for i in Range.asc(base.weights.size)
+    base_sum_after += (base.weights.data + i)$
+  base_drift: = base_sum_after - base_sum_before
+  base_drift_abs: = -base_drift if base_drift < 0.0 else base_drift
+  assert(base_drift_abs < 1.0e-9, "LoRA: base weights must stay frozen")
+
+  base_out: = base.forward(x)
+  delta: = lora.forward(x)
+  $final_logits: = base_out + delta
+  loss_final: = final_logits.cross_entropy_loss(target)
+  pred: = ai_sampler.argmax(final_logits)
+  assert(pred == target, "LoRA: fine-tuned model must predict the target class")
+  assert(loss_final < loss0 * 0.5, "LoRA: fine-tuning must reduce the loss")
+  verdict
+    .pass(arena.text()
+    .s("with the body left frozen, only the low-rank difference is trained and the loss falls ")
+    .s("(loss \{loss0\} -> \{loss_final\})").take())
+// ==========================================
+// On-device learning with Self-Attention + Qkv_lora: train_forward_lora/backward_lora checked
+// numerically, the base (wq/wk/wv/wo) frozen and only the LoRA's A and B trained.
+// ==========================================
+fn test_attention_lora_grad(arena: Arena$@)
+  verdict.start("[Attn+LoRA] frozen base + Qkv_lora backward numerical gradient check (F64)...")
+  seqn: Sz = 3
+  d: Sz = 4
+  $att: = ai_nn.Self_attention<|F64|>.new(d, seqn, arena)
+  $rng: = prng.Prng.new(7U64)
+  $q_lora: = ai_lora.Lora<|F64|>.new(d, d, 2, 4.0, rng@, arena)
+  $v_lora: = ai_lora.Lora<|F64|>.new(d, d, 2, 4.0, rng@, arena)
+  x_shape: Sz[2] = ::{ seqn, d }
+  x: = Tensor<|F64|>.new(Sz[]::x_shape, arena)
+  for i in Range.asc(x.size)
+    (x.data + i)$ = 0.1 * (F64::i) - 0.5 // a deterministic input that varies
+  // the analytic gradient (lr=0 freezes the LoRA too; only dX is checked)
+  $c: = att.train_forward_lora(x, q_lora@, v_lora@)
+  $dout: = Tensor<|F64|>.new(c.out.shape, arena)
+  dout.fill(1.0)
+  dx: = att.backward_lora(c@, dout, 0.0, q_lora@, v_lora@)
+
+  eps: = 1.0e-5
+  for k in Range.asc(x.size)
+    saved: = (x.data + k)$
+    (x.data + k)$ = saved + eps
+    l_plus: = common_test.tsum_f64(att.train_forward_lora(x, q_lora@, v_lora@).out)
+    (x.data + k)$ = saved - eps
+    l_minus: = common_test.tsum_f64(att.train_forward_lora(x, q_lora@, v_lora@).out)
+    (x.data + k)$ = saved
+    numeric: = (l_plus - l_minus) / (2.0 * eps)
+    analytic: = (dx.data + k)$
+    diff: = numeric - analytic
+    ad: = -diff if diff < 0.0 else diff
+    assert(ad < 1.0e-4, "Attn+LoRA: dX must match finite difference")
+  // A snapshot of the base weight (wq), to check it is still frozen after training
+  $wq_sum_before: = 0.0
+  for i in Range.asc(att.wq.weights.size)
+    wq_sum_before += (att.wq.weights.data + i)$
+  // L=Σout decreases under gradient descent (the LoRA-only backward pass and update together)
+  before: = common_test.tsum_f64(att.train_forward_lora(x, q_lora@, v_lora@).out)
+  for _step in Range.asc(20)
+    $cc: = att.train_forward_lora(x, q_lora@, v_lora@)
+    $d1: = Tensor<|F64|>.new(cc.out.shape, arena)
+    d1.fill(1.0)
+    att.backward_lora(cc@, d1, 0.01, q_lora@, v_lora@)
+  after: = common_test.tsum_f64(att.train_forward_lora(x, q_lora@, v_lora@).out)
+  assert(after < before, "Attn+LoRA: SGD must reduce the sum-of-outputs loss")
+
+  $wq_sum_after: = 0.0
+  for i in Range.asc(att.wq.weights.size)
+    wq_sum_after += (att.wq.weights.data + i)$
+  drift: = wq_sum_after - wq_sum_before
+  drift_abs: = -drift if drift < 0.0 else drift
+  assert(drift_abs < 1.0e-9, "Attn+LoRA: base wq must stay frozen during LoRA training")
+  verdict
+    .pass(arena.text()
+    .s("the backward pass of an Attention with Qkv_lora inserted matches numerical differentiation ")
+    .s("(F64) (Σout \{before\} -> \{after\})").take())
+// ==========================================
+// Transformer_block + Qkv_lora/Mlp_lora: the block version of the Attn+LoRA check, the whole block
+// frozen and only the LoRA on Attention's Q/V and the MLP's fc1/fc2 trained.
+// ==========================================
+fn test_block_lora_grad(arena: Arena$@)
+  verdict
+    .start("[Block+LoRA] frozen base + Qkv_lora/Mlp_lora backward numerical gradient check (F64)...")
+  seqn: Sz = 3
+  d: Sz = 4
+  hidden: Sz = 8
+  $blk: = ai_nn.Transformer_block<|F64|>.new(d, hidden, seqn, 1.0e-5, arena)
+  $rng: = prng.Prng.new(11U64)
+  $q_lora: = ai_lora.Lora<|F64|>.new(d, d, 2, 4.0, rng@, arena)
+  $v_lora: = ai_lora.Lora<|F64|>.new(d, d, 2, 4.0, rng@, arena)
+  $fc1_lora: = ai_lora.Lora<|F64|>.new(d, hidden, 2, 4.0, rng@, arena)
+  $fc2_lora: = ai_lora.Lora<|F64|>.new(hidden, d, 2, 4.0, rng@, arena)
+
+  x_shape: Sz[2] = ::{ seqn, d }
+  x: = Tensor<|F64|>.new(Sz[]::x_shape, arena)
+  for i in Range.asc(x.size)
+    (x.data + i)$ = 0.07 * (F64::i) - 0.4
+
+  // the analytic gradient (lr=0 freezes the LoRA too; only dX is checked)
+  $c: = blk.train_forward_lora(x, q_lora@, v_lora@, fc1_lora@, fc2_lora@)
+  $dout: = Tensor<|F64|>.new(c.out.shape, arena)
+  dout.fill(1.0)
+  dx: = blk.backward_lora(c@, dout, 0.0, q_lora@, v_lora@, fc1_lora@, fc2_lora@)
+
+  eps: = 1.0e-5
+  for k in Range.asc(x.size)
+    saved: = (x.data + k)$
+    (x.data + k)$ = saved + eps
+    fwd_plus: = blk.train_forward_lora(x, q_lora@, v_lora@, fc1_lora@, fc2_lora@)
+    l_plus: = common_test.tsum_f64(fwd_plus.out)
+    (x.data + k)$ = saved - eps
+    fwd_minus: = blk.train_forward_lora(x, q_lora@, v_lora@, fc1_lora@, fc2_lora@)
+    l_minus: = common_test.tsum_f64(fwd_minus.out)
+    (x.data + k)$ = saved
+    numeric: = (l_plus - l_minus) / (2.0 * eps)
+    analytic: = (dx.data + k)$
+    diff: = numeric - analytic
+    ad: = -diff if diff < 0.0 else diff
+    assert(ad < 1.0e-3, "Block+LoRA: dX must match finite difference")
+
+  // Snapshots of the base weights (attention.wq / attention_norm / ffn.fc1), one from each path,
+  // to check they stay frozen.
+  wq_before: = common_test.tsum_f64(blk.attention.wq.weights)
+  norm_before: = common_test.tsum_f64(blk.attention_norm.weight)
+  fc1_before: = common_test.tsum_f64(blk.ffn.fc1.weights)
+
+  // L=Σout decreases under gradient descent (the LoRA-only backward pass and update together)
+  fwd_before: = blk.train_forward_lora(x, q_lora@, v_lora@, fc1_lora@, fc2_lora@)
+  before: = common_test.tsum_f64(fwd_before.out)
+  for _step in Range.asc(20)
+    $cc: = blk.train_forward_lora(x, q_lora@, v_lora@, fc1_lora@, fc2_lora@)
+    $d1: = Tensor<|F64|>.new(cc.out.shape, arena)
+    d1.fill(1.0)
+    blk.backward_lora(cc@, d1, 0.01, q_lora@, v_lora@, fc1_lora@, fc2_lora@)
+  fwd_after: = blk.train_forward_lora(x, q_lora@, v_lora@, fc1_lora@, fc2_lora@)
+  after: = common_test.tsum_f64(fwd_after.out)
+  assert(after < before, "Block+LoRA: SGD must reduce the sum-of-outputs loss")
+
+  wq_drift_raw: = common_test.tsum_f64(blk.attention.wq.weights) - wq_before
+  wq_drift: = -wq_drift_raw if wq_drift_raw < 0.0 else wq_drift_raw
+  norm_drift_raw: = common_test.tsum_f64(blk.attention_norm.weight) - norm_before
+  norm_drift: = -norm_drift_raw if norm_drift_raw < 0.0 else norm_drift_raw
+  fc1_drift_raw: = common_test.tsum_f64(blk.ffn.fc1.weights) - fc1_before
+  fc1_drift: = -fc1_drift_raw if fc1_drift_raw < 0.0 else fc1_drift_raw
+  assert(wq_drift < 1.0e-9, "Block+LoRA: attention.wq must stay frozen")
+  assert(norm_drift < 1.0e-9, "Block+LoRA: attention_norm must stay frozen")
+  assert(fc1_drift < 1.0e-9, "Block+LoRA: ffn.fc1 must stay frozen")
+  verdict
+    .pass(arena.text()
+    .s("the backward pass of a Transformer_block with Qkv_lora/Mlp_lora inserted matches numerical ")
+    .s("differentiation (F64) (Σout \{before\} -> \{after\})").take())
+// ==========================================
+// Persisting a LoRA adapter (save_raw/load_raw): save_set_into/load_set_from (safetensors+JSON) go
+// through Str_builder and so require the global heap, which an arena-only build cannot use.
+// ==========================================
+fn test_lora_raw_persist()
+  verdict.start("[LoRA] save_raw/load_raw: the raw-byte persistence round trip test...")
+  storage: Sz[4096] = ::{}
+  $sa: = Arena.from_buffer(Void$@::storage@, sizeof(Sz) * 4096)
+  heap_before: = mem.heap_requested_total_bytes()
+
+  $rng: = prng.Prng.new(3U64)
+  $lora: = ai_lora.Lora<|F32|>.new(4, 6, 2, 4.0, rng@, sa@)
+  // Makes B non-zero, imitating a trained state (a fresh initialization has B=0 and so delta=0)
+  for i in Range.asc(lora.b.size)
+    (lora.b.data + i)$ = (F32::0.01) * (F32::i + F32::1.0)
+
+  flash_sim: U8[256] = ::{} // a static byte array standing in for flash/NVRAM
+  assert(lora.raw_size() <= 256, "test buffer too small for Lora.raw_size()")
+  lora.save_raw(Void$@::flash_sim@)
+
+  // Rebuilt from the raw bytes alone, with no link to the original, as after a restart
+  $reloaded: = ai_lora.Lora<|F32|>.load_raw(Void$@::flash_sim@, 4, 6, 2, sa@)
+  after_roundtrip: = mem.heap_requested_total_bytes()
+  assert(after_roundtrip == heap_before, "Lora.save_raw/load_raw must never call libc.malloc")
+
+  x_shape: Sz[2] = ::{ 1, 4 }
+  x: = Tensor<|F32|>.new(Sz[]::x_shape, sa@)
+  for i in Range.asc(x.size)
+    (x.data + i)$ = (F32::0.1) * (F32::i)
+  out0: = lora.forward(x)
+  out1: = reloaded.forward(x)
+  for i in Range.asc(out0.size)
+    diff: = (out0.data + i)$ - (out1.data + i)$
+    ad: = -diff if diff < 0.0 else diff
+    assert(ad < 1.0e-9, "Lora.load_raw output must exactly match the original after round-trip")
+  verdict
+    .pass(sa.text().s("(raw_size=\{I32::lora.raw_size()\} bytes, 0 libc.malloc calls)").take())

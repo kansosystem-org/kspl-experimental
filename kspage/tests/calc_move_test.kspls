@@ -1,0 +1,600 @@
+import "kspage/expr/calc"
+import "kspage/lay/caret"
+import "kspage/lay/flow"
+import "kspage/lay/page"
+import "kspage/model/doc" { Axis, Block, Doc }
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/paint"
+import "kspage/model/style" + { Sheet }
+// The helpers that build a table live there.
+// Caution: **Do not make a copy** (the same sample would be maintained in two places).
+import "kspage/tests/base"
+import "kspage/tests/calc_test" as book
+import "kspage/write/cells"
+import "kspage/write/edit"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// kspage: checks a table's formulas when rows and columns are added or removed, and when copied (a
+// golden test). **A reference is absolute**: `A2` keeps pointing at the cell `A2`, so adding or
+// removing a row or column changes the formula's number. **Only copying differs**: the part with
+// `$` does not move.
+// ==========================================
+
+// ---- references moving when rows and columns are added or removed ----
+
+priv fn cell_source(t: Block$@, r: Sz, c: Sz): U8[]
+  return t.children.get(r).children.get(c).inlines.get(0).text()
+
+priv fn caret_at(ed: edit.Editor$@, t: Block$@, r: Sz, c: Sz) //<
+  //< Puts the cursor in the cell (`r`, `c`)
+  ed.caret = caret.at(t.children.get(r).children.get(c).inlines.get(0), 0)
+
+priv fn place(d: Doc$@, sheet: Sheet$@, arena: Arena$@): page.Page$@
+  return flow.layout(d, sheet, fixed.make(), 200.0, arena)
+
+fn test_inserting_a_row_moves_the_references_below_it() //<
+  //< Add a row and a formula pointing at a cell below keeps pointing at the same cell
+  verdict.start("[kspage/calc] a reference slipping when a row is added test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = d.add_block("table")
+  r0: = book.add_row(t)
+  book.add_cell(r0, "10")
+  book.add_cell(r0, "=A1:A3.sum()")
+  book.add_cell(r0, "=A3+1")
+  book.add_cell(book.add_row(t), "20")
+  book.add_cell(book.add_row(t), "30")
+
+  sheet: = base.grid_sheet(arena)
+  calc.recalc(d, sheet)
+  assert(book.cell_text(t, 0, 1).equals("60"), "the total before")
+  assert(book.cell_text(t, 0, 2).equals("31"), "the reference before")
+
+  ed: = edit.new_editor(d)
+  caret_at(ed, t, 0, 0)
+  assert(ed.add_line(place(d, sheet, arena), Axis.row), "the row could be added")
+  assert(t.children.len == 4, "the rows grow by one")
+  assert(cell_source(t, 0, 1).equals("=A1:A4.sum()"), "the range swallows the row added")
+  assert(cell_source(t, 0, 2).equals("=A4+1"), "a formula pointing at a cell that was below slips")
+
+  calc.recalc(d, sheet)
+  assert(book.cell_text(t, 0, 1).equals("60"), "the total does not change")
+  assert(book.cell_text(t, 0, 2).equals("31"), "what it points at does not change either")
+  verdict.pass("add a row and the formula goes on pointing at the same cell.")
+
+fn test_dropping_a_row_breaks_only_what_pointed_at_it() //<
+  //< Delete a row and a formula pointing at it breaks, and a range shrinks by as much
+  verdict.start("[kspage/calc] a reference when a row is deleted test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = d.add_block("table")
+  r0: = book.add_row(t)
+  book.add_cell(r0, "10")
+  book.add_cell(r0, "=A1:A3.sum()")
+  book.add_cell(r0, "=A2*2")
+  book.add_cell(r0, "=A3+1")
+  book.add_cell(book.add_row(t), "20")
+  book.add_cell(book.add_row(t), "30")
+
+  sheet: = base.grid_sheet(arena)
+  calc.recalc(d, sheet)
+  ed: = edit.new_editor(d)
+  caret_at(ed, t, 1, 0)
+  assert(ed.drop_line(place(d, sheet, arena), Axis.row), "the row could be deleted")
+  assert(t.children.len == 2, "the rows drop by one")
+  assert(cell_source(t, 0, 1).equals("=A1:A2.sum()"), "the range shrinks by the row that went")
+  assert(cell_source(t, 0, 2).equals("=#REF!*2"), "the row that went can no longer be pointed at")
+  assert(cell_source(t, 0, 3).equals("=A2+1"),
+    "a formula pointing at a cell that was below packs up")
+
+  calc.recalc(d, sheet)
+  assert(book.cell_text(t, 0, 1).equals("40"), "the total of the cells left over comes out")
+  assert(book.cell_text(t, 0, 2).equals("#REF!"), "a formula that cannot point puts a mark out")
+  assert(book.cell_text(t, 0, 3).equals("31"), "what it points at does not change")
+  verdict.pass("only a formula pointing at the row that went breaks, and the range shrinks.")
+
+fn test_inserting_a_column_moves_the_references_to_its_right() //< a column moves by the same rule
+  //<
+  //< Only the column's number changes, and the row's number stays.
+  verdict.start("[kspage/calc] a reference slipping when a column is added test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = d.add_block("table")
+  r0: = book.add_row(t)
+  book.add_cell(r0, "10")
+  book.add_cell(r0, "20")
+  r1: = book.add_row(t)
+  book.add_cell(r1, "=A1:B1.sum()")
+  book.add_cell(r1, "=B1*2")
+
+  sheet: = base.grid_sheet(arena)
+  calc.recalc(d, sheet)
+  assert(book.cell_text(t, 1, 0).equals("30"), "the total before")
+  assert(book.cell_text(t, 1, 1).equals("40"), "the reference before")
+
+  ed: = edit.new_editor(d)
+  caret_at(ed, t, 0, 0)
+  assert(ed.add_line(place(d, sheet, arena), Axis.column), "the column could be added")
+  assert(cell_source(t, 1, 0).equals("=A1:C1.sum()"),
+    "the column range swallows the column added too")
+  assert(cell_source(t, 1, 2).equals("=C1*2"),
+    "a formula pointing at a cell that was to the right slips")
+
+  calc.recalc(d, sheet)
+  assert(book.cell_text(t, 1, 0).equals("30"), "the total does not change")
+  assert(book.cell_text(t, 1, 2).equals("40"), "what it points at does not change either")
+  verdict.pass("add a column and the formula goes on pointing at the same cell.")
+
+fn test_references_from_elsewhere_move_too() //<
+  //< A reference that names its table shifts the same way from another table and from the body
+  //<
+  //< One that names no table resolves in its formula's own table, so inside another it stays.
+  verdict.start("[kspage/calc] a reference from elsewhere slipping too test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  src: = d.add_block("table")
+  src.name = "detail"
+  book.add_cell(book.add_row(src), "10")
+  book.add_cell(book.add_row(src), "20")
+
+  other: = d.add_block("table")
+  r: = book.add_row(other)
+  book.add_cell(r, "=detail!A2")
+  book.add_cell(r, "=A1")
+  book.add_cell(r, "=detail!A1:A2.sum()")
+  body: = d.add_block("body")
+  prose: = body.add_text("=detail!A2")
+
+  sheet: = base.grid_sheet(arena)
+  calc.recalc(d, sheet)
+  ed: = edit.new_editor(d)
+  caret_at(ed, src, 0, 0)
+  assert(ed.add_line(place(d, sheet, arena), Axis.row), "the row could be added")
+  assert(cell_source(other, 0, 0).equals("=detail!A3"), "a reference from another table slips")
+  bare: = cell_source(other, 0, 1)
+  assert(bare.equals("=A1"), "a reference with no name stays on its own table")
+  span: = cell_source(other, 0, 2)
+  assert(span.equals("=detail!A1:A3.sum()"), "the name lies on the whole range")
+  assert(prose.text().equals("=detail!A3"), "a formula in the body slips too")
+
+  calc.recalc(d, sheet)
+  assert(book.cell_text(other, 0, 0).equals("20"), "what it points at does not change")
+  assert(book.cell_text(other, 0, 2).equals("30"), "the range's total does not change either")
+  assert(prose.showing().equals("20"),
+    "the answer of the formula in the body does not change either")
+  verdict.pass("only a reference that points by name slips across tables.")
+
+fn test_the_row_and_its_formulas_undo_together() //<
+  //< Adding or removing a row and rewriting the formulas are one step
+  //<
+  //< Split, one undo would bring back only the row and strand the formulas.
+  verdict.start("[kspage/calc] a row and a formula going back in one test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = d.add_block("table")
+  r0: = book.add_row(t)
+  book.add_cell(r0, "10")
+  book.add_cell(r0, "=A2*2")
+  book.add_cell(book.add_row(t), "20")
+
+  sheet: = base.grid_sheet(arena)
+  calc.recalc(d, sheet)
+  ed: = edit.new_editor(d)
+  caret_at(ed, t, 0, 0)
+  assert(ed.add_line(place(d, sheet, arena), Axis.row), "the row could be added")
+  assert(cell_source(t, 0, 1).equals("=A3*2"), "the formula slipped")
+
+  assert(ed.undo(), "it can be put back in one")
+  assert(t.children.len == 2, "the row comes home")
+  assert(cell_source(t, 0, 1).equals("=A2*2"), "the formula comes home with it")
+  calc.recalc(d, sheet)
+  assert(book.cell_text(t, 0, 1).equals("40"), "the answer comes home too")
+
+  assert(ed.redo(), "it can be redone in one step")
+  assert(t.children.len == 3, "the row grows again")
+  assert(cell_source(t, 0, 1).equals("=A3*2"), "the formula slips again")
+  verdict.pass("a row and a formula go back in one, and redo in one step.")
+// ---- number formats ----
+
+priv fn shown_with(spec: style.Number_spec, formula: U8[], arena: Arena$@): U8[] //<
+  //< A formula's result is shown in the format that text's style sets
+  //<
+  //< **It applies only where a text is made from a value**; changing plain typed text would turn it
+  //< into a number mid-keystroke.
+  d: = Doc.new(arena)
+  sheet: = base.grid_sheet(arena)
+  money: = sheet.add("money", paint.inherit_all())
+  money.number = spec
+  t: = d.add_block("table")
+  r: = book.add_row(t)
+  r.add_child("").add_text("1234.5")
+  r.add_child("").add_text(formula, "money")
+  calc.recalc(d, sheet)
+  return book.cell_text(t, 0, 1)
+
+fn test_a_number_format_dresses_the_answer()
+  verdict.start("[kspage/calc] how a number is shown acting on the answer test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  plain: style.Number_spec = style.plain_number()
+  bare: = shown_with(plain, "=A1", arena)
+  assert(bare.equals("1234.5"), "with nothing dressed it stays plain")
+
+  $money: style.Number_spec = style.plain_number()
+  money.grouped = true
+  money.places = Option<|Sz|>.some(0)
+  money.prefix = "$"
+  money.suffix = " USD"
+  // Round before grouping; take the integer part first and 1,234 and .5 would fall apart.
+  assert(shown_with(money, "=A1", arena).equals("$1,235 USD"), "both the sign and the parting go on")
+
+  $pct: style.Number_spec = style.plain_number()
+  pct.percent = true
+  pct.places = Option<|Sz|>.some(1)
+  pct.suffix = "%"
+  assert(shown_with(pct, "=A1/10000", arena).equals("12.3%"), "a per cent shows a hundredfold")
+
+  $two: style.Number_spec = style.plain_number()
+  two.places = Option<|Sz|>.some(2)
+  // Drop the leading 0 after the point and 1.05 would become "1.5".
+  assert(shown_with(two, "=1.05", arena).equals("1.05"), "the 0 above the decimal is written too")
+  assert(shown_with(two, "=1", arena).equals("1.00"), "set the places and it is filled with 0")
+
+  $wide: style.Number_spec = style.plain_number()
+  wide.grouped = true
+  assert(shown_with(wide, "=1000", arena).equals("1,000"),
+    "the group below evens up to three places")
+  assert(shown_with(wide, "=1234567", arena).equals("1,234,567"),
+    "however many groups, it parts them")
+  assert(shown_with(wide, "=-2500", arena).equals("-2,500"), "a negative value gets the parting too")
+  // Format an error's text and it would look like a value.
+  assert(shown_with(money, "=1+", arena).equals("#SYNTAX!"), "a mistake is not dressed")
+  verdict.pass("the answer is written in the showing the style says, and a mistake is not dressed.")
+
+fn test_a_merged_cell_answers_at_its_top_left() //< a merged cell's address is only its top left
+  verdict.start("[kspage/calc] a merged cell's address test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = base.grid_sheet(arena)
+  t: = d.add_block("table")
+  head: = book.add_row(t)
+  book.add_cell(head, "5")
+  book.add_cell(head, "7")
+  low: = book.add_row(t)
+  // The first cell of the first row is merged to the right (the covered cell is removed).
+  head.children.get(0).span_cols = 2
+  head.children.remove_at(1)
+  book.add_cell(low, "=A1")
+  book.add_cell(low, "=B1")
+
+  calc.recalc(d, sheet)
+  assert(book.cell_text(t, 1, 0).equals("5"), "the top-left address holds that value")
+  // **A covered address means "there is no cell"**; a 0 would look like a value although merged.
+  assert(book.cell_text(t, 1, 1).equals("#REF!"), "the address covered holds no value")
+  verdict.pass("on a merged cell the top-left address alone holds a value.")
+
+fn test_a_number_format_is_not_inherited() //<
+  //< **A number format is not inherited**: only the text's own style counts
+  //<
+  //< On the table's style, even the headings and notes would become currency.
+  verdict.start("[kspage/calc] how a number is shown not being carried down test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = base.grid_sheet(arena)
+  yen: = sheet.find("table").unwrap_or(null)
+  yen.number.prefix = "¥"
+  t: = book.one_row(d, "1200", "=A1")
+
+  calc.recalc(d, sheet)
+  plain: = book.cell_text(t, 0, 1)
+  assert(plain.equals("1200"), "the table style's showing does not come down to the text")
+  verdict.pass("how a number is shown comes from the text's own style and nowhere else.")
+fn test_an_absolute_reference_is_read_and_written_back() //<
+  //< The part with `$` does not move when copied
+  verdict.start("[kspage/calc] the text of an absolute reference test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = d.add_block("table")
+  r0: = book.add_row(t)
+  book.add_cell(r0, "10")
+  // It points below the added row (rows before it do not move, so the `$` would show nothing).
+  book.add_cell(r0, "=$A$2*2")
+  book.add_cell(book.add_row(t), "20")
+
+  sheet: = base.grid_sheet(arena)
+  calc.recalc(d, sheet)
+  assert(book.cell_text(t, 0, 1).equals("40"), "with the mark on it, it points at the same cell")
+
+  // Add a row and the number moves, `$` or not (because the cell itself moves).
+  ed: = edit.new_editor(d)
+  caret_at(ed, t, 0, 0)
+  assert(ed.add_line(place(d, sheet, arena), Axis.row), "the row could be added")
+  assert(cell_source(t, 0, 1).equals("=$A$3*2"), "the mark is left and the number moves")
+  verdict.pass("a `$` goes round as a text, and moves when rows are added or taken away.")
+
+fn test_filling_down_shifts_the_relative_parts() //<
+  //< Copies the current cell's text to the cells further along
+  verdict.start("[kspage/calc] copying downwards test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = d.add_block("table")
+  // Column A is values, and column B is "the same row's A × $B$1".
+  r0: = book.add_row(t)
+  book.add_cell(r0, "2")
+  book.add_cell(r0, "=A1*$A$1")
+  r1: = book.add_row(t)
+  book.add_cell(r1, "3")
+  book.add_cell(r1, "")
+  r2: = book.add_row(t)
+  book.add_cell(r2, "4")
+  book.add_cell(r2, "")
+
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+  caret_at(ed, t, 0, 1)
+  assert(ed.fill_along(place(d, sheet, arena), Axis.row), "it copied downwards")
+  assert(cell_source(t, 1, 1).equals("=A2*$A$1"), "the second row points one below")
+  assert(cell_source(t, 2, 1).equals("=A3*$A$1"), "the third row slips in the same shape")
+
+  // **Undo restores the text from before the recalculation.** Restored after it, the texts would
+  // mix: the record holds an offset in the text, which the computed value replaces.
+  assert(ed.undo(), "it can be put back in one")
+  assert(cell_source(t, 1, 1).len == 0, "it comes home to the empty it was before the copying")
+  assert(ed.redo(), "it can be redone in one step")
+
+  calc.recalc(d, sheet)
+  assert(book.cell_text(t, 1, 1).equals("6"), "the formula copied comes apart")
+  assert(book.cell_text(t, 2, 1).equals("8"), "the next one comes apart in the same shape")
+  verdict.pass("a copy slips the relative places alone, and goes back in one.")
+
+fn test_filling_right_shifts_the_columns() //< it copies to the right by the same rule too
+  verdict.start("[kspage/calc] copying rightwards test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = d.add_block("table")
+  r0: = book.add_row(t)
+  book.add_cell(r0, "5")
+  book.add_cell(r0, "6")
+  book.add_cell(r0, "7")
+  r1: = book.add_row(t)
+  book.add_cell(r1, "=A1+1")
+  book.add_cell(r1, "")
+  book.add_cell(r1, "")
+
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+  caret_at(ed, t, 1, 0)
+  assert(ed.fill_along(place(d, sheet, arena), Axis.column), "it copied rightwards")
+  assert(cell_source(t, 1, 1).equals("=B1+1"), "one to the right points at the next column")
+  assert(cell_source(t, 1, 2).equals("=C1+1"), "the next one slips in the same shape")
+  calc.recalc(d, sheet)
+  assert(book.cell_text(t, 1, 2).equals("8"), "the formula copied comes apart")
+  verdict.pass("copying rightwards slips the column's number alone.")
+
+// ---- sorting the rows ----
+
+priv fn scored(d: Doc$@): Block$@ //< one heading row and three rows of values
+  //<
+  //< Column B is "twice the same row's A".
+  t: = d.add_block("table")
+  head: = book.add_row(t)
+  book.add_cell(head, "score")
+  book.add_cell(head, "double")
+  r1: = book.add_row(t)
+  book.add_cell(r1, "30")
+  book.add_cell(r1, "=A2*2")
+  r2: = book.add_row(t)
+  book.add_cell(r2, "10")
+  book.add_cell(r2, "=A3*2")
+  r3: = book.add_row(t)
+  book.add_cell(r3, "20")
+  book.add_cell(r3, "=A4*2")
+  return t
+
+fn test_sorting_moves_the_rows_and_their_formulas() //<
+  //< Sorts, by the cursor's column, from the cursor's row downwards
+  //<
+  //< The references inside a formula shift by as much as the row moved.
+  verdict.start("[kspage/calc] sorting the rows test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = scored(d)
+  sheet: = base.grid_sheet(arena)
+
+  ed: = edit.new_editor(d)
+  // From the row after the heading downwards, sorted on column A.
+  caret_at(ed, t, 1, 0)
+  assert(ed.sort_rows(place(d, sheet, arena), false).sorted(), "it sorted")
+  assert(book.cell_text(t, 0, 0).equals("score"), "the heading row does not move")
+  assert(book.cell_text(t, 1, 0).equals("10"), "the smaller value comes first")
+  assert(book.cell_text(t, 2, 0).equals("20"), "the next larger value carries on")
+  assert(book.cell_text(t, 3, 0).equals("30"), "the largest value is last")
+  // Not shifted, a formula would read another row where it landed.
+  assert(cell_source(t, 1, 1).equals("=A2*2"), "the first formula points at its own row")
+  assert(cell_source(t, 2, 1).equals("=A3*2"), "the second points at its own row too")
+  assert(cell_source(t, 3, 1).equals("=A4*2"), "the third points at its own row too")
+
+  calc.recalc(d, sheet)
+  assert(book.cell_text(t, 1, 1).equals("20"), "it comes apart on the values after the sorting")
+  assert(book.cell_text(t, 3, 1).equals("60"), "the bottom one comes apart in the same shape")
+  verdict.pass("sorted, the rows move and a formula goes on pointing at its own row.")
+
+fn test_undoing_a_sort_restores_the_original_order() //< one sort is one undo
+  verdict.start("[kspage/calc] putting a sort back test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = scored(d)
+  sheet: = base.grid_sheet(arena)
+
+  ed: = edit.new_editor(d)
+  caret_at(ed, t, 1, 0)
+  assert(ed.sort_rows(place(d, sheet, arena), false).sorted(), "it sorted")
+  assert(ed.undo(), "it can be put back in one")
+  assert(book.cell_text(t, 1, 0).equals("30"), "it comes home to the order before")
+  assert(book.cell_text(t, 3, 0).equals("20"), "the last row is as it was too")
+  assert(cell_source(t, 1, 1).equals("=A2*2"), "the formula comes home to its text before")
+  assert(!ed.undo(), "there is one step to go back by and no more")
+  verdict.pass("a sort comes home in one undo.")
+
+priv fn column_of(d: Doc$@, texts: U8[][]): Block$@ //<
+  //< A table of one column: a heading row "key" and then one row per text
+  t: = d.add_block("table")
+  book.add_cell(book.add_row(t), "key")
+  for $i: Sz = 0; i < texts.len; i += 1
+    book.add_cell(book.add_row(t), texts[i])
+  return t
+
+fn test_sorting_puts_numbers_first_and_blanks_last() //< it can be sorted in reverse too
+  //<
+  //< A text comes after the numbers, and an empty cell is always last.
+  verdict.start("[kspage/calc] the row of numbers, texts and empties test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = column_of(d, U8[][]::{ "xyz", "5", "", "40" })
+  sheet: = base.grid_sheet(arena)
+
+  ed: = edit.new_editor(d)
+  caret_at(ed, t, 1, 0)
+  assert(ed.sort_rows(place(d, sheet, arena), false).sorted(), "it sorted")
+  assert(book.cell_text(t, 1, 0).equals("5"), "the numbers come first")
+  assert(book.cell_text(t, 2, 0).equals("40"), "numbers are compared as numbers")
+  assert(book.cell_text(t, 3, 0).equals("xyz"), "a text comes behind the numbers")
+  assert(book.cell_text(t, 4, 0).len == 0, "an empty is last")
+
+  caret_at(ed, t, 1, 0)
+  assert(ed.sort_rows(place(d, sheet, arena), true).sorted(), "it could be sorted in reverse too")
+  assert(book.cell_text(t, 1, 0).equals("xyz"), "in reverse a text comes first")
+  assert(book.cell_text(t, 2, 0).equals("40"), "the larger number comes first")
+  assert(book.cell_text(t, 4, 0).len == 0, "an empty is last in reverse too")
+  verdict
+    .pass("the order of numbers, texts and empties is fixed, and an empty is last in reverse too.")
+
+fn test_sorting_never_moves_the_heading_row() //<
+  //< The first row is the heading by position, whichever row the cursor is in
+  //<
+  //< Excel guesses the heading from the contents; the saved format says which row it is, and the
+  //< cursor only chooses the column.
+  verdict.start("[kspage/calc] the heading staying put test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = scored(d)
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+  // The cursor in the heading itself, as an Excel user would put it.
+  caret_at(ed, t, 0, 0)
+  assert(ed.sort_rows(place(d, sheet, arena), false).sorted(), "it sorts from the heading too")
+  assert(book.cell_text(t, 0, 0).equals("score"), "the heading stays at the head")
+  assert(book.cell_text(t, 1, 0).equals("10"), "and the rows under it are in order")
+  assert(book.cell_text(t, 3, 0).equals("30"), "down to the last")
+  assert(ed.undo(), "one undo")
+  // The cursor partway down: the rows above it are sorted too (the whole table under the heading).
+  caret_at(ed, t, 3, 0)
+  assert(ed.sort_rows(place(d, sheet, arena), true).sorted(), "it sorts from partway down too")
+  assert(book.cell_text(t, 1, 0).equals("30"), "the whole table under the heading is in order")
+  assert(book.cell_text(t, 3, 0).equals("10"), "the smallest is last in reverse")
+  verdict.pass("the heading never moves, and the cursor only chooses the column.")
+
+fn test_sorting_orders_text_without_regard_to_case() //< "apple" comes before "Zebra"
+  //<
+  //< Excel and Calc sort this way; Sheets puts every capital first. Texts that differ only by case
+  //< keep their order.
+  verdict.start("[kspage/calc] the order of letters regardless of case test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = column_of(d, U8[][]::{ "Zebra", "apple", "Apple", "banana" })
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+  caret_at(ed, t, 1, 0)
+  assert(ed.sort_rows(place(d, sheet, arena), false).sorted(), "it sorted")
+  assert(book.cell_text(t, 1, 0).equals("apple"), "a small letter is not behind every capital")
+  assert(book.cell_text(t, 2, 0).equals("Apple"), "the same word in another case keeps its place")
+  assert(book.cell_text(t, 3, 0).equals("banana"), "b after a")
+  assert(book.cell_text(t, 4, 0).equals("Zebra"), "z last, capital or not")
+  caret_at(ed, t, 1, 0)
+  assert(ed.sort_rows(place(d, sheet, arena), true).sorted(), "reversed too")
+  assert(book.cell_text(t, 1, 0).equals("Zebra"), "z first in reverse")
+  assert(book.cell_text(t, 3, 0).equals("apple") &&
+    book.cell_text(t, 4, 0).equals("Apple"), "the two spellings keep their order in reverse too")
+  verdict.pass("text sorts by letter without regard to case, and case alone does not reorder.")
+
+fn test_sorting_reads_dates_as_dates() //< a date sorts by the day it names, in either form
+  //<
+  //< Compared as text, "18 August 2026" would come before "2025-12-31" (a digit after a letter).
+  verdict.start("[kspage/calc] dates sorting as dates test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = column_of(d, U8[][]::{ "18 August 2026", "2026-01-05", "2025-12-31", "later" })
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+  caret_at(ed, t, 1, 0)
+  assert(ed.sort_rows(place(d, sheet, arena), false).sorted(), "it sorted")
+  assert(book.cell_text(t, 1, 0).equals("2025-12-31"), "the earliest day comes first")
+  assert(book.cell_text(t, 2, 0).equals("2026-01-05"), "then the next")
+  assert(book.cell_text(t, 3, 0).equals("18 August 2026"), "the spelling does not decide the place")
+  assert(book.cell_text(t, 4, 0).equals("later"), "a text that is no date comes behind the dates")
+  verdict.pass("dates sort by the day they name.")
+
+fn test_a_refused_sort_says_why() //< each refusal carries its own reason
+  //<
+  //< One message for every refusal names the wrong cause ("click inside a cell" for a merge), and
+  //< the reader looks for the problem in the cursor's position.
+  verdict.start("[kspage/calc] the reason a sort was refused test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  head: = d.add_block("body").add_text("outside")
+  t: = scored(d)
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+  laid: = place(d, sheet, arena)
+  ed.caret = caret.at(head, 0)
+  assert(ed.sort_rows(laid, false).variant_name().equals("outside"), "outside a table it says so")
+  caret_at(ed, t, 1, 0)
+  assert(ed.sort_rows(laid, false).sorted(), "it sorts once")
+  assert(ed.sort_rows(laid, false).variant_name().equals("in_order"),
+    "sorted again the same way, it says the rows are already in order")
+  assert(ed.undo(), "the one sort goes back")
+  short: = column_of(d, U8[][]::{ "only" })
+  caret_at(ed, short, 1, 0)
+  assert(ed.sort_rows(place(d, sheet, arena), false).variant_name().equals("too_few"),
+    "one row under the heading is too few to order")
+  verdict.pass("a refused sort names its reason.")
+
+fn test_sorting_refuses_across_a_vertical_merge() //<
+  //< A sort that reaches a downward-merged cell is not done
+  //<
+  //< Move the rows and what it covers would shift.
+  verdict.start("[kspage/calc] not sorting where a merge downwards is there test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  t: = scored(d)
+  sheet: = base.grid_sheet(arena)
+
+  ed: = edit.new_editor(d)
+  caret_at(ed, t, 1, 1)
+  assert(ed.merge_cell(place(d, sheet, arena), Axis.row), "it could be merged downwards")
+  caret_at(ed, t, 1, 0)
+  assert(ed.sort_rows(place(d, sheet, arena), false).variant_name().equals("merged"),
+    "where a merge is there it does not sort, and says the merge is why")
+  assert(book.cell_text(t, 1, 0).equals("30"), "the row is as it was too")
+  verdict.pass("no sort that reaches a cell merged downwards is done.")

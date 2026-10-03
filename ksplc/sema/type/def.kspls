@@ -1,0 +1,144 @@
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/core" as base_core
+import "ksplc/sema/type/env" { Info }
+import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
+import "std/ds" { List, Map }
+import "std/str"
+
+// ==========================================
+// The types' shapes themselves (the registry's entry, and the struct / trait / enum
+// declarations), plus small helpers for them.
+//
+// **`Env` (the registry) is not here**: `Env` does the lookups while this file says what exists,
+// and many files import `Env`.
+// ==========================================
+struct Entry
+  info: Info
+  str_repr: U8$[]
+  implemented_traits: List<|I32|>$@
+  methods: Map<|U8[], Sema_symbol$@|>$@
+
+struct Struct_field
+  name: U8[]
+  type_id: I32
+  vis: sema_type_scope.Visibility
+  node: Ast_node$@
+
+struct Struct_def //<
+  //< A struct's definition: its fields, and whether they are filled in yet
+  //<
+  //< **`pending_decl` points at "a declaration whose fields or variants have not been filled in
+  //< yet", and nothing else.** The code that fills it (`sema/decl/registry.kspls`) sets it to null
+  //< before it starts, so this one field tells whether it is filled.
+  //< A layout request fills it then (`ensure_type_registry` in `sema/decl/layout.kspls`). A
+  //< template and an instantiation are null from the start (the latter filled by
+  //< `sema/decl/mono.kspls`).
+  fields_list: List<|Struct_field$@|>$@
+  is_packed: Bool
+  align_attr: I32
+  size_attr: I32 //<
+    //< The N of a `#size(N)` (0 where none), set only on a bodiless opaque struct and used as is.
+  pending_decl: Ast_node$@
+
+struct Trait_def
+  methods_list: List<|Sema_symbol$@|>$@
+
+struct Enum_variant
+  name: U8[]
+  tag_value: I32
+  payload_fields: List<|Struct_field$@|>$@
+  node: Ast_node$@
+
+struct Enum_def
+  base_type_id: I32
+  variants_list: List<|Enum_variant$@|>$@
+  pending_decl: Ast_node$@ //< the meaning is the same as Struct_def.pending_decl's
+
+struct Fn_sig //< a function type's parts: the parameters' types in order, then the result's
+  params: List<|I32|>$@
+  ret_id: I32
+impl Struct_field
+  fn new(name: U8[], type_id: I32, vis: sema_type_scope.Visibility, node: Ast_node$@):
+    Struct_field$@
+    return base_core.arena
+      .create(Struct_field::{ .name = name, .type_id = type_id, .vis = vis, .node = node })
+
+impl Struct_def
+  fn new(): Struct_def$@
+    fields_list: = List<|Struct_field$@|>.create(base_core.arena)
+    return base_core.arena
+      .create(Struct_def::{ .fields_list = fields_list, .is_packed = false, .align_attr = 0,
+      .size_attr = 0, .pending_decl = null })
+  fn get_field(r: Self$@, name: U8[]): Option<|Struct_field$@|>
+    for field in r.fields_list
+      if field.name.equals(name)
+        return Option<|Struct_field$@|>.some(field)
+    return Option<|Struct_field$@|>.none
+
+impl Fn_sig
+  fn new(ret_id: I32): Fn_sig$@
+    params: = List<|I32|>.create(base_core.arena)
+    return base_core.arena.create(Fn_sig::{ .params = params, .ret_id = ret_id })
+
+impl Enum_variant
+  fn new(name: U8[], tag_value: I32, node: Ast_node$@): Enum_variant$@
+    payload_fields: = List<|Struct_field$@|>.create(base_core.arena)
+    return base_core.arena
+      .create(Enum_variant::{ .node = node, .name = name, .tag_value = tag_value,
+      .payload_fields = payload_fields })
+
+impl Enum_def
+  fn new(base_type_id: I32): Enum_def$@
+    variants_list: = List<|Enum_variant$@|>.create(base_core.arena)
+    return base_core.arena
+      .create(Enum_def::{ .base_type_id = base_type_id, .variants_list = variants_list,
+      .pending_decl = null })
+
+  fn get_variant(r: Self$@, name: U8[]): Option<|Enum_variant$@|>
+    for variant in r.variants_list
+      if variant.name.equals(name)
+        return Option<|Enum_variant$@|>.some(variant)
+    return Option<|Enum_variant$@|>.none
+
+  fn is_scalar(r: Self$@): Bool
+    for variant in r.variants_list
+      if variant.payload_fields.len > 0
+        return false
+    return true
+
+impl Trait_def
+  fn new(): Trait_def$@
+    methods_list: = List<|Sema_symbol$@|>.create(base_core.arena)
+    return base_core.arena.create(Trait_def::{ .methods_list = methods_list })
+
+impl Entry
+  fn new(info: Info, str_repr: U8$[]): Entry$@
+    return base_core.arena.create(Entry::{ .info = info, .str_repr = str_repr })
+  fn get_method(r: Self$@, name: U8[]): Option<|Sema_symbol$@|>
+    if r.methods == null
+      return Option<|Sema_symbol$@|>.none
+    sym: = r.methods.get(name) catch null
+    if sym != null
+      sym.flags.is_used = true
+      return Option<|Sema_symbol$@|>.some(sym)
+    return Option<|Sema_symbol$@|>.none
+
+  fn add_method(r: Self$@, name: U8[], sym: Sema_symbol$@)
+    if r.methods == null
+      r.methods = base_core.arena
+        .create(Map<|U8[], Sema_symbol$@|>.new(base_core.arena))
+    r.methods.set(name, sym)
+
+  fn has_trait(r: Self$@, trait_id: I32): Bool
+    if r.implemented_traits == null
+      return false
+    for id in r.implemented_traits
+      if id == trait_id
+        return true
+    return false
+
+  fn add_trait(r: Self$@, trait_id: I32)
+    if r.implemented_traits == null
+      r.implemented_traits = List<|I32|>.create(base_core.arena)
+    if !r.has_trait(trait_id)
+      r.implemented_traits.push(trait_id)

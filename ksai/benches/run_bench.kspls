@@ -1,0 +1,189 @@
+#!/usr/bin/env -S ksplc run
+//< The driver for the KSPL vs numpy training-step bench
+//<
+//< Run it from the repository's root. One core is the default, to compare the kernels themselves
+//< (more threads measure how each library parallelizes). How it is measured is in
+//< `ksai/benches/README.md`.
+//< **This file only builds and runs**; `bench_train.kspls` and `bench_ref.c` hold the rounds and
+//< sizes (a copy here would drift from them).
+
+// ==========================================
+//     ksplc run ksai/benches/run_bench.kspls [thread count]   the default is 1
+// ==========================================
+import "std/argp"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/strnum"
+import "std/subproc"
+import "std/sys"
+
+priv const bench_dir: U8[] = "ksai/benches"
+priv const ksplc: U8[] = "out/ksplc_stage1.exe"
+priv const out_dir: U8[] = "out"
+
+priv const build_timeout_ms: I32 = 600000 //<
+  //< The cap on waiting for a build, and the cap on the output collected
+  //<
+  //< Caution: Output over the cap is cut off silently, so only the exit code is used for the
+  //< verdict.
+priv const capture_cap: Sz = 64 * 1024
+
+// The environment variables that carry the thread count.
+// Caution: **Set all four.** The linked library decides which one it reads, and one left unset
+// lets that library choose the core count itself.
+priv const thread_env: U8[][] = U8[][]::{ "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS",
+}
+
+priv fn which(name: U8[], arena: Arena$@): U8[] //< looks a command up from PATH
+  //<
+  //< Returns empty if there is none.
+  //< Caution: **Do not assume a command exists from its name alone.** Without `taskset` or
+  //< `python3` it exits with 127, which reads like "the build failed".
+  // **Copy the looked-up string at once**: `get_env` returns a view into libc's static buffer,
+  // which changes when the environment is next touched.
+  path: = arena.dup_str(sys.get_env("PATH").unwrap_or(""))
+  dirs: = path.split(':', arena)
+  for d in dirs
+    if d.len == 0
+      continue
+    full: = fs.join(d, name, arena)
+    if fs.can_run(full)
+      return full
+  return arena.dup_str("")
+
+priv fn build(argv: U8[][], arena: Arena$@): Bool //< builds one
+  //<
+  //< Returns false if the build exits with anything but 0.
+  r: = subproc.run_capture(argv, "", build_timeout_ms, capture_cap, arena)
+  return !r.spawn_failed && !r.timed_out && r.exit_code == 0
+
+priv fn measure(exe: U8[], pin: U8[], cores: U8[], arena: Arena$@) //< runs the one that was built
+  //<
+  //< **Stream the child's output as is** (`spawn_wait`); printing it again breaks the columns.
+  $argv: = List<|U8[]|>.new(arena)
+  if pin.len > 0
+    argv.push(pin)
+    argv.push("-c")
+    argv.push(cores)
+  argv.push(exe)
+  subproc.spawn_wait(argv.slice(), "") catch
+    io.out().s("  (cannot start: \{exe\})\n")
+
+priv fn has_openblas(arena: Arena$@): Bool //< whether the system OpenBLAS is installed
+  //<
+  //< **Without `ldconfig` it counts as not installed**: "skipped" reads better than a link
+  //< failure.
+  argv: = U8[][]::{ "ldconfig", "-p" }
+  r: = subproc.run_capture(argv, "", build_timeout_ms, capture_cap, arena)
+  if r.spawn_failed || r.timed_out || r.exit_code != 0
+    return false
+  return (U8[]::r.stdout_data).find_str("libopenblas.so ") >= 0
+
+priv fn core_list(threads: U8[], arena: Arena$@): U8$[] //<
+  //< The string passed for pinning the cores
+  //<
+  //< `0` for one thread, `0-(n-1)` for n.
+  n: = threads.to_i64() catch 1I64
+  $b: = Str_builder.new()
+  defer b.free()
+  b.s("0")
+  if n > 1I64
+    b.s("-\{n - 1I64\}")
+  return arena.dup_str(b.slice())
+
+priv fn run_all(threads: U8[], arena: Arena$@)
+  cores: = U8[]::core_list(threads, arena)
+  for name in thread_env
+    sys.set_env(name, threads)
+  pin: = which("taskset", arena)
+  io.out().s("=== threads=\{threads\}  pinned-cores=\{cores\}  (min-of-7, wall-clock) ===\n")
+
+  src: = fs.join(bench_dir, "bench_train.kspls", arena)
+
+  io.out().s("--- pure KSPL matmul (zero dependencies, the default) ---\n")
+  // The libraries the program needs are the ones `--emit-libs` wrote, passed to clang as a
+  // response file (`@`), so none is repeated here.
+  if build(U8[][]::{ ksplc, "--emit-libs=out/bt_pure.libs", src, "out/bt_pure.c" }, arena) &&
+    build(U8[][]::{ "clang", "-std=c99", "-O3", "out/bt_pure.c", "@out/bt_pure.libs", "-lm", "-o",
+    "out/bt_pure.exe" }, arena)
+    measure("out/bt_pure.exe", pin, cores, arena)
+  else
+    io.out().s("  (the build failed)\n")
+
+  if !has_openblas(arena)
+    io.out()
+      .s("(no libopenblas -> KSPL+BLAS and the C reference are skipped. apt libopenblas-dev)\n")
+  else
+    io.out().s("--- KSPL+BLAS(system OpenBLAS) ---\n")
+    if build(U8[][]::{ ksplc, "--define=blas", "--emit-libs=out/bt_blas.libs", src,
+      "out/bt_blas.c" }, arena) &&
+      build(U8[][]::{ "clang", "-std=c99", "-O3", "out/bt_blas.c", "@out/bt_blas.libs", "-lm", "-o",
+      "out/bt_blas.exe" }, arena)
+      measure("out/bt_blas.exe", pin, cores, arena)
+    else
+      io.out().s("  (the build failed)\n")
+
+    ref: = fs.join(bench_dir, "bench_ref.c", arena)
+    io.out().s("--- the C reference (the same system OpenBLAS = the control) ---\n")
+    ref_argv: = U8[][]::{ "clang", "-std=c99", "-O3", ref, "-lopenblas", "-o", "out/bench_ref.exe" }
+    if build(ref_argv, arena)
+      measure("out/bench_ref.exe", pin, cores, arena)
+    else
+      io.out().s("  (the build failed)\n")
+
+  py: = which("python3", arena)
+  if py.len == 0
+    io.out().s("(no python3 -> the numpy reference is skipped)\n")
+    return
+  // Caution: **Check that numpy can actually be imported**, or a failed import cannot be told
+  // from a slow result.
+  if !build(U8[][]::{ py, "-c", "import numpy" }, arena)
+    io.out().s("(no numpy -> the numpy reference is skipped)\n")
+    return
+  io.out().s("--- numpy (its own OpenBLAS = for reference) ---\n")
+  $argv: = List<|U8[]|>.new(arena)
+  if pin.len > 0
+    argv.push(pin)
+    argv.push("-c")
+    argv.push(cores)
+  argv.push(py)
+  argv.push(fs.join(bench_dir, "bench_np.py", arena))
+  subproc.spawn_wait(argv.slice(), "") catch
+    io.out().s("  (cannot start)\n")
+
+fn main(): I32 //< runs the KSPL-against-numpy bench and prints the table
+  arena: = Arena.new(8 * 1024 * 1024)
+  defer arena.free()
+  // Caution: **Do not read the arguments by hand.** Rejecting an unknown `--name` is
+  // `std/argp`'s job.
+  p: = argp.Parser
+    .create(sys.program_name(), "measure and compare KSPL's and numpy's training step", arena)
+  p.positional("[thread count] the default is 1")
+  p.parse_or_exit(sys.args(), arena)
+  if p.rest.len > 1
+    io.err().s("\{sys.program_name()\}: there is only one thread count (\{p.rest.len\} given)\n")
+    return 1
+  threads: = p.rest.get(0) if p.rest.len > 0 else "1"
+  // Caution: **Check that it is a number and in range**, or a measurement headed `threads=abc`
+  // comes out, pinned to one core.
+  said: = threads.to_i64() catch -1I64
+  if said < 1I64 || said > I64::sys.cpu_count()
+    io.err()
+      .s("\{sys.program_name()\}: the thread count is 1..\{sys.cpu_count()\} (`\{threads\}`)\n")
+    return 1
+
+  if !fs.can_run(ksplc)
+    io.err().s("`make` (building stage1) is needed first: there is no \{ksplc\}\n")
+    return 1
+  fs.mkdir_all(out_dir) catch e
+    io.err().s("\{sys.program_name()\}: cannot make \{out_dir\}: \{e\}\n")
+    return 1
+  run_all(threads, arena)
+  io.out().s("=== done ===\n")
+  return 0

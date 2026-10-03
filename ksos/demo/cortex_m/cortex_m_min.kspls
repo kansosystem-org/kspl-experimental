@@ -1,0 +1,36 @@
+//< The smallest ARM Cortex-M bare-metal demo
+//<
+//< It prints through ARM semihosting (QEMU -semihosting) and does not depend on std/io. It runs the
+//< same kernel core as the POSIX demos (ksos/kernel/task.kspls) unchanged on the Cortex-M port, and
+//< shows cooperative scheduling with priority, Task.delay (tickless idle) and Task.yield. Run it
+//< under QEMU (mps2-an385) to verify it.
+import "ksos/demo/common/semihost_console" as con
+import "ksos/kernel/task" + { Task }
+
+$tcb_a: Task
+$tcb_b: Task
+$stack_a: U8[4096]
+$stack_b: U8[4096]
+
+fn task_a(_arg: Void$@): Void
+  for $i: I32 = 0; i < 3; i += 1
+    con.puts("[A] run\n")
+    Task.delay(1) // sleep one tick: it blocks and yields to B
+  con.puts("[A] done\n")
+
+fn task_b(_arg: Void$@): Void
+  for $i: I32 = 0; i < 3; i += 1
+    con.puts("[B] run\n")
+    Task.yield() // yield to A explicitly (cooperative: without a yield A cannot run)
+  con.puts("[B] done\n")
+// The bare-metal entry called from startup.S.
+#export
+fn ksos_main()
+  con.puts("=== Kanso OS (Cortex-M / QEMU mps2-an385) ===\n")
+  // A has priority 2 and B 1. A runs first and blocks on the delay, and B runs meanwhile.
+  tcb_a.create(U8$[]::stack_a, task_a, null, 2, "a")
+  tcb_b.create(U8$[]::stack_b, task_b, null, 1, "b")
+  task.start_scheduler()
+  con.puts("=== scheduler finished (all tasks done) ===\n")
+  con.exit() // end QEMU
+  for {}

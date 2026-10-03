@@ -1,0 +1,469 @@
+//< Starting a process on the local machine (`/api/run`)
+//<
+//< Caution: **Do not start a string the client wrote as it is.** `cmd` and `args` **are refused
+//< unless they match the table below**.
+//< **Do not allow `ksplc` as a whole**: `ksplc run` runs any KSPL.
+//< **Keep reading standard error too**: unread, the pipe fills and **the child stops**.
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/log" { Level, Log }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/subproc" + { Piped_child, Spawn_error }
+import "std/sys"
+
+const sip_bytes: Sz = 16 * 1024 //< how much is read at once
+  //<
+  //< Caution: **Do not make it too large** (one read holds up the accept loop).
+const sip_rounds: Sz = 8 //< the cap on reads from one pipe per pass
+  //<
+  //< **Keep a cap**: one child that keeps writing would stop the accept loop (the rest waits for
+  //< the next pass).
+const drain_rounds: Sz = 64 //< the cap on reads when draining a finished child
+  //<
+  //< What is left usually fits in the pipe; only a grandchild that holds the pipe and keeps writing
+  //< reaches this.
+const pending_cap: Sz = 1024 * 1024 //< the cap on output waiting to be sent to the watcher
+  //<
+  //< **Above it, nothing is read**, so the pipe fills and the child waits at its write (back
+  //< pressure).
+  //< Caution: **Do not buffer without a cap**: an unwatched child's output would eat the server's
+  //< memory. Reading resumes once the watcher takes it, so nothing is dropped.
+const max_procs: Sz = 4 //< how many children can run at once
+  //<
+  //< **One language server needs one.** To raise it, first make sure that children never stopped
+  //< do not accumulate.
+
+const from_out: U8 = 'O' //< the pipe a chunk was read from
+  //<
+  //< **Do not mix it into the body**, or the chunk's source can no longer be read.
+const from_err: U8 = 'E'
+const from_exit: U8 = 'X' //< the final chunk
+  //<
+  //< Its content is `{"exit":<number>}`.
+
+priv struct Allowed //< one combination that may be started
+  //<
+  //< **`args` is "exactly this"**: with a prefix match, a string appended to it could make it do
+  //< something else.
+  //< Caution: **What is started comes from the row, not from the client.** `cmd` and `args` are
+  //< only the key; what runs is `exe` and `run_args` below, never built from the text that arrived.
+  cmd: U8[]
+  args: U8[]
+  exe: U8[] //< the path to start. **Empty means "look for ksplc next to this server"**
+  run_args: U8[] //< the one argument passed. **Empty passes none**
+  filter: Bool //<
+    //< Whether the program reads its input to the end and answers once.
+    //<
+    //< Caution: **The row decides this, not the caller.** A filter whose input is left open waits
+    //< forever and **nothing ever comes out**, and a stream whose input is closed early stops
+    //< mid-conversation.
+
+const exe_env: U8[] = "KSSRV_KSPLC" //<
+  //< The environment variable that says where the program to start is
+  //<
+  //< It says where, not what may start (the table below); whoever can set it can run anything.
+  //< **Unset, it looks next to the server**, never on PATH: whoever changes PATH picks the program.
+// The names looked for next to the server.
+// Caution: **Include the built names too.** Built in this repository, the file next to it is
+// `ksplc_stage1.exe` (or `ksplc_stage1_llvm.exe`), so with the installed name alone **the language
+// server never starts inside the repository**.
+priv const exe_names: U8[][4] = ::{ "ksplc", "ksplc.exe", "ksplc_stage1.exe",
+  "ksplc_stage1_llvm.exe" }
+
+// The rows that exist whatever is on the machine.
+// Caution: **Before widening this, make sure the subcommand does not run the user's code.** `ksplc
+// lsp` only reads and parses; `ksplc run` and `make` run it, which is "allow anything". The plugins
+// below **name no subcommand**: each row starts one built program next to this server, by name.
+priv const fixed_rows: Allowed[1] = ::{
+  Allowed::{ .cmd = "ksplc", .args = "lsp", .exe = "", .run_args = "lsp", .filter = false },
+}
+
+priv const plugin_dir: U8[] = "plugins" //< the folder next to this server that holds the plugins
+  //<
+  //< Caution: **Next to the server, never inside the served folder.** Inside it, a downloaded tree
+  //< could carry a program, and just opening kspage on that tree would offer it as a button to
+  //< press.
+priv const plugin_cmd: U8[] = "plugin" //< what the client sends to reach one
+  //<
+  //< **It is not `ksplc`**: a plugin is a program of its own, with no subcommand.
+priv const plugin_cap: Sz = 64 //< how many plugins are read
+  //<
+  //< **Keep a cap**, or a full folder makes the table grow without limit.
+
+struct Proc //< one running child
+  // 0 means free.
+  id: I64
+  child: Piped_child
+  // The chunks not yet sent.
+  // Caution: **Store them as they are read** (emptying the pipe comes first).
+  pending: Str_builder
+  // Whether it is finished (set after the final chunk is queued).
+  done: Bool
+  // Whether the child has already been stopped and cleared away.
+  // Caution: **Do not kill it twice** (the first kill releases it).
+  killed: Bool
+  // The serial of the watching connection. **The slot number alone is not enough** (another
+  // connection may take the slot). 0 means nobody is watching yet.
+  watcher_serial: I64
+  watcher_slot: Sz
+
+struct Procs
+  slots: Proc[max_procs]
+  next_id: I64
+  // Where kssrv itself is. **The paths of what is started are built from here.**
+  home: U8[]
+  // Everything that may be started, decided once when this table is made.
+  // Caution: **Read the folder once, at the start.** Read per request, a program dropped in later
+  // becomes startable without the server's operator agreeing.
+  priv allowed: List<|Allowed|>$@
+  // The run's one logger: these lines are written inside the accept loop, so it is the one `Ctx`
+  // holds (`kssrv/conn.kspls`).
+  lg: Log$@
+
+priv fn home_of(argv0: U8[]): U8[] //<
+  //< The part of a path before the last separator (`.` where there is no folder)
+  at: = sys.get_dir_name(argv0)
+  return "." if at.len == 0 else at
+
+fn procs_new(argv0: U8[], arena: Arena$@, lg: Log$@): Procs$@ //< makes the table
+  //<
+  //< `argv0` is how this server was started (item 0 of `sys.args()`).
+  //< **What is started is found next to the server**, not on PATH (see `exe_env`):
+  //< `out/ksplc_stage1.exe` next to `out/kssrv.exe`.
+  // Caution: **Make the paths absolute before starting** (`fs.absolute`): the child starts in
+  // another working directory (the served root), where a relative path points somewhere else.
+  here: = home_of(argv0)
+  home: = fs.absolute(here, arena) catch here
+  r: = arena
+    .create(Procs::{ .slots = ::{}, .next_id = 1I64, .home = home,
+    .allowed = List<|Allowed|>.create(arena), .lg = lg })
+  for $i: Sz = 0; i < fixed_rows.len; i += 1
+    r.allowed.push(fixed_rows[i])
+  read_plugins(r, arena)
+  return r
+
+priv fn read_plugins(r: Procs$@, arena: Arena$@) //<
+  //< Makes a row for every program in the folder next to this server
+  //<
+  //< **No folder means no plugins** (the usual case, so nothing is logged).
+  //< Caution: **Check that it can really be started**, or a folder or a stray text file shows on
+  //< the page as a button that does nothing.
+  at: = fs.join(r.home, plugin_dir, arena)
+  $names: = fs.read_dir(at, arena) catch _e
+    return
+  for one in names.slice()
+    if r.allowed.len >= plugin_cap
+      return
+    exe: = fs.join(at, one, arena)
+    if !fs.can_run(exe)
+      continue
+    // **The name is what is shown and what is sent** (the reason is at `plugin_name`).
+    r.allowed
+      .push(Allowed::{ .cmd = plugin_cmd, .args = plugin_name(one), .exe = exe, .run_args = "",
+      .filter = true })
+    if ln: = r.lg.at(Level.information)
+      ln.s("plugin \{plugin_name(one)\} found (\{exe\})")
+
+priv fn plugin_name(file: U8[]): U8[] //< the name a plugin is known by (its file name, bare)
+  //<
+  //< Caution: **Strip the `.exe`.** Left on, the same plugin is `sort` on one system and
+  //< `sort.exe` on another, and a page written on one finds nothing on the other.
+  if file.ends_with(".exe")
+    return file.sub(0, file.len - 4)
+  return file
+
+fn plugin_count(r: Procs$@): Sz //< how many plugins were found
+  $n: Sz = 0
+  for $i: Sz = 0; i < r.allowed.len; i += 1
+    if r.allowed.get(i).cmd.equals(plugin_cmd)
+      n += 1
+  return n
+
+fn plugin_at(r: Procs$@, want: Sz): U8[] //< the want-th plugin's name (empty where there is none)
+  $n: Sz = 0
+  for $i: Sz = 0; i < r.allowed.len; i += 1
+    if !r.allowed.get(i).cmd.equals(plugin_cmd)
+      continue
+    if n == want
+      return r.allowed.get(i).args
+    n += 1
+  return ""
+
+priv fn allowed_row(r: Procs$@, cmd: U8[], args: U8[]): Sz //<
+  //< Which row that request names (-1 where it names none)
+  //<
+  //< Caution: **Refuse it if even one name differs** (nothing passes for being "close").
+  for $i: Sz = 0; i < r.allowed.len; i += 1
+    if r.allowed.get(i).cmd.equals(cmd) && r.allowed.get(i).args.equals(args)
+      return i
+  return -1
+
+priv fn exe_path(r: Procs$@, looked: List<|U8[]|>$@, arena: Arena$@): U8[] //<
+  //< The path of the program to start
+  //<
+  //< Empty if it is not found; every place it looked is appended to `looked`, in order. **It never
+  //< resolves from a string the client wrote.**
+  //< Caution: **Always record where it looked.** With only "it cannot be started", nobody can tell
+  //< where the file should have been (the page shows this list).
+  if told: = sys.get_env(exe_env)
+    at: = fs.absolute(told, arena) catch arena.dup_str(told)
+    looked.push(at)
+    return at if fs.can_run(at) else ""
+  for $i: Sz = 0; i < exe_names.len; i += 1
+    at: = fs.join(r.home, exe_names[i], arena)
+    looked.push(at)
+    if fs.can_run(at)
+      return at
+  return ""
+
+priv fn spawn_one(exe: U8[], args: U8[], cwd: U8[]): Piped_child?Spawn_error //<
+  //< Starts that path, passing the one argument (none where it is empty)
+  //<
+  //< **The argument comes from the table, never from the client** (`Allowed.run_args`).
+  if args.len == 0
+    bare: U8[][1] = ::{ exe }
+    return subproc.spawn_piped(U8[][]::bare, cwd)
+  argv: U8[][2] = ::{ exe, args }
+  return subproc.spawn_piped(U8[][]::argv, cwd)
+
+priv fn free_slot(r: Procs$@): Sz //< looks for a free slot
+  //<
+  //< -1 if there is none.
+  for $i: Sz = 0; i < max_procs; i += 1
+    if r.slots[i].id == 0I64
+      return i
+  return -1
+
+fn slot_of(r: Procs$@, id: I64): Sz //< looks a slot up from an id
+  //<
+  //< -1 if there is none.
+  for $i: Sz = 0; i < max_procs; i += 1
+    if r.slots[i].id == id && id != 0I64
+      return i
+  return -1
+
+fn start(r: Procs$@, cmd: U8[], args: U8[], cwd: U8[], input: U8[], looked: List<|U8[]|>$@,
+  arena: Arena$@): I64 //<
+    //< Starts one, writing `input` to it if the row is a filter
+    //<
+    //< Returns the id if it started, 0 for a combination not allowed, -2 if too many are running,
+    //< and -1 if it could not be started.
+    //< Caution: **Keep the three refusals apart** (each is fixed differently). **Call it only after
+    //< the root check on `cwd`** (starting outside the root is reading outside it).
+  row: = allowed_row(r, cmd, args)
+  if row < 0
+    return 0I64
+  at: = free_slot(r)
+  if at < 0
+    return -2I64
+  told: = r.allowed.get(row)
+  // Caution: **Check that it exists before starting it.** Otherwise a failure to start looks like
+  // "a child that finished at once", with no reason (an exec failure after a fork does not reach
+  // the parent).
+  $exe: U8[] = told.exe
+  if exe.len == 0
+    exe = exe_path(r, looked, arena)
+  else
+    // **Record this one too**, or a removed plugin is refused without naming the path looked at.
+    looked.push(exe)
+    if !fs.can_run(exe)
+      exe = ""
+  if exe.len == 0
+    return -1I64
+  // **No shell is involved** (the command is not passed as one string; part of the agreement).
+  child: = spawn_one(exe, told.run_args, cwd) catch _e
+    return -1I64
+  id: = r.next_id
+  r.next_id += 1I64
+  r.slots[at] = Proc::{ .id = id, .child = child, .pending = Str_builder.new(), .done = false,
+    .killed = false, .watcher_serial = 0I64, .watcher_slot = 0 }
+  // Caution: **Log the start and the finish, one line each.** Otherwise a child that vanished
+  // leaves the page with "a request that never returns", and **the reason is recorded nowhere**.
+  if told.filter
+    // **Everything is written now, and the input closed** (the reason is at `Allowed.filter`).
+    // **Close it even when nothing was written.** An empty selection is normal, and with the input
+    // closed the answer comes back empty instead of never.
+    if input.len > 0
+      $buf: = Str_builder.new()
+      defer buf.free()
+      buf.s(input)
+      _wrote: = r.slots[at].child.write(buf.slice())
+    r.slots[at].child.close_stdin()
+  if ln: = r.lg.at(Level.information)
+    ln.s("proc #\{id\} started (\{cmd\} \{args\})")
+  return id
+
+fn feed(r: Procs$@, id: I64, data: U8[]): Bool //< writes to the child's standard input
+  //<
+  //< True if it could write.
+  at: = slot_of(r, id)
+  if at < 0
+    return false
+  // **A mutable slice is passed** (as the C declaration requires; see `write` in `std/sys`).
+  $buf: = Str_builder.new()
+  defer buf.free()
+  buf.s(data)
+  return r.slots[at].child.write(buf.slice())
+
+fn stop(r: Procs$@, id: I64): Bool //< stops the child
+  //<
+  //< **Its exit code is -1.**
+  //< Caution: **Do not use -1 anywhere but here.** For a child that exited on its own (`sip`), the
+  //< server waits for its real code, so a chunk's -1 means one thing: **stopped**.
+  at: = slot_of(r, id)
+  if at < 0
+    return false
+  if r.slots[at].watcher_serial == 0I64 || r.slots[at].done
+    drop_at(r, at)
+    return true
+  r.slots[at].child.kill()
+  r.slots[at].killed = true
+  if ln: = r.lg.at(Level.information)
+    ln.s("proc #\{r.slots[at].id\} stopped (asked to)")
+  put_piece(r.slots[at].pending@, from_exit, "{\"exit\":-1}")
+  r.slots[at].done = true
+  return true
+
+priv fn drop_at(r: Procs$@, at: Sz)
+  if !r.slots[at].killed
+    r.slots[at].child.kill()
+  r.slots[at].pending.free()
+  r.slots[at].id = 0I64
+  r.slots[at].done = false
+  r.slots[at].killed = false
+  r.slots[at].watcher_serial = 0I64
+
+fn watch(r: Procs$@, id: I64, slot: Sz, serial: I64): Bool //< records the watching connection
+  //<
+  //< **There is only one** (with two, a chunk goes to only one of them).
+  at: = slot_of(r, id)
+  if at < 0 || r.slots[at].watcher_serial != 0I64
+    return false
+  r.slots[at].watcher_slot = slot
+  r.slots[at].watcher_serial = serial
+  return true
+
+fn unwatch(r: Procs$@, slot: Sz, serial: I64) //< the watching connection closed
+  //<
+  //< Caution: **Stop the child too**: nobody reaps a child whose watcher is gone.
+  for $i: Sz = 0; i < max_procs; i += 1
+    if r.slots[i].id != 0I64 && r.slots[i].watcher_slot == slot &&
+      r.slots[i].watcher_serial == serial
+      // **Log that it was stopped** (the reason is in `start`).
+      if ln: = r.lg.at(Level.information)
+        ln.s("proc #\{r.slots[i].id\} stopped (the connection watching it closed)")
+      drop_at(r, i)
+
+fn watching(r: Procs$@, slot: Sz, serial: I64): Bool //<
+  //< whether that connection is watching a child
+  //<
+  //< Caution: **Compare the serial too** (slots are reused). The caller decides whether a
+  //< half-closed connection may be dropped (`sweep_done` in `kssrv/main.kspls`), and dropping a
+  //< watching one stops the child.
+  for $i: Sz = 0; i < max_procs; i += 1
+    if r.slots[i].id != 0I64 && r.slots[i].watcher_slot == slot &&
+      r.slots[i].watcher_serial == serial
+      return true
+  return false
+
+fn busy(r: Procs$@): Bool //< whether any child is running
+  //<
+  //< **It shortens the poll wait** while one is running.
+  for $i: Sz = 0; i < max_procs; i += 1
+    if r.slots[i].id != 0I64
+      return true
+  return false
+
+priv fn put_piece(out: Str_builder$@, tag: U8, body: U8[]) //< queues one chunk
+  //<
+  //< **Write the length**: the content is raw bytes, so any separator character could appear in
+  //< it.
+  //< Caution: **Do not use a newline as the separator.** It **looks like a list of lines**, and a
+  //< reader that treats it so confuses the content's newlines with the separator.
+  out.c(tag).s("\{body.len\}").c(' ').s(body)
+
+priv fn pump(p: Proc$@, err: Bool, rounds: Sz): Bool //< reads from one pipe and queues the output
+  //<
+  //< True if it hits EOF. It stops when nothing is left to read, or at the cap on reads. **A read
+  //< that did not fill the buffer emptied the pipe for now** (it returns everything there is), so
+  //< stopping there drops nothing, even for a finished child.
+  $buf: U8[sip_bytes] = ::{}
+  for _k in Range.asc(rounds)
+    $shut: = false
+    n: =
+      (p.child.read_err(U8$[]::buf, 0I32) if err else p.child.read(U8$[]::buf, 0I32)) catch e
+      switch e case .closed
+        shut = true
+        fallback 0
+      default
+        fallback 0
+    if shut
+      return true
+    if n == 0
+      return false
+    put_piece(p.pending@, from_err if err else from_out,
+      U8[]::{ .ptr = buf[0]@, .len = n })
+    if n < sip_bytes
+      return false
+  return false
+
+fn sip(r: Procs$@) //< reads from both pipes and queues the output
+  //<
+  //< **The timeout is 0** (it does not block the accept loop).
+  //< Caution: **Always read standard error too** (the reason is in this file's header). **Check
+  //< whether it finished only after draining**; checked first, the last write is dropped. **Do not
+  //< read from a child whose buffer reached the cap** (the reason is at `pending_cap`).
+  for $i: Sz = 0; i < max_procs; i += 1
+    if r.slots[i].id == 0I64 || r.slots[i].done
+      continue
+    if r.slots[i].pending.len >= pending_cap
+      continue
+    _shut: = pump(r.slots[i]@, false, sip_rounds)
+    _shut_err: = pump(r.slots[i]@, true, sip_rounds)
+    // Whether it finished is judged by **whether the exit code could be read**.
+    // Caution: **Do not judge it by the pipe closing.** The EOF comes **before** the child exits
+    // and its code is known; asked in that gap, the -1 for "not finished yet" would go into the
+    // final chunk.
+    code: = r.slots[i].child.exit_code()
+    if code < 0I32
+      continue
+    // Caution: **Do not drain before the child is known to have exited**, or the last write is
+    // dropped. The pipe still holds everything written.
+    _rest: = pump(r.slots[i]@, false, drain_rounds)
+    _rest_err: = pump(r.slots[i]@, true, drain_rounds)
+    // **Report the finish with a chunk too**, or it looks like the connection was merely cut.
+    if ln: = r.lg.at(Level.information)
+      ln.s("proc #\{r.slots[i].id\} ended by itself (exit \{code\})")
+    $tail: = Str_builder.new()
+    defer tail.free()
+    tail.s("{\"exit\":\{code\}}")
+    put_piece(r.slots[i].pending@, from_exit, tail.slice())
+    r.slots[i].done = true
+
+fn take(r: Procs$@, slot: Sz, serial: I64, out: Str_builder$@): Bool //<
+  //< Takes the chunks to send to the watching connection (what is taken is removed)
+  //<
+  //< Empty if there is none.
+  for $i: Sz = 0; i < max_procs; i += 1
+    if r.slots[i].id == 0I64 || r.slots[i].watcher_slot != slot ||
+      r.slots[i].watcher_serial != serial
+      continue
+    if r.slots[i].pending.len > 0
+      out.s(r.slots[i].pending.slice())
+      r.slots[i].pending.clear()
+    if r.slots[i].done
+      // Everything up to the finish has been sent, so the slot is cleared.
+      drop_at(r, i)
+      return true
+    return false
+  return false
+
+fn shut_all(r: Procs$@) //< stops them all
+  //<
+  //< Caution: **Call it when shutting down** (otherwise the children are left running).
+  for $i: Sz = 0; i < max_procs; i += 1
+    if r.slots[i].id != 0I64
+      drop_at(r, i)

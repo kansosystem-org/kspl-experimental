@@ -1,0 +1,239 @@
+import "ksplc/tests/support/lsp_client"
+import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, end_text }
+import "std/chars"
+import "std/ds" as _ds // what makes `arr_list`'s List available
+import "std/json" as _json // what makes `get` and `as_str` on a value available
+import "std/jsonrpc"
+import "std/mem" { Arena }
+import "std/str" // `find_str` and `equals`
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+// ==========================================
+// What a declaration says of itself, as the editor shows it: the hover's description and parameter
+// list, and the panel that comes up while the call is being typed.
+//
+// **They are one subject, so they share one fixture**: one reader (`ksplc/base/ast_doc.kspls`)
+// reads all three marks. **This is not a suite of its own**; one would start the language server a
+// second time, so it uses the suite's client ("Files near the limit and how they split" in
+// `../../README.md`).
+// ==========================================
+
+priv const normal_ms: I32 = 15000
+
+// ==========================================
+// A hover shows the documentation the declaration carries
+// ==========================================
+
+// **The marks are read from the source, not from the tree**: a `//<` does not survive parsing
+// (`ksplc/base/ast_doc.kspls`).
+priv const doc_src: U8[] =
+  """import "std/io";
+
+pub struct Row { //< one row of the table
+  //< A row is one line of the table, not one line on the screen.
+  /// What a row stands for, in a sentence.
+  pub text: U8[]; //< the text as the writer typed it
+}
+
+fn wide(a: I32, b: I32): I32 { //< the whole of it written on one line
+  return a + b;
+}
+
+fn many(a1: Sz, a2: Sz, a3: Sz, a4: Sz, a5: Sz, a6: Sz, a7: Sz, a8: Sz, a9: Sz, a10: Sz, a11: Sz, a12: Sz, a13: Sz, a14: Sz, a15: Sz, a16: Sz, a17: Sz): Sz {
+  return a1 + a17;
+}
+
+impl Row {
+  fn put( //< writes one row out
+    r: Self@,
+    at: Sz, //< which column it starts in
+    //< Counted from 0, not 1.
+    times: Sz,
+  ): Sz { //< how many characters the row now runs to
+    return r.text.len + at + times;
+  }
+}
+
+fn wrapped(a1: I32, a2: I32, a3: I32, a4: I32, a5: I32, a6: I32, a7: I32, a8: I32,
+  a9: I32): I32 { //<
+  //< The summary of a head that closes on a later line
+  //<
+  //< The detail behind the parting mark.
+  return a1 + a9 - a2 - a3 - a4 - a5 - a6 - a7 - a8;
+}
+
+fn pointing(): Sz { //< what `Row.put` gives back, never `r.text` alone
+  return 0;
+}
+
+fn quiet(io: Sz): Sz { //< the `io.out` here is the parameter's, not the module's
+  return io;
+}
+
+fn main(): I32 {
+  w2: = wrapped(1, 0, 0, 0, 0, 0, 0, 0, 0);
+  r: Row = ::{ .text = "a" };
+  n: = r.put(1, 2);
+  w: = wide(3, 4);
+  io.out().s(r.text);
+  return I32::(r.text.len + n + Sz::w) - 1 + w2 - 1 + I32::quiet(0);
+}
+"""
+
+priv const doc_uri: U8[] = "file:///doc_probe.kspl"
+
+priv fn check_hover_doc(c: jsonrpc.Client$@, arena: Arena$@)
+  _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(doc_uri, doc_src, arena), arena)
+  // The declaration's own line carries the summary, and the start of its contents the detail.
+  line: = decl_line(doc_src, "pub struct Row {", arena)
+  col: = col_in_line(doc_src, "pub struct Row {", "Row", arena)
+  got: =
+    c.request("textDocument/hover", lsp_client.at_pos(doc_uri, line, col, arena), normal_ms, arena)
+    catch e
+    verdict.check("a hover carries the documentation the declaration holds", false, end_text(e))
+    return
+  text: = lsp_client.hover_text(got)
+  verdict.check("a hover carries the documentation the declaration holds",
+    text.find_str("one row of the table") >= 0 &&
+    text.find_str("not one line on the screen") >= 0,
+    lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
+  // **A `///` is read as nothing, not as the struct's**, or a field's description written the Rust
+  // way lands silently on the struct. It is a warning (`[W0212]`).
+  verdict.check("a /// is read as nothing, not as the struct's",
+    text.find_str("What a row stands for") < 0,
+    lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
+  // A head ending on a later line starts its run on that line, with **a mark carrying no text**;
+  // one with text describes the return type (`return_doc` in `../../base/ast_doc.kspls`).
+  w_line: = decl_line(doc_src, "  w2: = wrapped(1,", arena)
+  w_col: = col_in_line(doc_src, "  w2: = wrapped(1,", "wrapped", arena)
+  w2_got: =
+    c.request("textDocument/hover", lsp_client.at_pos(doc_uri, w_line, w_col, arena), normal_ms,
+    arena) catch e
+    verdict.check("a head closing on a later line carries its run", false, end_text(e))
+    return
+  w2_text: = lsp_client.hover_text(w2_got)
+  verdict.check("a head closing on a later line carries its run",
+    w2_text.find_str("The summary of a head that closes on a later line") >= 0 &&
+    w2_text.find_str("The detail behind the parting mark.") >= 0,
+    lsp_client.why(c, arena.text().s("'").s(w2_text).s("'").take(), arena))
+  // A mark with no text inside a run separates the summary from the detail (PEP 257's blank line).
+  verdict.check("a mark carrying no text parts the summary from the detail",
+    w2_text.find_str("later line.\n\nThe detail behind") >= 0,
+    lsp_client.why(c, arena.text().s("'").s(w2_text).s("'").take(), arena))
+
+  // Caution: **Test a field too.** It has no contents, and searching for a `{` would find the
+  // struct's and show the wrong sentence.
+  f_line: = decl_line(doc_src, "  pub text: U8[];", arena)
+  f_col: = col_in_line(doc_src, "  pub text: U8[];", "text", arena)
+  f_got: =
+    c.request("textDocument/hover", lsp_client.at_pos(doc_uri, f_line, f_col, arena), normal_ms,
+    arena) catch e
+    verdict.check("a hover over a field carries that field's own sentence", false, end_text(e))
+    return
+  f_text: = lsp_client.hover_text(f_got)
+  verdict.check("a hover over a field carries that field's own sentence",
+    f_text.find_str("the text as the writer typed it") >= 0 &&
+    f_text.find_str("What a row stands for") < 0,
+    lsp_client.why(c, arena.text().s("'").s(f_text).s("'").take(), arena))
+
+priv fn check_hover_params(c: jsonrpc.Client$@, arena: Arena$@) //<
+  //< It checks a hover shows the parameters one per line, each with its own `//<`
+  //<
+  //< The lines are as the source has them.
+  //< A parameter with no comment stays bare, and a run continued below joins its parameter's line.
+  //< Caution: **Test a signature written on one line too.** Its `//<` describes the declaration;
+  //< taken per parameter, each would repeat the declaration\'s summary.
+  _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(doc_uri, doc_src, arena), arena)
+  line: = decl_line(doc_src, "  n: = r.put(1, 2);", arena)
+  col: = col_in_line(doc_src, "  n: = r.put(1, 2);", "put", arena)
+  got: =
+    c.request("textDocument/hover", lsp_client.at_pos(doc_uri, line, col, arena), normal_ms, arena)
+    catch e
+    verdict.check("a hover lists the parameters that carry a description", false, end_text(e))
+    return
+  text: = lsp_client.hover_text(got)
+  verdict.check("a hover lays a described parameter out on its own line",
+    text.find_str("\n  at: Sz, //< which column it starts in Counted from 0, not 1.\n") >= 0,
+    lsp_client.why(c, arena.text().s("\'").s(text).s("\'").take(), arena))
+  verdict.check("a parameter that describes nothing stands with nothing behind it",
+    text.find_str("\n  times: Sz,\n") >= 0 && text.find_str("times: Sz, //<") < 0,
+    lsp_client.why(c, arena.text().s("\'").s(text).s("\'").take(), arena))
+  // Caution: **The return's line is described too, and by nothing else.** It is neither the
+  // declaration's line (`decl_summary`) nor the last parameter's run, so if not read here it shows
+  // nowhere (`return_doc` in `../../base/ast_doc.kspls`).
+  verdict.check("a hover shows what the return type's own line says",
+    text.find_str("): Sz //< how many characters the row now runs to") >= 0,
+    lsp_client.why(c, arena.text().s("\'").s(text).s("\'").take(), arena))
+
+  w_line: = decl_line(doc_src, "  w: = wide(3, 4);", arena)
+  w_col: = col_in_line(doc_src, "  w: = wide(3, 4);", "wide", arena)
+  w_got: =
+    c.request("textDocument/hover", lsp_client.at_pos(doc_uri, w_line, w_col, arena), normal_ms,
+    arena) catch e
+    verdict.check("a one-line signature gives its summary to no parameter", false, end_text(e))
+    return
+  w_text: = lsp_client.hover_text(w_got)
+  verdict.check("a one-line signature gives its summary to no parameter",
+    w_text.find_str("the whole of it written on one line") >= 0 && w_text.find_str("//<") < 0,
+    lsp_client.why(c, arena.text().s("\'").s(w_text).s("\'").take(), arena))
+  verdict.check("a signature that describes nothing and fits stays on one line",
+    w_text.find_str("wide(a: I32, b: I32): I32") >= 0,
+    lsp_client.why(c, arena.text().s("\'").s(w_text).s("\'").take(), arena))
+
+  // Caution: **Test the elision on a real declaration, not only on the count**: the return type's
+  // line, which a reader needs, must still be shown.
+  m_line: = decl_line(doc_src, "fn many(a1: Sz,", arena)
+  m_col: = col_in_line(doc_src, "fn many(a1: Sz,", "many", arena)
+  m_got: =
+    c.request("textDocument/hover", lsp_client.at_pos(doc_uri, m_line, m_col, arena), normal_ms,
+    arena) catch e
+    verdict.check("a signature past the cap says how many were left out", false, end_text(e))
+    return
+  m_text: = lsp_client.hover_text(m_got)
+  verdict.check("a signature past the cap says how many were left out",
+    m_text.find_str("  a16: Sz,\n  // ... 1 more\n") >= 0,
+    lsp_client.why(c, arena.text().s("\'").s(m_text).s("\'").take(), arena))
+  verdict.check("an elided signature still carries the return type",
+    m_text.find_str("\n): Sz") >= 0 && m_text.find_str("a17") < 0,
+    lsp_client.why(c, arena.text().s("\'").s(m_text).s("\'").take(), arena))
+
+priv fn check_hover_links(c: jsonrpc.Client$@, arena: Arena$@) //<
+  //< A name the description mentions is shown as a link to where it is declared
+  //<
+  //< **It is resolved as `[W0211]` resolves it**, through the description's scope: `Row.put` links,
+  //< `r.text` (unknown head) stays text, and so does `io.out` where a parameter `io` hides the
+  //< module.
+  //< Caution: **Check the line, not just the link**, or one opening the file at its start passes.
+  _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(doc_uri, doc_src, arena), arena)
+  line: = decl_line(doc_src, "fn pointing(): Sz {", arena)
+  col: = col_in_line(doc_src, "fn pointing(): Sz {", "pointing", arena)
+  got: =
+    c.request("textDocument/hover", lsp_client.at_pos(doc_uri, line, col, arena), normal_ms, arena)
+    catch e
+    verdict.check("a name the description points at becomes a link", false, end_text(e))
+    return
+  text: = lsp_client.hover_text(got)
+  put_line: = decl_line(doc_src, "  fn put( //< writes one row out", arena)
+  want: = arena.text().s("doc_probe.kspl#L").s("\{put_line + 1\}").s(")").take()
+  verdict.check("a name the description points at becomes a link to its line",
+    text.find_str("[`Row.put`](file://") >= 0 && text.find_str(want) >= 0,
+    lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
+  verdict.check("a name the file does not know stays text",
+    text.find_str("`r.text` alone") >= 0 && text.find_str("[`r.text`]") < 0,
+    lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
+  q_line: = decl_line(doc_src, "fn quiet(io: Sz): Sz {", arena)
+  q_col: = col_in_line(doc_src, "fn quiet(io: Sz): Sz {", "quiet", arena)
+  q_at: = lsp_client.at_pos(doc_uri, q_line, q_col, arena)
+  got_q: = c.request("textDocument/hover", q_at, normal_ms, arena) catch e
+    verdict.check("a parameter hides the module's name in its function", false, end_text(e))
+    return
+  quiet: = lsp_client.hover_text(got_q)
+  verdict.check("a parameter hides the module's name in its function",
+    quiet.find_str("`io.out` here") >= 0 && quiet.find_str("[`io.out`]") < 0,
+    lsp_client.why(c, arena.text().s("'").s(quiet).s("'").take(), arena))
+
+fn run(c: jsonrpc.Client$@, arena: Arena$@)
+  check_hover_doc(c, arena)
+  check_hover_params(c, arena)
+  check_hover_links(c, arena)

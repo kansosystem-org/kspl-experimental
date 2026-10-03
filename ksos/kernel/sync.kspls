@@ -1,0 +1,330 @@
+//< All the blocking synchronization primitives
+//<
+//< Every one is built on the kernel core's block_and_rearm / wake and is safe under preemption: a
+//< critical section plus wake-and-recheck (the condition is checked again on waking).
+
+// ==========================================
+//   Sem   a counting semaphore
+//   Queue  a bounded message queue (it can block in both directions, on full and on empty)
+//   Mutex a priority-inheriting mutex (it prevents priority inversion)
+//   Event event flags (waiting on the AND/OR of several events)
+// ==========================================
+import "ksos/kernel/task" + { Task }
+
+// ============================ The counting semaphore ============================
+struct Sem
+  priv count: I32
+
+impl Sem
+  fn init(r: Self$@, initial: I32)
+    r.count = initial
+  fn take($r: Self$@) //< takes one from the count if there is one, and blocks if not
+    //<
+    //< Once woken it checks the condition again (wake-and-recheck).
+    $st: = task.irq_save()
+    defer task.irq_restore(st)
+    for
+      if r.count > 0
+        r.count -= 1
+        return
+      _cur: = task.require_current()
+      st = task.block_and_rearm(Void$@::r, st)
+  fn give($r: Self$@) //<
+    //< Raises the count and wakes one waiting task if there is one
+    //<
+    //< The woken task sees count>0 and takes it. It does not block, so it is safe from an ISR
+    //< (irq_save/irq_restore nest). An ISR always uses this, never take.
+    st: = task.irq_save()
+    defer task.irq_restore(st)
+    r.count += 1
+    task.wake(Void$@::r, false)
+  fn try_take(r: Self$@): Bool //< take's non-waiting version
+    //<
+    //< true if it took one. It can be called from an ISR too.
+    st: = task.irq_save()
+    defer task.irq_restore(st)
+    if r.count > 0
+      r.count -= 1
+      return true
+    return false
+  fn take_for($r: Self$@, ticks: U64): Bool //< take with a timeout
+    //<
+    //< true if it took one within ticks ticks, false on the timeout (the deadline is an absolute
+    //< time, so waiting again does not restart it).
+    assert(ticks > 0, "Sem.take_for: ticks must be greater than 0 (try_take waits for nothing)")
+    $st: = task.irq_save()
+    defer task.irq_restore(st)
+    deadline: = task.current_tick() + ticks
+    for
+      if r.count > 0
+        r.count -= 1
+        return true
+      _cur: = task.require_current()
+      if task.current_tick() >= deadline
+        return false
+      st = task.block_and_rearm_until(Void$@::r, deadline, st)
+
+// ============================ The bounded message queue ============================
+struct Queue<|T|> //<
+  //< A bounded queue of T that, unlike Sem, can also block when full
+  //<
+  //< Waiters are told apart by a field's address: waiting for room waits on &cap, waiting for data
+  //< on &count (different addresses, so they do not collide). T is anything; a struct or a pointer
+  //< is copied as it is.
+  priv buf: T$@ //< the element buffer (the caller allocates a T[cap])
+  priv cap: Sz
+  priv head: Sz //< where to read next
+  priv count: Sz //< how many elements it holds now
+
+impl<|T|> Queue<|T|>
+  fn get_buf(r: Self$@): T$@ //<
+    //< buf is priv; this getter serves a caller freeing it (destroy in ksos/kernel/dynamic.kspls)
+    return r.buf
+
+  fn init(r: Self$@, buf: T$@, cap: Sz)
+    // With cap==0 it is both full and empty, and send and recv block each other forever (a
+    // deadlock with no diagnostic). That is a configuration mistake, so it is caught here.
+    assert(cap > 0, "Queue.init: cap must be greater than 0")
+    r.buf = buf
+    r.cap = cap
+    r.head = 0
+    r.count = 0
+  fn send($r: Self$@, v: T) //< blocks while it is full, until there is room
+    //<
+    //< Writes into the free slot and wakes a receiver waiting for data.
+    $st: = task.irq_save()
+    defer task.irq_restore(st)
+    for r.count >= r.cap
+      _cur: = task.require_current()
+      st = task.block_and_rearm(Void$@::r.cap@, st) // full -> waiting for room
+    tail: = (r.head + r.count) % r.cap
+    (r.buf + tail)$ = v
+    r.count += 1
+    task.wake(Void$@::r.count@, false) // wake a receiver waiting for data
+  fn recv($r: Self$@): T //< blocks while it is empty, until data arrives
+    //<
+    //< Takes the first element and wakes a sender waiting for room.
+    $st: = task.irq_save()
+    defer task.irq_restore(st)
+    for r.count == 0
+      _cur: = task.require_current()
+      st = task.block_and_rearm(Void$@::r.count@, st) // empty -> waiting for data
+    v: = (r.buf + r.head)$
+    r.head = (r.head + 1) % r.cap
+    r.count -= 1
+    task.wake(Void$@::r.cap@, false) // wake a sender waiting for room
+    return v
+  fn send_for($r: Self$@, v: T, ticks: U64): Bool //< send with a timeout
+    //<
+    //< true if room appeared and it wrote, false if it stayed full until the timeout.
+    assert(ticks > 0, "Queue.send_for: ticks must be greater than 0 (try_send waits for nothing)")
+    $st: = task.irq_save()
+    defer task.irq_restore(st)
+    deadline: = task.current_tick() + ticks
+    for r.count >= r.cap
+      _cur: = task.require_current()
+      if task.current_tick() >= deadline
+        return false
+      st = task.block_and_rearm_until(Void$@::r.cap@, deadline, st)
+    tail: = (r.head + r.count) % r.cap
+    (r.buf + tail)$ = v
+    r.count += 1
+    task.wake(Void$@::r.count@, false)
+    return true
+  fn recv_for($r: Self$@, ticks: U64): Option<|T|> //< recv with a timeout
+    //<
+    //< some if something arrived, none if it stayed empty until the timeout.
+    assert(ticks > 0, "Queue.recv_for: ticks must be greater than 0 (try_recv waits for nothing)")
+    $st: = task.irq_save()
+    defer task.irq_restore(st)
+    deadline: = task.current_tick() + ticks
+    for r.count == 0
+      _cur: = task.require_current()
+      if task.current_tick() >= deadline
+        return Option<|T|>.none
+      st = task.block_and_rearm_until(Void$@::r.count@, deadline, st)
+    v: = (r.buf + r.head)$
+    r.head = (r.head + 1) % r.cap
+    r.count -= 1
+    task.wake(Void$@::r.cap@, false)
+    return Option<|T|>.some(v)
+  fn try_send($r: Self$@, v: T): Bool //< send's non-blocking version
+    //<
+    //< If it is full it returns false at once. An ISR cannot block, so an ISR always sends with
+    //< this.
+    st: = task.irq_save()
+    defer task.irq_restore(st)
+    if r.count >= r.cap
+      return false
+    tail: = (r.head + r.count) % r.cap
+    (r.buf + tail)$ = v
+    r.count += 1
+    task.wake(Void$@::r.count@, false)
+    return true
+  fn try_recv($r: Self$@): Option<|T|> //< recv's non-blocking version
+    //<
+    //< If it is empty it returns none at once (safe from an ISR too).
+    st: = task.irq_save()
+    defer task.irq_restore(st)
+    if r.count == 0
+      return Option<|T|>.none
+    v: = (r.buf + r.head)$
+    r.head = (r.head + 1) % r.cap
+    r.count -= 1
+    task.wake(Void$@::r.cap@, false)
+    return Option<|T|>.some(v)
+
+// ============================ The priority-inheriting mutex ============================
+struct Mutex //<
+  //< A mutex with single-stage priority inheritance
+  //<
+  //< It keeps one saved_prio per holder; a nested inheritance chain is not handled.
+  //< When several mutexes are held at once, unlock them in reverse order of locking (LIFO) —
+  //< otherwise a priority borrowed for another mutex still held can be lost early.
+  priv holder: Task$@ //< the current holder (null when free)
+  priv saved_prio: I32 //< the holder's priority before it took the lock, restored on unlock
+
+impl Mutex
+  fn init(r: Self$@)
+    r.holder = null
+    r.saved_prio = 0
+  fn lock($r: Self$@) //< if it is free, takes it and records the holder's original priority
+    //<
+    //< On contention it raises the holder to the requester's priority (priority inheritance),
+    //< blocks, and tries again once woken.
+    $st: = task.irq_save()
+    defer task.irq_restore(st)
+    // Even the free path records the holder's priority, so the current task is checked first.
+    me: = task.require_current()
+    // Caution: **The holder locking it again is stopped here.** Waiting silently would wait for
+    // itself, a hang with no diagnostic (it is not reentrant: with a count, a miscounted unlock
+    // would silently delay the release). Keep the message a fixed string (no allocation on a
+    // panic's path).
+    if r.holder == me
+      panic("ksos: Mutex.lock by the holder itself (the mutex is not reentrant)")
+    for
+      if r.holder == null
+        r.holder = me
+        r.saved_prio = me.prio
+        return
+      // Contention: lend the requester's priority to the holder.
+      h: = r.holder
+      if h.prio < me.prio
+        h.prio = me.prio
+      st = task.block_and_rearm(Void$@::r, st)
+  fn try_lock(r: Self$@): Bool //< lock's non-waiting version
+    //<
+    //< true if it was free and is now taken; false if anyone holds it, the caller included.
+    //< From an ISR it panics like the other task-only calls.
+    st: = task.irq_save()
+    defer task.irq_restore(st)
+    me: = task.require_current()
+    if r.holder != null
+      return false
+    r.holder = me
+    r.saved_prio = me.prio
+    return true
+  fn lock_for($r: Self$@, ticks: U64): Bool //< lock with a timeout
+    //<
+    //< true if it was taken, false if the holder did not release it before the timeout.
+    //< Caution: **When giving up, return the lent priority**, or the holder keeps running at the
+    //< high priority with nobody left waiting.
+    assert(ticks > 0, "Mutex.lock_for: ticks must be greater than 0 (try_lock waits for nothing)")
+    $st: = task.irq_save()
+    defer task.irq_restore(st)
+    me: = task.require_current()
+    if r.holder == me
+      panic("ksos: Mutex.lock by the holder itself (the mutex is not reentrant)")
+    deadline: = task.current_tick() + ticks
+    for
+      if r.holder == null
+        r.holder = me
+        r.saved_prio = me.prio
+        return true
+      h: = r.holder
+      if task.current_tick() >= deadline
+        floor: = task.highest_waiter_prio(Void$@::r)
+        h.prio = r.saved_prio if r.saved_prio > floor else floor
+        return false
+      if h.prio < me.prio
+        h.prio = me.prio
+      st = task.block_and_rearm_until(Void$@::r, deadline, st)
+  fn unlock($r: Self$@) //<
+    //< Returns the holder's priority, raised by inheritance, to what it was, and wakes one waiter
+    //<
+    //< Caution: **An unlock by a non-holder, or of a free mutex, is stopped.** If it were ignored,
+    //< the caller would believe it had released it and mutual exclusion would lapse with no
+    //< diagnostic; a return value could go unread, so it panics.
+    st: = task.irq_save()
+    defer task.irq_restore(st)
+    if r.holder == null
+      panic("ksos: Mutex.unlock on a mutex nobody holds")
+    if r.holder != task.g_current
+      panic("ksos: Mutex.unlock by a task that is not the holder")
+    h: = r.holder
+    h.prio = r.saved_prio // return the borrowed priority
+    r.holder = null
+    task.wake(Void$@::r, false) // wake one waiter (it tries to take it again)
+
+// ============================ Event flags ============================
+priv enum Event_mode
+  any //< holds when at least one of the named bits is set (OR)
+  all //< holds when every named bit is set (AND)
+
+struct Event
+  priv bits: U32 //< the flags set now
+
+impl Event
+  fn init(r: Self$@)
+    r.bits = 0
+  fn wait($r: Self$@, wanted: U32, mode: Event_mode, clear_on_exit: Bool): U32 //<
+    //< Blocks until wanted's bits meet mode's condition
+    //<
+    //< Returns the flags when it held; clear_on_exit clears wanted's bits in the same step.
+    $st: = task.irq_save()
+    defer task.irq_restore(st)
+    for
+      cur: = r.bits
+      hit: = cur & wanted
+      satisfied: = (hit == wanted) if (mode == .all) else (hit != 0)
+      if satisfied
+        if clear_on_exit
+          r.bits &= ~wanted
+        return cur
+      _cur: = task.require_current()
+      st = task.block_and_rearm(Void$@::r, st)
+  fn wait_for($r: Self$@, wanted: U32, mode: Event_mode, clear_on_exit: Bool, ticks: U64):
+    Option<|U32|> //<
+      //< wait with a timeout: some (the flags when it held), or none on the timeout
+      //<
+      //< To check without waiting, use `get` (there is no `wait_for(…, 0)`).
+    assert(ticks > 0, "Event.wait_for: ticks must be greater than 0 (read get() to poll)")
+    $st: = task.irq_save()
+    defer task.irq_restore(st)
+    deadline: = task.current_tick() + ticks
+    for
+      cur: = r.bits
+      hit: = cur & wanted
+      satisfied: = (hit == wanted) if (mode == .all) else (hit != 0)
+      if satisfied
+        if clear_on_exit
+          r.bits &= ~wanted
+        return Option<|U32|>.some(cur)
+      _cur: = task.require_current()
+      if task.current_tick() >= deadline
+        return Option<|U32|>.none
+      st = task.block_and_rearm_until(Void$@::r, deadline, st)
+  fn set($r: Self$@, set: U32) //<
+    //< Sets the named bits and wakes every waiter
+    //<
+    //< Each waiter checks again, and only those whose condition holds move on. It does not block,
+    //< so it is safe from an ISR.
+    st: = task.irq_save()
+    defer task.irq_restore(st)
+    r.bits |= set
+    task.wake(Void$@::r, true)
+  fn get(r: Self$@): U32 //<
+    //< Returns the flags set now (checks the state without blocking)
+    st: = task.irq_save()
+    defer task.irq_restore(st)
+    return r.bits

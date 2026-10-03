@@ -1,0 +1,234 @@
+import "ksplc/base/as_written" as base_as_written
+import "ksplc/base/core" as base_core
+import "ksplc/base/locate" as base_locate
+import "std/chars"
+import "std/ds" { List, Map }
+import "std/io"
+import "std/json" + { Json_builder }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+enum Diagnostic_severity: I32
+  error = 1
+  warning = 2
+  information = 3
+  hint = 4
+
+impl Diagnostic_severity
+  fn to_lsp_severity(r: Self@): I32 //<
+    //< The number the LSP uses for this severity
+    //<
+    //< Caution: Take the receiver as read-only (`Self@`); a `Self$@` method cannot be called on a
+    //< read-only value.
+    return I32::r$
+
+  fn name(r: Self): U8[] //< the word that heads a diagnostic, in the text and in JSON alike
+    switch r case .error
+      return "error"
+    case .warning
+      return "warning"
+    case .information
+      return "information"
+    case .hint
+      return "hint"
+
+fn code_of(msg: U8[]): U8[] //<
+  //< Extracts CODE from a diagnostic's leading "[CODE] ..." (empty if it does not start with "[")
+  if msg.len < 3 || (msg.ptr + 0)$ != '['
+    return ""
+  for $i: = 1; i < msg.len; i += 1
+    if (msg.ptr + i)$ == ']'
+      return U8[]::{ .ptr = msg.ptr + 1, .len = i - 1 }
+  return ""
+
+struct Lsp_diagnostic
+  file: U8$[]
+  severity: Diagnostic_severity
+  line: Sz
+  col: Sz
+  len: Sz
+  msg: U8$[]
+
+struct Lsp_diag_manager
+  list: List<|Lsp_diagnostic|>
+  seen: Map<|U8[], Bool|> //<
+    //< The diagnostics already collected (file:line:column:severity:message)
+    //<
+    //< The keys live on the arena the LSP rewinds, so drop them **together with** list.
+    //< Caution: **Do not look for duplicates by walking the list.** That is quadratic and slows the
+    //< editor on a document with many findings.
+  is_init: Bool
+$lsp_diags: Lsp_diag_manager = ::{}
+
+impl Lsp_diag_manager
+  fn init(r: Self$@)
+    if !r.is_init
+      r.list = List<|Lsp_diagnostic|>.new()
+      r.seen = Map<|U8[], Bool|>.new()
+      r.is_init = true
+    else
+      r.clear()
+
+  fn clear(r: Self$@)
+    if r.is_init
+      r.list.len = 0
+      // A Map cannot be emptied, so it is created again; its keys live as long as list.
+      r.seen.free()
+      r.seen = Map<|U8[], Bool|>.new()
+
+  fn free(r: Self$@)
+    if r.is_init
+      r.list.free()
+      r.seen.free()
+      r.is_init = false
+
+fn log(): Writer
+  return io.err()
+
+fn ice_panic(msg: U8$[])
+  log()
+    .s("\n=========================================\n[Internal Compiler Error] \
+      \{msg\}\n=========================================\n")
+  panic("ICE")
+
+fn ice_assert(cond: Bool, msg: U8$[])
+  if !cond
+    ice_panic(msg)
+
+// One diagnostic as one line of JSON on stderr (`--diagnostic-format=json`; the keys and their
+// meaning are "Diagnostics a program reads" in `ksplc/docs/SPEC-tools.md`).
+// An unknown position is passed as zero and printed as `null`: a settings file gives only a line,
+// and some errors have no place at all.
+priv fn print_json(file: U8[], line: Sz, column: Sz, end_column: Sz, msg: U8[],
+  severity: Diagnostic_severity)
+  arena: = Arena.new(4096)
+  defer arena.free()
+  $b: = Json_builder.new(arena)
+  code: = code_of(msg)
+  // The code has its own key, so the message drops its leading `[CODE] `.
+  text: = msg.sub_from(code.len + 2).trim_start() if code.len > 0 else msg
+  row: = b.obj().set("severity", b.str_val(severity.name()))
+    .set("code", b.str_val(code) if code.len > 0 else b.null_val())
+    .set("message", b.str_val(text))
+    .set("file", b.str_val(file) if file.len > 0 else b.null_val())
+    .set("line", json_num(b@, line)).set("column", json_num(b@, column))
+    .set("end_column", json_num(b@, end_column)).build()
+  $out: = Str_builder.new()
+  defer out.free()
+  row.dump(out@)
+  log().s(out.slice()).c('\n')
+
+priv fn json_num(b: Json_builder$@, v: Sz): json.Val //< a position, or `null` where it is 0
+  return b.null_val() if v == 0 else b.int_val(v)
+
+fn print_unplaced(file: U8[], line: Sz, msg: U8[]) //<
+  //< An error placed in no source: a settings file's line, or nowhere at all (`file` empty)
+  if base_core.config.diag_json
+    print_json(file, line, 0, 0, msg, .error)
+  else if file.len > 0
+    log().s(file).s(":\{line\}: error: ").s(msg).c('\n')
+  else
+    log().s("\nerror: ").s(msg).c('\n')
+
+// The length of the mark passed to the LSP (in UTF-16 units).
+// Caution: **Do not pass a byte count.** The LSP counts the column and the length in UTF-16
+// units, so bytes make **the squiggle run over the next name after a non-ASCII one**. The
+// column is `char_idx` (`disp_col` counts code points and drifts outside the BMP).
+priv fn lsp_wide(source: U8[], offset: Sz, length: Sz, info: base_core.Line_info,
+  starts: List<|Sz|>$@): Sz
+  // Caution: **Do not make it 0** (a mark with no width does not show in an editor).
+  if length == 0
+    return 1
+  // **Cut what crosses the line end**: this reports one line only.
+  end_off: = source.len if offset + length > source.len else offset + length
+  to: = source.get_line_info(end_off, starts)
+  if to.line != info.line
+    return 1
+  wide: = to.char_idx - info.char_idx
+  return 1 if wide == 0 else wide
+
+fn print_diagnostic(file_name: U8[], source: U8[], offset: Sz, length: Sz, msg: U8[],
+  severity: Diagnostic_severity, starts: List<|Sz|>$@)
+  $out_file_str: = Str_builder.new()
+  defer out_file_str.free()
+  // **The file is named so it can be opened**: a declared package's file by the path it was read
+  // from (`disk_name` in `locate.kspls`), anything else by its logical name.
+  out_file_str.s(base_locate.disk_name(file_name))
+  // Caution: **Do not copy the extension here.** base/core.kspls holds it (`has_kspl_ext`); with
+  // a copy, a renamed extension leaves the diagnostics on the old one.
+  if file_name.len > 0 && !file_name.has_kspl_ext() && !file_name.ends_with(".kspeg")
+    out_file_str.s(base_core.default_ext())
+  out_file: = out_file_str.slice()
+
+  actual_offset: = source.len if offset > source.len else offset
+  info: = source.get_line_info(actual_offset, starts)
+  line: = info.line
+  column: = info.disp_col
+  line_start: = info.line_start
+
+  if base_core.config.is_lsp
+    if lsp_diags.is_init
+      $key_b: = Str_builder.new()
+      defer key_b.free()
+      key_b.s(out_file).c(':').s("\{line\}").c(':').s("\{column\}").c(':')
+        .s("\{severity.to_lsp_severity()\}").c(':').s(msg)
+      key: = key_b.slice()
+      if lsp_diags.seen@.get(key) catch false
+        return
+      perm_key: = base_core.arena.dup_str(key)
+      lsp_diags.seen@.set(perm_key, true)
+      dup: = base_core.arena.dup_str(msg)
+      file_dup: = base_core.arena.dup_str(out_file)
+
+      lsp_diags.list
+        .push(Lsp_diagnostic::{ .file = file_dup, .severity = severity, .line = line - 1,
+        .col = info.char_idx, .len = lsp_wide(source, actual_offset, length, info, starts),
+        .msg = U8$[]::{ .ptr = dup.ptr, .len = dup.len } })
+    return
+
+  // It prints **the line as the writer typed it**.
+  // Caution: **Do not print the rewritten line** (see the head of base/as_written.kspls).
+  // The rewrite moves no line number. For a file with nothing stored the lookup returns empty;
+  // then the text as read is printed.
+  $line_text: = base_as_written.as_written_line(file_name, line)
+  if line_text.len == 0
+    $line_end: = line_start
+    for line_end < source.len && (source.ptr + line_end)$ != '\n' &&
+      (source.ptr + line_end)$ != '\r'
+      line_end += 1
+    line_text = U8[]::{ .ptr = source.ptr + line_start, .len = line_end - line_start }
+  $num_digits: Sz = 1
+  for $temp: = line; temp >= 10; temp /= 10
+    num_digits += 1
+
+  // The underline, **counted in characters like the column** (a byte count overruns a line with
+  // non-ASCII): at least one, stopping at the line end. Both outputs use one count, so the JSON
+  // and the carets never mark different text.
+  end_info: = source.get_line_info(source.len if actual_offset + length > source.len
+    else actual_offset + length, starts)
+  line_chars: = line_text.count_codepoints()
+  $span_len: Sz =
+    (end_info.disp_col - column) if end_info.line == line else line_chars + 1 - column
+  if column + span_len > line_chars + 1
+    span_len = line_chars + 1 - column
+  if span_len < 1
+    span_len = 1
+  if base_core.config.diag_json
+    print_json(out_file, line, column, column + span_len, msg, severity)
+    return
+
+  log_w: = log()
+  log_w.s("\{out_file\}:\{line\}:\{column\}: \{severity.name()\}: \{msg\}\n")
+  log_w.s("\{line\} | \{line_text\}\n")
+  repeat_char(log_w, " ", num_digits)
+  log_w.s(" | ")
+  repeat_char(log_w, " ", column - 1)
+  repeat_char(log_w, "^", span_len)
+  log_w.s("\n")
+
+priv fn repeat_char(w: Writer, ch: U8[], count: Sz) //<
+  //< It writes one character `count` times, for a diagnostic's gutter and underline
+  for _i in Range.asc(count)
+    w.s(ch)
+
+impl Lsp_diag_manager: Owned {}

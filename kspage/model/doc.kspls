@@ -1,0 +1,717 @@
+//< The document model
+//<
+//< Writing, a table and a presentation are all held in this one shape; a section and a bullet
+//< list are both "a nested block".
+//< Caution: **Do not let them outlive the arena.** Throwing the document away means throwing the
+//< arena away.
+//< `Inline` is split out into `run.kspls` to keep each file under 1000 lines (the reason is at
+//< its top); a file that needs it by name imports that one.
+import "kspage/model/locate" + { Path }
+// How one run is stored. **The reference goes one way only** (`run.kspls` points at no `Block`).
+import "kspage/model/run" + { Inline }
+import "std/ds" { List }
+import "std/mem" { Arena }
+
+struct Rect //< a rectangle on a slide
+  //<
+  //< **The upper left is the origin; down and right are positive.**
+  x: F32
+  y: F32
+  w: F32
+  h: F32
+
+impl Rect
+  fn holds(r: Self, x: F32, y: F32): Bool //< whether (x, y) is inside, edges included
+    //<
+    //< Caution: **Keep the test in this one place** (where the edges disagree, clicking an edge
+    //< hits another container).
+    return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h
+
+struct Block
+  style: U8[]
+  id: Sz //<
+    //< The permanent number that identifies the same thing
+    //<
+    //< **0 means "no number"** (an old text, or a document imported from a text).
+    //< Caution: **Never give one out twice, and never reuse one**: two texts are matched on it,
+    //< so every difference would turn into "a different thing".
+  name: U8[] //<
+    //< The name that identifies this one block
+    //<
+    //< In HTML, `style` is the class and this is the id; it names one thing, so it is not shared.
+    //< **A name is used in three places**: a formula points at a table (`expr/calc.kspls`), a line
+    //< connects a slide's frames (`kspage/absolute`), and the body refers to a block that has a
+    //< running number (`Inline.refers`).
+  inlines: List<|Inline$@|>$@ //< the contents held directly
+  children: List<|Block$@|>$@ //<
+    //< The nested blocks. **They can exist alongside `inlines`.**
+  frame: Option<|Rect|> //<
+    //< Where it is placed
+    //<
+    //< **Only the absolute-coordinate layout reads this** (flow and grid place a thing relative to
+    //< the element before).
+    //< **Do not put it into the style**: a style is shared by name, but each thing's position
+    //< differs.
+  tie_from: U8[] //<
+    //< The name of the frame it connects to (`Block.name`)
+    //<
+    //< **It holds no position.**
+    //< **Not in the style** (as with `frame`); `Style.shape` says whether it is a line or an
+    //< arrow.
+  tie_to: U8[]
+  step: Sz //<
+    //< At which step it appears
+    //<
+    //< **0 means "always shown"**; 1 or more shows once the presentation reaches that step.
+    //< Caution: **Do not put it into the style** (as with `frame`, the step differs frame by
+    //< frame).
+  column_widths: List<|Option<|F32|>|>$@ //<
+    //< The width of each column
+    //<
+    //< **Only the grid layout reads this.** **Not in the style**: there, resizing one table's
+    //< column would resize every table of the same name. Empty, `none`, and fewer entries than
+    //< columns all size to the contents.
+  row_heights: List<|Option<|F32|>|>$@ //<
+    //< The height of each row (set the same way as `column_widths`).
+  // How many rows and columns one cell covers (a merge). **1 means "not merged"** (there is no 0).
+  // Caution: **Do not put it into the style** (merges differ per table). **A covered cell is not
+  // in the row**: a merge removes the covered cells, so the row has fewer children (kept, they
+  // would leave text nobody can see in the document).
+  span_rows: Sz
+  span_cols: Sz
+  chart: U8[] //<
+    //< The range shown as a chart (`detail!A2:A4`)
+    //<
+    //< **Empty means no chart.**
+    //< **It holds no contents**: the chart is built from the range's values at layout time.
+    //< **The style says whether it is drawn as a picture** (`Style.collect`).
+  aim: U8[] //<
+    //< The source it points at (`src:<file>#<symbol>`)
+    //<
+    //< **Empty means no window.** **It holds no text.** The text is cut from the borrowed text at
+    //< layout time; stored here, **the same text would exist twice with no rule for which is
+    //< newer**.
+    //< **The style says whether it becomes a window** (`Style.collect`).
+    //< Note: [`source.kspls`](source.kspls) decides how the text is read.
+  image: U8[] //<
+    //< Where the picture came from
+    //<
+    //< **Empty means no picture.**
+    //< **It does not hold the picture itself**: reading and drawing it happen outside (the core
+    //< cannot read a picture).
+  image_w: F32 //<
+    //< The size the picture is laid out at
+    //<
+    //< **The document holds it**, since the core cannot find it out. **Not in the style** (it
+    //< differs per picture). **It is not shrunk to fit** (where it does not fit it sticks out, as a
+    //< set column width does).
+  image_h: F32
+  aside: U8[] //<
+    //< The note placed beside that block
+    //<
+    //< **Empty means no note.** **It is not laid out in the flow.** Layout, printing and export all
+    //< ignore it (beside a slide it is the presenter's note). It is separate from `Inline.note`,
+    //< whose mark appears in the body.
+
+struct Tile //< where one cell lies
+  //<
+  //< **Merges are counted here and nowhere else** (counted separately by the layout, the formulas
+  //< and the export, one table would look like three different shapes).
+  row: Sz
+  column: Sz
+  rows: Sz //< how many rows and columns it covers. **1 or more.**
+  cols: Sz
+  block: Block$@
+
+enum Axis //< the direction in which a table's cells are counted
+  column
+  row
+
+impl Block
+  fn add_text(r: Self$@, text: U8[], style: U8[] = ""): Inline$@ //< adds one run of text
+    //<
+    //< The text is copied, so the caller need not keep it alive. **It is allocated in the arena
+    //< this block lives in** (`inlines` holds it). A function that returns a result (`tiles_of` /
+    //< `lay.layout`) lets the caller choose instead (`kspage/docs/DESIGN.md`).
+    n: = run.new_inline(style, r.inlines.arena)
+    n.insert(0, text)
+    r.inlines.push(n)
+    return n
+
+  priv fn specs(r: Self@, axis: Axis): List<|Option<|F32|>|>$@
+    switch axis case .column
+      return r.column_widths
+    case .row
+      return r.row_heights
+
+  fn size_of(r: Self@, axis: Axis, i: Sz): Option<|F32|> //<
+    //< The setting for the i-th column's width (or row's height)
+    //<
+    //< **Where nothing is written it is "not set"** (there may be fewer or more settings than
+    //< cells).
+    list: = r.specs(axis)
+    if i < 0 || i >= list.len
+      return Option<|F32|>.none
+    return list.get(i)
+
+  fn set_size(r: Self$@, axis: Axis, i: Sz, v: Option<|F32|>) //<
+    //< Sets the i-th column's width (or row's height)
+    //<
+    //< Caution: **Fill the gaps with "not set".** Close them up and everything after shifts one
+    //< place forward.
+    if i < 0
+      return
+    list: = r.specs(axis)
+    for list.len <= i
+      list.push(Option<|F32|>.none)
+    list.set(i, v)
+
+  fn open_line(r: Self$@, axis: Axis, at: Sz) //< adds one row (or column)
+    //<
+    //< Caution: **Shift the size settings along with it.** Unshifted, the settings after it attach
+    //< to the wrong row or column (one place off). The added row or column has none.
+    list: = r.specs(axis)
+    if at < 0 || at > list.len
+      return
+    list.insert(at, Option<|F32|>.none)
+
+  fn close_line(r: Self$@, axis: Axis, at: Sz): Option<|F32|> //<
+    //< Removes one row's (or column's) size setting and returns it
+    //<
+    //< **It is used to put one back.**
+    list: = r.specs(axis)
+    if at < 0 || at >= list.len
+      return Option<|F32|>.none
+    got: = list.get(at)
+    list.remove_at(at)
+    return got
+
+  fn first_run(r: Self@): Option<|Inline$@|> //<
+    //< The first text in this block, in document order
+    //<
+    //< Caution: **Walk into the children too**, or a paragraph inside a cell is missed. A block may
+    //< have no text (a picture), so it returns an `Option`.
+    if r.inlines.len > 0
+      return Option<|Inline$@|>.some(r.inlines.get(0))
+    for $i: Sz = 0; i < r.children.len; i += 1
+      if n: = r.children.get(i).first_run()
+        return Option<|Inline$@|>.some(n)
+    return Option<|Inline$@|>.none
+
+  fn last_run(r: Self@): Option<|Inline$@|> //<
+    //< The last text in this block, in document order
+    //<
+    //< Caution: **Walk from the end**, children first: a child is laid out after its parent's text.
+    $i: Sz = r.children.len
+    for i > 0
+      i -= 1
+      if n: = r.children.get(i).last_run()
+        return Option<|Inline$@|>.some(n)
+    if r.inlines.len > 0
+      return Option<|Inline$@|>.some(r.inlines.get(r.inlines.len - 1))
+    return Option<|Inline$@|>.none
+
+  fn holds(r: Self@, n: Inline$@): Bool //< whether n lies inside this block
+    //<
+    //< Caution: **Walk into the children too** (the reason is at `first_run`).
+    for $i: Sz = 0; i < r.inlines.len; i += 1
+      if r.inlines.get(i) == n
+        return true
+    for $i: Sz = 0; i < r.children.len; i += 1
+      if r.children.get(i).holds(n)
+        return true
+    return false
+
+  fn add_child(r: Self$@, style: U8[]): Block$@ //< adds one child block
+    //<
+    //< It is allocated in the arena this block lives in (the reason is at `add_text`).
+    b: = new_block(style, r.children.arena)
+    r.children.push(b)
+    return b
+
+  // ---- A table's rows and columns ----
+  fn tiles_of(r: Self$@, arena: Arena$@): List<|Tile|>$@ //<
+    //< Each cell of the table with the row and column it starts at, counting merges
+    //<
+    //< Caution: **Use it together with the code that shifts the size settings (`open_line` /
+    //< `close_line`).** Move one alone and the settings after it attach one place off. **Merges
+    //< are counted here and nowhere else**; a covered position holds no cell, so the next cell
+    //< moves to the right.
+    out: = List<|Tile|>.create(arena)
+    // Per column, "how many more rows are taken".
+    // Caution: **Subtract one every time a row is laid out.**
+    held: = List<|Sz|>.create(arena)
+    for $i: Sz = 0; i < r.children.len; i += 1
+      row: = r.children.get(i)
+      $c: Sz = 0
+      for $k: Sz = 0; k < row.children.len; k += 1
+        cell: = row.children.get(k)
+        // Skips the taken columns (a cell reaching down from a row above lies there).
+        for c < held.len && held.get(c) > 0
+          c += 1
+        rows: = cell.span_rows if cell.span_rows > 1 else 1
+        cols: = cell.span_cols if cell.span_cols > 1 else 1
+        out
+          .push(Tile::{ .row = i, .column = c, .rows = rows, .cols = cols, .block = cell })
+        // Caution: **Store the covered row count as it is.** Subtract one here and the next row
+        // already looks free (a vertical merge would cover one row only).
+        for $n: Sz = 0; n < cols; n += 1
+          for held.len <= c + n
+            held.push(0)
+          held.set(c + n, rows)
+        c += cols
+      for $n: Sz = 0; n < held.len; n += 1
+        if held.get(n) > 0
+          held.set(n, held.get(n) - 1)
+    return out
+
+  fn grid_columns(r: Self$@, arena: Arena$@): Sz //< the number of a table's columns
+    //<
+    //< **It counts merges** (`line_count` is short by the merged columns).
+    tiles: = r.tiles_of(arena)
+    $n: Sz = 0
+    for $i: Sz = 0; i < tiles.len; i += 1
+      t: = tiles.get(i)
+      right: = t.column + t.cols
+      if right > n
+        n = right
+    return n
+
+  fn line_count(r: Self$@, axis: Axis): Sz //< the number of a table's rows (or columns)
+    //<
+    //< **A column count here is "the most children any row has"**, lower than `grid_columns`
+    //< where a merge exists. **Adding and removing a column count the grid's columns** (`tiles_of`,
+    //< through `slot_in`), the number that identifies the cursor's cell.
+    switch axis case .row
+      return r.children.len
+    case .column
+      $n: Sz = 0
+      for $i: Sz = 0; i < r.children.len; i += 1
+        got: = r.children.get(i).children.len
+        if got > n
+          n = got
+      return n
+
+  fn fresh_line(r: Self$@, axis: Axis, arena: Arena$@): List<|Block$@|>$@ //<
+    //< Makes one empty row (or column)
+    //<
+    //< **It is not attached to the tree yet** (the code that goes through the record attaches
+    //< it). An empty cell gets one text too, or the cursor could not be placed there.
+    made: = List<|Block$@|>.create(arena)
+    // **A new row has one cell per grid column**, not per child of a row (a merge would make it
+    // short).
+    cells: = r.grid_columns(arena) if axis == Axis.row else r.children.len
+    $style: U8[] = ""
+    $cell_style: U8[] = ""
+    if r.children.len > 0
+      style = r.children.get(0).style
+      if r.children.get(0).children.len > 0
+        cell_style = r.children.get(0).children.get(0).style
+    switch axis case .row
+      row: = new_block(style, arena)
+      for $c: Sz = 0; c < cells; c += 1
+        row.add_child(cell_style).add_text("")
+      made.push(row)
+    case .column
+      for $i: Sz = 0; i < cells; i += 1
+        cell: = new_block(cell_style, arena)
+        cell.add_text("")
+        made.push(cell)
+    return made
+
+  fn detach_line(r: Self$@, axis: Axis, at: Sz, spans: List<|Sz|>$@, arena: Arena$@):
+    List<|Block$@|>$@ //<
+      //< Removes one row (or column) and returns the removed blocks
+      //<
+      //< **A column is removed once per row** (it is "the cell with the same index in each row"),
+      //< and **a cell spanning several columns is narrowed instead** (a merge holds those columns
+      //< as one), so the result can be shorter than the row count. `spans` gets how many columns
+      //< each row's cell covered (**0 where the row ends short**, null to record nothing), so that
+      //< putting it back returns each row the way it came.
+    gone: = List<|Block$@|>.create(arena)
+    switch axis case .row
+      if at < 0 || at >= r.children.len
+        return gone
+      gone.push(r.children.get(at))
+      r.children.remove_at(at)
+    case .column
+      tiles: = r.tiles_of(arena)
+      for $i: Sz = 0; i < r.children.len; i += 1
+        row: = r.children.get(i)
+        slot: = slot_in(tiles, i, at)
+        if spans != null
+          spans.push(0 if slot.cell == null else slot.cols)
+        // The row ends before that column, so it has nothing to remove.
+        if slot.cell == null
+          continue
+        if slot.cols > 1
+          slot.cell.span_cols = slot.cols - 1
+          continue
+        gone.push(row.children.get(slot.index))
+        row.children.remove_at(slot.index)
+    return gone
+
+  fn attach_line(r: Self$@, axis: Axis, at: Sz, blocks: List<|Block$@|>$@, spans: List<|Sz|>$@,
+    arena: Arena$@) //<
+      //< Puts the removed row (or column) back in the same place
+      //<
+      //< **Where `spans` is empty the column is a new one**, and one that lands on a merged cell
+      //< widens that cell (Excel's behavior). **Where it is filled, a removal is being undone**,
+      //< each row going back the way `detach_line` took it.
+      //< **The table alone cannot tell that way** (`Line_op` in `write/record.kspls`).
+    switch axis case .row
+      if blocks.len > 0 && at >= 0 && at <= r.children.len
+        r.children.insert(at, blocks.get(0))
+    case .column
+      tiles: = r.tiles_of(arena)
+      fresh: = spans == null || spans.len <= 0
+      $k: Sz = 0
+      for $i: Sz = 0; i < r.children.len; i += 1
+        row: = r.children.get(i)
+        slot: = slot_in(tiles, i, at)
+        // A new column widens a merged cell and inserts a cell elsewhere. **Past the row's end it
+        // goes at the row's end**, so no row is left short.
+        $put: = true
+        if fresh
+          if slot.cell != null && slot.cols > 1
+            slot.cell.span_cols = slot.cols + 1
+            put = false
+        else
+          // Being put back: the way this row came is remembered, not read from the table.
+          was: = spans.get(i) if i < spans.len else 0
+          put = was == 1
+          if was > 1 && slot.cell != null
+            slot.cell.span_cols = was
+        if !put || k >= blocks.len
+          continue
+        row.children.insert(slot.index, blocks.get(k))
+        k += 1
+
+  fn owner_of(r: Self$@, n: Inline$@): Owner //<
+    //< The block holding n directly, and n's index within it
+    //<
+    //< **Where `found` is false the other fields are not read.** The index is what lets the second
+    //< half of a split go in beside the original.
+    for $i: Sz = 0; i < r.inlines.len; i += 1
+      if r.inlines.get(i) == n
+        return Owner::{ .block = r, .index = i, .found = true }
+    for $i: Sz = 0; i < r.children.len; i += 1
+      got: = r.children.get(i).owner_of(n)
+      if got.found
+        return got
+    return no_owner()
+
+struct Slot //< where one of the grid's columns falls within one row
+  //<
+  //< **"Which column" and "which child" are two numbers, not one.** The column is the grid's,
+  //< counting merges (`tiles_of`); the child is the index in `row.children`. Read as one, a row
+  //< with a merge is skipped and the rows end up with different numbers of columns.
+  index: Sz //<
+    //< The child that column falls on
+    //<
+    //< **Where the row ends before that column it is the row's end**, which is where an inserted
+    //< cell goes.
+  cell: Block$@ //< the cell that column falls on (**null where the row ends before that column**)
+  cols: Sz //< how many columns that cell covers (**read it only where `cell` is not null**)
+
+priv fn slot_in(tiles: List<|Tile|>$@, row: Sz, column: Sz): Slot //<
+  //< Where the grid's column `column` falls within row `row`
+  //<
+  //< **Merges are read from `tiles_of` and nowhere else.** A row's tiles are in child order, so
+  //< counting the ones wholly before it gives the child index.
+  $index: Sz = 0
+  for $i: Sz = 0; i < tiles.len; i += 1
+    t: = tiles.get(i)
+    if t.row != row
+      continue
+    if t.column + t.cols <= column
+      index += 1
+      continue
+    return Slot::{ .index = index, .cell = t.block, .cols = t.cols }
+  return Slot::{ .index = index, .cell = null, .cols = 0 }
+
+struct Owner //< the block holding a run, and the run's index within it
+  block: Block$@
+  index: Sz
+  found: Bool
+
+fn no_owner(): Owner
+  return Owner::{ .block = null, .index = 0, .found = false }
+
+priv fn seek_parent(here: Block$@, b: Block$@): Owner //<
+  //< looks for b's parent among here's children
+  for $i: Sz = 0; i < here.children.len; i += 1
+    if here.children.get(i) == b
+      return Owner::{ .block = here, .index = i, .found = true }
+    got: = seek_parent(here.children.get(i), b)
+    if got.found
+      return got
+  return no_owner()
+
+fn new_block(style: U8[], arena: Arena$@): Block$@ //< makes one block (attached to nothing)
+  b: = Block::{
+    .style = style,
+    // **No number is given out here**: the top and bottom bands are made at every redraw, so the
+    // number would keep climbing. Saving gives it out ([`ident.kspls`](ident.kspls)).
+    .id = 0,
+    .name = "",
+    .inlines = List<|Inline$@|>.create(arena),
+    .children = List<|Block$@|>.create(arena),
+    .frame = Option<|Rect|>.none,
+    .tie_from = "",
+    .tie_to = "",
+    .step = 0,
+    .column_widths = List<|Option<|F32|>|>.create(arena),
+    .row_heights = List<|Option<|F32|>|>.create(arena),
+    .span_rows = 1,
+    .span_cols = 1,
+    .chart = "",
+    .aim = "",
+    .image = "",
+    .image_w = 0.0,
+    .image_h = 0.0,
+    .aside = "",
+  }
+  return arena.create(b)
+
+fn add_framed_child(r: Block$@, style: U8[], at: Rect): Block$@ //<
+  //< Adds one child block with a set frame
+  //<
+  //< The absolute-coordinate layout reads the frame.
+  b: = r.add_child(style)
+  b.frame = Option<|Rect|>.some(at)
+  return b
+
+struct Neighbors //< what lies before and after an inline within the document
+  //<
+  //< **At an edge it is null.**
+  prev: Inline$@
+  next: Inline$@
+
+priv struct Scan //< the state partway through the walk
+  target: Inline$@
+  found: Inline$@
+  prev: Inline$@
+  next: Inline$@
+  last: Inline$@
+  // How many have been seen so far, and which one target was. Where it is not found, count_to
+  // stays -1.
+  seen: Sz
+  count_to: Sz
+
+priv fn new_scan(cur: Inline$@): Scan
+  return Scan::{
+    .target = cur,
+    .found = null,
+    .prev = null,
+    .next = null,
+    .last = null,
+    .seen = 0,
+    // The value for "not found". As 0 it could not be told apart from the first.
+    .count_to = -1,
+  }
+
+priv fn scan_block(s: Scan$@, b: Block$@)
+  // Caution: **Keep the order the same as the layout's** (this block's own inlines first, the
+  // child blocks after). Otherwise the ← → direction disagrees with the visible order.
+  for $i: Sz = 0; i < b.inlines.len; i += 1
+    n: = b.inlines.get(i)
+    if s.found != null && s.next == null
+      s.next = n
+    if n == s.target
+      s.found = n
+      s.prev = s.last
+      s.count_to = s.seen
+    s.last = n
+    s.seen += 1
+  for $i: Sz = 0; i < b.children.len; i += 1
+    scan_block(s, b.children.get(i))
+
+struct Doc //< one document
+  blocks: List<|Block$@|>$@
+  origin: U8[] //<
+    //< The mark of where this document came from, written into the text
+    //<
+    //< **A copied document keeps the same mark**, so two versions of one document can be told
+    //< apart from two separately made documents, whose clashing numbers then do not get mixed up.
+  next_id: Sz //<
+    //< The number to give out next
+    //<
+    //< Caution: **Save it.** Unsaved, a block added after reopening reuses the number of a deleted
+    //< block that is still in the other text, and a diff matches a different thing as "the same
+    //< thing". It starts at 1.
+  // The text shown at the top and bottom of every page. **No path can point at it**, yet it takes
+  // part in undo. **Where the text is empty nothing is shown** (an empty band would narrow the
+  // margin).
+  header: Block$@
+  footer: Block$@
+  arena: Arena$@
+
+enum Chrome //< which band it is, the header or the footer
+  header
+  footer
+
+impl Doc
+  fn new(arena: Arena$@, origin: U8[] = ""): Doc$@ //< makes one empty document
+    //<
+    //< **The origin mark is passed in from outside** (the core has neither a clock nor random
+    //< numbers). Empty means "do not trust the numbers", which a test or an import may leave.
+    // One text each, so the empty bands can be typed into.
+    head: = new_block("header", arena)
+    head.add_text("")
+    foot: = new_block("footer", arena)
+    foot.add_text("")
+    d: = Doc::{ .blocks = List<|Block$@|>.create(arena), .origin = origin, .next_id = 1,
+      .header = head, .footer = foot, .arena = arena }
+    return arena.create(d)
+
+  fn chrome_of(r: Self$@, which: Chrome): Block$@ //< the band at the page's top or bottom
+    switch which case .header
+      return r.header
+    case .footer
+      return r.footer
+
+  fn add_block(r: Self$@, style: U8[]): Block$@ //< adds one top-level block
+    b: = new_block(style, r.arena)
+    r.blocks.push(b)
+    return b
+
+  fn index_of(r: Self$@, cur: Inline$@): Sz //<
+    //< The index of cur within the document (counting from 0)
+    //<
+    //< **-1 where there is none.** It decides which of two positions comes first (a selection's
+    //< direction).
+    $s: Scan = new_scan(cur)
+    for $i: Sz = 0; i < r.blocks.len; i += 1
+      scan_block(s@, r.blocks.get(i))
+    return s.count_to
+
+  fn neighbors(r: Self$@, cur: Inline$@): Neighbors //<
+    //< What lies before and after cur within the document
+    //<
+    //< **It searches across blocks**, or ← → would stop at a paragraph's start. One walk gives
+    //< both sides, so the order is decided in one place.
+    $s: Scan = new_scan(cur)
+    for $i: Sz = 0; i < r.blocks.len; i += 1
+      scan_block(s@, r.blocks.get(i))
+    return Neighbors::{ .prev = s.prev, .next = s.next }
+
+  fn path_of(r: Self$@, cur: Inline$@): Path //< the path that points at cur
+    //<
+    //< **Where `found` is false the other fields are not read.**
+    $out: Path = locate.no_path(r.arena)
+    for $i: Sz = 0; i < r.blocks.len; i += 1
+      if locate.seek_path(r.blocks.get(i), cur, out@)
+        out.blocks.insert(0, i)
+        return out
+    return out
+
+  fn path_of_block(r: Self$@, b: Block$@, at: Sz): Path //<
+    //< The path that points at b, with at set as the text's index
+    //<
+    //< It points at the block so that it can carry adding a run (the text is not there yet).
+    $out: Path = locate.no_path(r.arena)
+    for $i: Sz = 0; i < r.blocks.len; i += 1
+      if locate.seek_block(r.blocks.get(i), b, out@)
+        out.blocks.insert(0, i)
+        out.run = at
+        return out
+    return out
+
+  priv fn walked(r: Self$@, p: Path, deep: Sz): Owner //< where the path leads after deep levels
+    //<
+    //< **Where `block` is null and `found` is true it is the document's top level** (the same
+    //< promise as `parent_of`). `index` is the index at the next level, and -1 where the path has
+    //< been walked to the end.
+    if !p.found || deep < 0 || deep > p.blocks.len
+      return no_owner()
+    $b: Block$@ = null
+    for $i: Sz = 0; i < deep; i += 1
+      k: = p.blocks.get(i)
+      kin: = r.kin_of(b)
+      if k < 0 || k >= kin.len
+        return no_owner()
+      b = kin.get(k)
+    $at: Sz = -1
+    if deep < p.blocks.len
+      at = p.blocks.get(deep)
+    return Owner::{ .block = b, .index = at, .found = true }
+
+  fn sheet_path(r: Self$@): Path //< the path that points at the style table
+    //<
+    //< **It points nowhere in the tree** (its list of indices is empty): styles are found by name.
+    $out: Path = locate.no_path(r.arena)
+    out.found = true
+    return out
+
+  fn path_of_slot(r: Self$@, parent: Block$@, at: Sz): Path //<
+    //< The path that points at parent's at-th child (`run` is -1)
+    //<
+    //< **It can point at a position that does not exist yet** (it is used to point at where a
+    //< block is inserted). Where parent is null it is the document's top level.
+    if parent == null
+      $top: Path = locate.no_path(r.arena)
+      top.blocks.push(at)
+      top.found = true
+      return top
+    out: = r.path_of_block(parent, -1)
+    if out.found
+      out.blocks.push(at)
+    return out
+
+  fn block_at(r: Self$@, p: Path): Option<|Block$@|> //< the block the path points at
+    //<
+    //< **Where the tree has changed it points somewhere else** (or nowhere).
+    if p.blocks.len <= 0
+      return Option<|Block$@|>.none
+    got: = r.walked(p, p.blocks.len)
+    if !got.found
+      return Option<|Block$@|>.none
+    return Option<|Block$@|>.some(got.block)
+
+  fn slot_of(r: Self$@, p: Path): Owner //<
+    //< The parent block of where the path points, and the index
+    //<
+    //< **The last level may be a position that does not exist yet** (where a thing is inserted);
+    //< the caller checks whether it is in range. **Where `block` is null and `found` is true it is
+    //< the document's top level.**
+    if p.blocks.len <= 0
+      return no_owner()
+    return r.walked(p, p.blocks.len - 1)
+
+  fn inline_at(r: Self$@, p: Path): Option<|Inline$@|> //< the text the path points at
+    //<
+    //< It has the same caveat as `block_at`.
+    if p.run < 0
+      return Option<|Inline$@|>.none
+    if b: = r.block_at(p)
+      if p.run < b.inlines.len
+        return Option<|Inline$@|>.some(b.inlines.get(p.run))
+    return Option<|Inline$@|>.none
+
+  fn parent_of(r: Self$@, b: Block$@): Owner //<
+    //< b's parent, and b's index among its children
+    //<
+    //< **Where `block` is null and `found` is true it is the document's top level** (there is no
+    //< parent block). Where `found` is false, b is not in this document.
+    for $i: Sz = 0; i < r.blocks.len; i += 1
+      if r.blocks.get(i) == b
+        return Owner::{ .block = null, .index = i, .found = true }
+      got: = seek_parent(r.blocks.get(i), b)
+      if got.found
+        return got
+    return no_owner()
+
+  fn kin_of(r: Self$@, parent: Block$@): List<|Block$@|>$@ //< parent's list of children
+    //<
+    //< **Where it is null it is the document's top-level list**, so adding and removing a
+    //< paragraph is written once.
+    return r.blocks if parent == null else parent.children
+
+  fn owner_of(r: Self$@, cur: Inline$@): Owner //<
+    //< The block holding cur directly, and cur's index within it
+    for $i: Sz = 0; i < r.blocks.len; i += 1
+      got: = r.blocks.get(i).owner_of(cur)
+      if got.found
+        return got
+    return no_owner()

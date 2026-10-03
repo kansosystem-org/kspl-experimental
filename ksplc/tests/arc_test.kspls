@@ -1,0 +1,662 @@
+import "std/verdict"
+// ==========================================
+// Checks **at which positions** the compiler inserts retain/release under ARC (Swift-style
+// automatic reference counting).
+// Caution: **Do not declare `Ref_counted` in this file.** Every file imports `std/lang` implicitly,
+// so a declaration of the same name here wins, and Arc_counter quietly stops being an ARC type
+// (the same-named declaration is kept apart in ksplc/tests/arc_lookalike_test.kspls).
+// **This file checks only the insertion positions**; std's own tests check the balance of
+// `std/mem`'s Rc/Arc/Weak_*.
+// ==========================================
+
+import "std/ds" { List, Map }
+import "std/mem" + { alloc, dealloc }
+import "std/refcount" { Rc, Weak_rc }
+
+// ==========================================
+// A generic ARC type.
+// **It checks something only while it is generic, `priv` and never called by hand, all three**;
+// `Rc<|T|>` cannot stand in.
+// ==========================================
+priv struct _Arc_cell_ctrl<|T|>
+  count: Sz
+  value: T
+
+struct Arc_cell<|T|>
+  priv ctrl: _Arc_cell_ctrl<|T|>$@
+
+impl<|T|> Arc_cell<|T|>
+  fn new(v: T): Arc_cell<|T|>
+    c: = mem.alloc_as<|_Arc_cell_ctrl<|T|>|>()
+    c.count = 1
+    c.value = v
+    return ::{ .ctrl = c }
+  fn get(r: Self$@): T$@
+    return r.ctrl.value@
+
+impl<|T|> Arc_cell<|T|>: Ref_counted
+  priv fn retain(r: Self@)
+    r.ctrl.count += 1
+  priv fn release(r: Self@)
+    r.ctrl.count -= 1
+    if r.ctrl.count == 0
+      dealloc(Void$@::r.ctrl)
+
+priv fn arc_cell_body()
+  $a: = Arc_cell<|I32|>.new(11)
+  $b: = a // a copy: the compiler inserts a retain
+  assert(a.get()$ == 11 && b.get()$ == 11, "both Arc_cell handles must share the value")
+
+fn test_arc_generic_synthesized_only()
+  verdict.start("[ARC] the retain/release of a generic only the synthesis calls survives test...")
+  b0: = mem.heap_used_bytes()
+  arc_cell_body()
+  b1: = mem.heap_used_bytes()
+  assert(b1 == b0,
+    "a generic ARC type whose retain/release are only compiler-synthesized must still link and \
+      balance")
+  verdict
+    .pass("an instantiated method not appearing in the source was not dropped, and was freed still \
+      balanced.")
+priv struct _Arc_counter_ctrl
+  count: Sz
+  value: I32
+
+struct Arc_counter
+  priv ctrl: _Arc_counter_ctrl$@
+
+impl Arc_counter
+  fn new(v: I32): Arc_counter
+    c: = mem.alloc_as<|_Arc_counter_ctrl|>()
+    c.count = 1
+    c.value = v
+    return ::{ .ctrl = c }
+  fn get(r: Self$@): I32$@
+    return r.ctrl.value@
+  fn refcount(r: Self$@): Sz
+    return r.ctrl.count
+
+// The conforming impl's methods are priv too (calls by hand would double the inserted ones), and
+// take `Self@` (`Ref_counted` in std/lang.kspls) for a type outside std as well.
+impl Arc_counter: Ref_counted
+  priv fn retain(r: Self@)
+    r.ctrl.count += 1
+  priv fn release(r: Self@)
+    r.ctrl.count -= 1
+    if r.ctrl.count == 0
+      dealloc(Void$@::r.ctrl)
+
+priv fn arc_auto_single() //<
+  //< One binding (count 1 at new()) -> an automatic release on leaving the scope -> freed at 0.
+  $a: = Arc_counter.new(42)
+  assert(a.get()$ == 42 && a.refcount() == 1, "a single ARC binding must have count 1")
+
+priv fn arc_auto_copy() //<
+  //< A copy (b := a) retains -> count 2; leaving releases b then a -> 0.
+  $a: = Arc_counter.new(7)
+  $b: = a
+  assert(a.refcount() == 2, "a plain copy of an ARC value must auto-retain to count 2")
+  assert(b.get()$ == 7, "the copied ARC handle must share the value")
+
+fn test_arc_auto_local()
+  verdict.start("[ARC] compiler-inserted retain (a copy) / release (leaving a scope) test...")
+
+  b0: = mem.heap_used_bytes()
+  arc_auto_single()
+  assert(mem.heap_used_bytes() == b0, "a single ARC binding must be auto-freed at scope exit")
+
+  b1: = mem.heap_used_bytes()
+  arc_auto_copy()
+  b1_end: = mem.heap_used_bytes()
+  assert(b1_end == b1, "an ARC copy must auto retain/release in balance (no leak, no double-free)")
+
+  verdict
+    .pass("the retain on copy and the release on leaving a scope balanced exactly, both \
+      compiler-inserted.")
+priv fn arc_consume($c: Arc_counter) //< another function taking an ARC target's value by value
+  //<
+  //< It pairs with the caller's retain and is released at this function's end (count 2 until then).
+  assert(c.get()$ == 99, "the callee must see the shared ARC value")
+  assert(c.refcount() == 2, "during the call both caller and callee owners are counted")
+
+priv fn arc_make(v: I32): Arc_counter //< a factory allocating an ARC target and returning it
+  //<
+  //< A retain at the return offsets the local's release, so the caller owns it at count 1.
+  x: = Arc_counter.new(v)
+  return x
+
+priv fn arc_cross_scenario()
+  // Allocated and passed by value: not freed in the callee, but released at this scope's end ->
+  // 0 -> freed.
+  $x: = Arc_counter.new(99)
+  arc_consume(x)
+  assert(x.refcount() == 1, "after callee returns, only the caller's owner remains")
+  assert(x.get()$ == 99, "value must survive the cross-function call")
+
+  $y: = arc_make(7)
+  assert(y.refcount() == 1, "factory return must hand over count 1")
+  assert(y.get()$ == 7, "the returned ARC value must be intact")
+
+fn test_arc_auto_cross_fn()
+  verdict
+    .start("[ARC] automatic retain/release across functions (passing an argument, returning) \
+      test...")
+  b0: = mem.heap_used_bytes()
+  arc_cross_scenario()
+  b0_end: = mem.heap_used_bytes()
+  assert(b0_end == b0,
+    "ARC values must be auto-freed across function boundaries (no leak, no double-free)")
+  verdict
+    .pass("passing an argument (a retain in the caller plus a release in the callee) and the retain \
+      at a return balanced across functions.")
+// ==========================================
+// ARC's chaining: a struct holding an ARC type as a **value field** chain-retains it on copy and
+// chain-releases it on leaving the scope, nesting included. Arc_pair itself does not conform to
+// Ref_counted; the compiler decides the chaining from the field types.
+// ==========================================
+priv struct Arc_pair
+  a: Rc<|I32|>
+  b: Rc<|I32|>
+
+priv struct Arc_nest
+  p: Arc_pair
+  tag: I32
+
+priv fn arc_field_body()
+  $p: = Arc_pair::{ .a = Rc<|I32|>.new(10), .b = Rc<|I32|>.new(20) }
+  assert(p.a.get()$ == 10 && p.b.get()$ == 20, "struct ARC fields must be readable")
+  $q: = p // a struct copy -> each ARC field is chain-retained and shared
+  assert(q.a.get()$ == 10 && q.b.get()$ == 20, "a copied struct shares its ARC fields")
+  // Leaving the scope: q's and p's fields are each chain-released and every ctrl is freed.
+
+priv fn arc_nest_body()
+  $w: = Arc_nest::{ .p = Arc_pair::{ .a = Rc<|I32|>.new(1), .b = Rc<|I32|>.new(2) }, .tag = 7 }
+  assert(w.p.a.get()$ == 1 && w.tag == 7, "a nested struct ARC field must be readable")
+  // Leaving the scope: w.p.a / w.p.b are chain-released, following the nesting.
+
+fn test_arc_field_cascade()
+  verdict.start("[ARC] chained retain/release into a struct's fields test...")
+  b0: = mem.heap_used_bytes()
+  arc_field_body()
+  b0_end: = mem.heap_used_bytes()
+  assert(b0_end == b0,
+    "struct-with-arc-fields must cascade-free on scope exit (no leak, no double-free)")
+  b1: = mem.heap_used_bytes()
+  arc_nest_body()
+  assert(mem.heap_used_bytes() == b1, "nested struct ARC fields must cascade-free")
+  verdict
+    .pass("the chained retain on a struct copy and the chained release on leaving a scope (nesting \
+      included) balanced.")
+// ==========================================
+// std/mem: covers the positions where a retain goes in for "a copy of a bare ARC binding".
+// Caution: On Linux freed memory keeps the old value, so a missing retain passes; macOS overwrites
+// it and fails. Judge liveness with Weak_rc.upgrade(), not by reading the value ("A retain goes
+// wherever a copy happens" in ksplc/docs/DESIGN.md).
+// ==========================================
+struct Arc_holder
+  v: Rc<|I32|>
+
+enum Arc_wrap
+  empty
+  filled(v: Rc<|I32|>)
+
+priv fn arc_is_alive(r: Rc<|I32|>$@): Bool
+  $w: = r.downgrade()
+  $alive: = true
+  _got: = w.upgrade() catch
+    alive = false
+    fallback Rc<|I32|>.new(0)
+  return alive
+
+priv fn arc_store_into_field(v: Rc<|I32|>): Arc_holder
+  return Arc_holder::{ .v = v }
+
+priv fn arc_store_into_array(v: Rc<|I32|>): Rc<|I32|>[2]
+  return ::{ v, v }
+
+priv fn arc_store_into_enum(v: Rc<|I32|>): Arc_wrap
+  return Arc_wrap.filled(v)
+
+fn test_arc_retain_on_every_copy_site()
+  verdict
+    .start("[ARC] the retain inserted at every position where a copy happens \
+      (struct/array/enum/assignment) test...")
+
+  $h: = arc_store_into_field(Rc<|I32|>.new(7))
+  field_alive: = arc_is_alive(h.v@)
+  assert(field_alive, "an Rc stored into a struct-literal field must stay alive with the struct")
+
+  $arr: = arc_store_into_array(Rc<|I32|>.new(7))
+  elem_alive: = arc_is_alive(arr[0]@)
+  assert(elem_alive, "an Rc stored into an array-literal element must stay alive with the array")
+
+  e: = arc_store_into_enum(Rc<|I32|>.new(7))
+  switch e case .filled(inner)
+    payload_alive: = arc_is_alive(inner@)
+    assert(payload_alive, "an Rc stored into an enum payload must stay alive with the enum")
+  default
+    panic("enum payload lost its variant")
+
+  $dst: = Rc<|I32|>.new(1)
+  release_on_exit:
+    src: = Rc<|I32|>.new(7)
+    dst = src
+  dst_alive: = arc_is_alive(dst@)
+  assert(dst_alive,
+    "an Rc assigned into an existing binding must stay alive after the source's scope ends")
+
+  // An assignment releases the value it overwrites, or the original leaks; creation and
+  // destruction must balance (for a struct or a bare Rc, where the chained release applies).
+  b0: = mem.heap_used_bytes()
+  arc_assign_balance_body()
+  b0_end: = mem.heap_used_bytes()
+  assert(b0_end == b0, "assigning over an ARC binding must release the overwritten value (no leak)")
+
+  verdict
+    .pass("a retain goes in on copy for a struct or array literal, an enum payload and an \
+      assignment to an existing binding alike, and none of them becomes a use after free.")
+
+priv fn arc_assign_balance_body()
+  $dst: = Rc<|I32|>.new(1)
+  src: = Rc<|I32|>.new(7)
+  dst = src
+  _u: = dst.get()$
+
+// ==========================================
+// std/mem: covers the chained release of "an aggregate owning ARC as a value".
+// An enum's chaining is a synthesized switch on the run-time tag (the live variant alone).
+// ==========================================
+priv enum Arc_multi
+  empty
+  one(v: Rc<|I32|>)
+  two(tag: I32, v: Rc<|I32|>)
+  nested(inner: Arc_holder)
+
+priv struct Arc_aggregate
+  arr: Rc<|I32|>[2]
+  e: Arc_multi
+
+priv fn arc_enum_payload_body()
+  e: = Arc_multi.two(3, Rc<|I32|>.new(10))
+  switch e case .two(t, v)
+    assert(t == 3 && v.get()$ == 10, "enum payload must be readable")
+  default
+    panic("enum lost its variant")
+  // Leaving the scope: the payload v of the live variant two alone is released.
+
+priv fn arc_array_element_body()
+  $arr: Rc<|I32|>[2] = ::{ Rc<|I32|>.new(1), Rc<|I32|>.new(2) }
+  assert(arr[0].get()$ == 1 && arr[1].get()$ == 2, "array elements must be readable")
+  // Leaving the scope: every element is released.
+
+priv fn arc_aggregate_nest_body()
+  $g: = Arc_aggregate::{ .arr = ::{ Rc<|I32|>.new(1), Rc<|I32|>.new(2) },
+    .e = Arc_multi.nested(Arc_holder::{ .v = Rc<|I32|>.new(3) }) }
+  assert(g.arr[1].get()$ == 2, "an array field inside a struct must be readable")
+  // Leaving the scope: two array elements and a struct field inside the enum's payload.
+
+priv fn arc_place_expr_copy_body() //< a copy from a place expression (`g.arr[0]` and the like)
+  //<
+  //< Without a retain here, the destination's release **frees memory that should still be alive**
+  //< (a use after free).
+  $g: = Arc_aggregate::{ .arr = ::{ Rc<|I32|>.new(1), Rc<|I32|>.new(2) },
+    .e = Arc_multi.one(Rc<|I32|>.new(3)) }
+  release_on_exit:
+    _from_elem: = g.arr[0]
+    _from_field: = g.arr
+  origin_alive: = arc_is_alive(g.arr[0]@)
+  assert(origin_alive,
+    "copying an array element must retain it (the original storage still owns a reference)")
+
+priv fn arc_multi_exit_body(n: I32): I32 //<
+  //< the three routes of a return, a break and a normal exit
+  //<
+  //< The cleanup is duplicated per exit, and the synthesized switch (payload binding included)
+  //< must still resolve after duplication.
+  e: = Arc_multi.two(1, Rc<|I32|>.new(n))
+  $arr: Rc<|I32|>[2] = ::{ Rc<|I32|>.new(1), Rc<|I32|>.new(2) }
+  for i in Range.asc(3)
+    if i == n
+      return arr[0].get()$
+    if i == 2
+      break
+  switch e case .two(_t, v)
+    return v.get()$ - n + arr[1].get()$
+  default
+    return arr[1].get()$
+
+fn test_arc_aggregate_cascade_release()
+  verdict.start("[ARC] the chained release into an enum payload / array elements test...")
+
+  b0: = mem.heap_used_bytes()
+  arc_enum_payload_body()
+  b0_end: = mem.heap_used_bytes()
+  assert(b0_end == b0, "an enum's active-variant payload must be released on scope exit (no leak)")
+
+  b1: = mem.heap_used_bytes()
+  arc_array_element_body()
+  assert(mem.heap_used_bytes() == b1, "every array element must be released on scope exit")
+
+  b2: = mem.heap_used_bytes()
+  arc_aggregate_nest_body()
+  b2_end: = mem.heap_used_bytes()
+  assert(b2_end == b2, "array elements and enum payloads must be reached through struct fields too")
+
+  b3: = mem.heap_used_bytes()
+  arc_place_expr_copy_body()
+  assert(mem.heap_used_bytes() == b3, "place-expression copies must balance retain/release")
+
+  b4: = mem.heap_used_bytes()
+  total: = arc_multi_exit_body(0) + arc_multi_exit_body(1) + arc_multi_exit_body(3)
+  assert(total == 1 + 1 + 2, "multi-exit paths must return the expected values")
+  b4_end: = mem.heap_used_bytes()
+  assert(b4_end == b4, "the cascade must run on every exit path (return / break / fall-through)")
+
+  verdict
+    .pass("a live enum variant's payload and every array element were chain-released through a \
+      struct, through nesting and on every exit route.")
+// ==========================================
+// std/mem: a Result's (`T?E`) success payload is an owning position too.
+// Received with `catch` or `?`, the value moves to the binding and balances, so if the walk over
+// owning positions skips Result, **only a Result thrown away unreceived** leaks.
+// ==========================================
+priv enum Arc_err
+  failed
+
+priv fn arc_make_ok(): Rc<|I32|>?Arc_err
+  return Rc<|I32|>.new(5)
+
+priv fn arc_make_err(): Rc<|I32|>?Arc_err
+  throw Arc_err.failed
+
+priv fn arc_result_dropped_body() //<
+  //< The shape that throws a Result away using neither catch nor ?
+  _ok: = arc_make_ok()
+  _bad: = arc_make_err()
+
+priv fn arc_result_unwrapped_body() //< the receiving shape
+  r: = arc_make_ok()
+  $v: = r catch
+    fallback Rc<|I32|>.new(0)
+  assert(v.get()$ == 5, "an unwrapped Result payload must be readable")
+
+priv struct Arc_result_holder
+  r: Rc<|I32|>?Arc_err
+
+priv fn arc_result_in_struct_body()
+  h: = Arc_result_holder::{ .r = arc_make_ok() }
+  _copy: = h
+
+fn test_arc_result_payload_release()
+  verdict.start("[ARC] the chained release into a Result's success payload test...")
+
+  b0: = mem.heap_used_bytes()
+  arc_result_dropped_body()
+  b0_end: = mem.heap_used_bytes()
+  assert(b0_end == b0, "a Result dropped without catch/? must still release its ARC payload")
+
+  b1: = mem.heap_used_bytes()
+  arc_result_unwrapped_body()
+  assert(mem.heap_used_bytes() == b1, "unwrapping a Result must not double-release its payload")
+
+  b2: = mem.heap_used_bytes()
+  arc_result_in_struct_body()
+  b2_end: = mem.heap_used_bytes()
+  assert(b2_end == b2,
+    "a Result held in a struct field must be reached by the cascade (copy included)")
+
+  verdict
+    .pass("a Result thrown away unreceived, a Result received and a Result in a struct field all \
+      balanced (the error side holds no payload).")
+// ==========================================
+// std/mem: a Result built around a place, or unwrapped from one, copies what the place owns.
+// `return entry.value` in a `V?E` function and `v: = r catch …` on a binding both leave the
+// place owning too, so each copy needs its own count. A missing one frees the value under the
+// copy; the heap still balances while the freed memory reads as before, so a weak handle and the
+// final balance are what tell.
+// ==========================================
+priv fn arc_unwrap_place(r: Rc<|I32|>?Arc_err): Rc<|I32|> //< unwraps a Result it does not give up
+  v: = r catch
+    fallback Rc<|I32|>.new(0)
+  return v
+
+priv struct Arc_kept
+  owner: Rc<|I32|>
+  watch: Weak_rc<|I32|>
+
+priv fn arc_handed_through_unwrap(): Arc_kept //< its first owner gone, the copy alone holds it
+  $a: = Rc<|I32|>.new(5)
+  w: = a.downgrade()
+  return Arc_kept::{ .owner = arc_unwrap_place(a), .watch = w }
+
+priv fn arc_unwrap_keeps_body(): Bool
+  $k: = arc_handed_through_unwrap()
+  $alive: = k.watch.upgrade() catch
+    return false
+  return alive.get()$ == 5 && k.owner.get()$ == 5
+
+fn test_arc_result_place_copy()
+  verdict.start("[ARC] wrapping a place in a Result, and unwrapping one, counts the copy test...")
+  b0: = mem.heap_used_bytes()
+  assert(arc_unwrap_keeps_body(), "the copy keeps the value alive once its first owner is gone")
+  assert(mem.heap_used_bytes() == b0, "every count taken is given back, so the value is freed")
+  verdict
+    .pass("a place wrapped into a Result and a place Result unwrapped each counted their copy.")
+
+// ==========================================
+// std/mem: an ARC handle's zero value is "empty, owning nothing".
+// The chained release follows a zero-initialized area as usual: an array's empty slot, a `::{}`
+// aggregate, an enum's zero-tag payload.
+// ==========================================
+priv struct Arc_slot
+  used: Bool
+  rc: Rc<|I32|>
+
+priv fn arc_zero_array_body() //< leaving the scope of, and copying, a zero-initialized array
+  arr: Rc<|I32|>[2] = ::{}
+  _copy: = arr
+
+priv fn arc_zero_slot_assign_body() //< an assignment into an empty slot
+  $arr: Rc<|I32|>[2] = ::{}
+  arr[0] = Rc<|I32|>.new(7)
+  assert(arr[0].get()$ == 7, "assigning into an empty slot must produce a live handle")
+  arr[0] = arr[1] // assigning a zero value over a live handle -> the 7 is freed
+
+priv fn arc_zero_aggregate_body() //< the zero value of an enum's payload and of a struct's field
+  opts: Option<|Rc<|I32|>|>[2] = ::{}
+  _o2: = opts
+  slots: Arc_slot[2] = ::{}
+  _s2: = slots
+
+priv fn arc_empty_slot_table_body() //< a table holding empty slots
+  //<
+  //< `empty()` puts a slot back to empty, and `is_empty()` tells it.
+  $slots: Rc<|I32|>[3] = ::{}
+  assert(slots[0].is_empty() && slots[2].is_empty(), "a zero-initialized slot must read empty")
+  slots[1] = Rc<|I32|>.new(5)
+  assert(!slots[1].is_empty(), "an occupied slot must not read empty")
+  assert(slots[1].get()$ == 5, "an occupied slot must hold the stored value")
+  slots[1] = Rc<|I32|>.empty() // put explicitly back to empty -> the original value is freed
+  assert(slots[1].is_empty(), "assigning empty() must clear the slot")
+
+fn test_arc_zero_value_is_empty()
+  verdict.start("[ARC] a zero-valued handle is treated as \"empty\" test...")
+
+  b_slot: = mem.heap_used_bytes()
+  arc_empty_slot_table_body()
+  b_slot_end: = mem.heap_used_bytes()
+  assert(b_slot_end == b_slot,
+    "empty()/is_empty() must agree with the zero value and balance on clear")
+
+  b0: = mem.heap_used_bytes()
+  arc_zero_array_body()
+  assert(mem.heap_used_bytes() == b0, "a zero-initialized ARC array must own nothing")
+
+  b1: = mem.heap_used_bytes()
+  arc_zero_slot_assign_body()
+  b1_end: = mem.heap_used_bytes()
+  assert(b1_end == b1,
+    "assigning into and out of an empty slot must balance (the empty side owns nothing)")
+
+  b2: = mem.heap_used_bytes()
+  arc_zero_aggregate_body()
+  b2_end: = mem.heap_used_bytes()
+  assert(b2_end == b2, "zero-initialized enum payloads and struct fields own nothing")
+
+  verdict
+    .pass("an array's empty slot, an enum's zero tag and a struct's zero-valued field all went \
+      through retain/release doing nothing.")
+// ==========================================
+// std/mem: where the T of `Rc<|T|>.new()` holds ARC content.
+// `new()`'s `c.value = value` is an ordinary assignment and releases the value it overwrites,
+// which is fresh garbage, so `new()` must zero the value area first.
+// ==========================================
+
+priv fn arc_dirty_small_bins() //<
+  //< It fills freshly allocated small blocks (16 to 128 bytes) with 0xFF and frees them again
+  //<
+  //< Caution: **Fill freshly allocated memory with garbage first.** A fresh page from the OS is
+  //< zeros, so an implementation that does not zero silently passes. The control block's frame size
+  //< depends on the layout, so all the smaller frames are dirtied.
+  for $bytes: Sz = 16; bytes <= 128; bytes += 8
+    p: = U8$@::alloc(bytes)
+    for i in Range.asc(bytes)
+      (p + i)$ = 0xFF
+    dealloc(Void$@::p)
+
+priv fn arc_new_of_arc_bearing_body()
+  arc_dirty_small_bins()
+  $b: = Rc<|Arc_slot|>.new(Arc_slot::{ .used = true, .rc = Rc<|I32|>.new(9) })
+  p: = b.get()
+  assert(p.used && p.rc.get()$ == 9, "an ARC value carried into Rc.new must stay readable")
+  // The pointee is not followed, so ownership returns here: overwriting with empty releases the
+  // content.
+  // Caution: An assignment's left side must be a **place expression**. `b.get().rc = ...` holds a
+  // call, so no release is inserted and it leaks quietly; go through a pointer.
+  empty: Rc<|I32|>[1] = ::{}
+  p.rc = empty[0]
+
+fn test_arc_new_of_arc_bearing_value()
+  verdict.start("[ARC] handing a value holding ARC content to Rc<|T|>.new() test...")
+  b0: = mem.heap_used_bytes()
+  arc_new_of_arc_bearing_body()
+  b0_end: = mem.heap_used_bytes()
+  assert(b0_end == b0,
+    "Rc.new must not traverse its uninitialized value region, and the hand-back must balance")
+  verdict
+    .pass("the garbage right after allocation was not followed as ARC, and it balanced after the \
+      ownership of what it points at was handed back.")
+
+// ==========================================
+// std/ds: where the elements of a container implementing "a subscript returning a place"
+// (std/lang's Index_place) are ARC, `l[i]`'s reads and writes go through retain/release. ARC
+// runs before the expansion to `l.at(i)$`, so the cloned receiver is still a `[`, an ICE if genc
+// gets it (expand_place_index_ops in `ksplc/lower/arc.kspls`).
+// ==========================================
+priv fn arc_list_index_body()
+  $l: = List<|Rc<|I32|>|>.new()
+  empty: Rc<|I32|>[1] = ::{}
+  l.push(Rc<|I32|>.new(11))
+  release_on_exit:
+    $e: = l[0]
+    assert(e.get()$ == 11, "reading an element through l[i] must be usable")
+    // e's release must not free it here (the read inserted a retain).
+  assert(l[0].get()$ == 11, "reading an element must not steal the stored reference")
+  for x in l
+    assert(x.get()$ == 11, "for x in must retain each element it binds")
+  l[0] = empty[0] // overwrite with empty -> it lets the stored value go
+  l.push(Rc<|I32|>.new(12)) // free it while still holding one, to see the container let go
+  l.free()
+
+fn test_arc_place_index_container()
+  verdict.start("[ARC] the retain/release of an Index_place container's (List's) elements test...")
+  b0: = mem.heap_used_bytes()
+  arc_list_index_body()
+  b0_end: = mem.heap_used_bytes()
+  assert(b0_end == b0, "l[i] reads must retain and l[i] = ... must release the overwritten element")
+  verdict
+    .pass("a subscript's read, its overwrite and for x in all went through retain/release as the \
+      expanded place expression.")
+
+// ==========================================
+// std/ds: A container owns its elements' ARC counts
+// **An element is read and written through `(r.ptr + i)$`**, always a place expression: a read
+// retains, an overwrite releases the original ("A container owns its elements' ARC counts" in
+// `../../std/docs/DESIGN.md`).
+// ==========================================
+priv fn arc_list_owns_elements_body()
+  $l: = List<|Rc<|I32|>|>.new()
+  for i in Range.asc(40)
+    l.push(Rc<|I32|>.new(I32::i)) // put a few growths in between
+  release_on_exit:
+    $e: = l.get(3)
+    assert(e.get()$ == 3, "get() must return a usable element")
+    // The stored element must survive this release (it does, if get retained).
+  assert(l[3].get()$ == 3, "get() must not steal the stored reference")
+  l.set(3, Rc<|I32|>.new(300)) // an overwrite -> the original 3 is freed
+  assert(l[3].get()$ == 300, "set() must install the new element")
+  l.insert(0, Rc<|I32|>.new(999)) // the count must not shift as elements are pushed along
+  shifted_ok: = l[0].get()$ == 999 && l[4].get()$ == 300
+  assert(shifted_ok, "insert() must shift elements without losing counts")
+  l.free() // throw it away holding 41 -> the container lets every one go
+
+priv fn arc_map_owns_values_body()
+  $m: = Map<|I32, Rc<|I32|>|>.new()
+  for i in Range.asc(40)
+    m.set(I32::i, Rc<|I32|>.new(I32::i)) // put a few resizes in between
+  $got: = m.get(7) catch
+    fallback Rc<|I32|>.new(-1)
+  assert(got.get()$ == 7, "a value must survive the table's resizes")
+  removed: = m.remove(7)
+  assert(removed, "remove() must report that the key was present")
+  m.free() // throw it away holding the remaining 39
+
+fn test_arc_container_owns_elements()
+  verdict.start("[ARC] a container (List / Map) owns its elements test...")
+
+  b0: = mem.heap_used_bytes()
+  arc_list_owns_elements_body()
+  list_balanced: = mem.heap_used_bytes() == b0
+  assert(list_balanced,
+    "a List must retain on read, release on overwrite, and release what is left at free()")
+
+  b1: = mem.heap_used_bytes()
+  arc_map_owns_values_body()
+  map_balanced: = mem.heap_used_bytes() == b1
+  assert(map_balanced,
+    "a Map must not lose counts across resize, and must release on remove()/free()")
+
+  verdict
+    .pass("the count balanced for a read, an overwrite, a push-along, a growth, a remove and a free \
+      alike.")
+// ==========================================
+// Returning a place expression needs a retain whether or not the function holds a cleanup.
+// **Inserted only where there is a cleanup, it is one short in `return p.field;`**, and the
+// caller's release frees memory still alive.
+// ==========================================
+priv struct Arc_box
+  rc: Rc<|I32|>
+
+priv fn arc_read_field(b: Arc_box$@): Rc<|I32|> //<
+  //< A function holding not one cleanup (no local ARC binding and no defer)
+  return b.rc
+
+priv fn arc_return_without_cleanup_body()
+  $box: Arc_box = ::{ .rc = Rc<|I32|>.new(21) }
+  release_on_exit:
+    _copy: = arc_read_field(box@)
+    // This must not reach 0 at _copy's release.
+  still_alive: = arc_is_alive(box.rc@)
+  assert(still_alive,
+    "returning a place expression must retain even when the function has no cleanups")
+  empty: Rc<|I32|>[1] = ::{}
+  box.rc = empty[0]
+
+fn test_arc_return_retains_without_cleanups()
+  verdict.start("[ARC] a retain goes into the return of a function holding no cleanup too test...")
+  b0: = mem.heap_used_bytes()
+  arc_return_without_cleanup_body()
+  assert(mem.heap_used_bytes() == b0, "the retain/release pair must still balance")
+  verdict
+    .pass("whether or not there is a cleanup, a place expression's return was handed to the calling \
+      side at +1.")

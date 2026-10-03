@@ -1,0 +1,92 @@
+//< Base64, encoded and decoded (RFC 4648's standard alphabet, with padding)
+//<
+//< It uses only bit operations and needs nothing from the OS, like `std/sha256`. Use it to put
+//< binary data in a JSON string, an HTTP header or a data URI.
+import "std/chars" // classifying one character
+import "std/mem" { Arena, alloc_in, dealloc }
+
+pub enum Base64_error //< why a Base64 string could not be read
+  invalid_length //< the input's length is not a multiple of 4
+  invalid_char //< a character outside the alphabet, including an `=` outside the padding
+
+priv fn encode_char(v: U8): U8
+  return (('A' + v) if v < 26U8 else ('a' + (v - 26U8)) if v < 52U8
+    else ('0' + (v - 52U8)) if v < 62U8 else '+' if v == 62U8 else '/')
+
+priv fn decode_char(c: U8): I32 //< returns -1 for a character outside the alphabet
+  return ((c - 'A') if c.is_upper() else (c - 'a') + 26 if c.is_lower()
+    else (c - '0') + 52 if c.is_digit() else 62 if c == '+' else 63 if c == '/' else -1)
+
+pub fn encode( //< encodes bytes with the standard alphabet and `=` padding into a new string
+  //<
+  data: U8[], //< the bytes to encode
+  arena: Arena$@, //< where the result goes; null means the heap, freed with `dealloc`
+): U8[] //< the encoded text, 4 characters for every 3 bytes, rounded up
+  out_len: = (data.len + 2) / 3 * 4
+  out: = U8$[]::{ .ptr = U8$@::alloc_in(arena, out_len), .len = out_len }
+
+  $pos: Sz = 0
+  $i: Sz = 0
+  for i < data.len
+    has1: = i + 1 < data.len
+    has2: = i + 2 < data.len
+    b0: = data[i]
+    b1: = data[i + 1] if has1 else 0U8
+    b2: = data[i + 2] if has2 else 0U8
+    n: U32 = (U32::b0 << 16U32) | (U32::b1 << 8U32) | U32::b2
+
+    out[pos] = encode_char(U8::((n >> 18U32) & 0x3fU32))
+    out[pos + 1] = encode_char(U8::((n >> 12U32) & 0x3fU32))
+    out[pos + 2] = encode_char(U8::((n >> 6U32) & 0x3fU32)) if has1 else '='
+    out[pos + 3] = encode_char(U8::(n & 0x3fU32)) if has2 else '='
+
+    i += 3
+    pos += 4
+  return out
+
+pub fn decode( //< decodes a Base64 string into a new byte array
+  //<
+  s: U8[], //< the text to read, whose length must be a multiple of 4
+  arena: Arena$@, //< where the result goes; null means the heap, freed with `dealloc`
+): U8[]?Base64_error //< the decoded bytes; fails on a character outside the alphabet
+  if s.len == 0
+    return U8[]::{ .ptr = null, .len = 0 }
+  if s.len % 4 != 0
+    throw Base64_error.invalid_length
+
+  $pad: Sz = 0
+  if s[s.len - 1] == '='
+    pad += 1
+  if s[s.len - 2] == '='
+    pad += 1
+
+  out_len: = (s.len / 4) * 3 - pad
+  out: = U8$[]::{ .ptr = U8$@::alloc_in(arena, out_len), .len = out_len }
+
+  $pos: Sz = 0
+  $i: Sz = 0
+  for i < s.len
+    is_last_group: = i + 4 == s.len
+    skip2: = is_last_group && pad >= 2
+    skip3: = is_last_group && pad >= 1
+    c0: = decode_char(s[i])
+    c1: = decode_char(s[i + 1])
+    c2: = 0 if skip2 else decode_char(s[i + 2])
+    c3: = 0 if skip3 else decode_char(s[i + 3])
+
+    if c0 < 0 || c1 < 0 || c2 < 0 || c3 < 0
+      if arena == null
+        dealloc(Void$@::out.ptr)
+      throw Base64_error.invalid_char
+
+    n: U32 = (U32::c0 << 18U32) | (U32::c1 << 12U32) | (U32::c2 << 6U32) | U32::c3
+
+    out[pos] = U8::(n >> 16U32)
+    if !skip2
+      out[pos + 1] = U8::(n >> 8U32)
+    if !skip3
+      out[pos + 2] = U8::n
+
+    i += 4
+    pos += 3
+  return out

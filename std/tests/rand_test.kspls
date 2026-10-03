@@ -1,0 +1,85 @@
+import "std/mem" { dealloc }
+import "std/prng"
+import "std/rand"
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// PRNG (std/sys): tests of determinism and range
+// ==========================================
+fn test_rand()
+  verdict.start("[Rand] xorshift64* deterministic/range test...")
+  // 1. The same seed reproduces the same sequence
+  $a: = prng.Prng.new(12345U64)
+  $b: = prng.Prng.new(12345U64)
+  for _i in Range.asc(8)
+    assert(a.next_u64() == b.next_u64(), "Rand: same seed must reproduce sequence")
+  // 2. next_f64 stays within [0.0, 1.0)
+  $c: = prng.Prng.new(1U64)
+  for _i in Range.asc(100)
+    v: = c.next_f64()
+    assert(v >= 0.0 && v < 1.0, "Rand: next_f64 must be in [0,1)")
+  // 3. Different seeds give different values
+  $d: = prng.Prng.new(1U64)
+  $e: = prng.Prng.new(2U64)
+  assert(d.next_u64() != e.next_u64(), "Rand: different seeds should differ")
+  verdict.pass("")
+fn test_prng_ranges() //< below, between and chance keep to their ranges, and reach both ends
+  verdict.start("[Rand] a number below n, between two ends, and a chance...")
+  $r: = prng.Prng.new(7U64)
+  $seen: Bool[6] = ::{}
+  for _i in Range.asc(600)
+    v: = r.below(6)
+    assert(v < 6, "below must answer under n")
+    seen[v] = true
+  for k in Range.asc(6)
+    assert(seen[k], "below must come to every value, 0 and n - 1 among them")
+  assert(r.below(0) == 0, "below 0 answers 0")
+  $lo_seen: = false
+  $hi_seen: = false
+  for _i in Range.asc(400)
+    v: = r.between(-3I64, 3I64)
+    assert(v >= -3I64 && v <= 3I64, "between must keep to its two ends")
+    lo_seen = lo_seen || v == -3I64
+    hi_seen = hi_seen || v == 3I64
+  assert(lo_seen && hi_seen, "between must come to both ends")
+  assert(r.between(5I64, 5I64) == 5I64 && r.between(9I64, 2I64) == 9I64,
+    "between answers lo where hi is at or below it")
+  _whole: = r.between(-9223372036854775807I64 - 1I64, 9223372036854775807I64)
+  assert(!r.chance(0) && r.chance(100), "chance 0 is never and 100 always")
+  // The same seed gives the same sequence through all three.
+  $a: = prng.Prng.new(99U64)
+  $b: = prng.Prng.new(99U64)
+  for _i in Range.asc(16)
+    assert(a.below(1000) == b.below(1000) &&
+      a.between(-50I64, 50I64) == b.between(-50I64, 50I64),
+      "the same seed must draw the same numbers")
+  verdict
+    .pass("Each keeps to its range and reaches both ends, and a seed draws the same run twice.")
+
+// ==========================================
+// std/rand: cryptographic randomness comes from the OS source (/dev/urandom, BCryptGenRandom), and
+// two calls of fill, bytes or u64 do not collide.
+// ==========================================
+fn test_secure_random()
+  verdict.start("[Rand] CSPRNG (fill/bytes/u64) test...")
+
+  buf: U8[16] = ::{}
+  rand.fill(U8$[]::buf) catch panic("rand.fill should succeed when /dev/urandom is available")
+  $all_zero: = true
+  for i in Range.asc(16)
+    if buf[i] != 0U8
+      all_zero = false
+  assert(!all_zero, "16 random bytes should not all be zero")
+
+  b1: = rand.bytes(32, null) catch panic("rand.bytes should succeed when /dev/urandom is available")
+  defer dealloc(Void$@::b1.ptr)
+  b2: = rand.bytes(32, null) catch panic("rand.bytes should succeed when /dev/urandom is available")
+  defer dealloc(Void$@::b2.ptr)
+  assert(!b1.equals(b2), "two independent 32-byte draws should not collide")
+
+  v1: = rand.u64() catch panic("rand.u64 should succeed when /dev/urandom is available")
+  v2: = rand.u64() catch panic("rand.u64 should succeed when /dev/urandom is available")
+  assert(v1 != v2, "two independent u64 draws should not collide")
+
+  verdict.pass("Two values actually read from the OS's random source do not collide.")

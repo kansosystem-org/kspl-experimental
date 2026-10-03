@@ -1,0 +1,309 @@
+import "kspage/model/doc" + { Doc, Rect }
+import "kspage/model/paint"
+import "kspage/share/compare" + { Kind }
+import "kspage/share/store"
+import "kspage/tests/base"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// kspage: checks the list of changes produced by matching two texts (a golden test).
+// Caution: **Do not copy the list's numbers into the check**: it checks which kind appears how
+// many times, not where (otherwise a mere change of order would fail it).
+// ==========================================
+
+fn test_inserting_at_the_top_does_not_move_the_rest() //<
+  //< Add one block at the start and the blocks after it do not become "moved"
+  //<
+  //< **This is how matching by position breaks.**
+  verdict.start("[kspage/compare] adding in front not moving what is behind test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  sheet: = base.body_sheet(arena)
+  was: = base.three(arena, "mark")
+  $sb: = Str_builder.new()
+  defer sb.free()
+  now: = base.round_trip(was, sheet, arena).doc
+  // One block is inserted at the start (by text alone, every position after it shifts).
+  fresh: = now.add_block("body")
+  fresh.add_text("z")
+  now.blocks.insert(0, now.blocks.get(now.blocks.len - 1))
+  now.blocks.len -= 1
+
+  got: = compare.compare(was, sheet, now, sheet, arena)
+  assert(got.by_id, "it solved by number")
+  assert(compare.count_of(got, Kind.added) == 1, "there is one added")
+  assert(compare.count_of(got, Kind.moved) == 0, "no part moved")
+  assert(compare.count_of(got, Kind.removed) == 0, "no part was removed either")
+  assert(compare.count_of(got, Kind.edited) == 0, "no part had its text changed either")
+  verdict.pass("adding in front does not count as moving what is behind.")
+
+fn test_typing_into_a_paragraph_is_one_edit() //<
+  //< A paragraph typed over shows as one "the text changed" (not the two of removed + added)
+  verdict.start("[kspage/compare] typing over coming out as one test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  sheet: = base.body_sheet(arena)
+  was: = base.three(arena, "mark")
+  $sb: = Str_builder.new()
+  defer sb.free()
+  now: = base.round_trip(was, sheet, arena).doc
+  now.blocks.get(1).inlines.get(0).insert(0, "!")
+
+  got: = compare.compare(was, sheet, now, sheet, arena)
+  assert(compare.count_of(got, Kind.edited) == 1, "one had its text changed")
+  assert(compare.count_of(got, Kind.added) == 0, "no part was added")
+  assert(compare.count_of(got, Kind.removed) == 0, "no part was removed either")
+  assert(compare.count_of(got, Kind.restyled) == 0, "the look has not changed")
+  verdict.pass("typing over comes out as one `the text changed`.")
+
+fn test_reordering_reports_the_one_that_moved() //< a sort shows as "moved"
+  //<
+  //< **Only one moved**; the rest did not.
+  verdict.start("[kspage/compare] a sort coming out as one moved test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  sheet: = base.body_sheet(arena)
+  was: = base.three(arena, "mark")
+  $sb: = Str_builder.new()
+  defer sb.free()
+  now: = base.round_trip(was, sheet, arena).doc
+  last: = now.blocks.get(2)
+  now.blocks.len = 2
+  now.blocks.insert(0, last)
+
+  got: = compare.compare(was, sheet, now, sheet, arena)
+  assert(compare.count_of(got, Kind.moved) == 1, "one moved")
+  assert(compare.count_of(got, Kind.added) == 0, "no part was added")
+  assert(compare.count_of(got, Kind.removed) == 0, "no part was removed either")
+  verdict.pass("a sort comes out as one moved.")
+
+fn test_the_same_document_has_no_difference() //< change nothing and there is no difference
+  //<
+  //< **A plain copy shows no difference** (otherwise one would appear at every opening).
+  verdict.start("[kspage/compare] the same document holding no difference test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  sheet: = base.body_sheet(arena)
+  was: = base.three(arena, "mark")
+  $sb: = Str_builder.new()
+  defer sb.free()
+  now: = base.round_trip(was, sheet, arena).doc
+  got: = compare.compare(was, sheet, now, sheet, arena)
+  assert(got.diffs.len == 0, "not one difference comes out")
+  verdict.pass("the same document puts out no difference.")
+
+fn test_two_origins_are_never_matched_by_number() //<
+  //< Two documents with different origin marks are not matched by number
+  //<
+  //< **Documents made separately number separately**, so a clashing number is a different block;
+  //< it then matches by text (the anchors and the positions).
+  verdict.start("[kspage/compare] not matching another source up by number test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  sheet: = base.body_sheet(arena)
+  $sb: = Str_builder.new()
+  defer sb.free()
+  was: = base.three(arena, "here")
+  store.save(was, sheet, sb@)
+  // Documents with the same numbers, but different contents and origins.
+  other: = Doc.new(arena, "there")
+  other.add_block("body").add_text("p")
+  other.add_block("body").add_text("q")
+  other.add_block("body").add_text("r")
+  sb.clear()
+  store.save(other, sheet, sb@)
+
+  got: = compare.compare(was, sheet, other, sheet, arena)
+  assert(!got.by_id, "it does not solve by number")
+  assert(compare.count_of(got, Kind.edited) == 3,
+    "all three come out as having had their text changed")
+  assert(compare.count_of(got, Kind.moved) == 0, "no part moved (it does not guess)")
+  verdict.pass("another source is not matched up by number.")
+
+fn test_documents_without_numbers_still_compare() //<
+  //< Two old texts with no numbers can be matched too
+  verdict.start("[kspage/compare] two with no numbers being matchable up too test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  sheet: = base.body_sheet(arena)
+  was: = base.three(arena, "")
+  now: = base.three(arena, "")
+  // The middle is typed over and one is added at the end.
+  now.blocks.get(1).inlines.get(0).insert(0, "!")
+  now.add_block("body").add_text("d")
+
+  got: = compare.compare(was, sheet, now, sheet, arena)
+  assert(!got.by_id, "it does not solve by number")
+  assert(compare.count_of(got, Kind.added) == 1, "there is one added")
+  assert(compare.count_of(got, Kind.edited) == 1, "one had its text changed too")
+  assert(compare.count_of(got, Kind.moved) == 0, "no part moved")
+  verdict.pass("with no numbers it still solves by the anchors and the places.")
+
+fn test_moving_into_a_table_is_a_move() //< a block moved into a table shows as "moved"
+  //<
+  //< **Order kept or not, a different parent means it has moved.**
+  verdict.start("[kspage/compare] coming out as moved once it goes into a table test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  sheet: = base.body_sheet(arena)
+  was: = Doc.new(arena, "mark")
+  was.add_block("body").add_text("a")
+  table: = was.add_block("table")
+  table.add_child("cell").add_text("cell")
+  was.add_block("body").add_text("c")
+  $sb: = Str_builder.new()
+  defer sb.free()
+  now: = base.round_trip(was, sheet, arena).doc
+  // The last paragraph moves into the table (its path grows; the row's order stays).
+  moved: = now.blocks.get(2)
+  now.blocks.len = 2
+  now.blocks.get(1).children.push(moved)
+
+  got: = compare.compare(was, sheet, now, sheet, arena)
+  assert(compare.count_of(got, Kind.moved) == 1, "one moved")
+  assert(compare.count_of(got, Kind.added) == 0, "no part was added")
+  assert(compare.count_of(got, Kind.removed) == 0, "no part was removed either")
+  verdict.pass("where the parent changes it comes out as moved.")
+
+fn test_a_look_and_a_text_change_are_separate() //<
+  //< The look and the text show as separate changes
+  //<
+  //< Caution: **Do not merge them into one** (filtered to one view, one would be lost).
+  verdict.start("[kspage/compare] the look and the text coming out as separate ones test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  sheet: = base.body_sheet(arena)
+  was: = base.three(arena, "mark")
+  $sb: = Str_builder.new()
+  defer sb.free()
+  now: = base.round_trip(was, sheet, arena).doc
+  one: = now.blocks.get(0)
+  one.inlines.get(0).insert(0, "!")
+  one.aside = "a memo"
+
+  got: = compare.compare(was, sheet, now, sheet, arena)
+  assert(compare.count_of(got, Kind.edited) == 1, "one `the text changed`")
+  assert(compare.count_of(got, Kind.restyled) == 1, "one `the style changed`")
+  assert(got.diffs.len == 2, "two come out of the same part")
+  verdict.pass("the text and the look come out as separate ones.")
+
+fn test_dragging_a_frame_is_only_a_reframe() //<
+  //< Moving a frame and nothing else is one "the frame changed"
+  //<
+  //< Caution: **Do not also report it as a setting change**; one edit looking like two puts the
+  //< shapes and look counts out of step.
+  verdict.start("[kspage/compare] moving a frame putting out the frame's one alone test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  sheet: = base.body_sheet(arena)
+  was: = Doc.new(arena, "mark")
+  face: = was.add_block("surface")
+  doc.add_framed_child(face, "box", Rect::{ .x = 10.0, .y = 10.0, .w = 100.0, .h = 50.0 })
+  $sb: = Str_builder.new()
+  defer sb.free()
+  now: = base.round_trip(was, sheet, arena).doc
+  box: = now.blocks.get(0).children.get(0)
+  box.frame = Option<|Rect|>.some(Rect::{ .x = 40.0, .y = 10.0, .w = 100.0, .h = 50.0 })
+
+  got: = compare.compare(was, sheet, now, sheet, arena)
+  assert(compare.count_of(got, Kind.reframed) == 1, "it is one `the frame changed` alone")
+  assert(compare.count_of(got, Kind.restyled) == 0, "the style has not changed")
+  assert(compare.count_of(got, Kind.edited) == 0, "the text has not changed either")
+  verdict.pass("moving a frame comes out as the frame's one.")
+
+fn test_resizing_an_image_or_a_column_is_a_reframe() //<
+  //< Changing only a picture's size and a column's width is one "the frame changed"
+  //<
+  //< **The text has not changed**, so neither the text difference nor the setting difference shows
+  //< it.
+  verdict
+    .start("[kspage/compare] a picture's size and a column's width coming out as the frame's one \
+      test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  sheet: = base.body_sheet(arena)
+  was: = Doc.new(arena, "mark")
+  pic: = was.add_block("body")
+  pic.image = "a.png"
+  pic.image_w = 100.0
+  pic.image_h = 50.0
+  table: = was.add_block("body")
+  table.add_child("").add_child("").add_text("a")
+  table.column_widths.push(Option<|F32|>.some(40.0))
+  table.column_widths.push(Option<|F32|>.none)
+  $sb: = Str_builder.new()
+  defer sb.free()
+  now: = base.round_trip(was, sheet, arena).doc
+  now.blocks.get(0).image_w = 120.0
+  now.blocks.get(1).column_widths.set(0, Option<|F32|>.some(60.0))
+
+  got: = compare.compare(was, sheet, now, sheet, arena)
+  assert(compare.count_of(got, Kind.reframed) == 2, "two frame ones, for the picture and the table")
+  assert(compare.count_of(got, Kind.edited) == 0, "the text has not changed")
+  assert(compare.count_of(got, Kind.restyled) == 0, "the style has not changed either")
+  // Removing a setting is a difference too ("not set" and 0 differ, and the length of the list of
+  // widths changes).
+  bare: = base.round_trip(was, sheet, arena).doc
+  bare.blocks.get(1).column_widths.len = 0
+  gone: = compare.compare(was, sheet, bare, sheet, arena)
+  assert(compare.count_of(gone, Kind.reframed) == 1,
+    "one for the table whose width setting was taken off")
+  filled: = base.round_trip(was, sheet, arena).doc
+  filled.blocks.get(1).column_widths.set(1, Option<|F32|>.some(10.0))
+  named: = compare.compare(was, sheet, filled, sheet, arena)
+  assert(compare.count_of(named, Kind.reframed) == 1,
+    "one for the table where a width was set on a column that had none")
+  boxed: = base.round_trip(was, sheet, arena).doc
+  boxed.blocks.get(0).frame = Option<|Rect|>
+    .some(Rect::{ .x = 0.0, .y = 0.0, .w = 100.0, .h = 50.0 })
+  framed: = compare.compare(was, sheet, boxed, sheet, arena)
+  assert(compare.count_of(framed, Kind.reframed) == 1, "one for the picture given a frame")
+  verdict
+    .pass("a picture's size and a column's width come out as a frame difference, and in no other \
+      one.")
+
+fn test_the_sheet_is_compared_by_name() //< a style table difference shows by name
+  //<
+  //< **A difference in order is no difference** (added styles go at the end, so the order differs
+  //< even between two windows).
+  verdict.start("[kspage/compare] matching styles up by name test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  was: = base.body_sheet(arena)
+  now: = base.body_sheet(arena)
+  // One style is added on one side, and the body's spacing changed on the other.
+  now.add("footnote", paint.inherit_all())
+  switch now.find("body") case .some(s)
+    s.space_after = 20.0
+  case .none
+    assert(false, "the body's style is there")
+
+  d: = Doc.new(arena, "mark")
+  got: = compare.compare(d, was, d, now, arena)
+  assert(compare.count_of(got, Kind.added) == 1, "one style added comes out")
+  assert(compare.count_of(got, Kind.restyled) == 1, "one style changed comes out too")
+  assert(compare.count_of(got, Kind.removed) == 0, "no style was removed")
+  verdict.pass("styles are matched up by name.")
+
+fn test_the_paper_shows_up_but_the_overlay_does_not() //<
+  //< Where the paper settings changed, one change shows
+  //<
+  //< **The viewer's override must not show** (the rule is that it is not saved).
+  verdict.start("[kspage/compare] the paper's settings coming out, and an override not test...")
+  arena: = Arena.new(512 * 1024)
+  defer arena.free()
+  was: = base.body_sheet(arena)
+  now: = base.body_sheet(arena)
+  d: = Doc.new(arena, "mark")
+  now.paper.width = 800.0
+  got: = compare.compare(d, was, d, now, arena)
+  assert(compare.count_of(got, Kind.resheeted) == 1, "one paper setting comes out")
+
+  fresh: = base.body_sheet(arena)
+  fresh.over.reading = 600.0
+  quiet: = compare.compare(d, was, d, fresh, arena)
+  assert(compare.count_of(quiet, Kind.resheeted) == 0,
+    "the viewing side's override does not come out in the difference")
+  verdict.pass("the paper's settings come out, and the viewing side's override does not.")

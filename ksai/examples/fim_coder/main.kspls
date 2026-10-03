@@ -1,0 +1,465 @@
+//< A small FIM (fill-in-the-middle) coding model, trained from scratch, and its completion
+//<
+//< `train` fits `Mini_llama` (`../llama_engine/model.kspls`) to a FIM corpus; `complete` answers a
+//< file of holes with candidates, the greedy one first. Whether a candidate is right is for its
+//< caller to judge (a compiler, for code), not this program.
+
+// ==========================================
+// Usage (the corpus: one {"prefix", "middle", "suffix"} per line; `Tokenizer.load`'s tokenizer):
+//   fim_coder train --corpus=<fim.jsonl> --vocab=<v> --merges=<m> --out=<weights> [--steps=N]
+//     [--batch=B] [--threads=T]
+//   fim_coder complete --vocab=<v> --merges=<m> --weights=<w> --in=<holes.jsonl> --out=<answers>
+//   fim_coder loss --corpus=<held-out.jsonl> --vocab=<v> --merges=<m> --weights=<w>
+// ==========================================
+import "ksai/examples/llama_engine/model" as ai_model
+import "ksai/model_file" as ai_file
+import "ksai/optim" as ai_optim
+import "ksai/sampler" as ai_sampler
+import "ksai/tensor" { Tensor }
+import "ksai/tokenizer" as ai_tokenizer
+import "std/argp"
+import "std/chars"
+import "std/ds" { List }
+import "std/io"
+import "std/json" + { Json_builder }
+import "std/mem" { Arena }
+import "std/prng"
+import "std/str" { Str_builder }
+import "std/strfmt" // `{avg:.3}`
+import "std/strnum"
+import "std/sys"
+import "std/thread"
+
+priv struct Paths //< where the tokenizer is read from
+  vocab: U8[]
+  merges: U8[]
+
+// The shape. **`train` and `complete` build the same one**, so a weights file fits by construction.
+priv const dim: Sz = 128
+priv const hidden: Sz = 512
+priv const layers: Sz = 2
+// What the model sees of a hole: the prefix nearest it, the suffix's start and the middle's start.
+priv const prefix_tokens: Sz = 96
+priv const suffix_tokens: Sz = 48
+priv const middle_tokens: Sz = 32
+priv const context_bytes: Sz = 512 // how much text each side is encoded from, before the cut
+priv const max_seq: Sz = prefix_tokens + suffix_tokens + middle_tokens + 4
+
+struct Fim_ids //< the four markers, numbered after the tokenizer's own words
+  pre: I32
+  suf: I32
+  mid: I32
+  eot: I32
+
+fn fim_ids(base: Sz): Fim_ids //< the markers for a vocabulary of `base` words
+  return Fim_ids::{ .pre = I32::base, .suf = I32::(base + 1), .mid = I32::(base + 2),
+    .eot = I32::(base + 3) }
+
+fn fim_prompt(pre: List<|I32|>$@, suf: List<|I32|>$@, ids: Fim_ids, arena: Arena$@): List<|I32|> //<
+  //< `[PRE] prefix [SUF] suffix [MID]`, keeping the prefix's end and the suffix's start
+  //<
+  //< **The prefix is cut from its front and the suffix from its back**: what lies nearest the
+  //< hole matters most.
+  $out: = List<|I32|>.new(arena)
+  out.push(ids.pre)
+  from: = pre.len - prefix_tokens if pre.len > prefix_tokens else 0
+  for $i: = from; i < pre.len; i += 1
+    out.push(pre[i])
+  out.push(ids.suf)
+  for $i: Sz = 0; i < suf.len && i < suffix_tokens; i += 1
+    out.push(suf[i])
+  out.push(ids.mid)
+  return out
+
+fn fim_sequence(pre: List<|I32|>$@, mid: List<|I32|>$@, suf: List<|I32|>$@, ids: Fim_ids,
+  arena: Arena$@): List<|I32|> //<
+    //< The prompt followed by the middle; `[EOT]` closes it only when the whole middle fits
+    //<
+    //< Caution: **No `[EOT]` after a cut middle**, or the model learns to stop where it was cut.
+  $out: = fim_prompt(pre, suf, ids, arena)
+  for $i: Sz = 0; i < mid.len && i < middle_tokens; i += 1
+    out.push(mid[i])
+  if mid.len <= middle_tokens
+    out.push(ids.eot)
+  return out
+
+priv fn tail(text: U8[]): U8[] //< the prefix's end, where the hole begins
+  return text.sub_from(text.len - context_bytes) if text.len > context_bytes else text
+
+priv fn head(text: U8[]): U8[] //< the suffix's start, where the hole ends
+  return text.sub(0, context_bytes) if text.len > context_bytes else text
+
+priv fn base_vocab(at: Paths): Sz //< how many words the tokenizer has: its highest id, plus one
+  data: = io.read_file(at.vocab) catch
+    io.err().s("[error] cannot read \{at.vocab\}\n")
+    sys.exit(1)
+  $top: Sz = 0
+  for line in data.lines(null)
+    tab: = line.find_char('\t')
+    if tab <= 0
+      continue
+    id: = line.sub(0, tab).parse_size() catch 0
+    if id + 1 > top
+      top = id + 1
+  return top
+
+priv fn load_tokenizer(at: Paths, arena: Arena$@): ai_tokenizer.Tokenizer
+  $tok: = ai_tokenizer.Tokenizer.new(arena)
+  tok.load(at.vocab, at.merges) catch
+    io.err().s("[error] cannot read the tokenizer (\{at.vocab\}, \{at.merges\})\n")
+    sys.exit(1)
+  return tok
+
+priv fn read_jsonl(path: U8[], arena: Arena$@): List<|json.Val|> //< one JSON value per line
+  //<
+  //< A blank line is skipped; **a broken one stops the run**, naming it, so a bad file is not
+  //< silently half-read.
+  data: = io.read_file(path) catch
+    io.err().s("[error] cannot read \{path\}\n")
+    sys.exit(1)
+  $out: = List<|json.Val|>.new(arena)
+  $n: Sz = 0
+  for line in data.lines(arena)
+    n += 1
+    if line.trim_spaces().len == 0
+      continue
+    out.push(json.parse(line, arena) catch {
+      io.err().s("[error] \{path\}:\{n\} is not JSON\n"); sys.exit(1);
+    })
+  return out
+
+priv fn new_model(vocab: Sz, arena: Arena$@): ai_model.Mini_llama<|F32|>
+  return ai_model.Mini_llama<|F32|>.new(vocab, dim, hidden, layers, max_seq, arena)
+
+priv struct Encoded //< the corpus as token sequences, laid end to end
+  tokens: List<|I32|>
+  starts: List<|Sz|> //< where each sequence begins in `tokens`; the next one's start ends it
+
+priv fn encode_corpus(corpus: U8[], at: Paths, ids: Fim_ids, keep: Arena$@): Encoded //<
+  //< Every training example made a sequence, once
+  //<
+  //< **The tokenizer's scratch memory lives on its own arena**, freed here: `encode` allocates its
+  //< result on the tokenizer's arena, and encoding again at every step would grow it without limit.
+  scratch: = Arena.new(64 * 1024 * 1024)
+  defer scratch.free()
+  $tok: = load_tokenizer(at, scratch)
+  recs: = read_jsonl(corpus, scratch)
+  $out: = Encoded::{ .tokens = List<|I32|>.new(keep), .starts = List<|Sz|>.new(keep) }
+  for rec in recs
+    pre: = tok.encode(tail(rec.get("prefix").as_str()))
+    mid: = tok.encode(rec.get("middle").as_str())
+    suf: = tok.encode(head(rec.get("suffix").as_str()))
+    seq: = fim_sequence(pre, mid, suf, ids, scratch)
+    out.starts.push(out.tokens.len)
+    for t in seq
+      out.tokens.push(t)
+  return out
+
+priv struct Schedule //< how long `train` runs, and on how many threads
+  steps: Sz //< how many times the weights move
+  batch: Sz //< how many sequences' gradients each move sums
+  threads: Sz //< how many threads share a batch; the weights come out the same for any count
+
+priv struct Batch //< one step's sequences, and what their workers leave
+  model: ai_model.Mini_llama<|F32|>$@ //< only read while the workers run
+  inputs: List<|List<|I32|>|>
+  targets: List<|List<|I32|>|>
+  out: List<|ai_model.Seq_grads<|F32|>|> //< a slot per sequence, each written by one worker alone
+
+priv struct Worker //< one thread's part of a batch: every `stride`th sequence from `first`
+  batch: Batch$@
+  first: Sz
+  stride: Sz
+  arena: Arena$@ //< this worker's alone, emptied after each step
+
+#export
+fn fim_worker(w: Worker$@): Void$@ //< a worker's sequences of the batch, on the thread it runs on
+  b: = w.batch
+  for $s: = w.first; s < b.inputs.len; s += w.stride
+    b.out[s] = b.model.grads_seq(b.inputs[s]@, b.targets[s].slice(), w.arena)
+  return null
+
+priv fn train(corpus: U8[], at: Paths, plan: Schedule, u: ai_optim.Updater<|F32|>$@, seed: U64,
+  out_path: U8[]) //<
+    //< Fits a fresh model to the corpus, a batch of sequences per step, and writes its weights
+    //<
+    //< **The thread count changes only the time**: the sequences are drawn on this thread, and
+    //< their gradients summed in the order drawn, whichever thread computed each.
+  began: = sys.mono_us()
+  model_arena: = Arena.new(64 * 1024 * 1024)
+  defer model_arena.free()
+  base: = base_vocab(at)
+  ids: = fim_ids(base)
+  data: = encode_corpus(corpus, at, ids, model_arena)
+  n: = data.starts.len
+  if n == 0
+    io.err().s("[error] the corpus holds no example\n")
+    sys.exit(1)
+  io.out().s("examples=\{n\}  tokens=\{data.tokens.len\}  vocab=\{base + 4\}\n")
+  // **Printed once, before the first loss**: the number alone reads as a rate, which it is not.
+  io.out().s("loss: nats per token on what it learns from, over the recent steps; lower is ")
+    .s("better, 0 is every next token certain and right\n")
+  $model: = new_model(base + 4, model_arena)
+  $rng: = prng.Prng.new(seed)
+  model.randomize(rng@)
+  work: = Arena.new(64 * 1024 * 1024)
+  defer work.free()
+  $batch: = Batch::{ .model = model@ }
+  threads: = plan.threads if plan.threads < plan.batch else plan.batch
+  $workers: = List<|Worker|>.new(model_arena)
+  for t in Range.asc(threads)
+    workers
+      .push(Worker::{ .batch = batch@, .first = t, .stride = threads,
+      .arena = Arena.new(64 * 1024 * 1024) })
+  $avg: = 0.0
+  for step in Range.asc(plan.steps)
+    batch.inputs = List<|List<|I32|>|>.new(work)
+    batch.targets = List<|List<|I32|>|>.new(work)
+    for _i in Range.asc(plan.batch)
+      k: = rng.below(n)
+      from: = data.starts[k]
+      to: = data.starts[k + 1] if k + 1 < n else data.tokens.len
+      if to - from < 2
+        continue
+      $inputs: = List<|I32|>.new(work)
+      $targets: = List<|I32|>.new(work)
+      for $i: = from; i + 1 < to; i += 1
+        inputs.push(data.tokens[i])
+        targets.push(data.tokens[i + 1])
+      batch.inputs.push(inputs)
+      batch.targets.push(targets)
+    count: = batch.inputs.len
+    if count == 0
+      work.reset()
+      continue
+    batch.out = List<|ai_model.Seq_grads<|F32|>|>.new_with_cap(count, work)
+    for _i in Range.asc(count)
+      batch.out.push(ai_model.Seq_grads<|F32|>::{})
+    $running: = List<|thread.Thread$@|>.new(work)
+    for t in Range.new(1, threads, 1)
+      started: = thread.Thread.spawn<|Worker|>(fim_worker, workers[t]@) catch
+        panic("fim_coder: a training thread cannot be started")
+      running.push(started)
+    fim_worker(workers[0]@) // this thread is the first worker
+    for t in Range.asc(running.len)
+      running[t].join_and_free()
+    $loss: = 0.0
+    for s in Range.asc(count)
+      loss += batch.out[s].loss / F64::count
+      if s > 0
+        batch.out[0].grads.accumulate(batch.out[s].grads@)
+    model.apply_grads(batch.out[0].grads@, u)
+    for t in Range.asc(threads)
+      workers[t].arena.reset()
+    work.reset()
+    avg = loss if step == 0 else 0.98 * avg + 0.02 * loss
+    if (step + 1) % 100 == 0
+      io.out().s("step \{step + 1\}/\{plan.steps\}  loss \{avg:.3\}\n")
+  for t in Range.asc(threads)
+    workers[t].arena.free()
+  model.save(out_path) catch
+    io.err().s("[error] cannot write \{out_path\}\n")
+    sys.exit(1)
+  took: = F64::(sys.mono_us() - began) / 1.0e6
+  io.out().s("  -> \{out_path\}  (trained in \{took:.1\} s = \{(took / 60.0):.1\} min)\n")
+
+priv fn held_out_loss(corpus: U8[], at: Paths, weights: U8[], most: Sz) //<
+  //< The mean loss over the first `most` examples of `corpus`; the weights are only read
+  //<
+  //< **The loss `train` prints is on its own training data**; this one shows whether it learned
+  //< the language or just the examples. **Only the middle's loss measures the task**: the whole is
+  //< mostly the prefix and the suffix, which a hole filler is given, not asked to write.
+  model_arena: = Arena.new(64 * 1024 * 1024)
+  defer model_arena.free()
+  base: = base_vocab(at)
+  ids: = fim_ids(base)
+  $model: = new_model(base + 4, model_arena)
+  $st: = ai_file.load_safetensors(weights, model_arena) catch
+    io.err().s("[error] cannot read \{weights\} (train writes it)\n")
+    sys.exit(1)
+  defer st.free()
+  model.load_weights(st, model_arena) catch
+    io.err().s("[error] \{weights\} does not fit the model's shape\n")
+    sys.exit(1)
+  data: = encode_corpus(corpus, at, ids, model_arena)
+  work: = Arena.new(64 * 1024 * 1024)
+  defer work.free()
+  $whole: = 0.0
+  $middle: = 0.0
+  $count: Sz = 0
+  for k in Range.asc(data.starts.len)
+    if count >= most
+      break
+    from: = data.starts[k]
+    to: = data.starts[k + 1] if k + 1 < data.starts.len else data.tokens.len
+    if to - from < 2
+      continue
+    $inputs: = List<|I32|>.new(work)
+    $targets: = List<|I32|>.new(work)
+    for $i: = from; i + 1 < to; i += 1
+      inputs.push(data.tokens[i])
+      targets.push(data.tokens[i + 1])
+    // The middle is what follows `[MID]`, its end marker included: where to stop is part of it.
+    $at_mid: Sz = 0
+    for inputs[at_mid] != ids.mid
+      at_mid += 1
+    loss: = model.loss_seq(inputs@, targets.slice(), at_mid, work)
+    whole += loss.whole
+    middle += loss.tail
+    count += 1
+    work.reset()
+  io.out().s("examples=\{count\}  loss \{(whole / F64::count):.3\} (every position)  ")
+    .s("middle \{(middle / F64::count):.3\} (the hole's tokens and its end alone)\n")
+  io.out().s("  nats per token, averaged per example; lower is better\n")
+
+priv fn candidates(model: ai_model.Mini_llama<|F32|>$@, tok: ai_tokenizer.Tokenizer$@,
+  prompt: List<|I32|>$@, ids: Fim_ids, samples: Sz, rng: prng.Prng$@, work: Arena$@):
+  List<|U8[]|> //<
+    //< `samples` completions of one hole, each one line: the first greedy, the rest drawn
+    //<
+    //< The prompt is read once. **Each draw restarts at the prompt's end**: attention at a position
+    //< reads the cache only up to it, so what a draw left past the prompt is written over first.
+  $out: = List<|U8[]|>.new(work)
+  $last: Tensor<|F32|> = model.forward(prompt[0], 0, work)
+  for $i: Sz = 1; i < prompt.len; i += 1
+    last = model.forward(prompt[i], i, work)
+  drawn: = ai_sampler.Sample_config::{ .temperature = 0.8, .top_k = 40, .top_p = 0.95 }
+  for s in Range.asc(samples)
+    cfg: = ai_sampler.Sample_config.greedy() if s == 0 else drawn
+    $mid: = List<|I32|>.new(work)
+    $logits: = last
+    for $pos: = prompt.len; pos < prompt.len + middle_tokens; pos += 1
+      pick: = ai_sampler.sample(logits, cfg, rng, work)
+      // A marker other than a word ends it too: none of them is text.
+      if pick >= ids.pre
+        break
+      mid.push(pick)
+      if tok.decode_one(pick).find_char('\n') >= 0
+        break
+      logits = model.forward(pick, pos, work)
+    text: = tok.decode(mid@)
+    cut: = text.find_char('\n')
+    out.push(text.sub(0, cut) if cut >= 0 else text)
+  return out
+
+priv fn complete(at: Paths, weights: U8[], in_path: U8[], out_path: U8[], samples: Sz, seed: U64) //<
+  //< Answers each hole of `in_path` (`{"prefix", "suffix"}` per line) with `{"candidates": [...]}`
+  model_arena: = Arena.new(64 * 1024 * 1024)
+  defer model_arena.free()
+  base: = base_vocab(at)
+  ids: = fim_ids(base)
+  $tok: = load_tokenizer(at, model_arena)
+  $model: = new_model(base + 4, model_arena)
+  $st: = ai_file.load_safetensors(weights, model_arena) catch
+    io.err().s("[error] cannot read \{weights\} (train writes it)\n")
+    sys.exit(1)
+  defer st.free()
+  model.load_weights(st, model_arena) catch
+    io.err().s("[error] \{weights\} does not fit the model's shape\n")
+    sys.exit(1)
+  holes: = read_jsonl(in_path, model_arena)
+  $rng: = prng.Prng.new(seed)
+  work: = Arena.new(64 * 1024 * 1024)
+  defer work.free()
+  $text: = Str_builder.new()
+  defer text.free()
+  for hole in holes
+    pre: = tok.encode(tail(hole.get("prefix").as_str()))
+    suf: = tok.encode(head(hole.get("suffix").as_str()))
+    $prompt: = fim_prompt(pre, suf, ids, work)
+    got: = candidates(model@, tok@, prompt@, ids, samples, rng@, work)
+    $b: = Json_builder.new(work)
+    $arr: = b.arr()
+    for c in got
+      arr = arr.push(b.str_val(c))
+    b.obj().set("candidates", arr.build()).build().dump(text@)
+    text.c('\n')
+    work.reset()
+  io.write_file(out_path, text.slice()) catch
+    io.err().s("[error] cannot write \{out_path\}\n")
+    sys.exit(1)
+
+fn main()
+  // Flush line by line, so a long `train` shows its loss as it goes rather than at the end.
+  io.set_line_buffered()
+  arena: = Arena.new(1024 * 1024)
+  defer arena.free()
+  $steps: U8[] = "3000"
+  $optimizer: U8[] = "adam"
+  $lr: U8[] = ""
+  $seed: U8[] = "1"
+  $samples: U8[] = "4"
+  $corpus: U8[] = ""
+  $vocab: U8[] = ""
+  $merges: U8[] = ""
+  $weights: U8[] = ""
+  $in_path: U8[] = ""
+  $out_path: U8[] = ""
+  p: = argp.Parser.create(sys.program_name(), "a small FIM coding model", arena)
+  p.subcommand("train", "fit a fresh model to a FIM corpus and write its weights")
+  p.subcommand("complete", "answer a file of holes with candidates, one JSON object per line")
+  p.subcommand("loss", "the mean loss over a corpus's first examples, the weights only read")
+  p.str_opt("--corpus", corpus@, "train: the FIM examples, one {prefix, middle, suffix} per line")
+  p.str_opt("--vocab", vocab@, "the tokenizer's vocabulary (Tokenizer.load)")
+  p.str_opt("--merges", merges@, "the tokenizer's merge rules (Tokenizer.load)")
+  p.str_opt("--weights", weights@, "complete: the weights train wrote")
+  p.str_opt("--in", in_path@, "complete: the holes, one {prefix, suffix} per line")
+  p.str_opt("--out", out_path@, "train: the weights written; complete: the answers written")
+  p.str_opt("--steps", steps@, "train: how many times the weights move (3000)")
+  $batch: U8[] = "1"
+  p.str_opt("--batch", batch@, "train: how many sequences' gradients each move sums (1)")
+  $threads: U8[] = ""
+  p.str_opt("--threads", threads@, "train: how many threads share a batch (every CPU)")
+  p.str_opt("--optimizer", optimizer@, "train: adam or sgd (adam)")
+  p.str_opt("--lr", lr@, "train: the step size (0.001 for adam, 0.05 for sgd)")
+  p.str_opt("--samples", samples@, "complete: candidates per hole, the greedy one first (4)")
+  p.str_opt("--seed", seed@, "where the randomness starts (1)")
+  $most: U8[] = "1000"
+  p.str_opt("--most", most@, "loss: how many examples are measured (1000)")
+  p.parse_or_exit(sys.args(), arena)
+  // **Every path is explicit, none assumed**: a default would tie this program to one repository.
+  if p.command.equals("loss")
+    if vocab.len == 0 || merges.len == 0 || corpus.len == 0 || weights.len == 0
+      io.err().s("loss needs --corpus=<fim.jsonl> --vocab=<v> --merges=<m> --weights=<w>\n")
+      sys.exit(2)
+    held_out_loss(corpus, Paths::{ .vocab = vocab, .merges = merges }, weights,
+      most.parse_size() catch 1000)
+    return
+  if vocab.len == 0 || merges.len == 0 || out_path.len == 0
+    io.err().s("name the tokenizer and the output: --vocab=<v> --merges=<m> --out=<file>\n")
+    sys.exit(2)
+  at: = Paths::{ .vocab = vocab, .merges = merges }
+  seed_n: = U64::(seed.parse_size() catch 1)
+  if p.command.equals("train")
+    if corpus.len == 0
+      io.err().s("train needs --corpus=<fim.jsonl>\n")
+      sys.exit(2)
+    // **Each optimizer uses its own default step size** unless one is given: Adam's steps are
+    // already scaled by its memory, so SGD's step size would make its weights jump around.
+    is_adam: = optimizer.equals("adam")
+    if !is_adam && !optimizer.equals("sgd")
+      io.err().s("--optimizer: expected sgd or adam\n")
+      sys.exit(2)
+    step: = (lr.to_f64() catch 0.0) if lr.len > 0 else (0.001 if is_adam else 0.05)
+    if step <= 0.0
+      io.err().s("--lr: expected a positive number\n")
+      sys.exit(2)
+    $u: =
+      ai_optim.Updater<|F32|>.adam(step) if is_adam else ai_optim.Updater<|F32|>.sgd(step)
+    defer u.free()
+    plan: = Schedule::{ .steps = steps.parse_size() catch 3000,
+      .batch = batch.parse_size() catch 1,
+      .threads =
+      (threads.parse_size() catch 1) if threads.len > 0 else sys.cpu_count() }
+    if plan.batch == 0 || plan.threads == 0
+      io.err().s("--batch and --threads: expected at least 1\n")
+      sys.exit(2)
+    train(corpus, at, plan, u@, seed_n, out_path)
+  else if p.command.equals("complete")
+    if weights.len == 0 || in_path.len == 0
+      io.err().s("complete needs --weights=<file> and --in=<holes.jsonl>\n")
+      sys.exit(2)
+    complete(at, weights, in_path, out_path, samples.parse_size() catch 4, seed_n)
+  else
+    io.err().s("name a command: train or complete (--help lists the options)\n")
+    sys.exit(2)

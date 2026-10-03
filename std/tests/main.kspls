@@ -1,0 +1,28 @@
+//< std's tests as a standalone program (`make test` in this package's folder)
+//<
+//< **This is the only way to run std's tests alone.** `all.kspls` lists the tests; this file gives
+//< them a `main` and the one thing they need from the caller: a compiler to start as the other end
+//< of a pipe.
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/sys"
+import "std/tests/all"
+
+priv const usage: U8[] = "usage: ksplc run tests/main.kspls <ksplc>" //<
+  //< the arguments it expects (`make test` in `std/Makefile` passes them)
+
+fn main(): I32
+  // Flush line by line, so a run that crashes shows how far it got.
+  io.set_line_buffered()
+  arena: = Arena.new(1024 * 1024)
+  defer arena.free()
+  argv: = sys.args()
+  if argv.len != 2
+    panic(arena.dup_str(usage))
+  // The tests write under `out/tmp` in the folder they run in. Some create only the last folder of
+  // their path, as POSIX `mkdir` does. **Do not stop if it cannot be created**: a test that cannot
+  // write reports it under its own name.
+  fs.mkdir_all("out/tmp") catch {}
+  all.run_std(arena.dup_str(argv.get(1)), arena)
+  return 0

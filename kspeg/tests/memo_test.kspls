@@ -1,0 +1,121 @@
+//< One memo table serving every parse of a grammar, tested where a real parse seldom goes
+//<
+//< **A stale answer shows only when a later input asks a question an earlier one answered
+//< differently**, and a table grows or its generation counter wraps only now and then. So each
+//< case is set up here on purpose instead of waited for.
+import "kspeg/engine" as kspeg
+import "kspeg/memo" { Memo_key, Memo_table }
+import "kspeg/notation" as kspeg_notation
+import "std/mem" { Arena }
+import "std/str" + { Arena_text } // `equals` also comes through this import
+import "std/verdict"
+
+priv fn key(pos: Sz, rule_id: I32): Memo_key //< a question asked where whitespace is skipped
+  return Memo_key::{ .pos = pos, .rule_id = rule_id, .syn = true, .sup = false }
+
+priv fn stamped(t: Memo_table<|I64|>$@): Sz //< how many slots carry the parse's stamp
+  //<
+  //< **It must equal the table's own count.** A table fuller than its count says can leave a
+  //< lookup with no empty slot ahead to stop at.
+  $n: Sz = 0
+  for i in Range.asc(t.cap)
+    if (t.slots + i).gen == t.gen
+      n += 1
+  return n
+
+priv fn render(n: kspeg.Node$@, b: Arena_text$@) //<
+  //< the tree as text: each node's kind, offset and matched text
+  b.s(n.kind).c('@').s("\{n.offset\}").c('=').s(n.text).c('(')
+  for c in n.children
+    render(c, b)
+  b.c(')')
+
+priv fn tree_text(parser: kspeg.Target$@, input: U8[], arena: Arena$@): U8[] //<
+  //< The tree `top` builds from `input` under the grammar `parser` holds, as text
+  $t: = kspeg.Target.new(input, arena)
+  defer t.free_memo()
+  t.share_grammar_from(parser)
+  node: = t.parse_rule("top") catch
+    return "(no parse)"
+  b: = arena.text()
+  render(node, b)
+  return b.take()
+
+priv fn test_later_input(arena: Arena$@) //< a later input reads none of what an earlier one left
+  // `pair` is read twice at the start of an input ending in `?`, so the memo answers it there.
+  pairs: U8[] = "top = pair \"!\" | pair \"?\"\npair = item item\nitem = \"a\" | \"b\"\n"
+  $meta: = kspeg_notation.Meta.new(pairs, arena)
+  lender: = meta.parse_grammar() catch
+    panic("the grammar did not load")
+  defer lender.free_memo()
+  $first: = kspeg.Target.new("ab?", arena)
+  defer first.free_memo()
+  first.share_grammar_from(lender)
+  first.enable_profiling = true
+  _tree: = first.parse_rule("top") catch
+    panic("the first input did not parse")
+  // Caution: **Check that the table was used.** If the memo were off for `pair`, nothing could go
+  // stale, and the comparison below would pass however the table was emptied.
+  $answered: I64 = 0
+  for p in first.prof_list
+    if p.name.equals("pair")
+      answered = p.memo_hits
+  assert(answered == 1, "the memo did not answer `pair` on the first input")
+  // "ab" was `pair`'s answer at 0; read again for "ba!", it would put `a` before `b`.
+  shared: = tree_text(lender, "ba!", arena)
+  $own_meta: = kspeg_notation.Meta.new(pairs, arena)
+  own: = own_meta.parse_grammar() catch
+    panic("the grammar did not load")
+  defer own.free_memo()
+  alone: = tree_text(own, "ba!", arena)
+  assert(shared.equals(alone), "a lent table handed a later input an earlier one's answer")
+  verdict.pass("a later input reads none of the answers an earlier one left")
+
+priv fn test_grow_past_cap() //< growing past the allocated slots keeps every answer
+  $t: = Memo_table<|I64|>.new()
+  defer t.free()
+  t.begin(0)
+  for i in Range.asc(17)
+    t.set(key(i, 1), i + 1)
+  assert(t.cap == 64, "seventeen answers did not grow a table of thirty-two slots")
+  assert(stamped(t@) == 17 && t.len == 17, "growing left slots stamped but not counted")
+  for i in Range.asc(17)
+    assert(t.get(key(i, 1)).unwrap_or(0) == I64::i + 1, "an answer was lost growing")
+  verdict.pass("growing past the slots taken keeps every answer")
+
+priv fn test_grow_within_cap() //< growing within the allocated slots revives nothing old
+  $t: = Memo_table<|I64|>.new()
+  defer t.free()
+  t.begin(1000)
+  for i in Range.asc(300)
+    t.set(key(i, 1), 1)
+  // A short input uses 32 of the 1024 slots the long one allocated, then outgrows them.
+  t.begin(0)
+  for i in Range.asc(17)
+    t.set(key(i, 2), i + 1)
+  assert(t.cap == 1024 && t.mask == 63, "the table did not grow inside the slots it had")
+  assert(stamped(t@) == 17 && t.len == 17, "growing left slots stamped but not counted")
+  for i in Range.asc(17)
+    assert(t.get(key(i, 2)).unwrap_or(0) == I64::i + 1, "an answer was lost growing")
+  for i in Range.asc(300)
+    assert(t.get(key(i, 1)).is_none(), "growing woke an answer the parse before left")
+  verdict.pass("growing inside the slots taken wakes nothing another parse left")
+
+priv fn test_wrap() //< wrapping the generation counter revives no old answer
+  $t: = Memo_table<|I64|>.new()
+  defer t.free()
+  t.begin(0)
+  t.set(key(0, 1), 1)
+  // As if every other generation had been used since: the next one wraps past 0 to 1, the stamp
+  // the answer above carries.
+  t.gen = U32::4294967295
+  t.begin(0)
+  assert(t.get(key(0, 1)).is_none(), "an old answer read as live once the counter came round")
+  verdict.pass("the generation counter coming round wakes no old answer")
+
+pub fn test_memo(arena: Arena$@) //< every case, each named on its own line
+  verdict.start("[KSPEG] one memo table serving every parse of a grammar")
+  test_later_input(arena)
+  test_grow_past_cap()
+  test_grow_within_cap()
+  test_wrap()

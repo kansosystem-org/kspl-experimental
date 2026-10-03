@@ -1,0 +1,32 @@
+//< Scales the command sent to the wheels down to the speed cap
+//<
+//< The triple is forward-back, sideways and turning.
+//< **Do not clamp each component separately.**
+//< `cap` is returned even when no scaling is needed, so callers need no special case.
+
+// ==========================================
+// How it is used:
+//   d: = cap.divisor(lon, lat, rot);
+//   out: = lon * cap.cap / d;
+// ==========================================
+
+const cap: I32 = 20 //< the cap in % on the size of the command sent to the wheels
+  //<
+  //< **This is the only value that sets the car's speed** (the manoeuvre table sets only how sharp
+  //< a turn is). Lower, the line stays longer under the sensors: more reads, less overshoot. **It
+  //< is also the prediction net's scale** (`car_model.init`), so a change rejects learned weights.
+  //< Caution: **Keep it just above `board.wheel_min_percent`**: at that floor a wheel stalls, and
+  //< higher the car overshoots the line.
+
+fn abs_i32(v: I32): I32
+  return 0 - v if v < 0 else v
+
+fn divisor(lon: I32, lat: I32, rot: I32): I32 //< the divisor that brings the triple within `cap`
+  //<
+  //< **If no scaling is needed it returns `cap`.**
+  $m: I32 = abs_i32(lon)
+  if abs_i32(lat) > m
+    m = abs_i32(lat)
+  if abs_i32(rot) > m
+    m = abs_i32(rot)
+  return m if m > cap else cap

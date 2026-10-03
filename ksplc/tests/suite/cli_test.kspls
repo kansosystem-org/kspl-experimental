@@ -1,0 +1,610 @@
+#!/usr/bin/env -S ksplc run
+//< The test of ksplc's command-line shape
+//<
+//< The subcommands, and which options each subcommand accepts.
+
+// ==========================================
+// The properties pinned down:
+//   * `ksplc info <subject>` answers one line, and rejects a wrong subject, naming the valid ones
+//   * `ksplc clean cache` answers with the directory it erased
+//   * `ksplc explain <code>` prints only that code's section, and rejects an unknown code
+//   * **an option that has no effect on that subcommand is an error** — silently ignored, it
+//     cannot be told from having worked (Principle 5 in docs/DESIGN.md) — and the error names the
+//     subcommands that accept it
+//   * `ksplc --help`'s per-subcommand list agrees with the pairs really accepted
+//   * `--diagnostic-format=json` writes a JSON object per line, where the text form writes a line
+// ==========================================
+
+// Caution: **Do not copy the per-subcommand list into here.** Its source is flag_faces in
+// ksplc/main.kspls, which `--help` prints; the test checks that ksplc behaves as those lines say.
+import "ksplc/tests/support/harness"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/json"
+import "std/mem" { Arena }
+import "std/regex"
+import "std/seq"
+import "std/str" { Str_builder }
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+
+priv const cache_env: U8[] = "KSPLC_CACHE_DIR" //<
+  //< The environment variable naming the disk cache's directory
+  //<
+  //< It is cache_env_name in `ksplc/base/cache.kspls`.
+
+priv fn cache_root(arena: Arena$@): U8[] //< the cache directory for this suite only
+  //<
+  //< `info cache-dir` and `clean cache` point here.
+  return fs.join(harness.tmp_dir(), "cli_cache", arena)
+
+priv fn cli(args: U8[][]): verdict.Run_out //< it runs ksplc once
+  //<
+  //< Not `harness.ksplc`: a subcommand that does not accept `--std-dir=` rejects its call.
+  return harness.ksplc_bare(args)
+
+priv fn ok_case(name: U8[], args: U8[][], expect: U8[]) //<
+  //< It checks that the run passes (exit code 0) and what the output must contain
+  r: = cli(args)
+  if r.code != 0
+    verdict.check(name, false,
+      harness.arena().text().s("the exit code is not 0\n\{r.out\}").take())
+    return
+  if expect.len > 0 && r.out.find_str(expect) < 0
+    verdict.check(name, false,
+      harness.arena().text().s("\{expect\} does not come out\n\{r.out\}").take())
+    return
+  verdict.check(name, true, "")
+
+priv fn ng_case(name: U8[], args: U8[][], expect: U8[]) //<
+  //< It checks that the run is rejected (a non-zero exit code) and what the error must contain
+  r: = cli(args)
+  if r.code == 0
+    verdict.check(name, false,
+      harness.arena().text().s("it passed without being turned away\n\{r.out\}").take())
+    return
+  if expect.len > 0 && r.out.find_str(expect) < 0
+    verdict.check(name, false,
+      harness.arena().text().s("\{expect\} does not come out\n\{r.out\}").take())
+    return
+  verdict.check(name, true, "")
+
+priv struct Face_flags //<
+  //< One line of `--help`'s "the options each subcommand accepts"
+  face: U8[]
+  flags: List<|U8[]|>
+
+priv struct Help //< the result of reading `--help`'s output
+  //<
+  //< `with_value` is the name of an option that takes a value.
+  faces: List<|Face_flags|>
+  with_value: List<|U8[]|>
+
+priv fn parse_help(arena: Arena$@): Help //<
+  //< From `--help`'s output it reads the per-subcommand lines and the options that take a value
+  //<
+  //< Caution: **Finding no subcommand line at all is itself a failure**, or a changed list format
+  //< lets the checks below pass without testing anything.
+  $out: = List<|Face_flags|>.new(arena)
+  $with_value: = List<|U8[]|>.new(arena)
+  r: = cli(U8[][]::{ "--help" })
+  if r.code != 0
+    return Help::{ .faces = out, .with_value = with_value }
+  $inside: = false
+  for raw in r.out.lines(arena)
+    ln: = raw.trim_end()
+    // An option that takes a value is listed as `--name=<str>` in the `Options:` list.
+    if ln.starts_with("  --") && ln.find_str("=<str>") >= 0
+      head: = ln.trim_spaces()
+      with_value.push(head.sub(0, head.find_str("=<str>")))
+    if ln.find_str("The options that take effect per subcommand") >= 0
+      inside = true
+      continue
+    if !inside
+      continue
+    if !ln.starts_with("  ")
+      inside = false
+      continue
+    colon: = ln.find_str(":")
+    if colon < 0
+      continue
+    face: = ln.sub(0, colon).trim_spaces()
+    if face.equals("on every subcommand")
+      continue
+    rest: = ln.sub_from(colon + 1).trim_spaces()
+    $fl: = List<|U8[]|>.new(arena)
+    if rest.len > 0
+      for w in rest.split(' ', arena)
+        fl.push(w)
+    out.push(Face_flags::{ .face = face, .flags = fl })
+  return Help::{ .faces = out, .with_value = with_value }
+
+priv fn has(names: List<|U8[]|>@, name: U8[]): Bool
+  return names.any(fn(n: U8[]; name: U8[]): Bool {
+    return n.equals(name);
+  })
+
+priv fn case_help_matches_behavior(arena: Arena$@) //<
+  //< It tries every pair of subcommand and option against what `--help` lists
+  //<
+  //< Caution: **Test the accepted pairs too.** With only the rejected ones, an emptied table makes
+  //< everything green.
+  h: = parse_help(arena)
+  if !verdict.check("--help puts the per-subcommand list out", h.faces.len > 0,
+    "not one line could be picked up")
+    return
+  // Every option in the table (one that no subcommand accepts is on no line).
+  $all: = List<|U8[]|>.new(arena)
+  for f in h.faces
+    for fl in f.flags
+      if !has(all@, fl)
+        all.push(fl)
+  $bad: = Str_builder.new()
+  defer bad.free()
+  $pairs: Sz = 0
+  for f in h.faces
+    for fl in all
+      // Caution: Do not put `=x` on an option taking no value: argp rejects it before the
+      // per-subcommand check, and every pair passes as "rejected".
+      arg: =
+        arena.text().s(fl).s("=x").take() if has(h.with_value@, fl) else fl
+      r: = cli(U8[][]::{ f.face, arg })
+      refused: = r.out.find_str("does not take effect on this subcommand") >= 0
+      pairs += 1
+      if has(f.flags@, fl) == refused
+        bad.s("  ").s(f.face).s(" should take ").s(fl)
+          .s(" but turned it away\n" if refused else
+          " but should have turned it away and did not\n")
+  verdict.check(arena.text().s("it accepts as --help's list says (\{pairs\} pairs)").take(),
+    bad.slice().len == 0, bad.slice())
+
+priv fn case_info(arena: Arena$@)
+  ok_case("info std-dir", U8[][]::{ "info", "std-dir" }, "std")
+  ok_case("info link-libs", U8[][]::{ "info", "link-libs" }, "-lm")
+  ok_case("info exe-flags", U8[][]::{ "info", "exe-flags" }, "-")
+  ok_case("info cache-dir", U8[][]::{ "info", "cache-dir" }, cache_root(arena))
+  ok_case("info keywords", U8[][]::{ "info", "keywords" }, "Total:")
+  // A missing or wrong subject is rejected, with the valid ones listed.
+  ng_case("info: with no subject it turns it away", U8[][]::{ "info" }, "std-dir")
+  ng_case("info: an unknown subject is turned away", U8[][]::{ "info", "std-dirs" }, "std-dir")
+  // `--std-dir=` works here too (the answer is that setting's result).
+  ok_case("info std-dir: --std-dir= takes effect",
+    U8[][]::{ "--std-dir=marker_dir", "info", "std-dir" }, "marker_dir")
+
+priv fn case_clean(arena: Arena$@)
+  ok_case("clean cache", U8[][]::{ "clean", "cache" }, cache_root(arena))
+  ng_case("clean: with no subject it turns it away", U8[][]::{ "clean" }, "cache")
+  ng_case("clean: an unknown subject is turned away", U8[][]::{ "clean", "caches" }, "cache")
+
+priv fn case_emit_runtime(arena: Arena$@)
+  dir: = harness.sandbox("cli") catch
+    verdict.check("emit-runtime", false, "the working directory cannot be made")
+    return
+  gen: = fs.join(dir, "rt.c", arena)
+  ok_case("emit-runtime: it can write taking no input", U8[][]::{ "emit-runtime", gen }, "")
+  body: = io.read_file(gen) catch
+    verdict.check("emit-runtime: the output can be read", false, "cannot be read")
+    return
+  verdict.check("emit-runtime: the runtime's source is in it", body.find_str("kspl_") >= 0, "")
+  // `--freestanding` works here too, keeping the content in step with the generated C.
+  bare: = fs.join(dir, "rt_bare.c", arena)
+  ok_case("emit-runtime: --freestanding takes effect",
+    U8[][]::{ "--freestanding", "emit-runtime", bare }, "")
+  b2: = io.read_file(bare) catch
+    verdict.check("emit-runtime: --freestanding's output can be read", false, "cannot be read")
+    return
+  verdict.check("emit-runtime: --freestanding changes the content", !b2.equals(body), "")
+  ng_case("emit-runtime: with no destination it turns it away", U8[][]::{ "emit-runtime" },
+    "usage:")
+
+priv fn case_explain(arena: Arena$@) //<
+  //< `ksplc explain <code>` prints that code's section and nothing past it
+  //<
+  //< `tests/support/conventions_match.kspls` checks that every registered code has a section and
+  //< every section a code; this checks the printing.
+  ok_case("explain W0702", U8[][]::{ "explain", "W0702" }, "#### [W0702]")
+  ok_case("explain: a code in lower case is taken", U8[][]::{ "explain", "w0702" }, "#### [W0702]")
+  ok_case("explain: it names where the text came from", U8[][]::{ "explain", "W0702" },
+    "\"5.5 The list of warnings (W)\" in ksplc/docs/SPEC-tools.md")
+  ng_case("explain: an unknown code is turned away", U8[][]::{ "explain", "W9999" },
+    "not a diagnostic code")
+  ng_case("explain: with no code it turns it away", U8[][]::{ "explain" }, "usage: ksplc explain")
+  ng_case("explain: two codes are turned away", U8[][]::{ "explain", "W0702", "W0701" },
+    "usage: ksplc explain")
+  ng_case("explain: an option is turned away", U8[][]::{ "explain", "--stats", "W0702" },
+    "does not take effect")
+  // The registered codes are `base/lint_codes.kspls`'s `code.equals("W0702")` lines.
+  reg: = io.read_file("base/lint_codes.kspls") catch
+    verdict.check("explain prints each registered code's section alone", false,
+      "base/lint_codes.kspls cannot be read")
+    return
+  rx: = regex.Regex.compile("code\\.equals\\(\"([WIH][0-9][0-9][0-9][0-9])\"\\)") catch
+    verdict.check("explain prints each registered code's section alone", false,
+      "the pattern for a registered code does not compile")
+    return
+  defer rx.free()
+  found: = rx.find_all(reg, arena) catch
+    verdict.check("explain prints each registered code's section alone", false,
+      "the registered codes cannot be read")
+    return
+  $bad: = Str_builder.new()
+  defer bad.free()
+  $seen: Sz = 0
+  for m in found
+    code: = m.group(1, reg)
+    seen += 1
+    r: = cli(U8[][]::{ "explain", code })
+    head: = arena.text().s("#### [").s(code).s("]").take()
+    // Caution: **Check past the start too.** A section that runs on into the next one still starts
+    // right; a `#` line inside an example has no space after it, so it is no heading.
+    ran_on: =
+      r.out.find_str("\n#### ") >= 0 || r.out.find_str("\n### ") >= 0 ||
+      r.out.find_str("\n## ") >= 0
+    if r.code != 0 || !r.out.starts_with(head) || ran_on || r.out.find_str("\nFrom \"") < 0
+      bad.s("  ").s(code).c('\n')
+  verdict.check(arena.text()
+    .s("explain prints each registered code's section alone (\{seen\} codes)").take(),
+    seen > 0 && bad.slice().len == 0, bad.slice())
+
+priv fn case_summary_codes(arena: Arena$@) //<
+  //< The closing line offers `ksplc explain` only the codes the registry knows
+  //<
+  //< A value where a trait is wanted brings a codeless hint beside the [I0401]; named on the
+  //< closing line, it would send the reader to a command with nothing to print.
+  dir: = fs.join(harness.tmp_dir(), "cli_summary", arena)
+  fs.mkdir_all(dir) catch {}
+  src: = fs.join(dir, "summary.kspls", arena)
+  body: =
+    "import \"std/io\"\n\npriv fn take(w: Writer)\n  w.s(\"x\")\n\nfn main(): I32\n  take(5)\n  \
+      return 0\n"
+  io.write_file(src, body) catch
+    verdict.check("the closing line: the sample can be written", false, src)
+    return
+  r: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(arena), "lint", src }, dir)
+  verdict.check("the closing line offers explain only the codes it knows",
+    r.out.find_str("does not explicitly implement interface") >= 0 &&
+    r.out.find_str("explained by `ksplc explain <code>`: I0401.") >= 0, r.out)
+
+priv fn case_refusals()
+  // The error names the subcommands that accept the option.
+  ng_case("--stats does not take effect on fmt", U8[][]::{ "fmt", "--stats", "a.kspl" }, "compile")
+  ng_case("--in-place does not take effect on compile",
+    U8[][]::{ "--in-place", "a.kspl", "a.c" }, "fmt")
+  ng_case("--split does not take effect on run", U8[][]::{ "run", "--split=2", "a.kspl" },
+    "compile")
+  ng_case("--target does not take effect on lint",
+    U8[][]::{ "lint", "--target=llvm", "a.kspl" }, "compile")
+  ng_case("--std-dir does not take effect on clean",
+    U8[][]::{ "clean", "--std-dir=std", "cache" }, "compile run lint info")
+  // argp rejects naming two subcommands.
+  ng_case("two subcommands cannot be written", U8[][]::{ "fmt", "lint", "a.kspl" }, "")
+  // An option given with nothing after its `=` is refused, never read as the default.
+  ng_case("--surface-scope= is refused, not read as pub",
+    U8[][]::{ "--surface-scope=", "a.kspl", "a.c" }, "'--surface-scope' needs a value")
+  ng_case("--to= is refused, not ignored", U8[][]::{ "fmt", "--to=", "a.kspl" },
+    "'--to' needs a value")
+  ng_case("fmt with no input gives fmt's usage line", U8[][]::{ "fmt" },
+    "usage: ksplc fmt [options...] <input.kspl>...")
+
+priv fn std_flag(_arena: Arena$@): U8[] //< the option passing the standard library's directory
+  //<
+  //< **The working directory changes before the run, so a relative path would not resolve.**
+  return harness.arena().text().s("--std-dir=\{harness.std_dir()\}").take()
+
+priv fn case_bom(arena: Arena$@) //< checks that a leading BOM runs and survives formatting
+  //<
+  //< Caution: **Check that it survives formatting** — forget to put the mark back and `make fmt`
+  //< alone silently erases the encoding's mark.
+  dir: = fs.join(harness.tmp_dir(), "cli_bom", arena)
+  fs.mkdir_all(dir) catch {}
+  bom: U8[] = "\uFEFF"
+  braced: = fs.join(dir, "b.kspl", arena)
+  laid: = fs.join(dir, "b.kspls", arena)
+  b_src: = arena.text().s(bom).s("import \"std/io\";\n\nfn main() {\n  io.out().s(\"ok\\n\");\n}\n")
+    .take()
+  l_src: = arena.text().s(bom).s("import \"std/io\"\n\nfn main()\n  io.out().s(\"ok\\n\")\n").take()
+  io.write_file(braced, b_src) catch
+    verdict.check("BOM: the sample can be written", false, braced)
+    return
+  io.write_file(laid, l_src) catch
+    verdict.check("BOM: the sample can be written", false, laid)
+    return
+  for path in U8[][]::{ braced, laid }
+    r: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(arena), "run", path }, dir)
+    verdict.check(arena.text().s("BOM: it runs even with a BOM at the head (").s(path).s(")").take(),
+      r.code == 0 && r.out.find_str("ok") >= 0, r.out)
+    // Caution: Do not pass `--std-dir` to `fmt` (it has no effect there, so it is rejected).
+    f: = harness.run_in(U8[][]::{ harness.ksplc_exe(), "fmt", "--in-place", path }, dir)
+    back: = io.read_file(path) catch ""
+    verdict.check(arena.text().s("BOM: the BOM survives formatting (").s(path).s(")").take(),
+      f.code == 0 && back.starts_with(bom, 0), f.out)
+
+priv fn case_surface_doc(arena: Arena$@) //<
+  //< The record of the published API carries the documentation as a fourth column
+  //<
+  //< Caution: **Check both sides of the parting**, the opening paragraph and the detail; one alone
+  //< lets the other be lost unnoticed. **Check the full stop between them too**: without it two
+  //< fragments run into one broken sentence, and none is wanted where the summary ends in its own
+  //< (`described` in `../../base/ast_doc.kspls`).
+  dir: = fs.join(harness.tmp_dir(), "cli_surface", arena)
+  fs.mkdir_all(dir) catch {}
+  src: = fs.join(dir, "api.kspl", arena)
+  tsv: = fs.join(dir, "api.tsv", arena)
+  obj: = fs.join(dir, "api.c", arena)
+  body: U8[] =
+    """pub struct Row { //< one row of the table
+  //<
+  //< What a row stands for, in a sentence.
+  pub text: U8[]; //< the text as the writer typed it
+}
+
+pub fn count(rows: Row[1]): Sz { //< how many rows carry text
+  //<
+  //< Walks the table once and counts.
+  return rows[0].text.len;
+}
+
+pub fn named(rows: Row[1]): Sz { //< it names the column as `text`
+  //<
+  //< A summary closing on a code span takes its stop behind the span.
+  return rows[0].text.len;
+}
+
+pub fn closed(rows: Row[1]): Sz { //< it closes its own sentence.
+  //<
+  //< No second stop is put in behind it.
+  return rows[0].text.len;
+}
+
+fn main(): I32 {
+  return 0;
+}
+"""
+  io.write_file(src, body) catch
+    verdict.check("the record's documentation: the sample can be written", false, src)
+    return
+  r: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(arena),
+    arena.text().s("--emit-surface=").s(tsv).take(), src, obj }, dir)
+  if r.code != 0
+    verdict.check("the record's documentation: it is put out", false, r.out)
+    return
+  got: = io.read_file(tsv) catch ""
+  wants: U8[][5] = ::{ "Row\tpub struct Row\tone row of the table. What a row stands for, in a \
+    sentence.", "Row.text\tpub text: U8[]\tthe text as the writer typed it",
+    "count\tpub fn count(rows: Row[1]): Sz\thow many rows carry text. Walks the table once and \
+      counts.",
+    "named\tpub fn named(rows: Row[1]): Sz\tit names the column as `text`. A summary closing on a \
+      code span takes its stop behind the span.",
+    "closed\tpub fn closed(rows: Row[1]): Sz\tit closes its own sentence. No second stop is put in \
+      behind it." }
+  for want in wants
+    verdict.check(arena.text().s("the record's documentation carries \"").s(want).s("\"").take(),
+      got.find_str(want) >= 0, got)
+
+priv fn emitted_libs(dir: U8[], entry: U8[], flags: U8[][], arena: Arena$@): U8[] //<
+  //< What `--emit-libs` wrote for the entry file, or `FAILED` and the output where it failed
+  libs: = fs.join(dir, "out.libs", arena)
+  fs.remove_path(libs) catch {}
+  $argv: = List<|U8[]|>.new(arena)
+  argv.push(harness.ksplc_exe())
+  argv.push(std_flag(arena))
+  for f in flags
+    argv.push(f)
+  argv.push(arena.text().s("--emit-libs=").s(libs).take())
+  argv.push(fs.join(dir, entry, arena))
+  argv.push(fs.join(dir, "out.c", arena))
+  r: = harness.run_in(argv.slice(), dir)
+  if r.code != 0
+    return arena.text().s("FAILED ").s(r.out).take()
+  return harness.read_generated(libs)
+
+priv fn case_emit_libs(arena: Arena$@) //<
+  //< `--emit-libs` writes the libraries the kept `extern` blocks name (`#link`)
+  //<
+  //< **A file's names come before those of the files it imports** (a one-pass linker wants a
+  //< library before the ones it uses), each once, at its first place; a block that `#cfg` dropped
+  //< names nothing.
+  //< Caution: **A failed compile leaves no file.** A build that reads a stale one links the
+  //< libraries of a program that does not build.
+  dir: = fs.join(harness.tmp_dir(), "cli_emit_libs", arena)
+  fs.mkdir_all(dir) catch {}
+  main_src: U8[] =
+    """import "wrap";
+
+#link("app") #link("shared")
+extern "C" {
+  fn app_value(): I32;
+}
+
+#cfg(extra) #link("extra")
+extern "C" {
+  fn extra_value(): I32;
+}
+
+fn main(): I32 {
+  return wrap.value();
+}
+"""
+  wrap_src: U8[] =
+    """#link("wrapped") #link("shared")
+extern "C" {
+  fn wrapped_value(): I32;
+}
+
+pub fn value(): I32 {
+  return 0;
+}
+"""
+  none_src: U8[] = """fn main(): I32 {
+  return 0;
+}
+"""
+  bad_src: U8[] =
+    """#link("app")
+extern "C" {
+  fn app_value(): I32;
+}
+
+fn main(): I32 {
+  return app_value(1);
+}
+"""
+  fs.write_tree(dir, U8[][]::{ "main.kspl", "wrap.kspl", "none.kspl", "bad.kspl" },
+    U8[][]::{ main_src, wrap_src, none_src, bad_src }, harness.arena()) catch
+    verdict.check("--emit-libs: the sample can be written", false, dir)
+    return
+  got: = emitted_libs(dir, "main.kspl", U8[][]::{}, arena)
+  verdict.check("--emit-libs: a file's names before those of what it imports, each once",
+    got.equals("-lapp -lshared -lwrapped\n"), got)
+  flagged: = emitted_libs(dir, "main.kspl", U8[][]::{ "--define=extra" }, arena)
+  verdict.check("--emit-libs: a block #cfg keeps names its library in its place",
+    flagged.equals("-lapp -lshared -lextra -lwrapped\n"), flagged)
+  none: = emitted_libs(dir, "none.kspl", U8[][]::{}, arena)
+  verdict.check("--emit-libs: naming no library writes an empty line", none.equals("\n"), none)
+  bad: = emitted_libs(dir, "bad.kspl", U8[][]::{}, arena)
+  verdict.check("--emit-libs: a compile that fails writes no file",
+    bad.starts_with("FAILED ") && !fs.exists(fs.join(dir, "out.libs", arena)), bad)
+
+priv fn case_entry_spelling(arena: Arena$@)
+  dir: = fs.join(harness.tmp_dir(), "cli_entry", arena)
+  fs.mkdir_all(dir) catch {}
+  hw: = fs.join(dir, "hw.kspl", arena)
+  // Caution: **Do not put `pub` on `say`.** Only a symbol visible just inside the unit reproduces
+  // this error (with `pub` it passes however the path is written).
+  io.write_file(hw, "import \"std/io\";\n\nfn say() {\n  io.out().s(\"ok\\n\");\n}\n") catch
+    verdict.check("the entry file's spelling: the sample can be written", false, hw)
+    return
+  main_file: = fs.join(dir, "main.kspl", arena)
+  io.write_file(main_file, "import \"hw\";\n\nfn main() {\n  hw.say();\n}\n") catch
+    verdict.check("the entry file's spelling: the sample can be written", false, main_file)
+    return
+  // The Windows spelling (`.\main.kspl`) is the same entry file. **Write that file as well**: on
+  // POSIX `\` is a plain character naming **a file of its own**, so the same content opens either
+  // way, and **the separator check does not depend on the OS**.
+  win_file: = fs.join(dir, ".\\main.kspl", arena)
+  io.write_file(win_file, "import \"hw\";\n\nfn main() {\n  hw.say();\n}\n") catch
+    verdict.check("the entry file's spelling: the sample can be written", false, win_file)
+    return
+  // The three spellings of one folder **must give the same answer**, or it looks like another
+  // package.
+  spellings: = U8[][]::{ "main.kspl", "./main.kspl", ".\\main.kspl" }
+  for one in spellings
+    r: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(arena), "run", one }, dir)
+    verdict.check(arena.text().s("the entry file's spelling: \{one\}").take(), r.code == 0, r.out)
+  // **`./hw` and `hw` in an import are the same file.**
+  dotted: = fs.join(dir, "dotted.kspl", arena)
+  io.write_file(dotted, "import \"./hw\";\n\nfn main() {\n  hw.say();\n}\n") catch
+    verdict.check("the entry file's spelling: the sample can be written", false, dotted)
+    return
+  r: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(arena), "run", "dotted.kspl" }, dir)
+  verdict.check("the `./` in an import's spelling is the same unit too", r.code == 0, r.out)
+
+  // An import not found must say **where it searched** as an absolute path: a path holding a `/`
+  // is searched from **the working directory**, which a relative report hides.
+  lost: = fs.join(dir, "lost.kspl", arena)
+  io.write_file(lost, "import \"src/hw\";\n\nfn main() {\n  hw.say();\n}\n") catch
+    verdict.check("the entry file's spelling: the sample can be written", false, lost)
+    return
+  bad: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(arena), "run", "lost.kspl" }, dir)
+  // Caution: **Normalise the separators before matching.** The working directory comes with the
+  // OS's separator and the diagnostic writes `/`, so this string is converted to `/`.
+  want: = dir.replace("\\", "/", arena)
+  verdict.check("an import that is not found says where it hunted as an absolute path",
+    bad.code != 0 &&
+    bad.out.find_str(arena.text().s("\{want\}/src/hw.kspl").take()) >= 0, bad.out)
+
+priv fn json_lines(args: U8[][], arena: Arena$@): List<|json.Val|> //<
+  //< Each line of what one run wrote to stderr, read as JSON (a line that is not is `null_val`)
+  //<
+  //< **Only standard error**: `harness.ksplc` joins the two streams, and the summary stays on
+  //< stdout.
+  r: = subproc.run_capture(harness.ksplc_argv(args), "", verdict.default_timeout_ms, 4 * 1024 * 1024,
+    arena)
+  $rows: = List<|json.Val|>.new(arena)
+  for line in r.stderr_data.lines(arena)
+    rows.push(json.parse(line, arena) catch json.Val.null_val)
+  return rows
+
+priv fn is_null(v: json.Val): Bool
+  switch v case .null_val
+    return true
+  default
+    return false
+
+priv fn case_diagnostic_json(arena: Arena$@) //<
+  //< `--diagnostic-format=json`: one object per diagnostic, with its code apart from its message
+  //<
+  //< Caution: **Build the text form's head from the JSON and search for it in the text run**, so
+  //< the two forms cannot name different places.
+  dir: = fs.join(harness.tmp_dir(), "cli_diag_json", arena)
+  fs.mkdir_all(dir) catch {}
+  bad: = fs.join(dir, "bad.kspls", arena)
+  warn: = fs.join(dir, "warn.kspls", arena)
+  out_c: = fs.join(dir, "out.c", arena)
+  io.write_file(bad, "fn main(): I32\n  x: I32 = \"a\"\n  return x\n") catch
+    verdict.check("json diagnostics: the sample can be written", false, bad)
+    return
+  io.write_file(warn, "fn main(): I32\n  v: = 3\n  return 0\n") catch
+    verdict.check("json diagnostics: the sample can be written", false, warn)
+    return
+  errs: = json_lines(U8[][]::{ "--diagnostic-format=json", bad, out_c }, arena)
+  one: = errs.get(0) if errs.len == 1 else json.Val.null_val
+  verdict.check("json diagnostics: an error is one line of one object",
+    errs.len == 1 && one.get("severity").as_str().equals("error") &&
+    one.get("line").as_int(0I32) == 2I32 && one.get("column").as_int(0I32) == 12I32 &&
+    one.get("end_column").as_int(0I32) == 15I32,
+    arena.text().s("\{errs.len\} lines").take())
+  verdict.check("json diagnostics: an error carries no code",
+    one.has_key("code") && is_null(one.get("code")), "")
+  text: = harness.ksplc(U8[][]::{ bad, out_c })
+  head: = arena.text().s(one.get("file").as_str()).c(':').s("\{one.get("line").as_int(0I32)\}")
+    .c(':').s("\{one.get("column").as_int(0I32)\}").s(": error: ")
+    .s(one.get("message").as_str()).take()
+  verdict.check("json diagnostics: the text form names the same place and says the same",
+    head.len > 12 && text.out.find_str(head) >= 0, text.out)
+  warns: = json_lines(U8[][]::{ "lint", "--diagnostic-format=json", warn }, arena)
+  w: = warns.get(0) if warns.len == 1 else json.Val.null_val
+  verdict.check("json diagnostics: a code has a key of its own, out of the message",
+    w.get("code").as_str().equals("W0207") &&
+    !w.get("message").as_str().starts_with("["),
+    arena.text().s("\{warns.len\} lines").take())
+  // **The underline is counted in characters, as the column is**: a byte count runs past a
+  // string of three-byte characters.
+  wide: = fs.join(dir, "wide.kspls", arena)
+  io.write_file(wide, "fn main(): I32\n  s: I32 = \"かんそ\"\n  return 0\n") catch
+    verdict.check("json diagnostics: the sample can be written", false, wide)
+    return
+  wides: = json_lines(U8[][]::{ "--diagnostic-format=json", wide, out_c }, arena)
+  verdict.check("json diagnostics: a non-ASCII underline is counted in characters",
+    wides.len == 1 && wides.get(0).get("end_column").as_int(0I32) == 17I32,
+    arena.text().s("\{wides.len\} lines").take())
+  ng_case("json diagnostics: an unknown format is refused",
+    U8[][]::{ "--diagnostic-format=xml", bad, out_c }, "expected text or json")
+
+fn main(): I32
+  arena: = harness.begin(64 * 1024 * 1024)
+  io.out().s("# ksplc's command line\n")
+  // Caution: **Point the cache at your own directory before starting.** `clean cache` really
+  // erases: left on the shared cache it erases what suites running in parallel are building (a
+  // `ksplc run` loses a file mid-build).
+  if !sys.set_env(cache_env, cache_root(arena))
+    return harness.fatal("the cache cannot be pointed at this suite's own directory")
+  // Caution: **Clear the package directory setting.** The Makefile passes it on, and this suite's
+  // missing import must be searched from the working directory, as when nothing is set.
+  sys.unset_env("KSPLC_PKG_SRC_DIR")
+  case_info(arena)
+  case_clean(arena)
+  case_emit_runtime(arena)
+  case_explain(arena)
+  case_summary_codes(arena)
+  case_refusals()
+  case_help_matches_behavior(arena)
+  case_bom(arena)
+  case_surface_doc(arena)
+  case_emit_libs(arena)
+  case_entry_spelling(arena)
+  case_diagnostic_json(arena)
+  return harness.finish()

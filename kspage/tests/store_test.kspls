@@ -1,0 +1,673 @@
+import "kspage/lay/flow"
+import "kspage/model/collect" { Collect }
+import "kspage/model/doc" + { Axis, Doc, Rect }
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/marker"
+import "kspage/model/paint"
+import "kspage/model/style" { Sheet }
+import "kspage/share/store"
+import "kspage/tests/base"
+import "std/chars"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// kspage: checks saving and loading a document and its styles (a golden test).
+// The round trip keeps every field: written, read and written again, the text does not differ.
+// **The result of laying it out again is checked separately**, since the reader could put the
+// same text in another place.
+// **The Japanese left in this file is test vocabulary, not prose.**
+// ==========================================
+
+priv fn sample_sheet(arena: Arena$@): Sheet$@ //<
+  //< A sheet with one of each thing that could be lost in saving and loading
+  sheet: = Sheet.new(base.root_font(), arena)
+
+  $big: paint.Font_spec = paint.inherit_all()
+  big.size_px = Option<|F32|>.some(28.0)
+  big.weight = Option<|U16|>.some(700U16)
+  h1: = sheet.add("h1", big)
+  h1.space_after = 8.0
+  // The heading's depth and the contents setting.
+  h1.outline = 1
+  // The style the next paragraph continues in. **Lost, Enter at a heading's end would make a second
+  // heading and the outline would fill with empty entries.**
+  h1.next = "body"
+  toc: = sheet.add("toc", paint.inherit_all())
+  toc.collect = Collect.contents
+
+  body: = sheet.add("body", paint.inherit_all())
+  body.space_after = 12.0
+
+  $slanted: paint.Font_spec = paint.inherit_all()
+  slanted.family = Option<|U8[]|>.some("serif")
+  slanted.italic = Option<|Bool|>.some(true)
+  sheet.add("em", slanted)
+
+  item: = sheet.add("item", paint.inherit_all())
+  item.indent = 24.0
+
+  // Not wrapping. Lost, a code block would wrap and lose the whitespace at the break.
+  code: = sheet.add("code", paint.inherit_all())
+  code.wrap = false
+
+  t: = base.table_style(sheet)
+  t.space_before = 6.0
+  // The paper settings. Lost, it would stop splitting into pages.
+  sheet.paper.width = 794.0
+  sheet.paper.height = 1123.0
+  sheet.paper.left = 76.0
+  sheet.paper.bottom = 40.0
+  // The body's width. Lost, the body would spread across the whole window.
+  sheet.paper.reading = 620.0
+  return sheet
+
+priv fn sample_doc(arena: Arena$@): Doc$@ //<
+  //< A document with a heading, a style per inline, nesting, a table and a frame
+  d: = Doc.new(arena)
+  d.add_block("h1").add_text("title")
+
+  p: = d.add_block("body")
+  p.add_text("ordinary characters and ")
+  // The link's target.
+  slanted: = p.add_text("slanted characters", "em")
+  slanted.href = "https://example.com/"
+  // The note (its number is not stored).
+  slanted.note = "the note's text"
+
+  list: = d.add_block("body")
+  list.add_child("item").add_text("an item")
+
+  t: = d.add_block("table")
+  // The name survives the round trip separately from the style's name.
+  t.name = "detail"
+  // An empty column is kept in the list too; dropped, every column after it would shift forward.
+  t.set_size(Axis.column, 0, Option<|F32|>.some(40.0))
+  t.set_size(Axis.column, 1, Option<|F32|>.none)
+  // A row's height.
+  t.set_size(Axis.row, 0, Option<|F32|>.some(30.0))
+  r: = t.add_child("")
+  r.add_child("").add_text("a")
+  // A formula cell holds the typed text, not the computed value.
+  r.add_child("").add_text("=A1&1")
+  // The merge.
+  wide: = t.add_child("")
+  merged: = wide.add_child("")
+  merged.add_text("c")
+  merged.span_cols = 2
+
+  // A picture, by its source and size (the picture itself is not in the document).
+  shot: = d.add_block("body")
+  shot.image = "picture.png"
+  shot.image_w = 80.0
+  shot.image_h = 40.0
+  shot.add_text("")
+
+  slide: = d.add_block("body")
+  at: = Rect::{ .x = 10.0, .y = 20.0, .w = 100.0, .h = 50.0 }
+  doc.add_framed_child(slide, "frame", at).add_text("a frame")
+
+  // The page's header and footer, which walking `blocks` does not reach.
+  d.header.inlines.get(0).insert(0, "confidential")
+  d.footer.inlines.get(0).insert(0, "{page}/{pages}")
+  return d
+
+fn test_a_document_survives_the_round_trip()
+  verdict.start("[kspage/store] the text not changing over the round trip test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  sheet: = sample_sheet(arena)
+  d: = sample_doc(arena)
+
+  $first: = Str_builder.new()
+  defer first.free()
+  store.save(d, sheet, first@)
+  back: = store.load(first.slice(), arena) catch _e
+    panic("the text just written cannot be read")
+  $again: = Str_builder.new()
+  defer again.free()
+  store.save(back.doc, back.sheet, again@)
+
+  same: = first.slice().equals(again.slice())
+  assert(same, "written, read and written again it comes out the same text")
+  verdict.pass("over a round trip the text does not change by one character.")
+
+fn test_the_reloaded_document_lays_out_the_same()
+  verdict.start("[kspage/store] being laid in the same places after a reading back test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  sheet: = sample_sheet(arena)
+  d: = sample_doc(arena)
+  back: = base.round_trip(d, sheet, arena)
+
+  before: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  after: = flow.layout(back.doc, back.sheet, fixed.make(), 200.0, arena)
+  assert(before.boxes.len == after.boxes.len, "the count of boxes is the same")
+  assert(base.near(before.height, after.height), "the height is the same too")
+  for $i: Sz = 0; i < before.boxes.len; i += 1
+    a: = before.boxes.get(i)
+    b: = after.boxes.get(i)
+    assert(a.text.equals(b.text), "the boxes of the same texts come out in the same order")
+    assert(base.near(a.rect.x, b.rect.x) && base.near(a.rect.y, b.rect.y),
+      "they are laid in the same places")
+    assert(base.near(a.font.size_px, b.font.size_px), "the size is inherited too")
+    assert(a.font.italic == b.font.italic, "the italic is inherited too")
+    assert(a.font.family.equals(b.font.family), "the face's name is inherited too")
+  verdict.pass("a document read back is laid out the same as the one it came from.")
+
+priv fn family_is_unset(sheet: Sheet$@, name: U8[]): Bool //<
+  //< An unset field comes back unset (it is not filled with the current value)
+  if s: = sheet.find(name)
+    switch s.font.family case .none
+      return true
+    case .some(_v)
+      return false
+  return false
+
+fn test_colors_survive_the_round_trip() //< a color survives the round trip
+  //<
+  //< **Lost, the color would disappear every time it is saved and opened.**
+  verdict.start("[kspage/store] the colours going round the trip test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  sheet: = sample_sheet(arena)
+  h1: = sheet.find("h1").unwrap_or(null)
+  h1.ink.color = Option<|U32|>.some(0x102030U32)
+  h1.ink.background = Option<|U32|>.some(0xfffffeU32)
+  back: = base.round_trip(sample_doc(arena), sheet, arena)
+
+  got: = back.sheet.find("h1").unwrap_or(null)
+  assert(got != null, "the style comes back")
+  switch got.ink.color case .some(v)
+    assert(v == 0x102030U32, "the text colour comes back")
+  case .none
+    assert(false, "the writing of the text colour comes back")
+  switch got.ink.background case .some(v)
+    assert(v == 0xfffffeU32, "the ground's colour comes back too")
+  case .none
+    assert(false, "the writing of the ground's colour comes back too")
+  // The number format. Lost, the currency symbol would disappear.
+  h1.number.grouped = true
+  h1.number.places = Option<|Sz|>.some(2)
+  h1.number.prefix = "$"
+  h1.number.suffix = " USD"
+  again: = base.round_trip(sample_doc(arena), sheet, arena).sheet.find("h1").unwrap_or(null)
+  assert(again.number.grouped, "the grouping of figures comes back")
+  affix: = again.number.prefix.equals("$") && again.number.suffix.equals(" USD")
+  assert(affix, "the texts put before and behind come back too")
+  switch again.number.places case .some(v)
+    assert(v == 2, "the decimal places come back too")
+  case .none
+    assert(false, "the writing of the decimal places comes back")
+  // The line and the fill. Lost, a table's grid would disappear.
+  h1.rule_width = 2.0
+  h1.rule_color = 0xccccccU32
+  h1.fill = Option<|U32|>.some(0xeeeeeeU32)
+  edged: = base.round_trip(sample_doc(arena), sheet, arena).sheet.find("h1").unwrap_or(null)
+  assert(base.near(edged.rule_width, 2.0), "the line's thickness comes back")
+  assert(edged.rule_color == 0xccccccU32, "the line's colour comes back too")
+  switch edged.fill case .some(v)
+    assert(v == 0xeeeeeeU32, "the fill's colour comes back too")
+  case .none
+    assert(false, "the writing of the fill comes back")
+  // The paper settings. **An unset field comes back as 0** (not filled with the current value).
+  paper_back: = base.round_trip(sample_doc(arena), sheet, arena).sheet
+  assert(base.near(paper_back.paper.width, 794.0), "the paper's width comes back")
+  assert(base.near(paper_back.paper.height, 1123.0), "the page's height comes back too")
+  assert(base.near(paper_back.paper.left, 76.0), "the left margin comes back")
+  assert(base.near(paper_back.paper.bottom, 40.0), "the bottom margin comes back too")
+  assert(base.near(paper_back.paper.top, 0.0), "a margin not written stays 0")
+  assert(base.near(paper_back.paper.reading, 620.0), "the body's width comes back too")
+  // **The viewer's override is not written into the text**; written, whoever opens it would be
+  // stuck at the width of the writer's window.
+  over_back: = paper_back.over.reading
+  assert(base.near(over_back, 0.0), "the viewing side's overwrite is 0 even after a reading back")
+  // The merge.
+  span_back: = base.round_trip(sample_doc(arena), sheet, arena).doc
+  $tables: Sz = 0
+  for $i: Sz = 0; i < span_back.blocks.len; i += 1
+    b: = span_back.blocks.get(i)
+    if b.name.equals("detail")
+      tables += 1
+      wide_back: = b.children.get(1).children.get(0).span_cols
+      assert(wide_back == 2, "the merge's reach comes back")
+      plain_back: = b.children.get(0).children.get(0).span_cols
+      assert(plain_back == 1, "a cell that is not merged is 1")
+  assert(tables == 1, "the table comes back")
+  // The line settings. **`false` comes back too** (lost, a line would reappear where the parent's
+  // was removed).
+  h1.ink.underline = Option<|Bool|>.some(false)
+  h1.ink.strike = Option<|Bool|>.some(true)
+  lined: = base.round_trip(sample_doc(arena), sheet, arena).sheet.find("h1").unwrap_or(null)
+  switch lined.ink.underline case .some(v)
+    assert(!v, "`do not draw the underline` comes back")
+  case .none
+    assert(false, "the writing of the underline comes back")
+  assert(paint.drawn(lined.ink.strike), "the strike-through comes back too")
+  // The marker: **both the kind and the text** (the text alone would mix up a bullet and a number).
+  h1.marker = marker.Marker.number(")")
+  marked: = base.round_trip(sample_doc(arena), sheet, arena).sheet.find("h1").unwrap_or(null)
+  switch marked.marker case .number(after)
+    assert(after.equals(")"), "the text put behind the number comes back")
+  case .bullet(_g)
+    assert(false, "it comes back as a number, not as a mark")
+  case .serial(_b, _a)
+    assert(false, "it comes back as a number counted among the siblings")
+  case .outline(_s, _a)
+    assert(false, "it comes back as a number counted among the siblings, not as a chapter number")
+  case .none
+    assert(false, "the writing of the mark comes back")
+  // A running number keeps **both the text before it and after** (in `Figure 1.` the `Figure ` and
+  // the `.` are one setting).
+  h1.marker = marker.Marker.serial("Figure ", ". ")
+  serial: = base.round_trip(sample_doc(arena), sheet, arena).sheet.find("h1").unwrap_or(null)
+  switch serial.marker case .serial(before, after)
+    assert(before.equals("Figure ") && after.equals(". "),
+      "the texts before and behind a running number come back")
+  case .number(_a)
+    assert(false, "it comes back as a running number")
+  case .bullet(_g)
+    assert(false, "it comes back as a running number, not as a mark")
+  case .outline(_s, _a)
+    assert(false, "it comes back as a running number, not as a chapter number")
+  case .none
+    assert(false, "the writing of the mark comes back")
+  // A style with nothing set comes back unset (it is not filled with the current value).
+  plain: = back.sheet.find("body").unwrap_or(null)
+  if plain != null
+    switch plain.ink.color case .none {} case .some(_v)
+      assert(false, "a style with nothing written keeps its colour unwritten")
+    switch plain.fill case .none {} case .some(_v)
+      assert(false, "a style with nothing written keeps its fill unwritten too")
+  verdict
+    .pass("the colour, the line and the fill all go round the trip, and what was unwritten comes \
+      back unwritten.")
+
+fn test_unset_font_fields_stay_unset()
+  verdict.start("[kspage/store] what was unwritten coming back unwritten test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  sheet: = sample_sheet(arena)
+  back: = base.round_trip(sample_doc(arena), sheet, arena)
+
+  // h1 sets only the size and the weight, and inherits the typeface from the parent.
+  assert(family_is_unset(sheet, "h1"), "it was unwritten to begin with")
+  assert(family_is_unset(back.sheet, "h1"), "read back it is unwritten still")
+  // em sets the typeface, so that one is kept.
+  assert(!family_is_unset(back.sheet, "em"), "a field that was written stays written")
+  verdict
+    .pass("what was unwritten is not filled with what stands, and the inheritance comes back alive.")
+
+fn test_frames_survive_the_round_trip()
+  verdict.start("[kspage/store] a frame's place being left over the round trip test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
+
+  // The last block's child is the frame that has a position.
+  last: = back.doc.blocks.get(back.doc.blocks.len - 1)
+  framed: = last.children.get(0)
+  switch framed.frame case .some(f)
+    assert(base.near(f.x, 10.0) && base.near(f.y, 20.0), "the top left is left")
+    assert(base.near(f.w, 100.0) && base.near(f.h, 50.0), "the size is left too")
+  case .none
+    panic("the frame's place has fallen away")
+  // A block with no position comes back with none.
+  if _f: = back.doc.blocks.get(0).frame
+    panic("a place has grown on a block that has none")
+  verdict.pass("a frame's place is left where it was there, and does not grow where it was not.")
+
+fn test_column_widths_survive_the_round_trip()
+  verdict.start("[kspage/store] a column's width being left over the round trip test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
+
+  // The table is the block whose style is named `table`.
+  $table: doc.Block$@ = null
+  for $i: Sz = 0; i < back.doc.blocks.len; i += 1
+    blk: = back.doc.blocks.get(i)
+    if blk.style.equals("table")
+      table = blk
+  assert(table != null, "the table has come back")
+  // The name is a field separate from the style's name.
+  assert(table.name.equals("detail"), "the table's name is left")
+  assert(back.doc.blocks.get(0).name.len == 0, "no name grows on a block that has none")
+  assert(table.column_widths.len == 2, "the row of columns is left, length and all")
+  assert(table.row_heights.len == 1, "the row of rows is left too")
+  switch table.size_of(Axis.row, 0) case .some(v)
+    assert(base.near(v, 30.0), "the row's height as written is left")
+  case .none
+    panic("the row's height has fallen away")
+  switch table.size_of(Axis.column, 0) case .some(v)
+    assert(base.near(v, 40.0), "the width as written is left")
+  case .none
+    panic("the width written has fallen away")
+  // No width appears on a column with nothing set.
+  if _v: = table.size_of(Axis.column, 1)
+    panic("a width has grown on a column with nothing written")
+  verdict.pass("a column's width is left with its row, columns with nothing written and all.")
+
+fn test_the_bands_survive_the_round_trip()
+  verdict
+    .start("[kspage/store] the page's header and footer being left over the round trip test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
+
+  assert(back.doc.header.inlines.get(0).text().equals("confidential"), "the header's text is left")
+  // The page mark is kept as text (page layout is what replaces it).
+  mark: = back.doc.footer.inlines.get(0).text()
+  assert(mark.equals("{page}/{pages}"), "the footer's mark stays a text too")
+  assert(back.doc.header.style.equals("header"), "the band's style name is left too")
+
+  // A band with no text is not written, but reads back as a shape that can be typed into.
+  plain: = base.round_trip(Doc.new(arena), sample_sheet(arena), arena)
+  assert(plain.doc.header.inlines.len == 1, "an empty band holds one text too")
+  assert(plain.doc.footer.inlines.get(0).text().len == 0, "an empty band comes back empty")
+  verdict
+    .pass("a band's text goes round the trip as the mark, and an empty band comes back ready to \
+      type into.")
+
+fn test_the_arrangement_survives_the_round_trip()
+  verdict.start("[kspage/store] the arrangement being left over the round trip test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
+
+  page: = flow.layout(back.doc, back.sheet, fixed.make(), 200.0, arena)
+  // The table's two cells sit side by side in one row.
+  $left: Sz = -1
+  for $i: Sz = 0; i < page.boxes.len; i += 1
+    if page.boxes.get(i).text.equals("a")
+      left = i
+  assert(left >= 0, "the table's cells are laid")
+  a: = page.boxes.get(left).rect
+  b: = page.boxes.get(left + 1).rect
+  assert(base.near(a.y, b.y), "they stand on the same row")
+  // The first column is set 40px wide; if lost, the contents' width (8px) would appear.
+  assert(base.near(b.x, 40.0),
+    "the second column starts right by the first column's width as written")
+  verdict.pass("the arrangement the style says is left in the text too.")
+
+fn test_every_way_of_collecting_survives_the_round_trip() //< each `Collect` reads back as saved
+  verdict.start("[kspage/store] every way of collecting being left over the round trip test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  ways: = Collect[6]::{ Collect.contents, Collect.notes, Collect.bars, Collect.lines,
+    Collect.source, Collect.imports }
+  sheet: = Sheet.new(base.root_font(), arena)
+  for way in ways
+    sheet.add(way.variant_name(), paint.inherit_all()).collect = way
+  back: = base.round_trip(Doc.new(arena), sheet, arena).sheet
+  for way in ways
+    name: = way.variant_name()
+    got: = back.find(name).unwrap_or(null)
+    assert(got != null, "the style is read back")
+    assert(got.collect.same_collect(way), "the way of collecting is read back as saved")
+  verdict.pass("every way of collecting comes back as it was saved, the window's two included.")
+
+fn test_a_formula_survives_the_round_trip() //<
+  //< Only the typed text is stored, nothing else
+  //<
+  //< With the value written in, an old value would be left behind after the formula changes.
+  verdict.start("[kspage/store] a formula being left over the round trip test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  before: = sample_doc(arena)
+  cell_was: = before.blocks.get(3).children.get(0).children.get(1).inlines.get(0)
+  cell_was.show_value("999", Option<|F64|>.some(999.0), arena)
+  back: = base.round_trip(before, sample_sheet(arena), arena)
+
+  table: = back.doc.blocks.get(3)
+  cell: = table.children.get(0).children.get(1).inlines.get(0)
+  assert(cell.text().equals("=A1&1"), "the text typed (the formula) is left")
+  assert(!cell.shows_value(), "the value worked out does not go in")
+  verdict.pass("what goes into what is saved is the text typed and nothing else.")
+
+fn test_an_empty_document_round_trips()
+  verdict.start("[kspage/store] an empty document going round the trip test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = Sheet.new(base.root_font(), arena)
+  back: = base.round_trip(d, sheet, arena)
+  assert(back.doc.blocks.len == 0, "there is no block")
+  assert(back.sheet.styles.len == 0, "there is no style either")
+  assert(base.near(back.sheet.root.size_px, 16.0), "the place the inheritance sets off from is left")
+  verdict.pass("an empty document goes round the trip without crashing.")
+
+fn test_broken_text_is_rejected()
+  verdict.start("[kspage/store] a broken text being refused test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  store.load("{ this is not JSON", arena) catch e
+    switch e case .broken {} case .unknown_version, .out_of_range
+      panic("a broken text is to be refused as broken")
+    verdict.pass("a text that cannot be solved as JSON is not read.")
+    return
+  panic("a broken text must not be readable")
+
+fn test_an_unknown_version_is_rejected()
+  verdict.start("[kspage/store] a version it does not know being refused test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  // Valid JSON is still not read where the version differs.
+  store.load("{\"kspage\":99,\"sheet\":{},\"blocks\":[]}", arena) catch e
+    switch e case .unknown_version {} case .broken, .out_of_range
+      panic("a version that differs is to be refused as unknown_version")
+    verdict.pass("a text of a version it does not know is not even read in part.")
+    return
+  panic("a version it does not know must not be readable")
+
+fn test_only_the_one_name_opens() //< only the one version field opens a text
+  //<
+  //< The version field's name is the product's own, so a document saved under an earlier name does
+  //< not open. **A different version number is a separate test** (above).
+  verdict.start("[kspage/store] only the one version field opening a text test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  named: =
+    "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"body\",\"runs\":[{\"text\":\"a\"}]}]}"
+  got: = store.load(named, arena) catch _e
+    panic("a text naming the version field is to be readable")
+  assert(got.doc.blocks.len == 1, "the contents are read too")
+  $out: = Str_builder.new()
+  defer out.free()
+  store.save(got.doc, got.sheet, out@)
+  assert(out.slice().find_str("\"kspage\"") >= 0, "what is written back carries the version field")
+  // **A version under another field name is refused**, not opened as version 0.
+  store.load("{\"kswrite\":6,\"sheet\":{},\"blocks\":[]}", arena) catch e
+    switch e case .unknown_version {} case .broken, .out_of_range
+      panic("a version under another field name is to be refused as unknown_version")
+    verdict.pass("the one version field reads, and a version under another name is refused.")
+    return
+  panic("a version under another field name must not be readable")
+
+fn test_a_number_out_of_range_is_rejected() //<
+  //< A text with a number outside the range is refused
+  //<
+  //< **It is about how many times loops run.** A merge's column count, a column count and a
+  //< heading's depth each decide how much work there is, so a ten-byte text with 2 billion loops
+  //< until the layout exhausts memory (`Block.tiles_of` creates that many covering columns).
+  verdict.start("[kspage/store] a number outside the range being refused test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  refused(arena,
+    "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"table\",\"children\":[{\"style\":\"line\",\"children\":[{\"style\":\"cell\",\"span_cols\":2000000000}]}]}]}",
+    "a merge of too many columns")
+  refused(arena,
+    "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"cell\",\"span_rows\":100000}]}",
+    "a merge of too many rows")
+  // **A merge of 0 is refused too** (the layout could not count the columns to skip).
+  refused(arena, "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"cell\",\"span_cols\":0}]}",
+    "a merge of 0")
+  refused(arena,
+    "{\"kspage\":6,\"sheet\":{\"styles\":[{\"name\":\"cols\",\"columns\":900000}]},\"blocks\":[]}",
+    "too many columns")
+  refused(arena,
+    "{\"kspage\":6,\"sheet\":{\"styles\":[{\"name\":\"head\",\"outline\":40}]},\"blocks\":[]}",
+    "a heading too deep")
+  refused(arena,
+    "{\"kspage\":6,\"sheet\":{\"styles\":[{\"name\":\"num\",\"places\":99}]},\"blocks\":[]}",
+    "a decimal place too deep")
+  // **Converted to `Sz` first, a negative number becomes the largest there is**; refuse it before.
+  refused(arena, "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"cell\",\"span_cols\":-1}]}",
+    "a merge that goes negative")
+  // Inside the range it reads as before.
+  got: =
+    store.load("{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"cell\",\"span_cols\":3,\"span_rows\":2}]}",
+    arena) catch _e
+    panic("a merge inside the range is to be readable")
+  assert(got.doc.blocks.get(0).span_cols == 3, "columns inside the range are read as they stand")
+  assert(got.doc.blocks.get(0).span_rows == 2, "rows inside the range are read as they stand")
+  verdict.pass("a number outside the range is refused rather than rounded.")
+
+priv fn refused(arena: Arena$@, text: U8[], what: U8[]) //<
+  //< Checks that it refused, and refused with `out_of_range`
+  store.load(text, arena) catch e
+    switch e case .out_of_range {} case .broken, .unknown_version
+      io.out().s("the refusal differs: ").s(what).s("\n")
+      panic("a number outside the range is to be refused as out_of_range")
+    return
+  io.out().s("it was read after all: ").s(what).s("\n")
+  panic("a number outside the range must not be readable")
+fn test_a_link_survives_the_round_trip() //< a link's target survives the round trip too
+  //<
+  //< **Lost, the link would disappear every time it is opened.**
+  verdict.start("[kspage/store] a link's destination being left over the round trip test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
+
+  // The body is `ordinary characters and ` and `slanted characters`; the second is the link.
+  body: = back.doc.blocks.get(1)
+  assert(body.inlines.get(1).href.equals("https://example.com/"), "the destination is left")
+  assert(body.inlines.get(0).href.len == 0, "no destination grows on a run that has none")
+  verdict.pass("a link's destination does not change over the round trip.")
+fn test_a_picture_survives_the_round_trip() //< a picture's source and size survive too
+  //<
+  //< **Lost, the picture would disappear or get no space reserved.**
+  verdict.start("[kspage/store] a picture being left over the round trip test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
+
+  $shot: doc.Block$@ = null
+  for $i: Sz = 0; i < back.doc.blocks.len; i += 1
+    blk: = back.doc.blocks.get(i)
+    if blk.image.len > 0
+      shot = blk
+  assert(shot != null, "the picture's block comes back")
+  assert(shot.image.equals("picture.png"), "the source is left")
+  assert(base.near(shot.image_w, 80.0) && base.near(shot.image_h, 40.0), "the size is left too")
+  // No picture appears on a block that has none.
+  assert(back.doc.blocks.get(0).image.len == 0, "a block with no picture is left as it was")
+  verdict.pass("a picture goes round the trip with its source and its size.")
+fn test_the_outline_survives_the_round_trip() //<
+  //< The heading's depth and the contents setting survive the round trip too
+  //<
+  //< **Lost, the table of contents would come up empty.**
+  verdict.start("[kspage/store] the heading and the contents mark going round the trip test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
+
+  head: = back.sheet.find("h1").unwrap_or(null)
+  assert(head != null && head.outline == 1, "the heading's depth is left")
+  assert(head.collect.same_collect(Collect.none), "a heading is no table of contents")
+  toc: = back.sheet.find("toc").unwrap_or(null)
+  gathers: = toc != null && toc.collect.same_collect(Collect.contents)
+  assert(gathers, "the contents mark is left")
+  assert(toc.outline == 0, "a table of contents is no heading")
+  assert(head.next.equals("body"), "the style named as what follows is left")
+  // **A style that names none writes nothing**, so it comes back naming none, not itself.
+  assert(toc.next.len == 0, "a style that names none carries none back")
+  verdict.pass("the heading's depth, the contents mark and what follows all go round the trip.")
+fn test_the_saved_text_reads_as_a_diff() //<
+  //< The saved text is split into lines, so two versions one word apart differ by one line too
+  //<
+  //< **Not packed onto one line**: there, one changed word is the whole document to git's diff, its
+  //< merge and `grep`. **The indent width is not copied** — only whether it splits into lines and
+  //< how many differ.
+  verdict.start("[kspage/store] the text saved reading as a diff test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  sheet: = sample_sheet(arena)
+  $was: = Str_builder.new()
+  defer was.free()
+  store.save(worded(arena, "the first text"), sheet, was@)
+  $now: = Str_builder.new()
+  defer now.free()
+  store.save(worded(arena, "the later text"), sheet, now@)
+
+  assert(lines_in(was.slice()) > 1, "the text is parted into rows")
+  assert(lines_in(now.slice()) == lines_in(was.slice()), "the count of rows does not change")
+  assert(unlike_lines(was.slice(), now.slice()) == 1, "a difference of one word is one row")
+  msg: = arena.text()
+    .s("a difference of one word is one row, and does not become the whole document (rows \
+      \{lines_in(was.slice())\} / rows that differ ")
+    .s("\{unlike_lines(was.slice(), now.slice())\})").take()
+  verdict.pass(msg)
+
+priv fn worded(arena: Arena$@, word: U8[]): Doc$@ //<
+  //< A small document, for making two versions one word apart
+  d: = Doc.new(arena)
+  d.add_block("h1").add_text("title")
+  p: = d.add_block("body")
+  p.add_text(word)
+  p.add_text("the text behind")
+  return d
+
+priv fn lines_in(text: U8[]): Sz //< the number of lines in a text
+  $n: Sz = 1
+  for $i: Sz = 0; i < text.len; i += 1
+    if (text.ptr + i)$ == 0x0aU8
+      n += 1
+  return n
+
+priv fn unlike_lines(a: U8[], b: U8[]): Sz //<
+  //< Over two texts with the same line count, how many lines differ
+  $n: Sz = 0
+  $ai: Sz = 0
+  $bi: Sz = 0
+  for ai < a.len || bi < b.len
+    a_end: = line_end(a, ai)
+    b_end: = line_end(b, bi)
+    if !a.sub(ai, a_end - ai).equals(b.sub(bi, b_end - bi))
+      n += 1
+    ai = a_end + 1
+    bi = b_end + 1
+  return n
+
+priv fn line_end(text: U8[], at: Sz): Sz //<
+  //< The end of the line starting at `at` (the newline's position, or the text's end)
+  $i: Sz = at
+  for i < text.len && (text.ptr + i)$ != 0x0aU8
+    i += 1
+  return i
+
+fn test_a_note_survives_the_round_trip() //< a note's text survives the round trip too
+  //<
+  //< **The number is not stored** (it is counted where notes are listed).
+  verdict.start("[kspage/store] a note being left over the round trip test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  $sb: = Str_builder.new()
+  defer sb.free()
+  store.save(sample_doc(arena), sample_sheet(arena), sb@)
+  written: = sb.slice()
+  // **The text's packing is not copied** (`spacing` in `share/store.kspls`): only that the key and
+  // the value are there. The round trip below checks that the value comes back right.
+  assert(written.find_str("\"note\"") >= 0 && written.find_str("\"the note's text\"") >= 0,
+    "the note's text is written out")
+  // The number is not written; written, one added note would leave every number after it stale.
+  assert(written.find_str("\"note_number\"") < 0, "the number is not written out")
+
+  back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
+  body: = back.doc.blocks.get(1)
+  assert(body.inlines.get(1).note.equals("the note's text"), "the note is left")
+  assert(body.inlines.get(0).note.len == 0, "no note grows on a run that has none")
+  verdict.pass("a note's text goes round the trip, and the number does not go into the text.")

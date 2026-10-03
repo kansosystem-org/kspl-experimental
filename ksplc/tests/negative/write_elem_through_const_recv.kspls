@@ -1,0 +1,18 @@
+//< A method with a read-only receiver cannot write an element of an array field
+//<
+//< `U8[4]`'s step holds the elements' mutability, but **the road reaching it** crosses `r: Self@`,
+//< so the index goes through enforce_mutability. Without it the C backend rejects it only by the
+//< generated C's const (the diagnostic points at the artifact) and the LLVM backend writes 99.
+// EXPECT: cannot write through a read-only pointer
+
+struct Holder
+  buf: U8[4]
+
+impl Holder
+  fn ro_write(r: Self@): U8
+    r.buf[0] = 99
+    return r.buf[0]
+
+fn main(): I32
+  $h: Holder = ::{ .buf = ::{ 1, 2, 3, 4 } }
+  return I32::h.ro_write()

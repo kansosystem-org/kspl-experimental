@@ -1,0 +1,26 @@
+//< A local or a parameter with an imported module's name hides it for the rest of its scope
+//<
+//< KSPL reaches a module's member and a value's with the same `.`, so below the local an `io.out()`
+//< reads the local and fails as a missing member, far from the cause. Quiet: a name no import binds
+//< (`std/mem` as `{ Arena }` binds `Arena` alone), the prelude's `lang`, and a name led by `_`.
+// EXPECT: local_hides_module.kspls:15:15: warning: [W0505] 'json' hides the imported module
+// EXPECT: local_hides_module.kspls:25:3: warning: [W0505] 'io' hides the imported module
+// EXPECT-NOT: 'mem' hides
+// EXPECT-NOT: 'lang' hides
+// EXPECT-NOT: '_io' hides
+import "std/io"
+import "std/json"
+import "std/mem" { Arena }
+
+priv fn shown(json: I32): I32 //< a parameter named as a module
+  return json + 1
+
+pub fn main(): I32
+  arena: = Arena.new(1024)
+  defer arena.free()
+  io.out().s(json.Val.null_val.as_str())
+  mem: = 3
+  lang: = 4
+  _io: = 5
+  io: = shown(mem + lang + _io)
+  return io

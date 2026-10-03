@@ -1,0 +1,700 @@
+//< A lightweight regular-expression engine: compile a pattern, then match it against text
+//<
+//< A character matches itself; `\.` and `\*` write the ones that mean something else. **Going past
+//< any limit is refused, never silently truncated**: the group count, the counted repetition
+//< `{m,n}`, the nesting depth and the backtracking budget each have their own error, so
+//< catastrophic backtracking returns `too_complex` instead of never returning.
+
+// ==========================================
+// Caution: **Every notation must be either "carried" or "refused".** A notation in neither is
+// swallowed as a literal and silently gives an answer that differs from other implementations.
+// ==========================================
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" + { dealloc, Arena }
+import "std/regex_node" { max_groups, max_repeat_count, Slots, reset_slots, Rx_node, new_node,
+  new_group_node, new_class_node, new_repeat_step, drop_repeat_step, set_range, free_rx_node,
+  free_rx_alts }
+
+pub enum Regex_error //< why a pattern could not be compiled, or matched nothing
+  unmatched_paren //< an opening parenthesis has no closing one, or the other way round
+  unmatched_bracket //< a `[` has no `]`
+  dangling_quantifier //< nothing quantifiable comes before `*`, `+`, `?` or `{`
+  invalid_escape //< nothing follows `\`, or an escaped letter or digit is not in the list
+  invalid_range //< a range's ends are reversed, or a set such as `\d` is at a range's end
+  invalid_repeat //< `{` has no valid count, m > n, or the count exceeds `max_repeat_count`
+  no_match //< nothing in the text matched
+  too_deep //< the `(` nesting is too deep; guards against stack exhaustion at compile time
+  too_complex //< backtracking went over budget; guards against catastrophic backtracking
+  too_many_groups //< there are more capturing groups than `max_groups`
+  unsupported_backreference //< `\1`…`\9`, which refer to a captured string inside the pattern
+
+priv const max_nesting_depth: Sz = 500 //<
+  //< The deepest group nesting compile() accepts
+  //<
+  //< compile() walks group nesting recursively (parse_atom -> parse_alts -> parse_seq ->
+  //< parse_atom_quant -> parse_atom). The limit exists for the same reason as json.kspls's
+  //< max_nesting_depth (stack exhaustion).
+priv const max_match_steps: Sz = 2000000 //<
+  //< The most match attempts one whole find() makes
+  //<
+  //< Plain backtracking can take exponential time with some quantifier combinations (ReDoS). Past
+  //< this limit, find() fails instead of hanging.
+priv const max_match_depth: Sz = 3000 //<
+  //< The deepest recursion of match_seq in one find()
+  //<
+  //< max_match_steps counts only the attempts of the whole find(); the depth of match_seq's native
+  //< recursion (stack frames) is separate. A flat pattern (not in parentheses) recurses one level
+  //< per character, so a very long one can exhaust the stack long before max_match_steps.
+
+priv fn is_word_byte(c: U8): Bool //< whether the byte is a word character (`\w` and `\b`)
+  //<
+  //< A letter, a digit or `_` (`is_alnum` counts `_`).
+  return c.is_alnum()
+
+priv fn is_word_edge(text: U8[], ti: Sz): Bool //< whether position ti is a word boundary
+  //<
+  //< **It has no width.** Positions outside either end count as "not a word character".
+  before: = ti > 0 && is_word_byte((text.ptr + ti - 1)$)
+  after: = ti < text.len && is_word_byte((text.ptr + ti)$)
+  return before != after
+
+priv fn is_class_escape(c: U8): Bool //<
+  //< Whether it is `\d` / `\w` / `\s` or one of their negated forms
+  return c == 'd' || c == 'D' || c == 'w' || c == 'W' || c == 's' || c == 'S'
+
+priv fn class_from_escape(c: U8): Rx_node$@ //<
+  //< Expands `\d`/`\w`/`\s` and their negated forms into a character class
+  n: = new_class_node()
+  $lower: = c
+  n.neg = c == 'D' || c == 'W' || c == 'S'
+  if n.neg
+    lower = c + ('a' - 'A')
+  // **From the same predicates the matcher uses**, so `\w` and `\b` cannot disagree.
+  for i in Range.asc(256)
+    b: = U8::i
+    n.set[i] =
+      (b.is_digit() if lower == 'd' else is_word_byte(b) if lower == 'w' else b.is_space())
+  return n
+
+priv fn add_class_escape(n: Rx_node$@, c: U8) //<
+  //< Adds a `\d` or similar inside `[...]` to the class being built
+  //<
+  //< **A negated form adds the complement**; it does not negate the whole class. Touching `n.neg`
+  //< would invert `[^\D]`.
+  sub: = class_from_escape(c)
+  for i in Range.asc(256)
+    if sub.set[i] != sub.neg
+      n.set[i] = true
+  free_rx_node(sub)
+
+// ==================== Compiling (a pattern string -> an Rx_node tree) ====================
+priv struct Compiler //<
+  //< The state of one compile() call while it reads the pattern
+  //<
+  //< Caution: **Do not throw partway through the parse.** An error goes into err, and the tree is
+  //< always returned complete; a throw partway would leak the nodes allocated so far. Freeing
+  //< happens in one place, compile().
+  pat: U8[]
+  pos: Sz
+  depth: Sz
+  err: Option<|Regex_error|>
+  groups: Sz //<
+    //< The number of capturing groups assigned so far.
+    //<
+    //< Caution: **Number groups in the order their opening parentheses are read**, as other
+    //< implementations do; in closing order, nested numbers swap.
+
+priv fn quantify_group(g: Rx_node$@, min_count: I32, max_count: I32, lazy: Bool): Rx_node$@ //<
+  //< Attaches a quantifier to a group
+  //<
+  //< **`?` is not a repetition**: an empty alternative expresses it (`{0,1}` gives the same tree).
+  //< An empty alternative placed after gives the longest match; placed before, the shortest.
+  if min_count == 0 && max_count == 1
+    // Caution: **Do not add the empty alternative to the group itself.** Then `(ab)?c` matching `c`
+    // would fill the group with an empty string, where other implementations answer "it did not
+    // take part"; so it is wrapped **from outside** in a non-capturing group.
+    $inner: = List<|Rx_node$@|>.new()
+    inner.push(g)
+    $alts: = List<|List<|Rx_node$@|>|>.new()
+    if lazy
+      alts.push(List<|Rx_node$@|>.new())
+      alts.push(inner)
+    else
+      alts.push(inner)
+      alts.push(List<|Rx_node$@|>.new())
+    return new_group_node(alts, -1)
+  n: = new_node(.group_repeat)
+  n.sub = g
+  n.lazy = lazy
+  n.min_count = min_count
+  n.max_count = max_count
+  return n
+
+impl Compiler
+  fn fail(r: Self$@, e: Regex_error) //< remembers only the first error found
+    //<
+    //< Later errors follow from the first one.
+    switch r.err case .none
+      r.err = Option<|Regex_error|>.some(e)
+    default {}
+
+  fn failed(r: Self$@): Bool //<
+    //< Once an error is found, every loop checks this and stops at once
+    //<
+    //< Otherwise a loop spins at a position that does not advance, or recurses past the limit.
+    return r.err.is_some()
+
+  fn peek(r: Self$@): U8
+    return 0 if r.pos >= r.pat.len else (r.pat.ptr + r.pos)$
+
+  fn advance(r: Self$@): U8
+    c: = r.peek()
+    r.pos += 1
+    return c
+
+  fn escaped_char(r: Self$@): U8 //< reads the one character after `\` as a plain character
+    //<
+    //< Caution: **Refuse a letter or digit that is not in the list.** Swallowed as a literal, it
+    //< silently fails to match (see the caution at the top of this file). A symbol is itself: `\.`,
+    //< `\*` and `\[` must not be refused.
+    e: = r.advance()
+    if e == 't'
+      return 9U8
+    if e == 'n'
+      return 10U8
+    if e == 'r'
+      return 13U8
+    if e.is_alnum()
+      r.fail(.invalid_escape)
+      return 0U8
+    return e
+
+  fn parse_class(r: Self$@): Rx_node$@ //<
+    //< Parses the contents of `[...]` and returns one character-class node
+    n: = new_class_node()
+    if r.peek() == '^'
+      n.neg = true
+      r.advance()
+    $first: = true
+    for r.peek() != ']' || first
+      if r.pos >= r.pat.len
+        r.fail(.unmatched_bracket)
+        return n
+      first = false
+      $lo: = r.advance()
+      if lo == '\\'
+        // **A `\d` is a set inside a class too**; otherwise `[\d]` silently matches the letter `d`.
+        if is_class_escape(r.peek())
+          add_class_escape(n, r.advance())
+          // A `-` next to a set (`[\d-z]`) is neither a range nor clearly a literal (other
+          // implementations disagree), so it is refused.
+          if r.peek() == '-' && r.pos + 1 < r.pat.len && (r.pat.ptr + r.pos + 1)$ != ']'
+            r.fail(.invalid_range)
+            return n
+          continue
+        lo = r.escaped_char()
+      if r.peek() == '-' && r.pos + 1 < r.pat.len && (r.pat.ptr + r.pos + 1)$ != ']'
+        r.advance() // consume the '-'
+        $hi: = r.advance()
+        if hi == '\\'
+          // Caution: **Resolve the escape at the upper end too.** Otherwise the upper end of
+          // `[a-\z]` is `\` (0x5C), which is below 'a', and the range is empty.
+          if is_class_escape(r.peek())
+            // A set cannot be a range's end (`[a-\d]` means nothing).
+            r.fail(.invalid_range)
+            return n
+          hi = r.escaped_char()
+        // Caution: **Refuse a reversed range.** If allowed, it becomes a class that matches
+        // nothing, with no error.
+        if hi < lo
+          r.fail(.invalid_range)
+          return n
+        set_range(n, lo, hi)
+      else
+        n.set[lo] = true
+    r.advance() // consume the ']'
+    return n
+
+  fn parse_atom(r: Self$@): Rx_node$@ //<
+    //< Parses one atom, without its quantifier
+    //<
+    //< An atom is a literal, `.`, a class, an escape, a group or an anchor.
+    c: = r.advance()
+    // Caution: **Do not swallow a quantifier's symbol (or `{`) as a literal.** `*a` and `a**` would
+    // silently pass as **a different pattern** where others refuse with "nothing to repeat". A
+    // literal is written `\*` or `[*]`.
+    if c == '*' || c == '+' || c == '?' || c == '{'
+      r.fail(.dangling_quantifier)
+      return new_node(.lit)
+    if c == '.'
+      return new_node(.any)
+    if c == '^'
+      return new_node(.start_anchor)
+    if c == '$'
+      return new_node(.end_anchor)
+    if c == '['
+      return r.parse_class()
+    if c == '\\'
+      // Caution: **Do not accept a pattern that ends with nothing to escape.** `a\` would become a
+      // literal 0, a pattern that matches nothing, with no error.
+      if r.pos >= r.pat.len
+        r.fail(.invalid_escape)
+        return new_node(.lit)
+      e: = r.advance()
+      if is_class_escape(e)
+        return class_from_escape(e)
+      // Caution: **Refuse a digit after `\`.** Elsewhere it means a backreference (`\1`) or an
+      // octal escape (`\0`), and this engine supports neither; read a capture with Match.group.
+      if e >= '0' && e <= '9'
+        r.fail(.unsupported_backreference)
+        return new_node(.lit)
+      // A word boundary. **It has no width**, so no quantifier attaches (parse_atom_quant refuses
+      // `\b*` for the same reason as an anchor).
+      if e == 'b'
+        return new_node(.word_boundary)
+      if e == 'B'
+        return new_node(.not_word_boundary)
+      r.pos -= 1 // escaped_char advances one character itself
+      n: = new_node(.lit)
+      n.ch = r.escaped_char()
+      return n
+    if c == '('
+      r.depth += 1
+      if r.depth > max_nesting_depth
+        // Caution: Stop recursing here; only recording the excess still exhausts the stack.
+        r.fail(.too_deep)
+        r.depth -= 1
+        return new_group_node(List<|List<|Rx_node$@|>|>.new(), -1)
+      // `(?:…)` is a non-capturing group.
+      // Caution: **Check for it before assigning a number.** Assigning and then discarding shifts
+      // later groups by one (`(?:a)(b)`'s `b` becomes number 2).
+      $gidx: I32 = -1
+      if r.peek() == '?' && r.pos + 1 < r.pat.len && (r.pat.ptr + r.pos + 1)$ == ':'
+        r.advance()
+        r.advance()
+      else if r.groups >= max_groups
+        r.fail(.too_many_groups)
+      else
+        gidx = I32::r.groups
+        r.groups += 1
+      alts: = r.parse_alts()
+      if r.peek() != ')'
+        r.fail(.unmatched_paren)
+      else
+        r.advance()
+      r.depth -= 1
+      return new_group_node(alts, gidx)
+    n: = new_node(.lit)
+    n.ch = c
+    return n
+
+  fn parse_atom_quant(r: Self$@): Rx_node$@ //<
+    //< Parses one atom plus the quantifier right after it (*+?)
+    atom: = r.parse_atom()
+    q: = r.peek()
+    if q != '*' && q != '+' && q != '?' && q != '{'
+      return atom
+    if atom.kind != .group && atom.kind != .lit && atom.kind != .any && atom.kind != .class
+      r.fail(.dangling_quantifier)
+      return atom
+    // The four notations become one pair of minimum and maximum counts (`-1` means no upper bound).
+    // Caution: **Do not treat `*`, `+` and `?` apart from `{m,n}`**: once `a{0,}` and `a*` become
+    // different trees, a difference in results can split across two paths.
+    r.advance()
+    $min_count: I32 = 0
+    $max_count: I32 = -1
+    if q == '+'
+      min_count = 1
+    else if q == '?'
+      max_count = 1
+    else if q == '{'
+      if !r.parse_repeat_bounds(min_count@, max_count@)
+        return atom
+    // A `?` right after a quantifier asks for the shortest match.
+    // Caution: **Do not swallow it as a literal** (`a.*?b` would match nowhere). parse_atom refuses
+    // `a*??` on the next round.
+    $lazy: = false
+    if r.peek() == '?'
+      r.advance()
+      lazy = true
+    if atom.kind == .group
+      return quantify_group(atom, min_count, max_count, lazy)
+    n: = new_node(.repeat)
+    n.sub = atom
+    n.min_count = min_count
+    n.max_count = max_count
+    n.lazy = lazy
+    return n
+
+  fn parse_repeat_bounds(r: Self$@, min_out: I32$@, max_out: I32$@): Bool //<
+    //< Reads the count after `{` (`{n}`, `{n,}`, `{n,m}`; the `{` is already read)
+    //<
+    //< false if the count is malformed; invalid_repeat is recorded.
+    //< Caution: **Do not swallow a malformed `{` as a character.** `a{3` would silently match only
+    //< the three characters `a{3` (see the caution at the top of this file).
+    $lo: I32 = 0
+    if !r.parse_repeat_number(lo@)
+      r.fail(.invalid_repeat)
+      return false
+    $hi: I32 = lo
+    if r.peek() == ','
+      r.advance()
+      hi = -1
+      if r.peek() != '}' && !r.parse_repeat_number(hi@)
+        r.fail(.invalid_repeat)
+        return false
+    if r.peek() != '}' || (hi >= 0 && hi < lo)
+      r.fail(.invalid_repeat)
+      return false
+    r.advance() // '}'
+    min_out$ = lo
+    max_out$ = hi
+    return true
+
+  fn parse_repeat_number(r: Self$@, out: I32$@): Bool //< reads one decimal count
+    //<
+    //< false when there is no digit, or the count exceeds max_repeat_count.
+    $v: Sz = 0
+    $digits: Sz = 0
+    for r.peek().is_digit()
+      v = v * 10 + Sz::(r.advance() - '0')
+      digits += 1
+      if v > max_repeat_count
+        return false
+    out$ = I32::v
+    return digits > 0
+
+  fn parse_seq(r: Self$@): List<|Rx_node$@|> //<
+    //< Parses one alternative's run of atoms, up to `|` or `)`
+    $seq: = List<|Rx_node$@|>.new()
+    for !r.failed() && r.pos < r.pat.len && r.peek() != '|' && r.peek() != ')'
+      seq.push(r.parse_atom_quant())
+    return seq
+
+  fn parse_alts(r: Self$@): List<|List<|Rx_node$@|>|> //<
+    //< Parses the list of alternatives separated by `|` (a group's contents, or the whole pattern)
+    $alts: = List<|List<|Rx_node$@|>|>.new()
+    alts.push(r.parse_seq())
+    for !r.failed() && r.peek() == '|'
+      r.advance()
+      alts.push(r.parse_seq())
+    return alts
+
+// ==================== Matching (by backtracking) ====================
+fn atom_matches(atom: Rx_node$@, c: U8): Bool
+  switch atom.kind case .lit
+    return c == atom.ch
+  case .any
+    return c != '\n'
+  case .class
+    hit: = atom.set[c]
+    return !hit if atom.neg else hit
+  default
+    return false // not reached (a quantifier attaches only to lit/any/class)
+
+// Consumes the atom at least min_count times (at most max_count), then backtracks.
+//
+// **The order in which counts are tried is all that separates longest from shortest match**:
+// longest counts down from the maximum, shortest counts up from min_count. This changes **which
+// match is found first** (`a.*?b` gives `axxb` from `axxbyyb`; `a.*b` gives the whole).
+fn match_repeat(atom: Rx_node$@, min_count: Sz, max_count: I32, lazy: Bool,
+  seq: List<|Rx_node$@|>$@, idx: Sz, text: U8[], ti: Sz, out_end: Sz$@, steps: Sz$@, depth: Sz,
+  caps: Slots$@): Bool
+  // The furthest position it can reach, within any upper bound.
+  $max_j: = ti
+  for max_j < text.len && (max_count < 0 || max_j - ti < Sz::max_count) &&
+    atom_matches(atom, (text.ptr + max_j)$)
+    max_j += 1
+  if max_j - ti < min_count
+    return false
+  if lazy
+    for $j: = ti + min_count; j <= max_j; j += 1
+      if match_seq(seq, idx + 1, text, j, out_end, steps, depth + 1, caps)
+        return true
+      if steps$ > max_match_steps
+        return false
+    return false
+  $j: = max_j
+  for j >= ti + min_count
+    if match_seq(seq, idx + 1, text, j, out_end, steps, depth + 1, caps)
+      return true
+    if steps$ > max_match_steps
+      return false
+    if j == ti
+      break
+    j -= 1
+  return false
+
+fn match_group(node: Rx_node$@, outer_seq: List<|Rx_node$@|>$@, outer_idx: Sz, text: U8[], ti: Sz,
+  out_end: Sz$@, steps: Sz$@, depth: Sz, caps: Slots$@): Bool //<
+    //< Tries each of a group's alternatives
+    //<
+    //< Appending "the rest of the outer seq" to a temporary copy of the alternative expresses the
+    //< continuation without a closure.
+  for i in Range.asc(node.alts.len)
+    $alt: = node.alts.get(i)
+    // Caution: **Save the whole capture state before trying an alternative.** Otherwise a group
+    // from a failed alternative stays filled (`(a)(b)|c` matching `c` with group 1 set). The copy
+    // is cheap (9 pairs of positions).
+    saved: Slots = caps$
+    if node.gidx >= 0
+      caps.start[node.gidx] = ti
+    $combined: = List<|Rx_node$@|>.new()
+    for k in Range.asc(alt.len)
+      combined.push(alt.get(k))
+    // The group's end mark goes at the join. **Without it, the end cannot be seen** in the
+    // appended list.
+    if node.end_marker != null
+      combined.push(node.end_marker)
+    for $k: = outer_idx + 1; k < outer_seq.len; k += 1
+      combined.push(outer_seq.get(k))
+    ok: = match_seq(combined@, 0, text, ti, out_end, steps, depth + 1, caps)
+    combined.free()
+    if ok
+      return true
+    caps$ = saved
+    if steps$ > max_match_steps
+      return false
+  return false
+
+// Matching `(…)*` / `(…)+` / `(…){m,n}`.
+// **Append "this round's continuation" after one round's body.** The flat list cannot hold a
+// count, so a temporary copy holds **the position where that round started**, and a round that did
+// not advance is stopped there.
+// Caution: **Do not copy the shared tree.** Both the copy (`new_repeat_step`) and the freeing
+// (`drop_repeat_step`) are shallow.
+fn match_group_repeat(node: Rx_node$@, outer_seq: List<|Rx_node$@|>$@, outer_idx: Sz, text: U8[],
+  ti: Sz, out_end: Sz$@, steps: Sz$@, depth: Sz, caps: Slots$@): Bool
+  // A round that did not advance has been reached.
+  // Caution: **Stop only the repetition; do not undo that round.** Undoing would make `(a?)*b`'s
+  // group "did not take part" where others answer an empty match.
+  if node.pos_mark >= 0 && ti == node.pos_mark
+    return match_seq(outer_seq, outer_idx + 1, text, ti, out_end, steps, depth + 1, caps)
+  // The maximum count is reached; go on to the continuation.
+  if node.max_count == 0
+    return match_seq(outer_seq, outer_idx + 1, text, ti, out_end, steps, depth + 1, caps)
+  can_stop: = node.min_count == 0
+  // Shortest match tries "do not loop again" first, once the minimum is met.
+  if node.lazy && can_stop &&
+    match_seq(outer_seq, outer_idx + 1, text, ti, out_end, steps, depth + 1, caps)
+    return true
+  g: = node.sub
+  next: = new_repeat_step(node, ti)
+  for i in Range.asc(g.alts.len)
+    $alt: = g.alts.get(i)
+    saved: Slots = caps$
+    if g.gidx >= 0
+      caps.start[g.gidx] = ti
+    $combined: = List<|Rx_node$@|>.new()
+    for k in Range.asc(alt.len)
+      combined.push(alt.get(k))
+    if g.end_marker != null
+      combined.push(g.end_marker)
+    combined.push(next)
+    for $k: = outer_idx + 1; k < outer_seq.len; k += 1
+      combined.push(outer_seq.get(k))
+    ok: = match_seq(combined@, 0, text, ti, out_end, steps, depth + 1, caps)
+    combined.free()
+    if ok
+      drop_repeat_step(next)
+      return true
+    caps$ = saved
+    if steps$ > max_match_steps
+      drop_repeat_step(next)
+      return false
+  drop_repeat_step(next)
+  // Longest match tries "do not loop again" last.
+  if !node.lazy && can_stop
+    return match_seq(outer_seq, outer_idx + 1, text, ti, out_end, steps, depth + 1, caps)
+  return false
+
+fn match_seq(seq: List<|Rx_node$@|>$@, idx: Sz, text: U8[], ti: Sz, out_end: Sz$@, steps: Sz$@,
+  depth: Sz, caps: Slots$@): Bool //<
+    //< Matches seq from idx onward against text from ti
+    //<
+    //< steps is the attempt budget shared across one whole find(); past it, this returns false and
+    //< find() throws Regex_error.too_complex.
+  steps$ += 1
+  if steps$ > max_match_steps
+    return false
+  // Unlike max_match_steps, this cannot report too_complex, so a very deep recursion fails quietly
+  // as Regex_error.no_match.
+  if depth > max_match_depth
+    return false
+  if idx >= seq.len
+    out_end$ = ti
+    return true
+  node: = seq.get(idx)
+  switch node.kind case .lit, .any, .class
+    if ti < text.len && atom_matches(node, (text.ptr + ti)$)
+      return match_seq(seq, idx + 1, text, ti + 1, out_end, steps, depth + 1, caps)
+    return false
+  case .start_anchor
+    return ti == 0 && match_seq(seq, idx + 1, text, ti, out_end, steps, depth + 1, caps)
+  case .end_anchor
+    return ti == text.len &&
+      match_seq(seq, idx + 1, text, ti, out_end, steps, depth + 1, caps)
+  case .word_boundary, .not_word_boundary
+    want: = node.kind == .word_boundary
+    if is_word_edge(text, ti) != want
+      return false
+    return match_seq(seq, idx + 1, text, ti, out_end, steps, depth + 1, caps)
+  case .repeat
+    return match_repeat(node.sub, node.min_count, node.max_count, node.lazy, seq, idx, text, ti,
+      out_end, steps, depth + 1, caps)
+  case .group
+    return match_group(node, seq, idx, text, ti, out_end, steps, depth + 1, caps)
+  case .group_repeat
+    return match_group_repeat(node, seq, idx, text, ti, out_end, steps, depth + 1, caps)
+  case .group_end
+    // A group's end was reached.
+    // Caution: **Only write here.** Restoring after a later failure is done by match_group's saved
+    // copy; from here there is no way to tell which value is the original.
+    caps.end[node.gidx] = ti
+    return match_seq(seq, idx + 1, text, ti, out_end, steps, depth + 1, caps)
+
+// ==================== The public API ====================
+pub struct Match //< one matched span, and what its groups captured
+  pub start: Sz //< where the match begins in the text
+  pub end: Sz //< where it ends; the span is `[start, end)`
+  priv caps: Slots
+
+impl Match
+  pub fn group_count(r: Self): Sz //< how many capturing groups the pattern has
+    //<
+    //< **It is not the number that took part** (`(a)|b` matching `b` still has one).
+    return r.caps.count
+
+  pub fn has_group( //< whether that group took part; an empty match still counts
+    //<
+    //< Caution: **Do not confuse a group that did not take part with one that matched empty.**
+    //< For the first, `has_group` is false; for the second, it is true and `group` returns empty.
+    //< Group 0, the whole match, is not handled here (`start` / `end` hold it).
+    r: Self,
+    n: Sz, //< which group, counting from 1 in the order of the `(`
+  ): Bool
+    return n >= 1 && n <= r.caps.count && r.caps.start[n - 1] >= 0
+
+  pub fn group( //< what that group captured, or empty if it did not take part
+    //<
+    //< **The result is a view into text**, using the original text's indices.
+    r: Self,
+    n: Sz, //< which group, counting from 1 in the order of the `(`
+    text: U8[], //< the same text passed to `find`; any other text gives garbage
+  ): U8[]
+    if !r.has_group(n)
+      return ""
+    lo: = r.caps.start[n - 1]
+    hi: = r.caps.end[n - 1]
+    return ("" if lo < 0 || hi < lo || hi > text.len
+      else U8[]::{ .ptr = text.ptr + lo, .len = hi - lo })
+
+pub struct Regex //< one compiled pattern, matched against any number of texts
+  priv alts: List<|List<|Rx_node$@|>|>
+  priv groups: Sz //<
+    //< The number of capturing groups, **fixed at compile time**, not counted per find.
+  priv anchored: Bool //<
+    //< Whether every alternative starts with `^`, **fixed at compile time**.
+
+priv fn alts_all_anchored(alts: List<|List<|Rx_node$@|>|>$@): Bool //<
+  //< Whether every alternative starts with `^`
+  //<
+  //< Caution: **Make it false if even one does not start with it**; otherwise a match found by
+  //< moving the start is missed. A `^` inside a group (`(^a|^b)c`) gives false: it errs toward
+  //< skipping the optimization, which only costs speed.
+  if alts.len == 0
+    return false
+  for i in Range.asc(alts.len)
+    $alt: = alts.get(i)
+    if alt.len == 0 || alt.get(0).kind != .start_anchor
+      return false
+  return true
+
+impl Regex
+  pub fn compile( //< reads a pattern once, so it can be matched many times
+    //<
+    //< Caution: **On failure, free the tree before throwing.** The parse returns the whole tree
+    //< even on an error (Compiler's description says why); this is the only place it is freed.
+    pattern: U8[], //< the pattern's text
+  ): Regex$@?Regex_error
+    $c: = Compiler::{ .pat = pattern, .pos = 0, .depth = 0, .err = Option<|Regex_error|>.none,
+      .groups = 0 }
+    $alts: = c.parse_alts()
+    if c.pos < c.pat.len
+      // a ')' is left over == there was no matching '('
+      c.fail(.unmatched_paren)
+    if e: = c.err
+      free_rx_alts(alts@)
+      throw e
+    r: = mem.alloc_as<|Regex|>()
+    r.alts = alts
+    r.groups = c.groups
+    r.anchored = alts_all_anchored(alts@)
+    return r
+
+  priv fn find_from(r: Self$@, text: U8[], from: Sz): Match?Regex_error //<
+    //< Finds the first matched span in text, starting at `from`
+    //<
+    //< **The returned position counts from the start of text.**
+    $steps: Sz = 0
+    $caps: Slots = ::{}
+    for $start: Sz = from; start <= text.len; start += 1
+      $end: Sz = 0
+      for i in Range.asc(r.alts.len)
+        $alt: = r.alts.get(i)
+        // Caution: **Initialize per attempt.** Otherwise **a group from a failed attempt** leaks
+        // into the next start's match, unnoticed, since the match itself is still correct.
+        reset_slots(caps@, r.groups)
+        if match_seq(alt@, 0, text, start, end@, steps@, 0, caps@)
+          return Match::{ .start = start, .end = end, .caps = caps }
+        if steps >= max_match_steps
+          throw Regex_error.too_complex
+      // **A pattern starting with `^` cannot match by moving the start**; trying would waste a
+      // line's length of attempts per line scanned.
+      if r.anchored
+        break
+    throw Regex_error.no_match
+
+  pub fn find( //< the first matched span; fails when nothing matches
+    r: Self$@,
+    text: U8[], //< the text to search
+  ): Match?Regex_error
+    return r.find_from(text, 0)
+
+  pub fn find_all( //< every matched span; the search resumes past each one
+    //<
+    //< Front to back; **even an empty match advances one byte.** The budget (max_match_steps)
+    //< restarts per match. An element holds a whole `Slots`. Why it is eager, and how it differs
+    //< from Python's `findall`, is in "Every match is returned in a `List`. No lazy iterator is
+    //< made" in `std/docs/DESIGN.md`.
+    r: Self$@,
+    text: U8[], //< the text to search
+    arena: Arena$@, //< the arena for the list
+  ): List<|Match|>?Regex_error
+    $out: = List<|Match|>.new(arena)
+    $from: Sz = 0
+    for from <= text.len
+      m: = r.find_from(text, from) catch e
+        switch e case .no_match
+          break
+        default
+          out.free()
+          throw e
+      out.push(m)
+      from = m.end if m.end > m.start else m.start + 1
+    return out
+
+  pub fn is_match( //< whether anything in the text matches
+    r: Self$@,
+    text: U8[], //< the text to search
+  ): Bool
+    _m: = r.find(text) catch
+      return false
+    return true
+
+  pub fn free(r: Self$@) //< frees the compiled tree
+    free_rx_alts(r.alts@) // free the node tree and lists first, then the handle itself
+    dealloc(Void$@::r)
+
+impl Regex: Owned {} //< it owns its resources and frees them in `free()`.

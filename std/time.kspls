@@ -1,0 +1,193 @@
+//< The wall clock as a calendar date and time in UTC, written in the standard formats
+//<
+//< **Output goes straight into the caller's array, with no `Writer`**: importing `std/io` would
+//< make one formatted date pay for the whole string and IO modules. A date-time whose year does not
+//< fit the format's four digits fails with a `Time_error`.
+import "std/libc"
+
+pub enum Time_error //< why a time could not be written
+  //<
+  //< It does not say which field does not fit; the caller would act the same either way.
+  out_of_range //< a field is outside what the format can write (a year over 4 digits)
+
+pub struct Datetime //< one moment as a calendar date and time, in UTC
+  pub year: I32 //< the year as written, not counted from 1900
+  pub month: I32 //< 1-12
+  pub day: I32 //< 1-31
+  pub hour: I32 //< 0-23
+  pub minute: I32 //< 0-59
+  pub second: I32 //< 0-59
+  pub weekday: I32 //< 0=Sunday … 6=Saturday, computed from the date
+
+pub fn now(): I64 //< the seconds elapsed since 1970-01-01T00:00:00Z
+  return libc.time(null)
+
+priv fn floor_div(a: I64, b: I64): I64 //< floor division; floor_mod below gives the remainder
+  //<
+  //< Hinnant's algorithm needs floor rounding for negative values (before 1970); KSPL's `/` and `%`
+  //< round towards zero, like C's.
+  q: = a / b
+  r: = a % b
+  return q - 1 if (r != 0 && ((r < 0) != (b < 0))) else q
+
+priv fn floor_mod(a: I64, b: I64): I64
+  return a - floor_div(a, b) * b
+
+pub fn from_epoch( //< turns epoch seconds into a calendar date and time
+  epoch_secs: I64, //< the seconds since the epoch, which may be negative
+): Datetime //< the date and time in UTC
+  days: = floor_div(epoch_secs, 86400)
+  secs_of_day: = epoch_secs - days * 86400
+  hour: = secs_of_day / 3600
+  minute: = (secs_of_day % 3600) / 60
+  second: = secs_of_day % 60
+
+  // civil_from_days (Howard Hinnant, public domain).
+  // A year that starts on 1 March puts February at the end, so one expression for mp (the month
+  // index) covers the leap day.
+  z: = days + 719468
+  era: = floor_div(z, 146097)
+  doe: = z - era * 146097 // [0, 146096]
+  yoe: =
+    floor_div(doe - floor_div(doe, 1460) + floor_div(doe, 36524) - floor_div(doe, 146096), 365) // [0, 399]
+  $y: = yoe + era * 400
+  doy: = doe - (365 * yoe + floor_div(yoe, 4) - floor_div(yoe, 100)) // [0, 365]
+  mp: = floor_div(5 * doy + 2, 153) // [0, 11]
+  d: = doy - floor_div(153 * mp + 2, 5) + 1 // [1, 31]
+  m: = mp + (3 if mp < 10 else -9) // [1, 12]
+  y = y + (1 if m <= 2 else 0)
+
+  // 1970-01-01 is a Thursday (weekday=4). days counts the days since that date.
+  weekday: = floor_mod(days + 4, 7)
+
+  return Datetime::{
+    .year = I32::y,
+    .month = I32::m,
+    .day = I32::d,
+    .hour = I32::hour,
+    .minute = I32::minute,
+    .second = I32::second,
+    .weekday = I32::weekday,
+  }
+
+priv fn month_name(m: I32): U8[]
+  switch m case 1
+    return "Jan"
+  case 2
+    return "Feb"
+  case 3
+    return "Mar"
+  case 4
+    return "Apr"
+  case 5
+    return "May"
+  case 6
+    return "Jun"
+  case 7
+    return "Jul"
+  case 8
+    return "Aug"
+  case 9
+    return "Sep"
+  case 10
+    return "Oct"
+  case 11
+    return "Nov"
+  case 12
+    return "Dec"
+  default
+    return "???"
+
+priv fn weekday_name(w: I32): U8[]
+  switch w case 0
+    return "Sun"
+  case 1
+    return "Mon"
+  case 2
+    return "Tue"
+  case 3
+    return "Wed"
+  case 4
+    return "Thu"
+  case 5
+    return "Fri"
+  case 6
+    return "Sat"
+  default
+    return "???"
+
+pub const rfc1123_len: Sz = 29 //< the length of the RFC 1123 form, which is always the same
+  //<
+  //< The caller provides an array of this size.
+pub const iso8601_len: Sz = 20 //< the length of the ISO 8601 form, which is always the same
+
+priv fn check_fields(dt: Datetime): Void?Time_error //< checks that every field fits the format
+  //<
+  //< **A year out of range fails; it is not cut to its last 4 digits**: the year 10000 would read
+  //< back as 0000, and a negative year produces bytes that are not digits. ISO 8601's expanded
+  //< form `+10000` is not used, because the destination is a fixed-length array.
+  fits: =
+    dt.year >= 0 && dt.year <= 9999 && dt.month >= 1 && dt.month <= 12 && dt.day >= 1 &&
+    dt.day <= 31 && dt.hour >= 0 && dt.hour <= 23 && dt.minute >= 0 && dt.minute <= 59 &&
+    dt.second >= 0 && dt.second <= 59 && dt.weekday >= 0 && dt.weekday <= 6
+  if !fits
+    throw Time_error.out_of_range
+
+priv fn put_dec(out: U8$[], at: Sz, n: Sz, v: I32) //<
+  //< Writes v into out[at..at+n) in decimal, right-aligned and zero-padded
+  //<
+  //< Caution: v must be 0 or more and fit in n digits, which check_fields ensures; lost digits
+  //< would change the value silently.
+  $x: = v
+  for i in Range.desc(n)
+    out[at + i] = U8::(x % 10) + '0'
+    x = x / 10
+
+priv fn put_str(out: U8$[], at: Sz, t: U8[])
+  for i in Range.asc(t.len)
+    out[at + i] = t[i]
+
+pub fn write_rfc1123( //< writes the form HTTP uses, without allocating
+  //<
+  //< The form is `Tue, 15 Nov 1994 08:12:31 GMT`, as HTTP's `Date` header expects.
+  //< Caution: **Do not take a `Writer`** (the file header gives the reason).
+  dt: Datetime, //< the moment to write
+  out: U8$[], //< the destination; its first `rfc1123_len` bytes are written
+): Void?Time_error
+  assert(out.len >= rfc1123_len, "time.write_rfc1123: out is shorter than rfc1123_len")
+  check_fields(dt)?
+  put_str(out, 0, weekday_name(dt.weekday))
+  put_str(out, 3, ", ")
+  put_dec(out, 5, 2, dt.day)
+  out[7] = ' '
+  put_str(out, 8, month_name(dt.month))
+  out[11] = ' '
+  put_dec(out, 12, 4, dt.year)
+  out[16] = ' '
+  put_dec(out, 17, 2, dt.hour)
+  out[19] = ':'
+  put_dec(out, 20, 2, dt.minute)
+  out[22] = ':'
+  put_dec(out, 23, 2, dt.second)
+  put_str(out, 25, " GMT")
+
+pub fn write_iso8601( //< writes the ISO 8601 / RFC 3339 form, without allocating
+  //<
+  //< The form is `1994-11-15T08:12:31Z`.
+  dt: Datetime, //< the moment to write
+  out: U8$[], //< the destination; its first `iso8601_len` bytes are written
+): Void?Time_error
+  assert(out.len >= iso8601_len, "time.write_iso8601: out is shorter than iso8601_len")
+  check_fields(dt)?
+  put_dec(out, 0, 4, dt.year)
+  out[4] = '-'
+  put_dec(out, 5, 2, dt.month)
+  out[7] = '-'
+  put_dec(out, 8, 2, dt.day)
+  out[10] = 'T'
+  put_dec(out, 11, 2, dt.hour)
+  out[13] = ':'
+  put_dec(out, 14, 2, dt.minute)
+  out[16] = ':'
+  put_dec(out, 17, 2, dt.second)
+  out[19] = 'Z'

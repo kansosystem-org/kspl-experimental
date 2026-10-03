@@ -1,0 +1,48 @@
+#!/usr/bin/env -S ksplc run
+//< A kspage plugin, and the worked example of one: it sorts the lines it is given
+//<
+//< **A plugin is just a local program**: the selected text comes in on standard input and its
+//< replacement goes out on standard output, so it can be tried on its own: `printf 'b\na\n' |
+//< ./out/plugins/sort`.
+//< Caution: **Write nothing to standard output but the answer** (anything else lands in the user's
+//< document). On failure, write the reason to standard error and exit with a nonzero code: kspage
+//< then replaces nothing and shows the reason, so a failing plugin never destroys the selection.
+//< `make kspage-plugins` builds it into the folder the server reads.
+import "std/chars" // `compare`
+import "std/io"
+import "std/mem" { Arena }
+import "std/seq" // `order_by`
+import "std/str" { Str_builder }
+
+priv const arena_bytes: Sz = 4 * 1024 * 1024 //< the space the input is read into
+  //<
+  //< The input is one selection, far smaller than this; past this size reading stops, and the exit
+  //< code says so.
+
+fn main(): I32 //< reads the lines, sorts them, and writes them out
+  //<
+  //< Caution: **End the last line the way it came**: a selection with no final line break must not
+  //< gain one, or running this on one row joins it to the next.
+  arena: = Arena.new(arena_bytes)
+  defer arena.free()
+  src: = io.read_stdin(arena)
+  if src.len == 0
+    return 0
+  tail: = src[src.len - 1] == '\n'
+  // **Byte by byte (`compare`), a prefix before the longer row**, equal rows kept in their order,
+  // and no special handling of case. It is only an example; the product's own sorting is the
+  // table's ("Sorting keeps the first row, orders letters without regard to case, and says why it
+  // refused" in `kspage/docs/DESIGN.md`).
+  rows: = src.lines(arena).order_by(fn(a: U8[], b: U8[]; ): I32 {
+    return a.compare(b);
+  }, arena)
+  $out: = Str_builder.new()
+  defer out.free()
+  for $i: Sz = 0; i < rows.len; i += 1
+    if i > 0
+      out.c('\n')
+    out.s(rows.get(i))
+  if tail
+    out.c('\n')
+  io.out().s(out.slice())
+  return 0

@@ -1,0 +1,669 @@
+//< Aligns two texts into one sequence of changes
+//<
+//< Caution: **Do not keep a separate matching per view.** Text, figures and look are ways of
+//< showing the same one sequence; matched separately, the same edit gets a different count per
+//< view. The page decides how it is shown.
+//<
+//< Matching has three levels, and **a pair decided at an earlier level is never changed by a later
+//< one**: the **number** (`Block.id`) pairs blocks with the same origin mark and is authoritative;
+//< among the blocks left, the **anchors** (blocks whose text appears exactly once on each side)
+//< are paired; then by **position**, the blocks left between anchors are paired front to back
+//< where the depth and the style match. Why that order is in `kspage/docs/DESIGN.md`. No text is
+//< copied — a difference points at the documents' blocks.
+//< Caution: **Do not let it outlive either document** (it is not a format for passing around;
+//< what is saved is a path, `locate.kspls`). Blocks with one number but different contents on the
+//< two sides are rejected ("Block identity for showing a difference" in `kspage/docs/DESIGN.md`).
+import "kspage/model/doc" + { Block, Doc, Rect }
+import "kspage/model/run" { Inline }
+import "kspage/model/style" { Sheet, Style }
+import "kspage/share/store"
+import "std/chars"
+import "std/ds" { List }
+import "std/json" { Json_builder }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+enum Kind //< the kind of one difference
+  //<
+  //< One block can have two or more at once (it moved and its text changed too); what is counted
+  //< is the ways it changed, not the blocks. The kinds are separate so the page can filter by view.
+  //< Caution: **Do not rename a variant**: the page learns a kind by its name's place in
+  //< `diff_order` (`port/web/state.kspls`; `make test` pins every one).
+  added //< only on the right; only on the left
+  removed
+  moved //<
+    //< The same thing is somewhere else. **A shifted path is not a move** (`mark_moves` below).
+  edited //<
+    //< The text changed.
+    //<
+    //< That covers the list of inlines, the style's name, the link, the note, the annotation and
+    //< the name a reference uses.
+  restyled //<
+    //< A setting attached to that block changed.
+    //<
+    //< That covers the style's name, the name, the connector, the merge, the chart's range and the
+    //< picture's source.
+  reframed //<
+    //< The frame's place or size changed.
+    //<
+    //< That covers the frame, the picture's size, a column's width and a row's height.
+  resheeted //<
+    //< A setting for the whole document changed.
+    //<
+    //< That covers the paper's size and margins, the body's width and the root typeface.
+
+struct Diff //< one place that changed
+  //<
+  //< It holds no contents; the two documents hold them (a copy would make two versions of the
+  //< truth).
+  kind: Kind
+  // The left and the right blocks. On `added` the left is null, and on `removed` the right.
+  // On a change to the style table both are null (that points by name).
+  was: Block$@
+  now: Block$@
+  style: U8[] //<
+    //< The style's name, or empty for a change to a block.
+    //<
+    //< A style is shared by name, so neither a number nor a path points at it. `resheeted` has
+    //< neither (it has no name).
+
+struct Compared //< the result of matching
+  diffs: List<|Diff|>$@
+  by_id: Bool //<
+    //< Whether the numbers could be relied on for the matching.
+    //<
+    //< False means it matched on the text (an old text, or two of different origin); the reader is
+    //< told which.
+    //< Caution: **Do not fall back to the text silently** — unseen, a mistake would be taken for
+    //< "how the difference comes out".
+
+priv struct Node //< one block during matching
+  //<
+  //< It is not exposed (callers would come to depend on an intermediate shape).
+  b: Block$@
+  key: U8[] //< the text used for matching (the depth, the style's name, the typed text)
+  empty: Bool //<
+    //< Whether it holds no typed text.
+    //<
+    //< A block with none is not an anchor (the reason is at `match_by_anchor`).
+  parent: Sz //< the parent's index. **-1 means the top level of the document.**
+  depth: Sz
+  mate: Sz //< the other side's index. **-1 means no partner** (added, or removed)
+  by_id: Bool //<
+    //< What it was paired on. A block paired by position is never called "moved".
+  anchor: Bool
+  kept: Bool //< whether it is in the sequence whose order was kept (`mark_moves`)
+  moved: Bool
+  done: Bool //<
+    //< Whether it is already in the output, so a crossed pair is not written twice.
+
+// ---- The text used for matching up ----
+
+fn plain_into(b: Block$@, out: Str_builder$@) //< appends the block's own typed text
+  //<
+  //< It is the typed text (not `face()`), or a document whose formulas were never touched shows as
+  //< "changed".
+  for $i: Sz = 0; i < b.inlines.len; i += 1
+    out.s(b.inlines.get(i).text())
+
+priv fn key_of(b: Block$@, depth: Sz, sb: Str_builder$@, arena: Arena$@): U8[] //<
+  //< The text used for matching
+  //<
+  //< Caution: **Include the depth.** Without it, paragraphs with the same text pair up inside and
+  //< outside a table cell, and their differences turn into "moved".
+  sb.clear()
+  for $d: Sz = 0; d < depth; d += 1
+    sb.c(0x01U8)
+  sb.s(b.style)
+  sb.c(0x1FU8)
+  plain_into(b, sb)
+  return arena.dup_str(sb.slice())
+
+priv fn flatten(blocks: List<|Block$@|>$@, parent: Sz, depth: Sz, out: List<|Node$@|>$@,
+  arena: Arena$@, sb: Str_builder$@) //<
+    //< Flattens the tree into a list in document order, parent first.
+    //<
+    //< A list, since walking the tree as a tree sees a block in two orders; the depth in the key
+    //< keeps blocks nested differently apart.
+  for $i: Sz = 0; i < blocks.len; i += 1
+    b: = blocks.get(i)
+    if b == null
+      continue
+    n: = Node::{ .b = b, .key = key_of(b, depth, sb, arena), .parent = parent, .depth = depth,
+      .mate = -1, .by_id = false, .anchor = false, .kept = false, .moved = false, .done = false }
+    at: = out.len
+    out.push(arena.create(n))
+    flatten(b.children, at, depth + 1, out, arena, sb)
+
+// ---- Pairing them in three tiers ----
+
+priv fn trusts_ids(was: Doc$@, now: Doc$@): Bool //<
+  //< Whether the numbers of the two documents can be trusted
+  //<
+  //< Only where the origin marks are the same (made separately, the same number is a different
+  //< thing). An empty mark is not trusted.
+  if was.origin.len <= 0 || now.origin.len <= 0
+    return false
+  return was.origin.equals(now.origin)
+
+priv typedef Ahead = fn(a: Node$@, b: Node$@): Bool //< which comes first when blocks are sorted
+  //<
+  //< Caution: **Return false for equal keys** (that makes the sort stable).
+
+priv fn ahead_by_id(a: Node$@, b: Node$@): Bool
+  return a.b.id < b.b.id
+
+priv fn ahead_by_key(a: Node$@, b: Node$@): Bool
+  return a.key.compare(b.key) < 0
+
+priv fn numbered(nodes: List<|Node$@|>$@, arena: Arena$@): List<|Sz|>$@ //<
+  //< Returns the indices of the blocks that have a number, in document order
+  at: = List<|Sz|>.create(arena)
+  for $i: Sz = 0; i < nodes.len; i += 1
+    if nodes.get(i).b.id != 0
+      at.push(i)
+  return at
+
+priv fn unpaired(nodes: List<|Node$@|>$@, arena: Arena$@): List<|Sz|>$@ //<
+  //< Returns the indices of the blocks with no partner yet, in document order
+  at: = List<|Sz|>.create(arena)
+  for $i: Sz = 0; i < nodes.len; i += 1
+    if nodes.get(i).mate < 0
+      at.push(i)
+  return at
+
+priv fn merge_run(nodes: List<|Node$@|>$@, src: List<|Sz|>$@, dst: List<|Sz|>$@, from: Sz,
+  width: Sz, ahead: Ahead)
+  mid: = from + width if from + width < src.len else src.len
+  end: = from + width * 2 if from + width * 2 < src.len else src.len
+  $a: Sz = from
+  $b: Sz = mid
+  $k: Sz = from
+  for k < end
+    // Caution: **Take the left side first on equal keys**, so the anchors do not depend on the
+    // reading order.
+    take_b: =
+      a >= mid ||
+      (b < end && ahead(nodes.get(src.get(b)), nodes.get(src.get(a))))
+    if take_b
+      dst.set(k, src.get(b))
+      b += 1
+    else
+      dst.set(k, src.get(a))
+      a += 1
+    k += 1
+
+priv fn ordered(nodes: List<|Node$@|>$@, at: List<|Sz|>$@, ahead: Ahead, arena: Arena$@):
+  List<|Sz|>$@ //<
+    //< Sorts a list of block indices into key order with a merge sort.
+    //<
+    //< A hash table (`ds.Map`) cannot be used: the keys come from outside, and colliding keys pile
+    //< up in one bucket (the decision in `std/docs/DESIGN.md`).
+    //< Caution: **Copy back rather than swap** (swapped, the next round reads the old side).
+  src: = List<|Sz|>.create(arena)
+  dst: = List<|Sz|>.create(arena)
+  for $i: Sz = 0; i < at.len; i += 1
+    src.push(at.get(i))
+    dst.push(0)
+  $width: Sz = 1
+  for
+    $from: Sz = 0
+    for from < src.len
+      merge_run(nodes, src, dst, from, width, ahead)
+      from += width * 2
+    for $k: Sz = 0; k < src.len; k += 1
+      src.set(k, dst.get(k))
+    // Caution: **Stop at the list's length.** Doubling further overflows (the text comes from
+    // outside).
+    if width >= src.len
+      break
+    width *= 2
+  return src
+
+priv fn match_by_id(left: List<|Node$@|>$@, right: List<|Node$@|>$@, arena: Arena$@) //<
+  //< Pairs blocks by number
+  //<
+  //< This is authoritative (a number is never assigned twice).
+  //< Caution: **Do not crash where two blocks have the same number** (a hand-written text may). The
+  //< first is kept; if the later silently won, the difference would depend on the reading order.
+  l_at: = ordered(left, numbered(left, arena), ahead_by_id, arena)
+  r_at: = ordered(right, numbered(right, arena), ahead_by_id, arena)
+  $a: Sz = 0
+  $b: Sz = 0
+  for a < l_at.len && b < r_at.len
+    l: = left.get(l_at.get(a))
+    r: = right.get(r_at.get(b))
+    if l.b.id < r.b.id
+      a += 1
+      continue
+    if r.b.id < l.b.id
+      b += 1
+      continue
+    if l.mate < 0 && r.mate < 0
+      l.mate = r_at.get(b)
+      l.by_id = true
+      r.mate = l_at.get(a)
+      r.by_id = true
+    a += 1
+    b += 1
+
+priv fn run_len(nodes: List<|Node$@|>$@, at: List<|Sz|>$@, from: Sz): Sz //<
+  //< How far the same key continues
+  key: = nodes.get(at.get(from)).key
+  $n: Sz = 1
+  for from + n < at.len && nodes.get(at.get(from + n)).key.equals(key)
+    n += 1
+  return n
+
+priv fn match_by_anchor(left: List<|Node$@|>$@, right: List<|Node$@|>$@, arena: Arena$@) //<
+  //< Pairs the blocks whose text appears exactly once on each side (the anchors)
+  //<
+  //< The core of patience diff ("pin the lines that appear once first"); a text that appears many
+  //< times would be paired on a guess. **A block with no text is not an anchor** (like table rows,
+  //< they all get one key where the depth and the style match).
+  l_at: = ordered(left, unpaired(left, arena), ahead_by_key, arena)
+  r_at: = ordered(right, unpaired(right, arena), ahead_by_key, arena)
+  $a: Sz = 0
+  $b: Sz = 0
+  for a < l_at.len && b < r_at.len
+    l: = left.get(l_at.get(a))
+    r: = right.get(r_at.get(b))
+    if l.key.compare(r.key) < 0
+      a += 1
+      continue
+    if r.key.compare(l.key) < 0
+      b += 1
+      continue
+    l_run: = run_len(left, l_at, a)
+    r_run: = run_len(right, r_at, b)
+    if l_run == 1 && r_run == 1 && !l.empty
+      l.mate = r_at.get(b)
+      l.anchor = true
+      r.mate = l_at.get(a)
+      r.anchor = true
+    a += l_run
+    b += r_run
+
+priv fn same_slot(a: Node$@, b: Node$@): Bool //< whether two blocks can sit in the same position
+  //<
+  //< Only where the depth and the style match, or a position swapped whole looks like "the text
+  //< changed".
+  return a.depth == b.depth && a.b.style.equals(b.b.style)
+
+priv fn fill_slots(left: List<|Node$@|>$@, right: List<|Node$@|>$@, l_from: Sz, l_to: Sz,
+  r_from: Sz, r_to: Sz) //<
+    //< Pairs the blocks left between the anchors, front to back.
+  $a: Sz = l_from
+  $b: Sz = r_from
+  for a < l_to && b < r_to
+    x: = left.get(a)
+    if x.mate >= 0
+      a += 1
+      continue
+    y: = right.get(b)
+    if y.mate >= 0
+      b += 1
+      continue
+    // Blocks that do not match are not paired (they show as "removed" and "added").
+    if same_slot(x, y)
+      x.mate = b
+      y.mate = a
+    a += 1
+    b += 1
+
+priv fn match_by_slot(left: List<|Node$@|>$@, right: List<|Node$@|>$@) //<
+  //< Pairs by position the blocks between the pairs already decided
+  //<
+  //< The pairs decided by anchors and numbers are the boundaries.
+  //< Caution: **Do not fill in where pairs cross**, or a block that has a partner gets tied to
+  //< another too.
+  $prev_l: Sz = -1
+  $prev_r: Sz = -1
+  for $i: Sz = 0; i <= left.len; i += 1
+    // The end counts once as a boundary (there is a gap after the last anchor too).
+    $stop_l: Sz = left.len
+    $stop_r: Sz = right.len
+    if i < left.len
+      n: = left.get(i)
+      if n.mate < 0
+        continue
+      stop_l = i
+      stop_r = n.mate
+    if stop_r > prev_r
+      fill_slots(left, right, prev_l + 1, stop_l, prev_r + 1, stop_r)
+      prev_r = stop_r
+    prev_l = stop_l
+
+// ---- The runs that moved ----
+
+priv fn same_parent(left: List<|Node$@|>$@, right: List<|Node$@|>$@, i: Sz): Bool //<
+  //< Whether the parents' partners disagree
+  //<
+  //< Where they do, the block moved, even if the order of the list was kept.
+  l: = left.get(i)
+  r: = right.get(l.mate)
+  if l.parent < 0 || r.parent < 0
+    return l.parent < 0 && r.parent < 0
+  return left.get(l.parent).mate == r.parent
+
+priv fn mark_moves(left: List<|Node$@|>$@, right: List<|Node$@|>$@, arena: Arena$@) //<
+  //< Marks the blocks that moved
+  //<
+  //< Caution: **Do not call a shifted path "moved"**, or one addition makes everything after it
+  //< "moved". Only a pair outside the longest "sequence of pairs in kept order" moved. The work
+  //< grows with the number of pairs, not the document's size.
+  at: = List<|Sz|>.create(arena)
+  for $i: Sz = 0; i < left.len; i += 1
+    if left.get(i).mate >= 0
+      at.push(i)
+  // The length of the "sequence in kept order" starting there.
+  // Caution: **Count from the end** (from the front it reads a length not yet computed).
+  run: = List<|Sz|>.create(arena)
+  for $k: Sz = 0; k < at.len; k += 1
+    run.push(1)
+  $k: Sz = at.len - 1
+  for k >= 0
+    mate_k: = left.get(at.get(k)).mate
+    $best: Sz = 1
+    for $m: Sz = k + 1; m < at.len; m += 1
+      if left.get(at.get(m)).mate > mate_k && run.get(m) + 1 > best
+        best = run.get(m) + 1
+    run.set(k, best)
+    k -= 1
+  keep_longest(left, at, run)
+  for $n: Sz = 0; n < at.len; n += 1
+    node: = left.get(at.get(n))
+    if !node.kept || !same_parent(left, right, at.get(n))
+      node.moved = true
+
+priv fn keep_longest(left: List<|Node$@|>$@, at: List<|Sz|>$@, run: List<|Sz|>$@) //<
+  //< Walks the longest sequence from the front and marks those pairs
+  //<
+  //< A pair not walked is a pair that moved.
+  $after: Sz = -1
+  $from: Sz = 0
+  for from < at.len
+    $pick: Sz = -1
+    for $m: Sz = from; m < at.len; m += 1
+      node: = left.get(at.get(m))
+      if node.mate <= after
+        continue
+      if pick < 0 || run.get(m) > run.get(pick)
+        pick = m
+    if pick < 0
+      return
+    kept: = left.get(at.get(pick))
+    kept.kept = true
+    after = kept.mate
+    from = pick + 1
+
+// ---- Comparing two that were paired ----
+
+priv fn print_block(b: Block$@, work: Arena$@, out: Str_builder$@) //<
+  //< Writes only the list of inlines into a text
+  //<
+  //< Caution: **Do not compare the fields one at a time** — a field added to `Inline` would be
+  //< silently left out; what is compared is the saved text. The list is borrowed (do not change
+  //< it).
+  $jb: = Json_builder.new(work)
+  out.clear()
+  store.block_val(jb@, b).dump(out)
+
+priv fn text_print(b: Block$@, out: Str_builder$@)
+  work: = Arena.new(16 * 1024)
+  defer work.free()
+  hollow: = doc.new_block("", work)
+  hollow.inlines = b.inlines
+  print_block(hollow, work, out)
+
+priv fn look_print(b: Block$@, out: Str_builder$@) //<
+  //< Writes only the settings attached to that block into a text
+  //<
+  //< Children, inlines and the frame are left out.
+  //< What is compared is the saved text. Remove the frame's fields, or a moved frame also shows
+  //< under "a setting changed", and one edit becomes two.
+  //< Caution: **A field added to `Block` is never silently lost** (an unknown field shows up here).
+  //< When one is added to the frame's fields, add it to the fields removed here too.
+  work: = Arena.new(16 * 1024)
+  defer work.free()
+  $copy: Block = b$
+  copy.id = 0
+  copy.inlines = List<|Inline$@|>.create(work)
+  copy.children = List<|Block$@|>.create(work)
+  copy.frame = Option<|Rect|>.none
+  copy.column_widths = List<|Option<|F32|>|>.create(work)
+  copy.row_heights = List<|Option<|F32|>|>.create(work)
+  copy.image_w = 0.0F32
+  copy.image_h = 0.0F32
+  print_block(copy@, work, out)
+
+priv fn same_rect(a: Option<|Rect|>, b: Option<|Rect|>): Bool
+  if x: = a
+    switch b case .some(y)
+      return x.x == y.x && x.y == y.y && x.w == y.w && x.h == y.h
+    case .none
+      return false
+  if _y: = b
+    return false
+  return true
+
+priv fn same_sizes(a: List<|Option<|F32|>|>$@, b: List<|Option<|F32|>|>$@): Bool //<
+  //< Whether the measurement settings are the same
+  //<
+  //< Not set and 0 differ (a column of width 0, and a column that fits its contents).
+  if a.len != b.len
+    return false
+  for $i: Sz = 0; i < a.len; i += 1
+    switch a.get(i) case .some(x)
+      switch b.get(i) case .some(y)
+        if x != y
+          return false
+      case .none
+        return false
+    case .none
+      if _y: = b.get(i)
+        return false
+  return true
+
+priv fn same_frame(a: Block$@, b: Block$@): Bool //<
+  //< Whether the frame and the measurements are the same
+  //<
+  //< The fields here are the ones `look_print` removes (add one to only one side and its change
+  //< shows in neither or in both).
+  if !same_rect(a.frame, b.frame)
+    return false
+  if a.image_w != b.image_w || a.image_h != b.image_h
+    return false
+  return same_sizes(a.column_widths, b.column_widths) &&
+    same_sizes(a.row_heights, b.row_heights)
+
+priv fn push(out: List<|Diff|>$@, kind: Kind, was: Block$@, now: Block$@)
+  out.push(Diff::{ .kind = kind, .was = was, .now = now, .style = "" })
+
+priv fn compare_pair(l: Node$@, r: Node$@, out: List<|Diff|>$@, sb: Str_builder$@,
+  other: Str_builder$@) //<
+    //< Compares two paired blocks and appends what changed to the list.
+    //<
+    //< One block can give two or more; merged into one, a filtered view would lose its change.
+  l.done = true
+  r.done = true
+  // A block paired by position is never called moved (the text alone is no ground for it).
+  if l.moved && (l.by_id || l.anchor)
+    push(out, Kind.moved, l.b, r.b)
+  text_print(l.b, sb)
+  text_print(r.b, other)
+  if !sb.slice().equals(other.slice())
+    push(out, Kind.edited, l.b, r.b)
+  look_print(l.b, sb)
+  look_print(r.b, other)
+  if !sb.slice().equals(other.slice())
+    push(out, Kind.restyled, l.b, r.b)
+  if !same_frame(l.b, r.b)
+    push(out, Kind.reframed, l.b, r.b)
+
+priv fn compare_band(was: Block$@, now: Block$@, out: List<|Diff|>$@, sb: Str_builder$@,
+  other: Str_builder$@) //<
+    //< Compares the page's header and footer.
+    //<
+    //< There is no need to match them (there is always one of each). Do not look a band up by
+    //< number: it has none (it is not reached from `blocks`).
+  if was == null || now == null
+    return
+  text_print(was, sb)
+  text_print(now, other)
+  if !sb.slice().equals(other.slice())
+    push(out, Kind.edited, was, now)
+  look_print(was, sb)
+  look_print(now, other)
+  if !sb.slice().equals(other.slice())
+    push(out, Kind.restyled, was, now)
+
+// ---- The style table ----
+
+priv fn sheet_print(sheet: Sheet$@, out: Str_builder$@) //<
+  //< Writes only the paper settings and the root typeface into a text
+  //<
+  //< The styles are matched by name and compared separately. The viewer's overrides (`Over`) are
+  //< not included (they are not saved).
+  work: = Arena.new(16 * 1024)
+  defer work.free()
+  $copy: Sheet = sheet$
+  copy.styles = List<|Style$@|>.create(work)
+  $jb: = Json_builder.new(work)
+  out.clear()
+  store.sheet_val(jb@, copy@).dump(out)
+
+priv fn compare_sheets(was: Sheet$@, now: Sheet$@, out: List<|Diff|>$@, sb: Str_builder$@,
+  other: Str_builder$@) //<
+    //< Matches the style tables.
+    //<
+    //< Caution: **Match them by name.** Two windows' tables differ in order (styles are added at
+    //< the end), and a difference of order is no difference.
+  if was == null || now == null
+    return
+  sheet_print(was, sb)
+  sheet_print(now, other)
+  if !sb.slice().equals(other.slice())
+    out.push(Diff::{ .kind = Kind.resheeted, .was = null, .now = null, .style = "" })
+  for $i: Sz = 0; i < was.styles.len; i += 1
+    s: = was.styles.get(i)
+    switch now.find(s.name) case .some(t)
+      if !store.same_style(s, t)
+        out
+          .push(Diff::{ .kind = Kind.restyled, .was = null, .now = null, .style = s.name })
+    case .none
+      out
+        .push(Diff::{ .kind = Kind.removed, .was = null, .now = null, .style = s.name })
+  for $j: Sz = 0; j < now.styles.len; j += 1
+    t: = now.styles.get(j)
+    switch was.find(t.name) case .some {} case .none
+      out.push(Diff::{ .kind = Kind.added, .was = null, .now = null, .style = t.name })
+
+// ---- Putting them out into the row ----
+
+priv fn emit(left: List<|Node$@|>$@, right: List<|Node$@|>$@, out: List<|Diff|>$@,
+  sb: Str_builder$@, other: Str_builder$@) //<
+    //< Appends the pairs, and the blocks with no partner, to the list in text order.
+    //<
+    //< Caution: **Make the left's order the authority**, or with a crossed pair the same two texts
+    //< give a different list depending on the calling order.
+  $i: Sz = 0
+  $j: Sz = 0
+  for i < left.len || j < right.len
+    if i < left.len && left.get(i).done
+      i += 1
+      continue
+    if j < right.len && right.get(j).done
+      j += 1
+      continue
+    if i < left.len && left.get(i).mate < 0
+      l: = left.get(i)
+      l.done = true
+      push(out, Kind.removed, l.b, null)
+      i += 1
+      continue
+    if j < right.len && right.get(j).mate < 0
+      r: = right.get(j)
+      r.done = true
+      push(out, Kind.added, null, r.b)
+      j += 1
+      continue
+    if i >= left.len
+      r: = right.get(j)
+      compare_pair(left.get(r.mate), r, out, sb, other)
+      j += 1
+      continue
+    l: = left.get(i)
+    compare_pair(l, right.get(l.mate), out, sb, other)
+    i += 1
+
+fn compare(was: Doc$@, was_sheet: Sheet$@, now: Doc$@, now_sheet: Sheet$@, arena: Arena$@):
+  Compared //<
+    //< Matches two documents and their styles and returns the list of changes.
+    //<
+    //< The returned list points into the two documents (free either and it cannot be read). The
+    //< order is "whole-document settings → the styles → the bands → the blocks", the blocks in text
+    //< order (a crossing in the left's order).
+  out: = List<|Diff|>.create(arena)
+  if was == null || now == null
+    return Compared::{ .diffs = out, .by_id = false }
+  work: = Arena.new(64 * 1024)
+  defer work.free()
+  $sb: = Str_builder.new()
+  defer sb.free()
+  $other: = Str_builder.new()
+  defer other.free()
+  compare_sheets(was_sheet, now_sheet, out, sb@, other@)
+  compare_band(was.header, now.header, out, sb@, other@)
+  compare_band(was.footer, now.footer, out, sb@, other@)
+  by_id: = trusts_ids(was, now)
+  left: = List<|Node$@|>.create(work)
+  right: = List<|Node$@|>.create(work)
+  flatten(was.blocks, -1, 0, left, work, sb@)
+  flatten(now.blocks, -1, 0, right, work, sb@)
+  if by_id
+    match_by_id(left, right, work)
+  match_by_anchor(left, right, work)
+  match_by_slot(left, right)
+  mark_moves(left, right, work)
+  emit(left, right, out, sb@, other@)
+  return Compared::{ .diffs = out, .by_id = by_id }
+
+struct Middle //< the changed middle of two texts
+  //<
+  //< What is left once the matching front and back are removed is "what changed". It is not the
+  //< shortest edit script: for a person, a shortest solution is scattered and unreadable.
+  head: Sz //< how many bytes match from the front
+  was_len: Sz //< the length (bytes) of what changed, on the left and on the right
+  now_len: Sz
+
+priv fn mid_char(s: U8[], at: Sz): Bool //< whether the byte at `at` continues a character
+  //<
+  //< Caution: **Cut at a character boundary** (cutting by byte gives a broken character).
+  return at > 0 && at < s.len && (s[at] & 0xC0U8) == 0x80U8
+
+fn middle_of(was: U8[], now: U8[]): Middle //< returns the changed middle
+  //<
+  //< Move both the front and the back to a character boundary.
+  $head: Sz = 0
+  for head < was.len && head < now.len && was[head] == now[head]
+    head += 1
+  for mid_char(was, head) || mid_char(now, head)
+    head -= 1
+  $tail: Sz = 0
+  for tail < was.len - head && tail < now.len - head &&
+    was[was.len - 1 - tail] == now[now.len - 1 - tail]
+    tail += 1
+  for mid_char(was, was.len - tail) || mid_char(now, now.len - tail)
+    tail -= 1
+  return Middle::{ .head = head, .was_len = was.len - head - tail,
+    .now_len = now.len - head - tail }
+
+fn count_of(got: Compared, kind: Kind): Sz //< how many differences of that kind there are
+  //<
+  //< Caution: **Do not count them again in the caller** (the count would differ per view).
+  $n: Sz = 0
+  for $i: Sz = 0; i < got.diffs.len; i += 1
+    if got.diffs.get(i).kind == kind
+      n += 1
+  return n

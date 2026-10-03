@@ -1,0 +1,267 @@
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/gen/c/ctx" { Genc_ctx }
+import "ksplc/gen/c/expr" as gen_c_expr
+import "ksplc/sema/body/call" as sema_body_call
+import "ksplc/sema/body/postfix" as sema_body_postfix
+import "ksplc/sema/type/query" as sema_type_query
+import "std/chars"
+import "std/str"
+
+// ==========================================
+// Where the postfix chain (`.` / `[]` / `()` / `::`) is emitted as C.
+//
+// **Some places write the same subexpression twice** (a subscript names the receiver for `.ptr`
+// and for the bounds check's `.len`), so a side effect would run twice. `lower/expr.kspls` copies
+// such values to temporaries first (`ksplc/tests/lang_test.kspls` checks the count).
+// **`receiver_needs_hoist` decides whether the receiver needs a temporary before its address is
+// taken** (`base/ast_place.kspls`). Do not decide it again here.
+// ==========================================
+
+impl Ast_node
+  fn emit_method_call(r: Self$@, c: Genc_ctx$@, args_node: Ast_node$@)
+    method_node: = r.get_postfix_member()
+    r.ice_assert(method_node != null, "emit_method_call: missing method name")
+
+    recv_node: = r.get_postfix_receiver()
+    r.ice_assert(recv_node != null, "emit_method_call: missing receiver")
+
+    obj_id: = recv_node.type_id
+    depth: = c.env.ptr_depth(obj_id)
+    arrow: = "->" if depth >= 1 else "."
+
+    c.s("(")
+    c.s("(")
+    recv_node.emit_ptr_adjusted_receiver(c, depth)
+    c.s(")").s(arrow).s("vtable->")
+    c.nm(method_node.text)
+    c.s("((")
+    recv_node.emit_ptr_adjusted_receiver(c, depth)
+    c.s(")").s(arrow).s("obj")
+    if args_node != null
+      for arg_node in args_node.children
+        if arg_node.is_literal(",")
+          continue
+        c.s(", ")
+        arg_node.emit_expr(c)
+    c.s("))")
+
+  fn emit_upcast_expr(r: Self$@, c: Genc_ctx$@)
+    inner: = r.get_upcast_inner()
+    trait_id: = r.type_id
+    base_id: = inner.type_id
+    // Caution: Strip it the same way as vtable_key in lower/vtable.kspls does (strip_ptr leaves
+    // an immutability level and prints `Const_<type>`, a symbol with no definition).
+    clean_base_id: = c.env.receiver_base_id(base_id)
+
+    c.s("(").m(trait_id).s("){ .obj = (void*)")
+    if c.env.is_pointer(base_id)
+      inner.emit_expr(c)
+    else
+      c.s("&")
+      inner.emit_expr_prec(c, 13)
+    c.s(", .vtable = &kspl_vtable_impl_").m(clean_base_id).s("_").m(trait_id).s(" }")
+
+  fn emit_postfix_call(r: Ast_node$@, c: Genc_ctx$@, expr_node: Ast_node$@)
+    is_method: = expr_node.kind_id == .k_method_access
+    $args_node: = r.find_child(.k_expr_args)
+    if args_node == null
+      args_node = expr_node.find_child(.k_expr_args)
+
+    $intr: = sema_body_call.Intrinsic.not_intrinsic
+    if expr_node.kind_id == .k_identifier
+      intr = sema_body_call.intrinsic_of(expr_node.text)
+    if !is_method && intr != .not_intrinsic
+      if intr == .read_volatile
+        if arg1: = args_node.get_arg_at(0)
+          val_type: = c.env.strip_ptr(arg1.type_id)
+          c.s("(*(volatile ")
+          c.t(val_type)
+          c.s("*)(")
+          arg1.emit_expr(c)
+          c.s("))")
+          return
+      if intr == .write_volatile
+        $arg1: Ast_node$@ = null
+        if a1: = args_node.get_arg_at(0)
+          arg1 = a1
+        $arg2: Ast_node$@ = null
+        if a2: = args_node.get_arg_at(1)
+          arg2 = a2
+        if arg1 != null && arg2 != null
+          val_type: = c.env.strip_ptr(arg1.type_id)
+          c.s("((*(volatile ")
+          c.t(val_type)
+          c.s("*)(")
+          arg1.emit_expr(c)
+          c.s(")) = (")
+          arg2.emit_expr(c)
+          c.s("))")
+          return
+      if intr == .inline_c
+        if args_node != null
+          if arg1: = args_node.get_arg_at(0)
+            if arg1.kind_id == .k_string
+              raw: = arg1.text
+              if raw.len >= 6 && raw.starts_with("\"\"\"")
+                inner: = U8[]::{ .ptr = raw.ptr + 3, .len = raw.len - 6 }
+                c.s(inner)
+              else if raw.len >= 2
+                inner: = U8[]::{ .ptr = raw.ptr + 1, .len = raw.len - 2 }
+                c.s(inner)
+        return
+      if intr == .asm_volatile
+        c.s("__asm__ volatile(")
+        if args_node != null
+          $is_first: = true
+          for ch in args_node.children
+            if !ch.is_literal(",")
+              if !is_first
+                c.s(", ")
+              if ch.kind_id == .k_string
+                c.s(ch.text)
+              else
+                ch.emit_expr(c)
+              is_first = false
+        c.s(")")
+        return
+
+    if is_method
+      expr_node.emit_method_call(c, args_node)
+    else
+      expr_node.emit_expr_as_receiver(c)
+      c.s("(")
+      if args_node != null
+        args_node.emit_comma_separated_args(c)
+      c.s(")")
+
+  fn emit_ptr_adjusted_receiver(r: Self$@, c: Genc_ctx$@, depth: I32) //<
+    //< It writes depth-1 '*'s before the receiver, for a multi-level pointer (Foo@@)
+    //<
+    //< This is automatic dereferencing; at depth<=1 it writes nothing.
+    //< The caller picks the following '->' / '.' by depth.
+    if depth > 1
+      c.s("(")
+      for $i: = 1; i < depth; i += 1
+        c.s("*")
+      r.emit_expr_as_receiver(c)
+      c.s(")")
+    else
+      r.emit_expr_as_receiver(c)
+
+  fn emit_postfix_dot(r: Ast_node$@, c: Genc_ctx$@, expr_node: Ast_node$@)
+    member_node: = r.get_postfix_member()
+    r.ice_assert(member_node != null, "emit_postfix_dot: expr_postfix '.' missing target member")
+    depth: = c.env.ptr_depth(expr_node.type_id)
+    expr_node.emit_ptr_adjusted_receiver(c, depth)
+
+    // Caution: Escape the name for both `->` and `.`; with only one, the reference misses the
+    // declared suffix and only the C compiler's "undeclared" shows it.
+    c.s("->" if depth >= 1 else ".")
+    c.nm(member_node.text)
+
+  fn emit_postfix_array(r: Ast_node$@, c: Genc_ctx$@, expr_node: Ast_node$@)
+    r.ice_assert(r.children.len >= 3, "emit_postfix_array: access missing index")
+    next_op: = r.get_postfix_member()
+    r.ice_assert(next_op != null, "emit_postfix_array: missing index")
+
+    // A receiver can be a pointer (`ps[1]` with `ps: U8$[]@`). Just as sema strips it
+    // (receiver_base_id in sema/type/env.kspls), this emits `->` / `(*x)` per pointer level, as
+    // emit_postfix_dot does.
+    recv_id: = c.env.receiver_base_id(expr_node.type_id)
+    // **Only fixed-length arrays reach here.** `lower/expr.kspls` rewrites a slice's subscript
+    // into an `at(…)$` call (`Index_place` / `Index_ref`); a slice here is a missed rewrite.
+    if !c.env.is_array(recv_id)
+      r.ice_panic("emit_postfix_array: indexing here is only allowed for fixed-size arrays")
+    file_name: = r.loc.file()
+    line_num: = c.last_line
+    depth: = c.env.ptr_depth(expr_node.type_id)
+    arrow: = "->" if depth >= 1 else "."
+    expr_node.emit_ptr_adjusted_receiver(c, depth)
+
+    arr_size: = c.env.array_len(recv_id)
+    // A constant subscript inside the range needs no check (as in emit_divisor; the decision is
+    // in sema/body/postfix.kspls).
+    if sema_body_postfix.index_is_static_in_range(c.sema, next_op, arr_size)
+      c.s("\{arrow\}data[")
+      next_op.emit_expr(c)
+      c.s("]")
+      return
+    c.s("\{arrow\}data[kspl_bounds_check(")
+    next_op.emit_expr(c)
+    c.s(", \{arr_size\}, \"\{file_name\}\", \{line_num\})]")
+
+  fn emit_as_cast(r: Ast_node$@, c: Genc_ctx$@, expr_node: Ast_node$@)
+    $target_id: = r.type_id
+    if target_id == 0 && r.children.len >= 3
+      target_id = r.get_child(2).type_id
+
+    target_type_str: = c.env.get_str(target_id)
+    if target_type_str.len == 0 || target_type_str.equals("Unknown")
+      r.ice_panic("emit_as_cast: invalid target type (Sema inference missed)")
+
+    // The built-in constructor and a `Slice<|T|>` instance are handled the same. The
+    // descriptor's fields (`ptr` and `len`) are the same, so the compound literal built is the
+    // same too (`../../parse/desugar_slice.kspls`).
+    is_target_slice: = c.env.is_slice(target_id)
+    target_base_id: = c.env.slice_elem(target_id)
+    is_base_slice: = c.env.is_slice(expr_node.type_id)
+    is_base_array: = c.env.is_array(expr_node.type_id)
+
+    if is_target_slice && is_base_slice
+      clean_base_id: = c.env.strip_const(target_base_id)
+      src_base_id: = c.env.slice_elem(expr_node.type_id)
+      clean_src_base_id: = c.env.strip_const(src_base_id)
+      // Where the element types are identical in C (U8[] and const U8[] are both kspl_U8_Slice),
+      // the expression is emitted as is; rebuilding it would run the receiver's side effect twice.
+
+      if clean_base_id == clean_src_base_id
+        expr_node.emit_expr(c)
+      else
+        c.s("(").t(target_id).s("){ .ptr = (")
+        c.t(clean_base_id).s("*)")
+        expr_node.emit_expr_as_receiver(c)
+        c.s(".ptr, .len = ")
+        expr_node.emit_expr_as_receiver(c)
+        c.s(".len }")
+    else if is_target_slice && is_base_array
+      gen_c_expr.emit_slice_cast_prefix(c, target_id, target_base_id)
+      expr_node.emit_expr_as_receiver(c)
+      c.s(".data, .len = \{c.env.array_len(expr_node.type_id)\} }")
+    else
+      c.s("(").t(target_id).s(")")
+
+      expr_node.emit_expr_prec(c, 13)
+
+  fn emit_postfix_expr(r: Ast_node$@, c: Genc_ctx$@)
+    r.ice_assert(r.children.len >= 2, "emit_postfix_expr: requires an operator")
+    expr_node: = r.get_postfix_receiver()
+    op_node: = r.get_postfix_op()
+    op_text: = op_node.text if op_node != null else r.text
+
+    if op_text.equals(".")
+      r.emit_postfix_dot(c, expr_node)
+    else if op_text.equals("(")
+      r.emit_postfix_call(c, expr_node)
+    else if op_text.equals("@")
+      is_array: = c.env.is_array(expr_node.type_id)
+      if is_array
+        c.s("(")
+        expr_node.emit_expr_as_receiver(c)
+        c.s(".data)")
+      else
+        c.s("&")
+        expr_node.emit_expr_prec(c, 13)
+    else if op_text.equals("[") || op_text.equals("[]")
+      r.emit_postfix_array(c, expr_node)
+    else if op_text.equals("$")
+      c.s("(*(")
+      expr_node.emit_expr(c)
+      c.s("))")
+    else if op_text.equals("::")
+      r.emit_as_cast(c, expr_node)
+    else if op_text.equals("?") || op_text.equals("catch")
+      r.ice_panic("Lowering missed: '?' or 'catch' reached Genc")
+    else
+      expr_node.emit_expr_as_receiver(c)
+      c.s(op_text)

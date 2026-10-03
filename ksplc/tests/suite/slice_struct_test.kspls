@@ -1,0 +1,66 @@
+#!/usr/bin/env -S ksplc run
+//< It checks, from the output's side, that a slice (`T[]`) is `std/lang`'s `Slice<|$T|>`
+//<
+//< Caution: **Check that the built-in constructor has not come back.** One `Info.slice` added to
+//< the type table brings it back, and there are two forms again unnoticed. `tests/negative` and
+//< `ksplc/tests/slice_generic_impl_test.kspls` pin down the spelling (`T[]` as sugar, diagnostics
+//< in its words).
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/harness_build"
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/verdict"
+
+// The probe's source: **building** by a cast from an array, reading `len`, **reading** and
+// **writing** by an index (`4 + 5 + 9 = 18`). `std/lang`'s slices and string literals are built
+// this way too.
+priv const src: U8[] =
+  "priv fn total(s: I32[]): I32 {\n  $sum: I32 = 0;\n  for i in Range.asc(s.len) {\n    sum += \
+    s[i];\n  }\n  return sum;\n}\n\npub fn main(): I32 {\n  $store: I32[3] = ::{ 4, 5, 6 };\n  m: \
+    I32$[] = I32$[]::store;\n  m[2] = 9;\n  return total(I32[]::m);\n}\n"
+
+// The source that must be rejected: **it passes where the cast's check handles only one of the
+// slice's two forms** (check_slice_cast_writability in `ksplc/sema/body/postfix.kspls`).
+priv const bad_src: U8[] =
+  "pub fn main(): I32 {\n  w: U8$[] = U8$[]::\"frozen\";\n  w[0] = 65;\n  return 0;\n}\n"
+
+priv const bad_want: U8[] = "to the mutable slice type 'U8$[]'" //<
+  //< What the error message must hold: the type as the sugar spells it (`U8$[]`)
+  //<
+  //< It must not be a desugared name the user did not write (`ksplc/sema/type/display.kspls`).
+
+fn main(): I32
+  arena: = harness.begin(64 * 1024 * 1024)
+  dir: = harness.tmp_dir()
+  path: = fs.join(dir, "slice_struct_probe.kspl", arena)
+  out_c: = fs.join(dir, "slice_struct_probe.c", arena)
+  io.write_file(path, src) catch
+    harness.fatal("cannot write the probe's source")
+    return harness.finish()
+
+  built_c: = harness.ksplc(U8[][]::{ path, out_c })
+  verdict.check("a program using a slice builds", built_c.code == 0, built_c.out)
+
+  exe: = fs.join(dir, "slice_struct_probe.exe", arena)
+  built: = harness_build.build_exe(U8[][]::{ out_c }, exe, U8[][]::{})
+  verdict.check("the generated C goes through the C compiler", built.code == 0, built.out)
+  ran: = harness.run(U8[][]::{ exe })
+  verdict.check("assembling, the length, reading and writing give the right answer",
+    ran.code == 18, ran.out)
+
+  // **The built-in constructor must not come back**: with it a non-`U8` slice becomes
+  // `kspl_I32_Slice`.
+  gen: = io.read_file(out_c) catch ""
+  verdict.check("the built-in slice type does not appear in the generated C",
+    gen.find_str("kspl_I32_Slice") < 0, "")
+
+  bad_path: = fs.join(dir, "slice_struct_bad.kspl", arena)
+  bad_c: = fs.join(dir, "slice_struct_bad.c", arena)
+  io.write_file(bad_path, bad_src) catch
+    harness.fatal("cannot write the source that is refused")
+    return harness.finish()
+  bad: = harness.ksplc(U8[][]::{ bad_path, bad_c })
+  verdict.check("a mutable cast from read-only memory is refused",
+    bad.code != 0 && bad.out.find_str(bad_want) >= 0, bad.out)
+  return harness.finish()

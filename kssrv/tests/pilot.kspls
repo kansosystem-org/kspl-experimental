@@ -1,0 +1,159 @@
+//< Reads the policy `GET /api/pilot` serves, by the same steps the car takes
+//<
+//< It is not a suite; `kssrv/tests/main.kspls` and `kssrv/tests/copy.kspls` use it.
+//< Caution: **Do not copy kssrv/pilot.kspls's formulas; build only from what came back.** By design
+//< the blob holds both how the features are made and what the manoeuvres mean ("The policy shipped
+//< is a set that can be reproduced on its own" in kssrv/docs/DESIGN.md), so a constant kept here
+//< would mean "the blob alone reproduces it" is never tested.
+//< **Write the rule (`car_rule`) again from the specification.** Copying the implementation's
+//< formula makes both wrong in the same way when the formula is wrong.
+import "ksai/safetensors" as st
+import "ksai/tensor" { Tensor }
+import "std/ds" { List }
+import "std/math"
+import "std/mem" { Arena }
+import "std/strfmt" as _strfmt
+import "std/strnum"
+
+struct Blob //< the whole policy the server serves
+  // The format's version (`__metadata__.kspl_pilot`).
+  // Caution: Neither the feature order, the activation, nor the manoeuvre table's meaning shows in
+  // a tensor's shape, so an old reader whose version was not raised goes silently wrong.
+  version: U8[]
+  // The cap for scaling a distance into 0–1 (mm). This one value decides how the features are
+  // made.
+  far_mm: F64
+  w1: Tensor<|F32|>
+  b1: Tensor<|F32|>
+  w2: Tensor<|F32|>
+  b2: Tensor<|F32|>
+  // [manoeuvre count, 3]. One row is lon, lat, rot (integers stored as F32).
+  man: Tensor<|F32|>
+  params: Sz
+
+fn load(data: U8[], arena: Arena$@): Blob?st.Safetensors_error //<
+  //< Reads bytes back as a policy
+  $file: = st.Safetensors.load_from_bytes(data, arena)?
+  defer file.free()
+  meta: = file.metadata.get("__metadata__")
+  w1: = file.get_tensor<|F32|>("fc1.weight", arena)?
+  b1: = file.get_tensor<|F32|>("fc1.bias", arena)?
+  w2: = file.get_tensor<|F32|>("fc2.weight", arena)?
+  b2: = file.get_tensor<|F32|>("fc2.bias", arena)?
+  man: = file.get_tensor<|F32|>("maneuvers", arena)?
+  far: = meta.get("far_mm").as_str().to_f64() catch 0.0
+  return Blob::{ .version = meta.get("kspl_pilot").as_str(), .far_mm = far, .w1 = w1, .b1 = b1,
+    .w2 = w2, .b2 = b2, .man = man, .params = w1.size + b1.size + w2.size + b2.size }
+
+struct Drive //< the answer to one observation
+  lon: I32
+  lat: I32
+  rot: I32
+  // The logit gap between first and second.
+  // Caution: **Drop a close-call point from the verdict.** The server computes in F32 and this
+  // file in double precision, so that difference alone can swap first and second.
+  margin: F64
+
+priv const feature_count: Sz = 5 //< the count of features (valid, distance, left, centre, right)
+
+priv const silu_floor: F64 = -60.0 //< the input below which SiLU is taken as 0
+  //<
+  //< For large negative z, exp(-z) overflows, so the result is set to 0 there.
+
+priv fn silu(z: F64): F64
+  if z < silu_floor
+    return 0.0
+  return z / (1.0 + math.exp(-z))
+
+priv fn features(b: Blob, dist_mm: I64, line: I64, out: List<|F64|>$@) //<
+  //< Makes the features from an observation
+  //<
+  //< The only constant is `far_mm`, and the blob holds that.
+  valid: = dist_mm > 0I64
+  raw: = F64::dist_mm
+  clamped: = raw if raw < b.far_mm else b.far_mm
+  out.push(1.0 if valid else 0.0)
+  out.push((clamped / b.far_mm) if valid else 0.0)
+  out.push(1.0 if (line & 4I64) != 0I64 else 0.0)
+  out.push(1.0 if (line & 2I64) != 0I64 else 0.0)
+  out.push(1.0 if (line & 1I64) != 0I64 else 0.0)
+
+priv fn affine(x: List<|F64|>@, w: Tensor<|F32|>, bias: Tensor<|F32|>, out: List<|F64|>$@) //<
+  //< Multiplies x by a row-major [rows, cols] matrix from the left and adds the bias
+  rows: = w.shape[0]
+  cols: = w.shape[1]
+  for j in Range.asc(cols)
+    $acc: F64 = bias[j]
+    for i in Range.asc(rows)
+      acc += x.get(i) * F64::w[i * cols + j]
+    out.push(acc)
+
+fn drive(b: Blob, dist_mm: I64, line: I64, scratch: Arena$@): Drive //<
+  //< Gives the manoeuvre for an observation from the blob alone
+  //<
+  //< `scratch` is a working arena that is rewound.
+  mark: = scratch.save()
+  $x: = List<|F64|>.new(scratch)
+  features(b, dist_mm, line, x@)
+  $hidden: = List<|F64|>.new(scratch)
+  affine(x@, b.w1, b.b1, hidden@)
+  $act: = List<|F64|>.new(scratch)
+  for i in Range.asc(hidden.len)
+    act.push(silu(hidden.get(i)))
+  $logits: = List<|F64|>.new(scratch)
+  affine(act@, b.w2, b.b2, logits@)
+  best: = argmax(logits@)
+  row: = best * 3
+  man: = b.man
+  d: = Drive::{ .lon = I32::man[row], .lat = I32::man[row + 1], .rot = I32::man[row + 2],
+    .margin = top_margin(logits@, best) }
+  scratch.restore(mark)
+  return d
+
+priv fn argmax(logits: List<|F64|>@): Sz
+  $best: Sz = 0
+  for k in Range.asc(logits.len)
+    if logits.get(k) > logits.get(best)
+      best = k
+  return best
+
+priv fn top_margin(logits: List<|F64|>@, best: Sz): F64 //< the gap between first and second
+  //<
+  //< Where there is only one, the gap is the best logit itself.
+  $second: F64 = 0.0
+  $seen: = false
+  for k in Range.asc(logits.len)
+    if k == best
+      continue
+    v: = logits.get(k)
+    if !seen || v > second
+      second = v
+      seen = true
+  if !seen
+    return logits.get(best)
+  return logits.get(best) - second
+
+// The manoeuvre for each of the 8 line patterns. The index is left<<2 | centre<<1 | right, and 1
+// is black. Only an edge black is a large drift; an edge and the centre black is a small one.
+priv const rule_by_line: U8[][8] = ::{ "creep", // 000 nothing: the line's position is unknown
+  "track_right_hard", // 001 only right = the line is far right
+  "forward", // 010 only centre = on the line
+  "track_right", // 011 centre and right = the line is slightly right
+  "track_left_hard", // 100 only left = the line is far left
+  "creep", // 101 only both edges = the centre is white; it straddles the line
+  "track_left", // 110 left and centre = the line is slightly left
+  "stop", // 111 all three black = a crossing or the end
+}
+
+priv const back_mm: I64 = 150I64 //< the distance below which it backs off (mm)
+priv const strafe_mm: I64 = 400I64 //< the distance below which it dodges sideways (mm)
+
+fn car_rule(dist_mm: I64, line: I64): U8[] //<
+  //< kssrv/pilot.kspls's rule, written again from the specification to check the answers
+  if dist_mm <= 0I64
+    return "stop"
+  if dist_mm < back_mm
+    return "back"
+  if dist_mm < strafe_mm
+    return "strafe_left" if (line & 1I64) != 0I64 else "strafe_right"
+  return rule_by_line[Sz::line]

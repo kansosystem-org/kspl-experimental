@@ -1,0 +1,783 @@
+#!/usr/bin/env -S ksplc run
+//< The test that pins down that a declaration with no body links with the body in another artefact
+//<
+//< The declaration is `pub fn f(): I32;`. The convention is in "A declaration with no body" under
+//< "Definitions" and "A `struct` with no body (an opaque type)" under "Structs (`struct`)", both
+//< in `docs/SPEC-language.md`. It is not a one-file fixture (`tests/negative/`) because it means
+//< something only **when built, linked and run**: ksplc succeeds on a declaration alone, and the
+//< failure shows only at the C compiler.
+
+// ==========================================
+// `#export`: without `--emit-decls` a build prunes the library's `pub` as unreachable (the roots
+// are `main` and `#export`). Only ELF and Mach-O can keep the version's symbol.
+// ==========================================
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/harness_build"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/seq"
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+priv const lib_src: U8[] = """#export
+pub fn acme_add(a: I32, b: I32): I32 { return a + b; }
+"""
+
+priv const client_src: U8[] =
+  """#export
+pub fn acme_add(a: I32, b: I32): I32;
+
+import "std/io";
+
+fn main(): I32 {
+  io.out().s("\{I64::acme_add(20, 22)\}\n");
+  return 0;
+}
+"""
+
+priv const llvm_src: U8[] =
+  """pub fn ext_add(a: I32, b: I32): I32
+
+fn main(): I32
+  return ext_add(1, 2)
+"""
+
+priv const emit_lib: U8[] =
+  """import "std/str" { Str_builder };
+import "std/ds";
+import "std/mem";
+
+pub const version: U8[] = "1.2.3"; //< the version this library answers with
+pub const max_items: Sz = 4096;
+pub const table: I32[3] = ::{ 1, 2, 3 };
+pub const align_to: Sz = 8;
+pub const padded: Sz = ((sizeof(Point) + align_to - 1) / align_to) * align_to;
+
+pub struct Point { //< a place on the grid
+  //<
+  //< Two whole numbers, counted from the top left.
+  pub x: I32;
+  pub y: I32;
+}
+
+pub struct Vec2 {
+  pub x: F64;
+  pub y: F64;
+}
+
+pub typedef Score = I32;
+
+pub fn scaled(v: I32, by: I32 = 3): I32 {
+  return v * by;
+}
+
+pub fn add(a: I32, b: I32): I32 {
+  return a + b;
+}
+
+pub fn make_point(x: I32, y: I32): Point {
+  return Point::{ .x = x, .y = y };
+}
+
+pub fn box_sum(p: Point): Score {
+  return Score::add(p.x, p.y);
+}
+
+pub fn vec_len2(v: Vec2): F64 {
+  return v.x * v.x + v.y * v.y;
+}
+
+pub fn generic_id<|T|>(v: T): T {
+  return v;
+}
+
+pub fn render_into(b: Str_builder$@, p: Point): Sz {
+  b.s("p");
+  return b.slice().len + Sz::p.x;
+}
+
+pub fn alloc_point(a: mem.Arena$@, x: I32): Point {
+  return Point::{ .x = x, .y = 0 };
+}
+
+pub fn names(a: mem.Arena$@): ds.List<|U8[]|> {
+  return ds.List<|U8[]|>.new(a);
+}
+
+priv fn helper(): I32 {
+  return 1;
+}
+
+impl Point {
+  pub fn sum(r: Self): I32 {
+    return r.x + r.y;
+  }
+
+  pub fn bump(r: Self$@) {
+    r.x += 1;
+  }
+
+  priv fn secret(r: Self): I32 {
+    return r.x;
+  }
+}
+
+impl Point: Move_only {}
+
+pub struct Counted {
+  pub n: I32;
+}
+
+impl Counted: Ref_counted {
+  priv fn retain(_r: Self) {}
+  priv fn release(_r: Self) {}
+}
+"""
+
+// The client cannot look inside the opaque `Point`; it takes one from the library and passes it
+// back as a value, which exercises the opaque type's calling convention. `Vec2` holds floating
+// point, so it is transparent and its fields can be written directly.
+priv const emit_client: U8[] =
+  """import "std/io";
+import "std/str" { Str_builder };
+import "std/mem";
+import "acme/greet/lib.kspl" as greet;
+
+fn main(): I32 {
+  $p: = greet.make_point(20, 22);
+  p.bump();
+  v: greet.Vec2 = greet.Vec2::{ .x = 3.0, .y = 4.0 };
+  a: = mem.Arena.new(4096);
+  defer a.free();
+  $b: = Str_builder.new();
+  defer b.free();
+  n: = greet.render_into(b@, greet.make_point(1, 1));
+  q: = greet.alloc_point(a, 5);
+  names: = greet.names(a);
+  io.out().s("\{I64::p.sum()\} \{I64::sizeof(greet.Point)\}").s(" \{I64::greet.vec_len2(v)\}").s(" ").s(greet.version).s(" \{I64::greet.max_items\}").s(" \{I64::n\} \{I64::q.sum()\} \{I64::names.len\}").s(" \{I64::greet.padded\}").s(" \{I64::greet.scaled(2)\}").s("\n");
+  return 0;
+}
+"""
+
+priv const opaque_lib: U8[] =
+  """pub struct Point {
+  pub x: I32;
+  pub y: I32;
+}
+
+#export
+pub fn opaque_make(x: I32, y: I32): Point { return Point::{ .x = x, .y = y }; }
+
+#export
+pub fn opaque_sum(p: Point): I32 { return p.x + p.y; }
+"""
+
+// The opaque declaration written by hand; its size and alignment must match the body.
+priv const opaque_client: U8[] =
+  """import "std/io";
+
+#size(8) #align(4) pub struct Point;
+
+#export
+pub fn opaque_make(x: I32, y: I32): Point;
+
+#export
+pub fn opaque_sum(p: Point): I32;
+
+fn main(): I32 {
+  p: = opaque_make(20, 22);
+  io.out().s("\{I64::opaque_sum(p)\} \{I64::sizeof(Point)\}").s("\n");
+  return 0;
+}
+"""
+
+priv const generic_client: U8[] =
+  """import "std/io";
+import "std/ds" { List };
+
+#size(8) #align(4) pub struct Point;
+
+#export
+pub fn opaque_make(x: I32, y: I32): Point;
+
+#export
+pub fn opaque_sum(p: Point): I32;
+
+fn main(): I32 {
+  o: = Option<|Point|>.some(opaque_make(20, 22));
+  $xs: = List<|Point|>.new();
+  defer xs.free();
+  xs.push(opaque_make(1, 2));
+  $total: I32 = 0;
+  for p in xs {
+    total += opaque_sum(p);
+  }
+  switch o case .some(p2) {
+    total += opaque_sum(p2);
+  } default {}
+  io.out().s("\{I64::total\}\n");
+  return 0;
+}
+"""
+
+// The generic that distributes a body.
+// Caution: Make both artefacts hold the same instantiation; without the overlap there is no
+// telling whether weak works.
+priv const publish_lib: U8[] =
+  """#publish_body
+pub fn pair_sum<|T|>(a: T, b: T): T {
+  s: = a + b;
+  return s + s;
+}
+
+#export
+pub fn lib_probe(): I32 {
+  return pair_sum<|I32|>(1, 2);
+}
+"""
+
+priv const publish_decls: U8[] =
+  """#publish_body
+pub fn pair_sum<|T|>(a: T, b: T): T {
+  s: = a + b;
+  return s + s;
+}
+
+#export
+pub fn lib_probe(): I32;
+"""
+
+priv const publish_client: U8[] =
+  """import "std/io";
+import "lib.kspl" as lib;
+
+fn main(): I32 {
+  io.out().s("\{I64::lib.pair_sum<|I32|>(3, 4)\} \{I64::lib.lib_probe()\}").s("\n");
+  return 0;
+}
+"""
+
+// The shape in which `--emit-decls` copies the body out. The imports the distributed body uses
+// must be copied too, or the names do not resolve for the receiver; an import of another file of
+// the package's own cannot be, so the check is that the line remains.
+priv const body_lib: U8[] =
+  """import "std/ds" { List };
+import "std/mem" as store;
+import "acme/greet/helper";
+
+#publish_body
+pub fn sum_all<|T|>(xs: List<|T|>$@, zero: T): T {
+  $acc: = zero;
+  for v in xs {
+    acc += v;
+  }
+  return acc;
+}
+
+#export
+pub fn lib_probe(): I32 {
+  return helper.bump(1);
+}
+
+pub fn count(xs: List<|I32|>$@): Sz {
+  return xs.len;
+}
+
+pub fn fresh(a: store.Arena$@): I32 {
+  return 0 if a == null else 7;
+}
+"""
+
+priv const body_helper: U8[] = """pub fn bump(n: I32): I32 {
+  return n + 1;
+}
+"""
+
+priv const body_client: U8[] =
+  """import "std/io";
+import "std/ds" { List };
+import "std/mem";
+import "acme/greet/lib.kspl" as greet;
+
+fn main(): I32 {
+  a: = mem.Arena.new(4096);
+  defer a.free();
+  $xs: = List<|I32|>.new();
+  defer xs.free();
+  xs.push(10);
+  xs.push(20);
+  io.out().s("\{I64::greet.sum_all<|I32|>(xs@, 0)\} \{I64::greet.lib_probe()\}").s(" \{I64::greet.count(xs@)\} \{I64::greet.fresh(a)\}").s("\n");
+  return 0;
+}
+"""
+
+// An `enum` cannot be made opaque (to take it apart by `switch` the variants must be known).
+// Caution: Check the tag values too. A skipped number (`err = 3`) recounted from the order makes
+// the same name a different number, and the branches swap with the link still passing.
+priv const enum_lib: U8[] =
+  """pub enum Status: U8 {
+  ok = 0;
+  err = 3;
+}
+
+pub enum Event {
+  quit;
+  message(text: U8[]);
+  click(x: I32, y: I32);
+}
+
+pub trait Drawable {
+  fn draw(r: Self): I32;
+  priv fn secret(r: Self): I32;
+}
+
+pub fn classify(s: Status): I32 {
+  return 1 if s == Status.ok else 0;
+}
+
+pub fn first(e: Event): I32 {
+  switch e case .click(x, _y) {
+    return x;
+  } default {}
+  return 0;
+}
+"""
+
+// The client, from the declaration alone, builds a variant, switches on it and conforms to a
+// trait.
+priv const enum_client: U8[] =
+  """import "acme/greet/lib.kspl" as greet;
+import "std/io";
+
+struct Box {
+  n: I32;
+}
+
+// Caution: `Box` is unspecified, so `pub` cannot be written on a method (a visibility wider than
+// the enclosure is turned away). The conformance verdict does not look at a method's visibility, so
+// the demand can be met this way.
+impl Box: greet.Drawable {
+  fn draw(r: Self): I32 {
+    return r.n;
+  }
+
+  priv fn secret(r: Self): I32 {
+    return r.n;
+  }
+}
+
+fn main(): I32 {
+  s: greet.Status = greet.Status.err;
+  e: greet.Event = greet.Event.click(7, 8);
+  b: = Box::{ .n = 3 };
+  io.out().s("\{I64::greet.classify(s)\} \{I64::greet.first(e)\} \{s\} \{I64::b.draw()\}").s("\n");
+  return 0;
+}
+"""
+
+priv const state_ok: Sz = 0 //< the verdict's three states
+  //<
+  //< Caution: Do not confuse "it cannot be built under this object format" with "it failed".
+priv const state_failed: Sz = 1
+priv const state_skip: Sz = 2
+
+priv struct Result
+  state: Sz
+  why: U8[]
+
+priv fn ok_result(): Result
+  return Result::{ .state = state_ok, .why = "" }
+
+priv fn failed(why: U8[]): Result
+  return Result::{ .state = state_failed, .why = why }
+
+priv fn report(name: U8[], r: Result)
+  if r.state == state_skip
+    verdict.skip_check(name, r.why)
+    return
+  verdict.check(name, r.state == state_ok, r.why)
+
+priv fn dist_args(args: U8[][], arena: Arena$@): U8[][] //< the distributor's settings
+  //<
+  //< Three make one set: runtime outside, std weak, std's directory passed.
+  $out: = List<|U8[]|>.new(arena)
+  out.push("--omit-runtime")
+  for a in args
+    out.push(a)
+  return out.slice()
+
+priv fn ksplc_in(dir: U8[], args: U8[][]): verdict.Run_out //< it runs ksplc with cwd set to dir
+  return harness.run_in(harness.ksplc_argv(args), dir)
+
+priv fn emit_runtime(dir: U8[]): verdict.Run_out //< it writes the runtime out
+  //<
+  //< Not `ksplc_in`: `emit-runtime` does not take `--std-dir=`.
+  return harness.run_in(U8[][]::{ harness.ksplc_exe(), "emit-runtime", "rt.c" }, dir)
+
+priv fn link_and_run(dir: U8[], srcs: U8[][], want: U8[], arena: Arena$@): Result //<
+  //< It builds, links, runs, and matches the output
+  exe: = fs.join(dir, "prog.exe", arena)
+  b: = harness_build.build_exe(srcs, exe, U8[][]::harness_build.default_cflags)
+  if b.code != 0
+    if b.out.find_str(harness.runtime_extern_refusal) >= 0
+      return Result::{ .state = state_skip,
+        .why = "an object format that cannot keep the mark (the generated C itself turns it away)" }
+    return failed(arena.text().s("it cannot be linked\n\{b.out\}").take())
+  r: = harness.run(U8[][]::{ exe })
+  if r.code != 0 || !r.out.trim_spaces().equals(want)
+    return failed(arena.text().s("the run's result is not \{want\}: \{r.out.trim_spaces()\}").take())
+  return ok_result()
+
+priv fn count_lines_starting(text: U8[], head: U8[], arena: Arena$@): Sz //<
+  //< How many lines start with head
+  lines: = text.lines(arena)
+  return lines.where(fn(line: U8[]; head: U8[]): Bool {
+    return line.starts_with(head);
+  }).count()
+
+priv fn has_trimmed_line(text: U8[], want: U8[], arena: Arena$@): Bool //<
+  //< Whether a line, trimmed, is exactly want
+  lines: = text.lines(arena)
+  return lines.any(fn(line: U8[]; want: U8[]): Bool {
+    return line.trim_spaces().equals(want);
+  })
+
+priv fn case_links_against_external_definition(arena: Arena$@): Result //<
+  //< It links a declaration-only client with the unit holding the body, and runs it
+  dir: = harness.sandbox("decls_extern") catch
+    return failed("cannot make a working directory")
+  work: = dir
+  fs.write_tree(work, U8[][]::{ "acme/greet/lib.kspl", "client.kspl" },
+    U8[][]::{ lib_src, client_src }, arena) catch
+    return failed("cannot place the material")
+  for i in Range.asc(2)
+    src: = "acme/greet/lib.kspl" if i == 0 else "client.kspl"
+    out: = "lib.c" if i == 0 else "client.c"
+    r: = ksplc_in(work, dist_args(U8[][]::{ src, out }, arena))
+    if r.code != 0
+      return failed(arena.text().s("ksplc failed (\{src\})\n\{r.out\}").take())
+  rt: = emit_runtime(work)
+  if rt.code != 0
+    return failed(arena.text().s("the runtime cannot be spat out\n\{rt.out\}").take())
+  client_c: = io.read_file(fs.join(work, "client.c", arena)) catch
+    return failed("the generated C cannot be read")
+  proto: = "I32 acme_add(I32 a, I32 b);"
+  body: = "I32 acme_add(I32 a, I32 b) {"
+  if count_lines_starting(client_c, proto, arena) != 1 ||
+    count_lines_starting(client_c, body, arena) != 0
+    return failed("the declaring side must be a prototype alone")
+  return link_and_run(work,
+    U8[][]::{ fs.join(work, "client.c", arena), fs.join(work, "rt.c", arena),
+    fs.join(work, "lib.c", arena) }, "42", arena)
+
+priv fn case_llvm_emits_declare(arena: Arena$@): Result //<
+  //< The LLVM backend emits a declaration with no body as `declare`
+  dir: = harness.sandbox("decls_llvm") catch
+    return failed("cannot make a working directory")
+  work: = dir
+  io.write_file(fs.join(work, "m.kspls", arena), llvm_src) catch
+    return failed("cannot write the material")
+  r: = ksplc_in(work, U8[][]::{ "--target=llvm", "m.kspls", "m.ll" })
+  if r.code != 0
+    return failed(arena.text().s("ksplc failed\n\{r.out\}").take())
+  ll: = io.read_file(fs.join(work, "m.ll", arena)) catch
+    return failed("the LLVM IR cannot be read")
+  if !has_trimmed_line(ll, "declare i32 @kspl_m_ext_add(i32, i32)", arena)
+    return failed("no declare comes out")
+  ll_lines: = ll.lines(arena)
+  defines: = ll_lines.where(fn(line: U8[]; ): Bool {
+    return line.starts_with("define ") && line.find_str("@kspl_m_ext_add") >= 0;
+  }).count()
+  if defines > 0
+    return failed("it puts a define out with no body")
+  return ok_result()
+
+priv fn decls_must_have(decls: U8[], wants: U8[][]): U8[] //<
+  //< The strings the declaration file must hold, and those it must not
+  for w in wants
+    if decls.find_str(w) < 0
+      return harness.arena().text().s("a declaration is missing: \{w\}").take()
+  return ""
+
+priv const round_trip_wants: U8[][19] = ::{ "pub fn add(a: I32, b: I32): I32;",
+  "pub fn scaled(v: I32, by: I32 = 3): I32;", "pub fn box_sum(p: Point): Score;",
+  "pub typedef Score = I32;", "#size(8) #align(4) pub struct Point;", "pub struct Vec2 {",
+  "pub fn sum(r: Point): I32;", "pub fn bump(r: Point$@);", "impl Point: Move_only {}",
+  "pub const version: U8[] = \"1.2.3\";", "pub const max_items: Sz = 4096;",
+  "pub const padded: Sz = 8;", "import \"std/str\";", "import \"std/mem\";", "import \"std/ds\";",
+  "pub fn render_into(b: str.Str_builder$@, p: Point): Sz;",
+  "pub fn alloc_point(a: mem.Arena$@, x: I32): Point;",
+  "pub fn names(a: mem.Arena$@): ds.List<|U8[]|>;", "generics are not put out to the boundary" }
+
+priv const round_trip_reasons: U8[][4] = ::{ "// method that could not go out: 'secret'",
+  "// declaration that could not go out: 'table'",
+  "// declaration that could not go out: 'Counted' (it is a type under ARC",
+  "// declaration that could not go out: 'impl Counted'" }
+
+priv fn case_emit_decls_round_trip(arena: Arena$@): Result //<
+  //< It places `--emit-decls`'s declarations into the client's project, links the body and runs it
+  //<
+  //< The declarations are placed at **the body's logical name** (`acme/greet/lib.kspl`): symbol
+  //< names are made from it, so anywhere else they disagree with the `.a`'s.
+  dir: = harness.sandbox("decls_emit") catch
+    return failed("cannot make a working directory")
+  work: = dir
+  fs.write_tree(work, U8[][]::{ "acme/greet/lib.kspl" }, U8[][]::{ emit_lib }, arena) catch
+    return failed("cannot place the material")
+  r: =
+    ksplc_in(work,
+    dist_args(U8[][]::{ "--emit-decls=greet.decls.kspl", "acme/greet/lib.kspl", "lib.c" }, arena))
+  if r.code != 0
+    return failed(arena.text().s("the library cannot be built\n\{r.out\}").take())
+  decls: = io.read_file(fs.join(work, "greet.decls.kspl", arena)) catch
+    return failed("the declaration file cannot be read")
+  text: = decls
+  missing: = decls_must_have(text, U8[][]::round_trip_wants)
+  if missing.len > 0
+    return failed(arena.text().s("\{missing\}\n\{text\}").take())
+  if text.find_str("pub x: I32;") >= 0
+    return failed("an opaque struct's field is leaking")
+  reasons: = decls_must_have(text, U8[][]::round_trip_reasons)
+  if reasons.len > 0
+    return failed(arena.text().s("the reason it could not be put out is not left: \{reasons\}")
+      .take())
+  if text.find_str("helper") >= 0
+    return failed("`priv` must not be put out into the declaration file")
+  // **The summary is copied; the detail after the parting is not**, so the receiver's editor
+  // shows the run's opening paragraph.
+  if text.find_str("pub struct Point; //< a place on the grid") < 0 ||
+    text.find_str("//< the version this library answers with") < 0
+    return failed(arena.text().s("the summary did not travel into the declarations\n\{text\}")
+      .take())
+  if text.find_str("Two whole numbers") >= 0
+    return failed("the detail behind the parting mark rode into a file that carries no body")
+  if text.find_str("generic_id") < 0
+    return failed("the name of the generic that could not be put out is not left")
+  cdir: = fs.join(work, "client", arena)
+  fs.write_tree(cdir, U8[][]::{ "acme/greet/lib.kspl", "main.kspl" },
+    U8[][]::{ text, emit_client }, arena) catch
+    return failed("cannot place the caller-side material")
+  c: = ksplc_in(cdir, dist_args(U8[][]::{ "main.kspl", "main.c" }, arena))
+  if c.code != 0
+    return failed(arena.text().s("the client cannot be built\n\{c.out\}").take())
+  rt: = emit_runtime(work)
+  if rt.code != 0
+    return failed(arena.text().s("the runtime cannot be spat out\n\{rt.out\}").take())
+  return link_and_run(work,
+    U8[][]::{ fs.join(cdir, "main.c", arena), fs.join(work, "rt.c", arena),
+    fs.join(work, "lib.c", arena) }, "43 8 25 1.2.3 4096 2 5 0 8 6", arena)
+
+priv fn case_opaque_struct_crosses_link(arena: Arena$@): Result //<
+  //< A hand-written opaque `struct` matches another translation unit holding the body
+  //<
+  //< Caution: Test passing it as a value too. Size and alignment alone do not decide the calling
+  //< convention (a type holding floating point is classified differently).
+  dir: = harness.sandbox("decls_opaque") catch
+    return failed("cannot make a working directory")
+  work: = dir
+  fs.write_tree(work, U8[][]::{ "lib.kspl", "client.kspl" },
+    U8[][]::{ opaque_lib, opaque_client }, arena) catch
+    return failed("cannot place the material")
+  for i in Range.asc(2)
+    src: = "lib.kspl" if i == 0 else "client.kspl"
+    out: = "lib.c" if i == 0 else "client.c"
+    r: = ksplc_in(work, dist_args(U8[][]::{ src, out }, arena))
+    if r.code != 0
+      return failed(arena.text().s("ksplc failed (\{src\})\n\{r.out\}").take())
+  client_c: = io.read_file(fs.join(work, "client.c", arena)) catch
+    return failed("the generated C cannot be read")
+  if !has_trimmed_line(client_c, "U8 _opaque[8];", arena)
+    return failed("the opaque struct takes no place")
+  rt: = emit_runtime(work)
+  if rt.code != 0
+    return failed(arena.text().s("the runtime cannot be spat out\n\{rt.out\}").take())
+  return link_and_run(work,
+    U8[][]::{ fs.join(work, "client.c", arena), fs.join(work, "rt.c", arena),
+    fs.join(work, "lib.c", arena) }, "42 8", arena)
+
+priv fn case_opaque_type_as_generic_argument(arena: Arena$@): Result //<
+  //< An opaque type can be a generic's actual argument (`Option<|Point|>` / `List<|Point|>`)
+  //<
+  //< `#size` / `#align` give the instantiation what it needs; without this an opaque type cannot go
+  //< into std's collections.
+  dir: = harness.sandbox("decls_opaque_gen") catch
+    return failed("cannot make a working directory")
+  work: = dir
+  fs.write_tree(work, U8[][]::{ "lib.kspl", "client.kspl" },
+    U8[][]::{ opaque_lib, generic_client }, arena) catch
+    return failed("cannot place the material")
+  for i in Range.asc(2)
+    src: = "lib.kspl" if i == 0 else "client.kspl"
+    out: = "lib.c" if i == 0 else "client.c"
+    r: = ksplc_in(work, dist_args(U8[][]::{ src, out }, arena))
+    if r.code != 0
+      return failed(arena.text().s("ksplc failed (\{src\})\n\{r.out\}").take())
+  rt: = emit_runtime(work)
+  if rt.code != 0
+    return failed(arena.text().s("the runtime cannot be spat out\n\{rt.out\}").take())
+  return link_and_run(work,
+    U8[][]::{ fs.join(work, "client.c", arena), fs.join(work, "rt.c", arena),
+    fs.join(work, "lib.c", arena) }, "45", arena)
+
+priv fn build_published(slot: U8[], lib_body: U8[], decls: U8[], want: U8[], arena: Arena$@): Result //<
+  //< It builds the library and the client separately and links them
+  //<
+  //< The client's declarations are placed at **the library's logical name** (`lib.kspl`), which
+  //< the symbol names are made from.
+  //< Caution: **The import names the extension.** A logical name drops only the default extension,
+  //< and these files use the other, so a bare `import "lib"` resolves to a name other than the
+  //< library's and nothing overlaps.
+  dir: = harness.sandbox(slot) catch
+    return failed("cannot make a working directory")
+  work: = dir
+  a_dir: = fs.join(work, "a", arena)
+  b_dir: = fs.join(work, "b", arena)
+  fs.write_tree(a_dir, U8[][]::{ "lib.kspl" }, U8[][]::{ lib_body }, arena) catch
+    return failed("cannot place the material")
+  fs.write_tree(b_dir, U8[][]::{ "lib.kspl", "main.kspl" }, U8[][]::{ decls, publish_client }, arena)
+    catch
+    return failed("cannot place the material")
+  lib: =
+    ksplc_in(a_dir,
+    dist_args(U8[][]::{ "lib.kspl", fs.join(work, "lib.c", arena) }, arena))
+  if lib.code != 0
+    return failed(arena.text().s("the library cannot be built\n\{lib.out\}").take())
+  app: =
+    ksplc_in(b_dir,
+    dist_args(U8[][]::{ "main.kspl", fs.join(work, "main.c", arena) }, arena))
+  if app.code != 0
+    return failed(arena.text().s("the client cannot be built\n\{app.out\}").take())
+  rt: = emit_runtime(work)
+  if rt.code != 0
+    return failed(arena.text().s("the runtime cannot be spat out\n\{rt.out\}").take())
+  return link_and_run(work,
+    U8[][]::{ fs.join(work, "main.c", arena), fs.join(work, "rt.c", arena),
+    fs.join(work, "lib.c", arena) }, want, arena)
+
+priv fn case_publish_body_needs_the_attribute(arena: Arena$@): Result //<
+  //< Without the attribute it fails on a duplicate definition
+  //<
+  //< Caution: **Remove it from both.** With only one side weak, the strong definition wins and the
+  //< link passes.
+  plain: = "#publish_body\n"
+  r: =
+    build_published("decls_publish_np", publish_lib.replace(plain, "", arena),
+    publish_decls.replace(plain, "", arena), "14 6", arena)
+  // Caution: Do not read a skipped run as "it failed": failing without the attribute is expected,
+  // so a failure for another reason would count as this case passing.
+  if r.state == state_skip
+    return r
+  if r.state == state_ok
+    return failed("it linked even without the attribute")
+  if r.why.find_str("it cannot be linked") < 0
+    return failed(arena.text().s("it fails for a reason other than the link\n\{r.why\}").take())
+  return ok_result()
+
+priv const body_wants: U8[][8] = ::{ "#publish_body\npub fn sum_all<|T|>(xs: List<|T|>$@, zero: T): \
+  T {", "    acc += v;", "import \"std/ds\" { List };", "import \"std/mem\" as store;",
+  "import \"std/ds\";", "pub fn count(xs: ds.List<|I32|>$@): Sz;",
+  "pub fn fresh(a: store.Arena$@): I32;", "// import that could not go out: 'acme/greet/helper'" }
+
+priv fn case_emit_decls_copies_published_body(arena: Arena$@): Result //<
+  //< `--emit-decls` copies a `#publish_body` generic out body and all, and the receiver builds it
+  dir: = harness.sandbox("decls_body") catch
+    return failed("cannot make a working directory")
+  work: = dir
+  fs.write_tree(work, U8[][]::{ "acme/greet/lib.kspl", "acme/greet/helper.kspl" },
+    U8[][]::{ body_lib, body_helper }, arena) catch
+    return failed("cannot place the material")
+  r: =
+    ksplc_in(work,
+    dist_args(U8[][]::{ "--emit-decls=gen.kspl", "acme/greet/lib.kspl", "lib.c" }, arena))
+  if r.code != 0
+    return failed(arena.text().s("the library cannot be built\n\{r.out\}").take())
+  decls: = io.read_file(fs.join(work, "gen.kspl", arena)) catch
+    return failed("the declaration file cannot be read")
+  text: = decls
+  missing: = decls_must_have(text, U8[][]::body_wants)
+  if missing.len > 0
+    return failed(arena.text().s("\{missing\}\n\{text\}").take())
+  // No signature-only line twice (the name would be defined twice).
+  if text.count_str("sum_all") != 1
+    return failed(arena.text().s("sum_all does not come out exactly once\n\{text\}").take())
+  cdir: = fs.join(work, "client", arena)
+  fs.write_tree(cdir, U8[][]::{ "acme/greet/lib.kspl", "main.kspl" },
+    U8[][]::{ text, body_client }, arena) catch
+    return failed("cannot place the caller-side material")
+  c: = ksplc_in(cdir, dist_args(U8[][]::{ "main.kspl", "main.c" }, arena))
+  if c.code != 0
+    return failed(arena.text().s("the client cannot be built\n\{c.out\}").take())
+  rt: = emit_runtime(work)
+  if rt.code != 0
+    return failed(arena.text().s("the runtime cannot be spat out\n\{rt.out\}").take())
+  return link_and_run(work,
+    U8[][]::{ fs.join(cdir, "main.c", arena), fs.join(work, "rt.c", arena),
+    fs.join(work, "lib.c", arena) }, "30 2 2 7", arena)
+
+priv const enum_wants: U8[][10] = ::{ "pub enum Status: U8 {", "  ok = 0;", "  err = 3;",
+  "pub enum Event {", "  quit = 0;", "  message(text: U8[]) = 1;", "  click(x: I32, y: I32) = 2;",
+  "pub trait Drawable {", "  pub fn draw(r: Self): I32;", "  priv fn secret(r: Self): I32;" }
+
+priv fn case_emit_decls_enum_and_trait(arena: Arena$@): Result //<
+  //< It checks an `enum` and a `trait` are written into the declaration file
+  //<
+  //< The receiver builds against them and conforms to the trait.
+  dir: = harness.sandbox("decls_enum") catch
+    return failed("cannot make a working directory")
+  work: = dir
+  fs.write_tree(work, U8[][]::{ "acme/greet/lib.kspl" }, U8[][]::{ enum_lib }, arena) catch
+    return failed("cannot place the material")
+  r: =
+    ksplc_in(work,
+    dist_args(U8[][]::{ "--emit-decls=gen.kspl", "acme/greet/lib.kspl", "lib.c" }, arena))
+  if r.code != 0
+    return failed(arena.text().s("the library cannot be built\n\{r.out\}").take())
+  decls: = io.read_file(fs.join(work, "gen.kspl", arena)) catch
+    return failed("the declaration file cannot be read")
+  text: = decls
+  missing: = decls_must_have(text, U8[][]::enum_wants)
+  if missing.len > 0
+    return failed(arena.text().s("\{missing\}\n\{text\}").take())
+  cdir: = fs.join(work, "client", arena)
+  fs.write_tree(cdir, U8[][]::{ "acme/greet/lib.kspl", "main.kspl" },
+    U8[][]::{ text, enum_client }, arena) catch
+    return failed("cannot place the caller-side material")
+  c: = ksplc_in(cdir, dist_args(U8[][]::{ "main.kspl", "main.c" }, arena))
+  if c.code != 0
+    return failed(arena.text().s("the client cannot be built\n\{c.out\}").take())
+  rt: = emit_runtime(work)
+  if rt.code != 0
+    return failed(arena.text().s("the runtime cannot be spat out\n\{rt.out\}").take())
+  return link_and_run(work,
+    U8[][]::{ fs.join(cdir, "main.c", arena), fs.join(work, "rt.c", arena),
+    fs.join(work, "lib.c", arena) }, "0 7 err 3", arena)
+
+fn main(): I32
+  arena: = harness.begin(512 * 1024 * 1024)
+  io.out().s("# declarations with no body: 10\n")
+  report("a declaration-only side links with another translation unit's body and runs",
+    case_links_against_external_definition(arena))
+  report("LLVM puts a declaration with no body out as declare", case_llvm_emits_declare(arena))
+  report("the client builds on the declarations --emit-decls spat out, links with the body, runs",
+    case_emit_decls_round_trip(arena))
+  report("an opaque struct crosses the boundary as a value",
+    case_opaque_struct_crosses_link(arena))
+  report("an opaque type can be a generic's actual argument",
+    case_opaque_type_as_generic_argument(arena))
+  report("a generic that distributes a body is folded even when present in both artefacts",
+    build_published("decls_publish", publish_lib, publish_decls, "14 6", arena))
+  report("without #publish_body it fails on a duplicate definition",
+    case_publish_body_needs_the_attribute(arena))
+  // Only the client's body copy changes; if folded away, the client loses the body printing 15.
+  bumped: = publish_decls.replace("return s + s;", "return s + s + 1;", arena)
+  report("with different bodies the version changes and they do not mix",
+    build_published("decls_publish_ver", publish_lib, bumped, "15 6", arena))
+  report("--emit-decls copies #publish_body's body out",
+    case_emit_decls_copies_published_body(arena))
+  report("an enum and a trait come out into the declaration file and the receiver can assemble",
+    case_emit_decls_enum_and_trait(arena))
+  return harness.finish()

@@ -1,0 +1,157 @@
+//< The smallest MQTT (v3.1.1) client protocol layer
+//<
+//< The scope: only CONNECT/CONNACK/PUBLISH (QoS 0 only)/DISCONNECT — no QoS 1/2, no SUBSCRIBE,
+//< no Will, no authentication, no keep-alive PINGREQ.
+//< **Copy bytes only with `copy_from` in `std/bytes`**, so an overrun of the buffer behaves the
+//< same everywhere.
+//< Caution: **Check the buffer's size before building** (fits).
+import "std/bytes"
+import "std/chars"
+
+const pkt_type_connect: U8 = 1
+const pkt_type_connack: U8 = 2
+const pkt_type_publish: U8 = 3
+const pkt_type_disconnect: U8 = 14
+
+const content_start: Sz = 5 //<
+  //< The longest the fixed header can be, and so the offset where the content starts
+  //<
+  //< That is 1 byte of packet type and flags plus up to 4 bytes of Remaining Length.
+  //< build_* writes the rest from this offset; finalize_packet moves it forward.
+
+const max_str_len: Sz = 65535 //<
+  //< An MQTT string gives its length in 2 bytes, so a longer length cannot be encoded
+  //<
+  //< Caution: Beyond it, `U16::` silently truncates the length (a 65536-byte topic claims
+  //< "length 0"), so the building function rejects it first.
+
+fn fits(buf: U8$[], content_len: Sz): Bool //<
+  //< Whether a packet with content_len bytes of content fits buf
+  //<
+  //< It checks content_start + content_len: building needs more room than the finished packet.
+  return buf.len >= content_start + content_len
+
+fn put_str(buf: U8$[], off: Sz, s: U8[]): Sz //<
+  //< Writes a length-prefixed UTF-8 string into buf at off, returning **the bytes really written**
+  //<
+  //< The prefix is a 2-byte big-endian length. The count returned is 2 plus the length it could
+  //< copy.
+  //<
+  //< Caution: **Check fits and max_str_len before calling it.** It claims s.len but copies only
+  //< what fits, so a short buffer makes the length and the content disagree.
+  buf.put_u16_be(off, U16::s.len)
+  return 2 + buf.copy_from(off + 2, s)
+
+fn put_remaining_length(buf: U8$[], off: Sz, len: Sz): Sz //<
+  //< Writes MQTT's Remaining Length into buf at off and returns how many bytes it used (1 to 4)
+  //<
+  //< It is MQTT's variable-length encoding ("Remaining Length" in the MQTT v3.1.1 specification).
+  $value: Sz = len
+  $i: Sz = 0
+  for i < 4
+    $encoded: = U8::(value % 128)
+    value /= 128
+    if value > 0
+      encoded |= 0x80
+    buf[off + i] = encoded
+    i += 1
+    if value == 0
+      return i
+  return i // Remaining Length's limit (4 bytes), never reached by this file's packets
+
+struct Remaining_length
+  value: Sz
+  consumed: Sz //< how many bytes were read (0 if it is malformed)
+
+fn get_remaining_length(buf: U8[], off: Sz, len: Sz): Remaining_length //<
+  //< Reads MQTT's variable-length encoding from buf at off (up to 4 bytes)
+  none: Remaining_length = ::{ .value = 0, .consumed = 0 }
+  $value: Sz = 0
+  $multiplier: Sz = 1
+  $i: Sz = 0
+  for i < 4 && off + i < len
+    b: U8 = buf[off + i]
+    value += (b & 0x7F) * multiplier
+    i += 1
+    if (b & 0x80) == 0
+      return ::{ .value = value, .consumed = i }
+    if multiplier > 128 * 128 * 128
+      return none // it exceeds Remaining Length's 4-byte limit (malformed input)
+    multiplier *= 128
+  return none // over 4 bytes, or it reached the end of the buffer (malformed)
+
+fn finalize_packet(buf: U8$[], type_and_flags: U8, content_len: Sz): Sz //<
+  //< Puts the fixed header in front of the content and packs the packet together
+  //<
+  //< The fixed header is the packet type and flags (1 byte) and the Remaining Length (1 to 4
+  //< bytes). The content is the variable header and payload written from content_start
+  //< (content_len bytes).
+  //< copy_from handles the overlapping move within the buffer, so do not write a loop for it. It
+  //< returns the packet's full length.
+  buf[0] = type_and_flags
+  rl_len: = put_remaining_length(buf, 1, content_len)
+  header_len: Sz = 1 + rl_len
+  buf.copy_from(header_len, (U8[]::buf).sub(content_start, content_len))
+  return header_len + content_len
+
+fn build_connect(buf: U8$[], client_id: U8[], keep_alive_secs: U16): Sz //<
+  //< Builds a CONNECT packet (Clean Session set, with no Will, user name or password)
+  //<
+  //< It returns the packet's full length (including the fixed header), or 0 if it does not fit
+  //< (see fits).
+  // 12 plus the Client Identifier's length: 2+4 ("MQTT") + 1 + 1 + 2 (Keep Alive), and 2+len.
+  if client_id.len > max_str_len || !fits(buf, 12 + client_id.len)
+    return 0
+  $off: Sz = content_start
+  off += put_str(buf, off, "MQTT")
+  buf[off] = 4 // Protocol Level = 4 (MQTT v3.1.1)
+  off += 1
+  buf[off] = 0x02 // Connect Flags: only Clean Session (bit1)
+  off += 1
+  buf.put_u16_be(off, keep_alive_secs)
+  off += 2
+  off += put_str(buf, off, client_id)
+  content_len: Sz = off - content_start
+  return finalize_packet(buf, pkt_type_connect << 4, content_len)
+
+struct Connack
+  ok: Bool
+  session_present: Bool
+  return_code: U8 //< 0 = Connection Accepted
+
+fn parse_connack(buf: U8[], off: Sz, len: Sz): Connack //<
+  //< Checks that buf[off..len) is a CONNACK and returns its Session Present flag and Return Code
+  none: Connack = ::{ .ok = false, .session_present = false, .return_code = 0 }
+  if off >= len || (buf[off] >> 4) != pkt_type_connack
+    return none
+  rl: = get_remaining_length(buf, off + 1, len)
+  if rl.consumed == 0
+    return none
+  vh_off: Sz = off + 1 + rl.consumed
+  if vh_off + 2 > len
+    return none
+  flags: = buf[vh_off]
+  rc: = buf[vh_off + 1]
+  return ::{ .ok = true, .session_present = (flags & 0x1) != 0, .return_code = rc }
+
+fn build_publish(buf: U8$[], topic: U8[], payload: U8[]): Sz //<
+  //< Builds a PUBLISH packet (QoS 0; DUP and RETAIN are not set either)
+  //<
+  //< There is no Packet Identifier at QoS 0 ("Packet Identifier" in the MQTT v3.1.1
+  //< specification). It returns the packet's full length, or 0 if it does not fit (see fits).
+  // 2+len (the Topic Name) plus the payload, which has no length field (the rest is payload).
+  if topic.len > max_str_len || !fits(buf, 2 + topic.len + payload.len)
+    return 0
+  $off: Sz = content_start
+  off += put_str(buf, off, topic)
+  off += buf.copy_from(off, payload)
+  content_len: Sz = off - content_start
+  return finalize_packet(buf, pkt_type_publish << 4, content_len) // flags=0(QoS0/DUP0/RETAIN0)
+
+fn build_disconnect(buf: U8$[]): Sz //<
+  //< Builds a DISCONNECT packet (with no variable header or payload)
+  //<
+  //< It returns the packet's full length, or 0 if it does not fit (see fits).
+  if !fits(buf, 0)
+    return 0
+  return finalize_packet(buf, pkt_type_disconnect << 4, 0)

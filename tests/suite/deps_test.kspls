@@ -1,0 +1,140 @@
+#!/usr/bin/env -S ksplc run
+//< Checks stage1's rebuild trigger (`KSPL_SRCS` in `Makefile`)
+//<
+//< It must list every file ksplc reads. A missing one makes **nothing happen**: edit it and make
+//< answers "up to date", so **an executable without your edit** passes every gate with no sign of
+//< it. It is compared with the compiler itself: `--emit-deps` writes **the sources that
+//< compilation opened**.
+
+// ==========================================
+// Caution: **Do not copy the list out by hand**; it goes stale with the next import, and this
+// check stays green against it.
+// ==========================================
+// The reverse (in `KSPL_SRCS` but not read, such as `ksplc/tests/`) is not checked; an extra file
+// only rebuilds more. An `embed`'s content is burned in, so a missing `.h` keeps emitting the old
+// header: `--emit-deps` lists what an `embed` read, and this compares it with the `embed` lines.
+// ==========================================
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+import "tests/support/harness"
+
+priv const srcs_var: U8[] = "KSPL_SRCS := " //< the mark to look for when asking make
+  //<
+  //< It is `:=`, so this line shows **the expanded value**.
+
+priv fn words(text: U8[], out: List<|U8[]|>$@) //<
+  //< Collects the words separated by whitespace
+  //<
+  //< A make variable's value and one line of deps have the same form.
+  $start: Sz = 0
+  for $i: Sz = 0; i <= text.len; i += 1
+    blank: = i == text.len || text[i] == ' ' || text[i] == '\t'
+    if !blank
+      continue
+    if i > start
+      out.push(text.sub(start, i - start))
+    start = i + 1
+
+priv fn kspl_srcs(arena: Arena$@): List<|U8[]|> //< asks make itself for `KSPL_SRCS`'s value
+  //<
+  //< Caution: **Do not parse the Makefile yourself**; then an imitation of `$(shell find ...)`
+  //< decides the answer, not the Makefile. `-p` lists the variables, `-Rr` drops the built-ins,
+  //< `-q` runs nothing.
+  $out: = List<|U8[]|>.new(arena)
+  r: = harness.make(U8[][]::{ "LOGGING=1", "-pRrq" })
+  for line in r.out.lines(arena)
+    if !line.starts_with(srcs_var)
+      continue
+    words(line.sub(srcs_var.len, line.len - srcs_var.len), out@)
+    break
+  return out
+
+priv fn to_rel(path: U8[], arena: Arena$@): U8[] //<
+  //< Rewrites a deps path to be relative to the root, as the Makefile's paths are
+  //<
+  //< Caution: **Do not match absolute paths as they are.** `std/` comes out absolute (via
+  //< `--std-dir=`); left so, every std file reads as missing and buries a real omission.
+  p: = path.replace("\\", "/", arena)
+  prefix: = arena.text().s("\{harness.root()\}/").take().replace("\\", "/", arena)
+  if p.starts_with(prefix)
+    return p.sub(prefix.len, p.len - prefix.len)
+  return p
+
+priv fn deps_of_ksplc(work: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< Has ksplc build itself, and returns the list of sources it opened
+  $out: = List<|U8[]|>.new(arena)
+  deps: = fs.join(work, "deps.txt", arena)
+  r: = harness
+    .ksplc(U8[][]::{ arena.text().s("--emit-deps=\{deps\}").take(), "ksplc/main.kspls",
+    fs.join(work, "ksplc.c", arena) })
+  if !verdict.check("ksplc can build itself", r.code == 0, r.out)
+    return out
+  // One line is `<64-digit sha256> <path>` (the format is `--emit-deps` in
+  // ksplc/docs/SPEC-tools.md).
+  for line in harness.read_generated(deps).lines(arena)
+    $w: = List<|U8[]|>.new(arena)
+    words(line, w@)
+    // A line of dashes names a settings file looked for and not found (`write_deps_file` in
+    // `ksplc/tools/run.kspls`): no source.
+    if w.len == 2 && !w.get(0).starts_with("-")
+      out.push(to_rel(w.get(1), arena))
+  return out
+
+priv fn embedded_paths(srcs: List<|U8[]|>@, arena: Arena$@): List<|U8[]|> //<
+  //< Collects what the `embed`s in the given sources point at
+  //<
+  //< Caution: **Read only the sources in deps.** Scanning all of `ksplc/` reports the test tree's
+  //< `embed`s, which are rightly absent from `KSPL_SRCS`.
+  $out: = List<|U8[]|>.new(arena)
+  for rel in srcs
+    for line in harness.read_under_root(rel).lines(arena)
+      if !line.starts_with("embed \"")
+        continue
+      rest: = line.sub("embed \"".len, line.len - "embed \"".len)
+      for i in Range.asc(rest.len)
+        if rest[i] == '"'
+          out.push(rest.sub(0, i))
+          break
+  return out
+
+priv fn has(names: List<|U8[]|>@, want: U8[]): Bool
+  for i in Range.asc(names.len)
+    if names.get(i).equals(want)
+      return true
+  return false
+
+priv fn all_listed(name: U8[], want: List<|U8[]|>@, srcs: List<|U8[]|>@, missed: U8[],
+  arena: Arena$@) //<
+    //< Every item of `want` is in `srcs`; `missed` says what a missing one costs
+  $bad: = List<|U8[]|>.new(arena)
+  for i in Range.asc(want.len)
+    if !has(srcs, want.get(i)) && !has(bad@, want.get(i))
+      bad.push(want.get(i))
+  verdict.check_list(name, want.len, "paths", bad@, missed)
+
+fn main(): I32
+  arena: = harness.begin(64 * 1024 * 1024)
+  work: = harness.sandbox("deps") catch
+    return harness.fatal("cannot make a working directory")
+  srcs: = kspl_srcs(arena)
+  if !verdict.check("KSPL_SRCS can be read from the Makefile", srcs.len > 0,
+    "no KSPL_SRCS line in the output of make LOGGING=1 -pRrq")
+    return harness.finish()
+  deps: = deps_of_ksplc(work, arena)
+  if deps.len == 0
+    verdict.check("--emit-deps puts out a list", false, "not one line could be read")
+    return harness.finish()
+  all_listed("every source ksplc reads is present in KSPL_SRCS", deps@, srcs@,
+    "not in the Makefile's KSPL_SRCS (mending it does not rebuild stage1)", arena)
+  embeds: = embedded_paths(deps@, arena)
+  if !verdict.check("the embed lines are found", embeds.len > 0,
+    "no embed in any source of deps (the scan's writing has drifted)")
+    return harness.finish()
+  all_listed("every target burned in by embed is among what --emit-deps lists", embeds@, deps@,
+    "not listed by --emit-deps (ksplc run would not see it edited)", arena)
+  return harness.finish()

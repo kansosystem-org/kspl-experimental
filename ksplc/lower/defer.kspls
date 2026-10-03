@@ -1,0 +1,135 @@
+//< `defer`, and the scope exits that run what it registered
+//<
+//< A `defer` only registers its body on its scope's cleanup list. Each way out (`return`, `throw`,
+//< `break`, `continue`, and the block's own end in `root.kspls`) lowers a new copy of the
+//< cleanups it passes, so the temporaries of one copy never collide with another's.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/lower/arc" as lower_arc
+import "ksplc/lower/ctx" { Lowering_ctx }
+import "ksplc/lower/root" as lower_root
+import "ksplc/sema/type/arc" as sema_type_arc
+import "ksplc/sema/type/env" as sema_type_env
+import "std/str"
+
+impl Lowering_ctx
+  fn has_cleanups(r: Self$@, target_depth: Sz): Bool
+    for $i: = r.cleanup_stack.len; i > target_depth; i -= 1
+      cleanup_scope: = r.cleanup_stack.get(i - 1)
+      if cleanup_scope.len > 0
+        return true
+    return false
+
+  fn lower_and_wrap_cleanup(r: Self$@, raw: Ast_node$@): Ast_node$@ //<
+    //< It copies and lowers one raw cleanup statement from cleanup_stack
+    //<
+    //< It returns the statement with any pre_stmts it made collected into one stmt_block, or the
+    //< statement itself where it made none.
+    //< Each call lowers and numbers temporaries anew, so a cleanup inserted at several exits gets
+    //< no colliding temporary names.
+    node: = raw.clone()
+    pre_start: = r.pre_stmts.len
+    node.lower(r)
+    if r.pre_stmts.len == pre_start
+      return node
+    wrapper: = Ast_node.new(.k_stmt_block, "stmt_block", node.loc)
+    r.flush_pre_stmts_to_node(pre_start, wrapper)
+    if node.kind_id == .k_stmt_block
+      for c in node.children
+        wrapper.add_child(c)
+    else
+      wrapper.add_child(node)
+    return wrapper
+
+  fn inject_cleanups(r: Self$@, target_depth: Sz)
+    for $i: = r.cleanup_stack.len; i > target_depth; i -= 1
+      cleanup_scope: = r.cleanup_stack.get(i - 1)
+      for $j: = cleanup_scope.len; j > 0; j -= 1
+        d_node: = r.lower_and_wrap_cleanup(cleanup_scope.get(j - 1))
+        r.pre_stmts.push(d_node)
+
+impl Ast_node
+  fn lower_cleanup_stmt(r: Self$@, lctx: Lowering_ctx$@)
+    $inner: Ast_node$@ = null
+    switch r.get_defer_block() case .some(ib)
+      inner = ib
+    case .none
+      r.ice_panic("lower_cleanup_stmt: stmt_defer missing its body block")
+    // Caution: **Do not add a mechanism that copies values into temporaries at registration.**
+    // On a value struct, freeing a frozen copy does not free the real one. A user who wants the
+    // value at registration binds a copy. The body (inner) is kept raw, unlowered.
+    r.ice_assert(lctx.cleanup_stack.len > 0, "Lowering ICE: deferStmt outside of any block scope")
+    cleanup_scope: = lctx.cleanup_stack.get(lctx.cleanup_stack.len - 1)
+    cleanup_scope.push(inner)
+    r.morph(.k_empty, "")
+    r.type_id = I32::sema_type_env.Builtin_type_id.void_type
+
+  fn lower_return_or_throw_stmt(r: Self$@, lctx: Lowering_ctx$@)
+    k: = r.kind_id
+    expr_node: Ast_node$@ =
+      (r.get_return_expr() if k == .k_stmt_return
+      else (r.get_throw_expr() if k == .k_stmt_throw else null))
+
+    if expr_node != null
+      expr_node.lower(lctx)
+
+    // Returning a place expression gives the caller a new owner, so one retain is inserted.
+    // Caution: **Whether it is inserted must not depend on whether there is a cleanup.** Without
+    // a cleanup (`return p.field;`, as `List.get` does) it would be one short, and the caller's
+    // release would free memory that is still alive.
+    $retain_src: Ast_node$@ = null
+    ret_type_id: = expr_node.type_id if expr_node != null else 0
+    if k == .k_stmt_return && expr_node != null && expr_node.kind_id != .k_empty &&
+      lctx.sema.env.type_is_managed(ret_type_id)
+      if rs: = expr_node.arc_bare_copy_source()
+        retain_src = rs
+
+    if lctx.has_cleanups(0)
+      // Caution: Copy the returned value into a temporary first, or it reads bindings the
+      // cleanup freed.
+      if expr_node != null && expr_node.kind_id != .k_empty
+        r.set_child(1, expr_node.hoist_to_tmp(lctx, r.loc))
+
+    // Caution: Emit the retain **before** the cleanup. After it, where the returned value is the
+    // local binding itself, the cleanup's release drops the count to 0 and frees it.
+    if retain_src != null
+      retain_recv: = retain_src.clone()
+      lower_arc.emit_managed_op(lctx, retain_recv, retain_recv.type_id, "retain", lctx.pre_stmts, 0)
+    if lctx.has_cleanups(0)
+      lctx.inject_cleanups(0)
+
+  fn lower_loop_jump(r: Self$@, lctx: Lowering_ctx$@)
+    label_node: = r.get_jump_label()
+    target_label: = label_node.text if label_node != null else ""
+    $target_idx: I32 = -1
+
+    for $i: = I32::lctx.jump_stack.len - 1; i >= 0; i -= 1
+      frame: = lctx.jump_stack.get(i)
+      if (target_label.len > 0 && frame.jump_label.equals(target_label)) ||
+        (target_label.len == 0 && frame.is_loop)
+        target_idx = i
+        break
+
+    if target_idx < 0
+      r
+        .ice_panic("lower_loop_jump: no matching loop/label on jump_stack for break/continue (Sema \
+          should have rejected this)")
+      return
+
+    $target_ctx: = lctx.jump_stack.get(target_idx)
+    lctx.inject_cleanups(target_ctx.cleanup_depth)
+    current_k: = r.kind_id
+
+    is_cont: = current_k == .k_stmt_continue
+    actual_jump_label: = target_ctx.continue_label if is_cont else target_ctx.break_label
+    if actual_jump_label.len > 0
+      if is_cont
+        target_ctx.continue_used = true
+      else
+        target_ctx.break_used = true
+      lctx.jump_stack.set(target_idx, target_ctx)
+
+      r.morph(.k_stmt_goto, "goto")
+      r.type_id = I32::sema_type_env.Builtin_type_id.void_type
+      r.clear_children()
+      r.add_child(Ast_node.new(.k_identifier, actual_jump_label, r.loc))

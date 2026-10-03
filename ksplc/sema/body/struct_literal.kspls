@@ -1,0 +1,297 @@
+//< Infers the type of `::{ … }`
+//<
+//< It covers four things: matching fields (named and positional), the defaults of fields left out,
+//< visibility, and deciding a `T[_]` array's element count.
+//< **A field's visibility is checked from where it was written.**
+//< Note: Called from `sema/body/expr.kspls`, which holds expression inference in general.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/sema/body/expr" as sema_body_expr
+import "ksplc/sema/decl/access" as sema_decl_access
+import "ksplc/sema/decl/eval" as sema_decl_eval
+import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
+import "ksplc/sema/type/def" as sema_type_def
+import "ksplc/sema/type/display" as sema_type_display
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "std/ds" { Map }
+
+fn size_inferred_array_literal(node: Ast_node$@, c: Sema_ctx$@, type_node: Ast_node$@,
+  actual_id: I32, base_struct_id: I32): I32 //<
+    //< Decides the count of a `T[_]` literal and returns the sized type id; otherwise actual_id
+    //<
+    //< The count comes from the initializers and the largest [idx] written.
+  $arr_base_id: I32 = 0
+  $is_unsized: = false
+  switch c.env.get_info(base_struct_id) case .array(b_id, size)
+    is_unsized = (size == -1)
+    arr_base_id = b_id
+  default {}
+  if !is_unsized
+    return actual_id
+
+  $max_index: I32 = -1
+  $tmp_idx: I32 = 0
+  for child in node.children
+    if child != null && child.kind_id == .k_expr_field_init
+      if idx_node: = child.get_field_init_index()
+        eval_idx: = c.eval_constexpr_quiet(idx_node, -1)
+        if eval_idx >= 0
+          tmp_idx = eval_idx
+      if tmp_idx > max_index
+        max_index = tmp_idx
+      tmp_idx += 1
+  sized_id: = c.env.make_array(arr_base_id, max_index + 1)
+  node.type_id = sized_id
+  if type_node != null
+    type_node.type_id = sized_id
+  return sized_id
+
+priv fn has_named_field_init(node: Ast_node$@): Bool //<
+  //< Whether any initializer names a field (`.f =`) or an index (`[i] =`)
+  //<
+  //< Such a literal is a slice's descriptor, not a list of elements.
+  for child in node.children
+    if child.kind_id != .k_expr_field_init
+      continue
+    if child.get_field_init_name().is_some() || child.get_field_init_index().is_some()
+      return true
+  return false
+
+priv fn check_not_opaque(node: Ast_node$@, c: Sema_ctx$@,
+  struct_def: sema_type_def.Struct_def$@, clean_name: U8[]) //<
+    //< Rejects a literal of an opaque type
+    //<
+    //< An opaque type is a `struct` that declares `#size` and has no body.
+    //< Caution: **Do not read "no fields here" as "all fields were written".** The value has
+    //< fields, and a zero-filled value is not known to be valid for the type.
+  if struct_def.size_attr == 0
+    return
+  c.clear_scratch()
+    .s("'\{clean_name\}' is opaque here: the declaration names only its size and alignment, so a \
+      struct literal cannot build one (the zero bytes it would write are not known to be a valid \
+      value). Get one from a function the defining artifact publishes")
+  c.err(node, c.scratch.slice())
+
+priv fn check_omitted_fields_visibility(node: Ast_node$@, c: Sema_ctx$@,
+  struct_def: sema_type_def.Struct_def$@, written: Map<|Sz, Bool|>$@, clean_name: U8[]) //<
+    //< Checks whether the fields not written are visible from this position.
+    //<
+    //< **Checking the written ones alone is not enough**: with zero filling, `S::{}` **would build
+    //< a value with an invisible field from outside**. Written fields are reported at their own
+    //< position (check_field_visibility); the rest as one item here.
+  for f_idx in Range.asc(struct_def.fields_list.len)
+    if written.get(f_idx) catch false
+      continue
+    field: = struct_def.fields_list.get(f_idx)
+    if c.is_field_visible_here(field)
+      continue
+    c.clear_scratch()
+      .s("'\{clean_name\}' cannot be built here: field '\{field.name\}' is not visible at this \
+        point, and a field left out of '::{ ... }' is filled with zeros. Build the value through \
+        something the declaring file publishes")
+    c.err(node, c.scratch.slice())
+    return
+
+priv fn has_field_init(node: Ast_node$@): Bool //< whether any field is written
+  //<
+  //< Caution: **Tell it apart from an empty `::{}`**: an empty literal writes nothing, so it means
+  //< zero filling and passes even for a type with no fields ("Initialization and construction" in
+  //< `docs/SPEC-language.md`).
+  for child in node.children
+    if child != null && child.kind_id == .k_expr_field_init
+      return true
+  return false
+
+priv fn has_no_fields(c: Sema_ctx$@, id: I32): Bool //< whether this type has fields to fill
+  //<
+  //< A number, a boolean, an enumeration and a Result do not.
+  if c.env.is_numeric(id) || c.env.is_bool(id) || c.env.is_result(id) ||
+    sema_type_env.is_void(c.env.get_real_type(id))
+    return true
+  switch c.env.get_info(c.env.get_real_type(id)) case .enum_type(_def)
+    return true
+  default {}
+  return false
+
+priv fn wrote_result_inner_fields(node: Ast_node$@): Bool //<
+  //< Whether the literal tries to build a Result by hand (`::{ .is_err = …, .val = … }`)
+  //<
+  //< Only for this form can the message name the right approach.
+  //< It is recognized by the field names, since the expected type here has the `?` stripped.
+  for child in node.children
+    if child != null && child.kind_id == .k_expr_field_init
+      if name_node: = child.get_field_init_name()
+        if name_node.kind_id == .k_identifier &&
+          sema_type_query.is_result_inner_field(name_node.text)
+          return true
+  return false
+
+priv fn report_fieldless_literal(node: Ast_node$@, c: Sema_ctx$@, whole_id: I32)
+  $shown: = c.env.display_str(whole_id)
+  defer shown.free()
+  c.clear_scratch().s("'").s(shown.slice())
+    .s("' has no fields to fill, so it cannot be built with '::{ ... }'")
+  if wrote_result_inner_fields(node)
+    c.scratch
+      .s(". A Result is built by returning a value or throwing an error, and read with '?' or \
+        'catch'")
+  else
+    c.scratch.s(". Write the value itself")
+  c.err(node, c.scratch.slice())
+
+fn infer_struct_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error
+  $type_node: = node.get_struct_literal_type()
+  if type_node != null && type_node.kind_id != .k_type_expr && type_node.kind_id != .k_expr_path &&
+    type_node.kind_id != .k_type_path
+    type_node = null
+
+  $actual_id: = I32::sema_type_env.Builtin_type_id.unknown
+  if type_node != null
+    if type_node.kind_id == .k_type_expr
+      actual_id = type_node.resolve_type(c)?
+    else
+      actual_id = type_node.infer_expr(c, I32::sema_type_env.Builtin_type_id.unknown)?
+    type_node.type_id = actual_id
+  else
+    if sema_type_env.is_unknown(expected_id) || sema_type_env.is_void(expected_id)
+      c.err(node,
+        "Type Error: Cannot infer struct type for implicit literal. Context does not provide an \
+          expected type.")
+      return expected_id
+
+    if c.env.is_pointer(expected_id)
+      c.err(node,
+        "Type Error: Cannot assign a struct literal value directly to a pointer type. Did you mean \
+          to dereference the pointer (e.g., 'ptr$ = .{...}')?")
+      return expected_id
+
+    // An expected slice with no names written is a list of elements (`s: U8[] = ::{ 65, 66 };`).
+    // Caution: **Treat a form that names fields as an ordinary struct literal** (`::{ .ptr = p,
+    // .len = n }`).
+    // `U8[]::{ … }` is folded earlier (`../../parse/desugar.kspls`).
+    if c.env.is_slice(expected_id) && !has_named_field_init(node)
+      actual_id = c.env.make_array(c.env.slice_elem(expected_id), -1)
+    else
+      actual_id = expected_id
+    node.set_kind(.k_struct_literal)
+
+  $base_struct_id: = c.env.strip_result(c.env.strip_ptr(actual_id))
+  clean_name: = c.env.base_type_name(base_struct_id)
+
+  struct_sym_ptr: = c.symtab.resolve(clean_name) catch null
+  if struct_sym_ptr != null
+    c.check_visibility_and_mark_used(struct_sym_ptr, node)
+
+  $struct_def: sema_type_def.Struct_def$@ = null
+  if sd: = c.env.get_struct_def(clean_name)
+    struct_def = sd
+  $current_field_idx: Sz = 0
+
+  actual_id = size_inferred_array_literal(node, c, type_node, actual_id, base_struct_id)
+  base_struct_id = c.env.strip_result(c.env.strip_ptr(actual_id))
+
+  // **A `::{ ... }` for a type with no fields is rejected here**, or the C compiler reports it
+  // (Principle 2); `n: I32 = ::{ 1, 2 };` would pass with a warning, the second value silently
+  // lost.
+  if has_field_init(node) && has_no_fields(c, base_struct_id)
+    report_fieldless_literal(node, c, actual_id)
+    return actual_id
+
+  // A name-to-index map built once; a linear walk per named field is O(F^2), and one literal
+  // naming every field of a wide struct would hang the compilation.
+  $field_idx_map: = Map<|U8[], Sz|>.new()
+  defer field_idx_map.free()
+  if struct_def != null
+    for f_idx in Range.asc(struct_def.fields_list.len)
+      field_idx_map.set(struct_def.fields_list.get(f_idx).name, f_idx)
+  // The written fields' indices, for the zero-filled rest's visibility.
+  $written: = Map<|Sz, Bool|>.new()
+  defer written.free()
+  // Caution: Compute the shape with the same expression as the walk below. For a slice or a
+  // Result, struct_def is the stripped struct, so counting fields alone reads
+  // `::{ .ptr = …, .len = … }` as a struct literal.
+  $is_struct_shape: = struct_def != null
+  switch c.env.get_info(c.env.strip_result(c.env.strip_ptr(actual_id))) case .array(_ab, _asz)
+    is_struct_shape = false
+  case .result(_rb, _re)
+    is_struct_shape = false
+  default {}
+  if is_struct_shape
+    check_not_opaque(node, c, struct_def, clean_name)
+
+  for child in node.children
+    if child != null && child.kind_id == .k_expr_field_init
+      if child.children.len > 0
+        $field_expected_id: = I32::sema_type_env.Builtin_type_id.unknown
+        $is_array: = false
+        // The shape is computed here, not from base_struct_id, which has one slice level stripped:
+        // from it the `.ptr` of `U8[]$[]` reads `U8@`, not `U8[]@`, and a `U8$[]` strips to a
+        // scalar and **no field's type is checked at all**.
+        info: = c.env.get_info(c.env.strip_result(c.env.strip_ptr(actual_id)))
+        $field_name_node: Ast_node$@ = null
+        if fnn: = child.get_field_init_name()
+          field_name_node = fnn
+
+        switch info case .array(arr_base_id, _size)
+          field_expected_id = arr_base_id
+          is_array = true
+        default {}
+
+        if is_array
+          // The elements must fit the declared length; **if not counted here, the C compiler
+          // reports it.** A `T[_]` is sized earlier (size_inferred_array_literal), so
+          // `arr_size < 0` means uncheckable, not "not known yet".
+          $arr_size: I32 = -1
+          switch c.env.get_info(c.env.strip_result(c.env.strip_ptr(actual_id))) case .array(_ab, asz)
+            arr_size = asz
+          default {}
+          if idx_node: = child.get_field_init_index()
+            idx_node.infer_expr(c, I32::sema_type_env.Builtin_type_id.size_type)?
+            switch c.try_eval_constexpr(idx_node) case .some(at)
+              current_field_idx = at
+            case .none {}
+          if arr_size >= 0 && current_field_idx >= Sz::arr_size
+            c.clear_scratch()
+              .s("too many initializers for array of length \{arr_size\}: this one lands at index \
+                \{current_field_idx\}")
+            c.err(child, c.scratch.slice())
+          current_field_idx += 1
+        else if struct_def != null
+          if field_name_node != null && field_name_node.kind_id == .k_identifier
+            found_idx: = field_idx_map.get(field_name_node.text) catch -1
+            if found_idx >= 0
+              field_def: = struct_def.fields_list.get(found_idx)
+              field_expected_id = field_def.type_id
+              field_name_node.def_node = field_def.node
+              child.def_node = field_def.node
+              if struct_sym_ptr != null
+                c.check_field_visibility(field_def, field_name_node)
+              written.set(found_idx, true)
+              current_field_idx = found_idx
+            else
+              // Caution: **Reject an unknown field name here.** Otherwise C gets `.nope = 1` as
+              // written, and the user gets a **raw C error** ("Failing fast through an exception or
+              // an ICE" in ksplc/docs/DESIGN.md).
+              c.clear_scratch().s("'\{clean_name\}' has no field named '\{field_name_node.text\}'")
+              c.err(field_name_node, c.scratch.slice())
+          else
+            if current_field_idx < struct_def.fields_list.len
+              field_def: = struct_def.fields_list.get(current_field_idx)
+              field_expected_id = field_def.type_id
+              child.def_node = field_def.node
+              if struct_sym_ptr != null
+                c.check_field_visibility(field_def, child)
+              written.set(current_field_idx, true)
+            else
+              c.err(child, "too many initializers for struct")
+          current_field_idx += 1
+
+        val_node: = child.get_field_init_expr()
+        if val_node != null
+          val_node.def_node = child.def_node
+          val_node.infer_expr(c, field_expected_id)?
+  if is_struct_shape
+    check_omitted_fields_visibility(node, c, struct_def, written@, clean_name)
+  return actual_id

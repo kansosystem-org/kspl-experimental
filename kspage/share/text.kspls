@@ -1,0 +1,130 @@
+//< Keeps a text form (`.txt`, a program's source) exactly as written
+//<
+//< Caution: **Do not make a second document shape** — relayout, the cursor, undo, saving and
+//< searching all work on the shape that exists (Principle 1 and Principle 6).
+//< A fence is already this shape, so only reading and writing are added. The price is arena
+//< ("Plain text holds one line per block" in [`../docs/DESIGN.md`](../docs/DESIGN.md));
+//< the memory gate (`room_for` in `port/web/state.kspls`) refuses before opening.
+import "kspage/model/doc" { Doc, Block }
+import "kspage/model/font" { Font }
+import "kspage/model/marker" { Marker }
+import "kspage/model/paint"
+import "kspage/model/style" { Sheet }
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+priv const line_name: U8[] = "line" //<
+  //< The name given to the line style of a text that declares no language
+priv const line_spacing: F32 = 1.1 //<
+  //< The line height's ratio, and the character size (a multiple of the parent's)
+  //<
+  //< Do not reuse prose's line spacing: 1.4 is too wide for code, where reading lines against each
+  //< other wants more lines on one screen.
+priv const size_scale: F32 = 0.9
+priv const number_gap: U8[] = " " //< the space after a line's number
+  //<
+  //< The marker builds the number itself (`../model/marker.kspls`).
+priv const digit_width_em: F32 = 0.65 //<
+  //< The character width (in ems) used for the line-number gutter, counted per digit
+  //<
+  //< Caution: **Do not make the gutter a fixed width** — it follows the digits of the line count
+  //< (`gutter_for` below). Err on the wide side: a number wider than the gutter overlaps the body
+  //< (`place_mark` in `../lay/line.kspls`); a monospaced digit is 0.55 to 0.62em.
+
+priv fn gutter_for(lines: Sz, root: Font): F32 //<
+  //< The width (pixels) of the line-number gutter for a document of `lines` lines
+  //<
+  //< It includes the space after the number. `number_gap` must be ASCII: its width is counted as a
+  //< digit's, so a wide character makes the gutter too narrow.
+  // Do not count digits by multiplying (it overflows. [W0103]); dividing only goes down.
+  $digits: Sz = 1
+  $rest: Sz = lines
+  for rest >= 10 && digits < 12
+    rest /= 10
+    digits += 1
+  return F32::(digits + number_gap.len) * root.size_px * size_scale * digit_width_em
+
+fn sheet_for(root: Font, spoken: U8[], arena: Arena$@): Sheet$@ //<
+  //< The style table of a text form
+  //<
+  //< Set neither a background color nor a frame: this is the document itself, not a band.
+  //< Caution: **Name the style after the declared language** — it is the only way the highlighter
+  //< learns the language ("What a Markdown round trip drops" in
+  //< `../docs/DESIGN.md`).
+  sheet: = Sheet.new(root, arena)
+  $mono: paint.Font_spec = paint.inherit_all()
+  mono.family = Option<|U8[]|>.some("monospace")
+  mono.size_px = Option<|F32|>.some(root.size_px * size_scale)
+  line: = sheet.add(spoken if spoken.len > 0 else line_name, mono)
+  line.wrap = false
+  line.line_spacing = line_spacing
+  // The line numbers. They are not written into the text (`write`). The marker's own mechanism is
+  // used (Principle 6); to hide them, remove the style's marker.
+  line.marker = Marker.number(number_gap)
+  // This sets one digit's width; `read` below sets it again from the digit count.
+  line.indent = gutter_for(0, root)
+  return sheet
+
+priv fn line_style(sheet: Sheet$@): U8[] //<
+  //< Chooses a style that does not wrap (adds one where there is none)
+  //<
+  //< Caution: **Find it by its part, not by its name** (the table of parts in `../docs/DESIGN.md`).
+  //< Adding one is for a test given an empty table; the name is a constant, so no arena is needed.
+  for $i: Sz = 0; i < sheet.styles.len; i += 1
+    s: = sheet.styles.get(i)
+    if !s.wrap && s.outline <= 0
+      return s.name
+  fresh: = sheet.add(line_name, paint.inherit_all())
+  fresh.wrap = false
+  return fresh.name
+
+fn texty(src: U8[]): Bool //< whether the text can be held as a text form
+  //<
+  //< Caution: **Reject a text holding a NUL**, or a picture opened as text is broken the moment it
+  //< is saved. The test is git's (guessing the encoding silently lets a wrong answer through).
+  return !src.contains_nul()
+
+fn read(src: U8[], sheet: Sheet$@, arena: Arena$@): Doc$@ //<
+  //< Makes one document out of a text form
+  //<
+  //< Each piece between newlines becomes one line, unchanged.
+  //< Caution: **Do not tidy the text** — trailing spaces, tabs and runs of empty lines all stay as
+  //< they were typed.
+  d: = Doc.new(arena)
+  name: = line_style(sheet)
+  $from: Sz = 0
+  for $i: Sz = 0; i <= src.len; i += 1
+    if i < src.len && src[i] != '\n'
+      continue
+    d.add_block(name).add_text(src.sub(from, i - from))
+    from = i + 1
+  // Set the gutter after reading (the reason is at `gutter_for`).
+  if s: = sheet.find(name)
+    s.indent = gutter_for(d.blocks.len, sheet.root)
+  return d
+
+priv fn line_into(b: Block$@, out: Str_builder$@, first: Bool$@) //<
+  //< Writes one block's text into `out` (walking into the children)
+  //<
+  //< Caution: **Write a child as a line too** (pasting can put one in) — dropped, a line seen on
+  //< the screen silently goes missing from the saved text.
+  if b == null
+    return
+  if !first$
+    out.c('\n')
+  first$ = false
+  for $i: Sz = 0; i < b.inlines.len; i += 1
+    out.s(b.inlines.get(i).text())
+  for $k: Sz = 0; k < b.children.len; k += 1
+    line_into(b.children.get(k), out, first)
+
+fn write(d: Doc$@, out: Str_builder$@) //< writes a document out as a text form
+  //<
+  //< Caution: **Put a newline only between lines**, or a file grows by one byte each time it is
+  //< opened and saved (`read` makes the trailing empty line).
+  if d == null
+    return
+  $first: = true
+  for $i: Sz = 0; i < d.blocks.len; i += 1
+    line_into(d.blocks.get(i), out, first@)

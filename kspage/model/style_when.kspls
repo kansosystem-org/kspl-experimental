@@ -1,0 +1,69 @@
+//< A setting that changes the look by the value (a style under a condition)
+//<
+//< **Another style is laid over only when a cell's value matches the condition** (`When`).
+//< Note: The code that draws the table (`when_style`) is in [`style.kspls`](style.kspls); this file
+//< holds only the condition and the match test, nothing about tables (so the reference is one-way).
+import "std/str" // provides `U8[].equals`
+import "std/strnum"
+
+enum Compare //< how the value is compared
+  //<
+  //< **`none` means no condition.**
+  //< Caution: **Do not rename a variant**: its name is the spelling a saved text holds (`make test`
+  //< pins every one).
+  none
+  above
+  below
+  equal
+
+impl Compare
+  fn same_compare(a: Self, b: Compare): Bool //< whether the way of comparing is the same
+    //<
+    //< It compares the names, not numbers (the reason is at `same_arrange` in `style.kspls`).
+    return a.variant_name().equals(b.variant_name())
+
+fn compare_from(name: U8[]): Compare //< reads a way of comparing from a name
+  //<
+  //< **An unknown name means "no condition".**
+  if name.equals("above")
+    return Compare.above
+  if name.equals("below")
+    return Compare.below
+  if name.equals("equal")
+    return Compare.equal
+  return Compare.none
+
+struct When //< the condition that changes the look by the value (a style under a condition)
+  //<
+  //< **A match lays another style over, by name**, not a color (a color held here would be another
+  //< look with no name). **Only the look changes** (the font, the color, the fill, the line); a
+  //< line height that moved with a value would confuse the reader.
+  how: Compare
+  than: F32 //< the value it is compared against
+  then: U8[] //< the name of the style laid over on a match. **Empty lays nothing over.**
+
+fn no_when(): When
+  return When::{ .how = Compare.none, .than = 0.0, .then = "" }
+
+fn same_when(a: When, b: When): Bool
+  return a.how.same_compare(b.how) && a.than == b.than && a.then.equals(b.then)
+
+fn suits(w: When, text: U8[]): Bool //< whether the text matches the condition
+  //<
+  //< **A text that cannot be read as a number does not match** (an empty cell, a heading word).
+  switch w.how case .none
+    return false
+  case .above, .below, .equal {}
+  if text.len <= 0
+    return false
+  v: = text.to_f64() catch
+    return false
+  than: = F64::w.than
+  switch w.how case .above
+    return v > than
+  case .below
+    return v < than
+  case .equal
+    return v == than
+  case .none {}
+  return false

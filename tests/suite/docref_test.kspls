@@ -1,0 +1,668 @@
+#!/usr/bin/env -S ksplc run
+//< Checks that what a document reference points at exists, in the direction the convention allows
+//<
+//< A reference is an asset; the problem is **silent drift** (add one section and `§12` points
+//< elsewhere with nobody noticing). So the drift is made detectable, rather than the count cut.
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/sys"
+import "std/verdict"
+import "tests/support/docref_cite" as cite
+import "tests/support/docref_number" as number
+import "tests/support/docref_samples" as samples
+import "tests/support/docref_scan" as scan
+import "tests/support/harness"
+import "tests/support/harness_refs" as refs
+import "tests/support/harness_text" as htext
+
+priv const max_shown: Sz = 20 //< the cap on how many are listed in the report
+  //<
+  //< List all of them and CI's log becomes unreadable.
+
+// ==========================================
+// What may be referred to **Packages follow only the import direction.** `ksplc` and `ksos` use
+// `std` but not the reverse, and between `ksplc` and `ksos` there is no dependency.
+// `ksos` and `kspage` point at `ksdb` for its append-only record.
+// ==========================================
+priv const layer_from: U8[][12] = ::{ "docs", "root", "ksplc", "std", "ksai", "kspeg", "ksos",
+  "kssrv", "ksdb", "kspage", "tests", "tools" }
+
+// Caution: **A leaf's row must be "everything upward".** What the table says to a leaf is "upward
+// only", and it does not sort the destinations ("Reference direction between documents" in
+// `docs/SPEC-documents.md`).
+// `make test-conventions` matches only the implementations' directions against each other, so it
+// does not catch this.
+priv const layer_to: U8[][12] = ::{ "docs root ksplc std ksai kspeg ksos kssrv ksdb kspage tests \
+  tools", "root docs ksplc std ksai kspeg ksos kssrv ksdb kspage tests tools",
+  "ksplc docs std kspeg root", "std docs root", "ksai docs std root", "kspeg docs std root",
+  "ksos docs std ksai ksdb root", "kssrv docs std ksai root", "ksdb docs std root",
+  "kspage docs std ksdb root", "tests docs ksplc std ksai kspeg ksos kssrv ksdb kspage tools root",
+  "tools docs ksplc std ksai kspeg ksos kssrv ksdb kspage root" }
+
+priv const spec_may_reach_up: U8[][2] = ::{ "docs", "root" } //<
+  //< The groups whose DESIGN/SPEC documents a specification may point at
+  //<
+  //< **A specification does not point at the DESIGN/SPEC of a folder below or beside it** (once
+  //< it depends on an implementation, nothing decides which is canonical). An index (README.md)
+  //< and upward (`docs/`) are allowed.
+
+// ==========================================
+// The directions the code crosses (`import` and `embed`)
+// ==========================================
+
+priv const ref_heads: U8[][2] = ::{ "import \"", "embed \"" } //<
+  //< The line starts that name another file
+  //<
+  //< Caution: **Check both the form that imports a name and the form that embeds a file** (both
+  //< cross packages). **`find_doc_paths` does not catch it**: it picks up only `.md` names, so an
+  //< `embed`'s target is invisible. **Existence is not checked.**
+priv const ref_names: U8[][2] = ::{ "import", "embed" }
+
+priv fn group_of(rel: U8[]): U8[]
+  at: = rel.find_char('/')
+  if at < 0
+    return "root"
+  top: = rel.sub(0, at)
+  // Caution: **Do not hard-code the count.** A shorter count leaves the last rows unmatched,
+  // `group_of` returns `root` (which may point anywhere), and **their references silently skip
+  // the direction check**.
+  for i in Range.asc(layer_from.len)
+    if layer_from[i].equals(top)
+      return layer_from[i]
+  return "root"
+
+priv fn may_refer(from: U8[], to: U8[], arena: Arena$@): Bool //< whether from may refer to to
+  for i in Range.asc(layer_from.len)
+    if !layer_from[i].equals(from)
+      continue
+    for w in layer_to[i].split(' ', arena)
+      if w.equals(to)
+        return true
+    return false
+  return false
+
+priv fn unit_ref_defects(rel: U8[], text: U8[], out: List<|U8[]|>$@, arena: Arena$@): Sz //<
+  //< Checks the directions one file crosses, returning the number of references seen
+  //<
+  //< Caution: **Match at a line's start**, so a line inside a raw string (`"""`) does not match.
+  //< **A relative one from the same folder (`./`) is not checked** (it crosses no package).
+  from: = group_of(rel)
+  $seen: Sz = 0
+  $lines: = text.lines(arena)
+  for i in Range.asc(lines.len)
+    t: = lines.get(i).trim_spaces()
+    for k in Range.asc(2)
+      if !t.starts_with(ref_heads[k])
+        continue
+      rest: = t.sub_from(ref_heads[k].len)
+      end: = rest.find_char('"')
+      if end < 0
+        continue
+      target: = rest.sub(0, end)
+      if target.starts_with(".")
+        continue
+      seen += 1
+      to: = group_of(target)
+      if may_refer(from, to, arena)
+        continue
+      out
+        .push(arena.text().s(rel).s(":\{i + 1\}: ").s(ref_names[k]).s(" \"").s(target).s("\" is ")
+        .s(from).s("->").s(to).s(", a direction not in the table").take())
+  return seen
+
+priv fn doc_dirs(arena: Arena$@): U8[][] //<
+  //< the names of the folders whose references are picked up
+  //<
+  //< Caution: **Build it from layer_from.** A copied list misses an added folder, and references
+  //< naming it pass without being picked up.
+  $out: = List<|U8[]|>.new(arena)
+  for d in layer_from
+    if !d.equals("root")
+      out.push(d)
+  return out.slice()
+
+priv fn scanned_files(arena: Arena$@): List<|U8[]|> //< what is scanned
+  //<
+  //< Caution: **Check only what git knows**, or the count depends on whether it was built. The
+  //< base layer decides which names are read (`is_scanned`), so the carving reads the same files.
+  $out: = List<|U8[]|>.new(arena)
+  files: = harness.tracked() catch
+    return out
+  for f in files
+    if refs.is_scanned(f)
+      out.push(f)
+  return out
+
+priv fn read_at(rel: U8[], arena: Arena$@): U8[]
+  path: = fs.join(harness.root(), rel, arena)
+  body: = io.read_file(path) catch
+    return ""
+  return body
+
+priv fn exists_at(rel: U8[], arena: Arena$@): Bool
+  return fs.exists(fs.join(harness.root(), rel, arena))
+
+priv fn is_file_at(rel: U8[], arena: Arena$@): Bool //< whether a file is there
+  //<
+  //< Caution: **Keep it separate from `exists_at`.** A Markdown link **may point at a folder**,
+  //< but a symbol's home is a file; folded into one, a symbol named by a folder (`ksos/net`) reads
+  //< a folder and runs the arena out.
+  full: = fs.join(harness.root(), rel, arena)
+  return fs.exists(full) && !fs.is_dir(full)
+
+// ==========================================
+// Headings
+// ==========================================
+
+priv fn heading_anchors(rel: U8[], arena: Arena$@): List<|U8[]|>
+  return scan.heading_anchors_of(read_at(rel, arena), arena)
+
+priv fn heading_numbers(rel: U8[], arena: Arena$@): List<|U8[]|>
+  return scan.heading_numbers_of(read_at(rel, arena), arena)
+
+priv fn has_str(xs: List<|U8[]|>@, want: U8[]): Bool
+  for i in Range.asc(xs.len)
+    if xs.get(i).equals(want)
+      return true
+  return false
+
+// ==========================================
+// Resolving a name
+// ==========================================
+
+priv fn resolve_src(here: U8[], raw: U8[], arena: Arena$@): U8[] //<
+  //< Resolves a named implementation/test file to a path that really exists
+  //<
+  //< The base layer (`src_places`) sets the locations and their order, shared with the carving.
+  places: = refs.src_places(here, raw, arena)
+  $k: Sz = 0
+  $p: = refs.src_place(places@, k, arena)
+  for p.len > 0
+    if is_file_at(p, arena)
+      return p
+    k += 1
+    p = refs.src_place(places@, k, arena)
+  return ""
+
+priv fn src_here(rel: U8[], here: U8[], text: U8[], at: Sz, arena: Arena$@): U8[] //<
+  //< Where a named file is read from: a workflow step's own folder, else the naming file's folder
+  if !rel.starts_with(".github/workflows/")
+    return here
+  dir: = cite.step_dir(text, at, arena)
+  return here if dir.len == 0 else dir
+
+priv fn generated_dirs(arena: Arena$@): List<|U8[]|> //< the build output folders
+  //<
+  //< Caution: **Build it from `.gitignore`'s directory entries**, or after `.gitignore` grows,
+  //< artefacts are reported as "a reference that does not exist".
+  $out: = List<|U8[]|>.new(arena)
+  files: = harness.tracked() catch
+    return out
+  for f in files
+    if !f.ends_with(".gitignore")
+      continue
+    here: = f.sub(0, f.len - 10)
+    for line in read_at(f, arena).lines(arena)
+      t: = line.trim_spaces()
+      if t.len > 1 && t.ends_with("/") && !t.starts_with("#")
+        out.push(arena.text().s("\{here\}\{t\}").take())
+  return out
+// ==========================================
+// A section number that names no document
+// ==========================================
+
+priv const bare_exempt: U8[][1] = ::{ "docs/SPEC-documents.md" } //<
+  //< The documents exempt from the check for a bare section number
+  //<
+  //< Note: This suite itself is not exempt (write a sample number as `§N` and it is not a bare
+  //< number).
+
+// The names that identify a number's owner. Add a new standard when one is cited, or its
+// references come out as "not in its own document".
+// Caution: **Do not add a loose alias ("spec" and the like).** A loose word exempts paragraphs that
+// name no document at all, which narrows the check.
+priv const doc_names: U8[][18] = ::{ "README.md", "CONTRIBUTING.md", "DESIGN.md", "PLAN.md",
+  "Principle", "board material", "RFC", "MQTT", "POSIX", "IEEE", "ISO", "Unicode", "AAPCS", "C99",
+  "ELF", "DWARF", "UEFI", "CBOR" }
+
+priv fn names_a_doc(block: U8[]): Bool //<
+  //< the `SPEC-…md` and `HOWTO-…md` forms are namings too
+  for n in doc_names
+    if block.find_str(n) >= 0
+      return true
+  if block.find_str("USB") >= 0
+    return true
+  for head in U8[][]::{ "SPEC", "HOWTO" }
+    $i: Sz = 0
+    for i + head.len <= block.len
+      if !block.sub(i, head.len).equals(head)
+        i += 1
+        continue
+      $j: = i + head.len
+      for j < block.len && (htext.is_word_at(block, j) || block[j] == '-')
+        j += htext.cp_len(block[j])
+      if j + 3 <= block.len && block.sub(j, 3).equals(".md")
+        return true
+      i += 1
+  return false
+
+priv const bare_leaders: U8[][4] = ::{ "section ", "sections ", "chapter ", "chapters " } //<
+  //< The word that comes before a bare section number
+  //<
+  //< **The word comes first and the number after** (`section 1.2`), so a scan that looks only
+  //< after the number picks up **none of them**, and stays green on the smaller count.
+
+priv fn bare_leader_len(line: U8[], at: Sz): Sz //<
+  //< Whether `at` starts with one of `bare_leaders` (a leading capital too); its length if so
+  for w in bare_leaders
+    if at + w.len > line.len
+      continue
+    seen: = line.sub(at, w.len)
+    if seen.equals(w)
+      return w.len
+    if seen[0].to_lower() == w[0] && seen.sub_from(1).equals(w.sub_from(1))
+      return w.len
+  return 0
+
+priv fn find_bare_sections(line: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< Picks up the bare section numbers (`§12`, `section 1.2`) in one line
+  $out: = List<|U8[]|>.new(arena)
+  $i: Sz = 0
+  for i < line.len
+    lead: = bare_leader_len(line, i)
+    if lead > 0
+      num: = cite.read_section_number(line, i + lead, arena)
+      if num.len > 0
+        out.push(num)
+        i += lead + num.len
+        continue
+    if i + 2 <= line.len && line.sub(i, 2).equals("§")
+      num: = cite.read_section_number(line, i, arena)
+      if num.len > 0
+        out.push(num)
+        i += 2 + num.len
+        continue
+    i += 1
+  return out
+
+// ==========================================
+// The scan
+// ==========================================
+
+priv struct Finding //< where the findings are collected
+  //<
+  //< Every finding is counted, and the names are listed up to the cap.
+  seen: Sz
+  bad: List<|U8[]|>
+
+priv fn new_finding(arena: Arena$@): Finding
+  return Finding::{ .seen = 0, .bad = List<|U8[]|>.new(arena) }
+
+priv fn report(name: U8[], count: Sz, f: Finding@, tail: U8[], arena: Arena$@)
+  b: = arena.text()
+  for i in Range.asc(f.bad.len)
+    if i >= max_shown
+      break
+    b.s("\n" if i > 0 else "").s(f.bad.get(i))
+  if tail.len > 0 && f.bad.len > 0
+    b.s("\n    ").s(tail)
+  title: = arena.text().s(name)
+  if count > 0
+    title.s("(\{count\})")
+  verdict.check(title.take(), f.bad.len == 0, b.take())
+
+priv fn quote_needle(name: U8[], arena: Arena$@): U8[] //<
+  //< Turns the name carried with a naming into the text to search for in that document
+  //<
+  //< Caution: **Fold both forms** (the repository uses both), or **a correct reference fails**; a
+  //< check that fails wrongly gets removed, and the real stale references go unseen with it.
+  $t: = name
+  // For the form wrapped in a link, only what is between the `[` and the `]` is taken.
+  if t.starts_with("[")
+    close: = t.find_str("](")
+    if close > 1
+      t = t.sub(1, close - 1)
+  // It drops a trailing ellipsis.
+  if t.ends_with("…")
+    t = t.sub(0, t.len - 3)
+  return arena.dup_str(t)
+
+priv fn symbol_ref_defects(rel: U8[], here: U8[], text: U8[], dirs: U8[][],
+  generated: List<|U8[]|>@, missing: Finding$@, stray: Finding$@, arena: Arena$@) //<
+    //< Checks one file's symbol namings
+    //<
+    //< **A path that does not resolve is sent to the existence check (`missing`).**
+    //< Caution: **Do not move this back into `main`.** With it, `main` goes over 300 lines
+    //< (Principle 3).
+  for s in scan.find_symbol_refs(text, dirs, arena)
+    base: = scan.sym_base(s.extra)
+    if base.len == 0
+      continue // a name that does not look like a symbol is out of scope
+    target: = resolve_src(here, s.text, arena)
+    // Caution: **Do not silently skip an unresolved path.** `find_src_paths` **picks up only
+    // paths starting from a folder**, so a path with a step dropped (`sema/type/env.kspls`)
+    // leaves **both checks silent**; it goes to the existence check here.
+    if target.len == 0
+      $made: = false
+      for g in generated
+        if s.text.starts_with(g)
+          made = true // the build makes it. Not existing is right
+      if !made
+        missing.seen += 1
+        missing.bad.push(arena.text().s("\{rel\}: \{s.text\}").take())
+      continue
+    stray.seen += 1
+    body: = read_at(target, arena)
+    member: = scan.sym_member(s.extra)
+    $absent: U8[] = ""
+    if !has_word(body, base)
+      absent = base
+    else if member.len > 0 && !has_word(body, member)
+      absent = member
+    if absent.len > 0
+      stray.bad
+        .push(arena.text().s(rel).s(": no `").s(absent).s("` in ").s(target).s("  [`").s(s.text)
+        .s("`'s `").s(s.extra).s("`]").take())
+
+priv fn has_word(body: U8[], word: U8[]): Bool //<
+  //< whether word appears in body as a whole word
+  $at: Sz = 0
+  for at + word.len <= body.len
+    if body.sub(at, word.len).equals(word) && !htext.is_word_before(body, at) &&
+      !htext.is_word_at(body, at + word.len)
+      return true
+    at += 1
+  return false
+
+fn main(): I32
+  arena: = harness.begin(512 * 1024 * 1024)
+  dirs: = doc_dirs(arena)
+  generated: = generated_dirs(arena)
+  files: = scanned_files(arena)
+  $missing: = new_finding(arena)
+  $missing_src: = new_finding(arena)
+  $stale: = new_finding(arena)
+  $bad_anchor: = new_finding(arena)
+  $bad_link: = new_finding(arena)
+  $wrong_dir: = new_finding(arena)
+  $spec_down: = new_finding(arena)
+  $spec_plan: = new_finding(arena)
+  $bare_phase: = new_finding(arena)
+  $bad_numbering: = new_finding(arena)
+  $stray_sym: = new_finding(arena)
+  $bare_sec: = new_finding(arena)
+  $unit_ref: = new_finding(arena)
+  $stale_quote: = new_finding(arena)
+  $quoted_head: = new_finding(arena)
+  for rel in files
+    text: = read_at(rel, arena)
+    here: = sys.get_dir_name(rel)
+    is_md: = rel.ends_with(".md")
+    is_kspage: = rel.ends_with(".kspage")
+    // Caution: **Include `.kspls` too.** `.kspl` does not match the end of `.kspls`, so without it
+    // **no indentation-notation `import` has its direction checked**.
+    if rel.ends_with(".kspl") || rel.ends_with(".kspls")
+      unit_ref.seen += unit_ref_defects(rel, text, unit_ref.bad@, arena)
+    if is_md || is_kspage
+      // Caution: A link to a heading is not caught by the number check. Rename the heading and the
+      // anchor alone goes stale, jumping to the document's start.
+      for l in refs.links_of(rel, text, arena)
+        // That a link's target exists. **A Markdown link is relative to the file it is written
+        // in**, unlike a bare name. `find_src_paths` and `find_doc_paths` pick up **only names
+        // starting with a folder's name or `../`** (`doc_dirs`), so a path with a step dropped
+        // (`port/web/...`) is checked here.
+        if l.text.len > 0 && !refs.is_external(l.text)
+          dest: = refs.normalize(arena.text().s("\{here\}/\{l.text\}").take(), arena)
+          $made: = false
+          for g in generated
+            if dest.starts_with(g)
+              made = true // the build makes it. Not existing is right
+          bad_link.seen += 1
+          if !made && !exists_at(dest, arena)
+            bad_link.bad
+              .push(arena.text().s(rel).s(": ").s(l.text).s("  (missing: ").s(dest).s(")").take())
+        if l.extra.len == 0
+          continue
+        $target: = rel
+        if l.text.len > 0
+          target = refs.normalize(arena.text().s("\{here\}/\{l.text\}").take(), arena)
+        if !target.ends_with(".md") || !exists_at(target, arena)
+          continue // anything but `.md`, and absence, are looked at by other checks
+        bad_anchor.seen += 1
+        $anchors: = heading_anchors(target, arena)
+        if !has_str(anchors@, l.extra)
+          bad_anchor.bad
+            .push(arena.text().s(rel).s(": there is no heading #").s(l.extra).s(" in ").s(target)
+            .take())
+    // A heading number depends on Markdown syntax (what is read is the `#` line).
+    if is_md
+      number.heading_number_defects(rel, text, bad_numbering.bad@, arena)
+      // **A fence's `# ...` is a shell comment, not a heading.**
+      $n: Sz = 0
+      $fenced: = false
+      for line in text.lines(arena)
+        n += 1
+        if line.trim_spaces().starts_with("```")
+          fenced = !fenced
+        else if !fenced && line.starts_with("#")
+          quoted_head.seen += 1
+          if scan.quotes_in_heading(line)
+            quoted_head.bad
+              .push(arena.text().s(rel).s(":\{n\}: ").s(line).take())
+    // Caution: **Read symbol namings in every file, not only in Markdown.** A comment's stale
+    // backticks mislead just as a document's do.
+    symbol_ref_defects(rel, here, text, dirs, generated@, missing_src@, stray_sym@, arena)
+    // **`Phase N` is used only by the root README.md**; elsewhere the same number would point at
+    // different things. A document counts "stage N", and names README.md next to a Phase.
+    if !rel.equals("README.md")
+      $lines: = text.lines(arena)
+      for i in Range.asc(lines.len)
+        line: = lines.get(i)
+        at: = line.find_str("Phase")
+        if at < 0 || cite.read_section_number(line, at + 5, arena).len == 0
+          continue
+        near: = arena.text()
+        lo: = 0 if i < 2 else i - 2
+        hi: = lines.len if i + 3 > lines.len else i + 3
+        for k in Range.new(lo, hi, 1)
+          near.s(lines.get(k)).s("\n")
+        bare_phase.seen += 1
+        if near.take().find_str("README.md") < 0
+          bare_phase.bad
+            .push(arena.text().s(rel).s(":\{i + 1\}: ").s(line.trim_spaces()).take())
+    for p in refs.find_src_paths(text, dirs, arena)
+      missing_src.seen += 1
+      $skip: = false
+      for g in generated
+        if p.text.starts_with(g)
+          skip = true // the build makes it. Not existing is right
+      if !skip &&
+        resolve_src(src_here(rel, here, text, p.at, arena), p.text, arena).len == 0
+        missing_src.bad.push(arena.text().s("\{rel\}: \{p.text\}").take())
+    for p in refs.find_doc_paths(text, dirs, arena)
+      target: = refs.hit_target(here, text, p, arena)
+      missing.seen += 1
+      if !exists_at(target, arena)
+        missing.bad.push(arena.text().s("\{rel\}: \{p.text\}").take())
+        continue
+      g_from: = group_of(rel)
+      g_to: = group_of(target)
+      if !may_refer(g_from, g_to, arena)
+        wrong_dir.bad
+          .push(arena.text().s(rel).s(" -> ").s(target).s("  (").s(g_from).s(" does not refer to ")
+          .s(g_to).s(")").take())
+      base_to: = sys.get_file_name(target)
+      down: = base_to.equals("DESIGN.md") || base_to.starts_with("SPEC-")
+      $up: = false
+      for u in spec_may_reach_up
+        if g_to.equals(u)
+          up = true
+      if sys.get_file_name(rel).starts_with("SPEC-") && down && !up &&
+        !here.equals(sys.get_dir_name(target))
+        spec_down.bad.push(arena.text().s("\{rel\} -> \{target\}").take())
+      if sys.get_file_name(rel).starts_with("SPEC-") && base_to.equals("PLAN.md")
+        spec_plan.bad.push(arena.text().s("\{rel\} -> \{target\}").take())
+    for q in cite.find_doc_quotes(text, dirs, arena)
+      target: = refs.hit_target(here, text, q, arena)
+      if !exists_at(target, arena)
+        // Caution: **Do not silently skip a bare name.** `find_doc_paths` picks up only a name
+        // with a folder, so a bare `DESIGN.md` from a subfolder resolves to nothing and **is
+        // reported by nobody**. It is reported here; the check above handles a name with a folder.
+        if q.text.find_char('/') < 0
+          stale_quote.seen += 1
+          stale_quote.bad
+            .push(arena.text().s(rel).s(": `").s(q.text).s("` points at no document (").s(target)
+            .s(")").take())
+        continue
+      stale_quote.seen += 1
+      // **A document is searched for its own names; a source for the name anywhere** — a check
+      // is cited by its verdict line, which a source holds as a string, not as a heading.
+      needle: = quote_needle(q.extra, arena)
+      body: = read_at(target, arena)
+      is_doc: = target.ends_with(".md")
+      $found: = false
+      if is_doc
+        found = scan.holds_name(body, needle, arena)
+      else
+        found = body.find_str(needle) >= 0
+      if !found
+        stale_quote.bad
+          .push(arena.text().s(rel).s(": there is no \"").s(q.extra).s("\" in ").s(target)
+          .s(" (not in a heading, a bold span, or at a cell's or an item's head)" if is_doc else "")
+          .take())
+    for s in cite.find_sections(text, dirs, arena)
+      // Caution: **A name with no folder resolves relative to the file it is written in.** From
+      // the root, `docs/`'s `DESIGN.md` names a root one that does not exist, so **that section
+      // number passes unmatched**.
+      target: = refs.hit_target(here, text, s, arena)
+      if !exists_at(target, arena)
+        // **A bare name that resolves nowhere is skipped here**: a number near a name is too weak
+        // a sign (a `.md` in a source string, this scanner's own examples). **The quoted-name
+        // check does report it**, since a quoted name next to a document is a citation.
+        continue
+      nums: = heading_numbers(target, arena)
+      if nums.len == 0
+        continue // a document with no numbered heading is out of scope
+      stale.seen += 1
+      if !has_str(nums@, s.extra)
+        stale.bad
+          .push(arena.text().s(rel).s(": there is no §").s(s.extra).s(" in ").s(target).take())
+    // Per paragraph: a paragraph naming a document anywhere refers to that document.
+    $exempt: = false
+    for e in bare_exempt
+      if rel.equals(e)
+        exempt = true
+    if is_md || !exempt
+      own: = heading_numbers(rel, arena)
+      $lines: = text.lines(arena)
+      $start: Sz = 0
+      for start < lines.len
+        if lines.get(start).trim_spaces().len == 0
+          start += 1
+          continue
+        $stop: = start
+        block: = arena.text()
+        for stop < lines.len && lines.get(stop).trim_spaces().len > 0
+          block.s(lines.get(stop)).s(" ")
+          stop += 1
+        // Caution: **Search for the document name before masking.** It is written in backticks
+        // (`ksplc/docs/DESIGN.md`), so dropping the code spans first loses the naming.
+        if !exempt && !names_a_doc(block.take())
+          for k in Range.new(start, stop, 1)
+            // A number the convention quotes as a sample, in a code span, is not counted.
+            masked: = refs.masked_code(lines.get(k), arena)
+            for num in find_bare_sections(masked, arena)
+              bare_sec.seen += 1
+              if !has_str(own@, num)
+                bare_sec.bad
+                  .push(arena.text().s(rel).s(":\{k + 1\}: ").s(num)
+                  .s(" is not in its own document  ").s(lines.get(k).trim_spaces()).take())
+        start = stop + 1
+  io.out().s("# references to documents: \{files.len\} files\n")
+  report("every named .md really exists", missing.seen, missing@, "", arena)
+  report("every named implementation/test file really exists", missing_src.seen, missing_src@, "",
+    arena)
+  head_fires: = Finding::{ .seen = samples.head_samples.len,
+    .bad = samples.head_defects(arena) }
+  report("a cited path is taken to start at a word's edge alone", samples.head_samples.len,
+    head_fires@, "the table is `head_samples` in `support/docref_samples.kspls`", arena)
+  report("every reference with a section number points at a heading that exists", stale.seen,
+    stale@, "", arena)
+  sec_fires: = Finding::{ .seen = samples.sec_samples.len,
+    .bad = samples.section_defects(arena) }
+  report("the verdict that picks a section-number naming up can fire", samples.sec_samples.len,
+    sec_fires@,
+    "the table of writings that match and do not is `sec_samples` in `support/docref_samples.kspls`",
+    arena)
+  report("every link to a heading points at a heading that exists", bad_anchor.seen, bad_anchor@, "",
+    arena)
+  report("a heading holds no double quote outside a code span", quoted_head.seen, quoted_head@,
+    "a citation of it could not be checked; write the inner quote as '", arena)
+  quoted_fires: = Finding::{ .seen = samples.quoted_head_samples.len,
+    .bad = samples.quoted_head_defects(arena) }
+  report("the check on a heading's double quotes can fire", samples.quoted_head_samples.len,
+    quoted_fires@, "the table is `quoted_head_samples` in `support/docref_samples.kspls`", arena)
+  report("every link's destination really exists", bad_link.seen, bad_link@,
+    "a markdown link is relative to the file it is written in", arena)
+  report("the reference directions are as the convention says (no sideways or reverse flow)", 0,
+    wrong_dir@, "", arena)
+  report("import's and embed's directions are as the convention says too", unit_ref.seen, unit_ref@,
+    "the source is the table in docs/SPEC-documents.md", arena)
+  report("SPEC-*.md does not point at a DESIGN/SPEC below or beside it", 0, spec_down@, "", arena)
+  report("SPEC-*.md cites no PLAN.md", 0, spec_plan@,
+    "a specification relies on nothing that is not yet there", arena)
+  report("a \"Phase N\" outside README names README.md nearby", bare_phase.seen, bare_phase@, "",
+    arena)
+  report("numbered headings are unique and consecutive per document", 0, bad_numbering@, "", arena)
+  report("every named symbol is in that file", stray_sym.seen, stray_sym@,
+    "name the file the symbol lives in now; a comment's naming is read as a document's is", arena)
+  sym_fires: = Finding::{ .seen = samples.sym_samples.len,
+    .bad = samples.symbol_defects(arena) }
+  report("the verdict that picks a symbol naming up can fire", samples.sym_samples.len, sym_fires@,
+    "the table of writings that match and do not is `sym_samples` in `support/docref_samples.kspls`",
+    arena)
+  word_fires: = Finding::{ .seen = samples.sym_word_samples.len,
+    .bad = samples.sym_word_defects(arena) }
+  report("the words a symbol naming is looked for by breathe fire", samples.sym_word_samples.len,
+    word_fires@, "the table is `sym_word_samples` in `support/docref_samples.kspls`", arena)
+  report("the name accompanying a naming is one that document holds", stale_quote.seen,
+    stale_quote@,
+    "mend it to the name it moved to (a name reference has no number; nothing else complains)",
+    arena)
+  own_fires: = Finding::{ .seen = samples.own_samples.len, .bad = samples.own_defects(arena) }
+  report("the verdict on whether a document holds a name can fire", samples.own_samples.len,
+    own_fires@, "the table is `own_samples` in `support/docref_samples.kspls`", arena)
+  step_fires: = Finding::{ .seen = samples.step_sample_count(),
+    .bad = samples.step_defects(arena) }
+  report("a workflow step's path is read from the folder the step runs from",
+    samples.step_sample_count(), step_fires@,
+    "the table is `step_samples` in `support/docref_samples.kspls`", arena)
+  target_fires: = Finding::{ .seen = samples.target_sample_count(),
+    .bad = samples.target_defects(arena) }
+  report("a document reference resolves from the folder it is written in",
+    samples.target_sample_count(), target_fires@,
+    "the table of what resolves where is `target_samples` in `support/docref_samples.kspls`", arena)
+  quote_fires: = Finding::{ .seen = samples.quote_samples.len,
+    .bad = samples.quote_defects(arena) }
+  report("the verdict that picks an accompanying name up can fire", samples.quote_samples.len,
+    quote_fires@,
+    "the writings that match and do not are `quote_samples` in `support/docref_samples.kspls`",
+    arena)
+  report("a section number that names no document points at its own document", bare_sec.seen,
+    bare_sec@, "for another document's section, name the document in the same paragraph", arena)
+  md_link_fires: = Finding::{ .seen = samples.md_link_samples.len,
+    .bad = samples.md_link_defects(arena) }
+  report("the pick of a document's links can fire", samples.md_link_samples.len, md_link_fires@,
+    "the table of what hits and what does not is `md_link_samples` in \
+      `support/docref_samples.kspls`", arena)
+  kspage_fires: = Finding::{ .seen = samples.kspage_link_samples.len,
+    .bad = samples.kspage_link_defects(arena) }
+  report("the pick of a kspage's `href` can fire", samples.kspage_link_samples.len, kspage_fires@,
+    "the table of what hits and what does not is `kspage_link_samples` in \
+      `support/docref_samples.kspls`", arena)
+  return harness.finish()

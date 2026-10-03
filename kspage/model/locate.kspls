@@ -1,0 +1,88 @@
+//< Points at a run in a form that can be passed around (a path)
+//<
+//< **A thing inside a document can be pointed at in three ways, and their purposes differ**
+//< (mixing them breaks both).
+//< Caution: **Do not match things on a path**, or one added paragraph makes everything after it
+//< "a different thing".
+
+// ==========================================
+// | Way of pointing | What for | When the tree changes |
+// | :-- | :-- | :-- |
+// | `Neighbors` | Move the cursor by one | Recomputed on the spot |
+// | `Path` (the path) | Find a block in the tree again | **It shifts** (update it first) |
+// | `Block.id` | Match **the same thing** across two texts | It does not change |
+// ==========================================
+import "kspage/model/doc" { Block }
+import "kspage/model/run" { Inline }
+import "std/ds" { List }
+import "std/mem" { Arena }
+
+// ---- Pointing at a run in a form that can be passed around ----
+
+struct Path //< the path that points at a text inside a document
+  //<
+  //< **It is a list of indices** from the root, the text's index last. **When the tree changes,
+  //< what it points at changes**: update it before applying it.
+  blocks: List<|Sz|>$@
+  run: Sz //< which text within that block. **-1 means the block itself.**
+  found: Bool
+
+fn no_path(arena: Arena$@): Path
+  return Path::{ .blocks = List<|Sz|>.create(arena), .run = -1, .found = false }
+
+fn same_block(a: Path, b: Path): Bool //<
+  //< Whether the paths point at the same block (which text is ignored)
+  if a.blocks.len != b.blocks.len
+    return false
+  for $i: Sz = 0; i < a.blocks.len; i += 1
+    if a.blocks.get(i) != b.blocks.get(i)
+      return false
+  return true
+
+fn same_path(a: Path, b: Path): Bool //< whether the paths point at the same place
+  return a.run == b.run && same_block(a, b)
+
+fn under(a: Path, b: Path): Bool //< whether a's path starts with b's path
+  //<
+  //< **Equal paths count too** (b contains a). It finds how far a moved row's shift reaches.
+  if b.blocks.len > a.blocks.len
+    return false
+  for $i: Sz = 0; i < b.blocks.len; i += 1
+    if a.blocks.get(i) != b.blocks.get(i)
+      return false
+  return true
+
+fn at_run(p: Path, run: Sz): Path //< the path with only the text's index replaced
+  //<
+  //< **The list of indices is shared, not copied** (it is not rewritten once made).
+  return Path::{ .blocks = p.blocks, .run = run, .found = p.found }
+
+fn seek_path(b: Block$@, n: Inline$@, out: Path$@): Bool //<
+  //< Looks for n inside b and, if found, builds the path into out
+  //<
+  //< It builds in order from the root. **It is package-wide for `doc.kspls`'s `path_of`**, its
+  //< only caller besides itself.
+  for $i: Sz = 0; i < b.inlines.len; i += 1
+    if b.inlines.get(i) == n
+      out.run = i
+      out.found = true
+      return true
+  for $i: Sz = 0; i < b.children.len; i += 1
+    if seek_path(b.children.get(i), n, out)
+      // Caution: **Add the index on the way back**, or branches that did not match leave indices.
+      out.blocks.insert(0, i)
+      return true
+  return false
+
+fn seek_block(b: Block$@, target: Block$@, out: Path$@): Bool //<
+  //< Looks for the block target inside b and, if found, builds the path into out
+  //<
+  //< It works the same way as `seek_path`.
+  if b == target
+    out.found = true
+    return true
+  for $i: Sz = 0; i < b.children.len; i += 1
+    if seek_block(b.children.get(i), target, out)
+      out.blocks.insert(0, i)
+      return true
+  return false

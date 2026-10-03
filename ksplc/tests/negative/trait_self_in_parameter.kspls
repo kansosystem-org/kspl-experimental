@@ -1,0 +1,23 @@
+//< `Self` cannot be written on a trait method's parameters other than the receiver
+//<
+//< A thunk hands the fat pointer to the implementation's concrete type, so C falls on a mismatch
+//< (write `trait Eq<|Other|>` instead). A `Self$@` receiver draws another diagnostic, so it stays
+//< out (`case_trait_receiver_must_be_plain_self` in tests/negative/trait_shape.kspls).
+// EXPECT: 'Self' cannot be used for a parameter other than the receiver
+// EXPECT-NOT: fn dup(r: Self): Self;
+pub trait Bad
+  fn dup(r: Self): Self
+  fn equals(r: Self, other: Self): Bool
+
+pub struct Key
+  pub a: I32
+
+impl Key: Bad
+  pub fn dup(r: Self$@): Self
+    return r$
+  pub fn equals(r: Self$@, other: Key): Bool
+    return r.a == other.a
+
+fn main(): I32
+  k: Key = ::{ .a = 1 }
+  return k.dup().a - 1

@@ -1,0 +1,156 @@
+#!/usr/bin/env -S ksplc run
+//< A stand-in MQTT peer, so a real write can be confirmed without a broker
+//<
+//< It listens on a port, answers a CONNECT with a CONNACK, and prints every packet it is sent.
+
+// ==========================================
+// Usage:
+//     ./out/ksplc_stage1.exe run tools/mqtt_stub.kspls          # the default, 1883
+//     ./out/ksplc_stage1.exe run tools/mqtt_stub.kspls --port=18830
+// ==========================================
+// What it prints:
+//     listening on 0.0.0.0:1883
+//     connected
+//     CONNECT  client_id='kanso-pico' keep_alive=60 (proto='MQTT')
+//     PUBLISH  topic='kanso/pico' payload='hello from Kanso OS on RP2040'
+//     DISCONNECT
+import "std/argp"
+import "std/bytes"
+import "std/chars" // single-character tests and slicing
+import "std/io"
+import "std/mem" { Arena }
+import "std/net"
+import "std/strnum" as _strnum // the import that provides `to_i64` / `to_f64` / `parse_size`
+import "std/sys"
+
+priv const default_port: I32 = 1883
+priv const max_body: Sz = 4096 //< the cap on one packet
+  //<
+  //< Above it the connection is closed (a clean cut shows a fault on the hardware side better
+  //< than a partial printout).
+priv $body_buf: U8[4096]
+
+priv enum Mqtt_error
+  peer_closed //< the peer closed the connection (also a normal way to end)
+  read_failed
+  malformed_length //< the variable-length encoding went over 4 bytes
+  body_too_large
+  truncated_field //< the 2-byte length plus the body does not fit inside the payload
+
+priv fn read_exact(s: net.Tcp_stream$@, dst: U8$[], n: Sz): Void?Mqtt_error //<
+  //< Reads exactly n bytes from the peer
+  //<
+  //< It loops, since TCP need not return all of it at once.
+  $got: Sz = 0
+  for got < n
+    k: = s.read(dst.sub_mut(got, n - got)) catch
+      throw .read_failed
+    if k == 0
+      throw .peer_closed
+    got += k
+
+priv fn read_byte(s: net.Tcp_stream$@): U8?Mqtt_error
+  $one: U8[1] = ::{}
+  read_exact(s, U8$[]::one, 1)?
+  return one[0]
+
+priv fn read_remaining_length(s: net.Tcp_stream$@): Sz?Mqtt_error //<
+  //< Reads MQTT's variable-length encoding (7 bits at a time, the top bit the continuation flag)
+  // The cap is 4 bytes (128^3), per the specification. The multiplier is checked too, to show the
+  // reader and a sanitizer that it does not overflow on untrusted input.
+  $multiplier: Sz = 1
+  $value: Sz = 0
+  for
+    b: = read_byte(s)?
+    value += (b & 0x7f) * multiplier
+    if (b & 0x80) == 0
+      return value
+    if multiplier > 128 * 128
+      throw .malformed_length // multiplying again would go over the 4-byte cap
+    multiplier *= 128
+
+priv struct Field //< an MQTT string (a 2-byte big-endian length plus UTF-8)
+  //<
+  //< It holds the content and the offset just after it.
+  val: U8[]
+  next: Sz
+
+priv fn read_field(body: U8[], off: Sz): Field?Mqtt_error
+  if off + 2 > body.len
+    throw .truncated_field
+  n: = Sz::body.get_u16_be(off)
+  if off + 2 + n > body.len
+    throw .truncated_field
+  return Field::{ .val = body.sub(off + 2, n), .next = off + 2 + n }
+
+priv fn serve_one(s: net.Tcp_stream$@): Void?Mqtt_error //< handles one connection
+  //<
+  //< It returns on a DISCONNECT or when the peer closes the connection.
+  for
+    head: = read_byte(s)?
+    packet_type: = head >> 4
+    length: = read_remaining_length(s)?
+    if length > max_body
+      throw .body_too_large
+    body_all: = U8$[]::body_buf
+    if length > 0
+      read_exact(s, body_all, length)?
+    body: = (U8[]::body_buf).sub(0, length)
+
+    if packet_type == 1
+      // CONNECT: the protocol name + the level (1) + the flags (1) + keep alive (2) + the client id
+      proto: = read_field(body, 0)?
+      if proto.next + 4 > body.len
+        throw .truncated_field
+      keep_alive: = body.get_u16_be(proto.next + 2)
+      client: = read_field(body, proto.next + 4)?
+      io.out()
+        .s("CONNECT  client_id='\{client.val\}' keep_alive=\{keep_alive\} (proto='\{proto.val\}')\n")
+      // CONNACK: fixed header 0x20, remaining length 2, no session present, return code 0 (success)
+      connack: U8[4] = ::{ 0x20, 0x02, 0x00, 0x00 }
+      s.write_all(U8[]::connack) catch
+        throw .read_failed
+    else if packet_type == 3
+      // PUBLISH (only QoS 0 is assumed, so there is no packet ID)
+      topic: = read_field(body, 0)?
+      payload: = body.sub_from(topic.next)
+      io.out().s("PUBLISH  topic='\{topic.val\}' payload='\{payload\}'\n")
+    else if packet_type == 14
+      io.out().s("DISCONNECT\n")
+      return
+    if packet_type != 1 && packet_type != 3
+      // Interpolating a U8 comes out as **a character**; cast to a wider integer for a number.
+      io.out().s("(unsupported packet type \{Sz::packet_type\}, \{length\} bytes)\n")
+
+fn main(): I32 //< runs the stand-in MQTT peer
+  // Line-buffered: **this long-running process ends by Ctrl+C or kill**, and full buffering (the
+  // default for a pipe or a file) loses everything not yet flushed: "the hardware sends and nothing
+  // shows" ("A program does not lose its own output on an abnormal exit" in std/docs/DESIGN.md).
+  io.set_line_buffered()
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  // Caution: **Do not parse the number by hand**: by hand, a non-numeric string gets reported and
+  // then the run carries on with the default.
+  $said: I64 = default_port
+  p: = argp.Parser
+    .create(sys.program_name(), "the other party for MQTT (for confirming a real write)", arena)
+  p.int_opt("--port", said@, "the number listened on (the default is 1883)")
+  p.parse_or_exit(sys.args(), arena)
+  // Caution: **Check the range.** `I32::` truncates, so a bad value would listen on another port.
+  if said < 1I64 || said > 65535I64
+    io.err().s("\{sys.program_name()\}: --port is 1..65535 (\{said\} was passed)\n")
+    return 1
+  port: = I32::said
+  srv: = net.Tcp_listener.bind("0.0.0.0", port) catch e
+    io.err().s("\{sys.program_name()\}: cannot listen on port \{port\}: \{e\}\n")
+    return 1
+  io.out().s("listening on 0.0.0.0:\{port\}\n")
+  // It keeps accepting: the hardware is reflashed many times.
+  for
+    conn: = srv.accept() catch e
+      io.err().s("\{sys.program_name()\}: accept failed: \{e\}\n")
+      return 1
+    io.out().s("connected\n")
+    serve_one(conn) catch e
+      io.out().s("connection ended: \{e\}\n")
+    conn.free()

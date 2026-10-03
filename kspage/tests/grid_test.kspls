@@ -1,0 +1,925 @@
+import "kspage/lay/ask"
+import "kspage/lay/caret"
+import "kspage/lay/flow"
+import "kspage/model/doc" { Axis, Doc }
+import "kspage/model/filter"
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/paint"
+import "kspage/model/style" { Sheet, Arrange, Shape }
+import "kspage/tests/base"
+import "kspage/write/cells"
+import "kspage/write/edit"
+import "kspage/write/insert"
+import "kspage/write/shape"
+import "kspage/write/typing"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// kspage: checks grid (table) layout (a golden test).
+// **The metrics are fixed (`kspage/model/fixed_font`)** (why is in the header of
+// `kspage/model/fixed_font.kspls`); the absolute-coordinate side is
+// [`slide_test.kspls`](slide_test.kspls). **The multi-byte cells are deliberate.**
+// ==========================================
+
+fn test_a_shape_hangs_on_a_cell() //< a figure can be drawn on a table cell too
+  //<
+  //< **The cell holds it**: a table's children are rows and a row's are cells, so a figure there
+  //< would be laid out as a row (so the cell is the container at the clicked place).
+  verdict.start("[kspage/grid] drawing a figure on a cell test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = base.two_by_two(d)
+  sheet: = base.grid_sheet(arena)
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(page.cells.len == 4, "there are four cells")
+  spot: = page.cells.get(0)
+
+  ed: = edit.new_editor(d)
+  put: = ed.draw_shape(page, sheet, "figure", Shape.box, spot.rect.x + 2.0F32,
+    spot.rect.y + 2.0F32, 30.0, 12.0)
+  assert(put, "on a cell it can be drawn")
+  cell: = table.children.get(0).children.get(0)
+  assert(cell.children.len == 1, "it goes in as that cell's child")
+  // **A frame's position is from the cell's top left** (not screen coordinates).
+  switch cell.children.get(0).frame case .some(f)
+    assert(base.near(f.x, 2.0) && base.near(f.y, 2.0),
+      "the place pressed becomes the frame's top left")
+    assert(base.near(f.w, 30.0) && base.near(f.h, 12.0), "it comes out the size dragged")
+  case .none
+    assert(false, "it holds a frame's place")
+  again: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(again.frames.len == 1, "it is laid as a frame")
+  assert(again.cells.len == 4, "the cells do not grow (a figure becomes no row)")
+  verdict.pass("a figure drawn on a cell is carried by that cell.")
+
+fn test_columns_take_the_width_of_their_contents()
+  verdict.start("[kspage/grid] a column becoming its contents' width test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  base.two_by_two(d)
+
+  // One ASCII character (8px) each, so a column is 8px even when 200px is given.
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
+  assert(page.boxes.len == 4, "the cells are four")
+  assert(base.near(page.boxes.get(0).rect.x, 0.0), "the first column is at the left edge")
+  assert(base.near(page.boxes.get(1).rect.x, 8.0),
+    "the second column starts right by the first column's width")
+  assert(base.near(page.boxes.get(2).rect.x, 0.0),
+    "the second row's first column is at the left edge too")
+  verdict.pass("a column becomes the width of the widest contents in it.")
+
+fn test_rows_stack_by_their_tallest_cell()
+  verdict.start("[kspage/grid] a row going down by its tallest cell's worth test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  base.two_by_two(d)
+
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
+  assert(base.near(page.boxes.get(0).rect.y, 0.0), "the first row")
+  assert(base.near(page.boxes.get(2).rect.y, 19.2), "the second row is one row lower")
+  assert(base.near(page.height, 38.4), "two rows' worth of height")
+  verdict.pass("a row goes down by the worth of the tallest cell in it.")
+
+fn test_columns_shrink_together_when_they_do_not_fit() //<
+  //< Where they do not fit, they shrink proportionally first and then wrap
+  verdict.start("[kspage/grid] columns that do not fit shrinking by the ratio test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = d.add_block("table")
+  row: = table.add_child("row")
+  row.add_child("cell").add_text("あいうえお")
+  row.add_child("cell").add_text("かきくけこ")
+
+  // Both want 80px (160px in all) and 80px is given, so each shrinks by half.
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 80.0, arena)
+  assert(page.boxes.len == 6, "both break into three rows")
+  assert(base.near(page.boxes.get(0).rect.w, 32.0), "a row that broke is two characters' worth")
+  assert(base.near(page.boxes.get(3).rect.x, 40.0),
+    "the second column starts at half of what is given")
+  // Three lines' worth, from the taller cell.
+  assert(base.near(page.height, 57.6), "the row's height is decided by its tallest cell")
+  verdict.pass("columns that do not fit shrink by the ratio, and wrap at that width.")
+
+fn test_column_count_comes_from_the_widest_row() //<
+  //< The column count is decided by the row with the most cells
+  verdict.start("[kspage/grid] the count of columns being decided by the widest row test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = d.add_block("table")
+  short: = table.add_child("row")
+  short.add_child("cell").add_text("a")
+  wide: = table.add_child("row")
+  wide.add_child("cell").add_text("b")
+  wide.add_child("cell").add_text("c")
+  wide.add_child("cell").add_text("d")
+
+  // Every cell is one ASCII character (8px), so the columns are 8px apart.
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 300.0, arena)
+  assert(page.boxes.len == 4, "the cells come to four all told")
+  assert(base.near(page.boxes.get(3).rect.x, 16.0),
+    "there is a third column (starting right by two columns' worth)")
+  verdict.pass("the count of columns is decided by the row holding the most cells.")
+
+fn test_empty_table_makes_no_boxes()
+  verdict.start("[kspage/grid] an empty table making no box test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("table")
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
+  assert(page.boxes.len == 0, "there is no box")
+  assert(base.near(page.height, 0.0), "there is no height either")
+  verdict.pass("a table with no row makes neither a box nor a height.")
+
+fn test_an_empty_cell_can_be_stood_in() //< an empty text needs a place for the cursor too
+  //<
+  //< An added row is no use if it cannot be seen or clicked into.
+  verdict.start("[kspage/grid] standing in an empty cell test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = d.add_block("table")
+  table.add_child("row").add_child("cell").add_text("a")
+  empty: = table.add_child("row").add_child("cell").add_text("")
+  sheet: = base.grid_sheet(arena)
+
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(page.cells.len == 2, "an empty row becomes a cell too")
+  blank: = page.cells.get(1).rect
+  assert(blank.h > 0.0, "an empty row takes one row's worth of height too")
+
+  found: = caret.hit_test(page, blank.x + 1.0F32, blank.y + blank.h * 0.5F32)
+  assert(found.inline == empty, "the cursor stands in the empty cell")
+  ed: = edit.new_editor(d)
+  ed.caret = found
+  ed.insert("x")
+  assert(empty.text().equals("x"), "it can be typed into the empty cell")
+  verdict.pass("an empty cell has a height too, and can be pressed and typed into.")
+
+fn test_an_empty_table_still_takes_room() //<
+  //< A cell with no text gets a minimum width too, and the region encloses the table
+  //<
+  //< **Without it a newly inserted table cannot be seen on screen**: a 0-wide column cannot be
+  //< clicked, and the region spreads to the body's width.
+  verdict.start("[kspage/grid] an empty table getting a width too test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = d.add_block("table")
+  for $y: Sz = 0; y < 2; y += 1
+    row: = table.add_child("row")
+    row.add_child("cell").add_text("")
+    row.add_child("cell").add_text("")
+  wide: F32 = 200.0
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), wide, arena)
+  assert(page.cells.len == 4, "the cells are four")
+  one: = page.cells.get(0).rect
+  assert(one.w > 0.0, "an empty cell gets a width too")
+  $grid: Sz = -1
+  for $i: Sz = 0; i < page.regions.len; i += 1
+    if page.regions.get(i).kind.same_arrange(Arrange.grid)
+      grid = i
+  assert(grid >= 0, "there is a table region")
+  box: = page.regions.get(grid).rect
+  assert(box.w > 0.0 && box.w < wide, "the region is the table's width, not the body's whole width")
+  verdict.pass("an empty table gets a width too, and the region wraps it.")
+
+// ---- setting a width per column ----
+
+fn test_a_specified_column_takes_the_width_it_asks_for() //<
+  //< A column with a width set takes that width, and the unset columns share the rest
+  verdict.start("[kspage/grid] a column with a naming becoming that width test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = base.two_by_two(d)
+  table.set_size(Axis.column, 0, Option<|F32|>.some(50.0))
+
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
+  assert(base.near(page.cells.get(0).rect.w, 50.0), "the first column is the width named")
+  assert(base.near(page.cells.get(1).rect.x, 50.0),
+    "the second column starts right of the width named")
+  assert(base.near(page.cells.get(1).rect.w, 8.0),
+    "a column with no naming stays its contents' width")
+  verdict.pass("a column with a naming takes that width.")
+
+fn test_a_specified_width_does_not_shrink() //< a set width does not shrink
+  verdict.start("[kspage/grid] a width named not shrinking test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = d.add_block("table")
+  row: = table.add_child("row")
+  row.add_child("cell").add_text("a")
+  row.add_child("cell").add_text("あいうえお")
+  row.add_child("cell").add_text("かきくけこ")
+  table.set_size(Axis.column, 0, Option<|F32|>.some(60.0))
+
+  // Of the 100px given, the 60px set stays; the other two want 32px each (two characters a line)
+  // of the 40px left, so each shrinks proportionally to 20px.
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 100.0, arena)
+  assert(base.near(page.cells.get(0).rect.w, 60.0), "the column with a naming does not shrink")
+  assert(base.near(page.cells.get(1).rect.w, 20.0), "the columns with no naming shrink by the ratio")
+  assert(base.near(page.cells.get(2).rect.w, 20.0), "the other shrinks by the same")
+  verdict.pass("what shrinks is the columns with no naming alone.")
+
+fn test_specified_widths_may_overflow_the_container() //<
+  //< Where the set widths alone exceed the given width, the table sticks out
+  //<
+  //< The columns with no width set become 0.
+  verdict.start("[kspage/grid] the namings coming to more than what is given test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = base.two_by_two(d)
+  table.set_size(Axis.column, 0, Option<|F32|>.some(120.0))
+  table.set_size(Axis.column, 1, Option<|F32|>.some(120.0))
+
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 100.0, arena)
+  assert(base.near(page.cells.get(0).rect.w, 120.0), "it is as named even past what is given")
+  assert(base.near(page.cells.get(1).rect.x, 120.0),
+    "the second column comes right by that much too")
+  verdict.pass("a naming comes before what is given, and sticks out and is seen.")
+
+fn test_a_short_or_negative_spec_is_taken_safely() //< a width list may be short or negative
+  //<
+  //< The cells decide the column count.
+  verdict.start("[kspage/grid] a naming that falls short and a naming that goes negative test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = base.two_by_two(d)
+  table.set_size(Axis.column, 0, Option<|F32|>.some(-30.0))
+
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
+  assert(base.near(page.cells.get(0).rect.w, 0.0), "a naming that goes negative becomes 0")
+  assert(base.near(page.cells.get(1).rect.x, 0.0), "the next column does not come back left")
+  assert(base.near(page.cells.get(1).rect.w, 8.0), "a column not written follows its contents")
+  verdict
+    .pass("neither a naming that falls short nor one that goes negative breaks the laying-out.")
+
+fn test_column_widths_are_ignored_outside_a_grid() //<
+  //< Where it is laid out as flow, the width settings are not read
+  verdict.start("[kspage/grid] not reading the widths outside a grid test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = base.two_by_two(d)
+  table.set_size(Axis.column, 0, Option<|F32|>.some(50.0))
+
+  // `table` is laid out with a style that does not make it a grid.
+  plain: = Sheet.new(base.root_font(), arena)
+  page: = flow.layout(d, plain, fixed.make(), 200.0, arena)
+  assert(page.cells.len == 0, "not one cell is laid")
+  assert(base.near(page.boxes.get(0).rect.x, 0.0), "the width's naming does not act")
+  verdict.pass("the widths are read only when it is laid as a grid.")
+
+// ---- dragging a column border ----
+
+fn test_a_column_edge_is_found_only_at_a_border() //<
+  //< A border is caught at a column's right edge and nowhere else
+  verdict.start("[kspage/grid] a column's border being caught test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = d.add_block("table")
+  row: = table.add_child("row")
+  row.add_child("cell").add_text("あいうえお")
+  row.add_child("cell").add_text("かきくけこ")
+
+  // The columns are 80px each. The first column's right border is at x = 80.
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 300.0, arena)
+  edge: = ask.edge_at(page, 80.0, 10.0)
+  assert(edge.found && edge.index == 0, "on the border the column to its left is caught")
+  assert(edge.table == table, "the table holding that column comes back")
+  // It is not caught in the middle of a cell (that is where text is selected).
+  assert(!ask.edge_at(page, 40.0, 10.0).found, "inside a cell nothing is caught")
+  assert(!ask.edge_at(page, 80.0, 100.0).found, "outside the table nothing is caught")
+  last: = ask.edge_at(page, 160.0, 10.0)
+  assert(last.found && last.index == 1, "the right of the last column is caught too")
+  verdict.pass("a border is caught only near a column's right edge.")
+
+fn test_dragging_a_border_sets_the_column_width() //< dragged, it becomes that column's width
+  verdict.start("[kspage/grid] dragging a border setting the width test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  base.two_by_two(d)
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  ed.drag_edge(page, ask.edge_at(page, 8.0, 10.0), 50.0, 10.0)
+
+  moved: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(base.near(moved.cells.get(0).rect.w, 50.0),
+    "as far as it was dragged becomes the first column's width")
+  assert(base.near(moved.cells.get(1).rect.x, 50.0), "the second column starts right of it")
+  verdict.pass("where it was dragged to becomes that column's width.")
+
+fn test_typing_a_width_sets_the_column_width() //<
+  //< A size typed as a number is written to the same place as a dragged one
+  //<
+  //< Caution: **Check that it is not written somewhere else**; if separate, an undo would restore
+  //< only one of the two, so the undo is checked too.
+  verdict.start("[kspage/grid] setting a column's width by a number test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  base.two_by_two(d)
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  ed.caret = caret.at(page.cells.get(0).block.inlines.get(0), 0)
+  assert(ed.set_line_size(page, Axis.column, Option<|F32|>.some(50.0)),
+    "the number typed goes through")
+
+  moved: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(base.near(moved.cells.get(0).rect.w, 50.0),
+    "the number typed becomes the first column's width as it stands")
+  assert(base.near(moved.cells.get(1).rect.x, 50.0), "the second column starts right of it")
+
+  assert(ed.undo(), "it can be put back in one")
+  back: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(base.near(back.cells.get(0).rect.w, 8.0), "in one it returns to the contents' width it had")
+  assert(!ed.undo(), "there is nothing left to go back to")
+  verdict.pass("a width typed as a number becomes that column's width.")
+
+fn test_clearing_a_width_returns_to_the_content_width() //<
+  //< `not set` is one of the settings too (that is what an emptied field means)
+  //<
+  //< Caution: **Do not confuse it with 0.** 0 is a valid setting with its own result.
+  verdict.start("[kspage/grid] taking a width's naming off test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = base.two_by_two(d)
+  table.set_size(Axis.column, 0, Option<|F32|>.some(120.0))
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(base.near(page.cells.get(0).rect.w, 120.0), "before it is taken off it is the width typed")
+  // Outside the table nothing happens, **and it does not report success as though it had acted.**
+  assert(!ed.set_line_size(page, Axis.column, Option<|F32|>.none),
+    "outside the table it does not act")
+  ed.caret = caret.at(page.cells.get(0).block.inlines.get(0), 0)
+  assert(ed.set_line_size(page, Axis.column, Option<|F32|>.none),
+    "the word to take it off goes through")
+
+  gone: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(base.near(gone.cells.get(0).rect.w, 8.0),
+    "the naming comes off and it goes back to the contents' width")
+
+  assert(ed.set_line_size(page, Axis.column, Option<|F32|>.some(0.0)), "0 can be typed too")
+  flat: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(base.near(flat.cells.get(0).rect.w, 0.0), "0 is a column of width 0")
+  verdict.pass("empty the field and the naming comes off, while 0 is left as width 0.")
+
+fn test_one_drag_undoes_in_one_step() //<
+  //< One drag is undone in one step, however many times it moved
+  verdict.start("[kspage/grid] one drag being put back in one test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  base.two_by_two(d)
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  edge: = ask.edge_at(page, 8.0, 10.0)
+  ed.drag_edge(page, edge, 20.0, 10.0)
+  ed.drag_edge(page, edge, 35.0, 10.0)
+  ed.drag_edge(page, edge, 50.0, 10.0)
+  ed.break_group()
+
+  assert(ed.undo(), "it can be put back in one")
+  back: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  // **It had no setting to begin with, so it returns to the contents' width** (not to 0).
+  assert(base.near(back.cells.get(0).rect.w, 8.0), "in one it returns to the contents' width it had")
+  assert(!ed.undo(), "there is nothing left to go back to")
+
+  assert(ed.redo(), "it can be done again")
+  again: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(base.near(again.cells.get(0).rect.w, 50.0),
+    "done again it goes back to the width last dragged to")
+  verdict.pass("one drag is put back in one, however many times it moved.")
+
+fn test_a_border_does_not_go_left_of_its_column() //< it cannot be dragged left of the left edge
+  //<
+  //< Make the width negative and the next column would come back left.
+  verdict.start("[kspage/grid] a border not going left of its column's left edge test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  base.two_by_two(d)
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  ed.drag_edge(page, ask.edge_at(page, 8.0, 10.0), -40.0, 10.0)
+
+  moved: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(base.near(moved.cells.get(0).rect.w, 0.0), "the width stops at 0")
+  assert(base.near(moved.cells.get(1).rect.x, 0.0), "the next column does not come back left")
+  verdict.pass("a border stops at its column's left edge.")
+
+// ---- setting a height per row ----
+
+fn test_a_specified_row_takes_the_height_it_asks_for() //< a row with a set height takes it
+  verdict.start("[kspage/grid] a row with a naming becoming that height test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = base.two_by_two(d)
+  // The second row stays at its contents' one line (19.2px).
+  table.set_size(Axis.row, 0, Option<|F32|>.some(50.0))
+
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
+  assert(base.near(page.cells.get(0).rect.h, 50.0), "the first row is the height named")
+  assert(base.near(page.cells.get(2).rect.y, 50.0), "the second row starts below the height named")
+  auto_h: = page.cells.get(2).rect.h
+  assert(base.near(auto_h, 19.2), "a row with no naming stays its contents' height")
+  assert(base.near(page.height, 69.2), "the table's height is the naming and the contents added up")
+  verdict.pass("a row with a naming takes that height.")
+
+fn test_a_specified_height_does_not_grow_with_its_content() //<
+  //< A set height is not pushed taller by its contents
+  verdict.start("[kspage/grid] a height named not moving with its contents test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = d.add_block("table")
+  row: = table.add_child("row")
+  // Contents of three lines in a 40px column (57.6px) go into a row 20px tall.
+  cell: = row.add_child("cell")
+  cell.add_text("あいうえお")
+  table.set_size(Axis.column, 0, Option<|F32|>.some(40.0))
+  table.set_size(Axis.row, 0, Option<|F32|>.some(20.0))
+
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
+  assert(base.near(page.cells.get(0).rect.h, 20.0),
+    "it is as named even where the contents are taller")
+  assert(base.near(page.height, 20.0), "the table's height is as named too")
+  // Sticking out and visible is easier to fix than silently cut off.
+  assert(page.boxes.len == 3, "the rows that stick out are laid too")
+  verdict.pass("a height named does not move with its contents, and sticks out and is seen.")
+
+fn test_a_row_edge_is_found_below_a_cell() //< a border is caught below as well
+  //<
+  //< Which direction it was caught in changes how it moves.
+  verdict.start("[kspage/grid] a row's border being caught test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = base.two_by_two(d)
+
+  // The first row's lower border is at y = 19.2. x stays away from the column border (8px), which
+  // is hit first at a corner.
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
+  edge: = ask.edge_at(page, 2.0, 19.2)
+  assert(edge.found && edge.table == table, "on the border the table comes back")
+  switch edge.axis case .row
+    assert(edge.index == 0, "the row above is caught")
+  case .column
+    assert(false, "the border below is caught as a row")
+  verdict.pass("the border below a cell is caught as a row.")
+
+fn test_dragging_a_row_edge_sets_the_height() //< dragged, it becomes that row's height
+  verdict.start("[kspage/grid] dragging a row's border setting the height test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  base.two_by_two(d)
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  ed.drag_edge(page, ask.edge_at(page, 2.0, 19.2), 2.0, 60.0)
+
+  moved: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(base.near(moved.cells.get(0).rect.h, 60.0),
+    "as far as it was dragged becomes the first row's height")
+  assert(base.near(moved.cells.get(2).rect.y, 60.0), "the second row starts below it")
+  // Undone in one step: it is the same record as a column's.
+  ed.break_group()
+  assert(ed.undo(), "it can be put back in one")
+  back: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(base.near(back.cells.get(0).rect.h, 19.2), "it returns to the contents' height it had")
+  verdict.pass("a row's border is dragged and put back by the same record as a column's.")
+
+// ---- stepping from cell to cell ----
+
+fn test_the_caret_steps_from_cell_to_cell() //< where Tab moves to
+  //<
+  //< **It goes right, and at a row's end wraps to the next row's start.**
+  verdict.start("[kspage/grid] stepping from cell to cell test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  head: = d.add_block("body").add_text("body")
+  table: = base.two_by_two(d)
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+
+  // Outside the table the key is left to the browser.
+  ed.caret = caret.at(head, 0)
+  outside: = ed.move_cell(page, true)
+  assert(!outside, "outside the table it does not step")
+  ed.caret = caret.at(table.children.get(0).children.get(0).inlines.get(0), 0)
+  assert(ed.move_cell(page, true), "it can step to the cell on the right")
+  assert(ed.caret.inline.text().equals("b"), "it stands at the head of the cell beside")
+  assert(ed.caret.offset == 0, "where it stands is the cell's head")
+  assert(ed.move_cell(page, true), "at the row's end it can step too")
+  assert(ed.caret.inline.text().equals("c"), "it comes round to the next row's head")
+  assert(ed.move_cell(page, false), "it can step back too")
+  assert(ed.caret.inline.text().equals("b"), "it goes back one cell")
+  // Past the table's end it adds a row, as Word, Docs and Writer do; a misclick is one undo.
+  ed.caret = caret.at(table.children.get(1).children.get(1).inlines.get(0), 0)
+  assert(ed.move_cell(page, true), "past the end it steps into a row it adds")
+  assert(table.children.len == 3, "one row grows")
+  assert(ed.caret.inline == table.children.get(2).children.get(0).inlines.get(0),
+    "it stands in the new row's first cell")
+  assert(ed.undo(), "the row added goes back in one")
+  assert(table.children.len == 2, "and the rows are as they were")
+  ed.caret = caret.at(table.children.get(0).children.get(0).inlines.get(0), 0)
+  assert(!ed.move_cell(page, false), "before the first cell it does not step")
+  verdict
+    .pass("a cell steps right, round to the next row's head, and past the end into a row it adds.")
+
+fn test_enter_moves_down_a_row() //< Enter goes to the cell below, Shift+Enter to the one above
+  //<
+  //< Past the last row it adds one, as Tab past the end does; above the first it stops.
+  verdict.start("[kspage/grid] moving a row test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  head: = d.add_block("body").add_text("body")
+  table: = base.two_by_two(d)
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  ed.caret = caret.at(head, 0)
+  assert(!ed.move_row(page, true), "outside a table it does not step")
+  ed.caret = caret.at(table.children.get(0).children.get(1).inlines.get(0), 0)
+  assert(ed.move_row(page, true), "it can step down")
+  assert(ed.caret.inline.text().equals("d"), "it stands in the cell below, in the same column")
+  assert(ed.move_row(page, false), "it can step up")
+  assert(ed.caret.inline.text().equals("b"), "it stands in the cell above again")
+  assert(!ed.move_row(page, false), "above the first row it does not step")
+  assert(table.children.len == 2, "and no row grows above")
+  ed.caret = caret.at(table.children.get(1).children.get(1).inlines.get(0), 0)
+  assert(ed.move_row(page, true), "past the last row it steps into a row it adds")
+  assert(table.children.len == 3, "one row grows")
+  assert(ed.caret.inline == table.children.get(2).children.get(1).inlines.get(0),
+    "it stands in the new row, in the same column")
+  assert(ed.undo() && table.children.len == 2, "the row added goes back in one")
+  // A downward-merged cell reaches the end from the row above; the new row goes at the table's end,
+  // not inside the merge after the cursor's row.
+  tall: = table.children.get(0).children.get(1)
+  tall.span_rows = 2
+  table.children.get(1).children.remove_at(1)
+  merged: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  ed.caret = caret.at(tall.inlines.get(0), 0)
+  assert(ed.move_row(merged, true), "from a cell merged to the end it steps into a row it adds")
+  assert(table.children.len == 3, "one row grows")
+  assert(table.children.get(1).children.len == 1, "the merge's row is as it was")
+  assert(ed.caret.inline == table.children.get(2).children.get(1).inlines.get(0),
+    "and the row is at the end, below the merge")
+  verdict.pass("Enter steps down a row and Shift+Enter up, and past the last row adds one.")
+
+// ---- adding and deleting rows and columns ----
+
+fn test_a_row_is_added_after_the_caret() //< one row is inserted after the cursor's cell
+  verdict.start("[kspage/grid] a row being added test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = base.two_by_two(d)
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  ed.caret = caret.at(page.boxes.get(0).inline, 0)
+  assert(ed.add_line(page, Axis.row), "it was added")
+  assert(table.children.len == 3, "the rows grow by one")
+  // The added row is empty but holds one text, so the cursor can stand in it.
+  made: = table.children.get(1)
+  assert(made.children.len == 2, "it gets as many cells as there are columns")
+  assert(made.children.get(0).inlines.len == 1, "empty, it still holds one text")
+
+  assert(ed.undo(), "it can be put back in one")
+  assert(table.children.len == 2, "put back, it returns to the count of rows it had")
+  assert(ed.redo() && table.children.len == 3, "done again, it grows again")
+  verdict.pass("a row goes in behind the cursor, and is put back in one.")
+
+fn test_a_column_is_added_to_every_row() //< a column is added the same way
+  verdict.start("[kspage/grid] a column being added test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = base.two_by_two(d)
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  ed.caret = caret.at(page.boxes.get(0).inline, 0)
+  assert(ed.add_line(page, Axis.column), "it was added")
+  assert(table.children.get(0).children.len == 3, "the first row gains a column")
+  assert(table.children.get(1).children.len == 3, "the second row gains one too")
+  assert(ed.undo(), "it can be put back in one")
+  assert(table.children.get(1).children.len == 2, "put back, every row returns to what it was")
+  verdict.pass("a column goes into every row, one each, and is put back all together.")
+
+fn test_dropping_a_row_moves_its_size_spec_too() //<
+  //< The deleted row's setting goes with it, so the rows after it do not shift
+  verdict.start("[kspage/grid] deleting a row moving its namings too test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = base.two_by_two(d)
+  table.set_size(Axis.row, 0, Option<|F32|>.some(30.0))
+  table.set_size(Axis.row, 1, Option<|F32|>.some(50.0))
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  ed.caret = caret.at(page.boxes.get(0).inline, 0)
+  assert(ed.drop_line(page, Axis.row), "it was deleted")
+  assert(table.children.len == 1, "the rows fall by one")
+  // If the settings did not move, the remaining row would stay 30px.
+  after: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(base.near(after.cells.get(0).rect.h, 50.0), "the row left keeps its own naming")
+
+  assert(ed.undo(), "it can be put back in one")
+  back: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  assert(back.cells.len == 4, "the row comes back")
+  assert(base.near(back.cells.get(0).rect.h, 30.0), "the naming returns to the row it was on")
+  verdict.pass("the naming of the row deleted comes off with it, and put back it returns.")
+
+fn test_the_last_line_is_kept() //< the last one is not deleted
+  //<
+  //< A table with neither a row nor a column would leave nothing to click to add one.
+  verdict.start("[kspage/grid] the last row being kept test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = d.add_block("table")
+  row: = table.add_child("row")
+  row.add_child("cell").add_text("a")
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  ed.caret = caret.at(page.boxes.get(0).inline, 0)
+  assert(!ed.drop_line(page, Axis.row), "with only one row it is not deleted")
+  assert(!ed.drop_line(page, Axis.column), "with only one column it is not deleted")
+  assert(table.children.len == 1, "the table stays as it was")
+  verdict.pass("the last row and the last column are kept.")
+
+fn test_lines_are_only_added_inside_a_table() //< nothing can be added outside a table
+  verdict.start("[kspage/grid] not adding outside a table test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("body")
+  base.two_by_two(d)
+  sheet: = base.grid_sheet(arena)
+  ed: = edit.new_editor(d)
+
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  ed.caret = caret.at(page.boxes.get(0).inline, 0)
+  assert(!ed.add_line(page, Axis.row), "on the body nothing can be added")
+  assert(!ed.drop_line(page, Axis.row), "on the body nothing can be deleted")
+  verdict.pass("a row and a column can be touched only inside a table.")
+
+// ---- nesting the arrangements ----
+
+fn test_a_table_sits_in_the_flow_of_the_text() //<
+  //< A table goes into the text flow, and the paragraph after continues below the table
+  verdict.start("[kspage/grid] a table going into the flowing writing test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  d.add_block("body").add_text("ab")
+  base.two_by_two(d)
+  d.add_block("body").add_text("cd")
+
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
+  assert(page.boxes.len == 6, "the paragraph in front + four cells + the paragraph behind")
+  assert(base.near(page.boxes.get(0).rect.y, 0.0), "the paragraph in front is the topmost")
+  assert(base.near(page.boxes.get(1).rect.y, 19.2), "the table starts below the paragraph in front")
+  assert(base.near(page.boxes.get(2).rect.x, 8.0), "inside the table it parts into two columns")
+  assert(base.near(page.boxes.get(5).rect.y, 57.6),
+    "the paragraph behind carries on below the table's two rows")
+  assert(base.near(page.height, 76.8), "the height is the paragraphs and the table added up")
+  verdict.pass("a table is laid as part of the flow, and pushes the paragraph behind it down.")
+
+fn test_a_table_nests_inside_a_cell() //<
+  //< A table can be laid out inside a cell again (the arrangements call each other in turn)
+  verdict.start("[kspage/grid] a table going inside a table test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  outer: = d.add_block("table")
+  row: = outer.add_child("row")
+  left: = row.add_child("cell")
+  inner: = left.add_child("table")
+  ir: = inner.add_child("row")
+  ir.add_child("cell").add_text("a")
+  ir.add_child("cell").add_text("b")
+  row.add_child("cell").add_text("z")
+
+  // The inner table is two 8px columns, so the outer first column is 16px.
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
+  assert(page.boxes.len == 3, "the two inside and the one outside")
+  assert(base.near(page.boxes.get(0).rect.x, 0.0),
+    "the inner first column is at the outer cell's left edge")
+  assert(base.near(page.boxes.get(1).rect.x, 8.0),
+    "the inner second column is right of the inner first")
+  assert(base.near(page.boxes.get(2).rect.x, 16.0),
+    "the outer second column starts right by the inner table's width")
+  verdict.pass("a grid and flowing call each other by turns, so they nest to any depth.")
+
+fn test_a_grids_own_inlines_come_before_its_rows() //<
+  //< A table block's own inlines are laid out before its rows
+  verdict.start("[kspage/grid] a table's own inlines being laid before its rows test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = base.two_by_two(d)
+  table.add_text("heading")
+
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
+  assert(page.boxes.len == 5, "one heading and four cells")
+  assert(base.near(page.boxes.get(0).rect.y, 0.0), "the heading is laid first")
+  assert(base.near(page.boxes.get(1).rect.y, 19.2), "the rows start below the heading")
+  verdict.pass("the characters a table's block holds are flowed before its rows.")
+
+fn test_a_tables_indent_moves_and_narrows_it() //<
+  //< A table's indent affects both the left edge and the width where it does not fit
+  verdict.start("[kspage/grid] a table's indent acting on the width too test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = d.add_block("table")
+  row: = table.add_child("row")
+  row.add_child("cell").add_text("あいうえお")
+  row.add_child("cell").add_text("かきくけこ")
+  sheet: = base.grid_sheet(arena)
+  if s: = sheet.find("table")
+    s.indent = 20.0
+
+  // The left edge moves 20px in, and the remaining 80px is halved.
+  page: = flow.layout(d, sheet, fixed.make(), 100.0, arena)
+  assert(base.near(page.boxes.get(0).rect.x, 20.0),
+    "the first column comes right by the indent's worth")
+  assert(base.near(page.boxes.get(3).rect.x, 60.0),
+    "the second column starts at half the width left")
+  verdict.pass("an indent moves the table right and narrows it by the same.")
+
+fn test_clicking_lands_in_the_cell_under_the_point() //<
+  //< The clicked point lands in that cell, inside nesting too
+  verdict.start("[kspage/grid] the place pressed landing in the table's cell test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  base.two_by_two(d)
+
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
+  // On the second column's "b" (the columns are 8px each).
+  c: = caret.hit_test(page, 10.0, 10.0)
+  assert(c.inline == page.boxes.get(1).inline, "it lands in the second column's cell")
+  low: = caret.hit_test(page, 2.0, 25.0)
+  assert(low.inline == page.boxes.get(2).inline, "it lands in the second row's cell")
+  verdict.pass("inside a table too, it lands in the cell under the place pressed.")
+
+fn test_a_grid_records_the_shape_of_each_cell() //<
+  //< The shape of each laid-out cell is kept, and the height is aligned per row
+  verdict.start("[kspage/grid] a cell's shape being left test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = d.add_block("table")
+  row: = table.add_child("row")
+  // The first column becomes two lines from its two paragraphs, and the second stays one line.
+  tall: = row.add_child("cell")
+  tall.add_child("").add_text("a")
+  tall.add_child("").add_text("b")
+  row.add_child("cell").add_text("z")
+
+  page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
+  assert(page.cells.len == 2, "the cells are two")
+  first: = page.cells.get(0).rect
+  second: = page.cells.get(1).rect
+  assert(base.near(first.x, 0.0) && base.near(first.w, 8.0),
+    "the first column runs from the left edge for its contents' width")
+  assert(base.near(second.x, 8.0) && base.near(second.w, 8.0),
+    "the second column starts right of the first")
+  assert(base.near(first.h, 38.4), "the taller is two rows' worth")
+  assert(base.near(second.h, 38.4), "the shorter comes out the row's height too")
+  verdict.pass("a cell's shape is left, and the height is matched to the row.")
+
+fn test_a_cells_panel_takes_the_shape_of_the_cell() //<
+  //< Where a cell's style has a line, the band is the cell's shape, aligned per row
+  verdict.start("[kspage/grid] a cell's band becoming the cell's shape test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = base.grid_sheet(arena)
+  cell: = sheet.add("cell", paint.inherit_all())
+  cell.rule_width = 1.0
+  cell.rule_color = 0xccccccU32
+  table: = d.add_block("table")
+  row: = table.add_child("row")
+  tall: = row.add_child("cell")
+  tall.add_child("").add_text("a")
+  tall.add_child("").add_text("b")
+  row.add_child("cell").add_text("z")
+
+  page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+  // Neither the row nor the table has a line, so the bands are only the cells'.
+  assert(page.panels.len == 2, "there is one band per cell")
+  low: = page.panels.get(1).rect
+  assert(base.near(page.panels.get(0).rect.h, 38.4), "the taller one's band is two rows' worth")
+  // **Aligned to the row's height**: left at the contents' height, the grid would be missing below
+  // the shorter cell.
+  assert(base.near(low.h, 38.4), "the shorter one's band comes out the row's height too")
+  assert(base.near(low.x, 8.0) && base.near(low.w, 8.0), "the band is the cell's width")
+  assert(page.panels.get(0).width == 1.0, "the line's thickness carries over")
+  assert(page.panels.get(0).color == 0xccccccU32, "the line's colour carries over too")
+  verdict.pass("a cell's band is the cell's shape matched to the row.")
+
+fn test_a_filter_leaves_rows_out_of_the_layout() //<
+  //< A condition on a column leaves the rows that fail it out of the layout
+  //<
+  //< The heading and the row kept for the cursor stay, the numbers stay, and the moves step over
+  //< what is left out.
+  //< **It is a view**: the document still holds every row.
+  verdict.start("[kspage/grid] narrowing the rows test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = d.add_block("table")
+  h: = table.add_child("row")
+  h.add_child("cell").add_text("n")
+  h.add_child("cell").add_text("name")
+  texts: = U8[][]::{ "10", "5", "20" }
+  names: = U8[][]::{ "ten", "five", "twenty" }
+  for $i: Sz = 0; i < 3; i += 1
+    row: = table.add_child("row")
+    row.add_child("cell").add_text(texts[i])
+    row.add_child("cell").add_text(names[i])
+  sheet: = base.grid_sheet(arena)
+  sheet.over.filters = List<|filter.Filter|>.create(arena)
+  sheet.over.filters.push(filter.make_filter(table, 0, filter.Keep.above, "8"))
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  $rows_laid: Sz = 0
+  $row_two: = false
+  for $i: Sz = 0; i < page.cells.len; i += 1
+    c: = page.cells.get(i)
+    if c.column == 0
+      rows_laid += 1
+    if c.row == 2
+      row_two = true
+  assert(rows_laid == 3, "the heading and the two rows above 8 are laid")
+  assert(!row_two, "the row of 5 is left out")
+  assert(table.children.len == 4, "the document holds every row still")
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(table.children.get(1).children.get(0).inlines.get(0), 0)
+  assert(ed.move_row(page, true), "Enter steps down")
+  assert(ed.caret.inline.text().equals("20"), "and lands past the row left out")
+  assert(ed.move_row(page, false), "and back up")
+  assert(ed.caret.inline.text().equals("10"), "over the row left out again")
+  ed.caret = caret.at(table.children.get(1).children.get(1).inlines.get(0), 0)
+  assert(ed.move_cell(page, true) && ed.caret.inline.text().equals("20"),
+    "Tab from the row's end goes to the next row shown")
+  sheet.over.kept_row = table.children.get(2)
+  kept: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  $five: = false
+  for $i: Sz = 0; i < kept.cells.len; i += 1
+    if kept.cells.get(i).row == 2
+      five = true
+  assert(five, "the row kept for the cursor is laid though it fails the condition")
+  sheet.over.kept_row = null
+  sheet.over.filters.len = 0
+  sheet.over.filters.push(filter.make_filter(table, 1, filter.Keep.holds, "T"))
+  held: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  $shown: Sz = 0
+  for $i: Sz = 0; i < held.cells.len; i += 1
+    if held.cells.get(i).column == 0 && held.cells.get(i).row > 0
+      shown += 1
+  assert(shown == 2, "\"contains T\" keeps ten and twenty, without regard to case")
+  verdict
+    .pass("a filter leaves rows out of the layout, keeps the heading and the cursor's row, and the \
+      moves step over.")

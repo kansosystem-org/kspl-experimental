@@ -1,0 +1,217 @@
+//< Checks that what a recipient is owed is written down: every notice, and each binary's origin
+//<
+//< Note: The rules are the header of `THIRD-PARTY-NOTICES.md`, the notices' canonical source; this
+//< file **only turns them into a check**, run by `make test-conventions`.
+import "std/chars" // `to_lower`
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" // `find_str` / `starts_with` / `lines`
+import "std/strfmt" as _strfmt
+import "std/verdict"
+import "tests/support/conventions_scan" as scan + { Sample }
+import "tests/support/harness"
+
+priv const notices: U8[] = "THIRD-PARTY-NOTICES.md"
+
+priv const no_notice_heads: U8[][2] = ::{ "## Public-domain origins", "## Binary files" } //<
+  //< The sections whose files owe no notice: a public-domain origin, and a binary's origin
+  //<
+  //< A borrowed binary also states its origin under its license's own section.
+
+priv const binary_head: U8[] = "## Binary files" //< the section every binary file is listed in
+
+priv const license_words: U8[][7] = ::{ "spdx-license-identifier:", "copyright (c)", "copyright ©",
+  "licensed under", "all rights reserved", "permission is hereby granted",
+  "redistribution and use" } //<
+    //< A license's own words, folded to lower case: what code copied with its header carries
+    //<
+    //< Caution: **List only words a license itself uses**, not ones a sentence about licenses uses
+    //< ("the licence travels with the files"), or every document about licenses fires.
+
+priv const own_words: U8[][3] = ::{ "LICENSE.md", "THIRD-PARTY-NOTICES.md",
+  "tests/support/conventions_notice.kspls" } //< the files whose license words are their own
+
+priv const released: U8[][5] = ::{ "ksplc/", "std/", "tools/release-assets/", "tools/kspl_lldb.py",
+  ".vscode/" } //<
+    //< What the release carries
+    //<
+    //< That is the compiler built from `ksplc/`, and what "Collect the bundled files" and the
+    //< extensions step pack in `.github/workflows/release.yml`.
+    //< Caution: **Add a path here together with the step that bundles it** (they are two halves of
+    //< one change), or a file owing a notice goes out in a zip that carries none.
+
+priv struct Listed //< one file `THIRD-PARTY-NOTICES.md` names in a table's first column
+  path: U8[]
+  owes: Bool //< whether its section owes a notice
+  binary: Bool //< whether it is listed under `binary_head`
+
+priv fn listed_in(text: U8[], arena: Arena$@): List<|Listed|>$@ //<
+  //< The files a notices text names, each with its section's status
+  //<
+  //< **Only a row starting with a backticked name counts**: "What is not bundled" names a project
+  //< by its plain name, and owes nothing checked here.
+  out: = List<|Listed|>.create(arena)
+  $head: U8[] = ""
+  for line in text.lines(arena)
+    if line.starts_with("## ")
+      head = line.trim_end()
+    if !line.starts_with("| `")
+      continue
+    close: = line.sub_from(3).find_char('`')
+    if close <= 0
+      continue
+    $owes: = true
+    for h in no_notice_heads
+      owes = owes && !head.equals(h)
+    out
+      .push(Listed::{ .path = line.sub(3, close), .owes = owes,
+      .binary = head.equals(binary_head) })
+  return out
+
+fn carries_license_words(text: U8[], arena: Arena$@): Bool //< whether it holds a license's words
+  b: = arena.text()
+  for c in text
+    b.c(c.to_lower())
+  low: = b.take()
+  for w in license_words
+    if low.find_str(w) >= 0
+      return true
+  return false
+
+fn is_binary(body: U8[], _arena: Arena$@): Bool //< whether it holds a NUL in its first 8000 bytes
+  //<
+  //< **git's own test**, so the check calls binary what `git diff` does.
+  for i in Range.asc(body.len if body.len < 8000 else 8000)
+    if body[i] == 0
+      return true
+  return false
+
+fn is_released(path: U8[], _arena: Arena$@): Bool //< whether the release carries it
+  for r in released
+    if path.equals(r) || r.ends_with("/") && path.starts_with(r)
+      return true
+  return false
+
+priv fn is_listed(path: U8[], listed: List<|Listed|>$@, binary_only: Bool): Bool
+  for l in listed.slice()
+    if l.path.equals(path) && (!binary_only || l.binary)
+      return true
+  return false
+
+priv const word_samples: Sample[7] = ::{
+  Sample::{ .text = "// SPDX-License-Identifier: BSD-3-Clause", .hits = true },
+  Sample::{ .text = "/* Copyright (c) 2020 Someone Else */", .hits = true },
+  Sample::{ .text = "Licensed under the Apache License, Version 2.0", .hits = true },
+  // **A sentence about licenses is not a license**, so a document explaining them stays quiet.
+  Sample::{ .text = "The licence travels with the files it covers", .hits = false },
+  Sample::{ .text = "the copyright holder is named in the notice", .hits = false },
+  Sample::{ .text = "a converted artifact inherits the original license", .hits = false },
+  // **Naming the header is not writing one**: a header always carries its colon.
+  Sample::{ .text = "an `SPDX-License-Identifier` line at the head of every file", .hits = false },
+}
+
+priv const binary_samples: Sample[3] = ::{
+  Sample::{ .text = "weights\0\0\0", .hits = true },
+  Sample::{ .text = "plain text, no NUL", .hits = false },
+  Sample::{ .text = "", .hits = false },
+}
+
+priv const released_samples: Sample[5] = ::{
+  Sample::{ .text = "std/time.kspls", .hits = true },
+  Sample::{ .text = "ksplc/seed.c", .hits = true },
+  Sample::{ .text = "tools/kspl_lldb.py", .hits = true },
+  Sample::{ .text = "ksos/port/rp2040/boot2_generic_03h.S", .hits = false },
+  // **A file beside a bundled one is not bundled**: `tools/release-assets/` goes, not `tools/`.
+  Sample::{ .text = "tools/surface.kspls", .hits = false },
+}
+
+priv const sample_notices: U8[] =
+  """
+## Someone's kit (BSD-3-Clause)
+
+| File | What it originates from |
+| :-- | :-- |
+| `ksos/drivers/rp2040/adc.kspls` | the register values |
+
+## Public-domain origins
+
+| File | What it originates from | Origin |
+| :-- | :-- | :-- |
+| `std/time.kspls` | an algorithm | a page |
+
+## What is not bundled
+
+| Name | Where it appears | What is not included |
+| :-- | :-- | :-- |
+| Model | `ksai/` | the weights |
+
+## Binary files
+
+| File | Where it comes from | License |
+| :-- | :-- | :-- |
+| `ksos/demo/cortex_m/pilot_policy.safetensors` | made here | this repository's |
+""" //< a notices text holding one row of each kind
+
+priv fn check_fires(arena: Arena$@)
+  $w: = scan.misjudged(Sample[]::word_samples, carries_license_words, arena)
+  verdict.check_list("the judgment of a license's words can fire", word_samples.len, "samples", w@,
+    "the table of what is hit and what is not is `word_samples`")
+  $b: = scan.misjudged(Sample[]::binary_samples, is_binary, arena)
+  verdict.check_list("the judgment of a binary file can fire", binary_samples.len, "samples", b@,
+    "the table of what is hit and what is not is `binary_samples`")
+  $r: = scan.misjudged(Sample[]::released_samples, is_released, arena)
+  verdict.check_list("the judgment of what the release carries can fire", released_samples.len,
+    "samples", r@, "the table is `released_samples`")
+  rows: = listed_in(sample_notices, arena)
+  got: = rows.slice()
+  verdict.check("the notices' rows are read with their section's standing",
+    got.len == 3 && got[0].path.equals("ksos/drivers/rp2040/adc.kspls") && got[0].owes &&
+    !got[1].owes && got[2].path.equals("ksos/demo/cortex_m/pilot_policy.safetensors") &&
+    got[2].binary && !got[2].owes, arena.text().s("\{got.len\} rows").take())
+
+priv fn check_notices(arena: Arena$@)
+  listed: = listed_in(harness.read_under_root(notices), arena)
+  $tracked: = harness.tracked() catch
+    verdict.skip_check("a file owing a notice is listed", "git ls-files failed")
+    return
+  $gone: = List<|U8[]|>.new(arena)
+  $unlisted: = List<|U8[]|>.new(arena)
+  $shipped: = List<|U8[]|>.new(arena)
+  $untold: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  for l in listed.slice()
+    $there: = false
+    for rel in tracked.slice()
+      there = there || rel.equals(l.path)
+    if !there
+      gone.push(l.path)
+    if l.owes && is_released(l.path, arena)
+      shipped.push(l.path)
+  for rel in tracked.slice()
+    $own: = false
+    for o in own_words
+      own = own || rel.equals(o)
+    if own
+      continue
+    seen += 1
+    body: = harness.read_under_root(rel)
+    if is_binary(body, arena)
+      if !is_listed(rel, listed, true)
+        untold.push(rel)
+    else if carries_license_words(body, arena) && !is_listed(rel, listed, false)
+      unlisted.push(rel)
+  verdict.check_list("every file THIRD-PARTY-NOTICES.md lists exists", listed.len, "rows", gone@,
+    "move or drop the row with the file")
+  verdict.check_list("a file carrying a license's words is listed in THIRD-PARTY-NOTICES.md", seen,
+    "files", unlisted@, "add its origin and license text there (the file's header says how)")
+  verdict.check_list("a file owing a notice stands outside what the release carries", listed.len,
+    "rows", shipped@,
+    "the release's zip leaves the notices behind: bundle them there first (`released` here)")
+  verdict.check_list("every binary file is listed with where it comes from", seen, "files", untold@,
+    "add a row under \"Binary files\" in THIRD-PARTY-NOTICES.md: its origin and license")
+
+fn run(arena: Arena$@) //< this section's entry point
+  //<
+  //< Caution: **Call it from `suite/conventions_test.kspls`'s `main`** (there is one suite).
+  check_fires(arena)
+  check_notices(arena)

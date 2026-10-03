@@ -1,0 +1,95 @@
+//< Lays out the page's header and footer
+//<
+//< **The coordinates are from the page's upper left** (not document coordinates).
+//< **The number does not go into the document.** `{page}` in the text is replaced with the
+//< current page and `{pages}` with the page count, at every layout.
+//< Note: It is split from [`flow.kspls`](flow.kspls) to keep each file under 1000 lines.
+//< The layout goes straight through that file's `place_blocks`.
+import "kspage/lay/flow"
+import "kspage/lay/page" + { Page }
+import "kspage/model/doc" + { Block, Chrome, Doc, Rect }
+import "kspage/model/font" { Font_source }
+import "kspage/model/style" + { Sheet }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+priv fn filled_text(text: U8[], no: Sz, of: Sz, arena: Arena$@): U8[] //<
+  //< The text with the page number filled in
+  //<
+  //< **There are two marks and no more** (`{page}`, `{pages}`). To add one, change the place it is
+  //< written and the place it is read together.
+  $sb: = Str_builder.new()
+  defer sb.free()
+  $i: Sz = 0
+  for i < text.len
+    rest: = text.sub(i, text.len - i)
+    if rest.len >= page_mark.len && rest.sub(0, page_mark.len).equals(page_mark)
+      sb.s("\{no\}")
+      i += page_mark.len
+      continue
+    if rest.len >= count_mark.len && rest.sub(0, count_mark.len).equals(count_mark)
+      sb.s("\{of\}")
+      i += count_mark.len
+      continue
+    sb.c(text[i])
+    i += 1
+  return arena.dup_str(sb.slice())
+
+priv const page_mark: U8[] = "{page}"
+priv const count_mark: U8[] = "{pages}"
+
+priv fn worded(b: Block$@): Bool //<
+  //< whether the header or footer holds visible text
+  //<
+  //< **Nesting is not checked** (a header and a footer hold only text).
+  for $i: Sz = 0; i < b.inlines.len; i += 1
+    if b.inlines.get(i).text().len > 0
+      return true
+  return false
+
+priv fn filled(b: Block$@, no: Sz, of: Sz, arena: Arena$@): Block$@ //<
+  //< Copies one header or footer, replacing only the text
+  //<
+  //< Caution: **Carry over the style's name and the formulas too** (otherwise the look changes).
+  //< **Nesting is not copied** (the page margin has no height to stack a paragraph in).
+  made: = doc.new_block(b.style, arena)
+  for $i: Sz = 0; i < b.inlines.len; i += 1
+    n: = b.inlines.get(i)
+    made.add_text(filled_text(n.text(), no, of, arena), n.style)
+  return made
+
+priv fn chrome_rect(sheet: Sheet$@, which: Chrome): Rect //<
+  //< Where the header and the footer lie on the page
+  //<
+  //< **Where the page height is not set there is no place** (it returns height 0): without a
+  //< lower edge the footer has nowhere to go.
+  if sheet.paper.height <= 0.0
+    return Rect::{ .x = 0.0, .y = 0.0, .w = 0.0, .h = 0.0 }
+  $room: F32 = 0.0
+  $y: F32 = 0.0
+  switch which case .header
+    room = sheet.paper.top
+  case .footer
+    room = sheet.paper.bottom
+    y = sheet.paper.height - room
+  return Rect::{ .x = sheet.paper.left, .y = y, .w = sheet.column_width(0.0), .h = room }
+
+fn layout_chrome(d: Doc$@, sheet: Sheet$@, src: Font_source, which: Chrome, no: Sz, of: Sz,
+  arena: Arena$@): Page$@ //<
+    //< Lays out one header or footer at the page's top or bottom
+    //<
+    //< **The coordinates are as in the file header.** **Do not call it without pages** (a page
+    //< number would mean nothing).
+  out: = page.new_page(src, arena)
+  band: = d.chrome_of(which)
+  at: = chrome_rect(sheet, which)
+  if band == null || at.w <= 0.0 || at.h <= 0.0 || !worded(band)
+    return out
+  one: = List<|Block$@|>.create(arena)
+  one.push(filled(band, no, of, arena))
+  // **The reader's character size is not applied** (ratio 1.0), or **the header and footer on
+  // paper would grow with the reader's text size**.
+  flow.place_blocks(out, one, sheet, at, style.root_look(sheet.root, 1.0F32), 0.0, 0.0, arena)
+  return out

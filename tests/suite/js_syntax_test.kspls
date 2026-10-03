@@ -1,0 +1,110 @@
+#!/usr/bin/env -S ksplc run
+//< Checks that the page's JS **parses as syntax**
+//<
+//< Caution: **Do not drop the second tier.** The page and the checks both run **concatenated into
+//< one `<script>`** (see `kspage/port/web/page.html` and `KSPAGE_PROBE` in `kspage/Makefile`).
+//< node is already required (`make test-kspage-wasm`). **Only syntax is checked.**
+
+// ==========================================
+//   1. **one file at a time** ... reports the name and line of the broken file.
+//   2. **the concatenated form** ... a `let` / `const` / `class` collision across files is caught
+// ==========================================
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/verdict"
+import "tests/support/harness"
+
+priv const check_timeout_ms: I32 = 30000 //< the wait for `node --check`
+  //<
+  //< **Only syntax is checked, so it can be short**, but long enough for a busy machine.
+priv const output_cap: Sz = 64 * 1024 //< the cap on the captured output
+  //<
+  //< node's syntax error is about a dozen lines, so this is enough.
+
+priv fn no_node(path: U8[], arena: Arena$@): U8[] //< the report when node cannot be started
+  //<
+  //< Caution: **Never let a failure to start pass**, or with no node **it goes green having
+  //< checked nothing**.
+  return arena.text().s(path).s(": node cannot be started (it is in `.devcontainer/Dockerfile`. ")
+    .s("To run it locally, install Node.js and put it on PATH)").take()
+
+priv fn check_one(path: U8[], arena: Arena$@): U8[] //< puts one file through `node --check`
+  //<
+  //< Empty if it passes, and the report if it fails.
+  argv: = U8[][]::{ "node", "--check", path }
+  r: = subproc.run_capture(argv, "", check_timeout_ms, output_cap, arena)
+  if r.spawn_failed
+    return no_node(path, arena)
+  if r.timed_out
+    return arena.text().s(path).s(": node does not return").take()
+  if r.exit_code == 0I32
+    return ""
+  said: = said_line(r.stderr_data, arena)
+  // Caution: **Treat a failure with no message as "cannot be started" too.** Only Windows reports
+  // `spawn_failed`; POSIX gives **the child's exit code**, so a missing node would fail **with a
+  // report that reads as "the syntax is broken"**.
+  if said.len == 0
+    return no_node(path, arena)
+  return arena.text().s(path).c(' ').s(said).take()
+
+priv fn said_line(text: U8[], arena: Arena$@): U8[] //<
+  //< The line of node's output that names the error (empty if there is none)
+  //<
+  //< Caution: **Do not report all of it** (about a dozen lines per finding). **Split it with
+  //< `lines`**: split by hand, Windows's CRLF leaves an invisible `\r` ("a test does not cut a
+  //< child's output into lines by hand" in `tests/support/conventions_win.kspls`).
+  $best: U8[] = ""
+  for line in text.lines(arena)
+    if line.find_str("Error") >= 0
+      best = line
+  return best
+
+priv fn check_joined(what: U8[], slug: U8[], files: List<|U8[]|>@, arena: Arena$@) //<
+  //< Concatenates the files and puts the result through `node --check`
+  //<
+  //< **Sorting by name is fine**: a collision does not depend on order (a copy of the page's load
+  //< order would drift).
+  $body: = Str_builder.new()
+  defer body.free()
+  for i in Range.asc(files.len)
+    text: = io.read_file(files.get(i)) catch
+      harness.fatal(arena.text().s("cannot read: ").s(files.get(i)).take())
+      return
+    body.s(text).c('\n')
+  // Caution: **Build the name in ASCII**; the heading's spaces and multi-byte characters would
+  // garble the path passed to node on some systems.
+  joined: = fs.join(harness.tmp_dir(), arena.text().s(slug).s("_joined.js").take(), arena)
+  io.write_file(joined, body.slice()) catch
+    harness.fatal(arena.text().s("cannot write: ").s(joined).take())
+    return
+  said: = check_one(joined, arena)
+  $bad: = List<|U8[]|>.new(arena)
+  if said.len > 0
+    bad.push(said)
+  verdict.check_list(arena.text().s(what).s(" parses as syntax when concatenated too").take(),
+    files.len, "files", bad@,
+    "the names collide where they are concatenated (it does not come out one file at a time)")
+
+fn main(): I32
+  arena: = harness.begin(64 * 1024 * 1024)
+  all: = harness.tracked_matching(U8[][]::{ "*.js", "*.mjs" })
+  $bad: = List<|U8[]|>.new(arena)
+  for i in Range.asc(all.len)
+    said: = check_one(all.get(i), arena)
+    if said.len > 0
+      bad.push(said)
+  verdict.check_list("the JS parses as syntax", all.len, "files", bad@, "`node --check` failed")
+
+  // The two groups that run concatenated. **Both are `*.js` only** (`.mjs` files are joined by
+  // import).
+  page: = harness.tracked_matching(U8[][]::{ "kspage/port/web/*.js" })
+  check_joined("the page's JS", "page_js", page@, arena)
+  probe: = harness.tracked_matching(U8[][]::{ "kspage/tests/browser/*.js" })
+  check_joined("the browser checks' JS", "probe_js", probe@, arena)
+  return harness.finish()

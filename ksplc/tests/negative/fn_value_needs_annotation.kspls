@@ -1,0 +1,34 @@
+//< The diagnostic that rejects a function value bound with no type annotation
+//<
+//< The shape is `f: = big;`: **a path expression's type is "the type when called" = the return
+//< type** (sema/body/call.kspls).
+//< Caution: Always place the non-firing side alongside: the passing cases below have to pass.
+// EXPECT: cannot infer the type of 'ptr' from function 'big'
+// EXPECT: cannot infer the type of 'anon' from this anonymous function
+// EXPECT: write the function pointer type
+// EXPECT: add ';' before the closing paren
+// EXPECT-NOT: _anon_fn
+import "std/io"
+
+priv typedef Pred = fn(x: I32): Bool
+
+priv fn big(x: I32): Bool
+  return x > 5
+
+fn main(): I32
+  // The stopping side: the name alone does not settle the type.
+  ptr: = big
+  // The stopping side: an anonymous function also merely points at the lifted name, so it is the
+  // same shape.
+  anon: = fn(x: I32): Bool
+    return x > 1
+  // The passing side: the function-pointer type is written.
+  named: Pred = big
+  // The passing side: with a capture list it is a closure, so a type is attached.
+  n: = 3
+  clo: = fn(x: I32; n: I32): Bool
+    return x > n
+  // The passing side: a call's result may be the return type.
+  called: = big(7)
+  io.out().s("\{ptr(7)\}\{anon(2)\}\{named(9)\}\{clo.call(4)\}\{called\}\n")
+  return 0

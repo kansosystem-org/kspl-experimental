@@ -1,0 +1,29 @@
+#!/usr/bin/env -S ksplc run
+//< Rewrites the table of diagnostic codes in `ksplc/docs/SPEC-tools.md` (`make code-table`)
+//<
+//< The rows come from the code sections below the table (`tools/code_rows.kspls`), so a renamed
+//< or added section reaches the table by running this. **The document is built into the
+//< compiler** (`ksplc explain`), so commit the seed after it changes (`make commit-seed`).
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "tools/code_rows" as rows
+
+fn main(): I32
+  arena: = Arena.new(1 << 20)
+  defer arena.free()
+  spec: = io.read_file(rows.spec_path) catch
+    io.err().s("cannot read ").s(rows.spec_path).s("\n")
+    return 1
+  registry: = io.read_file(rows.registry_path) catch
+    io.err().s("cannot read ").s(rows.registry_path).s("\n")
+    return 1
+  now: = rows.with_table(spec, registry, arena)
+  if now.equals(spec)
+    io.out().s(rows.spec_path).s(": the table of codes is already current\n")
+    return 0
+  io.write_file(rows.spec_path, now) catch
+    io.err().s("cannot write ").s(rows.spec_path).s("\n")
+    return 1
+  io.out().s("wrote the table of codes in ").s(rows.spec_path).s("\n")
+  return 0

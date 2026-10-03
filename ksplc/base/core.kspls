@@ -1,0 +1,460 @@
+import "std/chars" as std_chars
+import "std/ds" { List, Map }
+import "std/mem" + { Arena, alloc, dealloc }
+import "std/str" { Str_builder }
+import "std/sys"
+
+const max_ast_kinds: I32 = 512
+
+const immut_mark: U8[] = " immut" //< the immutability marker of the type's internal representation
+  //<
+  //< In source, "unmarked is immutable" (the `$` goes only on a mutable level). The string keeps
+  //< it apart from KSPL's `const` (a compile-time constant) and the C output's `const`.
+
+const slice_fqn: U8[] = "std.lang.Slice" //<
+  //< The FQN of the borrowed contiguous region (`Slice<|$T|>` in `std/lang`)
+  //<
+  //< A `T[]` is sugar for this (`../parse/desugar_slice.kspls`).
+  //< Caution: **Keep the string in one place.** Sema's three layers (the type query, the
+  //< instantiation, the cast check) and genc all match on this name.
+
+fn slice_ident(): U8[] //< the last word of `slice_fqn` (`Slice`)
+  //<
+  //< **This is the identifier put into the AST.**
+  //< Caution: **Do not write the bare name directly.** That breaks "keep it in one place" above:
+  //< after a rename, the desugaring would still insert the old name.
+  at: = slice_fqn.rfind_char('.')
+  return slice_fqn if at < 0 else slice_fqn.sub_from(at + 1)
+
+const fmt_method_char: U8[] = "fmt_char" //<
+  //< The method names that the format spec `\{value:SPEC\}` desugars to
+  //<
+  //< Caution: **Keep the strings in one place.** The builder (`build_call` in
+  //< `../parse/format_spec.kspls`) and the code that rewords "there is no such method" in terms of
+  //< the format spec (`format_spec_item` in `../sema/body/dot.kspls`) match on the same name; if
+  //< they drift, the user sees `fmt_prec`, a name they never wrote, for a `:.2`.
+const fmt_method_hex: U8[] = "fmt_hex"
+const fmt_method_prec: U8[] = "fmt_prec"
+const fmt_method_spec: U8[] = "fmt_spec"
+const fmt_method_file: U8[] = "std/strfmt" //<
+  //< The file that defines the four, which a file using a SPEC imports
+  //<
+  //< The rule is "An extension method requires the import" in `../../docs/SPEC-language.md`.
+
+struct String_pool
+  map: Map<|U8[], I32|>
+  list: List<|U8$[]|>
+
+impl String_pool
+  fn free(r: Self$@)
+    if r == null
+      return
+    r.map.free()
+    // Free the bytes of every string that intern allocated
+    for $i: = 1; i < r.list.len; i += 1
+      s: = r.list.get(i)
+      dealloc(Void$@::s.ptr)
+    r.list.free()
+    dealloc(Void$@::r)
+
+  fn new(): String_pool$@
+    p: = mem.alloc_as<|String_pool|>()
+    // 512 saves the ast_kinds pool a resize (it has under 256 kinds); for symbol_names it is only
+    // a starting capacity.
+    p.map = Map<|U8[], I32|>.new_with_cap(512, null)
+    p.list = List<|U8$[]|>.new()
+    empty_str: = U8$[]::{ .ptr = null, .len = 0 }
+    p.list.push(empty_str)
+    p.map.set(empty_str, 0)
+    return p
+
+  fn intern(r: Self$@, s: U8[]): I32
+    if r == null || s.len == 0
+      return 0
+    existing: = r.map.get(s) catch -1
+    if existing != -1
+      return existing
+
+    new_id: = I32::r.list.len
+    heap_ptr: = U8$@::alloc(s.len + 1)
+    mem.copy(Void$@::heap_ptr, Void$@::s.ptr, s.len)
+    (heap_ptr + s.len)$ = 0U8
+    duped: = U8$[]::{ .ptr = heap_ptr, .len = s.len }
+
+    r.map.set(duped, new_id)
+    r.list.push(duped)
+    return new_id
+
+$arena: Arena$@ = null
+
+// **The arena that is never rewound.** The LSP saves and restores the arena per request
+// (ksplc/lsp/worker.kspls); a table that does **not** outlive a request stays there and is
+// forgotten at the rewind (`wind_back` in ksplc/lsp/state.kspls lists them all).
+// **There is no third choice**: a global on the arena that nothing forgets is the bug above.
+$perm_arena: Arena$@ = null
+struct Line_info
+  line: Sz
+  char_idx: Sz
+  disp_col: Sz
+  line_start: Sz
+
+enum Target_backend
+  c
+  llvm
+
+struct Compiler_config
+  target: Target_backend
+  is_lsp: Bool
+  is_lint: Bool
+  run_lint_checks: Bool //<
+    //< Whether to run the lint analysis
+    //<
+    //< It is true under `is_lint`, or under any `##lint(CODE = error)` or `--lint=CODE=error`.
+    //< Tied to `is_lint` only, a check raised to an error that returns early on `!is_lint` never
+    //< runs in an ordinary build (docs/DESIGN.md Principle 5). report_diagnostic decides what is
+    //< shown, from `is_lint` and the per-code level.
+  recover_syntax: Bool //<
+    //< Whether a file that fails to parse is read a second time with the recovery rules enabled.
+    //<
+    //< **Only the editor sets it.** Set on a compile, input that should be rejected would be
+    //< accepted (the grounds are "Only the editor's parse recovers from a syntax error" in
+    //< `../docs/DESIGN.md`).
+  is_freestanding: Bool
+  runtime_extern: Bool //<
+    //< It links the runtime from a separate translation unit (`--omit-runtime`).
+    //<
+    //< Caution: **Keep the default false (embedded).** The seed must build in one run of the C
+    //< compiler, and every `--freestanding` target also depends on the runtime being embedded
+    //< ("Embedding the runtime, and the two ways to keep it out" in ksplc/docs/DESIGN.md).
+  weak_std: Bool //<
+    //< Weak linkage on std's definitions (`--omit-runtime` sets it with runtime_extern)
+    //<
+    //< Artifacts built on the same std then link statically, and the linker folds the duplicates.
+    //< Caution: **Mix std versions and one is silently chosen.** To make that fail instead, keep
+    //< the version strings in step.
+  unit_count: Sz //<
+    //< How many translation units to split the generated C into (`--split=`); 1 is unsplit.
+    //<
+    //< **Do not read it directly.** Callers that bypass the CLI (the LSP, the tests) leave it 0,
+    //< so read it through unit_count_or_one.
+  decls_path: U8[] //<
+    //< Where to write the declarations for other builds (`--emit-decls=`; empty writes none)
+    //<
+    //< **When set, it changes the dead-code elimination's roots** (`lower/prune.kspls`), so every
+    //< declared symbol keeps its body in the artifact.
+  surface_path: U8[] //<
+    //< Where to write the record of the published API (`--emit-surface=`; empty writes none).
+    //<
+    //< **It differs from `decls_path`**: it is for comparing two versions, so it holds no ABI
+    //< number (`#size`) and writes every declaration, generics too.
+  surface_all: Bool //<
+    //< Whether the record holds everything a sibling file may use, not just what is published
+    //<
+    //< It is `--surface-scope=all`; **the default is the published API only**.
+    //< **It is for a package that publishes nothing**, whose files use one another without `pub`
+    //< and whose published record is empty. Not for comparing two versions: a changed `priv` is
+    //< not a break.
+  enable_stats: Bool
+  diag_json: Bool //<
+    //< Whether a diagnostic is printed as one JSON object per line rather than as text
+    //<
+    //< It is `--diagnostic-format=json`; `print_json` in `diag.kspls` is the only writer.
+  defines: List<|U8[]|>$@
+  std_dir: U8[] //<
+    //< The standard library's folder, empty until std_dir() resolves it; read it through that.
+  pkg_src_dir: U8[] //<
+    //< The folder of packages other than `std`
+    //<
+    //< **Empty is a valid answer** (the current folder only), so the length does not say whether
+    //< it is resolved. Read it through pkg_src_dir().
+  pkg_src_dir_known: Bool
+$config: Compiler_config = ::{}
+
+fn unit_count_or_one(): Sz //< the generated C's split count
+  //<
+  //< A 0 left by a caller that bypasses the CLI counts as 1.
+  return 1 if config.unit_count < 1 else config.unit_count
+
+typedef Progress_hook = fn() //<
+  //< The hook that tells the caller "still working" during long work
+  //<
+  //< Caution: **Use this hook instead of calling lsp from a lower layer**: parse or pipeline
+  //< importing lsp would reverse the dependency. Where nothing sets it (ksplc itself, the tests)
+  //< it stays null and a call does nothing.
+$progress_hook: Progress_hook = Progress_hook::null
+
+priv const progress_every_us: I64 = 1000000I64 //<
+  //< The time between two reports [microseconds]
+  //<
+  //< Caution: **Do not throttle by "once every N calls".** One iteration's cost varies by orders
+  //< of magnitude, so counting lets **only the slow loops exceed the window**. **Keep it well
+  //< under the supervisor's window** (`worker_timeout_ms` in `ksplc/lsp/server.kspls`).
+$progress_last_us: I64 = 0I64
+
+fn report_progress() //< it tells the caller "still working" during long work
+  //<
+  //< **The caller need not count.** The throttling lives here, so call it freely inside a heavy
+  //< loop.
+  if progress_hook == null
+    return
+  now: = sys.mono_us()
+  // **Where the clock is broken (`mono_us` always 0), report every time**; throttled, it would
+  // exceed the window without reporting once.
+  if now != 0I64 && now - progress_last_us < progress_every_us
+    return
+  progress_last_us = now
+  progress_hook()
+
+fn is_llvm_target(): Bool //< whether the output goes to the LLVM IR backend
+  //<
+  //< The checks whose accepted spelling depends on the backend share it (check_ffi_safety in
+  //< sema/session/ctx.kspls, __kspl_inline_c in sema/body/call.kspls).
+  switch config.target case .llvm
+    return true
+  default {}
+  return false
+
+const defines_env_name: U8[] = "KSPLC_DEFINES" //<
+  //< The environment variable that carries the `#cfg()` flags the LSP sets for analysis
+  //<
+  //< It passes the same thing as `--define`.
+  //< Caution: **Do not read it when compiling.** If it were read there, one source would silently
+  //< build into something different whenever the Makefile's `--define` and the environment
+  //< variable disagree.
+
+fn append_defines_from_env() //<
+  //< It adds the `#cfg()` flags given through the environment variable to config.defines
+  //<
+  //< The separators are a comma and whitespace.
+  //< Caution: **Allocate the copy from perm_arena.** A flag lives as long as the process; on the
+  //< arena the LSP rewinds, the next request frees it.
+  raw: = sys.get_env(defines_env_name).unwrap_or("")
+  $start: Sz = 0
+  for i in Range.asc(raw.len + 1)
+    is_sep: = i == raw.len || (raw.ptr + i)$ == ',' || (raw.ptr + i)$ == ' '
+    if !is_sep
+      continue
+    if i > start
+      config.defines.push(perm_arena.dup_str(raw.sub(start, i - start)))
+    start = i + 1
+
+const source_ext: U8[] = ".kspl" //< the source's extension in the brace notation
+  //<
+  //< **The string lives here and nowhere else** (the check and the removal are `has_kspl_ext` /
+  //< `strip_kspl_ext` below).
+
+const laid_out_ext: U8[] = ".kspls" //<
+  //< The extension of the notation written by indentation (`parse/layout.kspls`)
+  //<
+  //< Caution: **Do not make it a string that ends with `source_ext`.** The check is `ends_with`,
+  //< so a name ending in `.kspl` would match both.
+
+fn default_ext(): U8[] //<
+  //< **What a name without an extension means**, decided in this one place
+  //<
+  //< Four things depend on it: the file an `import` opens (`append_file_path`), the notation it is
+  //< read as (`reads_as_laid_out`), the extension a name drops (`strip_kspl_ext`), and the one a
+  //< diagnostic or `#line` adds back. Decided apart, a diagnostic names a file that does not exist
+  //< ("The indentation notation (`.kspls`)" in `../../docs/DESIGN.md`).
+  // **A function, not a `const`**: the LLVM backend cannot lower a global initialized from another
+  // (`make test-llvm-abi`), and a second spelling would be a second place deciding the default.
+  return laid_out_ext
+
+fn source_of(map: Map<|U8[], U8$[]|>$@, file: U8[]): U8$[] //<
+  //< the text a source map holds for `file`
+  //<
+  //< An `import`'s name has no extension, so a miss retries with default_ext added; "" if neither.
+  //< Caution: **Look a file's text up only through here**, so every reader agrees on the retry.
+  got: = map.get(file) catch ""
+  if got.len > 0
+    return got
+  $named: = Str_builder.new()
+  defer named.free()
+  named.s(file).s(default_ext())
+  return map.get(named.slice()) catch ""
+
+const file_uri_scheme: U8[] = "file://" //< the scheme an LSP document URI carries
+  //<
+  //< **Input and output share it**, so a document cannot come in under one spelling and go back
+  //< out under another.
+
+fn default_is_laid_out(): Bool //<
+  //< Whether the default notation is the one written by indentation
+  //<
+  //< **Every question about "the default" and "the other" goes through this**, so changing
+  //< `default_ext` changes both.
+  return default_ext().equals(laid_out_ext)
+
+fn spelt_out_ext(): U8[] //<
+  //< The extension a name must write out, because a bare name does not mean it
+  return source_ext if default_is_laid_out() else laid_out_ext
+
+struct Global_pools
+  priv ast_kinds: String_pool$@
+  priv symbol_names: String_pool$@
+  priv source_files: String_pool$@ //<
+    //< The sources' logical names.
+    //<
+    //< Caution: **Do not store the name itself in a tree node.** There can be millions of nodes,
+    //< so a 16-byte slice per node costs the tree's size where one per file is enough. A node
+    //< holds a 4-byte number, which `base_ast.Loc.file` looks up.
+$pools: Global_pools = ::{}
+
+impl Global_pools
+  fn init(r: Self$@) //<
+    //< It creates the three pools, empty
+    //<
+    //< Caution: **Intern the node kinds before anything else uses the kind pool** (`init` in
+    //< `setup.kspls` does it next), so a kind's number in the pool equals its enum value.
+    if r.ast_kinds != null
+      return
+    r.ast_kinds = String_pool.new()
+    r.symbol_names = String_pool.new()
+    r.source_files = String_pool.new()
+
+  fn free(r: Self$@)
+    if r.ast_kinds != null
+      r.ast_kinds.free()
+      r.ast_kinds = null // free() also deallocates the pool; clearing prevents a double free
+    if r.symbol_names != null
+      r.symbol_names.free()
+      r.symbol_names = null
+    if r.source_files != null
+      r.source_files.free()
+      r.source_files = null
+
+  fn intern_kind(r: Self$@, kind: U8[]): I32
+    return r.ast_kinds.intern(kind)
+
+  fn intern_name(r: Self$@, name: U8[]): I32
+    return r.symbol_names.intern(name)
+
+  fn intern_file(r: Self$@, file: U8[]): I32 //< turns a source's logical name into a number
+    //<
+    //< An empty name is 0, and `get_file_str` returns empty for it too.
+    return r.source_files.intern(file)
+
+  fn get_file_str(r: Self$@, file_id: I32): U8[] //< turns a number back into a logical name
+    //<
+    //< An unknown number returns empty (treated the same as no name).
+    if r.source_files != null && file_id >= 0 && file_id < I32::r.source_files.list.len
+      return r.source_files.list.get(file_id)
+    return ""
+
+  fn get_kind_str(r: Self$@, kind_id: I32, fallback_str: U8$[]): U8$[]
+    if r.ast_kinds != null && kind_id >= 0 && kind_id < I32::r.ast_kinds.list.len
+      return r.ast_kinds.list.get(kind_id)
+    return arena.dup_str(fallback_str)
+
+  fn get_kind_pool_size(r: Self$@): I32
+    if r.ast_kinds != null
+      return I32::r.ast_kinds.list.len
+    return 0
+
+impl Str_builder
+  fn s_path_as_dots(r: Self$@, path: U8[]): Str_builder$@ //<
+    //< A file path written as the qualifier of a fully qualified name
+    //<
+    //< This rule lives here and nowhere else.
+    //< A separator becomes the `.` between parts, and **a `.` inside the name becomes `_`** (the
+    //< extension a non-default notation keeps), so the result can be written in source.
+    //< Caution: **Leave no `.` inside a part.** Many places split a qualified name at `.`; write
+    //< this rule a second time and one copy builds a name the other cannot find.
+    for i in Range.asc(path.len)
+      ch: = (path.ptr + i)$
+      if ch == '/' || ch == '\\'
+        r.c('.')
+      else
+        r.c('_' if ch == '.' else ch)
+    return r
+
+// ==========================================
+// Compiler-Specific String Extensions
+// ==========================================
+impl U8[]
+  fn has_kspl_ext(r: U8[]): Bool
+    return r.ends_with(source_ext) || r.ends_with(laid_out_ext)
+
+  fn strip_kspl_ext(r: U8[]): U8[] //<
+    //< **Only the default extension is dropped**, so `a.kspl` and `a.kspls` stay two names
+    //<
+    //< They stay two names in the diagnostics too.
+    //< Caution: **This follows `default_ext`, never a separate rule.** Drop what the output adds
+    //< back and the name round-trips; drop the other and every name written out again points at
+    //< a file that does not exist.
+    return r.strip_suffix(default_ext()) if r.ends_with(default_ext()) else r
+
+  fn is_laid_out(r: U8[]): Bool //< whether it is the notation written by indentation
+    //<
+    //< **Only the name decides it**; judging by the contents would waver on an empty or
+    //< half-written file.
+    return r.ends_with(laid_out_ext)
+
+  fn reads_as_laid_out(r: U8[]): Bool //<
+    //< Which notation a name is read as **before any file is opened**
+    //<
+    //< So a logical name without an extension gets an answer here too: the default
+    //< (`default_ext`).
+    //< Caution: **Do not write this as `is_laid_out()`.** That asks what the name says; this also
+    //< answers where it says nothing, and they differ on exactly the case that matters (`std/io`).
+    return !r.ends_with(source_ext)
+  fn strip_file_uri(r: U8[]): U8[] //<
+    //< A `file://` URI as a local path (the LSP's document URI; anything else unchanged)
+    return r.strip_prefix(file_uri_scheme)
+
+  fn get_line_info(r: U8[], target_offset: Sz, starts: List<|Sz|>$@): Line_info //<
+    //< char_idx: the UTF-16 code-unit offset returned to the LSP (a surrogate pair's worth is +2)
+    //<
+    //< disp_col: the 1-based display column for the CLI's diagnostic display (in code points).
+    //< Caution: **Always pass the line-start table (line_starts).** Recounting makes N lookups in
+    //< one file O(size × N). **Do not write a second conversion**: line_for_offset gives the line
+    //< only, this one the column or UTF-16; both use the same table.
+    line: = line_for_offset(starts, target_offset)
+    line_start: = starts.get(line - 1) if line >= 1 && line - 1 < starts.len else 0
+    $info: = Line_info::{ .line = line, .char_idx = 0, .disp_col = 1, .line_start = line_start }
+    $i: = line_start
+    for i < target_offset && i < r.len
+      c: = (r.ptr + i)$
+      if c == '\n'
+        info.line += 1
+        info.char_idx = 0
+        info.disp_col = 1
+        info.line_start = i + 1
+        i += 1
+      else if c == '\r'
+        i += 1
+      else
+        step: = r.next_codepoint(i)
+        info.char_idx += 2 if step == 4 else 1
+        info.disp_col += 1
+        i += step
+    return info
+
+  fn line_starts(r: U8[], arena: Arena$@): List<|Sz|>$@ //<
+    //< Each line's starting byte offset (ascending; index 0 is 0, the start of line 1)
+    //<
+    //< Caution: **Build it once per file and pass it along** (the reason is at get_line_info
+    //< above).
+    starts: = arena.create(List<|Sz|>.new(arena))
+    starts.push(0)
+    for i in Range.asc(r.len)
+      if (r.ptr + i)$ == '\n'
+        starts.push(i + 1)
+    return starts
+
+fn line_for_offset(starts: List<|Sz|>$@, offset: Sz): Sz //<
+  //< The 1-based line number of the offset, by binary search in the table from `line_starts`
+  //<
+  //< Caution: The table must come from `line_starts` (ascending, with 0 first).
+  $lo: Sz = 0
+  $hi: Sz = starts.len
+  for lo < hi
+    mid: = lo + (hi - lo) / 2
+    if starts.get(mid) <= offset
+      lo = mid + 1
+    else
+      hi = mid
+  return lo
+
+impl String_pool: Owned {}
+impl Global_pools: Owned {}

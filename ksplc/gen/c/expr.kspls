@@ -1,0 +1,569 @@
+//< Generates C99 for expressions
+//<
+//< It dispatches expressions by kind_id and adds the parentheses C's operator precedence needs.
+//< Declarations are in decl.kspls, statements in stmt.kspls.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/mangle" as base_mangle
+import "ksplc/gen/c/ctx" { Genc_ctx }
+import "ksplc/gen/c/expr_postfix" as gen_c_expr_postfix
+import "ksplc/gen/c/literal" as gen_c_literal
+import "ksplc/sema/body/binary" as sema_body_binary
+import "ksplc/sema/decl/eval" as sema_decl_eval
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "std/chars"
+import "std/str" { Str_builder }
+
+impl Ast_node
+  fn emit_expr(r: Self$@, c: Genc_ctx$@)
+    r.ice_assert(r != null, "emit_expr: node is null")
+
+    switch r.kind_id case .k_integer
+      r.emit_integer(c)
+    case .k_float
+      r.emit_float(c)
+    case .k_char
+      r.emit_char_literal(c)
+    case .k_string
+      r.emit_string_literal(c)
+    case .k_enum_init
+      r.emit_enum_init(c)
+    case .k_enum_init_call
+      r.emit_enum_init_call(c)
+    case .k_struct_literal, .k_expr_compound
+      r.emit_struct_literal(c)
+    case .k_expr
+      r.emit_binary_expr(c)
+    case .k_result_wrap
+      r.emit_result_wrap(c)
+    case .k_generic_path
+      r.emit_generic_path(c)
+    case .k_literal, .k_bool, .k_null, .k_identifier, .k_expr_path, .k_type_path
+      r.emit_path_or_literal(c)
+    case .k_expr_sizeof
+      r.emit_sizeof(c)
+    case .k_expr_offsetof
+      r.emit_offsetof(c)
+    case .k_expr_postfix, .k_method_access, .k_generic_method
+      r.emit_postfix_expr(c)
+    case .k_expr_unary
+      r.emit_unary_expr(c)
+    case .k_expr_primary
+      r.emit_expr_primary(c)
+    case .k_expr_upcast
+      r.emit_upcast_expr(c)
+    case .k_empty, .k_underscore
+      r.emit_noop(c)
+    default
+      r.emit_unknown_expr(c)
+
+  fn emit_expr_as_receiver(r: Self$@, c: Genc_ctx$@)
+    if r == null
+      return
+    r.emit_expr_prec(c, 14)
+
+  fn emit_expr_prec(r: Self$@, c: Genc_ctx$@, min_prec: I32)
+    if get_c_expr_precedence(r) < min_prec
+      c.s("(")
+      r.emit_expr(c)
+      c.s(")")
+    else
+      r.emit_expr(c)
+  priv fn emit_enum_init(r: Ast_node$@, c: Genc_ctx$@)
+    variant_name: = r.last_child().text
+    r.ice_assert(variant_name.len > 0, "emit_enum_init: enum_init missing variant name")
+
+    real_type_id: = c.env.get_real_type(r.type_id)
+    if c.env.is_scalar_enum(real_type_id)
+      c.s("(").m(real_type_id).s(")kspl_").m(real_type_id).s("_\{variant_name\}")
+    else
+      c.s("(").m(real_type_id).s("){ .tag = kspl_").m(real_type_id).s("_\{variant_name\} }")
+
+  priv fn emit_enum_init_call(r: Ast_node$@, c: Genc_ctx$@)
+    r.ice_assert(r.children.len > 0, "emit_enum_init_call: enum_init_call missing inner enum_init")
+    inner_enum: = r.get_child(0)
+    variant_name: = inner_enum.last_child().text
+
+    real_type_id: = c.env.get_real_type(r.type_id)
+
+    c.s("(").m(real_type_id).s("){ .tag = kspl_").m(real_type_id).s("_\{variant_name\}")
+
+    args_node: = r.find_child(.k_expr_args)
+    if args_node != null
+      c.s(", .payload.\{variant_name\} = { ")
+      args_node.emit_comma_separated_args(c)
+      c.s(" }")
+    c.s(" }")
+
+  priv fn emit_struct_literal(r: Ast_node$@, c: Genc_ctx$@)
+    is_array: = c.env.is_array(r.type_id)
+    has_fields: = r.find_child(.k_expr_field_init) != null
+    if !has_fields
+      // An array is a struct `{ T data[N]; }` too, filled with braces nested as the type says
+      // (emit_zero_init counts the levels) rather than `.data =`.
+      c.s("(").t(r.type_id).s(")")
+      c.emit_zero_init(r.type_id, r)
+      return
+
+    if is_array
+      c.s("(").t(r.type_id).s("){ .data = { ")
+    else
+      c.s("(").t(r.type_id).s("){")
+
+    $is_first: = true
+    for child_node in r.children
+      if child_node != null && child_node.kind_id == .k_expr_field_init
+        child_len: = child_node.children.len
+        if child_len > 0
+          if !is_first
+            c.s(", ")
+
+          $slice_ptr_field: = false
+          if !is_array
+            if name_node: = child_node.get_field_init_name()
+              if name_node.kind_id == .k_identifier
+                c.s(".").nm(name_node.text).s(" = ")
+                slice_real_id: = c.env.get_real_type(r.type_id)
+                // Only a slice of const elements needs it on `.ptr`; on a mutable slice the cast
+                // would only clutter the generated C.
+                slice_ptr_field =
+                  name_node.text.equals("ptr") && c.env.is_slice(slice_real_id) &&
+                  c.env.is_const(c.env.slice_elem(slice_real_id))
+          else
+            if idx_node: = child_node.get_field_init_index()
+              c.s("[")
+              idx_node.emit_expr(c)
+              c.s("] = ")
+
+          val_node: = child_node.get_field_init_expr()
+          child_node.ice_assert(val_node != null, "emit_struct_literal: field missing value node")
+          if slice_ptr_field
+            // An immutable slice's C type is the alias `Const_T_Slice = T_Slice`, and its `ptr` is
+            // non-const (the reason is in the matching comment in gen/c/decl.kspls). Storing a
+            // `const T *` from a KSPL `T@` there warns about a discarded qualifier, so it is cast
+            // to the element type's non-const version (as emit_slice_cast_prefix does for arrays).
+            elem_id: = c.env.slice_elem(c.env.get_real_type(r.type_id))
+            c.s("(").t(c.env.strip_const(elem_id)).s("*)(")
+            val_node.emit_expr(c)
+            c.s(")")
+          else
+            val_node.emit_expr(c)
+          is_first = false
+    if is_array
+      c.s(" }")
+    c.s("}")
+  // --- Expression implementations ---
+
+  priv fn emit_generic_path(r: Ast_node$@, c: Genc_ctx$@)
+    inst_name: = c.env.get_str(r.type_id)
+    $mangled_name: = inst_name.mangle_c_identifier()
+    defer mangled_name.free()
+
+    if !mangled_name.slice().starts_with("kspl_")
+      c.s("kspl_\{mangled_name.slice()\}")
+    else
+      c.s(mangled_name.slice())
+
+  priv fn emit_const_ref_inline(r: Ast_node$@, c: Genc_ctx$@): Bool //<
+    //< It emits another constant's initializer instead of a reference to it; true if it did
+    //<
+    //< It does so only inside a top-level `const`'s initializer.
+    //<
+    //< Caution: **C's initializers must be constant expressions.** A weak symbol (`--omit-runtime`,
+    //< `--emit-decls`' `pub const`) can be replaced at link time, so a reference by name fails with
+    //< `initializer element is not a compile-time constant`.
+    if c.const_init_depth == 0
+      return false
+    if init: = r.const_init_expr(c.sema)
+      key: = Sz::init
+      if c.sema.resolving.consts.get(key) catch false
+        return false
+      c.sema.resolving.consts.set(key, true)
+      defer c.sema.resolving.consts.remove(key)
+      // Caution: **Where it can be folded, emit a value, not an expression.** Chaining
+      // `const A1 = A0 + 1;` over n levels nests n deep and hits C's parenthesis depth limit.
+      // Only constant references are replaced; a `sizeof` stays as C's `sizeof`.
+      switch c.sema.try_eval_constexpr_wide(init) case .some(v)
+        c.s("((").t(r.type_id).s(")\{v\})")
+        return true
+      case .none {}
+      c.s("(")
+      init.emit_expr(c)
+      c.s(")")
+      return true
+    return false
+
+  priv fn emit_path_or_literal(r: Ast_node$@, c: Genc_ctx$@)
+    if r.emit_const_ref_inline(c)
+      return
+    if r.kind_id == .k_expr_path || r.kind_id == .k_type_path
+      $is_first: = true
+      for child_node in r.children
+        if child_node.kind_id == .k_type_args
+          continue
+        if !is_first
+          c.s("_")
+        c.s(child_node.text)
+        is_first = false
+    else if r.text.len > 0
+      // Only a name goes through nm; literals come here too, and a string containing `int` would
+      // be rewritten.
+      if r.kind_id == .k_identifier
+        c.nm(r.text)
+      else
+        c.s(r.text)
+    else
+      c.s(r.get_path_name())
+
+  priv fn emit_sizeof(r: Ast_node$@, c: Genc_ctx$@) //<
+    //< It emits C's `sizeof` of the target type
+    //<
+    //< Caution: **Cast it to `Sz`.** KSPL's `sizeof` is signed and C's is `size_t`, so without the
+    //< cast `neg > sizeof(I32)` is false in C while genllvm's `icmp sgt` says true.
+    c.s("(Sz)sizeof(").t(r.get_sizeof_target().type_id).s(")")
+
+  priv fn emit_offsetof(r: Ast_node$@, c: Genc_ctx$@) //<
+    //< It emits C's `offsetof`, cast to `Sz` for the same reason as `emit_sizeof`
+    //<
+    //< Caution: **Leave it to C's `offsetof`** (do not emit the folded value). Where ksplc's layout
+    //< and C's disagree, no diagnostic is reported (the head of `sema/decl/layout.kspls`), so the C
+    //< backend asks C itself, which keeps them in agreement by construction. `--target=llvm` has
+    //< nobody to ask, so it folds (emit_llvm_const_int in `gen/llvm/expr.kspls`). A field keeps its
+    //< name in the generated C, so it can be passed as it is (`gen/c/types.kspls`).
+    c.s("(Sz)offsetof(").t(r.get_offsetof_type().type_id).s(", ")
+      .s(r.get_offsetof_field().text).s(")")
+
+  priv fn emit_unary_expr(r: Ast_node$@, c: Genc_ctx$@) //<
+    //< It emits a unary expression
+    //<
+    //< Caution: **Require precedence above unary (14) for the operand.** At 13, `-(-x)` becomes
+    //< `--x`, a prefix decrement: **x itself is changed**, with no warning even under -Wall.
+    r.ice_assert(r.children.len >= 2, "emit_unary_expr: missing operator or operand")
+    op: = r.get_unary_op().text
+    target: = r.get_unary_target()
+
+    // Only unary minus exceeds the width (negating a type's minimum); `~` stays in range and `!`
+    // is Bool. C's unsigned unary minus is `0 - x`, so the conversion alone gives `mod 2^N`.
+    twin: = signed_wrap_twin(c, r.type_id) if op.equals("-") else ""
+    if twin.len > 0
+      c.s("(").t(c.env.strip_const_deep(r.type_id)).s(")((\{twin\})(0) - (\{twin\})(")
+      target.emit_expr(c)
+      c.s("))")
+      return
+
+    // For an unsigned type narrower than `int`, both `~` and unary minus convert the promoted
+    // result back to the type.
+    narrow: = narrow_unsigned(c, r.type_id)
+    if narrow
+      c.s("(").t(c.env.strip_const_deep(r.type_id)).s(")(")
+    c.s(op)
+    target.emit_expr_prec(c, 14)
+    if narrow
+      c.s(")")
+
+  fn emit_shift_amount(r: Ast_node$@, c: Genc_ctx$@, left_type_id: I32) //<
+    //< The only place that emits a shift amount
+    //<
+    //< Caution: **Do not emit a shift amount unchecked.** An amount at or beyond the width, or
+    //< negative, is undefined behaviour in C and changes with the optimization level. Sema checks a
+    //< constant amount; only this check can stop one at run time.
+    //< The receiver is the amount's expression; `<<` `>>` `<<=` `>>=` all come here.
+    if sema_body_binary.shift_amount_is_static(c.sema, left_type_id, r)
+      // Caution: **Always parenthesize it.** C's shifts bind tighter than the bitwise operators
+      // and comparisons (`1U << m & 3` is `(1U << m) & 3`). With the check, the call's parentheses
+      // do it; without it they must be written, or the meaning changes.
+      c.s("(")
+      r.emit_expr(c)
+      c.s(")")
+      return
+    c.s("kspl_shift_check(")
+    r.emit_expr(c)
+    c.s(", \{c.env.get_portable_bit_size(left_type_id)\}, \"\{r.loc.file()\}\", \{c.last_line\})")
+
+  fn emit_divisor(r: Ast_node$@, c: Genc_ctx$@, value_type_id: I32) //<
+    //< The only place that emits a divisor: the receiver is the divisor's expression
+    //<
+    //< `/` `%` `/=` `%=` all come through here.
+    //<
+    //< Caution: **Do not emit a divisor unchecked.** Dividing by 0 is undefined behaviour in C (x86
+    //< stops with SIGFPE, ARM does not). Sema checks a constant; only this stops a run-time 0.
+    if sema_body_binary.divisor_is_static(c.sema, r)
+      // The parentheses are always added, for the same reason as in emit_shift_amount.
+      c.s("(")
+      r.emit_expr(c)
+      c.s(")")
+      return
+    // Caution: **Convert it back to the original type.** The check is in ptrdiff_t, so without it
+    // C's usual arithmetic conversions make a `U32 / ptrdiff_t` signed 64-bit.
+    c.s("(").t(c.env.strip_const_deep(value_type_id)).s(")kspl_div_check(")
+    r.emit_expr(c)
+    c.s(", \"\{r.loc.file()\}\", \{c.last_line\})")
+
+  fn close_signed_div(r: Ast_node$@, c: Genc_ctx$@) //<
+    //< It closes what open_signed_div began: the receiver is the divisor's expression
+    c.s("), (I64)(")
+    r.emit_expr(c)
+    c.s("), \"\{r.loc.file()\}\", \{c.last_line\})")
+
+  priv fn emit_binary_expr(r: Ast_node$@, c: Genc_ctx$@) //< the only place that emits wrapping
+    //<
+    //< Only for can_exceed_width's operations: a narrow unsigned result is converted back to the
+    //< type, a signed one is computed in the same-width unsigned; both end in the declared type.
+    r.ice_assert(r.children.len == 3, "Binary expression node must have exactly 3 children")
+    op: = r.get_binary_op().text
+    // Caution: **Do not wrap a subtraction between pointers.** The result's type is `Sz` but the
+    // operands are pointers, and C's `p - q` returns **the number of elements**. Convert the
+    // operands to `size_t` and it becomes a byte count, which differs from genllvm's result, an
+    // element count (`../llvm/expr.kspls`).
+    if op.equals("-") && c.env.is_pointer(r.get_binary_left().type_id)
+      r.emit_binary_body(c)
+      return
+    if takes_signed_div(c, op, r.type_id, r.get_binary_right())
+      open_signed_div(c, op, r.type_id)
+      r.get_binary_left().emit_expr(c)
+      r.get_binary_right().close_signed_div(c)
+      return
+    if !can_exceed_width(op)
+      r.emit_binary_body(c)
+      return
+    twin: = signed_wrap_twin(c, r.type_id)
+    if twin.len == 0 && !narrow_unsigned(c, r.type_id)
+      r.emit_binary_body(c)
+      return
+    c.s("(").t(c.env.strip_const_deep(r.type_id)).s(")(")
+    if twin.len > 0
+      r.emit_binary_wrapped(c, twin)
+    else
+      r.emit_binary_body(c)
+    c.s(")")
+
+  priv fn emit_binary_wrapped(r: Ast_node$@, c: Genc_ctx$@, twin: U8[]) //<
+    //< It converts the operands to unsigned and emits them
+    //<
+    //< **Parenthesize the operands**: C's cast binds only to the next unary (`(U32)x * y`).
+    //< Caution: **Do not convert the shift amount.** It has its own type and its own width check
+    //< (emit_shift_amount).
+    op: = r.get_binary_op().text
+    left_node: = r.get_binary_left()
+    c.s("(\{twin\})(")
+    left_node.emit_expr(c)
+    c.s(") \{op\} ")
+    if is_shift_op(op)
+      r.get_binary_right().emit_shift_amount(c, left_node.type_id)
+      return
+    c.s("(\{twin\})(")
+    r.get_binary_right().emit_expr(c)
+    c.s(")")
+
+  priv fn emit_binary_body(r: Ast_node$@, c: Genc_ctx$@)
+    left_node: = r.get_binary_left()
+    op: = r.get_binary_op().text
+    right_node: = r.get_binary_right()
+    my_prec: = get_c_precedence(op)
+
+    if left_node.kind_id == .k_expr &&
+      (get_c_precedence(left_node.get_binary_op().text) < my_prec ||
+      needs_warning_silencing_parens(left_node.get_binary_op().text, op))
+      c.s("(")
+      left_node.emit_expr(c)
+      c.s(")")
+    else
+      left_node.emit_expr(c)
+
+    c.s(" \{op\} ")
+
+    if is_shift_op(op) && c.env.is_integer(left_node.type_id)
+      right_node.emit_shift_amount(c, left_node.type_id)
+      return
+
+    if is_div_op(op) && c.env.is_integer(left_node.type_id)
+      right_node.emit_divisor(c, left_node.type_id)
+      return
+
+    if right_node.kind_id == .k_expr &&
+      (get_c_precedence(right_node.get_binary_op().text) <= my_prec ||
+      needs_warning_silencing_parens(right_node.get_binary_op().text, op))
+      c.s("(")
+      right_node.emit_expr(c)
+      c.s(")")
+    else
+      right_node.emit_expr(c)
+
+  priv fn emit_result_wrap(r: Self$@, c: Genc_ctx$@)
+    inner: = r.get_result_wrap_inner()
+    if sema_type_env.is_void(inner.type_id)
+      c.s("(")
+      // Skip an empty node: a Void `return f()?;` leaves a k_empty (lower_try_op in
+      // lower/expr.kspls), which would make an `(a, , b)` the C compiler rejects.
+      // Caution: A Void that is not empty must always be emitted. The call in a `return
+      // plainvoid(x);` appears only here, so skipping it removes the call too.
+      if inner.kind_id != .k_empty
+        inner.emit_expr(c)
+        c.s(", ")
+      c.s("(").t(r.type_id).s("){ .is_err = false })")
+    else
+      c.s("((").t(r.type_id).s("){ .is_err = false, .val = ")
+      inner.emit_expr(c)
+      c.s(" })")
+
+  priv fn emit_expr_primary(r: Ast_node$@, c: Genc_ctx$@)
+    r.ice_assert(r.children.len > 0, "emit_expr: primary expression empty")
+    inner: = r.get_primary_inner_expr()
+    if r.has_parentheses()
+      c.s("(")
+      if inner != null
+        inner.emit_expr(c)
+      c.s(")")
+    else if inner != null
+      inner.emit_expr(c)
+
+  priv fn emit_noop(_r: Ast_node$@, _c: Genc_ctx$@) {}
+
+  priv fn emit_unknown_expr(r: Ast_node$@, _c: Genc_ctx$@)
+    $msg: = Str_builder.new()
+    defer msg.free()
+    msg.s("emit_expr: unhandled AST kind '").s(r.get_kind_str()).s("' reached Genc")
+    r.ice_panic(msg.slice())
+
+  fn emit_comma_separated_args(r: Self$@, c: Genc_ctx$@)
+    $is_first: = true
+    for arg_node in r.children
+      if arg_node.is_literal(",")
+        continue
+      if !is_first
+        c.s(", ")
+      arg_node.emit_expr(c)
+      is_first = false
+priv fn get_c_precedence(op: U8[]): I32
+  return (10 if op.equals("*") || op.equals("/") || op.equals("%")
+    else 9 if op.equals("+") || op.equals("-")
+    else 8 if op.equals("<<") || op.equals(">>")
+    else 7
+    if op.equals("<") || op.equals("<=") || op.equals(">") || op.equals(">=")
+    else 6 if op.equals("==") || op.equals("!=") else 5 if op.equals("&")
+    else 4 if op.equals("^") else 3 if op.equals("|") else 2 if op.equals("&&")
+    else 1 if op.equals("||") else 0)
+
+priv fn is_bitwise_op(op: U8[]): Bool
+  return op.equals("&") || op.equals("|") || op.equals("^")
+
+priv fn is_shift_op(op: U8[]): Bool
+  return op.equals("<<") || op.equals(">>")
+
+priv fn is_div_op(op: U8[]): Bool
+  return op.equals("/") || op.equals("%")
+
+fn takes_signed_div(c: Genc_ctx$@, op: U8[], type_id: I32, divisor: Ast_node$@): Bool //<
+  //< Whether `/` or `%` on type_id goes through open_signed_div rather than a plain `/` `%`
+  //<
+  //< Caution: **Do not emit a division of a type's minimum value by `-1` as a plain `/` `%`.**
+  //< C makes it undefined (x86 stops with SIGFPE). A constant divisor other than `0` and `-1`
+  //< cannot overflow and keeps the plain instruction. `/=` `%=` ask here too.
+  return is_div_op(op) && is_signed_int(c, type_id) &&
+    !sema_body_binary.divisor_cannot_overflow(c.sema, divisor)
+
+fn open_signed_div(c: Genc_ctx$@, op: U8[], type_id: I32) //<
+  //< The only place that emits signed division and remainder: the dividend follows it
+  //<
+  //< The caller emits the dividend, then close_signed_div with the divisor.
+  helper: = "kspl_sdiv" if op.equals("/") else "kspl_smod"
+  c.s("(").t(c.env.strip_const_deep(type_id)).s(")\{helper\}((I64)(")
+
+priv fn is_additive_op(op: U8[]): Bool
+  return op.equals("+") || op.equals("-")
+
+priv fn can_exceed_width(op: U8[]): Bool //< whether an operation's result can exceed the width
+  //<
+  //< For `& | ^ / % >>`, if the operands fit the width, the result fits too.
+  return is_additive_op(op) || op.equals("*") || op.equals("<<")
+
+priv fn narrow_unsigned(c: Genc_ctx$@, type_id: I32): Bool //<
+  //< Whether an operation's result on this type must be converted back to the declared type
+  //<
+  //< **C's integer promotions widen `U8` / `U16` to `int`.** `U32` and up need none (`Sz` counts as
+  //< 32, the portable minimum). A signed type goes through signed_wrap_twin instead.
+  return c.env.is_integer(type_id) && c.env.is_unsigned(type_id) &&
+    c.env.get_portable_bit_size(type_id) < 32
+
+priv fn is_signed_int(c: Genc_ctx$@, type_id: I32): Bool //< whether the type is a signed integer
+  real: = c.env.strip_const_deep(c.env.get_real_type(type_id))
+  return c.env.is_integer(real) && !c.env.is_unsigned(real)
+
+priv fn signed_wrap_twin(c: Genc_ctx$@, type_id: I32): U8[] //<
+  //< The C name of the same-width unsigned that does the signed wrapping; empty if not signed
+  //<
+  //< Caution: **Do not emit signed arithmetic to C unchanged.** KSPL says `mod 2^N`, but C makes
+  //< signed overflow undefined and the optimizer relies on it (a loop on `i > 0` with `i *= 2`
+  //< never ends). **Use the same-width unsigned**; `U64` would make a 32-bit target do 64-bit work.
+  if !is_signed_int(c, type_id)
+    return ""
+  real: = c.env.strip_const_deep(c.env.get_real_type(type_id))
+  if real == (I32::sema_type_env.Builtin_type_id.size_type)
+    return "size_t"
+  bits: = c.env.get_portable_bit_size(real)
+  if bits == 8
+    return "U8"
+  if bits == 16
+    return "U16"
+  if bits == 32
+    return "U32"
+  return "U64" if bits == 64 else ""
+
+priv fn is_comparison_op(op: U8[]): Bool
+  return op.equals("<") || op.equals("<=") || op.equals(">") || op.equals(">=") ||
+    op.equals("==") || op.equals("!=")
+
+priv fn is_equality_op(op: U8[]): Bool
+  return op.equals("==") || op.equals("!=")
+
+priv fn needs_warning_silencing_parens(child_op: U8[], parent_op: U8[]): Bool //<
+  //< Whether to keep parentheses that get_c_precedence omits but the C compiler warns about
+  //<
+  //< The warnings call them "visually confusing" (clang's -Wbitwise-op-parentheses, gcc's
+  //< -Wparentheses).
+  //< Caution: **Do not check with clang only.** gcc warns even about pairs clang accepts
+  //< silently (an addition or a comparison as a bitwise operator's operand).
+
+  if is_bitwise_op(child_op) && is_bitwise_op(parent_op) && !child_op.equals(parent_op)
+    return true
+  if (is_shift_op(child_op) && is_additive_op(parent_op)) ||
+    (is_additive_op(child_op) && is_shift_op(parent_op))
+    return true
+  // gcc: warnings like "'+' in operand of '&'" and "comparison in operand of '!='".
+  if is_additive_op(child_op) && is_bitwise_op(parent_op)
+    return true
+  if is_comparison_op(child_op) && (is_bitwise_op(parent_op) || is_equality_op(parent_op))
+    return true
+  return (child_op.equals("&&") && parent_op.equals("||")) ||
+    (child_op.equals("||") && parent_op.equals("&&"))
+
+fn emit_slice_cast_prefix(c: Genc_ctx$@, target_id: I32, target_base_id: I32)
+  c.s("(").t(target_id).s("){ .ptr = (")
+  clean_base_id: = c.env.strip_const(target_base_id)
+  c.t(clean_base_id).s("*)")
+
+priv fn get_c_expr_precedence(node: Ast_node$@): I32
+  if node == null
+    return 15
+  k: = node.kind_id
+  if k == .k_expr_postfix
+    op: = node.get_postfix_op()
+    if op != null && op.text.equals("::")
+      return 13
+    return 14
+  if k == .k_expr
+    op: = node.get_binary_op()
+    if op != null
+      return get_c_precedence(op.text)
+    return 10
+  switch k case .k_expr_unary, .k_expr_sizeof, .k_expr_offsetof, .k_expr_upcast
+    return 13
+  case .k_literal, .k_identifier, .k_expr_path, .k_type_path, .k_generic_path, .k_expr_primary,
+    .k_string, .k_char, .k_integer, .k_float, .k_bool, .k_null
+    return 15
+  case .k_method_access, .k_generic_method, .k_enum_init_call
+    return 14
+  default
+    return 0

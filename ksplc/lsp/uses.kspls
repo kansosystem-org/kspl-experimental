@@ -1,0 +1,239 @@
+//< LSP: finds where a name is used, and answers both references and rename
+//<
+//< **One function collects the places**; references turn the list into `Location`s, renaming
+//< into `changes`. **Matching is by definition, not by name.**
+//< **The list must be in a fixed order.** The collection is a Map, so its plain order comes from
+//< the hash and the same answer **looks shuffled on screen** from one request to the next.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/core" as base_core
+import "ksplc/base/locate" as base_locate
+import "ksplc/lsp/msg" as lsp_msg
+import "ksplc/lsp/nav" as lsp_nav
+import "ksplc/lsp/state" { Doc_state }
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "std/chars"
+import "std/ds" { List, Map }
+import "std/json" + { Json_builder }
+import "std/mem" { Arena }
+import "std/seq"
+import "std/str" { Str_builder }
+
+struct Spot //< one place of use
+  //<
+  //< `is_decl` marks the declaration itself: **a references request says whether to count it**
+  //< (`context.includeDeclaration`).
+  uri: U8[]
+  line: Sz
+  character: Sz
+  len: Sz
+  is_decl: Bool
+
+fn handle(ws_state: Doc_state$@, method: U8[], params: json.Val, id_val: json.Val, arena: Arena$@) //<
+  //< It answers both references and rename (see the file header); only building the answer differs
+  uri: = params.get("textDocument").get("uri").as_str()
+  path: = lsp_nav.find_path_at_params(ws_state, params)
+  defer path.free()
+  if path.len <= 0
+    lsp_msg.send_null_response(id_val, arena)
+    return
+  $def_node: Ast_node$@ = null
+  switch target_def_of(ws_state, path, path.get(path.len - 1)) case .some(d)
+    def_node = d
+  default {}
+  if def_node == null
+    lsp_msg.send_null_response(id_val, arena)
+    return
+  // Every place is returned in this request's URI style (`Uri_style` in `../base/locate.kspls`),
+  // since a client spells every file the same way.
+  builder: = Json_builder.new(arena)
+  $spots: = collect_spots(ws_state, def_node, base_locate.uri_style_of(uri), arena)
+  if method.equals("textDocument/references")
+    send_references(spots@, wants_decl(params), id_val, builder)
+  else
+    send_rename(spots@, params.get("newName").as_str(), id_val, builder)
+
+priv fn wants_decl(params: json.Val): Bool //< whether the references count the declaration itself
+  //<
+  //< Caution: **Where the option is absent, count it**, or a client that sends none loses the
+  //< definition from the list. False only when exclusion is asked for.
+  switch params.get("context").get("includeDeclaration") case .bool_val(b)
+    return b
+  default
+    return true
+
+priv fn target_def_of(ws_state: Doc_state$@, path: List<|Ast_node$@|>$@, target_node: Ast_node$@):
+  Option<|Ast_node$@|> //<
+    //< The definition the name under the cursor points at, or null
+    //<
+    //< Where the name is unresolved (sema names no local binding, say), the identifier itself is
+    //< taken as the definition.
+  def_node: = lsp_nav.resolve_def_node(ws_state.sema, ws_state.root_file, path, target_node)
+    .def_node
+  if def_node != null
+    return Option<|Ast_node$@|>.some(def_node)
+  id_child: = target_node.find_child(.k_identifier)
+  last: = target_node.last_child()
+  $n: Ast_node$@ = null
+  if target_node.kind_id == .k_identifier
+    n = target_node
+  else if id_child != null
+    n = id_child
+  else if target_node.children.len > 0 && last.kind_id == .k_identifier
+    n = last
+  if n == null
+    return Option<|Ast_node$@|>.none
+  return Option<|Ast_node$@|>.some(n.def_node if n.def_node != null else n)
+
+priv fn collect_spots(ws_state: Doc_state$@, def_node: Ast_node$@, style: base_locate.Uri_style,
+  arena: Arena$@): List<|Spot|> //<
+    //< It collects the places that refer to that definition, across the whole workspace.
+    //<
+    //< Caution: **Walk the generics' templates too.** An instantiated tree cannot be reached from
+    //< `root_file`, so skipping them silently misses the calls found only inside a generic.
+  $out: = List<|Spot|>.new(arena)
+  seen: = arena.create(Map<|U8[], I32|>.new(arena))
+  if ws_state.root_file != null
+    walk_node(ws_state.root_file, def_node, ws_state.sema, style, seen, out@, arena, 0)
+  if ws_state.sema != null
+    for entry in ws_state.sema.generics.templates.items()
+      walk_node(entry.value, def_node, ws_state.sema, style, seen, out@, arena, 0)
+  seen.free()
+  return out.order_by(fn(a: Spot, b: Spot; ): I32 {
+    return spot_order(a, b);
+  }, arena)
+
+priv fn spot_order(a: Spot, b: Spot): I32 //< by name, then line, then column
+  order: = a.uri.compare(b.uri)
+  if order != 0
+    return order
+  if a.line != b.line
+    return -1 if a.line < b.line else 1
+  if a.character != b.character
+    return -1 if a.character < b.character else 1
+  return 0
+
+// ==========================================
+// Assembling the answer
+// ==========================================
+
+priv fn send_references(spots: List<|Spot|>@, want_decl: Bool, id_val: json.Val, $b: Json_builder) //<
+  //< `textDocument/references`: it returns the uses as a list of `Location`
+  //<
+  //< **Count the declaration only as asked** (`context.includeDeclaration`), or "only the uses"
+  //< cannot be had (a common complaint).
+  $arr: = b.arr()
+  for i in Range.asc(spots.len)
+    s: = spots.get(i)
+    if s.is_decl && !want_decl
+      continue
+    arr = arr
+      .push(b.obj().set("uri", b.str_val(s.uri))
+      .set("range", b.range(s.line, s.character, s.line, s.character + s.len)).build())
+  lsp_msg.send_response(id_val, arr.build(), b.arena)
+
+priv fn send_rename(spots: List<|Spot|>@, new_name: U8[], id_val: json.Val, $b: Json_builder) //<
+  //< `textDocument/rename`: it returns the uses as per-file edits
+  //<
+  //< **Rewrite the declaration too**, or the workspace no longer compiles.
+  $changes: = b.obj()
+  $at: Sz = 0
+  for at < spots.len
+    uri: = spots.get(at).uri
+    $edits: = b.arr()
+    for at < spots.len && spots.get(at).uri.equals(uri)
+      s: = spots.get(at)
+      edits = edits
+        .push(b.obj()
+        .set("range", b.range(s.line, s.character, s.line, s.character + s.len))
+        .set("newText", b.str_val(new_name)).build())
+      at += 1
+    changes = changes.set(uri, edits.build())
+  lsp_msg.send_response(id_val, b.obj().set("changes", changes.build()).build(), b.arena)
+
+// ==========================================
+// Walking the tree and collecting
+// ==========================================
+
+priv fn is_same_loc(a: Ast_node$@, b: Ast_node$@): Bool
+  if a == null || b == null
+    return false
+  if a == b
+    return true
+  return a.loc.offset == b.loc.offset && a.loc.file().len > 0 &&
+    a.loc.file().equals(b.loc.file())
+
+priv fn is_def_match(n_def: Ast_node$@, t_def: Ast_node$@): Bool //<
+  //< Whether the two definitions are the same one
+  //<
+  //< One definition can be several node instances (a template's re-instantiation, an identifier
+  //< standing for its declaration), so besides sym_ptr several fallbacks are tried; one is enough.
+  if n_def == null || t_def == null
+    return false
+  if n_def.sym_ptr != null && t_def.sym_ptr != null && n_def.sym_ptr == t_def.sym_ptr
+    return true
+
+  n_id: = n_def.find_child(.k_identifier)
+  t_id: = t_def.find_child(.k_identifier)
+
+  return is_same_loc(n_def, t_def) || is_same_loc(n_id, t_def) || is_same_loc(t_id, n_def) ||
+    (n_id != null && is_same_loc(n_id, t_id)) || is_same_loc(n_def.def_node, t_def) ||
+    is_same_loc(n_def, t_def.def_node) ||
+    (n_def.def_node != null && is_same_loc(n_def.def_node, t_def.def_node))
+
+priv fn is_the_decl(n: Ast_node$@, target_def: Ast_node$@): Bool //<
+  //< Whether that identifier is the declaration itself
+  //<
+  //< Caution: **Compare strictly**, or a real use passes for the declaration and is dropped where
+  //< `includeDeclaration` is false.
+  return n == target_def || n == target_def.find_child(.k_identifier)
+
+priv fn walk_node(node: Ast_node$@, target_def: Ast_node$@, c: Sema_ctx$@,
+  style: base_locate.Uri_style, seen: Map<|U8[], I32|>$@, out: List<|Spot|>$@, arena: Arena$@,
+  depth: Sz)
+  // **Nodes the compiler generated are not uses** (`made_by_compiler` in `../base/ast_ext.kspls`).
+  if node == null || target_def == null || depth > lsp_nav.max_walk_depth ||
+    node.made_by_compiler()
+    return
+  // An import's or embed's name belongs to its file alone; unrelated imports elsewhere stay as is.
+  if target_def.kind_id == .k_decl_import || target_def.kind_id == .k_decl_embed
+    if node.loc.file().len > 0 && target_def.loc.file().len > 0 &&
+      !node.loc.file().equals(target_def.loc.file())
+      return
+
+  $hit: Ast_node$@ = null
+  if node.kind_id == .k_identifier &&
+    (is_def_match(node.def_node, target_def) || is_def_match(node, target_def))
+    hit = node
+  if hit != null && hit.loc.file().len > 0
+    add_spot(hit, target_def, c, style, seen, out, arena)
+
+  for child in node.children
+    if child != hit
+      walk_node(child, target_def, c, style, seen, out, arena, depth + 1)
+
+priv fn add_spot(hit: Ast_node$@, target_def: Ast_node$@, c: Sema_ctx$@,
+  style: base_locate.Uri_style, seen: Map<|U8[], I32|>$@, out: List<|Spot|>$@, arena: Arena$@) //<
+    //< It adds one place, dropping a duplicate by `<file>:<offset>`
+    //<
+    //< The duplicates come from root_file's walk and a template's.
+    //< Caution: **Get the line-start table from `line_starts_for`**, which builds it once per file.
+    //< Built per place, a name used a thousand times in one file walks that file a thousand times.
+  src: = base_core.source_of(c.source_map, hit.loc.file())
+  if src.len == 0
+    return
+  offset: = src.clamp_offset(hit.loc.offset)
+  $key: = Str_builder.new()
+  defer key.free()
+  key.s(hit.loc.file()).c(':').s("\{offset\}")
+  if (seen.get(key.slice()) catch 0) != 0
+    return
+  seen.set(arena.dup_str(key.slice()), 1)
+
+  pos: = src.get_line_char(offset, c.line_starts_for(hit.loc.file(), src))
+  $safe: = hit.loc.file().escape_json_path()
+  defer safe.free()
+  uri: = style.spell(safe.slice())
+  out
+    .push(Spot::{ .uri = arena.dup_str(uri), .line = pos.line, .character = pos.character,
+    .len = hit.text.get_generic_base_name().len, .is_decl = is_the_decl(hit, target_def) })

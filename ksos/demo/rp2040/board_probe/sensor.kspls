@@ -1,0 +1,134 @@
+//< All the sensors on one screen
+//<
+//< The battery voltage and the light sensors (ADC), line tracking (a GPIO input), the ultrasonic
+//< distance (a time measurement), and the infrared remote (NEC) — stages 4 / 5a / 5b in
+//< `ksos/docs/HOWTO-bring-up.md`.
+//< The sensors share one screen, so whether fixing one sensor broke the others shows at the
+//< same time.
+
+// ==========================================
+// How to read the output: what each field of the line says is in "Stage 4 — the ADC and line
+// tracking" in ksos/docs/HOWTO-bring-up.md.
+// ==========================================
+import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/boards/freenove_4wd_pico/track"
+import "ksos/demo/rp2040/common/console" as con
+import "ksos/drivers/rp2040/adc"
+import "ksos/drivers/rp2040/gpio"
+import "ksos/drivers/rp2040/hcsr04" as sonar
+import "ksos/drivers/rp2040/ir_nec" as ir
+import "ksos/drivers/rp2040/timer"
+import "ksos/drivers/rp2040/usb_cdc" as usb
+
+const line_interval_ms: U32 = 500
+const lines_per_run: U32 = 8
+
+priv $ready: Bool = false
+
+// The remote code last received. It is not cleared after each line, so the last value stays
+// after the button is released and shows whether the press was caught.
+priv $ir_seen: Bool = false
+priv $ir_addr: U32 = 0
+priv $ir_cmd: U32 = 0
+priv $ir_count: U32 = 0
+
+fn init(): Bool //< starts it
+  //<
+  //< Call it after `clocks.init()` (the ADC needs clk_adc). false means the ADC did not start
+  //< (most likely clk_adc is not running).
+  // Line tracking is a plain digital input. The sensor board drives it, so no pull is set.
+  track.init()
+  // The ultrasonic uses only two GPIOs (TRIG out / ECHO in). No dedicated block is needed.
+  sonar.init(board.ultrasonic_trig, board.ultrasonic_echo)
+  ir.init(board.ir_receiver)
+  // The ADC needs both "switch the pin to analog" and "start the ADC itself".
+  gpio.init_analog(board.battery_pin)
+  gpio.init_analog(board.light_sensor_left)
+  gpio.init_analog(board.light_sensor_right)
+  ready = adc.init()
+  return ready
+
+priv fn pump(ms: U32) //< waits ms milliseconds, running USB and watching for the remote
+  //<
+  //< **Use this rather than `bringup.pump`** — the remote is checked here. **One frame is only
+  //< about 70ms**, so checking only between lines (500ms) misses it entirely. When the line is
+  //< idle is_idle returns at once, so even a call every millisecond costs almost nothing.
+  for $i: U32 = 0; i < ms; i += 1
+    usb.poll_once()
+    if !ir.is_idle(board.ir_receiver)
+      f: = ir.try_receive(board.ir_receiver)
+      if f.ok
+        ir_count += 1
+        if !f.repeat
+          ir_seen = true
+          ir_addr = f.addr
+          ir_cmd = f.cmd
+    timer.delay_us(1000)
+
+priv fn append_line_sensors(ln: con.Line$@, bits: U32)
+  ln.str("line=")
+  for $i: U32 = 3; i > 0; i -= 1
+    ln.byte('B' if (bits & (1U32 << (i - 1))) != 0 else 'W')
+    if i > 1
+      ln.byte('.')
+  ln.str(" (")
+  ln.u32(bits)
+  ln.byte(')')
+
+priv fn append_reading(ln: con.Line$@)
+  bat: = adc.read_pin_avg(board.battery_pin, board.battery_samples)
+  left: = adc.read_pin(board.light_sensor_left)
+  right: = adc.read_pin(board.light_sensor_right)
+
+  ln.str("bat=")
+  if bat.ok
+    ln.u32_milli(board.battery_mv(bat.value))
+    ln.str("V(")
+    ln.u32_pad(bat.value, 4)
+    ln.byte(')')
+    if board.battery_mv(bat.value) < board.battery_low_mv
+      ln.str(" LOW")
+  else
+    ln.str("----")
+
+  ln.str("  light L=")
+  ln.u32_pad(left.value if left.ok else 0, 4)
+  ln.str(" R=")
+  ln.u32_pad(right.value if right.ok else 0, 4)
+
+  ln.str("  ")
+  append_line_sensors(ln, track.read_bits())
+
+  // The ultrasonic blocks for up to 36ms. At a 0.5-second period the gap (settle_us) is enough
+  // too.
+  d: = sonar.measure(board.ultrasonic_trig, board.ultrasonic_echo)
+  ln.str("  dist=")
+  if !d.ok
+    ln.str("----") // ECHO did not rise: probably not connected
+  else if d.timed_out
+    ln.str(">3000mm") // no reflection came back: too far away, or absorbed
+  else
+    ln.u32_pad(d.mm, 4)
+    ln.str("mm")
+
+  ln.str("  ir=")
+  if !ir_seen
+    ln.str("--")
+  else
+    ln.byte('A')
+    ln.u32(ir_addr)
+    ln.str(":C")
+    ln.u32(ir_cmd)
+    ln.str(" x")
+    ln.u32(ir_count)
+
+fn run(ln: con.Line$@)
+  if !ready
+    con.say(ln, "[sensor]", "ADC did not start (clk_adc?)")
+    return
+  con.say(ln, "[sensor]", "ADC 12bit (0-4095); press a remote button while these lines run")
+  for _i in Range.asc(Sz::lines_per_run)
+    ln.reset()
+    append_reading(ln)
+    _sent: = ln.flush()
+    pump(line_interval_ms)

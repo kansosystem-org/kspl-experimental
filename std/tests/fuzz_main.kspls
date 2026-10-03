@@ -1,0 +1,161 @@
+//< Fuzzes std's readers with mutated input (`make test-fuzz`)
+//<
+//< **Six kinds of bytes come into std from outside**: JSON, a URL query, Base64, a regular
+//< expression, an HTTP request and an HTTP response. The target program
+//< ([`read_prog.kspls`](read_prog.kspls)) goes as far as using what it read. **std's own writers
+//< produce the seeds**, so reader and writer are checked against each other before any round.
+//< The JSON files under the given folders (the repository's own, when it runs this) are seeds too.
+//< Usage: `ksplc run tests/fuzz_main.kspls <reader> <work folder> [seed folder ...]`, with
+//< `--trials` and `--seed`; the Makefile builds the reader.
+import "std/argp"
+import "std/base64"
+import "std/ds" { List }
+import "std/fuzz"
+import "std/http"
+import "std/io"
+import "std/json" { Json_builder }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/url"
+import "std/verdict"
+
+priv const default_seed: I64 = 20260903
+priv const default_trials: I64 = 2000
+
+priv const reach_floor_div: Sz = 10 //<
+  //< At least one round in this many must get deep into the reader
+  //<
+  //< It is the minimum share of mutated inputs that the reader reads rather than refuses.
+  //< Caution: **Do not change it to tighten the check**: it is a lower bound for "is it working";
+  //< the share that gets through means nothing by itself.
+
+priv const trial_timeout_ms: I32 = 10000 //<
+  //< How long a round runs before it counts as never ending
+  //<
+  //< Shorter than for ksplc: a sane input is read in under a second.
+
+priv const max_seed_bytes: I64 = 64I64 * 1024I64 //< the size cap on a file used as a seed
+  //<
+  //< Caution: **Do not drop the small files.** A file of a few bytes can break a reader too.
+
+priv const kinds: fuzz.Input_kind[6] = ::{ //<
+  //< The kinds of input that the fuzzer mutates and feeds to a reader, and their files' endings
+  //<
+  //< **This is the canonical source**: the reader's names ([`read_prog.kspls`](read_prog.kspls))
+  //< and the seeds below follow it.
+  fuzz.Input_kind::{ .name = "json", .ext = ".json" },
+  fuzz.Input_kind::{ .name = "url", .ext = ".url" },
+  fuzz.Input_kind::{ .name = "base64", .ext = ".b64" },
+  fuzz.Input_kind::{ .name = "regex", .ext = ".re" },
+  fuzz.Input_kind::{ .name = "http-req", .ext = ".http" },
+  fuzz.Input_kind::{ .name = "http-res", .ext = ".http" },
+}
+
+// --- Assembling the seeds ---------------------------------
+priv fn built_json(arena: Arena$@): U8[] //<
+  //< The JSON that std's writer produces
+  //<
+  //< Caution: **Include one of each form**: mutation cannot reach a form missing from the seeds
+  //< (an escape, a decimal, an integer over 53 bits and a nesting each take a separate path).
+  $b: = Json_builder.new(arena)
+  inner: = b.obj().set("s", b.str_val("a quote \" and a newline \n and \\ and \t"))
+    .set("f", b.float_val(-1.5e-7)).set("big", b.int_val(9007199254740993I64))
+    .set("t", b.bool_val(true)).set("n", b.null_val()).build()
+  arr: = b.arr().push(b.int_val(0I64)).push(inner)
+    .push(b.arr().push(b.str_val("")).build()).build()
+  root: = b.obj().set("items", arr).set("empty_obj", b.obj().build()).build()
+  $out: = Str_builder.new()
+  defer out.free()
+  root.dump(out@, 2)
+  return arena.dup_str(out.slice())
+
+priv fn built_query(arena: Arena$@): U8[] //< the query that std's writer produces
+  //<
+  //< Caution: **Keep the `%` and the `+`**: decoding branches on those two.
+  $out: = Str_builder.new()
+  defer out.free()
+  for one in U8[][]::{ "name", "value with spaces", "a+b", "%" }
+    if out.len > 0
+      out.c('&')
+    enc: = url.encode(one, arena)
+    out.s(enc).c('=').s(enc)
+  out.s("&flag&=empty&x=%E3%81%82")
+  return arena.dup_str(out.slice())
+
+priv fn built_base64(arena: Arena$@): U8[] //< the Base64 that std's writer produces
+  //<
+  //< All 256 bytes, so a mutation both leaves the table and hits the padding.
+  $raw: = List<|U8|>.new_with_cap(256, arena)
+  for i in Range.asc(256)
+    raw.push(U8::i)
+  return base64.encode(raw.slice(), arena)
+
+priv fn built_response(arena: Arena$@): U8[] //< the HTTP response that std's writer produces
+  head: = http.headers(arena).add("Content-Type", "text/plain; charset=utf-8")
+    .add("X-Long", "0123456789012345678901234567890123456789").add("Connection", "close").build()
+  $out: = Str_builder.new()
+  defer out.free()
+  http.format_response(out@, 200, head, "this is the body.") catch
+    return ""
+  return arena.dup_str(out.slice())
+
+// **From here down the seeds are written by hand.**
+// **When adding one, choose "a form that reaches one more branch of the reader"**; similar forms
+// add no path.
+// A regex seed has the form "the pattern before the 0 byte, the text to match after it" (why the
+// separator is not a newline is in `read_regex` in [`read_prog.kspls`](read_prog.kspls)).
+priv const regex_samples: U8[][6] = ::{ "([a-z]+)-([0-9]+)\0foo-12 bar-345 baz",
+  "^(cat|dog)s?$\0dogs", "a.*?b|a.*b\0axxbxxb", "[^\\d\\s]+\\b\0words and 123 and abc",
+  "(ab)+(cd)?\0ababcd", "\\((\\w+)\\)[*+?]\0(x)* (y)+" }
+
+priv const request_samples: U8[][4] = ::{ "GET /a/b?x=1&y=%E3%81%82 HTTP/1.1\r\nHost: \
+  example.org\r\nAccept: */*\r\n\r\n",
+  "POST /post HTTP/1.1\r\nHost: h\r\nContent-Length: 11\r\nContent-Type: text/plain\r\n\r\nhello \
+    world", "PUT / HTTP/1.0\r\nX-A: 1\r\nX-A: 2\r\nx-a: 3\r\n\r\n",
+  "HEAD /%2e%2e/ HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n" }
+
+priv fn push_sample(out: List<|fuzz.Sample|>$@, kind: U8[], name: U8[], data: U8[], built: Bool)
+  if data.len == 0
+    return
+  out.push(fuzz.Sample::{ .kind = kind, .name = name, .data = data, .built = built })
+
+priv fn collect_samples(dirs: U8[][], arena: Arena$@): List<|fuzz.Sample|> //<
+  //< The seeds built here, then the JSON files under dirs
+  $out: = List<|fuzz.Sample|>.new(arena)
+  push_sample(out@, "json", "built JSON", built_json(arena), true)
+  push_sample(out@, "url", "built query", built_query(arena), true)
+  push_sample(out@, "base64", "built Base64", built_base64(arena), true)
+  push_sample(out@, "http-res", "built response", built_response(arena), true)
+  for i in Range.asc(regex_samples.len)
+    push_sample(out@, "regex", arena.text().s("hand-written seed \{i\}").take(), regex_samples[i],
+      false)
+  for i in Range.asc(request_samples.len)
+    push_sample(out@, "http-req", arena.text().s("hand-written request \{i\}").take(),
+      request_samples[i], false)
+  for f in fuzz.gather(dirs, U8[][]::{ ".json" }, max_seed_bytes, arena)
+    push_sample(out@, "json", f.name, f.data, false)
+  return out
+
+// ---------------------------------------------------------
+// Fuzzing
+// ---------------------------------------------------------
+
+fn main(): I32
+  verdict.begin("fuzz")
+  arena: = Arena.new(512 * 1024 * 1024)
+  defer arena.free()
+  $o: = fuzz.Opts::{ .trials = default_trials, .seed = default_seed }
+  p: = argp.Parser.create("fuzz_main", "scatters broken input at std's readers", arena)
+  s: =
+    fuzz.setup(p, o@, "ksplc run tests/fuzz_main.kspls", "<reader>", true, arena) catch why
+    return verdict.fatal(why)
+  c: = fuzz.Campaign::{ .subject = "std", .argv = U8[][]::{ s.exe }, .tell_kind = true,
+    .after = U8[][]::{}, .work = s.work, .kinds = fuzz.Input_kind[]::kinds, .in_turn = false,
+    .wait_ms = trial_timeout_ms, .reach_div = reach_floor_div, .again = s.again }
+  $all: = collect_samples(s.dirs, arena)
+  io.out().s("# assembling the seeds and reading them back (\{all.len\})\n")
+  $samples: = fuzz.check_seeds(c@, all@, arena)
+  fuzz.scatter(c@, samples@, "byte sequences", o, arena) catch why
+    return verdict.fatal(why)
+  return verdict.finish()

@@ -1,0 +1,690 @@
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
+import "ksplc/base/ast_spell"
+import "ksplc/base/core" as base_core
+import "ksplc/base/mangle"
+import "ksplc/sema/body/call_args" { check_args_against_instance, infer_call_args,
+  infer_value_call_args }
+import "ksplc/sema/body/expr" as sema_body_expr
+import "ksplc/sema/body/generic_infer" as sema_body_generic_infer
+import "ksplc/sema/decl/access" as sema_decl_access
+import "ksplc/sema/decl/mono" as sema_decl_mono
+import "ksplc/sema/decl/mono_name" as sema_decl_mono_name
+import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
+import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/session/ctx" as _sema_session_ctx + { Sema_ctx, Sema_error }
+import "ksplc/sema/session/import_table" as sema_session_import_table
+import "ksplc/sema/type/def" as sema_type_def
+import "ksplc/sema/type/display" as sema_type_display
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" { Sema_symbol }
+import "std/chars"
+import "std/str" { Str_builder }
+
+fn check_alias_prefix(c: Sema_ctx$@, node: Ast_node$@, orig_name: U8$[], label: U8[]) //<
+  //< Checks that a call to a function defined in another file names its origin
+  //<
+  //< An import alias prefix (`io.out()`) names it, and so does a selective import (the `out()`
+  //< after `import "std/io" { out };`); without the latter, the import passes but the call fails.
+  loc_first_dot: = orig_name.find_char('.')
+  $has_valid_prefix: = false
+  if loc_first_dot >= 0
+    prefix: = orig_name.sub(0, loc_first_dot)
+    if c.get_file_alias_target(c.file_name, prefix).len > 0 ||
+      c.get_import_symbol_target(c.file_name, prefix).len > 0
+      has_valid_prefix = true
+  else if c.imported_symbol_fqn(orig_name).len > 0
+    has_valid_prefix = true
+  if !has_valid_prefix
+    c.clear_scratch().s("\{label\} '\{orig_name\}' requires an import alias prefix")
+    c.err(node, c.scratch.slice())
+fn check_variant_call_arity(c: Sema_ctx$@, node: Ast_node$@, args_node: Ast_node$@,
+  variant_def: sema_type_def.Enum_variant$@, has_call_syntax: Bool) //<
+    //< Checks the argument count of a call to an enum variant, `()` on a payload-free one included
+    //<
+    //< `Enum.variant(...)`, `.variant(...)` and a bare `.variant` / `Enum.variant` all use it.
+  if variant_def == null
+    return
+  expected_args: = I32::variant_def.payload_fields.len
+  if expected_args == 0
+    if has_call_syntax
+      c.clear_scratch()
+        .s("enum variant '\{variant_def.name\}' has no payload and cannot be called with '()'. Use \
+          '.\{variant_def.name\}' without parentheses")
+      c.err(node, c.scratch.slice())
+    return
+  $actual_args: I32 = 0
+  if args_node != null
+    for arg_node in args_node.children
+      if !arg_node.is_literal(",")
+        actual_args += 1
+  if actual_args != expected_args
+    c.clear_scratch()
+      .s("argument count mismatch for enum variant '\{variant_def.name\}'. Expected \
+        \{expected_args\}, but got \{actual_args\}")
+    if args_node != null
+      c.err(args_node, c.scratch.slice())
+    else
+      c.err(node, c.scratch.slice())
+priv fn infer_enum_init_call(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@): I32?Sema_error //<
+  //< Infers a call that builds an enum variant with a payload (for example Shape.circle(7))
+  node.set_kind(.k_enum_init_call)
+  type_id: = left.type_id
+  node.type_id = type_id
+
+  $variant_name: U8[] = ""
+  for $ci: I32 = (I32::left.children.len) - 1; ci >= 0; ci -= 1
+    v_node: = left.get_child(ci)
+    if v_node.kind_id == .k_identifier
+      variant_name = v_node.text
+      break
+  // An alias's variant (`Form.circle(3)`) is typed by the alias; its payload is the enum's.
+  enum_name: = c.env.get_str(c.env.get_real_type(type_id))
+  $variant_def: sema_type_def.Enum_variant$@ = null
+  if enum_def: = c.env.get_enum_def(enum_name)
+    switch enum_def.get_variant(variant_name) case .some(d)
+      variant_def = d
+    case .none {}
+
+  $args_node: Ast_node$@ = null
+  if node.children.len > 2 && node.get_child(2).kind_id == .k_expr_args
+    args_node = node.get_child(2)
+
+  check_variant_call_arity(c, node, args_node, variant_def, true)
+
+  if args_node != null
+    args_node.infer_enum_payload_args(c, variant_def)?
+  return type_id
+priv struct Receiver_permission //<
+  //< The permission a method's receiver type demands of the caller
+  ptr: Bool //< demands a place (a pointer)
+  mut_ptr: Bool //< also demands writing what it points at (`Self$@`)
+
+priv fn receiver_permission(c: Sema_ctx$@, p_type: Ast_node$@): Receiver_permission //<
+  //< Reads the permission a method demands of its receiver from the type annotation `p_type`
+  //<
+  //< `p_type` is the first parameter's type annotation.
+  //<
+  //< Caution: **When the type is unresolved (type_id <= 0, as for `Self` in `impl U8`), read the
+  //< spelling, both `@` and `$@`** (parse/load.kspls's k_type_expr normalization keeps the `$`).
+  //< Checking `@` alone, a `Self$@` method reads as demanding no pointer and passes the check.
+  if p_type == null
+    return Receiver_permission::{ .ptr = true, .mut_ptr = false }
+  p_type_id: = p_type.type_id
+  if p_type_id > 0
+    is_ptr: = c.env.is_pointer(p_type_id)
+    return Receiver_permission::{ .ptr = is_ptr,
+      .mut_ptr = is_ptr && !c.env.is_const(c.env.strip_ptr(p_type_id)) }
+  for tc in p_type.children
+    if tc.kind_id != .k_type_postfix
+      continue
+    if tc.text.equals("@")
+      return Receiver_permission::{ .ptr = true, .mut_ptr = false }
+    if tc.text.equals("$@")
+      return Receiver_permission::{ .ptr = true, .mut_ptr = true }
+  return Receiver_permission::{ .ptr = false, .mut_ptr = false }
+
+priv fn check_method_receiver_lvalue(c: Sema_ctx$@, left: Ast_node$@, def_node: Ast_node$@) //<
+  //< Checks that the receiver is an lvalue where the method demands `@`; an rvalue is an error
+  recv_node: = left.get_postfix_receiver()
+  sig_node: = def_node.find_child(.k_type_fn_sig)
+  if sig_node != null
+    $params: = base_ast_ext.Param_cursor.new(sig_node.find_child(.k_param_list), false)
+    if first_param: = params.next()
+      need: = receiver_permission(c, first_param.get_decl_type_node())
+      requires_ptr: = need.ptr
+      requires_mut_ptr: = need.mut_ptr
+
+      if requires_ptr && recv_node != null
+        recv_id: = recv_node.type_id
+        is_ptr: = c.env.is_pointer(recv_id)
+        is_slice: = c.env.is_slice(recv_id)
+
+        // The receiver **implicitly has its address taken**. A call's or a computation's result
+        // has no address, so it is stored in a temporary in the frame.
+        // Caution: **Writing (`Self$@`) is rejected**: the temporary is a copy, so the caller
+        // never sees the write (`make_point().set_n(5)`: "called, nothing happened").
+        needs_hoist: = recv_node.receiver_needs_hoist(is_ptr, is_slice)
+        if needs_hoist && requires_mut_ptr
+          c.clear_scratch()
+            .s("cannot call a method that writes its receiver ('Self$@') on a temporary object: the \
+              write would land on a copy that is thrown away. Bind it first (`$x: = ...;`), or take \
+              the receiver as 'Self@' if the method does not write.")
+          c.err(recv_node, c.scratch.slice())
+        // **A `Self$@` method must demand the same permission as an assignment**, or `v.n = 9`
+        // is rejected while `v.bump()` passes (on `const` data, a write to ROM). A temporary is
+        // rejected above; "a read-only location" does not describe it.
+        if requires_mut_ptr && !needs_hoist && c.place_is_readonly(recv_node)
+          c.clear_scratch()
+            .s("cannot call a method that takes a writable receiver ('Self$@') on a read-only \
+              location. Make the binding mutable ('$x'), take the receiver as 'Self@', or cast \
+              explicitly ('T$@::(...)') if the write is intended.")
+          c.err(recv_node, c.scratch.slice())
+
+priv fn written_member_type_args(left: Ast_node$@): Option<|Ast_node$@|> //<
+  //< The type arguments written on the method name (the `<|U8|>` of `x.m<|U8|>()`)
+  //<
+  //< **The receiver's path is not searched**: `Foo<|I32|>.new()`'s type arguments belong to the
+  //< receiver, not the method.
+  if left == null
+    return Option<|Ast_node$@|>.none
+  for child in left.children
+    if child.kind_id == .k_type_args
+      return Option<|Ast_node$@|>.some(child)
+  return Option<|Ast_node$@|>.none
+
+priv fn refuses_fn_name_binding(c: Sema_ctx$@, left: Ast_node$@, args_node: Ast_node$@,
+  inferred: U8[]): Bool //<
+    //< Rejects a type argument inferred from a bare function name, and tells the user to write it
+    //<
+    //< Such a name has the type generic_fn_value_type_id, a marker with no signature, since a
+    //< function has no type of its own (check_fn_value_binding in sema/body/stmt_escape.kspls). An
+    //< instance built on the marker could neither be called nor spelled in C.
+  mark_id: = c.env.generic_fn_value_type_id()
+  mark: = c.env.get_str(mark_id)
+  $bound: = false
+  for pos in Range.asc(inferred.count_type_args())
+    if inferred.nth_type_arg(pos).equals(mark)
+      bound = true
+  if !bound || args_node == null
+    return false
+  callee: =
+    (left.get_postfix_member().text if left.kind_id == .k_method_access
+    else left.get_path_or_ident_name())
+  for arg_node in args_node.children
+    if arg_node.type_id != mark_id
+      continue
+    fn_name: = arg_node.get_path_or_ident_name()
+    c.clear_scratch()
+    if base_ast.is_anon_fn_name(fn_name)
+      c.scratch.s("cannot infer the type arguments of '\{callee\}' from this anonymous function")
+    else
+      c.scratch.s("cannot infer the type arguments of '\{callee\}' from function '\{fn_name\}'")
+    c.scratch.s(": a function has no type of its own\n  Hint: write them — ")
+      .s("'typedef Op = fn(x: I32): I32' then '\{callee\}<|Op|>(…)'.")
+    c.err(arg_node, c.scratch.slice())
+    return true
+  return false
+
+priv fn infer_generic_call_result(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
+  lookup_name: U8$[], generic_args: U8$[], is_generic_static: Bool, is_method_access: Bool,
+  def_node: Ast_node$@, args_node: Ast_node$@, arg0_id: I32, cur_type_id: I32): I32?Sema_error //<
+    //< Instantiates a generic call from its type arguments and returns the return type
+    //<
+    //< It also rewrites def_node and the node's kind to the instance.
+  $type_id: = cur_type_id
+  $inst_args_str: U8[] = "I32"
+  $fqn_args_str: = Str_builder.new()
+  defer fqn_args_str.free()
+
+  $type_args_node: Ast_node$@ = null
+  $path_node: = left
+  if is_method_access
+    path_node = left.get_postfix_receiver()
+
+  for $i_ta: = 0; path_node != null && i_ta < path_node.children.len; i_ta += 1
+    if path_node.get_child(i_ta).kind_id == .k_type_args
+      type_args_node = path_node.get_child(i_ta)
+  if type_args_node == null && left != null
+    for child in left.children
+      if child.kind_id == .k_type_args
+        type_args_node = child
+  if type_args_node != null
+    $temp: = type_args_node.build_resolved_type_args_str(c, def_node)?
+    fqn_args_str.s(temp.slice())
+    temp.free()
+    // Checks the count the user wrote against the declaration, not an inferred list (the reason is
+    // at check_written_generic_arity in sema/decl/mono.kspls).
+    sema_decl_mono.check_written_generic_arity(c, def_node, fqn_args_str.slice(), node)
+
+  if is_generic_static
+    if type_args_node != null
+      inst_args_str = fqn_args_str.slice()
+    else
+      inst_args_str = generic_args
+  else if !sema_type_env.is_unknown(arg0_id)
+    inst_args_str = sema_body_generic_infer.extract_inferred_generic_arg(c, def_node, args_node,
+      arg0_id, is_method_access)
+    if refuses_fn_name_binding(c, left, args_node, inst_args_str)
+      return I32::sema_type_env.Builtin_type_id.unknown
+  else if type_args_node == null && c.has_error()
+    // Caution: **Do not instantiate with the placeholder once an error is reported.** An argument
+    // whose type is unknown leaves `I32` as the type argument, and the instance's own checks then
+    // report a mismatch the user never wrote (`put`'s `Writer` bound inside `std/lang`).
+    return I32::sema_type_env.Builtin_type_id.unknown
+  // The call position is recorded during the instantiation, so that a bound violation
+  // (`f<|T: some.Trait|>`) is reported here rather than on the template's line
+  // (check_type_constraint in sema/decl/resolve.kspls). Instantiations nest, so it is restored.
+  prev_inst_site: = c.generics.inst_site
+  c.generics.inst_site = node
+  defer c.generics.inst_site = prev_inst_site
+  $inst_name: = c.instantiate_fn(lookup_name, inst_args_str, false)?
+  defer inst_name.free()
+
+  inst_sym: = c.symtab.resolve(inst_name.slice()) catch null
+  if inst_sym != null
+    type_id = inst_sym.type_id
+    node.def_node = inst_sym.node
+    left.def_node = inst_sym.node
+    $member_node: Ast_node$@ = null
+    if left.kind_id == .k_expr_postfix || left.kind_id == .k_method_access
+      member_node = left.get_postfix_member()
+    if member_node != null
+      member_node.def_node = inst_sym.node
+    else if left.children.len > 0
+      left.last_child().def_node = inst_sym.node
+
+  check_args_against_instance(c, args_node, inst_sym.node if inst_sym != null else null,
+    is_method_access)
+
+  permanent_id: = c.env.get_or_add(inst_name.slice())
+  if left.is_path_or_ident()
+    left.type_id = permanent_id
+    left.set_kind(.k_generic_path)
+  else if left.kind_id == .k_method_access
+    m_node: = left.get_postfix_member()
+    if m_node != null
+      m_node.type_id = permanent_id
+      m_node.set_kind(.k_generic_method)
+  return type_id
+fn resolves_to_named_fn(left: Ast_node$@): Bool //<
+  //< Whether the path expression resolved to a named function's declaration
+  //<
+  //< A method_access uses the member's. This one test serves both a call target
+  //< (`is_indirect_fn_ptr_call` below) and an unannotated binding (`sema/body/stmt.kspls`).
+  //< Caution: **A call's result is a value, whatever function made it.** The call node carries
+  //< its callee's declaration, so `pick()(21)` would read as a call of `pick`.
+  if left == null
+    return false
+  if left.kind_id == .k_expr_postfix && left.get_postfix_op().is_literal("(")
+    return false
+  $def: = left.def_node
+  if left.kind_id == .k_method_access
+    m: = left.get_postfix_member()
+    if m != null && m.def_node != null
+      def = m.def_node
+  if def == null
+    return false
+  return def.kind_id == .k_decl_fn || def.kind_id == .k_decl_fn_proto
+
+priv fn is_indirect_fn_ptr_call(c: Sema_ctx$@, left: Ast_node$@, target_id: I32): Bool //<
+  //< Whether this call is an indirect call through a function pointer **value**
+  //<
+  //< Caution: **Do not decide by the target's type alone.** A named function's symbol holds
+  //< **the return type** in type_id (resolve_ret_type_or_void in collect_fn_def), so `fn cb(): Cb`
+  //< (Cb a function pointer alias) looks like a function pointer: `cb()` would be typed as Cb's
+  //< return value, and an unannotated binding would emit invalid C with no KSPL diagnostic.
+  return c.env.is_fn_ptr(target_id) && !resolves_to_named_fn(left)
+
+priv fn holds_call_method(c: Sema_ctx$@, type_id: I32): Bool //<
+  //< Whether a value of that type is called through a `call` method (a `Callable1`)
+  //<
+  //< A trait's methods live on the trait, not in the type table, so both are checked.
+  base: = c.env.receiver_base_id(type_id)
+  switch c.env.get_info(base) case .trait_type(trait_def)
+    for m in trait_def.methods_list
+      if m.name.equals("call")
+        return true
+  default {}
+  c.ensure_instance_methods(base) catch {}
+  entry: = c.env.id_to_type.get(c.env.get_real_type(base))
+  if entry == null
+    return false
+  if _found: = entry.get_method("call")
+    return true
+  return false
+
+priv fn report_field_called(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, field_id: I32) //<
+  //< Reports a field written with `()` as though it were a method (`args.len()`)
+  //<
+  //< The advice is to drop the `()`, except for **a field holding a `Callable1`** (called through
+  //< its `call`) and a pointer to a function pointer (dereferenced first).
+  member: = left.get_postfix_member().text
+  owner_id: = c.env.receiver_base_id(left.get_postfix_receiver().type_id)
+  $owner: = c.env.display_str(owner_id)
+  defer owner.free()
+  $held: = c.env.display_str(field_id)
+  defer held.free()
+  c.clear_scratch()
+    .s("cannot call '\{member\}': it is a field of '\{owner.slice()\}' (type '\{held.slice()\}'), \
+      not a method.")
+  if holds_call_method(c, field_id)
+    c.scratch.s(" Call what it holds through 'call': '.\{member\}.call(...)'")
+  else if c.env.is_fn_ptr(c.env.strip_ptr(field_id))
+    c.scratch.s(" Dereference it first: '.\{member\}$(...)'")
+  else
+    c.scratch.s(" Read it without the '()': '.\{member\}'")
+  c.err(node, c.scratch.slice())
+
+fn infer(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32, expected_id: I32):
+  I32?Sema_error
+  if left.kind_id == .k_enum_init
+    return infer_enum_init_call(c, node, left)?
+
+  is_method_access: = left.kind_id == .k_method_access
+  is_fn_ptr: = is_indirect_fn_ptr_call(c, left, target_id)
+  // A field called as a method (`args.len()`): past here its pieces are joined into a name no
+  // function has, and it is reported as an undefined 'a...len'.
+  if !is_method_access && !is_fn_ptr && left.kind_id == .k_expr_postfix &&
+    left.get_postfix_op().is_literal(".") && !sema_type_env.is_unknown(target_id)
+    report_field_called(c, node, left, target_id)
+    return I32::sema_type_env.Builtin_type_id.unknown
+  $fn_name_str: = Str_builder.new()
+  defer fn_name_str.free()
+
+  if is_method_access
+    recv_type_id: = left.get_postfix_receiver().type_id
+    m_node: = left.get_postfix_member()
+    method_str: = m_node.text
+
+    clean_type: = c.env.base_type_name(recv_type_id)
+    if clean_type.len > 0
+      fn_name_str.s("\{clean_type\}.\{method_str\}")
+    else
+      fn_name_str.s(".\{method_str\}")
+  else if !is_fn_ptr
+    if left.is_callable_target()
+      fn_name_str.s(left.text)
+    else
+      for i in Range.asc(left.children.len)
+        if i > 0
+          fn_name_str.c('.')
+        fn_name_str.s(left.get_child(i).text)
+
+  fn_name: = fn_name_str.slice()
+  $base_fn_name: = Str_builder.new()
+  defer base_fn_name.free()
+  $generic_args_str: = Str_builder.new()
+  defer generic_args_str.free()
+  $is_generic_static: = false
+
+  if !is_fn_ptr
+    switch fn_name.find_generic_bounds() case .found(start_idx, inner_start, inner_end, end_idx)
+      is_generic_static = true
+      base_fn_name.s(fn_name.sub(0, start_idx))
+      if end_idx + 1 < fn_name.len
+        base_fn_name.s(fn_name.sub_from(end_idx + 1))
+      generic_args_str.s(fn_name.sub(inner_start, inner_end - inner_start))
+    default
+      base_fn_name.s(fn_name)
+
+  $lookup_name: = base_fn_name.slice()
+  if !is_fn_ptr && !is_method_access
+    intr_id: = check_and_infer_intrinsic(c, node, left, lookup_name) catch -1
+    if intr_id != -1
+      return intr_id
+
+  $is_generic_call: = false
+  $sym: Sema_symbol$@ = null
+  $fqn_lookup_str: = Str_builder.new()
+  defer fqn_lookup_str.free()
+
+  if !is_fn_ptr
+    first_dot: = lookup_name.find_char('.')
+    if first_dot >= 0
+      prefix: = lookup_name.sub(0, first_dot)
+      target_file: = c.get_file_alias_target(c.file_name, prefix)
+      if target_file.len > 0
+        actual_base: = lookup_name.sub_from(first_dot + 1)
+        fqn_lookup_str.s_path_as_dots(target_file).s(".").s(actual_base)
+      else
+        fqn_lookup_str.s(lookup_name)
+    else
+      $local_fqn: = Str_builder.new()
+      defer local_fqn.free()
+      local_fqn.s_path_as_dots(c.file_name).s(".").s(lookup_name)
+      g_node: = c.generics.templates.get(local_fqn.slice()) catch null
+      if g_node != null
+        fqn_lookup_str.s(local_fqn.slice())
+      else
+        fqn_lookup_str.s(lookup_name)
+
+  fqn_lookup: = fqn_lookup_str.slice()
+
+  if is_method_access
+    m_node: = left.get_postfix_member()
+    if m_node != null && m_node.def_node != null
+      if m_node.def_node.sym_ptr != null
+        sym = Sema_symbol$@::m_node.def_node.sym_ptr
+  else if !is_fn_ptr
+    if left.def_node != null && left.def_node.sym_ptr != null
+      sym = Sema_symbol$@::left.def_node.sym_ptr
+
+  $generic_fn_ptr: Ast_node$@ = null
+  if !is_fn_ptr
+    // Only the template table is searched.
+    // Caution: **Do not take "the resolved declaration has no `sym_ptr`" as a template's sign**:
+    // a declaration whose `sym_ptr` was never set, such as a trait's prototype, would go to
+    // monomorphization, and the output would call a slot that is not in the vtable.
+    generic_fn_ptr = c.generics.templates.get(fqn_lookup) catch null
+  // **An instantiated receiver arrives as a mangled name**, while the template of a method with its
+  // own type arguments (`Holder<|T|>.to<|U|>`) is registered under the base's FQN, so it is looked
+  // up there (lookup_method_template in sema/decl/mono_name.kspls); otherwise the rejection of
+  // stray type arguments below fires.
+  if generic_fn_ptr == null && is_method_access
+    last_dot: = fqn_lookup.rfind_char_out('.')
+    if last_dot > 0
+      owner: = fqn_lookup.sub(0, last_dot)
+      member: = fqn_lookup.sub_from(last_dot + 1)
+      found_tmpl: = sema_decl_mono_name.lookup_method_template(c, owner, member)
+      if tmpl: = found_tmpl
+        generic_fn_ptr = tmpl
+  // A template always takes the instantiation route.
+  if generic_fn_ptr != null
+    sym = null
+
+  $newly_resolved: = false
+  if sym == null && generic_fn_ptr == null && !is_fn_ptr
+    $sym_ptr: = c.symtab.resolve(fqn_lookup) catch null
+    if sym_ptr == null && !fqn_lookup.equals(lookup_name)
+      sym_ptr = c.symtab.resolve(lookup_name) catch null
+    if sym_ptr == null
+      if rs: = c.resolve_type_method_fqn(fqn_lookup)
+        sym_ptr = rs
+    if sym_ptr == null && !fqn_lookup.equals(lookup_name)
+      if rs: = c.resolve_type_method_fqn(lookup_name)
+        sym_ptr = rs
+
+    if sym_ptr != null
+      sym = sym_ptr
+      newly_resolved = true
+
+  if sym != null
+    sym.flags.is_used = true
+    node.def_node = sym.node
+    left.def_node = sym.node
+    if left.children.len > 0
+      left.last_child().def_node = sym.node
+    if newly_resolved
+      c.check_visibility_and_mark_used(sym, left)
+
+    defined_in: = sym.get_defined_in()
+    if !is_method_access && defined_in.len > 0 && !defined_in.equals(c.file_name) &&
+      !sym.flags.is_generated_instance
+      check_alias_prefix(c, node, base_fn_name.slice(), "function")
+  else if generic_fn_ptr == null && !is_fn_ptr
+    // **Report a callee once**: where resolving its name already reported it, a second report
+    // is the same mistake counted twice.
+    if !is_method_access && fqn_lookup.find_str("<|") == -1 && !c.undefined_reported_at(left)
+      c.report_undefined_symbol(node, fqn_lookup)
+
+  // Caution: **Reject a type argument with nothing to bind to.** The type arguments of a generic
+  // type's method are **fixed by the receiver's instance**, so ones written at the call bind
+  // nothing. A method declaring **its own** (`fn m<|T|>(…)`) is a template and passes here.
+  if generic_fn_ptr == null && is_method_access
+    if stray: = written_member_type_args(left)
+      c.err(stray,
+        "type arguments cannot be written here: this method's type parameters come from its 'impl', \
+          so the receiver's own type already fixes them (write them on the type instead, as in \
+          'Plain<|I32|>'). Drop the '<|...|>' after the method name")
+      throw Sema_error.analysis_failed
+  if generic_fn_ptr != null
+    lookup_name = fqn_lookup
+    is_generic_call = true
+    def_file: = generic_fn_ptr.loc.file()
+
+    if def_file.len > 0 && !def_file.equals(c.file_name) && !is_method_access
+      check_alias_prefix(c, node, base_fn_name.slice(), "generic function")
+
+  // A call of something that cannot be called is caught here. A named function's symbol holds
+  // **the return type** in type_id, so `type_id = target_id` below is right for it, but for a
+  // plain variable it would emit `I32 y = x(1);` with no diagnostic and a raw C error.
+  if sym != null && sym.kind.is_var_or_const() && !is_fn_ptr && !is_method_access &&
+    !sema_type_env.is_unknown(target_id)
+    $shown: = c.env.display_str(target_id)
+    defer shown.free()
+    c.clear_scratch()
+      .s("cannot call '\{sym.name\}': it is a value of type '\{shown.slice()\}', not a function")
+    // A pointer to a function pointer becomes callable once dereferenced, so say how.
+    if c.env.is_fn_ptr(c.env.strip_ptr(target_id))
+      c.scratch.s(". Dereference it first: '\{sym.name\}$(...)'")
+    c.err(node, c.scratch.slice())
+    return I32::sema_type_env.Builtin_type_id.unknown
+
+  op_text: = node.text
+  args_node: = node.get_postfix_member()
+  // A call through a value reads the signature off the value's type, whatever declared it (a
+  // local, a field of a generic, another call's result).
+  if is_fn_ptr
+    return infer_value_call(c, node, target_id, args_node)?
+
+  $type_id: = I32::sema_type_env.Builtin_type_id.unknown
+  if !sema_type_env.is_unknown(target_id)
+    type_id = target_id
+  else if !sema_type_env.is_unknown(expected_id)
+    type_id = expected_id
+
+  if args_node != null
+    $def_node: Ast_node$@ = null
+    if is_method_access
+      m_node: = left.get_postfix_member()
+      if m_node != null
+        def_node = m_node.def_node
+    else if sym != null
+      def_node = sym.node
+    else if generic_fn_ptr != null
+      def_node = generic_fn_ptr
+    else if left.def_node != null
+      def_node = left.def_node
+
+    if is_method_access && def_node != null
+      check_method_receiver_lvalue(c, left, def_node)
+
+    arg0_id: =
+      infer_call_args(c, args_node, def_node, is_method_access, op_text, is_generic_call)?
+
+    if is_generic_call
+      args_str: = generic_args_str.slice()
+      type_id =
+        infer_generic_call_result(c, node, left, lookup_name, args_str, is_generic_static,
+        is_method_access, def_node, args_node, arg0_id, type_id)?
+  return type_id
+
+priv fn infer_value_call(c: Sema_ctx$@, node: Ast_node$@, callee_id: I32, args_node: Ast_node$@):
+  I32?Sema_error //<
+    //< Infers a call through a function value: its arguments against the value's type, its result
+    //<
+    //< It is rejected where the type has no signature: the marker type of a bare function name in
+    //< a generic call (generic_fn_value_type_id) says only "a function".
+  switch c.env.fn_sig_of(callee_id) case .some(sig)
+    infer_value_call_args(c, node, args_node, sig)?
+    return sig.ret_id
+  case .none
+    c.err(node,
+      "cannot call this value: its function type holds no signature. Give it one — 'typedef Op = \
+        fn(x: I32): I32' then 'f: Op = …'")
+    return I32::sema_type_env.Builtin_type_id.unknown
+
+enum Intrinsic //< a call the compiler builds in: `__kspl_<name>(…)`, declared nowhere
+  not_intrinsic //< any other name
+  read_volatile //< `__kspl_read_volatile(p)`: a volatile load through p
+  write_volatile //< `__kspl_write_volatile(p, v)`: a volatile store of v through p
+  asm_volatile //< `__kspl_asm_volatile("…", …)`: inline assembly
+  inline_c //< `__kspl_inline_c("…")`: C source embedded as it stands (the C target only)
+
+fn intrinsic_of(name: U8[]): Intrinsic //< the intrinsic a callee's name calls
+  //<
+  //< **Sema and both backends tell an intrinsic by this alone.**
+  if name.equals("__kspl_read_volatile")
+    return .read_volatile
+  if name.equals("__kspl_write_volatile")
+    return .write_volatile
+  if name.equals("__kspl_asm_volatile")
+    return .asm_volatile
+  if name.equals("__kspl_inline_c")
+    return .inline_c
+  return .not_intrinsic
+
+priv fn finish_intrinsic(node: Ast_node$@, left: Ast_node$@, id: I32): I32 //<
+  //< The shared tail of intrinsic resolution
+  //<
+  //< It sets the type on node and left, turns left into an identifier, and returns id.
+  node.type_id = id
+  left.type_id = id
+  left.set_kind(.k_identifier)
+  return id
+
+priv fn check_and_infer_intrinsic(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
+  lookup_name: U8[]): I32?Sema_error
+  intr: = intrinsic_of(lookup_name)
+  if intr == .not_intrinsic
+    return -1
+
+  args_node: = node.get_postfix_member()
+  void_id: = c.env.get_or_add("Void")
+
+  is_llvm: = base_core.is_llvm_target()
+
+  if intr == .inline_c
+    if args_node != null && args_node.children.len > 0
+      first_arg: = args_node.get_child(0)
+      if first_arg.kind_id != .k_string
+        c.err(first_arg, "__kspl_inline_c requires a string literal")
+    else
+      c.err(node, "__kspl_inline_c requires a string argument")
+    if is_llvm
+      c.err(node,
+        "__kspl_inline_c is only supported on the C target; use __kspl_asm_volatile for LLVM")
+    return finish_intrinsic(node, left, void_id)
+  if intr == .asm_volatile
+    if args_node != null && args_node.children.len > 0
+      first_arg: = args_node.get_child(0)
+      if first_arg.kind_id != .k_string
+        c.err(first_arg, "__kspl_asm_volatile requires a string literal as the first argument")
+      for ch in args_node.children
+        if !ch.is_literal(",")
+          ch.infer_expr(c, 0)?
+          // LLVM cannot convert C's constrained operands mechanically.
+          if is_llvm && ch.kind_id != .k_string
+            c.err(ch,
+              "__kspl_asm_volatile operands are only supported on the C target; use __kspl_inline_c \
+                for LLVM")
+    else
+      c.err(node, "__kspl_asm_volatile requires at least one string argument")
+    return finish_intrinsic(node, left, void_id)
+
+  $arg1: Ast_node$@ = null
+  if a1: = args_node.get_arg_at(0)
+    arg1 = a1
+  $arg2: Ast_node$@ = null
+  if a2: = args_node.get_arg_at(1)
+    arg2 = a2
+
+  if intr == .read_volatile
+    if arg1 != null
+      arg0_id: = arg1.infer_expr(c, 0)?
+      if !c.env.is_pointer(arg0_id)
+        c.err(arg1, "__kspl_read_volatile requires a pointer type")
+      val_id: = c.env.strip_ptr(arg0_id)
+      return finish_intrinsic(node, left, val_id)
+  else
+    if arg1 != null && arg2 != null
+      arg0_id: = arg1.infer_expr(c, 0)?
+      if !c.env.is_pointer(arg0_id)
+        c.err(arg1, "__kspl_write_volatile requires a pointer type for the first argument")
+      val_id: = c.env.strip_ptr(arg0_id)
+      arg2.infer_expr(c, val_id)?
+      return finish_intrinsic(node, left, void_id)
+  return -1

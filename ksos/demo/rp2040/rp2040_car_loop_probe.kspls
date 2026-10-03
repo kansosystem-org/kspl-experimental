@@ -1,0 +1,289 @@
+//< **Runs a closed loop** between the car and kssrv on the PC
+//<
+//< The car is the Freenove 4WD mecanum one (Pico W). The steps are in
+//< "Stage 6e — running a closed loop with the PC's kssrv" in `ksos/docs/HOWTO-bring-up.md`.
+
+// ==========================================
+// Caution: **Test it with the wheels off the ground.** A hand is too slow to catch a wrong start.
+// ==========================================
+// One round of the loop:
+//   read the sensors -> send them to kssrv on the PC with POST /api/car -> drive the four wheels
+//   with the manoeuvre that comes back
+// ==========================================
+// What stops it whatever the answer says:
+//   (1) once the battery falls below its minimum it stops and sends no more requests (it does not
+//       resume until the switch is turned off and on)
+//   (2) at point-blank range (under emergency_mm) it backs off whatever the answer is
+//   (3) if no valid answer comes within reply_deadline_ms, it stops
+// ==========================================
+// The PC side, before starting:
+//     make kssrv && ./out/kssrv.exe 8080 <the directory to publish>
+// ==========================================
+import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/boards/freenove_4wd_pico/motor"
+import "ksos/boards/freenove_4wd_pico/range"
+import "ksos/boards/freenove_4wd_pico/track"
+import "ksos/demo/rp2040/common/battery"
+import "ksos/demo/rp2040/common/bringup" as boot
+import "ksos/demo/rp2040/common/console" as con
+import "ksos/demo/rp2040/common/net_client" as nc
+import "ksos/drivers/rp2040/adc"
+import "ksos/drivers/rp2040/gpio"
+import "ksos/drivers/rp2040/usb_cdc" as usb
+import "ksos/kernel/task" + { Task }
+import "std/buf" { Buf_writer }
+import "std/chars"
+import "std/json"
+import "std/mem" { Arena }
+
+$tcb_car: Task
+$stack_car: U8[2048]
+
+// Global: too large for the task stack (2048).
+$req_buf: U8[512] // where the request (the header plus the body) is built
+$arena_buf: U8[2048] // used by json.parse
+$resp_buf: U8[1024] // one response
+
+const our_port: U16 = 54323
+const peer_port: U16 = 8080 // kssrv
+const our_isn: U32 = 13000 // a fixed value (a demo; real use randomizes it)
+const stage_report_interval_ms: U32 = 3000
+
+const loop_interval_ms: U32 = 100 //< the control period [ms]
+  //<
+  //< Caution: Keep it well above the ultrasonic's 36ms worst case.
+const reply_deadline_ms: U32 = 300 //< the limit on waiting for a valid answer [ms]
+  //<
+  //< Past this it stops.
+const emergency_mm: U32 = 100 //<
+  //< The distance at which it backs off, before the server's decision [mm]
+
+// Set once anything has failed; it stays stopped from then on.
+$halted: Bool = false
+$halt_reason: U8[] = ""
+
+// The running totals for the Serial Monitor.
+$loops: U32 = 0
+$replies: U32 = 0
+$timeouts: U32 = 0
+$parse_errors: U32 = 0
+
+// The observation the latest **decision used**.
+// Caution: **Do not read it again at reporting time**, or one line mixes a later dist with
+// another round's `cmd=emergency_back`.
+$last_dist: U32 = 0
+$last_line: U32 = 0
+
+// The manoeuvre carried out most recently.
+$last_cmd: U8[] = "(none)"
+$last_lon: I32 = 0
+$last_lat: I32 = 0
+$last_rot: I32 = 0
+
+priv fn apply(cmd: U8[], lon: I32, lat: I32, rot: I32) //<
+  //< Sends the command to the four wheels, and records it as the latest manoeuvre
+  last_cmd = cmd
+  last_lon = lon
+  last_lat = lat
+  last_rot = rot
+  motor.drive(lon, lat, rot)
+
+priv fn halt(reason: U8[]) //< stops from then on
+  //<
+  //< **It does not resume by itself**; setting off unasked is worse than staying stopped. Only the
+  //< battery's minimum has a way back (halt_battery / watch_battery).
+  halted = true
+  halt_reason = reason
+  apply("halted", 0, 0, 0)
+
+priv fn halt_battery() //< stops at the battery's minimum
+  //<
+  //< **This one resumes when a person turns the switch off and on** (watch_battery;
+  //< `common/battery.kspls` records the voltage and the flag).
+  halt("battery low")
+
+priv fn exchange(dist_mm: U32, line: U32, seq: U32): Sz //<
+  //< POSTs one observation as JSON and puts the answer's body into resp_buf
+  //<
+  //< It returns the body's length, 0 if no answer came.
+  // The body first, since its length goes in the header; no malloc/free in the control loop.
+  $body_buf: U8[128] = ::{}
+  $body: = Buf_writer.new(U8$[]::body_buf)
+  body.s("{\"dist_mm\":\{Sz::dist_mm\},\"line\":\{Sz::line\},\"seq\":\{Sz::seq\}}")
+  $head: = Buf_writer.new(U8$[]::req_buf)
+  // No `Connection: close`: a handshake per request does not fit in the period.
+  head
+    .s("POST /api/car HTTP/1.1\r\nHost: 192.168.137.1\r\nContent-Type: \
+      application/json\r\nContent-Length: \{body.len\}\r\n\r\n").s(body.slice())
+  // Caution: **Do not send it if it overflowed**: on the reused connection the server would read
+  // the next request's header as the body.
+  if body.overflowed() || head.overflowed()
+    return 0
+  if !nc.send_all(head.slice().ptr, head.len)
+    return 0
+  got: = nc.read_stream(U8$[]::resp_buf, reply_deadline_ms)
+  return got
+
+priv fn body_offset(resp: U8[]): Sz //< finds where the body starts in the response
+  //<
+  //< 0 if the end of the header has not arrived, rather than a number cut off partway.
+  at: = resp.find_str("\r\n\r\n")
+  return 0 if at < 0 else at + 4
+
+priv fn drive_from_reply(resp: U8[], seq: U32): Bool //<
+  //< Interprets the answer and drives the four wheels with it; true if it could be interpreted
+  at: = body_offset(resp)
+  if at == 0 || at >= resp.len
+    return false
+  $arena: = Arena.from_buffer(arena_buf@, 2048)
+  doc: = json.parse(resp.sub_from(at), arena@) catch
+    return false
+  // Caution: Check that it answers this observation; the last round's answer can arrive late.
+  if U32::doc.get("seq").as_int(-1) != seq
+    return false
+  cmd: = doc.get("cmd").as_str()
+  if cmd.len == 0
+    return false
+  apply(cmd, doc.get("lon").as_int(0), doc.get("lat").as_int(0), doc.get("rot").as_int(0))
+  return true
+
+priv fn watch_battery(ln: con.Line$@): Bool //<
+  //< Checks the battery for one round and returns whether a decision may be made this round
+  //<
+  //< **The rules are `common/battery.kspls`'s**; only how this car stops is here.
+  //< Caution: **Call it while stopped too** (the reason is at `battery.Watch.look`).
+  $may: = false
+  switch battery.watch.look(halted) case .go
+    may = true
+  case .low
+    halt_battery()
+  case .back
+    halted = false
+    con.say(ln, "[car]", battery.back_note)
+  default {}
+  return may
+
+priv fn one_round(seq: U32) //< runs one round
+  //<
+  //< Caution: **Whichever path it takes, set the wheels' state at the end**, or the last command
+  //< keeps running after the answers stop.
+  dist: = range.read_mm()
+  line: = track.read_bits()
+  last_dist = dist
+  last_line = line
+
+  // Point-blank range is decided here, without waiting for the server.
+  if dist > 0 && dist < emergency_mm
+    apply("emergency_back", -45, 0, 0)
+    _sent: = exchange(dist, line, seq) // still sent, to keep the server's counts moving
+    return
+
+  got: = exchange(dist, line, seq)
+  if got == 0
+    timeouts += 1
+    apply("no reply", 0, 0, 0)
+    return
+  if !drive_from_reply(U8[]::{ .ptr = resp_buf[0]@, .len = got }, seq)
+    parse_errors += 1
+    apply("bad reply", 0, 0, 0)
+    return
+  replies += 1
+
+priv fn report(ln: con.Line$@) //< prints one line
+  //<
+  //< Not every round, or USB's send queue drops lines. One line describes **one moment**: the
+  //< values the latest decision used.
+  dist: = last_dist
+  line: = last_line
+  mv: = battery.watch.last_mv
+  ln.reset()
+  ln.str("car t=")
+  ln.u32(loops)
+  ln.str(" dist=")
+  if dist == 0
+    ln.str("----")
+  else
+    ln.u32_pad(dist, 4)
+    ln.str("mm")
+  ln.str(" line=")
+  ln.u32(line)
+  ln.str(" bat=")
+  ln.u32_milli(mv)
+  ln.str("V cmd=")
+  ln.str(last_cmd)
+  ln.str(" (")
+  ln.i32(last_lon)
+  ln.str(",")
+  ln.i32(last_lat)
+  ln.str(",")
+  ln.i32(last_rot)
+  ln.str(") ok=")
+  ln.u32(replies)
+  ln.str(" to=")
+  ln.u32(timeouts)
+  ln.str(" bad=")
+  ln.u32(parse_errors)
+  ln.str(" drop=")
+  ln.u32(usb.tx_dropped())
+  if halted
+    battery.watch.halt_note(ln, halt_reason)
+  _sent: = ln.flush()
+
+fn car_task(_arg: Void$@): Void
+  if !boot.clocks_and_gpio()
+    return // silent; see `boot.clocks_and_gpio`
+  track.init()
+  range.init()
+  gpio.init_analog(board.battery_pin)
+  if !adc.init()
+    boot.beep(4)
+    return
+  // Caution: **The motor's initialization must succeed**, or every command is ignored ("connected
+  // but does not move"). init leaves the wheels stopped.
+  if !motor.init()
+    boot.beep(5)
+    return
+  if !boot.usb_up()
+    return
+
+  $waited: U32 = 0
+  for !usb.ncm_is_up()
+    boot.pump(200)
+    waited += 200
+    if waited >= stage_report_interval_ms
+      waited = 0
+      boot.beep(usb.current_stage())
+
+  nc.init_addrs()
+  // Sending right after the link comes up loses a frame.
+  boot.pump(500)
+
+  $ln: = con.Line.new()
+  con.say(ln@, "[car]", "link up, resolving peer")
+  if !nc.resolve_peer(ln@)
+    halt("no arp reply")
+  else if !nc.open(ln@, our_port, peer_port, our_isn)
+    halt("no tcp handshake")
+  else
+    con.say(ln@, "[car]", "connected to kssrv, entering the control loop")
+
+  // It does not return; the lines **that keep flowing** are the sign of life.
+  for
+    loops += 1
+    // Called while stopped too (see `watch_battery`).
+    may_drive: = watch_battery(ln@)
+    if may_drive
+      one_round(loops)
+    // One line every 10 rounds.
+    // Caution: **Do not read the sensors again here**, or dist/line and cmd come from different
+    // moments.
+    if loops % 10 == 0
+      report(ln@)
+    boot.pump(loop_interval_ms)
+
+// The on_idle for `task.run_single_task`: semihosting's exit is not available, so it does nothing.
+priv fn park() {}
+
+#export
+fn ksos_main()
+  task.run_single_task(tcb_car@, U8$[]::stack_car, car_task, "car", park)

@@ -1,0 +1,445 @@
+#!/usr/bin/env -S ksplc run
+//< Checks that what the editor integration (`.vscode/tasks.json` / `launch.json`) points at exists
+//<
+//< **`tasks.json` / `launch.json` go through neither the build nor the tests**, so a missing make
+//< target fails only for whoever presses it (Principle 5 in `docs/DESIGN.md`). Two drifts show
+//< nothing at all: a name out of step with `${fileBasenameNoExtension}.exe` makes F5 silently start
+//< the last executable, and the release zip's version missing `-lws2_32` fails to link.
+
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/json"
+import "std/mem" { Arena, dealloc }
+import "std/seq"
+import "std/str" { Str_builder }
+import "std/verdict"
+import "tests/support/harness"
+
+priv const probe_stem: U8[] = "probe file" //< the name used for `make debug-file`'s check
+  //<
+  //< Caution: **Include a space.** make's `$(notdir)` / `$(basename)` split on whitespace, so a
+  //< naive recipe turns `probe file.kspl` into another name and F5 starts the last executable.
+priv const probe_dir: U8[] = "out/vscode_test src"
+
+priv const probe_src: U8[] =
+  "import \"std/io\";
+
+fn main(): I32 {
+    io.out().s(\"ok\\n\");
+    return 0;
+}
+"
+
+priv struct Link_rule //< the libraries required of the release-shipped version's build task
+  //<
+  //< The emitted C holds all of hosted.c's preamble, so the libraries are needed whatever the
+  //< program uses. The comments around the Makefile's LDLIBS (the canonical source) say why.
+  key: U8[] //< the per-platform branch's name (empty means the default args)
+  label: U8[]
+  need: U8[][]
+  deny: U8[][]
+  why: U8[]
+
+priv const link_rules: Link_rule[] = Link_rule[]::{
+  Link_rule::{ .key = "", .label = "default", .need = U8[][]::{ "-lm" },
+    .deny = U8[][]::{ "-lpthread", "-lws2_32" }, .why = "the default (macOS uses it)" },
+  Link_rule::{ .key = "linux", .label = "linux", .need = U8[][]::{ "-lm", "-lpthread" },
+    .deny = U8[][]::{ "-lws2_32" }, .why = "Linux" },
+  Link_rule::{ .key = "osx", .label = "osx", .need = U8[][]::{ "-lm" },
+    .deny = U8[][]::{ "-lpthread" }, .why = "macOS has no libpthread" },
+  Link_rule::{ .key = "windows", .label = "windows",
+    .need = U8[][]::{ "-lws2_32", "-lshell32" }, .deny = U8[][]::{ "-lm", "-lpthread" },
+    .why = "the MSVC target finds CommandLineToArgvW only named, and hunts m.lib for -lm" },
+}
+
+priv fn strip_line_comments(text: U8[], arena: Arena$@): U8$[] //<
+  //< VS Code's configuration allows JSON with line comments, so they are dropped before reading
+  //<
+  //< Caution: **Do not drop a `//` inside a string literal** (`problemMatcher`'s regex has one).
+  $b: = Str_builder.new()
+  defer b.free()
+  for raw in text.lines(arena)
+    $in_str: = false
+    $cut: Sz = raw.len
+    $i: Sz = 0
+    for i < raw.len
+      c: = raw[i]
+      if in_str
+        if c == '\\'
+          i += 2
+          continue
+        if c == '"'
+          in_str = false
+      else if c == '"'
+        in_str = true
+      else if c == '/' && i + 1 < raw.len && raw[i + 1] == '/'
+        cut = i
+        break
+      i += 1
+    b.s(raw.sub(0, cut)).c('\n')
+  return arena.dup_str(b.slice())
+
+priv fn is_obj(v: json.Val): Bool //< whether it is an object
+  //<
+  //< `get` returns `null_val` for a missing key too, so this tells "could not be read" apart.
+  switch v case .obj_val(_o)
+    return true
+  default {}
+  return false
+
+priv fn load_jsonc(path: U8[], arena: Arena$@): json.Val
+  text: = io.read_file(path) catch
+    return json.Val.null_val
+  defer dealloc(Void$@::text.ptr)
+  return json.parse(strip_line_comments(text, arena), arena) catch
+    return json.Val.null_val
+
+priv struct Make_cmd //<
+  //< The make target and the `VAR=` variable names read out of `command`'s literal text
+  found: Bool
+  target: U8[]
+  vars: List<|U8[]|>
+
+priv fn parse_make_cmd(cmd: U8[], arena: Arena$@): Make_cmd
+  t: = cmd.trim_spaces()
+  if !t.starts_with("make ")
+    return Make_cmd::{ .found = false, .target = "", .vars = List<|U8[]|>.new(arena) }
+  $vars: = List<|U8[]|>.new(arena)
+  words: = t.sub_from(5).trim_spaces().split(' ', arena)
+  $target: U8[] = ""
+  for w in words
+    if w.len == 0
+      continue
+    eq: = w.find_char('=')
+    if eq > 0
+      vars.push(w.sub(0, eq))
+    else if target.len == 0
+      target = w
+  return Make_cmd::{ .found = target.len > 0, .target = target, .vars = vars }
+
+priv fn workspace_rel(text: U8[], from: Sz): U8[] //<
+  //< Extracts `${workspaceFolder}/<relative path>` (ending at a space or a `"`).
+  marker: = "${workspaceFolder}/"
+  at: = text.sub_from(from).find_str(marker)
+  if at < 0
+    return ""
+  rest: = text.sub_from(from + at + marker.len)
+  $end: Sz = rest.len
+  for i in Range.asc(rest.len)
+    c: = rest[i]
+    if c == ' ' || c == '"' || c == '\t'
+      end = i
+      break
+  return rest.sub(0, end)
+
+priv fn labels_of(tasks: json.Val, arena: Arena$@): List<|U8[]|>
+  $out: = List<|U8[]|>.new(arena)
+  for t in tasks.get("tasks").arr_list(arena)
+    out.push(t.get("label").as_str())
+  return out
+
+priv fn has_label(labels: List<|U8[]|>$@, name: U8[]): Bool
+  return labels.any(fn(l: U8[]; name: U8[]): Bool {
+    return l.equals(name);
+  })
+
+priv fn arg_text(a: json.Val): U8[] //< one argument's text, written bare or quoted (`value`)
+  return a.as_str() if !is_obj(a) else a.get("value").as_str()
+
+priv fn has_arg(args: List<|json.Val|>$@, want: U8[]): Bool
+  return args.any(fn(a: json.Val; want: U8[]): Bool {
+    return arg_text(a).equals(want);
+  })
+
+priv const libs_file: U8[] = "${fileDirname}/${fileBasenameNoExtension}.libs" //<
+  //< Where the compile task writes the libraries the program names, and the build task reads them
+
+priv fn check_make_targets(tasks: json.Val, arena: Arena$@) //<
+  //< Checks that each `make <target>` in `tasks.json` names a target that really exists
+  //<
+  //< `make -n` returns 2 for a missing target. `LOGGING=1` skips the logging wrapper (`%:`) so the
+  //< real definition resolves it.
+  for t in tasks.get("tasks").arr_list(arena)
+    label: = t.get("label").as_str()
+    cmd: = parse_make_cmd(t.get("command").as_str(), arena)
+    if !cmd.found
+      continue
+    $argv: = List<|U8[]|>.new(arena)
+    argv.push("-n")
+    argv.push("LOGGING=1")
+    argv.push(cmd.target)
+    // A setting such as `SRC_KSPL="${relativeFile}"` gets a real file (`${...}` cannot expand).
+    for v in cmd.vars
+      assign: = arena.text().s("\{v\}=tests/debug/main.kspls").take()
+      argv.push(assign)
+    r: = harness.make(argv.slice())
+    name: = arena.text().s("tasks.json[\{label\}]: 'make \{cmd.target\}' really exists").take()
+    verdict.check(name, r.code == 0, r.out.trim_end())
+
+priv fn check_launch(launch: json.Val, labels: List<|U8[]|>$@, root: U8[], arena: Arena$@) //<
+  //< `launch.json`'s preLaunchTask and initCommands
+  for c in launch.get("configurations").arr_list(arena)
+    name: = c.get("name").as_str()
+    pre: = c.get("preLaunchTask").as_str()
+    if pre.len > 0
+      title: = arena.text().s("launch.json[\{name\}]: preLaunchTask '\{pre\}' is in tasks.json")
+        .take()
+      verdict.check(title, has_label(labels, pre), "")
+    for cmd in c.get("initCommands").arr_list(arena)
+      rel: = workspace_rel(cmd.as_str(), 0)
+      if rel.len == 0
+        continue
+      title: = arena.text().s("launch.json[\{name\}]: '\{rel\}' really exists").take()
+      verdict.check(title, fs.exists(fs.join(root, rel, arena)), "")
+
+priv fn check_debug_file(root: U8[], arena: Arena$@) //<
+  //< That `make debug-file` makes `out/<name>.exe` and that it works
+  name: = "debug-file: the output name matches ${fileBasenameNoExtension}.exe (with a space)"
+  src_dir: = fs.join(root, probe_dir, arena)
+  fs.mkdir_all(src_dir) catch
+    verdict.check(name, false, "the material's place cannot be made")
+    return
+  rel: = arena.text().s("\{probe_dir\}/\{probe_stem\}.kspl").take()
+  src: = fs.join(root, rel, arena)
+  exe: = arena.text().s("\{root\}/out/\{probe_stem\}.exe").take()
+  gen: = arena.text().s("\{root\}/out/\{probe_stem\}.c").take()
+  io.write_file(src, probe_src) catch
+    verdict.check(name, false, "cannot write the material")
+    return
+  fs.remove_path(exe) catch { // Not being there is fine.
+  }
+  defer
+    fs.remove_path(src) catch {}
+    fs.remove_path(src_dir) catch {}
+    fs.remove_path(exe) catch {}
+    fs.remove_path(gen) catch {}
+
+  src_arg: = arena.text().s("SRC_KSPL=\{rel\}").take()
+  r: = harness.make(U8[][]::{ "LOGGING=1", "debug-file", src_arg })
+  if r.code != 0
+    verdict.check(name, false, r.out.trim_end())
+    return
+  if !fs.exists(exe)
+    why: = arena.text().s("the '\{exe\}' launch.json starts is not there").take()
+    verdict.check(name, false, why)
+    return
+  out: = harness.run(U8[][]::{ exe })
+  why: = arena.text().s("the run's result differs from what was supposed: \{out.out\}").take()
+  verdict.check(name, out.out.equals("ok\n"), why)
+
+priv fn check_release_assets(root: U8[], arena: Arena$@) //<
+  //< The simplified version shipped in the release zip
+  //<
+  //< The unpacked layout differs from this repository's (`.github/workflows/release.yml`), so only
+  //< the labels agreeing and the libraries linked are checked.
+  tasks: =
+    load_jsonc(fs.join(root, "tools/release-assets/vscode/tasks.json", arena), arena)
+  launch: =
+    load_jsonc(fs.join(root, "tools/release-assets/vscode/launch.json", arena), arena)
+  $labels: = labels_of(tasks, arena)
+  for t in tasks.get("tasks").arr_list(arena)
+    label: = t.get("label").as_str()
+    for dep in t.get("dependsOn").arr_list(arena)
+      d: = dep.as_str()
+      title: = harness.arena().text()
+        .s("release-assets tasks.json[\{label\}]: dependsOn '\{d\}' is there").take()
+      verdict.check(title, has_label(labels@, d), "")
+  for c in launch.get("configurations").arr_list(arena)
+    pre: = c.get("preLaunchTask").as_str()
+    if pre.len == 0
+      continue
+    cfg_name: = c.get("name").as_str()
+    title: = harness.arena().text()
+      .s("release-assets launch.json[\{cfg_name\}]: preLaunchTask '\{pre\}' is there").take()
+    verdict.check(title, has_label(labels@, pre), "")
+  check_link_rules(tasks, arena)
+
+priv fn check_link_rules(tasks: json.Val, arena: Arena$@)
+  $build: = json.Val.null_val
+  $found: = false
+  for t in tasks.get("tasks").arr_list(arena)
+    if t.get("label").as_str().equals("kanso-build-current-file")
+      build = t
+      found = true
+  if !verdict.check("release-assets tasks.json: the build task is there", found, "")
+    return
+  // The libraries the program names (`#link`) reach the build only through the file the compile
+  // writes, so both ends are checked.
+  for t in tasks.get("tasks").arr_list(arena)
+    if t.get("label").as_str().equals("kanso-compile-to-c")
+      $args: = t.get("args").arr_list(arena)
+      want: = harness.arena().text().s("--emit-libs=").s(libs_file).take()
+      verdict.check("release-assets tasks.json: the compile writes the libraries the program names",
+        has_arg(args@, want), "")
+  for rule in link_rules
+    branch: = build if rule.key.len == 0 else build.get(rule.key)
+    src: = branch if is_obj(branch) else build
+    $args: = src.get("args").arr_list(arena)
+    check_one_rule(rule, args@)
+
+priv fn check_one_rule(rule: Link_rule, args: List<|json.Val|>$@)
+  $missing: = Str_builder.new()
+  defer missing.free()
+  for x in rule.need
+    if !has_arg(args, x)
+      missing.s(" ").s(x)
+  need_name: = harness.arena().text()
+    .s("release-assets [\{rule.label\}]: the libraries wanted are all there (\{rule.why\})").take()
+  need_why: = harness.arena().text().s("missing:\{missing.slice()\}").take()
+  verdict.check(need_name, missing.len == 0, need_why)
+
+  $present: = Str_builder.new()
+  defer present.free()
+  for x in rule.deny
+    if has_arg(args, x)
+      present.s(" ").s(x)
+  deny_name: = harness.arena().text()
+    .s("release-assets [\{rule.label\}]: no library that must not be handed over (\{rule.why\})")
+    .take()
+  deny_why: = harness.arena().text().s("handed over:\{present.slice()\}").take()
+  verdict.check(deny_name, present.len == 0, deny_why)
+
+  // GNU ld resolves the arguments once, left to right, so a `-l...` must come after the sources,
+  // and the program's own (`@<name>.libs`) before the ones every program needs.
+  $has_src: = false
+  $libs_before: = false
+  $named_at: Sz = 0
+  $first_lib: Sz = 0
+  for i in Range.asc(args.len)
+    a: = arg_text(args.get(i))
+    if a.ends_with(".c")
+      has_src = true
+    if a.starts_with("-l") && !has_src
+      libs_before = true
+    if a.starts_with("-l") && first_lib == 0
+      first_lib = i + 1
+    if a.equals(harness.arena().text().c('@').s(libs_file).take()) && has_src
+      named_at = i + 1
+  order_name: = harness.arena().text()
+    .s("release-assets [\{rule.label\}]: the -l... are behind the source files").take()
+  verdict.check(order_name, has_src && !libs_before, "")
+  named_name: = harness.arena().text()
+    .s("release-assets [\{rule.label\}]: the libraries the program names come in behind the source, \
+      before the rest").take()
+  verdict.check(named_name, named_at > 0 && (first_lib == 0 || named_at < first_lib), "")
+
+// ==========================================
+// The editor extension (`.vscode/extensions/kspl/`) **`.kspls` is not a copy of `.kspl`.** What is
+// shared (the colouring rules, the brackets, the auto-closing) **points at the same file**, and
+// only what differs (the templates' content) is separate.
+// ==========================================
+
+priv const ext_dir: U8[] = ".vscode/extensions/kspl"
+
+priv fn prefixes_of(path: U8[], arena: Arena$@): List<|U8[]|> //<
+  //< Picks up the values of `"prefix": "..."` from the raw text
+  //<
+  //< **`std/json` cannot walk keys**, so the templates are counted from the raw text.
+  $out: = List<|U8[]|>.new(arena)
+  text: = io.read_file(path) catch
+    return out
+  defer dealloc(Void$@::text.ptr)
+  for raw in text.lines(arena)
+    line: = raw.trim_spaces()
+    if !line.starts_with("\"prefix\":")
+      continue
+    rest: = line.sub_from(9).trim_spaces().strip_prefix("\"")
+    end: = rest.find_char('"')
+    if end > 0
+      out.push(arena.dup_str(rest.sub(0, end)))
+  return out
+
+priv fn has_text(items: List<|U8[]|>$@, want: U8[]): Bool
+  return items.any(fn(x: U8[]; want: U8[]): Bool {
+    return x.equals(want);
+  })
+
+priv fn check_extension(root: U8[], arena: Arena$@) //<
+  //< Checks that the files the extension points at exist
+  //<
+  //< It also checks how the two notations are split.
+  dir: = fs.join(root, ext_dir, arena)
+  pkg: = load_jsonc(fs.join(dir, "package.json", arena), arena)
+  if !verdict.check("extension: package.json can be read", is_obj(pkg), "")
+    return
+  $missing: = List<|U8[]|>.new(arena)
+  langs: = pkg.get("contributes").get("languages").arr_list(arena)
+  $config_of_kspl: U8[] = ""
+  $config_of_kspls: U8[] = ""
+  $kspl_takes_laid: = false
+  for one in langs
+    id: = one.get("id").as_str()
+    cfg: = one.get("configuration").as_str()
+    if id.equals("kspl")
+      config_of_kspl = cfg
+      $exts: = one.get("extensions").arr_list(arena)
+      for e in exts.slice()
+        if e.as_str().equals(".kspls")
+          kspl_takes_laid = true
+    if id.equals("kspls")
+      config_of_kspls = cfg
+    note_missing(missing@, dir, cfg, arena)
+  for one in pkg.get("contributes").get("grammars").arr_list(arena)
+    note_missing(missing@, dir, one.get("path").as_str(), arena)
+  for one in pkg.get("contributes").get("snippets").arr_list(arena)
+    note_missing(missing@, dir, one.get("path").as_str(), arena)
+  verdict.check_list("extension: the files package.json points at really exist", langs.len, "files",
+    missing@, "")
+
+  // Caution: **Separate the ids.** `extension.js` sends languageId `kspl` to the language server;
+  // with one id for both, opening a file it cannot read shows syntax errors on every line.
+  verdict.check("extension: the laid-out notation holds a different language id",
+    config_of_kspls.len > 0 && !kspl_takes_laid,
+    "there is no language definition for kspls, or `.kspls` is among kspl's extensions")
+  // **The bracket and auto-closing settings have no copy.**
+  verdict.check("extension: the two notations point at the same language-configuration",
+    config_of_kspl.len > 0 && config_of_kspl.equals(config_of_kspls),
+    arena.text().s("kspl=\{config_of_kspl\} kspls=\{config_of_kspls\}").take())
+
+  // **The colouring rules have no copy either.** The `.kspls` side just includes `source.kspl`.
+  laid: = load_jsonc(fs.join(dir, "tmLanguage-kspls.json", arena), arena)
+  $pats: = laid.get("patterns").arr_list(arena)
+  only_include: =
+    pats.len == 1 && pats.get(0).get("include").as_str().equals("source.kspl")
+  verdict.check("extension: the laid-out notation's colouring merely takes source.kspl in",
+    only_include && !laid.has_key("repository"), "the rules are copied out")
+
+  // **Only the templates differ in content**, so their prefixes must agree (add to one side and
+  // the other misses it).
+  $braced: = prefixes_of(fs.join(dir, "snippets.json", arena), arena)
+  $laid_p: = prefixes_of(fs.join(dir, "snippets-kspls.json", arena), arena)
+  $gap: = List<|U8[]|>.new(arena)
+  for x in braced.slice()
+    if !has_text(laid_p@, x)
+      gap.push(arena.text().s("not on the laid-out side: \{x\}").take())
+  for x in laid_p.slice()
+    if !has_text(braced@, x)
+      gap.push(arena.text().s("not on the braced side: \{x\}").take())
+  verdict.check_list("extension: the templates' line-up agrees across the two notations",
+    braced.len, "templates", gap@, "")
+
+priv fn note_missing(missing: List<|U8[]|>$@, dir: U8[], rel: U8[], arena: Arena$@)
+  if rel.len == 0
+    return
+  path: = fs.join(dir, rel.strip_prefix("./"), arena)
+  if !fs.exists(path)
+    missing.push(arena.text().s(rel).take())
+
+fn main(): I32
+  arena: = harness.begin(32 * 1024 * 1024)
+  root: = harness.root()
+  vscode: = fs.join(root, ".vscode", arena)
+  tasks: = load_jsonc(fs.join(vscode, "tasks.json", arena), arena)
+  launch: = load_jsonc(fs.join(vscode, "launch.json", arena), arena)
+  if !is_obj(tasks) || !is_obj(launch)
+    return harness.fatal(".vscode's tasks.json / launch.json cannot be read")
+
+  check_make_targets(tasks, arena)
+  $labels: = labels_of(tasks, arena)
+  check_launch(launch, labels@, root, arena)
+  check_debug_file(root, arena)
+  check_release_assets(root, arena)
+  check_extension(root, arena)
+  return harness.finish()

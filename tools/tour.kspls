@@ -1,0 +1,84 @@
+#!/usr/bin/env -S ksplc run
+//< Writes and checks the language tour (`docs/TOUR.md`)
+//<
+//< It is built from `ksplc/tests/kspls/tour.kspls`, `ksplc/tests/kspls/tour.kspl` and a run.
+//< **The page is committed**, so a change to the program or to what the compiler makes of it shows
+//< as a diff (`make tour` rewrites it, `make test-docs` fails when it is out of date).
+
+// ==========================================
+//     ksplc run tools/tour.kspls write   # rewrites docs/TOUR.md
+//     ksplc run tools/tour.kspls check   # checks the page against the program's current output
+// ==========================================
+import "std/argp"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" // `equals`
+import "std/subproc"
+import "std/sys"
+import "tools/tour_page" as page
+
+priv const laid_src: U8[] = "ksplc/tests/kspls/tour.kspls"
+priv const braced_src: U8[] = "ksplc/tests/kspls/tour.kspl"
+priv const page_path: U8[] = "docs/TOUR.md"
+priv const default_ksplc: U8[] = "out/ksplc_stage1.exe"
+priv const run_timeout_ms: I32 = 300000
+priv const capture_cap: Sz = 1 << 16
+
+priv enum Tour_error
+  unreadable //< one of the two sources, or the page, could not be read
+  did_not_run //< the program did not compile or did not exit cleanly
+  not_written //< the page could not be written
+
+priv fn built(ksplc: U8[], arena: Arena$@): U8[]?Tour_error //<
+  //< The page as the current program produces it
+  laid: = io.read_file(laid_src) catch
+    throw Tour_error.unreadable
+  braced: = io.read_file(braced_src) catch
+    throw Tour_error.unreadable
+  r: = subproc.run_capture(U8[][]::{ ksplc, "run", laid_src }, "", run_timeout_ms, capture_cap,
+    arena)
+  if r.spawn_failed || r.timed_out || r.exit_code != 0
+    io.err().s("\{sys.program_name()\}: \{laid_src\} did not run to the end\n\{r.stderr_data\}")
+    throw Tour_error.did_not_run
+  return page.render(laid, braced, arena.dup_str(r.stdout_data), arena)
+
+priv fn do_write(ksplc: U8[], arena: Arena$@): Void?Tour_error
+  text: = built(ksplc, arena)?
+  io.write_file(page_path, text) catch
+    throw Tour_error.not_written
+  io.out().s("wrote \{page_path\}\n")
+
+priv fn do_check(ksplc: U8[], arena: Arena$@): Bool?Tour_error //< whether the page is current
+  had: = io.read_file(page_path) catch
+    io.err().s("\{sys.program_name()\}: there is no \{page_path\}. Make it with `make tour`\n")
+    throw Tour_error.unreadable
+  now: = built(ksplc, arena)?
+  if had.equals(now)
+    io.out().s("\{page_path\}: the tour is what its program gives today\n")
+    return true
+  io.err().s("\{page_path\}: the tour differs from what its program gives today.\n")
+    .s("Run `make tour` and commit the diff.\n")
+  return false
+
+fn main(): I32 //< writes or checks the language tour
+  arena: = Arena.new(16 * 1024 * 1024)
+  defer arena.free()
+  $ksplc: U8[] = ""
+  p: = argp.Parser.create(sys.program_name(), "make / match the tour of the language", arena)
+  p.subcommand("write", "remake docs/TOUR.md")
+  p.subcommand("check", "match the page against what the program gives today (exit 1 on a drift)")
+  p.str_opt("--ksplc", ksplc@, "the compiler to use (default out/ksplc_stage1.exe)")
+  p.parse_or_exit(sys.args(), arena)
+  if p.command.len == 0
+    io.err().s("\{sys.program_name()\}: pass write or check\n")
+    return 1
+  exe: = ksplc if ksplc.len > 0 else default_ksplc
+  if p.command.equals("write")
+    do_write(exe, arena) catch e
+      io.err().s("\{sys.program_name()\}: failed: \{e\}\n")
+      return 1
+    return 0
+  ok: = do_check(exe, arena) catch e
+    io.err().s("\{sys.program_name()\}: failed: \{e\}\n")
+    return 1
+  return 0 if ok else 1

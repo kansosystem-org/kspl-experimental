@@ -1,0 +1,85 @@
+//< The ADC (successive-approximation, 12-bit) for the real Raspberry Pi Pico / Pico W (RP2040) chip
+//<
+//< **Channels 0 to 3 are GPIO 26 to 29** (pin_channel() converts), and channel 4 is the built-in
+//< temperature sensor.
+//< Caution: **Call clocks.init() first.** Without clk_adc, READY is never set while the registers
+//< still read: nothing looks broken, yet only 0 comes back.
+
+// ==========================================
+// **Call gpio.init_analog(pin) before reading**, or the readings drift.
+// The three things to set up, the 12-bit resolution (not Arduino's 10) and the register map are
+// in "The ADC (`adc.kspls`)" in ksos/docs/DESIGN.md.
+// ==========================================
+import "ksos/drivers/mmio"
+import "ksos/drivers/rp2040/resets"
+
+const reset_adc: U32 = 1U32 << 0
+
+const adc_cs: U32 = 0x4004c000
+const adc_result: U32 = 0x4004c004
+
+const cs_en: U32 = 1U32 << 0
+const cs_start_once: U32 = 1U32 << 2
+const cs_ready: U32 = 1U32 << 8
+const cs_err: U32 = 1U32 << 9
+const cs_ainsel_bits: U32 = 0x7U32 << 12
+
+const max_value: U32 = 4095 //< the conversion result's range
+  //<
+  //< Not Arduino's 10 bits (1023).
+
+const first_adc_gpio: U32 = 26 //< the first GPIO the ADC input is connected to
+  //<
+  //< Channel n = GPIO (first_adc_gpio + n).
+const channel_count: U32 = 4 // channel 4 is the temperature sensor; only external inputs here
+
+fn pin_channel(pin: U32): U32 //< turns a GPIO number into the ADC's channel number
+  //<
+  //< Caution: Pass only 26 to 29 (out of range it returns 0, which cannot be told apart from
+  //< "channel 0 was read").
+  if pin < first_adc_gpio || pin >= first_adc_gpio + channel_count
+    return 0
+  return pin - first_adc_gpio
+
+fn init(): Bool //< starts the ADC block
+  //<
+  //< Call it once after clocks.init() and before reading; gpio.init_analog is needed separately.
+  if !resets.unreset(reset_adc)
+    return false
+  mmio.write32(adc_cs, cs_en)
+  // READY stays clear from power-on until the ADC is usable.
+  return mmio.poll(adc_cs, cs_ready, true)
+
+struct Reading
+  ok: Bool //< false means the conversion did not finish, or a conversion error (value is 0)
+  value: U32 //< 0 to 4095
+
+fn read_channel(ch: U32): Reading //< converts a channel once
+  //<
+  //< **Do not read RESULT while converting (READY=0).** It returns the previous value.
+  cur: = mmio.read32(adc_cs)
+  mmio.write32(adc_cs, (cur & ~cs_ainsel_bits) | ((ch & 0x7) << 12))
+  started: = mmio.read32(adc_cs)
+  mmio.write32(adc_cs, started | cs_start_once)
+  if !mmio.poll(adc_cs, cs_ready, true)
+    return Reading::{ .ok = false, .value = 0 }
+  st: = mmio.read32(adc_cs)
+  if (st & cs_err) != 0
+    return Reading::{ .ok = false, .value = 0 }
+  return Reading::{ .ok = true, .value = mmio.read32(adc_result) & max_value }
+
+fn read_pin(pin: U32): Reading //< reads once by GPIO number
+  return read_channel(pin_channel(pin))
+
+fn read_pin_avg(pin: U32, n: U32): Reading //< reads n times and returns the average
+  //<
+  //< One reading varies by a few LSB; average where it meets a threshold. n = 0 counts as once.
+  count: = 1U32 if n == 0 else n
+  ch: = pin_channel(pin)
+  $sum: U32 = 0
+  for $i: U32 = 0; i < count; i += 1
+    r: = read_channel(ch)
+    if !r.ok
+      return r
+    sum += r.value
+  return Reading::{ .ok = true, .value = sum / count }

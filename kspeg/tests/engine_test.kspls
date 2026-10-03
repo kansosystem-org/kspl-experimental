@@ -1,0 +1,474 @@
+//< Runs the engine on small grammars, one shape each, and on the example grammars in `docs/`
+//<
+//< **A grammar that defines `_Space` and `_Boundary` itself never takes the path that injects the
+//< defaults**, and most real grammars do. **The grammars built here are the only tests of those
+//< paths.** The examples are the documents' only copy, so they are read here, not quoted.
+import "kspeg/engine" as kspeg
+import "kspeg/notation" as kspeg_notation
+import "std/mem" { Arena }
+import "std/str" + { Arena_text, Str_builder } // `equals` and `arena.text()` come through it too
+import "std/verdict"
+
+embed "kspeg/docs/kspeg.kspeg" as notation_grammar //< the notation's own grammar (Appendix A)
+embed "kspeg/docs/json.kspeg" as json_grammar //< the JSON example
+embed "kspeg/docs/script.kspeg" as script_grammar //< the scripting-language example
+
+priv fn fail(label: U8[], why: U8[]) //< stops the run, naming the case and what it saw
+  $b: = Str_builder.new()
+  defer b.free()
+  b.s(label).s(" (").s(why).c(')')
+  panic(b.slice())
+
+priv fn try_parse(grammar: U8[], input: U8[], rule: U8[], arena: Arena$@): Option<|Bool|> //<
+  //< Reads the grammar and returns whether `rule` parses `input`
+  //<
+  //< If the grammar itself cannot be read, .none.
+  $meta: = kspeg_notation.Meta.new(grammar, arena)
+  parser: = meta.parse_grammar() catch
+    return Option<|Bool|>.none
+  $t: = kspeg.Target.new(input, arena)
+  defer t.free_memo()
+  t.share_grammar_from(parser)
+  node: = t.parse_rule(rule) catch
+    return Option<|Bool|>.some(false)
+  return Option<|Bool|>.some(node != null)
+
+priv const deep_msg: U8[] = "nesting too deep" //<
+  //< The message the engine gives when it stops on depth (Rule.parse in kspeg/engine.kspls)
+
+priv const deep_levels: Sz = 2000 //<
+  //< Deep enough to trip the depth safety valve (`max_parse_depth` in kspeg/rule.kspls)
+
+priv fn nested(open: U8[], close: U8[], arena: Arena$@): U8[] //<
+  //< An input of `open` repeated deep_levels times, then `close` as many times
+  b: = arena.text()
+  for $i: Sz = 0; i < deep_levels; i += 1
+    b.s(open)
+  for $i: Sz = 0; i < deep_levels; i += 1
+    b.s(close)
+  return b.take()
+
+priv fn expect_deep_fatal(label: U8[], grammar: U8[], input: U8[], arena: Arena$@) //<
+  //< That too deep a nesting comes out **as a stop (`fatal`), not a non-match (`mismatch`)**
+  //<
+  //< Caution: **Do not write it with `expect(..., want=false)`.** That does not tell the two apart,
+  //< so it passes even when an alternation, an option or a repetition swallows the stop and the
+  //< search goes on at the same depth.
+  $meta: = kspeg_notation.Meta.new(grammar, arena)
+  parser: = meta.parse_grammar() catch
+    fail(label, "grammar did not load")
+    return
+  $t: = kspeg.Target.new(input, arena)
+  defer t.free_memo()
+  t.share_grammar_from(parser)
+  $got: U8[] = "parsed"
+  _node: = t.parse_rule("pair") catch e
+    switch e case .fatal(msg)
+      got = msg
+    case .mismatch
+      got = "mismatch"
+    fallback null
+  if !got.equals(deep_msg)
+    fail(label, arena.text().s("got=\{got\}, want=\{deep_msg\}").take())
+  verdict.pass(label)
+
+priv fn expect(label: U8[], grammar: U8[], input: U8[], rule: U8[], want: Bool, arena: Arena$@)
+  switch try_parse(grammar, input, rule, arena) case .some(got)
+    if got != want
+      fail(label, arena.text().s("parsed=\{got\}, want=\{want\}").take())
+    verdict.pass(label)
+  case .none
+    fail(label, "grammar did not load")
+
+priv fn parts_under(grammar: U8[], input: U8[], rule: U8[], arena: Arena$@): U8[] //<
+  //< What the node `rule` builds holds directly: each child's kind, or a literal's own text
+  //<
+  //< It shows how a grammar grouped its input. Empty where the grammar does not load or the input
+  //< does not parse.
+  $meta: = kspeg_notation.Meta.new(grammar, arena)
+  parser: = meta.parse_grammar() catch
+    return ""
+  $t: = kspeg.Target.new(input, arena)
+  defer t.free_memo()
+  t.share_grammar_from(parser)
+  node: = t.parse_rule(rule) catch
+    return ""
+  if node == null
+    return ""
+  b: = arena.text()
+  $sep: U8[] = ""
+  for kid in node.children
+    b.s(sep).s(kid.text if kid.kind.equals("Literal") else kid.kind)
+    sep = " "
+  return b.take()
+
+priv fn expect_parts(label: U8[], grammar: U8[], input: U8[], rule: U8[], want: U8[],
+  arena: Arena$@) //<
+    //< That `rule` groups input as `want` says (parts_under)
+  got: = parts_under(grammar, input, rule, arena)
+  if !got.equals(want)
+    fail(label, arena.text().s("parts=\{got\}, want=\{want\}").take())
+  verdict.pass(label)
+
+priv fn expect_bad_grammar(label: U8[], grammar: U8[], arena: Arena$@) //<
+  //< The check that the grammar itself cannot be read
+  //<
+  //< Not expect, which assumes a readable grammar and would report this as a failure.
+  switch try_parse(grammar, "", "pair", arena) case .none
+    verdict.pass(label)
+  case .some(_)
+    fail(label, "grammar loaded")
+
+priv struct Prof_row //< one line of the rule profile
+  //<
+  //< Caution: **Do not count "read and failed".** It is `calls - memo_hits - parsed_ok` (Rule_prof
+  //< in kspeg/engine.kspls), computed the same way here; a separate count would be a second source.
+  found: Bool
+  calls: I64
+  memo_hits: I64
+  parsed_ok: I64
+  failed: I64
+
+priv struct Prof_sum //<
+  //< What `profile` returns: the line for the rule named want, and how many lines there are
+  //<
+  //< `profile` reads the grammar and parses input with rule. A call without stats goes through it
+  //< too, to check that no line is produced.
+  loaded: Bool
+  rows: Sz
+  row: Prof_row
+
+priv fn profile(grammar: U8[], input: U8[], rule: U8[], want: U8[], stats: Bool, arena: Arena$@):
+  Prof_sum
+  none_row: = Prof_row::{ .found = false, .calls = 0, .memo_hits = 0, .parsed_ok = 0, .failed = 0 }
+  $sum: = Prof_sum::{ .loaded = false, .rows = 0, .row = none_row }
+  $meta: = kspeg_notation.Meta.new(grammar, arena)
+  parser: = meta.parse_grammar() catch
+    return sum
+  $t: = kspeg.Target.new(input, arena)
+  defer t.free_memo()
+  t.share_grammar_from(parser)
+  t.enable_profiling = stats
+  _node: = t.parse_rule(rule) catch
+    fallback null
+  sum.loaded = true
+  for p in t.prof_list
+    sum.rows += 1
+    if p.name.equals(want)
+      sum.row = Prof_row::{ .found = true, .calls = p.calls, .memo_hits = p.memo_hits,
+        .parsed_ok = p.parsed_ok, .failed = p.calls - p.memo_hits - p.parsed_ok }
+  return sum
+
+priv fn expect_prof(label: U8[], grammar: U8[], input: U8[], rule: U8[], want: U8[],
+  expected: Prof_row, arena: Arena$@) //<
+    //< Checks that all four numbers of the named rule match
+    //<
+    //< **The identity (`calls == memo_hits + parsed_ok + the subtraction`) alone is not enough**:
+    //< it always holds, so a miscount passes as "many failures". A grammar and input with exactly
+    //< one possible answer pin all four.
+  got: = profile(grammar, input, rule, want, true, arena)
+  if !got.loaded
+    fail(label, "grammar did not load")
+  if got.row.found == expected.found && got.row.calls == expected.calls &&
+    got.row.memo_hits == expected.memo_hits && got.row.parsed_ok == expected.parsed_ok &&
+    got.row.failed == expected.failed
+    verdict.pass(label)
+    return
+  fail(label,
+    arena.text().s("got \{got.row.calls\}/\{got.row.memo_hits\}")
+    .s("/\{got.row.parsed_ok\}/\{got.row.failed\}, want \{expected.calls\}")
+    .s("/\{expected.memo_hits\}/\{expected.parsed_ok\}/\{expected.failed\}").take())
+
+priv fn expect_no_prof(label: U8[], grammar: U8[], input: U8[], rule: U8[], arena: Arena$@) //<
+  //< That no line is produced when counting is off
+  //<
+  //< Caution: This is the only test of the path without `--stats`; the counting tests alone still
+  //< pass if the code is changed to always count.
+  got: = profile(grammar, input, rule, "", false, arena)
+  if !got.loaded || got.rows != 0
+    fail(label, arena.text().s("rows=\{got.rows\}, loaded=\{got.loaded\}").take())
+  verdict.pass(label)
+
+priv fn dump_node(b: Arena_text$@, n: kspeg.Node$@) //< one node and everything below it, as text
+  b.s(n.kind).c(':').s(n.text).c('(')
+  for kid in n.children
+    dump_node(b, kid)
+  b.c(')')
+
+priv fn outcome(grammar: U8[], input: U8[], rule: U8[], skips: Bool, arena: Arena$@): U8[] //<
+  //< What a parse leaves for its reader: the tree, and the labels where it fails or stops short
+  //<
+  //< Each label carries its mark (`?` where it did not stop the parse), since the report orders by
+  //< it. A parse that reads to the end, or leaves only spaces, has nothing to report, so its
+  //< labels are not shown. An empty answer means the grammar did not load. `skips` says whether
+  //< a rule that cannot begin with the next byte is skipped (`checks_first_byte` in
+  //< kspeg/engine.kspls).
+  $meta: = kspeg_notation.Meta.new(grammar, arena)
+  parser: = meta.parse_grammar() catch
+    return ""
+  $t: = kspeg.Target.new(input, arena)
+  defer t.free_memo()
+  t.share_grammar_from(parser)
+  t.checks_first_byte = skips
+  b: = arena.text()
+  $node: kspeg.Node$@ = null
+  $parsed: = true
+  node = t.parse_rule(rule) catch
+    parsed = false
+    fallback null
+  if parsed && node != null
+    dump_node(b, node)
+  $rest: = t.pos
+  for rest < input.len && input[rest] == ' '
+    rest += 1
+  if parsed && rest == input.len
+    // Only a syntax error may run again: here it would mean a rule skipped that could match.
+    if t.ran_twice
+      b.s(" ran twice")
+    return b.take()
+  b.s(" at \{t.fail.max_fail_pos\}:")
+  for i in Range.asc(t.fail.expected_label_count)
+    e: = (t.fail.expected_labels + i)$
+    b.c(' ').s(e.text).s("?" if e.is_optional else "")
+  return b.take()
+
+priv fn expect_same_outcome(label: U8[], folded: U8[], plain: U8[], input: U8[], rule: U8[],
+  arena: Arena$@) //<
+    //< That two grammars matching the same leave the same tree and the same labels
+  a: = outcome(folded, input, rule, true, arena)
+  p: = outcome(plain, input, rule, true, arena)
+  if a.len == 0 || !a.equals(p)
+    fail(label, arena.text().s("folded=\{a\}, plain=\{p\}").take())
+  verdict.pass(label)
+
+priv fn expect_same_entering_all(label: U8[], grammar: U8[], input: U8[], rule: U8[],
+  arena: Arena$@) //<
+    //< That skipping rules by their first byte leaves the tree and labels of entering every rule
+  a: = outcome(grammar, input, rule, true, arena)
+  p: = outcome(grammar, input, rule, false, arena)
+  if a.len == 0 || !a.equals(p)
+    fail(label, arena.text().s("skipping=\{a\}, entering all=\{p\}").take())
+  verdict.pass(label)
+
+pub fn test_engine(arena: Arena$@) //< every case, each named on its own line
+  verdict.start("[KSPEG] the engine on small grammars and the examples")
+
+  // --- Injecting the defaults: a grammar writing neither `_Space` nor `_Boundary` ---
+  bare: U8[] = "pair = 'a' 'b'\n"
+  expect("injected _Space skips a run of spaces", bare, "a   b", "pair", true, arena)
+  expect("injected _Space skips tab and newline", bare, "a\t\r\n b", "pair", true, arena)
+  expect("injected _Boundary rejects a letter after a keyword", bare, "ax b", "pair", false, arena)
+  expect("injected _Boundary rejects a digit after a keyword", bare, "a1 b", "pair", false, arena)
+  expect("injected _Boundary rejects an underscore after a keyword", bare, "a_ b", "pair", false,
+    arena)
+
+  // --- The grammar side's definition takes precedence over the default ---
+  // Make `_Space` skip only dots, and a space is no longer a delimiter.
+  own_space: U8[] = "pair = 'a' 'b'\n_Space = [.]*\n"
+  expect("grammar _Space replaces the default", own_space, "a...b", "pair", true, arena)
+  expect("grammar _Space makes a space not a separator", own_space, "a b", "pair", false, arena)
+
+  // Narrow `_Boundary` to digits only, and a letter may follow a keyword directly.
+  // Caution: Keep the pair on the same input and rule; with one alone, "the override took effect"
+  // and "it happened to pass" look the same.
+  word_default: U8[] = "word = 'a' Tail\nTail = [x-z]+\n"
+  word_narrow: U8[] = "word = 'a' Tail\nTail = [x-z]+\n_Boundary = [0-9]\n"
+  expect("default _Boundary rejects 'a' before x", word_default, "ax", "word", false, arena)
+  expect("narrowed _Boundary accepts 'a' before x", word_narrow, "ax", "word", true, arena)
+  expect("narrowed _Boundary still rejects 'a' before 1", word_narrow, "a1", "word", false, arena)
+
+  // --- The automatically synthesised `_Keyword` ---
+  kw: U8[] = "stmt = 'if' Ident\nIdent = !_Keyword [a-z]+\n"
+  expect("_Keyword lets a plain word through", kw, "if foo", "stmt", true, arena)
+  expect("_Keyword blocks a reserved word", kw, "if if", "stmt", false, arena)
+
+  // --- Keywords folded into one lookup ---
+  // A run of keywords inside a choice becomes one set lookup (`fold_keyword_choices` in
+  // kspeg/rule.kspls). **The plain twin cannot fold**: its `_Boundary` is a reference, not a
+  // character class, so each keyword is tried in turn. Both must leave the same tree and the same
+  // labels, including a run between other alternatives and one inside a lexical rule.
+  fold_body: = arena.text().s("top = decl | 'let' Ident ';'\ndecl = vis? 'fn' Type Ident ';'\n")
+    .s("vis = 'pub' | 'priv' | 'pkg'\nType = 'int' | 'long' | 'byte' | Ident\n")
+    .s("Ident = !_Keyword [a-z]+\n").take()
+  folded: = arena.text().s(fold_body).s("_Boundary = [A-Za-z0-9_]\n").take()
+  plain: = arena.text().s(fold_body).s("_Boundary = _B\n_B = [A-Za-z0-9_]\n").take()
+  // The text left unread after `;` makes each report its labels.
+  expect_same_outcome("a folded run matches its first keyword", folded, plain, "pub fn int x; ?",
+    "top", arena)
+  expect_same_outcome("a folded run matches a later keyword", folded, plain, "pkg fn byte x; ?",
+    "top", arena)
+  expect_same_outcome("a folded run gives way to the next alternative", folded, plain,
+    "fn abc x; ?", "top", arena)
+  expect_same_outcome("a folded run refuses a longer word", folded, plain, "pubx fn int x;", "top",
+    arena)
+  expect_same_outcome("a folded run's labels on a miss", folded, plain, "pob fn int x;", "top",
+    arena)
+  expect_same_outcome("a folded run inside a lexical rule", folded, plain, "fn long int;", "top",
+    arena)
+  expect_same_outcome("labels after a later keyword matched", folded, plain, "priv fn int", "top",
+    arena)
+
+  // --- Rules skipped by their first byte ---
+  // A rule that cannot begin with the next byte is not entered (`First_bytes` in
+  // kspeg/rule.kspls). Each case parses with and without the skipping, and requires the same tree
+  // and labels.
+  firsts: = arena.text().s("top = item+ \";\"\nitem = Num | Name | str | Tag | \"(\" item* \")\"\n")
+    .s("Num = [0-9]+\nName = !_Keyword [a-z]+ | 'nil'\nstr = Str\n")
+    .s("Str = \"<\" inside? \">\"\ninside = Name+\nTag = \"[\" Tag_body \"]\"\n")
+    .s("Tag_body = inside\n").take()
+  expect_same_entering_all("a rule is skipped by its first byte", firsts, "1 ab (2 c) ;", "top",
+    arena)
+  expect_same_entering_all("a parse that stops short lists the skipped rules", firsts, "1 ab ; ?",
+    "top", arena)
+  expect_same_entering_all("trailing spaces are not text left unread", firsts, "1 ab ;  ", "top",
+    arena)
+  // The labels come from a second run that enters every rule (parse_rule in kspeg/engine.kspls).
+  expect_same_entering_all("a syntax error lists the skipped rules", firsts, "1 ab ?", "top", arena)
+  expect_same_entering_all("a syntax error inside a group", firsts, "(1 ? ;", "top", arena)
+  expect_same_entering_all("an input that ends early", firsts, "1 (", "top", arena)
+  // **A syntax-mode rule entered from a lexical one skips whitespace first**, so the byte before
+  // it is not its first: `inside` is entered at the space after `<`.
+  expect_same_entering_all("a syntax rule inside a token sees past the space", firsts, "< ab cd> ;",
+    "top", arena)
+  // The same one level down: a token that begins with such a rule can begin with whitespace.
+  expect_same_entering_all("a token wrapping a syntax rule sees past the space", firsts, "[ ab] ;",
+    "top", arena)
+  // Left recursion never ends (each entry enters it again in place), so the grammar is refused.
+  expect_bad_grammar("left recursion through an empty prefix is rejected",
+    "pair = \"x\"? pair \"y\" | \"z\"\n", arena)
+  expect_bad_grammar("left recursion through a lookahead is rejected",
+    "pair = !pair \"y\" | \"z\"\n", arena)
+
+  // --- The example grammars in kspeg/docs (SPEC-notation.md points at them) ---
+  // The notation's grammar must read every example, itself included, or Appendix A is wrong.
+  expect("the notation's grammar reads itself", notation_grammar, notation_grammar, "grammar", true,
+    arena)
+  expect("the notation's grammar reads the JSON example", notation_grammar, json_grammar, "grammar",
+    true, arena)
+  expect("the notation's grammar refuses a rule without '='", notation_grammar, "pair \"x\"\n",
+    "grammar", false, arena)
+  expect("the notation's grammar reads the scripting example", notation_grammar, script_grammar,
+    "grammar", true, arena)
+  json_doc: U8[] = "{ \"a\": [1, -2.5e3, 0, true, null], \"b\": \"\\u00e9\\n\", \"c\": {} }\n"
+  expect("the JSON example reads a document", json_grammar, json_doc, "json", true, arena)
+  expect("the JSON example refuses a trailing comma", json_grammar, "[1,]", "json", false, arena)
+  expect("the JSON example refuses a leading zero", json_grammar, "01", "json", false, arena)
+  expect("the JSON example refuses an unknown escape", json_grammar, "\"\\x\"", "json", false,
+    arena)
+  expect("the JSON example refuses a raw tab in a string", json_grammar, "\"a\tb\"", "json", false,
+    arena)
+  expect("the JSON example refuses a longer word", json_grammar, "[truex]", "json", false, arena)
+  expect("the JSON example refuses a missing colon", json_grammar, "{\"a\" 1}", "json", false,
+    arena)
+  script: = arena.text().s("// totals\nlet letter = 1; /* outer /* nested */ still a comment */\n")
+    .s("if letter <= 2 && !false { letter = letter * (3 + 4); } else { print(\"$5\"); }\n")
+    .s("while nil == f(1, 2) { }\nlet s = \"sum: ${ letter /* inside */ + 1 }\\n\";\n").take()
+  expect("the scripting example reads a program", script_grammar, script, "program", true, arena)
+  expect("the scripting example refuses a keyword as a name", script_grammar, "let let = 1;",
+    "program", false, arena)
+  expect("the scripting example refuses an unclosed nested comment", script_grammar,
+    "/* a /* b */ let x = 1;", "program", false, arena)
+  expect("the scripting example refuses an unclosed interpolation", script_grammar,
+    "let s = \"${ x\";", "program", false, arena)
+  expect("the scripting example refuses a missing operand", script_grammar, "let x = 1 +;",
+    "program", false, arena)
+  // Precedence shows in the tree: `*` sits inside a `factor`, never beside the `+` of a `term`.
+  expect_parts("the scripting example binds * tighter after +", script_grammar, "1 + 2 * 3", "term",
+    "factor + factor", arena)
+  expect_parts("the scripting example binds * tighter before +", script_grammar, "1 * 2 + 3",
+    "term", "factor + factor", arena)
+  expect_parts("the scripting example keeps a run of + in one level", script_grammar, "1 + 2 + 3",
+    "term", "factor + factor + factor", arena)
+
+  // --- A keyword not shaped like a word ---
+  // `_Keyword` must work for a keyword not made only of `_Boundary`'s characters.
+  arrow: U8[] = "jump = '->' Ident\nIdent = !_Keyword [a-z]+\n"
+  expect("non-word keyword matches", arrow, "-> foo", "jump", true, arena)
+  expect("non-word keyword is in _Keyword", arrow, "-> ->", "jump", false, arena)
+
+  // --- An escape inside a literal ("Escape sequences" in kspeg/docs/SPEC-notation.md) ---
+  // Caution: A `\X` not in the list must not pass as the character itself (the reason is at
+  // `bad_escape_msg` in `kspeg/notation.kspls`).
+  expect_bad_grammar("unknown escape in a string literal is rejected", "pair = \"a\\db\"\n", arena)
+  expect_bad_grammar("unknown escape in a keyword literal is rejected", "pair = 'a\\db'\n", arena)
+  expect_bad_grammar("unknown escape in a character class is rejected", "pair = [a\\d]+\n", arena)
+  // The control: a listed escape still works (the rejection is not too broad).
+  expect("listed escape still decodes", "pair = \"a\\nb\"\n", "a\nb", "pair", true, arena)
+
+  // --- `\uXXXX` (the same heading) --- **The only way to write an untypeable byte in a grammar**,
+  // such as a control byte used as a marker ("How to handle a language that depends on
+  // indentation" in kspeg/docs/SPEC-notation.md).
+  hex_lit: U8[] = "pair = \"a\\u0041b\"\n"
+  expect("a \\u escape decodes in a literal", hex_lit, "aAb", "pair", true, arena)
+  // Caution: **Keep the pair.** With one alone, "it resolved" and "it passed as the six characters
+  // `u0041`" look the same.
+  expect("a \\u escape is not the letter u", hex_lit, "au0041b", "pair", false, arena)
+  expect("a \\u escape decodes in a character class", "pair = [\\u0041-\\u0043]+\n", "AB", "pair",
+    true, arena)
+  // **A character class matches one byte at a time, so a multi-byte `\u` is not allowed in it**;
+  // if it were, あ would match any one of its three bytes, with no diagnostic.
+  expect_bad_grammar("a wide \\u in a character class is rejected", "pair = [\\u3042]+\n", arena)
+  // The control: in a literal it may resolve to several bytes (matched as a run).
+  expect("a wide \\u decodes in a literal", "pair = \"\\u3042\"\n", "あ", "pair", true, arena)
+  // **Reject a `\u` with too few digits** (it must not pass as the three bytes `u00`).
+  expect_bad_grammar("a short \\u is rejected", "pair = \"\\u00\"\n", arena)
+
+  // --- The classic shapes on which a PEG parser fails to terminate ---
+  // **What is checked is that it stops, before the answer**; when broken, it shows as a hang, a CI
+  // timeout. Left recursion never ends under PEG, so the grammar is refused when it is read.
+  expect_bad_grammar("direct left recursion is rejected", "pair = pair \"x\" | \"y\"\n", arena)
+  expect_bad_grammar("indirect left recursion is rejected",
+    "pair = mid\nmid = pair \"x\" | \"y\"\n", arena)
+  // A repetition of something that can succeed without consuming input must not loop in place.
+  expect("repetition of a possibly-empty expression terminates", "pair = (\"x\"?)*\n", "xxx",
+    "pair", true, arena)
+  expect("repetition of an empty literal terminates", "pair = \"\"*\n", "abc", "pair", true, arena)
+  // A grammar that refers to an undefined rule must be rejected **when it is read**.
+  // Caution: Each case below sits on a branch that never runs (an alternation's other branch, an
+  // option, a repetition), so a check delayed until parsing would miss it.
+  expect_bad_grammar("a reference to an undefined rule is rejected", "pair = Nope\n", arena)
+  expect_bad_grammar("an undefined rule inside a choice is rejected", "pair = \"x\" | Nope\n", arena)
+  expect_bad_grammar("an undefined rule inside an option is rejected", "pair = \"x\" Nope?\n", arena)
+  expect_bad_grammar("an undefined rule inside a repetition is rejected", "pair = \"x\" Nope*\n",
+    arena)
+  // A rule defined twice is rejected too: one of the two would never be used.
+  expect_bad_grammar("a rule defined twice is rejected", "pair = \"x\"\npair = \"y\"\n", arena)
+  // The control: a grammar referring to an existing rule still reads (the check is not too broad).
+  expect("a reference to a defined rule still parses", "pair = \"x\" tail\ntail = \"y\"\n", "xy",
+    "pair", true, arena)
+  // A grammar with broken syntax must fail to read.
+  expect_bad_grammar("an unclosed group is rejected", "pair = (\"x\"\n", arena)
+  expect_bad_grammar("a rule without '=' is rejected", "pair \"x\"\n", arena)
+  expect_bad_grammar("an unclosed character class is rejected", "pair = [a-z\n", arena)
+  // The control: plain recursion (not left recursion) must pass however deeply nested.
+  expect("plain recursion handles a deeply nested input", "pair = \"(\" pair \")\" | \"x\"\n",
+    "((((((((((((((((x))))))))))))))))", "pair", true, arena)
+  // A stop on depth must reach the caller without being swallowed.
+  // Caution: **Test all three constructs** that turn an inner failure into "it did not match": an
+  // alternation, an option and a repetition (`try_parse` in kspeg/engine.kspls); fixing one leaves
+  // the other two silently swallowing it.
+  deep_in: = nested("(", ")", arena)
+  expect_deep_fatal("a depth cutoff inside a choice reaches the caller",
+    "pair = \"(\" pair \")\" | \"x\"\n", deep_in, arena)
+  expect_deep_fatal("a depth cutoff inside an option reaches the caller",
+    "pair = \"(\" pair? \")\"\n", deep_in, arena)
+  expect_deep_fatal("a depth cutoff inside a repetition reaches the caller",
+    "pair = \"(\" pair* \")\"\n", deep_in, arena)
+
+  // --- The rule profile: calls / memo hits / read and succeeded / read and failed ---
+  // Caution: **Use only a grammar and input with exactly one possible answer.** A real grammar's
+  // numbers move with it and with its input, so pinning them only says "it changed".
+  // `seq` never backtracks: each rule is called and succeeds once, so a dropped increment shows.
+  seq: U8[] = "top = one two\none = \"a\"\ntwo = \"b\"\n"
+  expect_prof("a rule read once counts one call and one success", seq, "ab", "top", "one",
+    Prof_row::{ .found = true, .calls = 1, .memo_hits = 0, .parsed_ok = 1, .failed = 0 }, arena)
+
+  // `alt`'s first alternative always misses. On "1-2": plus is called once and fails at "+"; num
+  // is read by plus at 0, hit in the memo by minus, and read again at 2 (calls 3, memo hits 1,
+  // succeeded 2), pinning all four counts at once.
+  alt: U8[] = "top = plus | minus\nplus = num \"+\" num\nminus = num \"-\" num\nnum = [0-9]\n"
+  expect_prof("a failed alternative counts as read-and-failed", alt, "1-2", "top", "plus",
+    Prof_row::{ .found = true, .calls = 1, .memo_hits = 0, .parsed_ok = 0, .failed = 1 }, arena)
+  expect_prof("a re-visited position counts as a memo hit", alt, "1-2", "top", "num",
+    Prof_row::{ .found = true, .calls = 3, .memo_hits = 1, .parsed_ok = 2, .failed = 0 }, arena)
+  expect_no_prof("no rule is recorded while profiling is off", alt, "1-2", "top", arena)

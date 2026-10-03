@@ -1,0 +1,92 @@
+import "kspage/model/doc" + { Doc }
+import "kspage/share/consts"
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// kspage: checks the code that writes a table out as constants (a golden test).
+// Caution: **Test the refusing side first.** Tried only on a table that passes, a text that
+// cannot be a name would be silently skipped, unnoticed (and a table row would go missing).
+// ==========================================
+
+priv fn a_table(d: Doc$@, arena: Arena$@): doc.Block$@ //<
+  //< A table with a heading row and name/value rows
+  //<
+  //< The first row is the heading (not a name).
+  table: = d.add_block("table")
+  table.name = "settings"
+  head: = table.add_child("row")
+  head.add_child("cell").add_text("Name")
+  head.add_child("cell").add_text("Value")
+  one: = table.add_child("row")
+  one.add_child("cell").add_text("greeting")
+  one.add_child("cell").add_text("hello \"everyone\"")
+  // A cell holding a computed value: the formula's result becomes the constant as it is (this
+  // links the table to the text).
+  two: = table.add_child("row")
+  two.add_child("cell").add_text("limit")
+  sum: = two.add_child("cell").add_text("=1+2")
+  sum.show_value("3", Option<|F64|>.some(3.0), arena)
+  // **A text that cannot be a name is refused** (otherwise the generated text does not build).
+  bad: = table.add_child("row")
+  bad.add_child("cell").add_text("2nd one")
+  bad.add_child("cell").add_text("no good")
+  // **A repeated name is refused too** (a constant defined twice does not build).
+  same: = table.add_child("row")
+  same.add_child("cell").add_text("greeting")
+  same.add_child("cell").add_text("2nd one")
+  return table
+
+fn test_what_it_writes_compiles(builds: fn(src: U8[], arena: Arena$@): Bool) //<
+  //< The generated text builds as KSPL
+  //<
+  //< **The caller passes an entry point into the real compiler**, as a function pointer: the rule
+  //< "only `tests/` may run the compiler" shows in the signature.
+  verdict.start("[kspage/consts] the text made building test...")
+  arena: = Arena.new(256 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = a_table(d, arena)
+  $sb: = Str_builder.new()
+  defer sb.free()
+  made: = consts.write(table, "the sample document", sb@, arena)
+  out: = sb.slice()
+  assert(made.rows == 2, "two rows went through")
+  // Caution: **Count the refused rows** (skipped silently, a table row goes missing).
+  assert(made.refused == 2, "two rows were refused as well")
+  // **The origin mark goes in** (without it, nobody can trace what was generated).
+  assert(out.find_str("what was made") >= 0, "it says that this is what was made")
+  assert(out.find_str("the sample document") >= 0, "it says which document it came from")
+  assert(out.find_str("settings") >= 0, "it says which table it came from too")
+  // The text is escaped, and the number comes out as a number.
+  quoted: = out.find_str("pub const greeting: U8[] = \"hello \\\"everyone\\\"\"\n")
+  assert(quoted >= 0, "the quote inside the text is escaped")
+  assert(out.find_str("pub const limit: F64 = 3") >= 0, "a value worked out comes out as a number")
+  assert(out.find_str("2nd one") < 0, "a row refused does not go into what is made")
+  // Caution: **Have the real compiler read it**; by eye, nobody can tell whether it builds.
+  assert(builds(out, arena), "the text made builds as KSPL")
+  verdict.pass("the text made builds, carries where it came from, and counts the refused rows.")
+
+fn test_an_empty_table_makes_nothing() //<
+  //< Nothing is generated from a missing or empty table
+  //<
+  //< **Do not write out an empty text.**
+  verdict.start("[kspage/consts] nothing being made from an empty table test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  table: = d.add_block("table")
+  head: = table.add_child("row")
+  head.add_child("cell").add_text("Name")
+  $sb: = Str_builder.new()
+  defer sb.free()
+  made: = consts.write(table, "the sample", sb@, arena)
+  assert(made.rows == 0 && made.refused == 0, "nothing comes out of a heading-only table")
+  assert(sb.slice().find_str("pub const") < 0, "not one constant is written")
+  // **It must not crash on a missing table.**
+  sb.clear()
+  none: = consts.write(null, "the sample", sb@, arena)
+  assert(none.rows == 0, "nothing comes out of a table that is not there either")
+  verdict.pass("nothing is made from a heading-only table.")

@@ -1,0 +1,32 @@
+// The KSPEG notation, written in itself: the normative grammar of `.kspeg` files ("Appendix A"
+// in SPEC-notation.md). kspeg/tests/engine_test.kspls reads this file and the other two examples with it.
+
+grammar = definition+ _Space !.
+definition = Identifier "=" choice
+choice = sequence ( "|" sequence )*
+sequence = prefix+
+prefix = ( "&" | "!" )? suffix
+suffix = primary ( "?" | "*" | "+" )?
+primary = reference | group | Keyword_literal | String_literal | Stop_set | Char_class | Wildcard
+reference = Identifier !"="
+group = "(" choice ")"
+
+Identifier = [A-Za-z_] [A-Za-z0-9_]*
+
+Keyword_literal = ['] ( Escape | !['\\] !_New_line . )* [']
+String_literal = ["] ( Escape | !["\\] !_New_line . )* ["]
+Stop_set = "~" ["] ( Escape | !["\\] !_New_line . )+ ["]
+
+Char_class = "[" ( !"]" !_New_line ( Char_range | Char_single ) )+ "]"
+Char_range = Char_single "-" Char_single
+Char_single = Escape | !"]" !"\\" !_New_line .
+
+Escape = "\\" ( [nrt"'\\\[\]\-] | "u" Hex Hex Hex Hex )
+Hex = [0-9A-Fa-f]
+Wildcard = "."
+
+// Between definitions only whitespace and the `//` line comment may stand, whatever the grammar
+// being read defines for its own language.
+_Space = ( [ \t] | _New_line | _Line_comment )*
+_Line_comment = "//" ( !_New_line . )*
+_New_line = "\r\n" | "\n" | "\r"

@@ -1,0 +1,81 @@
+//< Fills in a default argument at the call site
+//<
+//< Choosing the declaration happens elsewhere; this fills in the chosen one's missing arguments.
+//< **A default value exists only in the declaration**, so it is copied from the declaration's
+//< tree every time (`sema/decl/resolve.kspls` accepts only constants as default values).
+import "ksplc/base/ast" { Ast_node, Loc }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/core" as base_core
+import "ksplc/sema/decl/mono" as sema_decl_mono
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/env" as sema_type_env
+import "std/str" // `arena.text()`
+
+fn trailing_default_count(param_list: Ast_node$@): Sz //<
+  //< How many formal parameters in a row, counted from the end, have a default value
+  //<
+  //< Caution: **Count from the end.** A default in the middle alone is rejected at the declaration
+  //< (sema/decl/resolve.kspls), so the defaults are contiguous.
+  $n: Sz = 0
+  for p in base_ast_ext.Param_cursor.new(param_list, false)
+    n = n + 1 if p.get_param_default() != null else 0
+  return n
+
+priv fn make_caller_loc(c: Sema_ctx$@, kind: U8[], loc: Loc): Ast_node$@ //<
+  //< Makes one literal that stands for the caller's position
+  //<
+  //< Caution: **Store the line number, counted here** (`Loc` holds a byte position; the one
+  //< function that counts lines is `line_of` in `sema/session/ctx.kspls`).
+  // **Set the type here too.** Nothing types the operator desugaring's nodes later, and LLVM
+  // would emit the `Sz` argument as `ptr` (C passes; only `make test-llvm-abi` catches it).
+  if kind.equals("caller_line")
+    lit: = Ast_node.new(.k_integer,
+      base_core.arena.text().s("\{c.line_of(loc)\}").take(), loc)
+    lit.type_id = I32::sema_type_env.Builtin_type_id.size_type
+    return lit
+  // Caution: Include the quotation marks. A `String` node holds the literal as written in source.
+  str_lit: = Ast_node.new(.k_string,
+    base_core.arena.text().c('"').s(loc.file()).c('"').take(), loc)
+  u8_id: = c.env.get_or_add("U8")
+  str_lit.type_id = c.slice_type_of(c.env.make_const(u8_id))
+  return str_lit
+
+fn fill_default_args(c: Sema_ctx$@, args_node: Ast_node$@, param_list: Ast_node$@, missing: Sz) //<
+  //< Fills the missing actual arguments with a **copy** of the declaration's default value
+  //<
+  //< Caution: **Copy it.** If one node is attached to more than one call, the type one analysis
+  //< writes leaks into the other. No `,` is added: genc emits the separators between actual
+  //< arguments itself (`emit_comma_separated_args` in `gen/c/expr.kspls`), so the tree needs none.
+  total: = base_ast_ext.Param_cursor.count(param_list)
+  $seen: Sz = 0
+  for p in base_ast_ext.Param_cursor.new(param_list, false)
+    seen += 1
+    if seen <= total - missing
+      continue
+    d: = p.get_param_default()
+    if d == null
+      continue
+    // The caller's position becomes **a literal made at the caller**; copied, it would name the
+    // declaration's line in `std/lang.kspls`. A plain `String` / `Integer` needs no special
+    // handling in typing, genc, genllvm or `--emit-decls`.
+    kind: = d.caller_loc_kind()
+    if kind.len > 0
+      args_node.add_child(make_caller_loc(c, kind, args_node.loc))
+      continue
+    args_node.add_child(d.clone())
+
+fn fill_operator_defaults(c: Sema_ctx$@, args_node: Ast_node$@, method_node: Ast_node$@,
+  supplied: Sz) //<
+    //< Fills the declaration's default values into the arguments an operator desugaring assembled
+    //<
+    //< **These arguments do not go through `infer_call_args`**. `supplied` counts the receiver,
+    //< as `actual_args` in that function does.
+  if args_node == null || method_node == null
+    return
+  p_list: = method_node.get_fn_params()
+  if p_list == null
+    return
+  total: = base_ast_ext.Param_cursor.count(p_list)
+  if total <= supplied
+    return
+  fill_default_args(c, args_node, p_list, total - supplied)

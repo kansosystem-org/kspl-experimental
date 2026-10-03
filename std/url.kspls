@@ -1,0 +1,124 @@
+//< Percent-encoding (RFC 3986), and the query-string form `application/x-www-form-urlencoded`
+//<
+//< For putting text safely into an HTTP path or a query parameter; decoding returns the original
+//< text unchanged.
+import "std/chars"
+import "std/mem" { Arena, alloc_in }
+import "std/strfmt"
+
+pub enum Url_error //< why a piece of a URL could not be decoded
+  invalid_percent_encoding //< what follows a `%` is not two hex digits
+
+priv fn is_unreserved(c: U8): Bool //<
+  //< Whether c is an "unreserved" character (RFC 3986 §2.3)
+  //<
+  //< These are ALPHA, DIGIT, "-", ".", "_" and "~".
+  return c.is_alnum() || c == '-' || c == '.' || c == '_' || c == '~'
+
+pub fn encode( //< percent-encodes a piece of text so it can go inside a URL
+  //<
+  //< An unreserved character stays as it is; any other byte becomes the hex form `%XX`.
+  s: U8[], //< the plain text, not yet escaped
+  arena: Arena$@, //< where the result goes; null means the heap, freed with `dealloc`
+): U8[] //< the escaped text, hex digits in uppercase
+  $n: Sz = 0
+  for c in s
+    n += 1 if is_unreserved(c) else 3
+  out: = U8$[]::{ .ptr = U8$@::alloc_in(arena, n), .len = n }
+  $at: Sz = 0
+  for c in s
+    if is_unreserved(c)
+      out[at] = c
+      at += 1
+    else
+      out[at] = '%'
+      out[at + 1] = (c >> 4).to_hex_upper()
+      out[at + 2] = (U8::(c & 0xF)).to_hex_upper()
+      at += 3
+  return out
+
+pub fn decode_component( //< percent-decodes a path piece, leaving `+` as a `+`
+  //<
+  //< **"+" does not become a space.** Only application/x-www-form-urlencoded writes a space as
+  //< "+"; in a URI path a "+" is just a "+" (RFC 3986). For a form, use decode_form.
+  s: U8[], //< the escaped text as it arrived
+  arena: Arena$@, //< where the result goes; null means the heap, freed with `dealloc`
+): U8[]?Url_error //< the decoded text; a broken `%XX` fails, having allocated nothing
+  return decode_impl(s, false, arena)
+
+pub fn decode_form( //< percent-decodes as a form does, turning `+` into a space
+  //<
+  //< Use it for the names and values of a query string, and for a form body.
+  s: U8[], //< the escaped text as it arrived
+  arena: Arena$@, //< where the result goes; null means the heap, freed with `dealloc`
+): U8[]?Url_error //< the decoded text; a broken `%XX` fails, having allocated nothing
+  return decode_impl(s, true, arena)
+
+priv fn decode_impl(s: U8[], plus_is_space: Bool, arena: Arena$@): U8[]?Url_error //<
+  //< Checks every `%XX` and counts the bytes first, so a failure has nothing to free
+  $n: Sz = 0
+  $i: Sz = 0
+  for i < s.len
+    if s[i] == '%'
+      if i + 2 >= s.len || s[i + 1].hex_val() < 0 || s[i + 2].hex_val() < 0
+        throw Url_error.invalid_percent_encoding
+      i += 3
+    else
+      i += 1
+    n += 1
+  out: = U8$[]::{ .ptr = U8$@::alloc_in(arena, n), .len = n }
+  $at: Sz = 0
+  i = 0
+  for i < s.len
+    c: = s[i]
+    if c == '%'
+      out[at] = U8::(s[i + 1].hex_val() * 16 + s[i + 2].hex_val())
+      i += 3
+    else
+      out[at] = ' ' if c == '+' && plus_is_space else c
+      i += 1
+    at += 1
+  return out
+
+// ---------------------------------------------------------
+// Parsing a query string (the "a=1&b=2" form)
+// ---------------------------------------------------------
+pub struct Query_param //< one `name=value` pair of a query string
+  pub name: U8$[] //< the name, already decoded and copied into the arena
+  pub value: U8$[] //< the value; empty when the pair has no `=`
+  pub next: Query_param$@ //< the next pair, in the order they appear
+
+pub fn parse_query( //< splits a query string into a linked list of pairs
+  //<
+  //< Each name and value is decoded with `decode_form()` and copied into the arena, in order.
+  query: U8[], //< the text after the `?`, without the `?` itself
+  arena: Arena$@, //< where the decoded names and values are copied
+): Query_param$@?Url_error //< the first pair, or null for an empty query; a broken `%XX` fails
+  $head: Query_param$@ = null
+  $tail: Query_param$@ = null
+  q: = query.strip_prefix("?")
+
+  $start: Sz = 0
+  for start <= q.len
+    amp: = q.sub_from(start).find_char('&')
+    end: = start + Sz::amp if amp >= 0 else q.len
+    pair: = q.sub(start, end - start)
+    if pair.len > 0
+      eq: = pair.find_char('=')
+      $raw_name: U8[] = pair
+      $raw_value: U8[] = ""
+      if eq >= 0
+        raw_name = pair.sub(0, eq)
+        raw_value = pair.sub_from(eq + 1)
+      param: Query_param = ::{ .name = U8$[]::decode_form(raw_name, arena)?,
+        .value = U8$[]::decode_form(raw_value, arena)?, .next = null }
+      node: = arena.create(param)
+      if head == null
+        head = node
+      else
+        tail.next = node
+      tail = node
+    if amp < 0
+      break
+    start = end + 1
+  return head

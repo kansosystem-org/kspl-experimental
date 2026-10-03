@@ -1,0 +1,23 @@
+//< A use in the receiver position after a release is a use after free too
+//<
+//< The access may be a field read, a field write or a method call. Suppress the check itself at the
+//< receiver position and all that can be detected is the most harmless whole copy
+//< (ksplc/docs/DESIGN.md §11.2).
+// EXPECT: variable 'p' may already be freed here
+import "std/mem"
+import "std/mem" { dealloc }
+
+priv struct S
+  v: I32
+
+impl S
+  priv fn free(r: Self$@)
+    dealloc(Void$@::r)
+
+fn main()
+  p: = mem.alloc_as<|S|>()
+  p.free()
+  _x: = p.v
+
+// The declaration that has the release tracked (Owned in std/lang.kspls).
+impl S: Owned {}

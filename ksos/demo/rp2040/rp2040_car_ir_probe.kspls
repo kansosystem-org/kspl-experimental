@@ -1,0 +1,529 @@
+//< Driving the Freenove 4WD mecanum car **from the infrared remote alone**
+//<
+//< No PC and no link needed; it follows Freenove's tutorial "6.3 Multi-Functional Infrared Car".
+
+// ==========================================
+// **This board's `wheel_polarity` absorbs the wheels' direction**, so through `motor` forward is
+// forward.
+// Caution: **Plug in the matrix** (the obstacle-avoiding key answers with a reason). **Test it
+// with the wheels off the ground**: a wrong key sets it off faster than a hand can catch it.
+// ==========================================
+// What the remote controls:
+//   the remote → drive by hand / swing the head / the buzzer / WS2812 / the face
+//   the remote → choose a driving mode (line tracking, light chasing) → from then on the car drives
+//                itself
+// ==========================================
+import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/boards/freenove_4wd_pico/cap" as ccap
+import "ksos/boards/freenove_4wd_pico/face"
+import "ksos/boards/freenove_4wd_pico/motor"
+import "ksos/boards/freenove_4wd_pico/track"
+import "ksos/demo/common/pilot_policy" as policy
+import "ksos/demo/rp2040/common/buzzer"
+import "ksos/demo/rp2040/common/console" as con
+import "ksos/demo/rp2040/common/records"
+import "ksos/demo/rp2040/common/store"
+import "ksos/drivers/rp2040/adc"
+import "ksos/drivers/rp2040/clocks"
+import "ksos/drivers/rp2040/gpio"
+import "ksos/drivers/rp2040/ir_nec" as ir
+import "ksos/drivers/rp2040/servo"
+import "ksos/drivers/rp2040/timer"
+import "ksos/drivers/rp2040/usb_cdc" as usb
+import "ksos/drivers/rp2040/ws2812"
+import "ksos/kernel/task" + { Task }
+import "std/mem" { Arena }
+
+$tcb_car: Task
+$stack_car: U8[2560]
+// The policy's body. **The weights point straight into this**, so it lives for the whole run.
+$policy_buf: U8[4096]
+$arena_buf: U8[24576]
+
+const record_marker: U8[] = "car1" //< the marker that identifies this writer
+  //<
+  //< Caution: **It must be the same name as `rp2040_car_pilot_probe`'s**, which saved the policy;
+  //< a different one erases the region.
+
+const loop_interval_ms: U32 = 100 //< the control period [ms]
+  //<
+  //< **Keep it within the face's frame interval**, or the fastest blink (100ms) lags.
+const ir_poll_us: U32 = 1000 //< the interval for checking IR [us]
+  //<
+  //< **Keep it under 1.5ms**, not merely under a frame: the driver needs 7500us of the 9000us
+  //< leader mark, so **a late check cuts the leader short and the frame is rejected**.
+
+// --- the remote's keys ---
+// **In the table's 32-bit value, cmd is the third byte, not the leftmost** (NEC sends the low bit
+// first; the leftmost is `cmd ^ 0xFF`). **This remote's address is 0x00**. Details: stage 12 in
+// ksos/docs/HOWTO-bring-up.md.
+const key_forward: U32 = 0x40 // ✚     (table BF40FF00)
+const key_back: U32 = 0x19 // ➖     (table E619FF00)
+const key_left: U32 = 0x07 // ⏪     (table F807FF00)
+const key_right: U32 = 0x09 // ⏩     (table F609FF00)
+const key_stop: U32 = 0x15 // ▶      (table EA15FF00)
+const key_servo_left: U32 = 0x16 // 0      (table E916FF00)
+const key_servo_right: U32 = 0x0C // 1      (table F30CFF00)
+const key_servo_center: U32 = 0x08 // 4      (table F708FF00)
+const key_buzzer: U32 = 0x44 // TEST   (table BB44FF00)
+const key_face_next: U32 = 0x18 // 2      (table E718FF00)
+const key_face_off: U32 = 0x1C // 5      (table E31CFF00)
+const key_ws2812_next: U32 = 0x42 // 7      (table BD42FF00)
+const key_ws2812_off: U32 = 0x52 // 8      (table AD52FF00)
+const key_mode_light: U32 = 0x0D // C      (table F20DFF00)
+const key_mode_line: U32 = 0x5E // 3      (table A15EFF00)
+const key_mode_sonar: U32 = 0x5A // 6      (table A55AFF00)
+const key_mode_manual: U32 = 0x4A // 9      (table B54AFF00)
+
+enum Mode //< the car's driving mode
+  //<
+  //< **In every mode but `manual` the car decides itself** (the direction keys do nothing).
+  manual
+  light
+  line
+
+impl Mode
+  priv fn set_mode(m: Self) //< changes the mode
+    //<
+    //< Caution: **Bring the head back to the front and stop the wheels before changing it**, or the
+    //< first round runs on the old mode's command.
+    motor.stop()
+    last_lon = 0
+    last_lat = 0
+    last_rot = 0
+    look_at(I32::board.servo_angle_center)
+    mode = m
+
+  priv fn mode_text(m: Self): U8[]
+    switch m case .manual
+      return "manual"
+    case .light
+      return "light"
+    case .line
+      return "line"
+    return "?"
+
+const hold_timeout_us: U32 = 250000 //< how long until a held press counts as released [us]
+  //<
+  //< **About twice the repeat interval (108ms)**: shorter judders between repeats, longer keeps
+  //< running after the finger comes off.
+
+const line_interval_us: U32 = 10000 //< the interval for reading the line again [us]
+  //<
+  //< **Read on this interval, not on the period (100ms)**, which steers only after the line has
+  //< crossed the sensor and loses it on a bend.
+
+const servo_step_deg: I32 = 10 //< one step of the head's swing [degrees]
+
+const light_min: U32 = 50 //< the minimum for light chasing [the raw ADC value]
+  //<
+  //< **Below this it does not drive**: in the dark, noise alone would steer the difference.
+const light_diff_div: I32 = 8 //<
+  //< Light chasing's cruising speed, and the divisor for the left-right difference
+
+const ws2812_modes: U32 = 6 //< how many WS2812 display modes there are (0 = off)
+
+$mode: Mode = Mode.manual
+$servo_angle: I32 = 90
+$ws2812_mode: U32 = 0
+$ws2812_phase: U32 = 0
+$have_policy: Bool = false
+$pol: policy.Policy
+// The latest command sent, for the report.
+$last_lon: I32 = 0
+$last_lat: I32 = 0
+$last_rot: I32 = 0
+$loops: U32 = 0
+$keys: U32 = 0
+// The command a held press keeps sending, and the moment its signal was last seen.
+// Caution: **Always stop once the signal ends**, or it keeps driving after the remote is put down.
+$hold_lon: I32 = 0
+$hold_rot: I32 = 0
+$holding: Bool = false
+$hold_seen_us: U32 = 0
+// The three line bits read most recently. Kept **so it steers again only when they change**.
+$last_line: U32 = 0
+// How many times it steered again partway through a round: **the evidence that line following
+// works**.
+$steers: U32 = 0
+// The breakdown of what was received: nothing arriving and unassigned keys both show `keys=0`.
+// **`bad` means "the line was busy but no frame came"**: slow checks, or light noise.
+$ir_ok: U32 = 0
+$ir_repeat: U32 = 0
+$ir_bad: U32 = 0
+$last_addr: U32 = 0
+$last_cmd: U32 = 0
+
+priv fn apply(lon: I32, lat: I32, rot: I32) //<
+  //< Fits it within the speed cap, then sends it to the wheels
+  //<
+  //< Caution: **Do not clamp each component separately** (the reason is at `cap`).
+  d: = ccap.divisor(lon, lat, rot)
+  last_lon = lon * ccap.cap / d
+  last_lat = lat * ccap.cap / d
+  last_rot = rot * ccap.cap / d
+  motor.drive(last_lon, last_lat, last_rot)
+
+priv fn drive_lr(left: I32, right: I32) //<
+  //< Drives by the left and right wheels' speeds (it matches the tutorial's `Motor_Move`)
+  //<
+  //< Caution: **Convert it into the mecanum triple before passing it on**, or `motor`'s formula
+  //< gets a second version.
+  apply((left + right) / 2, 0, (left - right) / 2)
+
+priv fn refuse() //< the signal for rejecting something
+  //<
+  //< Caution: **Do not ignore it silently**, or "broken" cannot be told from "no such key".
+  buzzer.tone(2000, 50)
+  timer.delay_ms(50)
+  buzzer.tone(2000, 50)
+
+priv fn rgb(r: Bool, g: Bool, b: Bool): U32 //< one WS2812 LED's colour
+  //<
+  //< **Only `board.ws2812_level` sets the brightness** (the reason is there).
+  lv: = board.ws2812_level
+  return ((lv if g else 0U32) << 16U32) | ((lv if r else 0U32) << 8U32) | (lv if b else 0U32)
+
+priv fn ws2812_show() //< lights the eight LEDs in the current display mode
+  //<
+  //< **It may be called every round** (the phase advances in here).
+  $px: U32[8] = ::{}
+  ws2812_phase += 1
+  for i in Range.asc(board.ws2812_count)
+    n: = U32::i
+    px[i] = 0
+    switch mode_of_ws2812() case .off
+      px[i] = 0
+    case .solid
+      px[i] = rgb(true, false, false)
+    case .chase
+      px[i] = rgb(true, true, true) if (ws2812_phase / 2) % 8U32 == n else 0
+    case .blink
+      px[i] = rgb(false, false, true) if (ws2812_phase / 5) % 2U32 == 0 else 0
+    case .split
+      px[i] = rgb(true, false, false) if n < 4U32 else rgb(false, true, false)
+    case .rainbow
+      k: = (n + ws2812_phase / 3) % 3U32
+      px[i] = rgb(k == 0, k == 1, k == 2)
+  _sent: = ws2812.send(U32[]::px)
+
+enum Ws2812_mode //< the WS2812 display modes
+  //<
+  //< **Branch on names, not numbers.**
+  off
+  solid
+  chase
+  blink
+  split
+  rainbow
+
+priv fn mode_of_ws2812(): Ws2812_mode
+  switch ws2812_mode case 1U32
+    return Ws2812_mode.solid
+  case 2U32
+    return Ws2812_mode.chase
+  case 3U32
+    return Ws2812_mode.blink
+  case 4U32
+    return Ws2812_mode.split
+  case 5U32
+    return Ws2812_mode.rainbow
+  default {}
+  return Ws2812_mode.off
+
+priv fn look_at(angle: I32) //< points the head
+  //<
+  //< Caution: **After pointing it, wait for the movement to settle**, or it measures mid-swing.
+  a: = I32::servo.clamp_angle(angle)
+  if a == servo_angle
+    return
+  servo_angle = a
+  servo.set_angle(board.servo_head_pin, servo_angle)
+  timer.delay_ms(100)
+
+// ---------------------------------------------------------
+// The driving modes
+// ---------------------------------------------------------
+
+priv fn run_line(arena: Arena$@) //< line tracking
+  //<
+  //< **The policy's net decides** (`pilot_policy`); rules copied here would be a second way of
+  //< following the line.
+  if !have_policy
+    return
+  mark: = arena.save()
+  line: = track.read_bits()
+  last_line = line
+  // Caution: **For the distance, pass the policy's "nothing there"**: the ultrasonic is
+  // unplugged, and a made-up number would read as an obstacle.
+  d: = policy.decide(pol@, pol.far_mm, line, arena)
+  apply(d.lon, d.lat, d.rot)
+  arena.restore(mark)
+
+priv fn run_light() //< light chasing
+  //<
+  //< It turns on the difference in brightness between left and right. **In the dark it does not
+  //< drive** (the reason is at `light_min`).
+  left: = adc.read_pin(board.light_sensor_left)
+  right: = adc.read_pin(board.light_sensor_right)
+  if left.value < light_min || right.value < light_min
+    apply(0, 0, 0)
+    return
+  diff: = (I32::right.value - I32::left.value) / light_diff_div
+  // **Steer towards the brighter side** (a brighter right slows the right wheels).
+  drive_lr(ccap.cap + diff, ccap.cap - diff)
+
+// ---------------------------------------------------------
+// The remote
+// ---------------------------------------------------------
+
+priv fn manual_hold(lon: I32, rot: I32) //< drives by hand for one press
+  //<
+  //< Caution: **Do not leave it running**: it drives only while the button is held. **A repeat
+  //< carries no cmd**, so the key is remembered and each repeat extends it.
+  Mode.manual.set_mode()
+  hold_lon = lon
+  hold_rot = rot
+  holding = true
+  hold_seen_us = timer.now_us()
+  apply(lon, 0, rot)
+
+priv fn hold_expire() //< stops once the held press has ended
+  //<
+  //< **It may be called every tick.**
+  if !holding || timer.elapsed_us(hold_seen_us) < hold_timeout_us
+    return
+  holding = false
+  apply(0, 0, 0)
+
+priv fn handle_key(ln: con.Line$@, cmd: U32)
+  keys += 1
+  switch cmd case key_forward
+    manual_hold(ccap.cap, 0)
+  case key_back
+    manual_hold(0 - ccap.cap, 0)
+  case key_left
+    manual_hold(0, 0 - ccap.cap)
+  case key_right
+    manual_hold(0, ccap.cap)
+  case key_stop
+    // **Acting the same as `9` (to manual) is on purpose**: two keys to reach for, one path
+    // (`set_mode`).
+    Mode.manual.set_mode()
+  case key_servo_left
+    look_at(servo_angle + servo_step_deg)
+  case key_servo_right
+    look_at(servo_angle - servo_step_deg)
+  case key_servo_center
+    look_at(I32::board.servo_angle_center)
+  case key_buzzer
+    buzzer.tone(2000, 100)
+  case key_ws2812_next
+    ws2812_mode = (ws2812_mode + 1) % ws2812_modes
+  case key_ws2812_off
+    ws2812_mode = 0
+  case key_mode_light
+    Mode.light.set_mode()
+  case key_mode_line
+    if have_policy
+      Mode.line.set_mode()
+    else
+      // **It does not follow the line without a policy.** How to follow is not defined here.
+      refuse()
+      ln.reset()
+      ln.str("[car] no stored policy - run ksos-rp2040-car-pilot with kssrv first")
+      _sent: = ln.flush()
+  case key_mode_sonar
+    // **The ultrasonic is not plugged in** (it shares the matrix's pins): rejected, with the
+    // reason.
+    refuse()
+    ln.reset()
+    ln.str("[car] no ultrasonic - it shares GPIO 4/5 with the LED matrix")
+    _sent: = ln.flush()
+  case key_mode_manual
+    Mode.manual.set_mode()
+  case key_face_next
+    if face.available()
+      face.next()
+    else
+      refuse()
+      ln.reset()
+      ln.str("[car] LED matrix did not answer - check that it is plugged in")
+      _sent: = ln.flush()
+  case key_face_off
+    face.Look.off.set()
+  default
+    // An unknown key is silently ignored, **with no rejection signal**: another remote or light
+    // noise would trigger it too.
+    keys -= 1
+
+priv fn track_step(arena: Arena$@) //< steers again if the line changed
+  //<
+  //< Caution: **Keep USB running alongside**, or the host detaches it and the Serial Monitor dies.
+  //< **Steer only when the line changed**; deciding every time spends the 9ms pass and loses IR.
+  if !have_policy
+    return
+  line: = track.read_bits()
+  if line == last_line
+    return
+  last_line = line
+  mark: = arena.save()
+  d: = policy.decide(pol@, pol.far_mm, line, arena)
+  apply(d.lon, d.lat, d.rot)
+  arena.restore(mark)
+  steers += 1
+
+priv fn pump(ln: con.Line$@, arena: Arena$@, ms: U32)
+  $waited: U32 = 0
+  $since_line: U32 = 0
+  for waited < ms * 1000
+    usb.poll_once()
+    // Caution: **Check whether it is idle first**; `try_receive` returns silently when idle, and
+    // "nothing came" would look like "unreadable".
+    busy: = !ir.is_idle(board.ir_receiver)
+    f: = ir.try_receive(board.ir_receiver)
+    if f.ok
+      if f.repeat
+        ir_repeat += 1
+        // **Extend it on a repeat**, the only signal of a held press.
+        hold_seen_us = timer.now_us()
+      else
+        ir_ok += 1
+        last_addr = f.addr
+        last_cmd = f.cmd
+        handle_key(ln, f.cmd)
+    else if busy
+      ir_bad += 1
+    hold_expire()
+    // **Read the line on this tick** (the reason is at `line_interval_us`).
+    since_line += ir_poll_us
+    if since_line >= line_interval_us
+      since_line = 0
+      if mode == Mode.line
+        track_step(arena)
+    timer.delay_us(ir_poll_us)
+    waited += ir_poll_us
+
+priv fn report(ln: con.Line$@)
+  ln.reset()
+  ln.str("car t=")
+  ln.u32(loops)
+  ln.str(" mode=")
+  ln.str(mode.mode_text())
+  ln.str(" drive=(")
+  ln.i32(last_lon)
+  ln.str(",")
+  ln.i32(last_lat)
+  ln.str(",")
+  ln.i32(last_rot)
+  ln.str(") servo=")
+  ln.i32(servo_angle)
+  ln.str(" line=")
+  ln.u32(track.read_bits())
+  ln.str(" ws=")
+  ln.u32(ws2812_mode)
+  // Caution: **Print the face's address**: `00` means nothing answered, an unplugged matrix.
+  ln.str(" face=")
+  ln.hex2(face.address())
+  ln.str(" trk=")
+  ln.u32(steers)
+  ln.str(" keys=")
+  ln.u32(keys)
+  // Caution: **Print the breakdown** (`keys=0` alone cannot tell why).
+  ln.str(" ir=")
+  ln.u32(ir_ok)
+  ln.str("/")
+  ln.u32(ir_repeat)
+  ln.str("/")
+  ln.u32(ir_bad)
+  ln.str(" last=")
+  ln.hex2(last_addr)
+  ln.str(":")
+  ln.hex2(last_cmd)
+  ln.str(" drop=")
+  ln.u32(usb.tx_dropped())
+  _sent: = ln.flush()
+
+priv fn bring_up() //< starts the peripherals
+  //<
+  //< Caution: **Call it inside the task.** `ksos_main` only starts the scheduler, and before this
+  //< there is no running context.
+  clocks.init()
+  _ok: = gpio.init()
+  gpio.init_out(board.buzzer_pin)
+  gpio.clear(board.buzzer_pin)
+  gpio.init_analog(board.light_sensor_left)
+  gpio.init_analog(board.light_sensor_right)
+  _adc: = adc.init()
+  _mot: = motor.init()
+  servo.init(board.servo_head_pin)
+  track.init()
+  ir.init(board.ir_receiver)
+  _ws: = ws2812.init(board.ws2812_pin)
+  _face: = face.init()
+  _usb: = usb.init()
+
+fn car_task(_arg: Void$@): Void
+  bring_up()
+  $ln: = con.Line.new()
+  abuf: = U8$[]::arena_buf
+  $arena: = Arena.from_buffer(Void$@::abuf.ptr, abuf.len)
+
+  // **Wait for the console to become usable**; a line before that is lost.
+  // Caution: Limit the wait — with no USB it never gets configured, and would never set off.
+  $waited: U32 = 0
+  for waited < 8000 && !usb.is_configured()
+    usb.poll_once()
+    timer.delay_ms(10)
+    waited += 10
+  ln.reset()
+  ln.str("[car] IR remote car - see ksos/docs/HOWTO-bring-up.md")
+  _sent: = ln.flush()
+
+  if !records.claim(record_marker)
+    ln.reset()
+    ln.str("[car] records unavailable - line mode will refuse")
+    _sent: = ln.flush()
+  else
+    kept: = store.stored_policy(U8$[]::policy_buf)
+    if kept.len > 0
+      pol = policy.load(kept, arena@) catch
+        ln.reset()
+        ln.str("[car] stored policy is unreadable - line mode will refuse")
+        _sent: = ln.flush()
+        fallback policy.empty()
+      have_policy = pol.hidden > 0
+  ln.reset()
+  ln.str("[car] policy ")
+  ln.str("loaded" if have_policy else "missing")
+  _said: = ln.flush()
+  // **Print the face's address here**; `bring_up` runs before the console is up.
+  ln.reset()
+  ln.str("[car] LED matrix at 0x")
+  ln.hex2(face.address())
+  if !face.available()
+    ln.str(" - nothing answered on 0x70-0x77, face keys will refuse")
+  _said2: = ln.flush()
+
+  servo.set_angle(board.servo_head_pin, servo_angle)
+  timer.delay_ms(100)
+
+  for
+    loops += 1
+    switch mode case .manual { // **Nothing.** The remote issues the command (`manual_hold`).
+    } case .light
+      run_light()
+    case .line
+      run_line(arena@)
+    ws2812_show()
+    face.show()
+    if loops % 10 == 0
+      report(ln@)
+    pump(ln@, arena@, loop_interval_ms)
+
+// The on_idle for `task.run_single_task`: semihosting's exit is not available, so it does nothing.
+priv fn park() {}
+
+#export
+fn ksos_main()
+  task.run_single_task(tcb_car@, U8$[]::stack_car, car_task, "car", park)

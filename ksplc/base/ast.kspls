@@ -1,0 +1,739 @@
+import "ksplc/base/ast_kinds" as base_ast_kinds
+import "ksplc/base/core" as base_core
+import "ksplc/base/diag" as base_diag
+import "ksplc/base/locate" as base_locate
+import "std/chars"
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/sys"
+
+// find_child / clone_with are tree-walking primitives used everywhere, and they keep the promise
+// to return null, as the ones under std/ do.
+##lint(H0704 = off)
+
+priv const max_clone_depth: Sz = 2000 //<
+  //< The deepest AST clone_with walks before it exits with a fatal error
+  //<
+  //< Caution: A postfix chain (`@` / `$` / `[]`) is outside the parser's max_parse_depth, so a
+  //< pathologically deep type (`I32@@@@...@`) reaches every later pass as a deep AST. clone_with /
+  //< validate_layout recurse and can get there before the other depth guards (max_mangle_depth in
+  //< sema/type/env.kspls), so this limit keeps the native stack from overflowing.
+priv const max_validate_depth: Sz = 2000
+priv const max_find_deep_child_depth: Sz = 2000
+
+priv const anon_fn_prefix: U8[] = "_anon_fn_" //<
+  //< The prefix on the name of the top-level function an anonymous function is lifted into
+  //<
+  //< parse/desugar.kspls creates the name; sema/session/ctx.kspls checks for it to add "it cannot
+  //< be captured" to a diagnostic. It starts with `_` so an unused lifted function gets no [W0206].
+  //< Caution: Use it through the two functions below; written directly, only one copy changes.
+
+const type_arg_sep: U8[] = ", " //<
+  //< The separator between two type arguments in a resolved type-args string
+  //<
+  //< **Both builders of such a string read this.** `strip_variance_const` here and
+  //< `build_resolved_type_args_str` in `../sema/decl/resolve.kspls` must match byte for byte, or a
+  //< specialization gets a different name from the plain body and does not fold.
+
+fn build_anon_fn_name(serial: Sz): U8[] //<
+  //< it makes the lifted function's name from a serial number
+  //<
+  //< It copies into the arena and returns it.
+  return base_core.arena.text().s(anon_fn_prefix).s("\{serial\}").take()
+
+fn is_anon_fn_name(name: U8[]): Bool //< whether a name was made by build_anon_fn_name
+  //<
+  //< A diagnostic asks it whether it is inside an anonymous function.
+  return name.starts_with(anon_fn_prefix)
+
+priv const anon_env_prefix: U8[] = "_anon_env_" //<
+  //< The prefix on the name of the environment struct that holds a closure's captures
+  //<
+  //< It lives here once, as anon_fn_prefix above does.
+
+fn build_anon_env_name(serial: Sz): U8[] //<
+  //< It makes the environment struct's name from a serial number
+  //<
+  //< Like `build_anon_fn_name`, it returns a copy on the arena.
+  return base_core.arena.text().s(anon_env_prefix).s("\{serial\}").take()
+
+fn is_anon_env_type(name: U8[]): Bool //<
+  //< Whether a type's name names a synthesized environment struct
+  //<
+  //< The name may be qualified (`a.b._anon_env_1`), so it matches at the start or just after a
+  //< `.`; a plain substring match would also hit `Foo_anon_env_1`.
+  if name.starts_with(anon_env_prefix)
+    return true
+  $sb: = Str_builder.new()
+  defer sb.free()
+  sb.c('.').s(anon_env_prefix)
+  return name.find_str(sb.slice()) >= 0
+
+priv const max_offset: Sz = 2147483647 //<
+  //< The largest position an I32 can hold
+  //<
+  //< **It is also the size limit of one source** (`Loc.at` rejects a larger one).
+
+struct Loc //< a position inside the source
+  //<
+  //< **The logical name is stored as a number** (the reason is at `source_files` in `base_core`).
+  //< Caution: **Do not build it directly with `Loc::{ … }`.** Without `Loc.at`, a forgotten 0
+  //< passes silently and the diagnostic and the jump target lose their file.
+  file_id: I32
+  offset: I32
+
+impl Loc
+  fn at(file: U8[], offset: Sz): Loc //< the only builder from a name and a position
+    //<
+    //< Caution: **Do not wrap a position that does not fit.** A position past I32 wraps around and
+    //< **points at an unrelated line**, so it is rejected here.
+    if offset < 0 || offset > max_offset
+      io.err()
+        .s("\nfatal: source offset does not fit in 32 bits (one source file must stay under 2 \
+          GiB).\n")
+      sys.exit(1)
+    return Loc::{ .file_id = base_core.pools.intern_file(file), .offset = I32::offset }
+
+  fn with_file(r: Self, file: U8[]): Loc //< it replaces only the name (the position stays)
+    //<
+    //< **Only this and `at` turn a name into its number.**
+    return Loc::{ .file_id = base_core.pools.intern_file(file), .offset = r.offset }
+
+  fn file(r: Self): U8[] //< the only function that turns the number back into a logical name
+    //<
+    //< An unknown number gives empty (treated the same as no name).
+    return base_core.pools.get_file_str(r.file_id)
+
+impl Loc: Formattable
+  fn fmt(r: Self$@, w: Writer): Writer
+    return w.s("\{base_core.pools.get_file_str(r.file_id)\}:offset_\{r.offset\}")
+
+struct Span_info
+  span: Sz
+  offset: Sz
+
+enum Generic_bounds
+  found(start_idx: Sz, inner_start: Sz, inner_end: Sz, end_idx: Sz)
+  not_found
+
+enum Match_variant_info
+  variant(name_node: Ast_node$@, payload_start_idx: Sz)
+  not_variant
+
+struct Ast_node
+  // The I32 fields (kind_id / type_id / ival) come first, together, to cut the padding.
+  // **When adding a field, check the size per node**: there can be millions of nodes, so 8 bytes
+  // change the tree by tens of MB. **A guard fixes the size** (`want_node_bytes` in
+  // `tests/tools/perf_guard.kspls`); where growing it is the decision, update both.
+  kind_id: base_ast_kinds.Ast_kind
+  type_id: I32
+  ival: I32 //<
+    //< A number whose meaning depends on the node's kind
+    //<
+    //< On an `Identifier` (a field reference) it is the virtual field's number, on a `stmt_throw`
+    //< 0 = a new error / 1 = a `?`'s propagation, on a declaration whether the compiler made it
+    //< (`made_by_compiler` in `ast_ext.kspls`), and on a `for` / `if` / `switch` / labelled block
+    //< whether a `break` leaves it (`is_left_by_break` there). Make 0 the plain case, so a
+    //< forgotten value is the safe one; the `break` mark cannot be, as `left_by_break` there says.
+  text: U8[]
+  loc: Loc
+  children: List<|Ast_node$@|>$@
+  def_node: Ast_node$@
+  sym_ptr: Void$@ //< a Sema_symbol@, type-erased: base cannot import sema (a cycle)
+
+impl Ast_node: Formattable
+  fn fmt(r: Self$@, w: Writer): Writer
+    if r != null
+      return w.s(r.text)
+    return w.s("<null>")
+
+struct Ast_shared
+  empty_list: List<|Ast_node$@|>$@
+$shared: Ast_shared = ::{}
+
+impl Ast_shared
+  fn init(r: Self$@)
+    if r.empty_list == null
+      r.empty_list = List<|Ast_node$@|>.create(base_core.arena)
+
+fn new_ast_node_list(): List<|Ast_node$@|>$@
+  return List<|Ast_node$@|>.create(base_core.arena)
+
+fn empty_child_list(): List<|Ast_node$@|>$@ //<
+  //< The empty list shared by the nodes that have no children
+  //<
+  //< For code that builds an Ast_node itself (the cache restore in ksplc/parse/ast_cache.kspls);
+  //< one list per childless node would waste one allocation each.
+  //< Caution: **Do not push onto the returned list.** Every childless node shares it, so a push
+  //< shows up as a child of an unrelated node.
+  if shared.empty_list == null
+    shared.init()
+  return shared.empty_list
+
+fn variance_names_mut(mask: I32, pos: Sz): Bool //<
+  //< Whether a generic's declaration marked the type argument at pos as mutable
+  //<
+  //< It is true for position 0 of `struct Box<|$T|>`.
+  //< mask is the value gen_param_variance_mask in `ast_ext.kspls` returns; it holds 32 positions.
+  return pos < 32 && ((mask >> I32::pos) & 1) == 1
+
+impl U8[]
+  fn find_generic_bounds(r: U8[]): Generic_bounds
+    $start_idx: Sz = 0
+    $inner_start: Sz = 0
+    $has_start: = false
+    $depth: = 0
+
+    for $i: = 0; i < r.len; i += 1
+      if r.starts_with("<|", i)
+        if depth == 0
+          start_idx = i
+          inner_start = i + 2
+          has_start = true
+        depth += 1
+        i += 1
+      else if r.starts_with("|>", i)
+        if depth > 0
+          depth -= 1
+          if depth == 0 && has_start
+            return .found(start_idx, inner_start, i, i + 1)
+        i += 1
+    return .not_found
+
+  fn generic_args_str(r: U8[]): U8[] //<
+    //< The contents of the `<|…|>` of a realized name (`Box<|I32 immut|>`)
+    //<
+    //< Empty where it is not a generic.
+    switch r.find_generic_bounds() case .found(_s, inner_start, inner_end, _e)
+      return r.sub(inner_start, inner_end - inner_start)
+    default {}
+    return ""
+
+  fn nth_type_arg(r: U8[], pos: Sz): U8[] //<
+    //< The name of the pos-th actual argument of `args` (the `<|…|>`'s contents)
+    //<
+    //< Empty where there is none. **It does not allocate** (it is a view into the original string).
+    $start: Sz = 0
+    for _passed in Range.asc(pos)
+      start = r.type_arg_end(start) + 1
+      if start > r.len
+        return ""
+    return r.sub(start, r.type_arg_end(start) - start).trim_start()
+
+  fn count_type_args(r: U8[]): Sz //< how many actual arguments `args` holds
+    if r.len == 0
+      return 0
+    $n: Sz = 1
+    $end: = r.type_arg_end(0)
+    for end < r.len
+      n += 1
+      end = r.type_arg_end(end + 1)
+    return n
+
+  priv fn type_arg_end(r: U8[], from: Sz): Sz //<
+    //< Where the argument starting at from ends: the next comma outside every bracket, or the end
+    //<
+    //< Caution: **Skip the commas inside `(…)` as well as inside a nested `<|…|>`**, or a function
+    //< type's own commas (`fn(I32,I32):I32`) cut one argument in two.
+    $depth: I32 = 0
+    for $i: = from; i < r.len; i += 1
+      if r.starts_with("<|", i)
+        depth += 1
+        i += 1
+      else if r.starts_with("|>", i)
+        depth -= 1
+        i += 1
+      else if r[i] == '('
+        depth += 1
+      else if r[i] == ')'
+        depth -= 1
+      else if r[i] == ',' && depth == 0
+        return i
+    return r.len
+
+  fn strip_variance_const(r: U8[], mask: I32): Str_builder //<
+    //< It drops the **outer** immutability qualifier at the positions `mask` named
+    //<
+    //< It works on a list of actual arguments.
+    //< **The separator is `type_arg_sep`** (the reason is at that constant). Only the last mark is
+    //< dropped: `make_const` adds it at the end, so that is the outer one.
+    $out: = Str_builder.new()
+    n: = r.count_type_args()
+    $changed: = false
+    for $i: Sz = 0; i < n; i += 1
+      if i > 0
+        out.s(type_arg_sep)
+      a: = r.nth_type_arg(i)
+      if variance_names_mut(mask, i) && a.ends_with(base_core.immut_mark)
+        out.s(a.strip_suffix(base_core.immut_mark))
+        changed = true
+      else
+        out.s(a)
+    if !changed
+      out.clear()
+    return out
+
+  fn get_generic_base_name(r: U8[]): U8[]
+    switch r.find_generic_bounds() case .found(start_idx, _is, _ie, _end)
+      return r.sub(0, start_idx)
+    default
+      return r
+
+  fn default_import_alias(r: U8[]): U8[] //<
+    //< the import alias where `import "a/b/c";` wrote no `as`
+    //<
+    //< It takes the part after the last separator.
+    //< Caution: Keep the rule in this one place. Otherwise the code that creates the alias
+    //< (collect.kspls) and imports.kspls's [I0310] drift apart unnoticed.
+    last_slash: = r.rfind_char('/')
+    base: = r.sub_from(last_slash + 1) if last_slash >= 0 else r
+    // **The extension is not part of a name that can be written**; kept, `lib.helper()` would fail
+    // with "undefined path or identifier 'lib'", and only an `as` would get past it.
+    return base.sub(0, base.rfind_char('.')) if base.has_kspl_ext() else base
+
+  fn resolve_import_path(r: U8[], import_str: U8[]): Str_builder
+    $res: = r.logical_path(import_str)
+    // A bare name means the default notation, or the other one where only that file exists.
+    // **The reader and the analyser both go through here**, so one file has one name
+    // (`name_as_found` in `locate.kspls`).
+    found: = base_locate.name_as_found(res.slice())
+    if !found.equals(res.slice())
+      res.clear().s(found)
+    return res
+
+  fn resolve_embed_path(r: U8[], written: U8[]): U8[] //<
+    //< The logical name of the file an `embed` in this file names
+    //<
+    //< **It is found the way an import's file is** (`logical_path` below), so a package's data is
+    //< read from its folder. Nothing is added: an embedded file's name includes its extension.
+    $res: = r.logical_path(written)
+    defer res.free()
+    return base_core.arena.dup_str(res.slice())
+
+  priv fn logical_path(r: U8[], written: U8[]): Str_builder //<
+    //< What a path written in this file names
+    //<
+    //< It is that package's file where the first segment names a package, and otherwise the file
+    //< next to this one.
+    $res: = Str_builder.new()
+    if written.starts_with("std/") ||
+      (written.find_char('/') >= 0 && !written.starts_with("."))
+      res.s(written)
+    else
+      dir: = sys.get_dir_name(r)
+      if dir.len > 0
+        res.s("\{dir\}/\{written\}")
+      else
+        res.s(written)
+    // Caution: **Normalize a logical name here and only here**; with `./hw` and `hw` one folder
+    // looks like two packages and an unmarked symbol becomes "invisible" (`one_name` in
+    // `locate.kspls`). The entry point's name goes the same way, through `to_project_relative`.
+    tidy: = base_locate.to_project_relative(res.slice())
+    if !tidy.equals(res.slice())
+      res.clear().s(tidy)
+    return res
+
+impl Ast_node
+  fn get_kind_str(r: Self$@): U8$[]
+    if r != null
+      return base_core.pools.get_kind_str(I32::r.kind_id, "")
+    return ""
+
+  fn new(kind: base_ast_kinds.Ast_kind, text: U8[], loc: Loc, arena: Arena$@ = null): Ast_node$@ //<
+    //< It allocates a node on an arena
+    //<
+    //< **Without `arena`, it goes on `base_core.arena` (the pipeline's shared one).** Here `null`
+    //< means the default arena, not std's global heap: a node always lives on an arena.
+    if shared.empty_list == null
+      shared.init()
+    target: = base_core.arena if arena == null else arena
+    return target
+      .create(Ast_node::{
+      .kind_id = kind,
+      .text = text,
+      .loc = loc,
+      .children = shared.empty_list // the other fields are left zero
+    })
+  fn peek_kind_id(kind: U8[]): base_ast_kinds.Ast_kind //<
+    //< The **only function** that looks up a kind by name
+    //<
+    //< Caution: **Do not call it when building nodes**; pass an `Ast_kind` there (`new` /
+    //< `set_kind` / `morph`). It serves KSPEG's rule names (`parse/load.kspls`), at the boundary.
+    return base_ast_kinds.Ast_kind::base_core.pools.intern_kind(kind)
+
+  fn set_kind(r: Self$@, new_kind: base_ast_kinds.Ast_kind)
+    if r != null
+      r.kind_id = new_kind
+  // --- Fluent Builders ---
+
+  fn build_ident(name: U8[], type_id: I32, loc: Loc): Ast_node$@
+    return Ast_node.new(.k_identifier, name, loc).with_type(type_id)
+
+  fn build_type_expr(type_name: U8[], type_id: I32, loc: Loc): Ast_node$@
+    return Ast_node.new(.k_type_expr, type_name, loc).with_type(type_id)
+      .add_child(Ast_node.new(.k_type_atom, "Primitive", loc).with_type(type_id))
+
+  fn build_var_decl(var_name: U8[], type_name: U8[], type_id: I32, loc: Loc): Ast_node$@
+    return Ast_node.new(.k_decl_var, "var", loc).with_type(type_id)
+      .add_child(Ast_node.new(.k_empty, "", loc))
+      .add_child(Ast_node.new(.k_keyword, "var", loc))
+      .add_child(Ast_node.build_ident(var_name, type_id, loc))
+      .add_child(Ast_node.build_type_expr(type_name, type_id, loc))
+
+  fn build_synth_param(name: U8[], type_name: U8[], type_id: I32, loc: Loc): Ast_node$@ //<
+    //< A synthesized function's parameter `name: <type>`
+    //<
+    //< Its identifier's def_node is the parameter itself, as a reference to it has to be linked
+    //< ("The limits on building an AST" in ksplc/docs/DESIGN.md).
+    param: = Ast_node.new(.k_fn_param, "param", loc).with_type(type_id)
+    id_node: = Ast_node.build_ident(name, type_id, loc)
+    id_node.def_node = param
+    return param.add_child(id_node)
+      .add_child(Ast_node.build_type_expr(type_name, type_id, loc))
+
+  fn build_synth_fn(name: U8[], params: Ast_node$@, ret_name: U8[], ret_id: I32, loc: Loc):
+    Ast_node$@ //< a synthesized function `fn <name>(<params>): <ret>` still without its body
+    sig: = Ast_node.new(.k_type_fn_sig, "sig", loc)
+      .add_child(Ast_node.new(.k_literal, "(", loc)).add_child(params)
+      .add_child(Ast_node.new(.k_literal, ")", loc))
+      .add_child(Ast_node.build_type_expr(ret_name, ret_id, loc))
+    return Ast_node.new(.k_decl_fn, "fn", loc)
+      .add_child(Ast_node.new(.k_keyword, "fn", loc))
+      .add_child(Ast_node.new(.k_identifier, name, loc)).add_child(sig)
+
+  fn build_member_access(recv: Ast_node$@, field_name: U8[], field_idx: I32, field_type_id: I32,
+    loc: Loc): Ast_node$@ //< `<recv>.<field>`, with the field's index in the member's ival
+      //<
+      //< Sema never sees this node, so the index is set here. Left 0, genllvm reads every field as
+      //< the first (genc goes by the name and is unaffected).
+    member: = Ast_node.new(.k_identifier, field_name, loc)
+    member.ival = field_idx
+    return Ast_node.new(.k_expr_postfix, ".", loc).with_type(field_type_id).add_child(recv)
+      .add_child(Ast_node.new(.k_literal, ".", loc)).add_child(member)
+
+  fn build_field_access(obj_name: U8[], obj_type_id: I32, field_name: U8[], field_type_id: I32,
+    loc: Loc): Ast_node$@
+    // The index follows the virtual field numbers in ksplc/sema/body/dot.kspls (slice.len=1,
+    // result.is_err=0 / .error_code=1 / .val=2). It is built without sema's resolution, so it
+    // breaks silently when those numbers change.
+    $field_idx: I32 = 0
+    if field_name.equals("len") || field_name.equals("error_code")
+      field_idx = 1
+    else if field_name.equals("val")
+      field_idx = 2
+    return Ast_node.build_member_access(Ast_node.build_ident(obj_name, obj_type_id, loc),
+      field_name, field_idx, field_type_id, loc)
+
+  fn build_assign_stmt(left: Ast_node$@, right: Ast_node$@, loc: Loc): Ast_node$@
+    return Ast_node.new(.k_stmt_expr, "assign", loc).add_child(left)
+      .add_child(Ast_node.new(.k_assign_op, "=", loc)).add_child(right)
+
+  fn build_if_stmt(cond: Ast_node$@, then_block: Ast_node$@, else_block: Ast_node$@, loc: Loc):
+    Ast_node$@
+    if_node: = Ast_node.new(.k_stmt_if, "if", loc)
+      .add_child(Ast_node.new(.k_empty, "", loc)).add_child(cond).add_child(then_block)
+    if_node.add_child(else_block if else_block != null else Ast_node.new(.k_empty, "", loc))
+    return if_node
+
+  fn build_method_call(recv: Ast_node$@, method_name: U8[], args: Ast_node$@, res_type_id: I32,
+    loc: Loc): Ast_node$@
+    m_acc: = Ast_node.new(.k_method_access, ".", loc).with_type(res_type_id)
+    if recv != null
+      m_acc.add_child(recv)
+    m_acc.add_child(Ast_node.new(.k_identifier, method_name, loc))
+
+    safe_args: =
+      (Ast_node.new(.k_expr_args, "args", loc) if args == null
+      else (args if args.kind_id == .k_expr_args
+      else Ast_node.new(.k_expr_args, "args", loc).add_child(args)))
+
+    return Ast_node.new(.k_expr_postfix, "(", loc).with_type(res_type_id).add_child(m_acc)
+      .add_child(Ast_node.new(.k_literal, "(", loc)).add_child(safe_args)
+
+  fn build_fn_call(callee_name: U8[], args: Ast_node$@, loc: Loc): Ast_node$@ //<
+    //< It builds a free function call node of the shape `name(args…)`
+    //<
+    //< It is build_method_call without a receiver (how desugaring calls a std/lang function).
+    safe_args: =
+      (Ast_node.new(.k_expr_args, "args", loc) if args == null
+      else (args if args.kind_id == .k_expr_args
+      else Ast_node.new(.k_expr_args, "args", loc).add_child(args)))
+
+    return Ast_node.new(.k_expr_postfix, "(", loc)
+      .add_child(Ast_node.new(.k_identifier, callee_name, loc))
+      .add_child(Ast_node.new(.k_literal, "(", loc)).add_child(safe_args)
+
+  fn build_unary_expr(op: U8[], target: Ast_node$@, type_id: I32, loc: Loc): Ast_node$@
+    return Ast_node.new(.k_expr_unary, op, loc).with_type(type_id)
+      .add_child(Ast_node.new(.k_literal, op, loc)).add_child(target)
+
+  fn build_label_stmt(label_name: U8[], loc: Loc): Ast_node$@
+    return Ast_node.new(.k_stmt_label, "label", loc)
+      .add_child(Ast_node.new(.k_identifier, label_name, loc))
+
+  fn build_goto_stmt(label_name: U8[], loc: Loc): Ast_node$@
+    return Ast_node.new(.k_stmt_goto, "goto", loc)
+      .add_child(Ast_node.new(.k_identifier, label_name, loc))
+
+  fn build_int_literal(val: I64, loc: Loc): Ast_node$@ //<
+    //< It synthesizes an integer literal node, shaped like one written in the source
+    return Ast_node.new(.k_integer, base_core.arena.text().s("\{val\}").take(), loc)
+
+  fn build_bool_literal(val: Bool, loc: Loc): Ast_node$@
+    return Ast_node.new(.k_bool, "true" if val else "false", loc)
+
+  fn build_inferred_var_decl(var_name: U8[], init_expr: Ast_node$@, loc: Loc): Ast_node$@ //<
+    //< It synthesizes a decl_var with no type annotation (`name: = init_expr;`)
+    //<
+    //< Unlike build_var_decl, it leaves the type to inference. The decl_var's text is "var_synth",
+    //< neither "var" nor "let".
+    return Ast_node.new(.k_decl_var, "var_synth", loc)
+      .add_child(Ast_node.new(.k_empty, "", loc))
+      .add_child(Ast_node.new(.k_keyword, "var", loc))
+      .add_child(Ast_node.build_ident(var_name, 0, loc))
+      .add_child(Ast_node.new(.k_empty, "", loc)).add_child(init_expr)
+  // --- Core Operations ---
+
+  fn clone(r: Self$@): Ast_node$@
+    return r.clone_with(base_core.arena, 0)
+
+  priv fn clone_with(r: Self$@, arena: Arena$@, depth: Sz): Ast_node$@
+    if r == null
+      return null
+    if depth >= max_clone_depth
+      io.err()
+        .s("\nfatal: AST node nesting too deep to clone (possible unbounded pointer/array/deref \
+          chain).\n")
+      sys.exit(1)
+    cloned: = Ast_node.new(r.kind_id, r.text, r.loc, arena)
+    cloned.type_id = r.type_id
+    cloned.def_node = r.def_node
+    cloned.sym_ptr = r.sym_ptr
+    cloned.ival = r.ival
+    for c in r.children
+      cloned.add_child(c.clone_with(arena, depth + 1))
+    return cloned
+
+  fn retarget_loc(r: Self$@, loc: Loc) //< it sets `loc` on every node of this subtree
+    //<
+    //< For a synthesized declaration, so its diagnostics point where the user wrote what it stands
+    //< for (a closure's lifted declarations, a trait's default method copied into an impl).
+    //< Caution: **Do not replace only `file`**: the offset would point somewhere wrong in the file.
+    if r == null
+      return
+    r.loc = loc
+    for c in r.children
+      c.retarget_loc(loc)
+
+  fn clear_children(r: Self$@)
+    if r.children != shared.empty_list
+      r.children.len = 0
+
+  fn morph(r: Self$@, new_kind: base_ast_kinds.Ast_kind, new_text: U8[])
+    r.set_kind(new_kind)
+    r.text = base_core.arena.dup_str(new_text)
+    r.clear_children()
+
+  fn add_child(r: Self$@, child: Ast_node$@): Ast_node$@
+    if r.children == shared.empty_list
+      r.children = new_ast_node_list()
+    r.children.push(child)
+    return r
+
+  fn insert_child(r: Self$@, index: Sz, child: Ast_node$@)
+    if r.children == shared.empty_list
+      r.children = new_ast_node_list()
+    r.children.insert(index, child)
+
+  fn with_type(r: Self$@, type_id: I32): Ast_node$@
+    r.type_id = type_id
+    return r
+  fn set_child(r: Self$@, index: Sz, child: Ast_node$@)
+    if index >= r.children.len
+      r.ice_panic("AST set_child Index Out Of Bounds")
+    r.children.set(index, child)
+
+  fn get_child(r: Self$@, index: Sz): Ast_node$@
+    if index >= r.children.len
+      r.ice_panic("AST get_child Index Out Of Bounds")
+    return r.children.get(index)
+
+  fn safe_get_child(r: Self$@, index: Sz): Ast_node$@
+    return r.get_child(index) if r != null && index < r.children.len else null
+
+  fn get_non_empty_child(r: Self$@, index: Sz): Ast_node$@
+    c: = r.safe_get_child(index)
+    return c if c != null && c.kind_id != .k_empty else null
+
+  fn last_child(r: Self$@): Ast_node$@
+    if r.children.len == 0
+      return r
+    return r.get_child(r.children.len - 1)
+
+  fn is_literal(r: Self$@, text: U8[]): Bool
+    return r != null && r.kind_id == .k_literal && r.text.equals(text)
+
+  fn is_keyword(r: Self$@, text: U8$[]): Bool
+    return r != null && r.kind_id == .k_keyword && r.text.equals(text)
+
+  fn find_child(r: Self$@, target_id: base_ast_kinds.Ast_kind): Ast_node$@
+    if r == null
+      return null
+    for c in r.children
+      if c.kind_id == target_id
+        return c
+    return null
+
+  fn find_deep_child(r: Self$@, target_id: base_ast_kinds.Ast_kind): Option<|Ast_node$@|>
+    return r.find_deep_child_impl(target_id, 0)
+
+  priv fn find_deep_child_impl(r: Self$@, target_id: base_ast_kinds.Ast_kind, depth: Sz):
+    Option<|Ast_node$@|> //<
+      //< Depth-guarded, since a postfix chain escapes max_parse_depth (see max_clone_depth).
+    if r == null
+      return Option<|Ast_node$@|>.none
+    if depth >= max_find_deep_child_depth
+      io.err()
+        .s("\nfatal: AST node nesting too deep to search (possible unbounded pointer/array/deref \
+          chain).\n")
+      sys.exit(1)
+    if r.kind_id == target_id
+      return Option<|Ast_node$@|>.some(r)
+    for c in r.children
+      if res: = c.find_deep_child_impl(target_id, depth + 1)
+        return Option<|Ast_node$@|>.some(res)
+    return Option<|Ast_node$@|>.none
+
+  fn find_text(r: Self$@, target_id: base_ast_kinds.Ast_kind): U8[]
+    c: = r.find_child(target_id)
+    if c != null
+      return c.text
+    return ""
+
+  fn first_expr(r: Self$@): Option<|Ast_node$@|>
+    if r == null
+      return Option<|Ast_node$@|>.none
+    for c in r.children
+      if c.kind_id != .k_keyword && c.kind_id != .k_literal && c.kind_id != .k_attribute &&
+        c.kind_id != .k_visibility && c.kind_id != .k_attribute_list
+        return Option<|Ast_node$@|>.some(c)
+    return Option<|Ast_node$@|>.none
+
+  fn get_span_length(r: Self$@): Sz
+    if r.children.len == 0
+      return r.text.len
+    last_child: = r.last_child()
+    end_offset: = last_child.loc.offset + last_child.get_span_length()
+    return end_offset - r.loc.offset if end_offset > r.loc.offset else r.text.len
+
+  fn get_span_offset(r: Self$@): Span_info
+    if r == null
+      return Span_info::{ .span = 1, .offset = 0 }
+    s: = r.get_span_length()
+    return Span_info::{ .span = s if s > 0 else 1, .offset = r.loc.offset }
+
+  priv fn print_tree_to(r: Self$@, depth: Sz, out: Writer)
+    for _i in Range.asc(depth)
+      out.s("  ")
+    out.s("[\{r.get_kind_str()\}] '\{r.text\}'")
+    if r.type_id != 0
+      out.s(" (TypeID: \{r.type_id\})")
+    out.s("\n")
+    for c in r.children
+      c.print_tree_to(depth + 1, out)
+
+  priv fn print_tree(r: Self$@, depth: Sz)
+    r.print_tree_to(depth, base_diag.log())
+
+  fn ice_panic(r: Self$@, msg: U8$[])
+    if r != null
+      _l: = base_diag.log()
+      _l.s("\n=========================================\n[ICE] \{msg\}\nLocation: ")
+      r.loc.fmt(_l)
+      _l.s("\nNode text: '\{r.text\}'\n--- AST Dump ---\n")
+      r.print_tree(0)
+      _l.s("=========================================\n")
+    base_diag.ice_panic(msg)
+
+  fn ice_assert(r: Self$@, cond: Bool, msg: U8$[])
+    if !cond
+      r.ice_panic(msg)
+
+  // Caution: **Return the result; do not end the run here.** A language server must go on
+  // serving the other files ("The supervisor is the last resort" in `../docs/DESIGN.md`); the
+  // caller fails that file. **Take the source text and the file name**, or the depth error has no
+  // position to report. `src` is what `loc.offset` points into, a synthesized source included.
+  fn validate_layout(r: Self$@, src: U8[], file: U8[]): Bool //< false where it is too deep
+    return r.validate_layout_impl(src, file, 0)
+
+  priv fn validate_layout_impl(r: Self$@, src: U8[], file: U8[], depth: Sz): Bool
+    if r == null
+      return true
+    if depth >= max_validate_depth
+      starts: = src.line_starts(base_core.arena)
+      base_diag.print_diagnostic(file, src, r.loc.offset, 1,
+        "AST node nesting too deep to validate (possible unbounded pointer/array/deref chain)",
+        .error, starts)
+      return false
+    // **The trailing attribute list is not counted.** A statement's attribute goes at the end
+    // (apply_modifiers_to_targets in parse/normalize.kspls) and moves no fixed slot; counted, one
+    // statement would have two possible lengths.
+    $len: = r.children.len
+    if len > 0 && r.get_child(len - 1).kind_id == .k_attribute_list
+      len -= 1
+
+    switch r.kind_id case .k_decl_var, .k_decl_const
+      r.ice_assert(len == 5,
+        "AST Validation Error: decl_var/decl_const must have exactly 5 children")
+      child1: = r.get_child(1)
+      // `var` / `let` are marks parse/normalize_decl.kspls sets from the `$`, not grammar.
+      r.ice_assert(child1.kind_id == .k_keyword,
+        "Child 1 must be Keyword (synthesized var/let, or const)")
+      r.ice_assert(r.get_child(2).kind_id == .k_identifier, "Child 2 must be Identifier")
+    case .k_stmt_if
+      r.ice_assert(len == 4, "AST Validation Error: stmt_if must have exactly 4 children")
+    case .k_stmt_loop
+      r.ice_assert(len == 5, "AST Validation Error: stmt_loop must have exactly 5 children")
+    case .k_stmt_labeled_block
+      r.ice_assert(len == 2,
+        "AST Validation Error: stmt_labeled_block must have exactly 2 children")
+      r.ice_assert(r.get_child(0).kind_id == .k_label, "Child 0 must be label")
+      r.ice_assert(r.get_child(1).kind_id == .k_stmt_block, "Child 1 must be stmt_block")
+    case .k_stmt_match, .k_expr_postfix, .k_decl_import, .k_decl_struct, .k_decl_enum, .k_decl_impl,
+      .k_decl_trait, .k_enum_field
+      r.ice_assert(len >= 2, "AST Validation Error: node must have at least 2 children")
+    case .k_stmt_return, .k_stmt_break, .k_stmt_continue
+      r.ice_assert(len >= 1 && len <= 2, "AST Validation Error: node must have 1 or 2 children")
+    case .k_stmt_throw, .k_stmt_fallback, .k_expr_unary
+      r.ice_assert(len == 2, "AST Validation Error: node must have exactly 2 children")
+    case .k_stmt_defer
+      // Caution: `defer` takes no capture list, so no third child; without this check, nobody knows
+      // what get_defer_block's "first child that is not a keyword" picks up.
+      r.ice_assert(len == 2, "AST Validation Error: stmt_defer must have exactly 2 children")
+    case .k_expr_catch_chain, .k_expr_catch
+      r.ice_assert(len >= 2 && len <= 3, "AST Validation Error: node must have 2 or 3 children")
+    case .k_stmt_expr
+      r.ice_assert(len >= 1 && len <= 3,
+        "AST Validation Error: stmt_expr must have 1 to 3 children")
+    case .k_expr, .k_expr_ternary
+      r.ice_assert(len == 3, "AST Validation Error: node must have exactly 3 children")
+    case .k_expr_field_init
+      r.ice_assert(len >= 1 && len <= 4,
+        "AST Validation Error: expr_field_init must have 1 to 4 children")
+    case .k_decl_embed, .k_decl_alias
+      r.ice_assert(len >= 3, "AST Validation Error: node must have at least 3 children")
+    case .k_enum_payload
+      r.ice_assert(len >= 1, "AST Validation Error: enum_payload must have at least 1 child")
+    case .k_expr_implicit_dot
+      r.ice_assert(len >= 1 && len <= 2,
+        "AST Validation Error: implicit dot must have 1 or 2 children")
+    default { // the other kinds have no fixed layout to check
+    }
+
+    // **It stops at the first node too deep**; going on would repeat the error for each node below.
+    for i in Range.asc(r.children.len)
+      if !r.get_child(i).validate_layout_impl(src, file, depth + 1)
+        return false
+    return true

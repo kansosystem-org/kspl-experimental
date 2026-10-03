@@ -1,0 +1,193 @@
+//< Generates C99 for struct / enum / trait declarations
+//<
+//< Field layouts, tagged unions (enums), vtable types and a trait's wrapper struct (the thunks are
+//< synthesized in ksplc/lower/root.kspls as ordinary decl_fn / decl_const). Forward declarations
+//< are in decl.kspls; expressions and statements in expr.kspls / stmt.kspls.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/mangle" as base_mangle
+import "ksplc/gen/c/ctx" { Genc_ctx }
+import "ksplc/gen/c/decl" as gen_c_decl
+import "ksplc/gen/c/expr" as gen_c_expr
+import "ksplc/gen/c/root" as gen_c_root
+import "ksplc/lower/prune" as lower_prune
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "std/str"
+
+impl Ast_node
+  fn emit_enum_decl(r: Ast_node$@, cg: Genc_ctx$@)
+    cg.emit_line_directive(r)
+    name: = r.find_text(.k_identifier)
+    r.ice_assert(name.len > 0, "emit_node: enum_decl missing identifier")
+
+    is_scalar: = cg.env.is_scalar_enum(r.type_id)
+    cg.s("enum {\n" if is_scalar else "typedef enum {\n")
+
+    for child2 in r.children
+      if child2.kind_id == .k_enum_variant
+        child2.ice_assert(child2.children.len > 0, "emit_node: enum_variant has no children")
+        cg.clear_scratch()
+        child2.get_child(0).text.mangle_c_identifier_to(cg.scratch)
+        cg.s("    kspl_\{name\}_\{cg.scratch.slice()\}")
+
+        last_node: = child2.last_child()
+        if last_node.kind_id == .k_expr || last_node.kind_id == .k_integer
+          cg.s(" = ")
+          last_node.emit_expr(cg)
+        cg.s(",\n")
+
+    if is_scalar
+      cg.s("};\n\n")
+      return
+
+    cg.s("} kspl_\{name\}_Tag;\n\nstruct \{name\} {\n    kspl_\{name\}_Tag tag;\n")
+
+    $has_payloads: = false
+    if _found: = r.find_deep_child(.k_enum_payload)
+      has_payloads = true
+
+    if has_payloads
+      cg.s("    union {\n")
+      for child2 in r.children
+        if child2.kind_id == .k_enum_variant
+          cg.clear_scratch()
+          child2.get_child(0).text.mangle_c_identifier_to(cg.scratch)
+          v_name: = cg.scratch.slice()
+
+          f_list: = child2.find_child(.k_enum_payload)
+          if f_list != null
+            cg.s("        struct {\n")
+            for f_node in f_list.children
+              if f_node.kind_id == .k_enum_field
+                f_name_node: = f_node.get_enum_field_name_node()
+                f_name: = f_name_node.text if f_name_node != null else ""
+                f_type: = f_node.get_enum_field_type_node()
+                cg.s("            ")
+                f_type.emit_resolved_type(cg, false)
+                cg.s(" ")
+                cg.nm(f_name)
+                cg.s(";\n")
+            cg.s("        } \{v_name\};\n")
+      cg.s("    } payload;\n")
+    cg.s("};\n\n")
+
+  fn emit_vtable_param(r: Ast_node$@, cg: Genc_ctx$@, pi: Sz) //<
+    //< It writes one argument of a vtable's function pointer
+    //<
+    //< pi is the argument's position. **The first (pi==0) is always a `void*`**: the receiver's
+    //< type differs per implementation.
+    p_name: = r.get_decl_id_text()
+    t_node: = r.get_decl_type_node()
+    if pi > 0 && t_node != null && t_node.kind_id != .k_empty &&
+      !t_node.text.equals("Unknown")
+      t_node.emit_resolved_type(cg, false)
+      cg.s(" ").nm(p_name)
+      return
+    // No type annotation: the inferred type, where there is one.
+    if pi > 0 && !sema_type_env.is_unknown(r.type_id) && !sema_type_env.is_void(r.type_id)
+      cg.t(r.type_id).s(" ").nm(p_name)
+      return
+    cg.s("void* ").nm(p_name)
+
+  fn emit_trait_decl(r: Ast_node$@, cg: Genc_ctx$@) //<
+    //< It emits a trait's C struct and the struct of its vtable
+    //<
+    //< Note: The walk of a vtable's function pointers is like emit_param_list in gen/c/decl.kspls,
+    //< but the two cannot be merged: this one always makes the first argument (the receiver) a
+    //< void* (the pi==0 branch).
+    cg.emit_line_directive(r)
+    name: = r.find_text(.k_identifier)
+    cg
+      .s("struct \{name\} {\n    void *obj;\n    const struct kspl_vtable_\{name\} \
+        *vtable;\n};\n\nstruct kspl_vtable_\{name\} {\n")
+
+    for c in r.children
+      if c.has_vtable_slot()
+        m_name: = c.find_text(.k_identifier)
+        type_node: = c.get_decl_type_node()
+
+        cg.s("    ")
+        if type_node != null
+          type_node.emit_resolved_type(cg, true)
+          cg.s(" (*")
+        else
+          cg.s("void (*")
+        // A method name is emitted plain as the vtable struct's member, so it gets the suffix
+        // here just as at the call (`vtable->` in gen/c/expr.kspls).
+        cg.nm(m_name)
+        cg.s(")(")
+
+        param_list: = c.get_fn_params()
+        if param_list != null
+          $is_first: = true
+          for pi in Range.asc(param_list.children.len)
+            item: = param_list.get_child(pi)
+            if item.kind_id == .k_fn_param
+              if !is_first
+                cg.s(", ")
+              item.emit_vtable_param(cg, pi)
+              is_first = false
+            else if item.kind_id == .k_literal && item.text.equals("...")
+              if !is_first
+                cg.s(", ")
+              cg.s("...")
+              is_first = false
+        cg.s(");\n")
+    cg.s("};\n\n")
+
+  fn emit_impl_decl(r: Ast_node$@, cg: Genc_ctx$@)
+    cg.emit_line_directive(r)
+    target_node: = r.get_decl_type_node()
+    r.ice_assert(target_node != null, "emit_node: impl_decl missing target type_expr")
+
+    t_id: = target_node.type_id
+
+    old_impl: = cg.current_impl_name
+    if t_id != 0
+      cg.clear_scratch()
+      cg.env.mangle_type_id_to(t_id, cg.scratch)
+      cg.current_impl_name = cg.scratch.slice()
+
+    for child in r.children
+      if child.kind_id == .k_decl_fn && child.is_emittable()
+        child.emit(cg)
+
+    cg.current_impl_name = old_impl
+
+  fn emit_struct_decl(r: Ast_node$@, cg: Genc_ctx$@)
+    cg.emit_line_directive(r)
+    name: = r.find_text(.k_identifier)
+    r.ice_assert(name.len > 0, "emit_node: struct_decl missing Identifier")
+
+    $is_packed: = false
+    $align_val: I32 = 0
+    $size_val: I32 = 0
+    if struct_def: = cg.env.get_struct_def(cg.env.get_str(r.type_id))
+      is_packed = struct_def.is_packed
+      align_val = struct_def.align_attr
+      size_val = struct_def.size_attr
+
+    cg.s("struct ")
+    if align_val > 0
+      cg.s("__attribute__((aligned(\{align_val\}))) ")
+    if is_packed
+      cg.s("__attribute__((packed)) ")
+    cg.s("\{name\} {\n")
+    // An opaque struct (a declaration with no body and a `#size(N)`) only reserves the space.
+    // Caution: **Do not make it an empty `{}`.** C99 has no such thing, and a size of 0 would make
+    // the layout of a struct holding it by value differ from the real one.
+
+    if size_val > 0
+      cg.s("    U8 _opaque[\{size_val\}];\n};\n\n")
+      return
+    for c in r.children
+      if c.kind_id == .k_struct_field
+        current_field: = c.find_text(.k_identifier)
+        type_node: = c.get_decl_type_node()
+        if current_field.len > 0 && type_node != null && type_node.kind_id != .k_empty
+          cg.s("    ")
+          type_node.emit_c_decl(cg, current_field, false)
+          cg.s(";\n")
+    cg.s("};\n\n")

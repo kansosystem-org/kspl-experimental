@@ -1,0 +1,124 @@
+//< Folds a slice's postfix (`T[]` / `T$[]`) into `std/lang`'s `Slice<|T|>` / `Slice<|$T|>`
+//<
+//< It applies only to type expressions written in the source. **The type itself has one origin**:
+//< the `Slice<|$T|>` built here and the code that looks up its type id directly both end in
+//< `instantiate_struct` ("`T[]` is sugar for `Slice<|$T|>`" in `../../docs/DESIGN.md`).
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "std/chars"
+import "std/ds" { List }
+import "std/str" { Str_builder }
+
+fn wrap_type_expr(base: Ast_node$@, posts: List<|Ast_node$@|>$@, loc: base_ast.Loc): Ast_node$@ //<
+  //< It wraps the base and the postfixes still attached to it into one `type_expr`
+  //<
+  //< Where there is no postfix, it returns the base unchanged.
+  if posts.len == 0
+    return base
+  node: = Ast_node.new(.k_type_expr, "", loc)
+  node.add_child(base)
+  for p in posts
+    node.add_child(p)
+  node.text = base_core.arena.dup_str(spell_type_expr(node))
+  return node
+
+fn is_slice_postfix(p: Ast_node$@): Bool //< whether it is a postfix to fold
+  //<
+  //< **A postfix holding a size is not folded**: a `[N]` is recognized by its child, and a `[_]`,
+  //< which has none, by its text. A `[_]` comes from expanding `T[]::{ v1, … }`
+  //< (desugar_slice_elems in `desugar.kspls`); if folded, its elements would read as the
+  //< descriptor's fields.
+  t: = p.text.strip_prefix("$")
+  return t.starts_with("[") && !t.starts_with("[_") && p.children.len == 0
+
+fn make_slice_atom(inner_raw: Ast_node$@, is_mut: Bool, loc: base_ast.Loc): Ast_node$@ //<
+  //< It builds the `type_atom` for `Slice<|arg|>`
+  //<
+  //< With `is_mut`, it is `Slice<|$arg|>`.
+  //< Caution: **Set the `type_args` text here**: normalization (`normalize_type_args_text`) runs
+  //< before desugar, and `get_full_path_str_to` (`../base/ast_spell.kspls`) reads the text.
+  // **Wrap a type argument in a `type_expr`**: strip_arg_mut_mark (`../sema/decl/variance.kspls`)
+  // looks for a `type_expr`'s child, and with a bare `type_atom` the mark alone is resolved as a
+  // type named `$`.
+  $inner: Ast_node$@ = inner_raw
+  if inner.kind_id != .k_type_expr
+    wrapped: = Ast_node.new(.k_type_expr, "", loc)
+    wrapped.add_child(inner)
+    wrapped.text = base_core.arena.dup_str(spell_type_expr(wrapped))
+    inner = wrapped
+  $arg: Ast_node$@ = inner
+  if is_mut
+    arg = Ast_node.new(.k_type_arg, "type_arg", loc)
+    arg.add_child(Ast_node.new(.k_literal, "$", loc))
+    arg.add_child(inner)
+  args: = Ast_node.new(.k_type_args, "", loc)
+  args.add_child(arg)
+  $t: = Str_builder.new()
+  defer t.free()
+  t.s("<|")
+  if is_mut
+    t.s("$")
+  t.s(inner.text).s("|>")
+  args.text = base_core.arena.dup_str(t.slice())
+  path: = Ast_node.new(.k_type_path, "", loc)
+  // Caution: Do not write the name inline (its canonical source is `base_core.slice_ident`).
+  path.add_child(Ast_node.new(.k_identifier, base_core.slice_ident(), loc))
+  path.add_child(args)
+  atom: = Ast_node.new(.k_type_atom, "", loc)
+  atom.add_child(path)
+  return atom
+
+fn spell_type_expr(node: Ast_node$@): U8[] //< a type expression's name
+  //<
+  //< **Just join the text of the base and the postfixes**: `extract_type_name` drops the
+  //< mutability mark, turning `Slice<|$U8|>` into `Slice<|U8|>`.
+  $b: = Str_builder.new()
+  defer b.free()
+  for c in node.children
+    if c.kind_id == .k_type_atom || c.kind_id == .k_type_expr
+      b.s(c.text if c.text.len > 0 else spell_atom(c))
+    else
+      b.s(c.text)
+  return base_core.arena.dup_str(b.slice())
+
+fn spell_atom(node: Ast_node$@): U8[] //< a `type_atom`'s name
+  //<
+  //< It reads the child path, for an atom whose text is empty.
+  $b: = Str_builder.new()
+  defer b.free()
+  for c in node.children
+    c.get_full_path_str_to(b)
+  return base_core.arena.dup_str(b.slice())
+
+impl Ast_node
+  fn fold_slice_postfixes(r: Ast_node$@) //<
+    //< It folds the built-in slice postfixes (`[]` / `$[]`) into `Slice<|T|>` / `Slice<|$T|>`
+    //<
+    //< Caution: **Fold from the left in order.** Postfixes apply from the left (`U8$[][]` is an
+    //< immutable-element slice of a mutable-element slice); reversed, the marks swap. An `@` or a
+    //< `?E` stays a postfix on the folded base.
+    $has_slice: = false
+    for c in r.children
+      if c.kind_id == .k_type_postfix && is_slice_postfix(c)
+        has_slice = true
+    if !has_slice
+      return
+    $base: Ast_node$@ = null
+    kept: = base_ast.new_ast_node_list()
+    for c in r.children
+      if c.kind_id != .k_type_postfix
+        base = c
+        continue
+      if !is_slice_postfix(c)
+        kept.push(c)
+        continue
+      // The levels so far (the base and its postfixes) become the `Slice`'s type argument.
+      inner: = wrap_type_expr(base, kept, r.loc)
+      base = make_slice_atom(inner, c.text.starts_with("$"), r.loc)
+      kept.len = 0
+    r.clear_children()
+    r.add_child(base)
+    for k in kept
+      r.add_child(k)
+    r.text = base_core.arena.dup_str(spell_type_expr(r))

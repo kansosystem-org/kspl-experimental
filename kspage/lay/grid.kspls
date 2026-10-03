@@ -1,0 +1,241 @@
+//< Laying out a grid
+//<
+//< One of the three layout strategies: **everything but how the boxes are placed is shared with
+//< the flow layout**, and a cell's contents use the flow layout. A table is a block holding rows
+//< holding cells; **no field in the document says it is a table**: the style does (`Arrange.grid`).
+//< **The entry point is not here but `lay/flow.kspls`.**
+import "kspage/lay/flow"
+import "kspage/lay/page" + { Cell, Page }
+import "kspage/model/doc" { Axis, Block, Rect, Tile }
+import "kspage/model/filter"
+import "kspage/model/font" { Font_source }
+import "kspage/model/style" + { Look, Sheet }
+import "std/ds" { List }
+import "std/mem" { Arena }
+
+priv fn only(cell: Block$@, arena: Arena$@): List<|Block$@|>$@
+  one: = List<|Block$@|>.create(arena)
+  one.push(cell)
+  return one
+
+priv fn natural_width(cell: Block$@, sheet: Sheet$@, src: Font_source, avail: F32, look: Look,
+  arena: Arena$@): F32 //<
+    //< The width actually used when a cell is laid out at width avail as a trial
+    //<
+    //< Caution: **Measure it the same way as the real layout**, or the indent, the inheritance
+    //< and the wrapping could each be computed two ways (the boxes laid out here are thrown away).
+    //< **It is never wider than avail** (contents that do not fit wrap there).
+  scratch: = page.new_page(src, arena)
+  at: = Rect::{ .x = 0.0, .y = 0.0, .w = avail, .h = 0.0 }
+  flow.place_blocks(scratch, only(cell, arena), sheet, at, look, 0.0, 0.0, arena)
+  $w: F32 = 0.0
+  for $i: Sz = 0; i < scratch.boxes.len; i += 1
+    b: = scratch.boxes.get(i)
+    right: = b.rect.x + b.rect.w
+    if right > w
+      w = right
+  // Caution: **Add the inner margin.** What is measured is the contents' right edge, and **only
+  // the left margin is in it**. Without it, a column sized to its contents **is short by the right
+  // margin**: the text runs into the margin and, where it does not fit, wraps.
+  return w + inner_pad(cell, sheet)
+
+priv fn inner_pad(b: Block$@, sheet: Sheet$@): F32 //<
+  //< The inner margin of the fill and the line that the block's style sets
+  //<
+  //< **An unknown name gives 0** (as in `flow`, a typo does not stop the layout).
+  if s: = sheet.find(b.style)
+    return s.pad
+  return 0.0F32
+
+priv const blank_column: F32 = 32.0 //< the width given to a column with no contents (pixels)
+  //<
+  //< **It must be a size that can be clicked**, so a newly inserted table can be typed into.
+  //< Caution: **Do not apply it to a column with contents**, or a one-character column widens and
+  //< "a column with no set width sizes to its contents" breaks.
+
+priv fn is_auto(table: Block$@, c: Sz): Bool //<
+  //< Whether column c sizes to its contents
+  //<
+  //< **The table holds the setting** (`Block.size_of`).
+  if _v: = table.size_of(Axis.column, c)
+    return false
+  return true
+
+priv fn resolve_columns(table: Block$@, sheet: Sheet$@, src: Font_source, avail: F32, look: Look,
+  arena: Arena$@): List<|F32|>$@ //<
+    //< The width of each column
+    //<
+    //< **A set width does not shrink** (or nobody could tell whether it applied). Only the columns
+    //< with no setting adjust, and **where they add up to more than the rest they shrink
+    //< proportionally** (trimming only the overflow would collapse the narrow ones first).
+  cols: = table.grid_columns(arena)
+  widths: = List<|F32|>.create(arena)
+  // The set columns are taken first; the rest is shared among the others.
+  $taken: F32 = 0.0
+  $autos: Sz = 0
+  for $c: Sz = 0; c < cols; c += 1
+    widths.push(0.0)
+    switch table.size_of(Axis.column, c) case .some(v)
+      // **A negative setting becomes 0**, or the cells overlap.
+      w: = v if v > 0.0F32 else 0.0F32
+      widths.set(c, w)
+      taken += w
+    case .none
+      autos += 1
+  if autos == 0
+    return widths
+  room: = avail - taken if avail > taken else 0.0F32
+
+  // **A merged cell does not decide a column's width** (the narrow columns would all widen at
+  // once). Contents that do not fit stick out, as with a set width.
+  tiles: = table.tiles_of(arena)
+  for $i: Sz = 0; i < tiles.len; i += 1
+    t: = tiles.get(i)
+    if t.cols > 1 || !is_auto(table, t.column)
+      continue
+    row_look: = style.look_for(sheet, table.children.get(t.row).style, look)
+    got: = natural_width(t.block, sheet, src, room, row_look, arena)
+    if got > widths.get(t.column)
+      widths.set(t.column, got)
+
+  // Caution: **Give a width to a column with no contents too.** A column of width 0 cannot be
+  // clicked, and a newly inserted table cannot even be seen on the screen. **A column with a
+  // setting is not touched** (the written width applies as it is; write 0 and it is 0).
+  for $c: Sz = 0; c < cols; c += 1
+    if is_auto(table, c) && widths.get(c) <= 0.0
+      widths.set(c, blank_column)
+  $total: F32 = 0.0
+  for $c: Sz = 0; c < cols; c += 1
+    if is_auto(table, c)
+      total += widths.get(c)
+  if total <= room || total <= 0.0
+    return widths
+  for $c: Sz = 0; c < cols; c += 1
+    if is_auto(table, c)
+      widths.set(c, widths.get(c) * room / total)
+  return widths
+
+priv fn left_of(widths: List<|F32|>$@, c: Sz): F32 //< column c's left edge (from the table's)
+  $x: F32 = 0.0
+  for $i: Sz = 0; i < c && i < widths.len; i += 1
+    x += widths.get(i)
+  return x
+
+priv fn width_of(widths: List<|F32|>$@, t: Tile): F32 //< one cell's width
+  //<
+  //< **Add the columns the merge covers.**
+  $w: F32 = 0.0
+  for $i: Sz = t.column; i < t.column + t.cols && i < widths.len; i += 1
+    w += widths.get(i)
+  return w
+
+priv struct Tall //< a cell merged downward
+  //<
+  //< **Its height is not known until the rows it covers are laid out.**
+  spot: Cell$@
+  rows: Sz
+
+priv fn fit_panel(dst: Page$@, from: Sz, spot: Cell$@) //<
+  //< Stretches a cell's fill and frame to the cell's shape
+  //<
+  //< Caution: **Do not leave them at the contents' band**, or they misalign with the next cell.
+  for $i: Sz = from; i < dst.panels.len; i += 1
+    panel: = dst.panels.get(i)
+    if panel.block == spot.block
+      panel.rect = spot.rect
+
+priv fn place_row(dst: Page$@, table: Block$@, sheet: Sheet$@, tiles: List<|Tile|>$@, r: Sz,
+  x0: F32, y: F32, widths: List<|F32|>$@, look: Look, tall: List<|Tall|>$@, arena: Arena$@): F32 //<
+    //< Lays out one row and returns its height.
+  row: = table.children.get(r)
+  row_look: = style.look_for(sheet, row.style, look)
+  // A row's height is set by the tallest cell, once the cells are laid out.
+  $row_h: F32 = 0.0
+  // This row's cells, **remembered for filling in the height afterwards** (in `dst.cells` an
+  // inner table's cells come between).
+  mine: = List<|Cell$@|>.create(arena)
+  panel_from: = dst.panels.len
+  for $i: Sz = 0; i < tiles.len; i += 1
+    t: = tiles.get(i)
+    if t.row != r
+      continue
+    cell: = Rect::{ .x = x0 + left_of(widths, t.column), .y = y, .w = width_of(widths, t),
+      .h = 0.0 }
+    // Caution: **Add it before the contents**, or an inner table goes in first and the innermost
+    // cell could not be found by searching from the end.
+    spot: = arena
+      .create(Cell::{ .rect = cell, .block = t.block, .table = table, .row = r,
+      .column = t.column })
+    dst.cells.push(spot)
+    // **A cell merged downward does not decide the row's height** (the first row would carry
+    // them all); it is filled in once the rows it covers are laid out.
+    if t.rows > 1
+      tall.push(Tall::{ .spot = spot, .rows = t.rows })
+    else
+      mine.push(spot)
+    used: = flow.place_blocks(dst, only(t.block, arena), sheet, cell, row_look, 0.0, 0.0, arena)
+    if used > row_h && t.rows <= 1
+      row_h = used
+  // **A set height does not change with the contents**; tall contents stick out (as in a column).
+  if v: = table.size_of(Axis.row, r)
+    row_h = v if v > 0.0F32 else 0.0F32
+  // **The height is made even across the row**, or neighbouring frames disagree.
+  for $i: Sz = 0; i < mine.len; i += 1
+    mine.get(i).rect.h = row_h
+    fit_panel(dst, panel_from, mine.get(i))
+  return row_h
+
+fn place_rows(dst: Page$@, table: Block$@, sheet: Sheet$@, at: Rect, look: Look, page_height: F32,
+  arena: Arena$@): F32 //<
+    //< Lays out table's rows and cells from `at`'s upper left, and adds what was laid out to dst
+    //<
+    //< The rows are table's children and the cells its grandchildren. Returns the height used.
+    //< **`at.w` is the container's width, not the table's** (narrow contents make a narrow table).
+    //< **`at.h` is ignored.**
+  tiles: = table.tiles_of(arena)
+  if tiles.len == 0
+    return 0.0
+  widths: = resolve_columns(table, sheet, dst.src, at.w, look, arena)
+  // The top edge and height of each row, for filling in a merged-down cell's height afterwards.
+  tops: = List<|F32|>.create(arena)
+  heights: = List<|F32|>.create(arena)
+  tall: = List<|Tall|>.create(arena)
+  panel_from: = dst.panels.len
+
+  $y: F32 = at.y
+  for $r: Sz = 0; r < table.children.len; r += 1
+    // **A row a filter hides takes no height and keeps its index** (formulas and the merged cells
+    // below count by index). The heading and the cursor's row are always laid out
+    // (`filter.row_shown`).
+    if !filter.row_shown(sheet.over.filters, sheet.over.kept_row, table,
+      table.children.get(r), tiles, r)
+      tops.push(y)
+      heights.push(0.0)
+      continue
+    // **A page break never splits a row**: a row that crosses is rolled back and laid out anew.
+    back: = page.placed_of(dst)
+    tall_back: = tall.len
+    $row_h: F32 =
+      place_row(dst, table, sheet, tiles, r, at.x, y, widths, look, tall, arena)
+    if top: = page.page_break(page_height, y, row_h)
+      page.rewind(dst, back)
+      // Caution: **Throw the remembered cells away with it**, or a stale height is filled in.
+      tall.len = tall_back
+      y = top
+      row_h =
+        place_row(dst, table, sheet, tiles, r, at.x, y, widths, look, tall, arena)
+    tops.push(y)
+    heights.push(row_h)
+    y += row_h
+
+  // Stretches a cell merged downward to the lower edge of the rows it covers. **Across a page, it
+  // stretches by the amount moved on**, so a table that must not be split keeps its rows within
+  // the page.
+  for $i: Sz = 0; i < tall.len; i += 1
+    one: = tall.get(i)
+    $last: Sz = one.spot.row + one.rows - 1
+    if last >= heights.len
+      last = heights.len - 1
+    one.spot.rect.h = tops.get(last) + heights.get(last) - one.spot.rect.y
+    fit_panel(dst, panel_from, one.spot)
+  return y - at.y

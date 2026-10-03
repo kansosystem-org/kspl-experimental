@@ -1,0 +1,40 @@
+// A small scripting language in KSPEG: statements, expressions with precedence, identifiers that
+// exclude the keywords, two kinds of comment, and strings with interpolation.
+// kspeg/tests/engine_test.kspls parses programs with it.
+
+program = statement* !.
+statement = let_stmt | if_stmt | while_stmt | block | expr_stmt
+let_stmt = 'let' Identifier "=" expr ";"
+if_stmt = 'if' expr block ( 'else' ( if_stmt | block ) )?
+while_stmt = 'while' expr block
+block = "{" statement* "}"
+expr_stmt = expr ( "=" expr )? ";"
+
+// Precedence is a chain: each level is made of the next tighter one, and a repetition keeps a run
+// of one level's operators in order, left to right.
+expr = or
+or = and ( "||" and )*
+and = equality ( "&&" equality )*
+equality = comparison ( ( "==" | "!=" ) comparison )*
+comparison = term ( ( "<=" | ">=" | "<" | ">" ) term )*
+term = factor ( ( "+" | "-" ) factor )*
+factor = unary ( ( "*" | "/" | "%" ) unary )*
+unary = ( "!" | "-" ) unary | call
+call = primary ( "(" ( expr ( "," expr )* )? ")" )*
+primary = Number | String | 'true' | 'false' | 'nil' | Identifier | "(" expr ")"
+
+// `!_Keyword` keeps the keywords out: `letter` is an identifier, `let` is not.
+Identifier = !_Keyword [A-Za-z_] [A-Za-z0-9_]*
+Number = [0-9]+ ( "." [0-9]+ )?
+
+// A string is one token, read byte by byte. `${ ... }` inside it reads an expression in syntax
+// mode, and calls `_Space` by hand for the whitespace just inside the braces.
+String = ["] ( Interpolation | Escape | !["\\$] . | "$" !"{" )* ["]
+Interpolation = "${" _Space expr _Space "}"
+Escape = "\\" ["\\$nt]
+
+// Comments: `//` to the line's end, and `/* */`, which nests.
+_Space = ( [ \t] | _New_line | _Line_comment | _Block_comment )*
+_Line_comment = "//" ( !_New_line . )*
+_Block_comment = "/*" ( _Block_comment | !"*/" . )* "*/"
+_New_line = "\r\n" | "\n" | "\r"

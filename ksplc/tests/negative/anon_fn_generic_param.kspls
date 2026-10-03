@@ -1,0 +1,42 @@
+//< An anonymous function cannot use the enclosing type argument
+//<
+//< It is lifted to a non-generic top-level function passed as a pointer **value**, so nothing can
+//< settle the instantiation. **That the reason and the alternative are stated** is pinned down.
+//< Caution: Keep the two passing sides alongside (forwarded_gen_params in parse/desugar.kspls).
+// EXPECT: an anonymous function cannot use the enclosing type parameter 'T'
+// EXPECT: Add a capture list to make it a closure
+// EXPECT-NOT: missing import alias prefix
+import "std/io"
+
+priv typedef Int_op = fn(a: I32): I32
+
+priv fn app_ptr(a: I32, f: Int_op): I32
+  return f(a)
+
+priv fn app_call<|T|>(v: T, f: Callable1<|T, T|>): T
+  return f.call(v)
+
+priv struct Holder<|T|>
+  priv v: T
+
+impl<|T|> Holder<|T|>
+  pub fn probe(r: Self$@): I32
+    // The stopping side: the anonymous function writes the enclosing `T`.
+    bad: = app_call<|T|>(r.v, fn(x: T): T {
+      return x;
+    })
+    // The passing side: write a capture list and it becomes a closure, which can copy `T` across.
+    ok_closure: = app_call<|T|>(r.v, fn(x: T; ): T {
+      return x;
+    })
+    // The passing side: an anonymous function that does not touch the type arguments becomes a
+    // function pointer as it stands, even inside a generic.
+    ok_ptr: = app_ptr(1, fn(a: I32): I32 {
+      return a + 1;
+    })
+    return I32::bad * 0 + I32::ok_closure * 0 + ok_ptr
+
+fn main(): I32
+  $h: = Holder<|I32|>::{ .v = 3 }
+  io.out().s("\{h.probe()\}\n")
+  return 0

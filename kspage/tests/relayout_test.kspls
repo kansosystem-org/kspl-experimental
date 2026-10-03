@@ -1,0 +1,215 @@
+//< Checks that laying out again gives the same result as laying out the whole document
+//<
+//< **It is not a speed test** (that is `kspage/tests/wasm/store.mjs`): laid out again from partway
+//< through, the result is byte for byte the full layout's.
+//< Caution: **Do not write the values out one by one.** The result is copied into a text and
+//< matched whole; as a list of values, a field added to `Box` would be left out and nobody notices.
+import "kspage/lay/flow"
+import "kspage/lay/page" { Page }
+import "kspage/model/collect" { Collect }
+import "kspage/model/doc" { Doc, Rect }
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/font" { Font }
+import "kspage/model/paint" + { Ink }
+import "kspage/model/style" { Sheet }
+import "kspage/tests/base"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+priv const width: F32 = 300.0
+
+// ==========================================
+// Copying the layout result into a text
+// ==========================================
+
+priv fn put_rect(b: Str_builder$@, r: Rect) //<
+  //< Writes a rectangle's position and size into `b`
+  //<
+  //< Caution: **Copy every exposed field**; a forgotten one stays green while out of step.
+  b.s(" \{r.x\},\{r.y\},\{r.w\},\{r.h\}")
+
+priv fn put_u32(b: Str_builder$@, v: Option<|U32|>)
+  switch v case .some(x)
+    b.s(" \{x\}")
+  case .none
+    b.s(" -")
+
+priv fn put_bool(b: Str_builder$@, v: Option<|Bool|>)
+  switch v case .some(x)
+    b.s(" 1" if x else " 0")
+  case .none
+    b.s(" -")
+
+priv fn put_ink(b: Str_builder$@, ink: Ink)
+  put_u32(b, ink.color)
+  put_u32(b, ink.background)
+  put_bool(b, ink.underline)
+  put_bool(b, ink.strike)
+
+priv fn put_font(b: Str_builder$@, f: Font)
+  b.s(" \{f.family\}/\{f.size_px\}/\{f.weight\}/")
+  b.s("i" if f.italic else "r")
+
+priv fn dump_page(page: Page$@, arena: Arena$@): U8[] //<
+  //< Copies a laid-out page into a text, one line per box, cell and surface
+  //<
+  //< Caution: **Copy the address too.** Change which `Inline` a box came from and a click goes to
+  //< another text.
+  $b: = Str_builder.new()
+  defer b.free()
+  b.s("height \{page.height\}\n")
+  for i in Range.asc(page.boxes.len)
+    x: = page.boxes.get(i)
+    b.s("box \{i\}")
+    put_rect(b@, x.rect)
+    b.s(" [\{x.text\}]")
+    put_font(b@, x.font)
+    put_ink(b@, x.ink)
+    b.s(" \{Sz::x.inline\} \{x.offset\} \{x.spacing\}")
+    b.s(" c" if x.composing else " -")
+    b.c('\n')
+  for i in Range.asc(page.cells.len)
+    x: = page.cells.get(i)
+    b.s("cell \{i\}")
+    put_rect(b@, x.rect)
+    b.s(" \{Sz::x.block\} \{Sz::x.table\}\n")
+  for i in Range.asc(page.surfaces.len)
+    x: = page.surfaces.get(i)
+    b.s("surface \{i\}")
+    put_rect(b@, x.rect)
+    b.s(" \{Sz::x.block\}\n")
+  for i in Range.asc(page.frames.len)
+    x: = page.frames.get(i)
+    b.s("frame \{i\}")
+    put_rect(b@, x.rect)
+    b.s(" \{Sz::x.block\}\n")
+  for i in Range.asc(page.pictures.len)
+    x: = page.pictures.get(i)
+    b.s("picture \{i\}")
+    put_rect(b@, x.rect)
+    b.s(" \{Sz::x.block\}\n")
+  for i in Range.asc(page.regions.len)
+    x: = page.regions.get(i)
+    b.s("region \{i\}")
+    put_rect(b@, x.rect)
+    b.s(" \{x.kind.variant_name()\}\n")
+  for i in Range.asc(page.panels.len)
+    x: = page.panels.get(i)
+    b.s("panel \{i\}")
+    put_rect(b@, x.rect)
+    b.s(" \{Sz::x.block\} \{x.width\} \{x.color\}")
+    put_u32(b@, x.fill)
+    b.s(" \{x.shape.variant_name()\}\n")
+  for i in Range.asc(page.toc_lines.len)
+    x: = page.toc_lines.get(i)
+    b.s("toc \{i\} \{x.top\} \{x.bottom\} \{x.head\}\n")
+  for i in Range.asc(page.note_lines.len)
+    x: = page.note_lines.get(i)
+    b.s("noteline \{i\} \{x.top\} \{x.bottom\} \{x.note\}\n")
+  b.s("notes \{page.notes.len\} serials \{page.serials.len\}")
+  b.s(" headings \{page.headings.len\}\n")
+  return arena.dup_str(b.slice())
+
+// ==========================================
+// Matching: whether laying the same document out twice gives the same output.
+// The name is not a parameter: `assert`'s message is a `U8$[]`, which a built text cannot be.
+// ==========================================
+priv fn same_twice(doc: Doc$@, sheet: Sheet$@, arena: Arena$@): Bool
+  a: = dump_page(flow.layout(doc, sheet, fixed.make(), width, arena), arena)
+  c: = dump_page(flow.layout(doc, sheet, fixed.make(), width, arena), arena)
+  if !a.equals(c)
+    io.out().s(" -> first time:\n\{a\}\n -> second time:\n\{c\}\n")
+  return a.equals(c)
+
+priv fn text_of(head: U8[], i: Sz, arena: Arena$@): U8[] //< the built text
+  //<
+  //< **Interpolation can only be written inside `Writer`'s `.s()`**.
+  $b: = Str_builder.new()
+  defer b.free()
+  b.s(head).s("\{i\}")
+  return arena.dup_str(b.slice())
+
+// ==========================================
+// The documents matched
+// ==========================================
+
+priv fn flat_doc(arena: Arena$@): Doc$@ //<
+  //< A document of plain paragraphs long enough to wrap
+  //<
+  //< Caution: **Always include something that reads the whole document** (a table of contents, a
+  //< list of notes, a chart, a reference): with those, "what came before is safe" breaks.
+  doc: = Doc.new(arena)
+  for i in Range.asc(6)
+    line: =
+      text_of("A paragraph. A text long enough to wrap is laid here. The number is ", i, arena)
+    doc.add_block("body").add_text(line)
+  return doc
+
+priv fn nested_doc(arena: Arena$@): Doc$@
+  doc: = Doc.new(arena)
+  item: = doc.add_block("body")
+  item.add_text("the parent's item")
+  for i in Range.asc(3)
+    item.add_child("body").add_text(text_of("child ", i, arena))
+  doc.add_block("body").add_text("the paragraph behind")
+  return doc
+
+priv fn toc_doc(sheet: Sheet$@, arena: Arena$@): Doc$@
+  sheet.add("heading", paint.inherit_all()).outline = 1
+  sheet.add("contents", paint.inherit_all()).collect = Collect.contents
+  doc: = Doc.new(arena)
+  // Caution: **Put the table of contents before the headings**, so a change after it changes what
+  // is before it.
+  doc.add_block("contents")
+  for i in Range.asc(3)
+    doc.add_block("heading").add_text(text_of("chapter ", i, arena))
+    doc.add_block("body").add_text(text_of("paragraph ", i, arena))
+  return doc
+
+priv fn note_doc(sheet: Sheet$@, arena: Arena$@): Doc$@
+  sheet.add("footnote", paint.inherit_all()).collect = Collect.notes
+  doc: = Doc.new(arena)
+  for i in Range.asc(3)
+    b: = doc.add_block("body")
+    marked: = b.add_text(text_of("paragraph ", i, arena))
+    marked.note = text_of("the note's contents ", i, arena)
+  doc.add_block("footnote")
+  return doc
+
+// ==========================================
+// The tests
+// ==========================================
+
+priv fn one_letter_shows(arena: Arena$@): Bool //<
+  //< A document differing by one character is written out differently too
+  //<
+  //< **Without this the check above passes even when empty** (writing nothing, every match silently
+  //< agrees).
+  sheet: = Sheet.new(base.root_font(), arena)
+  a: = Doc.new(arena)
+  a.add_block("body").add_text("abc")
+  c: = Doc.new(arena)
+  c.add_block("body").add_text("abd")
+  da: = dump_page(flow.layout(a, sheet, fixed.make(), width, arena), arena)
+  dc: = dump_page(flow.layout(c, sheet, fixed.make(), width, arena), arena)
+  return !da.equals(dc) && da.len > 0
+
+fn test_layout_is_the_same_twice()
+  verdict
+    .start("[kspage/relayout] laying the same document out twice putting the same thing out test...")
+  arena: = Arena.new(1024 * 1024)
+  defer arena.free()
+  assert(same_twice(flat_doc(arena), Sheet.new(base.root_font(), arena), arena), "a flat document")
+  assert(same_twice(nested_doc(arena), Sheet.new(base.root_font(), arena), arena),
+    "a document with nesting")
+  toc_sheet: = Sheet.new(base.root_font(), arena)
+  assert(same_twice(toc_doc(toc_sheet, arena), toc_sheet, arena),
+    "a document with a table of contents")
+  note_sheet: = Sheet.new(base.root_font(), arena)
+  assert(same_twice(note_doc(note_sheet, arena), note_sheet, arena), "a document with notes")
+  assert(one_letter_shows(arena),
+    "differ by one character and the answer differs too (the answer is not empty)")
+  verdict.pass("laying out is a pure function (the ground for comparing a laying-out again).")

@@ -1,0 +1,115 @@
+//< The list of headings, and the entry point that jumps to one
+//<
+//< The navigation list (the document at a glance) and a click on a table-of-contents row that
+//< jumps both live here, on the same base. The list of headings is the one collected at layout
+//< time (`Page.headings`); both the list and the jump target come from it. With two lists, one
+//< goes stale the day a chapter is added.
+//< Caution: **Call all of them after layout** — the headings are collected at layout time.
+import "kspage/lay/caret"
+import "kspage/port/web/state" { doc, ed, ensure, out, page }
+import "kspage/write/edit" as _edit
+
+// The number of headings. 0 before layout.
+#export
+fn kspage_web_heading_count(): Sz
+  ensure()
+  if page == null
+    return 0
+  return page.headings.len
+
+// Heading `i`'s depth (1 is a chapter). 0 when absent.
+#export
+fn kspage_web_heading_level(i: Sz): Sz
+  ensure()
+  if page == null || i < 0 || i >= page.headings.len
+    return 0
+  return page.headings.get(i).level
+
+// Heading `i`'s text. It writes into the arena and returns the length.
+#export
+fn kspage_web_heading_text(i: Sz): Sz
+  ensure()
+  out.clear()
+  if page == null || i < 0 || i >= page.headings.len
+    return 0
+  out.s(page.headings.get(i).text)
+  return out.len
+
+// Heading `i`'s chapter number. **Empty for a heading without one** (its marker is not a chapter
+// number).
+#export
+fn kspage_web_heading_number(i: Sz): Sz
+  ensure()
+  out.clear()
+  if page == null || i < 0 || i >= page.headings.len
+    return 0
+  out.s(page.headings.get(i).number)
+  return out.len
+
+// Moves the cursor to heading `i`. Returns 1 if it moved.
+// Caution: **Check that it is still in the tree.** The list of headings points at blocks as of the
+// layout, so putting the cursor into a section deleted since then means typing into a dangling
+// place (the same rule as `kspage_web_diff_go`).
+#export
+fn kspage_web_heading_go(i: Sz): I32
+  ensure()
+  if page == null || i < 0 || i >= page.headings.len
+    return 0
+  head: = page.headings.get(i).block
+  if head == null || head.inlines.len <= 0
+    return 0
+  spot: = doc.path_of_block(head, -1)
+  if !spot.found
+    return 0
+  ed.caret = caret.at(head.inlines.get(0), 0)
+  return 1
+
+// The height of the table of contents' top. **-1 without a table of contents.**
+// The cursor cannot point at it: the table-of-contents block holds no text (its contents are
+// built at every layout), so the jump can only go by height. It is the first of the row
+// positions remembered at layout time.
+#export
+fn kspage_web_contents_top(): F32
+  ensure()
+  if page == null || page.toc_lines.len <= 0
+    return -1.0
+  return page.toc_lines.get(0).top
+
+// The index of the heading that the table-of-contents row at the clicked height points at. **-1
+// when absent** (not on the table of contents). The box cannot tell it: the contents box points at
+// none of the document's text (clicking does not get inside), so it comes from the row positions
+// remembered at layout time.
+#export
+fn kspage_web_contents_hit(y: F32): Sz
+  ensure()
+  if page == null
+    return -1
+  for $i: Sz = 0; i < page.toc_lines.len; i += 1
+    one: = page.toc_lines.get(i)
+    if y >= one.top && y < one.bottom
+      return one.head
+  return -1
+
+// The height of the note that the notes-list row at the clicked height points at. **-1 when
+// absent.** The list's box cannot tell it (as with the table of contents, the box points at none
+// of the document's text). It finds the note from the row positions remembered at layout time and
+// looks for the box of the inline that shows that note's mark.
+// It returns a height because a note's mark sits partway through an inline (not at a paragraph's
+// start).
+#export
+fn kspage_web_notes_hit(y: F32): F32
+  ensure()
+  if page == null
+    return -1.0
+  for $i: Sz = 0; i < page.note_lines.len; i += 1
+    one: = page.note_lines.get(i)
+    if y < one.top || y >= one.bottom
+      continue
+    if one.note >= page.notes.len
+      return -1.0
+    from: = page.notes.get(one.note).from
+    for $k: Sz = 0; k < page.boxes.len; k += 1
+      if page.boxes.get(k).inline == from
+        return page.boxes.get(k).rect.y
+    return -1.0
+  return -1.0

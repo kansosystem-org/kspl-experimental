@@ -1,0 +1,101 @@
+//< Receiving an infrared remote (the NEC scheme)
+//<
+//< Caution: **Call clocks.init() first.** The widths are measured in real microseconds, so it
+//< needs rp2040/timer running.
+
+// ==========================================
+//   the leader   a mark of 9000µs, then a space of 4500µs
+//   the data     32 bits. Each bit is a mark of 560µs, then a space (560µs for 0, 1690µs for 1)
+//   the stop     a mark of 560µs
+//   a repeat     a mark of 9000µs, a space of 2250µs, a mark of 560µs (about every 108ms while a
+//                key is held)
+// ==========================================
+import "ksos/drivers/rp2040/gpio"
+import "ksos/drivers/rp2040/timer"
+
+const leader_mark_min_us: U32 = 7500 //<
+  //< The values from the standard, and the tolerances for matching them
+  //<
+  //< **They are loose**: polling cuts off the start of the leader, and remotes' crystals differ.
+const leader_mark_max_us: U32 = 11000
+const leader_space_data_min_us: U32 = 3500
+const leader_space_data_max_us: U32 = 5500
+const leader_space_repeat_min_us: U32 = 1700
+const leader_space_repeat_max_us: U32 = 3000
+const bit_space_threshold_us: U32 = 1120 //<
+  //< The boundary between a bit's 0 (about 560µs) and 1 (about 1690µs)
+const bit_space_max_us: U32 = 3000
+const bit_mark_max_us: U32 = 1500
+
+const frame_bits: U32 = 32
+
+struct Frame
+  ok: Bool //< false means it is not a valid frame (the three below mean nothing)
+  repeat: Bool //< true means the "key held" code; use the previous addr/cmd
+  addr: U32 //< 0 to 255
+  cmd: U32 //< 0 to 255
+
+priv fn no_frame(): Frame
+  return Frame::{ .ok = false, .repeat = false, .addr = 0, .cmd = 0 }
+
+fn init(pin: U32)
+  // No pull. The receiver module drives the line itself.
+  gpio.init_in(pin)
+
+fn is_idle(pin: U32): Bool //< whether nothing is being received (the line is idle)
+  //<
+  //< The signal is active low, so High is idle.
+  return gpio.read(pin)
+
+priv fn measure(pin: U32, level_high: Bool, limit_us: U32): U32 //<
+  //< Measures how long level lasts, in µs
+  //<
+  //< Past the limit it returns 0, "could not be measured", which the caller rejects.
+  start: = timer.now_us()
+  for gpio.read(pin) == level_high
+    if timer.elapsed_us(start) > limit_us
+      return 0
+  return timer.elapsed_us(start)
+
+priv fn within(v: U32, lo: U32, hi: U32): Bool
+  return v >= lo && v <= hi
+
+fn try_receive(pin: U32): Frame //< reads one frame
+  //<
+  //< If the line is idle it returns **at once**, so it may be called regularly. Once reception
+  //< has begun it blocks for up to about 70ms.
+  if is_idle(pin)
+    return no_frame()
+
+  // --- the leader ---
+  mark: = measure(pin, false, leader_mark_max_us)
+  if !within(mark, leader_mark_min_us, leader_mark_max_us)
+    return no_frame()
+  space: = measure(pin, true, leader_space_data_max_us)
+  if within(space, leader_space_repeat_min_us, leader_space_repeat_max_us)
+    // A repeat. The stop mark follows, so read and discard it before returning.
+    _stop: = measure(pin, false, bit_mark_max_us)
+    return Frame::{ .ok = true, .repeat = true, .addr = 0, .cmd = 0 }
+  if !within(space, leader_space_data_min_us, leader_space_data_max_us)
+    return no_frame()
+
+  // --- the 32 bits (LSB first) ---
+  $raw: U32 = 0
+  for $i: U32 = 0; i < frame_bits; i += 1
+    m: = measure(pin, false, bit_mark_max_us)
+    if m == 0
+      return no_frame()
+    s: = measure(pin, true, bit_space_max_us)
+    if s == 0
+      return no_frame()
+    if s > bit_space_threshold_us
+      raw |= 1U32 << i
+
+  addr: = raw & 0xff
+  cmd: = (raw >> 16) & 0xff
+  cmd_inv: = (raw >> 24) & 0xff
+  // **Only the command's inverse is checked**: extended NEC uses bits 8 to 15 as the high half of
+  // a 16-bit address.
+  if (cmd ^ cmd_inv) != 0xff
+    return no_frame()
+  return Frame::{ .ok = true, .repeat = false, .addr = addr, .cmd = cmd }

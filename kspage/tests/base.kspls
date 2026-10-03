@@ -1,0 +1,82 @@
+//< The one setup that every kspage test starts from, and the material the tests share
+//<
+//< Caution: **Do not copy it.** Copied, one default font size, or the tolerance within which two
+//< measurements count as equal, changes in every test, and **unexplained differences** creep in.
+//< Its font is the product's default (`font.default_root`), so a test's document is laid out as
+//< the product's would be.
+import "kspage/model/doc" { Block, Doc }
+import "kspage/model/font" + { Font }
+import "kspage/model/paint"
+import "kspage/model/style" { Arrange, Sheet, Style }
+import "kspage/share/store"
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+fn root_font(): Font //< the default font (`font.default_root`)
+  return font.default_root()
+
+fn mono_font(): Font //< the fixed-width font
+  //<
+  //< A label, so a test reads as "this is a program's text"; its metrics are `root_font`'s (the
+  //< family name does not affect them).
+  return Font::{ .family = "monospace", .size_px = 16.0, .weight = 400U16, .italic = false }
+
+fn near(a: F32, b: F32): Bool //< whether two measurements are equal, within tolerance
+  //<
+  //< Caution: **Do not widen this tolerance.** The metrics are fixed, the same in any environment;
+  //< widened, a drift would pass unnoticed. Only a test that matches pixel positions uses another
+  //< tolerance (the reason is in that test).
+  d: = a - b
+  return d < 0.001 && d > -0.001
+
+fn has(text: U8[], part: U8[]): Bool //< whether `part` appears in `text`
+  return text.find_str(part) >= 0
+
+// ---- Tables ----
+
+fn table_style(sheet: Sheet$@): Style$@ //< adds the style `table`, laid out in rows × columns
+  t: = sheet.add("table", paint.inherit_all())
+  t.arrange = Arrange.grid
+  return t
+
+fn grid_sheet(arena: Arena$@): Sheet$@ //< a sheet whose only style is `table` (`table_style`)
+  sheet: = Sheet.new(root_font(), arena)
+  table_style(sheet)
+  return sheet
+
+fn two_by_two(d: Doc$@): Block$@ //< a table of 2 rows × 2 columns holding `a` `b` / `c` `d`
+  table: = d.add_block("table")
+  r0: = table.add_child("row")
+  r0.add_child("cell").add_text("a")
+  r0.add_child("cell").add_text("b")
+  r1: = table.add_child("row")
+  r1.add_child("cell").add_text("c")
+  r1.add_child("cell").add_text("d")
+  return table
+
+// ---- Versions of a document ----
+
+fn body_sheet(arena: Arena$@): Sheet$@ //< a sheet whose only style is `body`
+  sheet: = Sheet.new(root_font(), arena)
+  sheet.add("body", paint.inherit_all())
+  return sheet
+
+fn three(arena: Arena$@, origin: U8[]): Doc$@ //< a document of three paragraphs, `a` `b` `c`
+  //<
+  //< **Every text differs**, so each can be matched on its own.
+  d: = Doc.new(arena, origin)
+  d.add_block("body").add_text("a")
+  d.add_block("body").add_text("b")
+  d.add_block("body").add_text("c")
+  return d
+
+fn round_trip(d: Doc$@, sheet: Sheet$@, arena: Arena$@): store.Loaded //<
+  //< Saves the document and reads the text back; if it cannot be read, the test fails
+  //<
+  //< Saving gives out the numbers, so `d` carries them afterwards too.
+  $sb: = Str_builder.new()
+  defer sb.free()
+  store.save(d, sheet, sb@)
+  return store.load(sb.slice(), arena) catch _e
+    panic("the text just written cannot be read")

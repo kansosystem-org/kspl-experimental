@@ -1,0 +1,195 @@
+#!/usr/bin/env -S ksplc run
+//< The test on the project settings file (`ksplc.cfg`)
+//<
+
+// ==========================================
+// The properties pinned down:
+//   * `[lint]`'s CODE = off/on/error works, `error` on an ordinary build as well as under
+//     `ksplc lint`
+//   * the nearest `ksplc.cfg` applies whole (an outer one covers a folder holding none), never
+//     merged with an outer one
+//   * the precedence is `##lint(...)` > CLI > `ksplc.cfg`
+//   * an invalid setting (an unknown section, code or level) is rejected, not silently ignored
+// ==========================================
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/harness_markers"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" // what makes `arena.text()` available
+import "std/verdict"
+
+// Fires I0307 (an empty block) and H0311 (unnecessary parentheses). lint exits with 0 even with
+// diagnostics, so the check reads the output rather than the exit code.
+priv const src: U8[] =
+  """import "std/io";
+
+fn main(): I32 {
+    x: = 1;
+    if (x == 1) {
+    }
+    io.out().s("hi\n");
+    return 0;
+}
+"""
+
+// The source that fires W0602 (a hidden retain/release), a code off by default.
+priv const src_arc: U8[] =
+  """import "std/refcount";
+
+fn main() {
+    r: = refcount.Rc<|I32|>.new(1);
+    _x: = r;
+}
+"""
+
+// Gives no diagnostic (the caution in `main` says why).
+priv const src_clean: U8[] = """fn main(): I32 {
+    return 0;
+}
+"""
+
+priv struct Bad //<
+  //< An invalid setting, which must be rejected, not silently ignored
+  //<
+  //< The rule is Principle 5 in `docs/DESIGN.md`.
+  slot: U8[]
+  label: U8[]
+  body: U8[]
+  msg: U8[]
+
+priv const bad_cfgs: Bad[7] = ::{
+  ::{ .slot = "sec", .label = "an unknown section", .body = "[typo]\nI0307 = off\n",
+    .msg = "unknown configuration section" },
+  ::{ .slot = "code", .label = "an unknown code", .body = "[lint]\nI9999 = off\n",
+    .msg = "unknown diagnostic code" },
+  ::{ .slot = "level", .label = "an unknown level", .body = "[lint]\nI0307 = maybe\n",
+    .msg = "unknown lint level" },
+  ::{ .slot = "nosec", .label = "a setting before the section", .body = "I0307 = off\n",
+    .msg = "setting appears before any '[section]' header" },
+  ::{ .slot = "noeq", .label = "no '='", .body = "[lint]\nI0307 off\n",
+    .msg = "expected 'key = value'" },
+  ::{ .slot = "unterm", .label = "an unclosed section heading", .body = "[lint\nI0307 = off\n",
+    .msg = "unterminated section header" },
+  ::{ .slot = "retired", .label = "an already withdrawn spelling",
+    .body = "[lint]\nprofile = managed\n", .msg = "unknown diagnostic code" },
+}
+
+priv fn lint_case(slot: U8[], name: U8[], rels: U8[][], bodies: U8[][], entry: U8[],
+  extra: U8[][], expect: U8[][], deny: U8[][], want_fail: Bool, allow_nonzero: Bool,
+  arena: Arena$@) //<
+    //< One case = the files are written into the working directory and `ksplc lint` runs once.
+    //<
+    //< Caution: Make the directory's name from the ASCII label. The case name as it is makes a
+    //< directory holding a `:`, which cannot be made on Windows. A case that is not want_fail
+    //< demands exit code 0: lint ends with 0 even with diagnostics, so a failure means reading the
+    //< settings file is broken.
+  dir: = harness.sandbox(arena.text().s("cfg_\{slot\}").take()) catch
+    verdict.check(name, false, "cannot make a working directory")
+    return
+  fs.write_tree(dir, rels, bodies, arena) catch
+    verdict.check(name, false, "cannot place the material")
+    return
+  $argv: = List<|U8[]|>.new(arena)
+  argv.push("lint")
+  for e in extra
+    argv.push(e)
+  argv.push(fs.join(dir, entry, arena))
+  r: = harness.ksplc(argv.slice())
+  if want_fail
+    if r.code == 0
+      verdict.check(name, false,
+        arena.text().s("it ended at 0 without refusing the setting\n\{r.out\}").take())
+      return
+  else if !allow_nonzero && r.code != 0
+    verdict.check(name, false, arena.text().s("it failed\n\{r.out\}").take())
+    return
+  harness_markers.check(name, expect, deny, r.out)
+
+priv fn build_case(slot: U8[], name: U8[], cfg: U8[], arena: Arena$@) //<
+  //< It builds the empty-block source under a settings file, which must reject it
+  //<
+  //< The build is an ordinary one, not `ksplc lint`.
+  //< **The file's `error` has to switch the check on**, as `##lint(… = error)` and `--lint=…=error`
+  //< do ("The levels" in `ksplc/docs/SPEC-tools.md`): outside lint mode the empty-block check
+  //< returns early.
+  dir: = harness.sandbox(arena.text().s("cfg_\{slot\}").take()) catch
+    verdict.check(name, false, "cannot make a working directory")
+    return
+  fs.write_tree(dir, U8[][]::{ "a.kspl", "ksplc.cfg" }, U8[][]::{ src, cfg }, arena) catch
+    verdict.check(name, false, "cannot place the material")
+    return
+  r: = harness
+    .ksplc(U8[][]::{ fs.join(dir, "a.kspl", arena), fs.join(dir, "a.c", arena) })
+  fail: = harness_markers.match_markers(U8[][]::{ "error: [I0307]" }, U8[][]::{}, r.out)
+  verdict.check(name, r.code != 0 && fail.len == 0,
+    arena.text().s("exit \{r.code\}\n\{fail\}\n\{r.out\}").take())
+
+priv fn main_cases(arena: Arena$@)
+  none: = U8[][]::{}
+  // --- The baseline with no settings file ---
+  lint_case("nocfg", "no cfg: it fires as by default", U8[][]::{ "a.kspl" }, U8[][]::{ src },
+    "a.kspl", none, U8[][]::{ "[I0307]" }, none, false, false, arena)
+  // --- off / on / error work ---
+  lint_case("off", "cfg: off suppresses it", U8[][]::{ "a.kspl", "ksplc.cfg" },
+    U8[][]::{ src, "[lint]\nI0307 = off\n" }, "a.kspl", none, none, U8[][]::{ "[I0307]" }, false,
+    false, arena)
+  lint_case("error", "cfg: error promotes it to a warning or above",
+    U8[][]::{ "a.kspl", "ksplc.cfg" }, U8[][]::{ src, "[lint]\nI0307 = error\n" }, "a.kspl", none,
+    U8[][]::{ "error: [I0307]" }, none, false, true, arena)
+  build_case("error_build", "cfg: error refuses an ordinary build too, not only lint",
+    "[lint]\nI0307 = error\n", arena)
+  lint_case("arcoff", "cfg: a code off by default stays silent", U8[][]::{ "a.kspl" },
+    U8[][]::{ src_arc }, "a.kspl", none, none, U8[][]::{ "[W0602]" }, false, false, arena)
+  lint_case("arcon", "cfg: a code off by default can be enabled with on",
+    U8[][]::{ "a.kspl", "ksplc.cfg" }, U8[][]::{ src_arc, "[lint]\nW0602 = on\n" }, "a.kspl", none,
+    U8[][]::{ "[W0602]" }, none, false, false, arena)
+  // --- The search: the nearest file applies whole ---
+  lint_case("above", "cfg: a folder with no file of its own takes the nearest one above",
+    U8[][]::{ "sub/a.kspl", "ksplc.cfg" }, U8[][]::{ src, "[lint]\nI0307 = off\n" }, "sub/a.kspl",
+    none, none, U8[][]::{ "[I0307]" }, false, false, arena)
+  lint_case("inner", "cfg: an inner setting beats an outer",
+    U8[][]::{ "sub/a.kspl", "ksplc.cfg", "sub/ksplc.cfg" },
+    U8[][]::{ src, "[lint]\nI0307 = off\n", "[lint]\nI0307 = on\n" }, "sub/a.kspl", none,
+    U8[][]::{ "[I0307]" }, none, false, false, arena)
+  // Caution: **Leave the code out of the nearer file.** With the same code in both, the case passes
+  // whether the nearer file replaces the outer one or is merged into it.
+  lint_case("whole", "cfg: a nearer file applies whole, so the outer one's setting stops there",
+    U8[][]::{ "sub/a.kspl", "ksplc.cfg", "sub/ksplc.cfg" },
+    U8[][]::{ src, "[lint]\nI0307 = off\n", "[lint]\nW0602 = on\n" }, "sub/a.kspl", none,
+    U8[][]::{ "[I0307]" }, none, false, false, arena)
+  // --- The precedence: `##lint(...)` > CLI > `ksplc.cfg` ---
+  lint_case("cli", "the precedence: CLI beats ksplc.cfg", U8[][]::{ "a.kspl", "ksplc.cfg" },
+    U8[][]::{ src, "[lint]\nI0307 = off\n" }, "a.kspl", U8[][]::{ "--lint=I0307=on" },
+    U8[][]::{ "[I0307]" }, none, false, false, arena)
+  lint_case("pragma", "the precedence: ##lint(...) beats CLI",
+    U8[][]::{ "a.kspl", "ksplc.cfg" },
+    U8[][]::{ arena.text().s("##lint(I0307 = off);\n\{src\}").take(), "[lint]\nI0307 = off\n" },
+    "a.kspl", U8[][]::{ "--lint=I0307=on" }, none, U8[][]::{ "[I0307]" }, false, false, arena)
+  // --- How comments, empty lines and whitespace are handled ---
+  lint_case("comment", "cfg: comments and extra whitespace are tolerated",
+    U8[][]::{ "a.kspl", "ksplc.cfg" },
+    U8[][]::{ src,
+    "# before the heading\n\n[lint]   # on the section\n   I0307   =   off   # on the value\n" },
+    "a.kspl", none, none, U8[][]::{ "[I0307]" }, false, false, arena)
+
+fn main(): I32
+  arena: = harness.begin(64 * 1024 * 1024)
+  io.out().s("# ksplc.cfg: \{12 + bad_cfgs.len * 2\}\n")
+  main_cases(arena)
+  none: = U8[][]::{}
+  for b in bad_cfgs
+    // The error carries the position "ksplc.cfg: ", so the user finds the place to fix.
+    marks: = U8[][]::{ b.msg, "ksplc.cfg:" }
+    lint_case(arena.text().s("bad_\{b.slot\}").take(),
+      arena.text().s("an invalid setting is refused: \{b.label\}").take(),
+      U8[][]::{ "a.kspl", "ksplc.cfg" }, U8[][]::{ src, b.body }, "a.kspl", none, marks, none, true,
+      false, arena)
+    // Caution: Reject even on a source with zero diagnostics. If the settings check sits inside the
+    // code that emits diagnostics, a spelling mistake silently passes there.
+    lint_case(arena.text().s("clean_\{b.slot\}").take(),
+      arena.text().s("it is refused even on a source with zero diagnostics: \{b.label\}").take(),
+      U8[][]::{ "a.kspl", "ksplc.cfg" }, U8[][]::{ src_clean, b.body }, "a.kspl", none, marks, none,
+      true, false, arena)
+  return harness.finish()

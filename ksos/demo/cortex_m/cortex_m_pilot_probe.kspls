@@ -1,0 +1,105 @@
+//< A probe showing the car deciding on its own, from a policy it was given once
+//<
+//< One safetensors file is burned into FLASH with `embed` and read with no filesystem or link;
+//< `ksos/demo/common/pilot_policy` points straight into it (zero copy), with an arena on a static
+//< buffer reset per observation. **The burned-in policy is a one-time copy**; it does not follow
+//< upstream changes.
+import "ksos/demo/common/pilot_policy" as policy
+import "ksos/demo/common/semihost_console" as con
+import "std/mem" { Arena }
+
+embed "ksos/demo/cortex_m/pilot_policy.safetensors" as policy_bytes
+
+$storage: Sz[4096] = ::{}
+
+// SysTick_Handler (port.o) calls it; it is empty, as this probe has no scheduler.
+#export
+fn ksos_tick() {}
+
+priv struct Case //< one observation, and the manoeuvre expected of it
+  //<
+  //< Caution: **Do not place cases at the boundaries (150mm / 400mm)**, where the net and the
+  //< rules disagree; the point is "it reads and computes the same way".
+  name: U8[]
+  dist: I64
+  line: I64
+  lon: I32
+  lat: I32
+  rot: I32
+
+priv const cases: Case[_] = ::{
+  // Unmeasured (0) stops, whatever the line. The first is a **tie** (every logit 0), checking that
+  // "the lower number (stop) wins".
+  ::{ .name = "unmeasured_no_line_stops", .dist = 0I64, .line = 0I64, .lon = 0, .lat = 0,
+    .rot = 0 },
+  ::{ .name = "unmeasured_with_line_stops", .dist = 0I64, .line = 5I64, .lon = 0, .lat = 0,
+    .rot = 0 },
+  // Too close -> back off.
+  ::{ .name = "too_close_backs_off", .dist = 80I64, .line = 0I64, .lon = -45, .lat = 0, .rot = 0 },
+  // At the avoiding distance -> move sideways towards the side with no line (mecanum).
+  ::{ .name = "avoid_strafes_away_from_line", .dist = 250I64, .line = 1I64, .lon = 0, .lat = -50,
+    .rot = 0 },
+  ::{ .name = "avoid_strafes_to_the_right", .dist = 250I64, .line = 4I64, .lon = 0, .lat = 50,
+    .rot = 0 },
+  // The way ahead is clear -> follow the line. **A weak correction keeps moving forward**, or it
+  // alternates between forward and turning on the spot.
+  ::{ .name = "centered_goes_forward", .dist = 800I64, .line = 2I64, .lon = 60, .lat = 0,
+    .rot = 0 },
+  // An edge and the middle black = a small offset: turn and move sideways, still going forward.
+  ::{ .name = "slightly_left_tracks_left", .dist = 800I64, .line = 6I64, .lon = 40, .lat = -15,
+    .rot = -25 },
+  ::{ .name = "slightly_right_tracks_right", .dist = 800I64, .line = 3I64, .lon = 40, .lat = 15,
+    .rot = 25 },
+  // Only an edge black = a large offset: almost no forward, sideways while turning.
+  ::{ .name = "far_left_tracks_hard_left", .dist = 800I64, .line = 4I64, .lon = 10, .lat = -30,
+    .rot = -50 },
+  ::{ .name = "far_right_tracks_hard_right", .dist = 800I64, .line = 1I64, .lon = 10, .lat = 30,
+    .rot = 50 },
+  // All three white = no line: it creeps forward.
+  ::{ .name = "no_line_creeps", .dist = 800I64, .line = 0I64, .lon = 18, .lat = 0, .rot = 0 },
+  // All three black = a crossing or the end: it stops.
+  ::{ .name = "all_three_dark_stops", .dist = 800I64, .line = 7I64, .lon = 0, .lat = 0, .rot = 0 },
+  // Beyond the normalizing limit -> it is treated the same, as "far".
+  ::{ .name = "far_beyond_the_cap_goes_forward", .dist = 2500I64, .line = 2I64, .lon = 60, .lat = 0,
+    .rot = 0 },
+}
+
+#export
+fn ksos_main()
+  con.puts("=== Cortex-M pilot policy probe ===\n")
+  panic_hook = con.on_panic
+  $arena: = Arena.from_buffer(Void$@::storage@, sizeof(Sz) * 4096)
+
+  // Caution: **Reject a truncated file given to load**, or a tensor points outside FLASH before
+  // the shape check.
+  truncated: = U8[]::{ .ptr = policy_bytes.ptr, .len = 4 }
+  $rejected: = false
+  policy.load(truncated, arena@) catch
+    rejected = true
+  con.check("truncated_blob_is_rejected", rejected)
+
+  base: = arena.save()
+  // Caution: **Report a load failure as a check too**; `puts` alone gives the gate no fail mark
+  // (ksos_run_gate in `ksos/Makefile`).
+  $p: = policy.load(policy_bytes, arena@) catch
+    con.check("policy_loads", false)
+    con.print_summary("pilot policy probe aborted")
+    con.exit()
+    for {}
+  con.check("policy_loads", true)
+  con.check("metadata_far_mm", p.far_mm == 1000I64)
+  con.check("shape_from_the_blob", p.actions == 10 && p.hidden == 24)
+
+  work: = arena.save()
+  for c in cases
+    d: = policy.decide(p@, c.dist, c.line, arena@)
+    con.check(c.name, d.lon == c.lon && d.lat == c.lat && d.rot == c.rot)
+    // Caution: Reset for each one, or the working space grows per observation and runs out of
+    // buffer.
+    arena.restore(work)
+  // The policy only points into blob, so resetting this far keeps it.
+  arena.restore(base)
+
+  con.print_summary("pilot policy probe done")
+  con.exit()
+  for {}

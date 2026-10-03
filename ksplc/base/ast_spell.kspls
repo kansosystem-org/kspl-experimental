@@ -1,0 +1,327 @@
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "std/chars"
+import "std/ds" { List }
+import "std/io"
+import "std/str" { Str_builder }
+import "std/sys"
+
+// It builds **the spelling of types and names** from the AST. Unlike the accessors
+// (ksplc/base/ast_ext.kspls), which say which child is what, it walks the tree into a string, with
+// its own depth limit.
+//
+// **Spellings are built here and nowhere else**: a mangled name, a diagnostic and the generated
+// C's type names must agree, so do not rebuild one in the caller.
+##lint(H0704 = off)
+
+priv const max_extract_type_name_depth: Sz = 1000 //<
+  //< The depth limit for extract_type_name_to's walk down a postfix chain
+  //<
+  //< Caution: A postfix chain (`I32@@@@...@`) escapes the parser's max_parse_depth and could
+  //< overflow extract_type_name_to's native stack (max_mangle_depth in sema/type/env.kspls too).
+
+fn mentions_ident(text: U8[], name: U8[]): Bool //<
+  //< Whether `name` appears as one identifier word inside a type's spelling `text`
+  //<
+  //< Caution: Do not match by substring: a `T` is found inside `Total` or `List`. It lives in one
+  //< place so the capture copying (`parse/desugar.kspls`) and an impl's type-argument check
+  //< (`sema/decl/collect.kspls`) share it.
+  if name.len == 0 || text.len < name.len
+    return false
+  for $at: Sz = 0; at + name.len <= text.len; at += 1
+    if !text.sub(at, name.len).equals(name)
+      continue
+    if at > 0 && text[at - 1].is_alnum()
+      continue
+    after: = at + name.len
+    if after < text.len && text[after].is_alnum()
+      continue
+    return true
+  return false
+
+struct Sig_part //< one piece of a function's signature: a parameter, or the return type
+  //<
+  //< **The name is empty on the return type**, and on the `...` of a C variadic, which has no type
+  //< node either.
+  name: U8[]
+  type_node: Ast_node$@
+  type_id: I32 //< the parameter's resolved type, or 0 (the return type is read from its node)
+  default_text: U8[] //< the default argument as written (one literal), or empty
+  is_rest: Bool //< the `...` of a C variadic
+
+fn write_sig_part(part: Sig_part, spell: Callable2<|Sig_part, Str_builder$@, Bool|>,
+  out: Str_builder$@): Bool //<
+    //< One parameter, `name: Type = default` or `...`, its type written by `spell`
+    //<
+    //< It returns false where `spell` could not write the type.
+  if part.is_rest
+    out.s("...")
+    return true
+  out.s(part.name).s(": ")
+  if !spell.call(part, out)
+    return false
+  if part.default_text.len > 0
+    out.s(" = ").s(part.default_text)
+  return true
+
+fn write_sig(fn_node: Ast_node$@, spell: Callable2<|Sig_part, Str_builder$@, Bool|>,
+  out: Str_builder$@): Bool //<
+    //< A function's signature on one line, `(a: I32, b: I32 = 2): I32`, types written by `spell`
+    //<
+    //< **Only this function decides what a signature holds** (which children are parameters, the
+    //< `...`, the defaults, the return type), so the editor and `--emit-decls` show one signature;
+    //< only a type's spelling is up to the caller. It returns false where `spell` could not.
+    //< Caution: **Do not drop a default.** Without it, a reader takes the parameter for one every
+    //< call must pass.
+  $parts: = List<|Sig_part|>.new()
+  defer parts.free()
+  fn_node.sig_parts(parts@)
+  out.c('(')
+  for i in Range.asc(parts.len)
+    if i > 0
+      out.s(", ")
+    if !write_sig_part(parts.get(i), spell, out)
+      return false
+  out.c(')')
+  return write_sig_ret(fn_node, spell, out)
+
+fn write_sig_ret(fn_node: Ast_node$@, spell: Callable2<|Sig_part, Str_builder$@, Bool|>,
+  out: Str_builder$@): Bool //<
+    //< The return type as `: T`, written by `spell`, or nothing where the function returns none
+  ret: = fn_node.get_decl_type_node()
+  if ret == null
+    return true
+  out.s(": ")
+  return spell.call(Sig_part::{ .name = "", .type_node = ret, .type_id = 0, .default_text = "",
+    .is_rest = false }, out)
+
+impl Ast_node
+  fn get_import_path_text(r: Self$@): Option<|U8[]|> //<
+    //< An import path's contents (the spelling without its quotes)
+    //<
+    //< `.none` where it is not a plain `"..."`.
+    //< Caution: **Strip the quotes here and nowhere else.** An import's path can be any `String`,
+    //< interpolated (`"a\{x\}"`) or raw (`"""a"""`), and counting by hand silently reads `""a""`.
+    node: = r.get_import_path()
+    if node == null || node.text.len < 2 || node.text.starts_with("\"\"\"")
+      return Option<|U8[]|>.none
+    return Option<|U8[]|>.some(node.text.sub(1, node.text.len - 2))
+  // The selective import list of `import "path" { A, B as C };`; null where absent (the plain
+  // `as alias` is read by sema/collect.kspls through r.get_child(2)).
+
+  fn sig_parts(r: Self$@, out: List<|Sig_part|>$@) //<
+    //< A function's parameters in order, including the `...` of a C variadic
+    //<
+    //< Caution: **Do not walk the parameter list by hand.** Its children include the `(`, `,` and
+    //< `)` literals, and `Param_cursor` (ast_ext.kspls) skips the `...`.
+    list: = r.get_fn_params()
+    if list == null
+      return
+    for p in list.children
+      if p.kind_id == .k_fn_param
+        name: = p.get_decl_id_text()
+        d: = p.get_param_default()
+        out
+          .push(Sig_part::{ .name = name if name.len > 0 else "?",
+          .type_node = p.get_decl_type_node(), .type_id = p.type_id,
+          .default_text = d.text if d != null else "", .is_rest = false })
+      else if p.kind_id == .k_keyword && p.text.equals("...")
+        out
+          .push(Sig_part::{ .name = "", .type_node = null, .type_id = 0, .default_text = "",
+          .is_rest = true })
+
+  fn get_decl_id_text(r: Self$@): U8[]
+    if r.kind_id == .k_decl_var || r.kind_id == .k_decl_const || r.kind_id == .k_decl_var_item
+      id_n: = r.get_var_decl_id()
+      if id_n != null
+        return id_n.text
+    id_node: = r.find_child(.k_identifier)
+    return id_node.text if id_node != null else ""
+
+  priv fn last_path_segment_node(r: Self$@): Ast_node$@ //<
+    //< A path node's trailing segment, before any `type_args`
+    //<
+    //< The path node is an expr_path, a type_path or a generic_path.
+    //< null without children. get_path_name and extract_match_variant share it.
+    len: = r.children.len
+    if len == 0
+      return null
+    last: = r.last_child()
+    return r.get_child(len - 2) if last.kind_id == .k_type_args && len >= 2 else last
+
+  fn get_path_name(r: Self$@): U8[]
+    if !(r.kind_id == .k_expr_path || r.kind_id == .k_type_path)
+      return r.text
+    seg: = r.last_path_segment_node()
+    return seg.text if seg != null else r.text
+
+  fn get_path_or_ident_name(r: Self$@): U8[]
+    return r.get_path_name() if r.kind_id != .k_identifier else r.text
+
+  fn get_full_path_str_to(r: Self$@, out: Writer)
+    r.ice_assert(r != null, "get_full_path_str_to: node is null")
+    res: = out
+    if r.kind_id == .k_expr_path || r.kind_id == .k_type_path || r.kind_id == .k_generic_path
+      $is_first: = true
+      for child in r.children
+        if child.kind_id == .k_type_args
+          res.s(child.text)
+        else
+          if !is_first
+            res.c('.')
+          res.s(child.text)
+          is_first = false
+    else
+      res.s(r.text)
+
+  fn get_full_path_str(r: Self$@): Str_builder
+    res: = Str_builder.new()
+    r.get_full_path_str_to(res)
+    return res
+
+  priv fn extract_type_name_to(r: Self$@, out: Writer, depth: Sz)
+    res: = out
+    if r == null
+      return
+    if depth >= max_extract_type_name_depth
+      io.err()
+        .s("\nfatal: type expression nesting too deep to extract name (possible unbounded \
+          pointer/array/slice chain).\n")
+      sys.exit(1)
+
+    if r.kind_id == .k_type_expr || r.kind_id == .k_type_postfix || r.kind_id == .k_type_arg
+      if r.kind_id == .k_type_postfix && r.text.len > 0
+        // A `$` is not part of a type name (it says what may be written, not which type), so it
+        // is dropped; kept, `impl U8$[]` would not register as `impl U8[]` and never be found.
+        res.s(r.text.strip_prefix("$"))
+      for c in r.children
+        c.extract_type_name_to(res, depth + 1)
+      if r.children.len == 0 && r.text.len > 0 && r.kind_id != .k_type_postfix
+        res.s(r.text)
+    else if r.kind_id == .k_type_atom
+      $has_output: = false
+      for c in r.children
+        if c == null
+          continue
+        has_output = true
+        if c.text.equals("<") || c.text.equals(">")
+          res.s(c.text)
+        else if c.text.equals(",")
+          res.s(", ")
+        else
+          c.extract_type_name_to(res, depth + 1)
+      if !has_output && r.text.len > 0
+        res.s(r.text)
+    else if r.kind_id == .k_expr_path || r.kind_id == .k_type_path || r.kind_id == .k_identifier ||
+      r.kind_id == .k_type_args || r.kind_id == .k_type_gen_params || r.kind_id == .k_type_arg
+      if r.text.len > 0
+        res.s(r.text)
+      else
+        r.get_full_path_str_to(res)
+    else
+      res.s(r.text)
+
+  fn append_subtree_material(r: Self$@, out: Str_builder$@, depth: Sz) //<
+    //< It writes a subtree into one string
+    //<
+    //< **Include both the kind and the spelling.** With the spelling alone, `a - b` and `a + b`
+    //< give the same string.
+    //< Caution: Do not include the position (loc) or a type id, or a moved body stops folding.
+    if r == null
+      return
+    if depth >= max_extract_type_name_depth
+      io.err()
+        .s("\nfatal: AST node nesting too deep to fingerprint (possible pathological input).\n")
+      sys.exit(1)
+    out.s(r.get_kind_str()).c(0U8).s(r.text).c(0U8)
+    for c in r.children
+      c.append_subtree_material(out, depth + 1)
+    out.c(1U8)
+
+  fn extract_type_name(r: Self$@): Str_builder
+    res: = Str_builder.new()
+    r.extract_type_name_to(res, 0)
+    return res
+
+  fn mentions_self_type(r: Self$@): Bool //<
+    //< whether a `Self` appears anywhere in a type expression
+    //<
+    //< `Self` / `Self$@` / `Self[]` / `Foo<|Self|>` all give true. It runs before name
+    //< resolution, so matching the spelling is enough.
+    if r == null
+      return false
+    if r.text.equals("Self")
+      return true
+    for c in r.children
+      if c.mentions_self_type()
+        return true
+    return false
+
+  fn names_self_type(r: Self$@): Bool //<
+    //< Whether the type expression **is** `Self` itself (possibly with a `@` / `$@` postfix)
+    //<
+    //< Caution: **Do not confuse it with `mentions_self_type`**, which is true for `Wrap<|Self|>`
+    //< too: "is the implementing type" versus "contains it somewhere".
+    if r == null
+      return false
+    $spelled: = r.extract_type_name()
+    defer spelled.free()
+    base: = spelled.slice()
+    return base.equals("Self") || base.equals("Self@") || base.equals("Self$@")
+
+  fn self_type_spelling(r: Self$@): U8[] //<
+    //< How a type that is `Self` itself is written (`Self`, `Self@`, `Self$@`), or ""
+    //<
+    //< Caution: **Keep the `$`.** extract_type_name drops it (a type's name says nothing about
+    //< writing through it), and shown without it, a receiver written `Self$@` reads as one that
+    //< cannot be written through.
+    if !r.names_self_type()
+      return ""
+    for c in r.children
+      if c.kind_id == .k_type_postfix
+        return "Self$@" if c.text.starts_with("$") else "Self@"
+    return "Self"
+
+  fn flatten_to_identifier(r: Self$@, c_name: U8[])
+    r.ice_assert(r != null, "flatten_to_identifier: node is null")
+    r.morph(.k_identifier, c_name)
+
+  fn extract_match_variant(r: Self$@): base_ast.Match_variant_info
+    if r == null || r.children.len == 0
+      return .not_variant
+
+    $actual: = r.get_child(0)
+    for
+      id: = actual.kind_id
+      if id == .k_literal || id == .k_identifier || id == .k_enum_init || id == .k_enum_init_call ||
+        id == .k_expr_path || id == .k_type_path || id == .k_generic_path
+        break
+      if actual.children.len > 0
+        actual = actual.get_child(0)
+      else
+        break
+
+    if actual.is_literal(".")
+      return .variant(r.get_child(1), 2) if r.children.len > 1 else .variant(null, 1)
+
+    if actual.kind_id == .k_identifier
+      return .variant(actual, 1)
+
+    if actual.kind_id == .k_enum_init || actual.kind_id == .k_enum_init_call ||
+      actual.kind_id == .k_expr_postfix
+      $inner: = actual
+      if actual.kind_id == .k_enum_init_call && actual.children.len > 0
+        inner = actual.get_child(0)
+      for $ci: I32 = (I32::inner.children.len) - 1; ci >= 0; ci -= 1
+        v_node: = inner.get_child(ci)
+        if v_node.kind_id == .k_identifier
+          return .variant(v_node, 1)
+    else if actual.kind_id == .k_expr_path || actual.kind_id == .k_type_path ||
+      actual.kind_id == .k_generic_path
+      last: = actual.last_path_segment_node()
+      if last != null && last.kind_id == .k_identifier
+        return .variant(last, 1)
+      return .variant(actual, 1)
+    return .not_variant
+
+  // Whether a subscript (`a[i]`) goes through an operator trait; a built-in one holds no def_node.

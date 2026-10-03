@@ -1,0 +1,83 @@
+//< A comment behind a `}` the indentation notation leaves out is reported where it stands
+//<
+//< Such a comment does not come back from a round trip: behind a block's close (with or without a
+//< comment on the line above), a one-line block the formatting unfolds, and a `};`. Quiet where the
+//< line stays: behind the `{` of `else` or of a branch, a close inside a call, and a value's `}`.
+// EXPECT: comment_behind_a_left_out_brace.kspl:25:3: information: [I0805] This comment stands
+// EXPECT: comment_behind_a_left_out_brace.kspl:31:5: information: [I0805] This comment stands
+// EXPECT: comment_behind_a_left_out_brace.kspl:34:5: information: [I0805] This comment stands
+// EXPECT: comment_behind_a_left_out_brace.kspl:42:5: information: [I0805] This comment stands
+// EXPECT: comment_behind_a_left_out_brace.kspl:43:3: information: [I0805] This comment stands
+// EXPECT: comment_behind_a_left_out_brace.kspl:49:31: information: [I0805] This comment stands
+// EXPECT: comment_behind_a_left_out_brace.kspl:80:6: information: [I0805] This comment stands
+// EXPECT: comment_behind_a_left_out_brace.kspl:83:3: information: [I0805] This comment stands
+// EXPECT-NOT: comment_behind_a_left_out_brace.kspl:32:
+// EXPECT-NOT: comment_behind_a_left_out_brace.kspl:46:
+// EXPECT-NOT: comment_behind_a_left_out_brace.kspl:73:
+// EXPECT-NOT: comment_behind_a_left_out_brace.kspl:76:
+// EXPECT-NOT: warning: [
+// EXPECT-NOT: hint: [
+import "std/io";
+
+priv struct Point {
+  x: I32;
+  y: I32;
+} // behind a declaration's close
+
+priv fn sign(n: I32): I32 {
+  $s: = 1;
+  if n < 0 {
+    s = -1;
+  } // behind a block's close
+  else { // behind an else's opening brace
+    io.out().s("not below zero\n");
+  } // behind the else's close
+  return s;
+}
+
+priv fn spin(n: I32) {
+  $i: = n;
+  for i > 0 {
+    i -= 1; // the line above carries a comment of its own
+  } // behind a loop's close
+} // behind a function's close, below another
+
+priv fn tally(c: U8): I32 {
+  switch c case 'a' { // behind a branch's opening brace
+    return 1;
+  } default {
+    if c == 'b' { return 2; } // behind a one-line block the formatting unfolds
+    return 0;
+  }
+}
+
+priv fn apply(v: I32, f: fn(x: I32): I32): I32 {
+  return f(v);
+}
+
+priv enum Odd {
+  odd;
+}
+
+priv fn half(n: I32): I32?Odd {
+  if n % 2 != 0 {
+    throw .odd;
+  }
+  return n / 2;
+}
+
+fn main(): I32 {
+  spin(3);
+  n: = apply(sign(2), fn(v: I32): I32 {
+    return v * 2;
+  } // behind a close inside a call
+  );
+  ps: Point[1] = ::{
+    Point::{ .x = n, .y = tally('a') } // behind a value's close
+  };
+  h: = half(n) catch {
+    fallback 0;
+  }; // behind a block inside an expression, and its terminator
+  io.out().s("\{ps[0].x\} \{ps[0].y\} \{h\}\n");
+  return 0;
+} // behind the last close of the file

@@ -1,0 +1,39 @@
+//< A shift amount that is negative, or at least the left-hand side's type width, is rejected
+//<
+//< **An error, not a lint**: it is undefined behaviour in the generated C, so nothing silences it
+//< (ksplc/base/lint_codes.kspls); run-time case: tests/runtime/shift_amount_out_of_range.kspls.
+//< Caution: **Keep the compound assignments and the amount wrapping to unsigned in.**
+
+// EXPECT: shift count 40 is out of range for the left-hand side type 'I32' (must be 0..31)
+// EXPECT: shift count 32 is out of range for the left-hand side type 'U32' (must be 0..31)
+// EXPECT: shift count 64 is out of range for the left-hand side type 'U64' (must be 0..63)
+// EXPECT: shift count -1 is out of range for the left-hand side type 'I32' (must be 0..31)
+// EXPECT: shift count 40 is out of range for the left-hand side type 'Sz' (must be 0..31)
+// EXPECT: shift count 33 is out of range for the left-hand side type 'U32' (must be 0..31)
+
+// EXPECT: shift count 34 is out of range for the left-hand side type 'U32' (must be 0..31)
+// EXPECT-NOT: [W0
+import "std/io"
+
+fn main(): I32
+  too_wide_i32: I32 = 1 << 40
+  too_wide_u32: U32 = 1U32 << 32
+  too_wide_u64: U64 = 1U64 << 64
+  negative_count: I32 = 1 << -1
+  // Sz is 64 bits on a host, but 32 or more cannot be written because 32-bit targets exist.
+  too_wide_sz: Sz = 1Sz << 40
+  // An amount that folds to 32 unsigned. Read as signed it does not fit an I32 and does not
+  // reach the width decision.
+  wrapped_count: U32 = 1U32 << (0U32 - 4294967264U32)
+  // Inside the width it passes (that the errors do not grow here is pinned down at the same
+  // time).
+  ok_i32: I32 = 1 << 31
+  ok_u64: U64 = 1U64 << 63
+  ok_sz: Sz = 1Sz << 31
+  $compound: U32 = 1U32
+  compound <<= 33
+  compound >>= 34
+  compound <<= 31 // inside the width, so it passes
+  io.out()
+    .s("\{I64::too_wide_i32\}\{I64::too_wide_u32\}\{I64::too_wide_u64\}\{I64::negative_count\}\{I64::too_wide_sz\}\{I64::wrapped_count\}\{I64::ok_i32\}\{I64::ok_u64\}\{I64::ok_sz\}\{I64::compound\}\n")
+  return 0

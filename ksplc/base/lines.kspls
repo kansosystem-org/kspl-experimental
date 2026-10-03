@@ -1,0 +1,38 @@
+//< Where a line of source text begins and ends, and where its leading blanks stop
+//<
+//< A line ends at its `\n`; a `\r` before it belongs to the line. A blank is a space or a tab.
+//< Caution: **The indentation notation counts only the space** (`../parse/layout.kspls`), so
+//< a reader of its columns does not skip blanks through here.
+import "std/chars" // `sub`
+
+fn line_start(src: U8[], at: Sz): Sz //< where the line holding `at` begins
+  $i: = at
+  for i > 0 && src[i - 1] != '\n'
+    i -= 1
+  return i
+
+fn line_end(src: U8[], at: Sz): Sz //< where the line holding `at` ends: its `\n` or the end
+  $i: = at
+  for i < src.len && src[i] != '\n'
+    i += 1
+  return i
+
+fn next_line_start(src: U8[], at: Sz): Sz //<
+  //< Where the line after the one holding `at` begins, or the text's end
+  e: = line_end(src, at)
+  return e + 1 if e < src.len else src.len
+
+fn line_from(src: U8[], at: Sz): U8[] //< the text from `at` to its line's end, without the `\n`
+  return src.sub(at, line_end(src, at) - at)
+
+fn skip_blanks(src: U8[], at: Sz): Sz //< the first position at or after `at` that is not a blank
+  $i: = at
+  for i < src.len && (src[i] == ' ' || src[i] == '\t')
+    i += 1
+  return i
+
+fn opens_its_line(src: U8[], at: Sz): Bool //< whether only blanks stand before `at` on its line
+  $i: = at
+  for i > 0 && (src[i - 1] == ' ' || src[i - 1] == '\t')
+    i -= 1
+  return i == 0 || src[i - 1] == '\n'

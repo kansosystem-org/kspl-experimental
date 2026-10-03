@@ -1,0 +1,118 @@
+//< Feeds broken input to ksai's readers (`make test-fuzz`)
+//<
+//< **ksai reads two kinds of outside input**: a weights file and a vocabulary. `get_tensor`
+//< returns a view onto raw bytes, so **no error shows until an element is read**, and the reader
+//< ([`read_prog.kspls`](read_prog.kspls)) sums every element. The Makefile builds it with the
+//< address sanitizer where the C compiler has its runtime, and says so (`--asan`), so an
+//< out-of-range read stops where it happens.
+//< Usage: `ksplc run tests/fuzz_main.kspls <reader> <work folder> [--asan] [--require-asan]`,
+//< with `--trials` and `--seed`.
+import "ksai/safetensors" as st
+import "ksai/tensor" { Tensor }
+import "std/argp"
+import "std/ds" { List }
+import "std/fuzz"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+priv const default_seed: I64 = 20260906
+priv const default_trials: I64 = 500
+
+priv const trial_timeout_ms: I32 = 10000 //<
+  //< How long to wait before treating a trial as a loop that never ends
+  //<
+  //< Shorter than ksplc's: the reader sums one file, so a sane input takes under a second.
+
+priv const reach_floor_div: Sz = 20 //<
+  //< The fewest broken-input trials that must reach deep into the reader, as trials / this
+  //<
+  //< **A check only that it does not crash can pass having tried nothing** (Principle 8 in
+  //< `docs/DESIGN.md`). **Do not raise it**: it only shows that fuzzing works; the proportion
+  //< itself means nothing.
+
+priv const kinds: fuzz.Input_kind[2] = ::{ //<
+  //< The kinds of input that are fuzzed, and their files' endings
+  //<
+  //< **This is the canonical source**: both the names the program under test accepts and the code
+  //< below that builds the seeds follow it.
+  //< Caution: **Keep the tensors' names in step with the reader too** (`tensor_names` in
+  //< [`read_prog.kspls`](read_prog.kspls)).
+  fuzz.Input_kind::{ .name = "safetensors", .ext = ".safetensors" },
+  fuzz.Input_kind::{ .name = "vocab", .ext = ".txt" },
+}
+
+priv fn filled(shape: Sz[], base: F64, arena: Arena$@): Tensor<|F32|> //<
+  //< A tensor filled with fixed values
+  //<
+  //< **Do not fill it with 0**: then a trial that was read and one that was not would give the
+  //< same values.
+  t: = Tensor<|F32|>.new(shape, arena)
+  for i in Range.asc(t.size)
+    (t.data + i)$ = F32::(base + 0.25 * (F64::i))
+  return t
+
+priv fn built_weights(arena: Arena$@): U8[] //<
+  //< one weights file, written by the writer
+  w_shape: Sz[2] = ::{ 2, 3 }
+  b_shape: Sz[1] = ::{ 3 }
+  big_shape: Sz[2] = ::{ 4, 4 }
+  $w: = st.Safetensors_writer.new()
+  w.set_meta("format", "kspl")
+  w.add("w", filled(Sz[]::w_shape, 1.0, arena))
+  w.add("b", filled(Sz[]::b_shape, -2.0, arena))
+  w.add("big", filled(Sz[]::big_shape, 0.5, arena))
+  $out: = w.finish()
+  data: = arena.dup_str(out.slice())
+  out.free()
+  return data
+
+priv fn built_vocab(arena: Arena$@): U8[] //< one assembled vocabulary
+  //<
+  //< **The vocabulary lines and the merge lines are mixed into one file**: the program under test
+  //< passes the same bytes to both readers (the reason is there), so a seed for only one would
+  //< leave half the paths untested.
+  return arena.text().s("0\t\n1\t4b\n2\t61\n3\t6e\n4\t73\n5\t6f\n6\t20\n7\t3132\n")
+    .s("8\t4b61\n9\t6e73\n10\t6e736f\n").s("1 2 8\n3 4 9\n9 5 10\n").take()
+
+priv fn collect_seeds(arena: Arena$@): List<|fuzz.Sample|>
+  $out: = List<|fuzz.Sample|>.new(arena)
+  out
+    .push(fuzz.Sample::{ .kind = "safetensors", .name = "built weights",
+    .data = built_weights(arena), .built = true })
+  out
+    .push(fuzz.Sample::{ .kind = "vocab", .name = "built vocabulary", .data = built_vocab(arena),
+    .built = true })
+  return out
+
+fn main(): I32
+  verdict.begin("fuzz")
+  arena: = Arena.new(256 * 1024 * 1024)
+  defer arena.free()
+  $o: = fuzz.Opts::{ .trials = default_trials, .seed = default_seed }
+  $asan: = false
+  $require_asan: = false
+  p: = argp.Parser.create("fuzz_main", "scatters broken input at ksai's readers", arena)
+  p.flag("--asan", asan@, "the reader was built with the address sanitiser")
+  p.flag("--require-asan", require_asan@, "a reader built without it is a failure")
+  s: =
+    fuzz.setup(p, o@, "ksplc run tests/fuzz_main.kspls", "<reader>", false, arena) catch why
+    return verdict.fatal(why)
+  // Caution: **Report whether the sanitizer is in**, required or not: a reader built without it
+  // passes the same way, and nothing would show that the most important failures go unchecked.
+  if require_asan || asan
+    verdict.check("the reader is built with the address sanitiser", asan,
+      "the C compiler holds no sanitiser runtime (in the devcontainer, libclang-rt-<version>-dev)")
+  else
+    verdict.skip_check("building the reader with the address sanitiser",
+      "this environment's C compiler holds no sanitiser runtime")
+  // The same reader and work folder run it again, from this folder.
+  c: = fuzz.Campaign::{ .subject = "ksai", .argv = U8[][]::{ s.exe }, .tell_kind = true,
+    .after = U8[][]::{}, .work = s.work, .kinds = fuzz.Input_kind[]::kinds, .in_turn = false,
+    .wait_ms = trial_timeout_ms, .reach_div = reach_floor_div,
+    .again = arena.text().s(s.again).s(" --asan" if asan else "").take() }
+  $all: = collect_seeds(arena)
+  $samples: = fuzz.check_seeds(c@, all@, arena)
+  fuzz.scatter(c@, samples@, "byte sequences", o, arena) catch why
+    return verdict.fatal(why)
+  return verdict.finish()

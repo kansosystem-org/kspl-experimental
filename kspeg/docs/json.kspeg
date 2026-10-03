@@ -1,0 +1,18 @@
+// JSON (RFC 8259) in KSPEG. kspeg/tests/engine_test.kspls parses documents with it.
+//
+// JSON's whitespace is exactly the engine's default `_Space`, and its three literal names end
+// where the default `_Boundary` says a word ends (`truex` is not `true`), so neither is defined
+// here.
+
+json = value !.
+value = object | array | String | Number | 'true' | 'false' | 'null'
+object = "{" ( member ( "," member )* )? "}"
+member = String ":" value
+array = "[" ( value ( "," value )* )? "]"
+
+// Upper-case initials make tokens: read byte by byte with no whitespace inside, one node each.
+String = ["] ( Escape | !["\\] !Control . )* ["]
+Escape = "\\" ( ["\\/bfnrt] | "u" Hex Hex Hex Hex )
+Hex = [0-9A-Fa-f]
+Control = [\u0000-\u001F]
+Number = "-"? ( "0" | [1-9] [0-9]* ) ( "." [0-9]+ )? ( [eE] [+\-]? [0-9]+ )?

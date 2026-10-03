@@ -1,0 +1,42 @@
+//< Secure randomness from the OS, safe for a key, a token or a nonce
+//<
+//< It reads `/dev/urandom` on POSIX and `BCryptGenRandom` on Windows. **It is not `std/prng`**,
+//< whose values anyone can predict after seeing one. Use this for any security purpose.
+
+// ==========================================
+// The per-OS code (fopen/fread/fclose on /dev/urandom, or BCryptGenRandom) stays inside
+// `kspl_rand_fill` in `ksplc/gen/runtime/hosted.c`.
+// ==========================================
+import "std/bytes" // `get_u64_be`
+import "std/mem" { Arena, alloc_in, dealloc }
+
+extern "C"
+  fn kspl_rand_fill(buf_ptr: U8$@, buf_len: Sz): Bool
+
+pub enum Rand_error //< why secure randomness could not be obtained
+  unavailable //< the OS randomness source could not be opened, or reading it failed
+
+pub fn fill( //< fills the caller's memory from the OS randomness source
+  buf: U8$[], //< the memory to fill, every byte of it
+): Void?Rand_error
+  if !kspl_rand_fill(buf.ptr, buf.len)
+    throw Rand_error.unavailable
+
+pub fn bytes( //< a newly allocated buffer of secure random bytes
+  n: Sz, //< how many bytes to return
+  arena: Arena$@, //< where they go; null means the heap, freed with `dealloc`
+): U8[]?Rand_error //< the bytes; fails if the OS randomness source cannot be read
+  buf: = U8$[]::{ .ptr = U8$@::alloc_in(arena, n), .len = n }
+  fill(buf) catch e
+    if arena == null
+      dealloc(Void$@::buf.ptr)
+    throw e
+  return buf
+
+pub fn u64(): U64?Rand_error //< one secure random `U64`
+  //<
+  //< For a token or a session ID.
+  buf: U8[8] = ::{}
+  fill(U8$[]::buf)?
+  v: = U8[]::buf
+  return v.get_u64_be(0)

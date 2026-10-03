@@ -1,0 +1,38 @@
+//< The standard ways to add a declaration to the tables
+//<
+//< They add a name to both the symbol table (`Symbol_table`) and the generic template table
+//< (`Generic_state.templates`), under both the name and the FQN.
+//< Caution: **Do not add a check here.** Redefinition, visibility and naming are checked by
+//< `Sema_ctx.declare_symbol` (ksplc/sema/session/ctx.kspls). **A caller must import this file**;
+//< `sema/session/ctx` alone does not add these methods.
+//< ==========================================
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/scope" { Sema_symbol }
+import "std/str"
+
+fn register_template_names(c: Sema_ctx$@, fqn: U8[], name: U8[], node: Ast_node$@) //<
+  //< Registers into generics.templates under the FQN and, where it differs, the shortened name
+  c.generics.templates.set(fqn, node)
+  if !name.equals(fqn)
+    c.generics.templates.set(name, node)
+  // Caution: **Record the variance at the same time.** The code that matches types holds only
+  // `Env` and cannot reach the template's tree.
+  mask: = node.gen_param_variance_mask()
+  if mask != 0
+    c.env.variance_masks.set(fqn, mask)
+    if !name.equals(fqn)
+      c.env.variance_masks.set(name, mask)
+
+impl Sema_ctx
+  fn declare_symbol_with_fqn(r: Self$@, name: U8[], fqn: U8[], sym: Sema_symbol$@) //<
+    //< Registers the symbol under both the name and its FQN (the alias-prefixed name)
+    is_same: = name.equals(fqn)
+    if r.declare_symbol(name, sym, is_same)
+      if !is_same
+        r.declare_symbol(fqn, sym, true)
+
+  fn declare_global_symbol(r: Self$@, name: U8[], sym: Sema_symbol$@) //<
+    //< The variant that builds the FQN itself
+    r.declare_symbol_with_fqn(name, r.make_fqn(name), sym)

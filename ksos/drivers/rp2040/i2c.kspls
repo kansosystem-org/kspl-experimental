@@ -1,0 +1,198 @@
+//< The I2C master (I2C0) for the real Raspberry Pi Pico / Pico W (RP2040) chip
+//<
+//< Caution: **Call clocks.init() first.** SCL's divisor is worked out from clk_sys.
+
+// ==========================================
+//   I2C0_BASE = 0x40044000  +0x00 CON, +0x04 TAR, +0x10 DATA_CMD
+//                           +0x1c FS_SCL_HCNT, +0x20 FS_SCL_LCNT, +0x34 RAW_INTR_STAT
+//                           +0x54 CLR_TX_ABRT, +0x60 CLR_STOP_DET, +0x6c ENABLE
+//                           +0x70 STATUS, +0x7c SDA_HOLD, +0x80 TX_ABRT_SOURCE
+//                           +0xa0 FS_SPKLEN
+//   RESETS's I2C0 is bit3. SDA/SCL's FUNCSEL is 3.
+// ==========================================
+import "ksos/drivers/mmio"
+import "ksos/drivers/rp2040/clocks"
+import "ksos/drivers/rp2040/gpio"
+import "ksos/drivers/rp2040/resets"
+import "ksos/drivers/rp2040/timer"
+
+const reset_i2c0: U32 = 1U32 << 3
+
+const base: U32 = 0x40044000
+const reg_con: U32 = base + 0x00
+const reg_tar: U32 = base + 0x04
+const reg_data_cmd: U32 = base + 0x10
+const reg_fs_scl_hcnt: U32 = base + 0x1c
+const reg_fs_scl_lcnt: U32 = base + 0x20
+const reg_raw_intr_stat: U32 = base + 0x34
+const reg_clr_tx_abrt: U32 = base + 0x54
+const reg_clr_stop_det: U32 = base + 0x60
+const reg_enable: U32 = base + 0x6c
+const reg_status: U32 = base + 0x70
+const reg_sda_hold: U32 = base + 0x7c
+const reg_tx_abrt_source: U32 = base + 0x80
+const reg_fs_spklen: U32 = base + 0xa0
+
+const con_master_mode: U32 = 1U32 << 0
+const con_slave_disable: U32 = 1U32 << 6 //<
+  //< The bit that disables the slave function
+  //<
+  //< **Rewriting all of CON clears it to 0**, and master and slave enabled together do not work.
+const con_speed_fast: U32 = 2U32 << 1
+const con_restart_en: U32 = 1U32 << 5
+const con_tx_empty_ctrl: U32 = 1U32 << 8
+
+const cmd_read: U32 = 1U32 << 8
+const cmd_stop: U32 = 1U32 << 9
+
+const status_tfnf: U32 = 1U32 << 1 // the send FIFO has space
+const status_rfne: U32 = 1U32 << 3 // the receive FIFO has data
+
+const intr_tx_abrt: U32 = 1U32 << 6
+const intr_stop_det: U32 = 1U32 << 9
+
+const funcsel_i2c: U32 = 3
+
+// Why the latest transfer failed. **Reading TX_ABRT_SOURCE clears it**, so it is copied here;
+// otherwise the caller cannot tell "no device" from a NACK.
+$last_abort_src: U32 = 0
+$last_timed_out: Bool = false
+
+fn last_abort(): U32 //< the TX_ABRT_SOURCE captured on the latest transfer
+  //<
+  //< 0 means no abort. bit0 = no device at the address, bit3 = the data was NACKed (the device is
+  //< there but does not accept it).
+  return last_abort_src
+
+fn last_was_timeout(): Bool //<
+  //< Whether the latest transfer ended in **a timeout** rather than an abort
+  //<
+  //< A timeout happens when the device still holds the clock, for example.
+  return last_timed_out
+
+const timeout_us: U32 = 10000 //<
+  //< The limit on one wait, so it does not hang forever when no device is there
+  //<
+  //< One byte is about 90µs at SCL 100kHz, so this leaves plenty of room.
+
+const scl_hz: U32 = 100000 //< the SCL's target frequency
+  //<
+  //< Standard mode: it tolerates rough wiring better than 400kHz.
+
+fn init(sda: U32, scl: U32): Bool //< starts I2C0 and connects the sda / scl pins to it
+  //<
+  //< Caution: Call it after gpio.init() and clocks.init().
+  if !resets.reset_then_unreset(reset_i2c0)
+    return false
+
+  // The settings are written **with ENABLE cleared**. Written while it runs, they have no effect.
+  mmio.write32(reg_enable, 0U32)
+  mmio.write32(reg_con,
+    con_master_mode | con_slave_disable | con_speed_fast | con_restart_en | con_tx_empty_ctrl)
+
+  // SCL's High / Low times, split as in pico-sdk (Low takes 3/5).
+  period: = clocks.sys_hz / scl_hz
+  lcnt: = period * 3 / 5
+  hcnt: = period - lcnt
+  mmio.write32(reg_fs_scl_hcnt, hcnt)
+  mmio.write32(reg_fs_scl_lcnt, lcnt)
+  // The spike suppression width. 0 is not allowed, so the minimum is 1.
+  mmio.write32(reg_fs_spklen, 1U32 if lcnt < 16 else lcnt / 16)
+  // How long SDA is held after SCL's falling edge (300ns); without it some devices misread data.
+  mmio.write32(reg_sda_hold, (clocks.sys_hz * 3 / 10000000) + 1)
+
+  // Connect the pins to the I2C function, not SIO.
+  gpio.select_function(sda, funcsel_i2c)
+  gpio.select_function(scl, funcsel_i2c)
+  // Caution: **Turn on the built-in pull-ups.** I2C is open drain: with nothing pulling High, no
+  // address can ACK. Do not rely on the device's board having them.
+  gpio.set_pull(sda, true, false)
+  gpio.set_pull(scl, true, false)
+
+  mmio.write32(reg_enable, 1U32)
+  return true
+
+priv fn set_target(addr7: U32) //< selects a new target device
+  //<
+  //< TAR can only be changed while ENABLE is cleared.
+  mmio.write32(reg_enable, 0U32)
+  mmio.write32(reg_tar, addr7 & 0x7f)
+  mmio.write32(reg_enable, 1U32)
+
+priv fn begin_transfer() //< clears what the previous transfer left before a new one starts
+  //<
+  //< Caution: **Clear STOP_DET too.** If the previous transfer gave up partway it is still set,
+  //< and the next finish() sees it and wrongly takes the transfer as already over.
+  _a: = mmio.read32(reg_clr_tx_abrt)
+  _s: = mmio.read32(reg_clr_stop_det)
+  last_abort_src = 0
+  last_timed_out = false
+
+priv fn finish(): Bool //< completes a transfer
+  //<
+  //< It waits for STOP to be sent, and returns true if no abort happened.
+  start: = timer.now_us()
+  for (mmio.read32(reg_raw_intr_stat) & intr_stop_det) == 0
+    if timer.elapsed_us(start) > timeout_us
+      last_timed_out = true
+      return false
+  _ignored: = mmio.read32(reg_clr_stop_det)
+  abrt: = mmio.read32(reg_tx_abrt_source)
+  if abrt != 0
+    last_abort_src = abrt // record it before it is cleared
+    _cleared: = mmio.read32(reg_clr_tx_abrt)
+    return false
+  return true
+
+priv fn wait_status(mask: U32): Bool //< waits until a status bit is set
+  //<
+  //< false if it is not set in time.
+  start: = timer.now_us()
+  for (mmio.read32(reg_status) & mask) == 0
+    if timer.elapsed_us(start) > timeout_us
+      return false
+  return true
+
+fn write(addr7: U32, data: U8@, len: U32): Bool //<
+  //< Writes len bytes to addr7, sending STOP after the last byte
+  //<
+  //< **false if the device returns no ACK.** With broken wiring it does not hang; it reports it
+  //< here.
+  if len == 0
+    return false // 0 bytes cannot be expressed in DATA_CMD (use scan)
+  set_target(addr7)
+  begin_transfer()
+  for $i: U32 = 0; i < len; i += 1
+    if !wait_status(status_tfnf)
+      last_timed_out = true
+      return false
+    $v: U32 = (data + Sz::i)$
+    if i == len - 1
+      v |= cmd_stop
+    mmio.write32(reg_data_cmd, v)
+  return finish()
+
+fn present(addr7: U32): Bool //<
+  //< Whether a device answers at addr7
+  //<
+  //< **It checks by reading one byte**: a zero-byte transfer cannot be expressed, and a write
+  //< would touch the device's registers.
+  set_target(addr7)
+  begin_transfer()
+  if !wait_status(status_tfnf)
+    last_timed_out = true
+    return false
+  mmio.write32(reg_data_cmd, cmd_read | cmd_stop)
+  // Caution: **Wait for both the reception and the abort.** With no device there RFNE is never
+  // set, and each address would take the whole timeout.
+  start: = timer.now_us()
+  for
+    if (mmio.read32(reg_status) & status_rfne) != 0
+      // Discard the data. If it were not read out, it would be left over for the next transfer.
+      _ignored: = mmio.read32(reg_data_cmd)
+      break
+    if (mmio.read32(reg_raw_intr_stat) & intr_tx_abrt) != 0
+      break
+    if timer.elapsed_us(start) > timeout_us
+      break
+  return finish()

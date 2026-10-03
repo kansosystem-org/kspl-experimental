@@ -1,0 +1,13 @@
+//< Elements must not be rewritable through a pointer to a read-only slice
+//<
+//< `p[0] = v` on a `p: U8[]@` auto-dereferences (`docs/SPEC-language.md` §6.2.1), so the elements'
+//< check must peel the pointer step off. A `U8$[]@` (an immutable pointer to a **mutable** slice)
+//< has writable elements: the descriptor's (ptr+len) mutability is a different step.
+// EXPECT: cannot write to an element of a read-only slice or array
+
+fn main(): I32
+  $buf: U8[4] = ::{ 'a', 'b', 'c', 'd' }
+  imm: U8[] = U8[]::{ .ptr = buf[0]@, .len = 4 }
+  p: U8[]@ = imm@ // both the elements and the descriptor are read-only
+  p[0] = 'Z'
+  return I32::buf[0]

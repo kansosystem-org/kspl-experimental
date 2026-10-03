@@ -1,0 +1,50 @@
+//< A demo of ARM Cortex-M pre-emptive scheduling
+//<
+//< The SysTick interrupt calls ksos_tick() at a fixed rate and forces tasks of the same priority
+//< to switch on a time slice. Tasks A and B are endless loops that never yield, so under
+//< cooperative scheduling A would hog the CPU and the others could never run. If both run
+//< (g_ran_a/b set) and monitor wakes from its Task.delay and ends, pre-emption and the
+//< timer-driven clock work. startup.S calls ksos_main on the PSP, and PendSV (switch.S) switches.
+import "ksos/demo/common/semihost_console" as con
+import "ksos/kernel/task" + { Task }
+
+$g_ran_a: I32 = 0
+$g_ran_b: I32 = 0
+
+$tcb_a: Task
+$tcb_b: Task
+$tcb_m: Task
+$stack_a: U8[4096]
+$stack_b: U8[4096]
+$stack_m: U8[4096]
+fn task_a(_arg: Void$@): Void //< a computing task that never yields
+  for
+    g_ran_a = 1
+
+fn task_b(_arg: Void$@): Void
+  for
+    g_ran_b = 1
+fn monitor(_arg: Void$@): Void //< the monitoring task
+  //<
+  //< It sleeps 20 ticks on Task.delay. Meanwhile SysTick forces A and B, which never yield, to
+  //< switch, the clock advances and monitor wakes. That it wakes at all shows the pre-emptive tick
+  //< works. It reports the result and ends QEMU.
+  Task.delay(20)
+  con.puts("=== Kanso OS (Cortex-M) preemptive scheduling ===\n")
+  con.puts("[monitor] woke after task_delay while A/B never yield -> preemption works\n")
+  if g_ran_a == 1
+    con.puts("[monitor] task A ran\n")
+  if g_ran_b == 1
+    con.puts("[monitor] task B ran\n")
+  con.puts("=== done ===\n")
+  con.exit()
+// The bare-metal entry, called on the PSP from startup.S.
+#export
+fn ksos_main()
+  tcb_a.create(U8$[]::stack_a, task_a, null, 1, "a")
+  tcb_b.create(U8$[]::stack_b, task_b, null, 1, "b")
+  tcb_m.create(U8$[]::stack_m, monitor, null, 1, "m")
+  // Start SysTick (the first interrupt comes one reload period later, after the scheduler starts).
+  task.enable_preemption(50000)
+  task.start_scheduler()
+  for {}

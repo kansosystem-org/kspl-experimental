@@ -1,0 +1,82 @@
+import "std/chars"
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// The default values that carry the caller's position (`caller_file` / `caller_line`).
+//
+// **This checks that the value "differs per call".** Called from only one place, the values cannot
+// tell whether the declaration's position or the call's position went in.
+// ==========================================
+priv struct Site
+  file: U8[]
+  line: Sz
+
+priv fn here(file: U8[] = caller_file, line: Sz = caller_line): Site
+  return Site::{ .file = file, .line = line }
+
+priv fn relayed_without_forwarding(): Site //< a relay that shows the position goes back one step
+  //<
+  //< It does not forward, so this function becomes "the caller".
+  return here()
+
+priv fn relayed_with_forwarding(file: U8[] = caller_file, line: Sz = caller_line): Site //<
+  //< A forwarding relay
+  //<
+  //< The caller's position reaches all the way in.
+  return here(file, line)
+
+priv trait Sited //<
+  //< A trait whose declared default values the compiler passes on to each implementation
+  //<
+  //< **This checks that it works on both paths** (a call on the concrete type resolves to the
+  //< implementation's declaration, and a call through a trait value to the trait's declaration,
+  //< so it is easy to make it work on only one).
+  fn where_from(r: Self, file: U8[] = caller_file, line: Sz = caller_line): Site
+
+priv struct Marker
+  unused: I32
+
+// The implementation writes the parameter but not the default value (a negative test pins the
+// shape that writes it).
+impl Marker: Sited
+  fn where_from(_r: Self, file: U8[], line: Sz): Site
+    return Site::{ .file = file, .line = line }
+
+fn test_trait_declaration_defaults()
+  verdict.start("[Caller] a default value written on a trait's declaration test...")
+  m: Marker = ::{ .unused = 0 }
+  direct: = m.where_from()
+  t: Sited = m
+  via_trait: = t.where_from()
+  own_file: = direct.file.ends_with("caller_loc_test")
+  assert(own_file, "trait: a call on the concrete type passes in the caller's file")
+  assert(direct.line + 2 == via_trait.line, "trait: both routes put in the line of their own call")
+  verdict
+    .pass("a default value written on a trait's declaration takes effect for a call against the \
+      concrete type and for a call through a trait value alike.")
+
+fn test_caller_location_defaults()
+  verdict.start("[Caller] the default values conveying the caller's position test...")
+  a: = here()
+  b: = here()
+  assert(a.line + 1 == b.line, "caller_line: a different line goes in per call")
+  own_file: = a.file.ends_with("caller_loc_test")
+  assert(own_file, "caller_file: the caller's file is passed in")
+
+  // With a relay that does not forward, the position becomes **the relay's line** (it goes back
+  // one step only).
+  no_fwd: = relayed_without_forwarding()
+  assert(no_fwd.line < a.line, "caller_line: without forwarding it becomes the relay's line")
+
+  // With forwarding, the caller's line reaches.
+  fwd: = relayed_with_forwarding()
+  assert(fwd.line > a.line, "caller_line: with forwarding, the caller's line gets through")
+
+  // Written explicitly, it can be overridden (the same rule as an ordinary default argument).
+  spelled: = here("other.kspl", 4242)
+  overridden: = spelled.file.equals("other.kspl") && spelled.line == 4242
+  assert(overridden, "caller: an explicitly passed value wins")
+  verdict
+    .pass("the position of each call goes in, and going back one step and an explicit overwrite \
+      both take effect.")

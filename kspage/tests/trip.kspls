@@ -1,0 +1,32 @@
+//< The entry points the round-trip gates call
+//<
+//< They are called by `tests/suite/textrip_test.kspls` and `tests/suite/mdtrip_test.kspls`.
+//< **All they do is "one round trip the way a person opens a file".**
+//< Caution: **Do not add an entry point beyond these two.** Kept here, the inside of `kspage/`
+//< stays unmarked (`pub` is only a contract with outside the unit, ksplc.cfg's [I0402]).
+import "kspage/share/markdown"
+import "kspage/share/markdown_look" as mdlook
+import "kspage/share/markdown_read" as mdread
+import "kspage/share/text"
+import "kspage/tests/base"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+pub fn is_texty(src: U8[]): Bool //< whether that text can be opened as a text form
+  //<
+  //< What cannot be opened is not round-tripped.
+  return text.texty(src)
+
+pub fn text_trip(src: U8[], out: Str_builder$@, arena: Arena$@) //< round-trips the text form once
+  //<
+  //< Caution: **Use the same table as when a person opens it** (`text.sheet_for`).
+  sheet: = text.sheet_for(base.root_font(), "", arena)
+  text.write(text.read(src, sheet, arena), out)
+
+pub fn md_trip(src: U8[], out: Str_builder$@, arena: Arena$@) //< round-trips Markdown once
+  //<
+  //< Caution: **Use the table that carries the look** (`markdown_look.sheet_for`). With an empty
+  //< table, **the gate does not notice** a look that breaks the round trip. The empty table is
+  //< `markdown_test.kspls`'s.
+  sheet: = mdlook.sheet_for(base.root_font(), arena)
+  markdown.write(mdread.read(src, sheet, arena), sheet, out)

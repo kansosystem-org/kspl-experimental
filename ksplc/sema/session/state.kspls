@@ -1,0 +1,261 @@
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/lint_codes" as base_lint_codes
+import "std/ds" { List, Map }
+
+// ==========================================
+// The state accumulated during the analysis. A generic's instantiation, monomorphization, aliases,
+// imported names, the diagnostics' bookkeeping, measuring a type and the declarations being
+// resolved are each kept in one struct.
+//
+// **`Sema_ctx` is not here**: many files import it, and moving it would change all their import
+// blocks. Only what `Sema_ctx` holds by value is here.
+// ==========================================
+
+struct Generic_arg
+  param_name_id: I32
+  bound_type_id: I32
+  is_const: Bool //<
+    //< Whether it is an argument qualified with `const`, as `<|const N: Sz|>` is.
+    //<
+    //< Then replace_type_vars in `sema/decl/subst.kspls` substitutes an integer literal node rather
+    //< than a type name, so it evaluates as a value in an expression.
+
+struct Alias_info
+  target_path: U8[]
+  is_used: Bool
+  decl_node: Ast_node$@
+
+struct Import_symbol_info //<
+  //< One symbol brought in with no namespace by `import "path" { A, B as C };`
+  //<
+  //< original_name is the name at the import source even after `as`; the FQN resolved is
+  //< target_path.original_name.
+  target_path: U8[]
+  original_name: U8[]
+  is_used: Bool
+  decl_node: Ast_node$@
+
+struct Pending_inst //<
+  //< One instantiation whose body's type inference was deferred
+  //<
+  //< The worklist in sema/body/infer.kspls runs it.
+  //<
+  //< Caution: Always keep a copy of the bindings. The body is analyzed under the template's file,
+  //< and without `T`'s binding the visibility check treats a reference to the type argument's file
+  //< as an intrusion (check_visibility_and_mark_used's exemption loop).
+  node: Ast_node$@
+  impl_name: U8[]
+  bound_args: List<|Generic_arg|>$@ //< a copy of generics.args when it was queued
+  depth: Sz //< its depth in the instantiation chain (see Generic_state.inst_chain_depth)
+
+struct Pending_constraint //<
+  //< A record for re-running, at a boundary, a type-argument constraint check that was deferred
+  //<
+  //< Caution: **Drain it at the instantiation's boundary.** The check reads
+  //< `env.implements_trait`, which the instantiation fills (register_generic_trait_impls). Keep
+  //< the constraint node with a copy of the bindings: the literal text alone cannot resolve an
+  //< unbound `K`, and a correctly implementing type would be wrongly rejected.
+  constraint_node: Ast_node$@ //< .k_type_constraint (the trait's paths)
+  arg_type_id: I32 //< the type bound as the actual argument
+  site: Ast_node$@ //< where the diagnostic attaches (the instantiation the user wrote)
+  bound_args: List<|Generic_arg|>$@ //< a copy of generics.args when it was recorded
+  inst_name: U8[] //< the constrained instantiation's mangled name (to skip the body check)
+
+struct Pending_methods //<
+  //< An instantiation whose method table and conformance await drain_pending_instances
+  //<
+  //< **They cannot be built at the moment of instantiation**: that happens while type annotations
+  //< are resolved (collect's Pass 1 to 3), before every generic impl is registered, so building is
+  //< queued here and done once they all are.
+  //< Caution: **Clear the outer bindings before pushing again** (drain_pending_instances in
+  //< mono.kspls).
+  type_id: I32
+  base_name: U8[] //< the template's FQN (`std.ds.List` and so on)
+  args_str: U8[] //< the canonicalized type-argument list (`I32` / `U8[], I32` and so on)
+  inst_name: U8[] //< the instantiation's mangled name (the key for a violation record)
+  depth: Sz //<
+    //< This entry's depth in the instantiation chain
+    //<
+    //< It is Generic_state.inst_chain_depth's value when this table is built. **Call depth cannot
+    //< measure it**: the queue turns recursion into iteration. One depth count shared by table and
+    //< body stops polymorphic recursion (`Chain<|S|>` making `Chain<|Box2<|S|>|>` ...) at the
+    //< limit.
+  awaits_pull: Bool //<
+    //< Whether to keep it deferred until the table is looked up.
+    //<
+    //< Caution: **Do not defer the conformance registration (add_implemented_trait)**; the reason
+    //< is at register_generic_trait_impls (and its with_table) in mono.kspls.
+
+struct Trait_inst //<
+  //< One conformance from an instantiated generic impl (`impl<|T|> Env<|T|>: Pred`'s `Env<|I32|>`)
+  //<
+  //< **No `decl_impl` node is made for the instantiation**: its methods become separate `decl_fn`s
+  //< (`instantiate_generic_methods` in mono.kspls). Without this record **broken C is emitted with
+  //< zero diagnostics**, an upcast naming an undefined `&kspl_vtable_impl_<type>_<trait>`
+  //< (Principle 2).
+  target_id: I32 //< the conforming side's instantiated type (`Env_I32`)
+  trait_id: I32 //< the trait conformed to (it can be instantiated too)
+  loc_node: Ast_node$@ //< the generic impl's node, for the diagnostic and the unit assignment
+
+struct Diagnostic_counts
+  errors: I32
+  warnings: I32
+  infos: I32
+  hints: I32
+  codes: List<|U8[]|>$@ //< the codes of the emitted diagnostics, each once, in order
+
+struct Lint_setting_entry //<
+  //< A file-scope diagnostic level registered with `##lint(CODE = level)`
+  //<
+  //< Registrations are few, so a linear search is used, not a Map (see lint_level_for_file).
+  file: U8[]
+  code: U8[]
+  level: base_lint_codes.Lint_level
+
+struct Diag_state //< diagnostics bookkeeping: the counts, what was reported, the levels set
+  //<
+  //< The diagnostic methods in `ctx.kspls` maintain it. The counts decide the exit code, and a
+  //< quiet evaluation restores the error count (fold_quietly in `../decl/eval.kspls`).
+  counts: Diagnostic_counts
+  reported: Map<|U8[], I32|>$@ //< the diagnostics already reported, so each is reported once
+  undefined_at: Map<|U8[], Bool|>$@ //< where an undefined name was reported, as "file:offset"
+  lint_settings: List<|Lint_setting_entry|>$@ //< the levels `##lint(CODE = level)` registered
+  line_starts: Map<|U8[], List<|Sz|>$@|>$@ //<
+    //< The line-start offset tables for diagnostic positions (file name -> table)
+    //<
+    //< **Build one per file only.** Building one per diagnostic makes it O(count × file size) and
+    //< makes compilation several times slower in a file with many warnings (gen/c/ctx.kspls keeps
+    //< the same table for the same reason).
+struct Generic_state //< the generics' state
+  //<
+  //< What exists, what is bound now, and where the binding was requested.
+  //< Caution: Do not add monomorphization's working state here (it belongs in Mono_state below).
+  templates: Map<|U8[], Ast_node$@|>$@ //< generic template definitions (FQN -> node)
+  impls: List<|Ast_node$@|>$@ // the generic impls
+  trait_insts: List<|Trait_inst|>$@ //<
+    //< Instantiated generic impls' trait conformances (see Trait_inst). lower builds the vtables.
+  args: List<|Generic_arg|>$@ //< the currently bound type arguments
+  pending: List<|Pending_inst|>$@ //< monomorphization's pending queue
+  inst_chain_depth: Sz //<
+    //< The instantiation-chain depth of the body being analyzed or the table being built
+    //<
+    //< It is not the call depth; both pass through the pending queue.
+    //< Caution: **Share one depth count between the body and the table** (Pending_inst.depth and
+    //< Pending_methods.depth).
+  inst_site: Ast_node$@ //<
+    //< The position the user wrote that caused a generic's instantiation
+    //<
+    //< It is the caller, not the template's bound (the constraint node of `f<|T: some.Trait|>`).
+    //< Set when an instantiation starts; instantiations nest, so the setter saves and
+    //< restores it (check_type_constraint reads it).
+  resolving_template_types: Bool //<
+    //< Whether a not-yet-instantiated template's types are being resolved for the LSP
+    //<
+    //< That is the last pass of sema/body/infer.kspls.
+    //< Caution: **Do not check a type argument's constraint during this.** The type arguments are
+    //< bound to nothing yet, so a declaration would fail the constraint it declares itself (the
+    //< `Seq<|K|>` written inside `impl<|K: Hashable<|K|>|> Box<|K|>`).
+
+struct Mono_state //<
+  //< Monomorphization's own working state
+  //<
+  //< It holds the pending queues, the re-entry flags, the depth and the duplicate records.
+  //< **Only the instantiation (`../decl/mono.kspls`) and its queue (`../decl/mono_queue.kspls`)
+  //< touch it**, so the queues' order and the re-entry checks live in one place; other code goes
+  //< through their methods. Visibility cannot enforce this within a package; keep it by
+  //< convention.
+  trait_inst_seen: Map<|U8[], Bool|>$@ //<
+    //< The (conforming type, trait) pairs pushed onto Generic_state.trait_insts
+    //<
+    //< A pair added twice is a vtable redefinition.
+  pending_methods: List<|Pending_methods|>$@ //<
+    //< The queue of instantiations whose method table and trait conformance are not built yet
+    //<
+    //< See Pending_methods.
+  draining_methods: Bool //<
+    //< drain_pending_instances' re-entry flag
+    //<
+    //< One created mid-drain is picked up by the outer loop.
+  deferred_methods: Map<|I32, Pending_methods|>$@ //<
+    //< Instantiations whose table building was deferred (type id -> the set needed to rebuild it)
+    //<
+    //< Built when looked up (ensure_instance_methods in mono_queue.kspls).
+  pending_constraints: List<|Pending_constraint|>$@ //<
+    //< The queue of deferred constraint checks (see Pending_constraint).
+  draining_constraints: Bool //<
+    //< Whether the queue above is being drained.
+    //<
+    //< Caution: **Do not queue again while draining**: the queue never shrinks and uses up memory
+    //< (drain_pending_constraints).
+  constraint_failed: Map<|U8[], Bool|>$@ //<
+    //< The mangled names of the instantiations that violated a type-argument constraint
+    //<
+    //< Their body check is skipped; otherwise follow-on errors inside the template (the standard
+    //< library) bury the one diagnostic at the user's position.
+  current_inst_name: U8[] //<
+    //< Which instantiation bind_generic_args is binding for right now
+    //<
+    //< A violation is recorded against it.
+  mono_depth: Sz //<
+    //< instantiate_struct's recursive call depth
+    //<
+    //< It is a limit for a non-cycling chain of differently named generics (A<|T|> embeds B<|T|>
+    //< ...), which the exact-match cache cannot catch (see max_mono_depth in mono.kspls).
+struct Alias_state //< the state for resolving import aliases
+  files: Map<|U8[], Alias_info$@|>$@ //< "file::alias" -> the alias information
+  withheld: Map<|U8[], U8[]|>$@ //< "file::alias" -> the path of a selective import with no `+`
+
+struct Import_symbol_state //<
+  //< The state for resolving the symbols brought in by `import "path" { A, B as C };`
+  files: Map<|U8[], Import_symbol_info$@|>$@ //< "file::local_name" -> selective-import info
+
+struct Import_hit //< the import line that lets one file reach another (is_file_imported)
+  alias: Alias_info$@ //< the import alias that does; null where only a selective import does
+  symbol: Import_symbol_info$@ //< the selective import that does, read where alias is null
+
+struct Type_layout
+  size: Sz
+  align: Sz
+
+struct Layout_state //< measuring a type's size (calc_type_layout in `../decl/layout.kspls`)
+  memo: Map<|I32, Type_layout|>$@ //<
+    //< calc_type_layout's memo from type_id to Type_layout
+    //<
+    //< It is kept for one outer call only (detected by resolving.len == 0). Without it a "diamond",
+    //< one type referenced from several fields, costs the field fanout to the power of the depth:
+    //< an exponential DoS.
+  field: Ast_node$@ //<
+    //< The field whose size is being measured
+    //<
+    //< The diagnostics for an infinite size, a chain too deep and `[_]` point here. It is not an
+    //< argument: the measuring path has many steps, and adding it to each signature spreads far.
+    //< The measuring code saves and restores it.
+  scanning_all: Bool //<
+    //< True only while check_infinite_size_types (sema/decl/layout.kspls) sweeps the declarations
+    //<
+    //< It keeps the depth limit's diagnostic from being reported from that sweep.
+
+struct Resolving_state //<
+  //< The declarations being resolved right now, one list per kind
+  //<
+  //< Each tracks its own path, so a circular definition is rejected where it closes rather than
+  //< at a depth limit.
+  aliases: List<|U8[]|>$@ //< the `typedef` declarations being resolved (resolve_alias_sym)
+  consts: Map<|Sz, Bool|>$@ //<
+    //< The constants whose initializers are being folded, keyed by the declaration node's address
+    //<
+    //< Caution: **Do not make it a List.** The path is checked at every level, so a linear walk
+    //< costs the square of the chain's length.
+  registries: List<|I32|>$@ //<
+    //< The struct / enum types whose fields or variants are being filled in
+    //<
+    //< **`pending_decl` alone is not enough.**
+    //< Caution: Do not pass it as an argument. Filling leaves midway through `resolve_type` →
+    //< `eval_sizeof` and re-enters where an argument cannot reach (the same reason as
+    //< `Layout_state.field`).
+  registry_cycle_at: Ast_node$@ //<
+    //< The `sizeof` node that asked for the size of a type being filled in (null if none).
+    //<
+    //< Caution: **Record the report here and emit it later.** An array length is evaluated
+    //< under `eval_constexpr_quiet`, which discards diagnostics, so an `err` where it is found
+    //< leaves nothing. run in `sema/decl/collect.kspls` reports it once, at the end.

@@ -1,0 +1,53 @@
+//< Turns a document into the parts of a page for display
+//<
+//< This is a public function for a caller that builds its own `<head>` (a site); `write` in
+//< [`html.kspls`](html.kspls) emits no title or viewport. Both take the rules from the same
+//< function (`html.write_rules`).
+
+// ==========================================
+// Usage:
+//   ok: = page.parts(src, "md", "sans-serif", 16.0, css@, body@, arena);
+// ==========================================
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/font" { Font }
+import "kspage/model/style" { Sheet }
+import "kspage/share/html"
+import "kspage/share/markdown_look"
+import "kspage/share/markdown_read"
+import "kspage/share/store"
+import "kspage/share/text"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+const kind_doc: U8[] = "doc" //< the name of a format that can be read
+  //<
+  //< Caution: **Use the same words as `kspage/tests/open_prog.kspls`** (Principle 6).
+const kind_md: U8[] = "md"
+const kind_txt: U8[] = "txt"
+
+pub fn parts(src: U8[], kind: U8[], family: U8[], size_px: F32, css: Str_builder$@,
+  body: Str_builder$@, arena: Arena$@): Bool //<
+    //< Writes a document into `css` and `body`; returns `false` where it cannot be read.
+    //<
+    //< On `false`, `css` and `body` are left untouched. `kind` is one of `doc` (the JSON of
+    //< `.kspage`), `md` and `txt`.
+    //< Caution: **An unknown name is rejected, not guessed at** (a wrong guess silently turns the
+    //< whole text into one paragraph).
+  root: = Font::{ .family = family, .size_px = size_px, .weight = 400U16, .italic = false }
+  if kind.equals(kind_doc)
+    got: = store.load(src, arena) catch _e
+      return false
+    html.write_rules(got.sheet, fixed.make(), css)
+    html.write_body(got.doc, got.sheet, body)
+    return true
+  if !kind.equals(kind_md) && !kind.equals(kind_txt)
+    return false
+  // **Pass in the style table before reading**, or headings come out at body size ("Markdown's look
+  // comes from a style table passed in before reading" in `../docs/DESIGN.md`).
+  sheet: Sheet$@ = markdown_look.sheet_for(root, arena)
+  d: =
+    (text.read(src, sheet, arena) if kind.equals(kind_txt)
+    else markdown_read.read(src, sheet, arena))
+  html.write_rules(sheet, fixed.make(), css)
+  html.write_body(d, sheet, body)
+  return true

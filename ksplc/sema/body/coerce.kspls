@@ -1,0 +1,308 @@
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
+import "ksplc/base/core" as base_core
+import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
+import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/decl/trait_check" as sema_decl_trait_check
+import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
+import "ksplc/sema/type/def" as sema_type_def
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" { Sema_symbol }
+import "std/str"
+
+impl Ast_node
+  fn check_unnecessary_cast(r: Ast_node$@, c: Sema_ctx$@, expected_id: I32): Void?Sema_error
+    if !base_core.config.run_lint_checks || r.kind_id != .k_expr_postfix || r.ival == 1
+      return // a generated implicit cast (ival == 1) is not linted
+    // Skipped while instantiating a generic: a cast redundant at one type argument is needed at
+    // another (`F32$@::(a)` in `blas_gemm<|T|>` is identity at T=F32, a real conversion at T=F64),
+    // so the advice would break the build if followed.
+    if c.is_instantiating()
+      return
+    // **The cast's `::` is a Literal child.** Matching text alone would pick up a **subexpression**
+    // holding `::` (`a[T::i]`), read its neighbour as a type, and index out of range.
+    for $i: = 1; i + 1 < r.children.len; i += 1
+      child: = r.get_child(i)
+      if child.is_literal("::")
+        cast_node: = r.get_child(i + 1)
+        cast_id: = cast_node.resolve_type(c)?
+        original_id: = r.get_child(0).type_id
+
+        if original_id != 0 && cast_id != 0
+          real_src: = c.env.get_real_type(original_id)
+          real_dst: = c.env.get_real_type(cast_id)
+          if real_src == real_dst
+            // An identity cast. **Only here is the expected type ignored**: without the cast the
+            // expression infers to the same type, even in `x: = T::f();`.
+            c.information(r, "[I0301] Unnecessary '::' cast. This conversion is implicit.")
+          else if !sema_type_env.is_unknown(expected_id)
+            // A type-changing cast is checked only where the context fixes a type. Otherwise it
+            // **decides the binding's type itself**, and removing it changes the permission or
+            // width (`x: = U8[]::f()` turns mutable, `x: = U64::small` narrows).
+            r.check_widening_cast(c, real_src, real_dst, original_id, expected_id)
+        break
+
+  priv fn check_widening_cast(r: Ast_node$@, c: Sema_ctx$@, real_src: I32, real_dst: I32,
+    original_id: I32, expected_id: I32) //<
+      //< Reports type-changing casts the language would do implicitly ([I0301]'s other two kinds).
+      //<
+      //< **Called only where the expected type is known** (from check_unnecessary_cast).
+    switch implicit_cast_kind(c, real_src, real_dst, original_id, expected_id) case .numeric
+      c.information(r,
+        "[I0301] Unnecessary '::' cast. This numeric conversion is safe and happens implicitly.")
+    case .permission
+      c.information(r,
+        "[I0301] Unnecessary '::' cast. Dropping the '$' (write permission) happens implicitly.")
+    default {}
+
+  fn snapshot_for_morph(r: Ast_node$@, type_id: I32): Ast_node$@
+    clone: = Ast_node.new(r.kind_id, r.text, r.loc)
+    clone.children = r.children
+    clone.type_id = type_id
+    clone.def_node = r.def_node
+    return clone
+
+  fn build_implicit_cast(r: Ast_node$@, c: Sema_ctx$@, type_id: I32, expected_id: I32)
+    clone: = r.snapshot_for_morph(type_id)
+    kw_node: = Ast_node.new(.k_literal, "::", r.loc)
+    type_node: = Ast_node.new(.k_type_expr, c.env.get_str(expected_id), r.loc)
+    type_node.type_id = expected_id
+    r.children = base_ast.new_ast_node_list()
+    r.morph(.k_expr_postfix, "::")
+    // r is now the cast's wrapper (the clone from snapshot_for_morph keeps the def_node). A stale
+    // def_node would make lower/expr.kspls's "::" test misfire (it detects an explicit cast
+    // through operator.Cast).
+    r.def_node = null
+    r.add_child(clone)
+    r.add_child(kw_node)
+    r.add_child(type_node)
+    r.ival = 1
+
+  fn wrap_implicit_cast(r: Ast_node$@, c: Sema_ctx$@, type_id: I32, expected_id: I32): I32
+    if type_id != expected_id && type_id != 0 && expected_id != 0
+      r.build_implicit_cast(c, type_id, expected_id)
+      r.type_id = expected_id
+    return expected_id
+
+  fn is_noreturn_call(r: Ast_node$@): Bool //<
+    //< Whether it is a call to a function that declares `#noreturn`
+    //<
+    //< **The declaration is trusted**, as with C's `__attribute__((noreturn))`: if such a function
+    //< does return, control continues with no value stored.
+    if r.kind_id != .k_expr_postfix
+      return false
+    op: = r.get_postfix_op()
+    if op == null || !op.text.equals("(")
+      return false
+    callee: = r.get_child(0)
+    return callee != null && callee.def_node != null &&
+      callee.def_node.has_attribute("noreturn")
+
+  fn apply_type_coercion(r: Ast_node$@, c: Sema_ctx$@, type_id: I32, expected_id: I32): I32
+    if type_id == expected_id || sema_type_env.is_unknown(expected_id) ||
+      sema_type_env.is_unknown(type_id)
+      return type_id
+    // A call that does not return is accepted where a value is needed, as with Rust's `!` and
+    // Swift's `Never`, so `x: = f() catch panic("…");` fits on one line.
+    // Caution: **Leave the type as Void.** Given the expected type, lower builds an assignment and
+    // emits C reading `T x = <Void>` (lower_fallback_stmt in lower/root.kspls).
+    if c.fn_ctx.in_fallback_value && sema_type_env.is_void(type_id) &&
+      !sema_type_env.is_void(expected_id) && r.is_noreturn_call()
+      return type_id
+
+    real_type_id: = c.env.get_real_type(type_id)
+    real_expected_id: = c.env.get_real_type(expected_id)
+
+    // The same type under an alias ("A typedef is only another name" in docs/SPEC-language.md).
+    if real_type_id == real_expected_id
+      return expected_id
+
+    switch c.env.get_info(real_expected_id) case .trait_type(_d)
+      // **Finish building the instance's methods before making a trait value**, or the vtable
+      // names a thunk with no instance (register_generic_trait_impls in mono.kspls; the test is
+      // ksplc/tests/generic_vtable_test.kspls).
+      c.ensure_instance_methods(type_id) catch {}
+      if c.check_trait_implementation(type_id, real_expected_id, r)
+        if !c.env.is_pointer(type_id) && !c.env.is_slice(type_id) && !r.is_place_expr()
+          // Advising a binding is right only where it outlives the call; at a return it dies with
+          // the frame (check_frame_escape in sema/body/stmt_escape.kspls rejects that).
+          c.err(r,
+            "cannot cast an rvalue (temporary object) to an interface: the interface value keeps a \
+              pointer to it. Bind it to something that outlives the interface value first (`x: = \
+              ...;`, or a heap allocation when it must outlive the call).")
+          return expected_id
+
+        clone: = r.snapshot_for_morph(type_id)
+        r.children = base_ast.new_ast_node_list()
+        r.morph(.k_expr_upcast, "upcast")
+        r.add_child(clone)
+        r.type_id = expected_id
+        return expected_id
+    default {}
+
+    if sema_type_env.is_void(expected_id)
+      c.err(r, "cannot return a value from a Void function")
+      return expected_id
+
+    if c.env.is_numeric(expected_id) || c.env.is_numeric(type_id)
+      $is_enum_cast: = false
+      $base_type_id: = I32::sema_type_env.Builtin_type_id.i32_type
+
+      $exp_def: sema_type_def.Enum_def$@ = null
+      if d: = c.env.get_enum_def(c.env.get_str(real_expected_id))
+        exp_def = d
+      $act_def: sema_type_def.Enum_def$@ = null
+      if d: = c.env.get_enum_def(c.env.get_str(real_type_id))
+        act_def = d
+
+      if exp_def != null && exp_def.is_scalar()
+        is_enum_cast = true
+        base_type_id = exp_def.base_type_id
+      else if act_def != null && act_def.is_scalar()
+        is_enum_cast = true
+        base_type_id = act_def.base_type_id
+      else if r.def_node != null && r.def_node.sym_ptr != null
+        sym: = Sema_symbol$@::r.def_node.sym_ptr
+        switch sym.kind case .enum_variant(_tag)
+          is_enum_cast = true
+        default {}
+
+      if is_enum_cast
+        base_clean: = c.env.get_clean_real_type(base_type_id)
+        exp_clean: = c.env.get_clean_real_type(expected_id)
+        res_clean: = c.env.get_clean_real_type(type_id)
+
+        if base_type_id == expected_id || base_type_id == type_id ||
+          is_safe_numeric_coercion(res_clean, exp_clean) ||
+          is_safe_numeric_coercion(base_clean, exp_clean) ||
+          is_safe_numeric_coercion(res_clean, base_clean)
+          r.build_implicit_cast(c, type_id, expected_id)
+          return expected_id
+
+    if c.env.is_numeric(expected_id) && c.env.is_numeric(type_id)
+      exp_clean: = c.env.get_clean_real_type(expected_id)
+      act_clean: = c.env.get_clean_real_type(type_id)
+
+      if is_safe_numeric_coercion(act_clean, exp_clean)
+        if act_clean != exp_clean
+          r.wrap_implicit_cast(c, type_id, expected_id)
+        return expected_id
+
+      c.clear_scratch()
+        .s("implicit conversion between '\{c.env.get_str(type_id)\}' and \
+          '\{c.env.get_str(expected_id)\}' is forbidden to prevent data loss. Use explicit '::' \
+          cast.")
+      c.err(r, c.scratch.slice())
+      return expected_id
+
+    void_ptr: = I32::sema_type_env.Builtin_type_id.void_ptr
+    if expected_id == void_ptr &&
+      (c.env.is_pointer(type_id) || c.env.is_fn_ptr(type_id))
+      return r.wrap_implicit_cast(c, type_id, expected_id)
+    if type_id == void_ptr &&
+      (c.env.is_pointer(expected_id) || c.env.is_fn_ptr(expected_id))
+      return r.wrap_implicit_cast(c, type_id, expected_id)
+
+    // An expected Result: coerce to the ok type first, then wrap.
+    // Caution: Do not wrap only on an exact `strip_result(expected_id) == type_id`. Then no value
+    // **requiring a conversion** would pass, and `fn f(): Trait?Err` or `fn f(): Void$@?Err` could
+    // only throw.
+    ok_id: = c.env.strip_result(expected_id)
+    if c.env.is_result(expected_id) && ok_id != expected_id && !c.env.is_result(type_id)
+      if ok_id != type_id
+        inner_id: = r.apply_type_coercion(c, type_id, ok_id)
+        if inner_id != ok_id
+          return expected_id // already diagnosed inside
+      clone: = r.snapshot_for_morph(ok_id)
+      r.children = base_ast.new_ast_node_list()
+      r.morph(.k_result_wrap, "result_wrap")
+      r.add_child(clone)
+      return expected_id
+
+    switch c.env.get_info(real_expected_id) case .array(exp_b, exp_s)
+      if exp_s == -1
+        switch c.env.get_info(real_type_id) case .array(res_b, res_s)
+          if exp_b == res_b && res_s != -1
+            return type_id // Array size match
+        default {}
+    default {}
+
+    is_ref: =
+      c.env.is_pointer(type_id) || c.env.is_slice(type_id) || c.env.is_array(type_id)
+    // Immutability can appear at any level of nesting (`U8[]`, what `U8$[]@` points at): the
+    // shapes are compared with every level stripped, then is_const_compatible allows only the
+    // direction that does not weaken immutability.
+    if c.env.same_shape_ignoring_const(type_id, expected_id) &&
+      (!is_ref ||
+      (type_id != expected_id && c.env.is_const_compatible(type_id, expected_id)))
+      // **No cast is emitted** for immutability alone: the representation is identical. A `::`
+      // here would discard a qualifier in C (`Const_U8_Slice = U8_Slice` has a non-const ptr
+      // while `U8@` is `const U8 *`), and the C compiler warns.
+      r.type_id = expected_id
+      return expected_id
+
+    // One level of weakening on a type argument that declares variance (`Box<|$I32|>` →
+    // `Box<|I32|>`), which **the branch above cannot handle**. No cast: both have one C name.
+    if type_id != expected_id && c.env.is_const_compatible(type_id, expected_id)
+      r.type_id = expected_id
+      return expected_id
+
+    c.report_type_mismatch(r, expected_id, type_id)
+    return expected_id
+
+enum Implicit_cast //< what a type-changing `::` does that the language would do by itself
+  none //< a real conversion: the cast is wanted
+  numeric //< a safe numeric widening
+  permission //< dropping the `$` (write permission)
+
+fn implicit_cast_kind(c: Sema_ctx$@, real_src: I32, real_dst: I32, original_id: I32,
+  expected_id: I32): Implicit_cast //<
+    //< Whether a type-changing cast, where `expected_id` is expected, only converts implicitly
+    //<
+    //< **The one decision that [I0301] reports on and [H0312] backs off on** (`lint_repeated_type`
+    //< in `lint_stmt.kspls`): following both would drop both the cast and the type that drives it.
+  if c.env.is_numeric(real_src) && c.env.is_numeric(real_dst)
+    if is_safe_numeric_coercion(c.env.strip_const(real_src), c.env.strip_const(real_dst))
+      return .numeric
+    return .none
+  // A slice or generic instance holds the immutability in its name, which
+  // `same_shape_ignoring_const` misses, so `is_const_compatible` decides alone (as in
+  // apply_type_coercion's two branches).
+  if c.env.is_const_compatible(original_id, expected_id)
+    return .permission
+  return .none
+
+priv fn is_safe_numeric_coercion(act: I32, exp: I32): Bool
+  if act == exp
+    return true
+
+  t_i64: = I32::sema_type_env.Builtin_type_id.i64_type
+  t_u64: = I32::sema_type_env.Builtin_type_id.u64_type
+  t_size: = I32::sema_type_env.Builtin_type_id.size_type
+  t_i32: = I32::sema_type_env.Builtin_type_id.i32_type
+  t_u32: = I32::sema_type_env.Builtin_type_id.u32_type
+  t_i16: = I32::sema_type_env.Builtin_type_id.i16_type
+  t_u16: = I32::sema_type_env.Builtin_type_id.u16_type
+  t_i8: = I32::sema_type_env.Builtin_type_id.i8_type
+  t_u8: = I32::sema_type_env.Builtin_type_id.u8_type
+  t_f64: = I32::sema_type_env.Builtin_type_id.f64_type
+  t_f32: = I32::sema_type_env.Builtin_type_id.f32_type
+
+  if exp == t_i64
+    return act == t_i32 || act == t_i16 || act == t_i8 || act == t_size || act == t_u32 ||
+      act == t_u16 || act == t_u8
+  if exp == t_size || exp == t_i32
+    return act == t_i32 || act == t_i16 || act == t_i8 || act == t_u16 || act == t_u8
+  if exp == t_i16
+    return act == t_i8 || act == t_u8
+  if exp == t_u64
+    return act == t_u32 || act == t_u16 || act == t_u8
+  if exp == t_u32
+    return act == t_u16 || act == t_u8
+  if exp == t_u16
+    return act == t_u8
+  if exp == t_f64
+    return act == t_f32
+  return false

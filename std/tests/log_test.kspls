@@ -1,0 +1,179 @@
+import "std/chars"
+import "std/log" { Level, Log }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// std/log: tests of log lines that carry a severity level.
+// **Every test writes into a `Str_builder` rather than a stream**, so the output reads as a
+// string; the destination is only a `Writer`, as in a freestanding build.
+// ==========================================
+
+fn test_log_keeps_what_is_heavy_enough()
+  verdict.start("[Log] a line lighter than the level set being dropped test...")
+
+  $out: = Str_builder.new()
+  defer out.free()
+  $lg: = Log.new(out, Level.information, "t")
+  lg.say(Level.error, "a")
+  lg.say(Level.warning, "b")
+  lg.say(Level.information, "c")
+  lg.say(Level.hint, "d")
+  lg.done()
+  assert(out.slice().equals("t: E: a\nt: W: b\nt: I: c\n"),
+    "Log: down to the level set comes out, and what is lighter does not")
+
+  // **The most severe level keeps only its own lines.**
+  $only: = Str_builder.new()
+  defer only.free()
+  $strict: = Log.new(only, Level.error, "t")
+  strict.say(Level.error, "a")
+  strict.say(Level.warning, "b")
+  strict.done()
+  assert(only.slice().equals("t: E: a\n"), "Log: at error, a warning does not come out")
+
+  verdict.pass("a line at or above the level set comes out, and a lighter one does not.")
+
+fn test_log_at_does_not_run_the_body_when_light()
+  verdict.start("[Log] the body of a line that is not emitted not running test...")
+
+  $out: = Str_builder.new()
+  defer out.free()
+  $lg: = Log.new(out, Level.information, "")
+  // **This is the guarantee the whole design exists for**: if `ran` changed for the dropped line,
+  // a body would be built and thrown away.
+  $ran: Sz = 0
+  if w: = lg.at(Level.information)
+    ran += 1
+    w.s("kept")
+  if w2: = lg.at(Level.hint)
+    ran += 1
+    w2.s("dropped")
+  lg.done()
+  assert(ran == 1, "Log: the body runs for the line kept and not for the one dropped")
+  assert(out.slice().equals("I: kept\n"), "Log: an empty tag puts out no name and no separator")
+  assert(lg.wants(Level.information) && !lg.wants(Level.hint), "Log: wants answers the same way")
+
+  verdict.pass("the body of a line too light to be emitted does not run at all.")
+
+fn test_log_closes_the_line_it_opened()
+  verdict.start("[Log] the line opened being closed by whatever comes next test...")
+
+  // **The next line closes a line left open**, so a caller that writes the body never ends it.
+  $out: = Str_builder.new()
+  defer out.free()
+  $lg: = Log.new(out, Level.hint, "t")
+  if w: = lg.at(Level.information)
+    w.s("first")
+  if w2: = lg.at(Level.information)
+    w2.s("second")
+  assert(out.slice().equals("t: I: first\nt: I: second"),
+    "Log: opening the next line closes the one before it")
+
+  // **`done` closes the last one**, and calling it twice adds nothing.
+  lg.done()
+  lg.done()
+  assert(out.slice().equals("t: I: first\nt: I: second\n"),
+    "Log: done closes the last line, and a second done adds nothing")
+
+  verdict.pass("a line is closed by the next one opening, and the last by done.")
+
+fn test_log_says_where_it_was_called_from()
+  verdict.start("[Log] the caller's place going onto the line test...")
+
+  // Passed by name, file and line override the default. **The line number is not this call's**,
+  // so the check holds however this file is edited.
+  $out: = Str_builder.new()
+  defer out.free()
+  $lg: = Log.new(out, Level.hint, "t", ": ", true)
+  lg.say(Level.error, "boom", "a/b.kspl", 42)
+  assert(out.slice().equals("t: E: a/b.kspl: 42: boom\n"),
+    "Log: the place goes in ahead of the body, parted by the separator")
+
+  // With the default it names **this** file, not `std/log`: `say` passes both on to `at`.
+  $here: = Str_builder.new()
+  defer here.free()
+  $lg2: = Log.new(here, Level.hint, "t", ": ", true)
+  lg2.say(Level.error, "boom")
+  assert(here.slice().find_str("log_test") >= 0, "Log: the caller's file is the one named")
+  assert(here.slice().find_str("std/log") < 0, "Log: the library is not the one named")
+
+  // **The place is off unless the logger is created with it on**, so a plain logger is unchanged.
+  $plain: = Str_builder.new()
+  defer plain.free()
+  $lg3: = Log.new(plain, Level.hint, "t")
+  lg3.say(Level.error, "boom")
+  assert(plain.slice().equals("t: E: boom\n"), "Log: with place off the line carries no place")
+
+  verdict.pass("the caller's file and line go on the line, one step back and no further.")
+
+fn test_log_parts_its_fields_with_the_separator_given()
+  verdict.start("[Log] the separator handed over parting the fields test...")
+
+  // **A comma separator gives rows a spreadsheet can filter**, each with the same field count.
+  $out: = Str_builder.new()
+  defer out.free()
+  $csv: = Log.new(out, Level.hint, "srv", ",", true)
+  csv.say(Level.error, "cannot listen", "a/b.kspl", 7)
+  csv.say(Level.hint, "chasing it", "a/b.kspl", 9)
+  csv.done()
+  assert(out.slice().equals("srv,E,a/b.kspl,7,cannot listen\nsrv,H,a/b.kspl,9,chasing it\n"),
+    "Log: every row carries the same fields, parted by the separator handed over")
+
+  // **The body is written unchanged**, so a caller that wants extra columns writes them itself.
+  $raw: = Str_builder.new()
+  defer raw.free()
+  $loose: = Log.new(raw, Level.hint, "t", ",")
+  loose.say(Level.error, "row 1 value,row 2 value")
+  loose.done()
+  assert(raw.slice().equals("t,E,row 1 value,row 2 value\n"),
+    "Log: a body holding the separator becomes columns of its own")
+
+  verdict.pass("the separator parts every row alike, and a body may carry columns of its own.")
+
+priv struct Tally //<
+  //< A destination that counts how often it is told to flush
+  //<
+  //< **Nothing else shows the flushes**: a missing flush would look like a pass.
+  text: Str_builder
+  flushes: Sz
+
+impl Tally: Writer
+  fn s(r: Self$@, val: U8[]): Self$@
+    r.text.s(val)
+    return r
+
+  fn c(r: Self$@, val: U8): Self$@
+    r.text.c(val)
+    return r
+
+  fn flush(r: Self$@): Self$@
+    r.flushes += 1
+    return r
+
+fn test_log_pushes_a_heavy_line_out_at_once()
+  verdict.start("[Log] a heavy line not being left to pile up test...")
+
+  // **A buffering destination loses its last lines when the run is killed**, and those are the
+  // lines that say what went wrong. So the two most severe levels are flushed as each line closes.
+  $t: Tally = ::{ .text = Str_builder.new(), .flushes = 0 }
+  defer t.text.free()
+  $lg: = Log.new(t@, Level.hint, "t")
+  lg.say(Level.information, "a")
+  lg.say(Level.hint, "b")
+  assert(t.flushes == 0, "Log: a light line is left to pile up")
+  lg.say(Level.warning, "c")
+  assert(t.flushes == 1, "Log: a warning goes over the moment it closes")
+  lg.say(Level.error, "d")
+  assert(t.flushes == 2, "Log: an error goes over the moment it closes")
+
+  // **The line opened through `at` counts the same**: both paths close the same way.
+  if ln: = lg.at(Level.error)
+    ln.s("e")
+  assert(t.flushes == 2, "Log: it is the close that pushes, not the open")
+  lg.done()
+  assert(t.flushes == 4, "Log: done closes the heavy line, and flushes on its own besides")
+  assert(t.text.slice().equals("t: I: a\nt: H: b\nt: W: c\nt: E: d\nt: E: e\n"),
+    "Log: what came out is unchanged by the pushing")
+
+  verdict.pass("an error and a warning are handed over as they close, and a lighter line piles.")

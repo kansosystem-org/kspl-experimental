@@ -1,0 +1,66 @@
+#!/usr/bin/env -S ksplc run
+//< It pins down that a program has only one entry point
+//<
+//< It is not a one-file fixture (`tests/negative/`): it needs **two files**. If this were not
+//< rejected, **nothing would fail on a mix-up**: `find_main_symbol` in `ksplc/sema/type/env.kspls`
+//< returns the first hit, so the table's walk order would pick the entry point, with no diagnostic.
+//< Caution: Pair a case that fires with one that does not. Too strict, it rejects even a program
+//< that merely imports a file holding no `main`.
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/harness_markers"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" // what makes `arena.text()` available
+import "std/verdict"
+
+// The entry file, calling the imported `helper`.
+priv const entry_src: U8[] = """import "lib" { helper }
+fn main(): I32
+  return helper()
+"""
+
+// The imported file holds a `main`: rejected.
+priv const lib_with_main: U8[] = """fn main(): I32
+  return 2
+pub fn helper(): I32
+  return 1
+"""
+
+// The same without that `main`: passes.
+priv const lib_plain: U8[] = """pub fn helper(): I32
+  return 1
+"""
+
+priv fn check_case(slot: U8[], name: U8[], lib_src: U8[], expect: U8[][], deny: U8[][],
+  arena: Arena$@) //<
+    //< One case: the base and main.kspls in the working directory, one run, the marks matched.
+    //<
+    //< Caution: Make cwd the working directory. Resolving `import "lib"` starts from cwd.
+  dir: = harness.sandbox(arena.text().s("onemain_\{slot\}").take()) catch
+    verdict.check(name, false, "cannot make a working directory")
+    return
+  names: = U8[][]::{ "lib.kspls", "main.kspls" }
+  fs.write_tree(dir, names, U8[][]::{ lib_src, entry_src }, arena) catch
+    verdict.check(name, false, "cannot place the material")
+    return
+  $args: = List<|U8[]|>.new(arena)
+  args.push("main.kspls")
+  args.push("main.c")
+  r: = harness.run_in(harness.ksplc_argv(args.slice()), dir)
+  harness_markers.check(name, expect, deny, r.out)
+
+fn main(): I32
+  arena: = harness.begin(64 * 1024 * 1024)
+  none: = U8[][]::{}
+  io.out().s("# only one main per program: 2\n")
+
+  // **A mark must appear at both positions**, or the reader cannot tell which to remove.
+  check_case("two", "an import target holding a main is refused", lib_with_main,
+    U8[][]::{ "lib.kspls:1:1:", "main.kspls:2:1:", "defines main() 2 times" }, none, arena)
+
+  // Against being too strict: importing a file holding no `main` is ordinary.
+  check_case("one", "an import target holding no main passes", lib_plain, none,
+    U8[][]::{ "error:", "defines main()" }, arena)
+  return harness.finish()

@@ -1,0 +1,77 @@
+//< The RTC driver for the real Raspberry Pi Pico / Pico W (RP2040) chip
+//<
+//< A calendar RTC that ticks on clk_rtc (no external crystal). The caller passes the CLKDIV_M1
+//< that matches clk_rtc (`clocks.rtc_hz - 1`).
+
+// ==========================================
+// The register map is in "The RTC (`rtc.kspls`)" in ksos/docs/DESIGN.md.
+// ==========================================
+
+// QEMU has no RP2040 board model, so CI checks only the build and the link; that it ticks is
+// checked on real hardware in `ksos-rp2040-board`'s `[rtc]` line (ksos/README.md).
+
+import "ksos/drivers/mmio"
+import "ksos/drivers/rp2040/resets"
+const rtc_base: U32 = 0x4005c000
+const rtc_clkdiv_m1: U32 = rtc_base + 0x00
+const rtc_setup_0: U32 = rtc_base + 0x04
+const rtc_setup_1: U32 = rtc_base + 0x08
+const rtc_ctrl: U32 = rtc_base + 0x0C
+const rtc_rtc_1: U32 = rtc_base + 0x18
+const rtc_rtc_0: U32 = rtc_base + 0x1C
+
+const reset_rtc: U32 = 1U32 << 15 //< RESETS's RTC is bit15 (pico-sdk's RESETS_RESET_RTC_BITS)
+
+const ctrl_enable: U32 = 1U32 << 0
+const ctrl_active: U32 = 1U32 << 1
+const ctrl_load: U32 = 1U32 << 4
+
+struct Date_time
+  year: U32 //< 0-4095
+  month: U32 //< 1-12
+  day: U32 //< 1-31
+  dotw: U32 //< 0=Sunday to 6=Saturday (not derived from the date automatically)
+  hour: U32 //< 0-23
+  minute: U32 //< 0-59
+  second: U32 //< 0-59
+
+fn pack_setup_0(dt: Date_time): U32
+  return ((dt.year & 0xFFF) << 12) | ((dt.month & 0xF) << 8) | (dt.day & 0x1F)
+
+fn pack_setup_1(dt: Date_time): U32
+  return ((dt.dotw & 0x7) << 24) | ((dt.hour & 0x1F) << 16) | ((dt.minute & 0x3F) << 8) | (dt.second
+    & 0x3F)
+
+fn unpack(setup0_bits: U32, setup1_bits: U32): Date_time
+  return Date_time::{
+    .year = (setup0_bits >> 12) & 0xFFF,
+    .month = (setup0_bits >> 8) & 0xF,
+    .day = setup0_bits & 0x1F,
+    .dotw = (setup1_bits >> 24) & 0x7,
+    .hour = (setup1_bits >> 16) & 0x1F,
+    .minute = (setup1_bits >> 8) & 0x3F,
+    .second = setup1_bits & 0x3F,
+  }
+
+fn init(dt: Date_time, clkdiv_m1: U32): Bool //< starts the RTC with dt as the initial value
+  //<
+  //< clkdiv_m1 is clk_rtc's frequency in Hz, minus 1.
+  //< Caution: **Take it out of reset first.** A write to a register still in reset is silently
+  //< discarded (and reads back as 0).
+  if !resets.reset_then_unreset(reset_rtc)
+    return false
+  mmio.write32(rtc_ctrl, 0U32) // stop it first, then configure it
+  mmio.write32(rtc_clkdiv_m1, clkdiv_m1)
+  mmio.write32(rtc_setup_0, pack_setup_0(dt))
+  mmio.write32(rtc_setup_1, pack_setup_1(dt))
+  mmio.write32(rtc_ctrl, ctrl_load) // load SETUP_0/1 into the counters
+  mmio.write32(rtc_ctrl, ctrl_enable) // start it running
+  return true
+
+fn is_active(): Bool //< returns the RTC_ACTIVE bit (the status bit saying it is running)
+  return (mmio.read32(rtc_ctrl) & ctrl_active) != 0
+
+fn read(): Date_time //< reads the current date and time
+  date_bits: = mmio.read32(rtc_rtc_1)
+  time_bits: = mmio.read32(rtc_rtc_0)
+  return unpack(date_bits, time_bits)

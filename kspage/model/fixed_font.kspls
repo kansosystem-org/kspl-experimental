@@ -1,0 +1,44 @@
+//< A table of fixed measurements (an implementation of `Font_source` in `kspage/model/font.kspls`)
+//<
+//< **It needs no real font and no OS, and gives the same answer every time.**
+//< Caution: **Do not move it toward a real font**, or the answer changes with the machine and the
+//< golden tests "fail without anything being broken".
+
+// ==========================================
+// Usage:
+//   src: = fixed.make();
+// ==========================================
+import "kspage/model/font" { Font, Vmetrics, Font_source }
+import "std/chars"
+
+priv const half_width: F32 = 0.5 //< the width as a share of an em
+  //<
+  //< **These values are design choices** (they are no font's measurement).
+priv const full_width: F32 = 1.0
+priv const ascent_ratio: F32 = 0.8
+priv const descent_ratio: F32 = 0.2
+priv const line_gap_ratio: F32 = 0.2
+
+priv fn measure_width(font: Font, text: U8[]): F32 //<
+  //< The width of text; **weight and slant do not affect it** (that would add made-up numbers)
+  $em: F32 = 0.0
+  $i: Sz = 0
+  for i < text.len
+    // Read the byte width from the UTF-8 lead byte. One byte means ASCII.
+    step: = text.next_codepoint(i)
+    em += half_width if step == 1 else full_width
+    i += step
+  return em * font.size_px
+
+priv fn vmetrics_of(font: Font): Vmetrics
+  return Vmetrics::{
+    .ascent = font.size_px * ascent_ratio,
+    .descent = font.size_px * descent_ratio,
+    .line_gap = font.size_px * line_gap_ratio,
+  }
+
+fn make(): Font_source //< returns the table of fixed measurements
+  return Font_source::{
+    .measure_width = measure_width,
+    .vmetrics_of = vmetrics_of,
+  }

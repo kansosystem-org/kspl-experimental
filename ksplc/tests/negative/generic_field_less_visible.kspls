@@ -1,0 +1,24 @@
+//< A generic's struct fields and enum payloads are checked the same way as a non-generic one's
+//<
+//< Without the check on an instance, merely wrapping it in a `pub struct W<|T|>` would leak a
+//< `priv` type into other files (ksplc/docs/DESIGN.md §11.1).
+// EXPECT: field type 'Hidden' is less visible than the field exposing it
+// EXPECT: payload type 'Hidden' is less visible than the variant exposing it
+
+priv struct Hidden
+  v: I32
+
+pub struct W<|T|>
+  pub t: T
+  pub h: Hidden
+
+pub enum E<|T|>
+  none
+  some(t: T, h: Hidden)
+
+fn main()
+  w: W<|I32|> = ::{ .t = 1, .h = Hidden::{ .v = 2 } }
+  e: E<|I32|> = E<|I32|>.some(1, Hidden::{ .v = 3 })
+  switch e case .some(_t, h)
+    _x: = w.h.v + h.v
+  default {}

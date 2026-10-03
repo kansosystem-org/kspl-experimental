@@ -1,0 +1,59 @@
+//< The LED matrix driver for a VK16K33 / HT16K33 (I2C)
+//<
+//< This chip holds a display RAM and scans it by itself to keep it lit, so once the pattern is
+//< written the CPU has nothing more to do.
+//< Some commands are a single byte and some are an address plus data.
+
+// ==========================================
+//   0x21               the oscillator on (0x20 is off)
+//   0x81               the display on, no blinking (0x80 is off; the low 3 bits are the blink rate)
+//   0xE0 | brightness  the brightness, 0 to 15
+//   0x00 + 16 bytes    write from the start of the display RAM (the address advances by itself)
+// ==========================================
+import "ksos/drivers/rp2040/i2c"
+import "std/bytes"
+
+const default_addr: U32 = 0x70 //< the data sheet's default I2C address
+  //<
+  //< The A0 to A2 solder jumpers move it within 0x70 to 0x77, and **the Freenove unit answers at
+  //< 0x71**. Do not hard-code it; the caller scans with i2c.present() and uses the address found.
+
+const cmd_oscillator_on: U8 = 0x21
+const cmd_display_on: U8 = 0x81 // the display on, no blinking
+const cmd_brightness_base: U8 = 0xe0
+
+const max_brightness: U32 = 15
+const rows: Sz = 8
+
+priv fn send1(addr: U32, b: U8): Bool
+  buf: U8[1] = ::{ b }
+  return i2c.write(addr, buf[0]@, 1)
+
+fn init(addr: U32, brightness: U32): Bool //< wakes the oscillator and the display
+  //<
+  //< Caution: **Send all three in this order.** Miss one and nothing lights.
+  if !send1(addr, cmd_oscillator_on)
+    return false
+  if !send1(addr, cmd_display_on)
+    return false
+  b: = max_brightness if brightness > max_brightness else brightness
+  return send1(addr, cmd_brightness_base | U8::b)
+
+fn draw(addr: U32, pattern: U16@): Bool //< rewrites the whole display RAM
+  //<
+  //< pattern holds one 16-bit value per row (bit0 is column 0). It does no partial update: sending
+  //< everything avoids leaving part of the previous picture on the display.
+  $buf: U8[17] = ::{}
+  buf[0] = 0 // the display RAM's start address; it advances by itself after that
+  // Bind one descriptor and reuse it. A cast's result is a temporary, so calling a method that
+  // writes into it directly is rejected with "a temporary's address cannot be taken" (the
+  // receiver is `Self@`: the descriptor is not changed, only the elements are written).
+  view: = U8$[]::buf
+  for i in Range.asc(rows)
+    // The HT16K33's display RAM is 2 bytes per row, little endian.
+    view.put_u16_le(1 + i * 2, (pattern + i)$)
+  return i2c.write(addr, buf[0]@, 17)
+
+fn clear(addr: U32): Bool //< turns every LED off
+  zero: U16[8] = ::{}
+  return draw(addr, zero[0]@)

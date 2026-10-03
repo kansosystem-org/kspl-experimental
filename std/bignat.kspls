@@ -1,0 +1,180 @@
+//< Natural numbers of a fixed, generous width, and the raw bits of a floating-point number
+//<
+//< **It holds only what an exact decimal/binary round trip needs**: multiplying by a 32-bit
+//< integer or by a power of 10 or 2, adding, subtracting and comparing. Both `std/strnum`'s
+//< `to_f64` and `std/strfmt`'s floating-point output use it.
+pub const bignat_limbs: Sz = 120 //< how many 32-bit limbs one holds (3840 bits).
+  //<
+  //< `to_f64`'s correct rounding sets this size: with up to 768 decimal digits against the power
+  //< of 2, the largest value is `2^56 x 10^1098 ~= 2^3704` (std/strnum's `cmp_scaled`).
+
+pub struct Bignat //< a natural number of a fixed, generous width, held by value
+  //<
+  //< Caution: **The unused limbs must be 0.** `add` and `cmp` read limbs past the other value's
+  //< `len`; only `sub` and `trim` shrink `len`, and only over limbs that became 0.
+  priv limbs: U32[bignat_limbs] //< ordered from the lowest limb up
+  priv len: Sz //< the number of limbs in use, not counting leading 0s; 0 means the value 0
+
+impl Bignat
+  pub fn zero(): Bignat //< the value 0
+    r: Bignat = ::{}
+    return r
+
+  pub fn from_u64(v: U64): Bignat //< the same value, widened
+    $r: Bignat = ::{}
+    r.limbs[0] = U32::v
+    r.limbs[1] = U32::(v >> 32U64)
+    r.len = 2
+    r.trim()
+    return r
+
+  pub fn is_zero(r: Self@): Bool //< whether the value is 0
+    return r.len == 0
+
+  priv fn trim(r: Self$@)
+    for r.len > 0 && r.limbs[r.len - 1] == 0
+      r.len -= 1
+
+  priv fn push_limb(r: Self$@, v: U32)
+    assert(r.len < bignat_limbs, "Bignat: the value does not fit in bignat_limbs")
+    r.limbs[r.len] = v
+    r.len += 1
+
+  pub fn mul_small(r: Self$@, m: U32) //< multiplies in place by a value that fits in one limb
+    if m == 0
+      for i in Range.asc(r.len)
+        r.limbs[i] = 0
+      r.len = 0
+      return
+    $carry: U64 = 0
+    for i in Range.asc(r.len)
+      cur: U64 = r.limbs[i] * U64::m + carry
+      r.limbs[i] = U32::cur
+      carry = cur >> 32U64
+    if carry != 0
+      r.push_limb(U32::carry)
+
+  pub fn mul(r: Self$@, o: Self@) //< multiplies in place by another value of the same width
+    //<
+    //< Long multiplication, from o's top limb down. The other value is `10^n`, which `std/strnum`
+    //< keeps so it need not rebuild it on each call.
+    $acc: = Bignat.zero()
+    for $i: Sz = o.len; i > 0; i -= 1
+      acc.shl(32)
+      $part: = r$
+      part.mul_small(o.limbs[i - 1])
+      acc.add(part@)
+    r$ = acc
+
+  pub fn add_small(r: Self$@, v: U32) //< adds, in place, a value that fits in one limb
+    $carry: U64 = v
+    for i in Range.asc(r.len)
+      if carry == 0
+        return
+      cur: U64 = r.limbs[i] + carry
+      r.limbs[i] = U32::cur
+      carry = cur >> 32U64
+    if carry != 0
+      r.push_limb(U32::carry)
+
+  pub fn mul_pow10(r: Self$@, n: Sz) //< multiplies in place by 10 to the power of `n`
+    //<
+    //< It multiplies by 10^9 at a time, the largest power of 10 that fits in a U32.
+    $rest: = n
+    for rest >= 9
+      r.mul_small(1000000000U32)
+      rest -= 9
+    for rest > 0
+      r.mul_small(10U32)
+      rest -= 1
+
+  pub fn shl(r: Self$@, bits: Sz) //< shifts left in place, which multiplies by 2 to that power
+    if r.len == 0 || bits == 0
+      return
+    words: Sz = bits / 32
+    rem: = U32::(bits % 32)
+    new_len: = r.len + words + (1 if rem != 0 else 0)
+    assert(new_len <= bignat_limbs, "Bignat: the shifted value does not fit in bignat_limbs")
+    // Caution: Write from the top limb down, or a limb not yet read is overwritten.
+    if rem == 0
+      for $i: Sz = r.len; i > 0; i -= 1
+        r.limbs[i - 1 + words] = r.limbs[i - 1]
+    else
+      r.limbs[new_len - 1] = r.limbs[r.len - 1] >> (32U32 - rem)
+      for $i: Sz = r.len; i > 0; i -= 1
+        low: U32 = r.limbs[i - 1] << rem
+        high: U32 = r.limbs[i - 2] >> (32U32 - rem) if i >= 2 else 0U32
+        r.limbs[i - 1 + words] = low | high
+    for i in Range.asc(words)
+      r.limbs[i] = 0
+    r.len = new_len
+    r.trim()
+
+  pub fn add(r: Self$@, o: Self@) //< adds another value in place
+    n: = r.len if r.len > o.len else o.len
+    $carry: U64 = 0
+    for i in Range.asc(n)
+      cur: U64 = r.limbs[i] + U64::o.limbs[i] + carry
+      r.limbs[i] = U32::cur
+      carry = cur >> 32U64
+    r.len = n
+    if carry != 0
+      r.push_limb(U32::carry)
+
+  pub fn sub(r: Self$@, o: Self@) //< subtracts another value in place
+    //<
+    //< Caution: r >= o must hold, because a natural number never goes negative.
+    $borrow: I64 = 0
+    for i in Range.asc(r.len)
+      $cur: I64 = I64::r.limbs[i] - I64::o.limbs[i] - borrow
+      if cur < 0
+        cur += 4294967296I64
+        borrow = 1
+      else
+        borrow = 0
+      r.limbs[i] = U32::cur
+    assert(borrow == 0 && o.len <= r.len, "Bignat.sub: the subtrahend is larger than the value")
+    r.trim()
+
+  pub fn cmp(r: Self@, o: Self@): I32 //< returns -1, 0 or 1 for less, equal or greater
+    if r.len != o.len
+      return 1 if r.len > o.len else -1
+    for $i: Sz = r.len; i > 0; i -= 1
+      a: = r.limbs[i - 1]
+      b: = o.limbs[i - 1]
+      if a != b
+        return 1 if a > b else -1
+    return 0
+
+// ==========================================
+// Reinterpreting a floating-point number's bit pattern.
+// Caution: **Do not copy by casting a pointer.** `(U64@::x@)$` breaks C's strict aliasing
+// (optimization can reorder the read and the write).
+// ==========================================
+priv fn copy_bytes(dst: U8$@, src: U8@, n: Sz)
+  for i in Range.asc(n)
+    (dst + i)$ = (src + i)$
+
+pub fn f64_to_bits(v: F64): U64 //< the same bits read as an integer; no numeric conversion
+  $x: = v
+  $bits: U64 = 0
+  copy_bytes(U8$@::bits@, U8@::x@, 8)
+  return bits
+
+pub fn f64_from_bits(bits: U64): F64 //< the same bits read as a float; no numeric conversion
+  $x: = bits
+  $v: F64 = 0.0
+  copy_bytes(U8$@::v@, U8@::x@, 8)
+  return v
+
+pub fn f32_to_bits(v: F32): U32 //< the same bits read as an integer; no numeric conversion
+  $x: = v
+  $bits: U32 = 0
+  copy_bytes(U8$@::bits@, U8@::x@, 4)
+  return bits
+
+pub fn f32_from_bits(bits: U32): F32 //< the same bits read as a float; no numeric conversion
+  $x: = bits
+  $v: F32 = 0.0
+  copy_bytes(U8$@::v@, U8@::x@, 4)
+  return v

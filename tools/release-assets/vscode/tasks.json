@@ -1,0 +1,107 @@
+// The cut-down build tasks that come with the release zip (they do not depend on the Makefile).
+// For opening the unpacked folder in VS Code as it stands and building and debugging with
+// F5 / Ctrl+Shift+B.
+//
+// The libraries linked differ per platform. The C ksplc puts out carries the whole of hosted.c's
+// preamble whether or not the program itself uses the network, threads or the math functions, so
+// "it is not used, so it is not needed" cannot be settled. The grounds are the comments around the
+// Makefile's LDLIBS:
+//   * Windows: TCP/UDP go through winsock2, so -lws2_32 is always needed, and -lshell32 for
+//     `CommandLineToArgvW` (mingw finds it unnamed; the MSVC target does not). The math functions are
+//     built into the CRT, and on clang's MSVC target the m.lib that -lm looks for does not exist
+//     and the link fails, so it is not attached (on the mingw target libm's body is on the CRT
+//     side too, so it need not be attached).
+//   * Linux: below glibc 2.34 the pthread_* live apart in libpthread, so -lpthread is needed.
+//   * macOS: pthread comes with libSystem and libpthread itself does not exist, so handing over
+//     -lpthread fails the link. -lm is inside libSystem, so it does no harm.
+// Caution: Put the -l… after the source file. GNU ld resolves its arguments one way only, from the left,
+// so put in front it walks straight through in the state "there is no unresolved symbol yet" and
+// the link fails.
+// The libraries the program itself names (`#link` on an `extern` block) are what the compile task
+// writes to `<name>.libs` (`--emit-libs`), which clang reads as a response file (`@<name>.libs`).
+// Caution: **Quote that argument strongly.** PowerShell reads a bare `@name` as its own splatting,
+// and the file never reaches clang.
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "kanso-compile-to-c",
+            "type": "shell",
+            "command": "${workspaceFolder}/ksplc",
+            "windows": {
+                "command": "${workspaceFolder}/ksplc.exe"
+            },
+            "args": [
+                "--emit-libs=${fileDirname}/${fileBasenameNoExtension}.libs",
+                "${relativeFile}",
+                "${fileDirname}/${fileBasenameNoExtension}.c"
+            ],
+            "problemMatcher": {
+                "owner": "kspl",
+                "fileLocation": ["absolute"],
+                "pattern": {
+                    "regexp": "^(.*?):(\\d+):(\\d+):\\s+(error|warning|information|hint):\\s+(.*)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "message": 5
+                }
+            }
+        },
+        {
+            "label": "kanso-build-current-file",
+            "type": "shell",
+            "command": "clang",
+            "args": [
+                "-std=c99",
+                "-g",
+                "${fileDirname}/${fileBasenameNoExtension}.c",
+                { "value": "@${fileDirname}/${fileBasenameNoExtension}.libs", "quoting": "strong" },
+                "-lm",
+                "-o",
+                "${fileDirname}/${fileBasenameNoExtension}"
+            ],
+            "linux": {
+                "args": [
+                    "-std=c99",
+                    "-g",
+                    "${fileDirname}/${fileBasenameNoExtension}.c",
+                    { "value": "@${fileDirname}/${fileBasenameNoExtension}.libs", "quoting": "strong" },
+                    "-lm",
+                    "-lpthread",
+                    "-o",
+                    "${fileDirname}/${fileBasenameNoExtension}"
+                ]
+            },
+            "osx": {
+                "args": [
+                    "-std=c99",
+                    "-g",
+                    "${fileDirname}/${fileBasenameNoExtension}.c",
+                    { "value": "@${fileDirname}/${fileBasenameNoExtension}.libs", "quoting": "strong" },
+                    "-lm",
+                    "-o",
+                    "${fileDirname}/${fileBasenameNoExtension}"
+                ]
+            },
+            "windows": {
+                "args": [
+                    "-std=c99",
+                    "-g",
+                    "${fileDirname}/${fileBasenameNoExtension}.c",
+                    { "value": "@${fileDirname}/${fileBasenameNoExtension}.libs", "quoting": "strong" },
+                    "-lws2_32",
+                    "-lshell32",
+                    "-o",
+                    "${fileDirname}/${fileBasenameNoExtension}.exe"
+                ]
+            },
+            "dependsOn": ["kanso-compile-to-c"],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        }
+    ]
+}

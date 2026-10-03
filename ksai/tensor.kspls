@@ -1,0 +1,523 @@
+//< ksai's foundation: the multi-dimensional `Tensor<|T|>`, and the operations over it
+//<
+//< matmul, rmsnorm, softmax, RoPE, the activation functions and the arithmetic operators. **The
+//< matrix-product kernel is pure KSPL by default**: no dependencies, written so that Clang's
+//< auto-vectorization works, and it hands off to BLAS only in a `--define=blas` build. Read this
+//< file first.
+import "std/math"
+import "std/mem" { Arena, alloc_in, dealloc }
+import "std/prng"
+import "std/str" { Str_builder }
+import "std/strfmt"
+
+pub enum Tensor_error //< why an operation could not run on the shapes it was given
+  //<
+  //< A shape mismatch can come from run-time data (a bad shape in weights read from a
+  //< safetensors file), so it propagates as an error union (?E) for the caller to handle.
+  rank_mismatch //< the number of dimensions is not what the operation expects
+  shape_mismatch //< a dimension's size does not match, such as the inner-product dimension
+  out_of_bounds //< a row number outside the tensor; a bad element index stops the program instead
+pub const max_tensor_elems: Sz = 100000000 //< the most elements one tensor may hold.
+  //<
+  //< The cap `new` enforces, which fits cfg(freestanding)'s 32-bit Sz (800MB even at F64). It is
+  //< pub so safetensors.get_tensor, which bypasses `new`, applies the same cap.
+
+pub struct Tensor<|T|> //< a multi-dimensional array: the elements and their shape
+  pub data: T$@ //< the elements, laid out with the last dimension varying fastest
+  pub shape: Sz$[] //< each dimension's size; how many there are is `shape.len`
+  pub size: Sz //< the total number of elements, kept because every loop bound needs it
+  pub arena: Arena$@ //< the arena the elements were allocated from; null means the global heap
+
+impl<|T|> Tensor<|T|>
+  fn from_raw_parts(data_ptr: T$@, shape_ptr: Sz$@, ndim: Sz, size: Sz, arena: Arena$@):
+    Tensor<|T|> //<
+      //< Builds a tensor from raw parts whose shape_ptr, ndim and size the caller computed
+      //<
+      //< Both an ordinary allocation and a zero-copy read use it.
+    return Tensor<|T|>::{
+      .data = data_ptr,
+      .shape = Sz$[]::{ .ptr = shape_ptr, .len = ndim },
+      .size = size,
+      .arena = arena,
+    }
+  pub fn new( //< a tensor of that shape, its elements not yet written
+    shape: Sz[], //< each dimension's size, outermost first
+    arena: Arena$@, //< the arena for the elements; null means the global heap
+  ): Tensor<|T|>
+    ndim: = shape.len
+    $size: Sz = 1
+
+    shape_ptr: = Sz$@::alloc_in(arena, ndim * sizeof(Sz))
+    for $i: = I32::ndim - 1; i >= 0; i -= 1
+      s: = shape[i]
+      (shape_ptr + i)$ = s
+      // Caution: **Check before multiplying.** Multiplying first and then comparing with
+      // `max_tensor_elems` lets through a product that overflowed Sz and wrapped below the cap (the
+      // wrap can land on any multiple of 256). `new` cannot fail and is called from many places,
+      // so it stops at once on what should never happen.
+      if s > 0 && size > max_tensor_elems / s
+        // Always print which dimension held which value: without the values, the cause (a bug in
+        // the caller or in code generation) cannot be told apart (the same intent as "A program
+        // does not lose its own output on an abnormal exit" in std/docs/DESIGN.md).
+        $b: = Str_builder.new()
+        defer b.free()
+        b
+          .s("Tensor shape product overflow (shape too large): ndim=\{ndim\} shape[\{i\}]=\{s\} \
+            product_before=\{size\} shape.ptr=")
+        strfmt.write_ptr(b, Void$@::shape.ptr)
+        strfmt.write_ptr(b.s(" dest="), Void$@::shape_ptr)
+        // Print every dimension: one broken dimension alone cannot tell "the caller passed a
+        // broken shape" from "the shape's memory was overwritten afterwards" (such as only the low
+        // 4 bytes of an 8-byte slot, from a calling-convention mismatch).
+        b.s("\n  dims:")
+        for $k: = 0; k < I32::ndim && k < 16; k += 1
+          b.s(" [\{k\}]=\{shape[k]\}")
+        // To identify the caller: a panic has no call history (only `?` builds a trace), and
+        // several callers build the same shape. An arena's usage says which allocation this is
+        // (near the start means the first call).
+        // **Do not dereference a null arena**: null means "use the global heap" (mem.alloc_in).
+        arena_used: = arena.save().used if arena != null else -1
+        b.s(" arena_used=\{arena_used\}")
+        panic(b.slice())
+      size *= s
+
+    data_ptr: = T$@::alloc_in(arena, size * sizeof(T))
+    return Tensor<|T|>.from_raw_parts(data_ptr, shape_ptr, ndim, size, arena)
+  pub fn free(r: Self$@) //< frees the elements and the shape
+    // An arena's elements are freed with the arena, so there is no individual free.
+    if r.size > 0 && r.arena == null
+      dealloc(Void$@::r.data)
+      dealloc(Void$@::r.shape.ptr)
+    r.size = 0
+
+  pub fn dup( //< a copy in another arena, flattened to one dimension
+    //<
+    //< It is for keeping a value alive after the caller's arena is gone.
+    r: Self$@,
+    arena: Arena$@, //< the arena the copy is allocated from
+  ): Tensor<|T|>
+    shape: Sz[1] = ::{ r.size }
+    out: = Tensor<|T|>.new(Sz[]::shape, arena)
+    for i in Range.asc(r.size)
+      (out.data + i)$ = (r.data + i)$
+    return out
+
+  pub fn fill(r: Self$@, val: T) //< writes the same value into every element
+    for i in Range.asc(r.size)
+      (r.data + i)$ = val
+  pub fn fill_uniform( //< writes uniform random values into every element
+    //<
+    //< **A constant start makes every unit symmetric and training impossible** (every token would
+    //< get the same embedding), so training from scratch begins here.
+    r: Self$@,
+    rng: prng.Prng$@, //< the random generator; its seed makes a run reproducible
+    scale: F64, //< the values land in [-scale, scale)
+  )
+    for i in Range.asc(r.size)
+      (r.data + i)$ = T::((rng.next_f64() * 2.0 - 1.0) * scale)
+
+  pub fn matmul( //< the matrix product, in a newly allocated tensor
+    r: Self$@,
+    rhs: Tensor<|T|>, //< the right-hand matrix; its rows must match this one's columns
+  ): Tensor<|T|>?Tensor_error
+    m: = r.shape[0]
+    n: = rhs.shape[1] if rhs.shape.len == 2 else 0
+    out_shape: Sz[2] = ::{ m, n }
+    out: = Tensor<|T|>.new(Sz[]::out_shape, r.arena)
+    r.matmul_into(rhs, out)?
+    return out
+  pub fn matmul_into( //< the matrix product, written into a tensor the caller owns
+    //<
+    //< It is for a hot loop that would otherwise allocate once per step.
+    r: Self$@,
+    rhs: Tensor<|T|>, //< the right-hand matrix; its rows must match this one's columns
+    out: Tensor<|T|>, //< where the product goes; it must already be shaped `[m, n]`
+  ): Void?Tensor_error
+    if r.shape.len != 2 || rhs.shape.len != 2
+      throw Tensor_error.rank_mismatch
+    m: = r.shape[0]
+    k: = r.shape[1]
+    if k != rhs.shape[0] || k <= 0
+      throw Tensor_error.shape_mismatch
+    n: = rhs.shape[1]
+    if out.size != m * n
+      throw Tensor_error.shape_mismatch
+    matmul_kernel<|T|>(out.data, r.data, rhs.data, m, k, n)
+  fn add_bias(r: Self$@, bias: Tensor<|T|>): Tensor<|T|>?Tensor_error //<
+    //< Broadcast addition (for adding a bias)
+    if r.shape.len < 2
+      throw Tensor_error.rank_mismatch
+    n: = r.shape[r.shape.len - 1]
+    if bias.size != n
+      throw Tensor_error.shape_mismatch
+
+    out: = Tensor<|T|>.new(r.shape, r.arena)
+    rows: = r.size / n
+    // Nested per row, so the inner loop is a plain contiguous access with no division (i % n),
+    // which favours auto-vectorization (as in matmul_kernel).
+    for row in Range.asc(rows)
+      row_off: = row * n
+      for j in Range.asc(n)
+        (out.data + row_off + j)$ = (r.data + row_off + j)$ + (bias.data + j)$
+    return out
+  pub fn rmsnorm( //< root-mean-square normalization over the last dimension
+    r: Self$@,
+    weight: Tensor<|T|>, //< the per-element gain, as long as the last dimension
+    eps: T, //< added under the square root, so a row of zeros does not divide by zero
+  ): Tensor<|T|>?Tensor_error
+    if r.shape.len < 2
+      throw Tensor_error.rank_mismatch
+    n: = r.shape[r.shape.len - 1]
+    if weight.size != n
+      throw Tensor_error.shape_mismatch
+
+    out: = Tensor<|T|>.new(r.shape, r.arena)
+    rows: = r.size / n
+
+    for i in Range.asc(rows)
+      $ss: T = 0.0
+      for j in Range.asc(n)
+        val: = (r.data + i * n + j)$
+        ss = ss + val * val
+      mean: = ss / (F64::n)
+      variance: = mean + eps
+      // The reciprocal is computed once, so the row's n divisions become multiplications (division
+      // has lower per-lane throughput, and this favours auto-vectorization).
+      inv_rms: = T::(1.0 / math.sqrt(variance))
+      for j in Range.asc(n)
+        (out.data + i * n + j)$ = (r.data + i * n + j)$ * inv_rms * (weight.data + j)$
+    return out
+  pub fn scale( //< every element multiplied, in a newly allocated tensor
+    r: Self$@,
+    factor: T, //< what each element is multiplied by
+  ): Tensor<|T|>
+    out: = Tensor<|T|>.new(r.shape, r.arena)
+    for i in Range.asc(r.size)
+      (out.data + i)$ = (r.data + i)$ * factor
+    return out
+  fn matmul_transb(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>?Tensor_error //<
+    //< The matrix product with the right side transposed (for Q * K^T; a zero-allocation transpose)
+    if r.shape.len != 2 || rhs.shape.len != 2
+      throw Tensor_error.rank_mismatch
+    m: = r.shape[0]
+    k: = r.shape[1]
+    n: = rhs.shape[0] // rhs is transposed, so its row count becomes n
+    if k != rhs.shape[1]
+      throw Tensor_error.shape_mismatch
+
+    out_shape: Sz[2] = ::{ m, n }
+    out: = Tensor<|T|>.new(Sz[]::out_shape, r.arena)
+    transb_kernel<|T|>(out.data, r.data, rhs.data, m, k, n)
+    return out
+  pub fn softmax(r: Self$@): Tensor<|T|>?Tensor_error //<
+    //< each row turned into weights that sum to 1
+    //<
+    //< The row's maximum is subtracted first, so a large value does not overflow.
+    if r.shape.len < 2
+      throw Tensor_error.rank_mismatch
+    n: = r.shape[r.shape.len - 1]
+    rows: = r.size / n
+    out: = Tensor<|T|>.new(r.shape, r.arena)
+
+    for i in Range.asc(rows)
+      $max_val: = (r.data + i * n)$
+      for $j: Sz = 1; j < n; j += 1
+        val: = (r.data + i * n + j)$
+        if val > max_val
+          max_val = val
+      $sum_exp: T = 0.0
+      for j in Range.asc(n)
+        ex: = T::math.exp((r.data + i * n + j)$ - max_val)
+        (out.data + i * n + j)$ = ex
+        sum_exp = sum_exp + ex
+      // The sum's reciprocal is computed once (the same reason as rmsnorm).
+      inv_sum: = T::1.0 / sum_exp
+      for j in Range.asc(n)
+        (out.data + i * n + j)$ = (out.data + i * n + j)$ * inv_sum
+    return out
+  pub fn apply_rope( //< rotates each pair of elements by its position, so the order is encoded
+    r: Self$@,
+    start_pos: Sz, //< the position of the first row, so a continued run keeps rotating from there
+  ): Tensor<|T|>?Tensor_error
+    if r.shape.len < 2
+      throw Tensor_error.rank_mismatch
+    if r.shape[r.shape.len - 1] % 2 != 0
+      throw Tensor_error.shape_mismatch
+    return r.rope_rotate(start_pos, false)
+  fn rope_rotate(r: Self$@, start_pos: Sz, invert: Bool): Tensor<|T|> //<
+    //< Rotates each adjacent pair (2j, 2j+1) by the angle θ
+    //<
+    //< Caution: **Get the reverse rotation from here, with `invert`.** RoPE is orthogonal, so the
+    //< backward pass is a rotation by -θ (`apply_rope_grad` in `ksai/grad.kspls`). **Do not copy
+    //< the body with only the sign changed**: a fix to the frequency base or the indexing on one
+    //< side alone silently puts the gradient out of step with the forward pass. The caller does the
+    //< shape check (forward rejects with a diagnostic, reverse with an assert).
+    seq_len: = r.shape[r.shape.len - 2]
+    dim: = r.shape[r.shape.len - 1]
+
+    out: = Tensor<|T|>.new(r.shape, r.arena)
+    rows: = r.size / (seq_len * dim)
+
+    for b in Range.asc(rows)
+      for i in Range.asc(seq_len)
+        pos: = F64::(start_pos + i)
+
+        for $j: Sz = 0; j < dim / 2; j += 1
+          freq: = 1.0 / math.pow(10000.0, (F64::(j * 2)) / (F64::dim))
+          theta: = pos * freq
+          cos_val: = T::math.cos(theta)
+          raw_sin: = T::math.sin(theta)
+          sin_val: = -raw_sin if invert else raw_sin
+          base_idx: = b * (seq_len * dim) + i * dim
+          idx1: = base_idx + j * 2
+          idx2: = base_idx + j * 2 + 1
+
+          v1: = (r.data + idx1)$
+          v2: = (r.data + idx2)$
+          (out.data + idx1)$ = v1 * cos_val - v2 * sin_val
+          (out.data + idx2)$ = v1 * sin_val + v2 * cos_val
+    return out
+  fn apply_rope_neox(r: Self$@, start_pos: Sz, head_dim: Sz, theta: F64):
+    Tensor<|T|>?Tensor_error //<
+      //< The RoPE of the NeoX/Llama/Qwen family, pairing each head's first half with its second
+      //<
+      //< apply_rope is the interleaved style (pair 2j, 2j+1), while HF Llama/Qwen pair the first
+      //< half's j with the second half's j+hd/2 (rotate_half), per head of head_dim, with its own
+      //< base theta (1e6 for Qwen2.5). r's shape is [seq, n_heads*head_dim].
+    if r.shape.len != 2
+      throw Tensor_error.rank_mismatch
+    if head_dim % 2 != 0
+      throw Tensor_error.shape_mismatch
+    seq: = r.shape[0]
+    width: = r.shape[1]
+    half: = head_dim / 2
+    out: = Tensor<|T|>.new(r.shape, r.arena)
+    for s in Range.asc(seq)
+      pos: = F64::(start_pos + s)
+      for $base: Sz = 0; base < width; base += head_dim // per head boundary
+        for j in Range.asc(half)
+          freq: = 1.0 / math.pow(theta, (F64::(j * 2)) / (F64::head_dim))
+          angle: = pos * freq
+          cos_val: = T::math.cos(angle)
+          sin_val: = T::math.sin(angle)
+          idx1: = s * width + base + j // the first half
+          idx2: = s * width + base + j + half // the second half
+          x1: = (r.data + idx1)$
+          x2: = (r.data + idx2)$
+          (out.data + idx1)$ = x1 * cos_val - x2 * sin_val
+          (out.data + idx2)$ = x2 * cos_val + x1 * sin_val
+    return out
+  fn update_row(r: Self$@, row_idx: Sz, src: Tensor<|T|>): Void?Tensor_error //<
+    //< Overwrites row `row_idx` (for saving into the KV cache)
+    if r.shape.len < 2 || src.shape.len < 2
+      throw Tensor_error.rank_mismatch
+    dim: = r.shape[r.shape.len - 1]
+    if src.shape[src.shape.len - 1] != dim
+      throw Tensor_error.shape_mismatch
+    // In the KV cache (Self_attention/Gqa_attention.forward) row_idx is the generation position,
+    // which goes past the allocated rows once the sequence outgrows max_seq_len; this stops that.
+    if row_idx >= r.shape[0]
+      throw Tensor_error.out_of_bounds
+
+    offset: = row_idx * dim
+    for i in Range.asc(dim)
+      (r.data + offset + i)$ = (src.data + i)$
+  fn view_rows(r: Self$@, first: Sz, num_rows: Sz, arena: Arena$@): Tensor<|T|>?Tensor_error //<
+    //< Builds a zero-copy view of `num_rows` rows from `first`
+    //<
+    //< It serves reading the KV cache so far, or a sequence's tail.
+    if r.shape.len != 2
+      throw Tensor_error.rank_mismatch
+    if first + num_rows > r.shape[0]
+      throw Tensor_error.out_of_bounds
+    dim: = r.shape[1]
+
+    shape_ptr: = Sz$@::arena.alloc(2 * sizeof(Sz))
+    (shape_ptr + 0)$ = num_rows
+    (shape_ptr + 1)$ = dim
+
+    return Tensor<|T|>::{
+      .data = r.data + first * dim, // the elements themselves stay where they are (zero copy)
+      .shape = Sz$[]::{ .ptr = shape_ptr, .len = 2 },
+      .size = num_rows * dim,
+      .arena = arena, // only the view itself, not the elements, belongs to step_arena
+    }
+
+  // ---------------------------------------------------------
+  // Operator overloading (+, -, *). An operator cannot return an error union under the trait's
+  // contract, so `checked_add` / `checked_sub` / `checked_mul` hold the body and the operator
+  // panics on their error (so a shape mismatch stays available as a recoverable error).
+  // ---------------------------------------------------------
+  priv fn elementwise_out(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>?Tensor_error
+    if r.size != rhs.size
+      throw Tensor_error.shape_mismatch
+    return Tensor<|T|>.new(r.shape, r.arena)
+
+  pub fn checked_add( //< element-wise sum; rejects shapes that do not match
+    //<
+    //< **Do not merge the three loops below into one.** Passing the operation as a function
+    //< pointer makes an indirect call per element, and -O3's auto-vectorization stops working (the
+    //< property the SIMD gate in `tests` checks).
+    r: Self$@,
+    rhs: Tensor<|T|>, //< the other tensor, which must be the same shape
+  ): Tensor<|T|>?Tensor_error
+    out: = r.elementwise_out(rhs)?
+    for i in Range.asc(r.size)
+      (out.data + i)$ = (r.data + i)$ + (rhs.data + i)$
+    return out
+
+  pub fn checked_sub( //< element-wise difference; rejects shapes that do not match
+    r: Self$@,
+    rhs: Tensor<|T|>, //< the other tensor, which must be the same shape
+  ): Tensor<|T|>?Tensor_error
+    out: = r.elementwise_out(rhs)?
+    for i in Range.asc(r.size)
+      (out.data + i)$ = (r.data + i)$ - (rhs.data + i)$
+    return out
+
+  pub fn checked_mul( //< element-wise product; rejects shapes that do not match
+    r: Self$@,
+    rhs: Tensor<|T|>, //< the other tensor, which must be the same shape
+  ): Tensor<|T|>?Tensor_error
+    out: = r.elementwise_out(rhs)?
+    for i in Range.asc(r.size)
+      (out.data + i)$ = (r.data + i)$ * (rhs.data + i)$
+    return out
+
+  // ---------------------------------------------------------
+  // The activation functions
+  // ---------------------------------------------------------
+
+  pub fn silu(r: Self$@): Tensor<|T|> //< the SiLU (Swish) activation, element by element
+    out: = Tensor<|T|>.new(r.shape, r.arena)
+    for i in Range.asc(r.size)
+      val: = (r.data + i)$
+      // math.exp takes F64
+      ex: = math.exp(-(val))
+      (out.data + i)$ = T::(val / (1.0 + ex))
+    return out
+
+impl<|T|> Tensor<|T|>: Index_place<|Sz, T|> //< so `t[i]` reads and writes one element
+  //<
+  //< Note: An index out of range panics (for the same reason as `std/ds.kspls`'s List: the caller
+  //< can compute the range from `size`, so going outside it is a bug). Only a shape mismatch is a
+  //< recoverable `Tensor_error` (the reason is at `Tensor_error`).
+  #inline
+  pub fn at(r: Self@, index: Sz, file: U8[], line: Sz): T$@ //< the element at a flat index
+    if index < 0 || index >= r.size
+      bounds_panic("Tensor.at", index, r.size, file, line)
+    return r.data + index
+
+impl<|T|> Tensor<|T|>: Add<|Tensor<|T|>, Tensor<|T|>|> //< so `a + b` can be written
+  pub fn add(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|> //< the sum; a shape mismatch panics
+    return r.checked_add(rhs) catch panic("Tensor Add Error: shape mismatch")
+
+impl<|T|> Tensor<|T|>: Sub<|Tensor<|T|>, Tensor<|T|>|> //< so `a - b` can be written
+  pub fn sub(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|> //< the difference; a mismatch panics
+    return r.checked_sub(rhs) catch panic("Tensor Sub Error: shape mismatch")
+
+impl<|T|> Tensor<|T|>: Mul<|Tensor<|T|>, Tensor<|T|>|> //< so `a * b` is element-wise, not matmul
+  pub fn mul(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|> //< the element-wise product
+    return r.checked_mul(rhs) catch panic("Tensor Mul Error: shape mismatch")
+// ---------------------------------------------------------
+// The matrix-product kernel C[m,n] = A[m,k] @ B[k,n], called from matmul. By default (cfg !blas) it
+// is pure KSPL (i-k-j, cache-efficient and auto-vectorizable); under --define=blas, BLAS's gemm.
+// cfg leaves only one body in the AST.
+// ---------------------------------------------------------
+#cfg(!blas)
+fn matmul_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz)
+  for $i: Sz = 0; i < m * n; i += 1
+    (c + i)$ = 0.0
+  for i in Range.asc(m)
+    c_row: = c + i * n
+    for step in Range.asc(k)
+      av: = (a + i * k + step)$
+      b_row: = b + step * n
+      for j in Range.asc(n)
+        (c_row + j)$ = (c_row + j)$ + av * (b_row + j)$
+
+#cfg(blas)
+fn matmul_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz)
+  blas_gemm<|T|>(111, 111, m, n, k, a, k, b, n, c, n) // NoTrans, NoTrans: C = A@B
+
+// C = A @ B^T (A:[m,k], B:[n,k] -> C:[m,n]): each output an inner product of two rows.
+#cfg(!blas)
+fn transb_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz) //<
+  //< Four outputs at once, **each summed separately in ascending order**
+  //<
+  //< One running sum waits on its last addition at every step; four independent ones overlap,
+  //< and each still adds its terms in the same order, so the result is identical bit for bit (the
+  //< third technique beside the two in "The kernels are spelt for the auto-vectorizer, not with
+  //< intrinsics" in `ksai/docs/DESIGN.md`).
+  for i in Range.asc(m)
+    a_row: = a + i * k
+    c_row: = c + i * n
+    $j: Sz = 0
+    for j + 4 <= n
+      b0: = b + j * k
+      b1: = b0 + k
+      b2: = b1 + k
+      b3: = b2 + k
+      $s0: T = 0.0
+      $s1: T = 0.0
+      $s2: T = 0.0
+      $s3: T = 0.0
+      for step in Range.asc(k)
+        x: = (a_row + step)$
+        s0 = s0 + x * (b0 + step)$
+        s1 = s1 + x * (b1 + step)$
+        s2 = s2 + x * (b2 + step)$
+        s3 = s3 + x * (b3 + step)$
+      (c_row + j)$ = s0
+      (c_row + j + 1)$ = s1
+      (c_row + j + 2)$ = s2
+      (c_row + j + 3)$ = s3
+      j += 4
+    for j < n
+      b_row: = b + j * k
+      $s: T = 0.0
+      for step in Range.asc(k)
+        s = s + (a_row + step)$ * (b_row + step)$
+      (c_row + j)$ = s
+      j += 1
+
+#cfg(blas)
+fn transb_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz)
+  blas_gemm<|T|>(111, 112, m, n, k, a, k, b, k, c, n) // NoTrans, Trans: C = A@B^T
+
+// ---------------------------------------------------------
+// An optional backend: only a `--define=blas` build calls BLAS's gemm by FFI; by default cfg(blas)
+// discards these and matmul_kernel's BLAS version, so the generated C never mentions cblas. The
+// library is declared with the block, so no build file names it.
+// ---------------------------------------------------------
+#cfg(blas)
+#link("openblas")
+extern "C"
+  fn cblas_sgemm(order: I32, ta: I32, tb: I32, m: I32, n: I32, k: I32, alpha: F32, a: F32$@,
+    lda: I32, b: F32$@, ldb: I32, beta: F32, c: F32$@, ldc: I32)
+  fn cblas_dgemm(order: I32, ta: I32, tb: I32, m: I32, n: I32, k: I32, alpha: F64, a: F64$@,
+    lda: I32, b: F64$@, ldb: I32, beta: F64, c: F64$@, ldc: I32)
+
+#cfg(blas)
+fn blas_gemm<|T|>(ta: I32, tb: I32, m: Sz, n: Sz, k: Sz, a: T$@, lda: Sz, b: T$@, ldb: Sz, c: T$@,
+  ldc: Sz) //<
+    //< cfg(blas): the shared dispatch to BLAS gemm, C = op(A)@op(B) with alpha=1 and beta=0
+    //<
+    //< It is RowMajor (101) and transposes by ta/tb (111=NoTrans, 112=Trans); it picks sgemm or
+    //< dgemm by the element size (F32 or F64 only). matmul and grad.kspls's backward gemm share it.
+  mi: = I32::m
+  ni: = I32::n
+  ki: = I32::k
+  lda_i: = I32::lda
+  ldb_i: = I32::ldb
+  ldc_i: = I32::ldc
+  if sizeof(T) == 4
+    cblas_sgemm(101, ta, tb, mi, ni, ki, F32::1.0, F32$@::a, lda_i, F32$@::b, ldb_i, F32::0.0,
+      F32$@::c, ldc_i)
+  else
+    cblas_dgemm(101, ta, tb, mi, ni, ki, F64::1.0, F64$@::a, lda_i, F64$@::b, ldb_i, F64::0.0,
+      F64$@::c, ldc_i)
+
+// Without this impl the use-after-free check does not work (`Owned` in std/lang.kspls; [W0108]
+// says so).
+impl<|T|> Tensor<|T|>: Owned {} //< it owns its elements and frees them with `free()`

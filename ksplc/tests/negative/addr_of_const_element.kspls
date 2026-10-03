@@ -1,0 +1,21 @@
+//< `@` on a read-only element must not pass it where a mutable pointer is expected
+//<
+//< **The notation is right and only the permission drops**: handed straight to a `U8$@`, the
+//< expected type descends into `ro[0]`, and the `const_of(U8)` -> `U8` conversion, fit for a copy,
+//< must not retype the place. The type of `x@` is settled by `x` alone, or a ROM write is lost.
+// EXPECT: expected 'U8$@', but got 'U8@'
+// EXPECT: expected 'U8$[]', but got 'U8[]'
+
+const ro: U8[4] = ::{ 1, 2, 3, 4 }
+const lit: U8[] = "abc"
+
+priv fn writes_through(p: U8$@)
+  p$ = 9
+
+priv fn writes_elem(s: U8$[])
+  s[0] = 9
+
+fn main(): I32
+  writes_through(ro[0]@)
+  writes_elem(lit)
+  return 0

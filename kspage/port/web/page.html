@@ -1,0 +1,435 @@
+<!doctype html>
+<!-- Caution: **Name the language.** Without it the browser guesses, and the voice a screen reader
+     chooses has nothing to go on. -->
+<html lang="en">
+<!-- kspage's page template.
+     **Opening this as it is does not work.** `make kspage-web` puts `bundle.kspls` through,
+     embeds the texts named here and the wasm, and makes one complete page.
+     **What is bound is what this template names** (a new text means a line here). -->
+<meta charset="utf-8">
+<title>kspage</title>
+<style>__KSPAGE_FILE:page.css__</style>
+<!-- Caution: **Do not put `#stage` inside the tools** — showing and printing split on "fold
+     everything but `#stage`". -->
+<div id="chrome">
+<!-- **Do not break the `.menu` and `.items` pairing.** What opens pushes the canvas down. -->
+<div id="bar">
+  <details class="menu"><summary>File</summary>
+    <div class="items">
+      <!-- Caution: **Do not interpose a screen that makes them choose**: a blank opens.
+           **Do not name `Ctrl+N`** — the browser takes it, so it does not reach the page. -->
+      <div class="row">
+        <button id="doc-new" type="button" title="Opens one blank document (the document you have stays open)">New</button>
+        <button id="save" type="button" data-edit>Save (Ctrl+S)</button>
+        <button id="open" type="button">Open</button>
+        <button id="print" type="button">Print</button>
+      </div>
+      <!-- Caution: **Show it only while the local server is there**; then it is the destination
+           (empty, saving asks). **Call it a path**, the word Explorer and VS Code use. -->
+      <div class="row" id="local-row" hidden>
+        <label for="local-path">Path for saving and opening</label>
+        <input id="local-path" type="text" size="26"
+          placeholder="docs/notes.kspage"
+          title="The path as seen from the folder kssrv publishes. Both [Open] and [Save] use it">
+      </div>
+      <!-- Caution: **Do not line it up beside Save** — it is pressed far less often, and there it
+           shrinks Save's target. **Do not call it "Recovered"**: a draft is not a save. -->
+      <div data-fly="Draft kept" id="keep-fly">
+        <div class="row">
+          <button id="keep-take" type="button" title="Opens the draft from when you last closed or fell over, in a new place (the first save asks for the destination)">Bring the draft back</button>
+          <button id="keep-drop" type="button" title="Throws every draft kept away">Throw the drafts away</button>
+        </div>
+      </div>
+      <!-- **Taking in is the same set**, not beside "Open": Markdown is not a round-trip shape. -->
+      <div data-fly="Write out, take in" id="file-out-fly">
+        <div class="row">
+          <button id="export" type="button">Write out as HTML</button>
+          <button id="export-md" type="button">Write out as Markdown</button>
+          <button id="open-md" type="button">Open a Markdown</button>
+          <button id="export-csv" type="button">Write the table out as CSV</button>
+          <!-- **This alone runs "document -> source"**; row 1 is the heading. -->
+          <button id="export-consts" type="button" title="Makes KSPL constants, taking column 1 as the name and column 2 as the value">Write the table out as constant source</button>
+        </div>
+        <!-- Where the text that table makes points. **Settled, it can say whether the artefact
+             is stale.** Press it inside the table. -->
+        <div class="row">
+          <input id="consts-aim" type="text" size="14" placeholder="the file this table makes (settings.kspl)">
+          <button id="consts-aim-apply" type="button">Make it this table's target</button>
+
+        </div>
+      </div>
+      <!-- **Keep it folded**, or the menu covers the canvas. -->
+      <details class="sub"><summary>Paper and margins, the body's width, the header and footer</summary>
+      <div class="items">
+      <!-- Caution: **Do not multiply the size by the orientation** — as one choice the rows double
+           with every size added. **Not a `<select>` either** (the rows are `paper.js`'s). -->
+      <div id="paper-picks"></div>
+      <div class="row">
+        <label for="paper">Height</label>
+        <input id="paper" type="number" min="0" step="10" size="5" placeholder="0 does not split into pages">
+        <label for="paper-width">Width</label>
+        <input id="paper-width" type="number" min="0" step="10" size="5" placeholder="the window's width">
+      </div>
+      <!-- With no margin above and below, the header and footer have nowhere to go. -->
+      <div class="row">
+        <input id="header-text" type="text" size="14" placeholder="header ({page}/{pages})">
+      </div>
+      <div class="row">
+        <input id="footer-text" type="text" size="14" placeholder="footer ({page}/{pages})">
+      </div>
+      <!-- **It is the document's settlement, not the window's**; a paper width overrides it. -->
+      <div class="row">
+        <label for="text-width">The body's width</label>
+        <input id="text-width" type="number" min="0" step="20" size="5" placeholder="no limit">
+        <button id="text-width-read" type="button">Make it a readable width</button>
+      </div>
+      <div class="row">
+        <label>Margins</label>
+        <input id="margin-left" type="number" min="0" step="4" size="3" placeholder="left">
+        <input id="margin-top" type="number" min="0" step="4" size="3" placeholder="top">
+        <input id="margin-right" type="number" min="0" step="4" size="3" placeholder="right">
+        <input id="margin-bottom" type="number" min="0" step="4" size="3" placeholder="bottom">
+      </div>
+      </div>
+      </details>
+    </div>
+  </details>
+__KSPAGE_FILE:menus.html__
+  <!-- Caution: **Show the plugins only where there is one** (`plugin.js` takes `hidden` off). -->
+  <details class="menu" id="plugins" data-edit hidden><summary>Plugins</summary>
+    <div class="items" id="plugin-items"></div>
+  </details>
+  <details class="menu" data-edit><summary>Share</summary>
+    <div class="items">
+      <div class="row">
+        <button id="present" type="button">Slideshow (Esc goes back)</button>
+      </div>
+      <!-- **A reading-only window**, hence "pin"; `peek.js` swaps the show and fold texts. -->
+      <div data-fly="Split view" id="peek-fly">
+        <div class="row">
+          <button id="peek-flip" type="button" title="Pins the position shown now below">Pin it below</button>
+          <button id="peek-pin" type="button" title="Re-pins the split view to the current view position">Re-pin</button>
+        </div>
+      </div>
+      <!-- It does not come out in the flow; on a slide it is the presenter's note. -->
+      <div data-fly="Attach a note" id="aside-fly">
+        <div class="row">
+          <input id="aside" type="text" size="16" placeholder="the current slide's note">
+          <button id="aside-apply" type="button">Attach</button>
+          <button id="aside-clear" type="button">Take it off</button>
+        </div>
+      </div>
+
+    </div>
+  </details>
+  <!-- **The change history wants no git**: it comes down with the document as `kspage.ksdb`. -->
+  <details class="menu" data-edit><summary>Review</summary>
+    <div class="items">
+      <!-- Caution: **Do not cram it onto one line** — wrapping grows the menu over the canvas.
+           It is on neither the page nor the HTML written out; the writer is `#who` below. -->
+      <div data-fly="Comment" id="remark-fly">
+        <div class="row">
+          <input id="remark-text" type="text" size="14" placeholder="the comment's text">
+          <button id="remark-apply" type="button">Attach</button>
+          <button id="remark-clear" type="button">Take it off</button>
+        </div>
+        <div class="row"><span id="remark-by"></span></div>
+      </div>
+      <!-- Caution: **Do not make the history a submenu** — the list is **text to be read**, so the
+           finger leaving closes it mid-read (`fly.js`'s opening header). -->
+      <details class="sub"><summary>The change history</summary>
+        <div class="items">
+          <div class="row">
+            <input id="who" type="text" size="10" placeholder="your name">
+            <button id="show-trail" type="button">See the history</button>
+          </div>
+          <pre id="trail-list" style="max-height:200px;overflow:auto;margin:0;font-size:12px"></pre>
+        </div>
+      </details>
+      <!-- **A version is kept only on a press and on a save**, in this page's memory (to carry one
+           to another machine, choose a file). -->
+      <div data-fly="Save a version" id="diff-keep-fly">
+        <div class="row">
+          <button id="diff-keep" type="button" title="Saves the current content as a version">Save the current version</button>
+          <!-- The rows are made by `diff.js`; **not a `<select>`**: choosing compares at once. -->
+          <div id="diff-past"></div>
+          <!-- Caution: **Deleting has rows of its own, and does not read the row above.** A
+               choice invisible once the panel reopens goes stale, and another version is lost. -->
+          <div id="diff-drop"></div>
+        </div>
+      </div>
+      <!-- **The result's row is outside this set** (`#diff-list` below), so it stays readable. -->
+      <div data-fly="Compare with an earlier version" id="diff-run-fly">
+        <div class="row">
+          <button id="compare-open" type="button" title="Chooses an earlier version's file and compares">Compare with an earlier version</button>
+          <!-- The lens rows are made by `diff.js`; **not a `<select>`**, which hides the lens. -->
+          <div id="diff-lens"></div>
+          <button id="diff-clear" type="button" title="Closes the comparison's result">Stop</button>
+        </div>
+      </div>
+      <div class="row"><span id="diff-note"></span></div>
+      <canvas id="diff-shot" width="280" height="1" hidden></canvas>
+      <div id="diff-list"></div>
+    </div>
+  </details>
+  <!-- The file chooser opens only on a press, so a button starts it by click().
+       Caution: **The history must be choosable too** (`.ksdb`), chosen with the document. -->
+  <input id="file" type="file" accept=".json,.ksdb,application/json" multiple hidden>
+  <input id="csv-file" type="file" accept=".csv,text/csv" hidden>
+  <input id="md-file" type="file" accept=".md,.markdown,text/markdown" hidden>
+  <!-- **Comparing is not a reading again**: the document you have does not move. -->
+  <input id="compare-file" type="file" accept=".json,application/json" hidden>
+  <!-- The source read in **does not enter the document** (it is only shown on a press).
+       **Do not add `webkitdirectory`**: reading a whole folder hands over text not wanted. -->
+  <input id="source-file" type="file" multiple hidden>
+  <!-- The right side from here. **Place it without adding a row.** -->
+  <span class="push"></span>
+  <!-- **The name of the file saved, not the document's content** (the core holds no name).
+       Caution: **Do not put it on the ribbon's row** (folded, the name disappears). -->
+  <input id="doc-name" type="text" value="kspage" aria-label="the document's name"
+    title="the file name when saving">
+  <!-- The find field is not in a menu: closing on every press would stop searching again. -->
+  <input id="find-text" type="search" placeholder="Find (Ctrl+F)">
+  <!-- **The count is put out while they type, 0 too** (empty cannot be told from not counted).
+       The number swapped can be lower (an expression's cell is found but not swapped). -->
+  <span id="find-tally" title="the count found"></span>
+  <button id="find-prev" class="thin" type="button" title="Previous">&lsaquo;</button>
+  <button id="find-next" class="thin" type="button" title="Next">&rsaquo;</button>
+  <details class="menu at-right" id="swap"><summary>Replace</summary>
+    <div class="items">
+      <div class="row">
+        <input id="find-with" type="text" size="12" placeholder="the string to replace with">
+        <button id="find-swap" type="button">Replace</button>
+        <button id="find-swap-all" type="button">Replace all</button>
+      </div>
+    </div>
+  </details>
+  <!-- **Call it by the panel's content** ("List" does not say of what). With no content, the
+       handle is not shown either. -->
+<!-- Caution: **Do not place a zoom tool.** The browser holds the zoom; a second one multiplies
+     with it ("Whether the browser or the page holds the zoom" in `kspage/docs/DESIGN.md`). -->
+<button id="side-toggle" class="thin" type="button" title="Fold the navigation" hidden>Navigation</button>
+  <!-- **Place the usage at the bar's right end**, where Help is elsewhere too. -->
+  <details class="menu at-right" id="help"><summary>?</summary>
+    <div class="items">
+      <!-- **The manual is a kspage document**, opened in this window so it can be tried
+           while read. **Opening it replaces the document you have**, so it asks first. -->
+      <button id="open-manual">Open the manual</button>
+      <!-- Caution: **Do not put the document's content in** — the log goes to someone else.
+           **Do not say "write out"**: it is no document, so the word is "download". -->
+      <button id="report" type="button"
+        title="Saves the current state and the last error as text. The document's content is not in it">Download the debug log</button>
+    </div>
+  </details>
+  <!-- Caution: **Keep a way back**: a broken remembered shape would leave the tools unusable. -->
+  <details class="menu at-right" id="pick-tools"><summary title="this page's settings">&#9881;</summary>
+    <div class="items">
+      <!-- **Divide it by headings, and search too** (categories alone still leave "I cannot find
+           it"). **Use the same word as the thing set** ("Rectangle" on the ribbon and here). -->
+      <h3>The look</h3>
+      <!-- The rows are made by `side.js` (**not a `<select>`**, which hides what is hung on).
+           **How tightly the tools pack is this screen's settlement too** (not the document's). -->
+      <div id="look-picks"></div>
+      <!-- **It is neither saved nor printed**; a settled paper width still wins. -->
+      <div class="row">
+        <label for="over-width">The body's width (this screen only)</label>
+        <input id="over-width" type="number" min="0" step="20" size="5"
+          placeholder="as the document is set">
+      </div>
+      <!-- **It is apart from the browser's zoom**, which enlarges the ribbon and the menus too.
+           Caution: **Take a size, not a multiple**, so every document's body reads the same. -->
+      <div class="row">
+        <label for="over-size">The body's type size (this screen only)</label>
+        <input id="over-size" type="number" min="0" step="1" size="5"
+          placeholder="as the document is set">
+      </div>
+      <!-- **It does not invert the colours** (that ruins images and highlighter). -->
+      <label><input id="over-plain" type="checkbox"> Fit the document's colours to the screen</label>
+      <!-- **An outside image is not read in by default** (a tracking pixel).
+           **Do not remember it**: what was permitted was about this document. -->
+      <label><input id="over-pics" type="checkbox"> Read in images from outside servers</label>
+      <!-- Caution: **Do not make the panel itself a scrolling box** — it cuts absolutely
+           positioned descendants off, hiding the submenus above; only `#tool-picks` scrolls. -->
+      <details class="sub"><summary>The ribbon</summary>
+      <div class="items">
+      <label><input id="show-labels" type="checkbox" checked> Show the tools' names</label>
+      <!-- **Past 20 fields, place a way of narrowing** (categories alone do not get there). -->
+      <div class="row">
+        <label for="tool-find">Narrow</label>
+        <input id="tool-find" type="search" placeholder="a tool's name" autocomplete="off">
+      </div>
+      <div id="tool-picks"></div>
+      <button id="tools-reset" type="button">Put the ribbon back to the default</button>
+      </div>
+      </details>
+      <details class="sub"><summary>What is remembered</summary>
+      <div class="items">
+      <!-- **Write what is remembered** (unseen, it cannot be fixed). -->
+      <p class="hint">The theme, how tightly the tools pack, the viewer's overrides (the body's
+      width, type size and colours), the ribbon's shape, what was folded, the shapes used lately
+      and the document's name are remembered by this screen (they do not follow to another
+      machine).</p>
+      <!-- **Write where the document's own settlements are too** — two "width" fields cannot be
+           chosen between otherwise. -->
+      <p class="hint">The body's width, the paper size, the margins, the styles and the theme are
+      the document's own settlements, so they are under File &#9656; Paper and margins, and Style
+      (they remain when saved, and come out the same way for whoever opens it). The "this screen
+      only" fields above override that document's settlements on the viewer's side (the document
+      does not move).</p>
+      </div>
+      </details>
+    </div>
+  </details>
+  <button id="fold-ribbon" class="thin" type="button" title="Fold the ribbon">&#8963;</button>
+</div>
+<!-- The ribbon: **one row** (no tabs), assembled by the JS below; a press takes the menu's way.
+     **The images are drawn with characters** (an outside image would break the one file). -->
+<!-- **`data-edit` is the mark for "do not show it when read-only"** (`page.css`). What turns an
+     edit away is the core's side (`shut` in `kspage/write/edit.kspls`). -->
+<!-- **Put the `…` beside the ribbon** (inside, it is clipped with it), **not on another row**:
+     apart from where the cut was, what disappeared cannot be read. -->
+<div id="ribbon-row">
+  <div id="ribbon" data-edit></div>
+  <details class="menu at-right" id="spill" hidden>
+    <summary title="the tools that do not fit here">&hellip;</summary>
+    <div class="items"></div>
+  </details>
+</div>
+<!-- Caution: **Show it only while inside a table's cell** (always there, it wastes a row). -->
+<div id="formula-row" hidden>
+  <label for="formula">Formula</label>
+  <!-- It shows the original text of where was pressed, and Enter swaps it. -->
+  <input id="formula" type="text" spellcheck="false" autocomplete="off" disabled>
+</div>
+</div>
+<!-- Caution: **Place it outside the panel** (`#side` is a scrolling box, so put inside, the
+     grabbable band is cut off). **Its role is a separator**, and it must be walkable by key.
+     `side.js` wires it; `aria-valuenow` is a percentage of the window, `aria-valuetext` px. -->
+<div id="side-grip" role="separator" aria-orientation="vertical" aria-controls="side"
+  tabindex="0" aria-label="The navigation's width (change it with the arrow keys. Double-click puts it back to the default)" hidden></div>
+<!-- **Do not place it in the fixed area above**: the body would drop by its length. -->
+<aside id="side" hidden>
+  <!-- **A closing key on the panel too**, or whoever showed it hunts for where to close it. -->
+  <button id="side-close" type="button" title="Fold the navigation" aria-label="Fold the navigation">&#10005;</button>
+  <!-- Caution: **Do not mix the headings and the objects into one row** (what is hunted flows
+       away), **nor banish the objects to another panel** (a feature nobody notices).
+       **Always show every tab**; each carries a count, read without a press. -->
+  <div id="side-tabs" role="tablist">
+    <button id="side-tab-outline" type="button" role="tab" data-pane="outline"
+      title="The document's headings, and the rows that move to the document's head and tail">Headings<span class="tally"></span></button>
+    <button id="side-tab-slides" type="button" role="tab" data-pane="slides"
+      title="The slides' thumbnails. Clicking one moves to that slide">Slides<span class="tally"></span></button>
+    <!-- **It is not "the slide's content"**: a shape sits on a paragraph or a cell too. -->
+    <button id="side-tab-objects" type="button" role="tab" data-pane="objects"
+      title="The shapes, frames and lines placed at the current position. The top is nearest">Placed<span class="tally"></span></button>
+    <!-- Caution: **An open document comes out nowhere but here**; one being written goes to the
+         drafts on a re-open, and without this list it would be invisible. -->
+    <button id="side-tab-docs" type="button" role="tab" data-pane="docs"
+      title="The documents open. Clicking one shows that document">Files<span class="tally"></span></button>
+  </div>
+  <!-- **Assemble it from the headings** (it holds no row of its own). A press jumps. -->
+  <div id="outline" role="tabpanel" aria-labelledby="side-tab-outline"></div>
+  <div id="slides" role="tabpanel" aria-labelledby="side-tab-slides"></div>
+  <div id="objects" role="tabpanel" aria-labelledby="side-tab-objects"></div>
+  <div id="docs" role="tabpanel" aria-labelledby="side-tab-docs"></div>
+</aside>
+<!-- Caution: **It only draws, so nothing goes to a screen reader.** **It names what it is and that
+     it cannot be read** — a legible reason beats silence. It is not screen-reader support ("The
+     body is not available to a screen reader" in `../../docs/DESIGN.md`). -->
+<div id="stage"><canvas id="page" role="img"
+    aria-label="The document's body. It is drawn directly on the screen, so a screen reader cannot read its content (see the manual's What it cannot do)"></canvas>
+  <!-- Caution: **Place it inside the stage** (all else is folded while presenting).
+       **Show it only while the key (N) is held** — the audience sees the same one screen. -->
+  <div id="stage-note" hidden></div></div>
+<!-- Narrowing and ordering one column, opened by the arrow `narrow.js` draws in its heading.
+     **The tick list and the condition are one panel, not two** (one means to one end).
+     **The values' order is the order that column sorts in** (the core settles it). -->
+<div id="narrow" hidden role="dialog" aria-label="Narrow and order this column">
+  <div class="narrow-row">
+    <button id="sort-down" type="button" title="Puts the rows in order, smallest first">Ascending</button>
+    <button id="sort-up" type="button" title="Puts the rows in order, largest first">Descending</button>
+  </div>
+  <!-- **It is the same narrowing as the ticks**: setting either takes the other off. -->
+  <div class="narrow-row">
+    <span>Show the rows where this column</span>
+    <div id="filter-kind"></div>
+    <input id="filter-text" type="text" size="8" placeholder="the value">
+    <button id="filter-apply" type="button">Narrow by this</button>
+  </div>
+  <!-- **Typing here only narrows the list shown, and never unticks anything.** -->
+  <div class="narrow-row">
+    <input id="narrow-find" type="search" size="12" placeholder="look for a value">
+  </div>
+  <div id="narrow-list" role="group" aria-label="The values this column shows"></div>
+  <div class="narrow-row"><span id="narrow-note"></span></div>
+  <div class="narrow-row">
+    <button id="narrow-ticked" type="button">Narrow to the ticked</button>
+    <button id="narrow-clear" type="button">Show every row</button>
+    <button id="narrow-shut" type="button">Close</button>
+  </div>
+</div>
+<!-- The split view: **lay it below** (sideways halves the width and re-places both). -->
+<div id="peek" hidden>
+  <div id="peek-head">
+    <span>Split view (read-only)</span>
+    <span id="peek-at"></span>
+  </div>
+  <canvas id="peek-page"></canvas>
+</div>
+
+<!-- The status bar. **Fix it at the bottom edge**, and put the notice out here alone. -->
+<div id="status">
+  <!-- **Place the mode first of all** — half the reasons a press does nothing are this.
+       Caution: **Always say which it is now**, or a mistyped switch goes unnoticed.
+       **The place that says which it is and the place that switches it are one.** -->
+  <span id="mode"></span>
+  <!-- Which file is open now, path and name (only the path tells same-named files apart).
+       **Do not trim the tail**: the front is trimmed, so the name always stays. -->
+  <span id="file-at"><span class="dir"></span><span class="name"></span></span>
+  <span id="where"></span>
+  <!-- Caution: **Say how many rows show while a filter hides some** — silent, it reads as a
+       table that lost them (`page.js` puts the text in). -->
+  <span id="narrowed"></span>
+  <span id="note"></span>
+  <span class="push"></span>
+  <span id="tally"></span>
+</div>
+<!-- Filled only when printing. **Do not leave it drawn** (the page grows heavy). -->
+<div id="sheets"></div>
+<!-- The texts, in the order "the using side last" (`page.js` assembles the parts).
+     Caution: **Keep the wasm's mark in the template**: the binder fills the template's marks once,
+     so a mark inside an embedded text is not filled. -->
+<script>const kspageWasmBase64 = "__KSPAGE_WASM_BASE64__";</script>
+<script>
+__KSPAGE_FILE:kspage.js__
+__KSPAGE_FILE:draw.js__
+__KSPAGE_FILE:draw_crop.js__
+__KSPAGE_FILE:pin.js__
+__KSPAGE_FILE:narrow.js__
+__KSPAGE_FILE:keys.js__
+__KSPAGE_FILE:api.js__
+__KSPAGE_FILE:api_io.js__
+__KSPAGE_FILE:api_look.js__
+__KSPAGE_FILE:api_diff.js__
+__KSPAGE_FILE:api_show.js__
+__KSPAGE_FILE:local.js__
+__KSPAGE_FILE:fly.js__
+__KSPAGE_FILE:handle.js__
+__KSPAGE_FILE:keep.js__
+__KSPAGE_FILE:file.js__
+__KSPAGE_FILE:save.js__
+__KSPAGE_FILE:inout.js__
+__KSPAGE_FILE:report.js__
+__KSPAGE_FILE:command.js__
+__KSPAGE_FILE:plugin.js__
+__KSPAGE_FILE:form.js__
+__KSPAGE_FILE:ribbon.js__
+__KSPAGE_FILE:side.js__
+__KSPAGE_FILE:peek.js__
+__KSPAGE_FILE:diff.js__
+__KSPAGE_FILE:source.js__
+__KSPAGE_FILE:here.js__
+__KSPAGE_FILE:drop.js__
+__KSPAGE_FILE:paper.js__
+__KSPAGE_FILE:page.js__
+</script>

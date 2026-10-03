@@ -1,0 +1,95 @@
+//< Checks that no published text passes a verdict on another product
+//<
+//< **A phrase that only ever judges is refused wherever it stands**, in documents and comments
+//< alike: another product is named for what it does, never for what it is thought of.
+//< Note: The rule itself is "Another product is named for its behavior, not judged" in
+//< `docs/SPEC-documents.md`; this file only feeds its verdict words to `make test-conventions`.
+import "std/chars" // `to_lower`
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" // `find_str` / `lines`
+import "std/strfmt" as _strfmt
+import "std/sys"
+import "std/verdict"
+import "tests/support/conventions_scan" as scan + { Sample }
+import "tests/support/harness"
+
+priv const verdict_words: U8[][12] = ::{ "classic accident", "classic mistake", "classic trap",
+  "well regarded", "ill regarded", "badly regarded", "poorly regarded", "earned its complaints",
+  "infamous", "notorious", "vaporware", "broken by design" } //<
+    //< The phrases, folded to lower case, that judge whatever they are said of
+    //<
+    //< Caution: **List only a phrase with no neutral use.** "A common complaint" names no one
+    //< and stays; "ahead of" and "better than" also say "ahead of time" and "better than nothing",
+    //< so they are the reader's to catch, not this list's.
+
+priv const verdict_globs: U8[][12] = ::{ "*.md", "*.kspls", "*.kspl", "*.js", "*.mjs", "*.c", "*.h",
+  "*.py", "*.html", "*.css", ":!private", ":!ksplc/seed.c" } //<
+    //< What is read: every published text except `private/` and the seed
+    //<
+    //< `private/` is never published, and the seed is a generated copy of the runtime's sources,
+    //< which are read themselves.
+
+priv const verdict_exempt: U8[][2] = ::{ "docs/SPEC-documents.md",
+  "tests/support/conventions_verdict.kspls" } //<
+    //< The files the words may stand in
+    //<
+    //< They are the rule, which quotes them as what not to write, and this list; a clone's own
+    //< documents (`harness.private_docs`), which are never published, are left out as well.
+
+fn holds_verdict(text: U8[], arena: Arena$@): Bool //< whether a line holds one of the phrases
+  b: = arena.text()
+  for c in text
+    b.c(c.to_lower())
+  low: = b.take()
+  for w in verdict_words
+    if low.find_str(w) >= 0
+      return true
+  return false
+
+priv const verdict_samples: Sample[6] = ::{
+  Sample::{ .text = "a binary semaphore pressed into exclusion is its classic accident",
+    .hits = true },
+  Sample::{ .text = "and neither is Well Regarded", .hits = true },
+  Sample::{ .text = "// the proliferation that earned its complaints", .hits = true },
+  // **A complaint naming no one is not a verdict**, so it stays.
+  Sample::{ .text = "an undeletable history is a common complaint", .hits = false },
+  Sample::{ .text = "Excel and Word put redo and repeat on one key", .hits = false },
+  Sample::{ .text = "the table is regarded as the source", .hits = false },
+}
+
+priv fn check_fires(arena: Arena$@)
+  $n: = scan.misjudged(Sample[]::verdict_samples, holds_verdict, arena)
+  verdict.check_list("the judgment of a verdict on another product can fire", verdict_samples.len,
+    "samples", n@, "the table of what is hit and what is not is `verdict_samples`")
+
+priv fn check_verdicts(arena: Arena$@)
+  $bad: = List<|U8[]|>.new(arena)
+  $seen: Sz = 0
+  own: = harness.private_docs()
+  for rel in harness.tracked_matching(U8[][]::verdict_globs)
+    $exempt: = false
+    for e in verdict_exempt
+      exempt =
+        exempt || rel.equals(e) ||
+        rel.ends_with(arena.text().s("/").s(e).take())
+    for o in own
+      exempt = exempt || sys.get_file_name(rel).equals(o)
+    if exempt
+      continue
+    seen += 1
+    $i: Sz = 0
+    for line in harness.read_under_root(rel).lines(arena)
+      i += 1
+      if holds_verdict(line, arena)
+        bad
+          .push(arena.text().s(rel).s(":\{i\}: ").s(line.trim_spaces()).take())
+  verdict.check_list("no published text passes a verdict on another product \
+    (docs/SPEC-documents.md)", seen, "files", bad@,
+    "say what the product does, and why that grounds the decision here")
+
+fn run(arena: Arena$@) //< this section's entry point
+  //<
+  //< Caution: **Call it from `suite/conventions_test.kspls`'s `main`** (there is one suite).
+  check_fires(arena)
+  check_verdicts(arena)

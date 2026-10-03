@@ -1,0 +1,245 @@
+//< A demo CLI for inference, LoRA fine-tuning on the device, and full end-to-end training
+//<
+//< The model is a minimal Llama-family one (`ksai/nn`'s `Mini_llama`), with a fixed small
+//< tokenizer (12 tokens) and `mini_llama.safetensors` embedded in the executable, so it runs from
+//< any folder.
+import "ksai/examples/llama_engine/model" as ai_model
+import "ksai/grad" as ai_grad // adds the loss/gradient operations to Tensor
+import "ksai/lora" as ai_lora
+import "ksai/safetensors" as ai_safetensors
+import "ksai/sampler" as ai_sampler
+import "ksai/tensor" { Tensor }
+import "ksai/tokenizer" as ai_tokenizer
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+import "std/prng"
+
+embed "ksai/examples/llama_engine/mini_llama.safetensors" as model_bytes //<
+  //< The weights the shape below is built for, found through the package wherever it is
+  //<
+  //< **Embedded, not read at run time**: a path would find them only from the repository's root.
+
+fn main()
+  io.out().s("=========================================\n")
+  io.out().s(" Kanso AI Engine - Text Generation\n")
+  io.out().s("=========================================\n")
+
+  model_arena: = Arena.new(1024 * 1024 * 100)
+  defer model_arena.free()
+
+  $tok: = ai_tokenizer.Tokenizer.new(model_arena)
+  tok.add_token("<unk>", 0)
+  tok.add_token("K", 1)
+  tok.add_token("a", 2)
+  tok.add_token("n", 3)
+  tok.add_token("s", 4)
+  tok.add_token("o", 5)
+  tok.add_token(" ", 6)
+  tok.add_token("an", 7)
+  tok.add_token("so", 8)
+  tok.add_token("Kan", 9)
+  tok.add_token("Kanso", 10)
+  tok.add_token("AI", 11)
+
+  tok.add_merge(2, 3, 7)
+  tok.add_merge(4, 5, 8)
+  tok.add_merge(1, 7, 9)
+  tok.add_merge(9, 8, 10)
+
+  // Caution: vocab_size (12) has to agree with the tokenizer's 12 token IDs above (embed's and
+  // lm_head's dimensions follow it); dim, hidden and n_layers are the minimum for a fast demo.
+  $llama: = ai_model.Mini_llama<|F32|>.new(12, 4, 8, 2, 128, model_arena)
+  // **It trains a copy.** The weights are views into the bytes they are read from, training writes
+  // them in place, and the embedded bytes are read-only, so the first step would fault.
+  weights: = model_arena.dup_str(model_bytes)
+  $st: = ai_safetensors.Safetensors.load_from_bytes(weights, model_arena) catch
+    io.err().s("[Error] Failed to read the model weights burned into this program\n")
+    return
+  // The copy lives in `model_arena` as long as the model; `free` releases nothing here, but stays
+  // so the code does not depend on where the bytes came from.
+  defer st.free()
+  llama.load_weights(st, model_arena) catch
+    io.err().s("[Error] Failed to map model weights (missing/invalid tensor)\n")
+    return
+
+  prompt: = "Kanso"
+  io.out().s("Prompt: ").s(prompt).s("\n\n")
+  io.out().s("Output: ").s(prompt)
+
+  tokens: = tok.encode(prompt)
+  // The generation loop assumes the prompt is one token ("Kanso" -> 10 with this merge table):
+  // it does not feed a longer prompt into the KV cache first, so start_pos and the cache would
+  // drift apart.
+  assert(tokens.len == 1,
+    "prompt must encode to exactly 1 token (see comment above the generation loop)")
+  // Top-p sampling with a temperature; the fixed seed makes it reproducible.
+  $rng: = prng.Prng.new(42U64)
+  cfg: = ai_sampler.Sample_config::{ .temperature = 0.8, .top_k = 0, .top_p = 0.9 }
+
+  max_gen_steps: = 5
+  for step in Range.asc(max_gen_steps)
+    step_arena: = Arena.new(1024 * 1024 * 10)
+    defer step_arena.free()
+
+    current_token: = tokens[tokens.len - 1]
+    logits: = llama.forward(current_token, step, step_arena)
+    next_token: = ai_sampler.sample(logits, cfg, rng@, step_arena)
+    tokens.push(next_token)
+
+    single_token_list: = List<|I32|>.create(step_arena)
+    single_token_list.push(next_token)
+    decoded_str: = tok.decode(single_token_list)
+    io.out().s(decoded_str)
+
+  io.out().s("\n\n=========================================\n")
+  io.out().s(" Generation Complete!\n")
+
+  lora_finetune_demo(llama@, tok@, model_arena)
+  lora_continual_stream_demo(llama@, tok@, model_arena)
+  full_finetune_demo(llama@, tok@)
+// ==========================================
+// The full-model end-to-end training demo: back-propagation updates every parameter from the
+// embedding to lm_head, fitting the next token to the target (train_step), and the loss must go
+// down.
+// ==========================================
+priv fn full_finetune_demo(llama: ai_model.Mini_llama<|F32|>$@, tok: ai_tokenizer.Tokenizer$@)
+  io.out().s("\n=========================================\n")
+  io.out().s(" Full-Model End-to-End Training (every layer is trained)\n")
+  io.out().s("=========================================\n")
+
+  tokens: = tok.encode("Kanso")
+  target: I32 = 11 // "AI" is what we want predicted next
+
+  $loss0: = 0.0
+  $loss_final: = 0.0
+  for step in Range.asc(50)
+    sa: = Arena.new(1024 * 1024 * 4)
+    defer sa.free()
+    loss: = llama.train_step(tokens, target, 0.05, sa)
+    if step == 0
+      loss0 = loss
+    loss_final = loss
+  io.out().s("Loss (next token = AI): \{loss0\} -> \{loss_final\}\n")
+  if loss_final < loss0
+    io.out().s(" -> End-to-end training of every layer brought the loss down.\n")
+    // **The line below is the verdict line, not the narrative above it**: `ci_check` greps for it
+    // (`make ci`'s AI step) and `ksai/tests/examples_main.kspls` reads it.
+    // Caution: **Keep the verdict line ASCII.** The grep is a Makefile recipe literal, and on
+    // Windows (MSYS2) make garbles a recipe's non-ASCII bytes on the way to sh, so a non-ASCII
+    // marker would not match the real output.
+    io.out().s("RESULT: ALL PASS (full-model end-to-end training loss decreased)\n")
+// ==========================================
+// The LoRA on-device fine-tuning demo: with the LM head as a frozen base, it trains only the
+// low-rank adapter to output a particular token after "Kanso".
+// ==========================================
+priv fn lora_finetune_demo(llama: ai_model.Mini_llama<|F32|>$@, tok: ai_tokenizer.Tokenizer$@,
+  model_arena: Arena$@)
+  io.out().s("\n=========================================\n")
+  io.out().s(" LoRA On-Device Fine-Tuning (the LM head is frozen)\n")
+  io.out().s("=========================================\n")
+
+  ctx_token: I32 = 10 // "Kanso"
+  target_token: I32 = 11 // "AI" is the token that must come next
+  probe: = Arena.new(1024 * 1024)
+  defer probe.free()
+  h0: = llama.forward_hidden(ctx_token, 0, probe)
+  before_pred: = ai_sampler.argmax(llama.lm_head.forward(h0))
+
+  // A rank=2 LoRA adapter against the LM head (dim=4 -> vocab=12)
+  $rng: = prng.Prng.new(7U64)
+  $lora: = ai_lora.Lora<|F32|>.new(4, 12, 2, 4.0, rng@, model_arena)
+
+  $loss0: = 0.0
+  for step in Range.asc(200)
+    sa: = Arena.new(1024 * 1024)
+    defer sa.free()
+    h: = llama.forward_hidden(ctx_token, 0, sa)
+    base: = llama.lm_head.forward(h) // the frozen base's output
+    $logits: = base + lora.forward(h)
+    loss: = logits.cross_entropy_loss(target_token)
+    if step == 0
+      loss0 = loss
+    dlogits: = logits.grad_softmax_cross_entropy(target_token)
+    lora.backward(h, dlogits, 0.3) // only A and B are updated (the base is frozen)
+  $after_logits: = predict_logits(llama, lora@, ctx_token, probe)
+  after_pred: = ai_sampler.argmax(after_logits)
+
+  io.out().s("The next-token prediction for the context 'Kanso':\n")
+  io.out().s("  Before: ").s(tok.decode_one(before_pred)).s(" (token \{before_pred\})\n")
+  io.out().s("  After : ").s(tok.decode_one(after_pred))
+    .s(" (token \{after_pred\}, target=\{target_token\})\n")
+  io.out().s("  Loss  : \{loss0\} -> \{after_logits.cross_entropy_loss(target_token)\}\n")
+  if after_pred == target_token
+    io.out().s(" -> LoRA fitted the target token with the base still frozen.\n")
+// ==========================================
+// The LoRA on-device continual-learning demo: unlike lora_finetune_demo's single example, it
+// learns (context, answer) pairs one at a time as a stream (online SGD).
+// ==========================================
+priv fn lora_continual_stream_demo(llama: ai_model.Mini_llama<|F32|>$@,
+  tok: ai_tokenizer.Tokenizer$@, model_arena: Arena$@)
+  io.out().s("\n=========================================\n")
+  io.out().s(" LoRA On-Device Continual Learning (a real data stream + replay)\n")
+  io.out().s("=========================================\n")
+
+  // A stream of context/answer pairs arriving one at a time: "Kanso" -> "AI" -> " " -> "Kan".
+  ctx_stream: I32[3] = ::{ 10, 11, 6 }
+  target_stream: I32[3] = ::{ 11, 6, 9 }
+  n_examples: Sz = 3
+
+  $rng: = prng.Prng.new(11U64)
+  $lora: = ai_lora.Lora<|F32|>.new(4, 12, 2, 4.0, rng@, model_arena)
+  probe: = Arena.new(1024 * 1024)
+  defer probe.free()
+
+  steps_per_example: Sz = 150 // enough rounds to converge on every example, replay included
+  for idx in Range.asc(n_examples)
+    for _step in Range.asc(steps_per_example)
+      // Replay: every example observed so far (0..idx), not only this one, is trained again on
+      // each step.
+      for j in Range.asc(idx + 1)
+        sa: = Arena.new(1024 * 1024)
+        defer sa.free()
+        h: = llama.forward_hidden(ctx_stream[j], 0, sa)
+        base: = llama.lm_head.forward(h) // the frozen base's output
+        $logits: = base + lora.forward(h) // the same adapter is reused
+        dlogits: = logits.grad_softmax_cross_entropy(target_stream[j])
+        lora.backward(h, dlogits, 0.3) // only A and B are updated (the base is frozen)
+    // Right after training: is every example observed so far still predicted
+    $kept_so_far: Sz = 0
+    for j in Range.asc(idx + 1)
+      logits: = predict_logits(llama, lora@, ctx_stream[j], probe)
+      if ai_sampler.argmax(logits) == target_stream[j]
+        kept_so_far += 1
+    io.out().s("  [\{idx + 1\}/\{n_examples\}] ").s(tok.decode_one(ctx_stream[idx])).s(" -> ")
+      .s(tok.decode_one(target_stream[idx]))
+      .s(" trained (kept so far \{kept_so_far\}/\{idx + 1\})\n")
+
+  io.out()
+    .s("\nThe retention check after one pass of the stream (catastrophic forgetting or not):\n")
+  $kept: Sz = 0
+  for idx in Range.asc(n_examples)
+    logits: = predict_logits(llama, lora@, ctx_stream[idx], probe)
+    pred: = ai_sampler.argmax(logits)
+    ok: = pred == target_stream[idx]
+    if ok
+      kept += 1
+    io.out().s("  ").s(tok.decode_one(ctx_stream[idx])).s(" -> ").s(tok.decode_one(pred))
+      .s(" (target=").s(tok.decode_one(target_stream[idx])).s(") ")
+      .s("OK\n" if ok else "FORGOTTEN\n")
+  io.out().s("Kept: \{kept\}/\{n_examples\}\n")
+  if kept == n_examples
+    io.out()
+      .s(" -> With experience replay, the whole stream was learned continually by one LoRA adapter, \
+        with no catastrophic forgetting.\n")
+  else
+    io.out()
+      .s(" -> Even with experience replay, a rank=2 low-rank adapter has too little capacity, so \
+        catastrophic forgetting happened on some examples (EWC and a larger rank are for later).\n")
+priv fn predict_logits(llama: ai_model.Mini_llama<|F32|>$@, lora: ai_lora.Lora<|F32|>$@,
+  ctx_token: I32, arena: Arena$@): Tensor<|F32|> //<
+    //< One token's logits: llama's LM head output with lora added
+    //<
+    //< It is the post-training check lora_finetune_demo and lora_continual_stream_demo share.
+  h: = llama.forward_hidden(ctx_token, 0, arena)
+  return llama.lm_head.forward(h) + lora.forward(h)

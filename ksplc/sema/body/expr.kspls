@@ -1,0 +1,468 @@
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/base/literal" as base_literal
+import "ksplc/sema/body/analyze" as sema_body_analyze
+import "ksplc/sema/body/binary" as sema_body_binary
+import "ksplc/sema/body/call" as sema_body_call
+import "ksplc/sema/body/coerce" as sema_body_coerce
+import "ksplc/sema/body/literal" as sema_body_literal
+import "ksplc/sema/body/postfix" as sema_body_postfix
+import "ksplc/sema/body/resolve_path" as sema_body_resolve_path
+import "ksplc/sema/body/stmt" as sema_body_stmt
+import "ksplc/sema/body/struct_literal" as sema_body_struct_literal
+import "ksplc/sema/decl/eval" as sema_decl_eval
+import "ksplc/sema/decl/mono" as sema_decl_mono
+import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/decl/trait_check" as sema_decl_trait_check
+import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
+import "ksplc/sema/type/def" as sema_type_def
+import "ksplc/sema/type/display" as sema_type_display
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
+import "std/chars"
+import "std/str"
+
+impl Ast_node
+  fn infer_enum_payload_args(r: Self$@, c: Sema_ctx$@,
+    variant_def: sema_type_def.Enum_variant$@): Void?Sema_error //<
+      //< Infers an enum_init_call's payload arguments, each against its variant field's type
+      //<
+      //< The node itself is the argument list. The call path and the expr path both use it.
+    $arg_idx: Sz = 0
+    for arg_node in r.children
+      if arg_node.is_literal(",")
+        continue
+      $expected_arg_id: = I32::sema_type_env.Builtin_type_id.unknown
+      if variant_def != null && arg_idx < variant_def.payload_fields.len
+        expected_arg_id = variant_def.payload_fields.get(arg_idx).type_id
+      arg_node.infer_expr(c, expected_arg_id)?
+      arg_idx += 1
+
+  fn infer_expr(r: Self$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error
+    if r == null
+      return I32::sema_type_env.Builtin_type_id.unknown
+
+    // k_expr_catch / k_result_wrap / k_expr_catch_chain build or unpack a Result, so they see the
+    // expected Result unchanged; any other expression gets only the inner value type.
+    $effective_expected: = expected_id
+    if c.env.is_result(effective_expected)
+      k: = r.kind_id
+      if k != .k_expr_catch && k != .k_result_wrap && k != .k_expr_catch_chain
+        effective_expected = c.env.strip_result(effective_expected)
+
+    // An explicit cast ("::") in the postfix chain fixes the result type, so the outer expected
+    // type is not passed down; if it were, a needless cast would read as an implicit conversion
+    // and the redundant-cast check would go wrong.
+    if r.has_explicit_cast_in_chain()
+      effective_expected = I32::sema_type_env.Builtin_type_id.unknown
+
+    $type_id: = I32::sema_type_env.Builtin_type_id.unknown
+    switch r.kind_id case .k_expr_catch_chain
+      type_id = infer_catch_chain(r, c, effective_expected)?
+    case .k_literal, .k_integer, .k_null, .k_bool, .k_float
+      type_id = sema_body_literal.infer_literal_expr(r, c, effective_expected)
+    case .k_primitive_type
+      type_id = infer_primitive_type(r, c, effective_expected)?
+    case .k_char
+      type_id = infer_char_expr(r, c, effective_expected)?
+    case .k_expr_sizeof
+      type_id = infer_sizeof_expr(r, c, effective_expected)?
+    case .k_expr_offsetof
+      type_id = infer_offsetof_expr(r, c, effective_expected)?
+    case .k_string
+      type_id = infer_string_expr(r, c, effective_expected)?
+    case .k_string_interp
+      // Only `w.s("...\{x\}")` is expanded into a chain (ksplc/parse/desugar.kspls); one arriving
+      // here has nowhere to go as a value. Allowed, it reaches Genc as a `string_interp`: an ICE.
+      c.err(r,
+        "string interpolation can only be written as the argument of a writer chain (e.g. \
+          'io.out().s(\"...\")' or 'b.s(\"...\")'); it streams into the writer instead of producing \
+          a value. Build the value with 'Str_builder' first, then pass '.slice()'")
+      type_id = c.slice_type_of(c.env.make_const(c.env.get_or_add("U8")))
+    case .k_expr_implicit_dot, .k_implicit_enum, .k_enum_init, .k_enum_init_call
+      type_id = infer_implicit_enum_expr(r, c, effective_expected)?
+    case .k_struct_literal, .k_expr_compound
+      type_id = sema_body_struct_literal.infer_struct_literal_expr(r, c, effective_expected)?
+    case .k_identifier, .k_expr_path, .k_type_path, .k_generic_path
+      type_id = sema_body_resolve_path.infer_path_expr(r, c, effective_expected)?
+    case .k_expr_postfix, .k_method_access, .k_generic_method
+      type_id = sema_body_postfix.infer(r, c, effective_expected)?
+    case .k_expr_unary
+      type_id = infer_unary_expr(r, c, effective_expected)?
+    case .k_expr
+      type_id = sema_body_binary.infer_binary_expr(r, c, effective_expected)?
+    case .k_expr_ternary
+      type_id = infer_ternary_expr(r, c, effective_expected)?
+    case .k_expr_upcast
+      type_id = infer_upcast_expr(r, c, effective_expected)?
+    default
+      type_id = infer_unknown_expr_type(r, c, effective_expected)
+
+    return r.settle_expected(c, type_id, expected_id)?
+
+  fn settle_expected(r: Self$@, c: Sema_ctx$@, type_id: I32, expected_id: I32): I32?Sema_error //<
+    //< Applies the outer expected type to an expression whose inference has finished
+    //<
+    //< Caution: **Do not duplicate this final step.** Only a `-`'s left-hand side is inferred
+    //< without the expected type (`infer_binary_expr` in `binary.kspls`), and it reapplies the
+    //< type through here.
+    settled: = r.apply_type_coercion(c, type_id, expected_id)
+    r.check_unnecessary_cast(c, expected_id)?
+    r.type_id = settled
+    return settled
+
+priv fn infer_primitive_type(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I32): I32?Sema_error
+  // A type is not a value. Allowed, it would reach genc as a bare `Primitive_type` node: an ICE
+  // rather than an answer (Principle 8 in `../../../docs/DESIGN.md`).
+  c.clear_scratch()
+    .s("'\{node.text\}' names a type, and a type is not a value. Write the value itself, a cast \
+      ('\{node.text\}::x'), or a static held on it ('\{node.text\}.width()')")
+  c.err(node, c.scratch.slice())
+  return c.env.get_or_add(node.text)
+
+priv fn check_literal_escapes(node: Ast_node$@, c: Sema_ctx$@, one_byte: Bool) //<
+  //< Rejects a literal with a malformed escape or character
+  //<
+  //< For example a `\b`, a `\u` short of digits, or a character that does not fit in one byte.
+  //<
+  //< Caution: **Do not copy the list of accepted escapes here.** Its canonical source is
+  //< is_known_escape in base/literal.kspls (paired with literal_escape_byte). Call this for both
+  //< strings and characters, or a `'\b'` passes; one_byte is true for a character.
+  found: = base_literal.literal_fault(node.text, one_byte)
+  if found.fault == .none
+    return
+  spell: = node.text.sub(found.at, found.len)
+  m: = c.clear_scratch()
+  switch found.fault case .unknown
+    m
+      .s("unknown escape '\{spell\}'; a literal takes only \\n \\r \\t \\0 \\' \\\" \\\\ \\{ \\} \
+        \\uXXXX, and in a string a \\ at the line's end carrying the text onto the next line. Write \
+        the character itself without the backslash, or '\\\\' for a backslash")
+  case .short_hex
+    m
+      .s("'\\u' takes exactly four hexadecimal digits (for example '\\u00E9'), but '\{spell\}' is \
+        not four of them")
+  case .surrogate
+    m
+      .s("'\{spell\}' names a surrogate (U+D800 to U+DFFF), which is not a character. Write the \
+        character itself, or the code point it stands for")
+  case .wide_in_char
+    m
+      .s("'\{spell\}' is more than one byte in UTF-8, and a character literal is one byte. Use a \
+        string literal, or keep '\\u' at U+007F or below")
+  case .wide_char_body
+    m
+      .s("a character literal holds exactly one byte, but '\{spell\}' is more than one. Use a \
+        string literal (\"…\") for text that does not fit in a byte")
+  default {}
+  c.err(node, c.scratch.slice())
+
+priv fn infer_char_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error
+  check_literal_escapes(node, c, true)
+  u8_id: = c.env.get_or_add("U8")
+  const_u8_id: = c.env.make_const(u8_id)
+  return expected_id if expected_id == const_u8_id else u8_id
+
+priv fn infer_sizeof_expr(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I32): I32?Sema_error
+  inner: = node.get_sizeof_target()
+  if inner != null
+    if inner.kind_id == .k_type_expr
+      inner.resolve_type(c)?
+    else
+      inner.infer_expr(c, I32::sema_type_env.Builtin_type_id.unknown)?
+  return I32::sema_type_env.Builtin_type_id.size_type
+
+priv fn infer_offsetof_expr(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I32): I32?Sema_error //<
+  //< An `offsetof(T, f)` is a `Sz` (like `sizeof`)
+  //<
+  //< **The field name is not typed.** It goes as written to `field_offset_of` in
+  //< `sema/decl/layout.kspls`; resolved as an identifier, it would match a local of the same name
+  //< and give a wrong offset with no diagnostic.
+  inner: = node.get_offsetof_type()
+  if inner != null
+    inner.resolve_type(c)?
+  // Folded only for its diagnostics (not a struct, no such field); without it an `offsetof`
+  // outside a constant's context reaches Genc undiagnosed.
+  node.eval_constexpr_wide(c) catch {}
+  return I32::sema_type_env.Builtin_type_id.size_type
+
+priv fn infer_string_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error //<
+  //< The only place that decides which type a string literal takes to match the expected type
+  //<
+  //< `Void immut@` is for C's format arguments: `printf` takes a plain `char*`, which KSPL cannot
+  //< name (one byte is `U8`: "Primitive types" in docs/SPEC-language.md), and a void pointer fits
+  //< both the hosted stdio.h and the freestanding declaration.
+  //< Caution: **Do not add `U8@`.** One of the two then always mismatches in sign (-Wpointer-sign).
+  check_literal_escapes(node, c, false)
+  u8_ptr_id: = c.env.make_ptr(c.env.make_const(c.env.get_or_add("U8")))
+  u8_ptr_id2: = c.env.make_ptr(c.env.get_or_add("U8"))
+  u8_slice_id: = c.slice_type_of(c.env.get_or_add("U8"))
+  void_ptr_id: = c.env.make_ptr(c.env.make_const(c.env.get_or_add("Void")))
+  if expected_id == u8_ptr_id || expected_id == u8_ptr_id2 || expected_id == u8_slice_id ||
+    expected_id == void_ptr_id
+    return expected_id
+  return c.slice_type_of(c.env.make_const(c.env.get_or_add("U8")))
+
+priv fn infer_unary_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error
+  inner: = node.get_unary_target()
+  op: = node.get_unary_op().text
+  // Passes the sign to the literal's range check (the reason is at Fn_ctx.literal_negated); set
+  // only when a literal is directly below, so it does not leak into a nested expression.
+  outer_negated: = c.fn_ctx.literal_negated
+  c.fn_ctx.literal_negated = op.equals("-") && inner.kind_id == .k_integer
+  inner_type_id: = inner.infer_expr(c, expected_id)?
+  c.fn_ctx.literal_negated = outer_negated
+
+  // Caution: **Do not let `-` or `~` on a `Bool` pass.** On C's `_Bool`, `-true` and `~true`
+  // truncate `-1` and `-2`, so **both return `true`**; `!` is the negation (Principle 5; the
+  // binary counterpart is `is_bool_arith_operand` in `binary.kspls`).
+  if (op.equals("-") || op.equals("~")) && c.env.is_bool(inner_type_id)
+    $shown: = c.env.display_str(inner_type_id)
+    defer shown.free()
+    c.clear_scratch().s("Unary operator '\{op\}' cannot be applied to '\{shown.slice()\}'; ")
+      .s("use '!' to negate, and convert first ('I32::flag') for arithmetic")
+    c.err(node, c.scratch.slice())
+    return I32::sema_type_env.Builtin_type_id.unknown
+
+  method_name: = "neg" if op.equals("-") else ("not" if op.equals("!") else "")
+  trait_name: = "Neg" if op.equals("-") else ("Not" if op.equals("!") else "")
+
+  if method_name.len > 0
+    resolved: = c.resolve_operator_call(inner_type_id, trait_name, method_name, "Unary operator",
+      op, node)
+    switch resolved case .user(method_sym)
+      node.def_node = method_sym.node
+      node.type_id = method_sym.type_id
+      return method_sym.type_id
+    case .failed
+      return I32::sema_type_env.Builtin_type_id.unknown
+    case .builtin {}
+  return inner_type_id
+
+priv fn infer_ternary_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error
+  node.ice_assert(node.children.len == 3, "Ternary expression must have exactly 3 children")
+  cond_node: = node.get_ternary_cond()
+  true_node: = node.get_ternary_true()
+  false_node: = node.get_ternary_false()
+
+  cond_node.infer_expr(c, I32::sema_type_env.Builtin_type_id.bool_type)?
+
+  t_id: = true_node.infer_expr(c, expected_id)?
+  f_id: = false_node.infer_expr(c, expected_id)?
+
+  $final_id: = t_id if !sema_type_env.is_unknown(t_id) else f_id
+
+  if !sema_type_env.is_unknown(t_id) && !sema_type_env.is_unknown(f_id) && t_id != f_id
+    if c.env.is_numeric(t_id) && c.env.is_numeric(f_id)
+      final_id = c.env.get_promoted_numeric_type(t_id, f_id)
+    else
+      real_t: = c.env.get_real_type(t_id)
+      real_f: = c.env.get_real_type(f_id)
+      void_ptr: = I32::sema_type_env.Builtin_type_id.void_ptr
+
+      if real_t == void_ptr && (c.env.is_pointer(f_id) || c.env.is_fn_ptr(f_id))
+        final_id = f_id
+      else if real_f == void_ptr &&
+        (c.env.is_pointer(t_id) || c.env.is_fn_ptr(t_id))
+        final_id = t_id
+      else
+        t_str: = c.env.get_str(t_id)
+        f_str: = c.env.get_str(f_id)
+        // As in apply_type_coercion (`coerce.kspls`), the shapes are compared with immutability
+        // stripped at every level; when they agree, the result is the immutable side (the safe
+        // direction).
+        t_is_const: = c.env.has_const_deep(t_id)
+        f_is_const: = c.env.has_const_deep(f_id)
+
+        if c.env.same_shape_ignoring_const(t_id, f_id) && (t_is_const || f_is_const)
+          final_id = t_id if t_is_const else f_id
+        else if c.env.is_const_compatible(t_id, f_id)
+          // One level of weakening on a **type argument** (`Slice<|$U8|>` → `Slice<|U8|>`,
+          // generic_arg_weakens in `../type/query.kspls`), which the arm above, looking at
+          // `Info.const_of`, misses. The result is the immutable side, as when passing an
+          // argument (the matching arm in `coerce.kspls`).
+          final_id = f_id
+        else if c.env.is_const_compatible(f_id, t_id)
+          final_id = t_id
+        else
+          c.clear_scratch()
+            .s("ternary operator branches have incompatible types: '\{t_str\}' and '\{f_str\}'")
+          c.err(node, c.scratch.slice())
+          throw Sema_error.analysis_failed
+
+  true_node.apply_type_coercion(c, t_id, final_id)
+  false_node.apply_type_coercion(c, f_id, final_id)
+
+  return final_id
+
+priv fn infer_unknown_expr_type(_node: Ast_node$@, _c: Sema_ctx$@, _expected_id: I32): I32
+  return I32::sema_type_env.Builtin_type_id.unknown
+
+priv fn infer_upcast_expr(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I32): I32?Sema_error
+  if node.children.len > 0
+    inner: = node.get_upcast_inner()
+    inner.infer_expr(c, I32::sema_type_env.Builtin_type_id.unknown)?
+  return node.type_id
+
+priv fn infer_catch_chain(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32?Sema_error
+  // Read and cleared at once: the flag applies to this catch alone; a catch nested in its subject
+  // or arguments passes its value to a reader.
+  value_unread: = ctx.fn_ctx.catch_value_unread
+  ctx.fn_ctx.catch_value_unread = false
+  left: = node.get_catch_chain_expr()
+  catch_node: = node.get_catch_chain_catch()
+
+  current_id: = left.infer_expr(ctx, I32::sema_type_env.Builtin_type_id.unknown)?
+  // Caution: **Put the same check as `?`'s here too** (`'?' operator can only be applied to a
+  // Result type` in sema/body/postfix.kspls). Otherwise the C reads `.is_err` on a non-Result and
+  // the C compiler fails with zero ksplc diagnostics (Principle 2).
+  if !sema_type_env.is_unknown(current_id) && !ctx.env.is_result(current_id)
+    ctx.err(node, "'catch' operator can only be applied to a Result type")
+  base_id: = ctx.env.strip_result(current_id)
+  $is_result_overall: = false
+
+  $err_id: U8[] = ""
+  $err_id_node: Ast_node$@ = null
+  $target_block: Ast_node$@ = null
+  $target_expr: Ast_node$@ = null
+
+  for ch in catch_node.children
+    if ch.kind_id == .k_identifier
+      err_id = ch.text
+      err_id_node = ch
+    else if ch.kind_id == .k_stmt_block
+      target_block = ch
+    else if ch.kind_id != .k_keyword && ch.kind_id != .k_stmt_block
+      target_expr = ch
+
+  err_type_id: = ctx.env.get_result_err_id(current_id)
+  $fb_is_result: = false
+
+  if target_block != null
+    if base_core.config.run_lint_checks && err_id.len > 0
+      $stmt_count: = 0
+      $target_stmt: Ast_node$@ = null
+      for c_node in target_block.children
+        if c_node.kind_id != .k_empty && c_node.kind_id != .k_underscore
+          stmt_count += 1
+          target_stmt = c_node
+      if stmt_count == 1 && target_stmt != null && target_stmt.kind_id == .k_stmt_throw
+        throw_expr: = target_stmt.get_throw_expr()
+        // A bare variable is a k_expr_path after normalization; checking k_identifier alone would
+        // miss `throw e` (as with W0204).
+        if throw_expr != null && throw_expr.is_path_or_ident()
+          if throw_expr.get_path_or_ident_name().equals(err_id)
+            ctx.information(catch_node,
+              "[I0703] Redundant error propagation. Consider using '?' instead of 'catch e { throw \
+                e; }'.")
+
+    ctx.symtab.enter_scope()
+    prev_fb_type: = ctx.fn_ctx.fallback_type
+    ctx.fn_ctx.fallback_type = base_id
+    ctx.fn_ctx.catch_depth += 1
+    if err_id.len > 0
+      err_sym: = Sema_symbol.new(sema_type_scope.Sym_kind.variable, err_id, err_id_node)
+      err_sym.type_id = err_type_id
+      ctx.declare_symbol(err_id, err_sym, false)
+      err_id_node.def_node = err_id_node
+      err_id_node.type_id = err_type_id
+    target_block.infer_stmts(ctx)?
+    // Caution: **A handler in a value position must produce a value.** Reaching its end would
+    // silently leave the zero value, while `catch alt()` produces one, so the two spellings would
+    // silently differ (Principle 8 in `../../../docs/DESIGN.md`).
+    if !value_unread && !sema_type_env.is_void(base_id) && !sema_type_env.is_unknown(base_id) &&
+      !target_block.is_guaranteed_to_leave(true)
+      ctx.clear_scratch()
+        .s("'catch' is expected to produce '\{ctx.env.get_str(base_id)\}', but control may reach ")
+        .s("the end of its block without 'fallback'")
+      ctx.err(catch_node, ctx.scratch.slice())
+    ctx.fn_ctx.catch_depth -= 1
+    ctx.fn_ctx.fallback_type = prev_fb_type
+    ctx.symtab.exit_scope()
+  else if target_expr != null
+    $exp_for_fb: = expected_id
+    if sema_type_env.is_unknown(exp_for_fb) || sema_type_env.is_void(exp_for_fb)
+      exp_for_fb = base_id
+    // Caution: **Set the same flag as the `fallback` statement.** It lets a `#noreturn` call pass
+    // at a value position (sema/body/coerce.kspls); without it here, only `catch panic(…)` would be
+    // rejected.
+    prev_in_fallback: = ctx.fn_ctx.in_fallback_value
+    ctx.fn_ctx.in_fallback_value = true
+    fb_is_result = ctx.env.is_result(target_expr.infer_expr(ctx, exp_for_fb)?)
+    ctx.fn_ctx.in_fallback_value = prev_in_fallback
+
+  if fb_is_result
+    is_result_overall = true
+
+  return ctx.env.make_result(base_id) if is_result_overall else base_id
+
+fn mark_variant_used(c: Sema_ctx$@, enum_name: U8[], variant_name: U8[]) //<
+  //< Marks `Enum.variant`'s symbol used, for a variant written as the shorthand `.variant`
+  //<
+  //< The shorthand (in an expression or a `case`) skips symbol resolution, so unless marked used
+  //< here the unused-symbol warnings ([W0206] and the like) misfire.
+  name: = c.clear_scratch().s(enum_name).s(".").s(variant_name).slice()
+  sym: = c.symtab.resolve(name) catch null
+  if sym != null
+    sym.flags.is_used = true
+
+priv fn infer_implicit_enum_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32):
+  I32?Sema_error
+  if sema_type_env.is_unknown(expected_id) || sema_type_env.is_void(expected_id)
+    c.err(node,
+      "cannot infer enum type for implicit variant. Context does not provide an expected type.")
+    return expected_id
+
+  enum_name: = c.env.get_str(expected_id)
+  $enum_def: sema_type_def.Enum_def$@ = null
+  switch c.env.get_enum_def(enum_name) case .some(d)
+    enum_def = d
+  case .none
+    c.err(node, "Type Error")
+    return expected_id
+
+  variant_node: = node.get_implicit_enum_variant()
+  node.ice_assert(variant_node != null, "implicit_enum is missing variant node")
+  variant_name: = variant_node.text
+  $variant_def: sema_type_def.Enum_variant$@ = null
+  switch enum_def.get_variant(variant_name) case .some(d)
+    variant_def = d
+  case .none
+    c.clear_scratch().s("enum '\{enum_name\}' has no variant named '\{variant_name\}'")
+    c.err(node, c.scratch.slice())
+    return expected_id
+  variant_node.def_node = variant_def.node
+  node.def_node = variant_def.node
+  mark_variant_used(c, enum_name, variant_name)
+
+  args_node: = node.get_implicit_enum_args()
+  if args_node != null && args_node.kind_id == .k_expr_args
+    node.set_kind(.k_enum_init_call)
+    inner_enum: = Ast_node.new(.k_enum_init, "enum_init", node.loc)
+    inner_enum.add_child(variant_node)
+    inner_enum.type_id = expected_id
+    flat: = base_ast.new_ast_node_list()
+    flat.push(inner_enum)
+    flat.push(args_node)
+    node.children = flat
+
+    sema_body_call.check_variant_call_arity(c, node, args_node, variant_def, true)
+    args_node.infer_enum_payload_args(c, variant_def)?
+  else
+    sema_body_call.check_variant_call_arity(c, node, null, variant_def, false)
+    node.set_kind(.k_enum_init)
+    flat: = base_ast.new_ast_node_list()
+    flat.push(variant_node)
+    node.children = flat
+  return expected_id
+
+fn infer_expr_of(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error //<
+  //< The function stored in Sema_ctx.infer_expr_fn
+  //<
+  //< A `sizeof(<expr>)` in a declaration gets its type here (infer_expr_fn in
+  //< sema/session/ctx.kspls; set in ksplc/pipeline.kspls).
+  return node.infer_expr(c, expected_id)?

@@ -1,0 +1,54 @@
+import "std/verdict"
+import "tools/ai_assist/corpus_count" as count
+
+// ==========================================
+// Tests the functions that count the training material (`tools/ai_assist/corpus_count.kspls`).
+//
+// It is tested because **a mistake here breaks nothing visible**: a wrong word boundary or an
+// extra line gives a plausible number, which looks the same as the material growing.
+// Caution: Test each case that matches together with one that does not.
+// ==========================================
+
+fn test_which_folder_is_left_out() //< `negative` is the only folder left out of the scan
+  //<
+  //< It keeps broken spellings out of the material.
+  verdict.start("[tools/ai_assist] the folders left out of the material test...")
+  assert(count.skip_dir("negative"), "negative is left out")
+  // **Do not skip on a partial match** (a folder with a similar name would be skipped too).
+  assert(!count.skip_dir("negatives"), "negatives is not left out")
+  assert(!count.skip_dir("runtime"), "runtime is not left out")
+  assert(!count.skip_dir(""), "an empty name is not left out")
+  verdict.pass("only `negative` is left out; a merely similarly named folder stays.")
+
+fn test_counting_words() //< words split on whitespace, a run of it being one boundary
+  verdict.start("[tools/ai_assist] how words are counted test...")
+  assert(count.count_words("") == 0, "an empty spelling is 0 words")
+  assert(count.count_words("   ") == 0, "whitespace alone is 0 words")
+  assert(count.count_words("abc") == 1, "one word")
+  assert(count.count_words("a b c") == 3, "split on whitespace")
+  // **Do not add a run of whitespace to the word count.**
+  assert(count.count_words("a    b") == 2, "whitespace in a row does not add words")
+  assert(count.count_words("  a b  ") == 2, "whitespace before and after is not a word")
+  assert(count.count_words("a\nb\tc") == 3, "a newline and a tab are boundaries too")
+  verdict.pass("words split on whitespace, and neither a run nor surrounding whitespace adds one.")
+
+fn test_counting_lines() //< the lines are the newline count + 1, an empty text counting as one
+  verdict.start("[tools/ai_assist] how lines are counted test...")
+  // **Do not count from 0**: one line with no newline is 1 line.
+  assert(count.count_lines("") == 1, "an empty spelling is 1 line too")
+  assert(count.count_lines("abc") == 1, "with no newline it is 1 line")
+  assert(count.count_lines("a\nb") == 2, "one newline makes 2 lines")
+  // A trailing newline adds one more line (the empty last line counts).
+  assert(count.count_lines("a\n") == 2, "a trailing newline counts as one too")
+  assert(count.count_lines("a\nb\nc") == 3, "two newlines make 3 lines")
+  verdict.pass("the lines are the newline count plus 1, and even an empty spelling is 1 line.")
+
+fn test_the_token_estimate() //< the estimate is the larger of the length / 4 and the word count
+  verdict.start("[tools/ai_assist] the token estimate test...")
+  // With few, long words, the length wins.
+  assert(count.approx_tokens("aaaaaaaaaaaaaaaa") == 4, "one long word is estimated by the length")
+  // **Do not let it drop below the word count** (with short words, length / 4 is smaller).
+  assert(count.approx_tokens("a b c d e f g h") == 8,
+    "short words in a row are estimated by the word count")
+  assert(count.approx_tokens("") == 0, "an empty spelling is 0")
+  verdict.pass("the estimate is the larger of the length / 4 and the word count, below neither.")

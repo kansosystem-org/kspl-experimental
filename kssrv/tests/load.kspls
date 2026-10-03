@@ -1,0 +1,274 @@
+//< Measures static serving **only while** heavy requests are being sent to it
+//<
+//< It is not a suite of its own; it is part of `kssrv/tests/main.kspls`.
+
+// ==========================================
+// Caution: **Limit the measuring window to the load's duration**, or the fast responses after it
+// fill the sample and pull the median down even where the server was clogged.
+// ==========================================
+// **Count a job's duration only for requests that returned 200**: a refused one did no computing
+// and would shorten "one job's worth".
+// **Give each thread its own arena**: a shared one corrupts its allocations and sometimes crashes.
+// **Measure idle first**: static serving has a fixed cost that varies by environment, and the
+// delay is the increase above it.
+// ==========================================
+import "kssrv/tests/client"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/sys"
+import "std/thread"
+import "std/verdict"
+
+priv const serve_ratio: I64 = 4I64 //<
+  //< How many times shorter than one heavy job the delay the load adds to static serving must be
+  //<
+  //< Below it, the listening thread is computing (serialised, the delay nears one job). **It is
+  //< compared with a job's duration under load**, which queueing lengthens, so it is lenient.
+priv const min_probes: Sz = 10 //< the smallest sample count that gives a median
+  //<
+  //< A shorter load window counts as unmeasured. The idle samples take this count too, so the
+  //< subtraction compares like with like.
+priv const probe_gap_ms: I32 = 5 //<
+  //< The interval at which the static serving is measured (milliseconds)
+priv const flood_cap_ratio: Sz = 20 //<
+  //< How many times `reps` the load may be extended while the samples are collected
+  //<
+  //< **Only so it stops if the measuring thread dies** (a full sample ends it earlier).
+priv const thread_chunk: Sz = 256 * 1024 //< the arena chunk size for one thread
+priv const shown_errors: Sz = 2 //< how many failures the message includes
+
+struct Load_out //< what was measured
+  // The median duration of the static serving under the load (microseconds).
+  static_us: I64
+  // The same median, measured as many times before the load (microseconds); subtracting it leaves
+  // "the delay the load added".
+  idle_us: I64
+  // The median duration of one heavy job (microseconds).
+  job_us: I64
+  probes: Sz
+  jobs: Sz
+  // Every static request returned 200, with no connection failure either.
+  served: Bool
+  // The first few failures, described.
+  why: U8[]
+
+priv struct Flood_ctx //< the state of a thread that keeps sending heavy requests
+  port: I32
+  raw: U8[]
+  reps: Sz
+  // The count of samples the measuring thread has collected, and the count wanted. **The load
+  // continues until they meet** (the caution inside `flood_entry`).
+  taken: thread.Atomic_sz$@
+  want: Sz
+  // The cap on keeping the load on.
+  // Caution: **It must stop if the measuring thread dies.**
+  cap: Sz
+  // Where the results go (never rewound).
+  res: Arena$@
+  // The working arena, rewound for every request.
+  tmp: Arena$@
+  jobs: List<|I64|>$@
+  errs: List<|U8[]|>$@
+
+priv struct Probe_ctx //< the state of the thread that keeps measuring static serving
+  port: I32
+  raw: U8[]
+  done: thread.Atomic_sz$@
+  // The counter that tells the load threads how many samples have been collected. **Only this
+  // thread writes it**, so no atomic add is needed.
+  taken: thread.Atomic_sz$@
+  res: Arena$@
+  tmp: Arena$@
+  lat: List<|I64|>$@
+  errs: List<|U8[]|>$@
+  // The connection this thread keeps, opened once. Null until the first request, and again after a
+  // failure drops it.
+  conn: client.Conn$@
+
+priv fn one_job(c: Flood_ctx$@)
+  mark: = c.tmp.save()
+  t0: = sys.mono_us()
+  got: =
+    client.request(c.port, c.raw, 1, client.job_timeout_ms, false, c.tmp) catch e
+    c.errs.push(e.reason())
+    c.tmp.restore(mark)
+    return
+  if got.get(0).status == 200
+    c.jobs.push(sys.mono_us() - t0)
+  c.tmp.restore(mark)
+
+priv fn flood_entry(c: Flood_ctx$@): Void$@
+  for _k in Range.asc(c.reps)
+    one_job(c)
+  // **Keep the load on until enough samples are collected**; stopped after `reps` requests, the
+  // environment's speed would decide the sample count.
+  // Caution: **Do not keep measuring after the load has ended**: idle values mix in, and the test
+  // stops catching the listening thread doing a job itself. It is the load that is extended.
+  for c.taken.load() < c.want && c.jobs.len < c.cap
+    one_job(c)
+  return Void$@::c
+
+priv fn drop_conn(c: Probe_ctx$@) //<
+  //< Drops the connection, so the next request opens a fresh one
+  if c.conn == null
+    return
+  c.conn.free()
+  c.conn = null
+
+priv fn one_probe(c: Probe_ctx$@) //< one static request, timed
+  //<
+  //< Caution: **Open the connection once and keep it.** A fresh connect per request also times the
+  //< OS's accept backlog, which grows with the load's connections and which idle cannot subtract.
+  if c.conn == null
+    c.conn = client.Conn.open_in(c.port, c.res) catch e0
+      c.errs.push(e0.reason())
+      return
+  mark: = c.tmp.save()
+  t0: = sys.mono_us()
+  c.conn.send(c.raw) catch e1
+    c.errs.push(e1.reason())
+    drop_conn(c)
+    c.tmp.restore(mark)
+    return
+  got: = c.conn.next(false, client.default_timeout_ms, c.tmp) catch e
+    c.errs.push(e.reason())
+    drop_conn(c)
+    c.tmp.restore(mark)
+    return
+  if got.status != 200
+    c.errs.push("the static serving did not return 200")
+  c.lat.push(sys.mono_us() - t0)
+  c.tmp.restore(mark)
+
+priv fn probe_entry(c: Probe_ctx$@): Void$@
+  for c.done.load() == 0
+    one_probe(c)
+    c.taken.store(c.lat.len)
+    sys.sleep_ms(probe_gap_ms)
+  return Void$@::c
+
+priv fn new_flood(port: I32, raw: U8[], reps: Sz, taken: thread.Atomic_sz$@, arena: Arena$@):
+  Flood_ctx$@
+  res: = Arena.new(thread_chunk)
+  c: = Flood_ctx$@::arena.alloc(sizeof(Flood_ctx))
+  c$ = Flood_ctx::{ .port = port, .raw = raw, .reps = reps, .taken = taken, .want = min_probes,
+    .cap = reps * flood_cap_ratio, .res = res, .tmp = Arena.new(thread_chunk),
+    .jobs = List<|I64|>.create(res), .errs = List<|U8[]|>.create(res) }
+  return c
+
+priv fn new_probe(port: I32, raw: U8[], done: thread.Atomic_sz$@, taken: thread.Atomic_sz$@,
+  arena: Arena$@): Probe_ctx$@
+  res: = Arena.new(thread_chunk)
+  c: = Probe_ctx$@::arena.alloc(sizeof(Probe_ctx))
+  c$ = Probe_ctx::{ .port = port, .raw = raw, .done = done, .taken = taken, .res = res,
+    .tmp = Arena.new(thread_chunk), .lat = List<|I64|>.create(res),
+    .errs = List<|U8[]|>.create(res), .conn = null }
+  return c
+
+fn measure(port: I32, target: U8[], body: U8[], workers: Sz, reps: Sz, arena: Arena$@): Load_out //<
+  //< Measures static serving while `workers` × `reps` heavy requests are sent
+  job_raw: = client.post_bytes(target, body, arena)
+  probe_raw: = client.raw("GET", "/style.css", "", "", arena)
+  $done: = thread.Atomic_sz.new(0)
+  // The counter the load threads check for "are there enough samples".
+  // Caution: **Do not count the idle measurements**: they are a fixed-count loop, and sharing the
+  // counter would complete the count before the load begins.
+  $taken: = thread.Atomic_sz.new(0)
+  probe: = new_probe(port, probe_raw, done@, taken@, arena)
+  // **Measure while idle** (before the load; the reason is in this file's header), on the
+  // calling thread.
+  $idle_taken: = thread.Atomic_sz.new(0)
+  idle: = new_probe(port, probe_raw, done@, idle_taken@, arena)
+  for _k in Range.asc(min_probes)
+    one_probe(idle)
+    sys.sleep_ms(probe_gap_ms)
+  $floods: = List<|Flood_ctx$@|>.new(arena)
+  for _k in Range.asc(workers)
+    floods.push(new_flood(port, job_raw, reps, taken@, arena))
+  // Caution: **Start the measuring thread first**, or the load's first requests go unmeasured.
+  prober: = thread.Thread.spawn<|Probe_ctx|>(probe_entry, probe) catch
+    return failed_out("could not start the measuring thread")
+  $threads: = List<|thread.Thread$@|>.new(arena)
+  for c in floods.slice()
+    t: = thread.Thread.spawn<|Flood_ctx|>(flood_entry, c) catch
+      break
+    threads.push(t)
+  for t in threads.slice()
+    t.join_and_free()
+  done.store(1)
+  prober.join_and_free()
+  drop_conn(probe)
+  drop_conn(idle)
+  return gather(probe, idle, floods@, workers, threads.len, arena)
+
+priv fn failed_out(why: U8[]): Load_out
+  return Load_out::{ .static_us = 0I64, .idle_us = 0I64, .job_us = 0I64, .probes = 0, .jobs = 0,
+    .served = false, .why = why }
+
+priv fn gather(probe: Probe_ctx$@, idle: Probe_ctx$@, floods: List<|Flood_ctx$@|>@, want: Sz,
+  got: Sz, arena: Arena$@): Load_out //<
+    //< Merges each thread's results into one.
+  $jobs: = List<|I64|>.new(arena)
+  $errs: = List<|U8[]|>.new(arena)
+  for e in idle.errs.slice()
+    errs.push(e)
+  for e in probe.errs.slice()
+    errs.push(e)
+  for c in floods
+    for d in c.jobs.slice()
+      jobs.push(d)
+    for e in c.errs.slice()
+      errs.push(e)
+  if got < want
+    errs.push("could not start a thread to put the load on")
+  return Load_out::{ .static_us = median_us(probe.lat, arena),
+    .idle_us = median_us(idle.lat, arena), .job_us = median_us(jobs@, arena),
+    .probes = probe.lat.len, .jobs = jobs.len, .served = errs.len == 0,
+    .why = first_errors(errs@, arena) }
+
+priv fn first_errors(errs: List<|U8[]|>$@, arena: Arena$@): U8[]
+  out: = arena.text()
+  for i in Range.asc(errs.len)
+    if i >= shown_errors
+      break
+    out.s(" / " if i > 0 else "").s(errs.get(i))
+  return out.take()
+
+priv fn median_us(src: List<|I64|>@, arena: Arena$@): I64 //< the median (microseconds)
+  //<
+  //< Caution: **Do not judge by the worst value**: it jumps on one interrupt, while a listening
+  //< thread that is computing slows **nearly every** sample. Insertion sort; the samples are few.
+  if src.len == 0
+    return 0I64
+  $sorted: = List<|I64|>.new(arena)
+  for k in Range.asc(src.len)
+    sorted.push(src.get(k))
+    $at: = sorted.len - 1
+    for at > 0 && sorted.get(at - 1) > sorted.get(at)
+      hold: = sorted.get(at - 1)
+      sorted.set(at - 1, sorted.get(at))
+      sorted.set(at, hold)
+      at -= 1
+  mid: = sorted.len / 2
+  if sorted.len % 2 == 1
+    return sorted.get(mid)
+  return (sorted.get(mid - 1) + sorted.get(mid)) / 2I64
+
+fn check_keeps_up(name: U8[], r: Load_out, arena: Arena$@): Bool //<
+  //< Checks that the delay the load adds to static serving stays far below one heavy job
+  //<
+  //< Caution: **Do not use an absolute wall-clock time as the cap**: it varies with the environment
+  //< and fails with nobody touching the repository. The difference from idle is checked.
+  if r.jobs == 0 || r.probes < min_probes || r.static_us <= 0I64 || r.idle_us <= 0I64
+    thin: = arena.text()
+      .s("not measured: n=\{r.probes\} idle=\{r.idle_us\}us jobs=\{r.jobs\} \{r.why\}").take()
+    return verdict.check(name, false, thin)
+  // It can be faster than idle (the fixed cost warms up); the delay is then 0.
+  // Caution: **Do not compare the value under load directly**: it includes the environment's
+  // per-request fixed cost (this file's header).
+  added: = 0I64 if r.static_us <= r.idle_us else r.static_us - r.idle_us
+  detail: = arena.text().s("under load=\{r.static_us\}us idle=\{r.idle_us\}us delay=\{added\}us ")
+    .s("job=\{r.job_us\}us n=\{r.probes\} \{r.why\}").take()
+  ok: = r.served && r.job_us > added * serve_ratio
+  return verdict.check(name, ok, detail)

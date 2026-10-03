@@ -1,0 +1,255 @@
+//< Reads the project settings file `ksplc.cfg`
+//<
+//< The format is INI-style sections, one setting per line; a `#` starts a comment to the line end,
+//< and a blank line is ignored. **The nearest file applies whole**: the search walks up from the
+//< file's folder to the current one, the first `ksplc.cfg` found wins, and settings never merge.
+//< An unknown section or key is an error. The rules are "The project settings file (ksplc.cfg)" in
+//< `ksplc/docs/SPEC-tools.md`.
+
+// ==========================================
+//     [lint]
+//     I0307 = off
+//     W0106 = error
+// ==========================================
+
+import "ksplc/base/core" as base_core
+import "ksplc/base/diag" as base_diag
+import "ksplc/base/locate" as base_locate
+import "std/chars"
+import "std/ds" { List, Map }
+import "std/io"
+import "std/mem" { dealloc }
+import "std/str" { Str_builder }
+import "std/sys"
+
+const config_file_name: U8[] = "ksplc.cfg"
+
+priv const max_parent_walk: Sz = 64 //< the limit on how many folders the search walks up
+  //<
+  //< Enough for any repository, and it stops a `..` chain or a symbolic link loop.
+
+priv fn is_known_section(name: U8[]): Bool //< the known sections
+  //<
+  //< Add each new kind of setting here; nothing about the file is lint-specific.
+  return name.equals("lint") || name.equals(package_section)
+
+const package_section: U8[] = "package" //<
+  //< The section a package names itself in (`ksplc/base/package.kspls` reads it)
+  //<
+  //< **It marks the top of a package**: `package_top` below looks for it.
+
+struct Setting
+  section: U8[]
+  key: U8[]
+  value: U8[]
+  file: U8[] //< where the setting comes from, for the position in a diagnostic
+  line: Sz
+
+struct Cfg_file //< one folder's own `ksplc.cfg`: whether it exists, and what it says
+  found: Bool //< whether the folder holds the file; an empty file still counts as found
+  settings: List<|Setting|>$@ //< what it says, in the order written
+
+// The per-folder caches: each folder's own file and the settings that apply there, so the I/O is
+// not O(diagnostic count × depth).
+// Caution: **Allocate both the containers and their contents from perm_arena.** They live as
+// long as the process; on base_core.arena, which the LSP rewinds per request, they would dangle
+// (see base_core.perm_arena).
+priv $own_cache: Map<|U8[], Cfg_file$@|>$@ = null
+priv $in_force_cache: Map<|U8[], List<|Setting|>$@|>$@ = null
+
+priv fn fail(file: U8[], line: Sz, msg: U8[])
+  base_diag.print_unplaced(file, line, msg)
+  sys.exit(1)
+
+// The `ksplc.cfg` files read so far, each once. **A settings file is an input of the build**
+// (`[package]` decides where sources are read from), so `ksplc run`'s cache must see it change
+// (`write_deps_file` in `ksplc/tools/run.kspls`).
+priv $files_seen: List<|U8[]|>$@ = null
+
+fn files_read(): List<|U8[]|>$@ //< every `ksplc.cfg` read so far, in the order first read
+  if files_seen == null
+    files_seen = List<|U8[]|>.create(base_core.perm_arena)
+  return files_seen
+
+// The `ksplc.cfg` files looked for and not found, each once. **A file's absence is an input too**:
+// one placed there later becomes the nearest, so `ksplc run`'s cache must see it appear.
+priv $files_absent: List<|U8[]|>$@ = null
+
+fn files_missed(): List<|U8[]|>$@ //< every `ksplc.cfg` looked for and not found, in that order
+  if files_absent == null
+    files_absent = List<|U8[]|>.create(base_core.perm_arena)
+  return files_absent
+
+priv fn note_once(names: List<|U8[]|>$@, path: U8[]) //< adds a file's project-relative name once
+  //<
+  //< Under that name, a file reached from the root and from its own folder gives one entry.
+  named: = base_locate.to_project_relative(path)
+  for f in names
+    if f.equals(named)
+      return
+  names.push(base_core.perm_arena.dup_str(named))
+
+priv fn load_one(path: U8[], out: List<|Setting|>$@): Bool //<
+  //< It reads one `ksplc.cfg` and appends to out; false where there is no such file
+  text: = io.read_file(path) catch
+    note_once(files_missed(), path)
+    return false
+  note_once(files_read(), path)
+  // The buffer is on the heap and freed after parsing (a Setting's strings are copies), or the
+  // leak check at exit fails.
+  defer dealloc(Void$@::text.ptr)
+  // The line list is on the heap too: its views live only during parsing, and on perm_arena they
+  // would stay until exit.
+  $lines: = text.lines(null)
+  defer lines.free()
+  $section: U8[] = ""
+  for idx in Range.asc(lines.len)
+    line_no: = idx + 1
+    raw: = lines.get(idx)
+
+    // Drop the comment and trim both ends.
+    hash: = raw.find_char('#')
+    body: = raw.sub(0, hash) if hash >= 0 else raw
+    line: = body.trim_spaces()
+    if line.len == 0
+      continue
+    if (line.ptr + 0)$ == '['
+      if (line.ptr + line.len - 1)$ != ']'
+        fail(path, line_no, "unterminated section header (expected '[name]')")
+      name: = line.sub(1, line.len - 2).trim_spaces()
+      if !is_known_section(name)
+        fail(path, line_no, "unknown configuration section (known sections: 'lint', 'package')")
+      section = base_core.perm_arena.dup_str(name)
+      // **A `[package]` header is kept as a setting with an empty key**: it marks a package's top,
+      // so one with no name is still seen and rejected (`ksplc/base/package.kspls`).
+      if section.equals(package_section)
+        out
+          .push(Setting::{ .section = section, .key = "", .value = "",
+          .file = base_core.perm_arena.dup_str(path), .line = line_no })
+      continue
+    eq: = line.find_char('=')
+    if eq < 0
+      fail(path, line_no, "expected 'key = value'")
+    if section.len == 0
+      fail(path, line_no, "setting appears before any '[section]' header")
+    key: = line.sub(0, eq).trim_spaces()
+    value: = line.sub_from(eq + 1).trim_spaces()
+    if key.len == 0 || value.len == 0
+      fail(path, line_no, "expected 'key = value'")
+    key_perm: = base_core.perm_arena.dup_str(key)
+    value_perm: = base_core.perm_arena.dup_str(value)
+    file_perm: = base_core.perm_arena.dup_str(path)
+    out
+      .push(Setting::{ .section = section, .key = key_perm, .value = value_perm, .file = file_perm,
+      .line = line_no })
+  return true
+
+fn reject(setting: Setting, msg: U8[]) //< it rejects one setting as invalid
+  //<
+  //< It prints the error with file:line and exits at once. A settings file is not KSPL source, so
+  //< there is no caret.
+  fail(setting.file, setting.line, msg)
+
+priv fn settings_for_dir(dir: U8[]): List<|Setting|>$@ //<
+  //< The settings that apply in dir: those of the nearest `ksplc.cfg`, walking up from dir
+  //<
+  //< **The first file found wins**, even an empty one. **A relative dir is walked up to the
+  //< current folder, which is included**. A package's top always holds a file, so the settings
+  //< above a package never reach into it.
+  if in_force_cache == null
+    in_force_cache = base_core.perm_arena
+      .create(Map<|U8[], List<|Setting|>$@|>.new(base_core.perm_arena))
+  hit: = in_force_cache.get(dir) catch null
+  if hit != null
+    return hit
+  $in_force: = none()
+  $dirs: = List<|U8[]|>.new()
+  defer dirs.free()
+  walk_up(dir, dirs@)
+  for d in dirs
+    f: = own_file(d)
+    if f.found
+      in_force = f.settings
+      break
+  in_force_cache.set(base_core.perm_arena.dup_str(dir), in_force)
+  return in_force
+
+fn settings_in(dir: U8[]): List<|Setting|>$@ //< what dir's own `ksplc.cfg` says; empty where none
+  return own_file(dir).settings
+
+fn package_top(dir: U8[]): U8[] //<
+  //< The nearest folder at or above dir whose own `ksplc.cfg` names a package; empty where none
+  //<
+  //< **It walks on past the nearest file**, which may be inside the package and name none.
+  $dirs: = List<|U8[]|>.new()
+  defer dirs.free()
+  walk_up(dir, dirs@)
+  for d in dirs
+    if holds_package(own_file(d).settings)
+      return base_core.perm_arena.dup_str(d)
+  return ""
+
+priv fn walk_up(dir: U8[], out: List<|U8[]|>$@) //< dir and each folder above it, innermost first
+  //<
+  //< **`..` is folded first** (`fold_dots` in `locate.kspls`). Cutting one name at a time,
+  //< `pkg/..` steps back into `pkg`, and a file whose path only spells `pkg` would get that
+  //< package and its settings. A relative dir that climbs above the current folder is walked from
+  //< the root, since the current folder is not above it.
+  $start: = base_locate.fold_dots(dir)
+  if !sys.is_absolute(start) && (start.equals("..") || start.starts_with("../"))
+    start = base_locate.canonical_path(start)
+  from_root: = sys.is_absolute(start)
+  $cur: = start
+  for _steps in Range.asc(max_parent_walk)
+    out.push(cur)
+    if cur.len == 0
+      break
+    parent: = sys.get_dir_name(cur)
+    if parent.len == 0 && from_root
+      break
+    cur = parent
+
+priv fn own_file(dir: U8[]): Cfg_file$@ //< dir's own `ksplc.cfg`, read once
+  if own_cache == null
+    own_cache = base_core.perm_arena
+      .create(Map<|U8[], Cfg_file$@|>.new(base_core.perm_arena))
+  hit: = own_cache.get(dir) catch null
+  if hit != null
+    return hit
+  // Caution: **Allocate the list from perm_arena.** It stays in the cache for good; from the heap
+  // (`new()`) it would leak.
+  settings: = List<|Setting|>.create(base_core.perm_arena)
+  found: = load_one(file_in(dir), settings)
+  f: = base_core.perm_arena.create(Cfg_file::{ .found = found, .settings = settings })
+  own_cache.set(base_core.perm_arena.dup_str(dir), f)
+  return f
+
+fn file_in(dir: U8[]): U8[] //< the path of the `ksplc.cfg` in dir (empty: the current folder)
+  if dir.len == 0
+    return config_file_name
+  $p: = Str_builder.new()
+  defer p.free()
+  p.s(dir).c('/').s(config_file_name)
+  return base_core.perm_arena.dup_str(p.slice())
+
+priv fn holds_package(settings: List<|Setting|>$@): Bool //< whether one file names a package
+  for s in settings
+    if s.section.equals(package_section)
+      return true
+  return false
+
+priv $no_settings: List<|Setting|>$@ = null //< the settings of a place no file reaches: none
+
+priv fn none(): List<|Setting|>$@ //< the one empty list, for `std` and a folder no file reaches
+  if no_settings == null
+    no_settings = List<|Setting|>.create(base_core.perm_arena)
+  return no_settings
+
+fn settings_for_file(file_path: U8[]): List<|Setting|>$@ //<
+  //< The settings that apply to a source file, given its logical name
+  //<
+  //< **They are looked for next to the file as read** (`disk_name` in `base/locate.kspls`). **None
+  //< reach into `std`**: it is the compiler's own, and a project must not change how it is checked.
+  if base_locate.is_std_file(file_path)
+    return none()
+  return settings_for_dir(sys.get_dir_name(base_locate.disk_name(file_path)))

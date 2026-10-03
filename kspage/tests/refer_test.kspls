@@ -1,0 +1,181 @@
+import "kspage/lay/caret"
+import "kspage/lay/flow"
+import "kspage/model/doc" + { Doc }
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/marker"
+import "kspage/model/paint"
+import "kspage/model/style" { Sheet }
+import "kspage/tests/base"
+import "kspage/write/edit"
+import "kspage/write/insert"
+import "kspage/write/typing"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// kspage: checks references to a figure from the body (cross-references).
+//
+// **The document holds only the target's name.** "Figure 2" is counted at every layout; written
+// in, one added figure would leave every reference after it stale.
+//
+// **Only a block with a running number can be referred to.** A number counted among siblings
+// changes with whatever comes in between, so referred to from far away it points at another thing.
+// ==========================================
+
+// ---- referring to a figure from the body (a cross-reference) ----
+
+priv fn named_figures(d: Doc$@, arena: Arena$@): Sheet$@ //<
+  //< A document with two figure headings and one body paragraph
+  sheet: = Sheet.new(base.root_font(), arena)
+  fig: = sheet.add("figure", paint.inherit_all())
+  fig.indent = 40.0
+  fig.marker = marker.Marker.serial("Figure ", ". ")
+  first: = d.add_block("figure")
+  first.name = "the first figure"
+  first.add_text("a")
+  d.add_block("body").add_text("cc")
+  second: = d.add_block("figure")
+  second.name = "the next figure"
+  second.add_text("d")
+  return sheet
+
+fn test_a_reference_shows_the_number_of_the_figure_it_names() //<
+  //< A reference from the body shows that figure's number
+  //<
+  //< The number is not stored in the document (it is counted at every layout).
+  verdict.start("[kspage/insert] a figure being callable from the body test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = named_figures(d, arena)
+  body: = d.blocks.get(1).inlines.get(0)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(body, body.text().len)
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(ed.insert_refer(page, sheet, "the next figure"), "it was called")
+  runs: = d.blocks.get(1).inlines
+  assert(runs.len == 2, "the calling run grows by one")
+  called: = runs.get(1)
+  assert(called.refers.equals("the next figure"),
+    "what the document holds is the name of what it points at")
+  assert(called.text().len == 0, "the number does not go in as a text")
+  after: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(called.showing().equals("Figure 2"),
+    "the second figure is called, so it is seen as Figure 2")
+  assert(after.boxes.len > 0, "it lays out")
+
+  // **Add a figure before it and the number changes too.**
+  fresh: = d.blocks.get(0)
+  head: = doc.new_block("figure", arena)
+  head.add_text("e")
+  d.blocks.insert(0, head)
+  assert(fresh != null, "the original figure is left")
+  flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(called.showing().equals("Figure 3"), "a figure going in in front makes it Figure 3")
+  verdict
+    .pass("it holds the name it calls and nothing else, and the number is counted afresh every \
+      laying.")
+
+fn test_a_reference_lands_in_the_middle_of_a_run() //<
+  //< Inserted in the middle of a text, it goes there and the second half stays
+  //<
+  //< Caution: **Split the inline before inserting.**
+  verdict.start("[kspage/insert] a calling text going into the middle of a text test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = named_figures(d, arena)
+  body: = d.blocks.get(1).inlines.get(0)
+  ed: = edit.new_editor(d)
+  // After the first character of "cc".
+  ed.caret = caret.at(body, 1)
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(ed.insert_refer(page, sheet, "the first figure"), "it can be called mid-text too")
+  runs: = d.blocks.get(1).inlines
+  assert(runs.len == 3, "it becomes the three of the front, the calling text and the back half")
+  assert(runs.get(0).text().equals("c"), "the front half is left")
+  assert(runs.get(1).refers.equals("the first figure"), "the middle is the calling run")
+  // **The document holds no text for it.**
+  assert(runs.get(1).text().len == 0, "the calling run holds no text")
+  assert(runs.get(2).text().equals("c"), "the back half is left too")
+  flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(runs.get(1).showing().equals("Figure 1"),
+    "the first figure is called, so it is seen as Figure 1")
+  verdict.pass("called mid-text, the text in front and behind is left.")
+
+fn test_a_reference_to_a_missing_figure_shows_a_question_mark() //<
+  //< Where the target is gone, a `?` is shown
+  //<
+  //< A stale number would go unnoticed by the reader.
+  verdict.start("[kspage/flow] a ? coming out where a figure that has gone is called test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = named_figures(d, arena)
+  body: = d.blocks.get(1).inlines.get(0)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(body, body.text().len)
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(ed.insert_refer(page, sheet, "the next figure"), "it was called")
+  called: = d.blocks.get(1).inlines.get(1)
+
+  // The name of the figure it referred to is removed.
+  d.blocks.get(2).name = ""
+  flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(called.showing().equals("?"), "where what it points at is not there it is a ?")
+  verdict.pass("calling a figure that has gone puts a ? out.")
+
+fn test_a_block_without_a_serial_number_cannot_be_called() //<
+  //< What has no number cannot be referred to
+  //<
+  //< The reason is in this file's header.
+  verdict.start("[kspage/insert] what holds no number not being callable test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = named_figures(d, arena)
+  plain: = d.blocks.get(1)
+  plain.name = "just a paragraph"
+  body: = plain.inlines.get(0)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(body, body.text().len)
+
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(!ed.insert_refer(page, sheet, "just a paragraph"),
+    "a paragraph with no number cannot be called")
+  assert(!ed.insert_refer(page, sheet, "nowhere at all"),
+    "a name that is not there cannot be called either")
+  assert(plain.inlines.len == 1, "refused, the runs do not grow either")
+  verdict.pass("what can be called is what carries a running number and nothing else.")
+
+fn test_a_reference_run_is_never_split_or_merged() //<
+  //< A reference inline is not joined with its neighbour
+  verdict.start("[kspage/edit] a calling run not being brought together and coming off test...")
+  arena: = Arena.new(64 * 1024)
+  defer arena.free()
+  d: = Doc.new(arena)
+  sheet: = named_figures(d, arena)
+  body: = d.blocks.get(1).inlines.get(0)
+  ed: = edit.new_editor(d)
+  ed.caret = caret.at(body, body.text().len)
+  page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+  assert(ed.insert_refer(page, sheet, "the next figure"), "it was called")
+  runs: = d.blocks.get(1).inlines
+  called: = runs.get(1)
+
+  // Joined, the neighbouring text would be rewritten as a number too.
+  edit.merge_runs(ed, ed.step(), d.blocks.get(1))
+  assert(d.blocks.get(1).inlines.len == 2, "it is not brought together with its neighbour")
+  assert(runs.get(1) == called, "the calling run is left as it is")
+  // Backspace removes it whole. **It holds no text, so if skipped over it could not be removed.**
+  ed.caret = caret.at(called, 0)
+  ed.backspace()
+  assert(d.blocks.get(1).inlines.len == 1, "Backspace takes the calling run off")
+  assert(ed.undo(), "it can be put back")
+  assert(d.blocks.get(1).inlines.len == 2, "it goes back in one")
+  verdict
+    .pass("a calling run is not brought together with its neighbour, and Backspace takes it off \
+      whole.")

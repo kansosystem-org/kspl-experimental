@@ -1,0 +1,20 @@
+//< A release wrapper whose body uses the `dealloc(x)` form is followed one level
+//<
+//< `free()`'s last line is mostly this rather than the method form, so without looking here not one
+//< release wrapped under another name can be followed (ksos's heap_free is exactly this shape).
+// EXPECT: variable 'q' may already be freed here
+import "std/mem"
+import "std/mem" { dealloc }
+
+priv struct P
+  v: I32
+
+// The name is not `free`, and the type does not conform to `Owned` either. Even so, the body
+// releases the parameter itself, so the caller's actual argument is treated as released.
+pub fn release(p: P$@)
+  dealloc(Void$@::p)
+
+fn main()
+  q: = mem.alloc_as<|P|>()
+  release(q)
+  _x: = q.v

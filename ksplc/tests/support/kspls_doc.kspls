@@ -1,0 +1,56 @@
+//< Whether a declaration's documentation is read from the indentation notation
+//<
+//< It is not the suite but a part of `../suite/kspls_test.kspls`.
+//<
+//< The round trip in `../suite/kspls_test.kspls` checks where the marks sit. **This file checks
+//< whether ksplc then reads them as documentation**, by asking the editor, the reader of
+//< `../../base/ast_doc.kspls` that a person sees.
+import "ksplc/tests/support/lsp_client"
+import "std/chars"
+import "std/json"
+import "std/jsonrpc"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+priv const probe_uri: U8[] = "file:///doc_probe.kspls"
+priv const wait_ms: I32 = 15000
+
+// One declaration carrying every mark: its summary, one on a parameter's line, that parameter's
+// continuation, and the detail after the parting. **The head wraps, so its run starts on the line
+// where the head ends** ("The documentation a declaration carries" in `../../../docs/DESIGN.md`).
+priv const probe_src: U8[] =
+  """priv fn twice(
+  n: I32, //< the number doubled
+  //< A negative is doubled just the same, and nothing is clamped.
+): I32 //<
+  //< twice what it is given
+  //<
+  //< Doubling is a multiply by two, and nothing more.
+  return n * 2
+
+fn main(): I32
+  return twice(21)
+"""
+
+priv const call_line: Sz = 10 //< the line and column of `twice`'s call (0-based)
+  //<
+  //< It is the `return twice(21)` line of `probe_src`.
+priv const call_col: Sz = 9
+
+fn run(c: jsonrpc.Client$@, arena: Arena$@) //<
+  //< It checks a hover on the call of twice carries every part of its documentation
+  //<
+  //< Caution: **Check all four.** Separate steps read them (`decl_summary`, `param_docs`,
+  //< `summary_run` and `run_at` in `../../base/ast_doc.kspls`), and one going silent shows nowhere
+  //< else.
+  _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(probe_uri, probe_src, arena), arena)
+  got: =
+    c.request("textDocument/hover", lsp_client.at_pos(probe_uri, call_line, call_col, arena),
+    wait_ms, arena) catch
+    fallback json.Val.null_val
+  t: = got.get("result").get("contents").get("value").as_str()
+  verdict.check("a hover carries the doc comment written in the indentation notation",
+    t.find_str("twice what it is given") >= 0 && t.find_str("the number doubled") >= 0 &&
+    t.find_str("nothing is clamped") >= 0 && t.find_str("Doubling is a multiply by two") >= 0,
+    arena.text().s("returned=").s(lsp_client.dump(got, arena)).take())

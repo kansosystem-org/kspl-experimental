@@ -1,0 +1,241 @@
+//< The entry points that link from the document to the source
+//<
+//< What these take is the byte sequence of the text passed in, and what they return is a
+//< position inside it.
+//< Caution: **Do not return the cut-out text.** Return only the position; the page can cut the
+//< text it passed in as it is (the same text is not copied into the wasm's arena twice).
+//< At this boundary "source" means a program's text.
+//< **Do not let a cell's typed text be called `source`** — the same word would get two meanings
+//< (that one is `kspage_web_typed`).
+import "kspage/lay/caret"
+import "kspage/model/doc" { Block }
+import "kspage/model/source"
+import "kspage/port/web/state" + { doc, ed, ensure, in_ptr, input, input_cap, page, sheet }
+import "kspage/write/insert"
+import "kspage/write/shape"
+import "std/chars"
+import "std/ds" { List }
+import "std/str" { Str_builder }
+
+const spot_nums: Sz = 3 //< the number of values that describe a target
+  //<
+  //< Caution: **It must match the page's count** (change both when adding one).
+
+priv fn wrote_aim(href: U8[], which: Sz): Sz //<
+  //< Writes one part of the link target and returns the length
+  //<
+  //< `which` 0 is the file, 1 the symbol. **0 when it points at no source** (an ordinary link and
+  //< an empty one are not told apart — both are "not a source").
+  state.out.clear()
+  aim: = source.aim_of(href)
+  if !aim.found
+    return 0
+  state.out.s(aim.name if which == 1 else aim.file)
+  return state.out.len
+
+// The source that the inline the cursor is in points at.
+#export
+fn kspage_web_source_aim(which: Sz): Sz
+  ensure()
+  if ed.caret.inline == null
+    state.out.clear()
+    return 0
+  return wrote_aim(ed.caret.inline.href, which)
+
+// The source that the text exactly at (x, y) points at.
+// It is not moved to what is nearby (outside any text, it is 0).
+// Caution: **Call it after layout** (with no boxes nothing is at any point).
+#export
+fn kspage_web_source_at(x: F32, y: F32, which: Sz): Sz
+  ensure()
+  state.out.clear()
+  if page == null
+    return 0
+  if n: = caret.inline_under(page, x, y)
+    return wrote_aim(n.href, which)
+  return 0
+
+// Makes the selection (with nothing selected, the whole current inline) a link to the source.
+// Returns 1 if set. The typing arena holds "the file's name" and "the symbol's name" separated by
+// one tab. The symbol may be empty (a link pointing at the whole file).
+// Caution: **Do not build the link target's text in the page** — building and splitting are a
+// pair, so split between two places one of them ends up changed alone
+// (`../../model/source.kspls`'s `href_of`).
+#export
+fn kspage_web_link_source(len: Sz): I32
+  ensure()
+  if len <= 0 || len > input_cap
+    return 0
+  got: = U8[]::{ .ptr = input@, .len = len }
+  cut: = got.find_char('\t')
+  file: = got if cut < 0 else got.sub(0, cut)
+  name: = "" if cut < 0 else got.sub_from(cut + 1)
+  if file.len <= 0
+    return 0
+  $sb: = Str_builder.new()
+  defer sb.free()
+  source.href_of(file, name, sb@)
+  return 1 if ed.link_span(sheet, sb.slice()) else 0
+
+// Where the symbol is inside the `len`-byte source written into the loading arena. Returns 1 if
+// found. The symbol's name is in the typing arena (`name_len` bytes). It writes three values:
+// "from which byte", "how many bytes" and "from which line".
+// Caution: **Where it is not found, return 0 and set the values to 0 too.** Returning empty would
+// make the page show a vanished symbol as "a symbol with no contents".
+#export
+fn kspage_web_source_spot(len: Sz, name_len: Sz, out: F32$@): I32
+  ensure()
+  state.clear_out(out, spot_nums)
+  if in_ptr == null || len <= 0 || name_len < 0 || name_len > input_cap
+    return 0
+  src: = U8[]::{ .ptr = in_ptr, .len = len }
+  got: = source.symbol_at(src, U8[]::{ .ptr = input@, .len = name_len })
+  if !got.found
+    return 0
+  out$ = F32::got.at
+  (out + 1)$ = F32::got.len
+  (out + 2)$ = F32::got.line
+  return 1
+
+// ---- Text passed in, and windows ----
+
+// Remembers the loading arena's `len` bytes as "text passed in", under the name in the typing
+// arena. 1 if remembered.
+// Caution: **Pass in only the files that are pointed at** (`kspage_web_aim_*` below tells which
+// are). Passing in everything piles up text nobody reads. **Passing the same name again replaces
+// it** (the changed source shows as it is).
+#export
+fn kspage_web_hand_source(name_len: Sz, len: Sz): I32
+  ensure()
+  if name_len <= 0 || name_len > input_cap || in_ptr == null || len <= 0
+    return 0
+  state.keep_source(U8[]::{ .ptr = input@, .len = name_len },
+    U8[]::{ .ptr = in_ptr, .len = len })
+  return 1
+
+// Forgets all the text passed in.
+// It is called when moving to a source in a different arena (so texts of the same name with
+// different contents do not mix).
+#export
+fn kspage_web_drop_sources()
+  state.drop_sources()
+
+// The number of targets this document points at (windows, figures and links in one list). **The
+// style is not checked** (even where a style is not a window, a person wants to pass in whatever
+// it points at).
+// Caution: **Include the links.** Counted separately, the check looks at one kind only and says
+// "everything has arrived". The list is in document order (the blocks first, then the texts
+// inside them).
+#export
+fn kspage_web_aim_count(): Sz
+  ensure()
+  return aimed(doc.blocks, 0, 0).at
+
+// What target `i` points at. `which` 0 is the file, 1 the symbol. 0 when absent.
+#export
+fn kspage_web_aim(i: Sz, which: Sz): Sz
+  ensure()
+  state.out.clear()
+  if i < 0
+    return 0
+  return wrote_aim(nth(i), which)
+
+// Whether target `i` has arrived. 0 not passed in yet, 1 found, 2 the symbol is missing.
+// Caution: **Keep "not passed in" and "the symbol is missing" apart.** Mixed, the check shows
+// "forgot to pass it in" and "lost in a rename" the same way — and the fixes are opposite (pass it
+// in / change the document).
+#export
+fn kspage_web_aim_state(i: Sz): I32
+  ensure()
+  aim: = source.aim_of(nth(i))
+  if !aim.found
+    return 0
+  text: = state.lent_text(aim.file)
+  if text.len <= 0
+    return 0
+  return 1 if source.symbol_at(text, aim.name).found else 2
+
+priv fn nth(i: Sz): U8[] //< the text of target `i`
+  //<
+  //< Caution: **Look it up the same way as the counting** (split in two, the day the counting and
+  //< the lookup get out of step a window appears that "exists but shows nothing").
+  if i < 0
+    return ""
+  return aimed(doc.blocks, 0, i + 1).aim
+
+priv struct Aimed //< counts and finds the targets
+  //<
+  //< With `want` 0 it only counts; at 1 or more it returns that target.
+  at: Sz
+  aim: U8[]
+  found: Bool
+
+priv fn no_aimed(at: Sz): Aimed
+  return Aimed::{ .at = at, .aim = "", .found = false }
+
+priv fn aimed(kin: List<|Block$@|>$@, seen: Sz, want: Sz): Aimed
+  $at: Sz = seen
+  for $i: Sz = 0; i < kin.len; i += 1
+    b: = kin.get(i)
+    if b == null
+      continue
+    if b.aim.len > 0
+      at += 1
+      if want > 0 && at == want
+        return Aimed::{ .at = at, .aim = b.aim, .found = true }
+    // A link inside a text is a target too (looking only at blocks, the check misses the links).
+    for $k: Sz = 0; k < b.inlines.len; k += 1
+      n: = b.inlines.get(k)
+      if !source.aim_of(n.href).found
+        continue
+      at += 1
+      if want > 0 && at == want
+        return Aimed::{ .at = at, .aim = n.href, .found = true }
+    inner: = aimed(b.children, at, want)
+    at = inner.at
+    if inner.found
+      return inner
+  return no_aimed(at)
+
+// Inserts an imports figure after the cursor's paragraph, from `the style's name\tthe file` in the
+// typing arena.
+// Neither the boxes nor the lines are inserted (they are built from the borrowed source's `import`
+// at every layout). **No symbol is taken** — imports belong to a whole file (there are no
+// per-symbol imports).
+#export
+fn kspage_web_insert_pulls(len: Sz): I32
+  ensure()
+  if page == null || len <= 0 || len > input_cap
+    return 0
+  got: = U8[]::{ .ptr = input@, .len = len }
+  cut: = got.find_char('\t')
+  if cut <= 0 || cut + 1 >= got.len
+    return 0
+  $sb: = Str_builder.new()
+  defer sb.free()
+  source.href_of(got.sub_from(cut + 1), "", sb@)
+  return 1 if ed.insert_pulls(page, sheet, got.sub(0, cut), sb.slice()) else 0
+
+// Inserts a window after the cursor's paragraph, from `the style's name\tthe file\tthe symbol` in
+// the typing arena.
+// The contents are not inserted (the symbol's text is cut from the borrowed source at every
+// layout). **The page decides the style's name** (the same rule as a table, a slide and a chart).
+#export
+fn kspage_web_insert_window(len: Sz): I32
+  ensure()
+  if page == null || len <= 0 || len > input_cap
+    return 0
+  got: = U8[]::{ .ptr = input@, .len = len }
+  cut: = got.find_char('\t')
+  if cut <= 0
+    return 0
+  rest: = got.sub_from(cut + 1)
+  next: = rest.find_char('\t')
+  file: = rest if next < 0 else rest.sub(0, next)
+  name: = "" if next < 0 else rest.sub_from(next + 1)
+  if file.len <= 0
+    return 0
+  $sb: = Str_builder.new()
+  defer sb.free()
+  source.href_of(file, name, sb@)
+  return 1 if ed.insert_window(page, sheet, got.sub(0, cut), sb.slice()) else 0

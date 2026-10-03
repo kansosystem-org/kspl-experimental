@@ -1,0 +1,690 @@
+//< Saves a document and its styles, and loads them back
+//<
+//< Caution: **Do not write it all on one line**, or changing one word makes the whole document
+//< show up as changed. With `spacing` below, each value gets a line of its own.
+
+// ==========================================
+// Usage:
+//   $sb: = Str_builder.new();
+//   defer sb.free();
+//   store.save(doc, sheet, sb@);
+//   got: = store.load(sb.slice(), arena)?;
+// ==========================================
+import "kspage/model/collect" { Collect }
+import "kspage/model/day"
+import "kspage/model/doc" + { Doc, Block, Rect }
+import "kspage/model/font" + { Font }
+import "kspage/model/ident"
+import "kspage/model/limit"
+import "kspage/model/marker" { Marker }
+import "kspage/model/paint" + { Font_spec, Ink }
+import "kspage/model/paper" + { Paper }
+import "kspage/model/run" { Inline }
+import "kspage/model/style" + { Number_spec, Sheet, Style }
+import "kspage/model/style_when" + { Compare, When }
+import "std/ds" { List }
+import "std/json" + { Val, Json_builder, Obj_builder }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+priv const version: I64 = 6 //< the version of the saved format
+  //<
+  //< Caution: **Raise it when the format changes.** Changed without raising it, an old text is
+  //< silently read as meaning something else. A name the core looks up counts as part of the format
+  //< too (the page's marks in [`../lay/chrome.kspls`](../lay/chrome.kspls)).
+
+enum Store_error
+  broken //< it does not parse as JSON
+  unknown_version //<
+    //< The text is written under an unknown version.
+    //<
+    //< Do not settle for reading part of it — writing it back would delete the rest.
+  out_of_range //<
+    //< A number outside the allowed range is written (`kspage/model/limit`).
+    //<
+    //< Reject it rather than round it, or the file and the screen disagree.
+
+struct Loaded //< the document and the styles read back
+  //<
+  //< Both live in the arena passed in.
+  doc: Doc$@
+  sheet: Sheet$@
+
+// ---- writing out ----
+
+priv fn font_val(b: Json_builder$@, f: Font): Val //< writes one fully set font as text
+  //<
+  //< Every field is written (a `Font` has no "not set").
+  return b.obj().set("family", b.str_val(f.family)).set("size_px", b.float_val(f.size_px))
+    .set("weight", b.int_val(f.weight)).set("italic", b.bool_val(f.italic)).build()
+
+fn spec_into($ob: Obj_builder, b: Json_builder$@, spec: Font_spec): Obj_builder //<
+  //< Writes the font settings, only the fields that are set
+  //<
+  //< An unset field is not written (filling in a default would cut the inheritance).
+  if v: = spec.family
+    ob = ob.set("family", b.str_val(v))
+  if v: = spec.size_px
+    ob = ob.set("size_px", b.float_val(v))
+  if v: = spec.weight
+    ob = ob.set("weight", b.int_val(v))
+  if v: = spec.italic
+    ob = ob.set("italic", b.bool_val(v))
+  return ob
+
+priv fn color_val(b: Json_builder$@, v: U32): Val //< writes one color as `#rrggbb`
+  //<
+  //< `str_val` makes the copy (the arena here is freed on return).
+  $sb: = Str_builder.new()
+  defer sb.free()
+  paint.color_into(v, sb@)
+  return b.str_val(sb.slice())
+
+fn ink_into($ob: Obj_builder, b: Json_builder$@, ink: Ink): Obj_builder //<
+  //< Writes a color's settings into the text
+  //<
+  //< An unset field is not written (as for `Font_spec`).
+  if v: = ink.color
+    ob = ob.set("color", color_val(b, v))
+  if v: = ink.background
+    ob = ob.set("background", color_val(b, v))
+  // Caution: **Write `false` too** ("do not draw it"; if dropped, the parent's line cannot be
+  // removed).
+  if v: = ink.underline
+    ob = ob.set("underline", b.bool_val(v))
+  if v: = ink.strike
+    ob = ob.set("strike", b.bool_val(v))
+  return ob
+
+priv fn number_into($ob: Obj_builder, b: Json_builder$@, spec: Number_spec): Obj_builder //<
+  //< Writes how a number is shown into the text
+  //<
+  //< For plain numbers nothing is written.
+  if v: = spec.places
+    ob = ob.set("places", b.int_val(v))
+  if spec.grouped
+    ob = ob.set("grouped", b.bool_val(true))
+  if spec.percent
+    ob = ob.set("percent", b.bool_val(true))
+  if spec.prefix.len > 0
+    ob = ob.set("prefix", b.str_val(spec.prefix))
+  if spec.suffix.len > 0
+    ob = ob.set("suffix", b.str_val(spec.suffix))
+  // The date format. Not written when the value is not shown as a date.
+  dated: = spec.dated.variant_name()
+  if !dated.equals("none")
+    ob = ob.set("dated", b.str_val(dated))
+  return ob
+
+priv fn checked(v: Val, dflt: I64, fits: fn(got: I64): Bool): Sz?Store_error //<
+  //< Reads a number only if it is inside the allowed range
+  //<
+  //< Caution: **Do not decide the range here** (`kspage/model/limit` holds it; `fits` checks it).
+  //< Read with `as_int64`, not `as_int`: `as_int` returns an I32, so an overflowing number comes
+  //< back negative and slips under the limit.
+  got: = v.as_int64(dflt)
+  if !fits(got)
+    throw Store_error.out_of_range
+  return Sz::got
+
+priv fn read_number(v: Val): Number_spec?Store_error //<
+  //< Builds how a number is shown from the text
+  $spec: Number_spec = style.plain_number()
+  places: = v.get("places")
+  if present(places)
+    spec.places = Option<|Sz|>.some(checked(places, 0I64, limit.places_fits)?)
+  spec.grouped = v.get("grouped").as_bool(false)
+  spec.percent = v.get("percent").as_bool(false)
+  if present(v.get("prefix"))
+    spec.prefix = v.get("prefix").as_str()
+  if present(v.get("suffix"))
+    spec.suffix = v.get("suffix").as_str()
+  if present(v.get("dated"))
+    spec.dated = day.dating_from(v.get("dated").as_str())
+  return spec
+
+priv fn when_into(b: Json_builder$@, ob: Obj_builder, how: U8[], w: When): Obj_builder //<
+  //< Writes the rule that changes the look by the value as text
+  //<
+  //< The field's name says how it compares (`when_above` and the like).
+  $sb: = Str_builder.new()
+  defer sb.free()
+  sb.s("when_")
+  sb.s(how)
+  $out: Obj_builder = ob.set(sb.slice(), b.float_val(w.than))
+  return out.set("when_then", b.str_val(w.then))
+
+priv fn read_when(v: Val): When //<
+  //< Builds the rule that changes the look by the value from the text
+  //<
+  //< There is only one way of comparing, read in a fixed order, so a text holding two does not
+  //< give an answer that depends on the writer's order.
+  $out: When = style_when.no_when()
+  if present(v.get("when_above"))
+    out.how = Compare.above
+    out.than = as_f32(v.get("when_above"), 0.0)
+  else if present(v.get("when_below"))
+    out.how = Compare.below
+    out.than = as_f32(v.get("when_below"), 0.0)
+  else if present(v.get("when_equal"))
+    out.how = Compare.equal
+    out.than = as_f32(v.get("when_equal"), 0.0)
+  else
+    return out
+  out.then = v.get("when_then").as_str()
+  return out
+
+fn style_val(b: Json_builder$@, s: Style$@): Val //< writes one style as text
+  $ob: Obj_builder = b.obj().set("name", b.str_val(s.name))
+  ob = spec_into(ob, b, s.font)
+  ob = ink_into(ob, b, s.ink)
+  ob = number_into(ob, b, s.number)
+  if s.space_before != 0.0
+    ob = ob.set("space_before", b.float_val(s.space_before))
+  if s.space_after != 0.0
+    ob = ob.set("space_after", b.float_val(s.space_after))
+  if s.indent != 0.0
+    ob = ob.set("indent", b.float_val(s.indent))
+  if s.pad != 0.0
+    ob = ob.set("pad", b.float_val(s.pad))
+  if s.width != 0.0
+    ob = ob.set("width", b.float_val(s.width))
+  if s.height != 0.0
+    ob = ob.set("height", b.float_val(s.height))
+  if s.rule_width != 0.0
+    ob = ob.set("rule_width", b.float_val(s.rule_width))
+    ob = ob.set("rule_color", color_val(b, s.rule_color))
+  if v: = s.fill
+    ob = ob.set("fill", color_val(b, v))
+  // The band's shape. A box is not written (no field writes its default).
+  shape: = s.shape.variant_name()
+  if !shape.equals("box")
+    ob = ob.set("shape", b.str_val(shape))
+  if s.line_spacing != 0.0
+    ob = ob.set("line_spacing", b.float_val(s.line_spacing))
+  // Columns. Without a column count the gap is not written either.
+  if s.columns > 1
+    ob = ob.set("columns", b.int_val(s.columns))
+    if s.column_gap != 0.0
+      ob = ob.set("column_gap", b.float_val(s.column_gap))
+  // The heading's depth and the contents.
+  if s.outline > 0
+    ob = ob.set("outline", b.int_val(s.outline))
+  // What is collected and listed. Which field is present gives the kind (as for the marker
+  // below). The name is the variant's (`variant_name`).
+  collect: = s.collect.variant_name()
+  if !collect.equals("none")
+    ob = ob.set(collect, b.bool_val(true))
+  // The rule that changes the look by the value. Whether the comparison field is present says
+  // whether there is a rule.
+  how: = s.when.how.variant_name()
+  if !how.equals("none")
+    ob = when_into(b, ob, how, s.when)
+  // The marker. Which of the two fields is present gives the kind (a separate kind field could
+  // get out of step).
+  switch s.marker case .bullet(glyph)
+    ob = ob.set("bullet", b.str_val(glyph))
+  case .number(after)
+    ob = ob.set("number_after", b.str_val(after))
+  case .serial(before, after)
+    ob = ob.set("serial_after", b.str_val(after)).set("serial_before", b.str_val(before))
+  case .outline(sep, after)
+    ob = ob.set("outline_after", b.str_val(after)).set("outline_sep", b.str_val(sep))
+  case .none {}
+  // Wrapping is the default, so it is written only when false. A written default duplicates the
+  // reader's, and changing the default would then change only the old documents.
+  if !s.wrap
+    ob = ob.set("wrap", b.bool_val(false))
+  // Write it only where it is not the default (true).
+  if !s.in_chapters
+    ob = ob.set("in_chapters", b.bool_val(false))
+  // The style used after a paragraph ends here. Empty means "the same style again" and writes
+  // nothing.
+  if s.next.len > 0
+    ob = ob.set("next", b.str_val(s.next))
+  // False is the default, so it is written only when true (the same reason as `wrap` above).
+  if s.break_before
+    ob = ob.set("break_before", b.bool_val(true))
+  // The default is not written (the same reason as `wrap` above). The names are the variants of
+  // `Align` and `Arrange` (`kspage/model/style.kspls`).
+  align: = s.align.variant_name()
+  if !align.equals("left")
+    ob = ob.set("align", b.str_val(align))
+  arrange: = s.arrange.variant_name()
+  if !arrange.equals("flow")
+    ob = ob.set("arrange", b.str_val(arrange))
+  return ob.build()
+
+fn paper_val(b: Json_builder$@, p: Paper): Val //< writes the paper settings as text
+  //<
+  //< The field names are the ones in `paper_into` below, so the saved text and the text sent
+  //< elsewhere stay in step.
+  return paper_into(b.obj(), b, p).build()
+
+priv const same_room: Sz = 16 * 1024 //< the scratch arena `same_style` and `same_paper` write in
+
+fn same_style(a: Style$@, b: Style$@): Bool //< whether two styles save as the same text
+  //<
+  //< Caution: **Do not compare field by field** — a field added to `Style` and forgotten there
+  //< makes a change to it alone "the same". **The work is freed before returning** (written into
+  //< the document's arena, every comparison would grow it).
+  work: = Arena.new(same_room)
+  defer work.free()
+  $jb: = Json_builder.new(work)
+  $one: = Str_builder.new()
+  defer one.free()
+  $other: = Str_builder.new()
+  defer other.free()
+  style_val(jb@, a).dump(one@)
+  style_val(jb@, b).dump(other@)
+  return one.slice().equals(other.slice())
+
+fn same_paper(a: Paper, b: Paper): Bool //< whether two paper settings save as the same text
+  //<
+  //< The same reasons as `same_style`.
+  work: = Arena.new(same_room)
+  defer work.free()
+  $jb: = Json_builder.new(work)
+  $one: = Str_builder.new()
+  defer one.free()
+  $other: = Str_builder.new()
+  defer other.free()
+  paper_val(jb@, a).dump(one@)
+  paper_val(jb@, b).dump(other@)
+  return one.slice().equals(other.slice())
+
+priv fn paper_into($ob: Obj_builder, b: Json_builder$@, p: Paper): Obj_builder //<
+  //< Writes one page's settings into the text
+  //<
+  //< A field that is 0 is not written.
+  //< The height field's name does not change across versions (an old text would turn into "do not
+  //< split").
+  if p.height != 0.0
+    ob = ob.set("page_height", b.float_val(p.height))
+  if p.width != 0.0
+    ob = ob.set("page_width", b.float_val(p.width))
+  if p.left != 0.0
+    ob = ob.set("margin_left", b.float_val(p.left))
+  if p.top != 0.0
+    ob = ob.set("margin_top", b.float_val(p.top))
+  if p.right != 0.0
+    ob = ob.set("margin_right", b.float_val(p.right))
+  if p.bottom != 0.0
+    ob = ob.set("margin_bottom", b.float_val(p.bottom))
+  if p.reading != 0.0
+    ob = ob.set("reading_width", b.float_val(p.reading))
+  return ob
+
+fn read_paper(v: Val): Paper //< builds the paper settings from the text
+  $p: Paper = paper.no_paper()
+  p.height = as_f32(v.get("page_height"), p.height)
+  p.width = as_f32(v.get("page_width"), p.width)
+  p.left = as_f32(v.get("margin_left"), p.left)
+  p.top = as_f32(v.get("margin_top"), p.top)
+  p.right = as_f32(v.get("margin_right"), p.right)
+  p.bottom = as_f32(v.get("margin_bottom"), p.bottom)
+  p.reading = as_f32(v.get("reading_width"), p.reading)
+  return p
+
+fn sheet_val(b: Json_builder$@, sheet: Sheet$@): Val //< writes the style table as text
+  //<
+  //< `kspage/compare` calls this too: two documents are compared on the saved text (compared
+  //< field by field, a newly added field would be silently forgotten).
+  $list: = b.arr()
+  for $i: Sz = 0; i < sheet.styles.len; i += 1
+    list = list.push(style_val(b, sheet.styles.get(i)))
+  $ob: = b.obj().set("root", font_val(b, sheet.root)).set("styles", list.build())
+  // A field that is 0 is not written.
+  ob = paper_into(ob, b, sheet.paper)
+  return ob.build()
+
+priv fn rect_val(b: Json_builder$@, r: Rect): Val
+  return b.obj().set("x", b.float_val(r.x)).set("y", b.float_val(r.y))
+    .set("w", b.float_val(r.w)).set("h", b.float_val(r.h)).build()
+
+priv fn inline_val(b: Json_builder$@, n: Inline$@): Val
+  $ob: Obj_builder = b.obj().set("text", b.str_val(n.text()))
+  if n.style.len > 0
+    ob = ob.set("style", b.str_val(n.style))
+  if n.href.len > 0
+    ob = ob.set("href", b.str_val(n.href))
+  if n.remark.len > 0
+    ob = ob.set("remark", b.str_val(n.remark)).set("remark_by", b.str_val(n.remark_by))
+  // The number is not written (which note it is gets counted where the notes are listed).
+  if n.note.len > 0
+    ob = ob.set("note", b.str_val(n.note))
+  // Only the name of the target is written (the number is counted at layout time).
+  if n.refers.len > 0
+    ob = ob.set("refers", b.str_val(n.refers))
+  return ob.build()
+
+priv fn sizes_val(b: Json_builder$@, specs: List<|Option<|F32|>|>$@): Val //<
+  //< Writes the list of column widths and row heights
+  //<
+  //< An unset entry is null (packed together, the entries would shift).
+  $out: = b.arr()
+  for $i: Sz = 0; i < specs.len; i += 1
+    switch specs.get(i) case .some(v)
+      out = out.push(b.float_val(v))
+    case .none
+      out = out.push(b.null_val())
+  return out.build()
+
+fn block_val(b: Json_builder$@, blk: Block$@): Val //< writes one block and its tree as text
+  //<
+  //< An empty field is not added.
+  $ob: Obj_builder = b.obj().set("style", b.str_val(blk.style))
+  // The number that identifies the block. 0 is not written.
+  if blk.id != 0
+    ob = ob.set("id", b.int_val(blk.id))
+  if blk.name.len > 0
+    ob = ob.set("name", b.str_val(blk.name))
+  if f: = blk.frame
+    ob = ob.set("frame", rect_val(b, f))
+  // Which step it appears at. 0 is not written.
+  if blk.step > 0
+    ob = ob.set("step", b.int_val(blk.step))
+  // An unset entry is written as null. Dropped, the entries after it shift one place forward.
+  if blk.column_widths.len > 0
+    ob = ob.set("columns", sizes_val(b, blk.column_widths))
+  if blk.row_heights.len > 0
+    ob = ob.set("rows", sizes_val(b, blk.row_heights))
+  // Merging. 1 is not written.
+  if blk.span_cols > 1
+    ob = ob.set("span_cols", b.int_val(blk.span_cols))
+  if blk.span_rows > 1
+    ob = ob.set("span_rows", b.int_val(blk.span_rows))
+  // The image. Its source and its size go together (one alone cannot be laid out).
+  if blk.image.len > 0
+    ob = ob.set("image", b.str_val(blk.image)).set("image_w", b.float_val(blk.image_w))
+      .set("image_h", b.float_val(blk.image_h))
+  // The range shown as a chart. The contents are not written (they are built at layout time).
+  if blk.chart.len > 0
+    ob = ob.set("chart", b.str_val(blk.chart))
+  // The source it points at. The text is not written (it is cut out at layout time).
+  if blk.aim.len > 0
+    ob = ob.set("aim", b.str_val(blk.aim))
+  // The connector's two ends. Both go together (one end alone cannot be laid out).
+  if blk.tie_from.len > 0 && blk.tie_to.len > 0
+    ob = ob.set("tie_from", b.str_val(blk.tie_from)).set("tie_to", b.str_val(blk.tie_to))
+  // The memo beside the block. It is not laid out in the flow, but it is saved (if lost, only its
+  // writer could notice).
+  if blk.aside.len > 0
+    ob = ob.set("aside", b.str_val(blk.aside))
+  if blk.inlines.len > 0
+    $ns: = b.arr()
+    for $i: Sz = 0; i < blk.inlines.len; i += 1
+      ns = ns.push(inline_val(b, blk.inlines.get(i)))
+    ob = ob.set("inlines", ns.build())
+  if blk.children.len > 0
+    $cs: = b.arr()
+    for $i: Sz = 0; i < blk.children.len; i += 1
+      cs = cs.push(block_val(b, blk.children.get(i)))
+    ob = ob.set("children", cs.build())
+  return ob.build()
+
+priv fn chrome_into($ob: Obj_builder, b: Json_builder$@, key: U8[], band: Block$@): Obj_builder //<
+  //< Writes one band into the text
+  //<
+  //< A band with no text is not written (an empty band matches the default).
+  if band == null || band.inlines.len <= 0 || band.inlines.get(0).text().len <= 0
+    return ob
+  return ob.set(key, block_val(b, band))
+
+priv const spacing: Sz = 1 //< the width of one indent step
+  //<
+  //< Caution: **Do not make it 0** — 0 means "all on one line" (see the header). The reader skips
+  //< whitespace, so changing it leaves old texts readable.
+
+fn save(d: Doc$@, sheet: Sheet$@, out: Str_builder$@) //<
+  //< Writes the document and the styles to `out`
+  //<
+  //< Caution: **Create and free the builder's memory here.** Borrowing the document's arena piles
+  //< up allocations with every save.
+  // Only here are numbers assigned ([`../model/ident.kspls`](../model/ident.kspls)).
+  ident.number_new(d)
+  scratch: = Arena.new(64 * 1024)
+  defer scratch.free()
+  $b: = Json_builder.new(scratch)
+  $blocks: = b.arr()
+  for $i: Sz = 0; i < d.blocks.len; i += 1
+    blocks = blocks.push(block_val(b@, d.blocks.get(i)))
+  $ob: Obj_builder = b.obj().set("kspage", b.int_val(version))
+    .set("sheet", sheet_val(b@, sheet)).set("blocks", blocks.build())
+  // The mark of where the document came from, and the next number to assign.
+  // Caution: **Write both.** Without the mark two copies cannot be matched up, and without the
+  // next number a reopened document assigns a deleted block's number again. An empty mark and 0
+  // are not written.
+  if d.origin.len > 0
+    ob = ob.set("origin", b.str_val(d.origin))
+  if d.next_id > 1
+    ob = ob.set("next_id", b.int_val(d.next_id))
+  // The page's header and footer. With empty text they are not written.
+  ob = chrome_into(ob, b@, "header", d.header)
+  ob = chrome_into(ob, b@, "footer", d.footer)
+  ob.build().dump(out, spacing)
+
+// ---- reading back ----
+
+priv fn present(v: Val): Bool //< whether a field is present
+  //<
+  //< `null` counts as "not present".
+  switch v case .null_val
+    return false
+  default {}
+  return true
+
+priv fn as_f32(v: Val, dflt: F32): F32
+  return F32::v.as_f64(dflt)
+
+priv fn read_font(v: Val, dflt: Font): Font
+  $out: Font = dflt
+  if present(v.get("family"))
+    out.family = v.get("family").as_str()
+  out.size_px = as_f32(v.get("size_px"), dflt.size_px)
+  out.weight = U16::v.get("weight").as_int(dflt.weight)
+  out.italic = v.get("italic").as_bool(dflt.italic)
+  return out
+
+fn read_spec(v: Val): Font_spec //< builds the font settings from the text
+  $spec: Font_spec = paint.inherit_all()
+  family: = v.get("family")
+  if present(family)
+    spec.family = Option<|U8[]|>.some(family.as_str())
+  size_px: = v.get("size_px")
+  if present(size_px)
+    spec.size_px = Option<|F32|>.some(as_f32(size_px, 0.0))
+  weight: = v.get("weight")
+  if present(weight)
+    spec.weight = Option<|U16|>.some(U16::weight.as_int(400))
+  italic: = v.get("italic")
+  if present(italic)
+    spec.italic = Option<|Bool|>.some(italic.as_bool(false))
+  return spec
+
+fn read_ink(v: Val): Ink //< builds a color's settings from the text
+  //<
+  //< A text that does not read means "not set" (not a half-built black).
+  $ink: Ink = paint.inherit_ink()
+  color: = v.get("color")
+  if present(color)
+    ink.color = paint.color_from(color.as_str())
+  background: = v.get("background")
+  if present(background)
+    ink.background = paint.color_from(background.as_str())
+  if present(v.get("underline"))
+    ink.underline = Option<|Bool|>.some(v.get("underline").as_bool(false))
+  if present(v.get("strike"))
+    ink.strike = Option<|Bool|>.some(v.get("strike").as_bool(false))
+  return ink
+
+fn read_style(sheet: Sheet$@, v: Val): Style$@?Store_error //<
+  //< Builds one style from the text, adds it to the end of the table and returns it
+  //<
+  //< `Sheet.add` sets the defaults (setting them here too would put the default in two places).
+  s: = sheet.add(v.get("name").as_str(), read_spec(v))
+  s.ink = read_ink(v)
+  s.number = read_number(v)?
+  s.space_before = as_f32(v.get("space_before"), s.space_before)
+  s.space_after = as_f32(v.get("space_after"), s.space_after)
+  s.indent = as_f32(v.get("indent"), s.indent)
+  s.pad = as_f32(v.get("pad"), s.pad)
+  s.width = as_f32(v.get("width"), s.width)
+  s.height = as_f32(v.get("height"), s.height)
+  s.line_spacing = as_f32(v.get("line_spacing"), s.line_spacing)
+  s.columns = checked(v.get("columns"), 0I64, limit.columns_fits)?
+  s.column_gap = as_f32(v.get("column_gap"), s.column_gap)
+  s.outline = checked(v.get("outline"), 0I64, limit.outline_fits)?
+  // Read in a fixed order (the reason is at `read_when`).
+  s.collect = Collect.none
+  if v.get("contents").as_bool(false)
+    s.collect = Collect.contents
+  else if v.get("notes").as_bool(false)
+    s.collect = Collect.notes
+  else if v.get("bars").as_bool(false)
+    s.collect = Collect.bars
+  else if v.get("lines").as_bool(false)
+    s.collect = Collect.lines
+  else if v.get("source").as_bool(false)
+    s.collect = Collect.source
+  else if v.get("imports").as_bool(false)
+    s.collect = Collect.imports
+  s.when = read_when(v)
+  s.rule_width = as_f32(v.get("rule_width"), s.rule_width)
+  if present(v.get("rule_color"))
+    s.rule_color = paint.color_from(v.get("rule_color").as_str()).unwrap_or(0U32)
+  if present(v.get("fill"))
+    s.fill = paint.color_from(v.get("fill").as_str())
+  if present(v.get("shape"))
+    s.shape = style.shape_from(v.get("shape").as_str())
+  // The marker comes first (the order is fixed, as at `read_when`).
+  if present(v.get("bullet"))
+    s.marker = Marker.bullet(v.get("bullet").as_str())
+  else if present(v.get("number_after"))
+    s.marker = Marker.number(v.get("number_after").as_str())
+  else if present(v.get("serial_after"))
+    before: = v.get("serial_before").as_str()
+    s.marker = Marker.serial(before, v.get("serial_after").as_str())
+  else if present(v.get("outline_after"))
+    sep: = v.get("outline_sep").as_str()
+    s.marker = Marker.outline(sep, v.get("outline_after").as_str())
+  s.wrap = v.get("wrap").as_bool(s.wrap)
+  s.break_before = v.get("break_before").as_bool(s.break_before)
+  // A name that is in no table is the same as naming none (the split then keeps the style), so
+  // it is read as it is and looked up at the moment of splitting.
+  if present(v.get("next"))
+    s.next = v.get("next").as_str()
+  s.in_chapters = v.get("in_chapters").as_bool(s.in_chapters)
+  // Caution: **Where the field is absent, leave the value alone.** Reset to the default, it
+  // would override the default rule passed in.
+  if present(v.get("align"))
+    s.align = style.align_from(v.get("align").as_str())
+  if present(v.get("arrange"))
+    s.arrange = style.arrange_from(v.get("arrange").as_str())
+  return s
+
+priv fn read_sheet(v: Val, arena: Arena$@): Sheet$@?Store_error
+  sheet: = Sheet.new(read_font(v.get("root"), font.default_root()), arena)
+  sheet.paper = read_paper(v)
+  $styles: = v.get("styles").arr_list(arena)
+  for $i: Sz = 0; i < styles.len; i += 1
+    read_style(sheet, styles.get(i))?
+  return sheet
+
+priv fn read_rect(v: Val): Rect
+  return Rect::{
+    .x = as_f32(v.get("x"), 0.0),
+    .y = as_f32(v.get("y"), 0.0),
+    .w = as_f32(v.get("w"), 0.0),
+    .h = as_f32(v.get("h"), 0.0),
+  }
+
+priv fn read_sizes(v: Val, into: List<|Option<|F32|>|>$@, arena: Arena$@) //<
+  //< Reads the list and appends it to `into`
+  //<
+  //< null means "not set".
+  $list: = v.arr_list(arena)
+  for $i: Sz = 0; i < list.len; i += 1
+    got: = list.get(i)
+    $spec: = Option<|F32|>.none
+    if present(got)
+      spec = Option<|F32|>.some(as_f32(got, 0.0))
+    into.push(spec)
+
+priv fn span_of(v: Val): Sz?Store_error //< reads the size of a merge
+  //<
+  //< Absent, it is 1 (not merged).
+  return checked(v, 1I64, limit.span_fits)
+
+fn read_block(v: Val, arena: Arena$@): Block$@?Store_error //<
+  //< Builds one block, with its whole tree, from the text
+  //<
+  //< It is the counterpart of `block_val`.
+  blk: = doc.new_block(v.get("style").as_str(), arena)
+  // A number read is not assigned again (absent it is 0 = the block has no number).
+  blk.id = v.get("id").as_int(0)
+  blk.name = v.get("name").as_str()
+  frame: = v.get("frame")
+  if present(frame)
+    blk.frame = Option<|Rect|>.some(read_rect(frame))
+  // Caution: **Read null as "not set".** Skipped, the entries after it shift one place forward.
+  read_sizes(v.get("columns"), blk.column_widths, arena)
+  read_sizes(v.get("rows"), blk.row_heights, arena)
+  blk.span_cols = span_of(v.get("span_cols"))?
+  blk.span_rows = span_of(v.get("span_rows"))?
+  // The image.
+  // Caution: **Read its size along with it** (the core cannot read an image to learn its size).
+  blk.image = v.get("image").as_str()
+  blk.image_w = as_f32(v.get("image_w"), 0.0)
+  blk.image_h = as_f32(v.get("image_h"), 0.0)
+  blk.chart = v.get("chart").as_str()
+  blk.aim = v.get("aim").as_str()
+  blk.aside = v.get("aside").as_str()
+  blk.tie_from = v.get("tie_from").as_str()
+  blk.tie_to = v.get("tie_to").as_str()
+  // Absent, it is 0 (it appears at every step).
+  blk.step = v.get("step").as_int(0)
+  $inlines: = v.get("inlines").arr_list(arena)
+  for $i: Sz = 0; i < inlines.len; i += 1
+    n: = inlines.get(i)
+    made: = blk.add_text(n.get("text").as_str(), n.get("style").as_str())
+    made.href = n.get("href").as_str()
+    made.note = n.get("note").as_str()
+    made.remark = n.get("remark").as_str()
+    made.remark_by = n.get("remark_by").as_str()
+    made.refers = n.get("refers").as_str()
+  $children: = v.get("children").arr_list(arena)
+  for $i: Sz = 0; i < children.len; i += 1
+    blk.children.push(read_block(children.get(i), arena)?)
+  return blk
+
+fn load(src: U8[], arena: Arena$@): Loaded?Store_error //<
+  //< Reads the document and the styles back from the text
+  //<
+  //< Caution: **Put the parsed text and the document on the same arena.** A style's name is a
+  //< pointer into the parsed text, not a copy, so if the text is on another arena, the name
+  //< dangles once that arena is freed.
+  root: = json.parse(src, arena) catch
+    throw Store_error.broken
+  // Caution: **Only this one name is read.** The version field is the product's name, so renaming
+  // the product stops every saved document from opening ("An earlier name is not read" in
+  // `../docs/DESIGN.md`).
+  said: = root.get("kspage").as_int64(0)
+  if said != version
+    throw Store_error.unknown_version
+  d: = Doc.new(arena, root.get("origin").as_str())
+  $blocks: = root.get("blocks").arr_list(arena)
+  for $i: Sz = 0; i < blocks.len; i += 1
+    d.blocks.push(read_block(blocks.get(i), arena)?)
+  // The page's header and footer. Without them they stay empty (the empty bands `Doc.new` made
+  // are kept).
+  if present(root.get("header"))
+    d.header = read_block(root.get("header"), arena)?
+  if present(root.get("footer"))
+    d.footer = read_block(root.get("footer"), arena)?
+  // Caution: **Read the next number too**, or a block added after reopening reuses a deleted
+  // block's number. Where the text lacks it, saving makes it larger than any number it saw.
+  next: = root.get("next_id").as_int(0)
+  if next > d.next_id
+    d.next_id = next
+  return Loaded::{ .doc = d, .sheet = read_sheet(root.get("sheet"), arena)? }

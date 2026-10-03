@@ -1,0 +1,185 @@
+import "std/db"
+// Only the cfg(db) round-trip test uses an Arena. Put the same cfg on the import line too.
+#cfg(db)
+import "std/mem" { Arena }
+import "std/reflect"
+// Only the cfg(db) code calls `equals`.
+#cfg(db)
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// std/db: the SQLite client. With DB=1 it tests the whole prepare/bind/step/column flow against
+// ":memory:"; on the default build, only that Db_error.unsupported is returned (the same style as
+// std/tests/tls_test.kspls: two functions of one name, chosen by cfg(db)/cfg(!db)).
+// ==========================================
+#cfg(db)
+fn test_db_crud_roundtrip()
+  verdict.start("[Db] the whole prepare/bind/step/column flow test...")
+
+  conn: = db.Db.open(":memory:") catch panic("open(:memory:) should not fail")
+
+  // **A path holding a NUL is refused, not cut at it.** C would read this one as `:memory:`.
+  memory: = ":memory:"
+  $nul_path: U8[10] = ::{}
+  for i in Range.asc(memory.len)
+    nul_path[i] = memory[i]
+  nul_path[9] = 'x'
+  $cut: = false
+  _z: = db.Db.open(U8[]::nul_path) catch e
+    switch e case .open_failed
+      cut = true
+    default {}
+    fallback null
+  assert(cut, "a path holding a NUL is refused rather than cut at the NUL")
+
+  conn.exec("CREATE TABLE person (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)") catch panic("create table should not fail")
+
+  ins: = conn.prepare("INSERT INTO person (name, age) VALUES (?, ?)") catch panic("prepare insert \
+    should not fail")
+  ins.bind_text(1, "Alice") catch panic("bind_text failed")
+  ins.bind_i64(2, 30) catch panic("bind_i64 failed")
+  ins.step() catch panic("insert step failed")
+  ins.free()
+  rowid: = conn.last_insert_rowid()
+  assert(rowid == 1, "rowid should be 1 for the first insert")
+
+  ins2: = conn.prepare("INSERT INTO person (name, age) VALUES (?, ?)") catch panic("prepare insert2 \
+    should not fail")
+  ins2.bind_text(1, "Bob") catch panic("bind_text failed")
+  ins2.bind_i64(2, 25) catch panic("bind_i64 failed")
+  ins2.step() catch panic("insert2 step failed")
+  ins2.free()
+
+  // A NULL bound is read back as a NULL, not as 0 or empty text.
+  ins3: = conn.prepare("INSERT INTO person (name, age) VALUES (?, ?)") catch panic("prepare insert3 \
+    should not fail")
+  ins3.bind_text(1, "Carol") catch panic("bind_text failed")
+  ins3.bind_null(2) catch panic("bind_null failed")
+  ins3.step() catch panic("insert3 step failed")
+  ins3.free()
+  nul: = conn.prepare("SELECT age FROM person WHERE name = 'Carol'") catch panic("prepare select \
+    null should not fail")
+  nul_row: = nul.step() catch panic("select null step failed")
+  $saw_null: = false
+  switch nul_row case .row
+    switch nul.column_kind(0) case .null_value
+      saw_null = true
+    default {}
+  default {}
+  nul.free()
+  assert(saw_null, "a bound NULL reads back as null_value")
+
+  sel: =
+    conn.prepare("SELECT name, age FROM person WHERE age IS NOT NULL ORDER BY age ASC") catch panic("prepare select should not fail")
+  $count: Sz = 0
+  $buf: U8[64] = ::{}
+  for
+    r: = sel.step() catch panic("select step failed")
+    switch r case .row
+      n: = sel.column_text(0, U8$[]::buf) catch panic("column_text failed")
+      name: = U8$[]::{ .ptr = buf@, .len = n }
+      age: = sel.column_i64(1)
+      if count == 0
+        assert(name.equals("Bob"), "first row (by age asc) should be Bob")
+        assert(age == 25, "Bob's age should be 25")
+      else
+        assert(name.equals("Alice"), "second row should be Alice")
+        assert(age == 30, "Alice's age should be 30")
+      count += 1
+    case .done
+      break
+  sel.free()
+  assert(count == 2, "expected 2 rows")
+
+  conn.free()
+  verdict.pass("The whole CRUD flow works as expected.")
+
+// On DB=0 (the default build) std/db always returns unsupported.
+#cfg(!db)
+fn test_db_crud_roundtrip()
+  verdict.start("[Db] the whole prepare/bind/step/column flow test...")
+  $unsupported_seen: = false
+  db.Db.open(":memory:") catch e
+    switch e case .unsupported
+      unsupported_seen = true
+    default
+      panic("expected Db_error.unsupported in a default (DB=0) build")
+  assert(unsupported_seen, "default (DB=0) build must report Db_error.unsupported")
+  verdict.pass("On the default build (DB=0) unsupported comes back.")
+
+// ==========================================
+// A round trip through std/reflect's field table (bind_row / read_row).
+// ==========================================
+priv struct Person
+  name: U8[]
+  age: I64
+  height: F64
+  active: Bool
+
+priv const person_fields: reflect.Field_info[4] = ::{
+  ::{ .name = "name", .offset = offsetof(Person, name), .kind = .str_field },
+  ::{ .name = "age", .offset = offsetof(Person, age), .kind = .int_field,
+    .extra = ::{ .width = sizeof(I64) } },
+  ::{ .name = "height", .offset = offsetof(Person, height), .kind = .float_field,
+    .extra = ::{ .width = sizeof(F64) } },
+  ::{ .name = "active", .offset = offsetof(Person, active), .kind = .bool_field },
+}
+
+impl Person: reflect.Reflectable
+  fn fields(_r: Self): reflect.Field_info[]
+    return reflect.Field_info[]::person_fields
+
+#cfg(db)
+fn test_db_row_roundtrip()
+  verdict.start("[Db] walking the table to round-trip one row test...")
+  arena: = Arena.new(8 * 1024)
+  defer arena.free()
+
+  conn: = db.Db.open(":memory:") catch panic("open(:memory:) should not fail")
+  conn.exec("CREATE TABLE p (name TEXT, age INTEGER, height REAL, active INTEGER)") catch panic("create table should not fail")
+
+  // It binds by named parameters; no position is written.
+  ins: =
+    conn.prepare("INSERT INTO p (name, age, height, active) VALUES (:name, :age, :height, :active)")
+    catch panic("prepare insert should not fail")
+  src: Person = ::{ .name = "Alice", .age = 30, .height = 1.62, .active = true }
+  ins.bind_row(src@) catch panic("bind_row failed")
+  ins.step() catch panic("step insert failed")
+  ins.free()
+
+  // **The columns are in a different order from the declaration**; they are matched by name.
+  sel: = conn.prepare("SELECT active, height, age, name FROM p") catch panic("prepare select should \
+    not fail")
+  sel.step() catch panic("step select failed")
+  $back: Person = ::{}
+  sel.read_row(back@, arena) catch panic("read_row failed")
+  assert(back.name.equals("Alice"), "a string round-trips")
+  assert(back.age == 30I64, "an integer round-trips")
+  assert(back.height > 1.61 && back.height < 1.63, "a fraction round-trips")
+  assert(back.active, "a boolean round-trips")
+
+  // If the table has no column for a field, it is refused with the field's name (not filled in
+  // with a default).
+  thin: = conn.prepare("SELECT name, age FROM p") catch panic("prepare thin select should not fail")
+  thin.step() catch panic("step thin select failed")
+  $partial: Person = ::{}
+  $missing: U8[] = ""
+  thin.read_row(partial@, arena) catch e
+    switch e case .missing_column(which)
+      missing = which
+    default
+      panic("expected missing_column")
+  assert(missing.equals("height"), "a dropped column is named")
+  thin.free()
+  sel.free()
+  conn.free()
+  verdict
+    .pass("It round-trips regardless of the columns' order, and refuses a dropped column by name.")
+
+#cfg(!db)
+fn test_db_row_roundtrip()
+  verdict.start("[Db] walking the table to round-trip one row test...")
+  verdict
+    .pass("On the default build (DB=0) no connection opens, so the round trip's entry points cannot \
+      be called either.")

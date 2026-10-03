@@ -1,0 +1,170 @@
+//< A type's field list as a table, so a round trip can walk it instead of naming each field
+//<
+//< `std/json` and `std/db` round-trip a container without writing key names on either side: a key
+//< is the field's own name, so the two cannot drift apart.
+
+// ==========================================
+// Caution: **Do not move it into `std/lang`.** Every file imports that one implicitly, so a program
+// that never round-trips would pay for this declaration too (`make test-thin-use` fires).
+// **ksplc refers to `Reflectable` and `fields` by name**, and **this file has no import lines**;
+// do not add one.
+// ==========================================
+pub enum Field_kind //< what one field is, as far as a round trip needs to know
+  //<
+  //< **List only the kinds the round-trip functions can walk**, or a name could be written that
+  //< does nothing (`../docs/DESIGN.md`'s Principle 5). A number's width is in `Field_extra.width`.
+  int_field //< a signed integer (`I8` / `I16` / `I32` / `I64`)
+  uint_field //< an unsigned integer (`U8` / `U16` / `U32` / `U64` / `Sz`).
+    //<
+    //< **It is separate from the signed kind for the reader's sake**: sign-extending a `U32`'s
+    //< `0xFFFFFFFF` gives `-1`.
+  float_field //< floating point (`F32` / `F64`)
+  bool_field //< a `Bool`
+  str_field //< a `U8[]`.
+    //<
+    //< Read as the slice it is; written as a copy into the receiver's arena.
+  struct_field //< a nested struct, whose table is in `Field_info.nested`
+  list_field //< a `List<|T|>`, whose element is described by `Field_info.extra`
+  opt_field //< an `Option<|T|>`, whose contents are described by `Field_info.extra`
+
+pub struct Field_extra //< what only some kinds carry; all 0 for every other kind
+  //<
+  //< Caution: **Read it only for that kind.**
+  //< **It cannot be `Field_kind`'s payload** (the reason is at `Field_info.nested`). Grouping it
+  //< here keeps `Field_info` from growing one field per kind.
+  pub width: Sz //< the width of one number in bytes, for the three numeric kinds only.
+    //<
+    //< It comes from the declaration's `sizeof`, so it fits `Sz` in any environment.
+  pub elem: Field_kind //< a list's element kind, or an option's contents kind
+  pub elem_size: Sz //< the width of one value of the `elem` kind, which is a list's stride.
+    //<
+    //< Its `sizeof`; **for `.list_field` it is the stride itself**.
+  pub payload_offset: Sz //< where an option's contents start; the tag comes first.
+    //<
+    //< **Only this one cannot be found with `offsetof`**: an enum's payload sits in an anonymous C
+    //< union. It comes from ksplc's layout, as `sizeof` does.
+  pub some_tag: I32 //< the tag an option carries when it holds a value.
+    //<
+    //< **Both tags are taken from the declaration.** A hard-coded "the value variant is 0" would
+    //< silently flip if `Option`'s variants were reordered. A struct zeroed with `::{}` gets tag 0,
+    //< so the round trip writes the tag on both branches.
+  pub none_tag: I32 //< the tag an option carries when it holds nothing
+
+pub struct Field_info //< one field of a struct: its name, where it sits, and what it is
+  //<
+  //< The position is written with `offsetof` ("Built-in operators" in `../docs/SPEC-language.md`).
+  //< Caution: **Do not drop `offset` and add up widths from `kind`.** Padding breaks the sum (in
+  //< `struct { a: U8; b: I64; }`, `b` is at 8, not 1).
+  pub name: U8[] //< the name as the declaration writes it
+  pub offset: Sz //< how far into the struct it sits, counting padding
+  pub kind: Field_kind //< what it is
+  pub nested: Field_info[] //< the table of a nested struct; empty for every other kind.
+    //<
+    //< **It is not `Field_kind`'s payload because of a gap in `--target=llvm`.** The shape it
+    //< takes once that gap is filled is in "a trait returning a table" in `../docs/DESIGN.md`.
+  pub extra: Field_extra //< what only some kinds carry (see `Field_extra`).
+    //<
+    //< **`.list_field` and `.opt_field` never go into `extra.elem`**: a container of containers
+    //< cannot be walked, since a kind that points at itself is blocked by the same gap.
+
+pub trait Reflectable //< a type that returns its own field table
+  //<
+  //< **Writing the body by hand turns off the synthesis.** Do so when key names differ from the
+  //< declaration, or when the synthesis cannot handle the type.
+  //< Caution: **Do not let the names and positions disagree with the declaration.** No diagnostic
+  //< catches it: the code reads or writes the neighbouring field.
+  fn fields(r: Self): Field_info[] //< the table, which points at a `const` and is not built
+
+// ---- Reading and writing by width ----
+pub fn load_int( //< reads a signed integer of that width, widened to `I64`
+  //<
+  //< Caution: **Keep the per-width branching in these `load_*` / `store_*` functions only**, not in
+  //< `std/json_struct` / `std/db` (Principle 6 in `../docs/DESIGN.md`). The widths are 1/2/4/8.
+  //< **Read it as the type of that width, then widen** (that type decides the sign extension).
+  at: U8@, //< where the field sits
+  width: Sz, //< its width in bytes: 1, 2, 4 or 8
+): I64 //< the value; any other width gives 0
+  if width == 8
+    p: = I64@::at
+    return p$
+  if width == 4
+    p: = I32@::at
+    return p$
+  if width == 2
+    p: = I16@::at
+    return p$
+  if width == 1
+    p: = I8@::at
+    return p$
+  return 0I64
+
+pub fn load_uint( //< reads an unsigned integer of that width, widened without sign extension
+  //<
+  //< **Keeping it separate from the signed kind is the point** (see `Field_kind`). **A `U64` with
+  //< its top bit set does not fit in an `I64`**, and `I64` is the limit of both round-trip formats
+  //< (JSON, sqlite).
+  at: U8@, //< where the field sits
+  width: Sz, //< its width in bytes: 1, 2, 4 or 8
+): I64 //< the value; other widths give 0, and a huge `U64` turns negative
+  if width == 8
+    p: = U64@::at
+    // **Only this width needs an explicit `::`** (the overflow noted above).
+    return I64::p$
+  if width == 4
+    p: = U32@::at
+    return p$
+  if width == 2
+    p: = U16@::at
+    return p$
+  if width == 1
+    p: U8@ = at
+    return p$
+  return 0I64
+
+pub fn store_int( //< writes an integer, narrowed to that width
+  //<
+  //< **Signed and unsigned share this function**: the narrowed bytes are the same.
+  at: U8$@, //< where the field sits
+  width: Sz, //< its width in bytes: 1, 2, 4 or 8
+  v: I64, //< the value to write
+)
+  if width == 8
+    p: = I64$@::at
+    p$ = v
+  else if width == 4
+    p: = I32$@::at
+    p$ = I32::v
+  else if width == 2
+    p: = I16$@::at
+    p$ = I16::v
+  else if width == 1
+    p: = I8$@::at
+    p$ = I8::v
+
+pub fn load_float( //< reads a floating-point value of that width as an `F64`
+  //<
+  //< An `F32` is widened; the round-trip formats hold only double precision.
+  at: U8@, //< where the field sits
+  width: Sz, //< its width in bytes: 4 or 8
+): F64 //< the value; any other width gives 0
+  if width == 8
+    p: = F64@::at
+    return p$
+  if width == 4
+    p: = F32@::at
+    return p$
+  return 0.0
+
+pub fn store_float( //< writes a floating-point value, narrowed to that width
+  //<
+  //< **Narrowing into an `F32` loses digits**, so a round trip can change such a value.
+  at: U8$@, //< where the field sits
+  width: Sz, //< its width in bytes: 4 or 8
+  v: F64, //< the value to write
+)
+  if width == 8
+    p: = F64$@::at
+    p$ = v
+  else if width == 4
+    p: = F32$@::at
+    p$ = F32::v

@@ -1,0 +1,388 @@
+//< The shared base that every tests/*_test.kspls uses
+//<
+//< Caution: **Do not rewrite what is here in each suite.** Copied per suite, CI's log stops being
+//< readable and the Makefile's reading of the `RESULT:` line stops matching. One `pass` / `FAIL` /
+//< `SKIP` line per case and a `RESULT:` line at the end are for a human and the log; **the exit
+//< code carries the verdict to the Makefile**. The compiler under test is `out/ksplc_stage1.exe`
+//< (replaceable by `KANSO_CC_EXE`), **separate from the one that builds this suite**, which the
+//< Makefile pins to the seed (`../README.md`).
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena, dealloc }
+import "std/str" { Str_builder }
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+
+// The suite's arena ("Why harness holds the arena" in `../docs/DESIGN.md`). **This does not
+// mean an arena is never passed**: an argument choosing where the result goes
+// (`Map.entry_list`'s) stays.
+priv $suite_arena: Arena$@ = null
+
+fn arena(): Arena$@ //< the suite's arena
+  //<
+  //< Caution: **Do not free it** — `begin` and `end_suite` own its lifetime. It is for a helper
+  //< that takes no arena, so what it builds shares the suite's lifetime.
+  return suite_arena
+
+fn begin(chunk_size: Sz): Arena$@ //< starts a suite
+  //<
+  //< Caution: **Call it once, at the start of `main`.** The arena returned serves the suite's own
+  //< allocations; `finish` / `fatal` clean up. **Do not free it with a `defer`** (a double free).
+  // The label every line carries is the suite's name, passed by the Makefile. Output is flushed
+  // line by line from here on (`verdict.begin`), as `ci` needs when it joins suites into one pipe.
+  verdict.begin(sys.get_env("KANSO_SUITE").unwrap_or(""))
+  suite_arena = Arena.new(chunk_size)
+  return suite_arena
+
+priv fn end_suite()
+  if suite_arena != null
+    suite_arena.free()
+    suite_arena = null
+
+// ==========================================
+// The paths
+// ==========================================
+
+priv fn absolute(path: U8[]): U8[] //< the path from the root, joined onto the working directory
+  //<
+  //< Caution: **Always return the root as an absolute path**: a child started in another cwd
+  //< (`run_in`) reads a relative root **from its own cwd** and cannot start, returning only a 127.
+  return fs.absolute(path, suite_arena) catch
+    fallback suite_arena.dup_str(path)
+
+fn root(): U8[] //< the repository's root
+  //<
+  //< `KANSO_ROOT` has the highest priority; without it, the search goes up from the running script.
+  //< Caution: **Do not count the levels**: a script may be at any depth under the root. **Do not
+  //< keep `get_env`'s return value as it is**: it views libc's static buffer, which changes the
+  //< moment an environment variable is next touched.
+  arena: = suite_arena
+  explicit: = sys.get_env("KANSO_ROOT").unwrap_or("")
+  if explicit.len > 0
+    return absolute(explicit)
+  script: = sys.script_path().unwrap_or("")
+  if script.len == 0
+    return absolute("")
+  $dir: = absolute(sys.get_dir_name(script))
+  for dir.len > 0
+    if is_root_dir(dir, arena)
+      return dir
+    up: = sys.get_dir_name(dir)
+    if up.len >= dir.len
+      break
+    dir = arena.dup_str(up)
+  return absolute("")
+
+priv fn is_root_dir(dir: U8[], arena: Arena$@): Bool //<
+  //< whether it is a folder holding the landmark files
+  //<
+  //< Caution: **Check for two.** `Makefile` alone matches a package's folder too.
+  return fs.exists(fs.join(dir, "Makefile", arena)) &&
+    fs.is_dir(fs.join(dir, "ksplc", arena))
+
+fn ksplc_exe(): U8[] //< the compiler under test
+  //<
+  //< CI replaces it with `KANSO_CC_EXE`.
+  arena: = suite_arena
+  explicit: = sys.get_env("KANSO_CC_EXE").unwrap_or("")
+  if explicit.len > 0
+    return arena.dup_str(explicit)
+  return fs.join(root(), "out/ksplc_stage1.exe", arena)
+
+fn std_dir(): U8[] //< the standard library's path (passed to `--std-dir=`)
+  arena: = suite_arena
+  return fs.join(root(), "std", arena)
+
+fn cc(): U8[] //< the C compiler
+  arena: = suite_arena
+  explicit: = sys.get_env("CC").unwrap_or("")
+  if explicit.len > 0
+    return arena.dup_str(explicit)
+  return "clang"
+
+fn tmp_dir(): U8[] //< the folder for the temporary files a check makes
+  //<
+  //< Caution: **Do not write directly under `out/`.** That is the artifacts' level, which the
+  //< documents point at by name; a check's leftovers there cannot be told from what `make` made.
+  arena: = suite_arena
+  return fs.join(root(), "out/tmp", arena)
+
+// ==========================================
+// Ending a suite
+// ==========================================
+// The lines and `RESULT:` are `std/verdict`'s; the suite's arena, which the verdict outlives, stays
+// here.
+
+fn finish(): I32 //< prints the `RESULT:` line and returns the verdict as the exit code
+  //<
+  //< **`return finish()` from `main`.** The suite's arena is freed here (`begin`'s).
+  //< Caution: **What is not a verdict uses a word other than `RESULT:`** — where something built
+  //< is placed is `OUTPUT:`, and a refusal partway through is `NOTE:`.
+  code: = verdict.finish()
+  end_suite()
+  return code
+
+fn fatal(msg: U8[]): I32 //<
+  //< The exit for when the suite itself cannot run (its input is not found, and so on)
+  code: = verdict.fatal(msg)
+  end_suite()
+  return code
+
+// ==========================================
+// Starting a process: `std/verdict`'s runs, in the suite's arena
+// ==========================================
+
+fn run(argv: U8[][]): verdict.Run_out //< runs argv once, in the repository's root
+  return run_in(argv, root())
+
+fn run_in(argv: U8[][], cwd: U8[]): verdict.Run_out //< runs it with the cwd given
+  return run_capped(argv, cwd, verdict.default_timeout_ms)
+
+fn run_capped(argv: U8[][], cwd: U8[], timeout_ms: I32): verdict.Run_out //<
+  //< Runs it with the given time limit
+  //<
+  //< **Only a check that tests a timeout itself uses this** (`verdict.default_timeout_ms`'s).
+  return verdict.run_child(argv, cwd, timeout_ms, suite_arena)
+
+fn private_docs(): List<|U8[]|> //< the documents a clone carries beyond the published copy
+  //<
+  //< File names, split at spaces, from `KANSO_PRIVATE_DOCS`, which only such a clone sets; unset,
+  //< the list is empty. A check that names documents takes these as the clone's own.
+  arena: = suite_arena
+  $out: = List<|U8[]|>.new(arena)
+  given: = arena.dup_str(sys.get_env("KANSO_PRIVATE_DOCS").unwrap_or(""))
+  for w in given.split(' ', arena)
+    if w.len > 0
+      out.push(w)
+  return out
+
+fn run_all(items: subproc.Job[], name: U8[]): List<|verdict.Run_out|>$@ //<
+  //< Runs jobs side by side (`verdict.run_children`), collected in `out/tmp/work_<name>`
+  //<
+  //< Caution: **Pass a different name per suite**, or two suites at once (under `make -j`) read
+  //< each other's output.
+  dir: = suite_arena.text().s("\{tmp_dir()\}/work_\{name\}").take()
+  return verdict.run_children(items, dir, suite_arena)
+
+fn ksplc_argv(args: U8[][]): U8[][] //<
+  //< builds the argv for running the compiler under test
+  //<
+  //< **Do not drop `--std-dir=`** (ksplc's). For building a `subproc.Job` to run side by side;
+  //< for one run, call `ksplc`.
+  arena: = suite_arena
+  $argv: = List<|U8[]|>.new(arena)
+  argv.push(ksplc_exe())
+  argv.push(suite_arena.text().s("--std-dir=\{std_dir()\}").take())
+  for a in args
+    argv.push(a)
+  return argv.slice()
+
+fn ksplc(args: U8[][]): verdict.Run_out //< runs the compiler under test once
+  //<
+  //< `--std-dir=` is always prefixed.
+  //< Caution: **Name the repository's `std/` explicitly.** Without it the current directory is
+  //< searched, so a case whose cwd is a temporary directory looks at another std.
+  return run(ksplc_argv(args))
+
+fn ksplc_bare(args: U8[][]): verdict.Run_out //<
+  //< Runs the compiler under test once without prefixing `--std-dir=`
+  //<
+  //< Caution: **Call the `fmt` / `clean` / `emit-runtime` subcommands with this one.** They take no
+  //< `--std-dir`, and through `ksplc` above the option itself is refused.
+  arena: = suite_arena
+  $argv: = List<|U8[]|>.new(arena)
+  argv.push(ksplc_exe())
+  for a in args
+    argv.push(a)
+  return run(argv.slice())
+
+fn make(args: U8[][]): verdict.Run_out //< runs `make` once
+  //<
+  //< **Do not let it rebuild stage1 (`-o`)**: under `make -j test-ci` another suite may be running
+  //< it, and on Windows a running exe cannot be replaced. **Do not call `make` by name
+  //< (`KANSO_MAKE`)**: PATH may give a different make.
+  arena: = suite_arena
+  // Caution: Drop the job server's setting: this process is not make's child and holds no token,
+  // and on Windows the named semaphore cannot open and a warning is printed.
+  sys.unset_env("MAKEFLAGS")
+  sys.unset_env("MFLAGS")
+  sys.unset_env("MAKELEVEL")
+  $argv: = List<|U8[]|>.new(arena)
+  argv.push(arena.dup_str(sys.get_env("KANSO_MAKE").unwrap_or("make")))
+  argv.push("-o")
+  argv.push(fs.join("out", "ksplc_stage1.exe", arena))
+  for a in args
+    argv.push(a)
+  return run(argv.slice())
+
+// ==========================================
+// The temporary directory
+// ==========================================
+
+fn sandbox(name: U8[]): U8[]?fs.Fs_error //<
+  //< Makes a workspace for this suite only and returns it (`out/tmp/<name>_<mark>`)
+  //<
+  //< Caution: **Do not delete a fixed folder and then create it**: where it cannot be deleted (a
+  //< sync client or virus scanner holding a handle on Windows), no case runs from then on. The
+  //< next run deletes the previous run's folders.
+  arena: = suite_arena
+  prefix: = arena.text().s("\{name\}_").take()
+  base: = tmp_dir()
+  sweep_old_dirs(base, prefix, arena)
+  return fs.mkdir_unique(base, prefix, arena)
+
+priv fn sweep_old_dirs(base: U8[], prefix: U8[], arena: Arena$@) //<
+  //< Deletes the `<prefix>…` folders directly under base
+  //<
+  //< Caution: **Do not report a failure to delete**: the cleanup would hide the real result, and
+  //< this run's workspace has another name.
+  entries: = fs.read_dir(base, arena) catch
+    return
+  for name in entries
+    if !name.starts_with(prefix)
+      continue
+    full: = fs.join(base, name, arena)
+    remove_tree(full)
+
+fn remove_tree(dir: U8[]) //< deletes a whole tree
+  //<
+  //< Caution: **Pass it only paths inside the workspace.** A failure to delete is not reported
+  //< (check with fs.exists). **It stays out of `std/fs`**: its check-then-descend race is harmless
+  //< only over a tree that only this run made.
+  clear_tree(dir, 0)
+  fs.remove_path(dir) catch {}
+
+priv const max_clear_depth: Sz = 32 //< how deep deleting a workspace this run made descends
+  //<
+  //< Caution: **Do not pass anything but a workspace here.** **Remove a link without following
+  //< it**: followed, it deletes what it points at, even outside the workspace (`fs.is_link` first).
+
+priv fn clear_tree(dir: U8[], depth: Sz)
+  if depth >= max_clear_depth || !fs.is_dir(dir)
+    return
+  scratch: = Arena.new(1024 * 1024)
+  defer scratch.free()
+  entries: = fs.read_dir(dir, scratch) catch
+    return
+  for name in entries
+    full: = fs.join(dir, name, scratch)
+    if !fs.is_link(full)
+      clear_tree(full, depth + 1)
+    fs.remove_path(full) catch { // leave what cannot be erased.
+      // Caution: Do not report here. The workspace's cleanup would hide the real result.
+    }
+
+// ==========================================
+// The files git knows
+// ==========================================
+
+fn tracked(): List<|U8[]|>?Run_error //<
+  //< The tracked files plus the untracked files that are not ignored
+  //<
+  //< Caution: **Do not pass a wildcard to `git ls-files`** (the reason is at `tracked_matching`
+  //< below); the caller narrows the list. **Do not list the tracked files alone**: a new file is
+  //< absent until committed and slips past the check.
+  arena: = suite_arena
+  $out: = List<|U8[]|>.new(arena)
+  collect_ls_files(U8[][]::{ "git", "ls-files" }, out@, arena)?
+  collect_ls_files(U8[][]::{ "git", "ls-files", "--others", "--exclude-standard" }, out@, arena)?
+  return out
+
+enum Run_error
+  failed //< git cannot be started, or it exited non-zero
+
+fn read_under_root(rel: U8[]): U8[] //<
+  //< Reads a file under the root (length 0 where it cannot be read)
+  arena: = suite_arena
+  path: = fs.join(root(), rel, arena)
+  body: = io.read_file(path) catch
+    return ""
+  return body
+
+fn read_generated(path: U8[]): U8[] //< reads the text ksplc wrote
+  //<
+  //< Caution: **Convert the newlines to LF**: an artifact written with `io.open(path, "w")` gets
+  //< `\r\n` on Windows. The repository's own files are LF by `.gitattributes` (`read_under_root`).
+  body: = io.read_file(path) catch
+    return ""
+  defer dealloc(Void$@::body.ptr)
+  return body.replace("\r\n", "\n", suite_arena)
+
+priv fn spec_match(path: U8[], spec: U8[]): Bool //< whether it matches git's pathspec
+  //<
+  //< **A `*` crosses a `/`** (`*.md` matches at any level), unlike a shell's or fnmatch's; `**` is
+  //< the same as `*`. A pattern with no wildcard names a folder too (as in git).
+  if spec.find_char('*') < 0 && spec.find_char('?') < 0
+    return path.equals(spec) ||
+      path.starts_with(spec.strip_suffix("/")) && path.len > spec.strip_suffix("/").len &&
+      path[spec.strip_suffix("/").len] == '/'
+  return glob_at(path, 0, spec, 0)
+
+priv fn glob_at(path: U8[], i: Sz, spec: U8[], j: Sz): Bool //<
+  //< Whether `spec[j..]` matches the whole of `path[i..]` (checked with backtracking)
+  if j >= spec.len
+    return i >= path.len
+  if spec[j] == '*'
+    $k: = j
+    for k < spec.len && spec[k] == '*'
+      k += 1
+    for $n: = i; n <= path.len; n += 1
+      if glob_at(path, n, spec, k)
+        return true
+    return false
+  if i >= path.len
+    return false
+  if spec[j] == '?' || spec[j] == path[i]
+    return glob_at(path, i + 1, spec, j + 1)
+  return false
+
+fn tracked_matching(patterns: U8[][]): List<|U8[]|> //<
+  //< the files git knows that match the pathspec
+  //<
+  //< Caution: **Do not walk the working tree**: it picks up artifacts and leftovers too. **Do not
+  //< pass a pathspec to `git ls-files`**: on Windows a `git.exe` on MSYS2's runtime **expands the
+  //< wildcards itself**, so `*.md` shrinks to the top level and goes green unseen.
+  arena: = suite_arena
+  $out: = List<|U8[]|>.new(arena)
+  files: = tracked() catch
+    fatal("git ls-files failed")
+    return out
+  for f in files
+    $keep: = false
+    $drop: = false
+    for p in patterns
+      if p.starts_with(":!")
+        drop = drop || spec_match(f, p.sub_from(2))
+      else
+        keep = keep || spec_match(f, p)
+    if keep && !drop
+      out.push(f)
+  // **An exclusion (`:!`) that matches nothing is normal**; only including patterns are checked.
+  // **`fatal` frees the suite's arena** (`end_suite`), `files` included, so return on the spot.
+  for p in patterns
+    if p.starts_with(":!") || p.find_char('*') >= 0 || p.find_char('?') >= 0
+      continue
+    $seen: = false
+    for f in files
+      if spec_match(f, p)
+        seen = true
+        break
+    // Caution: **Do not use `fatal`**: it frees the suite's arena, so `files` and `out` would be
+    // read freed. A slip in the check itself stops it here.
+    if !seen
+      panic(U8$[]::suite_arena.text().s("there is a pattern matching not one tracked file: \{p\}")
+        .take())
+  return out
+
+priv fn collect_ls_files(argv: U8[][], out: List<|U8[]|>$@, arena: Arena$@): Void?Run_error
+  r: = run(argv)
+  if r.code != 0
+    _ok: = verdict.check("git ls-files ran", false, r.out)
+    throw Run_error.failed
+  for ln in r.out.lines(arena)
+    path: = ln.trim_spaces()
+    if path.len > 0
+      out.push(path)

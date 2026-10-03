@@ -1,0 +1,82 @@
+//< ARM Cortex-M: a mutex's priority inheritance keeps an inversion bounded
+//<
+//< **Without inheritance** the mid-priority hog runs ahead of low, so the mutex is never released
+//< and high waits forever although it has the highest priority — an unbounded inversion.
+//< **With inheritance** low is raised to high's priority while it holds the mutex, so it runs
+//< ahead of mid, finishes its work and drops back to its own priority on release; high then takes
+//< the mutex and completes.
+
+// ==========================================
+// The three tasks:
+//   low (prio1)  : takes the mutex first, and does long CPU work (a nop loop) while holding it.
+//   mid (prio2)  : wakes a little later and hogs the CPU in an endless loop that never yields.
+//   high (prio3) : wakes later still and requests the mutex -> low holds it, so it blocks.
+// ==========================================
+import "ksos/demo/common/semihost_console" as con
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+
+priv const cs_work: I32 = 5000000 // the critical section's work (well over one tick)
+
+$g_mutex: sync.Mutex
+$g_low_done: I32 = 0 // set once low completed its critical section
+$g_mid_ran: I32 = 0 // set once mid (the mid-priority hog) ran
+
+$tcb_low: Task
+$tcb_mid: Task
+$tcb_high: Task
+$stack_low: U8[4096]
+$stack_mid: U8[4096]
+$stack_high: U8[4096]
+fn low_task(_arg: Void$@): Void //<
+  //< It takes the mutex first and does long work while holding it
+  //<
+  //< Without inheritance mid pre-empts it and it cannot resume; with inheritance it borrows
+  //< high's priority, finishes its work and releases the mutex.
+  g_mutex.lock()
+  con.puts("[low] holds mutex, doing long work\n")
+  // The CPU work while holding it. nop does not vanish even under -Os (it is volatile), so it
+  // really takes time.
+  for $i: I32 = 0; i < cs_work; i += 1
+    __kspl_asm_volatile("nop")
+  g_low_done = 1
+  con.puts("[low] work done, releasing mutex\n")
+  g_mutex.unlock()
+  for
+    Task.delay(1000) // after that it idles at the lowest priority
+fn mid_task(_arg: Void$@): Void //< the mid-priority hog
+  //<
+  //< It wakes after low has locked and never yields -> without inheritance it starves low.
+  Task.delay(2) // let low lock first
+  for
+    g_mid_ran = 1
+fn high_task(_arg: Void$@): Void //< the highest priority
+  //<
+  //< It requests the mutex after low and mid have started. low holds it, so it blocks, and
+  //< inheritance raises low. Once it gets the mutex, it reports the outcome and ends QEMU.
+  Task.delay(5) // request after low has locked and mid has started
+  g_mutex.lock() // low holds it -> it blocks (inheritance raises low to prio3)
+  con.puts("=== Kanso OS (Cortex-M) priority-inheritance mutex ===\n")
+  if g_low_done == 1
+    con.puts("[high] acquired after low finished its section (boosted past mid)\n")
+  if g_mid_ran == 1
+    con.puts("[high] mid-priority hog was running -> real inversion pressure\n")
+  con.puts("[high] priority inheritance prevented unbounded inversion -> OK\n")
+  con.puts("=== done ===\n")
+  g_mutex.unlock()
+  con.exit()
+// The bare-metal entry, called on the PSP from startup.S.
+#export
+fn ksos_main()
+  g_mutex.init()
+  // Unlocking a mutex with no holder stops the program rather than passing silently
+  // (`make ksos-mutex-foreign-unlock` checks it on POSIX). It is not called here: on bare metal,
+  // QEMU does not exit after the stop, and the run waits out the time limit.
+  tcb_low.create(U8$[]::stack_low, low_task, null, 1, "low")
+  tcb_mid.create(U8$[]::stack_mid, mid_task, null, 2, "mid")
+  tcb_high.create(U8$[]::stack_high, high_task, null, 3, "high")
+  // reload=50000 SysTick cycles (an arbitrary value; the real time depends on the clock). cs_work
+  // (near the top) is chosen to last well past it.
+  task.enable_preemption(50000)
+  task.start_scheduler()
+  for {}

@@ -1,0 +1,255 @@
+//< Reads and writes the industry-standard safetensors format: a JSON header and raw bytes
+//<
+//< **The read is zero-copy**: a `Tensor` is a view into the raw bytes, so inference can run
+//< straight from weights embedded as bytes on a Cortex-M with no file system.
+
+// ==========================================
+// **The code that writes this format from a checkpoint lives elsewhere**: a separate
+// implementation converts an HF/PyTorch checkpoint, a deliberate duplication.
+// **Do not name a package that depends on this one here** (the reference direction is the table
+// in docs/SPEC-documents.md).
+// ==========================================
+import "ksai/tensor" + { Tensor }
+import "std/bytes" // `get_u64_le` / `put_u64_le`
+import "std/ds" { List }
+import "std/json"
+import "std/mem" { Arena, dealloc }
+import "std/str" { Str_builder }
+
+pub enum Safetensors_error //< why a weights file could not be read or written
+  //<
+  //< I/O, a broken header and a missing tensor are recoverable run-time conditions, so they
+  //< propagate as an error union (?E) for the caller to handle.
+  read_failed //< the file could not be read
+  write_failed //< the file could not be written
+  too_small //< the file is shorter than the 8-byte header length
+  invalid_header //< the JSON header could not be parsed
+  tensor_not_found(name: U8[]) //< the header has no tensor of that name
+  dtype_mismatch(name: U8[]) //< the file's element width is not the one being read, naming it
+  shape_mismatch(name: U8[]) //< the file's shape is not the one expected, naming the tensor
+
+priv fn dtype_bytes(name: U8[]): Sz //<
+  //< the size in bytes of one element of the named dtype
+  //<
+  //< Caution: **Do not let an unknown dtype through in the hope that it works.** The content is
+  //< just bytes, so reading it at another width garbles the numbers with no error (F16 read as F32
+  //< turns two elements into one meaningless value). Only the width is checked, so F32 and I32 are
+  //< not told apart.
+  if name.equals("F64") || name.equals("I64") || name.equals("U64")
+    return 8
+  if name.equals("F32") || name.equals("I32") || name.equals("U32")
+    return 4
+  if name.equals("F16") || name.equals("BF16") || name.equals("I16") || name.equals("U16")
+    return 2
+  if name.equals("I8") || name.equals("U8") || name.equals("BOOL")
+    return 1
+  return 0
+
+pub struct Safetensors //< one weights file, read without copying the weights themselves
+  pub raw_data: U8[] //< the whole file as bytes; every tensor is a view into this
+  pub metadata: json.Val //< the header, giving each tensor's type, shape and position
+  pub data_offset: Sz //< where the weights begin, past the header
+  // Whether raw_data came from an alloc (load; free() releases it) or is the caller's
+  // (load_from_bytes, such as an `embed`ded array; free() must not release it).
+  owns_data: Bool
+
+impl Safetensors
+  pub fn load_from_bytes( //< reads the header of a file the caller already holds in memory
+    //<
+    //< **The function that opens a file lives elsewhere** (`ksai/model_file`): here it would need
+    //< `std/io`, and code that only uses tensors would pay for file I/O. The bytes belong to the
+    //< caller (typically `embed "model.safetensors" as model_bytes;`), and free() does not release
+    //< them.
+    file_data: U8[], //< the whole file, which the caller owns and `free()` does not release
+    arena: Arena$@, //< the arena the header's parts are allocated from
+  ): Safetensors?Safetensors_error
+    if file_data.len < 8
+      throw Safetensors_error.too_small
+    // The JSON header's size is the leading 8 bytes (little endian).
+    // Caution: Sz is 32-bit under cfg(freestanding), so **finish the range check while the value
+    // is still U64, and convert to Sz after.** Converted first, header_len wraps on a 32-bit
+    // target and slips past the bounds check.
+    header_len_u64: = file_data.get_u64_le(0)
+    // A broken or malicious header length must not read outside the file.
+    if header_len_u64 > U64::(file_data.len - 8)
+      throw Safetensors_error.invalid_header
+    header_len: = Sz::header_len_u64
+    json_str: = U8[]::{ .ptr = file_data.ptr + 8, .len = header_len }
+    metadata: = json.parse(json_str, arena) catch
+      throw Safetensors_error.invalid_header
+
+    return Safetensors::{ .raw_data = file_data, .metadata = metadata,
+      .data_offset = 8 + header_len, .owns_data = false }
+  pub fn get_tensor<|T|>( //< one tensor as a view into the file, copying no elements
+    //<
+    //< Caution: **The result borrows from the file.** The elements are not copied, so `r.free()`
+    //< must wait until this tensor, and every weight taken from it, is no longer used.
+    r: Self$@,
+    name: U8[], //< the tensor's name as the header spells it
+    arena: Arena$@, //< the arena for the shape; the elements stay in the file's bytes
+  ): Tensor<|T|>?Safetensors_error
+    t_info: = r.metadata.get(name)
+    switch t_info case .null_val
+      throw Safetensors_error.tensor_not_found(name)
+    default {}
+    // **Check the dtype first** (the reason is at dtype_bytes).
+    if dtype_bytes(t_info.get("dtype").as_str()) != sizeof(T)
+      throw Safetensors_error.dtype_mismatch(name)
+    // The data offset (read with as_int64, since files can exceed 2GB)
+    offsets: = t_info.get("data_offsets")
+    start_raw: = offsets.get_at(0).as_int64(0)
+    // A negative offset, or one beyond the raw data's range, is rejected.
+    // Caution: **Compare before converting to `Sz`** (for the same reason as the header length):
+    // converted first, a value past 2^32 wraps into range and slips past the bounds check, and
+    // **the neighbouring tensor's content silently comes out as this tensor's values**.
+    body_len: = r.raw_data.len - r.data_offset
+    if start_raw < 0 || U64::start_raw > U64::body_len
+      throw Safetensors_error.invalid_header
+    start: = Sz::start_raw
+    shape_val: = t_info.get("shape")
+    shape_list: = List<|Sz|>.create(arena)
+    for dim_val in shape_val.arr_list(arena)
+      dim: = dim_val.as_int(0)
+      if dim < 0
+        throw Safetensors_error.invalid_header
+      shape_list.push(dim)
+
+    ndim: = shape_list.len
+    $shape_ptr: Sz$@ = null
+    if ndim > 0
+      shape_ptr = Sz$@::arena.alloc(ndim * sizeof(Sz))
+
+    // Capped by the raw data's remaining elements, which stops a multiplication overflow and an
+    // out-of-range access
+    avail: = (r.raw_data.len - r.data_offset - start) / sizeof(T)
+    $size: Sz = 1
+    for $i: = I32::ndim - 1; i >= 0; i -= 1
+      s: = shape_list.get(i)
+      (shape_ptr + i)$ = s
+      if s > 0 && size > avail / s
+        throw Safetensors_error.invalid_header
+      size *= s
+    // avail bounds it only by the file's size; a huge but real file can hold a dimension past
+    // I32's range, which is truncated where it reaches a BLAS FFI as an I32 (see tensor.kspls). So
+    // `new`'s cap, tensor.max_tensor_elems, applies here too, and this path cannot bypass it.
+    if size > tensor.max_tensor_elems
+      throw Safetensors_error.invalid_header
+    // Caution: **Check `data_offsets`' end too.** A size from `shape` alone can read past the
+    // declared range while staying inside the file, so it passes the bounds check and returns the
+    // neighbouring tensor's content (as above). In a valid file the two always agree.
+    end_raw: = offsets.get_at(1).as_int64(0)
+    if end_raw < start_raw || U64::end_raw > U64::body_len
+      throw Safetensors_error.invalid_header
+    if Sz::end_raw - start != size * sizeof(T)
+      throw Safetensors_error.invalid_header
+    data_ptr: = T$@::(r.raw_data.ptr + r.data_offset + start)
+
+    return Tensor<|T|>.from_raw_parts(data_ptr, shape_ptr, ndim, size, arena)
+  pub fn map_into<|T|>( //< maps one tensor from the file into `dst`, rejecting a different shape
+    //<
+    //< Caution: **Check the shape before swapping the weights in.** The model is built with its
+    //< own dimensions, so weights that do not fit fail later in some matmul, with no hint of which
+    //< tensor differs (typically, a different checkpoint was passed).
+    r: Self$@,
+    name: U8[], //< the tensor's name as the header spells it
+    dst: Tensor<|T|>$@, //< the tensor whose weights are replaced; the file's shape must match it
+    arena: Arena$@, //< the arena the shape is allocated from
+  ): Void?Safetensors_error
+    want: = dst.shape
+    got: = r.get_tensor<|T|>(name, arena)?
+    if got.shape.len != want.len
+      throw Safetensors_error.shape_mismatch(name)
+    for i in Range.asc(want.len)
+      if got.shape[i] != want[i]
+        throw Safetensors_error.shape_mismatch(name)
+    dst$ = got
+  pub fn free(r: Self$@) //< frees the file's bytes, once
+    //<
+    //< Caution: Every tensor `get_tensor` returned becomes invalid here, so call it only when the
+    //< model is no longer used.
+    if r.owns_data && r.raw_data.ptr != null
+      dealloc(Void$@::r.raw_data.ptr)
+
+pub struct Safetensors_writer //< collects tensors one at a time and writes one file at the end
+  //<
+  //< Writes trained weights (F32, row-major contiguous) out in the safetensors format: `add` puts
+  //< the name into the header and the bytes into the data, and `save` writes one file.
+  //< data_offsets follows the order added, so it streams without holding on to the tensors.
+  pub head: Str_builder //< the JSON header being built
+  pub data: Str_builder //< the tensors' raw bytes, joined in the order added
+  pub meta: Str_builder //< what goes under `__metadata__`; nothing is written when it is empty
+  pub count: Sz //< how many tensors have been added
+
+impl Safetensors_writer
+  pub fn new(): Safetensors_writer //< an empty writer; `finish()` frees it
+    //<
+    //< **It takes no arena**: head, data and meta are freed by `finish()`, so they must live on
+    //< the heap, and an `_in` would misstate where the memory goes ("A constructor's name says
+    //< where the returned thing goes" in `std/README.md`).
+    $head: = Str_builder.new()
+    head.s("{")
+    return Safetensors_writer::{ .head = head, .data = Str_builder.new(),
+      .meta = Str_builder.new(), .count = 0 }
+  pub fn set_meta( //< one entry under `__metadata__`; the order of calls does not matter
+    //<
+    //< `__metadata__` is safetensors' standard optional table of strings, for what a reader needs
+    //< in order to use the weights (a preprocessing constant, the format's version). finish writes
+    //< them all at the end.
+    //< Caution: **Do not pass a name containing `"` or `\`.** This does no JSON escaping (nor does
+    //< add, which writes tensor names).
+    r: Self$@,
+    key: U8[], //< the entry's name
+    value: U8[], //< its value, written as text
+  )
+    if r.meta.len > 0
+      r.meta.s(",")
+    r.meta.s("\"\{key\}\":\"\{value\}\"")
+  pub fn add( //< appends one more tensor; its position in the file follows the order added
+    r: Self$@,
+    name: U8[], //< the tensor's name, written into the header
+    t: Tensor<|F32|>, //< the tensor, whose bytes are copied in
+  )
+    start: = r.data.len
+    nbytes: = t.size * sizeof(F32)
+    if r.count > 0
+      r.head.s(",")
+    r.head.s("\"\{name\}\":{\"dtype\":\"F32\",\"shape\":[")
+    for j in Range.asc(t.shape.len)
+      if j > 0
+        r.head.s(",")
+      r.head.s("\{I32::t.shape[j]\}")
+    // data_offsets can exceed 2GB, so it is written as I64 (an I32 overflows on a large model).
+    r.head.s("],\"data_offsets\":[\{start\},\{start + nbytes\}]}")
+    r.data.s(U8$[]::{ .ptr = U8$@::t.data, .len = nbytes })
+    r.count += 1
+  pub fn finish($r: Self$@): Str_builder //< the whole file as bytes, header and weights
+    //<
+    //< For a destination that is not a file (sending it over a network, reading it back in
+    //< memory); it pairs with load / load_from_bytes.
+    //< **Call it only once**: it releases the builder's three buffers, and the caller frees the
+    //< result.
+    if r.meta.len > 0
+      if r.count > 0
+        r.head.s(",")
+      r.head.s("\"__metadata__\":{").s(r.meta.slice()).s("}")
+    r.head.s("}")
+    // Spaces pad the header so the data part starts on an 8-byte boundary (for interoperability).
+    for (r.head.len + 8) % 8 != 0
+      r.head.s(" ")
+    header: = r.head.slice()
+    // It concatenates [8B LE header length][header][data].
+    // Caution: Write the length **after widening it to U64**: Sz is 32-bit under
+    // cfg(freestanding), and shifting 8 bytes out of it leaves the top 4 unfilled.
+    $out: = Str_builder.new()
+    len_bytes: U8[8] = ::{}
+    len_slice: = U8$[]::len_bytes
+    len_slice.put_u64_le(0, U64::header.len)
+    out.s(U8$[]::len_bytes).s(header).s(r.data.slice())
+    r.head.free()
+    r.data.free()
+    r.meta.free()
+    return out
+
+// Without this impl the use-after-free check does not work (`Owned` in std/lang.kspls; [W0108]
+// says so).
+impl Safetensors: Owned {} //< it owns the file's bytes and frees them with `free()`

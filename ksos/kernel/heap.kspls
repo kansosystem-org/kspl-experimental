@@ -1,0 +1,38 @@
+//< General heap allocation, safe to call from a task or from an interrupt handler (an ISR)
+//<
+//< `std/mem.kspls`'s freestanding heap takes a spinlock but is not ISR-safe on a single core
+//< (mem.kspls cannot depend on machinery above it, such as irq_save in ksos/kernel/task.kspls), so
+//< alloc/dealloc called directly are not ISR-safe.
+import "ksos/kernel/task"
+import "std/mem" { alloc, dealloc }
+// Only heap_init below (the freestanding version) calls init_freestanding_heap, so this import
+// carries the same cfg; otherwise the hosted build has an unused import.
+#cfg(freestanding)
+import "std/mem"
+
+// Registers a static buffer the caller owns as the only free region (by calling
+// mem.init_freestanding_heap). Call it once per program, before the scheduler starts.
+#cfg(freestanding)
+fn heap_init(buf: U8$[])
+  mem.init_freestanding_heap(buf)
+// On hosted, alloc calls libc.malloc; this empty version lets one start-up path serve both.
+#cfg(!freestanding)
+fn heap_init(_buf: U8$[]) {}
+
+fn heap_alloc(size: Sz): Void$@ //< safe to call from a task or from an ISR
+  s: = task.irq_save()
+  defer task.irq_restore(s)
+  return alloc(size)
+
+fn heap_free(ptr: Void$@) //< safe to call from a task or from an ISR
+  //<
+  //< If ptr is null it does nothing (like dealloc).
+  s: = task.irq_save()
+  defer task.irq_restore(s)
+  dealloc(ptr)
+
+fn heap_alloc_as<|T|>(): T$@ //<
+  //< The ISR-safe version of mem.alloc_as<|T|> (ksos/kernel/dynamic.kspls uses it)
+  //<
+  //< It allocates sizeof(T) bytes with heap_alloc and returns them cast to a T@.
+  return T$@::heap_alloc(sizeof(T))

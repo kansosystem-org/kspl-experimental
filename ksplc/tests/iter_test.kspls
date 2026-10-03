@@ -1,0 +1,105 @@
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/verdict"
+
+// ==========================================
+// `for x in` loops in two shapes. The type being looped over decides which
+// (`ksplc/sema/body/for_in.kspls`).
+// **The subscript shape is the default**: most loops are over an array, a slice or a `List`, and
+// `next()` would add an `Option` for every element. **An `Iter` has neither a length nor a
+// position** (a filtered or converted run), so it cannot be subscripted.
+// ==========================================
+priv struct Countdown
+  priv n: I32
+
+impl Countdown: Iter<|I32|>
+  priv fn next(r: Self$@): Option<|I32|> //<
+    //< The receiver may be `Self$@` (the trait writes `Self`)
+    if r.n <= 0
+      return Option<|I32|>.none
+    r.n -= 1
+    return Option<|I32|>.some(r.n)
+
+fn test_loop_in_over_iter()
+  verdict.start("[Iter] for x in turns in next()'s shape too test...")
+  $total: = 0
+  for v in Countdown::{ .n = 4 }
+    total += v
+  assert(total == 6, "3+2+1+0 = 6")
+  // **The default body must reach a `priv` type too.** Left where the trait is, the copy is "in
+  // another file" and neither this call nor its `next` resolves (adopt_as_impl_method in
+  // `ksplc/sema/decl/trait_default.kspls`).
+  assert(Countdown::{ .n = 4 }.count() == 4, "`Iter`'s default body reaches a priv type too")
+  verdict.pass("a type that gives itself as `Iter` can be turned with for x in.")
+
+fn test_loop_in_over_indexed(arena: Arena$@)
+  verdict.start("[Iter] the side turning by subscript has not changed test...")
+  xs: = List<|I32|>.create(arena)
+  xs.push(1)
+  xs.push(2)
+  xs.push(3)
+  $total: = 0
+  for v in xs
+    total += v
+  assert(total == 6, "1+2+3 = 6")
+  // An array and a slice take the same path.
+  arr: I32[3] = ::{ 4, 5, 6 }
+  $sum2: = 0
+  for v in arr
+    sum2 += v
+  assert(sum2 == 15, "4+5+6 = 15")
+  verdict.pass("a partner holding `.len` and a subscript turns by subscript as it always did.")
+priv fn total_of<|C|>(c: C): I32 //< a `for x in` inside a generic's body
+  //<
+  //< **The shape is decided per instantiation**; the template does not know the type yet.
+  $sum: = 0
+  for v in c
+    sum += v
+  return sum
+
+fn test_loop_in_inside_generic(arena: Arena$@)
+  verdict.start("[Iter] the shape is decided per instantiation inside a generic body too test...")
+  xs: = List<|I32|>.create(arena)
+  xs.push(1)
+  xs.push(2)
+  xs.push(3)
+  assert(total_of<|List<|I32|>$@|>(xs) == 6, "the subscript side: 1+2+3 = 6")
+  assert(total_of<|Countdown|>(Countdown::{ .n = 4 }) == 6, "the next() side: 3+2+1+0 = 6")
+  verdict.pass("one template expands into a different shape per instantiation.")
+priv struct Both_shapes //< a type with `.len` and a subscript that also conforms to `Iter`
+  priv len: Sz
+  priv pos: I32
+
+impl Both_shapes: Index<|Sz, I32|>
+  priv fn get(_r: Self@, i: Sz): I32
+    return 100 + I32::i
+
+impl Both_shapes: Iter<|I32|>
+  priv fn next(r: Self$@): Option<|I32|>
+    if r.pos >= 3
+      return Option<|I32|>.none
+    r.pos += 1
+    return Option<|I32|>.some(r.pos)
+
+fn test_iter_wins_over_index()
+  verdict.start("[Iter] Iter wins for a type satisfying both test...")
+  $sum: = 0
+  for v in Both_shapes::{ .len = 3, .pos = 0 }
+    sum += v
+  // By subscript it would be 100+101+102 = 303, by `next()` it is 1+2+3 = 6.
+  assert(sum == 6, "the next() side is chosen")
+  assert(Both_shapes::{ .len = 3, .pos = 0 }.count() == 3,
+    "the default body counts on the next() side too")
+  // Caution: **It must work as a trait value too.** `Iter`'s default body (`count`) has no vtable
+  // slot; if the code that fills the vtable and the code that emits it disagree, the C breaks
+  // **with no KSPL diagnostic** (has_vtable_slot in `ksplc/base/ast_ext.kspls`).
+  $shapes: = Both_shapes::{ .len = 3, .pos = 0 }
+  as_iter: Iter<|I32|> = shapes@
+  $via: = 0
+  for
+    if v: = as_iter.next()
+      via += v
+    else
+      break
+  assert(via == 6, "it turns by next() through a trait value too")
+  verdict.pass("an `Iter` given explicitly does not lose to a match on structure alone.")

@@ -1,0 +1,275 @@
+//< The entry points for importing and exporting the document
+//<
+//< Saving and reloading the reloadable text (JSON), exporting for display (HTML / Markdown), and
+//< importing Markdown.
+//< Caution: **Do not mix the reloadable text with the exports.** Exported HTML and Markdown do not
+//< carry the styles, so they cannot be reloaded (`../../docs/DESIGN.md`'s "Saving and loading are
+//< separate from exporting").
+//< It is split from [`bridge.kspls`](bridge.kspls) for the 1000-line-per-file cap.
+import "kspage/content/manual"
+import "kspage/port/web/state"
+import "kspage/port/web/state" { doc, doc_arena, ed, ensure, in_arena, in_ptr, input, input_cap,
+  load_arena, sheet }
+import "kspage/share/html"
+import "kspage/share/markdown"
+import "kspage/share/markdown_look"
+import "kspage/share/markdown_read"
+import "kspage/share/store"
+import "kspage/share/text"
+import "kspage/write/edit" as _edit
+import "std/mem" { Arena }
+
+// Writes this document's origin mark and returns the length. **Empty means no mark** (do not
+// trust the numbers); the page then makes one and passes it in before saving.
+#export
+fn kspage_web_origin(): Sz
+  ensure()
+  state.out.clear()
+  state.out.s(doc.origin)
+  return state.out.len
+
+// Sets an origin mark; 1 if set. **An existing mark is not overwritten** (returns 0): a copy that
+// keeps the mark is what makes matching by number possible, and overwritten it would claim to be a
+// new document at every reopening. The mark comes from outside (the core has neither a clock nor
+// randomness), like the history's "when and who".
+#export
+fn kspage_web_set_origin(len: Sz): I32
+  ensure()
+  // Caution: **Do not read the loading arena** — the mark comes in the typing arena (static and of
+  // fixed size, usable before the loading arena exists, as on a newly opened document).
+  if len <= 0 || len > input_cap || doc.origin.len > 0
+    return 0
+  // Copy it into the document's arena (the typing arena is rewritten at the next input).
+  doc.origin = doc_arena.dup_str(U8[]::{ .ptr = input@, .len = len })
+  return 1
+
+// Sets whether to open read-only (anything but 0). A copy of the document is editable as usual (no
+// document can falsely declare itself "read-only").
+// Caution: **Do not settle for hiding the tools.** The core refuses (`Editor.shut` in
+// `write/edit.kspls`) — shortcut keys and pasting get past hidden tools.
+#export
+fn kspage_web_set_read_only(on: I32)
+  ensure()
+  state.read_only = on != 0
+  ed.read_only = state.read_only
+
+// Whether it is open read-only (1).
+#export
+fn kspage_web_read_only(): I32
+  ensure()
+  return 1 if state.read_only else 0
+
+// Writes the current document and its styles as the reloadable text and returns the length.
+// Note: This is where the numbers (`Block.id`) are assigned (`model/ident.kspls`).
+#export
+fn kspage_web_save(): Sz
+  ensure()
+  state.out.clear()
+  store.save(doc, sheet, state.out@)
+  return state.out.len
+
+// Writes the current document and its styles as HTML and returns the length. **It cannot be
+// reloaded.**
+#export
+fn kspage_web_html(): Sz
+  ensure()
+  state.out.clear()
+  html.write(doc, sheet, state.source(), state.out@)
+  return state.out.len
+
+// The number of things dropped from the Markdown just written.
+// Caution: **Ask right after writing** (the next write replaces it, as with `state.out`). If it is
+// not 0, writing that text back to the original file **deletes something**.
+#export
+fn kspage_web_markdown_dropped(): Sz
+  ensure()
+  return state.md_dropped
+
+// Writes the current document and its styles as Markdown and returns the length.
+#export
+fn kspage_web_markdown(): Sz
+  ensure()
+  state.out.clear()
+  state.md_dropped = markdown.write(doc, sheet, state.out@)
+  return state.out.len
+
+// Writes the current document as a text form and returns the length — not one box's text after
+// layout (`kspage_web_box_text`), but the whole document in a savable form. **Nothing is dropped**:
+// a text form round-trips byte for byte (the header of `../../share/text.kspls`), so there is no
+// count to report.
+#export
+fn kspage_web_plain_text(): Sz
+  ensure()
+  state.out.clear()
+  text.write(doc, state.out@)
+  return state.out.len
+
+// The address of the written text.
+// Caution: **Ask after writing** (memory growth while writing moves it).
+#export
+fn kspage_web_out_ptr(): U8@
+  return state.out.ptr
+
+// Prepares an arena of exactly `len` bytes for the text to load and returns it, or null where it
+// does not fit (the cap is `state.doc_limit`). **The pointer lasts only until the next call**,
+// which frees the previous one.
+// Caution: **The caller must check for null.** Address 0 is C's stack, so writing after a refusal
+// corrupts the page's internals (`api.js`'s `handOver` checks in one place).
+#export
+fn kspage_web_load_buffer(len: Sz): U8@
+  ensure()
+  if len > state.doc_limit()
+    return null
+  if in_arena != null
+    in_arena.free()
+  in_arena = Arena.new(len + 4096)
+  in_ptr = U8$@::in_arena.alloc(len)
+  return in_ptr
+
+const too_big: I32 = -1 //<
+  //< The result when it can be read but there is too little memory to lay it out and write it back
+  //<
+  //< Caution: **Keep it separate from "cannot be read"** (the fixes are opposite), **as a value
+  //< neither 0 nor 1** — callers read "1 means read", so 0 would say "it is broken".
+
+const not_text: I32 = -2 //<
+  //< The result when a file opened as a text form is not text (it holds a NUL)
+  //<
+  //< Caution: **Keep it separate from both "too large" and "cannot be read"** — an image or an
+  //< executable is not something to fix; it opens with a different tool. Only `texty` in
+  //< `../../share/text.kspls` decides it.
+
+// The largest document in bytes that can be opened, **so a refusal can give its reason**: "cannot
+// be read" (a writing mistake) and "too large" (the arena) have opposite fixes.
+#export
+fn kspage_web_doc_limit(): Sz
+  return state.doc_limit()
+
+// Reloads the `len` bytes in the arena; 1 if read. **Once read, the whole document is replaced**
+// and the editing state is made anew (the cursor and the undo record pointed into the old one).
+// If unreadable, the current document is unchanged.
+#export
+fn kspage_web_load(len: Sz): I32
+  if in_ptr == null || len <= 0
+    return 0
+  // The arena is global (`state.load_arena`) so it can be freed when things stop partway; as a
+  // local, unwinding would leave nothing pointing at it and the arena would leak **forever**.
+  load_arena = Arena.new(64 * 1024)
+  got: = store.load(U8[]::{ .ptr = in_ptr, .len = len }, load_arena) catch _e
+    state.drop_load()
+    return 0
+  // Caution: **Check that it can be laid out and written back before replacing** — a readable
+  // document can still exhaust the arena at layout, and after the replacement **the currently open
+  // document is lost with it**. So that refusal is a separate result from "cannot be read".
+  if !state.room_for(got.doc, got.sheet, doc_arena)
+    state.drop_load()
+    return too_big
+  state.adopt(load_arena, got.doc, got.sheet)
+  return 1
+
+// Opens the manual, built by [`manual.kspls`](manual.kspls) (a load from generated text rather
+// than read text); 1 if opened. This function prepares the arena and swaps it in.
+// Caution: **Make it larger than the sample's arena** (the manual does not fit the sample's size).
+#export
+fn kspage_web_load_manual(): I32
+  // Set up the base first — allocating before the arena exists writes outside memory (unnoticed by
+  // the handover, which calls `kspage_web_load_buffer` first).
+  ensure()
+  fresh: = Arena.new(512 * 1024)
+  made: = manual.build(fresh)
+  state.adopt(fresh, made.doc, made.sheet)
+  return 1
+
+// ---- The list of open documents ----
+// **A window shows one.** This code only holds them; **the page remembers which file each is**
+// (the core neither opens a file nor remembers opening one; as with `state.kspls`'s "Source text
+// a person passed in").
+
+// The number of open documents.
+#export
+fn kspage_web_doc_count(): Sz
+  ensure()
+  return state.slot_count()
+
+// The index of the document shown now.
+#export
+fn kspage_web_doc_now(): Sz
+  ensure()
+  return state.slot_now()
+
+// Whether that index is open. The indices are not compacted (closing leaves a hole).
+#export
+fn kspage_web_doc_open(i: Sz): I32
+  ensure()
+  return 1 if state.slot_open(i) else 0
+
+// Shows document `i`; 1 if switched.
+#export
+fn kspage_web_doc_use(i: Sz): I32
+  ensure()
+  return 1 if state.slot_use(i) else 0
+
+// Opens one blank document (a style table and one empty paragraph: all "New" needs) and shows it,
+// returning its index (negative if full).
+// Caution: **If loading into it fails, close it** (`kspage_web_doc_drop`), or a blank document
+// stays in the list.
+#export
+fn kspage_web_doc_new(): I32
+  ensure()
+  got: = state.slot_new()
+  return -1 if got >= state.max_slots else I32::got
+
+// Closes document `i`; 1 if closed. The last one is not closed.
+#export
+fn kspage_web_doc_drop(i: Sz): I32
+  ensure()
+  return 1 if state.slot_drop(i) else 0
+
+// Reads the `len` bytes in the arena as a text form.
+// Caution: **Pass the declaration (the language) before the text** (the highlighter learns the
+// language from it). Refuse what is not text (`text.texty`). **Follow `kspage_web_load_markdown`'s
+// steps** — without the same arena and gate, this path alone crashes the page.
+#export
+fn kspage_web_load_plain_text(len: Sz, spoken_len: Sz): I32
+  if in_ptr == null || len <= 0 || spoken_len > len
+    return 0
+  // The declaration and the text share the one arena, split by length (a text can hold any
+  // separator).
+  spoken: = U8[]::{ .ptr = in_ptr, .len = spoken_len }
+  src: = U8[]::{ .ptr = in_ptr + spoken_len, .len = len - spoken_len }
+  if src.len <= 0
+    return 0
+  if !text.texty(src)
+    return not_text
+  load_arena = Arena.new(64 * 1024)
+  made: = text.sheet_for(sheet.root, load_arena.dup_str(spoken), load_arena)
+  got: = text.read(src, made, load_arena)
+  // One line is one block, so the gate matters most here ("Plain text holds one line per
+  // block" in `../../docs/DESIGN.md`).
+  if !state.room_for(got, made, doc_arena)
+    state.drop_load()
+    return too_big
+  state.adopt(load_arena, got, made)
+  return 1
+
+// Reads the `len` bytes in the arena as Markdown; 1 if read. **It becomes a new document** (it is
+// not merged into the current one).
+// Caution: **Make the style table anew too** — a new document lives in a new arena, and names
+// pointing into the old table dangle once it is freed. Only the inheritance root is kept.
+#export
+fn kspage_web_load_markdown(len: Sz): I32
+  if in_ptr == null || len <= 0
+    return 0
+  // The arena is global (as `kspage_web_load`).
+  load_arena = Arena.new(64 * 1024)
+  // Caution: **Pass a table that carries the look** — with an empty one the reader decides the
+  // roles alone, and headings and body come out the same size, with no rules or background color.
+  made: = markdown_look.sheet_for(sheet.root, load_arena)
+  got: = markdown_read.read(U8[]::{ .ptr = in_ptr, .len = len }, made, load_arena)
+  // Put this through the gate too — the text comes from outside, and a few bytes can make many
+  // blocks (a run of `- ` makes a block per line).
+  if !state.room_for(got, made, doc_arena)
+    state.drop_load()
+    return too_big
+  state.adopt(load_arena, got, made)
+  return 1

@@ -1,0 +1,292 @@
+//< Links from the document to the source (splits a link, and finds where a symbol is)
+//<
+//< **Do not add a third** kind of link: each one adds another path through saving, copying,
+//< export and matching (Principle 6); `src:` is read in this one file. Counting braces would
+//< rebuild what ksplc already handles (brackets inside strings and comments).
+import "std/chars"
+import "std/ds" { List }
+import "std/str" { Str_builder }
+
+const mark: U8[] = "src:" //< the mark that points at a source
+  //<
+  //< **A link that does not start with this is an ordinary link.**
+
+struct Hand //< the entry point for borrowing the text
+  //<
+  //< Caution: **Return empty where nothing was provided**; telling that apart from "there is none"
+  //< is the display's job. The symbol's name is not passed (cutting comes after).
+  read: fn(file: U8[]): U8[]
+
+struct Aim //< what it points at
+  //<
+  //< **Where `found` is false there is no file name** (it is an ordinary link).
+  //< The symbol's name may be empty (it points at the whole file).
+  file: U8[]
+  name: U8[]
+  found: Bool
+
+struct Symbol_at //< where a symbol is (from which byte, how many bytes, and which line)
+  //<
+  //< **Where `found` is false that name is not in this text** (say so, rather than show nothing).
+  at: Sz
+  len: Sz
+  line: Sz //< which line it starts at. **Counted from 1** (the number is shown to a person)
+  found: Bool
+
+priv fn no_aim(): Aim
+  return Aim::{ .file = "", .name = "", .found = false }
+
+priv fn no_symbol_at(): Symbol_at
+  return Symbol_at::{ .at = 0, .len = 0, .line = 0, .found = false }
+
+fn aim_of(href: U8[]): Aim //< splits a link into "the file's name" and "the symbol's name"
+  //<
+  //< **Reject a link without the mark here**, or clicking an ordinary link says "nothing was
+  //< provided".
+  if !href.starts_with(mark)
+    return no_aim()
+  rest: = href.strip_prefix(mark)
+  cut: = rest.find_char('#')
+  if cut < 0
+    return Aim::{ .file = rest, .name = "", .found = rest.len > 0 }
+  return Aim::{ .file = rest.sub(0, cut), .name = rest.sub_from(cut + 1), .found = cut > 0 }
+
+fn safe_href(href: U8[]): Bool //< whether it is a link that may be opened
+  //<
+  //< **A link is text that the document supplies.**
+  //< Caution: **Do not open one without checking the scheme**: a `javascript:` (or `data:`) link
+  //< runs inside the page of whoever clicks it. **Drop leading spaces and control characters
+  //< first** (a browser reads `java\tscript:`). **Ignore case** (`JavaScript:`).
+  $at: Sz = 0
+  for at < href.len && href[at] <= ' '
+    at += 1
+  rest: = href.sub_from(at)
+  if rest.len <= 0
+    return false
+  cut: = scheme_end(rest)
+  if cut < 0
+    // A link with no scheme is a path relative to this document.
+    return true
+  said: = rest.sub(0, cut)
+  for ok in allowed_schemes
+    if said.equals_ignore_case(ok)
+      return true
+  return false
+
+priv const allowed_schemes: U8[][3] = ::{ "http", "https", "mailto" } //<
+  //< The schemes that are allowed
+  //<
+  //< **`src` is not needed here** ([`../port/web/keys.js`](../port/web/keys.js) handles it another
+  //< way).
+
+priv fn scheme_end(s: U8[]): Sz //< where the scheme's name ends (the `:`'s position)
+  //<
+  //< **-1 where there is none.**
+  //< **Where a `/`, a `?` or a `#` comes first it is not a scheme** (`a/b:c` is a path). **The
+  //< first character must be a letter.**
+  if s.len <= 0 || !(s[0].is_lower() || s[0].is_upper())
+    return -1
+  for $i: Sz = 1; i < s.len; i += 1
+    c: = s[i]
+    if c == ':'
+      return i
+    if c == '/' || c == '?' || c == '#'
+      return -1
+    if !c.is_lower() && !c.is_upper() && !c.is_digit() && c != '+' && c != '-' && c != '.'
+      return -1
+  return -1
+
+fn href_of(file: U8[], name: U8[], out: Str_builder$@) //< builds a link
+  //<
+  //< Caution: **Do not build the text in two places** (the splitting and the building are a pair).
+  out.s(mark).s(file)
+  if name.len > 0
+    out.c('#').s(name)
+
+fn plain_href(href: U8[]): U8[] //< the link for export
+  //<
+  //< **It drops the mark and turns it into a file path** (`src:` opens only on the screen).
+  aim: = aim_of(href)
+  if !aim.found
+    return href
+  return aim.file
+
+priv fn line_end(src: U8[], from: Sz): Sz
+  for $i: Sz = from; i < src.len; i += 1
+    if (src.ptr + i)$ == '\n'
+      return i
+  return src.len
+
+priv fn spaces_from(s: U8[], from: Sz): Sz
+  for $i: Sz = from; i < s.len; i += 1
+    if (s.ptr + i)$ != ' '
+      return i
+  return s.len
+
+priv fn word_from(s: U8[], from: Sz): Sz
+  for $i: Sz = from; i < s.len; i += 1
+    if (s.ptr + i)$ == ' '
+      return i
+  return s.len
+
+priv fn ident_from(s: U8[], from: Sz): Sz
+  for $i: Sz = from; i < s.len; i += 1
+    c: = (s.ptr + i)$
+    ok: =
+      (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
+    if !ok
+      return i
+  return s.len
+
+priv fn is_kind(w: U8[]): Bool //< the words that start a declaration
+  //<
+  //< **Seven and no more**, or a line in the middle of a text is taken for a symbol's start.
+  return w.equals("fn") || w.equals("struct") || w.equals("enum") || w.equals("trait") ||
+    w.equals("impl") || w.equals("const") || w.equals("typedef")
+
+priv struct Head //< what a declaration's line declares
+  //<
+  //< **Where it is not a declaration the name is empty.**
+  //< `impl U8$[]`'s name is `U8` (a name is letters, digits and `_`).
+  kind: U8[]
+  name: U8[]
+
+priv fn no_head(): Head
+  return Head::{ .kind = "", .name = "" }
+
+priv fn declared(line: U8[], indent: Sz): Head
+  if line.len <= indent
+    return no_head()
+  for $i: Sz = 0; i < indent; i += 1
+    if (line.ptr + i)$ != ' '
+      return no_head()
+  if (line.ptr + indent)$ == ' '
+    return no_head()
+  $at: Sz = indent
+  $w: U8[] = line.sub(at, word_from(line, at) - at)
+  if w.equals("pub") || w.equals("priv")
+    at = spaces_from(line, at + w.len)
+    w = line.sub(at, word_from(line, at) - at)
+  if !is_kind(w)
+    return no_head()
+  at = spaces_from(line, at + w.len)
+  return Head::{ .kind = w, .name = line.sub(at, ident_from(line, at) - at) }
+
+priv fn holds_fns(kind: U8[]): Bool //< a declaration that can hold functions
+  //<
+  //< **`struct` does not**, or the `struct` beside an `impl` of the same name answers "there is
+  //< none".
+  return kind.equals("impl") || kind.equals("trait")
+
+priv fn decl_end(src: U8[], head_at: Sz, to: Sz, indent: Sz): Sz //<
+  //< The declaration's end (the byte after it)
+  //<
+  //< **The head may span several lines** (a long signature wraps): it runs to the line ending in
+  //< `{` or `;`, and after a `{` to the `}` at the same column.
+  $i: Sz = head_at
+  for i < to
+    e: = line_end(src, i)
+    tail: = src.sub(i, e - i).trim_end()
+    if tail.len > 0 && (tail.ptr + tail.len - 1)$ == ';'
+      return e
+    if tail.len > 0 && (tail.ptr + tail.len - 1)$ == '{'
+      return shut_from(src, e + 1, to, indent)
+    i = e + 1
+  return to
+
+priv fn shut_from(src: U8[], from: Sz, to: Sz, indent: Sz): Sz //<
+  //< The end of the line that closes at the same column
+  //<
+  //< **Where nothing closes it is the text's end** (an unformatted text).
+  $i: Sz = from
+  for i < to
+    e: = line_end(src, i)
+    line: = src.sub(i, e - i)
+    if spaces_from(line, 0) == indent && line.len > indent && (line.ptr + indent)$ == '}'
+      return e
+    i = e + 1
+  return to
+
+priv fn dig(src: U8[], from: Sz, to: Sz, name: U8[], indent: Sz, holder: Bool): Symbol_at //<
+  //< The declaration of that name
+  //<
+  //< **Where `holder` is true it looks only at declarations that can hold functions.**
+  $i: Sz = from
+  for i < to
+    e: = line_end(src, i)
+    head: = declared(src.sub(i, e - i), indent)
+    if head.name.equals(name) && (!holder || holds_fns(head.kind))
+      end: = decl_end(src, i, to, indent)
+      return Symbol_at::{ .at = i, .len = end - i, .line = 0, .found = true }
+    i = e + 1
+  return no_symbol_at()
+
+priv fn line_of(src: U8[], at: Sz): Sz
+  $n: Sz = 1
+  for $i: Sz = 0; i < at && i < src.len; i += 1
+    if (src.ptr + i)$ == '\n'
+      n += 1
+  return n
+
+fn symbol_at(src: U8[], name: U8[]): Symbol_at //< where that symbol is, inside this text
+  //<
+  //< **Where the name is empty it is the whole file.** **Only one level of nesting**
+  //< (`Inline.text` is the `fn text` inside `impl Inline`); deeper is rejected.
+  if src.len <= 0
+    return no_symbol_at()
+  if name.len <= 0
+    return Symbol_at::{ .at = 0, .len = src.len, .line = 1, .found = true }
+  cut: = name.find_char('.')
+  if cut < 0
+    return fill_line(src, dig(src, 0, src.len, name, 0, false))
+  inner: = name.sub_from(cut + 1)
+  if inner.len <= 0 || inner.find_char('.') >= 0
+    return no_symbol_at()
+  outer: = name.sub(0, cut)
+  // **There can be two `impl`s with the same name** (`impl U8[]` and `impl U8$[]`), so continue
+  // past the first.
+  $i: Sz = 0
+  for i < src.len
+    holder: = dig(src, i, src.len, outer, 0, true)
+    if !holder.found
+      return no_symbol_at()
+    // **Inside is column 2** (the formatter sets one level of nesting to two columns).
+    got: = dig(src, holder.at, holder.at + holder.len, inner, 2, false)
+    if got.found
+      return fill_line(src, got)
+    i = holder.at + holder.len
+  return no_symbol_at()
+
+priv fn fill_line(src: U8[], got: Symbol_at): Symbol_at
+  if !got.found
+    return got
+  return Symbol_at::{ .at = got.at, .len = got.len, .line = line_of(src, got.at), .found = true }
+
+fn pulls_of(src: U8[], out: List<|U8[]|>$@) //<
+  //< lists what it imports (the text of `import "…"`)
+  //<
+  //< **Each name goes in only once.** **Only an `import` at column 0 counts** (not inside a
+  //< string or a comment; this relies on formatted text). **Only the imported name is taken** (the
+  //< `{ … }` and the `as …` are dropped).
+  $i: Sz = 0
+  for i < src.len
+    e: = line_end(src, i)
+    line: = src.sub(i, e - i)
+    i = e + 1
+    if !line.starts_with(head)
+      continue
+    rest: = line.strip_prefix(head)
+    shut: = rest.find_char('"')
+    if shut <= 0
+      continue
+    name: = rest.sub(0, shut)
+    if !has_name(out, name)
+      out.push(name)
+
+priv const head: U8[] = "import \""
+
+priv fn has_name(out: List<|U8[]|>$@, name: U8[]): Bool
+  for $i: Sz = 0; i < out.len; i += 1
+    if out.get(i).equals(name)
+      return true
+  return false

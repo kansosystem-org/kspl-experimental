@@ -1,0 +1,40 @@
+#!/usr/bin/env -S ksplc run
+//< The pilot policy burnt into ksos's demo still drives as the one kssrv hands out
+//<
+//< **Neither package can hold this check.** The copy is ksos's, the policy it copies is kssrv's,
+//< and neither imports the other, so the only place that may name both is here, above them. kssrv
+//< does the comparing (`make check-pilot-copy` in `kssrv/Makefile`); this suite names the copy.
+import "std/chars"
+import "std/fs"
+import "std/str" // `arena.text()`
+import "std/sys"
+import "std/verdict"
+import "tests/support/harness"
+
+priv const copy_rel: U8[] = "ksos/demo/cortex_m/pilot_policy.safetensors" //<
+  //< The copy burnt into the demo's FLASH, read by the car when it runs disconnected
+  //<
+  //< Caution: **Name it here and nowhere else in the tests** — the command that fetches a fresh
+  //< copy is built from it when the copy is found stale.
+
+fn main(): I32
+  arena: = harness.begin(4 * 1024 * 1024)
+  work: = harness.sandbox("pilot_copy") catch
+    return harness.fatal("cannot make a working directory")
+  // Caution: **Pass kssrv's make paths relative to its folder.** A path from the root would carry
+  // the repository's location, which on Windows can hold characters the C linker garbles.
+  top: = arena.text().s(harness.root()).c('/').take()
+  if !work.starts_with(top)
+    return harness
+      .fatal(arena.text().s("the working directory is not under the root: \{work\}").take())
+  out: = arena.text().s("../").s(work.sub_from(top.len)).take()
+  copy: = arena.text().s("../").s(copy_rel).take()
+  sys.set_env("KSPLC_STD_DIR", harness.std_dir())
+  sys.set_env("KSPLC_PKG_SRC_DIR", harness.root())
+  r: = harness
+    .make(U8[][]::{ "-C", fs.join(harness.root(), "kssrv", arena), "check-pilot-copy",
+    arena.text().s("KSPLC=\{harness.ksplc_exe()\}").take(),
+    arena.text().s("COPY=\{copy\}").take(), arena.text().s("OUT=\{out\}").take() })
+  verdict.check("the pilot policy burnt into ksos drives as the one kssrv hands out", r.code == 0,
+    r.out)
+  return harness.finish()

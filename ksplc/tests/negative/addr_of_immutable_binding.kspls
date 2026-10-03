@@ -1,0 +1,26 @@
+//< Taking an immutable binding's address must not let an out parameter rewrite it
+//<
+//< Whether `x@` becomes a **mutable** pointer is settled by the binding, or the callee rewrites an
+//< immutable `x`. **A slice and a pointer are no exception**, though their type settles whether an
+//< element is writable through them. `p@` points at the variable `p` **itself**, not at its target.
+// EXPECT: expected 'Sz$@', but got 'Sz@'
+// EXPECT: expected 'U8[]$@', but got 'U8[]@'
+// EXPECT: expected 'Sz$@$@', but got 'Sz$@@'
+
+priv fn writes_out(p: Sz$@)
+  p$ = 9
+
+priv fn writes_slice(p: U8[]$@)
+  p$ = "overwritten"
+
+priv fn writes_ptr(p: Sz$@$@)
+  p$ = null
+
+fn main(): I32
+  n: Sz = 0 // an immutable binding
+  writes_out(n@)
+  s: U8[] = "kept" // an immutable binding. an axis apart from element mutability (`U8$[]`)
+  writes_slice(s@)
+  p: Sz$@ = null // an immutable binding. an axis apart from the target being mutable
+  writes_ptr(p@)
+  return I32::n

@@ -1,0 +1,678 @@
+//< Assembles only the declarations, for distribution (`--emit-decls=`)
+//<
+//< **Call it before lower.** The ABI pass (`lower/abi.kspls`) rewrites an identifier's text into a
+//< mangled name, so reading it afterwards gives `kspl_…`.
+//< Caution: **Do not silently drop a declaration that cannot be written**, or the receiver reads
+//< "that API is not there". A type's spelling is built from `env.get_str(type_id)`, not cut from
+//< the source: a `Loc` holds only the start, so a declaration's end is unknown.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_doc" { decl_summary }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/sema/decl/eval" as sema_decl_eval
+import "ksplc/sema/decl/layout" as sema_decl_layout
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/arc" as sema_type_arc
+import "ksplc/sema/type/display" as sema_type_display
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
+import "std/chars"
+import "std/ds" { List, Map }
+import "std/str" { Str_builder }
+
+priv const max_type_walk_depth: Sz = 1000 //<
+  //< The depth limit for walking inside a type
+  //<
+  //< It matches max_type_layout_depth in sema/decl/layout.kspls.
+
+priv const lang_prefix: U8[] = "std.lang." //<
+  //< `std/lang`'s prefix. Every file imports it implicitly, so a name without the prefix resolves.
+
+priv struct Decls_state //< the state for writing names inside a declaration file
+  //<
+  //< Caution: **The code writing names and the code writing the import lines must use the same
+  //< table.** Decided separately, an alias that does not resolve gets written, and it breaks only
+  //< when the receiver compiles.
+  prefix: U8[] //< its own file's prefix (the dotted spelling; the trailing dot included)
+  alias_of: Map<|U8[], U8[]|>$@ //<
+    //< A std file's logical name -> the alias pointing at that file inside the declaration file.
+  owner_of_alias: Map<|U8[], U8[]|>$@ //<
+    //< An alias -> the file it names, kept to reject two files under one alias.
+  copied: Map<|U8[], Bool|>$@ //<
+    //< Files whose alias resolves without an added line (the source's import was copied).
+  added: List<|U8[]|>$@ //< the logical names of the imports this file adds (in writing order)
+  bad: U8[] //< names that could not be written, quoted in the reason a declaration is left out
+
+impl Decls_state
+  priv fn note_copied(r: Self$@, path: U8[], mod_name: U8[]) //<
+    //< It records the aliases the copied import lines define
+    //<
+    //< Of two lines for the same path the earlier wins (`as` and a selective import may both
+    //< appear).
+    key: = base_core.arena.dup_str(path)
+    r.copied.set(key, true)
+    if (r.alias_of.get(key) catch "").len > 0 ||
+      (r.owner_of_alias.get(mod_name) catch "").len > 0
+      return
+    owned: = base_core.arena.dup_str(mod_name)
+    r.alias_of.set(key, owned)
+    r.owner_of_alias.set(owned, key)
+
+  priv fn need_module(r: Self$@, path: U8[]): U8[] //< the alias pointing at the std file path
+    //<
+    //< Where there is none yet, the last path element becomes the alias, recorded as an added
+    //< import. Where another file already uses that alias it returns empty.
+    known: = r.alias_of.get(path) catch ""
+    if known.len > 0
+      return known
+    name: = path.default_import_alias()
+    if (r.owner_of_alias.get(name) catch "").len > 0
+      return ""
+    key: = base_core.arena.dup_str(path)
+    owned: = base_core.arena.dup_str(name)
+    r.alias_of.set(key, owned)
+    r.owner_of_alias.set(owned, key)
+    r.added.push(key)
+    return owned
+
+  priv fn mark(r: Self$@): Sz //< the rollback point before building one declaration
+    return r.added.len
+
+  priv fn rollback(r: Self$@, mark: Sz) //<
+    //< It discards the imports recorded for a declaration that could not be written
+    //<
+    //< Caution: **Remove it from the alias table too**, or the next declaration writes the alias
+    //< with no import line.
+    for r.added.len > mark
+      last: = r.added.len - 1
+      path: = r.added.get(last)
+      r.owner_of_alias.remove(r.alias_of.get(path) catch "")
+      r.alias_of.remove(path)
+      r.added.remove_at(last)
+
+priv fn is_name_char(ch: U8): Bool //<
+  //< Whether it is a character continuing a name, a dot included
+  //<
+  //< The prefix and the name together are one spelling.
+  return ch.is_alnum() || ch == '.'
+
+priv fn localize_token(c: Sema_ctx$@, st: Decls_state$@, tok: U8[], out: Str_builder$@): Bool //<
+  //< It rewrites one dotted name into the form a declaration file can use
+  //<
+  //< **Only std can be referred to**: the receiver has std and the declaration file, none of this
+  //< package's other files. Any other name goes onto `bad` and the declaration is left out.
+  $name: = tok
+  if name.starts_with(st.prefix)
+    name = name.sub_from(st.prefix.len)
+  else if name.starts_with(lang_prefix)
+    name = name.sub_from(lang_prefix.len)
+  dot: = name.rfind_char('.')
+  if dot < 0
+    out.s(name)
+    return true
+  // A type's name is its file's logical name plus one element (no nested types), so what precedes
+  // the last element is the file.
+  // Caution: **Do not trust a path just because it parses.** If it is not in a loaded file, the
+  // name is outside std.
+  path: = name.sub(0, dot).replace(".", "/", base_core.arena)
+  if !path.starts_with("std/") || (c.source_map.get(path) catch "").len == 0
+    st.bad = base_core.arena.dup_str(tok)
+    return false
+  mod_name: = st.need_module(path)
+  if mod_name.len == 0
+    st.bad = base_core.arena.dup_str(tok)
+    return false
+  out.s(mod_name).c('.').s(name.sub_from(dot + 1))
+  return true
+
+priv fn localize_spelling(c: Sema_ctx$@, st: Decls_state$@, spelled: U8[], out: Str_builder$@): Bool //<
+  //< It rewrites the names in a type's spelling one at a time
+  //<
+  //< **Replacing the whole spelling at once is not enough**: the names inside type arguments
+  //< (`ds.List<|mem.Arena$@|>`) follow the same rule.
+  $i: Sz = 0
+  for i < spelled.len
+    if !is_name_char(spelled[i])
+      out.c(spelled[i])
+      i += 1
+      continue
+    $j: = i
+    for j < spelled.len && is_name_char(spelled[j])
+      j += 1
+    if !localize_token(c, st, spelled.sub(i, j - i), out)
+      return false
+    i = j
+  return true
+
+priv fn spell_type(c: Sema_ctx$@, st: Decls_state$@, type_id: I32): U8[] //<
+  //< A type's spelling as a declaration file writes it, its own file's prefix dropped
+  //<
+  //< The prefix is dropped because the declaration file stands for that file.
+  //<
+  //< Where it cannot be written it returns empty.
+  //< Caution: **Take the spelling from `display_str`.** The internal spelling (`env.get_str`) has
+  //< the mutability reversed and holds the unwritable word `immut` (see sema/type/display.kspls).
+  if type_id == 0
+    return ""
+  $spelled: = c.env.display_str(type_id)
+  defer spelled.free()
+  $local: = Str_builder.new()
+  defer local.free()
+  if !localize_spelling(c, st, spelled.slice(), local@)
+    return ""
+  return base_core.arena.dup_str(local.slice())
+
+priv fn append_type(c: Sema_ctx$@, st: Decls_state$@, n: Ast_node$@, keep_self: Bool,
+  out: Str_builder$@): Bool //<
+    //< The parameters' and the return value's types.
+    //<
+    //< keep_self is true only for a `trait`'s required method.
+    //< Caution: **Inside a `trait`, write `Self` as is.** A required method's receiver is written
+    //< `Self` ("Traits (`trait`)" in docs/SPEC-language.md); the trait's name in its place would
+    //< make it a trait value's type and change what the requirement means.
+  if n == null
+    return false
+  if keep_self && n.mentions_self_type()
+    $written: = n.extract_type_name()
+    defer written.free()
+    if !written.slice().equals("Self")
+      st.bad = base_core.arena.dup_str(written.slice())
+      return false
+    out.s(written.slice())
+    return true
+  local: = spell_type(c, st, n.type_id)
+  if local.len == 0
+    return false
+  out.s(local)
+  return true
+
+priv fn render_fn(n: Ast_node$@, c: Sema_ctx$@, st: Decls_state$@, vis: U8[], keep_self: Bool,
+  out: Str_builder$@): Bool //<
+    //< A function's signature, with a `;` in place of the body.
+    //<
+    //< vis starts the line (only a `trait`'s required method may write `priv`). keep_self is
+    //< passed to append_type.
+  if n.sym_ptr != null && (Sema_symbol$@::n.sym_ptr).flags.is_export
+    out.s("#export\n")
+  out.s(vis).s(" fn ").s(n.get_decl_id_text())
+  // A default argument is written too: dropped, the receiver sees an API whose argument cannot be
+  // left out, and one call means two things across the boundary (`write_sig`'s caution).
+  written: = base_ast_spell.write_sig(n,
+    fn(part: base_ast_spell.Sig_part, o: Str_builder$@; c: Sema_ctx$@, st: Decls_state$@,
+    keep_self: Bool): Bool {
+    return append_type(c, st, part.type_node, keep_self, o);
+  }, out)
+  if !written
+    return false
+  out.s(";\n")
+  return true
+
+priv fn has_float_member(c: Sema_ctx$@, type_id: I32, depth: Sz): Bool //<
+  //< Whether a type holds any floating-point field directly, not through a pointer or slice
+  //<
+  //< A target has no bearing on the by-value classification.
+  //<
+  //< Caution: **Where it holds one, it must not be made opaque.** An opaque struct is just bytes,
+  //< so passed by value it goes to integer registers (SysV sorts a small struct into integer/SSE by
+  //< its fields' kinds; AArch64 passes an all-float struct in floating-point registers).
+  if depth >= max_type_walk_depth
+    return true
+  real_id: = c.env.get_clean_real_type(type_id)
+  if c.env.is_float(real_id)
+    return true
+  switch c.env.get_info(real_id) case .struct_type(def)
+    for f in def.fields_list
+      if has_float_member(c, f.type_id, depth + 1)
+        return true
+  case .enum_type(def)
+    for v in def.variants_list
+      for f in v.payload_fields
+        if has_float_member(c, f.type_id, depth + 1)
+          return true
+  case .array(base_id, _size)
+    return has_float_member(c, base_id, depth + 1)
+  case .result(base_id, err_id)
+    return has_float_member(c, base_id, depth + 1) || has_float_member(c, err_id, depth + 1)
+  default {}
+  return false
+
+priv fn render_opaque_struct(n: Ast_node$@, c: Sema_ctx$@, out: Str_builder$@) //<
+  //< An opaque `struct`
+  //<
+  //< It gives only the size and alignment: the receiver can hold it as a value but cannot touch its
+  //< contents.
+  //< Caution: The size is measured on the target `--emit-decls` was run for; for another target,
+  //< measure again there.
+  lay: = c.type_layout(n.type_id)
+  out.s("#size(\{lay.size\}) #align(\{lay.align\}) pub struct ").s(n.get_decl_id_text()).s(";\n")
+
+priv fn render_struct(n: Ast_node$@, c: Sema_ctx$@, st: Decls_state$@, out: Str_builder$@): Bool //<
+  //< A transparent `struct`
+  //<
+  //< The fields are written as they are (the receiver works out the size and layout too).
+  out.s("pub struct ").s(n.get_decl_id_text()).s(" {\n")
+  for f in n.children
+    if f.kind_id != .k_struct_field
+      continue
+    out.s("  ")
+    if f.get_visibility() == sema_type_scope.Visibility.public
+      out.s("pub ")
+    out.s(f.get_decl_id_text()).s(": ")
+    if !append_type(c, st, f.get_decl_type_node(), false, out)
+      return false
+    out.s(";\n")
+  out.s("}\n")
+  return true
+
+priv fn reason_with(head: U8[], name: U8[], tail: U8[]): U8[] //<
+  //< It inserts a name into the reason's sentence
+  //<
+  //< Interpolation writes only into a writer, so a value goes through Str_builder ("The expansion
+  //< specification for string interpolation" in docs/SPEC-language.md).
+  return base_core.arena.text().s(head).s(name).s(tail).take()
+
+priv fn unspellable(st: Decls_state$@, head: U8[]): U8[] //<
+  //< The reason, with the name that could not be written attached
+  $s: = Str_builder.new()
+  defer s.free()
+  s.s(head)
+  if st.bad.len > 0
+    s.s(" '").s(st.bad).c('\'')
+  return base_core.arena.dup_str(s.slice())
+
+priv fn render_impl(n: Ast_node$@, c: Sema_ctx$@, st: Decls_state$@, out: Str_builder$@): U8[] //<
+  //< An `impl` block.
+  //<
+  //< **A non-`pub` method cannot be exported**: a `priv` one is `static` in the generated C, and
+  //< one with no visibility is invisible outside the package, so it is left out with a comment.
+  target_node: = n.get_decl_type_node()
+  if target_node == null
+    return "an impl's target cannot be read"
+  target_name: = spell_type(c, st, target_node.type_id)
+  if target_name.len == 0
+    return unspellable(st, "the target type cannot be written inside a declaration file:")
+  $trait_name: = ""
+  $trait_id: I32 = 0
+  if trait_node: = n.get_impl_trait_node()
+    if trait_node.find_child(.k_type_args) != null
+      return "a generic's conformance to a trait is not put out to the boundary"
+    // **Only a std trait can be referred to.** A trait from this file is not exported, so the
+    // conformance alone would leave the name unresolved for the receiver.
+    if !c.env.get_str(trait_node.type_id).starts_with("std.")
+      return "conformance to a trait outside std is not put out to the boundary"
+    trait_name = spell_type(c, st, trait_node.type_id)
+    if trait_name.len == 0
+      return "the trait's name cannot be written inside a declaration file"
+    trait_id = trait_node.type_id
+
+  $body: = Str_builder.new()
+  defer body.free()
+  for m in n.children
+    if m.kind_id != .k_decl_fn
+      continue
+    m_name: = m.get_decl_id_text()
+    if m.get_visibility() != sema_type_scope.Visibility.public
+      body.s("  // method that could not go out: '\{m_name\}' (not 'pub')\n")
+      continue
+    if m.find_child(.k_type_gen_params) != null
+      body
+        .s("  // method that could not go out: '\{m_name\}' (generics are not put out to the \
+          boundary)\n")
+      continue
+    $one: = Str_builder.new()
+    defer one.free()
+    if !render_fn(m, c, st, "pub", false, one@)
+      body
+        .s("  // method that could not go out: '\{m_name\}' \
+          (\{unspellable(st, "a type unwritable in the signature appears:")\})\n")
+      continue
+    body.s("  ").s(one.slice())
+  if trait_name.len > 0
+    missing: = missing_trait_method(c, n, trait_id)
+    if missing.len > 0
+      return reason_with("the method '", missing,
+        "' the trait requires cannot go out as 'pub' (it cannot be called from outside the \
+          artefact)")
+  out.s("impl ").s(target_name)
+  if trait_name.len > 0
+    out.s(": ").s(trait_name)
+  out.s(" {}\n" if body.slice().len == 0 else " {\n")
+  if body.slice().len > 0
+    out.s(body.slice()).s("}\n")
+  return ""
+
+priv fn missing_trait_method(c: Sema_ctx$@, impl_node: Ast_node$@, trait_id: I32): U8[] //<
+  //< A trait method the conformance needs that this impl does not have as `pub`, or empty if none
+  //<
+  //< A method the trait declares `priv` is always caught here (ARC's `Ref_counted`, which cannot be
+  //< called from outside the artefact).
+  switch c.env.get_info(c.env.get_real_type(trait_id)) case .trait_type(trait_def)
+    for m_sym in trait_def.methods_list
+      $found: = false
+      for m in impl_node.children
+        if m.kind_id == .k_decl_fn && m.get_decl_id_text().equals(m_sym.name) &&
+          m.get_visibility() == sema_type_scope.Visibility.public
+          found = true
+      if !found
+        return m_sym.name
+  default {}
+  return ""
+
+priv fn render_enum(n: Ast_node$@, c: Sema_ctx$@, st: Decls_state$@, out: Str_builder$@): U8[] //<
+  //< An `enum`.
+  //<
+  //< The variants, the tag values and the payload types are written as they are. **It cannot be
+  //< made opaque**: a `switch` on the receiver's side must know the variants.
+  //<
+  //< Caution: **Write the tag values**, as folded numbers (an initializer cannot be written back).
+  //< Left out, the receiver counts from the order, and a skipped number (`err = 3`) shifts.
+  // As with a struct, a type under ARC cannot be exported (retain/release are `priv`).
+  if c.env.type_is_managed(n.type_id)
+    return "it is a type under ARC (retain/release cannot be called from outside the artefact)"
+  $body: = Str_builder.new()
+  defer body.free()
+  $base: = ""
+  $found: = false
+  $spelled_all: = true
+  switch c.env.get_info(c.env.get_real_type(n.type_id)) case .enum_type(def)
+    found = true
+    if n.get_decl_type_node() != null
+      base = spell_type(c, st, def.base_type_id)
+      spelled_all = base.len > 0
+    for v in def.variants_list
+      body.s("  ").s(v.name)
+      if v.payload_fields.len > 0
+        body.c('(')
+        $first: = true
+        for f in v.payload_fields
+          if !first
+            body.s(", ")
+          first = false
+          local: = spell_type(c, st, f.type_id)
+          if local.len == 0
+            spelled_all = false
+          body.s(f.name).s(": ").s(local)
+        body.c(')')
+      body.s(" = \{v.tag_value\};\n")
+  default {}
+  if !found
+    return "the enum's contents cannot be read"
+  if !spelled_all
+    return unspellable(st, "a type unwritable in a variant appears:")
+  out.s("pub enum ").s(n.get_decl_id_text())
+  if base.len > 0
+    out.s(": ").s(base)
+  out.s(" {\n").s(body.slice()).s("}\n")
+  return ""
+
+priv fn render_trait(n: Ast_node$@, c: Sema_ctx$@, st: Decls_state$@, out: Str_builder$@): U8[] //<
+  //< A `trait`
+  //<
+  //< The required methods' signatures are written in declaration order.
+  //< Caution: **Keep the order.** A call through a trait value uses a slot chosen by it, so one
+  //< missing sends the call to another method. A `priv` requirement is written too — the
+  //< conforming side must have it.
+  $body: = Str_builder.new()
+  defer body.free()
+  for m in n.children
+    if !m.is_fn_decl()
+      continue
+    body.s("  ")
+    if !render_fn(m, c, st,
+      "priv" if m.get_visibility() == sema_type_scope.Visibility.file_private else "pub", true,
+      body@)
+      return unspellable(st, "a type unwritable in a required method's signature appears:")
+  out.s("pub trait ").s(n.get_decl_id_text()).s(" {\n").s(body.slice()).s("}\n")
+  return ""
+
+priv fn render_one(n: Ast_node$@, c: Sema_ctx$@, st: Decls_state$@, out: Str_builder$@): U8[] //<
+  //< It builds one declaration and returns why it could not (empty means it was written)
+  if n.find_child(.k_type_gen_params) != null
+    return "generics are not put out to the boundary"
+  switch n.kind_id case .k_decl_fn
+    return ("" if render_fn(n, c, st, "pub", false, out)
+      else unspellable(st, "a type unwritable in the signature appears:"))
+  case .k_decl_const
+    return render_const(n, c, st, out)
+  case .k_decl_impl
+    return render_impl(n, c, st, out)
+  case .k_decl_struct
+    // A type under ARC cannot be exported: retain/release are `priv` (`Ref_counted`). Written
+    // without the conformance, the receiver copies without counting — it links, and the program
+    // breaks at run time. Types it holds by value count too.
+    if c.env.type_is_managed(n.type_id)
+      return "it is a type under ARC (retain/release cannot be called from outside the artefact)"
+    // The default is opaque; a type holding floating point is written transparent
+    // (has_float_member), so its fields' types must be writable.
+    if !has_float_member(c, n.type_id, 0)
+      render_opaque_struct(n, c, out)
+      return ""
+    return ("" if render_struct(n, c, st, out)
+      else unspellable(st, "a type unwritable in a field appears:"))
+  case .k_decl_enum
+    return render_enum(n, c, st, out)
+  case .k_decl_trait
+    return render_trait(n, c, st, out)
+  case .k_decl_alias
+    out.s("pub typedef ").s(n.get_decl_id_text()).s(" = ")
+    if !append_type(c, st, n.get_decl_type_node(), false, out)
+      return unspellable(st, "a typedef's target cannot be written:")
+    out.s(";\n")
+    return ""
+  default {}
+  return "this kind cannot be written out yet"
+
+priv fn const_init_node(n: Ast_node$@, type_node: Ast_node$@): Option<|Ast_node$@|> //<
+  //< A `const`'s initializer
+  //<
+  //< Of "attributes / `const` / name / type / value", it is the non-empty child after the type
+  //< (after the name where the type's slot is empty).
+  $after_type: = false
+  for c in n.children
+    if after_type && c.kind_id != .k_empty
+      return Option<|Ast_node$@|>.some(c)
+    if c == type_node || (type_node == null && c.kind_id == .k_identifier)
+      after_type = true
+  return Option<|Ast_node$@|>.none
+
+priv fn render_const_value(n: Ast_node$@, c: Sema_ctx$@, init: Ast_node$@, type_name: U8[],
+  out: Str_builder$@): U8[] //<
+    //< It writes a `const`'s value, or returns why not.
+    //<
+    //< Only a single literal or an expression that folds to an integer is written (folding yields
+    //< only integers; an aggregate has no spelling).
+  out.s("pub const ").s(n.get_decl_id_text()).s(": ").s(type_name).s(" = ")
+  // A literal's spelling is copied (the same lexer reads it); a string, a character and a float
+  // have no folded value. An interpolation (`k_string_expr`) runs at run time, never in a `const`.
+  switch init.kind_id case .k_string, .k_char, .k_float, .k_integer, .k_bool
+    out.s(init.text).s(";\n")
+    return ""
+  default {}
+  real_id: = c.env.get_clean_real_type(n.type_id)
+  if real_id == (I32::sema_type_env.Builtin_type_id.bool_type)
+    switch c.try_eval_constexpr(init) case .some(v)
+      out.s("false;\n" if v == 0 else "true;\n")
+      return ""
+    default {}
+    return "it does not fold to a boolean"
+  if !c.env.is_integer(real_id)
+    return "it is neither one literal nor an integer (there is no means of assembling a spelling)"
+  switch c.try_eval_constexpr_wide(init) case .some(wide)
+    out.s("\{wide\};\n")
+    return ""
+  default {}
+  return "it does not fold to an integer"
+
+priv fn render_const(n: Ast_node$@, c: Sema_ctx$@, st: Decls_state$@, out: Str_builder$@): U8[] //<
+  //< A `const`
+  //<
+  //< **The value is written out** rather than a symbol: a `const` is folded at translation time.
+  type_node: = n.get_decl_type_node()
+  local: = spell_type(c, st, n.type_id if type_node == null else type_node.type_id)
+  if local.len == 0
+    return "the type cannot be written inside a declaration file"
+  switch const_init_node(n, type_node) case .some(init)
+    return render_const_value(n, c, init, local, out)
+  default {}
+  return "the value cannot be read"
+
+priv fn append_published_bodies(raw_root: Ast_node$@, src: U8[], out: Str_builder$@): Sz //<
+  //< It copies each declaration that publishes its body (`#publish_body`) and returns how many
+  //<
+  //< **Cut from the raw tree** — in the normalized one the `{` `}` `;` are gone, so a subtree
+  //< ends at the body's last token.
+  //<
+  //< Caution: **Do not rebuild the text.** Both sides reading the same body text is what makes the
+  //< copies of an instantiated body agree (abi_label_tag in gen/c/decl.kspls).
+  $count: Sz = 0
+  if raw_root == null || src.len == 0
+    return count
+  for item in raw_root.children
+    if !item.has_attribute("publish_body")
+      continue
+    span: = item.get_span_offset()
+    if span.offset + span.span > src.len
+      continue
+    out.s(src.sub(span.offset, span.span)).s("\n\n")
+    count += 1
+  return count
+
+priv fn copy_source_imports(raw_root: Ast_node$@, src: U8[], out: Str_builder$@) //<
+  //< It copies the source's `import` lines into the declaration file
+  //<
+  //< **Only an import of std is copied**; one of the package's own files leaves a comment line so
+  //< the omission shows. **`note_source_imports` records the aliases** from the normalized tree
+  //< (here `as` and `;` are children too).
+  if raw_root == null
+    return
+  for item in raw_root.children
+    node: = item.unwrap_top_level()
+    if node.kind_id != .k_decl_import
+      continue
+    path: = node.get_import_path_text().unwrap_or("")
+    if !path.starts_with("std/")
+      out.s("// import that could not go out: '").s(path)
+        .s("' (the library's user does not have that file)\n")
+      continue
+    span: = item.get_span_offset()
+    if span.offset + span.span <= src.len
+      out.s(src.sub(span.offset, span.span)).s("\n")
+
+priv fn note_source_imports(root: Ast_node$@, c: Sema_ctx$@, st: Decls_state$@) //<
+  //< It records the aliases the copied `import`s give the declaration file
+  //<
+  //< Caution: **Look only at the entry file's imports.** The normalized tree holds every loaded
+  //< file, so another file's alias would count as "copied" and be written with no import line. A
+  //< selective import (`{ X }`) makes no alias.
+  for child_node in root.children
+    node: = child_node.unwrap_top_level()
+    if node.kind_id != .k_decl_import
+      continue
+    if !node.loc.file().equals(c.main_file)
+      continue
+    path: = node.get_import_path_text().unwrap_or("")
+    if !path.starts_with("std/") || node.get_decl_import_selector_list() != null
+      continue
+    written: = node.get_import_alias()
+    st.note_copied(path, path.default_import_alias() if written.len == 0 else written)
+
+priv fn append_needed_imports(st: Decls_state$@, out: Str_builder$@) //<
+  //< It writes the `import`s it decided to add so the signatures can be written
+  for path in st.added
+    out.s("import \"\{path\}\";\n")
+
+priv fn decl_label(n: Ast_node$@): U8[] //<
+  //< The name of a declaration that could not be exported
+  //<
+  //< An `impl`, having no name, is named by its target type.
+  if n.kind_id != .k_decl_impl
+    return n.get_decl_id_text()
+  target_node: = n.get_decl_type_node()
+  return "impl" if target_node == null else reason_with("impl ", target_node.text, "")
+
+priv fn with_summary(one: U8[], doc: U8[]): U8[] //<
+  //< One declaration with its summary on its first line
+  //<
+  //< Caution: **Put it on that line, not above**, where it would be an ordinary comment the
+  //< receiver's hover does not read. **Nothing after the parting line is copied**: the detail stays
+  //< with the body ("Writing out only the declarations to ship (`--emit-decls`)" in
+  //< `../docs/SPEC-tools.md`).
+  nl: = one.find_char('\n')
+  if doc.len == 0 || nl < 0
+    return one
+  return base_core.arena.text().s(one.sub(0, nl)).s(" //< ").s(doc).s(one.sub_from(nl)).take()
+
+// It builds a declaration file's contents from the entry file's `pub` declarations. raw_root / src
+// are the entry file's raw tree and text (for the published bodies).
+
+fn render_decls(root: Ast_node$@, c: Sema_ctx$@, raw_root: Ast_node$@, src: U8[]): U8[]
+  $prefix: = Str_builder.new()
+  defer prefix.free()
+  prefix.s_path_as_dots(c.main_file).c('.')
+  $st: = Decls_state::{ .prefix = prefix.slice(),
+    .alias_of = base_core.arena.create(Map<|U8[], U8[]|>.new(base_core.arena)),
+    .owner_of_alias = base_core.arena.create(Map<|U8[], U8[]|>.new(base_core.arena)),
+    .copied = base_core.arena.create(Map<|U8[], Bool|>.new(base_core.arena)),
+    .added = base_core.arena.create(List<|U8[]|>.new(base_core.arena)), .bad = "" }
+  // The published bodies are copied first, **with the imports they use**, or their names do not
+  // resolve. With no body there are no imports (they would be unused).
+  $imports: = Str_builder.new()
+  defer imports.free()
+  $bodies: = Str_builder.new()
+  defer bodies.free()
+  published: = append_published_bodies(raw_root, src, bodies@)
+  if published > 0
+    copy_source_imports(raw_root, src, imports@)
+    note_source_imports(root, c, st@)
+  // Caution: **Build the declarations first.** Writing the signatures decides which imports are
+  // needed, and those are written before them.
+  $decls: = Str_builder.new()
+  defer decls.free()
+  for child_node in root.children
+    n: = child_node.unwrap_top_level()
+    if !n.loc.file().equals(c.main_file)
+      continue
+    // An `impl` gets no visibility mark (its methods do). Filtering to `pub` here would silently
+    // drop the conformance and the methods.
+    if n.kind_id != .k_decl_impl && n.get_visibility() != sema_type_scope.Visibility.public
+      continue
+    $one: = Str_builder.new()
+    defer one.free()
+    mark: = st.mark()
+    st.bad = ""
+    reason: = render_one(n, c, st@, one@)
+    if reason.len > 0
+      st.rollback(mark)
+      decls.s("// declaration that could not go out: '").s(decl_label(n)).s("' (").s(reason)
+        .s(")\n")
+      continue
+    decls.s(with_summary(one.slice(), decl_summary(src, n)))
+  // **A generic's template is not in the tree** (sema moves it to `generics.templates`), so the
+  // walk above silently misses it; templates are listed here. The table holds each under two keys
+  // (the short name and the FQN), deduplicated by node identity.
+  $seen: = Map<|Sz, Bool|>.new(base_core.arena)
+  for entry in c.generics.templates.items()
+    n: = entry.value
+    if n == null || !n.loc.file().equals(c.main_file) ||
+      n.get_visibility() != sema_type_scope.Visibility.public
+      continue
+    if seen.get(Sz::n) catch false
+      continue
+    seen.set(Sz::n, true)
+    if n.has_attribute("publish_body")
+      continue // already copied with its body
+    decls.s("// declaration that could not go out: '").s(n.get_decl_id_text())
+      .s("' (generics are not put out to the boundary)\n")
+  append_needed_imports(st@, imports@)
+  $out: = Str_builder.new()
+  defer out.free()
+  out
+    .s("// These are the declarations `ksplc --emit-decls` wrote. The bodies are in another \
+      artefact.\n// Caution: Do not mend them by hand. Whenever the bodies are remade, remake this \
+      too.\n\n")
+  if imports.slice().len > 0
+    out.s(imports.slice()).c('\n')
+  out.s(bodies.slice()).s(decls.slice())
+  return base_core.arena.dup_str(out.slice())

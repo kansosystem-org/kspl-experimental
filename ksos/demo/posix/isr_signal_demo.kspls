@@ -1,0 +1,70 @@
+//< An ISR-safe notification to a task through Queue<|T|>.try_send
+//<
+//< A real POSIX signal (SIGUSR1) stands in for a microcontroller's external interrupt. The handler
+//< cannot block (the scheduler has nothing to switch to), so it always uses try_send, which does
+//< not block. Like std/sys's shutdown handler, it does nothing that is not async-signal-safe (no
+//< I/O such as io.out(), no allocation): only try_send and a counter update. Raising the
+//< "interrupt" 10 times against a queue of capacity 4 also shows the price of never blocking: once
+//< the queue is full, values are dropped, and drop_count shows it.
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+import "std/io"
+import "std/libc"
+import "std/sys"
+
+const sigusr1: I32 = 10 // assumes Linux (30 on macOS/BSD; this demo only runs on a POSIX host)
+
+$g_q: sync.Queue<|I32|>
+$g_qbuf: I32[4] // a small capacity, so the demo also shows drops on a full queue
+
+$g_irq_count: I32 = 0
+$g_drop_count: I32 = 0
+$g_next_value: I32 = 0
+
+$tcb_driver: Task
+$tcb_consumer: Task
+$stack_driver: U8[65536]
+$stack_consumer: U8[65536]
+
+fn on_ext_irq(_sig: I32): Void //< the mock ISR
+  //<
+  //< It calls libc.signal() again at the end because, on glibc built with -std=c99, signal() has
+  //< SysV semantics: after one delivery the action resets to the default, which exits. Without
+  //< registering again, the second SIGUSR1 ends the process (the classic "reliable signal" idiom).
+  g_irq_count += 1
+  if !g_q.try_send(g_next_value)
+    g_drop_count += 1
+  g_next_value += 1
+  libc.signal(sigusr1, on_ext_irq)
+
+fn driver(_arg: Void$@): Void //<
+  //< Raise the "interrupt" 10 times in a row
+  //<
+  //< There is no yield between them, so consumer cannot run in between. The first 4 fill the
+  //< queue, and msgq_try_send drops the other 6 by returning false without blocking.
+  for $i: I32 = 0; i < 10; i += 1
+    sys.raise_signal(sigusr1) // a real signal delivery, standing in for the interrupt
+  io.out().s("[driver] raised 10 simulated interrupts\n")
+
+fn consumer(_arg: Void$@): Void
+  $sum: I32 = 0
+  for $n: I32 = 0; n < 4; n += 1
+    v: = g_q.recv() // take the 4 that fit (it may block, but should return at once)
+    sum += v
+    io.out().s("[consumer] recv \{v\}\n")
+    Task.delay(1)
+  io.out().s("=== Kanso OS (POSIX) ISR-safe msgq_try_send demo ===\n")
+  io.out().s("[consumer] irq_count=\{g_irq_count\} drop_count=\{g_drop_count\} sum=\{sum\}\n")
+  assert(g_irq_count == 10, "isr: every raised signal must reach the handler")
+  assert(g_drop_count == 6, "isr: a full queue must drop without blocking")
+  assert(sum == 6, "isr: the 4 kept values must be the first 4 (0+1+2+3)")
+  io.out().s("[consumer] ISR->task signaling via msgq_try_send verified\n")
+  io.out().s("=== done ===\n")
+
+fn main()
+  g_q.init(g_qbuf[0]@, 4)
+  libc.signal(sigusr1, on_ext_irq)
+  tcb_driver.create(U8$[]::stack_driver, driver, null, 1, "driver")
+  tcb_consumer.create(U8$[]::stack_consumer, consumer, null, 1, "consumer")
+  task.start_scheduler()
+  io.out().s("=== scheduler finished (all tasks done) ===\n")

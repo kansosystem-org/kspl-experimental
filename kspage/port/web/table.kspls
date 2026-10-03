@@ -1,0 +1,436 @@
+//< The entry points that move a table's cells
+//<
+//< Adding and removing rows and columns, merging and splitting cells, copying from the current
+//< cell onward, sorting rows, CSV import and export, and the memo on a container.
+//< Caution: **Call all of them after layout** — which cell the cursor is in is unknown until it is
+//< laid out.
+//< The boundary follows [`bridge.kspls`](bridge.kspls)'s rules ("The boundary between the core
+//< and the browser" in `kspage/docs/DESIGN.md`).
+import "kspage/lay/ask"
+import "kspage/model/doc" { Axis, Block }
+import "kspage/model/filter" + { Filter }
+import "kspage/model/source"
+import "kspage/port/web/state" + { doc_arena, ed, ensure, in_ptr, input, input_cap, page, sheet }
+import "kspage/share/consts"
+import "kspage/write/block"
+import "kspage/write/cells"
+import "kspage/write/csv"
+import "kspage/write/edit" as _edit
+import "kspage/write/shape" as _shape
+import "std/chars"
+import "std/ds" { List }
+import "std/json" { Json_builder }
+import "std/str" { Str_builder }
+
+// Adds one row (`axis` 0) or column (1) to the table the cursor is in. 1 if added.
+#export
+fn kspage_web_add_line(axis: I32): I32
+  if page == null
+    return 0
+  which: = Axis.column if axis != 0 else Axis.row
+  return 1 if ed.add_line(page, which) else 0
+
+// Merges every cell the selection covers into its top-left cell (drag across, click once); one
+// undo restores them all.
+// **The result carries its reason as a number** (the rule at `kspage_web_set_block_style`):
+// 1 merged, 0 the selection is outside a cell or spans two tables, -1 open read-only, -2 only one
+// cell is selected, -3 a merge inside extends outside the selection.
+#export
+fn kspage_web_merge_cells(): I32
+  if page == null
+    return 0
+  switch ed.merge_range(page) case .done
+    return 1
+  case .shut
+    return -1
+  case .alone
+    return -2
+  case .ragged
+    return -3
+  case .outside
+    return 0
+
+// Copies the text of the cursor's cell into the cells beyond it (`axis` 0 down, 1 right). 1 if
+// copied. **References inside a formula shift** (only the part with `$` stays put).
+#export
+fn kspage_web_fill_along(axis: I32): I32
+  if page == null
+    return 0
+  which: = Axis.column if axis != 0 else Axis.row
+  return 1 if ed.fill_along(page, which) else 0
+
+// Splits the merged cell the cursor is in. 1 if split.
+// An empty cell comes back where it was covering.
+#export
+fn kspage_web_split_cell(): I32
+  if page == null
+    return 0
+  return 1 if ed.split_cell(page) else 0
+
+// Deletes the row (`axis` 0) or column (1) the cursor is in. 1 if deleted.
+// The last one is not deleted (the cursor would point at nothing).
+#export
+fn kspage_web_drop_line(axis: I32): I32
+  if page == null
+    return 0
+  which: = Axis.column if axis != 0 else Axis.row
+  return 1 if ed.drop_line(page, which) else 0
+
+// Sorts the rows under the heading by the cursor's column (`down` 0 is smallest first). **The
+// first row is the heading and never moves**; the cursor only chooses the column.
+// Caution: **Return the reason as a number** (the rule at `kspage_web_set_block_style` in
+// `face.kspls`): 1 sorted, 0 the cursor is outside a cell, -1 a downward-merged cell among the
+// rows, -2 fewer than two rows under the heading, -3 already in that order, -4 open read-only. One
+// number for all would send the reader looking for the wrong cause.
+#export
+fn kspage_web_sort_rows(down: I32): I32
+  if page == null
+    return 0
+  switch ed.sort_rows(page, down != 0) case .done
+    return 1
+  case .outside
+    return 0
+  case .merged
+    return -1
+  case .too_few
+    return -2
+  case .in_order
+    return -3
+  case .shut
+    return -4
+// Writes the cursor's table as CSV text and returns the length (at `kspage_web_out_ptr`).
+// **The shown text is written**, not the formulas (CSV carries values).
+#export
+fn kspage_web_csv(): Sz
+  ensure()
+  state.out.clear()
+  if page == null
+    return 0
+  spot: = ask.cell_of(page, ed.caret)
+  if !spot.found
+    return 0
+  csv.write_table(spot.table, state.out@, doc_arena)
+  return state.out.len
+
+// Writes the cursor's table as "constant text" and returns the length (at `kspage_web_out_ptr`).
+// Caution: **Do not name the parameter `out`** — the name would clash with the export buffer
+// (`state.out`) (the same issue as in `bridge.kspls`).
+// Do not hide a refused row (one whose text cannot be a name is left out).
+#export
+fn kspage_web_consts(name_len: Sz, counts: F32$@): Sz
+  ensure()
+  state.out.clear()
+  state.clear_out(counts, 2)
+  if page == null || name_len < 0 || name_len > input_cap
+    return 0
+  spot: = ask.cell_of(page, ed.caret)
+  if !spot.found
+    return 0
+  made: = consts.write(spot.table, U8[]::{ .ptr = input@, .len = name_len }, state.out@, doc_arena)
+  counts$ = F32::made.rows
+  (counts + 1)$ = F32::made.refused
+  return state.out.len
+
+// Writes what the cursor's container (the table) points at and returns the length. **Empty means
+// it points at nothing.**
+#export
+fn kspage_web_aim_here(): Sz
+  ensure()
+  state.out.clear()
+  if page == null
+    return 0
+  state.out.s(source.plain_href(ed.aim_at(page)))
+  return state.out.len
+
+// Makes the `len` bytes in the typing arena what the cursor's container points at (the link to
+// the text generated from it).
+// Empty removes it. Only inside a container. Once set, staleness can be checked
+// (`kspage_web_consts_stale` below).
+#export
+fn kspage_web_set_aim_here(len: Sz): I32
+  ensure()
+  if page == null || len < 0 || len > input_cap
+    return 0
+  if len <= 0
+    return 1 if ed.set_aim(page, "") else 0
+  $sb: = Str_builder.new()
+  defer sb.free()
+  source.href_of(U8[]::{ .ptr = input@, .len = len }, "", sb@)
+  return 1 if ed.set_aim(page, sb.slice()) else 0
+
+// Whether the text generated from the cursor's table equals the text passed in. 0 means nothing
+// to compare (the table has no link target, or that text was not passed in), 1 the same, 2
+// different.
+// Caution: **Keep the freshness check next to the generated output**, or a changed table leaves
+// the text silently stale (and someone edits the generated file by hand).
+#export
+fn kspage_web_consts_stale(name_len: Sz): I32
+  ensure()
+  if page == null || name_len < 0 || name_len > input_cap
+    return 0
+  spot: = ask.cell_of(page, ed.caret)
+  if !spot.found || spot.table == null
+    return 0
+  aim: = source.aim_of(spot.table.aim)
+  if !aim.found
+    return 0
+  had: = state.lent_text(aim.file)
+  if had.len <= 0
+    return 0
+  $fresh: = Str_builder.new()
+  defer fresh.free()
+  consts.write(spot.table, U8[]::{ .ptr = input@, .len = name_len }, fresh@, doc_arena)
+  return 1 if fresh.slice().equals(had) else 2
+
+// Reads the `text_len` bytes in the loading arena as CSV and inserts one table after the cursor's
+// paragraph. 1 if inserted.
+// The style's name comes from the typing arena (it is the document's own).
+#export
+fn kspage_web_insert_csv(text_len: Sz, name_len: Sz): I32
+  ensure()
+  if page == null || in_ptr == null || text_len <= 0 || name_len <= 0 || name_len > input_cap
+    return 0
+  name: = U8[]::{ .ptr = input@, .len = name_len }
+  src: = U8[]::{ .ptr = in_ptr, .len = text_len }
+  return 1 if ed.insert_csv(page, sheet, name, src) else 0
+// Writes the memo on the cursor's container and returns the length.
+#export
+fn kspage_web_aside(): Sz
+  ensure()
+  state.out.clear()
+  if page != null
+    state.out.s(ed.aside_at(page))
+  return state.out.len
+
+// Makes the `len` bytes in the typing arena the memo on the cursor's container. 1 if set.
+// **A memo does not appear in the flow** (only its writer sees it). Empty removes it.
+#export
+fn kspage_web_set_aside(len: Sz): I32
+  ensure()
+  if page == null || len < 0 || len > input_cap
+    return 0
+  return 1 if ed.set_aside(page, U8[]::{ .ptr = input@, .len = len }) else 0
+
+// ---- A column's width and a row's height ----
+
+priv fn room_of(spot: ask.Cell_at, axis: Axis): F32 //<
+  //< That column's width (or that row's height), taken from a cell that is not merged
+  //<
+  //< Caution: **Do not take it from a merged cell**, or the field shows a number wider than the
+  //< visible column. Unmerged cells agree, so the largest found is enough (none: 0).
+  $best: F32 = 0.0
+  for i in Range.asc(page.cells.len)
+    c: = page.cells.get(i)
+    if c.table != spot.table
+      continue
+    switch axis case .column
+      if c.column == spot.column && c.block.span_cols == 1 && c.rect.w > best
+        best = c.rect.w
+    case .row
+      if c.row == spot.row && c.block.span_rows == 1 && c.rect.h > best
+        best = c.rect.h
+  return best
+
+// The column width and row height of the cursor's cell. `out` holds the column and row settings,
+// the column and row measurements, and whether the cursor is inside a cell.
+// Caution: **Return the setting and the measurement from one entry point** (as
+// [`grab.kspls`](grab.kspls)'s `kspage_web_frame_rect` does) — split, one goes stale on a layout.
+// "Not set" is `out + 5` / `out + 6`, not 0 (a valid value).
+#export
+fn kspage_web_cell_sizes(out: F32$@)
+  for $i: Sz = 0; i < 7; i += 1
+    (out + i)$ = 0.0
+  if page == null
+    return
+  spot: = ask.cell_of(page, ed.caret)
+  if !spot.found
+    return
+  (out + 4)$ = 1.0
+  switch spot.table.size_of(Axis.column, spot.column) case .some(v)
+    out$ = v
+    (out + 5)$ = 1.0
+  case .none {}
+  switch spot.table.size_of(Axis.row, spot.row) case .some(v)
+    (out + 1)$ = v
+    (out + 6)$ = 1.0
+  case .none {}
+  (out + 2)$ = room_of(spot, Axis.column)
+  (out + 3)$ = room_of(spot, Axis.row)
+
+// Sets the width of the cursor's column (`axis` 1) or the height of its row (0) by number. 1 if
+// set.
+// Caution: **Do not use 0 for "unset"** — 0 is a valid setting, and it is written as 0
+// ([`../../lay/grid.kspls`](../../lay/grid.kspls)).
+#export
+fn kspage_web_set_cell_size(axis: I32, v: F32): I32
+  if page == null
+    return 0
+  which: = Axis.column if axis != 0 else Axis.row
+  spec: = Option<|F32|>.none if v < 0.0 else Option<|F32|>.some(v)
+  return 1 if ed.set_line_size(page, which, spec) else 0
+
+// ---- Filtering the rows ----
+
+// Filters the cursor's table to the rows whose cell in the cursor's column matches: the kind is
+// `kind`'s number in `keep_order` (`state.kspls`) and the value is the `len` bytes written into
+// `kspage_web_input_buffer()`. **It is a view** (`Over.filters`): nothing is saved, and a formula
+// counts every row. A condition already on that column is replaced. 1 if filtered, 0 with the
+// cursor outside a cell, -1 where a number is needed and the text is not one.
+#export
+fn kspage_web_filter(kind: I32, len: Sz): I32
+  ensure()
+  if page == null || len < 0 || len > input_cap
+    return 0
+  spot: = ask.cell_of(page, ed.caret)
+  if !spot.found
+    return 0
+  keep: = state.keep_at(kind)
+  // Caution: **Copy the text** — the typing arena is overwritten by the next call, and the
+  // condition lives as long as the document.
+  text: = doc_arena.dup_str(U8[]::{ .ptr = input@, .len = len })
+  made: = filter.make_filter(spot.table, spot.column, keep, text)
+  if keep.wants_number() && !made.numeric
+    return -1
+  if sheet.over.filters == null
+    sheet.over.filters = List<|Filter|>.create(doc_arena)
+  drop_filters(spot.table, spot.column, true)
+  sheet.over.filters.push(made)
+  return 1
+
+// Writes what the cursor's column shows, so a set of values can be checked, and returns the
+// length: `{"values":[…],"blank":<bool>,"cut":<bool>,"chosen":[…]|null}`, where `values` are that
+// column's distinct texts in its sort order, `blank` says some cell shows nothing, `cut` says there
+// were more values than the list holds, and `chosen` is the set a filter keeps. **Empty means the
+// cursor is not inside a cell.**
+// Caution: **Ask again after every change** (what a column shows changes with the document).
+#export
+fn kspage_web_column_values(): Sz
+  ensure()
+  state.out.clear()
+  if page == null
+    return 0
+  spot: = ask.cell_of(page, ed.caret)
+  if !spot.found
+    return 0
+  seen: = List<|U8[]|>.create(doc_arena)
+  got: = cells.column_values(spot.table, spot.column, doc_arena, seen)
+  $b: = Json_builder.new(doc_arena)
+  $arr: = b.arr()
+  for $k: Sz = 0; k < seen.len; k += 1
+    arr = arr.push(b.str_val(seen.get(k)))
+  $made: = b.obj().set("values", arr.build()).set("blank", b.bool_val(got.blank))
+    .set("cut", b.bool_val(got.cut))
+  if chosen: = set_on(spot.table, spot.column)
+    $picked: = b.arr()
+    $at: Sz = 0
+    for at < chosen.len
+      hit: = chosen.sub_from(at).find_char(filter.value_sep)
+      stop: = chosen.len if hit < 0 else at + hit
+      picked = picked.push(b.str_val(chosen.sub(at, stop - at)))
+      at = stop + 1
+    made = made.set("chosen", picked.build())
+  else
+    // Caution: **Write `null`, do not leave the name out** — absent reads as "not asked", not "not
+    // filtered".
+    made = made.set("chosen", b.null_val())
+  made.build().dump(state.out@)
+  return state.out.len
+
+priv fn set_on(table: Block$@, column: Sz): Option<|U8[]|> //<
+  //< The set of values a filter on that column keeps, if it is a set filter
+  //<
+  //< A filter by condition is not a set, so none is returned and every checkbox shows as checked
+  //< (it keeps no choice among them).
+  had: = sheet.over.filters
+  if had == null
+    return Option<|U8[]|>.none
+  for $i: Sz = 0; i < had.len; i += 1
+    f: = had.get(i)
+    if f.table == table && f.column == column && f.keep == filter.Keep.one_of
+      return Option<|U8[]|>.some(f.text)
+  return Option<|U8[]|>.none
+
+// Filters the cursor's column to the rows whose cell shows one of the chosen values: the set is
+// the `len` bytes written into `kspage_web_input_buffer()`, one value per line with a line break
+// after each (an empty value means the blank cells). **It is a view** (as `kspage_web_filter`).
+// 1 if filtered, 0 with the cursor outside a cell.
+// **Choosing nothing filters to no rows**, which is what unchecking everything asks for; the way
+// back is `kspage_web_unfilter_column`.
+#export
+fn kspage_web_filter_values(len: Sz): I32
+  ensure()
+  if page == null || len < 0 || len > input_cap
+    return 0
+  spot: = ask.cell_of(page, ed.caret)
+  if !spot.found
+    return 0
+  // Caution: **Copy the text** (the same reason as `kspage_web_filter`).
+  set: = doc_arena.dup_str(U8[]::{ .ptr = input@, .len = len })
+  made: = filter.make_filter(spot.table, spot.column, filter.Keep.one_of, set)
+  if sheet.over.filters == null
+    sheet.over.filters = List<|Filter|>.create(doc_arena)
+  drop_filters(spot.table, spot.column, true)
+  sheet.over.filters.push(made)
+  return 1
+
+// Removes the filter from the cursor's column only, keeping the other columns'. 1 if one was
+// removed, else 0.
+#export
+fn kspage_web_unfilter_column(): I32
+  ensure()
+  if page == null || sheet.over.filters == null
+    return 0
+  spot: = ask.cell_of(page, ed.caret)
+  if !spot.found
+    return 0
+  return 1 if drop_filters(spot.table, spot.column, true) > 0 else 0
+
+priv fn drop_filters(table: Block$@, column: Sz, one_column: Bool): Sz //<
+  //< Removes the conditions from that table (or from one of its columns), and returns how many
+  had: = sheet.over.filters
+  if had == null
+    return 0
+  $gone: Sz = 0
+  $i: Sz = had.len
+  for i > 0
+    i -= 1
+    f: = had.get(i)
+    if f.table == table && (!one_column || f.column == column)
+      had.remove_at(i)
+      gone += 1
+  return gone
+
+// Shows every row of the cursor's table again (with the cursor outside a table, of every table).
+// 1 if any condition was removed, else 0.
+#export
+fn kspage_web_unfilter(): I32
+  ensure()
+  if sheet.over.filters == null || sheet.over.filters.len == 0
+    return 0
+  if page != null
+    spot: = ask.cell_of(page, ed.caret)
+    if spot.found
+      return 1 if drop_filters(spot.table, 0, false) > 0 else 0
+  sheet.over.filters.len = 0
+  return 1
+
+// Writes four values into out for the cursor's table: the rows shown under the heading, all rows
+// under the heading, whether a condition is set on the table, and whether the cursor is in a table
+// at all. **It counts what the layout produced** (the row kept for the cursor counts as shown).
+#export
+fn kspage_web_rows_shown(out: F32$@)
+  state.clear_out(out, 4)
+  if page == null
+    return
+  spot: = ask.cell_of(page, ed.caret)
+  if !spot.found
+    return
+  $shown: Sz = 0
+  for $r: Sz = 1; r < spot.table.children.len; r += 1
+    if ask.row_laid(page, spot.table, r)
+      shown += 1
+  total: = spot.table.children.len - 1 if spot.table.children.len > 0 else 0
+  out$ = F32::shown
+  (out + 1)$ = F32::total
+  (out + 2)$ = 1.0 if filter.narrowed(sheet.over.filters, spot.table) else 0.0
+  (out + 3)$ = 1.0
