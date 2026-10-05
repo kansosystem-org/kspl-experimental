@@ -15,6 +15,11 @@ typedef struct {
     ucontext_t uc;
 } ksos_ctx;
 
+// The signals that stand in for interrupts: the tick (SIGALRM) and the external interrupt the
+// demos raise (SIGUSR1). Caution: **Block every one of them in a critical section**, as PRIMASK
+// masks every interrupt; one left out runs its handler in the middle of the kernel's state.
+static const int ksos_irq_signals[2] = {SIGALRM, SIGUSR1};
+
 // The task-starting trampoline the KSPL kernel core #exports.
 extern void ksos_trampoline(void);
 
@@ -29,11 +34,15 @@ static ksos_ctx* alloc_ctx(void) {
 }
 
 // Makes, on the named stack, a context that enters ksos_trampoline the first time it starts.
+// Caution: **A new task starts with the interrupt signals unblocked**, as a Cortex-M task starts
+// with interrupts enabled. Task.create runs in a critical section, so the mask getcontext captured
+// there would otherwise stay on the task for good, and no tick or interrupt would reach it.
 void* ksos_port_ctx_create(void* stack, long stack_size) {
     ksos_ctx* c = alloc_ctx();
     if (c == 0) {
         return 0;
     }
+    for (int i = 0; i < 2; i++) sigdelset(&c->uc.uc_sigmask, ksos_irq_signals[i]);
     c->uc.uc_stack.ss_sp = stack;
     c->uc.uc_stack.ss_size = (size_t)stack_size;
     c->uc.uc_link = 0;
@@ -81,23 +90,28 @@ void ksos_port_tick_start(uint32_t reload) {
     setitimer(ITIMER_REAL, &tv, NULL);
 }
 
-// The critical section: it blocks SIGALRM and returns whether it was already blocked (1) or not
-// (0). It nests like PRIMASK's save/restore: only the outermost restore unblocks.
+// The critical section: it blocks those signals and returns, a bit per signal, which were blocked
+// already. It nests like PRIMASK's save/restore: a restore unblocks only what its save blocked, so
+// inside a handler (its own signal blocked by the kernel) the handler's return unblocks that one.
 uint32_t ksos_port_irq_save(void) {
     sigset_t set, old;
+    uint32_t state = 0u;
     sigemptyset(&set);
-    sigaddset(&set, SIGALRM);
+    for (int i = 0; i < 2; i++) sigaddset(&set, ksos_irq_signals[i]);
     sigprocmask(SIG_BLOCK, &set, &old);
-    return sigismember(&old, SIGALRM) ? 1u : 0u;
+    for (int i = 0; i < 2; i++) {
+        if (sigismember(&old, ksos_irq_signals[i])) state |= 1u << i;
+    }
+    return state;
 }
 
 void ksos_port_irq_restore(uint32_t state) {
-    if (state == 0u) {
-        sigset_t set;
-        sigemptyset(&set);
-        sigaddset(&set, SIGALRM);
-        sigprocmask(SIG_UNBLOCK, &set, NULL);
+    sigset_t set;
+    sigemptyset(&set);
+    for (int i = 0; i < 2; i++) {
+        if ((state & (1u << i)) == 0u) sigaddset(&set, ksos_irq_signals[i]);
     }
+    sigprocmask(SIG_UNBLOCK, &set, NULL);
 }
 
 // POSIX has no handler mode: a signal handler runs on the interrupted task's context, so waiting

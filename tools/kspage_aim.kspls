@@ -1,178 +1,280 @@
-//< Builds and parses, as strings, the URL that opens kspage and the note listing running servers
+//< Builds the URL that opens kspage, the page handing it to a browser, and the server note
 //<
 //< **There is no child process and no network here** (those are in `tools/kspage_open.kspls`),
-//< so a test can confirm from the paths alone that the right path is opened
-//< (`tools/tests/aim_test.kspls`).
+//< so a test can confirm from the paths and the files written alone that the right path is
+//< opened and that the token stays off every command line (`tools/tests/aim_test.kspls`).
 //< Caution: **Do not add more places that know the URL's format**: `make kspage`, `make
 //< kspage-open` and the file association all go through these two files.
 import "std/chars"
+import "std/fs"
+import "std/mem" { Arena, dealloc }
 import "std/str" { Str_builder }
 import "std/strnum"
+import "std/sys"
+import "std/url" as url_text
 
 fn split_path(path: U8[]): U8[][2] //< a path split into its folder and its name
-  //<
-  //< Caution: **Look at both separators** (Windows has `\`).
-  cut: = path.rfind_char('/')
-  back: = path.rfind_char('\\')
-  at: = cut if cut > back else back
-  if at < 0
-    return U8[][2]::{ ".", path }
-  return U8[][2]::{ path.sub(0, at), path.sub_from(at + 1) }
+    //<
+    //< Caution: **Look at both separators** (Windows has `\`).
+    cut: = path.rfind_char('/')
+    back: = path.rfind_char('\\')
+    at: = cut if cut > back else back
+    if at < 0
+        return U8[][2]::{ ".", path }
+    return U8[][2]::{ path.sub(0, at), path.sub_from(at + 1) }
 
 fn trim_end_sep(dir: U8[]): U8[] //< a folder without the separators after its last name
-  //<
-  //< Caution: **Compare folders without them**: `devel/` and `devel` are one folder, and the note
-  //< matched on the string would start two servers for it, or find none to stop. A root (`/`,
-  //< `C:\`) keeps its own.
-  $at: = dir
-  for at.len > 1 && (at[at.len - 1] == '/' || at[at.len - 1] == '\\') && at[at.len - 2] != ':'
-    at = at.sub(0, at.len - 1)
-  return at
+    //<
+    //< Caution: **Compare folders without them**: `devel/` and `devel` are one folder, and the note
+    //< matched on the string would start two servers for it, or find none to stop. A root (`/`,
+    //< `C:\`) keeps its own.
+    $at: = dir
+    for at.len > 1 && (at[at.len - 1] == '/' || at[at.len - 1] == '\\') &&
+        at[at.len - 2] != ':'
+        at = at.sub(0, at.len - 1)
+    return at
 
 fn parent_of(dir: U8[]): U8[] //< the folder one above
-  //<
-  //< With nothing further up it returns itself, so the caller stops (above `kspage` is `.`,
-  //< above `.` is nothing).
-  cut: = dir.rfind_char('/')
-  back: = dir.rfind_char('\\')
-  at: = cut if cut > back else back
-  if at < 0
-    return "" if dir.equals(".") || dir.len == 0 else "."
-  return dir.sub(0, at + 1) if at == 0 else dir.sub(0, at)
+    //<
+    //< With nothing further up it returns itself, so the caller stops (above `kspage` is `.`,
+    //< above `.` is nothing).
+    cut: = dir.rfind_char('/')
+    back: = dir.rfind_char('\\')
+    at: = cut if cut > back else back
+    if at < 0
+        return "" if dir.equals(".") || dir.len == 0 else "."
+    return dir.sub(0, at + 1) if at == 0 else dir.sub(0, at)
 
 fn doc_under(root: U8[], path: U8[]): U8[] //< the document's path relative to the served folder
-  //<
-  //< Caution: **Drop the served folder's part**, or the server looks for one more folder of that
-  //< name under the root (a 404). A path already relative to the root (`--root=.`) stays as it is.
-  if root.len == 0 || root.equals(".") || !path.starts_with(root, 0)
-    return path
-  $rest: U8[] = path.sub_from(root.len)
-  for rest.len > 0 && (rest[0] == '/' || rest[0] == '\\')
-    rest = rest.sub_from(1)
-  return path if rest.len == 0 else rest
+    //<
+    //< Caution: **Drop the served folder's part**, or the server looks for one more folder of that
+    //< name under the root (a 404). A path already relative to the root (`--root=.`) stays as it
+    //< is.
+    if root.len == 0 || root.equals(".") || !path.starts_with(root, 0)
+        return path
+    $rest: U8[] = path.sub_from(root.len)
+    for rest.len > 0 && (rest[0] == '/' || rest[0] == '\\')
+        rest = rest.sub_from(1)
+    return path if rest.len == 0 else rest
 
 fn url_in_log(log: U8[]): U8[] //< the URL from the line kssrv printed, empty where there is none
-  // Caution: **The level sits in the middle** (`kssrv: I: open `). Without the `I: ` the marker
-  // matches nothing and the opener waits 30 seconds for a server that is already up
-  // (`kssrv/main.kspls` names this reader and `kspage/Makefile` in the same comment).
-  mark: = "kssrv: I: open "
-  at: = log.find_str(mark)
-  if at < 0
-    return ""
-  rest: = log.sub_from(at + mark.len)
-  end: = rest.find_char('\n')
-  return rest if end < 0 else rest.sub(0, end)
+    // Caution: **The level sits in the middle** (`kssrv: I: open `). Without the `I: ` the marker
+    // matches nothing and the opener waits 30 seconds for a server that is already up
+    // (`kssrv/main.kspls` names this reader and `kspage/Makefile` in the same comment).
+    mark: = "kssrv: I: open "
+    at: = log.find_str(mark)
+    if at < 0
+        return ""
+    rest: = log.sub_from(at + mark.len)
+    end: = rest.find_char('\n')
+    return rest if end < 0 else rest.sub(0, end)
 
 fn token_in_url(url: U8[]): U8[] //<
-  //< the token from the URL's fragment (`#t=…`), empty where there is none
-  mark: = "#t="
-  at: = url.find_str(mark)
-  return "" if at < 0 else url.sub_from(at + mark.len)
+    //< the token from the URL's fragment (`#t=…`), empty where there is none
+    mark: = "#t="
+    at: = url.find_str(mark)
+    return "" if at < 0 else url.sub_from(at + mark.len)
 
 fn port_in_url(url: U8[]): U8[] //<
-  //< the port to wait on, from the URL, empty where there is none
-  //<
-  //< Caution: **Look only after the `://` and before the first `/`** (`http:` and the fragment can
-  //< hold a `:` too).
-  mark: = "://"
-  at: = url.find_str(mark)
-  if at < 0
-    return ""
-  rest: = url.sub_from(at + mark.len)
-  end: = rest.find_char('/')
-  host: = rest if end < 0 else rest.sub(0, end)
-  cut: = host.find_char(':')
-  return "" if cut < 0 else host.sub_from(cut + 1)
+    //< the port to wait on, from the URL, empty where there is none
+    //<
+    //< Caution: **Look only after the `://` and before the first `/`** (`http:` and the fragment
+    //< can hold a `:` too).
+    mark: = "://"
+    at: = url.find_str(mark)
+    if at < 0
+        return ""
+    rest: = url.sub_from(at + mark.len)
+    end: = rest.find_char('/')
+    host: = rest if end < 0 else rest.sub(0, end)
+    cut: = host.find_char(':')
+    return "" if cut < 0 else host.sub_from(cut + 1)
 
 fn port_num(at: U8[]): I32 //< a port string as a number, 0 where it is not a valid port
-  //<
-  //< 0 cannot be waited on, so this refuses up front what would otherwise cost 30 seconds of
-  //< waiting for a server that never comes up.
-  n: = at.to_i64() catch
-    return 0
-  return 0 if n < 1I64 || n > 65535I64 else I32::n
+    //<
+    //< 0 cannot be waited on, so this refuses up front what would otherwise cost 30 seconds of
+    //< waiting for a server that never comes up.
+    n: = at.to_i64() catch
+        return 0
+    return 0 if n < 1I64 || n > 65535I64 else I32::n
 
 fn url_for( //< the URL to open, with the document to open added
-  //<
-  //< **Put it before the fragment (`#`)**, or it becomes part of the token.
-  //< Caution: **Do not append the name unescaped**: `?doc=` is a query the page reads, so a `#` in
-  //< the name cuts it short.
-  url: U8[], //< the URL kssrv printed, fragment included
-  doc: U8[], //< the document to open, relative to the served folder
-  win: Bool, //< only when this is set is `\` turned into `/`
-  text: Str_builder$@, //< where the URL is built
+    //<
+    //< **Put it before the fragment (`#`)**, or it becomes part of the token.
+    //< Caution: **Escape every byte but the unreserved ones and the separator.** `?doc=` is a query
+    //< the page decodes, so a name escaped only in part opens another file, which Save then
+    //< overwrites: `a+b` reads as `a b`, `notes%2Fx` as `notes/x`, and `x&read=1` adds a setting.
+    url: U8[], //< the URL kssrv printed, fragment included
+    doc: U8[], //< the document to open, relative to the served folder
+    win: Bool, //< only when this is set is `\` turned into `/`
+    text: Str_builder$@, //< where the URL is built
 ): U8[]
-  cut: = url.find_char('#')
-  head: = url if cut < 0 else url.sub(0, cut)
-  tail: = "" if cut < 0 else url.sub_from(cut)
-  text.s(head).s("?doc=")
-  for c in doc
-    if c == '#'
-      text.s("%23")
-    else if c == '?'
-      text.s("%3F")
-    else if c == ' '
-      text.s("%20")
-    else if c == '\\' && win
-      text.c('/')
-    else
-      text.c(c)
-  text.s(tail)
-  return text.slice()
+    cut: = url.find_char('#')
+    head: = url if cut < 0 else url.sub(0, cut)
+    tail: = "" if cut < 0 else url.sub_from(cut)
+    text.s(head).s("?doc=")
+    $start: Sz = 0
+    for i in Range.asc(doc.len + 1)
+        at_sep: = i < doc.len && (doc[i] == '/' || (doc[i] == '\\' && win))
+        if i < doc.len && !at_sep
+            continue
+        piece: = url_text.encode(doc.sub(start, i - start), null)
+        text.s(piece)
+        dealloc(Void$@::piece.ptr)
+        if at_sep
+            text.c('/')
+        start = i + 1
+    text.s(tail)
+    return text.slice()
+
+priv const page_prefix: U8[] = "kspage_open-" //< the start of a handed page's name
+priv const page_ext: U8[] = ".html" //< the end of a handed page's name
+
+const page_keep_s: I64 = 600 //< how long a handed page is kept [s]
+    //<
+    //< **Long enough for a cold browser to start and read it**; the next run removes it after that
+    //< (`sweep_pages`).
+
+fn page_text(open_url: U8[], text: Str_builder$@): U8[] //<
+    //< The page handed to the browser in place of the URL, which moves on to the URL
+    //<
+    //< **The browser is handed this page's path, never the URL**: a command line is open to every
+    //< user on the machine (`ps`), and the URL holds the token. The page moves on at once
+    //< (`refresh`) and offers the link where a browser does not; the fragment goes along, so the
+    //< page reads the token as it does from a URL typed by hand.
+    text.s("<!doctype html>\n<meta charset=\"utf-8\">\n")
+    text.s("<meta http-equiv=\"refresh\" content=\"0;url=")
+    attr_into(text, open_url)
+    text.s("\">\n<title>kspage</title>\n<a href=\"")
+    attr_into(text, open_url)
+    text.s("\">open kspage</a>\n")
+    return text.slice()
+
+priv fn attr_into(text: Str_builder$@, s: U8[]) //< writes s as a quoted attribute's value
+    for c in s
+        if c == '&'
+            text.s("&amp;")
+        else if c == '"'
+            text.s("&quot;")
+        else if c == '<'
+            text.s("&lt;")
+        else if c == '>'
+            text.s("&gt;")
+        else
+            text.c(c)
+
+fn write_page( //< writes the page for the URL, readable by its owner alone, and returns its path
+    //<
+    //< **A name of its own each time** (`fs.write_unique`): two documents opened at once (several
+    //< chosen and opened together) would otherwise each hand the browser the other's page.
+    open_url: U8[], //< the URL to move on to, token included
+    dir: U8[], //< the folder it goes in
+    arena: Arena$@, //< where the path goes
+): U8[]?fs.Fs_error
+    $text: = Str_builder.new()
+    defer text.free()
+    return fs.write_unique(dir, page_prefix, page_ext, page_text(open_url, text@), arena)
+
+fn browser_argv( //< the command that starts the browser on a page
+    //<
+    //< **It takes the page's path, not the URL** (the reason is at `page_text`).
+    //< **On Windows the separator becomes `\`**, the one `explorer.exe` reads as a path's;
+    //< `fs.join` writes `/`.
+    tool: U8[], //< the tool that starts the browser
+    page: U8[], //< the path `write_page` returned
+    win: Bool, //< only when this is set is `/` turned into `\`
+    arena: Arena$@, //< where a turned path goes
+): U8[][2]
+    if !win
+        return U8[][2]::{ tool, page }
+    turned: = arena.text()
+    for c in page
+        turned.c('\\' if c == '/' else c)
+    return U8[][2]::{ tool, turned.take() }
+
+fn sweep_pages(dir: U8[], now: I64, arena: Arena$@) //< removes the pages handed long enough ago
+    //<
+    //< **A page is needed only until the browser has read it**, and nothing tells when that was:
+    //< the opener exits once the browser is started. So each run removes the pages older than
+    //< `page_keep_s`. Only names this file gives are touched.
+    names: = fs.read_dir(dir, arena) catch
+        return
+    for name in names
+        if !name.starts_with(page_prefix) || !name.ends_with(page_ext)
+            continue
+        path: = fs.join(dir, name, arena)
+        info: = fs.stat(path) catch
+            continue
+        if now - info.mtime > page_keep_s
+            fs.remove_path(path) catch {}
+
+fn write_owned(path: U8[], data: U8[], arena: Arena$@): Void?fs.Fs_error //<
+    //< Replaces a file with one only its owner may read
+    //<
+    //< **The note and the log hold the token as the page does**, so they are written the same way.
+    //< Caution: **Write beside it and rename over it**: a file opened in place keeps the mode it
+    //< had, and a reader that opened it before keeps reading what is written into it.
+    dir: = parent_of(path)
+    name: = sys.get_file_name(path)
+    fresh: = fs.write_unique(dir, arena.text().s(name).c('-').take(), ".new", data, arena)?
+    fs.rename_path(fresh, path) catch
+        fs.remove_path(fresh) catch {}
+        throw fs.Fs_error.operation_failed
 
 priv const max_records: Sz = 8 //< the cap on the records listed in the note
-  //<
-  //< Caution: **Do not let it grow without limit**: each run adds one, and every search would
-  //< connect to all the dead servers.
+    //<
+    //< Caution: **Do not let it grow without limit**: each run adds one, and every search would
+    //< connect to all the dead servers.
 
 fn state_count(body: U8[]): Sz //< how many records the note holds
-  //<
-  //< A record is two lines, "the URL to open" then "the folder being served", newest first.
-  //< **Do not keep only one**: each folder has its own server. The two lines need no other
-  //< separator, so a folder name with a space in it does not split.
-  $n: Sz = 0
-  for state_line(body, n).len > 0
-    n += 1
-  return n / 2
+    //<
+    //< A record is two lines, "the URL to open" then "the folder being served", newest first.
+    //< **Do not keep only one**: each folder has its own server. The two lines need no other
+    //< separator, so a folder name with a space in it does not split.
+    $n: Sz = 0
+    for state_line(body, n).len > 0
+        n += 1
+    return n / 2
 
 fn state_record(body: U8[], i: Sz): U8[][2] //< the i-th record, both halves empty where none
-  return U8[][2]::{ state_line(body, i * 2), state_line(body, i * 2 + 1) }
+    return U8[][2]::{ state_line(body, i * 2), state_line(body, i * 2 + 1) }
 
 fn state_text(url: U8[], root: U8[], had: U8[], text: Str_builder$@): U8[] //< the note, rebuilt
-  //<
-  //< The server just started goes first, the earlier records after it.
-  //< Caution: **Drop an old record for the same folder**, or the search connects to a dead server
-  //< first.
-  //< **Store the URL unchanged**: splitting it into port and token and rebuilding it here would
-  //< make a third place that knows its format.
-  state_put(text, url, root)
-  count: = state_count(had)
-  $kept: Sz = 1
-  for $i: Sz = 0; i < count; i += 1
-    if kept >= max_records
-      break
-    one: = state_record(had, i)
-    if one[1].equals(root)
-      continue
-    state_put(text, one[0], one[1])
-    kept += 1
-  return text.slice()
+    //<
+    //< The server just started goes first, the earlier records after it.
+    //< Caution: **Drop an old record for the same folder**, or the search connects to a dead server
+    //< first.
+    //< **Store the URL unchanged**: splitting it into port and token and rebuilding it here would
+    //< make a third place that knows its format.
+    state_put(text, url, root)
+    count: = state_count(had)
+    $kept: Sz = 1
+    for $i: Sz = 0; i < count; i += 1
+        if kept >= max_records
+            break
+        one: = state_record(had, i)
+        if one[1].equals(root)
+            continue
+        state_put(text, one[0], one[1])
+        kept += 1
+    return text.slice()
 
 fn state_put(text: Str_builder$@, url: U8[], root: U8[]) //< adds one record to the end of a note
-  //<
-  //< **The one place that writes a record**, so `state_record` reads back what every writer wrote.
-  text.s(url).c('\n').s(root).c('\n')
+    //<
+    //< **The one place that writes a record**, so `state_record` reads back what every writer
+    //< wrote.
+    text.s(url).c('\n').s(root).c('\n')
 
 priv fn state_line(body: U8[], i: Sz): U8[] //< the note's i-th line
-  //<
-  //< **Empty where the note has fewer lines** (a note cut off partway can still be read).
-  $from: Sz = 0
-  for $n: Sz = 0; n <= i; n += 1
-    end: = body.sub_from(from).find_char('\n')
-    line: = body.sub_from(from) if end < 0 else body.sub(from, end)
-    if n == i
-      return line
-    if end < 0
-      return ""
-    from += end + 1
-  return ""
+    //<
+    //< **Empty where the note has fewer lines** (a note cut off partway can still be read).
+    $from: Sz = 0
+    for $n: Sz = 0; n <= i; n += 1
+        end: = body.sub_from(from).find_char('\n')
+        line: = body.sub_from(from) if end < 0 else body.sub(from, end)
+        if n == i
+            return line
+        if end < 0
+            return ""
+        from += end + 1
+    return ""

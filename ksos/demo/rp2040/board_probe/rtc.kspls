@@ -14,52 +14,52 @@ priv $have_last: Bool = false
 priv $last: rtc.Date_time
 
 fn init(): Bool //< starts it
-  //<
-  //< Caution: Call it after `clocks.init()` (clk_rtc is supplied there).
-  initial: = rtc.Date_time::{ .year = 2026, .month = 7, .day = 24, .dotw = 5, .hour = 12,
-    .minute = 0, .second = 0 }
-  ready = rtc.init(initial, clocks.rtc_hz - 1)
-  return ready
+    //<
+    //< Caution: Call it after `clocks.init()` (clk_rtc is supplied there).
+    initial: = rtc.Date_time::{ .year = 2026, .month = 7, .day = 24, .dotw = 5, .hour = 12,
+        .minute = 0, .second = 0 }
+    ready = rtc.init(initial, clocks.rtc_hz - 1)
+    return ready
 
 priv fn same(a: rtc.Date_time, b: rtc.Date_time): Bool
-  return a.year == b.year && a.month == b.month && a.day == b.day && a.hour == b.hour &&
-    a.minute == b.minute && a.second == b.second
+    return a.year == b.year && a.month == b.month && a.day == b.day && a.hour == b.hour &&
+        a.minute == b.minute && a.second == b.second
 
 priv fn two(ln: con.Line$@, v: U32) //< appends v as two digits (`07`)
-  //<
-  //< It follows the convention for dates and times.
-  if v < 10
-    ln.byte('0')
-  ln.u32(v)
+    //<
+    //< It follows the convention for dates and times.
+    if v < 10
+        ln.byte('0')
+    ln.u32(v)
 
 fn run(ln: con.Line$@)
-  ln.reset()
-  if !ready
-    ln.str("[rtc] not started (the block did not leave reset)")
-    _e: = ln.flush()
-    return
-  now: = rtc.read()
-  ln.str("[rtc] ")
-  ln.u32(now.year)
-  ln.byte('-')
-  two(ln, now.month)
-  ln.byte('-')
-  two(ln, now.day)
-  ln.byte(' ')
-  two(ln, now.hour)
-  ln.byte(':')
-  two(ln, now.minute)
-  ln.byte(':')
-  two(ln, now.second)
-  ln.str(" dotw=")
-  ln.u32(now.dotw)
-  ln.str(" active=")
-  ln.u32(1 if rtc.is_active() else 0)
-  ln.str(" ticking=")
-  if !have_last
-    ln.str("first")
-  else
-    ln.str("NO" if same(now, last) else "yes")
-  last = now
-  have_last = true
-  _s: = ln.flush()
+    ln.reset()
+    if !ready
+        ln.str("[rtc] not started (the block did not leave reset)")
+        _e: = ln.flush()
+        return
+    now: = rtc.read()
+    ln.str("[rtc] ")
+    ln.u32(now.year)
+    ln.byte('-')
+    two(ln, now.month)
+    ln.byte('-')
+    two(ln, now.day)
+    ln.byte(' ')
+    two(ln, now.hour)
+    ln.byte(':')
+    two(ln, now.minute)
+    ln.byte(':')
+    two(ln, now.second)
+    ln.str(" dotw=")
+    ln.u32(now.dotw)
+    ln.str(" active=")
+    ln.u32(1 if rtc.is_active() else 0)
+    ln.str(" ticking=")
+    if !have_last
+        ln.str("first")
+    else
+        ln.str("NO" if same(now, last) else "yes")
+    last = now
+    have_last = true
+    _s: = ln.flush()

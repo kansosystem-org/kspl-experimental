@@ -5,8 +5,7 @@ function kspageProbeKeep(ks) {
 
   // Caution: **Do not wait out the thinning's wait** — it is the product's, so the checks alone
   // would fall the day it is shortened; the person's entry point (`keepSync`) is called by name.
-  // **Swap documents in one lump with no wait inside**: sections overlap through `hold()`, and a
-  // swap throws away `diff`'s partner (`kspage/port/web/api_diff.js`), so `probe.js` runs it first.
+  // **Swap documents in one lump with no wait inside**: sections overlap through `hold()`.
   // **Type by the same way as a person** (an `input` event, the same settlement as `store.js`).
   const typeIn = (t) => ks.ime.dispatchEvent(new InputEvent("input",
     { data: t, inputType: "insertText", bubbles: true }));
@@ -18,18 +17,16 @@ function kspageProbeKeep(ks) {
   const MARK = "¶";
 
   // ---- The lump with no wait inside ----
-  // 1. The earlier round's draft comes back **beside the document now, not over it**.
-  const was = app.docNow();
+  // 1. The earlier round's draft comes back **in place of the document now, which is set aside**.
+  const wasSaved = app.save();
   const why = app.draftTake({ kind: "json", text: planted, name: "the round that fell",
     path: notAPath + "/probe.json" });
   check(why === "", "the draft can be brought back (" + (why || "no refusal") + ")");
-  check(app.docNow() !== was,
-    "the draft brought back opens into another place (it does not crush the document now)");
   check(app.text().indexOf("the draft of the round that fell") >= 0,
     "the earlier round's characters are in the document brought back ("
       + app.text().slice(0, 12) + ")");
-  // 2. A document with nothing to lose is not held back (no "saved, and a draft is still there").
-  const rested = app.save();
+  // 2. A document brought back **stays a draft until it is saved** (it is in no file), so opening
+  // another over it does not lose it.
   app.keepSync();
   // 3. What was typed is held back, **looked at as far as the body**: the key alone lets "it comes
   // back empty" walk past, and a sheet from `save` numbers the blocks and differs even untyped.
@@ -39,10 +36,12 @@ function kspageProbeKeep(ks) {
   check(app.text().indexOf(MARK) >= 0,
     "the document brought back can be typed on (" + app.text().slice(0, 14) + ")");
   app.keepSync();
-  // Caution: **Return to the original number** (shutting moves to the smallest number).
-  check(app.docShut(app.docNow()), "the document brought back can be shut");
-  if (app.docNow() !== was) app.docGo(was);
-  check(app.docNow() === was, "after shutting it returns to the original document");
+  // Caution: **Put the document back** (the draft brought back took its place in the window)
+  // **over a blank sheet**: read over the draft itself, the draft's key would be written again
+  // without the mark before the store is looked at. "New" sets the typed draft aside first.
+  document.getElementById("doc-new").click();
+  app.load(wasSaved);
+  check(app.save() === wasSaved, "the document from before is back as it was");
 
   // ---- From here on it does not touch the document ----
   // **Borrow the page's connection** (IndexedDB orders transactions only inside one connection).
@@ -77,20 +76,17 @@ function kspageProbeKeep(ks) {
       check(mine.length === 1 && mine[0].kind === "json",
         "the draft remembers the opening shape too ("
           + (mine.length === 1 ? mine[0].kind : "none") + ")");
-      // Caution: **See that a shut document's draft survives** (a reused number overwrites it).
+      // Caution: **See that the draft brought back is held under a key of its own** (under the
+      // earlier one it would be thrown away with it).
       check(mine.length === 1 && mine[0].at !== PLANT,
-        "a shut document's draft is not deleted by a number being reused ("
+        "the document brought back is held back under its own key ("
           + (mine.length === 1 ? mine[0].at : "none") + ")");
-      // **The unchanged brought-back document has no draft**: counted by the side without the mark.
-      const still = having(got, "the draft of the round that fell")
-        .filter((one) => one.text.indexOf(MARK) < 0);
-      check(still.length === 1,
-        "a document that has not changed is not held back (" + still.length + ")");
       // 5. It finds the earlier round's draft at start-up.
       return app.keepBoot().then((many) => {
         check(many >= 1,
           "the earlier round's draft is found at start-up (" + many + ")");
-        check(app.keepCount() === many, "the count found can be counted");
+        // **The count can be brought back** holds those found and those set aside since.
+        check(app.keepCount() >= many, "the count found can be counted");
         // Caution: **Tidy up what was laid down** (it would line up at the next round's start-up).
         for (const one of mine) store.dropDraft(one.at);
         store.dropDraft(PLANT);

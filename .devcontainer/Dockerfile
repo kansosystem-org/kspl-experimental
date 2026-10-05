@@ -12,8 +12,8 @@ RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
 # looks unused and goes. This is the tool list's canonical source; no mingw-w64 (Windows is
 # watched on real hardware).
 #   BLAS=1: libopenblas-dev · test-ksos-qemu: qemu-system-arm · bare metal: gcc-arm-none-eabi
-#   ci-linux (TLS=1 DB=1): libssl-dev, libsqlite3-dev · test-kspage-wasm: nodejs
-#   test-pytools: python3-numpy · kspage: desktop-file-utils (without either, a silent SKIP)
+#   ksbind's own test (test-extract): libssl-dev, libsqlite3-dev · test-kspage-wasm: nodejs
+#   test-pytools: python3-numpy (without it, a silent SKIP) · test-kspage-desktop: desktop-file-utils
 RUN apt-get update && apt-get install -y \
     python3 \
     nodejs \

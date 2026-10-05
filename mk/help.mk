@@ -14,7 +14,10 @@
 # that stops here**: run at load, it would stop whatever target was typed.
 HELP_FILES := $(sort Makefile $(MAKEFILE_LIST) $(wildcard */*.mk))
 
-export HELP_GROUPS := Build-and-install Local-cycle Gates Run Measure-and-inspect
+export HELP_GROUPS := Build-and-install Local-cycle Gates Run Measure-and-inspect Per-item
+# **`Per-item` is described but not listed**: one item of a gate, made so `-j` can run them side by
+# side (`lint-one-*`). Listed, they would outnumber what a person types.
+export HELP_UNLISTED := Per-item
 
 # Caution: **ASCII only, `#` as `\#`, no tab heading a continuation** (above Makefile's `include`).
 help_prog := function pad(s, n) { while (length(s) < n) { s = s " " } return s } \
@@ -26,7 +29,7 @@ help_prog := function pad(s, n) { while (length(s) < n) { s = s " " } return s }
     c[g]++; SP[g, c[g]] = spec; DE[g, c[g]] = substr(s, i + 1); \
     if (length(spec) > w) { w = length(spec) } } \
   END { n = split(ENVIRON["HELP_GROUPS"], ord, " "); \
-    for (k = 1; k <= n; k++) { g = ord[k]; if (!(g in c)) { continue } \
+    for (k = 1; k <= n; k++) { g = ord[k]; if (!(g in c) || index(" " ENVIRON["HELP_UNLISTED"] " ", " " g " ")) { continue } \
       printf "\n%s\n", g; \
       for (j = 1; j <= c[g]; j++) { printf "  make %s  %s\n", pad(SP[g, j], w), DE[g, j] } } }
 
@@ -37,6 +40,7 @@ define help_foot
 
 The options and variables (PREFIX / LLVM / FMT_JOBS and the like) are explained in docs/CONTRIBUTING.md.
 What each one does is written just above that target's rule (the notation is in mk/help.mk's header).
+One item of a gate (the group Per-item, there for -j) is described beside its rule but not listed.
 endef
 export help_head
 export help_foot

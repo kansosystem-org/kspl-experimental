@@ -1,0 +1,181 @@
+//< A TLS client: an encrypted connection on top of a `std/net` socket, through OpenSSL
+//<
+//< **It covers client connections only** (`TLS_client_method`), and needs OpenSSL 1.1.0 or later.
+//< Caution: **The security level does not depend on the system's configuration.** OpenSSL does the
+//< work, but openssl.cnf does not decide which protocol version it connects with.
+
+// ==========================================
+// OpenSSL's own C API, called directly; `#link` names its libraries, so no build file does. No
+// OpenSSL header is in any translation unit, so these declarations are the only ones C sees.
+// ==========================================
+import "std/mem" + { dealloc }
+import "std/net"
+import "std/str" // `to_cstr`
+
+// The contents only OpenSSL reads. Unmarked, so the package's tests can reach them.
+extern "C"
+    struct SSL_METHOD
+    struct SSL_CTX
+    struct SSL
+
+// Caution: **Keep C's `long` as `Sz` going in and `I32` coming out** (the two `ctrl` functions and
+// `SSL_get_verify_result`). Written as `I64`, a result breaks on Windows ("What cannot be written
+// in C's types" in `../docs/DESIGN.md`). The `ctrl` functions stand for the macros
+// `SSL_CTX_set_min_proto_version` and `SSL_set_tlsext_host_name`.
+#link("ssl")
+#link("crypto")
+extern "C"
+    fn TLS_client_method(): SSL_METHOD@
+    fn SSL_CTX_new(method: SSL_METHOD@): SSL_CTX$@
+    fn SSL_CTX_free(ctx: SSL_CTX$@)
+    fn SSL_CTX_set_verify(ctx: SSL_CTX$@, mode: I32, callback: Void@)
+    fn SSL_CTX_set_default_verify_paths(ctx: SSL_CTX$@): I32
+    fn SSL_CTX_ctrl(ctx: SSL_CTX$@, cmd: I32, larg: Sz, parg: Void$@): I32
+    fn SSL_new(ctx: SSL_CTX$@): SSL$@
+    fn SSL_free(ssl: SSL$@)
+    fn SSL_set_fd(ssl: SSL$@, fd: I32): I32
+    fn SSL_set1_host(ssl: SSL$@, hostname: Void@): I32
+    fn SSL_ctrl(ssl: SSL$@, cmd: I32, larg: Sz, parg: Void$@): I32
+    fn SSL_connect(ssl: SSL$@): I32
+    fn SSL_get_verify_result(ssl: SSL@): I32
+    fn SSL_read(ssl: SSL$@, buf: Void$@, num: I32): I32
+    fn SSL_get_error(ssl: SSL@, ret: I32): I32
+    fn ERR_clear_error()
+    fn SSL_write(ssl: SSL$@, buf: Void@, num: I32): I32
+    fn SSL_shutdown(ssl: SSL$@): I32
+
+// The numbers behind the macros; each is the same in OpenSSL 1.1.0, 1.1.1 and 3.x.
+priv const ssl_verify_peer: I32 = 1 //< SSL_VERIFY_PEER
+priv const ssl_ctrl_set_min_proto_version: I32 = 123 //< SSL_CTRL_SET_MIN_PROTO_VERSION
+priv const tls1_2_version: Sz = 0x0303 //< TLS1_2_VERSION
+priv const ssl_ctrl_set_tlsext_hostname: I32 = 55 //< SSL_CTRL_SET_TLSEXT_HOSTNAME
+priv const tlsext_nametype_host_name: Sz = 0 //< TLSEXT_NAMETYPE_host_name
+priv const x509_v_ok: I32 = 0 //< X509_V_OK
+priv const ssl_error_zero_return: I32 = 6 //< SSL_ERROR_ZERO_RETURN: the peer's close_notify came
+
+// SSL_read/SSL_write take the length as a C int, so a buf.len of 2^31 or more would become negative
+// in the cast. Partial I/O is already the contract (the caller loops), so clamping breaks nothing.
+priv const max_tls_io_len: Sz = 2147483647 // I32::MAX
+
+priv fn clamp_tls_io_len(len: Sz): Sz
+    return len if len <= max_tls_io_len else max_tls_io_len
+
+pub enum Tls_error //< why a secure connection could not be opened or used
+    connect_failed //< the underlying TCP connection failed
+    ctx_failed //< OpenSSL setup failed (SSL_CTX_new, SSL_new and similar)
+    handshake_failed //< SSL_connect (the handshake) failed for a reason other than the next one
+    cert_verify_failed //<
+        //< the certificate or host name did not verify, so the handshake was refused
+    io_failed //< a send or receive failed, or the connection ended without the peer's close_notify
+
+priv fn transferred(n: I32): Sz?Tls_error //<
+    //< Turns the return value of an OpenSSL write (0 or negative on failure) into a byte count
+    if n <= 0
+        throw Tls_error.io_failed
+    return Sz::n
+
+pub struct Tls_stream //< a TCP connection with TLS on top, which owns its resources
+    priv tcp: net.Tcp_stream$@
+    priv ctx: SSL_CTX$@
+    priv ssl: SSL$@
+
+priv fn client_ctx(): SSL_CTX$@?Tls_error //<
+    //< A client context that verifies the peer against the default CA store, at TLS 1.2 or above
+    //<
+    //< Caution: **State the lower bound outright.** `TLS_client_method` allows 1.0 up, so otherwise
+    //< openssl.cnf's MinProtocol decides, and a loose environment connects at 1.0 or 1.1.
+    ctx: = SSL_CTX_new(TLS_client_method())
+    if ctx == null
+        throw Tls_error.ctx_failed
+    SSL_CTX_set_verify(ctx, ssl_verify_peer, null)
+    if SSL_CTX_ctrl(ctx, ssl_ctrl_set_min_proto_version, tls1_2_version, null) != 1 ||
+        SSL_CTX_set_default_verify_paths(ctx) != 1
+        SSL_CTX_free(ctx)
+        throw Tls_error.ctx_failed
+    return ctx
+
+priv fn client_ssl(ctx: SSL_CTX$@, fd: I32, host: U8[]): SSL$@?Tls_error //<
+    //< One connection's SSL on a connected socket, sending `host` as SNI and verifying against it
+    //<
+    //< Caution: **A host name holding a NUL, or longer than OpenSSL takes, fails rather than being
+    //< cut**: cut, verification would pass for another host.
+    $c_host: U8$@ = null
+    switch host.to_cstr() case .some(p)
+        c_host = p
+    case .none
+        throw Tls_error.ctx_failed
+    defer dealloc(Void$@::c_host)
+    ssl: = SSL_new(ctx)
+    if ssl == null
+        throw Tls_error.ctx_failed
+    if SSL_set_fd(ssl, fd) != 1 ||
+        SSL_ctrl(ssl, ssl_ctrl_set_tlsext_hostname, tlsext_nametype_host_name, Void$@::c_host) != 1
+        || SSL_set1_host(ssl, Void@::c_host) != 1
+        SSL_free(ssl)
+        throw Tls_error.ctx_failed
+    return ssl
+
+priv fn close_ssl(ssl: SSL$@) //< shuts down (trying to send a close_notify) and frees the SSL
+    SSL_shutdown(ssl)
+    SSL_free(ssl)
+
+impl Tls_stream
+    pub fn connect( //< connects, then does the TLS handshake, verifying the certificate
+        host: U8[], //< the host name to connect to; SNI and the certificate check also use it
+        port: I32, //< the port on that host
+    ): Tls_stream$@?Tls_error
+        tcp: = net.Tcp_stream.connect(host, port) catch
+            throw Tls_error.connect_failed
+        ctx: = client_ctx() catch e
+            tcp.free()
+            throw e
+        ssl: = client_ssl(ctx, tcp.raw_fd(), host) catch e
+            SSL_CTX_free(ctx)
+            tcp.free()
+            throw e
+        // **The verification's own answer decides the error**: with `SSL_VERIFY_PEER` a certificate
+        // that does not verify stops the handshake, and only this tells it from a peer speaking no
+        // TLS.
+        shook: = SSL_connect(ssl) == 1
+        verified: = SSL_get_verify_result(ssl) == x509_v_ok
+        if !shook || !verified
+            close_ssl(ssl)
+            SSL_CTX_free(ctx)
+            tcp.free()
+            throw Tls_error.handshake_failed if verified else Tls_error.cert_verify_failed
+
+        s: = mem.alloc_as<|Tls_stream|>()
+        s.tcp = tcp
+        s.ctx = ctx
+        s.ssl = ssl
+        return s
+
+    pub fn write( //< sends and returns how much was sent; a partial send is normal, so loop
+        r: Self$@,
+        buf: U8[], //< the bytes to send
+    ): Sz?Tls_error
+        return transferred(SSL_write(r.ssl, Void@::buf.ptr, I32::clamp_tls_io_len(buf.len)))
+
+    pub fn read( //< receives and returns how much arrived; 0 only after the peer's close_notify
+        r: Self$@,
+        buf: U8$[], //< where the bytes go
+    ): Sz?Tls_error
+        // `SSL_get_error` reads this thread's error queue, so a failure left there before would be
+        // taken for this call's.
+        ERR_clear_error()
+        n: = SSL_read(r.ssl, Void$@::buf.ptr, I32::clamp_tls_io_len(buf.len))
+        if n > 0
+            return Sz::n
+        // Caution: **Only the peer's close_notify is an end.** A TCP connection dropped without one
+        // returns 0 too; read as an end, whoever can drop it could cut a reply short unnoticed.
+        if SSL_get_error(r.ssl, n) == ssl_error_zero_return
+            return 0
+        throw Tls_error.io_failed
+
+    pub fn free(r: Self$@) //< closes the connection and frees everything it owns
+        close_ssl(r.ssl)
+        SSL_CTX_free(r.ctx)
+        r.tcp.free()
+        dealloc(Void$@::r)
+
+impl Tls_stream: Owned {} //< it owns its memory and frees it with `free()`

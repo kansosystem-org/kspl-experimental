@@ -22,14 +22,14 @@
  * Caution: **The standard error must be readable too**; it is where the partner says why it does
  * not answer. */
 /* **Remember the ending number where it was reaped.** waitpid answers once only
- * (`kspl_proc_alive` reaps with WNOHANG). code is -1 until reaped is up. */
+ * (`kspl_proc_alive` reaps with WNOHANG). code means nothing until reaped is up. */
 typedef struct {
     int pid; int to_w; int from_w; int from_err;
     int code; int reaped;
     int out_eof; int err_eof; /* The streams whose read returned EOF. poll skips them */
 } kspl_proc_t;
 
-I32 kspl_proc_write(I64 handle, U8 *ptr, Sz len) {
+KSPL_LINK I32 kspl_proc_write(I64 handle, U8 *ptr, Sz len) {
     if (handle == 0) return -1;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
     if (h->to_w < 0) return -1; /* An attempt to write after closing */
@@ -75,7 +75,7 @@ static int kspl_proc_status_code(int st) {
 /* Closes the child's standard input to hand it an EOF.
    Caution: **Without this, "everything is handed over" cannot be told**; a filter waits for it
  * before answering. Calling it twice is harmless (-1 marks closed). */
-void kspl_proc_close_stdin(I64 handle) {
+KSPL_LINK void kspl_proc_close_stdin(I64 handle) {
     if (handle == 0) return;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
     if (h->to_w >= 0) {
@@ -87,7 +87,7 @@ void kspl_proc_close_stdin(I64 handle) {
 /* Stops and reaps it, and closes the pipes.
    Caution: **Do not send a signal to a child already reaped.** The OS may reuse the pid, and the
  * SIGKILL stops an unrelated process (kspl_proc_alive often reaps first). */
-void kspl_proc_kill(I64 handle) {
+KSPL_LINK void kspl_proc_kill(I64 handle) {
     if (handle == 0) return;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
     if (!h->reaped) {
@@ -100,7 +100,7 @@ void kspl_proc_kill(I64 handle) {
 /* Waits until it ends and returns the number, closes the pipes and tidies up.
    Caution: **The handle cannot be used after this** (as with kspl_proc_kill). A child that died
  * by a signal is 128 + the signal number. */
-I32 kspl_proc_wait(I64 handle) {
+KSPL_LINK I32 kspl_proc_wait(I64 handle) {
     if (handle == 0) return -1;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
     if (!h->reaped) {
@@ -119,7 +119,7 @@ I32 kspl_proc_wait(I64 handle) {
  * -1 where no stream is piped or all read EOF.
  * Caution: **Look at the two in one go.** One at a time, the other waits out the silent one's
  * timeout too (run_capture in std/subproc.kspls gathers everything). */
-I32 kspl_proc_poll(I64 handle, I32 timeout_ms) {
+KSPL_LINK I32 kspl_proc_poll(I64 handle, I32 timeout_ms) {
     if (handle == 0) return -1;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
     struct pollfd pfds[2];
@@ -136,7 +136,7 @@ I32 kspl_proc_poll(I64 handle, I32 timeout_ms) {
     return mask;
 }
 
-Bool kspl_proc_alive(I64 handle) {
+KSPL_LINK Bool kspl_proc_alive(I64 handle) {
     if (handle == 0) return false;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
     if (h->reaped) return false;
@@ -160,7 +160,7 @@ typedef struct {
     int out_eof; int err_eof;
 } kspl_proc_t;
 
-I32 kspl_proc_write(I64 handle, U8 *ptr, Sz len) {
+KSPL_LINK I32 kspl_proc_write(I64 handle, U8 *ptr, Sz len) {
     if (handle == 0) return -1;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
     if (h->to_w == NULL) return -1; /* An attempt to write after closing */
@@ -202,7 +202,7 @@ static void kspl_proc_free(kspl_proc_t *h) {
 }
 
 /* Closes the child's standard input to hand it an EOF (the same contract as the POSIX side). */
-void kspl_proc_close_stdin(I64 handle) {
+KSPL_LINK void kspl_proc_close_stdin(I64 handle) {
     if (handle == 0) return;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
     if (h->to_w != NULL) {
@@ -211,7 +211,7 @@ void kspl_proc_close_stdin(I64 handle) {
     }
 }
 
-void kspl_proc_kill(I64 handle) {
+KSPL_LINK void kspl_proc_kill(I64 handle) {
     if (handle == 0) return;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
     TerminateProcess(h->proc, 1);
@@ -219,15 +219,48 @@ void kspl_proc_kill(I64 handle) {
     kspl_proc_free(h);
 }
 
+/* The ending number of an ended child, in the POSIX side's terms: a crash Windows reports as an
+ * NTSTATUS is 128 + the signal POSIX raises for the same fault, and any other code is its own.
+ * Caution: **Keep one case per line, each NTSTATUS named, and the code a literal**: make
+ * test-conventions compares this table with the one in "A child's end is one code on every OS" in
+ * std/docs/DESIGN.md, where the reasons are. Exit code 3 is not here, as an exit(3) gives it too. */
+static int kspl_proc_status_code(DWORD st) {
+    switch (st) {
+    case 0xC0000005u: /* STATUS_ACCESS_VIOLATION */
+    case 0xC00000FDu: /* STATUS_STACK_OVERFLOW */
+        return 139; /* SIGSEGV */
+    case 0xC000001Du: /* STATUS_ILLEGAL_INSTRUCTION */
+        return 132; /* SIGILL */
+    case 0xC000008Du: /* STATUS_FLOAT_DENORMAL_OPERAND */
+    case 0xC000008Eu: /* STATUS_FLOAT_DIVIDE_BY_ZERO */
+    case 0xC000008Fu: /* STATUS_FLOAT_INEXACT_RESULT */
+    case 0xC0000090u: /* STATUS_FLOAT_INVALID_OPERATION */
+    case 0xC0000091u: /* STATUS_FLOAT_OVERFLOW */
+    case 0xC0000092u: /* STATUS_FLOAT_STACK_CHECK */
+    case 0xC0000093u: /* STATUS_FLOAT_UNDERFLOW */
+    case 0xC0000094u: /* STATUS_INTEGER_DIVIDE_BY_ZERO */
+    case 0xC0000095u: /* STATUS_INTEGER_OVERFLOW */
+        return 136; /* SIGFPE */
+    case 0xC0000409u: /* STATUS_STACK_BUFFER_OVERRUN */
+        return 134; /* SIGABRT */
+    case 0xC000013Au: /* STATUS_CONTROL_C_EXIT */
+        return 130; /* SIGINT */
+    case 0xC0000135u: /* STATUS_DLL_NOT_FOUND */
+        return 127; /* the loader's exit code */
+    default:
+        return (int)st;
+    }
+}
+
 /* The same contract as the POSIX side (wait until it ends, return the number, tidy up). */
-I32 kspl_proc_wait(I64 handle) {
+KSPL_LINK I32 kspl_proc_wait(I64 handle) {
     if (handle == 0) return -1;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
     if (!h->reaped) {
         DWORD st = 0;
         WaitForSingleObject(h->proc, INFINITE);
         h->reaped = 1;
-        h->code = GetExitCodeProcess(h->proc, &st) ? (int)st : -1;
+        h->code = GetExitCodeProcess(h->proc, &st) ? kspl_proc_status_code(st) : -1;
     }
     I32 code = (I32)h->code;
     kspl_proc_free(h);
@@ -237,7 +270,7 @@ I32 kspl_proc_wait(I64 handle) {
 /* The same contract as the POSIX side.
    Caution: It peeks and sleeps as kspl_proc_read_end does. A stream whose peek failed has its
  * bit raised as closed (a read then returns 0 = EOF). */
-I32 kspl_proc_poll(I64 handle, I32 timeout_ms) {
+KSPL_LINK I32 kspl_proc_poll(I64 handle, I32 timeout_ms) {
     if (handle == 0) return -1;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
     int watch_out = h->from_w != NULL && !h->out_eof;
@@ -256,7 +289,7 @@ I32 kspl_proc_poll(I64 handle, I32 timeout_ms) {
     }
 }
 
-Bool kspl_proc_alive(I64 handle) {
+KSPL_LINK Bool kspl_proc_alive(I64 handle) {
     if (handle == 0) return false;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
     if (h->reaped) return false;
@@ -265,14 +298,14 @@ Bool kspl_proc_alive(I64 handle) {
 
     DWORD st = 0;
     h->reaped = 1;
-    h->code = GetExitCodeProcess(h->proc, &st) ? (int)st : -1;
+    h->code = GetExitCodeProcess(h->proc, &st) ? kspl_proc_status_code(st) : -1;
     return false;
 }
 #endif
 
 /* The rest is one text for both: the fields it touches have one name on each side. */
 
-I32 kspl_proc_read(I64 handle, U8 *buf, Sz cap, I32 timeout_ms) {
+KSPL_LINK I32 kspl_proc_read(I64 handle, U8 *buf, Sz cap, I32 timeout_ms) {
     if (handle == 0) return -2;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
     I32 n = kspl_proc_read_end(h->from_w, buf, cap, timeout_ms);
@@ -280,7 +313,7 @@ I32 kspl_proc_read(I64 handle, U8 *buf, Sz cap, I32 timeout_ms) {
     return n;
 }
 
-I32 kspl_proc_read_err(I64 handle, U8 *buf, Sz cap, I32 timeout_ms) {
+KSPL_LINK I32 kspl_proc_read_err(I64 handle, U8 *buf, Sz cap, I32 timeout_ms) {
     if (handle == 0) return -2;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
     I32 n = kspl_proc_read_end(h->from_err, buf, cap, timeout_ms);
@@ -288,12 +321,13 @@ I32 kspl_proc_read_err(I64 handle, U8 *buf, Sz cap, I32 timeout_ms) {
     return n;
 }
 
-/* The ending number.
-   Caution: **It is -1 while it has not ended** (0 means "it ended normally"). */
-I32 kspl_proc_exit_code(I64 handle) {
-    if (handle == 0) return -1;
+/* Whether it has ended, with the ending number in *code where it has.
+   Caution: **Do not fold the two into one number.** Every I32 is some child's exit code (Windows's
+ * exit(-1) is -1), so a value set aside for "still running" would also be one child's ending. */
+KSPL_LINK Bool kspl_proc_ended(I64 handle, I32 *code) {
+    if (handle == 0) return false;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
     if (!h->reaped) (void)kspl_proc_alive(handle);
-    return h->reaped ? (I32)h->code : -1;
+    if (h->reaped) *code = (I32)h->code;
+    return h->reaped != 0;
 }
-

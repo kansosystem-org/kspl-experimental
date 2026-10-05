@@ -84,7 +84,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 | Qwen | `ksai/examples/qwen_infer/`, `tools/ai_assist/` | The weights. Only the tools that convert them are present. **Whoever downloads and uses them follows Qwen's own license** |
 | Llama | `ksai/examples/llama_engine/` | Meta's weights. The bundled `mini_llama.safetensors` is made here, with a vocabulary of 12 and two layers; only the shape is borrowed |
 | PyTorch / transformers / peft | `tools/ai_assist/*.py` | The packages themselves. The tools assume you install them on your own machine |
-| OpenSSL | `std/tls` (`make TLS=1`) | The library itself. Only the caller's declarations are present |
+| OpenSSL | `ksbind/tls` | The library itself. Only the caller's declarations are present |
+| SQLite | `ksbind/db` | The library itself. Only the caller's declarations are present |
 
 ## Binary files
 
@@ -92,6 +93,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 | File | Where it comes from | License |
 | :-- | :-- | :-- |
+| `.vscode/extensions/kspl/icon.png` | Made here: the VS Code extension's icon, rendered from [`docs/kspl-icon.svg`](docs/kspl-icon.svg), which is drawn here with no font | This repository's |
 | `ksai/examples/llama_engine/mini_llama.safetensors` | Made here: tiny weights of Llama's shape (a vocabulary of 12, two layers), trained by this repository's own code | This repository's ([`LICENSE.md`](LICENSE.md)) |
 | `ksos/demo/cortex_m/pilot_policy.safetensors` | Made here: the Edge AI car's piloting policy, trained on a PC by this repository's own code | This repository's |
 | `ksplc/tests/prog/embed_data/raw.bin` | Made here: sample bytes for the `embed` tests | This repository's |

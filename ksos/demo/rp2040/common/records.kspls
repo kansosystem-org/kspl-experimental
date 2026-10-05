@@ -14,66 +14,67 @@ import "ksdb/store" { Store }
 import "ksos/drivers/rp2040/flash"
 
 const kind_marker: U16 = 0 //< the marker record's kind
-  //<
-  //< Caution: **Give each writer's kinds numbers of 1 or more** (0 is the marker).
+    //<
+    //< Caution: **Give each writer's kinds numbers of 1 or more** (0 is the marker).
 
 const marker_max: Sz = 8 //< the maximum marker length
-  //<
-  //< Keep it short (it only claims the region and carries no meaning).
+    //<
+    //< Keep it short (it only claims the region and carries no meaning).
 
 priv $lg: ksdblog.Log
 priv $ready: Bool = false
 priv $erased_on_open: Bool = false
 
 fn claim(marker: U8[]): Bool //< opens the record
-  //<
-  //< **true if it could be opened.** If the marker differs it erases the whole region. The caller
-  //< can report that with `wiped()` (without a word about the erase, nobody would know why the
-  //< previous record is gone).
-  ready = false
-  erased_on_open = false
-  if marker.len == 0 || marker.len > marker_max
-    return false
-  if !flash.init()
-    return false
-  store: = Store::{
-    .read_at = flash.read_at,
-    .program_at = flash.program_at,
-    .erase_sector = flash.erase_sector,
-    .capacity = flash.region_size,
-    .sector_size = flash.sector_size,
-  }
-  lg = ksdblog.Log.open(store)
-  ready = true
-  if lg.last_equals(kind_marker, marker)
+    //<
+    //< **true if it could be opened.** If the marker differs it erases the whole region. The caller
+    //< can report that with `wiped()` (without a word about the erase, nobody would know why the
+    //< previous record is gone).
+    ready = false
+    erased_on_open = false
+    if marker.len == 0 || marker.len > marker_max
+        return false
+    if !flash.init()
+        return false
+    store: = Store::{
+        .read_at = flash.read_at,
+        .program_at = flash.program_at,
+        .erase_sector = flash.erase_sector,
+        .capacity = flash.region_size,
+        .sector_size = flash.sector_size,
+    }
+    lg = ksdblog.Log.open(store)
+    ready = true
+    if lg.last_equals(kind_marker, marker)
+        return true
+    lg.reset() catch
+        ready = false
+        return false
+    lg.append(kind_marker, marker) catch
+        ready = false
+        return false
+    erased_on_open = true
     return true
-  lg.reset() catch
-    ready = false
-    return false
-  lg.append(kind_marker, marker) catch
-    ready = false
-    return false
-  erased_on_open = true
-  return true
 
 fn wiped(): Bool //< whether opening started by erasing the region
-  //<
-  //< Ask once, after `claim`.
-  return erased_on_open
+    //<
+    //< Ask once, after `claim`.
+    return erased_on_open
 
 fn ok(): Bool //< whether it is open
-  return ready
+    return ready
 
 fn handle(): ksdblog.Log$@ //< the record itself
-  //<
-  //< Caution: **Use it only after `claim` returns true.**
-  return lg@
+    //<
+    //< Caution: **Use it only after `claim` returns true.**
+    return lg@
 
 fn read_last(kind: U16, dst: U8$[]): Sz //< copies the newest record of kind into dst
-  //<
-  //< 0 if there is none (or if dst is too small). Swallowing the failure suits only this place,
-  //< where the caller can take "0 means none". **These probes store no record with empty content.**
-  //< If one did, 0 could not tell them apart, so change it to return `ksdb`'s `not_found` as it is.
-  if !ready
-    return 0
-  return lg.last(kind, dst) catch 0
+    //<
+    //< 0 if there is none (or if dst is too small). Swallowing the failure suits only this place,
+    //< where the caller can take "0 means none". **These probes store no record with empty
+    //< content.** If one did, 0 could not tell them apart, so change it to return `ksdb`'s
+    //< `not_found` as it is.
+    if !ready
+        return 0
+    return lg.last(kind, dst) catch 0

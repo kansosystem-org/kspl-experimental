@@ -1,6 +1,6 @@
 # kspage -- building and testing this package on its own
-# `make test` wants only a `ksplc`, the `std` it carries (or `KSPLC_STD_DIR`) and the `ksdb` it uses
-# (`KSPLC_PKG_SRC_DIR`); the page and the checks on it want more, named above each.
+# `make test` wants only a `ksplc` and the `std` it carries (or `KSPLC_STD_DIR`); the page and the
+# checks on it want more, named above each.
 #   make test / test-fuzz [KSPLC=/path/to/ksplc]  # the tests; broken documents fuzzed at opening
 #   make web / test-wasm                          # the page (out/web/kspage.html); its wasm in node
 #   make test-browser / test-served KSSRV=<kssrv> # the input plumbing in a real browser; as served
@@ -13,35 +13,33 @@ SHELL := bash
 
 KSPLC ?= ksplc
 OUT ?= out
-# The C compiler ksplc itself picks (`CC`, else clang), exported so ksplc's link words fit it.
-ifeq ($(origin CC),default)
-CC := clang
-endif
-export CC
 # Where the fuzz draws Markdown from besides the document it writes (the repository names its root).
 FUZZ_SEEDS ?= .
 # Handed to the fuzz as they stand: `--trials=N`, `--seed=N`.
 FUZZ_ARGS ?=
+# 1 fails a reader built without the address sanitizer (Linux CI holds its runtime); else a SKIP.
+KANSO_REQUIRE_ASAN ?=
+# -O1, as the sanitizer slows it; `-g` and the frame pointer keep a stop's call row readable.
+ASAN_CFLAGS := -O1 -g -fno-omit-frame-pointer -fsanitize=address
 # Where the page is written: one `kspage.html` that opens alone, beside the `kspage.wasm` bound in.
 WEB ?= $(OUT)/web
-# The compiler as a path: the tests have it read a text they wrote, never looking at PATH.
-KSPLC_EXE = $(shell command -v "$(KSPLC)")
 
 .PHONY: test test-fuzz web test-wasm test-browser test-served
 
 test:
-	rm -rf "$(OUT)/test"
-	"$(KSPLC)" run tests/main.kspls "$(KSPLC_EXE)" "$(OUT)/test"
+	"$(KSPLC)" run tests/main.kspls
 
+fuzz_build = "$(KSPLC)" build --cflags="$(1)" tests/open_prog.kspls "$(OUT)/fuzz/open_prog.exe"
+# Caution: **Make the folder first**: the sanitizer's log is redirected into it before the build.
 test-fuzz:
 	@mkdir -p "$(OUT)/fuzz"
-	"$(KSPLC)" --emit-libs="$(OUT)/fuzz/open_prog.libs" tests/open_prog.kspls \
-		"$(OUT)/fuzz/open_prog.c"
-	"$(CC)" -std=c99 -O0 "$(OUT)/fuzz/open_prog.c" "@$(OUT)/fuzz/open_prog.libs" \
-		$$("$(KSPLC)" info exe-flags) $$("$(KSPLC)" info link-libs) -o "$(OUT)/fuzz/open_prog.exe"
 	rm -rf "$(OUT)/fuzz/work"
+	@if $(call fuzz_build,$(ASAN_CFLAGS)) > "$(OUT)/fuzz/asan.log" 2>&1; then asan=--asan; \
+		echo "# the reader: with the address sanitizer"; \
+	else asan=; echo "# the reader: without the address sanitizer ($(OUT)/fuzz/asan.log says why)"; \
+		$(call fuzz_build,-O0) || exit 1; fi; \
 	"$(KSPLC)" run tests/fuzz_main.kspls "$(OUT)/fuzz/open_prog.exe" "$(OUT)/fuzz/work" \
-		"$(FUZZ_SEEDS)" $(FUZZ_ARGS)
+		"$(FUZZ_SEEDS)" $$asan $(if $(filter 1,$(KANSO_REQUIRE_ASAN)),--require-asan) $(FUZZ_ARGS)
 
 # ==========================================
 # The page, for the browser (wasm32)
@@ -174,7 +172,7 @@ kspage_err_summary = mine=$$(grep -c '$(KSPAGE_SAID): ' "$(1)" || true); \
 # Caution: **Hold the checks' sources by name.** Bound as a folder, one added falls into an order
 # settled by its name, unnoticed until it fails. `probe.js` turns the sections.
 KSPAGE_PROBE := probe input store menu cell show insert pin filter find paint paper link note keys \
-	ribbon diff source fresh drag outside local keep outline
+	ribbon fresh drag outside local keep outline
 KSPAGE_PROBE_JS := $(patsubst %,tests/browser/%.js,$(KSPAGE_PROBE))
 
 # Caution: **Both checks are to use this page with the checks pasted in**: built apart, the
@@ -225,7 +223,7 @@ test-browser: $(KSPAGE_PROBE_PAGE)
 # ==========================================
 # The page `kssrv --local` served
 # ==========================================
-# **The server is handed in** (`KSSRV=<path>`, another package's), the `sort` plugin laid beside it.
+# **The server is handed in** (`KSSRV=<path>`, another package's).
 # Caution: **Take the token in as a fragment (`#t=`)**: on the query (`?`) it rides the request's
 # line (docs/SPEC-local-server.md). The URL is taken whole from the line `kssrv: I: open `, and
 # `kssrv/main.kspls` names this waiter where it puts that line out.

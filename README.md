@@ -1,5 +1,7 @@
 # Kanso Programming Language (KSPL)
 
+<img src="docs/kspl-icon.svg" alt="" width="112" align="right">
+
 > [!CAUTION]
 > **This repository is an experiment.** The language, the standard library and every tool may change in ways that break existing code, with no deprecation period. The repository itself may be deleted or replaced without notice. Do not depend on it.
 
@@ -39,10 +41,11 @@ A row counts what actually ran, not what was written.
 | :-- | :-- | :-- |
 | **The compiler** (`ksplc/`) | C99 generation, generics (one copy per type argument), `T?E`, `defer`, the formatter, the Language Server, the linter | A two-stage bootstrap from the seed, **self-hosting with zero difference**. CI builds it on Linux / macOS / Windows ×2, of which only some are supported ([below](#where-it-is-supported)). The Language Server is tested only with VS Code |
 | **The LLVM IR backend** | The language features pass | **Not shipped: a mirror that keeps backend dependencies out of parse/sema/lower** ("6. The backends (Genc / Genllvm) and the runtime ABI" in [`ksplc/docs/DESIGN.md`](ksplc/docs/DESIGN.md)) |
-| **The standard library** (`std/`) | Files, time, environment variables, signals, hashing and randomness, thread synchronization, TCP/UDP, HTTP/1.1, asynchronous I/O, JSON, URLs, regular expressions, collection operations | No dependencies by default. Only TLS (OpenSSL) and DB (SQLite) use an optional backend over FFI, **built only on Linux** |
+| **The standard library** (`std/`) | Files, time, environment variables, signals, hashing and randomness, thread synchronization, TCP/UDP, HTTP/1.1, asynchronous I/O, JSON, URLs, regular expressions, collection operations | No dependencies: it builds wherever the toolchain does, with nothing to install |
+| **The bindings** (`ksbind/`) | A TLS client over OpenSSL, and SQLite | Only where OpenSSL and SQLite are installed. **Run only on Linux** in CI |
 | **The AI engine** (`ksai/`) | Tensor operations, inference, training (backpropagation), fine-tuning with LoRA, tokenizer, safetensors | KSPL alone, with no external library, including continued training on the device |
-| **Kanso OS** (`ksos/`) | Cooperative and preemptive scheduling, mutual exclusion and waiting, a heap, peripheral drivers (MMIO), a minimal ARP/IPv4/UDP/TCP/MQTT | Three ports: Cortex-M / Armv6-M / POSIX. **Runs on real silicon (RP2040)**, not only QEMU. Wireless is out of scope (its license does not fit this repository's attribution) |
-| **Kanso Server** (`kssrv/`) | Static serving, JSON APIs, inference on a resident model, LoRA training while it runs | Many connections on one thread, in constant resident memory |
+| **Kanso OS** (`ksos/`) | Cooperative and preemptive scheduling, mutual exclusion and waiting, a heap, peripheral drivers (MMIO), a minimal ARP/IPv4/UDP/TCP | Three ports: Cortex-M / Armv6-M / POSIX. **Runs on real silicon (RP2040)**, not only QEMU. Wireless is out of scope (its license does not fit this repository's attribution) |
+| **Kanso Server** (`kssrv/`) | Static serving, the file endpoints a local page uses, steering the car | Many connections on one thread, in constant resident memory |
 | **Edge AI** | A policy trained on a PC and run on a microcontroller alone | **A closed loop on a palm-sized four-wheeled car** (a Freenove car kit plus a Raspberry Pi Pico W). It decides with the PC disconnected (measured timings are in "What has been checked on real hardware" in [ksos](ksos/README.md)) |
 | **The document editing system** (`kspage/`) | Prose, tables and presentation material as one document: typing, formatting, table formulas, figures, a table of contents, chapter numbers, printing, HTML export | Runs in a browser (wasm32 + canvas); CI runs the wasm under `node`, and the input handling in a real browser: headless Chromium on Linux. Other browsers and input-method (IME) conversion are untested. **Not complete as an editing system** (what is there and what is not: [kspage](kspage/README.md)) |
 
@@ -59,10 +62,9 @@ A row counts what actually ran, not what was written.
 | 2 | A general-purpose language: `std/`, `ksai/`, `ksos/`, and what bare metal needs (inline assembly, `volatile`, custom linker scripts) | ✅ |
 | 3 | Demonstrating embedded, IoT and edge AI: the Edge AI loop, its result kept across power cycles in `ksdb/` | ✅ |
 
-**Two things are worked on now, side by side**:
+**One thing is worked on now**:
 
 * **AI on microcontrollers**: gesture recognition, a model on the car's RP2040 recognizing a hand waved over its own sensors, trained and run from one KSPL source (its stages are in "Gesture recognition on the RP2040" in [`docs/PLAN.md`](docs/PLAN.md)).
-* **The document editing system** ([`kspage/`](kspage/README.md)): what is left in it is in [`kspage/docs/PLAN.md`](kspage/docs/PLAN.md).
 
 ### Where it is supported
 
@@ -71,8 +73,8 @@ A row counts what actually ran, not what was written.
 | Level | What stands behind it | Environments |
 | :-- | :-- | :-- |
 | **Supported** | The gates run there in CI, and Kanso is developed there day to day, so a person sees what no gate checks | Linux x86-64 (glibc) with clang, as [`.devcontainer/`](.devcontainer/) sets it up; Windows x64 with MSYS2 UCRT64's clang, which builds the released Windows `ksplc.exe` |
-| **Built in CI, not confirmed** | A CI job builds it and runs part of the gates; nobody develops there, so nobody sees what no gate checks | macOS arm64 with Xcode's clang; Windows x64 with LLVM's own clang, which targets MSVC |
-| **Untested** | Nothing runs there. It may work, since the output is C99, but nothing has shown it | GCC as the C compiler; MSVC's own `cl.exe` and `clang-cl`; a clang older than the rows above use; Linux on arm64, on musl, or other than the image above; Intel Macs; Windows on Arm; 32-bit hosts; the BSDs |
+| **Built in CI, not confirmed** | A CI job builds it and runs part of the gates; nobody develops there, so nobody sees what no gate checks | macOS arm64 with Xcode's clang |
+| **Untested** | Nothing runs there. It may work, since the output is C99, but nothing has shown it | GCC as the C compiler; Windows x64 with LLVM's own clang, which targets MSVC; MSVC's own `cl.exe` and `clang-cl`; a clang older than the rows above use; Linux on arm64, on musl, or other than the image above; Intel Macs; Windows on Arm; 32-bit hosts; the BSDs |
 
 **A supported environment does not carry every package.** How far each package is confirmed is its row in [the table that opens this section](#-what-works-and-how-far). Which gate runs in which environment is in "What each platform runs" in [`docs/SPEC-gates.md`](docs/SPEC-gates.md).
 
@@ -103,7 +105,7 @@ The steps need a C compiler (`clang`) on the PATH, since `ksplc` passes its outp
   import "std/io"
 
   fn main()
-    io.out().s("Hello, Kanso!\n")
+      io.out().s("Hello, Kanso!\n")
   ```
 
 3. **Run it**
@@ -129,7 +131,8 @@ Each package's `README.md` is linked from its row.
 | **`ksos/`** | The lightweight real-time OS (Kanso OS): one kernel from a bare-metal microcontroller to a Linux host ([introduction](ksos/README.md) / [design](ksos/docs/DESIGN.md) / [what is left](ksos/docs/PLAN.md)). |
 | **`kssrv/`** | The server (Kanso Server), on top of `std/net` and `std/http` ([introduction](kssrv/README.md) / [design](kssrv/docs/DESIGN.md) / [what is left](kssrv/docs/PLAN.md)). |
 | **`ksdb/`** | A zero-dependency database for inside a device (Kanso DataBase): an append-only record on flash that survives power loss ([introduction](ksdb/README.md) / [design](ksdb/docs/DESIGN.md)). |
-| **`kspage/`** | The editing system for prose, tables and presentation material as one document (Kanso Doc), with a browser port (wasm32 + canvas) ([introduction](kspage/README.md) / [design](kspage/docs/DESIGN.md) / [what is left](kspage/docs/PLAN.md)). |
+| **`ksbind/`** | Bindings to C libraries from outside the toolchain, kept out of `std` so that `std` needs nothing installed: a TLS client over OpenSSL, and SQLite ([introduction](ksbind/README.md) / [design](ksbind/docs/DESIGN.md)). |
+| **`kspage/`** | The editing system for prose, tables and presentation material as one document (Kanso Doc), with a browser port (wasm32 + canvas) ([introduction](kspage/README.md) / [design](kspage/docs/DESIGN.md)). |
 | **`docs/`** | The documents belonging to no single package, such as [the design rationale](docs/DESIGN.md), [the rules every document obeys](docs/SPEC-documents.md) and [what is left](docs/PLAN.md). The table in [`docs/README.md`](docs/README.md) says who each is for. |
 | **`tests/`** | The test suites for the language, the toolchain and the OS ([entry point](tests/README.md)). |
 | **`tools/`** | Tools for developing Kanso itself, in KSPL where possible, including `ai_assist/` (training the code-completion AI) ([entry point](tools/README.md) / [what is left](tools/docs/PLAN.md)). |

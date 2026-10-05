@@ -1,17 +1,18 @@
 # std
 
-**The KSPL standard library**, which the compiler itself depends on too. Apart from `std/lang`, each file is imported as `import "std/xxx";` and reached through its alias (["9. Files and import" in `docs/SPEC-language.md`](../docs/SPEC-language.md#9-files-and-import)).
+**The KSPL standard library**, which the compiler itself depends on too. Apart from `std/lang`, each file is imported as `import "std/xxx"` and reached through its alias (["9. Files and import" in `docs/SPEC-language.md`](../docs/SPEC-language.md#9-files-and-import)).
 
 ## Run it
 
 ```kspls
-import "std/ds" as ds
+import "std/ds" { List }
 import "std/io"
 
 fn main()
-  nums: = List<|I32|>.create()
-  nums.push(42)
-  io.out().s("first = \{nums[0]\}\n")
+    $nums: = List<|I32|>.new(null)
+    defer nums.free()
+    nums.push(42)
+    io.out().s("first = \{nums[0]\}\n")
 ```
 
 ---
@@ -20,16 +21,9 @@ fn main()
 
 **`ksplc doc std` lists every file and what it is for**, rendered from the sources when asked; `ksplc doc std/<file>` gives one file's declarations. Below is only what it does not say.
 
-### The files carrying an optional dependency
+### Nothing to install
 
-These two stay out of the default build until named, under **selective extensibility**: a feature only some programs need is not put into the language specification, but offered as a file those programs `import`.
-
-| File | What it needs | How it is built |
-| --- | --- | --- |
-| **`std/tls`** | OpenSSL (`libssl-dev`) | `make TLS=1` |
-| **`std/db`** | SQLite (`libsqlite3-dev`) | `make DB=1` |
-
-Every other file builds with the toolchain alone; `std/net`, `std/http`, `std/reactor`, `std/subproc` and `std/fs` reach the OS through the always-linked C runtime.
+**Every file builds with the toolchain alone.** `std/net`, `std/http`, `std/reactor`, `std/subproc` and `std/fs` reach the OS through the always-linked C runtime, and no file binds a C library from outside the toolchain ("13.5 The standard library reaches only itself" in [`../docs/DESIGN.md`](../docs/DESIGN.md)).
 
 ### How many files one import brings along
 
@@ -46,8 +40,8 @@ Caution: **Do not add line counts to this table**: every edit changes them, and 
 | `chars` | 3 (4 on a freestanding build, where `mem` supplies `memcmp`) |
 | `strfmt` | 4 |
 | `strnum` | 5 |
-| `ds` (`List` / `Map`), `sha256` `base64` `rand` `thread` `net` `db` | 4 |
-| `seq` `regex` `tls` | 5 |
+| `ds` (`List` / `Map`), `sha256` `base64` `rand` `thread` `net` | 4 |
+| `seq` `regex` | 5 |
 | `str` | 7 |
 | `io` | 8 |
 | `sys` `json` `fs` and the like, which use those above | 8+ |
@@ -80,9 +74,6 @@ How to choose where to cut is "Choosing where to split a file" in [`docs/DESIGN.
 
 * [`std/strfmt.kspls`](strfmt.kspls): **the exact assembly of decimal digits from a binary value** moves to a new `strfmt_digits.kspls` under `std/`. That is `Binary_float` and the decomposition, the loop that runs `Bignat` and emits one digit at a time, the carry, and fixing the digit count.
   * The cut lies between making the digits and writing them out. `write_float` / `write_float32` stay, since moving them too would make both files need `Writer`.
-* [`std/tests/sys_test.kspls`](tests/sys_test.kspls): **the filesystem tests** (`test_fs_ops` / `test_fs_wide_path` / `test_fs_walk` / `test_fs_mkdir_all_race` / `test_fs_path_guard` / `test_fs_long_path`, and their helpers) move to a new `fs_test.kspls` under `std/tests/`.
-  * The cut follows the question each test asks. What stays covers environment variables, signals, the clock, a path's extension and child processes; what moves asks about non-ASCII names, the length limit, racing creation and the depth limit.
-  * Caution: **Once it moves, move its `import` and its call in [`std/tests/all.kspls`](tests/all.kspls) too.** A file that no entry point calls is invisible to `make debug`, so forgetting this still shows green.
 
 **Name a new file with a word no value uses.** `rc.kspls` for the reference-counting handles would make its alias collide with the variable name `rc`, hence [`std/refcount.kspls`](refcount.kspls).
 

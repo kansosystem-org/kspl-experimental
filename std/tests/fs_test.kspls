@@ -1,0 +1,504 @@
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/mem" { dealloc }
+import "std/str" { Str_builder }
+import "std/thread"
+import "std/verdict"
+
+// ==========================================
+// std/fs: creating a directory, metadata, writing, renaming, enumerating and deleting, on a real
+// filesystem.
+// ==========================================
+fn test_fs_ops()
+    verdict.start("[Fs] directory operations (mkdir/stat/rename/enumerate/delete)...")
+    // kspl_mkdir does not create parents, and Windows has no "/tmp", so everything goes under
+    // `out/tmp`, which the entry point that runs the tests creates first.
+    tmp_dir: = "out/tmp/kspl_test_debug_fs_dir"
+    // Remove what the previous run left. **Delete the paths inside first**: `remove_path` is POSIX
+    // `rmdir` and cannot delete a folder with contents, so the `assert` below would fail.
+    // Caution: **Do not write "harmless even if it cannot be deleted".** It is harmless only when
+    // the folder is empty.
+    fs.remove_path("out/tmp/kspl_test_debug_fs_dir/a.txt") catch {}
+    fs.remove_path("out/tmp/kspl_test_debug_fs_dir/b.txt") catch {}
+    fs.remove_path(tmp_dir) catch {}
+
+    assert(!fs.exists(tmp_dir), "tmp_dir should not exist before mkdir")
+    fs.mkdir(tmp_dir) catch panic("mkdir should succeed for a fresh path")
+    assert(fs.exists(tmp_dir) && fs.is_dir(tmp_dir), "tmp_dir should exist as a directory")
+
+    f1: = "out/tmp/kspl_test_debug_fs_dir/a.txt"
+    io.write_file(f1, "hello") catch panic("write_file should succeed inside a freshly created \
+        directory")
+    info: = fs.stat(f1) catch panic("stat should succeed for an existing file")
+    assert(info.size == 5 && !info.is_dir, "a.txt metadata should report size=5, is_dir=false")
+
+    f2: = "out/tmp/kspl_test_debug_fs_dir/b.txt"
+    fs.rename_path(f1, f2) catch panic("rename_path should succeed")
+    assert(!fs.exists(f1) && fs.exists(f2), "rename_path should move, not copy")
+
+    // **It must replace even when the destination already exists.** That is the basis of the
+    // "write to another name, then replace" pattern (a server's file writes and an on-disk cache
+    // both use it).
+    // Caution: **Do not treat an existing destination as a failure**: if it cannot replace, every
+    // save after the first silently writes nothing.
+    io.write_file(f1, "again") catch panic("write_file should succeed for the source of a replacing \
+        rename")
+    fs.rename_path(f1, f2) catch panic("rename_path should replace an existing destination, not \
+        fail")
+    assert(!fs.exists(f1), "the source should be gone after a replacing rename")
+    replaced: = io.read_file(f2) catch panic("the replaced destination should be readable")
+    assert(replaced.equals("again"), "the destination should hold the new bytes")
+    dealloc(Void$@::replaced.ptr)
+
+    dir_arena: = Arena.new(4096)
+    defer dir_arena.free()
+    entries: = fs.read_dir(tmp_dir, dir_arena) catch panic("read_dir should succeed for an existing \
+        directory")
+    assert(entries.len == 1, "directory should contain exactly one entry")
+    for name in entries
+        assert(name.equals("b.txt"), "the only directory entry should be b.txt")
+
+    fs.remove_path(f2) catch panic("remove_path must succeed for an existing file")
+    fs.remove_path(tmp_dir) catch panic("remove_path must succeed for a now-empty directory")
+    assert(!fs.exists(tmp_dir), "tmp_dir should no longer exist after cleanup")
+
+    verdict.pass("mkdir/stat/rename/enumerate/delete worked correctly on a genuine filesystem.")
+
+fn test_fs_wide_path() //<
+    //< That the file operations work in a folder whose path contains a space and non-ASCII
+    //<
+    //< **Only this test covers it.** The folder in the section above is ASCII, so `std/fs`'s
+    //< functions never pass through **the code that copies a path for the OS's wide API** (on
+    //< Windows every function goes through `kspl_win_to_wide`; `ksplc/gen/runtime/hosted_fs.c`).
+    //< This test checks the functions themselves; a program run through `ksplc run` from such a
+    //< folder is for the compiler's own suites to test.
+    verdict.start("[Fs] file operations in a place holding a space and non-ASCII...")
+    arena: = Arena.new(4096)
+    defer arena.free()
+    // **Delete by name, deepest first** (a folder with contents cannot be deleted).
+    root: = "out/tmp/kspl_test 場所 と 空白"
+    deep: = "out/tmp/kspl_test 場所 と 空白/深い 所"
+    one: = "out/tmp/kspl_test 場所 と 空白/深い 所/かんそ.txt"
+    two: = "out/tmp/kspl_test 場所 と 空白/深い 所/直した.txt"
+    fs.remove_path(one) catch {}
+    fs.remove_path(two) catch {}
+    fs.remove_path(deep) catch {}
+    fs.remove_path(root) catch {}
+    assert(!fs.exists(root), "the wide-path probe root should not exist before mkdir_all")
+
+    // **It must be possible to create several levels**, each name containing a space and non-ASCII.
+    fs.mkdir_all(deep) catch panic("mkdir_all should create every level of a wide path")
+    assert(fs.exists(deep) && fs.is_dir(deep), "the wide path should exist as a directory")
+
+    io.write_file(one, "かんそ") catch panic("write_file should succeed under a wide path")
+    info: = fs.stat(one) catch panic("stat should succeed for a file under a wide path")
+    // Caution: **Check the byte count** (`かんそ` is 9 bytes in UTF-8); a character count differs
+    // per environment.
+    assert(info.size == 9 && !info.is_dir, "the wide-path file should report 9 bytes, is_dir=false")
+
+    fs.rename_path(one, two) catch panic("rename_path should succeed between two wide paths")
+    assert(!fs.exists(one) && fs.exists(two), "rename_path should move, not copy, under a wide path")
+
+    // Caution: **The enumerated name must reopen the file.** If the name is not converted back,
+    // the enumeration succeeds, but the joined path points at no file.
+    entries: = fs.read_dir(deep, arena) catch panic("read_dir should succeed for a wide path")
+    assert(entries.len == 1, "the wide-path directory should contain exactly one entry")
+    for name in entries
+        assert(name.equals("直した.txt"),
+            "the entry name should come back as the bytes that were written")
+        got: = io.read_file(fs.join(deep, name, arena)) catch panic("the file should be readable \
+            through the path rebuilt from the listed name")
+        assert(got.equals("かんそ"), "the rebuilt path should reach the same bytes")
+        dealloc(Void$@::got.ptr)
+
+    fs.remove_path(two) catch panic("remove_path must succeed for a file under a wide path")
+    fs.remove_path(deep) catch panic("remove_path must succeed for an empty wide directory")
+    fs.remove_path(root) catch panic("remove_path must succeed for the wide probe root")
+    assert(!fs.exists(root), "the wide-path probe tree should be gone after cleanup")
+
+    verdict
+        .pass("even in a place holding a space and non-ASCII, creating, writing, measuring, \
+            renaming, enumerating, reading and deleting all went through.")
+
+priv const level_filler: U8[] = "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmn" //<
+    //< Fifty characters that make each level of the long tree below long
+
+fn test_fs_past_max_path() //<
+    //< That every function works on a path longer than Windows's 260 characters
+    //<
+    //< **On Linux it works anyway**; the target is a Windows runner, where a path passed unchanged
+    //< stops at 260 while a C compiler still accepts it (`kspl_path_to_wide` in
+    //< `ksplc/gen/runtime/hosted_fs.c`). The tree is built through a relative path, which is
+    //< resolved before the long-path prefix is added, and read back through the absolute one.
+    verdict.start("[Fs] file operations on a path longer than Windows's 260 characters...")
+    arena: = Arena.new(8192)
+    defer arena.free()
+    root: = "out/tmp/kspl_test_past_max_path"
+    // Five levels of 58 characters put the relative path alone past 300, wherever the tests
+    // run.
+    $levels: = List<|U8[]|>.new(arena)
+    $at: = root
+    for i in Range.asc(5)
+        at = fs.join(at, arena.text().s("level_\{i\}_").s(level_filler).take(), arena)
+        levels.push(at)
+    deep: = levels.get(levels.len - 1)
+    one: = fs.join(deep, "leaf.txt", arena)
+    two: = fs.join(deep, "moved.txt", arena)
+    assert(one.len > 300, "the probe path must be longer than Windows's limit on its own")
+    // **Delete by name, deepest first** (a folder with contents cannot be deleted).
+    fs.remove_path(one) catch {}
+    fs.remove_path(two) catch {}
+    for $i: = levels.len; i > 0; i -= 1
+        fs.remove_path(levels.get(i - 1)) catch {}
+    fs.remove_path(root) catch {}
+    assert(!fs.exists(root), "the long-path probe root should not exist before mkdir_all")
+
+    fs.mkdir_all(deep) catch panic("mkdir_all should create every level of a long path")
+    assert(fs.is_dir(deep), "the long path should exist as a directory")
+    io.write_file(one, "past") catch panic("write_file should succeed under a long path")
+    info: = fs.stat(one) catch panic("stat should succeed for a file under a long path")
+    assert(info.size == 4 && !info.is_dir, "the long-path file should report 4 bytes, is_dir=false")
+    abs: = fs.absolute(one, arena) catch panic("the long path should be made absolute")
+    assert(fs.exists(abs), "the absolute spelling should reach the same file")
+
+    fs.rename_path(one, two) catch panic("rename_path should succeed between two long paths")
+    assert(!fs.exists(one) && fs.exists(two), "rename_path should move, not copy, under a long path")
+    entries: = fs.read_dir(deep, arena) catch panic("read_dir should succeed for a long path")
+    assert(entries.len == 1, "the long directory should contain exactly one entry")
+    for name in entries
+        assert(name.equals("moved.txt"), "the entry should come back by the name it was moved to")
+        got: = io.read_file(fs.join(deep, name, arena)) catch panic("the file should be readable \
+            through the long path rebuilt from the listed name")
+        assert(got.equals("past"), "the rebuilt long path should reach the same bytes")
+        dealloc(Void$@::got.ptr)
+
+    fs.remove_path(two) catch panic("remove_path must succeed for a file under a long path")
+    for $i: = levels.len; i > 0; i -= 1
+        fs.remove_path(levels.get(i - 1)) catch panic("remove_path must succeed for an empty long \
+            directory")
+    fs.remove_path(root) catch panic("remove_path must succeed for the long probe root")
+    assert(!fs.exists(root), "the long-path probe tree should be gone after cleanup")
+
+    verdict
+        .pass("past Windows's 260 characters too, creating, writing, measuring, renaming, \
+            enumerating, reading and deleting all went through.")
+
+fn skip_skipme(name: U8[]): Bool //< a `skip_dir` that leaves out the folders named `skipme`
+    return name.equals("skipme")
+
+priv const walk_root: U8[] = "out/tmp/kspl_test_debug_walk"
+
+// ==========================================
+// std/fs: walk_files / walk_dirs return a tree flat and in lexicographic order, and skip_dir drops
+// a whole branch.
+// ==========================================
+fn test_fs_walk()
+    verdict.start("[Fs] mkdir_all/walk_files/walk_dirs...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+    remove_walk_tree()
+
+    fs.mkdir_all("out/tmp/kspl_test_debug_walk/z/deep") catch panic("mkdir_all should create every \
+        missing level")
+    fs.mkdir_all("out/tmp/kspl_test_debug_walk/a") catch panic("mkdir_all should create a sibling \
+        directory")
+    // mkdir_all on an existing path is a success, so the caller needs no existence check.
+    fs.mkdir_all("out/tmp/kspl_test_debug_walk/a") catch panic("mkdir_all must treat an existing \
+        directory as success")
+    fs.mkdir_all("out/tmp/kspl_test_debug_walk/skipme") catch panic("mkdir_all should create the \
+        directory to be pruned")
+    write_probe_file("out/tmp/kspl_test_debug_walk/b.txt")
+    write_probe_file("out/tmp/kspl_test_debug_walk/a/a2.txt")
+    write_probe_file("out/tmp/kspl_test_debug_walk/z/deep/d.txt")
+    write_probe_file("out/tmp/kspl_test_debug_walk/skipme/x.txt")
+
+    $files: = fs.walk_files(walk_root, skip_skipme, arena) catch panic("walk_files should succeed \
+        for an existing directory")
+    assert(files.len == 3, "walk_files should return 3 files with skipme pruned")
+    assert(entry_is(files@, 0, "out/tmp/kspl_test_debug_walk/a/a2.txt"), "walk_files[0] mismatch")
+    assert(entry_is(files@, 1, "out/tmp/kspl_test_debug_walk/b.txt"), "walk_files[1] mismatch")
+    assert(entry_is(files@, 2, "out/tmp/kspl_test_debug_walk/z/deep/d.txt"),
+        "walk_files[2] mismatch")
+
+    $dirs: = fs.walk_dirs(walk_root, skip_skipme, arena) catch panic("walk_dirs should succeed for \
+        an existing directory")
+    // The starting point itself is not included. Nor is the pruned skipme.
+    assert(dirs.len == 3, "walk_dirs should return 3 directories excluding the root and skipme")
+    assert(entry_is(dirs@, 0, "out/tmp/kspl_test_debug_walk/a"), "walk_dirs[0] mismatch")
+    assert(entry_is(dirs@, 1, "out/tmp/kspl_test_debug_walk/z"), "walk_dirs[1] mismatch")
+    assert(entry_is(dirs@, 2, "out/tmp/kspl_test_debug_walk/z/deep"), "walk_dirs[2] mismatch")
+
+    joined: U8[] = fs.join("out/tmp/kspl_test_debug_walk/", "/b.txt", arena)
+    join_ok: = joined.equals("out/tmp/kspl_test_debug_walk/b.txt")
+    assert(join_ok, "join should not duplicate separators")
+
+    // The caller must learn which level could not be created; the whole path alone cannot tell a
+    // name problem from a permission one. Nothing can be created under an existing file's name.
+    $failed_part: U8[] = ""
+    fs.mkdir_all("out/tmp/kspl_test_debug_walk/b.txt/under") catch e
+        switch e case .mkdir_failed(part)
+            failed_part = part
+        default
+            panic("mkdir_all should report mkdir_failed, not another error")
+    // It stops at the intermediate `b.txt` level, not at the whole path passed in.
+    part_ok: = failed_part.equals("out/tmp/kspl_test_debug_walk/b.txt")
+    assert(part_ok, "mkdir_failed should name the level that could not be created")
+
+    remove_walk_tree()
+    assert(!fs.exists(walk_root), "the probe tree should be gone after cleanup")
+    verdict
+        .pass("mkdir_all created every level, walk_files/walk_dirs returned in lexicographic order, \
+            and skip_dir dropped a whole branch.")
+
+priv const race_dirs: Sz = 16 //< how many threads create the same tree at once
+    //<
+    //< Caution: **Make it actually hit the check-then-act race.** Called twice in sequence,
+    //< `is_dir` short-circuits, so the test passes even without the handling. Suites run by
+    //< `make -j` share `ksplc run`'s cache tree and do hit the race; threads reproduce it here.
+
+priv struct Race_ctx
+    path: U8[]
+    fails: thread.Atomic_sz$@
+    go: thread.Atomic_sz$@ //<
+        //< The flag that holds every thread until all are up.
+        //<
+        //< Caution: **Without it there is no race**: a late starter would find the tree already
+        //< made.
+
+priv const race_spin: Sz = 100000000
+
+priv fn race_entry(c: Race_ctx$@): Void$@
+    for _k in Range.asc(race_spin)
+        if c.go.load() != 0
+            break
+    fs.mkdir_all(c.path) catch
+        _bumped: = c.fails.fetch_add(1)
+    return Void$@::c
+
+fn test_fs_mkdir_all_race()
+    verdict.start("[Fs] mkdir_all creating the same tree at once...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+    root: = "out/tmp/kspl_test_debug_mkdir_race"
+    clear_tree_best_effort(root, arena)
+    deep: = "out/tmp/kspl_test_debug_mkdir_race/a/b/c/d"
+    $fails: = thread.Atomic_sz.new(0)
+    $go: = thread.Atomic_sz.new(0)
+    $ctxs: = List<|Race_ctx$@|>.new(arena)
+    for _k in Range.asc(race_dirs)
+        c: = Race_ctx$@::arena.alloc(sizeof(Race_ctx))
+        c$ = Race_ctx::{ .path = deep, .fails = fails@, .go = go@ }
+        ctxs.push(c)
+    $threads: = List<|thread.Thread$@|>.new(arena)
+    for c in ctxs.slice()
+        t: = thread.Thread.spawn<|Race_ctx|>(race_entry, c) catch
+            break
+        threads.push(t)
+    go.store(1)
+    for t in threads.slice()
+        t.join_and_free()
+    assert(threads.len == race_dirs, "all racers must start")
+    assert(fs.is_dir(deep), "the tree must exist after the race")
+    assert(fails.load() == 0, "losing the race must not be reported as a failure")
+    clear_tree_best_effort(root, arena)
+    verdict.pass("when several create it at once, the one that loses the race is not a failure.")
+
+fn clear_tree_best_effort(root: U8[], arena: Arena$@) //< deletes a test's scratch tree
+    //<
+    //< It does not report a failed delete (clean-up must not hide the result under test).
+    files: = fs.walk_files(root, fs.skip_none, arena) catch
+        return
+    for f in files
+        fs.remove_path(f) catch {}
+    dirs: = fs.walk_dirs(root, fs.skip_none, arena) catch
+        return
+    for $i: = I32::dirs.len - 1; i >= 0; i -= 1
+        fs.remove_path(dirs.get(i)) catch {}
+    fs.remove_path(root) catch {}
+
+// ==========================================
+// std/fs: path safety decided by the text alone (is_safe_relative), and walk_*'s depth limit.
+// ==========================================
+fn test_fs_path_guard()
+    verdict.start("[Fs] is_safe_relative and walk's depth limit...")
+    assert(fs.is_safe_relative("a/b.txt"), "an ordinary relative path goes through")
+    assert(fs.is_safe_relative("a..b.txt"), "a '..' inside a segment is a legitimate name")
+    assert(fs.is_safe_relative("..foo/bar"),
+        "starting with '..' goes through unless it is the whole segment")
+    assert(!fs.is_safe_relative(""), "empty does not go through")
+    assert(!fs.is_safe_relative("/etc/passwd"), "an absolute path does not go through")
+    assert(!fs.is_safe_relative("\\etc\\passwd"), "a Windows-style absolute path does not either")
+    assert(!fs.is_safe_relative("C:/tmp/x"), "a drive letter does not go through")
+    assert(!fs.is_safe_relative("../x"), "a leading '..' segment does not go through")
+    assert(!fs.is_safe_relative("a/../../x"), "an intermediate '..' segment does not either")
+    assert(!fs.is_safe_relative("a/.."), "a trailing '..' segment does not either")
+
+    // A path the OS reinterprets slips past every caller-side check deciding by name; the answer is
+    // the same on every platform (see is_safe_relative).
+    assert(!fs.is_safe_relative("secret.key\0.html"), "everything after a NUL never reaches the OS")
+    assert(!fs.is_safe_relative("secret.key."), "Windows drops a segment's trailing '.'")
+    assert(!fs.is_safe_relative("secret.key "), "Windows drops a segment's trailing ' '")
+    assert(!fs.is_safe_relative("a/b./c"),
+        "an intermediate segment's trailing '.' does not go through either")
+    assert(!fs.is_safe_relative("secret.key::$DATA"),
+        "an NTFS alternate stream name does not go through")
+    assert(!fs.is_safe_relative("a/x:y"), "a ':' inside a segment does not either")
+    assert(!fs.is_safe_relative("a/./b"), "a '.' segment does not go through, in step with '..'")
+    assert(!fs.is_safe_relative("x\ny"), "a control character does not go through")
+    // A device name is a device at any level; a read on COM1/LPT1 with nothing there never returns.
+    assert(!fs.is_safe_relative("CON"), "a Windows device name does not go through")
+    assert(!fs.is_safe_relative("www/con.txt"), "a device name is a device even with an extension")
+    assert(!fs.is_safe_relative("CoM1"), "a device name does not care about case")
+    assert(!fs.is_safe_relative("a/LPT9/b"), "an intermediate segment's device name does not either")
+    assert(fs.is_safe_relative("console.js"),
+        "an ordinary name merely starting with a device name goes through")
+    assert(fs.is_safe_relative("com12"), "a name longer than a device name goes through")
+    assert(fs.is_safe_relative("a//b.txt"), "a repeated separator points at the same place")
+
+    // stays_under keeps paths under the root (is_safe_relative is its text-only half).
+    // Caution: **Do not count an absent path as "a link".** If it counted, code writing a file
+    // about to be created (a server's PUT, for example) could write nothing.
+    // Refusing a real link is not tested here: `fs` has no way to create one, so that test belongs
+    // to whoever serves files and creates links of its own.
+    assert(fs.stays_under(".", "a/b.txt"), "an absent path is treated as staying under")
+    assert(!fs.stays_under(".", "../x"), "pointing outside by path does not stay under")
+    assert(!fs.stays_under(".", ""), "empty does not stay under (in step with is_safe_relative)")
+    // Caution: **Create the file it checks.** A repository file exists only when run from the root;
+    // from std's own folder this line would pass as the absent case above.
+    fs.mkdir_all("out/tmp/kspl_test_path_guard") catch panic("mkdir_all should succeed under \
+        out/tmp")
+    write_probe_file("out/tmp/kspl_test_path_guard/present.txt")
+    assert(fs.stays_under(".", "out/tmp/kspl_test_path_guard/present.txt"),
+        "an existing ordinary file stays under")
+    fs.remove_path("out/tmp/kspl_test_path_guard/present.txt") catch {}
+
+    // Over the limit, walk must return too_deep rather than crash, so the caller can report it.
+    arena: = Arena.new(1024 * 1024)
+    defer arena.free()
+    $deep: = build_deep_tree(520)
+    defer deep.free()
+    // **Where the OS path-length limit is hit first, the tree cannot be created** (Windows, macOS),
+    // and mkdir_all rightly fails; there the test stops after the text checks. Linux verifies
+    // depth.
+    fs.mkdir_all(deep.slice()) catch
+        remove_deep_tree(520)
+        verdict
+            .pass("the text decisions match the boundaries (the depth limit was blocked by the OS's \
+                path-length limit and is unverified).")
+        return
+    fs.walk_files(deep_root, fs.skip_none, arena) catch e
+        switch e case .too_deep
+            remove_deep_tree(520)
+            verdict
+                .pass("the text decisions match the boundaries, and an over-deep tree came back as \
+                    too_deep.")
+            return
+        default
+            remove_deep_tree(520)
+            panic("walk_files should fail with too_deep, not another error")
+    remove_deep_tree(520)
+    panic("walk_files should not succeed on a tree deeper than the limit")
+
+// ==========================================
+// std/fs: a path too long to pass to the OS is not treated as a success.
+// ==========================================
+fn test_fs_long_path()
+    verdict.start("[Fs] a path too long to hand to the OS...")
+    // **A path exceeding max_path_len is refused with invalid_path**, not operation_failed, which
+    // would not tell the caller the length was the cause.
+    $b: = Str_builder.new()
+    defer b.free()
+    for $i: Sz = 0; i <= fs.max_path_len; i += 1
+        b.c('x')
+    long_path: = b.slice()
+    assert(long_path.len == fs.max_path_len + 1,
+        "builds a path exceeding the bound by exactly one byte")
+
+    $saw_invalid: = false
+    fs.mkdir(long_path) catch e
+        switch e case .invalid_path
+            saw_invalid = true
+        default {}
+    assert(saw_invalid, "an mkdir on an over-long path is refused with invalid_path")
+    $rm_invalid: = false
+    fs.remove_path(long_path) catch e
+        switch e case .invalid_path
+            rm_invalid = true
+        default {}
+    assert(rm_invalid, "a remove_path on an over-long path is refused with invalid_path too")
+    // A predicate cannot fail, so it returns false (not the answer for a truncated, different
+    // path).
+    assert(!fs.exists(long_path), "an over-long path is not found by exists either")
+    // A path exactly at the bound is accepted (the two sides together pin an off-by-one).
+    at_limit: = long_path.sub(0, fs.max_path_len)
+    $at_limit_invalid: = false
+    fs.mkdir(at_limit) catch e
+        switch e case .invalid_path
+            at_limit_invalid = true
+        default {}
+    assert(!at_limit_invalid,
+        "a length exactly at the bound is not refused on account of its length")
+    verdict
+        .pass("confirmed that over the bound is refused with invalid_path and exactly at the bound \
+            goes through.")
+
+fn test_fs_inner_nul()
+    verdict.start("[Fs] a path holding a NUL...")
+    // **C reads a NUL as the end of a path**, so handed on, the operation would act on the part
+    // before it: here, create `dir`.
+    dir: = "out/tmp/kspl_test_debug_nul"
+    fs.remove_path(dir) catch {}
+    $b: = Str_builder.new()
+    defer b.free()
+    b.s(dir).c(0U8).s("tail")
+    $saw_invalid: = false
+    fs.mkdir(b.slice()) catch e
+        switch e case .invalid_path
+            saw_invalid = true
+        default {}
+    assert(saw_invalid, "an mkdir on a path holding a NUL is refused with invalid_path")
+    assert(!fs.exists(dir), "the part before the NUL is not created")
+    // The runtime refuses it too, so a call std/fs does not check is not cut either.
+    $sh: = Str_builder.new()
+    defer sh.free()
+    sh.s("/bin/sh").c(0U8).s("x")
+    assert(!fs.is_executable(sh.slice()), "the runtime refuses a path holding a NUL")
+    verdict.pass("a path holding a NUL is refused, both by std/fs and by the runtime.")
+
+priv const deep_root: U8[] = "out/tmp/kspl_test_debug_deep"
+
+priv fn build_deep_tree(levels: Sz): Str_builder
+    $b: = Str_builder.new()
+    b.s(deep_root)
+    for _i in Range.asc(levels)
+        b.s("/d")
+    return b
+
+priv fn remove_deep_tree(levels: Sz) //< deletes from the leaves in order
+    for $n: Sz = levels; n > 0; n -= 1
+        $b: = build_deep_tree(n)
+        defer b.free()
+        fs.remove_path(b.slice()) catch {}
+    fs.remove_path(deep_root) catch {}
+
+priv fn entry_is(list: List<|U8[]|>$@, at: Sz, want: U8[]): Bool
+    got: U8[] = list.get(at)
+    return got.equals(want)
+
+priv fn write_probe_file(path: U8[])
+    io.write_file(path, "x") catch panic("write_file should succeed inside a freshly created \
+        directory")
+
+priv fn remove_walk_tree() //< deletes the tree from the leaves in order
+    fs.remove_path("out/tmp/kspl_test_debug_walk/skipme/x.txt") catch {}
+    fs.remove_path("out/tmp/kspl_test_debug_walk/z/deep/d.txt") catch {}
+    fs.remove_path("out/tmp/kspl_test_debug_walk/a/a2.txt") catch {}
+    fs.remove_path("out/tmp/kspl_test_debug_walk/b.txt") catch {}
+    fs.remove_path("out/tmp/kspl_test_debug_walk/skipme") catch {}
+    fs.remove_path("out/tmp/kspl_test_debug_walk/z/deep") catch {}
+    fs.remove_path("out/tmp/kspl_test_debug_walk/z") catch {}
+    fs.remove_path("out/tmp/kspl_test_debug_walk/a") catch {}
+    fs.remove_path(walk_root) catch {}

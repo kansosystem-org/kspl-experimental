@@ -81,8 +81,8 @@ CFLAGS    := -std=c99 -Wall -g -O0
 SHIP_CFLAGS := -std=c99 -w -g -O2
 # System libraries go in LDLIBS, placed after the sources: GNU ld resolves from the left, so an -l
 # in CFLAGS (before the sources in every link recipe) is passed by and fails the link.
+# It copies ksplc's own link rules (`ksplc info link-libs`); `make test-link-rules` compares them.
 LDLIBS    := -lm
-MATH_LIB  := -lm
 C_FMT     := clang-format -style="{ColumnLimit: 0}" -i
 KSPL_FMT   := --in-place
 # Names the std, so a machine's KSPLC_STD_DIR brings in no other and seed.c's byte-match holds.
@@ -94,17 +94,26 @@ HOST_CORES = $(shell (nproc || sysctl -n hw.ncpu || echo 4) 2>/dev/null)
 # The gates' Python writes UTF-8 even into a pipe, where it would fall back to the ANSI code page.
 export PYTHONUTF8 := 1
 
-# --- Build statistics output (make STATS=1) --- Not performance's baseline: `make perf-log` is.
+# --- The switches a person sets: `LLVM=1`, `STATS=1`, `BLAS=1` --- **Each reads 0 or 1 alone**:
+# any other value would build the default without a word (Principle 5). What they decide below
+# (`BACKEND`, `TARGET_EXT`, `TARGET_FLAG`, `GUI_LDFLAGS`) is not set by hand, or one choice would
+# have two spellings that can disagree.
+LLVM ?= 0
 STATS ?= 0
+BLAS ?= 0
+$(foreach v,LLVM STATS BLAS,$(if $(filter 0 1,$($(v))),,$(error $(v)=$($(v)): only 0 or 1 is read)))
+$(foreach v,BACKEND TARGET_EXT TARGET_FLAG GUI_LDFLAGS,$(if $(filter command line,$(origin $(v))),\
+  $(error $(v) follows from LLVM=1 and the platform, and is not set by hand)))
+
+# --- Build statistics output (make STATS=1) --- Not performance's baseline: `make perf-log` is.
 ifeq ($(STATS),1)
     KSPL_FLAGS += --stats
 endif
 
 # --- Switching the backend (make LLVM=1) ---
-LLVM ?= 0
-BACKEND    ?= c
-TARGET_EXT ?= c
-TARGET_FLAG ?=
+BACKEND     := c
+TARGET_EXT  := c
+TARGET_FLAG :=
 ifeq ($(LLVM),1)
     BACKEND     := llvm
     TARGET_EXT  := ll
@@ -113,28 +122,9 @@ ifeq ($(LLVM),1)
 endif
 
 # --- Optional BLAS backend (make BLAS=1) --- Applies to the AI examples and tests only.
-BLAS ?= 0
 AI_KSPL_FLAGS :=
 ifeq ($(BLAS),1)
     AI_KSPL_FLAGS := --define=blas
-endif
-
-# --- Optional TLS backend (make TLS=1) --- Applies to the debug tests only.
-TLS ?= 0
-TLS_KSPL_FLAGS :=
-TLS_LIB :=
-TLS_CFLAGS :=
-ifeq ($(TLS),1)
-    TLS_KSPL_FLAGS := --define=tls
-    TLS_LIB      := -lssl -lcrypto
-    TLS_CFLAGS   := -DKSPL_TLS
-endif
-
-# --- Optional DB backend (make DB=1) --- Applies to the debug tests only.
-DB ?= 0
-DB_KSPL_FLAGS :=
-ifeq ($(DB),1)
-    DB_KSPL_FLAGS := --define=db
 endif
 
 # --- What the bootstrap produces ---
@@ -192,38 +182,31 @@ ifneq ($(PLATFORM),win32)
 endif
 
 # --- Linking Winsock (for std/net.kspls) --- Windows's TCP/UDP go through winsock2.
-# --- Linking shell32 (for taking the generated main's argv again) --- CommandLineToArgvW is in it.
-# Caution: **mingw resolves it anyway**: dropped, it fails only the MSVC target, at the seed's link.
+# --- Linking shell32 (for taking the generated main's argv again) --- CommandLineToArgvW is in it;
+# mingw resolves it unasked, and it stays because ksplc names it (`make test-link-rules`).
 # --- The main thread's stack size (for max_parse_depth in kspeg/rule.kspls) ---
 # The KSPEG parser recurses on the C stack, its depth assuming Linux's 8MB; Windows reserves 1MB.
+# The windowing subsystem for the artifact a person opens by a double-click: none but on win32.
+# **Only UCRT64's own compiler builds here** (its triple holds `-w64-`): the MSYS layer's makes a
+# ksplc.exe that needs msys-2.0.dll, and LLVM's own Windows clang targets MSVC, which nothing tests.
+GUI_LDFLAGS :=
 ifeq ($(PLATFORM),win32)
     WIN_TARGET_TRIPLE := $(shell $(CC) -dumpmachine 2>/dev/null)
-    ifneq (,$(findstring msys,$(WIN_TARGET_TRIPLE)))
-$(error Build this project's artifacts on MSYS2's native layer (UCRT64) [$(CC)'s target is $(WIN_TARGET_TRIPLE), which is for the MSYS layer (the POSIX emulation layer)]. A ksplc.exe made with that clang/gcc depends on msys-2.0.dll, and both path handling and fork become a different thing. Install `pacman -S --needed mingw-w64-ucrt-x86_64-clang` and confirm that /ucrt64/bin comes before /usr/bin on PATH (MSYS2 UCRT64's default). Fixing the problem of make hitting the native version by reordering PATH lands you in this state)
+    ifeq (,$(findstring -w64-,$(WIN_TARGET_TRIPLE)))
+$(error Build this project's artifacts with MSYS2 UCRT64's own compiler [$(CC)'s target is '$(WIN_TARGET_TRIPLE)'; UCRT64's is x86_64-w64-windows-gnu or x86_64-w64-mingw32]. A target of the MSYS layer (the POSIX emulation layer) makes a ksplc.exe that depends on msys-2.0.dll, where both path handling and fork become a different thing; LLVM's own Windows clang targets MSVC, which no job builds. Install `pacman -S --needed mingw-w64-ucrt-x86_64-clang` and confirm that /ucrt64/bin comes before /usr/bin on PATH (MSYS2 UCRT64's default). Fixing the problem of make hitting the native version by reordering PATH lands you in the MSYS layer's case)
     endif
-    ifneq (,$(findstring msvc,$(WIN_TARGET_TRIPLE)))
-        # MSVC: the math functions are in the CRT and there is no m.lib, so -lm fails the link.
-        LDLIBS := $(filter-out -lm,$(LDLIBS))
-        LDLIBS += -lws2_32 -lshell32 -Wl,/STACK:8388608
-        MATH_LIB :=
-        GUI_LDFLAGS := -Wl,/SUBSYSTEM:WINDOWS -Wl,/ENTRY:mainCRTStartup
-    else
-        LDLIBS += -lws2_32 -lshell32 -Wl,--stack,8388608
-        GUI_LDFLAGS := -mwindows
-    endif
+    LDLIBS += -lws2_32 -lshell32 -Wl,--stack,8388608
+    GUI_LDFLAGS := -mwindows
 endif
 
-# --- The windowing subsystem (for the artifact a person opens by a double-click) ---
-GUI_LDFLAGS ?=
-
 .PHONY: all clean \
-	stage1 self-host commit-seed surface \
+	stage1 self-host self-host-ship commit-seed surface \
 	fmt test-fmt-tree lint lint-cfg debug debug-file \
 	test-llvm-abi test-freestanding-math test-simd install-lsp install \
 	ci-linux ci-macos \
 	run fim-corpus fim-model fim-eval qwen kssrv ai-venv ci
 
-# A blank line, parting the lines a `$(foreach)` lists; here as mk/ci.mk and mk/test.mk use it.
+# A blank line, parting the lines a `$(foreach)` lists; here as mk/test.mk uses it.
 define nl
 
 
@@ -246,7 +229,8 @@ all: self-host
 stage1: $(STAGE1_EXE)
 
 # **The verdict is emitted here, not in $(DIFF_TXT)'s recipe** (run only when remaking), or an
-# incremental build passes `ci_check` in `mk/ci.mk` unverified. **No `-B`**: it redoes the seed.
+# incremental build passes `Gate.verdict` in `tools/ci_gates.kspls` unverified. **No `-B`**: it
+# redoes the seed.
 ## Gates|self-host|See that the notation stage1 and stage2 emit does not differ by one byte
 self-host: $(DIFF_TXT)
 	@$(ksplc_step) verdict DIFF=$(DIFF_TXT) LABEL='self-hosting, $(BACKEND) backend'
@@ -299,6 +283,18 @@ SHIP_EXE := $(OUT_DIR)/ksplc_ship.exe
 $(SHIP_EXE): $(STAGE2_OUT)
 	@echo "# BUILDING THE SHIPPED EXECUTABLE (optimized)..."
 	$(CC) $(SHIP_CFLAGS) $^ $(STAGE2_RT) $(LDLIBS) -o $@
+
+# **What ships is checked as it ships**: `-O2` can change what the compiler does where its C leans
+# on behaviour the stages' `-O0` never shows, so the shipped build must emit stage2's C to the byte.
+SHIP_OUT  := $(GEN_DIR)/ksplc_ship.$(TARGET_EXT)
+SHIP_RT   := $(if $(STAGE2_RT),$(GEN_DIR)/ksplc_ship_runtime.c)
+SHIP_DIFF := $(OUT_DIR)/ship_diff.txt
+## Gates|self-host-ship|See that the optimized ksplc `make install` ships emits stage2's notation to the byte
+self-host-ship: $(SHIP_EXE)
+	@echo "# VERIFYING THE SHIPPED EXECUTABLE"
+	@$(ksplc_step) translate WITH=$(SHIP_EXE) TO=$(SHIP_OUT) RT=$(SHIP_RT)
+	@$(ksplc_step) compare FROM=$(STAGE2_OUT) TO=$(SHIP_OUT) DIFF=$(SHIP_DIFF)
+	@$(ksplc_step) verdict DIFF=$(SHIP_DIFF) LABEL='the shipped executable, $(BACKEND) backend'
 
 # The old $(STAGE2_EXE) goes at the end: stale once stage2's C is remade, yet newer than stage1.exe.
 $(DIFF_TXT): $(STAGE1_OUT) $(STAGE2_OUT)
@@ -450,9 +446,9 @@ ksos ksos-cm ksos-rp2040 test-ksos-link test-ksos-ramtext test-ksos-qemu test-ks
 ## Run|ksos-*|One POSIX host demo (the listing is in `ksos/README.md`, the accounts in `ksos/docs/DESIGN.md`)
 ## Run|ksos-cm-*|One Cortex-M demo (the listing is in `ksos/README.md`, the accounts in `ksos/docs/DESIGN.md`)
 ## Run|ksos-rp2040-*|One RP2040 demo (the listing is in `ksos/README.md`, the accounts in `ksos/docs/DESIGN.md`)
-## Gates|ksos-linkcheck-*|One target's worth of `test-ksos-link`
-## Gates|ksos-qemugate-*|One target's worth of `test-ksos-qemu`
-## Gates|ksos-posixgate-*|One target's worth of `test-ksos-posix`
+## Per-item|ksos-linkcheck-*|One target's worth of `test-ksos-link`
+## Per-item|ksos-qemugate-*|One target's worth of `test-ksos-qemu`
+## Per-item|ksos-posixgate-*|One target's worth of `test-ksos-posix`
 ksos-%: $(STAGE1_EXE)
 	@$(ksos_make) $@
 

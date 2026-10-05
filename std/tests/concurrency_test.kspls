@@ -1,5 +1,7 @@
 import "std/mem" + { dealloc }
 import "std/refcount" { Rc }
+import "std/subproc"
+import "std/sys"
 import "std/thread"
 import "std/verdict"
 
@@ -9,122 +11,196 @@ import "std/verdict"
 // ==========================================
 #export
 fn thread_test_echo(arg: I32$@): Void$@
-  return Void$@::arg
+    return Void$@::arg
 
 // thread.Mutex<|I32|> makes lock()'s return value the only way to reach the content.
 #export
 fn thread_test_increment(arg: thread.Mutex<|I32|>$@): Void$@
-  for _i in Range.asc(1000)
-    counter: = arg.lock()
-    counter$ += 1
-    arg.unlock()
-  return null
+    for _i in Range.asc(1000)
+        counter: = arg.lock()
+        counter$ += 1
+        arg.unlock()
+    return null
 
 // Mutex<|T|> makes a T that cannot be shared safe to share. The type does not guarantee this ("Why
 // data races are not prevented by the type system" in docs/DESIGN.md), so this test checks it.
 #export
 fn thread_test_touch_mutex_rc(arg: thread.Mutex<|Rc<|I32|>|>$@): Void$@
-  rc: = arg.lock()
-  _v: = rc.get()$
-  arg.unlock()
-  return null
+    rc: = arg.lock()
+    _v: = rc.get()$
+    arg.unlock()
+    return null
 
 fn test_thread_spawn_join()
-  verdict.start("[Thread] spawn/join argument round-trip + Mutex mutual exclusion test...")
+    verdict.start("[Thread] spawn/join argument round-trip + Mutex mutual exclusion test...")
 
-  // 1. entry's return value round-trips across the thread to join()
-  $marker: I32 = 42
-  t0: = thread.Thread.spawn<|I32|>(thread_test_echo, marker@) catch panic("thread spawn failed")
-  echoed: = t0.join_and_free()
-  assert(echoed == Void$@::marker@, "join() must return exactly what entry() returned")
+    // 1. entry's return value round-trips across the thread to join()
+    $marker: I32 = 42
+    t0: = thread.Thread.spawn<|I32|>(thread_test_echo, marker@) catch panic("thread spawn failed")
+    echoed: = t0.join_and_free()
+    assert(echoed == Void$@::marker@, "join() must return exactly what entry() returned")
 
-  // 2. Two threads each add 1000 times while protecting the counter with the same Mutex<I32>
-  $mx: = thread.Mutex<|I32|>.new(0) catch panic("mutex create failed")
-  t1: =
-    thread.Thread.spawn<|thread.Mutex<|I32|>|>(thread_test_increment, mx@) catch panic("thread \
-      spawn failed")
-  t2: =
-    thread.Thread.spawn<|thread.Mutex<|I32|>|>(thread_test_increment, mx@) catch panic("thread \
-      spawn failed")
-  t1.join_and_free()
-  t2.join_and_free()
+    // 2. Two threads each add 1000 times while protecting the counter with the same Mutex<I32>
+    $mx: = thread.Mutex<|I32|>.new(0) catch panic("mutex create failed")
+    t1: =
+        thread.Thread.spawn<|thread.Mutex<|I32|>|>(thread_test_increment, mx@) catch panic("thread \
+            spawn failed")
+    t2: =
+        thread.Thread.spawn<|thread.Mutex<|I32|>|>(thread_test_increment, mx@) catch panic("thread \
+            spawn failed")
+    t1.join_and_free()
+    t2.join_and_free()
 
-  final_val: = mx.lock()
-  assert(final_val$ == 2000,
-    "mutex-protected counter must equal 2000 after 2 threads x 1000 increments")
-  mx.unlock()
-  mx.free()
+    final_val: = mx.lock()
+    assert(final_val$ == 2000,
+        "mutex-protected counter must equal 2000 after 2 threads x 1000 increments")
+    mx.unlock()
+    mx.free()
 
-  // 3. Even a single-thread Rc<|I32|> is safe to use when wrapped in a Mutex
-  $g_rc: = thread.Mutex<|Rc<|I32|>|>.new(Rc<|I32|>.new(7)) catch panic("mutex<rc> create failed")
-  t3: =
-    thread.Thread.spawn<|thread.Mutex<|Rc<|I32|>|>|>(thread_test_touch_mutex_rc, g_rc@) catch panic("thread spawn failed")
-  t3.join_and_free()
-  held: = g_rc.lock()
-  assert(held.get()$ == 7, "the Rc guarded by a mutex must survive the thread round-trip")
-  g_rc.unlock()
-  g_rc.free()
+    // 3. Even a single-thread Rc<|I32|> is safe to use when wrapped in a Mutex
+    $g_rc: = thread.Mutex<|Rc<|I32|>|>.new(Rc<|I32|>.new(7)) catch panic("mutex<rc> create failed")
+    t3: =
+        thread.Thread
+        .spawn<|thread.Mutex<|Rc<|I32|>|>|>(thread_test_touch_mutex_rc, g_rc@) catch panic("thread \
+            spawn failed")
+    t3.join_and_free()
+    held: = g_rc.lock()
+    assert(held.get()$ == 7, "the Rc guarded by a mutex must survive the thread round-trip")
+    g_rc.unlock()
+    g_rc.free()
 
-  verdict
-    .pass("The argument/return round trip, Mutex mutual exclusion under real parallelism \
-      (2000/2000), and Mutex<|T|> making a type that cannot be shared shareable are all confirmed.")
+    verdict
+        .pass("The argument/return round trip, Mutex mutual exclusion under real parallelism \
+            (2000/2000), and Mutex<|T|> making a type that cannot be shared shareable are all \
+            confirmed.")
 // ==========================================
 // std/thread: the operations of Atomic_sz; two threads without a lock lose no addition; and
 // Cond_var's wait wakes after a signal.
 // ==========================================
 struct Atomic_test_ctx
-  counter: thread.Atomic_sz
+    counter: thread.Atomic_sz
 
 #export
 fn atomic_test_worker(arg: Atomic_test_ctx$@): Void$@
-  for _i in Range.asc(10000)
-    arg.counter.fetch_add(1)
-  return null
+    for _i in Range.asc(10000)
+        arg.counter.fetch_add(1)
+    return null
 
 fn test_atomic_and_cond_var()
-  verdict.start("[Thread] Atomic_sz (lock-free addition) + Cond_var (signal/wait) test...")
+    verdict.start("[Thread] Atomic_sz (lock-free addition) + Cond_var (signal/wait) test...")
 
-  // 1. Atomic_sz's basic operations
-  $a: = thread.Atomic_sz.new(5)
-  assert(a.load() == 5, "Atomic_sz.load() must return the initial value")
-  old: = a.fetch_add(3)
-  assert(old == 5 && a.load() == 8, "fetch_add must return the pre-add value")
-  a.store(100)
-  assert(a.load() == 100, "store must overwrite the value")
-  ok1: = a.compare_and_swap(100, 200)
-  ok2: = a.compare_and_swap(100, 999)
-  cas_final: = a.load()
-  assert(ok1 && !ok2 && cas_final == 200,
-    "compare_and_swap must only succeed when the current value matches expected")
+    // 1. Atomic_sz's basic operations
+    $a: = thread.Atomic_sz.new(5)
+    assert(a.load() == 5, "Atomic_sz.load() must return the initial value")
+    old: = a.fetch_add(3)
+    assert(old == 5 && a.load() == 8, "fetch_add must return the pre-add value")
+    a.store(100)
+    assert(a.load() == 100, "store must overwrite the value")
+    ok1: = a.compare_and_swap(100, 200)
+    ok2: = a.compare_and_swap(100, 999)
+    cas_final: = a.load()
+    assert(ok1 && !ok2 && cas_final == 200,
+        "compare_and_swap must only succeed when the current value matches expected")
 
-  // 2. Two threads add 20000 times in total to the same counter, with no lock
-  ctx: = mem.alloc_as<|Atomic_test_ctx|>()
-  ctx.counter = thread.Atomic_sz.new(0)
-  t1: = thread.Thread.spawn<|Atomic_test_ctx|>(atomic_test_worker, ctx) catch panic("thread spawn \
-    failed")
-  t2: = thread.Thread.spawn<|Atomic_test_ctx|>(atomic_test_worker, ctx) catch panic("thread spawn \
-    failed")
-  t1.join_and_free()
-  t2.join_and_free()
-  counter_total: = ctx.counter.load()
-  assert(counter_total == 20000, "lock-free concurrent fetch_add must not lose any increments")
-  dealloc(Void$@::ctx)
+    // 2. Two threads add 20000 times in total to the same counter, with no lock
+    ctx: = mem.alloc_as<|Atomic_test_ctx|>()
+    ctx.counter = thread.Atomic_sz.new(0)
+    t1: = thread.Thread.spawn<|Atomic_test_ctx|>(atomic_test_worker, ctx) catch panic("thread spawn \
+        failed")
+    t2: = thread.Thread.spawn<|Atomic_test_ctx|>(atomic_test_worker, ctx) catch panic("thread spawn \
+        failed")
+    t1.join_and_free()
+    t2.join_and_free()
+    counter_total: = ctx.counter.load()
+    assert(counter_total == 20000, "lock-free concurrent fetch_add must not lose any increments")
+    dealloc(Void$@::ctx)
 
-  // 3. Cond_var: wait wakes after a signal (on a Mutex<|Sz|>; Raw_mutex is priv).
-  $mx: = thread.Mutex<|Sz|>.new(0) catch panic("mutex create failed")
-  $cv: = thread.Cond_var.new() catch panic("cond create failed")
+    // 3. Cond_var: wait wakes after a signal (on a Mutex<|Sz|>; Raw_mutex is priv).
+    $mx: = thread.Mutex<|Sz|>.new(0) catch panic("mutex create failed")
+    $cv: = thread.Cond_var.new() catch panic("cond create failed")
 
-  ready: = mx.lock()
-  ready$ = 1
-  cv.signal()
-  mx.unlock()
+    ready: = mx.lock()
+    ready$ = 1
+    cv.signal()
+    mx.unlock()
 
-  flag: = mx.lock()
-  for flag$ == 0
-    cv.wait(mx@)
-  mx.unlock()
-  mx.free()
-  cv.free()
+    flag: = mx.lock()
+    for flag$ == 0
+        cv.wait(mx@)
+    mx.unlock()
+    mx.free()
+    cv.free()
 
-  verdict
-    .pass("Lock-free addition (20000/20000) and Cond_var's signal/wait round trip are confirmed.")
+    verdict
+        .pass("Lock-free addition (20000/20000) and Cond_var's signal/wait round trip are \
+            confirmed.")
+
+// ==========================================
+// std/subproc with std/thread: children started from two threads at once. A start whose pipe ends
+// reached a child started meanwhile on the other thread would see its end of output only when that
+// child ends.
+// ==========================================
+priv const lingering_slots: Sz = 24 //< how many long-lived children the other thread keeps at once
+priv const lingering_gap_ms: I32 = 50 //< the time between its starts; a child lives 24 of them
+priv const quick_starts: Sz = 40 //< how many short children this thread reads to the end
+priv const late_us: I64 = 600000 //< longer than this, a short child's end waited for another's
+
+struct Lingering_ctx //< what the thread starting long-lived children reads
+    ksplc: U8[]
+    stop: thread.Atomic_sz
+
+#export
+fn concurrency_start_lingering(arg: Lingering_ctx$@): Void$@
+    // `ksplc lsp` waits on its standard input, so a child lives until it is killed.
+    $kids: subproc.Piped_child[lingering_slots] = ::{}
+    $used: Bool[lingering_slots] = ::{}
+    $at: Sz = 0
+    for arg.stop.load() == 0
+        if used[at]
+            kids[at].kill()
+        kids[at] = subproc.spawn_piped(U8[][]::{ arg.ksplc, "lsp" }, "") catch panic("the lingering \
+            child must start")
+        used[at] = true
+        at = (at + 1) % lingering_slots
+        sys.sleep_ms(lingering_gap_ms)
+    for i in Range.asc(lingering_slots)
+        if used[i]
+            kids[i].kill()
+    return null
+
+fn test_spawn_from_threads(ksplc: U8[]) //<
+    //< That a short child's end of output arrives on time while another thread starts children
+    //<
+    //< ksplc is both children (`run_std` passes it): `info keywords` prints and ends, `lsp`
+    //< lingers.
+    verdict
+        .start("[Thread] children started from two threads at once: each end of output arrives on \
+            time...")
+    ctx: = mem.alloc_as<|Lingering_ctx|>()
+    ctx.ksplc = ksplc
+    ctx.stop = thread.Atomic_sz.new(0)
+    t: =
+        thread.Thread.spawn<|Lingering_ctx|>(concurrency_start_lingering, ctx) catch panic("thread \
+            spawn failed")
+    $late: Sz = 0
+    for _i in Range.asc(quick_starts)
+        began: = sys.mono_us()
+        $child: =
+            subproc.spawn_piped(U8[][]::{ ksplc, "info", "keywords" }, "") catch panic("the short \
+                child must start")
+        $buf: U8[1024] = ::{}
+        $ended: = false
+        for !ended
+            _n: = child.read(U8$[]::buf, 2000) catch
+                ended = true
+                fallback 0
+        if sys.mono_us() - began > late_us
+            late += 1
+        child.kill()
+    ctx.stop.store(1)
+    t.join_and_free()
+    dealloc(Void$@::ctx)
+    assert(late == 0, "no short child's end of output waits for a child started on another thread")
+    verdict
+        .pass("While another thread kept starting children, every short child's end of output \
+            arrived at once.")

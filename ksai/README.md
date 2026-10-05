@@ -80,7 +80,7 @@ The parts built from tensor operations. A model stacks them like blocks.
 - `ksai/lora.kspls`: `Lora`, lightweight fine-tuning (LoRA) that trains only small added matrices rather than the whole model. **It imports no safetensors.** It saves raw bytes with zero dependencies (`save_raw` / `load_raw`).
 - `ksai/lora_set.kspls`: `Qkv_lora` / `Mlp_lora`, the adapters bundled per block, and the naming that lays them into safetensors (`load_set_from` / `save_set_into`, given an already parsed `Safetensors`).
   * **Which to use**: this one (the standard format) to carry a result elsewhere. `Lora.save_raw` (no JSON, no allocation) only to save and re-read in the same environment.
-- `ksai/model_file.kspls`: calls the two above by path (`load_safetensors` / `save_qkv_lora_set` and the rest). **It is the only ksai file that imports `std/io`**, split off so code using only tensors skips the file-I/O cost. With no filesystem, pass an `embed`ed byte sequence through `load_from_bytes` → `load_set_from` instead.
+- `ksai/model_file.kspls`: calls the two above by path (`load_safetensors` / `save_qkv_lora_set` and the rest). **It and `ksai/tokenizer.kspls` (whose `Tokenizer.load` reads a vocabulary by path) are the only files of the library itself that import `std/io`**, split off so code using only tensors skips the file-I/O cost. With no filesystem, pass an `embed`ed byte sequence through `load_from_bytes` → `load_set_from` instead.
 
 ## Pitfalls
 
@@ -110,7 +110,7 @@ The bundled weights `examples/llama_engine/mini_llama.safetensors` (vocabulary 1
 | :-- | :-- |
 | `make run` (CI's AI step) | `llama_engine` really trains, and reports for itself that the loss fell |
 | `make test-extract` (runs this folder's `make test` from a copy) | `llama_engine` trains from a folder holding nothing else. `qwen_infer` reads small Qwen-shaped weights written by a fixed formula and gives the reference answers ([`tests/examples_qwen.kspls`](tests/examples_qwen.kspls)). `fim_coder` trains a few steps on a corpus written on the spot, writes the same weights on one thread and two, and answers a hole ([`tests/examples_fim.kspls`](tests/examples_fim.kspls)) |
-| `make test-simd` | Compiles `llama_engine` and `qwen_infer` to C and checks that the `ksai` functions it names auto-vectorize at `-O3` |
+| `make test-simd` | Compiles `llama_engine` and `qwen_infer` to C and checks that each `ksai` loop whose comment names it auto-vectorizes at `-O3` |
 | `make lint` | Every example's `main.kspls` is in `LINT_TARGETS` (`mk/lint.mk`) |
 | `make test-ksos-link` / `make test-ksos-qemu` | `ksos`'s Cortex-M demo `embed`s the weights, bringing trained weights into an environment with no file system |
 

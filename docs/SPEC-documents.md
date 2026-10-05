@@ -2,14 +2,14 @@
 
 **What every document in this repository must satisfy**: the words it uses, the name it takes, how it is worded and laid out, and which other documents it may point at. Read this before adding one.
 
-**It is a specification, not a guide**: the agreement that `make test-docref` and `make test-conventions` guard. Why each rule was chosen is in [`DESIGN.md`](DESIGN.md); which document to read for what is in [`README.md`](README.md).
+**It is a specification, not a guide**: the agreement whose checkable parts `make test-docref` and `make test-conventions` guard. Why each rule was chosen is in [`DESIGN.md`](DESIGN.md); which document to read for what is in [`README.md`](README.md).
 
 * [Terms of art](#terms-of-art) — the words that carry one meaning each
 * [Names for units](#names-for-units) — file, folder, package, all
 * [Document naming](#document-naming) — the six kinds, where documents sit, the names fixed from outside, what every README contains, where a splitting plan is written
-* [Wording and formatting rules](#wording-and-formatting-rules) — where a fact goes, the two labels, how a trap is written, another product named only for its behavior, no hand wrapping, the vertical bar inside a table
+* [Wording and formatting rules](#wording-and-formatting-rules) — where a fact goes, the two labels, how a trap is written, another product named only for its behavior, no hand wrapping, the vertical bar inside a table, a code block that compiles
 * [Reference direction between documents](#reference-direction-between-documents) — the layers, naming is not depending, what a SPEC may point at, how a reference is written
-* [Linking documents to source](#linking-documents-to-source) — one direction, by name
+* [Linking documents to source](#linking-documents-to-source) — one direction, by name, and a `make` command that names a target
 
 ## Terms of art
 
@@ -77,7 +77,7 @@ The rules for visibility and `import` are in [`SPEC-language.md`](SPEC-language.
 
 **The name is in capitals, and a subject follows the kind only where one folder can hold several of it** (`SPEC-language.md`, `HOWTO-bring-up.md`). The subject may run to any number of words: choose the form the reader will understand ([`SPEC-local-server.md`](SPEC-local-server.md)), since a name that does not say what the document is fails as an entry point, however short.
 
-**One file, one kind.** A passage written for another kind moves to that kind's document once it is longer than a sentence. The smallest usage example stays inside a `README.md`, but a manual does not; a sentence of why stays inside a `HOWTO-`, but a chapter does not. The gates guard what a count can decide. Every tracked `.md` carries one of the six names or one fixed from outside, and a heading that names a roadmap (`roadmap`, `milestone`, `not started`, `what is left`, `what is to be added`, `next step`) stands only in a `PLAN.md` (`make test-conventions`). A `SPEC-<subject>.md` cites no `PLAN.md` (`make test-docref`).
+**One file, one kind.** A passage written for another kind moves to that kind's document once it is longer than a sentence. The smallest usage example stays inside a `README.md`, but a manual does not; a sentence of why stays inside a `HOWTO-`, but a chapter does not. The gates guard two things: every tracked `.md` carries one of the six names or one fixed from outside (`make test-conventions`), and a `SPEC-<subject>.md` cites no `PLAN.md` (`make test-docref`).
 
 **Do not move a kind into a differently named document.** Splitting the grounds into `RATIONALE.md` or the entry point into `OVERVIEW.md` makes two documents of one kind, with nothing to decide which is canonical. The six names are closed.
 
@@ -186,17 +186,13 @@ Caution: **Do not put a label on every assertion.** Then the reader cannot pick 
 
 #### The two exceptions
 
-**One alert box stands in the whole tree: the root `README.md`'s status notice**, written as GitHub's alert (`> [!CAUTION]`) directly under the title. It is the one caution every arriving reader must see before anything else, and a coloured box is what reaches them. Repeated elsewhere, the box would stop standing out, so every other caution keeps the plain label. `make test-conventions` refuses an alert anywhere else.
+**One alert box stands in the whole tree: the root `README.md`'s status notice**, written as GitHub's alert (`> [!CAUTION]`) directly under the title. It is the one caution every arriving reader must see before anything else, and a coloured box is what reaches them. Repeated elsewhere, the box would stop standing out, so every other caution keeps the plain label.
 
 **The two words are not the compiler's.** A diagnostic carries `error` / `warning` / `information` / `hint`, and neither label is one of them. So `warning` in a line of text is always the compiler speaking, and a label is always a person speaking to the reader. That is why `Warning:`, which Google's style guide offers, is not used here. A few diagnostics use the bare word `Note:` inside their own message text; that is the compiler, not a label.
 
-#### What the check counts
+#### No gate counts the labels
 
-**The check (`make test-conventions`) counts; it does not judge.** It catches a label that does not come first in its line or its comment, a second label on the same line, a label inside a table cell or a heading, a label within four lines of another, and a `Note:` that names no place to go.
-
-**It reads every file a person writes, using each file's own comment marks**: `//`, `#`, `/* */` and `<!-- -->`, as the file type has them. A label inside a string is not read (a Python docstring included), but the rule applies to it all the same.
-
-**Whether a clause is a fact is not gated.** A check that reads a clause's opening for a subject and a copula catches too few cases to be worth its upkeep, and it reopens the judgement every time the tree's wording changes. So no check guards this rule: a reader catches a marker on a fact, not CI (Principle 8 names that gap rather than closing it). A word list pays where a judgement does not. "This word is refused, write that one instead" is literal text and cheap, and the other checks in this section take that shape.
+**Whoever writes and reviews holds this rule**; a green run says nothing about it (Principle 8).
 
 ### A trap is written as why it is dangerous
 
@@ -209,13 +205,13 @@ Caution: **Do not put a label on every assertion.** Then the reader cannot pick 
 
 **A named product, language or company stays in the text only where what it does grounds a decision here, and it is described as behavior**: "Excel and Word put redo and repeat on one key, so which a press does cannot be told beforehand" grounds a choice; "Excel is complained about for this" does not. Where only the complaint grounds it, the complaint stays and the name goes ("a common complaint is …").
 
-**Do not write a verdict on another product**, nor that this one does better: "a classic accident", "not well regarded", "ahead of". A verdict reads as a claim against that product's users, a behavior as a fact anyone can check, and only the fact grounds a decision. `make test-conventions` refuses the phrases that only ever judge, in documents and comments alike. A phrase that also has a neutral use ("ahead of", "better than") is left to the reader to catch.
+**Do not write a verdict on another product**, nor that this one does better: "a classic accident", "not well regarded", "ahead of". A verdict reads as a claim against that product's users, a behavior as a fact anyone can check, and only the fact grounds a decision. This holds in documents and comments alike.
 
 ### A word-for-word idiom gives way to the plain word
 
 **Write the plain English word, not a phrase built word by word that English does not use**: `the caller`, not `the calling side`; `an entry point`, not `a mouth` or `an entrance`. The reader has to translate such a phrase back before the sentence says anything, and a model reading it has nothing to translate it from.
 
-**Do not copy the list here.** Its canonical source is `idiom_words` in `tests/support/conventions_prose.kspls`, which pairs each word with its replacement and names the replacement when it refuses a line. Only a word with a single replacement goes in: where the right word depends on the sentence, a refusal cannot say what to write. The check is `make test-conventions`, in documents and comments alike; a span in backquotes is code and is not read.
+This holds in documents and comments alike; a span in backquotes is code, which keeps its own names.
 
 ### Do not hard-wrap paragraphs
 
@@ -241,6 +237,29 @@ table cell  `Option<\|T\|>`
 
 **Write a quote inside a heading as `'`**, outside a code span. A comment or a document cites a heading by its text in double quotes, so a `"` inside the heading ends the citation early, and nothing checks that the citation still matches. `make test-docref` refuses such a heading. A code span may hold the notation it names (`` `~"..."` ``).
 
+### A code block compiles, or says why not
+
+**A ` ```kspls ` or ` ```kspl ` block is KSPL, and `make test-docsnippet` compiles it** inside a copy of the package whose documents hold it, so a name that package keeps to itself resolves as it does for the package's own files. A reader copies what a document shows, and a model takes it for the language.
+
+| The block | What it must do |
+| :-- | :-- |
+| **A whole program** (it holds `main`) | Compile as it stands, and draw nothing from `ksplc lint`, down to a hint, as `make lint` asks of the tree |
+| **A block carrying a mark** (below) | Compile once its marked lines are taken out, so it carries what it needs: its imports, the declarations it calls |
+| **A fragment** (neither) | Read as KSPL; it is compiled as it stands and with its statements wrapped in a function, and where neither compiles it leans on the prose around it |
+
+**A line the compiler refuses ends in `// error:` and why** (`x: U8[] = "n=\{n\}" // error: it cannot build a value`). The mark covers its line and the block that line opens: the deeper lines after it, and any bracket it leaves open. Each marked line must draw an error inside what it covers and nowhere else, alone and together with the other marks.
+
+**A mark ends the line it marks, spelt `// error`.** On a line of its own it names no line, and `// Error` is a second spelling of one mark.
+
+**Two marks excuse a whole program, or a block carrying `// error`, that does not compile**, and each is written where the reader sees it:
+
+* **An elision**: `...` or `…` outside a comment, where the writer left part out.
+* **A first line naming the file it needs beside it**: `// app.kspls (the KSPL customer; greet_api.kspls is beside it)`. One that compiles alone fails, since the line no longer says anything true.
+
+**A tour's blocks are steps of one program**, which `make test-docs` compiles and runs, so they are not compiled one by one.
+
+There is a gap: a fragment that does not compile is taken as leaning on the prose, whatever the reason, so a refusal in it goes unseen unless the fragment carries a mark. A form that escapes is still a violation (Principle 8 in [`DESIGN.md`](DESIGN.md)).
+
 ## Reference direction between documents
 
 References are an asset: they are the shortest path to "why is it this way". The trouble is that they drift silently. So rather than cutting their number, **`make test-docref` checks every reference**, and the rules below also fix their direction.
@@ -252,10 +271,10 @@ The layers, from the top, are these three.
 | Layer | Contents | Role |
 | :-- | :-- | :-- |
 | index | The root `README.md`, `docs/` | Shows where everything is. **May point downward** |
-| implementation | `ksplc/` / `std/` / `ksai/` / `kspeg/` / `ksos/` / `kssrv/` / `ksdb/` / `kspage/` | References among them go **only in the direction of import** (`ksplc→std`, `ksai→std`, `kspeg→std`, `ksos→std`, `kssrv→std`, `ksdb→std`, `kspage→std`, `ksplc→kspeg`, `ksos→ksai`, `kssrv→ksai`, `ksos→ksdb`, `kspage→ksdb`) |
+| implementation | `ksplc/` / `std/` / `ksai/` / `kspeg/` / `ksos/` / `kssrv/` / `ksdb/` / `kspage/` / `ksbind/` | References among them go **only in the direction of import** (`ksplc→std`, `ksai→std`, `kspeg→std`, `ksos→std`, `kssrv→std`, `ksdb→std`, `kspage→std`, `ksbind→std`, `ksplc→kspeg`, `ksos→ksai`, `kssrv→ksai`, `ksos→ksdb`) |
 | leaf | `tests/` / `tools/` | Point upward only |
 
-`ksos→ksdb` and `kspage→ksdb` exist because both packages keep an append-only record (the record inside a device, and a document's change history). `ksdb/` itself uses only `std/`.
+`ksos→ksdb` exists because `ksos` keeps an append-only record inside a device. `ksdb/` itself uses only `std/`.
 
 **Do not create the reverse.** Once `ksdb/` knows a particular device or document, the point of being able to use it anywhere is lost.
 
@@ -348,5 +367,9 @@ Caution: **Do not make it a round trip.** The grounds, and what is given up, are
 **What the check reads of a name** is a name in backticks tied to a file in backticks: `` `name` in `file` `` (or `of` / `inside`), a run `` `a` / `b` in `file` ``, and `` `name`(`file`) ``, in documents and comments alike. The file must exist and hold the name as a word; for `` `Owner.member` `` it must hold the member as well as the owner (why is "A comment that points is checked as a document is" in [`DESIGN.md`](DESIGN.md)). A form that escapes is still a violation: a name joined by "and", or a file named without backticks, is not read, but the rule applies to it all the same.
 
 **In a comment, the compiler reads a dotted name tied to no file** through the commenting file's own scope, member and all. One that leads nowhere gets a warning (`[W0211]`; `ksplc explain W0211` gives what is read and what is left alone), and the same reading links it in the editor's hover (why is "A pointer that names no file is read through the commenting file's own scope" in [`DESIGN.md`](DESIGN.md)). A name another product owns is introduced as its owner's ("Python's `` `json.dumps` ``"); that is the one wording both readers leave alone.
+
+**A dotted name in a document tied to no file is read against the declarations of the whole tree**, as `ksplc doc --surface-scope=all` lists them, since a document has no scope of its own. `make test-docref` refuses `` `Owner.member` `` whose owner is a type the tree declares and lacks the member, and `` `module.name` `` whose module is a standard library file and lacks the name. The spellings left alone are a comment's: a name tied to its file (read above), a name introduced as another product's, a file's name, and a code fragment. A lower-case head other than a standard library file's is not read, since it is as often a variable the prose speaks of.
+
+**A `make` command in a document names a target make has**: a code span opening with `make`, or a line of a fence, is read, and `make test-docref` asks make itself for its rules. A document inside a package with its own `Makefile` may name that file's targets, and so may a sentence that names the target a package's (``ksbind's own `make test` ``).
 
 **A description written in a source is read where it is written**: `ksplc doc` prints it as it stands, with nothing rendered beside it, so a relative link in it resolves from the source's folder, as in any comment.

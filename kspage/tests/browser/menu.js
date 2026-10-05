@@ -41,11 +41,10 @@ function kspageProbeMenu(ks) {
   if (carried !== null) {
     const done = ks.hold();
     carried.text().then((text) => {
-      // Caution: **Both the names lined up and the document's styles go in** (the drift is there).
+      // **Both the names lined up and the document's styles go in** (the drift is there).
       check(text.indexOf("The document's styles:") >= 0
         && text.indexOf("The paragraph styles listed in the menu:") >= 0,
         "both the document's styles and the row of rows go into the log");
-      check(text.indexOf("Change history") >= 0, "the change history goes into the log");
       // Caution: **The text typed must not go in** (the needle is `kspage/content`'s own text).
       check(text.indexOf("all in one document") < 0,
         "the document's content does not go into the log");

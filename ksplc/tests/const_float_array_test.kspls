@@ -11,23 +11,46 @@
 import "std/verdict"
 
 priv const scales: F32[6] = ::{ 2.0, 1.5, 1.25, 1.0, 0.875, 0.85 } //<
-  //< Values that round-trip and values that do not, mixed
+    //< Values that round-trip and values that do not, mixed
 priv struct Pair //< an F32 inside a struct is the same route
-  a: F32
-  b: F32
+    a: F32
+    b: F32
 priv const pairs: Pair[2] = ::{ Pair::{ .a = 0.1, .b = 0.85 }, Pair::{ .a = 0.5, .b = 3.14 } }
 priv const separated: F32[2] = ::{ 1_000.5, 2_500.25F32 } //<
-  //< A `_` separator and a type suffix are removed before the value is read
+    //< A `_` separator and a type suffix are removed before the value is read
 
 fn test_a_const_float_array_keeps_its_values()
-  verdict.start("[genllvm] an immutable F32 array keeps its values test...")
-  // Caution: **Compare against the value rounded to F32** (compared as F64, 0.85 does not match).
-  assert(scales[0] == 2.0F32 && scales[3] == 1.0F32, "a round-tripping value stays as it is")
-  assert(scales[4] == 0.875F32, "a fraction that is a power of two stays as it is")
-  assert(scales[5] == F32::0.85, "a value that does not round-trip is held as written too")
-  assert(scales[1] > scales[2] && scales[2] > scales[3], "the order is not broken")
-  assert(pairs[0].b == F32::0.85 && pairs[1].b == F32::3.14, "the same holds inside a struct")
-  assert(pairs[0].a == F32::0.1, "0.1 is held as written too")
-  assert(separated[0] == 1000.5F32 && separated[1] == 2500.25F32,
-    "a separator or a suffix does not cut the value short")
-  verdict.pass("an F32 that does not round-trip in decimal is held as the value written too.")
+    verdict.start("[genllvm] an immutable F32 array keeps its values test...")
+    // Caution: **Compare against the value rounded to F32** (compared as F64, 0.85 does not match).
+    assert(scales[0] == 2.0F32 && scales[3] == 1.0F32, "a round-tripping value stays as it is")
+    assert(scales[4] == 0.875F32, "a fraction that is a power of two stays as it is")
+    assert(scales[5] == F32::0.85, "a value that does not round-trip is held as written too")
+    assert(scales[1] > scales[2] && scales[2] > scales[3], "the order is not broken")
+    assert(pairs[0].b == F32::0.85 && pairs[1].b == F32::3.14, "the same holds inside a struct")
+    assert(pairs[0].a == F32::0.1, "0.1 is held as written too")
+    assert(separated[0] == 1000.5F32 && separated[1] == 2500.25F32,
+        "a separator or a suffix does not cut the value short")
+    verdict.pass("an F32 that does not round-trip in decimal is held as the value written too.")
+
+// ==========================================
+// A float constant computed from others folds on LLVM as C's compiler folds it for genc
+// (`fold_float` in `ksplc/gen/llvm/decl.kspls`); LLVM refused `pi * 2.0` and `I32::2.9`.
+// ==========================================
+priv const fold_pi: F64 = 3.25
+priv const fold_twice: F64 = fold_pi * 2.0
+priv const fold_third: F64 = 1.0 / 3.0
+priv const fold_neg: F64 = -(fold_pi - 0.25)
+priv const fold_down: I32 = I32::2.9
+priv const fold_down_neg: I32 = I32::(-2.9)
+priv const fold_up: F64 = F64::3
+priv const fold_small: F32 = 1.5F32 / 3.0F32
+priv const fold_table: F64[2] = ::{ fold_pi * 2.0, fold_third }
+
+fn test_a_computed_float_constant_folds()
+    verdict.start("[genllvm] a float constant computed from others folds test...")
+    assert(fold_twice == 6.5 && fold_neg == -3.0 && fold_up == 3.0, "arithmetic and a cast fold")
+    assert(fold_third == 1.0 / 3.0, "a division rounds as at run time")
+    assert(fold_down == 2 && fold_down_neg == -2, "a float cast to an integer truncates toward zero")
+    assert(fold_small == 0.5F32, "an F32 folds at F32")
+    assert(fold_table[0] == 6.5 && fold_table[1] == fold_third, "inside an array as well")
+    verdict.pass("each computed float constant holds the value C's fold gives.")

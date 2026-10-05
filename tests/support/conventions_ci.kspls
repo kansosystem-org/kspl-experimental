@@ -3,14 +3,15 @@
 //< **One `if:` line decides whether a job runs**, and GitHub is silent on a condition that does
 //< not take effect, so a job run by mistake and one never run both go unseen; only this file
 //< stops them.
-//< Note: Only two files are compared, `.github/workflows/ci.yml` and `mk/ci.mk`. Disagreements
-//< inside ksplc are checked by `conventions_match.kspls`.
+//< Note: The workflow and `tools/ci_gates.kspls` are compared, and the gates and the suites with
+//< the platform table of `docs/SPEC-gates.md`. Disagreements inside ksplc are checked by
+//< `conventions_match.kspls`.
 import "std/chars" // `trim_spaces`
 import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/str" // `strip_prefix` / `find_str`
 import "std/verdict"
-import "tests/support/conventions_scan" as scan
+import "tests/support/conventions_scan" as scan + { Sample }
 import "tests/support/harness"
 import "tests/support/harness_text" as htext
 
@@ -23,231 +24,416 @@ priv const input_pad: U8[] = "      "
 priv const guard_head: U8[] = "    if:"
 
 priv fn key_at(line: U8[], pad: U8[]): U8[] //< takes the name out of a `<indent><name>:` line
-  //<
-  //< It returns empty for a line with a different indent and for a comment.
-  if !line.starts_with(pad) || line.starts_with(" ", pad.len)
-    return ""
-  rest: = line.sub_from(pad.len)
-  at: = rest.find_char(':')
-  if at < 0
-    return ""
-  name: = rest.sub(0, at)
-  if name.len == 0 || name.find_char(' ') >= 0
-    return ""
-  return name
+    //<
+    //< It returns empty for a line with a different indent and for a comment.
+    if !line.starts_with(pad) || line.starts_with(" ", pad.len)
+        return ""
+    rest: = line.sub_from(pad.len)
+    at: = rest.find_char(':')
+    if at < 0
+        return ""
+    name: = rest.sub(0, at)
+    if name.len == 0 || name.find_char(' ') >= 0
+        return ""
+    return name
 
 priv fn job_blocks(yml: U8[], names: List<|U8[]|>$@, bodies: List<|U8[]|>$@, arena: Arena$@) //<
-  //< Lists the jobs under `jobs:`, by name and body
-  //<
-  //< Caution: **Cut the body at that job's range**: a `workflow_dispatch` input may share a job's
-  //< name (`check_dispatch_switches` below), so an unanchored search reads another job's inside.
-  $off: Sz = 0
-  $head: Sz = 0
-  $seen: = false
-  for line in yml.lines(arena)
-    // `lines` drops a `\r` at a line's end, so count the step from the original line.
-    $step: = line.len + 1
-    if off + line.len < yml.len && (yml.ptr + off + line.len)$ == '\r'
-      step += 1
-    if !seen
-      seen = line.equals(jobs_head)
-    else
-      name: = key_at(line, job_pad)
-      if name.len > 0
-        if names.len > 0
-          bodies.push(yml.sub(head, off - head))
-        names.push(name)
-        head = off
-    off += step
-  if names.len > 0
-    bodies.push(yml.sub_from(head))
+    //< Lists the jobs under `jobs:`, by name and body
+    //<
+    //< Caution: **Cut the body at that job's range**: a `workflow_dispatch` input may share a job's
+    //< name (`check_dispatch_switches` below), so an unanchored search reads another job's inside.
+    $off: Sz = 0
+    $head: Sz = 0
+    $seen: = false
+    for line in yml.lines(arena)
+        // `lines` drops a `\r` at a line's end, so count the step from the original line.
+        $step: = line.len + 1
+        if off + line.len < yml.len && (yml.ptr + off + line.len)$ == '\r'
+            step += 1
+        if !seen
+            seen = line.equals(jobs_head)
+        else
+            name: = key_at(line, job_pad)
+            if name.len > 0
+                if names.len > 0
+                    bodies.push(yml.sub(head, off - head))
+                names.push(name)
+                head = off
+        off += step
+    if names.len > 0
+        bodies.push(yml.sub_from(head))
 
 priv fn dispatch_inputs_of(yml: U8[], arena: Arena$@): List<|U8[]|> //<
-  //< The names listed under `workflow_dispatch`'s `inputs:`
-  $out: = List<|U8[]|>.new(arena)
-  $inside: = false
-  for line in yml.lines(arena)
-    if !inside
-      inside = line.equals(inputs_head)
-      continue
-    // Once outside `workflow_dispatch:` it is over (a comment may stand inside).
-    if line.trim_spaces().len > 0 && !line.starts_with("    ")
-      break
-    name: = key_at(line, input_pad)
-    if name.len > 0
-      out.push(name)
-  return out
+    //< The names listed under `workflow_dispatch`'s `inputs:`
+    $out: = List<|U8[]|>.new(arena)
+    $inside: = false
+    for line in yml.lines(arena)
+        if !inside
+            inside = line.equals(inputs_head)
+            continue
+        // Once outside `workflow_dispatch:` it is over (a comment may stand inside).
+        if line.trim_spaces().len > 0 && !line.starts_with("    ")
+            break
+        name: = key_at(line, input_pad)
+        if name.len > 0
+            out.push(name)
+    return out
 
 priv fn crons_of(yml: U8[], arena: Arena$@): List<|U8[]|> //<
-  //< The expressions of the crons `schedule:` declares
-  $out: = List<|U8[]|>.new(arena)
-  for line in yml.lines(arena)
-    t: = line.trim_spaces()
-    if !t.starts_with(cron_head)
-      continue
-    rest: = t.sub_from(cron_head.len)
-    end: = rest.find_char('"')
-    if end >= 0
-      out.push(rest.sub(0, end))
-  return out
+    //< The expressions of the crons `schedule:` declares
+    $out: = List<|U8[]|>.new(arena)
+    for line in yml.lines(arena)
+        t: = line.trim_spaces()
+        if !t.starts_with(cron_head)
+            continue
+        rest: = t.sub_from(cron_head.len)
+        end: = rest.find_char('"')
+        if end >= 0
+            out.push(rest.sub(0, end))
+    return out
 
 priv fn quoted_crons(guard: U8[], arena: Arena$@): List<|U8[]|> //<
-  //< Of the `'...'` inside an `if:`, lists the ones holding a space
-  //<
-  //< **A quoted text holding a space is a cron**; the condition's other quoted texts
-  //< (`'schedule'`, `'workflow_dispatch'`) hold none.
-  $out: = List<|U8[]|>.new(arena)
-  $rest: = guard
-  for
-    open: = rest.find_char('\'')
-    if open < 0
-      break
-    tail: = rest.sub_from(open + 1)
-    close: = tail.find_char('\'')
-    if close < 0
-      break
-    if tail.sub(0, close).find_char(' ') >= 0
-      out.push(tail.sub(0, close))
-    rest = tail.sub_from(close + 1)
-  return out
+    //< Of the `'...'` inside an `if:`, lists the ones holding a space
+    //<
+    //< **A quoted text holding a space is a cron**; the condition's other quoted texts
+    //< (`'schedule'`, `'workflow_dispatch'`) hold none.
+    $out: = List<|U8[]|>.new(arena)
+    $rest: = guard
+    for
+        open: = rest.find_char('\'')
+        if open < 0
+            break
+        tail: = rest.sub_from(open + 1)
+        close: = tail.find_char('\'')
+        if close < 0
+            break
+        if tail.sub(0, close).find_char(' ') >= 0
+            out.push(tail.sub(0, close))
+        rest = tail.sub_from(close + 1)
+    return out
 
 priv fn guard_of(body: U8[], arena: Arena$@): U8[] //<
-  //< The `if:` line of a job's body (empty where there is none)
-  for line in body.lines(arena)
-    if line.starts_with(guard_head)
-      return line
-  return ""
+    //< The `if:` line of a job's body (empty where there is none)
+    for line in body.lines(arena)
+        if line.starts_with(guard_head)
+            return line
+    return ""
 
-priv const ci_mk: U8[] = "mk/ci.mk" //< the CI's shards and the shards the workflow runs agree
-  //<
-  //< Caution: **A shard missing from the `.yml` silently stops running.** The make side drops "a
-  //< step in no shard" (`mk/ci.mk`) but cannot see the CI's matrix; this is the second link.
-priv const shards_head: U8[] = "CI_SHARDS :="
+priv const gates_src: U8[] = "tools/ci_gates.kspls" //<
+    //< The CI's sets and the targets the workflow's matrices run agree
+    //<
+    //< Caution: **A set missing from the `.yml` silently stops running.** The runner refuses a set
+    //< holding no gate but cannot see the CI's matrix; this is the second link.
+priv const set_head: U8[] = "enum Set "
+priv const set_order_head: U8[] = "const set_order:"
+priv const shard_prefix: U8[] = "ci_shard_" //< the sets one job of `ci` runs
 priv const matrix_head: U8[] = "target: ["
 priv const linux_only: U8[] = "ci-linux-only" //<
-  //< What only the Linux runner runs (qemu, wasm, the browser, TLS/DB)
+    //< What only the Linux runner runs (qemu, wasm, the browser, BLAS)
+
+priv fn set_variants(src: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< The variants `enum Set` declares, in the source's spelling
+    $out: = List<|U8[]|>.new(arena)
+    $inside: = false
+    for line in src.lines(arena)
+        if !inside
+            inside = line.starts_with(set_head)
+            continue
+        if !line.starts_with("  ")
+            break
+        t: = line.trim_spaces()
+        at: = t.find_char(' ')
+        name: = t if at < 0 else t.sub(0, at)
+        if name.len > 0 && !name.starts_with("//")
+            out.push(name)
+    return out
 
 priv fn body_of(names: List<|U8[]|>@, bodies: List<|U8[]|>@, job: U8[]): U8[] //<
-  //< Looks up a job's body by name (empty where there is none)
-  for i in Range.asc(names.len)
-    if names.get(i).equals(job)
-      return bodies.get(i)
-  return ""
+    //< Looks up a job's body by name (empty where there is none)
+    for i in Range.asc(names.len)
+        if names.get(i).equals(job)
+            return bodies.get(i)
+    return ""
 
 priv fn matrix_of(body: U8[], arena: Arena$@): List<|U8[]|> //<
-  //< Returns the elements of a `target: [...]` in a job's body
-  //<
-  //< Caution: **Search only within the body** (what `job_blocks` cut). Searching the whole file,
-  //< it reads another job's matrix as its own.
-  $out: = List<|U8[]|>.new(arena)
-  head: = body.find_str(matrix_head)
-  if head < 0
+    //< Returns the elements of a `target: [...]` in a job's body
+    //<
+    //< Caution: **Search only within the body** (what `job_blocks` cut). Searching the whole file,
+    //< it reads another job's matrix as its own.
+    $out: = List<|U8[]|>.new(arena)
+    head: = body.find_str(matrix_head)
+    if head < 0
+        return out
+    rest: = body.sub_from(head + matrix_head.len)
+    end: = rest.find_char(']')
+    if end < 0
+        return out
+    for w in rest.sub(0, end).split(',', arena)
+        t: = w.trim_spaces()
+        if t.len > 0
+            out.push(t)
     return out
-  rest: = body.sub_from(head + matrix_head.len)
-  end: = rest.find_char(']')
-  if end < 0
-    return out
-  for w in rest.sub(0, end).split(',', arena)
-    t: = w.trim_spaces()
-    if t.len > 0
-      out.push(t)
-  return out
 
 priv fn check_job(body: U8[], job: U8[], want: List<|U8[]|>@, bad: List<|U8[]|>$@, arena: Arena$@) //<
-  //< Compares the targets a job should run with the ones its matrix lists
-  $got: = matrix_of(body, arena)
-  where: = arena.text().s(job).s(" in ").s(ci_yml).take()
-  if got.len == 0
-    bad.push(arena.text().s("there is no matrix in ").s(where).take())
-    return
-  scan.diff_into(want, got@, ci_mk, where, bad, arena)
-  scan.diff_into(got@, want, where, ci_mk, bad, arena)
+    //< Compares the targets a job should run with the ones its matrix lists
+    $got: = matrix_of(body, arena)
+    where: = arena.text().s(job).s(" in ").s(ci_yml).take()
+    if got.len == 0
+        bad.push(arena.text().s("there is no matrix in ").s(where).take())
+        return
+    scan.diff_into(want, got@, gates_src, where, bad, arena)
+    scan.diff_into(got@, want, where, gates_src, bad, arena)
 
 priv fn check_ci_shards(arena: Arena$@)
-  $bad: = List<|U8[]|>.new(arena)
-  shards: = htext.line_after(harness.read_under_root(ci_mk), shards_head, arena)
-  $want: = List<|U8[]|>.new(arena)
-  for w in shards.split(' ', arena)
-    if w.len > 0
-      want.push(arena.text().s("ci-shard-").s(w).take())
-  if want.len == 0
-    verdict.check("the CI's shards agree with the workflow's matrix", false,
-      arena.text().s("could not read ").s(shards_head).s(" out of ").s(ci_mk).take())
-    return
-  $names: = List<|U8[]|>.new(arena)
-  $bodies: = List<|U8[]|>.new(arena)
-  job_blocks(harness.read_under_root(ci_yml), names@, bodies@, arena)
-  // **Linux has one more**: what runs only there is a separate target (`ci-linux-only` in
-  // `mk/ci.mk`).
-  $with_linux: = List<|U8[]|>.new(arena)
-  for i in Range.asc(want.len)
-    with_linux.push(want.get(i))
-  with_linux.push(linux_only)
-  check_job(body_of(names@, bodies@, "linux"), "linux", with_linux@, bad@, arena)
-  check_job(body_of(names@, bodies@, "windows-ucrt64"), "windows-ucrt64", want@, bad@, arena)
-  verdict.check_list("the CI's shards agree with the workflow's matrix", want.len, "shards", bad@,
-    "add a shard and line it up in the .yml's matrix too (CI_SHARDS in mk/ci.mk is the origin)")
+    $bad: = List<|U8[]|>.new(arena)
+    src: = harness.read_under_root(gates_src)
+    sets: = set_variants(src, arena)
+    // **`set_order` is how a name is read back**, so a set missing there cannot be run.
+    $order: U8[] = ""
+    head: = src.find_str(set_order_head)
+    if head >= 0
+        tail: = src.sub_from(head)
+        end: = tail.find_char('}')
+        order = tail if end < 0 else tail.sub(0, end)
+    $want: = List<|U8[]|>.new(arena)
+    for i in Range.asc(sets.len)
+        v: = sets.get(i)
+        if order.find_str(arena.text().s("Set.").s(v).s(",").take()) < 0 &&
+            order.find_str(arena.text().s("Set.").s(v).s(" ").take()) < 0
+            bad
+                .push(arena.text().s("Set.").s(v).s(" is not in set_order in ").s(gates_src).take())
+        if v.starts_with(shard_prefix)
+            want.push(v.replace("_", "-", arena))
+    if want.len == 0
+        verdict.check("the CI's shards agree with the workflow's matrix", false,
+            arena.text().s("could not read the ci_shard_ sets out of ").s(gates_src).take())
+        return
+    $names: = List<|U8[]|>.new(arena)
+    $bodies: = List<|U8[]|>.new(arena)
+    job_blocks(harness.read_under_root(ci_yml), names@, bodies@, arena)
+    // **Linux has one more**: what runs only there is a set of its own (`ci-linux-only`).
+    $with_linux: = List<|U8[]|>.new(arena)
+    for i in Range.asc(want.len)
+        with_linux.push(want.get(i))
+    with_linux.push(linux_only)
+    check_job(body_of(names@, bodies@, "linux"), "linux", with_linux@, bad@, arena)
+    check_job(body_of(names@, bodies@, "windows-ucrt64"), "windows-ucrt64", want@, bad@, arena)
+    verdict.check_list("the CI's shards agree with the workflow's matrix", want.len, "shards", bad@,
+        "add a shard and line it up in the .yml's matrix too (Set in tools/ci_gates.kspls is the \
+            origin)")
 
 priv fn check_dispatch_switches(arena: Arena$@) //<
-  //< A job's `if:` matches the input of the manual start and the cron `schedule:` declares
-  //<
-  //< Caution: **Add only one side and either direction breaks silently**: an input alone "can be
-  //< pressed and does nothing" (Principle 5); a job alone runs whatever is chosen. The names match
-  //< so nobody has to remember the pairing; a cron that is not declared matches no run.
-  yml: = harness.read_under_root(ci_yml)
-  $names: = List<|U8[]|>.new(arena)
-  $bodies: = List<|U8[]|>.new(arena)
-  job_blocks(yml, names@, bodies@, arena)
-  got: = dispatch_inputs_of(yml, arena)
-  if names.len == 0 || got.len == 0
-    verdict.check("a job's if: matches the input and cron declarations", false,
-      arena.text().s("could not read the jobs or the inputs out of ").s(ci_yml).take())
-    return
-  $bad: = List<|U8[]|>.new(arena)
-  scan.diff_into(names@, got@, "the jobs", "workflow_dispatch's inputs", bad@, arena)
-  scan.diff_into(got@, names@, "workflow_dispatch's inputs", "the jobs", bad@, arena)
-  crons: = crons_of(yml, arena)
-  for i in Range.asc(names.len)
-    guard: = guard_of(bodies.get(i), arena)
-    want: = arena.text().s("inputs['").s(names.get(i)).s("']").take()
-    if guard.find_str(want) < 0
-      bad
-        .push(arena.text().s(names.get(i)).s("'s if: does not look at ").s(want).take())
-    // Caution: Allow a cron that is not declared and the condition silently stops taking effect
-    // (a condition meant to leave out the weekdays matches no run).
-    for c in quoted_crons(guard, arena)
-      if !scan.has(crons@, c)
-        bad
-          .push(arena.text().s(names.get(i)).s("'s if: holds the cron '").s(c)
-          .s("', which schedule: does not declare").take())
-  verdict.check_list("a job's if: matches the input and cron declarations", names.len, "jobs", bad@,
-    "add a job and add an input of the same name and an if: too (.github/workflows/ci.yml)")
+    //< A job's `if:` matches the input of the manual start and the cron `schedule:` declares
+    //<
+    //< Caution: **Add only one side and either direction breaks silently**: an input alone "can be
+    //< pressed and does nothing" (Principle 5); a job alone runs whatever is chosen. The names
+    //< match so nobody has to remember the pairing; a cron that is not declared matches no run.
+    yml: = harness.read_under_root(ci_yml)
+    $names: = List<|U8[]|>.new(arena)
+    $bodies: = List<|U8[]|>.new(arena)
+    job_blocks(yml, names@, bodies@, arena)
+    got: = dispatch_inputs_of(yml, arena)
+    if names.len == 0 || got.len == 0
+        verdict.check("a job's if: matches the input and cron declarations", false,
+            arena.text().s("could not read the jobs or the inputs out of ").s(ci_yml).take())
+        return
+    $bad: = List<|U8[]|>.new(arena)
+    scan.diff_into(names@, got@, "the jobs", "workflow_dispatch's inputs", bad@, arena)
+    scan.diff_into(got@, names@, "workflow_dispatch's inputs", "the jobs", bad@, arena)
+    crons: = crons_of(yml, arena)
+    for i in Range.asc(names.len)
+        guard: = guard_of(bodies.get(i), arena)
+        want: = arena.text().s("inputs['").s(names.get(i)).s("']").take()
+        if guard.find_str(want) < 0
+            bad
+                .push(arena.text().s(names.get(i)).s("'s if: does not look at ").s(want).take())
+        // Caution: Allow a cron that is not declared and the condition silently stops taking effect
+        // (a condition meant to leave out the weekdays matches no run).
+        for c in quoted_crons(guard, arena)
+            if !scan.has(crons@, c)
+                bad
+                    .push(arena.text().s(names.get(i)).s("'s if: holds the cron '").s(c)
+                    .s("', which schedule: does not declare").take())
+    verdict.check_list("a job's if: matches the input and cron declarations", names.len, "jobs",
+        bad@,
+        "add a job and add an input of the same name and an if: too (.github/workflows/ci.yml)")
 
 priv const lint_mk: U8[] = "mk/lint.mk" //<
-  //< The static analysis' list of entry points agrees with the tree
-  //<
-  //< Caution: **A source holding `fn main` that is missing from the list is never linted**: the
-  //< analysis walks imports, so **an entry point nobody imports is not covered**.
+    //< The static analysis' list of entry points agrees with the tree
+    //<
+    //< Caution: **A source holding `fn main` that is missing from the list is never linted**: the
+    //< analysis walks imports, so **an entry point nobody imports is not covered**.
+
+priv const lint_sources: U8[][6] = ::{ "*.kspl", "*.kspls", ":!ksplc/tests/negative/*",
+    ":!ksplc/tests/lint/*", ":!ksplc/tests/runtime/*", ":!ksplc/tests/ship/*" } //<
+        //< Sources searched for an entry point, and the fixtures left out, each linted by its suite
+        //<
+        //< The suites' material diagnoses by design (`negative/`, `lint/`), stops on purpose
+        //< (`runtime/`), or imports what the suite writes beside it (`ship/`).
+
+priv fn is_entry(src: U8[], arena: Arena$@): Bool //<
+    //< Whether a source defines `main`: a line opening with it, outside a `"""` string
+    //<
+    //< A suite writes the programs it runs into such strings, and they are not this file's entry.
+    $raw: = false
+    for line in src.lines(arena)
+        if !raw && line.starts_with("fn main(")
+            return true
+        raw = scan.flip_raw(line, raw)
+    return false
+
+// Caution: **Keep a `main` inside a string on the miss side**: it is what a plain search hits.
+priv const entry_samples: Sample[5] = ::{
+    Sample::{ .text = "fn main(): I32\n  return 0\n", .hits = true },
+    Sample::{ .text = "import \"std/io\"\n\nfn main() {\n}\n", .hits = true },
+    Sample::{ .text = "priv const s: U8[] =\n  \"\"\"x\nfn main()\n\"\"\"\n", .hits = false },
+    Sample::{ .text = "fn mainly(): I32\n", .hits = false },
+    Sample::{ .text = "  // fn main(): I32\n", .hits = false },
+}
+
+priv fn lint_targets(arena: Arena$@): List<|U8[]|> //<
+    //< Every entry point the lint lists name, their wildcards expanded by make itself
+    $out: = List<|U8[]|>.new(arena)
+    r: = harness
+        .make(U8[][]::{ "LOGGING=1", "-s", "--no-print-directory", "--eval",
+        "lint-print: ; @echo $(LINT_TARGETS) $(LINT_TARGETS_FREE) $(LINT_TARGETS_OWN)",
+        "lint-print" })
+    if r.code != 0
+        return out
+    for w in r.out.trim_spaces().split(' ', arena)
+        if w.len > 0
+            out.push(w)
+    return out
 
 priv fn check_lint_entries(arena: Arena$@)
-  body: = harness.read_under_root(lint_mk)
-  $bad: = List<|U8[]|>.new(arena)
-  $seen: Sz = 0
-  for rel in harness.tracked_matching(U8[][]::{ "tools" })
-    if !rel.ends_with(".kspl") && !rel.ends_with(".kspls")
-      continue
-    src: = harness.read_under_root(rel)
-    if src.find_str("\nfn main") < 0 && !src.starts_with("fn main")
-      continue
-    seen += 1
-    if body.find_str(rel) < 0
-      bad.push(rel)
-  verdict.check_list("no entry point of the static analysis has leaked out", seen, "entry points",
-    bad@, arena.text().s("line it up in LINT_TARGETS in ").s(lint_mk).take())
+    $bad: = scan.misjudged(Sample[]::entry_samples, is_entry, arena)
+    listed: = lint_targets(arena)
+    if listed.len == 0
+        bad
+            .push(arena.text().s("make could not print the lint lists of ").s(lint_mk).take())
+    $seen: Sz = 0
+    for rel in harness.tracked_matching(U8[][]::lint_sources)
+        if !is_entry(harness.read_under_root(rel), arena)
+            continue
+        seen += 1
+        if !scan.has(listed@, rel)
+            bad.push(rel)
+    verdict.check_list("no entry point of the static analysis has leaked out", seen, "entry points",
+        bad@,
+        arena.text().s("line it up in LINT_TARGETS in ").s(lint_mk)
+        .s(", or leave its folder out in `lint_sources` with why").take())
+
+// ==========================================
+// The platform table names every gate and every suite CI runs
+// **It is written by hand, for people**, so a check added to the gates or to a suite list and not
+// to the table stays out of sight on every platform at once.
+// ==========================================
+priv const gates_doc: U8[] = "docs/SPEC-gates.md"
+priv const table_head: U8[] = "| Check | Linux"
+priv const args_mark: U8[] = ".args = \""
+priv const suite_lists: U8[][2] = ::{ "mk/test.mk", "ksplc/Makefile" } //<
+    //< The files whose `SUITES` (and `LINUX_SUITES`) list the suites CI runs
+priv const list_heads: U8[][2] = ::{ "SUITES := ", "LINUX_SUITES := " }
+
+priv fn first_cells(doc: U8[], arena: Arena$@): List<|U8[]|> //< the table's first column, by row
+    $out: = List<|U8[]|>.new(arena)
+    $inside: = false
+    for line in doc.lines(arena)
+        if !inside
+            inside = line.starts_with(table_head)
+            continue
+        if !line.starts_with("|")
+            break
+        rest: = line.sub_from(1)
+        end: = rest.find_char('|')
+        if end > 0 && !rest.starts_with("---")
+            out.push(rest.sub(0, end))
+    return out
+
+priv fn is_check(word: U8[], name: U8[]): Bool //< whether a word is the check, `test-` or not
+    w: = word.trim_spaces()
+    return w.equals(name) || (w.starts_with("test-") && w.sub_from(5).equals(name))
+
+priv fn cell_names(text: U8[], arena: Arena$@): Bool //<
+    //< Whether a cell names a check: the text is `<cell>\t<name>`
+    //<
+    //< **The cell's first word, or an item of the list in its brackets** (`(cli / config)`). Any
+    //< word would do, but a suite named by an English word (`conventions`) is then found in prose.
+    tab: = text.find_char('\t')
+    if tab < 0
+        return false
+    cell: = text.sub(0, tab).trim_spaces()
+    name: = text.sub_from(tab + 1)
+    $head: = cell.len
+    for i in Range.asc(cell.len)
+        if head == cell.len && (cell[i] == ' ' || cell[i] == '(')
+            head = i
+    if is_check(cell.sub(0, head), name)
+        return true
+    open: = cell.find_char('(')
+    close: = cell.rfind_char(')')
+    if open < 0 || close <= open
+        return false
+    for item in cell.sub(open + 1, close - open - 1).split('/', arena)
+        if is_check(item, name)
+            return true
+    return false
+
+// Caution: **Keep a prefix, a longer name and a word of prose on the miss side**: a search for
+// the name anywhere in the cell hits all three.
+priv const cell_samples: Sample[8] = ::{
+    Sample::{ .text = "test-lsp (the language server)\tlsp", .hits = true },
+    Sample::{ .text = "debug tests\tdebug", .hits = true },
+    Sample::{ .text = "The other suites (cli / config)\tconfig", .hits = true },
+    Sample::{ .text = "The other suites (cli / test-config)\tconfig", .hits = true },
+    Sample::{ .text = "test-lsp-tree (over the tree)\tlsp", .hits = false },
+    Sample::{ .text = "self-host-ship (the -O2 build)\tself-host", .hits = false },
+    Sample::{ .text = "test-llvm-abi (the calling conventions agree)\tconventions", .hits = false },
+    Sample::{ .text = "no tab here", .hits = false },
+}
+
+priv fn ci_checks(arena: Arena$@): List<|U8[]|> //<
+    //< The make targets the gates ask for and the suites the lists hold
+    //<
+    //< A half of the suites (`test-suites-a`) stands for what its list holds, and `NAME=1` is a
+    //< setting, not a target.
+    $out: = List<|U8[]|>.new(arena)
+    for args in scan.find_all(harness.read_under_root(gates_src), args_mark, "\"", arena)
+        for w in args.split(' ', arena)
+            if w.len > 0 && w.find_char('=') < 0 && !w.starts_with("test-suites")
+                scan.push_unique(out@, w)
+    for rel in suite_lists
+        text: = harness.read_under_root(rel)
+        for head in list_heads
+            for w in htext.make_list(text, head, arena)
+                scan.push_unique(out@, w)
+    return out
+
+priv fn check_platform_table(arena: Arena$@)
+    $bad: = scan.misjudged(Sample[]::cell_samples, cell_names, arena)
+    cells: = first_cells(harness.read_under_root(gates_doc), arena)
+    checks: = ci_checks(arena)
+    if cells.len == 0 || checks.len == 0
+        bad
+            .push(arena.text().s("could not read the table out of ").s(gates_doc)
+            .s(" or the gates and suites").take())
+    for name in checks
+        $named: = false
+        for cell in cells
+            if !named &&
+                cell_names(arena.text().s(cell).c('\t').s(name).take(), arena)
+                named = true
+        if !named
+            bad.push(name)
+    verdict.check_list("the platform table names every gate and suite CI runs", checks.len, "checks",
+        bad@,
+        arena.text().s("give it a row, or a place in a row's list, in \"What each ")
+        .s("platform runs\" in ").s(gates_doc).take())
 
 fn run(arena: Arena$@) //< this section's entry point
-  //<
-  //< Caution: **Call it from `conventions_match.kspls`'s `run`** (there is one suite).
-  check_dispatch_switches(arena)
-  check_ci_shards(arena)
-  check_lint_entries(arena)
+    //<
+    //< Caution: **Call it from `conventions_match.kspls`'s `run`** (there is one suite).
+    check_dispatch_switches(arena)
+    check_ci_shards(arena)
+    check_platform_table(arena)
+    check_lint_entries(arena)

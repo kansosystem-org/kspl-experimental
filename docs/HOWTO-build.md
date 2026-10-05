@@ -32,7 +32,7 @@ make
 
 **A copy of `ksplc/` bootstraps the same way from any `ksplc`.** Run `make self-host` in that folder, and tell it where `std` and kspeg are, as for any package (the top of [`ksplc/Makefile`](../ksplc/Makefile)).
 
-**Two variables change what is built.** `make LLVM=1` (and `make LLVM=1 debug`) uses the LLVM backend instead of the C backend. `make debug-file SRC_KSPL=<file.kspls>` builds one file with debug information (VS Code's F5 calls it).
+**Two variables change what is built.** `make LLVM=1` (and `make LLVM=1 debug`) uses the LLVM backend instead of the C backend. A switch reads `0` or `1` alone: `LLVM=true` stops make rather than building the C backend unnoticed. `make debug-file SRC_KSPL=<file.kspls>` builds one file with debug information (VS Code's F5 calls it).
 
 ### The formatter and the linter (`make fmt` / `make lint`)
 
@@ -82,7 +82,7 @@ make install                       # puts Stage2 into ~/.local/bin/ksplc, std/ i
 * To match CI exactly, run the `.devcontainer/` on WSL2, where CI's authoritative gates (every stage of `make ci`) run bit for bit the same.
 * To confirm Windows-native behavior on real hardware, use [MSYS2](https://www.msys2.org/) as below.
 
-What the `windows-msvc` / `windows-ucrt64` jobs each verify is in "What each platform runs" in [`SPEC-gates.md`](SPEC-gates.md).
+What the `windows-ucrt64` job verifies is in "What each platform runs" in [`SPEC-gates.md`](SPEC-gates.md).
 
 ### 1. Use the 'MSYS2 UCRT64' shell (mandatory)
 
@@ -90,7 +90,7 @@ Install MSYS2 by the [official site](https://www.msys2.org/)'s procedure. Launch
 
 **On Windows, the Makefile refuses to run outside the UCRT64 shell.** That includes MSYS2's tools run from PowerShell or cmd through the PATH (`MSYSTEM` is empty there). What breaks outside the shell is in the same section of [`DESIGN.md`](DESIGN.md).
 
-Note: **`ksplc`'s own output (`--help`, diagnostics) does not depend on the terminal's setting**, even through ConPTY (VS Code's integrated terminal and the like). `ksplc` sets the console's output code page to UTF-8 at start-up and restores it on exit (`kspl_io_init_console` in `ksplc/gen/runtime/hosted.c`).
+Note: **`ksplc`'s own output (`--help`, diagnostics) does not depend on the terminal's setting**, even through ConPTY (VS Code's integrated terminal and the like). `ksplc` sets the console's output and input code pages to UTF-8 at start-up and restores them on exit and after a panic (`kspl_io_init_console` in `ksplc/gen/runtime/hosted.c`). A crash that ends the process without a panic (an access violation) leaves them set.
 
 **In VS Code, the integrated terminal is already UCRT64.** `.vscode/settings.json` makes an "MSYS2 UCRT64" profile the default terminal on Windows (a Windows-only key). Open this folder and `make` / `make ci` run unchanged in the integrated terminal (`Ctrl+@`). PowerShell stays in the dropdown at its top right. Where MSYS2 is not in `C:\msys64`, set the profile's `path` to its location.
 
@@ -163,4 +163,4 @@ From here, `make`, `make debug`, `make ci` and the rest run as on Linux/macOS.
 **Known caveats**:
 
 * **A link fails with `Permission denied`**: `make ci` rebuilds the same `.exe` many times in a short span, and a program that watches new files can briefly lock one just written. A real-time scan such as Windows Defender's does it, and so does a sync agent such as OneDrive's. Re-running often fixes it. Where it recurs, exclude this repository's `out/` (or the whole repository) from the scan, and keep the repository outside a synced folder (for example `C:\dev\kspl`), as "[Building and testing](#building-and-testing)" says.
-* Part of `std/tests/sys_test.kspls` needs POSIX paths such as `/bin/echo` and skips itself on native Windows (`sys.is_windows()`). Subprocesses themselves (`run_capture`, through `CreateProcess`) work there, and the `windows-msvc` job in `.github/workflows/ci.yml` verifies them on real hardware.
+* Part of `std/tests/sys_test.kspls` needs POSIX paths such as `/bin/echo` and skips itself on native Windows (`sys.is_windows()`). Subprocesses themselves (`run_capture`, through `CreateProcess`) work there, and the `windows-ucrt64` job in `.github/workflows/ci.yml` runs them on real hardware.

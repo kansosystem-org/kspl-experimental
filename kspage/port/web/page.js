@@ -185,13 +185,10 @@
       // must agree too is written out in both forms at the call.
       count: (n, one, many) => `${n} ${n === 1 ? one : (many || one + "s")}`,
       putButton: putButton, lineButton: lineButton, whyButton: whyButton, shutTools: shutTools,
-      fit: fit, watchSide: watchSide, headRoomVar: headRoomVar,
+      fit: fit, watchSide: watchSide,
       dressRead: dressRead,
       // The log of the status bar's texts (the debug log reads it). **It only reads.**
       sayTrail: () => trail.slice(),
-      // Caution: **Start another instance from the same bytes** (comparing looks needs a second
-      // renderer), **on an offscreen canvas** (or its cursor shows).
-      boot: (target) => kspageBoot(target, bytes),
     };
     // **Turn the HTML's groups into submenus before wiring**, or the contents move away from it
     // (the ids do not change, so later `getElementById`s still find them).
@@ -207,34 +204,22 @@
     Object.assign(ui, kspagePaper(ui));
     kspageReport(ui);
     Object.assign(ui, kspageCommand(ui));
-    // **Set it up after the local server** (it borrows the header that carries the token).
-    Object.assign(ui, kspagePlugin(ui));
     Object.assign(ui, kspageForm(ui));
     Object.assign(ui, kspageRibbon(ui));
     Object.assign(ui, kspageSide(ui));
-    // **Set it up after `app.headRoom` is set** (the split view measures from it).
-    Object.assign(ui, kspagePeek(ui));
-    Object.assign(ui, kspageDiff(ui));
-    Object.assign(ui, kspageSource(ui));
     // **After the menus**: an item names a menu's button; before them, items silently go missing.
     Object.assign(ui, kspageHere(ui));
     // **Set it up after what opens files and what inserts an image** (drops go to them).
     kspageDrop(ui);
-    // **Pass on the click handler for sources**, or a link to the source does nothing when clicked.
-    app.onSource = ui.showSource;
+    // **Pictures beside the document are read with the token** (`local.js`), drawn and measured
+    // alike.
+    app.localPicture = ui.localPicture;
     // Caution: **After the parts are set up**, it opens the URL's document (`?doc=…`) or the one
     // the tab had open before a reload (it touches the path field and the windows).
     const opened = ui.openFromUrl().catch(() => false);
     // It reports an earlier draft **once the document is open** (shown first, "Loaded it" replaces
     // it), **not in a window this page opened** (the opener is alive and still writing that draft).
     if (window.opener === null) opened.then(() => ui.keepBoot());
-    // The plugins: **the check calls the ones a person uses**, so broken wiring cannot stay green.
-    app.pluginNames = ui.pluginNames;
-    app.pluginRun = ui.pluginRun;
-    // **Ask for the plugins after the server is known** (with none, the group stays hidden).
-    if (ui.localReady) {
-      ui.localReady.then(() => ui.pluginBoot());
-    }
 
     const formula = document.getElementById("formula");
     // Caution: **Do not rewrite a field mid-typing** (the typed text disappears), **nor wire clicks
@@ -252,8 +237,6 @@
       // Caution: **Re-ask for the semantic colors and save the draft here**: a redraw is the only
       // sign that the text changed; throttling is their job (`keep.js`'s `keepLater`).
       ui.keepLater();
-      // **Redraw the split view too**, or it shows an old picture; closed, it does nothing.
-      ui.peekPaint();
       if (document.activeElement !== ui.hrefBox) {
         ui.hrefBox.value = app.href();
       }
@@ -261,9 +244,6 @@
         ui.noteBox.value = app.note();
       }
       // Who wrote the comment is shown beside it, **not in a field** (not editable).
-      if (ui.aimBox && document.activeElement !== ui.aimBox) {
-        ui.aimBox.value = app.aimHere();
-      }
       if (document.activeElement !== ui.remarkBox) {
         ui.remarkBox.value = app.remark();
       }
@@ -360,25 +340,16 @@
     app.openDoc = ui.openDoc;
     // Which text is open now, **for back and forward** ("which file, and where").
     app.pathNow = ui.pathNow;
-    // The open documents and switching among them, **for outside** (the page's list uses `ui`).
-    app.docList = ui.docList;
-    app.docGo = ui.docGo;
-    app.docShut = ui.docShut;
     // Saving and restoring a draft: **the check calls the ones a person uses**, and `keepSync` by
     // name so as not to wait out the throttle (it would break the day the delay changes).
     app.keepSync = ui.keepSync;
     app.keepBoot = ui.keepBoot;
     app.keepRestore = ui.keepRestore;
     app.keepCount = ui.keepCount;
-    // One draft back without a wait (**`keepRestore` waits on the storage**); loading drops the
-    // compared version (`api_diff.js`), so the check calls it before the other sections.
+    // One draft back without a wait (**`keepRestore` waits on the storage**).
     app.draftTake = ui.draftTake;
     // The draft storage, **so the check does not open its own** (why: `keep.js`'s `keepStore`).
     app.keepStore = ui.keepStore;
-    // Caution: **Do not call the core's `docUse` directly** — it changes only the index, and the
-    // name, the path and the handle stay (the next save goes elsewhere). Needed after closing:
-    // `docDrop` moves to **the smallest index** (`port/web/state.kspls`'s `slot_drop`).
-    app.docGo = ui.docGo;
     window.kspage = app;
   });
 })();

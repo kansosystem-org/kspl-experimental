@@ -100,10 +100,7 @@ function kspageDrop(ui) {
       const one = at >= 0 && at < got.length ? got[at] : null;
       return one && one.kind === "file" ? one : null;
     };
-    const past = papers.find((f) => f.name.endsWith(".ksdb")) || null;
-    const body = papers.find((f) => f !== past) || null;
-    // Caution: **With no handle, do not bind again** (it would only drop the one already held).
-    const bound = { body: handleOf(body), past: past ? handleOf(past) : null };
-    ui.takeChosen(papers, bound.body || bound.past ? bound : null);
+    // **A window holds one document**, so the first dropped opens.
+    ui.takeChosen(papers[0], handleOf(papers[0]));
   });
 }

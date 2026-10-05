@@ -16,7 +16,7 @@
 | [5c](#stage-5c--i2c--the-led-matrix) | I2C (the VK16K33 LED matrix) | By eye |
 | [6a](#stage-6a--usb-ethernet--cdc-ncm) | USB Ethernet (CDC-NCM) as a network adapter | Device Manager |
 | [6b](#stage-6b--passing-8023-frames--ping) | 802.3 frames through `Link` in `ksos/net/link.kspls` | ping from the PC |
-| [6c](#stage-6c--running-the-upper-layers-tcp--http--mqtt-on-real-hardware) | TCP / MQTT / HTTP | A server and a broker on the PC |
+| [6c](#stage-6c--running-the-upper-layers-tcp--http-on-real-hardware) | TCP / HTTP | A server on the PC |
 | [6d](#stage-6d--the-heap-and-the-atomics-on-armv6-m) | The heap and the atomics (`alloc` / `Arc` / `std/http`) | The `[heap]` lines |
 | [6e](#stage-6e--running-a-closed-loop-with-the-pcs-kssrv) | A **closed loop** with the PC's kssrv | The wheels move / kssrv's `/api/status` |
 | [7](#stage-7--receiving-a-policy-then-disconnecting-and-deciding-for-itself) | Deciding in the car on a policy received once | The wheels keep moving with `kssrv.exe` down |
@@ -332,22 +332,21 @@ A working line reads like `net t=75 rx=173 arp=1 ping=14 drop=0`. **`rx` far abo
 
 **Run `make debug` first**: it checks the NTB handling ([`ksos/drivers/cdc_ncm.kspls`](../drivers/cdc_ncm.kspls)) and the ARP and ICMP answers byte by byte on the host.
 
-## Stage 6c — running the upper layers (TCP / HTTP / MQTT) on real hardware
+## Stage 6c — running the upper layers (TCP / HTTP) on real hardware
 
-**`ksos/net`'s TCP / MQTT / HTTP on the real chip, over USB Ethernet.** These run on the real chip for the first time here:
+**`ksos/net`'s TCP / HTTP on the real chip, over USB Ethernet.** These run on the real chip for the first time here:
 
 | The thing | Where |
 |---|---|
 | TCP data sending and receiving | `tcp_stream_send` / `tcp_stream_recv` in `ksos/net/tcp_conn.kspls` |
 | ARP's requesting side | `mini_ipv4`'s `build_arp_request` / `parse_arp_reply` |
-| MQTT | `ksos/net/mini_mqtt.kspls` |
 | HTTP parsing under freestanding | `parse_response` in `std/http.kspls` |
 
 Note: The link layer (`Link` in `ksos/net/link.kspls`) works from stage 6b; the wiring in `ksos/demo/rp2040/rp2040_net_probe.kspls` serves as a template.
 
 **Where it is likely to stall**: `tcp_conn.kspls`, the densest new code; ARP's requesting side (stage 6b had only the answering side), when resolving the gateway 192.168.137.1's MAC; and USB going quiet. Keep calling `usb.poll_once()` while waiting for a reply, through `pump()` in `ksos/demo/rp2040/common/bringup.kspls`, or the host detaches the device.
 
-**Done means both sides**: the 3-way handshake in the Serial Monitor, and the request or PUBLISH arriving on the PC.
+**Done means both sides**: the 3-way handshake in the Serial Monitor, and the request arriving on the PC.
 
 ### How to proceed
 
@@ -355,14 +354,13 @@ Note: The link layer (`Link` in `ksos/net/link.kspls`) works from stage 6b; the 
 make ksos-rp2040-net
 ```
 
-**Set up the PC first**: stage 6b's sharing (the PC at 192.168.137.1), and these two servers.
+**Set up the PC first**: stage 6b's sharing (the PC at 192.168.137.1), and an HTTP server.
 
 ```
-python -m http.server 8080                                   # HTTP
-./out/ksplc_stage1.exe run tools/mqtt_stub.kspls                # MQTT (1883)
+python -m http.server 8080
 ```
 
-**mosquitto is not needed**. Write `ksos_rp2040_net.uf2`, replug, and open the Serial Monitor.
+Write `ksos_rp2040_net.uf2`, replug, and open the Serial Monitor.
 
 #### What comes out
 
@@ -371,7 +369,7 @@ python -m http.server 8080                                   # HTTP
 | 1 | USB initialized |
 | 2 | NCM's link up (as in stage 6a) |
 | 1 after that | Stopped at ARP |
-| 2 after that | HTTP went through, MQTT did not |
+| 2 after that | ARP went through, HTTP did not |
 | 3 after that | **Everything went through** |
 
 The Serial Monitor shows one line per stage, then the result line every second.
@@ -385,21 +383,12 @@ The Serial Monitor shows one line per stage, then the result line every second.
 [http] recv=1024
 [http] status200=1 head=152
 [http] total=2318 segs>1=1
-[tcp] handshake ok (mqtt)
-[mqtt] connack ok=1 rc=0
-[mqtt] published + disconnected
-net t=1 rx=72 arp=0 ping=0 drop=0 txf=0 upper arp=ok http=ok mqtt=ok arpf=6 et=0800 from=192.168.137.1
+net t=1 rx=72 arp=0 ping=0 drop=0 txf=0 upper arp=ok http=ok arpf=6 et=0800 from=192.168.137.1
 ```
 
 Caution: **Check `drop=0`.** If it grows, sends are lost: there is one NTB, and sending again without `drain_tx()` silently discards the previous frame.
 
-`segs>1=1` says the response spanned several segments, confirming `tcp_stream_recv`'s seq tracking. **Check the PC side too**: `192.168.137.50 - - [...] "GET / HTTP/1.1" 200 -` on `python -m http.server`'s console, and these lines on `mqtt_stub.kspls`'s:
-
-```
-CONNECT  client_id='kanso-pico' keep_alive=60 (proto='MQTT')
-PUBLISH  topic='kanso/pico' payload='hello from Kanso OS on RP2040'
-DISCONNECT
-```
+`segs>1=1` says the response spanned several segments, confirming `tcp_stream_recv`'s seq tracking. **Check the PC side too**: `192.168.137.50 - - [...] "GET / HTTP/1.1" 200 -` on `python -m http.server`'s console.
 
 #### When it does not work
 
@@ -466,7 +455,7 @@ Plug in the ultrasonic module, not the LED matrix. **Lifted, the reflective sens
 
 **The car applies three safety timeouts itself, whatever the reply**: the battery, point-blank range and no reply (the `car-loop` column of "The safety timeouts of each firmware" in stage 7). The battery one does not clear by itself: switch the battery off and on.
 
-**kssrv must run on the PC** (only it answers `/api/car`); it trains its model at start-up, so its listener takes a few seconds. The sharing is as in stage 6c (the PC 192.168.137.1, the car 192.168.137.50). The connection stays open (kssrv keeps it alive), since a new TCP connection per lap does not fit the 100ms control period.
+**kssrv must run on the PC, facing outward** (only it answers `/api/car`, and not under `--local`); it trains the steering policy at start-up, so its listener takes a moment. The sharing is as in stage 6c (the PC 192.168.137.1, the car 192.168.137.50). The connection stays open (kssrv keeps it alive), since a new TCP connection per lap does not fit the 100ms control period.
 
 ### How to proceed
 

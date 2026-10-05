@@ -49,28 +49,6 @@ function kspageReport(ui) {
     lines.push("The messages that came out in the status bar (oldest first):");
     const said = ui.sayTrail ? ui.sayTrail() : [];
     lines.push(said.length > 0 ? said.join("\n") : "(nothing has come out yet)");
-    // The change history: what was done just before it broke matters most.
-    // Caution: **Do not rely on `.ksdb` alone** — it is written only on save, so people would have
-    // to save to report. Only "when, who and what" go in, not the typed text. Stamp before reading,
-    // or what was just typed does not appear.
-    app.stampTrail();
-    lines.push("");
-    // Read the count after stamping, or unstamped items are lost and the lines and count differ.
-    lines.push("Change history: " + ui.count(app.trailCount(), "item")
-      + " (oldest first. The characters typed do not go in):");
-    const deeds = app.trail().split("\n").filter((one) => one !== "")
-      .map((one) => one.split("\t").join("  "));
-    // Caution: **Cap it** (a long session makes thousands of lines); the most recent are kept.
-    const deedMax = 80;
-    if (deeds.length > deedMax) {
-      lines.push(deeds.length - deedMax === 1 ? "(the oldest item is left out)"
-        : "(the oldest " + (deeds.length - deedMax) + " items are left out)");
-    }
-    lines.push(deeds.length > 0 ? deeds.slice(-deedMax).join("\n") : "(there is nothing yet)");
-    const lost = app.trailLost();
-    if (lost > 0) {
-      lines.push("Caution: The count that could not be recorded because memory was full: " + lost);
-    }
     download(lines.join("\n") + "\n", nameOf("-debug-log.txt"), "text/plain",
       "Downloaded the debug log (the document's contents are not in it)");
   });

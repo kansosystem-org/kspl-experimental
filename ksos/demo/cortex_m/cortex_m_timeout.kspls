@@ -22,39 +22,39 @@ priv const give_after: U64 = 3
 priv const long_deadline: U64 = 100
 
 fn spinner(_arg: Void$@): Void //< Never lets go of the CPU (SysTick does the switching)
-  for {}
+    for {}
 
 fn giver(_arg: Void$@): Void //<
-  //< Runs at the spinner's priority, waits for SysTick to switch to it, then gives
-  Task.delay(give_after)
-  g_sem.give()
+    //< Runs at the spinner's priority, waits for SysTick to switch to it, then gives
+    Task.delay(give_after)
+    g_sem.give()
 
 fn coordinator(_arg: Void$@): Void //< High-priority waiter with a timeout; checks both results
-  con.puts("=== Kanso OS (Cortex-M) timeout under preemption ===\n")
-  before1: = task.current_tick()
-  got1: = g_sem.take_for(5)
-  waited1: = task.current_tick() - before1
-  con.check("take_for(5) gives up with false while a spinner holds the CPU", !got1)
-  con.check("the deadline was carried by at least 5 SysTick ticks", waited1 >= 5)
+    con.puts("=== Kanso OS (Cortex-M) timeout under preemption ===\n")
+    before1: = task.current_tick()
+    got1: = g_sem.take_for(5)
+    waited1: = task.current_tick() - before1
+    con.check("take_for(5) gives up with false while a spinner holds the CPU", !got1)
+    con.check("the deadline was carried by at least 5 SysTick ticks", waited1 >= 5)
 
-  tcb_giver.create(U8$[]::stack_giver, giver, null, 1, "giver")
-  before2: = task.current_tick()
-  got2: = g_sem.take_for(long_deadline)
-  waited2: = task.current_tick() - before2
-  con.check("take_for(100) returns true once the giver gives", got2)
-  con.check("it returned before the deadline", waited2 < long_deadline)
+    tcb_giver.create(U8$[]::stack_giver, giver, null, 1, "giver")
+    before2: = task.current_tick()
+    got2: = g_sem.take_for(long_deadline)
+    waited2: = task.current_tick() - before2
+    con.check("take_for(100) returns true once the giver gives", got2)
+    con.check("it returned before the deadline", waited2 < long_deadline)
 
-  con.print_summary("Cortex-M timeout")
-  con.exit()
+    con.print_summary("Cortex-M timeout")
+    con.exit()
 
 #export
 fn ksos_main()
-  g_sem.init(0)
-  // coordinator has the higher priority (2), so it runs first and blocks with a timeout.
-  tcb_co.create(U8$[]::stack_co, coordinator, null, 2, "co")
-  tcb_spin.create(U8$[]::stack_spin, spinner, null, 1, "spin")
-  // SysTick's reload value: any value that causes pre-emption will do.
-  task.enable_preemption(50000)
-  task.start_scheduler()
-  // The spinner never yields, so start_scheduler() never returns (coordinator calls con.exit()).
-  for {}
+    g_sem.init(0)
+    // coordinator has the higher priority (2), so it runs first and blocks with a timeout.
+    tcb_co.create(U8$[]::stack_co, coordinator, null, 2, "co")
+    tcb_spin.create(U8$[]::stack_spin, spinner, null, 1, "spin")
+    // SysTick's reload value: any value that causes pre-emption will do.
+    task.enable_preemption(50000)
+    task.start_scheduler()
+    // The spinner never yields, so start_scheduler() never returns (coordinator calls con.exit()).
+    for {}

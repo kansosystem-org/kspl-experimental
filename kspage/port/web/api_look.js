@@ -2,7 +2,7 @@
 // kspage's JS side — the entry points for styling: colors on text, paragraph and inline styles,
 // the marker, the border and the fill, shapes, and the list of a slide's contents. **They are
 // added to the same `app` as [`api.js`](api.js)** (`api.js` / `api_io.js` / `api_look.js` /
-// `api_diff.js` are one `app`). Split off for the 1000-line-per-file cap, and follows the same
+// `api_show.js` are one `app`). Split off for the 1000-line-per-file cap, and follows the same
 // boundary rules.
 //
 // Caution: **Every entry point replaces the whole.** One that changes a field at a time breaks
@@ -274,7 +274,6 @@ function kspageApiLook(ks) {
           x: x, y: y, w: wide, h: tall,
           picked: (flags & 1) !== 0,
           hasText: (flags & 2) !== 0,
-          tie: (flags & 4) !== 0,
           // Screen coordinates, **only after layout** (0 before).
           seen: { x: sx, y: sy, w: sw, h: sh },
         });
@@ -397,99 +396,6 @@ function kspageApiLook(ks) {
       const done = w.kspage_web_set_href(len) !== 0;
       if (done) draw();
       return done;
-    },
-    // The source the cursor's inline points at. **null means none** (an ordinary link included).
-    sourceAim() {
-      const len = w.kspage_web_source_aim(0);
-      if (len <= 0) return null;
-      const file = outText(len);
-      const two = w.kspage_web_source_aim(1);
-      return { file: file, name: outText(two) };
-    },
-    // The source the text exactly at document position (x, y) points at; **not moved to what is
-    // nearby** (null outside).
-    sourceAt(x, y) {
-      w.kspage_web_layout(ks.width);
-      const len = w.kspage_web_source_at(x, y, 0);
-      if (len <= 0) return null;
-      const file = outText(len);
-      const two = w.kspage_web_source_at(x, y, 1);
-      return { file: file, name: outText(two) };
-    },
-    // Makes the selection (with nothing selected, the whole inline) a link to the source.
-    // Caution: **Do not build the link target's text here** (the core does, in one place); the two
-    // names are sent separated by a tab.
-    linkSource(file, name) {
-      const len = stage(file + "\t" + (name || ""));
-      if (len < 0) return false;
-      const done = w.kspage_web_link_source(len) !== 0;
-      if (done) draw();
-      return done;
-    },
-    // Remembers one text passed in. **A window borrows at layout time**, so one whose text was not
-    // passed in shows only the target. The same name again replaces it.
-    handSource(file, bytes) {
-      if (!handOver(bytes)) return false;
-      const nameLen = stage(file);
-      if (nameLen < 0) return false;
-      const done = w.kspage_web_hand_source(nameLen, bytes.length) !== 0;
-      if (done) draw();
-      return done;
-    },
-    // Forgets all the text passed in.
-    dropSources() {
-      w.kspage_web_drop_sources();
-      draw();
-    },
-    // What this document points at (windows, figures and links in one list), **for choosing the
-    // files to pass in and for the check** — passing everything in piles unread text in the wasm.
-    // `state` is 0 not passed in, 1 found, 2 the symbol missing (**kept apart because the fixes are
-    // opposite**: pass it in / change the document).
-    aims() {
-      const many = w.kspage_web_aim_count();
-      const got = [];
-      for (let i = 0; i < many; i += 1) {
-        const len = w.kspage_web_aim(i, 0);
-        if (len <= 0) continue;
-        const file = outText(len);
-        const two = w.kspage_web_aim(i, 1);
-        got.push({
-          file: file,
-          name: outText(two),
-          state: w.kspage_web_aim_state(i),
-        });
-      }
-      return got;
-    },
-    // Inserts one window after the cursor's paragraph. **The contents are not inserted** (borrowed
-    // at every layout).
-    insertWindow(style, file, name) {
-      const len = stage(style + "\t" + file + "\t" + (name || ""));
-      if (len < 0) return false;
-      const done = w.kspage_web_insert_window(len) !== 0;
-      if (done) draw();
-      return done;
-    },
-    // Inserts one imports figure after the cursor's paragraph. **Neither boxes nor lines are
-    // inserted** (built from the borrowed source's `import` at every layout). Two styles are made
-    // (the box and its lines).
-    insertPulls(style, file) {
-      const len = stage(style + "\t" + file);
-      if (len < 0) return false;
-      const done = w.kspage_web_insert_pulls(len) !== 0;
-      if (done) draw();
-      return done;
-    },
-    // Where that symbol is inside the passed-in text, in bytes (the caller cuts its own bytes).
-    // **null when absent** — empty text would hide that the symbol is gone.
-    sourceSpot(bytes, name) {
-      // Caution: **Return null when it is absent** (the same promise as `nameLen` below).
-      if (!handOver(bytes)) return null;
-      const nameLen = stage(name || "");
-      if (nameLen < 0) return null;
-      const found = w.kspage_web_source_spot(bytes.length, nameLen, scratch);
-      const [at, wide, line] = nums(3);
-      return found === 0 ? null : { at: at, len: wide, line: line };
     },
     // The link target exactly at document position (x, y); **not moved to what is nearby** (empty
     // outside).

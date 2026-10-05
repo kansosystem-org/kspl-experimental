@@ -15,7 +15,7 @@ import "std/verdict"
 
 // A type, a member, and a label in the detail.
 priv const argp_src: U8[] =
-  """//< reading the command line
+    """//< reading the command line
 
 pub struct Parser //< the declarations
   n: I32
@@ -29,7 +29,7 @@ impl Parser
 
 // Publishes nothing.
 priv const inner_src: U8[] =
-  """//< what only the package reaches
+    """//< what only the package reaches
 
 fn helper(): I32 //< not published
   return 1
@@ -37,7 +37,7 @@ fn helper(): I32 //< not published
 
 // Parameters and a return, and `sub` beside `sub_from`, whose parts sort after `sub_from`.
 priv const run_src: U8[] =
-  """pub fn run( //< runs one child
+    """pub fn run( //< runs one child
   argv: U8[][], //< the executable and its arguments
   cwd: U8[], //< the working place
 ): U8[] //< its standard output
@@ -57,7 +57,7 @@ pub fn sub_from( //< from a place to the end
 
 // A summary with an explanation after it, and names that link and names that do not.
 priv const mem_src: U8[] =
-  """pub struct Arena //< a bump allocator.
+    """pub struct Arena //< a bump allocator.
   //<
   //< Everything goes at once.
   n: I32
@@ -72,7 +72,7 @@ pub fn drop_all() //< as `Arena.free` does, or `mem.Arena`; not `mem.gone` or `i
 
 // Two declarations whose headings reduce to one anchor.
 priv const math_src: U8[] =
-  """#cfg(!freestanding)
+    """#cfg(!freestanding)
 pub fn cos(x: F64): F64 //< libm's
   return x
 
@@ -89,104 +89,107 @@ priv const fine_src: U8[] = """pub fn fine() //< reads well
 """
 
 priv fn doc(dir: U8[], args: U8[][], arena: Arena$@): verdict.Run_out //< one `ksplc doc` run
-  $argv: = List<|U8[]|>.new(arena)
-  argv.push("doc")
-  for a in args
-    argv.push(a)
-  return harness.run_in(harness.ksplc_argv(argv.slice()), dir)
+    $argv: = List<|U8[]|>.new(arena)
+    argv.push("doc")
+    for a in args
+        argv.push(a)
+    return harness.run_in(harness.ksplc_argv(argv.slice()), dir)
 
 priv fn before(out: U8[], first: U8[], then: U8[]): Bool //< whether both stand, `first` earlier
-  a: = out.find_str(first)
-  b: = out.find_str(then)
-  return a >= 0 && b > a
+    a: = out.find_str(first)
+    b: = out.find_str(then)
+    return a >= 0 && b > a
 
 fn main(): I32
-  arena: = harness.begin(64 * 1024 * 1024)
-  none: = U8[][]::{}
-  io.out().s("# ksplc doc: a file, an entry, a folder\n")
-  dir: = harness.sandbox("doc") catch
-    return harness.fatal("cannot make a working directory")
-  names: = U8[][]::{ "pk/argp.kspls", "pk/inner.kspls", "pk/run.kspls", "pk/mem.kspls",
-    "pk/math.kspls", "pk2/broken.kspls", "pk2/fine.kspls" }
-  fs.write_tree(dir, names,
-    U8[][]::{ argp_src, inner_src, run_src, mem_src, math_src, broken_src, fine_src }, arena) catch
-    return harness.fatal("cannot place the material")
+    arena: = harness.begin(64 * 1024 * 1024)
+    none: = U8[][]::{}
+    io.out().s("# ksplc doc: a file, an entry, a folder\n")
+    dir: = harness.sandbox("doc") catch
+        return harness.fatal("cannot make a working directory")
+    names: = U8[][]::{ "pk/argp.kspls", "pk/inner.kspls", "pk/run.kspls", "pk/mem.kspls",
+        "pk/math.kspls", "pk2/broken.kspls", "pk2/fine.kspls" }
+    fs.write_tree(dir, names,
+        U8[][]::{ argp_src, inner_src, run_src, mem_src, math_src, broken_src, fine_src }, arena)
+        catch
+        return harness.fatal("cannot place the material")
 
-  // **One file, its own entries**: a type at the second level, its member one step in.
-  page: = doc(dir, U8[][]::{ "pk/argp" }, arena)
-  harness_markers.check("a file's reference holds its title, description, types and members",
-    U8[][]::{ "# pk/argp — the API reference", "reading the command line", "\n## `Parser`\n",
-    "\n### `Parser.flag`\n", "pub fn flag(r: Self$@)", "a switch taking no value" }, none,
-    page.out)
-  // The detail is joined into one line, so a label would land mid-paragraph unless split.
-  harness_markers.check("a label in a description opens a paragraph of its own",
-    U8[][]::{ "a switch taking no value.\n\nCaution: **Keep it.**" }, none, page.out)
+    // **One file, its own entries**: a type at the second level, its member one step in.
+    page: = doc(dir, U8[][]::{ "pk/argp" }, arena)
+    harness_markers.check("a file's reference holds its title, description, types and members",
+        U8[][]::{ "# pk/argp — the API reference", "reading the command line", "\n## `Parser`\n",
+        "\n### `Parser.flag`\n", "pub fn flag(r: Self$@)", "a switch taking no value" }, none,
+        page.out)
+    // The detail is joined into one line, so a label would land mid-paragraph unless split.
+    harness_markers.check("a label in a description opens a paragraph of its own",
+        U8[][]::{ "a switch taking no value.\n\nCaution: **Keep it.**" }, none, page.out)
 
-  // **Asked for a type, its members come with it**; asked for a member, only the member.
-  ty: = doc(dir, U8[][]::{ "pk/argp.Parser" }, arena)
-  harness_markers.check("an entry asked for by name comes with its members",
-    U8[][]::{ "## `Parser`", "### `Parser.flag`" }, U8[][]::{ "## Contents" }, ty.out)
-  one: = doc(dir, U8[][]::{ "pk/argp.Parser.flag" }, arena)
-  harness_markers.check("a member asked for comes alone", U8[][]::{ "### `Parser.flag`" },
-    U8[][]::{ "\n## `Parser`\n" }, one.out)
+    // **Asked for a type, its members come with it**; asked for a member, only the member.
+    ty: = doc(dir, U8[][]::{ "pk/argp.Parser" }, arena)
+    harness_markers.check("an entry asked for by name comes with its members",
+        U8[][]::{ "## `Parser`", "### `Parser.flag`" }, U8[][]::{ "## Contents" }, ty.out)
+    one: = doc(dir, U8[][]::{ "pk/argp.Parser.flag" }, arena)
+    harness_markers.check("a member asked for comes alone", U8[][]::{ "### `Parser.flag`" },
+        U8[][]::{ "\n## `Parser`\n" }, one.out)
 
-  // **A folder lists each file that publishes**, with its count; the file's own row is no entry.
-  list: = doc(dir, U8[][]::{ "pk" }, arena)
-  harness_markers.check("a folder lists each publishing file with its count and summary",
-    U8[][]::{ "* `pk/argp` — 2 entries. reading the command line", "* `pk/run` — " },
-    U8[][]::{ "pk/inner", "could not be read" }, list.out)
-  // **A file that cannot be read is named, not dropped.**
-  bad: = doc(dir, U8[][]::{ "pk2" }, arena)
-  harness_markers.check("a folder names the file it could not read",
-    U8[][]::{ "* `pk2/fine` — 1 entries", "could not be read", "* `pk2/broken`" }, none, bad.out)
+    // **A folder lists each file that publishes**, with its count; the file's own row is no entry.
+    list: = doc(dir, U8[][]::{ "pk" }, arena)
+    harness_markers.check("a folder lists each publishing file with its count and summary",
+        U8[][]::{ "* `pk/argp` — 2 entries. reading the command line", "* `pk/run` — " },
+        U8[][]::{ "pk/inner", "could not be read" }, list.out)
+    // **A file that cannot be read is named, not dropped.**
+    bad: = doc(dir, U8[][]::{ "pk2" }, arena)
+    harness_markers.check("a folder names the file it could not read",
+        U8[][]::{ "* `pk2/fine` — 1 entries", "could not be read", "* `pk2/broken`" }, none,
+        bad.out)
 
-  // **A part is not an entry**: a list under its declaration, in the signature's order.
-  run: = doc(dir, U8[][]::{ "pk/run" }, arena)
-  harness_markers.check("the parameters and the return stand as a list under the declaration",
-    U8[][]::{ "* `argv` — the executable and its arguments", "* `cwd` — the working place",
-    "**what comes back** — its standard output" }, U8[][]::{ "run~00" }, run.out)
-  verdict.check("the parameters stand in the order the signature writes them",
-    before(run.out, "* `argv` —", "* `cwd` —"), run.out)
-  // **A part lands on the declaration its key names**, whatever the order puts above it.
-  verdict.check("a part stands under its own declaration, not the one sorted above it",
-    before(run.out, "\n## `sub`\n", "where it begins, for sub\n") &&
-    before(run.out, "where it begins, for sub\n", "\n## `sub_from`\n") &&
-    before(run.out, "\n## `sub_from`\n", "where it begins, for sub_from"), run.out)
+    // **A part is not an entry**: a list under its declaration, in the signature's order.
+    run: = doc(dir, U8[][]::{ "pk/run" }, arena)
+    harness_markers.check("the parameters and the return stand as a list under the declaration",
+        U8[][]::{ "* `argv` — the executable and its arguments", "* `cwd` — the working place",
+        "**what comes back** — its standard output" }, U8[][]::{ "run~00" }, run.out)
+    verdict.check("the parameters stand in the order the signature writes them",
+        before(run.out, "* `argv` —", "* `cwd` —"), run.out)
+    // **A part lands on the declaration its key names**, whatever the order puts above it.
+    verdict.check("a part stands under its own declaration, not the one sorted above it",
+        before(run.out, "\n## `sub`\n", "where it begins, for sub\n") &&
+        before(run.out, "where it begins, for sub\n", "\n## `sub_from`\n") &&
+        before(run.out, "\n## `sub_from`\n", "where it begins, for sub_from"), run.out)
 
-  // **The contents hold one sentence each**; the rest is under the entry.
-  mem: = doc(dir, U8[][]::{ "pk/mem" }, arena)
-  harness_markers.check("the contents link each entry with its first sentence",
-    U8[][]::{ "* [`Arena`](#arena) — a bump allocator.", "* [`Arena.free`](#arenafree) —",
-    "a bump allocator. Everything goes at once." },
-    U8[][]::{ "#arena) — a bump allocator. Everything" }, mem.out)
-  // Caution: **Test the names that stay text beside the ones that link**; linking every span and
-  // linking none both pass a one-sided check.
-  harness_markers.check("a name of the file's own entry links, and anything else stays text",
-    U8[][]::{ "[`Arena.free`](#arenafree)", "[`mem.Arena`](#arena)", "`mem.gone`" },
-    U8[][]::{ "[`mem.gone`]", "[`io.err()" }, mem.out)
+    // **The contents hold one sentence each**; the rest is under the entry.
+    mem: = doc(dir, U8[][]::{ "pk/mem" }, arena)
+    harness_markers.check("the contents link each entry with its first sentence",
+        U8[][]::{ "* [`Arena`](#arena) — a bump allocator.", "* [`Arena.free`](#arenafree) —",
+        "a bump allocator. Everything goes at once." },
+        U8[][]::{ "#arena) — a bump allocator. Everything" }, mem.out)
+    // Caution: **Test the names that stay text beside the ones that link**; linking every span and
+    // linking none both pass a one-sided check.
+    harness_markers.check("a name of the file's own entry links, and anything else stays text",
+        U8[][]::{ "[`Arena.free`](#arenafree)", "[`mem.Arena`](#arena)", "`mem.gone`" },
+        U8[][]::{ "[`mem.gone`]", "[`io.err()" }, mem.out)
 
-  // **A repeat is numbered as the renderer numbers it**; uncounted, both links reach the first.
-  math: = doc(dir, U8[][]::{ "pk/math" }, arena)
-  harness_markers.check("two headings of one anchor get numbered links",
-    U8[][]::{ "](#cos-cfgfreestanding)", "](#cos-cfgfreestanding-1)" }, none, math.out)
+    // **A repeat is numbered as the renderer numbers it**; uncounted, both links reach the first.
+    math: = doc(dir, U8[][]::{ "pk/math" }, arena)
+    harness_markers.check("two headings of one anchor get numbered links",
+        U8[][]::{ "](#cos-cfgfreestanding)", "](#cos-cfgfreestanding-1)" }, none, math.out)
 
-  // **The scope settles what is shown**, as it does for the record.
-  hidden: = doc(dir, U8[][]::{ "pk/inner" }, arena)
-  harness_markers.check("what is not pub stays out by default", none, U8[][]::{ "helper" },
-    hidden.out)
-  all: = doc(dir, U8[][]::{ "--surface-scope=all", "pk/inner" }, arena)
-  harness_markers.check("--surface-scope=all shows it", U8[][]::{ "`helper`" }, none, all.out)
+    // **The scope settles what is shown**, as it does for the record.
+    hidden: = doc(dir, U8[][]::{ "pk/inner" }, arena)
+    harness_markers.check("what is not pub stays out by default", none, U8[][]::{ "helper" },
+        hidden.out)
+    all: = doc(dir, U8[][]::{ "--surface-scope=all", "pk/inner" }, arena)
+    harness_markers.check("--surface-scope=all shows it", U8[][]::{ "`helper`" }, none, all.out)
 
-  // **A std name resolves as `import` resolves it**, from the std the compiler is told of.
-  std: = doc(dir, U8[][]::{ "std/prng" }, arena)
-  harness_markers.check("a std file is found where an import would find it",
-    U8[][]::{ "# std/prng — the API reference", "Prng.next_u64" }, none, std.out)
+    // **A std name resolves as `import` resolves it**, from the std the compiler is told of.
+    std: = doc(dir, U8[][]::{ "std/prng" }, arena)
+    harness_markers.check("a std file is found where an import would find it",
+        U8[][]::{ "# std/prng — the API reference", "Prng.next_u64" }, none, std.out)
 
-  // **A name that names nothing is an error**, so a typo does not read as an empty package.
-  gone: = doc(dir, U8[][]::{ "pk/nope" }, arena)
-  verdict.check("a name that resolves to nothing fails and says what it looked for",
-    gone.code != 0 && gone.out.find_str("no file or folder is called 'pk/nope'") >= 0, gone.out)
-  miss: = doc(dir, U8[][]::{ "pk/argp.Nope" }, arena)
-  verdict.check("an entry the file does not publish fails",
-    miss.code != 0 && miss.out.find_str("publishes nothing called 'Nope'") >= 0, miss.out)
-  return harness.finish()
+    // **A name that names nothing is an error**, so a typo does not read as an empty package.
+    gone: = doc(dir, U8[][]::{ "pk/nope" }, arena)
+    verdict.check("a name that resolves to nothing fails and says what it looked for",
+        gone.code != 0 && gone.out.find_str("no file or folder is called 'pk/nope'") >= 0,
+        gone.out)
+    miss: = doc(dir, U8[][]::{ "pk/argp.Nope" }, arena)
+    verdict.check("an entry the file does not publish fails",
+        miss.code != 0 && miss.out.find_str("publishes nothing called 'Nope'") >= 0, miss.out)
+    return harness.finish()

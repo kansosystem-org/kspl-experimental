@@ -1,0 +1,190 @@
+#!/usr/bin/env -S ksplc run
+//< Runs a set of CI gates in order, one log each, and prints what they left
+//<
+//< **The gates and which job runs each are `tools/ci_gates.kspls`'s table**; this file only runs
+//< them. `make ci` and its siblings call it with their own name (`mk/ci.mk`), and `make ci-summary`
+//< asks it for the summary the workflow shows.
+//< Caution: **Stop at the first gate that falls**, as `make` did: later gates build on earlier
+//< ones, so what fails after a fall is noise.
+
+// ==========================================
+// Usage:
+//     ksplc run tools/ci.kspls ci|ci-linux|ci-linux-only|ci-macos|ci-shard-<shard>
+//         [--make=<make>] [--jobs=<n>]
+//     ksplc run tools/ci.kspls summary [--jobs=<n>] [--title=<text>]
+// ==========================================
+import "std/argp"
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena, dealloc }
+import "std/str" + { Str_builder }
+import "std/subproc"
+import "std/sys"
+import "tools/ci_gates" + { Gate, Set }
+
+priv const verdict_line: U8[] = "RESULT: ALL PASS" //<
+    //< The line a gate with `Gate.verdict` must print ("How a run is read" in `docs/SPEC-gates.md`)
+
+fn main(): I32
+    arena: = Arena.new(1024 * 1024)
+    defer arena.free()
+    $make: U8[] = "make"
+    $jobs: I64 = 1I64
+    $title: U8[] = "ci"
+    p: = argp.Parser
+        .create(sys.program_name(), "run a set of CI gates, or print the summary", arena)
+    p.positional("<set> | summary")
+    p.str_opt("--make", make@, "the make to run each gate with (make passes its own)")
+    p.int_opt("--jobs", jobs@, "how many jobs a gate run with -j takes")
+    p.str_opt("--title", title@, "the summary's heading (the workflow names its job)")
+    p.parse_or_exit(sys.args(), arena)
+    if p.rest.len != 1 || jobs < 1I64
+        p.print_usage()
+        return 2
+    name: = p.rest.get(0)
+    if name.equals("summary")
+        return summary(title, jobs, arena)
+    switch ci_gates.set_from(name, arena) case .some(s)
+        return run_set(name, s, make, jobs, arena)
+    case .none
+        io.err().s("ci: no set is named '\{name\}'\n")
+        p.print_usage()
+        return 2
+
+priv fn run_set(name: U8[], s: Set, make: U8[], jobs: I64, arena: Arena$@): I32 //<
+    //< Runs every gate of the set in the table's order; 0 when all passed
+    //<
+    //< **Every set refuses a gate no set runs**: it would go green everywhere, run nowhere.
+    for g in ci_gates.gates
+        if !run_anywhere(g)
+            io.err().s("ci: no set runs the gate '\{g.log\}'\n")
+            return 1
+        if g.macos && g.par == ci_gates.Par.synced
+            io.err()
+                .s("ci: macOS runs the gate '\{g.log\}', and its make 3.81 has no --output-sync\n")
+            return 1
+    fs.mkdir_all(ci_gates.log_dir) catch {}
+    ci_gates.reset_logs(arena)
+    $count: Sz = 0
+    for g in ci_gates.gates
+        if !s.runs(g)
+            continue
+        count += 1
+        if !run_gate(g, make, jobs, arena)
+            print_digest(jobs, arena)
+            return 1
+    // **A set that runs nothing has gone wrong**: a gate moved to a shard no job runs.
+    if count == 0
+        io.err().s("ci: the set '\{name\}' holds no gate\n")
+        return 1
+    print_digest(jobs, arena)
+    io.out().s("# \{name\}: ALL GREEN\n")
+    return 0
+
+priv fn run_anywhere(g: Gate): Bool //< whether some set runs the gate
+    for s in ci_gates.set_order
+        if s.runs(g)
+            return true
+    return false
+
+priv fn run_gate(g: Gate, make: U8[], jobs: I64, arena: Arena$@): Bool //<
+    //< Runs one gate through `make`, its output on the screen and in its log; true when it passed
+    //<
+    //< **`bash -o pipefail`**, or the pipe answers with `tee`'s status and a fallen gate passes.
+    log: = ci_gates.log_path(g.log, arena)
+    $cmd: = Str_builder.new()
+    defer cmd.free()
+    cmd.c('\'').s(make).c('\'')
+    if g.par != ci_gates.Par.serial
+        cmd.s(" -j\{jobs\}")
+    if g.par == ci_gates.Par.synced
+        cmd.s(" --output-sync=target")
+    cmd.c(' ').s(g.args).s(" 2>&1 | tee ").s(log)
+    io.out().s("# --- ").s(g.log).s(": make ").s(g.args).s(" ---\n")
+    io.out().flush()
+    t0: = sys.mono_us()
+    // 127, the shell's "not found", where bash itself cannot start.
+    $rc: I32 =
+        subproc.spawn_wait(U8[][]::{ "bash", "-o", "pipefail", "-c", cmd.slice() }, "") catch
+        fallback 127
+    sec: = (sys.mono_us() - t0) / 1000000I64
+    $why: U8[] = ""
+    if rc == 0 && g.verdict && !said_verdict(log, arena)
+        rc = 1
+        why = "no RESULT line"
+    $end: = Str_builder.new()
+    defer end.free()
+    end.s("\{rc\} \{sec\}\n")
+    io.write_file(ci_gates.end_path(g.log, arena), end.slice()) catch {}
+    if rc != 0
+        annotate(g.log, log, rc, why, arena)
+    return rc == 0
+
+priv fn said_verdict(log: U8[], arena: Arena$@): Bool //<
+    //< Whether the log holds the line a passing gate prints
+    text: = io.read_file(log) catch
+        return false
+    defer dealloc(Void$@::text.ptr)
+    for line in text.lines(arena)
+        if line.starts_with(verdict_line)
+            return true
+    return false
+
+priv fn annotate(name: U8[], log: U8[], rc: I32, why: U8[], arena: Arena$@) //<
+    //< One error mark per fallen gate on GitHub's page (a step keeps ten)
+    //<
+    //< The reason is the given one, else the log's first `FAIL ` line, else make's `*** [`.
+    if !sys.get_env("GITHUB_ACTIONS").is_some()
+        return
+    $reason: = why
+    text: = io.read_file(log) catch ""
+    if reason.len == 0
+        for line in text.lines(arena)
+            if line.starts_with("FAIL ")
+                reason = arena.dup_str(line)
+                break
+    if reason.len == 0
+        for line in text.lines(arena)
+            if line.find_str("*** [") >= 0
+                reason = arena.dup_str(line)
+                break
+    if text.len > 0
+        dealloc(Void$@::text.ptr)
+    if reason.len == 0
+        reason = arena.text().s("exit \{rc\}").take()
+    io.out().s("::error title=").s(name).s("::").s(reason).c('\n')
+
+priv fn print_digest(jobs: I64, arena: Arena$@) //< the gates that ran, on the screen
+    outs: = ci_gates.outcomes(arena)
+    $b: = Str_builder.new()
+    defer b.free()
+    ci_gates.digest_plain(outs@, jobs, b@)
+    io.out().s(b.slice())
+
+priv fn summary(title: U8[], jobs: I64, arena: Arena$@): I32 //<
+    //< The summary for the job's page, added to `$GITHUB_STEP_SUMMARY` (the screen when unset)
+    //<
+    //< Caution: **Return 0 with no log too, and say so**: the step runs after a fall, and the cause
+    //< is the step above.
+    outs: = ci_gates.outcomes(arena)
+    $b: = Str_builder.new()
+    defer b.free()
+    if outs.len == 0
+        b.s("no gate log: the round fell before a gate ran (the cause is the step above)\n")
+    else
+        ci_gates.digest_md(outs@, jobs, title, b@)
+    switch sys.get_env("GITHUB_STEP_SUMMARY") case .some(path)
+        // The file may hold an earlier step's lines; they stay.
+        had: = io.read_file(path) catch ""
+        $all: = Str_builder.new()
+        defer all.free()
+        all.s(had).s(b.slice())
+        if had.len > 0
+            dealloc(Void$@::had.ptr)
+        io.write_file(path, all.slice()) catch
+            io.err().s("ci: cannot write the summary to \{path\}\n")
+            return 1
+    case .none
+        io.out().s(b.slice())
+    return 0

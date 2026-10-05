@@ -18,8 +18,6 @@ import * as style from "./style.mjs";
 import * as span from "./span.mjs";
 import * as shape from "./shape.mjs";
 import * as edit from "./edit.mjs";
-import * as diff from "./diff.mjs";
-import * as source from "./source.mjs";
 
 const wasm = fs.readFileSync(process.argv[2]);
 
@@ -63,8 +61,8 @@ check(edge.w.kspage_web_selection_count() === 0, "with nothing chosen there are 
 // sample itself names `null`.
 const open = opener(wasm);
 // The key is the label (give it a separate writing and it drifts from the name being read).
-for (const [name, part] of Object.entries({ place, store, table, paper, style, span, shape, edit,
-  diff, source })) {
+for (const [name, part] of Object.entries({ place, store, table, paper, style, span, shape,
+  edit })) {
   inPart(name);
   console.log(`# ${part.subject}`);
   const ks = await open();

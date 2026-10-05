@@ -1,5 +1,5 @@
 // ==========================================
-// kspage's page — import and export in other formats: HTML, Markdown, CSV and constants, **separate
+// kspage's page — import and export in other formats: HTML, Markdown and CSV, **separate
 // from the reloadable save** (these texts hold no styles, so reading them back does not restore the
 // document: the header of [`inout.kspls`](inout.kspls)).
 // Caution: **Put nothing here that replaces the current document.** This file only downloads or
@@ -31,40 +31,6 @@ function kspageInout(ui) {
     }
     download(text, nameOf(".csv"), "text/csv", "Wrote it out as CSV");
   });
-  // Constant text from a table: **the one "document → source" direction** (the other three start
-  // from the source); with a link target whose text was passed in, it says whether that is stale.
-  // Caution: **Do not hide a refused row** — a row whose text cannot be a name is left out.
-  document.getElementById("export-consts").addEventListener("click", () => {
-    const got = app.consts(nameOf(""));
-    if (got === null) {
-      deny("Click inside a table");
-      app.focus();
-      return;
-    }
-    if (got.rows <= 0) {
-      deny("There is no row that can be a name (column 1 is the name, column 2 the value)");
-      app.focus();
-      return;
-    }
-    const stale = app.constsState(nameOf(""));
-    const rest = got.refused === 0 ? ""
-      : got.refused === 1 ? "(1 row cannot be a name, so it is not in)"
-        : `(${got.refused} rows cannot be names, so they are not in)`;
-    const age = stale === "stale" ? ". The text handed over is stale" : stale === "same" ? ". It is the same as the text handed over" : "";
-    // The file name gives the notation; `share/consts.kspls` writes the default one.
-    download(got.text, nameOf(".kspls"), "text/plain",
-      `Wrote ${got.rows} constants out${rest}${age}`);
-    app.focus();
-  });
-
-  // The link target of the table's text; **once set, the export can tell whether it is stale.**
-  const aimBox = document.getElementById("consts-aim");
-  document.getElementById("consts-aim-apply").addEventListener("click", () => {
-    tell(app.setAimHere(aimBox.value), aimBox.value === "" ? "Released the link target" : "Made it this table's target",
-      "Click inside a table, a slide or an image");
-    app.focus();
-  });
-
   const csvFile = document.getElementById("csv-file");
   document.getElementById("open-csv").addEventListener("click", () => csvFile.click());
   csvFile.addEventListener("change", () => {
@@ -79,8 +45,5 @@ function kspageInout(ui) {
       app.focus();
     });
   });
-  return {
-    // **The redraw notification copies it into the field** (otherwise it is stale across tables).
-    aimBox: aimBox,
-  };
+  return {};
 }

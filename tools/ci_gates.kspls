@@ -1,0 +1,283 @@
+//< The CI gates in one table: what each asks `make` for, which job runs it, and the summary
+//<
+//< **The table is the one place a gate is named.** `tools/ci.kspls` runs it, `make ci` and its
+//< siblings call that (`mk/ci.mk`), and `.github/workflows/ci.yml`'s matrices name the sets, held
+//< to `Set` by `tests/support/conventions_ci.kspls`. What each platform runs is said for people
+//< in "What each platform runs" in `docs/SPEC-gates.md`; change the two together.
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena, dealloc }
+import "std/str" + { Str_builder }
+import "std/strnum"
+
+enum Shard //< which job runs a gate on Linux and Windows
+    //<
+    //< **A shard's name is what `make ci-shard-<name>` and the workflow's matrix use.**
+    //< Caution: **A shard costs a job's start-up** (checkout, MSYS2, stage1: about a shard's work,
+    //< more on Windows), so measure before adding one ("Where CI's time goes" in `docs/DESIGN.md`).
+    core //< the first of the two jobs both platforms split `ci` into
+    rest //< the second
+    linux //< the Linux job alone: only its image holds the tool (`make ci-linux-only`)
+    none //< neither: macOS alone runs it (`Gate.macos`)
+
+enum Par //< how `make` is asked to run one gate's targets
+    serial //< one at a time
+    parallel //< `-j<jobs>`, the output as the targets write it
+    synced //<
+        //< `-j<jobs> --output-sync=target`: each target's output kept together
+        //<
+        //< Caution: **Never on a gate macOS runs.** Its `make` is 3.81, which has no
+        //< `--output-sync` and stops with exit 2 before running anything (`run_set` in
+        //< `tools/ci.kspls` refuses it).
+
+struct Gate //< one gate: what `make` is asked for, and where it runs
+    log: U8[] //< its log's name, `out/log/ci/<log>.log`
+    args: U8[] //< what `make` is given, the words parted by one space
+    par: Par //< whether `make` runs its targets side by side, and how their output is kept
+    verdict: Bool //<
+        //< It must also print `RESULT: ALL PASS`
+        //<
+        //< ("How a run is read" in `docs/SPEC-gates.md`). False for a gate that is several targets'
+        //< worth, where one line would speak for the rest; `make` failing still fails it.
+    shard: Shard
+    macos: Bool //< the macOS job runs it too
+
+// Caution: **The order is the order they run in**: a gate may use what one before it built (the
+// self-host builds stage2, which perf-log measures again). **Formatting comes before lint**: a
+// file that is not formatted fails the formatter's check with the reason, where lint would only
+// name a line.
+const gates: Gate[30] = ::{
+    Gate::{ .log = "selfhost", .args = "self-host", .par = Par.serial, .verdict = true,
+        .shard = Shard.core, .macos = true },
+    Gate::{ .log = "debug", .args = "debug", .par = Par.serial, .verdict = true,
+        .shard = Shard.rest, .macos = true },
+    Gate::{ .log = "fmt_tree", .args = "test-fmt-tree", .par = Par.serial, .verdict = true,
+        .shard = Shard.rest, .macos = false },
+    Gate::{ .log = "lint", .args = "lint", .par = Par.parallel, .verdict = true,
+        .shard = Shard.rest, .macos = true },
+    Gate::{ .log = "lint_cfg", .args = "lint-cfg", .par = Par.parallel, .verdict = true,
+        .shard = Shard.rest, .macos = false },
+    // **Only this `-j` shrinks the suites' time**, and the order they start in settles it (`SUITES`
+    // in `mk/test.mk`, longest first; the halves are cut at `SUITES_B` there). Caution: **keep
+    // `--output-sync=target`**, or one suite's `RESULT:` lines scatter among another's.
+    Gate::{ .log = "suites_a", .args = "test-suites-a", .par = Par.synced, .verdict = false,
+        .shard = Shard.core, .macos = false },
+    // The QEMU run covers the Cortex-M demos; the link check stays to notice a demo falling out of
+    // QEMU's list. **One make for both**, so stage1's check is paid once (no verdict: one log).
+    Gate::{ .log = "link_abi", .args = "test-ksos-link test-llvm-abi", .par = Par.synced,
+        .verdict = false, .shard = Shard.core, .macos = false },
+    Gate::{ .log = "fm", .args = "test-freestanding-math", .par = Par.serial, .verdict = true,
+        .shard = Shard.core, .macos = true },
+    Gate::{ .log = "simd", .args = "test-simd", .par = Par.serial, .verdict = true,
+        .shard = Shard.core, .macos = true },
+    // On a fall, remake the record with `make surface` and commit it with its diff.
+    Gate::{ .log = "surface", .args = "test-surface", .par = Par.serial, .verdict = true,
+        .shard = Shard.core, .macos = false },
+    // The tour is generated from its program; `make tour` remakes it.
+    Gate::{ .log = "docs", .args = "test-docs", .par = Par.serial, .verdict = true,
+        .shard = Shard.core, .macos = false },
+    Gate::{ .log = "suites_b", .args = "test-suites-b", .par = Par.synced, .verdict = false,
+        .shard = Shard.rest, .macos = false },
+    Gate::{ .log = "run", .args = "run", .par = Par.serial, .verdict = true, .shard = Shard.rest,
+        .macos = true },
+    Gate::{ .log = "selfhost_llvm", .args = "LLVM=1 self-host STATS=1", .par = Par.serial,
+        .verdict = true, .shard = Shard.rest, .macos = true },
+    // Caution: **Put the run-time tests through the LLVM backend too.** A self-host that passes
+    // does not tread a shape ksplc itself never uses, so a broken genllvm goes unseen. Windows runs
+    // it as well: only Win64 passes arguments on the stack, where a wrong argument type shows.
+    Gate::{ .log = "debug_llvm", .args = "LLVM=1 debug", .par = Par.serial, .verdict = true,
+        .shard = Shard.rest, .macos = true },
+    // Peak memory alone settles it; the time is only recorded (`tests/tools/perf_guard.kspls`).
+    Gate::{ .log = "perf", .args = "perf-log", .par = Par.serial, .verdict = false,
+        .shard = Shard.rest, .macos = false },
+    // macOS runs these of ksplc's own suites, which the jobs above reach through `suites_a`. It
+    // leaves out `perf` (the baseline is Linux's) and what is platform-independent; it keeps what
+    // meets Apple's toolchain only there (`fm`, `emit_runtime`).
+    Gate::{ .log = "lsp", .args = "test-lsp", .par = Par.serial, .verdict = true,
+        .shard = Shard.none, .macos = true },
+    Gate::{ .log = "negative", .args = "test-negative", .par = Par.serial, .verdict = true,
+        .shard = Shard.none, .macos = true },
+    Gate::{ .log = "equiv", .args = "test-equiv", .par = Par.serial, .verdict = true,
+        .shard = Shard.none, .macos = true },
+    Gate::{ .log = "emit_runtime", .args = "test-emit-runtime", .par = Par.serial, .verdict = true,
+        .shard = Shard.none, .macos = true },
+    // Each needs a tool only the devcontainer image holds: `<ucontext.h>`, `qemu-system-arm`, node,
+    // wasm-ld and a browser, `desktop-file-validate`, libopenblas, ThreadSanitizer. **A browser and
+    // the validator are required here** (`KSPAGE_REQUIRE_*`): the image bundles them, so their
+    // absence is a fault, not the place.
+    Gate::{ .log = "ksos_posix", .args = "test-ksos-posix", .par = Par.serial, .verdict = false,
+        .shard = Shard.linux, .macos = false },
+    Gate::{ .log = "ksos_qemu", .args = "test-ksos-qemu", .par = Par.serial, .verdict = false,
+        .shard = Shard.linux, .macos = false },
+    Gate::{ .log = "js_syntax", .args = "test-js-syntax", .par = Par.serial, .verdict = true,
+        .shard = Shard.linux, .macos = false },
+    Gate::{ .log = "kspage_wasm", .args = "test-kspage-wasm", .par = Par.serial, .verdict = true,
+        .shard = Shard.linux, .macos = false },
+    Gate::{ .log = "kspage_browser", .args = "test-kspage-browser KSPAGE_REQUIRE_BROWSER=1",
+        .par = Par.serial, .verdict = true, .shard = Shard.linux, .macos = false },
+    // No substitute for the `file://` gate above: one sees the page with a server, the other
+    // without.
+    Gate::{ .log = "kspage_served", .args = "test-kspage-served KSPAGE_REQUIRE_BROWSER=1",
+        .par = Par.serial, .verdict = true, .shard = Shard.linux, .macos = false },
+    Gate::{ .log = "kspage_desktop", .args = "test-kspage-desktop KSPAGE_REQUIRE_DESKTOP=1",
+        .par = Par.serial, .verdict = true, .shard = Shard.linux, .macos = false },
+    // Caution: **Build and run the BLAS backend for real.** `lint-cfg` reads its branch, but only
+    // a link shows whether the FFI is right.
+    Gate::{ .log = "debug_blas", .args = "BLAS=1 debug", .par = Par.serial, .verdict = true,
+        .shard = Shard.linux, .macos = false },
+    Gate::{ .log = "race", .args = "test-race", .par = Par.serial, .verdict = true,
+        .shard = Shard.linux, .macos = false },
+    // Needs no tool of the image's: it is here because Linux's minute costs least, and the release
+    // checks each platform's own (`.github/workflows/release.yml`). It pays one `-O2` build.
+    Gate::{ .log = "selfhost_ship", .args = "self-host-ship", .par = Par.serial, .verdict = true,
+        .shard = Shard.linux, .macos = false },
+}
+
+enum Set //< a set of gates one command runs, named as `make` names it
+    ci //< `make ci`: what Linux and Windows both run
+    ci_linux //< `make ci-linux`: that, then what Linux alone runs
+    ci_linux_only //< `make ci-linux-only`: what Linux alone runs
+    ci_macos //< `make ci-macos`
+    ci_shard_core //< `make ci-shard-core`
+    ci_shard_rest //< `make ci-shard-rest`
+
+const set_order: Set[6] = ::{ Set.ci, Set.ci_linux, Set.ci_linux_only, Set.ci_macos,
+    Set.ci_shard_core, Set.ci_shard_rest } //< every set, so a name can be read back
+
+fn set_from(name: U8[], arena: Arena$@): Option<|Set|> //< the set a name spells, if any
+    //<
+    //< **A name is the variant's with `_` written `-`** (`ci-shard-core`), so `make`, the workflow
+    //< and this table spell it one way.
+    for s in set_order
+        if s.variant_name().replace("_", "-", arena).equals(name)
+            return Option<|Set|>.some(s)
+    return Option<|Set|>.none
+
+impl Set
+    fn runs(s: Self, g: Gate): Bool //< whether this set runs that gate
+        shared: = g.shard == Shard.core || g.shard == Shard.rest
+        switch s case .ci
+            return shared
+        case .ci_linux
+            return shared || g.shard == Shard.linux
+        case .ci_linux_only
+            return g.shard == Shard.linux
+        case .ci_macos
+            return g.macos
+        case .ci_shard_core
+            return g.shard == Shard.core
+        case .ci_shard_rest
+            return g.shard == Shard.rest
+
+// ==========================================
+// What a run leaves, and the summary read back from it
+// **One gate leaves two files**: its log, and `<log>.end` holding its exit code and seconds, so a
+// later `make ci-summary` (another process, another workflow step) reads what this one saw.
+// ==========================================
+
+const log_dir: U8[] = "out/log/ci" //< where the gates' logs go
+const end_ext: U8[] = ".end" //< the file beside a log holding `<exit code> <seconds>`
+
+struct Outcome //< what one gate left
+    log: U8[]
+    ok: Bool
+    sec: I64
+    skips: List<|U8[]|> //< its lines carrying `SKIP`: passing silently by their own account
+
+fn log_path(log: U8[], arena: Arena$@): U8[] //< where a gate's log is
+    return arena.text().s(log_dir).c('/').s(log).s(".log").take()
+
+fn end_path(log: U8[], arena: Arena$@): U8[] //< where a gate's exit code and seconds are
+    return arena.text().s(log_dir).c('/').s(log).s(end_ext).take()
+
+fn outcomes(arena: Arena$@): List<|Outcome|> //< what the gates left, in the table's order
+    //<
+    //< **A gate with no log did not run** and is left out; one with a log and no `.end` was cut
+    //< short, and counts as fallen.
+    $out: = List<|Outcome|>.new(arena)
+    for g in gates
+        text: = io.read_file(log_path(g.log, arena)) catch
+            continue
+        held: = arena.dup_str(text)
+        dealloc(Void$@::text.ptr)
+        $ok: = false
+        $sec: I64 = 0I64
+        ended: = io.read_file(end_path(g.log, arena)) catch ""
+        if ended.len > 0
+            words: = arena.dup_str(ended).trim_spaces().split(' ', arena)
+            dealloc(Void$@::ended.ptr)
+            if words.len == 2
+                rc: = words.get(0).to_i64() catch 1I64
+                ok = rc == 0I64
+                sec = words.get(1).to_i64() catch 0I64
+        $skips: = List<|U8[]|>.new(arena)
+        for line in held.lines(arena)
+            if line.find_str("SKIP") >= 0
+                skips.push(line)
+        out.push(Outcome::{ .log = g.log, .ok = ok, .sec = sec, .skips = skips })
+    return out
+
+priv struct Tally //< the counts both summaries open or close with
+    failed: Sz
+    skipping: Sz //< gates with one SKIP line or more
+    sec: I64
+
+priv fn tally(outs: List<|Outcome|>@): Tally
+    $t: = Tally::{ .failed = 0, .skipping = 0, .sec = 0I64 }
+    for i in Range.asc(outs.len)
+        o: = outs.get(i)
+        if !o.ok
+            t.failed += 1
+        if o.skips.len > 0
+            t.skipping += 1
+        t.sec += o.sec
+    return t
+
+fn digest_plain(outs: List<|Outcome|>@, jobs: I64, b: Str_builder$@) //< for the screen
+    t: = tally(outs)
+    b.s("# the gates that ran (one carrying a SKIP line is passing silently by its own account)\n")
+    for i in Range.asc(outs.len)
+        o: = outs.get(i)
+        b.s("#   ").s(o.log)
+        for $k: Sz = o.log.len; k < 15; k += 1
+            b.c(' ')
+        b.s("PASS" if o.ok else "FAIL").s(" \{o.sec\}s\n")
+        for j in Range.asc(o.skips.len)
+            b.s("#     ").s(o.skips.get(j)).c('\n')
+    b
+        .s("# gates invoked: \{outs.len\} (\{t.failed\} FAIL, SKIP lines in \{t.skipping\}), gate \
+            seconds: \{t.sec\}, -j\{jobs\}\n")
+
+fn digest_md(outs: List<|Outcome|>@, jobs: I64, title: U8[], b: Str_builder$@) //<
+    //< For the job's summary page
+    //<
+    //< Caution: **No log body goes in**: near 1 MiB a summary fails without a word; the logs are
+    //< the round's artifacts.
+    t: = tally(outs)
+    b
+        .s("## \{title\} - \{outs.len - t.failed\} PASS / \{t.failed\} FAIL   (\{t.sec\}s, \
+            -j\{jobs\})\n\n")
+    b.s("| gate | verdict | sec |\n| :-- | :-- | --: |\n")
+    for i in Range.asc(outs.len)
+        o: = outs.get(i)
+        b.s("| ").s(o.log).s(" | ").s("PASS" if o.ok else "**FAIL**").s(" | \{o.sec\} |\n")
+    if t.skipping > 0
+        b.s("\nSKIP:\n\n")
+        for i in Range.asc(outs.len)
+            o: = outs.get(i)
+            if o.skips.len > 0
+                b.s("* `").s(o.log).s("`\n")
+    b.s("\na fallen gate's reason is in the per-gate log among the same round's artifacts, log-*\n")
+
+fn reset_logs(arena: Arena$@) //< removes what an earlier round left, so it is not counted again
+    //<
+    //< Caution: **Remove the suites' times too** (`out/log/suite/*.times`): `make test-suites`
+    //< counts every one it finds.
+    for dir in U8[][]::{ log_dir, "out/log/suite" }
+        names: = fs.read_dir(dir, arena) catch
+            continue
+        for name in names
+            if name.ends_with(".log") || name.ends_with(end_ext) || name.ends_with(".times")
+                fs.remove_path(fs.join(dir, name, arena)) catch {}

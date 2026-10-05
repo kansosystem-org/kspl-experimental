@@ -30,6 +30,12 @@ function kspageProbeStore(ks) {
   check(written.split("\n").length > 1,
     "the text saved is split into lines (" + written.split("\n").length + " lines)");
 
+  // **The file field shows what "Open" opens** (a browser without the picker chooses through it,
+  // and an extension left off hides the file until "all files" is picked).
+  const accepts = document.getElementById("file").accept.split(",");
+  const hidden = [".kspage", ".json", ".md", ".txt"].filter((ext) => accepts.indexOf(ext) < 0);
+  check(hidden.length === 0, "the file field offers every kind \"Open\" opens (" + hidden + ")");
+
   // Read only. **This can be seen nowhere else**: folding the tools and stopping the shortcut keys
   // are the DOM's side (it breaks as "it can be written to through the folded tools' gaps").
   //
@@ -285,8 +291,7 @@ function kspageProbeStore(ks) {
       // ---- A save still writing while the document in view changes ----
       //
       // Caution: **A save's place goes to the document it was made for.** With its write held back
-      // and the view changed meanwhile, a blank sheet made and shut restores the earlier place, and
-      // a document left in view must not take the file written.
+      // and a blank sheet made meanwhile, the blank sheet must not take the file written.
       let holding = "";
       let letGo = null;
       const passOn = child.fetch;
@@ -306,19 +311,10 @@ function kspageProbeStore(ks) {
         return until(() => saidThere(child, "Saved (" + path), "the held save");
       };
       const blank = () => child.document.getElementById("doc-new").click();
-      const cameBack = await heldSave("race-back.json", () => {
-        blank();
-        child.kspage.docShut(child.kspage.docNow());
-      });
-      check(cameBack && pathField().value === "race-back.json"
-        && child.kspage.pathNow() === "race-back.json",
-      "a save that finishes after a document came and went keeps its place ("
-        + pathField().value + ")");
       const stayed = await heldSave("race-away.json", blank);
       check(stayed && child.kspage.pathNow() === "" && pathField().value === "",
         "a document that came into view while it was written does not take the file ("
           + child.kspage.pathNow() + ")");
-      child.kspage.docShut(child.kspage.docNow());
       child.fetch = passOn;
     } finally {
       child.close();

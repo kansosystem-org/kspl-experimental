@@ -27,7 +27,7 @@ import "std/verdict"
 // Caution: **Write after waiting for the child to end.** Written sooner, the write succeeds, and
 // the check goes green having checked nothing.
 priv const dead_child_src: U8[] =
-  """import "std/io";
+    """import "std/io";
 import "std/str" { Str_builder };
 import "std/subproc";
 import "std/sys";
@@ -69,7 +69,7 @@ fn main(): I32 {
 // Caution: **Write more than the buffer.** An amount that fits is never flushed, so the probe
 // never gets the chance to notice the destination is gone.
 priv const loud_src: U8[] =
-  """import "std/io";
+    """import "std/io";
 import "std/sys";
 
 fn main() {
@@ -85,7 +85,7 @@ fn main() {
 
 // The probe printing the signals a started child ignores (Linux's `/proc/self/status`).
 priv const child_sig_src: U8[] =
-  """import "std/io";
+    """import "std/io";
 import "std/mem" { Arena };
 import "std/subproc";
 
@@ -99,94 +99,94 @@ fn main() {
 """
 
 priv const sigpipe_bit: U8[] = "1000" //< the mark for ignoring SIGPIPE (number 13)
-  //<
-  //< `SigIgn` in `/proc/<pid>/status` is 64 hex digits.
+    //<
+    //< `SigIgn` in `/proc/<pid>/status` is 64 hex digits.
 
 priv fn build(name: U8[], src: U8[], work: U8[], arena: Arena$@): U8[] //< it builds one probe
-  //<
-  //< If it cannot be built, it returns empty.
-  s_path: = fs.join(work, arena.text().s("\{name\}.kspl").take(), arena)
-  gen: = fs.join(work, arena.text().s("\{name\}.c").take(), arena)
-  exe: = fs.join(work, arena.text().s("\{name\}.exe").take(), arena)
-  io.write_file(s_path, src) catch
-    verdict.check(arena.text().s("\{name\}: the source can be written").take(), false, s_path)
-    return ""
-  c: = harness.ksplc(U8[][]::{ s_path, gen })
-  if c.code != 0
-    verdict.check(arena.text().s("\{name\}: it translates to C").take(), false, c.out)
-    return ""
-  b: = harness_build.build_exe(U8[][]::{ gen }, exe, U8[][]::{ "-std=c99", "-O0", "-w" })
-  if b.code != 0
-    verdict.check(arena.text().s("\{name\}: it builds").take(), false, b.out)
-    return ""
-  return exe
+    //<
+    //< If it cannot be built, it returns empty.
+    s_path: = fs.join(work, arena.text().s("\{name\}.kspl").take(), arena)
+    gen: = fs.join(work, arena.text().s("\{name\}.c").take(), arena)
+    exe: = fs.join(work, arena.text().s("\{name\}.exe").take(), arena)
+    io.write_file(s_path, src) catch
+        verdict.check(arena.text().s("\{name\}: the source can be written").take(), false, s_path)
+        return ""
+    c: = harness.ksplc(U8[][]::{ s_path, gen })
+    if c.code != 0
+        verdict.check(arena.text().s("\{name\}: it translates to C").take(), false, c.out)
+        return ""
+    b: = harness_build.build_exe(U8[][]::{ gen }, exe, U8[][]::{ "-std=c99", "-O0", "-w" })
+    if b.code != 0
+        verdict.check(arena.text().s("\{name\}: it builds").take(), false, b.out)
+        return ""
+    return exe
 
 priv fn check_dead_child(work: U8[], arena: Arena$@) //<
-  //< Checks that writing to a peer that has ended does not crash
-  exe: = build("deadchild", dead_child_src, work, arena)
-  if exe.len == 0
-    return
-  r: = harness.run(U8[][]::{ exe })
-  // Caution: **Check the exit status too.** With only the error checked, a crash **after the
-  // write** passes.
-  verdict.check("writing to a peer that has ended does not crash", r.code == 0,
-    arena.text().s("exit status \{r.code\} (141 = died by SIGPIPE) / output: \{r.out\}").take())
-  verdict.check("a write to a peer that has ended gets an error back",
-    r.out.find_str("REFUSED") >= 0, r.out)
+    //< Checks that writing to a peer that has ended does not crash
+    exe: = build("deadchild", dead_child_src, work, arena)
+    if exe.len == 0
+        return
+    r: = harness.run(U8[][]::{ exe })
+    // Caution: **Check the exit status too.** With only the error checked, a crash **after the
+    // write** passes.
+    verdict.check("writing to a peer that has ended does not crash", r.code == 0,
+        arena.text().s("exit status \{r.code\} (141 = died by SIGPIPE) / output: \{r.out\}").take())
+    verdict.check("a write to a peer that has ended gets an error back",
+        r.out.find_str("REFUSED") >= 0, r.out)
 
 priv fn check_head(work: U8[], arena: Arena$@) //<
-  //< checks that it ends quietly once the destination is gone
-  exe: = build("loud", loud_src, work, arena)
-  if exe.len == 0
-    return
-  // Caution: **Check the positive control first.** Without it, a run where the probe could write
-  // nothing looks like "it ended quietly".
-  full_mark: = fs.join(work, "full.txt", arena)
-  full: = harness.run(U8[][]::{ exe, full_mark })
-  verdict.check("with a counterpart connected it can write to the end",
-    full.code == 0 && fs.exists(full_mark),
-    arena.text().s("exit status \{full.code\}").take())
-  cut_mark: = fs.join(work, "cut.txt", arena)
-  // **Have the shell build the pipe**; the caller cannot connect stages itself.
-  piped: = harness
-    .run(U8[][]::{ "/bin/sh", "-c",
-    arena.text().s("'\{exe\}' '\{cut_mark\}' | head -1 > /dev/null").take() })
-  verdict.check("once the destination goes it ends without writing it all",
-    !fs.exists(cut_mark),
-    arena.text().s("the mark is left (it ran to the end). The shell's exit status \{piped.code\}")
-    .take())
+    //< checks that it ends quietly once the destination is gone
+    exe: = build("loud", loud_src, work, arena)
+    if exe.len == 0
+        return
+    // Caution: **Check the positive control first.** Without it, a run where the probe could write
+    // nothing looks like "it ended quietly".
+    full_mark: = fs.join(work, "full.txt", arena)
+    full: = harness.run(U8[][]::{ exe, full_mark })
+    verdict.check("with a counterpart connected it can write to the end",
+        full.code == 0 && fs.exists(full_mark),
+        arena.text().s("exit status \{full.code\}").take())
+    cut_mark: = fs.join(work, "cut.txt", arena)
+    // **Have the shell build the pipe**; the caller cannot connect stages itself.
+    piped: = harness
+        .run(U8[][]::{ "/bin/sh", "-c",
+        arena.text().s("'\{exe\}' '\{cut_mark\}' | head -1 > /dev/null").take() })
+    verdict.check("once the destination goes it ends without writing it all",
+        !fs.exists(cut_mark),
+        arena.text()
+        .s("the mark is left (it ran to the end). The shell's exit status \{piped.code\}").take())
 
 priv fn check_child_default(work: U8[], arena: Arena$@) //<
-  //< Checks that a started child keeps SIGPIPE's default
-  exe: = build("childsig", child_sig_src, work, arena)
-  if exe.len == 0
-    return
-  r: = harness.run(U8[][]::{ exe })
-  said: = r.out
-  if said.find_str("SigIgn:") < 0
-    verdict.skip_check("a started child holds SIGPIPE's default",
-      arena.text().s("it cannot be read from `/proc/self/status`: \{said\}").take())
-    return
-  // The bit for number 13 (0x1000) is not set in the lowest four digits.
-  tail: = said.sub(said.len - 5, 4) if said.len >= 5 else said
-  verdict.check("a started child holds SIGPIPE's default", !tail.equals(sigpipe_bit),
-    arena.text().s("the child inherits the ignoring: \{said\}").take())
+    //< Checks that a started child keeps SIGPIPE's default
+    exe: = build("childsig", child_sig_src, work, arena)
+    if exe.len == 0
+        return
+    r: = harness.run(U8[][]::{ exe })
+    said: = r.out
+    if said.find_str("SigIgn:") < 0
+        verdict.skip_check("a started child holds SIGPIPE's default",
+            arena.text().s("it cannot be read from `/proc/self/status`: \{said\}").take())
+        return
+    // The bit for number 13 (0x1000) is not set in the lowest four digits.
+    tail: = said.sub(said.len - 5, 4) if said.len >= 5 else said
+    verdict.check("a started child holds SIGPIPE's default", !tail.equals(sigpipe_bit),
+        arena.text().s("the child inherits the ignoring: \{said\}").take())
 
 fn main(): I32 //<
-  //< It runs the broken-pipe cases, skipping them on Windows
-  //<
-  //< Caution: **The suite's own process cannot test it** — the seed runs the suite, with the old
-  //< runtime it carries. **The test builds the current `ksplc`** (`harness_build`).
-  arena: = harness.begin(64 * 1024 * 1024)
-  // **On Windows there is nothing to test**: no SIGPIPE, and a write to a closed named pipe
-  // returns a failure (hosted.c's Windows branch).
-  if harness.cc_target().find_str("windows") >= 0 ||
-    harness.cc_target().find_str("mingw") >= 0
-    verdict.skip_check("writing when nobody is left to read it", "Windows has no SIGPIPE")
+    //< It runs the broken-pipe cases, skipping them on Windows
+    //<
+    //< Caution: **The suite's own process cannot test it** — the seed runs the suite, with the old
+    //< runtime it carries. **The test builds the current `ksplc`** (`harness_build`).
+    arena: = harness.begin(64 * 1024 * 1024)
+    // **On Windows there is nothing to test**: no SIGPIPE, and a write to a closed named pipe
+    // returns a failure (hosted.c's Windows branch).
+    if harness.cc_target().find_str("windows") >= 0 ||
+        harness.cc_target().find_str("mingw") >= 0
+        verdict.skip_check("writing when nobody is left to read it", "Windows has no SIGPIPE")
+        return harness.finish()
+    work: = harness.sandbox("brokenpipe") catch
+        return harness.fatal("cannot make a working directory")
+    check_dead_child(work, arena)
+    check_head(work, arena)
+    check_child_default(work, arena)
     return harness.finish()
-  work: = harness.sandbox("brokenpipe") catch
-    return harness.fatal("cannot make a working directory")
-  check_dead_child(work, arena)
-  check_head(work, arena)
-  check_child_default(work, arena)
-  return harness.finish()

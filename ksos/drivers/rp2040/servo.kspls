@@ -20,25 +20,25 @@ priv const duty_max_permille: U32 = 125 // 12.5% = 2.5ms / 20ms
 priv const angle_span: U32 = 180
 
 fn init(pin: U32) //< sets up one pin for a servo
-  //<
-  //< **The period is per slice**, shared with the slice's other channel.
-  pwm.init_pin(pin)
-  pwm.config_slice(pwm.slice_of(pin), board.servo_pwm_div_int, 0, board.servo_pwm_top)
+    //<
+    //< **The period is per slice**, shared with the slice's other channel.
+    pwm.init_pin(pin)
+    pwm.config_slice(pwm.slice_of(pin), board.servo_pwm_div_int, 0, board.servo_pwm_top)
 
 fn clamp_angle(angle: I32): U32 //< clamps an angle in degrees to the range of motion
-  //<
-  //< Caution: **Do not widen it.** Beyond its range of motion the mechanism collides with itself
-  //< (the range is `board.servo_angle_min` / `max`).
-  lo: = I32::board.servo_angle_min
-  hi: = I32::board.servo_angle_max
-  return U32::(lo if angle < lo else (hi if angle > hi else angle))
+    //<
+    //< Caution: **Do not widen it.** Beyond its range of motion the mechanism collides with itself
+    //< (the range is `board.servo_angle_min` / `max`).
+    lo: = I32::board.servo_angle_min
+    hi: = I32::board.servo_angle_max
+    return U32::(lo if angle < lo else (hi if angle > hi else angle))
 
 fn set_angle(pin: U32, angle: I32) //< sets an angle in degrees
-  //<
-  //< **An out-of-range angle is clamped first.**
-  a: = clamp_angle(angle)
-  span: = duty_max_permille - duty_min_permille
-  permille: = duty_min_permille + (a * span / angle_span)
-  // **Compute in parts per thousand**; in percent, 180 degrees get only 10 steps.
-  level: = (board.servo_pwm_top + 1) * permille / 1000
-  pwm.set_level(pin, level)
+    //<
+    //< **An out-of-range angle is clamped first.**
+    a: = clamp_angle(angle)
+    span: = duty_max_permille - duty_min_permille
+    permille: = duty_min_permille + (a * span / angle_span)
+    // **Compute in parts per thousand**; in percent, 180 degrees get only 10 steps.
+    level: = (board.servo_pwm_top + 1) * permille / 1000
+    pwm.set_level(pin, level)

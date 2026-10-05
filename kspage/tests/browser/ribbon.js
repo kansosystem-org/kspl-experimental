@@ -1,11 +1,11 @@
-// The tools' height, the ribbon's sets, the tidings band and the right list, and the themes.
+// The tools' height, the ribbon's sets, the tidings band and the right list, and the look.
 
 function kspageProbeRibbon(ks) {
   const { check, app, canvas, ime, spot, press, pressAt, keyIn, openMenu, findCell } = ks;
 
-  // 28''. That the tools at the top eat no height, can be folded, and can be chosen.
+  // 28''. That the tools at the top eat no height, and can be folded.
   //
-  // **This can be seen nowhere else**: the height, the folding and the choosing are the DOM's side
+  // **This can be seen nowhere else**: the height and the folding are the DOM's side
   // (it breaks as "two thirds of the window is all that is seen of the body"). **Lay a cap down.**
   // Every row added shaves the body's width, so it is made to fall once they grow.
   const chromeBox = document.getElementById("chrome");
@@ -26,47 +26,22 @@ function kspageProbeRibbon(ks) {
     "folding it takes the height down (" + chromeTall() + " < " + wasTall + ")");
   document.getElementById("fold-ribbon").click();
   check(!ribbonBox.hidden && chromeTall() === wasTall, "pressing again puts it back");
-  // The names can be deleted (pictures alone). **The default is to put them out** (a picture's
-  // meaning must be remembered).
-  const labelBox = document.getElementById("show-labels");
-  check(labelBox.checked, "the names are out by default");
-  const labelWide = () =>
-    document.querySelector("#ribbon .label").getBoundingClientRect().width;
-  check(labelWide() > 0, "the names have a width");
-  labelBox.checked = false;
-  labelBox.dispatchEvent(new Event("change", { bubbles: true }));
-  check(labelWide() === 0, "the names can be deleted");
-  check(chromeTall() <= chromeCap,
-    "deleted, it is within the cap (" + chromeTall() + ")");
-  labelBox.checked = true;
-  labelBox.dispatchEvent(new Event("change", { bubbles: true }));
-  // The tools put out can be chosen. **A way back must be there too.**
-  const picksMenu = document.getElementById("tool-picks");
-  const firstPick = picksMenu.querySelector("input[type=\"checkbox\"]");
-  check(firstPick !== null, "the list of tools lines up");
-  // Caution: **Count inside the `…` too.** A set that does not fit falls in there, so counting the
-  // ribbon alone goes wrong once taking one off lets the whole set fit (it falls on a narrow screen
-  // alone).
-  const toolCount = () =>
-    document.querySelectorAll("#ribbon [id^=\"tool-\"], #spill [id^=\"tool-\"]").length;
-  // Caution: **A name must be one to one.** Give two tools the same name and taking one off deletes
-  // the other too; several places get one by name.
+  // **The ribbon is the same on every screen**: no tool is chosen, hidden, moved or stripped of
+  // its name by the viewer, so the ⚙ panel holds no place for it, and a tool's name is out.
+  for (const id of ["tool-picks", "show-labels", "tool-find", "tools-reset"]) {
+    check(document.getElementById(id) === null, "there is no ribbon setting " + id);
+  }
+  check(document.querySelector("#ribbon .label").getBoundingClientRect().width > 0,
+    "the tools' names are out");
+  // Caution: **A name must be one to one.** Several places get a tool by its name.
   const twice = [];
   const seenIds = new Set();
-  for (const one of document.querySelectorAll("#tool-picks input[data-tool]")) {
-    if (seenIds.has(one.dataset.tool)) twice.push(one.dataset.tool);
-    seenIds.add(one.dataset.tool);
+  for (const one of document.querySelectorAll("#ribbon [id^=\"tool-\"]")) {
+    if (seenIds.has(one.id)) twice.push(one.id);
+    seenIds.add(one.id);
   }
   check(twice.length === 0,
     "the tools' names are one to one (" + twice.join(" / ") + ")");
-  const beforePicks = toolCount();
-  firstPick.checked = false;
-  firstPick.dispatchEvent(new Event("change", { bubbles: true }));
-  check(toolCount() === beforePicks - 1,
-    "a tool taken off vanishes from the ribbon ("
-      + beforePicks + " -> " + toolCount() + ")");
-  document.getElementById("tools-reset").click();
-  check(toolCount() === beforePicks, "putting the defaults back returns it");
 
   // 28'''. That a set which does not fit falls into the `…`.
   //
@@ -522,46 +497,6 @@ function kspageProbeRibbon(ks) {
   check(Math.abs(canvas.getBoundingClientRect().width - wasWide) < 2,
     "the body's width comes back");
 
-  // Sorting the tools. **Remember it** (do not make them sort afresh every time). The settings are
-  // split by heading and can be narrowed; **do not line them up flat** (the field wanted cannot be
-  // found). **It must be the same word as the thing set** (the ribbon set's name is the heading).
-  const picksHeads = Array.from(document.querySelectorAll("#tool-picks h4"))
-    .map((one) => one.textContent);
-  check(picksHeads.length >= 4,
-    "the list of settings carries a heading per set (" + picksHeads.length + ")");
-  check(picksHeads.includes("Shapes"),
-    "the headings are the same names as the ribbon's sets");
-  const findTools = document.getElementById("tool-find");
-  const allTools = document.querySelectorAll("#tool-picks label").length;
-  findTools.value = "Shape";
-  findTools.dispatchEvent(new Event("input", { bubbles: true }));
-  const someTools = document.querySelectorAll("#tool-picks label").length;
-  check(someTools > 0 && someTools < allTools,
-    "narrowed, the tools that landed alone remain ("
-      + allTools + " -> " + someTools + ")");
-  findTools.value = "";
-  findTools.dispatchEvent(new Event("input", { bubbles: true }));
-  check(document.querySelectorAll("#tool-picks label").length === allTools,
-    "emptying it puts it back");
-  const liftKey = document.querySelector("#tool-picks .lift");
-  check(liftKey !== null, "the hand that sorts is there");
-  if (liftKey) {
-    const order = () => Array.from(document.querySelectorAll("#ribbon button"))
-      .map((one) => one.id).join(",");
-    const was = order();
-    // The first cannot be moved forward (it is the edge). It presses the second's ▲.
-    const keys = document.querySelectorAll("#tool-picks label");
-    const second = keys.length > 1 ? keys[1].querySelector(".lift") : null;
-    if (second) {
-      second.click();
-      check(order() !== was, "sorting changes the ribbon's row");
-      let kept = null;
-      try { kept = localStorage.getItem("kspage.tools"); } catch (_) { kept = null; }
-      check(kept !== null && kept.indexOf("order") >= 0, "the row is remembered");
-    }
-    document.getElementById("tools-reset").click();
-  }
-
   // The document's name. **It is not the document's content** (it is the name of the file saved).
   const docNameBox = document.getElementById("doc-name");
   check(docNameBox !== null && docNameBox.closest("#bar") !== null,
@@ -574,122 +509,24 @@ function kspageProbeRibbon(ks) {
     check(keptName === "work", "the name is remembered (" + keptName + ")");
   }
 
-  // Columns. **What holds the count of columns is a style** (no invisible mark such as a section
-  // break). **It is not put out by default**, so it is put out first.
-  const columnTick = document.querySelector("#tool-picks input[data-tool=\"tool-columns\"]");
-  check(columnTick !== null, "the columns tool can be put out");
-  if (columnTick) {
-    columnTick.checked = true;
-    columnTick.dispatchEvent(new Event("change", { bubbles: true }));
-  }
-  press(20, 20);
-  const columnKey = document.getElementById("tool-columns");
-  check(columnKey !== null, "put out, the columns tool is in the ribbon");
-  if (columnKey) {
-    const faceName = app.blockStyle();
-    const spotAt = app.styleNames().indexOf(faceName);
-    columnKey.click();
-    const after = spotAt >= 0 ? app.stylePara(spotAt).columns : 0;
-    check(spotAt < 0 || after === 2,
-      "a press makes the style now two columns (" + after + ")");
-    columnKey.click();
-    const back = spotAt >= 0 ? app.stylePara(spotAt).columns : 0;
-    check(spotAt < 0 || back === 0, "pressing again puts it back (" + back + ")");
-  }
-
-  // 28'''. The look's themes.
+  // 28'''. The look.
   //
-  // **This can be seen nowhere else**: whether swapping the roles (CSS variables) reaches both the
-  // screen and the canvas (it breaks as "the page alone changes colour, the selection stays the
-  // earlier colour").
+  // **This can be seen nowhere else**: the roles (CSS variables) hold colours, and **the look is
+  // one**: no other palette and no other packing of the tools is offered, so the root carries no
+  // mark for either.
   const root = document.documentElement;
   const roleOf = (name) => getComputedStyle(root).getPropertyValue(name).trim();
-  // **Follow it in the same order as a person** (press the row to open it, then press the choice);
-  // it is a `fly.js` row, not a `<select>`.
-  const themeFly = document.getElementById("look-theme");
-  check(themeFly !== null, "the row that chooses a theme is there");
-  if (themeFly) {
-    const plainAccent = roleOf("--accent");
-    const plainField = roleOf("--field");
-    check(plainAccent.length > 0,
-      "the roles hold colours even bare (" + plainAccent + ")");
-    check(ks.flyPick("look-theme", "Ink (a dark ground and amber)"),
-      "the Ink theme can be chosen");
-    check(root.dataset.theme === "Ink", "the theme chosen becomes the root's mark");
-    // **It must come out on the shut row too** (what is landed must be readable).
-    check(ks.flyNow("look-theme") === "Ink (a dark ground and amber)",
-      "the theme now comes out to the shut row's right (" + ks.flyNow("look-theme") + ")");
-    check(ks.flyTick("look-theme") === "Ink (a dark ground and amber)",
-      "Ink in the list gets the mark");
-    const darkAccent = roleOf("--accent");
-    check(darkAccent !== plainAccent, "the role's colour swaps (" + darkAccent + ")");
-    check(roleOf("--field") !== plainField, "the ground's colour swaps too");
-    // The canvas reads the same roles. **A selection colour that does not follow is leaking out of
-    // the theme** (a colour written straight into the canvas). **Choose by key** (the entry point
-    // that chooses is on the key's side alone).
-    ime.dispatchEvent(new KeyboardEvent("keydown",
-      { key: "a", ctrlKey: true, bubbles: true, cancelable: true }));
-    const inkOf = (want) => {
-      const g = canvas.getContext("2d");
-      const p = g.getImageData(0, 0, canvas.width, Math.min(canvas.height, 400)).data;
-      let n = 0;
-      for (let i = 0; i < p.length; i += 4) {
-        if (Math.abs(p[i] - want[0]) < 24 && Math.abs(p[i + 1] - want[1]) < 24 &&
-          Math.abs(p[i + 2] - want[2]) < 24) n += 1;
-      }
-      return n;
-    };
-    // Ink's emphasis is #ff9f0a.
-    // Caution: **Look at it by pixels rather than text** (the colour drawn is the answer).
-    check(inkOf([255, 159, 10]) > 100,
-      "the selection is painted in the theme's emphasis colour ("
-        + inkOf([255, 159, 10]) + " pixels)");
-    // Remembering it. **It must not fall where it cannot remember** (it is read inside a guard).
-    let keptTheme = null;
-    try { keptTheme = localStorage.getItem("kspage.theme"); } catch (_) { keptTheme = null; }
-    check(keptTheme === "Ink", "the theme chosen is remembered (" + keptTheme + ")");
-    check(ks.flyPick("look-theme", "Standard (fits the screen)"),
-      "it can go back to Standard");
-    check(root.dataset.theme === undefined,
-      "going back to Standard takes the mark off with it");
-    check(roleOf("--accent") === plainAccent, "the roles come back too");
-  }
+  check(roleOf("--accent").length > 0, "the roles hold colours (" + roleOf("--accent") + ")");
+  check(document.getElementById("look-theme") === null
+    && document.getElementById("look-dense") === null,
+    "there is no row choosing a palette or how tightly the tools pack");
+  check(root.dataset.theme === undefined && root.dataset.dense === undefined,
+    "the root carries no palette's or packing's mark");
   // The document's slide is a colour apart from the ground: **it shows where the document runs,
   // with no line.**
   check(getComputedStyle(canvas).backgroundColor !== "rgba(0, 0, 0, 0)",
     "the document's slide carries a colour ("
       + getComputedStyle(canvas).backgroundColor + ")");
-
-  // 28''''. How tightly the tools pack.
-  //
-  // **This can be seen nowhere else**: how much height goes is the adornment's (it breaks as
-  // "choose it and nothing changes").
-  // Caution: **It must not land on the body.** Landed, the same document wraps in different places
-  // per machine.
-  const denseFly = document.getElementById("look-dense");
-  check(denseFly !== null, "the row that chooses how tightly it packs is there");
-  if (denseFly) {
-    const wasChrome = chromeTall();
-    const wasWide = Math.round(canvas.getBoundingClientRect().width);
-    check(ks.flyPick("look-dense", "Tight (a wider body)"), "Tight can be chosen");
-    check(root.dataset.dense === "Tight",
-      "the packing chosen becomes the root's mark");
-    check(chromeTall() < wasChrome,
-      "packing it takes the tools' height down (" + wasChrome + " -> " +
-      chromeTall() + ")");
-    check(Math.round(canvas.getBoundingClientRect().width) === wasWide,
-      "the body's width does not change (" + wasWide + ")");
-    check(ks.flyPick("look-dense", "Roomy (for touch)"), "Roomy can be chosen");
-    check(chromeTall() > wasChrome,
-      "loosening it grows the height (" + chromeTall() + ")");
-    let keptDense = null;
-    try { keptDense = localStorage.getItem("kspage.dense"); } catch (_) { keptDense = null; }
-    check(keptDense === "Roomy",
-      "the packing chosen is remembered (" + keptDense + ")");
-    check(ks.flyPick("look-dense", "Standard"), "it can go back to Standard");
-    check(root.dataset.dense === undefined && chromeTall() === wasChrome,
-      "going back to Standard takes the mark off with it and returns the height");
-  }
 
   // 28-e. Putting the right list out, and folding it.
   //
@@ -785,18 +622,6 @@ function kspageProbeRibbon(ks) {
     check(Math.round(sideBox.getBoundingClientRect().width) === 216,
       `a second press goes back to the default `
         + `(${Math.round(sideBox.getBoundingClientRect().width)})`);
-    // **The split view must not cover the panel.** It sits in front of the status bar, so laid to
-    // the right edge it hides the list's lower part (winding up does not bring it out). The panel's
-    // width changes, so unlooked at here it becomes "the wider it goes the more is hidden".
-    const peekBand = document.getElementById("peek");
-    document.getElementById("peek-flip").click();
-    check(!peekBand.hidden, "the split view opens");
-    check(peekBand.getBoundingClientRect().right
-      <= sideBox.getBoundingClientRect().left + 1,
-      `the split view does not cover the list's panel `
-      + `(split view ${Math.round(peekBand.getBoundingClientRect().right)}`
-      + ` / panel ${Math.round(sideBox.getBoundingClientRect().left)})`);
-    document.getElementById("peek-flip").click();
     // **Fold the panel and the boundary must fold too** (else a band stands alone where no panel
     // is).
     sideKey.click();

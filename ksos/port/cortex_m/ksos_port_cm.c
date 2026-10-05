@@ -56,10 +56,17 @@ void* ksos_port_ctx_create_main(void) {
 
 // Saves from and switches to to. The body is PendSV. In thread mode pend plus isb switches at
 // once, and from handler mode (SysTick and the like) it is tail-chained after that handler returns.
+// While a switch is still pending, the thread running is the pending switch's from, not the from
+// handed in (the kernel already counts the pending switch's to as current), so only to changes.
+// It happens when a second schedule() comes before PendSV runs: an interrupt handler giving
+// between another handler's schedule() and PendSV.
 void ksos_port_switch(void* from, void* to) {
-    g_pendsv_from = (ksos_ctx*)from;
+    volatile uint32_t* icsr = (volatile uint32_t*)0xE000ED04u; // SCB->ICSR
+    if ((*icsr & (1u << 28)) == 0u) { // PENDSVSET reads 1 while PendSV is pending
+        g_pendsv_from = (ksos_ctx*)from;
+    }
     g_pendsv_to = (ksos_ctx*)to;
-    * (volatile uint32_t*)0xE000ED04u = (1u << 28); // SCB->ICSR: PENDSVSET
+    *icsr = (1u << 28); // PENDSVSET
     __asm__ volatile("dsb; isb");
 }
 

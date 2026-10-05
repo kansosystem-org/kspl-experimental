@@ -29,50 +29,51 @@ $stack_ai: U8[8192]
 $stack_monitor: U8[4096]
 
 fn control_task(_arg: Void$@): Void
-  for
-    now: = task.current_tick()
-    if g_control_runs > 0
-      delta: = now - g_control_prev_tick
-      jitter: = (delta - control_period) if delta > control_period else (control_period - delta)
-      if jitter > g_control_max_jitter
-        g_control_max_jitter = jitter
-    g_control_prev_tick = now
-    g_control_runs += 1
-    Task.delay(control_period)
+    for
+        now: = task.current_tick()
+        if g_control_runs > 0
+            delta: = now - g_control_prev_tick
+            jitter: =
+                (delta - control_period) if delta > control_period else (control_period - delta)
+            if jitter > g_control_max_jitter
+                g_control_max_jitter = jitter
+        g_control_prev_tick = now
+        g_control_runs += 1
+        Task.delay(control_period)
 fn ai_task(_arg: Void$@): Void //< a continuous inference loop that never yields
-  //<
-  //< It is priority 1 (the lowest), so it is pre-empted whenever the priority-2 control_task
-  //< wakes.
-  $arena: = Arena.from_buffer(Void$@::ai_storage@, sizeof(Sz) * 8192)
-  $emb: = nn.Embedding<|F32|>.new(4, 4, arena@)
-  $blk: = nn.Transformer_block<|F32|>.new(4, 8, 4, F32::1.0e-5, arena@)
-  $lm_head: = nn.Linear<|F32|>.new(4, 4, arena@)
-  for
-    mark: = arena.save() // reset the temporary tensors each iteration, reusing the static buffer
-    h0: = emb.forward(0, arena@)
-    h1: = blk.forward(h0, 0)
-    _logits: = lm_head.forward(h1) // the point is the inference load; the value is not used
-    arena.restore(mark)
-    g_ai_iters += 1
+    //<
+    //< It is priority 1 (the lowest), so it is pre-empted whenever the priority-2 control_task
+    //< wakes.
+    $arena: = Arena.from_buffer(Void$@::ai_storage@, sizeof(Sz) * 8192)
+    $emb: = nn.Embedding<|F32|>.new(4, 4, arena@)
+    $blk: = nn.Transformer_block<|F32|>.new(4, 8, 4, F32::1.0e-5, arena@)
+    $lm_head: = nn.Linear<|F32|>.new(4, 4, arena@)
+    for
+        mark: = arena.save() // reset the temporary tensors each iteration, reusing the static buffer
+        h0: = emb.forward(0, arena@)
+        h1: = blk.forward(h0, 0)
+        _logits: = lm_head.forward(h1) // the point is the inference load; the value is not used
+        arena.restore(mark)
+        g_ai_iters += 1
 
 fn monitor(_arg: Void$@): Void
-  Task.delay(monitor_wait)
-  con.puts("=== Kanso OS (Cortex-M) control loop with AI inference ===\n")
-  con.out()
-    .s("[monitor] control_runs=\{g_control_runs\} max_jitter=\{g_control_max_jitter\} \
-      ai_iters=\{g_ai_iters\}\n")
+    Task.delay(monitor_wait)
+    con.puts("=== Kanso OS (Cortex-M) control loop with AI inference ===\n")
+    con.out()
+        .s("[monitor] control_runs=\{g_control_runs\} max_jitter=\{g_control_max_jitter\} \
+            ai_iters=\{g_ai_iters\}\n")
 
-  con.check("control_loop_keeps_its_period",
-    g_control_max_jitter == 0 && g_control_runs > 10 && g_ai_iters > 10)
-  con.print_summary("done")
-  con.exit()
+    con.check("control_loop_keeps_its_period",
+        g_control_max_jitter == 0 && g_control_runs > 10 && g_ai_iters > 10)
+    con.print_summary("done")
+    con.exit()
 // The bare-metal entry, called on the PSP from startup.S.
 #export
 fn ksos_main()
-  panic_hook = con.on_panic
-  tcb_control.create(U8$[]::stack_control, control_task, null, 2, "control")
-  tcb_ai.create(U8$[]::stack_ai, ai_task, null, 1, "ai")
-  tcb_monitor.create(U8$[]::stack_monitor, monitor, null, 3, "monitor")
-  task.enable_preemption(50000)
-  task.start_scheduler()
-  for {}
+    panic_hook = con.on_panic
+    tcb_control.create(U8$[]::stack_control, control_task, null, 2, "control")
+    tcb_ai.create(U8$[]::stack_ai, ai_task, null, 1, "ai")
+    tcb_monitor.create(U8$[]::stack_monitor, monitor, null, 3, "monitor")
+    task.enable_preemption(50000)
+    task.start_scheduler()
+    for {}

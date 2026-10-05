@@ -5,9 +5,9 @@
 // connects the menu's buttons to the core's entry points, as [`file.js`](file.js) does for files,
 // [`form.js`](form.js) for styles and [`paper.js`](paper.js) for paper.
 // Caution: **Route every click result through one path** (`ui.putButton` / `ui.lineButton`);
-// wired directly, the focus return and the refusal color would be missing here alone. **Adding
-// a connector and removing a frame act only inside a slide** (the menu says so); a shape goes to
-// the container the click landed in, so over the body too.
+// wired directly, the focus return and the refusal color would be missing here alone. **Removing
+// a frame acts only inside a slide** (the menu says so); a shape goes to the container the click
+// landed in, so over the body too.
 // ==========================================
 function kspageCommand(ui) {
   const app = ui.app;
@@ -139,39 +139,12 @@ function kspageCommand(ui) {
 
   // Inserting an image from a local file, **for those who can insert one only here** (the URL field
   // alone would mean building the data: text yourself); cleared so the same file fires `change`
-  // again, and the natural size is read. **Two forms, no choice** (`file.js`'s rule): with the
-  // local server and the document's path set it is saved beside the document and referenced by
-  // path, otherwise embedded; which one it became is reported.
+  // again, and the natural size is read. **It is always embedded**, with the local server or
+  // without: one press does one thing. A picture to be pointed at by place is typed into the URL
+  // field, which references what it is given.
   // **Report the embedded size** (base64 is 4/3), or a few photos silently reach the opening cap.
   const imageFile = document.getElementById("image-file");
   document.getElementById("pick-image").addEventListener("click", () => imageFile.click());
-  // The same folder as the document (`docs/` for `docs/notes.kspage`).
-  // Caution: **Do not create a folder** — the server's write entry point creates none (a person
-  // decides folders), and a folder per document would need one (Principle 1). **The path is
-  // relative to the served folder**, the same basis as the document's path (with two bases only the
-  // images would stop showing).
-  const folderOf = (path) => {
-    const cut = path.lastIndexOf("/");
-    return cut < 0 ? "" : path.slice(0, cut + 1);
-  };
-  // Saves it on the local server and references it by path, returning the path, or null (with the
-  // reason shown).
-  // Caution: **Do not silently overwrite what is there** — the chosen file's name can clash with
-  // another image, so on a clash it names it and refuses.
-  const putBeside = async (chosen) => {
-    const to = folderOf(ui.docPath()) + chosen.name;
-    if (await ui.localStat(to)) {
-      deny("An image of the same name is already there (" + to + "). Change the name and then insert it");
-      return null;
-    }
-    const bytes = new Uint8Array(await chosen.arrayBuffer());
-    const stopped = await ui.localWrite(to, bytes);
-    if (stopped) {
-      deny("The image could not be placed (" + to + ": " + stopped + ")");
-      return null;
-    }
-    return to;
-  };
   // Reads it into data: text, **once the asynchronous read is finished.**
   const asEmbedded = (chosen) => new Promise((done) => {
     const read = new FileReader();
@@ -185,19 +158,11 @@ function kspageCommand(ui) {
     takeImage(chosen);
   });
   // Inserts one image into the document.
-  // **Do not write it per case** — picking and dropping share this function, so neither embeds
-  // where the other saves beside the document.
+  // **Do not write it per case** — picking and dropping share this function, so both go in by the
+  // same shape.
   async function takeImage(chosen) {
     if (!chosen) return;
-    // Where the path is not set it embeds the image.
-    const beside = ui.localHere() && ui.docPath() !== ""
-      ? await putBeside(chosen)
-      : null;
-    if (beside === null && ui.localHere() && ui.docPath() !== "") {
-      app.focus();   // `putBeside` has already reported what happened
-      return;
-    }
-    const src = beside !== null ? beside : await asEmbedded(chosen);
+    const src = await asEmbedded(chosen);
     if (src === "") {
       deny("This file cannot be read");
       app.focus();
@@ -212,8 +177,6 @@ function kspageCommand(ui) {
     const put = app.insertImage(src, size[0], size[1]);
     if (!put) {
       deny("It cannot be inserted inside a table's cell");
-    } else if (beside !== null) {
-      say("Inserted the image (it refers to " + beside + ". Only the place goes into the document)");
     } else {
       say("Inserted the image (embedded " + Math.round(src.length / 1024) + " KB into the document)");
     }

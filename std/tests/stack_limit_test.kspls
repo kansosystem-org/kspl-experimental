@@ -1,4 +1,8 @@
+import "std/json"
+import "std/mem" { Arena }
+import "std/regex" { Regex }
 import "std/stack_limit" { Stack_limit }
+import "std/str" { Str_builder }
 import "std/thread"
 import "std/verdict"
 
@@ -10,44 +14,136 @@ import "std/verdict"
 priv const test_margin: Sz = 64 * 1024 //< the room kept spare below where the walk stops
 
 priv fn dig( //< how many levels deeper it goes before the limit comes near
-  limit: Stack_limit@, //< where it stops
-  levels: Sz, //< the current depth
-  above: U8$[], //< a buffer of the level above, which this level writes
+    limit: Stack_limit@, //< where it stops
+    levels: Sz, //< the current depth
+    above: U8$[], //< a buffer of the level above, which this level writes
 ): Sz
-  // Caution: **The level above passes its buffer down and reads it after the call**, so the call
-  // is never the last thing a level does. No compiler can then turn the walk into a loop that uses
-  // no stack.
-  $pad: U8[64] = ::{}
-  above[0] = U8::(levels & 1)
-  if limit.near()
-    return levels
-  deepest: = dig(limit, levels + 1, U8$[]::pad)
-  return deepest if pad[0] <= 1U8 else -1
+    // Caution: **The level above passes its buffer down and reads it after the call**, so the call
+    // is never the last thing a level does. No compiler can then turn the walk into a loop that
+    // uses no stack.
+    $pad: U8[64] = ::{}
+    above[0] = U8::(levels & 1)
+    if limit.near()
+        return levels
+    deepest: = dig(limit, levels + 1, U8$[]::pad)
+    return deepest if pad[0] <= 1U8 else -1
 
 // **The walk must go deep.** A floor read too high stops the walk at once: it does not crash, but
 // it refuses depth the stack could hold.
 priv const floor_levels: Sz = 1000 //< the walk must get at least this deep
 
 fn test_stack_limit_on_main()
-  verdict.start("[Stack] a walk that looks stops before the main thread's stack runs out...")
-  limit: = Stack_limit.new(test_margin)
-  assert(!limit.near(), "at a test's head the stack is not near its end")
-  $seed: U8[1] = ::{}
-  levels: = dig(limit@, 0, U8$[]::seed)
-  assert(levels > floor_levels, "the walk goes deeper than a thousand levels before it stops")
-  verdict.pass("")
+    verdict.start("[Stack] a walk that looks stops before the main thread's stack runs out...")
+    limit: = Stack_limit.new(test_margin)
+    assert(!limit.near(), "at a test's head the stack is not near its end")
+    $seed: U8[1] = ::{}
+    levels: = dig(limit@, 0, U8$[]::seed)
+    assert(levels > floor_levels, "the walk goes deeper than a thousand levels before it stops")
+    verdict.pass("")
 
 #export
 fn stack_test_walk(arg: Sz$@): Void$@
-  limit: = Stack_limit.new(test_margin)
-  $seed: U8[1] = ::{}
-  arg$ = dig(limit@, 0, U8$[]::seed)
-  return null
+    limit: = Stack_limit.new(test_margin)
+    $seed: U8[1] = ::{}
+    arg$ = dig(limit@, 0, U8$[]::seed)
+    return null
 
 fn test_stack_limit_on_a_thread()
-  verdict.start("[Stack] a walk that looks stops before a thread's own stack runs out...")
-  $levels: Sz = 0
-  t: = thread.Thread.spawn<|Sz|>(stack_test_walk, levels@) catch panic("thread spawn failed")
-  t.join_and_free()
-  assert(levels > floor_levels, "on a thread too the walk goes deeper than a thousand levels")
-  verdict.pass("")
+    verdict.start("[Stack] a walk that looks stops before a thread's own stack runs out...")
+    $levels: Sz = 0
+    t: = thread.Thread.spawn<|Sz|>(stack_test_walk, levels@) catch panic("thread spawn failed")
+    t.join_and_free()
+    assert(levels > floor_levels, "on a thread too the walk goes deeper than a thousand levels")
+    verdict.pass("")
+
+// **The floor must be the stack's real end**, not where its reservation starts: Windows keeps the
+// bottom back (16KB on 64 bits), so a margin smaller than that walks into it on a floor read from
+// the bounds alone.
+priv const close_margin: Sz = 4 * 1024 //< a margin smaller than the pages Windows keeps back
+
+fn test_stack_limit_close_to_the_end()
+    verdict.start("[Stack] a walk with a margin of a page stops before the stack's real end...")
+    limit: = Stack_limit.new(close_margin)
+    $seed: U8[1] = ::{}
+    levels: = dig(limit@, 0, U8$[]::seed)
+    assert(levels > floor_levels, "a small margin still lets the walk go deep, and stops it alive")
+    verdict.pass("")
+
+fn test_stack_limit_later()
+    verdict.start("[Stack] a limit that asks late stops the walk as one that asks at once does...")
+    $limit: = Stack_limit.later(test_margin, 16)
+    assert(!limit.near_at(0), "above the depth it asks from, it answers without asking")
+    $seed: U8[1] = ::{}
+    levels: = dig_at(limit@, 0, U8$[]::seed)
+    assert(levels > floor_levels, "asked late, the walk still goes deeper than a thousand levels")
+    verdict.pass("")
+
+priv fn dig_at(limit: Stack_limit$@, levels: Sz, above: U8$[]): Sz //< `dig`, asking by `near_at`
+    $pad: U8[64] = ::{}
+    above[0] = U8::(levels & 1)
+    if limit.near_at(levels)
+        return levels
+    deepest: = dig_at(limit, levels + 1, U8$[]::pad)
+    return deepest if pad[0] <= 1U8 else -1
+
+// ==========================================
+// The walks in std that read input stop before a short stack runs out. **The test leaves less
+// stack than they keep free** (they keep 64KB) and gives them input their counts allow, so only the
+// stack can stop them; without the check they crash.
+// ==========================================
+
+priv const short_room: Sz = 60 * 1024 //< the stack left when the walk under test starts
+
+priv fn on_short_stack( //< runs `job` with about `short_room` of the stack left
+    limit: Stack_limit@, //< made with `short_room` as its margin
+    levels: Sz,
+    above: U8$[],
+    job: fn(arena: Arena$@): Bool, //< true where the walk refused as it should
+    arena: Arena$@,
+): Bool
+    $pad: U8[64] = ::{}
+    above[0] = U8::(levels & 1)
+    if limit.near()
+        return job(arena)
+    ok: = on_short_stack(limit, levels + 1, U8$[]::pad, job, arena)
+    return ok && pad[0] <= 1U8
+
+priv fn json_refuses(arena: Arena$@): Bool //< 400 levels, within `max_nesting_depth`
+    $doc: = Str_builder.new()
+    defer doc.free()
+    for _i in Range.asc(400)
+        doc.c('[')
+    for _i in Range.asc(400)
+        doc.c(']')
+    $refused: = false
+    json.parse(doc.slice(), arena) catch e
+        switch e case .too_deep
+            refused = true
+        default {}
+    return refused
+
+priv fn regex_refuses(_arena: Arena$@): Bool //< a flat pattern recursing once per character
+    $text: = Str_builder.new()
+    defer text.free()
+    for _i in Range.asc(2000)
+        text.c('a')
+    re: = Regex.compile(text.slice()) catch
+        return false
+    defer re.free()
+    $refused: = false
+    re.find(text.slice()) catch e
+        switch e case .too_complex
+            refused = true
+        default {}
+    return refused
+
+fn test_walks_stop_on_a_short_stack(arena: Arena$@)
+    verdict
+        .start("[Stack] JSON and regex refuse, rather than crash, on a stack shorter than kept...")
+    limit: = Stack_limit.new(short_room)
+    $seed: U8[1] = ::{}
+    assert(on_short_stack(limit@, 0, U8$[]::seed, json_refuses, arena),
+        "json.parse refuses nesting the stack left cannot hold, as too_deep")
+    assert(on_short_stack(limit@, 0, U8$[]::seed, regex_refuses, arena),
+        "Regex.find refuses recursion the stack left cannot hold, as too_complex")
+    verdict.pass("")

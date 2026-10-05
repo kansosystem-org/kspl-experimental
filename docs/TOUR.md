@@ -43,7 +43,7 @@ priv const limit: Sz = 4
 
 ```kspls
 priv fn greet(who: U8[])
-  io.out().s("hello, ").s(who).s(".\n")
+    io.out().s("hello, ").s(who).s(".\n")
 ```
 
 ## A binding that changes, and the three shapes of a loop
@@ -52,15 +52,15 @@ priv fn greet(who: U8[])
 
 ```kspls
 priv fn count_up(n: Sz): Sz
-  $total: Sz = 0
-  for $i: Sz = 0; i < n; i += 1
-    if i % 2 == 0
-      total += i
-    else if i == 3
-      total += 10
-    else
-      continue
-  return total
+    $total: Sz = 0
+    for $i: Sz = 0; i < n; i += 1
+        if i % 2 == 0
+            total += i
+        else if i == 3
+            total += 10
+        else
+            continue
+    return total
 ```
 
 ## Values laid side by side
@@ -69,8 +69,8 @@ priv fn count_up(n: Sz): Sz
 
 ```kspls
 priv struct Point
-  x: I32
-  y: I32
+    x: I32
+    y: I32
 ```
 
 ## Methods of one's own
@@ -79,8 +79,8 @@ priv struct Point
 
 ```kspls
 impl Point
-  fn moved(r: Self@, by: I32): Point
-    return Point::{ .x = r.x + by, .y = r.y + by }
+    fn moved(r: Self@, by: I32): Point
+        return Point::{ .x = r.x + by, .y = r.y + by }
 ```
 
 ## What a type promises
@@ -89,7 +89,7 @@ impl Point
 
 ```kspls
 trait Sized_thing
-  fn area(r: Self): I32
+    fn area(r: Self): I32
 ```
 
 ## Keeping the promise
@@ -98,8 +98,8 @@ trait Sized_thing
 
 ```kspls
 impl Point: Sized_thing
-  fn area(r: Self@): I32
-    return r.x * r.y
+    fn area(r: Self@): I32
+        return r.x * r.y
 ```
 
 ## Saying what a thing is, behind it
@@ -108,8 +108,8 @@ impl Point: Sized_thing
 
 ```kspls
 priv struct Span
-  from: Sz //< where it begins
-  to: Sz //< just past where it ends
+    from: Sz //< where it begins
+    to: Sz //< just past where it ends
 ```
 
 ## One of a few, and a variant that carries something
@@ -118,9 +118,9 @@ priv struct Span
 
 ```kspls
 priv enum Shade
-  dark
-  mid(level: I32)
-  light
+    dark
+    mid(level: I32)
+    light
 ```
 
 ## Reading an enum with `switch`
@@ -129,12 +129,12 @@ priv enum Shade
 
 ```kspls
 priv fn shade_name(s: Shade): U8[]
-  switch s case .dark
-    return "dark"
-  case .mid(level)
-    return "mid" if level > 0 else "mid0"
-  default
-    return "light"
+    switch s case .dark
+        return "dark"
+    case .mid(level)
+        return "mid" if level > 0 else "mid0"
+    default
+        return "light"
 ```
 
 ## A generic, and a function handed over
@@ -143,7 +143,7 @@ priv fn shade_name(s: Shade): U8[]
 
 ```kspls
 priv fn twice_of<|T|>(v: T, add: fn(a: T, b: T): T): T
-  return add(v, v)
+    return add(v, v)
 ```
 
 ## An error is a value, and it is listed
@@ -152,7 +152,7 @@ priv fn twice_of<|T|>(v: T, add: fn(a: T, b: T): T): T
 
 ```kspls
 priv enum Step_error
-  too_far
+    too_far
 ```
 
 ## Failing, and a return type that says so
@@ -161,9 +161,9 @@ priv enum Step_error
 
 ```kspls
 priv fn step(n: I32): I32?Step_error
-  if n > 100
-    throw Step_error.too_far
-  return n + 1
+    if n > 100
+        throw Step_error.too_far
+    return n + 1
 ```
 
 ## Passing a failure on with `?`
@@ -172,8 +172,8 @@ priv fn step(n: I32): I32?Step_error
 
 ```kspls
 priv fn step_twice(n: I32): I32?Step_error
-  once: = step(n)?
-  return step(once)?
+    once: = step(n)?
+    return step(once)?
 ```
 
 ## `defer`, right below what it cleans up
@@ -182,9 +182,9 @@ priv fn step_twice(n: I32): I32?Step_error
 
 ```kspls
 priv fn pick_builder(ok: Bool): Str_builder?Step_error
-  if !ok
-    throw Step_error.too_far
-  return Str_builder.new()
+    if !ok
+        throw Step_error.too_far
+    return Str_builder.new()
 ```
 
 ## Leaving early
@@ -193,9 +193,9 @@ priv fn pick_builder(ok: Bool): Str_builder?Step_error
 
 ```kspls
 priv fn note(on: Bool)
-  if !on
-    return
-  seen += 1
+    if !on
+        return
+    seen += 1
 ```
 
 ## Where the braces have to stay
@@ -204,12 +204,12 @@ priv fn note(on: Bool)
 
 ```kspls
 priv fn tally(s: Shade)
-  switch s case .dark
-    seen += 1
-  case .mid(_level) {
-    // A variant that is not counted. As a sample it holds no content.
-  } default
-    seen += 2
+    switch s case .dark
+        seen += 1
+    case .mid(_level) {
+        // A variant that is not counted. As a sample it holds no content.
+    } default
+        seen += 2
 ```
 
 ## A global, and why there is one here
@@ -226,15 +226,15 @@ priv $seen: Sz = 0
 
 ```kspls
 priv fn gather(arena: Arena$@): List<|U8[]|>
-  $out: = List<|U8[]|>.new(arena)
-  for w in U8[][]::{ "a", "b", "c" }
-    out.push(w)
-    seen += 1
-  outer: for
-    for k in Range.asc(limit)
-      if k == 2
-        break outer
-  return out
+    $out: = List<|U8[]|>.new(arena)
+    for w in U8[][]::{ "a", "b", "c" }
+        out.push(w)
+        seen += 1
+    outer: for
+        for k in Range.asc(limit)
+            if k == 2
+                break outer
+    return out
 ```
 
 ## Putting it together
@@ -243,47 +243,47 @@ priv fn gather(arena: Arena$@): List<|U8[]|>
 
 ```kspls
 fn main(): I32
-  arena: = Arena.new(1024 * 1024)
-  defer arena.free()
-  greet("Kanso")
-  p: Point = ::{ .x = 3, .y = 4 }
-  span: Span = ::{ .from = 2, .to = 5 }
-  moved: = p.moved(2)
-  ok: = step(9) catch 0
-  bad: = step(999) catch
-    io.out().s("step refused.\n")
-    fallback -1
-  // **A handler names the error.** The line is written past the width on purpose and still is not
-  // closed on `catch <name>`: broken there, the handler lands at the block's own column and is
-  // read as its first statement ("The formatting settings (`--style`)" in `ksplc/docs/SPEC-
-  // tools.md`).
-  far: =
-    step(1000 + moved.x + moved.y + p.x + p.y + p.area() + moved.area() + p.moved(1).x) catch refusal_reason
-    switch refusal_reason case .too_far
-      io.out().s("too far.\n")
-    fallback -2
-  $b: = pick_builder(true) catch
-    io.out().s("the place to assemble into could not be taken.\n")
-    fallback Str_builder.new()
-  defer b.free()
-  b.s("held")
-  note(true)
-  note(false)
-  tally(Shade.dark)
-  tally(Shade.mid(1))
-  words: = gather(arena)
-  // **It carries a label.** A block with no heading cannot be told from a continuation of the
-  // statement before it, so a bare `{ … }` is writable in neither notation.
-  while_locked:
-    io.out().s("a labelled block passes too.\n")
-  defer io.out().s("defer comes out last.\n")
-  io.out().s("area=\{p.area()\} moved=(\{moved.x\},\{moved.y\})\n")
-  io.out().s("span=\{span.to - span.from\}\n")
-  io.out().s("shade=\{shade_name(Shade.mid(1))\}/\{shade_name(Shade.dark)\}\n")
-  io.out().s("step=\{ok\}/\{bad\}/\{far\} twice=\{twice_of<|I32|>(5, add_i32)\}\n")
-  io.out().s("count=\{count_up(6)\} words=\{words.len\} seen=\{seen\} b=\{b.slice()\}\n")
-  io.out().s("twice=\{step_twice(1) catch -1\}/\{step_twice(999) catch -1\}\n")
-  return 0
+    arena: = Arena.new(1024 * 1024)
+    defer arena.free()
+    greet("Kanso")
+    p: Point = ::{ .x = 3, .y = 4 }
+    span: Span = ::{ .from = 2, .to = 5 }
+    moved: = p.moved(2)
+    ok: = step(9) catch 0
+    bad: = step(999) catch
+        io.out().s("step refused.\n")
+        fallback -1
+    // **A handler names the error.** The line is written past the width on purpose and still is not
+    // closed on `catch <name>`: broken there, the handler lands at the block's own column and is
+    // read as its first statement ("The formatting settings (`--style`)" in `ksplc/docs/SPEC-
+    // tools.md`).
+    far: =
+        step(1000 + moved.x + moved.y + p.x + p.y + p.area() + moved.area() + p.moved(1).x) catch refusal_reason
+        switch refusal_reason case .too_far
+            io.out().s("too far.\n")
+        fallback -2
+    $b: = pick_builder(true) catch
+        io.out().s("the place to assemble into could not be taken.\n")
+        fallback Str_builder.new()
+    defer b.free()
+    b.s("held")
+    note(true)
+    note(false)
+    tally(Shade.dark)
+    tally(Shade.mid(1))
+    words: = gather(arena)
+    // **It carries a label.** A block with no heading cannot be told from a continuation of the
+    // statement before it, so a bare `{ … }` is writable in neither notation.
+    while_locked:
+        io.out().s("a labelled block passes too.\n")
+    defer io.out().s("defer comes out last.\n")
+    io.out().s("area=\{p.area()\} moved=(\{moved.x\},\{moved.y\})\n")
+    io.out().s("span=\{span.to - span.from\}\n")
+    io.out().s("shade=\{shade_name(Shade.mid(1))\}/\{shade_name(Shade.dark)\}\n")
+    io.out().s("step=\{ok\}/\{bad\}/\{far\} twice=\{twice_of<|I32|>(5, add_i32)\}\n")
+    io.out().s("count=\{count_up(6)\} words=\{words.len\} seen=\{seen\} b=\{b.slice()\}\n")
+    io.out().s("twice=\{step_twice(1) catch -1\}/\{step_twice(999) catch -1\}\n")
+    return 0
 ```
 
 ## The same program, written with braces
@@ -292,13 +292,13 @@ fn main(): I32
 
 ```kspl
 priv fn shade_name(s: Shade): U8[] {
-  switch s case .dark {
-    return "dark";
-  } case .mid(level) {
-    return "mid" if level > 0 else "mid0";
-  } default {
-    return "light";
-  }
+    switch s case .dark {
+        return "dark";
+    } case .mid(level) {
+        return "mid" if level > 0 else "mid0";
+    } default {
+        return "light";
+    }
 }
 ```
 

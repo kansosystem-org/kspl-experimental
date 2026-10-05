@@ -1,6 +1,6 @@
 # kssrv
 
-**A server written in KSPL**: static serving of files under `<root>` over HTTP, a JSON API under `/api/`, and inference by a small resident model.
+**A server written in KSPL**: static serving of files under `<root>` over HTTP, and a JSON API under `/api/`: the file endpoints a local page uses, and the car's steering.
 
 ## Run it
 
@@ -13,7 +13,7 @@ make kssrv                              # -> out/kssrv.exe
 
 The port and the root are **positional**; no environment variable fills either in. The port must be a whole number, and options follow in any order.
 
-**`--local` makes it a local server.** The file endpoints (`/api/file`, `/api/stat`) and the process endpoint (`/api/run`) exist only under it. The rules are [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md)'s, and the grounds [`kssrv/docs/DESIGN.md`](docs/DESIGN.md)'s.
+**`--local` makes it a local server.** The file endpoints (`/api/file`, `/api/stat`) exist only under it, it starts no program, and it trains nothing, so it answers as soon as it starts. The rules are [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md)'s, and the grounds [`kssrv/docs/DESIGN.md`](docs/DESIGN.md)'s.
 
 **`--page=<file>` names the one file returned for `/` and `/index.html`.** It may sit outside the root ("Where it listens" in [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md) says what naming it weighs).
 
@@ -21,14 +21,10 @@ The port and the root are **positional**; no environment variable fills either i
 
 | File | What it holds |
 | :-- | :-- |
-| [`kssrv/main.kspls`](main.kspls) | The command line, the accept loop and static serving |
+| [`kssrv/main.kspls`](main.kspls) | The command line, the accept loop, static serving, and the one logger a run speaks through |
 | [`kssrv/conn.kspls`](conn.kspls) | One connection's state, and how a response is queued |
 | [`kssrv/api.kspls`](api.kspls) | The endpoints under `/api/` and their routing table |
-| [`kssrv/proc.kspls`](proc.kspls) | Starting a process on the local machine (`/api/run`), and the combinations allowed |
-| [`kssrv/worker.kspls`](worker.kspls) | The worker thread that runs inference and training away from the accept loop |
-| [`kssrv/model.kspls`](model.kspls) | The small model kept resident, trained at startup and quantized to int8 |
 | [`kssrv/pilot.kspls`](pilot.kspls) | How the steering returned to the car (`POST /api/car`) is decided |
-| [`kssrv/prog.kspls`](prog.kspls) | The product's name, and the one logger it speaks through |
 | [`kssrv/tests/`](tests/) | The tests `make test` runs ("The tests" below) |
 | [`kssrv/docs/`](docs/README.md) | The client agreement, the design and the plan ("Further reading" below) |
 
@@ -43,17 +39,9 @@ kssrv: I: conn #4 closed (open 1)
 
 Every line gives the product's name, the severity (`E` error, `W` warning, `I` information, `H` hint) and what happened, in `std/log`'s format. So a run can keep only the lines severe enough.
 
-A child started through `/api/run` gets a line when it starts and when it ends or is stopped:
-
-```
-kssrv: I: proc #1 started (ksplc lsp)
-kssrv: I: proc #1 ended by itself (exit 0)
-kssrv: I: proc #1 stopped (the connection watching it closed)
-```
-
 ## How it holds up under load
 
-Idle, it uses no CPU. With many connections open and small and large files requested over and over on keep-alive, **resident memory stays flat**, even with clients that never finish a request, keep sending headers, or disconnect mid-response ([`kssrv/tests/main.kspls`](tests/main.kspls) checks it).
+Idle, it uses no CPU. **What it holds on its heap comes back to the same figure** after waves of clients that never finish a request, send headers past the cap, or disconnect mid-response, beside one that behaves (the run `memory`, [`kssrv/tests/memory.kspls`](tests/memory.kspls), reads `heap_bytes` from `/api/status` after each wave).
 
 ## The tests
 
@@ -71,4 +59,4 @@ Idle, it uses no CPU. With many connections open and small and large files reque
 | [`kssrv/docs/DESIGN.md`](docs/DESIGN.md) | Why it is shaped this way — one-thread multiplexing, the connection table, arena rewinding — and what pins each decision. | Whoever changes kssrv |
 | [`kssrv/docs/PLAN.md`](docs/PLAN.md) | What is left, and what marks each stage as done. | Whoever changes kssrv |
 | [std](../std/README.md) | The `net` / `reactor` / `http` / `json` it is built on; `ksplc doc std` lists every file std publishes. | Whoever changes kssrv |
-| [ksai](../ksai/README.md) | The inference code it is built on: `tensor`, `nn`, `safetensors` and the rest. | Whoever changes kssrv |
+| [ksai](../ksai/README.md) | What the car's steering policy is built on: `tensor`, `nn`, `safetensors` and the rest. | Whoever changes kssrv |

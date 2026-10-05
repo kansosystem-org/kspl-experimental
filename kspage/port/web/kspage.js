@@ -117,7 +117,6 @@ function kspageBoot(canvas, wasmBytes) {
     kspageApi(ks);
     kspageApiIo(ks);
     kspageApiLook(ks);
-    kspageApiDiff(ks);
     kspageApiShow(ks);
     return ks.api;
   });

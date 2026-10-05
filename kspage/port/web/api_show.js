@@ -24,16 +24,8 @@ function kspageApiShow(ks) {
       return { width, height, left, top, right, bottom, band: 0, reading: was.reading };
     },
     // Draws every page; `make(i)` returns page `i`'s canvas (null draws nothing).
-    // Caution: **Lay out once and ask the page count once** (not in the `for` condition), and
-    // **remove the viewer's overrides while printing**, restoring them at the end (otherwise the
-    // print differs per viewer).
+    // **Lay out once and ask the page count once** (not in the `for` condition).
     paintPages(make, from = 0, upto = -1) {
-      // **Whole, not per field** (a field added later would leak onto the paper).
-      const over = this.over();
-      const overOn = over.reading > 0 || over.size > 0;
-      if (overOn) {
-        w.kspage_web_set_over(0, 0);
-      }
       // Caution: **Split into pages even with no page set** (unsplit, the browser breaks one long
       // canvas mid-line), **borrowing the margins with the size** (a margin of 0 leaves the bands
       // nowhere to go); a document with paper set borrows nothing.
@@ -46,9 +38,6 @@ function kspageApiShow(ks) {
         w.kspage_web_set_paper(use.width, use.height, use.left, use.top, use.right, use.bottom,
           was.reading);
       }
-      // **A page is light**: laid out under a dark theme, text would come out pale on white paper.
-      // The viewer's setting is reset before layout and restored afterwards.
-      w.kspage_web_set_dark_ground(0);
       const count = w.kspage_web_layout(ks.width);
       const total = w.kspage_web_paper_count();
       const last = upto < 0 ? total : Math.min(upto, total);
@@ -58,31 +47,16 @@ function kspageApiShow(ks) {
           this.paintSheet(target, i, count, total);
         }
       }
-      // Caution: **Restore both the borrowed page and the overrides and lay out again**, or the
-      // screen stays split into pages at the document's width (the settings silently vanish).
+      // Caution: **Restore the borrowed page and lay out again**, or the screen stays split into
+      // pages at the document's width (the settings silently vanish).
       if (bare) {
         w.kspage_web_set_paper(was.width, was.height, was.left, was.top, was.right, was.bottom,
           was.reading);
-      }
-      if (overOn) {
-        w.kspage_web_set_over(over.reading, over.size);
       }
       // **Back to the screen's background color**: `draw` reads the theme again and lays out.
       draw();
     },
     // The height of the whole laid-out document, **after layout** (0 before).
-    docHeight() { return w.kspage_web_height(); },
-    // Draws `tall` pixels from document height `from` onto `target`'s canvas at 1:1.
-    // Caution: **Do not lay out again**: at the body's width there is one layout, so this only
-    // **crops and draws**, in screen colors; the column's width and left edge come from the core.
-    paintPeek(target, from, tall) {
-      const count = w.kspage_web_layout(ks.width);
-      const column = w.kspage_web_column(ks.width);
-      const left = w.kspage_web_column_left(ks.width);
-      const high = Math.max(1, Math.min(tall, Math.max(1, w.kspage_web_height() - from)));
-      paintCrop(target, count, [left, Math.max(0, from), column, high],
-        column, tall, window.devicePixelRatio || 1, { scale: 1, x: 0, y: 0 });
-    },
     // Page `i` at 1:1, for `paintPages` only, **given the layout and page count** (else per page).
     paintSheet(target, i, count, total) {
       const p = paperOf();

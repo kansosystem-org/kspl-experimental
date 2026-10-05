@@ -6,7 +6,6 @@
 | :-- | :-- |
 | [`ksos/docs/PLAN.md`](../ksos/docs/PLAN.md) | The OS: its kernel and its ports |
 | [`kssrv/docs/PLAN.md`](../kssrv/docs/PLAN.md) | The server, and the local server's protocol |
-| [`kspage/docs/PLAN.md`](../kspage/docs/PLAN.md) | The editing system |
 | [`tools/docs/PLAN.md`](../tools/docs/PLAN.md) | The coding assistant |
 
 ## Gesture recognition on the RP2040

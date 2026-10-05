@@ -15,19 +15,25 @@
 #define KSPL_UNUSED
 #endif
 
-/* `--omit-runtime` puts this on a definition from std, so artifacts sharing it link with the
- * duplicates dropped. **Where weak is unknown it is empty**: a duplicate then fails the link. */
-#if defined(__GNUC__) || defined(__clang__)
-#define KSPL_WEAK __attribute__((weak))
+/* The linkage of the runtime's own functions and data. Under `--library` the generated C defines
+ * KSPL_LIBRARY before this file, and they are `static`, as is every symbol of the library but an
+ * `#export`: each library in a program keeps its own runtime. Elsewhere the word is empty.
+ * Caution: **Put it on every declaration and definition of a runtime symbol.** C refuses a `static`
+ * definition after a declaration without it (genc writes std's `extern` declarations with it). */
+#if defined(KSPL_LIBRARY)
+#define KSPL_LINK static KSPL_UNUSED
 #else
-#define KSPL_WEAK
+#define KSPL_LINK
 #endif
 
-/* The mark on a function carrying `#export`, empty but on wasm (`export_name` is wasm's alone).
+/* The mark on a function carrying `#export`. On wasm it is `export_name`, and in a library built
+ * for Windows `dllexport`, which a DLL needs to export it; elsewhere it is empty.
  * Caution: **On wasm it is itself the list of functions exported to the host**: without it wasm-ld's
  * `--gc-sections` drops the function, and a forgotten `--export=` passes in silence. */
 #if defined(__wasm__)
 #define KSPL_EXPORT(name) __attribute__((export_name(#name)))
+#elif defined(_WIN32) && defined(KSPL_LIBRARY)
+#define KSPL_EXPORT(name) __declspec(dllexport)
 #else
 #define KSPL_EXPORT(name)
 #endif
@@ -60,8 +66,8 @@ typedef unsigned char Char;
  * (the storage is core.c's, as each target spells KSPL_PER_THREAD). std/sys.kspls reads it back.
  * Caution: **Begin the chain at a `throw` and extend it by `?` alone.** Guessed by "did it return
  * a success", it keeps the frames of failures `catch` handled, and a later route rides on them. */
-void kspl_trace_start(const char* file, const char* func, int line);
-void kspl_trace_record(const char* file, const char* func, int line);
+KSPL_LINK void kspl_trace_start(const char* file, const char* func, int line);
+KSPL_LINK void kspl_trace_record(const char* file, const char* func, int line);
 
 #define KSPL_RECORD_TRACE() kspl_trace_record(__FILE__, __func__, __LINE__)
 #define KSPL_START_TRACE() kspl_trace_start(__FILE__, __func__, __LINE__)
@@ -92,5 +98,3 @@ static inline KSPL_UNUSED int64_t kspl_smod(int64_t a, int64_t b, const char* fi
  * own struct). The literal is written once; `sizeof` counts its bytes, a NUL inside included. */
 #define KSPL_STR(type, lit) ((type){ .ptr = (uint8_t*)(lit), .len = (ptrdiff_t)(sizeof(lit) - 1) })
 
-#define KSPL_OK(type, ...) ((type){ .val = (__VA_ARGS__), .is_err = false })
-#define KSPL_ERR(type, ...) ((type){ .error_code = (__VA_ARGS__), .is_err = true })

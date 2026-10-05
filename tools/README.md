@@ -26,13 +26,12 @@
 | `code_table.kspls` / `code_rows.kspls` | The table of diagnostic codes in `ksplc/docs/SPEC-tools.md`, generated from the code sections below it: `make code-table` regenerates it, `make test-conventions` fails on a drift. |
 | `repo_stat.kspls` / `repo_stat_path.kspls` | Writes the repository's size as one page of text, counting the files git lists: the tracked, and the untracked that are not ignored. |
 | `kspage_open.kspls` / `kspage_aim.kspls` / `kspage_doc.kspls` | Opening one document in kspage: the server, the URL, and the document to double-click (`make kspage-open`, `make kspage`). `out/kspage_open.exe --list` shows the servers it left running, `--stop=<folder>` stops one and `--stop-all` every one. Its design is in "The desktop opener" in [`tools/docs/DESIGN.md`](docs/DESIGN.md). |
-| `kspage_plugin_sort.kspls` | A kspage plugin, and the worked example of one. |
 | `lsp_client.kspls` / `lsp_place.kspls` | Asking `ksplc lsp` once by hand, and the position passed to it. |
-| `mqtt_stub.kspls` | The MQTT peer the car's probes talk to. |
+| `ci.kspls` / `ci_gates.kspls` | The CI's gates: one table of what each asks `make` for and which job runs it, and the runner `make ci` and its siblings call with their own name. `make ci-summary` asks it for the job's summary page. How the gates are read is in [`docs/SPEC-gates.md`](../docs/SPEC-gates.md). |
 | `kspl_lldb.py` | The LLDB pretty printer: readable slices, `Result`s and structs while debugging. |
 | `ai_assist/` | The coding assistant's data, evaluation and training pipeline, with its own tests ([its guide](ai_assist/README.md)). |
 | `release-assets/` | What the release zip carries beside the executable (its own `README.md` and the `.vscode/` settings), copied in by `.github/workflows/release.yml`. |
-| `tests/` | One test file per tool: `surface_test.kspls`, `tour_page_test.kspls`, `code_rows_test.kspls`, `repo_stat_test.kspls`, `aim_test.kspls` (the URL that opens kspage), and `lsp_place_test.kspls`. `all.kspls` runs them, and `ai_assist/tests/` too (`make debug-tools`). |
+| `tests/` | One test file per tool: `surface_test.kspls`, `tour_page_test.kspls`, `code_rows_test.kspls`, `repo_stat_test.kspls`, `aim_test.kspls` (the URL that opens kspage), `ci_gates_test.kspls` (how the CI's sets are dealt out, and the summary), and `lsp_place_test.kspls`. `all.kspls` runs them, and `ai_assist/tests/` too (`make debug-tools`). |
 | `docs/` | This folder's documents: the design and what is left ([its index](docs/README.md)). |
 
 ## Files near the limit and how they split

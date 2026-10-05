@@ -1,0 +1,78 @@
+//< ARM Cortex-M: tasks woken from an interrupt handler run as the handler returns
+//<
+//< low (1) raises IRQ0 from software with the NVIC's STIR. The handler gives two semaphores: first
+//< the one mid (3) waits on, then the one high (4) waits on. The switch the gives pend is taken as
+//< the handler returns, so by low's very next line high and then mid have run. Nothing else gives
+//< the CPU up in between: no yield, no delay, and SysTick runs too slowly to fire inside the
+//< window.
+//<
+//< The second give schedules while the first one's switch is still pending, the case where the
+//< port must keep switching away from low, the task really running, and not from mid.
+import "ksos/demo/common/semihost_console" as con
+import "ksos/drivers/cortex_m/scs"
+import "ksos/drivers/mmio"
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+
+const nvic_stir: U32 = 0xE000EF00 // Software Trigger Interrupt Register: writing an IRQ number
+const irq0: U32 = 0 //< makes that IRQ pending
+
+$g_sem_mid: sync.Sem
+$g_sem_high: sync.Sem
+$g_gives: I32 = 0
+$g_order: I32[2] // who ran, in order (3 = mid, 4 = high)
+$g_ran: Sz = 0
+
+$tcb_low: Task
+$tcb_mid: Task
+$tcb_high: Task
+$stack_low: U8[4096]
+$stack_mid: U8[4096]
+$stack_high: U8[4096]
+
+// IRQ0's handler (#export overrides the vector table's weak default, the same wiring as the mps2
+// UART driver).
+#export
+fn uart0_irq0_handler()
+    g_gives += 1
+    g_sem_mid.give()
+    g_sem_high.give()
+
+fn waiter(arg: Void$@): Void //< waits on the semaphore given, then records its priority
+    sem: = sync.Sem$@::arg
+    sem.take()
+    g_order[g_ran] = Task.current().get_prio()
+    g_ran += 1
+
+fn raise_irq0() //< pends IRQ0 and waits until the core has taken it
+    mmio.write32(nvic_stir, irq0)
+    // The barriers make the write reach the NVIC, and the core take the interrupt, before the next
+    // instruction.
+    __kspl_asm_volatile("dsb")
+    __kspl_asm_volatile("isb")
+
+fn low(_arg: Void$@): Void
+    con.puts("=== Kanso OS (Cortex-M) gives from an ISR switch on the handler's return ===\n")
+    scs.enable_irq(irq0)
+    raise_irq0()
+    con.check("the interrupt handler ran and gave", g_gives == 1)
+    con.check("both tasks woken by the ISR's gives ran before the interrupted task's next line",
+        g_ran == 2)
+    con.check("they ran highest first (high, then mid)",
+        g_ran == 2 && g_order[0] == 4 && g_order[1] == 3)
+    con.print_summary("Cortex-M ISR give")
+    con.exit()
+
+#export
+fn ksos_main()
+    panic_hook = con.on_panic
+    g_sem_mid.init(0)
+    g_sem_high.init(0)
+    tcb_low.create(U8$[]::stack_low, low, null, 1, "low")
+    tcb_mid.create(U8$[]::stack_mid, waiter, Void$@::g_sem_mid@, 3, "mid")
+    tcb_high.create(U8$[]::stack_high, waiter, Void$@::g_sem_high@, 4, "high")
+    // Preemption on, so PendSV sits at the lowest priority below IRQ0, as it does on a real board.
+    // The reload (an arbitrary value) makes a tick far longer than the window checked.
+    task.enable_preemption(1000000)
+    task.start_scheduler()
+    for {}

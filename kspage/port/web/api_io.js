@@ -35,6 +35,8 @@ function kspageApiIo(ks) {
       const got = cramps(() => w.kspage_web_load(bytes.length));
       if (got === null) return "cramped";
       if (got === 0) return "broken";
+      // What kspage no longer carries (`withdrawn` in `inout.kspls`).
+      if (got === -3) return "withdrawn";
       if (got < 0) return "too_big";
       draw();
       return "";
@@ -51,28 +53,11 @@ function kspageApiIo(ks) {
       draw();
       return "";
     },
-    // ---- The list of open documents ----
-    // **A window shows one.** The page remembers which file each is (the core opens no files).
-    docCount() { return w.kspage_web_doc_count(); },
-    docNow() { return w.kspage_web_doc_now(); },
-    docOpen(i) { return w.kspage_web_doc_open(i) !== 0; },
-    // Caution: **Redraw once the document is switched** (the layout result is dropped).
-    docUse(i) {
-      const moved = w.kspage_web_doc_use(i) !== 0;
-      if (moved) draw();
-      return moved;
-    },
-    // Opens one new document and shows it, returning its index (-1 if full).
-    docNew() {
-      const got = w.kspage_web_doc_new();
-      if (got >= 0) draw();
-      return got;
-    },
-    // Closes document `i`. **The last one is not closed.**
-    docDrop(i) {
-      const shut = w.kspage_web_doc_drop(i) !== 0;
-      if (shut) draw();
-      return shut;
+    // Replaces the document with a blank one (**keeping what was there is the page's**: `file.js`
+    // sets a draft aside first).
+    loadBlank() {
+      w.kspage_web_load_blank();
+      draw();
     },
     // The cursor's line and byte offset in it (**null with no cursor**), for `api.js`'s `spotNow`.
     caretSpot() {

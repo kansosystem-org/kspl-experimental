@@ -7,6 +7,9 @@
  * restored, and PSP is swapped over.
  * Where they are saved to and restored from is the C side's g_pendsv_from / g_pendsv_to (a
  * ksos_ctx*, whose head is the saved SP).
+ * It runs with interrupts masked (cpsid i): an interrupt handler that gives schedules too, and a
+ * g_pendsv_from / g_pendsv_to rewritten halfway through would save one thread into another's
+ * context.
  * ========================================== */
     .syntax unified
     .thumb          /* the CPU (cortex-m3 / cortex-m33 etc.) is named by the -mcpu compile flag */
@@ -16,6 +19,7 @@
     .type PendSV_Handler, %function
     .thumb_func
 PendSV_Handler:
+    cpsid   i                   /* no interrupt in the middle (see above)      */
     mrs     r0, psp             /* r0 = the present thread's PSP               */
     stmdb   r0!, {r4-r11}       /* save the callee-saved to PSP                */
     ldr     r1, =g_pendsv_from
@@ -26,5 +30,6 @@ PendSV_Handler:
     ldr     r0, [r1]            /* r0 = to_ctx->sp                             */
     ldmia   r0!, {r4-r11}       /* restore the next thread's callee-saved      */
     msr     psp, r0             /* swap PSP over to the next thread            */
+    cpsie   i                   /* PRIMASK was 0 on entry, or PendSV could not run */
     bx      lr                  /* EXC_RETURN (0xFFFFFFFD): return to thread/PSP */
     .size PendSV_Handler, . - PendSV_Handler

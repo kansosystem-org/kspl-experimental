@@ -1,6 +1,6 @@
 // ==========================================
 // kspage's page — the panel on the right (the slides, and the current slide's contents), the
-// status bar at the bottom, and the theme.
+// status bar at the bottom, and the viewer's overrides.
 //
 // **It is not in the fixed area at the top** (the body would move down by the slide count).
 // **The stacking order is the document's order**; the list's top is the frontmost.
@@ -21,7 +21,7 @@ function kspageSide(ui) {
   // A given name is shown (the "Figure" menu sets it).
   const objectName = (one) => {
     if (one.name.length > 0) return one.name;
-    const kind = one.tie ? "Line" : one.hasText ? "Text box" : "Shape";
+    const kind = one.hasText ? "Text box" : "Shape";
     return kind + " " + (one.index + 1);
   };
   // **The caller passes the slide count** (asked here, the layout would run once more on every
@@ -36,8 +36,7 @@ function kspageSide(ui) {
   // without clicking. **Do not switch the tab on a click** (choosing a shape would hide the
   // headings). **Remember it**, and **work on a page that cannot store** (read it guarded).
   const TAB_KEY = "kspage.side.tab";
-  const docsBox = document.getElementById("docs");
-  const panes = { outline: outlineBox, slides: slidesBox, objects: objectsBox, docs: docsBox };
+  const panes = { outline: outlineBox, slides: slidesBox, objects: objectsBox };
   const tabs = Array.from(document.querySelectorAll("#side-tabs > button"));
   let tabAt = "outline";
   try {
@@ -231,46 +230,6 @@ function kspageSide(ui) {
     return heads.length;
   };
 
-  // The list of open documents.
-  // Caution: **Show a draft's mark**, or "something unsaved" goes unnoticed (and closing it is
-  // refused). **Provide a way to close too** (the list fills up and nothing more opens).
-  let docsMark = "";
-  const drawDocs = () => {
-    const got = ui.docList();
-    const mark = got.map((one) => one.at + (one.here ? "*" : "") + (one.unsaved ? "!" : "")
-      + one.name).join("|");
-    if (mark === docsMark) return got.length;
-    docsMark = mark;
-    docsBox.textContent = "";
-    for (const one of got) {
-      const row = document.createElement("div");
-      row.className = one.here ? "item on" : "item";
-      const who = document.createElement("button");
-      who.type = "button";
-      who.className = "who";
-      // Caution: **Put the draft's mark next to the name** (not everyone can read color alone).
-      who.textContent = (one.unsaved ? "● " : "") + one.name;
-      who.title = one.path.length > 0 ? one.path : "A document whose save target is not chosen yet";
-      who.addEventListener("click", () => {
-        tell(ui.docGo(one.at), "", "This document is not open");
-        app.focus();
-      });
-      row.appendChild(who);
-      const shut = document.createElement("button");
-      shut.type = "button";
-      shut.className = "lift";
-      shut.textContent = "✕";
-      shut.title = "Close this document";
-      shut.addEventListener("click", () => {
-        ui.docShut(one.at);
-        app.focus();
-      });
-      row.appendChild(shut);
-      docsBox.appendChild(row);
-    }
-    return got.length;
-  };
-
   const drawSide = (many) => {
     // Caution: **Show it where there is a shape**, slides or not (a shape can sit on the body or a
     // cell too). **With neither, the whole panel collapses** (an empty panel only narrows the
@@ -279,22 +238,13 @@ function kspageSide(ui) {
     const heads = drawOutline();
     tallyTab("slides", many);
     tallyTab("objects", got.length);
-    tallyTab("docs", drawDocs());
     // Caution: **Show the panel for headings alone too.** On a prose-only document with neither
     // slides nor shapes, the overview would vanish.
-    // **Show the panel when there are two or more documents** (the only way back to another one).
-    const room = many > 0 || got.length > 0 || heads > 0 || app.docCount() > 1;
+    const room = many > 0 || got.length > 0 || heads > 0;
     // **The user's choice wins**: collapsed stays collapsed, whatever is drawn.
     side.hidden = sideShut || !room;
     // **Hide the resize handle with it** (alone it is a strip that does nothing, even by key).
     grip.hidden = side.hidden;
-    // **Mark on the root that the panel is shown**: the split view stops before the panel by it
-    // (`page.css`).
-    if (side.hidden) {
-      delete document.documentElement.dataset.side;
-    } else {
-      document.documentElement.dataset.side = "1";
-    }
     // **Where there are no contents, hide the toggle too.**
     sideKey.hidden = !room;
     sideKey.classList.toggle("on", !sideShut);
@@ -467,12 +417,11 @@ function kspageSide(ui) {
   // **The style holds the column count**, so every paragraph of that style changes together (no
   // invisible mark such as a section break).
 
-  // ---- The look (the theme, and how densely the tools pack), and the viewer's overrides ----
-  // **The theme and the density are defined by role** (`page.css`'s `:root`). This file only swaps
-  // the root's attributes, and the rules and the canvas read nothing but the role names.
-  // Caution: **Do not grow the fields** (with hundreds, every new part leaves the themes behind).
-  // **Remember it, guarded.** Remembering and applying are one place (`keptPick` and `keptFly` both
-  // go through `kept`). A checkbox is stored as "1" / "0", distinct from empty.
+  // ---- The viewer's overrides ----
+  // **The look is one, held by role** (`page.css`'s `:root`), following the screen's light or dark;
+  // the rules and the canvas read nothing but the role names.
+  // **Remember it, guarded.** Remembering and applying are one place (`keptPick` through `kept`).
+  // A checkbox is stored as "1" / "0", distinct from empty.
   const kept = (key) => ({
     read: () => {
       try {
@@ -504,73 +453,15 @@ function kspageSide(ui) {
     });
     return box;
   };
-  // A submenu that remembers.
-  // Caution: **Do not go back to a `<select>`** — a closed field hides what is applied (the header
-  // of `fly.js`). The value is kept here, so a closed item's text stays in step.
-  const keptFly = (host, id, name, key, picks, wear) => {
-    const store = kept(key);
-    let at = store.read() || "";
-    // **Remembered text not in the list falls back to the default** (a removed choice would leave
-    // the mark nowhere).
-    if (at !== "" && !picks.some(([value]) => value === at)) at = "";
-    wear(at);
-    const fly = kspageFlyout(host, {
-      id: id, name: name, picks: () => picks,
-      now: () => at,
-      run: (value) => {
-        at = value;
-        store.write(value);
-        wear(at);
-        fly.sync();
-        ui.app.focus();
-      },
-    });
-    return fly;
-  };
-  // The item that swaps the root's attributes. **Empty means "the default"** (the attribute is
-  // removed and it falls back to the `:root` above).
-  const rootFly = (id, name, key, at, picks) => keptFly(
-    document.getElementById("look-picks"), id, name, key, picks, (value) => {
-      if (value) {
-        document.documentElement.dataset[at] = value;
-      } else {
-        delete document.documentElement.dataset[at];
-      }
-      // **Redraw the canvas too** (it draws in the role colors), and measure the width and the
-      // tools' height again.
-      ui.headRoomVar();
-      ui.fit();
-    });
-  // **The texts live only here** (not also in `page.html`).
-  // The first is the default, and its value is empty (the `:root`'s attribute is removed).
-  rootFly("look-theme", "Theme", "kspage.theme", "theme", [
-    ["", "Standard (fits the screen)"],
-    ["Mist", "Mist (a white ground and blue)"],
-    ["Ink", "Ink (a dark ground and amber)"],
-    ["Page", "Page (a warm white and brown)"],
-  ]);
-  rootFly("look-dense", "How tightly the tools pack", "kspage.dense", "dense", [
-    ["", "Standard"],
-    ["Tight", "Tight (a wider body)"],
-    ["Roomy", "Roomy (for touch)"],
-  ]);
-
   // The viewer's overrides. **The document does not change** (not saved, not in the HTML or on
-  // paper). The core holds the width (layout and hit testing share one expression); the page holds
-  // the colors (the core knows none). **Two fields are one override** (passing one alone deletes
-  // the other).
+  // paper); the page holds them (the core knows no colors). **The two fields are one override**
+  // (passing one alone deletes the other).
   const wearOver = () => {
-    const wide = document.getElementById("over-width");
-    const size = document.getElementById("over-size");
     ui.app.setOver({
-      reading: wide.value === "" ? 0 : Number(wide.value),
-      size: size.value === "" ? 0 : Number(size.value),
       plain: document.getElementById("over-plain").checked,
       pics: document.getElementById("over-pics").checked,
     });
   };
-  keptPick("over-width", "kspage.over.width", wearOver);
-  keptPick("over-size", "kspage.over.size", wearOver);
   keptPick("over-plain", "kspage.over.plain", wearOver);
   // Whether to load external images.
   // Caution: **Do not route it through `keptPick`** — remembered, it would stay allowed next time.

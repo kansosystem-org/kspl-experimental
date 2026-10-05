@@ -1,0 +1,35 @@
+//< Vendor `count`: a second library built from KSPL, linked into the same program as `greet`
+//<
+//< Built by itself, it holds the same std and runtime functions `greet` does; only `--library`
+//< keeps the two copies from colliding at the link.
+import "std/ds" { List }
+import "std/io"
+import "std/strnum" // `to_i64`
+
+#export
+pub fn count_words(text: Void@, len: Sz): I32 //<
+    //< counts and prints the words in `len` bytes at text
+    bytes: = U8[]::{ .ptr = U8@::text, .len = len }
+    $starts: = List<|Sz|>.new(null)
+    defer starts.free()
+    $inside: = false
+    for i in Range.asc(bytes.len)
+        space: = bytes[i] == ' '
+        if !space && !inside
+            starts.push(i)
+        inside = !space
+    io.out().s("count: \{starts.len\} words\n")
+    return I32::starts.len
+
+#export
+pub fn count_parse(digits: Void@, len: Sz, out: I64$@): I32 //<
+    //< reads a number; 0, else an error code
+    //<
+    //< Caution: **Read the code before `out`**: on a failure `out` is left as it was.
+    n: = U8[]::{ .ptr = U8@::digits, .len = len }.to_i64() catch e
+        switch e case .invalid_format
+            return 1
+        case .out_of_bounds
+            return 2
+    out$ = n
+    return 0

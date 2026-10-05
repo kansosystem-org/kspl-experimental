@@ -8,9 +8,6 @@
  * Caution: **Throw an unused argument away with `(void)`**, or -Wunused-parameter fires
  * (Principle 2); `KSPL_UNUSED` is empty on a target without attributes. */
 
-
-#define KSPL_PANIC(msg) while(1) {}
-
 /* What core.c keeps per thread is one copy here: bare metal's thread-local storage needs a thread
  * pointer that only a port layer could give (`__thread` is a link error on arm-none-eabi). */
 #define KSPL_PER_THREAD

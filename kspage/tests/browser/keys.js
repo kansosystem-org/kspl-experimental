@@ -1,4 +1,4 @@
-// Delete, bold and italic, Home and End, the change history.
+// Delete, bold and italic, Home and End, the name comments are written under.
 
 function kspageProbeKeys(ks) {
   const { check, app, ime, pressAt, undoKey, openMenu } = ks;
@@ -88,19 +88,15 @@ function kspageProbeKeys(ks) {
   pressAt(8);
   check(app.selectionText() === "", "pressing again takes the selection off");
 
-  // 28'''. The change history (**git is not wanted**): the name field wired to the history and the
-  // list readable, which the wasm cannot tell. Every rewrite of the sections so far is held back,
-  // so a press stacks all of it.
-  openMenu("show-trail");
+  // 28'''. The name a comment is written under: the field wired to the page's `author`, which the
+  // wasm cannot tell (`note.js` looks at the comment carrying it).
+  const menu = openMenu("who");
   const who = document.getElementById("who");
+  const wasAuthor = app.author;
   who.value = "Alice";
   who.dispatchEvent(new Event("input", { bubbles: true }));
-  document.getElementById("show-trail").click();
-  const listed = document.getElementById("trail-list").textContent;
-  check(listed.indexOf("Alice") >= 0, "the name put in goes into the history");
-  // Note: The deed's name is the core's to settle (`summary_of` in `kspage/write/record.kspls`).
-  check(listed.indexOf("Typed") >= 0, "what was done lines up");
-  // **It cannot be read as tabs.** The field's breaks are changed into a visible shape.
-  check(listed.indexOf("\t") < 0, "the tabs are changed into a readable shape");
-  check(document.activeElement === ime, "after the press the focus goes back to the input field");
+  check(app.author === "Alice", "the name put in is the one comments are written under");
+  menu.open = false;
+  app.author = wasAuthor;
+  who.value = wasAuthor;
 }

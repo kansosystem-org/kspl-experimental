@@ -1,7 +1,7 @@
 // ==========================================
-// kspage's page — files: the document's name, saving, opening, the change history, and the list
-// of open documents. **Every path that replaces the current document is here**; exporting to
-// other formats, and importing what only inserts, are in [`inout.js`](inout.js).
+// kspage's page — files: the document's name, saving and opening. **Every path that replaces the
+// current document is here**; exporting to other formats, and importing what only inserts, are in
+// [`inout.js`](inout.js).
 // Note: Pages, printing and presenting are in [`paper.js`](paper.js) (the 1000-line-per-file cap,
 // Principle 3).
 // **A file is written only when Save is clicked.** What is closed without saving is kept as a
@@ -40,7 +40,7 @@ function kspageFile(ui) {
   // it, which writing back compares against (`save.js`'s `writeTo`); a handle restored after a
   // reload has nothing seen and is not guarded.
   // Caution: **Replace `seen` whole** — location and text change as a pair ("saved, yet changed").
-  const kf = { openKind: KIND_JSON, docId: mintDoc(), bodyAt: null, pastAt: null,
+  const kf = { openKind: KIND_JSON, docId: mintDoc(), bodyAt: null, aside: "",
     seen: { path: "", body: "" }, seenAt: new WeakMap() };
   // Decides from the name how to open (**a new document is kspage's JSON format**) — **in one
   // place**, or the format opened and the format written back differ per path (Principle 4). **An
@@ -53,8 +53,8 @@ function kspageFile(ui) {
     if (low.endsWith(".md")) return KIND_MD;
     return low.endsWith(".kspage") || low.endsWith(".json") ? KIND_JSON : KIND_TEXT;
   };
-  // The language the name declares (the extension itself); **no list here** — the core decides
-  // whether it is known (`../../model/code.kspls`'s `colored`).
+  // The language the name declares (the extension itself); **no list here** — any name passes, and
+  // the core only names the style after it (`sheet_for` in `../../share/text.kspls`).
   const spokenOf = (name) => {
     const at = (name || "").lastIndexOf(".");
     return at < 0 ? "" : name.slice(at + 1).toLowerCase();
@@ -109,9 +109,12 @@ function kspageFile(ui) {
     : BODY_KIND);
   const typeOf = (kind) => (kind === KIND_MD ? "text/markdown"
     : kind === KIND_TEXT ? "text/plain" : "application/json");
-  const PAST_KIND =
-    { description: "A kspage change history", accept: { "application/octet-stream": [".ksdb"] } };
-  // Where the current document and the history write back.
+  // What "Open" offers, **one list for the picker and the file field** (written twice, the field
+  // of a browser without the picker hid what the picker opens).
+  const OPEN_KINDS = [BODY_KIND, MD_KIND, TEXT_KIND];
+  file.accept = OPEN_KINDS.flatMap((k) => Object.entries(k.accept)
+    .flatMap(([type, exts]) => [...exts, type])).join(",");
+  // Where the current document writes back.
   // Caution: **Clear it when a new name is typed** (`save.js`'s `renamed`).
   // **Keep the assignment here**: the tab's record is told when the handles change (`keepWhere`),
   // and a place that forgets would sometimes reopen something else after a reload.
@@ -122,7 +125,6 @@ function kspageFile(ui) {
     keepWhere();
     if (ui.showPlace) ui.showPlace();
   };
-  const bindPast = (at) => { kf.pastAt = at; keepWhere(); };
 
   // ---- Where the shown document lives, across reloads ----
   // **It is remembered per tab** (`sessionStorage` survives a reload, and no other tab sees it):
@@ -144,7 +146,7 @@ function kspageFile(ui) {
   // What the tab's record held when the page started (null if none), **requested before anything
   // is stored**; `save.js`'s `reopen` takes it.
   const recalled = tabName ? handles.takeWhere(tabName) : Promise.resolve(null);
-  let keptWhere = { path: "", bodyAt: null, pastAt: null };
+  let keptWhere = { path: "", bodyAt: null };
   let keeping = false;
   // Stores where the document lives, **when that changed**, once per turn.
   const keepWhere = () => {
@@ -152,16 +154,15 @@ function kspageFile(ui) {
     keeping = true;
     queueMicrotask(() => {
       keeping = false;
-      const now = { path: kf.seen.path, bodyAt: kf.bodyAt, pastAt: kf.pastAt };
-      if (now.path === keptWhere.path && now.bodyAt === keptWhere.bodyAt
-        && now.pastAt === keptWhere.pastAt) return;
+      const now = { path: kf.seen.path, bodyAt: kf.bodyAt };
+      if (now.path === keptWhere.path && now.bodyAt === keptWhere.bodyAt) return;
       keptWhere = now;
-      handles.keepWhere(tabName, now.path.length > 0 || now.bodyAt || now.pastAt ? now : null);
+      handles.keepWhere(tabName, now.path.length > 0 || now.bodyAt ? now : null);
     });
   };
   // Forgets the tab's record (a location that could not be reopened).
   const forgetWhere = () => {
-    keptWhere = { path: "", bodyAt: null, pastAt: null };
+    keptWhere = { path: "", bodyAt: null };
     if (tabName) handles.keepWhere(tabName, null);
   };
 
@@ -175,16 +176,6 @@ function kspageFile(ui) {
   const pathBox = document.getElementById("local-path");
   // **Empty when there is no server** (read unchecked, it would write to a path with no server).
   const pathOf = () => (ui.localHere && ui.localHere() ? pathBox.value.trim() : "");
-  // The history's path, **from the document's path**, and **the same for either extension**
-  // (otherwise `.kspage` and `.json` would each get a history, the older one unreadable).
-  const pastPathOf = (path) => {
-    for (const ext of [".kspage", ".json"]) {
-      if (path.endsWith(ext)) {
-        return path.slice(0, -ext.length) + ".ksdb";
-      }
-    }
-    return path + ".ksdb";
-  };
   // The path's last part, shaped as a file for `takeName` (which drops the extension).
   const nameInPath = (path) => {
     const cut = path.lastIndexOf("/");
@@ -212,121 +203,39 @@ function kspageFile(ui) {
   // The current document as text **in the format it was opened in**, for writing back and compare.
   const bodyText = () => (kf.openKind === KIND_MD ? app.markdown()
     : kf.openKind === KIND_TEXT ? app.plainText() : app.save());
-  // ---- The open documents ----
-  // **Only a document that loses nothing when discarded is discarded and opened over.**
-  // Caution: **Do not discard a draft silently** — with unsaved text, that document goes to the
-  // drafts and a new one opens (`port/web/state.kspls`'s "The list of open documents"). **The core
-  // assigns the number** and holds the document; this side remembers which file it is.
-  const perDoc = new Map();
-  // **Save whether it is a draft too**: a set-aside document's text lives in the core's list,
-  // judged only on leaving; unjudged and called "clean", closing would discard it.
-  const stashDoc = () => {
-    // **Save it before leaving** (left to the throttle, the departed document's draft is lost).
-    if (ui.keepSync) ui.keepSync();
-    perDoc.set(app.docNow(), { path: kf.seen.path, body: kf.seen.body, kind: kf.openKind,
-      bodyAt: kf.bodyAt, pastAt: kf.pastAt, name: docName.value, dirty: unsaved(),
-      docId: kf.docId });
-  };
-  // Caution: **Where there is no saved copy, leave it alone** (a new slot is about to be loaded).
-  const restoreDoc = () => {
-    const had = perDoc.get(app.docNow());
-    // **With no saved copy, mint a new identity**, or another document's draft takes the old one.
-    if (had === undefined) {
-      kf.docId = mintDoc();
-      return;
-    }
-    // Caution: **Switch the identity before `remember`**, which updates the draft: out of order it
-    // pairs the outgoing identity with the incoming comparison and discards the outgoing draft.
-    kf.docId = had.docId;
-    remember(had.path, had.body);
-    kf.openKind = had.kind;
-    bindBody(had.bodyAt);
-    bindPast(had.pastAt);
-    docName.value = had.name;
-    pathBox.value = had.path;
-  };
-  // The index where that text is open (-1 if none).
-  const slotOf = (path) => {
-    if (path.length === 0) return -1;
-    for (const [i, one] of perDoc) {
-      if (app.docOpen(i) && one.path === path) return i;
-    }
-    return kf.seen.path === path ? app.docNow() : -1;
-  };
-  // The plan before opening: "switched" / "reuse" (load here) / "fresh" (new) / "full".
-  const planOpen = (path) => {
-    // Caution: **Save the draft before loading over the current one** (or the last typing is lost).
-    const reuse = () => {
-      if (ui.keepSync) ui.keepSync();
-      return "reuse";
-    };
-    const at = slotOf(path);
-    // Caution: **The text already shown is read again** ("Open" asks for a reread).
-    if (at === app.docNow()) return reuse();
-    if (at >= 0) {
-      stashDoc();
-      app.docUse(at);
-      restoreDoc();
-      return "switched";
-    }
-    // Caution: **With nothing to lose, replace it as it is** (a new slot per open fills up fast).
-    if (!unsaved()) return reuse();
-    stashDoc();
-    if (app.docNew() < 0) {
-      deny("There are too many documents open (shut one of them and then open)");
-      restoreDoc();
-      return "full";
-    }
-    return "fresh";
-  };
-  // Restores the plan where loading failed.
-  const undoPlan = (plan) => {
-    if (plan !== "fresh") return;
-    app.docDrop(app.docNow());
-    restoreDoc();
-  };
-  const NOWHERE = { path: "", bodyAt: null, pastAt: null };
+  // ---- Replacing the document ----
+  // **A window holds one document**, so opening another replaces it, and **nothing typed is lost
+  // by that**: the outgoing document's unsaved text is set aside as a draft, which "Bring the draft
+  // back" lists at once (`keep.js`'s `keepAside`). To keep another document in view beside this
+  // one, open it in another window.
+  // Caution: **Take the draft before reading** (reading replaces the text), and **set it aside only
+  // once the new document is in**: a refused read leaves the document as it was, drafted as before.
+  const planOpen = () => (ui.draftNow ? ui.draftNow() : null);
+  const NOWHERE = { path: "", bodyAt: null };
   // Makes the just-loaded document the current one: a new identity, where it lives (`where`), and
-  // what the draft compares against. **Every path that replaces the document ends here** (per path,
-  // one would skip a step and lose a draft or save into the previous document's file).
+  // what the draft compares against, then sets `out` (`planOpen`'s) aside. **Every path that
+  // replaces the document ends here** (per path, one would skip a step and lose a draft or save
+  // into the previous document's file). The notice's tail for what was set aside is `kf.aside`.
   // Caution: **Mint the identity before `remember`**; **a path compares with the text read from
   // it**, the rest with their own text, so Markdown does not look changed on opening.
-  const settleIn = (kind, where, read) => {
+  const settleIn = (out, kind, where, read) => {
     kf.openKind = kind;
     kf.docId = mintDoc();
     if (kf.bodyAt !== where.bodyAt) bindBody(where.bodyAt);
-    if (kf.pastAt !== where.pastAt) bindPast(where.pastAt);
     pathBox.value = where.path;
     remember(where.path, where.path.length > 0 ? read : bodyText());
+    kf.aside = ui.keepAside ? ui.keepAside(out) : "";
   };
-  // Loads a read document into `planOpen`'s slot: "" if it could, else the reason.
-  const layIn = (plan, kind, text, name, where) => {
+  // Loads a read document over the current one: "" if it could, else the reason (the current one
+  // stays as it was).
+  const layIn = (out, kind, text, name, where) => {
     const why = readAs(kind, text, name);
-    if (why !== "") {
-      undoPlan(plan);
-      return why;
-    }
-    settleIn(kind, where, text);
+    if (why !== "") return why;
+    settleIn(out, kind, where, text);
     return "";
   };
-  // The open documents (index, name, whether a draft); **the display reads only this**.
-  const docList = () => {
-    const out = [];
-    for (let i = 0; i < 64; i += 1) {
-      if (!app.docOpen(i)) continue;
-      const mine = i === app.docNow();
-      const had = perDoc.get(i);
-      const path = mine ? kf.seen.path : (had === undefined ? "" : had.path);
-      const name = mine ? docName.value : (had === undefined ? "" : had.name);
-      out.push({ at: i, here: mine, path: path,
-        name: path.length > 0 ? nameInPath(path) : (name || "Untitled document"),
-        unsaved: mine ? unsaved() : (had !== undefined && had.dirty) });
-      if (out.length >= app.docCount()) break;
-    }
-    return out;
-  };
 
-  // Whether the text changed since it was read ("may the draft be discarded"). **A document in no
+  // Whether the text changed since it was read (the status bar's "Unsaved"). **A document in no
   // file is "not changed"**; a handle is a location as much as a path.
   const unsaved = () => {
     if (kf.seen.path.length === 0 && !kf.bodyAt) return false;
@@ -345,6 +254,10 @@ function kspageFile(ui) {
     if (why === "not_text") {
       return "This is not a text file (content that is not text is in it)";
     }
+    if (why === "withdrawn") {
+      return "This document holds a window onto source code or a line joining two frames, which "
+        + "kspage no longer shows. It was not opened, so nothing in it is lost";
+    }
     return why === "too_big"
       ? `This document is too large to lay down (${kb(size)} / the cap that can be opened is `
         + `${kb(app.docLimit())}). Split it and then open it`
@@ -353,10 +266,9 @@ function kspageFile(ui) {
 
   // Caution: **Put the entry points on `kf` before passing it to `save.js`** (that file touches
   // nothing except through `kf`).
-  Object.assign(kf, { KIND_JSON, KIND_MD, KIND_TEXT, PAST_KIND, app, bindBody, bindPast,
-    bodyExt, bodyText, canBind, deny, forgetWhere, keepName, kindOf, kindPick, layIn, nameInPath,
-    nameOf, pastPathOf, pathBox, pathOf, planOpen, recalled, remember, say, takeChosen, takeName,
-    typeOf, ui, whyNotRead });
+  Object.assign(kf, { KIND_JSON, KIND_MD, KIND_TEXT, app, bindBody, bodyExt, bodyText, canBind,
+    deny, forgetWhere, keepName, kindOf, kindPick, layIn, nameInPath, nameOf, pathBox, pathOf,
+    planOpen, recalled, remember, say, takeChosen, takeName, typeOf, ui, whyNotRead });
   kspageSave(kf);
   const { download, openDoc, openFromUrl, renamed, saveToFile, why } = kf;
 
@@ -371,45 +283,15 @@ function kspageFile(ui) {
   // ---- Choosing a file and reading it ----
   // **Every one of them replaces the current document** (inserting is in [`inout.js`](inout.js)).
 
-  // Markdown imported as **a new document**, without the history (a history belongs to a document).
-  const mdFile = document.getElementById("md-file");
-  document.getElementById("open-md").addEventListener("click", () => mdFile.click());
-  mdFile.addEventListener("change", () => {
-    const chosen = mdFile.files[0];
-    // Cleared so that choosing the same file again still fires a change.
-    mdFile.value = "";
-    if (!chosen) return;
-    chosen.text().then((text) => {
-      const plan = planOpen("");
-      if (plan === "full") {
-        app.focus();
-        return;
-      }
-      // Caution: **Do not keep a handle** (the chosen file is read; it is not where it writes
-      // back). The location is asked for at the first save.
-      const why = layIn(plan, KIND_MD, text, chosen.name, NOWHERE);
-      if (why === "") takeName(chosen);
-      tell(why === "", "Opened the Markdown", whyNotRead(why, text));
-      app.focus();
-    });
-  });
-  // Opens the manual, **planned the same way as every other opening** ("A document is replaced by
-  // another only when nothing would be lost" in `../../docs/DESIGN.md`).
+  // Opens the manual, **replacing the document the same way as every other opening** ("A document
+  // is replaced by another only when nothing would be lost" in `../../docs/DESIGN.md`).
   document.getElementById("open-manual").addEventListener("click", () => {
-    const plan = planOpen("");
-    if (plan === "full") {
-      app.focus();
-      return;
-    }
+    const out = planOpen();
     const made = app.loadManual();
     // Caution: **Decide the opening format anew per document** (an earlier Markdown document is no
     // reason to write the manual as Markdown); **it lives in no file**, so no save lands elsewhere.
-    if (made) {
-      settleIn(KIND_JSON, NOWHERE, "");
-    } else {
-      undoPlan(plan);
-    }
-    tell(made, "Opened the manual", "The manual could not be opened");
+    if (made) settleIn(out, KIND_JSON, NOWHERE, "");
+    tell(made, "Opened the manual" + kf.aside, "The manual could not be opened");
     app.focus();
   });
   // Caution: **Take over Ctrl+S** — otherwise the browser saves this HTML, not the document.
@@ -421,26 +303,20 @@ function kspageFile(ui) {
   });
 
   // ---- Starting from a blank page ----
-  // Caution: **Do not close the current document** — "New" adds one, as everywhere else
-  // (`../../docs/DESIGN.md`'s "How a blank document is started"). **Do not keep where
-  // it writes back**, or a save overwrites the earlier file with a blank page (the guard does not
-  // act, the draft being empty too). **Undo the read-only look** the core applies.
+  // Caution: **Do not lose the current document** — what is unsaved is set aside as a draft first
+  // (`settleIn`), as on every opening (`../../docs/DESIGN.md`'s "How a blank document is started").
+  // **Do not keep where it writes back**, or a save overwrites the earlier file with a blank page.
+  // **Undo the read-only look** the core takes off.
   const newDoc = () => {
-    stashDoc();
-    if (app.docNew() < 0) {
-      deny("There are too many documents open (shut one of them and then make a new one)");
-      restoreDoc();
-      app.focus();
-      return;
-    }
+    const out = planOpen();
+    app.loadBlank();
     // Caution: **Store the blank page's text as what it compares against** (`settleIn` does); an
     // empty text would make it look "changed", and blank drafts would pile up (`draftNow`).
-    settleIn(KIND_JSON, NOWHERE, "");
+    settleIn(out, KIND_JSON, NOWHERE, "");
     docName.value = "kspage";
     keepName();
     ui.dressRead();
-    if (ui.handWindows) ui.handWindows();
-    say("Opened a blank document");
+    say("Opened a blank document" + kf.aside);
     app.focus();
   };
   // Caution: **The document at startup has something to compare against too**, or the sample itself
@@ -449,9 +325,8 @@ function kspageFile(ui) {
 
   document.getElementById("doc-new").addEventListener("click", newDoc);
 
-  // Caution: **Read the document before the history** (reloading it empties the history). With a
-  // picker that can keep a handle, where it opened is where it writes back; without, the file field
-  // chooses (it depends on the browser; one click runs one of them).
+  // With a picker that can keep a handle, where it opened is where it writes back; without, the
+  // file field chooses (it depends on the browser; one click runs one of them).
   document.getElementById("open").addEventListener("click", async () => {
     // **"Open" is the browser's own dialog, server or not**; where it opened is where it writes
     // back (`save.js`'s `saveToFile`); opening by path is the path field's Enter and `?doc=`.
@@ -461,8 +336,7 @@ function kspageFile(ui) {
     }
     let got = null;
     try {
-      got = await window.showOpenFilePicker({ multiple: true,
-        types: [BODY_KIND, MD_KIND, TEXT_KIND, PAST_KIND] });
+      got = await window.showOpenFilePicker({ types: OPEN_KINDS });
     } catch (e) {
       // Caution: **Report a cancel too** (silent, it looks as if clicking does nothing).
       if (e && e.name === "AbortError") {
@@ -473,48 +347,27 @@ function kspageFile(ui) {
       app.focus();
       return;
     }
-    const past = got.find((at) => at.name.endsWith(".ksdb")) || null;
-    const body = got.find((at) => at !== past) || null;
     // Caution: **Do not ask for the handle again where it could not be read** — obtained within the
     // click's user activation, once dropped it cannot be obtained again.
-    const files = [];
-    for (const at of got) {
-      files.push(await at.getFile());
-    }
-    takeChosen(files, { body: body, past: past });
+    takeChosen(await got[0].getFile(), got[0]);
   });
   // Cleared so that choosing the same file again still fires a change.
   file.addEventListener("change", () => {
-    const chosen = Array.from(file.files);
+    const chosen = file.files[0];
     file.value = "";
-    takeChosen(chosen, null);
+    if (chosen) takeChosen(chosen, null);
   });
   // The function that takes a file the browser passed in, **one for the picker, the file field and
-  // a drop**.
-  // Caution: **Bind the handles only once their document is loaded**: bound before, an unreadable
+  // a drop**; `bodyAt` is its handle where the browser gave one (null otherwise).
+  // Caution: **Bind the handle only once its document is loaded**: bound before, an unreadable
   // file leaves its handle on the current document, and the next save writes into a file it did not
-  // come from ("A document is written back where it was opened" in
-  // `../../docs/DESIGN.md`).
-  function takeChosen(files, handles) {
-    if (files.length <= 0) return Promise.resolve(false);
-    const past = files.find((f) => f.name.endsWith(".ksdb")) || null;
-    const body = files.find((f) => f !== past) || null;
-    const pastAt = handles ? handles.past : null;
-    if (!body) {
-      takeTrail(past, pastAt);
-      return Promise.resolve(false);
-    }
-    const bodyAt = handles ? handles.body : null;
+  // come from ("A document is written back where it was opened" in `../../docs/DESIGN.md`).
+  function takeChosen(body, bodyAt) {
     return body.text().then((t) => {
-      // Caution: **Decide the plan just before loading**, as `openDoc` does, so a file that could
-      // not be read makes no draft. **The name decides the text's format.**
-      const plan = planOpen("");
-      if (plan === "full") {
-        app.focus();
-        return false;
-      }
-      const why = layIn(plan, kindOf(body.name), t, body.name,
-        { path: "", bodyAt: bodyAt, pastAt: pastAt });
+      // Caution: **Take the draft just before loading**, as `openDoc` does. **The name decides the
+      // text's format.**
+      const out = planOpen();
+      const why = layIn(out, kindOf(body.name), t, body.name, { path: "", bodyAt: bodyAt });
       if (why !== "") {
         deny(whyNotRead(why, t));
         app.focus();
@@ -524,48 +377,15 @@ function kspageFile(ui) {
       if (bodyAt) kf.seenAt.set(bodyAt, t);
       // The file's name becomes the document's name (the next save goes back to it).
       takeName(body);
-      // Caution: **Read the history after the document** — loading a document empties it.
-      const trail = past ? past.arrayBuffer().then((buf) => app.loadTrail(new Uint8Array(buf)))
-        : Promise.resolve(true);
-      return trail.then((ok) => {
-        // **Pass the files to the windows of the opened document too** (the targets differ).
-        if (ui.handWindows) ui.handWindows();
-        tell(ok, "Loaded it", "The change history could not be read");
-        app.focus();
-        return true;
-      });
-    });
-  }
-  // Only a history came: it goes onto the current document, which is not replaced.
-  function takeTrail(past, pastAt) {
-    past.arrayBuffer().then((buf) => {
-      const ok = app.loadTrail(new Uint8Array(buf));
-      if (ok && pastAt) bindPast(pastAt);
-      tell(ok, "Loaded it", "The change history could not be read");
+      say("Loaded it" + kf.aside);
       app.focus();
+      return true;
     });
   }
 
-  // ---- The change history's wiring ----
-
-  // **The name goes into the history** (empty, entries are stored with an empty "who" field).
+  // **The name goes with the comments** (empty, a comment is stored with an empty "by").
   const who = document.getElementById("who");
   who.addEventListener("input", () => { app.author = who.value; });
-  document.getElementById("show-trail").addEventListener("click", () => {
-    // **Stamp before reading**, or what was just typed is not in the list.
-    app.stampTrail();
-    const list = document.getElementById("trail-list");
-    // **Tabs cannot be seen**, so the field separators are made visible.
-    list.textContent = app.trail().split("\n").filter((s) => s !== "")
-      .map((s) => s.split("\t").join("  ")).join("\n");
-    const lost = app.trailLost();
-    if (lost > 0) {
-      deny("The change history is full (" + lost + " did not go in)");
-    } else {
-      say(app.trailCount() > 0 ? "" : "There is no change history yet");
-    }
-    app.focus();
-  });
 
   return {
     // **The download function and the name are one each** ([`report.js`](report.js) borrows them).
@@ -575,9 +395,9 @@ function kspageFile(ui) {
     docName: docName,
     openFromUrl: openFromUrl,
     openDoc: openDoc,
-    // **How "may another document be opened and this one discarded" is decided.**
+    // Whether the status bar says "Unsaved".
     unsaved: unsaved,
-    // The one bundle passed to the draft; **null when there is nothing to lose**.
+    // The one bundle passed to the draft; **its text is null when there is nothing to lose**.
     // Caution: **Do not decide that by `unsaved`** — it deliberately says a document with no
     // location has not changed, so a document typed from a blank page would go unsaved. **One entry
     // point for the question and the content** (split, the text would be built twice per throttle),
@@ -587,27 +407,20 @@ function kspageFile(ui) {
       return { id: kf.docId, kind: kf.openKind, path: kf.seen.path, name: docName.value,
         text: text === kf.seen.body ? null : text };
     },
-    // Restores a draft into a new slot, **unbound** ("" or the reason): the draft can be older than
-    // the file, so if bound, one click of save could revert the file to an older version.
+    // Restores a draft over the current document, **unbound** ("" or the reason): the draft can be
+    // older than the file, so if bound, one click of save could revert the file to an older
+    // version. What the current document has unsaved is set aside first (`settleIn`).
     draftTake: (one) => {
-      stashDoc();
-      if (app.docNew() < 0) {
-        restoreDoc();
-        return "There are too many documents open (shut one of them and then bring it back)";
-      }
+      const out = planOpen();
       const why = readAs(one.kind, one.text, one.name);
-      if (why !== "") {
-        app.docDrop(app.docNow());
-        restoreDoc();
-        return whyNotRead(why, one.text);
-      }
-      // Caution: **Store the restored text as what it compares against** (`settleIn` does), or
-      // Markdown counts as "changed" at once and another draft of the same appears.
-      settleIn(one.kind, NOWHERE, "");
+      if (why !== "") return whyNotRead(why, one.text);
+      settleIn(out, one.kind, NOWHERE, "");
+      // Caution: **It stays a draft until it is saved** (compared with nothing), or opening another
+      // document over it would drop the text that was just brought back.
+      remember("", "");
       docName.value = one.name || "kspage";
       keepName();
       ui.dressRead();
-      if (ui.handWindows) ui.handWindows();
       return "";
     },
     // The text open now (empty if none), **not the path field** (that can be retyped).
@@ -621,38 +434,5 @@ function kspageFile(ui) {
       if (kf.bodyAt) return { kind: "pick", at: kf.bodyAt.name };
       return { kind: "none", at: "" };
     },
-    // The open documents and switching between them; **the display reads only here**.
-    docList: docList,
-    docGo: (i) => {
-      if (i === app.docNow()) return true;
-      stashDoc();
-      if (!app.docUse(i)) return false;
-      restoreDoc();
-      return true;
-    },
-    // Caution: **Do not make it close only documents without a draft** — closing means "discard
-    // it". With a draft it refuses once, against a misclick: save, then close.
-    docShut: (i) => {
-      const one = docList().find((x) => x.at === i);
-      if (one !== undefined && one.unsaved) {
-        deny("It does not shut because there are changes not saved (save with Ctrl+S and then "
-          + "shut)");
-        return false;
-      }
-      const here = i === app.docNow();
-      if (here) stashDoc();
-      if (!app.docDrop(i)) {
-        deny("The last one cannot be shut");
-        return false;
-      }
-      perDoc.delete(i);
-      if (here) {
-        restoreDoc();
-      }
-      return true;
-    },
-    // The current document's path, **empty without a server** (`command.js` puts images beside it).
-    // Caution: **Do not read the field directly** (a second reader would miss the server check).
-    docPath: pathOf,
   };
 }

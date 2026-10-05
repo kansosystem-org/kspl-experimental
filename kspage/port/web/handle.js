@@ -86,12 +86,11 @@ function kspageHandles() {
   });
 
   return {
-    // Remembers where tab `tab`'s document lives: `where` holds the path (`path`) and the handles
-    // (`bodyAt` / `pastAt`); **null forgets it**, and past the cap the oldest tabs go.
+    // Remembers where tab `tab`'s document lives: `where` holds the path (`path`) and the handle
+    // (`bodyAt`); **null forgets it**, and past the cap the oldest tabs go.
     keepWhere(tab, where) {
       if (!where) return inStore(STORE, "readwrite", (store) => store.delete(tab));
-      const one = { path: where.path, bodyAt: where.bodyAt, pastAt: where.pastAt,
-        when: Date.now() };
+      const one = { path: where.path, bodyAt: where.bodyAt, when: Date.now() };
       return inStore(STORE, "readwrite", (store) => {
         store.put(one, tab);
         // Caution: **Never drop the record just written** (it is the current tab); records in the
@@ -117,7 +116,7 @@ function kspageHandles() {
       return inStore(STORE, "readonly", (store) => store.get(tab)).then((one) => {
         if (!one || typeof one.path !== "string") return null;
         const handle = (at) => (at && typeof at.getFile === "function" ? at : null);
-        return { path: one.path, bodyAt: handle(one.bodyAt), pastAt: handle(one.pastAt) };
+        return { path: one.path, bodyAt: handle(one.bodyAt) };
       });
     },
     // Stores one draft, **which must carry an `at`** (the key).

@@ -1,0 +1,225 @@
+#!/usr/bin/env -S ksplc run
+//< Checks that the Makefile links as ksplc says an artifact links
+//<
+//< ksplc decides the libraries and the stack size (`info link-libs` / `info exe-flags`, from
+//< `ksplc/tools/run.kspls`). The Makefile's `LDLIBS` links ksplc itself, so it cannot ask and holds
+//< a copy. **A Windows disagreement shows nowhere else**: Linux and macOS take neither branch, and
+//< a stack too small dies only on a deep recursion. So both are asked as UCRT64 through a stand-in
+//< C compiler naming its target (both decide by `CC -dumpmachine`), and once as this host is.
+//< Caution: **Do not parse the Makefile here**: make answers `LDLIBS` itself (`-p`).
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/sys"
+import "std/verdict"
+import "tests/support/harness"
+
+priv const triple_var: U8[] = "KANSO_STAND_IN_TRIPLE" //< what the stand-in answers `-dumpmachine`
+
+// The Windows target, as UCRT64's clang names it (the Makefile refuses any other). The host is
+// asked besides, with its own compiler.
+priv const windows_triple: U8[] = "x86_64-w64-windows-gnu"
+
+// What Windows and MSYS2's UCRT64 shell set, which the Makefile reads to take its Windows branch.
+priv const windows_env: U8[][2] = ::{ "OS=Windows_NT", "MSYSTEM=UCRT64" }
+
+priv const ldlibs_head: U8[] = "LDLIBS := " //< `LDLIBS`'s line in make's `-p`, its value expanded
+
+priv const fix_hint: U8[] =
+    "fix the Makefile's LDLIBS or `append_link_libs` / `append_stack_flag` in \
+        ksplc/tools/run.kspls, whichever is wrong"
+
+// ==========================================
+// The comparison
+// ==========================================
+
+priv fn words(text: U8[], arena: Arena$@): List<|U8[]|> //< the words text holds, split at blanks
+    $out: = List<|U8[]|>.new(arena)
+    $start: Sz = 0
+    for $i: Sz = 0; i <= text.len; i += 1
+        if i < text.len && !text[i].is_space()
+            continue
+        if i > start
+            out.push(text.sub(start, i - start))
+        start = i + 1
+    return out
+
+priv fn has(xs: List<|U8[]|>@, w: U8[]): Bool
+    for x in xs
+        if x.equals(w)
+            return true
+    return false
+
+priv fn sets_stack(word: U8[]): Bool //< whether a linker option sets the stack's size
+    //<
+    //< Each linker spells it its own way (`/STACK:`, `--stack,`, ld64's `-stack_size,`).
+    if !word.starts_with("-Wl,")
+        return false
+    for i in Range.asc(word.len - 4)
+        if word.sub(i, 5).equals_ignore_case("stack")
+            return true
+    return false
+
+priv fn disagreements(ldlibs: U8[], libs: U8[], flags: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< What `LDLIBS` and ksplc's two answers (`info link-libs`, `info exe-flags`) disagree on
+    //<
+    //< A library must be on both sides, in any order. A linker option in `LDLIBS` must be one ksplc
+    //< passes, and one ksplc passes for the stack must be in `LDLIBS`. ksplc's other options
+    //< (removing unreferenced sections) the Makefile keeps in `CFLAGS`, so they are not compared.
+    m: = words(ldlibs, arena)
+    l: = words(libs, arena)
+    f: = words(flags, arena)
+    $bad: = List<|U8[]|>.new(arena)
+    for w in m
+        if !has(l@, w) && !has(f@, w)
+            bad
+                .push(arena.text().s("LDLIBS holds `\{w\}`, which ksplc neither links nor passes")
+                .take())
+    for w in l
+        if !has(m@, w)
+            bad.push(arena.text().s("ksplc links `\{w\}`, which LDLIBS lacks").take())
+    for w in f
+        if sets_stack(w) && !has(m@, w)
+            bad.push(arena.text().s("ksplc passes `\{w\}`, which LDLIBS lacks").take())
+    return bad
+
+// ==========================================
+// The comparison shows it can fire **Both sides agree today**, so a comparison broken into
+// "always agrees" would stay green.
+// ==========================================
+
+struct Answers //< one sample: `LDLIBS`, ksplc's two answers, and whether they disagree
+    ldlibs: U8[]
+    libs: U8[]
+    flags: U8[]
+    fires: Bool
+
+// The first two are today's answers on Linux and UCRT64 (on Linux, ksplc's section options are not
+// in LDLIBS), the third UCRT64's out of order.
+priv const samples: Answers[8] = ::{ Answers::{ .ldlibs = "-lm -lpthread", .libs = "-lm -lpthread",
+    .flags = "-ffunction-sections -fdata-sections -Wl,--gc-sections", .fires = false },
+    Answers::{ .ldlibs = "-lm -lws2_32 -lshell32 -Wl,--stack,8388608",
+    .libs = "-lm -lws2_32 -lshell32", .flags = "-Wl,--stack,8388608", .fires = false },
+    Answers::{ .ldlibs = "-lshell32 -Wl,--stack,8388608 -lws2_32 -lm",
+    .libs = "-lm -lws2_32 -lshell32", .flags = "-Wl,--stack,8388608", .fires = false },
+    Answers::{ .ldlibs = "-lm -lws2_32 -Wl,--stack,8388608", .libs = "-lm -lws2_32 -lshell32",
+    .flags = "-Wl,--stack,8388608", .fires = true },
+    Answers::{ .ldlibs = "-lm -lpthread -lws2_32 -lshell32 -Wl,--stack,8388608",
+    .libs = "-lm -lws2_32 -lshell32", .flags = "-Wl,--stack,8388608", .fires = true },
+    Answers::{ .ldlibs = "-lws2_32 -lshell32 -Wl,--stack,4194304", .libs = "-lws2_32 -lshell32",
+    .flags = "-Wl,--stack,8388608", .fires = true },
+    Answers::{ .ldlibs = "-lws2_32 -lshell32", .libs = "-lws2_32 -lshell32",
+    .flags = "-Wl,--stack,8388608", .fires = true },
+    Answers::{ .ldlibs = "-lm -Wl,--stack,8388608", .libs = "-lm", .flags = "-Wl,--gc-sections",
+    .fires = true } }
+
+priv fn check_fires(arena: Arena$@)
+    $bad: = List<|U8[]|>.new(arena)
+    for s in samples
+        if (disagreements(s.ldlibs, s.libs, s.flags, arena).len > 0) != s.fires
+            bad
+                .push(arena.text()
+                .s("LDLIBS \"\{s.ldlibs\}\" against \"\{s.libs\}\" / \"\{s.flags\}\"")
+                .s(" should " if s.fires else " should not ").s("disagree").take())
+    verdict.check_list("the comparison of the link rules can fire", samples.len, "samples", bad@,
+        "the table is `samples`")
+
+// ==========================================
+// Asking both sides
+// ==========================================
+
+priv fn stand_in_src(arena: Arena$@): U8[] //< a C compiler that only names a target
+    return arena.text().s("import \"std/io\"\nimport \"std/sys\"\n\nfn main(): I32\n")
+        .s("  io.out().s(sys.get_env(\"\{triple_var\}\").unwrap_or(\"\")).c('\\n')\n  return 0\n")
+        .take()
+
+priv fn info(topic: U8[]): verdict.Run_out //< what `ksplc info <topic>` answers
+    return harness.ksplc_bare(U8[][]::{ "info", topic })
+
+priv fn build_stand_in(work: U8[], arena: Arena$@): U8[] //<
+    //< Builds the stand-in with the host's compiler and returns it; empty where it cannot
+    src: = fs.join(work, "stand_in.kspls", arena)
+    c: = fs.join(work, "stand_in.c", arena)
+    exe: = fs.join(work, "stand_in.exe", arena)
+    io.write_file(src, stand_in_src(arena)) catch
+        return ""
+    gen: = harness.ksplc(U8[][]::{ src, c })
+    if !verdict.check("the stand-in C compiler compiles", gen.code == 0, gen.out)
+        return ""
+    libs: = info("link-libs")
+    flags: = info("exe-flags")
+    $argv: = List<|U8[]|>.new(arena)
+    argv.push(harness.cc())
+    argv.push("-std=c99")
+    argv.push(c)
+    for w in words(libs.out, arena)
+        argv.push(w)
+    for w in words(flags.out, arena)
+        argv.push(w)
+    argv.push("-o")
+    argv.push(exe)
+    linked: = harness.run(argv.slice())
+    if !verdict.check("the stand-in C compiler links", linked.code == 0, linked.out)
+        return ""
+    return exe
+
+priv fn ldlibs_of(out: U8[], arena: Arena$@): Option<|U8[]|> //< `LDLIBS`'s value in make's `-p`
+    for line in out.lines(arena)
+        if line.starts_with(ldlibs_head)
+            return .some(line.sub_from(ldlibs_head.len))
+    return .none
+
+priv fn compare(name: U8[], cc: U8[], triple: U8[], make_vars: U8[][], arena: Arena$@) //<
+    //< Asks make and ksplc under one C compiler, and reports where they disagree
+    //<
+    //< Caution: **Pass `CC` to make on its command line**: the Makefile assigns it, which an
+    //< environment variable does not override.
+    if triple.len > 0 && !sys.set_env(triple_var, triple)
+        verdict.check(arena.text().s("\{name\}: the stand-in can be told the target").take(), false,
+            "")
+        return
+    $args: = List<|U8[]|>.new(arena)
+    args.push("LOGGING=1")
+    args.push("-pRrq")
+    args.push(arena.text().s("CC=\{cc\}").take())
+    for v in make_vars
+        args.push(v)
+    made: = harness.make(args.slice())
+    saved: = arena.dup_str(sys.get_env("CC").unwrap_or(""))
+    $libs: = verdict.Run_out::{ .code = -1, .out = "CC could not be set" }
+    $flags: = libs
+    if sys.set_env("CC", cc)
+        libs = info("link-libs")
+        flags = info("exe-flags")
+    _restored: = sys.unset_env("CC") if saved.len == 0 else sys.set_env("CC", saved)
+    _cleared: = sys.unset_env(triple_var)
+    $ldlibs: U8[] = ""
+    switch ldlibs_of(made.out, arena) case .some(v)
+        ldlibs = v
+    case .none
+        verdict.check(arena.text().s("\{name\}: make answers LDLIBS").take(), false, made.out)
+        return
+    if !verdict.check(arena.text().s("\{name\}: ksplc answers the link rules").take(),
+        libs.code == 0 && flags.code == 0,
+        arena.text().s(libs.out).s(flags.out).take())
+        return
+    $bad: = disagreements(ldlibs, libs.out, flags.out, arena)
+    seen: = words(ldlibs, arena).len + words(libs.out, arena).len
+    verdict.check_list(arena.text().s("\{name\}: the Makefile's LDLIBS agrees with ksplc").take(),
+        seen, "words", bad@, fix_hint)
+
+fn main(): I32
+    arena: = harness.begin(16 * 1024 * 1024)
+    check_fires(arena)
+    work: = harness.sandbox("link-rules") catch
+        return harness.fatal("cannot make a working directory")
+    host_cc: = harness.cc()
+    compare("this host", host_cc, "", U8[][]::{ .ptr = null, .len = 0 }, arena)
+    stand_in: = build_stand_in(work, arena)
+    if stand_in.len == 0
+        return harness.finish()
+    compare(windows_triple, stand_in, windows_triple, U8[][]::windows_env, arena)
+    return harness.finish()

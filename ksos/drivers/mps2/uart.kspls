@@ -21,37 +21,37 @@ const ctrl_tx_enable: U32 = 0x1
 const ctrl_rx_enable: U32 = 0x2
 
 fn init() //< initializes UART0 (enabling both TX and RX)
-  mmio.write32(uart0_bauddiv, 16U32)
-  mmio.write32(uart0_ctrl, ctrl_tx_enable | ctrl_rx_enable)
+    mmio.write32(uart0_bauddiv, 16U32)
+    mmio.write32(uart0_ctrl, ctrl_tx_enable | ctrl_rx_enable)
 
 fn putc(c: U8): Bool //< sends one byte (busy-waits until the TX buffer has space)
-  //<
-  //< On a timeout it returns false (the byte was not sent).
-  if !mmio.poll(uart0_state, state_tx_full, false)
-    return false
-  mmio.write32(uart0_data, c)
-  return true
+    //<
+    //< On a timeout it returns false (the byte was not sent).
+    if !mmio.poll(uart0_state, state_tx_full, false)
+        return false
+    mmio.write32(uart0_data, c)
+    return true
 
 fn puts(s: U8[]): Bool //< sends a string a byte at a time
-  //<
-  //< If putc times out partway it returns false at once.
-  for c in s
-    if !putc(c)
-      return false
-  return true
+    //<
+    //< If putc times out partway it returns false at once.
+    for c in s
+        if !putc(c)
+            return false
+    return true
 
 fn getc(): Option<|U8|> //<
-  //< Receives one byte (busy-waits until data arrives in the RX buffer)
-  //<
-  //< On a timeout it returns none.
-  if !mmio.poll(uart0_state, state_rx_full, true)
-    return Option<|U8|>.none
-  return Option<|U8|>.some(U8::mmio.read32(uart0_data))
+    //< Receives one byte (busy-waits until data arrives in the RX buffer)
+    //<
+    //< On a timeout it returns none.
+    if !mmio.poll(uart0_state, state_rx_full, true)
+        return Option<|U8|>.none
+    return Option<|U8|>.some(U8::mmio.read32(uart0_data))
 
 fn try_getc(): Option<|U8|> //<
-  //< Takes a byte from the receive buffer at once, or returns none if it is empty
-  //<
-  //< It does not wait: it is one iteration of the polling loop's check, exposed on its own.
-  if (mmio.read32(uart0_state) & state_rx_full) == 0
-    return Option<|U8|>.none
-  return Option<|U8|>.some(U8::mmio.read32(uart0_data))
+    //< Takes a byte from the receive buffer at once, or returns none if it is empty
+    //<
+    //< It does not wait: it is one iteration of the polling loop's check, exposed on its own.
+    if (mmio.read32(uart0_state) & state_rx_full) == 0
+        return Option<|U8|>.none
+    return Option<|U8|>.some(U8::mmio.read32(uart0_data))

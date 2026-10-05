@@ -1,0 +1,127 @@
+//< Checks that the memory kssrv holds comes back to the same figure after clients that misbehave
+//<
+//< Not a suite; part of `kssrv/tests/main.kspls`, which starts the server for it (the run
+//< `memory`). **The figure is the server's own heap count** (`heap_bytes` in `/api/status`), not
+//< what the OS reports as resident: that moves with the allocator's caching, which no wave of
+//< clients decides, while the count moves only with what the server holds.
+import "kssrv/tests/client"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/sys"
+import "std/verdict"
+
+const memory_port: I32 = 18397 //< the port the run listens on
+    //<
+    //< Caution: **Keep it different from the others** (`ports_apart` in `kssrv/tests/main.kspls`).
+
+priv const waves: Sz = 4 //< how many times the misbehaving clients come
+    //<
+    //< The first fills what grows once and stays (the watch list's room); the rest must not add.
+
+priv const per_kind: Sz = 8 //< how many clients of each kind one wave brings at once
+
+priv const big_rel: U8[] = "big.bin" //< a file large enough that its answer goes out in parts
+priv const big_bytes: Sz = 1024 * 1024
+
+priv const flood_lines: Sz = 80 //< header lines a flooding client sends, past the head's cap
+priv const flood_line_bytes: Sz = 1000
+
+priv const settle_ms: I32 = 10000 //< the cap on waiting for the wave's connections to close
+priv const settle_poll_ms: I32 = 50
+
+fn place(root: U8[], arena: Arena$@): Bool //< puts the large file under the root
+    io.write_file(fs.join(root, big_rel, arena), client.filler(big_bytes, arena)) catch
+        return false
+    return true
+
+fn cases(token: U8[], arena: Arena$@): Void?client.Http_end //<
+    //< Brings the waves and checks the heap after each against the one after the first
+    auth: = client.bearer_head(token, arena)
+    $first: I64 = 0I64
+    for w in Range.asc(waves)
+        wave(auth, arena)?
+        $held: I64 = 0I64
+        switch settled_heap(auth, arena)? case .some(h)
+            held = h
+        case .none
+            verdict.check("every connection of a wave closes once its clients are gone", false,
+                "connections were still open at the cap on waiting")
+            return
+        if w == 0
+            first = held
+            if !verdict.check("/api/status names the heap the server holds", held > 0I64,
+                arena.text().s("\{held\}").take())
+                return
+            continue
+        nm: = arena.text().s("the heap is back to its figure after wave \{w + 1\}").take()
+        verdict.check(nm, held <= first,
+            arena.text().s("\{held\} bytes held, against \{first\} after the first").take())
+
+priv fn wave(auth: U8[], arena: Arena$@): Void?client.Http_end //<
+    //< Brings one wave of clients, and closes them all
+    //<
+    //< Clients that never finish a request, that send headers past the cap, that walk away
+    //< mid-answer, and one that behaves.
+    $stalled: = List<|client.Conn$@|>.new(arena)
+    for _k in Range.asc(per_kind)
+        c: = client.Conn.open_in(memory_port, arena)?
+        c.send("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n")?
+        stalled.push(c)
+    flood: = arena.text().s("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n")
+    line: = arena.text().s("X-Fill: ").s(client.filler(flood_line_bytes, arena)).s("\r\n").take()
+    for _l in Range.asc(flood_lines)
+        flood.s(line)
+    flood_bytes: = flood.take()
+    for _k in Range.asc(per_kind)
+        flood_once(flood_bytes, arena)?
+    target: = arena.text().s("/").s(big_rel).take()
+    for _k in Range.asc(per_kind)
+        walk_away(client.raw("GET", target, auth, "", arena))?
+    fine: = arena.text().s(client.raw("GET", target, auth, "", arena))
+        .s(client.raw("GET", "/sub/one.txt", auth, "", arena)).take()
+    _got: = client.request(memory_port, fine, 2, client.default_timeout_ms, false, arena)?
+    for c in stalled
+        c.free()
+
+priv fn flood_once(bytes: U8[], arena: Arena$@): Void?client.Http_end //<
+    //< Sends a head past the cap on one connection, and reads the refusal
+    $f: = client.Conn.open(memory_port)?
+    defer f.free()
+    f.send(bytes)?
+    _refused: = f.next(false, client.default_timeout_ms, arena)?
+
+priv fn walk_away(request: U8[]): Void?client.Http_end //<
+    //< Sends one request and closes once the first of its answer has arrived
+    $c: = client.Conn.open(memory_port)?
+    defer c.free()
+    c.send(request)?
+    read_some(c@)
+
+priv fn read_some(c: client.Conn$@) //< waits until some of the answer has arrived, and stops
+    deadline: = sys.mono_us() + I64::client.default_timeout_ms * 1000I64
+    for sys.mono_us() < deadline
+        n: = c.sock.read(c.buf) catch e
+            switch e case .would_block
+                sys.sleep_ms(1)
+                continue
+            default
+                return
+        if n != 0
+            return
+
+priv fn settled_heap(auth: U8[], arena: Arena$@): Option<|I64|>?client.Http_end //<
+    //< The heap once only the asking connection is open; none if that never comes by the cap
+    //<
+    //< -1 where the status names no heap.
+    deadline: = sys.mono_us() + I64::settle_ms * 1000I64
+    for sys.mono_us() < deadline
+        st: = client.get(memory_port, "/api/status", auth, arena)?
+        doc: = client.doc_of(st, arena)
+        if doc.get("connections_open").as_int64(-1I64) == 1I64
+            return Option<|I64|>.some(doc.get("heap_bytes").as_int64(-1I64))
+        sys.sleep_ms(settle_poll_ms)
+    return Option<|I64|>.none

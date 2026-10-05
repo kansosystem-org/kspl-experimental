@@ -198,62 +198,13 @@ function kspageProbePaper(ks) {
   // 23''''. The viewing side's overrides (not saved, and not landing on the page).
   //
   // **This can be seen nowhere else**: that the fields are wired to the overrides, and that copying
-  // to paper takes them off and puts them back (it breaks as "printed at the viewing width" and
-  // "after printing the screen's width does not come back").
-  const overWide = document.getElementById("over-width");
+  // to paper does not take them.
+  // **The body's width and type size have no field of their own** (the document's width is the
+  // settlement under File, and the browser's zoom enlarges what is read).
+  check(document.getElementById("over-width") === null
+    && document.getElementById("over-size") === null,
+    "there is no field for a width or a type size of the viewer's own");
   const overPlain = document.getElementById("over-plain");
-  const third = Math.round(roomWide / 3);
-  overWide.value = third;
-  overWide.dispatchEvent(new Event("change", { bubbles: true }));
-  check(app.over().reading === third,
-    "the width written in the field goes into the override (" + third + ")");
-  check(app.paper().reading === 0, "the document's settlement does not move");
-  const overSlack = Math.round((roomWide - third) / 2);
-  const overInward = Math.round(headLeft() - wasHead);
-  check(Math.abs(overInward - overSlack) <= 2,
-    "the row lands at the width overridden (" + overInward + " / " + overSlack + ")");
-  // Caution: **Take the overrides off while copying to paper** (a page is a thing that comes out by
-  // the document's settlement).
-  // With no paper width settled, an override would narrow the paper by that much too.
-  const paperSheet = document.createElement("canvas");
-  app.paintPage(paperSheet, 0);
-  check(paperSheet.width > third + 40,
-    "the page does not come out at the width overridden ("
-      + paperSheet.width + " / " + third + ")");
-  // Caution: **Put them back after copying.** Unput-back, the screen after printing stays at the
-  // document's width.
-  check(app.over().reading === third, "after copying the override is still there");
-  check(Math.abs(Math.round(headLeft() - wasHead) - overSlack) <= 2,
-    "the screen is still landed too");
-  // The body's font size. **This can be seen nowhere else**: that the field is wired to the
-  // overrides, is remembered, and comes off while copying to paper.
-  // Caution: **Look at it by the box's size** (reading the field's number back alone lets the shape
-  // where it never reached the laying-out walk past).
-  // The cursor's length follows the row's height, so whether the text grew can be read here.
-  const overSize = document.getElementById("over-size");
-  const caretTall = () => {
-    press(1, 20);
-    return caretBox.getBoundingClientRect().height;
-  };
-  const wasTall = caretTall();
-  overSize.value = 32;
-  overSize.dispatchEvent(new Event("change", { bubbles: true }));
-  check(app.over().size === 32,
-    "the size written in the field goes into the override (" + app.over().size + ")");
-  check(caretTall() > wasTall + 4,
-    "the body grows at the size written (" + wasTall + " → " + caretTall() + ")");
-  // Caution: **Remember it** (do not make it put in afresh every time).
-  // Where it is remembered is the one place `keptPick`.
-  let keptSize = null;
-  try {
-    keptSize = localStorage.getItem("kspage.over.size");
-  } catch (_) { /* it works on a page that cannot remember too */ }
-  check(keptSize === null || keptSize === "32",
-    "the size put in is remembered (" + keptSize + ")");
-  overSize.value = "";
-  overSize.dispatchEvent(new Event("change", { bubbles: true }));
-  check(app.over().size === 0 && Math.abs(caretTall() - wasTall) < 1,
-    "emptying it goes back to the original size (" + caretTall() + ")");
   // Fitting the document's colours to the screen.
   // Caution: **Look at it by pixels** (the colour drawn is the answer).
   // It is looked at by the code block's fill (#f5f5f5) vanishing; the document does not move.
@@ -299,9 +250,7 @@ function kspageProbePaper(ks) {
     "the document's fill comes out on the page (" + paperFills + " pixels)");
   overPlain.checked = false;
   overPlain.dispatchEvent(new Event("change", { bubbles: true }));
-  overWide.value = "";
-  overWide.dispatchEvent(new Event("change", { bubbles: true }));
-  check(app.over().reading === 0 && app.over().plain === false, "both can be taken off");
+  check(app.over().plain === false, "it can be taken off");
   check(fillOf([245, 245, 245]) > 100, "taking them off puts the document's fill back");
 
   // The paper's settings must ride on the record for undoing.

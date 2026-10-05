@@ -34,7 +34,6 @@ suite_run := run
 suite_thin-use := thin_use
 suite_negative := negative
 suite_runtime := runtime
-suite_decls := decls
 suite_std-dir := std_dir
 suite_emit-runtime := emit_runtime
 suite_property := property
@@ -62,8 +61,9 @@ suite_lsp := lsp
 suite_kspls := kspls
 suite_ast-cache := ast_cache
 suite_doc := doc
+suite_ship := ship
 # **List them by how long they take, the longest first**: `make -j` starts them in this order.
-SUITES := lsp run thin-use negative runtime write-perm decls std-dir emit-runtime property \
+SUITES := lsp run thin-use negative runtime write-perm std-dir emit-runtime ship property \
   limits lint cli kspls split equiv ast-cache broken-pipe config output-flush ext-import \
   debug-line decl-macros spawn slice-struct one-main file-path place visibility fmt doc
 # The scattering is a suite too, run apart (`make test-fuzz`) and handed, after the two places, the
@@ -98,11 +98,12 @@ translate_cmd = cd "$(RUN_FROM)" && "$(1)" $(FLAGS) "$(ENTRY_FILE)" "$(2)" \
 # $(call build_cmd,<compiler that made the code>,<from>,<runtime or empty>,<exe>)
 build_cmd = cd "$(RUN_FROM)" && "$(CC)" $(CFLAGS) $$("$(1)" info exe-flags) "$(2)" $(3) \
   $$("$(1)" info link-libs) -o "$(4)"
-# $(call compare_cmd,<one>,<the other>,<diff>)
-compare_cmd = cd "$(RUN_FROM)" && { diff -w "$(1)" "$(2)" > "$(3)" || true; }
-# $(call verdict_cmd,<diff>,<what passed>)
+# $(call compare_cmd,<one>,<the other>,<diff>): byte for byte, so `diff` takes no option that
+# ignores some (`-w` passes a space added inside a string literal); a file that cannot be read fails.
+compare_cmd = cd "$(RUN_FROM)" && { diff "$(1)" "$(2)" > "$(3)"; [ $$? -le 1 ]; }
+# $(call verdict_cmd,<diff>,<what was compared>)
 verdict_cmd = cd "$(RUN_FROM)" && if [ -s "$(1)" ]; then \
-  echo "RESULT: SOME FAILED (1) -> stage1 and stage2 differ. See $(1) for full details."; \
+  echo "RESULT: SOME FAILED (1) -> $(2): the two outputs differ. See $(1) for full details."; \
   head -n 20 "$(1)"; exit 1; fi; echo "RESULT: ALL PASS ($(2))"
 
 translate:

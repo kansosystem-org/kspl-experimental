@@ -23,7 +23,7 @@ test-kspage-browser: $(STAGE1_EXE)
 	@$(kspage_make) test-browser
 
 ## Gates|test-kspage-served|Look at the page `kssrv --local` served
-test-kspage-served: $(STAGE1_EXE) kssrv kspage-plugins
+test-kspage-served: $(STAGE1_EXE) kssrv
 	@$(kspage_make) test-served KSSRV=../$(OUT_DIR)/kssrv.exe
 
 # ==========================================
@@ -39,13 +39,6 @@ kspage-serve: kspage-web kssrv
 	@echo "# SERVING kspage"
 	./$(STAGE1_EXE) run tools/kspage_open.kspls "$(KSPAGE_DOC)" --root=. \
 		--port=$(KSPAGE_SERVE_PORT) --show
-
-# Caution: **Plugins beside the server, not in the folder served**: a fetched tree could plant one.
-## Run|kspage-plugins|Build the sample plugins into the folder the server reads
-kspage-plugins: $(STAGE1_EXE)
-	@echo "# BUILDING the kspage plugins (out/plugins/)"
-	$(call kspl_build,tools/kspage_plugin_sort.kspls,kspage_plugin_sort,,,$(OUT_DIR)/plugins/sort)
-	@echo "# built -> $(OUT_DIR)/plugins/sort"
 
 KSPAGE_OPEN_EXE := $(OUT_DIR)/kspage_open.exe
 
@@ -95,8 +88,29 @@ KSPAGE_ASSOC_STEPS := \
 	'xdg-mime default kspage.desktop application/x-kspage'
 endif
 
+# **It writes the entry alone**, so the gate costs no build; written afresh each time, as it holds
+# where the repository stands. `KSPAGE_REQUIRE_DESKTOP=1` fails where `desktop-file-validate` is
+# missing (`ci-linux` passes it: the image holds the tool); else a SKIP.
+KSPAGE_REQUIRE_DESKTOP ?=
+## Gates|test-kspage-desktop|Whether the entry `make kspage` writes for a double-click is a valid `.desktop` file
+test-kspage-desktop: | $(OUT_DIR)
+	@here="$$PWD"; printf '%s\n' \
+		'[Desktop Entry]' 'Type=Application' 'Version=1.0' \
+		'Name=kspage' 'Comment=Open this file with kspage in a browser' \
+		"Exec=$$here/$(KSPAGE_OPEN_EXE) %f" \
+		"Path=$$here" 'Terminal=false' 'NoDisplay=true' \
+		'MimeType=application/x-kspage;text/plain;text/markdown;text/csv;application/json;' \
+		> $(KSPAGE_DESKTOP)
+	@if command -v desktop-file-validate >/dev/null 2>&1; then \
+		desktop-file-validate $(KSPAGE_DESKTOP) || exit 1; \
+		echo "RESULT: ALL PASS ($(KSPAGE_DESKTOP) is a valid desktop entry)"; \
+	elif [ "$(KSPAGE_REQUIRE_DESKTOP)" = 1 ]; then \
+		echo "RESULT: SOME FAILED (1) -> desktop-file-validate is not installed, where it is required"; \
+		exit 1; \
+	else echo "RESULT: SKIPPED (desktop-file-validate is not installed)"; fi
+
 ## Run|kspage|Build the lot and make a `.kspage` open on a double-click
-kspage: kspage-web kssrv $(KSPAGE_OPEN_EXE) $(KSPAGE_SAMPLE)
+kspage: kspage-web kssrv $(KSPAGE_OPEN_EXE) $(KSPAGE_SAMPLE) test-kspage-desktop
 	@printf '%s\n' \
 		'<?xml version="1.0" encoding="UTF-8"?>' \
 		'<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">' \
@@ -107,16 +121,6 @@ kspage: kspage-web kssrv $(KSPAGE_OPEN_EXE) $(KSPAGE_SAMPLE)
 		'  </mime-type>' \
 		'</mime-info>' \
 		> $(KSPAGE_MIME)
-	@here="$$PWD"; printf '%s\n' \
-		'[Desktop Entry]' 'Type=Application' 'Version=1.0' \
-		'Name=kspage' 'Comment=Open this file with kspage in a browser' \
-		"Exec=$$here/$(KSPAGE_OPEN_EXE) %f" \
-		"Path=$$here" 'Terminal=false' 'NoDisplay=true' \
-		'MimeType=application/x-kspage;text/plain;text/markdown;text/csv;application/json;' \
-		> $(KSPAGE_DESKTOP)
-	@if command -v desktop-file-validate >/dev/null 2>&1; then \
-		desktop-file-validate $(KSPAGE_DESKTOP) && echo "# desktop-file-validate: OK"; \
-	else echo "# NOTE: desktop-file-validate is not installed; SKIPPED that check"; fi
 	@echo "# built -> $(KSPAGE_DESKTOP)"
 	@echo "# built -> $(KSPAGE_MIME)"
 	@echo "# $(KSPAGE_ASSOC_LEAD)"
@@ -124,5 +128,5 @@ kspage: kspage-web kssrv $(KSPAGE_OPEN_EXE) $(KSPAGE_SAMPLE)
 	@echo "# then double-click $(KSPAGE_SAMPLE) to check it"
 	@echo "# (the other platforms, and what to do if nothing opens: the last section of docs/HOWTO-set-up-a-project.md)"
 
-.PHONY: kspage kspage-serve kspage-open kspage-plugins kspage-web \
-	test-kspage-wasm test-kspage-browser test-kspage-served
+.PHONY: kspage kspage-serve kspage-open kspage-web \
+	test-kspage-wasm test-kspage-browser test-kspage-served test-kspage-desktop

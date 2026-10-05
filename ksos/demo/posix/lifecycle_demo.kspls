@@ -13,41 +13,41 @@ $stack_w: U8[65536]
 $stack_c: U8[65536]
 
 fn worker(_arg: Void$@): Void //<
-  //< A simple worker that only advances a counter once per tick
-  for
-    g_counter += 1
-    Task.delay(1)
+    //< A simple worker that only advances a counter once per tick
+    for
+        g_counter += 1
+        Task.delay(1)
 
 fn coordinator(_arg: Void$@): Void
-  io.out().s("=== Kanso OS (POSIX) task suspend/resume/delete ===\n")
-  Task.delay(5)
-  before_suspend: = g_counter
-  io.out().s("[coord] suspending worker at counter=\{before_suspend\}\n")
-  tcb_w.suspend()
-  Task.delay(5)
-  after_suspend: = g_counter
-  assert(after_suspend == before_suspend, "lifecycle: worker advanced while suspended")
-  io.out().s("[coord] worker did not advance while suspended (counter=\{after_suspend\})\n")
+    io.out().s("=== Kanso OS (POSIX) task suspend/resume/delete ===\n")
+    Task.delay(5)
+    before_suspend: = g_counter
+    io.out().s("[coord] suspending worker at counter=\{before_suspend\}\n")
+    tcb_w.suspend()
+    Task.delay(5)
+    after_suspend: = g_counter
+    assert(after_suspend == before_suspend, "lifecycle: worker advanced while suspended")
+    io.out().s("[coord] worker did not advance while suspended (counter=\{after_suspend\})\n")
 
-  io.out().s("[coord] resuming worker\n")
-  tcb_w.resume()
-  Task.delay(5)
-  after_resume: = g_counter
-  assert(after_resume > after_suspend, "lifecycle: worker did not resume")
-  io.out().s("[coord] worker advanced again after resume (counter=\{after_resume\})\n")
+    io.out().s("[coord] resuming worker\n")
+    tcb_w.resume()
+    Task.delay(5)
+    after_resume: = g_counter
+    assert(after_resume > after_suspend, "lifecycle: worker did not resume")
+    io.out().s("[coord] worker advanced again after resume (counter=\{after_resume\})\n")
 
-  io.out().s("[coord] deleting worker\n")
-  tcb_w.delete()
-  Task.delay(5)
-  after_delete: = g_counter
-  Task.delay(5)
-  after_delete2: = g_counter
-  assert(after_delete2 == after_delete, "lifecycle: deleted worker still running")
-  io.out().s("[coord] worker stayed deleted (counter=\{after_delete2\})\n")
-  io.out().s("=== done ===\n")
+    io.out().s("[coord] deleting worker\n")
+    tcb_w.delete()
+    Task.delay(5)
+    after_delete: = g_counter
+    Task.delay(5)
+    after_delete2: = g_counter
+    assert(after_delete2 == after_delete, "lifecycle: deleted worker still running")
+    io.out().s("[coord] worker stayed deleted (counter=\{after_delete2\})\n")
+    io.out().s("=== done ===\n")
 
 fn main()
-  tcb_w.create(U8$[]::stack_w, worker, null, 1, "worker")
-  tcb_c.create(U8$[]::stack_c, coordinator, null, 1, "coord")
-  task.start_scheduler()
-  io.out().s("=== scheduler finished (all tasks done) ===\n")
+    tcb_w.create(U8$[]::stack_w, worker, null, 1, "worker")
+    tcb_c.create(U8$[]::stack_c, coordinator, null, 1, "coord")
+    task.start_scheduler()
+    io.out().s("=== scheduler finished (all tasks done) ===\n")

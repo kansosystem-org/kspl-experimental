@@ -64,54 +64,54 @@ const max_packet: U32 = 64
 // The low-level parts
 // ==========================================
 fn buf_ctrl_addr(ep: U32, is_in: Bool): U32
-  return dpram_buf_ctrl + 8 * ep + (0U32 if is_in else 4U32)
+    return dpram_buf_ctrl + 8 * ep + (0U32 if is_in else 4U32)
 
 fn ep_ctrl_addr(ep: U32, is_in: Bool): U32
-  return dpram_ep_ctrl + 8 * (ep - 1) + (0U32 if is_in else 4U32)
+    return dpram_ep_ctrl + 8 * (ep - 1) + (0U32 if is_in else 4U32)
 
 fn copy_to_dpram(dst: U32, src: U8@, len: U32) //<
-  //< Copies len bytes from src into DPRAM at dst
-  //<
-  //< The descriptors are fixed-length arrays (U8[N]), passed as **a pointer to the first element
-  //< plus a length** (a fixed-length array has no .slice()).
-  for $i: U32 = 0; i < len; i += 1
-    a: = dst + i
-    mmio.write8(a, (src + Sz::i)$)
+    //< Copies len bytes from src into DPRAM at dst
+    //<
+    //< The descriptors are fixed-length arrays (U8[N]), passed as **a pointer to the first element
+    //< plus a length** (a fixed-length array has no .slice()).
+    for $i: U32 = 0; i < len; i += 1
+        a: = dst + i
+        mmio.write8(a, (src + Sz::i)$)
 
 fn copy_from_dpram(src: U32, dst: U8$[], at: Sz, len: Sz)
-  for i in Range.asc(len)
-    a: = src + U32::i
-    dst[at + i] = mmio.read8(a)
+    for i in Range.asc(len)
+        a: = src + U32::i
+        dst[at + i] = mmio.read8(a)
 
 fn recv_len(ep: U32): Sz //< how many bytes actually arrived in the last reception
-  //<
-  //< The hardware writes it into the buffer control's low 10 bits: **read it after completion**.
-  addr: = buf_ctrl_addr(ep, false)
-  return Sz::(mmio.read32(addr) & 0x3ff)
+    //<
+    //< The hardware writes it into the buffer control's low 10 bits: **read it after completion**.
+    addr: = buf_ctrl_addr(ep, false)
+    return Sz::(mmio.read32(addr) & 0x3ff)
 
 fn enable_ep(ep: U32, is_in: Bool, ep_type: U32, buf: U32) //< enables an endpoint
-  //<
-  //< buf is an absolute DPRAM address; the register takes its offset.
-  addr: = ep_ctrl_addr(ep, is_in)
-  mmio.write32(addr, ep_ctrl_enable | ep_ctrl_int_per_buf | (ep_type << 26) | (buf - dpram))
+    //<
+    //< buf is an absolute DPRAM address; the register takes its offset.
+    addr: = ep_ctrl_addr(ep, is_in)
+    mmio.write32(addr, ep_ctrl_enable | ep_ctrl_int_per_buf | (ep_type << 26) | (buf - dpram))
 
 fn send(ep: U32, buf: U32, data: U8@, len: U32, pid: U32) //<
-  //< Arms one packet to send (device to host)
-  //<
-  //< len must be 64 or less.
-  copy_to_dpram(buf, data, len)
-  $v: U32 = len | buf_ctrl_avail | buf_ctrl_full | buf_ctrl_last
-  if pid != 0
-    v = v | buf_ctrl_data1_pid
-  addr: = buf_ctrl_addr(ep, true)
-  mmio.write32(addr, v)
+    //< Arms one packet to send (device to host)
+    //<
+    //< len must be 64 or less.
+    copy_to_dpram(buf, data, len)
+    $v: U32 = len | buf_ctrl_avail | buf_ctrl_full | buf_ctrl_last
+    if pid != 0
+        v = v | buf_ctrl_data1_pid
+    addr: = buf_ctrl_addr(ep, true)
+    mmio.write32(addr, v)
 
 fn arm_recv(ep: U32, pid: U32, len: U32) //< arms one packet to receive (host to device)
-  //<
-  //< len is the most that can be received. To wait for the status stage (a zero-length OUT),
-  //< pass len = 0.
-  $v: U32 = len | buf_ctrl_avail
-  if pid != 0
-    v = v | buf_ctrl_data1_pid
-  addr: = buf_ctrl_addr(ep, false)
-  mmio.write32(addr, v)
+    //<
+    //< len is the most that can be received. To wait for the status stage (a zero-length OUT),
+    //< pass len = 0.
+    $v: U32 = len | buf_ctrl_avail
+    if pid != 0
+        v = v | buf_ctrl_data1_pid
+    addr: = buf_ctrl_addr(ep, false)
+    mmio.write32(addr, v)

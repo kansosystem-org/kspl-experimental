@@ -4,6 +4,7 @@
 //< terminator and the shebang come off before formatting and go back on after it, so a file that
 //< needs no other change is written back byte for byte. `ksplc fmt` calls it once per file.
 import "kspeg/engine" as kspeg
+import "ksplc/base/cache" as base_cache
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
 import "ksplc/fmt/style" { Config }
@@ -12,74 +13,141 @@ import "ksplc/parse/layout" as parse_layout
 import "ksplc/parse/load" as parse_load
 import "ksplc/parse/source_fix" as parse_source_fix
 import "std/ds" { List }
+import "std/fs"
 import "std/io"
 import "std/mem" { dealloc }
-import "std/str" // `Arena.text`
+import "std/str" { Str_builder } // `Arena.text`
+
+priv const fixed_magic: U8[] = "KSFMT" //< the start of every key, with the version after it
+priv const fixed_version: U32 = 1 //<
+    //< The key's version
+    //<
+    //< **Raise it whenever what goes into the key changes**, as `ast_cache`'s does.
+
+struct Fixed_points //< the record of the texts this ksplc already formats to themselves
+    //<
+    //< **A text formatted with no change is recorded, and next time it is not formatted again.**
+    //< The record is an empty file named by the key: this ksplc's identity, the style, the
+    //< notation and the file's bytes (`key_path`), so a rebuilt formatter or another style finds
+    //< none. A text that changes is never recorded: only a fixed point is known to stay one.
+    dir: U8[] //< the folder holding the records (`<cache folder>/fmt/<generation>`), or empty
+    hits: Sz
+    misses: Sz
+    stores: Sz
+
+impl Fixed_points
+    fn open(): Fixed_points //< the record this process uses; with no cache folder it records none
+        $dir: = Str_builder.new()
+        defer dir.free()
+        found: = base_cache.append_generation_dir(base_cache.fmt_kind, dir@, base_core.arena)
+        kept: = base_core.arena.dup_str(dir.slice()) if found else ""
+        return Fixed_points::{ .dir = kept, .hits = 0, .misses = 0, .stores = 0 }
+
+    priv fn key_path(r: Self$@, raw: U8[], laid: Bool, config: Config): U8[] //<
+        //< The record's path for these bytes, or empty where there is no record to keep
+        if r.dir.len == 0
+            return ""
+        $material: = Str_builder.new()
+        defer material.free()
+        material.s(fixed_magic).c(0U8).s("\{Sz::fixed_version\}").c(0U8)
+        if !base_cache.append_self_identity(material@)
+            return ""
+        config.append_key(material@)
+        material.c('l' if laid else 'b').c(0U8).s(raw)
+        $name: = Str_builder.new()
+        defer name.free()
+        base_cache.append_hash_hex(material.slice(), name@)
+        return fs.join(r.dir, name.slice(), base_core.arena)
+
+    fn print_stats(r: Self$@) //< it prints the hits and misses, only under --stats
+        //<
+        //< **On the error stream**: the formatted text may be on the output.
+        if base_core.config.enable_stats
+            io.err().s("    [Fmt Cache] \{r.hits\} hit / \{r.misses\} miss / \{r.stores\} stored\n")
 
 enum Fmt_error //< why one file was left as it was; its diagnostic is already printed
-  refused //< `--in-place` with a change of notation, which the file's name would contradict
-  parse(err: parse_load.Parse_error) //< it could not be read, parsed or written back
-  too_deep //< the printer's walk hit its depth limit, so the output is cut short
+    refused //< `--in-place` with a change of notation, which the file's name would contradict
+    parse(err: parse_load.Parse_error) //< it could not be read, parsed or written back
+    too_deep //< the printer's walk hit its depth limit, so the output is cut short
 
 fn format_file(in_path: U8[], base_parser: kspeg.Target$@, config: Config, in_place: Bool,
-  to_layout: Bool): Void?Fmt_error //<
-    //< It formats one file, in place (`in_place`) or to standard output
-  // Caution: **Refuse a change of notation before formatting starts.** The formatter rearranges
-  // the original text's tokens, so the brace-less notation fails at the first statement with a
-  // diagnostic that reads as a typo. Without `--in-place` the output goes to standard output.
-  if in_place && to_layout != in_path.is_laid_out()
-    io.err().s(in_path).s(": it cannot be written back under a changed name")
-    io.err().s(" (leave `--in-place` off and it puts it out to standard output).\n")
-    throw Fmt_error.refused
-  raw: = io.read_file(in_path) catch e
-    throw Fmt_error.parse(.io(e))
-  defer dealloc(Void$@::raw.ptr)
-  // The `defer` above frees the original buffer. The fixed-up text lives on the arena, so never
-  // pass it to `dealloc`.
-  // Caution: **Strip the BOM before formatting and restore it before writing** (as with the
-  // shebang). Left on, it makes the first line unreadable; not restored, it silently disappears
-  // from the user's file.
-  had_bom: = parse_source_fix.strip_bom(raw).len != raw.len
-  // Strip the CRLF line ends with the BOM and restore them with it. The formatter ends each line
-  // with `\n`, so a `\r` left in a comment would sit before it and the output would mix two line
-  // ends.
-  had_crlf: = parse_source_fix.has_crlf(raw)
-  // The layout notes are not reported on this formatting path (the reason is at
-  // `parse_load.layout_notes`).
-  $laid_notes: = List<|parse_layout.Note|>.new(base_core.arena)
-  src: = parse_layout.mend(raw, in_path.is_laid_out(), laid_notes@, base_core.arena).code
-  // Formatted as a line comment, the shebang's `#!` becomes `//` and the script no longer starts.
-  // So this formats a masked copy and restores the output's first two bytes.
-  had_shebang: = parse_source_fix.has_shebang(src)
-  $work: U8[] = src
-  if had_shebang
-    masked: = base_core.arena.dup_str(src)
-    parse_source_fix.mask_shebang(masked)
-    work = masked
-
-  $formatter: =
-    fmt_text.format_text(work, in_path, base_parser, config, to_layout, in_path.is_laid_out()) catch e
-    throw .parse(e)
-  defer formatter.free()
-  if formatter.too_deep
-    io.err()
-      .s("\nerror: source nesting too deep for the formatter (possible pathological input).\n")
-    throw Fmt_error.too_deep
-
-  fmt_out: = formatter.out.slice()
-  if had_shebang
-    parse_source_fix.unmask_shebang(fmt_out) // forget this and the script's start-up line breaks
-  // Caution: **Restore the BOM before writing** (the reason is at `had_bom`).
-  $out_bytes: U8[] = fmt_out
-  if had_crlf
-    out_bytes = parse_source_fix.to_crlf(out_bytes, base_core.arena)
-  if had_bom
-    out_bytes = base_core.arena.text().s("\uFEFF").s(out_bytes).take()
-  if in_place
-    if !raw.equals(out_bytes)
-      io.write_file(in_path, out_bytes) catch e
+    to_layout: Bool, fixed: Fixed_points$@): Void?Fmt_error //<
+        //< It formats one file, in place (`in_place`) or to standard output
+    // Caution: **Refuse a change of notation before formatting starts.** The formatter rearranges
+    // the original text's tokens, so the brace-less notation fails at the first statement with a
+    // diagnostic that reads as a typo. Without `--in-place` the output goes to standard output.
+    if in_place && to_layout != in_path.is_laid_out()
+        io.err().s(in_path).s(": it cannot be written back under a changed name")
+        io.err().s(" (leave `--in-place` off and it puts it out to standard output).\n")
+        throw Fmt_error.refused
+    raw: = io.read_file(in_path) catch e
         throw Fmt_error.parse(.io(e))
-      base_diag.log().s("Formatted (in-place): \{in_path\}\n")
-  else
-    // Caution: **Do not add a newline here.** `end_with_one_nl` already ended the output with one.
-    io.out().s(out_bytes)
+    defer dealloc(Void$@::raw.ptr)
+    // The `defer` above frees the original buffer. The fixed-up text lives on the arena, so never
+    // pass it to `dealloc`.
+    // Only a text kept in its own notation can be a fixed point.
+    same_notation: = to_layout == in_path.is_laid_out()
+    record: = fixed.key_path(raw, to_layout, config) if same_notation else ""
+    if record.len > 0
+        if fs.exists(record)
+            fixed.hits += 1
+            if !in_place
+                io.out().s(raw)
+            return
+        fixed.misses += 1
+    // Caution: **Strip the BOM before formatting and restore it before writing** (as with the
+    // shebang). Left on, it makes the first line unreadable; not restored, it silently disappears
+    // from the user's file.
+    had_bom: = parse_source_fix.strip_bom(raw).len != raw.len
+    // Strip the CRLF line ends with the BOM and restore them with it. The formatter ends each line
+    // with `\n`, so a `\r` left in a comment would sit before it and the output would mix two line
+    // ends.
+    had_crlf: = parse_source_fix.has_crlf(raw)
+    // The layout notes are not reported on this formatting path (the reason is at
+    // `parse_load.layout_notes`).
+    $laid_notes: = List<|parse_layout.Note|>.new(base_core.arena)
+    src: = parse_layout.mend(raw, in_path.is_laid_out(), laid_notes@, base_core.arena).code
+    // Formatted as a line comment, the shebang's `#!` becomes `//` and the script no longer starts.
+    // So this formats a masked copy and restores the output's first two bytes.
+    had_shebang: = parse_source_fix.has_shebang(src)
+    $work: U8[] = src
+    if had_shebang
+        masked: = base_core.arena.dup_str(src)
+        parse_source_fix.mask_shebang(masked)
+        work = masked
+
+    $formatter: =
+        fmt_text.format_text(work, in_path, base_parser, config, to_layout,
+        in_path.is_laid_out()) catch e
+        throw .parse(e)
+    defer formatter.free()
+    if formatter.too_deep
+        io.err()
+            .s("\nerror: source nesting too deep for the formatter (possible pathological input).\n")
+        throw Fmt_error.too_deep
+
+    fmt_out: = formatter.out.slice()
+    if had_shebang
+        parse_source_fix.unmask_shebang(fmt_out) // forget this and the script's start-up line breaks
+    // Caution: **Restore the BOM before writing** (the reason is at `had_bom`).
+    $out_bytes: U8[] = fmt_out
+    if had_crlf
+        out_bytes = parse_source_fix.to_crlf(out_bytes, base_core.arena)
+    if had_bom
+        out_bytes = base_core.arena.text().s("\uFEFF").s(out_bytes).take()
+    // A record that cannot be written costs only the next run's time.
+    if record.len > 0 && raw.equals(out_bytes)
+        $stored: = true
+        io.write_file(record, "") catch
+            stored = false
+        if stored
+            fixed.stores += 1
+    if in_place
+        if !raw.equals(out_bytes)
+            io.write_file(in_path, out_bytes) catch e
+                throw Fmt_error.parse(.io(e))
+            base_diag.log().s("Formatted (in-place): \{in_path\}\n")
+    else
+        // Caution: **Do not add a newline here.** `end_with_one_nl` already ended the output with
+        // one.
+        io.out().s(out_bytes)

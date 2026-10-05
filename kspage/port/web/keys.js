@@ -38,22 +38,13 @@ function kspageKeys(ks) {
     return bytes.length;
   }
 
-  // The current time **in local time**, to the minute (to the second, one burst of typing splits).
-  function nowText() {
-    const t = new Date();
-    const p = (n) => String(n).padStart(2, "0");
-    return t.getFullYear() + "-" + p(t.getMonth() + 1) + "-" + p(t.getDate())
-      + " " + p(t.getHours()) + ":" + p(t.getMinutes());
-  }
-
-  // A pause between keystrokes ends the undo step (else undo goes one keystroke at a time) and
-  // stamps the history. **The core has no clock**: the pause, time and name are decided here.
+  // A pause between keystrokes ends the undo step (else undo goes one keystroke at a time). **The
+  // core has no clock**: the pause is decided here.
   let idleTimer = 0;
   function armGroupBreak() {
     clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
       w.kspage_web_break_undo_group();
-      ks.api.stampTrail();
     }, 700);
   }
 
@@ -129,13 +120,6 @@ function kspageKeys(ks) {
     }
     // **It follows a link only with Ctrl (⌘) held** (a plain click places the cursor).
     if (e.ctrlKey || e.metaKey) {
-      // Caution: **A link to the source must not open a window** (`src:` means text shown only on
-      // this screen): the page shows it (`onSource`), or it stays unopened.
-      const aim = ks.api.sourceAt(x, y);
-      if (aim !== null) {
-        if (ks.api.onSource) ks.api.onSource(aim);
-        return;
-      }
       const to = ks.api.hrefAt(x, y);
       if (to.length > 0) {
         window.open(to, "_blank", "noopener");
@@ -439,6 +423,5 @@ function kspageKeys(ks) {
   ks.stage = stage;
   ks.type = type;
   ks.compose = compose;
-  ks.nowText = nowText;
   ks.armGroupBreak = armGroupBreak;
 }

@@ -285,11 +285,16 @@ String  = "\"\"\"" ( !"\"\"\"" . )* "\"\"\"" | ["] String_part* ["]
 String_part = String_expr | String_content
 String_expr = "\\{" _Space expr ( ":" Format_spec )? _Space "\\}"
 String_content = ( "\\" !"{" !"}" . | !["\\] . )+
-Format_spec = [0-9,.xXc]+
+// **Any text up to the `\}` is a spec**, even none: `ksplc/parse/format_spec.kspls` reads it and
+// names what it cannot read. A character class here made `\{n:q\}` and `\{n:\}` a syntax error
+// far away ("'(' is never closed").
+Format_spec = ( !"\\}" ![ \t"] . )*
 
 Literal = Float | Integer | String | Char | Bool | Null
 
-Integer = ( "0x" [0-9A-Fa-f_]+ | "0b" [01_]+ | [0-9] [0-9_]* ) ( ( "I" | "U" ) ( "8" | "16" | "32" | "64" )? | 'Sz' )?
+// **A decimal integer does not start with `0`** unless it is `0`: C reads `0755` as octal, and
+// KSPL has none (`append_leading_zero_hint` in `ksplc/parse/syntax_msg.kspls` says so).
+Integer = ( "0x" [0-9A-Fa-f_]+ | "0b" [01_]+ | "0" ![0-9_] | [1-9] [0-9_]* ) ( ( "I" | "U" ) ( "8" | "16" | "32" | "64" )? | 'Sz' )?
 Float   = [0-9] [0-9_]* "." [0-9_]+ ( [eE] [+\-]? [0-9_]+ )? ( "F32" | "F64" )?
 Bool    = 'true' | 'false'
 Null    = 'null'

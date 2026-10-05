@@ -20,14 +20,8 @@ function kspageApi(ks) {
   };
 
   const { w, mem, canvas, enc, str, outText, colorText, colorNum, scratch, nums, draw, stage, type,
-  compose, ime, bar, paperOf, nowText, armGroupBreak, handOver,
+  compose, ime, bar, paperOf, armGroupBreak, handOver,
   SHAPES, ALIGNS, MARKS, DATINGS, COLLECTS, SKETCHES } = ks;
-  // One origin mark for a document: the time plus randomness (otherwise two in one minute match);
-  // only equality matters. **The page makes it** (the core has neither a clock nor randomness).
-  const freshMark = () => {
-    const rand = Math.floor(Math.random() * 0x100000000).toString(16).padStart(8, "0");
-    return nowText() + "-" + rand;
-  };
   // The handler for exhausted memory — **the last safety net**: the core stops once the arena runs
   // out (`panic` in `../../../std/lang.kspls`), so unhandled **the screen freezes**.
   // Caution: **Always clean up** — the chunk being built is referenced by nobody, and unfreed the
@@ -51,23 +45,19 @@ function kspageApi(ks) {
     onCramped: null,
     // The bottom (px) of the chrome pinned at the top, **set by the page** (unset, 24px).
     headRoom: null,
-    // The handler for a link to the source, **set by the page** (the core opens no files).
-    onSource: null,
     // Where the slide list is shown, **set by the page** (unset, no list); redrawn each time.
     slideStrip: null,
     // Sets the width and redraws. **Pass the container's width as it is** — one document unit is
     // one CSS pixel (`kspage/docs/DESIGN.md`'s "Whether the browser or the page holds the zoom").
     resize(cssWidth) { ks.width = cssWidth; draw(); },
-    // The viewer's overrides, **not document settings** (`reading` and `size` 0: none).
+    // The viewer's overrides, **not document settings**: the colors fitted to the screen, and
+    // whether outside images are read in.
     over() {
-      w.kspage_web_over(scratch);
-      const [reading, size] = nums(2);
-      return { reading: reading, size: size, plain: ks.plain, pics: ks.outsidePics };
+      return { plain: ks.plain, pics: ks.outsidePics };
     },
-    // Replaces the viewer's overrides whole (an omitted field: not overridden). **The color
-    // override is the page's** (it knows the roles' colors); the width is the core's.
+    // Replaces the viewer's overrides whole (an omitted field: not overridden). **Both are the
+    // page's** (it knows the roles' colors and fetches the images).
     setOver(spec) {
-      w.kspage_web_set_over(spec.reading || 0, spec.size || 0);
       ks.plain = spec.plain === true;
       // **Only external images are not remembered** (unlike `side.js`'s `keptPick`), or one
       // permission would silently fetch from outside for every later document.
@@ -131,17 +121,10 @@ function kspageApi(ks) {
       return what + " cannot be done where the cursor is";
     },
     // Writes the reloadable text.
-    // Caution: **Set the origin mark before saving** (without it, copies cannot be matched by
-    // number); **an existing mark is not overwritten** (the core refuses), so a copy keeps it.
     save() {
-      if (this.origin().length <= 0) {
-        w.kspage_web_set_origin(stage(freshMark()));
-      }
       const len = w.kspage_web_save();
       return outText(len);
     },
-    // The current time (local, to the minute); **the core has no clock**, so it is made here.
-    now() { return nowText(); },
     // The largest document that can be opened, in bytes (**"unreadable" and "too large" are
     // reported apart**, with opposite fixes); **not copied into the page** (the two would drift).
     docLimit() { return w.kspage_web_doc_limit(); },
@@ -156,11 +139,6 @@ function kspageApi(ks) {
     // The bytes of the arena in use and of the whole memory, for the debug log and the status bar.
     room() {
       return { used: w.kspage_web_heap_used(), all: w.kspage_web_heap_room() };
-    },
-    // This document's origin mark. **Empty means it has no mark** (do not trust the numbers).
-    origin() {
-      const len = w.kspage_web_origin();
-      return outText(len);
     },
     // Whether style `i` "starts a new page before it" (no effect where pages do not split).
     styleBreaks(i) { return w.kspage_web_style_breaks(i) !== 0; },
@@ -401,37 +379,6 @@ function kspageApi(ks) {
       const len = w.kspage_web_csv();
       return outText(len);
     },
-    // "Constant text" of the cursor's table (**empty outside one**), **the one "document → source"
-    // direction**; `whence` is the origin mark, written at the top. A refused row is left out and
-    // counted (`refused`), **never dropped silently**.
-    consts(whence) {
-      const len = stage(whence || "");
-      if (len < 0) return null;
-      const wrote = w.kspage_web_consts(len, scratch);
-      const [rows, refused] = nums(2);
-      if (wrote <= 0) return null;
-      return { text: outText(wrote), rows: rows, refused: refused };
-    },
-    // The link target of the text generated from the cursor's table. **Empty means none.**
-    aimHere() {
-      const len = w.kspage_web_aim_here();
-      return outText(len);
-    },
-    // Sets that link target; **empty removes it.**
-    setAimHere(file) {
-      const len = file.length > 0 ? stage(file) : 0;
-      if (len < 0) return false;
-      const done = w.kspage_web_set_aim_here(len) !== 0;
-      if (done) draw();
-      return done;
-    },
-    // Whether the table's text matches the text passed in (**freshness**); "none": no pair.
-    constsState(whence) {
-      const len = stage(whence || "");
-      if (len < 0) return "none";
-      const got = w.kspage_web_consts_stale(len);
-      return got === 1 ? "same" : got === 2 ? "stale" : "none";
-    },
     // Inserts one table from CSV text after the cursor's paragraph. **Read memory after getting the
     // arena** (as `paste`); **the style name goes via the typing arena**, so load the text first.
     insertCsv(text, name) {
@@ -507,8 +454,11 @@ function kspageApi(ks) {
       const len = w.kspage_web_remark_by();
       return outText(len);
     },
-    // Attaches a comment to the selection (a range, not a point); **empty removes it**. **The page
-    // supplies the author** (the core holds no user name): the history's `author`.
+    // Who writes the comments. **The page sets it** (the core holds no user name; empty, a comment
+    // carries an empty "by").
+    author: "",
+    // Attaches a comment to the selection (a range, not a point); **empty removes it**, written by
+    // `author` above.
     setRemark(text) {
       const len = stage(api.author + "\t" + text);
       if (len < 0) return false;
@@ -522,7 +472,17 @@ function kspageApi(ks) {
         const img = new Image();
         img.addEventListener("load", () => done([img.naturalWidth, img.naturalHeight]));
         img.addEventListener("error", () => done(null));
-        img.src = src;
+        // **Read it where drawing reads it** (`draw.js`'s `pictureOf`), or a picture measured
+        // here fails to draw, or the other way round.
+        const load = api.localPicture;
+        if (!load) {
+          img.src = src;
+          return;
+        }
+        load(src).then((url) => {
+          if (url) img.src = url;
+          else done(null);
+        });
       });
     },
     // Whether the text may be replaced whole as a formula (a cell or a formula's inline).

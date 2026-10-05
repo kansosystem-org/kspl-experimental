@@ -1,0 +1,43 @@
+//< Two numeric operands neither of which holds every value of the other have no type to compute in
+//<
+//< **Let them through and a value changes in silence**: `I32 -1 < U32 1` was false (an unsigned
+//< compare) while `I64 -1 < U64 1` was true, `I8 -1 == U8 255` was true, `-6 / U32 2` gave
+//< 2147483645, and `U16 1 + I8 -2` gave 65535. A constant folded too: C and LLVM disagreed on it.
+//< The rule is one relation, `is_lossless_numeric` in `ksplc/sema/type/query.kspls`.
+// EXPECT: between 'I32' and 'U32' is forbidden to prevent data loss: neither holds every value of the other, so '<' has
+// EXPECT: between 'I64' and 'U64' is forbidden to prevent data loss: neither holds every value of the other, so '<' has
+// EXPECT: between 'I8' and 'U8' is forbidden to prevent data loss: neither holds every value of the other, so '==' has
+// EXPECT: between 'I32' and 'U32' is forbidden to prevent data loss: neither holds every value of the other, so '/' has
+// EXPECT: between 'U16' and 'I8' is forbidden to prevent data loss: neither holds every value of the other, so '+' has
+// EXPECT: between 'U64' and 'I32' is forbidden to prevent data loss: neither holds every value of the other, so '-' has
+// EXPECT: between 'Sz' and 'U32' is forbidden to prevent data loss: neither holds every value of the other, so '*' has
+// EXPECT: between 'Sz' and 'U64' is forbidden to prevent data loss: neither holds every value of the other, so '>' has
+// EXPECT: ternary operator branches have incompatible types: 'I16' and 'U16'
+// EXPECT: numeric_operands_no_common_type.kspls:20:27:
+// EXPECT-NOT: error: expected
+const ca: I32 = -1
+const cb: U32 = 1
+const folded: I64 = I64::(ca / cb)
+
+fn main(): I32
+  a: I32 = -1
+  b: U32 = 1
+  c: I64 = -1
+  d: U64 = 1
+  e: I8 = -1
+  f: U8 = 255
+  g: U16 = 1
+  h: I8 = -2
+  n: Sz = 3
+  s: I16 = 2
+  t: U16 = 2
+  r1: = a < b
+  r2: = c < d
+  r3: = e == f
+  r4: = a / b
+  r5: = g + h
+  r6: = d - a
+  r7: = n * b
+  r8: = n > d
+  r9: = s if r1 else t
+  return I32::r4 + I32::r5 + I32::r6 + I32::r7 + I32::r9 + I32::(r2 || r3 || r8) + I32::folded

@@ -5,7 +5,8 @@
 // [`handle.js`](handle.js) holds the storage; this file decides when to write, discard and tell.
 // **There is one entry point, `keepSync`**: it asks only `draftNow`, and null means discard.
 // **Restoring happens only on a click** (restored at startup, a draft thought discarded would come
-// back to life).
+// back to life). **A document replaced in the window is set aside here** (`keepAside`), listed for
+// bringing back at once.
 // ==========================================
 function kspageKeep(ui) {
   const app = ui.app;
@@ -28,7 +29,8 @@ function kspageKeep(ui) {
   const wrote = new Map();
   let settle = null;
 
-  // The drafts found at startup, **kept until clicked** (restoring reads them).
+  // The drafts that can be brought back, newest first: those found at startup and those set aside
+  // since, **kept until clicked** (restoring reads them).
   let found = [];
 
   // Brings the stored draft in line with the current one; **one entry point** (see the header).
@@ -82,13 +84,30 @@ function kspageKeep(ui) {
       if (!whole(one) || one.when <= stale) store.dropDraft(one.at);
     }
     for (const one of live.slice(KEEP_MAX)) store.dropDraft(one.at);
-    found = live.slice(0, KEEP_MAX);
+    // **What was set aside before the count came back stays** (it is this startup's).
+    found = found.concat(live.slice(0, KEEP_MAX));
     if (found.length === 0) return 0;
     // Caution: **Say "not saved" plainly** ("can be recovered" reads as saved, and gets closed).
     ui.say("There are " + found.length + " unsaved drafts: " + said(found[0])
       + (found.length > 1 ? " and others" : "") + ". Open them from \"Bring the draft back\" under \"File\"");
     return found.length;
   });
+
+  // Sets aside the draft of a document another has just replaced (`file.js`'s `draftNow`, taken
+  // before the replacing), **listed at once**: kept only in storage, it could be brought back only
+  // after a reload, and where storage is refused, never. "" when nothing was unsaved, else the tail
+  // of the notice that says where it went.
+  const ASIDE = ". What was not saved is kept as a draft (\"Bring the draft back\" under "
+    + "\"File\")";
+  const keepAside = (one) => {
+    if (!one || one.text === null) return "";
+    const kept = { at: keyOf(one.id), when: Date.now(), kind: one.kind, name: one.name,
+      from: one.path, text: one.text };
+    wrote.set(kept.at, kept.text);
+    store.keepDraft(kept);
+    found = [kept].concat(found.filter((x) => x.at !== kept.at));
+    return ASIDE;
+  };
 
   // Caution: **One draft at a time**: all at once, when space runs out, how far it got is unclear.
   const keepRestore = () => {
@@ -97,18 +116,22 @@ function kspageKeep(ui) {
       return false;
     }
     const one = found[0];
+    const had = found.length;
     const why = ui.draftTake(one);
     if (why !== "") {
       ui.deny(why);
       return false;
     }
-    found = found.slice(1);
+    // Caution: **Take out the one brought back, not the head**: the document it replaced may have
+    // been set aside in front of it.
+    const aside = found.length > had ? ASIDE : "";
+    found = found.filter((x) => x !== one);
     wrote.delete(one.at);
     store.dropDraft(one.at);
     // Caution: **Say where it came from** — it is unbound, and the first save asks for a location.
     ui.say("Brought the draft back (from: " + (one.from || "it was in no file")
       + "). Where to save will be asked at the first save" + (found.length > 0
-        ? ". " + found.length + " left" : ""));
+        ? ". " + found.length + " left" : "") + aside);
     app.focus();
     return true;
   };
@@ -126,7 +149,7 @@ function kspageKeep(ui) {
   document.getElementById("keep-take").addEventListener("click", keepRestore);
   document.getElementById("keep-drop").addEventListener("click", keepDrop);
 
-  return { keepSync: keepSync, keepLater: keepLater, keepBoot: keepBoot,
+  return { keepSync: keepSync, keepLater: keepLater, keepBoot: keepBoot, keepAside: keepAside,
     keepRestore: keepRestore, keepCount: () => found.length,
     // The draft storage itself. **The check uses this connection**: IndexedDB orders transactions
     // only within one connection, so a second would leave the write and the read unordered.

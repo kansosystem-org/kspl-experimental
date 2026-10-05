@@ -19,6 +19,8 @@ FMT_LIST = { git ls-files '*.kspl' '*.kspls'; \
     $(foreach d,$(FMT_UNTOUCHED),| grep -v '^$(d)/') | sort -u \
     | while IFS= read -r f; do if [ -f "$$f" ]; then printf '%s\n' "$$f"; fi; done
 
+# **The formatter is named as `test-fmt-tree` names it** (`$$PWD/`): its path is part of ksplc's
+# identity in the cache, so under one spelling the texts one records the other skips.
 ## Local-cycle|fmt|Format every tracked `.kspl` / `.kspls` (`FMT_JOBS=1` for one at a time)
 fmt: $(SEED_EXE)
 	@set -o pipefail; mkdir -p $(TMP_DIR); log=$(TMP_DIR)/fmt.log; : > "$$log"; \
@@ -26,7 +28,7 @@ fmt: $(SEED_EXE)
 	$(FMT_LIST) | tr '\n' '\0' > "$$list"; \
 	n=$$(tr -cd '\0' < "$$list" | wc -c); \
 	echo "# RUNNING KSPL FORMATTER ($$n files, $(FMT_JOBS) jobs)"; \
-	xargs -0 -P $(FMT_JOBS) -n 32 ./$(SEED_EXE) fmt $(KSPL_FMT) < "$$list" \
+	xargs -0 -P $(FMT_JOBS) -n 32 "$$PWD/$(SEED_EXE)" fmt $(KSPL_FMT) < "$$list" \
 		> /dev/null 2>> "$$log" \
 		|| { cat "$$log" >&2; exit 1; }
 
@@ -77,21 +79,22 @@ LINT_TARGETS_OWN := ksplc/tests/main.kspls kspage/tests/main.kspls ksos/tests/ma
 LINT_TARGETS := ksplc/main.kspls tests/debug/main.kspls ksai/examples/llama_engine/main.kspls \
 	ksai/examples/qwen_infer/main.kspls ksai/examples/fim_coder/main.kspls \
 	ksai/benches/bench_train.kspls \
-	ksos/net/mini_ipv4.kspls ksos/net/mini_mqtt.kspls ksos/net/tcp_conn.kspls kssrv/main.kspls \
+	ksos/net/mini_ipv4.kspls ksos/net/tcp_conn.kspls kssrv/main.kspls \
 	tools/ai_assist/build_corpus.kspls tools/ai_assist/eval_fim.kspls tools/ai_assist/make_fim.kspls \
-	tools/ai_assist/make_error_fix.kspls tools/ai_assist/train_bpe.kspls \
-	ksos/port/rp2040/pad_checksum.kspls ksos/port/rp2040/elf2uf2.kspls tools/mqtt_stub.kspls \
+	tools/ai_assist/train_bpe.kspls \
+	ksos/port/rp2040/pad_checksum.kspls ksos/port/rp2040/elf2uf2.kspls \
 	tools/kspage_open.kspls tools/kspage_aim.kspls \
-	tools/kspage_plugin_sort.kspls \
-	tools/surface.kspls \
+	tools/surface.kspls tools/ci.kspls \
 	tools/tour.kspls \
 	tools/kspage_doc.kspls \
 	ksai/benches/run_bench.kspls tools/lsp_client.kspls \
 	kspage/port/web/bundle.kspls kspage/tests/open_prog.kspls ksai/tests/read_prog.kspls \
 	std/tests/read_prog.kspls $(filter-out $(LINT_TARGETS_OWN),$(wildcard */tests/fuzz_main.kspls)) \
-	ksai/tests/main.kspls ksdb/tests/main.kspls kspeg/tests/main.kspls kssrv/tests/main.kspls \
+	ksai/tests/main.kspls ksbind/tests/main.kspls ksdb/tests/main.kspls kspeg/tests/main.kspls \
+	kssrv/tests/main.kspls \
 	std/tests/main.kspls \
-	kssrv/tests/copy.kspls kssrv/tests/spew.kspls ksai/tests/examples_main.kspls \
+	kssrv/tests/copy.kspls ksai/tests/examples_main.kspls \
+	ksai/tests/stops_main.kspls $(wildcard ksai/tests/stops/*.kspls) ksplc/tests/filepath/main.kspls \
 	$(wildcard ksos/demo/posix/*.kspls) \
 	$(wildcard tests/suite/*.kspls) \
 	$(filter-out $(LINT_SUITES_OWN),$(wildcard ksplc/tests/suite/*.kspls)) \
@@ -127,10 +130,10 @@ LINT_ONE_TARGETS := $(addprefix lint-one-,$(subst /,_,$(LINT_TARGETS) $(LINT_TAR
 lint: $(LINT_ONE_TARGETS)
 	@echo "RESULT: ALL PASS ($(words $(LINT_ONE_TARGETS)) lint targets clean)"
 
-## Local-cycle|lint-one-*|One file's worth of `make lint` (named by its path, `/` becoming `_`)
+## Per-item|lint-one-*|One file's worth of `make lint` (named by its path, `/` becoming `_`)
 .PHONY: $(LINT_ONE_TARGETS)
 
-LINT_CFG_VARIANTS := tls db blas llvm tls_db_blas
+LINT_CFG_VARIANTS := blas llvm
 
 define lint_cfg_rule
 lint-cfg-$(1): $$(STAGE1_EXE)
@@ -142,9 +145,9 @@ endef
 $(foreach v,$(LINT_CFG_VARIANTS),$(eval $(call lint_cfg_rule,$(v))))
 LINT_CFG_TARGETS := $(addprefix lint-cfg-,$(LINT_CFG_VARIANTS))
 
-## Local-cycle|lint-cfg|All the `#cfg` branches' semantic analysis (TLS/DB/BLAS/LLVM)
+## Local-cycle|lint-cfg|All the `#cfg` branches' semantic analysis (BLAS/LLVM)
 lint-cfg: $(LINT_CFG_TARGETS)
 	@echo "RESULT: ALL PASS ($(words $(LINT_CFG_VARIANTS)) #cfg variants clean)"
 
-## Local-cycle|lint-cfg-*|One combination only (the sets are `LINT_CFG_VARIANTS` in `mk/lint.mk`)
+## Per-item|lint-cfg-*|One combination only (the sets are `LINT_CFG_VARIANTS` in `mk/lint.mk`)
 .PHONY: $(LINT_CFG_TARGETS)

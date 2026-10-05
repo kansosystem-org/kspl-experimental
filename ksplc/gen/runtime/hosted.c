@@ -2,8 +2,8 @@
  * with an OS).
  *
  * **The substance half is split per subject.** This side holds the includes and the shared
- * small pieces alone, and hosted_proc / hosted_thread / hosted_fs / hosted_spawn / hosted_net /
- * hosted_tls join behind it **in that order** to make one translation unit (the order
+ * small pieces alone, and hosted_proc / hosted_thread / hosted_fs / hosted_spawn / hosted_net
+ * join behind it **in that order** to make one translation unit (the order
  * is held by write_impl in ksplc/gen/runtime.kspls).
  * **The standard for splitting is the
  * subject on std's side** — cut by line count and reading one subject means going back and forth
@@ -33,7 +33,7 @@
  * seconds first the digits are lost, so the quotient and the remainder are multiplied apart. */
 #ifdef _WIN32
 #include <windows.h>
-I64 kspl_mono_us(void) {
+KSPL_LINK I64 kspl_mono_us(void) {
     LARGE_INTEGER freq, ctr;
     if (!QueryPerformanceFrequency(&freq) || freq.QuadPart == 0) return 0;
     if (!QueryPerformanceCounter(&ctr)) return 0;
@@ -41,7 +41,7 @@ I64 kspl_mono_us(void) {
                  ((ctr.QuadPart % freq.QuadPart) * 1000000) / freq.QuadPart);
 }
 #else
-I64 kspl_mono_us(void) {
+KSPL_LINK I64 kspl_mono_us(void) {
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
     return (I64)ts.tv_sec * 1000000 + (I64)ts.tv_nsec / 1000;
@@ -62,6 +62,43 @@ KSPL_UNUSED static int kspl_to_cstr(const U8 *ptr, Sz len, char *out, Sz out_cap
     out[len] = '\0';
     return 1;
 }
+
+/* ============================================================
+ * Nothing the runtime opens passes to a child unasked
+ *
+ * A child holding a copy keeps what it names alive while it runs: a closed listener's port cannot
+ * be bound again, a peer never sees a connection close, and a pipe's reader never sees its end.
+ * So every socket, file and pipe end is opened close-on-exec (POSIX) or not inheritable (Windows),
+ * and a child holds only the three streams kspl_proc_start hands it.
+ * Caution: **Mark it in the call that opens it** (SOCK_CLOEXEC, accept4, pipe2, O_CLOEXEC,
+ * WSA_FLAG_NO_HANDLE_INHERIT). Marked afterwards, a child started from another thread in between
+ * takes the copy. Only where the OS has no such call (a socket or a pipe on macOS, an accepted
+ * socket on Windows) is it marked right after. The decision is in std/docs/DESIGN.md.
+ * ============================================================ */
+#ifndef _WIN32
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#if defined(__linux__)
+#define KSPL_CLOEXEC_IN_CALL 1
+#if !defined(_GNU_SOURCE)
+/* Caution: **Declared here rather than by raising _GNU_SOURCE** (the reason is at
+ * kspl_stack_floor in hosted_thread.c). glibc and musl both carry them. */
+int accept4(int fd, struct sockaddr *addr, socklen_t *addr_len, int flags);
+int pipe2(int fds[2], int flags);
+#endif
+#else
+#define KSPL_CLOEXEC_IN_CALL 0
+#endif
+
+/* Marks an fd close-on-exec, where the call that opened it could not. */
+KSPL_UNUSED static void kspl_fd_cloexec(int fd) {
+    int flags = fcntl(fd, F_GETFD);
+    if (flags >= 0) fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+}
+#endif
 
 /* ============================================================
  * The Windows route hands things over in UTF-16.
@@ -87,11 +124,11 @@ KSPL_UNUSED static int kspl_to_cstr(const U8 *ptr, Sz len, char *out, Sz out_cap
 #include <shellapi.h>
 #include <wchar.h>
 
-/* The limits for a path and a command line.
+/* The limits for a path and a command line (the OS's own, its NUL counted).
  * Caution: **They count UTF-16 elements.** Taken as UTF-8 bytes, a path of kana or kanji (three
  * bytes a character) does not fit. */
 #define KSPL_WPATH_CAP 4096
-#define KSPL_WCMD_CAP 8192
+#define KSPL_WCMD_MAX 32767
 
 /* Copies a UTF-8 run to a UTF-16 NUL terminator.
  * Caution: **Returns 0 where it does not fit or holds a NUL** — an operation on a different path
@@ -125,6 +162,29 @@ KSPL_UNUSED static int kspl_win_from_wide(const wchar_t *w, char *out, Sz out_ca
 KSPL_UNUSED static int kspl_win_cstr_to_wide(const char *cstr, wchar_t *out, Sz out_cap) {
     return kspl_win_to_wide(cstr, (Sz)strlen(cstr), out, out_cap);
 }
+
+/* Copies a NUL-terminated UTF-8 to a UTF-16 one on the heap, as long as it needs (an environment
+ * value, a command line); NULL where it is not UTF-8 or memory is short. The caller frees it. */
+KSPL_UNUSED static wchar_t *kspl_win_wide_dup(const char *utf8) {
+    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, NULL, 0);
+    wchar_t *w = n > 0 ? (wchar_t *)malloc((size_t)n * sizeof(wchar_t)) : NULL;
+    if (w != NULL && MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, w, n) != n) {
+        free(w);
+        w = NULL;
+    }
+    return w;
+}
+
+/* The reverse: a NUL-terminated UTF-16 to a UTF-8 one on the heap; NULL where it cannot be. */
+KSPL_UNUSED static char *kspl_win_utf8_dup(const wchar_t *w) {
+    int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
+    char *u = n > 0 ? (char *)malloc((size_t)n) : NULL;
+    if (u != NULL && WideCharToMultiByte(CP_UTF8, 0, w, -1, u, n, NULL, NULL) != n) {
+        free(u);
+        u = NULL;
+    }
+    return u;
+}
 #endif
 
 /* Returns the argv the generated main took, in the shape KSPL holds (UTF-8).
@@ -141,7 +201,7 @@ KSPL_UNUSED static int kspl_win_cstr_to_wide(const char *cstr, wchar_t *out, Sz 
  * **Put it through once only** (inside the generated main; gen/c/root.kspls). Put it through
  * on every `sys.args()` and the allocations pile up per call.
  * POSIX is UTF-8 from the start, so it passes straight through. */
-char **kspl_os_argv(int argc, char **argv) {
+KSPL_LINK char **kspl_os_argv(int argc, char **argv) {
 #ifdef _WIN32
     LPWSTR *wav;
     char **out;
@@ -162,14 +222,8 @@ char **kspl_os_argv(int argc, char **argv) {
         return argv;
     }
     for (i = 0; i < argc; i++) {
-        int n = WideCharToMultiByte(CP_UTF8, 0, wav[i], -1, NULL, 0, NULL, NULL);
-        char *u = (n > 0) ? (char *)malloc((size_t)n) : NULL;
-        if (u == NULL || WideCharToMultiByte(CP_UTF8, 0, wav[i], -1, u, n, NULL, NULL) <= 0) {
-            free(u);
-            out[i] = argv[i];
-            continue;
-        }
-        out[i] = u;
+        char *u = kspl_win_utf8_dup(wav[i]);
+        out[i] = u != NULL ? u : argv[i];
     }
     out[argc] = NULL;
     LocalFree(wav);
@@ -187,11 +241,11 @@ char **kspl_os_argv(int argc, char **argv) {
  * Where a read with a timeout (kspl_proc_read) can do the waiting, that comes first; this one is
  * for a wait with nobody to read from, such as a mark appearing in a file. */
 #ifdef _WIN32
-void kspl_sleep_ms(I32 ms) {
+KSPL_LINK void kspl_sleep_ms(I32 ms) {
     if (ms > 0) Sleep((DWORD)ms);
 }
 #else
-void kspl_sleep_ms(I32 ms) {
+KSPL_LINK void kspl_sleep_ms(I32 ms) {
     if (ms <= 0) return;
     struct timespec ts;
     ts.tv_sec = (time_t)(ms / 1000);
@@ -203,9 +257,9 @@ void kspl_sleep_ms(I32 ms) {
 /* Whether this is Windows, for a KSPL source (a test and the like) that branches at run time on
  * the OS's paths (skipping a test that leans on a POSIX path such as /bin/echo). */
 #ifdef _WIN32
-Bool kspl_is_windows(void) { return true; }
+KSPL_LINK Bool kspl_is_windows(void) { return true; }
 #else
-Bool kspl_is_windows(void) { return false; }
+KSPL_LINK Bool kspl_is_windows(void) { return false; }
 #endif
 
 /* The OS's random source for std/rand.kspls's CSPRNG (fill/bytes/u64). POSIX reads /dev/urandom;
@@ -213,21 +267,21 @@ Bool kspl_is_windows(void) { return false; }
  * _CRT_RAND_S definition) is called four bytes at a time. Not bcrypt.h: under <windows.h> alone
  * some environments lack its types (LONG/ULONG/PUCHAR), and rand_s needs no extra link. */
 #ifndef _WIN32
-Bool kspl_rand_fill(U8 *buf, Sz len) {
-    FILE *f = fopen("/dev/urandom", "rb");
-    if (!f) return false;
+KSPL_LINK Bool kspl_rand_fill(U8 *buf, Sz len) {
+    int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return false;
     Sz pos = 0;
-    Bool ok = true;
     while (pos < len) {
-        size_t n = fread(buf + pos, 1, (size_t)(len - pos), f);
-        if (n == 0) { ok = false; break; }
+        ssize_t n = read(fd, buf + pos, (size_t)(len - pos));
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) break;
         pos += (Sz)n;
     }
-    fclose(f);
-    return ok;
+    close(fd);
+    return pos == len;
 }
 #else
-Bool kspl_rand_fill(U8 *buf, Sz len) {
+KSPL_LINK Bool kspl_rand_fill(U8 *buf, Sz len) {
     Sz pos = 0;
     while (pos < len) {
         unsigned int v;
@@ -240,53 +294,62 @@ Bool kspl_rand_fill(U8 *buf, Sz len) {
 }
 #endif
 
-/* Windows's CRT opens stdin/stdout in text mode, where a \n written becomes \r\n behind the
- * program's back — so a "\r\n" the program wrote itself lands as "\r\r\n". Content-Length framing
- * holds raw "\r\n" in its headers and is destroyed by it, and any other program handing bytes to
- * standard output is too. Every generated program calls this once before kspl_main
- * (emit_main_function in gen/c/root.kspls), so what a KSPL program writes is what lands. */
+/* Windows's CRT opens the three standard streams in text mode, where a \n written becomes \r\n
+ * behind the program's back — so a "\r\n" the program wrote itself lands as "\r\r\n".
+ * Content-Length framing holds raw "\r\n" in its headers and is destroyed by it, and any other
+ * program handing bytes to a stream is too. Every generated program calls this once before
+ * kspl_main (emit_main_function in gen/c/root.kspls), so what a KSPL program writes is what lands,
+ * on standard error as on standard output. */
 #ifdef _WIN32
 #include <io.h>
 #include <fcntl.h>
-void kspl_io_set_stdio_binary(void) {
+KSPL_LINK void kspl_io_set_stdio_binary(void) {
     _setmode(_fileno(stdin), _O_BINARY);
     _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(stderr), _O_BINARY);
 }
 #else
-void kspl_io_set_stdio_binary(void) {}
+KSPL_LINK void kspl_io_set_stdio_binary(void) {}
 #endif
 
-/* Returns an open stream's size in bytes and puts the position back to the head; -1 where it
- * cannot be read.
+/* Returns an open stream's size in bytes, -1 where it cannot be read; after any seek that
+ * succeeded the position is back at the head (a stream that cannot seek, a pipe, stays put).
  * Caution: **Do not call fseek / ftell directly from KSPL.** Their `long` is 32-bit on Windows
  * (LLP64) and 64-bit on Linux (LP64), and KSPL cannot write `long`: declared as `I64`, a failing
- * `-1L` reads on Windows x86-64 as 4294967295 and slips past the `< 0` check. The width is
- * converted here, on the C side. */
-int64_t kspl_file_size(void* stream) {
+ * `-1L` reads on Windows x86-64 as 4294967295 and slips past the `< 0` check.
+ * **Nor use them here**: past 2 GiB, Windows's ftell fails. The 64-bit pair is taken instead. */
+#ifdef _WIN32
+#define kspl_fseek64 _fseeki64
+#define kspl_ftell64 _ftelli64
+#else
+#define kspl_fseek64 fseeko
+#define kspl_ftell64 ftello
+#endif
+KSPL_LINK int64_t kspl_file_size(void* stream) {
     FILE* f = (FILE*)stream;
-    long end;
-    if (fseek(f, 0L, SEEK_END) != 0) {
+    int64_t end;
+    if (kspl_fseek64(f, 0, SEEK_END) != 0) {
         return -1;
     }
-    end = ftell(f);
-    if (end < 0L) {
-        return -1;
-    }
+    end = (int64_t)kspl_ftell64(f);
     rewind(f);
-    return (int64_t)end;
+    return end < 0 ? -1 : end;
 }
 
-/* Lines the console's output code page up with UTF-8. The generated main calls it once before
- * kspl_main (emit_main_function in gen/c/root.kspls).
+/* Lines the console's output and input code pages up with UTF-8, and on Windows sets how an
+ * abort() ends (kspl_end_on_abort). The generated main calls it once before kspl_main
+ * (emit_main_function in gen/c/root.kspls).
  *
  * Caution: **A KSPL string literal is a run of UTF-8 bytes**, and Windows's CRT hands it to
  * WriteConsoleA, which reads it in the console's code page (under CP932 `ソースを整形する`
  * comes out as `繧ｽ繝ｼ繧ｹ繧呈紛蠖｢縺吶ｋ`). Only **a real console handle** garbles (ConPTY, as in
  * VS Code's terminal, or PowerShell/cmd); mintty (MSYS2) is a pipe. No terminal can be relied on
- * to be the safe kind, so it is lined up on the program's side.
+ * to be the safe kind, so it is lined up on the program's side. **Line up both sides**: typed
+ * input would otherwise arrive in the old code page, and mix with UTF-8 in one program.
  *
- * Caution: Put it back once done. The code page is the whole console's state and outlives the
- * process, so left behind it breaks the output of the next program run there. */
+ * Caution: Put them back once done, on exit and after a panic too (abort() skips atexit, and
+ * raises SIGABRT first). A code page is the whole console's state and outlives the process, so left
+ * behind it breaks the output of the next program run there. */
 #ifdef _WIN32
 #include <windows.h>
 #include <stdlib.h> /* atexit */
@@ -296,21 +359,36 @@ static int kspl_win_no_handle(DWORD which) {
     HANDLE h = GetStdHandle(which);
     return h == NULL || h == INVALID_HANDLE_VALUE;
 }
-static UINT kspl_saved_console_cp = 0;
+static UINT kspl_saved_out_cp = 0;
+static UINT kspl_saved_in_cp = 0;
 static void kspl_restore_console_cp(void) {
-    if (kspl_saved_console_cp != 0) SetConsoleOutputCP(kspl_saved_console_cp);
+    if (kspl_saved_out_cp != 0) SetConsoleOutputCP(kspl_saved_out_cp);
+    if (kspl_saved_in_cp != 0) SetConsoleCP(kspl_saved_in_cp);
 }
-void kspl_io_init_console(void) {
-    UINT cur = GetConsoleOutputCP();
+/* abort() raises SIGABRT first, in msvcrt and UCRT alike, and this ends the process there with
+ * the code __fastfail gives (STATUS_STACK_BUFFER_OVERRUN), which a parent reads as SIGABRT's 134
+ * ("A child's end is one code on every OS" in std/docs/DESIGN.md).
+ * Caution: **Do not leave the end to the CRT.** msvcrt's abort() exits 3, which an exit(3) gives
+ * too, and UCRT's depends on its fault-reporting setting; a panic and the run-time checks would
+ * read differently per CRT. TerminateProcess raises no error-report dialog, as __fastfail can. */
+static void kspl_end_on_abort(int sig) {
+    (void)sig;
+    kspl_restore_console_cp();
+    TerminateProcess(GetCurrentProcess(), 0xC0000409u);
+}
+KSPL_LINK void kspl_io_init_console(void) {
+    UINT out = GetConsoleOutputCP();
+    UINT in = GetConsoleCP();
+    signal(SIGABRT, kspl_end_on_abort);
     /* 0 is "not joined to a console" (a redirect / a pipe). There is no need to touch it, and
      * touching it leaves nobody to put it back. */
-    if (cur == 0 || cur == CP_UTF8) return;
-    if (!SetConsoleOutputCP(CP_UTF8)) return;
-    kspl_saved_console_cp = cur;
+    if (out != 0 && out != CP_UTF8 && SetConsoleOutputCP(CP_UTF8)) kspl_saved_out_cp = out;
+    if (in != 0 && in != CP_UTF8 && SetConsoleCP(CP_UTF8)) kspl_saved_in_cp = in;
+    if (kspl_saved_out_cp == 0 && kspl_saved_in_cp == 0) return;
     atexit(kspl_restore_console_cp);
 }
 #else
-void kspl_io_init_console(void) {}
+KSPL_LINK void kspl_io_init_console(void) {}
 #endif
 
 /* Joins the console the program was started from, where the program has none of its own. The
@@ -328,7 +406,7 @@ void kspl_io_init_console(void) {}
  * A console program (attached already) and a double-clicked one (no parent console) both fail the
  * attach and do nothing, which is right for both. */
 #ifdef _WIN32
-void kspl_io_attach_console(void) {
+KSPL_LINK void kspl_io_attach_console(void) {
     /* Caution: **Ask before the joining, not after.** Joining sets the standard handles, so asked
      * afterwards every stream looks alike, whether it has nowhere to go or points at a file. */
     int in_free = kspl_win_no_handle(STD_INPUT_HANDLE);
@@ -340,7 +418,7 @@ void kspl_io_attach_console(void) {
     if (err_free) (void)freopen("CONOUT$", "w", stderr);
 }
 #else
-void kspl_io_attach_console(void) {}
+KSPL_LINK void kspl_io_attach_console(void) {}
 #endif
 
 /* ============================================================
@@ -370,13 +448,15 @@ void kspl_io_attach_console(void) {}
 /* No include after this section is leaned on (the preamble comes first). */
 #include <errno.h> /* the EPIPE judgement below */
 
-/* Caution: **Make it take effect before `main`.** Shaped as being called from the generated `main`,
- * the LLVM backbone puts its own `main` out by hand (gen/llvm/module.kspls) and **one side alone
- * does not take effect**. The runtime's C is what both backbones join the same of, so placed here
- * it lines up in one place. */
+/* Caution: **Make it take effect before `main`.** Called from the generated `main`, it would miss
+ * the `main` the LLVM backbone writes by hand (gen/llvm/module.kspls); both join this runtime.
+ * **A library leaves the signal to the program that links it** (KSPL_LIBRARY): its handling is
+ * process-wide, and that program has chosen it for its own writes. */
+#if !defined(KSPL_LIBRARY)
 __attribute__((constructor)) static void kspl_sigpipe_init(void) {
     signal(SIGPIPE, SIG_IGN);
 }
+#endif
 
 /* Puts it back to the default on the child's side, after the fork and before the exec
  * (the caution above). */
@@ -384,26 +464,29 @@ static void kspl_child_restore_signals(void) {
     signal(SIGPIPE, SIG_DFL);
 }
 
-void kspl_io_broken_pipe(void) {
+/* In a library a failed write stays a failure: ending the process is the program's choice. */
+KSPL_LINK void kspl_io_broken_pipe(void) {
+#if !defined(KSPL_LIBRARY)
     /* Caution: **Do nothing for anything but EPIPE.** A write also comes out short on a full disk
      * or a removed device, and killing the process there takes away the refusal returned as a
      * value. */
     if (errno != EPIPE) return;
     signal(SIGPIPE, SIG_DFL);
     raise(SIGPIPE);
+#endif
 }
 #else
 /* Windows has no SIGPIPE. A write to a closed named pipe merely returns a failure. */
-void kspl_io_broken_pipe(void) {}
+KSPL_LINK void kspl_io_broken_pipe(void) {}
 #endif
 
-I32 argc = 0;
-U8 **argv = null;
+KSPL_LINK I32 argc = 0;
+KSPL_LINK U8 **argv = null;
 
 /* stdout / stderr being macros, they are wrapped in functions (get_stdout / get_stderr in
  * std/libc.kspls).
  * Caution: They must have external linkage (the reason is on hosted.h's declaration
  * side). */
-void* get_stdout(void) { return (void*)stdout; }
-void* get_stderr(void) { return (void*)stderr; }
+KSPL_LINK void* get_stdout(void) { return (void*)stdout; }
+KSPL_LINK void* get_stderr(void) { return (void*)stderr; }
 

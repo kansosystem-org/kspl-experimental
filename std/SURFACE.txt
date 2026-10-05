@@ -76,7 +76,7 @@ std/bytes	U8$[].put_u32_be	pub fn put_u32_be(r: Self@, at: Sz, v: U32)	writes fo
 std/bytes	U8$[].put_u32_le	pub fn put_u32_le(r: Self@, at: Sz, v: U32)	writes four bytes, least significant first
 std/bytes	U8$[].put_u64_be	pub fn put_u64_be(r: Self@, at: Sz, v: U64)	writes eight bytes, most significant first
 std/bytes	U8$[].put_u64_le	pub fn put_u64_le(r: Self@, at: Sz, v: U64)	writes eight bytes, least significant first
-std/bytes	U8[].crc32	pub fn crc32(r: U8[], seed: U32): U32	the standard CRC-32; it can be continued across pieces
+std/bytes	U8[].crc32	pub fn crc32(r: U8[], seed: U32): U32	the CRC-32 register after the bytes, with no inversion before or after. Caution: **The plain call is not the standard CRC-32**: `"abc".crc32(0)` is `ca6598d0`, while zlib's value is `"abc".crc32(0xffffffff) ^ 0xffffffff`, `352441c2`.
 std/bytes	U8[].get_u16_be	pub fn get_u16_be(r: U8[], at: Sz): U16	reads two bytes, most significant first
 std/bytes	U8[].get_u16_le	pub fn get_u16_le(r: U8[], at: Sz): U16	reads two bytes, least significant first
 std/bytes	U8[].get_u32_be	pub fn get_u32_be(r: U8[], at: Sz): U32	reads four bytes, most significant first
@@ -111,6 +111,7 @@ std/chars	U8[].strip_suffix	pub fn strip_suffix(r: U8[], suffix: U8[]): U8[]	a v
 std/chars	U8[].trim_end	pub fn trim_end(r: U8[]): U8[]	a view without the trailing whitespace
 std/chars	U8[].trim_spaces	pub fn trim_spaces(r: U8[]): U8[]	a view with the whitespace at both ends dropped
 std/chars	U8[].trim_start	pub fn trim_start(r: U8[]): U8[]	a view past the leading whitespace. All three return a **view**, valid as long as `r` is, and share `U8.is_space`.
+std/chars	U8[].utf8_seq_len	pub fn utf8_seq_len(r: U8[], offset: Sz): Sz	the length of the well-formed UTF-8 sequence at offset; 0 if none is. **It is strict where `next_codepoint` is lenient**: an overlong form (`C0 AF`), a surrogate (`ED A0 80`), anything past 10FFFF and a cut-off sequence all give 0, as Unicode's table of well-formed sequences has it.
 std/chars	codepoint_byte	pub fn codepoint_byte(cp: I32, i: Sz): U8	one byte of a code point's UTF-8 encoding
 std/chars	codepoint_len	pub fn codepoint_len(cp: I32): Sz	how many bytes a code point takes in UTF-8, 1 to 4. **The count has its own function**, to get a `\uXXXX`'s length with no buffer to write to. **Refuse a surrogate (D800-DFFF) and anything over 10FFFF before passing it**; otherwise an invalid sequence is written and fails only later. Caution: `codepoint_byte`'s `i` must be less than this (beyond it, the last byte is returned).
 std/checked_int	Checked_error	pub enum Checked_error	why an operation could not give a result
@@ -264,49 +265,6 @@ std/checked_int	U64.cast	pub fn cast(r: Self$@): Cu64	the same value, now checke
 std/checked_int	U64:Cast<|Cu64|>	impl U64: Cast<|Cu64|>	so `Cu64::v` turns a plain value into a checked one
 std/checked_int	U8.cast	pub fn cast(r: Self$@): Cu8	the same value, now checked
 std/checked_int	U8:Cast<|Cu8|>	impl U8: Cast<|Cu8|>	so `Cu8::v` turns a plain value into a checked one
-std/db	Column_kind	pub enum Column_kind	what kind of value a column of the current row holds
-std/db	Column_kind.blob	blob	raw bytes
-std/db	Column_kind.float	float	a floating-point number
-std/db	Column_kind.integer	integer	a whole number
-std/db	Column_kind.null_value	null_value	SQL's NULL
-std/db	Column_kind.text	text	text
-std/db	Db	pub struct Db	one open database, which prepares statements
-std/db	Db.exec #cfg(db)	pub fn exec(r: Self$@, sql: U8[]): Void?Db_error	prepares, steps and frees in one call, for SQL with no parameters and no rows. Use it for `CREATE TABLE` / `INSERT` / `UPDATE` / `DELETE`.
-std/db	Db.free #cfg(db)	pub fn free(r: Self$@)	closes the database and frees it. Caution: **The name must be `free`.** The use-after-free check treats a call as a release when "the receiver's type conforms to `Owned` and the method called is `free`" (get_free_call_receiver in ksplc/sema/flow/track.kspls). Under a different name, `c.free(); c.query(…);` compiles with no diagnostics ([W0108] reports it).
-std/db	Db.last_insert_rowid #cfg(db)	pub fn last_insert_rowid(r: Self$@): I64	the row id the last `INSERT` created
-std/db	Db.open #cfg(!db)	pub fn open(_path: U8[]): Db$@?Db_error	always fails with `unsupported`; `make DB=1` turns it on
-std/db	Db.open #cfg(db)	pub fn open(path: U8[]): Db$@?Db_error	opens a database, creating the file if it does not exist
-std/db	Db.prepare #cfg(db)	pub fn prepare(r: Self$@, sql: U8[]): Statement$@?Db_error	prepares one statement from SQL. Caution: The caller frees it with `stmt.free()`.
-std/db	Db:Owned #cfg(db)	impl Db: Owned	it owns its memory and releases it with `free()`
-std/db	Db_error	pub enum Db_error	why a database operation failed
-std/db	Db_error.bind_failed	bind_failed	a parameter could not be bound: an index out of range or similar
-std/db	Db_error.buffer_too_small	buffer_too_small	the buffer for a text column is shorter than `column_bytes`
-std/db	Db_error.column_type	column_type(mismatched: U8[])	the column's kind does not match the kind in the table
-std/db	Db_error.missing_column	missing_column(missing: U8[])	no column or parameter matches a field in the table. Only `bind_row` / `read_row` return this and the next error. Caution: **These two errors keep a default from being filled in silently** (the reason is in "a trait returning a table" in `../docs/DESIGN.md`).
-std/db	Db_error.open_failed	open_failed	the file could not be opened: a bad path, no permission, or similar
-std/db	Db_error.prepare_failed	prepare_failed	the SQL could not be prepared: a syntax error or similar
-std/db	Db_error.step_failed	step_failed	the step returned something other than a row or the end
-std/db	Db_error.unsupported	unsupported	the build did not use `make DB=1` (the default build)
-std/db	Statement	pub struct Statement	one prepared statement, which is bound, stepped and read
-std/db	Statement.bind_f64 #cfg(db)	pub fn bind_f64(r: Self$@, idx: I32, val: F64): Void?Db_error	binds a floating-point number to a parameter
-std/db	Statement.bind_i64 #cfg(db)	pub fn bind_i64(r: Self$@, idx: I32, val: I64): Void?Db_error	binds an integer to a parameter
-std/db	Statement.bind_null #cfg(db)	pub fn bind_null(r: Self$@, idx: I32): Void?Db_error	binds SQL's NULL to a parameter
-std/db	Statement.bind_row #cfg(db)	pub fn bind_row<|T: reflect.Reflectable|>(r: Self$@, v: T@): Void?Db_error	binds a whole table type to `:field` parameters. **It matches by name** (`:field`, and the column's name when reading). Caution: **If it matched by position, swapping two columns in the SQL would silently read the wrong one** for as long as their types agree. `v` is a `T@`: passed by value, the field offsets would point into a temporary.
-std/db	Statement.bind_text #cfg(db)	pub fn bind_text(r: Self$@, idx: I32, val: U8[]): Void?Db_error	binds text to a parameter
-std/db	Statement.column_bytes #cfg(db)	pub fn column_bytes(r: Self$@, col: I32): Sz	the length of that text column, for allocating a buffer of that size
-std/db	Statement.column_count #cfg(db)	pub fn column_count(r: Self$@): I32	how many columns a row of this statement has
-std/db	Statement.column_f64 #cfg(db)	pub fn column_f64(r: Self$@, col: I32): F64	that column of the current row, as a floating-point number
-std/db	Statement.column_i64 #cfg(db)	pub fn column_i64(r: Self$@, col: I32): I64	that column of the current row, as an integer
-std/db	Statement.column_kind #cfg(db)	pub fn column_kind(r: Self$@, col: I32): Column_kind	what kind of value that column of the current row holds
-std/db	Statement.column_text #cfg(db)	pub fn column_text(r: Self$@, col: I32, buf: U8$[]): Sz?Db_error	copies that text column out, and returns how many bytes it copied
-std/db	Statement.free #cfg(db)	pub fn free(r: Self$@)	frees the prepared statement
-std/db	Statement.read_row #cfg(db)	pub fn read_row<|T: reflect.Reflectable|>(r: Self$@, out: T$@, arena: Arena$@): Void?Db_error	reads the current row into a whole table type. **If no column matches a field, it fails** (the reason is at `Db_error`). Caution: **Copy the names into `arena`.** The names sqlite returns become invalid on the next `step()`.
-std/db	Statement.reset #cfg(db)	pub fn reset(r: Self$@): Void?Db_error	rewinds to run again, keeping the bound values
-std/db	Statement.step #cfg(db)	pub fn step(r: Self$@): Step_result?Db_error	runs to the next row, or to the end
-std/db	Statement:Owned #cfg(db)	impl Statement: Owned	it owns its memory and releases it with `free()`
-std/db	Step_result	pub enum Step_result	the result of one step of a statement
-std/db	Step_result.done	done	the statement ran to the end, and there is no current row
-std/db	Step_result.row	row	a row is ready, and its columns can be read
 std/ds	Ds_error	pub enum Ds_error	why a container lookup failed
 std/ds	Ds_error.key_not_found	key_not_found	there is no entry for that key
 std/ds	Hashable	pub trait Hashable<|Key|>	what a type must provide to be a `Map`'s key. A key type declares `impl X: ds.Hashable<|X|>`; `Map`'s type argument carries the constraint, so a type that does not meet it is diagnosed in the user's code, not inside std. `Self` cannot be written on a non-receiver parameter, so the other key arrives as `Key`.
@@ -315,6 +273,9 @@ std/ds	Hashable.hash	fn hash(r: Self): U32	a value spread over the buckets; equa
 std/ds	I32.equals	pub fn equals(r: Self@, other: I32): Bool	whether the two are the same number
 std/ds	I32.hash	pub fn hash(r: Self@): U32	the value spread over the buckets
 std/ds	I32:Hashable<|I32|>	impl I32: Hashable<|I32|>	so an `I32` can be a `Map`'s key. A primitive's method receives r as a pointer, so the value is r$
+std/ds	I64.equals	pub fn equals(r: Self@, other: I64): Bool	whether the two are the same number
+std/ds	I64.hash	pub fn hash(r: Self@): U32	the value spread over the buckets
+std/ds	I64:Hashable<|I64|>	impl I64: Hashable<|I64|>	so an `I64` can be a `Map`'s key. A primitive's method receives r as a pointer, so the value is r$
 std/ds	List	pub struct List<|T|>	a sequence of elements that grows as elements are pushed
 std/ds	List.arena	pub arena: Arena$@	where the elements go; null means the global heap
 std/ds	List.cap	pub cap: Sz	how many fit before it has to grow
@@ -326,8 +287,8 @@ std/ds	List<|T|>.create	pub fn create(arena: Arena$@): List<|T|>$@	an empty list
 std/ds	List<|T|>.free	pub fn free(r: Self$@)	frees the elements and the memory. Caution: **Release the elements' ownership before freeing the memory.** If T holds ARC content, assigning the zero value releases the old value; without it all the contents leak on every discard, where the caller cannot reach them. Without ARC it is a cheap write.
 std/ds	List<|T|>.get #inline	pub fn get(r: Self@, index: Sz): T	a copy of the element; out of range stops the program
 std/ds	List<|T|>.insert	pub fn insert(r: Self$@, index: Sz, item: T, file: U8[] = caller_file, line: Sz = caller_line)	inserts one element, shifting the following elements along
-std/ds	List<|T|>.new	pub fn new(arena: Arena$@ = null): List<|T|>	an empty list, which has allocated no memory yet. **`arena` is "where the elements go"**; the `List` itself is the caller's variable. Without an arena, free it with `defer xs.free()`.
-std/ds	List<|T|>.new_with_cap	pub fn new_with_cap(initial_cap: Sz, arena: Arena$@ = null): List<|T|>	an empty list with room already allocated, so it need not grow
+std/ds	List<|T|>.new	pub fn new(arena: Arena$@): List<|T|>	an empty list, which has allocated no memory yet. **`arena` is "where the elements go"**; the `List` itself is the caller's variable. With `null`, free it with `defer xs.free()`.
+std/ds	List<|T|>.new_with_cap	pub fn new_with_cap(initial_cap: Sz, arena: Arena$@): List<|T|>	an empty list with room already allocated, so it need not grow
 std/ds	List<|T|>.push #inline	pub fn push(r: Self$@, item: T)	adds one element at the end, growing if it must
 std/ds	List<|T|>.remove_at	pub fn remove_at(r: Self$@, index: Sz, file: U8[] = caller_file, line: Sz = caller_line)	removes one element, shifting the following elements back. Caution: **Overwrite the freed last slot with zero.** If T holds ARC content, that assignment releases the old value being overwritten (the same reason as in `free`); without it, every removal leaks.
 std/ds	List<|T|>.set #inline	pub fn set(r: Self$@, index: Sz, item: T)	writes one element; out of range stops the program
@@ -348,8 +309,8 @@ std/ds	Map.used	pub used: Sz	live slots and tombstones together, which decide a 
 std/ds	Map<|K, V|>.free	pub fn free(r: Self$@)	frees the pairs and the memory. As in `List.free`, the live slots' ownership is released before the memory is freed.
 std/ds	Map<|K, V|>.get	pub fn get(r: Self$@, key: K): V?Ds_error	the value for the key, or an error if absent
 std/ds	Map<|K, V|>.items	pub fn items(r: Self$@): Map_seq<|K, V|>	a chain over the live pairs (`for e in m.items()`). Caution: **Do not return a list.** It would instantiate **all of `List` for the nested element type** for every `Map`, increasing translation time and peak memory ("A function that returns every entry does not build a nested generic" in `std/docs/DESIGN.md`).
-std/ds	Map<|K, V|>.new	pub fn new(arena: Arena$@ = null): Map<|K, V|>	an empty map, which has allocated no memory yet. **`arena` is "where the elements go"** (as with `List.new`).
-std/ds	Map<|K, V|>.new_with_cap	pub fn new_with_cap(initial_cap: Sz, arena: Arena$@ = null): Map<|K, V|>	an empty map with slots already allocated, so it need not resize. The bucket is hash & (cap - 1), hence the power of two (resize() doubles from 32).
+std/ds	Map<|K, V|>.new	pub fn new(arena: Arena$@): Map<|K, V|>	an empty map, which has allocated no memory yet. **`arena` is "where the elements go"** (as with `List.new`).
+std/ds	Map<|K, V|>.new_with_cap	pub fn new_with_cap(initial_cap: Sz, arena: Arena$@): Map<|K, V|>	an empty map with its slots already allocated. Caution: **It counts slots, not pairs**: it resizes once half the slots are used.
 std/ds	Map<|K, V|>.remove	pub fn remove(r: Self$@, key: K): Bool	removes a pair, leaving a tombstone; false if there was none
 std/ds	Map<|K, V|>.set	pub fn set(r: Self$@, key: K, value: V)	stores a pair, replacing any old value for the key
 std/ds	Map<|K, V|>:Index<|K, V?Ds_error|>	impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Index<|K, V?Ds_error|>	so `m[k]` reads a pair
@@ -368,6 +329,12 @@ std/ds	Sz.equals	pub fn equals(r: Self@, other: Sz): Bool	whether the two are th
 std/ds	Sz.hash	pub fn hash(r: Self@): U32	the value spread over the buckets
 std/ds	Sz:Hashable<|Sz|>	impl Sz: Hashable<|Sz|>	so an `Sz` can be a `Map`'s key. `Sz` is here because keying on a pointer's address is common. Caution: **Do not put an impl that makes a built-in type a key of std's containers in the compiler**, which would invert the layers; it goes here, next to the trait that requires it.
 std/ds	fmix32	pub fn fmix32(h: U32): U32	MurmurHash3's finalizer, for a hash whose differences are in the high bits. `Map` takes the bucket from the low bits with `hash & (cap-1)`, so **a key whose differences are in the high bits** (a string through FNV, a sequential I32) runs its hash through this at the end of `hash()`. Caution: **Do not add it everywhere.** It costs extra work per lookup, and in a `hash` that runs in the innermost loop that cost outweighs the better spread (for a parser's memo key it slows self-hosting's parse by 10-20%).
+std/fs	Dir_trust	pub enum Dir_trust	who besides the current user could change what a directory holds
+std/fs	Dir_trust.foreign	foreign	another user owns it
+std/fs	Dir_trust.missing	missing	it is not a directory, or cannot be read
+std/fs	Dir_trust.own	own	no one: the current user owns it, and neither its group nor everyone may write it
+std/fs	Dir_trust.shared	shared	its group or everyone may write it
+std/fs	Dir_trust.unchecked	unchecked	this OS's permissions are not read here (Windows, where an ACL decides)
 std/fs	File_info	pub struct File_info	what the OS reports about one path
 std/fs	File_info.is_dir	pub is_dir: Bool	whether it is a directory
 std/fs	File_info.mtime	pub mtime: I64	the last modification time, in Unix epoch seconds, UTC
@@ -388,17 +355,18 @@ std/fs	Fs_error.too_deep	too_deep	a walk reached the depth limit (see `max_walk_
 std/fs	absolute	pub fn absolute(path: U8[], arena: Arena$@): U8[]?Fs_error	the full path from the root: a relative path joined to the working directory. **Only the text is joined**; `..` and links stay, since folding `a/link/..` into `a` names a different place when `link` points elsewhere (Rust's `std::path::absolute` keeps them too). Caution: **Pass a path for a child through this** before starting it in another directory; a relative path is resolved from the child's directory, not the caller's.
 std/fs	can_run	pub fn can_run(path: U8[]): Bool	whether it can actually be started on this system. On Windows the extension decides (the trap is at `is_executable`). A folder cannot be started on either.
 std/fs	copy_tree	pub fn copy_tree(from: U8[], to: U8[], skip_dir: fn(name: U8[]): Bool, arena: Arena$@): Void?Fs_error	copies every file under one directory to a path that does not exist yet. The relative layout is kept; only one file at a time is in memory. Caution: **It fails if the destination already exists.** A copy mixed with files left by an earlier run is not a copy of the tree, and nothing in it would show that.
+std/fs	dir_trust	pub fn dir_trust(path: U8[]): Dir_trust	whether what a directory holds could have been put there by someone else. For a folder whose contents are run or built in: a file planted there by another user would run as the current one ("A cache folder that others can write is refused" in `std/docs/DESIGN.md`). A link is followed, so the folder it reaches is judged.
 std/fs	exists	pub fn exists(path: U8[]): Bool	whether anything exists at that path
 std/fs	is_dir	pub fn is_dir(path: U8[]): Bool	whether it is a directory; a link to one counts
 std/fs	is_executable	pub fn is_executable(path: U8[]): Bool	whether the owner's execute bit is set; Windows: false. Close to Python's `os.access(p, os.X_OK)`. **Always false on Windows**, which has no execute bit. Caution: **Do not use this to decide "can it be started"**: `can_run` below answers that.
 std/fs	is_link	pub fn is_link(path: U8[]): Bool	whether it is a link, without following it. **`is_dir` cannot tell**: it follows the link. A tree walk must **first decide whether it may follow the link**. A path that does not exist gives false (the functions that create paths call this).
 std/fs	is_safe_relative	pub fn is_safe_relative(path: U8[]): Bool	whether the path's text alone cannot climb out. Caution: **This alone does not keep a path under the root.** It checks only the text, so **it cannot stop a way out through a link inside the root**. It checks segment by segment (matching `..` as a substring would also refuse `..foo`). **Do not make the answer depend on `sys.is_windows()`**, or a path that is safe on Linux becomes a hole on Windows only.
-std/fs	join	pub fn join(a: U8[], b: U8[], arena: Arena$@): U8[]	a path with a segment appended (Python's `os.path.join`). It always writes `/`, which Windows also accepts, so it never builds a mixed path; separators at the join are not doubled. To split a path, use `sys.get_dir_name` / `sys.get_file_name`.
+std/fs	join	pub fn join(a: U8[], b: U8[], arena: Arena$@): U8[]	a path with a segment appended (Python's `os.path.join`). It writes `/` at the join, which Windows also accepts; separators at the join are not doubled. **After a bare root, `b` follows it directly**: `/` and `etc` give `/etc`, and on Windows `C:` and `x` give `C:x`, which stays relative to that drive's working folder, as Python, Go and Rust answer. To split a path, use `sys.get_dir_name` / `sys.get_file_name`.
 std/fs	max_path_len	pub const max_path_len: Sz = 4095	the longest path passed to the OS; a longer one fails. The runtime copies a path into a fixed-length buffer. Caution: **Never truncate a longer path and pass it on.** The caller would get **the result of an operation on a different path** (a remove that deletes something else).
 std/fs	mkdir	pub fn mkdir(path: U8[]): Void?Fs_error	creates one directory; fails if the path exists
 std/fs	mkdir_all	pub fn mkdir_all(path: U8[]): Void?Fs_error	creates every missing level (`mkdir -p`). A level that already exists counts as success. On a failure part way, it **stops there and throws** `mkdir_failed` with the segment it could not create.
 std/fs	mkdir_unique	pub fn mkdir_unique(base: U8[], prefix: U8[], arena: Arena$@): U8[]?Fs_error	creates a directory with a name nobody has used, and returns its path. **Creating it decides that it is new, not checking first**: `mkdir` fails on a path that exists, a link included. A used name is retried with another random suffix (Python's `mkdtemp`). **Nothing removes it.** Its creator removes it, or the directory that holds it.
-std/fs	read_dir	pub fn read_dir(path: U8[], arena: Arena$@): List<|U8[]|>?Fs_error	one directory's entries, without descending. `.` and `..` are skipped, so the list holds only the entries.
+std/fs	read_dir	pub fn read_dir(path: U8[], arena: Arena$@): List<|U8[]|>?Fs_error	one directory's entries, without descending. `.` and `..` are skipped, so the list holds only the entries. A name that cannot be read fails the call (`operation_failed`), never hands back a listing cut short.
 std/fs	remove_path	pub fn remove_path(path: U8[]): Void?Fs_error	deletes a file, or an empty directory
 std/fs	rename_path	pub fn rename_path(old_path: U8[], new_path: U8[]): Void?Fs_error	renames or moves a file or a directory
 std/fs	skip_build_output	pub fn skip_build_output(name: U8[]): Bool	a `skip_dir` that leaves out `out` and `.git`. A repository's build output and git's own folder: neither holds a file anyone wrote there.
@@ -408,6 +376,7 @@ std/fs	stays_under	pub fn stays_under(root: U8[], rel: U8[]): Bool	whether a rel
 std/fs	walk_dirs	pub fn walk_dirs(path: U8[], skip_dir: fn(name: U8[]): Bool, arena: Arena$@): List<|U8[]|>?Fs_error	every directory under a path, in one flat list. The order, the prefix and `skip_dir` work as in `walk_files`, and `path` itself is **not included** (it is a list of what is inside).
 std/fs	walk_files	pub fn walk_files(path: U8[], skip_dir: fn(name: U8[]): Bool, arena: Arena$@): List<|U8[]|>?Fs_error	every file under a path, in one flat list (a narrower Python `os.walk`). Each element starts with `path` (`walk_files(".")` gives `./std/io.kspls`). **Exclude `.git` and `out`** (`skip_build_output`) in a repository, or the time and the result grow by an order of magnitude.
 std/fs	write_tree	pub fn write_tree(dir: U8[], rels: U8[][], bodies: U8[][], arena: Arena$@): Void?Fs_error	writes files under a directory, creating missing levels. `rels[i]` gets the contents `bodies[i]`; an existing file at that name is overwritten. Caution: **A name that climbs out fails before anything is written** (`is_safe_relative`). A link inside the tree is still followed.
+std/fs	write_unique	pub fn write_unique(base: U8[], prefix: U8[], suffix: U8[], data: U8[], arena: Arena$@): U8[]?Fs_error	writes a new file under a name nobody has used, readable by its owner. **Creating it decides that it is new**, as at `mkdir_unique`, so a link planted at the name is not followed. The name is the prefix, 16 hex digits and the suffix. **On POSIX its mode is 0600 from its first byte**, so it may hold what others on the machine must not read (Python's `mkstemp`). **On Windows the ACL it takes from its folder decides**: this sets none, as `dir_trust` reads none. **Nothing removes it.**
 std/fuzz	Campaign	pub struct Campaign	one fuzz run: the program under test, the input it reads, and its report
 std/fuzz	Campaign.after	pub after: U8[][]	the arguments that come after the input file
 std/fuzz	Campaign.again	pub again: U8[]	the command that starts this fuzz run, without the two numbers
@@ -431,6 +400,9 @@ std/fuzz	Sample.built	pub built: Bool	the program's own writer made it, so the p
 std/fuzz	Sample.data	pub data: U8[]	its bytes, never changed (`mutate` changes a copy)
 std/fuzz	Sample.kind	pub kind: U8[]	which input kind it is passed as (`Input_kind.name`)
 std/fuzz	Sample.name	pub name: U8[]	where it came from; a finding uses this name
+std/fuzz	Sanitized	pub struct Sanitized	whether the program under test was built with the address sanitizer. The driver cannot see it from the program, so its build says so: an out-of-range read stops where it happens only in such a build, and without one passes unseen.
+std/fuzz	Sanitized.asan	pub asan: Bool	it was (`--asan`)
+std/fuzz	Sanitized.required	pub required: Bool	a build without it is a failure (`--require-asan`)
 std/fuzz	Setup	pub struct Setup	what a fuzz driver's command line names
 std/fuzz	Setup.again	pub again: U8[]	the command that runs the driver again, without the two numbers
 std/fuzz	Setup.dirs	pub dirs: U8[][]	the seed folders (`.` when none is named); empty for a driver taking none
@@ -439,15 +411,18 @@ std/fuzz	Setup.work	pub work: U8[]	the work folder, as a full path; it stands on
 std/fuzz	Trial	pub struct Trial	the outcome of one trial
 std/fuzz	Trial.got	pub got: subproc.Run_result	the run; the rerun with a longer timeout if the first timed out
 std/fuzz	Trial.slow	pub slow: Bool	it timed out the first time but ended within the longer timeout. Caution: **Report it when it is true** (`note` does): a trial near the timeout will one day look hung.
+std/fuzz	again_with_asan	pub fn again_with_asan(a: Sanitized, again: U8[], arena: Arena$@): U8[]	the reproduce line, carrying `--asan` where the build had it
 std/fuzz	check_dirs	pub fn check_dirs(dirs: U8[][], arena: Arena$@): Void?U8[]	fails unless every seed folder stands. Caution: **A seed folder that does not exist is an error**, not a folder with no seeds: a path broken on its way here would fuzz with fewer seeds and pass.
 std/fuzz	check_seeds	pub fn check_seeds(c: Campaign@, all: List<|Sample|>@, arena: Arena$@): List<|Sample|>	has the program read every seed once, and returns those it accepted. Caution: **Do not continue silently if a seed cannot be written**: the program then reads the previous trial's input, and the input fuzzed and the finding disagree. **Drop a refused seed here, before fuzzing**, or every trial mutates a seed that is unreadable from the start.
 std/fuzz	declare	pub fn declare(p: argp.Parser$@, o: Opts$@)	adds `--trials` and `--seed` to the caller's parser. The values in `o` at the call are the defaults. **Declare both options through this**: the same names everywhere let the reproduce line of `report_all` run as printed.
+std/fuzz	declare_asan	pub fn declare_asan(p: argp.Parser$@, a: Sanitized$@)	adds `--asan` and `--require-asan` to the caller's parser
 std/fuzz	findings_new	pub fn findings_new(arena: Arena$@): Findings	an empty set of findings
 std/fuzz	gather	pub fn gather(dirs: U8[][], endings: U8[][], cap: I64, arena: Arena$@): List<|Sample|>	collects the files with the given endings under the folders, as seeds. **In the order the folders are given, and within a folder in path order**, so the seeds are the same on every machine. The kind is the ending that matched; the name is the path below. Caution: **Nothing under a folder named `out` or `.git`**: a seed list that changes with the last build reproduces nothing.
 std/fuzz	mutate	pub fn mutate(src: U8[], r: Prng$@, arena: Arena$@): U8[]	returns the bytes with one random mutation applied. A bit flipped, bytes dropped, random bytes inserted, a run copied, the end cut off, or two bytes swapped. Empty input is returned unchanged.
 std/fuzz	note	pub fn note(f: Findings, t: Trial@, trial: Sz, seed_name: U8[], data: U8[], dir: U8[], ext: U8[], arena: Arena$@)	records one trial, and saves its input if it is a finding. **A trial that ended with the program's own answer is not recorded**: that is the normal end. A slow one (`Trial.slow`) is said on a line of its own.
 std/fuzz	pick	pub fn pick(all: List<|Sample|>@, kind: U8[], r: Prng$@): Sz	one seed of the given kind, or `all.len` if there is none. Caution: **It does not pick from all seeds**, or a kind with few seeds would almost never be tested; the caller picks the kind first.
 std/fuzz	report_all	pub fn report_all(f: Findings, o: Opts, subject: U8[], wait_ms: I32, again: U8[], arena: Arena$@)	prints the findings, the three check lines, and how to run it again. Caution: **Keep the three lines separate**, or the verdict cannot tell a crash from a hang. **A fuzz run with no trials is a failure**, not three passes over nothing.
+std/fuzz	report_asan	pub fn report_asan(a: Sanitized)	says whether the program under test is sanitized, in a line. A check where it is, or is required; a skip otherwise. Caution: **Report it either way**: a program built without it passes the same way, and nothing else would show that the most important failures go unchecked.
 std/fuzz	run_trial	pub fn run_trial(argv: U8[][], ms: I32, arena: Arena$@): Trial	runs one trial, in the caller's working directory. **A trial that times out is run again with a longer timeout** before it counts as a hang: a busy machine can slow a finite trial past a wall-clock timeout.
 std/fuzz	scatter	pub fn scatter(c: Campaign@, seeds: List<|Sample|>@, what: U8[], o: Opts, arena: Arena$@): Void?U8[]	runs the trials, checks that they reached the program, and reports them. A kind with no seed is reported as skipped and left out of the draw.
 std/fuzz	setup	pub fn setup(p: argp.Parser$@, o: Opts$@, run_as: U8[], program: U8[], seed_dirs: Bool, arena: Arena$@): Setup?U8[]	reads `<program> <work folder> [seed folder ...]`, and makes the work folder. It declares the positional arguments and the two numbers (`declare`), so the caller declares only its own options before the call.
@@ -472,6 +447,8 @@ std/http	Http_error.invalid_line_break	invalid_line_break	a bare CR or LF was in
 std/http	Http_error.invalid_request_line	invalid_request_line	the first line is not `METHOD target VERSION`
 std/http	Http_error.invalid_status_line	invalid_status_line	the first line is not `VERSION status reason`
 std/http	Http_error.io	io(err: net.Net_error)	the socket itself failed
+std/http	Http_error.length_mismatch	length_mismatch	what a head being built says of the body's length is not what is written. A `Content-Length` naming another length or given twice, or a length or a body where the status allows none (1xx, 204, 304). A reader would cut the message somewhere else.
+std/http	Http_error.unsupported_close_delimited	unsupported_close_delimited	a response that may carry a body names no `Content-Length`. Its body runs to the close, which is not read here: cut off early, it cannot be told from a whole one, so it is refused rather than read as empty.
 std/http	Http_error.unsupported_transfer_encoding	unsupported_transfer_encoding	the message has `Transfer-Encoding`, which is always refused. Ignoring it silently would let it disagree with Content-Length (request smuggling).
 std/http	Http_error.unsupported_version	unsupported_version	the version is not `HTTP/` plus one digit, a dot and one digit
 std/http	Request	pub struct Request	one received request, and how much of the buffer it used
@@ -489,8 +466,9 @@ std/http	Response.reason	pub reason: U8$[]	the reason phrase, as the peer wrote 
 std/http	Response.status	pub status: I32	the status number
 std/http	Response.version	pub version: U8$[]	the version as it arrived, such as `HTTP/1.1`
 std/http	default_max_body_bytes	pub const default_max_body_bytes: Sz = 16 * 1024 * 1024	the body limit if the caller sets none
-std/http	format_response	pub fn format_response(b: Str_builder$@, status: I32, head: Header$@, body: U8[]): Void?Http_error	builds one whole response as bytes, for the caller to send. Appends the status line, the headers, an empty line and the body to b, **leaving the bytes to the caller**: a non-blocking socket cannot always send it all at once (see write_all in std/net.kspls), so the sender must remember how far it got and continue once writable.
-std/http	format_response_head	pub fn format_response_head(b: Str_builder$@, status: I32, head: Header$@): Void?Http_error	builds only a response's head, for a body sent piece by piece. Caution: **Do not add `Content-Length`.** That is why this function exists: a streamed body's length is not known in advance, and `format_response` adds it. **Always include `Connection: close`** (it fails without it).
+std/http	format_response	pub fn format_response(b: Str_builder$@, status: I32, head: Header$@, body: U8[]): Void?Http_error	builds one whole response as bytes, for the caller to send. Appends the status line, the headers, an empty line and the body to b, **leaving the bytes to the caller**: a non-blocking socket cannot always send it all at once (see write_all in std/net.kspls), so the sender must remember how far it got and continue once writable. **The length is the body's**: one given that differs is refused, as is any body or length for 1xx, 204 and 304, whose head names none. The answer to a HEAD is `format_response_to_head`.
+std/http	format_response_head	pub fn format_response_head(b: Str_builder$@, status: I32, head: Header$@): Void?Http_error	builds only a response's head, for a body sent piece by piece. Caution: **Do not add `Content-Length`.** That is why this function exists: a streamed body's length is not known in advance, and `format_response` adds it. **Always include `Connection: close`** (it fails without it), and a status that has a body.
+std/http	format_response_to_head	pub fn format_response_to_head(b: Str_builder$@, status: I32, head: Header$@, length: Sz): Void?Http_error	builds the answer to a HEAD request: a head with no body. The head is the one a GET would get: its `Content-Length` names `length`, the length of the body a GET would carry, which is not sent (RFC 9110 §9.3.2). For 1xx, 204 and 304 no length is named, and `length` must be 0.
 std/http	headers	pub fn headers(arena: Arena$@): Header_builder	an empty header builder
 std/http	max_head_bytes	pub const max_head_bytes: Sz = 64 * 1024	the most a message's head may take, against DoS. The head is the first line and the headers; every reader here refuses a longer one.
 std/http	parse_request	pub fn parse_request(src: U8[], max_body: Sz, arena: Arena$@): Request$@?Http_error	the one request at the start of the buffer; fails if it is incomplete. **A body over `max_body` fails as soon as the head says so**, before it arrives, and a head over `max_head_bytes` as soon as that much has arrived without its end.
@@ -522,7 +500,7 @@ std/io	Reader.read	fn read(r: Self, $buf: U8$[]): Sz?Io_error	fills buf; returns
 std/io	copy	pub fn copy($src: Reader, $dst: Writer): Sz?Io_error	reads to the end, writes it all out, and returns how much was copied
 std/io	err	pub fn err(): Writer	standard error, opened on the first call
 std/io	getchar	pub fn getchar(): I32	one byte from standard input, or negative at the end
-std/io	open	pub fn open(path: U8[], mode: U8[]): File_stream?Io_error	opens a file, handling a non-ASCII path on Windows too
+std/io	open	pub fn open(path: U8[], mode: U8[]): File_stream?Io_error	opens a file, handling a non-ASCII path on Windows too. A child process started while it is open does not get it.
 std/io	out	pub fn out(): Writer	standard output, opened on the first call
 std/io	read_file	pub fn read_file(path: U8[]): U8[]?Io_error	The whole file, on the heap; the caller frees it with `mem.dealloc(text.ptr)`. A `/proc` file that reports 0 bytes, and a pipe, are still read to the end.
 std/io	read_file_capped	pub fn read_file_capped(path: U8[], cap: Sz, arena: Arena$@): U8[]?Io_error	the file's first `cap` bytes, or the whole file if it is shorter. **It stops at `cap` however long the file grows**, so a child still writing cannot fill the memory; the buffer grows with what is read, never to the whole cap up front.
@@ -548,12 +526,13 @@ std/json	Json_builder.str_val	pub fn str_val(r: Self$@, s: U8[]): Val	a string, 
 std/json	Json_error	pub enum Json_error	why a document could not be read, or cannot be trusted
 std/json	Json_error.expected_colon	expected_colon	a member's name was not followed by `:`
 std/json	Json_error.expected_comma_or_bracket	expected_comma_or_bracket	an element was not followed by `,` or the closing mark
-std/json	Json_error.field_type	field_type(mismatched: U8[])	the kinds differ; `"<root>"` when it is not at a field
+std/json	Json_error.field_type	field_type(mismatched: U8[])	the kinds differ, or the field cannot hold the integer. `"<root>"` when it is not at a field. Only `into_struct` and `from_struct` return it.
 std/json	Json_error.invalid_character	invalid_character(ch: U8)	a byte that is not allowed where it appears
 std/json	Json_error.invalid_number	invalid_number	the digits do not match JSON's number grammar
 std/json	Json_error.invalid_string	invalid_string	a string's escape or its ending is not what JSON allows
-std/json	Json_error.missing_field	missing_field(missing: U8[])	a field in the table is missing from the object. Only `into_struct` returns this one and the next. Caution: **These two keep a default from being filled in silently.** Filled with 0 or "", a sender's misspelt key would show only as "the value was 0" (see std/docs/DESIGN.md's "Known holes").
-std/json	Json_error.too_deep	too_deep	the nesting is too deep; this guards against stack exhaustion
+std/json	Json_error.missing_field	missing_field(missing: U8[])	a field in the table is missing from the object. Only `into_struct` returns this one. Caution: **It and the next keep a default from being filled in silently.** Filled with 0 or "", a sender's misspelt key would show only as "the value was 0" (see std/docs/DESIGN.md's "Known holes").
+std/json	Json_error.too_deep	too_deep	deeper than `max_nesting_depth`, or than the stack left can hold
+std/json	Json_error.too_large	too_large	an array's elements need more bytes than this target's `Sz` can count
 std/json	Json_error.trailing_comma	trailing_comma	`[1,]` or `{"a":1,}`; JSON requires an element after a comma
 std/json	Json_error.trailing_input	trailing_input	something other than whitespace follows the value
 std/json	Json_error.unexpected_eof	unexpected_eof	it ended in the middle of a value
@@ -570,7 +549,7 @@ std/json	Val.arr_list	pub fn arr_list(r: Self, arena: Arena$@): List<|Val|>	an a
 std/json	Val.array_val	array_val(head: Node$@)	an array, as a chain of elements
 std/json	Val.as_bool	pub fn as_bool(r: Self, default_val: Bool): Bool	the boolean it holds
 std/json	Val.as_f64	pub fn as_f64(r: Self, default_val: F64): F64	the number it holds. It accepts the integer kind too, so `3` and `3.0` need no branch.
-std/json	Val.as_int	pub fn as_int(r: Self, default_val: I32): I32	the integer it holds, narrowed to `I32`
+std/json	Val.as_int	pub fn as_int(r: Self, default_val: I32): I32	the integer it holds, when an `I32` holds it. Caution: **An integer past `I32` gives the default, never its low bytes**: narrowed, 4294967297 would read as 1, and an id that large would match id 1.
 std/json	Val.as_int64	pub fn as_int64(r: Self, default_val: I64): I64	the integer it holds, at its full width. For a value that can exceed 2GB, such as safetensors' `data_offsets`.
 std/json	Val.as_str	pub fn as_str(r: Self): U8[]	the string it holds, or empty if it is another kind
 std/json	Val.bool_val	bool_val(b: Bool)	`true` or `false`
@@ -585,8 +564,8 @@ std/json	Val.obj_val	obj_val(o: Obj)	an object; read its members through `get`
 std/json	Val.str_val	str_val(s: U8[])	a string, already unescaped
 std/json	max_nesting_depth	pub const max_nesting_depth: Sz = 500	the deepest nesting read; deeper fails with `too_deep`. It guards against stack exhaustion, and is deep enough for ordinary JSON. `std/json_struct` holds a round trip to it too, so a document that parses does not stop part way.
 std/json	parse	pub fn parse(src: U8[], arena: Arena$@): Val?Json_error	the whole document as one value; anything left over is refused. Caution: **A document ends after one value.** Otherwise `1 2` **succeeds** as `1`, and two concatenated inputs silently pass as the first.
-std/json_struct	from_struct	pub fn from_struct<|T: reflect.Reflectable|>(v: T@, b: Json_builder$@): Val	copies a reflectable value into a JSON object. `v` is a `T@`: passed by value, the field offsets would point into a temporary.
-std/json_struct	into_struct	pub fn into_struct<|T: reflect.Reflectable|>(v: Val, out: T$@, arena: Arena$@): Void?Json_error	copies a JSON object into a reflectable value. **A field whose key is missing or of another kind is refused** (the reason is at `Json_error`). Caution: **Copy the names into `arena`.** The names inside `v` point into the parse's arena; freeing that first leaves the written value pointing at freed memory.
+std/json_struct	from_struct	pub fn from_struct<|T: reflect.Reflectable|>(v: T@, b: Json_builder$@): Val?Json_error	copies a reflectable value into a JSON object. `v` is a `T@`: passed by value, the field offsets would point into a temporary. **A `U64` past the largest `I64` is refused** (`field_type`), not written as a negative number: `I64` is the widest integer a `Val` holds.
+std/json_struct	into_struct	pub fn into_struct<|T: reflect.Reflectable|>(v: Val, out: T$@, arena: Arena$@): Void?Json_error	copies a JSON object into a reflectable value. **A field whose key is missing or of another kind is refused** (the reason is at `Json_error`), and so is an integer the field cannot hold: 70000 into a `U16`, -1 into a `U8`. Caution: **Copy the names into `arena`.** The names inside `v` point into the parse's arena; freeing that first leaves the written value pointing at freed memory.
 std/jsonrpc	Client #cfg(!freestanding)	pub struct Client	exchanges JSON-RPC messages with a child connected by pipes
 std/jsonrpc	Client.alive #cfg(!freestanding)	pub fn alive(r: Self@): Bool	whether the child is still running
 std/jsonrpc	Client.err_tail #cfg(!freestanding)	pub fn err_tail(r: Self$@): U8[]	the end of what the server wrote to standard error. Caution: **Attach it to a failure's description**; if it is discarded, no reason remains. **It borrows the buffer**, which the next drain reallocates: **copy it at once** (`arena.text().s(c.err_tail())`).
@@ -773,8 +752,10 @@ std/net	Net_error	pub enum Net_error	why a socket operation failed
 std/net	Net_error.accept_failed	accept_failed	the waiting connection could not be accepted
 std/net	Net_error.addr_buffer_too_small	addr_buffer_too_small	the buffer for the address is shorter than `addr_text_max`
 std/net	Net_error.addr_not_numeric	addr_not_numeric	a name was given where an address string is required
+std/net	Net_error.bad_port	bad_port	the port is outside 0 to 65535, which a socket address cannot hold
 std/net	Net_error.bind_failed	bind_failed	the listen or bind failed: the port is in use, permission is missing, and so on
 std/net	Net_error.connect_failed	connect_failed	the address resolved, but no candidate connected
+std/net	Net_error.datagram_too_long	datagram_too_long	the datagram was longer than the buffer; it is consumed, its rest lost
 std/net	Net_error.io_failed	io_failed	the send or receive failed (a disconnection, for example)
 std/net	Net_error.resolve_failed	resolve_failed	the host name did not resolve to an address. **Keep "it did not resolve" apart from "it did not connect"**: otherwise a wrong name and a missing peer look the same, and nobody can tell which to fix.
 std/net	Net_error.set_option_failed	set_option_failed	changing a socket option failed
@@ -783,7 +764,7 @@ std/net	Peer_addr	pub struct Peer_addr	the address of the peer of a connection. 
 std/net	Peer_addr.host_len	pub host_len: Sz	how many bytes of address text were written into the caller's buffer
 std/net	Peer_addr.port	pub port: I32	the peer's port
 std/net	Tcp_listener	pub struct Tcp_listener	a socket that waits for incoming connections
-std/net	Tcp_listener.accept	pub fn accept(r: Self$@): Tcp_stream$@?Net_error	accepts the next waiting connection
+std/net	Tcp_listener.accept	pub fn accept(r: Self$@): Tcp_stream$@?Net_error	accepts the next waiting connection. The stream it returns is blocking on every OS, whatever the listener's mode.
 std/net	Tcp_listener.bind	pub fn bind(host: U8[], port: I32): Tcp_listener$@?Net_error	starts listening on the address and port. "0.0.0.0" listens on every IPv4 interface, "::" on every IPv6 one. **"::" does not accept IPv4 clients**, whatever the system default ("Connecting by name tries the candidates overlapped" in std/docs/DESIGN.md); to accept both, open two listeners.
 std/net	Tcp_listener.free	pub fn free(r: Self$@)	closes the listener and frees it
 std/net	Tcp_listener.raw_handle	pub fn raw_handle(r: Self$@): I64	the raw handle, the only thing `std/reactor` uses to register the socket. Only for registering; send/recv/accept still go only through this type's methods.
@@ -795,6 +776,7 @@ std/net	Tcp_stream.connect_nonblocking	pub fn connect_nonblocking(host: U8[], po
 std/net	Tcp_stream.free	pub fn free(r: Self$@)	closes the connection and frees it
 std/net	Tcp_stream.is_connected	pub fn is_connected(r: Self$@): Bool	whether the connection succeeded; if false, free it. Call it after the writable notification arrives.
 std/net	Tcp_stream.peer	pub fn peer(r: Self$@, host_out: U8$[]): Peer_addr?Net_error	the address of the peer. For a stream that `accept` returned, it is the client; for one that connected, the server.
+std/net	Tcp_stream.raw_fd	pub fn raw_fd(r: Self$@): I32	the OS's socket number, for a C library that reads and writes the socket itself. Caution: **Do not also read or write through this type**: the bytes would interleave with that library's. `free()` still closes the socket.
 std/net	Tcp_stream.raw_handle	pub fn raw_handle(r: Self$@): I64	the raw handle, the only thing `std/reactor` uses to register the socket
 std/net	Tcp_stream.read	pub fn read(r: Self$@, buf: U8$[]): Sz?Net_error	receives and returns how much arrived; 0 means the peer closed
 std/net	Tcp_stream.set_nonblocking	pub fn set_nonblocking(r: Self$@): Void?Net_error	makes it non-blocking, for use with `std/reactor`
@@ -810,7 +792,7 @@ std/net	Udp_socket	pub struct Udp_socket	a socket that sends and receives datagr
 std/net	Udp_socket.bind	pub fn bind(host: U8[], port: I32): Udp_socket$@?Net_error	opens a socket on the address and port. The host works as in `Tcp_listener.bind`.
 std/net	Udp_socket.free	pub fn free(r: Self$@)	closes the socket and frees it
 std/net	Udp_socket.raw_handle	pub fn raw_handle(r: Self$@): I64	the raw handle, the only thing `std/reactor` uses to register the socket
-std/net	Udp_socket.recv_from	pub fn recv_from(r: Self$@, buf: U8$[], from_host_out: U8$[]): Udp_recv_result?Net_error	receives one datagram and returns its size and who sent it
+std/net	Udp_socket.recv_from	pub fn recv_from(r: Self$@, buf: U8$[], from_host_out: U8$[]): Udp_recv_result?Net_error	receives one datagram and returns its size and who sent it. A datagram longer than `buf` fails as `datagram_too_long`, on every OS, rather than come back cut.
 std/net	Udp_socket.send_to	pub fn send_to(r: Self$@, buf: U8[], host: U8[], port: I32): Sz?Net_error	sends one datagram and returns how much was sent. The destination must be **an address string**; resolve a name once with `resolve_one`.
 std/net	Udp_socket.set_nonblocking	pub fn set_nonblocking(r: Self$@): Void?Net_error	makes it non-blocking, for use with `std/reactor`
 std/net	Udp_socket:Owned	impl Udp_socket: Owned	it owns its socket and memory and frees them with `free()`
@@ -888,19 +870,20 @@ std/reflect	Field_info.offset	pub offset: Sz	how far into the struct it sits, co
 std/reflect	Field_kind	pub enum Field_kind	what one field is, as far as a round trip needs to know. **List only the kinds the round-trip functions can walk**, or a name could be written that does nothing (`../docs/DESIGN.md`'s Principle 5). A number's width is in `Field_extra.width`.
 std/reflect	Field_kind.bool_field	bool_field	a `Bool`
 std/reflect	Field_kind.float_field	float_field	floating point (`F32` / `F64`)
-std/reflect	Field_kind.int_field	int_field	a signed integer (`I8` / `I16` / `I32` / `I64`)
+std/reflect	Field_kind.int_field	int_field	a signed integer (`I8` / `I16` / `I32` / `I64` / `Sz`)
 std/reflect	Field_kind.list_field	list_field	a `List<|T|>`, whose element is described by `Field_info.extra`
 std/reflect	Field_kind.opt_field	opt_field	an `Option<|T|>`, whose contents are described by `Field_info.extra`
 std/reflect	Field_kind.str_field	str_field	a `U8[]`. Read as the slice it is; written as a copy into the receiver's arena.
 std/reflect	Field_kind.struct_field	struct_field	a nested struct, whose table is in `Field_info.nested`
-std/reflect	Field_kind.uint_field	uint_field	an unsigned integer (`U8` / `U16` / `U32` / `U64` / `Sz`). **It is separate from the signed kind for the reader's sake**: sign-extending a `U32`'s `0xFFFFFFFF` gives `-1`.
+std/reflect	Field_kind.uint_field	uint_field	an unsigned integer (`U8` / `U16` / `U32` / `U64`). **It is separate from the signed kind for the reader's sake**: sign-extending a `U32`'s `0xFFFFFFFF` gives `-1`.
 std/reflect	Reflectable	pub trait Reflectable	a type that returns its own field table. **Writing the body by hand turns off the synthesis.** Do so when key names differ from the declaration, or when the synthesis cannot handle the type. Caution: **Do not let the names and positions disagree with the declaration.** No diagnostic catches it: the code reads or writes the neighbouring field.
 std/reflect	Reflectable.fields	fn fields(r: Self): Field_info[]	the table, which points at a `const` and is not built
+std/reflect	fits_int	pub fn fits_int(kind: Field_kind, width: Sz, v: I64): Bool	whether an integer is held unchanged by a field of that kind and width. **Ask before `store_int`**, which keeps only the low bytes: 300 stored into a `U8` reads back as 44, and -1 into a `U32` as 4294967295. Refuse a value that does not fit; never store it.
 std/reflect	load_float	pub fn load_float(at: U8@, width: Sz): F64	reads a floating-point value of that width as an `F64`. An `F32` is widened; the round-trip formats hold only double precision.
-std/reflect	load_int	pub fn load_int(at: U8@, width: Sz): I64	reads a signed integer of that width, widened to `I64`. Caution: **Keep the per-width branching in these `load_*` / `store_*` functions only**, not in `std/json_struct` / `std/db` (Principle 6 in `../docs/DESIGN.md`). The widths are 1/2/4/8. **Read it as the type of that width, then widen** (that type decides the sign extension).
-std/reflect	load_uint	pub fn load_uint(at: U8@, width: Sz): I64	reads an unsigned integer of that width, widened without sign extension. **Keeping it separate from the signed kind is the point** (see `Field_kind`). **A `U64` with its top bit set does not fit in an `I64`**, and `I64` is the limit of both round-trip formats (JSON, sqlite).
+std/reflect	load_int	pub fn load_int(at: U8@, width: Sz): I64	reads a signed integer of that width, widened to `I64`. Caution: **Keep the per-width branching in these `load_*` / `store_*` functions only**, not in a walker such as `std/json_struct` (Principle 6 in `../docs/DESIGN.md`). Widths: 1/2/4/8. **Read it as the type of that width, then widen** (that type decides the sign extension).
+std/reflect	load_uint	pub fn load_uint(at: U8@, width: Sz): I64	reads an unsigned integer of that width, widened without sign extension. **Keeping it separate from the signed kind is the point** (see `Field_kind`). **A `U64` with its top bit set does not fit in an `I64`**, and `I64` is the widest integer a round trip carries.
 std/reflect	store_float	pub fn store_float(at: U8$@, width: Sz, v: F64)	writes a floating-point value, narrowed to that width. **Narrowing into an `F32` loses digits**, so a round trip can change such a value.
-std/reflect	store_int	pub fn store_int(at: U8$@, width: Sz, v: I64)	writes an integer, narrowed to that width. **Signed and unsigned share this function**: the narrowed bytes are the same.
+std/reflect	store_int	pub fn store_int(at: U8$@, width: Sz, v: I64)	writes an integer, narrowed to that width. **Signed and unsigned share this function**: the narrowed bytes are the same. Caution: **It narrows without a word**; ask `fits_int` first where the value comes from outside.
 std/regex	Match	pub struct Match	one matched span, and what its groups captured
 std/regex	Match.end	pub end: Sz	where it ends; the span is `[start, end)`
 std/regex	Match.group	pub fn group(r: Self, n: Sz, text: U8[]): U8[]	what that group captured, or empty if it did not take part. **The result is a view into text**, using the original text's indices.
@@ -912,7 +895,7 @@ std/regex	Regex.compile	pub fn compile(pattern: U8[]): Regex$@?Regex_error	reads
 std/regex	Regex.find	pub fn find(r: Self$@, text: U8[]): Match?Regex_error	the first matched span; fails when nothing matches
 std/regex	Regex.find_all	pub fn find_all(r: Self$@, text: U8[], arena: Arena$@): List<|Match|>?Regex_error	every matched span; the search resumes past each one. Front to back; **even an empty match advances one byte.** The budget (max_match_steps) restarts per match. An element holds a whole `Slots`. Why it is eager, and how it differs from Python's `findall`, is in "Every match is returned in a `List`. No lazy iterator is made" in `std/docs/DESIGN.md`.
 std/regex	Regex.free	pub fn free(r: Self$@)	frees the compiled tree
-std/regex	Regex.is_match	pub fn is_match(r: Self$@, text: U8[]): Bool	whether anything in the text matches
+std/regex	Regex.is_match	pub fn is_match(r: Self$@, text: U8[]): Bool?Regex_error	whether anything in the text matches. Caution: **Only `no_match` is "no".** `too_complex` is thrown, not read as false: the budget ran out before the whole text was tried, so a match may still stand in it.
 std/regex	Regex:Owned	impl Regex: Owned	it owns its resources and frees them in `free()`.
 std/regex	Regex_error	pub enum Regex_error	why a pattern could not be compiled, or matched nothing
 std/regex	Regex_error.dangling_quantifier	dangling_quantifier	nothing quantifiable comes before `*`, `+`, `?` or `{`
@@ -920,8 +903,8 @@ std/regex	Regex_error.invalid_escape	invalid_escape	nothing follows `\`, or an e
 std/regex	Regex_error.invalid_range	invalid_range	a range's ends are reversed, or a set such as `\d` is at a range's end
 std/regex	Regex_error.invalid_repeat	invalid_repeat	`{` has no valid count, m > n, or the count exceeds `max_repeat_count`
 std/regex	Regex_error.no_match	no_match	nothing in the text matched
-std/regex	Regex_error.too_complex	too_complex	backtracking went over budget; guards against catastrophic backtracking
-std/regex	Regex_error.too_deep	too_deep	the `(` nesting is too deep; guards against stack exhaustion at compile time
+std/regex	Regex_error.too_complex	too_complex	matching went over its attempt budget, or deeper than its limit or the stack
+std/regex	Regex_error.too_deep	too_deep	the `(` nesting is deeper than its limit, or than the stack left can hold
 std/regex	Regex_error.too_many_groups	too_many_groups	there are more capturing groups than `max_groups`
 std/regex	Regex_error.unmatched_bracket	unmatched_bracket	a `[` has no `]`
 std/regex	Regex_error.unmatched_paren	unmatched_paren	an opening parenthesis has no closing one, or the other way round
@@ -1006,7 +989,9 @@ std/sha256	hmac	pub fn hmac(key: U8[], data: U8[]): U8[32]	RFC 2104's HMAC-SHA25
 std/sha256	hmac_verify	pub fn hmac_verify(key: U8[], data: U8[], mac: U8[]): Bool	whether a MAC matches, in a time that does not reveal how much matched. Caution: **Do not compare with `hmac(..).equals(mac)`.** equals returns at the first byte that differs, so the time reveals how many leading bytes matched, and an attacker can forge a MAC one byte at a time. This loop takes the same time whichever byte differs; a different length may return early.
 std/sha256	write_hex	pub fn write_hex(digest: U8[32], out: U8$[])	writes the digest as lowercase hex, without allocating. Use it for log output and for comparisons in a test. Caution: **Do not take a `Writer`.** Importing `io` would make one digest pay for the whole string and IO library, many times the size of this file.
 std/stack_limit	Stack_limit	pub struct Stack_limit	where a walk on the calling thread stops, a margin before the end of its stack. Caution: **Create it on the thread that walks.** It holds that thread's bounds, and another thread's stack is somewhere else.
+std/stack_limit	Stack_limit.later	pub fn later(margin: Sz, deep: Sz): Stack_limit	a limit that asks the OS only once a walk gets deep. **For a walk run many times over mostly shallow input** (a regex per line of a file): asking costs far more than a shallow walk, which never needs the answer. Check it with `near_at`.
 std/stack_limit	Stack_limit.near	pub fn near(limit: Self@): Bool	whether the caller is within the margin of the stack's end. **Always false where the OS does not tell** (a freestanding build), so a walk also keeps its own depth count.
+std/stack_limit	Stack_limit.near_at	pub fn near_at(limit: Self$@, depth: Sz): Bool	`near` for a walk at `depth`, asking the OS first if this one has not yet. A limit made by `new` has asked already, so this is `near`.
 std/stack_limit	Stack_limit.new	pub fn new(margin: Sz): Stack_limit	the limit for the calling thread. **It asks the OS, and that is not cheap** (on Linux the main thread's bounds are read from a file). Create it once per walk and keep it.
 std/str	Arena.text	pub fn text(r: Self$@): Arena_text$@	a builder for one string in this arena. The builder is in the arena too, so `.s(…)` can chain (a method's receiver must be a place).
 std/str	Arena_text	pub struct Arena_text	a short-lived builder that leaves the finished text in the arena
@@ -1047,6 +1032,7 @@ std/str	U8[].split	pub fn split(r: U8[], delimiter: U8, arena: Arena$@): List<|U
 std/str	U8[].to_cstr	pub fn to_cstr(r: U8[]): Option<|U8$@|>	a new NUL-terminated copy, or none if r holds a NUL. Caution: The caller must `dealloc()` it. A KSPL string has a length, so it can hold a NUL, but C treats the first NUL as the end.
 std/str	U8[].unescape_to_arena	pub fn unescape_to_arena(r: U8[], arena: Arena$@): U8[]?Str_error	turns the text of a string literal back into the bytes it means. **An unknown alphanumeric escape fails** (`\x` and `\q` are `invalid_format`). Only `\n`, `\r`, `\t`, `\b`, `\f` and `\uXXXX` are decoded, and an escaped symbol is the symbol itself; the caller lists which symbols are allowed (std/json's is_json_escape). The reason is in "After `\`, an alphanumeric is accepted only in a defined escape" in std/docs/DESIGN.md.
 std/str	U8[]:ds.Hashable<|U8[]|>	impl U8[]: ds.Hashable<|U8[]|>	so a string can be a `Map`'s key. `Eq` (what `==` desugars to) is deliberately not implemented: `equals` is an O(N) comparison of contents, and written as `==` it would look the same as a pointer comparison.
+std/str	from_cstr	pub fn from_cstr(c_str: U8$@): U8$[]	a C string as a slice of its bytes before the NUL, which it views and does not copy. A null pointer gives an empty slice, so what a C function returns can be passed as it is.
 std/strfmt	Bool.fmt	pub fn fmt(r: Self, w: Writer): Writer	writes the value to w
 std/strfmt	Bool:Formattable	impl Bool: Formattable	so it can be used inside an interpolation
 std/strfmt	Char_fmt	pub struct Char_fmt	one byte written as a character rather than a number. What `\{b:c\}` desugars to; a plain `\{b\}` is a decimal number. **One byte has two readings: "as a number" and "as a character".** The format string chooses which one prints; choosing by type would make the output change just because a value passed through another type ("Notations not carried" in `docs/DESIGN.md`). It writes one byte; pass a multi-byte character as text (`U8[]`).
@@ -1137,7 +1123,7 @@ std/subproc	Job.cwd	pub cwd: U8[]	the working directory; empty inherits the call
 std/subproc	Piped_child #cfg(!freestanding)	pub struct Piped_child	a child whose standard input, output and error are pipes
 std/subproc	Piped_child.alive #cfg(!freestanding)	pub fn alive(r: Self@): Bool	whether it is still running
 std/subproc	Piped_child.close_stdin #cfg(!freestanding)	pub fn close_stdin(r: Self$@)	closes standard input, to signal the end of input. A child that answers only after reading all its input is waiting for this.
-std/subproc	Piped_child.exit_code #cfg(!freestanding)	pub fn exit_code(r: Self@): I32	the exit code, or -1 if it has not finished. -1 because 0 means "finished cleanly". **Do not call it after `kill`** (kill also does the cleanup). A child killed by a signal gives `128 + the signal number` (the shell's convention).
+std/subproc	Piped_child.exit_code #cfg(!freestanding)	pub fn exit_code(r: Self@): Option<|I32|>	the exit code, or none while it is still running. The code is as `Run_result.exit_code`'s. **Do not call it after `kill`** (kill also does the cleanup).
 std/subproc	Piped_child.kill #cfg(!freestanding)	pub fn kill(r: Self$@)	kills it, reaps it, and closes the pipes. Caution: **Call it once only.**
 std/subproc	Piped_child.read #cfg(!freestanding)	pub fn read(r: Self@, buf: U8$[], timeout_ms: I32): Sz?Read_end	reads from standard output. **The timeout is required**, so a stall returns as a value and can be diagnosed right away.
 std/subproc	Piped_child.read_err #cfg(!freestanding)	pub fn read_err(r: Self@, buf: U8$[], timeout_ms: I32): Sz?Read_end	reads from standard error, where the child says why it is silent. Caution: **Do not discard it.** Without it, nothing tells you why the response was empty.
@@ -1149,31 +1135,31 @@ std/subproc	Read_end.timed_out	timed_out	no byte arrived in time; the child may 
 std/subproc	Run_error	pub enum Run_error	why a run did not produce a result. **The text in `exited` points into the arena** and cannot be read after the arena is freed.
 std/subproc	Run_error.describe #cfg(!freestanding)	pub fn describe(r: Self, what: U8[], tool: U8[])	writes to standard error why a run failed, for a tool that then stops. The heading is `<program>: <what> failed`; under it, indented, that `tool` could not be started, that it timed out, or the exit code followed by the child's standard error.
 std/subproc	Run_error.exited	exited(code: I32, err: U8[])	it exited non-zero; the text is its standard error
-std/subproc	Run_error.spawn_failed	spawn_failed	it could not start: no executable, no permission, or the fork failed
+std/subproc	Run_error.spawn_failed	spawn_failed	it could not start; the causes are `Spawn_error.spawn_failed`'s
 std/subproc	Run_error.timed_out	timed_out	the time ran out, so it was killed
 std/subproc	Run_result	pub struct Run_result	the outcome of one run: how it ended, and what it wrote
-std/subproc	Run_result.exit_code	pub exit_code: I32	the child's exit code; 0 means success
+std/subproc	Run_result.exit_code	pub exit_code: I32	the child's exit code; 0 means success. **A child that crashed or was killed gives 128 + the signal number on every OS** (the shell's convention: a segmentation fault is 139, an abort 134); Windows's crash codes are read as the signal POSIX raises for the same fault ("A child's end is one code on every OS" in std/docs/DESIGN.md). Any other code is the child's own, which on Windows may be negative.
 std/subproc	Run_result.spawn_failed	pub spawn_failed: Bool	if true, every other field is invalid
 std/subproc	Run_result.stderr_data	pub stderr_data: U8$[]	what it wrote to standard error, cut at the cap
 std/subproc	Run_result.stdout_data	pub stdout_data: U8$[]	what it wrote to standard output, cut at the cap. Not named stdout/stderr: MSVC UCRT's headers make those object-like macros, so a field of that name in the generated C struct fails to compile on Windows.
 std/subproc	Run_result.text	pub fn text(r: Self@, arena: Arena$@): U8[]	the child's output as one text: its standard output, then its standard error. Each `\r\n` becomes `\n`, since a child on Windows ends its text lines that way; a lone `\r` is kept. **The two are joined end to end, not interleaved**, so a run reads the same every time; the cost is that you cannot tell which stream a line came from.
 std/subproc	Run_result.timed_out	pub timed_out: Bool	if true, the child was killed, so the exit code means nothing
 std/subproc	Spawn_error	pub enum Spawn_error	why a child could not be started
-std/subproc	Spawn_error.spawn_failed	spawn_failed	no executable, no permission, or the fork failed; it cannot say which. Telling them apart would need errno passed up from the C code (as with fs.Fs_error).
+std/subproc	Spawn_error.spawn_failed	spawn_failed	it could not start, and it cannot say why. The causes are the same on every OS: no such program, no permission to run it, a working directory or output file that cannot be opened, an argument holding a NUL, or the OS refusing a new process. Telling them apart would need errno passed up from the C code (as with fs.Fs_error).
 std/subproc	run	pub fn run(argv: U8[][], cwd: U8[], timeout_ms: I32, output_cap: Sz, arena: Arena$@): U8$[]?Run_error	runs one child and returns its standard output; any failure is thrown. The arguments are as for run_capture; **the failure is thrown**: "cannot start", "timed out" and "exited non-zero" all become `Run_error`, so the caller can pass them on with `?`. **When you need the exit code itself, use run_capture**; this one treats anything but 0 as a failure, which does not suit a program where a non-zero exit is normal.
-std/subproc	run_capture	pub fn run_capture(argv: U8[][], cwd: U8[], timeout_ms: I32, output_cap: Sz, arena: Arena$@): Run_result	runs one child to the end and collects both its outputs. argv[0] is the executable's absolute or relative path; stdout and stderr are collected separately, watched in one wait (`kspl_proc_poll`). **Append only what was read**: the cap is a promise ("beyond this it is cut"), not the size to allocate.
+std/subproc	run_capture	pub fn run_capture(argv: U8[][], cwd: U8[], timeout_ms: I32, output_cap: Sz, arena: Arena$@): Run_result	runs one child to the end and collects both its outputs. argv[0] is as for `spawn_wait`; stdout and stderr are collected separately, watched in one wait (`kspl_proc_poll`). **Append only what was read**: the cap is a promise ("beyond this it is cut"), not the size to allocate.
 std/subproc	run_many #cfg(!freestanding)	pub fn run_many(jobs: Job[], max_parallel: Sz, output_cap: Sz, work_dir: U8[], arena: Arena$@): List<|Run_result|>$@	runs many children, a few at a time, and collects each one's output
 std/subproc	spawn_async #cfg(!freestanding)	pub fn spawn_async(argv: U8[][], cwd: U8[]): I64?Spawn_error	starts a child with the standard I/O inherited, without waiting
 std/subproc	spawn_piped #cfg(!freestanding)	pub fn spawn_piped(argv: U8[][], cwd: U8[]): Piped_child?Spawn_error	starts a child for two-way communication over pipes
 std/subproc	spawn_reap #cfg(!freestanding)	pub fn spawn_reap(handle: I64): I32	waits for one `spawn_async` child, so no zombie is left
 std/subproc	spawn_redirect #cfg(!freestanding)	pub fn spawn_redirect(argv: U8[][], cwd: U8[], out_path: U8[], err_path: U8[]): Child?Spawn_error	starts a child without waiting, with its outputs going to files
-std/subproc	spawn_wait	pub fn spawn_wait(argv: U8[][], cwd: U8[]): I32?Spawn_error	runs one child with the standard I/O inherited, and waits for it. argv[0] is the executable's path or a name looked up in PATH; returns the exit code. Caution: **Give a third-party tool its location with `cwd` and keep the paths relative** ("Paths are held in UTF-8, and converted to the wide API on Windows" in std/docs/DESIGN.md). When argv's length is known only at run time, build a `List<|U8[]|>` and pass its `slice()`.
+std/subproc	spawn_wait	pub fn spawn_wait(argv: U8[][], cwd: U8[]): I32?Spawn_error	runs one child with the standard I/O inherited, and waits for it. argv[0] is the executable's path or a name looked up in PATH alone, never in the current directory unless PATH names it ("A program named without a directory is looked up in PATH alone" in std/docs/DESIGN.md); **a relative one is read from `cwd`**, on every OS. Caution: **Give a third-party tool its location with `cwd` and keep the paths relative** ("Paths are held in UTF-8, and converted to the wide API on Windows" in std/docs/DESIGN.md). When argv's length is known only at run time, build a `List<|U8[]|>` and pass its `slice()`.
 std/sys	Args	pub struct Args	the arguments this process was started with; `[0]` is the program
 std/sys	Args.get	pub fn get(r: Self@, index: Sz): U8[]	one argument; an index out of range stops the program
 std/sys	Args.len	pub len: Sz	how many there are, counting the program's own name
 std/sys	Args:Index<|Sz, U8[]|>	impl Args: Index<|Sz, U8[]|>	so `args()[i]` can be written
 std/sys	args	pub fn args(): Args	the arguments this process was started with
-std/sys	cpu_count #cfg(!freestanding)	pub fn cpu_count(): Sz	how many CPUs are usable; 1 if unknown, never 0
+std/sys	cpu_count #cfg(!freestanding)	pub fn cpu_count(): Sz	how many CPUs this process may run on; 1 if unknown, never 0. It follows the affinity (`taskset`, a job object) where the OS has one; a container's CPU quota is not read.
 std/sys	cwd #cfg(!freestanding)	pub fn cwd(buf: U8$[]): U8[]	the working directory, or empty if it cannot be read or does not fit
 std/sys	exit #noreturn	pub fn exit(status: I32)	ends the process at once, without unwinding
 std/sys	get_dir_name	pub fn get_dir_name(path: U8[]): U8[]	the folder part, or empty if there is none. **A file directly under the root is in the root** (`/x` in `/`, on Windows `C:\x` in `C:\`), as Python, Go, Rust and C++ answer; the root itself is in nothing.
@@ -1210,10 +1196,10 @@ std/thread	Cond_var.broadcast	pub fn broadcast(r: Self$@)	wakes every waiting th
 std/thread	Cond_var.free	pub fn free(r: Self$@)	destroys the OS condition variable. As with `Raw_mutex.free`, the value itself has no memory to free.
 std/thread	Cond_var.new	pub fn new(): Cond_var?Thread_error	creates one through the OS
 std/thread	Cond_var.signal	pub fn signal(r: Self$@)	wakes exactly one waiting thread
-std/thread	Cond_var.wait	pub fn wait<|T|>(r: Self$@, m: Mutex<|T|>$@)	releases the lock and waits; returns holding the lock again. Caution: **A spurious wakeup is possible**, so check the condition again in a `for` and wait again if it does not hold.
+std/thread	Cond_var.wait	pub fn wait<|T|>(r: Self$@, m: Mutex<|T|>$@)	releases the lock and waits; returns holding the lock again. Caution: **A spurious wakeup is possible**, so check the condition again in a `for` and wait again if it does not hold. Waiting without holding the lock stops the program.
 std/thread	Cond_var:Move_only	impl Cond_var: Move_only	copying it would destroy one OS object twice
 std/thread	Cond_var:Owned	impl Cond_var: Owned	it owns an OS object and releases it with `free()`
-std/thread	Mutex	pub struct Mutex<|T|>	a lock and the data it protects, kept together so neither is forgotten. The data is reachable only through lock() (like Rust's `Mutex<T>`). This is the only public mutex in KSPL (the bare Raw_mutex is priv).
+std/thread	Mutex	pub struct Mutex<|T|>	a lock and the data it protects, kept together so neither is forgotten. The data is reachable only through lock() (like Rust's `Mutex<T>`). This is the only public mutex in KSPL (the bare Raw_mutex is priv). Caution: **It is not re-entrant: locking it again on the thread that holds it stops the program** with a message, on every OS, as unlocking it from a thread that does not hold it does ("A mutex is locked once, by one thread" in std/docs/DESIGN.md).
 std/thread	Mutex<|T|>.free	pub fn free(r: Self$@)	destroys the OS lock
 std/thread	Mutex<|T|>.lock	pub fn lock(r: Self$@): T$@	takes the lock and returns a pointer to the data. Caution: Call `unlock()` when you are done with the data.
 std/thread	Mutex<|T|>.new	pub fn new(value: T): Mutex<|T|>?Thread_error	creates a lock around a value
@@ -1237,7 +1223,7 @@ std/time	Datetime.minute	pub minute: I32	0-59
 std/time	Datetime.month	pub month: I32	1-12
 std/time	Datetime.second	pub second: I32	0-59
 std/time	Datetime.weekday	pub weekday: I32	0=Sunday … 6=Saturday, computed from the date
-std/time	Datetime.year	pub year: I32	the year as written, not counted from 1900
+std/time	Datetime.year	pub year: I64	the year as written, not counted from 1900. **It is as wide as the epoch seconds**, so every `I64` second has its year; narrowed to `I32`, a year past it would wrap and could land among the ones a format writes.
 std/time	Time_error	pub enum Time_error	why a time could not be written. It does not say which field does not fit; the caller would act the same either way.
 std/time	Time_error.out_of_range	out_of_range	a field is outside what the format can write (a year over 4 digits)
 std/time	from_epoch	pub fn from_epoch(epoch_secs: I64): Datetime	turns epoch seconds into a calendar date and time
@@ -1246,20 +1232,6 @@ std/time	now	pub fn now(): I64	the seconds elapsed since 1970-01-01T00:00:00Z
 std/time	rfc1123_len	pub const rfc1123_len: Sz = 29	the length of the RFC 1123 form, which is always the same. The caller provides an array of this size.
 std/time	write_iso8601	pub fn write_iso8601(dt: Datetime, out: U8$[]): Void?Time_error	writes the ISO 8601 / RFC 3339 form, without allocating. The form is `1994-11-15T08:12:31Z`.
 std/time	write_rfc1123	pub fn write_rfc1123(dt: Datetime, out: U8$[]): Void?Time_error	writes the form HTTP uses, without allocating. The form is `Tue, 15 Nov 1994 08:12:31 GMT`, as HTTP's `Date` header expects. Caution: **Do not take a `Writer`** (the file header gives the reason).
-std/tls	Tls_error	pub enum Tls_error	why a secure connection could not be opened or used
-std/tls	Tls_error.cert_verify_failed	cert_verify_failed	the handshake succeeded, but the certificate or host name did not verify
-std/tls	Tls_error.connect_failed	connect_failed	the underlying TCP connection failed
-std/tls	Tls_error.ctx_failed	ctx_failed	OpenSSL setup failed (SSL_CTX_new, SSL_new and similar)
-std/tls	Tls_error.handshake_failed	handshake_failed	SSL_connect (the handshake) failed
-std/tls	Tls_error.io_failed	io_failed	a send or a receive failed
-std/tls	Tls_error.unsupported	unsupported	the build did not use `make TLS=1` (the default build)
-std/tls	Tls_stream	pub struct Tls_stream	a TCP connection with TLS on top, which owns its resources
-std/tls	Tls_stream.connect #cfg(!tls)	pub fn connect(_host: U8[], _port: I32): Tls_stream$@?Tls_error	always fails with `unsupported`; build with `make TLS=1` to enable it
-std/tls	Tls_stream.connect #cfg(tls)	pub fn connect(host: U8[], port: I32): Tls_stream$@?Tls_error	connects, then does the TLS handshake, verifying the certificate
-std/tls	Tls_stream.free #cfg(tls)	pub fn free(r: Self$@)	closes the connection and frees everything it owns
-std/tls	Tls_stream.read #cfg(tls)	pub fn read(r: Self$@, buf: U8$[]): Sz?Tls_error	receives and returns how much arrived; 0 means the peer closed
-std/tls	Tls_stream.write #cfg(tls)	pub fn write(r: Self$@, buf: U8[]): Sz?Tls_error	sends and returns how much was sent; a partial send is normal, so loop
-std/tls	Tls_stream:Owned #cfg(tls)	impl Tls_stream: Owned	it owns its memory and frees it with `free()`
 std/url	Query_param	pub struct Query_param	one `name=value` pair of a query string
 std/url	Query_param.name	pub name: U8$[]	the name, already decoded and copied into the arena
 std/url	Query_param.next	pub next: Query_param$@	the next pair, in the order they appear

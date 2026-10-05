@@ -24,62 +24,62 @@ import "ksos/drivers/rp2040/timer"
 import "ksos/drivers/rp2040/usb_cdc" as usb
 
 const stage_report_interval_ms: U32 = 3000 //<
-  //< The interval for reporting the stage reached while not yet enumerated
+    //< The interval for reporting the stage reached while not yet enumerated
 
 fn pump(ms: U32) //< waits ms milliseconds while running USB
-  //<
-  //< Caution: It is a polling design, so unless `poll_once` keeps being called through the wait,
-  //< neither enumeration nor bringing the link up advances, and the send queue is not drained
-  //< either. Do not wait with a raw `timer.delay_ms`.
-  for $i: U32 = 0; i < ms; i += 1
-    usb.poll_once()
-    timer.delay_us(1000)
+    //<
+    //< Caution: It is a polling design, so unless `poll_once` keeps being called through the wait,
+    //< neither enumeration nor bringing the link up advances, and the send queue is not drained
+    //< either. Do not wait with a raw `timer.delay_ms`.
+    for $i: U32 = 0; i < ms; i += 1
+        usb.poll_once()
+        timer.delay_us(1000)
 
 fn beep(times: U32) //< beeps times times
-  for _i in Range.asc(Sz::times)
-    buzzer.tone(buzzer.beep_hz, buzzer.beep_ms)
-    pump(200)
+    for _i in Range.asc(Sz::times)
+        buzzer.tone(buzzer.beep_hz, buzzer.beep_ms)
+        pump(200)
 
 fn clocks_and_gpio(): Bool //<
-  //< Starts the clocks and GPIO, and gets ready to sound the buzzer
-  //<
-  //< false means not even the buzzer can sound at this point (the silence tells you).
-  // Set up the clocks before anything else. USB needs 48MHz on clk_usb and the ADC on clk_adc, and
-  // the TIMER's tick comes from here too (continue after a failure here and delay_us never
-  // returns).
-  if !clocks.init()
-    return false
-  if !gpio.init()
-    return false
-  gpio.init_out(board.buzzer_pin)
-  return true
+    //< Starts the clocks and GPIO, and gets ready to sound the buzzer
+    //<
+    //< false means not even the buzzer can sound at this point (the silence tells you).
+    // Set up the clocks before anything else. USB needs 48MHz on clk_usb and the ADC on clk_adc,
+    // and the TIMER's tick comes from here too (continue after a failure here and delay_us never
+    // returns).
+    if !clocks.init()
+        return false
+    if !gpio.init()
+        return false
+    gpio.init_out(board.buzzer_pin)
+    return true
 
 fn usb_up(): Bool //< starts USB and beeps once
-  //<
-  //< false means it has beeped nine times.
-  if !usb.init()
-    beep(9)
-    return false
-  beep(1)
-  return true
+    //<
+    //< false means it has beeped nine times.
+    if !usb.init()
+        beep(9)
+        return false
+    beep(1)
+    return true
 
 fn wait_configured(timeout_ms: U32): Bool //< waits until the host configures it
-  //<
-  //< Once configured it beeps twice and returns true. If `timeout_ms` is 0 it never gives up (the
-  //< host can take dozens of seconds to enumerate, and even after a failure it can be retried by
-  //< unplugging and replugging; if it gave up it could not answer a host that attaches later).
-  //< Caution: **Firmware that works with no USB attached must use a finite timeout** — a start-up
-  //< on battery alone never gets configured.
-  $waited: U32 = 0
-  $since_report: U32 = 0
-  for !usb.is_configured()
-    if timeout_ms != 0 && waited >= timeout_ms
-      return false
-    pump(10)
-    waited += 10
-    since_report += 10
-    if since_report >= stage_report_interval_ms
-      since_report = 0
-      beep(usb.current_stage())
-  beep(2)
-  return true
+    //<
+    //< Once configured it beeps twice and returns true. If `timeout_ms` is 0 it never gives up (the
+    //< host can take dozens of seconds to enumerate, and even after a failure it can be retried by
+    //< unplugging and replugging; if it gave up it could not answer a host that attaches later).
+    //< Caution: **Firmware that works with no USB attached must use a finite timeout** — a start-up
+    //< on battery alone never gets configured.
+    $waited: U32 = 0
+    $since_report: U32 = 0
+    for !usb.is_configured()
+        if timeout_ms != 0 && waited >= timeout_ms
+            return false
+        pump(10)
+        waited += 10
+        since_report += 10
+        if since_report >= stage_report_interval_ms
+            since_report = 0
+            beep(usb.current_stage())
+    beep(2)
+    return true

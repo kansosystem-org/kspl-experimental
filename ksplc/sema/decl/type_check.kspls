@@ -7,6 +7,7 @@
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/session/import_table" as sema_session_import_table
@@ -16,199 +17,244 @@ import "std/ds" { List }
 import "std/str" { Str_builder }
 
 enum Type_exist_status
-  not_found
-  found
-  missing_prefix
-  unknown_alias
+    not_found
+    found
+    missing_prefix
+    unknown_alias
 
 fn report_type_existence_error(c: Sema_ctx$@, status: Type_exist_status, base_name: U8[],
-  err_node: Ast_node$@)
-  switch status case .unknown_alias
-    first_dot: = base_name.find_char('.')
-    prefix: = base_name.sub(0, first_dot)
-    c.clear_scratch().s("unknown import alias '\{prefix\}'")
-    c.err(err_node, c.scratch.slice())
-  case .missing_prefix
-    c.clear_scratch().s("missing import alias prefix for type '\{base_name\}'")
-    c.err(err_node, c.scratch.slice())
-  case .not_found
-    if !base_name.starts_with("_")
-      c.clear_scratch().s("undefined type '\{base_name\}'")
-      c.err(err_node, c.scratch.slice())
-  default {}
+    err_node: Ast_node$@)
+    switch status case .unknown_alias
+        first_dot: = base_name.find_char('.')
+        prefix: = base_name.sub(0, first_dot)
+        c.clear_scratch().s("unknown import alias '\{prefix\}'")
+        c.err(err_node, c.scratch.slice())
+    case .missing_prefix
+        c.clear_scratch().s("missing import alias prefix for type '\{base_name\}'")
+        c.err(err_node, c.scratch.slice())
+    case .not_found
+        if !base_name.starts_with("_")
+            c.clear_scratch().s("undefined type '\{base_name\}'")
+            c.err(err_node, c.scratch.slice())
+    default {}
 
 priv fn check_type_existence(c: Sema_ctx$@, base_name: U8[], gen_params: List<|U8[]|>$@):
-  Type_exist_status
-  if base_name.equals("Self")
-    return .found
-
-  first_dot: = base_name.find_char('.')
-  if first_dot >= 0
-    prefix: = base_name.sub(0, first_dot)
-    target_file: = c.get_file_alias_target(c.file_name, prefix)
-    if target_file.len > 0
-      actual_base: = base_name.sub_from(first_dot + 1)
-      if c.file_has_type(target_file, actual_base)
+    Type_exist_status
+    if base_name.equals("Self")
         return .found
-      return .not_found
-    return .unknown_alias
 
-  for gp_name in gen_params
-    if gp_name.equals(base_name)
-      return .found
-  if c.find_generic_arg(base_name).is_some()
-    return .found
+    first_dot: = base_name.find_char('.')
+    if first_dot >= 0
+        prefix: = base_name.sub(0, first_dot)
+        target_file: = c.get_file_alias_target(c.file_name, prefix)
+        if target_file.len > 0
+            actual_base: = base_name.sub_from(first_dot + 1)
+            if c.file_has_type(target_file, actual_base)
+                return .found
+            return .not_found
+        return .unknown_alias
 
-  // A name brought in with no namespace by `import "path" { A };`.
-  // Caution: Look it up before a same-named one from outside the file (the reason is at
-  // Ctx.imported_symbol_fqn), or it becomes `missing import alias prefix`.
-  if c.imported_symbol_fqn(base_name).len > 0
-    return .found
+    for gp_name in gen_params
+        if gp_name.equals(base_name)
+            return .found
+    if c.find_generic_arg(base_name).is_some()
+        return .found
 
-  fqn: = c.make_fqn(base_name)
-  if (c.generics.templates.get(fqn) catch null) != null
-    return .found
+    // A name brought in with no namespace by `import "path" { A };`.
+    // Caution: Look it up before a same-named one from outside the file (the reason is at
+    // Ctx.imported_symbol_fqn), or it becomes `missing import alias prefix`.
+    if c.imported_symbol_fqn(base_name).len > 0
+        return .found
 
-  sym: = c.symtab.resolve(base_name) catch null
-  if sym != null
-    def_in: = sym.get_defined_in()
-    if def_in.len == 0 || def_in.equals(c.file_name)
-      return .found
-    return .missing_prefix
+    fqn: = c.make_fqn(base_name)
+    if (c.generics.templates.get(fqn) catch null) != null
+        return .found
 
-  t_id: = c.env.type_to_id.get(base_name) catch 0
-  if t_id != 0
-    if sema_type_env.is_builtin(t_id)
-      return .found
-    return .missing_prefix
-  return .not_found
+    sym: = c.symtab.resolve(base_name) catch null
+    if sym != null
+        def_in: = sym.get_defined_in()
+        if def_in.len == 0 || def_in.equals(c.file_name)
+            return .found
+        return .missing_prefix
+
+    t_id: = c.env.type_to_id.get(base_name) catch 0
+    if t_id != 0
+        if sema_type_env.is_builtin(t_id)
+            return .found
+        return .missing_prefix
+    return .not_found
 
 priv fn check_and_report_type(node: Ast_node$@, c: Sema_ctx$@, gen_params: List<|U8[]|>$@,
-  err_node: Ast_node$@)
-  $path_str: = Str_builder.new()
-  defer path_str.free()
-  node.get_full_path_str_to(path_str)
-  base_name: = path_str.slice().get_generic_base_name()
-  if base_name.len > 0
-    status: = check_type_existence(c, base_name, gen_params)
-    report_type_existence_error(c, status, base_name, err_node)
+    err_node: Ast_node$@)
+    $path_str: = Str_builder.new()
+    defer path_str.free()
+    node.get_full_path_str_to(path_str)
+    base_name: = path_str.slice().get_generic_base_name()
+    if base_name.len > 0
+        status: = check_type_existence(c, base_name, gen_params)
+        report_type_existence_error(c, status, base_name, err_node)
+
+priv fn sizeof_may_name_value(c: Sema_ctx$@, target: Ast_node$@, bound: List<|U8[]|>$@): Bool //<
+    //< Whether a `sizeof` target's first name may be a value: one the function binds, or a global
+    $names: = List<|Ast_node$@|>.new(null)
+    defer names.free()
+    target.sizeof_path_names(names@)
+    if names.len == 0
+        return false
+    head: = names.get(0).text
+    if bound != null
+        for name in bound$
+            if name.equals(head)
+                return true
+    return target.sizeof_named_value(c).is_some()
 
 impl Ast_node
-  priv fn report_untyped_fn_ptr_params(r: Ast_node$@, c: Sema_ctx$@) //<
-    //< Reports a formal parameter of a function pointer type (`fn(…): R`) with no type written
-    //<
-    //< Caution: **It must not be silently made Unknown.** `fn(T): T` is a parameter named `T` with
-    //< no type. **Decide by whether a type is written**: parse/normalize.kspls adds an empty
-    //< `type_expr` anyway.
-    param_list: = r.get_fn_params()
-    if param_list == null
-      return
-    for p in base_ast_ext.Param_cursor.new(param_list, false)
-      t_node: = p.find_child(.k_type_expr)
-      if t_node != null && t_node.children.len > 0
-        continue
-      c.err(p,
-        "a parameter of this function-pointer type has no type: inside 'fn(...)' a bare name is the \
-          parameter's name, not its type. Write 'fn(name: Type): Ret'")
+    priv fn collect_bound_names(r: Ast_node$@, out: List<|U8[]|>$@) //<
+        //< The names r's subtree binds as values: parameters, variables and the other bindings
+        if r == null
+            return
+        k: = r.kind_id
+        if k == .k_decl_var || k == .k_decl_var_item || k == .k_fn_param || k == .k_if_bind ||
+            k == .k_identifier_list || k == .k_expr_catch
+            for child in r.children
+                if child.kind_id == .k_identifier
+                    out.push(child.text)
+        for child in r.children
+            child.collect_bound_names(out)
 
-  priv fn report_bad_param_defaults(r: Ast_node$@, c: Sema_ctx$@, gen_params: List<|U8[]|>$@,
-    is_closure: Bool) //<
-      //< Checks a parameter's default value at the declaration's position, once, not per instance
-      //<
-      //< **`k_type_fn_sig` is both a function's and a function pointer type's**; one rejection
-      //< covers both.
-    param_list: = r.find_child(.k_param_list)
-    if param_list == null
-      return
-    $seen_default: = false
-    for p in base_ast_ext.Param_cursor.new(param_list, false)
-      d: = p.get_param_default()
-      if d == null
-        if seen_default
-          c.err(p,
-            "a parameter without a default cannot follow one that has a default: move the defaults \
-              to the end of the list")
-        continue
-      seen_default = true
-      if is_closure
-        c.err(d, "a closure parameter cannot have a default value")
-        continue
-      if !d.is_const_param_default()
-        c.err(d,
-          "a parameter default must be a literal (a number, 'true'/'false', a character, a string, \
-            or 'null')")
-        continue
-      t_node: = p.get_decl_type_node()
-      if t_node != null && t_node.mentions_gen_param(gen_params)
-        c.err(d, "a parameter whose type mentions a type parameter cannot have a default value")
+    priv fn report_untyped_fn_ptr_params(r: Ast_node$@, c: Sema_ctx$@) //<
+        //< Reports a formal parameter of a function pointer type (`fn(…): R`) with no type written
+        //<
+        //< Caution: **It must not be silently made Unknown.** `fn(T): T` is a parameter named `T`
+        //< with no type. **Decide by whether a type is written**: parse/normalize.kspls adds an
+        //< empty `type_expr` anyway.
+        param_list: = r.get_fn_params()
+        if param_list == null
+            return
+        for p in base_ast_ext.Param_cursor.new(param_list, false)
+            t_node: = p.find_child(.k_type_expr)
+            if t_node != null && t_node.children.len > 0
+                continue
+            c.err(p,
+                "a parameter of this function-pointer type has no type: inside 'fn(...)' a bare \
+                    name is the parameter's name, not its type. Write 'fn(name: Type): Ret'")
 
-  priv fn mentions_gen_param(r: Ast_node$@, gen_params: List<|U8[]|>$@): Bool //<
-    //< Whether the type's name names one of the type parameters currently in scope
-    //<
-    //< Caution: **Walk the tree**; checking only the outermost name misses `List<|T|>` and `T$@`.
-    if r.kind_id == .k_identifier || r.kind_id == .k_type_path
-      for i in Range.asc(gen_params.len)
-        if r.text.equals(gen_params.get(i))
-          return true
-    for ch in r.children
-      if ch.mentions_gen_param(gen_params)
-        return true
-    return false
+    priv fn report_bad_param_defaults(r: Ast_node$@, c: Sema_ctx$@,
+        gen_params: List<|U8[]|>$@, is_closure: Bool) //<
+            //< Checks a parameter's default value at the declaration, once, not per instance
+            //<
+            //< **`k_type_fn_sig` is both a function's and a function pointer type's**; one
+            //< rejection covers both.
+        param_list: = r.find_child(.k_param_list)
+        if param_list == null
+            return
+        $seen_default: = false
+        for p in base_ast_ext.Param_cursor.new(param_list, false)
+            d: = p.get_param_default()
+            if d == null
+                if seen_default
+                    c.err(p,
+                        "a parameter without a default cannot follow one that has a default: move \
+                            the defaults to the end of the list")
+                continue
+            seen_default = true
+            if is_closure
+                c.err(d, "a closure parameter cannot have a default value")
+                continue
+            if !d.is_const_param_default()
+                c.err(d,
+                    "a parameter default must be a literal (a number, 'true'/'false', a character, \
+                        a string, or 'null')")
+                continue
+            t_node: = p.get_decl_type_node()
+            if t_node != null && t_node.mentions_gen_param(gen_params)
+                c.err(d,
+                    "a parameter whose type mentions a type parameter cannot have a default value")
 
-  fn validate_all_type_exprs(r: Ast_node$@, c: Sema_ctx$@, gen_params: List<|U8[]|>$@)
-    if r == null
-      return
+    priv fn mentions_gen_param(r: Ast_node$@, gen_params: List<|U8[]|>$@): Bool //<
+        //< Whether the type's name names one of the type parameters currently in scope
+        //<
+        //< Caution: **Walk the tree**; checking only the outermost name misses `List<|T|>` and
+        //< `T$@`.
+        if r.kind_id == .k_identifier || r.kind_id == .k_type_path
+            for i in Range.asc(gen_params.len)
+                if r.text.equals(gen_params.get(i))
+                    return true
+        for ch in r.children
+            if ch.mentions_gen_param(gen_params)
+                return true
+        return false
 
-    $added_params: = 0
-    if r.kind_id == .k_decl_struct || r.kind_id == .k_decl_fn || r.kind_id == .k_decl_impl ||
-      r.kind_id == .k_decl_trait || r.kind_id == .k_decl_enum
-      gen_node: = r.find_child(.k_type_gen_params)
-      if gen_node != null
-        for p in gen_node.children
-          if p.kind_id == .k_type_gen_param
-            $id_node: = p.find_child(.k_identifier)
-            if id_node == null && p.kind_id == .k_identifier
-              id_node = p
-            if id_node != null
-              gen_params.push(id_node.text)
-              added_params += 1
-          else if p.kind_id == .k_identifier
-            gen_params.push(p.text)
-            added_params += 1
-    if r.kind_id == .k_decl_impl
-      if trait_node: = r.get_impl_trait_node()
-        check_and_report_type(trait_node, c, gen_params, trait_node)
-    if r.kind_id == .k_type_constraint
-      for p_node in r.children
-        if p_node.kind_id == .k_type_path || p_node.kind_id == .k_expr_path
-          check_and_report_type(p_node, c, gen_params, p_node)
+    fn validate_all_type_exprs(r: Ast_node$@, c: Sema_ctx$@, gen_params: List<|U8[]|>$@,
+        bound: List<|U8[]|>$@ = null) //<
+            //< Reports each type expression under r naming no type
+            //<
+            //< bound lists the names a function binds (parameters and locals), once inside one.
+        if r == null
+            return
+        // **A `sizeof` naming a value is the body's to read** (`sizeof(x)`, `sizeof(x.a)`): no
+        // local is in scope yet here, so a name the function binds is left to infer_sizeof_expr in
+        // `../body/expr.kspls`, which has the scope. A global's name reads the same way.
+        if r.kind_id == .k_expr_sizeof &&
+            sizeof_may_name_value(c, r.get_sizeof_target(), bound)
+            return
+        $collected: = List<|U8[]|>.new(null)
+        defer collected.free()
+        $inner_bound: = bound
+        if r.kind_id == .k_decl_fn && bound == null
+            r.collect_bound_names(collected@)
+            inner_bound = collected@
 
-    if r.kind_id == .k_type_fn_sig
-      r.report_untyped_fn_ptr_params(c)
-      r.report_bad_param_defaults(c, gen_params, false)
-    if r.kind_id == .k_expr_fn_lit_sig
-      r.report_bad_param_defaults(c, gen_params, true)
-    if r.kind_id == .k_type_atom
-      $path_node: Ast_node$@ = null
-      if r.children.len > 0
-        first: = r.get_child(0)
-        if first.kind_id == .k_identifier || first.kind_id == .k_type_path ||
-          first.kind_id == .k_expr_path || first.kind_id == .k_generic_path
-          path_node = first
-      if path_node != null
-        check_and_report_type(path_node, c, gen_params, r)
+        $added_params: = 0
+        if r.kind_id == .k_decl_struct || r.kind_id == .k_decl_fn || r.kind_id == .k_decl_impl ||
+            r.kind_id == .k_decl_trait || r.kind_id == .k_decl_enum
+            gen_node: = r.find_child(.k_type_gen_params)
+            if gen_node != null
+                for p in gen_node.children
+                    if p.kind_id == .k_type_gen_param
+                        $id_node: = p.find_child(.k_identifier)
+                        if id_node == null && p.kind_id == .k_identifier
+                            id_node = p
+                        if id_node != null
+                            gen_params.push(id_node.text)
+                            added_params += 1
+                    else if p.kind_id == .k_identifier
+                        gen_params.push(p.text)
+                        added_params += 1
+        if r.kind_id == .k_decl_impl
+            if trait_node: = r.get_impl_trait_node()
+                check_and_report_type(trait_node, c, gen_params, trait_node)
+        if r.kind_id == .k_type_constraint
+            for p_node in r.children
+                if p_node.kind_id == .k_type_path || p_node.kind_id == .k_expr_path
+                    check_and_report_type(p_node, c, gen_params, p_node)
 
-    // **A cast on a module (`io::out()`) is left to the body's analysis**, which reads the
-    // `::` as the path its writer meant and reports it once (`read_as_path` in
-    // `../body/postfix.kspls`). Reported here as well, one mistake would give two errors.
-    $left_to_body: Ast_node$@ = null
-    if r.kind_id == .k_expr_postfix && r.children.len >= 3 &&
-      r.get_postfix_op().is_literal("::")
-      if path: = r.get_postfix_member().bare_type_path()
-        if path.children.len == 1 && c.names_module_only(path.get_child(0).text)
-          left_to_body = r.get_postfix_member()
-    for child in r.children
-      if child != left_to_body
-        child.validate_all_type_exprs(c, gen_params)
-    if added_params > 0
-      gen_params.len -= added_params
+        if r.kind_id == .k_type_fn_sig
+            r.report_untyped_fn_ptr_params(c)
+            r.report_bad_param_defaults(c, gen_params, false)
+        if r.kind_id == .k_expr_fn_lit_sig
+            r.report_bad_param_defaults(c, gen_params, true)
+        if r.kind_id == .k_type_atom
+            $path_node: Ast_node$@ = null
+            if r.children.len > 0
+                first: = r.get_child(0)
+                if first.kind_id == .k_identifier || first.kind_id == .k_type_path ||
+                    first.kind_id == .k_expr_path || first.kind_id == .k_generic_path
+                    path_node = first
+            if path_node != null
+                check_and_report_type(path_node, c, gen_params, r)
+
+        // **A cast on a module (`io::out()`) is left to the body's analysis**, which reads the
+        // `::` as the path its writer meant and reports it once (`read_as_path` in
+        // `../body/postfix.kspls`). Reported here as well, one mistake would give two errors.
+        $left_to_body: Ast_node$@ = null
+        if r.kind_id == .k_expr_postfix && r.children.len >= 3 &&
+            r.get_postfix_op().is_literal("::")
+            if path: = r.get_postfix_member().bare_type_path()
+                if path.children.len == 1 && c.names_module_only(path.get_child(0).text)
+                    left_to_body = r.get_postfix_member()
+        for child in r.children
+            if child != left_to_body
+                child.validate_all_type_exprs(c, gen_params, inner_bound)
+        if added_params > 0
+            gen_params.len -= added_params

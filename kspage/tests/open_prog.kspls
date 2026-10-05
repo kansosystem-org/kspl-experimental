@@ -17,54 +17,56 @@ import "kspage/share/text"
 import "kspage/tests/base"
 import "kspage/write/csv"
 import "std/io"
-import "std/mem" { Arena }
+import "std/mem" { Arena, dealloc }
 import "std/str" { Str_builder }
 import "std/sys"
 
 priv const width: F32 = 640.0 //< the width it is laid out at
-  //<
-  //< Any width at which columns and wrapping take effect will do.
+    //<
+    //< Any width at which columns and wrapping take effect will do.
 
 priv fn used(d: Doc$@, sheet: Sheet$@, arena: Arena$@) //< uses the document that was read
-  //<
-  //< Caution: **Do both the layout and the export**; they use the numbers differently.
-  flow.layout(d, sheet, fixed.make(), width, arena)
-  $out: = Str_builder.new()
-  defer out.free()
-  store.save(d, sheet, out@)
-  out.clear()
-  markdown.write(d, sheet, out@)
-  out.clear()
-  html.write(d, sheet, fixed.make(), out@)
+    //<
+    //< Caution: **Do both the layout and the export**; they use the numbers differently.
+    flow.layout(d, sheet, fixed.make(), width, arena)
+    $out: = Str_builder.new()
+    defer out.free()
+    store.save(d, sheet, out@)
+    out.clear()
+    markdown.write(d, sheet, out@)
+    out.clear()
+    html.write(d, sheet, fixed.make(), out@)
 
 fn main(): I32
-  args: = sys.args()
-  if args.len < 3
-    io.err().s("Usage: kspage_open <doc|md|csv|txt> <file>\n")
-    return 2
-  kind: = args[1]
-  src: = io.read_file(args[2]) catch
-    io.err().s("cannot read: \{args[2]\}\n")
-    return 2
-  arena: = Arena.new(8 * 1024 * 1024)
-  defer arena.free()
-  if kind.equals("doc")
-    got: = store.load(src, arena) catch _e
-      return 1
-    used(got.doc, got.sheet, arena)
+    args: = sys.args()
+    if args.len < 3
+        io.err().s("Usage: kspage_open <doc|md|csv|txt> <file>\n")
+        return 2
+    kind: = args[1]
+    src: = io.read_file(args[2]) catch
+        io.err().s("cannot read: \{args[2]\}\n")
+        return 2
+    // The address sanitizer's leak check counts a buffer still held at the exit as a finding.
+    defer dealloc(Void$@::src.ptr)
+    arena: = Arena.new(8 * 1024 * 1024)
+    defer arena.free()
+    if kind.equals("doc")
+        got: = store.load(src, arena) catch _e
+            return 1
+        used(got.doc, got.sheet, arena)
+        return 0
+    if kind.equals("csv")
+        // **One table is not a document** (layout needs a container). Build one and then use it.
+        if made: = csv.read_table(src, "table", arena)
+            sheet: = Sheet.new(base.root_font(), arena)
+            d: = Doc.new(arena)
+            d.blocks.push(made)
+            used(d, sheet, arena)
+            return 0
+        return 1
+    sheet: = Sheet.new(base.root_font(), arena)
+    d: =
+        (text.read(src, sheet, arena) if kind.equals("txt")
+        else markdown_read.read(src, sheet, arena))
+    used(d, sheet, arena)
     return 0
-  if kind.equals("csv")
-    // **One table is not a document** (layout needs a container). Build one and then use it.
-    if made: = csv.read_table(src, "table", arena)
-      sheet: = Sheet.new(base.root_font(), arena)
-      d: = Doc.new(arena)
-      d.blocks.push(made)
-      used(d, sheet, arena)
-      return 0
-    return 1
-  sheet: = Sheet.new(base.root_font(), arena)
-  d: =
-    (text.read(src, sheet, arena) if kind.equals("txt")
-    else markdown_read.read(src, sheet, arena))
-  used(d, sheet, arena)
-  return 0

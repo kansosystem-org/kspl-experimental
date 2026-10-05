@@ -31,18 +31,16 @@ export const opens = material({
 });
 
 export function run(ks) {
-  const { w, textOf, type, save, html, load, out, stage, measured, vmetrics } = ks;
+  const { w, textOf, type, save, html, load, measured, vmetrics } = ks;
 
   // --- A blank document ---
   //
   // Caution: **It has to be seen where there is no browser too** (`../browser/fresh.js` walks past
   // without one). **Look at one box coming out** — with a block and no run, **a blank cannot be
   // typed on**. **Look at the table of styles too** (else tables and slides pile up as
-  // paragraphs). **Look at the earlier document staying too.**
-  const wasDocs = w.kspage_web_doc_count();
-  check(w.kspage_web_doc_new() >= 0, "one blank document can be opened");
-  check(w.kspage_web_doc_count() === wasDocs + 1,
-    `the earlier document stays open (${w.kspage_web_doc_count()})`);
+  // paragraphs).
+  const wasDoc = save();
+  w.kspage_web_load_blank();
   check(w.kspage_web_layout(300) === 1,
     `a blank puts one box out (${w.kspage_web_layout(300)})`);
   check(textOf(0) === "", `that box is empty (${textOf(0)})`);
@@ -54,9 +52,7 @@ export function run(ks) {
   w.kspage_web_layout(300);
   check(textOf(0) === "a", `a blank can be typed on as it stands (${textOf(0)})`);
   // Caution: **Put it back where it was** (leaving the document the sections after this look at).
-  check(w.kspage_web_doc_drop(w.kspage_web_doc_now()) === 1, "a blank can be shut");
-  check(w.kspage_web_doc_count() === wasDocs,
-    `shut, it returns to the count it was (${w.kspage_web_doc_count()})`);
+  check(load(wasDoc) === 1, "the document from before the blank reads back over it");
 
   // --- Taking it in and out ---
   // **A text crosses the boundary as a pointer and a length** (the entry points are shell.mjs's).
@@ -118,32 +114,6 @@ export function run(ks) {
   check(page.indexOf("=A2*B2") < 0 && page.indexOf(">$360<") >= 0,
     "the HTML written out holds the value and not the formula");
   check(save() !== page, "the writing out and the saving are different texts");
-
-  // --- The number that points at the same thing, and the mark of where it came from ---
-  // **It is not the core that makes the mark** (no clock nor die); this test plays the page side.
-  const marked = load("{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"body\"," +
-    "\"inlines\":[{\"text\":\"a\"}]},{\"style\":\"body\",\"inlines\":[{\"text\":\"b\"}]}]}");
-  check(marked === 1, "a text carrying neither number nor mark can be read");
-  check(out(w.kspage_web_origin()) === "", "in a document carrying no mark it is empty");
-  check(w.kspage_web_set_origin(stage("amark")) === 1, "a mark can be put in");
-  check(out(w.kspage_web_origin()) === "amark", "the mark put in comes back");
-  // **A mark that is there is not written over** (else each opening calls it another document).
-  check(w.kspage_web_set_origin(stage("bmark")) === 0, "a mark that is there is not written over");
-  check(out(w.kspage_web_origin()) === "amark", "where it refused the mark does not move");
-
-  const numbered = save();
-  check(numbered.indexOf("\"origin\": \"amark\"") >= 0, "the mark goes into the text");
-  // Caution: **Do not hunt for it packed** (the saved shape is one value to a line, with one space
-  // behind the key).
-  check(numbered.indexOf("\"id\": ") >= 0, "the number goes into the text");
-  check(numbered.indexOf("\"next_id\": ") >= 0, "the next number goes into the text");
-  // **Saved again the numbers do not move** (this is where Word breaks).
-  w.kspage_web_layout(300);
-  check(save() === numbered, "placed afresh or saved afresh the text is the same");
-  check(load(numbered) === 1, "a text carrying numbers can be read back");
-  check(out(w.kspage_web_origin()) === "amark", "read back the mark comes back too");
-  check(save() === numbered,
-    "read back and written again it is the same text, numbers and all");
 
   // --- A document that does not fit is refused ---
   //

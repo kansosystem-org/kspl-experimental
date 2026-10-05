@@ -5,10 +5,10 @@
 ## Local-cycle|debug|Run the tests `tests/debug/main.kspls` calls, in one executable
 DEBUG_RT := $(if $(filter 1,$(LLVM)),$(GEN_DIR)/test_debug_runtime.c,)
 debug: $(STAGE1_EXE)
-	@echo "# RUNNING DEBUG TESTS ($(BACKEND), BLAS=$(BLAS), TLS=$(TLS), DB=$(DB))"
-	./$(STAGE1_EXE) $(KSPL_FLAGS) $(TARGET_FLAG) $(AI_KSPL_FLAGS) $(TLS_KSPL_FLAGS) $(DB_KSPL_FLAGS) --emit-libs=$(DEBUG_LIBS) tests/debug/main.kspls $(DEBUG_OUT)
+	@echo "# RUNNING DEBUG TESTS ($(BACKEND), BLAS=$(BLAS))"
+	./$(STAGE1_EXE) $(KSPL_FLAGS) $(TARGET_FLAG) $(AI_KSPL_FLAGS) --emit-libs=$(DEBUG_LIBS) tests/debug/main.kspls $(DEBUG_OUT)
 	$(if $(DEBUG_RT),./$(STAGE1_EXE) emit-runtime $(DEBUG_RT))
-	$(CC) $(CFLAGS) $(TLS_CFLAGS) $(DEBUG_OUT) $(DEBUG_RT) @$(DEBUG_LIBS) $(TLS_LIB) $(LDLIBS) -o $(DEBUG_EXE)
+	$(CC) $(CFLAGS) $(DEBUG_OUT) $(DEBUG_RT) @$(DEBUG_LIBS) $(LDLIBS) -o $(DEBUG_EXE)
 	./$(DEBUG_EXE)
 
 # --- Building a single file for debugging (VS Code's F5) ---
@@ -28,11 +28,11 @@ debug-file: $(STAGE1_EXE)
 	gen="$(OUT_DIR)/$$stem.$(TARGET_EXT)"; exe="$(OUT_DIR)/$$stem.exe"; libf="$(OUT_DIR)/$$stem.libs"; \
 	echo "# BUILDING $(SRC_KSPL) FOR DEBUGGING ($(BACKEND))"; \
 	echo "./$(STAGE1_EXE) $(KSPL_FLAGS) $(TARGET_FLAG) \"$(SRC_KSPL)\" \"$$gen\""; \
-	./$(STAGE1_EXE) $(KSPL_FLAGS) $(TARGET_FLAG) $(AI_KSPL_FLAGS) $(TLS_KSPL_FLAGS) $(DB_KSPL_FLAGS) --emit-libs="$$libf" "$(SRC_KSPL)" "$$gen"; \
+	./$(STAGE1_EXE) $(KSPL_FLAGS) $(TARGET_FLAG) $(AI_KSPL_FLAGS) --emit-libs="$$libf" "$(SRC_KSPL)" "$$gen"; \
 	if [ "$(BACKEND)" = "c" ]; then $(C_FMT) "$$gen"; fi; \
 	rt=""; if [ "$(BACKEND)" = "llvm" ]; then rt="$(OUT_DIR)/$$stem.runtime.c"; ./$(STAGE1_EXE) emit-runtime "$$rt"; fi; \
 	echo "$(CC) $(CFLAGS) \"$$gen\" $$rt \"@$$libf\" $(LDLIBS) -o \"$$exe\""; \
-	$(CC) $(CFLAGS) $(TLS_CFLAGS) "$$gen" $$rt "@$$libf" $(TLS_LIB) $(LDLIBS) -o "$$exe"; \
+	$(CC) $(CFLAGS) "$$gen" $$rt "@$$libf" $(LDLIBS) -o "$$exe"; \
 	echo "# BUILT $$exe"
 
 # --- One package's worth of tests (`make debug-<name>`) ---
@@ -64,7 +64,9 @@ endef
 $(foreach p,$(DEBUG_PKGS),$(eval $(call debug_pkg_rule,$(p))))
 
 # **The one way to call a package's `Makefile`**: $(call pkg_make,<package>) <target> [<var>=<val>]
-pkg_make = KSPLC_STD_DIR="$(abspath std)" KSPLC_PKG_SRC_DIR="$(abspath .)" \
+# Caution: **Keep the leading `+`**: make passes its job slots only to a line it sees as a sub-make,
+# and a `$(MAKE)` reached through a variable is not seen, so the child warns and runs at `-j1`.
+pkg_make = +KSPLC_STD_DIR="$(abspath std)" KSPLC_PKG_SRC_DIR="$(abspath .)" \
   $(MAKE) --no-print-directory -C $(1) KSPLC="$(abspath $(STAGE1_EXE))" \
   RUNNER="$(abspath $(SEED_EXE))" UNDER="$(abspath $(STAGE1_EXE))" \
   SCRATCH="$(abspath $(TMP_DIR))/$(1)-suites" FUZZ_SEEDS="$(abspath .)"
@@ -89,27 +91,26 @@ suite_docsnippet   := suite/docsnippet_test.kspls
 suite_mdtrip       := suite/mdtrip_test.kspls
 suite_textrip      := suite/textrip_test.kspls
 suite_lsp-tree     := suite/lsp_tree_test.kspls
-suite_link-flags   := suite/link_flags_test.py
 suite_pytools      := suite/pytools_test.kspls
 suite_keywords     := suite/keywords_test.kspls
 suite_c-warnings   := suite/c_warnings_test.kspls
 suite_pilot-copy   := suite/pilot_copy_test.kspls
 suite_recipe-bytes := suite/recipe_bytes_test.kspls
 suite_deps         := suite/deps_test.kspls
+suite_link-rules   := suite/link_rules_test.kspls
 suite_js-syntax    := suite/js_syntax_test.kspls
 suite_race         := suite/race_test.kspls
 suite_spec-claims  := suite/spec_claims_test.kspls
 suite_kspls-trip   := suite/kspls_trip_test.kspls
 suite_lint-gate    := suite/lint_gate_test.kspls
-suite_carve        := suite/carve_test.kspls
 
 # Caution: **Longest first, by CPU time** (not wall clock, a cold-cache round or Windows's 0.0x):
 # `make -j` starts them in this order, and a heavy one at the back runs alone; `make test-suites`
 # prints the numbers. `lsp-tree` leads, as its minute is spent waiting on the language server.
 # `PRIVATE_SUITES` stands only where `private/` does (the root `Makefile`).
 SUITES := lsp-tree extract-ksplc extract-rest kspls-trip c-warnings conventions docref pilot-copy \
-  carve deps spec-claims mdtrip textrip docsnippet vscode recipe-bytes lint-gate keywords pytools \
-  link-flags $(PRIVATE_SUITES)
+  deps spec-claims mdtrip textrip docsnippet vscode recipe-bytes lint-gate link-rules keywords \
+  pytools $(PRIVATE_SUITES)
 
 # Linux's image alone holds their tool (`js-syntax`: node; `race`: clang's ThreadSanitizer): out of
 # `test-suites`, run by `ci-linux`.
@@ -127,9 +128,9 @@ ifneq ($(suite_undeclared),)
 $(error there are names listed with no suite_<name>: $(suite_undeclared))
 endif
 
-suite_cmd = $(if $(filter %.kspls,$(firstword $(1))),./$(SEED_EXE) run tests/$(1),python3 tests/$(1))
+suite_cmd = ./$(SEED_EXE) run tests/$(1)
 
-# Caution: **Not in $(CI_LOG_DIR)**, which mk/ci.mk's $(ci_digest) counts as the gates that ran.
+# Caution: **Not in $(CI_LOG_DIR)**, whose logs `tools/ci.kspls` counts as the gates that ran.
 suite_times = $(SUITE_LOG_DIR)/$(1).times
 
 # KANSO_SUITE labels each per-item line; **the table above is its sole origin**, not the suite side.
@@ -151,10 +152,16 @@ $(addprefix test-,$(addsuffix -fuzz,$(FUZZ_PKGS))): test-%-fuzz: $(STAGE1_EXE) $
 	@$(call pkg_make,$*) test-fuzz
 .PHONY: $(addprefix test-,$(addsuffix -fuzz,$(FUZZ_PKGS)))
 
-# Caution: **ksai's address sanitizer is mandatory on Linux**, whose image holds it: no silent pass.
-export KSAI_REQUIRE_ASAN := $(if $(filter linux,$(PLATFORM)),1,)
+# Caution: **The fuzzed readers' address sanitizer is mandatory on Linux**, whose image holds it: no
+# silent pass (each package's `test-fuzz`).
+export KANSO_REQUIRE_ASAN := $(if $(filter linux,$(PLATFORM)),1,)
 # The same for `test-race`'s ThreadSanitizer (`tests/suite/race_test.kspls`).
 export KANSO_REQUIRE_TSAN := $(if $(filter linux,$(PLATFORM)),1,)
+# The same for handing a folder to another user (`hand_over` in `ksplc/tests/suite/cli_test.kspls`),
+# which the image's passwordless `sudo` allows.
+export KANSO_REQUIRE_CHOWN := $(if $(filter linux,$(PLATFORM)),1,)
+# The same for the libraries `ksbind` binds (OpenSSL, SQLite), which its own `make test` links.
+export KSBIND_REQUIRE_LIBS := $(if $(filter linux,$(PLATFORM)),1,)
 
 # `times` into seconds, ASCII with `#` as `\#` (above Makefile's `include`); MSYS2's 0.00s gets
 # one line instead.
@@ -220,64 +227,50 @@ test-freestanding-math: $(STAGE1_EXE)
 	@echo "# RUNNING freestanding std/math vs libm numerical test"
 	./$(STAGE1_EXE) --freestanding tests/freestanding/probe.kspls $(TMP_DIR)/fm_probe.c
 	$(CC) -std=c99 -O2 -ffreestanding -ffunction-sections -fdata-sections -c $(TMP_DIR)/fm_probe.c -o $(TMP_DIR)/fm_probe.o
-	$(CC) -std=c99 -O2 tests/freestanding/harness.c $(TMP_DIR)/fm_probe.o $(MATH_LIB) \
+	$(CC) -std=c99 -O2 tests/freestanding/harness.c $(TMP_DIR)/fm_probe.o -lm \
 		$(GC_SECTIONS_FLAG) -o $(TMP_DIR)/fm_test.exe
 	./$(TMP_DIR)/fm_test.exe
 
-# --- Whether ksai's hot paths auto-vectorize at -O3, with no hand-written SIMD intrinsic ---
+# --- Whether ksai's hot loops auto-vectorize at -O3, with no hand-written SIMD intrinsic ---
+# **Each loop is checked at its own place**, found by the comment on the line before it naming
+# `make test-simd`: a function holding a loop that vectorizes would otherwise pass for another.
+# **The place is where the generated C's `for` sits as `#line` counts it**, which can fall past the
+# `.kspls` line of the loop, so it is read from the C; the record (`-g`) says which places vectorized.
+simd_prog := FILENAME == src && index($$0, "`make test-simd`") { want[FNR + 1] = 1; n++ } \
+  FILENAME == gen && /^\#line / { at = 0; \
+    if ($$3 == "\"" src "\"" && ($$2 in want) && !($$2 in place)) { at = $$2; p = $$2 - 1 }; next } \
+  FILENAME == gen && at { p++; if ($$0 ~ /^[ \t]*for \(/) { place[at] = p; at = 0 } } \
+  FILENAME == rec && /^--- / { passed = ($$0 ~ /!Passed/) } \
+  FILENAME == rec && /^Name:/ { vec = passed && $$2 == "Vectorized" } \
+  FILENAME == rec && /^DebugLoc:/ && vec && index($$0, "File: \047" src "\047") { \
+    if (match($$0, /Line: [0-9]+/)) done[substr($$0, RSTART + 6, RLENGTH - 6) + 0] = 1 } \
+  END { if (n == 0) { print "RESULT: SOME FAILED (1) -> no loop in " src " names make test-simd"; \
+      exit 1 } \
+    for (l in want) if (!(l in place) || !((place[l]) in done)) { bad = 1; \
+      print "RESULT: SOME FAILED (1) -> the loop at " src ":" l " no longer auto-vectorizes at -O3" } \
+    if (bad) exit 1; \
+    print "  -> " n " loops in " src " auto-vectorize at -O3" }
+# $(call simd_check,<program>,<the .kspls its loops are in>,<stem>): builds it, then checks them
 define simd_check
-	@line=$$($(3)); \
-	if grep -q "$(2):$$line:.*vectorized loop (vectorization" $(4); then \
-		echo "  -> $(1) ($(2):$$line) auto-vectorizes at -O3"; \
-	else \
-		echo "RESULT: SOME FAILED (1) -> $(1) ($(2):$$line) no longer auto-vectorizes at -O3"; \
-		grep "$(notdir $(2)):$$line" $(4) || true; \
-		exit 1; \
-	fi
+	./$(STAGE1_EXE) $(1) $(TMP_DIR)/$(3).c
+	@$(CC) -std=c99 -O3 -g -c $(TMP_DIR)/$(3).c -o $(TMP_DIR)/$(3).o -fsave-optimization-record \
+		-foptimization-record-file=$(LOG_DIR)/$(3).yaml -foptimization-record-passes=loop-vectorize
+	@awk -v src=$(2) -v gen=$(TMP_DIR)/$(3).c -v rec=$(LOG_DIR)/$(3).yaml '$(simd_prog)' \
+		$(2) $(TMP_DIR)/$(3).c $(LOG_DIR)/$(3).yaml
 endef
 
-
-SIMD_TENSOR_FNS  := matmul_kernel add_bias rmsnorm softmax
-SIMD_TENSOR_LINE  = grep -n 'fn $(1)' ksai/tensor.kspls | head -1 | cut -d: -f1
-SIMD_LORA_LINE   := awk '/^impl<\|T\|> Gqa_attention<\|T\|>/{f=1} f && /fn forward_lora/{print NR; exit}' ksai/nn.kspls
-
-## Gates|test-simd|Whether what should vectorize appears in the optimization report
+## Gates|test-simd|Whether the loops that should vectorize appear vectorized in the optimization record
 test-simd: $(STAGE1_EXE)
-	@echo "# VERIFYING ksai/tensor.kspls auto-vectorization (-O3 loop vectorizer)"
-	./$(STAGE1_EXE) ksai/examples/llama_engine/main.kspls $(TMP_DIR)/simd_check.c
-	@$(CC) -std=c99 -O3 -c $(TMP_DIR)/simd_check.c -o $(TMP_DIR)/simd_check.o \
-		-Rpass=loop-vectorize 2> $(LOG_DIR)/simd_check.log || true
-	$(foreach f,$(SIMD_TENSOR_FNS),$(call simd_check,$(f),ksai/tensor.kspls,$(call SIMD_TENSOR_LINE,$(f)),$(LOG_DIR)/simd_check.log)$(nl))
-	@echo "# VERIFYING ksai/nn.kspls Gqa_attention.forward_lora auto-vectorization (-O3 loop vectorizer)"
-	./$(STAGE1_EXE) ksai/examples/qwen_infer/main.kspls $(TMP_DIR)/simd_check_qwen.c
-	@$(CC) -std=c99 -O3 -c $(TMP_DIR)/simd_check_qwen.c -o $(TMP_DIR)/simd_check_qwen.o \
-		-Rpass=loop-vectorize 2> $(LOG_DIR)/simd_check_qwen.log || true
-	$(call simd_check,Gqa_attention.forward_lora,ksai/nn.kspls,$(SIMD_LORA_LINE),$(LOG_DIR)/simd_check_qwen.log)
-	@# Caution: **Do not remove this line.** It is the only `RESULT:` line ci_check looks at.
-	@echo "RESULT: ALL PASS ($(words $(SIMD_TENSOR_FNS)) + 1 functions auto-vectorize at -O3)"
-
-MUTANTS_MAX ?=
-## Measure-and-inspect|test-mutants|Sow seeds and count the proportion the tests catch (it emits no verdict)
-test-mutants: $(STAGE1_EXE)
-	@echo "# MEASURING which decisions the tests actually pin"
-	@if [ -z "$(FILE)" ]; then \
-		echo "RESULT: SOME FAILED (1) -> pass FILE=<path> (the range is named on purpose)"; exit 1; fi
-	./$(STAGE1_EXE) run tests/tools/mutants.kspls $(FILE) $(MAX)
-
-.PHONY: test-mutants
-
-## Build-and-install|carve|Carve a package out into a read-only copy of its own (PKG=<package>; DEST= and URL= optional)
-carve: $(SEED_EXE)
-	@if [ -z "$(PKG)" ]; then echo "carve: name the package (PKG=<package>)"; exit 1; fi
-	./$(SEED_EXE) run tests/tools/carve.kspls "$(PKG)" "$(if $(DEST),$(DEST),out/carve/$(PKG))" \
-		$(if $(URL),"$(URL)")
-
-.PHONY: carve
+	@echo "# VERIFYING ksai's hot loops auto-vectorize (-O3 loop vectorizer)"
+	$(call simd_check,ksai/examples/llama_engine/main.kspls,ksai/tensor.kspls,simd_check)
+	$(call simd_check,ksai/examples/qwen_infer/main.kspls,ksai/nn.kspls,simd_check_qwen)
+	@# Caution: **Do not remove this line.** It is the gate's verdict (`Gate.verdict`).
+	@echo "RESULT: ALL PASS (every loop naming make test-simd auto-vectorizes at -O3)"
 
 # --- The published API: its record (`SURFACE.txt`), and the reference to browse under `out/docs/` ---
 # Caution: **Only the record is committed** (an API change shows as a diff); remake it by
 # `make surface`. The reference is `ksplc doc`'s answer, written out only to be browsed.
-SURFACE_PKGS := std ksai kspeg ksdb
+SURFACE_PKGS := std ksai kspeg ksdb ksbind
 
 ## Measure-and-inspect|surface|Rewrite each package's API record (`SURFACE.txt`), and write its reference to browse under `out/docs/`
 surface: $(STAGE1_EXE)

@@ -5,7 +5,7 @@
 ## Run it
 
 ```sh
-ksplc hello.kspls hello.c && clang hello.c $(ksplc info link-libs) -o hello   # the default target, C99
+ksplc build hello.kspls hello            # the default target, C99, compiled and linked by clang
 ksplc --target=llvm hello.kspls hello.ll   # then clang hello.ll with the runtime ksplc emit-runtime puts out
 ```
 
@@ -70,7 +70,7 @@ The design is chapter 4 of [`ksplc/docs/DESIGN.md`](docs/DESIGN.md); where a che
 
 **It levels the typed AST into a shape with no dependence on a backend.** The passes run in the order §5.2 of [`ksplc/docs/DESIGN.md`](docs/DESIGN.md) gives.
 
-* [`root.kspls`](lower/root.kspls) — the one recursive walk that flattens the control flow; [`expr.kspls`](lower/expr.kspls) hoists the expressions inside it, [`defer.kspls`](lower/defer.kspls) flattens `defer` and the exits that run it, and [`ctx.kspls`](lower/ctx.kspls) holds the walk's state.
+* [`root.kspls`](lower/root.kspls) — the one recursive walk that flattens the control flow; [`expr.kspls`](lower/expr.kspls) hoists the expressions inside it, [`defer.kspls`](lower/defer.kspls) flattens `defer` and the exits that run it, [`order.kspls`](lower/order.kspls) moves an operand into a temporary where C could run it out of the written order, and [`ctx.kspls`](lower/ctx.kspls) holds the walk's state.
 * [`arc.kspls`](lower/arc.kspls) — inserts ARC's `retain()` / `release()` on the way.
 * [`vtable.kspls`](lower/vtable.kspls) — a trait value's thunks and vtables.
 * [`abi.kspls`](lower/abi.kspls) — the ABI mangling, and desugaring the method calls.
@@ -87,7 +87,7 @@ The design is chapter 5 of [`ksplc/docs/DESIGN.md`](docs/DESIGN.md), and ARC's i
 
 **What the two outputs must agree on is written once, directly under `gen/`** (why is §6.2 of [`ksplc/docs/DESIGN.md`](docs/DESIGN.md)).
 
-* [`runtime.kspls`](gen/runtime.kspls) — hands out the C runtime that completes either output. The runtime itself is [`gen/runtime/`](gen/runtime/): `core.*` for every target, plus either `hosted.*` (an OS beneath, split by subject into `hosted_fs` / `hosted_net` / `hosted_proc` / `hosted_spawn` / `hosted_thread` / `hosted_tls`) or `freestanding.*` (bare metal).
+* [`runtime.kspls`](gen/runtime.kspls) — hands out the C runtime that completes either output. The runtime itself is [`gen/runtime/`](gen/runtime/): `core.*` for every target, plus either `hosted.*` (an OS beneath, split by subject into `hosted_fs` / `hosted_net` / `hosted_proc` / `hosted_spawn` / `hosted_thread`) or `freestanding.*` (bare metal).
 * [`entry.kspls`](gen/entry.kspls) — what the generated `main` does around `kspl_main`.
 * [`embed.kspls`](gen/embed.kspls) — reads the file an `embed` names.
 
@@ -97,12 +97,16 @@ make test-emit-runtime   # the runtime handed out whole, and one entry point whi
 
 ### gen/c/ — the C99 backend
 
-**It turns the flattened AST into C99.** The `.c` holds the C runtime too (`gen/` above), unless `--omit-runtime` leaves its bodies to the file `ksplc emit-runtime` wrote.
+**It turns the flattened AST into C99.** The `.c` holds the C runtime too (`gen/` above); under `--library` everything in it but the `#export` functions is `static`.
 
 * [`root.kspls`](gen/c/root.kspls) — `run`, the single entry.
 * [`ctx.kspls`](gen/c/ctx.kspls) — the context and its fluent output API.
 * [`decl.kspls`](gen/c/decl.kspls) the declarations, [`types.kspls`](gen/c/types.kspls) the types, [`stmt.kspls`](gen/c/stmt.kspls) the statements, and [`expr.kspls`](gen/c/expr.kspls) the expressions, with the postfix forms in [`expr_postfix.kspls`](gen/c/expr_postfix.kspls).
 * [`literal.kspls`](gen/c/literal.kspls) — turns KSPL's literals into C strings.
+
+```sh
+make test-ship   # two libraries built with --library link into one C program and one KSPL program
+```
 
 ### gen/llvm/ — the LLVM IR backend
 
@@ -163,15 +167,15 @@ The design is §10.1 to §10.12 of [`ksplc/docs/DESIGN.md`](docs/DESIGN.md). Wha
 make fmt    # every tracked .kspl / .kspls, each in its own notation
 ```
 
-What `ksplc fmt` and `--style` promise is [`ksplc/docs/SPEC-tools.md`](docs/SPEC-tools.md), "3. The formatter (ksplc fmt)". The formatter's own decisions (the `import`s reordered as text before the printer, nothing folded by default, blank lines and the line terminator) are §10.13 to §10.15 of [`ksplc/docs/DESIGN.md`](docs/DESIGN.md).
+What `ksplc fmt` and `--style` promise is [`ksplc/docs/SPEC-tools.md`](docs/SPEC-tools.md), "3. The formatter (ksplc fmt)". The formatter's own decisions (the `import`s reordered as text before the printer, nothing folded by default, four spaces a level, blank lines and the line terminator) are §10.13 to §10.16 of [`ksplc/docs/DESIGN.md`](docs/DESIGN.md).
 
 ### tools/ — the tools that work on the pipeline's artifact
 
 **Commands built on what the pipeline produces, and the tools that inspect the compiler's own parts.**
 
 * [`keywords.kspls`](tools/keywords.kspls) — derives the keyword list from the grammar.
-* [`decls.kspls`](tools/decls.kspls) — assembles only the declarations, for handing out (`--emit-decls=`).
 * [`surface.kspls`](tools/surface.kspls) — the record of the API a package offers (`--emit-surface=`).
+* [`interface.kspls`](tools/interface.kspls) — a library's interface, a C header or an `extern "C"` block, from its `#export` functions (`--emit-interface=`).
 * [`doc.kspls`](tools/doc.kspls) — what a file, an entry or a folder publishes, rendered from the source as the reference to read (`ksplc doc`).
 * [`explain.kspls`](tools/explain.kspls) — prints a diagnostic code's section of the tools specification (`ksplc explain`).
 * [`run.kspls`](tools/run.kspls) — `ksplc run`.
@@ -197,9 +201,10 @@ The CLI options, and the formatter, the language server and the linter as seen f
 | [`tests/suite/`](tests/suite/) | One suite, `<name>_test.kspls`, run by `make test-<name>` |
 | [`tests/support/`](tests/support/) | Code the suites read: `harness*`, shared by every suite, and `<suite name>_<subject>`, one suite's own piece |
 | [`tests/negative/`](tests/negative/) [`tests/lint/`](tests/lint/) [`tests/runtime/`](tests/runtime/) | The fixtures `test-negative`, `test-lint` and `test-runtime` read, one case (or a few) per file |
-| [`tests/prog/`](tests/prog/) | A one-file program under inspection, which a suite builds on both backends or reads a line-number landmark from |
+| [`tests/prog/`](tests/prog/) | A program under inspection, which a suite builds on both backends or reads a line-number landmark from: one file, or `equiv.kspls` with the shapes C leaves open in the `equiv_shapes.kspls` it imports |
 | [`tests/filepath/`](tests/filepath/) | `test-file-path`'s material. **It takes two files**: with one, the unspecified-visibility path is never taken |
 | [`tests/kspls/`](tests/kspls/) | `test-kspls`'s twins: one source in both notations, which must give the same C. The language tour is written from one of them |
+| [`tests/ship/`](tests/ship/) | `test-ship`'s two vendors and two customers: libraries built with `--library`, a C program and a KSPL program using them. `app.kspls` imports an interface the suite writes, so it compiles only there |
 
 **The shared foundation is split by the reason for reading it**: `harness`, `harness_build` (the only caller of the C compiler and the linker), `harness_expect`, `harness_markers` and `harness_grow`, each saying in its opening comment what it holds.
 
@@ -213,7 +218,7 @@ A fixture is a source with its expectation in the opening comment. The three fol
 program
 ```
 
-**The description holds at most four lines of text**, a bare `//<` parting aside, and `make test-conventions` refuses more: the cases are a few lines each, so a longer one outgrows what it describes. A trap one case guards goes beside that case, as a `//` above it.
+**The description holds at most four lines of text**, a bare `//<` parting aside: the cases are a few lines each, so a longer one outgrows what it describes. A trap one case guards goes beside that case, as a `//` above it.
 
 * `tests/negative/`: runs `ksplc [ARGS] <file> <out.c>` and also demands **a non-zero exit**.
 * `tests/lint/`: runs `ksplc lint [ARGS] <file>`; lint exits 0 even with diagnostics, so the exit code is not looked at.

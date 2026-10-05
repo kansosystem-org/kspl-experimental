@@ -4,39 +4,20 @@
 
 KSPLC ?= ksplc
 OUT ?= out
-# The C compiler ksplc picks (`CC`, or clang), exported so ksplc's link words fit it.
-ifeq ($(origin CC),default)
-CC := clang
-endif
-export CC
-# Optimized: the server learns its model as it starts, which takes seconds unoptimized.
-KSSRV_CFLAGS := -std=c99 -g -O2
-KSPLC_EXE = $(shell command -v "$(KSPLC)")
 
-.PHONY: all server spew test check-pilot-copy
+.PHONY: all server test check-pilot-copy
 
 all: server
 
-# One program, compiled and linked. The link words are asked of ksplc, never copied here.
+# `ksplc build` compiles and links, optimised by default, with the C compiler `CC` names (or clang).
 # Caution: **Quote every path** — a folder whose name holds a space splits an unquoted one.
-define kspl_exe
-	@mkdir -p "$(OUT)"
-	"$(KSPLC)" --emit-libs="$(OUT)/$(2).libs" $(1) "$(OUT)/$(2).c"
-	"$(CC)" $(KSSRV_CFLAGS) "$(OUT)/$(2).c" "@$(OUT)/$(2).libs" $$("$(KSPLC)" info exe-flags) \
-		$$("$(KSPLC)" info link-libs) -o "$(OUT)/$(2).exe"
-endef
-
 server:
-	$(call kspl_exe,main.kspls,kssrv)
-
-spew:
-	$(call kspl_exe,tests/spew.kspls,spew)
+	"$(KSPLC)" build main.kspls "$(OUT)/kssrv.exe"
 
 # Caution: **Empty the workshop first**: the tests link out of it, and `rm -rf` follows no link.
-test: server spew
+test: server
 	rm -rf "$(OUT)/test"
-	"$(KSPLC)" run tests/main.kspls "$(OUT)/kssrv.exe" "$(OUT)/spew.exe" "$(KSPLC_EXE)" \
-		"$(OUT)/test"
+	"$(KSPLC)" run tests/main.kspls "$(OUT)/kssrv.exe" "$(OUT)/test"
 
 check-pilot-copy: server
 	@test -n "$(COPY)" || { echo "name the copy: make check-pilot-copy COPY=<file>"; exit 2; }

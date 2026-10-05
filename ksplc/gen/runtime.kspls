@@ -31,16 +31,15 @@ embed "ksplc/gen/runtime/hosted_thread.c" as rt_hosted_thread
 embed "ksplc/gen/runtime/hosted_fs.c" as rt_hosted_fs
 embed "ksplc/gen/runtime/hosted_spawn.c" as rt_hosted_spawn
 embed "ksplc/gen/runtime/hosted_net.c" as rt_hosted_net
-embed "ksplc/gen/runtime/hosted_tls.c" as rt_hosted_tls
 
 fn write_decls($w: Writer): Writer //<
-  //< The runtime's declaration half (the system headers plus the `.h` side)
-  //<
-  //< Caution: **Every object-like macro the includes `#define` must be removed by the `#undef`
-  //< below** (`si_pid`, `L_tmpnam`, `math_errhandling`, ...): where KSPL emits the same name
-  //< unprefixed (a local, a parameter, a field), the macro expands.
-  w = w
-    .s("""
+    //< The runtime's declaration half (the system headers plus the `.h` side)
+    //<
+    //< Caution: **Every object-like macro the includes `#define` must be removed by the `#undef`
+    //< below** (`si_pid`, `L_tmpnam`, `math_errhandling`, ...): where KSPL emits the same name
+    //< unprefixed (a local, a parameter, a field), the macro expands.
+    w = w
+        .s("""
 #define _POSIX_C_SOURCE 200809L
 // Caution: **On macOS, always raise _DARWIN_C_SOURCE too.** Apple's headers hide "what is not in
 // POSIX.1" where `_POSIX_C_SOURCE` is defined. What hides includes sysconf's _SC_NPROCESSORS_ONLN
@@ -73,9 +72,9 @@ fn write_decls($w: Writer): Writer //<
 #include <stdint.h>
 #include <stdarg.h>
 """)
-  if !base_core.config.is_freestanding
-    w = w
-      .s("""
+    if !base_core.config.is_freestanding
+        w = w
+            .s("""
 #include <stdio.h>
 // The premise for std/rand.kspls's CSPRNG (kspl_rand_fill, hosted.c) using rand_s() on Windows.
 // #defined after stdlib.h it is ignored by the header guard (where that has already been
@@ -135,89 +134,58 @@ fn write_decls($w: Writer): Writer //<
 #undef wcswcs
 #undef wpopen
 """)
-  w = w.s(rt_core_decls)
-  if base_core.config.is_freestanding
-    w = w.s(rt_freestanding_decls)
-  else
-    w = w.s(rt_hosted_decls)
-  return w
+    w = w.s(rt_core_decls)
+    if base_core.config.is_freestanding
+        w = w.s(rt_freestanding_decls)
+    else
+        w = w.s(rt_hosted_decls)
+    return w
 
 const impl_half_mark: U8[] = "/* ---- kspl runtime implementation half ---- */\n" //<
-  //< The mark at the start of the body half
-  //<
-  //< Caution: **Do not change it.** It appears both in `emit-runtime`'s output and in the
-  //< generated C, where the program's body sits between the two halves, and
-  //< `tests/suite/emit_runtime_test.kspls` cuts both there to compare them.
+    //< The mark at the start of the body half
+    //<
+    //< Caution: **Do not change it.** It appears both in `emit-runtime`'s output and in the
+    //< generated C, where the program's body sits between the two halves, and
+    //< `tests/suite/emit_runtime_test.kspls` cuts both there to compare them.
 
 fn write_impl($w: Writer): Writer //< the runtime's body half (the `.c` side)
-  //<
-  //< It goes into only one translation unit.
-  w = w.s(impl_half_mark).s(rt_core_impl)
-  if base_core.config.is_freestanding
-    w = w.s(rt_freestanding_impl)
-  else
-    w = w.s(rt_hosted_impl).s(rt_hosted_proc).s(rt_hosted_thread).s(rt_hosted_fs).s(rt_hosted_spawn)
-      .s(rt_hosted_net).s(rt_hosted_tls)
-  return w
+    //<
+    //< It goes into only one translation unit.
+    w = w.s(impl_half_mark).s(rt_core_impl)
+    if base_core.config.is_freestanding
+        w = w.s(rt_freestanding_impl)
+    else
+        w = w.s(rt_hosted_impl).s(rt_hosted_proc).s(rt_hosted_thread).s(rt_hosted_fs)
+            .s(rt_hosted_spawn).s(rt_hosted_net)
+    return w
 
 priv const abi_hash_len: Sz = 16 //< the length of the version in the version symbol
-  //<
-  //< The version is computed from **the runtime's whole source**.
-  //< Caution: **Do not compute it from the declaration half only**, or a runtime whose bodies
-  //< alone changed would pass. genllvm matches on the same symbol (the IR always links the runtime
-  //< from outside).
+    //<
+    //< The version is computed from **the runtime's whole source**.
+    //< Caution: **Do not compute it from the declaration half only**, or a runtime whose bodies
+    //< alone changed would pass. genllvm references the symbol (the IR always links the runtime
+    //< from outside), so an IR file and a runtime of another version do not link.
 
 fn append_abi_symbol(out: Str_builder$@)
-  $text: = Str_builder.new()
-  defer text.free()
-  write_impl(write_decls(text@))
-  $hex: = Str_builder.new()
-  defer hex.free()
-  base_cache.append_hash_hex(text.slice(), hex@)
-  out.s("kspl_runtime_abi_").s(hex.slice().sub(0, abi_hash_len))
+    $text: = Str_builder.new()
+    defer text.free()
+    write_impl(write_decls(text@))
+    $hex: = Str_builder.new()
+    defer hex.free()
+    base_cache.append_hash_hex(text.slice(), hex@)
+    out.s("kspl_runtime_abi_").s(hex.slice().sub(0, abi_hash_len))
 
 fn write_unit($w: Writer): Writer //<
-  //< It writes only the runtime, as one translation unit (`emit-runtime`)
-  //<
-  //< The version symbol's body goes at the end.
-  //< Caution: **Use the same function as the preamble.** Built separately, the name embedded in
-  //< an artifact and the name in the shipped runtime could disagree, with both passing unnoticed.
-  w = write_impl(write_decls(w))
-  $sym: = Str_builder.new()
-  defer sym.free()
-  append_abi_symbol(sym@)
-  // Caution: **Do not put anything before it.** tests/suite/emit_runtime_test.kspls cuts "the
-  // runtime itself" out of the emitted file at this line.
-  w = w.s("\nvoid ").s(sym.slice()).s("(void) {}\n")
-  return w
-
-fn write_abi_ref($w: Writer): Writer //<
-  //< The reference to the version symbol that `--omit-runtime`'s generated C contains
-  //<
-  //< The symbol's body is in the separately built runtime.
-  //< Caution: **`used` alone is not enough on ELF**: `--gc-sections` drops the whole section.
-  //< **Nor is `__has_attribute(retain)` alone**: it says the compiler knows the attribute, not
-  //< that the object format honors it. **Make it `static`**, so `--split`'s units do not collide.
-  $sym: = Str_builder.new()
-  defer sym.free()
-  append_abi_symbol(sym@)
-  w = w.s("extern void ").s(sym.slice()).s("(void);\n")
-  w = w
-    .s("""
-#if defined(__ELF__)
-#if !defined(__has_attribute) || !__has_attribute(retain)
-#error "--omit-runtime needs __attribute__((retain)) on ELF: without it the version guard is
-#stripped without a word"
-#endif
-__attribute__((used, retain))
-#elif defined(__MACH__)
-__attribute__((used))
-#elif defined(_WIN32)
-__attribute__((used))
-#else
-#error "--omit-runtime needs a way to keep the version reference; only ELF, Mach-O and PE are known
-#to honor one, so the guard would be stripped without a word"
-#endif
-""")
-  w = w.s("static void (* const kspl_runtime_abi_ref)(void) = ").s(sym.slice()).s(";\n\n")
-  return w
+    //< It writes only the runtime, as one translation unit (`emit-runtime`)
+    //<
+    //< The version symbol's body goes at the end.
+    //< Caution: **Use the same function as the preamble.** Built separately, the name embedded in
+    //< an artifact and the name in the shipped runtime could disagree, with both passing unnoticed.
+    w = write_impl(write_decls(w))
+    $sym: = Str_builder.new()
+    defer sym.free()
+    append_abi_symbol(sym@)
+    // Caution: **Do not put anything before it.** tests/suite/emit_runtime_test.kspls cuts "the
+    // runtime itself" out of the emitted file at this line.
+    w = w.s("\nvoid ").s(sym.slice()).s("(void) {}\n")
+    return w

@@ -12,40 +12,65 @@
 
 #cfg(!freestanding)
 extern "C"
-  fn kspl_stack_floor(): Sz
+    fn kspl_stack_floor(): Sz
 
 #cfg(!freestanding)
 priv fn stack_floor(): Sz //< where the calling thread's stack ends, as the OS reports it
-  return kspl_stack_floor()
+    return kspl_stack_floor()
 
 #cfg(freestanding)
 priv fn stack_floor(): Sz //< 0, "not known": the bounds are the linker script's, unread here
-  return 0
+    return 0
 
 pub struct Stack_limit //<
-  //< where a walk on the calling thread stops, a margin before the end of its stack
-  //<
-  //< Caution: **Create it on the thread that walks.** It holds that thread's bounds, and another
-  //< thread's stack is somewhere else.
-  floor: Sz //< the lowest address the walk may reach; 0 where the OS does not tell
+    //< where a walk on the calling thread stops, a margin before the end of its stack
+    //<
+    //< Caution: **Create it on the thread that walks.** It holds that thread's bounds, and another
+    //< thread's stack is somewhere else.
+    floor: Sz //< the lowest address the walk may reach; 0 where the OS does not tell
+    margin: Sz //< the room kept free, for a limit made by `later` that has not asked yet
+    ask_at: Sz //< the depth at which a `later` limit asks the OS; 0 once it has asked
 
 impl Stack_limit
-  pub fn new( //< the limit for the calling thread
-    //<
-    //< **It asks the OS, and that is not cheap** (on Linux the main thread's bounds are
-    //< read from a file). Create it once per walk and keep it.
-    margin: Sz, //< how many bytes to keep free below the point where the walk stops
-  ): Stack_limit
-    low: = stack_floor()
-    return Stack_limit::{ .floor = 0 if low == 0 else low + margin }
+    pub fn new( //< the limit for the calling thread
+        //<
+        //< **It asks the OS, and that is not cheap** (on Linux the main thread's bounds are
+        //< read from a file). Create it once per walk and keep it.
+        margin: Sz, //< how many bytes to keep free below the point where the walk stops
+    ): Stack_limit
+        low: = stack_floor()
+        return Stack_limit::{ .floor = 0 if low == 0 else low + margin, .margin = margin,
+            .ask_at = 0 }
 
-  pub fn near( //< whether the caller is within the margin of the stack's end
-    //<
-    //< **Always false where the OS does not tell** (a freestanding build), so a walk also keeps its
-    //< own depth count.
-    limit: Self@,
-  ): Bool
-    here: U8 = 0
-    // **Compare the difference**, not the two addresses: when the stack crosses the middle of the
-    // address space, the signed `Sz` changes sign between the two; the difference does not.
-    return limit.floor != 0 && Sz::here@ - limit.floor < 0
+    pub fn later( //< a limit that asks the OS only once a walk gets deep
+        //<
+        //< **For a walk run many times over mostly shallow input** (a regex per line of a file):
+        //< asking costs far more than a shallow walk, which never needs the answer. Check it with
+        //< `near_at`.
+        margin: Sz, //< how many bytes to keep free below the point where the walk stops
+        deep: Sz, //< the depth from which it asks; the levels above it must fit in any stack at all
+    ): Stack_limit
+        return Stack_limit::{ .floor = 0, .margin = margin, .ask_at = deep if deep > 0 else 1 }
+
+    pub fn near_at( //< `near` for a walk at `depth`, asking the OS first if this one has not yet
+        //<
+        //< A limit made by `new` has asked already, so this is `near`.
+        limit: Self$@,
+        depth: Sz, //< how deep the walk is now
+    ): Bool
+        if limit.ask_at > 0
+            if depth < limit.ask_at
+                return false
+            limit$ = Stack_limit.new(limit.margin)
+        return limit.near()
+
+    pub fn near( //< whether the caller is within the margin of the stack's end
+        //<
+        //< **Always false where the OS does not tell** (a freestanding build), so a walk also keeps
+        //< its own depth count.
+        limit: Self@,
+    ): Bool
+        here: U8 = 0
+        // **Compare the difference**, not the two addresses: when the stack crosses the middle of
+        // the address space, the signed `Sz` changes sign between the two; the difference does not.
+        return limit.floor != 0 && Sz::here@ - limit.floor < 0

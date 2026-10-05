@@ -14,19 +14,35 @@
  * One difference is left: POSIX renames a directory over an empty one, MoveFileExW fails; every
  * caller replaces files. Windows's remove() is file-only, so kspl_remove_path stats and turns a
  * directory over to rmdir() / _wrmdir().
+ * **A read-only file is removed and replaced as on POSIX**, where its own mode does not stop
+ * either: Windows refuses both, so its read-only mark is cleared first (kspl_win_writable).
  *
  * A path is copied by kspl_to_cstr (hosted.c) or kspl_path_to_wide, both returning 0 where it
  * does not fit or holds a NUL. Both are static with no KSPL declaration, so their signatures
  * can change without the seed.
  * ============================================================ */
+
+/* Whether a mode is one std/io's open takes: `r`, `w` or `a`, then any of `+` and `b`, and `x`
+ * after `w` alone (C11's set).
+ * Caution: **Refuse any other letter, on both sides**, so a mode means one thing everywhere:
+ * glibc skips a letter it does not know, while Windows reads `t`, `N` and `ccs=` as its own. */
+static int kspl_fopen_mode_ok(const char *mode) {
+    if (mode[0] != 'r' && mode[0] != 'w' && mode[0] != 'a') return 0;
+    for (const char *p = mode + 1; *p != '\0'; p++) {
+        if (*p != '+' && *p != 'b' && !(*p == 'x' && mode[0] == 'w')) return 0;
+    }
+    return 1;
+}
+
 #ifndef _WIN32
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <unistd.h> /* geteuid */
 
-I64 kspl_dir_open(const U8 *path_ptr, Sz path_len) {
+KSPL_LINK I64 kspl_dir_open(const U8 *path_ptr, Sz path_len) {
     char path[4096];
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return 0;
     DIR *d = opendir(path);
@@ -35,7 +51,7 @@ I64 kspl_dir_open(const U8 *path_ptr, Sz path_len) {
 
 /* Copies the next entry's name into buf and returns the byte count (0 = the enumeration ended,
  * -1 = buf is too short). "." and ".." are skipped here. */
-I32 kspl_dir_read(I64 handle, U8 *buf, Sz cap) {
+KSPL_LINK I32 kspl_dir_read(I64 handle, U8 *buf, Sz cap) {
     if (handle == 0) return 0;
     DIR *d = (DIR *)(intptr_t)handle;
     for (;;) {
@@ -52,14 +68,14 @@ I32 kspl_dir_read(I64 handle, U8 *buf, Sz cap) {
     }
 }
 
-void kspl_dir_close(I64 handle) {
+KSPL_LINK void kspl_dir_close(I64 handle) {
     if (handle == 0) return;
     closedir((DIR *)(intptr_t)handle);
 }
 
 /* size_out = the byte count, is_dir_out = 1 for a directory, mtime_out = the modification time
  * (Unix epoch seconds). Returns false on failure (a path that does not exist, and so on). */
-Bool kspl_stat(const U8 *path_ptr, Sz path_len, I64 *size_out, I32 *is_dir_out, I64 *mtime_out) {
+KSPL_LINK Bool kspl_stat(const U8 *path_ptr, Sz path_len, I64 *size_out, I32 *is_dir_out, I64 *mtime_out) {
     char path[4096];
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return false;
     struct stat st;
@@ -75,7 +91,7 @@ Bool kspl_stat(const U8 *path_ptr, Sz path_len, I64 *size_out, I32 *is_dir_out, 
  * Caution: It must not be shaped as adding an output argument to kspl_stat. kspl_stat is declared
  * in both the preamble (hosted.c) and std/fs.kspls, and disagreeing with the seed's old one breaks
  * the bootstrap's link. An addition is always a separate function. */
-Bool kspl_is_exec(const U8 *path_ptr, Sz path_len) {
+KSPL_LINK Bool kspl_is_exec(const U8 *path_ptr, Sz path_len) {
     char path[4096];
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return false;
     struct stat st;
@@ -88,7 +104,7 @@ Bool kspl_is_exec(const U8 *path_ptr, Sz path_len) {
  * Caution: **Do not mix -1 with 0.** A step that could not be peeked passing as "not a link" opens
  * a road out of the root; refusing is the caller's part (has_link_on_path in std/fs.kspls).
  * A path that is not there is 0 (the function that creates one comes through here). */
-I32 kspl_is_link(const U8 *path_ptr, Sz path_len) {
+KSPL_LINK I32 kspl_is_link(const U8 *path_ptr, Sz path_len) {
     char path[4096];
     struct stat st;
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return -1;
@@ -98,16 +114,58 @@ I32 kspl_is_link(const U8 *path_ptr, Sz path_len) {
     return S_ISLNK(st.st_mode) ? 1 : 0;
 }
 
-I32 kspl_mkdir(const U8 *path_ptr, Sz path_len) {
+KSPL_LINK I32 kspl_mkdir(const U8 *path_ptr, Sz path_len) {
     char path[4096];
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return -1;
     return mkdir(path, 0755);
 }
 
+/* Creates a file that did not stand, readable and writable by its owner alone, and writes data
+ * into it (for std/fs.kspls's write_unique): 0 = written, 1 = the name is taken, -1 = refused.
+ * **O_EXCL decides that it is new**, so a link planted at the name is not followed, and 0600 is
+ * the mode from the first byte (a chmod after creating leaves a moment others could open it).
+ * What fails partway is removed, so no half-written file stands under the name. */
+KSPL_LINK I32 kspl_create_owned(const U8 *path_ptr, Sz path_len, const U8 *data, Sz len) {
+    char path[4096];
+    Sz done = 0;
+    if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return -1;
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    if (fd < 0) return errno == EEXIST ? 1 : -1;
+    while (done < len) {
+        ssize_t n = write(fd, data + done, (size_t)(len - done));
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) {
+            close(fd);
+            unlink(path);
+            return -1;
+        }
+        done += (Sz)n;
+    }
+    if (close(fd) != 0) {
+        unlink(path);
+        return -1;
+    }
+    return 0;
+}
+
+/* Who besides the current user could change what a directory holds (for std/fs.kspls's
+ * dir_trust): 0 = no one, 1 = not a directory or unreadable, 2 = another user owns it, 3 = its
+ * group or everyone may write it, 4 = not checked here (the Windows side).
+ * It follows a link, so a cache folder linked onto another disk is judged by what it reaches. */
+KSPL_LINK I32 kspl_dir_trust(const U8 *path_ptr, Sz path_len) {
+    char path[4096];
+    struct stat st;
+    if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return 1;
+    if (stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) return 1;
+    if (st.st_uid != geteuid()) return 2;
+    if ((st.st_mode & (S_IWGRP | S_IWOTH)) != 0) return 3;
+    return 0;
+}
+
 /* It peeks and turns a directory over to rmdir(), as the Windows side must (see the heading).
  * Caution: **Use lstat, not stat.** stat answers "a directory" for a link to one, rmdir fails with
  * ENOTDIR, and **the link can never be taken off**. */
-I32 kspl_remove_path(const U8 *path_ptr, Sz path_len) {
+KSPL_LINK I32 kspl_remove_path(const U8 *path_ptr, Sz path_len) {
     char path[4096];
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return -1;
     struct stat st;
@@ -120,28 +178,44 @@ I32 kspl_remove_path(const U8 *path_ptr, Sz path_len) {
 /* Renames. On POSIX it is rename() as it is.
    Caution: **The wide API is needed here** — Windows breaks a non-ASCII path outside the wide API,
  * so libc called from the KSPL side breaks there alone (hosted.c's kspl_win_to_wide heading). */
-I32 kspl_rename_cstr(const U8 *old_cstr, const U8 *new_cstr) {
+KSPL_LINK I32 kspl_rename_cstr(const U8 *old_cstr, const U8 *new_cstr) {
     return rename((const char *)old_cstr, (const char *)new_cstr);
 }
 
-/* Opens a path.
-   Caution: **Do not call `fopen` directly from the KSPL side** (the same reason). */
-void *kspl_fopen_cstr(const U8 *path_cstr, const U8 *mode_cstr) {
-    return (void *)fopen((const char *)path_cstr, (const char *)mode_cstr);
+/* Opens a path, close-on-exec (hosted.c's "Nothing the runtime opens passes to a child
+ * unasked"): open() with O_CLOEXEC, then fdopen() on the mode's shape alone.
+ * Caution: **Do not add `e` to fopen's mode instead**: macOS's fopen drops the letter in silence.
+ * **Nor call `fopen` directly from the KSPL side** (the same reason as kspl_rename_cstr). */
+KSPL_LINK void *kspl_fopen_cstr(const U8 *path_cstr, const U8 *mode_cstr) {
+    const char *mode = (const char *)mode_cstr;
+    char shape[3] = {0, 0, 0};
+    if (!kspl_fopen_mode_ok(mode)) return NULL;
+    int plus = strchr(mode, '+') != NULL;
+    int flags = plus ? O_RDWR : (mode[0] == 'r' ? O_RDONLY : O_WRONLY);
+    if (mode[0] == 'w') flags |= O_CREAT | O_TRUNC;
+    if (mode[0] == 'a') flags |= O_CREAT | O_APPEND;
+    if (strchr(mode, 'x') != NULL) flags |= O_EXCL;
+    int fd = open((const char *)path_cstr, flags | O_CLOEXEC, 0666);
+    if (fd < 0) return NULL;
+    shape[0] = mode[0];
+    shape[1] = plus ? '+' : '\0';
+    FILE *f = fdopen(fd, shape);
+    if (f == NULL) close(fd);
+    return (void *)f;
 }
 
 /* A lock on a file, the handle an fd plus one (0 = failure), for std/fs.kspls's File_lock.
    **flock, not fcntl's lock**: fcntl's goes the moment the process closes any fd on the file, and
  * a second fd in the same process never waits on it. O_CLOEXEC keeps a child from holding it on. */
-I64 kspl_lock_open(const U8 *path_ptr, Sz path_len) {
+KSPL_LINK I64 kspl_lock_open(const U8 *path_ptr, Sz path_len) {
     char path[4096];
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return 0;
-    int fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+    int fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
     return fd < 0 ? 0 : (I64)fd + 1;
 }
 
 /* Takes the lock: 0 = held, 1 = another holds it (only where `wait` is 0), -1 = refused. */
-I32 kspl_lock_take(I64 handle, I32 wait) {
+KSPL_LINK I32 kspl_lock_take(I64 handle, I32 wait) {
     for (;;) {
         if (flock((int)(handle - 1), LOCK_EX | (wait ? 0 : LOCK_NB)) == 0) return 0;
         if (errno == EINTR) continue;
@@ -150,7 +224,7 @@ I32 kspl_lock_take(I64 handle, I32 wait) {
 }
 
 /* Lets the lock go with the file. */
-void kspl_lock_close(I64 handle) {
+KSPL_LINK void kspl_lock_close(I64 handle) {
     close((int)(handle - 1));
 }
 #else
@@ -224,7 +298,7 @@ static int kspl_path_to_wide(const U8 *path_ptr, Sz path_len, wchar_t *out, Sz o
 
 typedef struct { HANDLE h; WIN32_FIND_DATAW fd; int first; } kspl_dir_t;
 
-I64 kspl_dir_open(const U8 *path_ptr, Sz path_len) {
+KSPL_LINK I64 kspl_dir_open(const U8 *path_ptr, Sz path_len) {
     wchar_t path[KSPL_WPATH_CAP];
     kspl_dir_t *d;
     Sz n;
@@ -249,7 +323,7 @@ I64 kspl_dir_open(const U8 *path_ptr, Sz path_len) {
     return (I64)(intptr_t)d;
 }
 
-I32 kspl_dir_read(I64 handle, U8 *buf, Sz cap) {
+KSPL_LINK I32 kspl_dir_read(I64 handle, U8 *buf, Sz cap) {
     kspl_dir_t *d;
     if (handle == 0) return 0;
     d = (kspl_dir_t *)(intptr_t)handle;
@@ -273,7 +347,7 @@ I32 kspl_dir_read(I64 handle, U8 *buf, Sz cap) {
     }
 }
 
-void kspl_dir_close(I64 handle) {
+KSPL_LINK void kspl_dir_close(I64 handle) {
     kspl_dir_t *d;
     if (handle == 0) return;
     d = (kspl_dir_t *)(intptr_t)handle;
@@ -281,7 +355,7 @@ void kspl_dir_close(I64 handle) {
     free(d);
 }
 
-Bool kspl_stat(const U8 *path_ptr, Sz path_len, I64 *size_out, I32 *is_dir_out, I64 *mtime_out) {
+KSPL_LINK Bool kspl_stat(const U8 *path_ptr, Sz path_len, I64 *size_out, I32 *is_dir_out, I64 *mtime_out) {
     wchar_t path[KSPL_WPATH_CAP];
     struct _stat64 st;
     if (!kspl_path_to_wide(path_ptr, path_len, path, KSPL_WPATH_CAP)) return false;
@@ -293,7 +367,7 @@ Bool kspl_stat(const U8 *path_ptr, Sz path_len, I64 *size_out, I32 *is_dir_out, 
 }
 
 /* Windows has no execute bit (the extension settles it); the caller judges. */
-Bool kspl_is_exec(const U8 *path_ptr, Sz path_len) {
+KSPL_LINK Bool kspl_is_exec(const U8 *path_ptr, Sz path_len) {
     (void)path_ptr;
     (void)path_len;
     return false;
@@ -306,12 +380,12 @@ Bool kspl_is_exec(const U8 *path_ptr, Sz path_len) {
  * FindFirstFileW's dwReserved0 holds without opening.
  *
  * Caution: **Do not change it to the shape resolving with `GetFinalPathNameByHandleW`.** That needs
- * an opened handle, which means opening it first in order to refuse it ("Keeping things under the
- * root is \"refuse\"" in std/docs/DESIGN.md). */
+ * an opened handle, which means opening it first in order to refuse it ("A path is kept under the
+ * root by refusing, not by resolving and comparing" in std/docs/DESIGN.md). */
 #ifndef IO_REPARSE_TAG_NAME_SURROGATE_BIT
 #define IO_REPARSE_TAG_NAME_SURROGATE_BIT 0x20000000UL
 #endif
-I32 kspl_is_link(const U8 *path_ptr, Sz path_len) {
+KSPL_LINK I32 kspl_is_link(const U8 *path_ptr, Sz path_len) {
     wchar_t path[KSPL_WPATH_CAP];
     DWORD attr;
     WIN32_FIND_DATAW fd;
@@ -329,10 +403,66 @@ I32 kspl_is_link(const U8 *path_ptr, Sz path_len) {
     return (fd.dwReserved0 & IO_REPARSE_TAG_NAME_SURROGATE_BIT) ? 1 : 0;
 }
 
-I32 kspl_mkdir(const U8 *path_ptr, Sz path_len) {
+KSPL_LINK I32 kspl_mkdir(const U8 *path_ptr, Sz path_len) {
     wchar_t path[KSPL_WPATH_CAP];
     if (!kspl_path_to_wide(path_ptr, path_len, path, KSPL_WPATH_CAP)) return -1;
     return _wmkdir(path);
+}
+
+/* The POSIX side's meanings. **CREATE_NEW decides that it is new.** Who may read it is the ACL it
+ * takes from its folder, which this does not set (the reason is at write_unique in
+ * std/fs.kspls). No security attributes, so the handle is not inheritable (hosted.c's "Nothing the
+ * runtime opens passes to a child unasked"), as O_CLOEXEC on the POSIX side. */
+KSPL_LINK I32 kspl_create_owned(const U8 *path_ptr, Sz path_len, const U8 *data, Sz len) {
+    wchar_t path[KSPL_WPATH_CAP];
+    HANDLE h;
+    Sz done = 0;
+    if (!kspl_path_to_wide(path_ptr, path_len, path, KSPL_WPATH_CAP)) return -1;
+    h = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return GetLastError() == ERROR_FILE_EXISTS ? 1 : -1;
+    while (done < len) {
+        DWORD step = (len - done) > 0x40000000 ? 0x40000000 : (DWORD)(len - done);
+        DWORD n = 0;
+        if (!WriteFile(h, data + done, step, &n, NULL) || n == 0) {
+            CloseHandle(h);
+            DeleteFileW(path);
+            return -1;
+        }
+        done += (Sz)n;
+    }
+    if (!CloseHandle(h)) {
+        DeleteFileW(path);
+        return -1;
+    }
+    return 0;
+}
+
+/* The POSIX side's meanings. A directory is 4, "not checked": who may write it is an ACL, which
+ * this does not read. */
+KSPL_LINK I32 kspl_dir_trust(const U8 *path_ptr, Sz path_len) {
+    wchar_t path[KSPL_WPATH_CAP];
+    DWORD attr;
+    if (!kspl_path_to_wide(path_ptr, path_len, path, KSPL_WPATH_CAP)) return 1;
+    attr = GetFileAttributesW(path);
+    if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY) == 0) return 1;
+    return 4;
+}
+
+/* Clears the read-only mark where one is set, so a removal or a replacement goes through as on
+ * POSIX (the heading); returns the attributes it found, INVALID_FILE_ATTRIBUTES where none. */
+static DWORD kspl_win_writable(const wchar_t *path) {
+    DWORD attr = GetFileAttributesW(path);
+    if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_READONLY) != 0) {
+        SetFileAttributesW(path, attr & ~(DWORD)FILE_ATTRIBUTE_READONLY);
+    }
+    return attr;
+}
+
+/* Puts back what kspl_win_writable cleared, where the operation then failed. */
+static void kspl_win_restore_attr(const wchar_t *path, DWORD attr) {
+    if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_READONLY) != 0) {
+        SetFileAttributesW(path, attr);
+    }
 }
 
 /* Windows's UCRT remove() is file-only, so a directory goes to _wrmdir().
@@ -340,15 +470,19 @@ I32 kspl_mkdir(const U8 *path_ptr, Sz path_len) {
  * link**, and a link to a directory would go to _wremove and never come off. The link's own
  * attributes carry FILE_ATTRIBUTE_DIRECTORY for a directory link, which RemoveDirectoryW removes
  * (as lstat on the POSIX side). */
-I32 kspl_remove_path(const U8 *path_ptr, Sz path_len) {
+KSPL_LINK I32 kspl_remove_path(const U8 *path_ptr, Sz path_len) {
     wchar_t path[KSPL_WPATH_CAP];
     DWORD attr;
+    int r;
     if (!kspl_path_to_wide(path_ptr, path_len, path, KSPL_WPATH_CAP)) return -1;
-    attr = GetFileAttributesW(path);
+    attr = kspl_win_writable(path);
     if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) {
-        return _wrmdir(path);
+        r = _wrmdir(path);
+    } else {
+        r = _wremove(path);
     }
-    return _wremove(path);
+    if (r != 0) kspl_win_restore_attr(path, attr);
+    return r;
 }
 
 /* Renames.
@@ -357,7 +491,7 @@ I32 kspl_remove_path(const U8 *path_ptr, Sz path_len) {
  * code page. It takes NUL-terminated paths and returns 0 for success, as on POSIX (MoveFileExW's
  * success is non-zero). */
 
-I32 kspl_rename_cstr(const U8 *old_cstr, const U8 *new_cstr) {
+KSPL_LINK I32 kspl_rename_cstr(const U8 *old_cstr, const U8 *new_cstr) {
     wchar_t oldp[KSPL_WPATH_CAP];
     wchar_t newp[KSPL_WPATH_CAP];
     if (!kspl_path_to_wide(old_cstr, (Sz)strlen((const char *)old_cstr), oldp, KSPL_WPATH_CAP)) {
@@ -366,25 +500,34 @@ I32 kspl_rename_cstr(const U8 *old_cstr, const U8 *new_cstr) {
     if (!kspl_path_to_wide(new_cstr, (Sz)strlen((const char *)new_cstr), newp, KSPL_WPATH_CAP)) {
         return -1;
     }
-    return MoveFileExW(oldp, newp, MOVEFILE_REPLACE_EXISTING) ? 0 : -1;
+    DWORD attr = kspl_win_writable(newp);
+    if (MoveFileExW(oldp, newp, MOVEFILE_REPLACE_EXISTING)) return 0;
+    kspl_win_restore_attr(newp, attr);
+    return -1;
 }
 
-/* Opens a path.
-   Caution: **Do not call `fopen` directly from the KSPL side** (the same reason). */
-void *kspl_fopen_cstr(const U8 *path_cstr, const U8 *mode_cstr) {
+/* Opens a path. `N` makes the handle not inheritable (hosted.c's "Nothing the runtime opens
+ * passes to a child unasked"); the CRT's default hands it to every child.
+ * Caution: **Do not call `fopen` directly from the KSPL side** (the same reason). */
+KSPL_LINK void *kspl_fopen_cstr(const U8 *path_cstr, const U8 *mode_cstr) {
     wchar_t path[KSPL_WPATH_CAP];
     wchar_t mode[16];
+    size_t n;
+    if (!kspl_fopen_mode_ok((const char *)mode_cstr)) return NULL;
     if (!kspl_path_to_wide(path_cstr, (Sz)strlen((const char *)path_cstr), path, KSPL_WPATH_CAP)) {
         return NULL;
     }
-    if (!kspl_win_cstr_to_wide((const char *)mode_cstr, mode, 16)) return NULL;
+    if (!kspl_win_cstr_to_wide((const char *)mode_cstr, mode, 15)) return NULL;
+    n = wcslen(mode);
+    mode[n] = L'N';
+    mode[n + 1] = L'\0';
     return (void *)_wfopen(path, mode);
 }
 
 /* A lock on a file, the handle a HANDLE (0 = failure), for std/fs.kspls's File_lock.
    Every sharing flag is given, so the file itself is never what blocks: only the lock does. The
  * handle is not inheritable, so a child does not hold it on. */
-I64 kspl_lock_open(const U8 *path_ptr, Sz path_len) {
+KSPL_LINK I64 kspl_lock_open(const U8 *path_ptr, Sz path_len) {
     wchar_t path[KSPL_WPATH_CAP];
     if (!kspl_path_to_wide(path_ptr, path_len, path, KSPL_WPATH_CAP)) return 0;
     HANDLE h = CreateFileW(path, GENERIC_READ | GENERIC_WRITE,
@@ -395,7 +538,7 @@ I64 kspl_lock_open(const U8 *path_ptr, Sz path_len) {
 
 /* Takes the lock on the first byte: 0 = held, 1 = another holds it (only where `wait` is 0),
  * -1 = refused. A byte past the end can be locked, so the file stays empty. */
-I32 kspl_lock_take(I64 handle, I32 wait) {
+KSPL_LINK I32 kspl_lock_take(I64 handle, I32 wait) {
     OVERLAPPED ov;
     memset(&ov, 0, sizeof(ov));
     DWORD flags = LOCKFILE_EXCLUSIVE_LOCK | (wait ? 0 : LOCKFILE_FAIL_IMMEDIATELY);
@@ -404,7 +547,7 @@ I32 kspl_lock_take(I64 handle, I32 wait) {
 }
 
 /* Lets the lock go with the file. */
-void kspl_lock_close(I64 handle) {
+KSPL_LINK void kspl_lock_close(I64 handle) {
     CloseHandle((HANDLE)(intptr_t)handle);
 }
 #endif

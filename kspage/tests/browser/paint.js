@@ -4,7 +4,7 @@
 // (`kspage/write/theme.kspls`), so those needles follow those sides.
 
 function kspageProbePaint(ks) {
-  const { check, app, canvas, ime, spot, pressAt, undoKey, openMenu, findBlock, dpr } = ks;
+  const { check, app, canvas, ime, spot, undoKey, openMenu, findBlock, dpr } = ks;
 
   const h1At = app.styleNames().indexOf("heading");
   // Caution: **Hunt for where the band is** (the start-up rows are the product's sample, so a place
@@ -68,72 +68,6 @@ function kspageProbePaint(ks) {
   const withLine = blueOf();
   check(withLine > plainInk,
     "the pixels grow by the underline's worth (" + plainInk + " -> " + withLine + ")");
-
-  // 21'. The split view (another place in the same document at the same time), drawn to another
-  // canvas the core does not know; **a window that only reads** (the cursor is one).
-  // Caution: **Look at it by pixels** — opened and shut by the DOM's mark alone passes with the
-  // content undrawn.
-  const peekBand = document.getElementById("peek");
-  const peekFace = document.getElementById("peek-page");
-  const peekInk = () => {
-    const g = peekFace.getContext("2d");
-    if (peekFace.width <= 0 || peekFace.height <= 0) return 0;
-    const p = g.getImageData(0, 0, peekFace.width, peekFace.height).data;
-    let n = 0;
-    // Caution: **Count the pixels that differ from the under-ground** (the page's colour is bright,
-    // so the dark side is counted).
-    for (let i = 0; i < p.length; i += 4) {
-      if (p[i + 3] > 0 && p[i] < 140 && p[i + 1] < 140) n += 1;
-    }
-    return n;
-  };
-  check(peekBand.hidden, "the split view is folded at first");
-  // **Do not line it up flat on the menu's first row** (`fly.js`'s opening header); a set that ends
-  // in one press is a submenu. The count alone (`menu.js`'s cap of 4) passes while within the cap.
-  const peekKey = document.getElementById("peek-flip");
-  check(peekKey.closest(".fly-items") !== null,
-    "the split view's command sits inside a submenu");
-  // **Which it is now must be readable.** A row saying only "split view" leaves unread whether a
-  // press puts it out or folds it (a row inside a submenu takes no mark either).
-  const shutWord = peekKey.textContent;
-  peekKey.click();
-  check(peekKey.textContent !== shutWord,
-    `the put-out and fold texts swap (${shutWord} -> ${peekKey.textContent})`);
-  check(!peekBand.hidden, "a press opens it");
-  check(peekFace.width > 0 && peekFace.height > 0,
-    `the split view's canvas gets a size (${peekFace.width}×${peekFace.height})`);
-  const peeked = peekInk();
-  check(peeked > 0, `the document is drawn in the split view (${peeked} pixels)`);
-  // Caution: **Type in the body and the split view must be drawn afresh**, or it looks out of step
-  // though it mirrors the same document. "It is still drawn" passes on the earlier image, so **the
-  // pixel count changing** is looked at.
-  // **Type inside the band that is pinned** (the document's head, so it presses the head paragraph
-  // first). **Put what was typed back** — later sections rely on the text length; one character
-  // comes back in one.
-  pressAt(headY);
-  const wasInk = peekInk();
-  ime.dispatchEvent(new InputEvent("input",
-    { data: "P", inputType: "insertText", bubbles: true }));
-  const nowInk = peekInk();
-  check(nowInk !== wasInk,
-    `the split view's pixels move by what was typed (${wasInk} -> ${nowInk})`);
-  undoKey();
-  check(peekInk() === wasInk, `undoing puts the split view back too (${peekInk()})`);
-  // **A way of pinning it afresh must be there** (else another place means shutting and opening).
-  const wasAt = document.getElementById("peek-at").textContent;
-  window.scrollBy(0, 200);
-  document.getElementById("peek-pin").click();
-  check(document.getElementById("peek-at").textContent !== wasAt,
-    `pinning afresh changes what it mirrors `
-      + `(${wasAt} -> ${document.getElementById("peek-at").textContent})`);
-  window.scrollBy(0, -200);
-  // **A turn must not send the body's side** (the split view alone moves).
-  const wasScroll = window.scrollY;
-  peekFace.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true }));
-  check(window.scrollY === wasScroll, "a turn over the split view does not send the body");
-  peekKey.click();
-  check(peekBand.hidden, "pressing again folds it");
-  check(peekKey.textContent === shutWord, `folding puts the text back too (${peekKey.textContent})`);
 
   // 22. The buttons that join cells.
   //

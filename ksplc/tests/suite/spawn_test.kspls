@@ -1,7 +1,8 @@
 #!/usr/bin/env -S ksplc run
 //< The way to redirect a child's standard output and standard error to named files
 //<
-//< `spawn_redirect` in `std/subproc`.
+//< `spawn_redirect` in `std/subproc`, and a long argument and environment value reaching a child
+//< whole.
 //< Caution: **Do not check only "it does not fail"** — the check is that **both streams remain**.
 //< | Environment | How it breaks when the same path is passed twice |
 //< | :-- | :-- |
@@ -13,13 +14,15 @@ import "std/chars"
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
+import "std/str" { Str_builder }
 import "std/subproc"
+import "std/sys"
 import "std/verdict"
 
 // The child that writes to both streams and ends.
 // Caution: **Fix the order it writes them in** (the check is that both remain).
 priv const child_src: U8[] =
-  """import "std/io";
+    """import "std/io";
 
 fn main() {
   io.out().s("this is standard output\n");
@@ -27,67 +30,114 @@ fn main() {
 }
 """
 
-priv fn build_child(work: U8[], arena: Arena$@): U8[] //< it builds the child
-  //<
-  //< Empty if it cannot be built.
-  src: = fs.join(work, "twostreams.kspl", arena)
-  gen: = fs.join(work, "twostreams.c", arena)
-  exe: = fs.join(work, "twostreams.exe", arena)
-  io.write_file(src, child_src) catch
-    verdict.check("the child's source can be written", false, src)
-    return ""
-  c: = harness.run(harness.ksplc_argv(U8[][]::{ src, gen }))
-  if c.code != 0
-    verdict.check("the child translates to C", false, c.out)
-    return ""
-  b: = harness_build.build_exe(U8[][]::{ gen }, exe, U8[][]::harness_build.default_cflags)
-  if b.code != 0
-    verdict.check("the child builds", false, b.out)
-    return ""
-  return exe
+priv const kana_count: Sz = 2800 //< the long argument's length in `か`, one UTF-16 unit each
+priv const long_value_len: Sz = 5000 //< the long environment value's length, past 4096 units
+
+// The child that says whether its argument and an environment value arrived whole: 2800 `か` are
+// 8400 bytes, which a cut or a code page's `?` would change.
+priv const long_child_src: U8[] =
+    """import "std/io";
+import "std/sys";
+
+fn main() {
+  a: = sys.args();
+  arg_ok: = a.len == 2 && a.get(1).len == 8400;
+  $env_ok: = false;
+  if v: = sys.get_env("KSPL_SPAWN_LONG") {
+    env_ok = v.len == 5000;
+  }
+  io.out().s("arg ok\n" if arg_ok else "arg cut\n").s("env ok\n" if env_ok else "env cut\n");
+}
+"""
+
+priv fn build_child(work: U8[], name: U8[], source: U8[], arena: Arena$@): U8[] //<
+    //< it builds a child from source as name
+    //<
+    //< Empty if it cannot be built.
+    src: = fs.join(work, arena.text().s("\{name\}.kspl").take(), arena)
+    gen: = fs.join(work, arena.text().s("\{name\}.c").take(), arena)
+    exe: = fs.join(work, arena.text().s("\{name\}.exe").take(), arena)
+    io.write_file(src, source) catch
+        verdict.check("the child's source can be written", false, src)
+        return ""
+    c: = harness.run(harness.ksplc_argv(U8[][]::{ src, gen }))
+    if c.code != 0
+        verdict.check("the child translates to C", false, c.out)
+        return ""
+    b: = harness_build.build_exe(U8[][]::{ gen }, exe, U8[][]::harness_build.default_cflags)
+    if b.code != 0
+        verdict.check("the child builds", false, b.out)
+        return ""
+    return exe
 
 priv fn ran(exe: U8[], out_path: U8[], err_path: U8[]): U8[] //<
-  //< It starts exe, waits until it ends, and returns what out_path holds
-  //<
-  //< It returns empty where exe cannot be started or the file cannot be read.
-  argv: = U8[][]::{ exe }
-  $child: = subproc.spawn_redirect(argv, "", out_path, err_path) catch
-    return ""
-  child.wait()
-  return io.read_file(out_path) catch
-    return ""
+    //< It starts exe, waits until it ends, and returns what out_path holds
+    //<
+    //< It returns empty where exe cannot be started or the file cannot be read.
+    argv: = U8[][]::{ exe }
+    $child: = subproc.spawn_redirect(argv, "", out_path, err_path) catch
+        return ""
+    child.wait()
+    return io.read_file(out_path) catch
+        return ""
 
 fn main(): I32
-  arena: = harness.begin(64 * 1024 * 1024)
-  work: = fs.join(harness.tmp_dir(), "spawn", arena)
-  fs.mkdir_all(work) catch
-    verdict.check("the place can be made", false, work)
-    return harness.finish()
-  exe: = build_child(work, arena)
-  if exe.len == 0
+    arena: = harness.begin(64 * 1024 * 1024)
+    work: = fs.join(harness.tmp_dir(), "spawn", arena)
+    fs.mkdir_all(work) catch
+        verdict.check("the place can be made", false, work)
+        return harness.finish()
+    exe: = build_child(work, "twostreams", child_src, arena)
+    if exe.len == 0
+        return harness.finish()
+
+    // 1. The same path is passed twice (as `make kspage` does).
+    one: = fs.join(work, "one.log", arena)
+    said: = ran(exe, one, one)
+    // Caution: **Do not check only that it started.** Windows fails here while POSIX loses one
+    // stream; **only the content catches both with the same check**.
+    verdict.check("it starts even with both outputs pointed at the same record", said.len > 0, one)
+    verdict.check("standard output remains in the same record",
+        said.find_str("this is standard output") >= 0, said)
+    verdict.check("standard error remains in the same record too",
+        said.find_str("this is standard error") >= 0, said)
+
+    // 2. Different paths go to their own targets (**merged into one, this fails**).
+    two_out: = fs.join(work, "two_out.log", arena)
+    two_err: = fs.join(work, "two_err.log", arena)
+    split_out: = ran(exe, two_out, two_err)
+    split_err: = io.read_file(two_err) catch
+        return harness.finish()
+    verdict.check("pointed at separate records, only standard output enters one",
+        split_out.find_str("this is standard output") >= 0 &&
+        split_out.find_str("this is standard error") < 0, split_out)
+    verdict.check("pointed at separate records, only standard error enters the other",
+        split_err.find_str("this is standard error") >= 0 &&
+        split_err.find_str("this is standard output") < 0, split_err)
+    check_long(work, arena)
     return harness.finish()
 
-  // 1. The same path is passed twice (as `make kspage` does).
-  one: = fs.join(work, "one.log", arena)
-  said: = ran(exe, one, one)
-  // Caution: **Do not check only that it started.** Windows fails here while POSIX loses one
-  // stream; **only the content catches both with the same check**.
-  verdict.check("it starts even with both outputs pointed at the same record", said.len > 0, one)
-  verdict.check("standard output remains in the same record",
-    said.find_str("this is standard output") >= 0, said)
-  verdict.check("standard error remains in the same record too",
-    said.find_str("this is standard error") >= 0, said)
-
-  // 2. Different paths go to their own targets (**merged into one, this fails**).
-  two_out: = fs.join(work, "two_out.log", arena)
-  two_err: = fs.join(work, "two_err.log", arena)
-  split_out: = ran(exe, two_out, two_err)
-  split_err: = io.read_file(two_err) catch
-    return harness.finish()
-  verdict.check("pointed at separate records, only standard output enters one",
-    split_out.find_str("this is standard output") >= 0 &&
-    split_out.find_str("this is standard error") < 0, split_out)
-  verdict.check("pointed at separate records, only standard error enters the other",
-    split_err.find_str("this is standard error") >= 0 &&
-    split_err.find_str("this is standard output") < 0, split_err)
-  return harness.finish()
+priv fn check_long(work: U8[], arena: Arena$@) //<
+    //< 3. A long argument and a long environment value reach the child whole
+    //<
+    //< Windows counts both in UTF-16 units: a command line to 32767, a value past 4096. Counted in
+    //< UTF-8 bytes, the kana (three bytes a unit) would be refused at a third of the limit.
+    exe: = build_child(work, "longargs", long_child_src, arena)
+    if exe.len == 0
+        return
+    $kana: = Str_builder.new()
+    defer kana.free()
+    for _i in Range.asc(kana_count)
+        kana.s("か")
+    $value: = Str_builder.new()
+    defer value.free()
+    for _i in Range.asc(long_value_len)
+        value.c('a')
+    verdict.check("a long environment value can be set",
+        sys.set_env("KSPL_SPAWN_LONG", value.slice()), "")
+    r: = harness.run(U8[][]::{ exe, kana.slice() })
+    sys.unset_env("KSPL_SPAWN_LONG")
+    verdict.check("an argument of 2800 kana starts the child and arrives whole",
+        r.code == 0 && r.out.find_str("arg ok") >= 0, r.out)
+    verdict.check("an environment value of 5000 characters reaches the child whole",
+        r.out.find_str("env ok") >= 0, r.out)

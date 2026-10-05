@@ -13,15 +13,19 @@
  * "the rephrasings per environment" below, so those are drawn together and the body is shared.
  * **Split into two, a fix lands on one side** and the other keeps the old behaviour in silence.
  *
- * Caution: **Only CI confirms the Windows side.** After a fix here, put both windows-ucrt64 and
- * windows-msvc through (Linux builds the POSIX side alone).
+ * Caution: **Only CI confirms the Windows side.** After a fix here, put windows-ucrt64 through
+ * (Linux builds the POSIX side alone).
  * ============================================================ */
 
 /* --- The rephrasings per environment. From here down only one body is written. --- */
+/* What a receive returns for a datagram longer than the buffer, its rest lost. */
+#define KSPL_DGRAM_TOO_LONG (-3)
+
 #ifndef _WIN32
 /* Caution: **Include what is used here.** Leaning on the joining order breaks with "an unknown
  * type" once a file placed before it is taken out (including a header twice is harmless). */
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -66,10 +70,24 @@ static int kspl_net_wouldblock(void) {
     return errno == EWOULDBLOCK || errno == EAGAIN || errno == EINPROGRESS;
 }
 
+/* A write to a peer that has gone is a failed write, never a SIGPIPE, in a library too, where the
+ * program linking it may keep the signal's default (hosted.c's SIGPIPE section): MSG_NOSIGNAL on
+ * each send where the OS has it, SO_NOSIGPIPE on the socket where it does not (macOS). */
+#if defined(MSG_NOSIGNAL)
+#define KSPL_SEND_FLAGS MSG_NOSIGNAL
+static void kspl_net_no_sigpipe(int fd) { (void)fd; }
+#else
+#define KSPL_SEND_FLAGS 0
+static void kspl_net_no_sigpipe(int fd) {
+    int yes = 1;
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (const char *)&yes, sizeof(yes));
+}
+#endif
+
 /* The four that carry data take types differing per environment (POSIX a void pointer and a
  * size_t, Windows a char pointer and an int); absorbed here so the caller writes no cast. */
 static I32 kspl_net_send(kspl_fd_t fd, const U8 *buf, Sz len) {
-    return (I32)send(fd, buf, (size_t)len, 0);
+    return (I32)send(fd, buf, (size_t)len, KSPL_SEND_FLAGS);
 }
 
 static I32 kspl_net_recv(kspl_fd_t fd, U8 *buf, Sz cap) {
@@ -78,12 +96,56 @@ static I32 kspl_net_recv(kspl_fd_t fd, U8 *buf, Sz cap) {
 
 static I32 kspl_net_sendto(kspl_fd_t fd, const U8 *buf, Sz len, struct sockaddr *addr,
     kspl_socklen_t addr_len) {
-    return (I32)sendto(fd, buf, (size_t)len, 0, addr, addr_len);
+    return (I32)sendto(fd, buf, (size_t)len, KSPL_SEND_FLAGS, addr, addr_len);
 }
 
+/* Receives one datagram; KSPL_DGRAM_TOO_LONG where it was longer than cap.
+ * Caution: **Ask recvmsg, not recvfrom.** recvfrom returns the cut length as a success, while
+ * Windows refuses the same datagram; only MSG_TRUNC tells that the rest was lost. */
 static I32 kspl_net_recvfrom(kspl_fd_t fd, U8 *buf, Sz cap, struct sockaddr_storage *from) {
-    kspl_socklen_t from_len = sizeof(*from);
-    return (I32)recvfrom(fd, buf, (size_t)cap, 0, (struct sockaddr *)from, &from_len);
+    struct iovec iov;
+    struct msghdr msg;
+    ssize_t n;
+    iov.iov_base = buf;
+    iov.iov_len = (size_t)cap;
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_name = from;
+    msg.msg_namelen = sizeof(*from);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    n = recvmsg(fd, &msg, 0);
+    if (n >= 0 && (msg.msg_flags & MSG_TRUNC) != 0) return KSPL_DGRAM_TOO_LONG;
+    return (I32)n;
+}
+
+/* Opens a socket, and accepts a connection, that no child inherits (hosted.c's "Nothing the
+ * runtime opens passes to a child unasked").
+ * Caution: **An accepted socket is put to blocking on every OS.** Linux gives it blocking, but
+ * Windows, macOS and the BSDs copy the listener's non-blocking mode, so a read would return
+ * would_block on those alone. */
+static kspl_fd_t kspl_net_socket(int family, int type) {
+#if KSPL_CLOEXEC_IN_CALL
+    int fd = socket(family, type | SOCK_CLOEXEC, 0);
+#else
+    int fd = socket(family, type, 0);
+    if (fd >= 0) kspl_fd_cloexec(fd);
+#endif
+    if (fd >= 0) kspl_net_no_sigpipe(fd);
+    return fd;
+}
+
+static kspl_fd_t kspl_net_accept(kspl_fd_t listener) {
+#if KSPL_CLOEXEC_IN_CALL
+    int fd = accept4(listener, NULL, NULL, SOCK_CLOEXEC);
+#else
+    int fd = accept(listener, NULL, NULL);
+    if (fd >= 0) kspl_fd_cloexec(fd);
+#endif
+    if (fd >= 0) {
+        kspl_net_no_sigpipe(fd);
+        kspl_net_set_blk(fd);
+    }
+    return fd;
 }
 
 /* How a listening socket is opened. POSIX's `SO_REUSEADDR` only lets it attach past the
@@ -136,6 +198,22 @@ static int kspl_net_wouldblock(void) {
     return e == WSAEWOULDBLOCK || e == WSAEINPROGRESS;
 }
 
+/* The POSIX functions' roles. `socket()` makes an inheritable handle, so the flag is asked of
+ * WSASocketW; accept has no flag, and its socket is marked right after, and put back to blocking
+ * (the POSIX side's heading says why). */
+static kspl_fd_t kspl_net_socket(int family, int type) {
+    return WSASocketW(family, type, 0, NULL, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
+}
+
+static kspl_fd_t kspl_net_accept(kspl_fd_t listener) {
+    SOCKET fd = accept(listener, NULL, NULL);
+    if (fd != INVALID_SOCKET) {
+        SetHandleInformation((HANDLE)fd, HANDLE_FLAG_INHERIT, 0);
+        kspl_net_set_blk(fd);
+    }
+    return fd;
+}
+
 static I32 kspl_net_send(kspl_fd_t fd, const U8 *buf, Sz len) {
     return (I32)send(fd, (const char *)buf, (int)len, 0);
 }
@@ -163,7 +241,9 @@ static I32 kspl_net_sendto(kspl_fd_t fd, const U8 *buf, Sz len, struct sockaddr 
 
 static I32 kspl_net_recvfrom(kspl_fd_t fd, U8 *buf, Sz cap, struct sockaddr_storage *from) {
     kspl_socklen_t from_len = sizeof(*from);
-    return (I32)recvfrom(fd, (char *)buf, (int)cap, 0, (struct sockaddr *)from, &from_len);
+    int n = recvfrom(fd, (char *)buf, (int)cap, 0, (struct sockaddr *)from, &from_len);
+    if (n == SOCKET_ERROR && WSAGetLastError() == WSAEMSGSIZE) return KSPL_DGRAM_TOO_LONG;
+    return (I32)n;
 }
 #endif
 
@@ -181,6 +261,8 @@ typedef struct {
     kspl_socklen_t sa_len;
 } kspl_cand_t;
 
+/* Caution: **The port must already be inside 0..65535** (kspl_resolve refuses any other). The
+ * cast below would wrap it, binding or reaching another port in silence. */
 static void kspl_set_port(struct sockaddr_storage *sa, I32 port) {
     if (sa->ss_family == AF_INET6) {
         ((struct sockaddr_in6 *)sa)->sin6_port = htons((uint16_t)port);
@@ -213,6 +295,8 @@ static int kspl_resolve(const U8 *host_ptr, Sz host_len, I32 port, int socktype,
     int lead = 0;
     int i;
     if (!kspl_net_start()) return 0;
+    /* std/net names an out-of-range port first (Net_error.bad_port); this is a backstop. */
+    if (port < 0 || port > 65535) return 0;
     /* An empty string on the waiting side is IPv4's every interface (a string, since with the name
      * and service both NULL `getaddrinfo` returns EAI_NONAME).
      * Caution: **An empty string on the connecting side is refused here.** Linux answers "no such
@@ -261,7 +345,7 @@ static int kspl_resolve(const U8 *host_ptr, Sz host_len, I32 port, int socktype,
 static kspl_fd_t kspl_socket_for(kspl_cand_t *c, int type) {
     kspl_fd_t fd;
     if (!kspl_net_start()) return KSPL_BAD_FD;
-    fd = socket((int)c->sa.ss_family, type, 0);
+    fd = kspl_net_socket((int)c->sa.ss_family, type);
     if (kspl_fd_bad(fd)) return KSPL_BAD_FD;
     if (c->sa.ss_family == AF_INET6) {
         int only = 1;
@@ -334,7 +418,7 @@ static int kspl_fd_refused(kspl_fd_t fd) {
 /* The return value: a handle, 0 = it cannot wait, -1 = the name does not solve to an address.
  * **The waiting side grasps one candidate only**, the one the resolver placed first; to choose a
  * family, write an address. */
-I64 kspl_tcp_listen(const U8 *host_ptr, Sz host_len, I32 port, I32 backlog) {
+KSPL_LINK I64 kspl_tcp_listen(const U8 *host_ptr, Sz host_len, I32 port, I32 backlog) {
     kspl_cand_t cands[KSPL_ADDR_MAX];
     kspl_fd_t fd;
     if (kspl_resolve(host_ptr, host_len, port, SOCK_STREAM, AI_PASSIVE, cands) == 0) return -1;
@@ -349,9 +433,9 @@ I64 kspl_tcp_listen(const U8 *host_ptr, Sz host_len, I32 port, I32 backlog) {
     return kspl_socket_wrap(fd);
 }
 
-I64 kspl_tcp_accept(I64 handle) {
+KSPL_LINK I64 kspl_tcp_accept(I64 handle) {
     if (handle == 0) return 0;
-    kspl_fd_t fd = accept(kspl_socket_of(handle)->fd, NULL, NULL);
+    kspl_fd_t fd = kspl_net_accept(kspl_socket_of(handle)->fd);
     if (kspl_fd_bad(fd)) return 0;
     return kspl_socket_wrap(fd);
 }
@@ -359,7 +443,7 @@ I64 kspl_tcp_accept(I64 handle) {
 /* The connection partner's address. The output shape is the same as kspl_udp_recv_from's
  * from_host_out (the address as text + the port in host order). 0 on success, negative on
  * failure. */
-I32 kspl_tcp_peer(I64 handle, U8 *host_out, Sz host_cap, Sz *host_len_out, I32 *port_out) {
+KSPL_LINK I32 kspl_tcp_peer(I64 handle, U8 *host_out, Sz host_cap, Sz *host_len_out, I32 *port_out) {
     struct sockaddr_storage peer;
     kspl_socklen_t peer_len = sizeof(peer);
     if (handle == 0) return -1;
@@ -378,7 +462,7 @@ I32 kspl_tcp_peer(I64 handle, U8 *host_out, Sz host_cap, Sz *host_len_out, I32 *
  * texts[i * stride ..] and lens[i]; returns the count, -1 where the name does not solve, -2 where
  * the holder is short (fewer than KSPL_ADDR_MAX slots, or a text longer than stride), refused
  * rather than truncated. */
-I32 kspl_net_resolve_all(const U8 *host_ptr, Sz host_len, U8 *texts, Sz stride, Sz *lens,
+KSPL_LINK I32 kspl_net_resolve_all(const U8 *host_ptr, Sz host_len, U8 *texts, Sz stride, Sz *lens,
     Sz cap) {
     kspl_cand_t cands[KSPL_ADDR_MAX];
     char text[KSPL_HOST_TEXT_MAX];
@@ -403,7 +487,7 @@ I32 kspl_net_resolve_all(const U8 *host_ptr, Sz host_len, U8 *texts, Sz stride, 
 
 /* Solves a name into just one address string (the candidate the resolver placed first).
  * 0 = solved, -1 = it does not. */
-I32 kspl_net_resolve(const U8 *host_ptr, Sz host_len, U8 *host_out, Sz host_cap,
+KSPL_LINK I32 kspl_net_resolve(const U8 *host_ptr, Sz host_len, U8 *host_out, Sz host_cap,
     Sz *host_len_out) {
     kspl_cand_t cands[KSPL_ADDR_MAX];
     I32 port = 0;
@@ -411,18 +495,18 @@ I32 kspl_net_resolve(const U8 *host_ptr, Sz host_len, U8 *host_out, Sz host_cap,
     return kspl_write_addr(&cands[0].sa, host_out, host_cap, host_len_out, &port);
 }
 
-I32 kspl_tcp_send(I64 handle, const U8 *buf, Sz len) {
+KSPL_LINK I32 kspl_tcp_send(I64 handle, const U8 *buf, Sz len) {
     if (handle == 0) return -1;
     return kspl_net_send(kspl_socket_of(handle)->fd, buf, len);
 }
 
-I32 kspl_tcp_recv(I64 handle, U8 *buf, Sz cap) {
+KSPL_LINK I32 kspl_tcp_recv(I64 handle, U8 *buf, Sz cap) {
     if (handle == 0) return -1;
     return kspl_net_recv(kspl_socket_of(handle)->fd, buf, cap);
 }
 
 /* Closes a socket of either kind: TCP and UDP share kspl_socket_t. */
-void kspl_tcp_close(I64 handle) {
+KSPL_LINK void kspl_tcp_close(I64 handle) {
     if (handle == 0) return;
     kspl_socket_t *s = kspl_socket_of(handle);
     kspl_net_closefd(s->fd);
@@ -430,7 +514,7 @@ void kspl_tcp_close(I64 handle) {
 }
 
 /* The return value's meaning is the same as kspl_tcp_listen's (waiting, the candidate is one). */
-I64 kspl_udp_open(const U8 *host_ptr, Sz host_len, I32 port) {
+KSPL_LINK I64 kspl_udp_open(const U8 *host_ptr, Sz host_len, I32 port) {
     kspl_cand_t cands[KSPL_ADDR_MAX];
     kspl_fd_t fd;
     if (kspl_resolve(host_ptr, host_len, port, SOCK_DGRAM, AI_PASSIVE, cands) == 0) return -1;
@@ -446,7 +530,7 @@ I64 kspl_udp_open(const U8 *host_ptr, Sz host_len, I32 port) {
 /* Caution: **The destination takes an address string alone** (`AI_NUMERICHOST`); a name would be
  * looked up per datagram at a cost the caller cannot see. Solve it once with `kspl_net_resolve`.
  * The return value: the bytes sent, -1 = it cannot send, -2 = not an address string. */
-I32 kspl_udp_send_to(I64 handle, const U8 *buf, Sz len, const U8 *host_ptr, Sz host_len,
+KSPL_LINK I32 kspl_udp_send_to(I64 handle, const U8 *buf, Sz len, const U8 *host_ptr, Sz host_len,
     I32 port) {
     kspl_cand_t cands[KSPL_ADDR_MAX];
     if (handle == 0) return -1;
@@ -455,13 +539,16 @@ I32 kspl_udp_send_to(I64 handle, const U8 *buf, Sz len, const U8 *host_ptr, Sz h
         (struct sockaddr *)&cands[0].sa, cands[0].sa_len);
 }
 
-I32 kspl_udp_recv_from(I64 handle, U8 *buf, Sz cap, U8 *from_host_out, Sz from_host_cap,
+/* The return value: the bytes received, -1 = it cannot receive, -3 = the datagram was longer than
+ * cap (KSPL_DGRAM_TOO_LONG; it is consumed, the same on every OS). */
+KSPL_LINK I32 kspl_udp_recv_from(I64 handle, U8 *buf, Sz cap, U8 *from_host_out, Sz from_host_cap,
     Sz *from_host_len_out, I32 *from_port_out) {
     struct sockaddr_storage from;
     I32 n;
     if (handle == 0) return -1;
     memset(&from, 0, sizeof(from));
     n = kspl_net_recvfrom(kspl_socket_of(handle)->fd, buf, cap, &from);
+    if (n == KSPL_DGRAM_TOO_LONG) return n;
     if (n < 0) return -1;
     if (kspl_write_addr(&from, from_host_out, from_host_cap, from_host_len_out,
         from_port_out) != 0) {
@@ -476,20 +563,20 @@ I32 kspl_udp_recv_from(I64 handle, U8 *buf, Sz cap, U8 *from_host_out, Sz from_h
  * blocking API of std/net.kspls stays as it is.
  * ============================================================ */
 
-Bool kspl_net_set_nonblocking(I64 handle) {
+KSPL_LINK Bool kspl_net_set_nonblocking(I64 handle) {
     if (handle == 0) return false;
     return kspl_net_set_nb(kspl_socket_of(handle)->fd) ? true : false;
 }
 
 /* Puts it back to blocking: std/net's connect hands the candidate that won back so. */
-Bool kspl_net_set_blocking(I64 handle) {
+KSPL_LINK Bool kspl_net_set_blocking(I64 handle) {
     if (handle == 0) return false;
     return kspl_net_set_blk(kspl_socket_of(handle)->fd) ? true : false;
 }
 
 /* Whether the last send/recv/accept/connect failed merely because "it is not ready yet".
  * Caution: Call it right after the failed call, with no other system call in between. */
-Bool kspl_net_would_block(void) {
+KSPL_LINK Bool kspl_net_would_block(void) {
     return kspl_net_wouldblock() ? true : false;
 }
 
@@ -502,7 +589,7 @@ Bool kspl_net_would_block(void) {
  * Caution: **Do not fold `POLLHUP` into `POLLERR`'s mark.** `WSAPoll` returns `POLLHUP` on a FIN
  * alone, where POSIX returns `POLLIN`; folded, Windows treats a half-closed connection as broken.
  * `events` takes `POLLIN` / `POLLOUT` alone (`WSAPoll` fails on `POLLHUP` in the input). */
-I32 kspl_net_poll(I64 *handles, U8 *interest, Sz n, I32 timeout_ms, U8 *revents_out) {
+KSPL_LINK I32 kspl_net_poll(I64 *handles, U8 *interest, Sz n, I32 timeout_ms, U8 *revents_out) {
     if (n == 0) return 0;
     kspl_pollfd_t *pfds = (kspl_pollfd_t *)malloc(sizeof(kspl_pollfd_t) * n);
     if (pfds == NULL) return -1;
@@ -534,7 +621,7 @@ I32 kspl_net_poll(I64 *handles, U8 *interest, Sz n, I32 timeout_ms, U8 *revents_
  *
  * **One candidate alone is used** (the first one that starts), since moving on means waiting.
  * std/net's Tcp_stream.connect overlaps the candidates over this, one address text each. */
-I64 kspl_tcp_connect_nonblocking(const U8 *host_ptr, Sz host_len, I32 port) {
+KSPL_LINK I64 kspl_tcp_connect_nonblocking(const U8 *host_ptr, Sz host_len, I32 port) {
     kspl_cand_t cands[KSPL_ADDR_MAX];
     int n = kspl_resolve(host_ptr, host_len, port, SOCK_STREAM, 0, cands);
     int i;
@@ -557,7 +644,7 @@ I64 kspl_tcp_connect_nonblocking(const U8 *host_ptr, Sz host_len, I32 port) {
  * yet.
  * Caution: **Do not answer "it connected" merely because `SO_ERROR` is 0.** A socket just after
  * being started is 0 too, so it would answer "it connected" to a side that asked before waiting. */
-I32 kspl_net_connect_result(I64 handle) {
+KSPL_LINK I32 kspl_net_connect_result(I64 handle) {
     kspl_fd_t fd;
     if (handle == 0) return -1;
     fd = kspl_socket_of(handle)->fd;
@@ -565,7 +652,7 @@ I32 kspl_net_connect_result(I64 handle) {
     return kspl_fd_refused(fd) ? -1 : 0;
 }
 
-I32 kspl_net_raw_fd(I64 handle) {
+KSPL_LINK I32 kspl_net_raw_fd(I64 handle) {
     if (handle == 0) return -1;
     return (I32)kspl_socket_of(handle)->fd;
 }
@@ -580,7 +667,7 @@ I32 kspl_net_raw_fd(I64 handle) {
  */
 
 
-I32 kspl_net_shutdown_write(I64 handle) {
+KSPL_LINK I32 kspl_net_shutdown_write(I64 handle) {
     if (handle == 0) return -1;
     return kspl_net_shutdown_wr(kspl_socket_of(handle)->fd) == 0 ? 0 : -1;
 }

@@ -1,0 +1,69 @@
+//< Vendor `greet`: a library built from KSPL, called from C and from KSPL
+//<
+//< It allocates, formats numbers and writes to standard output with the runtime and std it holds,
+//< takes a `struct` by value across the boundary, names a library of its own (`#link`), and writes
+//< to a socket whose peer has gone.
+import "std/io"
+import "std/net"
+import "std/str" { Str_builder }
+import "std/sys"
+
+pub struct Greet_point //< a point, passed by value across the boundary
+    pub x: I32 //< the distance across
+    pub y: I32 //< the distance down
+
+#link("m")
+extern "C"
+    fn hypot(x: F64, y: F64): F64 //< C's hypot, from the math library the `#link` names
+
+#export
+pub fn greet_hello(times: I32): I32 //<
+    //< writes `hello <i>` for each i below times; the bytes written
+    $b: = Str_builder.new()
+    defer b.free()
+    for i in Range.asc(Sz::times)
+        b.s("hello \{i\}\n")
+    io.out().s(b.slice())
+    return I32::b.slice().len
+
+#export
+pub fn greet_norm(p: Greet_point): I32 //<
+    //< the point's distance from the origin, printed and returned
+    d: = hypot(F64::p.x, F64::p.y)
+    io.out().s("norm of (\{p.x\}, \{p.y\}) is \{d\}\n")
+    return I32::d
+
+#export
+pub fn greet_stop() //< ends the program with a panic, as a failed check inside the library does
+    io.out().s("greet stops here\n")
+    panic("greet was asked to stop")
+
+priv const port_tries: I32 = 16 //< how many ports from the first one it tries to listen on
+
+#export
+pub fn greet_gone_peer(port: I32): I32 //<
+    //< writes to a socket whose peer has closed; 1 once a write fails, 0 if none does, -1 if unset
+    //<
+    //< Caution: **It must not end the program.** A library leaves SIGPIPE to the program, so a host
+    //< keeping its default would die of the write unless the runtime asks the OS not to raise it.
+    $at: I32 = 0
+    $listener: net.Tcp_listener$@ = null
+    for listener == null && at < port_tries
+        listener = net.Tcp_listener.bind("127.0.0.1", port + at) catch
+            fallback null
+        at += 1
+    if listener == null
+        return -1
+    defer listener.free()
+    client: = net.Tcp_stream.connect("127.0.0.1", port + at - 1) catch
+        return -1
+    defer client.free()
+    conn: = listener.accept() catch
+        return -1
+    conn.free()
+    // The first writes may land in the buffer before the peer's reset arrives.
+    for _i in Range.asc(200)
+        _n: = client.write("x") catch
+            return 1
+        sys.sleep_ms(10)
+    return 0

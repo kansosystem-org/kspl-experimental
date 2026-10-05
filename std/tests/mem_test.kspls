@@ -1,4 +1,5 @@
 import "std/mem" + { Arena, alloc, dealloc }
+import "std/tests/sys_test"
 import "std/thread"
 import "std/verdict"
 
@@ -8,34 +9,52 @@ import "std/verdict"
 priv const kib: Sz = 1024
 
 priv fn one_round(a: Arena$@) //< three allocations, each bigger than the chunk before could hold
-  a.alloc(100 * kib)
-  a.alloc(300 * kib)
-  a.alloc(700 * kib)
+    a.alloc(100 * kib)
+    a.alloc(300 * kib)
+    a.alloc(700 * kib)
 
 fn test_arena_reset_keeps_one_chunk()
-  verdict.start("[Arena] reset keeps what a round used as one chunk, and the next round fits...")
-  a: = Arena.new(1024 * kib)
-  defer a.free()
-  one_round(a)
-  grown: = a.get_total_allocated()
-  a.reset()
-  kept: = a.get_total_allocated()
-  assert(kept < grown, "Arena: what the chunks held unused is let go")
-  assert(a.remaining() == 1100 * kib, "Arena: one chunk holds what the round used, past the ceiling")
-  one_round(a)
-  assert(a.get_total_allocated() == kept, "Arena: the same round again takes no new chunk")
-  verdict.pass("Arena.reset keeps one chunk, as big as the round, and the next round reuses it")
+    verdict.start("[Arena] reset keeps what a round used as one chunk, and the next round fits...")
+    a: = Arena.new(1024 * kib)
+    defer a.free()
+    one_round(a)
+    grown: = a.get_total_allocated()
+    a.reset()
+    kept: = a.get_total_allocated()
+    assert(kept < grown, "Arena: what the chunks held unused is let go")
+    assert(a.remaining() == 1100 * kib,
+        "Arena: one chunk holds what the round used, past the ceiling")
+    one_round(a)
+    assert(a.get_total_allocated() == kept, "Arena: the same round again takes no new chunk")
+    verdict.pass("Arena.reset keeps one chunk, as big as the round, and the next round reuses it")
 
 fn test_arena_reset_fixed_buffer()
-  verdict.start("[Arena] reset on a fixed buffer hands the whole buffer out again...")
-  buf: U8[4096] = ::{}
-  $a: = Arena.from_buffer(Void$@::buf@, 4096)
-  whole: = a.remaining()
-  a.alloc(whole)
-  a.reset()
-  assert(a.remaining() == whole, "Arena: a fixed buffer is whole again after reset")
-  a.alloc(whole)
-  verdict.pass("Arena.reset on a fixed buffer frees nothing and hands it all out again")
+    verdict.start("[Arena] reset on a fixed buffer hands the whole buffer out again...")
+    buf: U8[4096] = ::{}
+    $a: = Arena.from_buffer(Void$@::buf@, 4096)
+    whole: = a.remaining()
+    a.alloc(whole)
+    a.reset()
+    assert(a.remaining() == whole, "Arena: a fixed buffer is whole again after reset")
+    a.alloc(whole)
+    verdict.pass("Arena.reset on a fixed buffer frees nothing and hands it all out again")
+
+priv const arena_zero_src: U8[] = //< a child that asks for an arena whose chunks hold nothing
+    """import "std/mem" { Arena }
+
+fn main()
+  a: = Arena.new(0)
+  _p: = a.alloc(8)
+  a.free()
+"""
+
+fn test_arena_new_refuses_zero(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
+    verdict.start("[Arena] Arena.new with a chunk size of 0...")
+    // Without the refusal it is taken for a fixed buffer: the first alloc blames `from_buffer`.
+    named: = sys_test.child_stops_with(ksplc, "arena_zero", arena_zero_src,
+        "Arena.new: chunk_size must be above 0", arena)
+    assert(named, "Arena.new(0) must stop the program, naming itself and the size")
+    verdict.pass("Arena.new refuses a chunk size of 0 where it is called.")
 
 // ==========================================
 // std/mem: the heap's counters, when several threads allocate and free at once.
@@ -46,26 +65,26 @@ priv const churn_bytes: Sz = 24
 
 #export
 fn heap_churn(rounds: I32$@): Void$@ //< allocates and frees one block, rounds times over
-  for _i in Range.asc(rounds$)
-    dealloc(alloc(churn_bytes))
-  return null
+    for _i in Range.asc(rounds$)
+        dealloc(alloc(churn_bytes))
+    return null
 
 fn test_heap_counters_across_threads()
-  verdict.start("[Mem] the heap's counters lose no update when threads allocate at once...")
-  used0: = mem.heap_used_bytes()
-  total0: = mem.heap_requested_total_bytes()
-  $rounds: = churn_rounds
-  $ts: thread.Thread$@[churn_threads] = ::{}
-  for i in Range.asc(churn_threads)
-    ts[i] = thread.Thread.spawn<|I32|>(heap_churn, rounds@) catch panic("thread spawn failed")
-  for i in Range.asc(churn_threads)
-    ts[i].join_and_free()
-  // Each thread's handle is on the heap too, freed by its join.
-  want: = churn_threads * (Sz::churn_rounds * churn_bytes + sizeof(thread.Thread))
-  assert(mem.heap_used_bytes() == used0, "Mem: the bytes in use return to where they started")
-  assert(mem.heap_requested_total_bytes() - total0 == want,
-    "Mem: the running total counts every byte each thread asked for")
-  assert(mem.heap_peak_used_bytes() >= used0 + churn_bytes,
-    "Mem: the peak holds at least one block live at once")
-  verdict
-    .pass("four threads allocating at once leave the in-use count, the total and the peak right")
+    verdict.start("[Mem] the heap's counters lose no update when threads allocate at once...")
+    used0: = mem.heap_used_bytes()
+    total0: = mem.heap_requested_total_bytes()
+    $rounds: = churn_rounds
+    $ts: thread.Thread$@[churn_threads] = ::{}
+    for i in Range.asc(churn_threads)
+        ts[i] = thread.Thread.spawn<|I32|>(heap_churn, rounds@) catch panic("thread spawn failed")
+    for i in Range.asc(churn_threads)
+        ts[i].join_and_free()
+    // Each thread's handle is on the heap too, freed by its join.
+    want: = churn_threads * (Sz::churn_rounds * churn_bytes + sizeof(thread.Thread))
+    assert(mem.heap_used_bytes() == used0, "Mem: the bytes in use return to where they started")
+    assert(mem.heap_requested_total_bytes() - total0 == want,
+        "Mem: the running total counts every byte each thread asked for")
+    assert(mem.heap_peak_used_bytes() >= used0 + churn_bytes,
+        "Mem: the peak holds at least one block live at once")
+    verdict
+        .pass("four threads allocating at once leave the in-use count, the total and the peak right")

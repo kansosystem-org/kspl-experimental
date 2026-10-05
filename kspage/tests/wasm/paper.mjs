@@ -125,89 +125,11 @@ export async function run(ks, open) {
   check(near(w.kspage_web_column(1000), 1000),
     "with nothing stopping it, it widens to the vessel's width");
 
-  // --- The reader's overriding ---
-  // **It is not the document's settlement**: it stays out of the text saved, and stays on after
-  // the document is read afresh.
-  const overOf = () => {
-    w.kspage_web_over(scratch);
-    return read(2)[0];
-  };
-  const sizeOf = () => {
-    w.kspage_web_over(scratch);
-    return read(2)[1];
-  };
-  check(overOf() === 0 && sizeOf() === 0, "to begin with nothing is overridden");
-  w.kspage_web_set_paper(0, 0, 0, 0, 0, 0, 500);
-  w.kspage_web_set_over(300, 0);
-  check(overOf() === 300, "the overriding can be read back");
-  check(near(w.kspage_web_column(1000), 300),
-    "the overriding is stronger than the document's settlement");
-  check(near(w.kspage_web_column_left(1000), 350),
-    "what is left over is parted equally left and right");
-  // **It must not come out in the text** (it would fix the next reader to the writer's width).
-  const kept = save();
-  check(kept.includes("\"reading_width\": 500"),
-    "the document side's width does go into the text");
-  // Caution: **Look at it read back in another window** — the same window carries the overriding
-  // on, so a leak into the text would go unnoticed.
-  const other = await open();
-  check(other.load(kept) !== 0, "the text written out can be read in another window too");
-  other.w.kspage_web_over(other.scratch);
-  check(other.read(2)[0] === 0,
-    "in another window there is no overriding (it has not come out in the text)");
-  check(near(other.w.kspage_web_column(1000), 500),
-    "in another window the document side's width comes out");
-  // **It has to stay after the document is read afresh** (it hangs on the reader).
-  check(load(kept) !== 0 && overOf() === 300, "read afresh, the overriding is still there");
-  check(near(w.kspage_web_column(1000), 300), "after reading afresh the overriding still bites");
-  // **A negative value becomes 0** (0 is "do not override").
-  w.kspage_web_set_over(-10, -10);
-  check(overOf() === 0 && sizeOf() === 0, "a negative value becomes 0");
-  check(near(w.kspage_web_column(1000), 500),
-    "taken off, it returns to the document's settlement");
-  w.kspage_web_set_paper(0, 0, 0, 0, 0, 0, 0);
-
-  // --- The reader's type size ---
-  //
-  // **It is taken as a size and not as a multiple** (any document's body comes out at it).
-  // Caution: **A style with a size written on it has to stretch by the same ratio**, or **the
-  // body overtakes the heading** as the type grows. **It must not come out in the HTML written
-  // out.** **Do not follow it by a box's number** (the wrapping changes the count); the smallest
-  // and the largest type are looked at.
-  const sizeSpan = () => {
-    const all = w.kspage_web_layout(300);
-    let lo = 0;
-    let hi = 0;
-    for (let i = 0; i < all; i += 1) {
-      const px = boxOf(i)[4];
-      if (px <= 0) continue;
-      if (lo === 0 || px < lo) lo = px;
-      if (px > hi) hi = px;
-    }
-    return { lo: lo, hi: hi };
-  };
-  const wasSpan = sizeSpan();
-  check(wasSpan.hi > wasSpan.lo,
-    `there is a style with a size written on it (${wasSpan.lo}px and ${wasSpan.hi}px)`);
-  // **The HTML written out is set against the whole of it before the laying on** ("this number
-  // does not come out" would be a check that cannot fall).
-  const bareHtml = html();
-  w.kspage_web_set_over(0, 24);
-  check(sizeOf() === 24, "the type size can be read back");
-  const bigSpan = sizeSpan();
-  check(near(bigSpan.lo, 24), `the body comes out at the size said (${bigSpan.lo}px)`);
-  check(near(bigSpan.hi, wasSpan.hi * 24.0 / wasSpan.lo),
-    `a size written on stretches by the same ratio (${bigSpan.hi}px)`);
-  check(bigSpan.hi > bigSpan.lo, "the heading is still larger than the body");
-  // **It must come out neither in the text saved nor in the HTML written out.**
-  check(save().includes("\"size_px\": 24") === false,
-    "the type size does not come out in the text");
-  check(html() === bareHtml,
-    "the HTML written out does not differ by one byte with the reader's type size");
-  w.kspage_web_set_over(0, 0);
-  const backSpan = sizeSpan();
-  check(near(backSpan.lo, wasSpan.lo) && near(backSpan.hi, wasSpan.hi),
-    `taken off, it returns to the size it was (${backSpan.lo}px and ${backSpan.hi}px)`);
+  // --- No width or type size of the reader's own ---
+  // The body's width is the document's settlement above; the reader enlarges with the browser's
+  // zoom. **No entry point is left for either**, so nothing can lay the body out apart from it.
+  check(typeof w.kspage_web_set_over === "undefined" && typeof w.kspage_web_over === "undefined",
+    "the module holds no override of the body's width or type size");
 
   // A page height that is not a multiple of the line's height, so a line has to cross a page.
   w.kspage_web_set_paper(0, 137, 0, 0, 0, 0, 0);
@@ -297,14 +219,6 @@ export async function run(ks, open) {
   check(setChrome(0, "Confidential") !== 0 && w.kspage_web_chrome(0, 1, 3) === 1,
     "the header can be put out too");
   check(near(chromeBox(0)[1], 0), "the header starts from the page's top edge");
-  // **The reader's type size does not bite on the bands** (larger, they would eat the margin).
-  const bandSize = chromeBox(0)[4];
-  w.kspage_web_set_over(0, 40);
-  w.kspage_web_chrome(0, 1, 3);
-  check(near(chromeBox(0)[4], bandSize),
-    `the band's type does not move with the reader's size (${chromeBox(0)[4]}px)`);
-  w.kspage_web_set_over(0, 0);
-  w.kspage_web_chrome(0, 1, 3);
   // What changes the text rides the same record as what types.
   w.kspage_web_undo();
   check(out(w.kspage_web_chrome_source(0)) === "",

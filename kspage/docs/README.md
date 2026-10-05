@@ -5,7 +5,6 @@
 ## What is here
 
 * [`kspage/docs/DESIGN.md`](DESIGN.md) — The decisions behind the editor, their grounds, and what each gives up.
-* [`kspage/docs/PLAN.md`](PLAN.md) — What is left, in stages, and what marks each as done.
 
 ## Further reading
 

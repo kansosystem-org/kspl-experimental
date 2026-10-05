@@ -1,11 +1,11 @@
 name: CI
 
 # The `make ci` on hand (the gates Linux and Windows ucrt64 share) is the primary barrier; this
-# confirms once a week what cannot be run on hand (macOS, Windows ×2).
+# confirms once a week what cannot be run on hand (macOS, Windows).
 # **A scheduled run runs only the default branch's**; run a working branch from "Run
 # workflow". Sixty days with no movement stop the schedule until it is enabled again by hand.
 on:
-  # Caution: **All four jobs ride on this one cron** (the caution at macos below). It is 19:30
+  # Caution: **All three jobs ride on this one cron** (the caution at macos below). It is 19:30
   # UTC on Saturday (the day of week is UTC's: Sunday 04:30 in Japan), off minute zero.
   schedule:
     - cron: "30 19 * * 6"
@@ -21,10 +21,6 @@ on:
         default: true
       macos:
         description: "macos: the gates on real macOS hardware (the highest billing per minute)"
-        type: boolean
-        default: true
-      windows-msvc:
-        description: "windows-msvc: regression detection on the MSVC target, which LLVM's own Windows clang defaults to"
         type: boolean
         default: true
       windows-ucrt64:
@@ -51,7 +47,7 @@ jobs:
       # **Do not cut one short**: one shard's fall would leave the others unknown, green or unrun.
       fail-fast: false
       matrix:
-        # What runs is the Makefile's (CI_SHARDS and ci_linux_only_body in mk/ci.mk); a shard
+        # What runs is the gate table's (`Set` and `gates` in tools/ci_gates.kspls); a shard
         # missing here stops running unseen (tests/support/conventions_ci.kspls guards it).
         target: [ci-shard-core, ci-shard-rest, ci-linux-only]
     steps:
@@ -78,7 +74,7 @@ jobs:
             workflow_dispatch
           # The matrix gives the target's name as it stands; do not assemble it here.
           runCmd: make ${{ matrix.target }}
-      # Each gate's outcome goes to the job summary (the table is ci_digest_prog in `mk/ci.mk`):
+      # Each gate's outcome goes to the job summary (`digest_md` in `tools/ci_gates.kspls`):
       # `always()`, since the round that fell is the point, and `LOGGING=1`, since
       # out/log/make.log may be unwritable outside the container.
       - name: Emit each gate's outcome to the summary
@@ -86,7 +82,8 @@ jobs:
         run: make ci-summary LOGGING=1
         env:
           TITLE: linux ${{ matrix.target }}
-      # A log per gate (`ci_gate` keeps `out/log/ci/<name>.log`); `always()` for the round that fell
+      # A log per gate (`tools/ci.kspls` keeps `out/log/ci/<name>.log`); `always()` for the round
+      # that fell
       - name: Keep a log per gate
         if: always()
         uses: actions/upload-artifact@v4
@@ -128,80 +125,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-  # --- Windows (MSVC / the official LLVM): the target a plain LLVM install compiles for ---
-  # A user whose clang is LLVM's own Windows build hands `ksplc run`'s C to the MSVC target, so
-  # regressions there are caught here; windows-ucrt64 takes the full make ci. The
-  # Makefile's MSYSTEM=UCRT64 guard (its head says why) rules this Git Bash out, so the bootstrap
-  # is by hand, and the link libraries come from tests/support/link_flags.py.
-  windows-msvc:
-    if: github.event_name != 'workflow_dispatch' || inputs['windows-msvc']
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v5
-      # **Real-time scanning, not the compiler, slows a Windows runner** (the suites start tens of
-      # thousands of processes); a runner image refusing this goes on slow, not red.
-      - name: Take the workspace out of Defender's watch
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          Add-MpPreference -ExclusionPath "${env:GITHUB_WORKSPACE}" -ErrorAction SilentlyContinue
-          Add-MpPreference -ExclusionPath "${env:RUNNER_TEMP}" -ErrorAction SilentlyContinue
-      - name: Install LLVM
-        shell: pwsh
-        run: choco install llvm -y
-      - name: Bootstrap stage1 compiler
-        run: |
-          set -e
-          mkdir -p out
-          # The link libraries' one place is tests/support/link_flags.py; later steps use it too.
-          libs=$(python -c "import sys; sys.path.insert(0, 'tests/support'); import link_flags; print(' '.join(link_flags.c_libs()))")
-          echo "KSPL_LINK_LIBS=$libs" >> "$GITHUB_ENV"
-          # ksplc's own deep parse wants Linux's 8MB stack (/STACK); -D_CRT_SECURE_NO_WARNINGS
-          # keeps the portable fopen/getenv UCRT deprecates.
-          link() { clang -std=c99 -Wall -O0 -D_CRT_SECURE_NO_WARNINGS "$1" -o "$2" $libs -Wl,/STACK:8388608; }
-          mkdir -p out/gen
-          link ksplc/seed.c out/ksplc_seed.exe
-          # The executable sits in out/ (the suites' default), the C on the way in out/gen.
-          ./out/ksplc_seed.exe ksplc/main.kspls out/gen/stage1.c
-          link out/gen/stage1.c out/ksplc_stage1.exe
-      - name: Debug test suite (run-time regressions)
-        # It pokes Windows-specific behaviour most widely (threads, fs, sockets, …).
-        run: |
-          set -e
-          ./out/ksplc_stage1.exe tests/debug/main.kspls out/gen/test_debug.c
-          clang -std=c99 -Wall -O0 -D_CRT_SECURE_NO_WARNINGS out/gen/test_debug.c -o out/test_debug.exe $KSPL_LINK_LIBS
-          ./out/test_debug.exe
-      # The next three suites run as ksplc/Makefile's `test-%` does (no make here): from ksplc/, by
-      # the seed, with `std` and the packages named as `pkg_make` in mk/test.mk names them.
-      - name: Negative (error-path) tests
-        working-directory: ksplc
-        env:
-          KSPLC_STD_DIR: ${{ github.workspace }}/std
-          KSPLC_PKG_SRC_DIR: ${{ github.workspace }}
-        run: >-
-          ../out/ksplc_seed.exe run tests/suite/negative_test.kspls ../out/ksplc_stage1.exe
-          "$RUNNER_TEMP/ksplc-suites/negative"
-      # link.exe always fails the LLVM side, so the suite SKIPs it (note 3 in docs/SPEC-gates.md).
-      - name: Backend equivalence test (the C and LLVM outputs agreeing)
-        working-directory: ksplc
-        env:
-          KSPLC_STD_DIR: ${{ github.workspace }}/std
-          KSPLC_PKG_SRC_DIR: ${{ github.workspace }}
-        run: >-
-          ../out/ksplc_seed.exe run tests/suite/backend_equiv_test.kspls ../out/ksplc_stage1.exe
-          "$RUNNER_TEMP/ksplc-suites/equiv"
-      - name: LSP smoke (process isolation / the CreateProcess route)
-        working-directory: ksplc
-        env:
-          KSPLC_STD_DIR: ${{ github.workspace }}/std
-          KSPLC_PKG_SRC_DIR: ${{ github.workspace }}
-        run: >-
-          ../out/ksplc_seed.exe run tests/suite/lsp_test.kspls ../out/ksplc_stage1.exe
-          "$RUNNER_TEMP/ksplc-suites/lsp"
-
   # --- Windows (MSYS2 UCRT64 / mingw): the full make ci, as in the README's local setup ---
   windows-ucrt64:
     if: github.event_name != 'workflow_dispatch' || inputs['windows-ucrt64']
@@ -213,8 +136,9 @@ jobs:
       # **Do not cut one short** (as linux above).
       fail-fast: false
       matrix:
-        # **No Linux-only shard here**: no qemu, wasm or browser on this runner (`ci-linux` in
-        # mk/ci.mk); and no finer split, as start-up costs about a shard at a multiplier of two.
+        # **No Linux-only shard here**: no qemu, wasm or browser on this runner (`Shard.linux` in
+        # tools/ci_gates.kspls); and no finer split, as start-up costs about a shard at a multiplier
+        # of two.
         target: [ci-shard-core, ci-shard-rest]
     steps:
       - uses: actions/checkout@v5

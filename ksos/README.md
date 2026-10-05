@@ -57,7 +57,7 @@ It does two things:
 | `ksos/kernel/` | The scheduler and the synchronizing primitives, with neither hardware nor libc |
 | `ksos/port/` | One folder per architecture and OS: the context switch, the timer and the boot |
 | `ksos/drivers/` | Drivers reading and writing a microcontroller's registers directly |
-| `ksos/net/` | The smallest network stack (ARP, IPv4, UDP, TCP, MQTT) |
+| `ksos/net/` | The smallest network stack (ARP, IPv4, UDP, TCP) |
 | `ksos/boards/` | What one real board wires to what |
 | `ksos/demo/` | The demos, one firmware each; the POSIX and Cortex-M ones are tests too |
 | `ksos/tests/` | The unit tests, the USB descriptors read as text, elf2uf2 and the UART checks |
@@ -119,6 +119,8 @@ One demo per feature. The POSIX ones need no special tools:
 | `ksos/demo/posix/producer_consumer.kspls` | `make ksos` | cooperating on a semaphore (run in "Run it" above) |
 | `ksos/demo/posix/msgq_demo.kspls` | `make ksos-mq` | a message queue blocking when full |
 | `ksos/demo/posix/mutex_demo.kspls` | `make ksos-mutex` | exclusive holding with a mutex |
+| `ksos/demo/posix/mutex_nested_demo.kspls` | `make ksos-mutex-nested` | two mutexes held at once, released in either order: the priority lent through the one still held stays |
+| `ksos/demo/posix/wake_preempt_demo.kspls` | `make ksos-wake-preempt` | a higher-priority task woken by `give`/`unlock`/`send`/`set`/`resume` runs before the waker's next line, with no timer |
 | `ksos/demo/posix/event_demo.kspls` | `make ksos-event` | waiting on an AND/OR of event flags |
 | `ksos/demo/posix/posix_preempt_demo.kspls` | `make ksos-preempt` | timer-driven preemption |
 | `ksos/demo/posix/delay_until_demo.kspls` | `make ksos-delay-until` | a period with no drift, via `Task.delay_until` |
@@ -126,7 +128,7 @@ One demo per feature. The POSIX ones need no special tools:
 | `ksos/demo/posix/stack_overflow_demo.kspls` | `make ksos-stack-overflow` | the canary catching a stack overflow |
 | `ksos/demo/posix/isr_signal_demo.kspls` | `make ksos-isr` | `Queue<\|T\|>.try_send` from an ISR (SIGUSR1 stands in for the interrupt) |
 | `ksos/demo/posix/task_manager_demo.kspls` | `make ksos-task-manager` | tasks and queues on the heap (`dynamic.kspls`), and the task manager's CPU use per task (`Task.cpu_percent` in `ksos/kernel/task.kspls`) |
-| `ksos/demo/posix/kernel_check.kspls` | `make ksos-kernel-check` | the kernel's edges: waking in priority order, suspend/delete while blocked, a `delay_until` into the past, the cap on seats |
+| `ksos/demo/posix/kernel_check.kspls` | `make ksos-kernel-check` | the kernel's edges: waking in priority order and the longest waiter among equals, suspend/delete while blocked, a `delay_until` into the past, the cap on seats |
 | `ksos/demo/posix/mutex_relock_demo.kspls` | `make ksos-mutex-relock` | the holder relocking stops rather than waiting forever (the panic is the pass) |
 | `ksos/demo/posix/mutex_foreign_unlock_demo.kspls` | `make ksos-mutex-foreign-unlock` | a non-holder's unlock stops rather than being silently ignored (panic = pass) |
 | `ksos/demo/posix/timeout_demo.kspls` | `make ksos-timeout` | timeouts (`take_for`/`recv_for`/`send_for`/`lock_for`/`wait_for`), `try_take`/`try_lock`, and `ms_to_ticks` rounding up |
@@ -143,6 +145,7 @@ The Cortex-M demos need a cross compiler and QEMU (both in the development conta
 | `ksos/demo/cortex_m/cortex_m_mq.kspls` | `make ksos-cm-mq` | a queue under preemption (the critical section) |
 | `ksos/demo/cortex_m/cortex_m_timeout.kspls` | `make ksos-cm-timeout` | SysTick alone carrying `take_for`'s timeout while a spinner that never yields holds the CPU |
 | `ksos/demo/cortex_m/cortex_m_isr_block.kspls` | `make ksos-cm-isr-block` | `Sem.take` inside an interrupt handler panics rather than silently stopping the interrupted task (panic = pass) |
+| `ksos/demo/cortex_m/cortex_m_isr_give.kspls` | `make ksos-cm-isr-give` | tasks woken by an interrupt handler's `give`s run as it returns, highest first, before the interrupted task's next line |
 | `ksos/demo/cortex_m/cortex_m_heap_probe.kspls` | `make ksos-cm-heap-probe` | the freestanding heap (`mem.init_freestanding_heap`) and `Arc<T>`, with no OS or `malloc` |
 | `ksos/demo/cortex_m/cortex_m_panic_probe.kspls` | `make ksos-cm-panic-probe` | a panic's crash record read back across a real soft reset |
 | `ksos/demo/cortex_m/cortex_m_uart_probe.kspls` | `make ksos-cm-uart-probe` | reading and writing a real UART0 (a CMSDK APB UART) directly |
@@ -187,7 +190,7 @@ The file names do not tell them apart (every one is a `*_probe.kspls`), so they 
 | :-- | :-- |
 | `make ksos-rp2040-board` | the whole board in one: the USB CDC console, the calendar RTC, the free list's allocation and atomics (SIO spinlock), the record at Flash's end, the sensors (battery / light / line following / ultrasound / IR), the I2C LED matrix (`ht16k33`) and the WS2812, one file per stage under [`ksos/demo/rp2040/board_probe/`](demo/rp2040/board_probe/) |
 | `make ksos-rp2040-motor` | the four wheels' PWM. **Try it with the wheels off the ground** |
-| `make ksos-rp2040-net` | USB Ethernet in one: from the PC over CDC-NCM, ARP requests, then TCP / HTTP / MQTT, while still answering ARP and ping |
+| `make ksos-rp2040-net` | USB Ethernet in one: from the PC over CDC-NCM, ARP requests, then TCP / HTTP, while still answering ARP and ping |
 
 **Running them together**, closer to real use.
 
@@ -197,13 +200,13 @@ The file names do not tell them apart (every one is a `*_probe.kspls`), so they 
 | `make ksos-rp2040-car-pilot` | takes a policy home, cuts the line, decides inside the car |
 | `make ksos-rp2040-car-ir` | driving it with a remote |
 
-**The car's firmware links different code from the board's.** By the symbols linked, `board` and `net` use shared code that `car-pilot` does not (the LED matrix's I2C, MQTT, the calendar RTC, ARP/ICMP, atomics, 64-bit shift helpers). Only `car-ir` uses `__aeabi_llsr` / `__lshrdi3`. The link gate is there for symbols like these.
+**The car's firmware links different code from the board's.** By the symbols linked, `board` and `net` use shared code that `car-pilot` does not (the LED matrix's I2C, the calendar RTC, ARP/ICMP, atomics, 64-bit shift helpers). Only `car-ir` uses `__aeabi_llsr` / `__lshrdi3`. The link gate is there for symbols like these.
 
 ### ⑥ Beyond that: the peripheral drivers and the AI integration — `drivers/`, `net/`, `boards/`
 For the IoT and embedded side; not needed on a first read.
 - `ksos/boards/`: what one real board wires to what, above `ksos/port/` (which CPU) and `ksos/drivers/` (which peripheral). The board is a Freenove 4WD mecanum car with a Pico W (RP2040), the hardware behind Phase 3 of [What works, and how far](../README.md#-what-works-and-how-far). Its wiring is in [`ksos/docs/SPEC-board.md`](docs/SPEC-board.md), and bringing it up is in [`ksos/docs/HOWTO-bring-up.md`](docs/HOWTO-bring-up.md).
 - `ksos/drivers/`: drivers reading and writing a microcontroller's MMIO registers directly (UART, GPIO, PWM, clocks, ADC, I2C, USB CDC and more), each under "🔧 The peripheral drivers" in [`ksos/docs/DESIGN.md`](docs/DESIGN.md). `putc`/`getc`/`transfer` and the rest give up at a cap on iterations rather than stall on hardware that does not answer. They return a failure as a `Bool` or `Option<T>`.
-- `ksos/net/`: the smallest network stack. `ksos/net/tcp_conn.kspls` (TCP) and `ksos/net/mini_mqtt.kspls` (MQTT 3.1.1's CONNECT, PUBLISH at QoS 0, DISCONNECT) run on `ksos/net/mini_ipv4.kspls` (ARP, IPv4, UDP without fragmentation). See "🌐 The network stack" in [`ksos/docs/DESIGN.md`](docs/DESIGN.md).
+- `ksos/net/`: the smallest network stack. `ksos/net/tcp_conn.kspls` (TCP) runs on `ksos/net/mini_ipv4.kspls` (ARP, IPv4, UDP without fragmentation). See "🌐 The network stack" in [`ksos/docs/DESIGN.md`](docs/DESIGN.md).
 - **`ksai` runs beside a control loop with no malloc**, as the AI rows of the Cortex-M table show. What it needs is in "🤖 The AI on bare metal" in [`ksos/docs/DESIGN.md`](docs/DESIGN.md), and `ksai` itself is [ksai](../ksai/README.md).
 - **A panic leaves a crash record** (freestanding only) in `.noinit_panic`, RAM that `ksos/port/*/link.ld` leaves unzeroed. The next start-up after a warm reset reads it once with `take_panic_record` in `std/lang.kspls`. `make ksos-cm-panic-probe` runs it across a watchdog reset, a panic and a soft reset (`system_reset()` in `ksos/drivers/cortex_m/scs.kspls`) in one QEMU run.
 
@@ -244,8 +247,6 @@ For the IoT and embedded side; not needed on a first read.
 | The TCP 3-way handshake (`mini_ipv4`'s `build_tcp_segment` / `parse_tcp_segment`) | ✅ (SYN → SYN-ACK → ACK) |
 | TCP data both ways (`ksos/net/tcp_conn`'s `tcp_stream_send` / `tcp_stream_recv`) | ✅ (an HTTP GET out, a 200 back) |
 | The round trip as an HTTP client | ✅ (`status200=1`: the request arrived and was interpreted) |
-| MQTT's CONNECT/CONNACK (`mini_mqtt`) | ✅ (`connack ok=1 rc=0`) |
-| MQTT's PUBLISH reaching the peer | ✅ (topic and payload arrived unchanged on the other console; `mqtt_stub.kspls` is confirmed only as giving the same output for the same input, not on the real board) |
 | `alloc` / `Arena` / `Arc` / `std/http.parse_response` | ✅ (`RESULT pass=11 fail=0`, the atomics filled in from SIO's hardware spinlock by `ksos/port/rp2040/ksos_atomic_sio.c`; stage 6d) |
 | The four atomics (`kspl_atomic_add`/`cas`/`load`/`store`) | ✅ (taking and releasing the SIO spinlock meshes on the real chip) |
 | What the car learned surviving power-off (`car_model` plus ksdb) | ✅ (a restart says `resumed the forward model — N steps learned`, **the step count grows across start-ups**, and `drop=0` holds while learning a step) |

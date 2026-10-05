@@ -2,7 +2,7 @@
 
 **An append-only record with zero dependencies: every finished record reads back, even when the power fails mid-write.** On a device it keeps a sensor time series and a policy passed down across power cuts; on a desk, a document's change history.
 
-[`ksdb/docs/DESIGN.md`](docs/DESIGN.md) says why not `std/db` (SQLite through FFI), why appending only, and why a record is laid out as it is.
+[`ksdb/docs/DESIGN.md`](docs/DESIGN.md) says why not SQLite through FFI, why appending only, and why a record is laid out as it is.
 
 ## Run it
 
@@ -13,6 +13,7 @@ A program keeps its record like this:
 ```kspls
 import "ksdb/log" as ksdblog
 import "ksdb/ram_store" as ram
+import "std/io"
 
 const kind_sample: U16 = 1
 const kind_policy: U16 = 2
@@ -20,24 +21,25 @@ const kind_policy: U16 = 2
 $buf: U8[8192]
 
 fn main()
-  store: = ram.make(U8$[]::buf, 4096) // a 4KB sector
-  $lg: = ksdblog.Log.open(store) // scans the place and settles where it can append
+    store: = ram.make(U8$[]::buf, 4096) // a 4KB sector
+    $lg: = ksdblog.Log.open(store) // scans the place and settles where it can append
 
-  lg.append(kind_sample, "dist=180 line=2") catch
-    return
+    lg.append(kind_sample, "dist=180 line=2") catch
+        return
 
-  // Reading it back, oldest first.
-  $payload: U8[64] = ::{}
-  $it: = lg.iter()
-  for it.next()
-    it.read(U8$[]::payload)
-    // it.kind and it.len are the kind and content length of the record now pointed at.
+    // Reading it back, oldest first.
+    $payload: U8[64] = ::{}
+    $it: = lg.iter()
+    for it.next()
+        it.read(U8$[]::payload)
+        // it.kind and it.len are the kind and content length of the record now pointed at.
 
-  // "The newest one" per kind. This is the shape for taking the policy handed down.
-  // With not one record it throws `not_found`, which is not length 0.
-  $policy: U8[2048] = ::{}
-  n: = lg.last(kind_policy, U8$[]::policy) catch
-    return
+    // "The newest one" per kind. This is the shape for taking the policy handed down.
+    // With not one record it throws `not_found`, which is not length 0.
+    $policy: U8[2048] = ::{}
+    n: = lg.last(kind_policy, U8$[]::policy) catch
+        return
+    io.out().s("the policy holds \{n\} bytes\n")
 ```
 
 The caller decides what a `kind` means. `ksdb` matches kinds and never reads the content.
@@ -69,11 +71,11 @@ Build the `Store` of [`ksdb/store.kspls`](store.kspls) and pass it in. What each
 
 ```kspls
 store: = Store::{
-  .read_at = flash.read_at,
-  .program_at = flash.program_at,
-  .erase_sector = flash.erase_sector,
-  .capacity = flash.region_size,
-  .sector_size = flash.sector_size,
+    .read_at = flash.read_at,
+    .program_at = flash.program_at,
+    .erase_sector = flash.erase_sector,
+    .capacity = flash.region_size,
+    .sector_size = flash.sector_size,
 }
 ```
 

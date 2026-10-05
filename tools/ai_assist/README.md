@@ -22,13 +22,12 @@ Each KSPL tool also runs alone: `./out/ksplc_stage1.exe run tools/ai_assist/<too
 | `build_corpus.kspls` / `corpus_count.kspls` | Normalizes every source through `fmt`, removes duplicates, splits train/val and counts, writing to `corpus/`. `corpus_count.kspls` holds the counting rules (the folders left out; words, tokens and lines), split off so it can be tested. |
 | `make_fim.kspls` | Writes FIM training examples to `corpus/fim_{train,val}.jsonl`. The source is self-hosted code that compiles, so the middle is the correct completion by definition and no example needs recompiling. |
 | `eval_fim.kspls` | Hides single lines of the validation files, inserts a model's completion, and measures the rate at which `ksplc` accepts the file (`make fim-eval`). `--model=native` runs `ksai/examples/fim_coder` as its own process. A file that does not compile on its own gives no holes. |
-| `make_error_fix.kspls` / `fix_names.kspls` | Breaks the source in exactly one place (a missing `;`/`}`, a deleted line, a type typo), confirms the diagnostic `ksplc` really emits, and writes the triples (broken code, real diagnostic, fixed code) into `corpus/error_fix.jsonl`. `fix_names.kspls` holds how it builds the names in the examples, split off so it can be tested. |
 | `train_bpe.kspls` | Derives the BPE vocabulary and merges from the corpus into `tokenizer/`, which `Tokenizer.load` in `ksai/tokenizer.kspls` reads. |
 | `lora_finetune_external.py` | Fine-tunes a LoRA outside KSPL, on a GPU machine (from scratch, or continued with `--continue-from`), and writes it as safetensors in the KSPL convention. `--help` lists its options, including those for a CPU. |
 | `export_qwen_to_kspl.py` / `export_qwen_tokenizer.py` | Convert Hugging Face Qwen's weights and tokenizer into the files `ksai` reads. |
 | `qwen_logit_parity.py` | Prints Hugging Face's logits for the same input, to compare with KSPL's. |
 | `safetensors_io.py` | Writes safetensors, for `export_qwen_to_kspl.py` and `lora_finetune_external.py`. |
-| `tests/` | `corpus_count_test.kspls`, `fix_names_test.kspls`, and `oracle_test.kspls`, which starts the real compiler; `make debug-tools` runs them with the rest of the tools' tests. |
+| `tests/` | `corpus_count_test.kspls` and `oracle_test.kspls`, which starts the real compiler; `make debug-tools` runs them with the rest of the tools' tests. |
 
 **`corpus/` and `tokenizer/` are generated and reproducible**, and git ignores them; the scripts and the tools are the product.
 

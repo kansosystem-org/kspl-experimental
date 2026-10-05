@@ -9,7 +9,6 @@ This is for whoever adds a test to the repository. It assumes a built tree (`mak
 * [The arena is held by harness](#the-arena-is-held-by-harness)
 * [Showing that a check can fire](#showing-that-a-check-can-fire)
 * [Moving a tool out of Python](#moving-a-tool-out-of-python)
-* [Reading the mutants report](#reading-the-mutants-report)
 
 ---
 
@@ -29,19 +28,18 @@ A suite can use only the notations the seed knows, since the seed runs it. To us
 
 ## The manners for writing a suite
 
-Use `tests/support/harness.kspls` (the Python suites use `tests/support/harness.py`), and `std/verdict.kspls` for the verdict lines. If each suite finds the root and the target, formats the verdict lines and uses exit codes in its own way, CI's log becomes unreadable.
+Use `tests/support/harness.kspls`, and `std/verdict.kspls` for the verdict lines. If each suite finds the root and the target, formats the verdict lines and uses exit codes in its own way, CI's log becomes unreadable.
 
 ```kspls
 #!/usr/bin/env -S ksplc run
-import "std/mem" { Arena }
 import "std/verdict"
 import "tests/support/harness"
 
 fn main(): I32
-  arena: = harness.begin(8 * 1024 * 1024)
-  r: = harness.ksplc(U8[][]::U8[][_]::{ "info", "keywords" })
-  verdict.check("the exit code is 0", r.code == 0, r.out)
-  return harness.finish()
+    harness.begin(8 * 1024 * 1024)
+    r: = harness.ksplc(U8[][]::{ "info", "std-dir" })
+    verdict.check("the exit code is 0", r.code == 0, r.out)
+    return harness.finish()
 ```
 
 * **The exit code carries the verdict**: `main` ends with `return harness.finish()`. The `RESULT:` line is for people and the log (the Makefile greps it as a marker for some targets only).
@@ -62,26 +60,13 @@ fn main(): I32
 
 Caution: **Do not free it with a `defer`.** `finish` / `fatal` free it, so a `defer arena.free()` frees it twice.
 
-**Still pass an arena where the arena decides where the result goes**, as with `Map.entry_list`.
+**Still pass an arena where the arena decides where the result goes**, as with `fs.join`.
 
 ## Showing that a check can fire
 
-The convention checks (`make test-conventions`) are **green when the repository is clean, and so green even when a check is broken**: `test-mutants` shows that removing a verdict's guard fails no test.
+The convention checks (`make test-conventions`) are **green when the repository is clean, and so green even when a check is broken**.
 
-So a rule's decision is factored out into a function that takes one string, with a table of strings that should and should not match **in the same file as the rule**.
-
-```kspls
-priv const tmp_samples: Sample[7] = ::{
-  Sample::{ .text = "path = \"/tmp/x\"", .hits = true },
-  Sample::{ .text = "// On macOS /tmp is a link to /private/tmp.", .hits = false },
-  // …
-}
-
-priv fn check_tmp_fires(arena: Arena$@)
-  $bad: = scan.misjudged(Sample[]::tmp_samples, opens_tmp, arena)
-  verdict.check_list("the `/tmp` decision can fire", tmp_samples.len, "samples", bad@,
-    "the table is `tmp_samples`")
-```
+So a rule's decision is factored out into a function that takes one string, with a table of strings that should and should not match **in the same file as the rule**. `tmp_samples` and `check_tmp_fires` in `tests/support/conventions_win.kspls` are the shape: the table, then `scan.misjudged` putting each sample to the decision (`opens_tmp`) and `verdict.check_list` reporting the ones it misjudged.
 
 * Caution: **List both the matching and the non-matching side.** A one-sided table lets one kind of breakage ("always true" or "always false") slip past.
 * **Make the decision a pure function of one string.** If it reads a file, no sample can be passed to it. If the decision is inline in the check, factor it out first.
@@ -94,18 +79,3 @@ priv fn check_tmp_fires(arena: Arena$@)
 **When a tool moves out of Python, check that it gives the Python version's verdict, broken input included.** For `llvm_ir_abi_check`, that means the extracted type list agrees with real IR line for line, and the output matches byte for byte on four ways of breaking the IR. Comparing counts alone is not enough: two versions wrong in the same way still agree.
 
 **A scan built on regular expressions need not keep them when it moves**: `llvm_ir_abi_check` counts separators instead (its header says why).
-
-## Reading the mutants report
-
-`make test-mutants FILE=<file> [MAX=n]` drops one guard at a time, runs the tests, and reports each guard they did not catch.
-
-Caution: **Do not read a survivor as "the tests are lacking".** The report includes guards whose removal changes nothing (equivalent mutants), and no list suppresses them ("Why the mutants report keeps no suppression list" in [`tests/docs/DESIGN.md`](DESIGN.md)).
-
-**Read the survivors one at a time, and tell guards that take effect from guards whose removal changes nothing**, as with these from `kspage/write/typing.kspls`:
-
-| The survivor | What reading it showed |
-| :-- | :-- |
-| `set_preedit`'s `s.len <= 0` | **Equivalent**. `Inline.insert` refuses an empty one, so dropping it takes the same path |
-| `backspace`'s `c.inline == null` | **Equivalent**. `owner_of(null)` returns not-found, and the next guard returns |
-| The two `!own.found` | **Defensive**. Only a caret pointing at a run off the tree reaches them (a state that must not exist) |
-| `snap`'s `n == null` | **Defensive**. Only `clamp` calls it, and no path passes it a null |

@@ -1,0 +1,595 @@
+//< Writes a library's interface from its `#export` functions (`--emit-interface=`)
+//<
+//< **The library and its interface come out of one compilation**, so they cannot drift. The form
+//< follows the file's extension (`form_of`): a C header, or a KSPL file whose `extern "C"` block a
+//< KSPL caller imports. The types the signatures name are written beside the functions.
+//< **Call it before lower**: the ABI pass rewrites an identifier into its mangled name.
+//< Caution: **Do not drop a function that cannot be written**: a caller would read "there is no
+//< such function". A refusal names it and fails the compile.
+import "kspeg/engine" as kspeg
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_doc" { decl_summary }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" // `get_decl_id_text`
+import "ksplc/base/c_name" as base_c_name
+import "ksplc/base/core" as base_core
+import "ksplc/base/diag" as base_diag
+import "ksplc/fmt/style" { Config }
+import "ksplc/fmt/text" as fmt_text
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/def" as sema_type_def
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
+import "ksplc/tools/run" as tools_run
+import "std/chars"
+import "std/ds" { List, Map }
+import "std/str" { Str_builder }
+
+priv const max_type_walk_depth: Sz = 1000 //<
+    //< The depth limit for walking inside a type
+    //<
+    //< It matches max_type_layout_depth in sema/decl/layout.kspls.
+
+enum Form //< the interface a file's extension asks for
+    none //< an extension that names neither, which the option refuses
+    c_header //< `.h`: C's declarations
+    kspl //< `.kspls` or `.kspl`: an `extern "C"` block and the types its functions name
+
+fn form_of(path: U8[]): Form //< the form `--emit-interface=<path>` writes
+    if path.ends_with(".h")
+        return .c_header
+    if path.ends_with(".kspls") || path.ends_with(".kspl")
+        return .kspl
+    return .none
+
+priv struct Named //< a `struct` or an `enum` the interface declares, in the order first met
+    type_id: I32
+    name: U8[] //< the name as declared, which C's is too
+    is_enum: Bool
+    body: Bool //<
+        //< Whether its fields are written
+        //<
+        //< **A `struct` passed by value always is**: C needs its layout. One reached only through a
+        //< pointer is written as a handle unless every field is `pub` and can cross to C.
+    node: Ast_node$@ //< its declaration, for its summary; null where none is found
+
+priv struct Walk //< what the interface declares, gathered before anything is written
+    c: Sema_ctx$@
+    types: List<|Named|>$@
+    decl_of: Map<|I32, Ast_node$@|>$@ //< a `struct`'s or `enum`'s type id -> its declaration
+    site: Ast_node$@ //< the function being read, where a refusal is reported
+
+impl Walk
+    priv fn strip(r: Self$@, id: I32): I32 //< the type with its aliases resolved
+        return r.c.env.get_real_type(id)
+
+    priv fn find(r: Self$@, id: I32): Sz //< where `id` stands in `types`; -1 where absent
+        for i in Range.asc(r.types.len)
+            if r.types.get(i).type_id == id
+                return i
+        return -1
+
+    priv fn refuse(r: Self$@, what: U8[]) //<
+        //< reports why the function being read cannot be written
+        r.c.clear_scratch()
+            .s("'\{r.site.get_decl_id_text()\}' cannot be written into the interface \
+                ('--emit-interface'): \{what\}")
+        r.c.err(r.site, r.c.scratch.slice())
+
+    fn note(r: Self$@, raw: I32, by_value: Bool, depth: Sz) //<
+        //< It records the types `raw` names, a `struct` behind a pointer only as far as it is named
+        if depth >= max_type_walk_depth
+            return
+        id: = r.strip(raw)
+        switch r.c.env.get_info(id) case .const_of(b)
+            r.note(b, by_value, depth + 1)
+        case .pointer(b)
+            if r.nameable(r.c.env.get_clean_real_type(b))
+                r.note(b, false, depth + 1)
+        case .fn_type(sig)
+            r.note(sig.ret_id, true, depth + 1)
+            for p in sig.params
+                r.note(p, true, depth + 1)
+        case .struct_type(def)
+            r.note_struct(id, def, by_value, depth)
+        case .enum_type(def)
+            if def.is_scalar() && r.find(id) < 0
+                r.types
+                    .push(Named::{ .type_id = id, .name = r.short_name(id), .is_enum = true,
+                    .body = true, .node = r.decl_of.get(id) catch null })
+        default {}
+
+    priv fn note_struct(r: Self$@, id: I32, def: sema_type_def.Struct_def$@, by_value: Bool,
+        depth: Sz)
+        name: = r.short_name(id)
+        if name.len == 0
+            // Only by value: behind a pointer an unnamed type is an address (`void *`).
+            why: = base_core.arena.text().s("it passes '")
+                .s(r.c.env.inst_type_index.get(id) catch "")
+                .s("' by value, a generic type, which has no single name in C. Declare a plain \
+                    struct with the same fields for the interface").take()
+            r.refuse(why)
+            return
+        body: = by_value || r.handle_opens(def)
+        if by_value && (def.is_packed || def.align_attr > 0)
+            why: = base_core.arena.text().s("it passes '").s(name)
+                .s("' by value, whose '#packed' / '#align' layout C99 cannot state. Pass a pointer \
+                    to it").take()
+            r.refuse(why)
+            return
+        at: = r.find(id)
+        if at >= 0
+            if !body || r.types.get(at).body
+                return
+            $named: = r.types.get(at)
+            named.body = true
+            r.types.set(at, named)
+        else
+            r.types
+                .push(Named::{ .type_id = id, .name = name, .is_enum = false, .body = body,
+                .node = r.decl_of.get(id) catch null })
+        if body
+            for f in def.fields_list
+                r.note(f.type_id, true, depth + 1)
+
+    priv fn handle_opens(r: Self$@, def: sema_type_def.Struct_def$@): Bool //<
+        //< Whether a `struct` reached through a pointer shows its fields
+        //<
+        //< **Only where every field is `pub` and can cross to C**: a field kept inside the package
+        //< stays out of the caller's reach in C as well.
+        for f in def.fields_list
+            if f.vis != sema_type_scope.Visibility.public || !r.crosses(f.type_id, 0)
+                return false
+        return true
+
+    priv fn crosses(r: Self$@, raw: I32, depth: Sz): Bool //<
+        //< Whether a value of the type can be written in C (the `#export` check's set, by value)
+        if depth >= max_type_walk_depth
+            return false
+        id: = r.strip(raw)
+        switch r.c.env.get_info(id) case .const_of(b)
+            return r.crosses(b, depth + 1)
+        case .pointer(_b)
+            return true
+        case .fn_type(_s)
+            return true
+        case .struct_type(def)
+            if r.short_name(id).len == 0 || def.is_packed || def.align_attr > 0
+                return false
+            for f in def.fields_list
+                if !r.crosses(f.type_id, depth + 1)
+                    return false
+            return true
+        case .enum_type(def)
+            return def.is_scalar()
+        default
+            return c_scalar(r.c.env.get_str(id)).len > 0 ||
+                id == I32::sema_type_env.Builtin_type_id.void_ptr
+
+    priv fn short_name(r: Self$@, id: I32): U8[] //<
+        //< A `struct`'s or `enum`'s name as declared; empty for a generic's instance or a slice
+        if (r.c.env.inst_type_index.get(id) catch "").len > 0 || r.c.env.is_slice(id)
+            return ""
+        full: = r.c.env.get_str(id)
+        dot: = full.rfind_char('.')
+        return full if dot < 0 else full.sub_from(dot + 1)
+
+    fn nameable(r: Self$@, id: I32): Bool //<
+        //< Whether a pointer's target can be named in C; one that cannot is written `void`
+        switch r.c.env.get_info(id) case .pointer(_b)
+            return true
+        case .fn_type(_s)
+            return true
+        default
+            return r.c_name_of(id).len > 0 ||
+                id == I32::sema_type_env.Builtin_type_id.void_ptr
+
+    fn c_name_of(r: Self$@, id: I32): U8[] //<
+        //< The C name of a built-in type, a `struct` or an `enum`; empty for any other
+        if id == I32::sema_type_env.Builtin_type_id.void_type
+            return "void"
+        scalar: = c_scalar(r.c.env.get_str(id))
+        if scalar.len > 0
+            return scalar
+        switch r.c.env.get_info(id) case .struct_type(_d)
+            return r.short_name(id)
+        case .enum_type(def)
+            return r.short_name(id) if def.is_scalar() else ""
+        default
+            return ""
+
+priv fn c_scalar(kspl: U8[]): U8[] //< a built-in type's C spelling; empty for any other
+    names: = U8[][]::{ "I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64", "Sz", "F32", "F64",
+        "Bool", "Void" }
+    c_names: = U8[][]::{ "int8_t", "int16_t", "int32_t", "int64_t", "uint8_t", "uint16_t",
+        "uint32_t", "uint64_t", "ptrdiff_t", "float", "double", "bool", "void" }
+    for i in Range.asc(names.len)
+        if kspl.equals(names[i])
+            return c_names[i]
+    return ""
+
+// ==========================================
+// Spelling a type in C (a declarator around a name) and in KSPL
+// ==========================================
+
+impl Walk
+    fn c_decl(r: Self$@, raw: I32, inner: U8[], leaf_const: Bool, out: Str_builder$@, depth: Sz) //<
+        //< It writes the type `raw` as C declares `inner` (a name, or empty for a bare type)
+        //<
+        //< **The declarator grows from the inside out**, as C reads it: a pointer puts `*` before
+        //< `inner`, a function pointer wraps it as `(*inner)(...)`.
+        if depth >= max_type_walk_depth
+            return
+        id: = r.strip(raw)
+        switch r.c.env.get_info(id) case .const_of(b)
+            if r.c.env.get_info(r.strip(b)).is_pointer()
+                r.c_decl(b, base_core.arena.text().s("const ").s(inner).take(), false, out,
+                    depth + 1)
+            else
+                r.c_decl(b, inner, true, out, depth + 1)
+            return
+        case .pointer(b)
+            base: = r.c.env.get_clean_real_type(b)
+            starred: = base_core.arena.text().s("*").s(inner).take()
+            if r.nameable(base)
+                r.c_decl(b, starred, false, out, depth + 1)
+            else
+                is_const: = r.c.env.get_info(r.strip(b)).is_const_of()
+                out.s("const " if is_const else "").s("void ").s(starred)
+            return
+        case .fn_type(sig)
+            $params: = Str_builder.new()
+            defer params.free()
+            for i in Range.asc(sig.params.len)
+                if i > 0
+                    params.s(", ")
+                r.c_decl(sig.params.get(i), "", false, params@, depth + 1)
+            if sig.params.len == 0
+                params.s("void")
+            r.c_decl(sig.ret_id,
+                base_core.arena.text().s("(*").s(inner).s(")(").s(params.slice()).s(")").take(),
+                false, out, depth + 1)
+            return
+        default {}
+        if id == I32::sema_type_env.Builtin_type_id.void_ptr
+            r.c_decl_leaf("void", base_core.arena.text().s("*").s(inner).take(), leaf_const, out)
+            return
+        r.c_decl_leaf(r.c_name_of(id), inner, leaf_const, out)
+
+    priv fn is_fn(r: Self$@, id: I32): Bool //< whether it is a function pointer
+        switch r.c.env.get_info(r.c.env.get_clean_real_type(id)) case .fn_type(_s)
+            return true
+        default
+            return false
+
+    priv fn c_decl_leaf(_r: Self$@, name: U8[], inner: U8[], leaf_const: Bool, out: Str_builder$@)
+        out.s("const " if leaf_const else "").s(name)
+        if inner.len > 0
+            out.c(' ').s(inner)
+
+    fn k_type(r: Self$@, raw: I32, out: Str_builder$@, depth: Sz) //<
+        //< It writes the type `raw` as a KSPL declaration names it
+        if depth >= max_type_walk_depth
+            return
+        id: = r.strip(raw)
+        switch r.c.env.get_info(id) case .const_of(b)
+            r.k_type(b, out, depth + 1)
+            return
+        case .pointer(b)
+            inner: = r.strip(b)
+            $pointee: = inner
+            $mutable: = true
+            switch r.c.env.get_info(inner) case .const_of(bb)
+                pointee = bb
+                mutable = false
+            default {}
+            if !r.nameable(r.c.env.get_clean_real_type(pointee))
+                out.s("Void")
+            else if r.is_fn(pointee)
+                out.c('(')
+                r.k_type(pointee, out, depth + 1)
+                out.c(')')
+            else
+                r.k_type(pointee, out, depth + 1)
+            out.s("$@" if mutable else "@")
+            return
+        case .fn_type(sig)
+            out.s("fn(")
+            for i in Range.asc(sig.params.len)
+                out.s(", " if i > 0 else "").s("p\{i\}: ")
+                r.k_type(sig.params.get(i), out, depth + 1)
+            out.c(')')
+            if !sema_type_env.is_void(r.strip(sig.ret_id))
+                out.s(": ")
+                r.k_type(sig.ret_id, out, depth + 1)
+            return
+        case .struct_type(_d)
+            out.s(r.short_name(id))
+            return
+        case .enum_type(_d)
+            out.s(r.short_name(id))
+            return
+        default {}
+        out.s(r.c.env.get_str(id))
+
+// ==========================================
+// Writing the two forms
+// ==========================================
+
+priv struct Export //< one `#export` function, as the interface writes it
+    node: Ast_node$@
+    doc: U8[]
+
+fn render(root: Ast_node$@, c: Sema_ctx$@, form: Form, out_path: U8[], parser: kspeg.Target$@):
+    U8[] //<
+        //< The interface's text, or empty where a refusal was reported (`c.err`)
+    $walk: = Walk::{ .c = c,
+        .types = base_core.arena.create(List<|Named|>.new(base_core.arena)),
+        .decl_of = base_core.arena.create(Map<|I32, Ast_node$@|>.new(base_core.arena)),
+        .site = null }
+    $exports: = List<|Export|>.new(base_core.arena)
+    for raw in root.children
+        n: = raw.unwrap_top_level()
+        if (n.kind_id == .k_decl_struct || n.kind_id == .k_decl_enum) && n.type_id != 0
+            walk.decl_of.set(walk.strip(n.type_id), n)
+    for raw in root.children
+        n: = raw.unwrap_top_level()
+        if n.kind_id != .k_decl_fn || n.sym_ptr == null ||
+            !(Sema_symbol$@::n.sym_ptr).flags.is_export
+            continue
+        exports.push(Export::{ .node = n, .doc = summary_of(c, n) })
+    errors_before: = c.diags.counts.errors
+    for e in exports
+        walk.site = e.node
+        walk.note(ret_id_of(e.node), true, 0)
+        for p in params_of(e.node)
+            walk.note(p.type_id, true, 0)
+    check_names(walk@, exports@)
+    if c.diags.counts.errors > errors_before
+        return ""
+    switch form case .c_header
+        return render_c(walk@, exports@, out_path)
+    case .kspl
+        return render_kspl(walk@, exports@, root, out_path, parser)
+    case .none
+        return ""
+
+priv fn summary_of(c: Sema_ctx$@, n: Ast_node$@): U8[] //< a declaration's `//<` summary
+    if n == null
+        return ""
+    return decl_summary(base_core.source_of(c.source_map, n.loc.file()), n)
+
+priv fn ret_id_of(n: Ast_node$@): I32 //< a function's return type; `Void` where none is written
+    type_node: = n.get_decl_type_node()
+    if type_node == null || type_node.type_id == 0
+        return I32::sema_type_env.Builtin_type_id.void_type
+    return type_node.type_id
+
+priv fn params_of(n: Ast_node$@): List<|Ast_node$@|> //< a function's parameters, in order
+    $out: = List<|Ast_node$@|>.new(base_core.arena)
+    params: = n.get_fn_params()
+    if params != null
+        for p in params.children
+            if p.kind_id == .k_fn_param
+                out.push(p)
+    return out
+
+priv fn check_names(walk: Walk$@, exports: List<|Export|>$@) //<
+    //< It refuses two declarations of one name: C has one space for them all
+    $seen: = Map<|U8[], Bool|>.new(base_core.arena)
+    for e in exports
+        claim(walk, seen@, e.node, e.node.get_decl_id_text())
+    for t in walk.types
+        site: = t.node if t.node != null else walk.site
+        claim(walk, seen@, site, t.name)
+        if t.is_enum
+            switch walk.c.env.get_info(t.type_id) case .enum_type(def)
+                for v in def.variants_list
+                    claim(walk, seen@, site,
+                        base_core.arena.text().s(t.name).c('_').s(v.name).take())
+            default {}
+
+priv fn claim(walk: Walk$@, seen: Map<|U8[], Bool|>$@, site: Ast_node$@, name: U8[])
+    if seen.get(name) catch false
+        walk.c.clear_scratch()
+            .s("'\{name\}' is declared twice in the interface ('--emit-interface'): C names a \
+                function, a type and an enum's constant in one space. Rename one of them")
+        walk.c.err(site, walk.c.scratch.slice())
+        return
+    seen.set(name, true)
+
+priv fn c_doc(doc: U8[], indent: U8[], out: Str_builder$@) //< a summary as a C comment
+    if doc.len > 0
+        out.s(indent).s("/** ").s(doc.replace("*/", "* /", base_core.arena)).s(" */\n")
+
+priv fn c_ident(name: U8[]): U8[] //< a parameter's or a field's name as C may write it
+    $safe: = name.c_safe_name()
+    defer safe.free()
+    return base_core.arena.dup_str(safe.slice())
+
+priv fn guard_of(out_path: U8[]): U8[] //< the include guard, from the file's name
+    $base: = out_path
+    slash: = base.rfind_char('/')
+    if slash >= 0
+        base = base.sub_from(slash + 1)
+    back: = base.rfind_char('\\')
+    if back >= 0
+        base = base.sub_from(back + 1)
+    $g: = Str_builder.new()
+    defer g.free()
+    if base.len > 0 && base[0].is_digit()
+        g.s("H_")
+    for ch in base
+        if ch.is_lower()
+            g.c(U8::(ch - 32))
+        else if ch.is_alnum()
+            g.c(ch)
+        else
+            g.c('_')
+    return base_core.arena.dup_str(g.slice())
+
+priv fn render_c(walk: Walk$@, exports: List<|Export|>$@, out_path: U8[]): U8[]
+    guard: = guard_of(out_path)
+    $out: = Str_builder.new()
+    defer out.free()
+    out.s("/* The C interface of a library, written by `ksplc --emit-interface`.\n")
+    out.s(" * Caution: Do not edit it; it is remade with the library. */\n")
+    out.s("#ifndef \{guard\}\n#define \{guard\}\n\n")
+    out.s("#include <stdbool.h>\n#include <stddef.h>\n#include <stdint.h>\n\n")
+    out.s("#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n")
+    for t in walk.types
+        if t.is_enum
+            c_doc(summary_of(walk.c, t.node), "", out@)
+            switch walk.c.env.get_info(t.type_id) case .enum_type(def)
+                render_c_enum(walk, t.name, def, out@)
+            default {}
+        else
+            if !t.body
+                c_doc(summary_of(walk.c, t.node), "", out@)
+            out.s("typedef struct \{t.name\} \{t.name\};\n")
+    out.c('\n')
+    for t in bodies_in_order(walk)
+        c_doc(summary_of(walk.c, t.node), "", out@)
+        out.s("struct \{t.name\} {\n")
+        switch walk.c.env.get_info(t.type_id) case .struct_type(def)
+            for f in def.fields_list
+                c_doc(summary_of(walk.c, f.node), "    ", out@)
+                out.s("    ")
+                walk.c_decl(f.type_id, c_ident(f.name), false, out@, 0)
+                out.s(";\n")
+        default {}
+        out.s("};\n\n")
+    for e in exports
+        c_doc(e.doc, "", out@)
+        $params: = Str_builder.new()
+        defer params.free()
+        ps: = params_of(e.node)
+        for i in Range.asc(ps.len)
+            p: = ps.get(i)
+            if i > 0
+                params.s(", ")
+            walk.c_decl(p.type_id, c_ident(p.find_text(.k_identifier)), false, params@, 0)
+        if ps.len == 0
+            params.s("void")
+        walk.c_decl(ret_id_of(e.node),
+            base_core.arena.text().s(e.node.get_decl_id_text()).c('(').s(params.slice()).c(')')
+            .take(), false, out@, 0)
+        out.s(";\n\n")
+    out.s("#ifdef __cplusplus\n}\n#endif\n\n#endif /* \{guard\} */\n")
+    return base_core.arena.dup_str(out.slice())
+
+priv fn bodies_in_order(walk: Walk$@): List<|Named|> //<
+    //< The `struct`s whose fields are written, each after those it holds by value
+    //<
+    //< C needs a type complete where a value of it is held.
+    $out: = List<|Named|>.new(base_core.arena)
+    $done: = Map<|I32, Bool|>.new(base_core.arena)
+    for t in walk.types
+        if !t.is_enum && t.body
+            visit_body(walk, t.type_id, done@, out@, 0)
+    return out
+
+priv fn visit_body(walk: Walk$@, id: I32, done: Map<|I32, Bool|>$@, out: List<|Named|>$@, depth: Sz)
+    if depth >= max_type_walk_depth || (done.get(id) catch false)
+        return
+    done.set(id, true)
+    at: = walk.find(id)
+    if at < 0 || !walk.types.get(at).body
+        return
+    switch walk.c.env.get_info(id) case .struct_type(def)
+        for f in def.fields_list
+            inner: = walk.c.env.get_clean_real_type(f.type_id)
+            switch walk.c.env.get_info(inner) case .struct_type(_d)
+                visit_body(walk, inner, done, out, depth + 1)
+            default {}
+    default {}
+    out.push(walk.types.get(at))
+
+priv fn render_c_enum(walk: Walk$@, name: U8[], def: sema_type_def.Enum_def$@, out: Str_builder$@) //<
+    //< A scalar enum as the library's C carries it: its base type, and its tags
+    //<
+    //< A C enumerator is an `int`, so tags past it are macros of the enum's type, as genc writes
+    //< them (`emit_enum_decl` in `../gen/c/types.kspls`).
+    out.s("typedef ").s(c_scalar(walk.c.env.get_str(def.base_type_id))).s(" \{name\};\n")
+    if !def.tags_fit_i32()
+        unsigned: = walk.c.env.is_unsigned(def.base_type_id)
+        for v in def.variants_list
+            c_doc(summary_of(walk.c, v.node), "", out)
+            out.s("#define \{name\}_\{v.name\} ((\{name\})")
+            if unsigned
+                out.s("\{U64::v.tag_value\}ULL)\n")
+            else
+                out.s("\{v.tag_value\}LL)\n")
+        out.c('\n')
+        return
+    out.s("enum {\n")
+    for i in Range.asc(def.variants_list.len)
+        v: = def.variants_list.get(i)
+        c_doc(summary_of(walk.c, v.node), "    ", out)
+        out.s("    \{name\}_\{v.name\} = \{v.tag_value\}")
+            .s(",\n" if i + 1 < def.variants_list.len else "\n")
+    out.s("};\n\n")
+
+priv fn render_kspl(walk: Walk$@, exports: List<|Export|>$@, root: Ast_node$@, out_path: U8[],
+    parser: kspeg.Target$@): U8[] //<
+        //< The KSPL form, written in braces, then printed by the formatter in the file's notation
+    $out: = Str_builder.new()
+    defer out.free()
+    out.s("// The C interface of a library, written by `ksplc --emit-interface`.\n")
+    out.s("// Caution: Do not edit it; it is remade with the library.\n\n")
+    for t in walk.types
+        if !t.body
+            continue
+        doc: = summary_of(walk.c, t.node)
+        switch walk.c.env.get_info(t.type_id) case .enum_type(def)
+            out.s("pub enum \{t.name\}")
+            if def.base_type_id != I32::sema_type_env.Builtin_type_id.i32_type
+                out.s(": ").s(walk.c.env.get_str(def.base_type_id))
+            out.s(" {").s(kspl_doc(doc)).c('\n')
+            for v in def.variants_list
+                out.s("  \{v.name\} = \{v.tag_value\};")
+                    .s(kspl_doc(summary_of(walk.c, v.node))).c('\n')
+        case .struct_type(def)
+            out.s("pub struct \{t.name\} {").s(kspl_doc(doc)).c('\n')
+            for f in def.fields_list
+                out.s("  ").s("pub " if f.vis == sema_type_scope.Visibility.public else "")
+                    .s(f.name).s(": ")
+                walk.k_type(f.type_id, out@, 0)
+                out.c(';').s(kspl_doc(summary_of(walk.c, f.node))).c('\n')
+        default {}
+        out.s("}\n\n")
+    // The outside libraries the library itself names: a KSPL caller's `--emit-libs` takes them in.
+    $libs: = List<|U8[]|>.new(base_core.arena)
+    tools_run.append_program_libs(root, libs@)
+    for lib in libs
+        out.s("#link(\"").s(lib).s("\") ")
+    out.s("extern \"C\" {\n")
+    for t in walk.types
+        if !t.body
+            out.s("  pub struct \{t.name\};").s(kspl_doc(summary_of(walk.c, t.node))).c('\n')
+    for e in exports
+        out.s("  pub fn ").s(e.node.get_decl_id_text()).c('(')
+        ps: = params_of(e.node)
+        for i in Range.asc(ps.len)
+            p: = ps.get(i)
+            out.s(", " if i > 0 else "").s(p.find_text(.k_identifier)).s(": ")
+            walk.k_type(p.type_id, out@, 0)
+        out.c(')')
+        ret: = ret_id_of(e.node)
+        if !sema_type_env.is_void(walk.strip(ret))
+            out.s(": ")
+            walk.k_type(ret, out@, 0)
+        out.c(';').s(kspl_doc(e.doc)).c('\n')
+    out.s("}\n")
+    laid: = out_path.ends_with(".kspls")
+    $formatter: =
+        fmt_text.format_text(out.slice(), out_path, parser, Config.default_fmt(), laid, false) catch
+        base_diag.ice_panic("--emit-interface: the KSPL form does not parse")
+        return ""
+    defer formatter.free()
+    return base_core.arena.dup_str(formatter.out.slice())
+
+priv fn kspl_doc(doc: U8[]): U8[] //< a summary as a `//<` after its declaration; empty for none
+    return ("" if doc.len == 0
+        else base_core.arena.text().s(" //< ").s(doc).take())

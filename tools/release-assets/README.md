@@ -18,7 +18,7 @@ Make a `hello.kspls` inside the unpacked folder.
 import "std/io"
 
 fn main()
-  io.out().s("Hello, Kanso!\n")
+    io.out().s("Hello, Kanso!\n")
 ```
 
 ```sh
@@ -27,7 +27,7 @@ fn main()
 
 `run` translates, compiles, links and runs it in one command. **It compiles the intermediate C with `clang`** (or the compiler named by the environment variable `CC`), so one has to be on the PATH. Building an executable yourself uses the same C compiler ("Making an executable" below).
 
-**On Windows, use MSYS2's UCRT64 clang** (`pacman -S mingw-w64-ucrt-x86_64-clang` in the "MSYS2 UCRT64" shell, then put `C:\msys64\ucrt64\bin` on the PATH). Kanso is developed and built with it. LLVM's own Windows clang targets MSVC instead, and is built in CI but not confirmed.
+**On Windows, use MSYS2's UCRT64 clang** (`pacman -S mingw-w64-ucrt-x86_64-clang` in the "MSYS2 UCRT64" shell, then put `C:\msys64\ucrt64\bin` on the PATH). Kanso is developed and built with it. LLVM's own Windows clang targets MSVC instead: ksplc names that toolchain's link flags, but nothing builds or runs a program with it.
 
 ## Splitting a program into files — how to write `import`
 
@@ -35,46 +35,26 @@ fn main()
 
 | how it is written | where it looks from |
 | :-- | :-- |
-| `import "std/io";` | from the `std/` that came with it |
-| `import "hw";` / `"./hw"` / `"../hw"` (no `/`, or starting with `.`) | from **beside the file containing the import** |
-| `import "src/hw";` (holds a `/` and does not start with `.`) | from **the folder `ksplc` was run in** |
+| `import "std/io"` | from the `std/` that came with it |
+| `import "hw"` / `"./hw"` / `"../hw"` (no `/`, or starting with `.`) | from **beside the file containing the import** |
+| `import "src/hw"` (holds a `/` and does not start with `.`) | from **the folder `ksplc` was run in** |
 
-So with `hw.kspls` beside `main.kspls`, `main.kspls` writes `import "hw";`. `import "src/hw";` looks in `src/` and fails if nothing is there; the error lists every folder it looked in.
+So with `hw.kspls` beside `main.kspls`, `main.kspls` writes `import "hw"`. `import "src/hw"` looks in `src/` and fails if nothing is there; the error lists every folder it looked in.
 
-**`as` changes only the name**: `import "hw";` alone lets you write `hw.say()`. `import "hw" as hw;` means the same, and `ksplc lint` reports that the `as` adds nothing.
+**`as` changes only the name**: `import "hw"` alone lets you write `hw.say()`. `import "hw" as hw` means the same, and `ksplc lint` reports that the `as` adds nothing.
 
 A function used only inside its own folder needs no `pub`; only what another folder calls needs it.
 
 ## Making an executable
 
-To get the executable itself rather than `run` it, compile the KSPL to C and link it with your C compiler.
+To get the executable itself rather than `run` it, `build` it:
 
 ```sh
-# compile: hello.kspls -> hello.c
-./ksplc hello.kspls hello.c
-
-# link: hello.c -> executable
-clang hello.c $(./ksplc info link-libs) -o hello
-
-# run
+./ksplc build hello.kspls hello     # hello.c and hello.libs are left beside it
 ./hello
 ```
 
-**The libraries to link differ per C compiler target**, even without networking or threads, so `ksplc info link-libs` prints them for the `clang` on the PATH. In PowerShell, split its output into words:
-
-```powershell
-.\ksplc.exe hello.kspls hello.c
-clang hello.c ((.\ksplc.exe info link-libs) -split ' ') -o hello.exe
-```
-
-A program whose `extern` block names its library (`#link("openblas")`) needs that library too. Have the compile write the names to a file, and pass it to clang right after the source:
-
-```sh
-./ksplc --emit-libs=hello.libs hello.kspls hello.c
-clang hello.c @hello.libs $(./ksplc info link-libs) -o hello
-```
-
-`run` and the bundled tasks do this themselves.
+It writes the C, then has `clang` (or the compiler `CC` names) compile and link it, with the libraries this platform and the program need. PowerShell runs the same line, with `.\ksplc.exe` and `hello.exe`. Flags for the C compiler go in `--cflags` (`--cflags=-O0` for the debugger). The bundled build task runs it.
 
 ## Working in another folder
 

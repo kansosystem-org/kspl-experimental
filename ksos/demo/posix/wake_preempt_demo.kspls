@@ -1,0 +1,112 @@
+//< A task woken by a lower-priority one runs before the waker's next line
+//<
+//< low (1) wakes high (3) once per primitive, and checks on its very next line that high has
+//< already run. Nothing else gives the CPU up in between: no yield, no delay and no timer, so only
+//< the wake itself can have switched.
+
+// ==========================================
+//   give      high waits in Sem.take; low gives.
+//   unlock    high waits in Mutex.lock on the mutex low holds; low unlocks.
+//   send      high waits in Queue.recv on an empty queue; low sends.
+//   set       high waits in Event.wait; low sets the bit.
+//   resume    high is suspended; low resumes it.
+//   create    low creates a task above its own priority.
+//   equal     a woken task of the waker's own priority does not cut in (it waits for a yield).
+// ==========================================
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+import "std/verdict"
+
+$g_sem: sync.Sem
+$g_mutex: sync.Mutex
+$g_q: sync.Queue<|I32|>
+$g_qbuf: I32[2]
+$g_event: sync.Event
+$g_peer_sem: sync.Sem
+
+$g_high_step: I32 = 0 // how many of its waits high has come out of
+$g_peer_ran: Bool = false
+$g_late_ran: Bool = false
+
+$tcb_low: Task
+$tcb_high: Task
+$tcb_peer: Task
+$tcb_late: Task
+$stack_low: U8[65536]
+$stack_high: U8[65536]
+$stack_peer: U8[65536]
+$stack_late: U8[65536]
+
+fn high(_arg: Void$@): Void
+    g_sem.take()
+    g_high_step = 1
+    g_mutex.lock()
+    g_mutex.unlock()
+    g_high_step = 2
+    _v: = g_q.recv()
+    g_high_step = 3
+    _bits: = g_event.wait(1, .any, true)
+    g_high_step = 4
+    tcb_high.suspend()
+    g_high_step = 5
+
+fn late(_arg: Void$@): Void //< created by low while it runs, above its priority
+    g_late_ran = true
+
+fn peer(_arg: Void$@): Void //< the same priority as low
+    g_peer_sem.take()
+    g_peer_ran = true
+
+fn low(_arg: Void$@): Void
+    // high runs first (it is the highest) and is waiting in Sem.take by the time low starts. low
+    // takes the mutex before waking it, so high's next wait, in Mutex.lock, is behind low.
+    g_mutex.lock()
+    verdict.start("[ksos] a higher-priority task woken by give runs at once")
+    g_sem.give()
+    assert(g_high_step == 1, "wake_preempt: give left the woken high-priority task waiting")
+    verdict.pass("high ran before the line after give.")
+
+    verdict.start("[ksos] a higher-priority task woken by unlock runs at once")
+    // high is now waiting in Mutex.lock behind low.
+    assert(g_high_step == 1, "wake_preempt: high went past a mutex low holds")
+    g_mutex.unlock()
+    assert(g_high_step == 2, "wake_preempt: unlock left the woken high-priority task waiting")
+    verdict.pass("high ran before the line after unlock.")
+
+    verdict.start("[ksos] a higher-priority task woken by send runs at once")
+    g_q.send(7)
+    assert(g_high_step == 3, "wake_preempt: send left the woken high-priority task waiting")
+    verdict.pass("high ran before the line after send.")
+
+    verdict.start("[ksos] a higher-priority task woken by set runs at once")
+    g_event.set(1)
+    assert(g_high_step == 4, "wake_preempt: set left the woken high-priority task waiting")
+    verdict.pass("high ran before the line after set.")
+
+    verdict.start("[ksos] a higher-priority task resumed runs at once")
+    tcb_high.resume()
+    assert(g_high_step == 5, "wake_preempt: resume left the higher-priority task waiting")
+    verdict.pass("high ran before the line after resume.")
+
+    verdict.start("[ksos] a task created above the creator's priority runs at once")
+    tcb_late.create(U8$[]::stack_late, late, null, 3, "late")
+    assert(g_late_ran, "wake_preempt: create left the new higher-priority task waiting")
+    verdict.pass("the new task ran before the line after create.")
+
+    verdict.start("[ksos] a woken task of the same priority waits its turn")
+    g_peer_sem.give()
+    assert(!g_peer_ran, "wake_preempt: a task of the waker's own priority cut in")
+    Task.yield()
+    assert(g_peer_ran, "wake_preempt: the woken peer did not run at the yield")
+    verdict.pass("the peer ran at the yield, not at the give.")
+
+fn main()
+    g_sem.init(0)
+    g_mutex.init()
+    g_q.init(g_qbuf[0]@, 2)
+    g_event.init()
+    g_peer_sem.init(0)
+    tcb_low.create(U8$[]::stack_low, low, null, 1, "low")
+    tcb_peer.create(U8$[]::stack_peer, peer, null, 1, "peer")
+    tcb_high.create(U8$[]::stack_high, high, null, 3, "high")
+    task.start_scheduler()

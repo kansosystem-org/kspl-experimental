@@ -162,19 +162,56 @@ function kspageLocal(ui) {
     }
   };
 
+  // **Wait until the check is done**, or the tools flash on for an instant with no server.
+  const ready = ask().then(() => {
+    if (told) deny(told);
+    if (here) holdOn();
+    return here;
+  });
+
+  // ---- A picture the document names ----
+  //
+  // The address to load a picture from. **A picture beside the document is read through the API,
+  // with the token**: the server answers no file but the page without one, and an `<img>` cannot
+  // send a header, so the bytes come back as a `blob:` address. An embedded picture (`data:`), an
+  // outside one, and any picture where there is no server keep their source (whether an outside
+  // one may load is `draw.js`'s `outside`). null where it cannot be read.
+  // Caution: **The server does not say the type** (`application/octet-stream`), so it is given
+  // here from the name's end; an SVG without it does not draw.
+  const PICTURE_TYPES = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+    gif: "image/gif", webp: "image/webp", svg: "image/svg+xml", ico: "image/vnd.microsoft.icon" };
+  const pictureAt = async (src) => {
+    if (!(await ready)) return src;
+    let place = null;
+    try {
+      place = new URL(src, location.href);
+    } catch (_) {
+      return null;
+    }
+    if (place.origin !== location.origin) return src;
+    let path = "";
+    try {
+      path = decodeURIComponent(place.pathname.replace(/^\/+/, ""));
+    } catch (_) {
+      return null;
+    }
+    try {
+      const got = await fetch(at(path), { headers: head() });
+      if (!got.ok) return null;
+      const dot = path.lastIndexOf(".");
+      const type = PICTURE_TYPES[dot < 0 ? "" : path.slice(dot + 1).toLowerCase()] || "";
+      return URL.createObjectURL(new Blob([await got.arrayBuffer()], { type: type }));
+    } catch (_) {
+      return null;
+    }
+  };
+
   return {
-    // **Wait until the check is done**, or the tools flash on for an instant with no server.
-    localReady: ask().then(() => {
-      if (told) deny(told);
-      if (here) holdOn();
-      return here;
-    }),
+    localReady: ready,
     localHere: () => here,
-    // **The header carrying the token is built in one place.** With two, one path alone forgets the
-    // token and gets a 401. The plugin requests borrow it (`plugin.js`).
-    localHead: head,
     localRead: readAt,
     localWrite: writeAt,
     localStat: statAt,
+    localPicture: pictureAt,
   };
 }

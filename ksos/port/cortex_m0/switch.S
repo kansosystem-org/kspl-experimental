@@ -11,6 +11,9 @@
  * The hardware has already saved the latter; here r4-r11 are saved and restored, and PSP swapped.
  * Where they are saved to and restored from is the C side's g_pendsv_from / g_pendsv_to (a
  * ksos_ctx*, whose head is the saved SP).
+ * It runs with interrupts masked (cpsid i): an interrupt handler that gives schedules too, and a
+ * g_pendsv_from / g_pendsv_to rewritten halfway through would save one thread into another's
+ * context.
  * ========================================== */
     .syntax unified
     .thumb          /* the CPU is fixed at -mcpu=cortex-m0plus (Armv6-M) */
@@ -20,6 +23,7 @@
     .type PendSV_Handler, %function
     .thumb_func
 PendSV_Handler:
+    cpsid   i                   /* no interrupt in the middle (see above)      */
     mrs     r0, psp             /* r0 = the present thread's PSP               */
     subs    r0, r0, #32         /* take room to save r4-r11 (8 words)          */
     stmia   r0!, {r4-r7}        /* save r4-r7 (r0 advances by +16)             */
@@ -45,5 +49,6 @@ PendSV_Handler:
     ldmia   r0!, {r4-r7}        /* restore the next thread's own r4-r7         */
     msr     psp, r1             /* r1 is the saved area's head+32 = the head of the hardware's
                                    saved frame */
+    cpsie   i                   /* PRIMASK was 0 on entry, or PendSV could not run */
     bx      lr                  /* EXC_RETURN (0xFFFFFFFD): return to thread/PSP */
     .size PendSV_Handler, . - PendSV_Handler

@@ -30,7 +30,7 @@ out/kanso_lora_vN.safetensors (a new version)
 ## What is decided about the loop
 
 1. **The usage log is off by default.** The part that emits completions writes it only when given a path: privacy comes first.
-2. **Continued training is started by hand** (there is no `make retrain`). Background work and automatic retraining go against keeping the compiler light and stable.
+2. **Continued training is started by hand** (no make target starts it). Background work and automatic retraining go against keeping the compiler light and stable.
 3. **The regression gate promotes a new version only when it is at least as good as the old one.** While there are few samples, the gate withholds its verdict, so noise neither promotes nor rejects a version.
 
 ## Where the native model stands

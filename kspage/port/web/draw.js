@@ -17,20 +17,6 @@ function kspageDraw(ks) {
   let accent = "Highlight";
   let paperInk = "Canvas";
   let lineInk = "GrayText";
-  // "Whether the background is dark", for choosing the text color.
-  // Caution: **Do not read the role's text as it is** — `--paper` can be a system color name
-  // (`Canvas`), which reads as no color and stays dark after a dark theme. **Read the computed
-  // color** (`background`, names resolved to rgb()); **if transparent, decide by the system
-  // setting**. **Not a plain average** (`dark_color` in `kspage/model/style.kspls`).
-  const darkOf = (text) => {
-    const rgb = /^rgba?\(\s*([0-9.]+)[,\s]+([0-9.]+)[,\s]+([0-9.]+)(?:[,\s/]+([0-9.]+))?/i
-      .exec(text || "");
-    if (!rgb || (rgb[4] !== undefined && Number(rgb[4]) === 0)) {
-      return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-    }
-    return (Number(rgb[1]) * 299 + Number(rgb[2]) * 587 + Number(rgb[3]) * 114) / 1000 < 128;
-  };
-
   const readTheme = () => {
     const look = getComputedStyle(canvas);
     const got = look.getPropertyValue("--accent").trim();
@@ -39,9 +25,6 @@ function kspageDraw(ks) {
     paperInk = sheet.length > 0 ? sheet : "Canvas";
     const edge = look.getPropertyValue("--line").trim();
     lineInk = edge.length > 0 ? edge : "GrayText";
-    // Caution: **Pass it to the core too** — the layout chooses the text color, so otherwise, under
-    // a dark theme **the text alone** stays light-theme and disappears into the background.
-    w.kspage_web_set_dark_ground(darkOf(look.backgroundColor) ? 1 : 0);
   };
 
   const surfaceOf = (i) => {
@@ -273,17 +256,19 @@ function kspageDraw(ks) {
   // Caution: **Keep one per source** (otherwise it is fetched on every redraw).
   const pictures = new Map();
   // Whether that source is an external server: **anything but an embedded image (`data:`) or one
-  // beside the document (a relative path with no scheme)**, the latter fetched from this page's
-  // server.
+  // fetched from where this page came from**, judged by **the address the browser will fetch, not
+  // the spelling**. A source with no scheme can still name another server (`//host/p.png`, and
+  // `\\host/p.png`, which the browser reads the same), and from `file://` such a source asks a
+  // network share. The host is compared too: every `file:` address has the origin `null`.
   const outside = (src) => {
-    const cut = src.indexOf(":");
-    if (cut < 0) return false;
-    const said = src.slice(0, cut).toLowerCase();
-    // **Where `/` `?` `#` come first it is no scheme** (`a/b:c` is a path).
-    for (const c of ["/", "?", "#"]) {
-      if (src.indexOf(c) >= 0 && src.indexOf(c) < cut) return false;
+    let at;
+    try {
+      at = new URL(src, location.href);
+    } catch (e) {
+      return true;
     }
-    return said !== "data";
+    if (at.protocol === "data:") return false;
+    return at.protocol !== location.protocol || at.host !== location.host;
   };
   // The number of external images blocked.
   // Caution: **Count them again on every draw** (switching the document changes it).
@@ -296,7 +281,16 @@ function kspageDraw(ks) {
     // Caution: **Store it before starting the load** — setting `src` starts loading, so the
     // "loaded" event could come with no image stored to draw.
     pictures.set(src, got);
-    got.src = src;
+    // **Where the page is served locally, a picture beside the document is read with the token**
+    // (`local.js`'s `localPicture`); with no page around it (a test), the source as it is.
+    const load = ks.api.localPicture;
+    if (load) {
+      load(src).then((url) => {
+        if (url) got.src = url;
+      });
+    } else {
+      got.src = src;
+    }
     return got;
   }
 
@@ -359,7 +353,7 @@ function kspageDraw(ks) {
   const DATINGS = ["none", "plain", "long"];
   // What is built at layout time, **in the core's numbers too** (`Collect`'s order); bars and lines
   // come from the range's values, not the document.
-  const COLLECTS = ["none", "contents", "notes", "bars", "lines", "source", "imports"];
+  const COLLECTS = ["none", "contents", "notes", "bars", "lines"];
   // A slide's layout sketch, **in the numbers the core reads** (`Sketch`'s order); it acts once at
   // insertion.
   const SKETCHES = ["whole", "titled", "halved"];

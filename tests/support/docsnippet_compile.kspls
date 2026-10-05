@@ -1,0 +1,335 @@
+#!/usr/bin/env -S ksplc run
+//< Compiles a document's KSPL fragments, and holds each `// error` mark to what the compiler says
+//<
+//< The rule is "A code block compiles, or says why not" in `docs/SPEC-documents.md`. **A fragment
+//< is compiled inside a copy of the package whose documents hold it** (`place_of`), so a name the
+//< package keeps to itself resolves as it does for the package's own files. **It compiles**, since
+//< some refusals are made only after the analysis a lint stops at; a whole program is linted too.
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strnum"
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+import "tests/support/docsnippet_shape" as shape
+import "tests/support/harness"
+
+priv const tour_name: U8[] = "TOUR.md" //< a tour's blocks are steps of one program
+    //<
+    //< `make test-docs` compiles and runs that program in both notations, so its steps are not
+    //< compiled one by one.
+priv const package_mark: U8[] = "ksplc.cfg" //< a top folder holding it is copied for its fragments
+
+priv struct Case //< one fragment, and what compiling it found
+    s: shape.Snippet
+    lines: List<|U8[]|>$@ //< the fragment's lines
+    dir: U8[] //< where under the sandbox its files go: its package's copy, or the top (empty)
+    marks: List<|Sz|>$@ //< the lines marked `// error`, from 0
+    ends: List<|Sz|>$@ //< for each mark, where the block it covers ends
+    covered: List<|Bool|>$@ //< for each line, whether a mark covers it
+    shapes: List<|shape.Shape|>$@ //< as written, then wrapped where it holds no `main`
+    fit: Sz //< the shape that compiled with its marks left out, or `shapes.len`
+    fit_run: Sz //< that shape's run in the first round
+
+priv struct Job_at //< which case and which run a job is
+    case_at: Sz
+    mark_at: Sz //< the mark kept, `all_marks` for every one, `no_mark` for none
+    shape_at: Sz
+    rel: U8[] //< the file, from the sandbox
+    lint: Bool //< `ksplc lint` on it rather than the compile
+
+priv const lint_fails: U8[][] = U8[][]::{ "error", "warning", "information", "hint" } //<
+    //< The weights `make lint` turns back: every one, down to a hint
+
+priv const no_mark: Sz = -1
+priv const all_marks: Sz = -2
+
+priv fn place_of(doc: U8[], marked: List<|U8[]|>@): U8[] //<
+    //< The folder a document's fragments compile in: the top folder that holds a `ksplc.cfg`
+    slash: = doc.find_char('/')
+    if slash <= 0
+        return ""
+    top: = doc.sub(0, slash)
+    for m in marked
+        if m.equals(top)
+            return top
+    return ""
+
+priv fn copy_package(top: U8[], tracked: List<|U8[]|>@, sandbox: U8[], arena: Arena$@): Bool //<
+    //< Copies every file git knows under `top` into the sandbox, keeping its path
+    root: = harness.root()
+    prefix: = arena.text().s(top).c('/').take()
+    for rel in tracked
+        if !rel.starts_with(prefix)
+            continue
+        body: = io.read_file(fs.join(root, rel, arena)) catch
+            continue
+        to: = fs.join(sandbox, rel, arena)
+        fs.mkdir_all(sys.get_dir_name(to)) catch
+            return false
+        io.write_file(to, body) catch
+            return false
+    return true
+
+priv fn new_case(s: shape.Snippet, dir: U8[], arena: Arena$@): Case
+    lines: = List<|U8[]|>.create(arena)
+    for ln in s.body.lines(arena)
+        lines.push(ln)
+    $c: = Case::{ .s = s, .lines = lines, .dir = dir, .marks = List<|Sz|>.create(arena),
+        .ends = List<|Sz|>.create(arena), .covered = List<|Bool|>.create(arena),
+        .shapes = List<|shape.Shape|>.create(arena), .fit = 0, .fit_run = 0 }
+    for _i in Range.asc(lines.len)
+        c.covered.push(false)
+    for i in Range.asc(lines.len)
+        if !shape.is_mark(lines.get(i))
+            continue
+        end: = shape.block_end(lines, i)
+        c.marks.push(i)
+        c.ends.push(end)
+        for $j: = i; j < end; j += 1
+            c.covered.set(j, true)
+    c.shapes.push(shape.as_written(lines, arena))
+    if !shape.is_whole(lines)
+        c.shapes.push(shape.wrapped(lines, s.laid, arena))
+    c.fit = c.shapes.len
+    return c
+
+priv fn doc_line(c: Case@, at: Sz): Sz //< the document's line of the fragment's line `at`
+    return c.s.line + 1 + at
+
+priv fn kept(c: Case@, mark_at: Sz, arena: Arena$@): List<|Bool|> //<
+    //< Which lines a run leaves out: every covered line but the mark kept's
+    $out: = List<|Bool|>.new(arena)
+    for i in Range.asc(c.lines.len)
+        $drop: = c.covered.get(i) && mark_at != all_marks
+        if drop && mark_at >= 0
+            m: = c.marks.get(mark_at)
+            drop = i < m || i >= c.ends.get(mark_at)
+        out.push(drop)
+    return out
+
+priv fn job_for(c: Case@, case_at: Sz, shape_at: Sz, mark_at: Sz, sandbox: U8[], arena: Arena$@):
+    Job_at //<
+        //< Writes one run's file and says where it is
+    ext: = "kspls" if c.s.laid else "kspl"
+    name: = arena.text().s("doc_snippet_\{case_at\}_\{shape_at\}_\{mark_at + 2\}.").s(ext).take()
+    rel: =
+        (name if c.dir.len == 0
+        else arena.text().s(c.dir).c('/').s(name).take())
+    dropped: = kept(c, mark_at, arena)
+    sh: = c.shapes.get(shape_at)
+    io.write_file(fs.join(sandbox, rel, arena), shape.text_without(sh@, dropped@, arena)) catch {}
+    return Job_at::{ .case_at = case_at, .mark_at = mark_at, .shape_at = shape_at, .rel = rel,
+        .lint = false }
+
+priv fn argv_of(j: Job_at@, arena: Arena$@): U8[][] //<
+    //< the compile of one file, run in the sandbox
+    exe: = fs.absolute(harness.ksplc_exe(), arena) catch
+        fallback harness.ksplc_exe()
+    $argv: = List<|U8[]|>.new(arena)
+    argv.push(exe)
+    if j.lint
+        argv.push("lint")
+    argv.push(arena.text().s("--std-dir=").s(harness.std_dir()).take())
+    argv.push(arena.text().s("--pkg-src-dir=").s(harness.root()).take())
+    argv.push(j.rel)
+    if !j.lint
+        argv.push(arena.text().s(j.rel).s(".c").take())
+    return argv.slice()
+
+priv fn run_jobs(at: List<|Job_at|>@, sandbox: U8[], arena: Arena$@):
+    List<|verdict.Run_out|>$@
+    $jobs: = List<|subproc.Job|>.new(arena)
+    for j in at
+        jobs.push(subproc.Job::{ .argv = argv_of(j@, arena), .cwd = sandbox })
+    return harness.run_all(jobs.slice(), "docsnippet")
+
+priv fn said_lines(out: U8[], rel: U8[], word: U8[], arena: Arena$@): List<|Sz|> //<
+    //< The lines of `rel` the compiler names with `word` (`error` / `warning`), 1-based
+    $got: = List<|Sz|>.new(arena)
+    head: = arena.text().s(rel).c(':').take()
+    tail: = arena.text().s(": ").s(word).c(':').take()
+    for ln in out.lines(arena)
+        if !ln.starts_with(head) || ln.find_str(tail) < 0
+            continue
+        rest: = ln.sub_from(head.len)
+        stop: = rest.find_char(':')
+        if stop <= 0
+            continue
+        n: = rest.sub(0, stop).to_i64() catch 0
+        if n > 0
+            got.push(Sz::n)
+    return got
+
+priv fn first_said(c: Case@, j: Job_at@, out: U8[], word: U8[], arena: Arena$@): U8[] //<
+    //< What the compiler said first with `word` (`error` / `warning`), at the document's line
+    head: = arena.text().s(j.rel).c(':').take()
+    tail: = arena.text().s(": ").s(word).s(": ").take()
+    sh: = c.shapes.get(j.shape_at)
+    for ln in out.lines(arena)
+        said: = ln.find_str(tail)
+        if said < 0
+            continue
+        if !ln.starts_with(head)
+            return ln.trim_spaces()
+        rest: = ln.sub_from(head.len)
+        stop: = rest.find_char(':')
+        $n: I64 = 0
+        if stop > 0
+            n = rest.sub(0, stop).to_i64() catch 0
+        at: =
+            sh.from.get(Sz::n - 1) if n > 0 && Sz::n <= sh.from.len else shape.added_line
+        what: = ln.sub_from(said + tail.len)
+        if at == shape.added_line
+            return arena.text().s("on the line the wrapping added: ").s(what).take()
+        return arena.text().s("line \{doc_line(c, at)\}: ").s(what).take()
+    for ln in out.lines(arena)
+        if ln.trim_spaces().len > 0
+            return ln.trim_spaces()
+    return "(it said nothing)"
+
+priv fn mark_judged(c: Case@, j: Job_at@, out: verdict.Run_out@, arena: Arena$@): U8[] //<
+    //< What is wrong with one marked run, or empty: each error must fall inside what is kept
+    sh: = c.shapes.get(j.shape_at)
+    $inside: Sz = 0
+    for n in said_lines(out.out, j.rel, "error", arena)
+        at: = sh.from.get(n - 1) if n - 1 < sh.from.len else shape.added_line
+        $ok: = at != shape.added_line && c.covered.get(at)
+        if ok && j.mark_at >= 0
+            ok = at >= c.marks.get(j.mark_at) && at < c.ends.get(j.mark_at)
+        if !ok
+            return arena.text().s("an error falls on an unmarked line, ")
+                .s(first_said(c, j, out.out, "error", arena)).take()
+        inside += 1
+    if j.mark_at >= 0 && (out.code == 0 || inside == 0)
+        return "it is marked `// error`, but compiles"
+    return ""
+
+fn run(snippets: List<|shape.Snippet|>@, sandbox: U8[], arena: Arena$@) //<
+    //< Compiles every fragment and reports what disagrees with its marks, as one check
+    tracked: = harness.tracked() catch
+        fallback List<|U8[]|>.new(arena)
+    $marked: = List<|U8[]|>.new(arena)
+    for rel in tracked
+        if rel.ends_with(package_mark) && rel.count_str("/") == 1
+            marked.push(rel.sub(0, rel.len - package_mark.len - 1))
+    own: = harness.private_docs()
+    $bad: = List<|U8[]|>.new(arena)
+    $cases: = List<|Case|>.new(arena)
+    $copied: = List<|U8[]|>.new(arena)
+    for s in snippets
+        $skip: =
+            s.doc.starts_with("private/") || sys.get_file_name(s.doc).equals(tour_name)
+        for o in own
+            skip = skip || sys.get_file_name(s.doc).equals(o)
+        if skip
+            continue
+        dir: = place_of(s.doc, marked@)
+        $have: = dir.len == 0
+        for d in copied
+            have = have || d.equals(dir)
+        if !have
+            if !copy_package(dir, tracked@, sandbox, arena)
+                bad
+                    .push(arena.text().s("cannot copy ").s(dir).s(" into the sandbox").take())
+            copied.push(dir)
+        c: = new_case(s, dir, arena)
+        for i in Range.asc(c.lines.len)
+            if shape.is_stray_mark(c.lines.get(i))
+                bad
+                    .push(arena.text().s(s.doc).c(':').s("\{doc_line(c@, i)\}")
+                    .s(": a mark ends the line it marks, spelt `// error`").take())
+        cases.push(c)
+
+    // The first round: every shape with its marked lines left out.
+    $base: = List<|Job_at|>.new(arena)
+    for k in Range.asc(cases.len)
+        c: = cases.get(k)
+        for si in Range.asc(c.shapes.len)
+            base.push(job_for(c@, k, si, no_mark, sandbox, arena))
+        // A whole program is what a reader copies, so it passes the lint gate too.
+        if shape.is_whole(c.lines)
+            $lint: = job_for(c@, k, 0, no_mark, sandbox, arena)
+            lint.lint = true
+            base.push(lint)
+    base_out: = run_jobs(base@, sandbox, arena)
+    for b in Range.asc(base.len)
+        j: = base.get(b)
+        c: = cases[j.case_at]@
+        if !j.lint && base_out.get(b).code == 0 && c.fit == c.shapes.len
+            c.fit = j.shape_at
+            c.fit_run = b
+    $compiled: Sz = 0
+    $leaning: Sz = 0
+    $marks: = List<|Job_at|>.new(arena)
+    for k in Range.asc(cases.len)
+        c: = cases.get(k)
+        where: = arena.text().s(c.s.doc).c(':').s("\{c.s.line\}").take()
+        excused: = shape.has_elision(c.lines) || shape.names_a_sibling(c.lines)
+        if c.fit == c.shapes.len
+            last: = base_index(base@, k)
+            last_run: = base.get(last)
+            said: =
+                first_said(c@, last_run@, base_out.get(last).out, "error", arena)
+            if shape.is_whole(c.lines) && !excused
+                bad
+                    .push(arena.text().s(where).s(": a whole program does not compile, ").s(said)
+                    .take())
+            else if c.marks.len > 0 && !excused
+                bad
+                    .push(arena.text().s(where)
+                    .s(": it carries `// error`, and does not compile without the marked lines, ")
+                    .s(said).take())
+            else
+                leaning += 1
+            continue
+        compiled += 1
+        for b in Range.asc(base.len)
+            j: = base.get(b)
+            if !j.lint || j.case_at != k
+                continue
+            said: = base_out.get(b).out
+            for word in lint_fails
+                if said_lines(said, j.rel, word, arena).len > 0
+                    bad
+                        .push(arena.text().s(where).s(": `ksplc lint` reports a whole program's ")
+                        .s(word).s(", ").s(first_said(c@, j@, said, word, arena)).take())
+        if shape.names_a_sibling(c.lines)
+            bad
+                .push(arena.text().s(where).s(": it names a file beside it, yet compiles alone")
+                .take())
+        for m in Range.asc(c.marks.len)
+            marks.push(job_for(c@, k, c.fit, m, sandbox, arena))
+        if c.marks.len > 1
+            marks.push(job_for(c@, k, c.fit, all_marks, sandbox, arena))
+
+    // The second round: each mark alone, then all of them together.
+    marks_out: = run_jobs(marks@, sandbox, arena)
+    for i in Range.asc(marks.len)
+        j: = marks.get(i)
+        c: = cases.get(j.case_at)
+        out: = marks_out.get(i)
+        why: = mark_judged(c@, j@, out@, arena)
+        if why.len == 0
+            continue
+        line: =
+            doc_line(c@, c.marks.get(j.mark_at)) if j.mark_at >= 0 else c.s.line
+        bad
+            .push(arena.text().s(c.s.doc).c(':').s("\{line\}: ").s(why).take())
+    verdict.check_list(arena.text()
+        .s("a document's programs compile, and its `// error` marks hold (\{compiled\} compiled, ")
+        .s("\{leaning\} lean on their context)").take(), cases.len, "fragments", bad@,
+        "the marks are \"A code block compiles, or says why not\" in docs/SPEC-documents.md")
+
+priv fn base_index(base: List<|Job_at|>@, case_at: Sz): Sz //< the case's last run in the round
+    //<
+    //< The last shape is the wrapped one where there are two, whose error is the fragment's own.
+    $at: Sz = 0
+    for i in Range.asc(base.len)
+        if base.get(i).case_at == case_at
+            at = i
+    return at

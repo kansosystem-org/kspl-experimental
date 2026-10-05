@@ -1,19 +1,18 @@
 // ==========================================
 // kspage's page — saving and loading, **on the same `kf` as `file.js`**.
 //
-// **This file only writes text out and reads text in.** The name, the write-back handle, the path
-// and the open documents belong to [`file.js`](file.js), reached through `kf`.
-// **The fields that change live only in `kf`** (`openKind` / `bodyAt` / `pastAt` / `seen` /
-// `seenAt`); a `let` here would split the current state.
+// **This file only writes text out and reads text in.** The name, the write-back handle and the
+// path belong to [`file.js`](file.js), reached through `kf`.
+// **The fields that change live only in `kf`** (`openKind` / `bodyAt` / `seen` / `seenAt` /
+// `aside`); a `let` here would split the current state.
 // Caution: **Go through `kf.remember` once it is saved**, or it reads "saved, yet changed" (the
 // path and the text change as a pair). The boundary follows [`DESIGN.md`](../../docs/DESIGN.md)'s
 // "The boundary between the core and the browser".
 // ==========================================
 function kspageSave(kf) {
-  const { KIND_JSON, KIND_MD, KIND_TEXT, PAST_KIND, app, bindBody, bindPast, bodyExt,
-    bodyText, canBind, deny, forgetWhere, keepName, kindOf, kindPick, layIn, nameInPath, nameOf,
-    pastPathOf, pathBox, pathOf, planOpen, recalled, remember, say, takeChosen, takeName, typeOf,
-    ui, whyNotRead } = kf;
+  const { KIND_MD, app, bindBody, bodyExt, bodyText, canBind, deny, forgetWhere, keepName, kindOf,
+    kindPick, layIn, nameInPath, nameOf, pathBox, pathOf, planOpen, recalled, remember, say,
+    takeChosen, takeName, typeOf, ui, whyNotRead } = kf;
   //
   // Caution: **Before writing, check whether that path has changed**, or it silently overwrites
   // another window's changes. To the handle, else the path, else it downloads a copy.
@@ -46,9 +45,8 @@ function kspageSave(kf) {
   const renamed = () => {
     keepName();
     const path = pathOf();
-    if (!kf.bodyAt && !kf.pastAt && !path) return;
+    if (!kf.bodyAt && !path) return;
     bindBody(null);
-    bindPast(null);
     if (path) pathBox.value = "";
     say("The name has changed, so the save target will be confirmed at the next save");
   };
@@ -56,10 +54,10 @@ function kspageSave(kf) {
   // Caution: **Do not mistake it for a cancel** (told apart by name below).
   const why = (e) => String((e && e.message) || e);
   // The refusal when the file changed outside after it was read. **One message for both kinds of
-  // location** (a path and a handle), and it names how it compares.
+  // location** (a path and a handle), and it names the way out.
   const deniedOutside = (where) => {
-    deny(where + " has been changed outside since it was opened. Confirm it with [Share]'s"
-      + " [Compare with an earlier version], or save it under a different name");
+    deny(where + " has been changed outside since it was opened. Save it under a different name,"
+      + " then open both to bring them together");
   };
   // What `writeTo` returns when the file changed outside (every other refusal is its reason).
   const OUTSIDE = "changed outside since it was read";
@@ -127,9 +125,7 @@ function kspageSave(kf) {
     say(msg);
     app.focus();
   }
-  // Downloads the document and the history.
-  // **Stamp what was just typed first**, or the history misses it. **The history is a separate
-  // file**, left out when empty. Saving with the local server present:
+  // Saving with the local server present:
   // **Where no question is needed, do not ask** — with the path empty, **it writes under `kssrv`'s
   // folder by the field's name**, and that path goes into the field.
   // Caution: **Do not silently overwrite an existing file** (the default name `kspage` can clash):
@@ -148,10 +144,10 @@ function kspageSave(kf) {
   // The note added when the shown document is not the one written (its next save asks again).
   const MOVED = ". Another document came into view while it was written, and that one does not "
     + "take this file";
-  const saveLocal = async (body, past, mine) => {
+  const saveLocal = async (body, mine) => {
     const path = pathOf();
     if (path) {
-      await saveToPath(path, body, past, mine);
+      await saveToPath(path, body, mine);
       return;
     }
     // Caution: **Do not write the extension here** — only `file.js`'s `bodyExt` decides it, or a
@@ -162,12 +158,11 @@ function kspageSave(kf) {
       app.focus();
       return;
     }
-    await saveToPath(first, body, past, mine);
+    await saveToPath(first, body, mine);
   };
 
   // Writes back to the local path.
-  // **Write the document first**, or a newer history would get ahead of it on the next read.
-  const saveToPath = async (path, body, past, mine) => {
+  const saveToPath = async (path, body, mine) => {
     // Caution: **Where it changed outside, do not silently overwrite** (another window's write
     // would be lost); how it compares is named.
     if (await changedOutside(path)) {
@@ -182,49 +177,30 @@ function kspageSave(kf) {
       return;
     }
     // Caution: **Store the written text, and set the path, on the document the save was for**
-    // (`stillHere` above), or the next save wrongly says "it changed outside". The version is
-    // stored **after the save** (which sets the origin mark).
-    const here = stillHere(mine);
-    if (here) {
+    // (`stillHere` above), or the next save wrongly says "it changed outside".
+    if (stillHere(mine)) {
       pathBox.value = path;
       remember(path, body);
-      if (ui.keepPast) ui.keepPast();
+      say("Saved (" + path + ")");
+    } else {
+      say("Saved (" + path + ")" + MOVED);
     }
-    const tail = here ? "" : MOVED;
-    if (!past) {
-      say("Saved (" + path + ")" + tail);
-      app.focus();
-      return;
-    }
-    const to = pastPathOf(path);
-    const halted = await ui.localWrite(to, past);
-    if (halted) {
-      deny("The document was saved, but the history's file could not be written (" + halted + ")");
-      app.focus();
-      return;
-    }
-    say("Saved (" + path + " and " + to + ")" + tail);
     app.focus();
   };
 
   const saveToFile = async () => {
     // **The document the save is for** (`stillHere` above) and its target, taken before any await.
     const mine = kf.docId;
-    const pastAt0 = kf.pastAt;
-    app.stampTrail();
     // **Build the text before any await** (an await ends the click's user activation).
     const body = bodyText();
     // Caution: **Where anything will be dropped, say so before writing**, or **nobody notices what
     // vanished** from a Markdown document (`api.js`'s `markdownDropped`).
     const lost = kf.openKind === KIND_MD ? app.markdownDropped() : 0;
-    // **No history file next to a document kept as text** (a growing .ksdb does not belong in a
-    // folder kept as text, under git and the like).
-    const past = kf.openKind === KIND_JSON && app.trailCount() > 0 ? app.trailBytes() : null;
     // **Where it opened is where it writes back**: a handle from the dialog, else the path; with
     // the path empty, under the served folder by name (the dialog could land outside it, where no
     // path reopens it). The path then goes into the field and the tab's record.
     if (ui.localHere && ui.localHere() && !kf.bodyAt) {
-      await saveLocal(body, past, mine);
+      await saveLocal(body, mine);
       sayLost(lost);
       return;
     }
@@ -232,13 +208,6 @@ function kspageSave(kf) {
       download(body, nameOf(bodyExt()), typeOf(kf.openKind),
         "Downloaded a copy (this browser cannot write back to a file)");
       sayLost(lost);
-      // Stores the saved form as a version.
-      // Caution: **Call it after the save** (which sets the origin mark). The same text is not
-      // stored twice.
-      if (ui.keepPast) ui.keepPast();
-      if (past) {
-        download(past, nameOf(".ksdb"), "application/octet-stream", "Downloaded the change history too");
-      }
       return;
     }
     // **A target just chosen in the dialog is written as it is** — choosing an existing file is the
@@ -262,7 +231,7 @@ function kspageSave(kf) {
     const at = kf.bodyAt;
     const stopped = await writeTo(at, body, !fresh);
     // Caution: **Keep the handle when it changed outside.** It is still the right target; what is
-    // needed is a comparison, or another name.
+    // needed is another name.
     if (stopped === OUTSIDE) {
       deniedOutside(at.name);
       app.focus();
@@ -278,48 +247,21 @@ function kspageSave(kf) {
     // says "it changed outside" and the saved document looks unsaved.
     kf.seenAt.set(at, body);
     const here = stillHere(mine);
-    if (here) {
-      remember("", body);
-      if (ui.keepPast) ui.keepPast();
-    }
-    if (!past) {
-      say("Saved (" + at.name + ")" + (here ? "" : MOVED));
-      sayLost(lost);
-      app.focus();
-      return;
-    }
-    // **The history is a separate file**, so its target is asked for separately, once, and only
-    // while that document is shown.
-    let pastAt = pastAt0;
-    if (!pastAt && here) {
-      pastAt = await askFor(nameOf(".ksdb"), PAST_KIND);
-      if (pastAt && stillHere(mine)) bindPast(pastAt);
-    }
-    if (!pastAt) {
-      deny("Saved the document (" + at.name + "). The change history's save target is not chosen");
-      app.focus();
-      return;
-    }
-    const halted = await writeTo(pastAt, past);
-    if (halted) {
-      if (stillHere(mine)) bindPast(null);
-      deny("The document was saved, but the history's file could not be written (" + halted + ")");
-      app.focus();
-      return;
-    }
-    say("Saved (" + at.name + " and " + pastAt.name + ")" + (stillHere(mine) ? "" : MOVED));
+    if (here) remember("", body);
+    say("Saved (" + at.name + ")" + (here ? "" : MOVED));
+    sayLost(lost);
     app.focus();
   };
   document.getElementById("save").addEventListener("click", saveToFile);
 
-  // Loads the read text as this page's document, into the slot `plan` decided. If unreadable it
-  // shows the reason, restores the slot (`layIn`), and returns false.
+  // Loads the read text as this page's document, setting `out` (`planOpen`'s) aside. If unreadable
+  // it shows the reason, leaves the document as it was, and returns false.
   // **Both ways of opening (the path field, and text) come here**, so neither acts alone. **The
   // name decides the text's format**, which is also the format written back.
   // **The read text is kept**, under a new identity, by `layIn` for the outside-change check. **No
   // handle is kept** (an older one would write somewhere other than where it opened from).
-  const takeDoc = (plan, path, text) => {
-    const why = layIn(plan, kindOf(path), text, path, { path: path, bodyAt: null, pastAt: null });
+  const takeDoc = (out, path, text) => {
+    const why = layIn(out, kindOf(path), text, path, { path: path, bodyAt: null });
     if (why !== "") {
       deny(whyNotRead(why, text) + "(" + path + ")");
       return false;
@@ -329,10 +271,7 @@ function kspageSave(kf) {
     return true;
   };
 
-  // Opens a path.
-  // Caution: **Read the history along with it**, where there is one. **Read the document first**
-  // (reading it empties the history). Ask `/api/stat` whether a history exists, or a 404 shows as
-  // a refusal. **The path is passed in** (the field, or the tab's record); true is returned where
+  // Opens a path. **The path is passed in** (the field, or the tab's record); true is returned where
   // the document is the one shown.
   const openPlace = async (path) => {
     const bytes = await ui.localRead(path);
@@ -341,30 +280,11 @@ function kspageSave(kf) {
       return false;
     }
     const text = new TextDecoder().decode(bytes);
-    const plan = planOpen(path);
-    if (plan === "full") {
+    if (!takeDoc(planOpen(), path, text)) {
       app.focus();
       return false;
     }
-    if (plan === "switched") {
-      say("Showed it (" + path + ")");
-      app.focus();
-      return true;
-    }
-    if (!takeDoc(plan, path, text)) {
-      app.focus();
-      return false;
-    }
-    const to = pastPathOf(path);
-    const info = ui.localStat ? await ui.localStat(to) : null;
-    if (info) {
-      const trail = await ui.localRead(to);
-      if (trail && !app.loadTrail(trail)) deny("The change history could not be read (" + to + ")");
-    }
-    // Caution: **Pass the files to the opened document's windows again too** (they differ per
-    // document).
-    if (ui.handWindows) ui.handWindows();
-    say("Loaded it (" + path + ")");
+    say("Loaded it (" + path + ")" + kf.aside);
     app.focus();
     return true;
   };
@@ -385,7 +305,8 @@ function kspageSave(kf) {
   //
   // Caution: **Accept only a relative path on the same origin.** A scheme (`https:` / `data:`),
   // `//` and `..` are refused — **otherwise one link could make this page read and show anything**.
-  // A plain `fetch` reads it, so any static server will do. **Keep the query** (unlike `local.js`'s
+  // A plain `fetch` reads it, so any static server will do (served locally, the API with the
+  // token). **Keep the query** (unlike `local.js`'s
   // `#t=` token it is not a secret, and a reload returning to the document is the link's point).
   const wanted = (key) => new URLSearchParams(location.search).get(key) || "";
   // Whether it is a path fit to open. **Do not let it point outside the served folder.** **Check
@@ -415,22 +336,24 @@ function kspageSave(kf) {
         + "nothing else (" + path + ")");
       return false;
     }
-    const answer = await fetch(path).catch(() => null);
-    if (answer === null || !answer.ok) {
-      deny("This document could not be loaded (" + path + ")");
-      return false;
+    let text = "";
+    if (ui.localReady && (await ui.localReady)) {
+      // **Served by `kssrv --local`, read it with the token**: that server hands out no file but
+      // the page without one (`docs/SPEC-local-server.md`).
+      const bytes = await ui.localRead(path);
+      if (bytes === null) return false;   // `localRead` has already said why
+      text = new TextDecoder().decode(bytes);
+    } else {
+      const answer = await fetch(path).catch(() => null);
+      if (answer === null || !answer.ok) {
+        deny("This document could not be loaded (" + path + ")");
+        return false;
+      }
+      text = await answer.text();
     }
-    const text = await answer.text();
-    // **Decide the plan just before loading** (no draft for an unreadable document).
-    const plan = planOpen(path);
-    if (plan === "full") return false;
-    if (plan === "switched") {
-      say("Showed it (" + path + ")");
-      return true;
-    }
-    if (!takeDoc(plan, path, text)) return false;
-    if (ui.handWindows) ui.handWindows();
-    say("Loaded it (" + path + ")");
+    // **Take the draft just before loading** (what a slow read let be typed is in it).
+    if (!takeDoc(planOpen(), path, text)) return false;
+    say("Loaded it (" + path + ")" + kf.aside);
     return true;
   };
 
@@ -473,15 +396,7 @@ function kspageSave(kf) {
       return lost(was.bodyAt.name, e && e.name === "NotFoundError" ? "it is no longer there"
         : "the browser wants it chosen again: open it from \"Open\"");
     }
-    // The history comes along where it can still be read, and is dropped where it cannot.
-    let past = null;
-    try {
-      past = was.pastAt ? await was.pastAt.getFile() : null;
-    } catch (_) {
-      past = null;
-    }
-    return takeChosen(past ? [body, past] : [body], { body: was.bodyAt,
-      past: past ? was.pastAt : null });
+    return takeChosen(body, was.bodyAt);
   };
 
   // Opens the document named in the URL. Where none is named, it reopens the document the tab had

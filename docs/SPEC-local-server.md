@@ -1,14 +1,14 @@
 # The local server's protocol
 
-**This is the protocol a page in a browser uses to ask the local machine for files and processes.** By design, a browser lets a page open a file only through a window a person chooses. A page cannot walk folders or launch a process, so it cannot build, run a debugger or open a shell. So one local program answers these requests, and the same program serves the page, so the same-origin rule does not block them.
+**This is the protocol a page in a browser uses to ask the local machine for files.** By design, a browser lets a page open a file only through a window a person chooses, and a page cannot walk folders or reach a file by its path. So one local program answers these requests, and the same program serves the page, so the same-origin rule does not block them. **It starts no program**: a server that starts programs on a page's request is one whose every guard must hold, for what a page can ask for there is running code.
 
 **It describes no single implementation**: the server is meant to be replaceable, so only the rules live here. Why the protocol has its own document, and why each rule was chosen, is "13.10 A page asks the local machine through one protocol" in [`DESIGN.md`](DESIGN.md).
 
-**Both ends are built**: `kssrv --local` answers everything below, and the page asks from `kspage/port/web/local.js` (files, folders, watching, holding) and `kspage/port/web/plugin.js` (processes).
+**Both ends are built**: `kssrv --local` answers everything below, and the page asks from `kspage/port/web/local.js`.
 
 * [Who asks whom](#who-asks-whom)
 * [Where it listens](#where-it-listens) — loopback only, the token, the root
-* [Only five things can be asked for](#only-five-things-can-be-asked-for) — files, folders, watching, processes, holding and stopping
+* [Only three things can be asked for](#only-three-things-can-be-asked-for) — files, watching, holding and stopping
 * [How it refuses](#how-it-refuses)
 * [When it is not connected](#when-it-is-not-connected)
 
@@ -18,19 +18,18 @@
 the local machine
   the local server ──(1) serves the page──> the browser ──> the page runs
      ↑                                                │
-     └──────(2) asks for files, folders, processes ────┘
-     └──────(3) sends back what changed, and output ─────────>
+     └──────(2) asks for files and folders ────────────┘
 ```
 
 **Only the page asks.** The server never touches the page's contents unasked. It does not know the document either: it delivers only text and byte sequences, and the page decides where in the document they go.
 
-**(3) flows the other way.** A process's output is not one request and one reply, so it arrives as a response sent in delimited pieces (`Transfer-Encoding: chunked`), which `std/http` supports as it is.
-
-**WebSocket is not used**: typing into a process is a separate request.
+**Nothing flows the other way.** Whether a file changed is asked for ("Watching" below), so no connection carries news from the server, and no WebSocket is used.
 
 ## Where it listens
 
 * **It listens on `127.0.0.1` only**, out of reach of other machines; serving them is a separate matter, which this protocol refuses.
+* **It answers only a request whose `Host` names the loopback** (`127.0.0.1` or `localhost`, any port), and refuses any other with 403, the page included. A web page whose name is re-pointed at `127.0.0.1` (DNS rebinding) reaches the port as its own origin and sends its own name, so without this it would read whatever the page can.
+* **No file under the root is handed out without the token, the page alone excepted**, static serving included. A file served freely would come from the origin that keeps the token, so an HTML file in the root opened in the page's tab could read the token, and any program on this machine could read the root. The page reads what it shows through `GET /api/file`, a picture beside the document included (an `<img>` cannot send the header, so the page hands it the bytes).
 * **The server prints a token (`token`) once, at start-up, and knowing the address alone is not enough to ask.** A request without the token is refused with 401. Only `GET /`, the page, needs none: the page is where the token is handed over.
 * **The page cannot reach outside the root (`<root>`)**, through any endpoint. Two refusals guard this, and both are needed:
   * **The text** … `..` levels, an absolute path, a NUL, a Windows device name.
@@ -60,11 +59,11 @@ Caution: **Do not hand it over in the response that serves the page.** Anyone wh
 
 **It survives a reload**: `sessionStorage` stays inside the tab, disappears when the tab closes, and cannot be read from another origin. So a person opens the URL once per start-up.
 
-## Only five things can be asked for
+## Only three things can be asked for
 
-**Do not make a dedicated endpoint for building, debugging or completion.** Each launches a process and passes text back and forth, so it uses "Processes" below. A new tool is likewise one more process to launch. The server's language does not matter: it runs locally, so it need not be compiled to wasm.
+**Do not add an endpoint that starts a program**, for building, debugging, completion or a plugin. Every one turns a request a page can make into running code. **Nor one that lists a folder**: the page asks for each file by its name, and a listing would hand the names under the root to whoever holds the token.
 
-The five are below: files, folders, watching, processes, and holding the server or stopping it.
+The three are below: files, watching, and holding the server or stopping it.
 
 ### Files
 
@@ -75,17 +74,9 @@ The five are below: files, folders, watching, processes, and holding the server 
 
 **`HEAD` is not supported**: "Watching" below returns the size and whether the file exists. The server does not guess the type; it returns `application/octet-stream`. The character encoding is UTF-8 only, with no way to read another.
 
-Caution: **Do not let a write that dies halfway corrupt the original.** Write to another name, then replace.
+Caution: **Do not let a write that dies halfway corrupt the original.** Write to another name, then replace. **That other name goes through the same two refusals**: a link already standing there would take the write outside the root.
 
 **Set a ceiling.** A request over it is refused with 413, not silently cut short.
-
-### Folders
-
-| Request | Response |
-| :-- | :-- |
-| `GET /api/list?path=<p>` | `{"path":…,"truncated":…,"entries":[{"name":…,"is_dir":…,"size":…}]}` |
-
-Caution: **Say when the list was cut off** (`truncated`). If it is cut off silently, nothing tells an empty folder from a truncated list.
 
 ### Watching
 
@@ -96,52 +87,6 @@ Caution: **Say when the list was cut off** (`truncated`). If it is cut off silen
 **The OS's file watching (inotify / ReadDirectoryChangesW) is not offered.** The page polls instead and re-reads what changed. However often a file changed in between, the page catches up with its final state.
 
 Caution: **Do not return the contents**, only whether the file changed. Where the page needs the contents, it re-reads them through the file endpoint, so the same text never arrives by two paths.
-
-### Processes
-
-| Request | Response |
-| :-- | :-- |
-| `GET /api/plugins` | Returns `{"plugins":["…"]}`, the names this server will launch. **None is an empty list, not a refusal** |
-| `POST /api/run` | Receives `{"cmd":…,"args":[…],"cwd":…,"in":…}` and returns `{"id":…}`. `in` is typed into the child at the start |
-| `GET /api/run/<id>` | The output, as a response sent in delimited pieces; at the end, `{"exit":<number>}` |
-| `POST /api/run/<id>/in` | Types the body into that child |
-| `DELETE /api/run/<id>` | Stops it. The stream being watched gets an ending piece and closes (the number is `-1`, since a stopped child has none) |
-
-**What goes into a child and what comes out of it use one encoding.**
-
-#### What may be launched
-
-Caution: **Do not launch through a shell**: take the command and the arguments separately (`cmd` and `args`).
-
-**Apply the root check to `cwd` too**: launching outside the root is reading outside it.
-
-**The server may limit which combinations it will launch**: unless `cmd` and `args` match a permitted combination, the answer is 403. Allowing more adds a row to a table, not an endpoint.
-
-**The row, not the page, decides what is launched and how it ends.** `cmd` and `args` only choose a row. The row decides what runs, which arguments it gets and whether its input is closed at the start, so a name that matches no row launches nothing.
-
-**A row whose program reads its input to the end has that input closed right after launch** (after `in` is written). Otherwise the program waits for more input forever and prints nothing. A row that holds a conversation keeps its input open.
-
-**A server may hold a folder of programs it will launch, and name them**: `cmd` is `plugin`, `args` is the one name, and `GET /api/plugins` lists the names.
-
-**Do not put that folder under the root being served.** It sits beside the server, placed there by whoever runs it.
-
-**Do not send a path out, and do not take one in**: a name is all the page needs.
-
-**Do not mix "what may be launched" with "where it lives".** The server decides where the definition lives, never from the page's text and never from the PATH.
-
-**When the definition is not found and nothing could be launched, return the places searched** (500 with `{"looked":[…]}`). The page words the fix, as for every refusal: the state comes from the server, the text from the page.
-
-#### How the output comes back
-
-**Each piece sent carries its length.** One piece is `<tag><length><one space><byte sequence>`, and the tags are `O` (standard output), `E` (standard error), and `X` (the end; its contents are `{"exit":<number>}`).
-
-**Output is sent as bytes, not cut into lines**, so colour codes and progress lines that overwrite themselves both pass through. So do not delimit the contents by a character, least of all a newline: pieces are split by length, and the space only marks where the length ends.
-
-**The response does not state a length**, since none is fixed: closing the connection marks the end. That is why the last piece is `X`: it tells a finish from a connection that merely closed.
-
-**Keep draining standard error too**, under its own tag. Undrained, the pipe fills and the child stalls; discarded, nothing tells why the response came out empty.
-
-**Do not lose a finished child's output**: drain the rest before sending the ending piece (`X`). Output that nobody is watching is not stored without a ceiling. At the ceiling the server may stop draining and let the child wait at its write; the rest flows once a watcher connects.
 
 ### Keeping the server alive while a page is open
 
@@ -155,8 +100,6 @@ Caution: **Do not launch through a shell**: take the command and the arguments s
 
 **Do not rely on the page saying goodbye.**
 
-**A child still running counts as use**: it was started to finish, even with every page gone.
-
 Caution: **Open the hold again if it ends.** A connection can break while the page stays open, and without a new hold the server counts down while a person is still writing.
 
 #### Stopping it when asked
@@ -169,8 +112,6 @@ Caution: **Open the hold again if it ends.** A connection can break while the pa
 
 **The answer goes out before the server stops**, so the asker tells "it stopped" from "the connection broke". It stops once that answer has been sent, whatever pages hold it.
 
-**The children it launched stop with it.** Left running, nothing could reach them again.
-
 **A server is stopped by this request, not by a signal to its process.**
 
 ## How it refuses
@@ -181,19 +122,17 @@ Caution: **Open the hold again if it ends.** A connection can break while the pa
 | :-- | :-- |
 | 400 | A malformed request, or a malformed `%XX` |
 | 401 | No token, or it does not match |
-| 403 | It pointed outside the root, or asked for a combination that is not permitted |
-| 404 | A name that does not exist, an unknown endpoint, or an unknown process number |
+| 403 | It pointed outside the root, or named a `Host` other than the loopback |
+| 404 | A name that does not exist, or an unknown endpoint |
 | 405 | A `HEAD`, `DELETE`, and so on to the file endpoint |
-| 409 | A stream somebody is already watching |
 | 413 | The body exceeded the ceiling |
-| 500 | It could not be written or replaced, or it could not be launched (the definition is absent, and so on) |
-| 503 | The number of processes it can carry was exceeded |
+| 500 | It could not be written or replaced |
 
 ## When it is not connected
 
-**Do not present the unconnected state as a separate mode**: the screen then could not say why there is no terminal.
+**Do not present the unconnected state as a separate mode**: the screen then could not say why a path cannot be typed.
 
-**The page asks once whether the server is present, and hides the code tools if it is not.** No tool stays on screen that does nothing when pressed.
+**The page asks once whether the server is present, and hides the path tools if it is not.** No tool stays on screen that does nothing when pressed.
 
 **Do not read "an answer came back" as "it is present"**: the same server facing outward answers too. The server states whether it is local-facing, and the page checks that.
 

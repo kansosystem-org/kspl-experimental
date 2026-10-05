@@ -1,15 +1,15 @@
 // ==========================================
-// kspage's page — the ribbon and the tools: the table of commands shown, choosing tools,
-// reordering, collapsing the overflow, collapsing the ribbon.
+// kspage's page — the ribbon and the tools: the table of commands shown, collapsing the overflow,
+// collapsing the ribbon.
 //
 // **What a button does is the same as the menu's**: `press` clicks the menu's button (a second
 // path would drift), and `run` is for what is in no menu. **Only as much as fits on one row**; a
-// group that does not fit moves into `…`. **The chosen layout is remembered**, and **unreadable
-// text falls back to the default** (a broken memory must not disable the tools).
+// group that does not fit moves into `…`. **The table is the ribbon**: no tool is chosen, hidden
+// or moved by the viewer, so every screen shows the same row and a tool is where the manual says.
 // ==========================================
 function kspageRibbon(ui) {
   const app = ui.app;
-  const say = ui.say, tell = ui.tell, deny = ui.deny;
+  const say = ui.say, tell = ui.tell;
   const frameBoxes = [["frame-x", "x"], ["frame-y", "y"], ["frame-w", "w"], ["frame-h", "h"]];
   const framePart = (id) => document.getElementById(id);
   const frameSpec = () => {
@@ -20,25 +20,8 @@ function kspageRibbon(ui) {
     }
     return spec;
   };
-  const columnsToggle = () => {
-    // **Find the style's index from its name** (a paragraph's style is stored by name).
-    const face = app.blockStyle();
-    const at = app.styleNames().indexOf(face);
-    if (face.length <= 0 || at < 0) {
-      deny("The columns land on a paragraph style. Click on some text");
-      return;
-    }
-    const was = app.stylePara(at);
-    const spec = Object.assign({}, was);
-    spec.columns = was.columns > 1 ? 0 : 2;
-    if (spec.columns > 1 && !(was.columnGap > 0)) spec.columnGap = 16;
-    tell(app.setStylePara(at, spec), spec.columns > 1 ? "Made it two columns" : "Released the columns",
-      "It cannot be made into columns");
-  };
-
-  // The menu that chooses the tools shown.
-  // Caution: **Provide a way back too.** ---- The ribbon ---- (the rules are in the header; the
-  // menu side handles the notice and the focus.) **This table's order is "the order of use"**: `…`
+  // ---- The ribbon ---- (the rules are in the header; the menu side handles the notice and the
+  // focus.) **This table's order is "the order of use"**: `…`
   // takes from the end, so it is the order they survive a narrow screen (`../../docs/DESIGN.md`'s
   // "The band's right side is not left empty"). A contextual group (`when`: `"cells"` in a table,
   // `"frame"` on a selected frame) goes before the others, so it stays when it appears. The shapes:
@@ -95,8 +78,6 @@ function kspageRibbon(ui) {
       { id: "tool-italic", mark: "I", label: "Italic", tip: "Ctrl+I",
         run: () => app.accentSpan("italic") },
       { id: "tool-under", mark: "U", label: "Underline", run: () => app.accentSpan("underline") },
-      { id: "tool-strike", mark: "S", label: "Strikethrough", off: true,
-        run: () => app.accentSpan("strike") },
       // Colors.
       // Caution: **Do not copy the list** (`form.js` holds the colors and the names). A group that
       // opens on a click: a color is "choose one and done" (the header of `fly.js`).
@@ -107,7 +88,6 @@ function kspageRibbon(ui) {
     { name: "File", items: [
       { id: "tool-save", mark: "⭳", label: "Save", tip: "Ctrl+S", press: "save" },
       { id: "tool-print", mark: "⎙", label: "Print", press: "print" },
-      { id: "tool-export-md", mark: "⇩", label: "Markdown", press: "export-md", off: true },
     ] },
     { name: "Table", when: "cells", items: [
       { id: "tool-row", mark: "⊞", label: "Insert a row", press: "add-row" },
@@ -115,11 +95,6 @@ function kspageRibbon(ui) {
       { id: "tool-merge", mark: "⇥", label: "Merge cells", press: "merge-cells" },
       { id: "tool-split", mark: "⇤", label: "Unmerge cells", press: "split-cell" },
       { id: "cell-nums", nums: "cells", label: "Column width and row height" },
-      // **Sorting and filtering are one button**, because they are one panel: the arrow in a
-      // column's heading opens it, and this opens the same one at the cursor's column.
-      { id: "tool-narrow", mark: "⊽", label: "Order and narrow", press: "narrow-here", off: true },
-      { id: "tool-drop-row", mark: "⊝", label: "Delete the row", press: "drop-row", off: true },
-      { id: "tool-drop-col", mark: "⊘", label: "Delete the column", press: "drop-col", off: true },
     ] },
     { name: "The selected shape", when: "frame", items: [
       { id: "frame-nums", nums: "frame", label: "Place and size" },
@@ -138,14 +113,8 @@ function kspageRibbon(ui) {
       // color stand out).
       { id: "tool-link", mark: "↗", label: "Link", at: "put-link-fly", to: "href" },
       { id: "tool-remark", mark: "✎", label: "Comment", at: "remark-fly", to: "remark-text" },
-      // **Do not show one-time items by default** (a table of contents, a footnote list: they are
-      // in the menus).
-      { id: "tool-toc", mark: "☰", label: "Table of contents", press: "put-toc", off: true },
-      { id: "tool-notes", mark: "¹", label: "Footnote list", press: "put-notes", off: true },
-      // Columns. **They apply to the current paragraph's style** (there are no section breaks).
-      // Caution: **Do not show it by default** — it is set on a style once and done.
-      { id: "tool-columns", mark: "▥", label: "Columns", tip: "Makes the current paragraph style two columns",
-        off: true, run: () => columnsToggle() },
+      // **No one-time item** (a table of contents, a footnote list, columns: they are in the
+      // menus, and set once).
     ] },
     // Shapes. **Clicking arms the tool**, then a drag draws it (a click alone opens the menu's).
     // Caution: **Do not list the shapes on the row one by one** — they eat the row and the eye
@@ -163,68 +132,7 @@ function kspageRibbon(ui) {
         run: async () => tell(await app.jumpAhead(), "", "There is no further forward") },
     ] },
   ];
-  // The remembered layout (unreadable falls back to the default, as the header says).
-  // Caution: **It must work where nothing can be stored** (read it guarded).
-  const TOOLS_KEY = "kspage.tools";
-  const defaultPicks = () => {
-    const off = [];
-    for (const group of RIBBON) {
-      for (const one of group.items) {
-        if (one.off) off.push(one.id);
-      }
-    }
-    return { labels: true, off: off, order: [] };
-  };
-  let picks = defaultPicks();
-  const knownIds = new Set();
-  for (const group of RIBBON) {
-    for (const one of group.items) knownIds.add(one.id);
-  }
-  const loadPicks = () => {
-    try {
-      const raw = localStorage.getItem(TOOLS_KEY);
-      if (!raw) return;
-      const got = JSON.parse(raw);
-      if (!got || typeof got !== "object" || !Array.isArray(got.off)) return;
-      // **An unknown name is dropped** (a stale text must not delete every tool).
-      const order = Array.isArray(got.order) ? got.order.filter((id) => knownIds.has(id)) : [];
-      picks = {
-        labels: got.labels !== false,
-        off: got.off.filter((id) => knownIds.has(id)),
-        order: order,
-      };
-    } catch (_) { /* it works on a page that cannot remember too */ }
-  };
-  const savePicks = () => {
-    try {
-      localStorage.setItem(TOOLS_KEY, JSON.stringify(picks));
-    } catch (_) { /* it works on a page that cannot remember too */ }
-  };
-  loadPicks();
   const ribbon = document.getElementById("ribbon");
-  // The order within a group.
-  // Caution: **A tool not in the remembered order goes at the end in the table's order**, or a new
-  // tool vanishes for whoever has a remembered layout.
-  const sorted = (group) => {
-    const rank = (one) => {
-      const at = picks.order.indexOf(one.id);
-      return at < 0 ? 1000 + group.items.indexOf(one) : at;
-    };
-    return group.items.slice().sort((a, b) => rank(a) - rank(b));
-  };
-  // Moves one tool forward or back within its group. **The remembered order does not cross groups**
-  // (the table decides the groups' order).
-  const shift = (group, id, back) => {
-    const line = sorted(group).map((one) => one.id);
-    const at = line.indexOf(id);
-    const to = back ? at - 1 : at + 1;
-    if (at < 0 || to < 0 || to >= line.length) return false;
-    line.splice(to, 0, line.splice(at, 1)[0]);
-    // Caution: **Keep the other groups' orders** (replacing the whole resets them).
-    picks.order = picks.order.filter((one) => !line.includes(one)).concat(line);
-    savePicks();
-    return true;
-  };
   // Makes one number field (a label with a field).
   // Caution: **Build them in one place**, or the label link and the step size drift per field.
   // The unit is px at 96dpi everywhere. **Do not take focus back mid-typing.**
@@ -358,10 +266,8 @@ function kspageRibbon(ui) {
 
   const drawRibbon = () => {
     ribbon.textContent = "";
-    ribbon.className = picks.labels ? "" : "bare";
     for (const group of RIBBON) {
-      const shown = sorted(group).filter((one) => !picks.off.includes(one.id));
-      if (shown.length <= 0) continue;
+      const shown = group.items;
       const box = document.createElement("div");
       box.className = "group";
       box.title = group.name;
@@ -526,98 +432,28 @@ function kspageRibbon(ui) {
     spill.hidden = spillBox.children.length <= 0;
     if (spill.hidden) spill.open = false;
   };
-  const picksBox = document.getElementById("tool-picks");
-  const labelsBox = document.getElementById("show-labels");
-  // The filter text.
-  // Caution: **It must match both a group's name and a tool's name.**
-  const findBox = document.getElementById("tool-find");
-  const matches = (group, one) =>
-    findBox.value.length <= 0
-      || (group.name + " " + one.label).indexOf(findBox.value) >= 0;
-  const drawPicks = () => {
-    picksBox.textContent = "";
-    labelsBox.checked = picks.labels;
-    for (const group of RIBBON) {
-      const shown = sorted(group).filter((one) => matches(group, one));
-      if (shown.length <= 0) continue;
-      // Caution: **Show a heading per group**, so the list mirrors the ribbon's groups.
-      const head = document.createElement("h4");
-      head.textContent = group.name;
-      picksBox.appendChild(head);
-      for (const one of shown) {
-        const tag = document.createElement("label");
-        const tick = document.createElement("input");
-        tick.type = "checkbox";
-        // Caution: **Identify the tool by a data attribute** (by name, a rewording breaks it).
-        tick.dataset.tool = one.id;
-        tick.checked = !picks.off.includes(one.id);
-        tick.addEventListener("change", () => {
-          picks.off = picks.off.filter((id) => id !== one.id);
-          if (!tick.checked) picks.off.push(one.id);
-          savePicks();
-          drawRibbon();
-          if (app.onRedraw) app.onRedraw();
-        });
-        tag.appendChild(tick);
-        tag.appendChild(document.createTextNode(" " + one.label + " "));
-        // Reordering, one place per click, **only within a group** (the table orders the groups).
-        for (const way of [["▲", true], ["▼", false]]) {
-          const key = document.createElement("button");
-          key.type = "button";
-          key.className = "lift";
-          key.textContent = way[0];
-          key.title = way[1] ? "Forward" : "Back";
-          key.addEventListener("click", (e) => {
-            // **Do not let a click inside a label reach its checkbox** (a tool would vanish).
-            e.preventDefault();
-            e.stopPropagation();
-            if (!shift(group, one.id, way[1])) return;
-            drawRibbon();
-            drawPicks();
-            if (app.onRedraw) app.onRedraw();
-          });
-          tag.appendChild(key);
-        }
-        picksBox.appendChild(tag);
-      }
-    }
-  };
-  findBox.addEventListener("input", () => drawPicks());
-  labelsBox.addEventListener("change", () => {
-    picks.labels = labelsBox.checked;
-    savePicks();
-    drawRibbon();
-    if (app.onRedraw) app.onRedraw();
-  });
-  document.getElementById("tools-reset").addEventListener("click", () => {
-    picks = defaultPicks();
-    savePicks();
-    drawRibbon();
-    drawPicks();
-    if (app.onRedraw) app.onRedraw();
-    say("Put the ribbon back to the default");
-  });
-  // Collapses the ribbon. **The collapsed state is remembered too.**
+  // Collapses the ribbon. **The collapsed state is remembered.**
+  // Caution: **It must work where nothing can be stored** (read it guarded).
   const FOLD_KEY = "kspage.folded";
   const foldKey = document.getElementById("fold-ribbon");
+  let folded = false;
   const showFold = () => {
-    ribbon.hidden = picks.folded === true;
-    foldKey.textContent = picks.folded ? "⌄" : "⌃";
-    foldKey.title = picks.folded ? "Put the ribbon out" : "Fold the ribbon";
+    ribbon.hidden = folded;
+    foldKey.textContent = folded ? "⌄" : "⌃";
+    foldKey.title = folded ? "Put the ribbon out" : "Fold the ribbon";
   };
   try {
-    picks.folded = localStorage.getItem(FOLD_KEY) === "1";
-  } catch (_) { picks.folded = false; }
+    folded = localStorage.getItem(FOLD_KEY) === "1";
+  } catch (_) { folded = false; }
   foldKey.addEventListener("click", () => {
-    picks.folded = !picks.folded;
+    folded = !folded;
     try {
-      localStorage.setItem(FOLD_KEY, picks.folded ? "1" : "0");
+      localStorage.setItem(FOLD_KEY, folded ? "1" : "0");
     } catch (_) { /* it works on a page that cannot remember too */ }
     showFold();
     app.focus();
   });
   drawRibbon();
-  drawPicks();
   showFold();
   return {
     frameBoxes: frameBoxes,

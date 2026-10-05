@@ -369,16 +369,15 @@
     ks.tagged = (name) => forPart(ks, name);
     // The row of sections, the tabs named here (from the sections, they drift from the file names).
     // **Do not change the order**: a later section runs on the document an earlier one laid down,
-    // and the last puts the marks out. **`outline` is last** (the document does not remain) and
-    // **`keep` first** (its swap throws away "compare with the earlier version"'s partner).
+    // and the last puts the marks out. **`outline` is last** (the document does not remain).
     const parts = [["keep", kspageProbeKeep], ["input", kspageProbeInput],
       ["store", kspageProbeStore],
       ["menu", kspageProbeMenu], ["cell", kspageProbeCell], ["show", kspageProbeShow],
       ["insert", kspageProbeInsert], ["pin", kspageProbePin], ["filter", kspageProbeFilter],
       ["find", kspageProbeFind], ["paint", kspageProbePaint],
       ["paper", kspageProbePaper], ["link", kspageProbeLink], ["note", kspageProbeNote],
-      ["keys", kspageProbeKeys], ["ribbon", kspageProbeRibbon], ["diff", kspageProbeDiff],
-      ["source", kspageProbeSource], ["fresh", kspageProbeFresh], ["drag", kspageProbeDrag],
+      ["keys", kspageProbeKeys], ["ribbon", kspageProbeRibbon],
+      ["fresh", kspageProbeFresh], ["drag", kspageProbeDrag],
       ["local", kspageProbeLocal],
       ["outside", kspageProbeOutside], ["outline", kspageProbeOutline]];
     for (const [name, run] of parts) {

@@ -3,10 +3,9 @@
 //< Caution: **Do not count a failure already handled.** A failure caught by `catch` and then
 //< handled normally, such as `Map.get`'s missing key, is a `throw` as well. Left in the chain, it
 //< sits under a later, unrelated error's path (ksplc uses Maps heavily as caches, so the frames
-//< reach the limit and the real path is lost with them). Only the number of frames is checked; a
-//< function name or a line depends on how the code is written, so they are not pinned. The C
-//< backend counts with `KSPL_START_TRACE` / `KSPL_RECORD_TRACE`; the LLVM backend records nothing,
-//< so it gives 0. Either way the test can say "a failure already handled is not mixed in".
+//< reach the limit and the real path is lost with them). Both backends record the route (genc's
+//< `KSPL_START_TRACE` / `KSPL_RECORD_TRACE`, genllvm's calls to the same runtime), and each frame's
+//< line is the line of its `throw` or `?`, read off `caller_line` beside it, not copied in.
 import "std/ds" { Map }
 import "std/mem" { Arena }
 import "std/sys"
@@ -14,64 +13,94 @@ import "std/thread"
 import "std/verdict"
 
 enum Probe_error
-  deep
+    deep
 
 priv fn level3(): Void?Probe_error //< the chain's origin
-  //<
-  //< The three steps below it propagate with `?`.
-  throw Probe_error.deep
+    //<
+    //< The three steps below it propagate with `?`.
+    throw Probe_error.deep
 priv fn level2(): Void?Probe_error
-  level3()?
+    level3()?
 priv fn level1(): Void?Probe_error
-  level2()?
+    level2()?
 
 priv fn handled_misses(arena: Arena$@): I32 //<
-  //< Raises and handles a failure, again and again, outside the chain
-  $m: = Map<|U8[], I32|>.new(arena)
-  m.set("present", 1)
-  $found: I32 = 0
-  for _i in Range.asc(20)
-    found += m.get("absent") catch 0
-  return found
+    //< Raises and handles a failure, again and again, outside the chain
+    $m: = Map<|U8[], I32|>.new(arena)
+    m.set("present", 1)
+    $found: I32 = 0
+    for _i in Range.asc(20)
+        found += m.get("absent") catch 0
+    return found
 
 fn test_error_trace(arena: Arena$@)
-  verdict
-    .start("[trace] a failure already dealt with does not mix into `?`'s propagation route test...")
+    verdict
+        .start("[trace] a failure already dealt with does not mix into `?`'s propagation route \
+            test...")
 
-  assert(handled_misses(arena) == 0, "a missing key must yield the catch value")
+    assert(handled_misses(arena) == 0, "a missing key must yield the catch value")
 
-  // The chain's length is 1 throw step + 2 `?` steps = 3. The 20 failures above must not appear
-  // here.
-  level1() catch
-    depth: = sys.kspl_error_trace_depth()
-    assert(depth == 0 || depth == 3,
-      "the trace must hold this error's chain only (0 when the backend does not record)")
+    // The chain's length is 1 throw step + 2 `?` steps = 3. The 20 failures above must not appear
+    // here.
+    level1() catch
+        depth: = sys.kspl_error_trace_depth()
+        assert(depth == 3, "the trace must hold this error's chain only")
 
-  // Raising it once more in a row does not add to it (the chain starts over).
-  _ignored: = handled_misses(arena)
-  level1() catch
-    depth: = sys.kspl_error_trace_depth()
-    assert(depth == 0 || depth == 3, "a second chain must not stack onto the first")
+    // Raising it once more in a row does not add to it (the chain starts over).
+    _ignored: = handled_misses(arena)
+    level1() catch
+        depth: = sys.kspl_error_trace_depth()
+        assert(depth == 3, "a second chain must not stack onto the first")
 
-  verdict
-    .pass("a failure already dealt with does not stay in the chain, and the chain's length matches \
-      the propagation's steps.")
+    verdict
+        .pass("a failure already dealt with does not stay in the chain, and the chain's length \
+            matches the propagation's steps.")
 
 // The other thread's route: three frames, recorded while this thread's route is one.
 #export
 fn trace_on_other_thread(arg: I32$@): Void$@
-  level1() catch
-    arg$ = sys.kspl_error_trace_depth()
-  return null
+    level1() catch
+        arg$ = sys.kspl_error_trace_depth()
+    return null
 
 fn test_error_trace_per_thread()
-  verdict.start("[trace] another thread's failure does not overwrite this thread's route test...")
-  level3() catch {}
-  $theirs: I32 = -1
-  t: = thread.Thread.spawn<|I32|>(trace_on_other_thread, theirs@) catch panic("thread spawn failed")
-  t.join_and_free()
-  mine: = sys.kspl_error_trace_depth()
-  assert(theirs == 0 || theirs == 3, "the other thread records its own chain of three")
-  assert(mine == 0 || mine == 1,
-    "this thread's route of one survives the other's (0 when the backend does not record)")
-  verdict.pass("each thread keeps its own failure's route.")
+    verdict.start("[trace] another thread's failure does not overwrite this thread's route test...")
+    level3() catch {}
+    $theirs: I32 = -1
+    t: = thread.Thread.spawn<|I32|>(trace_on_other_thread, theirs@) catch panic("thread spawn \
+        failed")
+    t.join_and_free()
+    mine: = sys.kspl_error_trace_depth()
+    assert(theirs == 3, "the other thread records its own chain of three")
+    assert(mine == 1, "this thread's route of one survives the other's")
+    verdict.pass("each thread keeps its own failure's route.")
+
+// Each frame names the line its `throw` or `?` stands on. **A statement Lower expands into several
+// C lines drifts without a `#line` before each** (emit_stmt in `ksplc/gen/c/stmt.kspls`): `?` on
+// line 12 was reported as 14.
+priv fn line_here(line: Sz = caller_line): Sz
+    return line
+
+$pinned_lines: Sz[3] = ::{} //< the line of each level's `throw` / `?`, set as it runs
+
+priv fn pinned3(): Void?Probe_error
+    pinned_lines[0] = line_here() + 1
+    throw Probe_error.deep
+priv fn pinned2(): Void?Probe_error
+    pinned_lines[1] = line_here() + 1
+    pinned3()?
+priv fn pinned1(): Void?Probe_error
+    pinned_lines[2] = line_here() + 1
+    pinned2()?
+
+fn test_error_trace_lines()
+    verdict.start("[trace] each frame of the route names the line of its throw or `?` test...")
+    pinned1() catch
+        assert(sys.kspl_error_trace_depth() == 3, "the route has the three steps")
+        for i in Range.asc(3)
+            $file: U8@ = null
+            $func: U8@ = null
+            $line: I32 = 0
+            sys.kspl_get_trace_frame_info(I32::i, file@, func@, line@)
+            assert(Sz::line == pinned_lines[i], "a frame names the line its step stands on")
+    verdict.pass("the throw and each `?` are recorded at their own lines.")

@@ -16,6 +16,6 @@
 
 ## Out of scope, and what goes upstream
 
-**The optional builds TLS, DB and BLAS pass their work to OpenSSL, SQLite and OpenBLAS**, so report a problem in one of those to that project.
+**`ksbind` passes its work to OpenSSL and SQLite, and the optional BLAS build to OpenBLAS**, so report a problem in one of those to that project.
 
 **`.devcontainer/` is a local tool, not something shipped**, so it is out of scope.

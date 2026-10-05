@@ -8,7 +8,6 @@ import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
 import "std/tests/all" as std_all
-import "tools/ai_assist/ksplc_oracle" as oracle
 import "tools/tests/all" as tools_all
 
 // ==========================================
@@ -21,59 +20,55 @@ import "tools/tests/all" as tools_all
 // ==========================================
 
 priv const stage1: U8[] = "out/ksplc_stage1.exe" //< the ksplc passed to tests that start one
-  //<
-  //< Note: `make debug` depends on $(STAGE1_EXE), so it is there by the time they run.
-
-priv fn kspage_builds(src: U8[], arena: Arena$@): Bool //<
-  //< whether this repository's compiler reads src clean, which kspage's tests ask of their runner
-  return oracle.compiles(src, "_kspage_consts_test", arena)
+    //<
+    //< Note: `make debug` depends on $(STAGE1_EXE), so it is there by the time they run.
 
 fn begin(): Arena$@ //< sets things up before the run starts
-  //<
-  //< **The caller frees the arena it returns** (`defer arena.free()`).
-  // Line-buffered: in CI stdout is a fully buffered pipe, so a crash would lose the unflushed
-  // output and the log's last line would not show where it crashed.
-  io.set_line_buffered()
+    //<
+    //< **The caller frees the arena it returns** (`defer arena.free()`).
+    // Line-buffered: in CI stdout is a fully buffered pipe, so a crash would lose the unflushed
+    // output and the log's last line would not show where it crashed.
+    io.set_line_buffered()
 
-  // Caution: **Do not add a `mkdir` on the CI side instead**, or a second place knows out/'s
-  // layout. **Do not stop on failure either**; the test that writes there reports it by name.
-  fs.mkdir_all("out/tmp") catch {}
+    // Caution: **Do not add a `mkdir` on the CI side instead**, or a second place knows out/'s
+    // layout. **Do not stop on failure either**; the test that writes there reports it by name.
+    fs.mkdir_all("out/tmp") catch {}
 
-  return Arena.new(1024 * 1024)
+    return Arena.new(1024 * 1024)
 
 fn done() //< the closing line
-  //<
-  //< Caution: **Do not change its wording** — a gate's verdict is read from this line (its
-  //< wording is "The shape of a per-item pass/fail line" in
-  //< [`docs/SPEC-gates.md`](../../docs/SPEC-gates.md)).
-  io.out().s("\n=========================================\n")
-  io.out().s("RESULT: ALL PASS\n")
+    //<
+    //< Caution: **Do not change its wording** — a gate's verdict is read from this line (its
+    //< wording is "The shape of a per-item pass/fail line" in
+    //< [`docs/SPEC-gates.md`](../../docs/SPEC-gates.md)).
+    io.out().s("\n=========================================\n")
+    io.out().s("RESULT: ALL PASS\n")
 
 // --- One package's worth ---
 fn ksplc(arena: Arena$@) //<
-  //< Runs ksplc's tests
-  //<
-  //< Caution: **Keep the name equal to the package's folder name.** `pkg/<name>.kspls` and `make
-  //< debug-<name>` use the same name (mk/test.mk's $(error) fails when they differ).
-  ksplc_all.run_ksplc(arena)
+    //< Runs ksplc's tests
+    //<
+    //< Caution: **Keep the name equal to the package's folder name.** `pkg/<name>.kspls` and `make
+    //< debug-<name>` use the same name (mk/test.mk's $(error) fails when they differ).
+    ksplc_all.run_ksplc(arena)
 
 fn std(arena: Arena$@)
-  std_all.run_std(stage1, arena)
+    std_all.run_std(stage1, arena)
 
 fn ksai(_arena: Arena$@)
-  ksai_all.run_ksai()
+    ksai_all.run_ksai()
 
 fn ksdb(_arena: Arena$@)
-  ksdb_all.run_ksdb()
+    ksdb_all.run_ksdb()
 
 fn kspeg(_arena: Arena$@)
-  kspeg_all.run_kspeg()
+    kspeg_all.run_kspeg()
 
 fn kspage(_arena: Arena$@)
-  kspage_all.run_kspage(kspage_builds)
+    kspage_all.run_kspage()
 
 fn ksos(_arena: Arena$@)
-  ksos_all.run_ksos()
+    ksos_all.run_ksos()
 
 fn tools(arena: Arena$@)
-  tools_all.run_tools(arena)
+    tools_all.run_tools(arena)

@@ -12,7 +12,7 @@ This continues from the quick start in the root [`README.md`](../README.md). It 
 
 **It compiles the intermediate C with `clang`** (or the compiler named by the environment variable `CC`), so one has to be on the PATH. Building an executable yourself uses the same C compiler ("Building a standalone executable" below).
 
-**On Windows, use MSYS2's UCRT64 clang** (`pacman -S mingw-w64-ucrt-x86_64-clang` in the "MSYS2 UCRT64" shell, then put `C:\msys64\ucrt64\bin` on the PATH). Kanso is developed and built with it. LLVM's own Windows clang targets MSVC instead, and is built in CI but not confirmed ("Where it is supported" in the root [`README.md`](../README.md)).
+**On Windows, use MSYS2's UCRT64 clang** (`pacman -S mingw-w64-ucrt-x86_64-clang` in the "MSYS2 UCRT64" shell, then put `C:\msys64\ucrt64\bin` on the PATH). Kanso is developed and built with it. LLVM's own Windows clang targets MSVC instead: ksplc names that toolchain's link flags, but nothing builds or runs a program with it ("Where it is supported" in the root [`README.md`](../README.md)).
 
 Arguments after the script name go to the program:
 
@@ -33,44 +33,26 @@ ksplc info std-dir                          # names the std/ beside ksplc
 
 ## Building a standalone executable
 
-To get the executable itself rather than `run` it, compile the KSPL to C and link it with your C compiler.
+To get the executable itself rather than `run` it, `build` it:
 
 ```sh
-# compile: hello.kspls -> hello.c
-./ksplc hello.kspls hello.c
-
-# link: hello.c -> executable
-clang hello.c $(./ksplc info link-libs) -o hello
-
-# run
+./ksplc build hello.kspls hello     # hello.c and hello.libs are left beside it
 ./hello
 ```
 
-**The libraries to link differ per C compiler target, and are needed even when the program uses no networking or threads.** The C that `ksplc` emits always holds the whole standard-library runtime. `ksplc info link-libs` prints them for the `clang` on the PATH, so the line above is the same in every POSIX shell, MSYS2's included. In PowerShell, split its output into words:
+`build` writes the C, then has `clang` (or the compiler `CC` names) compile and link it, with the libraries this platform needs and those the program names (`#link("openblas")`, "11.5 Naming the library an `extern` block needs" in the [KSPL language specification](SPEC-language.md)). PowerShell runs the same line, with `.\ksplc.exe` and `hello.exe`. It builds optimised with `-g`; flags for the C compiler go in `--cflags`, after ksplc's own, so `--cflags=-O0` builds for the debugger.
 
-```powershell
-.\ksplc.exe hello.kspls hello.c
-clang hello.c ((.\ksplc.exe info link-libs) -split ' ') -o hello.exe
-```
-
-**A program whose `extern` block names its library** (`#link("openblas")`, "11.5 Naming the library an `extern` block needs" in the [KSPL language specification](SPEC-language.md)) needs that library on the line too. Have the compile write the names to a file, and pass it to clang right after the source:
-
-```sh
-./ksplc --emit-libs=hello.libs hello.kspls hello.c
-clang hello.c @hello.libs $(./ksplc info link-libs) -o hello
-```
-
-`ksplc run` and the bundled `.vscode/` build task (next section) do all of this themselves. Why it differs per OS, and where the `-l...` go, are in [`ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md).
+The steps it takes, and how to take them apart (to ship objects without the source, say), are in [`ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md).
 
 ## Splitting a program into files
 
 **Where an `import` searches from depends on how it is written, above all on whether it contains `/`** ("The three strict rules of path resolution" in the [KSPL language specification](SPEC-language.md)).
 
-With `hw.kspls` beside `main.kspls`, write `import "hw";` (`as` only to rename). **When an import is not found, the error lists every folder searched**, which shows the starting point.
+With `hw.kspls` beside `main.kspls`, write `import "hw"` (`as` only to rename). **When an import is not found, the error lists every folder searched**, which shows the starting point.
 
-**A project that names itself is found from any folder.** Put a `ksplc.cfg` holding `[package]` and `name = myapp` at its top, and `import "myapp/hw";` finds `hw.kspls` in that top folder. `ksplc info package` names the package of the current folder. The details are in "A package that names itself (`[package]`)" in [`ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md).
+**A project that names itself is found from any folder.** Put a `ksplc.cfg` holding `[package]` and `name = myapp` at its top, and `import "myapp/hw"` finds `hw.kspls` in that top folder. `ksplc info package` names the package of the current folder. The details are in "A package that names itself (`[package]`)" in [`ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md).
 
-Note: **Artifacts can also be linked against each other, so you need not hand over KSPL source** ("Linking the artifacts together" in [`ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)).
+Note: **A library can also be handed over without its KSPL source**, built with `--library` and used through the C interface the compiler writes for it ("Shipping a library and using it" in [`ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)).
 
 ## VS Code (syntax highlighting, the Language Server, debugging)
 
