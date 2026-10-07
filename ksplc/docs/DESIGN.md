@@ -258,7 +258,7 @@ Four folders of `ksplc/` are not steps of §1.1's pipeline. No data passes throu
 
 "What is here" in [`ksplc/README.md`](../README.md) says what each folder holds.
 
-**One lint asks the formatter a question**: which comment a round trip through the indentation notation moves (`[I0805]` in `ksplc/docs/SPEC-tools.md`). A *lint* is a check that warns about code that compiles but is likely wrong or untidy. For that alone, `pipeline.kspls` imports `fmt/text.kspls`, the formatter's single entry point for a text. The answer is the formatter's decision, and a copy would drift (§10.13, §10.14).
+**One lint asks the formatter a question**: which comment a round trip through the indentation notation moves (`[I0801]` in `ksplc/docs/SPEC-tools.md`). A *lint* is a check that warns about code that compiles but is likely wrong or untidy. For that alone, `pipeline.kspls` imports `fmt/text.kspls`, the formatter's single entry point for a text. The answer is the formatter's decision, and a copy would drift (§10.13, §10.14).
 
 ### 1.5 String interning
 
@@ -1463,7 +1463,7 @@ Note: **Dead-code elimination (`lower/prune.kspls`) drops about half of the func
 
 * `List.at` is inlined since std's `bounds_panic` stays out of line ("Indexing costs one comparison, and the stop is called out of line" in [`../../std/docs/DESIGN.md`](../../std/docs/DESIGN.md)), which is a fifth on its own.
 * `is_file_imported` looks up an index (`build_import_reach` in `sema/session/import_table.kspls`) instead of walking every file's import lines.
-* W0602, off by default, asks its level (`Sema_ctx.is_code_off`) before walking each local's type.
+* W0601, off by default, asks its level (`Sema_ctx.is_code_off`) before walking each local's type.
 
 **Sema is not the only one paying.** Dead-code elimination runs after `lower_root.run` and `lower_abi.run` (the reason is in 5.2.2), so what drops has been through Lower's walk and the ABI conversion too.
 

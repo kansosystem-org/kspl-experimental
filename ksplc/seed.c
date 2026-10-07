@@ -16301,6 +16301,7 @@ static Bool kspl_priv_ksplc_parse_syntax_msg_starts_with_word(std_lang_Slice_U8 
 static Bool kspl_priv_ksplc_parse_syntax_msg_append_split_value_hint(std_str_Str_builder *msg, std_lang_Slice_U8 src, Sz pos);
 static Bool kspl_priv_ksplc_parse_syntax_msg_append_trailing_defer_hint(std_str_Str_builder *msg, std_lang_Slice_U8 src, Sz pos);
 static Bool kspl_priv_ksplc_parse_syntax_msg_append_typedef_spelling_hint(std_str_Str_builder *msg, std_lang_Slice_U8 src, Sz pos);
+static Bool kspl_priv_ksplc_parse_syntax_msg_append_statement_word_hint(std_str_Str_builder *msg, std_lang_Slice_U8 src, Sz pos);
 static Sz kspl_priv_ksplc_parse_syntax_msg_statement_start(std_lang_Slice_U8 src, Sz pos);
 static std_lang_Slice_U8 kspl_priv_ksplc_parse_syntax_msg_declared_name(std_lang_Slice_U8 src, Sz from);
 static Bool kspl_priv_ksplc_parse_syntax_msg_statement_has_if_without_else(std_lang_Slice_U8 src, Sz pos);
@@ -24650,7 +24651,7 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     "**A formatted source comes back byte for byte from the other notation, with one exception for th"
     "e writer to fix.** A comment after a `}` that the indentation notation leaves out has no line to"
     " stand on there. `--to=kspls` moves it to the line above, or onto a line of its own where the li"
-    "ne above already has a comment, and it does not come back; `ksplc lint` names each one ([I0805])"
+    "ne above already has a comment, and it does not come back; `ksplc lint` names each one ([I0801])"
     ". A comment after a `}` that the notation keeps (a value's, or a block's inside a call's bracket"
     "s) stays where it is in both directions.\n"
     "\n"
@@ -24964,7 +24965,7 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     "ksplc lint src/main.kspls\n"
     "\n"
     "# enable a code that is off by default / raise a severity (§5.3)\n"
-    "ksplc lint --lint=W0602=on src/main.kspls\n"
+    "ksplc lint --lint=W0601=on src/main.kspls\n"
     "ksplc lint --lint=I0307=off --lint=W0105=error src/main.kspls\n"
     "```\n"
     "\n"
@@ -24991,8 +24992,11 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     " at one or to narrow the output to it. **An error has no number**: with one, the mechanism of §"
     "5.3 could silence it.\n"
     "\n"
-    "**The four digits are a class and an item**: the top two give the class, the bottom two the item"
-    " within it, so `W0106` is class 01's seventh.\n"
+    "**The four digits are a class and an item**: the top two give the class, and the bottom two coun"
+    "t that weight's items within the class, each weight from 01. So `W0106` is class 01's sixth warn"
+    "ing, and `I0301` and `H0301` are both first in class 03, one an information and the other a hint"
+    ". **The letter is part of the code**: `I0310` and a later `H0310` would name different findings."
+    "\n"
     "\n"
     "| | The class | What the reader is being told |\n"
     "| :-- | :-- | :-- |\n"
@@ -25009,9 +25013,6 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     "\n"
     "**The class and the weight are independent axes**: class 07 holds a warning, an information and "
     "a hint, so neither can be read off the other.\n"
-    "\n"
-    "Caution: **A code is never renumbered or re-lettered once others use it.** Moving it turns an ex"
-    "isting `##lint(...)` into a compile error or into a setting aimed at the wrong finding.\n"
     "\n"
     "**The CI verdict counts all four weights**: the lint gate (the CI check that runs the linter) an"
     "d the entry points it analyses are \"What each platform runs\" in [`docs/SPEC-gates.md`](../../d"
@@ -25058,10 +25059,10 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     "\n"
     "| Strength | Where | How it is written | What it covers |\n"
     "| :-- | :-- | :-- | :-- |\n"
-    "| 1 (strongest) | **per file** | `##lint(W0602 = on, I0305 = off);` near the file's head; settin"
+    "| 1 (strongest) | **per file** | `##lint(W0601 = on, I0305 = off);` near the file's head; settin"
     "gs are comma-separated | the whole file, from any position (it takes effect before any diagnosti"
     "c) |\n"
-    "| 2 | **the CLI** | `ksplc lint --lint=I0307=off --lint=W0602=on src/main.kspls`; it may be repe"
+    "| 2 | **the CLI** | `ksplc lint --lint=I0307=off --lint=W0601=on src/main.kspls`; it may be repe"
     "ated, and the later one wins | that one run |\n"
     "| 3 | **the project settings file** | the `[lint]` section of the nearest `ksplc.cfg` above the "
     "source ([§6.2](#62-the-search-and-the-range-it-applies-to); [§6.1](#61-how-to-write-it) shows "
@@ -25080,9 +25081,9 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     "\n"
     "| The code | The meaning | Enable it for |\n"
     "| :-- | :-- | :-- |\n"
-    "| [W0602] | points out where ARC's hidden `retain`/`release` makes timing invisible | a system p"
+    "| [W0601] | points out where ARC's hidden `retain`/`release` makes timing invisible | a system p"
     "utting determinism first — an OS, embedded, real-time control |\n"
-    "| [I0603] | recommends a reference-counted type over hand-made ownership (a raw pointer plus one"
+    "| [I0602] | recommends a reference-counted type over hand-made ownership (a raw pointer plus one"
     "'s own `free`) | a system putting memory robustness first, such as a web server |\n"
     "| [I0402] | points out a `pub` used only inside its package | an artifact closed at that unit, s"
     "uch as an executable |\n"
@@ -25094,7 +25095,7 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     "ay to write the per-code setting. To cover a directory tree, list the codes in `ksplc.cfg` (for "
     "example `kssrv/ksplc.cfg`).\n"
     "\n"
-    "**A code on by default is useful whatever is being built**: [H0704]'s `Option<|T|>` is an enum r"
+    "**A code on by default is useful whatever is being built**: [H0701]'s `Option<|T|>` is an enum r"
     "esolved at compile time, so it serves either kind of system without touching run-time timing.\n"
     "\n"
     "### 5.4 The list of diagnostic codes\n"
@@ -25158,9 +25159,9 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     "| W0211 | a name a comment points at leads nowhere |\n"
     "| W0212 | a comment opening with `///` or `//!`, which is not read |\n"
     "| W0213 | a `//<` summary longer than one line, or opening with a label |\n"
-    "| W0503 | conformance to a declaration named the same as a trait the compiler knows |\n"
-    "| W0504 | a local or a parameter that hides an imported module |\n"
-    "| W0602 | the use of an ARC-managed type (off by default) |\n"
+    "| W0501 | conformance to a declaration named the same as a trait the compiler knows |\n"
+    "| W0502 | a local or a parameter that hides an imported module |\n"
+    "| W0601 | the use of an ARC-managed type (off by default) |\n"
     "| W0701 | an unhandled Result type |\n"
     "| W0702 | the use of a deprecated symbol |\n"
     "| I0301 | an unnecessary `::` cast |\n"
@@ -25178,12 +25179,12 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     "| I0501 | shadowing |\n"
     "| I0502 | a naming-convention violation |\n"
     "| I0601 | an unnecessary mutability marker |\n"
-    "| I0603 | detecting a hand-made ownership struct (off by default) |\n"
-    "| I0703 | error propagation using '\?' is recommended |\n"
-    "| I0805 | a comment a round trip through the indentation notation moves |\n"
-    "| H0311 | unnecessary brackets |\n"
-    "| H0312 | a type written twice |\n"
-    "| H0704 | a proposal to adopt `Option<\\|T\\|>` for a raw-pointer return value that can return n"
+    "| I0602 | detecting a hand-made ownership struct (off by default) |\n"
+    "| I0701 | error propagation using '\?' is recommended |\n"
+    "| I0801 | a comment a round trip through the indentation notation moves |\n"
+    "| H0301 | unnecessary brackets |\n"
+    "| H0302 | a type written twice |\n"
+    "| H0701 | a proposal to adopt `Option<\\|T\\|>` for a raw-pointer return value that can return n"
     "ull |\n"
     "| H0801 | a guard clause is recommended |\n"
     "| H0802 | a wrap at a call inside an argument |\n"
@@ -25262,7 +25263,7 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     "The result of `&` / `|` / `^` is compared without brackets, as in `a & b == c`. KSPL places thes"
     "e three at the level of multiplication, so it reads `(a & b) == c`. **C reads it the other way**"
     " (`a & (b == c)`), and neither the types nor a run-time check catch it.\n"
-    "* **Fix**: bracket the intended grouping (`(a & b) == c`). [H0311]'s \"unneeded brackets\" does "
+    "* **Fix**: bracket the intended grouping (`(a & b) == c`). [H0301]'s \"unneeded brackets\" does "
     "not look at binary operations, so both can be followed.\n"
     "\n"
     "#### [W0109] An early exit before the `defer` that frees an `Owned` value\n"
@@ -25397,7 +25398,7 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     "* **Not reported**: a run whose summary is one line, however long the detail below the parting m"
     "ark.\n"
     "\n"
-    "#### [W0503] Conformance to a declaration named the same as a trait the compiler knows\n"
+    "#### [W0501] Conformance to a declaration named the same as a trait the compiler knows\n"
     "A type claims a trait that only looks like one the compiler treats specially, so the special tre"
     "atment never happens. The `X` of `impl <type>: X` names a different declaration with the same na"
     "me as a trait the compiler knows (`Ref_counted` / `Move_only` / `Owned`). The known traits are m"
@@ -25407,9 +25408,9 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     "* **Fix**: to conform to the real trait, qualify it with `lang.`, as in `impl <type>: lang.Ref_c"
     "ounted` (the `std/lang` item in [\"9. Files and import\" in `../../docs/SPEC-language.md`](../.."
     "/docs/SPEC-language.md#9-files-and-import)). Where the name serves an unrelated purpose, rename "
-    "it, or silence this for that one file with `##lint(W0503 = off)`.\n"
+    "it, or silence this for that one file with `##lint(W0501 = off)`.\n"
     "\n"
-    "#### [W0504] A local or a parameter that hides an imported module\n"
+    "#### [W0502] A local or a parameter that hides an imported module\n"
     "A local variable or parameter has the name an import line binds to a module (`import \"std/io\"`"
     " binds `io`, and `import \"std/json\" + { Val }` binds `json` beside `Val`). A module's members "
     "and a value's are both reached with `.`, so from the declaration to the end of its scope `io.out"
@@ -25424,14 +25425,14 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     "* **Not reported**: a name no import line binds (a selective import without `+` binds only the n"
     "ames it lists), the prelude's `lang`, which no line imports, and a name starting with `_`.\n"
     "\n"
-    "#### [W0602] The use of an ARC-managed type\n"
+    "#### [W0601] The use of an ARC-managed type\n"
     "Off by default ([§5.3](#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lin"
     "t--ksplccfg)). ARC (automatic reference counting) has the compiler insert `retain()`/`release()`"
     " calls that count a value's owners. They run invisibly, a risk where execution timing must stay "
     "visible. It is reported where a local variable's or parameter's type is ARC-managed (conforms to"
     " `Ref_counted`), or is a struct holding one as a value field at any depth.\n"
     "* **Fix**: consider explicit ownership through an arena or `defer`. It is not there to forbid AR"
-    "C: a deliberate exception may stay. To exclude one file while it is enabled, write `##lint(W0602"
+    "C: a deliberate exception may stay. To exclude one file while it is enabled, write `##lint(W0601"
     " = off);`.\n"
     "\n"
     "#### [W0701] An unhandled Result type\n"
@@ -25608,7 +25609,7 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     "* **Fix**: remove the `$` (`$x: = ...` → `x: = ...`). Unmarked is immutable, so the type syste"
     "m then guarantees the variable is never reassigned.\n"
     "\n"
-    "#### [I0603] Detecting a hand-made ownership struct\n"
+    "#### [I0602] Detecting a hand-made ownership struct\n"
     "Off by default ([§5.3](#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lin"
     "t--ksplccfg)). Reported where a struct not conforming to `Ref_counted` holds a raw-pointer field"
     " and defines its own `free` method: hand-made ownership. Structs under `std/` are out of scope ("
@@ -25617,12 +25618,12 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     "erence counting manages its lifetime (\"8.4 The memory management model: `defer` / ARC / arenas\""
     " in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md)).\n"
     "\n"
-    "#### [I0703] Error propagation using '\?' is recommended\n"
+    "#### [I0701] Error propagation using '\?' is recommended\n"
     "A `catch` that only rethrows the caught error, as in `catch e { throw e; }`.\n"
     "* **Fix**: replace the whole `catch` block with the `\?` operator, which propagates the error (h"
     "ands it to the caller) more safely and concisely.\n"
     "\n"
-    "#### [I0805] A comment a round trip through the indentation notation moves\n"
+    "#### [I0801] A comment a round trip through the indentation notation moves\n"
     "A comment after a closing `}` cannot survive conversion to the indentation notation, which has n"
     "o line for that `}`. In the brace notation, a line comment stands after a `}` that the indentati"
     "on notation leaves out: a block's close outside every bracket, with the statement's `;` between "
@@ -25639,7 +25640,7 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     "\n"
     "### 5.7 The list of hints (H)\n"
     "\n"
-    "#### [H0311] Unnecessary brackets\n"
+    "#### [H0301] Unnecessary brackets\n"
     "Brackets `()` that change nothing. They stand around the condition of an `if`, a `for`, a `switc"
     "h` and the like, or around the receiver of a postfix operator (`.`/`[`/`(`/`@`/`$`/`::`/`\?`) th"
     "at binds the same without them: an identifier, a path, a literal, an existing postfix chain and "
@@ -25648,7 +25649,7 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     " unary or ternary operation, a `catch`, a `sizeof`, an upcast) is out of scope, since there the "
     "brackets are needed.\n"
     "\n"
-    "#### [H0312] A type written twice\n"
+    "#### [H0302] A type written twice\n"
     "A local's annotation that its initializer already says. The same type is written at the initiali"
     "zer's head, as a struct literal (`p: Point = Point::{ … }`), a cast (`n: U8 = U8::v`), an enum"
     " variant (`k: Kind = Kind.small`) or a call made through the type (`xs: List<|I32|> = List<|I32|"
@@ -25670,7 +25671,7 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     " type in the text, which is the same for every instantiation, so they are reported, once per lin"
     "e however many instantiations check it.\n"
     "\n"
-    "#### [H0704] A proposal to adopt `Option<|T|>` for a raw-pointer return value that can return nu"
+    "#### [H0701] A proposal to adopt `Option<|T|>` for a raw-pointer return value that can return nu"
     "ll\n"
     "A function returning a raw pointer (`T@`) does `return null;` on some path, so a caller can forg"
     "et to check for null. It is on by default, whatever is being built ([§5.3](#53-enabling-disabli"
@@ -25725,7 +25726,7 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     "```\n"
     "# a comment runs from '#' to the end of the line\n"
     "[lint]\n"
-    "W0602 = on\n"
+    "W0601 = on\n"
     "I0307 = off\n"
     "W0105 = error\n"
     "```\n"
@@ -38144,11 +38145,11 @@ std_lang_Option_ksplc_base_lint_codes_Lint_level kspl_ksplc_base_lint_codes_Lint
 }
 
 std_lang_Option_Bool kspl_ksplc_base_lint_codes_lookup(std_lang_Slice_U8 code) {
-  if (kspl_std_lang_Slice_U8_Const_equals(code, KSPL_STR(std_lang_Slice_U8, "H0311"))) {
+  if (kspl_std_lang_Slice_U8_Const_equals(code, KSPL_STR(std_lang_Slice_U8, "H0301"))) {
     return kspl_priv_ksplc_base_lint_codes_info(true);
   }
 
-  if (kspl_std_lang_Slice_U8_Const_equals(code, KSPL_STR(std_lang_Slice_U8, "H0312"))) {
+  if (kspl_std_lang_Slice_U8_Const_equals(code, KSPL_STR(std_lang_Slice_U8, "H0302"))) {
     return kspl_priv_ksplc_base_lint_codes_info(true);
   }
 
@@ -38160,7 +38161,7 @@ std_lang_Option_Bool kspl_ksplc_base_lint_codes_lookup(std_lang_Slice_U8 code) {
     return kspl_priv_ksplc_base_lint_codes_info(true);
   }
 
-  if (kspl_std_lang_Slice_U8_Const_equals(code, KSPL_STR(std_lang_Slice_U8, "H0704"))) {
+  if (kspl_std_lang_Slice_U8_Const_equals(code, KSPL_STR(std_lang_Slice_U8, "H0701"))) {
     return kspl_priv_ksplc_base_lint_codes_info(true);
   }
 
@@ -38200,11 +38201,11 @@ std_lang_Option_Bool kspl_ksplc_base_lint_codes_lookup(std_lang_Slice_U8 code) {
     return kspl_priv_ksplc_base_lint_codes_info(true);
   }
 
-  if (kspl_std_lang_Slice_U8_Const_equals(code, KSPL_STR(std_lang_Slice_U8, "I0703"))) {
+  if (kspl_std_lang_Slice_U8_Const_equals(code, KSPL_STR(std_lang_Slice_U8, "I0701"))) {
     return kspl_priv_ksplc_base_lint_codes_info(true);
   }
 
-  if (kspl_std_lang_Slice_U8_Const_equals(code, KSPL_STR(std_lang_Slice_U8, "I0805"))) {
+  if (kspl_std_lang_Slice_U8_Const_equals(code, KSPL_STR(std_lang_Slice_U8, "I0801"))) {
     return kspl_priv_ksplc_base_lint_codes_info(true);
   }
 
@@ -38232,7 +38233,7 @@ std_lang_Option_Bool kspl_ksplc_base_lint_codes_lookup(std_lang_Slice_U8 code) {
     return kspl_priv_ksplc_base_lint_codes_info(true);
   }
 
-  if (kspl_std_lang_Slice_U8_Const_equals(code, KSPL_STR(std_lang_Slice_U8, "I0603"))) {
+  if (kspl_std_lang_Slice_U8_Const_equals(code, KSPL_STR(std_lang_Slice_U8, "I0602"))) {
     return kspl_priv_ksplc_base_lint_codes_info(false);
   }
 
@@ -38336,15 +38337,15 @@ std_lang_Option_Bool kspl_ksplc_base_lint_codes_lookup(std_lang_Slice_U8 code) {
     return kspl_priv_ksplc_base_lint_codes_info(true);
   }
 
-  if (kspl_std_lang_Slice_U8_Const_equals(code, KSPL_STR(std_lang_Slice_U8, "W0602"))) {
+  if (kspl_std_lang_Slice_U8_Const_equals(code, KSPL_STR(std_lang_Slice_U8, "W0601"))) {
     return kspl_priv_ksplc_base_lint_codes_info(false);
   }
 
-  if (kspl_std_lang_Slice_U8_Const_equals(code, KSPL_STR(std_lang_Slice_U8, "W0503"))) {
+  if (kspl_std_lang_Slice_U8_Const_equals(code, KSPL_STR(std_lang_Slice_U8, "W0501"))) {
     return kspl_priv_ksplc_base_lint_codes_info(true);
   }
 
-  if (kspl_std_lang_Slice_U8_Const_equals(code, KSPL_STR(std_lang_Slice_U8, "W0504"))) {
+  if (kspl_std_lang_Slice_U8_Const_equals(code, KSPL_STR(std_lang_Slice_U8, "W0502"))) {
     return kspl_priv_ksplc_base_lint_codes_info(true);
   }
 
@@ -52793,12 +52794,107 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_append_typedef_spelling
   return false;
 }
 
+static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_append_statement_word_hint(std_str_Str_builder *msg, std_lang_Slice_U8 src, Sz pos) {
+  KSPL_UNUSED Bool _mir_tmp_001 = pos < (Sz)0;
+  if (!_mir_tmp_001) {
+    _mir_tmp_001 = pos > src.len;
+  }
+
+  if (_mir_tmp_001) {
+    return false;
+  }
+
+  std_lang_Slice_U8 code = kspl_priv_ksplc_parse_syntax_msg_code_line(src, kspl_ksplc_base_lines_line_start(src, pos)).code;
+  Sz e = kspl_priv_ksplc_parse_syntax_msg_word_end(code, (Sz)0);
+  std_lang_Slice_U8 word = kspl_std_lang_Slice_U8_Const_sub(code, (Sz)0, e);
+  std_lang_Slice_U8 rest = kspl_std_lang_Slice_U8_Const_trim_spaces(kspl_std_lang_Slice_U8_Const_sub_from(code, e));
+  KSPL_UNUSED Bool _mir_tmp_005 = e == (Sz)0;
+  if (!_mir_tmp_005) {
+    KSPL_UNUSED Bool _mir_tmp_006 = e < code.len;
+    if (_mir_tmp_006) {
+      _mir_tmp_006 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&code, e, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)339))) != 32;
+    }
+
+    _mir_tmp_005 = _mir_tmp_006;
+  }
+
+  KSPL_UNUSED Bool _mir_tmp_004 = _mir_tmp_005;
+  if (!_mir_tmp_004) {
+    _mir_tmp_004 = kspl_std_lang_Slice_U8_Const_starts_with(rest, KSPL_STR(std_lang_Slice_U8, "="), (Sz)0);
+  }
+
+  KSPL_UNUSED Bool _mir_tmp_003 = _mir_tmp_004;
+  if (!_mir_tmp_003) {
+    _mir_tmp_003 = kspl_std_lang_Slice_U8_Const_starts_with(rest, KSPL_STR(std_lang_Slice_U8, ":"), (Sz)0);
+  }
+
+  KSPL_UNUSED Bool _mir_tmp_002 = _mir_tmp_003;
+  if (!_mir_tmp_002) {
+    _mir_tmp_002 = kspl_std_lang_Slice_U8_Const_starts_with(rest, KSPL_STR(std_lang_Slice_U8, "."), (Sz)0);
+  }
+
+  if (_mir_tmp_002) {
+    return false;
+  }
+
+  I32 brace = kspl_std_lang_Slice_U8_Const_find_char(rest, 123);
+  KSPL_UNUSED std_lang_Slice_U8 _mir_tmp_007 = {0};
+  if (brace >= 0) {
+    _mir_tmp_007 = kspl_std_lang_Slice_U8_Const_trim_spaces(kspl_std_lang_Slice_U8_Const_sub(rest, (Sz)0, (Sz)brace));
+  }
+
+  else {
+    _mir_tmp_007 = rest;
+  }
+  std_lang_Slice_U8 head = _mir_tmp_007;
+  KSPL_UNUSED Bool _mir_tmp_008 = kspl_std_lang_Slice_U8_Const_equals(word, KSPL_STR(std_lang_Slice_U8, "while"));
+  if (_mir_tmp_008) {
+    _mir_tmp_008 = head.len > (Sz)0;
+  }
+
+  if (_mir_tmp_008) {
+    (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(msg, KSPL_STR(std_lang_Slice_U8, "\n  Note: every loop is written with 'for', and a condition alone makes it repeat while the condition holds: 'for ")), head), KSPL_STR(std_lang_Slice_U8, "'.")));
+    return true;
+  }
+
+  KSPL_UNUSED Bool _mir_tmp_009 = kspl_std_lang_Slice_U8_Const_equals(word, KSPL_STR(std_lang_Slice_U8, "loop"));
+  if (_mir_tmp_009) {
+    _mir_tmp_009 = head.len == (Sz)0;
+  }
+
+  if (_mir_tmp_009) {
+    (void)(kspl_std_str_Str_builder_s(msg, KSPL_STR(std_lang_Slice_U8, "\n  Note: every loop is written with 'for', and a bare 'for' repeats until a 'break' leaves it.")));
+    return true;
+  }
+
+  KSPL_UNUSED Bool _mir_tmp_010 = !kspl_std_lang_Slice_U8_Const_equals(word, KSPL_STR(std_lang_Slice_U8, "match"));
+  if (!_mir_tmp_010) {
+    _mir_tmp_010 = head.len == (Sz)0;
+  }
+
+  if (_mir_tmp_010) {
+    return false;
+  }
+
+  KSPL_UNUSED std_str_Str_builder *_mir_tmp_011 = kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(msg, KSPL_STR(std_lang_Slice_U8, "\n  Note: KSPL branches on a value with 'switch'; each case opens with 'case', with no braces around them all: 'switch ")), head);
+  KSPL_UNUSED std_lang_Slice_U8 _mir_tmp_012 = {0};
+  if (kspl_std_lang_Slice_U8_Const_find_str(head, KSPL_STR(std_lang_Slice_U8, " case ")) >= 0) {
+    _mir_tmp_012 = KSPL_STR(std_lang_Slice_U8, "");
+  }
+
+  else {
+    _mir_tmp_012 = KSPL_STR(std_lang_Slice_U8, " case ...");
+  }
+  (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(_mir_tmp_011, _mir_tmp_012), KSPL_STR(std_lang_Slice_U8, "'.")));
+  return true;
+}
+
 static KSPL_UNUSED Sz kspl_priv_ksplc_parse_syntax_msg_statement_start(std_lang_Slice_U8 src, Sz pos) {
   Sz depth = (Sz)0;
   Sz i = (Sz)((size_t)(pos) - (size_t)((Sz)1));
   {
     for (; i >= (Sz)0;) {
-      const U8 ch = (*(kspl_std_lang_Slice_U8_Const_at_ref(&src, i, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)338)));
+      const U8 ch = (*(kspl_std_lang_Slice_U8_Const_at_ref(&src, i, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)370)));
       KSPL_UNUSED Bool _mir_tmp_004 = (U8)ch == 125;
       if (!_mir_tmp_004) {
         _mir_tmp_004 = (U8)ch == 41;
@@ -52856,19 +52952,19 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_parse_syntax_msg_declared_n
     for (;;) {
       KSPL_UNUSED Bool _mir_tmp_001 = s < src.len;
       if (_mir_tmp_001) {
-        KSPL_UNUSED Bool _mir_tmp_004 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, s, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)356))) == 32;
+        KSPL_UNUSED Bool _mir_tmp_004 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, s, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)388))) == 32;
         if (!_mir_tmp_004) {
-          _mir_tmp_004 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, s, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)356))) == 9;
+          _mir_tmp_004 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, s, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)388))) == 9;
         }
 
         KSPL_UNUSED Bool _mir_tmp_003 = _mir_tmp_004;
         if (!_mir_tmp_003) {
-          _mir_tmp_003 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, s, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)356))) == 10;
+          _mir_tmp_003 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, s, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)388))) == 10;
         }
 
         KSPL_UNUSED Bool _mir_tmp_002 = _mir_tmp_003;
         if (!_mir_tmp_002) {
-          _mir_tmp_002 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, s, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)356))) == 13;
+          _mir_tmp_002 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, s, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)388))) == 13;
         }
 
         _mir_tmp_001 = _mir_tmp_002;
@@ -52884,7 +52980,7 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_parse_syntax_msg_declared_n
   }
   KSPL_UNUSED Bool _mir_tmp_007 = s < src.len;
   if (_mir_tmp_007) {
-    _mir_tmp_007 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, s, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)358))) == 36;
+    _mir_tmp_007 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, s, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)390))) == 36;
   }
 
   if (_mir_tmp_007) {
@@ -52894,7 +52990,7 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_parse_syntax_msg_declared_n
   Sz e = kspl_priv_ksplc_parse_syntax_msg_word_end(src, s);
   KSPL_UNUSED Bool _mir_tmp_008 = e == s;
   if (!_mir_tmp_008) {
-    _mir_tmp_008 = kspl_U8_is_digit((*(kspl_std_lang_Slice_U8_Const_at_ref(&src, s, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)361))));
+    _mir_tmp_008 = kspl_U8_is_digit((*(kspl_std_lang_Slice_U8_Const_at_ref(&src, s, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)393))));
   }
 
   if (_mir_tmp_008) {
@@ -52906,7 +53002,7 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_parse_syntax_msg_declared_n
     for (;;) {
       KSPL_UNUSED Bool _mir_tmp_009 = c < src.len;
       if (_mir_tmp_009) {
-        _mir_tmp_009 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, c, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)364))) == 32;
+        _mir_tmp_009 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, c, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)396))) == 32;
       }
 
       if (!_mir_tmp_009) {
@@ -52919,7 +53015,7 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_parse_syntax_msg_declared_n
   }
   KSPL_UNUSED Bool _mir_tmp_013 = c >= src.len;
   if (!_mir_tmp_013) {
-    _mir_tmp_013 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, c, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)366))) != 58;
+    _mir_tmp_013 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, c, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)398))) != 58;
   }
 
   KSPL_UNUSED Bool _mir_tmp_012 = _mir_tmp_013;
@@ -52940,17 +53036,17 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_statement_has_if_withou
     for (;;) {
       KSPL_UNUSED Bool _mir_tmp_003 = start >= (Sz)0;
       if (_mir_tmp_003) {
-        _mir_tmp_003 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, start, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)373))) != 59;
+        _mir_tmp_003 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, start, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)405))) != 59;
       }
 
       KSPL_UNUSED Bool _mir_tmp_002 = _mir_tmp_003;
       if (_mir_tmp_002) {
-        _mir_tmp_002 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, start, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)373))) != 123;
+        _mir_tmp_002 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, start, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)405))) != 123;
       }
 
       KSPL_UNUSED Bool _mir_tmp_001 = _mir_tmp_002;
       if (_mir_tmp_001) {
-        _mir_tmp_001 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, start, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)373))) != 125;
+        _mir_tmp_001 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, start, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)405))) != 125;
       }
 
       if (!_mir_tmp_001) {
@@ -52974,7 +53070,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_append_unclosed_bracket
   Sz at = kspl_priv_ksplc_parse_syntax_msg_innermost_open(src, pos);
   KSPL_UNUSED Bool _mir_tmp_001 = at < (Sz)0;
   if (!_mir_tmp_001) {
-    _mir_tmp_001 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, at, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)389))) == 123;
+    _mir_tmp_001 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, at, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)421))) == 123;
   }
 
   if (_mir_tmp_001) {
@@ -52982,7 +53078,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_append_unclosed_bracket
   }
 
   KSPL_UNUSED U8 _mir_tmp_002 = {0};
-  if ((U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, at, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)391))) == 40) {
+  if ((U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, at, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)423))) == 40) {
     _mir_tmp_002 = 41;
   }
 
@@ -52992,9 +53088,9 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_append_unclosed_bracket
   U8 closer = _mir_tmp_002;
   KSPL_UNUSED Bool _mir_tmp_004 = pos < src.len;
   if (_mir_tmp_004) {
-    KSPL_UNUSED Bool _mir_tmp_005 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, pos, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)392))) == 41;
+    KSPL_UNUSED Bool _mir_tmp_005 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, pos, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)424))) == 41;
     if (!_mir_tmp_005) {
-      _mir_tmp_005 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, pos, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)392))) == 93;
+      _mir_tmp_005 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, pos, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)424))) == 93;
     }
 
     _mir_tmp_004 = _mir_tmp_005;
@@ -53002,13 +53098,13 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_append_unclosed_bracket
 
   KSPL_UNUSED Bool _mir_tmp_003 = _mir_tmp_004;
   if (_mir_tmp_003) {
-    _mir_tmp_003 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, pos, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)392))) != closer;
+    _mir_tmp_003 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, pos, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)424))) != closer;
   }
 
   if (_mir_tmp_003) {
     KSPL_UNUSED std_str_Str_builder *_mir_tmp_007 = kspl_std_str_Str_builder_s(msg, KSPL_STR(std_lang_Slice_U8, "\n  Note: this '"));
-    KSPL_UNUSED std_str_Str_builder *_mir_tmp_006 = kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_c(_mir_tmp_007, (*(kspl_std_lang_Slice_U8_Const_at_ref(&src, pos, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)393)))), KSPL_STR(std_lang_Slice_U8, "' cannot close the '"));
-    (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_c(_mir_tmp_006, (*(kspl_std_lang_Slice_U8_Const_at_ref(&src, at, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)393)))), KSPL_STR(std_lang_Slice_U8, "' at ")));
+    KSPL_UNUSED std_str_Str_builder *_mir_tmp_006 = kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_c(_mir_tmp_007, (*(kspl_std_lang_Slice_U8_Const_at_ref(&src, pos, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)425)))), KSPL_STR(std_lang_Slice_U8, "' cannot close the '"));
+    (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_c(_mir_tmp_006, (*(kspl_std_lang_Slice_U8_Const_at_ref(&src, at, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)425)))), KSPL_STR(std_lang_Slice_U8, "' at ")));
     kspl_priv_ksplc_parse_syntax_msg_append_place(msg, src, at);
     (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_c(kspl_std_str_Str_builder_s(msg, KSPL_STR(std_lang_Slice_U8, "; only a '")), closer), KSPL_STR(std_lang_Slice_U8, "' can.")));
     return true;
@@ -53018,7 +53114,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_append_unclosed_bracket
   Sz j = pos;
   {
     for (; j < src.len;) {
-      const U8 c = (*(kspl_std_lang_Slice_U8_Const_at_ref(&src, j, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)400)));
+      const U8 c = (*(kspl_std_lang_Slice_U8_Const_at_ref(&src, j, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)432)));
       KSPL_UNUSED Bool _mir_tmp_011 = (U8)c == 40;
       if (!_mir_tmp_011) {
         _mir_tmp_011 = (U8)c == 91;
@@ -53051,7 +53147,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_append_unclosed_bracket
   _mir_label_009:;
   }
   KSPL_UNUSED std_str_Str_builder *_mir_tmp_012 = kspl_std_str_Str_builder_s(msg, KSPL_STR(std_lang_Slice_U8, "\n  Note: the '"));
-  (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_c(_mir_tmp_012, (*(kspl_std_lang_Slice_U8_Const_at_ref(&src, at, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)410)))), KSPL_STR(std_lang_Slice_U8, "' at ")));
+  (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_c(_mir_tmp_012, (*(kspl_std_lang_Slice_U8_Const_at_ref(&src, at, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)442)))), KSPL_STR(std_lang_Slice_U8, "' at ")));
   kspl_priv_ksplc_parse_syntax_msg_append_place(msg, src, at);
   (void)(kspl_std_str_Str_builder_s(msg, KSPL_STR(std_lang_Slice_U8, " is never closed, so what follows it was read as its contents. Close it where its contents end.")));
   return true;
@@ -53072,7 +53168,7 @@ static KSPL_UNUSED Sz kspl_priv_ksplc_parse_syntax_msg_innermost_open(std_lang_S
         goto _mir_label_003;
       }
 
-      const U8 c = (*(kspl_std_lang_Slice_U8_Const_at_ref(&src, i, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)425)));
+      const U8 c = (*(kspl_std_lang_Slice_U8_Const_at_ref(&src, i, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)457)));
       KSPL_UNUSED Bool _mir_tmp_005 = (U8)c == 40;
       if (!_mir_tmp_005) {
         _mir_tmp_005 = (U8)c == 91;
@@ -53089,7 +53185,7 @@ static KSPL_UNUSED Sz kspl_priv_ksplc_parse_syntax_msg_innermost_open(std_lang_S
         }
 
         {
-          Sz *_kspl_dst_51 = &(open.data[kspl_bounds_check(n, 64, "ksplc/parse/syntax_msg", 429)]);
+          Sz *_kspl_dst_51 = &(open.data[kspl_bounds_check(n, 64, "ksplc/parse/syntax_msg", 461)]);
           *_kspl_dst_51 = i;
         }
         n += (Sz)1;
@@ -53111,7 +53207,7 @@ static KSPL_UNUSED Sz kspl_priv_ksplc_parse_syntax_msg_innermost_open(std_lang_S
   }
   KSPL_UNUSED Sz _mir_tmp_007 = {0};
   if (n > (Sz)0) {
-    _mir_tmp_007 = open.data[kspl_bounds_check((Sz)((size_t)(n) - (size_t)((Sz)1)), 64, "ksplc/parse/syntax_msg", 434)];
+    _mir_tmp_007 = open.data[kspl_bounds_check((Sz)((size_t)(n) - (size_t)((Sz)1)), 64, "ksplc/parse/syntax_msg", 466)];
   }
 
   else {
@@ -53136,8 +53232,8 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_append_missing_comma_hi
     return false;
   }
 
-  const U8 before = (*(kspl_std_lang_Slice_U8_Const_at_ref(&src, (Sz)((size_t)(at) - (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)447)));
-  KSPL_UNUSED Bool _mir_tmp_003 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, at, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)449))) == 40;
+  const U8 before = (*(kspl_std_lang_Slice_U8_Const_at_ref(&src, (Sz)((size_t)(at) - (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)479)));
+  KSPL_UNUSED Bool _mir_tmp_003 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, at, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)481))) == 40;
   if (_mir_tmp_003) {
     KSPL_UNUSED Bool _mir_tmp_006 = kspl_U8_is_alnum(before);
     if (!_mir_tmp_006) {
@@ -53158,7 +53254,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_append_missing_comma_hi
   }
 
   Bool call = _mir_tmp_003;
-  KSPL_UNUSED Bool _mir_tmp_009 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, at, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)451))) == 123;
+  KSPL_UNUSED Bool _mir_tmp_009 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, at, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)483))) == 123;
   if (_mir_tmp_009) {
     _mir_tmp_009 = at >= (Sz)2;
   }
@@ -53170,7 +53266,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_append_missing_comma_hi
 
   KSPL_UNUSED Bool _mir_tmp_007 = _mir_tmp_008;
   if (_mir_tmp_007) {
-    _mir_tmp_007 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, (Sz)((size_t)(at) - (size_t)((Sz)2)), KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)451))) == 58;
+    _mir_tmp_007 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, (Sz)((size_t)(at) - (size_t)((Sz)2)), KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)483))) == 58;
   }
 
   Bool value = _mir_tmp_007;
@@ -53192,7 +53288,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_append_missing_comma_hi
 
   KSPL_UNUSED Bool _mir_tmp_010 = _mir_tmp_011;
   if (!_mir_tmp_010) {
-    _mir_tmp_010 = !kspl_priv_ksplc_parse_syntax_msg_ends_item((*(kspl_std_lang_Slice_U8_Const_at_ref(&src, prev, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)453))));
+    _mir_tmp_010 = !kspl_priv_ksplc_parse_syntax_msg_ends_item((*(kspl_std_lang_Slice_U8_Const_at_ref(&src, prev, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)485))));
   }
 
   if (_mir_tmp_010) {
@@ -53227,9 +53323,9 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_append_leading_zero_hin
     for (;;) {
       KSPL_UNUSED Bool _mir_tmp_002 = start > (Sz)0;
       if (_mir_tmp_002) {
-        KSPL_UNUSED Bool _mir_tmp_003 = kspl_U8_is_digit((*(kspl_std_lang_Slice_U8_Const_at_ref(&src, (Sz)((size_t)(start) - (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)471))));
+        KSPL_UNUSED Bool _mir_tmp_003 = kspl_U8_is_digit((*(kspl_std_lang_Slice_U8_Const_at_ref(&src, (Sz)((size_t)(start) - (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)503))));
         if (!_mir_tmp_003) {
-          _mir_tmp_003 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, (Sz)((size_t)(start) - (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)471))) == 95;
+          _mir_tmp_003 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, (Sz)((size_t)(start) - (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)503))) == 95;
         }
 
         _mir_tmp_002 = _mir_tmp_003;
@@ -53245,7 +53341,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_append_leading_zero_hin
   }
   KSPL_UNUSED Bool _mir_tmp_008 = start >= src.len;
   if (!_mir_tmp_008) {
-    _mir_tmp_008 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, start, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)473))) != 48;
+    _mir_tmp_008 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, start, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)505))) != 48;
   }
 
   KSPL_UNUSED Bool _mir_tmp_007 = _mir_tmp_008;
@@ -53255,9 +53351,9 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_append_leading_zero_hin
 
   KSPL_UNUSED Bool _mir_tmp_006 = _mir_tmp_007;
   if (!_mir_tmp_006) {
-    KSPL_UNUSED Bool _mir_tmp_009 = kspl_U8_is_digit((*(kspl_std_lang_Slice_U8_Const_at_ref(&src, (Sz)((size_t)(start) + (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)474))));
+    KSPL_UNUSED Bool _mir_tmp_009 = kspl_U8_is_digit((*(kspl_std_lang_Slice_U8_Const_at_ref(&src, (Sz)((size_t)(start) + (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)506))));
     if (!_mir_tmp_009) {
-      _mir_tmp_009 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, (Sz)((size_t)(start) + (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)474))) == 95;
+      _mir_tmp_009 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, (Sz)((size_t)(start) + (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)506))) == 95;
     }
 
     _mir_tmp_006 = !_mir_tmp_009;
@@ -53269,9 +53365,9 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_append_leading_zero_hin
 
   KSPL_UNUSED Bool _mir_tmp_010 = start > (Sz)0;
   if (_mir_tmp_010) {
-    KSPL_UNUSED Bool _mir_tmp_011 = kspl_U8_is_alnum((*(kspl_std_lang_Slice_U8_Const_at_ref(&src, (Sz)((size_t)(start) - (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)476))));
+    KSPL_UNUSED Bool _mir_tmp_011 = kspl_U8_is_alnum((*(kspl_std_lang_Slice_U8_Const_at_ref(&src, (Sz)((size_t)(start) - (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)508))));
     if (!_mir_tmp_011) {
-      _mir_tmp_011 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, (Sz)((size_t)(start) - (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)476))) == 46;
+      _mir_tmp_011 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, (Sz)((size_t)(start) - (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)508))) == 46;
     }
 
     _mir_tmp_010 = _mir_tmp_011;
@@ -53288,9 +53384,9 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_append_leading_zero_hin
     for (;;) {
       KSPL_UNUSED Bool _mir_tmp_012 = end < src.len;
       if (_mir_tmp_012) {
-        KSPL_UNUSED Bool _mir_tmp_013 = kspl_U8_is_digit((*(kspl_std_lang_Slice_U8_Const_at_ref(&src, end, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)481))));
+        KSPL_UNUSED Bool _mir_tmp_013 = kspl_U8_is_digit((*(kspl_std_lang_Slice_U8_Const_at_ref(&src, end, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)513))));
         if (!_mir_tmp_013) {
-          _mir_tmp_013 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, end, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)481))) == 95;
+          _mir_tmp_013 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, end, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)513))) == 95;
         }
 
         _mir_tmp_012 = _mir_tmp_013;
@@ -53300,10 +53396,10 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_append_leading_zero_hin
         goto _mir_label_015;
       }
 
-      if ((U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, end, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)482))) != 95) {
+      if ((U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, end, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)514))) != 95) {
         KSPL_UNUSED Bool _mir_tmp_017 = is_octal;
         if (_mir_tmp_017) {
-          _mir_tmp_017 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, end, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)483))) <= 55;
+          _mir_tmp_017 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, end, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)515))) <= 55;
         }
 
         KSPL_UNUSED Bool _mir_tmp_016 = _mir_tmp_017;
@@ -53313,7 +53409,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_append_leading_zero_hin
 
         is_octal = _mir_tmp_016;
         KSPL_UNUSED U64 _mir_tmp_018 = octal * 8ULL;
-        octal = _mir_tmp_018 + (U64)((U8)((U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, end, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)484))) - 48));
+        octal = _mir_tmp_018 + (U64)((U8)((U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, end, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)516))) - 48));
       }
 
       end += (Sz)1;
@@ -53326,9 +53422,9 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_append_leading_zero_hin
     for (;;) {
       KSPL_UNUSED Bool _mir_tmp_019 = rest < (Sz)((size_t)(end) - (size_t)((Sz)1));
       if (_mir_tmp_019) {
-        KSPL_UNUSED Bool _mir_tmp_020 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, rest, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)488))) == 48;
+        KSPL_UNUSED Bool _mir_tmp_020 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, rest, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)520))) == 48;
         if (!_mir_tmp_020) {
-          _mir_tmp_020 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, rest, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)488))) == 95;
+          _mir_tmp_020 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&src, rest, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)520))) == 95;
         }
 
         _mir_tmp_019 = _mir_tmp_020;
@@ -53354,7 +53450,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_append_leading_zero_hin
 }
 
 static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_starts_item(std_lang_Slice_U8 src, Sz at) {
-  const U8 c = (*(kspl_std_lang_Slice_U8_Const_at_ref(&src, at, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)503)));
+  const U8 c = (*(kspl_std_lang_Slice_U8_Const_at_ref(&src, at, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)535)));
   KSPL_UNUSED Bool _mir_tmp_005 = kspl_U8_is_alnum(c);
   if (!_mir_tmp_005) {
     _mir_tmp_005 = (U8)c == 34;
@@ -53389,7 +53485,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_parse_syntax_msg_starts_item(std_lang_Sl
   {
     KSPL_UNUSED I32 _for_idx_s1 = 0;
     for (; (Sz)_for_idx_s1 < (Sz)5; _for_idx_s1 += 1) {
-      std_lang_Slice_U8 k = _for_coll1.data[kspl_bounds_check((Sz)_for_idx_s1, 5, "ksplc/parse/syntax_msg", 507)];
+      std_lang_Slice_U8 k = _for_coll1.data[kspl_bounds_check((Sz)_for_idx_s1, 5, "ksplc/parse/syntax_msg", 539)];
       if (kspl_std_lang_Slice_U8_Const_equals(w, k)) {
         return false;
       }
@@ -53448,7 +53544,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_parse_syntax_msg_append_place(std_str_St
 }
 
 static KSPL_UNUSED Sz kspl_priv_ksplc_parse_syntax_msg_text_step(std_lang_Slice_U8 src, Sz i) {
-  const U8 c = (*(kspl_std_lang_Slice_U8_Const_at_ref(&src, i, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)532)));
+  const U8 c = (*(kspl_std_lang_Slice_U8_Const_at_ref(&src, i, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)564)));
   KSPL_UNUSED Bool _mir_tmp_001 = (U8)c == 34;
   if (!_mir_tmp_001) {
     _mir_tmp_001 = (U8)c == 39;
@@ -53471,7 +53567,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_parse_syntax_msg_append_expected(std_str
     return;
   }
 
-  U8 head = kspl_U8_to_lower((*(kspl_std_lang_Slice_U8_Const_at_ref(&e.text, (Sz)0, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)548))));
+  U8 head = kspl_U8_to_lower((*(kspl_std_lang_Slice_U8_Const_at_ref(&e.text, (Sz)0, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)580))));
   KSPL_UNUSED std_lang_Slice_U8 _mir_tmp_001 = {0};
   KSPL_UNUSED Bool _mir_tmp_005 = head == 97;
   if (!_mir_tmp_005) {
@@ -53507,7 +53603,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_parse_syntax_msg_append_expected(std_str
     for (; (Sz)_for_idx_s1 < _for_coll1.len; _for_idx_s1 += 1) {
       KSPL_UNUSED Sz _mir_tmp_008 = kspl_std_lang_Range_get(&_for_coll1, (Sz)_for_idx_s1);
       Sz i = _mir_tmp_008;
-      const U8 c = (*(kspl_std_lang_Slice_U8_Const_at_ref(&e.text, i, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)553)));
+      const U8 c = (*(kspl_std_lang_Slice_U8_Const_at_ref(&e.text, i, KSPL_STR(std_lang_Slice_U8, "ksplc/parse/syntax_msg"), (Sz)585)));
       KSPL_UNUSED U8 _mir_tmp_009 = {0};
       if ((U8)c == 95) {
         _mir_tmp_009 = 32;
@@ -53606,6 +53702,10 @@ std_str_Str_builder kspl_ksplc_parse_syntax_msg_build_parse_error_msg(kspeg_engi
   }
 
   if (kspl_priv_ksplc_parse_syntax_msg_append_typedef_spelling_hint(&msg, src, pos)) {
+    return msg;
+  }
+
+  if (kspl_priv_ksplc_parse_syntax_msg_append_statement_word_hint(&msg, src, pos)) {
     return msg;
   }
 
@@ -61293,7 +61393,7 @@ Bool kspl_ksplc_sema_session_ctx_Sema_ctx_declare_symbol(ksplc_sema_session_ctx_
       }
 
       if (_mir_tmp_015) {
-        (void)(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(kspl_std_str_Str_builder_s(kspl_ksplc_sema_session_ctx_Sema_ctx_clear_scratch(r), KSPL_STR(std_lang_Slice_U8, "[W0504] '")), name), KSPL_STR(std_lang_Slice_U8, "' hides the imported module '")), name), KSPL_STR(std_lang_Slice_U8, "': from here to the end of its scope, '")), name), KSPL_STR(std_lang_Slice_U8, ".x' reads this instead. Rename it.")));
+        (void)(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(kspl_std_str_Str_builder_s(kspl_ksplc_sema_session_ctx_Sema_ctx_clear_scratch(r), KSPL_STR(std_lang_Slice_U8, "[W0502] '")), name), KSPL_STR(std_lang_Slice_U8, "' hides the imported module '")), name), KSPL_STR(std_lang_Slice_U8, "': from here to the end of its scope, '")), name), KSPL_STR(std_lang_Slice_U8, ".x' reads this instead. Rename it.")));
         KSPL_UNUSED ksplc_base_ast_Ast_node *_mir_tmp_016 = target_node;
         kspl_ksplc_sema_session_ctx_Sema_ctx_warn(r, _mir_tmp_016, kspl_std_str_Str_builder_slice(&r->scratch));
       }
@@ -65084,7 +65184,7 @@ void kspl_ksplc_sema_session_ctx_Sema_ctx_warn_shadowed_known_trait(ksplc_sema_s
   }
 
   std_lang_Slice_U8 simple = kspl_std_lang_Slice_U8_Const_sub_from(known, (Sz)((size_t)((Sz)kspl_std_lang_Slice_U8_Const_rfind_char(known, 46)) + (size_t)((Sz)1)));
-  (void)(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(kspl_std_str_Str_builder_s(kspl_ksplc_sema_session_ctx_Sema_ctx_clear_scratch(r), KSPL_STR(std_lang_Slice_U8, "[W0503] '")), trait_fqn), KSPL_STR(std_lang_Slice_U8, "' shadows the compiler-known '")), known), KSPL_STR(std_lang_Slice_U8, "'. Conforming to this declaration does not enable the built-in behavior, and nothing else reports it. Write 'lang.")), simple), KSPL_STR(std_lang_Slice_U8, "' to target the real one.")));
+  (void)(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(kspl_std_str_Str_builder_s(kspl_ksplc_sema_session_ctx_Sema_ctx_clear_scratch(r), KSPL_STR(std_lang_Slice_U8, "[W0501] '")), trait_fqn), KSPL_STR(std_lang_Slice_U8, "' shadows the compiler-known '")), known), KSPL_STR(std_lang_Slice_U8, "'. Conforming to this declaration does not enable the built-in behavior, and nothing else reports it. Write 'lang.")), simple), KSPL_STR(std_lang_Slice_U8, "' to target the real one.")));
   kspl_ksplc_sema_session_ctx_Sema_ctx_warn(r, err_node, kspl_std_str_Str_builder_slice(&r->scratch));
   return;
 }
@@ -65682,7 +65782,7 @@ void kspl_ksplc_base_ast_Ast_node_lint_manual_owner_struct(ksplc_base_ast_Ast_no
   }
 
   ksplc_base_ast_Ast_node *name_node = kspl_ksplc_base_ast_Ast_node_find_child(r, (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_identifier);
-  (void)(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(kspl_std_str_Str_builder_s(kspl_ksplc_sema_session_ctx_Sema_ctx_clear_scratch(c), KSPL_STR(std_lang_Slice_U8, "[I0603] Struct '")), target_fqn), KSPL_STR(std_lang_Slice_U8, "' owns a raw pointer field and defines its own 'free' method (hand-rolled ownership). In managed mode, consider using a reference-counted handle (Rc<|T|>/Arc<|T|>) for automatic lifetime management instead.")));
+  (void)(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(kspl_std_str_Str_builder_s(kspl_ksplc_sema_session_ctx_Sema_ctx_clear_scratch(c), KSPL_STR(std_lang_Slice_U8, "[I0602] Struct '")), target_fqn), KSPL_STR(std_lang_Slice_U8, "' owns a raw pointer field and defines its own 'free' method (hand-rolled ownership). In managed mode, consider using a reference-counted handle (Rc<|T|>/Arc<|T|>) for automatic lifetime management instead.")));
   KSPL_UNUSED ksplc_base_ast_Ast_node *_mir_tmp_008 = {0};
   if (name_node != null) {
     _mir_tmp_008 = name_node;
@@ -82181,7 +82281,7 @@ void kspl_ksplc_sema_flow_report_check_local_usage(ksplc_sema_session_ctx_Sema_c
 
   KSPL_UNUSED Bool _mir_tmp_003 = !is_match_payload;
   if (_mir_tmp_003) {
-    _mir_tmp_003 = !kspl_ksplc_sema_session_ctx_Sema_ctx_is_code_off(c, target_node, KSPL_STR(std_lang_Slice_U8, "W0602"));
+    _mir_tmp_003 = !kspl_ksplc_sema_session_ctx_Sema_ctx_is_code_off(c, target_node, KSPL_STR(std_lang_Slice_U8, "W0601"));
   }
 
   KSPL_UNUSED Bool _mir_tmp_002 = _mir_tmp_003;
@@ -82190,7 +82290,7 @@ void kspl_ksplc_sema_flow_report_check_local_usage(ksplc_sema_session_ctx_Sema_c
   }
 
   if (_mir_tmp_002) {
-    KSPL_UNUSED std_str_Str_builder *_mir_tmp_004 = kspl_std_str_Str_builder_s(kspl_ksplc_sema_session_ctx_Sema_ctx_clear_scratch(c), KSPL_STR(std_lang_Slice_U8, "[W0602] Variable '"));
+    KSPL_UNUSED std_str_Str_builder *_mir_tmp_004 = kspl_std_str_Str_builder_s(kspl_ksplc_sema_session_ctx_Sema_ctx_clear_scratch(c), KSPL_STR(std_lang_Slice_U8, "[W0601] Variable '"));
     (void)(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(_mir_tmp_004, var_name), KSPL_STR(std_lang_Slice_U8, "' has an ARC-managed type, which inserts hidden retain()/release() calls whose timing is not visible at this declaration. This conflicts with deterministic-mode's goal of fully visible execution timing. Consider explicit ownership (arena/defer) instead, or accept this as an intentional exception.")));
     KSPL_UNUSED ksplc_base_ast_Ast_node *_mir_tmp_005 = target_node;
     kspl_ksplc_sema_session_ctx_Sema_ctx_warn(c, _mir_tmp_005, kspl_std_str_Str_builder_slice(&c->scratch));
@@ -84502,7 +84602,7 @@ void kspl_ksplc_base_ast_Ast_node_lint_nullable_pointer_return(ksplc_base_ast_As
     return;
   }
 
-  KSPL_UNUSED std_str_Str_builder *_mir_tmp_003 = kspl_std_str_Str_builder_s(kspl_ksplc_sema_session_ctx_Sema_ctx_clear_scratch(c), KSPL_STR(std_lang_Slice_U8, "[H0704] Function '"));
+  KSPL_UNUSED std_str_Str_builder *_mir_tmp_003 = kspl_std_str_Str_builder_s(kspl_ksplc_sema_session_ctx_Sema_ctx_clear_scratch(c), KSPL_STR(std_lang_Slice_U8, "[H0701] Function '"));
   (void)(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(_mir_tmp_003, c->fn_ctx.name), KSPL_STR(std_lang_Slice_U8, "' can return a null pointer ('return null' on some path). Consider returning 'Option<|T|>' instead so the compiler forces callers to handle the no-value case explicitly.")));
   kspl_ksplc_sema_session_ctx_Sema_ctx_hint(c, r, kspl_std_str_Str_builder_slice(&c->scratch));
   return;
@@ -88216,7 +88316,7 @@ void kspl_ksplc_sema_body_lint_stmt_lint_repeated_type(ksplc_sema_session_ctx_Se
 
   if (expr_node->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_bool) {
     if (kspl_std_lang_Slice_U8_Const_equals(type_node->text, KSPL_STR(std_lang_Slice_U8, "Bool"))) {
-      kspl_ksplc_sema_session_ctx_Sema_ctx_hint(c, type_node, KSPL_STR(std_lang_Slice_U8, "[H0312] Unnecessary type annotation. 'true' and 'false' are always 'Bool'."));
+      kspl_ksplc_sema_session_ctx_Sema_ctx_hint(c, type_node, KSPL_STR(std_lang_Slice_U8, "[H0302] Unnecessary type annotation. 'true' and 'false' are always 'Bool'."));
     }
 
     return;
@@ -88229,7 +88329,7 @@ void kspl_ksplc_sema_body_lint_stmt_lint_repeated_type(ksplc_sema_session_ctx_Se
   }
 
   if (_mir_tmp_004) {
-    kspl_ksplc_sema_session_ctx_Sema_ctx_hint(c, type_node, KSPL_STR(std_lang_Slice_U8, "[H0312] Unnecessary type annotation. The initializer already names the type."));
+    kspl_ksplc_sema_session_ctx_Sema_ctx_hint(c, type_node, KSPL_STR(std_lang_Slice_U8, "[H0302] Unnecessary type annotation. The initializer already names the type."));
   }
 
   return;
@@ -88364,7 +88464,7 @@ kspl_Void_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_base_ast_Ast_node_
   }
 
   if (_mir_tmp_002) {
-    kspl_ksplc_sema_session_ctx_Sema_ctx_hint(ctx, cond_node, KSPL_STR(std_lang_Slice_U8, "[H0311] Unnecessary parentheses around 'switch' condition."));
+    kspl_ksplc_sema_session_ctx_Sema_ctx_hint(ctx, cond_node, KSPL_STR(std_lang_Slice_U8, "[H0301] Unnecessary parentheses around 'switch' condition."));
   }
 
   kspl_ksplc_sema_body_lint_stmt_lint_multiline_call_subject(ctx, cond_node, KSPL_STR(std_lang_Slice_U8, "switch"));
@@ -90366,7 +90466,7 @@ kspl_Void_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_base_ast_Ast_node_
     }
 
     if (_mir_tmp_001) {
-      kspl_ksplc_sema_session_ctx_Sema_ctx_hint(c, cond_node, KSPL_STR(std_lang_Slice_U8, "[H0311] Unnecessary parentheses around 'if' condition."));
+      kspl_ksplc_sema_session_ctx_Sema_ctx_hint(c, cond_node, KSPL_STR(std_lang_Slice_U8, "[H0301] Unnecessary parentheses around 'if' condition."));
     }
 
     kspl_ksplc_sema_body_lint_stmt_lint_constant_condition(c, cond_node, false);
@@ -90518,7 +90618,7 @@ kspl_Void_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_base_ast_Ast_node_
     }
 
     if (_mir_tmp_004) {
-      kspl_ksplc_sema_session_ctx_Sema_ctx_hint(c, cond_node, KSPL_STR(std_lang_Slice_U8, "[H0311] Unnecessary parentheses around 'for' condition."));
+      kspl_ksplc_sema_session_ctx_Sema_ctx_hint(c, cond_node, KSPL_STR(std_lang_Slice_U8, "[H0301] Unnecessary parentheses around 'for' condition."));
     }
 
     kspl_ksplc_sema_body_lint_stmt_lint_constant_condition(c, cond_node, true);
@@ -93112,7 +93212,7 @@ kspl_I32_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_body_postfix_i
   }
 
   if (_mir_tmp_001) {
-    kspl_ksplc_sema_session_ctx_Sema_ctx_hint(c, node, KSPL_STR(std_lang_Slice_U8, "[H0311] Unnecessary parentheses around receiver expression."));
+    kspl_ksplc_sema_session_ctx_Sema_ctx_hint(c, node, KSPL_STR(std_lang_Slice_U8, "[H0301] Unnecessary parentheses around receiver expression."));
   }
 
   ksplc_base_ast_Ast_node *op_node = kspl_ksplc_base_ast_Ast_node_get_postfix_op(node);
@@ -95652,7 +95752,7 @@ static KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error kspl_priv_k
         if (_mir_tmp_012) {
           KSPL_UNUSED std_lang_Slice_U8 _mir_tmp_013 = kspl_ksplc_base_ast_Ast_node_get_path_or_ident_name(throw_expr);
           if (kspl_std_lang_Slice_U8_Const_equals(_mir_tmp_013, err_id)) {
-            kspl_ksplc_sema_session_ctx_Sema_ctx_information(ctx, catch_node, KSPL_STR(std_lang_Slice_U8, "[I0703] Redundant error propagation. Consider using '\?' instead of 'catch e { throw e; }'."));
+            kspl_ksplc_sema_session_ctx_Sema_ctx_information(ctx, catch_node, KSPL_STR(std_lang_Slice_U8, "[I0701] Redundant error propagation. Consider using '\?' instead of 'catch e { throw e; }'."));
           }
         }
       }
@@ -122084,7 +122184,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_source_checks_report_displaced_comments(
         for (; (Sz)_for_idx_s2 < _for_coll1.len; _for_idx_s2 += 1) {
           Sz at = (*(kspl_std_lang_Slice_Sz_at(&_for_coll1, (Sz)_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/source_checks"), (Sz)235)));
           std_str_Str_builder msg = kspl_std_str_Str_builder_new();
-          (void)(kspl_std_str_Str_builder_s(&msg, KSPL_STR(std_lang_Slice_U8, "[I0805] This comment stands behind a `}` the indentation notation leaves out, so a round trip through .kspls moves it off this line and does not bring it back. Put it on the line of the code it speaks for, or on a line of its own.")));
+          (void)(kspl_std_str_Str_builder_s(&msg, KSPL_STR(std_lang_Slice_U8, "[I0801] This comment stands behind a `}` the indentation notation leaves out, so a round trip through .kspls moves it off this line and does not bring it back. Put it on the line of the code it speaks for, or on a line of its own.")));
           KSPL_UNUSED std_lang_Slice_U8 _mir_tmp_011 = f.name;
           KSPL_UNUSED std_lang_Slice_U8 _mir_tmp_012 = f.src;
           KSPL_UNUSED Sz _mir_tmp_013 = kspl_ksplc_fmt_text_given_offset(fmt.src, at, f.src);

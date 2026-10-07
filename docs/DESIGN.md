@@ -79,88 +79,118 @@ These words recur in every chapter. Compiler-internal words are in the compiler'
 
 ## Development Principles
 
-Eight rules come first in every folder: in the language, the libraries, the tools and the documents alike. The table gives each in one line. The numbered list after it is the full statement, and it is what other documents cite ("Principle 5").
+Eight rules come first in every folder: in the language, the libraries, the tools and the documents alike. The table states each rule in one line. The numbered list after it gives, for each rule, why it holds and how to apply it, the most important point first. Other documents cite the list's numbers ("Principle 5").
 
-| # | Principle | In plain words | For example |
-| :-- | :-- | :-- | :-- |
-| 1 | The Zen of Subtraction | Take a feature on only if its benefit outweighs all it costs, and remove one that stops paying its way | `Callable3` is not added: `std/seq` needs no more than two arguments, and "it would be handy" shows no price (§8.1) |
-| 2 | Warning Zero | The build prints no warning, from `ksplc` or from the C compiler | A C `char*` is received as `Void@`, since `U8@` makes the C compiler warn (§7.2) |
-| 3 | Keeping file size down and even | Keep files and functions short, and split a file where its parts are read for different reasons | A file holds at most 1000 lines, a function 300 |
-| 4 | Following DRY — one canonical source, copies tied together by a check | Keep each fact in one place. Where a copy must exist, a check compares it with the original | A runtime helper written in C and its LLVM counterpart are compared by `make test-conventions` (§7.2) |
-| 5 | Do not leave anything "writable but ineffective" | Whatever the compiler or a tool accepts must have an effect; otherwise it is an error | `defer` has no capture list, since one would change nothing (§4.2) |
-| 6 | One means to one purpose | Offer one way to write each thing | No number casts to `Bool`, since `x != 0` already says it (§2.10) |
-| 7 | Documents and comments state only "how it is now" | Write the present state and its reasons, never the history | This document says "X is", never "X used to be" |
-| 8 | A check that can only be half kept is not made a guarantee | If ordinary code can slip past a check, do not let the check pose as a guarantee | There is no thread-safety marker, since a global variable bypasses it (§5.1) |
+| # | Principle | In plain words | For example | How it is checked |
+| :-- | :-- | :-- | :-- | :-- |
+| 1 | The Zen of Subtraction | Take a feature on only if its benefit outweighs all it costs, and remove one that stops paying its way | `Callable3` is not added: `std/seq` needs no more than two arguments, and "it would be handy" shows no price (§8.1) | By review |
+| 2 | Warning Zero | The build prints no warning, from `ksplc` or from the C compiler | A C `char*` is received as `Void@`, since `U8@` makes the C compiler warn (§7.2) | `make lint`, which passes only at zero, and `make test-c-warnings` |
+| 3 | Keeping file size down and even | Keep files and functions short: split a file where its parts are read for different reasons, and merge a small file into its only user | A file holds at most 1000 lines, a function 300 | `make test-conventions` |
+| 4 | Following DRY — one canonical source, copies tied together by a check | Keep each fact in one place. Where a copy must exist, a check compares it with the original | A runtime helper written in C and its LLVM counterpart are compared by `make test-conventions` (§7.2) | The check added with each copy, most of them in `make test-conventions` |
+| 5 | Do not leave anything "writable but ineffective" | Whatever the compiler or a tool accepts must have an effect; otherwise it is an error | `defer` has no capture list, since one would change nothing (§4.2) | By review; each check's own samples show that the check can fire |
+| 6 | One means to one purpose | Offer one way to write each thing | No number casts to `Bool`, since `x != 0` already says it (§2.10) | By review |
+| 7 | Documents and comments state only "how it is now" | Write the present state and its reasons, never the history | This document says "X is", never "X used to be" | `make test-conventions` for a comment's length and for phrases that tell a history; `tools/repo_stat.kspls` measures the share of comments; the rest by review |
+| 8 | A check that can only be half kept is not made a guarantee | If ordinary code can slip past a check, do not let the check pose as a guarantee | There is no thread-safety marker, since a global variable bypasses it (§5.1) | By review |
 
-Each chapter below applies them to one subject. [`ksplc/docs/DESIGN.md`](../ksplc/docs/DESIGN.md) applies them to **the compiler's implementation**, under "The Development Principles" and from "The design rules for the checks and the diagnostics" onward.
+Each chapter below applies the principles to one subject, and [`ksplc/docs/DESIGN.md`](../ksplc/docs/DESIGN.md) applies them to the compiler's implementation.
 
 1. **The Zen of Subtraction**
-   Before taking a feature on, cut it if it makes the implementation unreasonably complex. This holds for a language's specification, a library's API and a tool's CLI alike, and what is left is a form that is explicit and predictable.
-   * **"It would be handy" is not a reason to add.** Pass over an addition that cannot show its price: the implementation, the checks, the documentation, and future compatibility.
-   * **A price, once shown, must also balance.** If the cost outweighs the convenience, do not take the feature on. Ask whether the cost is paid once or on every touch, whether the payer is the one who benefits, and who actually meets it.
-   * **A cost paid for input that never occurs in practice does not balance.** Do not speed up pathological depths, digit counts or item counts, unless correctness changes. Then fix it, as under Principle 5.
-   * **A feature whose balance has broken is a candidate for removal, even after it is implemented.** Being there already is no reason to stay. Review it once its use and upkeep can be seen.
-   * Caution: When removing a feature, either show its replacement or withdraw the notation entirely and make it an error. Silently making it ineffective goes against Principle 5.
+
+   **A feature costs more than the code it takes**: it has to be implemented, checked, documented and kept compatible, and every reader meets it. What is left after cutting is explicit and predictable. This holds for the language, a library's API and a tool's options alike.
+
+   * **Name the price before adding.** The price is the implementation, its checks, its documentation and future compatibility. "It would be handy" names no price, so it is no reason to add.
+   * **Take the feature on only if its benefit is larger.** Ask whether the cost is paid once or on every change, and whether whoever pays is whoever benefits.
+   * **Do not pay for input that does not occur in practice.** Making absurd nesting depths or item counts fast is no benefit. A wrong answer is another matter: it is fixed whatever the input (Principle 5).
+   * **Remove a feature that has stopped paying its way**, even one already built: being there is no reason to stay. Weigh it again once its use and upkeep can be seen. When removing it, show its replacement, or make the old notation an error. Leaving it accepted but doing nothing breaks Principle 5.
+
 2. **Warning Zero**
-   `ksplc` may print no warning, and neither may `clang`/`gcc` when building the generated C. Do not move on to the next piece of work while a warning remains.
+
+   **A warning that stays hides the next one**: among warnings everyone has learned to skip, a new one goes unread. So `ksplc` prints none, and neither do `clang` and `gcc` when they build the generated C.
+
+   * **Fix a warning before moving on to the next piece of work.**
+
 3. **Keeping file size down and even**
-   Split by feature into loosely coupled pieces. The upper limits are 1000 lines per file, 300 lines per function and 8 levels of block nesting. A short file does not stand alone without a reason either ("When a small file stands alone" below).
-   * **Split because the reasons to read differ, not for the line count.** Cut on line count alone, neither file can be understood without the other.
-   * Nor does hitting the limit mean splitting then: an unrelated change drags the split along, and that day's fix and that day's split land in different places. So decide where to split as the limit approaches, and **write the plan down before touching the file again** ("Where a file's splitting plan is written" in [`SPEC-documents.md`](SPEC-documents.md)). How to choose the cut is "Choosing where to split a file" below.
-   * The check is `make test-conventions`. Its counting, its exceptions and the C side are in [`SPEC-gates.md`](SPEC-gates.md), "What the convention checks count".
+
+   **A reader holds one file in mind at a time.** Mistakes hide in a file or a function too long to hold, and a file too short to stand alone sends the reader to another file to understand it. The limits are 1000 lines per file, 300 lines per function and 8 levels of block nesting.
+
+   * **Split where the parts are read for different reasons**, not at a line count. Cut by count, neither file can be read without the other. How to place the cut is "Choosing where to split a file" below.
+   * **Plan the split before the limit is reached.** Split on the day the limit is hit, and the split lands inside an unrelated change. As a file nears the limit, write down where it will split ("Where a file's splitting plan is written" in [`SPEC-documents.md`](SPEC-documents.md)) before touching it again.
+   * **Merge a small file into its only user**, unless it has a reason to stand alone ("When a small file stands alone" below).
+   * What `make test-conventions` counts, and its exceptions, are "What the convention checks count" in [`SPEC-gates.md`](SPEC-gates.md).
+
 4. **Following DRY — one canonical source, copies tied together by a check**
-   DRY is "don't repeat yourself": eliminate duplicated processing and data. When adding a feature especially, do not add a field casually; first see whether an existing one can serve.
-   * Caution: **If something must sit in two places, add the check that compares them in the same commit.** With an unchecked copy, a fix reaches only one side. Whoever fixed it cannot see this; someone else notices another day.
-   * Shape the check so that its failure **names the file to fix**, as every "X matches" and "X agrees" in `make test-conventions` does.
+
+   **Two copies of one fact drift apart**: a fix reaches one copy, whoever made it cannot see the other, and someone else finds the difference another day. So each fact, whether data, a computation or a field, lives in one place: its canonical source. DRY stands for "don't repeat yourself".
+
+   * **Before adding, look for what already holds the fact.** Add a field or a function only when no existing one can serve.
+   * **Where a copy cannot be avoided, add the check that compares it with the original, in the same commit.**
+   * **Make the check's failure name the file to fix**, as each "X matches" and "X agrees" check in `make test-conventions` does.
+   * Principle 6 is the same idea applied to the ways a thing is written.
+
 5. **Do not leave anything "writable but ineffective"**
-   Whatever is accepted must take effect: a language's grammar, attributes and modifiers; a tool's CLI options and configuration-file keys; a library's arguments. What can be written but does nothing **hides a latent bug**, because its writer believes it took effect. If it cannot be given an effect, withdraw the notation and make it an error.
-   * The checking tools have the same hole: a check can run and still be unable to fail. So that a diagnostic fires, and that the firing becomes a pass/fail verdict, are pinned down separately (`ksplc/docs/DESIGN.md` §11.6).
-   * The convention checks (`make test-conventions`) have it too. **They are green when the repository is clean, and they stay green when a check is broken.** So each check shows that it can fire (how: "Showing that a check can fire" in [`tests/docs/HOWTO-write-a-suite.md`](../tests/docs/HOWTO-write-a-suite.md)).
+
+   **What is accepted but does nothing hides a bug**: its writer believes it took effect, so nobody looks there. This covers the language's grammar, attributes and modifiers; a tool's options and configuration keys; a library's arguments.
+
+   * **Give it an effect, or refuse it with an error.** Never accept it and ignore it.
+   * **A check is something written too.** A check that runs but can never fail stays green while the rule is broken, so each check shows that it can fire. How is "Showing that a check can fire" in [`tests/docs/HOWTO-write-a-suite.md`](../tests/docs/HOWTO-write-a-suite.md), and for the compiler's diagnostics "11.6 A gate checks that a diagnostic fires separately from the pass/fail verdict" in [`ksplc/docs/DESIGN.md`](../ksplc/docs/DESIGN.md).
+
 6. **One means to one purpose**
-   Do not make the same thing writable two ways: an alias for a CLI option, a synonymous API, a copy of the same decision.
-   * **When adding, first confirm that no existing means suffices.** With two, the reader cannot tell which is canonical, and a fix made to one alone leaves them different.
-   * Principle 4 (DRY) watches duplication in the implementation; this one watches it in **how a thing is written**. Copying one decision into two places breaks both.
+
+   **With two ways to write one thing, nobody can tell which is canonical**, and a fix made to one leaves the two different. This covers an alias for an option, two API names for one operation, and two notations with one meaning.
+
+   * **Before adding a means, confirm that no existing one serves.**
+   * Principle 4 keeps a fact in one place; this one keeps each purpose to one way of writing it.
+
 7. **Documents and comments state only "how it is now"**
-   This applies equally to source comments, README, DESIGN and SPEC.
-   * **What to write**: decided facts; what breaks if the thing is not in this form; the traps the next person is likely to hit; the contract seen from outside (what the arguments mean, lifetimes, the order of calls).
-   * **What not to write**: a work log or history; the process of investigation and discovery; rejected proposals; explanations of fixed bugs; phrasings that narrate experience in the past tense; records of counts, dates, or which attempt this was. History belongs in git commit messages only.
-   * **The only exception is where "not having it" is itself the decision.** `§3.2.3 Markers not carried` and `§9.1 Notations not carried` stay, so that the same proposal does not come back again and again. They say only "it is absent" and "why it is absent", never when, by whom or how it was decided.
-   * **Do not write figures that change on their own.** The test: does it move while nobody touches the repository? If so, it is stale the moment it is written, and nobody can see that it is. Where a figure is needed, write only the relation and the order of magnitude, and point at material holding the measurement and the procedure for retaking it.
-   * A comment may run to 6 lines, and a file's opening header to 10. **A blank line does not start a new comment.** Every comment line before the next line of code counts, so splitting a block does not earn the cap twice. A section divider (a line opening with `---` or `===`) does start one: it marks that a new thing begins, and nobody can slip it in unseen. Longer background goes to DESIGN.md, under the same rules.
-   * `make test-conventions` checks the caps on a comment's length. Nothing checks the rest of this principle: whoever writes and reviews holds it. How a trap is written is "A trap is written as why it is dangerous" in [`SPEC-documents.md`](SPEC-documents.md).
-   * **Comments take 30% or less of the source as a whole.** The measure is `cmt%` on the `total (hand-written)` line that [`tools/repo_stat.kspls`](../tools/repo_stat.kspls) prints. The cap is on the whole, not on each file: a file with hard logic may run above it, and a plain one below. Room under the cap is no licence to write more. Keep what the code cannot say itself, said once and briefly, and cut what restates the code or rambles. No gate checks this; run the tool.
+
+   **A reader acts on what the text says**: where it tells a history, they have to work out which part still holds. This covers source comments, READMEs, DESIGN and SPEC documents alike. History belongs in git commit messages.
+
+   * **Write** the decided facts and their reasons, what breaks if the thing is changed, the traps the next person is likely to hit ("A trap is written as why it is dangerous" in [`SPEC-documents.md`](SPEC-documents.md)), and the contract seen from outside: what the arguments mean, lifetimes, the order of calls.
+   * **Do not write how it came to be**: a work log, the investigation, rejected proposals, bugs already fixed, experience told in the past tense, dates, or which attempt this was.
+   * **An absence is a present fact.** Where leaving something out is the decision, write what is absent and why, so that the same proposal does not come back ("3.2.3 Markers not carried" and "9.1 Notations not carried" below). Never write when or by whom it was decided.
+   * **Do not write a figure that changes while nobody touches the repository**, such as a measured time. It is stale once written, and nobody can see that it is. Write the relation and the order of magnitude, and point at where the measurement and the way to retake it are.
+   * **Keep each comment short**: 6 lines at most, and 10 for a file's opening header. Every comment line up to the next line of code counts toward one comment, so a blank line does not start a new one. A section divider (a line opening with `---` or `===`) does, since it visibly starts a new subject. Longer background goes to a DESIGN.md, under the same rules.
+   * **Keep comments to 30% of the source or less.** The share is measured over all the hand-written source (`cmt%` on the `total (hand-written)` line that [`tools/repo_stat.kspls`](../tools/repo_stat.kspls) prints), so a file with hard logic may run above it and a plain one below. Room under the cap is no reason to write more: keep what the code cannot say, said once and briefly.
+
 8. **A check that can only be half kept is not made a guarantee**
-   Before the compiler or a tool forbids something, confirm that **no ordinary way of writing slips past it**. If one does, do not forbid it in the type system: a program could pass the check and still break, and its writer would trust it more for having passed. Half-protecting is worse than not protecting at all.
-   * Failure (`T?E`), the absence of a value (`Option`) and being uninitialized cannot be slipped past, so the type system states them.
-   * Lifetime (who frees what, and when) and sharing (which threads may touch a value) can be slipped past, through raw pointers and top-level variables. Those are ordinary ways of writing, so the type system leaves them out (the grounds are in chapters 4 and 5).
-   * **What the type system does not state, the type's name does.** `Rc` (one thread), `Arc` (shareable), `Mutex<|T|>`, `Atomic_sz` and `Move_only` put the choice into the calling code. Instead of stopping misuse, make it legible.
-   * Caution: **Do not let a check that sees only part of the picture be read as a guarantee.** The convention checks (`make test-conventions`) read literal text and miss some forms. So the rule states that a form which escapes is still a violation. Otherwise green is read as "the rule is being kept".
+
+   **A check that ordinary code slips past is trusted more than it deserves**: a program passes it and still breaks, and its writer trusts it the more for having passed. Half-protecting is worse than not protecting at all.
+
+   * **Before forbidding something, confirm that no ordinary way of writing slips past the check.** Where one does, the type system does not state the rule.
+     * Failure (`T?E`), the absence of a value (`Option`) and being uninitialized cannot be slipped past, so the type system states them.
+     * Lifetime (who frees what, and when) and sharing (which threads may touch a value) can be, through raw pointers and top-level variables, so the type system leaves them out (chapters 4 and 5).
+   * **What the type system does not state, the type's name does.** `Rc` (one thread), `Arc` (shareable), `Mutex<|T|>`, `Atomic_sz` and `Move_only` put the choice in front of whoever calls: misuse is made visible instead of stopped.
+   * **A check that sees only some forms says so.** The convention checks read literal text and miss some forms, so their rules state that a form escaping the check is still a violation. Otherwise green is read as "the rule is kept".
 
 ### Choosing where to split a file
 
-Split a file where its parts are read for different reasons, and put the cut where the fewest names have to cross it (Principle 3).
+**Put the cut where the fewest names have to cross it.** Principle 3 splits a file where its parts are read for different reasons; among the cuts that do that, this one leaves each file readable on its own. A package's own limits, and the plan for each of its files near the cap, are in its README ("Where a file's splitting plan is written" in [`SPEC-documents.md`](SPEC-documents.md)). Below, `priv` marks a name visible only inside its own file.
 
-What follows holds in every package. A package's own limits, and the plan for each file near the cap, are in its README ("Where a file's splitting plan is written" in [`SPEC-documents.md`](SPEC-documents.md)). Below, `priv` marks a name visible only inside its own file.
+**First count what would cross**: the names each side needs from the other, by call sites, not by mentions. A part that touches none of the other part's state, or only a value fixed before the work starts, moves out with its imports running one way. `ksplc/fmt/space.kspls` touches no part of `Formatter`, and `ksplc/fmt/style.kspls` takes only `Config`.
 
-* **How much state crosses decides the cut.** A part that touches none of the other part's state, or only a value fixed before the work starts, moves out with its imports running one way. `ksplc/fmt/space.kspls` touches no part of `Formatter`, and `ksplc/fmt/style.kspls` takes only `Config`.
-* **Moving a foundation down moves what it carries.** The types the moved state holds go with it. Left above, they make the two files import each other. That is why `ksplc/sema/session/state.kspls` holds `Generic_arg`, `Alias_info` and `Import_symbol_info` beside the state structs.
-* **What both halves read stays with the lower one.** Moved up, it makes the lower file import the file that imports it. Open it from `priv` instead.
-* **Count the names that really cross before opening any, and count call sites, not mentions.** A name opened from `priv` is open to the whole package. A name only the moved side calls stays `priv` there.
-* **When only part of an `impl` moves, open the `impl` again in the new file.** An `impl` may add methods to a type declared in another file ("9.3 Adding a method to another file's type" in [`SPEC-language.md`](SPEC-language.md)), as `ksplc/base/ast_place.kspls` opens its own `impl Ast_node`. A caller of the moved methods imports the new file, and `make lint` refuses a missing import by name.
-* **Two halves that call each other import each other.** Imports may run both ways inside one folder, as between `ksplc/gen/c/expr.kspls` and `ksplc/gen/c/expr_postfix.kspls`. The price is a cut that cannot be read from one side alone.
-  * Caution: **Where a package keeps its imports running one way, an `impl` the original calls back cannot move alone.** Move the state it touches with it, so the imports still run one way.
-* **Do not split a reader of text by the word order it matches.** A form that puts the name before the document and a form that puts it after are one reading. Kept in separate files, a fix to one leaves the other behind.
-* **A band of a test suite goes to a support file, not to a suite of its own.** The Makefile registers each suite as one unit, so a new suite starts its own copy of whatever it drives, such as a language server. A support file takes what the suite holds as a parameter, so what it drives starts once.
-* **A band is held together by its fixture, not by its entry point.** One source that exercises several readers stays one source. Split by entry point, it would be written twice.
-* **After a cut, fix the documents that name what moved.** `make test-docref` checks that a named symbol is in the named file, so it fails even when only a call moved.
+**Then place what the two parts share**:
 
-**What this way of splitting gives up**: a cut placed by what crosses can leave one file well under the cap and the other near it. The line count is not the goal (Principle 3).
+| What | Where it goes | Why |
+| :-- | :-- | :-- |
+| The types the moved state holds | With the state | Left behind, they make the two files import each other. So `ksplc/sema/session/state.kspls` holds `Generic_arg`, `Alias_info` and `Import_symbol_info` beside the state structs |
+| What both parts read | The lower file, opened from `priv` | Moved up, it makes the lower file import the file that imports it |
+| A name only the moved part calls | The moved part, still `priv` | A name opened from `priv` is open to the whole package |
+| Some of an `impl`'s methods | A second `impl` of the same type, in the new file | An `impl` may add methods to a type declared in another file ("9.3 Adding a method to another file's type" in [`SPEC-language.md`](SPEC-language.md)), as `ksplc/base/ast_place.kspls` does for `Ast_node`. Callers import the new file, and `make lint` names a missing import |
+
+**Three cases need care**:
+
+* **Two parts that call each other** may import each other inside one folder, as `ksplc/gen/c/expr.kspls` and `ksplc/gen/c/expr_postfix.kspls` do. The price is that neither file can be read alone.
+  * Caution: **Where a package keeps its imports running one way, an `impl` the original calls back cannot move alone.** Move the state it touches with it.
+* **A reader of text is not split by word order.** A form that puts the name before the document and a form that puts it after are one reading. Kept in two files, a fix to one leaves the other behind.
+* **Part of a test suite goes to a support file, not to a suite of its own.** The Makefile registers each suite as one unit, so a new suite starts its own copy of whatever it drives, such as a language server. A support file takes what the suite drives as a parameter, so it starts once. Keep the part together by its fixture (the source it exercises), not by its entry point: one source that exercises several readers, split by entry point, is written twice.
+
+**After a cut, fix the documents that name what moved.** `make test-docref` checks that each named symbol is in the named file, so it fails even when only a call moved.
+
+**What this gives up**: a cut placed by what crosses can leave one file well under the cap and the other near it. The line count is not the goal.
 
 ### When a small file stands alone
 
-A short file used by only one other file joins that file, unless it has one of four reasons to stand alone.
-
-**The other half of splitting by reason is merging when the reason is the same.** A short file that one file alone uses is that file's part: to understand either, a reader opens both. The complaints about other languages' small files are all about files that exist because a rule demanded them, not because a reader needed them: a class per file, a module's boilerplate file, an empty package marker, a function made a package of its own.
+**A short file that only one other file uses joins that file, unless it has a reason to stand alone.** To understand either, a reader opens both, so the two are one part kept in two places. This is the other half of Principle 3: split where the reasons to read differ, and merge where they are the same. The small files complained about in other languages exist because a rule demanded them, not a reader: a class per file, a module's boilerplate file, an empty package marker, a function made a package of its own.
 
 **A file stands alone for one of four reasons**:
 
@@ -171,7 +201,7 @@ A short file used by only one other file joins that file, unless it has one of f
 | **It is a boundary** | `priv` stops at the file, so the file is what keeps its insides out of reach |
 | **It changes for another reason** | A platform, a piece of hardware, a bring-up stage, or a cut made because the file it came from neared the cap |
 
-**What is counted**: a file of 60 lines or fewer that exactly one file imports joins that file, unless a listed exception gives one of the reasons. 60 lines is about a screen, so the merge costs no scrolling. Two kinds of import are not counted as a user. A link-only import (an `_` alias) brings in entry points to be linked, never called, and a package's test entry point (`all.kspls`) gathers files that each stand for a subject of their own.
+**"Short" is 60 lines or fewer**, about one screen, so a merge costs no scrolling. Two kinds of import are not counted as a use. A link-only import (an `_` alias) brings in entry points to be linked, never called, and a package's test entry point (`all.kspls`) gathers files that each stand for a subject of their own. How the check counts, and where a file that stands alone names its reason, is "What the convention checks count" in [`SPEC-gates.md`](SPEC-gates.md).
 
 **What it gives up**: a file that has one user today and several tomorrow is merged and later split out again. A merge is cheap to undo, so that cost is accepted over a file that stays split for a reason nobody can name.
 
@@ -276,7 +306,7 @@ Guards gain little. A lookahead before both tries cuts the calls, and the time, 
 
 **What keeping `::` costs the writer, and the answer**: a Rust or C++ writer's `Arena::new(1024)`, read as a cast, gives three errors, none naming the fix. So where `T` is a module, or a type holding `name`, and `name` is nothing in scope, `T::name` is read as the path meant. It is reported as one error naming `Arena.new`. A cast of a value in scope (`I32::count`) is left alone.
 
-**The one weakness of `.` everywhere** is that a local named like an imported module hides the module: below `io: = 5`, `io.out()` reads the local. Such a local or parameter is a warning at its declaration (`[W0504]` in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)), not an error, since shadowing stays legal ("4.5 Scope and shadowing" in [`SPEC-language.md`](SPEC-language.md)). A second separator for modules (Swift 6.3's `Module::name`) would collide with the cast. `json::Val` and `Sz::n` have one shape, and only name resolution could tell them apart.
+**The one weakness of `.` everywhere** is that a local named like an imported module hides the module: below `io: = 5`, `io.out()` reads the local. Such a local or parameter is a warning at its declaration (`[W0502]` in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)), not an error, since shadowing stays legal ("4.5 Scope and shadowing" in [`SPEC-language.md`](SPEC-language.md)). A second separator for modules (Swift 6.3's `Module::name`) would collide with the cast. `json::Val` and `Sz::n` have one shape, and only name resolution could tell them apart.
 
 ### 1.3 Why immutability is the default
 
@@ -326,7 +356,7 @@ Top-level declarations (`const`, variables, `extern` variables: everything decla
 
 The compiler calls a local's type annotation redundant only when the same line already names that type. A type that could merely be inferred stays, because the annotation may be the only place a reader sees it.
 
-**A local's annotation is reported as redundant only where its initializer already says the type.** That is the same type written at the initializer's head, or `Bool` over `true` / `false`. It is [H0312], a hint on by default, so the tree holds none (its section is in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)).
+**A local's annotation is reported as redundant only where its initializer already says the type.** That is the same type written at the initializer's head, or `Bool` over `true` / `false`. It is [H0302], a hint on by default, so the tree holds none (its section is in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)).
 
 | The line | Reported? | Why |
 | :-- | :-- | :-- |
@@ -758,7 +788,7 @@ Three markers are deliberately absent: `#arc`, `#deterministic` and `Thread_shar
 
 **There is no `#arc` attribute.** ARC is conformance to `Ref_counted`; why an attribute is the wrong shape is 3.2.2.
 
-**There is no `#deterministic`** (an attribute making an ARC-managed parameter, return value or local variable a compile error in one function). By 3.2.1 (1) an attribute would be the right shape, since the subject is a function, but the existing machinery suffices. It is needed only where one binary mixes paths with and without ARC, and a hard error must hold the paths without it. Raising the lint [W0602] to `error` does that. `ksplc.cfg` is read up the directory tree with the innermost winning, so the `error` can be scoped to the real-time path's directory.
+**There is no `#deterministic`** (an attribute making an ARC-managed parameter, return value or local variable a compile error in one function). By 3.2.1 (1) an attribute would be the right shape, since the subject is a function, but the existing machinery suffices. It is needed only where one binary mixes paths with and without ARC, and a hard error must hold the paths without it. Raising the lint [W0601] to `error` does that. `ksplc.cfg` is read up the directory tree with the innermost winning, so the `error` can be scoped to the real-time path's directory.
 
 **There is no `Thread_shareable`**; chapter 5 gives the reason.
 
@@ -881,7 +911,7 @@ KSPL does not prove at compile time that every pointer stays valid, as Rust's bo
 
 **Raw pointers are set apart rather than banned.** `T@` is a first-class type, and unchecked access has its own form, `(p + i)$` (docs/SPEC-language.md §6.2.1), so C-level control need not move into a library.
 
-**What is given up: how a type's memory is managed has to be read from its name.** Raw pointers and ARC live side by side, so the reader checks which one manages a type. Consistency is chosen per project, not by the language. The lints [W0602] and [I0603], off by default, find code departing from the chosen policy ([`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)).
+**What is given up: how a type's memory is managed has to be read from its name.** Raw pointers and ARC live side by side, so the reader checks which one manages a type. Consistency is chosen per project, not by the language. The lints [W0601] and [I0602], off by default, find code departing from the chosen policy ([`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)).
 
 ### 4.1 Why there is no borrow checker, only a move-only marker
 
@@ -1566,13 +1596,13 @@ Some pairs look like two ways of doing one thing, but each covers cases the othe
 
 **Nor is a `const` inside a function.** It looks like an unmarked immutable binding (`n: Sz = 4;`). But only a `const`, fixed at compile time and holding no memory, can size an array (`I32$[n]`; the unmarked one is refused with `array size must be a positive constant expression`).
 
-**A raw pointer's `null` remains in three places only.** Elsewhere, `Option<|T|>` says whether a value is present, and lint [H0704] finds a raw pointer's `null` being returned. `T?E` is not the answer here: it says "it failed, and this is why", not "there is no value" (the "one way to convey failure" above).
+**A raw pointer's `null` remains in three places only.** Elsewhere, `Option<|T|>` says whether a value is present, and lint [H0701] finds a raw pointer's `null` being returned. `T?E` is not the answer here: it says "it failed, and this is why", not "there is no value" (the "one way to convey failure" above).
 
 | Where it remains | Reason |
 | :-- | :-- |
 | Under `std/` | Foundational primitives: moving to `Option` would require rewriting every caller |
 | Functions carrying `#export` | The FFI boundary with C (where C code calls KSPL): `Option<\|T\|>` is not ABI-compatible with C's null convention, that is, its memory layout differs from what C expects |
-| Tree walking in `ksplc/base` (`find_child` / `unwrap_top_level` / generating notation) | The same reason, suppressed with its grounds in the file-opening `##lint(H0704 = off)` |
+| Tree walking in `ksplc/base` (`find_child` / `unwrap_top_level` / generating notation) | The same reason, suppressed with its grounds in the file-opening `##lint(H0701 = off)` |
 
 **No unmigrated case can exist outside these three**: the repository requires zero diagnostics even at Hint level (`make lint`).
 
@@ -1839,7 +1869,7 @@ flowchart LR
 
 **One thing the brace notation can write has no line in the indentation notation, and it is reported, not refused or moved.** It is a comment behind a `}` that the indentation notation leaves out. In `.kspls` that comment lands on another line, and it does not come back.
 
-* **It is a lint** (`[I0805]`, in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)) rather than an error, because where a comment stands changes nothing that runs.
+* **It is a lint** (`[I0801]`, in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)) rather than an error, because where a comment stands changes nothing that runs.
 * **The formatter does not move it.** In the brace notation that placing is the writer's own (`if c { n += 1; } // only when c`), and a new one would say something else.
 * **The indentation notation gets no closing mark** for such a comment to stand behind, because that would give a block's end a second spelling (Principle 6).
 * **The lint asks the formatter which comments it moves** (`note_displaced` in [`../ksplc/fmt/trivia.kspls`](../ksplc/fmt/trivia.kspls)), so the report and the conversion cannot disagree. The question costs a parse and a printing per file written in braces. It costs nothing for a file written by indentation, which never wrote a closing line.

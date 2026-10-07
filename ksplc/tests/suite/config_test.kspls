@@ -20,7 +20,7 @@ import "std/mem" { Arena }
 import "std/str" // what makes `arena.text()` available
 import "std/verdict"
 
-// Fires I0307 (an empty block) and H0311 (unnecessary parentheses). lint exits with 0 even with
+// Fires I0307 (an empty block) and H0301 (unnecessary parentheses). lint exits with 0 even with
 // diagnostics, so the check reads the output rather than the exit code.
 priv const src: U8[] =
     """import "std/io";
@@ -34,7 +34,7 @@ fn main(): I32 {
 }
 """
 
-// The source that fires W0602 (a hidden retain/release), a code off by default.
+// The source that fires W0601 (a hidden retain/release), a code off by default.
 priv const src_arc: U8[] =
     """import "std/refcount";
 
@@ -141,10 +141,10 @@ priv fn main_cases(arena: Arena$@)
     build_case("error_build", "cfg: error refuses an ordinary build too, not only lint",
         "[lint]\nI0307 = error\n", arena)
     lint_case("arcoff", "cfg: a code off by default stays silent", U8[][]::{ "a.kspl" },
-        U8[][]::{ src_arc }, "a.kspl", none, none, U8[][]::{ "[W0602]" }, false, false, arena)
+        U8[][]::{ src_arc }, "a.kspl", none, none, U8[][]::{ "[W0601]" }, false, false, arena)
     lint_case("arcon", "cfg: a code off by default can be enabled with on",
-        U8[][]::{ "a.kspl", "ksplc.cfg" }, U8[][]::{ src_arc, "[lint]\nW0602 = on\n" }, "a.kspl",
-        none, U8[][]::{ "[W0602]" }, none, false, false, arena)
+        U8[][]::{ "a.kspl", "ksplc.cfg" }, U8[][]::{ src_arc, "[lint]\nW0601 = on\n" }, "a.kspl",
+        none, U8[][]::{ "[W0601]" }, none, false, false, arena)
     // --- The search: the nearest file applies whole ---
     lint_case("above", "cfg: a folder with no file of its own takes the nearest one above",
         U8[][]::{ "sub/a.kspl", "ksplc.cfg" }, U8[][]::{ src, "[lint]\nI0307 = off\n" },
@@ -157,7 +157,7 @@ priv fn main_cases(arena: Arena$@)
     // passes whether the nearer file replaces the outer one or is merged into it.
     lint_case("whole", "cfg: a nearer file applies whole, so the outer one's setting stops there",
         U8[][]::{ "sub/a.kspl", "ksplc.cfg", "sub/ksplc.cfg" },
-        U8[][]::{ src, "[lint]\nI0307 = off\n", "[lint]\nW0602 = on\n" }, "sub/a.kspl", none,
+        U8[][]::{ src, "[lint]\nI0307 = off\n", "[lint]\nW0601 = on\n" }, "sub/a.kspl", none,
         U8[][]::{ "[I0307]" }, none, false, false, arena)
     // --- The precedence: `##lint(...)` > CLI > `ksplc.cfg` ---
     lint_case("cli", "the precedence: CLI beats ksplc.cfg", U8[][]::{ "a.kspl", "ksplc.cfg" },

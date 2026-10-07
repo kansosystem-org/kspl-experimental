@@ -14,10 +14,13 @@ import "std/io"
 import "std/mem" { Arena, dealloc }
 import "std/str"
 import "std/strfmt" as _strfmt
+import "std/subproc"
 import "std/sys"
 import "std/verdict"
 
 priv const fixture_dir: U8[] = "tests/ship" //< the vendors' and the customers' sources
+
+priv const output_cap: Sz = 64 * 1024 //< how much of each of a customer's outputs is kept
 
 priv const libs: U8[][2] = ::{ "greet", "count" } //< the two vendors' libraries
 
@@ -238,11 +241,17 @@ priv fn link_main(tc: Toolchain, vendor: U8[], dir: U8[], shared: Bool, arena: A
     return exe if ok else ""
 
 priv fn check_runs(name: U8[], argv: U8[][], expected: U8[], dir: U8[], arena: Arena$@) //<
-    //< Runs a customer and compares what it printed, with Windows's line ends read as `\n`
-    r: = harness.run_in(argv, dir)
-    got: = r.out.replace("\r\n", "\n", arena)
-    verdict.check(name, r.code == 0 && got.equals(expected),
-        arena.text().s("exit code \{r.code\}; it printed:\n\{got\}").take())
+    //< Runs a customer and compares its standard output, with Windows's line ends read as `\n`
+    //<
+    //< **Only standard output is compared**: a customer prints there alone, while a host the run
+    //< goes through (Wine) writes its own notices to standard error. Stderr is still shown on a
+    //< failure.
+    r: = subproc.run_capture(argv, dir, verdict.default_timeout_ms, output_cap, arena)
+    got: = r.stdout_data.replace("\r\n", "\n", arena)
+    ended: = !r.spawn_failed && !r.timed_out
+    verdict.check(name, ended && r.exit_code == 0 && got.equals(expected),
+        arena.text().s("exit code \{r.exit_code\} (started \{!r.spawn_failed\}, timed out ")
+        .s("\{r.timed_out\}); it printed:\n\{got\}\non standard error:\n").s(r.stderr_data).take())
 
 priv fn check_collision(tc: Toolchain, vendor: U8[], dir: U8[], arena: Arena$@) //<
     //< The two libraries built without `--library` collide at the link

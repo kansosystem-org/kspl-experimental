@@ -324,6 +324,41 @@ priv fn append_typedef_spelling_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bo
             return true
     return false
 
+priv fn append_statement_word_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
+    //< It writes KSPL's head where a statement opens with `while`, `loop` or `match`
+    //<
+    //< Each reads as a name followed by what no name takes, so the expectation list alone leads
+    //< nowhere. **The words stay names**: the note only explains an error the line already has.
+    if pos < 0 || pos > src.len
+        return false
+    code: = code_line(src, line_start(src, pos)).code
+    e: = word_end(code, 0)
+    word: = code.sub(0, e)
+    rest: = code.sub_from(e).trim_spaces()
+    // A name in use (`match(x)`, `loop: = 1`, `match.len`) is followed by no space or by a mark.
+    if e == 0 || (e < code.len && code[e] != ' ') || rest.starts_with("=") ||
+        rest.starts_with(":") || rest.starts_with(".")
+        return false
+    brace: = rest.find_char('{')
+    head: = rest.sub(0, brace).trim_spaces() if brace >= 0 else rest
+    if word.equals("while") && head.len > 0
+        msg
+            .s("\n  Note: every loop is written with 'for', and a condition alone makes it repeat \
+                while the condition holds: 'for ").s(head).s("'.")
+        return true
+    if word.equals("loop") && head.len == 0
+        msg
+            .s("\n  Note: every loop is written with 'for', and a bare 'for' repeats until a \
+                'break' leaves it.")
+        return true
+    if !word.equals("match") || head.len == 0
+        return false
+    msg
+        .s("\n  Note: KSPL branches on a value with 'switch'; each case opens with 'case', with no \
+            braces around them all: 'switch ").s(head)
+        .s("" if head.find_str(" case ") >= 0 else " case ...").s("'.")
+    return true
+
 priv fn statement_start(src: U8[], pos: Sz): Sz //<
     //< Where the statement holding `pos` starts
     //<
@@ -602,6 +637,8 @@ fn build_parse_error_msg(target_parser: kspeg.Target$@, src: U8[], pos: Sz, laid
     if append_trailing_defer_hint(msg@, src, pos)
         return msg
     if append_typedef_spelling_hint(msg@, src, pos)
+        return msg
+    if append_statement_word_hint(msg@, src, pos)
         return msg
     msg.s(forbidden_spelling_hint(src, pos))
     return msg

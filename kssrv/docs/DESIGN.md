@@ -84,7 +84,7 @@ stateDiagram-v2
 
 Kssrv prefers reference-counted memory to memory it frees by hand, because a leak or a double free in a long-running server is worse than a little hidden work.
 
-`kssrv/ksplc.cfg` sets `I0603 = on`, the lint that points out hand-made ownership (a raw pointer plus one's own `free`). A resident process that keeps handling other people's input ranks avoiding that hand-rolled ownership management ([I0603]) above seeing when the hidden `retain`/`release` of ARC runs ([W0602], the lint a real-time system turns on instead).
+`kssrv/ksplc.cfg` sets `I0602 = on`, the lint that points out hand-made ownership (a raw pointer plus one's own `free`). A resident process that keeps handling other people's input ranks avoiding that hand-rolled ownership management ([I0602]) above seeing when the hidden `retain`/`release` of ARC runs ([W0601], the lint a real-time system turns on instead).
 
 ### Every socket is non-blocking and multiplexed on one thread
 

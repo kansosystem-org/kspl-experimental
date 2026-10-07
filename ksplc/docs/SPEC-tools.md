@@ -689,7 +689,7 @@ ksplc fmt --to=kspls src/main.kspl      # the indentation notation to standard o
 
 **It cannot change the notation and write back**: `--in-place` writes to the same file, whose name would then contradict its contents.
 
-**A formatted source comes back byte for byte from the other notation, with one exception for the writer to fix.** A comment after a `}` that the indentation notation leaves out has no line to stand on there. `--to=kspls` moves it to the line above, or onto a line of its own where the line above already has a comment, and it does not come back; `ksplc lint` names each one ([I0805]). A comment after a `}` that the notation keeps (a value's, or a block's inside a call's brackets) stays where it is in both directions.
+**A formatted source comes back byte for byte from the other notation, with one exception for the writer to fix.** A comment after a `}` that the indentation notation leaves out has no line to stand on there. `--to=kspls` moves it to the line above, or onto a line of its own where the line above already has a comment, and it does not come back; `ksplc lint` names each one ([I0801]). A comment after a `}` that the notation keeps (a value's, or a block's inside a call's brackets) stays where it is in both directions.
 
 **`fmt` never meets a bare block**: a `{ … }` standing as a statement does not parse in either notation ("A bare block carries a label" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)). A labelled block (`while_locked: { … }`) keeps its label, and an empty `{}` is written as it stands.
 
@@ -861,7 +861,7 @@ Besides errors, the compiler points out code that is legal but probably wrong, a
 ksplc lint src/main.kspls
 
 # enable a code that is off by default / raise a severity (§5.3)
-ksplc lint --lint=W0602=on src/main.kspls
+ksplc lint --lint=W0601=on src/main.kspls
 ksplc lint --lint=I0307=off --lint=W0105=error src/main.kspls
 ```
 
@@ -878,7 +878,7 @@ Every diagnostic has one of four weights, from "it does not run" down to "it run
 
 Only warnings, information and hints carry a code: a fixed number such as `W0201`, used to point at one or to narrow the output to it. **An error has no number**: with one, the mechanism of §5.3 could silence it.
 
-**The four digits are a class and an item**: the top two give the class, the bottom two the item within it, so `W0106` is class 01's seventh.
+**The four digits are a class and an item**: the top two give the class, and the bottom two count that weight's items within the class, each weight from 01. So `W0106` is class 01's sixth warning, and `I0301` and `H0301` are both first in class 03, one an information and the other a hint. **The letter is part of the code**: `I0310` and a later `H0310` would name different findings.
 
 | | The class | What the reader is being told |
 | :-- | :-- | :-- |
@@ -892,8 +892,6 @@ Only warnings, information and hints carry a code: a fixed number such as `W0201
 | **08** | The shape of the writing | layout and length, where the meaning is not at issue |
 
 **The class and the weight are independent axes**: class 07 holds a warning, an information and a hint, so neither can be read off the other.
-
-Caution: **A code is never renumbered or re-lettered once others use it.** Moving it turns an existing `##lint(...)` into a compile error or into a setting aimed at the wrong finding.
 
 **The CI verdict counts all four weights**: the lint gate (the CI check that runs the linter) and the entry points it analyses are "What each platform runs" in [`docs/SPEC-gates.md`](../../docs/SPEC-gates.md). Why it counts hints is "A severity and a CI policy are different things" in [`DESIGN.md`](DESIGN.md). Why one entry point that alone instantiates some code must be listed is [`DESIGN.md` §11.6](DESIGN.md#116-a-gate-checks-that-a-diagnostic-fires-separately-from-the-passfail-verdict).
 
@@ -921,8 +919,8 @@ Strongest first: inside the file > the command line > the settings file > the de
 
 | Strength | Where | How it is written | What it covers |
 | :-- | :-- | :-- | :-- |
-| 1 (strongest) | **per file** | `##lint(W0602 = on, I0305 = off);` near the file's head; settings are comma-separated | the whole file, from any position (it takes effect before any diagnostic) |
-| 2 | **the CLI** | `ksplc lint --lint=I0307=off --lint=W0602=on src/main.kspls`; it may be repeated, and the later one wins | that one run |
+| 1 (strongest) | **per file** | `##lint(W0601 = on, I0305 = off);` near the file's head; settings are comma-separated | the whole file, from any position (it takes effect before any diagnostic) |
+| 2 | **the CLI** | `ksplc lint --lint=I0307=off --lint=W0601=on src/main.kspls`; it may be repeated, and the later one wins | that one run |
 | 3 | **the project settings file** | the `[lint]` section of the nearest `ksplc.cfg` above the source ([§6.2](#62-the-search-and-the-range-it-applies-to); [§6.1](#61-how-to-write-it) shows one) | part of the directory tree |
 | 4 | the default | nothing written | everywhere else |
 
@@ -934,15 +932,15 @@ A code off by default is advice that matters only for one kind of system, and is
 
 | The code | The meaning | Enable it for |
 | :-- | :-- | :-- |
-| [W0602] | points out where ARC's hidden `retain`/`release` makes timing invisible | a system putting determinism first — an OS, embedded, real-time control |
-| [I0603] | recommends a reference-counted type over hand-made ownership (a raw pointer plus one's own `free`) | a system putting memory robustness first, such as a web server |
+| [W0601] | points out where ARC's hidden `retain`/`release` makes timing invisible | a system putting determinism first — an OS, embedded, real-time control |
+| [I0602] | recommends a reference-counted type over hand-made ownership (a raw pointer plus one's own `free`) | a system putting memory robustness first, such as a web server |
 | [I0402] | points out a `pub` used only inside its package | an artifact closed at that unit, such as an executable |
 
 (ARC, automatic reference counting, is the compiler inserting `retain` and `release` calls that count a value's owners and free it when the last one lets go.)
 
 **There are no named combinations (presets)**: a name enabling one code would only be a second way to write the per-code setting. To cover a directory tree, list the codes in `ksplc.cfg` (for example `kssrv/ksplc.cfg`).
 
-**A code on by default is useful whatever is being built**: [H0704]'s `Option<|T|>` is an enum resolved at compile time, so it serves either kind of system without touching run-time timing.
+**A code on by default is useful whatever is being built**: [H0701]'s `Option<|T|>` is an enum resolved at compile time, so it serves either kind of system without touching run-time timing.
 
 ### 5.4 The list of diagnostic codes
 
@@ -988,9 +986,9 @@ The language rules are "2.3 Literals" and "6.8 Integer arithmetic: folding, over
 | W0211 | a name a comment points at leads nowhere |
 | W0212 | a comment opening with `///` or `//!`, which is not read |
 | W0213 | a `//<` summary longer than one line, or opening with a label |
-| W0503 | conformance to a declaration named the same as a trait the compiler knows |
-| W0504 | a local or a parameter that hides an imported module |
-| W0602 | the use of an ARC-managed type (off by default) |
+| W0501 | conformance to a declaration named the same as a trait the compiler knows |
+| W0502 | a local or a parameter that hides an imported module |
+| W0601 | the use of an ARC-managed type (off by default) |
 | W0701 | an unhandled Result type |
 | W0702 | the use of a deprecated symbol |
 | I0301 | an unnecessary `::` cast |
@@ -1008,12 +1006,12 @@ The language rules are "2.3 Literals" and "6.8 Integer arithmetic: folding, over
 | I0501 | shadowing |
 | I0502 | a naming-convention violation |
 | I0601 | an unnecessary mutability marker |
-| I0603 | detecting a hand-made ownership struct (off by default) |
-| I0703 | error propagation using '?' is recommended |
-| I0805 | a comment a round trip through the indentation notation moves |
-| H0311 | unnecessary brackets |
-| H0312 | a type written twice |
-| H0704 | a proposal to adopt `Option<\|T\|>` for a raw-pointer return value that can return null |
+| I0602 | detecting a hand-made ownership struct (off by default) |
+| I0701 | error propagation using '?' is recommended |
+| I0801 | a comment a round trip through the indentation notation moves |
+| H0301 | unnecessary brackets |
+| H0302 | a type written twice |
+| H0701 | a proposal to adopt `Option<\|T\|>` for a raw-pointer return value that can return null |
 | H0801 | a guard clause is recommended |
 | H0802 | a wrap at a call inside an argument |
 | H0803 | a function exceeds 300 lines |
@@ -1060,7 +1058,7 @@ A method frees its object, but the compiler cannot tell, so using the object aft
 
 #### [W0108] A bit operation's operand is compared without brackets
 The result of `&` / `|` / `^` is compared without brackets, as in `a & b == c`. KSPL places these three at the level of multiplication, so it reads `(a & b) == c`. **C reads it the other way** (`a & (b == c)`), and neither the types nor a run-time check catch it.
-* **Fix**: bracket the intended grouping (`(a & b) == c`). [H0311]'s "unneeded brackets" does not look at binary operations, so both can be followed.
+* **Fix**: bracket the intended grouping (`(a & b) == c`). [H0301]'s "unneeded brackets" does not look at binary operations, so both can be followed.
 
 #### [W0109] An early exit before the `defer` that frees an `Owned` value
 A value that must be freed can leave the function before its `defer` (the statement that frees it at the end of the block) is reached, so it leaks. A `?`, `return`, `throw`, or a `break` / `continue` out of the block stands between binding a value whose type conforms to `Owned` and the `defer name.free()` later in the same block. That path leaves before the `defer` is registered, so the value is never freed. The finding sits on the exit and names both lines.
@@ -1123,18 +1121,18 @@ The summary is the first paragraph of a `//<` run: everything before the first `
 * **Fix**: keep the first line and end the summary there with an empty `//<`; the rest runs on below it as the detail, which the six-line cap counts. Where the first line is a label, write a line above it saying what the thing is, then the empty `//<`.
 * **Not reported**: a run whose summary is one line, however long the detail below the parting mark.
 
-#### [W0503] Conformance to a declaration named the same as a trait the compiler knows
+#### [W0501] Conformance to a declaration named the same as a trait the compiler knows
 A type claims a trait that only looks like one the compiler treats specially, so the special treatment never happens. The `X` of `impl <type>: X` names a different declaration with the same name as a trait the compiler knows (`Ref_counted` / `Move_only` / `Owned`). The known traits are matched by FQN, the name with its full module path (`std.lang.Ref_counted` and so on). So conforming to the look-alike turns on none of ARC's `retain`/`release`, the move check or the free tracking. **Nothing else reports this for these three.**
-* **Fix**: to conform to the real trait, qualify it with `lang.`, as in `impl <type>: lang.Ref_counted` (the `std/lang` item in ["9. Files and import" in `../../docs/SPEC-language.md`](../../docs/SPEC-language.md#9-files-and-import)). Where the name serves an unrelated purpose, rename it, or silence this for that one file with `##lint(W0503 = off)`.
+* **Fix**: to conform to the real trait, qualify it with `lang.`, as in `impl <type>: lang.Ref_counted` (the `std/lang` item in ["9. Files and import" in `../../docs/SPEC-language.md`](../../docs/SPEC-language.md#9-files-and-import)). Where the name serves an unrelated purpose, rename it, or silence this for that one file with `##lint(W0501 = off)`.
 
-#### [W0504] A local or a parameter that hides an imported module
+#### [W0502] A local or a parameter that hides an imported module
 A local variable or parameter has the name an import line binds to a module (`import "std/io"` binds `io`, and `import "std/json" + { Val }` binds `json` beside `Val`). A module's members and a value's are both reached with `.`, so from the declaration to the end of its scope `io.out()` reads the local. It fails as a missing member far from the cause, or, where the local has a member of that name, silently reads the wrong thing ("Why `::` stays the cast, and what the cast costs to parse" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)). It is a warning, not an error, because shadowing stays legal ("4.5 Scope and shadowing" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md)).
 * **Fix**: rename the local. Where the file uses the module only for names a selective import could bring (a type in signatures, `json.Val`), import those names instead (`import "std/json" { Val }`), so no module name is bound for a local to hide.
 * **Not reported**: a name no import line binds (a selective import without `+` binds only the names it lists), the prelude's `lang`, which no line imports, and a name starting with `_`.
 
-#### [W0602] The use of an ARC-managed type
+#### [W0601] The use of an ARC-managed type
 Off by default ([§5.3](#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg)). ARC (automatic reference counting) has the compiler insert `retain()`/`release()` calls that count a value's owners. They run invisibly, a risk where execution timing must stay visible. It is reported where a local variable's or parameter's type is ARC-managed (conforms to `Ref_counted`), or is a struct holding one as a value field at any depth.
-* **Fix**: consider explicit ownership through an arena or `defer`. It is not there to forbid ARC: a deliberate exception may stay. To exclude one file while it is enabled, write `##lint(W0602 = off);`.
+* **Fix**: consider explicit ownership through an arena or `defer`. It is not there to forbid ARC: a deliberate exception may stay. To exclude one file while it is enabled, write `##lint(W0601 = off);`.
 
 #### [W0701] An unhandled Result type
 A function that can fail returns `T?E` (a value `T` or an error `E`). It is called, its return value is not received, and neither a `catch` nor a `?` is written.
@@ -1247,31 +1245,31 @@ A variable or parameter declared with the mutability marker `$` is never reassig
   | `U8$[]::buf` (a writable slice made from the array `buf`) | **yes** | Without the `$`, `buf` becomes read-only memory in the generated C, and a write through the slice would hit it |
 * **Fix**: remove the `$` (`$x: = ...` → `x: = ...`). Unmarked is immutable, so the type system then guarantees the variable is never reassigned.
 
-#### [I0603] Detecting a hand-made ownership struct
+#### [I0602] Detecting a hand-made ownership struct
 Off by default ([§5.3](#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg)). Reported where a struct not conforming to `Ref_counted` holds a raw-pointer field and defines its own `free` method: hand-made ownership. Structs under `std/` are out of scope (ARC's own primitives, such as `Arena` and `List`, would make the advice circular).
 * **Fix**: following `Rc<|T|>` / `Arc<|T|>`, consider conforming it to `Ref_counted` so that reference counting manages its lifetime ("8.4 The memory management model: `defer` / ARC / arenas" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md)).
 
-#### [I0703] Error propagation using '?' is recommended
+#### [I0701] Error propagation using '?' is recommended
 A `catch` that only rethrows the caught error, as in `catch e { throw e; }`.
 * **Fix**: replace the whole `catch` block with the `?` operator, which propagates the error (hands it to the caller) more safely and concisely.
 
-#### [I0805] A comment a round trip through the indentation notation moves
+#### [I0801] A comment a round trip through the indentation notation moves
 A comment after a closing `}` cannot survive conversion to the indentation notation, which has no line for that `}`. In the brace notation, a line comment stands after a `}` that the indentation notation leaves out: a block's close outside every bracket, with the statement's `;` between them where the block ends one (`}; // …`). Converting moves the comment and converting back does not return it, so it speaks for different code ("Formatting, and the round trip that holds the two notations to one program" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)). **What is reported is what the formatter does** with its default settings (the formatter itself is asked), so a short block written on one line, which formatting unfolds, is reported too.
 * **Fix**: put the comment on the line of the code it speaks for, or on its own line above or below the `}`. Both notations have that line, so the comment comes back where it was written.
 * **Not reported**: a comment after a `}` the indentation notation keeps (a value's, a block's inside a call's brackets, an empty block's, one holding only comments), and any file in the indentation notation, which has no closing line to comment on.
 
 ### 5.7 The list of hints (H)
 
-#### [H0311] Unnecessary brackets
+#### [H0301] Unnecessary brackets
 Brackets `()` that change nothing. They stand around the condition of an `if`, a `for`, a `switch` and the like, or around the receiver of a postfix operator (`.`/`[`/`(`/`@`/`$`/`::`/`?`) that binds the same without them: an identifier, a path, a literal, an existing postfix chain and so on (`(fc1_lora$).forward(x)`, `(r::U8).is_space()`).
 * **Fix**: delete the brackets. An expression whose binding would change without them (a binary, unary or ternary operation, a `catch`, a `sizeof`, an upcast) is out of scope, since there the brackets are needed.
 
-#### [H0312] A type written twice
+#### [H0302] A type written twice
 A local's annotation that its initializer already says. The same type is written at the initializer's head, as a struct literal (`p: Point = Point::{ … }`), a cast (`n: U8 = U8::v`), an enum variant (`k: Kind = Kind.small`) or a call made through the type (`xs: List<|I32|> = List<|I32|>.new(arena)`); or the annotation is `Bool` over `true` / `false`. Deleting it leaves the variable's type as it is. **Only a type the text shows is reported**: `count: Sz = items.len` is not, since there the annotation is the one place a reader without hover sees the type ("A type is redundant only where it is written twice" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)).
 * **Fix**: delete the type the editor dims (`p: = Point::{ … }`); a `const` loses its `:` with it (`const k = Kind.small`).
 * **Not reported**: an annotation doing work, such as a literal taking its type from it (`$i: Sz = 0`), a conversion it drives (`wide: I64 = small`) or a right side typed by it (`::{ … }`, `.small`); and another name for the type (`spot: Spot = Point::{ … }`, `Spot` a typedef). A cast [I0301] calls unnecessary is left to [I0301]: deleting both would leave the value's own type. Inside a generic, a call through a type is not reported (`b: Box<|T|> = Box<|T|>.make(v)`). The compiler checks a generic's body once per instantiation (once per set of type arguments it is used with), and an `impl` written for one instantiation alone (`impl Box<|I32|>`) can give `make` another return type there. So the annotation can repeat the type for one instantiation and be needed for another, while the advice is about the one line both share. The other shapes name their type in the text, which is the same for every instantiation, so they are reported, once per line however many instantiations check it.
 
-#### [H0704] A proposal to adopt `Option<|T|>` for a raw-pointer return value that can return null
+#### [H0701] A proposal to adopt `Option<|T|>` for a raw-pointer return value that can return null
 A function returning a raw pointer (`T@`) does `return null;` on some path, so a caller can forget to check for null. It is on by default, whatever is being built ([§5.3](#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg)). Out of scope: anything under `std/` (the foundational primitives), and a function with `#export` (the FFI boundary with C, where `Option<|T|>` is not ABI-compatible: C cannot read its memory layout).
 * **Fix**: return `Option<|T|>` instead, as `Option<|T|>.some(value)` / `Option<|T|>.none`. The `switch`'s exhaustiveness check then stops callers from forgetting to handle the absent value.
 
@@ -1303,7 +1301,7 @@ The format is INI, the plain `[section]` and `key = value` format many tools use
 ```
 # a comment runs from '#' to the end of the line
 [lint]
-W0602 = on
+W0601 = on
 I0307 = off
 W0105 = error
 ```
