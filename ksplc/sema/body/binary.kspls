@@ -7,13 +7,15 @@
 //< (as in `ksplc/gen/c/expr.kspls`).
 //< The split is "a rule about one operator" versus "dispatch on an expression's kind". The
 //< reasoning is in "Files near the limit and how they split" in `../../README.md`.
-import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast" { Ast_node, is_anon_fn_name }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
+import "ksplc/base/ast_spell" // get_full_path_str_to, get_path_or_ident_name
 import "ksplc/base/core" as base_core
 import "ksplc/sema/body/coerce" as sema_body_coerce
 import "ksplc/sema/body/expr" as sema_body_expr
 import "ksplc/sema/body/literal" as sema_body_literal
+import "ksplc/sema/body/resolve_path" as sema_body_resolve_path
 import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/decl/trait_check" as sema_decl_trait_check
 import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
@@ -208,6 +210,14 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32?S
     $left_type_id: = left_node.infer_expr(ctx, pass_left_id)?
     if defer_left && !ctx.env.is_pointer(left_type_id)
         left_type_id = left_node.settle_expected(ctx, left_type_id, expected_id)?
+    // An operand is a value, so a type's name is refused on either side, with nothing expected of
+    // it too (`Box<|I32|> == f`).
+    if sema_body_resolve_path.refuse_type_name(ctx, left_node)
+        return I32::sema_type_env.Builtin_type_id.unknown
+    if refuses_fn_operator(ctx, node, op_text, left_type_id)
+        return I32::sema_type_env.Builtin_type_id.unknown
+    if left_type_id == ctx.env.generic_fn_value_type_id()
+        return infer_after_fn_name(node, ctx, left_node, right_node)?
 
     // Detects a meaningless comparison `a == a`. A bare variable reference is a k_expr_path after
     // normalization, so is_path_or_ident accepts both.
@@ -224,14 +234,14 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32?S
                 \{right_node.text\}' is always \{always_val\}")
         ctx.warn(node, ctx.scratch.slice())
 
-    // [W0109] KSPL ranks `&` `|` `^` with `*` ("The operator list and precedence" in
+    // [W0108] KSPL ranks `&` `|` `^` with `*` ("The operator list and precedence" in
     // docs/SPEC-language.md), C below comparison, so the same text parses differently. **Neither
     // types nor the run time catch it**: only the answer changes (`6 & 4 == 4` is true in KSPL
     // only).
     if base_core.config.run_lint_checks && is_cmp &&
         (is_bare_bitwise(left_node) || is_bare_bitwise(right_node))
         ctx.clear_scratch()
-            .s("[W0109] '&', '|' and '^' bind tighter than comparison in KSPL (they sit with '*'), \
+            .s("[W0108] '&', '|' and '^' bind tighter than comparison in KSPL (they sit with '*'), \
                 so the bitwise operand groups first. C groups the same spelling the other way \
                 round. Add parentheses to state the grouping in the source.")
         ctx.warn(node, ctx.scratch.slice())
@@ -262,8 +272,11 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32?S
 
     if !is_left_enum && (ctx.env.is_numeric(left_type_id) || is_cmp)
         pass_right_id = I32::sema_type_env.Builtin_type_id.unknown
-    if is_logical || ctx.env.is_pointer(left_type_id) || ctx.env.is_fn_ptr(left_type_id)
+    if is_logical || ctx.env.is_pointer(left_type_id)
         pass_right_id = I32::sema_type_env.Builtin_type_id.unknown
+    // A function's name on the right takes the left's function type, which checks its signature.
+    if ctx.env.is_fn_ptr(left_type_id)
+        pass_right_id = left_type_id
 
     // **Pass the left-hand side's type only to an integer literal with no fixed type**, and only
     // where the outer expected type equals it: other operands are promoted to the wider side by the
@@ -275,7 +288,15 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32?S
         sema_body_literal.is_untyped_int_literal(ctx, right_node)
         pass_right_id = left_type_id
 
-    right_type_id: = right_node.infer_expr(ctx, pass_right_id)?
+    $right_type_id: = right_node.infer_expr(ctx, pass_right_id)?
+    if sema_body_resolve_path.refuse_type_name(ctx, right_node)
+        return I32::sema_type_env.Builtin_type_id.unknown
+    if refuses_fn_operator(ctx, node, op_text, right_type_id)
+        return I32::sema_type_env.Builtin_type_id.unknown
+    // A function's name against a value that is no function (`1 == twice`) is reported as a name
+    // given a type it does not have.
+    if right_type_id == ctx.env.generic_fn_value_type_id()
+        right_type_id = right_node.infer_expr(ctx, left_type_id)?
 
     // Caution: **Do not let a binary operation on a slice pass.** The generated C would operate on
     // the `ptr`+`len` structs, and the user would get the C compiler's `invalid operands to binary
@@ -418,6 +439,56 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32?S
     if is_cmp || is_logical
         type_id = I32::sema_type_env.Builtin_type_id.bool_type
     return type_id
+
+fn refuses_fn_operator(ctx: Sema_ctx$@, node: Ast_node$@, op_text: U8[], type_id: I32): Bool //<
+    //< Whether it reported an operator other than `==` and `!=` on a function value
+    //<
+    //< A function value is an address, which has no order and no arithmetic that means anything;
+    //< C leaves ordering two functions' addresses undefined. A unary operator (`-f`, in
+    //< expr.kspls) and a compound assignment (`f += g`, in stmt.kspls) are checked here too.
+    if !ctx.env.is_fn_ptr(type_id) || op_text.equals("==") || op_text.equals("!=")
+        return false
+    ctx.clear_scratch()
+        .s("operator '\{op_text\}' does not apply to a function: functions are compared only with \
+            '==' and '!='")
+    ctx.err(node, ctx.scratch.slice())
+    return true
+
+priv fn infer_after_fn_name(node: Ast_node$@, ctx: Sema_ctx$@, left_node: Ast_node$@,
+    right_node: Ast_node$@): I32?Sema_error //<
+        //< Types a comparison whose left side is a function's name, the right side first
+        //<
+        //< **A function's name takes its type from where it is written** (value_of_fn in
+        //< sema/body/resolve_path.kspls), so the right side's type is the expected type of the
+        //< name, as the left's is the right's in `f == twice`: the order the two are written in
+        //< changes nothing. Two names give no type to either, and are refused: neither side is a
+        //< declaration with no type, which takes the name's own (`f: = twice`).
+    right_type_id: = right_node.infer_expr(ctx, I32::sema_type_env.Builtin_type_id.unknown)?
+    if sema_type_env.is_unknown(right_type_id)
+        return I32::sema_type_env.Builtin_type_id.unknown
+    if right_type_id == ctx.env.generic_fn_value_type_id()
+        ctx.clear_scratch().s("cannot compare ")
+        write_fn_name(ctx, left_node)
+        ctx.scratch.s(" with ")
+        write_fn_name(ctx, right_node)
+        ctx.scratch
+            .s(": each takes its type from the other side, and neither gives one\n  Hint: bind one \
+                side to a variable first ('f: = …' takes its function type), then compare 'f'")
+        ctx.err(node, ctx.scratch.slice())
+        return I32::sema_type_env.Builtin_type_id.unknown
+    left_node.infer_expr(ctx, right_type_id)?
+    return I32::sema_type_env.Builtin_type_id.bool_type
+
+priv fn write_fn_name(ctx: Sema_ctx$@, name_node: Ast_node$@) //<
+    //< Appends a function's name to scratch as the source spells it, quoted
+    //<
+    //< An anonymous function's synthesized name is not shown: the user did not write it.
+    if is_anon_fn_name(name_node.get_path_or_ident_name())
+        ctx.scratch.s("this anonymous function")
+        return
+    ctx.scratch.s("'")
+    name_node.get_full_path_str_to(ctx.scratch)
+    ctx.scratch.s("'")
 
 priv fn operand_type(ctx: Sema_ctx$@, left_node: Ast_node$@, left_id: I32, right_node: Ast_node$@,
     right_id: I32): I32 //<

@@ -1,7 +1,6 @@
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
-import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/sema/body/call" as sema_body_call
 import "ksplc/sema/body/dot" as sema_body_dot
@@ -9,6 +8,7 @@ import "ksplc/sema/body/expr" as sema_body_expr
 import "ksplc/sema/decl/access" as sema_decl_access
 import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/decl/layout" as sema_decl_layout
+import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/decl/trait_check" as sema_decl_trait_check
 import "ksplc/sema/decl/type_check" as sema_decl_type_check
@@ -74,6 +74,9 @@ fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error
         target_id = c.env.get_or_add(left.text)
         left.type_id = target_id
     else
+        outer_callee: = c.fn_ctx.callee
+        c.fn_ctx.callee = left if op.equals("(") else null
+        defer c.fn_ctx.callee = outer_callee
         target_id = left.infer_expr(c, pass_expected_id)?
     $type_id: = I32::sema_type_env.Builtin_type_id.unknown
 
@@ -88,19 +91,16 @@ fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error
         if left.kind_id == .k_primitive_type
             is_namespace = true
         else if left.kind_id == .k_identifier || is_path_kind
-            $sym_name: = left.text
-            if is_path_kind
-                sym_name = left.get_path_name()
-
+            // What left names, read as any value's name is (read_written_name in
+            // sema/decl/name.kspls): a local first, then an import alias, then a declaration.
+            named: = c.read_written_name(left)
             $is_alias: = false
-            local_sym: = c.symtab.resolve(left.text) catch null
-            if local_sym != null && !local_sym.flags.is_global
-                sym_ptr = local_sym
-                is_namespace = false
+            if named.sym != null && !named.sym.flags.is_global
+                sym_ptr = named.sym
             else
-                is_alias = c.get_file_alias(c.file_name, left.text)
-                if !is_alias
-                    is_alias = c.get_file_alias(c.file_name, sym_name)
+                is_alias =
+                    named.parts.owner == null &&
+                    c.get_file_alias(c.file_name, named.parts.name.text)
 
             if is_alias
                 is_namespace = true
@@ -108,10 +108,7 @@ fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error
                 if left.def_node != null && left.def_node.sym_ptr != null
                     sym_ptr = Sema_symbol$@::left.def_node.sym_ptr
                 else
-                    // local_sym has already resolved left.text
-                    sym_ptr = local_sym
-                    if sym_ptr == null
-                        sym_ptr = c.symtab.resolve(sym_name) catch null
+                    sym_ptr = named.sym
 
                 if sym_ptr != null
                     sym_ptr.flags.is_used = true
@@ -434,6 +431,9 @@ priv fn check_slice_elem_size(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32
     dst_size: = c.type_layout(dst_elem).size
     src_size: = c.type_layout(src_elem).size
     if dst_size == src_size
+        // The cast stands on the two sizes being equal, so C checks both.
+        c.record_folded(dst_elem, .size, dst_size, node)
+        c.record_folded(src_elem, .size, src_size, node)
         return
     $src_shown: = c.env.display_str(src_id)
     defer src_shown.free()

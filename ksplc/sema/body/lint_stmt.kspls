@@ -116,14 +116,14 @@ fn lint_multiline_nested_call(c: Sema_ctx$@, node: Ast_node$@): Bool //<
     return false
 
 priv struct Lock_borrow //<
-    //< [W0106] One tracked borrow from Mutex.lock(), to catch its use outside the lock
+    //< [W0105] One tracked borrow from Mutex.lock(), to catch its use outside the lock
     borrow: U8[] //< the local name bound to g.lock()'s return value
     guard: U8[] //< the name of the guard the lock came from (g)
     released: Bool //< whether g.unlock() was seen since this borrow was taken
     reported: Bool //< whether it was already reported, to avoid a double report
 
 priv struct Lock_site //<
-    //< [W0107] One tracked lock, to catch "took a lock and did not release it"
+    //< [W0106] One tracked lock, to catch "took a lock and did not release it"
     guard: U8[] //< the name of what the lock was taken on (the g of g.lock())
     node: Ast_node$@ //< the diagnostic's position (the statement holding lock())
     settled: Bool //< an unlock or defer was seen, or tracking stopped at a branch
@@ -216,7 +216,7 @@ impl Ast_node
     fn contains_unlock_of(r: Self$@, c: Sema_ctx$@, guard: U8[]): Bool //<
         //< Whether the subtree holds a `guard.unlock()` call
         //<
-        //< For [W0107], a defer body holding one resolves the site.
+        //< For [W0106], a defer body holding one resolves the site.
         if r == null || guard.len == 0
             return false
         if lock_call_guard(c, r, "unlock", false).equals(guard)
@@ -237,10 +237,10 @@ impl Ast_node
                 return true
         return false
 
-fn lint_lock_escape($c: Sema_ctx$@, block: Ast_node$@) //<
+fn lint_lock_escape(c: Sema_ctx$@, block: Ast_node$@) //<
     //< Runs the two extra lock checks in one straight-line walk of the function body
     //<
-    //< [W0106] A borrow from Mutex.lock() used while the lock is not held (a data race). Both
+    //< [W0105] A borrow from Mutex.lock() used while the lock is not held (a data race). Both
     //< checks stop tracking at a branch, loop or nested block; lifetimes are not followed, so they
     //< catch only typical mistakes.
     if !base_core.config.run_lint_checks
@@ -280,7 +280,7 @@ fn lint_lock_escape($c: Sema_ctx$@, block: Ast_node$@) //<
             track_borrow_alias(stmt, borrows@)
         if k == .k_stmt_return
             lint_lock_return_escape(c, stmt, borrows@)
-            // A return ends the straight-line walk, so [W0107]'s tracking stops too.
+            // A return ends the straight-line walk, so [W0106]'s tracking stops too.
             settle_all_sites(sites@)
             continue
         ug: = stmt_unlock_guard(c, stmt)
@@ -288,7 +288,7 @@ fn lint_lock_escape($c: Sema_ctx$@, block: Ast_node$@) //<
             set_released_for(borrows@, ug, true)
             settle_sites_for(sites@, ug)
             continue
-        // An unbound `g.lock();` counts for [W0107] too.
+        // An unbound `g.lock();` counts for [W0106] too.
         lock_target: = stmt.safe_get_child(0) if stmt.kind_id == .k_stmt_expr else stmt
         bare_lock: = lock_call_guard(c, lock_target, "lock", true)
         if bare_lock.len > 0 && !has_open_site(sites@, bare_lock)
@@ -298,7 +298,7 @@ fn lint_lock_escape($c: Sema_ctx$@, block: Ast_node$@) //<
         for e in borrows
             if e.released && !e.reported && stmt.refs_ident(e.borrow)
                 c.clear_scratch()
-                    .s("[W0106] Local '\{e.borrow\}' borrows into '\{e.guard\}' via .lock(), but is \
+                    .s("[W0105] Local '\{e.borrow\}' borrows into '\{e.guard\}' via .lock(), but is \
                         used here after '\{e.guard\}.unlock()'. The lock is no longer held, so \
                         another thread may access the data concurrently. Use it before unlock(), or \
                         re-lock first.")
@@ -308,14 +308,14 @@ fn lint_lock_escape($c: Sema_ctx$@, block: Ast_node$@) //<
     for s in sites
         if !s.settled
             c.clear_scratch()
-                .s("[W0107] '\{s.guard\}' is locked here but never unlocked before leaving this \
+                .s("[W0106] '\{s.guard\}' is locked here but never unlocked before leaving this \
                     scope, so every thread that later takes this lock will block forever. Call \
                     '\{s.guard\}.unlock()' when done, or register 'defer \{s.guard\}.unlock()' \
                     right after locking so it is released on every exit path.")
             c.warn(s.node, c.scratch.slice())
 
 fn lint_defer_gap(c: Sema_ctx$@, node: Ast_node$@) //<
-    //< [W0110] An exit between an `Owned` value's binding and the `defer` that frees it
+    //< [W0109] An exit between an `Owned` value's binding and the `defer` that frees it
     //<
     //< A `?`, `return`, `throw`, `break` or `continue` there leaves before the `defer` is
     //< registered, so the value leaks on that path. Every block of the body is walked, a closure's
@@ -355,7 +355,7 @@ priv fn lint_block_defer_gap(c: Sema_ctx$@, block: Ast_node$@) //<
                 break
 
 priv fn report_defer_gap(c: Sema_ctx$@, way: Ast_node$@, name: U8[], bound: Sz, freed: Sz) //<
-    //< Reports [W0110] at the exit, naming the line to move the `defer` to
+    //< Reports [W0109] at the exit, naming the line to move the `defer` to
     $what: U8[] = "?"
     k: = way.kind_id
     if k == .k_stmt_return
@@ -367,7 +367,7 @@ priv fn report_defer_gap(c: Sema_ctx$@, way: Ast_node$@, name: U8[], bound: Sz, 
     else if k == .k_stmt_continue
         what = "continue"
     c.clear_scratch()
-        .s("[W0110] '\{name\}' leaks if this '\{what\}' leaves: its 'defer \{name\}.free()' is \
+        .s("[W0109] '\{name\}' leaks if this '\{what\}' leaves: its 'defer \{name\}.free()' is \
             registered only on line \{freed\}. Put the defer on the line after '\{name\}' is bound \
             (line \{bound\}), so it runs on every way out.")
     c.warn(way, c.scratch.slice())
@@ -416,7 +416,7 @@ impl Ast_node
                 return Option<|Ast_node$@|>.some(way)
         return Option<|Ast_node$@|>.none
 
-priv fn lint_lock_return_escape($c: Sema_ctx$@, stmt: Ast_node$@,
+priv fn lint_lock_return_escape(c: Sema_ctx$@, stmt: Ast_node$@,
     borrows: List<|Lock_borrow$@|>$@)
     e: = stmt.get_return_expr()
     if e == null
@@ -430,11 +430,11 @@ priv fn lint_lock_return_escape($c: Sema_ctx$@, stmt: Ast_node$@,
                 break
     if flagged
         c.clear_scratch()
-            .s("[W0106] Returning a pointer obtained from Mutex.lock() lets the caller use the data \
+            .s("[W0105] Returning a pointer obtained from Mutex.lock() lets the caller use the data \
                 with the lock released (a data race). Copy the needed value out while the lock is \
                 held and return the copy instead.")
         c.warn(stmt, c.scratch.slice())
-fn lint_empty_block($c: Sema_ctx$@, node: Ast_node$@, kind_name: U8[], action: U8[]) //<
+fn lint_empty_block(c: Sema_ctx$@, node: Ast_node$@, kind_name: U8[], action: U8[]) //<
     //< [I0307] Detects a stmt_block with nothing inside (action is the advice for the context)
     //<
     //< Skipped while instantiating a generic: a branch on a type argument (`if sizeof(T) == 4`)
@@ -623,7 +623,7 @@ fn contains_throw_guard(node: Ast_node$@): Bool //<
         if contains_throw_guard(child)
             return true
     return false
-priv fn find_accumulator_assigns($c: Sema_ctx$@, node: Ast_node$@,
+priv fn find_accumulator_assigns(c: Sema_ctx$@, node: Ast_node$@,
     guarded_names: Map<|U8[], Bool|>$@, has_preceding_bound_check: Bool) //<
         //< [W0103] Detects a digit-accumulating loop with no upper-bound check.
         //<

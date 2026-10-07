@@ -9,6 +9,7 @@ import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/base/literal" as base_literal
+import "ksplc/base/target" as base_target
 import "ksplc/gen/entry" as gen_entry
 import "ksplc/gen/llvm/ctx" as gen_llvm_ctx + { Genllvm_ctx }
 import "ksplc/gen/llvm/decl" as gen_llvm_decl
@@ -28,7 +29,11 @@ fn run(root: Ast_node$@, cg: Genllvm_ctx$@, file_name: U8[]) //< runs the LLVM b
     cg.s("; ==========================================\n")
     cg.s("; Kanso LLVM IR Generator\n")
     cg.s("; ==========================================\n")
-    cg.s("source_filename = \"").s(file_name).s("\"\n\n")
+    cg.s("source_filename = \"").s(file_name).s("\"\n")
+    // The machine's triple, so an LLVM tool reading the IR builds for the machine sizes were laid
+    // out for. No `target datalayout`: LLVM derives it from the triple, and clang replaces a
+    // module's own without a word, so a copy here would be a second statement nothing reads.
+    cg.s("target triple = \"").s(base_target.current().llvm_triple).s("\"\n\n")
     gen_llvm_types.emit_complex_types(cg)
     emit_type_decls(root, cg)
     emit_globals(root, cg)

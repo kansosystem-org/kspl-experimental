@@ -1,73 +1,59 @@
-//< The operations on a type's name used when instantiating a generic
+//< The lookups by name instantiating a generic needs: a method's template, type arguments as text
 //<
-//< It works on **strings only** (neither the AST nor Env's tables), so the naming rule between
-//< `base<|args|>` and a mangled name can be checked here.
-//< Caution: **Do not write the naming rule in two places.** `build_mangled_inst_name` and
-//< `resolve_instantiated_template_ref` are a pair; change only one and an instance can no longer
-//< be looked up, reported far away as "an undefined type".
+//< An instance's own names are not made here: they are derived from its record
+//< (`Instance` in `../type/env.kspls`), never read back.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/core" as base_core
-import "ksplc/base/mangle" as base_mangle
 import "ksplc/sema/decl/mono" as sema_decl_mono
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
-import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/session/ctx" { Sema_ctx, join_dotted_name }
+import "ksplc/sema/type/env" as sema_type_env
 import "std/chars"
 import "std/ds" { List }
 import "std/str" { Str_builder }
 
-struct Resolved_template_ref //<
-    //< The template name and argument string recovered from an instantiated struct's mangled name
-    //<
-    //< From "std_lang_Option_app_Person" it recovers the original template name ("std.Option") and
-    //< the actual-argument string ("app.Person").
-    //< found=false: it could not be recovered.
-    base_name: U8[]
-    args_str: U8[]
-    found: Bool
+struct Method_template //< a method declaring type parameters of its own, and its owner
+    node: Ast_node$@ //< the method's template
+    fqn: U8[] //< the template's key (`app.Box.gm`, `app.Plain.gen`)
+    owner: I32 //< the generic type's instance it is reached through, or 0 for a plain type's
 
-fn lookup_method_template(r: Sema_ctx$@, type_name: U8[], method_name: U8[]):
-    Option<|Ast_node$@|> //<
-        //< Looks up the template of `<type name>.<method name>`
+fn lookup_method_template(r: Sema_ctx$@, owner_id: I32, method_name: U8[]):
+    Option<|Method_template|> //<
+        //< The template of the method method_name of the type owner_id
         //<
         //< **A method with its own type parameters (`Holder<|T|>.to<|U|>`) can be looked up only
         //< here:** it is not in the method table but instantiated at the call site (instantiate_fn
-        //< in `mono.kspls`).
-    r.clear_scratch().s("\{type_name\}.\{method_name\}")
+        //< in `mono.kspls`). An instance's is found under its template's FQN, read from the
+        //< instance's record.
+    r.clear_scratch().s("\{r.env.get_str(owner_id)\}.\{method_name\}")
     direct: = r.generics.templates.get(r.scratch.slice()) catch null
     if direct != null
-        return Option<|Ast_node$@|>.some(direct)
-    tref: = resolve_instantiated_template_ref(r, type_name)
-    if !tref.found
-        return Option<|Ast_node$@|>.none
-    r.clear_scratch().s("\{tref.base_name\}.\{method_name\}")
-    found: = r.generics.templates.get(r.scratch.slice()) catch null
+        return Option<|Method_template|>
+            .some(Method_template::{ .node = direct,
+            .fqn = base_core.arena.dup_str(r.scratch.slice()), .owner = 0 })
+    switch r.env.instance_of(owner_id) case .some(inst)
+        return instance_method_template(r, inst, owner_id, method_name)
+    case .none
+        return Option<|Method_template|>.none
+
+priv fn instance_method_template(r: Sema_ctx$@, inst: sema_type_env.Instance, owner_id: I32,
+    method_name: U8[]): Option<|Method_template|> //<
+        //< lookup_method_template's answer for an instance, found under its template's FQN
+    fqn: = join_dotted_name(inst.template, method_name)
+    found: = r.generics.templates.get(fqn) catch null
     if found == null
-        return Option<|Ast_node$@|>.none
+        return Option<|Method_template|>.none
     // Caution: **Return only methods with their own type parameters.** An ordinary one
     // (`Slice<|T|>.sub_from`) would take the generic-call path, inferring `T` from the actual
     // argument and turning `U8[]` into `Sz[]`.
-    tmpl: = r.generics.templates.get(tref.base_name) catch null
+    tmpl: = r.generics.templates.get(inst.template) catch null
     if tmpl == null
-        return Option<|Ast_node$@|>.none
+        return Option<|Method_template|>.none
     if !introduces_own_generic_param(found, tmpl.find_child(.k_type_gen_params))
-        return Option<|Ast_node$@|>.none
-    return Option<|Ast_node$@|>.some(found)
-
-fn resolve_instantiated_template_ref(r: Sema_ctx$@, mangled_name: U8[]): Resolved_template_ref
-    // Caution: Do not walk all of instantiated_nodes (O(N^2) over N instantiations). Look up the
-    // type_id, then the "base<|args|>" key from the index (inst_type_index of sema_type_env.Env).
-    tid: = r.env.type_to_id.get(mangled_name) catch 0
-    if tid != 0
-        key: = r.env.inst_type_index.get(tid) catch ""
-        if key.len > 0
-            lt_idx: = key.find_str("<|")
-            if lt_idx >= 0 && key.ends_with("|>")
-                base: = key.sub(0, lt_idx)
-                args: = key.sub(lt_idx + 2, key.len - 2 - (lt_idx + 2))
-                return Resolved_template_ref::{ .base_name = base, .args_str = args,
-                    .found = true }
-    return Resolved_template_ref::{ .base_name = "", .args_str = "", .found = false }
+        return Option<|Method_template|>.none
+    return Option<|Method_template|>
+        .some(Method_template::{ .node = found, .fqn = fqn, .owner = owner_id })
 
 fn introduces_own_generic_param(m_node: Ast_node$@, impl_gen_params: Ast_node$@): Bool //<
     //< Whether m_node's type parameters hold a name not in impl_gen_params (the impl block's own)
@@ -114,24 +100,11 @@ fn type_base_name_len(s: U8[]): Sz //<
     return i
 
 impl Sema_ctx
-    fn canonicalize_type_args(r: Self$@, args_str: U8[]): Str_builder //<
-        //< Normalizes a type-argument string, making each bare name an FQN
+    fn canonicalize_one_type_arg(r: Self$@, arg: U8[]): Str_builder //<
+        //< One type argument as an impl's target spells it, each name made an FQN (`c_mod.Plain$@`)
         //<
-        //< An example of the string is `"Plain$@, Map_entry<|K, V|>$@"`.
-        //< This matters for correctness: `Plain$@` and `c_mod.Plain$@` would emit two instances to
-        //< C.
-        $out: = Str_builder.new()
-        args: = split_args(args_str)
-        defer free_args_list(args)
-        for i in Range.asc(args.len)
-            if i > 0
-                out.s(", ")
-            $one: = r.canonicalize_one_type_arg(args.get(i).slice())
-            out.s(one.slice())
-            one.free()
-        return out
-
-    fn canonicalize_one_type_arg(r: Self$@, arg: U8[]): Str_builder
+        //< This matters for correctness: `Plain$@` and `c_mod.Plain$@` would be two types, and the
+        //< impl would attach to neither (impl_target_rejects in mono_target.kspls).
         $out: = Str_builder.new()
         switch arg.find_generic_bounds() case .found(start_idx, inner_start, inner_end, end_idx)
             base: = arg.sub(0, start_idx)
@@ -139,10 +112,9 @@ impl Sema_ctx
             // end_idx is the closing `>` itself; without the `+ 1` the suffix reads `">$@"`.
             suffix: = arg.sub_from(end_idx + 1)
             fqn_base: = r.resolve_fqn_for_type(base)
-            $canon_inner: = r.canonicalize_type_args(inner)
-            defer canon_inner.free()
             // As on the AST path, a generic argument becomes an instance's mangled name.
-            $inst: = r.instantiate_struct(fqn_base, canon_inner.slice()) catch Str_builder.new()
+            $inst: =
+                r.instantiate_struct(fqn_base, r.canonical_type_ids(inner)) catch Str_builder.new()
             out.s(inst.slice()).s(suffix)
             inst.free()
         default
@@ -153,22 +125,21 @@ impl Sema_ctx
                 out.s(r.resolve_fqn_for_type(arg.sub(0, base_len))).s(arg.sub_from(base_len))
         return out
 
-fn split_args(args_str: U8[]): List<|Str_builder$@|>$@
-    lst: = List<|Str_builder$@|>.create(base_core.arena)
-    for pos in Range.asc(args_str.count_type_args())
-        s: = base_core.arena.create(Str_builder.new())
-        s.s(args_str.nth_type_arg(pos))
-        lst.push(s)
-    return lst
+    priv fn canonical_type_ids(r: Self$@, args_str: U8[]): I32[] //<
+        //< The types a spelled list of type arguments names, one canonicalized id per argument
+        $ids: = List<|I32|>.new(base_core.arena)
+        for pos in Range.asc(args_str.count_type_args())
+            $one: = r.canonicalize_one_type_arg(args_str.nth_type_arg(pos))
+            ids.push(r.env.get_or_add(one.slice()))
+            one.free()
+        return ids.slice()
 
-fn free_args_list(args_list: List<|Str_builder$@|>$@)
-    for arg in args_list
-        arg.free()
-
-fn build_mangled_inst_name(base_name: U8[], args_str: U8[]): Str_builder
-    $full_arg: = Str_builder.new()
-    defer full_arg.free()
-    full_arg.s(base_name)
-    if args_str.len > 0
-        full_arg.s("_").s(args_str)
-    return full_arg.slice().mangle_type_name()
+    fn type_ids_of_text(r: Self$@, args_str: U8[]): I32[] //<
+        //< The types a list of type arguments names as spelt, one id per argument, no name resolved
+        //<
+        //< For the one binding of spellings, a trait's defaults copied into an impl
+        //< (bind_trait_decl_params in trait_default.kspls).
+        $ids: = List<|I32|>.new(base_core.arena)
+        for pos in Range.asc(args_str.count_type_args())
+            ids.push(r.env.get_or_add(args_str.nth_type_arg(pos)))
+        return ids.slice()

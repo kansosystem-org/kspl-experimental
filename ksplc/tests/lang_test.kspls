@@ -535,7 +535,7 @@ fn test_slice_views(arena: Arena$@)
     assert(empty.sub(0, 1).len == 0, "sub on an empty list must be empty")
 
     // A view is borrowed, so writing reaches the original (the same promise as `slice`).
-    $w: = xs.sub(1, 2)
+    w: = xs.sub(1, 2)
     w[0] = 111
     assert(xs[1] == 111, "writing through a sub view must reach the list")
 
@@ -628,7 +628,7 @@ priv struct Off_nested
 
 // It folds in a constant's context too.
 // Caution: **Do not leave this out.** The C passes it to C's `offsetof`, but a constant's
-// initializer and `--target=llvm` use ksplc's fold: two paths.
+// initializer and `--to=llvm` use ksplc's fold: two paths.
 priv const off_table: Sz[3] = ::{
     offsetof(Off_padded, a),
     offsetof(Off_padded, b),
@@ -761,6 +761,79 @@ fn test_if_binds_option()
             got += z
     assert(got == 27, "the bindings do not mix even nested")
     verdict.pass("`if name: = expr` binds an Option, and does nothing where there is none.")
+
+priv fn only_if(n: I32, want: I32): Option<|I32|> //< `n * 10` where n is `want`, none otherwise
+    return Option<|I32|>.some(n * 10) if n == want else Option<|I32|>.none
+
+priv fn bind_else_bind(n: I32, with_else: Bool): I32 //<
+    //< Which branch a binding `else if` after a binding `if` takes, plus the value it bound
+    //<
+    //< Caution: **Reuse the name `v`.** Each binding is a `switch` of its own, so the second `v`
+    //< is a new name, not the first one's.
+    $got: I32 = 0
+    if with_else
+        if v: = only_if(n, 1)
+            got = 100 + v
+        else if v: = only_if(n, 2)
+            got = 200 + v
+        else
+            got = 300
+    else
+        if v: = only_if(n, 1)
+            got = 100 + v
+        else if v: = only_if(n, 2)
+            got = 200 + v
+    return got
+
+priv fn bind_else_plain(n: I32): I32 //< a plain `else if` after a binding `if`
+    $got: I32 = 0
+    if v: = only_if(n, 1)
+        got = 100 + v
+    else if n == 2
+        got = 200
+    else
+        got = 300
+    return got
+
+priv fn plain_else_bind(n: I32): I32 //< a binding `else if` after a plain `if … else if`
+    $got: I32 = 0
+    if n == 1
+        got = 100
+    else if n == 2
+        got = 200
+    else if v: = only_if(n, 3)
+        got = 300 + v
+    else
+        got = 400
+    return got
+
+priv fn bind_three_deep(n: I32): I32 //< three binding `else if`s, then `else`
+    $got: I32 = 0
+    if a: = only_if(n, 1)
+        got = 100 + a
+    else if b: = only_if(n, 2)
+        got = 200 + b
+    else if c: = only_if(n, 3)
+        got = 300 + c
+    else if d: = only_if(n, 4)
+        got = 400 + d
+    else
+        got = 500
+    return got
+
+fn test_if_bind_in_else_if()
+    verdict.start("[Lang] if binds an Option in an else-if chain test...")
+    assert(bind_else_bind(1, true) == 110 && bind_else_bind(2, true) == 220 &&
+        bind_else_bind(3, true) == 300, "binding, binding else-if, else: each branch is taken")
+    assert(bind_else_bind(1, false) == 110 && bind_else_bind(2, false) == 220 &&
+        bind_else_bind(3, false) == 0, "without else, no branch is taken when neither binds")
+    assert(bind_else_plain(1) == 110 && bind_else_plain(2) == 200 && bind_else_plain(3) == 300,
+        "a plain else-if after a binding")
+    assert(plain_else_bind(1) == 100 && plain_else_bind(2) == 200 && plain_else_bind(3) == 330 &&
+        plain_else_bind(4) == 400, "a binding else-if after a plain if and else-if")
+    assert(bind_three_deep(1) == 110 && bind_three_deep(2) == 220 && bind_three_deep(3) == 330 &&
+        bind_three_deep(4) == 440 && bind_three_deep(5) == 500, "a binding else-if at every level")
+    verdict.pass("an `else if name: = expr` binds and branches as the first `if` of a chain does.")
 
 // ==========================================
 // A `for` with no condition that no `break` leaves never ends, so a function can end on it

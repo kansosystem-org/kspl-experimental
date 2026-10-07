@@ -12,10 +12,11 @@ import "ksplc/base/locate" as base_locate
 import "ksplc/sema/body/resolve_path" as sema_body_resolve_path
 import "ksplc/sema/body/stmt" as sema_body_stmt
 import "ksplc/sema/decl/access" as sema_decl_access
-import "ksplc/sema/decl/mono" as sema_decl_mono
 import "ksplc/sema/decl/mono_name" as sema_decl_mono_name
 import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
+import "ksplc/sema/decl/name" as sema_decl_name
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/decl/type_check" as sema_decl_type_check
 import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
 import "ksplc/sema/session/import_table" as sema_session_import_table
 import "ksplc/sema/type/def" as sema_type_def
@@ -39,17 +40,16 @@ fn try_rewrite_enum_fmt(node: Ast_node$@, left: Ast_node$@, c: Sema_ctx$@): Bool
     if args == null || args.children.len != 2
         return false
     // Caution: **Do not decide by the name `put` alone**, or a user's own `put` that takes an enum
-    // has its body silently replaced. Check that it is std/lang's `put`: first symtab, where a
-    // local or the file's own declaration wins, then imported_symbol_fqn (the order of
-    // sema/body/resolve_path.kspls).
+    // has its body silently replaced. Check that the name is read as std/lang's `put`
+    // (read_written_name in sema/decl/name.kspls), where a local or the file's own declaration
+    // wins.
     if left.kind_id == .k_expr_path && left.children.len > 1
         return false
     callee_name: = left.get_path_name() if left.kind_id == .k_expr_path else left.text
     if !callee_name.equals("put")
         return false
-    if (c.symtab.resolve(callee_name) catch null) != null
-        return false
-    if !c.imported_symbol_fqn(callee_name).equals("std.lang.put")
+    named: = c.read_written_name(left)
+    if named.template == null || !named.fqn.equals("std.lang.put")
         return false
     recv: = args.get_child(1)
     // **recv must not be inferred here**: every non-enum `put(w, X)` would be inferred twice,
@@ -57,8 +57,7 @@ fn try_rewrite_enum_fmt(node: Ast_node$@, left: Ast_node$@, c: Sema_ctx$@): Bool
     // `\{x.field.variant_name()\}`.
     if recv == null || (recv.kind_id != .k_expr_path && recv.kind_id != .k_identifier)
         return false
-    recv_name: = recv.get_path_name() if recv.kind_id == .k_expr_path else recv.text
-    sym: = c.symtab.resolve(recv_name) catch null
+    sym: = c.read_written_name(recv).sym
     if sym == null || !sym.kind.is_var_or_const() || sym.type_id == 0
         return false
     base_id: = c.env.get_clean_real_type(c.env.receiver_base_id(sym.type_id))
@@ -95,30 +94,33 @@ fn infer_namespace_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
     member_node: = node.get_postfix_member()
     node.ice_assert(member_node != null, "Missing member identifier after namespace access")
     member_name: = member_node.text
+    // The type left names, instantiated when it carries type arguments; 0 where left names none.
+    $owner_id: = 0
 
     // A generic enum's variant (Option<|I32|>.some(v), mod.Option<|I32|>.some): left resolves to
     // the template, so is_enum stays false and nothing is monomorphized. So a left with type
     // arguments is instantiated here (instantiate_struct handles enums too); a variant found there
     // is enum_init.
-    targs_node: = left.find_child(.k_type_args)
-    if targs_node != null
-        base_name: = left.get_path_name()
-        fqn_base: = c.resolve_fqn_for_type(base_name)
-        tmpl: = c.generics.templates.get(fqn_base) catch null
-        if tmpl != null
-            // Caution: **Suppress only the argument string's build.** The instance is cached, so an
+    // Caution: **Read the name as written** (`m.Box`, not the last segment `Box`): a bare name is
+    // looked up as this file's, and may find another file's type of that name.
+    if left.find_child(.k_type_args) != null
+        written: = c.read_written_type(left)
+        tmpl: = c.written_template(written)
+        // A type that declares no type parameters takes none (`Plain<|I32|>.mk(3)`); the call goes
+        // on through the type itself, as the refused arguments would bind nothing.
+        named: = c.written_type_symbol(written)
+        if tmpl == null && named != null && named.kind.is_type()
+            sema_decl_type_check.refuse_type_args_on_plain_type(c, written)
+        if tmpl != null && written.args != null
+            // Caution: **Suppress only the arguments' resolution.** The instance is cached, so an
             // error inside it, suppressed on a first use of this shape, is never reported.
             saved_sup: = c.suppress_errors
             c.suppress_errors = true
-            $args_fqn: = targs_node.build_resolved_type_args_str(c, tmpl) catch sema_decl_mono_name.unknown_type_str()
+            args: = written.args.build_resolved_type_args(c, tmpl) catch sema_decl_resolve.unknown_args()
             c.suppress_errors = saved_sup
-            prev_inst_site: = c.generics.inst_site
-            c.generics.inst_site = node
-            args_fqn2: = args_fqn.slice()
-            $inst_name: = c.instantiate_struct(fqn_base, args_fqn2) catch sema_decl_mono_name.unknown_type_str()
-            c.generics.inst_site = prev_inst_site
+            $inst_name: = c.instance_written(written, args, node) catch sema_decl_mono_name.unknown_type_str()
             cid: = c.env.get_or_add(inst_name.slice())
-            args_fqn.free()
+            owner_id = cid
             inst_name.free()
             if inst_def: = c.env.get_enum_def(c.env.get_str(cid))
                 switch inst_def.get_variant(member_name) case .some(_v)
@@ -144,6 +146,19 @@ fn infer_namespace_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
             return sym_ptr.type_id
         // Not a variant: continue to the static-method resolution.
     type_args_node: = node.get_type_args()
+    // **A method named as a value, not called**, is resolved here, where the type is known: the
+    // flattened path below would lose the instance its written type arguments name.
+    $owner_tmpl: Ast_node$@ = null
+    if owner_id == 0
+        if left.kind_id == .k_primitive_type
+            owner_id = left.type_id
+        else if sym_ptr != null && sym_ptr.kind.is_generic_type()
+            owner_tmpl = sym_ptr.node
+        else if sym_ptr != null && sym_ptr.kind.is_type()
+            owner_id = c.env.get_real_type(sym_ptr.type_id)
+        else if left.get_path_name().equals("Self") && c.fn_ctx.impl_name.len > 0
+            owner_id = c.env.type_to_id.get(c.fn_ctx.impl_name) catch 0
+    is_value: = c.fn_ctx.callee != node
 
     $new_path: = Str_builder.new()
     new_path.s(left.text).s(".").s(member_name)
@@ -165,6 +180,37 @@ fn infer_namespace_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
     if type_args_node != null
         flat.push(type_args_node)
     node.children = flat
+    if owner_tmpl != null
+        sema_body_resolve_path.refuse_method_of_bare_generic(c, node, left, member_node, owner_tmpl,
+            !is_value)
+        // A call stops here: its own lookup would find the template's member and build it from
+        // nothing, or report the name undefined a second time.
+        if !is_value
+            throw Sema_error.analysis_failed
+        return I32::sema_type_env.Builtin_type_id.unknown
+    has_owner: = owner_id != 0 && !sema_type_env.is_unknown(owner_id)
+    if is_value && has_owner
+        return sema_body_resolve_path.infer_method_value(node, c, owner_id, left, member_node,
+            type_args_node, expected_id)?
+    // **A generic method called through its type** has no function until the call instantiates
+    // it, from the type left names and the method's own type arguments (sema/body/call.kspls).
+    // The type is recorded on the path's owner for that, since the flattened path no longer
+    // holds what left resolved to.
+    // So is any method of a generic type's instance: the call takes it from the instance's table
+    // (instance_method in sema/decl/name.kspls).
+    if has_owner
+        owner_base: = c.env.receiver_base_id(owner_id)
+        if _tmpl: = sema_decl_mono_name.lookup_method_template(c, owner_base, member_name)
+            sema_decl_name.named_fn(node).owner.type_id = owner_id
+            return I32::sema_type_env.Builtin_type_id.unknown
+        if _sym: = c.instance_method(owner_id, member_name)
+            sema_decl_name.named_fn(node).owner.type_id = owner_id
+            return I32::sema_type_env.Builtin_type_id.unknown
+        // An instance whose type arguments were refused has no methods, and that was the one
+        // mistake (check_type_constraint reports it at the type's use).
+        if c.has_failed_constraint(c.env.base_type_name(owner_id))
+            sema_decl_name.named_fn(node).owner.type_id = owner_id
+            return I32::sema_type_env.Builtin_type_id.unknown
     return sema_body_resolve_path.infer_path_expr(node, c, expected_id)?
 
 fn check_builtin_dot_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, recv_id: I32,
@@ -293,15 +339,10 @@ fn infer_dot_access(c: Sema_ctx$@, node: Ast_node$@, _left: Ast_node$@, target_i
     member_node: = node.get_postfix_member()
     node.ice_assert(member_node != null, "Missing member identifier after '.'")
     member_name_raw: = member_node.text
-    $member_name_s: = Str_builder.new()
-    member_name_s.s(member_name_raw)
-
+    // The method's own type arguments stay a child of the access, not part of its name.
     type_args_node: = node.get_type_args()
-    if type_args_node != null
-        member_name_s.s(type_args_node.text)
 
     if fast_out: = check_builtin_dot_access(c, node, _left, recv_id, member_node)
-        member_name_s.free()
         return fast_out
 
     // The type as the user wrote it, for the diagnostic.
@@ -373,14 +414,13 @@ fn infer_dot_access(c: Sema_ctx$@, node: Ast_node$@, _left: Ast_node$@, target_i
             full_m_name: = full_m_name_s.slice()
 
             $generic_fn_node: Ast_node$@ = null
-            template: = sema_decl_mono_name.lookup_method_template(c, current_search_type,
-                member_name_raw)
+            template: = sema_decl_mono_name.lookup_method_template(c, s_id, member_name_raw)
             if tmpl: = template
-                generic_fn_node = tmpl
+                generic_fn_node = tmpl.node
             if generic_fn_node != null
                 target_def = generic_fn_node
                 // A generic method has no Sema_symbol until monomorphization
-                // (register_template_names in collect.kspls).
+                // (register_template in declare.kspls).
                 // Caution: Create one here, or the visibility and import checks below are skipped
                 // entirely (a `priv` generic method becomes callable from another file).
                 m_name: = base_core.arena.dup_str(full_m_name)
@@ -397,6 +437,9 @@ fn infer_dot_access(c: Sema_ctx$@, node: Ast_node$@, _left: Ast_node$@, target_i
                     target_type_id = sym.type_id
             full_m_name_s.free()
 
+        if target_def != null && c.fn_ctx.callee != node
+            refuse_method_value_on_value(c, member_node, recv_id)
+            return I32::sema_type_env.Builtin_type_id.unknown
         if target_def != null
             found = true
             member_node.def_node = target_def
@@ -446,8 +489,6 @@ fn infer_dot_access(c: Sema_ctx$@, node: Ast_node$@, _left: Ast_node$@, target_i
             type_id = target_type_id
             reject_slotless_trait_call(c, recv_id, member_name_raw, base_type_str, member_node)
             node.set_kind(.k_method_access)
-            slice: = member_name_s.slice()
-            member_node.text = base_core.arena.dup_str(slice)
             member_node.type_id = c.env.get_or_add(current_search_type)
             break
 
@@ -515,8 +556,6 @@ fn infer_dot_access(c: Sema_ctx$@, node: Ast_node$@, _left: Ast_node$@, target_i
                 c.err(member_node, c.scratch.slice())
         reject_slotless_trait_call(c, recv_id, member_name_raw, base_type_str, member_node)
         node.set_kind(.k_method_access)
-        slice: = member_name_s.slice()
-        member_node.text = base_core.arena.dup_str(slice)
         if !sema_type_env.is_unknown(expected_id)
             type_id = expected_id
 
@@ -528,8 +567,28 @@ fn infer_dot_access(c: Sema_ctx$@, node: Ast_node$@, _left: Ast_node$@, target_i
             new_children.push(type_args_node)
         node.children = new_children
 
-    member_name_s.free()
     return type_id
+
+priv fn refuse_method_value_on_value(c: Sema_ctx$@, member_node: Ast_node$@, recv_id: I32) //<
+    //< Refuses a method named through a value without being called (`p.m`)
+    //<
+    //< A function value is an address alone, with no room for the receiver, so `p.m` has nothing
+    //< to stand for. Named through its type, the method is a function taking the receiver first
+    //< ("A method used as a value is named through its type" in docs/DESIGN.md).
+    $owner: = c.env.display_str(recv_id)
+    defer owner.free()
+    m: = member_node.text
+    // The hint names the type as a file inside its package writes it: no package path before it.
+    shown: = owner.slice()
+    args_at: = shown.find_str("<|")
+    head: = shown if args_at < 0 else shown.sub(0, args_at)
+    last_dot: = head.rfind_char('.')
+    own_name: = shown if last_dot < 0 else shown.sub_from(last_dot + 1)
+    c.clear_scratch()
+        .s("method '\{m\}' cannot be used as a value through a value of type '\{shown\}': a \
+            function value holds no receiver\n  Hint: call it, '.\{m\}(…)', or name it through \
+            its type, '\{own_name\}.\{m\}', and pass the receiver as its first argument")
+    c.err(member_node, c.scratch.slice())
 
 priv fn is_declared_type(c: Sema_ctx$@, type_id: I32): Bool //<
     //< Whether a declaration names the type (struct, enum or trait), aliases and marks stripped

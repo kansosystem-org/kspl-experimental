@@ -40,7 +40,8 @@ function kspageProbeMenu(ks) {
   check(carried !== null, "the falling text is built");
   if (carried !== null) {
     const done = ks.hold();
-    carried.text().then((text) => {
+    // **Through `ks.fed`**: a `Blob` is read off the page's thread (why: `fed` in `probe.js`).
+    ks.fed(carried.text()).then((text) => {
       // **Both the names lined up and the document's styles go in** (the drift is there).
       check(text.indexOf("The document's styles:") >= 0
         && text.indexOf("The paragraph styles listed in the menu:") >= 0,

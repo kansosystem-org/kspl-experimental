@@ -1,10 +1,17 @@
 # kspage
 
-**Kanso Doc is one editing system in place of Word, Excel and PowerPoint**: the three uses in one document, not three programs. It is written in KSPL alone. It borrows neither the browser's layout (DOM/CSS) nor the OS, so the document model, the line building, the reckoning and the drawing are its own. Five core folders sit under a bridge to the browser: the KSPL side built as wasm32, and the JS that draws and wires the page.
+**Kanso Doc is one editing system in place of Word, Excel and PowerPoint**: the three uses in one document, not three programs. You type prose, put a table with formulas inside it, and lay out slides, all in the same file, in a web browser. Try it with two commands:
+
+```sh
+make kspage                              # build everything, and a sample document
+make kspage-open FILE=out/sample.kspage  # a browser comes up with that document open
+```
+
+**It is written in KSPL alone.** It borrows neither the browser's layout (DOM/CSS, the browser's own way of placing text on a page) nor the OS. So kspage does every step itself: it holds the document, breaks text into lines, solves the formulas (the reckoning) and draws the page. Five core folders do that work. Under them sits a bridge to the browser: the KSPL side built as wasm32 (WebAssembly, a compact program format a browser runs), and the JavaScript (JS) that draws and wires the page.
 
 **The aim is not reached, and the gap is file formats**: kspage can neither open nor write a `.docx`, an `.xlsx` or a `.pptx`. What else is missing is in the manual's last chapter (the page's `?`, "Open the manual"). Do not copy it here, since the manual is its source.
 
-**This guide is the map.** It assumes no experience of building an editing system. It shows where things are in the code, the order to read them in, and what a change must touch. The decisions and their grounds are in [`kspage/docs/DESIGN.md`](docs/DESIGN.md).
+**This guide is the map.** It is for whoever reads or changes kspage's code, and it assumes no experience of building an editing system. It shows where things are in the code, the order to read them in, and what a change must touch. The decisions and their grounds are in [`kspage/docs/DESIGN.md`](docs/DESIGN.md); its "Words used in this document" explains the terms this guide uses without stopping (canvas, IME, run, band and the rest).
 
 ## Contents
 
@@ -22,42 +29,64 @@
 
 ## Run it
 
-```sh
-make kspage                              # build the page, the server and the opener, and out/sample.kspage
-make kspage-open FILE=out/sample.kspage  # a browser comes up with that document open
-```
+**These commands build kspage and open a document in it.** `make help` lists every target under Run and Gates.
 
-`make help` lists the other targets under Run and Gates: serving one document, the page as one file, and the checks.
+| Command | What it does |
+| :-- | :-- |
+| `make kspage` | Builds the page, the server and the opener (the program that opens a `.kspage` file on a double-click), and `out/sample.kspage` |
+| `make kspage-open FILE=out/sample.kspage` | Opens that document in a browser |
+| `make kspage-serve` | Serves the page on one document, with saving to the file, opening another file and the folder list all working |
+| `make kspage-web` | Makes the page as one HTML file |
 
 **Type `make kspage` first.** It builds the page, the server and the opener, and prints the steps that tie the file type to the opener. You carry out those steps yourself. The last section of [`docs/HOWTO-set-up-a-project.md`](../docs/HOWTO-set-up-a-project.md) says how they differ per environment, and what to check when a double-click opens nothing.
 
-`make kspage-serve` opens the page on one document, with saving to the file, opening another file and the folder list all working. Choose the document with `KSPAGE_DOC=docs/CONTRIBUTING.md` (relative to the root) and the port with `KSPAGE_SERVE_PORT=8081`. It serves the whole root, because the server refuses anything outside what it serves. **Open the URL it prints, including the token (`#t=…`).** Without it, the page cannot read local files. A URL assembled by hand that misses the page's address or the document opens a page that shows no message.
+For `make kspage-serve`, choose the document with `KSPAGE_DOC=docs/CONTRIBUTING.md` (relative to the root) and the port with `KSPAGE_SERVE_PORT=8081`. It serves the whole root, because the server refuses anything outside what it serves. **Open the URL it prints, including the token (`#t=…`).** Without it, the page cannot read local files. A URL assembled by hand that misses the page's address or the document opens a page that shows no message.
 
 **`make kspage-web` makes one file that embeds the wasm and the JS.** It needs no web server or container, and copied alone to another machine it opens the same way. `make clean` deletes `out/`, so copy the file elsewhere to keep it.
 
-**This folder's own [`Makefile`](Makefile) builds and tests a standalone copy of the folder**: `make test`, `make test-fuzz` (`make test-kspage-fuzz` from the root), `make web`, `make test-wasm`, `make test-browser` and `make test-served KSSRV=<kssrv>`. The head of that file says what else each target needs. The commands above are the repository's: they call these targets with its own compiler, and build kssrv and the opener around the page.
+**This folder's own [`Makefile`](Makefile) builds and tests a standalone copy of the folder**: `make test`, `make test-fuzz` (`make test-kspage-fuzz` from the root), `make web`, `make test-wasm`, `make test-browser` and `make test-served KSSRV=<kssrv>`. The head of that file says what else each target needs. The commands above are the repository's: they call these targets with its own compiler, and build kssrv (the local web server) and the opener around the page.
 
-**What it does**: typing and styling from a blank sheet, solving a table's formulas, showing slides one at a time, paging and printing, saving and reading back, and writing out HTML and Markdown. Two windows may open one file. The second to save is refused if the file changed after it read it ("Editing together" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md) says why the two are not joined).
+**What it does**:
+
+* typing and styling from a blank sheet;
+* solving a table's formulas;
+* showing slides one at a time;
+* paging and printing;
+* saving and reading back;
+* writing out HTML and Markdown.
+
+Two windows may open one file. The second to save is refused if the file changed after it read it ("Editing together" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md) says why the two are not joined).
 
 ## The idea
 
-**A document, a spreadsheet and a presentation differ only in their arrangement, not in the shape of their data** (the grounds are "Why the three can be made one" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md)).
+**A document, a spreadsheet and a presentation differ only in their arrangement, not in the shape of their data** (the grounds are "Why the three can be made one" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md)). The arrangement is how a block's contents are placed on the page. All three hold the same thing underneath: blocks of text with styles.
 
 | How it looks | The arrangement |
 | :-- | :-- |
 | Prose | flow (a run of text split onto pages) |
-| A table | a grid (rows × columns), solved again along the graph of dependencies between values |
+| A table | a grid (rows × columns), whose formulas are solved again in the order their values depend on each other |
 | Presentation | absolute coordinates (laid onto a slide of a set size) |
 
-Only the arrangement forks. Everything under it is shared:
+Only the arrangement forks. Everything under it is shared, as the diagram shows:
 
+```mermaid
+flowchart TD
+    S["shared by all three uses:<br/>one document model, one text layout,<br/>one reckoning engine"] --> F["flowing<br/>(prose)"]
+    S --> G["a grid<br/>(a table)"]
+    S --> A["absolute coordinates<br/>(a slide)"]
+    F --> P["a thin port layer"]
+    G --> P
+    A --> P
+    P --> W["a canvas (WebAssembly)"]
 ```
-one document model        a tree of blocks + a row of inlines + styles drawn on by name
-one text layout           line parting, the range chosen, the cursor, the IME
-one reckoning engine      the graph of dependencies (a table's mostly, but it acts on a formula in prose too)
-three laying-out strategies   flowing / a grid / absolute coordinates   <- this alone forks
-two places drawn to       a canvas (WebAssembly) / native              <- a thin port layer
-```
+
+| Shared part | What it is |
+| :-- | :-- |
+| One document model | A tree of blocks, the rows of text (inlines) each block holds, and styles the blocks name |
+| One text layout | Breaking text into lines, the range selected, the cursor, and the IME (the OS tool that turns key presses into Japanese or Chinese characters) |
+| One reckoning engine | Solves formulas along the graph of dependencies between values: mostly a table's, but it acts on a formula in prose too |
+
+Under the three laying-out strategies, a thin port layer draws to a canvas (an HTML element kspage paints on itself) through WebAssembly. It is the only port (`port/web`); because drawing is kept in that layer, a native window would replace only it.
 
 ### The terms and the types behind them
 
@@ -75,12 +104,25 @@ two places drawn to       a canvas (WebAssembly) / native              <- a thin
 
 ### There are two trees, and they must not be mixed
 
+**The document (`Doc`) and what is shown (`Page`) are two separate trees.** Layout reads the first and builds the second; nothing flows back.
+
+```mermaid
+flowchart LR
+    E["Editor<br/>(the only writer)"] -->|rewrites| D["Doc<br/>saved, undone"]
+    D --> L["layout<br/>(reads only)"]
+    SH["Sheet<br/>(the styles)"] --> L
+    L --> P["Page<br/>rebuilt at every keystroke"]
+    P --> DR["drawing"]
+```
+
 * **`Doc`** is the source. Only it is saved, and only it is what an undo puts back.
 * **`Page`** is the layout result. It is thrown away and rebuilt at every keystroke. The coordinates, the line breaks and the boxes all live here and are never written into the document. To change what the screen shows, change `Doc` or `Sheet`.
 
 **This is why "it does not go into the document" turns up all over the code.** The table of contents, the chapter numbers, a list's marks, a note's number, a graph's contents and the page numbers are all counted at layout and put into `Page`. They never go into `Doc`, where typing could delete them ("What layout recomputes every time" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md)).
 
 ### The idea in code
+
+**This fragment builds a one-paragraph document and lays it out in a column 40 pixels wide.** `fixed.make()` stands in for real text measurement: a table of fixed measurements that needs no real font and gives the same answer every time, as the tests use.
 
 ```kspls
 import "std/mem" { Arena }
@@ -103,35 +145,55 @@ page: = flow.layout(doc, sheet, fixed.make(), 40.0, arena)
 // breaks behind a whitespace. Three rows, and three boxes.
 ```
 
-A block whose style says `arrange = Arrange.grid` is laid out in rows × columns, and only that block is: **that is a table inside flowing prose**. With `Arrange.absolute` it becomes a slide of `Style.width` × `Style.height`, each child in its own `frame`.
+The example lays out one paragraph of plain prose. The other two arrangements, formulas and saving work like this:
 
-Text written as `=A1*3` becomes a formula (`calc.recalc`), in the body too, where it can name a table (`=detail!C4`). **Only the text typed stays in the document**; the value is shown through `Inline.showing`.
-
-`store.save` and `store.load` save and read back (the "Save" and "Open" buttons). `html.write` and `markdown.write` write out, and `markdown_read.read` reads Markdown as a new document. **A document opened from a `.md` is written back to a `.md`.**
+| To get | Write | What happens |
+| :-- | :-- | :-- |
+| A table | a block whose style says `arrange = Arrange.grid` | That block, and only that block, is laid out in rows × columns: **that is a table inside flowing prose** |
+| A slide | a block whose style says `Arrange.absolute` | It becomes a slide of `Style.width` × `Style.height`, each child in its own `frame` |
+| A formula | text such as `=A1*3`, in a table or in the body | It becomes a formula (`calc.recalc`); in the body it can name a table (`=detail!C4`). **Only the text typed stays in the document**; the value is shown through `Inline.showing` |
+| Save and open | `store.save` / `store.load` | Save and read back (the "Save" and "Open" buttons) |
+| Other formats | `html.write` / `markdown.write` / `markdown_read.read` | Write out HTML or Markdown, and read Markdown as a new document. **A document opened from a `.md` is written back to a `.md`** |
 
 ### What happens on one keystroke
 
-```
-(1) keys.js               pick the keystroke up                       port/web/
-(2) bridge.kspls           call the wasm's entry point (#export)       port/web/
-(3) Editor.insert         rewrite the document, pile an undo break    write/
-(4) kspage_web_layout      from here down it carries on in one call    port/web/
-    - calc.recalc         solve the formula cells in dependency order expr/
-    - flow.layout         Doc + Sheet + measurements -> Page          lay/
-(5) draw.js               put Page's boxes out to the canvas          port/web/
-```
+**A keystroke passes through five steps, from the browser into the core and back out to the screen.**
+
+| Step | Where | What it does | Folder |
+| :-- | :-- | :-- | :-- |
+| (1) | `keys.js` | Picks the keystroke up | `port/web/` |
+| (2) | `bridge.kspls` | Calls the wasm's entry point (`#export`) | `port/web/` |
+| (3) | `Editor.insert` | Rewrites the document, and adds a break to the undo record | `write/` |
+| (4) | `kspage_web_layout` | From here down it carries on in one call: | `port/web/` |
+| | `calc.recalc` | solves the formula cells in dependency order | `expr/` |
+| | `flow.layout` | turns `Doc` + `Sheet` + the measurements into `Page` | `lay/` |
+| (5) | `draw.js` | Puts `Page`'s boxes out to the canvas | `port/web/` |
 
 **Only (3) rewrites the document**: (4) only reads it, and (5) sees only `Page`. So when the screen is wrong, the fault is in the rewrite (3), the layout (4) or the drawing (5).
 
 Note: **(4) redoes everything every time.** Its cost, and why it stays, are in "Accepted limit 1: typing one character lays the whole document out again" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md).
 
-**A formula is written in the code's own syntax** ("Formulas use KSPL's expression syntax" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md)), so a document holding prose, tables and figures can stand beside the code. A figure is a slide. A slide laid out at absolute coordinates already goes into the flow, so figures need no other container. (A box, a connecting line and a number are all a figure needs.)
+**A formula is written in the code's own syntax** ("Formulas use KSPL's expression syntax" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md)), so a document holding prose, tables and figures can stand beside the code.
+
+**A figure is a slide.** A slide laid out at absolute coordinates already goes into the flow, so figures need no other container. (A box, a connecting line and a number are all a figure needs.)
 
 What kspage leaves out is in "What it does not hold" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md).
 
 ## What is here
 
-The table below lists the folders from the bottom layer up, by what each one knows.
+**kspage is split into folders by what each one knows**: a folder may import only the folders below it. The table lists them from the bottom layer up; the diagram shows the same order, each arrow pointing at what a folder builds on.
+
+```mermaid
+flowchart BT
+    expr["expr<br/>formulas"] --> model["model<br/>the document"]
+    lay["lay<br/>layout"] --> expr
+    share["share<br/>saving, writing out"] --> lay
+    write["write<br/>editing"] --> share
+    content["content<br/>shipped documents"] --> model
+    port["port/web<br/>the browser bridge"] --> write
+    port --> content
+    tests["tests"] --> port
+```
 
 | Folder | What it holds | What it knows |
 | :-- | :-- | :-- |
@@ -144,20 +206,30 @@ The table below lists the folders from the bottom layer up, by what each one kno
 | `kspage/port/web/` | The bridge to the browser, built as wasm32, measuring and drawing on a canvas. | the six above |
 | `kspage/tests/` | The tests that inspect the inside of the unit. | the seven above |
 
-`kspage/content/` sits just below `kspage/port/web/` rather than at the bottom, because only `kspage/port/web` imports it. Its own files import `model` alone. **Do not import it from the other five**, or the core would know the manual's wording.
+**`kspage/content/` sits just below `kspage/port/web/` rather than at the bottom**, because only `kspage/port/web` imports it. Its own files import `model` alone. **Do not import it from the other five**, or the core would know the manual's wording.
 
-**`kspage/tests/` sits inside the package**, so the tests reach its inside without making it `pub` (why is "13.1 A test inspecting the inside of a unit goes inside that unit" in [`docs/DESIGN.md`](../docs/DESIGN.md)). `kspage/tests/main.kspls` gives them a `main` of their own, so this folder's `make test` runs them alone. Only what the repository's `tests/` calls is `pub`: `run_kspage` in `kspage/tests/all.kspls`, which runs them all; `kspage/tests/trip.kspls`, for the round-trip gate; and `kspage/tests/seeds.kspls`, which builds the fuzz seeds. [I0402] in `ksplc.cfg` holds the rest at zero. Do not import `kspage/tests/` from the product's code, or the tests end up in what is built.
+**`kspage/tests/` sits inside the package**, so the tests reach its inside without making it `pub` (visible to every package; why is "13.1 A test inspecting the inside of a unit goes inside that unit" in [`docs/DESIGN.md`](../docs/DESIGN.md)). `kspage/tests/main.kspls` gives them a `main` of their own, so this folder's `make test` runs them alone.
+
+Only what the repository's `tests/` calls is `pub`:
+
+| Name | What it is for |
+| :-- | :-- |
+| `run_kspage` in `kspage/tests/all.kspls` | Runs all the tests |
+| `kspage/tests/trip.kspls` | The round-trip gates (a file read in and written back out) |
+| `kspage/tests/seeds.kspls` | Builds the fuzz seeds (the starting inputs that fuzzing varies) |
+
+[I0402] in `ksplc.cfg` holds the rest at zero. Do not import `kspage/tests/` from the product's code, or the tests end up in what is built.
 
 **No folder imports one above it.** What holds that order, and why `kspage/lay/` is one loop, are in [`kspage/docs/DESIGN.md`](docs/DESIGN.md#why-the-folders-are-split-by-what-they-know).
 
-**Each file's head comment (`//<`) says what it holds**, so the files of the five core folders and `content/` are not listed here. A list kept by hand beside them would drift. Each document shipped with the product (`content/`) assembles a `Doc` and a `Sheet` and returns them, and knows neither an entry point nor a screen.
+**Each file's head comment (`//<`) says what it holds**, so the files of the five core folders and `content/` are not listed here. A list kept by hand beside them would drift. Each document shipped with the product (`content/`) assembles a `Doc` and a `Sheet` and returns them, and knows neither an entry point (a function the screen calls into) nor a screen.
 
 **The files of the bridge to the browser (`port/web/`) are listed**, because `make test-conventions` checks that this guide names every one of them. Several exist only because of the 1000-line cap on a file.
 
 | File | Contents |
 | :-- | :-- |
 | [`kspage/port/web/bridge.kspls`](port/web/bridge.kspls) | The KSPL side: the entry points that go outside (`#export`). |
-| [`kspage/port/web/state.kspls`](port/web/state.kspls) | One page's state (the document, the cursor, the arena), the only state, and the entry points that borrow dimensions. |
+| [`kspage/port/web/state.kspls`](port/web/state.kspls) | One page's state (the document, the cursor, the arena), the only state, and the small helpers the entry-point files share. No entry point is here. |
 | [`kspage/port/web/face.kspls`](port/web/face.kspls) | The entry points that **apply** a style (to the selection, a list, a paragraph) and the insertions that follow from it (a shape, an image, a link, a name, a note, a comment). |
 | [`kspage/port/web/face_edit.kspls`](port/web/face_edit.kspls) | The entry points that change **the i-th style's contents** (the look, how a number is shown, a paragraph's settings, the frame and the fill, the underline, the line-head mark, a heading's depth, the look changed by the value). |
 | [`kspage/port/web/objects.kspls`](port/web/objects.kspls) | The entry points for the contents of the container you are in: line them up, select one, change the stacking order. |
@@ -167,8 +239,8 @@ The table below lists the folders from the bottom layer up, by what each one kno
 | [`kspage/port/web/theme.kspls`](port/web/theme.kspls) | The entry points for themes (the count, a name, wearing one). |
 | [`kspage/port/web/inout.kspls`](port/web/inout.kspls) | The entry points for taking the document in and out (the save that reads back, HTML and Markdown out, Markdown in, a blank sheet). |
 | [`kspage/port/web/outline.kspls`](port/web/outline.kspls) | The list of headings and the entry point that jumps there, both built from one row, `Page.headings`. |
-| [`kspage/port/web/kspage.js`](port/web/kspage.js) | The JS side's entry point: starts the wasm, makes `ks` (the set the parts share), and assembles the parts. |
-| [`kspage/port/web/draw.js`](port/web/draw.js) | Draws the laid-out boxes with `fillText`, the bands, the shapes and the handles, and moves the cursor's sheet. |
+| [`kspage/port/web/kspage.js`](port/web/kspage.js) | The JS side's entry point: starts the wasm, makes `ks` (the one object the parts share), and assembles the parts. |
+| [`kspage/port/web/draw.js`](port/web/draw.js) | Draws the laid-out boxes with `fillText`, the bands, the shapes and the handles, and moves the cursor's sheet (an element of its own over the canvas). |
 | [`kspage/port/web/draw_crop.js`](port/web/draw_crop.js) | Draws onto another canvas (a printed sheet, a preview, a thumbnail, a slide shown alone), the same way as `draw.js`. |
 | [`kspage/port/web/pin.js`](port/web/pin.js) | The table heading kept in view, on a sheet of its own, while its table passes under the tools. Pressing it puts the cursor in the heading. |
 | [`kspage/port/web/narrow.js`](port/web/narrow.js) | The arrow in every heading cell, and the panel it opens (the ordering, the conditions, a box to search the values, the ticks). |
@@ -194,7 +266,7 @@ The table below lists the folders from the bottom layer up, by what each one kno
 | [`kspage/port/web/here.js`](port/web/here.js) | The menu of the place, on a right-click over the body. |
 | [`kspage/port/web/drop.js`](port/web/drop.js) | Opening a file dropped onto the screen, through `file.js`'s `takeChosen` for a document and `command.js`'s `takeImage` for an image. |
 | [`kspage/port/web/side.js`](port/web/side.js) | The list on the right (the slides and the contents), the status bar at the bottom edge, and the viewer's overrides. |
-| [`kspage/port/web/rt.c`](port/web/rt.c) | `memset` / `memcpy` / `memmove`, supplied here because wasm has no libc. |
+| [`kspage/port/web/rt.c`](port/web/rt.c) | `memset` / `memcpy` / `memmove`, supplied here because wasm has no libc (the C standard library). |
 | [`kspage/port/web/imports.txt`](port/web/imports.txt) | The entry points that may be borrowed from outside. **The link is bound by this list.** |
 | [`kspage/port/web/page.html`](port/web/page.html) | The page's template (the frame and the menus' text), naming the texts to bind. It works only once its marks are filled in. |
 | [`kspage/port/web/menus.html`](port/web/menus.html) | The band's Style, Table and Insert menus: a fragment of the template, named by `page.html`. |
@@ -202,14 +274,14 @@ The table below lists the folders from the bottom layer up, by what each one kno
 
 ## Reading order
 
-**Read along the line of understanding, `model` -> `lay` -> `write`**, not in import order (`model` -> `expr` -> `lay` -> `share` -> `write` -> `port/web`).
+**Read along the line of understanding, `model` -> `lay` -> `write`**, not in import order (`model` -> `expr` -> `lay` -> `share` -> `write` -> `port/web`). First what a document is, then how it becomes a screen, then how it is changed; formulas, saving and the browser come after.
 
 ### (1) The document and the styles — `model/`
 
 The base under everything, and **the only folder that knows no other**.
 
 * [`kspage/model/doc.kspls`](model/doc.kspls) — `Doc` / `Block` / `Rect`. Read `Block`'s fields and `Block.add_text` first: **a block has no field for its kind**, only `style`, a name.
-* [`kspage/model/style.kspls`](model/style.kspls) — `Sheet` (from a name to a `Style`) and `Style`. Read `Arrange` (the three arrangements) and `Sheet.add` first. **What says "this is a table" is the style, not the document**: that is the system's keystone.
+* [`kspage/model/style.kspls`](model/style.kspls) — `Sheet` (from a name to a `Style`) and `Style`. Read `Arrange` (the three arrangements) and `Sheet.add` first. **What says "this is a table" is the style, not the document**: that is the idea the whole system rests on.
 * [`kspage/model/run.kspls`](model/run.kspls) — `Inline`: the row of characters and the decoration laid on it.
 * The rest (`font` / `fixed_font` / `paint` / `marker` / `collect` / `fence` / `ident` / `limit` / `locate` / `number` / `over` / `paper` / `panel_paint` / `style_when` / `day` / `filter`) can wait until you need them.
 
@@ -217,18 +289,22 @@ The base under everything, and **the only folder that knows no other**.
 
 Reads `Doc` and makes `Page`. **Nothing here rewrites one byte.**
 
-* [`kspage/lay/flow.kspls`](lay/flow.kspls) — the entry point `layout(doc, sheet, src, width, arena)`, where everything starts, and flow layout itself.
+* [`kspage/lay/flow.kspls`](lay/flow.kspls) — the entry point `layout(doc, sheet, src, width, arena)`, where everything starts, and flow layout itself (prose wrapping into lines).
 * [`kspage/lay/line.kspls`](lay/line.kspls) — how one line is built (where it breaks, where it is drawn): the body of the text layout, and the most costly code there is.
 * [`kspage/lay/grid.kspls`](lay/grid.kspls) / [`kspage/lay/absolute.kspls`](lay/absolute.kspls) — the other two strategies, shorter than you would think because they leave the contents to flow.
 * [`kspage/lay/caret.kspls`](lay/caret.kspls) — `hit_test(page, x, y)`, which **turns the place pressed back into a place in the document**: the hinge between the screen and the document.
 
 ### (3) Editing — `write/`
 
-* [`kspage/write/edit.kspls`](write/edit.kspls) — `Editor`. **Only its `do_*` operations rewrite the document.** They record the undo in the same place, so no rewrite can escape the undo. The undo record's shape is [`kspage/write/record.kspls`](write/record.kspls).
-* [`kspage/write/typing.kspls`](write/typing.kspls) — `Editor.insert` / `backspace` / the IME / moving the cursor: the entry point to (3).
+Changes the document. Every change goes through one type, `Editor`.
+
+* [`kspage/write/edit.kspls`](write/edit.kspls) — `Editor`. **Only its `do_*` operations rewrite the document.** Each one also records how to undo itself, in the same place, so no rewrite can escape the undo. The undo record's shape is [`kspage/write/record.kspls`](write/record.kspls).
+* [`kspage/write/typing.kspls`](write/typing.kspls) — `Editor.insert` / `backspace` / the IME / moving the cursor: the entry point to step (3) of "What happens on one keystroke".
 * The rest (`block` / `shape` / `cells` / `insert` / `field` / `theme` / `csv` / `again`) are moves built from `edit`'s tools, split into files by purpose and nothing more. Read one when you need it.
 
 ### (4) Formulas — `expr/`
+
+Solves the formulas: text that begins with `=`.
 
 * [`kspage/expr/calc.kspls`](expr/calc.kspls) — `recalc(doc, sheet)` solves the cells beginning with `=` in dependency order.
   * Caution: **Call it before laying out**, so that the text shown becomes the computed value.
@@ -244,39 +320,53 @@ Saving, writing out and taking in.
 
 ### (6) Connecting to the browser — `port/web/`
 
-**The core calls neither the OS nor the canvas.** JS measures text for it through `Font_source` and draws on a canvas. Start with the row of `#export` in [`kspage/port/web/bridge.kspls`](port/web/bridge.kspls), which is every entry point from the screen into the core; then [`kspage/port/web/kspage.js`](port/web/kspage.js) and [`kspage/port/web/page.js`](port/web/page.js), which start the wasm and assemble the parts. One keystroke goes [`kspage/port/web/keys.js`](port/web/keys.js) → [`kspage/port/web/draw.js`](port/web/draw.js). What every other file holds is in "What is here" above. What the boundary promises is in "The boundary between the core and the browser" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md).
+**The core calls neither the OS nor the canvas.** JS measures text for it, answering through `Font_source` (the core's interface for text measurements), and draws on a canvas. Start with the row of `#export` in [`kspage/port/web/bridge.kspls`](port/web/bridge.kspls), which is every entry point from the screen into the core; then [`kspage/port/web/kspage.js`](port/web/kspage.js) and [`kspage/port/web/page.js`](port/web/page.js), which start the wasm and assemble the parts. One keystroke goes [`kspage/port/web/keys.js`](port/web/keys.js) → [`kspage/port/web/draw.js`](port/web/draw.js). What every other file holds is in "What is here" above. What the boundary promises is in "The boundary between the core and the browser" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md).
 
 ## Common changes
 
-**Few changes stay in one place.** The common ones, and the places easily forgotten:
+**Few changes stay in one place.** The table lists the common ones, the file you start in, the files easily forgotten, and the gate that catches a miss:
 
 | What you want to do | Where you touch | Easily forgotten | The gate |
 | :-- | :-- | :-- | :-- |
 | Add a field to a style | `kspage/model/style.kspls` | `kspage/share/store.kspls` (saving), `kspage/share/html.kspls` (writing out), `kspage/port/web/face.kspls` (the screen's entry point) | `make debug` / `make test-kspage-wasm` |
-| Add a move | a file under `kspage/write/` | `kspage/write/record.kspls` (the instruction that undoes it) | a test that undoes it in one step |
+| Add a move (an editing operation) | a file under `kspage/write/` | `kspage/write/record.kspls` (the instruction that undoes it) | a test that undoes it in one step |
 | Expose an entry point to the screen | `#export` in `kspage/port/web/bridge.kspls` | the JS side in `kspage/port/web/api.js` and the wiring (`port/web/*.js`), `kspage/port/web/face_edit.kspls` where it bears on the look, and the sources `kspage/port/web/page.html` names | `make test-kspage-browser` |
 | Change the shape it is saved in | `kspage/share/store.kspls` | **raise `version`**: otherwise an old file is silently read as something else | `make debug` |
-| Change a text shown on the screen | `port/web/*.js` / `kspage/port/web/page.html` / `content/manual.kspage` (edited in kspage itself) | the screen and the code share one vocabulary: a wording turned away is turned away in the code and the comments too ("The vocabulary is one" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md)) | `make test-conventions` |
+| Change a text shown on the screen | `port/web/*.js` / `kspage/port/web/page.html` / `content/manual.kspage` (edited in kspage itself) | the screen and the code share one vocabulary: a word kept off the screen is kept out of the code and the comments too ("The vocabulary is one" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md)) | `make test-conventions` |
 
 Note: **Whatever the change, finish with `make ci-linux`**, every Linux gate ("What each platform runs" in [`docs/SPEC-gates.md`](../docs/SPEC-gates.md)).
 
 ## Pitfalls
 
-* **Do not mix the arenas.** The document lives in a long-lived arena, and `Page` in a short-lived one thrown away per keystroke ("Whether an entry point takes an arena depends on what it returns" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md)).
-* **When you touch the text being composed, run both `make test-kspage-browser` and `make test-kspage-served`.** The tests confirm that characters of more than one byte can be typed, and what happens with a server present shows only in the second.
+* **Do not mix the arenas.** An arena is a block of memory whose pieces are all freed at once. The document lives in a long-lived arena, and `Page` in a short-lived one thrown away per keystroke ("Whether an entry point takes an arena depends on what it returns" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md)). Something of the document's placed in the short-lived arena is gone after the next keystroke.
+* **When you touch the text being composed, run both `make test-kspage-browser` and `make test-kspage-served`.** Text is being composed while an IME is still choosing characters, before they are committed. The tests confirm that characters of more than one byte can be typed, and what happens with a server present shows only in the second.
 * **The page's JS runs as one script**, so a name declared in two files stops all of it. Only two objects pass between the files ("The page's scripts share one scope" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md)).
 
 ## The checks, and what none of them sees
 
-`make test` (`make debug-kspage` from the root, and part of `make debug` on both C and LLVM) checks layout and editing as golden tests (`tests/*.kspls`), with the table of fixed measurements plugged in. `make test-wasm` (`make test-kspage-wasm`) runs the core built for wasm32 (`tests/wasm/`, run by `node`).
+**Four checks cover kspage, from the core alone up to the page a real server serves.** Each command runs from this folder; the name in the second column runs the same check from the repository's root.
 
-`make test-browser` (`make test-kspage-browser`) runs the scripts in `tests/browser/` on the built page in a real headless browser. The HTML written out is drawn for real in an `iframe`, since only drawing shows whether its class names and CSS rules match.
+| From this folder | From the root | What it checks |
+| :-- | :-- | :-- |
+| `make test` | `make debug-kspage` (also part of `make debug`, on both C and LLVM) | Layout and editing, as golden tests (`tests/*.kspls`: each compares the result with a stored, known-good answer), with the table of fixed measurements plugged in |
+| `make test-wasm` | `make test-kspage-wasm` | The core built for wasm32 (`tests/wasm/`, run by `node`) |
+| `make test-browser` | `make test-kspage-browser` | The scripts in `tests/browser/`, on the built page in a real headless browser (one that runs with no window). The HTML written out is drawn for real in an `iframe`, since only drawing shows whether its class names and CSS rules match |
+| `make test-served KSSRV=<kssrv>` | `make test-kspage-served` | The same sections, on the page a real `kssrv --local` served. kssrv is another package, so it is passed in; from the root, both are built and passed in |
 
-`make test-served KSSRV=<kssrv>` runs the same sections on the page a real `kssrv --local` served. kssrv is another package, so it is passed in. `make test-kspage-served` from the root builds both and passes them in. What each of these gates checks, and what it does when no browser is found, are in the notes to "What each platform runs" in [`docs/SPEC-gates.md`](../docs/SPEC-gates.md). How the checks keep their documents apart is in "How the page is checked" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md).
+What each of these gates checks, and what it does when no browser is found, are in the notes to "What each platform runs" in [`docs/SPEC-gates.md`](../docs/SPEC-gates.md). How the checks keep their documents apart is in "How the page is checked" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md).
 
-**What none of the three sees**: what comes out on the canvas (open the page yourself, by the steps in "Run it"); the window that chooses a file, which cannot open headless; and a real composition, since a headless browser has no input method (open the page by hand and type). To confirm that a save overwrote, open a file by hand, save twice, and see that nothing grew.
+**What none of them sees**, and how to check it by hand:
+
+| Not seen | Check it by hand |
+| :-- | :-- |
+| What comes out on the canvas | Open the page yourself, by the steps in "Run it" |
+| The window that chooses a file, which cannot open headless | Open a file through it |
+| A real composition, since a headless browser has no input method | Open the page by hand and type |
+| Whether a save overwrote | Open a file by hand, save twice, and see that nothing grew |
 
 ## Files near the limit and how they split
+
+**Each file below is close to the cap of 1000 lines a file may hold.** The table says which part leaves it, and for which new file, when it next has to grow. `priv` marks a name visible only inside its own file; some rows name one that stops being `priv` when its group moves.
 
 | File | What to split out | Destination |
 | :-- | :-- | :-- |
@@ -290,13 +380,13 @@ Note: **Whatever the change, finish with `make ci-linux`**, every Linux gate ("W
 | [`kspage/share/markdown.kspls`](share/markdown.kspls) | writing out a grid: a cell, the rule row under the heading, a column's alignment and a table's marks (`cell_into` / `table_notices` / `align_of` / `rule_into` / `write_table`). What stays is writing the flow. **It needs `Sink` passed in**, and `runs_into` / `start_block` / `lead_in` / `notice` stop being `priv` | a new `markdown_table.kspls` under `kspage/share/` |
 | [`kspage/share/markdown_read.kspls`](share/markdown_read.kspls) | what acts inside one line: the run being held and how it is put in, a code text's fence, the marks (a link, a picture, a note's mark) and the notes' definition lines (`Def` / `collect_defs` / `def_text` / `dest_of` / `flush_run` / `add_code_run` / `trimmed_text` / `Ticked` / `ticked_at` / `trimmed` / `all_spaces` / `add_inlines` / `mark_at` / `image_at` / `note_at`, with `Draft`). What stays is reading the lines themselves. **`Draft` goes with it and `Into` stays**, so the line reader passes `Into` in | a new `markdown_inline.kspls` under `kspage/share/` |
 
-Note: **Splitting an `Editor` method costs every caller an import.** An extension method is seen only where its file is imported. So moving the frame group out of [`kspage/write/block.kspls`](write/block.kspls) adds an `import` to every file that calls it. Count the callers before choosing which group leaves.
+Note: **Splitting an `Editor` method costs every caller an import.** An extension method (a method added to `Editor` from a file other than the one declaring it) is seen only where its file is imported. So moving the frame group out of [`kspage/write/block.kspls`](write/block.kspls) adds an `import` to every file that calls it. Count the callers before choosing which group leaves.
 
-**The build accepts a split with nothing added.** `make web` deliberately does not list the bound texts, since the template names them ([`kspage/Makefile`](Makefile)). A fragment needs only its mark and a row in the `port/web/` table under "What is here".
+**The build accepts a split with nothing added.** `make web` deliberately does not list the bound texts (the scripts, styles and fragments copied into the one page), since the template names them ([`kspage/Makefile`](Makefile)). A fragment needs only its mark and a row in the `port/web/` table under "What is here".
 
 **Do not move the navigation's labels out of `page.html`.** The manual's cross-check reads them from that file by path (`tests/support/conventions_manual.kspls`). With `side-tabs` moved, it finds no labels, and a check with nothing to match against passes.
 
-**When several sections share state rewritten inside one closure, moving blocks does not split the file**: a cut anywhere sends dozens of names across the boundary. First gather that state into one named object (`kf` in [`kspage/port/web/file.js`](port/web/file.js), the same shape as `ks`).
+**When several sections share state rewritten inside one closure, moving blocks does not split the file**: a cut anywhere sends dozens of names across the boundary. (A closure here is one enclosing JS function whose local variables the sections all read and write.) First gather that state into one named object (`kf` in [`kspage/port/web/file.js`](port/web/file.js), the same shape as `ks`).
 
 **Name a file with a word no variable already uses.** An import's alias can collide with a variable's name. [`kspage/model/paint.kspls`](model/paint.kspls) is not called `ink`, because `ink.drawn(...)` would be resolved as that variable's method.
 

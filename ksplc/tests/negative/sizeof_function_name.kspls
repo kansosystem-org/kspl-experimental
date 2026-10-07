@@ -1,0 +1,58 @@
+//< `sizeof` of a function's name is refused: a function's size has no one meaning
+//<
+//< Read as a type, the name took the function's return type (`sizeof(twice)` gave an `I32`'s 4,
+//< where a pointer to it is 8), and a written specialization or a method named through its type
+//< reached C as an undeclared name. `offsetof` reads its first argument as a type the same way.
+//< Caution: Keep the passing side: `sizeof` of a function type and of a variable holding one.
+// EXPECT: 'sizeof' cannot take the function 'twice': a function's size has no one meaning
+// EXPECT: 'sizeof' cannot take the function 'twice'
+// EXPECT: such as 'sizeof(fn(x: I32): I32)'
+// EXPECT: 'sizeof' cannot take the function 'same<|I32|>'
+// EXPECT: 'sizeof' cannot take 'Holder<|I32|>.keep': a member named through its type is neither a type nor a value
+// EXPECT: 'sizeof' cannot take 'Plain.v'
+// EXPECT: 'twice' is a function, not a type
+// EXPECT-NOT: undeclared identifier
+// EXPECT-NOT: 'I32' is not one
+priv typedef Op = fn(x: I32): I32
+
+priv fn twice(x: I32): I32
+    return x * 2
+
+priv fn same<|T|>(x: T): T
+    return x
+
+priv struct Holder<|T|>
+    v: T
+
+impl<|T|> Holder<|T|>
+    fn keep(x: T): T
+        return x
+
+priv struct Plain
+    v: I32
+
+// A constant's context folds it apart from a body's.
+priv by_name: U8[sizeof(twice)] = ::{}
+
+fn case_plain(): Sz
+    return sizeof(twice)
+
+fn case_specialization(): Sz
+    return sizeof(same<|I32|>)
+
+fn case_method(): Sz
+    return sizeof(Holder<|I32|>.keep)
+
+fn case_field_through_type(): Sz
+    return sizeof(Plain.v)
+
+fn case_offsetof(): Sz
+    return offsetof(twice, v)
+
+fn case_passing(): Sz
+    f: Op = twice
+    return sizeof(fn(x: I32): I32) + sizeof(f) + sizeof(Op)
+
+fn main()
+    _s: = case_plain() + case_specialization() + case_method() + case_field_through_type() +
+        case_offsetof() + case_passing() + by_name.len

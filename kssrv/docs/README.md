@@ -4,8 +4,8 @@
 
 ## What is here
 
-* [`kssrv/docs/DESIGN.md`](DESIGN.md) — The decisions behind the server, their grounds, and what each gives up.
-* [`kssrv/docs/SPEC-api.md`](SPEC-api.md) — What a client may ask for over HTTP, and the limits it writes against.
+* [`kssrv/docs/SPEC-api.md`](SPEC-api.md) — What a client may ask for over HTTP, and the limits it writes against. Read this to call the server.
+* [`kssrv/docs/DESIGN.md`](DESIGN.md) — The decisions behind the server, their grounds, and what each gives up. Read this to change the server.
 * [`kssrv/docs/PLAN.md`](PLAN.md) — What is left, and what marks each stage as done.
 
 ## Further reading

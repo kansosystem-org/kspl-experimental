@@ -79,6 +79,39 @@
     };
   }
 
+  // A wait on work done off the page's thread (the wasm's compile, IndexedDB, reading a `Blob`):
+  // it returns a promise that settles as `work` does, keeping the page's thread fed meanwhile.
+  // Caution: **Wait on such work through here, never on a timer nor bare.** The dumping side's
+  // virtual clock jumps to the next timer whenever the page's thread has nothing to run, and it
+  // does not see work off that thread: unfed, a cap counted on it, or the whole budget, runs out in
+  // a moment of real time on a busy machine, and the dump comes before the answer. **Fed** (one
+  // message after another) **it stands still** until the answer comes; real time is capped outside
+  // (`kspage/Makefile`'s `timeout`), and a round cut there names its wait as its last line.
+  let feeding = 0;
+  let flowing = false;
+  const feed = new MessageChannel();
+  feed.port1.onmessage = () => {
+    flowing = feeding > 0;
+    if (flowing) feed.port2.postMessage(0);
+  };
+  function fed(work) {
+    feeding += 1;
+    if (!flowing) {
+      flowing = true;
+      feed.port2.postMessage(0);
+    }
+    const off = () => {
+      feeding -= 1;
+    };
+    return Promise.resolve(work).then((got) => {
+      off();
+      return got;
+    }, (e) => {
+      off();
+      throw e;
+    });
+  }
+
   // A wait that looks until it comes out, and a safety net that says it could not be waited out.
   // Caution: **Do not write the length of the wait per section** — a hand-written net comes out
   // shorter than the real wait, names no bad wait, and fails rounds that were in time; this one
@@ -338,6 +371,8 @@
       hold: hold,
       // The wait and the safety net; **no milliseconds in a section** (why: `waitFor`'s comment).
       waitFor: waitFor, netFor: netFor,
+      // The wait on work off the page's thread (why: its own comment).
+      fed: fed,
       pickFile: pickFile,
     };
   }
@@ -352,13 +387,10 @@
     el.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
-  // It waits for the page to stand up before starting.
-  // Caution: **Do not look once and give up** — the initialising is asynchronous (`kspage.js`'s
-  // `WebAssembly.instantiate(...).then`), and a fixed wait fails as a real failure once it grows.
-  function runProbe() {
-    const app = window.kspage;
-    if (!app) {
-      check(false, "the page has stood up (there is no window.kspage)");
+  // It turns the sections on the page that stood up (`app`), or marks why it did not (`why`).
+  function runProbe(app, why) {
+    if (why !== "") {
+      check(false, "the page has stood up (" + why + ")");
       report();
       return;
     }
@@ -385,19 +417,20 @@
     }
   }
 
-  // Caution: **Lay a cap down** (a page never standing up would run out of time with no mark and
-  // the reason nowhere); at the cap it gives up and `runProbe` writes the failure.
-  const settleMs = 700;
-  const readyLimitMs = 5000;
-  const pollMs = 50;
-  setTimeout(function () {
-    let waited = 0;
-    const ready = setInterval(function () {
-      waited += pollMs;
-      if (window.kspage || waited >= readyLimitMs) {
-        clearInterval(ready);
-        runProbe();
-      }
-    }, pollMs);
-  }, settleMs);
+  // It starts when the page says it has stood up (`window.kspageReady`, `port/web/page.js`), and
+  // marks the reason where the start failed. **Through `fed`**: the wasm compiles off the page's
+  // thread, so a cap on the clock fails a slow start as a broken one (why: `fed`'s comment).
+  // Caution: **Turn the sections in a task of their own, not in the promise's `then`**: a section
+  // that throws inside a `then` never reaches the `error` listener above, and its marks stop.
+  if (!window.kspageReady) {
+    runProbe(null, "the page publishes no window.kspageReady");
+    return;
+  }
+  waiting("the page to stand up");
+  const stood = (app, why) => {
+    waiting("");
+    setTimeout(() => runProbe(app, why), 0);
+  };
+  fed(window.kspageReady).then((app) => stood(app, ""),
+    (e) => stood(null, String((e && e.message) || e)));
 })();

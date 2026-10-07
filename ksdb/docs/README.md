@@ -1,12 +1,12 @@
 # ksdb/docs
 
-**The documents `ksdb` carries.** Each is reached from the package's entry point, [`ksdb/README.md`](../README.md).
+**The documents of `ksdb`, the append-only record that survives power cuts.** Each is reached from the package's entry point, [`ksdb/README.md`](../README.md).
 
 ## What is here
 
 * [`ksdb/docs/DESIGN.md`](DESIGN.md) — why appending only, and why a record is laid out as it is.
 
-What the package publishes is not written here: `ksplc doc ksdb` lists every file, and `ksplc doc ksdb/<file>` gives one file's declarations, rendered from the sources when asked.
+The list of what the package offers is not kept here. `ksplc doc ksdb` lists every file, and `ksplc doc ksdb/<file>` gives one file's declarations; both are read from the sources each time you ask.
 
 ## Further reading
 

@@ -7,7 +7,6 @@ import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
 import "ksplc/sema/type/def" { Fn_sig }
 import "ksplc/sema/type/env" as sema_type_env
-import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/str"
 
 // ==========================================
@@ -49,10 +48,10 @@ fn check_args_against_instance(c: Sema_ctx$@, args_node: Ast_node$@, inst_node: 
         a_id: = arg_node.type_id
         if a_id == 0 || sema_type_env.is_unknown(a_id) || a_id == p_id
             continue
-        // A bare function name got the type `generic_fn_value_type_id`, **a marker with no
-        // signature**, since a generic call passes no expected type (the matching fix in
-        // infer_call_args). Now the parameter's type is known, so the function is checked against
-        // it.
+        // A function's name got the type `generic_fn_value_type_id`, **a marker with no
+        // signature**, since a generic call passes no expected type (value_of_fn in
+        // sema/body/resolve_path.kspls). Now the parameter's type is known, so the function is
+        // checked against it.
         if a_id == c.env.generic_fn_value_type_id()
             arg_node.type_id = arg_node.infer_expr(c, p_id) catch a_id
             continue
@@ -156,18 +155,7 @@ fn infer_call_args(c: Sema_ctx$@, args_node: Ast_node$@, def_node: Ast_node$@,
                 expected_arg_id = param_type_node.resolve_type(c)?
                 c.set_current_file(old_file)
 
-        $eval_id: = arg_node.infer_expr(c, expected_arg_id)?
-
-        // On a generic call a bare function name has no expected type, so its type would default to
-        // sym.type_id, the function's return type (and genllvm would emit a wrong scalar type for
-        // the function-pointer argument).
-        if sema_type_env.is_unknown(expected_arg_id) &&
-            (arg_node.kind_id == .k_identifier || arg_node.kind_id == .k_expr_path) &&
-            arg_node.def_node != null && arg_node.def_node.sym_ptr != null
-            arg_sym: = Sema_symbol$@::arg_node.def_node.sym_ptr
-            if arg_sym.kind.is_function()
-                eval_id = c.env.generic_fn_value_type_id()
-                arg_node.type_id = eval_id
+        eval_id: = arg_node.infer_expr(c, expected_arg_id)?
 
         if !sema_type_env.is_unknown(expected_arg_id) && !sema_type_env.is_unknown(eval_id) &&
             expected_arg_id != eval_id

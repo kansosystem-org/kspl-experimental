@@ -9,6 +9,7 @@ import "ksplc/sema/decl/declare" as sema_decl_declare
 import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/decl/mono" as sema_decl_mono
 import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
+import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/decl/reflect" as sema_decl_reflect
 import "ksplc/sema/decl/registry" as sema_decl_registry
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
@@ -276,7 +277,7 @@ priv fn resolve_ret_type_or_void(type_node: Ast_node$@, c: Sema_ctx$@): I32?Sema
     return c.env.get_or_add("Void")
 
 impl Sema_ctx
-    fn report_unbound_impl_gen_param($r: Self$@, node: Ast_node$@, name: U8[], target: U8[]) //<
+    fn report_unbound_impl_gen_param(r: Self$@, node: Ast_node$@, name: U8[], target: U8[]) //<
         //< Reports that an impl's type argument does not appear in the target type
         //<
         //< It shows the target type; without it, the user cannot see which parameter is spare.
@@ -325,8 +326,12 @@ impl Ast_node
         r.refuse_missing_body(c, name)
 
         fqn: = c.make_fqn(name)
+        // Caution: **Register the template under its FQN alone.** The template table is one for
+        // the whole build, while a function's short name names it only inside its file: under the
+        // short name, another file's `priv fn same<|T|>` answered a call of this file's own
+        // `same`. A bare name finds it through read_written_name (name.kspls).
         if has_gen
-            sema_decl_declare.register_template_names(c, fqn, name, r)
+            sema_decl_declare.register_template(c, fqn, r)
 
         $sym_kind: = sema_type_scope.Sym_kind.function(false)
         if has_gen
@@ -358,7 +363,7 @@ impl Ast_node
                     base type instead.")
 
         base_slice: = ts.get_generic_base_name()
-        target_fqn: = c.resolve_fqn_for_type(base_slice)
+        target_fqn: = c.impl_target_fqn(r)
         has_gen: = (gen_params_node != null)
 
         if has_gen
@@ -457,7 +462,7 @@ impl Ast_node
                     if prev != null && prev != m
                         c.clear_scratch().s("method '\{m_name\}' is already defined for this type")
                         c.err(m, c.scratch.slice())
-                    sema_decl_declare.register_template_names(c, arena_full_name, local_full_name, m)
+                    sema_decl_declare.register_template(c, arena_full_name, m)
                 else
                     m_kind: = sema_type_scope.Sym_kind.function(false)
                     sym: = Sema_symbol.new(m_kind, arena_full_name, m)

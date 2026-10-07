@@ -69,9 +69,7 @@ struct Pending_methods //<
     //< is queued here and done once they all are.
     //< Caution: **Clear the outer bindings before pushing again** (drain_pending_instances in
     //< mono.kspls).
-    type_id: I32
-    base_name: U8[] //< the template's FQN (`std.ds.List` and so on)
-    args_str: U8[] //< the canonicalized type-argument list (`I32` / `U8[], I32` and so on)
+    type_id: I32 //< the instance's, whose record (`Env.instance_of`) says what it instantiates
     inst_name: U8[] //< the instantiation's mangled name (the key for a violation record)
     depth: Sz //<
         //< This entry's depth in the instantiation chain
@@ -218,6 +216,17 @@ struct Type_layout
     size: Sz
     align: Sz
 
+enum Layout_measure //< what of a type's layout was folded
+    size
+    field_offset(field: U8[]) //< where the named field of a struct starts
+    payload_offset //< where a tagged enumeration's payload starts
+
+struct Folded_layout //< one layout number sema folded into the output (`record_folded`)
+    type_id: I32
+    measure: Layout_measure
+    value: Sz
+    at: Ast_node$@ //< what in the source asked for it; the C compiler's check points there
+
 struct Layout_state //< measuring a type's size (calc_type_layout in `../decl/layout.kspls`)
     memo: Map<|I32, Type_layout|>$@ //<
         //< calc_type_layout's memo from type_id to Type_layout
@@ -235,6 +244,12 @@ struct Layout_state //< measuring a type's size (calc_type_layout in `../decl/la
         //< True only while check_infinite_size_types (sema/decl/layout) sweeps the declarations
         //<
         //< It keeps the depth limit's diagnostic from being reported from that sweep.
+    folded: List<|Folded_layout|>$@ //<
+        //< Every layout number folded into the output, once per type and measure
+        //<
+        //< genc has the C compiler check each (`emit_layout_checks` in `../../gen/c/root.kspls`).
+    folded_keys: Map<|U8[], Bool|>$@ //< what `folded` holds already, keyed by type and measure
+    folded_checked: Sz //< how many of `folded` the C written so far checks
 
 struct Resolving_state //<
     //< The declarations being resolved right now, one list per kind

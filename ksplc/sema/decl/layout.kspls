@@ -11,6 +11,7 @@ import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
+import "ksplc/base/target" as base_target
 import "ksplc/sema/decl/registry" as sema_decl_registry
 import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
 import "ksplc/sema/session/state" as sema_session_state
@@ -19,7 +20,7 @@ import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/ds" { List, Map }
-import "std/str"
+import "std/str" + { Str_builder }
 
 priv const max_type_layout_depth: Sz = 1000 //<
     //< calc_type_layout's safety limit, on the reasoning of max_nesting_depth in std/json.kspls
@@ -260,7 +261,7 @@ impl Sema_ctx
                 align = fs.align if fs.align > align else align
                 offset = align_to(offset, fs.align)
             // Caution: **Check after rounding up**, or the `b` of `struct { a: U8; b: I64; }` is 1
-            // rather than 8 (only `--target=llvm` and the folding silently differ; C uses
+            // rather than 8 (only `--to=llvm` and the folding silently differ; C uses
             // `offsetof`).
             if stop_at.len > 0 && field.name.equals(stop_at)
                 return Fields_walk::{ .size = offset, .align = align, .stopped = true }
@@ -334,6 +335,53 @@ impl Sema_ctx
         r.err(err_node, r.scratch.slice())
         throw Sema_error.invalid_argument
 
+    fn record_folded(r: Self$@, type_id: I32, measure: sema_session_state.Layout_measure, value: Sz,
+        at: Ast_node$@) //<
+            //< Records a layout number that goes into the output folded, for C to check
+            //<
+            //< **Every reader of a folded layout number calls it** (`sizeof`, `offsetof`,
+            //< reflection's payload offset, a slice cast's element sizes). A type C cannot spell
+            //< (an unbound type parameter, `Void`) is left out: no number of it reaches the C.
+        real_id: = r.env.get_clean_real_type(type_id)
+        if at == null || !r.c_can_measure(real_id, 0)
+            return
+        $key: = Str_builder.new()
+        defer key.free()
+        key.s("\{real_id\}")
+        switch measure case .size
+            key.s(" size")
+        case .field_offset(f)
+            key.s(" field ").s(f)
+        case .payload_offset
+            key.s(" payload")
+        if r.layout.folded_keys.get(key.slice()) catch false
+            return
+        r.layout.folded_keys.set(base_core.arena.dup_str(key.slice()), true)
+        r.layout.folded
+            .push(sema_session_state.Folded_layout::{ .type_id = real_id, .measure = measure,
+            .value = value, .at = at })
+
+    priv fn c_can_measure(r: Self$@, type_id: I32, depth: Sz): Bool //<
+        //< Whether the type is one the generated C names, so `sizeof` can be asked of it there
+        if depth >= max_type_layout_depth || sema_type_env.is_unknown(type_id) ||
+            sema_type_env.is_void(type_id)
+            return false
+        switch r.env.get_info(type_id) case .pointer(b)
+            return sema_type_env.is_void(b) || r.c_can_measure(b, depth + 1)
+        case .const_of(b)
+            return sema_type_env.is_void(b) || r.c_can_measure(b, depth + 1)
+        case .alias_type(b)
+            return r.c_can_measure(b, depth + 1)
+        case .array(b, n)
+            return n > 0 && r.c_can_measure(b, depth + 1)
+        case .result(b, e)
+            return (sema_type_env.is_void(b) || r.c_can_measure(b, depth + 1)) &&
+                r.c_can_measure(e, depth + 1)
+        case .named
+            return sema_type_env.is_builtin(type_id)
+        default
+            return true
+
     fn type_layout(r: Self$@, type_id: I32): sema_session_state.Type_layout //<
         //< The size and alignment of the type type_id, measured afresh
         //<
@@ -381,13 +429,15 @@ impl Sema_ctx
         resolving.push(real_id)
 
         info: = r.env.get_info(real_id)
+        machine: = base_target.current()
 
         switch info case .pointer(_b)
-            res.align = 8
-            res.size = 8
+            res.align = machine.pointer_bytes
+            res.size = machine.pointer_bytes
         case .trait_type(_d)
-            res.align = 8
-            res.size = 16
+            // A trait value is two pointers: the object and its vtable.
+            res.align = machine.pointer_bytes
+            res.size = 2 * machine.pointer_bytes
         case .array(b, size)
             if size == -1
                 if !r.has_error()
@@ -414,9 +464,11 @@ impl Sema_ctx
             res.size = align_to(result_val_at(s2, s1) + s1.size, res.align)
         default
             if sema_type_env.is_builtin(real_id)
-                // A scalar (Void and `Void@` are handled above) is aligned to its own width.
+                // A scalar (Void and `Void@` are handled above) is aligned to its own width, but
+                // for `I64` / `U64` / `F64`, which a machine may align to less (`wide_align`).
                 width: = Sz::(r.env.get_primitive_bit_size(real_id) / 8)
-                res.align = width
+                is_sz: = real_id == I32::sema_type_env.Builtin_type_id.size_type
+                res.align = machine.wide_align if width == 8 && !is_sz else width
                 res.size = width
             else
                 clean_name: = r.env.base_type_name(real_id)
@@ -443,10 +495,10 @@ impl Sema_ctx
                     case .none
                         // A function pointer is a kind of its own (is_fn_ptr in
                         // sema/type/query.kspls); if missed, it measures the default 4 rather than
-                        // C's 8.
+                        // the machine's width.
                         is_fn: = r.env.is_fn_ptr(real_id)
-                        res.align = 8 if is_fn else 4
-                        res.size = 8 if is_fn else 4
+                        res.align = machine.fn_pointer_bytes if is_fn else 4
+                        res.size = machine.fn_pointer_bytes if is_fn else 4
         resolving.len -= 1
         r.layout.memo.set(real_id, res)
         return res

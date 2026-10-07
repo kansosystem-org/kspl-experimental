@@ -1,11 +1,11 @@
 # tools/docs
 
-**The documents of `tools`.** Each is linked from the folder's entry point, [`tools/README.md`](../README.md).
+**The documents of `tools`, the repository's own development tools.** Each is linked from the folder's entry point, [`tools/README.md`](../README.md).
 
 ## What is here
 
-* [`tools/docs/DESIGN.md`](DESIGN.md) — why the tools are built the way they are: the API record, the coding assistant, the desktop opener.
-* [`tools/docs/PLAN.md`](PLAN.md) — what is left of the coding assistant, and what marks each stage as done.
+* [`tools/docs/DESIGN.md`](DESIGN.md) — why the tools are built the way they are: the record of each package's API, the coding assistant, and the program that opens a document in kspage.
+* [`tools/docs/PLAN.md`](PLAN.md) — what is left to build for the coding assistant, and how to tell when each stage is done.
 
 ## Further reading
 

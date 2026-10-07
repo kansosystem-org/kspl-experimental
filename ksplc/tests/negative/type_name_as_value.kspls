@@ -1,21 +1,40 @@
-//< A type's own name is not a value, so a declaration set to one has no type to take
+//< A type's own name is not a value: with nothing expected it has no type, and with a type expected
 //<
 //< Let through, a primitive reaches genc as a bare `Primitive_type` node (an ICE) and a declared
 //< type emits an undefined C symbol, a C compiler error instead of a diagnostic (Principle 8 in
-//< `../../../docs/DESIGN.md`). A primitive, a declared type and `Self` resolve by three roads.
+//< `../../../docs/DESIGN.md`); expected to be a value, it was taken as one without a word.
 // EXPECT: 'Sz' names a type, and a type is not a value
-// EXPECT: cannot infer type for
+// EXPECT-NOT: cannot infer type for
+// EXPECT: 'Row' names a type, and a type is not a value. Write the value itself, a cast ('Row::x')
+// EXPECT: 'Self' names a type, and a type is not a value
+// EXPECT: 'Pair<|I32|>' names a type, and a type is not a value
 // EXPECT-NOT: [ICE]
+priv typedef Op = fn(x: I32): I32
+
 priv struct Row
   text: U8[]
+
+priv struct Pair<|T|>
+  a: T
 
 impl Row
   fn probe(r: Self@): Sz
     b: = Self
     return r.text.len + Sz::b
+  fn typed_self(): I32
+    x: I32 = Self
+    return x
+
+fn case_typed(): I32
+  f: Op = Row
+  return f(1)
+
+fn case_compared(f: Op): Bool
+  return Pair<|I32|> == f
 
 fn main(): I32
   p: = Sz
   d: = Row
   r: Row = ::{ .text = "x" }
-  return I32::(r.probe() + Sz::p + Sz::d)
+  return I32::(r.probe() + Sz::p + Sz::d) + case_typed() + Row.typed_self() +
+    I32::case_compared(null)

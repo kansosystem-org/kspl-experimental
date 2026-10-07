@@ -425,6 +425,64 @@ priv fn case_build(arena: Arena$@) //<
         U8[][]::{ "build", std_flag(arena), src, fs.join(dir, "prog.c", arena) }, "overwritten")
     ng_case("build: it takes an input and an output", U8[][]::{ "build", src }, "usage: ksplc build")
 
+priv fn case_output_language(arena: Arena$@) //<
+    //< `--to` names what a compile writes, and `--target` is turned away naming it
+    //<
+    //< **The refusal is shown to name the replacement**: an unknown option alone would leave the
+    //< reader of an old script to guess which option took its place.
+    dir: = harness.sandbox("cli_to") catch
+        verdict.check("--to", false, "the working directory cannot be made")
+        return
+    src: = fs.join(dir, "prog.kspls", arena)
+    io.write_file(src, "fn main(): I32\n  return 3\n") catch
+        verdict.check("--to: the program can be written", false, "")
+        return
+    ll: = fs.join(dir, "prog.ll", arena)
+    ok_case("--to=llvm writes LLVM IR", U8[][]::{ std_flag(arena), "--to=llvm", src, ll }, "")
+    text: = io.read_file(ll) catch ""
+    verdict.check("--to=llvm's output is LLVM IR", text.find_str("define ") >= 0, text)
+    ok_case("--to=c writes C",
+        U8[][]::{ std_flag(arena), "--to=c", src, fs.join(dir, "prog.c", arena) }, "")
+    ng_case("--to on a compile names c or llvm",
+        U8[][]::{ std_flag(arena), "--to=kspl", src, fs.join(dir, "x.c", arena) }, "'c' or 'llvm'")
+    ng_case("--target=llvm is refused, naming --to",
+        U8[][]::{ std_flag(arena), "--target=llvm", src, ll }, "'--target' is not an option")
+    ng_case("--target is refused whatever its value, naming --to",
+        U8[][]::{ std_flag(arena), "--target=c", src, ll }, "'--to=c|llvm'")
+
+priv fn case_machine(arena: Arena$@) //<
+    //< `--machine` names a machine from ksplc's table, and nothing else
+    //<
+    //< **A name the table lacks is refused with the list**, never guessed: a guess folds sizes the
+    //< C compiler then disagrees with. `info machine` answers the default, which compiles.
+    dir: = harness.sandbox("cli_machine") catch
+        verdict.check("--machine", false, "the working directory cannot be made")
+        return
+    src: = fs.join(dir, "prog.kspls", arena)
+    io.write_file(src, "fn main(): I32\n  return 3 if sizeof(Sz) == sizeof(U8@) else 4\n") catch
+        verdict.check("--machine: the program can be written", false, "")
+        return
+    out_c: = fs.join(dir, "prog.c", arena)
+    host: = cli(U8[][]::{ "info", "machine" })
+    name: = host.out.trim_end()
+    verdict.check("info machine names the machine ksplc runs on", host.code == 0 && name.len > 0,
+        host.out)
+    ok_case("the machine info names compiles",
+        U8[][]::{ std_flag(arena), arena.text().s("--machine=").s(name).take(), src, out_c }, "")
+    ng_case("an unknown machine is refused, with the known ones listed",
+        U8[][]::{ std_flag(arena), "--machine=pdp11", src, out_c }, "thumbv7m-none-eabi")
+    ng_case("--to=llvm is refused for a machine with 4-byte pointers",
+        U8[][]::{ std_flag(arena), "--to=llvm", "--machine=thumbv7m-none-eabi", src, out_c },
+        "8-byte pointers")
+    ng_case("--machine does not take effect on run", U8[][]::{ "run", "--machine=x", src },
+        "compile lint")
+    ll: = fs.join(dir, "prog.ll", arena)
+    ok_case("--to=llvm takes a 64-bit machine",
+        U8[][]::{ std_flag(arena), "--to=llvm", "--machine=aarch64-linux-gnu", src, ll }, "")
+    text: = io.read_file(ll) catch ""
+    verdict.check("the IR names the machine's triple",
+        text.find_str("target triple = \"aarch64-unknown-linux-gnu\"") >= 0, text)
+
 priv fn case_refusals()
     // The error names the subcommands that accept the option.
     ng_case("--define does not take effect on fmt", U8[][]::{ "fmt", "--define=x", "a.kspl" },
@@ -433,15 +491,14 @@ priv fn case_refusals()
         U8[][]::{ "--in-place", "a.kspl", "a.c" }, "fmt")
     ng_case("--split does not take effect on run", U8[][]::{ "run", "--split=2", "a.kspl" },
         "compile")
-    // `link-libs` / `exe-flags` follow the C compiler's target triple, which `--target` leaves
+    // `link-libs` / `exe-flags` follow the C compiler's target triple, which `--to` leaves
     // alone.
-    ng_case("--target does not take effect on info",
-        U8[][]::{ "info", "link-libs", "--target=llvm" }, "compile")
-    ng_case("--target does not take effect on lint",
-        U8[][]::{ "lint", "--target=llvm", "a.kspl" }, "compile")
+    ng_case("--to does not take effect on info", U8[][]::{ "info", "link-libs", "--to=llvm" },
+        "fmt compile")
+    ng_case("--to does not take effect on lint", U8[][]::{ "lint", "--to=llvm", "a.kspl" },
+        "fmt compile")
     ng_case("--std-dir does not take effect on clean",
         U8[][]::{ "clean", "--std-dir=std", "cache" }, "compile run build lint info")
-    ng_case("--to does not take effect on info", U8[][]::{ "info", "std-dir", "--to=kspl" }, "fmt")
     ng_case("--cflags does not take effect on compile",
         U8[][]::{ "--cflags=-O0", "a.kspl", "a.c" }, "build")
     ng_case("--pkg-src-dir does not take effect on info",
@@ -773,6 +830,8 @@ fn main(): I32
     case_explain(arena)
     case_summary_codes(arena)
     case_refusals()
+    case_output_language(arena)
+    case_machine(arena)
     case_help_matches_behavior(arena)
     case_bom(arena)
     case_surface_doc(arena)

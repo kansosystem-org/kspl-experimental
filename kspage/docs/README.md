@@ -1,10 +1,10 @@
 # kspage/docs
 
-**The documents `kspage` carries.** Each is reached from the package's entry point, [`kspage/README.md`](../README.md).
+**The documents `kspage` carries.** Start from the package's entry point, [`kspage/README.md`](../README.md), which says what kspage is, how to run it and where its code is.
 
 ## What is here
 
-* [`kspage/docs/DESIGN.md`](DESIGN.md) — The decisions behind the editor, their grounds, and what each gives up.
+* [`kspage/docs/DESIGN.md`](DESIGN.md) — why the editor is built the way it is: each decision, its reasons, and what it gives up.
 
 ## Further reading
 

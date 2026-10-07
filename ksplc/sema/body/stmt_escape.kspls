@@ -1,8 +1,9 @@
-import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/sema/body/call" as sema_body_call
+import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/query" as sema_type_query
 
@@ -21,7 +22,7 @@ priv fn is_frame_binding(c: Sema_ctx$@, node: Ast_node$@): Bool //<
     //< A global is in the static area, so false.
     //< Caution: **Do not copy this test.** Taking an address and returning an array both
     //< need the same answer; fix one copy and the two disagree on which names pass.
-    sym: = c.symtab.resolve(node.get_path_or_ident_name()) catch null
+    sym: = c.read_written_name(node).sym
     if sym == null
         return false
     return !sym.flags.is_global && sym.kind.is_value()
@@ -70,7 +71,7 @@ priv fn find_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@): Frame_escape //
     if target == null
         return .none
     if target.is_path_or_ident()
-        sym: = c.symtab.resolve(target.get_path_or_ident_name()) catch null
+        sym: = c.read_written_name(target).sym
         if sym != null && sym.flags.holds_frame_pointer
             return .local(target)
         return .none
@@ -117,7 +118,7 @@ fn note_frame_pointer(c: Sema_ctx$@, id_node: Ast_node$@, expr_node: Ast_node$@)
     switch find_frame_escape(c, expr_node) case .none
         return
     default {}
-    sym: = c.symtab.resolve(id_node.get_path_or_ident_name()) catch null
+    sym: = c.read_written_name(id_node).sym
     if sym != null && !sym.flags.is_global
         sym.flags.holds_frame_pointer = true
 
@@ -147,31 +148,22 @@ fn check_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@, verb: U8[]) //<
         c.err(name, c.scratch.slice())
 
 fn check_fn_value_binding(c: Sema_ctx$@, id_node: Ast_node$@, expr_node: Ast_node$@): Bool //<
-    //< Rejects binding a function's name with no type annotation (`f: = big;`)
+    //< Rejects binding a variadic function's name with no type annotation (`f: = log_all;`)
     //<
-    //< **A function's name has no type here.** `f: Pred = big;` is handled by `fn_value_type_id` in
-    //< `sema/body/resolve_path.kspls`.
-    //< Caution: **Do not show a synthesized name** (`_anon_fn_1`).
+    //< **A declaration with no type takes the function type of the function a name names**
+    //< (own_type_of_name in sema/decl/name.kspls); a variadic one has none, since no function type
+    //< holds its `...`, and keeps the mark generic_fn_value_type_id, which no C type spells.
     // **Only a bare name counts**: `x: = f(1);` resolves to the same function, so without checking
     // the node's kind every call's result would be rejected.
-    if expr_node == null
+    if expr_node == null || expr_node.type_id != c.env.generic_fn_value_type_id()
         return false
     is_bare_path: = expr_node.kind_id == .k_identifier || expr_node.kind_id == .k_expr_path
     if !is_bare_path || !sema_body_call.resolves_to_named_fn(expr_node)
         return false
-    name: = id_node.text
-    is_anon: = base_ast.is_anon_fn_name(expr_node.get_path_name())
     c.clear_scratch()
-    if is_anon
-        c.scratch.s("cannot infer the type of '\{name\}' from this anonymous function")
-    else
-        c.scratch
-            .s("cannot infer the type of '\{name\}' from function '\{expr_node.get_path_name()\}'")
-    c.scratch
-        .s(": a function has no type of its own\n  Hint: write the function pointer type — \
-            'typedef Pred = fn(x: I32): Bool' then '\{name\}: Pred = …'.")
-    if is_anon
-        c.scratch.s(" A closure has one ('Callable1' / 'Callable2') and needs no annotation.")
-        c.append_closure_note()
+        .s("cannot infer the type of '\{id_node.text\}' from function \
+            '\{expr_node.get_path_name()\}': it is variadic, and a function type holds no '...'\n  \
+            Hint: call it where it is needed, or wrap the call in a function with fixed parameters \
+            and bind that.")
     c.err(id_node, c.scratch.slice())
     return true

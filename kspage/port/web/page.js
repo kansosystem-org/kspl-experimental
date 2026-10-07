@@ -15,7 +15,13 @@
   for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
 
   const canvas = document.getElementById("page");
-  kspageBoot(canvas, bytes).then((app) => {
+  // The start-up's outcome, **the one signal every waiter takes** (the checks too): it resolves
+  // with `window.kspage` once the start-up is done (the core runs, the local server has been
+  // asked, and the document the page comes up on is in), and rejects with the reason where the
+  // start failed.
+  // Caution: **Do not make a waiter look for `window.kspage` on a timer instead**: the wasm is
+  // compiled, and the server asked, off this thread, so no length of wait is ever the right one.
+  window.kspageReady = kspageBoot(canvas, bytes).then((app) => {
     const side = document.getElementById("side");
     const sideRoom = () => (side.hidden ? 0 : side.getBoundingClientRect().width);
     const fit = () => {
@@ -351,5 +357,15 @@
     // The draft storage, **so the check does not open its own** (why: `keep.js`'s `keepStore`).
     app.keepStore = ui.keepStore;
     window.kspage = app;
+    // **Done once the server has been asked and the document is in**: before, the tools the
+    // server brings are not out yet, and the document shown is not the one it comes up on.
+    return Promise.all([ui.localReady, opened]).then(() => app);
+  });
+  // **A start that fails says why in the status bar**: silent, the page stays blank and the
+  // reason is only in the console, where a person does not look.
+  window.kspageReady.catch((why) => {
+    const note = document.getElementById("note");
+    note.textContent = "The page could not start: " + String((why && why.message) || why);
+    note.className = "warn";
   });
 })();

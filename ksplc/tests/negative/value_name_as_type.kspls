@@ -1,0 +1,57 @@
+//< A value's name is not a type, so a declaration typed with one is refused
+//<
+//< Let through, the name read as the value's type: `x: twice` declared an `I32` (the function's
+//< return type), `y: g` the global's `I64`, and nothing was reported. A pointer to a function
+//< is written as a function type. The inverse is
+//< `type_name_as_value.kspls`.
+// EXPECT: 'twice' is a function, not a type. A pointer to one has a function type
+// EXPECT: 'twice' is a function, not a type
+// EXPECT: 'same<|U8|>' is a function, not a type
+// EXPECT: 'g' is a variable, not a type
+// EXPECT: 'Holder<|I32|>.keep' is a member of a type, not a type
+// EXPECT: 'Plain.v' is a member of a type, not a type
+priv fn twice(x: I32): I32
+    return x * 2
+
+priv fn same<|T|>(x: T): T
+    return x
+
+priv struct Holder<|T|>
+    v: T
+
+impl<|T|> Holder<|T|>
+    fn keep(x: T): T
+        return x
+
+priv struct Plain
+    v: I32
+
+priv g: I64 = 3
+
+fn case_function(): I32
+    x: twice = 5
+    return x
+
+fn case_pointer(): Bool
+    p: twice@ = null
+    return p == null
+
+fn case_specialization(): I32
+    z: same<|U8|> = 3
+    return I32::z
+
+fn case_variable(): I64
+    y: g = 4
+    return y
+
+fn case_member(): I32
+    m: Holder<|I32|>.keep = 3
+    return I32::m
+
+fn case_field(): I32
+    v: Plain.v = 3
+    return v
+
+fn main()
+    _a: = case_function() + I32::case_pointer() + case_specialization() + I32::case_variable() +
+        case_member() + case_field()

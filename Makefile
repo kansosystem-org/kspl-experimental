@@ -117,7 +117,7 @@ TARGET_FLAG :=
 ifeq ($(LLVM),1)
     BACKEND     := llvm
     TARGET_EXT  := ll
-    TARGET_FLAG := --target=llvm
+    TARGET_FLAG := --to=llvm
     CFLAGS      += -Wno-override-module -mllvm -fast-isel=false
 endif
 

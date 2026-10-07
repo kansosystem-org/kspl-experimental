@@ -12,6 +12,7 @@ import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/decl/mono" as sema_decl_mono
+import "ksplc/sema/decl/name" as sema_decl_name
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/def" as sema_type_def
@@ -221,6 +222,7 @@ impl Sema_ctx
         spec.elem_type = inner_node
         if !is_list
             spec.payload_offset = r.enum_payload_offset(f.type_id)
+            r.record_folded(f.type_id, .payload_offset, spec.payload_offset, site)
             spec.some_tag = r.option_tag(f.type_id, true)
             spec.none_tag = r.option_tag(f.type_id, false)
         rows.push(spec)
@@ -256,12 +258,9 @@ impl Sema_ctx
         //< not the type, is read, since the element's clause is taken from it (list_elem_node).
         if f_type == null
             return false
-        $spelled: = f_type.extract_type_name()
-        defer spelled.free()
-        base: = spelled.slice().get_generic_base_name()
-        if base.len == 0
-            return false
-        return r.resolve_fqn_for_type(base).equals(generic_fqn)
+        if clause: = sema_decl_name.written_clause_of(f_type)
+            return r.read_written_type(clause).fqn.equals(generic_fqn)
+        return false
 
     priv fn list_elem_type(r: Self$@, list_id: I32): I32 //< `List<|T|>`'s element type
         //<
@@ -379,9 +378,7 @@ impl Sema_ctx
             return false
         if impl_node.find_child(.k_decl_fn) != null
             return false
-        $spelling: = path.get_full_path_str()
-        defer spelling.free()
-        return r.resolve_fqn_for_type(spelling.slice()).equals(trait_fqn)
+        return r.read_written_type(path).fqn.equals(trait_fqn)
 
 priv fn make_table_decl(impl_node: Ast_node$@, target: Ast_node$@, rows_in: List<|Row_spec|>$@,
     prefix: U8[]): Ast_node$@ //<

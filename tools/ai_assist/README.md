@@ -1,8 +1,10 @@
 # ai_assist — the coding assistant
 
-The pipeline (data, evaluation, training) for building an AI that completes KSPL code. It is kept apart from the language core and the AI engine (`ksai`). Why it is built this way is in "The coding assistant" in [`tools/docs/DESIGN.md`](../docs/DESIGN.md); what is left is in [`tools/docs/PLAN.md`](../docs/PLAN.md).
+This folder holds the pipeline (data, evaluation, training) that builds a small AI to fill in a missing line of KSPL code, and measures how often the compiler accepts what it writes. Three `make` lines at the repository's root run it all, from collecting the training text to scoring the model. It is kept apart from the language core and the AI engine (`ksai`). Why it is built this way is in "The coding assistant" in [`tools/docs/DESIGN.md`](../docs/DESIGN.md); what is left is in [`tools/docs/PLAN.md`](../docs/PLAN.md).
 
 Note: If how an AI works is new to you, read [`../../ksai/README.md`](../../ksai/README.md) (the introduction to the KSPL-native AI engine) first.
+
+Words used here: the *corpus* is the body of source text the model learns from. *FIM* (fill-in-the-middle) is a training example made by cutting a hole out of code, so the model learns to fill it from the code around it. The *oracle* is the compiler used as the judge: a completion is good if `ksplc` accepts the file.
 
 ## Run it
 
@@ -12,20 +14,37 @@ make fim-model    # the tokenizer, then the KSPL-native model -> out/fim_coder.s
 make fim-eval     # the model's held-out loss, then the rate at which ksplc accepts its completions
 ```
 
+The held-out loss is the model's error on validation files it never trained on.
+
 Each KSPL tool also runs alone: `./out/ksplc_stage1.exe run tools/ai_assist/<tool>.kspls`, with the usage in the file's header.
+
+The picture shows what each step makes and what the next one reads.
+
+```mermaid
+flowchart LR
+    A[the repository's KSPL sources] --> B[build_corpus]
+    B --> C[corpus: train and val]
+    C --> D[make_fim]
+    D --> E[FIM examples]
+    C --> F[train_bpe]
+    F --> G[tokenizer]
+    E --> H[fim_coder trains]
+    G --> H
+    H --> I[eval_fim, with ksplc as the judge]
+```
 
 ## What is here
 
 | File | What it does |
 | :-- | :-- |
-| `ksplc_oracle.kspls` | The compiler oracle's shared parts: an error count plus the diagnostics, and reading JSONL. Evaluation, generation and filtering all use it; it has no executable of its own. |
-| `build_corpus.kspls` / `corpus_count.kspls` | Normalizes every source through `fmt`, removes duplicates, splits train/val and counts, writing to `corpus/`. `corpus_count.kspls` holds the counting rules (the folders left out; words, tokens and lines), split off so it can be tested. |
+| `ksplc_oracle.kspls` | The compiler oracle's shared parts: an error count plus the diagnostics, and reading JSONL (one JSON value per line). Evaluation, generation and filtering all use it; it has no executable of its own. |
+| `build_corpus.kspls` / `corpus_count.kspls` | Normalizes every source through `fmt` (KSPL's formatter), removes duplicates, splits train/val and counts, writing to `corpus/`. `corpus_count.kspls` holds the counting rules (the folders left out; words, tokens and lines), split off so it can be tested. |
 | `make_fim.kspls` | Writes FIM training examples to `corpus/fim_{train,val}.jsonl`. The source is self-hosted code that compiles, so the middle is the correct completion by definition and no example needs recompiling. |
 | `eval_fim.kspls` | Hides single lines of the validation files, inserts a model's completion, and measures the rate at which `ksplc` accepts the file (`make fim-eval`). `--model=native` runs `ksai/examples/fim_coder` as its own process. A file that does not compile on its own gives no holes. |
-| `train_bpe.kspls` | Derives the BPE vocabulary and merges from the corpus into `tokenizer/`, which `Tokenizer.load` in `ksai/tokenizer.kspls` reads. |
-| `lora_finetune_external.py` | Fine-tunes a LoRA outside KSPL, on a GPU machine (from scratch, or continued with `--continue-from`), and writes it as safetensors in the KSPL convention. `--help` lists its options, including those for a CPU. |
+| `train_bpe.kspls` | Derives the BPE vocabulary and merges from the corpus into `tokenizer/`, which `Tokenizer.load` in `ksai/tokenizer.kspls` reads. (BPE, byte-pair encoding, builds the vocabulary by merging the pairs of pieces that occur most often.) |
+| `lora_finetune_external.py` | Fine-tunes a LoRA (a small set of added weights trained on top of a model) outside KSPL, on a GPU machine (from scratch, or continued with `--continue-from`), and writes it as safetensors in the KSPL convention. `--help` lists its options, including those for a CPU. |
 | `export_qwen_to_kspl.py` / `export_qwen_tokenizer.py` | Convert Hugging Face Qwen's weights and tokenizer into the files `ksai` reads. |
-| `qwen_logit_parity.py` | Prints Hugging Face's logits for the same input, to compare with KSPL's. |
+| `qwen_logit_parity.py` | Prints Hugging Face's logits (the scores for each next token) for the same input, to compare with KSPL's. |
 | `safetensors_io.py` | Writes safetensors, for `export_qwen_to_kspl.py` and `lora_finetune_external.py`. |
 | `tests/` | `corpus_count_test.kspls` and `oracle_test.kspls`, which starts the real compiler; `make debug-tools` runs them with the rest of the tools' tests. |
 
@@ -44,6 +63,8 @@ pip install numpy torch transformers peft safetensors
 
 ### How borrowed models are handled
 
+You bring the borrowed model's weights yourself, and its own license goes with whatever you make from them.
+
 **The models' weights are not in this repository.** `export_qwen_to_kspl.py` converts weights you obtain yourself (`--base-model Qwen/Qwen2.5-Coder-0.5B`). Only the conversion procedure is distributed here, so the [MIT](../../LICENSE.md) notice does not cover the model.
 
 **The converted safetensors inherit the original model's license.** To distribute them, meet its conditions (the Qwen2.5 family is Apache-2.0, which requires attribution).
@@ -52,7 +73,7 @@ The `ksai/examples/llama_engine/mini_llama.safetensors` and `ksos/demo/cortex_m/
 
 ## Checking against a real Qwen
 
-These need the outside packages above and a downloaded Qwen2.5-Coder-0.5B.
+These two checks show that KSPL runs a real, downloaded model the same way the reference Python library does. They need the outside packages above and a downloaded Qwen2.5-Coder-0.5B.
 
 **The logit check** runs the same tokens through KSPL and through Hugging Face:
 
@@ -64,7 +85,7 @@ echo "3 1 4" | ./out/qwen_infer.exe out/qwen_kspl.safetensors
 python3 tools/ai_assist/qwen_logit_parity.py --base-model Qwen/Qwen2.5-Coder-0.5B --tokens "3 1 4"
 ```
 
-The two print the same argmax, and logits that differ only by floating-point rounding (24 layers of matrix products added in a different order).
+The two print the same argmax (the token with the top score), and logits that differ only by floating-point rounding (24 layers of matrix products added in a different order).
 
 **Generating text** adds the tokenizer:
 
@@ -79,7 +100,7 @@ echo "def add(a, b):
 
 It writes Python that stays coherent across several functions. **The prompt is Python on purpose**: the model has never seen KSPL, so a KSPL prompt could not tell a broken pipeline from a model that does not know KSPL.
 
-Decoding is greedy, with no repetition penalty, so a numeric prompt such as `let n = ` can repeat digits without end. That comes from the decoding, not from a fault in the pipeline.
+Decoding is greedy (it always takes the top-scoring token), with no repetition penalty. So a numeric prompt such as `let n = ` can repeat digits without end. That comes from the decoding, not from a fault in the pipeline.
 
 ## Further reading
 

@@ -3302,6 +3302,18 @@ If the test browser hangs and has to be killed, the gate still reports the last 
 
 **A way out used only in an emergency has to run on the ordinary round too.** The shape of the line Chrome writes is no contract and moves between versions. A reader left behind would cut out nothing and report "the page said nothing", on the one round where the trace was needed. So a round that passes compares the two lists (the marks in the DOM and the marks read from standard error), and the day the shape moves, a green round fails instead.
 
+### A check starts when the page says it has stood up
+
+The browser checks begin only once the page itself says its start-up is done, however long that takes, and a start that fails is marked with its reason.
+
+**The page publishes one promise, `window.kspageReady`** ([`port/web/page.js`](../port/web/page.js)). It resolves once the core runs, the local server has been asked and the document the page comes up on is in. It rejects with the reason where the start failed, and the page then shows that reason in the status bar, so a person is not left before a blank page. Every waiter takes this promise, and none looks for `window.kspage` on a timer.
+
+**A wait on a clock cannot be right here.** The `file://` round runs on Chrome's virtual clock (`--virtual-time-budget`), which jumps to the next timer whenever the page's thread has nothing to run. It does not see work done off that thread: compiling the wasm, IndexedDB, reading a `Blob`. On a busy machine, a cap of a few seconds on that clock runs out in a fraction of a real second while the wasm is still compiling, and the round fails as if the page were broken. With no timer at all it is worse: the clock jumps to the end of the budget and the DOM is dumped before the answer.
+
+**So a wait on such work keeps the page's thread fed** (`fed` in `kspage/tests/browser/probe.js`): one message after another, and the virtual clock stands still until the answer comes. Chrome holds that clock for pending network loads alone, so nothing else would. Real time is capped outside, by the gate's `timeout`, and a round cut there names the wait as its last line.
+
+**Every round starts late on purpose** (`kspage/tests/browser/late.js`). Before the page's start goes on, the wasm is compiled again off the page's thread a number of times. A wait counted on the clock then fails every round, not only on a busy machine.
+
 ## The screen and its controls
 
 How to use the screen is the manual's to explain ([`content/manual.kspage`](../content/manual.kspage)). This chapter holds only what the page itself fixes that no chapter above says: where a control sits, what a key does, and the numbers the page holds.

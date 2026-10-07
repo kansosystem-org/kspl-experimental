@@ -153,7 +153,7 @@ function kspageKeep(ui) {
     keepRestore: keepRestore, keepCount: () => found.length,
     // The draft storage itself. **The check uses this connection**: IndexedDB orders transactions
     // only within one connection, so a second would leave the write and the read unordered.
-    // Caution: **Do not fill it with repeated polling waits** — the test driver's budget does not
-    // run out while a request is pending, so it times out before the mark.
+    // Caution: **Do not wait on it by polling on a timer** — it answers off the page's thread, which
+    // the check's virtual clock does not see, so a cap counted on that clock runs out first.
     keepStore: store };
 }

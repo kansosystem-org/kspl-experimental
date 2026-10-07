@@ -1,5 +1,5 @@
 #!/usr/bin/env -S ksplc run
-//< The tests that start threads, built with ThreadSanitizer, run with no data race reported
+//< The programs that start threads, built with ThreadSanitizer, run with no data race reported
 //<
 //< **This stands where a type-system check does not** ("5.1 Why data races are not prevented by
 //< the type system" in `docs/DESIGN.md`): it finds the races the tests reach, never the ones they
@@ -8,10 +8,13 @@
 //< sanitizer); elsewhere a C compiler without it gives a `SKIP` line, never a silent pass.
 //< Caution: **A file that starts a thread is compiled into a program here or named in `left_out`**,
 //< so a new one cannot stay outside the gate unseen.
+import "ksplc/tests/support/lsp_client"
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
+import "std/json" + { Json_builder }
+import "std/jsonrpc"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/subproc"
@@ -19,10 +22,17 @@ import "std/sys"
 import "std/verdict"
 import "tests/support/harness"
 
-// -O1, as ThreadSanitizer advises for its speed; `-g` and the frame pointer keep a report's stack
-// readable down to the `.kspls` line.
-priv const tsan_cflags: U8[][5] = ::{ "-std=c99", "-O1", "-g", "-fno-omit-frame-pointer",
+// `-g` and the frame pointer keep a report's stack readable down to the `.kspls` line. The
+// optimisation level is each build's (`build`).
+priv const tsan_cflags: U8[][4] = ::{ "-std=c99", "-g", "-fno-omit-frame-pointer",
     "-fsanitize=thread" }
+priv const opt_for_run: U8[] = "-O1" //< for a program whose run takes longer than its build
+    //<
+    //< ThreadSanitizer's advice, for its speed.
+priv const opt_for_build: U8[] = "-O0" //< for one whose build takes longer than its run
+    //<
+    //< **ksplc is one**: its C takes 75 s to build at `-O1` and 9 s at `-O0`, for a session of a
+    //< few seconds (measured). The sanitizer watches every access at `-O0` too.
 
 priv const self_path: U8[] = "tests/suite/race_test.kspls"
 priv const race_stack_kib: U8[] = "4096" //< the stack limit every raced run starts under, in KiB
@@ -159,8 +169,10 @@ priv fn words_of(topic: U8[], out: List<|U8[]|>$@, arena: Arena$@): Bool //<
             out.push(w)
     return true
 
-priv fn build(dir: U8[], entry: U8[], exe: U8[], arena: Arena$@): Built //<
+priv fn build(dir: U8[], entry: U8[], exe: U8[], opt: U8[], arena: Arena$@): Built //<
     //< Compiles entry (from the folder dir) to C and links it with the sanitizer into exe
+    //<
+    //< `opt` is `opt_for_run` or `opt_for_build`.
     c: = arena.text().s(exe).s(".c").take()
     libs: = arena.text().s(exe).s(".libs").take()
     deps: = arena.text().s(exe).s(".deps").take()
@@ -175,6 +187,7 @@ priv fn build(dir: U8[], entry: U8[], exe: U8[], arena: Arena$@): Built //<
     argv.push(harness.cc())
     for f in tsan_cflags
         argv.push(f)
+    argv.push(opt)
     argv.push(c)
     argv.push(arena.text().c('@').s(libs).take())
     if !words_of("exe-flags", argv@, arena) || !words_of("link-libs", argv@, arena)
@@ -215,6 +228,19 @@ struct Raced //< one sanitized run: the check it reports to, where it runs, and 
     log_dir: U8[] //< the folder its processes' sanitizer logs go to, one per check
     env: U8[][] //< `NAME=value` pairs for this run alone
 
+priv fn sanitized(log_dir: U8[], env: U8[][], argv: U8[][], arena: Arena$@): U8[][] //<
+    //< argv as a raced run starts it: under `race_stack_kib`, its logs in log_dir, env set
+    $out: = List<|U8[]|>.new(arena)
+    for w in U8[][]::{ "sh", "-c", "ulimit -s \"$0\" && exec \"$@\"", race_stack_kib, "env" }
+        out.push(w)
+    out
+        .push(arena.text().s("TSAN_OPTIONS=log_path=").s(fs.join(log_dir, "tsan", arena)).take())
+    for e in env
+        out.push(e)
+    for a in argv
+        out.push(a)
+    return out.slice()
+
 priv fn run_all_raced(runs: List<|Raced|>@, work: U8[], arena: Arena$@) //<
     //< Runs every run side by side, then reports one check per name, in the order first named
     //<
@@ -228,17 +254,9 @@ priv fn run_all_raced(runs: List<|Raced|>@, work: U8[], arena: Arena$@) //<
     for i in Range.asc(runs.len)
         r: = runs.get(i)
         fs.mkdir_all(r.log_dir) catch {}
-        $argv: = List<|U8[]|>.new(arena)
-        for w in U8[][]::{ "sh", "-c", "ulimit -s \"$0\" && exec \"$@\"", race_stack_kib, "env" }
-            argv.push(w)
-        argv
-            .push(arena.text().s("TSAN_OPTIONS=log_path=")
-            .s(fs.join(r.log_dir, "tsan", arena)).take())
-        for e in r.env
-            argv.push(e)
-        for a in r.argv
-            argv.push(a)
-        jobs.push(subproc.Job::{ .argv = argv.slice(), .cwd = r.dir })
+        jobs
+            .push(subproc.Job::{ .argv = sanitized(r.log_dir, r.env, r.argv, arena),
+            .cwd = r.dir })
     outs: = verdict.run_children(jobs.slice(), fs.join(work, "jobs", arena), arena)
     for i in Range.asc(runs.len)
         name: = runs.get(i).name
@@ -279,7 +297,7 @@ priv fn check_fires(work: U8[], arena: Arena$@) //<
     io.write_file(src, racy_source) catch
         verdict.check("a race written on purpose is reported", false, "cannot write it")
         return
-    b: = build(work, src, fs.join(work, "racy.exe", arena), arena)
+    b: = build(work, src, fs.join(work, "racy.exe", arena), opt_for_run, arena)
     if b.exe.len == 0
         verdict.check("a race written on purpose is reported", false, b.why)
         return
@@ -298,7 +316,7 @@ priv fn race_debug(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena
     root: = harness.root()
     b: =
         build(root, fs.join(root, "tests/debug/main.kspls", arena),
-        fs.join(work, "debug_tests.exe", arena), arena)
+        fs.join(work, "debug_tests.exe", arena), opt_for_run, arena)
     if b.exe.len == 0
         verdict.check(name, false, b.why)
         return
@@ -329,7 +347,8 @@ priv fn build_all(name: U8[], pkg: U8[], entries: U8[][], work: U8[], deps: Str_
     for i in Range.asc(entries.len)
         stem: = arena.text().s(pkg).s("_\{i\}.exe").take()
         b: =
-            build(dir, fs.join(harness.root(), entries[i], arena), fs.join(work, stem, arena), arena)
+            build(dir, fs.join(harness.root(), entries[i], arena), fs.join(work, stem, arena),
+            opt_for_run, arena)
         if b.exe.len == 0
             verdict.check(name, false, b.why)
             return List<|U8[]|>.new(arena)
@@ -367,7 +386,7 @@ priv fn race_ksbind(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, aren
     dir: = fs.join(harness.root(), "ksbind", arena)
     b: =
         build(dir, fs.join(harness.root(), "ksbind/tests/main.kspls", arena),
-        fs.join(work, "ksbind.exe", arena), arena)
+        fs.join(work, "ksbind.exe", arena), opt_for_run, arena)
     if b.exe.len == 0
         if b.why.starts_with("it does not link") &&
             !sys.get_env("KSBIND_REQUIRE_LIBS").unwrap_or("").equals("1")
@@ -379,6 +398,134 @@ priv fn race_ksbind(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, aren
     runs
         .push(Raced::{ .name = name, .dir = dir, .argv = kept(U8[][]::{ b.exe }, arena),
         .log_dir = fs.join(work, "ksbind_log", arena), .env = pkg_env(arena) })
+
+// ==========================================
+// The language server, raced through a session
+// **Its supervisor reads the editor on a thread of its own** while the main loop pumps the worker,
+// restarts it and hands it the documents. No test program reaches that, so ksplc itself is built
+// with the sanitizer and an editor's session is played to it: its worker is the same build (the
+// supervisor starts its own executable), so both sides are watched.
+// ==========================================
+
+priv const lsp_docs: Sz = 4 //< how many documents the session opens
+priv const lsp_wait_ms: I32 = 60000 //< how long one answer may take under the sanitizer
+priv const lsp_exit_ms: I64 = 30000I64 //< how long the server may take to end after `exit`
+
+priv fn lsp_text(fn_name: U8[], k: Sz, arena: Arena$@): U8[] //<
+    //< A document whose `main` calls a function named fn_name and k; the hovers ask at its call
+    return arena.text().s("fn ").s(fn_name).s("\{k\}(a: I32, b: I32): I32 //< adds\n")
+        .s("    return a + b\n\nfn main(): I32\n    return ").s(fn_name).s("\{k\}(1, 2)\n").take()
+
+struct Lsp_session //< the client playing the editor, the workspace, and what went wrong
+    c: jsonrpc.Client$@
+    top: U8[]
+    faults: List<|U8[]|>
+
+impl Lsp_session
+    priv fn uri(r: Self$@, k: Sz, arena: Arena$@): U8[]
+        return lsp_client.uri_of(r.top, arena.text().s("d\{k\}.kspls").take(), arena)
+
+    priv fn change(r: Self$@, k: Sz, fn_name: U8[], arena: Arena$@) //<
+        //< a didChange of the whole text
+        $b: = Json_builder.new(arena)
+        td: = b.obj().set("uri", b.str_val(r.uri(k, arena))).set("version", b.int_val(2I64)).build()
+        change: = b.obj().set("text", b.str_val(lsp_text(fn_name, k, arena))).build()
+        params: = b.obj().set("textDocument", td)
+            .set("contentChanges", b.arr().push(change).build()).build()
+        _sent: = r.c.notify("textDocument/didChange", params, arena)
+
+    priv fn hover(r: Self$@, k: Sz, fn_name: U8[], when: U8[], arena: Arena$@) //<
+        //< A hover at document k's call, which must name fn_name and k
+        at: = lsp_client.at_pos(r.uri(k, arena), 4, 12, arena)
+        got: = r.c.request("textDocument/hover", at, lsp_wait_ms, arena) catch
+            fallback json.Val.null_val
+        text: = lsp_client.hover_text(got)
+        want: = arena.text().s(fn_name).s("\{k\}").take()
+        if text.find_str(want) < 0
+            said: = arena.text().s("a hover on d\{k\} ").s(when).s(" did not name `").s(want)
+                .s("`: '").s(text).s("'").take()
+            r.faults.push(lsp_client.why(r.c, said, arena))
+
+    priv fn crash(r: Self$@, arena: Arena$@) //< the worker's crash hook (`$/ksplTestCrash`)
+        $b: = Json_builder.new(arena)
+        _sent: = r.c.notify("$/ksplTestCrash", b.obj().build(), arena)
+
+priv fn play_lsp_session(exe: U8[], log_dir: U8[], top: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< An editor's session with the server, returning what went wrong; empty where it all answered
+    //<
+    //< **Each step gives the reading thread something to do beside the main loop**: a crash
+    //< followed at once by more messages, which it reads while the worker is restarted and handed
+    //< the documents; a pause, in which the main loop analyses the documents nobody asked for
+    //< while the thread waits on the input; `exit` with the input still open, where the thread
+    //< must stop by itself.
+    $faults: = List<|U8[]|>.new(arena)
+    argv: =
+        sanitized(log_dir,
+        U8[][]::{ arena.text().s("KSPLC_STD_DIR=").s(harness.std_dir()).take() },
+        U8[][]::{ exe, "lsp" }, arena)
+    $c: = jsonrpc.spawn(argv, top) catch
+        faults.push("the server cannot be started")
+        return faults
+    defer c.free()
+    $s: = Lsp_session::{ .c = c@, .top = top, .faults = faults }
+    $b: = Json_builder.new(arena)
+    _init: =
+        s.c.request("initialize", b.obj().build(), lsp_wait_ms, arena) catch
+        fallback json.Val.null_val
+    _ready: = s.c.notify("initialized", b.obj().build(), arena)
+    for k in Range.asc(lsp_docs)
+        _sent: = s.c
+            .notify("textDocument/didOpen",
+            lsp_client.did_open(s.uri(k, arena), lsp_text("add", k, arena), arena), arena)
+    for k in Range.asc(lsp_docs)
+        s.hover(k, "add", "before the crash", arena)
+    // The first document's request comes while the worker is remade; the others are analysed
+    // while the editor is silent.
+    s.crash(arena)
+    s.hover(0, "add", "right after the crash", arena)
+    sys.sleep_ms(500)
+    for k in Range.asc(lsp_docs)
+        s.hover(k, "add", "after the pause", arena)
+    // A burst while the worker is remade: edits and a request, read as they come.
+    s.crash(arena)
+    for k in Range.asc(lsp_docs)
+        s.change(k, "sum", arena)
+    for k in Range.asc(lsp_docs)
+        s.hover(k, "sum", "after the edits", arena)
+    _down: = s.c.request("shutdown", json.Val.null_val, lsp_wait_ms, arena) catch
+        fallback json.Val.null_val
+    _bye: = s.c.notify("exit", json.Val.null_val, arena)
+    deadline: = sys.mono_us() + lsp_exit_ms * 1000I64
+    for s.c.alive() && sys.mono_us() < deadline
+        sys.sleep_ms(20)
+    if s.c.alive()
+        said: = "the server did not end after `exit` with its input still open"
+        s.faults.push(lsp_client.why(s.c, said, arena))
+    return s.faults
+
+priv fn race_lsp(work: U8[], deps: Str_builder$@, arena: Arena$@) //<
+    //< The language server through one session, its supervisor's reading thread included
+    name: = "the language server runs an editor's session with no data race"
+    root: = harness.root()
+    b: =
+        build(root, fs.join(root, "ksplc/main.kspls", arena),
+        fs.join(work, "ksplc.exe", arena), opt_for_build, arena)
+    if b.exe.len == 0
+        verdict.check(name, false, b.why)
+        return
+    deps.s(b.deps)
+    log_dir: = fs.join(work, "lsp_log", arena)
+    top: = fs.join(work, "lsp_ws", arena)
+    fs.mkdir_all(log_dir) catch {}
+    fs.mkdir_all(top) catch {}
+    faults: = play_lsp_session(b.exe, log_dir, top, arena)
+    races: = reports_in(log_dir, arena)
+    why: = arena.text().s(tallied(races@, arena))
+    for f in faults
+        why.s(f).c('\n')
+    if races.len > 0
+        why.s("the whole reports are in ").s(log_dir)
+    verdict.check(name, races.len == 0 && faults.len == 0, why.take())
 
 priv fn check_covered(deps: U8[], arena: Arena$@) //<
     //< Every tracked source that starts a thread is compiled into a program above, or left out
@@ -416,7 +563,7 @@ fn main(): I32
                 .s("required here, as the image holds it (`.devcontainer/Dockerfile`):\n").s(said)
                 .take())
         else
-            verdict.skip_check("the tests that start threads, raced",
+            verdict.skip_check("the programs that start threads, raced",
                 arena.text().s("the C compiler cannot build with ThreadSanitizer: ").s(said).take())
         return harness.finish()
     check_fires(work, arena)
@@ -426,6 +573,7 @@ fn main(): I32
     race_debug(work, deps@, runs@, arena)
     race_ksai(work, deps@, runs@, arena)
     race_ksbind(work, deps@, runs@, arena)
+    race_lsp(work, deps@, arena)
     run_all_raced(runs@, work, arena)
     check_covered(deps.slice(), arena)
     return harness.finish()

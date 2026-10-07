@@ -62,10 +62,13 @@ suite_kspls := kspls
 suite_ast-cache := ast_cache
 suite_doc := doc
 suite_ship := ship
+suite_generic-matrix := generic_matrix
+suite_layout-targets := layout_targets
 # **List them by how long they take, the longest first**: `make -j` starts them in this order.
-SUITES := lsp run thin-use negative runtime write-perm std-dir emit-runtime ship property \
-  limits lint cli kspls split equiv ast-cache broken-pipe config output-flush ext-import \
-  debug-line decl-macros spawn slice-struct one-main file-path place visibility fmt doc
+SUITES := lsp run generic-matrix thin-use negative runtime write-perm std-dir emit-runtime ship \
+  property limits lint cli kspls split equiv ast-cache broken-pipe config output-flush ext-import \
+  debug-line decl-macros spawn slice-struct one-main file-path place visibility fmt doc \
+  layout-targets
 # The scattering is a suite too, run apart (`make test-fuzz`) and handed, after the two places, the
 # folder its seeds come from besides `std` (this one unless named) and `--trials=N` / `--seed=N`.
 suite_fuzz := fuzz
@@ -90,7 +93,7 @@ test-%: $(UNDER)
 RUN_FROM ?= .
 ENTRY_FILE ?= main.kspls
 # What the compiler is handed besides the entry file.
-FLAGS ?= $(if $(filter llvm,$(TARGET)),--target=llvm)
+FLAGS ?= $(if $(filter llvm,$(TARGET)),--to=llvm)
 
 # $(call translate_cmd,<compiler>,<to>,<runtime or empty>)
 translate_cmd = cd "$(RUN_FROM)" && "$(1)" $(FLAGS) "$(ENTRY_FILE)" "$(2)" \

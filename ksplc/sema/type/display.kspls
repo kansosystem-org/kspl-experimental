@@ -39,7 +39,7 @@ impl sema_type_env.Env
         //<
         //< For example `ds_List_I32` reads back as `List<|I32|>`.
         //< A full walk of the intern table, O(cap). **A caller that has the type id must not use
-        //< it** — display_type_to looks `inst_type_index` up at O(1). This is for
+        //< it** — display_type_to reads the instance's record at O(1). This is for
         //< name-only callers (`display_str_named`, the LSP's completion).
         for i in Range.asc(r.instantiated_nodes.cap)
             entry: = r.instantiated_nodes.entries + i
@@ -155,12 +155,33 @@ impl sema_type_env.Env
             if slice_elem != 0
                 res = r.display_type_to(r.strip_const(slice_elem), depth, res)
                 return res.s("[]" if r.is_const(slice_elem) else "$[]")
-            // An instantiated type is written from its registration key, found by type_id (not the
-            // O(cap) walk by name).
+            // An instantiated type is written from its record, found by type_id (not the O(cap)
+            // walk by name).
             // Caution: **Do not resolve an alias before writing.** An alias is exactly the name the
             // user wrote (the `Names` of `typedef Names = List<|U8[]|>;`).
-            key: = r.inst_type_index.get(id) catch ""
-            return r.expand_generic_key_to(r.get_str(id) if key.len == 0 else key, depth, res)
+            if inst: = r.instance_of(id)
+                return r.display_instance_to(inst, depth, res)
+            return r.expand_generic_key_to(r.get_str(id), depth, res)
+
+    priv fn display_instance_to(r: Self$@, inst: sema_type_env.Instance, depth: Sz, w: Writer):
+        Writer //<
+            //< Writes an instance as its template and type arguments, in source notation
+            //<
+            //< Caution: **Write each type argument as a type**, not its internal name, or it shows
+            //< `List<|U8 immut[]|>` or `List<|std_ds_List_U8_Const_Slice|>`.
+        $res: = w.s(inst.template).s("<|")
+        mask: = r.variance_masks.get(inst.template) catch 0
+        for pos in Range.asc(inst.args.len)
+            if pos > 0
+                res = res.s(", ")
+            id: = inst.args[pos]
+            if base_ast.variance_names_mut(mask, pos) && !r.is_const(id)
+                res = res.c('$')
+            if depth < max_generic_key_depth
+                res = r.display_type_to(id, depth + 1, res)
+            else
+                res = res.s(r.get_str(id))
+        return res.s("|>")
 
     fn display_str(r: Self$@, id: I32): Str_builder
         b: = Str_builder.new()

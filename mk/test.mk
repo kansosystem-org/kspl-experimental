@@ -214,9 +214,9 @@ test-extract: test-extract-ksplc test-extract-rest
 ## Gates|test-llvm-abi|See in the IR whether the direct caller's argument types agree with the `define` side
 test-llvm-abi: $(STAGE1_EXE) $(SEED_EXE)
 	@echo "# VERIFYING LLVM IR CALL SIGNATURES (caller vs callee)"
-	./$(STAGE1_EXE) --target=llvm ksplc/main.kspls $(TMP_DIR)/abi_check_ksplc.ll
-	./$(STAGE1_EXE) --target=llvm tests/debug/main.kspls $(TMP_DIR)/abi_check_debug.ll
-	./$(STAGE1_EXE) --target=llvm ksplc/tests/runtime/main_result_without_sys.kspls \
+	./$(STAGE1_EXE) --to=llvm ksplc/main.kspls $(TMP_DIR)/abi_check_ksplc.ll
+	./$(STAGE1_EXE) --to=llvm tests/debug/main.kspls $(TMP_DIR)/abi_check_debug.ll
+	./$(STAGE1_EXE) --to=llvm ksplc/tests/runtime/main_result_without_sys.kspls \
 	  $(TMP_DIR)/abi_check_main_result.ll
 	./$(SEED_EXE) run tests/tools/llvm_ir_abi_check.kspls $(TMP_DIR)/abi_check_ksplc.ll \
 	  $(TMP_DIR)/abi_check_debug.ll $(TMP_DIR)/abi_check_main_result.ll

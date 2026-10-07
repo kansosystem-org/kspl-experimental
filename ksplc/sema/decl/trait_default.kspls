@@ -7,15 +7,13 @@
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
-import "ksplc/base/core" as base_core
 import "ksplc/sema/decl/access" as sema_decl_access
 import "ksplc/sema/decl/mono" as sema_decl_mono
 import "ksplc/sema/decl/mono_name" as sema_decl_mono_name
-import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/decl/subst" as sema_decl_subst
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/scope" as sema_type_scope
-import "std/chars"
 import "std/str"
 
 const inherited_default: I32 = 1 //< the flag for a copied default value
@@ -44,21 +42,16 @@ impl Sema_ctx
         //< FQN.
         $spelled: = trait_node.extract_type_name()
         defer spelled.free()
-        // A generic's actual arguments are dropped: the template holds the default values.
         full: = spelled.slice()
-        $base: U8[] = full
-        switch full.find_generic_bounds() case .found(start_idx, _is, _ie, _end_idx)
-            base = full.sub(0, start_idx)
-        default {}
+        // A generic's actual arguments are dropped: the template holds the default values.
         // **A generic trait is in the template table, not the symbol table**; if it is missed,
         // `Index_ref`'s default values are silently not copied.
-        $decl: Ast_node$@ = r.generics.templates.get(base) catch null
+        written: = r.read_written_type(trait_node)
+        $decl: Ast_node$@ = r.written_template(written)
         if decl == null
-            raw_fqn: = r.resolve_fqn_for_type(base)
-            if raw_fqn.len == 0
+            if written.fqn.len == 0
                 return
-            trait_fqn: = base_core.arena.dup_str(raw_fqn)
-            t_sym: = r.symtab.resolve_fqn(trait_fqn) catch null
+            t_sym: = r.symtab.resolve_fqn(written.fqn) catch null
             if t_sym != null
                 decl = t_sym.node
         if decl == null || decl.kind_id != .k_decl_trait
@@ -111,9 +104,7 @@ impl Sema_ctx
         args_str: = spelled.generic_args_str()
         if args_str.len == 0
             return
-        args: = sema_decl_mono_name.split_args(args_str)
-        defer sema_decl_mono_name.free_args_list(args)
-        r.bind_generic_args(decl.find_child(.k_type_gen_params), args, false)
+        r.bind_generic_args(decl.find_child(.k_type_gen_params), r.type_ids_of_text(args_str), false)
 
 priv fn adopt_as_impl_method(fresh: Ast_node$@, impl_node: Ast_node$@,
     target_vis: sema_type_scope.Visibility) //<

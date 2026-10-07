@@ -13,14 +13,16 @@ import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/locate" as base_locate
+import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/def" { Struct_field }
+import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
 import "std/chars" // for its single-character methods
 import "std/ds" { List }
-import "std/str"
+import "std/str" { Str_builder }
 
 fn vis_rank(v: sema_type_scope.Visibility): I32 //<
     //< A visibility's breadth (narrowest first, file_private < internal < public)
@@ -87,7 +89,11 @@ impl Sema_ctx
         if fn_node != null && fn_node.sym_ptr != null
             v = (Sema_symbol$@::fn_node.sym_ptr).vis
         if r.fn_ctx.impl_name.len > 0
-            base: = r.fn_ctx.impl_name.get_generic_base_name()
+            $base: = r.fn_ctx.impl_name
+            // An instance's body names its target by the mangled name; the instance's record names
+            // its template, whose declaration answers (and carries the mark).
+            if inst: = r.env.instance_of(r.env.type_to_id.get(base) catch 0)
+                base = inst.template
             target: = r.symtab.resolve_fqn(base) catch null
             if target != null && target.kind.is_type()
                 v = narrower_vis(target.vis, v)
@@ -402,10 +408,13 @@ impl Sema_ctx
                 // Keep function and field names out of the message: a generic reaches here once per
                 // instance, and differing internal names slip past report_diagnostic's
                 // de-duplication (the file:offset:msg key), giving N entries for one line.
+                $shown: = Str_builder.new()
+                defer shown.free()
+                r.write_shown_name(sym, node, shown@)
                 r.clear_scratch()
-                    .s("\{position\} '\{sym.name\}' is less visible than the \{owner\} exposing it, \
-                        so code that cannot name the type still receives a value of it. Widen the \
-                        type's visibility to match, or narrow the \{owner\}.")
+                    .s("\{position\} '\{shown.slice()\}' is less visible than the \{owner\} \
+                        exposing it, so code that cannot name the type still receives a value of \
+                        it. Widen the type's visibility to match, or narrow the \{owner\}.")
                 r.err(node, r.scratch.slice())
         for child in node.children
             // **An array's length is a value, not a type handed out**: `U8[sizeof(Later)]` gives no
@@ -462,6 +471,35 @@ impl Sema_ctx
             return true
         return r.vis_allows_here(sym.vis, defined_in)
 
+    fn check_import_symbols_visible(r: Self$@) //<
+        //< Reports a selective import naming what its file cannot see (`import "p" { Hidden }`)
+        //<
+        //< **Selecting a name changes no visibility** ("Which names an import brings in" in
+        //< docs/SPEC-language.md), and the line that selects it is where that shows. Left to each
+        //< use, every road to a name had to ask again, and a type's, a constant's and a struct
+        //< literal's did not: a `priv` struct selected from another file was used without a word.
+        if r.suppress_errors
+            return
+        old_file: = r.file_name
+        defer r.set_current_file(old_file)
+        for entry in r.import_symbols.files.items()
+            info: = entry.value
+            if info.decl_node == null
+                continue
+            file_env: = r.env.files.get(info.target_path) catch null
+            if file_env == null
+                continue
+            sym: = file_env.symbols.get(info.original_name) catch null
+            if sym == null
+                continue // check_import_symbols_exist reports it
+            r.set_current_file(info.decl_node.loc.file())
+            if r.is_symbol_visible_here(sym)
+                continue
+            r.clear_scratch()
+                .s("cannot access symbol '\{info.original_name\}'\n(defined in \
+                    \{info.target_path\})")
+            r.err(info.decl_node, r.scratch.slice())
+
     fn is_field_visible_here(r: Self$@, field: Struct_field$@): Bool //<
         //< is_symbol_visible_here for a struct field, which has no symbol of its own
         return r.is_symbol_visible_here(field_symbol(field))
@@ -469,6 +507,29 @@ impl Sema_ctx
     fn check_field_visibility(r: Self$@, field: Struct_field$@, loc: Ast_node$@) //<
         //< check_visibility_and_mark_used for a struct field read or written at loc
         r.check_visibility_and_mark_used(field_symbol(field), loc)
+
+    priv fn write_shown_name(r: Self$@, sym: Sema_symbol$@, loc: Ast_node$@, out: Str_builder$@) //<
+        //< The name a visibility diagnostic shows for sym, as the source spells it
+        //<
+        //< Only where sym's own is internal: an instance's name is mangled
+        //< (`app_lib_kspl_Box_I64`), and its methods' are named after it ("A diagnostic points at
+        //< 'the position the user wrote'" in ksplc/docs/DESIGN.md).
+        if sym.flags.is_generated_instance && sym.kind.is_type() && sym.type_id != 0
+            $d: = r.env.display_str(sym.type_id)
+            out.s(d.slice())
+            d.free()
+            return
+        if !sym.flags.is_generated_instance && !sym.flags.is_method
+            out.s(sym.name)
+            return
+        if loc != null && loc.is_path_or_ident()
+            loc.get_full_path_str_to(out)
+        else if loc != null &&
+            (loc.kind_id == .k_expr_postfix || loc.kind_id == .k_method_access) &&
+            loc.get_postfix_member() != null
+            out.s(loc.get_postfix_member().text)
+        else
+            out.s(sym.name)
 
     fn check_visibility_and_mark_used(r: Self$@, sym: Sema_symbol$@, loc: Ast_node$@)
         if sym.flags.is_deprecated
@@ -488,7 +549,14 @@ impl Sema_ctx
             sym.flags.is_used_outside_unit = true
 
         if !r.vis_allows_here(sym.vis, defined_in)
-            r.clear_scratch().s("cannot access symbol '\{sym.name\}'\n(defined in \{defined_in\})")
+            // An instance's own name is mangled (`app_lib_kspl_Box_I64`): it is shown as the
+            // source spells the type ("A diagnostic points at 'the position the user wrote'" in
+            // ksplc/docs/DESIGN.md).
+            $shown: = Str_builder.new()
+            defer shown.free()
+            r.write_shown_name(sym, loc, shown@)
+            r.clear_scratch()
+                .s("cannot access symbol '\{shown.slice()\}'\n(defined in \{defined_in\})")
             r.err(loc, r.scratch.slice())
 
 priv fn field_symbol(field: Struct_field$@): Sema_symbol$@ //<
@@ -518,13 +586,9 @@ fn impl_target_symbol(c: Sema_ctx$@, impl_node: Ast_node$@): Option<|Sema_symbol
     //< Caution: **Look it up by name.** The target's type node gets its type id only in body
     //< analysis, so while declarations are collected it is still 0 (collect_impl_decl looks it up
     //< the same way).
-    target_node: = impl_node.get_decl_type_node()
-    if target_node == null
+    if impl_node.get_decl_type_node() == null
         return Option<|Sema_symbol$@|>.none
-    $raw: = target_node.extract_type_name()
-    defer raw.free()
-    fqn: = c.resolve_fqn_for_type(raw.slice().get_generic_base_name())
-    sym: = c.symtab.resolve_fqn(fqn) catch null
+    sym: = c.symtab.resolve_fqn(c.impl_target_fqn(impl_node)) catch null
     if sym == null || !sym.kind.is_type()
         return Option<|Sema_symbol$@|>.none
     return Option<|Sema_symbol$@|>.some(sym)

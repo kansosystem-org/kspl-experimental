@@ -4,9 +4,9 @@
 
 ## What is here
 
-* [`ksai/docs/DESIGN.md`](DESIGN.md) — why ksai took this shape.
+* [`ksai/docs/DESIGN.md`](DESIGN.md) — why ksai is built the way it is: each choice, and what it gives up.
 
-What the package publishes is not written here: `ksplc doc ksai` lists every file, and `ksplc doc ksai/<file>` gives one file's declarations, rendered from the sources when asked.
+What the package publishes (its types and functions) is not written here. Ask the compiler instead: `ksplc doc ksai` lists every file, and `ksplc doc ksai/<file>` gives one file's declarations, read from the sources each time.
 
 ## Further reading
 

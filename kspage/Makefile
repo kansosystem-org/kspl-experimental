@@ -47,7 +47,10 @@ test-fuzz:
 # It wants a clang that targets wasm32, and `wasm-ld`. **wasm holds neither libc nor malloc**: it is
 # generated with `--freestanding`, and `port/web/rt.c` fills in memset / memcpy / memmove.
 WEB_SRC  := port/web
-WASM_CC  := clang --target=wasm32 -std=c99 -O2 -ffreestanding -nostdlib -Wall \
+# The machine is named once, to clang and to ksplc alike: ksplc lays the sizes it folds out for it,
+# and the C it writes makes clang check each against its own.
+WASM_MACHINE := wasm32-unknown-unknown
+WASM_CC  := clang --target=$(WASM_MACHINE) -std=c99 -O2 -ffreestanding -nostdlib -Wall \
     -ffunction-sections -fdata-sections
 # Caution: **Do not use `--allow-undefined`**: only the two in `port/web/imports.txt` are borrowed,
 # so anything else **fails the link** (allowed, only the browser says "no such function").
@@ -65,7 +68,8 @@ export KSPAGE_IMPORTS_NOTE := what is borrowed from outside is the two in port/w
 web:
 	@echo "# BUILDING kspage for the browser (wasm32, freestanding)"
 	@mkdir -p "$(OUT)/gen" "$(WEB)"
-	"$(KSPLC)" --freestanding $(WEB_SRC)/bridge.kspls "$(OUT)/gen/kspage_bridge.c"
+	"$(KSPLC)" --freestanding --machine=$(WASM_MACHINE) $(WEB_SRC)/bridge.kspls \
+		"$(OUT)/gen/kspage_bridge.c"
 	$(WASM_CC) -c "$(OUT)/gen/kspage_bridge.c" -o "$(OUT)/gen/kspage_bridge.o"
 	$(WASM_CC) -c $(WEB_SRC)/rt.c -o "$(OUT)/gen/kspage_rt.o"
 	$(WASM_LD) "$(OUT)/gen/kspage_bridge.o" "$(OUT)/gen/kspage_rt.o" -o "$(WEB)/kspage.wasm"
@@ -142,7 +146,9 @@ KSPAGE_UDD := $(OUT)/kspage_udd
 # `--dump-dom`: read the markers inside `<pre id="kspage-probe">` alone (the script's strings are
 # in the DOM too). `--virtual-time-budget`: the checks are asynchronous, so the dump waits for them.
 # Caution: **This is a virtual time**: a section that waits on real time cannot wait, and the dump
-# cuts before the marker is written; so the side that served runs on the real clock.
+# cuts before the marker is written; so the side that served runs on the real clock. **Work off the
+# page's thread** (the wasm's compile, IndexedDB) **is waited on through `fed`** in
+# `tests/browser/probe.js`, which holds this clock still until it answers.
 KSPAGE_DUMP_FLAGS := --dump-dom --virtual-time-budget=300000
 
 # What the page itself said, cut back out of the browser's stderr (`--enable-logging=stderr` puts
@@ -178,10 +184,21 @@ KSPAGE_PROBE_JS := $(patsubst %,tests/browser/%.js,$(KSPAGE_PROBE))
 # Caution: **Both checks are to use this page with the checks pasted in**: built apart, the
 # `file://` side alone goes through on an old shape of the source.
 KSPAGE_PROBE_PAGE := $(OUT)/kspage_probe.html
+# The page's start held back on purpose (why: its own header), pasted in **ahead of the page's
+# texts**, right after the line below: behind them, the start has already begun.
+KSPAGE_PROBE_LATE := tests/browser/late.js
+KSPAGE_PROBE_AFTER := <meta charset="utf-8">
 
-$(KSPAGE_PROBE_PAGE): web $(KSPAGE_PROBE_JS)
-	@{ cat "$(WEB)/kspage.html"; echo '<script>'; cat $(KSPAGE_PROBE_JS); \
-		echo '</script>'; } > "$@"
+# Caution: **Fail where the line is gone**: unfound, the held-back start lands behind the page and
+# every round passes on a start nothing held back.
+$(KSPAGE_PROBE_PAGE): web $(KSPAGE_PROBE_JS) $(KSPAGE_PROBE_LATE)
+	@grep -qF '$(KSPAGE_PROBE_AFTER)' "$(WEB)/kspage.html" \
+		|| { echo "the page holds no '$(KSPAGE_PROBE_AFTER)' to paste $(KSPAGE_PROBE_LATE) behind"; \
+		     exit 1; }
+	@{ sed -n '1,\#$(KSPAGE_PROBE_AFTER)#p' "$(WEB)/kspage.html"; \
+		echo '<script>'; cat "$(KSPAGE_PROBE_LATE)"; echo '</script>'; \
+		sed '1,\#$(KSPAGE_PROBE_AFTER)#d' "$(WEB)/kspage.html"; \
+		echo '<script>'; cat $(KSPAGE_PROBE_JS); echo '</script>'; } > "$@"
 
 # **Settle pass and fail by the markers alone**; the exit code says only that it hit the cap (124).
 # The dump goes **into a file** (piped, `|| true` swallows the status), and **stderr is kept**: it
@@ -210,7 +227,8 @@ test-browser: $(KSPAGE_PROBE_PAGE)
 		            "timeout killed it, so no DOM was drawn"; \
 		       echo "  the list above is what the page said on the standard error instead," \
 		            "and its last line is as far as the round got"; \
-		       echo "  the virtual time budget does not expire while loads are pending"; \
+		       echo "  the virtual time budget does not expire while loads are pending" \
+		            "or while the page waits fed (probe.js's fed)"; \
 		     fi; \
 		     echo "RESULT: SOME FAILED (1) -> the browser checks did not reach the marker"; \
 		     $(call kspage_err_summary,$(OUT)/kspage_probe.err); exit 1; }; \

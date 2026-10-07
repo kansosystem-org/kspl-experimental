@@ -109,9 +109,9 @@ function kspageProbeStore(ks) {
   const store = kspageHandles();
   const TAB = "probe-tab";
   // A page that cannot remember. **`file://` comes here.**
+  // **Wait through `ks.fed`**: the arena answers off the page's thread (why: `fed` in `probe.js`).
   if (location.protocol === "file:") {
-    store.keepWhere(TAB, null)
-      .then(() => store.takeWhere(TAB))
+    ks.fed(store.keepWhere(TAB, null).then(() => store.takeWhere(TAB)))
       .then((was) => {
         check(was === null, "on a page that cannot remember nothing comes back");
         done();

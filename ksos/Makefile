@@ -68,7 +68,10 @@ test:
 
 # --- The toolchain for Cortex-M (cross compiling for an ARM Cortex-M3) ---
 # One section per symbol, so --gc-sections drops the uncalled libc references that `ksai` carries.
-CM_CC := clang --target=thumbv7m-none-eabi -mcpu=cortex-m3 -ffreestanding -Wall -Os \
+# The machine is named once, to clang and to ksplc alike: ksplc lays the sizes it folds out for it,
+# and the C it writes makes clang check each against its own.
+CM_MACHINE := thumbv7m-none-eabi
+CM_CC := clang --target=$(CM_MACHINE) -mcpu=cortex-m3 -ffreestanding -Wall -Os \
     -ffunction-sections -fdata-sections
 # Soft float and 64-bit integer division (`__aeabi_uldivmod`, ...): arm-none-eabi's libgcc (nofp).
 # Caution: **It must not fall to empty**: the link then fails on `__aeabi_uldivmod` and names no
@@ -82,6 +85,56 @@ export ARM_TOOLCHAIN_HINT := arm-none-eabi-gcc was not found. Linking bare metal
 define require_arm_toolchain
 	@if [ -z "$(1)" ]; then printf '%s\n' "$$ARM_TOOLCHAIN_HINT" >&2; exit 1; fi
 endef
+
+# --- The time cap on every demo run, POSIX and QEMU alike ---
+# **Every run of a demo goes through `ksos_capped`**: a kernel bug that leaves a task spinning
+# stalls the run, and with no cap the gate (and `make ci-linux` with it) waits for ever without a
+# word. A run that hits its cap prints the `[FAIL] ... it hung` line the gates read
+# (`ksos_run_gate`), rather than ending on `timeout`'s silent 124.
+# **One default for every run.** Measured under load (every demo 10 times, 8 at once beside 16 busy
+# loops on 4 cores; and 3 times, 4 at once beside 2 busy loops pinned to one core), the slowest run
+# took 6.3 s (`ksos-cm-car-model-probe`; the slowest POSIX one, `ksos-task-manager`, 4.2 s), so
+# 30 s is about five times the slowest. A slower machine raises it on the command line
+# (`make test-ksos-posix KSOS_RUN_CAP=120`).
+# A run that needs another cap sets `ksos_run_cap_<its target>` next to this, saying why.
+KSOS_RUN_CAP := 30
+ksos_cap = $(or $(ksos_run_cap_$@),$(KSOS_RUN_CAP))
+
+# $(call ksos_capped,<command>): the shell words that run it under the cap. On hitting the cap they
+# print the line the gates read and exit 1; otherwise they leave its exit status in `rc`.
+define ksos_capped
+echo "timeout $(ksos_cap) $(1)"; rc=0; timeout $(ksos_cap) $(1) || rc=$$?; \
+	if [ "$$rc" = 124 ]; then \
+		echo "[FAIL] $@ did not finish in $(ksos_cap)s: it hung (timeout killed it)"; exit 1; fi
+endef
+# $(call ksos_capped_run,<command>): a recipe line that runs it under the cap and ends with its
+# exit status.
+ksos_capped_run = @$(call ksos_capped,$(1)); exit $$rc
+
+# The cap's own check (`test-ksos-posix` runs it first): a run that spins for ever must end at its
+# cap, print the hung line, and fail its gate. Its cap is 1 s, so the check costs a second rather
+# than the default's 30; the outer `timeout` only keeps the check from hanging where the cap is lost.
+ksos_run_cap_cap-check-spin := 1
+cap-check-spin:
+	$(call ksos_capped_run,sh -c 'while :; do :; done')
+
+test-ksos-cap: export CAP_LOST_MSG := [FAIL] the cap did not stop a run that spins for ever (the check's own 20 s bound ended it)
+test-ksos-cap: export CAP_PASSED_MSG := [FAIL] the gate passed a run that spins for ever
+test-ksos-cap: export CAP_SILENT_MSG := [FAIL] a run stopped at its cap did not say that it hung:
+test-ksos-cap: export CAP_OK_MSG := RESULT: ALL PASS (a run that spins for ever ended at its $(ksos_run_cap_cap-check-spin) s cap, said that it hung, and failed its gate
+test-ksos-cap:
+	@rm -f $(KSOS_LOG_DIR)/cap_cap-check-spin.log
+	@start=$$(date +%s); rc=0; \
+	timeout 20 $(MAKE) --no-print-directory ksos-capgate-cap-check-spin >/dev/null 2>&1 || rc=$$?; \
+	took=$$(( $$(date +%s) - start )); \
+	if [ "$$rc" = 124 ]; then printf '%s\n' "$$CAP_LOST_MSG"; exit 1; fi; \
+	if [ "$$rc" = 0 ]; then printf '%s\n' "$$CAP_PASSED_MSG"; exit 1; fi; \
+	if ! grep -q '^\[FAIL\] cap-check-spin did not finish in $(ksos_run_cap_cap-check-spin)s: it hung' \
+		$(KSOS_LOG_DIR)/cap_cap-check-spin.log; then \
+		printf '%s %s\n' "$$CAP_SILENT_MSG" "$(KSOS_LOG_DIR)/cap_cap-check-spin.log"; exit 1; fi; \
+	printf '%s, in %s s)\n' "$$CAP_OK_MSG" "$$took"
+
+.PHONY: cap-check-spin test-ksos-cap
 
 # --- Kanso OS (RTOS): the portable core plus the port layer ------------------------
 POSIX_PORT_SRC := port/posix/ksos_port_posix.c
@@ -101,30 +154,30 @@ endef
 ksos:
 	@echo "# BUILDING KANSO OS (POSIX host demo)"
 	$(call posix_link,demo/posix/producer_consumer.kspls,ksos_demo)
-	./$(POSIX_OUT)/ksos_demo.exe
+	$(call ksos_capped_run,./$(POSIX_OUT)/ksos_demo.exe)
 
 # --- The demos run on a POSIX host -------------------------------------------------
-# A row is `<suffix>:<input>[:<cap in seconds>]`: `ksos-<suffix>` builds `demo/posix/<input>.kspls`
-# into `$(POSIX_OUT)/ksos_<suffix>.exe` (`-` becomes `_`). The input is always written: it cannot
-# be derived (`mq`'s is `msgq_demo`). **Put the cap on a demo that looks at real time**:
-# cooperative, it hangs.
+# A row is `<suffix>:<input>`: `ksos-<suffix>` builds `demo/posix/<input>.kspls` into
+# `$(POSIX_OUT)/ksos_<suffix>.exe` (`-` becomes `_`). The input is always written: it cannot be
+# derived (`mq`'s is `msgq_demo`).
 KSOS_POSIX_TEMPLATED := mq:msgq_demo mutex:mutex_demo mutex-nested:mutex_nested_demo \
-    wake-preempt:wake_preempt_demo event:event_demo preempt:posix_preempt_demo:20 \
+    wake-preempt:wake_preempt_demo event:event_demo preempt:posix_preempt_demo \
     delay-until:delay_until_demo lifecycle:lifecycle_demo isr:isr_signal_demo \
-    task-manager:task_manager_demo:20 kernel-check:kernel_check timeout:timeout_demo
+    task-manager:task_manager_demo kernel-check:kernel_check timeout:timeout_demo \
+    tick-mid-switch:tick_mid_switch_demo
 
 ifneq ($(call rows_missing,$(KSOS_POSIX_TEMPLATED),2),)
 $(error a POSIX demo's row has no input: $(call rows_missing,$(KSOS_POSIX_TEMPLATED),2))
 endif
 
-# $(call ksos_posix_demo_rule,<suffix>,<input>,<cap or empty>)
+# $(call ksos_posix_demo_rule,<suffix>,<input>)
 define ksos_posix_demo_rule
 ksos-$(1):
 	@echo "# BUILDING KANSO OS (POSIX demo/posix/$(2).kspls)"
 	$$(call posix_link,demo/posix/$(2).kspls,ksos_$(subst -,_,$(1)))
-	$(if $(3),timeout $(3) )./$$(POSIX_OUT)/ksos_$(subst -,_,$(1)).exe
+	$$(call ksos_capped_run,./$$(POSIX_OUT)/ksos_$(subst -,_,$(1)).exe)
 endef
-$(foreach r,$(KSOS_POSIX_TEMPLATED),$(eval $(call ksos_posix_demo_rule,$(call row_field,$(r),1),$(call row_field,$(r),2),$(call row_field,$(r),3))))
+$(foreach r,$(KSOS_POSIX_TEMPLATED),$(eval $(call ksos_posix_demo_rule,$(call row_field,$(r),1),$(call row_field,$(r),2))))
 
 # **The demos whose mark of success is a panic**: a row is `<suffix>:<input>`, and
 # `ksos_posix_panic_needle_<suffix>` the line the run must print. **The needle is the kernel-side
@@ -149,9 +202,9 @@ define ksos_posix_panic_rule
 ksos-$(1):
 	@echo "# BUILDING KANSO OS (POSIX demo/posix/$(2).kspls, which must panic)"
 	$$(call posix_link,demo/posix/$(2).kspls,ksos_$(subst -,_,$(1)))
-	@out=$$$$(./$$(POSIX_OUT)/ksos_$(subst -,_,$(1)).exe 2>&1 || true); \
-	echo "$$$$out" >&2; \
-	if echo "$$$$out" | grep -q "$(ksos_posix_panic_needle_$(1))"; then \
+	@$$(call ksos_capped,./$$(POSIX_OUT)/ksos_$(subst -,_,$(1)).exe >$$(POSIX_OUT)/ksos_$(subst -,_,$(1)).out 2>&1); \
+	cat $$(POSIX_OUT)/ksos_$(subst -,_,$(1)).out >&2; \
+	if grep -q "$(ksos_posix_panic_needle_$(1))" $$(POSIX_OUT)/ksos_$(subst -,_,$(1)).out; then \
 		echo "RESULT: ALL PASS (ksos-$(1): the kernel stopped with the expected message)"; \
 	else \
 		echo "RESULT: SOME FAILED (1) -> ksos-$(1): expected message not found"; exit 1; \
@@ -174,32 +227,30 @@ $(CM_OUT)/switch.o: $(CM_DIR)/switch.S | $(CM_OUT)
 $(CM_OUT)/startup.o: $(CM_DIR)/startup.S | $(CM_OUT)
 	$(CM_CC) -c $< -o $@
 
-# $(call bare_link,<cc>,<out dir>,<link.ld>,<objects>,<libgcc>,<src.kspls>,<elf>,<stem>): the one
-# bare-metal build, which `cm_link` and `cm0_link` name their port's parts to. The libgcc goes last
-# (an archive, pulled per symbol).
+# $(call bare_link,<cc>,<out dir>,<link.ld>,<objects>,<libgcc>,<src.kspls>,<elf>,<stem>,<machine>):
+# the one bare-metal build, which `cm_link` and `cm0_link` name their port's parts to. The libgcc
+# goes last (an archive, pulled per symbol).
 # Caution: The .c/.o stem is **the ELF's base name** unless <stem> names one, never a fixed name:
 # demos run in parallel would overwrite one `demo.c` and link another demo's source.
 define bare_link
 	$(call require_arm_toolchain,$(5))
-	"$(KSPLC)" --freestanding $(6) $(2)/$(or $(8),$(basename $(notdir $(7)))).c
+	"$(KSPLC)" --freestanding --machine=$(9) $(6) $(2)/$(or $(8),$(basename $(notdir $(7)))).c
 	@$(C_FMT) $(2)/$(or $(8),$(basename $(notdir $(7)))).c
 	$(1) -c $(2)/$(or $(8),$(basename $(notdir $(7)))).c -o $(2)/$(or $(8),$(basename $(notdir $(7)))).o
 	$(LLD_LINK) --gc-sections -T $(3) -o $(7) $(4) $(2)/$(or $(8),$(basename $(notdir $(7)))).o $(5)
 endef
 
 # $(call cm_link,<src.kspls>,<elf>[,<stem>]): a Cortex-M3 build (`bare_link`).
-cm_link = $(call bare_link,$(CM_CC),$(CM_OUT),$(CM_DIR)/link.ld,$(CM_OBJS),$(LIBGCC_CM),$(1),$(2),$(3))
+cm_link = $(call bare_link,$(CM_CC),$(CM_OUT),$(CM_DIR)/link.ld,$(CM_OBJS),$(LIBGCC_CM),$(1),$(2),$(3),$(CM_MACHINE))
 
-# $(call cm_qemu,<elf>,<the timeout in seconds>,<extra qemu arguments>) on MPS2-AN385 (Cortex-M3).
-# Caution: **Always put a timeout**: the only stop for a hung demo (semihosting's exit returns 0).
+# $(call cm_qemu,<elf>): runs it on MPS2-AN385 (Cortex-M3), under the cap (`ksos_capped_run`): the
+# only stop for a hung demo, since semihosting's exit returns 0 whatever the demo's verdict.
 # Caution: **Keep `-icount shift=auto`**: it makes the board's clock count executed instructions.
 # Without it the SysTick follows the host's clock, and a host that stalls QEMU gets two ticks
 # delivered back to back to catch up, which no real board does: the control loop's period check
 # then sees a one-tick slip in about one run in ten (`cortex_m_control_ai_probe.kspls`).
-define cm_qemu
-	timeout $(2) qemu-system-arm -M mps2-an385 -cpu cortex-m3 -nographic -semihosting \
-		-icount shift=auto $(3) -kernel $(1)
-endef
+cm_qemu = $(call ksos_capped_run,qemu-system-arm -M mps2-an385 -cpu cortex-m3 -nographic \
+    -semihosting -icount shift=auto -kernel $(1))
 
 # The cooperative demo: the build, plus checking the vector table and PendSV with objdump.
 ksos-cm: $(CM_OBJS)
@@ -214,42 +265,37 @@ ksos-cm: $(CM_OBJS)
 # Runs that ELF under QEMU (mps2-an385); output and exit go through ARM semihosting.
 ksos-cm-run: ksos-cm
 	@echo "# RUNNING KANSO OS (Cortex-M) on QEMU mps2-an385"
-	$(call cm_qemu,$(CM_OUT)/ksos_cm.elf,20)
+	$(call cm_qemu,$(CM_OUT)/ksos_cm.elf)
 
 # --- The demos run under QEMU ------------------------------------------------------
-# A row is `<suffix>:<QEMU's seconds>`: `ksos-cm-<suffix>` builds
-# `ksos/demo/cortex_m/cortex_m_<suffix>.kspls` into `$(CM_OUT)/ksos_cm_<suffix>.elf` (`-` becomes
-# `_`) and runs it. A demo with a peer process or objdump is written by hand.
-KSOS_CM_DEMOS := uart-probe:15 heap-probe:15 panic-probe:15 ai-probe:15 ai-train-probe:15 \
-    car-model-probe:15 ai-weights-probe:15 pilot-probe:15 preempt:20 control-ai-probe:20 mq:20 \
-    pi:20 event:20 timeout:20 isr-block:15 isr-give:15
-
-ifneq ($(call rows_missing,$(KSOS_CM_DEMOS),2),)
-$(error a Cortex-M demo's row has no seconds: $(call rows_missing,$(KSOS_CM_DEMOS),2))
-endif
+# A row is `<suffix>`: `ksos-cm-<suffix>` builds `ksos/demo/cortex_m/cortex_m_<suffix>.kspls` into
+# `$(CM_OUT)/ksos_cm_<suffix>.elf` (`-` becomes `_`) and runs it. A demo with a peer process or
+# objdump is written by hand.
+KSOS_CM_DEMOS := uart-probe heap-probe panic-probe ai-probe ai-train-probe car-model-probe \
+    ai-weights-probe pilot-probe preempt control-ai-probe mq pi event timeout isr-block isr-give
 
 # UART0's RX path: QEMU's chardev on a Unix socket, and `tests/uart_echo_test.py` checks the echo.
 ksos-cm-uart-echo: $(CM_OBJS)
 	@echo "# BUILDING+RUNNING UART0(RX) echo probe on Cortex-M (thumbv7m) bare metal"
 	$(call cm_link,demo/cortex_m/cortex_m_uart_echo.kspls,$(CM_OUT)/ksos_cm_uart_echo.elf)
 	@rm -f $(CM_OUT)/uart_echo_test.sock
-	python3 tests/uart_echo_test.py $(CM_OUT)/ksos_cm_uart_echo.elf
+	$(call ksos_capped_run,python3 tests/uart_echo_test.py $(CM_OUT)/ksos_cm_uart_echo.elf)
 
 # UART0's RX driven by NVIC IRQ0, the CPU resting on WFI; `tests/uart_irq_echo_test.py` checks it.
 ksos-cm-uart-irq-echo: $(CM_OBJS)
 	@echo "# BUILDING+RUNNING UART0(RX, interrupt-driven NVIC IRQ0 + WFI) echo probe on Cortex-M (thumbv7m) bare metal"
 	$(call cm_link,demo/cortex_m/cortex_m_uart_irq_echo.kspls,$(CM_OUT)/ksos_cm_uart_irq_echo.elf)
 	@rm -f $(CM_OUT)/uart_irq_echo_test.sock
-	timeout 15 python3 tests/uart_irq_echo_test.py $(CM_OUT)/ksos_cm_uart_irq_echo.elf
+	$(call ksos_capped_run,python3 tests/uart_irq_echo_test.py $(CM_OUT)/ksos_cm_uart_irq_echo.elf)
 
-# $(call ksos_cm_demo_rule,<suffix>,<seconds>)
+# $(call ksos_cm_demo_rule,<suffix>)
 define ksos_cm_demo_rule
 ksos-cm-$(1): $$(CM_OBJS)
 	@echo "# BUILDING+RUNNING demo/cortex_m/cortex_m_$(subst -,_,$(1)).kspls on Cortex-M (thumbv7m) bare metal"
 	$$(call cm_link,demo/cortex_m/cortex_m_$(subst -,_,$(1)).kspls,$$(CM_OUT)/ksos_cm_$(subst -,_,$(1)).elf)
-	$$(call cm_qemu,$$(CM_OUT)/ksos_cm_$(subst -,_,$(1)).elf,$(2))
+	$$(call cm_qemu,$$(CM_OUT)/ksos_cm_$(subst -,_,$(1)).elf)
 endef
-$(foreach r,$(KSOS_CM_DEMOS),$(eval $(call ksos_cm_demo_rule,$(call row_field,$(r),1),$(call row_field,$(r),2))))
+$(foreach r,$(KSOS_CM_DEMOS),$(eval $(call ksos_cm_demo_rule,$(r))))
 
 # --- Raspberry Pi Pico / Pico W (RP2040, Cortex-M0+) real-chip port ----------------
 # RP2040 is Armv6-M (Thumb-1): startup/switch come from cortex_m0, the rest of the port is reused.
@@ -262,7 +308,8 @@ RP2040_DIR := port/rp2040
 RP2040_CM0_DIR := port/cortex_m0
 RP2040_OUT := $(OUT)/ksos_rp2040
 
-CM0_CC   := clang --target=thumbv6m-none-eabi -mcpu=cortex-m0plus -ffreestanding -Wall -Os \
+CM0_MACHINE := thumbv6m-none-eabi
+CM0_CC   := clang --target=$(CM0_MACHINE) -mcpu=cortex-m0plus -ffreestanding -Wall -Os \
     -ffunction-sections -fdata-sections
 LIBGCC_CM0 := $(shell arm-none-eabi-gcc -mcpu=cortex-m0plus -mthumb -print-libgcc-file-name 2>/dev/null)
 # atomic.o is RP2040's alone: Armv6-M has no LDREX/STREX, so without it mem.alloc / mem.Arc /
@@ -301,7 +348,7 @@ $(RP2040_OUT)/boot2_incbin.o: $(RP2040_OUT)/boot2_padded.bin
 # $(call cm0_link,<src.kspls>,<elf>[,<stem>]): an RP2040 build (`bare_link`), with boot2, or the
 # boot ROM refuses to start.
 # **Every RP2040 build goes through here**; by hand it skips `require_arm_toolchain` and its hint.
-cm0_link = $(call bare_link,$(CM0_CC),$(RP2040_OUT),$(RP2040_DIR)/link.ld,$(RP2040_LINK_OBJS),$(LIBGCC_CM0),$(1),$(2),$(3))
+cm0_link = $(call bare_link,$(CM0_CC),$(RP2040_OUT),$(RP2040_DIR)/link.ld,$(RP2040_LINK_OBJS),$(LIBGCC_CM0),$(1),$(2),$(3),$(CM0_MACHINE))
 
 ksos-rp2040: $(RP2040_LINK_OBJS) | $(RP2040_OUT)
 	@echo "# BUILDING KANSO OS (Raspberry Pi Pico / Pico W / RP2040, Cortex-M0+) -> flashable ELF"
@@ -427,8 +474,8 @@ endif
 
 # ==========================================
 # The regression gate that runs under QEMU.
-# Linking is not running: this is the only goal that runs the demos (`qemu-system-arm`), and
-# `timeout` turns a hang into a failure (the verdict is read in `ksos_run_gate`).
+# Linking is not running: this is the only goal that runs the demos (`qemu-system-arm`), and the
+# cap (`ksos_capped`) turns a hang into a failure (the verdict is read in `ksos_run_gate`).
 # Caution: **Separate what may run in parallel from what may not**: the tests/*.py demos' fixed
 # socket/port/pcap, and timing that parallel QEMUs spoil (control-ai claims **exactly zero** drift:
 # do not loosen that `== 0` to keep it parallel).
@@ -446,6 +493,9 @@ ksos-$(1)gate-$(2):
 	$$(call ksos_run_gate,$(2),$(1))
 endef
 $(foreach t,$(KSOS_QEMU_PARALLEL_DEMOS),$(eval $(call ksos_gate_rule,qemu,$(t))))
+# The cap's own check (`test-ksos-cap`) runs its spin through the same gate recipe.
+$(eval $(call ksos_gate_rule,cap,cap-check-spin))
+.PHONY: ksos-capgate-cap-check-spin
 KSOS_QEMU_GATE_TARGETS := $(addprefix ksos-qemugate-,$(KSOS_QEMU_PARALLEL_DEMOS))
 
 # $(call ksos_run_gate,<target>,<log prefix>), shared by test-ksos-qemu and test-ksos-posix.
@@ -490,7 +540,7 @@ KSOS_POSIX_PARALLEL_DEMOS := $(filter-out $(KSOS_POSIX_SERIAL_DEMOS),$(KSOS_POSI
 $(foreach t,$(KSOS_POSIX_PARALLEL_DEMOS),$(eval $(call ksos_gate_rule,posix,$(t))))
 KSOS_POSIX_GATE_TARGETS := $(addprefix ksos-posixgate-,$(KSOS_POSIX_PARALLEL_DEMOS))
 
-test-ksos-posix:
+test-ksos-posix: test-ksos-cap
 	@echo "# [test-ksos-posix] $(words $(KSOS_POSIX_DEMOS)) demos on the POSIX host port (parallel $(words $(KSOS_POSIX_PARALLEL_DEMOS)) / serial $(words $(KSOS_POSIX_SERIAL_DEMOS)))"
 	$(MAKE) -j$(TEST_JOBS) $(KSOS_POSIX_GATE_TARGETS)
 	$(foreach t,$(KSOS_POSIX_SERIAL_DEMOS),$(call ksos_run_gate,$(t),posix)$(nl))

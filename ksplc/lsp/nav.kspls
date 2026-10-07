@@ -6,6 +6,7 @@ import "ksplc/base/core" as base_core
 import "ksplc/base/locate" as base_locate
 import "ksplc/lsp/msg" as lsp_msg
 import "ksplc/lsp/state" { Doc_state }
+import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/session/import_table" as sema_session_import_table
@@ -353,11 +354,10 @@ priv fn function_of(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, name: Ast_node$@)
             return Option<|Ast_node$@|>.some(d)
         return Option<|Ast_node$@|>.none
     case .none {}
-    $f: Ast_node$@ = c.generics.templates.get(name.text) catch null
-    if f == null
-        sym: = c.symtab.resolve(name.text) catch null
-        if sym != null
-            f = sym.node
+    named: = c.read_written_name(name)
+    $f: = named.template
+    if f == null && named.sym != null
+        f = named.sym.node
     if f.is_fn_decl()
         return Option<|Ast_node$@|>.some(f)
     return Option<|Ast_node$@|>.none
@@ -445,7 +445,8 @@ priv fn declared_type_name(c: Sema_ctx$@, t_node: Ast_node$@): U8[] //<
     if t_node.type_id == 0
         return t_node.get_path_name()
     clean_id: = c.env.get_clean_real_type(get_base_type_id(c.env, t_node.type_id))
-    return c.env.inst_type_index.get(clean_id) catch c.env.get_str(clean_id)
+    key: = c.env.instance_key(clean_id)
+    return key if key.len > 0 else c.env.get_str(clean_id)
 
 priv fn field_type_name(c: Sema_ctx$@, owner: U8[], field: Ast_node$@): U8[] //<
     //< The type a field of `owner`'s declaration names, or "" where it has no such field
@@ -673,7 +674,8 @@ fn get_definition_node(c: Sema_ctx$@, path: List<|Ast_node$@|>$@): Option<|Ast_n
     if sym != null
         return Option<|Ast_node$@|>.some(sym.node)
 
-    gen_st: = c.generics.templates.get(target_text) catch null
+    // A template is keyed by its FQN alone (register_template in sema/decl/declare.kspls).
+    gen_st: = c.generics.templates.get(c.resolve_fqn_for_type(target_text)) catch null
     if gen_st != null
         return Option<|Ast_node$@|>.some(gen_st)
 

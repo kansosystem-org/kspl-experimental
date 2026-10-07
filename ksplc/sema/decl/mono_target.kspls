@@ -11,7 +11,7 @@ import "ksplc/sema/session/ctx" { Sema_ctx }
 import "std/chars"
 import "std/str"
 
-fn impl_target_rejects(r: Sema_ctx$@, impl_node: Ast_node$@, target_name: U8[], args_str: U8[],
+fn impl_target_rejects(r: Sema_ctx$@, impl_node: Ast_node$@, target_name: U8[], args: I32[],
     mask: I32): Bool //<
         //< Whether the type arguments on the impl's target fail to match the instance's arguments
         //<
@@ -21,7 +21,7 @@ fn impl_target_rejects(r: Sema_ctx$@, impl_node: Ast_node$@, target_name: U8[], 
         //< single instantiation the target of an impl" in `../../../docs/DESIGN.md`).
     t_args: = target_name.generic_args_str()
     n: = t_args.count_type_args()
-    if n == 0 || n != args_str.count_type_args()
+    if n == 0 || n != args.len
         return false
     gen_params: = impl_node.find_child(.k_type_gen_params)
     // A concrete type's name is seen from the impl's file; normalize it there to an FQN.
@@ -30,7 +30,7 @@ fn impl_target_rejects(r: Sema_ctx$@, impl_node: Ast_node$@, target_name: U8[], 
     defer r.set_current_file(prev_file)
     for $i: Sz = 0; i < n; i += 1
         written: = t_args.nth_type_arg(i)
-        actual: = args_str.nth_type_arg(i)
+        actual: = r.env.get_str(args[i])
         wants_mut: = written.starts_with("$")
         if wants_mut && actual.ends_with(base_core.immut_mark)
             return true

@@ -75,6 +75,7 @@ priv fn picks_in(c: jsonrpc.Client$@, uri: U8[], text: U8[], line: Sz, character
     arena: Arena$@): List<|Row|> //<
         //< It opens that text and sends completion at (line, character)
     _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(uri, text, arena), arena)
+    defer lsp_client.close(c, uri, arena)
     $b: = Json_builder.new(arena)
     pos: = b.obj().set("line", b.int_val(I32::line))
         .set("character", b.int_val(I32::character)).build()
@@ -83,7 +84,7 @@ priv fn picks_in(c: jsonrpc.Client$@, uri: U8[], text: U8[], line: Sz, character
         .build()
     msg: = c.request("textDocument/completion", params, heavy_ms, arena) catch
         return List<|Row|>.new(arena)
-    $items: = msg.get("result").arr_list(arena)
+    items: = msg.get("result").arr_list(arena)
     $out: = List<|Row|>.new(arena)
     for i in Range.asc(items.len)
         it: = items.get(i)

@@ -222,6 +222,7 @@ fn run(r: Ast_node$@, c: Sema_ctx$@): Void?Sema_error
         child.mark_template_symbols_used(c)
 
     c.check_import_symbols_exist()
+    c.check_import_symbols_visible()
     c.check_redundant_import_alias()
     c.check_unused_imports()
     c.check_unused_symbols()
@@ -246,19 +247,8 @@ impl Ast_node
         prof_nested: = sema_session_prof.prof.nested_save()
         defer sema_session_prof.prof.body_end(fn_name, r.loc, prof_started, prof_nested)
 
-        $def_file: = r.loc.file()
-        if fn_name.len > 0
-            switch fn_name.find_generic_bounds() case .found(start_idx, _is, _ie, end_idx)
-                $tmpl_name: = Str_builder.new()
-                defer tmpl_name.free()
-                tmpl_name.s(fn_name.sub(0, start_idx))
-                if end_idx + 1 < fn_name.len
-                    tmpl_name.s(fn_name.sub_from(end_idx + 1))
-                tmpl: = c.generics.templates.get(tmpl_name.slice()) catch null
-                if tmpl != null
-                    def_file = tmpl.loc.file()
-            default {}
-
+        // An instance's tree carries its template's file (prepare_inst_node in mono.kspls).
+        def_file: = r.loc.file()
         prev_file: = c.file_name
         if def_file.len > 0
             c.set_current_file(def_file)
@@ -323,9 +313,9 @@ impl Ast_node
             block.infer_stmts(c) catch
                 has_err = true
             if !has_err
-                // [W0106] A lock's borrow used outside the lock (lint only).
+                // [W0105] A lock's borrow used outside the lock (lint only).
                 sema_body_lint_stmt.lint_lock_escape(c, block)
-                // [W0110] A way out between an `Owned` value's binding and the `defer` freeing it.
+                // [W0109] A way out between an `Owned` value's binding and the `defer` freeing it.
                 sema_body_lint_stmt.lint_defer_gap(c, block)
             if !has_err && r.has_attribute("naked") && !block.holds_only_asm(c)
                 has_err = true

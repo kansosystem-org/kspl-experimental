@@ -1,0 +1,59 @@
+//< A function's name passed to a generic parameter gives it a type only where it names one function
+//<
+//< A non-generic function, a written specialization and a method named through its type each give
+//< the function type of the function they name. A bare generic name names none, so it is refused at
+//< its line with what to write, and so is a variadic function, which no function type holds; bound
+//< to the mark of "a function", a call through the result had nothing to be checked against, nor C
+//< to spell. A name passed where the parameter's type is fixed is checked against it.
+//< Caution: Keep the passing side: the names that give a type, and a written type argument.
+// EXPECT: generic function 'gf' cannot be used as a value without its type arguments
+// EXPECT: generic type 'Holder' needs its type arguments before a method of it can be used as a value
+// EXPECT: generic method 'gk' cannot be used as a value without its type arguments
+// EXPECT: cannot infer the type arguments of 'pass_through' from function 'snprintf': it is variadic, and a function type holds no '...'
+// EXPECT: then 'pass_through<|Op|>(…)'
+// EXPECT: function 'text_len' cannot be used as 'fn(I32):I32': its own type is 'fn(U8[]):I32'
+// EXPECT-NOT: from function 'twice'
+// EXPECT-NOT: from function 'gf'
+// EXPECT-NOT: from function 'keep'
+import "std/libc" { snprintf }
+
+priv fn twice(a: I32): I32
+  return a * 2
+
+priv fn text_len(_s: U8[]): I32
+  return 3
+
+priv fn gf<|T|>(_x: T): Sz
+  return 100 + sizeof(T)
+
+priv fn pass_through<|T|>(v: T): T
+  return v
+
+priv fn apply<|T|>(f: fn(x: T): T, v: T): T
+  return f(v)
+
+priv struct Holder<|T|>
+  v: T
+
+impl<|T|> Holder<|T|>
+  fn keep(_r: Self@): Sz
+    return 200 + sizeof(T)
+  fn gk<|U|>(_r: Self@, _u: U): Sz
+    return 1
+
+priv typedef Op = fn(a: I32): I32
+
+fn main(): I32
+  bare: = pass_through(gf)
+  bare_type: = pass_through(Holder.keep)
+  bare_own: = pass_through(Holder<|I32|>.gk)
+  variadic: = pass_through(snprintf)
+  bad: = apply(text_len, 3)
+  // The passing side.
+  plain: = pass_through(twice)
+  spec: = pass_through(gf<|U16|>)
+  h: = Holder<|I32|>::{ .v = 1 }
+  method: = pass_through(Holder<|I32|>.keep)
+  written: = pass_through<|Op|>(twice)
+  ok: I32 = written(1) + apply(twice, 2) + plain(3)
+  return ok + I32::spec(2U16) + I32::method(h@)

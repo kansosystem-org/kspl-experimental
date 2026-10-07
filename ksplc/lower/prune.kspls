@@ -136,8 +136,8 @@ priv fn collect_inst_types(c: Sema_ctx$@, out: Map<|Sz, Bool|>$@) //<
 priv fn inst_node_of(c: Sema_ctx$@, tid: I32): Option<|Ast_node$@|> //<
     //< The node that defines the type with this ID
     //<
-    //< It uses the index `inst_type_index` (a linear walk would be O(N^2)).
-    key: = c.env.inst_type_index.get(tid) catch ""
+    //< It asks the instance's record (a linear walk would be O(N^2)).
+    key: = c.env.instance_key(tid)
     if key.len == 0
         return Option<|Ast_node$@|>.none
     n: = c.env.instantiated_nodes.get(key) catch null
@@ -214,6 +214,9 @@ fn prune_unreachable_types(root: Ast_node$@, c: Sema_ctx$@) //<
         if insts.get(Sz::child) catch false
             continue
         mark_referenced_types(child, c, seen, work, 0)
+    // A type whose layout was folded stays, so the C compiler's check of the number can name it.
+    for f in c.layout.folded
+        mark_type(c, seen, work, f.type_id)
     for work.len > 0
         tid: = work.get(work.len - 1)
         work.len -= 1

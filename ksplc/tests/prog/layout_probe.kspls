@@ -1,0 +1,148 @@
+//< Every shape whose layout differs between machines, and every way a folded size reaches the C
+//<
+//< `layout_targets_test.kspls` compiles it for each machine ksplc knows and has clang compile the C
+//< for the same machine: the C checks each folded number, so a size laid out wrongly fails there.
+//< Its entry points answer what the folds decided, for a machine that runs it (wasm32 under node).
+import "std/json"
+import "std/json_struct"
+import "std/mem"
+import "std/reflect"
+
+trait Shape //< a trait value: an object and its table of methods
+    fn area(r: Self): I64
+
+struct Wide //< every width a machine decides, one field each
+    tag: U8
+    p: I32@
+    s: U8[]
+    f: fn(x: I32): I32
+    n: Sz
+    d: I64
+    x: F64
+    sh: Shape
+
+impl Wide: Shape
+    fn area(r: Self@): I64
+        return r.d
+
+enum Pick //< a tagged enumeration whose payload holds a pointer and a 64-bit field
+    none
+    one(at: U8@, n: Sz)
+    two(d: I64)
+
+#packed
+struct Tight
+    a: U8
+    n: Sz
+    d: I64
+
+#align(16)
+struct Lined
+    a: U8
+    p: U8@
+
+struct Spec //< what reflection walks: an option over `Sz` is read past its tag at a folded offset
+    count: Option<|Sz|>
+    after: I32
+
+impl Spec: reflect.Reflectable {}
+
+struct Holder
+    words: Sz[2]
+    tail: I32
+
+const ptr_bytes: Sz = sizeof(U8@)
+const two_ptr_bytes: Sz = ptr_bytes * 2 // a chain: the C writes the folded number, not `sizeof`
+const word_is_64: Bool = sizeof(Sz) == 8
+
+##error(sizeof(Sz) == sizeof(U8@), "Sz is as wide as a pointer on every machine ksplc knows")
+##error(sizeof(Wide) > offsetof(Wide, sh), "a struct ends after its last field")
+
+wide_bytes: U8[sizeof(Wide)] = ::{}
+pick_bytes: U8[sizeof(Pick)] = ::{}
+const fn_bytes: Sz = sizeof(fn(): I32)
+const slice_bytes: Sz = sizeof(U8[])
+const trait_bytes: Sz = sizeof(Shape)
+const tight_bytes: Sz = sizeof(Tight)
+const lined_bytes: Sz = sizeof(Lined)
+const result_bytes: Sz = sizeof(I64?U8)
+const wide_d_at: Sz = offsetof(Wide, d)
+const tight_d_at: Sz = offsetof(Tight, d)
+// Named through constants, so the C holds each folded number; a `sizeof` here would stay C's.
+sizes: Sz[8] = ::{ fn_bytes, slice_bytes, trait_bytes, tight_bytes, lined_bytes, result_bytes,
+    wide_d_at, tight_d_at }
+top_bits: Sz = 64 if sizeof(Sz) == 8 else 32
+
+$heap: U8[4096] = ::{}
+
+#export
+fn two_ptrs(): Sz //< two pointers' bytes, through a chain of constants
+    return two_ptr_bytes
+
+#export
+fn word_bits_if(): Sz //< `Sz`'s bits, by a static `if`: the branch kept is the machine's
+    $bits: Sz = 0
+    if sizeof(Sz) == 8
+        bits = 64
+    else
+        bits = 32
+    return bits
+
+#export
+fn word_bits_const(): Sz //< `Sz`'s bits, by a folded constant
+    return 64 if word_is_64 else 32
+
+#export
+fn word_bits_top(): Sz //< `Sz`'s bits, by a top-level initializer
+    return top_bits
+
+#export
+fn word_bits_case(): Sz //< a pointer's bits, by a `case` label
+    switch sizeof(U8@) case 4
+        return 32
+    case 8
+        return 64
+    default
+        return 0
+
+#export
+fn wide_len(): Sz //< an array whose length is a folded size
+    return wide_bytes.len + pick_bytes.len - sizeof(Pick)
+
+#export
+fn sizes_sum(): Sz //< the folded sizes in a table, which the C checks one by one
+    $sum: Sz = 0
+    for v in sizes
+        sum += v
+    return sum
+
+#export
+fn cast_len(): Sz //< a slice cast that stands on two element sizes being equal
+    h: Holder = ::{ .words = ::{ 1, 2 }, .tail = 9 }
+    view: = U8@[]::h.words
+    return view.len
+
+#export
+fn json_count(): I64 //< reflection writing an option over `Sz`, read back
+    $a: = mem.Arena.from_buffer(Void$@::heap@, heap.len)
+    $b: = json.Json_builder.new(a@)
+    s: Spec = ::{ .count = Option<|Sz|>.some(7), .after = 99 }
+    v: = json_struct.from_struct(s@, b@) catch json.Val.null_val
+    switch v.get("count") case .int_val(i)
+        return i
+    default
+        return -1
+
+#export
+fn json_after(): I32 //< reflection reading into the option, and the field after it left whole
+    $a: = mem.Arena.from_buffer(Void$@::heap@, heap.len)
+    v: = json.parse("{\"count\": 7, \"after\": 99}", a@) catch json.Val.null_val
+    $s: Spec = ::{ .count = Option<|Sz|>.none, .after = 0 }
+    json_struct.into_struct(v, s@, a@) catch {}
+    switch s.count case .some(n)
+        return s.after if n == 7 else -2
+    default
+        return -1
+
+fn main(): I32
+    return 0

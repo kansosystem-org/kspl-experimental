@@ -7,30 +7,34 @@
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/sema/decl/access" as _sema_decl_access
 import "ksplc/sema/decl/eval" as sema_decl_eval
+import "ksplc/sema/decl/name" as sema_decl_name
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/session/ctx" { Sema_ctx }
-import "ksplc/sema/session/import_table" as sema_session_import_table
-import "ksplc/sema/type/env" as sema_type_env
 import "std/chars"
 import "std/ds" { List }
 import "std/str" { Str_builder }
 
-enum Type_exist_status
-    not_found
-    found
-    missing_prefix
-    unknown_alias
-
-fn report_type_existence_error(c: Sema_ctx$@, status: Type_exist_status, base_name: U8[],
-    err_node: Ast_node$@)
-    switch status case .unknown_alias
+fn report_type_existence_error(c: Sema_ctx$@, kind: sema_decl_name.Written_kind, base_name: U8[],
+    err_node: Ast_node$@) //<
+        //< Reports what a written type's name is instead of a type, where it is not one
+        //<
+        //< base_name is the path as written up to its type arguments, the whole path for a value's.
+    switch kind case .unknown_alias
         first_dot: = base_name.find_char('.')
         prefix: = base_name.sub(0, first_dot)
         c.clear_scratch().s("unknown import alias '\{prefix\}'")
         c.err(err_node, c.scratch.slice())
-    case .missing_prefix
-        c.clear_scratch().s("missing import alias prefix for type '\{base_name\}'")
+    case .elsewhere
+        dot: = base_name.find_char('.')
+        head: = base_name if dot < 0 else base_name.sub(0, dot)
+        if reach: = c.alias_reaching(head)
+            c.report_without_alias(err_node, head, reach.path)
+    case .names_value(what)
+        c.clear_scratch().s("'\{base_name\}' is \{what.word()\}, not a type")
+        if what == .function
+            c.scratch.s(". A pointer to one has a function type, such as 'fn(x: I32): I32'")
         c.err(err_node, c.scratch.slice())
     case .not_found
         if !base_name.starts_with("_")
@@ -38,61 +42,79 @@ fn report_type_existence_error(c: Sema_ctx$@, status: Type_exist_status, base_na
             c.err(err_node, c.scratch.slice())
     default {}
 
-priv fn check_type_existence(c: Sema_ctx$@, base_name: U8[], gen_params: List<|U8[]|>$@):
-    Type_exist_status
-    if base_name.equals("Self")
-        return .found
-
-    first_dot: = base_name.find_char('.')
-    if first_dot >= 0
-        prefix: = base_name.sub(0, first_dot)
-        target_file: = c.get_file_alias_target(c.file_name, prefix)
-        if target_file.len > 0
-            actual_base: = base_name.sub_from(first_dot + 1)
-            if c.file_has_type(target_file, actual_base)
-                return .found
-            return .not_found
-        return .unknown_alias
-
-    for gp_name in gen_params
-        if gp_name.equals(base_name)
-            return .found
-    if c.find_generic_arg(base_name).is_some()
-        return .found
-
-    // A name brought in with no namespace by `import "path" { A };`.
-    // Caution: Look it up before a same-named one from outside the file (the reason is at
-    // Ctx.imported_symbol_fqn), or it becomes `missing import alias prefix`.
-    if c.imported_symbol_fqn(base_name).len > 0
-        return .found
-
-    fqn: = c.make_fqn(base_name)
-    if (c.generics.templates.get(fqn) catch null) != null
-        return .found
-
-    sym: = c.symtab.resolve(base_name) catch null
-    if sym != null
-        def_in: = sym.get_defined_in()
-        if def_in.len == 0 || def_in.equals(c.file_name)
-            return .found
-        return .missing_prefix
-
-    t_id: = c.env.type_to_id.get(base_name) catch 0
-    if t_id != 0
-        if sema_type_env.is_builtin(t_id)
-            return .found
-        return .missing_prefix
-    return .not_found
+fn refuse_type_args_on_plain_type(c: Sema_ctx$@, w: sema_decl_name.Written_type): Bool //<
+    //< Reports type arguments written after a type that declares none, and says whether it did
+    //<
+    //< They would bind nothing and change nothing (Principle 5), in a type position and before a
+    //< member alike (`Plain<|I32|>`, `Plain<|I32|>.mk(3)`), as after a function that declares none.
+    if w.args == null || c.written_template(w) != null
+        return false
+    c.clear_scratch()
+        .s("type '\{w.spelled\}' is not generic, so '\{w.args.text\}' names nothing: drop it")
+    c.err(w.args, c.scratch.slice())
+    return true
 
 priv fn check_and_report_type(node: Ast_node$@, c: Sema_ctx$@, gen_params: List<|U8[]|>$@,
     err_node: Ast_node$@)
+    w: = c.read_written_type(node)
+    if w.spelled.len == 0
+        return
+    kind: = c.type_kind_of(w, gen_params)
+    switch kind case .found
+        // **A type reached through an import alias is checked for visibility here**, at the use:
+        // nothing at the `import` line names it, as a selective import does.
+        if w.alias_file.len > 0
+            sym: = c.written_type_symbol(w)
+            if sym != null
+                c.check_visibility_and_mark_used(sym, err_node)
+        if w.member == null
+            refuse_type_args_on_plain_type(c, w)
+    case .names_value(_w)
+        $path_str: = Str_builder.new()
+        defer path_str.free()
+        node.get_full_path_str_to(path_str)
+        report_type_existence_error(c, kind, path_str.slice(), err_node)
+    default
+        report_type_existence_error(c, kind, w.spelled, err_node)
+
+priv fn refuse_sizeof_of_value_name(c: Sema_ctx$@, target: Ast_node$@,
+    gen_params: List<|U8[]|>$@): Bool //<
+        //< Reports a `sizeof` of a function's name or a type's member, and says whether it did
+        //<
+        //< **A function's size has no one meaning** (`sizeof(twice)`, `sizeof(same<|I32|>)`): the
+        //< pointer's, the machine code's or the result's would each be one reader's guess. The
+        //< message names the form that gives a pointer's size. A target with a postfix (`twice@`)
+        //< is a type, left to the type position's report.
+    if target == null || target.kind_id != .k_type_expr || target.children.len != 1
+        return false
+    atom: = target.get_child(0)
+    if atom.kind_id != .k_type_atom || atom.children.len != 1
+        return false
+    path: = atom.get_child(0)
+    if path.kind_id != .k_identifier && path.kind_id != .k_type_path &&
+        path.kind_id != .k_expr_path
+        return false
     $path_str: = Str_builder.new()
     defer path_str.free()
-    node.get_full_path_str_to(path_str)
-    base_name: = path_str.slice().get_generic_base_name()
-    if base_name.len > 0
-        status: = check_type_existence(c, base_name, gen_params)
-        report_type_existence_error(c, status, base_name, err_node)
+    path.get_full_path_str_to(path_str)
+    full: = path_str.slice()
+    switch c.type_kind_of(c.read_written_type(path), gen_params) case .names_value(what)
+        if what == .function
+            c.clear_scratch()
+                .s("'sizeof' cannot take the function '\{full\}': a function's size has no one \
+                    meaning. A pointer to one has the size of a function type, such as \
+                    'sizeof(fn(x: I32): I32)'")
+        else if what == .type_member
+            c.clear_scratch()
+                .s("'sizeof' cannot take '\{full\}': a member named through its type is neither a \
+                    type nor a value. Write the member's type: a field's own, or a function type \
+                    for a method")
+        else
+            return false
+        c.err(target, c.scratch.slice())
+        return true
+    default
+        return false
 
 priv fn sizeof_may_name_value(c: Sema_ctx$@, target: Ast_node$@, bound: List<|U8[]|>$@): Bool //<
     //< Whether a `sizeof` target's first name may be a value: one the function binds, or a global
@@ -196,7 +218,8 @@ impl Ast_node
         // local is in scope yet here, so a name the function binds is left to infer_sizeof_expr in
         // `../body/expr.kspls`, which has the scope. A global's name reads the same way.
         if r.kind_id == .k_expr_sizeof &&
-            sizeof_may_name_value(c, r.get_sizeof_target(), bound)
+            (sizeof_may_name_value(c, r.get_sizeof_target(), bound) ||
+            refuse_sizeof_of_value_name(c, r.get_sizeof_target(), gen_params))
             return
         $collected: = List<|U8[]|>.new(null)
         defer collected.free()

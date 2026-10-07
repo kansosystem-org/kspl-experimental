@@ -1,0 +1,599 @@
+//< The generic matrix's table: shapes, ways of reaching them, positions, and each cell's outcome
+//<
+//< A shape is what a generic takes, a way where it is written and how a file reaches it, a
+//< position where the subject is written.
+//< **A cell is one shape, reached one way, written in one position.** Its outcome is not listed
+//< per cell but derived by `outcome` from the rows' properties, each rule naming the section of
+//< `docs/SPEC-language.md` that states it: so a new shape, way or position is one row, and its
+//< cells follow. `generic_matrix_test.kspls` writes and judges the programs.
+//< Caution: **An outcome is either a run printing a value or a refusal at the user's line.** A C
+//< compiler's or LLVM's error is never an outcome: it is a ksplc bug wherever it shows.
+import "std/mem" { Arena }
+import "std/str"
+
+// ==========================================
+// The library every cell reaches into
+// ==========================================
+
+// The library, in the brace notation: `{VIS}` is the mark on every declaration and method,
+// `{FVIS}` on the fields (`pub` only where the type is), `{BASE}` what each answer starts from and
+// `{PAD}` a field before the others. A decoy written from it answers from 1000 with a field more,
+// so a cell that reaches it prints another number, not a C error.
+// Each answer is built from the sizes of its type arguments, so a type argument bound to another
+// type prints another number too.
+const library: U8[] =
+    """{VIS}fn gf<|T|>(_x: T): Sz {
+  return {BASE} + 100 + sizeof(T);
+}
+
+{VIS}struct Box<|T|> {
+{PAD}  {FVIS}a: U8;
+  {FVIS}v: T;
+}
+
+impl<|T|> Box<|T|> {
+  {VIS}fn get(_r: Self@): Sz {
+    return {BASE} + 200 + sizeof(T);
+  }
+  {VIS}fn mk(_x: T): Sz {
+    return {BASE} + 300 + sizeof(T);
+  }
+  {VIS}fn gm<|U|>(_r: Self@, _y: U): Sz {
+    return {BASE} + 400 + sizeof(T) * 10 + sizeof(U);
+  }
+}
+
+{VIS}struct Plain {
+  {FVIS}a: U8;
+}
+
+impl Plain {
+  {VIS}fn gen<|U|>(_y: U): Sz {
+    return {BASE} + 500 + sizeof(U);
+  }
+  {VIS}fn genr<|U|>(_r: Self@, _y: U): Sz {
+    return {BASE} + 600 + sizeof(U);
+  }
+}
+"""
+
+fn library_text(vis: U8[], decoy: Bool, arena: Arena$@): U8[] //< the library with its marks
+    fvis: = "pub " if vis.equals("pub ") else ""
+    pad: =
+        arena.text().s("  ").s(fvis).s("pad: I64;\n").take() if decoy else ""
+    return library.replace("{VIS}", vis, arena).replace("{FVIS}", fvis, arena)
+        .replace("{BASE}", "1000" if decoy else "0", arena).replace("{PAD}", pad, arena)
+
+// ==========================================
+// Shapes: what is generic, and how it is written whole
+// ==========================================
+
+enum Kind //< what a shape names, which decides the words a refusal uses
+    function //< a free function
+    member //< a function reached through its type
+    type //< a type
+
+enum Owner //< the library's declaration a shape hangs on, which a way of reaching spells
+    gf
+    box
+    plain
+
+// In a shape's text `{G}` is `gf`, `{B}` the instance `Box<|I64|>`, `{BB}` the bare `Box` and `{P}`
+// `Plain`, each spelt as the way of reaching it says (`spell`). `recv` / `precv` are the receivers
+// the program declares at its top.
+struct Shape //< one shape a generic takes
+    name: U8[] //< a short name for the cell's name
+    what: U8[] //< in words
+    kind: Kind
+    owner: Owner
+    recv: Bool //< it takes a receiver, so it can be reached through a value
+    own: Bool //< it declares type parameters of its own
+    v: U8[] //< the subject written whole: every type argument written
+    vo: U8[] //< its own type arguments left out (empty where it has none)
+    vt: U8[] //< the type's type arguments left out (empty where its type is not generic)
+    ty: U8[] //< the function type it has as a value
+    a: U8[] //< the arguments it is called with
+    rv: U8[] //< the receiver a call through a value goes through
+    mw: U8[] //< the method after a value's `.`, its own type arguments written
+    mi: U8[] //< the same with them left out
+    av: U8[] //< the arguments after a value's `.` (the receiver taken away)
+    init: U8[] //< a value of the type a type position names
+    rd: U8[] //< how a probe reads `x`, of that type, as an `Sz`
+    addr: U8[] //< an address of a value of that type
+    want: U8[] //< what a call prints
+    size: U8[] //< what `sizeof` prints (a type alone)
+    offset: U8[] //< what `offsetof(…, v)` prints (a type alone)
+    read: U8[] //< what reading a value through a type position prints (a type alone)
+
+priv const fn_init: U8[] = "7" //< what a function-like subject's type positions are given
+priv const fn_rd: U8[] = "Sz::x"
+
+const shapes: Shape[7] = ::{
+    Shape::{ .name = "gf", .what = "a generic free function", .kind = Kind.function,
+        .owner = Owner.gf, .recv = false, .own = true, .v = "{G}<|U16|>", .vo = "{G}", .vt = "",
+        .ty = "fn(x: U16): Sz", .a = "2U16", .rv = "", .mw = "", .mi = "", .av = "",
+        .init = fn_init, .rd = fn_rd, .addr = "null", .want = "102", .size = "", .offset = "",
+        .read = "" },
+    Shape::{ .name = "get", .what = "a plain method of a generic type", .kind = Kind.member,
+        .owner = Owner.box, .recv = true, .own = false, .v = "{B}.get", .vo = "", .vt = "{BB}.get",
+        .ty = "fn(r: {B}@): Sz", .a = "recv@", .rv = "recv", .mw = "", .mi = "get", .av = "",
+        .init = fn_init, .rd = fn_rd, .addr = "null", .want = "208", .size = "", .offset = "",
+        .read = "" },
+    Shape::{ .name = "mk", .what = "a static function of a generic type", .kind = Kind.member,
+        .owner = Owner.box, .recv = false, .own = false, .v = "{B}.mk", .vo = "", .vt = "{BB}.mk",
+        .ty = "fn(x: I64): Sz", .a = "7", .rv = "", .mw = "", .mi = "", .av = "", .init = fn_init,
+        .rd = fn_rd, .addr = "null", .want = "308", .size = "", .offset = "", .read = "" },
+    Shape::{ .name = "gm", .what = "a generic method of a generic type", .kind = Kind.member,
+        .owner = Owner.box, .recv = true, .own = true, .v = "{B}.gm<|U16|>", .vo = "{B}.gm",
+        .vt = "{BB}.gm<|U16|>", .ty = "fn(r: {B}@, y: U16): Sz", .a = "recv@, 2U16", .rv = "recv",
+        .mw = "gm<|U16|>", .mi = "gm", .av = "2U16", .init = fn_init, .rd = fn_rd, .addr = "null",
+        .want = "482", .size = "", .offset = "", .read = "" },
+    Shape::{ .name = "gen", .what = "a generic static method of a plain type",
+        .kind = Kind.member, .owner = Owner.plain, .recv = false, .own = true,
+        .v = "{P}.gen<|U16|>", .vo = "{P}.gen", .vt = "", .ty = "fn(y: U16): Sz", .a = "2U16",
+        .rv = "", .mw = "", .mi = "", .av = "", .init = fn_init, .rd = fn_rd, .addr = "null",
+        .want = "502", .size = "", .offset = "", .read = "" },
+    Shape::{ .name = "genr", .what = "a generic method of a plain type", .kind = Kind.member,
+        .owner = Owner.plain, .recv = true, .own = true, .v = "{P}.genr<|U16|>", .vo = "{P}.genr",
+        .vt = "", .ty = "fn(r: {P}@, y: U16): Sz", .a = "precv@, 2U16", .rv = "precv",
+        .mw = "genr<|U16|>", .mi = "genr", .av = "2U16", .init = fn_init, .rd = fn_rd,
+        .addr = "null", .want = "602", .size = "", .offset = "", .read = "" },
+    Shape::{ .name = "box", .what = "a generic type", .kind = Kind.type, .owner = Owner.box,
+        .recv = false, .own = false, .v = "{B}", .vo = "", .vt = "{BB}", .ty = "fn(x: I64): Sz",
+        .a = "7", .rv = "", .mw = "", .mi = "", .av = "", .init = "{B}::{ .a = 1, .v = 7 }",
+        .rd = "Sz::x.v", .addr = "recv@", .want = "", .size = "16", .offset = "8", .read = "7" },
+}
+
+fn of_generic_type(s: Shape@): Bool //< whether its type is generic, so it has type arguments
+    return s.owner == Owner.box
+
+// ==========================================
+// Ways of reaching it: where the library is written, its mark, and how this file names it
+// ==========================================
+
+enum Home //< where the library's declarations are written
+    here //< in the program's own file
+    pkg //< in another file of the same package (`app/lib`)
+    ext //< in another package (`other/lib`)
+
+enum Reach //< how the program's file names what the library declares
+    direct //< by its own name, declared in the same file
+    alias //< `m.gf`, through `import "…" as m`
+    select //< `gf`, through `import "…" { gf }`
+    rename //< `pick`, through `import "…" { gf as pick }`
+    unimported //< `gf` bare, though the file is imported only as `_m`
+
+enum Decoy //< a third file declaring every name of the library again
+    none
+    pub_pkg //< another package's, every name `pub`, imported as `_t`
+    priv_sib //< a file of the program's own package, every name `priv`, imported as `_t`
+
+enum Via //< what the program writes for the type the shape hangs on
+    name //< the type itself, spelt as the reach says
+    alias_type //< `Ints`, a typedef of the instance `Box<|I64|>`
+    self_type //< `Self`, inside an `impl` of the type in the program's file
+
+struct Access //< one way of reaching the library
+    name: U8[]
+    what: U8[]
+    home: Home
+    vis: U8[] //< the mark on the library's declarations
+    reach: Reach
+    decoy: Decoy
+    via: Via
+    refusal: U8[] //<
+        //< What ksplc says on every cell, empty where the name is reachable
+        //<
+        //< At a line of the program's file that writes the name. Texts parted by a tab are
+        //< alternatives: any one of them will do.
+
+const accesses: Access[17] = ::{
+    Access::{ .name = "here_priv", .what = "declared priv in the same file", .home = Home.here,
+        .vis = "priv ", .reach = Reach.direct, .decoy = Decoy.none, .via = Via.name,
+        .refusal = "" },
+    Access::{ .name = "here_pub", .what = "declared pub in the same file", .home = Home.here,
+        .vis = "pub ", .reach = Reach.direct, .decoy = Decoy.none, .via = Via.name, .refusal = "" },
+    Access::{ .name = "pkg_alias", .what = "unmarked in another file of the package, as m.",
+        .home = Home.pkg, .vis = "", .reach = Reach.alias, .decoy = Decoy.none, .via = Via.name,
+        .refusal = "" },
+    Access::{ .name = "pkg_select", .what = "unmarked in another file of the package, selected",
+        .home = Home.pkg, .vis = "", .reach = Reach.select, .decoy = Decoy.none, .via = Via.name,
+        .refusal = "" },
+    // SPEC-language 9.4: `priv` is that file's alone.
+    Access::{ .name = "pkg_priv", .what = "priv in another file of the package, as m.",
+        .home = Home.pkg, .vis = "priv ", .reach = Reach.alias, .decoy = Decoy.none,
+        .via = Via.name, .refusal = "cannot access symbol" },
+    // SPEC-language 9.2: selecting a name changes no visibility.
+    Access::{ .name = "pkg_priv_select", .what = "priv in another file of the package, selected",
+        .home = Home.pkg, .vis = "priv ", .reach = Reach.select, .decoy = Decoy.none,
+        .via = Via.name, .refusal = "cannot access symbol" },
+    Access::{ .name = "ext_alias", .what = "pub in another package, as m.", .home = Home.ext,
+        .vis = "pub ", .reach = Reach.alias, .decoy = Decoy.none, .via = Via.name, .refusal = "" },
+    Access::{ .name = "ext_select", .what = "pub in another package, selected", .home = Home.ext,
+        .vis = "pub ", .reach = Reach.select, .decoy = Decoy.none, .via = Via.name, .refusal = "" },
+    Access::{ .name = "ext_rename", .what = "pub in another package, selected under another name",
+        .home = Home.ext, .vis = "pub ", .reach = Reach.rename, .decoy = Decoy.none,
+        .via = Via.name, .refusal = "" },
+    // SPEC-language 9.4: unmarked is the package's alone.
+    Access::{ .name = "ext_hidden", .what = "unmarked in another package, as m.",
+        .home = Home.ext, .vis = "", .reach = Reach.alias, .decoy = Decoy.none, .via = Via.name,
+        .refusal = "cannot access symbol" },
+    // SPEC-language 9.2: a whole file's names are reached through its alias only.
+    Access::{ .name = "ext_unimported", .what = "pub in another package, written without m.",
+        .home = Home.ext, .vis = "pub ", .reach = Reach.unimported, .decoy = Decoy.none,
+        .via = Via.name, .refusal = "missing import alias prefix" },
+    Access::{ .name = "decoy_select",
+        .what = "selected from another package, beside a third file's pub namesake",
+        .home = Home.ext, .vis = "pub ", .reach = Reach.select, .decoy = Decoy.pub_pkg,
+        .via = Via.name, .refusal = "" },
+    Access::{ .name = "decoy_alias",
+        .what = "as m. from another package, beside a third file's pub namesake",
+        .home = Home.ext, .vis = "pub ", .reach = Reach.alias, .decoy = Decoy.pub_pkg,
+        .via = Via.name, .refusal = "" },
+    Access::{ .name = "decoy_here",
+        .what = "declared in the same file, beside a priv namesake in another file",
+        .home = Home.here, .vis = "priv ", .reach = Reach.direct, .decoy = Decoy.priv_sib,
+        .via = Via.name, .refusal = "" },
+    // SPEC-language 3.5.2: a type's members are reached through its typedef as through it.
+    Access::{ .name = "typedef", .what = "through a typedef of the instance, from another package",
+        .home = Home.ext, .vis = "pub ", .reach = Reach.alias, .decoy = Decoy.none,
+        .via = Via.alias_type, .refusal = "" },
+    // SPEC-language 5.2: inside an `impl`, `Self` is another name for its target.
+    Access::{ .name = "self_here", .what = "through Self, in an impl in the same file",
+        .home = Home.here, .vis = "priv ", .reach = Reach.direct, .decoy = Decoy.none,
+        .via = Via.self_type, .refusal = "" },
+    // SPEC-language 9.3: an `impl` may add methods to another file's type.
+    Access::{ .name = "self_ext", .what = "through Self, in this file's impl of another package's",
+        .home = Home.ext, .vis = "pub ", .reach = Reach.alias, .decoy = Decoy.none,
+        .via = Via.self_type, .refusal = "" },
+}
+
+fn library_path(a: Access@): U8[] //< the import path of the library, empty where it is this file
+    switch a.home case .here
+        return ""
+    case .pkg
+        return "app/lib"
+    case .ext
+        return "other/lib"
+
+impl Owner
+    fn own_name(r: Self): U8[] //< the library's own name for it
+        switch r case .gf
+            return "gf"
+        case .box
+            return "Box"
+        case .plain
+            return "Plain"
+
+    fn renamed(r: Self): U8[] //< the name a renaming selective import gives it
+        switch r case .gf
+            return "pick"
+        case .box
+            return "Crate"
+        case .plain
+            return "Flat"
+
+fn base_name(a: Access@, o: Owner, arena: Arena$@): U8[] //<
+    //< the library's name as this file spells it
+    switch a.reach case .alias
+        return arena.text().s("m.").s(o.own_name()).take()
+    case .rename
+        return o.renamed()
+    default
+        return o.own_name()
+
+fn import_lines(a: Access@, s: Shape@, arena: Arena$@): U8[] //< what the program imports
+    t: = arena.text()
+    path: = library_path(a)
+    if path.len > 0
+        t.s("import \"").s(path).s("\"")
+        switch a.reach case .alias
+            t.s(" as m")
+        case .unimported
+            t.s(" as _m")
+        case .rename
+            t.s(" { ").s(s.owner.own_name()).s(" as ").s(s.owner.renamed()).s(" }")
+        default
+            t.s(" { ").s(s.owner.own_name()).s(" }")
+        t.s(";\n")
+    switch a.decoy case .pub_pkg
+        t.s("import \"third/lib\" as _t;\n")
+    case .priv_sib
+        t.s("import \"app/third\" as _t;\n")
+    default {}
+    if a.via == Via.alias_type
+        t.s("priv typedef Ints = ").s(base_name(a, Owner.box, arena)).s("<|I64|>;\n")
+    return t.take()
+
+fn spell(text: U8[], a: Access@, s: Shape@, inner: Bool, arena: Arena$@): U8[] //<
+    //< A shape's text with the library's names spelt as this way of reaching them
+    //<
+    //< `inner` is a probe's body, where `Self` stands for the type the probes' `impl` targets.
+    $box: = arena.text().s(base_name(a, Owner.box, arena)).s("<|I64|>").take()
+    $plain: = base_name(a, Owner.plain, arena)
+    switch a.via case .alias_type
+        box = "Ints"
+    case .self_type
+        if inner && s.owner == Owner.box
+            box = "Self"
+        if inner && s.owner == Owner.plain
+            plain = "Self"
+    default {}
+    return text.replace("{BB}", base_name(a, Owner.box, arena), arena).replace("{B}", box, arena)
+        .replace("{P}", plain, arena).replace("{G}", base_name(a, Owner.gf, arena), arena)
+
+fn owner_type(a: Access@, s: Shape@, arena: Arena$@): U8[] //<
+    //< The type the probes' `impl` targets on the way through `Self`, spelt outside it
+    return spell("{B}" if s.owner == Owner.box else "{P}", a, s, false, arena)
+
+fn reaches(a: Access@, s: Shape@): Bool //< whether this way of reaching applies to the shape
+    switch a.via case .alias_type
+        return of_generic_type(s)
+    case .self_type
+        return s.owner != Owner.gf
+    default
+        return true
+
+// ==========================================
+// Positions: where the subject is written
+// ==========================================
+
+enum Group //< what a position asks of the subject, which decides the rule
+    call_written //< called, every type argument written
+    call_inferred //< called, its own type arguments left to the arguments
+    call_type_bare //< called through its type with the type's type arguments left out
+    call_value_written //< called through a value, its own type arguments written
+    call_value_inferred //< called through a value, its own left to the arguments
+    value //< a value, every type argument written
+    value_own_bare //< a value, its own type arguments left out
+    value_type_bare //< a value, the type's type arguments left out
+    value_through_value //< a value named through a value (`recv.get`)
+    value_inferred //< a value passed to a generic parameter with nothing written for it
+    compare //< compared with `==` and `!=`
+    size //< `sizeof`
+    offset //< `offsetof`
+    type_position //< where a type goes
+    type_bare //< where a type goes, its type arguments left out
+
+// In a position's text `{N}` is its name, `{V}` `{VO}` `{VT}` `{TY}` `{A}` `{RV}` `{MW}` `{MI}`
+// `{AV}` `{INIT}` `{RD}` `{ADDR}` the shape's texts, and `{H}` `Self.` where the probes stand in an
+// `impl`. **The line a refusal must point at starts with `@@`.**
+struct Position //< one position a subject is written in
+    name: U8[]
+    what: U8[]
+    group: Group
+    top: U8[] //< what it declares at the top of the file
+    fns: U8[] //< its functions, `probe_{N}` among them, which answers an `Sz`
+    top_subject: Bool //< the subject stands at the top, where `Self` does not reach
+    type_too: Bool //< a type is the subject too (its value group refuses it)
+
+const positions: Position[29] = ::{
+    Position::{ .name = "call_w", .what = "called, every type argument written",
+        .group = Group.call_written, .top = "",
+        .fns = "priv fn probe_{N}(): Sz {\n@@  return {V}({A});\n}\n", .top_subject = false,
+        .type_too = false },
+    Position::{ .name = "call_i", .what = "called, its own type arguments inferred",
+        .group = Group.call_inferred, .top = "",
+        .fns = "priv fn probe_{N}(): Sz {\n@@  return {VO}({A});\n}\n", .top_subject = false,
+        .type_too = false },
+    Position::{ .name = "call_t", .what = "called through its type, the type's arguments left out",
+        .group = Group.call_type_bare, .top = "",
+        .fns = "priv fn probe_{N}(): Sz {\n@@  return {VT}({A});\n}\n", .top_subject = false,
+        .type_too = false },
+    Position::{ .name = "call_vw", .what = "called through a value, its own written",
+        .group = Group.call_value_written, .top = "",
+        .fns = "priv fn probe_{N}(): Sz {\n@@  return {RV}.{MW}({AV});\n}\n", .top_subject = false,
+        .type_too = false },
+    Position::{ .name = "call_vi", .what = "called through a value, its own inferred",
+        .group = Group.call_value_inferred, .top = "",
+        .fns = "priv fn probe_{N}(): Sz {\n@@  return {RV}.{MI}({AV});\n}\n", .top_subject = false,
+        .type_too = false },
+    Position::{ .name = "val_bind", .what = "bound to a variable of its function type",
+        .group = Group.value, .top = "",
+        .fns = "priv fn probe_{N}(): Sz {\n@@  f: {TY} = {V};\n  return f({A});\n}\n",
+        .top_subject = false, .type_too = true },
+    Position::{ .name = "val_infer", .what = "bound to a declaration with no type",
+        .group = Group.value, .top = "",
+        .fns = "priv fn probe_{N}(): Sz {\n@@  f: = {V};\n  return f({A});\n}\n",
+        .top_subject = false, .type_too = true },
+    Position::{ .name = "val_arg", .what = "passed as an argument", .group = Group.value, .top = "",
+        .fns =
+        "priv fn take_{N}(f: {TY}): Sz {\n  return f({A});\n}\npriv fn probe_{N}(): Sz {\n@@  \
+            return {H}take_{N}({V});\n}\n", .top_subject = false, .type_too = false },
+    Position::{ .name = "val_field", .what = "stored in a struct's field", .group = Group.value,
+        .top = "priv struct Slot_{N} {\n  f: {TY};\n}\n",
+        .fns =
+        "priv fn probe_{N}(): Sz {\n@@  s: = Slot_{N}::{ .f = {V} };\n  return s.f({A});\n}\n",
+        .top_subject = false, .type_too = false },
+    Position::{ .name = "val_const", .what = "a top-level const", .group = Group.value,
+        .top = "@@priv const kept_{N}: {TY} = {V};\n",
+        .fns = "priv fn probe_{N}(): Sz {\n  return kept_{N}({A});\n}\n", .top_subject = true,
+        .type_too = false },
+    Position::{ .name = "val_ret", .what = "returned", .group = Group.value, .top = "",
+        .fns =
+        "priv fn give_{N}(): {TY} {\n@@  return {V};\n}\npriv fn probe_{N}(): Sz {\n  return \
+            {H}give_{N}()({A});\n}\n", .top_subject = false, .type_too = false },
+    Position::{ .name = "val_pass_w", .what = "passed to a generic parameter written as its type",
+        .group = Group.value, .top = "",
+        .fns =
+        "priv fn pass_{N}<|F|>(f: F): F {\n  return f;\n}\npriv fn probe_{N}(): Sz {\n@@  g: = \
+            {H}pass_{N}<|{TY}|>({V});\n  return g({A});\n}\n", .top_subject = false,
+        .type_too = false },
+    Position::{ .name = "val_pass_i", .what = "passed to a generic parameter written nowhere",
+        .group = Group.value_inferred, .top = "",
+        .fns =
+        "priv fn pass_{N}<|F|>(f: F): F {\n  return f;\n}\npriv fn probe_{N}(): Sz {\n@@  g: = \
+            {H}pass_{N}({V});\n  return g({A});\n}\n", .top_subject = false, .type_too = false },
+    Position::{ .name = "val_pass_bo",
+        .what = "passed to a generic parameter, its own type arguments left out",
+        .group = Group.value_own_bare, .top = "",
+        .fns =
+        "priv fn pass_{N}<|F|>(f: F): F {\n  return f;\n}\npriv fn probe_{N}(): Sz {\n@@  g: = \
+            {H}pass_{N}({VO});\n  return g({A});\n}\n", .top_subject = false, .type_too = false },
+    Position::{ .name = "val_pass_bt",
+        .what = "passed to a generic parameter, the type's type arguments left out",
+        .group = Group.value_type_bare, .top = "",
+        .fns =
+        "priv fn pass_{N}<|F|>(f: F): F {\n  return f;\n}\npriv fn probe_{N}(): Sz {\n@@  g: = \
+            {H}pass_{N}({VT});\n  return g({A});\n}\n", .top_subject = false, .type_too = false },
+    Position::{ .name = "val_bare_own", .what = "a value, its own type arguments left out",
+        .group = Group.value_own_bare, .top = "",
+        .fns = "priv fn probe_{N}(): Sz {\n@@  f: {TY} = {VO};\n  return f({A});\n}\n",
+        .top_subject = false, .type_too = false },
+    Position::{ .name = "val_bare_type", .what = "a value, the type's type arguments left out",
+        .group = Group.value_type_bare, .top = "",
+        .fns = "priv fn probe_{N}(): Sz {\n@@  f: {TY} = {VT};\n  return f({A});\n}\n",
+        .top_subject = false, .type_too = false },
+    Position::{ .name = "val_thru", .what = "a value named through a value, not called",
+        .group = Group.value_through_value, .top = "",
+        .fns = "priv fn probe_{N}(): Sz {\n@@  f: {TY} = {RV}.{MI};\n  return f({A});\n}\n",
+        .top_subject = false, .type_too = false },
+    Position::{ .name = "cmp_l", .what = "on the left of == and !=", .group = Group.compare,
+        .top = "",
+        .fns =
+        "priv fn probe_{N}(): Sz {\n  f: {TY} = {V};\n@@  return (10 if {V} == f else 20) + (1 if \
+            {V} != f else 2);\n}\n", .top_subject = false, .type_too = false },
+    Position::{ .name = "cmp_r", .what = "on the right of == and !=", .group = Group.compare,
+        .top = "",
+        .fns =
+        "priv fn probe_{N}(): Sz {\n  f: {TY} = {V};\n@@  return (10 if f == {V} else 20) + (1 if f \
+            != {V} else 2);\n}\n", .top_subject = false, .type_too = false },
+    Position::{ .name = "sizeof", .what = "sizeof", .group = Group.size, .top = "",
+        .fns = "priv fn probe_{N}(): Sz {\n@@  return sizeof({V});\n}\n", .top_subject = false,
+        .type_too = true },
+    Position::{ .name = "offsetof", .what = "offsetof", .group = Group.offset, .top = "",
+        .fns = "priv fn probe_{N}(): Sz {\n@@  return offsetof({V}, v);\n}\n", .top_subject = false,
+        .type_too = true },
+    Position::{ .name = "ty_local", .what = "a local's type", .group = Group.type_position,
+        .top = "", .fns = "priv fn probe_{N}(): Sz {\n@@  x: {V} = {INIT};\n  return {RD};\n}\n",
+        .top_subject = false, .type_too = true },
+    Position::{ .name = "ty_ptr", .what = "a pointer's target", .group = Group.type_position,
+        .top = "", .fns = "priv fn probe_{N}(): Sz {\n@@  x: {V}@ = {ADDR};\n  return {RD};\n}\n",
+        .top_subject = false, .type_too = true },
+    Position::{ .name = "ty_slice", .what = "a slice's element", .group = Group.type_position,
+        .top = "",
+        .fns =
+        "priv fn probe_{N}(): Sz {\n@@  xs: {V}[] = {V}[]::{ {INIT} };\n  x: = xs[0];\n  return \
+            {RD};\n}\n", .top_subject = false, .type_too = true },
+    Position::{ .name = "ty_field", .what = "a field's type", .group = Group.type_position,
+        .top = "priv struct Wrap_{N} {\n@@  w: {V};\n}\n",
+        .fns =
+        "priv fn probe_{N}(): Sz {\n  k: = Wrap_{N}::{ .w = {INIT} };\n  x: = k.w;\n  return \
+            {RD};\n}\n", .top_subject = true, .type_too = true },
+    Position::{ .name = "ty_arg", .what = "a type argument of another generic",
+        .group = Group.type_position, .top = "priv struct Hold_{N}<|T|> {\n  t: T;\n}\n",
+        .fns =
+        "priv fn probe_{N}(): Sz {\n@@  k: = Hold_{N}<|{V}|>::{ .t = {INIT} };\n  x: = k.t;\n  \
+            return {RD};\n}\n", .top_subject = false, .type_too = true },
+    Position::{ .name = "ty_ret", .what = "a function's return type",
+        .group = Group.type_position, .top = "",
+        .fns =
+        "@@priv fn make_{N}(): {V} {\n  return {INIT};\n}\npriv fn probe_{N}(): Sz {\n  x: = \
+            {H}make_{N}();\n  return {RD};\n}\n", .top_subject = false, .type_too = true },
+    Position::{ .name = "ty_bare", .what = "a type position, its type arguments left out",
+        .group = Group.type_bare, .top = "",
+        .fns = "priv fn probe_{N}(): Sz {\n@@  x: {VT} = {INIT};\n  return {RD};\n}\n",
+        .top_subject = false, .type_too = true },
+}
+
+// ==========================================
+// The outcome of a cell
+// ==========================================
+
+struct Outcome //< what one cell must do
+    applies: Bool //< the cell exists (its shape has what the position asks for)
+    runs: Bool //< it compiles on both backends and prints `want`
+    want: U8[]
+    says: U8[] //< where refused: the diagnostic's text, or texts parted by a tab, any one of them
+    any_line: Bool //< the refusal may stand at any line of the file writing the name
+    rule: U8[] //< where the rule is stated
+    open: U8[] //<
+        //< Where the language leaves the outcome open, the question it leaves; else empty
+        //<
+        //< Such a cell runs printing `want` or is refused at its line, in any words: either way
+        //< ksplc's output compiles. **It is listed for a decision, not taken as one.**
+
+priv fn none(): Outcome
+    return Outcome::{ .applies = false, .runs = false, .want = "", .says = "", .any_line = false,
+        .rule = "", .open = "" }
+
+priv fn run(want: U8[], rule: U8[]): Outcome
+    return Outcome::{ .applies = true, .runs = true, .want = want, .says = "", .any_line = false,
+        .rule = rule, .open = "" }
+
+priv fn refused(says: U8[], rule: U8[]): Outcome
+    return Outcome::{ .applies = true, .runs = false, .want = "", .says = says, .any_line = false,
+        .rule = rule, .open = "" }
+
+priv fn not_a_type(s: Shape@): U8[] //< the refusal of a function-like name where a type goes
+    if s.kind == Kind.function
+        return "is a function, not a type"
+    return "is a member of a type, not a type"
+
+impl Group
+    fn needs_bare(r: Self): Bool //< whether the position writes the type with no arguments
+        return r == Group.call_type_bare || r == Group.value_type_bare || r == Group.type_bare
+
+priv fn by_rule(s: Shape@, p: Position@): Outcome //< the outcome the language's rules give
+    callable: = s.kind != Kind.type
+    switch p.group case .call_written
+        return run(s.want, "8.1") if callable else none()
+    case .call_inferred
+        return run(s.want, "3.3, 8.1") if s.own else none()
+    case .call_type_bare
+        if !callable || !of_generic_type(s)
+            return none()
+        return refused("needs its type arguments before", "3.3")
+    case .call_value_written
+        return run(s.want, "3.3") if s.recv && s.own else none()
+    case .call_value_inferred
+        return run(s.want, "3.3") if s.recv else none()
+    case .value
+        if !callable
+            if !p.type_too
+                return none()
+            return refused("names a type, and a type is not a value", "6.3")
+        return run(s.want, "8.1")
+    case .value_own_bare
+        if !s.own
+            return none()
+        return refused("cannot be used as a value without its type arguments", "8.1")
+    case .value_type_bare
+        if !callable || !of_generic_type(s)
+            return none()
+        return refused("needs its type arguments before a method of it can be used as a value",
+            "8.1")
+    case .value_through_value
+        if !s.recv
+            return none()
+        return refused("cannot be used as a value through a value", "8.1")
+    case .value_inferred
+        return run(s.want, "8.1") if callable else none()
+    case .compare
+        if !callable
+            return refused("names a type, and a type is not a value", "6.3")
+        return run("12", "8.1")
+    case .size
+        return refused("'sizeof' cannot take", "6.7") if callable else run(s.size, "6.7")
+    case .offset
+        return refused(not_a_type(s), "6.3, 6.7") if callable else run(s.offset, "6.7")
+    case .type_position
+        return refused(not_a_type(s), "6.3") if callable else run(s.read, "3.3")
+    case .type_bare
+        return none() if callable else refused("is used without type arguments", "3.3")
+
+fn outcome(s: Shape@, a: Access@, p: Position@): Outcome //<
+    //< What a cell must do: the rule's outcome, refused wherever the way of reaching is
+    if !reaches(a, s)
+        return none()
+    if p.top_subject && a.via == Via.self_type
+        return none()
+    if p.group.needs_bare() && a.via != Via.name
+        return none()
+    o: = by_rule(s, p)
+    if !o.applies || a.refusal.len == 0
+        return o
+    // Refused for the access: its text, at any line writing the name. A refusal the rule gives
+    // as well is the program's other fault, so it is not asked for.
+    return Outcome::{ .applies = true, .runs = false, .want = "", .says = a.refusal,
+        .any_line = true, .rule = "9.2, 9.4", .open = "" }

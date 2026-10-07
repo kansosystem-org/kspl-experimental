@@ -120,6 +120,10 @@ struct Compiler_config
         //< accepted (the grounds are "Only the editor's parse recovers from a syntax error" in
         //< `../docs/DESIGN.md`).
     is_freestanding: Bool
+    machine: U8[] //<
+        //< The machine `--machine=` named; empty is the one ksplc runs on
+        //<
+        //< **Read it through `current` in `target.kspls`**, which resolves the empty default.
     library: Bool //<
         //< Whether a library is built (`--library`): only `#export` symbols have external linkage
         //<
@@ -320,6 +324,13 @@ impl Global_pools
 
     fn intern_name(r: Self$@, name: U8[]): I32
         return r.symbol_names.intern(name)
+
+    fn name_text(r: Self$@, name: U8[]): U8[] //< the pool's one copy of a name, kept to the end
+        //<
+        //< **A name built from parts is kept here** (an FQN, a path's segments joined by `.`), each
+        //< distinct name once, NUL-terminated. Such a name is built again on every read of it; a
+        //< copy on the arena per read costs a string per read, megabytes on a self-host.
+        return r.symbol_names.list.get(r.symbol_names.intern(name))
 
     fn intern_file(r: Self$@, file: U8[]): I32 //< turns a source's logical name into a number
         //<

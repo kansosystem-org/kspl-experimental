@@ -1,12 +1,12 @@
 # ksos/docs
 
-**The documents `ksos` carries.** Each is reached from the package's entry point, [`ksos/README.md`](../README.md).
+**The documents `ksos` carries.** Each is reached from the package's entry point, [`ksos/README.md`](../README.md), which says what ksos is and how to try it.
 
 ## What is here
 
-* [`ksos/docs/DESIGN.md`](DESIGN.md) — The decisions behind the RTOS, their grounds, and what each gives up.
-* [`ksos/docs/HOWTO-bring-up.md`](HOWTO-bring-up.md) — Bringing a board up from nothing, step by step.
-* [`ksos/docs/SPEC-board.md`](SPEC-board.md) — The car's own facts: its wiring, its motors and its conversion formulae.
+* [`ksos/docs/DESIGN.md`](DESIGN.md) — Why the RTOS is built the way it is, and what each choice gives up.
+* [`ksos/docs/HOWTO-bring-up.md`](HOWTO-bring-up.md) — Getting the real car working from nothing, one small check at a time.
+* [`ksos/docs/SPEC-board.md`](SPEC-board.md) — The car's own facts: which pin goes where, its motors, and the formulas that turn sensor readings into values.
 * [`ksos/docs/PLAN.md`](PLAN.md) — What is left, and what marks each stage as done.
 
 ## Further reading

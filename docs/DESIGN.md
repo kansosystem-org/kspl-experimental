@@ -25,7 +25,7 @@ Start with the eight Development Principles. Each chapter after them applies the
 | | [4. Ownership and lifetime](#4-ownership-and-lifetime) | What is protected in a language with no borrow checker |
 | | [5. Concurrency](#5-concurrency) | What the type system does not guarantee, and what stands in its place |
 | | [6. Visibility](#6-visibility) | Closing the holes where `priv` does not reach |
-| | [7. The boundary with C](#7-the-boundary-with-c) | Which types may cross, which of C's types cannot be written, where a binding names its library, what standard output carries, and how a library built from KSPL ships |
+| | [7. The boundary with C](#7-the-boundary-with-c) | Which types may cross, which of C's types cannot be written, where a binding names its library, what standard output carries, how a library built from KSPL ships, and how a folded size is tied to the C compiler |
 | | [8. Function values](#8-function-values) | Why capture is explicit and escape is forbidden |
 | **The notation**: how a program is written down | [9. One notation per purpose](#9-one-notation-per-purpose) | Not carrying several means to the same end |
 | | [10. The indentation notation (`.kspls`)](#10-the-indentation-notation-kspls) | Why a second notation is kept, and why its rules are what they are |
@@ -63,7 +63,7 @@ These words recur in every chapter. Compiler-internal words are in the compiler'
 | :-- | :-- |
 | **translation time** | When `ksplc` compiles the program, as opposed to run time. "Rejected at translation time" means a compile error |
 | **the generated C** | `ksplc` translates KSPL into C (or LLVM IR), and a C compiler (or LLVM) finishes the job |
-| **diagnostic**, `[W0110]` | A message from the compiler. The code's letter is its weight: `E` error, `W` warning, `I` information, `H` hint. `ksplc explain W0110` prints what the code means |
+| **diagnostic**, `[W0109]` | A message from the compiler. The code's letter is its weight: `E` error, `W` warning, `I` information, `H` hint. `ksplc explain W0109` prints what the code means |
 | **lint** | `ksplc lint`: the compiler's analysis alone. It prints every diagnostic, hints included, and builds nothing |
 | **desugar** | Rewrite a convenient notation into a plainer one: `a + b` becomes the call `a.add(b)` |
 | **generic**, **instantiate** | A generic is code with type parameters (`List<\|T\|>`). Instantiating it makes one concrete copy per type argument used (`List<\|I32\|>`), as C++ templates do |
@@ -276,7 +276,7 @@ Guards gain little. A lookahead before both tries cuts the calls, and the time, 
 
 **What keeping `::` costs the writer, and the answer**: a Rust or C++ writer's `Arena::new(1024)`, read as a cast, gives three errors, none naming the fix. So where `T` is a module, or a type holding `name`, and `name` is nothing in scope, `T::name` is read as the path meant. It is reported as one error naming `Arena.new`. A cast of a value in scope (`I32::count`) is left alone.
 
-**The one weakness of `.` everywhere** is that a local named like an imported module hides the module: below `io: = 5`, `io.out()` reads the local. Such a local or parameter is a warning at its declaration (`[W0505]` in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)), not an error, since shadowing stays legal ("4.5 Scope and shadowing" in [`SPEC-language.md`](SPEC-language.md)). A second separator for modules (Swift 6.3's `Module::name`) would collide with the cast. `json::Val` and `Sz::n` have one shape, and only name resolution could tell them apart.
+**The one weakness of `.` everywhere** is that a local named like an imported module hides the module: below `io: = 5`, `io.out()` reads the local. Such a local or parameter is a warning at its declaration (`[W0504]` in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)), not an error, since shadowing stays legal ("4.5 Scope and shadowing" in [`SPEC-language.md`](SPEC-language.md)). A second separator for modules (Swift 6.3's `Module::name`) would collide with the cast. `json::Val` and `Sz::n` have one shape, and only name resolution could tell them apart.
 
 ### 1.3 Why immutability is the default
 
@@ -467,7 +467,35 @@ You write `f(x)`, and the compiler works out `T` from `x`'s type. You write `<|T
 
 The design already infers what is determined and asks for the rest. Where `T` is the parameter's type itself (`Arena.create<|T|>(init_val: T)`), working back is unique; where `T` appears only in the return (`alloc_as<|T|>()`), it must be written. No cheap part is left to cut.
 
+**What is inferred is a function's own type arguments, however the function is reached**: `f(x)`, `h.to(x)` and `Holder<|I32|>.to(h, x)` alike. **A generic type's are not inferred from a call through it**: `Holder.mk(1)` is a compile error that says to write `Holder<|I32|>.mk(1)`. The type written before the `.` is what chooses the instance, as it is for a variable's type or a field's (§2.4.2). Many of a type's functions take nothing that would fix it (`List<|I32|>.new(null)`), so inferring it would add a second form that works for only some of them (Principle 6).
+
 **The price is that instantiation comes after the arguments' inference.** Right after instantiating, the actual arguments must be checked again against the substituted parameter types ([ksplc/docs/DESIGN.md 11.5.1](../ksplc/docs/DESIGN.md#1151-a-generic-calls-arguments-are-checked-against-the-parameter-types-after-instantiation)). Skip that, and broken C comes out with zero diagnostics.
+
+#### 2.5.1 A generic function used as a value names its specialization
+
+To pass or store a generic function as a function pointer, you write which copy you mean: `f: fn(x: I32): I32 = same<|I32|>`. The bare `same` there is a compile error that says to write it.
+
+**A generic function's code exists only as specializations**, one per set of type arguments, and a function-pointer value is the address of one of them. So a value must name one. Written `same<|I32|>`, it is built where it is named, as a call would build it, and its type is checked against the expected one.
+
+**The type arguments are not inferred from the expected type.** The inference of §2.5 works back from actual arguments, and a function named as a value has none. Working back from the expected type would be a second direction of inference, which no other position has: an anonymous function's types are not taken from where it is passed either (§8.1). It would also reach only some positions. Where the receiving parameter is itself generic (`apply(same, 3)` with `fn apply<|F|>(f: F, x: I32)`), nothing is expected at all, and a bare name already has to be written out there. Writing the specialization works in every position, so it is the one form (Principle 6), and the reader sees which copy is taken without opening the receiving function.
+
+**Passed to a generic parameter, or bound to a declaration with no type, the name gives its function type**: `apply(same<|I32|>, 3)` binds `F` to `fn(x: I32): I32`, and `f: = same<|I32|>` makes `f` one. This is the inference of §2.5, from an actual argument to the parameter, not a second direction: the written specialization names one function, and its signature is in the text. A non-generic function's name, a method named through its type (§2.5.2) and an anonymous function each name one function too, and give their types the same way. Refusing them while taking the specialization would make a plain function harder to pass than a generic one. A declaration with no type is the same question, the type a local takes from its initializer (§2.1), and the answer is in the text where the name is written; writing the function type out instead would repeat what the declaration already says. The bare `same` names no one function, so it stays a compile error there as everywhere. **`F` becomes a function-pointer type**, the same for every function of that signature, so two functions of one signature pass through one instance of `apply`, and a variable of that type holds either.
+
+**Type arguments after a function that declares none are a compile error**, called or named as a value (`twice<|I32|>`): they would bind nothing and change nothing (Principle 5).
+
+**What is given up**: `f: fn(x: I32): I32 = same`, leaving the specialization to the expected type. Each use costs the few characters of `<|I32|>`.
+
+#### 2.5.2 A method used as a value is named through its type
+
+A method is passed or stored as a function pointer by naming it through its type: `f: fn(r: Meter@): I32 = Meter.read`. It is then a function whose first parameter is the receiver, in the shape the method declares (a copy or a pointer).
+
+**Every type argument is written, each where it belongs**: a generic type's on the type, the method's own after the method (`Keeper<|I32|>.pair<|U8|>`). Each instance of `Keeper` has its own copy of each method, and a generic method has one copy per specialization, so a value names one, as in §2.5.1. The bare `Keeper.keep` and `Meter.same` are compile errors that say what to write.
+
+**A method named through a value (`p.read`, not called) is a compile error.** A function pointer is an address alone, with no room for the receiver, so `p.read` would have to keep `p` somewhere: that is a closure, which states what it captures (§8.1) and is written as one. Naming the method through its type and passing the receiver at the call keeps the value an address.
+
+**A trait's method named through the trait (`Shape.area`) is a compile error**: it is a slot that each conforming type fills with its own function, and there is no one function to point at. A conforming type's method is named through that type.
+
+**What is given up**: a bound method, `p.read` standing for "read `p` later". Where one is wanted, the receiver is passed at the call.
 
 ### 2.6 Generics also take translation-time constants as type arguments
 
@@ -942,9 +970,9 @@ Caution: **Do not reject a call's result either, and do not widen the check to "
 
 If a block can be left (by `?`, `return`, `throw`, `break` or `continue`) after a value is acquired but before the `defer` that frees it, the compiler warns: on that path the value leaks.
 
-**A `?`, `return`, `throw`, `break` or `continue` between an `Owned` value's binding and the `defer` that frees it in the same block is [W0110].** That path leaves before the `defer` is registered, so what was acquired leaks. The language does not stop it, since a `defer` is its own statement (§9.1).
+**A `?`, `return`, `throw`, `break` or `continue` between an `Owned` value's binding and the `defer` that frees it in the same block is [W0109].** That path leaves before the `defer` is registered, so what was acquired leaks. The language does not stop it, since a `defer` is its own statement (§9.1).
 
-* **It asks only where a later `defer` in the same block frees the value.** A value freed by hand, passed on or kept has another shape, and calling it a leak would be a false report (the exemptions are under [W0110] in `ksplc/docs/SPEC-tools.md`).
+* **It asks only where a later `defer` in the same block frees the value.** A value freed by hand, passed on or kept has another shape, and calling it a leak would be a false report (the exemptions are under [W0109] in `ksplc/docs/SPEC-tools.md`).
 * **A shape rather than every path.** Checkers that follow a resource along every path pay in false reports. A rule read off the code as written, like Error Prone's `MustBeClosed`, does not. The gap before a `defer` is such a rule.
 * **`Owned` says which values are asked about.** `Owned` is the trait whose `free()` the compiler reads as freeing the value. It is the same contract the use-after-free check reads (docs/SPEC-language.md §8.4.5), so a type taking part in one takes part in the other.
 
@@ -1069,11 +1097,21 @@ Swift closes the same hole with `MemberImportVisibility`, and Rust, C# and Kotli
 
 **What is given up**: one import line per file using a method another file adds to a built-in type, stating a dependency the call already has.
 
+### 6.5 A name the file cannot see is refused where it is selected
+
+`import "p" { Hidden }`, with `Hidden` `priv` in `p` or unmarked in another package, is a compile error at that `import` line: `cannot access symbol 'Hidden'`. A name that does not exist is refused there too.
+
+**Selecting a name changes no visibility, and the line that selects it is the one place to say so.** Asked at each use instead, every road to a name had to ask again: a call, a value, a type, a constant and a struct literal each find the name their own way. Some did not ask, so a `priv` struct or constant selected from another file was used with no diagnostic, and a function's use was reported as an undefined name.
+
+**Rust and Java refuse it at the import as well** (`use p::Hidden` is "struct `Hidden` is private"; `import p.Hidden` is "not public in p"). A use of the name then needs no check of its own.
+
+**What is given up**: a selector the file never uses, naming what it cannot see. No use of it could have compiled.
+
 ---
 
 ## 7. The boundary with C
 
-**Everything Kanso passes to C or receives from it crosses one boundary.** This chapter says which types may cross it, how C's types are received, where a binding names its C library, what standard output carries, and how a library built from KSPL is shipped to C.
+**Everything Kanso passes to C or receives from it crosses one boundary.** This chapter says which types may cross it, how C's types are received, where a binding names its C library, what standard output carries, how a library built from KSPL is shipped to C, and how the sizes ksplc folds are tied to the C compiler's.
 
 ### 7.1 The FFI boundary check looks inside the type
 
@@ -1169,6 +1207,25 @@ flowchart LR
 * **Each library carries its own runtime and std.** The parts it does not reach are dropped by the C compiler and the linker; the parts it does are paid once per library.
 * **What a KSPL program's start-up sets for the whole process is the program's**: SIGPIPE's handling, the Windows console's code page and binary standard output (7.4). A library sets none of them, and writes as the program that links it writes. A KSPL program's arguments are the program's too, so `sys.args()` is empty in a library.
 * **Every `#export` is the library's interface**, a callback passed to C (a thread's entry) included, so each is named as an API name is.
+
+### 7.6 A size is the target machine's, and the C compiler checks each one ksplc folds
+
+**ksplc lays every value out for the machine the program will run on, named to it with `--machine`, and each size it writes into the C as a number carries a compile-time check against the C compiler's own layout.** A pointer, `Sz` and a function pointer are 8 bytes on a 64-bit machine and 4 on a Cortex-M chip or in wasm32. Where ksplc folds a size (an array's length, a constant built from another, a static `if`, `##error`, reflection's offsets), the folded number is what the program runs with, so it must be that machine's.
+
+| Decision | Why |
+| :-- | :-- |
+| 1. **One description of each machine** (`machines` in [`../ksplc/base/target.kspls`](../ksplc/base/target.kspls)) | A width written where it is used answers for one machine only. With every reader taking it from one row, a fold cannot use one width while the layout uses another, and a new machine is one row |
+| 2. **The C compiler checks every number ksplc folds**, at the source line that asked for it | ksplc's layout is a copy of the C compiler's, and a copy is tied to its original by a check (Principle 4). The C compiler is the one party that knows the machine it builds for. Where the two disagree, a `typedef` of negative size stops the build, and its name says which machine ksplc laid the number out for |
+| 3. **Only a folded number makes the C target-specific** | A `sizeof` left in a function body stays the C compiler's own and is right on any machine. A program that folds nothing carries no check, and its C builds for any machine as it did |
+| 4. **The machine is named to both, rather than read by ksplc from the C compiler** | ksplc translates without a C compiler at hand: the editor's analysis, `ksplc lint`, a build whose C is compiled elsewhere. The default is the machine ksplc runs on, which every hosted build targets. A build for a chip writes the triple once and hands it to both (`CM_MACHINE` in [`../ksos/Makefile`](../ksos/Makefile)) |
+| 5. **A machine ksplc does not know is refused, never approximated** | A machine guessed close folds a size the C compiler then refuses, far from the cause. Refused at once, the message lists the machines it knows |
+
+**What is given up**:
+
+* **The C of a program that folds a size builds only for machines that lay that type out alike.** One C for a 32-bit and a 64-bit machine needs the size left in a function body, where the C compiler answers it.
+* **The editor analyses for the machine it runs on.** The language server takes no `--machine`, so a static `if` on a size is shown as that machine takes it, and on a machine the table lacks it refuses to start, naming that machine.
+* **The LLVM backend lays out only 8-byte pointers** and refuses `--to=llvm` for any other machine, rather than writing IR with wrong offsets.
+* **A constant expression is still checked at the bound every machine guarantees** (`Sz` at 32 bits, SPEC-language.md §6.8), whatever machine is named. So a source that compiles for one machine is not refused for another for its arithmetic.
 
 ---
 
@@ -1272,6 +1329,28 @@ big: = count_over(xs, over)
 A `fn` right behind a call's `)` is an error whose Note names both forms (`forbidden_spelling_hint` in `ksplc/parse/syntax_msg.kspls`). "Features not carried" in [`SPEC-language.md`](SPEC-language.md) lists it.
 
 **What would reopen it**: calls that read as statements of their own, written many times over (SwiftUI's view builders, Kotlin's type-safe builders), where naming each closure first would become the bulk of the text. KSPL writes none.
+
+### 8.5 A function's name in a comparison takes the other side's type
+
+`twice == f` and `f == twice` are the same comparison: the name of a function, written on either side, takes the function type of the other side and is checked against it. Two names (`twice == thrice`) are a compile error that says to bind one side to a variable of a function type first. A function value takes `==` and `!=` and no other operator.
+
+**A function's name takes its type from where it is written**: an expected function type, or, passed to a generic parameter or bound to a declaration with no type, the function type of the function it names (§2.5.1). In a comparison the position is the other side, and `==` asks the same question in either order, so the order the sides are written in cannot decide whether the name has a type. The other side is typed first, whichever it is.
+
+**Two names are refused, not compared**, even when their signatures agree. Neither side gives the other a type, and a comparison is neither a generic parameter nor a declaration, the positions that take a type from the function a name names (§2.5.1). The answer is in the text as well: which functions two names stand for is known where they are written. Binding one side (`f: = twice`) costs a line and fixes the type both are compared at.
+
+**An address has no order and no arithmetic that means anything.** Where two functions sit is the linker's choice, C leaves ordering them undefined, and an address moved by an offset is no function. So `<`, `+`, a unary `-` or `!`, and a compound assignment (`f += g`) are compile errors on a function value; a null check is `f == null`.
+
+**What is given up**: sorting function values by address, as a table's keys. Where an order is wanted, cast to an integer first (`U64::f`).
+
+### 8.6 A function's name has no size
+
+`sizeof(twice)` is a compile error, as is a function's name where a type goes (`x: twice`). The message names what answers the question its writer most likely had: `sizeof(fn(x: I32): I32)`, the size of a pointer to a function, which is the same for every function type.
+
+**`sizeof` gives a function's name no type** (§8.5), so it has nothing to measure. A variable holding a function does have a type, the function type it was declared with, and `sizeof(f)` measures it.
+
+**"The size of a function" has no one meaning.** It could be the size of a pointer to it, the size of its machine code, or, reading the name the way a call is read, the size of what it returns. Each answer is right for some reader and silently wrong for the others; the refusal costs one rewrite and leaves no reader with a wrong number.
+
+**What is given up**: nothing that cannot be written. The size of a pointer to a function is `sizeof` of a function type; the size of its result is `sizeof` of the result type.
 
 ---
 
@@ -1379,7 +1458,7 @@ priv fn greet()
 | **It fills in a receiver nothing else fills in** | Everywhere else a leading `.` names an enum value (`.ok`). So a `defer .free()` moved to a line of its own would meet "cannot infer enum type" |
 | **It is written nowhere else** | A `defer` of its own on the next line is what Go, Zig and C's draft `defer` write, and what a model writes unprompted. No form bound to a declaration fills a receiver into an arbitrary call |
 
-**The joined form guaranteed that nothing comes between an acquisition and its cleanup; that is the writer's to keep.** [W0110] asks about a way out of the block in between (§4.4), and Go and Zig carry the same exposure. The specification says to write the `defer` on the next line (8.4.1 in [`SPEC-language.md`](SPEC-language.md)).
+**The joined form guaranteed that nothing comes between an acquisition and its cleanup; that is the writer's to keep.** [W0109] asks about a way out of the block in between (§4.4), and Go and Zig carry the same exposure. The specification says to write the `defer` on the next line (8.4.1 in [`SPEC-language.md`](SPEC-language.md)).
 
 `defer` takes one statement, so the separate line costs only the name. If `defer` took only a block, the form would be `defer { buf.free(); }`, the one `;` the indentation notation would still show. **What holds it**: a `defer` behind a statement is refused with the line to write instead (`append_trailing_defer_hint` in [`../ksplc/parse/syntax_msg.kspls`](../ksplc/parse/syntax_msg.kspls)). A `defer .free()` standing alone is refused by name (`reject_receiverless_cleanup` in [`../ksplc/sema/body/stmt.kspls`](../ksplc/sema/body/stmt.kspls)). `make test-negative` holds both.
 
@@ -1428,7 +1507,7 @@ Every loop over a sequence is written `for x in xs`. The type of `xs` decides ho
 
 * **A method can return its own type one level deeper** (`Seq<|S|>.where(): Seq<|Wh<|S|>|>`), and a level advances only as far as the user wrote.
 * **A method can introduce a new type argument** (`fn select<|U|>`), bound at the call site ([§2.4](#24-a-type-argument-with-nothing-to-bind-to-is-rejected)).
-* **A closure literal passed directly still fixes the type argument.** Its type is a synthesized environment (`_anon_env_N`) that declares no generics of its own. So the argument is taken from the instantiation of the `Callable1` it declares (`implemented_trait_key_of` in `ksplc/sema/type/env.kspls`).
+* **A closure literal passed directly still fixes the type argument.** Its type is a synthesized environment (`_anon_env_N`) that declares no generics of its own. So the argument is taken from the instantiation of the `Callable1` it declares (`implemented_trait_instance` in `ksplc/sema/type/env.kspls`).
 
 **The stage types nest** (`Conv<|Keep<|List_seq<|T|>, T|>, T, U|>`), and every stage repeats `where` / `select` / `to_list`. So each new kind of stage multiplies the code in `std/seq`. Rust's `Iterator`, Java's `Stream` and Swift's `Sequence` remove this repetition with default method bodies. Which of the three a trait's default body could take in KSPL, and why each stays per stage, are std's own design (["Why the chain's stages cannot be folded"](../std/docs/DESIGN.md#why-the-chains-stages-cannot-be-folded) in [`../std/docs/DESIGN.md`](../std/docs/DESIGN.md)).
 
@@ -1464,7 +1543,7 @@ Two grounds follow from the table.
 * **A mistake shows in opposite ways.** A rich condition on the silent one alone would erase the clue to the mistake.
 * **They run at different stages.** When `#cfg` runs, the material for a comparison is absent. A comparison there would need arithmetic apart from the language, at a stage with no types: the C preprocessor's shape.
 
-**An attribute is either interpreted by both backends or explicitly rejected by one.** (A *backend* turns the checked program into output: ksplc has one that writes C and one that writes LLVM IR.) None is silently ignored under `--target=llvm` ("An attribute is either interpreted in both backends, or refused outright in one" in [`../ksplc/docs/DESIGN.md`](../ksplc/docs/DESIGN.md)).
+**An attribute is either interpreted by both backends or explicitly rejected by one.** (A *backend* turns the checked program into output: ksplc has one that writes C and one that writes LLVM IR.) None is silently ignored under `--to=llvm` ("An attribute is either interpreted in both backends, or refused outright in one" in [`../ksplc/docs/DESIGN.md`](../ksplc/docs/DESIGN.md)).
 
 #### 9.2.5 Things that look like duplication and are not
 

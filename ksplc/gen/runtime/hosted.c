@@ -262,6 +262,48 @@ KSPL_LINK Bool kspl_is_windows(void) { return true; }
 KSPL_LINK Bool kspl_is_windows(void) { return false; }
 #endif
 
+/* The machine this program was compiled for, as a triple built from the C compiler's own macros
+ * (its architecture, then its OS), into buf; returns the length, or 0 where cap is too small.
+ * ksplc looks it up in its table of machines (`ksplc/base/target.kspls`) and refuses, naming it, a
+ * machine the table has no row for. A part the macros do not tell is `unknown`.
+ * Caution: **Spell each part as the table's rows do**, or a machine the table holds is refused
+ * (every gate compiles with the default, on each platform CI runs). */
+#if defined(__x86_64__) || defined(_M_X64)
+#define KSPL_HOST_ARCH "x86_64"
+#elif (defined(__aarch64__) || defined(_M_ARM64)) && defined(__APPLE__)
+#define KSPL_HOST_ARCH "arm64"
+#elif defined(__aarch64__) || defined(_M_ARM64)
+#define KSPL_HOST_ARCH "aarch64"
+#elif defined(__riscv) && defined(__LP64__)
+#define KSPL_HOST_ARCH "riscv64"
+#elif defined(__i386__) || defined(_M_IX86)
+#define KSPL_HOST_ARCH "i686"
+#elif defined(__arm__)
+#define KSPL_HOST_ARCH "arm"
+#else
+#define KSPL_HOST_ARCH "unknown"
+#endif
+#if defined(__APPLE__)
+#define KSPL_HOST_OS "apple-darwin"
+#elif defined(_WIN32)
+#define KSPL_HOST_OS "w64-windows-gnu"
+#elif defined(__linux__)
+#define KSPL_HOST_OS "linux-gnu"
+#elif defined(__FreeBSD__)
+#define KSPL_HOST_OS "unknown-freebsd"
+#else
+#define KSPL_HOST_OS "unknown"
+#endif
+KSPL_LINK Sz kspl_host_machine(U8 *buf, Sz cap) {
+    static const char name[] = KSPL_HOST_ARCH "-" KSPL_HOST_OS;
+    Sz n = (Sz)(sizeof name - 1);
+    if (buf == NULL || cap <= n) return 0;
+    memcpy(buf, name, (size_t)n);
+    return n;
+}
+#undef KSPL_HOST_ARCH
+#undef KSPL_HOST_OS
+
 /* The OS's random source for std/rand.kspls's CSPRNG (fill/bytes/u64). POSIX reads /dev/urandom;
  * Windows has none, so rand_s() (UCRT/MSVCRT, CNG's RNG inside; its premise is ctx.kspls's
  * _CRT_RAND_S definition) is called four bytes at a time. Not bcrypt.h: under <windows.h> alone

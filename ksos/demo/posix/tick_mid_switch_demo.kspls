@@ -1,0 +1,58 @@
+//< A tick held back until a switch into a new task runs on that task, after the switch
+//<
+//< Under load the timer's signal is often pending the moment the kernel switches. This demo makes
+//< that moment happen every time instead of once in a few hundred runs: it raises the tick
+//< (`SIGALRM`) inside a critical section, so it is held, then switches into a task that has never
+//< run. Once the switch is over the new task takes the tick and must still run its own code. A
+//< tick let through in the middle of the switch runs on the old task's stack while the new one
+//< counts as current, and that task never runs its code again (the run hangs).
+
+// ==========================================
+//   start     main switches into the first task (start_scheduler) with a tick held.
+//   yield     the second task yields into the third, which has never run, with a tick held.
+// The timer itself is set too slow to fire during the run, so every tick is one raised here.
+// ==========================================
+import "ksos/kernel/task" + { Task }
+import "std/sys"
+import "std/verdict"
+
+const sigalrm: I32 = 14 // assumes Linux, as the POSIX port does
+
+$g_ran: I32[3]
+
+$tcb_1: Task
+$tcb_2: Task
+$tcb_3: Task
+$stack_1: U8[65536]
+$stack_2: U8[65536]
+$stack_3: U8[65536]
+
+fn first(_arg: Void$@): Void //< the task main's start_scheduler switches into with a tick held
+    g_ran[0] = 1
+
+fn second(_arg: Void$@): Void //< switches into third, which has never run, with a tick held
+    s: = task.irq_save()
+    sys.raise_signal(sigalrm)
+    Task.yield()
+    task.irq_restore(s)
+    g_ran[1] = 1
+
+fn third(_arg: Void$@): Void
+    g_ran[2] = 1
+
+fn main()
+    tcb_1.create(U8$[]::stack_1, first, null, 1, "first")
+    tcb_2.create(U8$[]::stack_2, second, null, 1, "second")
+    tcb_3.create(U8$[]::stack_3, third, null, 1, "third")
+    // It installs the tick's handler; at 1000 s the timer never fires during the run.
+    task.enable_preemption(1000000000)
+    verdict.start("[ksos] a tick held over a switch into a new task waits for the switch's end")
+    s: = task.irq_save()
+    sys.raise_signal(sigalrm)
+    task.start_scheduler() // returns once every task is done
+    task.irq_restore(s)
+    assert(g_ran[0] == 1, "tick_mid_switch: the task started with a tick held never ran its code")
+    assert(g_ran[1] == 1, "tick_mid_switch: the task that yielded with a tick held never resumed")
+    assert(g_ran[2] == 1, "tick_mid_switch: the task yielded into with a tick held never ran")
+    assert(task.current_tick() == 2, "tick_mid_switch: each held tick must arrive exactly once")
+    verdict.pass("every task ran its code, and each held tick arrived once, after its switch.")

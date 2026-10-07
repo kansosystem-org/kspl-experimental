@@ -1,0 +1,48 @@
+//< A function's name passed to a generic parameter gives it the function type of the one function
+//<
+//< A written specialization, a non-generic function, a method named through its type and an
+//< anonymous function each name one function, and bind `F` of `fn pass<|F|>(f: F)` to its type.
+//< Without it, `pass(gf<|U16|>)` was refused as giving no type, on both backends.
+//< Caution: **Keep it paired with the negative test**
+//< (`tests/negative/fn_name_to_generic_parameter.kspls`), which holds what is refused: a bare
+//< generic name and a variadic function.
+import "std/verdict"
+
+priv fn gp_size<|T|>(_x: T): Sz
+    return 100 + sizeof(T)
+
+priv fn gp_pass<|F|>(f: F): F
+    return f
+
+priv fn gp_twice(x: I32): I32
+    return x * 2
+
+priv struct Gp_box<|T|>
+    v: T
+
+impl<|T|> Gp_box<|T|>
+    fn get(r: Self@): T
+        return r.v
+    fn pair<|U|>(_x: T, _y: U): Sz
+        return 300 + sizeof(T) * 10 + sizeof(U)
+
+fn run()
+    verdict.start("[fn-ptr] a function's name passed to a generic parameter test...")
+    narrow: = gp_pass(gp_size<|U16|>)
+    wide: = gp_pass(gp_size<|I64|>)
+    assert(narrow(2) == 102, "the written specialization is the one passed")
+    assert(wide(2) == 108, "another type argument passes another specialization")
+    as_op: fn(x: U16): Sz = narrow
+    assert(as_op == gp_size<|U16|>, "the parameter's type is the specialization's function type")
+    plain: = gp_pass(gp_twice)
+    assert(plain(21) == 42, "a non-generic function passes its own type")
+    b: = Gp_box<|I32|>::{ .v = 8 }
+    get: = gp_pass(Gp_box<|I32|>.get)
+    assert(get(b@) == 8, "a method named through its type passes, its receiver first")
+    pair: = gp_pass(Gp_box<|I32|>.pair<|U8|>)
+    assert(pair(1, 2) == 341, "a generic method's specialization passes, both type arguments kept")
+    anon: = gp_pass(fn(x: I32): I32 {
+        return x + 1;
+    })
+    assert(anon(1) == 2, "an anonymous function passes its written type")
+    verdict.pass("")

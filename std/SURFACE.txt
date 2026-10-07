@@ -497,7 +497,7 @@ std/io	Io_error.read_failed	read_failed(path: U8[])	the read was refused, or the
 std/io	Io_error.write_failed	write_failed(path: U8[])	the write was refused or incomplete; names the file
 std/io	Reader	pub trait Reader	anything bytes can be read from
 std/io	Reader.read	fn read(r: Self, $buf: U8$[]): Sz?Io_error	fills buf; returns the count read, 0 at the end
-std/io	copy	pub fn copy($src: Reader, $dst: Writer): Sz?Io_error	reads to the end, writes it all out, and returns how much was copied
+std/io	copy	pub fn copy(src: Reader, dst: Writer): Sz?Io_error	reads to the end, writes it all out, and returns how much was copied
 std/io	err	pub fn err(): Writer	standard error, opened on the first call
 std/io	getchar	pub fn getchar(): I32	one byte from standard input, or negative at the end
 std/io	open	pub fn open(path: U8[], mode: U8[]): File_stream?Io_error	opens a file, handling a non-ASCII path on Windows too. A child process started while it is open does not get it.
@@ -632,7 +632,7 @@ std/lang	Ord.ge	fn ge(r: Self, other: Other): Bool	whether it is greater or equa
 std/lang	Ord.gt	fn gt(r: Self, other: Other): Bool	whether it is greater
 std/lang	Ord.le	fn le(r: Self, other: Other): Bool	whether it is less or equal
 std/lang	Ord.lt	fn lt(r: Self, other: Other): Bool	whether it is less
-std/lang	Owned	pub trait Owned	this type owns memory or a resource, and releases it with `free()`. **Without conforming, the check does not work.** A type that only has a `free()` is not tracked, so always conform a type that releases something ([W0108] names a missing one). **`free` returns no failure.** It runs on an exit path or from a `defer`, where a failure leaves the caller nothing to do. **Put clean-up whose result must be checked in its own method** (`io.File_stream`'s `sync()`).
+std/lang	Owned	pub trait Owned	this type owns memory or a resource, and releases it with `free()`. **Without conforming, the check does not work.** A type that only has a `free()` is not tracked, so always conform a type that releases something ([W0107] names a missing one). **`free` returns no failure.** It runs on an exit path or from a `defer`, where a failure leaves the caller nothing to do. **Put clean-up whose result must be checked in its own method** (`io.File_stream`'s `sync()`).
 std/lang	Owned.free	fn free(r: Self)	releases it, reporting no failure
 std/lang	Panic_hook	pub typedef Panic_hook = fn(msg: U8$[]): Void	where a freestanding port sends a panic message. lang does not know whether a console exists, so a port that has one sets it (null, the default, stops deterministically and prints nothing).
 std/lang	Panic_info	pub struct Panic_info	what a panic in the previous run left behind, for this run to report. The stack fragment is not included (a fixed-length array cannot be returned by value); read 0 <= index < stack_len one at a time with panic_stack_word().
@@ -865,7 +865,7 @@ std/reflect	Field_info	pub struct Field_info	one field of a struct: its name, wh
 std/reflect	Field_info.extra	pub extra: Field_extra	what only some kinds carry (see `Field_extra`). **`.list_field` and `.opt_field` never go into `extra.elem`**: a container of containers cannot be walked, since a kind that points at itself is blocked by the same gap.
 std/reflect	Field_info.kind	pub kind: Field_kind	what it is
 std/reflect	Field_info.name	pub name: U8[]	the name as the declaration writes it
-std/reflect	Field_info.nested	pub nested: Field_info[]	the table of a nested struct; empty for every other kind. **It is not `Field_kind`'s payload because of a gap in `--target=llvm`.** The shape it takes once that gap is filled is in "a trait returning a table" in `../docs/DESIGN.md`.
+std/reflect	Field_info.nested	pub nested: Field_info[]	the table of a nested struct; empty for every other kind. **It is not `Field_kind`'s payload because of a gap in `--to=llvm`.** The shape it takes once that gap is filled is in "a trait returning a table" in `../docs/DESIGN.md`.
 std/reflect	Field_info.offset	pub offset: Sz	how far into the struct it sits, counting padding
 std/reflect	Field_kind	pub enum Field_kind	what one field is, as far as a round trip needs to know. **List only the kinds the round-trip functions can walk**, or a name could be written that does nothing (`../docs/DESIGN.md`'s Principle 5). A number's width is in `Field_extra.width`.
 std/reflect	Field_kind.bool_field	bool_field	a `Bool`
@@ -1024,7 +1024,7 @@ std/str	Str_error.out_of_bounds	out_of_bounds	a position or a value out of range
 std/str	U8[].dedent	pub fn dedent(r: U8[]): Str_builder	the same lines with the common indentation removed
 std/str	U8[].equals	pub fn equals(r: U8[], b: U8[]): Bool	whether the bytes are the same; deliberately not `==`
 std/str	U8[].hash	pub fn hash(r: U8[]): U32	a hash of the contents that spreads keys over the buckets
-std/str	U8[].join	pub fn join(r: U8[], $parts: List<|U8[]|>, arena: Arena$@): U8[]	joins the pieces, with the receiver between each pair. Python's `sep.join(parts)`. `parts` is by value because a temporary's address cannot be taken; a List is a small struct.
+std/str	U8[].join	pub fn join(r: U8[], parts: List<|U8[]|>, arena: Arena$@): U8[]	joins the pieces, with the receiver between each pair. Python's `sep.join(parts)`. `parts` is by value because a temporary's address cannot be taken; a List is a small struct.
 std/str	U8[].lines	pub fn lines(r: U8[], arena: Arena$@): List<|U8[]|>	the lines, without trailing `\r` and with no empty line after the last newline
 std/str	U8[].replace	pub fn replace(r: U8[], old: U8[], new: U8[], arena: Arena$@): U8[]	a new string with every occurrence replaced. Unlike `trim_*`, it returns a copy: the result does not exist anywhere in the original.
 std/str	U8[].replace_first	pub fn replace_first(r: U8[], old: U8[], new: U8[], arena: Arena$@): U8[]	a new string with only the first occurrence replaced
@@ -1104,7 +1104,7 @@ std/strfmt	hex	pub fn hex(val: U64, digits: Sz): Hex_fmt	hex with a leading `0x`
 std/strfmt	write_float	pub fn write_float(w: Writer, v: F64, precision: I32, width: Sz, fill: U8, comma: Bool): Writer	writes a floating-point number
 std/strfmt	write_float32	pub fn write_float32(w: Writer, v: F32, precision: I32, width: Sz, fill: U8, comma: Bool): Writer	writes an `F32`, whose shortest digits differ from an `F64`'s. The width of `F32` decides the shortest digits, so `0.1F32` is `"0.1"`.
 std/strfmt	write_int	pub fn write_int(w: Writer, v: I64, width: Sz = 0, fill: U8 = ' ', comma: Bool = false): Writer	writes a signed integer as decimal
-std/strfmt	write_ptr #cfg(!freestanding)	pub fn write_ptr($w: Writer, val: Void$@): Writer	writes an address like `%p`, in the host libc's format
+std/strfmt	write_ptr #cfg(!freestanding)	pub fn write_ptr(w: Writer, val: Void$@): Writer	writes an address like `%p`, in the host libc's format
 std/strfmt	write_ptr #cfg(freestanding)	pub fn write_ptr(w: Writer, val: Void$@): Writer	writes an address as `0x` plus lowercase hex, whatever the host does
 std/strfmt	write_uint	pub fn write_uint(w: Writer, v: U64, width: Sz, fill: U8, comma: Bool): Writer	writes an unsigned integer as decimal; its top bit is not a sign. Caution: **Do not pass an unsigned value to write_int.** A value with its high bit set (`U32`'s 4294967295, `U64` at 2^63 or more) is a negative bit pattern in I64 and prints as `-1`.
 std/strnum	Strnum_error	pub enum Strnum_error	why a string could not be read as a number. It is separate from `std/str`'s `Str_error`, which has the same two variants: using that one would make a program that only reads numbers pay for all of `std/str`, and form a cycle.

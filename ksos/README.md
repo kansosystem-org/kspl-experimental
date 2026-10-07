@@ -1,12 +1,12 @@
 # ksos
 
-**Kanso OS, a light real-time OS (RTOS) written in KSPL alone.** It offers priority scheduling, cooperative yield and preemption, semaphores, message queues, mutexes and event flags. It runs the same kernel code on a microcontroller (bare metal) and on a Linux host.
+**Kanso OS, a light real-time OS (RTOS) written in KSPL alone.** An RTOS runs several *tasks* (functions that each behave as if they had the CPU to themselves) and switches between them by priority, so urgent work is never kept waiting behind less urgent work. ksos offers priority scheduling, cooperative yield and preemption, semaphores, message queues, mutexes and event flags. It runs the same kernel code on a microcontroller with no operating system under it (*bare metal*) and on a Linux host, and it drives a small robot car.
 
-**This guide is the map to read first**: where everything is in the code and in what order to read it, assuming no RTOS knowledge. The design's grounds, and what each make target checks, are in [`ksos/docs/DESIGN.md`](docs/DESIGN.md).
+**This guide is the map to read first**, for anyone who wants to try ksos or read its code. It says where everything is in the code and in what order to read it, assuming no RTOS knowledge. The quickest try is `make ksos` (below). The design's grounds, and what each make target checks, are in [`ksos/docs/DESIGN.md`](docs/DESIGN.md).
 
 ## Run it
 
-`clang` alone runs it; no ARM cross compiler or QEMU is needed.
+`clang` alone runs it; no ARM cross compiler (a compiler that builds for another CPU) or QEMU (an emulator that runs a microcontroller's program on the PC) is needed.
 
 ```sh
 make ksos   # on a POSIX host, runs the demo where two tasks (producer/consumer) cooperate on a semaphore
@@ -26,14 +26,33 @@ The producer makes five items, sleeping on `Task.delay` between them. The higher
 === scheduler finished (all tasks done) ===
 ```
 
-**This folder's own [`Makefile`](Makefile) lets a copy of it build and test alone.** `make test` and every demo and gate below have the same names there. They find `ksai` and `ksdb` where the compiler is told packages are (what else each target needs is at the head of that file). From the repository's root, the same names call these with the repository's compiler. The tests are in `ksos/tests/`: the unit tests, the USB descriptors read as text, elf2uf2 and the UART checks.
+**This folder's own [`Makefile`](Makefile) lets a copy of it build and test alone.** `make test` and every demo and gate below have the same names there. They find `ksai` and `ksdb` where the compiler is told packages are (what else each target needs is at the head of that file). From the repository's root, the same names call these with the repository's compiler. The tests are in `ksos/tests/`: the unit tests, the USB descriptors read as text, elf2uf2 (the tool that makes a firmware file for the real chip) and the UART (serial port) checks.
 
 ## The idea
 
-It does two things:
+An RTOS does two things:
 
 1. **Scheduling**: pick by priority which of several tasks (≒ threads) runs next, and swap in its whole set of CPU registers (its context).
 2. **Synchronizing**: let tasks wait on each other and hold things exclusively (semaphores, message queues, mutexes, event flags).
+
+The diagram shows the states a task moves through; the scheduler always runs the highest-priority `ready` task.
+
+```mermaid
+stateDiagram-v2
+    [*] --> ready : Task.create
+    ready --> running : the scheduler picks it
+    running --> ready : it yields, or the timer preempts it
+    running --> blocked : it waits on a Sem, Queue, Mutex or Event
+    running --> delayed : Task.delay
+    blocked --> ready : woken, or its timeout passes
+    delayed --> ready : its tick arrives
+    ready --> suspended : Task.suspend, also from delayed or blocked
+    suspended --> ready : Task.resume
+    running --> done : its entry returns, or Task.delete
+    done --> [*]
+```
+
+The table maps each RTOS word to everyday words and to the name in the code.
 
 | RTOS term | In everyday words | In KSPL |
 |---|---|---|
@@ -43,10 +62,16 @@ It does two things:
 | a cooperative yield | a task gives up the CPU on its own | `Task.yield()` |
 | preemption | a timer interrupt forces a task to give way | `enable_preemption()` + `ksos_tick()` |
 | blocking | a task sleeps until a condition holds | `block_current` / `block_and_rearm` |
-| priority inheritance | a waiter lends the holder its priority, so nothing inverts | `Mutex` (`ksos/kernel/sync.kspls`) |
+| a tick | one beat of the periodic timer; delays and timeouts are counted in ticks | `ksos_tick()` |
+| a semaphore | a counter of available things: `take` waits while it is 0, `give` adds one | `Sem` (`ksos/kernel/sync.kspls`) |
+| a message queue | a fixed-size line of values one task sends and another receives | `Queue<\|T\|>` (`ksos/kernel/sync.kspls`) |
+| a mutex | a lock only one task holds at a time | `Mutex` (`ksos/kernel/sync.kspls`) |
+| priority inheritance | a waiter lends the holder its priority, so nothing inverts (a low-priority holder cannot keep a high-priority waiter waiting behind a middle task) | `Mutex` (`ksos/kernel/sync.kspls`) |
 | an event flag | waits on an AND/OR of several bits | `Event` (`ksos/kernel/sync.kspls`) |
 | tickless idle | with nothing to do, moves **logical** time to the next delay's expiry | the fallback inside `pick_next` |
 | a port | the architecture-dependent part: context switching, the timer, interrupt control | `ksos_port_*` (POSIX and Cortex-M implement it) |
+| an interrupt handler (ISR) | code the hardware runs at once when something happens, cutting into whatever task was running | `ksos_port_in_isr()` tells the kernel it is inside one |
+| a critical section | a stretch of code run with interrupts off, so nothing can cut in | `irq_save()` / `irq_restore(state)` |
 
 **It does not depend on malloc.** The caller allocates the `Task`, the stacks and a queue's buffer as globals or static arrays (`tcb_p`/`stack_p` and the rest in `ksos/demo/posix/producer_consumer.kspls`). The kernel only takes them and allocates nothing inside.
 
@@ -74,7 +99,7 @@ Remember three things (register a task, pick the next, switch) and the rest foll
 - `Task.yield()`, `Task.delay(ticks)`, and `Task.delay_until(wake_tick)`, which names an absolute tick so a periodic task does not drift by the length of its work. **`ticks` are logical, not real time** (the tickless idle bullet in that DESIGN section).
 - `Task.suspend()` / `Task.resume()` pause and resume another task, which carries on whatever it was waiting on. `Task.delete()` makes a task `done`; its memory stays the caller's.
 - `irq_save()` / `irq_restore(state)`: the critical section (interrupts off) that every primitive in `ksos/kernel/sync.kspls` builds on.
-- A canary at the stack's lowest address, matched on every `schedule()`, panics on an overflow (`ksos: stack overflow detected`).
+- A *canary*, a known value at the stack's lowest address, is checked on every `schedule()`. A task whose stack grew past its end overwrites it, and ksos panics (stops with a message: `ksos: stack overflow detected`).
 - **The seven `ksos_port_*` functions declared `extern "C"` at the top are the only boundary to the port layer.** The kernel knows their signatures and nothing of the register work behind them.
 
 ### ② The synchronizing primitives — `ksos/kernel/sync.kspls`
@@ -83,7 +108,7 @@ All four rest on `block_and_rearm`/`wake` in `ksos/kernel/task.kspls`, in one sh
 - `Queue<|T|>` (a message queue of any `T`): `send`/`recv`, blocking when full too.
 - `Mutex` (priority-inheriting): `lock`/`unlock`.
 - `Event` (event flags): `wait`/`set` on an AND (`.all`) or OR (`.any`) of bits.
-- **Only what does not wait may be called from an ISR** (`give` / `set` / `try_*`).
+- **Only what does not wait may be called from an interrupt handler (ISR)** (`give` / `set` / `try_*`).
 - **How long a call waits is in how it is written.** The bare form waits until woken, `try_` answers at once, and `_for(ticks)` gives up after a timeout. The rules for each, and the conversion from real time, are in "⚙️ What sets the scheduler apart" in [`ksos/docs/DESIGN.md`](docs/DESIGN.md).
 
 ### ③ The dynamic API that allocates on the heap, and the task manager — `ksos/kernel/heap.kspls`, `ksos/kernel/dynamic.kspls`
@@ -96,8 +121,8 @@ Where the API above takes the `Task`, the stacks and a queue's buffer from the c
 ### ④ The port layer — `port/posix/`, `port/cortex_m/`, `port/cortex_m0/`, `port/rp2040/`
 Each port implements the seven functions `ksos/kernel/task.kspls` declares `extern "C"`. The files and their design are in "🔌 The ports" in [`ksos/docs/DESIGN.md`](docs/DESIGN.md).
 - `ksos/port/posix/`: `ucontext` switching and `SIGALRM` preemption. **It needs nothing special, so run things here first** (`make ksos` and the rest).
-- `ksos/port/cortex_m/`: ARMv7-M (thumbv7m) bare metal, every switch through PendSV. It runs under QEMU as the real chip would (`make ksos-cm-run` and the rest).
-- `ksos/port/cortex_m0/`: ARMv6-M (thumbv6m, Cortex-M0/M0+), with its own `startup.S` and `switch.S` for Thumb-1 and the rest of `cortex_m/` recompiled.
+- `ksos/port/cortex_m/`: ARMv7-M (thumbv7m) bare metal. Every task switch goes through PendSV, a low-priority exception the CPU offers for this. It runs under QEMU as the real chip would (`make ksos-cm-run` and the rest).
+- `ksos/port/cortex_m0/`: ARMv6-M (thumbv6m, Cortex-M0/M0+), with its own `startup.S` and `switch.S` for Thumb-1 (the smaller instruction set these CPUs have) and the rest of `cortex_m/` recompiled.
 - `ksos/port/rp2040/`: the real chip (Raspberry Pi Pico / Pico W, RP2040, Cortex-M0+) on `ksos/port/cortex_m0/`. The build and objdump check its boot ROM's 256-byte stage-2 bootloader and checksum (`make ksos-rp2040`).
 
 **Only the RP2040 (the mecanum car) is checked on a real chip.** For bare metal without the car, run `ksos/port/cortex_m/` under QEMU (`mps2-an385`).
@@ -110,7 +135,7 @@ Each port implements the seven functions `ksos/kernel/task.kspls` declares `exte
 | :-- | :-- |
 | `demo/<port>/` | that port's demos; one file = one firmware |
 | `demo/<port>/common/` | parts only that port's demos share (the RP2040's USB CDC console, …) |
-| `ksos/demo/common/` | parts shared across ports (the semihosting console, the reader of a policy passed down) |
+| `ksos/demo/common/` | parts shared across ports (the semihosting console, which prints through the debugger QEMU provides; the reader of a policy passed down) |
 
 One demo per feature. The POSIX ones need no special tools:
 
@@ -133,13 +158,14 @@ One demo per feature. The POSIX ones need no special tools:
 | `ksos/demo/posix/mutex_foreign_unlock_demo.kspls` | `make ksos-mutex-foreign-unlock` | a non-holder's unlock stops rather than being silently ignored (panic = pass) |
 | `ksos/demo/posix/timeout_demo.kspls` | `make ksos-timeout` | timeouts (`take_for`/`recv_for`/`send_for`/`lock_for`/`wait_for`), `try_take`/`try_lock`, and `ms_to_ticks` rounding up |
 | `ksos/demo/posix/timeout_zero_demo.kspls` | `make ksos-timeout-zero` | a timeout of 0 stops rather than meaning `try_` (panic = pass) |
+| `ksos/demo/posix/tick_mid_switch_demo.kspls` | `make ksos-tick-mid-switch` | a tick held over a switch into a task that has never run arrives after the switch, and the task still runs its code |
 
 The Cortex-M demos need a cross compiler and QEMU (both in the development container), and `make test-ksos-qemu` runs them all. `make ksos-cm` builds `cortex_m_min.kspls` and checks its vector table and PendSV with objdump. `make ksos-cm-run` runs that ELF under QEMU (`mps2-an385`). Every other target builds and runs in one.
 
 | The demo | The make target | What it demonstrates |
 |---|---|---|
 | `ksos/demo/cortex_m/cortex_m_min.kspls` | `make ksos-cm-run` | the cooperative scheduler on bare metal |
-| `ksos/demo/cortex_m/cortex_m_preempt.kspls` | `make ksos-cm-preempt` | SysTick preemption: two tasks that never yield both run, and a monitor's `Task.delay` still wakes |
+| `ksos/demo/cortex_m/cortex_m_preempt.kspls` | `make ksos-cm-preempt` | preemption by SysTick (the Cortex-M's built-in timer): two tasks that never yield both run, and a monitor's `Task.delay` still wakes |
 | `ksos/demo/cortex_m/cortex_m_pi.kspls` | `make ksos-cm-pi` | priority inheritance: the high-priority requester gets the lock past a mid-priority task that never `yield`s |
 | `ksos/demo/cortex_m/cortex_m_event.kspls` | `make ksos-cm-event` | a barrier of event flags: three workers' bits raised under preemption, and clear-on-exit |
 | `ksos/demo/cortex_m/cortex_m_mq.kspls` | `make ksos-cm-mq` | a queue under preemption (the critical section) |
@@ -150,9 +176,9 @@ The Cortex-M demos need a cross compiler and QEMU (both in the development conta
 | `ksos/demo/cortex_m/cortex_m_panic_probe.kspls` | `make ksos-cm-panic-probe` | a panic's crash record read back across a real soft reset |
 | `ksos/demo/cortex_m/cortex_m_uart_probe.kspls` | `make ksos-cm-uart-probe` | reading and writing a real UART0 (a CMSDK APB UART) directly |
 | `ksos/demo/cortex_m/cortex_m_uart_echo.kspls` | `make ksos-cm-uart-echo` | UART0's receive path, judged by an outside echo test |
-| `ksos/demo/cortex_m/cortex_m_uart_irq_echo.kspls` | `make ksos-cm-uart-irq-echo` | the same receive path driven by an interrupt (NVIC IRQ0 plus `WFI`) |
+| `ksos/demo/cortex_m/cortex_m_uart_irq_echo.kspls` | `make ksos-cm-uart-irq-echo` | the same receive path driven by an interrupt (NVIC IRQ0 plus `WFI`: the interrupt controller's line 0, and the instruction that sleeps until an interrupt) |
 | `ksos/demo/cortex_m/cortex_m_ai_probe.kspls` | `make ksos-cm-ai-probe` | `ksai` inference (a whole `Transformer_block`) on bare metal, matching the host's numbers |
-| `ksos/demo/cortex_m/cortex_m_ai_train_probe.kspls` | `make ksos-cm-ai-train-probe` | on-device LoRA training, the adapter persisted with `Lora.save_raw` / `load_raw` |
+| `ksos/demo/cortex_m/cortex_m_ai_train_probe.kspls` | `make ksos-cm-ai-train-probe` | on-device LoRA training (a small add-on to the weights, trained on the device), the adapter persisted with `Lora.save_raw` / `load_raw` |
 | `ksos/demo/cortex_m/cortex_m_ai_weights_probe.kspls` | `make ksos-cm-ai-weights-probe` | real weights (a safetensors made a static array by `embed`) read with zero copies and no filesystem |
 | `ksos/demo/cortex_m/cortex_m_control_ai_probe.kspls` | `make ksos-cm-control-ai-probe` | a control loop and continuing AI inference side by side, undisturbed |
 | `ksos/demo/cortex_m/cortex_m_pilot_probe.kspls` | `make ksos-cm-pilot-probe` | a policy passed down deciding the next manoeuvre inside the car alone |
@@ -167,6 +193,8 @@ The Cortex-M demos need a cross compiler and QEMU (both in the development conta
 | `ksos/demo/posix/` | runs every one; `assert` stops a failing path (`make test-ksos-posix`) | not needed |
 | `ksos/demo/cortex_m/` | runs every one under QEMU (`make test-ksos-qemu`) | not needed |
 | `ksos/demo/rp2040/` | links only (`make test-ksos-link`); QEMU has no RP2040 | a person flashes it |
+
+**Every demo `make test-ksos-posix` and `make test-ksos-qemu` run has a time cap** (`KSOS_RUN_CAP` in `ksos/Makefile`, whose comment gives its value and how it was chosen). A demo that hangs, a task left spinning by a kernel bug for one, fails its gate with `[FAIL] ksos-<demo> did not finish in <N>s: it hung (timeout killed it)` instead of stalling it. On a slow machine, raise the cap on the command line (`make test-ksos-posix KSOS_RUN_CAP=120`).
 
 **The POSIX and Cortex-M demos are the tests themselves.** Deleting one deletes a check. Merging them into one big demo hides which feature broke, and leaves everything after the first stop unrun.
 
@@ -205,20 +233,26 @@ The file names do not tell them apart (every one is a `*_probe.kspls`), so they 
 ### ⑥ Beyond that: the peripheral drivers and the AI integration — `drivers/`, `net/`, `boards/`
 For the IoT and embedded side; not needed on a first read.
 - `ksos/boards/`: what one real board wires to what, above `ksos/port/` (which CPU) and `ksos/drivers/` (which peripheral). The board is a Freenove 4WD mecanum car with a Pico W (RP2040), the hardware behind Phase 3 of [What works, and how far](../README.md#-what-works-and-how-far). Its wiring is in [`ksos/docs/SPEC-board.md`](docs/SPEC-board.md), and bringing it up is in [`ksos/docs/HOWTO-bring-up.md`](docs/HOWTO-bring-up.md).
-- `ksos/drivers/`: drivers reading and writing a microcontroller's MMIO registers directly (UART, GPIO, PWM, clocks, ADC, I2C, USB CDC and more), each under "🔧 The peripheral drivers" in [`ksos/docs/DESIGN.md`](docs/DESIGN.md). `putc`/`getc`/`transfer` and the rest give up at a cap on iterations rather than stall on hardware that does not answer. They return a failure as a `Bool` or `Option<T>`.
+- `ksos/drivers/`: drivers reading and writing a microcontroller's MMIO registers (memory addresses that control the hardware) directly (UART, GPIO, PWM, clocks, ADC, I2C, USB CDC and more), each under "🔧 The peripheral drivers" in [`ksos/docs/DESIGN.md`](docs/DESIGN.md). `putc`/`getc`/`transfer` and the rest give up at a cap on iterations rather than stall on hardware that does not answer. They return a failure as a `Bool` or `Option<T>`.
 - `ksos/net/`: the smallest network stack. `ksos/net/tcp_conn.kspls` (TCP) runs on `ksos/net/mini_ipv4.kspls` (ARP, IPv4, UDP without fragmentation). See "🌐 The network stack" in [`ksos/docs/DESIGN.md`](docs/DESIGN.md).
 - **`ksai` runs beside a control loop with no malloc**, as the AI rows of the Cortex-M table show. What it needs is in "🤖 The AI on bare metal" in [`ksos/docs/DESIGN.md`](docs/DESIGN.md), and `ksai` itself is [ksai](../ksai/README.md).
-- **A panic leaves a crash record** (freestanding only) in `.noinit_panic`, RAM that `ksos/port/*/link.ld` leaves unzeroed. The next start-up after a warm reset reads it once with `take_panic_record` in `std/lang.kspls`. `make ksos-cm-panic-probe` runs it across a watchdog reset, a panic and a soft reset (`system_reset()` in `ksos/drivers/cortex_m/scs.kspls`) in one QEMU run.
+- **A panic leaves a crash record** (freestanding only, that is, with no OS underneath) in `.noinit_panic`, RAM that `ksos/port/*/link.ld` (the linker script, which says where each part of the program goes in memory) leaves unzeroed. The next start-up after a warm reset (a restart without losing power) reads it once with `take_panic_record` in `std/lang.kspls`. `make ksos-cm-panic-probe` runs it across a watchdog reset, a panic and a soft reset (`system_reset()` in `ksos/drivers/cortex_m/scs.kspls`) in one QEMU run.
 
 ## Pitfalls
 
-- **On bare metal, libc comes in without being called** (how is in "The digits of a floating-point number are assembled here" in [`std/docs/DESIGN.md`](../std/docs/DESIGN.md)). Pair any libc call added to `std` that bare metal cannot use with a `cfg(freestanding)` version. `make test-ksos-link` links every demo, and `make test-ksos-qemu` runs them to catch what links but fails at start.
-- **Linking `ksos-cm*`/`ksos-rp2040*` needs arm-none-eabi's libgcc** (the development container has it).
-- **Touch shared state (a `Task`'s fields and the rest) inside a critical section** (`irq_save`/`irq_restore`). Otherwise an interrupt or preemption can race it (a dropped wakeup, and the like). `block_current`/`block_and_rearm` assume the caller holds one; outside it they protect nothing.
-- **Touching the signal mask in the POSIX port's code can break its preemption**, which ties blocking `SIGALRM` to `ucontext`'s switch.
-- **On Cortex-M, keep the frame `ksos/port/cortex_m/switch.S` saves matching the initial frame `ksos_port_ctx_create` builds** when rewriting either by hand. Every switch, cooperative or preemptive, goes through `PendSV_Handler`.
+These are the traps the next person is likely to hit.
+
+| The trap | What goes wrong | What to do |
+| :-- | :-- | :-- |
+| **On bare metal, libc comes in without being called** (how is in "The digits of a floating-point number are assembled here" in [`std/docs/DESIGN.md`](../std/docs/DESIGN.md)) | A libc call added to `std` that bare metal cannot use breaks the bare-metal build | Pair it with a `cfg(freestanding)` version. `make test-ksos-link` links every demo, and `make test-ksos-qemu` runs them to catch what links but fails at start |
+| **Linking `ksos-cm*`/`ksos-rp2040*` needs arm-none-eabi's libgcc** | The link fails without it | Use the development container, which has it |
+| **Shared state touched outside a critical section** (a `Task`'s fields and the rest) | An interrupt or preemption can race it (a dropped wakeup, and the like). `block_current`/`block_and_rearm` assume the caller holds one; outside it they protect nothing | Touch it inside `irq_save`/`irq_restore` |
+| **The POSIX port's signal mask** | Two ways to break it. A task left with `SIGALRM` (the timer tick) blocked is never switched out by the timer again: preemption stops. And a tick let through in the middle of a switch runs on the old task's stack while the new one already counts as current, so the new task never runs its own code again (it hangs, or another task is reported never to have run); under load a tick is often pending at the moment of a switch. So `ksos_port_switch` keeps the interrupt signals blocked across the whole `swapcontext` and gives the task its own mask back only once control has returned to it, and every saved context, a new one too, holds them blocked. A switch made inside the tick's handler leaves `SIGALRM` blocked in the task it leaves until that task resumes and returns from the handler. A new task unblocks them as its first code (`ksos_task_start`) | Leave the mask to `ksos_port_switch` and `ksos_task_start` (`ksos/port/posix/ksos_port_posix.c`): `swapcontext` alone installs the next task's mask before its registers, which opens the window. `make ksos-tick-mid-switch` holds a tick over a switch into a new task on every run |
+| **On Cortex-M, the saved frame and the initial frame** | A task that has never run starts at a wrong address, or faults. A switch (`PendSV_Handler`) keeps a task's registers on that task's stack as 16 words: `r4`–`r11`, then the 8 the CPU saves by itself (`r0`–`r3`, `r12`, `lr`, `pc`, `xPSR`). For a new task, `ksos_port_ctx_create` writes those 16 words by hand. If its layout differs, the first switch to the task loads the wrong words into its registers, `pc` included. Every switch, cooperative or preemptive, goes through `PendSV_Handler`, so no task avoids it | When rewriting either by hand, keep the frame `ksos/port/cortex_m/switch.S` saves matching the initial frame `ksos_port_ctx_create` builds. `ksos/port/cortex_m0/switch.S`, the RP2040's, saves the same frame and must match it too |
 
 ## What has been checked on real hardware
+
+Each row is one part of the real car, and whether someone has seen it work on the car itself.
 
 **This table is the canonical source for what was confirmed on the real board.** ✅ means confirmed on this unit's real chip, a Freenove 4WD car carrying a Raspberry Pi Pico W ([`ksos/docs/SPEC-board.md`](docs/SPEC-board.md)). The AI cannot add a ✅; only whoever has the hardware can. A stage named below is one of [`ksos/docs/HOWTO-bring-up.md`](docs/HOWTO-bring-up.md)'s.
 
@@ -263,13 +297,13 @@ For the IoT and embedded side; not needed on a first read.
 
 **No file in ksos exceeds 900 lines.**
 
-**Only a range that touches no state can be cut out.** The drivers and demos are joined through global state, so the state a cut crosses decides where to cut, not the line count. These ranges stay where they are:
+**Only a range that touches no state can be cut out.** *State* here means a file's global variables, the ones declared at the top level with `$` (such as `$halted: Bool = false`). The functions of a driver or a demo share them, so a range that reads or writes them cannot move to another file without taking them along or passing each one in and out. Those variables decide where a file can be cut, not its line count. These ranges stay where they are:
 
-| Range | State it crosses |
-| :-- | :-- |
-| the USB enumeration (EP0) | `stage_*` and `ncm_alt` |
-| the remaining safety timeouts (the remote, the running time) | 17 |
-| the one-line report | 20 |
+| Range | Its file | The state it shares with the rest of the file |
+| :-- | :-- | :-- |
+| the USB enumeration, the first exchange in which the PC asks the board what it is (EP0, USB's control endpoint) | `ksos/drivers/rp2040/usb_cdc.kspls` | `stage` (how far enumeration got, one of the `stage_*` values) and `ncm_alt` (the network setting the PC chose), which `init`, `poll_once` and the network side also use |
+| the remaining safety timeouts (the remote, the running time) | `ksos/demo/rp2040/rp2040_car_pilot_probe.kspls` | the stop (`halted`, `halt_state`, `halt_needs_remote`), the counts of the remote's presses (the `ir_*` variables), the driving time (`driving_rounds`), and the requests to dump or erase the record, which the main loop reads and writes too |
+| the one-line report | the same file | nearly every running total and last value the main loop keeps (`loops`, `decisions`, `steers`, `last_lon` and the rest), and the stop |
 
 ## Further reading
 

@@ -1,11 +1,10 @@
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
-import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/literal" as base_literal
 import "ksplc/sema/decl/layout" as sema_decl_layout
+import "ksplc/sema/decl/name" as sema_decl_name
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
-import "ksplc/sema/session/import_table" as sema_session_import_table
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
@@ -448,7 +447,7 @@ impl Ast_node
         if names.len == 0
             return .none
         first: = names.get(0)
-        sym: = c.symtab.resolve(first.text) catch null
+        sym: = c.read_written_name(first).sym
         if sym == null || !sym.kind.is_var_or_const()
             return .none
         $expr: = Ast_node.build_ident(first.text, 0, first.loc)
@@ -492,7 +491,9 @@ impl Ast_node
             // Caution: Request the declaration's layout first. The field list is complete only
             // after collect's Pass 3 (ensure_type_registry in sema/decl/layout.kspls).
             c.ensure_type_registry(type_id, r)?
-            return I64::c.type_layout(type_id).size
+            size: = c.type_layout(type_id).size
+            c.record_folded(type_id, .size, size, r)
+            return I64::size
         throw .not_constant
 
     fn eval_offsetof(r: Self$@, c: Sema_ctx$@, _depth: I32): I64?Sema_error //<
@@ -512,7 +513,9 @@ impl Ast_node
             c.suppress_errors = prev_sup
         if type_id == 0
             throw .not_constant
-        return I64::c.field_offset_of(type_id, field.text, r)?
+        offset: = c.field_offset_of(type_id, field.text, r)?
+        c.record_folded(type_id, .field_offset(field.text), offset, r)
+        return I64::offset
 
     fn eval_ident_or_path(r: Self$@, c: Sema_ctx$@, depth: I32): I64?Sema_error
         if r.kind_id == .k_expr_postfix
@@ -620,45 +623,12 @@ impl Ast_node
     priv fn resolve_ref_symbol(r: Self$@, c: Sema_ctx$@): Sema_symbol$@ //<
         //< The symbol this reference names
         //<
-        //< Caution: **Keep name lookup in this one place.** An identifier, a path, a method access
-        //< and an import alias each look up differently; copies drift until one folds and another
-        //< does not.
-        $sym_ptr: Sema_symbol$@ = null
-        if r.kind_id == .k_identifier
-            sym_ptr = c.symtab.resolve(r.text) catch null
-        else
-            $target_name: = ""
-            $prefix_name: = ""
-
-            if r.kind_id == .k_expr_postfix || r.kind_id == .k_method_access
-                mem_node: = r.get_postfix_member()
-                if mem_node != null
-                    target_name = mem_node.text
-                recv_node: = r.get_postfix_receiver()
-                if recv_node != null
-                    prefix_name =
-                        (recv_node.get_path_name()
-                        if recv_node.kind_id == .k_expr_path || recv_node.kind_id == .k_type_path ||
-                        recv_node.kind_id == .k_identifier else recv_node.text)
-            else
-                if r.children.len > 0
-                    target_name = r.get_child(r.children.len - 1).text
-                if r.children.len >= 2
-                    prefix_name =
-                        (r.get_child(r.children.len - 3).text
-                        if r.get_child(r.children.len - 2).text.equals(".") &&
-                        r.children.len >= 3 else r.get_child(r.children.len - 2).text)
-
-            sym_ptr = c.symtab.resolve(target_name) catch null
-            if sym_ptr == null && prefix_name.len > 0
-                c.clear_scratch().s("\{prefix_name\}.\{target_name\}")
-                sym_ptr = c.symtab.resolve(c.scratch.slice()) catch null
-            if sym_ptr == null && prefix_name.len > 0
-                target_file: = c.get_file_alias_target(c.file_name, prefix_name)
-                if target_file.len > 0
-                    sym_ptr =
-                        c.symtab.resolve(c.build_mod_fqn(target_file, target_name)) catch null
-        return sym_ptr
+        //< It is read as any value's name is (read_written_name in name.kspls): a copy of the
+        //< reading drifts until one folds and another does not.
+        $sym: Sema_symbol$@ = null
+        if path: = sema_decl_name.name_path_of(r)
+            sym = c.read_written_name(path).sym
+        return sym
 
     priv fn const_decl_of(r: Self$@, sym_ptr: Sema_symbol$@): Option<|Ast_node$@|> //<
         //< The referenced constant's declaration node

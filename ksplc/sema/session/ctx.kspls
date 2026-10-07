@@ -6,8 +6,8 @@ import "ksplc/sema/session/c_boundary" as sema_session_c_boundary
 import "ksplc/sema/session/import_table" as sema_session_import_table
 import "ksplc/sema/session/state" { Generic_arg, Alias_info, Import_symbol_info, Pending_inst,
     Pending_constraint, Pending_methods, Trait_inst, Diagnostic_counts, Generic_state, Mono_state,
-    Alias_state, Import_hit, Import_symbol_state, Lint_setting_entry, Type_layout, Diag_state,
-    Layout_state, Resolving_state }
+    Alias_state, Import_hit, Import_symbol_state, Lint_setting_entry, Type_layout, Folded_layout,
+    Diag_state, Layout_state, Resolving_state }
 import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
@@ -56,6 +56,12 @@ struct Fn_ctx
         //< `-1` is a unary minus on the literal `1`, so without this the range check rejects a
         //< correct minimum such as `I8 = -128`. Only the unary minus sets it, and only over a
         //< literal (saved and restored).
+    callee: Ast_node$@ //<
+        //< The expression a call is about to call, while it is inferred; null otherwise
+        //<
+        //< **A function's name anywhere else is a value**, which a generic one can be only as a
+        //< specialization (sema/body/resolve_path.kspls). The call's own route infers its type
+        //< arguments from the arguments (sema/body/call.kspls).
     effective_vis: sema_type_scope.Visibility //<
         //< The effective visibility of the function being analysed
         //<
@@ -206,6 +212,9 @@ impl Sema_ctx
             .layout = Layout_state::{
                 .memo = base_core.arena
                     .create(Map<|I32, Type_layout|>.new_with_cap(64, null)),
+                .folded = List<|Folded_layout|>.create(base_core.arena),
+                .folded_keys = base_core.arena
+                    .create(Map<|U8[], Bool|>.new(base_core.arena)),
             },
             .resolving = Resolving_state::{
                 .aliases = base_core.arena.create(List<|U8[]|>.new(null)),
@@ -277,25 +286,26 @@ impl Sema_ctx
     fn hint(r: Self$@, node: Ast_node$@, msg: U8[])
         r.report_diagnostic(node, base_diag.Diagnostic_severity.hint, msg)
 
-    fn make_fqn(r: Self$@, name: U8[]): U8$[] //<
+    fn make_fqn(r: Self$@, name: U8[]): U8[] //<
         //< The fully qualified name, qualified by the current file
         //<
         //< The built-in `Unknown` / `Void` are not qualified. It lives here, not in `resolve`:
         //< there, ctx would have to import resolve and be pulled into the declarations' mutual
         //< recursion, a large tangle since many files use ctx.
         if r.file_name.len > 0 && !name.equals("Unknown") && !name.equals("Void")
-            return base_core.arena.dup_str(r.build_mod_fqn(r.file_name, name))
-        return base_core.arena.dup_str(name)
+            return r.build_mod_fqn(r.file_name, name)
+        return base_core.pools.name_text(name)
 
-    fn build_mod_fqn(r: Self$@, file_path: U8[], name: U8[]): U8[]
-        // name may be r.scratch's own slice (alt_path_slice in resolve_path.kspls): clearing
-        // scratch and writing file_path would overwrite it before it is read, a silent corruption
-        // through aliasing. So copy it first, then clear.
-        name_copy: = base_core.arena.dup_str(name)
-        r.clear_scratch()
-        r.scratch.s_path_as_dots(file_path)
-        r.scratch.s(".").s(name_copy)
-        return r.scratch.slice()
+    fn build_mod_fqn(_r: Self$@, file_path: U8[], name: U8[]): U8[] //<
+        //< The FQN of name in the file at file_path (`std.io.Writer`), kept as long as the pools
+        //<
+        //< **The caller keeps it as it is**, with no copy: it is the one copy name_text in
+        //< ksplc/base/core.kspls holds. It is built in a builder of its own, so a name held in
+        //< the context's scratch is read intact.
+        $b: = Str_builder.new()
+        defer b.free()
+        b.s_path_as_dots(file_path).c('.').s(name)
+        return base_core.pools.name_text(b.slice())
 
     fn is_instantiating(r: Self$@): Bool //<
         //< Whether a generic's instantiation (the analysis of a template body) is in progress
@@ -437,7 +447,7 @@ impl Sema_ctx
                 return
         r.diags.counts.codes.push(base_core.arena.dup_str(code))
 
-    fn report_type_mismatch($r: Self$@, node: Ast_node$@, expected_id: I32, actual_id: I32)
+    fn report_type_mismatch(r: Self$@, node: Ast_node$@, expected_id: I32, actual_id: I32)
         // Either side Unknown means an error was already reported upstream.
         if sema_type_env.is_unknown(expected_id) || sema_type_env.is_unknown(actual_id)
             return
@@ -466,7 +476,7 @@ impl Sema_ctx
         r.append_closure_capture_note(actual_id)
         r.err(node, r.scratch.slice())
 
-    priv fn append_closure_capture_note($r: Self$@, actual_id: I32) //<
+    priv fn append_closure_capture_note(r: Self$@, actual_id: I32) //<
         //< Explains in scratch a closure's environment struct appearing in a type mismatch
         //<
         //< **Without this note the user sees a type name they never wrote, `_anon_env_1`.** Two
@@ -502,14 +512,14 @@ impl Sema_ctx
         info: = node.get_span_offset()
         out.s(r.file_for_node(node)).c(':').s("\{info.offset\}")
 
-    fn report_undefined_symbol($r: Self$@, node: Ast_node$@, name: U8[])
+    fn report_undefined_symbol(r: Self$@, node: Ast_node$@, name: U8[])
         r.clear_scratch().s("undefined path or identifier '\{name\}'")
         if !r.append_anon_fn_capture_note(name)
             dot: = name.find_char('.')
             r.append_withheld_alias_note(name if dot < 0 else name.sub(0, dot))
         r.err(node, r.scratch.slice())
 
-    fn append_withheld_alias_note($r: Self$@, name: U8[]): Bool //<
+    fn append_withheld_alias_note(r: Self$@, name: U8[]): Bool //<
         //< Writes to scratch how to import a name that a selective import left out; true if written
         //<
         //< The name not found is a file's name that a selective import does not bind.
@@ -528,7 +538,7 @@ impl Sema_ctx
                 'import \"\{path\}\" + { ... }'.")
         return true
 
-    fn append_anon_fn_capture_note($r: Self$@, name: U8[]): Bool //<
+    fn append_anon_fn_capture_note(r: Self$@, name: U8[]): Bool //<
         //< Writes to scratch that an anonymous function cannot capture the name; true if written
         //<
         //< It applies where a name is not found in an anonymous function's body. The body is lifted
@@ -544,7 +554,7 @@ impl Sema_ctx
                 (its body is lifted to a top-level function). Pass it as a parameter.")
         return true
 
-    fn append_closure_note($r: Self$@) //< writes to scratch that adding `;` makes it a closure
+    fn append_closure_note(r: Self$@) //< writes to scratch that adding `;` makes it a closure
         //<
         //< Even with zero captures a `;` makes it a `Callable` ("Why capture is made explicit and
         //< escape is forbidden" in docs/DESIGN.md). That **the presence of `;` decides the type**
@@ -563,7 +573,7 @@ impl Sema_ctx
             return
         r.append_closure_note()
 
-    fn report_redefinition($r: Self$@, node: Ast_node$@, name: U8[])
+    fn report_redefinition(r: Self$@, node: Ast_node$@, name: U8[])
         r.clear_scratch().s("symbol '\{name\}' is already declared in this scope")
         r.err(node, r.scratch.slice())
 
@@ -642,7 +652,7 @@ impl Sema_ctx
                 named: = r.peek_file_alias(r.file_name, name)
                 if named != null && named.decl_node != null
                     r.clear_scratch()
-                        .s("[W0505] '\{name\}' hides the imported module '\{name\}': from here to \
+                        .s("[W0504] '\{name\}' hides the imported module '\{name\}': from here to \
                             the end of its scope, '\{name\}.x' reads this instead. Rename it.")
                     r.warn(target_node, r.scratch.slice())
 
@@ -679,8 +689,11 @@ impl Sema_ctx
 impl Sema_ctx: Owned {}
 
 fn join_dotted_name(base_name: U8[], sub_name: U8[]): U8[] //<
-    //< `base_name.sub_name` on the arena: a member's name under its owner's (`Enum.variant`)
-    return base_core.arena.text().s(base_name).c('.').s(sub_name).take()
+    //< `base_name.sub_name`, a member's name under its owner's (`Enum.variant`), kept by name_text
+    $b: = Str_builder.new()
+    defer b.free()
+    b.s(base_name).c('.').s(sub_name)
+    return base_core.pools.name_text(b.slice())
 
 impl Ast_node
     fn collect_lint_decl(r: Ast_node$@, c: Sema_ctx$@) //<

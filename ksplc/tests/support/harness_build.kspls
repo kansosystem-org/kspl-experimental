@@ -9,6 +9,7 @@ import "std/fs"
 import "std/mem" { Arena }
 import "std/str" // `arena.text()`
 import "std/strfmt" as _strfmt
+import "std/subproc"
 import "std/sys"
 import "std/verdict"
 
@@ -64,13 +65,21 @@ const llvm_cflags: U8[][3] = ::{ "-Wno-override-module", "-mllvm", "-fast-isel=f
     //< answers differently from the C backend. `-Wno-override-module` silences the warning that the
     //< IR's target name differs from clang's default.
 
-priv fn build(cc: U8[], gen: U8[][], exe: U8[], cflags: U8[][], llvm: Bool, flagged: Bool,
-    arena: Arena$@): verdict.Run_out //<
-        //< It builds the executable exe from the generated files gen
+struct Exe_job //< the command that builds an executable, to run beside others (`harness.run_all`)
+    //<
+    //< **Where why is not empty, the command could not be composed**, and why says what failed.
+    job: subproc.Job
+    why: U8[]
+
+priv fn failed_job(why: U8[]): Exe_job
+    return Exe_job::{ .job = subproc.Job::{ .argv = U8[][]::{}, .cwd = "" }, .why = why }
+
+priv fn build_job(cc: U8[], gen: U8[][], exe: U8[], cflags: U8[][], llvm: Bool, flagged: Bool,
+    arena: Arena$@): Exe_job //<
+        //< The command that builds the executable exe from the generated files gen
         //<
-        //< Caution: **Only this function builds an executable**, or a caller that misses an
-        //< addition builds differently. The libraries go **after** the inputs (GNU ld resolves from
-        //< the left).
+        //< Caution: **Only this function composes it**, or a caller that misses an addition builds
+        //< differently. The libraries go **after** the inputs (GNU ld resolves from the left).
     dir: = sys.get_dir_name(exe)
     $argv: = List<|U8[]|>.new(arena)
     argv.push(cc)
@@ -85,18 +94,32 @@ priv fn build(cc: U8[], gen: U8[][], exe: U8[], cflags: U8[][], llvm: Bool, flag
         rt: = arena.text().s(exe).s(".runtime.c").take()
         made: = harness.ksplc_bare(U8[][]::{ "emit-runtime", rt })
         if made.code != 0
-            return verdict.Run_out::{ .code = -1,
-                .out = arena.text().s("[harness] emit-runtime failed\n").s(made.out).take() }
+            return failed_job(arena.text().s("[harness] emit-runtime failed\n").s(made.out).take())
         argv.push(below(rt, dir))
     if !query_words("link-libs", argv@, arena)
-        return verdict.Run_out::{ .code = -1,
-            .out = "[harness] the link options could not be asked of ksplc" }
+        return failed_job("[harness] the link options could not be asked of ksplc")
     if flagged && !query_words("exe-flags", argv@, arena)
-        return verdict.Run_out::{ .code = -1,
-            .out = "[harness] the link options could not be asked of ksplc" }
+        return failed_job("[harness] the link options could not be asked of ksplc")
     argv.push("-o")
     argv.push(below(exe, dir))
-    return harness.run_in(argv.slice(), dir)
+    return Exe_job::{ .job = subproc.Job::{ .argv = argv.slice(), .cwd = dir }, .why = "" }
+
+priv fn build(cc: U8[], gen: U8[][], exe: U8[], cflags: U8[][], llvm: Bool, flagged: Bool,
+    arena: Arena$@): verdict.Run_out //< it builds the executable exe from the generated files gen
+    j: = build_job(cc, gen, exe, cflags, llvm, flagged, arena)
+    if j.why.len > 0
+        return verdict.Run_out::{ .code = -1, .out = j.why }
+    return harness.run_in(j.job.argv, j.job.cwd)
+
+fn exe_job(gen: U8[], exe: U8[], llvm: Bool): Exe_job //<
+    //< The command that builds one generated file into an executable
+    //<
+    //< With the options `build_exe` and `build_llvm_exe` are given by default, for a suite that
+    //< builds many at once (`harness.run_all`).
+    arena: = harness.arena()
+    if llvm
+        return build_job(harness.cc(), U8[][]::{ gen }, exe, U8[][]::llvm_cflags, true, true, arena)
+    return build_job(harness.cc(), U8[][]::{ gen }, exe, U8[][]::default_cflags, false, true, arena)
 
 fn build_exe(gen: U8[][], exe: U8[], cflags: U8[][]): verdict.Run_out //<
     //< Links the C ksplc generated and makes an executable
@@ -137,7 +160,7 @@ struct Built //< whether it built, and the result of running it
 fn build_and_run(src: U8[], dir: U8[], stem: U8[], ksplc_args: U8[][], llvm: Bool = false): Built //<
     //< Turns a source into an executable and runs it
     //<
-    //< Set `llvm` and it builds with `--target=llvm`.
+    //< Set `llvm` and it builds with `--to=llvm`.
     //< Caution: **The stop message must be the same on both** backends, which keep the wording in
     //< separate places. **stdout at run time is a pipe (full buffering)**, as in CI's logs, so a
     //< process that crashed part way leaves not one byte.
@@ -147,7 +170,7 @@ fn build_and_run(src: U8[], dir: U8[], stem: U8[], ksplc_args: U8[][], llvm: Boo
     exe: = fs.join(dir, arena.text().s("\{stem\}.exe").take(), arena)
     $args: = List<|U8[]|>.new(arena)
     if llvm
-        args.push("--target=llvm")
+        args.push("--to=llvm")
     for a in ksplc_args
         args.push(a)
     args.push(src)

@@ -1,9 +1,9 @@
 //< The worker: analyses and answers the requests the supervisor forwards, one at a time
 //<
 //< The supervisor (`server.kspls`) owns the stdio with the editor; a worker that crashes or hangs
-//< is restarted and the open documents replayed into it. **Every method is routed in one place**
-//< (`dispatch`), each named once, with the state it is answered from built in its own branch: the
-//< document's (`document_state`) or the workspace's (`workspace_state`).
+//< is restarted and handed the open documents' texts, each analysed later. **Every method is
+//< routed in one place** (`dispatch`), each named once, with the state it is answered from built in
+//< its own branch: the document's (`document_state`) or the workspace's (`workspace_state`).
 import "kspeg/engine" as kspeg
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/cfg_inactive" as base_cfg_inactive
@@ -206,7 +206,16 @@ priv fn build_workspace_state(server: Server$@, target_uri: U8[], search_hint: U
     ptr.is_valid = compiler.is_valid
     return ptr
 
+priv const test_poison_scheme: U8[] = "kspl-test-poison:" //<
+    //< The URI scheme of a document whose analysis crashes the worker, a test hook for quarantine
+    //<
+    //< An editor names a document by `file:` or `untitled:`, so no real one reaches it, as no
+    //< editor sends the `$/ksplTest*` messages. Its name travels with the document: every worker
+    //< the supervisor starts crashes on it again, as on a text that really crashes the analysis.
+
 priv fn build_document_state(server: Server$@, src: U8[], uri: U8[], send_diag: Bool): Doc_state$@
+    if uri.starts_with(test_poison_scheme)
+        panic("injected test crash while analysing a document")
     arena_state: = base_core.arena.save()
     uri_perm: = base_core.arena.dup_str(uri)
     src_perm: = base_core.arena.dup_str(src)
@@ -267,6 +276,8 @@ impl Server
             r.handle_did_open_change(method, params)
         else if method.equals("textDocument/didClose")
             r.handle_did_close(params)
+        else if method.equals(lsp_msg.restore_method)
+            r.handle_restore(params)
         else if method.equals("textDocument/completion")
             r.handle_completion_req(params, id_val, arena)
         else if method.equals("textDocument/hover")
@@ -374,22 +385,13 @@ impl Server
             src_val = changes.get_at(0).get("text")
 
         sent: = src_val.as_str()
-        // The indentation notation is converted into braces here (`parse/layout.kspls`).
-        // Caution: **Convert it just once, at the entry point** (the other one is
-        // `parse/load.kspls`, which reads the disk). **The store holds the converted text too**:
-        // the other open documents' sources come from it (`populate_source_map_from_store`), and
-        // raw ones fail to analyse.
-        scratch: = Arena.new(layout_scratch_bytes)
-        defer scratch.free()
         // The indentation problems found while converting are **collected, not reported here** (the
         // reason is at `parse_load.layout_notes`); `pipeline.kspls` reports them once sema starts.
+        scratch: = Arena.new(layout_scratch_bytes)
+        defer scratch.free()
         $laid_notes: = List<|parse_layout.Note|>.new(scratch)
-        src: = parse_layout.mend(sent, uri.is_laid_out(), laid_notes@, scratch).code
-        if uri.len > 0 && src.len > 0
-            // A reopened document lands here too (the entry is kept; see `Doc_cache`).
-            r.docs.put(uri, src)
-            r.reset_current_state()
-            // Caution: **Record the notes after the rewind, never before.** `reset_current_state`
+        if src: = r.store_converted(uri, sent, laid_notes@, scratch)
+            // Caution: **Record the notes after the rewind, never before.** `store_converted`
             // rewinds `base_core.arena` and clears the pool with it (`wind_back` in
             // `lsp/state.kspls`), losing a list recorded earlier. **Copy them out of `scratch`**:
             // it is freed at the end of this function while the pool still holds the pointer.
@@ -399,6 +401,39 @@ impl Server
                     kept.push(nt)
                 parse_load.record_layout_notes(doc_name(uri).strip_kspl_ext(), kept)
             r.latest_state = build_document_state(r, src, uri, true)
+
+    fn handle_restore(r: Self$@, params: json.Val) //<
+        //< It takes one open document's text from a supervisor that restarted it, without analysing
+        //<
+        //< **A restart must not make the next answer wait for every open document.** The
+        //< supervisor sends each document's analysis later, as a didOpen: before the first request
+        //< naming it, or while the editor is idle (the grounds are "The language server is split
+        //< into two processes: the watcher and the analyser" in `../docs/DESIGN.md`). The
+        //< conversion's notes are dropped: that didOpen converts again and records them.
+        text_doc: = params.get("textDocument")
+        scratch: = Arena.new(layout_scratch_bytes)
+        defer scratch.free()
+        $notes: = List<|parse_layout.Note|>.new(scratch)
+        _held: = r.store_converted(text_doc.get("uri").as_str(),
+            text_doc.get("text").as_str(), notes@, scratch)
+
+    priv fn store_converted(r: Self$@, uri: U8[], sent: U8[],
+        notes: List<|parse_layout.Note|>$@, scratch: Arena$@): Option<|U8[]|> //<
+            //< It stores a document's text in the brace notation and returns it; none if not stored
+            //<
+            //< The indentation notation is converted into braces here (`parse/layout.kspls`).
+            //< Caution: **Convert it just once, at the entry point** (the other one is
+            //< `parse/load.kspls`, which reads the disk). **The store holds the converted text
+            //< too**: the other open documents' sources come from it
+            //< (`populate_source_map_from_store`), and raw ones fail to analyse. The state built
+            //< from the old text is discarded with it.
+        src: = parse_layout.mend(sent, uri.is_laid_out(), notes, scratch).code
+        if uri.len == 0 || src.len == 0
+            return Option<|U8[]|>.none
+        // A reopened document lands here too (the entry is kept; see `Doc_cache`).
+        r.docs.put(uri, src)
+        r.reset_current_state()
+        return Option<|U8[]|>.some(src)
 
     fn handle_did_close(r: Self$@, params: json.Val)
         uri: = params.get("textDocument").get("uri").as_str()

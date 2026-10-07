@@ -10,6 +10,7 @@ import "ksplc/base/locate" as base_locate
 import "ksplc/base/package" as base_package
 import "ksplc/base/setup" as base_setup
 import "ksplc/base/stats" as base_stats
+import "ksplc/base/target" as base_target
 import "ksplc/fmt/file" as fmt_file
 import "ksplc/fmt/printer" as fmt_printer
 import "ksplc/fmt/style" as fmt_style
@@ -67,7 +68,7 @@ priv enum Mode //< what the tool was asked to do
     emit_runtime(out_path: U8[]) //<
         //< It writes the C runtime's source out as one translation unit
         //<
-        //< `--target=llvm`'s IR links against it ("The backends (Genc / Genllvm) and the runtime
+        //< `--to=llvm`'s IR links against it ("The backends (Genc / Genllvm) and the runtime
         //< ABI" in ksplc/docs/DESIGN.md).
     explain(code: U8[]) //< it prints one diagnostic code's section of the tools specification
     doc(target: U8[]) //< it prints what a file, an entry or a folder publishes (`tools/doc.kspls`)
@@ -77,14 +78,13 @@ impl Mode
         base_core.config.defines = List<|U8[]|>.create(base_core.arena)
 
         $fmt_in_place: = false
-        $fmt_to: U8[] = ""
+        $to_name: U8[] = ""
         base_core.config.target = .c
         $fmt_config: = fmt_style.Config.default_fmt()
         script_args: = List<|U8[]|>.create(base_core.arena)
         $deps_path: U8[] = ""
         $libs_path: U8[] = ""
         $surface_scope: U8[] = ""
-        $target_name: U8[] = "c"
         $style: U8[] = ""
         $std_dir: U8[] = ""
         $pkg_src_dir: U8[] = ""
@@ -124,7 +124,8 @@ impl Mode
         p.str_opt("--surface-scope", surface_scope@,
             "what --emit-surface writes: pub (the default, what the package publishes) or all \
                 (everything a sibling file may reach, for a package that publishes nothing)")
-        p.str_opt("--target", target_name@, "the target of the code generation (c / llvm)")
+        p.str_opt("--machine", base_core.config.machine@,
+            "the machine the output is for, as a triple (the default is the one ksplc runs on)")
         p.str_opt("--std-dir", std_dir@, "where to look for the standard library")
         p.str_opt("--pkg-src-dir", pkg_src_dir@,
             "where to look for the source of a package other than std")
@@ -134,8 +135,9 @@ impl Mode
             "flags for the C compiler, added after ksplc's own so the last one wins (\"-O0 -g\")")
         p.str_opt("--style", style@,
             "the formatting settings (\"IndentWidth: 4, ColumnLimit: 100\")")
-        p.str_opt("--to", fmt_to@,
-            "the notation to format into (kspl / kspls. The default is the same as the input)")
+        p.str_opt("--to", to_name@,
+            "what the output is written in: a compile's c (the default) or llvm, fmt's kspl or \
+                kspls (the default is the input's)")
         p.str_list_opt("--lint", lint_specs, "lint's CODE=off|on|error (it can be repeated)")
         p.str_opt("--diagnostic-format", diag_format@,
             "how diagnostics are written: text (the default) or json (one JSON object per line)")
@@ -158,6 +160,7 @@ impl Mode
                 // Caution: Never treat an unknown option as an input file name: a typo would be
                 // ignored, and a path cut by the shell's word splitting would fail as file names,
                 // cause unseen.
+                usage.refuse_retired_option(n)
                 io.out().s("Error: unknown option: \{n\}\n")
                 usage.usage_exit()
             case .multiple_commands(_n)
@@ -194,13 +197,17 @@ impl Mode
             base_core.config.diag_json = true
         else if diag_format.len > 0 && !diag_format.equals("text")
             usage.error_exit("--diagnostic-format: expected text or json\n")
-        if target_name.equals("llvm")
+        // `--to` names what the output is written in; a compile's languages are c and llvm.
+        if mode_name.equals("compile") && to_name.equals("llvm")
             base_core.config.target = .llvm
-            // As with is_freestanding: --target=llvm alone enables cfg(llvm), with no --define=llvm
-            // to remember. No code depends on `#cfg(llvm)` yet; it is there for such a difference.
+            // As with is_freestanding: --to=llvm alone enables cfg(llvm), with no --define=llvm to
+            // remember. No code depends on `#cfg(llvm)` yet; it is there for such a difference.
             base_core.config.defines.push("llvm")
-        else if !target_name.equals("c")
-            usage.error_exit("--target: expected 'c' or 'llvm'\n")
+        else if mode_name.equals("compile") && to_name.len > 0 && !to_name.equals("c")
+            usage.error_exit("--to: a compile writes 'c' or 'llvm'\n")
+        // `info` asks only on its `machine` subject, once the subject is read (below).
+        if !mode_name.equals("info")
+            check_machine(mode_name)
         base_core.config.unit_count = 1
         if split_units.len > 0
             n: = split_units.to_i64() catch 0
@@ -240,10 +247,10 @@ impl Mode
         if mode_name.equals("fmt")
             if in_files.len == 0
                 usage.error_exit(usage.usage_of("fmt"))
-            if fmt_to.len > 0 && !fmt_to.equals("kspl") && !fmt_to.equals("kspls")
+            if to_name.len > 0 && !to_name.equals("kspl") && !to_name.equals("kspls")
                 usage
                     .error_exit("--to: the only notations that can be put out are kspl and kspls\n")
-            mode = .fmt(in_files, fmt_in_place, fmt_config, fmt_to)
+            mode = .fmt(in_files, fmt_in_place, fmt_config, to_name)
         else if mode_name.equals("lsp")
             mode = .lsp
         else if mode_name.equals("lsp-worker")
@@ -257,6 +264,9 @@ impl Mode
                 usage.error_exit(usage.usage_for_topics("info", usage.info_topics()))
             topic: = usage.parse_info_topic(in_files.get(0))
             usage.refuse_unread_std_dir(p, topic)
+            switch topic case .machine
+                check_machine(mode_name)
+            default {}
             mode = .info(topic)
         else if mode_name.equals("clean")
             if in_files.len != 1 || !in_files.get(0).equals("cache")
@@ -285,7 +295,7 @@ impl Mode
         else if mode_name.equals("run")
             if in_files.len == 0
                 usage.error_exit(usage.usage_of("run"))
-            // `--target=llvm` / `--freestanding` / `--library` are not valid for run, and
+            // `--to=llvm` / `--freestanding` / `--library` are not valid for run, and
             // check_flag_faces has already rejected them (its per-subcommand table is the canonical
             // source; docs/DESIGN.md Principle 6).
             mode = .run(in_files.get(0), script_args)
@@ -382,6 +392,32 @@ impl Mode
             defer parser.free_memo()
             run_compiler(in_path, out_path, deps_path, libs_path, parser, false)?
 
+priv fn check_machine(face: U8[]) //<
+    //< It refuses a machine ksplc has no widths for, listing the ones it has
+    //<
+    //< **Refused, never guessed**: a guess folds sizes the C compiler disagrees with. A machine
+    //< genllvm cannot lay out is refused `--to=llvm` here too, so no IR with wrong offsets is
+    //< written.
+    //< Caution: **The language server's refusal goes to standard error**: its standard output is
+    //< the protocol, where a line of text reads as a broken message and names nothing.
+    $said: = Str_builder.new()
+    defer said.free()
+    usage.machine_refusal_to(face, base_core.config.machine, base_target.host_name(), said@)
+    if said.len > 0
+        if face.starts_with("lsp")
+            io.err().s(said.slice())
+            sys.exit(1)
+        usage.error_exit(said.slice())
+    if !base_core.is_llvm_target()
+        return
+    name: = base_target.named_name()
+    if m: = base_target.find(name)
+        if m.llvm_triple.len == 0
+            refusal: = base_core.arena.text()
+                .s("--to=llvm: the LLVM backend lays out only machines with 8-byte pointers, and \
+                    '\{name\}' is not one. Write C for it (--to=c, the default)\n").take()
+            usage.error_exit(refusal)
+
 priv fn refuse_with_library() //<
     //< It refuses an option `--library` cannot work with
     //<
@@ -393,9 +429,9 @@ priv fn refuse_with_library() //<
                 functions, which a library makes static. Build a library as one unit\n")
     if base_core.is_llvm_target()
         usage
-            .error_exit("--library: --target=llvm cannot be combined: the IR links its runtime from \
+            .error_exit("--library: --to=llvm cannot be combined: the IR links its runtime from \
                 another file, which a library's own runtime cannot be. Build a library with \
-                --target=c\n")
+                --to=c\n")
     if base_core.config.is_freestanding
         usage
             .error_exit("--library: --freestanding cannot be combined: the C compiler calls the \
@@ -444,6 +480,8 @@ priv fn answer_info(topic: usage.Info_topic): Void?pipeline.Compile_error //< it
         parser: = kspl_parser()?
         defer parser.free_memo()
         tools_keywords.run_keyword_dump(parser)
+    case .machine
+        io.out().s(base_target.named_name()).c('\n')
     case .package
         decl: = base_package.here()
         io.out().s(decl.name).c('\n')

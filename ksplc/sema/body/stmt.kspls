@@ -9,12 +9,14 @@ import "ksplc/sema/body/for_in" as sema_body_for_in
 import "ksplc/sema/body/lint_stmt" as sema_body_lint_stmt
 import "ksplc/sema/body/literal" as sema_body_literal
 import "ksplc/sema/body/match" as sema_body_match
+import "ksplc/sema/body/resolve_path" as sema_body_resolve_path
 import "ksplc/sema/body/stmt_escape" { check_frame_escape, check_fn_value_binding,
     note_frame_pointer }
 import "ksplc/sema/body/write_perm" as sema_body_write_perm
 import "ksplc/sema/decl/access" as sema_decl_access
 import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
+import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/decl/trait_check" as sema_decl_trait_check
 import "ksplc/sema/session/ctx" as sema_session_ctx + { Sema_ctx, Sema_error }
@@ -215,6 +217,12 @@ impl Ast_node
                 c.fn_ctx.catch_value_unread = prev_unread
                 throw e
             c.fn_ctx.catch_value_unread = prev_unread
+            // **A declaration with no type takes a function's own type** from a name that stands
+            // for one function (own_type_of_name in sema/decl/name.kspls): `f: = twice`.
+            if sema_type_env.is_unknown(declared_id) &&
+                expr_id == c.env.generic_fn_value_type_id()
+                expr_id = c.own_type_of_name(expr_node)
+                expr_node.type_id = expr_id
 
         declared_id = r.resolve_inferred_array(c, declared_id, expr_id, type_node, id_node)
 
@@ -250,11 +258,12 @@ impl Ast_node
                     c.clear_scratch()
                         .s("cannot infer type for '\{id_node.text\}': add a type annotation (e.g. \
                             '\{id_node.text\}: I32') or an initializer")
-                else
+                else if !sema_body_resolve_path.refuse_type_name(c, expr_node)
                     c.clear_scratch()
                         .s("cannot infer type for '\{id_node.text\}': what it is set to has no type \
                             of its own (a type\'s name is not a value)")
-                c.err(id_node, c.scratch.slice())
+                if c.diags.counts.errors == err_before
+                    c.err(id_node, c.scratch.slice())
             final_id = c.env.get_or_add("Unknown")
         is_const: = r.kind_id == .k_decl_const || kw_text.equals("const")
         is_mut: = !is_const && kw_text.is_mut_binding_kw()
@@ -520,6 +529,9 @@ impl Ast_node
             op_node != null && !op_node.text.equals("=") && c.env.is_pointer(type_id)
         if ptr_step && !op_node.text.equals("+=") && !op_node.text.equals("-=")
             report_bad_ptr_compound_op(c, r, type_id, op_node.text)
+            throw Sema_error.analysis_failed
+        if op_node != null && !op_node.text.equals("=") &&
+            sema_body_binary.refuses_fn_operator(c, r, op_node.text, type_id)
             throw Sema_error.analysis_failed
 
         // Caution: **Do not pass the left-hand side's type down to the step**, or the `2` of

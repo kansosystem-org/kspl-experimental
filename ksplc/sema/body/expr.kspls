@@ -114,6 +114,13 @@ impl Ast_node
         //< Caution: **Do not duplicate this final step.** Only a `-`'s left-hand side is inferred
         //< without the expected type (`infer_binary_expr` in `binary.kspls`), and it reapplies the
         //< type through here.
+        // **A type's name is not a value**, here where a value of the expected type is asked for
+        // (`f: Op = Row`, `Box<|I32|> == f`, an argument). Taken as one, it reached C as a name
+        // no value has. With nothing expected, a declaration refuses it for having no type.
+        if !sema_type_env.is_unknown(expected_id) &&
+            sema_body_resolve_path.refuse_type_name(c, r)
+            r.type_id = I32::sema_type_env.Builtin_type_id.unknown
+            return r.type_id
         settled: = r.apply_type_coercion(c, type_id, expected_id)
         r.check_unnecessary_cast(c, expected_id)?
         r.type_id = settled
@@ -188,7 +195,7 @@ priv fn infer_sizeof_expr(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I32): I
                 errors_before: = c.diags.counts.errors
                 $gen_params: = List<|U8[]|>.new(null)
                 defer gen_params.free()
-                inner.validate_all_type_exprs(c, gen_params@)
+                node.validate_all_type_exprs(c, gen_params@)
                 if c.diags.counts.errors != errors_before
                     return I32::sema_type_env.Builtin_type_id.size_type
             inner.resolve_type(c)?
@@ -247,6 +254,8 @@ priv fn infer_unary_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
         c.clear_scratch().s("Unary operator '\{op\}' cannot be applied to '\{shown.slice()\}'; ")
             .s("use '!' to negate, and convert first ('I32::flag') for arithmetic")
         c.err(node, c.scratch.slice())
+        return I32::sema_type_env.Builtin_type_id.unknown
+    if sema_body_binary.refuses_fn_operator(c, node, op, inner_type_id)
         return I32::sema_type_env.Builtin_type_id.unknown
 
     method_name: = "neg" if op.equals("-") else ("not" if op.equals("!") else "")

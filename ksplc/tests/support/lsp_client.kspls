@@ -67,6 +67,15 @@ pub fn did_open(uri: U8[], text: U8[], arena: Arena$@): json.Val //<
         .set("version", b.int_val(1I64)).set("text", b.str_val(text)).build()
     return b.obj().set("textDocument", doc).build()
 
+pub fn close(c: jsonrpc.Client$@, uri: U8[], arena: Arena$@) //<
+    //< It sends didClose for `uri`
+    //<
+    //< **A check closes what it opened where the server is later made to recover** (the `lsp`
+    //< suite's crash and hang hooks), by `defer` right after its didOpen. The worker the
+    //< supervisor remakes analyses every open document again while the editor is idle, so a
+    //< document left behind is work the recovery's request may find under way.
+    _sent: = c.notify("textDocument/didClose", at_doc(uri, arena), arena)
+
 fn at_doc(uri: U8[], arena: Arena$@): json.Val //<
     //< The params pointing at only the document (`textDocument`)
     //<
@@ -82,7 +91,7 @@ pub fn at_pos(uri: U8[], line: Sz, character: Sz, arena: Arena$@): json.Val //<
     pos: = b.obj().set("line", b.int_val(line)).set("character", b.int_val(character)).build()
     return b.obj().set("textDocument", doc).set("position", pos).build()
 
-fn hover_text(msg: json.Val): U8[] //< `result.contents.value` (the hover's body)
+pub fn hover_text(msg: json.Val): U8[] //< `result.contents.value` (the hover's body)
     //<
     //< Empty where there is none.
     return msg.get("result").get("contents").get("value").as_str()

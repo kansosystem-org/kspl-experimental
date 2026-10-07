@@ -152,7 +152,7 @@ priv fn too_deep(slot: U8[], name: U8[], src: U8[], marker: U8[], arena: Arena$@
 
 fn main(): I32
     arena: = harness.begin(256 * 1024 * 1024)
-    io.out().s("# implementation limits: 10\n")
+    io.out().s("# implementation limits: 11\n")
     at_limit("block",
         arena.text().s("a block can be nested \{block_nesting\} deep").take(),
         src_block(block_nesting, arena), arena)
@@ -185,4 +185,8 @@ fn main(): I32
         src_alias_forward(deep, arena), "chain too deep", arena)
     too_deep("deep_const", "a constant reference chain too deep is refused as a depth",
         src_const_chain(const_chain * 5, arena), "nesting too deep", arena)
+    // Far past the guarantee either the block check or the parser's own depth guard refuses it,
+    // which one depending on the stack a build of ksplc spends per level; both name depth.
+    too_deep("deep_block", "a block nested far past the guarantee is refused as a depth",
+        src_block(block_nesting * 5, arena), "nesting too deep", arena)
     return harness.finish()

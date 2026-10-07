@@ -33,9 +33,8 @@ priv const anon_fn_prefix: U8[] = "_anon_fn_" //<
 const type_arg_sep: U8[] = ", " //<
     //< The separator between two type arguments in a resolved type-args string
     //<
-    //< **Both builders of such a string read this.** `strip_variance_const` here and
-    //< `build_resolved_type_args_str` in `../sema/decl/resolve.kspls` must match byte for byte, or
-    //< a specialization gets a different name from the plain body and does not fold.
+    //< **Every writer of such a string reads this** (type_args_to in `../sema/type/env.kspls`), so
+    //< one list of type arguments has one spelling, and one instance one name.
 
 fn build_anon_fn_name(serial: Sz): U8[] //<
     //< it makes the lifted function's name from a serial number
@@ -254,28 +253,6 @@ impl U8[]
             else if r[i] == ',' && depth == 0
                 return i
         return r.len
-
-    fn strip_variance_const(r: U8[], mask: I32): Str_builder //<
-        //< It drops the **outer** immutability qualifier at the positions `mask` named
-        //<
-        //< It works on a list of actual arguments.
-        //< **The separator is `type_arg_sep`** (the reason is at that constant). Only the last mark
-        //< is dropped: `make_const` adds it at the end, so that is the outer one.
-        $out: = Str_builder.new()
-        n: = r.count_type_args()
-        $changed: = false
-        for $i: Sz = 0; i < n; i += 1
-            if i > 0
-                out.s(type_arg_sep)
-            a: = r.nth_type_arg(i)
-            if variance_names_mut(mask, i) && a.ends_with(base_core.immut_mark)
-                out.s(a.strip_suffix(base_core.immut_mark))
-                changed = true
-            else
-                out.s(a)
-        if !changed
-            out.clear()
-        return out
 
     fn get_generic_base_name(r: U8[]): U8[]
         switch r.find_generic_bounds() case .found(start_idx, _is, _ie, _end)

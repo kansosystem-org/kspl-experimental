@@ -404,15 +404,24 @@ impl Ast_node
     fn mark_value_receiver_reassigned(r: Self$@, c: Df_ctx$@) //<
         //< Sets the binding axis on a method call whose receiver is **a value**
         //<
-        //< A value is not a pointer or a slice, so the call amounts to writing the binding itself,
-        //< as `v.f = x` does; otherwise [I0601] says "`$` is not needed". A pointer or slice
-        //< receiver writes the pointee (`p.m()` on `p: T$@` needs no `$p`).
+        //< A value is not a pointer or a slice, so a `Self$@` method amounts to writing the
+        //< binding itself, as `v.f = x` does; otherwise [I0601] says "`$` is not needed". A pointer
+        //< or slice receiver, or one reached through them (`s[0].m()`, `p.f.m()`), writes the
+        //< pointee, and a `Self@` or `Self` method writes nothing.
         receiver: = r.get_postfix_receiver()
         if receiver == null
             return
         env: = c.sema.env
-        if env.is_pointer(receiver.type_id) || env.is_slice(receiver.type_id)
+        if env.is_pointer(receiver.type_id) || env.is_slice(receiver.type_id) ||
+            receiver.write_crosses_indirection(c)
             return
+        // An unknown method (none resolved) is taken as writing, so no `$` is called spare.
+        member: = r.get_postfix_member()
+        if member != null
+            switch env.method_receiver_permission(member.def_node) case .some(need)
+                if !need.mut_ptr
+                    return
+            case .none {}
         if def: = receiver.get_assign_target_def()
             if def != null
                 c.mark_reassigned(def)
@@ -549,6 +558,36 @@ impl Ast_node
             return false
         return !env.const_elem_of(tid)
 
+    priv fn lends_binding_writable(r: Self$@, c: Df_ctx$@): Bool //<
+        //< Whether this `@` / `[` / mutable-view cast hands out the root binding's storage writable
+        //<
+        //< Only the `$` before the name allows that (the binding axis).
+        //< **Only a path that crosses no pointer or slice reaches that storage** (fields and a
+        //< fixed-length array's elements are part of the value; see Local_state). A read through
+        //< `$`, a `T$@`'s target and a `T$[]`'s elements are written under the type's `$`, so they
+        //< leave it out; a write itself is set by df_stmt_expr.
+        recv: = r.get_postfix_receiver()
+        if recv == null || recv.write_crosses_indirection(c)
+            return false
+        op_node: = r.get_postfix_op()
+        op: = op_node.text if op_node != null else r.text
+        env: = c.sema.env
+        // `x@` is a `T$@` only when `x` has the `$`, so the `$` decides what the pointer may do.
+        if op.equals("@")
+            return true
+        // `U8$[]::buf` makes the array's storage writable (without the `$`, its C declaration is
+        // `const`); a slice or a pointer cast only views memory elsewhere.
+        if op.equals("::")
+            return r.cast_makes_mutable_view(c) && !env.is_pointer(recv.type_id) &&
+                !env.is_slice(recv.type_id)
+        // A pointer's or a slice's element is not the binding's. A fixed-length array's is, and its
+        // type follows the `$` even when only read (a trait-object element of an unmarked array
+        // reads as immutable, which a `T` slot rejects); a value with its own subscript may run an
+        // `at(r: Self$@, …)` on the binding.
+        if op.equals("[")
+            return !env.is_pointer(recv.type_id) && !env.is_slice(recv.type_id)
+        return false
+
     fn df_expr_postfix(r: Self$@, c: Df_ctx$@, state: Df_state$@)
         op_node: = r.get_postfix_op()
         $op_text: = r.text
@@ -557,12 +596,9 @@ impl Ast_node
         if op_text.equals("@") || op_text.equals("[") || op_text.equals("$") ||
             (op_text.equals("::") && r.cast_makes_mutable_view(c))
             r.mark_postfix_receiver_mutated(c)
-            // A fixed-length array's elements take the binding's `$` (see Local_state), so `buf@` /
-            // `buf[i]@` sets the binding axis too.
-            // Caution: Go back to the root to set it: `arr[0]@` is decided by `$arr`.
-            recv_addr: = r.get_postfix_receiver()
-            if recv_addr != null
-                if def: = recv_addr.get_assign_target_def()
+            if r.lends_binding_writable(c)
+                // Caution: Go back to the root to set it: `arr[0]@` is decided by `$arr`.
+                if def: = r.get_postfix_receiver().get_assign_target_def()
                     if def != null
                         c.mark_reassigned(def)
         if op_text.equals(".") && r.children.len > 0

@@ -1,14 +1,14 @@
-import "ksplc/base/ast" as base_ast + { Ast_node, variance_names_mut }
+import "ksplc/base/ast" { Ast_node, variance_names_mut }
 import "ksplc/base/ast_ext" as base_ast_ext
-import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/base/mangle" as base_mangle
 import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/decl/mono" as sema_decl_mono
 import "ksplc/sema/decl/mono_name" as sema_decl_mono_name
 import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
+import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/decl/trait_check" as sema_decl_trait_check
-import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
+import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error, join_dotted_name }
 import "ksplc/sema/session/import_table" as sema_session_import_table
 import "ksplc/sema/type/def" as sema_type_def
 import "ksplc/sema/type/display" as sema_type_display
@@ -16,6 +16,7 @@ import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/chars"
+import "std/ds" { List }
 import "std/str" { Str_builder }
 import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
 // ==========================================
@@ -44,9 +45,8 @@ impl Sema_ctx
         //<
         //< A struct, an enum, an alias and a generic's template count.
         //<
-        //< Caution: **Do not look up the name with its qualifier stripped.** Templates and symbols
-        //< are registered under the short name too (register_template_names in declare.kspls), so
-        //< `io.List<|I32|>` would count as found.
+        //< Caution: **Do not look up the name with its qualifier stripped.** A short name answers
+        //< for whatever this file can see under it, so `io.List<|I32|>` would count as found.
         fqn: = r.build_mod_fqn(file_path, name)
         return (r.symtab.resolve(fqn) catch null) != null ||
             (r.generics.templates.get(fqn) catch null) != null ||
@@ -94,21 +94,18 @@ impl Sema_ctx
             target_file: = r.get_file_alias_target(r.file_name, prefix)
             if target_file.len > 0
                 actual_base: = base_name.sub_from(first_dot + 1)
-                return base_core.arena.dup_str(r.build_mod_fqn(target_file, actual_base))
+                return r.build_mod_fqn(target_file, actual_base)
         else
             // A name from `import "path" { A };` is mapped to the source's FQN.
             // Caution: Look it up before a name outside the file (Ctx.imported_symbol_fqn).
             imported_fqn: = r.imported_symbol_fqn(base_name)
             if imported_fqn.len > 0
                 return imported_fqn
+            // **Only a type's symbol answers.** A value's type_id is the value's type (a
+            // function's, its return type), and taken here a value's name would read as a type.
             sym: = r.symtab.resolve(base_name) catch null
-            if sym != null && sym.type_id != 0
+            if sym != null && sym.kind.is_type() && sym.type_id != 0
                 return r.env.get_str(sym.type_id)
-            g_node: = r.generics.templates.get(base_name) catch null
-            if g_node != null
-                mod_name: = g_node.loc.file()
-                if mod_name.len > 0 && !mod_name.equals(r.file_name)
-                    return base_core.arena.dup_str(r.build_mod_fqn(mod_name, base_name))
         return base_name
 
     fn resolve_type_method_fqn(r: Self$@, fqn: U8[]): Option<|Sema_symbol$@|>
@@ -117,26 +114,7 @@ impl Sema_ctx
             t_fqn: = fqn.sub(0, last_dot)
             m_name: = fqn.sub_from(last_dot + 1)
 
-            $t_id: = r.env.type_to_id.get(t_fqn) catch 0
-            if t_id == 0
-                switch t_fqn.find_generic_bounds() case .found(start_idx, inner_start, inner_end,
-                    _end_idx)
-                    local_base: = t_fqn.sub(0, start_idx)
-                    fqn_base: = r.resolve_fqn_for_type(local_base)
-                    // A type argument arrives **as the source's literal text**, possibly
-                    // unqualified. Used as is, it creates a second instance beside the AST path's
-                    // (build_resolved_type_args_str), and the generated C cannot compile.
-                    $canon_args: = r
-                        .canonicalize_type_args(t_fqn.sub(inner_start, inner_end - inner_start))
-                    defer canon_args.free()
-                    args_str: = canon_args.slice()
-                    $tmp_b: = r.instantiate_struct(fqn_base, args_str) catch Str_builder.new()
-                    tmp_b.free()
-                    t_id = r.env.type_to_id.get(t_fqn) catch 0
-                    if t_id == 0
-                        r.clear_scratch().s(fqn_base).s("<|").s(args_str).s("|>")
-                        t_id = r.env.type_to_id.get(r.scratch.slice()) catch 0
-                default {}
+            t_id: = r.env.type_to_id.get(t_fqn) catch 0
             if t_id != 0
                 // An impl target is never immutable (collect_impl_decl rejects one), so an
                 // immutable type's methods live in its plain type's table.
@@ -208,10 +186,10 @@ impl Sema_ctx
         entry: = sema_type_def.Entry.new(sema_type_env.Info.alias_type(target_id), fqn_dup)
         r.env.id_to_type.push(entry)
 
+        // Caution: **Register it under its FQN alone**, as a generic type's template is. The type
+        // table is one for the whole build, while a short name names the alias only inside its
+        // file: under the short name, another file's `priv typedef Num` answered this file's `Num`.
         r.env.type_to_id.set(fqn_dup, alias_id)
-        name_dup: = base_core.arena.dup_str(name)
-        if !name_dup.equals(fqn_dup)
-            r.env.type_to_id.set(name_dup, alias_id)
 
         sym.type_id = alias_id
         sym.node.type_id = alias_id
@@ -234,23 +212,80 @@ impl Sema_ctx
             return arg_id
         return arg_id if marked else r.env.make_const(arg_id)
 
-priv fn lookup_def_node(c: Sema_ctx$@, name: U8[]): Ast_node$@ //<
-    //< Looks up the definition node for a name
+impl Sema_ctx
+    priv fn resolve_written_type(r: Self$@, type_node: Ast_node$@, written_at: Ast_node$@,
+        path_node: Ast_node$@, atom: Ast_node$@): I32?Sema_error //<
+            //< The type id a type position's name stands for, its instance made where it is generic
+            //<
+            //< written_at is the name as written (read_written_type in name.kspls reads it);
+            //< type_node is the position, which a diagnostic points at. A member's name is no type,
+            //< and is the unknown type: validate_all_type_exprs in type_check.kspls reports it.
+        w: = r.read_written_type(written_at)
+        if w.member != null
+            return I32::sema_type_env.Builtin_type_id.unknown
+        sym: = r.symtab.resolve(w.fqn) catch null
+        if sym != null
+            // **An alias declared later is resolved here**, and named by the id that gives it: its
+            // name was read before it had one, so w.fqn is the name as written, a key it is not
+            // registered under.
+            if sym.kind.is_alias() && sym.type_id == 0
+                r.resolve_alias_sym(sym)?
+                if w.args == null && sym.type_id != 0
+                    type_node.def_node = sym.node
+                    set_resolved_def_node(path_node, atom, sym.node)
+                    return sym.type_id
+            type_node.def_node = sym.node
+            set_resolved_def_node(path_node, atom, sym.node)
+        tmpl: = r.written_template(w)
+        if w.args == null
+            // A generic type written with no type arguments reaches C as `unknown type name`
+            // ("Failing fast through an exception or an ICE" in ksplc/docs/DESIGN.md).
+            if tmpl != null
+                r.clear_scratch()
+                    .s("generic type '\{w.spelled\}' is used without type arguments (write them \
+                        explicitly, for example '\{w.spelled\}<|I32|>')")
+                r.err(type_node, r.scratch.slice())
+            return r.env.get_or_add(w.fqn)
+        if tmpl != null
+            type_node.def_node = tmpl
+            set_resolved_def_node(path_node, atom, tmpl)
+        else
+            // **Type arguments after a type that declares none name nothing**: it is that type,
+            // and the type check reports them (refuse_type_args_on_plain_type in type_check.kspls).
+            declared: = r.written_type_symbol(w)
+            if declared != null && declared.kind.is_type()
+                return r.env.get_or_add(w.fqn)
+        args: = w.args.build_resolved_type_args(r, tmpl) catch unknown_args()
+        $final_name: = Str_builder.new()
+        defer final_name.free()
+        if tmpl != null
+            sema_decl_mono.check_written_generic_arity(r, tmpl, args.len, type_node)
+            $inst_name: = r.instance_written(w, args, type_node) catch sema_decl_mono_name.unknown_type_str()
+            defer inst_name.free()
+            final_name.s(inst_name.slice())
+        else
+            r.env.type_args_to(args, final_name.s(w.fqn).s("<|"))
+            final_name.s("|>")
+        return r.env.get_or_add(final_name.slice())
+
+priv fn lookup_def_node(c: Sema_ctx$@, path: Ast_node$@): Ast_node$@ //<
+    //< Looks up the definition node for a written name, null if none
     //<
-    //< Caution: **Look in this order:** the symbol table → a template by FQN → by plain name → this
-    //< file's aliases. In another order, a different thing with the same name is found. Null if
-    //< none.
+    //< Caution: **Look in this order:** the symbol table → a template by FQN → this file's aliases.
+    //< In another order, a different thing with the same name is found.
+    written: = c.read_written_type(path)
+    name: = written.spelled
     sym: = c.symtab.resolve(name) catch null
     if sym != null
         sym.flags.is_used = true
         return sym.node
-    fqn: = c.resolve_fqn_for_type(name)
+    // A member's template is keyed under its type's FQN (`app.Box.get`).
+    fqn: =
+        (written.fqn if written.member == null
+        else join_dotted_name(written.fqn, written.member.text))
     gen: = c.generics.templates.get(fqn) catch null
     if gen != null
         return gen
-    gen2: = c.generics.templates.get(name) catch null
-    if gen2 != null
-        return gen2
     alias: = c.peek_file_alias(c.file_name, name)
     return alias.decl_node if alias != null else null
 
@@ -268,12 +303,8 @@ impl Ast_node
                 trait_node.resolve_type(c) catch 0
         else if r.kind_id == .k_identifier || r.kind_id == .k_expr_path ||
             r.kind_id == .k_type_path
-            if r.def_node == null
-                $path_str_b: = r.get_full_path_str()
-                name: = path_str_b.slice().get_generic_base_name()
-                if name.len > 0
-                    r.def_node = lookup_def_node(c, name)
-                path_str_b.free()
+            if r.def_node == null && (r.children.len > 0 || r.text.len > 0)
+                r.def_node = lookup_def_node(c, r)
         // **A function's own name is not a reference**, so it is not looked up: by bare name, a
         // method `put` would resolve to the prelude's `std.lang.put`, and the editor would show
         // that.
@@ -384,99 +415,44 @@ impl Ast_node
                 else
                     // Not immutability: apply_type_postfixes applies it per level. Applied here,
                     // `U8[]$@` and `U8$[]@` would collapse into one.
-                    $tname: = Str_builder.new()
-                    defer tname.free()
-
-                    $type_args_node: Ast_node$@ = null
-                    if path_node != null
-                        type_args_node = build_type_name_and_args(path_node, tname@)
-                    else if atom != null
-                        type_args_node = build_type_name_and_args(atom, tname@)
-                        if tname.len == 0
-                            tname.s(atom.text)
-
-                    if tname.len == 0 && r.text.len > 0 && r.kind_id != .k_type_postfix
-                        tname.s(r.text)
-
-                    t_slice: = tname.slice()
-                    $final_name: = Str_builder.new()
-
-                    base_name: = t_slice.get_generic_base_name()
-                    fqn_base: = c.resolve_fqn_for_type(base_name)
-                    sym: = c.symtab.resolve(fqn_base) catch null
-                    if sym != null
-                        if sym.kind.is_alias() && sym.type_id == 0
-                            c.resolve_alias_sym(sym)?
-                        r.def_node = sym.node
-                        set_resolved_def_node(path_node, atom, sym.node)
-
-                    if type_args_node != null
-                        tmpl: = c.generics.templates.get(fqn_base) catch null
-                        if tmpl != null
-                            r.def_node = tmpl
-                            set_resolved_def_node(path_node, atom, tmpl)
-
-                        $args_fqn: =
-                            type_args_node.build_resolved_type_args_str(c, tmpl) catch sema_decl_mono_name.unknown_type_str()
-                        defer args_fqn.free()
-
-                        if tmpl != null
-                            sema_decl_mono.check_written_generic_arity(c, tmpl, args_fqn.slice(), r)
-                            // The user's position is recorded during the instantiation (as in
-                            // call.kspls).
-                            prev_inst_site: = c.generics.inst_site
-                            c.generics.inst_site = r
-                            defer c.generics.inst_site = prev_inst_site
-                            $inst_name: =
-                                c.instantiate_struct(fqn_base, args_fqn.slice()) catch sema_decl_mono_name.unknown_type_str()
-                            defer inst_name.free()
-                            final_name.s(inst_name.slice())
-                        else
-                            final_name.s("\{fqn_base\}<|\{args_fqn.slice()\}|>")
-                    else
-                        // A generic type written with no type arguments reaches C as `unknown type
-                        // name` ("Failing fast through an exception or an ICE" in
-                        // ksplc/docs/DESIGN.md).
-                        if (c.generics.templates.get(fqn_base) catch null) != null
-                            c.clear_scratch()
-                                .s("generic type '\{base_name\}' is used without type arguments \
-                                    (write them explicitly, for example '\{base_name\}<|I32|>')")
-                            c.err(r, c.scratch.slice())
-                        final_name.s(fqn_base)
-
-                    base_tid = c.env.get_or_add(final_name.slice())
-                    final_name.free()
+                    $written_at: Ast_node$@ = path_node
+                    if written_at == null && atom != null &&
+                        (atom.children.len > 0 || atom.text.len > 0)
+                        written_at = atom
+                    if written_at == null && r.text.len > 0 && r.kind_id != .k_type_postfix
+                        written_at = r
+                    base_tid = c.resolve_written_type(r, written_at, path_node, atom)?
 
         final_tid: = apply_type_postfixes(c, base_tid, r)?
         r.type_id = final_tid
         return final_tid
 
-    fn build_resolved_type_args_str(r: Ast_node$@, c: Sema_ctx$@, decl: Ast_node$@):
-        Str_builder?Sema_error //<
-            //< Turns a generic's list of actual arguments into a list of canonical names.
+    fn build_resolved_type_args(r: Ast_node$@, c: Sema_ctx$@, decl: Ast_node$@):
+        I32[]?Sema_error //<
+            //< Resolves a generic's list of actual arguments, one type id per argument
             //<
+            //< An argument that does not resolve is the unknown type's id.
             //< Caution: **Pass `decl`.** Where it declares a `$` (`struct Slice<|$T|>`), **an
             //< unmarked actual argument is wrapped as immutable** (`Slice<|U8|>` vs
             //< `Slice<|$U8|>`).
-        $args_fqn: = Str_builder.new()
-        $is_first: = true
+        $args: = List<|I32|>.new(base_core.arena)
+        unknown: = I32::sema_type_env.Builtin_type_id.unknown
         $pos: Sz = 0
         for arg in r.children
             if arg.kind_id == .k_literal || arg.kind_id == .k_keyword || arg.kind_id == .k_empty
                 continue
-            if !is_first
-                args_fqn.s(base_ast.type_arg_sep)
             if v: = const_type_arg_value(arg, c)
-                args_fqn.s("\{v\}")
-                is_first = false
+                $value: = Str_builder.new()
+                defer value.free()
+                value.s("\{v\}")
+                args.push(c.env.get_or_add(value.slice()))
                 pos += 1
                 continue
             if holds_value_expr(arg)
                 c.err(arg,
                     "a value passed as a type argument must be a literal, a negated literal or the \
                         name of a const; declare 'const n: I32 = ...' and pass 'n'")
-                args_fqn.s("Unknown")
-                is_first = false
+                args.push(unknown)
                 pos += 1
                 continue
             // **An actual argument whose name is not known is made Unknown rather than resolved.**
@@ -486,13 +462,16 @@ impl Ast_node
                 (0 if names_unknown_type(c, arg)
                 else (strip_arg_mut_mark(arg).resolve_type(c) catch 0))
             if arg_id != 0 && !sema_type_env.is_unknown(arg_id)
-                args_fqn
-                    .s(c.env.get_str(c.apply_arg_mut_mark(decl, pos, arg, arg_id)))
+                args.push(c.apply_arg_mut_mark(decl, pos, arg, arg_id))
             else
-                args_fqn.s("Unknown")
-            is_first = false
+                args.push(unknown)
             pos += 1
-        return args_fqn
+        return args.slice()
+
+fn unknown_args(): I32[] //< the arguments of a list that could not be read: one unknown type
+    $args: = List<|I32|>.new(base_core.arena)
+    args.push(I32::sema_type_env.Builtin_type_id.unknown)
+    return args.slice()
 
 priv fn names_unknown_type(c: Sema_ctx$@, arg: Ast_node$@): Bool //<
     //< Whether the head name of a type argument names no type at all
@@ -500,12 +479,12 @@ priv fn names_unknown_type(c: Sema_ctx$@, arg: Ast_node$@): Bool //<
     //< Only the head name (`mod.Box2` of `mod.Box2<|t|>$@`). `Self` (unbound in a trait) and a
     //< leading `_` pass, as in report_type_existence_error in type_check.kspls.
     switch type_arg_head(arg) case .some(head)
-        $spelled: = head.get_full_path_str()
-        defer spelled.free()
-        name: = spelled.slice().get_generic_base_name()
+        written: = c.read_written_type(head)
+        name: = written.spelled
         if name.len == 0 || name.equals("Self") || name.starts_with("_")
             return false
-        return !c.is_type_name(name)
+        return !c.env.has_type_named(name) &&
+            (written.member != null || !c.env.has_type_named(written.fqn))
     case .none
         return false
 
@@ -617,21 +596,19 @@ fn fn_signature_type_id(node: Ast_node$@, c: Sema_ctx$@): I32?Sema_error //<
 
     return c.env.get_or_add(tname.slice())
 
-priv fn build_type_name_and_args(node_src: Ast_node$@, tname: Str_builder$@): Ast_node$@
-    $is_first_id: = true
-    for pc in node_src.children
-        if pc.kind_id == .k_type_args
-            continue
-        if !is_first_id
-            tname.c('.')
-        tname.s(pc.text)
-        is_first_id = false
-    $type_args_node: = node_src.find_child(.k_type_args)
-    if type_args_node == null && node_src.children.len > 0
-        last: = node_src.last_child()
-        if last.kind_id == .k_type_args
-            type_args_node = last
-    return type_args_node
+fn own_fn_type_id(decl: Ast_node$@, c: Sema_ctx$@): I32?Sema_error //<
+    //< The function type of the function decl declares, its types read in decl's own file
+    //<
+    //< The parameters' types use the declaring file's import aliases, so they resolve there, or
+    //< they read as undefined. A method's receiver is its first parameter, as written.
+    old_file: = c.file_name
+    if decl.loc.file().len > 0
+        c.set_current_file(decl.loc.file())
+    type_id: = fn_signature_type_id(decl, c) catch e
+        c.set_current_file(old_file)
+        throw e
+    c.set_current_file(old_file)
+    return type_id
 
 priv fn apply_type_postfixes(c: Sema_ctx$@, base_tid: I32, r: Ast_node$@): I32?Sema_error
     $current_tid: = base_tid

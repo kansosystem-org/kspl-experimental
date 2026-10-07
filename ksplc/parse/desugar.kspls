@@ -99,6 +99,11 @@ impl Ast_node
         if r.kind_id == .k_decl_fn
             for_in_counter = 0
 
+        // Caution: **Before the children are walked**: the block it adds is what lets
+        // desugar_stmt_block fold an `else if v: = X`.
+        if r.kind_id == .k_stmt_if
+            r.block_else_if_beside_bind()
+
         // It adds the enclosing declaration's type arguments only while walking inside it.
         gen_depth: = ctx.gen_params.len
         r.push_gen_params(ctx)
@@ -182,11 +187,9 @@ impl Ast_node
 
             // `if v: = X { … }`: where the condition's position is a k_if_bind it is an Option
             // binding.
-            if stmt.kind_id == .k_stmt_if
-                cond_node: = stmt.get_if_cond()
-                if cond_node != null && cond_node.kind_id == .k_if_bind
-                    new_children.push(stmt.desugar_if_bind())
-                    continue
+            if stmt.is_if_bind()
+                new_children.push(stmt.desugar_if_bind())
+                continue
 
             new_children.push(stmt)
         r.children = new_children
@@ -380,6 +383,25 @@ impl Ast_node
                 .s("'c' takes nothing else (it writes one byte as a character)"
                 if owner.equals("c") else "Hex takes only zero-pad and width (for example '08x')")
         r.desugar_err(ctx, m.slice())
+
+    priv fn is_if_bind(r: Ast_node$@): Bool //< whether it is an `if v: = X`
+        if r.kind_id != .k_stmt_if
+            return false
+        cond_node: = r.get_if_cond()
+        return cond_node != null && cond_node.kind_id == .k_if_bind
+
+    priv fn block_else_if_beside_bind(r: Ast_node$@) //<
+        //< It puts an `else if` beside a binding `if` into a block: `else { if v: = X { … } }`
+        //<
+        //< desugar_if_bind folds only a block's statement, and its `case` bodies are blocks.
+        //< Without this, a binding `else if` stays unfolded and a plain one is a bare `case` body.
+        //< **Not every `else if`**: Lower relocates a plain chain's hoisted statements itself.
+        alt: = r.get_if_else_block()
+        if alt == null || alt.kind_id != .k_stmt_if ||
+            (!r.is_if_bind() && !alt.is_if_bind())
+            return
+        r.set_child(3,
+            Ast_node.new(.k_stmt_block, "stmt_block", alt.loc).add_child(alt))
 
     priv fn desugar_if_bind(r: Ast_node$@): Ast_node$@ //<
         //< It folds `if v: = X { A } else { B }` to `switch X case .some(v) { A } case .none { B }`

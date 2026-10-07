@@ -16,6 +16,7 @@ import "ksplc/tests/support/lsp_pick"
 import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, end_text, from_names, has_name,
     is_missing }
 import "ksplc/tests/support/lsp_recover"
+import "ksplc/tests/support/lsp_restart"
 import "ksplc/tests/support/lsp_semtok" { off_words, read_tokens }
 import "ksplc/tests/support/lsp_spell"
 import "std/chars"
@@ -66,8 +67,9 @@ priv const normal_ms: I32 = 15000
 priv const after_hang_ms: I32 = 10000 + normal_ms //< how long a hover after the hang hook may take
     //<
     //< The supervisor's watchdog (`worker_timeout_ms` in `ksplc/lsp/server.kspls`, 10 s) must give
-    //< up first, and the worker it starts in place must analyse the open documents again, which
-    //< takes as long as any first answer (`normal_ms`).
+    //< up first, and the worker it starts in place must analyse the probe, which takes as long as
+    //< any first answer (`normal_ms`). The 10 s is written again here: the constant is the
+    //< supervisor's own, and importing the server would build the language server into this suite.
 
 // ==========================================
 // A hover on a slice's own `len` and `ptr`
@@ -93,6 +95,7 @@ priv const builtin_wants: U8[][2] = ::{ "len: Sz", "ptr: U8@" }
 priv fn check_hover_builtin_member(c: jsonrpc.Client$@, arena: Arena$@)
     _sent: = c.notify("textDocument/didOpen",
         lsp_client.did_open(builtin_uri, builtin_src, arena), arena)
+    defer lsp_client.close(c, builtin_uri, arena)
     for i in Range.asc(builtin_decls.len)
         decl: = builtin_decls[i]
         col: = col_in_line(builtin_src, decl, builtin_marks[i], arena) + 2
@@ -139,6 +142,7 @@ priv const alias_use: U8[] = "  return Form.line(3)"
 priv fn check_variant_through_alias(c: jsonrpc.Client$@, arena: Arena$@)
     _sent: = c.notify("textDocument/didOpen",
         lsp_client.did_open(alias_uri, alias_src, arena), arena)
+    defer lsp_client.close(c, alias_uri, arena)
     pos: = lsp_client.at_pos(alias_uri, decl_line(alias_src, alias_use, arena),
         col_in_line(alias_src, alias_use, "line", arena) + 1, arena)
     shown: = "a hover on a variant reached through an alias shows the variant"
@@ -232,6 +236,7 @@ priv const wide_to: I64 = 16I64
 
 priv fn check_wide_range(c: jsonrpc.Client$@, arena: Arena$@)
     _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(wide_uri, wide_src, arena), arena)
+    defer lsp_client.close(c, wide_uri, arena)
     $found: = false
     $from: I64 = -1I64
     $to: I64 = -1I64
@@ -274,6 +279,7 @@ priv const ragged_uri: U8[] = "file:///ragged_probe.kspls"
 priv fn check_ragged_reaches(c: jsonrpc.Client$@, arena: Arena$@)
     _sent: = c.notify("textDocument/didOpen",
         lsp_client.did_open(ragged_uri, ragged_src, arena), arena)
+    defer lsp_client.close(c, ragged_uri, arena)
     $found: = false
     $ragged: = false
     for _k in Range.asc(12)
@@ -296,18 +302,21 @@ priv fn check_ragged_reaches(c: jsonrpc.Client$@, arena: Arena$@)
 priv fn check_shebang(c: jsonrpc.Client$@, top: U8[], arena: Arena$@)
     _sent: = c.notify("textDocument/didOpen",
         lsp_client.did_open(shebang_uri, shebang_src, arena), arena)
+    defer lsp_client.close(c, shebang_uri, arena)
     got: = published_for(c, "shebang_probe.kspl", arena)
     verdict.check("no diagnostic comes out on a shebang script being edited",
         got.found && got.diags.len == 0, lsp_client.why(c, said(got, arena), arena))
     described: = lsp_client.uri_of(top, described_rel, arena)
     _sent2: = c.notify("textDocument/didOpen",
         lsp_client.did_open(described, described_src, arena), arena)
+    defer lsp_client.close(c, described, arena)
     quiet: = published_for(c, described_rel, arena)
     verdict.check("a script described under its start-up line puts out no diagnostic in the editor",
         quiet.found && quiet.diags.len == 0, lsp_client.why(c, said(quiet, arena), arena))
     dangling: = lsp_client.uri_of(top, dangling_rel, arena)
     _sent3: = c.notify("textDocument/didOpen",
         lsp_client.did_open(dangling, dangling_src, arena), arena)
+    defer lsp_client.close(c, dangling, arena)
     once: = published_for(c, dangling_rel, arena)
     one: =
         once.found && once.diags.len == 1 &&
@@ -335,14 +344,13 @@ priv const cfg_uri: U8[] = "file:///cfg_probe.kspl"
 // ==========================================
 
 priv const close_src: U8[] = "fn main(): I32 {\n  probe: I64 = 1;\n  return 0;\n}\n" //<
-    //< The source of the document the replay check closes
+    //< The source of the document the restore check closes
     //<
-    //< The supervisor remembers the open documents' text, and replays it by didOpen into a remade
-    //< worker.
-    //< **The supervisor's record marks the document closed**, or a closed document revives on
-    //< replay.
-    //< Caution: Test it with a dedicated client. The main client leaves many documents open, and
-    //< the replay's publishDiagnostics exceed read's skipping cap, dropping the response.
+    //< The supervisor remembers the open documents' text, and hands it to a remade worker.
+    //< **The supervisor's record marks the document closed**, or a closed document revives in the
+    //< remade worker.
+    //< Caution: **Test it with a dedicated client.** Its supervisor holds these two documents and
+    //< no other, so what comes back after the crash is theirs alone.
 priv const closed_uri: U8[] = "file:///closed_probe.kspl"
 priv const open_uri: U8[] = "file:///stays_open_probe.kspl"
 
@@ -351,6 +359,12 @@ priv const open_uri: U8[] = "file:///stays_open_probe.kspl"
 priv const crash_log: U8[] = "giving up on the worker while handling '$/ksplTestCrash': pipe closed"
 priv const hang_log: U8[] =
     "giving up on the worker while handling '$/ksplTestHang': no output within the watchdog window"
+// The crash's log line when the only document left open is the probe the hovers ask about.
+// **Every check on the shared client closes what it opened** (`lsp_client.close`): the remade
+// worker analyses every open document again, one at a time while the editor is idle, so each one
+// left behind is work a request may find under way.
+priv const restores_probe: U8[] =
+    "'$/ksplTestCrash': pipe closed (the worker exited) (restarting, open documents to restore: 1)"
 
 priv fn gave_up(c: jsonrpc.Client$@, line: U8[], arena: Arena$@): Bool //<
     //< Whether the supervisor's log carries `line`, copied at once (`err_tail` borrows its buffer)
@@ -373,10 +387,10 @@ priv fn check_didclose(exe: U8[], arena: Arena$@)
         fallback json.Val.null_val
     for uri in U8[][]::{ closed_uri, open_uri }
         _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(uri, close_src, arena), arena)
-    _closed: = c.notify("textDocument/didClose", one_doc(closed_uri, arena), arena)
+    lsp_client.close(c@, closed_uri, arena)
     _crash: = c.notify("$/ksplTestCrash", empty_obj(arena), arena)
     stays: = probe_hover(c@, open_uri, arena)
-    verdict.check("the crash hook ends the worker before the replay is checked",
+    verdict.check("the crash hook ends the worker before the restore is checked",
         gave_up(c@, crash_log, arena), lsp_client.why(c@, "", arena))
     d4: = lsp_client.why(c@, arena.text().s("'").s(stays).s("'").take(), arena)
     ok11: = stays.find_str("I64") >= 0
@@ -391,13 +405,9 @@ priv fn empty_obj(arena: Arena$@): json.Val
     $b: = Json_builder.new(arena)
     return b.obj().build()
 
-priv fn one_doc(uri: U8[], arena: Arena$@): json.Val
-    $b: = Json_builder.new(arena)
-    return b.obj()
-        .set("textDocument", b.obj().set("uri", b.str_val(uri)).build()).build()
-
 priv fn check_cfg(c: jsonrpc.Client$@, exe: U8[], arena: Arena$@)
     _open: = c.notify("textDocument/didOpen", lsp_client.did_open(cfg_uri, cfg_src, arena), arena)
+    defer lsp_client.close(c, cfg_uri, arena)
     off: =
         c.request("textDocument/hover", lsp_client.at_pos(cfg_uri, 3, 4, arena), normal_ms, arena)
         catch
@@ -626,6 +636,7 @@ fn main(): I32
     // its own string's positions, colours `t Pa` and `g` in the file's first lines.
     verdict.check("every token covers one whole name as written",
         off_words(sem_data, semtok_src, arena) == 0, d_sem)
+    lsp_client.close(c@, semtok_uri, arena)
 
     // **A document that fails to parse is coloured as far as it parsed**: the editor reads it a
     // second time ("Only the editor's parse recovers from a syntax error" in
@@ -655,6 +666,7 @@ fn main(): I32
         // null.
         d17: = lsp_client.why(c@, "", arena)
         verdict.check("incomingCalls returns the callers (the whole workspace)", calls.len > 0, d17)
+    lsp_client.close(c@, ch_file, arena)
     check_generic_caller(exe, arena)
     lsp_bound.check_template_bound(c@, arena)
     check_shebang(c@, top, arena)
@@ -679,6 +691,8 @@ fn main(): I32
         fallback json.Val.null_val
     d19: = lsp_client.why(c@, "", arena)
     verdict.check("the crash hook ends the worker", gave_up(c@, crash_log, arena), d19)
+    verdict.check("a recovery has only the probe to restore",
+        gave_up(c@, restores_probe, arena), d19)
     ok2: = !is_missing(after_crash)
     verdict.check("hover answers after a crash too (the supervisor remakes the worker)", ok2, d19)
 
@@ -693,6 +707,7 @@ fn main(): I32
 
     check_cfg(c@, exe, arena)
     check_didclose(exe, arena)
+    lsp_restart.run(exe, arena)
     check_worker_alive(exe, top, ch_text, arena)
     check_walk(exe, arena)
     lsp_package.run(exe, arena)

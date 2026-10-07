@@ -7,7 +7,8 @@
 import "ksplc/base/ast" { Ast_node, variance_names_mut }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
-import "ksplc/sema/type/def" { Trait_def }
+import "ksplc/base/target" as base_target
+import "ksplc/sema/type/def" { Fn_sig, Trait_def }
 import "ksplc/sema/type/env" as sema_type_env
 import "std/str"
 
@@ -39,6 +40,11 @@ fn is_result_inner_field(name: U8[]): Bool //<
     //< Note: The fields' order itself is in `../../gen/c/decl.kspls`. Here only the names are
     //< checked.
     return name.equals("is_err") || name.equals("error_code") || name.equals("val")
+
+struct Receiver_permission //<
+    //< The permission a method's receiver type demands of the caller
+    ptr: Bool //< demands a place (a pointer)
+    mut_ptr: Bool //< also demands writing what it points at (`Self$@`)
 
 impl sema_type_env.Env
     fn is_const(r: Self$@, id: I32): Bool //<
@@ -144,6 +150,11 @@ impl sema_type_env.Env
                     r.is_const_compatible_at(r.strip_const(b1), r.strip_const(b2), depth + 1, limit)
             default
                 return false
+        case .fn_type(s1)
+            switch r.get_info(eb) case .fn_type(s2)
+                return r.same_signature(s1, s2)
+            default
+                return false
         default
             // A one-level weakening at a type-argument position the declaration named as mutable
             // (`Box<|$I32|>` → `Box<|I32|>`), the same rule as a pointer's and a slice's with the
@@ -154,6 +165,24 @@ impl sema_type_env.Env
             // (`M$@` points at `alias M`, `M@` at `const_of(alias M)`, whose inside get_real_type
             // leaves), and the downgrade from `M$@` to `M@` is rejected as "the type differs".
             return r.get_clean_real_type(ab) == r.get_clean_real_type(eb)
+
+    priv fn same_signature(r: Self$@, a: Fn_sig$@, b: Fn_sig$@): Bool //<
+        //< Whether two function types are one, an alias seen through as at a pointer's level
+        //<
+        //< **Each part is matched both ways**: a function value is called with what either type
+        //< says, so a parameter or the result may not weaken or strengthen immutability either way.
+        //< An alias reaches here inside a parameter (`fn(r: Ints@)` beside `fn(r: Box<|I64|>@)`),
+        //< which the two types' ids keep apart ("A typedef is only another name" in
+        //< docs/SPEC-language.md).
+        if a.params.len != b.params.len
+            return false
+        for i in Range.asc(a.params.len)
+            if !r.same_part(a.params.get(i), b.params.get(i))
+                return false
+        return r.same_part(a.ret_id, b.ret_id)
+
+    priv fn same_part(r: Self$@, a: I32, b: I32): Bool //< one part of two signatures, both ways
+        return a == b || (r.is_const_compatible(a, b) && r.is_const_compatible(b, a))
 
     priv fn generic_arg_weakens(r: Self$@, act: I32, exp: I32, depth: I32, limit: I32): Bool //<
         //< Whether `act` and `exp` differ **only where the declaration named mutability**, weaker
@@ -170,20 +199,17 @@ impl sema_type_env.Env
             return false
         a_args: = r.instance_args(act)
         e_args: = r.instance_args(exp)
-        n: = a_args.count_type_args()
-        if n != e_args.count_type_args()
+        if a_args.len != e_args.len
             return false
         $diffs: Sz = 0
-        for $i: Sz = 0; i < n; i += 1
-            a_arg: = a_args.nth_type_arg(i)
-            e_arg: = e_args.nth_type_arg(i)
-            if a_arg.equals(e_arg)
+        for i in Range.asc(a_args.len)
+            a_id: = a_args[i]
+            e_id: = e_args[i]
+            if a_id == e_id
                 continue
             diffs += 1
             if diffs > 1 || !variance_names_mut(mask, i)
                 return false
-            a_id: = r.type_to_id.get(a_arg) catch 0
-            e_id: = r.type_to_id.get(e_arg) catch 0
             if a_id == 0 || e_id == 0 ||
                 !r.is_const_compatible_at(a_id, e_id, depth + 1, limit)
                 return false
@@ -294,6 +320,46 @@ impl sema_type_env.Env
             return false
         return r.strip_const(r.strip_ptr(ret_id)) == r.strip_const(node.type_id)
 
+    fn method_receiver_permission(r: Self$@, def_node: Ast_node$@): Option<|Receiver_permission|> //<
+        //< The permission the method declared at `def_node` demands of its receiver
+        //<
+        //< None where `def_node` has no signature with a first parameter. The call's check (`v.m()`
+        //< on a read-only `v` is rejected) and [I0601] (`v.m()` needs `$v` only for a `Self$@` `m`)
+        //< both read it here, so the two cannot disagree.
+        sig_node: = def_node.find_child(.k_type_fn_sig) if def_node != null else null
+        if sig_node == null
+            return Option<|Receiver_permission|>.none
+        $params: = base_ast_ext.Param_cursor.new(sig_node.find_child(.k_param_list), false)
+        if first_param: = params.next()
+            need: = r.receiver_permission(first_param.get_decl_type_node())
+            return Option<|Receiver_permission|>.some(need)
+        return Option<|Receiver_permission|>.none
+
+    priv fn receiver_permission(r: Self$@, p_type: Ast_node$@): Receiver_permission //<
+        //< Reads the permission a method demands of its receiver from the type annotation `p_type`
+        //<
+        //< `p_type` is the first parameter's type annotation.
+        //<
+        //< Caution: **When the type is unresolved (type_id <= 0, as for `Self` in `impl U8`), read
+        //< the spelling, both `@` and `$@`** (parse/load.kspls's k_type_expr normalization keeps
+        //< the `$`). Checking `@` alone, a `Self$@` method reads as demanding no pointer and passes
+        //< the check.
+        if p_type == null
+            return Receiver_permission::{ .ptr = true, .mut_ptr = false }
+        p_type_id: = p_type.type_id
+        if p_type_id > 0
+            is_ptr: = r.is_pointer(p_type_id)
+            return Receiver_permission::{ .ptr = is_ptr,
+                .mut_ptr = is_ptr && !r.is_const(r.strip_ptr(p_type_id)) }
+        for tc in p_type.children
+            if tc.kind_id != .k_type_postfix
+                continue
+            if tc.text.equals("@")
+                return Receiver_permission::{ .ptr = true, .mut_ptr = false }
+            if tc.text.equals("$@")
+                return Receiver_permission::{ .ptr = true, .mut_ptr = true }
+        return Receiver_permission::{ .ptr = false, .mut_ptr = false }
+
     fn field_type_of(r: Self$@, base_tid: I32, name: U8[]): I32 //<
         //< A struct type's field's declared type id, found from the type alone (unknown if none)
         //<
@@ -343,15 +409,15 @@ impl sema_type_env.Env
         default
             return I32::sema_type_env.Builtin_type_id.i32_type
 
-    fn is_pointer($r: Self$@, id: I32): Bool
+    fn is_pointer(r: Self$@, id: I32): Bool
         r_id: = r.get_clean_real_type(id)
         return (true if r_id == I32::sema_type_env.Builtin_type_id.void_ptr
             else r.get_info(r_id).is_pointer())
     fn is_slice(r: Self$@, id: I32): Bool
         return r.slice_struct_elem(id) != 0
-    fn is_array($r: Self$@, id: I32): Bool
+    fn is_array(r: Self$@, id: I32): Bool
         return r.get_info(r.get_clean_real_type(id)).is_array()
-    fn is_result($r: Self$@, id: I32): Bool
+    fn is_result(r: Self$@, id: I32): Bool
         return r.get_info(r.get_clean_real_type(id)).is_result()
     fn array_len(r: Self$@, id: I32): I32 //< a fixed-length array's element count (else 0)
         switch r.get_info(r.get_clean_real_type(id)) case .array(_b, size)
@@ -442,12 +508,14 @@ impl sema_type_env.Env
             return 32
         return r.get_primitive_bit_size(id)
 
-    fn get_primitive_bit_size(r: Self$@, id: I32): I32
+    fn get_primitive_bit_size(r: Self$@, id: I32): I32 //<
+        //< The bit count of a value on the machine this compile is for (`Sz`'s is the machine's)
         real_id: = r.get_clean_real_type(id)
-        switch real_id case I32::sema_type_env.Builtin_type_id.i64_type,
+        switch real_id case I32::sema_type_env.Builtin_type_id.size_type
+            return I32::(base_target.current().sz_bytes * 8)
+        case I32::sema_type_env.Builtin_type_id.i64_type,
             I32::sema_type_env.Builtin_type_id.u64_type,
-            I32::sema_type_env.Builtin_type_id.f64_type,
-            I32::sema_type_env.Builtin_type_id.size_type
+            I32::sema_type_env.Builtin_type_id.f64_type
             return 64
         case I32::sema_type_env.Builtin_type_id.i32_type,
             I32::sema_type_env.Builtin_type_id.u32_type,

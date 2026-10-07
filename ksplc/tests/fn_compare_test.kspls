@@ -1,0 +1,55 @@
+//< A function's name compared with `==` or `!=` takes the other side's function type, either order
+//<
+//< Written on the left, the name had no type to take and was typed as its return type: the LLVM IR
+//< compared an `i32` with a function's address and did not build.
+//< Caution: **Keep it paired with the negative test** (`tests/negative/fn_value_operators.kspls`),
+//< which holds what is refused: two names, and every operator but `==` and `!=`.
+import "std/verdict"
+
+priv typedef Cmp_op = fn(x: I32): I32
+
+priv fn cmp_twice(x: I32): I32
+    return x * 2
+
+priv fn cmp_thrice(x: I32): I32
+    return x * 3
+
+priv fn cmp_same<|T|>(x: T): T
+    return x
+
+priv struct Cmp_box<|T|>
+    v: T
+
+impl<|T|> Cmp_box<|T|>
+    fn keep(x: T): T
+        return x
+
+priv struct Cmp_plain
+    v: I32
+
+impl Cmp_plain
+    fn cmp_twice(x: I32): I32
+        return x * 2
+
+priv fn cmp_pick_wide(): fn(x: I64): I64
+    return cmp_same<|I64|>
+
+priv fn cmp_pick_thrice(): Cmp_op
+    return cmp_thrice
+
+fn run()
+    verdict.start("[fn-ptr] a function's name on either side of '==' test...")
+    f: Cmp_op = cmp_twice
+    assert(cmp_twice == f && f == cmp_twice, "a name compares in either order")
+    assert(cmp_thrice != f && f != cmp_thrice, "'!=' too")
+    g: Cmp_op = cmp_same<|I32|>
+    assert(cmp_same<|I32|> == g && cmp_same<|I64|> == cmp_pick_wide(),
+        "a specialization on the left")
+    keep: Cmp_op = Cmp_box<|I32|>.keep
+    assert(Cmp_box<|I32|>.keep == keep && Cmp_plain.cmp_twice != keep,
+        "a method named through its type")
+    k: = keep(1) == 1
+    assert((cmp_thrice if k else cmp_twice) == cmp_pick_thrice(), "a choice between two names")
+    n: Cmp_op = null
+    assert(n == null && null != f, "a null check is unchanged")
+    verdict.pass("")

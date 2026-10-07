@@ -15,6 +15,7 @@ import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/sema/body/expr" as sema_body_expr
 import "ksplc/sema/decl/access" as sema_decl_access
+import "ksplc/sema/decl/name" as sema_decl_name
 import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
@@ -156,16 +157,20 @@ impl Ast_node
         if r == null
             return
 
-        $root_name: U8[] = ""
-        if r.kind_id == .k_expr_path || r.kind_id == .k_identifier
-            full_name: = r.text
-            $dot_idx: Sz = 0
-            for dot_idx < full_name.len
-                if (full_name.ptr + dot_idx)$ == '.'
-                    break
-                dot_idx += 1
-            root_name = U8[]::{ .ptr = full_name.ptr, .len = dot_idx }
-        else if r.kind_id == .k_expr_postfix && r.children.len >= 2
+        // **A binding's name is read as any value's** (read_written_name in sema/decl/name.kspls),
+        // a `.` chain of names whole: `m.total` through an import alias names that file's global,
+        // not a field of a value `m`.
+        if path: = sema_decl_name.name_path_of(r)
+            named: = c.read_written_name(path)
+            if named.sym != null && named.sym.kind.is_var_or_const()
+                if !named.sym.flags.is_mut
+                    c.clear_scratch()
+                        .s("cannot assign to immutable variable '\{named.spelled\}'. Prefix the \
+                            declaration with '$' to make it mutable.")
+                    c.err(r, c.scratch.slice())
+                    throw Sema_error.analysis_failed
+                return
+        if r.kind_id == .k_expr_postfix && r.children.len >= 2
             op: = r.get_child(1)
             if op.kind_id == .k_literal &&
                 (op.text.equals(".") || op.text.equals("$"))
@@ -188,12 +193,3 @@ impl Ast_node
                 if c.index_stops_permission_walk(recv.write_target_type(c)?)
                     return
                 return recv.enforce_mutability(c)
-
-        if root_name.len > 0
-            sym_opt: = c.symtab.resolve(root_name) catch null
-            if sym_opt != null && !sym_opt.flags.is_mut
-                c.clear_scratch()
-                    .s("cannot assign to immutable variable '\{root_name\}'. Prefix the declaration \
-                        with '$' to make it mutable.")
-                c.err(r, c.scratch.slice())
-                throw Sema_error.analysis_failed

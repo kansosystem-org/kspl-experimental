@@ -1,12 +1,12 @@
 # std/docs
 
-**The documents `std` carries.** Each is reached from the package's entry point, [`std/README.md`](../README.md).
+**The documents of `std`, KSPL's standard library.** Each is reached from the package's entry point, [`std/README.md`](../README.md).
 
 ## What is here
 
-* [`std/docs/DESIGN.md`](DESIGN.md) — why each file took its shape, and what it gives up.
+* [`std/docs/DESIGN.md`](DESIGN.md) — why each file works the way it does, and what that choice gives up.
 
-What the package publishes is not written here: `ksplc doc std` lists every file, and `ksplc doc std/<file>` gives one file's declarations, rendered from the sources when asked.
+The list of what the package offers is not kept here. `ksplc doc std` lists every file, and `ksplc doc std/<file>` gives one file's declarations; both are read from the sources each time you ask.
 
 ## Further reading
 

@@ -1,17 +1,17 @@
 # docs — the documents that belong to no single source folder
 
-**This folder routes; it does not explain.** What each document says stays in that document, and nothing below restates it.
+**This folder holds the documents that cover Kanso as a whole: learning and using the language, building it, and the rules for changing it.** Find the row for what you want to do. This page only routes: what each document says stays in that document, and nothing below restates it.
 
 | Document | Contents | Who reads it |
 | :-- | :-- | :-- |
 | [`TOUR.md`](TOUR.md) | The language one step at a time, each step a declaration of one program. | Whoever is learning to write KSPL |
 | [`SPEC-language.md`](SPEC-language.md) | The language specification: syntax, type system, semantics. | Whoever writes KSPL |
-| [`SPEC-local-server.md`](SPEC-local-server.md) | The protocol a page opened in a browser uses to ask the local machine for files and processes. | Whoever writes such a page or client, in any language |
 | [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md) | After the quick start: running a program, working in another folder, an executable to distribute, splitting into files, VS Code with the language server and debugger. The last section opens a `.kspage` document on a double-click. | Whoever writes KSPL and has `ksplc`, unpacked or built. For the last section, whoever wants a document to open from the file manager, with a clone that builds from source |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Where to start changing Kanso: which document to read for what, naming yourself, AI-written work. | Whoever is about to change Kanso for the first time |
+| [`SPEC-local-server.md`](SPEC-local-server.md) | The protocol a page opened in a browser uses to ask the local machine for files and processes. | Whoever writes such a page or client, in any language |
 | [`SECURITY.md`](SECURITY.md) | Where to report a vulnerability, and what counts as one. | Whoever has found a way to make an input take over execution or writing |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Where to start changing Kanso: which document to read for what, naming yourself, AI-written work. | Whoever is about to change Kanso for the first time |
 | [`HOWTO-build.md`](HOWTO-build.md) | Building from source, the compiler rebuilding itself, the formatter, linter and tests, and the Windows environment without Docker. | Whoever changes Kanso, and whoever writes KSPL with no prebuilt `ksplc` for their system; both need a C compiler and Make |
-| [`SPEC-gates.md`](SPEC-gates.md) | What CI runs on each platform, the verdict line, the per-item pass/fail line, and what the convention checks count. | Whoever changes Kanso |
+| [`SPEC-gates.md`](SPEC-gates.md) | What CI (the automatic build-and-test run) runs on each platform, the verdict line, the per-item pass/fail line, and what the convention checks count. | Whoever changes Kanso |
 | [`DESIGN.md`](DESIGN.md) | The Development Principles, then why Kanso is as it is, in four bands: the language, the notation, the project, the aim. | Whoever changes Kanso |
 | [`SPEC-documents.md`](SPEC-documents.md) | What every document must satisfy: the terms of art, the six kinds, wording and formatting, reference direction. | Whoever adds or changes a document |
 | [`PLAN.md`](PLAN.md) | What is left that spans packages, and links to each package's own plan. | Whoever changes Kanso and looks for the next step |

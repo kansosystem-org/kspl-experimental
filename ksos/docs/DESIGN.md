@@ -285,7 +285,9 @@ It runs the kernel core in Linux user space, so the scheduler and the synchroniz
 
 The timer is `SIGALRM` (`setitimer`, on a period of `reload` microseconds). **The switch happens inside the signal handler.** `ksos_tick()` → `schedule()` → `ksos_port_switch()` calls `swapcontext` directly, swapping the handler's own return point for another task's context.
 
-**The next tick cannot interrupt a task mid-switch.** `swapcontext` saves and restores `uc_sigmask` (as POSIX specifies). So a task switched out inside the handler keeps `SIGALRM` blocked until control returns to it and the handler returns. The Cortex-M port gets the same protection from SysTick and PendSV sharing a priority.
+**The next tick cannot interrupt a task mid-switch.** `ksos_port_switch` blocks the interrupt signals before `swapcontext` and gives the task its own mask back only once control has returned to it, so every saved context holds them blocked. A task switched out inside the handler therefore keeps `SIGALRM` blocked until control returns to it and the handler returns, and a new task unblocks them as its first code, as a Cortex-M task begins with interrupts enabled. The Cortex-M port gets the same protection from SysTick and PendSV sharing a priority, and from PendSV running with interrupts masked.
+
+**`swapcontext` alone would not give it.** It installs the next context's mask before it loads that context's registers. A tick pending at that moment (under load, often) would run its handler on the old task's stack while the kernel already counts the new task as current, and that handler's own switch would save the half-made state as the new task's context: the new task would never run its own code again. `make ksos-tick-mid-switch` holds a tick over a switch into a new task, from `start_scheduler` and from a yield, on every run.
 
 **The critical section blocks and restores `SIGALRM` with `sigprocmask`**, together with `SIGUSR1`, the stand-in for an external interrupt. It nests as PRIMASK's save/restore does: a restore unblocks only what its own save blocked (`make ksos-isr` raises the interrupt inside one).
 

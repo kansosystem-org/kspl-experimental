@@ -1,0 +1,46 @@
+//< A declaration with no type takes the function type of the function a name names
+//<
+//< A non-generic function, a written specialization, a method named through its type (receiver
+//< first) and an anonymous function each name one function, and `f: = …` takes its type, as a
+//< generic parameter does, on both backends.
+//< Caution: **Keep it paired with the negative test**
+//< (`tests/negative/fn_value_variadic_binding.kspls`), which holds the variadic function, the one
+//< name with no function type.
+import "std/verdict"
+
+priv fn vb_twice(x: I32): I32
+    return x * 2
+
+priv fn vb_thrice(x: I32): I32
+    return x * 3
+
+priv fn vb_same<|T|>(x: T): T
+    return x
+
+priv struct Vb_box<|T|>
+    v: T
+
+impl<|T|> Vb_box<|T|>
+    fn get(r: Self@): T
+        return r.v
+
+priv typedef Vb_op = fn(x: I32): I32
+
+fn run()
+    verdict.start("[fn-ptr] a declaration with no type takes a function's own type test...")
+    plain: = vb_twice
+    assert(plain(21) == 42, "a non-generic function's name gives its type")
+    spec: = vb_same<|I32|>
+    assert(spec(7) == 7, "a written specialization gives the instance's type")
+    b: = Vb_box<|I32|>::{ .v = 8 }
+    get: = Vb_box<|I32|>.get
+    assert(get(b@) == 8, "a method named through its type gives its type, the receiver first")
+    anon: = fn(x: I32): I32
+        return x + 1
+    assert(anon(1) == 2, "an anonymous function gives its written type")
+    $swap: = vb_twice
+    swap = vb_thrice
+    assert(swap(2) == 6, "the binding holds another function of the same type")
+    typed: Vb_op = plain
+    assert(typed == vb_twice && plain != spec, "it is the function type written out")
+    verdict.pass("")

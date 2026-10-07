@@ -434,7 +434,7 @@ priv fn case_main_return_is_exit_code_llvm(work: U8[], arena: Arena$@): run_case
     exe: = fs.join(work, "r.exe", arena)
     io.write_file(src, run_progs.main_ret_src) catch
         return run_case.failed("cannot place the material")
-    g: = harness.ksplc(U8[][]::{ "--target=llvm", src, ll })
+    g: = harness.ksplc(U8[][]::{ "--to=llvm", src, ll })
     if g.code != 0
         return run_case.broke("generating the LLVM IR failed", g.out, arena)
     b: = harness_build.build_llvm_exe(U8[][]::{ ll }, exe, U8[][]::{ "-Wno-override-module" })
@@ -481,7 +481,7 @@ priv fn case_shebang_survives_fmt(work: U8[], arena: Arena$@): run_case.Result /
         return run_case.broke("fmt --in-place failed", w.out, arena)
     body: = io.read_file(path) catch
         return run_case.failed("the formatted result cannot be read")
-    $lines: = body.lines(arena)
+    lines: = body.lines(arena)
     if lines.len == 0 || !lines.get(0).trim_end().equals(run_progs.shebang_line)
         return run_case
             .failed(arena.text().s("fmt --in-place broke the shebang line: ")
@@ -719,9 +719,9 @@ priv fn case_llvm_target_refused(work: U8[], arena: Arena$@): run_case.Result //
     //< rejects it (tests/suite/cli_test.kspls).
     if !run_case.write_script(work, "s2.kspl", run_progs.script_src, 1, arena)
         return run_case.failed("cannot place the material")
-    r: = run_case.ksplc_run(U8[][]::{ "--target=llvm", fs.join(work, "s2.kspl", arena) }, arena)
+    r: = run_case.ksplc_run(U8[][]::{ "--to=llvm", fs.join(work, "s2.kspl", arena) }, arena)
     if r.code == 0 || r.out.find_str("does not take effect on this subcommand") < 0
-        return run_case.broke("--target=llvm is not turned away", r.out, arena)
+        return run_case.broke("--to=llvm is not turned away", r.out, arena)
     return run_case.ok_result()
 
 priv fn case_script_path(work: U8[], arena: Arena$@): run_case.Result //<
@@ -870,7 +870,7 @@ fn main(): I32
         case_define_reaches_the_child, arena)
     run_case.run("a script that does not exist is turned away", "run_missing", case_missing_script,
         arena)
-    run_case.run("--target=llvm is refused explicitly", "run_llvm_refused", case_llvm_target_refused,
+    run_case.run("--to=llvm is refused explicitly", "run_llvm_refused", case_llvm_target_refused,
         arena)
     run_case.run("script_path() returns its own path and does not leak to a grandchild",
         "run_script_path", case_script_path, arena)

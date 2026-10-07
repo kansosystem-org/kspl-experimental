@@ -156,7 +156,7 @@ priv fn when_into(b: Json_builder$@, ob: Obj_builder, how: U8[], w: When): Obj_b
     defer sb.free()
     sb.s("when_")
     sb.s(how)
-    $out: Obj_builder = ob.set(sb.slice(), b.float_val(w.than))
+    out: Obj_builder = ob.set(sb.slice(), b.float_val(w.than))
     return out.set("when_then", b.str_val(w.then))
 
 priv fn read_when(v: Val): When //<
@@ -416,7 +416,7 @@ fn block_val(b: Json_builder$@, blk: Block$@): Val //< writes one block and its 
         ob = ob.set("children", cs.build())
     return ob.build()
 
-priv fn chrome_into($ob: Obj_builder, b: Json_builder$@, key: U8[], band: Block$@): Obj_builder //<
+priv fn chrome_into(ob: Obj_builder, b: Json_builder$@, key: U8[], band: Block$@): Obj_builder //<
     //< Writes one band into the text
     //<
     //< A band with no text is not written (an empty band matches the default).
@@ -567,7 +567,7 @@ fn read_style(sheet: Sheet$@, v: Val): Style$@?Store_error //<
 priv fn read_sheet(v: Val, arena: Arena$@): Sheet$@?Store_error
     sheet: = Sheet.new(read_font(v.get("root"), font.default_root()), arena)
     sheet.paper = read_paper(v)
-    $styles: = v.get("styles").arr_list(arena)
+    styles: = v.get("styles").arr_list(arena)
     for $i: Sz = 0; i < styles.len; i += 1
         read_style(sheet, styles.get(i))?
     return sheet
@@ -584,7 +584,7 @@ priv fn read_sizes(v: Val, into: List<|Option<|F32|>|>$@, arena: Arena$@) //<
     //< Reads the list and appends it to `into`
     //<
     //< null means "not set".
-    $list: = v.arr_list(arena)
+    list: = v.arr_list(arena)
     for $i: Sz = 0; i < list.len; i += 1
         got: = list.get(i)
         $spec: = Option<|F32|>.none
@@ -623,7 +623,7 @@ fn read_block(v: Val, arena: Arena$@): Block$@?Store_error //<
     blk.aside = v.get("aside").as_str()
     // Absent, it is 0 (it appears at every step).
     blk.step = v.get("step").as_int(0)
-    $inlines: = v.get("inlines").arr_list(arena)
+    inlines: = v.get("inlines").arr_list(arena)
     for $i: Sz = 0; i < inlines.len; i += 1
         n: = inlines.get(i)
         made: = blk.add_text(n.get("text").as_str(), n.get("style").as_str())
@@ -632,7 +632,7 @@ fn read_block(v: Val, arena: Arena$@): Block$@?Store_error //<
         made.remark = n.get("remark").as_str()
         made.remark_by = n.get("remark_by").as_str()
         made.refers = n.get("refers").as_str()
-    $children: = v.get("children").arr_list(arena)
+    children: = v.get("children").arr_list(arena)
     for $i: Sz = 0; i < children.len; i += 1
         blk.children.push(read_block(children.get(i), arena)?)
     return blk
@@ -654,7 +654,7 @@ fn load(src: U8[], arena: Arena$@): Loaded?Store_error //<
     // Caution: **An `origin` key from an older text is not read** (the saved versions it divided
     // are gone); the text opens without it, and the next save drops it.
     d: = Doc.new(arena)
-    $blocks: = root.get("blocks").arr_list(arena)
+    blocks: = root.get("blocks").arr_list(arena)
     for $i: Sz = 0; i < blocks.len; i += 1
         d.blocks.push(read_block(blocks.get(i), arena)?)
     // The page's header and footer. Without them they stay empty (the empty bands `Doc.new` made

@@ -9,6 +9,7 @@ import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/base/mangle" as base_mangle
+import "ksplc/base/target" as base_target
 import "ksplc/gen/c/ctx" { Genc_ctx }
 import "ksplc/gen/c/decl" as gen_c_decl
 import "ksplc/gen/c/stmt" as gen_c_stmt
@@ -20,7 +21,7 @@ import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/chars" // the one-character tests and cuts
 import "std/ds" { List, Map }
-import "std/str"
+import "std/str" + { Str_builder }
 fn run(root: Ast_node$@, cg: Genc_ctx$@)
     if root == null
         return
@@ -33,6 +34,8 @@ fn run(root: Ast_node$@, cg: Genc_ctx$@)
         // A unit holds no declarations of its own; it takes them from the shared header.
         cg.s("#include \"\{cg.split.shared_header\}\"\n")
     root.emit(cg)
+    if cg.writes_bodies()
+        emit_layout_checks(cg)
     // Caution: **Put the body half after the generated body.** It includes `<sys/stat.h>` through
     // `<netinet/in.h>`, whose **macros would replace the generated body's names** (a field
     // `st_mtime` gives the user C's `expected member name`, not a KSPL diagnostic; Principle 5).
@@ -40,6 +43,33 @@ fn run(root: Ast_node$@, cg: Genc_ctx$@)
     // non-static functions).
     if cg.writes_bodies() && cg.owns_singleton()
         gen_runtime.write_impl(cg)
+
+priv fn emit_layout_checks(cg: Genc_ctx$@) //<
+    //< A compile-time check of each layout number sema folded, at the line that folded it
+    //<
+    //< **A wrong `--machine` fails the C compile here**: the array's size is -1 where C lays the
+    //< type out otherwise, and its name says which machine ksplc folded for. At the end, where
+    //< every type is complete; each unit writes those folded since the last one, so a fold genc
+    //< itself makes is checked too. A program that folds nothing gets none, and names no machine.
+    folded: = cg.sema.layout.folded
+    if cg.sema.layout.folded_checked >= folded.len
+        return
+    $machine: = Str_builder.new()
+    defer machine.free()
+    for ch in base_target.current().name
+        machine.c(ch if ch.is_alnum() else '_')
+    for $i: = cg.sema.layout.folded_checked; i < folded.len; i += 1
+        f: = folded.get(i)
+        cg.emit_line_directive(f.at, true)
+        cg.s("typedef char kspl_folded_for_\{machine.slice()\}_\{i\}[(")
+        switch f.measure case .size
+            cg.s("sizeof(").t(f.type_id).s(")")
+        case .field_offset(field)
+            cg.s("offsetof(").t(f.type_id).s(", ").s(field).s(")")
+        case .payload_offset
+            cg.s("offsetof(").t(f.type_id).s(", payload)")
+        cg.s(" == \{f.value\}) ? 1 : -1];\n")
+    cg.sema.layout.folded_checked = folded.len
 
 priv fn emit_main_error_return(cg: Genc_ctx$@, plan: gen_entry.Main_plan) //<
     //< The failure path where `main` returns a Result

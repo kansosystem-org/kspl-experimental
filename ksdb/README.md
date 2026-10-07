@@ -1,14 +1,14 @@
 # ksdb
 
-**An append-only record with zero dependencies: every finished record reads back, even when the power fails mid-write.** On a device it keeps a sensor time series and a policy passed down across power cuts; on a desk, a document's change history.
+**An append-only record with zero dependencies: every finished record reads back, even when the power fails mid-write.** *Append-only* means records are only ever added at the end, never changed. On a device it keeps a sensor time series and a policy (a setting the device was sent) across power cuts; on a desk, a document's change history.
 
-[`ksdb/docs/DESIGN.md`](docs/DESIGN.md) says why not SQLite through FFI, why appending only, and why a record is laid out as it is.
+It is for whoever needs a small, durable log in a KSPL program, above all on a microcontroller with flash memory. [`ksdb/docs/DESIGN.md`](docs/DESIGN.md) says why not SQLite through FFI (calling a C library from KSPL), why appending only, and why a record is laid out as it is.
 
 ## Run it
 
 **`make test` runs the tests from this folder** with nothing but a `ksplc` ([`ksdb/Makefile`](Makefile)). ksdb names itself in [`ksdb/ksplc.cfg`](ksplc.cfg), so a copy of this folder alone runs them the same way. What they cut and check is in "Power cuts are tested at every point, not at chosen ones" in [`ksdb/docs/DESIGN.md`](docs/DESIGN.md).
 
-A program keeps its record like this:
+A program keeps its record like this. It tags each record with a `kind` number, appends one, reads them all back oldest first, and then takes the newest record of one kind:
 
 ```kspls
 import "ksdb/log" as ksdblog
@@ -46,14 +46,26 @@ The caller decides what a `kind` means. `ksdb` matches kinds and never reads the
 
 ## What is here
 
+The record (`Log`) writes through a *place*: a `Store` that knows how to read, write and erase one kind of memory. The diagram shows the layers; the dashed line marks what the caller builds.
+
+```mermaid
+flowchart TD
+    P["your program"] -->|"append / iter / last"| L["Log (ksdb/log.kspls)"]
+    L -->|"read / write where erased / erase a sector"| S["Store (ksdb/store.kspls)"]
+    S --> R["RAM held to flash's rules<br/>(ksdb/ram_store.kspls)"]
+    S -.-> F["a device's flash,<br/>built by the caller from its own driver"]
+```
+
 | File | Content |
 | :-- | :-- |
 | [`ksdb/log.kspls`](log.kspls) | The record itself. |
-| [`ksdb/store.kspls`](store.kspls) | The swappable place: three functions ("read", "write where erased", "erase a sector") and the sector's size. |
+| [`ksdb/store.kspls`](store.kspls) | The swappable place: three functions ("read", "write where erased", "erase a sector") and the sector's size. A *sector* is the smallest block flash can erase at once. |
 | [`ksdb/ram_store.kspls`](ram_store.kspls) | A place in RAM that keeps flash's constraints (a write where nothing was erased only turns bits to 0). |
 | [`ksdb/tests/ksdb_test.kspls`](tests/ksdb_test.kspls) | The tests, on RAM held to flash's constraints. |
 
 ## What it can do
+
+ksdb does five things, each one call on the `Log`.
 
 | What it can do | How to write it |
 | :-- | :-- |
@@ -67,7 +79,7 @@ The caller decides what a `kind` means. `ksdb` matches kinds and never reads the
 
 ## Adding a place
 
-Build the `Store` of [`ksdb/store.kspls`](store.kspls) and pass it in. What each field must do is what `ksplc doc ksdb/store.Store` prints. Besides `ksdb/ram_store.kspls` (portable, host or device), the caller builds a device's flash (the RP2040's QSPI Flash, say) from its own driver, `flash` below. `ksdb` itself names no device.
+To keep the record in another kind of memory, build the `Store` of [`ksdb/store.kspls`](store.kspls) and pass it in. What each field must do is what `ksplc doc ksdb/store.Store` prints. Besides `ksdb/ram_store.kspls` (portable, host or device), the caller builds a device's flash (the RP2040's QSPI Flash, say) from its own driver, `flash` below. `ksdb` itself names no device.
 
 ```kspls
 store: = Store::{
@@ -82,5 +94,5 @@ store: = Store::{
 ## Further reading
 
 * [`ksdb/docs/DESIGN.md`](docs/DESIGN.md) — why appending only, and why a record is laid out as it is.
-* [`ksdb/SURFACE.txt`](SURFACE.txt) — the record of the published API, written and checked by the same two targets ("The record of a published API" in [`docs/SPEC-gates.md`](../docs/SPEC-gates.md)).
+* [`ksdb/SURFACE.txt`](SURFACE.txt) — the record of the published API, written by `make surface` and checked by `make test-surface` ("The record of a published API" in [`docs/SPEC-gates.md`](../docs/SPEC-gates.md)).
 * [std](../std/README.md) — the way in to `ksdb`'s only dependency; every file it publishes is listed by `ksplc doc std`.

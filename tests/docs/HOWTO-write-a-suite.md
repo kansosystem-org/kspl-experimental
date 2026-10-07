@@ -1,34 +1,73 @@
 # Writing a suite
 
-This is for whoever adds a test to the repository. It assumes a built tree (`make`), so that the seed (`out/ksplc_seed.exe`) and stage1 (`out/ksplc_stage1.exe`) exist. Each folder's place is in [`tests/README.md`](../README.md); why the suites are built this way is in [`tests/docs/DESIGN.md`](DESIGN.md).
+This guide shows how to add a test to the repository: where the file goes, how to write it, and how to run it. A *suite* is one KSPL program that runs many checks and prints one verdict. Each folder's place is in [`tests/README.md`](../README.md); why the suites are built this way is in [`tests/docs/DESIGN.md`](DESIGN.md).
 
 ## Contents
 
+* [What you need first](#what-you-need-first)
 * [Where a new test goes](#where-a-new-test-goes)
+* [Adding a suite, step by step](#adding-a-suite-step-by-step)
 * [The manners for writing a suite](#the-manners-for-writing-a-suite)
 * [The arena is held by harness](#the-arena-is-held-by-harness)
 * [Showing that a check can fire](#showing-that-a-check-can-fire)
 * [Moving a tool out of Python](#moving-a-tool-out-of-python)
+* [If it goes wrong](#if-it-goes-wrong)
 
 ---
 
+## What you need first
+
+You need a built tree and enough KSPL to read a short program.
+
+* **A built tree.** Run `make` once at the repository root. It builds the two compilers every suite run uses:
+
+  | File | What it is | Its job in a suite run |
+  | :-- | :-- | :-- |
+  | `out/ksplc_seed.exe` | The *seed*: a frozen copy of the compiler, kept as C source in `ksplc/seed.c` | Compiles and runs the suite |
+  | `out/ksplc_stage1.exe` | *Stage1*: the compiler built from the current source, with your edit in it | What the suite checks |
+
+  Why two compilers take part is "The seed runs the suites" in [`tests/docs/DESIGN.md`](DESIGN.md).
+* **Some KSPL.** [`docs/TOUR.md`](../../docs/TOUR.md) walks through the language in one program.
+
 ## Where a new test goes
 
-**A test inspecting one package goes into that package's `tests/`**, reached through `<package>/tests/all.kspls`. `make debug` runs those, not the suites here. "13.1 A test inspecting the inside of a unit goes inside that unit" in [`docs/DESIGN.md`](../../docs/DESIGN.md) lists the packages and why.
+Put a test next to what it checks. A test that looks inside one package lives in that package; only a suite that reads several packages lives here. A *package* is one top-level folder such as `std/` or `ksplc/`.
+
+| What the test checks | Where it goes | What runs it |
+| :-- | :-- | :-- |
+| The inside of one package (its functions, called directly) | That package's `tests/`, reached through `<package>/tests/all.kspls` | `make debug` (not the suites here) |
+| kssrv's programs, or ksai's examples | Their own folder: they build their programs and start them, so there is no `all.kspls` entry point | That folder's `make test` ([`kssrv/Makefile`](../../kssrv/Makefile), [`ksai/Makefile`](../../ksai/Makefile)): `make debug-kssrv` / `make debug-ksai` from here, and `make test-extract` in CI, which repeats any line they skipped as its own |
+| Only the compiler, from outside | ksplc's folder ([ksplc](../../ksplc/README.md)) | `make test-<name>` |
+| More than one package | `tests/suite/` | `make test-<name>` |
+
+"13.1 A test inspecting the inside of a unit goes inside that unit" in [`docs/DESIGN.md`](../../docs/DESIGN.md) lists the packages and why.
 
 Caution: **After adding a test, add its import and call to that package's `<package>/tests/all.kspls`.** `make debug` cannot see a file no entry point calls, so forgetting this stays green.
 
-**Do not write individual tests into `tests/debug/`.** Only the run that calls each package's entry point in turn lives there. There, in another unit, tests would need `pub` to inspect anything.
+**Do not write individual tests into `tests/debug/`.** It holds only the run that calls each package's entry point in turn. A test placed there sits outside the package it checks, so everything it inspects would have to be `pub` (visible to every file).
 
-**kssrv's tests and ksai's examples have no such entry point.** They build their programs and start them, so each runs through its own folder's `make test` ([`kssrv/Makefile`](../../kssrv/Makefile), [`ksai/Makefile`](../../ksai/Makefile)): `make debug-kssrv` / `make debug-ksai` from here, and `make test-extract` in CI, which repeats any line they skipped as its own.
+## Adding a suite, step by step
 
-**A suite that reads more than one package goes into `tests/suite/`**, and a suite that checks only the compiler goes into ksplc's folder ([ksplc](../../ksplc/README.md)). Register a new suite in [`mk/test.mk`](../../mk/test.mk): a `suite_<name>` line and its name in `SUITES`. `make` stops at start-up when the two disagree, and `make test-<name>` runs the suite.
+These steps add a suite under `tests/suite/`.
 
-A suite can use only the notations the seed knows, since the seed runs it. To use a language or codegen fix in a suite, **re-bake the seed first** (`make commit-seed`; `make install` does it too). Otherwise the suite passes on the stage1 just built, while `make test-<name>` alone fails.
+1. **Write the suite** as `tests/suite/<name>_test.kspls`, starting from the program in "The manners for writing a suite" below.
+2. **Register it in [`mk/test.mk`](../../mk/test.mk)**: add a line `suite_<name> := suite/<name>_test.kspls`, and add `<name>` to `SUITES`, where the comment above it says (longest first). `make` stops at start-up when the two disagree.
+3. **If the suite needs a fix you just made to the language or to code generation, re-bake the seed first**: run `make commit-seed` (`make install` does it too). The seed runs the suite, so a suite can use only the notations the seed knows. Without this step the suite passes on the stage1 just built, while `make test-<name>` alone fails.
+4. **Run it**: `make test-<name>`. You should see one line per check and a closing verdict:
+
+   ```
+   pass keywords: there is no unexpected line
+   pass keywords: the groups and the total line come out
+   RESULT: ALL PASS
+   ```
+
+   A failed check prints a `FAIL` line, the run goes on, and the last line reads `RESULT: SOME FAILED (<count>)`.
 
 ## The manners for writing a suite
 
-Use `tests/support/harness.kspls`, and `std/verdict.kspls` for the verdict lines. If each suite finds the root and the target, formats the verdict lines and uses exit codes in its own way, CI's log becomes unreadable.
+Every suite is built from the same shared helpers: `tests/support/harness.kspls`, and `std/verdict.kspls` for the verdict lines. If each suite found the repository root and the compiler under test, formatted its verdict lines and used exit codes in its own way, CI's log would become unreadable.
+
+The smallest suite starts the compiler under test once and checks its exit code:
 
 ```kspls
 #!/usr/bin/env -S ksplc run
@@ -42,21 +81,30 @@ fn main(): I32
     return harness.finish()
 ```
 
-* **The exit code carries the verdict**: `main` ends with `return harness.finish()`. The `RESULT:` line is for people and the log (the Makefile greps it as a marker for some targets only).
-* **Report a case that could not be confirmed with `verdict.skip_check()`.** Written as `check(.., true, ..)`, a case that confirmed nothing prints the same line as one that confirmed something, and the log cannot tell them apart.
-* **Get a workspace from `harness.sandbox("<suite name>")`.** It empties `out/tmp/<suite name>` and returns it, so the last run's leftovers do not mix into this run's verdict.
-  * Caution: **Do not write to a fixed path (`/tmp/out.c` and the like).**
-* **Read a generated file with `harness.read_generated`.** ksplc writes in text mode, so on Windows the newlines become `\r\n`. Compared raw, the same content fails only on Windows, as "the head does not match" or "a blank line is not found", never as a newline mismatch. `.gitattributes` pins the repository's files to LF, so `harness.read_under_root` is enough for them.
-* **Take a line out of a child's output with `htext.line_after()`.** A line cut at `'\n'` keeps a trailing `\r` on Windows: a child's stdout is in text mode by default, so the log gets CRLF. The `\r` stays unseen until the string lands in a header or a token. `make test-conventions` checks this.
-* Interpolation (`\{x\}`) can be written only inside a `Writer`'s `.s()`. To build a `U8[]`, such as a case name passed to `check`, use `arena.text().s("…").take()`, the notation for "allocate and keep" (why there are only three shapes: "The destination is always named" in [`std/docs/DESIGN.md`](../../std/docs/DESIGN.md)).
-  * **Where no arena is in reach, use `harness.arena()`.**
-* A suite runs its cases one at a time, in order. `harness.run_all` runs the cases given to it in parallel and returns the results **in input order**, through `std/verdict`'s `run_children`. `verdict.jobs()` sets the parallelism; `KANSO_TEST_JOBS=1` makes it sequential to narrow down a failure.
-  * Caution: **Give each suite its own workspace name.** Suites themselves run in parallel under `make -j`, so two sharing a workspace read each other's output.
-* **Where the amount of material is part of the verdict, give the reason in the suite's opening comment**, which anyone reducing it reads first. For example, `visibility` needs three files: without another folder and another package, the difference at the boundary does not show.
+Each row below is one manner: what to use, and what goes wrong without it.
+
+| To do this | Use | Why |
+| :-- | :-- | :-- |
+| End the suite | `return harness.finish()` at the end of `main` | **The exit code carries the verdict.** The `RESULT:` line is for people and the log; the Makefile greps it as a marker for some targets only |
+| Report a case that could not be confirmed | `verdict.skip_check()` | Written as `check(.., true, ..)`, a case that confirmed nothing prints the same line as one that confirmed something, and the log cannot tell them apart |
+| Get a folder to write in | `harness.sandbox("<suite name>")` | It empties `out/tmp/<suite name>` and returns it, so the last run's leftovers do not mix into this run's verdict |
+| Read a file the compiler generated | `harness.read_generated` | ksplc writes in text mode, so on Windows the newlines become `\r\n` |
+| Read a file the repository holds | `harness.read_under_root` | `.gitattributes` pins the repository's files to LF, so nothing needs converting |
+| Take one line out of a child's output | `htext.line_after()` | A line cut at `'\n'` keeps a trailing `\r` on Windows (below) |
+| Build a `U8[]` (a string), such as a case name passed to `check` | `arena.text().s("…").take()`, the notation for "allocate and keep" | Interpolation (`\{x\}`) can be written only inside a `Writer`'s `.s()` (why there are only three shapes: "The destination is always named" in [`std/docs/DESIGN.md`](../../std/docs/DESIGN.md)). **Where no arena is in reach, use `harness.arena()`** |
+| Run several cases at once | `harness.run_all` | It runs the cases given to it in parallel, through `std/verdict`'s `run_children`, and returns the results **in input order**. `verdict.jobs()` sets the parallelism; `KANSO_TEST_JOBS=1` makes it sequential to narrow down a failure. Otherwise a suite runs its cases one at a time, in order |
+
+Caution: **Do not write to a fixed path (`/tmp/out.c` and the like).** Take the folder from `harness.sandbox` instead.
+
+**Why the Windows newlines matter**: compared raw, the same generated content fails only on Windows, as "the head does not match" or "a blank line is not found", never as a newline mismatch. A child's stdout is in text mode by default, so its log gets CRLF (`\r\n`) too, and a stray `\r` stays unseen until the string lands in a header or a token. `make test-conventions` refuses a test that cuts a child's output into lines by hand.
+
+Caution: **Give each suite its own workspace name.** Suites themselves run in parallel under `make -j`, so two sharing a workspace read each other's output.
+
+**Where the amount of material is part of the verdict, give the reason in the suite's opening comment**, which anyone reducing it reads first. For example, `visibility` needs three files: without another folder and another package, the difference at the boundary does not show.
 
 ## The arena is held by harness
 
-`harness.begin()` makes the suite's arena and returns it. The suite can use it directly for its own allocations, so `List.new(arena)` and the like read as usual. Why `harness.*` does not take the arena per call is in "Why harness holds the arena" in [`tests/docs/DESIGN.md`](DESIGN.md).
+`harness.begin()` makes the suite's arena and hands it back, and `harness.finish()` frees it. An *arena* is one block of memory that many allocations share and that is freed all at once. The suite can use it directly for its own allocations, so `List.new(arena)` and the like read as usual. Why `harness.*` does not take the arena per call is in "Why harness holds the arena" in [`tests/docs/DESIGN.md`](DESIGN.md).
 
 Caution: **Do not free it with a `defer`.** `finish` / `fatal` free it, so a `defer arena.free()` frees it twice.
 
@@ -64,18 +112,46 @@ Caution: **Do not free it with a `defer`.** `finish` / `fatal` free it, so a `de
 
 ## Showing that a check can fire
 
-The convention checks (`make test-conventions`) are **green when the repository is clean, and so green even when a check is broken**.
+A convention check must prove that it can catch a violation. The convention checks (`make test-conventions`) are **green when the repository is clean, and so green even when a check is broken**. A check *fires* when it catches a violation; one that cannot fire guards nothing.
 
-So a rule's decision is factored out into a function that takes one string, with a table of strings that should and should not match **in the same file as the rule**. `tmp_samples` and `check_tmp_fires` in `tests/support/conventions_win.kspls` are the shape: the table, then `scan.misjudged` putting each sample to the decision (`opens_tmp`) and `verdict.check_list` reporting the ones it misjudged.
+So a rule's decision is factored out into a function that takes one string. Beside it, **in the same file as the rule**, sits a table of sample strings that should and should not match. `tmp_samples` and `check_tmp_fires` in `tests/support/conventions_win.kspls` are the shape: the table, then `scan.misjudged` putting each sample to the decision (`opens_tmp`), and `verdict.check_list` reporting the ones it misjudged.
 
-* Caution: **List both the matching and the non-matching side.** A one-sided table lets one kind of breakage ("always true" or "always false") slip past.
-* **Make the decision a pure function of one string.** If it reads a file, no sample can be passed to it. If the decision is inline in the check, factor it out first.
-* **A file holding a table excludes itself from that rule's check** (its samples would show as real findings). Exclude that one file only: anything excluded drops out of the rule's check entirely.
-* **Do not put the samples in a file.** Keeping that file out of scope needs machinery, and a missed exclusion fails the real check. `ksplc/tests/negative/`'s exclusions, scattered per check, show that shape.
-* This checks only the decision. `harness.tracked_matching` checks which files are looked at: it stops when a string without a wildcard matches nothing.
+The flow below shows the two halves: the samples test the decision, and the real check uses the same decision on the tree.
+
+```mermaid
+flowchart LR
+    S["sample table:<br/>should match / should not"] --> D["the decision:<br/>one string in, yes or no out"]
+    T["the repository's files"] --> D
+    D --> V1["a sample judged wrong<br/>→ the check is broken"]
+    D --> V2["a file that matches<br/>→ the rule is broken"]
+```
+
+| Manner | Why |
+| :-- | :-- |
+| **Make the decision a pure function of one string** | If it reads a file, no sample can be passed to it. If the decision is inline in the check, factor it out first |
+| **A file holding a table excludes itself from that rule's check** | Its samples would show as real findings. Exclude that one file only: anything excluded drops out of the rule's check entirely |
+| **Do not put the samples in a file** | Keeping that file out of scope needs machinery, and a missed exclusion fails the real check. `ksplc/tests/negative/`'s exclusions, scattered per check, show that shape |
+
+Caution: **List both the matching and the non-matching side.** A one-sided table lets one kind of breakage ("always true" or "always false") slip past.
+
+This checks only the decision. Which files are looked at is checked by `harness.tracked_matching`: it stops when a string without a wildcard matches nothing.
 
 ## Moving a tool out of Python
 
 **When a tool moves out of Python, check that it gives the Python version's verdict, broken input included.** For `llvm_ir_abi_check`, that means the extracted type list agrees with real IR line for line, and the output matches byte for byte on four ways of breaking the IR. Comparing counts alone is not enough: two versions wrong in the same way still agree.
 
 **A scan built on regular expressions need not keep them when it moves**: `llvm_ir_abi_check` counts separators instead (its header says why).
+
+## If it goes wrong
+
+Each row is a symptom you may meet, what causes it, and where the fix is described.
+
+| Symptom | Cause | Fix |
+| :-- | :-- | :-- |
+| `make` stops at start-up, before any suite runs | `suite_<name>` and `SUITES` in `mk/test.mk` disagree | Step 2 of "Adding a suite, step by step" |
+| A new package test never runs, and everything stays green | Its file is not imported and called from `<package>/tests/all.kspls` | "Where a new test goes" |
+| The suite passes on the stage1 just built, but `make test-<name>` alone fails | The suite uses a notation the seed does not know yet | Re-bake the seed (step 3) |
+| A check fails only on Windows, as "the head does not match" or "a blank line is not found" | A generated file read raw, so it holds `\r\n` | `harness.read_generated` |
+| A header or token holds a stray `\r` on Windows, or `make test-conventions` reports "a test does not cut a child's output into lines by hand" | A child's output cut into lines at `'\n'` by hand | `htext.line_after()` |
+| Two suites fail together, each seeing the other's files | They share a workspace name | Give each suite its own name in `harness.sandbox` |
+| The arena is freed twice at the suite's end | A `defer arena.free()` on the arena from `harness.begin()` | Remove the `defer`: `finish` frees it |

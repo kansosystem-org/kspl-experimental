@@ -73,10 +73,6 @@ priv struct Hover_ctx
     prefix: U8$[]
     def_node: Ast_node$@
     fallback_str: Str_builder
-priv fn instance_key(state: Doc_state$@, id: I32): U8[] //<
-    //< The registration key of a type monomorphization made, or "" for one the source declares
-    return state.sema.env.inst_type_index.get(id) catch ""
-
 // The type a method or associated function belongs to, "" for a free function.
 //
 // Caution: **Prefer the declared type over an instantiation.** A generic's method node is reached
@@ -90,11 +86,12 @@ priv fn find_owner_of_fn(state: Doc_state$@, def_node: Ast_node$@, keep_args: Bo
         entry: = state.sema.env.id_to_type.get(i)
         if entry == null || !owns_fn(entry, def_node)
             continue
-        key: = instance_key(state, I32::i)
-        if key.len == 0
+        // An instance's record names its template, the type the declaration belongs to.
+        template: = state.sema.env.instance_base(I32::i)
+        if template.len == 0
             return entry.str_repr
         if from_instance.len == 0
-            from_instance = entry.str_repr if keep_args else key.get_generic_base_name()
+            from_instance = entry.str_repr if keep_args else template
     if from_instance.len > 0
         return from_instance
     return find_owner_in_tree(state.sema, state.root_file, def_node)
