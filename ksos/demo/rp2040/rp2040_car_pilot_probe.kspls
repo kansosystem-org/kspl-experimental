@@ -114,7 +114,7 @@ $last_learn_us: U32 = 0
 // Set once anything has failed; it stays stopped from then on.
 $halted: Bool = false
 // Why it is stopped. **The text and the colour are `status`'s** alone.
-$halt_state: status.State = status.State.driving
+$halt_state: status.State = .driving
 
 // Whether only the remote can bring it back from this stop.
 // Caution: **Keep it apart from the battery**, whose way back is the switch, not a held press.
@@ -166,7 +166,7 @@ $last_rot: I32 = 0
 $last_decide_us: U32 = 0
 // Who issued the latest command.
 // Caution: **Set it only inside `apply`**, with the triple, or the record names a wrong source.
-$last_by: csample.Author = csample.Author.safety
+$last_by: csample.Author = .safety
 
 priv fn apply(lon: I32, lat: I32, rot: I32, by: csample.Author) //<
     //< The only function that sends a command to the wheels
@@ -187,13 +187,13 @@ priv fn halt(why: status.State) //< stops from then on
     halted = true
     halt_state = why
     // A stop here is always a safety one; the policy's own "stop" is one_round's 0,0,0.
-    apply(0, 0, 0, csample.Author.safety)
+    apply(0, 0, 0, .safety)
 
 priv fn halt_battery() //< stops at the battery's minimum
     //<
     //< **This one resumes when a person turns the switch off and on** (watch_battery;
     //< `common/battery.kspls` records the voltage and the flag).
-    halt(status.State.battery)
+    halt(.battery)
 
 priv fn watch_battery(ln: con.Line$@): Bool //<
     //< Checks the battery for one round and returns whether a decision may be made this round
@@ -202,7 +202,8 @@ priv fn watch_battery(ln: con.Line$@): Bool //<
     //< here.
     //< Caution: **Call it while stopped too** (the reason is at `battery.Watch.look`).
     $may: = false
-    switch battery.watch.look(halted) case .go
+    switch battery.watch.look(halted)
+    case .go
         may = true
     case .low
         halt_battery()
@@ -235,7 +236,7 @@ priv fn watch_remote(ln: con.Line$@): Bool //<
         ir_quiet_rounds = 0
         ir_hold += 1
         if !halted
-            halt_remote(status.State.remote)
+            halt_remote(.remote)
             // **The press that stopped it does not count towards re-arming**; counting restarts
             // after a release.
             ir_released = false
@@ -280,7 +281,7 @@ priv fn watch_run_time(): Bool //<
         return false
     driving_rounds += 1
     if max_driving_rounds > 0 && driving_rounds >= max_driving_rounds
-        halt_remote(status.State.time_limit)
+        halt_remote(.time_limit)
         return false
     return true
 
@@ -313,14 +314,14 @@ priv fn one_round(p: policy.Policy$@, arena: Arena$@) //< runs one round
     if raw > 0 && raw < emergency_mm
         last_dist = raw
         emergencies += 1
-        apply(-45, 0, 0, csample.Author.safety)
+        apply(-45, 0, 0, .safety)
         return
 
     last_dist = steady
     t0: = timer.now_us()
     d: = policy.decide(p, steady, line, arena)
     last_decide_us = timer.elapsed_us(t0)
-    apply(d.lon, d.lat, d.rot, csample.Author.policy)
+    apply(d.lon, d.lat, d.rot, .policy)
     decisions += 1
 
 priv fn track_while_pumping(p: policy.Policy$@, arena: Arena$@, driving: Bool): Bool //<
@@ -346,7 +347,7 @@ priv fn track_while_pumping(p: policy.Policy$@, arena: Arena$@, driving: Bool): 
         t0: = timer.now_us()
         d: = policy.decide(p, last_dist, line, arena)
         last_decide_us = timer.elapsed_us(t0)
-        apply(d.lon, d.lat, d.rot, csample.Author.policy)
+        apply(d.lon, d.lat, d.rot, .policy)
         arena.restore(mark)
         steers += 1
         if last_lon != prev_lon || last_lat != prev_lat || last_rot != prev_rot
@@ -484,7 +485,7 @@ fn car_task(_arg: Void$@): Void
         _rest: = nc.drain_stream(pilot_boot.fetch_idle_ms)
         nc.close_conn()
         if blob.len > 0
-            ready = take_policy(p@, blob, status.State.bad_policy, arena@)
+            ready = take_policy(p@, blob, .bad_policy, arena@)
             if ready
                 store.save_policy(ln@, blob)
 
@@ -493,11 +494,11 @@ fn car_task(_arg: Void$@): Void
     if !ready && !halted
         kept: = pilot_boot.stored_policy()
         if kept.len > 0
-            ready = take_policy(p@, kept, status.State.bad_stored_policy, arena@)
+            ready = take_policy(p@, kept, .bad_stored_policy, arena@)
             if ready
                 con.say(ln@, "[car]", "no fresh policy — using the one stored on board")
     if !ready && !halted
-        halt(status.State.no_policy)
+        halt(.no_policy)
 
     if ready
         // No exchange with the PC from here on: driving with no link is what this stage claims.

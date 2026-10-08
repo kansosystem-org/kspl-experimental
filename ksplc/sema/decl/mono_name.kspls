@@ -18,42 +18,40 @@ struct Method_template //< a method declaring type parameters of its own, and it
     fqn: U8[] //< the template's key (`app.Box.gm`, `app.Plain.gen`)
     owner: I32 //< the generic type's instance it is reached through, or 0 for a plain type's
 
-fn lookup_method_template(r: Sema_ctx$@, owner_id: I32, method_name: U8[]):
-    Option<|Method_template|> //<
-        //< The template of the method method_name of the type owner_id
-        //<
-        //< **A method with its own type parameters (`Holder<|T|>.to<|U|>`) can be looked up only
-        //< here:** it is not in the method table but instantiated at the call site (instantiate_fn
-        //< in `mono.kspls`). An instance's is found under its template's FQN, read from the
-        //< instance's record.
+fn lookup_method_template(r: Sema_ctx$@, owner_id: I32, method_name: U8[]): Method_template? //<
+    //< The template of the method method_name of the type owner_id
+    //<
+    //< **A method with its own type parameters (`Holder<|T|>.to<|U|>`) can be looked up only
+    //< here:** it is not in the method table but instantiated at the call site (instantiate_fn
+    //< in `mono.kspls`). An instance's is found under its template's FQN, read from the
+    //< instance's record.
     r.clear_scratch().s("\{r.env.get_str(owner_id)\}.\{method_name\}")
     direct: = r.generics.templates.get(r.scratch.slice()) catch null
     if direct != null
-        return Option<|Method_template|>
-            .some(Method_template::{ .node = direct,
+        return .some(Method_template::{ .node = direct,
             .fqn = base_core.arena.dup_str(r.scratch.slice()), .owner = 0 })
-    switch r.env.instance_of(owner_id) case .some(inst)
+    switch r.env.instance_of(owner_id)
+    case .some(inst)
         return instance_method_template(r, inst, owner_id, method_name)
     case .none
-        return Option<|Method_template|>.none
+        return .none
 
 priv fn instance_method_template(r: Sema_ctx$@, inst: sema_type_env.Instance, owner_id: I32,
-    method_name: U8[]): Option<|Method_template|> //<
+    method_name: U8[]): Method_template? //<
         //< lookup_method_template's answer for an instance, found under its template's FQN
     fqn: = join_dotted_name(inst.template, method_name)
     found: = r.generics.templates.get(fqn) catch null
     if found == null
-        return Option<|Method_template|>.none
+        return .none
     // Caution: **Return only methods with their own type parameters.** An ordinary one
     // (`Slice<|T|>.sub_from`) would take the generic-call path, inferring `T` from the actual
     // argument and turning `U8[]` into `Sz[]`.
     tmpl: = r.generics.templates.get(inst.template) catch null
     if tmpl == null
-        return Option<|Method_template|>.none
+        return .none
     if !introduces_own_generic_param(found, tmpl.find_child(.k_type_gen_params))
-        return Option<|Method_template|>.none
-    return Option<|Method_template|>
-        .some(Method_template::{ .node = found, .fqn = fqn, .owner = owner_id })
+        return .none
+    return .some(Method_template::{ .node = found, .fqn = fqn, .owner = owner_id })
 
 fn introduces_own_generic_param(m_node: Ast_node$@, impl_gen_params: Ast_node$@): Bool //<
     //< Whether m_node's type parameters hold a name not in impl_gen_params (the impl block's own)
@@ -87,7 +85,7 @@ fn unknown_type_str(): Str_builder //<
     return dummy
 
 fn type_base_name_len(s: U8[]): Sz //<
-    //< The length of a type name's base, before postfix modifiers (`$@` / `@` / `$[]` / `?E`)
+    //< The length of a type name's base, before postfix modifiers (`$@` / `@` / `$[]` / `!E`)
     //<
     //< The base runs as long as identifier characters and `.` continue.
     $i: Sz = 0
@@ -106,7 +104,8 @@ impl Sema_ctx
         //< This matters for correctness: `Plain$@` and `c_mod.Plain$@` would be two types, and the
         //< impl would attach to neither (impl_target_rejects in mono_target.kspls).
         $out: = Str_builder.new()
-        switch arg.find_generic_bounds() case .found(start_idx, inner_start, inner_end, end_idx)
+        switch arg.find_generic_bounds()
+        case .found(start_idx, inner_start, inner_end, end_idx)
             base: = arg.sub(0, start_idx)
             inner: = arg.sub(inner_start, inner_end - inner_start)
             // end_idx is the closing `>` itself; without the `+ 1` the suffix reads `">$@"`.

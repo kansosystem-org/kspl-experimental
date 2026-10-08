@@ -57,14 +57,16 @@ impl Sema_ctx
         //<
         //< genllvm lays a Result holding an over-aligned value at these offsets (`is_laid` in
         //< gen/llvm/types.kspls).
-        switch r.env.get_info(r.env.get_clean_real_type(result_id)) case .result(_b, e_id)
+        switch r.env.get_info(r.env.get_clean_real_type(result_id))
+        case .result(_b, e_id)
             return result_err_at(r.type_layout(e_id))
         default
             return 0
 
     fn result_val_offset(r: Self$@, result_id: I32): Sz //<
         //< where the Result result_id's `val` starts
-        switch r.env.get_info(r.env.get_clean_real_type(result_id)) case .result(b, e_id)
+        switch r.env.get_info(r.env.get_clean_real_type(result_id))
+        case .result(b, e_id)
             return result_val_at(r.type_layout(e_id), r.type_layout(b))
         default
             return 0
@@ -134,7 +136,8 @@ impl Sema_ctx
         count: = r.env.id_to_type.len
         for $id: Sz = 1; id < count; id += 1
             $is_aggregate: = false
-            switch r.env.get_info(I32::id) case .struct_type(_s)
+            switch r.env.get_info(I32::id)
+            case .struct_type(_s)
                 is_aggregate = true
             case .enum_type(_e)
                 is_aggregate = true
@@ -150,7 +153,7 @@ impl Sema_ctx
         r.layout.scanning_all = false
 
     fn ensure_type_registry(r: Self$@, type_id: I32, err_node: base_ast.Ast_node$@):
-        Void?Sema_error //<
+        Void!Sema_error //<
             //< Before a layout is measured, **fills in the structs / enums it contains**
             //<
             //< It fills in only those not yet filled.
@@ -160,33 +163,34 @@ impl Sema_ctx
             //< does not affect the size, and a linked list would never end.
         $seen: = List<|I32|>.new(null)
         defer seen.free()
-        r.ensure_type_registry_walk(type_id, seen@, err_node)?
+        r.ensure_type_registry_walk(type_id, seen@, err_node)!
 
     priv fn ensure_type_registry_walk(r: Self$@, type_id: I32, seen: List<|I32|>$@,
-        err_node: base_ast.Ast_node$@): Void?Sema_error
+        err_node: base_ast.Ast_node$@): Void!Sema_error
         real_id: = r.env.get_clean_real_type(type_id)
         for seen_id in seen
             if seen_id == real_id
                 return
         seen.push(real_id)
-        switch r.env.get_info(real_id) case .struct_type(def)
-            r.fill_registry(real_id, def.pending_decl, err_node)?
+        switch r.env.get_info(real_id)
+        case .struct_type(def)
+            r.fill_registry(real_id, def.pending_decl, err_node)!
             for field in def.fields_list
-                r.ensure_type_registry_walk(field.type_id, seen, err_node)?
+                r.ensure_type_registry_walk(field.type_id, seen, err_node)!
         case .enum_type(def)
-            r.fill_registry(real_id, def.pending_decl, err_node)?
+            r.fill_registry(real_id, def.pending_decl, err_node)!
             for variant in def.variants_list
                 for field in variant.payload_fields
-                    r.ensure_type_registry_walk(field.type_id, seen, err_node)?
+                    r.ensure_type_registry_walk(field.type_id, seen, err_node)!
         case .array(base_id, _size)
-            r.ensure_type_registry_walk(base_id, seen, err_node)?
+            r.ensure_type_registry_walk(base_id, seen, err_node)!
         case .result(base_id, err_id)
-            r.ensure_type_registry_walk(base_id, seen, err_node)?
-            r.ensure_type_registry_walk(err_id, seen, err_node)?
+            r.ensure_type_registry_walk(base_id, seen, err_node)!
+            r.ensure_type_registry_walk(err_id, seen, err_node)!
         default {}
 
     priv fn fill_registry(r: Self$@, type_id: I32, decl: base_ast.Ast_node$@,
-        err_node: base_ast.Ast_node$@): Void?Sema_error //<
+        err_node: base_ast.Ast_node$@): Void!Sema_error //<
             //< Fills in one declaration, recording a cycle where filling it needs its own size
             //<
             //< report_registry_cycle reports the cycle.
@@ -200,7 +204,7 @@ impl Sema_ctx
             if r.registry_is_filling(type_id)
                 if r.resolving.registry_cycle_at == null
                     r.resolving.registry_cycle_at = err_node
-                throw Sema_error.not_constant
+                throw .not_constant
             return
         old_file: = r.file_name
         old_impl: = r.fn_ctx.impl_name
@@ -209,7 +213,7 @@ impl Sema_ctx
         build_res: = decl.build_type_registry(r)
         r.set_current_file(old_file)
         r.fn_ctx.impl_name = old_impl
-        build_res?
+        build_res!
 
     priv fn registry_is_filling(r: Self$@, type_id: I32): Bool
         for filling_id in r.resolving.registries
@@ -309,8 +313,8 @@ impl Sema_ctx
     // counts ("Why the round trip between a container and an external form is a trait returning a
     // table" in docs/DESIGN.md).
     fn field_offset_of(r: Self$@, type_id: I32, field_name: U8[], err_node: base_ast.Ast_node$@):
-        Sz?Sema_error
-        r.ensure_type_registry(type_id, err_node)?
+        Sz!Sema_error
+        r.ensure_type_registry(type_id, err_node)!
         real_id: = r.env.get_clean_real_type(type_id)
         clean_name: = r.env.base_type_name(real_id)
         // Caution: Use `display_str`'s name in the diagnostic; `clean_name` is internal and not in
@@ -327,13 +331,13 @@ impl Sema_ctx
                     .s("'offsetof' names a field that '\{shown.slice()\}' does not have: \
                         '\{field_name\}'")
                 r.err(err_node, r.scratch.slice())
-                throw Sema_error.invalid_argument
+                throw .invalid_argument
             return walk.size
         r.clear_scratch()
             .s("'offsetof' needs a struct type, but '\{shown.slice()\}' is not one (only a struct \
                 has named fields at fixed offsets)")
         r.err(err_node, r.scratch.slice())
-        throw Sema_error.invalid_argument
+        throw .invalid_argument
 
     fn record_folded(r: Self$@, type_id: I32, measure: sema_session_state.Layout_measure, value: Sz,
         at: Ast_node$@) //<
@@ -348,7 +352,8 @@ impl Sema_ctx
         $key: = Str_builder.new()
         defer key.free()
         key.s("\{real_id\}")
-        switch measure case .size
+        switch measure
+        case .size
             key.s(" size")
         case .field_offset(f)
             key.s(" field ").s(f)
@@ -366,7 +371,8 @@ impl Sema_ctx
         if depth >= max_type_layout_depth || sema_type_env.is_unknown(type_id) ||
             sema_type_env.is_void(type_id)
             return false
-        switch r.env.get_info(type_id) case .pointer(b)
+        switch r.env.get_info(type_id)
+        case .pointer(b)
             return sema_type_env.is_void(b) || r.c_can_measure(b, depth + 1)
         case .const_of(b)
             return sema_type_env.is_void(b) || r.c_can_measure(b, depth + 1)
@@ -431,7 +437,8 @@ impl Sema_ctx
         info: = r.env.get_info(real_id)
         machine: = base_target.current()
 
-        switch info case .pointer(_b)
+        switch info
+        case .pointer(_b)
             res.align = machine.pointer_bytes
             res.size = machine.pointer_bytes
         case .trait_type(_d)
@@ -449,11 +456,11 @@ impl Sema_ctx
                 res.align = inner_lay.align
                 res.size = inner_lay.size * size
         case .result(b, e_id)
-            // A Result (T?E) is instantiated not as a tagged union but as a flat struct (see
+            // A Result (T!E) is instantiated not as a tagged union but as a flat struct (see
             // emit_single_complex_type in gen/c/decl.kspls: bool is_err; E error_code; T val;). The
             // order here, offset=1 (the tag) → err → ok, and the alignment must match that C
             // struct's fields exactly, or sizeof / offsetof disagree with the generated C.
-            // Caution: **No alignment of its own beyond its fields'**: C gives `U8?U8` 3 bytes, and
+            // Caution: **No alignment of its own beyond its fields'**: C gives `U8!U8` 3 bytes, and
             // a floor of 8 here made `sizeof` answer 8 on LLVM, which folds it from here.
             s1: = r.calc_type_layout(b, resolving)
             s2: = r.calc_type_layout(e_id, resolving)
@@ -472,14 +479,16 @@ impl Sema_ctx
                 res.size = width
             else
                 clean_name: = r.env.base_type_name(real_id)
-                switch r.env.get_struct_def(clean_name) case .some(struct_def)
+                switch r.env.get_struct_def(clean_name)
+                case .some(struct_def)
                     fields_lay: = r.calc_fields_layout(struct_def.fields_list, resolving,
                         !struct_def.is_packed)
                     res.align =
                         struct_def.align_attr if struct_def.align_attr > 0 else fields_lay.align
                     res.size = align_to(fields_lay.size, res.align)
                 case .none
-                    switch r.env.get_enum_def(clean_name) case .some(enum_def)
+                    switch r.env.get_enum_def(clean_name)
+                    case .some(enum_def)
                         if enum_def.is_scalar()
                             tag: = r.calc_type_layout(enum_def.base_type_id, resolving)
                             res.align = tag.align

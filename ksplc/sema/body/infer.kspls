@@ -21,7 +21,7 @@ import "ksplc/sema/session/imports" as sema_session_imports
 import "ksplc/sema/session/prof" as sema_session_prof
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
-import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
+import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/chars"
 import "std/ds" { List, Map }
 import "std/str" { Str_builder }
@@ -89,7 +89,8 @@ priv fn wants_names(c: Sema_ctx$@, decl: Ast_node$@): Bool //<
     //<
     //< **Only `Bodies.mentioning` narrows it**: a declaration naming none of the names holds no
     //< site to find. The document view keeps every file's, which its hover reads.
-    switch c.bodies case .mentioning(_name)
+    switch c.bodies
+    case .mentioning(_name)
         return names_any(decl, c.body_names, null, 0)
     default
         return true
@@ -97,17 +98,19 @@ priv fn wants_names(c: Sema_ctx$@, decl: Ast_node$@): Bool //<
 priv fn wants_body(c: Sema_ctx$@, decl: Ast_node$@): Bool //< whether `c.bodies` checks this body
     if decl.loc.file().equals(c.main_file)
         return true
-    switch c.bodies case .main_file
+    switch c.bodies
+    case .main_file
         return false
     case .everywhere
         return true
     case .mentioning(_name)
         return names_any(decl, c.body_names, null, 0)
 
-fn run(r: Ast_node$@, c: Sema_ctx$@): Void?Sema_error
+fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
     base_diag.ice_assert(r != null, "infer: file_node is null")
     $has_err: = false
-    switch c.bodies case .mentioning(name)
+    switch c.bodies
+    case .mentioning(name)
         c.body_names = wanted_names(r, name)
     default {}
 
@@ -133,7 +136,10 @@ fn run(r: Ast_node$@, c: Sema_ctx$@): Void?Sema_error
             expr_node: = child.get_var_decl_expr()
             if expr_node != null && expr_node.kind_id != .k_empty
                 expected_id: = child.type_id
-                expr_id: = expr_node.infer_expr(c, expected_id)?
+                expr_id: = expr_node.infer_expr(c, expected_id)!
+                // A top-level declaration writes its type, so the initializer's is the one to go.
+                sema_body_lint_stmt.lint_type_given(c, expr_node, expected_id,
+                    "The declared type already gives it.")
 
                 type_node: = child.get_var_decl_type_node()
                 child.type_id = child.resolve_inferred_array(c, expected_id, expr_id, type_node,
@@ -229,10 +235,10 @@ fn run(r: Ast_node$@, c: Sema_ctx$@): Void?Sema_error
     c.check_unit_internal_pubs()
 
     if c.has_error() || has_err
-        throw Sema_error.analysis_failed
+        throw .analysis_failed
 
 impl Ast_node
-    priv fn infer_fn(r: Self$@, c: Sema_ctx$@): Void?Sema_error
+    priv fn infer_fn(r: Self$@, c: Sema_ctx$@): Void!Sema_error
         // Restarts the temporary variables' numbering per body. **It nests, so restore it** (the
         // reason is at enter_fn_serial in sema/body/for_in.kspls).
         saved_for_in_serial: = sema_body_for_in.enter_fn_serial()
@@ -267,7 +273,7 @@ impl Ast_node
                 is_export = true
 
         if type_node != null
-            c.fn_ctx.ret_id = type_node.resolve_type(c)?
+            c.fn_ctx.ret_id = type_node.resolve_type(c)!
             if is_export
                 c.check_ffi_safety(c.fn_ctx.ret_id, type_node)
         else
@@ -285,7 +291,7 @@ impl Ast_node
                 t_node: = item.find_child(.k_type_expr)
                 item.ice_assert(p_name.len > 0, "Function parameter is missing an identifier")
 
-                sym: = Sema_symbol.new(sema_type_scope.Sym_kind.variable, p_name, item)
+                sym: = Sema_symbol.new(.variable, p_name, item)
                 // A parameter without `$` cannot be reassigned, as with `x: = ...`; a field write
                 // on a by-value receiver (`r: Self`) is rejected by enforce_mutability walking the
                 // `.`.
@@ -293,7 +299,7 @@ impl Ast_node
                     sym.flags.is_mut = false
                 $t_id: = c.env.get_or_add("Void")
                 if t_node != null
-                    t_id = t_node.resolve_type(c)?
+                    t_id = t_node.resolve_type(c)!
                     if is_export
                         c.check_ffi_safety(t_id, t_node)
                 if t_id == c.env.get_or_add("Unknown") || t_id == c.env.get_or_add("Void")
@@ -343,7 +349,7 @@ impl Ast_node
                                 .add_child(Ast_node.new(.k_keyword, "return", block.loc))
                             block.add_child(implicit_ret)
         if has_err
-            throw Sema_error.analysis_failed
+            throw .analysis_failed
 
     priv fn holds_only_asm(r: Self$@, c: Sema_ctx$@): Bool //<
         //< Whether a `#naked` function's body is `__kspl_asm_volatile(...)` statements alone
@@ -400,7 +406,7 @@ impl Ast_node
                     splitting it into smaller, focused helpers.")
             c.hint(r, c.scratch.slice())
 
-    priv fn infer_impl_decl(r: Self$@, c: Sema_ctx$@): Void?Sema_error
+    priv fn infer_impl_decl(r: Self$@, c: Sema_ctx$@): Void!Sema_error
         $has_err: = false
         target_node: = r.get_decl_type_node()
         $trait_node: Ast_node$@ = null
@@ -408,7 +414,7 @@ impl Ast_node
             trait_node = inode
 
         if !r.is_generic_template() && target_node != null
-            t_id: = target_node.resolve_type(c)?
+            t_id: = target_node.resolve_type(c)!
             target_type: = c.env.get_str(t_id)
 
             old_impl: = c.fn_ctx.impl_name
@@ -421,12 +427,12 @@ impl Ast_node
                         has_err = true
 
             if trait_node != null
-                trait_id: = trait_node.resolve_type(c)?
+                trait_id: = trait_node.resolve_type(c)!
                 if trait_id != 0 && !sema_type_env.is_unknown(trait_id)
                     if !c.verify_trait_implementation(t_id, trait_id, trait_node)
                         has_err = true
         if has_err
-            throw Sema_error.analysis_failed
+            throw .analysis_failed
 
     priv fn infer_compile_directive(r: Ast_node$@, c: Sema_ctx$@)
         $expr_node: Ast_node$@ = null

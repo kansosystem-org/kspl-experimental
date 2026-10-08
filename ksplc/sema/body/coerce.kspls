@@ -14,7 +14,7 @@ import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/str"
 
 impl Ast_node
-    fn check_unnecessary_cast(r: Ast_node$@, c: Sema_ctx$@, expected_id: I32): Void?Sema_error
+    fn check_unnecessary_cast(r: Ast_node$@, c: Sema_ctx$@, expected_id: I32): Void!Sema_error
         if !base_core.config.run_lint_checks || r.kind_id != .k_expr_postfix || r.ival == 1
             return // a generated implicit cast (ival == 1) is not linted
         // Skipped while instantiating a generic: a cast redundant at one type argument is needed at
@@ -29,7 +29,7 @@ impl Ast_node
             child: = r.get_child(i)
             if child.is_literal("::")
                 cast_node: = r.get_child(i + 1)
-                cast_id: = cast_node.resolve_type(c)?
+                cast_id: = cast_node.resolve_type(c)!
                 original_id: = r.get_child(0).type_id
 
                 if original_id != 0 && cast_id != 0
@@ -53,7 +53,8 @@ impl Ast_node
             //< Reports type-changing casts the language does implicitly ([I0301]'s other kinds).
             //<
             //< **Called only where the expected type is known** (from check_unnecessary_cast).
-        switch implicit_cast_kind(c, real_src, real_dst, original_id, expected_id) case .numeric
+        switch implicit_cast_kind(c, real_src, real_dst, original_id, expected_id)
+        case .numeric
             c.information(r,
                 "[I0301] Unnecessary '::' cast. This numeric conversion is safe and happens \
                     implicitly.")
@@ -125,7 +126,8 @@ impl Ast_node
         if real_type_id == real_expected_id
             return expected_id
 
-        switch c.env.get_info(real_expected_id) case .trait_type(_d)
+        switch c.env.get_info(real_expected_id)
+        case .trait_type(_d)
             // **Finish building the instance's methods before making a trait value**, or the vtable
             // names a thunk with no instance (register_generic_trait_impls in mono.kspls; the test
             // is ksplc/tests/generic_vtable_test.kspls).
@@ -173,7 +175,8 @@ impl Ast_node
                 base_type_id = act_def.base_type_id
             else if r.def_node != null && r.def_node.sym_ptr != null
                 sym: = Sema_symbol$@::r.def_node.sym_ptr
-                switch sym.kind case .enum_variant(_tag)
+                switch sym.kind
+                case .enum_variant(_tag)
                     is_enum_cast = true
                 default {}
 
@@ -218,8 +221,8 @@ impl Ast_node
 
         // An expected Result: coerce to the ok type first, then wrap.
         // Caution: Do not wrap only on an exact `strip_result(expected_id) == type_id`. Then no
-        // value **requiring a conversion** would pass, and `fn f(): Trait?Err` or `fn f():
-        // Void$@?Err` could only throw.
+        // value **requiring a conversion** would pass, and `fn f(): Trait!Err` or `fn f():
+        // Void$@!Err` could only throw.
         ok_id: = c.env.strip_result(expected_id)
         if c.env.is_result(expected_id) && ok_id != expected_id && !c.env.is_result(type_id)
             if ok_id != type_id
@@ -232,9 +235,11 @@ impl Ast_node
             r.add_child(clone)
             return expected_id
 
-        switch c.env.get_info(real_expected_id) case .array(exp_b, exp_s)
+        switch c.env.get_info(real_expected_id)
+        case .array(exp_b, exp_s)
             if exp_s == -1
-                switch c.env.get_info(real_type_id) case .array(res_b, res_s)
+                switch c.env.get_info(real_type_id)
+                case .array(res_b, res_s)
                     if exp_b == res_b && res_s != -1
                         return type_id // Array size match
                 default {}

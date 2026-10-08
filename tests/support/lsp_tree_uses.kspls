@@ -34,7 +34,8 @@ priv fn refs_at(c: jsonrpc.Client$@, with_decl: Bool, arena: Arena$@): List<|jso
     //< Asks for the places that use the name at that position
     $b: = Json_builder.new(arena)
     $pos: = json.Val.null_val
-    switch draw_pos(b@, arena) case .some(v)
+    switch draw_pos(b@, arena)
+    case .some(v)
         pos = v
     case .none
         verdict.check("the place `fn draw` stands can be found", false,
@@ -45,7 +46,7 @@ priv fn refs_at(c: jsonrpc.Client$@, with_decl: Bool, arena: Arena$@): List<|jso
     ctx: = b.obj().set("includeDeclaration", b.bool_val(with_decl)).build()
     params: = b.obj().set("textDocument", doc).set("position", pos).set("context", ctx).build()
     msg: = c.request("textDocument/references", params, heavy_ms, arena) catch
-        fallback json.Val.null_val
+        fallback .null_val
     return msg.get("result").arr_list(arena)
 
 fn check_references(c: jsonrpc.Client$@, arena: Arena$@) //<
@@ -114,7 +115,7 @@ priv fn ahead(a: json.Val, b: json.Val): Bool //<
     return a.get("range").get("start").get("character").as_int(0) <= b.get("range").get("start")
         .get("character").as_int(0)
 
-priv fn name_pos(rel: U8[], lead: U8[], name: U8[], arena: Arena$@): Option<|Lsp_pos|> //<
+priv fn name_pos(rel: U8[], lead: U8[], name: U8[], arena: Arena$@): Lsp_pos? //<
     //< The position of name in the line starting with lead, as an LSP position (both from 0)
     //<
     //< Caution: **Do not hard-code the line number**: a longer comment above `fn draw` moves the
@@ -126,24 +127,24 @@ priv fn name_pos(rel: U8[], lead: U8[], name: U8[], arena: Arena$@): Option<|Lsp
         if text.starts_with(lead)
             at: = text.find_str(name)
             if at >= 0
-                return Option<|Lsp_pos|>.some(Lsp_pos::{ .line = i, .character = at })
+                return .some(Lsp_pos::{ .line = i, .character = at })
         i += 1
-    return Option<|Lsp_pos|>.none
+    return .none
 
 struct Lsp_pos
     line: Sz
     character: Sz
 
-priv fn draw_pos(b: Json_builder$@, arena: Arena$@): Option<|json.Val|> //<
+priv fn draw_pos(b: Json_builder$@, arena: Arena$@): json.Val? //<
     //< The position the renaming and the references both ask at
     //<
     //< **One place** — computed separately, one of the two could keep pointing at the old place.
-    switch name_pos(rename_file, "fn draw(", rename_old, arena) case .some(p)
-        return Option<|json.Val|>
-            .some(b.obj().set("line", b.int_val(p.line))
+    switch name_pos(rename_file, "fn draw(", rename_old, arena)
+    case .some(p)
+        return .some(b.obj().set("line", b.int_val(p.line))
             .set("character", b.int_val(p.character)).build())
     case .none {}
-    return Option<|json.Val|>.none
+    return .none
 
 priv fn span_at(uri: U8[], line: Sz, from: Sz, to: Sz, arena: Arena$@): U8[]
     $i: Sz = 0
@@ -156,7 +157,8 @@ priv fn span_at(uri: U8[], line: Sz, from: Sz, to: Sz, arena: Arena$@): U8[]
 fn check_rename(c: jsonrpc.Client$@, arena: Arena$@)
     $b: = Json_builder.new(arena)
     $pos: = json.Val.null_val
-    switch draw_pos(b@, arena) case .some(v)
+    switch draw_pos(b@, arena)
+    case .some(v)
         pos = v
     case .none
         verdict.check("the place `fn draw` stands can be found", false,

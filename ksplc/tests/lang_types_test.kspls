@@ -160,7 +160,7 @@ fn test_enum_variant_name()
     assert(c_name.equals("two"), "variant_name has grown even with a fmt of one's own")
 
     // On another file's (std's) enum too
-    e: = Option<|I32|>.none
+    e: I32? = .none
     assert(e.variant_name().equals("none"), "it is synthesized for a generic enum too")
 
     verdict
@@ -317,7 +317,9 @@ fn test_embedded_nul_is_rejected_at_c_boundary()
         panic("get_env must reject a name containing a NUL")
 
     // A name containing no NUL is looked up.
-    switch sys.get_env("PATH") case .some {} case .none
+    switch sys.get_env("PATH")
+    case .some {}
+    case .none
         panic("get_env must still resolve a clean name")
 
     verdict
@@ -651,7 +653,7 @@ fn test_trait_upcast_through_an_alias_pointer() //<
 
     verdict.pass("a pointer to an alias conforms and dispatches as its base type.")
 // ==========================================
-// A return value needing a conversion inside a Result, such as `Trait?Err` / `Void$@?Err`.
+// A return value needing a conversion inside a Result, such as `Trait!Err` / `Void$@!Err`.
 // Against a Result expected type, convert to the ok type first, then wrap; wrapping only on an
 // exact match leaves these functions able only to throw.
 // ==========================================
@@ -660,16 +662,16 @@ priv enum Wrap_err
 
 priv $wrap_global: Up_sq = ::{ .n = 6 }
 
-priv fn wrap_from_ptr(p: Up_sq$@): Up_shape?Wrap_err
+priv fn wrap_from_ptr(p: Up_sq$@): Up_shape!Wrap_err
     return p
 
-priv fn wrap_from_global(): Up_shape?Wrap_err
+priv fn wrap_from_global(): Up_shape!Wrap_err
     return wrap_global
 
-priv fn wrap_throws(): Up_shape?Wrap_err
-    throw Wrap_err.bad
+priv fn wrap_throws(): Up_shape!Wrap_err
+    throw .bad
 
-priv fn wrap_void_ptr(p: I32$@): Void$@?Wrap_err
+priv fn wrap_void_ptr(p: I32$@): Void$@!Wrap_err
     return p
 
 fn test_result_wraps_coerced_value()
@@ -702,7 +704,7 @@ fn test_result_wraps_coerced_value()
 
     verdict.pass("")
 // ==========================================
-// Checks `return f()?;` for a function returning `Void`.
+// Checks `return f()!;` for a function returning `Void`.
 // Caution: Test a Void call not wrapped in a Result with it. `return plain_void(x);`'s call appears
 // only in that expression, so skipping too much silently deletes the call and its side effect.
 // ==========================================
@@ -711,33 +713,33 @@ priv enum Void_ret_err
 
 priv $void_ret_side: I32 = 0
 
-priv fn void_ret_inner(x: I32): Void?Void_ret_err
+priv fn void_ret_inner(x: I32): Void!Void_ret_err
     if x < 0
-        throw Void_ret_err.bad
+        throw .bad
     void_ret_side += x
 
 priv fn void_ret_plain(x: I32)
     void_ret_side += x * 10
 
-priv fn void_ret_forward(x: I32): Void?Void_ret_err
-    return void_ret_inner(x)?
+priv fn void_ret_forward(x: I32): Void!Void_ret_err
+    return void_ret_inner(x)!
 
-priv fn void_ret_wrap_plain(x: I32): Void?Void_ret_err
+priv fn void_ret_wrap_plain(x: I32): Void!Void_ret_err
     return void_ret_plain(x)
 
 fn test_void_result_return_forms()
-    verdict.start("[Void?E] the return of a Result returning Void test...")
+    verdict.start("[Void!E] the return of a Result returning Void test...")
 
     void_ret_side = 0
     void_ret_forward(3) catch
         assert(false, "forwarding a successful Void result must not throw")
         return
-    assert(void_ret_side == 3, "`return f()?;` performs the call inside exactly once")
+    assert(void_ret_side == 3, "`return f()!;` performs the call inside exactly once")
 
     $threw: = false
     void_ret_forward(-1) catch
         threw = true
-    assert(threw, "`return f()?;` hands a failure to the caller")
+    assert(threw, "`return f()!;` hands a failure to the caller")
     assert(void_ret_side == 3, "a failed call leaves no side effect")
 
     void_ret_wrap_plain(2) catch
@@ -745,7 +747,7 @@ fn test_void_result_return_forms()
         return
     assert(void_ret_side == 23, "`return plain_void(x);`'s call does not disappear")
 
-    verdict.pass("a collapsed `?` is skipped and an uncollapsed Void is put out.")
+    verdict.pass("a collapsed `!` is skipped and an uncollapsed Void is put out.")
 
 // ==========================================
 // The implicit conversion that relaxes immutability works through an alias too (a raw

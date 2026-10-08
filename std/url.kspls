@@ -43,7 +43,7 @@ pub fn decode_component( //< percent-decodes a path piece, leaving `+` as a `+`
     //< "+"; in a URI path a "+" is just a "+" (RFC 3986). For a form, use decode_form.
     s: U8[], //< the escaped text as it arrived
     arena: Arena$@, //< where the result goes; null means the heap, freed with `dealloc`
-): U8[]?Url_error //< the decoded text; a broken `%XX` fails, having allocated nothing
+): U8[]!Url_error //< the decoded text; a broken `%XX` fails, having allocated nothing
     return decode_impl(s, false, arena)
 
 pub fn decode_form( //< percent-decodes as a form does, turning `+` into a space
@@ -51,17 +51,17 @@ pub fn decode_form( //< percent-decodes as a form does, turning `+` into a space
     //< Use it for the names and values of a query string, and for a form body.
     s: U8[], //< the escaped text as it arrived
     arena: Arena$@, //< where the result goes; null means the heap, freed with `dealloc`
-): U8[]?Url_error //< the decoded text; a broken `%XX` fails, having allocated nothing
+): U8[]!Url_error //< the decoded text; a broken `%XX` fails, having allocated nothing
     return decode_impl(s, true, arena)
 
-priv fn decode_impl(s: U8[], plus_is_space: Bool, arena: Arena$@): U8[]?Url_error //<
+priv fn decode_impl(s: U8[], plus_is_space: Bool, arena: Arena$@): U8[]!Url_error //<
     //< Checks every `%XX` and counts the bytes first, so a failure has nothing to free
     $n: Sz = 0
     $i: Sz = 0
     for i < s.len
         if s[i] == '%'
             if i + 2 >= s.len || s[i + 1].hex_val() < 0 || s[i + 2].hex_val() < 0
-                throw Url_error.invalid_percent_encoding
+                throw .invalid_percent_encoding
             i += 3
         else
             i += 1
@@ -91,9 +91,9 @@ pub struct Query_param //< one `name=value` pair of a query string
 pub fn parse_query( //< splits a query string into a linked list of pairs
     //<
     //< Each name and value is decoded with `decode_form()` and copied into the arena, in order.
-    query: U8[], //< the text after the `?`, without the `?` itself
+    query: U8[], //< the text after the `!`, without the `!` itself
     arena: Arena$@, //< where the decoded names and values are copied
-): Query_param$@?Url_error //< the first pair, or null for an empty query; a broken `%XX` fails
+): Query_param$@!Url_error //< the first pair, or null for an empty query; a broken `%XX` fails
     $head: Query_param$@ = null
     $tail: Query_param$@ = null
     q: = query.strip_prefix("?")
@@ -110,8 +110,8 @@ pub fn parse_query( //< splits a query string into a linked list of pairs
             if eq >= 0
                 raw_name = pair.sub(0, eq)
                 raw_value = pair.sub_from(eq + 1)
-            param: Query_param = ::{ .name = U8$[]::decode_form(raw_name, arena)?,
-                .value = U8$[]::decode_form(raw_value, arena)?, .next = null }
+            param: Query_param = ::{ .name = U8$[]::decode_form(raw_name, arena)!,
+                .value = U8$[]::decode_form(raw_value, arena)!, .next = null }
             node: = arena.create(param)
             if head == null
                 head = node

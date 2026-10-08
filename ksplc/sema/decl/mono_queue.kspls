@@ -72,7 +72,7 @@ impl Sema_ctx
             .push(sema_session_state.Pending_inst::{ .node = node, .impl_name = impl_name,
             .bound_args = r.snapshot_generic_args(), .depth = depth })
 
-    fn ensure_instance_methods(r: Self$@, type_id: I32): Void?Sema_error //<
+    fn ensure_instance_methods(r: Self$@, type_id: I32): Void!Sema_error //<
         //< Builds the method table of the instance type_id where its building was deferred
         //<
         //< Caution: **Every function that reads a table must go through here**, or the table is
@@ -85,7 +85,7 @@ impl Sema_ctx
         // Caution: **Do not reverse the order**: an instance created in the same expression
         // (`b.moved(true).get()`) would come back with no table: "there is no such method".
         if r.is_table_pending(real)
-            r.drain_pending_instances()?
+            r.drain_pending_instances()!
         held: = r.mono.deferred_methods.get(real) catch empty_pending()
         if held.type_id == 0
             return
@@ -199,7 +199,7 @@ impl Sema_ctx
             .push(sema_session_state.Pending_methods::{ .type_id = type_id, .inst_name = inst_name,
             .depth = r.generics.inst_chain_depth + 1, .awaits_pull = true })
 
-    fn drain_pending_instances(r: Self$@): Void?Sema_error //<
+    fn drain_pending_instances(r: Self$@): Void!Sema_error //<
         //< Builds queued instances' method tables and trait conformances until the queue empties
         //<
         //< The queue grows during the walk: read the raw len on every iteration (`for x in list`
@@ -239,7 +239,7 @@ impl Sema_ctx
                         a free generic function taking the receiver")
                 r.err(tmpl_node if tmpl_node != null else r.generics.inst_site,
                     r.scratch.slice())
-                throw Sema_error.analysis_failed
+                throw .analysis_failed
             r.generics.inst_chain_depth = p.depth
             real_id: = r.env.get_real_type(p.type_id)
             r.mono.deferred_methods.remove(real_id)
@@ -261,7 +261,7 @@ impl Sema_ctx
                 tmpl_node.find_child(.k_type_gen_params) if tmpl_node != null else null
             if gen_params == null
                 if !r.has_failed_constraint(p.inst_name)
-                    r.instantiate_generic_methods(real_id, inst)?
+                    r.instantiate_generic_methods(real_id, inst)!
                 continue
             $backup: = r.backup_mono_state()
             defer r.restore_mono_state(backup@)
@@ -271,7 +271,7 @@ impl Sema_ctx
             // Caution: **Complete only the conformance registration first** (indexing, upcasting
             // and constraints read it), **after binding**, or C gets `unknown type name 'T'`.
             if p.awaits_pull
-                r.register_generic_trait_impls(real_id, inst, p.inst_name, false)?
+                r.register_generic_trait_impls(real_id, inst, p.inst_name, false)!
                 // **Only an ARC-managed type is not deferred.** lower synthesizes its retain /
                 // release (synth_arc_stmt in lower/arc.kspls), which looks nothing up; with no
                 // table the value silently leaks.
@@ -281,8 +281,8 @@ impl Sema_ctx
             // A body that violated a constraint is not checked, so as not to bury the real
             // diagnostic (constraint_failed in sema/session/state.kspls).
             if !r.has_failed_constraint(p.inst_name)
-                r.instantiate_generic_methods(real_id, inst)?
+                r.instantiate_generic_methods(real_id, inst)!
             // The conformance too, or `impl<|T|> List<|T|>: Index...` stays unattached and `for x
             // in list` fails with "pointer indexing is forbidden" inside std.
-            r.register_generic_trait_impls(real_id, inst, p.inst_name, true)?
+            r.register_generic_trait_impls(real_id, inst, p.inst_name, true)!
         r.mono.pending_methods.len = 0

@@ -496,7 +496,7 @@ Only the font is inherited. **Space before and after a paragraph, and the indent
 
 A frame's position on a slide is stored on the block itself: not in its style, and not in a table beside the document. The same goes for every value that differs from one block to the next.
 
-Of the three arrangements, only absolute coordinates cannot work out where a block goes from the element before it. Every frame's position is its own, so `Block` holds `frame: Option<|Rect|>` ([`model/doc.kspls`](../model/doc.kspls)).
+Of the three arrangements, only absolute coordinates cannot work out where a block goes from the element before it. Every frame's position is its own, so `Block` holds `frame: Rect?` ([`model/doc.kspls`](../model/doc.kspls)).
 
 **Do not put it in the style**: a style is shared by name, and an unshared value would need one style per frame. Nor outside the document: held in a separate table, the positions alone would be lost on saving and reading back.
 

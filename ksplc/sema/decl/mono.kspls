@@ -100,16 +100,16 @@ fn prepare_inst_node(c: Sema_ctx$@, tmpl_node: Ast_node$@, inst_name: U8[], args
 impl Sema_ctx
     // Finds a cached instance or clones the AST; on none, the caller returns inst_name unchanged.
     fn try_prepare_instance(r: Self$@, base_name: U8[], full_inst_name: U8[], inst_name: U8[],
-        args: I32[]): Option<|Ast_node$@|>
+        args: I32[]): Ast_node$@?
         // Caution: Look up the mangled-name key too. The literal text `Base<|args|>` varies with
         // qualification, and the same instance created twice fails in C with `redefinition of ...`.
         cached_inst: = r.env.instantiated_nodes.get(full_inst_name) catch (r.env.instantiated_nodes
             .get(inst_name) catch null)
         tmpl_node: = r.generics.templates.get(base_name) catch null
         if cached_inst != null || tmpl_node == null
-            return Option<|Ast_node$@|>.none
+            return .none
         inst: = prepare_inst_node(r, tmpl_node, inst_name, args)
-        return Option<|Ast_node$@|>.some(inst)
+        return .some(inst)
 
     priv fn declare_inst_trait_method(r: Self$@, inst_name: U8[], m_sym: Sema_symbol$@) //<
         //< Adds an instantiated trait's methods to the name table as `<instantiation>.<method>`
@@ -138,7 +138,7 @@ impl Sema_ctx
         defer inst.free()
         return r.env.get_or_add(base_core.arena.dup_str(inst.slice()))
 
-    fn instantiate_struct(r: Self$@, base_name: U8[], args: I32[]): Str_builder?Sema_error //<
+    fn instantiate_struct(r: Self$@, base_name: U8[], args: I32[]): Str_builder!Sema_error //<
         //< Makes the instance of the generic type base_name (an FQN) binding args, once
         //<
         //< It returns the instance's mangled name, derived from its record (`Instance` in
@@ -156,7 +156,7 @@ impl Sema_ctx
         $shares_c_repr: = false
         if plain_rec: = r.env.strip_variance(inst_rec)
             shares_c_repr = true
-            $plain: = r.instantiate_struct(base_name, plain_rec.args)?
+            $plain: = r.instantiate_struct(base_name, plain_rec.args)!
             plain.free()
         $inst_name: = Str_builder.new()
         r.env.instance_c_name_to(inst_rec, inst_name)
@@ -169,7 +169,8 @@ impl Sema_ctx
         inst_name_str: = inst_name.slice()
         prepared: = r.try_prepare_instance(base_name, full_inst_name_str, inst_name_str, args)
         $inst_node: Ast_node$@ = null
-        switch prepared case .some(in_node)
+        switch prepared
+        case .some(in_node)
             inst_node = in_node
         case .none
             return inst_name
@@ -180,7 +181,7 @@ impl Sema_ctx
             r.err(inst_node,
                 "generic type instantiation chain too deep (possible unbounded recursive generic \
                     type)")
-            throw Sema_error.analysis_failed
+            throw .analysis_failed
 
         arena_inst_name: = base_core.arena.dup_str(inst_name.slice())
 
@@ -208,28 +209,28 @@ impl Sema_ctx
         if is_trait
             trait_def: = sema_type_def.Trait_def.new()
             entry: = r.env.id_to_type.get(sym.type_id)
-            entry.info = sema_type_env.Info.trait_type(trait_def)
+            entry.info = .trait_type(trait_def)
 
             trait_vis: = sym.vis
             for m_node in inst_node.children
                 // A method with a default body is handled the same way (as in registry.kspls).
                 if m_node.kind_id == .k_decl_fn_proto || m_node.kind_id == .k_decl_fn
-                    m_sym: = r.add_trait_method(m_node, trait_def, trait_vis)?
+                    m_sym: = r.add_trait_method(m_node, trait_def, trait_vis)!
                     if m_sym != null
                         r.declare_inst_trait_method(arena_inst_name, m_sym)
         else if is_enum
             // A generic enum: the substituted clone's variants resolve under generics.args, as a
             // plain enum's do.
             enum_def: = sema_type_def.Enum_def.new(r.env.get_or_add("I32"))
-            inst_node.fill_enum_variants(r, enum_def, sym.type_id, false)?
+            inst_node.fill_enum_variants(r, enum_def, sym.type_id, false)!
             entry: = r.env.id_to_type.get(sym.type_id)
-            entry.info = sema_type_env.Info.enum_type(enum_def)
+            entry.info = .enum_type(enum_def)
             r.queue_instance_methods(sym.type_id, arena_inst_name)
         else
             struct_def: = sema_type_def.Struct_def.new()
-            inst_node.fill_struct_fields(r, struct_def)?
+            inst_node.fill_struct_fields(r, struct_def)!
             entry: = r.env.id_to_type.get(sym.type_id)
-            entry.info = sema_type_env.Info.struct_type(struct_def)
+            entry.info = .struct_type(struct_def)
             r.queue_instance_methods(sym.type_id, arena_inst_name)
 
         r.restore_mono_state(backup@)
@@ -271,7 +272,8 @@ impl Sema_ctx
         $p_idx: Sz = 0
         for p in params_node.children
             $param_id_node: Ast_node$@ = null
-            switch p.gen_param_id_node() case .some(id_node)
+            switch p.gen_param_id_node()
+            case .some(id_node)
                 param_id_node = id_node
             case .none
                 continue
@@ -346,7 +348,7 @@ impl Sema_ctx
     // Caution: **Do not defer it**: indexing, upcasting and constraints read it; deferred, `a[i]`
     // degrades to a plain array index and an `emit_postfix_array` ICE.
     fn register_generic_trait_impls(r: Self$@, target_id: I32, inst: sema_type_env.Instance,
-        inst_name: U8[], with_table: Bool): Void?Sema_error
+        inst_name: U8[], with_table: Bool): Void!Sema_error
         // **Restore the current file on the way out**, or the caller's visibility is checked as if
         // in the impl's file.
         entry_file: = r.file_name
@@ -399,7 +401,7 @@ impl Sema_ctx
             raw_target_type.slice(), inst.args, r.variance_mask_of(inst.template))
 
     fn instantiate_generic_methods(r: Self$@, type_id: I32, inst: sema_type_env.Instance):
-        Void?Sema_error
+        Void!Sema_error
         inst_nodes: = List<|Ast_node$@|>.create(base_core.arena)
         real_id: = r.env.get_real_type(type_id)
         t_entry: = r.env.id_to_type.get(real_id)
@@ -422,7 +424,7 @@ impl Sema_ctx
                 // skip_infer=true: the loop below queues the bodies on pending.
                 $inst_m_name: = r.instantiate_fn(Fn_instance::{ .template =
                     join_dotted_name(inst.template, m_name), .owner = type_id,
-                    .args = I32[]::{} }, true)?
+                    .args = I32[]::{} }, true)!
                 defer inst_m_name.free()
                 arena_inst_m_name: = base_core.arena.dup_str(inst_m_name.slice())
 
@@ -452,7 +454,8 @@ impl Sema_ctx
             //< method), `app_Box_I64<|U16|>.gm` / `app_Box_I64_gm_U16` (an instance's method with
             //< its own), `app.Box<|I64|>.get` / `app_Box_I64_get` (an instance's method with none).
             //< Caution: **Name a function instance through here only**: two spellings, two copies.
-        switch owner case .free
+        switch owner
+        case .free
             key.s(fi.template).s("<|")
             r.env.type_args_to(fi.args, key)
             key.s("|>")
@@ -473,7 +476,7 @@ impl Sema_ctx
             key.s("|>.").s(fn_method_name(fi))
             c_name.s(type_name).s("_").s(fn_method_name(fi))
 
-    priv fn fn_owner_of(r: Self$@, fi: Fn_instance): Fn_owner?Sema_error //<
+    priv fn fn_owner_of(r: Self$@, fi: Fn_instance): Fn_owner!Sema_error //<
         //< Which of fn_instance_names's shapes fi has, its type instantiated where it must be
         //<
         //< A method of a generic type's instance binds that instance's arguments: with its own
@@ -493,12 +496,12 @@ impl Sema_ctx
                     return .own_args(type_name)
                 return .type_args(type_name, inst.template, inst.args)
         // Reached through the template's own name, the type arguments are the call's.
-        $tmp_b: = r.instantiate_struct(type_fqn, fi.args)?
+        $tmp_b: = r.instantiate_struct(type_fqn, fi.args)!
         type_name: = base_core.arena.dup_str(tmp_b.slice())
         tmp_b.free()
         return .type_args(type_name, type_fqn, fi.args)
 
-    fn instantiate_fn(r: Self$@, fi: Fn_instance, skip_infer: Bool): Str_builder?Sema_error //<
+    fn instantiate_fn(r: Self$@, fi: Fn_instance, skip_infer: Bool): Str_builder!Sema_error //<
         //< Makes the instance fi records of a generic function or method, once
         //<
         //< It returns the instance's mangled name (fn_instance_names derives it). The signature is
@@ -508,11 +511,12 @@ impl Sema_ctx
         r.env.type_args_to(fi.args, bound_text)
         if sema_decl_mono_name.contains_unknown(bound_text.slice())
             return sema_decl_mono_name.unknown_type_str()
-        owner: = r.fn_owner_of(fi)?
+        owner: = r.fn_owner_of(fi)!
         // The type arguments the template's own parameters bind: a table's method binds its
         // type's.
         $bound_args: I32[] = fi.args
-        switch owner case .type_args(_n, _t, type_args)
+        switch owner
+        case .type_args(_n, _t, type_args)
             bound_args = type_args
         default {}
         $is_method: = false
@@ -523,7 +527,8 @@ impl Sema_ctx
         if fi.template.rfind_char_out('.') >= 0
             is_method = true
             struct_inst_name_str = fn_type_fqn(fi)
-        switch owner case .own_args(type_name)
+        switch owner
+        case .own_args(type_name)
             struct_inst_name_str = type_name
         case .type_args(type_name, _t, _a)
             struct_inst_name_str = type_name
@@ -535,7 +540,8 @@ impl Sema_ctx
         r.fn_instance_names(fi, owner, full_inst_name@, inst_name@)
 
         $backup: = r.backup_mono_state()
-        switch owner case .own_args(_n)
+        switch owner
+        case .own_args(_n)
             // Bind the type's own parameters from the instance's record, for this call only (the
             // struct's instantiation left generics.args long ago); restore_mono_state undoes it.
             if inst: = r.env.instance_of(fi.owner)
@@ -549,7 +555,8 @@ impl Sema_ctx
         in_s: = inst_name.slice()
         prepared: = r.try_prepare_instance(fi.template, fin_s, in_s, bound_args)
         $inst_node: Ast_node$@ = null
-        switch prepared case .some(in_node)
+        switch prepared
+        case .some(in_node)
             inst_node = in_node
         case .none
             return inst_name
@@ -560,7 +567,7 @@ impl Sema_ctx
             r.err(inst_node,
                 "generic function instantiation chain too deep (possible unbounded recursive \
                     generic function)")
-            throw Sema_error.analysis_failed
+            throw .analysis_failed
         r.register_inst_node(full_inst_name.slice(), inst_name.slice(), inst_node, true)
 
         arena_inst_name: = base_core.arena.dup_str(inst_name.slice())

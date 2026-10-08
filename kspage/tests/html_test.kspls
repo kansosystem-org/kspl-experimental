@@ -1,9 +1,7 @@
-import "kspage/model/collect" { Collect }
-import "kspage/model/doc" { Axis, Doc }
+import "kspage/model/doc" { Doc }
 // `html.write` needs metrics (a line-height multiple scales one line's height). Why these are
 // fixed: the header of `kspage/model/fixed_font.kspls`.
 import "kspage/model/fixed_font"
-import "kspage/model/marker"
 import "kspage/model/paint"
 import "kspage/model/run"
 import "kspage/model/style" { Sheet }
@@ -40,8 +38,8 @@ priv fn sample_sheet(arena: Arena$@): Sheet$@ //<
     //< h1 inherits the typeface and italic from its parent.
     sheet: = Sheet.new(base.root_font(), arena)
     $big: paint.Font_spec = paint.inherit_all()
-    big.size_px = Option<|F32|>.some(28.0)
-    big.weight = Option<|U16|>.some(700U16)
+    big.size_px = .some(28.0)
+    big.weight = .some(700U16)
     h1: = sheet.add("h1", big)
     h1.space_after = 8.0
     h1.indent = 24.0
@@ -117,9 +115,9 @@ fn test_column_widths_become_a_colgroup()
     defer arena.free()
     d: = Doc.new(arena)
     t: = d.add_block("table")
-    t.set_size(Axis.column, 0, Option<|F32|>.some(80.0))
-    t.set_size(Axis.column, 1, Option<|F32|>.none)
-    t.set_size(Axis.row, 0, Option<|F32|>.some(30.0))
+    t.set_size(.column, 0, .some(80.0))
+    t.set_size(.column, 1, .none)
+    t.set_size(.row, 0, .some(30.0))
     r: = t.add_child("row")
     r.add_child("cell").add_text("a")
     r.add_child("cell").add_text("b")
@@ -228,8 +226,8 @@ fn test_colors_become_css_declarations() //< a color becomes a CSS declaration
     defer sb.free()
     sheet: = sample_sheet(arena)
     ink: = sheet.find("h1").unwrap_or(null)
-    ink.ink.color = Option<|U32|>.some(0xff0000U32)
-    ink.ink.background = Option<|U32|>.some(0x00ff00U32)
+    ink.ink.color = .some(0xff0000U32)
+    ink.ink.background = .some(0x00ff00U32)
     html.write(Doc.new(arena), sheet, fixed_font.make(), sb@)
     out: = sb.slice()
     assert(base.has(out, "color: #ff0000;"), "the text colour becomes a declaration")
@@ -274,8 +272,8 @@ fn test_a_rule_and_a_fill_become_css_declarations() //<
     edged: = sheet.find("h1").unwrap_or(null)
     edged.rule_width = 2.0
     edged.rule_color = 0xccccccU32
-    edged.fill = Option<|U32|>.some(0xeeeeeeU32)
-    edged.ink.background = Option<|U32|>.some(0x00ff00U32)
+    edged.fill = .some(0xeeeeeeU32)
+    edged.ink.background = .some(0x00ff00U32)
     html.write(Doc.new(arena), sheet, fixed_font.make(), sb@)
     out: = sb.slice()
     assert(base.has(out, "border: 2px solid #cccccc;"), "the line becomes a declaration")
@@ -293,8 +291,8 @@ fn test_a_marker_is_written_as_text() //< a marker is written as text
     defer arena.free()
     sheet: = sample_sheet(arena)
     // The marker is text that comes from the style, so **escape it**.
-    sheet.add("item", paint.inherit_all()).marker = marker.Marker.bullet("<>")
-    sheet.add("step", paint.inherit_all()).marker = marker.Marker.number(".")
+    sheet.add("item", paint.inherit_all()).marker = .bullet("<>")
+    sheet.add("step", paint.inherit_all()).marker = .number(".")
     d: = Doc.new(arena)
     d.add_block("item").add_text("a")
     d.add_block("step").add_text("b")
@@ -324,7 +322,7 @@ fn test_a_serial_number_is_written_as_text() //< a running number is written as 
     arena: = Arena.new(64 * 1024)
     defer arena.free()
     sheet: = sample_sheet(arena)
-    sheet.add("figure", paint.inherit_all()).marker = marker.Marker.serial("Figure ", ". ")
+    sheet.add("figure", paint.inherit_all()).marker = .serial("Figure ", ". ")
     d: = Doc.new(arena)
     d.add_block("figure").add_text("a")
     d.add_block("body").add_text("b")
@@ -350,11 +348,11 @@ fn test_lines_become_one_decoration_declaration() //<
     defer sb.free()
     sheet: = sample_sheet(arena)
     both: = sheet.find("h1").unwrap_or(null)
-    both.ink.underline = Option<|Bool|>.some(true)
-    both.ink.strike = Option<|Bool|>.some(true)
+    both.ink.underline = .some(true)
+    both.ink.strike = .some(true)
     // "Do not draw it" becomes a declaration too (it differs from no setting).
     off: = sheet.add("plain", paint.inherit_all())
-    off.ink.underline = Option<|Bool|>.some(false)
+    off.ink.underline = .some(false)
     html.write(Doc.new(arena), sheet, fixed_font.make(), sb@)
     out: = sb.slice()
     assert(base.has(out, "text-decoration-line: underline line-through;"),
@@ -505,7 +503,7 @@ fn test_a_font_name_cannot_break_out_of_the_rule() //< a font's name is written 
     defer arena.free()
     sheet: = Sheet.new(base.root_font(), arena)
     $spec: paint.Font_spec = paint.inherit_all()
-    spec.family = Option<|U8[]|>.some("a; } body { display: none } .x {")
+    spec.family = .some("a; } body { display: none } .x {")
     sheet.add("body", spec)
     d: = Doc.new(arena)
     d.add_block("body").add_text("a")
@@ -517,7 +515,7 @@ fn test_a_font_name_cannot_break_out_of_the_rule() //< a font's name is written 
     assert(!base.has(out, "display: none"), "the rule slipped in does not come out")
     assert(!base.has(out, "} body {"), "it cannot break out of the declaration")
     // A list of names passes as it is (only what cannot be in a font name is dropped).
-    spec.family = Option<|U8[]|>.some("Helvetica, Arial, sans-serif")
+    spec.family = .some("Helvetica, Arial, sans-serif")
     sheet2: = Sheet.new(base.root_font(), arena)
     sheet2.add("body", spec)
     sb.clear()
@@ -559,7 +557,7 @@ fn test_the_contents_is_generated_in_the_html() //<
     sheet: = sample_sheet(arena)
     sheet.find("h1").unwrap_or(null).outline = 1
     toc: = sheet.add("toc", paint.inherit_all())
-    toc.collect = Collect.contents
+    toc.collect = .contents
     toc.indent = 16.0
     d: = Doc.new(arena)
     d.add_block("toc")
@@ -584,7 +582,7 @@ fn test_notes_become_marks_and_a_list() //<
     arena: = Arena.new(64 * 1024)
     defer arena.free()
     sheet: = sample_sheet(arena)
-    sheet.add("footnote", paint.inherit_all()).collect = Collect.notes
+    sheet.add("footnote", paint.inherit_all()).collect = .notes
     d: = Doc.new(arena)
     p: = d.add_block("body")
     p.add_text("body").note = "the note's <text>"

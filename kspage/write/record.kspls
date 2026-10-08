@@ -33,7 +33,7 @@ struct Size_op //< the operation that restores a column's width (or a row's heig
     table: Block$@
     axis: Axis
     index: Sz
-    was: Option<|F32|>
+    was: F32?
 
 struct Span_op //< the operation that changes a cell's merge
     //<
@@ -58,7 +58,7 @@ struct Line_op //< the operation that adds or removes one table row (or column)
         //< 0 where it had no cell there. Empty where the column is a new one.
         //< Caution: **It cannot be recomputed from the table** — a cell narrowed from two columns
         //< looks like one that spanned one, so the rows would get out of step.
-    size: Option<|F32|> //<
+    size: F32? //<
         //< The size setting of that row or column. Restore it with the row or column.
 
 struct Run_op //< the operation that adds or removes one inline
@@ -161,7 +161,7 @@ struct Frame_op //< the operation that restores a slide frame's position
     //< Caution: **Also record "no position was set".** A frame with none covers the whole slide;
     //< restored as a rectangle of 0 it can no longer be seen.
     block: Block$@
-    was: Option<|Rect|>
+    was: Rect?
 
 enum Op //< the operation that undoes one change
     text(t: Text_op$@)
@@ -201,7 +201,8 @@ impl Again
         //<
         //< Caution: **Say the name of what would happen** (a key that silently does nothing draws
         //< the most complaints).
-        switch a case .none
+        switch a
+        case .none
             return ""
         case .add_line(axis)
             return line_word(axis, false)
@@ -231,11 +232,12 @@ fn push_op(into: Step$@, arena: Arena$@, n: Inline$@, at: Sz, put_back: Bool, le
     for $i: Sz = 0; i < gone.len; i += 1
         buf.push((gone.ptr + i)$)
     op: = Text_op::{ .inline = n, .at = at, .put_back = put_back, .text = buf, .len = len }
-    into.ops.push(Op.text(arena.create(op)))
+    into.ops.push(.text(arena.create(op)))
 
 fn line_word(axis: Axis, put_back: Bool): U8[] //<
     //< What adding or removing a row (or column) is called
-    switch axis case .row
+    switch axis
+    case .row
         return "Deleted a row" if put_back else "Put a row in"
     case .column
         return "Deleted a column" if put_back else "Put a column in"
@@ -246,7 +248,8 @@ fn last_moved(into: Step$@, table: Block$@, axis: Axis, index: Sz): Bool //<
     //< While dragging, the first setting saved is enough to undo.
     if into.ops.len <= 0
         return false
-    switch into.ops.get(into.ops.len - 1) case .size(s)
+    switch into.ops.get(into.ops.len - 1)
+    case .size(s)
         return s.table == table && s.axis == axis && s.index == index
     case .text, .line, .run, .block, .style, .frame, .look, .paper, .sheet, .span, .href, .note,
         .remark, .name, .block_face, .aside, .refer, .step {}
@@ -258,7 +261,8 @@ fn last_framed(into: Step$@, b: Block$@): Bool //<
     //< No record is added while it is being dragged (the same reason as `last_moved`).
     if into.ops.len <= 0
         return false
-    switch into.ops.get(into.ops.len - 1) case .frame(f)
+    switch into.ops.get(into.ops.len - 1)
+    case .frame(f)
         return f.block == b
     case .text, .size, .line, .run, .block, .style, .look, .paper, .sheet, .span, .href, .note,
         .remark, .name, .block_face, .aside, .refer, .step {}

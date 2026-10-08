@@ -24,7 +24,8 @@ enum Task_state //<
 
 impl Task_state
     fn name(r: Self): U8$[] //< turns a task's state into a string for display
-        switch r case .ready
+        switch r
+        case .ready
             return "ready"
         case .running
             return "running"
@@ -178,7 +179,7 @@ priv fn wakes_by_clock(t: Task$@): Bool //<
     //<
     //< tickless idle uses it to find the next time to move the clock to.
     return t.state == .delayed || (t.state == .blocked && t.deadline_set)
-priv fn pick_next(): Option<|Task$@|> //< picks the runnable task with the highest priority
+priv fn pick_next(): Task$@? //< picks the runnable task with the highest priority
     //<
     //< **With none runnable it moves the clock forward without waiting in real time**, decoupling
     //< g_tick from real time, even with preemption enabled. That buys determinism, and under
@@ -198,7 +199,7 @@ priv fn pick_next(): Option<|Task$@|> //< picks the runnable task with the highe
                 best_idx = idx
         if best != null
             g_rr_start = (best_idx + 1) % g_task_count
-            return Option<|Task$@|>.some(best)
+            return .some(best)
         // No runnable task: move the clock to the nearest expiry and wake that task
         $earliest: U64 = 0
         $have_delayed: = false
@@ -208,7 +209,7 @@ priv fn pick_next(): Option<|Task$@|> //< picks the runnable task with the highe
                 earliest = t.delay_until
                 have_delayed = true
         if !have_delayed
-            return Option<|Task$@|>.none
+            return .none
         g_tick = earliest
         wake_delayed_to(g_tick)
 priv fn schedule() //< switches from the current task to the next
@@ -550,7 +551,8 @@ fn start_scheduler() //< switches to the first of the registered tasks and start
     //< When no task is runnable any more it returns here.
     g_main_ctx = ksos_port_ctx_create_main()
     $first: Task$@ = null
-    switch pick_next() case .some(t)
+    switch pick_next()
+    case .some(t)
         first = t
     case .none
         return

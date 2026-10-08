@@ -19,19 +19,19 @@ priv fn fail(label: U8[], why: U8[]) //< stops the run, naming the case and what
     b.s(label).s(" (").s(why).c(')')
     panic(b.slice())
 
-priv fn try_parse(grammar: U8[], input: U8[], rule: U8[], arena: Arena$@): Option<|Bool|> //<
+priv fn try_parse(grammar: U8[], input: U8[], rule: U8[], arena: Arena$@): Bool? //<
     //< Reads the grammar and returns whether `rule` parses `input`
     //<
     //< If the grammar itself cannot be read, .none.
     $meta: = kspeg_notation.Meta.new(grammar, arena)
     parser: = meta.parse_grammar() catch
-        return Option<|Bool|>.none
+        return .none
     $t: = kspeg.Target.new(input, arena)
     defer t.free_memo()
     t.share_grammar_from(parser)
     node: = t.parse_rule(rule) catch
-        return Option<|Bool|>.some(false)
-    return Option<|Bool|>.some(node != null)
+        return .some(false)
+    return .some(node != null)
 
 priv const deep_msg: U8[] = "nesting too deep" //<
     //< The message the engine gives when it stops on depth (Rule.parse in kspeg/engine.kspls)
@@ -63,7 +63,8 @@ priv fn expect_deep_fatal(label: U8[], grammar: U8[], input: U8[], arena: Arena$
     t.share_grammar_from(parser)
     $got: U8[] = "parsed"
     _node: = t.parse_rule("pair") catch e
-        switch e case .fatal(msg)
+        switch e
+        case .fatal(msg)
             got = msg
         case .mismatch
             got = "mismatch"
@@ -73,7 +74,8 @@ priv fn expect_deep_fatal(label: U8[], grammar: U8[], input: U8[], arena: Arena$
     verdict.pass(label)
 
 priv fn expect(label: U8[], grammar: U8[], input: U8[], rule: U8[], want: Bool, arena: Arena$@)
-    switch try_parse(grammar, input, rule, arena) case .some(got)
+    switch try_parse(grammar, input, rule, arena)
+    case .some(got)
         if got != want
             fail(label, arena.text().s("parsed=\{got\}, want=\{want\}").take())
         verdict.pass(label)
@@ -114,7 +116,8 @@ priv fn expect_bad_grammar(label: U8[], grammar: U8[], arena: Arena$@) //<
     //< The check that the grammar itself cannot be read
     //<
     //< Not expect, which assumes a readable grammar and would report this as a failure.
-    switch try_parse(grammar, "", "pair", arena) case .none
+    switch try_parse(grammar, "", "pair", arena)
+    case .none
         verdict.pass(label)
     case .some(_)
         fail(label, "grammar loaded")

@@ -49,7 +49,7 @@ extern "C"
 
 pub enum Fs_error //< why a filesystem operation failed
     //<
-    //< Every failure in this file is returned as this type (the same convention as `?Io_error` in
+    //< Every failure in this file is returned as this type (the same convention as `!Io_error` in
     //< `std/io.kspls`). Only the predicates (`exists` / `is_dir`) do not fail, so they return
     //< `Bool`. Splitting `operation_failed` further would need errno passed up from the C code
     //< (ksplc/gen/runtime/hosted.c). Do not split into variants what the code cannot tell apart.
@@ -74,21 +74,21 @@ pub const max_path_len: Sz = 4095 //< the longest path passed to the OS; a longe
     //< Caution: **Never truncate a longer path and pass it on.** The caller would get **the result
     //< of an operation on a different path** (a remove that deletes something else).
 
-priv fn check_path(path: U8[]): Void?Fs_error //< refuses what the OS cannot take as a path
+priv fn check_path(path: U8[]): Void!Fs_error //< refuses what the OS cannot take as a path
     //<
     //< It checks only the length and an inner NUL, which C reads as the end (each operation checks
     //< whether the path exists). The runtime refuses both as well; this names the cause.
     if path.len > max_path_len || path.contains_nul()
-        throw Fs_error.invalid_path
+        throw .invalid_path
 
-pub fn stat(path: U8[]): File_info?Fs_error //< what the OS reports about a path, following links
-    check_path(path)?
+pub fn stat(path: U8[]): File_info!Fs_error //< what the OS reports about a path, following links
+    check_path(path)!
     $size: I64 = 0
     $is_dir_flag: I32 = 0
     $mtime: I64 = 0
     ok: = kspl_stat(path.ptr, path.len, size@, is_dir_flag@, mtime@)
     if !ok
-        throw Fs_error.not_found
+        throw .not_found
     return File_info::{ .size = size, .is_dir = is_dir_flag != 0, .mtime = mtime }
 
 pub fn is_executable(path: U8[]): Bool //< whether the owner's execute bit is set; Windows: false
@@ -154,49 +154,52 @@ pub fn dir_trust( //< whether what a directory holds could have been put there b
     path: U8[],
 ): Dir_trust
     check_path(path) catch
-        return Dir_trust.missing
-    switch kspl_dir_trust(path.ptr, path.len) case 0
-        return Dir_trust.own
+        return .missing
+    switch kspl_dir_trust(path.ptr, path.len)
+    case 0
+        return .own
     case 2
-        return Dir_trust.foreign
+        return .foreign
     case 3
-        return Dir_trust.shared
+        return .shared
     case 4
-        return Dir_trust.unchecked
+        return .unchecked
     default
-        return Dir_trust.missing
+        return .missing
 
-pub fn mkdir(path: U8[]): Void?Fs_error //< creates one directory; fails if the path exists
-    check_path(path)?
+pub fn mkdir(path: U8[]): Void!Fs_error //< creates one directory; fails if the path exists
+    check_path(path)!
     if kspl_mkdir(path.ptr, path.len) != 0
-        throw Fs_error.operation_failed
+        throw .operation_failed
 
-pub fn remove_path(path: U8[]): Void?Fs_error //< deletes a file, or an empty directory
-    check_path(path)?
+pub fn remove_path(path: U8[]): Void!Fs_error //< deletes a file, or an empty directory
+    check_path(path)!
     if kspl_remove_path(path.ptr, path.len) != 0
-        throw Fs_error.operation_failed
+        throw .operation_failed
 
 pub fn rename_path( //< renames or moves a file or a directory
     old_path: U8[], //< its current path
     new_path: U8[], //< its new path
-): Void?Fs_error
-    check_path(old_path)?
-    check_path(new_path)?
+): Void!Fs_error
+    check_path(old_path)!
+    check_path(new_path)!
     // check_path refused a NUL already; to_cstr's `.none` is the same refusal.
     $old_buf: U8$@ = null
-    switch old_path.to_cstr() case .some(p)
+    switch old_path.to_cstr()
+    case .some(p)
         old_buf = p
     case .none
-        throw Fs_error.invalid_path
+        throw .invalid_path
     defer dealloc(Void$@::old_buf)
     $new_buf: U8$@ = null
-    switch new_path.to_cstr() case .some(p)
+    switch new_path.to_cstr()
+    case .some(p)
         new_buf = p
     case .none
-        throw Fs_error.invalid_path
+        throw .invalid_path
     defer dealloc(Void$@::new_buf)
     if kspl_rename_cstr(old_buf, new_buf) != 0
-        throw Fs_error.operation_failed
+        throw .operation_failed
 
 priv const max_entry_name_len: Sz = 1024
 
@@ -206,11 +209,11 @@ pub fn read_dir( //< one directory's entries, without descending
     //< fails the call (`operation_failed`), never hands back a listing cut short.
     path: U8[], //< the directory to read
     arena: Arena$@, //< where the names go; null uses the global heap and the caller frees each
-): List<|U8[]|>?Fs_error //< the bare names, in no fixed order; fails if it cannot be opened
-    check_path(path)?
+): List<|U8[]|>!Fs_error //< the bare names, in no fixed order; fails if it cannot be opened
+    check_path(path)!
     h: = kspl_dir_open(path.ptr, path.len)
     if h == 0
-        throw Fs_error.not_found
+        throw .not_found
     defer kspl_dir_close(h)
     $out: = List<|U8[]|>.new(arena)
     for
@@ -226,7 +229,7 @@ pub fn read_dir( //< one directory's entries, without descending
                 for name in out.slice()
                     dealloc(Void$@::name.ptr)
             out.free()
-            throw Fs_error.operation_failed
+            throw .operation_failed
         len: Sz = n
         copy: = U8$@::alloc_in(arena, len)
         mem.copy(Void$@::copy, Void$@::name_buf@, len)
@@ -305,13 +308,13 @@ pub fn absolute( //< the full path from the root: a relative path joined to the 
     //< a relative path is resolved from the child's directory, not the caller's.
     path: U8[], //< the path; empty and `.` both mean the working directory
     arena: Arena$@, //< where the path goes
-): U8[]?Fs_error //< the absolute path; fails if the working directory cannot be read
+): U8[]!Fs_error //< the absolute path; fails if the working directory cannot be read
     if path.len > 0 && sys.is_absolute(path)
         return arena.dup_str(path)
     $buf: U8[4096] = ::{}
     here: = sys.cwd(U8$[]::buf)
     if here.len == 0
-        throw Fs_error.operation_failed
+        throw .operation_failed
     if path.len == 0 || path.equals(".")
         return arena.dup_str(here)
     return join(here, path, arena)
@@ -378,12 +381,12 @@ pub fn stays_under( //< whether a relative path really stays inside the root, li
 ): Bool //< true only when neither the text nor a link climbs out
     return is_safe_relative(rel) && !has_link_on_path(root, rel)
 
-pub fn mkdir_all(path: U8[]): Void?Fs_error //< creates every missing level (`mkdir -p`)
+pub fn mkdir_all(path: U8[]): Void!Fs_error //< creates every missing level (`mkdir -p`)
     //<
     //< A level that already exists counts as success. On a failure part way, it **stops there and
     //< throws** `mkdir_failed` with the segment it could not create.
     if path.len == 0
-        throw Fs_error.invalid_path
+        throw .invalid_path
     // The root (`sys.root_len`) is assumed to exist: `mkdir("D:")` always fails on Windows.
     $from: = sys.root_len(path)
     for from <= path.len
@@ -398,7 +401,7 @@ pub fn mkdir_all(path: U8[]): Void?Fs_error //< creates every missing level (`mk
         // "already exists". A file at that path, or no permission, leaves `is_dir` false, and it
         // fails.
         if !made(prefix) && !is_dir(prefix)
-            throw Fs_error.mkdir_failed(prefix)
+            throw .mkdir_failed(prefix)
 
 priv fn made(path: U8[]): Bool
     mkdir(path) catch
@@ -413,7 +416,7 @@ pub fn walk_files( //< every file under a path, in one flat list (a narrower Pyt
     path: U8[], //< where the walk starts
     skip_dir: fn(name: U8[]): Bool, //< true for a directory not to enter; it gets only the name
     arena: Arena$@, //< where the paths are allocated
-): List<|U8[]|>?Fs_error //< the file paths in sorted order; fails if a directory cannot be read
+): List<|U8[]|>!Fs_error //< the file paths in sorted order; fails if a directory cannot be read
     return walk_collect(path, skip_dir, arena, false)
 
 pub fn walk_dirs( //< every directory under a path, in one flat list
@@ -423,7 +426,7 @@ pub fn walk_dirs( //< every directory under a path, in one flat list
     path: U8[], //< where the walk starts
     skip_dir: fn(name: U8[]): Bool, //< true for a directory not to enter; it gets only the name
     arena: Arena$@, //< where the paths are allocated
-): List<|U8[]|>?Fs_error //< the directory paths in sorted order; fails if one cannot be read
+): List<|U8[]|>!Fs_error //< the directory paths in sorted order; fails if one cannot be read
     return walk_collect(path, skip_dir, arena, true)
 
 pub fn skip_none(_name: U8[]): Bool //< a `skip_dir` that enters every directory
@@ -440,22 +443,22 @@ priv const max_walk_depth: Sz = 512 //< the maximum number of levels a walk desc
     //< stack; `too_deep` lets the caller report the cause.
 
 priv fn walk_collect(path: U8[], skip_dir: fn(name: U8[]): Bool, arena: Arena$@, want_dirs: Bool):
-    List<|U8[]|>?Fs_error
+    List<|U8[]|>!Fs_error
     $out: = List<|U8[]|>.new(arena)
-    walk_into(path, skip_dir, arena, out@, want_dirs, 0)?
+    walk_into(path, skip_dir, arena, out@, want_dirs, 0)!
     return out.order_by(fn(a: U8[], b: U8[]; ): I32 {
         return a.compare(b);
     }, arena)
 
 priv fn walk_into(dir: U8[], skip_dir: fn(name: U8[]): Bool, arena: Arena$@,
-    out: List<|U8[]|>$@, want_dirs: Bool, depth: Sz): Void?Fs_error //<
+    out: List<|U8[]|>$@, want_dirs: Bool, depth: Sz): Void!Fs_error //<
         //< Collects the files, or the directories, below dir into out
         //<
         //< With want_dirs it collects only directories, otherwise only files; one function keeps
         //< the pruning rule in one place.
     if depth >= max_walk_depth
-        throw Fs_error.too_deep
-    entries: = read_dir(dir, arena)?
+        throw .too_deep
+    entries: = read_dir(dir, arena)!
     for name in entries
         if name.equals(".") || name.equals("..")
             continue
@@ -468,7 +471,7 @@ priv fn walk_into(dir: U8[], skip_dir: fn(name: U8[]): Bool, arena: Arena$@,
             continue
         if want_dirs
             out.push(full)
-        walk_into(full, skip_dir, arena, out, want_dirs, depth + 1)?
+        walk_into(full, skip_dir, arena, out, want_dirs, depth + 1)!
 
 // ==========================================
 // Making a scratch directory, and writing and copying a tree
@@ -487,11 +490,11 @@ pub fn mkdir_unique( //< creates a directory with a name nobody has used, and re
     base: U8[], //< where it goes; missing parent levels are created
     prefix: U8[], //< the start of its name
     arena: Arena$@, //< where the path goes
-): U8[]?Fs_error //< the new directory's path; fails if it cannot be created
-    mkdir_all(base)?
+): U8[]!Fs_error //< the new directory's path; fails if it cannot be created
+    mkdir_all(base)!
     for _try in Range.asc(max_unique_tries)
         tail: = rand.u64() catch
-            throw Fs_error.operation_failed
+            throw .operation_failed
         path: =
             join(base, arena.text().s(prefix).s("\{tail:016x\}").take(), arena)
         if made(path)
@@ -499,8 +502,8 @@ pub fn mkdir_unique( //< creates a directory with a name nobody has used, and re
         // Caution: **Retry only if the name was taken.** If it failed for any other reason (no
         // permission, a file where `base` should be), every name would fail the same way.
         if !exists(path)
-            throw Fs_error.operation_failed
-    throw Fs_error.operation_failed
+            throw .operation_failed
+    throw .operation_failed
 
 pub fn write_unique( //< writes a new file under a name nobody has used, readable by its owner
     //<
@@ -514,22 +517,23 @@ pub fn write_unique( //< writes a new file under a name nobody has used, readabl
     suffix: U8[], //< the end of its name, such as an extension
     data: U8[], //< its whole content
     arena: Arena$@, //< where the path goes
-): U8[]?Fs_error //< the new file's path; fails if it cannot be created or written
-    mkdir_all(base)?
+): U8[]!Fs_error //< the new file's path; fails if it cannot be created or written
+    mkdir_all(base)!
     for _try in Range.asc(max_unique_tries)
         tail: = rand.u64() catch
-            throw Fs_error.operation_failed
+            throw .operation_failed
         path: =
             join(base,
             arena.text().s(prefix).s("\{tail:016x\}").s(suffix).take(), arena)
-        check_path(path)?
-        switch kspl_create_owned(path.ptr, path.len, data.ptr, data.len) case 0
+        check_path(path)!
+        switch kspl_create_owned(path.ptr, path.len, data.ptr, data.len)
+        case 0
             return path
         case 1
             continue
         default
-            throw Fs_error.operation_failed
-    throw Fs_error.operation_failed
+            throw .operation_failed
+    throw .operation_failed
 
 pub fn write_tree( //< writes files under a directory, creating missing levels
     //<
@@ -540,19 +544,19 @@ pub fn write_tree( //< writes files under a directory, creating missing levels
     rels: U8[][], //< each file's name under `dir`, with `/` between its levels
     bodies: U8[][], //< each file's contents, in the same order
     arena: Arena$@, //< where the joined paths go
-): Void?Fs_error
+): Void!Fs_error
     if rels.len != bodies.len
-        throw Fs_error.invalid_path
+        throw .invalid_path
     for rel in rels
         if !is_safe_relative(rel)
-            throw Fs_error.invalid_path
+            throw .invalid_path
     for i in Range.asc(rels.len)
         path: = join(dir, rels[i], arena)
         parent: = sys.get_dir_name(path)
         if parent.len > 0
-            mkdir_all(parent)?
+            mkdir_all(parent)!
         io.write_file(path, bodies[i]) catch
-            throw Fs_error.operation_failed
+            throw .operation_failed
 
 pub fn copy_tree( //< copies every file under one directory to a path that does not exist yet
     //<
@@ -563,25 +567,25 @@ pub fn copy_tree( //< copies every file under one directory to a path that does 
     to: U8[], //< where the copy goes; its parent is created if missing
     skip_dir: fn(name: U8[]): Bool, //< true for a directory not to copy; it gets only the name
     arena: Arena$@, //< where the paths go
-): Void?Fs_error
+): Void!Fs_error
     parent: = sys.get_dir_name(to)
     if parent.len > 0
-        mkdir_all(parent)?
-    mkdir(to)?
-    for path in walk_files(from, skip_dir, arena)?
+        mkdir_all(parent)!
+    mkdir(to)!
+    for path in walk_files(from, skip_dir, arena)!
         $k: = from.len
         for k < path.len && sys.is_path_sep(path[k])
             k += 1
         dest: = join(to, path.sub_from(k), arena)
-        mkdir_all(sys.get_dir_name(dest))?
-        copy_file(path, dest)?
+        mkdir_all(sys.get_dir_name(dest))!
+        copy_file(path, dest)!
 
-priv fn copy_file(from_path: U8[], to_path: U8[]): Void?Fs_error //< copies one file's contents
+priv fn copy_file(from_path: U8[], to_path: U8[]): Void!Fs_error //< copies one file's contents
     body: = io.read_file(from_path) catch
-        throw Fs_error.operation_failed
+        throw .operation_failed
     defer dealloc(Void$@::body.ptr)
     io.write_file(to_path, body) catch
-        throw Fs_error.operation_failed
+        throw .operation_failed
 
 // ==========================================
 // A lock on a file, shared between processes
@@ -595,30 +599,30 @@ pub struct File_lock //< a lock on a file; another process that asks for it wait
     priv handle: I64
 
 impl File_lock
-    priv fn open(path: U8[]): I64?Fs_error //< opens the file for locking, creating it if missing
-        check_path(path)?
+    priv fn open(path: U8[]): I64!Fs_error //< opens the file for locking, creating it if missing
+        check_path(path)!
         h: = kspl_lock_open(path.ptr, path.len)
         if h == 0
-            throw Fs_error.operation_failed
+            throw .operation_failed
         return h
 
-    priv fn held(h: I64, wait: I32): File_lock?Fs_error //< takes the lock on `h`, or closes `h`
+    priv fn held(h: I64, wait: I32): File_lock!Fs_error //< takes the lock on `h`, or closes `h`
         got: = kspl_lock_take(h, wait)
         if got == 0
             return File_lock::{ .handle = h }
         kspl_lock_close(h)
         if got == 1
-            throw Fs_error.held_elsewhere
-        throw Fs_error.operation_failed
+            throw .held_elsewhere
+        throw .operation_failed
 
-    pub fn take(path: U8[]): File_lock?Fs_error //< takes the lock, waiting while another holds it
-        return File_lock.held(File_lock.open(path)?, 1)
+    pub fn take(path: U8[]): File_lock!Fs_error //< takes the lock, waiting while another holds it
+        return File_lock.held(File_lock.open(path)!, 1)
 
-    pub fn try_take(path: U8[]): File_lock?Fs_error //< takes the lock if free, without waiting
+    pub fn try_take(path: U8[]): File_lock!Fs_error //< takes the lock if free, without waiting
         //<
         //< If someone else holds it, it throws `held_elsewhere`, so a caller can report the wait
         //< first.
-        return File_lock.held(File_lock.open(path)?, 0)
+        return File_lock.held(File_lock.open(path)!, 0)
 
     pub fn free(r: Self$@) //< releases the lock and closes the file
         kspl_lock_close(r.handle)

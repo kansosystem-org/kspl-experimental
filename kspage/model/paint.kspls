@@ -12,17 +12,17 @@ import "std/strfmt"
 struct Font_spec //< the font settings
     //<
     //< **Every field can be "not set".** A field that is not set comes from the parent.
-    family: Option<|U8[]|>
-    size_px: Option<|F32|>
-    weight: Option<|U16|>
-    italic: Option<|Bool|>
+    family: U8[]?
+    size_px: F32?
+    weight: U16?
+    italic: Bool?
 
 fn inherit_all(): Font_spec //< sets nothing (everything stays as the parent's)
     return Font_spec::{
-        .family = Option<|U8[]|>.none,
-        .size_px = Option<|F32|>.none,
-        .weight = Option<|U16|>.none,
-        .italic = Option<|Bool|>.none,
+        .family = .none,
+        .size_px = .none,
+        .weight = .none,
+        .italic = .none,
     }
 
 struct Ink //< the decoration applied at drawing time
@@ -30,29 +30,28 @@ struct Ink //< the decoration applied at drawing time
     //< **A color is `0xRRGGBB`, with no transparency.** "Not set" is `.none` (black is a real
     //< setting). **They do not go into `Font`**, the key for measuring (none of these changes the
     //< size). A paragraph's fill is `Style.fill`.
-    color: Option<|U32|>
-    background: Option<|U32|>
+    color: U32?
+    background: U32?
     // An underline and a strikethrough. **`false` is the setting "draw none"**, or the parent's
     // underline could not be removed.
-    underline: Option<|Bool|>
-    strike: Option<|Bool|>
+    underline: Bool?
+    strike: Bool?
 
 fn inherit_ink(): Ink //<
     //< Sets nothing (everything stays as the parent's)
     //<
     //< The characters keep the screen's color, no background is painted, and no line is drawn.
-    return Ink::{ .color = Option<|U32|>.none, .background = Option<|U32|>.none,
-        .underline = Option<|Bool|>.none, .strike = Option<|Bool|>.none }
+    return Ink::{ .color = .none, .background = .none, .underline = .none, .strike = .none }
 
 struct Accent //< the emphasis applied without a style name (bold and italic)
     //<
     //< **They cannot go into `Ink`**: both change the measurements. **`false` is the setting "not
     //< bold" or "not italic"**, or a run inside a bold paragraph could not be made normal weight.
-    bold: Option<|Bool|>
-    italic: Option<|Bool|>
+    bold: Bool?
+    italic: Bool?
 
 fn inherit_accent(): Accent //< sets neither (they stay as the parent's)
-    return Accent::{ .bold = Option<|Bool|>.none, .italic = Option<|Bool|>.none }
+    return Accent::{ .bold = .none, .italic = .none }
 
 const bold_weight: U16 = 700U16 //< the weight written for bold
     //<
@@ -64,44 +63,44 @@ fn accent_into(spec: Font_spec, accent: Accent): Font_spec //<
     //<
     //< **The typeface and the size are not touched** (an emphasis sets only the weight and italic).
     $out: Font_spec = spec
-    out.weight = Option<|U16|>.none
+    out.weight = .none
     if v: = accent.bold
-        out.weight = Option<|U16|>.some(bold_weight if v else plain_weight)
+        out.weight = .some(bold_weight if v else plain_weight)
     out.italic = accent.italic
     return out
 
 fn resolve_ink(spec: Ink, parent: Ink): Ink //< the decoration with spec laid over parent
     $out: Ink = parent
     if v: = spec.color
-        out.color = Option<|U32|>.some(v)
+        out.color = .some(v)
     if v: = spec.background
-        out.background = Option<|U32|>.some(v)
+        out.background = .some(v)
     if v: = spec.underline
-        out.underline = Option<|Bool|>.some(v)
+        out.underline = .some(v)
     if v: = spec.strike
-        out.strike = Option<|Bool|>.some(v)
+        out.strike = .some(v)
     return out
 
-fn drawn(spec: Option<|Bool|>): Bool //< whether the setting is present and `true`
+fn drawn(spec: Bool?): Bool //< whether the setting is present and `true`
     //<
     //< **Not set draws none** (by default, characters have no line).
     if v: = spec
         return v
     return false
 
-fn color_from(text: U8[]): Option<|U32|> //< reads `#rrggbb`
+fn color_from(text: U8[]): U32? //< reads `#rrggbb`
     //<
     //< **Anything but six digits is "not set"** (not a partial black). The `#` may be left out.
     at: Sz = 1 if text.len > 0 && text[0] == '#' else 0
     if text.len - at != 6
-        return Option<|U32|>.none
+        return .none
     $v: U32 = 0U32
     for $i: Sz = at; i < text.len; i += 1
         d: = text[i].hex_val()
         if d < 0
-            return Option<|U32|>.none
+            return .none
         v = (v << 4U32) | U32::d
-    return Option<|U32|>.some(v)
+    return .some(v)
 
 fn hex_into(v: U32, sb: Str_builder$@) //< writes a color in six hex digits
     //<

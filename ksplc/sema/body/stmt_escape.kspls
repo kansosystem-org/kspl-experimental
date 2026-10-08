@@ -64,7 +64,7 @@ priv fn find_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@): Frame_escape //
     //< named at is_frame_storage).
     if expr_node == null
         return .none
-    // When returning to `T?Err`, the value is inside result_wrap.
+    // When returning to `T!Err`, the value is inside result_wrap.
     $target: = expr_node
     if target.kind_id == .k_result_wrap
         target = target.get_result_wrap_inner()
@@ -81,7 +81,9 @@ priv fn find_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@): Frame_escape //
         for child in target.children
             if child.kind_id == .k_expr_field_init && child.children.len > 0
                 found: = find_frame_escape(c, child.last_child())
-                switch found case .none {} default
+                switch found
+                case .none {}
+                default
                     return found
         return .none
     if target.kind_id == .k_enum_init_call
@@ -89,7 +91,9 @@ priv fn find_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@): Frame_escape //
         if args != null
             for arg in args.children
                 found: = find_frame_escape(c, arg)
-                switch found case .none {} default
+                switch found
+                case .none {}
+                default
                     return found
         return .none
     if target.kind_id == .k_expr_upcast
@@ -115,7 +119,8 @@ fn note_frame_pointer(c: Sema_ctx$@, id_node: Ast_node$@, expr_node: Ast_node$@)
     //< A declaration's initializer and a plain `x = …` both set it, so `s: = I32[]::a; t: = s;
     //< return t` is refused. **The mark is never cleared**: `s = heap_slice` after it still refuses
     //< `return s`, the safe side of a check that follows names, not control flow.
-    switch find_frame_escape(c, expr_node) case .none
+    switch find_frame_escape(c, expr_node)
+    case .none
         return
     default {}
     sym: = c.read_written_name(id_node).sym
@@ -124,7 +129,9 @@ fn note_frame_pointer(c: Sema_ctx$@, id_node: Ast_node$@, expr_node: Ast_node$@)
 
 fn check_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@, verb: U8[]) //<
     //< Rejects a pointer the compiler synthesizes into the frame leaving by return / throw
-    switch find_frame_escape(c, expr_node) case .none {} case .upcast(inner)
+    switch find_frame_escape(c, expr_node)
+    case .none {}
+    case .upcast(inner)
         c.clear_scratch()
             .s("cannot \{verb\} an interface value built from local storage: the interface value \
                 keeps a pointer to it, and this function's frame dies here (the address is \

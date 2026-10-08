@@ -590,16 +590,16 @@ priv struct Import_line //< one `import` as the check reads it
     path: U8[] //< what it names, as written
     link_only: Bool //< bound to an `_` alias: imported to be linked, never called
 
-priv fn import_of(line: U8[]): Option<|Import_line|> //< the import a line holds, if it holds one
+priv fn import_of(line: U8[]): Import_line? //< the import a line holds, if it holds one
     if !line.starts_with("import \"")
-        return Option<|Import_line|>.none
+        return .none
     rest: = line.sub_from(8)
     q: = rest.find_char('"')
     if q < 0
-        return Option<|Import_line|>.none
+        return .none
     after: = rest.sub_from(q + 1).trim_start()
-    return Option<|Import_line|>
-        .some(Import_line::{ .path = rest.sub(0, q), .link_only = after.starts_with("as _") })
+    return .some(Import_line::{ .path = rest.sub(0, q),
+        .link_only = after.starts_with("as _") })
 
 priv fn joined(dir: U8[], rel: U8[], arena: Arena$@): U8[] //<
     //< `dir/rel` with each `.` dropped and each `x/..` folded, as the compiler names a file
@@ -667,7 +667,8 @@ priv fn check_lone_fires(arena: Arena$@)
     for s in import_samples
         $got: U8[] = ""
         $link: = false
-        switch import_of(s.line) case .some(imp)
+        switch import_of(s.line)
+        case .some(imp)
             got = imp.path
             link = imp.link_only
         case .none {}
@@ -700,7 +701,8 @@ priv fn check_lone(arena: Arena$@)
         if gathers(rel)
             continue
         for line in lines
-            switch import_of(line) case .some(imp)
+            switch import_of(line)
+            case .some(imp)
                 if !imp.link_only
                     target: = import_target(imp.path, rel, known@, arena)
                     if target.len > 0

@@ -117,7 +117,7 @@ priv fn write_cols(b: Str_builder$@, st: Stat) //< writes only the number column
 priv const git_timeout_ms: I32 = 60000 //< how long one `git ls-files` may run
 priv const git_list_cap: Sz = 1 << 24 //< the most of a list kept; the repository's is far under it
 
-priv fn git_list(args: U8[][], arena: Arena$@): U8[]?fs.Fs_error //< what `git <args>` prints
+priv fn git_list(args: U8[][], arena: Arena$@): U8[]!fs.Fs_error //< what `git <args>` prints
     //<
     //< A git that is missing or refuses is an error, never an empty count.
     $argv: = List<|U8[]|>.new(arena)
@@ -127,16 +127,16 @@ priv fn git_list(args: U8[][], arena: Arena$@): U8[]?fs.Fs_error //< what `git <
     r: = subproc.run_capture(argv.slice(), "", git_timeout_ms, git_list_cap, arena)
     if r.spawn_failed || r.timed_out || r.exit_code != 0
         io.err().s("\{sys.program_name()\}: git cannot list the files here\n").s(r.stderr_data)
-        throw fs.Fs_error.operation_failed
+        throw .operation_failed
     return r.stdout_data
 
-priv fn write_files(b: Str_builder$@, exts: List<|Ext_row|>$@, arena: Arena$@): Void?fs.Fs_error //<
+priv fn write_files(b: Str_builder$@, exts: List<|Ext_row|>$@, arena: Arena$@): Void!fs.Fs_error //<
     //< 1. The line count per file
     //<
     //< Grouped by top-level folder, with a subtotal after each group and the total last. The files
     //< are git's: the tracked and the untracked that are not ignored (`path_kind.listed`).
-    tracked: = git_list(U8[][]::{ "ls-files" }, arena)?
-    others: = git_list(U8[][]::{ "ls-files", "--others", "--exclude-standard" }, arena)?
+    tracked: = git_list(U8[][]::{ "ls-files" }, arena)!
+    others: = git_list(U8[][]::{ "ls-files", "--others", "--exclude-standard" }, arena)!
     files: = path_kind.listed(tracked, others, arena)
     $rootb: = Str_builder.new()
     defer rootb.free()
@@ -203,18 +203,18 @@ priv fn write_exts(b: Str_builder$@, exts: List<|Ext_row|>$@, arena: Arena$@) //
         b.s("\{e.ext\}\n")
     b.c('\n')
 
-priv fn write_stat(out_dir: U8[], arena: Arena$@): Void?fs.Fs_error
+priv fn write_stat(out_dir: U8[], arena: Arena$@): Void!fs.Fs_error
     $b: = Str_builder.new()
     defer b.free()
     $exts: = List<|Ext_row|>.new(arena)
-    write_files(b@, exts@, arena)?
+    write_files(b@, exts@, arena)!
     write_exts(b@, exts@, arena)
-    save(out_dir, "repo_stat.txt", b.slice(), arena)?
+    save(out_dir, "repo_stat.txt", b.slice(), arena)!
 
-priv fn save(out_dir: U8[], name: U8[], data: U8[], arena: Arena$@): Void?fs.Fs_error
+priv fn save(out_dir: U8[], name: U8[], data: U8[], arena: Arena$@): Void!fs.Fs_error
     path: = fs.join(out_dir, name, arena)
     io.write_file(path, data) catch
-        throw fs.Fs_error.operation_failed
+        throw .operation_failed
     io.out().s("wrote \{path\} (\{data.len\} bytes)\n")
 
 fn main(): I32 //< writes the repository's size on one page of text

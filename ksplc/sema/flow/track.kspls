@@ -139,12 +139,12 @@ struct Df_ctx
         //< The reason is at df_stmt_block_scope.
 
 impl Ast_node
-    fn get_assign_target_def(r: Self$@): Option<|Ast_node$@|>
+    fn get_assign_target_def(r: Self$@): Ast_node$@?
         $curr: = r
         for curr != null
             k: = curr.kind_id
             if k == .k_expr_path || k == .k_identifier || k == .k_type_path
-                return Option<|Ast_node$@|>.some(curr.def_node)
+                return .some(curr.def_node)
             if (k == .k_expr_postfix || k == .k_method_access) && curr.children.len > 0
                 curr = curr.get_postfix_receiver()
                 continue
@@ -155,7 +155,7 @@ impl Ast_node
                 curr = curr.get_child(0)
                 continue
             break
-        return Option<|Ast_node$@|>.none
+        return .none
 
     fn is_bare_name_target(r: Self$@): Bool //<
         //< Whether an assignment's left-hand side is a "bare name"
@@ -236,7 +236,8 @@ impl Ast_node
                     c.has_reported_unreachable = true
             return
 
-        switch r.kind_id case .k_decl_var, .k_decl_const
+        switch r.kind_id
+        case .k_decl_var, .k_decl_const
             r.df_decl_var(c, state)
         case .k_stmt_expr
             r.df_stmt_expr(c, state)
@@ -248,10 +249,15 @@ impl Ast_node
             r.df_method_access(c, state)
         case .k_expr_postfix
             r.df_expr_postfix(c, state)
-        case .k_stmt_if
-            r.df_stmt_if(c, state)
-        case .k_stmt_match
-            r.df_stmt_match(c, state)
+        case .k_stmt_if, .k_stmt_match
+            if r.kind_id == .k_stmt_if
+                r.df_stmt_if(c, state)
+            else
+                r.df_stmt_match(c, state)
+            // **A `break` to its label leaves it**, so what follows can run whatever its branches
+            // do (`is_left_by_break`, which the missing-return check reads too).
+            if r.is_left_by_break()
+                state.reachable = true
         case .k_stmt_loop
             r.df_stmt_loop(c, state)
         case .k_stmt_labeled_block
@@ -418,7 +424,8 @@ impl Ast_node
         // An unknown method (none resolved) is taken as writing, so no `$` is called spare.
         member: = r.get_postfix_member()
         if member != null
-            switch env.method_receiver_permission(member.def_node) case .some(need)
+            switch env.method_receiver_permission(member.def_node)
+            case .some(need)
                 if !need.mut_ptr
                     return
             case .none {}
@@ -426,7 +433,7 @@ impl Ast_node
             if def != null
                 c.mark_reassigned(def)
 
-    fn get_direct_local_def(r: Self$@): Option<|Ast_node$@|> //<
+    fn get_direct_local_def(r: Self$@): Ast_node$@? //<
         //< The receiver of `.free()` / `.dealloc()`, only where it is a bare identifier
         //<
         //< get_assign_target_def would take `r.list.free()` as releasing `r`.
@@ -436,22 +443,22 @@ impl Ast_node
         if curr != null &&
             (curr.kind_id == .k_identifier || curr.kind_id == .k_expr_path ||
             curr.kind_id == .k_type_path)
-            return Option<|Ast_node$@|>.some(curr.def_node)
-        return Option<|Ast_node$@|>.none
+            return .some(curr.def_node)
+        return .none
 
-    fn get_addressed_local_def(r: Self$@): Option<|Ast_node$@|> //<
+    fn get_addressed_local_def(r: Self$@): Ast_node$@? //<
         //< The local's declaration node, where the argument is that bare local or its address
         //<
         //< The address is an explicit one, such as the `f@` of `close_it(f@)`.
         //< This lets passing a pointer be tracked across the call (mark_call_freed_args).
         if direct: = r.get_direct_local_def()
-            return Option<|Ast_node$@|>.some(direct)
+            return .some(direct)
         // `f@` and `Void$@::f` are stripped: a real `dealloc(Void$@::p)` almost always casts.
         if r != null && r.kind_id == .k_expr_postfix
             op: = r.get_postfix_op()
             if op != null && (op.text.equals("@") || op.text.equals("::"))
                 return r.get_postfix_receiver().get_addressed_local_def()
-        return Option<|Ast_node$@|>.none
+        return .none
 
     fn mark_free_call_if_any(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
         //< Registers a bare local's `.free()` / `.dealloc()` in freed_vars
@@ -459,7 +466,8 @@ impl Ast_node
         //< `r.field.free()` is not tracked, avoiding false positives.
         $freed_expr: Ast_node$@ = null
         $frees_the_pointer: = false
-        switch r.get_free_call_receiver(c.sema) case .some(rv)
+        switch r.get_free_call_receiver(c.sema)
+        case .some(rv)
             freed_expr = rv
         case .none
             // The free-function form (`dealloc(x)`).

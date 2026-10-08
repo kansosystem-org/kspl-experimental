@@ -193,7 +193,7 @@ priv fn join_continued(lines: List<|U8[]|>@, at: Sz, arena: Arena$@): Logical //
         i += 1
     return Logical::{ .text = b.take(), .next = i + 1 }
 
-priv fn rule_deps(line: U8[]): Option<|U8[]|> //<
+priv fn rule_deps(line: U8[]): U8[]? //<
     //< If it is a rule line (`target: dependencies`), returns the dependency string
     //<
     //< **A `:=`, and a target-specific variable (`install: export V := x`), are not rules** (told
@@ -201,19 +201,19 @@ priv fn rule_deps(line: U8[]): Option<|U8[]|> //<
     //< dependencies go wrong.
     colon: = line.find_char(':')
     if colon < 1
-        return Option<|U8[]|>.none
+        return .none
     head: = line.sub(0, colon)
     if head.find_char('=') >= 0 || head.find_char('#') >= 0
-        return Option<|U8[]|>.none
+        return .none
     $rest: = line.sub_from(colon + 1)
     if rest.starts_with("=")
-        return Option<|U8[]|>.none
+        return .none
     note: = rest.find_char('#')
     if note >= 0
         rest = rest.sub(0, note)
     if rest.find_char('=') >= 0
-        return Option<|U8[]|>.none
-    return Option<|U8[]|>.some(rest)
+        return .none
+    return .some(rest)
 
 priv fn dep_count(deps: U8[]): Sz //< the dependency count
     //<
@@ -336,20 +336,20 @@ priv struct Said //< one name listed in `.PHONY`, and where it is
     where: U8[]
     name: U8[]
 
-priv fn rule_targets(line: U8[]): Option<|U8[]|> //<
+priv fn rule_targets(line: U8[]): U8[]? //<
     //< If it is a rule line (`target: dependencies`), returns the target string
     //<
     //< **Leave out a `:=` and a target-specific variable** (the same reason as `rule_deps`).
     //< Caution: **Do not count `.PHONY` itself as a target**, or everything "has a rule".
     colon: = line.find_char(':')
     if colon < 1
-        return Option<|U8[]|>.none
+        return .none
     head: = line.sub(0, colon).trim_spaces()
     if head.find_char('=') >= 0 || head.find_char('#') >= 0 || head.starts_with(".")
-        return Option<|U8[]|>.none
+        return .none
     if line.sub_from(colon + 1).starts_with("=")
-        return Option<|U8[]|>.none
-    return Option<|U8[]|>.some(head)
+        return .none
+    return .some(head)
 
 priv struct Doc //<
     //< The explanation taken from one line of `make help`, and where that line is

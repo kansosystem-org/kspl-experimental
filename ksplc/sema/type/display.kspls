@@ -108,7 +108,8 @@ impl sema_type_env.Env
         //< Writes the type a postfix applies to, a function type in brackets as it is written
         //<
         //< That is `(fn(I32):I32)@`, not a function returning `I32@`.
-        switch r.get_info(id) case .fn_type(_sig)
+        switch r.get_info(id)
+        case .fn_type(_sig)
             return r.display_type_to(id, depth, w.c('(')).c(')')
         default
             return r.display_type_to(id, depth, w)
@@ -121,7 +122,8 @@ impl sema_type_env.Env
         if id < 0 || id >= r.id_to_type.len
             return w.s("Unknown")
         $res: = w
-        switch r.get_info(id) case .pointer(b)
+        switch r.get_info(id)
+        case .pointer(b)
             res = r.display_suffix_base_to(r.strip_const(b), depth, res)
             return res.s("@" if r.is_const(b) else "$@")
         case .array(b, s)
@@ -130,9 +132,9 @@ impl sema_type_env.Env
                 res = res.s("$")
             return res.s("[\{s\}]") if s >= 0 else res.s("[_]")
         case .result(b, e)
-            // Caution: **Always write the error type.** The language has no `T?` shorthand, so
-            // `I32?` for an `I32?I32` names a type nobody can write.
-            res = r.display_suffix_base_to(b, depth, res).s("?")
+            // Caution: **Always write the error type.** The language has no `T!` shorthand, so
+            // `I32!` for an `I32!I32` names a type nobody can write.
+            res = r.display_suffix_base_to(b, depth, res).s("!")
             return r.display_type_to(e, depth, res)
         case .fn_type(sig)
             res = res.s("fn(")
@@ -155,6 +157,16 @@ impl sema_type_env.Env
             if slice_elem != 0
                 res = r.display_type_to(r.strip_const(slice_elem), depth, res)
                 return res.s("[]" if r.is_const(slice_elem) else "$[]")
+            // An instance of `Option<|T|>` was written `T?`; a result inside it is bracketed,
+            // since `T!E?` reads as `T!(E?)`.
+            real_id: = r.get_clean_real_type(id)
+            if r.instance_base(real_id).equals(base_core.option_fqn)
+                inner: = r.instance_arg(real_id, 0)
+                switch r.get_info(inner)
+                case .result(_b, _e)
+                    return r.display_type_to(inner, depth, res.c('(')).s(")?")
+                default
+                    return r.display_suffix_base_to(inner, depth, res).s("?")
             // An instantiated type is written from its record, found by type_id (not the O(cap)
             // walk by name).
             // Caution: **Do not resolve an alias before writing.** An alias is exactly the name the

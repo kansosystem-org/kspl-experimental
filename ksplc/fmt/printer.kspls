@@ -102,6 +102,11 @@ struct Formatter
         //<
         //< **Its last `;` is left out**, which the indentation reader puts back (`supply_block_end`
         //< in `../parse/layout.kspls`); a `;` between two statements stays.
+    block_on_one_line: Bool //<
+        //< Whether the block written last stands on one line (`{}`, or a short one folded)
+        //<
+        //< **A `switch`'s next arm reads it**: it follows a `}` that closes a line of its own, and
+        //< after a block on one line it starts a line instead.
     paren_spans: List<|Sz|> //<
         //< The start and end of each conditional value split outside every bracket, in pairs
         //<
@@ -114,6 +119,7 @@ struct Formatter
         //< **The indentation notation writes no line for that `}`**, so the comment lands on
         //< another line and a round trip does not bring it back (`note_displaced` in
         //< `trivia.kspls`; the lint reports each one as `[I0801]`).
+    postfix_mark_next: Bool //< whether the next token is a postfix `!` (set by its parent node)
     too_deep: Bool //<
         //< Set when format_internal's recursion goes past max_fmt_depth below
         //<
@@ -170,10 +176,11 @@ impl Formatter
             .current_col = 0, .src = src, .last_offset = 0, .last_char = '\n',
             .last_text = Str_builder.new(), .code_end = 0, .suppress_nl_depth = 0,
             .pending_seg_len = 0, .pending_dot_break_ok = false, .too_deep = false,
-            .from_layout = from_layout, .layout = layout, .paren_depth = 0, .paren_indent_level = 0,
-            .line_indent = 0, .line_wrapped = false, .line_dropped = 0, .summary_cont_col = 0,
-            .summary_run_open = false, .ternary_depth = -1, .ternary_broke = false,
-            .bare_close = -1, .paren_spans = List<|Sz|>.new(null),
+            .postfix_mark_next = false, .from_layout = from_layout, .layout = layout,
+            .paren_depth = 0, .paren_indent_level = 0, .line_indent = 0, .line_wrapped = false,
+            .line_dropped = 0, .summary_cont_col = 0, .summary_run_open = false,
+            .ternary_depth = -1, .ternary_broke = false, .bare_close = -1,
+            .block_on_one_line = false, .paren_spans = List<|Sz|>.new(null),
             .displaced = List<|Sz|>.new(null),
             .flags = Fmt_flags::{
             .is_line_start = true,
@@ -182,6 +189,7 @@ impl Formatter
             .force_next_nl = false,
             .last_was_no_space = false,
             .in_type_expr = false,
+            .last_was_postfix_mark = false,
         } }
 
     fn free(r: Self$@)
@@ -372,6 +380,8 @@ impl Formatter
         $text: = node.text
         $advance_len: = text.len
         kind: = node.kind_id
+        is_postfix_mark: = r.postfix_mark_next && kind == .k_literal
+        r.postfix_mark_next = false
         // The joined spelling of a string literal, held for as long as `text` points into it.
         $joined: = Str_builder.new()
         defer joined.free()
@@ -406,10 +416,6 @@ impl Formatter
             !fmt_source.has_comment_in(r.src, r.last_offset, node.loc.offset)
         r.catch_up_trivia(node.loc.offset, force_no_nl)
 
-        // Caution: **Do not move the first `case` to the next line.** A `switch` has no braces, so
-        // that would create a level where there are no braces, while the notation removes only
-        // blocks and terminators ("The indentation notation (`.kspls`)" in `docs/DESIGN.md`). Each
-        // later `case` already starts on a new line, where the preceding block closed.
         if r.flags.force_next_nl
             // **In the indentation notation it is not joined.** The `}` disappears, so joining
             // would put the `else` or `case` on the preceding block's last statement.
@@ -434,7 +440,8 @@ impl Formatter
         if text.equals("-")
             r.flags.last_was_unary_minus =
                 last_txt.is_opening_bracket() || last_txt.is_space_required_keyword() ||
-                last_txt.is_op() || last_txt.equals(",") || last_txt.equals(";")
+                (last_txt.is_op() && !r.flags.last_was_postfix_mark) || last_txt.equals(",") ||
+                last_txt.equals(";")
         else
             r.flags.last_was_unary_minus = false
         // On a chain's `.`, wrapping is decided by the width of the whole .m(args) that follows
@@ -455,8 +462,8 @@ impl Formatter
         if will_break
             r.write_nl()
             // Caution: **In the indentation notation, an arm or an `else` after a `}` is not a
-            // continuation.** Indented one step, `default` after `case .a {}` reads as a statement
-            // of the block above and the file no longer parses.
+            // continuation.** Indented one step, `else` after `if c {}` reads as a statement of
+            // the block above and the file no longer parses.
             r.flags.wrap_indent =
                 !(r.layout && last_txt.equals("}") && is_arm_or_else(text))
             require_space = false
@@ -470,6 +477,7 @@ impl Formatter
         r.seek_to(node.loc.offset + advance_len)
         r.set_last_text(text)
         r.flags.last_was_no_space = no_space_mode
+        r.flags.last_was_postfix_mark = is_postfix_mark
 
     fn format(r: Self$@, node: Ast_node$@)
         r.format_internal(node, false, false, 0)
@@ -683,9 +691,27 @@ impl Formatter
         was_bare_close: = r.bare_close
         if r.layout && my_brace_suppress && kind_id == .k_stmt_block && body_count == 1
             r.bare_close = body.close_brace_off
+        $first_arm: = true
 
         for i in Range.asc(len)
             child: = node.get_child(i)
+            // A `!` under a postfix node is a postfix mark (`f()!`, `T!E`), not a prefix "not".
+            r.postfix_mark_next =
+                (kind_id == .k_expr_postfix || kind_id == .k_type_postfix) &&
+                child.kind_id == .k_literal && child.text.equals("!")
+            // **Each arm starts a line at the `switch`'s column**, after any comment before it:
+            // the first below the `switch`, one after an arm on one line (`case .a {}`) below it.
+            // Only a `}` closing a line of its own takes the next arm (`} case .b {`), and the
+            // indentation notation writes none (`force_next_nl`). Caution: **Never one level in**:
+            // the `switch` opens no block ("No lines are added, and `switch` gets no block" in
+            // `../../docs/DESIGN.md`), and there an arm reads as a statement of the block above.
+            if kind_id == .k_stmt_match &&
+                (child.is_keyword("case") || child.is_keyword("default"))
+                if (first_arm || r.block_on_one_line) && r.suppress_nl_depth == 0
+                    r.catch_up_trivia(child.loc.offset, false)
+                    r.write_nl()
+                    r.flags.wrap_indent = false
+                first_arm = false
             c_text: = child.text
             is_close_brace: = c_text.is_closing_bracket()
             is_open_brace: = c_text.is_opening_bracket()
@@ -703,7 +729,7 @@ impl Formatter
             is_logical: = child.is_literal("&&") || child.is_literal("||")
             // The `:` before a type_fn_sig's return type (a param's own `:` sits in its param_list,
             // a separate node). As with is_assign, it checks ahead whether the whole return type
-            // fits, so no wrap lands inside it ("Void" fitting and "Void?Sema_error" not).
+            // fits, so no wrap lands inside it ("Void" fitting and "Void!Sema_error" not).
             is_ret_colon: = kind_id == .k_type_fn_sig && child.is_literal(":")
 
             if (is_brace_container && force_multiline && is_close_brace) ||
@@ -796,6 +822,8 @@ impl Formatter
                 r.write_space()
 
         r.bare_close = was_bare_close
+        if kind_id == .k_stmt_block
+            r.block_on_one_line = !is_block
         if my_list_suppress && r.suppress_nl_depth > 0
             r.suppress_nl_depth -= 1
 

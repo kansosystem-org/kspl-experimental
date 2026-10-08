@@ -11,17 +11,17 @@ import "kspage/model/run" { Inline }
 import "kspage/model/style" + { Sheet, Style }
 import "kspage/write/edit" + { Editor }
 import "kspage/write/record" + { Paper_op, Step }
-import "kspage/write/record" { Aside_op, Block_face_op, Frame_op, Href_op, Look_op, Note_op, Op,
+import "kspage/write/record" { Aside_op, Block_face_op, Frame_op, Href_op, Look_op, Note_op,
     Refer_op, Remark_op, Name_op, Sheet_op, Span_op, Step_op, Style_op }
 
-fn do_set_frame(e: Editor$@, into: Step$@, b: Block$@, at: Option<|Rect|>) //<
+fn do_set_frame(e: Editor$@, into: Step$@, b: Block$@, at: Rect?) //<
     //< Sets a slide frame's position, recording the change
     //<
     //< As with text, do not change a block directly.
     if into != null
         if !record.last_framed(into, b)
             op: = Frame_op::{ .block = b, .was = b.frame }
-            edit.keep(e, into, Op.frame(e.arena.create(op)))
+            edit.keep(e, into, .frame(e.arena.create(op)))
     b.frame = at
 
 fn do_set_step(e: Editor$@, into: Step$@, b: Block$@, at: Sz) //<
@@ -32,7 +32,7 @@ fn do_set_step(e: Editor$@, into: Step$@, b: Block$@, at: Sz) //<
     //< turn takes two undos, and neither restores its change alone.
     if into != null
         op: = Step_op::{ .block = b, .was = b.step }
-        edit.keep(e, into, Op.step(e.arena.create(op)))
+        edit.keep(e, into, .step(e.arena.create(op)))
     b.step = at
 
 fn do_set_span(e: Editor$@, into: Step$@, cell: Block$@, rows: Sz, cols: Sz) //<
@@ -48,7 +48,7 @@ fn do_set_span(e: Editor$@, into: Step$@, cell: Block$@, rows: Sz, cols: Sz) //<
     cell.span_cols = cols if cols > 1 else 1
     if into != null
         op: = Span_op::{ .cell = cell, .was_rows = was_rows, .was_cols = was_cols }
-        edit.keep(e, into, Op.span(e.arena.create(op)))
+        edit.keep(e, into, .span(e.arena.create(op)))
 
 fn do_set_paper(e: Editor$@, into: Step$@, sheet: Sheet$@, fresh: Paper) //<
     //< Replaces the paper settings as a whole
@@ -58,7 +58,7 @@ fn do_set_paper(e: Editor$@, into: Step$@, sheet: Sheet$@, fresh: Paper) //<
     sheet.paper = fresh
     if into != null
         edit.keep(e, into,
-            Op.paper(e.arena.create(Paper_op::{ .sheet = sheet, .was = was })))
+            .paper(e.arena.create(Paper_op::{ .sheet = sheet, .was = was })))
 
 fn do_set_look(e: Editor$@, into: Step$@, s: Style$@, fresh: Style) //<
     //< Replaces a style's contents as a whole, recording the change
@@ -69,8 +69,7 @@ fn do_set_look(e: Editor$@, into: Step$@, s: Style$@, fresh: Style) //<
     was: Style = s$
     style.put_face(s, fresh)
     if into != null
-        edit.keep(e, into,
-            Op.look(e.arena.create(Look_op::{ .style = s, .was = was })))
+        edit.keep(e, into, .look(e.arena.create(Look_op::{ .style = s, .was = was })))
 
 fn do_sheet(e: Editor$@, into: Step$@, sheet: Sheet$@, at: Sz, put_back: Bool, s: Style$@) //<
     //< Removes a style from the table or puts it back, recording the change
@@ -80,7 +79,7 @@ fn do_sheet(e: Editor$@, into: Step$@, sheet: Sheet$@, at: Sz, put_back: Bool, s
         sheet.styles.insert(at, s)
         if into != null
             op: = Sheet_op::{ .sheet = sheet, .at = at, .put_back = false, .style = null }
-            edit.keep(e, into, Op.sheet(e.arena.create(op)))
+            edit.keep(e, into, .sheet(e.arena.create(op)))
         return
     if at < 0 || at >= sheet.styles.len
         return
@@ -88,14 +87,14 @@ fn do_sheet(e: Editor$@, into: Step$@, sheet: Sheet$@, at: Sz, put_back: Bool, s
     if into != null
         // Caution: **Save it before removing it** (afterwards, which style it was cannot be read).
         op: = Sheet_op::{ .sheet = sheet, .at = at, .put_back = true, .style = gone }
-        edit.keep(e, into, Op.sheet(e.arena.create(op)))
+        edit.keep(e, into, .sheet(e.arena.create(op)))
     sheet.styles.remove_at(at)
 
 fn do_set_style(e: Editor$@, into: Step$@, n: Inline$@, name: U8[]) //<
     //< Sets an inline's style name, recording the change
     if into != null
         op: = Style_op::{ .run = n, .was = n.style }
-        edit.keep(e, into, Op.style(e.arena.create(op)))
+        edit.keep(e, into, .style(e.arena.create(op)))
     n.style = name
 
 fn do_set_aside(e: Editor$@, into: Step$@, b: Block$@, text: U8[]) //<
@@ -104,13 +103,13 @@ fn do_set_aside(e: Editor$@, into: Step$@, b: Block$@, text: U8[]) //<
     //< Empty removes the memo. The path points at the block itself (`run` is -1).
     if into != null
         op: = Aside_op::{ .block = b, .was = b.aside }
-        edit.keep(e, into, Op.aside(e.arena.create(op)))
+        edit.keep(e, into, .aside(e.arena.create(op)))
     b.aside = text
 
 fn do_set_note(e: Editor$@, into: Step$@, n: Inline$@, note: U8[]) //< writes an inline's note
     if into != null
         op: = Note_op::{ .run = n, .was = n.note }
-        edit.keep(e, into, Op.note(e.arena.create(op)))
+        edit.keep(e, into, .note(e.arena.create(op)))
     n.note = note
 
 fn do_set_remark(e: Editor$@, into: Step$@, n: Inline$@, remark: U8[], by: U8[]) //<
@@ -119,7 +118,7 @@ fn do_set_remark(e: Editor$@, into: Step$@, n: Inline$@, remark: U8[], by: U8[])
     //< Keep the two in one record (separate, one undo restores only the words).
     if into != null
         op: = Remark_op::{ .run = n, .was = n.remark, .was_by = n.remark_by }
-        edit.keep(e, into, Op.remark(e.arena.create(op)))
+        edit.keep(e, into, .remark(e.arena.create(op)))
     n.remark = remark
     n.remark_by = by
 
@@ -130,7 +129,7 @@ fn do_set_name(e: Editor$@, into: Step$@, b: Block$@, name: U8[]) //<
     //< layout would vanish while the name is being typed).
     if into != null
         op: = Name_op::{ .block = b, .was = b.name }
-        edit.keep(e, into, Op.name(e.arena.create(op)))
+        edit.keep(e, into, .name(e.arena.create(op)))
     b.name = name
 
 fn do_set_block_style(e: Editor$@, into: Step$@, b: Block$@, name: U8[]) //<
@@ -139,13 +138,13 @@ fn do_set_block_style(e: Editor$@, into: Step$@, b: Block$@, name: U8[]) //<
     //< It is separate from an inline's style (the layout and the marker belong to the paragraph).
     if into != null
         op: = Block_face_op::{ .block = b, .was = b.style }
-        edit.keep(e, into, Op.block_face(e.arena.create(op)))
+        edit.keep(e, into, .block_face(e.arena.create(op)))
     b.style = name
 
 fn do_set_href(e: Editor$@, into: Step$@, n: Inline$@, href: U8[]) //< writes an inline's link
     if into != null
         op: = Href_op::{ .run = n, .was = n.href }
-        edit.keep(e, into, Op.href(e.arena.create(op)))
+        edit.keep(e, into, .href(e.arena.create(op)))
     n.href = href
 
 fn do_set_refers(e: Editor$@, into: Step$@, n: Inline$@, name: U8[]) //<
@@ -154,5 +153,5 @@ fn do_set_refers(e: Editor$@, into: Step$@, n: Inline$@, name: U8[]) //<
     //< The number is not written ("Figure 1" is counted at layout time; only the name is stored).
     if into != null
         op: = Refer_op::{ .run = n, .was = n.refers }
-        edit.keep(e, into, Op.refer(e.arena.create(op)))
+        edit.keep(e, into, .refer(e.arena.create(op)))
     n.refers = name

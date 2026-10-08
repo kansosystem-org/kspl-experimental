@@ -8,7 +8,7 @@
 import "kspage/lay/caret"
 import "kspage/lay/page" { Page }
 import "kspage/model/doc" + { Block, Tile }
-import "kspage/model/style" { Arrange, Sheet, Style }
+import "kspage/model/style" { Sheet, Style }
 import "kspage/write/block"
 import "kspage/write/edit" + { Editor }
 import "kspage/write/shape"
@@ -123,7 +123,7 @@ priv fn read_row(c: Reader$@, out: List<|U8[]|>$@, arena: Arena$@): Bool //<
         c.pos += 1
     return true
 
-fn read_table(src: U8[], name: U8[], arena: Arena$@): Option<|Block$@|> //<
+fn read_table(src: U8[], name: U8[], arena: Arena$@): Block$@? //<
     //< Builds a table block from CSV text
     //<
     //< If no line reads, no table is made. **The rows are padded to the longest** (otherwise the
@@ -141,7 +141,7 @@ fn read_table(src: U8[], name: U8[], arena: Arena$@): Option<|Block$@|> //<
             wide = kept.len
         rows.push(kept)
     if rows.len <= 0 || wide <= 0
-        return Option<|Block$@|>.none
+        return .none
     made: = doc.new_block(name, arena)
     for $r: Sz = 0; r < rows.len; r += 1
         row: = made.add_child("")
@@ -149,7 +149,7 @@ fn read_table(src: U8[], name: U8[], arena: Arena$@): Option<|Block$@|> //<
         for $i: Sz = 0; i < wide; i += 1
             text: = got.get(i) if i < got.len else ""
             row.add_child("").add_text(text)
-    return Option<|Block$@|>.some(made)
+    return .some(made)
 
 impl Editor
     fn insert_csv(r: Self$@, page: Page$@, sheet: Sheet$@, name: U8[], src: U8[]): Bool //<
@@ -165,12 +165,14 @@ impl Editor
         r.break_group()
         st: = r.step()
         $s: Style$@ = null
-        switch r.styled(st, sheet, name, Arrange.grid) case .some(got)
+        switch r.styled(st, sheet, name, .grid)
+        case .some(got)
             s = got
         case .none
             return false
         $made: Block$@ = null
-        switch read_table(src, s.name, r.arena) case .some(got)
+        switch read_table(src, s.name, r.arena)
+        case .some(got)
             made = got
         case .none
             return false

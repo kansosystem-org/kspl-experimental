@@ -42,11 +42,11 @@ pub struct Compile_result //< what one run of the compiler said
         //< Not `stderr`, which is a macro in the Windows (MSVC UCRT) headers (see
         //< std/sys.Run_result).
 
-fn load_jsonl(path: U8[], arena: Arena$@): json.Val$[]?io.Io_error //< one JSON record per line
+fn load_jsonl(path: U8[], arena: Arena$@): json.Val$[]!io.Io_error //< one JSON record per line
     //<
     //< Shared by the corpus tools. A blank line is skipped, but broken JSON panics, so a broken
     //< corpus is noticed at once.
-    data: = io.read_file(path)?
+    data: = io.read_file(path)!
     defer dealloc(Void$@::data.ptr)
 
     $list: = List<|json.Val|>.new(arena)
@@ -58,7 +58,7 @@ fn load_jsonl(path: U8[], arena: Arena$@): json.Val$[]?io.Io_error //< one JSON 
         list.push(val)
     return list.slice()
 
-priv fn parse_error_summary(stdout_data: U8[]): Option<|I32|> //<
+priv fn parse_error_summary(stdout_data: U8[]): I32? //<
     //< Reads N from stdout's "Finished with N error(s), M warning(s)" summary line
     //<
     //< `.none` where a parse or syntax error exits with no summary (see ksplc/main.kspls).
@@ -77,8 +77,8 @@ priv fn parse_error_summary(stdout_data: U8[]): Option<|I32|> //<
         num_str: = U8$[]::after_with.sub(0, err_pos).trim_spaces()
         n: = num_str.parse_size() catch
             continue
-        return Option<|I32|>.some(I32::n)
-    return Option<|I32|>.none
+        return .some(I32::n)
+    return .none
 
 pub fn compile_errors( //< runs one source through ksplc and counts the errors it reports
     //<

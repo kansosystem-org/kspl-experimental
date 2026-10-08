@@ -80,27 +80,26 @@ impl Sema_ctx
         return made
 
     priv fn build_field_table(r: Self$@, impl_node: Ast_node$@,
-        emitted: Map<|U8[], U8[]|>$@, extra: List<|Ast_node$@|>$@, depth: Sz):
-        Option<|Ast_node$@|> //<
+        emitted: Map<|U8[], U8[]|>$@, extra: List<|Ast_node$@|>$@, depth: Sz): Ast_node$@? //<
             //< Builds one table; if it cannot, it reports a diagnostic and returns `none`.
         target: = impl_node.find_child(.k_type_expr)
         if target == null
-            return Option<|Ast_node$@|>.none
+            return .none
         if depth > max_nest_depth
             r.err(impl_node,
                 "'Reflectable' gave up nesting: this struct embeds other structs deeper than the \
                     limit, so write the 'fields()' body by hand for the inner types")
-            return Option<|Ast_node$@|>.none
+            return .none
         if impl_node.find_child(.k_type_gen_params) != null
             r.err(impl_node,
                 "a generic type cannot derive 'Reflectable': the field table is one constant per \
                     concrete type, so write the 'fields()' body by hand for each instantiation")
-            return Option<|Ast_node$@|>.none
+            return .none
         type_id: = target.resolve_type(r) catch 0
         if type_id == 0
-            return Option<|Ast_node$@|>.none
+            return .none
         r.ensure_type_registry(type_id, impl_node) catch
-            return Option<|Ast_node$@|>.none
+            return .none
         real_id: = r.env.get_clean_real_type(type_id)
         clean_name: = r.env.base_type_name(real_id)
         $def_fields: List<|sema_type_def.Struct_field$@|>$@ = null
@@ -110,14 +109,14 @@ impl Sema_ctx
             r.err(impl_node,
                 "only a struct can derive 'Reflectable': the field table names fields at fixed \
                     offsets, which no other kind of type has")
-            return Option<|Ast_node$@|>.none
+            return .none
         $rows: = List<|Row_spec|>.new(null)
         defer rows.free()
         if !r.collect_field_kinds(def_fields, rows@, impl_node, emitted, extra, depth)
-            return Option<|Ast_node$@|>.none
+            return .none
         prefix: = r.reflect_prefix(impl_node)
         table: = make_table_decl(impl_node, target, rows@, prefix)
-        return Option<|Ast_node$@|>.some(table)
+        return .some(table)
 
     priv fn collect_field_kinds(r: Self$@,
         def_fields: List<|sema_type_def.Struct_field$@|>$@, rows: List<|Row_spec|>$@,
@@ -136,7 +135,7 @@ impl Sema_ctx
             // into `ptr` / `len` / `cap` / `arena` and rejected under a name the user did not
             // write.
             is_list: = r.clause_names(f_type, list_fqn)
-            if is_list || r.clause_names(f_type, sema_type_env.option_fqn)
+            if is_list || r.clause_names(f_type, base_core.option_fqn)
                 if !r.push_wrapper_row(rows, f, f_type, is_list, site, impl_node, emitted, extra,
                     depth)
                     ok = false
@@ -162,7 +161,7 @@ impl Sema_ctx
                 r.clear_scratch()
                     .s("field '\{f.name\}' has type '\{shown.slice()\}', which 'Reflectable' cannot \
                         derive a table entry for (covered: the integer types, F32, F64, Bool, U8[], \
-                        a nested struct of those, and List<|T|> / Option<|T|> of those); write the \
+                        a nested struct of those, and List<|T|> / T? of those); write the \
                         'fields()' body by hand")
                 r.err(site, r.scratch.slice())
                 ok = false
@@ -173,7 +172,7 @@ impl Sema_ctx
         f: sema_type_def.Struct_field$@, f_type: Ast_node$@, is_list: Bool, site: Ast_node$@,
         impl_node: Ast_node$@, emitted: Map<|U8[], U8[]|>$@, extra: List<|Ast_node$@|>$@, depth: Sz):
         Bool //<
-            //< Adds the row of a `List<|T|>` (is_list) or `Option<|T|>` field; false if it cannot
+            //< Adds the row of a `List<|T|>` (is_list) or `T?` field; false if it cannot
             //<
             //< Caution: **Recognize a wrapper of wrappers by name**, not by kind (a
             //< `struct_field`), for the same reason as the container check in collect_field_kinds.
@@ -186,12 +185,12 @@ impl Sema_ctx
         // **Decide it first:** `clause_names` writes to scratch.
         nested: =
             r.clause_names(inner_node, list_fqn) ||
-            (!is_list && r.clause_names(inner_node, sema_type_env.option_fqn))
+            (!is_list && r.clause_names(inner_node, base_core.option_fqn))
         $spec: = Row_spec::{ .field = f.name, .kind = "list_field" if is_list else "opt_field" }
         if inner_kind.len == 0 || nested
-            // **Show the name the user wrote.** An instantiated `List`'s internal name
-            // (`std_ds_List_I64_Ptr`) does not appear in the source.
-            $spelled: = f_type.extract_type_name()
+            // **Show the type as a diagnostic shows it** (`List<|I64|>`, `I64?`), not an instance's
+            // internal name (`std_ds_List_I64_Ptr`) or the tree's folded `Option<|I64|>`.
+            $spelled: = r.env.display_str(f.type_id)
             defer spelled.free()
             r.clear_scratch().s("field '\{f.name\}' has type '\{spelled.slice()\}'")
             if nested && is_list
@@ -275,20 +274,20 @@ impl Sema_ctx
                     return r.env.strip_ptr(lf.type_id)
         return 0
 
-    priv fn list_elem_node(_r: Self$@, f_type: Ast_node$@): Option<|Ast_node$@|> //<
+    priv fn list_elem_node(_r: Self$@, f_type: Ast_node$@): Ast_node$@? //<
         //< The clause of the `T` of `List<|T|>`
         $args: Ast_node$@ = null
         if found: = f_type.find_deep_child(.k_type_args)
             args = found
         if args == null
-            return Option<|Ast_node$@|>.none
+            return .none
         for c in args.children
             if c.kind_id == .k_type_arg || c.kind_id == .k_type_expr
                 inner: = c.find_child(.k_type_expr)
-                return Option<|Ast_node$@|>.some(inner if inner != null else c)
-        return Option<|Ast_node$@|>.none
+                return .some(inner if inner != null else c)
+        return .none
 
-    priv fn option_inner_type(r: Self$@, opt_id: I32): I32 //< `Option<|T|>`'s contents' type
+    priv fn option_inner_type(r: Self$@, opt_id: I32): I32 //< `T?`'s contents' type
         //<
         //< **Taken from the only field of the variant that has a payload** (as in
         //< `list_elem_type`).
@@ -326,7 +325,8 @@ impl Sema_ctx
         real_id: = r.env.get_clean_real_type(type_id)
         // `Sz` is signed ("3.1 Primitive types" in `../../../docs/SPEC-language.md`): as unsigned,
         // a negative length would be read without its sign and refused as out of range.
-        switch real_id case I32::sema_type_env.Builtin_type_id.i8_type,
+        switch real_id
+        case I32::sema_type_env.Builtin_type_id.i8_type,
             I32::sema_type_env.Builtin_type_id.i16_type,
             I32::sema_type_env.Builtin_type_id.i32_type,
             I32::sema_type_env.Builtin_type_id.i64_type,

@@ -40,20 +40,20 @@ import "kspage/write/typing"
 import "std/ds" { List }
 import "std/mem" + { Arena }
 
-priv fn row_of_caret(): Option<|Block$@|> //<
+priv fn row_of_caret(): Block$@? //<
     //< The block holding the cursor's paragraph — in a table, the row
     //<
     //< Outside a table it is the paragraph's parent, which a filter ignores. None at the document's
     //< top level or with no cursor.
     if ed.caret.inline == null
-        return Option<|Block$@|>.none
+        return .none
     own: = ed.doc.owner_of(ed.caret.inline)
     if !own.found
-        return Option<|Block$@|>.none
+        return .none
     up: = ed.doc.parent_of(own.block)
     if !up.found || up.block == null
-        return Option<|Block$@|>.none
-    return Option<|Block$@|>.some(up.block)
+        return .none
+    return .some(up.block)
 
 // Lays out again at width `width` and returns the number of boxes. **The previous result is
 // freed here**; kept, resizing alone would pile up allocations.
@@ -326,17 +326,17 @@ fn kspage_web_caret_spot(out: F32$@)
         (out + 1)$ = F32::ed.caret.offset
         (out + 2)$ = 1.0
 
-priv fn caret_line(): Option<|Sz|> //< which of the document's blocks the cursor is in
+priv fn caret_line(): Sz? //< which of the document's blocks the cursor is in
     //<
     //< In a text-form document that is the line number (one line per block); inside nested blocks
     //< it gives no answer (there are no line numbers there).
     if ed.caret.inline == null
-        return Option<|Sz|>.none
+        return .none
     own: = ed.doc.owner_of(ed.caret.inline)
     if !own.found
-        return Option<|Sz|>.none
+        return .none
     at: = block_no(own.block)
-    return Option<|Sz|>.none if at >= ed.doc.blocks.len else Option<|Sz|>.some(at)
+    return .none if at >= ed.doc.blocks.len else .some(at)
 
 // Puts the cursor at that offset on that line; 1 if it could.
 // Caution: **Put it on a character boundary** — once the text changed, the remembered offset can
@@ -554,7 +554,8 @@ fn kspage_web_insert_surface(len: Sz, plan: I32): I32
     // Return the reason as a number (the rule at `kspage_web_set_block_style` in `face.kspls`): 1
     // inserted, 0 the cursor is in no paragraph, -1 inside a table cell, -2 no slide style, -3 open
     // read-only.
-    switch ed.insert_surface(page, sheet, name, state.sketch_at(plan)) case .done
+    switch ed.insert_surface(page, sheet, name, state.sketch_at(plan))
+    case .done
         return 1
     case .nowhere
         return 0

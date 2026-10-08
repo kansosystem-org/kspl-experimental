@@ -18,7 +18,7 @@ import "std/chars" // single-character tests and slicing
 import "std/fs"
 import "std/http"
 import "std/io"
-import "std/log" { Level, Log }
+import "std/log" { Log }
 import "std/mem" { Arena, dealloc }
 import "std/net"
 import "std/rand"
@@ -41,7 +41,7 @@ priv const name: U8[] = "kssrv"
 // Caution: **Do not hold it as a file-level variable**: only a null pointer filled in later could
 // be held, a server that is up but may not be able to speak. `main` makes it once.
 priv fn log_new(): Log //< makes the run's logger: the standard output, down to information
-    return Log.new(io.out(), Level.information, name)
+    return Log.new(io.out(), .information, name)
 
 priv const listener_token: Sz = conn.max_conns //< the token given to the listening socket
     //<
@@ -128,12 +128,13 @@ priv enum Rel_path //< makes a relative path under the root from a percent-decod
 
 priv fn path_to_rel(path: U8[], root: U8[], arena: Arena$@): Rel_path
     decoded: = url.decode_component(path, arena) catch _e
-        return Rel_path.malformed
+        return .malformed
     $t: U8[] = ""
-    switch api.rel_under(root, decoded) case .some(r)
+    switch api.rel_under(root, decoded)
+    case .some(r)
         t = r
     case .none
-        return Rel_path.rejected
+        return .rejected
     // Caution: **Check the name that is served, not the one asked for.** A folder gives its index,
     // and checked before the index was added, a link standing at a folder's index served what it
     // points at for the folder's own path, though the index asked for by name was refused.
@@ -141,11 +142,12 @@ priv fn path_to_rel(path: U8[], root: U8[], arena: Arena$@): Rel_path
         served: =
             (index_name if t.len == 0
             else arena.text().s(t).c('/').s(index_name).take())
-        switch api.rel_under(root, served) case .some(r)
+        switch api.rel_under(root, served)
+        case .some(r)
             t = r
         case .none
-            return Rel_path.rejected
-    return Rel_path.ok(t)
+            return .rejected
+    return .ok(t)
 
 priv fn names_this_server(req: http.Request$@): Bool //<
     //< Whether the `Host` header names this machine's loopback, as the token's URL does
@@ -199,7 +201,8 @@ priv fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) 
         return
 
     $rel: U8[] = ""
-    switch path_to_rel(t.path, ctx.root, c.arena) case .ok(r)
+    switch path_to_rel(t.path, ctx.root, c.arena)
+    case .ok(r)
         rel = r
     case .malformed
         conn.queue_error(c, 400)
@@ -264,7 +267,8 @@ priv fn conn_build($held: Rc<|conn.Conn|>, ctx: conn.Ctx$@): Bool //<
     req: =
         http.parse_request(c.inbuf.slice(), body_limit(ctx), c.arena) catch e
         c.arena.restore(base)
-        switch e case .incomplete
+        switch e
+        case .incomplete
             // It has not fully arrived yet; wait for the next readable event.
             return true
         case .head_too_large
@@ -294,7 +298,8 @@ priv fn conn_send($held: Rc<|conn.Conn|>): Bool //< sends as much of `outbuf` as
         rest: = c.outbuf.slice().sub(c.sent, c.outbuf.len - c.sent)
         n: =
             c.stream.write(rest.sub(0, io_chunk) if rest.len > io_chunk else rest) catch e
-            switch e case .would_block
+            switch e
+            case .would_block
                 return true // wait for writable
             default
                 return false
@@ -323,7 +328,8 @@ priv fn conn_linger($held: Rc<|conn.Conn|>): Bool //<
     $chunk: U8[io_chunk] = ::{}
     for _round in Range.asc(max_read_rounds)
         n: = c.stream.read(U8$[]::chunk) catch e
-            switch e case .would_block
+            switch e
+            case .would_block
                 return true
             default
                 return false
@@ -340,7 +346,8 @@ priv fn conn_read($held: Rc<|conn.Conn|>, ctx: conn.Ctx$@): Bool //< reads from 
     $chunk: U8[io_chunk] = ::{}
     for _round in Range.asc(max_read_rounds)
         n: = c.stream.read(U8$[]::chunk) catch e
-            switch e case .would_block
+            switch e
+            case .would_block
                 return true
             default
                 return false
@@ -413,13 +420,14 @@ priv fn drive_backlog(t: conn.Conn_table$@, ctx: conn.Ctx$@): Bool //<
 priv fn accept_all(listener: net.Tcp_listener$@, t: conn.Conn_table$@, lg: Log$@)
     for
         stream: = listener.accept() catch e
-            switch e case .would_block { // every pending connection is accepted.
+            switch e
+            case .would_block { // every pending connection is accepted.
             } default
-                if ln: = lg.at(Level.error)
+                if ln: = lg.at(.error)
                     ln.s("accept failed: \{e\}")
             return
         stream.set_nonblocking() catch
-            lg.say(Level.error, "cannot set the accepted socket nonblocking")
+            lg.say(.error, "cannot set the accepted socket nonblocking")
             stream.free()
             continue
         slot: = conn.table_find_free(t)
@@ -434,7 +442,7 @@ priv fn accept_all(listener: net.Tcp_listener$@, t: conn.Conn_table$@, lg: Log$@
         $host: U8[64] = ::{}
         p: = stream.peer(U8$[]::host) catch net.Peer_addr::{ .host_len = 0, .port = 0 }
         who: = U8[]::{ .ptr = host[0]@, .len = p.host_len } if p.host_len > 0 else "(unknown)"
-        if ln: = lg.at(Level.information)
+        if ln: = lg.at(.information)
             ln
                 .s("conn #\{conn.stats.connections_total\} from \{who\}:\{p.port\} (open \
                     \{conn.stats.connections_open\})")
@@ -550,7 +558,7 @@ fn main(): I32
     // Caution: **Do not start at all when the named page does not exist.** A 404 later leaves "the
     // page is blank" with no visible reason (the same section of the agreement).
     if page.len > 0 && !fs.exists(page)
-        if ln: = lg.at(Level.error)
+        if ln: = lg.at(.error)
             ln.s("no such page: \{page\}")
         return 1
 
@@ -559,33 +567,33 @@ fn main(): I32
     $token: U8[] = ""
     if local
         if !make_token(U8$[]::token_buf)
-            lg.say(Level.error, "cannot generate a token from the OS random source")
+            lg.say(.error, "cannot generate a token from the OS random source")
             return 1
         token = U8[]::{ .ptr = token_buf@, .len = token_bytes * 2 }
 
     port64: = port_text.to_i64() catch _e
-        if ln: = lg.at(Level.error)
+        if ln: = lg.at(.error)
             ln.s("port must be a number: \{port_text\}")
         return 1
     if port64 < 1I64 || port64 > 65535I64
-        if ln: = lg.at(Level.error)
+        if ln: = lg.at(.error)
             ln.s("port out of range (1-65535): \{port_text\}")
         return 1
     port: = I32::port64
 
     if !fs.is_dir(root)
-        if ln: = lg.at(Level.error)
+        if ln: = lg.at(.error)
             ln.s("not a directory: \{root\}")
         return 1
 
     host: = local_host if local else any_host
     listener: = net.Tcp_listener.bind(host, port) catch e
-        if ln: = lg.at(Level.error)
+        if ln: = lg.at(.error)
             ln.s("cannot listen on port \{port\}: \{e\}")
         return 1
     defer listener.free()
     listener.set_nonblocking() catch
-        lg.say(Level.error, "cannot set the listening socket nonblocking")
+        lg.say(.error, "cannot set the listening socket nonblocking")
         return 1
 
     $r: = reactor.Reactor.new()
@@ -612,18 +620,18 @@ fn main(): I32
     $ctx: conn.Ctx = ::{ .root = root, .lg = lg@, .token = token, .p = p, .page = page }
 
     conn.stats.started_s = time.now()
-    if ln: = lg.at(Level.information)
+    if ln: = lg.at(.information)
         ln.s("listening on \{host\}:\{port\}, root=\{root\}")
     // Caution: **Log the named page on one line**, or nobody can confirm which file `/` returns.
     if page.len > 0
-        if ln: = lg.at(Level.information)
+        if ln: = lg.at(.information)
             ln.s("page=\{page\}")
     if local
         // **The token goes in the fragment (`#`)**, which is not sent to the server, so another
-        // process's `GET /` cannot get it; in the query (`?`) it would stay in the log. **It is
+        // process's `GET /` cannot get it; in the query (`!`) it would stay in the log. **It is
         // printed only once**: an endpoint returning it would give it to anyone who does not know
         // it.
-        if ln: = lg.at(Level.information)
+        if ln: = lg.at(.information)
             ln.s("open http://\{host\}:\{port\}/#t=\{token\}")
 
     // Caution: **Do not enter the loop with the lines the waiters read still buffered.** The
@@ -646,15 +654,15 @@ fn main(): I32
         // **Asked to stop, it stops once the answer has gone out** (`api.queue_api_stop`), whoever
         // holds it: the person asked.
         if conn.stop_asked_by != 0I64 && !conn.open_serial(table@, conn.stop_asked_by)
-            lg.say(Level.information, "asked to stop: stopping")
+            lg.say(.information, "asked to stop: stopping")
             return 0
         // **No holder means "nobody is using me".**
         if idle_s > 0I64 && !conn.any_holding(table@) && now_us - asked_us >= idle_s * us_per_s
-            if ln: = lg.at(Level.information)
+            if ln: = lg.at(.information)
                 ln.s("no page has held it for \{idle_s\} seconds: stopping")
             return 0
         $ready: = r.wait(0 if backlogged else poll_timeout_ms) catch e
-            if ln: = lg.at(Level.error)
+            if ln: = lg.at(.error)
                 ln.s("poll failed: \{e\}")
             continue
         for ev in ready

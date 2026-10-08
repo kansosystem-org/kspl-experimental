@@ -10,6 +10,7 @@ import "ksplc/base/core" as base_core
 import "ksplc/base/locate" as base_locate
 import "ksplc/lsp/msg" as lsp_msg
 import "ksplc/lsp/nav" as lsp_nav
+import "ksplc/lsp/position" as lsp_position
 import "ksplc/lsp/state" { Doc_state }
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "std/chars"
@@ -32,13 +33,14 @@ struct Spot //< one place of use
 fn handle(ws_state: Doc_state$@, method: U8[], params: json.Val, id_val: json.Val, arena: Arena$@) //<
     //< It answers both references and rename (see the file header); only the answer differs
     uri: = params.get("textDocument").get("uri").as_str()
-    path: = lsp_nav.find_path_at_params(ws_state, params)
+    path: = lsp_position.find_path_at_params(ws_state, params)
     defer path.free()
     if path.len <= 0
         lsp_msg.send_null_response(id_val, arena)
         return
     $def_node: Ast_node$@ = null
-    switch target_def_of(ws_state, path, path.get(path.len - 1)) case .some(d)
+    switch target_def_of(ws_state, path, path.get(path.len - 1))
+    case .some(d)
         def_node = d
     default {}
     if def_node == null
@@ -57,13 +59,14 @@ priv fn wants_decl(params: json.Val): Bool //< whether the references count the 
     //<
     //< Caution: **Where the option is absent, count it**, or a client that sends none loses the
     //< definition from the list. False only when exclusion is asked for.
-    switch params.get("context").get("includeDeclaration") case .bool_val(b)
+    switch params.get("context").get("includeDeclaration")
+    case .bool_val(b)
         return b
     default
         return true
 
 priv fn target_def_of(ws_state: Doc_state$@, path: List<|Ast_node$@|>$@, target_node: Ast_node$@):
-    Option<|Ast_node$@|> //<
+    Ast_node$@? //<
         //< The definition the name under the cursor points at, or null
         //<
         //< Where the name is unresolved (sema names no local binding, say), the identifier itself
@@ -71,7 +74,7 @@ priv fn target_def_of(ws_state: Doc_state$@, path: List<|Ast_node$@|>$@, target_
     def_node: = lsp_nav
         .resolve_def_node(ws_state.sema, ws_state.root_file, path, target_node).def_node
     if def_node != null
-        return Option<|Ast_node$@|>.some(def_node)
+        return .some(def_node)
     id_child: = target_node.find_child(.k_identifier)
     last: = target_node.last_child()
     $n: Ast_node$@ = null
@@ -82,8 +85,8 @@ priv fn target_def_of(ws_state: Doc_state$@, path: List<|Ast_node$@|>$@, target_
     else if target_node.children.len > 0 && last.kind_id == .k_identifier
         n = last
     if n == null
-        return Option<|Ast_node$@|>.none
-    return Option<|Ast_node$@|>.some(n.def_node if n.def_node != null else n)
+        return .none
+    return .some(n.def_node if n.def_node != null else n)
 
 priv fn collect_spots(ws_state: Doc_state$@, def_node: Ast_node$@, style: base_locate.Uri_style,
     arena: Arena$@): List<|Spot|> //<
@@ -194,7 +197,7 @@ priv fn walk_node(node: Ast_node$@, target_def: Ast_node$@, c: Sema_ctx$@,
     depth: Sz)
     // **Nodes the compiler generated are not uses** (`made_by_compiler` in
     // `../base/ast_ext.kspls`).
-    if node == null || target_def == null || depth > lsp_nav.max_walk_depth ||
+    if node == null || target_def == null || depth > lsp_position.max_walk_depth ||
         node.made_by_compiler()
         return
     // An import's or embed's name belongs to its file alone; unrelated imports elsewhere stay as

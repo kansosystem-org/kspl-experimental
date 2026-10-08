@@ -26,6 +26,17 @@ fn slice_ident(): U8[] //< the last word of `slice_fqn` (`Slice`)
     at: = slice_fqn.rfind_char('.')
     return slice_fqn if at < 0 else slice_fqn.sub_from(at + 1)
 
+const option_fqn: U8[] = "std.lang.Option" //<
+    //< The FQN of a value that may be absent (`Option<|T|>` in `std/lang`)
+    //<
+    //< A `T?` is sugar for this (`../parse/desugar_slice.kspls`).
+    //< Caution: **Match an Option by this and `instance_base`**, never by its mangled name's shape.
+
+fn option_ident(): U8[] //<
+    //< the last word of `option_fqn` (`Option`), the identifier put into the AST
+    at: = option_fqn.rfind_char('.')
+    return option_fqn if at < 0 else option_fqn.sub_from(at + 1)
+
 const fmt_method_char: U8[] = "fmt_char" //<
     //< The method names that the format spec `\{value:SPEC\}` desugars to
     //<
@@ -124,20 +135,16 @@ struct Compiler_config
         //< The machine `--machine=` named; empty is the one ksplc runs on
         //<
         //< **Read it through `current` in `target.kspls`**, which resolves the empty default.
-    library: Bool //<
-        //< Whether a library is built (`--library`): only `#export` symbols have external linkage
-        //<
-        //< Everything else, its runtime and std included, is `static`, so two libraries in one
-        //< program each keep their own (`KSPL_LINK` in `gen/runtime/core.h`).
     unit_count: Sz //<
         //< How many translation units to split the generated C into (`--split=`); 1 is unsplit.
         //<
         //< **Do not read it directly.** Callers that bypass the CLI (the LSP, the tests) leave it
         //< 0, so read it through unit_count_or_one.
-    interface_path: U8[] //<
-        //< Where to write a library's interface (`--emit-interface=`; empty writes none)
+    interface_paths: List<|U8[]|>$@ //<
+        //< Where a library's interfaces go (`--library=`, repeated); a library is built if any
         //<
-        //< Its extension picks the form (`form_of` in `tools/interface.kspls`); it needs `library`.
+        //< Each extension picks its form (`form_of` in `tools/interface.kspls`). **Read whether a
+        //< library is built through `is_library`**: a caller that bypasses the CLI leaves it null.
     surface_path: U8[] //<
         //< Where to write the record of the published API (`--emit-surface=`; empty writes none).
         //<
@@ -200,11 +207,19 @@ fn report_progress() //< it tells the caller "still working" during long work
     progress_last_us = now
     progress_hook()
 
+fn is_library(): Bool //< whether a library is built (`--library=`)
+    //<
+    //< Only its `#export` symbols then have external linkage. Everything else, its runtime and std
+    //< included, is `static`, so two libraries in one program each keep their own (`KSPL_LINK` in
+    //< `gen/runtime/core.h`).
+    return config.interface_paths != null && config.interface_paths.len > 0
+
 fn is_llvm_target(): Bool //< whether the output goes to the LLVM IR backend
     //<
     //< The checks whose accepted spelling depends on the backend share it (check_ffi_safety in
     //< sema/session/ctx.kspls, __kspl_inline_c in sema/body/call.kspls).
-    switch config.target case .llvm
+    switch config.target
+    case .llvm
         return true
     default {}
     return false

@@ -1,9 +1,11 @@
-//< Folds a slice's postfix (`T[]` / `T$[]`) into `std/lang`'s `Slice<|T|>` / `Slice<|$T|>`
+//< Folds a type's sugar postfixes into `std/lang`'s generics
 //<
-//< It applies only to type expressions written in the source. **The type itself has one origin**:
-//< the `Slice<|$T|>` built here and the code that looks up its type id directly both end in
-//< `instantiate_struct` ("`T[]` is sugar for `Slice<|$T|>`" in `../../docs/DESIGN.md`).
+//< `T[]` / `T$[]` become `Slice<|T|>` / `Slice<|$T|>`, and `T?` becomes `Option<|T|>`.
+//< It applies only to type expressions written in the source. **Each type has one origin**: the
+//< instance built here and the code that looks it up directly end in the same instantiation
+//< ("`T[]` is sugar for `Slice<|$T|>`" in `../../docs/DESIGN.md`).
 import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/ast_ext" // `mark_sugar_made`
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "std/chars"
@@ -32,12 +34,16 @@ fn is_slice_postfix(p: Ast_node$@): Bool //< whether it is a postfix to fold
     t: = p.text.strip_prefix("$")
     return t.starts_with("[") && !t.starts_with("[_") && p.children.len == 0
 
-fn make_slice_atom(inner_raw: Ast_node$@, is_mut: Bool, loc: base_ast.Loc): Ast_node$@ //<
-    //< It builds the `type_atom` for `Slice<|arg|>`
-    //<
-    //< With `is_mut`, it is `Slice<|$arg|>`.
-    //< Caution: **Set the `type_args` text here**: normalization (`normalize_type_args_text`) runs
-    //< before desugar, and `get_full_path_str_to` (`../base/ast_spell.kspls`) reads the text.
+fn is_option_postfix(p: Ast_node$@): Bool //< whether it is an optional's `?`
+    return p.text.equals("?")
+
+fn make_generic_atom(ident: U8[], inner_raw: Ast_node$@, is_mut: Bool, loc: base_ast.Loc):
+    Ast_node$@ //<
+        //< It builds the `type_atom` for `<ident><|arg|>`
+        //<
+        //< With `is_mut`, it is `<ident><|$arg|>`.
+        //< Caution: **Set the `type_args` text here**: normalization (`normalize_type_args_text`)
+        //< runs before desugar, and `get_full_path_str_to` (`../base/ast_spell.kspls`) reads it.
     // **Wrap a type argument in a `type_expr`**: strip_arg_mut_mark (`../sema/decl/resolve.kspls`)
     // looks for a `type_expr`'s child, and with a bare `type_atom` the mark alone is resolved as a
     // type named `$`.
@@ -62,9 +68,11 @@ fn make_slice_atom(inner_raw: Ast_node$@, is_mut: Bool, loc: base_ast.Loc): Ast_
     t.s(inner.text).s("|>")
     args.text = base_core.arena.dup_str(t.slice())
     path: = Ast_node.new(.k_type_path, "", loc)
-    // Caution: Do not write the name inline (its canonical source is `base_core.slice_ident`).
-    path.add_child(Ast_node.new(.k_identifier, base_core.slice_ident(), loc))
+    // Caution: Do not write the name inline (its canonical sources are `base_core.slice_ident` and
+    // `base_core.option_ident`).
+    path.add_child(Ast_node.new(.k_identifier, ident, loc))
     path.add_child(args)
+    path.mark_sugar_made()
     atom: = Ast_node.new(.k_type_atom, "", loc)
     atom.add_child(path)
     return atom
@@ -92,17 +100,17 @@ fn spell_atom(node: Ast_node$@): U8[] //< a `type_atom`'s name
     return base_core.arena.dup_str(b.slice())
 
 impl Ast_node
-    fn fold_slice_postfixes(r: Ast_node$@) //<
-        //< It folds the built-in slice postfixes (`[]` / `$[]`) into `Slice<|T|>` / `Slice<|$T|>`
+    fn fold_sugar_postfixes(r: Ast_node$@) //<
+        //< It folds the postfixes `[]` / `$[]` and `?` into `Slice` and `Option`
         //<
         //< Caution: **Fold from the left in order.** Postfixes apply from the left (`U8$[][]` is an
-        //< immutable-element slice of a mutable-element slice); reversed, the marks swap. An `@` or
-        //< a `?E` stays a postfix on the folded base.
-        $has_slice: = false
+        //< immutable-element slice of a mutable-element slice, `U8[]?` an optional slice);
+        //< reversed, the meaning changes. An `@` or a `!E` stays a postfix on the folded base.
+        $has_sugar: = false
         for c in r.children
-            if c.kind_id == .k_type_postfix && is_slice_postfix(c)
-                has_slice = true
-        if !has_slice
+            if c.kind_id == .k_type_postfix && (is_slice_postfix(c) || is_option_postfix(c))
+                has_sugar = true
+        if !has_sugar
             return
         $base: Ast_node$@ = null
         kept: = base_ast.new_ast_node_list()
@@ -110,12 +118,16 @@ impl Ast_node
             if c.kind_id != .k_type_postfix
                 base = c
                 continue
-            if !is_slice_postfix(c)
+            is_option: = is_option_postfix(c)
+            if !is_slice_postfix(c) && !is_option
                 kept.push(c)
                 continue
-            // The levels so far (the base and its postfixes) become the `Slice`'s type argument.
+            // The levels so far (the base and its postfixes) become the type argument.
             inner: = wrap_type_expr(base, kept, r.loc)
-            base = make_slice_atom(inner, c.text.starts_with("$"), r.loc)
+            base =
+                (make_generic_atom(base_core.option_ident(), inner, false, r.loc) if is_option
+                else make_generic_atom(base_core.slice_ident(), inner,
+                c.text.starts_with("$"), r.loc))
             kept.len = 0
         r.clear_children()
         r.add_child(base)

@@ -33,10 +33,10 @@ priv enum Bundle_error
     no_wasm //< the template has no place to insert the wasm
     write //< the output cannot be written
 
-priv fn read_or_report(path: U8[]): U8[]?Bundle_error
+priv fn read_or_report(path: U8[]): U8[]!Bundle_error
     return io.read_file(path) catch
         io.err().s("bundle: cannot read: \{path\}\n")
-        throw Bundle_error.read
+        throw .read
 
 priv fn folder_of(path: U8[]): U8[] //< the template's own folder
     //<
@@ -62,7 +62,7 @@ priv fn safe_name(name: U8[]): Bool //< whether it is safe as a text's name
             return false
     return !(name.find_str("..") >= 0)
 
-priv fn put_mark(out: Str_builder$@, page: U8[], at: Sz, dir: U8[], blob: U8[]): Sz?Bundle_error //<
+priv fn put_mark(out: Str_builder$@, page: U8[], at: Sz, dir: U8[], blob: U8[]): Sz!Bundle_error //<
     //< Writes out one mark's contents, and returns the length of the mark consumed
     if page.starts_with(mark_wasm, at)
         out.s(blob)
@@ -71,35 +71,35 @@ priv fn put_mark(out: Str_builder$@, page: U8[], at: Sz, dir: U8[], blob: U8[]):
         io.err()
             .s("bundle: unknown mark: \
                 \{page.sub(at, 32 if at + 32 <= page.len else page.len - at)\}\n")
-        throw Bundle_error.bad_mark
+        throw .bad_mark
     from: = at + mark_file.len
     end: = page.sub_from(from).find_str(mark_tail)
     if end < 0
         io.err().s("bundle: the mark never shuts (no `__`)\n")
-        throw Bundle_error.bad_mark
+        throw .bad_mark
     name: = page.sub(from, end)
     if !safe_name(name)
         io.err().s("bundle: the text's name is not safe: \{name\}\n")
-        throw Bundle_error.bad_name
+        throw .bad_name
     $where: = Str_builder.new()
     defer where.free()
     where.s(dir).s(name)
-    body: = read_or_report(where.slice())?
+    body: = read_or_report(where.slice())!
     defer dealloc(Void$@::body.ptr)
     out.s(body)
     return from + Sz::end + mark_tail.len - at
 
-priv fn bundle(template: U8[], wasm: U8[], out: U8[]): Void?Bundle_error
-    page_raw: = read_or_report(template)?
+priv fn bundle(template: U8[], wasm: U8[], out: U8[]): Void!Bundle_error
+    page_raw: = read_or_report(template)!
     defer dealloc(Void$@::page_raw.ptr)
-    blob_raw: = read_or_report(wasm)?
+    blob_raw: = read_or_report(wasm)!
     defer dealloc(Void$@::blob_raw.ptr)
     page: = page_raw
     // Caution: **The wasm mark must be present** — a template without it bundles fine and fails
     // only when opened.
     if page.find_str(mark_wasm) < 0
         io.err().s("bundle: the template has no \{mark_wasm\}: \{template\}\n")
-        throw Bundle_error.no_wasm
+        throw .no_wasm
     blob: = base64.encode(blob_raw, null)
     defer dealloc(Void$@::blob.ptr)
     dir: = folder_of(template)
@@ -116,11 +116,11 @@ priv fn bundle(template: U8[], wasm: U8[], out: U8[]): Void?Bundle_error
             break
         next: = at + Sz::step
         built.s(page.sub(at, step))
-        at = next + put_mark(built@, page, next, dir, blob)?
+        at = next + put_mark(built@, page, next, dir, blob)!
 
     io.write_file(out, built.slice()) catch
         io.err().s("bundle: cannot write: \{out\}\n")
-        throw Bundle_error.write
+        throw .write
     io.out().s("OUTPUT: \{out\} (\{built.len / 1024\} KiB, complete in one file)\n")
 
 fn main(): I32

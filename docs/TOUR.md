@@ -19,7 +19,7 @@ The whole program is [`../ksplc/tests/kspls/tour.kspls`](../ksplc/tests/kspls/to
 | `Bool` | `true` or `false` |
 | `U8[]` | A string: a read-only slice (a view onto memory) of bytes |
 | `T@` / `T$@` | A pointer to a `T` that only reads / that may write |
-| `T?E` | A `T`, or the error `E` when the function fails |
+| `T!E` | A `T`, or the error `E` when the function fails |
 
 ## The steps
 
@@ -36,7 +36,7 @@ The whole program is [`../ksplc/tests/kspls/tour.kspls`](../ksplc/tests/kspls/to
 1. **A generic, and a function handed over** — `twice_of`
 1. **An error is a value, and it is listed** — `Step_error`
 1. **Failing, and a return type that says so** — `step`
-1. **Passing a failure on with `?`** — `step_twice`
+1. **Passing a failure on with `!`** — `step_twice`
 1. **`defer`, right below what it cleans up** — `pick_builder`
 1. **Leaving early** — `note`
 1. **Where the braces have to stay** — `tally`
@@ -144,7 +144,8 @@ priv enum Shade
 
 ```kspls
 priv fn shade_name(s: Shade): U8[]
-    switch s case .dark
+    switch s
+    case .dark
         return "dark"
     case .mid(level)
         return "mid" if level > 0 else "mid0"
@@ -172,33 +173,33 @@ priv enum Step_error
 
 ## Failing, and a return type that says so
 
-**`I32?Step_error` reads "an `I32`, or a `Step_error`".** `throw` hands the error back to the caller as the result; nothing unwinds the stack. The failure is in the signature, so a caller cannot ignore it by accident: nothing quietly returns 0 instead.
+**`I32!Step_error` reads "an `I32`, or a `Step_error`".** `throw` hands the error back to the caller as the result; nothing unwinds the stack. The failure is in the signature, so a caller cannot ignore it by accident: nothing quietly returns 0 instead.
 
 ```kspls
-priv fn step(n: I32): I32?Step_error
+priv fn step(n: I32): I32!Step_error
     if n > 100
-        throw Step_error.too_far
+        throw .too_far
     return n + 1
 ```
 
-## Passing a failure on with `?`
+## Passing a failure on with `!`
 
-**A `?` after a call says "if this failed, give up here and hand the failure to my caller".** It needs this function to be able to fail too, which its return type says. A `?` at a line's end does not carry the line on: the `return` below it is a statement of its own.
+**A `!` after a call says "if this failed, give up here and hand the failure to my caller".** It needs this function to be able to fail too, which its return type says. A `!` at a line's end does not carry the line on: the `return` below it is a statement of its own.
 
 ```kspls
-priv fn step_twice(n: I32): I32?Step_error
-    once: = step(n)?
-    return step(once)?
+priv fn step_twice(n: I32): I32!Step_error
+    once: = step(n)!
+    return step(once)!
 ```
 
 ## `defer`, right below what it cleans up
 
-**`defer` runs when the block ends, however it ends**: at its last line, or at a `return` or a `?` that leaves early. It takes one statement that names what it cleans up (`defer b.free()` in `main` below), so it sits on the line after the binding; a cleanup of more than one statement goes in a block. A bare `.free()` has nothing in front of it and is refused.
+**`defer` runs when the block ends, however it ends**: at its last line, or at a `return` or a `!` that leaves early. It takes one statement that names what it cleans up (`defer b.free()` in `main` below), so it sits on the line after the binding; a cleanup of more than one statement goes in a block. A bare `.free()` has nothing in front of it and is refused.
 
 ```kspls
-priv fn pick_builder(ok: Bool): Str_builder?Step_error
+priv fn pick_builder(ok: Bool): Str_builder!Step_error
     if !ok
-        throw Step_error.too_far
+        throw .too_far
     return Str_builder.new()
 ```
 
@@ -215,11 +216,12 @@ priv fn note(on: Bool)
 
 ## Where the braces have to stay
 
-**A block holding only a comment cannot be written by indentation**: a comment is not a statement, so laid out by indentation the block would be empty. The braces are kept for that arm alone. The first `case` sits on the `switch`'s own line; the rest come at the `switch`'s column.
+**A block holding only a comment cannot be written by indentation**: a comment is not a statement, so laid out by indentation the block would be empty. The braces are kept for that arm alone. Every `case` and `default` sits at the `switch`'s column, the first on the line below it.
 
 ```kspls
 priv fn tally(s: Shade)
-    switch s case .dark
+    switch s
+    case .dark
         seen += 1
     case .mid(_level) {
         // A variant that is not counted. As a sample it holds no content.
@@ -274,7 +276,8 @@ fn main(): I32
     // tools.md`).
     far: =
         step(1000 + moved.x + moved.y + p.x + p.y + p.area() + moved.area() + p.moved(1).x) catch refusal_reason
-        switch refusal_reason case .too_far
+        switch refusal_reason
+        case .too_far
             io.out().s("too far.\n")
         fallback -2
     $b: = pick_builder(true) catch
@@ -284,8 +287,8 @@ fn main(): I32
     b.s("held")
     note(true)
     note(false)
-    tally(Shade.dark)
-    tally(Shade.mid(1))
+    tally(.dark)
+    tally(.mid(1))
     words: = gather(arena)
     // **It carries a label.** A block with no heading cannot be told from a continuation of the
     // statement before it, so a bare `{ … }` is writable in neither notation.
@@ -294,7 +297,7 @@ fn main(): I32
     defer io.out().s("defer comes out last.\n")
     io.out().s("area=\{p.area()\} moved=(\{moved.x\},\{moved.y\})\n")
     io.out().s("span=\{span.to - span.from\}\n")
-    io.out().s("shade=\{shade_name(Shade.mid(1))\}/\{shade_name(Shade.dark)\}\n")
+    io.out().s("shade=\{shade_name(.mid(1))\}/\{shade_name(.dark)\}\n")
     io.out().s("step=\{ok\}/\{bad\}/\{far\} twice=\{twice_of<|I32|>(5, add_i32)\}\n")
     io.out().s("count=\{count_up(6)\} words=\{words.len\} seen=\{seen\} b=\{b.slice()\}\n")
     io.out().s("twice=\{step_twice(1) catch -1\}/\{step_twice(999) catch -1\}\n")
@@ -307,7 +310,8 @@ fn main(): I32
 
 ```kspl
 priv fn shade_name(s: Shade): U8[] {
-    switch s case .dark {
+    switch s
+    case .dark {
         return "dark";
     } case .mid(level) {
         return "mid" if level > 0 else "mid0";

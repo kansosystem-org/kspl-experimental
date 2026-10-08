@@ -70,10 +70,12 @@ impl Ast_node
         fqn: = c.make_fqn(name)
         return .ok(name, fqn, 0)
 
-    fn build_trait_registry(r: Ast_node$@, c: Sema_ctx$@): Void?Sema_error
-        switch r.get_registry_target(c) case .ok(target_name, target_fqn, _id)
+    fn build_trait_registry(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
+        switch r.get_registry_target(c)
+        case .ok(target_name, target_fqn, _id)
             $trait_def: sema_type_def.Trait_def$@ = null
-            switch c.env.get_trait_def(target_fqn) case .some(id)
+            switch c.env.get_trait_def(target_fqn)
+            case .some(id)
                 trait_def = id
             case .none
                 return
@@ -90,7 +92,7 @@ impl Ast_node
                         m_name: = m_name_node.text
                         c.check_snake_case(m_name, m_node, "Method")
 
-                        m_sym: = c.add_trait_method(m_node, trait_def, trait_vis)?
+                        m_sym: = c.add_trait_method(m_node, trait_def, trait_vis)!
 
                         local_full_name: = join_dotted_name(target_name, m_name)
                         fqn_full_name: = join_dotted_name(target_fqn, m_name)
@@ -98,21 +100,24 @@ impl Ast_node
             c.fn_ctx.impl_name = ""
         default {}
 
-    fn build_type_registry(r: Ast_node$@, c: Sema_ctx$@): Void?Sema_error //<
+    fn build_type_registry(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //<
         //< Dispatches on the declaration's kind to fill it in
         //<
         //< Caution: **Code that needs a declaration filled in calls this**, so no caller misses a
         //< kind.
-        switch r.kind_id case .k_decl_struct
-            r.build_struct_registry(c)?
+        switch r.kind_id
+        case .k_decl_struct
+            r.build_struct_registry(c)!
         case .k_decl_enum
-            r.build_enum_registry(c)?
+            r.build_enum_registry(c)!
         default {}
 
-    fn build_struct_registry(r: Ast_node$@, c: Sema_ctx$@): Void?Sema_error
-        switch r.get_registry_target(c) case .ok(_name, target_fqn, _id)
+    fn build_struct_registry(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
+        switch r.get_registry_target(c)
+        case .ok(_name, target_fqn, _id)
             $struct_def: sema_type_def.Struct_def$@ = null
-            switch c.env.get_struct_def(target_fqn) case .some(sd)
+            switch c.env.get_struct_def(target_fqn)
+            case .some(sd)
                 struct_def = sd
             case .none
                 return
@@ -127,13 +132,13 @@ impl Ast_node
             c.resolving.registries.push(c.env.get_or_add(target_fqn))
             defer c.resolving.registries.len -= 1
             c.fn_ctx.impl_name = target_fqn
-            r.fill_struct_fields(c, struct_def)?
+            r.fill_struct_fields(c, struct_def)!
             r.lint_manual_owner_struct(c, struct_def, target_fqn)
             c.fn_ctx.impl_name = ""
         default {}
 
     fn fill_struct_fields(r: Ast_node$@, c: Sema_ctx$@, struct_def: sema_type_def.Struct_def$@):
-        Void?Sema_error //<
+        Void!Sema_error //<
             //< Resolves a struct declaration's (self's) layout attributes and fields to struct_def
             //<
             //< build_struct_registry and a generic struct's instantiation (instantiate_struct in
@@ -163,14 +168,15 @@ impl Ast_node
 
                 if f_name.len > 0 && f_type_node != null
                     c.check_snake_case(f_name, c_node, "Field")
-                    f_type_id: = f_type_node.resolve_type(c)?
+                    f_type_id: = f_type_node.resolve_type(c)!
                     f_eff_vis: = sema_decl_access.narrower_vis(struct_vis, f_vis)
                     c.check_type_vis_leak(f_type_node, f_eff_vis, "field type", "field")
                     real_f_type: = c.env.get_real_type(f_type_id)
                     if sema_type_env.is_void(real_f_type)
                         c.err(f_type_node, "struct fields cannot be of type 'Void'")
 
-                    switch c.env.get_info(real_f_type) case .array(_b, s)
+                    switch c.env.get_info(real_f_type)
+                    case .array(_b, s)
                         if s == -1
                             c.err(f_type_node, "array size cannot be inferred for struct fields.")
                     default {}
@@ -231,7 +237,7 @@ impl Ast_node
 
     priv fn scan_payload_fields(r: Ast_node$@, c: Sema_ctx$@,
         variant_def: sema_type_def.Enum_variant$@, enum_vis: sema_type_scope.Visibility):
-        Void?Sema_error //<
+        Void!Sema_error //<
             //< Resolves an enum variant's (self's) payload fields, registering them in variant_def.
             //<
             //< enum_vis is the enum's own visibility: a payload field has none of its own (public
@@ -248,7 +254,7 @@ impl Ast_node
                 // genc avoids a payload's field names too (the same treatment as a struct's
                 // fields).
                 f_type_node: = f_node.get_enum_field_type_node()
-                resolved_id: = f_type_node.resolve_type(c)? if f_type_node != null else 0
+                resolved_id: = f_type_node.resolve_type(c)! if f_type_node != null else 0
                 // The same leak as a struct's pub field: `switch e case .some(x)` binds it from
                 // outside.
                 c.check_type_vis_leak(f_type_node, enum_vis, "payload type", "variant")
@@ -262,14 +268,15 @@ impl Ast_node
                 if f_name_node != null
                     f_name_node.def_node = f_node
                     f_name_node.type_id = f_type_id
-                field_def: = sema_type_def.Struct_field
-                    .new(f_name, f_type_id, sema_type_scope.Visibility.public, f_node)
+                field_def: = sema_type_def.Struct_field.new(f_name, f_type_id, .public, f_node)
                 variant_def.payload_fields.push(field_def)
 
-    fn build_enum_registry(r: Ast_node$@, c: Sema_ctx$@): Void?Sema_error
-        switch r.get_registry_target(c) case .ok(_name, target_fqn, _id)
+    fn build_enum_registry(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
+        switch r.get_registry_target(c)
+        case .ok(_name, target_fqn, _id)
             $enum_def: sema_type_def.Enum_def$@ = null
-            switch c.env.get_enum_def(target_fqn) case .some(d)
+            switch c.env.get_enum_def(target_fqn)
+            case .some(d)
                 enum_def = d
             case .none
                 return
@@ -280,12 +287,12 @@ impl Ast_node
             c.resolving.registries.push(c.env.get_or_add(target_fqn))
             defer c.resolving.registries.len -= 1
             c.fn_ctx.impl_name = target_fqn
-            r.fill_enum_variants(c, enum_def, c.env.get_or_add(target_fqn), true)?
+            r.fill_enum_variants(c, enum_def, c.env.get_or_add(target_fqn), true)!
             c.fn_ctx.impl_name = ""
         default {}
 
     fn fill_enum_variants(r: Ast_node$@, c: Sema_ctx$@, enum_def: sema_type_def.Enum_def$@,
-        type_id: I32, declare_syms: Bool): Void?Sema_error //<
+        type_id: I32, declare_syms: Bool): Void!Sema_error //<
             //< Resolves an enum declaration's (self's) base type and variants into enum_def
             //<
             //< The counterpart of fill_struct_fields. `declare_syms` adds each variant to the name
@@ -294,7 +301,7 @@ impl Ast_node
         $base_type_id: = c.env.get_or_add("I32")
         base_type_node: = r.get_decl_type_node()
         if base_type_node != null
-            base_type_id = base_type_node.resolve_type(c)?
+            base_type_id = base_type_node.resolve_type(c)!
         enum_def.base_type_id = base_type_id
         $current_tag: I64 = 0
         enum_name: = r.get_decl_id_text()
@@ -345,7 +352,7 @@ impl Ast_node
                 v_sym.vis = enum_vis
                 c.declare_symbol_with_fqn(arena_full_name, join_dotted_name(enum_fqn, v_name), v_sym)
 
-            v_node.scan_payload_fields(c, variant_def, enum_vis)?
+            v_node.scan_payload_fields(c, variant_def, enum_vis)!
             is_dup: = seen_variants.get(v_name) catch false
             if is_dup
                 c.clear_scratch().s("variant '\{v_name\}' is already defined in enum")
@@ -355,15 +362,15 @@ impl Ast_node
                 enum_def.variants_list.push(variant_def)
 
 impl Sema_ctx
-    priv fn fold_enum_tag(r: Self$@, node: Ast_node$@, base_id: I32): Option<|I64|> //<
+    priv fn fold_enum_tag(r: Self$@, node: Ast_node$@, base_id: I32): I64? //<
         //< A written tag folded at 64 bits and checked against the base type, or none (reported)
         v: = node.eval_constexpr_wide(r) catch
             if !r.has_error()
                 r.err(node, "an enum tag must be a compile-time constant")
-            return Option<|I64|>.none
+            return .none
         if !r.check_enum_tag_range(node, v, base_id)
-            return Option<|I64|>.none
-        return Option<|I64|>.some(v)
+            return .none
+        return .some(v)
 
     priv fn check_enum_tag_range(r: Self$@, node: Ast_node$@, v: I64, base_id: I32): Bool //<
         //< Whether the tag fits the enum's base type; where not, it reports and answers false

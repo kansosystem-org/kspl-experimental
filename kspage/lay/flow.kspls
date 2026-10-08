@@ -23,7 +23,7 @@ import "kspage/model/font" { Font_source }
 import "kspage/model/marker"
 import "kspage/model/number"
 import "kspage/model/panel_paint" + { Panel_paint }
-import "kspage/model/style" + { Align, Arrange, Look, Sheet }
+import "kspage/model/style" + { Arrange, Look, Sheet }
 import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
@@ -110,7 +110,7 @@ priv fn layout_block(p: Pen$@, b: Block$@, sheet: Sheet$@, parent: Look, left: F
     $breaks: = false
     // Caution: **Reset it to the value here.** Not reset, a paragraph with no style takes the
     // previous paragraph's alignment.
-    p.align = Align.left
+    p.align = .left
     p.lead = 0.0
     p.wrap = true
     p.mark = ""
@@ -184,7 +184,7 @@ priv fn layout_block(p: Pen$@, b: Block$@, sheet: Sheet$@, parent: Look, left: F
     // mid-fence** (an unused band stays in the drawing code's count, and the fill comes out
     // striped).
     inside: = joint.joined()
-    $band: = Option<|Panel$@|>.none
+    $band: Panel$@? = .none
     if !inside && !collect.charted()
         band =
             hold_panel(p, b, panel_paint.paint_of(sheet.find(b.style), over), left, room)
@@ -210,7 +210,8 @@ priv fn layout_block(p: Pen$@, b: Block$@, sheet: Sheet$@, parent: Look, left: F
     // nor "it is a slide".** Anything but flow takes the whole line.
     $at: = Rect::{ .x = p.left, .y = p.y, .w = p.right - p.left, .h = 0.0 }
     $used: F32 = -1.0
-    switch arrange case .grid
+    switch arrange
+    case .grid
         used = grid.place_rows(p.out, b, sheet, at, look, p.page_height, p.arena)
     case .absolute
         // **A slide is not split**: its size is known, so one that does not fit goes to the next
@@ -251,14 +252,15 @@ priv fn layout_block(p: Pen$@, b: Block$@, sheet: Sheet$@, parent: Look, left: F
     // A collecting block lays out what it collected instead of its children. **The document's
     // children are not laid out.**
     $gathered: = true
-    switch collect case .contents
+    switch collect
+    case .contents
         gather.place_contents(p, sheet, look, indent)
     case .notes
         gather.place_notes(p, look)
     case .bars
-        gather.place_chart(p, b, sheet, look, Collect.bars)
+        gather.place_chart(p, b, sheet, look, .bars)
     case .lines
-        gather.place_chart(p, b, sheet, look, Collect.lines)
+        gather.place_chart(p, b, sheet, look, .lines)
     case .none
         gathered = false
     if gathered
@@ -297,8 +299,8 @@ priv fn held_box(left: F32, top: F32, room: F32, bottom: F32): Rect //<
     //< contents).
     return Rect::{ .x = left, .y = top, .w = room - left, .h = bottom - top }
 
-priv fn close_block(p: Pen$@, band: Option<|Panel$@|>, from: Placed, floor: F32, pad: F32,
-    space_after: F32, room: F32) //<
+priv fn close_block(p: Pen$@, band: Panel$@?, from: Placed, floor: F32, pad: F32, space_after: F32,
+    room: F32) //<
         //< Closes one block
         //<
         //< It adds the bottom inner space, closes the band, restores the right edge, adds space
@@ -351,7 +353,7 @@ fn place_framed_block(dst: Page$@, b: Block$@, sheet: Sheet$@, at: Rect, look: L
         //< Returns the height used. **Do not go through the flow's list**, which skips a positioned
         //< child. `floor` is as in `place_blocks`.
     p: = line.new_pen(dst, at, 0.0, arena)
-    layout_block(p, b, sheet, look, at.x, style.next_ord(sheet, b.style, 0), floor, Joint.alone)
+    layout_block(p, b, sheet, look, at.x, style.next_ord(sheet, b.style, 0), floor, .alone)
     return p.y - at.y
 
 fn place_blocks(dst: Page$@, blocks: List<|Block$@|>$@, sheet: Sheet$@, at: Rect, look: Look,
@@ -373,7 +375,8 @@ priv fn fitted(dst: Page$@, from: Placed, band: Rect, kind: Arrange): Rect //<
     //< too), but not the width, or a page-wide frame appears around a narrow table or slide.
     $lo: F32 = band.x + band.w
     $hi: F32 = band.x
-    switch kind case .grid
+    switch kind
+    case .grid
         for $i: Sz = from.cells; i < dst.cells.len; i += 1
             r: = dst.cells.get(i).rect
             lo = r.x if r.x < lo else lo
@@ -395,9 +398,9 @@ priv fn note_region(dst: Page$@, kind: Arrange, at: Rect, arena: Arena$@) //< re
     //< paragraph. **A region with no height is not recorded** (it would show as a line).
     if at.h <= 0.0
         return
-    if dst.regions.len > 0 && kind.same_arrange(Arrange.flow)
+    if dst.regions.len > 0 && kind.same_arrange(.flow)
         last: = dst.regions.get(dst.regions.len - 1)
-        if last.kind.same_arrange(Arrange.flow)
+        if last.kind.same_arrange(.flow)
             last.rect.h = at.y + at.h - last.rect.y
             return
     dst.regions.push(arena.create(Region::{ .rect = at, .kind = kind }))
@@ -472,12 +475,11 @@ fn paper_count(page: Page$@, band: F32): Sz //<
 // **It is opened before the contents are laid out, and closed after** (opened later, an inner
 // block's band would lie under the outer one).
 // ==========================================
-fn seal_panel(dst: Page$@, panel: Option<|Panel$@|>, from: Placed, bottom: F32, floor: F32,
-    pad: F32) //<
-        //< Closes an opened fill band at the height of what was laid out
-        //<
-        //< **The space before and after is not included** (or it would be painted and join
-        //< paragraphs).
+fn seal_panel(dst: Page$@, panel: Panel$@?, from: Placed, bottom: F32, floor: F32, pad: F32) //<
+    //< Closes an opened fill band at the height of what was laid out
+    //<
+    //< **The space before and after is not included** (or it would be painted and join
+    //< paragraphs).
     if one: = panel
         // **A band whose lower edge is already set keeps its upper edge**, or a figure with no
         // contents gets height 0 and vanishes.
@@ -508,20 +510,20 @@ priv fn top_after(dst: Page$@, from: Placed, bottom: F32): F32 //<
 priv fn upper_of(a: F32, b: F32): F32
     return b if b < a else a
 
-fn hold_panel(p: Pen$@, b: Block$@, paint: Panel_paint, left: F32, right: F32):
-    Option<|Panel$@|> //<
-        //< Reserves one place for the fill and the line
-        //<
-        //< Caution: **Reserve it before layout**, or the outer band lies over the inner ones. **The
-        //< shape is written in afterwards.** **Nothing is reserved for an unknown name, nor with no
-        //< fill and no line** (the drawing code would count empty bands).
-    switch paint.fill case .none
+fn hold_panel(p: Pen$@, b: Block$@, paint: Panel_paint, left: F32, right: F32): Panel$@? //<
+    //< Reserves one place for the fill and the line
+    //<
+    //< Caution: **Reserve it before layout**, or the outer band lies over the inner ones. **The
+    //< shape is written in afterwards.** **Nothing is reserved for an unknown name, nor with no
+    //< fill and no line** (the drawing code would count empty bands).
+    switch paint.fill
+    case .none
         if paint.width <= 0.0
-            return Option<|Panel$@|>.none
+            return .none
     case .some {}
     fresh: = Panel::{ .rect = Rect::{ .x = left, .y = p.y, .w = right - left, .h = 0.0 },
         .block = b, .width = paint.width, .color = paint.color, .fill = paint.fill,
         .shape = paint.shape }
     made: = p.arena.create(fresh)
     p.out.panels.push(made)
-    return Option<|Panel$@|>.some(made)
+    return .some(made)

@@ -450,6 +450,38 @@ priv fn case_output_language(arena: Arena$@) //<
     ng_case("--target is refused whatever its value, naming --to",
         U8[][]::{ std_flag(arena), "--target=c", src, ll }, "'--to=c|llvm'")
 
+priv fn lib_opt(path: U8[], arena: Arena$@): U8[] //< `--library=<path>`
+    return arena.text().s("--library=").s(path).take()
+
+priv fn case_library(arena: Arena$@) //<
+    //< `--library=` builds a library and writes each interface it names, from one compile
+    //<
+    //< **The retired `--emit-interface` is shown to name its replacement**, and a value that
+    //< names no form, or one path twice, is refused rather than written.
+    dir: = harness.sandbox("cli_library") catch
+        verdict.check("--library", false, "the working directory cannot be made")
+        return
+    src: = fs.join(dir, "lib.kspls", arena)
+    io.write_file(src, "#export\npub fn lib_twice(n: I32): I32\n  return n * 2\n") catch
+        verdict.check("--library: the library can be written", false, "")
+        return
+    out_c: = fs.join(dir, "lib.c", arena)
+    h: = fs.join(dir, "lib.h", arena)
+    api: = fs.join(dir, "lib_api.kspls", arena)
+    ok_case("--library= twice writes both interfaces from one compile",
+        U8[][]::{ std_flag(arena), lib_opt(h, arena), lib_opt(api, arena), src, out_c }, "")
+    verdict.check("both interfaces are written",
+        fs.exists(h) && fs.exists(api) && fs.exists(out_c), dir)
+    ng_case("--emit-interface is refused, naming --library",
+        U8[][]::{ std_flag(arena), "--emit-interface=x.h", src, out_c }, "'--library=<FILE>'")
+    ng_case("--library needs the interface it writes",
+        U8[][]::{ std_flag(arena), "--library", src, out_c }, "'--library=<value>'")
+    ng_case("--library= refuses a name of neither form",
+        U8[][]::{ std_flag(arena), lib_opt("x.txt", arena), src, out_c }, "names neither form")
+    ng_case("--library= refuses one path named twice",
+        U8[][]::{ std_flag(arena), lib_opt(h, arena), lib_opt(h, arena), src, out_c },
+        "is named twice")
+
 priv fn case_machine(arena: Arena$@) //<
     //< `--machine` names a machine from ksplc's table, and nothing else
     //<
@@ -751,11 +783,12 @@ priv fn json_lines(args: U8[][], arena: Arena$@): List<|json.Val|> //<
         4 * 1024 * 1024, arena)
     $rows: = List<|json.Val|>.new(arena)
     for line in r.stderr_data.lines(arena)
-        rows.push(json.parse(line, arena) catch json.Val.null_val)
+        rows.push(json.parse(line, arena) catch .null_val)
     return rows
 
 priv fn is_null(v: json.Val): Bool
-    switch v case .null_val
+    switch v
+    case .null_val
         return true
     default
         return false
@@ -831,6 +864,7 @@ fn main(): I32
     case_summary_codes(arena)
     case_refusals()
     case_output_language(arena)
+    case_library(arena)
     case_machine(arena)
     case_help_matches_behavior(arena)
     case_bom(arena)

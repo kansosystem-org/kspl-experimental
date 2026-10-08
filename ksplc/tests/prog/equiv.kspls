@@ -29,7 +29,8 @@ priv enum Shape
 
 impl Shape
     priv fn area_tag(s: Self): I32
-        switch s case .dot
+        switch s
+        case .dot
             return 0
         case .line(len)
             return len
@@ -63,7 +64,7 @@ priv struct Byte_tags
 
 priv typedef Form = Shape //< an enum whose variants are reached through an alias
 priv typedef Form2 = Form //< and through an alias of that alias
-priv typedef Opt_i32 = Option<|I32|> //< a generic enum's instance, reached through an alias
+priv typedef Opt_i32 = I32? //< a generic enum's instance, reached through an alias
 priv typedef Nums = List<|I32|> //< a generic struct's instance, `new` reached through an alias
 
 priv const g_text: U8[] = "ksplc.cfg" //< a global declaration's initialiser
@@ -82,7 +83,8 @@ priv $g_sparse: I32[4] = ::{[2] = 6 }
 priv $g_zero: Point = ::{}
 
 priv fn form_tag(f: Form): I32 //< a variant built through the alias, taken as the alias
-    switch f case .dot
+    switch f
+    case .dot
         return 0
     case .line(len)
         return len
@@ -310,7 +312,8 @@ priv fn naked_ret() //< a `#naked` function: its assembly is its whole body and 
     __kspl_asm_volatile("ret")
 
 priv fn case_named(n: I32): I32 //< case labels that name constants, which C cannot take as names
-    switch n case case_one
+    switch n
+    case case_one
         return 10
     case case_two
         return 20
@@ -431,7 +434,7 @@ priv const shift_mask: U32 = 6U32 //<
     //< Conversely, the constant for building an amount that can be folded at translation time
 priv const div_pick: I32 = 6
 
-fn main(): Void?Exit_probe
+fn main(): Void!Exit_probe
     $b: = Str_builder.new()
     defer b.free()
     $acc: I32 = 0
@@ -582,8 +585,9 @@ raw-line-2""").s("<END>\n")
         .s("fntype=\{fn_list.get(0)(5)\}/\{fn_list.get(1)(5)\}/\{picked(5)\}/\{pick_op(false)(5)\}/\{pick_picker()(true)(5)\}/\{fn_box.f(5)\}/\{held_at$(5)\}/\{fn_arr[1](5)\}/\{apply_twice(twice, 5)\}\n")
     // A type's members reached through an alias: an enum's variant with and without a payload,
     // through an alias of the alias too, a generic enum's, and a generic struct's `new`.
-    $alias_sum: = form_tag(Form.line(3)) + form_tag(Form.dot)
-    switch Form2.line(4) case .line(len)
+    $alias_sum: = form_tag(.line(3)) + form_tag(.dot)
+    switch Form2.line(4)
+    case .line(len)
         alias_sum += len * 10
     case .dot {}
     if v: = Opt_i32.some(5)
@@ -728,4 +732,4 @@ raw-line-2""").s("<END>\n")
     io.out().s(b.slice())
     // Caution: **Throw after everything has been printed.** Throw first and the whole output being
     // compared vanishes.
-    throw Exit_probe.done
+    throw .done

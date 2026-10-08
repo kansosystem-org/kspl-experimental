@@ -15,7 +15,7 @@ import "std/sys"
 import "std/verdict"
 
 struct Started //< the result of waiting for the startup
-    child: Option<|subproc.Child|>
+    child: subproc.Child?
     why: U8[]
 
 priv const ready_line: U8[] = "kssrv: I: listening on" //<
@@ -47,7 +47,7 @@ fn start_server(exe: U8[], root: U8[], out_log: U8[], err_log: U8[], pt: I32, fl
     for f in flags
         argv.push(f)
     $child: = subproc.spawn_redirect(argv.slice(), "", out_log, err_log) catch
-        return Started::{ .child = Option<|subproc.Child|>.none, .why = "it could not be started" }
+        return Started::{ .child = .none, .why = "it could not be started" }
     scratch: = Arena.new(1024 * 1024)
     defer scratch.free()
     deadline: = sys.mono_us() + ready_timeout_us
@@ -55,15 +55,15 @@ fn start_server(exe: U8[], root: U8[], out_log: U8[], err_log: U8[], pt: I32, fl
         mark: = scratch.save()
         if !child.alive()
             code: = child.wait()
-            return Started::{ .child = Option<|subproc.Child|>.none,
+            return Started::{ .child = .none,
                 .why = arena.text().s("it ended before starting (exit code \{code\})\n")
                 .s(read_log(out_log, err_log, arena)).take() }
         if read_log(out_log, err_log, scratch).find_str(ready_line) >= 0
-            return Started::{ .child = Option<|subproc.Child|>.some(child), .why = "ok" }
+            return Started::{ .child = .some(child), .why = "ok" }
         scratch.restore(mark)
         sys.sleep_ms(ready_poll_ms)
     child.kill()
-    return Started::{ .child = Option<|subproc.Child|>.none,
+    return Started::{ .child = .none,
         .why = arena.text().s("the wait ran out with '\{ready_line\}' never put out\n")
         .s(read_log(out_log, err_log, arena)).take() }
 
@@ -81,16 +81,15 @@ fn bring_up( //< starts kssrv with its logs under `dir`, and checks that it came
     flags: U8[][], //< the options after the root
     what: U8[], //< the check that it came up, as the line names it
     arena: Arena$@, //< where the paths and the text go
-): Option<|Running|> //< the server, or none once the check has failed
+): Running? //< the server, or none once the check has failed
     out_log: = fs.join(dir, arena.text().s(name).s(".out").take(), arena)
     err_log: = fs.join(dir, arena.text().s(name).s(".err").take(), arena)
     started: = start_server(exe, root, out_log, err_log, pt, flags, arena)
     if !verdict.check(what, started.child.is_some(), started.why)
-        return Option<|Running|>.none
+        return .none
     if c: = started.child
-        return Option<|Running|>
-            .some(Running::{ .child = c, .out_log = out_log, .err_log = err_log })
-    return Option<|Running|>.none
+        return .some(Running::{ .child = c, .out_log = out_log, .err_log = err_log })
+    return .none
 
 impl Running
     fn log(r: Self@, arena: Arena$@): U8[] //< the ends of its two logs (`read_log`)

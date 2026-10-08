@@ -21,6 +21,11 @@ priv const compiler_made: I32 = 1 //<
     //<
     //< `made_by_compiler` below reads it.
 
+priv const sugar_made: I32 = 1 //<
+    //< The mark in `ival` on a type path a sugar postfix folded into (`I32?`, `U8[]`)
+    //<
+    //< `mark_sugar_made` sets it, `is_sugar_made` reads it.
+
 priv const left_by_break: I32 = 1 //<
     //< The mark in `ival` on a `for` / `if` / `switch` / labelled block that a `break` leaves
     //<
@@ -83,15 +88,15 @@ impl Param_cursor: Iter<|Ast_node$@|>
             n += 1
         return n
 
-    fn next(r: Self$@): Option<|Ast_node$@|> //< the next `k_fn_param`
+    fn next(r: Self$@): Ast_node$@? //< the next `k_fn_param`
         //<
         //< `.none` when there are no more.
         for r.list != null && r.at < r.list.children.len
             p_node: = r.list.get_child(r.at)
             r.at += 1
             if p_node.kind_id == .k_fn_param
-                return Option<|Ast_node$@|>.some(p_node)
-        return Option<|Ast_node$@|>.none
+                return .some(p_node)
+        return .none
 
 impl Ast_node
     fn made_by_compiler(r: Ast_node$@): Bool //<
@@ -119,6 +124,20 @@ impl Ast_node
             r.ival = compiler_made
         for child in r.children
             child.place_as_made(origin)
+
+    fn mark_sugar_made(r: Ast_node$@) //<
+        //< Records that a sugar postfix wrote this type path
+        //<
+        //< The one writer is `fold_sugar_postfixes` in `../parse/desugar_slice.kspls`.
+        if r != null && r.kind_id == .k_type_path
+            r.ival = sugar_made
+
+    fn is_sugar_made(r: Ast_node$@): Bool //<
+        //< Whether a sugar postfix wrote this type path, rather than the source spelling it out
+        //<
+        //< [H0303] reads it: an `Option<|I32|>` the source spells out is reported, the one `I32?`
+        //< folds into is not.
+        return r != null && r.kind_id == .k_type_path && r.ival == sugar_made
 
     fn mark_left_by_break(r: Ast_node$@) //<
         //< Records that a `break` leaves this statement, as sema resolved the `break`'s target
@@ -159,7 +178,7 @@ impl Ast_node
         //< it.
         return r != null && r.kind_id == .k_decl_fn_proto
 
-    fn build_option_match(subject: Ast_node$@, bind_name: U8[], some_block: Ast_node$@,
+    fn build_option_match(subject: Ast_node$@, bind: Ast_node$@, some_block: Ast_node$@,
         none_block: Ast_node$@, label_slot: Ast_node$@, mark: U8[], loc: Loc): Ast_node$@ //<
             //< Builds `switch subject case .some(name) { some_block } case .none { none_block }`
             //<
@@ -167,10 +186,11 @@ impl Ast_node
             //< the `.` stays a child and the bindings are a flat list without `identifier_list`.
             //< **Fill the label's slot**: left out, the children shift by one and the compiler
             //< crashes.
+            //< **`bind` is the name as written, not a copy**, so it keeps its own position: built
+            //< at the statement's, the editor found nothing on `v` in `if v: = opt`.
         some_pat: = Ast_node.new(.k_match_pattern, "match_pattern", loc)
             .add_child(Ast_node.new(.k_literal, ".", loc))
-            .add_child(Ast_node.build_ident("some", 0, loc))
-            .add_child(Ast_node.build_ident(bind_name, 0, loc))
+            .add_child(Ast_node.build_ident("some", 0, loc)).add_child(bind)
         none_pat: = Ast_node.new(.k_match_pattern, "match_pattern", loc)
             .add_child(Ast_node.new(.k_literal, ".", loc))
             .add_child(Ast_node.build_ident("none", 0, loc))
@@ -210,9 +230,9 @@ impl Ast_node
             return false
         return r.attribute_name().equals(attr_name)
 
-    fn get_attribute(r: Ast_node$@, attr_name: U8[]): Option<|Ast_node$@|>
+    fn get_attribute(r: Ast_node$@, attr_name: U8[]): Ast_node$@?
         if r == null
-            return Option<|Ast_node$@|>.none
+            return .none
         $attr_list: = r.find_child(.k_attribute_list)
         if attr_list == null
             proto: = r.find_child(.k_decl_fn_proto)
@@ -222,8 +242,8 @@ impl Ast_node
         if attr_list != null
             for attr in attr_list.children
                 if attr.is_attribute_named(attr_name)
-                    return Option<|Ast_node$@|>.some(attr)
-        return Option<|Ast_node$@|>.none
+                    return .some(attr)
+        return .none
     fn has_attribute(r: Ast_node$@, attr_name: U8[]): Bool
         return r.get_attribute(attr_name).is_some()
     fn has_keyword(r: Ast_node$@, kw: U8[]): Bool
@@ -274,10 +294,15 @@ impl Ast_node
         //<
         //< The literals, and the caller positions (`caller_file` / `caller_line`), which **the
         //< caller replaces with a literal** (fill_default_args in sema/body/call.kspls).
-        switch r.kind_id case .k_integer, .k_float, .k_bool, .k_char, .k_string, .k_null
+        return r.is_value_literal() || r.caller_loc_kind().len > 0
+
+    fn is_value_literal(r: Self$@): Bool //<
+        //< Whether it is a value written out (a number, a character, a string, `true`, `null`)
+        switch r.kind_id
+        case .k_integer, .k_float, .k_bool, .k_char, .k_string, .k_null
             return true
-        default {}
-        return r.caller_loc_kind().len > 0
+        default
+            return false
 
     fn caller_loc_kind(r: Self$@): U8[] //<
         //< Whether it is a default value pointing at the caller's position
@@ -285,7 +310,9 @@ impl Ast_node
         //< `"caller_file"` / `"caller_line"`, or empty.
         //< **They are accepted only as a default value, on purpose**: that position takes no other
         //< identifier, so these never hide a user's name.
-        switch r.kind_id case .k_identifier, .k_expr_path {} default
+        switch r.kind_id
+        case .k_identifier, .k_expr_path {}
+        default
             return ""
         if r.text.equals("caller_file") || r.text.equals("caller_line")
             return r.text
@@ -470,7 +497,7 @@ impl Ast_node
     fn is_postfix_safe_kind(r: Self$@): Bool //<
         //< Whether it can be a postfix operator's operand without parentheses
         //<
-        //< (`.` `[` `(` `@` `$` `::` `?`). The grammar starts an expr_postfix at an expr_primary
+        //< (`.` `[` `(` `@` `$` `::` `!`). The grammar starts an expr_postfix at an expr_primary
         //< only, so a binary, unary, ternary, catch, sizeof or upcast is not included.
         if r == null
             return false
@@ -580,24 +607,24 @@ impl Ast_node
     fn get_struct_literal_type(r: Self$@): Ast_node$@
         return r.safe_get_child(0)
 
-    fn get_defer_block(r: Self$@): Option<|Ast_node$@|> //<
+    fn get_defer_block(r: Self$@): Ast_node$@? //<
         //< A `defer { ... }`'s body block (stmt_defer's children are the keyword and stmt_block)
         for c in r.children
             if c.kind_id != .k_keyword
-                return Option<|Ast_node$@|>.some(c)
-        return Option<|Ast_node$@|>.none
+                return .some(c)
+        return .none
 
     fn get_match_label(r: Self$@): Ast_node$@
         return r.get_non_empty_child(0)
 
-    fn get_field_init_name(r: Self$@): Option<|Ast_node$@|>
+    fn get_field_init_name(r: Self$@): Ast_node$@?
         if r.children.len > 1
             first: = r.get_child(0)
             if first.is_literal(".")
-                return Option<|Ast_node$@|>.some(r.get_child(1))
-        return Option<|Ast_node$@|>.none
+                return .some(r.get_child(1))
+        return .none
 
-    fn get_field_init_index(r: Self$@): Option<|Ast_node$@|>
+    fn get_field_init_index(r: Self$@): Ast_node$@?
         $has_eq: = false
         for c in r.children
             if c.is_literal("=")
@@ -606,8 +633,8 @@ impl Ast_node
         if has_eq && r.children.len > 0
             first: = r.get_child(0)
             if !first.is_literal(".") && first.kind_id != .k_identifier
-                return Option<|Ast_node$@|>.some(first)
-        return Option<|Ast_node$@|>.none
+                return .some(first)
+        return .none
 
     fn get_field_init_expr(r: Self$@): Ast_node$@
         return r.last_child() if r.children.len > 0 else null
@@ -638,7 +665,7 @@ impl Ast_node
                 return true
         return false
 
-    fn gen_param_id_node(r: Self$@): Option<|Ast_node$@|> //<
+    fn gen_param_id_node(r: Self$@): Ast_node$@? //<
         //< The identifier node of a `type_gen_params` child that stands for one type argument
         //<
         //< Caution: **Decide what counts as one type argument here and nowhere else.** If the
@@ -646,21 +673,22 @@ impl Ast_node
         //< closure's synthesis (parse/desugar.kspls) each decided it, the count could disagree with
         //< the binding.
         if r == null
-            return Option<|Ast_node$@|>.none
+            return .none
         if r.kind_id == .k_identifier
-            return Option<|Ast_node$@|>.some(r)
+            return .some(r)
         if r.kind_id == .k_type_gen_param
             id_node: = r.find_child(.k_identifier)
             if id_node != null
-                return Option<|Ast_node$@|>.some(id_node)
-        return Option<|Ast_node$@|>.none
+                return .some(id_node)
+        return .none
 
     fn gen_param_name(r: Self$@): U8[] //< one type parameter's name
         //<
         //< Empty where there is none.
         //< Caution: **Read the name only through this** (built on `gen_param_id_node`); a copy
         //< elsewhere is left behind when `k_type_gen_param`'s shape changes.
-        switch r.gen_param_id_node() case .some(id_node)
+        switch r.gen_param_id_node()
+        case .some(id_node)
             return id_node.text
         case .none
             return ""
@@ -683,12 +711,12 @@ impl Ast_node
         type_node: = r.get_decl_type_node()
         return type_node.type_id if type_node != null else r.type_id
 
-    fn get_impl_trait_node(r: Self$@): Option<|Ast_node$@|>
+    fn get_impl_trait_node(r: Self$@): Ast_node$@?
         if r == null
-            return Option<|Ast_node$@|>.none
+            return .none
         target_node: = r.get_decl_type_node()
         if target_node == null
-            return Option<|Ast_node$@|>.none
+            return .none
         $found_target: = false
         for c_node in r.children
             if c_node == target_node
@@ -696,10 +724,10 @@ impl Ast_node
             else if found_target
                 if c_node.kind_id == .k_expr_path || c_node.kind_id == .k_type_path ||
                     c_node.kind_id == .k_identifier
-                    return Option<|Ast_node$@|>.some(c_node)
+                    return .some(c_node)
                 if c_node.kind_id == .k_decl_fn
                     break
-        return Option<|Ast_node$@|>.none
+        return .none
 
     fn get_fn_params(r: Self$@): Ast_node$@
         if r == null
@@ -718,38 +746,38 @@ impl Ast_node
                 return true
         return false
 
-    fn bare_type_path(r: Self$@): Option<|Ast_node$@|> //<
+    fn bare_type_path(r: Self$@): Ast_node$@? //<
         //< The path of a type written bare (`Arena`, `mem.Arena`, `List<|I32|>`, `io`)
         //<
         //< A mark after it (`Arena@`, `U8[]`) or a primitive gives no such path.
         if r == null || r.kind_id != .k_type_expr || r.children.len != 1
-            return Option<|Ast_node$@|>.none
+            return .none
         atom: = r.get_child(0)
         if atom.kind_id != .k_type_atom || atom.children.len != 1 ||
             atom.get_child(0).kind_id != .k_expr_path ||
             atom.get_child(0).children.len == 0
-            return Option<|Ast_node$@|>.none
-        return Option<|Ast_node$@|>.some(atom.get_child(0))
+            return .none
+        return .some(atom.get_child(0))
 
-    fn get_type_fn_sig(r: Self$@): Option<|Ast_node$@|>
+    fn get_type_fn_sig(r: Self$@): Ast_node$@?
         if r == null
-            return Option<|Ast_node$@|>.none
+            return .none
         if r.kind_id == .k_type_fn_sig
-            return Option<|Ast_node$@|>.some(r)
+            return .some(r)
         $sig: = r.find_child(.k_type_fn_sig)
         if sig != null
-            return Option<|Ast_node$@|>.some(sig)
+            return .some(sig)
         if r.children.len > 0
             atom: = r.get_child(0)
             if atom != null && atom.kind_id == .k_type_atom
                 sig = atom.find_child(.k_type_fn_sig)
                 if sig != null
-                    return Option<|Ast_node$@|>.some(sig)
+                    return .some(sig)
                 if atom.children.len > 1 && atom.get_child(1).kind_id == .k_type_fn_sig
-                    return Option<|Ast_node$@|>.some(atom.get_child(1))
+                    return .some(atom.get_child(1))
                 if atom.children.len > 0 && atom.get_child(0).kind_id == .k_type_fn_sig
-                    return Option<|Ast_node$@|>.some(atom.get_child(0))
-        return Option<|Ast_node$@|>.none
+                    return .some(atom.get_child(0))
+        return .none
     fn push_or_default(r: Self$@, list: List<|Ast_node$@|>$@, node: Ast_node$@,
         def_kind: base_ast_kinds.Ast_kind, def_text: U8[])
         list.push(node if node != null else Ast_node.new(def_kind, def_text, r.loc))
@@ -757,16 +785,16 @@ impl Ast_node
     fn push_or_empty(r: Self$@, list: List<|Ast_node$@|>$@, node: Ast_node$@)
         r.push_or_default(list, node, .k_empty, "")
 
-    fn get_arg_at(r: Self$@, index: Sz): Option<|Ast_node$@|>
+    fn get_arg_at(r: Self$@, index: Sz): Ast_node$@?
         if r == null || r.children.len == 0
-            return Option<|Ast_node$@|>.none
+            return .none
         $count: Sz = 0
         for ch in r.children
             if !ch.is_literal(",")
                 if count == index
-                    return Option<|Ast_node$@|>.some(ch)
+                    return .some(ch)
                 count += 1
-        return Option<|Ast_node$@|>.none
+        return .none
 
     fn gen_param_variance_mask(r: Self$@): I32 //<
         //< The bits at the positions of a generic's mutable type parameters (`struct Box<|$T|>`)

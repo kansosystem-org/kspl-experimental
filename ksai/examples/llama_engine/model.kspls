@@ -79,39 +79,39 @@ impl<|T|> Mini_llama<|T|>
         for i in Range.asc(r.blocks.len)
             r.blocks[i].init_uniform(rng, 0.1)
     fn load_weights(r: Self$@, $st: ai_safetensors.Safetensors, arena: Arena$@):
-        Void?ai_safetensors.Safetensors_error //<
+        Void!ai_safetensors.Safetensors_error //<
             //< Loads the real weights from a safetensors file, as a zero-copy mapping
             //<
             //< **A file whose shapes do not match the dimensions `new` built is rejected here**
             //< (the reason is at `map_into` in `ksai/safetensors.kspls`).
         io.err().s("\n[Model] Zero-copy mapping weights from Safetensors...\n")
 
-        st.map_into<|F32|>("model.embed_tokens.weight", r.token_embed.weight@, arena)?
-        st.map_into<|F32|>("model.norm.weight", r.norm.weight@, arena)?
-        st.map_into<|F32|>("lm_head.weight", r.lm_head.weights@, arena)?
+        st.map_into<|F32|>("model.embed_tokens.weight", r.token_embed.weight@, arena)!
+        st.map_into<|F32|>("model.norm.weight", r.norm.weight@, arena)!
+        st.map_into<|F32|>("lm_head.weight", r.lm_head.weights@, arena)!
 
         $b: = Str_builder.new()
         defer b.free()
 
         for i in Range.asc(r.blocks.len)
             k_wq: = key(b@, i, ".self_attn.wq.weight")
-            st.map_into<|F32|>(k_wq, r.blocks[i].attention.wq.weights@, arena)?
+            st.map_into<|F32|>(k_wq, r.blocks[i].attention.wq.weights@, arena)!
             k_wk: = key(b@, i, ".self_attn.wk.weight")
-            st.map_into<|F32|>(k_wk, r.blocks[i].attention.wk.weights@, arena)?
+            st.map_into<|F32|>(k_wk, r.blocks[i].attention.wk.weights@, arena)!
             k_wv: = key(b@, i, ".self_attn.wv.weight")
-            st.map_into<|F32|>(k_wv, r.blocks[i].attention.wv.weights@, arena)?
+            st.map_into<|F32|>(k_wv, r.blocks[i].attention.wv.weights@, arena)!
             k_wo: = key(b@, i, ".self_attn.wo.weight")
-            st.map_into<|F32|>(k_wo, r.blocks[i].attention.wo.weights@, arena)?
+            st.map_into<|F32|>(k_wo, r.blocks[i].attention.wo.weights@, arena)!
             k_fc1: = key(b@, i, ".mlp.fc1.weight")
-            st.map_into<|F32|>(k_fc1, r.blocks[i].ffn.fc1.weights@, arena)?
+            st.map_into<|F32|>(k_fc1, r.blocks[i].ffn.fc1.weights@, arena)!
             k_fc2: = key(b@, i, ".mlp.fc2.weight")
-            st.map_into<|F32|>(k_fc2, r.blocks[i].ffn.fc2.weights@, arena)?
+            st.map_into<|F32|>(k_fc2, r.blocks[i].ffn.fc2.weights@, arena)!
             k_an: = key(b@, i, ".input_layernorm.weight")
-            st.map_into<|F32|>(k_an, r.blocks[i].attention_norm.weight@, arena)?
+            st.map_into<|F32|>(k_an, r.blocks[i].attention_norm.weight@, arena)!
             k_fn: = key(b@, i, ".post_attention_layernorm.weight")
-            st.map_into<|F32|>(k_fn, r.blocks[i].ffn_norm.weight@, arena)?
+            st.map_into<|F32|>(k_fn, r.blocks[i].ffn_norm.weight@, arena)!
         io.err().s("[Model] Weight mapping completed successfully!\n\n")
-    fn save(r: Self$@, path: U8[]): Void?ai_safetensors.Safetensors_error //<
+    fn save(r: Self$@, path: U8[]): Void!ai_safetensors.Safetensors_error //<
         //< Writes the trained weights to a safetensors file (the same naming as load_weights)
         $w: = ai_safetensors.Safetensors_writer.new()
         w.add("model.embed_tokens.weight", r.token_embed.weight)
@@ -136,17 +136,17 @@ impl<|T|> Mini_llama<|T|>
             w.add(k_an, r.blocks[i].attention_norm.weight)
             k_fn: = key(b@, i, ".post_attention_layernorm.weight")
             w.add(k_fn, r.blocks[i].ffn_norm.weight)
-        ai_file.save_safetensors(w@, path)?
+        ai_file.save_safetensors(w@, path)!
     // Reads externally fine-tuned LoRA adapters (one per block) named
     // "blocks.{i}.attn.{q,v}.lora_{a,b,scale}"; the implementation is in `ksai/model_file.kspls`.
     // **Do not make these three (`load_lora_set` / `save_lora_set` / `forward_with_lora`)
     // `priv`.** No caller in this package uses them yet, but `priv` would have
     // `../qwen_infer/main.kspls` copy the same one-line delegation.
     fn load_lora_set(r: Self$@, path: U8[], arena: Arena$@):
-        ai_lora_set.Qkv_lora<|T|>$@?ai_safetensors.Safetensors_error
+        ai_lora_set.Qkv_lora<|T|>$@!ai_safetensors.Safetensors_error
         return ai_file.load_qkv_lora_set<|T|>(path, r.blocks.len, arena)
     fn save_lora_set(r: Self$@, adapters: ai_lora_set.Qkv_lora<|T|>$@, path: U8[], arena: Arena$@):
-        Void?ai_safetensors.Safetensors_error //<
+        Void!ai_safetensors.Safetensors_error //<
             //< Saves the adapters to `path`, as load_lora_set's inverse
             //<
             //< It is used for verification, and for saving an on-device training result.

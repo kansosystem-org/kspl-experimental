@@ -3,14 +3,14 @@
 //< It cannot be read back. The mapping is mechanical. Where a thing is placed (`frame`) is not
 //< written, so it may not be laid out in the same places. The column widths are written
 //< (in a `<colgroup>`).
-import "kspage/model/doc" { Axis, Doc, Block }
+import "kspage/model/doc" { Doc, Block }
 import "kspage/model/font" { Font, Font_source }
 import "kspage/model/marker"
 import "kspage/model/number"
 import "kspage/model/paint" + { Font_spec, Ink }
 import "kspage/model/paper" { Paper }
 import "kspage/model/run"
-import "kspage/model/style" + { Arrange, Sheet, Style }
+import "kspage/model/style" + { Sheet, Style }
 import "std/chars"
 import "std/ds" { List }
 import "std/str" { Str_builder }
@@ -29,7 +29,8 @@ priv fn escape_html(out: Str_builder$@, s: U8[]) //<
     //< Writes a text that is safe both as HTML contents and as an attribute value
     for $i: Sz = 0; i < s.len; i += 1
         c: = s[i]
-        switch c case '&'
+        switch c
+        case '&'
             out.s("&amp;")
         case '<'
             out.s("&lt;")
@@ -76,10 +77,10 @@ priv fn spec_of(f: Font): Font_spec //< a font spec with every field filled in
     //<
     //< It turns where inheritance starts into a CSS rule.
     return Font_spec::{
-        .family = Option<|U8[]|>.some(f.family),
-        .size_px = Option<|F32|>.some(f.size_px),
-        .weight = Option<|U16|>.some(f.weight),
-        .italic = Option<|Bool|>.some(f.italic),
+        .family = .some(f.family),
+        .size_px = .some(f.size_px),
+        .weight = .some(f.weight),
+        .italic = .some(f.italic),
     }
 
 priv fn css_value(out: Str_builder$@, s: U8[]) //< writes a CSS value
@@ -92,7 +93,8 @@ priv fn css_value(out: Str_builder$@, s: U8[]) //< writes a CSS value
         c: = s[i]
         if c < ' '
             continue
-        switch c case ';', '{', '}', '(', ')', '"', '\'', '\\', '<', '>', '@', ':'
+        switch c
+        case ';', '{', '}', '(', ')', '"', '\'', '\\', '<', '>', '@', ':'
             continue
         default
             out.c(c)
@@ -136,7 +138,8 @@ priv fn write_lines_prop(out: Str_builder$@, ink: Ink) //< the underline and the
     if !under && !through
         // "Not named" and "do not draw one" are written the same way (writing the former would cut
         // the inheritance).
-        switch ink.underline case .some(_u)
+        switch ink.underline
+        case .some(_u)
             out.s("text-decoration-line: none; ")
         case .none
             if _s: = ink.strike
@@ -161,7 +164,8 @@ priv fn diagonal(s: Style$@): Bool //< whether the band's shape is a line or an 
     //<
     //< Neither is written out — the ends are a frame's corners, which are not written. An ellipse
     //< is written by rounding the corners.
-    switch s.shape case .fall_line
+    switch s.shape
+    case .fall_line
         return true
     case .rise_line
         return true
@@ -184,7 +188,8 @@ priv fn write_style_rule(out: Str_builder$@, sheet: Sheet$@, s: Style$@, src: Fo
     drawn: = !diagonal(s)
     // The shape: only the corner rounding and the clipping (a line and an arrow are not written).
     // A triangle and a diamond are clipped as polygons.
-    switch s.shape case .round_box
+    switch s.shape
+    case .round_box
         out.s("border-radius: 8px; ")
     case .ellipse
         out.s("border-radius: 50%; ")
@@ -212,7 +217,8 @@ priv fn write_style_rule(out: Str_builder$@, sheet: Sheet$@, s: Style$@, src: Fo
     // the screen does. No `page-break-before` for old browsers is added.
     if s.break_before
         out.s("break-before: page; ")
-    switch s.align case .center
+    switch s.align
+    case .center
         out.s("text-align: center; ")
     case .right
         out.s("text-align: right; ")
@@ -292,8 +298,8 @@ priv fn indent(out: Str_builder$@, depth: Sz)
     for $i: Sz = 0; i < depth; i += 1
         out.s("  ")
 
-priv fn open_tag(out: Str_builder$@, tag: U8[], class_name: U8[], name: U8[],
-    height: Option<|F32|>, b: Block$@, heads: List<|number.Heading|>$@ = null, head: Sz = 0) //<
+priv fn open_tag(out: Str_builder$@, tag: U8[], class_name: U8[], name: U8[], height: F32?,
+    b: Block$@, heads: List<|number.Heading|>$@ = null, head: Sz = 0) //<
         //< Writes one start tag.
         //<
         //< `height` is passed only for a row and is not made a style rule (every row of the style
@@ -327,7 +333,7 @@ priv fn write_one_inline(out: Str_builder$@, n: run.Inline$@) //< writes one inl
     //<
     //< Only an inline with a style is wrapped in a `<span>`.
     if n.style.len > 0
-        open_tag(out, "span", n.style, "", Option<|F32|>.none, null)
+        open_tag(out, "span", n.style, "", .none, null)
         escape_html(out, n.showing())
         out.s("</span>")
     else
@@ -385,7 +391,8 @@ priv fn write_columns(out: Str_builder$@, b: Block$@, depth: Sz) //<
     indent(out, depth + 1)
     out.s("<colgroup>")
     for $i: Sz = 0; i < b.column_widths.len; i += 1
-        switch b.column_widths.get(i) case .some(v)
+        switch b.column_widths.get(i)
+        case .some(v)
             out.s("<col style=\"width:")
             px(out, v)
             out.s("\">")
@@ -473,13 +480,13 @@ priv fn write_image(out: Str_builder$@, b: Block$@) //< writes one picture
 
 priv fn write_block(out: Str_builder$@, sheet: Sheet$@, heads: List<|number.Heading|>$@,
     notes: List<|number.Note|>$@, serials: List<|number.Serial|>$@, b: Block$@, tag: U8[],
-    depth: Sz, height: Option<|F32|>, ord: Sz) //<
+    depth: Sz, height: F32?, ord: Sz) //<
         //< Writes one block.
         //<
         //< The parent chooses `tag` (a table's child is a row, a row's child is a cell). `height`
         //< is a row's height from the table. `ord` is the index among the siblings
         //< (`style.next_ord`).
-    grid: = sheet.arrange_of(b.style).same_arrange(Arrange.grid)
+    grid: = sheet.arrange_of(b.style).same_arrange(.grid)
     own: = "table" if grid else tag
     indent(out, depth)
     // The collected headings list decides whether it is a heading.
@@ -493,7 +500,8 @@ priv fn write_block(out: Str_builder$@, sheet: Sheet$@, heads: List<|number.Head
     write_image(out, b)
     if s: = sheet.find(b.style)
         // A graph is not written out: it is built at layout time and cannot be copied into CSS.
-        switch s.collect case .contents
+        switch s.collect
+        case .contents
             write_contents(out, sheet, heads, s.indent)
         case .notes
             write_notes(out, notes)
@@ -521,9 +529,9 @@ priv fn write_block(out: Str_builder$@, sheet: Sheet$@, heads: List<|number.Head
         $child_ord: Sz = 0
         for $i: Sz = 0; i < b.children.len; i += 1
             // Only a table passes a row height.
-            $row_h: = Option<|F32|>.none
+            $row_h: F32? = .none
             if grid
-                row_h = b.size_of(Axis.row, i)
+                row_h = b.size_of(.row, i)
             child: = b.children.get(i)
             child_ord = style.next_ord(sheet, child.style, child_ord)
             write_block(out, sheet, heads, notes, serials, child, child_tag, depth + 1, row_h,
@@ -549,4 +557,4 @@ fn write(d: Doc$@, sheet: Sheet$@, src: Font_source, out: Str_builder$@) //<
     for $i: Sz = 0; i < d.blocks.len; i += 1
         b: = d.blocks.get(i)
         ord = style.next_ord(sheet, b.style, ord)
-        write_block(out, sheet, heads, notes, serials, b, "div", 0, Option<|F32|>.none, ord)
+        write_block(out, sheet, heads, notes, serials, b, "div", 0, .none, ord)

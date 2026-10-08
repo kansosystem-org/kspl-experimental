@@ -5,15 +5,14 @@
     "brackets": [
         ["{", "}"],
         ["[", "]"],
-        ["(", ")"],
-        ["<|", "|>"]
+        ["(", ")"]
     ],
     "colorizedBracketPairs": [
         ["{", "}"],
         ["[", "]"],
-        ["(", ")"],
-        ["<|", "|>"]
+        ["(", ")"]
     ],
+    "$comment_colorized": "Caution: **Do not list `<|` / `|>` in brackets or colorizedBracketPairs.** Listed in either, VS Code's bracket-pair colouring showed the `<` and the `|` of one `<|` in different colours (the `<` as an unexpected bracket). Left out of both, the grammar's punctuation scope gives both characters the one colour the theme has for it; auto-closing and surrounding still pair them.",
     "autoClosingPairs": [
         { "open": "{", "close": "}" },
         { "open": "[", "close": "]" },
@@ -34,9 +33,16 @@
     ],
     "$comment": "Caution: **kspl and kspls both point at this same file.** The brackets, the auto-closing and the note notation are the same for both, so no copy is held (see languages in package.json).",
     "indentationRules": {
-        "$comment": "The second branch is the heading of a block in the notation written by indentation (.kspls). **It is safe on .kspl too** — that side's headings always end in `{`, so the first branch matches first, and a declaration with no body ends in `;`, so it falls outside this branch.",
-        "increaseIndentPattern": "^.*(\\{[^}\"']*|\\([^)\"']*|\\[[^\\]\"']*|<\\|[^|>\"']*)$|^\\s*(pub |priv )?(fn|struct|enum|trait|impl|extern|if|else|for|switch|case|default|defer)\\b.*[^;{,]$",
-        "decreaseIndentPattern": "^\\s*(\\}|\\)|\\]|\\|>)"
+        "$comment": "The second branch is the heading of a block in the notation written by indentation (.kspls). **It is safe on .kspl too** — that side's headings always end in `{`, so the first branch matches first, and a declaration with no body ends in `;`, so it falls outside this branch. A heading word alone (`default`, `else`, a bare `for`) opens a level too, and a label goes only before `for`, `switch` and `if`, as in the .kspls reader (`p: fn(…)` is a declaration). A `case` or `default` typed at a line's head goes one level out, to the `switch`'s column, in both notations.",
+        "increaseIndentPattern": "^.*(\\{[^}\"']*|\\([^)\"']*|\\[[^\\]\"']*|<\\|[^|>\"']*)$|^\\s*((pub |priv )?(fn|struct|enum|trait|impl|extern|if|else|for|switch|case|default|defer)|\\w+:\\s*(for|switch|if))\\b(.*[^;{,])?$",
+        "decreaseIndentPattern": "^\\s*(\\}|\\)|\\]|\\|>|(case|default)\\b)"
     },
+    "onEnterRules": [
+        {
+            "$comment": "A `switch` and its subject alone: the line below is its first `case`, at the `switch`'s column, since a `switch` opens no block. **Keep `switch` in increaseIndentPattern all the same**: a `case` typed there is measured from this line, one level in and then one out by decreaseIndentPattern, which lands on the same column.",
+            "beforeText": "^\\s*(\\w+:\\s*)?switch\\b(?!.*\\bcase\\b)[^{]*$",
+            "action": { "indent": "none" }
+        }
+    ],
     "wordPattern": "(-?\\d*\\.\\d\\w*)|([^\\`\\~\\!\\@\\#\\$\\%\\^\\&\\*\\(\\)\\-\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\?\\s]+)"
 }

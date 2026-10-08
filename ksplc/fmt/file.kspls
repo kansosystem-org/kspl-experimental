@@ -71,7 +71,7 @@ enum Fmt_error //< why one file was left as it was; its diagnostic is already pr
     too_deep //< the printer's walk hit its depth limit, so the output is cut short
 
 fn format_file(in_path: U8[], base_parser: kspeg.Target$@, config: Config, in_place: Bool,
-    to_layout: Bool, fixed: Fixed_points$@): Void?Fmt_error //<
+    to_layout: Bool, fixed: Fixed_points$@): Void!Fmt_error //<
         //< It formats one file, in place (`in_place`) or to standard output
     // Caution: **Refuse a change of notation before formatting starts.** The formatter rearranges
     // the original text's tokens, so the brace-less notation fails at the first statement with a
@@ -79,9 +79,9 @@ fn format_file(in_path: U8[], base_parser: kspeg.Target$@, config: Config, in_pl
     if in_place && to_layout != in_path.is_laid_out()
         io.err().s(in_path).s(": it cannot be written back under a changed name")
         io.err().s(" (leave `--in-place` off and it puts it out to standard output).\n")
-        throw Fmt_error.refused
+        throw .refused
     raw: = io.read_file(in_path) catch e
-        throw Fmt_error.parse(.io(e))
+        throw .parse(.io(e))
     defer dealloc(Void$@::raw.ptr)
     // The `defer` above frees the original buffer. The fixed-up text lives on the arena, so never
     // pass it to `dealloc`.
@@ -124,7 +124,7 @@ fn format_file(in_path: U8[], base_parser: kspeg.Target$@, config: Config, in_pl
     if formatter.too_deep
         io.err()
             .s("\nerror: source nesting too deep for the formatter (possible pathological input).\n")
-        throw Fmt_error.too_deep
+        throw .too_deep
 
     fmt_out: = formatter.out.slice()
     if had_shebang
@@ -145,7 +145,7 @@ fn format_file(in_path: U8[], base_parser: kspeg.Target$@, config: Config, in_pl
     if in_place
         if !raw.equals(out_bytes)
             io.write_file(in_path, out_bytes) catch e
-                throw Fmt_error.parse(.io(e))
+                throw .parse(.io(e))
             base_diag.log().s("Formatted (in-place): \{in_path\}\n")
     else
         // Caution: **Do not add a newline here.** `end_with_one_nl` already ended the output with

@@ -326,8 +326,8 @@ pub fn jobs(): Sz //< how many children `run_children` runs side by side
 pub fn run_children( //< runs children side by side (`jobs`), and returns their runs in order
     //<
     //< **The results come in the input's order**, so the code that judges has one form, sequential
-    //< or parallel. **There is no timeout** (`run_many`'s), so run nothing here that might not
-    //< stop.
+    //< or parallel. **Each waits at most `default_timeout_ms`**, as `run_child` does unless told
+    //< otherwise.
     //< Caution: **Give each run a `work_dir` of its own.** The outputs are collected there in files
     //< of fixed names (`j<number>.out`), so two runs sharing one at once read each other's.
     items: subproc.Job[], //< what to run
@@ -335,7 +335,7 @@ pub fn run_children( //< runs children side by side (`jobs`), and returns their 
     arena: Arena$@, //< where the texts are kept
 ): List<|Run_out|>$@
     fs.mkdir_all(work_dir) catch {}
-    rs: = subproc.run_many(items, jobs(), run_output_cap, work_dir, arena)
+    rs: = subproc.run_many(items, jobs(), default_timeout_ms, run_output_cap, work_dir, arena)
     outs: = List<|Run_out|>.create(arena)
     for i in Range.asc(rs.len)
         r: = rs.get(i)

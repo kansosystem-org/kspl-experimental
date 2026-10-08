@@ -62,9 +62,9 @@ impl Safetensors
         //< not release them.
         file_data: U8[], //< the whole file, which the caller owns and `free()` does not release
         arena: Arena$@, //< the arena the header's parts are allocated from
-    ): Safetensors?Safetensors_error
+    ): Safetensors!Safetensors_error
         if file_data.len < 8
-            throw Safetensors_error.too_small
+            throw .too_small
         // The JSON header's size is the leading 8 bytes (little endian).
         // Caution: Sz is 32-bit under cfg(freestanding), so **finish the range check while the
         // value is still U64, and convert to Sz after.** Converted first, header_len wraps on a
@@ -72,11 +72,11 @@ impl Safetensors
         header_len_u64: = file_data.get_u64_le(0)
         // A broken or malicious header length must not read outside the file.
         if header_len_u64 > U64::(file_data.len - 8)
-            throw Safetensors_error.invalid_header
+            throw .invalid_header
         header_len: = Sz::header_len_u64
         json_str: = U8[]::{ .ptr = file_data.ptr + 8, .len = header_len }
         metadata: = json.parse(json_str, arena) catch
-            throw Safetensors_error.invalid_header
+            throw .invalid_header
 
         return Safetensors::{ .raw_data = file_data, .metadata = metadata,
             .data_offset = 8 + header_len, .owns_data = false }
@@ -88,14 +88,15 @@ impl Safetensors
         r: Self$@,
         name: U8[], //< the tensor's name as the header spells it
         arena: Arena$@, //< the arena for the shape; the elements stay in the file's bytes
-    ): Tensor<|T|>?Safetensors_error
+    ): Tensor<|T|>!Safetensors_error
         t_info: = r.metadata.get(name)
-        switch t_info case .null_val
-            throw Safetensors_error.tensor_not_found(name)
+        switch t_info
+        case .null_val
+            throw .tensor_not_found(name)
         default {}
         // **Check the dtype first** (the reason is at dtype_bytes).
         if dtype_bytes(t_info.get("dtype").as_str()) != sizeof(T)
-            throw Safetensors_error.dtype_mismatch(name)
+            throw .dtype_mismatch(name)
         // The data offset (read with as_int64, since files can exceed 2GB)
         offsets: = t_info.get("data_offsets")
         start_raw: = offsets.get_at(0).as_int64(0)
@@ -106,7 +107,7 @@ impl Safetensors
         // values**.
         body_len: = r.raw_data.len - r.data_offset
         if start_raw < 0 || U64::start_raw > U64::body_len
-            throw Safetensors_error.invalid_header
+            throw .invalid_header
         start: = Sz::start_raw
         shape_val: = t_info.get("shape")
         shape_list: = List<|Sz|>.create(arena)
@@ -116,7 +117,7 @@ impl Safetensors
             // refuses.
             dim: = dim_val.as_int64(-1)
             if dim < 0 || U64::dim > U64::tensor.max_tensor_elems
-                throw Safetensors_error.invalid_header
+                throw .invalid_header
             shape_list.push(Sz::dim)
 
         ndim: = shape_list.len
@@ -132,22 +133,22 @@ impl Safetensors
             s: = shape_list.get(i)
             (shape_ptr + i)$ = s
             if s > 0 && size > avail / s
-                throw Safetensors_error.invalid_header
+                throw .invalid_header
             size *= s
         // avail bounds it only by the file's size; a huge but real file can hold a dimension past
         // I32's range, which is truncated where it reaches a BLAS FFI as an I32 (see tensor.kspls).
         // So `new`'s cap, tensor.max_tensor_elems, applies here too, and this path cannot bypass
         // it.
         if size > tensor.max_tensor_elems
-            throw Safetensors_error.invalid_header
+            throw .invalid_header
         // Caution: **Check `data_offsets`' end too.** A size from `shape` alone can read past the
         // declared range while staying inside the file, so it passes the bounds check and returns
         // the neighbouring tensor's content (as above). In a valid file the two always agree.
         end_raw: = offsets.get_at(1).as_int64(0)
         if end_raw < start_raw || U64::end_raw > U64::body_len
-            throw Safetensors_error.invalid_header
+            throw .invalid_header
         if Sz::end_raw - start != size * sizeof(T)
-            throw Safetensors_error.invalid_header
+            throw .invalid_header
         at: = r.raw_data.ptr + r.data_offset + start
         // Caution: **Copy a misaligned tensor, do not read it in place.** The format does not
         // require the header to pad the data to the element's width, nor need a caller's bytes be
@@ -168,14 +169,14 @@ impl Safetensors
         name: U8[], //< the tensor's name as the header spells it
         dst: Tensor<|T|>$@, //< the tensor whose weights are replaced; the file's shape must match it
         arena: Arena$@, //< the arena the shape is allocated from
-    ): Void?Safetensors_error
+    ): Void!Safetensors_error
         want: = dst.shape
-        got: = r.get_tensor<|T|>(name, arena)?
+        got: = r.get_tensor<|T|>(name, arena)!
         if got.shape.len != want.len
-            throw Safetensors_error.shape_mismatch(name)
+            throw .shape_mismatch(name)
         for i in Range.asc(want.len)
             if got.shape[i] != want[i]
-                throw Safetensors_error.shape_mismatch(name)
+                throw .shape_mismatch(name)
         dst$ = got
     pub fn free(r: Self$@) //< frees the file's bytes, once
         //<

@@ -230,7 +230,7 @@ impl<|T|> List<|T|>
 impl<|T|> List<|T|>: Index<|Sz, T|> //< so `xs[i]` reads an element
     //<
     //< An index out of range panics: the caller can check it against len, so a failure is a bug.
-    //< Map.get/remove are recoverable (V?Ds_error/Bool), since a key's presence is run-time data.
+    //< Map.get/remove are recoverable (V!Ds_error/Bool), since a key's presence is run-time data.
     #inline
     pub fn get(r: Self@, index: Sz): T //< a copy of the element; out of range stops the program
         if index < 0 || index >= r.len
@@ -436,16 +436,16 @@ pub struct Map_seq<|K: Hashable<|K|>, V|> //< walks a `Map` one live pair at a t
     priv i: Sz
 
 impl<|K: Hashable<|K|>, V|> Map_seq<|K, V|>: Iter<|Map_entry<|K, V|>$@|> //< so a `for` drives it
-    pub fn next(r: Self$@): Option<|Map_entry<|K, V|>$@|> //< the next live pair, or nothing
+    pub fn next(r: Self$@): Map_entry<|K, V|>$@? //< the next live pair, or nothing
         //<
         //< Caution: **Skip the empty slots** (their content is undefined); a tombstone is not
         //< active.
-        $out: = Option<|Map_entry<|K, V|>$@|>.none
+        $out: Map_entry<|K, V|>$@? = .none
         for r.i < r.m.cap
             entry: = r.m.entries + r.i
             r.i += 1
             if entry.is_active
-                out = Option<|Map_entry<|K, V|>$@|>.some(entry)
+                out = .some(entry)
                 break
         return out
 
@@ -453,11 +453,11 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Index_mut<|K, V|> //< so `m[k] = v` wri
     pub fn set(r: Self$@, key: K, value: V) //< stores a pair, replacing any old value for the key
         r.set_with_hash(key, value, key.hash())
 
-impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Index<|K, V?Ds_error|> //< so `m[k]` reads a pair
-    pub fn get(r: Self$@, key: K): V?Ds_error //< the value for the key, or an error if absent
+impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Index<|K, V!Ds_error|> //< so `m[k]` reads a pair
+    pub fn get(r: Self$@, key: K): V!Ds_error //< the value for the key, or an error if absent
         entry: = r.find_entry(key)
         if entry != null
             return entry.value
-        throw Ds_error.key_not_found
+        throw .key_not_found
 impl<|T|> List<|T|>: Owned {} //< it owns its resources and releases them with `free()`.
 impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Owned {} //< it owns its memory, released with `free()`

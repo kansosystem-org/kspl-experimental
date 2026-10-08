@@ -31,8 +31,9 @@ fn lang_file(): U8[] //< `lang_file_path` under the name the file was found as
 priv fn decl_name_of(r: Ast_node$@): U8[] //< the name of a declaration node
     //<
     //< A kind with no name (an impl, an extern block and so on) returns empty.
-    switch r.kind_id case .k_decl_struct, .k_decl_enum, .k_decl_trait, .k_decl_fn, .k_decl_const,
-        .k_decl_alias {} case .k_decl_var
+    switch r.kind_id
+    case .k_decl_struct, .k_decl_enum, .k_decl_trait, .k_decl_fn, .k_decl_const, .k_decl_alias {}
+    case .k_decl_var
         item: = r.find_child(.k_decl_var_item)
         if item != null
             name_node: = item.find_child(.k_identifier)
@@ -124,15 +125,15 @@ impl Sema_ctx
         //< operation would change it too).
         return r.aliases.files.get(r.import_key(file, ali)) catch null
 
-    fn find_file_alias(r: Self$@, file: U8[], ali: U8[]): Option<|Alias_info$@|> //<
+    fn find_file_alias(r: Self$@, file: U8[], ali: U8[]): Alias_info$@? //<
         //< Looks up the alias information keyed by "file::ali", setting the used flag if found
         //<
         //< It serves get_file_alias and get_file_alias_target.
         entry: = r.peek_file_alias(file, ali)
         if entry != null
             entry.is_used = true
-            return Option<|Alias_info$@|>.some(entry)
-        return Option<|Alias_info$@|>.none
+            return .some(entry)
+        return .none
 
     fn get_file_alias_target(r: Self$@, file: U8[], ali: U8[]): U8[]
         entry: = r.find_file_alias(file, ali).unwrap_or(null)
@@ -226,16 +227,15 @@ impl Sema_ctx
         //< Caution: the reason not to reuse `find_import_symbol` is at peek_file_alias.
         return r.import_symbols.files.get(r.import_key(file, local_name)) catch null
 
-    fn find_import_symbol(r: Self$@, file: U8[], local_name: U8[]):
-        Option<|Import_symbol_info$@|> //<
-            //< Looks up the selective-import information keyed by "file::local_name"
-            //<
-            //< If found, it sets the used flag and returns it.
+    fn find_import_symbol(r: Self$@, file: U8[], local_name: U8[]): Import_symbol_info$@? //<
+        //< Looks up the selective-import information keyed by "file::local_name"
+        //<
+        //< If found, it sets the used flag and returns it.
         entry: = r.peek_import_symbol(file, local_name)
         if entry != null
             entry.is_used = true
-            return Option<|Import_symbol_info$@|>.some(entry)
-        return Option<|Import_symbol_info$@|>.none
+            return .some(entry)
+        return .none
 
     fn mark_import_written(r: Self$@, file: U8[], name: U8[], heads_member: Bool) //<
         //< Records that file wrote that name; heads_member: a `.member` follows it

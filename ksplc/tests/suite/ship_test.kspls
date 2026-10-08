@@ -103,24 +103,20 @@ priv fn copy_in(names: U8[][], to: U8[], arena: Arena$@): Bool //< copies fixtur
     return true
 
 priv fn vendor_builds(vendor: U8[], arena: Arena$@): Bool //<
-    //< Each vendor's C and interfaces, as the vendor makes them: one compile per interface
+    //< Each vendor's C and interfaces, as the vendor makes them: one compile writes them all
     $all: = true
     for lib in libs
+        $argv: = List<|U8[]|>.new(arena)
+        argv.push(arena.text().s("--library=\{lib\}.h").take())
+        // **greet ships both forms from the one compile**; count ships its C header alone.
+        if lib.equals("greet")
+            argv.push("--library=greet_api.kspls")
+        argv.push(arena.text().s("\{lib\}.kspls").take())
+        argv.push(arena.text().s("\{lib\}.c").take())
         all =
             all &&
-            ok_step(arena.text().s("vendor \{lib\} builds with --library and writes its C header")
-            .take(),
-            harness
-            .ksplc_argv(U8[][]::{ "--library",
-            arena.text().s("--emit-interface=\{lib\}.h").take(),
-            arena.text().s("\{lib\}.kspls").take(),
-            arena.text().s("\{lib\}.c").take() }), vendor)
-    all =
-        all &&
-        ok_step("vendor greet writes its KSPL interface",
-        harness
-        .ksplc_argv(U8[][]::{ "--library", "--emit-interface=greet_api.kspls", "greet.kspls",
-        "greet.c" }), vendor)
+            ok_step(arena.text().s("vendor \{lib\} builds with --library and writes its interfaces")
+            .take(), harness.ksplc_argv(argv.slice()), vendor)
     return all
 
 priv fn check_private(vendor: U8[], obj_dir: U8[], arena: Arena$@) //<

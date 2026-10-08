@@ -80,7 +80,7 @@ fn install_idle_reap(stack: U8$[]) //<
 // ============================ Tasks ============================
 impl Task
     fn create_dyn(entry: task.Task_fn, arg: Void$@, prio: I32, name: U8[], stack_size: Sz):
-        Option<|Task$@|> //<
+        Task$@? //<
             //< Allocates the Task and the stack from the heap and creates a task
             //<
             //< It frees both and returns none when max_tasks in task.kspls or max_dyn is reached
@@ -88,19 +88,19 @@ impl Task
         reap_pending()
         slot: = find_dyn_slot()
         if slot >= max_dyn
-            return Option<|Task$@|>.none
+            return .none
         tcb: = heap.heap_alloc_as<|Task|>()
         stack: = U8$@::heap.heap_alloc(stack_size)
         if !tcb.create(U8$[]::{ .ptr = stack, .len = stack_size }, entry, arg, prio, name)
             heap.heap_free(Void$@::stack)
             heap.heap_free(Void$@::tcb)
-            return Option<|Task$@|>.none
+            return .none
         g_dyn[slot].tcb = tcb
         g_dyn[slot].stack = stack
         g_dyn[slot].pending_reap = false
         if slot == g_dyn_count
             g_dyn_count += 1
-        return Option<|Task$@|>.some(tcb)
+        return .some(tcb)
 
     fn delete_dyn(r: Self$@) //<
         //< Deletes an instance created by create_dyn and returns the Task and the stack to the heap

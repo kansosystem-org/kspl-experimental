@@ -28,7 +28,7 @@ import "std/str" { Str_builder }
 // expected" lets a function pointer through where a `Callable1` is expected (a closure's forgotten
 // `;`), and the user sees a clang error naming `_anon_fn_1`.
 priv fn fn_value_type_id(node: Ast_node$@, c: Sema_ctx$@, sym: Sema_symbol$@, expected_id: I32,
-    is_method: Bool): I32?Sema_error
+    is_method: Bool): I32!Sema_error
     exp_real: = c.env.get_clean_real_type(expected_id)
     // Nothing to match against: (1) no declaration (2) no expected type (`x: = f;`) (3) a generic
     // call's opaque marker (4) variadic arguments.
@@ -39,7 +39,7 @@ priv fn fn_value_type_id(node: Ast_node$@, c: Sema_ctx$@, sym: Sema_symbol$@, ex
     if exp_real == (I32::sema_type_env.Builtin_type_id.void_ptr)
         return expected_id
 
-    actual_id: = sema_decl_resolve.own_fn_type_id(sym.node, c)?
+    actual_id: = sema_decl_resolve.own_fn_type_id(sym.node, c)!
     actual_str: = c.env.get_str(actual_id)
     // Stay silent where something is unresolved (another diagnostic names the cause).
     // An alias in a parameter is another name for its type (is_const_compatible's signatures).
@@ -97,25 +97,25 @@ priv fn refuse_unwritten_type_args(c: Sema_ctx$@, at: Ast_node$@, what: U8[], na
     c.err(at, c.scratch.slice())
 
 priv fn instantiate_written(node: Ast_node$@, c: Sema_ctx$@, fn_tmpl: sema_decl_mono.Fn_instance,
-    tmpl: Ast_node$@, type_args: Ast_node$@): Sema_symbol$@?Sema_error //<
+    tmpl: Ast_node$@, type_args: Ast_node$@): Sema_symbol$@!Sema_error //<
         //< Builds the specialization of the template `tmpl` that `type_args` name
         //<
         //< null once reported. As at a call, a bound violation is reported at node's line, not the
         //< template's.
-    args: = type_args.build_resolved_type_args(c, tmpl)?
+    args: = type_args.build_resolved_type_args(c, tmpl)!
     if !sema_decl_mono.written_generic_arity_matches(tmpl, args.len)
         sema_decl_mono.check_written_generic_arity(c, tmpl, args.len, node)
         return null
     prev_inst_site: = c.generics.inst_site
     c.generics.inst_site = node
     defer c.generics.inst_site = prev_inst_site
-    $inst_name: = c.instantiate_fn(sema_body_call.with_args(fn_tmpl, args), false)?
+    $inst_name: = c.instantiate_fn(sema_body_call.with_args(fn_tmpl, args), false)!
     defer inst_name.free()
     inst: = c.symtab.resolve(inst_name.slice()) catch null
     return inst
 
 priv fn specialization_named(node: Ast_node$@, c: Sema_ctx$@, named: sema_decl_name.Written_name):
-    Option<|Sema_symbol$@|>?Sema_error //<
+    Sema_symbol$@?!Sema_error //<
         //< What a function named as a value stands for: itself, or the specialization it names
         //<
         //< The written type arguments name the specialization, which is instantiated here. None
@@ -126,42 +126,42 @@ priv fn specialization_named(node: Ast_node$@, c: Sema_ctx$@, named: sema_decl_n
     gen_params: = sym.node.find_child(.k_type_gen_params) if sym.node != null else null
     if gen_params == null || gen_params.children.len == 0
         if type_args == null
-            return Option<|Sema_symbol$@|>.some(sym)
+            return .some(sym)
         sema_body_call.refuse_type_args_on_plain_fn(c, sym.name, type_args)
-        return Option<|Sema_symbol$@|>.none
+        return .none
     if named.template != sym.node
         c.clear_scratch()
             .s("generic method '\{sym.name\}' cannot be used as a value\n  Hint: call it from a \
                 non-generic function, and use that function")
         c.err(node, c.scratch.slice())
-        return Option<|Sema_symbol$@|>.none
+        return .none
     if type_args == null
         $form: = Str_builder.new()
         defer form.free()
         form.s(sym.name).s("<|…|>")
         refuse_unwritten_type_args(c, node, "function", sym.name, form.slice(), gen_params)
-        return Option<|Sema_symbol$@|>.none
-    inst: = instantiate_written(node, c, named.fn_tmpl, sym.node, type_args)?
+        return .none
+    inst: = instantiate_written(node, c, named.fn_tmpl, sym.node, type_args)!
     if inst == null
-        return Option<|Sema_symbol$@|>.none
+        return .none
     // The instance's declaration is what the backends name (`get_c_identifier_for_sym_to` in
     // lower/abi.kspls); the template has no code of its own.
     inst.flags.is_used = true
     node.def_node = inst.node
     node.get_child(node.children.len - 2).def_node = inst.node
-    return Option<|Sema_symbol$@|>.some(inst)
+    return .some(inst)
 
 priv fn fn_value_id(node: Ast_node$@, c: Sema_ctx$@, named: sema_decl_name.Written_name,
-    expected_id: I32): I32?Sema_error //<
+    expected_id: I32): I32!Sema_error //<
         //< The type of a function's name used as a value rather than called
         //<
         //< A generic function stands for the specialization written after it.
-    if inst: = specialization_named(node, c, named)?
-        return value_of_fn(node, c, inst, expected_id, false)?
+    if inst: = specialization_named(node, c, named)!
+        return value_of_fn(node, c, inst, expected_id, false)!
     return I32::sema_type_env.Builtin_type_id.unknown
 
 priv fn value_of_fn(node: Ast_node$@, c: Sema_ctx$@, sym: Sema_symbol$@, expected_id: I32,
-    is_method: Bool): I32?Sema_error //<
+    is_method: Bool): I32!Sema_error //<
         //< The type of the function sym, named at node as a value, checked against the expected
         //<
         //< **A function's name takes its type from where it is written**: with nothing expected,
@@ -170,14 +170,14 @@ priv fn value_of_fn(node: Ast_node$@, c: Sema_ctx$@, sym: Sema_symbol$@, expecte
         //< Caution: Do not answer sym.type_id there: that is the function's return type, and
         //< genllvm would compare or pass the address as that scalar.
     if !sema_type_env.is_unknown(expected_id)
-        return fn_value_type_id(node, c, sym, expected_id, is_method)?
+        return fn_value_type_id(node, c, sym, expected_id, is_method)!
     // An unresolved return type is reported at the declaration.
     if sema_type_env.is_unknown(sym.type_id)
         return I32::sema_type_env.Builtin_type_id.unknown
     return c.env.generic_fn_value_type_id()
 
 fn infer_method_value(node: Ast_node$@, c: Sema_ctx$@, owner_id: I32, owner: Ast_node$@,
-    member: Ast_node$@, own_args: Ast_node$@, expected_id: I32): I32?Sema_error //<
+    member: Ast_node$@, own_args: Ast_node$@, expected_id: I32): I32!Sema_error //<
         //< The type of a method named through its type as a value
         //<
         //< It is the function whose first parameter is the receiver as declared (`Plain.m`,
@@ -196,7 +196,8 @@ fn infer_method_value(node: Ast_node$@, c: Sema_ctx$@, owner_id: I32, owner: Ast
     defer fqn.free()
     fqn.s(owner_name).s(".").s(member.text)
     // A trait's method is a slot each conforming type fills, with no function of its own.
-    switch c.env.get_info(owner_real) case .trait_type(_def)
+    switch c.env.get_info(owner_real)
+    case .trait_type(_def)
         c.clear_scratch()
             .s("trait method '\{written.slice()\}' cannot be used as a value: each type conforming \
                 to the trait has its own\n  Hint: name one conforming type's, as in \
@@ -229,7 +230,7 @@ fn infer_method_value(node: Ast_node$@, c: Sema_ctx$@, owner_id: I32, owner: Ast
             refuse_unwritten_type_args(c, node, "method", member.text, written.slice(),
                 tmpl.find_child(.k_type_gen_params))
             return I32::sema_type_env.Builtin_type_id.unknown
-        sym = instantiate_written(node, c, fn_tmpl, tmpl, own_args)?
+        sym = instantiate_written(node, c, fn_tmpl, tmpl, own_args)!
         if sym == null
             return I32::sema_type_env.Builtin_type_id.unknown
     // The method's own declaration (an instance's, for a generic) is what the backends name.
@@ -237,7 +238,7 @@ fn infer_method_value(node: Ast_node$@, c: Sema_ctx$@, owner_id: I32, owner: Ast
     node.def_node = sym.node
     member.def_node = sym.node
     c.check_visibility_and_mark_used(sym, node)
-    return value_of_fn(node, c, sym, expected_id, true)?
+    return value_of_fn(node, c, sym, expected_id, true)!
 
 fn refuse_method_of_bare_generic(c: Sema_ctx$@, node: Ast_node$@, owner: Ast_node$@,
     member: Ast_node$@, owner_tmpl: Ast_node$@, is_call: Bool) //<
@@ -263,7 +264,7 @@ fn refuse_method_of_bare_generic(c: Sema_ctx$@, node: Ast_node$@, owner: Ast_nod
     write_gen_param_names(c, owner_tmpl.find_child(.k_type_gen_params))
     c.err(node, c.scratch.slice())
 
-fn infer_path_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error
+fn infer_path_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error
     is_callee: = c.fn_ctx.callee == node
     if node.children.len <= 1
         name: = node.text if node.children.len == 0 else node.get_child(0).text
@@ -281,7 +282,8 @@ fn infer_path_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_
         c.report_name_by_fqn(node, named)
         return I32::sema_type_env.Builtin_type_id.unknown
     if sym == null
-        switch named.reach case .instance_type
+        switch named.reach
+        case .instance_type
             // A generic type's instance written whole names a type, which refuse_type_name tells
             // from its template.
             node.def_node = named.template
@@ -302,7 +304,7 @@ fn infer_path_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_
 
     if sym.kind.names_function()
         if !is_callee
-            return fn_value_id(node, c, named, expected_id)?
+            return fn_value_id(node, c, named, expected_id)!
     // Caution: **A type's own name is not a value.** Returning its type makes `x: = Row` emit an
     // undefined C symbol, a C compiler error rather than a diagnostic (Principle 2). Unknown is
     // rejected at the declaration instead (refuse_type_name); the `.` path (`Row.new()`,

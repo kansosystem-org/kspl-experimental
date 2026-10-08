@@ -2,7 +2,7 @@ import "kspage/lay/ask"
 import "kspage/lay/caret"
 import "kspage/lay/flow"
 import "kspage/lay/page" { Page }
-import "kspage/model/doc" { Axis, Block, Doc }
+import "kspage/model/doc" { Block, Doc }
 import "kspage/model/fixed_font" as fixed
 import "kspage/model/style" + { Sheet }
 import "kspage/tests/base"
@@ -103,7 +103,7 @@ fn test_merging_absorbs_the_next_cell_and_undoes_in_one_step() //<
     page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
     ed.caret = caret.at(table.children.get(0).children.get(0).inlines.get(0), 0)
 
-    assert(ed.merge_cell(page, Axis.column), "it can be merged with the right neighbour")
+    assert(ed.merge_cell(page, .column), "it can be merged with the right neighbour")
     head: = table.children.get(0)
     assert(head.children.len == 1, "the cell taken in comes off")
     assert(head.children.get(0).span_cols == 2, "it covers two columns")
@@ -127,7 +127,7 @@ fn test_splitting_puts_the_covered_cells_back() //<
     ed: = edit.new_editor(d)
     page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
     ed.caret = caret.at(table.children.get(0).children.get(0).inlines.get(0), 0)
-    ed.merge_cell(page, Axis.row)
+    ed.merge_cell(page, .row)
     assert(table.children.get(1).children.len == 1, "the cell of the row below comes off")
 
     laid: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
@@ -152,7 +152,8 @@ fn test_the_frame_marks_the_cell_the_caret_is_in() //<
     // The boxes come as "outside", a, b, c, d; the table starts one line lower.
     page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
     in_c: = caret.cell_frame(page, caret.at(page.boxes.get(3).inline, 0))
-    switch in_c case .some(r)
+    switch in_c
+    case .some(r)
         assert(base.near(r.x, 0.0) && base.near(r.y, 38.4),
             "it is the place of the second row's first column")
         assert(base.near(r.w, 8.0) && base.near(r.h, 19.2),
@@ -189,7 +190,8 @@ fn test_the_frame_is_the_innermost_cell() //<
 
     // "a" is inside both cells; the outer one's 16px would be the wrong answer.
     frame: = caret.cell_frame(page, caret.at(page.boxes.get(0).inline, 0))
-    switch frame case .some(r)
+    switch frame
+    case .some(r)
         assert(base.near(r.w, 8.0), "it is the inner first column's width")
     case .none
         assert(false, "the frame comes out inside a nesting too")
@@ -209,7 +211,7 @@ fn test_a_cell_does_not_split_into_paragraphs() //< inside a cell no paragraph i
     ed.caret = caret.at(page.boxes.get(0).inline, 0)
     assert(!ed.split_block(page, sheet), "it does not split")
     assert(!ed.join_prev(page), "it does not join onto the cell before either")
-    assert(table.line_count(Axis.row) == 2, "the rows stay two")
+    assert(table.line_count(.row) == 2, "the rows stay two")
     assert(table.children.get(0).children.len == 2, "the first row's cells stay two too")
     verdict
         .pass("pressed inside a cell no paragraph splits, and the table's shape does not change.")
@@ -232,7 +234,7 @@ fn test_a_table_is_inserted_after_the_caret() //<
     assert(ed.insert_table(page, sheet, "table", 2, 2), "it inserts")
     assert(d.blocks.len == 3, "one grows behind the paragraph the cursor is in")
     table: = d.blocks.get(1)
-    assert(table.line_count(Axis.row) == 2, "there are two rows")
+    assert(table.line_count(.row) == 2, "there are two rows")
     assert(table.children.get(0).children.len == 2, "there are two cells to a row")
     first: = table.children.get(0).children.get(0).inlines.get(0)
     assert(ed.caret.inline == first && ed.caret.offset == 0, "the cursor goes into the first cell")
@@ -247,7 +249,8 @@ fn test_a_table_is_inserted_after_the_caret() //<
     // text. It is made through the record, so the same undo removes it together with the table.
     first_cell: = table.children.get(0).children.get(0)
     assert(first_cell.style.len > 0, "a fresh cell carries a style name")
-    switch sheet.find(first_cell.style) case .some(cs)
+    switch sheet.find(first_cell.style)
+    case .some(cs)
         assert(style.cell_like(cs), "the cell's style has a cell's part (an inner space, no mark)")
         assert(cs.rule_width > 0.0, "the cell's style draws the grid's line")
     case .none
@@ -276,7 +279,7 @@ fn test_a_table_takes_the_size_pressed() //<
     assert(d.blocks.len == 1, "a refused size leaves the document as it was")
     assert(ed.insert_table(page, sheet, "table", 3, 4), "three by four inserts")
     table: = d.blocks.get(1)
-    assert(table.line_count(Axis.row) == 3, "there are three rows")
+    assert(table.line_count(.row) == 3, "there are three rows")
     for $y: Sz = 0; y < 3; y += 1
         assert(table.children.get(y).children.len == 4, "every row holds four cells")
     after: = flow.layout(d, sheet, fixed.make(), 400.0, arena)
@@ -305,7 +308,8 @@ fn test_a_fresh_table_spans_the_text() //<
     // The text is 200 wide; the indent takes 10 and the padding 4 on each side.
     $sum: F32 = 0.0
     for $c: Sz = 0; c < 4; c += 1
-        switch table.size_of(Axis.column, c) case .some(v)
+        switch table.size_of(.column, c)
+        case .some(v)
             assert(base.near(v, 45.5), "every column is named the same quarter")
             sum += v
         case .none
@@ -390,7 +394,7 @@ fn test_a_column_past_the_end_reaches_the_merged_row_too() //<
     page: = flow.layout(d, sheet, fixed.make(), 400.0, arena)
     // The cursor into the last column's "b", so the column is added past the grid's end.
     ed.caret = caret.at(table.children.get(1).children.get(1).inlines.get(0), 1)
-    assert(ed.add_line(page, Axis.column), "it was added")
+    assert(ed.add_line(page, .column), "it was added")
     // **Counted by child index, the first row has 1 and the wanted column is 2, so it would be
     // skipped** and the rows would get out of step.
     assert(table.children.get(0).children.len == 2, "the merged row gains a cell as well")
@@ -415,7 +419,7 @@ fn test_a_column_over_a_merge_widens_it() //<
     page: = flow.layout(d, sheet, fixed.make(), 400.0, arena)
     // The cursor into the merged cell, so the column lands on the merge.
     ed.caret = caret.at(table.children.get(0).children.get(0).inlines.get(0), 0)
-    assert(ed.add_line(page, Axis.column), "it was added")
+    assert(ed.add_line(page, .column), "it was added")
     // **The merge is those columns held as one**, so the column widens it rather than cutting it
     // (Excel's answer too).
     assert(table.children.get(0).children.get(0).span_cols == 3, "the merge grows by one column")
@@ -440,7 +444,7 @@ fn test_dropping_a_column_narrows_a_merge_and_comes_home() //<
 
     page: = flow.layout(d, sheet, fixed.make(), 400.0, arena)
     ed.caret = caret.at(table.children.get(0).children.get(0).inlines.get(0), 0)
-    assert(ed.drop_line(page, Axis.column), "it was deleted")
+    assert(ed.drop_line(page, .column), "it was deleted")
     assert(table.children.get(0).children.get(0).span_cols == 1, "the merge loses one column")
     assert(table.children.get(1).children.len == 1, "the plain row loses its first cell")
 
@@ -470,7 +474,7 @@ fn test_doing_it_again_puts_another_column_in() //<
     assert(ed.again_says().len == 0, "and it has nothing to say it would do")
 
     ed.caret = caret.at(page.boxes.get(0).inline, 0)
-    assert(ed.add_line(page, Axis.column), "a column goes in")
+    assert(ed.add_line(page, .column), "a column goes in")
     assert(ed.again_says().equals("Put a column in"), "it says what doing it again would do")
     // **The command runs again, rather than restoring the edits** (a redo needs an undo before it).
     page = flow.layout(d, sheet, fixed.make(), 200.0, arena)

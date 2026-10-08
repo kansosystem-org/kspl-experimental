@@ -40,17 +40,17 @@ priv fn served(arena: Arena$@): List<|U8[]|> //< the methods the server handles
                 scan.push_unique(out@, m)
     return out
 
-priv fn cap_says(src: U8[], name: U8[], arena: Arena$@): Option<|Bool|> //<
+priv fn cap_says(src: U8[], name: U8[], arena: Arena$@): Bool? //<
     //< Whether the declaration is true or false
     //<
     //< Where there is none, none.
     for got in scan.find_all(src,
         arena.text().s(".set(\"").s(name).s("\", b.bool_val(").take(), "))", arena)
-        return Option<|Bool|>.some(got.equals("true"))
+        return .some(got.equals("true"))
     // A declaration with a body (an object like `semanticTokensProvider`) counts as true.
     if src.find_str(arena.text().s(".set(\"").s(name).s("\", ").take()) >= 0
-        return Option<|Bool|>.some(true)
-    return Option<|Bool|>.none
+        return .some(true)
+    return .none
 
 // Samples that hit and miss, showing the declaration reader really reads: **a failed read looks
 // like "there is none"**, and only this says **why** it failed.
@@ -67,7 +67,8 @@ priv fn check_cap_says_fires(arena: Arena$@)
     $bad: = List<|U8[]|>.new(arena)
     for i in Range.asc(cap_says_samples.len)
         $got: I32 = -1
-        switch cap_says(cap_says_samples[i], "hoverProvider", arena) case .some(v)
+        switch cap_says(cap_says_samples[i], "hoverProvider", arena)
+        case .some(v)
             got = 1 if v else 0
         default {}
         if got != cap_says_want[i]
@@ -98,7 +99,8 @@ priv fn check_caps(arena: Arena$@) //<
         method: = cap_methods[i]
         $told: = false
         $has_cap: = false
-        switch cap_says(src, name, arena) case .some(v)
+        switch cap_says(src, name, arena)
+        case .some(v)
             told = v
             has_cap = true
         default {}
@@ -185,7 +187,7 @@ priv fn check_sent(arena: Arena$@) //< ② The server can handle the names a cli
 // ==========================================
 priv const server_file: U8[] = "ksplc/lsp/worker.kspls"
 priv const doc_view: U8[] =
-    "run_semantic_analysis(doc_path(ptr.uri_perm), true, quiet, Bodies.main_file)"
+    "run_semantic_analysis(doc_path(ptr.uri_perm), true, quiet, .main_file)"
 priv const ws_view: U8[] = "Bodies.mentioning(old_name)"
 
 priv fn check_body_views(arena: Arena$@) //<

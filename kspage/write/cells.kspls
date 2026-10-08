@@ -14,7 +14,7 @@ import "kspage/model/day"
 import "kspage/model/doc" + { Axis, Block, Tile }
 import "kspage/write/edit" + { Editor }
 import "kspage/write/field"
-import "kspage/write/record" { Again, Step }
+import "kspage/write/record" { Step }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -149,7 +149,8 @@ impl Sort_end
     fn sorted(e: Self): Bool //< whether the rows were sorted
         //<
         //< It answers only yes or no (where the reason is wanted, switch on the result).
-        switch e case .done
+        switch e
+        case .done
             return true
         default
             return false
@@ -166,7 +167,8 @@ enum Merge_end //< the result of merging the selected cells
 
 impl Merge_end
     fn merged_cells(e: Self): Bool //< whether the cells were merged
-        switch e case .done
+        switch e
+        case .done
             return true
         default
             return false
@@ -212,7 +214,8 @@ priv fn after_along(spot: Cell_at, t: Tile, axis: Axis): Bool //<
     //< Whether that cell is further along `axis` than the current cell
     //<
     //< Only within the same column (or row).
-    switch axis case .row
+    switch axis
+    case .row
         return t.column == spot.column && t.row > spot.row
     case .column
         return t.row == spot.row && t.column > spot.column
@@ -222,13 +225,15 @@ priv fn line_total(table: Block$@, axis: Axis, arena: Arena$@): Sz //<
     //<
     //< For columns it counts the grid's, merges included. `line_count` counts a row's children,
     //< which is too few when every row has a merge, and would refuse a column that is not the last.
-    switch axis case .row
+    switch axis
+    case .row
         return table.children.len
     case .column
         return table.grid_columns(arena)
 
 priv fn index_on(spot: Cell_at, axis: Axis): Sz
-    switch axis case .row
+    switch axis
+    case .row
         return spot.row
     case .column
         return spot.column
@@ -248,7 +253,7 @@ impl Editor
             return false
         // The command itself declares that it can be repeated, rather than the key working it out
         // from the record (`Again` in `record.kspls`).
-        r.again = Again.add_line(axis)
+        r.again = .add_line(axis)
         return true
 
     priv fn add_line_at(r: Self$@, table: Block$@, axis: Axis, at: Sz): Bool //<
@@ -262,13 +267,12 @@ impl Editor
         made: = table.fresh_line(axis, r.arena)
         // The spans are empty because the column is new, so a merged cell widens
         // (`Block.attach_line`).
-        edit.do_line(r, st, table, axis, at, true, made, List<|Sz|>.create(r.arena),
-            Option<|F32|>.none)
+        edit.do_line(r, st, table, axis, at, true, made, List<|Sz|>.create(r.arena), .none)
         edit.shift_formulas(r, st, table, axis, at, 1)
         r.break_group()
         return true
 
-    fn set_line_size(r: Self$@, page: Page$@, axis: Axis, v: Option<|F32|>): Bool //<
+    fn set_line_size(r: Self$@, page: Page$@, axis: Axis, v: F32?): Bool //<
         //< Sets the width of the cursor's column (or the height of its row) to a number
         //<
         //< Call it after layout (the same reason as `add_line`). `none` removes the setting,
@@ -355,29 +359,29 @@ impl Editor
         //< (as in a copy).
         //< Caution: **Call it after layout** (the same reason as `add_line`).
         if r.shut()
-            return Sort_end.shut
+            return .shut
         spot: = ask.cell_of(page, r.caret)
         if !spot.found
-            return Sort_end.outside
+            return .outside
         table: = spot.table
         first: Sz = 1
         if table.children.len - first < 2
-            return Sort_end.too_few
+            return .too_few
         tiles: = table.tiles_of(r.arena)
         for $i: Sz = 0; i < tiles.len; i += 1
             t: = tiles.get(i)
             if t.rows > 1 && t.row + t.rows > first
-                return Sort_end.merged
+                return .merged
         keys: = List<|Key|>.create(r.arena)
         for $i: Sz = first; i < table.children.len; i += 1
             keys.push(key_of(tiles, i, spot.column, r.arena))
         $order: = sorted_order(keys, down, r.arena)
         if same_order(order@)
-            return Sort_end.in_order
+            return .in_order
         r.break_group()
         r.reorder_rows(r.step(), table, first, order@)
         r.break_group()
-        return Sort_end.done
+        return .done
 
     priv fn reorder_rows(r: Self$@, st: Step$@, table: Block$@, first: Sz, order: List<|Sz|>$@) //<
         //< Rearranges the rows from `first` downwards into `order`'s order
@@ -385,21 +389,21 @@ impl Editor
         //< Caution: **The caller opens the step** (one sort is one undo).
         // Saved before moving (once removed, which row was which cannot be read).
         rows: = List<|Block$@|>.create(r.arena)
-        sizes: = List<|Option<|F32|>|>.create(r.arena)
+        sizes: = List<|F32?|>.create(r.arena)
         for $i: Sz = first; i < table.children.len; i += 1
             rows.push(table.children.get(i))
-            sizes.push(table.size_of(Axis.row, i))
+            sizes.push(table.size_of(.row, i))
         // Caution: **Remove them from the end**, or the index of a row not yet removed shifts.
         $i: Sz = table.children.len
         for i > first
             i -= 1
-            edit.do_line(r, st, table, Axis.row, i, false, null, null, Option<|F32|>.none)
+            edit.do_line(r, st, table, .row, i, false, null, null, .none)
         // Caution: **Restore them with contents** (`fresh` false), or an empty row reaches the
         // peer.
         for $k: Sz = 0; k < order.len; k += 1
             one: = List<|Block$@|>.create(r.arena)
             one.push(rows.get(order.get(k)))
-            edit.do_line(r, st, table, Axis.row, first + k, true, one, null,
+            edit.do_line(r, st, table, .row, first + k, true, one, null,
                 sizes.get(order.get(k)))
         // Caution: **Change the formulas once the rows are in place**, or they mix with unmoved
         // rows.
@@ -425,7 +429,8 @@ impl Editor
         $next: Tile = tile_at(tiles, spot.row, spot.column + mine.cols)
         $rows: Sz = mine.rows
         $cols: Sz = mine.cols
-        switch axis case .column
+        switch axis
+        case .column
             if next.block == null || next.rows != mine.rows
                 return false
             cols += next.cols
@@ -452,16 +457,16 @@ impl Editor
         //< Caution: **Keep only the top-left cell's text** (undo restores the rest).
         //< Call it after layout (the layout tells which cells are selected).
         if r.shut()
-            return Merge_end.shut
+            return .shut
         span: = ask.cell_range(page, r.caret)
         if !span.found
-            return Merge_end.outside
+            return .outside
         if span.rows <= 1 && span.cols <= 1
-            return Merge_end.alone
+            return .alone
         tiles: = span.table.tiles_of(r.arena)
         head: = tile_at(tiles, span.row, span.column)
         if head.block == null
-            return Merge_end.outside
+            return .outside
         // Caution: **Refuse where a merge inside extends outside**, or the cell sticking out loses
         // its columns and every row below shifts by one.
         for $y: Sz = span.row; y < span.row + span.rows; y += 1
@@ -471,7 +476,7 @@ impl Editor
                     continue
                 if y + one.rows > span.row + span.rows ||
                     x + one.cols > span.column + span.cols
-                    return Merge_end.ragged
+                    return .ragged
         r.break_group()
         st: = r.step()
         field.do_set_span(r, st, head.block, span.rows, span.cols)
@@ -497,7 +502,7 @@ impl Editor
         else
             r.caret = caret.nowhere()
         r.break_group()
-        return Merge_end.done
+        return .done
 
     fn split_cell(r: Self$@, page: Page$@): Bool //< splits the merge of the current cell
         //<
@@ -589,10 +594,9 @@ impl Editor
                     return r.stand_in(tiles, up, spot.column)
             return false
         $want: Sz = spot.row + span
-        for want < spot.table.line_count(Axis.row) &&
-            !ask.row_laid(page, spot.table, want)
+        for want < spot.table.line_count(.row) && !ask.row_laid(page, spot.table, want)
             want += 1
-        if want >= spot.table.line_count(Axis.row)
+        if want >= spot.table.line_count(.row)
             return r.grown_row(spot, spot.column)
         return r.stand_in(tiles, want, spot.column)
 
@@ -618,7 +622,7 @@ impl Editor
         //< goes at the end, not after the cursor's row** — after it, a new row could land inside a
         //< cell merged downward.
         at: = spot.table.children.len
-        if !r.add_line_at(spot.table, Axis.row, at)
+        if !r.add_line_at(spot.table, .row, at)
             return false
         row: = spot.table.children.get(at)
         if row.children.len == 0
@@ -642,10 +646,10 @@ impl Editor
         r.break_group()
         st: = r.step()
         at: = index_on(spot, axis)
-        edit.do_line(r, st, spot.table, axis, at, false, null, null, Option<|F32|>.none)
+        edit.do_line(r, st, spot.table, axis, at, false, null, null, .none)
         edit.shift_formulas(r, st, spot.table, axis, at, -1)
         // What the cursor pointed at is gone. Do not use it until it is placed again.
         r.caret = caret.nowhere()
-        r.again = Again.drop_line(axis)
+        r.again = .drop_line(axis)
         r.break_group()
         return true

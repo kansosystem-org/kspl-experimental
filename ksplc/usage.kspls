@@ -85,7 +85,8 @@ fn refuse_unread_std_dir(p: argp.Parser$@, topic: Info_topic) //<
     //<
     //< `info` takes the option for `std-dir` alone; `flag_faces` sees only the subcommand, so taken
     //< silently on another subject it would change nothing (Principle 5 in docs/DESIGN.md).
-    switch topic case .std_dir
+    switch topic
+    case .std_dir
         return
     default {}
     if !p.saw("--std-dir")
@@ -133,20 +134,22 @@ fn flag_faces(flag: U8[]): U8[] //< the subcommands an option applies to
     if flag.equals("--stats")
         return "compile fmt"
     if flag.equals("--split") || flag.equals("--emit-deps") || flag.equals("--emit-libs") ||
-        flag.equals("--emit-surface") || flag.equals("--library") ||
-        flag.equals("--emit-interface")
+        flag.equals("--emit-surface") || flag.equals("--library")
         return "compile"
     return ""
 
 fn refuse_retired_option(arg: U8[]) //<
-    //< It refuses `--target`, naming the two options that say what it could be read as
+    //< It refuses `--target` and `--emit-interface`, naming what to write instead
     //<
-    //< **No second spelling stays** (Principle 6 in docs/DESIGN.md): the word reads as the machine
-    //< as readily as the output's language, so it is turned away with both in the message.
-    if !arg.equals("--target") && !arg.starts_with("--target=")
-        return
-    error_exit("Error: '--target' is not an option: write '--to=c|llvm' for the language the output \
-        is written in, or '--machine=<triple>' for the machine it is for\n")
+    //< **No second spelling stays** (Principle 6 in docs/DESIGN.md). `--target` reads as the
+    //< machine as readily as the output's language; a library's interface is named by `--library=`.
+    if arg.equals("--target") || arg.starts_with("--target=")
+        error_exit("Error: '--target' is not an option: write '--to=c|llvm' for the language the \
+            output is written in, or '--machine=<triple>' for the machine it is for\n")
+    if arg.equals("--emit-interface") || arg.starts_with("--emit-interface=")
+        error_exit("Error: '--emit-interface' is not an option: '--library=<FILE>' builds the \
+            library and writes its interface to FILE (repeat it for a second form, as \
+            '--library=greet.h --library=greet_api.kspls')\n")
 
 const machine_faces: U8[] = "compile lint lsp lsp-worker run build info" //<
     //< The subcommands that lay values out, and so need a machine ksplc has widths for

@@ -47,26 +47,26 @@ fn base_level_for(file_path: U8[], code: U8[]): Lint_level //<
                 return e.level
     if level: = cfg_level_for(file_path, code)
         return level
-    return Lint_level.on if is_default_on(code) else Lint_level.off
+    return .on if is_default_on(code) else .off
 
-priv fn cfg_level_for(file_path: U8[], code: U8[]): Option<|Lint_level|> //<
+priv fn cfg_level_for(file_path: U8[], code: U8[]): Lint_level? //<
     //< It reads the level that applies to this file from the `[lint]` section of `ksplc.cfg`
     //<
     //< Where the file names the same code twice, the later line wins.
-    $found: = Option<|Lint_level|>.none
+    $found: Lint_level? = .none
     for setting in base_config_file.settings_for_file(file_path)
         if level: = lint_setting_level(setting)
             if setting.key.equals(code)
-                found = Option<|Lint_level|>.some(level)
+                found = .some(level)
     return found
 
-priv fn lint_setting_level(setting: base_config_file.Setting): Option<|Lint_level|> //<
+priv fn lint_setting_level(setting: base_config_file.Setting): Lint_level? //<
     //< If one setting is a code's level in the `[lint]` section, it returns that level
     //<
     //< It always checks the setting (unknown section, code or level), whatever code is asked for,
     //< or `I0305 = maybe` passes silently where I0305 does not fire (docs/DESIGN.md Principle 5).
     if !setting.section.equals("lint")
-        return Option<|Lint_level|>.none
+        return .none
     if !is_known(setting.key)
         base_config_file.reject(setting,
             "unknown diagnostic code (see ksplc/base/lint_codes.kspls for the full list)")
@@ -83,7 +83,8 @@ fn validate_config_for_file(file_path: U8[]) //<
     //< the other two ways of setting a level do, or a plain build rejects nothing.
     for setting in base_config_file.settings_for_file(file_path)
         if level: = lint_setting_level(setting)
-            switch level case .error
+            switch level
+            case .error
                 base_core.config.run_lint_checks = true
             default {}
 
@@ -93,16 +94,16 @@ enum Lint_level //< the levels a user can write into a `##lint(...)`
     error //< raised to an error (a setting may only add rejections, never remove them)
 
 impl Lint_level
-    fn parse(name: U8[]): Option<|Lint_level|>
+    fn parse(name: U8[]): Lint_level?
         if name.equals("off")
-            return Option<|Lint_level|>.some(Lint_level.off)
+            return .some(.off)
         if name.equals("on")
-            return Option<|Lint_level|>.some(Lint_level.on)
+            return .some(.on)
         if name.equals("error")
-            return Option<|Lint_level|>.some(Lint_level.error)
-        return Option<|Lint_level|>.none
+            return .some(.error)
+        return .none
 
-fn lookup(code: U8[]): Option<|Bool|> //< the list of every code: whether it is on by default
+fn lookup(code: U8[]): Bool? //< the list of every code: whether it is on by default
     //<
     //< None for a code that does not exist.
     //< Caution: **Do not return a description.** Nothing reads one, and it would bloat the
@@ -112,6 +113,8 @@ fn lookup(code: U8[]): Option<|Bool|> //< the list of every code: whether it is 
     if code.equals("H0301")
         return info(true)
     if code.equals("H0302")
+        return info(true)
+    if code.equals("H0303")
         return info(true)
     if code.equals("H0801")
         return info(true)
@@ -215,10 +218,10 @@ fn lookup(code: U8[]): Option<|Bool|> //< the list of every code: whether it is 
         return info(true)
     if code.equals("W0104")
         return info(true)
-    return Option<|Bool|>.none
+    return .none
 
-priv fn info(is_default_on: Bool): Option<|Bool|>
-    return Option<|Bool|>.some(is_default_on)
+priv fn info(is_default_on: Bool): Bool?
+    return .some(is_default_on)
 
 fn is_known(code: U8[]): Bool
     return lookup(code).is_some()

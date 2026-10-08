@@ -3,6 +3,7 @@ import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/sema/body/call_defaults" as sema_body_call_defaults
 import "ksplc/sema/body/coerce" as sema_body_coerce
 import "ksplc/sema/body/expr" as sema_body_expr
+import "ksplc/sema/body/lint_stmt" as sema_body_lint_stmt
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
 import "ksplc/sema/type/def" { Fn_sig }
@@ -30,7 +31,8 @@ fn check_args_against_instance(c: Sema_ctx$@, args_node: Ast_node$@, inst_node: 
         if arg_node.is_literal(",")
             continue
         $param_node: Ast_node$@ = null
-        switch cursor.next() case .some(p)
+        switch cursor.next()
+        case .some(p)
             param_node = p
         case .none
             return
@@ -61,7 +63,7 @@ fn check_args_against_instance(c: Sema_ctx$@, args_node: Ast_node$@, inst_node: 
             continue
         c.report_type_mismatch(arg_node, p_id, a_id)
 fn infer_value_call_args(c: Sema_ctx$@, call_node: Ast_node$@, args_node: Ast_node$@,
-    sig: Fn_sig$@): Void?Sema_error //<
+    sig: Fn_sig$@): Void!Sema_error //<
         //< Matches the arguments of a call through a function value against its type's parameters
         //<
         //< A function type holds no defaults and no variadic tail, so the count must be exact.
@@ -83,11 +85,13 @@ fn infer_value_call_args(c: Sema_ctx$@, call_node: Ast_node$@, args_node: Ast_no
         $expected_id: = I32::sema_type_env.Builtin_type_id.unknown
         if pos < sig.params.len
             expected_id = sig.params.get(pos)
-        arg_node.infer_expr(c, expected_id)?
+        arg_node.infer_expr(c, expected_id)!
+        sema_body_lint_stmt.lint_type_given(c, arg_node, expected_id,
+            "The parameter's type already gives it.")
         pos += 1
 
 fn infer_call_args(c: Sema_ctx$@, args_node: Ast_node$@, def_node: Ast_node$@,
-    is_method_access: Bool, op_text: U8[], is_generic_call: Bool): I32?Sema_error
+    is_method_access: Bool, op_text: U8[], is_generic_call: Bool): I32!Sema_error
     $fn_sig: Ast_node$@ = null
     $param_list: Ast_node$@ = null
     // What comes here is a named function's or method's declaration; a call through a function
@@ -152,10 +156,12 @@ fn infer_call_args(c: Sema_ctx$@, args_node: Ast_node$@, def_node: Ast_node$@,
                 old_file: = c.file_name
                 if param_type_node.loc.file().len > 0
                     c.set_current_file(param_type_node.loc.file())
-                expected_arg_id = param_type_node.resolve_type(c)?
+                expected_arg_id = param_type_node.resolve_type(c)!
                 c.set_current_file(old_file)
 
-        eval_id: = arg_node.infer_expr(c, expected_arg_id)?
+        eval_id: = arg_node.infer_expr(c, expected_arg_id)!
+        sema_body_lint_stmt.lint_type_given(c, arg_node, expected_arg_id,
+            "The parameter's type already gives it.")
 
         if !sema_type_env.is_unknown(expected_arg_id) && !sema_type_env.is_unknown(eval_id) &&
             expected_arg_id != eval_id

@@ -18,7 +18,7 @@ import "std/str"
 priv const max_paren_rounds: Sz = 4 //< how many rounds of inserting parentheses may run
 
 fn format_text(given: U8[], path: U8[], parser: kspeg.Target$@, config: Config, to_layout: Bool,
-    from_layout: Bool): Formatter?parse_load.Parse_error //<
+    from_layout: Bool): Formatter!parse_load.Parse_error //<
         //< The formatter that printed `given`, holding its output
         //<
         //< `from_layout` says `given` was converted from the indentation notation, `to_layout` that
@@ -26,12 +26,12 @@ fn format_text(given: U8[], path: U8[], parser: kspeg.Target$@, config: Config, 
         //< Caution: **Check `too_deep` before using the output** — where it is set the walk stopped
         //< early, so the output is cut short and must not be written back.
     $work: U8[] = given
-    $ast: = parse_load.parse_raw_ast(work, path, parser)?
+    $ast: = parse_load.parse_raw_ast(work, path, parser)!
     // **Parse again once the order has changed** (the reason is at `fmt_import.reorder`).
     sorted: = fmt_import.reorder(work, ast, base_core.arena)
     if !sorted.equals(work)
         work = sorted
-        ast = parse_load.parse_raw_ast(work, path, parser)?
+        ast = parse_load.parse_raw_ast(work, path, parser)!
     $formatter: = Formatter.new(config, work, to_layout, from_layout)
     formatter.format(ast)
     // **A conditional value split outside every bracket gets parentheses**, which go into the text
@@ -43,7 +43,7 @@ fn format_text(given: U8[], path: U8[], parser: kspeg.Target$@, config: Config, 
             break
         work = fmt_printer.with_parens(work, formatter.paren_spans@, base_core.arena)
         formatter.free()
-        ast = parse_load.parse_raw_ast(work, path, parser)?
+        ast = parse_load.parse_raw_ast(work, path, parser)!
         formatter = Formatter.new(config, work, to_layout, from_layout)
         formatter.format(ast)
     if !formatter.too_deep

@@ -7,6 +7,7 @@
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
 import "ksplc/sema/decl/access" as _sema_decl_access
 import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/decl/name" as sema_decl_name
@@ -21,7 +22,8 @@ fn report_type_existence_error(c: Sema_ctx$@, kind: sema_decl_name.Written_kind,
         //< Reports what a written type's name is instead of a type, where it is not one
         //<
         //< base_name is the path as written up to its type arguments, the whole path for a value's.
-    switch kind case .unknown_alias
+    switch kind
+    case .unknown_alias
         first_dot: = base_name.find_char('.')
         prefix: = base_name.sub(0, first_dot)
         c.clear_scratch().s("unknown import alias '\{prefix\}'")
@@ -60,7 +62,8 @@ priv fn check_and_report_type(node: Ast_node$@, c: Sema_ctx$@, gen_params: List<
     if w.spelled.len == 0
         return
     kind: = c.type_kind_of(w, gen_params)
-    switch kind case .found
+    switch kind
+    case .found
         // **A type reached through an import alias is checked for visibility here**, at the use:
         // nothing at the `import` line names it, as a selective import does.
         if w.alias_file.len > 0
@@ -98,7 +101,8 @@ priv fn refuse_sizeof_of_value_name(c: Sema_ctx$@, target: Ast_node$@,
     defer path_str.free()
     path.get_full_path_str_to(path_str)
     full: = path_str.slice()
-    switch c.type_kind_of(c.read_written_type(path), gen_params) case .names_value(what)
+    switch c.type_kind_of(c.read_written_type(path), gen_params)
+    case .names_value(what)
         if what == .function
             c.clear_scratch()
                 .s("'sizeof' cannot take the function '\{full\}': a function's size has no one \
@@ -192,6 +196,30 @@ impl Ast_node
             if t_node != null && t_node.mentions_gen_param(gen_params)
                 c.err(d,
                     "a parameter whose type mentions a type parameter cannot have a default value")
+
+    fn lint_spelled_out_options(r: Ast_node$@, c: Sema_ctx$@) //<
+        //< [H0303] Reports each type under r that spells an optional out as `Option<|T|>`
+        //<
+        //< **Read once, from the tree as written**: an instance's copy holds its type arguments
+        //< substituted and would repeat the advice, and a generic never instantiated would get
+        //< none. An expression keeps the long form (`Option<|I32|>.none`), as `?` cannot stand
+        //< there, and so does an `impl`'s target, which names the generic itself. A declaration the
+        //< compiler made (`variant_name`) is no one's to rewrite.
+        if r == null || r.made_by_compiler()
+            return
+        if r.kind_id == .k_type_atom && r.children.len > 0
+            path: = r.get_child(0)
+            if (path.kind_id == .k_expr_path || path.kind_id == .k_type_path) &&
+                !path.is_sugar_made()
+                w: = c.read_written_type(path)
+                if w.args != null && w.member == null && w.fqn.equals(base_core.option_fqn)
+                    c.hint(r,
+                        "[H0303] An optional is written with '?': 'T?' rather than 'Option<|T|>' (a \
+                            result or a function type is put in parentheses first: '(T!E)?').")
+        target: = r.get_decl_type_node() if r.kind_id == .k_decl_impl else null
+        for child in r.children
+            if child != target
+                child.lint_spelled_out_options(c)
 
     priv fn mentions_gen_param(r: Ast_node$@, gen_params: List<|U8[]|>$@): Bool //<
         //< Whether the type's name names one of the type parameters currently in scope

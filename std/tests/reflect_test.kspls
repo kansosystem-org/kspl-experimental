@@ -79,10 +79,10 @@ impl Doc: reflect.Reflectable {}
 priv struct Spec //< fields that are either present or absent
     //<
     //< **It also covers content that is a struct.**
-    family: Option<|U8[]|>
-    size_px: Option<|F64|>
-    weight: Option<|I64|>
-    part: Option<|Half|>
+    family: U8[]?
+    size_px: F64?
+    weight: I64?
+    part: Half?
 
 impl Spec: reflect.Reflectable {}
 
@@ -110,7 +110,7 @@ priv struct Narrow_bag //< a number with a width, carried in a container and in 
     //< **The width of an element or of an option's content comes from `extra.elem_size`**, a path
     //< separate from the field's own `extra.width`.
     codes: List<|U16|>
-    scale: Option<|F32|>
+    scale: F32?
 
 impl Narrow_bag: reflect.Reflectable {}
 
@@ -164,7 +164,8 @@ fn test_json_struct_roundtrip(arena: Arena$@)
     short: = json.parse("{\"label\":\"x\"}", arena) catch panic("json: the fixture must parse")
     $partial: Derived = ::{}
     json_struct.into_struct(short, partial@, arena) catch e
-        switch e case .missing_field(which)
+        switch e
+        case .missing_field(which)
             absent = which
         default
             panic("json: expected missing_field")
@@ -174,7 +175,8 @@ fn test_json_struct_roundtrip(arena: Arena$@)
     nulled: = json.parse("{\"label\":null}", arena) catch panic("json: the fixture must parse")
     $nulled_out: Derived = ::{}
     json_struct.into_struct(nulled, nulled_out@, arena) catch e
-        switch e case .field_type(which)
+        switch e
+        case .field_type(which)
             nulled_at = which
         default
             panic("json: null is \"the kind differs\", not \"the key is missing\"")
@@ -207,7 +209,8 @@ fn test_json_struct_roundtrip(arena: Arena$@)
         catch panic("json: the fixture must parse")
     $thin_out: Both = ::{}
     json_struct.into_struct(thin, thin_out@, arena) catch e
-        switch e case .missing_field(which)
+        switch e
+        case .missing_field(which)
             inner_missing = which
         default
             panic("json: expected missing_field")
@@ -220,7 +223,8 @@ fn test_json_struct_roundtrip(arena: Arena$@)
         json.parse("{\"tag\":\"t\",\"cold\":5,\"warm\":{\"ms\":3,\"bytes\":4}}", arena) catch panic("json: the fixture must parse")
     $flat_out: Both = ::{}
     json_struct.into_struct(flat, flat_out@, arena) catch e
-        switch e case .field_type(which)
+        switch e
+        case .field_type(which)
             not_obj = which
         default
             panic("json: expected field_type")
@@ -268,7 +272,8 @@ fn test_json_struct_roundtrip(arena: Arena$@)
         fixture must parse")
     $scalar_out: Doc = ::{}
     json_struct.into_struct(scalar, scalar_out@, arena) catch e
-        switch e case .field_type(which)
+        switch e
+        case .field_type(which)
             not_arr = which
         default
             panic("json: expected field_type")
@@ -277,9 +282,8 @@ fn test_json_struct_roundtrip(arena: Arena$@)
 
     // **`.none` writes no key.** Writing `null` would give two ways to say "it is absent".
     out.clear()
-    spec: Spec = ::{ .family = Option<|U8[]|>.some("serif"), .size_px = Option<|F64|>.none,
-        .weight = Option<|I64|>.some(700I64),
-        .part = Option<|Half|>.some(::{ .ms = 1, .bytes = 2 }) }
+    spec: Spec = ::{ .family = .some("serif"), .size_px = .none, .weight = .some(700I64),
+        .part = .some(::{ .ms = 1, .bytes = 2 }) }
     written5: = json_struct.from_struct(spec@, b@) catch panic("json: writing does not fail")
     written5.dump(out@, 0)
     want_opt: U8[] = "{\"family\":\"serif\",\"weight\":700,\"part\":{\"ms\":1,\"bytes\":2}}"
@@ -309,7 +313,8 @@ fn test_json_struct_roundtrip(arena: Arena$@)
     explicit: = json.parse("{\"family\":null}", arena) catch panic("json: the fixture must parse")
     $null_out: Spec = ::{}
     json_struct.into_struct(explicit, null_out@, arena) catch e
-        switch e case .field_type(which)
+        switch e
+        case .field_type(which)
             null_at = which
         default
             panic("json: an explicit null is a difference in kind")
@@ -353,7 +358,7 @@ fn test_json_struct_roundtrip(arena: Arena$@)
     $codes: = List<|U16|>.new(arena)
     codes.push(60000)
     codes.push(1)
-    bag: Narrow_bag = ::{ .codes = codes, .scale = Option<|F32|>.some(1.5) }
+    bag: Narrow_bag = ::{ .codes = codes, .scale = .some(1.5) }
     written7: = json_struct.from_struct(bag@, b@) catch panic("json: writing does not fail")
     written7.dump(out@, 0)
     want_bag: U8[] = "{\"codes\":[60000,1],\"scale\":1.5}"
@@ -435,7 +440,8 @@ priv fn refused_at(text: U8[], arena: Arena$@): U8[] //<
     v: = json.parse(text, arena) catch panic("json: the fixture must parse")
     $back: Ranged = ::{}
     json_struct.into_struct(v, back@, arena) catch e
-        switch e case .field_type(which)
+        switch e
+        case .field_type(which)
             return which
         default
             panic("json: a value out of range is a difference in kind")
@@ -458,7 +464,8 @@ fn test_json_struct_out_of_range(arena: Arena$@)
     $bag: Narrow_bag = ::{}
     $elem_at: U8[] = ""
     json_struct.into_struct(short, bag@, arena) catch e
-        switch e case .field_type(which)
+        switch e
+        case .field_type(which)
             elem_at = which
         default
             panic("json: an element out of range is a difference in kind")
@@ -471,7 +478,8 @@ fn test_json_struct_out_of_range(arena: Arena$@)
     huge.u_wide = U64::9223372036854775807I64 + 1
     $wrote_at: U8[] = ""
     json_struct.from_struct(huge@, jb@) catch e
-        switch e case .field_type(which)
+        switch e
+        case .field_type(which)
             wrote_at = which
         default
             panic("json: a U64 too wide for a Val is a difference in kind")

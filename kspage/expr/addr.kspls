@@ -65,16 +65,16 @@ struct Addr
     abs_row: Bool
 
 fn spot_at(row: Sz, col: Sz): Addr //< a position with no mark
-    return Addr::{ .row = row, .col = col, .kind = Addr_kind.spot, .abs_col = false,
-        .abs_row = false }
+    return Addr::{ .row = row, .col = col, .kind = .spot, .abs_col = false, .abs_row = false }
 
 fn is_spot(a: Addr): Bool
-    switch a.kind case .spot
+    switch a.kind
+    case .spot
         return true
     default {}
     return false
 
-priv fn push_digit(acc: Option<|Sz|>, base: I64, d: I64): Option<|Sz|> //<
+priv fn push_digit(acc: Sz?, base: I64, d: I64): Sz? //<
     //< Adds one digit to the number
     //<
     //< Caution: **Return "none" once it overflows.** A signed overflow has no defined result (the
@@ -82,17 +82,18 @@ priv fn push_digit(acc: Option<|Sz|>, base: I64, d: I64): Option<|Sz|> //<
     //< puts no cap on the digits. **`Sz`'s width depends on the target**, so it is checked at 32
     //< bits (a number past that points at no cell anyway).
     $v: Sz = 0
-    switch acc case .some(got)
+    switch acc
+    case .some(got)
         v = got
     case .none
-        return Option<|Sz|>.none
+        return .none
     scaled: = Ci64.new(v).checked_mul(Ci64.new(base)) catch
-        return Option<|Sz|>.none
+        return .none
     sum: = scaled.checked_add(Ci64.new(d)) catch
-        return Option<|Sz|>.none
+        return .none
     if sum.val > 2147483647I64
-        return Option<|Sz|>.none
-    return Option<|Sz|>.some(Sz::sum.val)
+        return .none
+    return .some(Sz::sum.val)
 
 fn parse_addr(c: Reader$@): Addr //< reads a position in A1 form
     //<
@@ -104,7 +105,7 @@ fn parse_addr(c: Reader$@): Addr //< reads a position in A1 form
     if at(c) == '$'
         abs_col = true
         c.pos += 1
-    $col: = Option<|Sz|>.some(0)
+    $col: Sz? = .some(0)
     $letters: Sz = 0
     for at(c) >= 'A' && at(c) <= 'Z'
         col = push_digit(col, 26, (at(c) - 'A') + 1)
@@ -114,7 +115,7 @@ fn parse_addr(c: Reader$@): Addr //< reads a position in A1 form
     if at(c) == '$'
         abs_row = true
         c.pos += 1
-    $row: = Option<|Sz|>.some(0)
+    $row: Sz? = .some(0)
     $digits: Sz = 0
     for at(c) >= '0' && at(c) <= '9'
         row = push_digit(row, 10, at(c) - '0')
@@ -127,11 +128,13 @@ fn parse_addr(c: Reader$@): Addr //< reads a position in A1 form
         return Addr_kind.unreadable.no_addr()
     $r: Sz = 0
     $n: Sz = 0
-    switch row case .some(got)
+    switch row
+    case .some(got)
         r = got
     case .none
         return Addr_kind.out_of_range.no_addr()
-    switch col case .some(got)
+    switch col
+    case .some(got)
         n = got
     case .none
         return Addr_kind.out_of_range.no_addr()

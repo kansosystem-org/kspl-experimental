@@ -1,4 +1,4 @@
-//< Writes a library's interface from its `#export` functions (`--emit-interface=`)
+//< Writes a library's interface from its `#export` functions (`--library=`)
 //<
 //< **The library and its interface come out of one compilation**, so they cannot drift. The form
 //< follows the file's extension (`form_of`): a C header, or a KSPL file whose `extern "C"` block a
@@ -36,7 +36,7 @@ enum Form //< the interface a file's extension asks for
     c_header //< `.h`: C's declarations
     kspl //< `.kspls` or `.kspl`: an `extern "C"` block and the types its functions name
 
-fn form_of(path: U8[]): Form //< the form `--emit-interface=<path>` writes
+fn form_of(path: U8[]): Form //< the form `--library=<path>` writes
     if path.ends_with(".h")
         return .c_header
     if path.ends_with(".kspls") || path.ends_with(".kspl")
@@ -73,8 +73,8 @@ impl Walk
     priv fn refuse(r: Self$@, what: U8[]) //<
         //< reports why the function being read cannot be written
         r.c.clear_scratch()
-            .s("'\{r.site.get_decl_id_text()\}' cannot be written into the interface \
-                ('--emit-interface'): \{what\}")
+            .s("'\{r.site.get_decl_id_text()\}' cannot be written into the interface ('--library'): \
+                \{what\}")
         r.c.err(r.site, r.c.scratch.slice())
 
     fn note(r: Self$@, raw: I32, by_value: Bool, depth: Sz) //<
@@ -82,7 +82,8 @@ impl Walk
         if depth >= max_type_walk_depth
             return
         id: = r.strip(raw)
-        switch r.c.env.get_info(id) case .const_of(b)
+        switch r.c.env.get_info(id)
+        case .const_of(b)
             r.note(b, by_value, depth + 1)
         case .pointer(b)
             if r.nameable(r.c.env.get_clean_real_type(b))
@@ -147,7 +148,8 @@ impl Walk
         if depth >= max_type_walk_depth
             return false
         id: = r.strip(raw)
-        switch r.c.env.get_info(id) case .const_of(b)
+        switch r.c.env.get_info(id)
+        case .const_of(b)
             return r.crosses(b, depth + 1)
         case .pointer(_b)
             return true
@@ -176,7 +178,8 @@ impl Walk
 
     fn nameable(r: Self$@, id: I32): Bool //<
         //< Whether a pointer's target can be named in C; one that cannot is written `void`
-        switch r.c.env.get_info(id) case .pointer(_b)
+        switch r.c.env.get_info(id)
+        case .pointer(_b)
             return true
         case .fn_type(_s)
             return true
@@ -191,7 +194,8 @@ impl Walk
         scalar: = c_scalar(r.c.env.get_str(id))
         if scalar.len > 0
             return scalar
-        switch r.c.env.get_info(id) case .struct_type(_d)
+        switch r.c.env.get_info(id)
+        case .struct_type(_d)
             return r.short_name(id)
         case .enum_type(def)
             return r.short_name(id) if def.is_scalar() else ""
@@ -221,7 +225,8 @@ impl Walk
         if depth >= max_type_walk_depth
             return
         id: = r.strip(raw)
-        switch r.c.env.get_info(id) case .const_of(b)
+        switch r.c.env.get_info(id)
+        case .const_of(b)
             if r.c.env.get_info(r.strip(b)).is_pointer()
                 r.c_decl(b, base_core.arena.text().s("const ").s(inner).take(), false, out,
                     depth + 1)
@@ -257,7 +262,8 @@ impl Walk
         r.c_decl_leaf(r.c_name_of(id), inner, leaf_const, out)
 
     priv fn is_fn(r: Self$@, id: I32): Bool //< whether it is a function pointer
-        switch r.c.env.get_info(r.c.env.get_clean_real_type(id)) case .fn_type(_s)
+        switch r.c.env.get_info(r.c.env.get_clean_real_type(id))
+        case .fn_type(_s)
             return true
         default
             return false
@@ -272,14 +278,16 @@ impl Walk
         if depth >= max_type_walk_depth
             return
         id: = r.strip(raw)
-        switch r.c.env.get_info(id) case .const_of(b)
+        switch r.c.env.get_info(id)
+        case .const_of(b)
             r.k_type(b, out, depth + 1)
             return
         case .pointer(b)
             inner: = r.strip(b)
             $pointee: = inner
             $mutable: = true
-            switch r.c.env.get_info(inner) case .const_of(bb)
+            switch r.c.env.get_info(inner)
+            case .const_of(bb)
                 pointee = bb
                 mutable = false
             default {}
@@ -347,7 +355,8 @@ fn render(root: Ast_node$@, c: Sema_ctx$@, form: Form, out_path: U8[], parser: k
     check_names(walk@, exports@)
     if c.diags.counts.errors > errors_before
         return ""
-    switch form case .c_header
+    switch form
+    case .c_header
         return render_c(walk@, exports@, out_path)
     case .kspl
         return render_kspl(walk@, exports@, root, out_path, parser)
@@ -383,7 +392,8 @@ priv fn check_names(walk: Walk$@, exports: List<|Export|>$@) //<
         site: = t.node if t.node != null else walk.site
         claim(walk, seen@, site, t.name)
         if t.is_enum
-            switch walk.c.env.get_info(t.type_id) case .enum_type(def)
+            switch walk.c.env.get_info(t.type_id)
+            case .enum_type(def)
                 for v in def.variants_list
                     claim(walk, seen@, site,
                         base_core.arena.text().s(t.name).c('_').s(v.name).take())
@@ -392,8 +402,8 @@ priv fn check_names(walk: Walk$@, exports: List<|Export|>$@) //<
 priv fn claim(walk: Walk$@, seen: Map<|U8[], Bool|>$@, site: Ast_node$@, name: U8[])
     if seen.get(name) catch false
         walk.c.clear_scratch()
-            .s("'\{name\}' is declared twice in the interface ('--emit-interface'): C names a \
-                function, a type and an enum's constant in one space. Rename one of them")
+            .s("'\{name\}' is declared twice in the interface ('--library'): C names a function, a \
+                type and an enum's constant in one space. Rename one of them")
         walk.c.err(site, walk.c.scratch.slice())
         return
     seen.set(name, true)
@@ -432,7 +442,7 @@ priv fn render_c(walk: Walk$@, exports: List<|Export|>$@, out_path: U8[]): U8[]
     guard: = guard_of(out_path)
     $out: = Str_builder.new()
     defer out.free()
-    out.s("/* The C interface of a library, written by `ksplc --emit-interface`.\n")
+    out.s("/* The C interface of a library, written by `ksplc --library`.\n")
     out.s(" * Caution: Do not edit it; it is remade with the library. */\n")
     out.s("#ifndef \{guard\}\n#define \{guard\}\n\n")
     out.s("#include <stdbool.h>\n#include <stddef.h>\n#include <stdint.h>\n\n")
@@ -440,7 +450,8 @@ priv fn render_c(walk: Walk$@, exports: List<|Export|>$@, out_path: U8[]): U8[]
     for t in walk.types
         if t.is_enum
             c_doc(summary_of(walk.c, t.node), "", out@)
-            switch walk.c.env.get_info(t.type_id) case .enum_type(def)
+            switch walk.c.env.get_info(t.type_id)
+            case .enum_type(def)
                 render_c_enum(walk, t.name, def, out@)
             default {}
         else
@@ -451,7 +462,8 @@ priv fn render_c(walk: Walk$@, exports: List<|Export|>$@, out_path: U8[]): U8[]
     for t in bodies_in_order(walk)
         c_doc(summary_of(walk.c, t.node), "", out@)
         out.s("struct \{t.name\} {\n")
-        switch walk.c.env.get_info(t.type_id) case .struct_type(def)
+        switch walk.c.env.get_info(t.type_id)
+        case .struct_type(def)
             for f in def.fields_list
                 c_doc(summary_of(walk.c, f.node), "    ", out@)
                 out.s("    ")
@@ -496,10 +508,12 @@ priv fn visit_body(walk: Walk$@, id: I32, done: Map<|I32, Bool|>$@, out: List<|N
     at: = walk.find(id)
     if at < 0 || !walk.types.get(at).body
         return
-    switch walk.c.env.get_info(id) case .struct_type(def)
+    switch walk.c.env.get_info(id)
+    case .struct_type(def)
         for f in def.fields_list
             inner: = walk.c.env.get_clean_real_type(f.type_id)
-            switch walk.c.env.get_info(inner) case .struct_type(_d)
+            switch walk.c.env.get_info(inner)
+            case .struct_type(_d)
                 visit_body(walk, inner, done, out, depth + 1)
             default {}
     default {}
@@ -535,13 +549,14 @@ priv fn render_kspl(walk: Walk$@, exports: List<|Export|>$@, root: Ast_node$@, o
         //< The KSPL form, written in braces, then printed by the formatter in the file's notation
     $out: = Str_builder.new()
     defer out.free()
-    out.s("// The C interface of a library, written by `ksplc --emit-interface`.\n")
+    out.s("// The C interface of a library, written by `ksplc --library`.\n")
     out.s("// Caution: Do not edit it; it is remade with the library.\n\n")
     for t in walk.types
         if !t.body
             continue
         doc: = summary_of(walk.c, t.node)
-        switch walk.c.env.get_info(t.type_id) case .enum_type(def)
+        switch walk.c.env.get_info(t.type_id)
+        case .enum_type(def)
             out.s("pub enum \{t.name\}")
             if def.base_type_id != I32::sema_type_env.Builtin_type_id.i32_type
                 out.s(": ").s(walk.c.env.get_str(def.base_type_id))
@@ -584,7 +599,7 @@ priv fn render_kspl(walk: Walk$@, exports: List<|Export|>$@, root: Ast_node$@, o
     laid: = out_path.ends_with(".kspls")
     $formatter: =
         fmt_text.format_text(out.slice(), out_path, parser, Config.default_fmt(), laid, false) catch
-        base_diag.ice_panic("--emit-interface: the KSPL form does not parse")
+        base_diag.ice_panic("--library: the KSPL form does not parse")
         return ""
     defer formatter.free()
     return base_core.arena.dup_str(formatter.out.slice())

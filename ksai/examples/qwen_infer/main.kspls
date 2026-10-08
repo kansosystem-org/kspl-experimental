@@ -63,14 +63,14 @@ priv struct Qwen_model<|T|>
 
 impl<|T|> Qwen_model<|T|>
     priv fn load(path: U8[], max_seq_len: Sz, arena: Arena$@):
-        Qwen_model<|T|>?st.Safetensors_error //<
+        Qwen_model<|T|>!st.Safetensors_error //<
             //< Builds the whole model from exported safetensors (each weight mapped, not copied).
-        $s: = ai_file.load_safetensors(path, arena)?
-        cfg: = read_cfg(s, arena)?
+        $s: = ai_file.load_safetensors(path, arena)!
+        cfg: = read_cfg(s, arena)!
         eps: = T::cfg.eps
 
         $tok_embed: = nn.Embedding<|T|>.new(cfg.vocab, cfg.hidden, arena)
-        s.map_into<|F32|>("embed.weight", tok_embed.weight@, arena)?
+        s.map_into<|F32|>("embed.weight", tok_embed.weight@, arena)!
 
         layers: =
             Qwen_layer<|T|>$@::arena.alloc(cfg.n_layers * sizeof(Qwen_layer<|T|>))
@@ -82,34 +82,34 @@ impl<|T|> Qwen_model<|T|>
             $attention: = nn.Gqa_attention<|T|>
                 .new(cfg.hidden, cfg.n_heads, cfg.n_kv_heads, cfg.head_dim, max_seq_len,
                 cfg.rope_theta, arena)
-            s.map_into<|F32|>(key(b@, i, ".attn.wq.weight"), attention.wq.weights@, arena)?
-            s.map_into<|F32|>(key(b@, i, ".attn.wq.bias"), attention.wq.bias@, arena)?
-            s.map_into<|F32|>(key(b@, i, ".attn.wk.weight"), attention.wk.weights@, arena)?
-            s.map_into<|F32|>(key(b@, i, ".attn.wk.bias"), attention.wk.bias@, arena)?
-            s.map_into<|F32|>(key(b@, i, ".attn.wv.weight"), attention.wv.weights@, arena)?
-            s.map_into<|F32|>(key(b@, i, ".attn.wv.bias"), attention.wv.bias@, arena)?
-            s.map_into<|F32|>(key(b@, i, ".attn.wo.weight"), attention.wo.weights@, arena)?
+            s.map_into<|F32|>(key(b@, i, ".attn.wq.weight"), attention.wq.weights@, arena)!
+            s.map_into<|F32|>(key(b@, i, ".attn.wq.bias"), attention.wq.bias@, arena)!
+            s.map_into<|F32|>(key(b@, i, ".attn.wk.weight"), attention.wk.weights@, arena)!
+            s.map_into<|F32|>(key(b@, i, ".attn.wk.bias"), attention.wk.bias@, arena)!
+            s.map_into<|F32|>(key(b@, i, ".attn.wv.weight"), attention.wv.weights@, arena)!
+            s.map_into<|F32|>(key(b@, i, ".attn.wv.bias"), attention.wv.bias@, arena)!
+            s.map_into<|F32|>(key(b@, i, ".attn.wo.weight"), attention.wo.weights@, arena)!
 
             $mlp: = nn.Swiglu_mlp<|T|>.new(cfg.hidden, cfg.intermediate, arena)
-            s.map_into<|F32|>(key(b@, i, ".mlp.gate.weight"), mlp.gate.weights@, arena)?
-            s.map_into<|F32|>(key(b@, i, ".mlp.up.weight"), mlp.up.weights@, arena)?
-            s.map_into<|F32|>(key(b@, i, ".mlp.down.weight"), mlp.down.weights@, arena)?
+            s.map_into<|F32|>(key(b@, i, ".mlp.gate.weight"), mlp.gate.weights@, arena)!
+            s.map_into<|F32|>(key(b@, i, ".mlp.up.weight"), mlp.up.weights@, arena)!
+            s.map_into<|F32|>(key(b@, i, ".mlp.down.weight"), mlp.down.weights@, arena)!
 
             $attention_norm: = nn.Rms_norm<|T|>.new(cfg.hidden, eps, arena)
-            s.map_into<|F32|>(key(b@, i, ".attn_norm.weight"), attention_norm.weight@, arena)?
+            s.map_into<|F32|>(key(b@, i, ".attn_norm.weight"), attention_norm.weight@, arena)!
             $ffn_norm: = nn.Rms_norm<|T|>.new(cfg.hidden, eps, arena)
-            s.map_into<|F32|>(key(b@, i, ".ffn_norm.weight"), ffn_norm.weight@, arena)?
+            s.map_into<|F32|>(key(b@, i, ".ffn_norm.weight"), ffn_norm.weight@, arena)!
             (layers + i)$ = Qwen_layer<|T|>::{ .attention_norm = attention_norm,
                 .attention = attention, .ffn_norm = ffn_norm, .mlp = mlp }
         $norm: = nn.Rms_norm<|T|>.new(cfg.hidden, eps, arena)
-        s.map_into<|F32|>("norm.weight", norm.weight@, arena)?
+        s.map_into<|F32|>("norm.weight", norm.weight@, arena)!
         $lm_head: = nn.Linear<|T|>.new(cfg.hidden, cfg.vocab, arena)
-        s.map_into<|F32|>("lm_head.weight", lm_head.weights@, arena)?
+        s.map_into<|F32|>("lm_head.weight", lm_head.weights@, arena)!
 
         return Qwen_model<|T|>::{ .cfg = cfg, .tok_embed = tok_embed, .layers = layers,
             .norm = norm, .lm_head = lm_head, .backing = s }
     priv fn load_lora_set(r: Self$@, path: U8[], arena: Arena$@):
-        lora_set.Qkv_lora<|T|>$@?st.Safetensors_error //<
+        lora_set.Qkv_lora<|T|>$@!st.Safetensors_error //<
             //< Reads a set of externally fine-tuned LoRA adapters
             //<
             //< They are named as in load_lora_set of ksai/examples/llama_engine/model.Mini_llama
@@ -140,24 +140,24 @@ impl<|T|> Qwen_model<|T|>
 // huge value, a negative), with neither saturation nor wrap-around, and a tampered "cfg" can hold
 // any of them; so the value is compared while still F32 (safe even against NaN or Inf).
 priv const max_cfg_dim: F32 = 100000000.0 // the same value as ksai/tensor.max_tensor_elems
-priv fn safe_cfg_dim(v: F32): Sz?st.Safetensors_error
+priv fn safe_cfg_dim(v: F32): Sz!st.Safetensors_error
     if !(v >= 0.0 && v <= max_cfg_dim)
-        throw st.Safetensors_error.invalid_header
+        throw .invalid_header
     return Sz::v
 
-priv fn read_cfg($s: st.Safetensors, arena: Arena$@): Qwen_config?st.Safetensors_error
-    c: = s.get_tensor<|F32|>("cfg", arena)? // [9] = Qwen_config's field order
+priv fn read_cfg($s: st.Safetensors, arena: Arena$@): Qwen_config!st.Safetensors_error
+    c: = s.get_tensor<|F32|>("cfg", arena)! // [9] = Qwen_config's field order
     // get_tensor verifies only that the declared shape fits inside the file; with fewer than 9
     // elements, the fixed nine-element read below would run past the raw data.
     if c.size < 9
-        throw st.Safetensors_error.invalid_header
-    n_layers: = safe_cfg_dim((c.data + 0)$)?
-    hidden: = safe_cfg_dim((c.data + 1)$)?
-    n_heads: = safe_cfg_dim((c.data + 2)$)?
-    n_kv_heads: = safe_cfg_dim((c.data + 3)$)?
-    head_dim: = safe_cfg_dim((c.data + 4)$)?
-    intermediate: = safe_cfg_dim((c.data + 5)$)?
-    vocab: = safe_cfg_dim((c.data + 6)$)?
+        throw .invalid_header
+    n_layers: = safe_cfg_dim((c.data + 0)$)!
+    hidden: = safe_cfg_dim((c.data + 1)$)!
+    n_heads: = safe_cfg_dim((c.data + 2)$)!
+    n_kv_heads: = safe_cfg_dim((c.data + 3)$)!
+    head_dim: = safe_cfg_dim((c.data + 4)$)!
+    intermediate: = safe_cfg_dim((c.data + 5)$)!
+    vocab: = safe_cfg_dim((c.data + 6)$)!
     cfg: = Qwen_config::{ .n_layers = n_layers, .hidden = hidden, .n_heads = n_heads,
         .n_kv_heads = n_kv_heads, .head_dim = head_dim, .intermediate = intermediate,
         .vocab = vocab, .rope_theta = (c.data + 7)$, .eps = (c.data + 8)$ }
@@ -166,11 +166,11 @@ priv fn read_cfg($s: st.Safetensors, arena: Arena$@): Qwen_config?st.Safetensors
     // n_layers).
     if cfg.n_layers == 0 || cfg.hidden == 0 || cfg.n_heads == 0 || cfg.n_kv_heads == 0 ||
         cfg.head_dim == 0 || cfg.intermediate == 0 || cfg.vocab == 0
-        throw st.Safetensors_error.invalid_header
+        throw .invalid_header
     // GQA assumes each KV head serves n_heads/n_kv_heads query heads evenly, and the Q projection's
     // width must be hidden (what goes back to the residual stream through wo).
     if cfg.n_heads % cfg.n_kv_heads != 0 || cfg.n_heads * cfg.head_dim != cfg.hidden
-        throw st.Safetensors_error.invalid_header
+        throw .invalid_header
     return cfg
 
 priv fn key(b: Str_builder$@, i: Sz, suffix: U8[]): U8[]

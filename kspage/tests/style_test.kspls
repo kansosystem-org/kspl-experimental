@@ -5,7 +5,7 @@ import "kspage/model/doc" { Doc }
 import "kspage/model/fixed_font" as fixed
 import "kspage/model/paint"
 import "kspage/model/run"
-import "kspage/model/style" + { Arrange, Sheet }
+import "kspage/model/style" + { Sheet }
 import "kspage/tests/base"
 import "kspage/write/edit"
 import "kspage/write/shape"
@@ -196,7 +196,7 @@ fn test_painting_a_span_makes_one_style_and_applies_it() //<
     ed.caret = caret.at(n, 2)
     ed.caret.offset = 4
     $red: paint.Ink = paint.inherit_ink()
-    red.color = Option<|U32|>.some(0xff0000U32)
+    red.color = .some(0xff0000U32)
 
     assert(ed.paint_span(sheet, red, paint.inherit_accent()), "it was laid on")
     assert(sheet.styles.len == 1, "one style comes of it")
@@ -233,8 +233,8 @@ fn test_painting_nothing_clears_the_look() //<
     ed.caret = caret.at(n, 0)
     ed.caret.offset = 4
     $both: paint.Ink = paint.inherit_ink()
-    both.background = Option<|U32|>.some(0x00ff00U32)
-    both.underline = Option<|Bool|>.some(true)
+    both.background = .some(0x00ff00U32)
+    both.underline = .some(true)
     assert(ed.paint_span(sheet, both, paint.inherit_accent()), "it was laid on")
     assert(run_style(d, 0).equals("decoration-b00ff00-u1"),
         "the name stands in the order of the fields")
@@ -262,12 +262,14 @@ fn test_bold_and_italic_apply_without_a_name() //<
     ed.caret.offset = 4
 
     $bold: paint.Accent = paint.inherit_accent()
-    bold.bold = Option<|Bool|>.some(true)
+    bold.bold = .some(true)
     assert(ed.paint_span(sheet, paint.inherit_ink(), bold), "bold could be laid on")
     assert(run_style(d, 0).equals("decoration-w1"), "the name carries on behind the decoration")
     // The style holds the weight; the typeface and the size are not touched.
-    switch sheet.find("decoration-w1") case .some(made)
-        switch made.font.weight case .some(v)
+    switch sheet.find("decoration-w1")
+    case .some(made)
+        switch made.font.weight
+        case .some(v)
             assert(v == paint.bold_weight, "the weight of the bold side goes in")
         case .none
             assert(false, "the weight's naming goes in")
@@ -280,9 +282,9 @@ fn test_bold_and_italic_apply_without_a_name() //<
     ed.caret = caret.at(runs_of(d).get(0), 0)
     ed.caret.offset = 4
     $red: paint.Ink = paint.inherit_ink()
-    red.color = Option<|U32|>.some(0xff0000U32)
+    red.color = .some(0xff0000U32)
     $slant: paint.Accent = paint.inherit_accent()
-    slant.italic = Option<|Bool|>.some(true)
+    slant.italic = .some(true)
     assert(ed.paint_span(sheet, red, slant), "it can be laid on together with a decoration")
     assert(run_style(d, 0).equals("decoration-cff0000-i1"),
         "the strengthening stands behind the decoration")
@@ -291,11 +293,13 @@ fn test_bold_and_italic_apply_without_a_name() //<
     ed.caret = caret.at(runs_of(d).get(0), 0)
     ed.caret.offset = 4
     $plain: paint.Accent = paint.inherit_accent()
-    plain.bold = Option<|Bool|>.some(false)
+    plain.bold = .some(false)
     assert(ed.paint_span(sheet, paint.inherit_ink(), plain), "not-bold can be laid on")
     assert(run_style(d, 0).equals("decoration-w0"), "the not-so side has a name of its own too")
-    switch sheet.find("decoration-w0") case .some(made)
-        switch made.font.weight case .some(v)
+    switch sheet.find("decoration-w0")
+    case .some(made)
+        switch made.font.weight
+        case .some(v)
             assert(v == paint.plain_weight, "the weight of the thin side goes in")
         case .none
             assert(false, "the weight's naming goes in")
@@ -308,7 +312,7 @@ fn test_bold_and_italic_apply_without_a_name() //<
 priv fn sheet_with(name: U8[], arena: Arena$@): style.Sheet$@
     sheet: = Sheet.new(base.root_font(), arena)
     s: = sheet.add(name, paint.inherit_all())
-    s.font.size_px = Option<|F32|>.some(28.0)
+    s.font.size_px = .some(28.0)
     return sheet
 
 fn test_changing_a_style_moves_everything_with_that_name() //<
@@ -326,7 +330,7 @@ fn test_changing_a_style_moves_everything_with_that_name() //<
     assert(base.near(page.boxes.get(0).font.size_px, 28.0), "the size it had")
     h1: = sheet.find("h1").unwrap_or(null)
     $fresh: style.Style = h1$
-    fresh.font.size_px = Option<|F32|>.some(40.0)
+    fresh.font.size_px = .some(40.0)
     ed.set_look(h1, fresh)
 
     after: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
@@ -373,11 +377,11 @@ fn test_colors_are_inherited_like_the_font() //<
     b.add_text("b", "mark")
     sheet: = sheet_with("h1", arena)
     h1: = sheet.find("h1").unwrap_or(null)
-    h1.ink.color = Option<|U32|>.some(0xff0000U32)
-    h1.ink.background = Option<|U32|>.some(0x00ff00U32)
+    h1.ink.color = .some(0xff0000U32)
+    h1.ink.background = .some(0x00ff00U32)
     mark: = sheet.add("mark", paint.inherit_all())
     // Only the text color is set; the background is inherited from the paragraph.
-    mark.ink.color = Option<|U32|>.some(0x0000ffU32)
+    mark.ink.color = .some(0x0000ffU32)
 
     page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
     assert(color_is(page, 0, 0xff0000U32), "the paragraph's colour reaches the text")
@@ -401,11 +405,11 @@ fn test_lines_are_inherited_and_can_be_turned_off() //<
     b.add_text("c", "gone")
     sheet: = sheet_with("h1", arena)
     h1: = sheet.find("h1").unwrap_or(null)
-    h1.ink.underline = Option<|Bool|>.some(true)
+    h1.ink.underline = .some(true)
     // **`false` means "do not draw"**; stored as nothing set, the parent's line could not be
     // removed.
-    sheet.add("plain", paint.inherit_all()).ink.underline = Option<|Bool|>.some(false)
-    sheet.add("gone", paint.inherit_all()).ink.strike = Option<|Bool|>.some(true)
+    sheet.add("plain", paint.inherit_all()).ink.underline = .some(false)
+    sheet.add("gone", paint.inherit_all()).ink.strike = .some(true)
 
     page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
     assert(paint.drawn(page.boxes.get(0).ink.underline),
@@ -440,9 +444,13 @@ fn test_an_unset_color_stays_unset_in_the_box() //<
     d: = Doc.new(arena)
     d.add_block("body").add_text("a")
     page: = flow.layout(d, Sheet.new(base.root_font(), arena), fixed.make(), 300.0, arena)
-    switch page.boxes.get(0).ink.color case .none {} case .some(_v)
+    switch page.boxes.get(0).ink.color
+    case .none {}
+    case .some(_v)
         assert(false, "a text colour not named is unnamed")
-    switch page.boxes.get(0).ink.background case .none {} case .some(_v)
+    switch page.boxes.get(0).ink.background
+    case .none {}
+    case .some(_v)
         assert(false, "a ground not named is unnamed too")
     verdict.pass("a colour not named reaches unnamed, not filled with what stands.")
 
@@ -471,7 +479,8 @@ priv fn read_color(text: U8[]): U32
     return 0xffffffffU32
 
 priv fn is_unset(text: U8[]): Bool
-    switch paint.color_from(text) case .none
+    switch paint.color_from(text)
+    case .none
         return true
     case .some(_v)
         return false
@@ -508,7 +517,7 @@ fn test_a_style_change_undoes_in_one_step() //< one undo restores what was chang
 
     head: = sheet.find("h1").unwrap_or(null)
     $fresh: style.Style = head$
-    fresh.font.weight = Option<|U16|>.some(700U16)
+    fresh.font.weight = .some(700U16)
     ed.set_look(head, fresh)
     bold: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
     assert(bold.boxes.get(0).font.weight == 700U16, "it comes out bold")
@@ -529,10 +538,10 @@ fn test_a_new_style_can_be_added_once() //< a style can be created
     sheet: = sheet_with("h1", arena)
     ed: = edit.new_editor(d)
 
-    made: = ed.add_style(sheet, "note", Arrange.flow).unwrap_or(null)
+    made: = ed.add_style(sheet, "note", .flow).unwrap_or(null)
     assert(made != null && made.name.equals("note"), "the style with the name given comes back")
     assert(sheet.styles.len == 2, "the sheet grows by one")
-    again: = ed.add_style(sheet, "note", Arrange.flow).unwrap_or(null)
+    again: = ed.add_style(sheet, "note", .flow).unwrap_or(null)
     assert(again == made, "with the same name the one that is there comes back")
     assert(sheet.styles.len == 2, "it does not come to two")
 
@@ -554,12 +563,12 @@ fn test_a_typed_style_name_holding_a_space_is_refused() //<
     sheet: = sheet_with("h1", arena)
     ed: = edit.new_editor(d)
 
-    spaced: = ed.add_style(sheet, "page break", Arrange.flow).unwrap_or(null)
+    spaced: = ed.add_style(sheet, "page break", .flow).unwrap_or(null)
     assert(spaced == null, "a name with a space in it comes back as nothing")
-    tabbed: = ed.add_style(sheet, "page\tbreak", Arrange.flow).unwrap_or(null)
+    tabbed: = ed.add_style(sheet, "page\tbreak", .flow).unwrap_or(null)
     assert(tabbed == null, "a name with a tab in it comes back as nothing too")
     assert(sheet.styles.len == 1, "neither is left on the sheet")
-    hyphened: = ed.add_style(sheet, "page-break", Arrange.flow).unwrap_or(null)
+    hyphened: = ed.add_style(sheet, "page-break", .flow).unwrap_or(null)
     assert(hyphened != null, "the same name joined with a hyphen goes in")
     assert(sheet.styles.len == 2, "and the sheet grows by that one")
 
@@ -580,12 +589,12 @@ fn test_a_style_keeps_the_arrangement_it_was_made_with() //<
     sheet: = sheet_with("h1", arena)
     ed: = edit.new_editor(d)
 
-    grid: = ed.add_style(sheet, "table", Arrange.grid).unwrap_or(null)
+    grid: = ed.add_style(sheet, "table", .grid).unwrap_or(null)
     assert(grid != null, "a grid style can be made")
-    same: = ed.add_style(sheet, "table", Arrange.grid).unwrap_or(null)
+    same: = ed.add_style(sheet, "table", .grid).unwrap_or(null)
     assert(same == grid, "with the same arrangement the one that is there comes back")
     // Another arrangement is refused: every place using that name would be arranged another way.
-    other: = ed.add_style(sheet, "table", Arrange.absolute).unwrap_or(null)
+    other: = ed.add_style(sheet, "table", .absolute).unwrap_or(null)
     assert(other == null, "with another arrangement nothing comes back")
     assert(sheet.styles.len == 2, "no second one is made either")
     verdict.pass("the arrangement is fixed when it is made, and does not change later.")

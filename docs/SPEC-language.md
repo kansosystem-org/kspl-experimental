@@ -93,7 +93,7 @@ These marks appear in examples from the first chapter on. Each is defined in the
 | `T$[]` / `T$@` | A slice whose elements, or a pointer whose target, may be written | [3.2](#32-derived-types) |
 | `List<\|I32\|>` | A generic type with its type argument | [3.3](#33-structs-struct) |
 | `T::x` / `T::{ … }` | Convert `x` to `T` / build a value of `T` from its parts | [6.4](#64-type-conversion--and-implicit-casts), [6.6](#66-initialization-and-construction) |
-| `T?E` | A function's result: a `T` on success, or an error `E` | [8.3](#83-error-handling) |
+| `T!E` | A function's result: a `T` on success, or an error `E` | [8.3](#83-error-handling) |
 | `.kspls` / `.kspl` | A source file in the indentation notation / the brace notation | [2.5](#25-blocks-and-statement-ends-brace-and-indentation-notations) |
 
 ---
@@ -193,7 +193,7 @@ struct File_descriptor
     file_id: I32
     is_open: Bool
 
-fn open_file(file_name: U8[]): File_descriptor?Io_error
+fn open_file(file_name: U8[]): File_descriptor!Io_error
     ...
 
 ```
@@ -373,7 +373,7 @@ enum Shade
 
 **After `catch`, the column decides.** After `f() catch` or `f() catch e`, a next line at the statement's own column continues the statement, and a deeper line opens the handler (the code run on an error, [8.3](#83-error-handling)). So a line is not broken right after `catch`: `ksplc fmt` lets such a line run past the width instead.
 
-**A line holding only `return`, `throw` or `fallback` is a statement of its own.** A `?` at a line's end is a rethrow (`f()?`, passing an error on to the caller) and ends the statement; a `?` at a line's start continues the line before (a wrapped `T?E` type).
+**A line holding only `return`, `throw` or `fallback` is a statement of its own.** A `!` at a line's end is a rethrow (`f()!`, passing an error on to the caller) and ends the statement; a `!` at a line's start continues the line before (a wrapped `T!E` type).
 
 **A value split where no mark continues it goes in parentheses.** This applies to a conditional value (`a if c else b`), and to the value of a `return`, `throw` or `fallback`, whose keyword alone is a statement. A break outside every bracket is a compile error whose message names the parentheses, and `ksplc fmt` puts them in.
 
@@ -393,14 +393,23 @@ return (func_name.sub_from(mod_prefix.len) if func_name.starts_with(mod_prefix.s
 * a closure (a function written inside an expression) with a multi-line body inside a call's arguments, since a newline inside brackets is not a block;
 * an empty block, and a block fitting on one line (`f() catch {}`, `fn f() {}`, `case .x {}`). A block holding only a comment counts as empty. No terminator follows such a block, and its last statement takes no `;` (`fn one(x: I32): I32 { return x + 1 }`), so `.kspls` shows a `;` only between two statements on one line.
 
-**`switch` carries no block**: its `case` and `default` do. In `.kspls` the first `case` goes on the `switch`'s line, and each later `case` or `default` at the `switch`'s column.
+**`switch` carries no block**: its `case` and `default` do. In `.kspls` each `case` and `default` stands at the `switch`'s column, the first on the line below the `switch`.
 
 ```kspls
-switch e case .spawn_failed
+switch e
+case .spawn_failed
     io.err().s("could not start\n")
 case .timed_out
     io.err().s("timed out\n")
 ```
+
+**The `switch`'s line goes on into a `case` at its own column**, as a later arm goes on from the block before it. The line it goes on into is the next line with code, so a comment line or a blank line between them changes nothing. Only that shape continues it:
+
+* **A `case` indented deeper is a compile error**: it would open a block under the `switch`, which has none.
+* **A `case` at a shallower column belongs to the level outside**, so the `switch` ends without an arm, which is a compile error.
+* **A `default` cannot be the first arm**, so it does not continue the `switch`'s line either.
+
+The first `case` may also stand on the `switch`'s own line (`switch e case .spawn_failed`); `ksplc fmt` moves it to the line below.
 
 **Line numbers are the same in both notations.** Reading `.kspls` adds no line: the `{` goes at the end of the heading's line, and the `}` at the end of the block's last line. So a diagnostic, a jump to a definition and a hover point at the line written.
 
@@ -435,7 +444,7 @@ Byte order shows only when a multi-byte value is viewed as bytes: through a hand
 
 ### 3.2 Derived types
 
-Five kinds of type are built from a **base type** (a primitive type or a struct). The diagram shows each one's notation; each is described below it. The `T?E` type is in [8.3](#83-error-handling).
+Six kinds of type are built from a **base type** (a primitive type or a struct). The diagram shows each one's notation; each is described below it. The `T!E` type is in [8.3](#83-error-handling).
 
 ```mermaid
 flowchart LR
@@ -444,7 +453,8 @@ flowchart LR
     T --> AR["T[N]<br/>fixed-length array (value type)"]
     T --> AT["T@<br/>raw pointer (address only, unchecked)"]
     T --> IM["T$[] / T$@<br/>mutability marker (what it points at is writable)"]
-    T --> RE["T?E<br/>a type holding success or failure (-> §8.3)"]
+    T --> RE["T!E<br/>a type holding success or failure (-> §8.3)"]
+    T --> OP["T?<br/>a value that may be absent: Option&lt;|T|&gt;"]
     FN["fn(Args): Ret<br/>function type (a pointer to a function)"]
 ```
 
@@ -481,6 +491,13 @@ flowchart LR
 * **Mutable converts to read-only** implicitly, not the reverse, and only at the outermost step ([6.4](#64-type-conversion--and-implicit-casts)).
 * **A read-only type is not a constant**: `$` concerns the type, whether what it points at may be rewritten. A named compile-time constant is a `const` declaration (`const PI = 3.14;`).
 
+6. **Optional (`T?`)**:
+
+* **Definition**: `T?` is `std/lang`'s `Option<|T|>`, a value that may be absent ("Null safety" in [3.4](#34-enums-enum)). The two spellings are one type, and a diagnostic writes the short one.
+* **Marks apply from the left**, as `[]` and `@` do: `U8[]?` is an optional slice, `U8?[]` a slice of optional bytes, and `Node$@?` an optional pointer.
+* **With a result**: `T?!E` is a result whose value may be absent, and an optional result is bracketed, `(T!E)?`. `T!E?` is a compile error, since the `?` would make the error type optional.
+* **A `?` marks a type only.** After a value it is a syntax error: `f()!` passes a failure on, and `if v: = x` takes an optional's value out. Where an expression names the type, it is written `Option<|T|>` (`Option<|I32|>.none`), or left to the place (`.none`).
+
 **`null` with no expected type** takes `Void@`, like C's `NULL` ([2.3](#23-literals)).
 
 ```kspls
@@ -491,7 +508,7 @@ p: = null
 p: User@ = null
 ```
 
-With a raw pointer's `null`, the writer must guarantee there are contents when dereferencing. For presence and absence **in the type system**, with a compile error where the absent case is not handled, use `Option<|T|>` ("Null safety" in [3.4](#34-enums-enum)).
+With a raw pointer's `null`, the writer must guarantee there are contents when dereferencing. For presence and absence **in the type system**, with a compile error where the absent case is not handled, use `T?` ("Null safety" in [3.4](#34-enums-enum)).
 
 ### 3.3 Structs (`struct`)
 
@@ -617,12 +634,13 @@ On a type with a hand-written `fmt`, that one wins (only `variant_name` is synth
 
 **A tagged union has no built-in `==`.** A simple enum compares like an integer. On an enum whose variants carry data, `==` and `!=` are refused unless it implements `Eq` ("its variants carry data, so it has no built-in '=='; take it apart with 'switch'"). To ask which variant a value is, `switch` on it, or compare `variant_name()`.
 
-**Null safety (`Option<|T|>`)**: `std/lang`'s `Option<|T|>` (`some(value: T)` / `none`) expresses "there may be no value" with a type, not with a raw pointer's `null` (Rust's `Option<T>`, Swift's `Optional<T>`). Its contents come out only through `switch`, and a `switch` missing a case is a compile error ([7.1](#71-branching)). So the `.none` case cannot be forgotten, and an absent value cannot be touched.
+**Null safety (`T?`, that is `Option<|T|>`)**: `std/lang`'s `Option<|T|>` (`some(value: T)` / `none`), written `T?` ([3.2](#32-derived-types)), expresses "there may be no value" with a type, not with a raw pointer's `null` (Rust's `Option<T>`, Swift's `Optional<T>`). Its contents come out only through `switch`, and a `switch` missing a case is a compile error ([7.1](#71-branching)). So the `.none` case cannot be forgotten, and an absent value cannot be touched.
 
 Note: **There is exactly one shorter notation, `if name: = expression`** ("An `if` that binds an `Option`" in [7.1](#71-branching)); there is no `guard let`, `?.` or `??`.
 
 ```kspls
-switch find(id) case .some(u)
+switch find(id)
+case .some(u)
     use(u)
 case .none {} // the absent case must be written too
 ```
@@ -1192,7 +1210,7 @@ The copy sits inside the `impl` block, so `Self` and the `impl`'s own type param
 
 ```kspls
 trait Seqish<|E|>
-    fn head(r: Self): Option<|E|>
+    fn head(r: Self): E?
     fn head_or(r: Self, alt: E): E // a default body. It may call a declaration-only method
         if v: = r.head()
             return v
@@ -1362,7 +1380,7 @@ stateDiagram-v2
   | A `struct` | Its fields |
   | An `enum` | The payloads of all its variants |
   | An array | Its elements |
-  | A Result (`T?E`) | The success value. `Handle?E` moves as `Option<\|Handle\|>` does; the error side is an error enum's tag |
+  | A Result (`T!E`) | The success value. `Handle!E` moves as `Handle?` does; the error side is an error enum's tag |
 
 * **The limit**: paths across branches and loops are tracked, but duplication by way of a pointer (writing `p$` elsewhere, and the like) is not detected. With no tracking of how long a borrow lives, the check is not *sound*: passing it does not prove that no copy exists.
 
@@ -1390,20 +1408,20 @@ priv struct Metrics
     compile_ms: I64
     peak_bytes: I64
 priv struct Baseline
-    label: Option<|U8[]|>
+    label: U8[]?
     cold: Metrics
     runs: List<|Metrics|>
 impl Baseline: reflect.Reflectable {} // the compiler assembles the table and fields() (nesting and containers included)
 ```
 
 * **A key is the field's name itself**; nothing maps it to a different spelling.
-* **The types covered are the integers (`I8` / `I16` / `I32` / `I64` / `U8` / `U16` / `U32` / `U64` / `Sz`), `F32` / `F64` / `Bool` / `U8[]`, and a nested `struct` built from them.** So are their `List<|T|>` and `Option<|T|>`. In JSON they take these shapes:
+* **The types covered are the integers (`I8` / `I16` / `I32` / `I64` / `U8` / `U16` / `U32` / `U64` / `Sz`), `F32` / `F64` / `Bool` / `U8[]`, and a nested `struct` built from them.** So are their `List<|T|>` and `T?`. In JSON they take these shapes:
 
   | Field type | In JSON |
   | :-- | :-- |
   | A nested `struct` | A nested object (`{"cold":{"ms":1}}`; keys are not flattened) |
   | `List<\|T\|>` | An array |
-  | `Option<\|T\|>` | `.none` writes no key. An absent key reads as `.none`, and an explicit `null` is refused as a kind mismatch |
+  | `T?` | `.none` writes no key. An absent key reads as `.none`, and an explicit `null` is refused as a kind mismatch |
 
   * A type holding any other field **is a compile error naming that field**; the field is never silently dropped from the table. Nested and contained types alike are checked: a container of containers (`List<|List<|T|>|>`), an option whose contents are a container or an option, a non-`struct` type and a generic type are all refused.
 * **Nothing is synthesized on an `impl` with a body written**: write `fields()` yourself to change the key mapping or to hold a type not covered (the same treatment as `variant_name`; [3.4](#34-enums-enum)).
@@ -1418,7 +1436,7 @@ The table lists every operator and how tightly it binds (its *precedence*). A sm
 
 | Precedence | Operators | Description | Associativity |
 | --- | --- | --- | --- |
-| **1 (high)** | `.`, `[]`, `()`, `@`, `$`, `?` | Member, index, call, take an address, dereference, error propagation | Left |
+| **1 (high)** | `.`, `[]`, `()`, `@`, `$`, `!` | Member, index, call, take an address, dereference, error propagation | Left |
 | **2** | `!`, `~`, `-`, `sizeof`, `offsetof`, `Type::expr` | Logical not, bitwise not, negation, take a size, take a position, type cast (prefix) | Right |
 | **3** | `*`, `/`, `%`, `&`, `<<`, `>>` | Multiply and divide, remainder, **bitwise and**, shift | Left |
 | **4** | `+`, `-`, `\|`, `^` | Add and subtract, **bitwise or / xor** | Left |
@@ -1787,11 +1805,17 @@ comp2: Component = ::{ 200, .tags = ::{ "Enemy", "Boss" } } // id=200, active ta
 
 You may write `::{ … }` without a type name only where the compiler already knows which type is expected. The same holds for an enum's `.variant`.
 
-**The type name may be left out only where the expected type ([2.3](#23-literals)) is fixed to one**, leaving `::{ ... }` or an enum's `.variant`. There are three such places:
+**The type name may be left out only where the expected type ([2.3](#23-literals)) is fixed to one**, leaving `::{ ... }` or an enum's `.variant`. There are nine such places:
 
 1. **The right-hand side of a variable declaration**
-2. **A direct argument of a function or method call**, a generic one's too where its type arguments are written (`Box<|P|>.make(::{ .x = 2 })`, and an integer literal in `larger<|U8|>(200, 100)` is a `U8`); where they are inferred from the arguments, the argument fixes them and so needs its type
-3. **The right-hand side of a `return` statement**
+2. **The right-hand side of `=`**, which takes the type of the place assigned (`held = .some(3)`); a compound assignment such as `+=` is not one
+3. **A direct argument of a function or method call**, a generic one's too where its type arguments are written (`Box<|P|>.make(::{ .x = 2 })`, and an integer literal in `larger<|U8|>(200, 100)` is a `U8`); where they are inferred from the arguments, the argument fixes them and so needs its type
+4. **A payload of an enum's variant**, which takes the type the variant declares for it (`.some(.green)`)
+5. **A field's value in a struct literal**, which takes the field's declared type (`Slot::{ .kind = .big(1) }`)
+6. **An element of an array or slice literal**, which takes the element type (`ks: Kind[2] = ::{ .small, .big(3) }`)
+7. **The value a `catch` stands in for**, written after `catch` or after `fallback` in its block, which takes the type of the value it replaces (`sized(n) catch .small`)
+8. **The right-hand side of a `return` statement**
+9. **The right-hand side of a `throw` statement**, which takes the function's error type, the `E` of its `T!E` (`throw .lost`)
 
 ```kspls
 p: Point = ::{ .x = 10, .y = 20 } // OK: the type is known from the left-hand side
@@ -1806,7 +1830,9 @@ status: Status = .ok
 // OK: an enum's variant can be inferred too
 ```
 
-**Anywhere else it is a compile error**, since the expected type is not fixed to one. Examples are inside a comparison (`if x == .ok`), either side of the ternary operator (`v: = .ok if cond else .err`), and a standalone expression statement. There, write from the type name (`Status.ok`).
+**An `if … else` expression standing in one of these places passes the place's type to both of its sides**, so each side may leave the name out: `return .some(n) if n > 0 else .none` in a function returning `I32?`, `held = .some(3) if ok else .none`.
+
+**Anywhere else it is a compile error**, since the expected type is not fixed to one. Examples are inside a comparison (`if x == .ok`), either side of an `if … else` whose own place fixes no type (`v: = .ok if cond else .err`), and a standalone expression statement. There, write from the type name (`Status.ok`).
 
 #### 6.6.3 What a literal cannot build
 
@@ -1814,10 +1840,10 @@ A compound literal fills fields, so it is refused where filling fields would byp
 
 * **A struct with invisible fields cannot be built with a literal.** Every field must be visible where the literal is written, the fields not written included (a compile error otherwise). Omitted fields are zero-filled, so code that cannot read the type could otherwise build and pass around a value breaking the type's own invariant (a condition its own code relies on always being true). Use what the declaring file publishes (its constructor function).
 * Note: **Only the fields of the struct the literal writes are inspected.** Invisible fields further inside a visible field's type (a wrapping struct, an array's elements) are not inspected, and are accepted as zero initialization ([4.4.1](#441-top-level-variables)).
-* **Fields cannot be written on a type that has no fields** (a compile error). Numbers, `Bool`, enums, and `Result` (`T?E`) itself give `::{ ... }` nothing to fill. Write the value itself (`n: I32 = 0;`).
+* **Fields cannot be written on a type that has no fields** (a compile error). Numbers, `Bool`, enums, and `Result` (`T!E`) itself give `::{ ... }` nothing to fill. Write the value itself (`n: I32 = 0;`).
   * An empty `::{}` writes nothing, so it is accepted on these types too, meaning zero.
-* **A `Result` cannot be built from fields.** Its success side is the value written as it is or with `return`, and its failure side is `throw`; it is read with `?` and `catch`. Its three inner fields (`is_err` / `error_code` / `val`) are absent from the surface. They are refused here, as they are when reading ([8.3](#83-error-handling)).
-  * If the success side is a struct, a `::{ ... }` writing that struct's fields is accepted (`p: Point?E = ::{ .x = 1, .y = 2 };` writes `Point`'s fields).
+* **A `Result` cannot be built from fields.** Its success side is the value written as it is or with `return`, and its failure side is `throw`; it is read with `!` and `catch`. Its three inner fields (`is_err` / `error_code` / `val`) are absent from the surface. They are refused here, as they are when reading ([8.3](#83-error-handling)).
+  * If the success side is a struct, a `::{ ... }` writing that struct's fields is accepted (`p: Point!E = ::{ .x = 1, .y = 2 };` writes `Point`'s fields).
 
 ### 6.7 Built-in operators
 
@@ -1948,13 +1974,15 @@ A condition is written without parentheses `()`, and a block is always written: 
 
 ```kspls
 // Caution: Line the variants up rather than using default. A default silently swallows "a variant that was added" too.
-switch change case .size(axis, index, _v)
+switch change
+case .size(axis, index, _v)
     return Size_at::{ .axis = axis, .index = index, .found = true }
 case .add, .cut, .open, .close, .face, .link, .note, .remark, .name, .refer {}
 ```
 
 ```kspls
-ui_event: switch event case Event.quit
+ui_event: switch event
+case Event.quit
     return
 case .click(x, y) // extract the attached data (the abbreviated form only)
     if x < 0
@@ -1965,7 +1993,8 @@ default {
 }
 
 // an example of extracting data of the same shape once
-switch token case .identifier(text), .string, .keyword
+switch token
+case .identifier(text), .string, .keyword
     io.out().s("Parsed token: ").s(text).s("\n")
 case .eof
     return
@@ -1978,14 +2007,15 @@ case .eof
 if run: = block.first_run()
     io.out().s(run.text).s("\n")
 
-switch block.first_run() case .some(run)
+switch block.first_run()
+case .some(run)
     io.out().s(run.text).s("\n")
 case .none {}
 ```
 
-**It takes effect on `Option<|T|>` only**; written on another `enum`, it is refused at translation time. `Option` is fixed at two variants, so "do nothing on the absent side" is safe. A user's `enum` can gain variants, and the day one is added, such an `if` would pass silently. On another `enum`, name every variant in a `switch`, so an added variant fails there and forces a review.
+**It takes effect on an optional (`T?`) only**; written on another `enum`, it is refused at translation time. `Option` is fixed at two variants, so "do nothing on the absent side" is safe. A user's `enum` can gain variants, and the day one is added, such an `if` would pass silently. On another `enum`, name every variant in a `switch`, so an added variant fails there and forces a review.
 
-**A `typedef` over an `Option` is one too.** `typedef Opt = Option<|T|>` names the same type, so its value binds here exactly as `Option`'s does, as with `switch`. A typedef over another `enum` is still refused: the check looks at the type the name resolves to, not at the name.
+**A `typedef` over an `Option` is one too.** `typedef Opt = I32?` names the same type, so its value binds here exactly as `Option`'s does, as with `switch`. A typedef over another `enum` is still refused: the check looks at the type the name resolves to, not at the name.
 
 **Neither a `$` nor a type annotation can be written** (the binding only reads, and the `Option`'s contents fix the type).
 
@@ -2034,18 +2064,18 @@ for $i: = 0, $j: = 10; i < j; i += 1, j -= 1 {
 | 2. Driven by `next()` | A type implementing `std/lang`'s `Iter<\|T\|>` | `for { switch collection.next() case .some(item) { … } case .none { break; } }` |
 
 1. **The shape driven by an index (the default)**: a type that carries a `.len: Sz` field and can be indexed with `[i]`. It expands into an index-based `for` (the C style, 1 above), taking each element as `collection[i]`. Built-in slices and arrays are walked this way, and so is a type implementing any one of `Index` / `Index_place` / `Index_ref` ([6.1](#61-the-operator-list-and-precedence)). The call target is never chosen at run time, so it runs as fast as an index loop written by hand.
-2. **The shape driven by `next()`**: a type implementing `std/lang`'s `trait Iter<|T|> { fn next(r: Self): Option<|T|>; }`. It expands into `for { switch collection.next() case .some(item) { …the body… } case .none { break; } }`. A sequence holding neither a length nor a current position (one built by layering filters and transformations) is this kind. `.len` cannot be asked of it, so it cannot be walked in the index shape.
+2. **The shape driven by `next()`**: a type implementing `std/lang`'s `trait Iter<|T|> { fn next(r: Self): T?; }`. It expands into `for { switch collection.next() case .some(item) { …the body… } case .none { break; } }`. A sequence holding neither a length nor a current position (one built by layering filters and transformations) is this kind. `.len` cannot be asked of it, so it cannot be walked in the index shape.
    * Here too the call target is fixed at compile time.
 
 ```kspls
 
 // a type naming `Iter` is walked, from the writer's point of view, in the same notation as a `List`.
 impl Countdown: Iter<|I32|>
-    fn next(r: Self$@): Option<|I32|>
+    fn next(r: Self$@): I32?
         if r.n <= 0
-            return Option<|I32|>.none
+            return .none
         r.n -= 1
-        return Option<|I32|>.some(r.n)
+        return .some(r.n)
 for v in Countdown::{ .n = 4 } // 3, 2, 1, 0
     ...
 ```
@@ -2105,7 +2135,8 @@ my_block:
 
 // 2. the transparency of an unlabelled break
 for
-    switch event case .quit
+    switch event
+    case .quit
         break // ignore the switch and escape the for
 ```
 
@@ -2337,12 +2368,12 @@ Caution: **Do not write more than one `main` in a program.** Two or more across 
 | :-- | :-- |
 | None (`fn main()`) | Always `0` |
 | An integer (`fn main(): I32` and so on) | **That value** |
-| `Void?E` | `0` on success, `E` on failure (when numeric; otherwise `1`) |
-| `I32?E` and so on | **That value** on success, as above on failure |
+| `Void!E` | `0` on success, `E` on failure (when numeric; otherwise `1`) |
+| `I32!E` and so on | **That value** on success, as above on failure |
 
 Any other type (`Bool` / `U8[]` / `F64` / a struct) is **a compile error**: it has no meaningful conversion to C's `int main`, and accepting it would silently discard the value (Principle 5 in [`DESIGN.md`](DESIGN.md)).
 
-When `main` returns the failure side (`?E`), the error's value and the path it came through are written to standard error before exiting.
+When `main` returns the failure side (`!E`), the error's value and the path it came through are written to standard error before exiting.
 
 ```kspls
 import "std/sys"
@@ -2365,16 +2396,16 @@ fn main(): I32
 
 ### 8.3 Error handling
 
-A function that may fail says so in its return type, `T?E`. It returns with `return` on success and `throw` on failure ([8.3.1](#831-success-and-failure-return-vs-throw)). The caller takes the contents out with `catch` ([8.3.2](#832-catching-an-error-catch)) or `?` ([8.3.3](#833-error-propagation-)).
+A function that may fail says so in its return type, `T!E`. It returns with `return` on success and `throw` on failure ([8.3.1](#831-success-and-failure-return-vs-throw)). The caller takes the contents out with `catch` ([8.3.2](#832-catching-an-error-catch)) or `!` ([8.3.3](#833-error-propagation-)).
 
 **No exception leaves a function without appearing in its return type**, so whether a call can fail is read from the type, and the caller cannot overlook it. (In Python or JavaScript, by contrast, an exception can escape a function whose signature does not mention it.)
 
-* **The `T?E` type** holds either the success value, `T`, or the failure value, `E`.
-* **The error type cannot be omitted**: there is no short form `T?`, which would be a second spelling of one type ([`docs/DESIGN.md` §9.1](DESIGN.md)). For a type compatible with C's `int`, write `T?I32`.
+* **The `T!E` type** holds either the success value, `T`, or the failure value, `E`.
+* **The error type cannot be omitted**: there is no short form `T!`, which would be a second spelling of one type ([`docs/DESIGN.md` §9.1](DESIGN.md)). For a type compatible with C's `int`, write `T!I32`.
 * **`E` can be any type** (a number, an enum, a struct), and need not be an error: it can be any token returned to the caller, as `kspeg/`'s parser uses it. When it is a struct, decide yourself who frees its contents and when.
-* **The fields inside cannot be touched**: `.val` / `.is_err` / `.error_code` are compile errors, since they would let the success value be read despite a failure. Only `?` and `catch` take the contents out.
+* **The fields inside cannot be touched**: `.val` / `.is_err` / `.error_code` are compile errors, since they would let the success value be read despite a failure. Only `!` and `catch` take the contents out.
 
-Building a result (`return` / `throw`) and receiving it (`?` / `catch` / `fallback`) fit together as follows.
+Building a result (`return` / `throw`) and receiving it (`!` / `catch` / `fallback`) fit together as follows.
 
 ```mermaid
 flowchart TD
@@ -2388,28 +2419,28 @@ flowchart TD
 
 #### 8.3.1 Success and failure (`return` vs `throw`)
 
-In a function returning a `T?E`, `return` hands back the success value and `throw` the failure value.
+In a function returning a `T!E`, `return` hands back the success value and `throw` the failure value.
 
 * **`return value;`** returns the success value `T` (for `Void`, simply `return;`).
 * **`throw error value;`** returns the failure value `E`.
 
 ```kspls
 // return an Enum on failure
-fn check_value(v: I32): Void?My_error
+fn check_value(v: I32): Void!My_error
     if v < 0
         throw My_error.invalid
     return // success (Void)
 
-fn read_file(): Handle?My_error
+fn read_file(): Handle!My_error
     // ...
     return Handle::{ .id = 1 }
 ```
 
 #### 8.3.2 Catching an error (`catch`)
 
-`catch` takes the contents out of a `T?E` value. The value cannot be used without it, so nothing proceeds until success or failure is decided.
+`catch` takes the contents out of a `T!E` value. The value cannot be used without it, so nothing proceeds until success or failure is decided.
 
-`catch` can be written **only on a `T?E` left-hand side** (the same restriction as `?`); on an expression that cannot fail, it is a compile error. Indexing is covered too: `a[i] catch v` requires `Index` / `Index_place` / `Index_ref` to return a `T?E`.
+`catch` can be written **only on a `T!E` left-hand side** (the same restriction as `!`); on an expression that cannot fail, it is a compile error. Indexing is covered too: `a[i] catch v` requires `Index` / `Index_place` / `Index_ref` to return a `T!E`.
 
 `catch` either takes another route on failure or supplies a substitute value. It has two forms:
 
@@ -2420,10 +2451,10 @@ fn read_file(): Handle?My_error
 
 * **The block form (`catch e { ... }`)** runs the block with the failure value named `e`. The block leaves with `throw` / `return` / `break` / `continue`, or passes on a substitute value with `fallback`.
   * **A block whose value can be read is refused if control can reach its end**, as a function that can reach its end without returning is. Allowing it would silently pass on the zero value, while the same letters on one line (`catch alt()`) pass on `alt()`'s value. A call to a `#noreturn` function (`sys.exit`, `panic`) ends the block, so a handler closing on one needs no `fallback`.
-  * **Where nobody can read the value, no `fallback` is needed.** That holds for a `catch` standing as its own statement, a binding whose name opens with `_`, and a subject producing nothing (a `Void?E`). There the block runs for its effect, and `catch { }` says exactly that.
+  * **Where nobody can read the value, no `fallback` is needed.** That holds for a `catch` standing as its own statement, a binding whose name opens with `_`, and a subject producing nothing (a `Void!E`). There the block runs for its effect, and `catch { }` says exactly that.
 * **The expression form (`catch substitute`)** writes the value for failure inline, without `{}` (it means `catch e { fallback substitute; }`).
-  * **The substitute must have the success side's type** (`T` for a `T?E`). The one exception is a call to a `#noreturn` function (`#noreturn` in [10](#10-compiler-directives-and-attributes)), a function that never returns. Control never comes back, so the value is never used, and `text: = io.read_file(path) catch panic("cannot read: \{path\}");` fits on one line.
-* **There is at most one `catch` per expression.** Chaining, as in `a() catch b() catch c`, is a syntax error. Once the first `catch` has resolved the `T?E`, the second one's subject is a `T`, which needs no further substitute.
+  * **The substitute must have the success side's type** (`T` for a `T!E`). The one exception is a call to a `#noreturn` function (`#noreturn` in [10](#10-compiler-directives-and-attributes)), a function that never returns. Control never comes back, so the value is never used, and `text: = io.read_file(path) catch panic("cannot read: \{path\}");` fits on one line.
+* **There is at most one `catch` per expression.** Chaining, as in `a() catch b() catch c`, is a syntax error. Once the first `catch` has resolved the `T!E`, the second one's subject is a `T`, which needs no further substitute.
 
 ```kspls
 // 1. the block form (flow control)
@@ -2440,19 +2471,19 @@ port: = parse_port(str) catch e
 port: = parse_port(str) catch 8080
 ```
 
-#### 8.3.3 Error propagation (`?`)
+#### 8.3.3 Error propagation (`!`)
 
-**`?`** takes the value out on success; on failure it `throw`s the failure from the function at once, handing it to the caller. These two mean the same:
+**`!`** takes the value out on success; on failure it `throw`s the failure from the function at once, handing it to the caller. These two mean the same:
 
 ```kspls
-x: = parse_data()?
+x: = parse_data()!
 x: = parse_data() catch e
     throw e
 ```
 
-**`?` can be written only inside a function returning a `T?E`**, since it passes the failure straight to the caller.
+**`!` can be written only inside a function returning a `T!E`**, since it passes the failure straight to the caller.
 
-**The failure types must agree** (`?` on an `EB` failure inside a function returning `I32?EA` is a compile error). When they differ, take the failure with `catch`, convert it yourself, and `throw` it.
+**The failure types must agree** (`!` on an `EB` failure inside a function returning `I32!EA` is a compile error). When they differ, take the failure with `catch`, convert it yourself, and `throw` it.
 
 ### 8.4 The memory management model: `defer` / ARC / arenas
 
@@ -2474,7 +2505,7 @@ There is no garbage collector (a run-time system that finds and frees unused mem
 
 * **Syntax**: `defer statement`. One statement goes bare (`defer buf.free()`); several go in a block (`defer { … }`, or a deeper level in the indentation notation). `ksplc fmt` writes a one-statement block the bare way, so one cleanup has one spelling.
 * **When it runs**: at the end of the scope, or on leaving it with `return`, `throw`, `break`, `continue` and the like, in reverse order of registration (the last one registered runs first).
-* **Nothing escapes from inside a `defer`**: cleanup must run to its end. So `return` / `throw` / `fallback` inside it, a `break` / `continue` aimed at an outer scope, and a `?` that may fail are compile errors.
+* **Nothing escapes from inside a `defer`**: cleanup must run to its end. So `return` / `throw` / `fallback` inside it, a `break` / `continue` aimed at an outer scope, and a `!` that may fail are compile errors.
 * **Values are read when it runs, not when it is registered.** An outer variable the block names takes its value at the moment of leaving. So `defer f(x)` reads `x` again then, where Go's evaluates `x` at registration. A closure's capture reads at the call by the same rule ("Closures" in [8.1](#81-definitions)). The grounds are in [`docs/DESIGN.md` §4.2](DESIGN.md).
   * **To use the value at registration, copy it yourself**; the language keeps no such value.
 
@@ -2485,7 +2516,7 @@ There is no garbage collector (a run-time system that finds and frees unused mem
   * **A capture list (`defer a, b { ... }`) cannot be written** (a compile error).
 
 * **A `defer` is a statement of its own**, on the line after the binding it cleans up, naming it (`defer buf.free()`). It does not ride on the end of a declaration, and nothing is filled in for it: `.free()` with nothing in front is a compile error on any line.
-  * **Put it right after the binding.** A statement that can leave the scope (`?`, `return`, `throw`, or a `break` / `continue` out of it) placed between the two leaves before the `defer` is registered. What was acquired is then never cleaned up. For a value whose type conforms to `Owned`, the check is [W0109] in the development tools specification.
+  * **Put it right after the binding.** A statement that can leave the scope (`!`, `return`, `throw`, or a `break` / `continue` out of it) placed between the two leaves before the `defer` is registered. What was acquired is then never cleaned up. For a value whose type conforms to `Owned`, the check is [W0109] in the development tools specification.
 
 ```kspls
 fn work()
@@ -2545,7 +2576,7 @@ Caution: **Do not call `retain` / `release` by hand.** Such a call doubles up wi
 * a `struct`'s fields
 * an `enum`'s variant payload (the run-time tag is inspected, and only the live variant's payload counts)
 * an array's elements
-* a `Result`'s (`T?E`'s) success payload (freed even when discarded without `catch`/`?`)
+* a `Result`'s (`T!E`'s) success payload (freed even when discarded without `catch`/`!`)
 
 Held through a pointer or a slice (a field of `Rc<|T|>$@` and the like), it is borrowed, not owned, and not counted. Nesting is walked to any depth (an enum wrapping a struct holding an array, and so on).
 
@@ -2630,7 +2661,7 @@ impl Buf: Owned {} // without this the check does not work (an empty block keeps
 ```
 
 * **A non-conforming type is not tracked.** With the name `free` alone as the mark, renaming it would silently switch the check off; conformance makes the compiler confirm the required shape too. The linter reports, at the declaration, a type whose conformance was forgotten, and a type freeing under another name such as `close`.
-* **`Owned`'s `free` returns no failure**: a free runs from a `defer` or partway along an escape path, where the caller could do nothing with one. Put cleanup that needs confirming in a separate method (`sync(): Void?Io_error` for `io.File_stream`).
+* **`Owned`'s `free` returns no failure**: a free runs from a `defer` or partway along an escape path, where the caller could do nothing with one. Put cleanup that needs confirming in a separate method (`sync(): Void!Io_error` for `io.File_stream`).
 * Only a **bare local variable** is inspected. A per-field free such as `r.field.free()`, and a free through an index, are not tracked, so a shape that cannot be tracked is never wrongly counted as freed.
 * A free wrapped in another function is followed **one level only**. If the callee's body always frees the matching parameter, in the `x.free()` or the `dealloc(x)` shape, the caller's argument counts as freed. A method shape (`x.close_it()`) is followed the same way, with the receiver as the first parameter.
   * So a body that frees the parameter itself is tracked even when its name is not `free` and its type does not conform to `Owned`. `Owned` is needed for a type whose `free()` frees **a field** instead of the parameter (such as `Str_builder`).
@@ -2989,7 +3020,7 @@ Only simple values can be passed to or returned from a C function. A type whose 
 | A single value, such as a number or a `Bool` | Yes |
 | A raw pointer (`T@`) | Yes |
 | A plain `struct` | Yes, if every field can cross. Under `--to=llvm` not by value: pass it by pointer (`T@`) |
-| The `T?E` type | No |
+| The `T!E` type | No |
 | A slice (`T[]`) | No |
 | An array (`T[N]`) | No |
 | A trait value (an address paired with a table of call targets) | No |
@@ -2997,7 +3028,7 @@ Only simple values can be passed to or returned from a C function. A type whose 
 
 To cross with one of the refused types, pass a raw pointer (`T@`) and the size as separate arguments. **The check walks inside a `struct`**: wrapping, as in `W { items: U8[] }`, does not let a type cross. The grounds for this and for the LLVM rule are "The FFI boundary check looks inside the type" in [`DESIGN.md`](DESIGN.md).
 
-A KSPL string (`U8[]`) carries its length, while a C function takes **a null-terminated pointer** (one whose end is marked by a zero byte). `slice.to_cstr()` allocates one and returns an `Option<|U8$@|>` (`.none` when the input contains a NUL).
+A KSPL string (`U8[]`) carries its length, while a C function takes **a null-terminated pointer** (one whose end is marked by a zero byte). `slice.to_cstr()` allocates one and returns a `U8$@?` (`.none` when the input contains a NUL).
 
 Caution: The caller must `dealloc` it.
 
@@ -3042,9 +3073,9 @@ fn my_kanso_callback(status: I32)
 
 **`#export` on a method inside an `impl` or a `trait` is a compile error.** A method's name is not unique once its type is stripped (`bump` may exist once per type), so it cannot be the symbol as written. To have C call one, wrap it in a free function. `#export` on a `priv` is a compile error too: the generated C makes it `static`, so it would reach neither C nor a wasm32 exit.
 
-**A library built from KSPL is reached through its `#export` functions.** Built with `--library` (in the development tools specification), a program becomes a library that other programs link against. Only its `#export` functions can be seen from outside; everything else, its own copy of the runtime and of std included, stays private to it.
+**A library built from KSPL is reached through its `#export` functions.** Built with `--library=<FILE>` (in the development tools specification), a program becomes a library that other programs link against. Only its `#export` functions can be seen from outside; everything else, its own copy of the runtime and of std included, stays private to it.
 
-**The same compilation can write the library's interface** with `--emit-interface`: the one file a caller needs in order to call the library. For a C caller it is a C header (`greet.h`); for a KSPL caller it is a KSPL file holding an `extern "C"` block, which the caller imports. It lists every `#export` function and the types their signatures name, each with its `//<` summary. A `struct` passed by value is written with its fields, and an `enum` with no payload with its constants. A `struct` reached only through a pointer is written as a *handle*: its name without its fields, so a caller can hold and pass the pointer but cannot look inside. Where every field of it is `pub` and can cross to C, its fields are written after all. The grounds are "A library built from KSPL crosses as C" in [`DESIGN.md`](DESIGN.md).
+**The same compilation writes the library's interface** to the file `--library=` names: the one file a caller needs in order to call the library. The option can be repeated, one file per form. For a C caller it is a C header (`greet.h`); for a KSPL caller it is a KSPL file holding an `extern "C"` block, which the caller imports. It lists every `#export` function and the types their signatures name, each with its `//<` summary. A `struct` passed by value is written with its fields, and an `enum` with no payload with its constants. A `struct` reached only through a pointer is written as a *handle*: its name without its fields, so a caller can hold and pass the pointer but cannot look inside. Where every field of it is `pub` and can cross to C, its fields are written after all. The grounds are "A library built from KSPL crosses as C" in [`DESIGN.md`](DESIGN.md).
 
 * **A library cannot hold a `main`, or an `#export` variable or constant, and must export at least one function** (compile errors). The program that links the library has its own `main`, and enters the library through its `#export` functions; with none, the library would hold nothing a caller can reach. A variable is refused because of Windows. There, code that reads a variable out of a DLL (a library the program loads when it starts) must declare it with the mark `__declspec(dllimport)`, and code that reads the same variable from a static library (one copied into the program when it is linked) must not. Which of the two a caller does is decided when the caller links, after the header is written, so no one header is right for both. A function needs no such mark, since a call reaches it either way. To share a value, export a function that returns it.
 * **Every `#export` is the library's interface**, a callback passed to C included, so it is named as an API name is: a library's C names share one space with every other library's.
@@ -3116,7 +3147,7 @@ Every KSPL compiler must accept nesting at least as deep as the table below says
 | :-- | --: | :-- |
 | Blocks `{ }` | 64 | `{ { { … } } }` inside a function body |
 | An expression's parentheses `( )` | 64 | `x: = ((((…1…))))` |
-| A type's postfix steps (`@` / `[]` / `[N]` / `?`) | 64 | `I32@@@…@` |
+| A type's postfix steps (`@` / `[]` / `[N]` / `!`) | 64 | `I32@@@…@` |
 | A `struct` embedded as a field | 64 | A run of `struct S64 { inner: S63; }` |
 | A generic's type arguments | 64 | `List<\|List<\|…I32…\|>\|>` |
 | A chain of typedefs | 256 | `typedef A256 = A255; … typedef A1 = I32;` |
@@ -3201,7 +3232,7 @@ Every KSPL implementation, and both of the compiler's backends, must agree on th
 
 Many languages have features KSPL leaves out on purpose. The table names each one, what to write in KSPL instead, and why it is left out.
 
-At the root are simplicity and language design by subtraction. **The test is not whether a feature is syntactic sugar** (a shorter way to write something the language can already say). KSPL desugars plenty, rewriting a short form into plain code: `?`, `catch`'s expression form, the ternary operator, string interpolation, operator overloading, closures. Each is accepted because it adds to what can be written while keeping one notation. What is turned away gives a second notation to something already writable, or adds implicit behavior ([`DESIGN.md`](DESIGN.md), "Not carrying several means to the same end"). Read the "Why" column by this test.
+At the root are simplicity and language design by subtraction. **The test is not whether a feature is syntactic sugar** (a shorter way to write something the language can already say). KSPL desugars plenty, rewriting a short form into plain code: `!`, `catch`'s expression form, the ternary operator, string interpolation, operator overloading, closures. Each is accepted because it adds to what can be written while keeping one notation. What is turned away gives a second notation to something already writable, or adds implicit behavior ([`DESIGN.md`](DESIGN.md), "Not carrying several means to the same end"). Read the "Why" column by this test.
 
 | Feature | The alternative in KSPL | Why |
 | --- | --- | --- |
@@ -3213,6 +3244,7 @@ At the root are simplicity and language design by subtraction. **The test is not
 | **Named actual arguments** (`f(offset = 0)`) | Take the settings as a struct, written `::{ .name = value }` (an omitted field is 0). | One call would have two spellings (`f(0)` and `f(offset = 0)`), and **parameter names would become published API** (Python offers the positional-only `/` to keep them out of it). Through a function-pointer type, the names in the type and in the definition may disagree. |
 | **Function overloading** (several functions with one name, told apart by their parameters) | Make it generic, or give each its own name. | No tracing which of several same-named candidates is called. |
 | **A distinct type made from another** (Go's `type Id int`, Haskell's `newtype`), or another language's spelling of another name for a type (`type Id = I32` in Rust, Go and Python; `typealias` in Swift and Kotlin; `using Id = I32;` in C++; `alias` in D; C's own order, `typedef I32 Id;`) | For a distinct type, a struct with one field (`struct User_id { v: I32 }`). For another name, `typedef Id = I32` ([3.5](#35-typedefs-typedef)): C's word, the new name first, the type after `=`. Each of those other spellings is a syntax error whose note writes this line. A `typedef` is only another name, indistinguishable from its type ([3.5.2](#352-a-typedef-is-only-another-name)). | One word, one meaning, one spelling. `typedef` stays a name, as in C, Rust and Swift, and a type kept apart is declared as one, so a mix-up is an error at no run-time cost. The order keeps the new name at the head of the line. C puts it after the type, or inside it for a function pointer (`typedef I32 (*Op)(I32);`). |
+| **`?` for a result** (Rust's `f()?`, and `T?E` for its type) | `f()!` passes the failure on and `T!E` is the type ([8.3](#83-error-handling)). `T?` is an optional ([3.2](#32-derived-types)); a `?` after a value, or a name after `T?`, is a syntax error whose note names the `!` form. | `!` marks the place a function may stop and hand a failure back, and `?` marks absence, as other languages spell an optional value ([`DESIGN.md`](DESIGN.md), "9.2.2 Failure"). |
 | **Another language's word for a loop or a branch** (`while` in C, Java, Python and Swift; Rust's `loop`; `match` in Rust, Python and Scala) | `for` with a condition alone (`for x > 0`) in place of `while`; a bare `for`, which repeats until a `break` leaves it, in place of `loop`; `switch x case ...` in place of `match` ([7.1](#71-branching), [7.2](#72-loops)). Each is a syntax error whose note writes the KSPL head. The three words stay usable as names. | One word for each job, spelled as C spells it, so a keyword takes no name a writer would use ([`DESIGN.md`](DESIGN.md), "11.2 The spelling of reserved words is taken from C"). |
 | **`::` as a path separator** (`Arena::new(1024)`, `io::out()`, `Shade::dark`) | `.`, which reaches a module's member, a type's own and a value's alike: `Arena.new(1024)`, `io.out()`, `Shade.dark`. `::` is the cast (`I32::n`) and a literal's type (`T::{ … }`); written as a path, it is an error naming the `.` spelling. | A second mark would give a member two spellings, and `::` already has a job: `json::Val` would read like `Sz::n`. A local named like an imported module hides it, and gets a warning at its declaration ([4.5](#45-scope-and-shadowing)). |
 | **Range syntax (`a..b`)** | `for x in` over `std/lang`'s `Range` (`Range.asc(n)` / `Range.desc(n)` / `Range.new(start, stop, step)`). | A call already writes it, so an operator would be a second notation. `a..b` does not show whether its bound is exclusive; `Range.new`'s argument names do (`stop` is exclusive). |

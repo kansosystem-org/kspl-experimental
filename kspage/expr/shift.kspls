@@ -30,7 +30,8 @@ impl How
         //< Whether that reference is moved
         //<
         //< **A copy moves references to any table.**
-        switch how case .copy(_r, _c)
+        switch how
+        case .copy(_r, _c)
             return true
         case .line {}
         if name.len > 0
@@ -45,17 +46,19 @@ priv fn moved($a: Addr, dr: Sz, dc: Sz): Addr //< the position shifted by a copy
     if !a.abs_col
         a.col += dc
     if a.row < 0 || a.col < 0
-        a.kind = Addr_kind.out_of_range
+        a.kind = .out_of_range
     return a
 
 priv fn index_on(a: Addr, axis: Axis): Sz //< the position's index along axis
-    switch axis case .column
+    switch axis
+    case .column
         return a.col
     case .row
         return a.row
 
 priv fn with_index($a: Addr, axis: Axis, i: Sz): Addr
-    switch axis case .column
+    switch axis
+    case .column
         a.col = i
     case .row
         a.row = i
@@ -80,7 +83,8 @@ priv fn put_addr(a: Addr, how: How, out: Str_builder$@) //<
     //< It is read as a range whose two ends coincide; pointing at what was removed, it is
     //< "removed".
     //< Caution: **Do not close up the numbers**, or it silently points at the neighbouring cell.
-    switch how case .copy(dr, dc)
+    switch how
+    case .copy(dr, dc)
         got: = moved(a, dr, dc)
         if !addr.is_spot(got)
             out.s(broken_ref)
@@ -102,7 +106,8 @@ priv fn put_span(a: Addr, b: Addr, how: How, out: Str_builder$@) //<
     $axis: = Axis.row
     $line: Sz = 0
     $delta: Sz = 0
-    switch how case .copy(_dr, _dc)
+    switch how
+    case .copy(_dr, _dc)
         // A copy does not swap the ends (both shift as they are).
         put_addr(a, how, out)
         out.c(':')
@@ -158,14 +163,14 @@ fn shift_refs(src: U8[], target: U8[], bare_hits: Bool, axis: Axis, line: Sz, de
         //< It appends the text to out. True if the text changed (it is appended either way). **Only
         //< references to target's table move**: by the written name, or, without one, by
         //< `bare_hits`.
-    return walk_refs(src, How.line(axis, line, delta), target, bare_hits, out)
+    return walk_refs(src, .line(axis, line, delta), target, bare_hits, out)
 
 fn offset_refs(src: U8[], dr: Sz, dc: Sz, out: Str_builder$@): Bool //<
     //< Shifts the positions in a formula by dr rows and dc columns and appends the result to out
     //<
     //< True if the text changed. **The part with a `$` does not move.** **Which table it points at
     //< is ignored.**
-    return walk_refs(src, How.copy(dr, dc), "", false, out)
+    return walk_refs(src, .copy(dr, dc), "", false, out)
 
 priv fn read_span_end(c: Reader$@): Addr //< reads a range's end
     //<

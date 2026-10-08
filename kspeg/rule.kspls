@@ -123,19 +123,20 @@ pub fn keyword_set_boundary( //< the ranges to fold a keyword set on, or `.none`
     //< that writes `!_Keyword`, an identifier swallows a reserved word.
     boundary: Rule$@, //< the grammar's `_Boundary`; only a single character class can fold
     keywords: List<|U8[]|>$@, //< the words to fold; an empty word or an outside byte prevents it
-): Option<|U8[]|> //< a view of `boundary`'s ranges, not a copy
+): U8[]? //< a view of `boundary`'s ranges, not a copy
     if boundary == null
-        return Option<|U8[]|>.none
-    switch boundary$ case .char_class(ranges)
+        return .none
+    switch boundary$
+    case .char_class(ranges)
         for kw in keywords
             if kw.len == 0
-                return Option<|U8[]|>.none
+                return .none
             for i in Range.asc(kw.len)
                 if !char_class_matches(ranges, kw[i])
-                    return Option<|U8[]|>.none
-        return Option<|U8[]|>.some(ranges)
+                    return .none
+        return .some(ranges)
     default
-        return Option<|U8[]|>.none
+        return .none
 
 fn sub_rules( //< the rules directly inside this one, in the order the grammar writes them
     //<
@@ -146,7 +147,8 @@ fn sub_rules( //< the rules directly inside this one, in the order the grammar w
 )
     if rule == null
         return
-    switch rule$ case .sequence(rules), .choice
+    switch rule$
+    case .sequence(rules), .choice
         for i in Range.asc(rules.len)
             out.push(rules.get(i))
     case .zero_or_more(inner), .one_or_more, .optional, .and_pred, .not_pred
@@ -159,7 +161,8 @@ pub fn collect_keywords( //< every keyword the rule matches, in the order the gr
 )
     if rule == null
         return
-    switch rule$ case .keyword_set(set)
+    switch rule$
+    case .keyword_set(set)
         // A folded choice's words too; otherwise they are missed, and both `_Keyword` and the
         // per-rule listing come up short.
         for kw in set.order
@@ -181,7 +184,8 @@ pub fn collect_references( //< every place where this rule refers to another rul
 )
     if rule == null
         return
-    switch rule$ case .reference(name)
+    switch rule$
+    case .reference(name)
         names.push(name)
     default {}
     $kids: = List<|Rule$@|>.new(null)
@@ -223,21 +227,24 @@ pub fn fold_keyword_choices( //< turns each run of keywords inside a choice into
     sub_rules(rule, kids@)
     for kid in kids
         fold_keyword_choices(kid, boundary, arena)
-    switch rule$ case .choice(rules)
+    switch rule$
+    case .choice(rules)
         folded: = List<|Rule$@|>.create(arena)
         $i: Sz = 0
         for i < rules.len
             run: = List<|U8[]|>.create(arena)
             $j: = i
             for j < rules.len
-                switch rules.get(j)$ case .keyword_literal(text)
+                switch rules.get(j)$
+                case .keyword_literal(text)
                     push_keyword(run, text)
                 default
                     break
                 j += 1
             $did_fold: = false
             if j - i >= 2
-                switch keyword_set_boundary(boundary, run) case .some(ranges)
+                switch keyword_set_boundary(boundary, run)
+                case .some(ranges)
                     folded.push(keyword_set_rule(run, ranges, arena))
                     did_fold = true
                 case .none {}
@@ -251,7 +258,7 @@ pub fn fold_keyword_choices( //< turns each run of keywords inside a choice into
         if folded.len == 1
             rule$ = folded.get(0)$
         else if folded.len < rules.len
-            rule$ = Rule.choice(folded)
+            rule$ = .choice(folded)
     default {}
 
 fn first_bytes_of( //< what a match of this part can begin with, as far as the rules' are known
@@ -263,7 +270,8 @@ fn first_bytes_of( //< what a match of this part can begin with, as far as the r
     if rule == null
         f.can_be_empty = true
         return f
-    switch rule$ case .literal(text), .keyword_literal
+    switch rule$
+    case .literal(text), .keyword_literal
         if text.len == 0
             f.can_be_empty = true
         else
@@ -340,7 +348,8 @@ fn left_refs( //< the rules this part can enter before reading a byte
 )
     if rule == null
         return
-    switch rule$ case .resolved_ref(r_id)
+    switch rule$
+    case .resolved_ref(r_id)
         out.push(r_id)
     case .sequence(rules)
         for i in Range.asc(rules.len)
@@ -359,7 +368,7 @@ pub fn left_recursive_rule( //< a rule that can enter itself before reading a by
     //< Such a rule never matches: each entry enters it again at the same position, until the depth
     //< limit stops the parse. Call it after compute_first_bytes, which says what can be empty.
     entries: List<|Rule_entry$@|>$@,
-): Option<|U8[]|> //< the first such rule in the grammar's order
+): U8[]? //< the first such rule in the grammar's order
     for i in Range.asc(entries.len)
         $seen: = List<|Bool|>.new(null)
         defer seen.free()
@@ -372,13 +381,13 @@ pub fn left_recursive_rule( //< a rule that can enter itself before reading a by
         for $k: Sz = 0; k < todo.len; k += 1
             r_id: = todo[k]
             if Sz::r_id == i
-                return Option<|U8[]|>.some(entries.get(i).name)
+                return .some(entries.get(i).name)
             if seen[r_id]
                 continue
             seen[r_id] = true
             e: = entries.get(r_id)
             left_refs(e.rule, entries, e.skips_space, todo@)
-    return Option<|U8[]|>.none
+    return .none
 
 pub struct Keyword_set //< keywords folded into one rule: extract one word, then look it up once
     //<

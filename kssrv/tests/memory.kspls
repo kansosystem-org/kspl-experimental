@@ -38,14 +38,15 @@ fn place(root: U8[], arena: Arena$@): Bool //< puts the large file under the roo
         return false
     return true
 
-fn cases(token: U8[], arena: Arena$@): Void?client.Http_end //<
+fn cases(token: U8[], arena: Arena$@): Void!client.Http_end //<
     //< Brings the waves and checks the heap after each against the one after the first
     auth: = client.bearer_head(token, arena)
     $first: I64 = 0I64
     for w in Range.asc(waves)
-        wave(auth, arena)?
+        wave(auth, arena)!
         $held: I64 = 0I64
-        switch settled_heap(auth, arena)? case .some(h)
+        switch settled_heap(auth, arena)!
+        case .some(h)
             held = h
         case .none
             verdict.check("every connection of a wave closes once its clients are gone", false,
@@ -61,15 +62,15 @@ fn cases(token: U8[], arena: Arena$@): Void?client.Http_end //<
         verdict.check(nm, held <= first,
             arena.text().s("\{held\} bytes held, against \{first\} after the first").take())
 
-priv fn wave(auth: U8[], arena: Arena$@): Void?client.Http_end //<
+priv fn wave(auth: U8[], arena: Arena$@): Void!client.Http_end //<
     //< Brings one wave of clients, and closes them all
     //<
     //< Clients that never finish a request, that send headers past the cap, that walk away
     //< mid-answer, and one that behaves.
     $stalled: = List<|client.Conn$@|>.new(arena)
     for _k in Range.asc(per_kind)
-        c: = client.Conn.open_in(memory_port, arena)?
-        c.send("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n")?
+        c: = client.Conn.open_in(memory_port, arena)!
+        c.send("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n")!
         stalled.push(c)
     flood: = arena.text().s("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n")
     line: = arena.text().s("X-Fill: ").s(client.filler(flood_line_bytes, arena)).s("\r\n").take()
@@ -77,35 +78,36 @@ priv fn wave(auth: U8[], arena: Arena$@): Void?client.Http_end //<
         flood.s(line)
     flood_bytes: = flood.take()
     for _k in Range.asc(per_kind)
-        flood_once(flood_bytes, arena)?
+        flood_once(flood_bytes, arena)!
     target: = arena.text().s("/").s(big_rel).take()
     for _k in Range.asc(per_kind)
-        walk_away(client.raw("GET", target, auth, "", arena))?
+        walk_away(client.raw("GET", target, auth, "", arena))!
     fine: = arena.text().s(client.raw("GET", target, auth, "", arena))
         .s(client.raw("GET", "/sub/one.txt", auth, "", arena)).take()
-    _got: = client.request(memory_port, fine, 2, client.default_timeout_ms, false, arena)?
+    _got: = client.request(memory_port, fine, 2, client.default_timeout_ms, false, arena)!
     for c in stalled
         c.free()
 
-priv fn flood_once(bytes: U8[], arena: Arena$@): Void?client.Http_end //<
+priv fn flood_once(bytes: U8[], arena: Arena$@): Void!client.Http_end //<
     //< Sends a head past the cap on one connection, and reads the refusal
-    $f: = client.Conn.open(memory_port)?
+    $f: = client.Conn.open(memory_port)!
     defer f.free()
-    f.send(bytes)?
-    _refused: = f.next(false, client.default_timeout_ms, arena)?
+    f.send(bytes)!
+    _refused: = f.next(false, client.default_timeout_ms, arena)!
 
-priv fn walk_away(request: U8[]): Void?client.Http_end //<
+priv fn walk_away(request: U8[]): Void!client.Http_end //<
     //< Sends one request and closes once the first of its answer has arrived
-    $c: = client.Conn.open(memory_port)?
+    $c: = client.Conn.open(memory_port)!
     defer c.free()
-    c.send(request)?
+    c.send(request)!
     read_some(c@)
 
 priv fn read_some(c: client.Conn$@) //< waits until some of the answer has arrived, and stops
     deadline: = sys.mono_us() + I64::client.default_timeout_ms * 1000I64
     for sys.mono_us() < deadline
         n: = c.sock.read(c.buf) catch e
-            switch e case .would_block
+            switch e
+            case .would_block
                 sys.sleep_ms(1)
                 continue
             default
@@ -113,15 +115,15 @@ priv fn read_some(c: client.Conn$@) //< waits until some of the answer has arriv
         if n != 0
             return
 
-priv fn settled_heap(auth: U8[], arena: Arena$@): Option<|I64|>?client.Http_end //<
+priv fn settled_heap(auth: U8[], arena: Arena$@): I64?!client.Http_end //<
     //< The heap once only the asking connection is open; none if that never comes by the cap
     //<
     //< -1 where the status names no heap.
     deadline: = sys.mono_us() + I64::settle_ms * 1000I64
     for sys.mono_us() < deadline
-        st: = client.get(memory_port, "/api/status", auth, arena)?
+        st: = client.get(memory_port, "/api/status", auth, arena)!
         doc: = client.doc_of(st, arena)
         if doc.get("connections_open").as_int64(-1I64) == 1I64
-            return Option<|I64|>.some(doc.get("heap_bytes").as_int64(-1I64))
+            return .some(doc.get("heap_bytes").as_int64(-1I64))
         sys.sleep_ms(settle_poll_ms)
-    return Option<|I64|>.none
+    return .none

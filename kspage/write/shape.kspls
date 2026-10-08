@@ -19,7 +19,7 @@ import "kspage/share/store"
 import "kspage/write/block"
 import "kspage/write/edit" + { Editor }
 import "kspage/write/field"
-import "kspage/write/record" { Again, Step }
+import "kspage/write/record" { Step }
 import "kspage/write/typing"
 import "std/ds" { List }
 import "std/str" { Str_builder }
@@ -37,8 +37,8 @@ priv fn link_ink(): paint.Ink //< a link's look
     //< The link itself is not part of the look (shared by name, it would split the style by where
     //< each link points).
     $ink: paint.Ink = paint.inherit_ink()
-    ink.color = Option<|U32|>.some(0x0000eeU32)
-    ink.underline = Option<|Bool|>.some(true)
+    ink.color = .some(0x0000eeU32)
+    ink.underline = .some(true)
     return ink
 
 priv fn dragged(now: Rect, grip: Grip, px: F32, py: F32, ratio: Bool): Rect //<
@@ -105,7 +105,7 @@ impl Editor
         r.break_group()
         // The name is stored, not where it was applied (repeating applies it where the cursor is
         // now).
-        r.again = Again.style(r.arena.dup_str(name))
+        r.again = .style(r.arena.dup_str(name))
         return true
 
     priv fn apply_style(r: Self$@, st: Step$@, name: U8[]) //<
@@ -195,7 +195,7 @@ impl Editor
             r.apply_style(st, "")
             return true
         name: = r.arena.dup_str(sb.slice())
-        if s: = r.styled(st, sheet, name, Arrange.flow)
+        if s: = r.styled(st, sheet, name, .flow)
             // The contents are set again every time (a person may have made a style with the same
             // name and another look). The typeface and the size are not touched.
             $fresh: Style = s$
@@ -225,7 +225,8 @@ impl Editor
             if nb.prev != null
                 on = nb.prev
         else
-            switch edit.split_run(r, st, on, r.caret.offset) case .some, .none {}
+            switch edit.split_run(r, st, on, r.caret.offset)
+            case .some, .none {}
         field.do_set_note(r, st, on, r.arena.dup_str(text))
         r.break_group()
         return true
@@ -290,7 +291,8 @@ impl Editor
                 to_offset -= sp.from_offset
             from = tail
         // Split at the end. The second half is not selected, so it is not collected.
-        switch edit.split_run(r, st, to, to_offset) case .some, .none {}
+        switch edit.split_run(r, st, to, to_offset)
+        case .some, .none {}
         out.push(from)
         if to == from
             return
@@ -313,15 +315,15 @@ impl Editor
         if !edge.found
             return
         $to: F32 = x
-        switch edge.axis case .column
+        switch edge.axis
+        case .column
             to = x
         case .row
             to = y
         if from: = ask.edge_origin(page, edge)
             // Do not let it go past the near edge (negative, the next column or row overlaps).
             v: = to - from if to > from else 0.0F32
-            edit.do_set_size(r, r.step(), edge.table, edge.axis, edge.index,
-                Option<|F32|>.some(v))
+            edit.do_set_size(r, r.step(), edge.table, edge.axis, edge.index, .some(v))
 
     fn fit_edge(r: Self$@, page: Page$@, edge: Edge): Bool //<
         //< Fits the column (or row) at that boundary to its contents. True if anything moved
@@ -366,29 +368,28 @@ impl Editor
         field.do_set_paper(r, r.step(), sheet, fresh)
         r.break_group()
 
-    fn styled(r: Self$@, st: Step$@, sheet: Sheet$@, name: U8[], how: Arrange):
-        Option<|Style$@|> //<
-            //< Prepares the style with that name and that arrangement
-            //<
-            //< Adds one where there is none; returns none where the arrangement does not match. The
-            //< caller opens the step (adding the style and the change undo together).
+    fn styled(r: Self$@, st: Step$@, sheet: Sheet$@, name: U8[], how: Arrange): Style$@? //<
+        //< Prepares the style with that name and that arrangement
+        //<
+        //< Adds one where there is none; returns none where the arrangement does not match. The
+        //< caller opens the step (adding the style and the change undo together).
         if sheet == null || name.len <= 0
-            return Option<|Style$@|>.none
+            return .none
         if got: = sheet.find(name)
             // An existing name's arrangement is not changed (every place using that name would
             // change).
             if !got.arrange.same_arrange(how)
-                return Option<|Style$@|>.none
-            return Option<|Style$@|>.some(got)
+                return .none
+            return .some(got)
         // Caution: Copy the name. The caller's text is gone at the next call.
         made: = sheet.add(r.arena.dup_str(name), paint.inherit_all())
         made.arrange = how
         // Put the added style through the record (`Sheet.add` appends it at the end).
         sheet.styles.len -= 1
         field.do_sheet(r, st, sheet, sheet.styles.len, true, made)
-        return Option<|Style$@|>.some(made)
+        return .some(made)
 
-    fn add_style(r: Self$@, sheet: Sheet$@, name: U8[], how: Arrange): Option<|Style$@|> //<
+    fn add_style(r: Self$@, sheet: Sheet$@, name: U8[], how: Arrange): Style$@? //<
         //< Adds one style and returns it
         //<
         //< An existing name is returned without adding, and the arrangement is set only when
@@ -397,7 +398,7 @@ impl Editor
         //< Caution: **Do not move the check into `styled`**, whose callers build their name from
         //< one already in the table — a document holding such a name would refuse every insertion.
         if r.shut() || !style.name_plain(name)
-            return Option<|Style$@|>.none
+            return .none
         r.break_group()
         got: = r.styled(r.step(), sheet, name, how)
         r.break_group()
@@ -414,13 +415,14 @@ impl Editor
         if !grip.found
             return
         $now: = Rect::{ .x = 0.0, .y = 0.0, .w = 0.0, .h = 0.0 }
-        switch grip.block.frame case .some(f)
+        switch grip.block.frame
+        case .some(f)
             now = f
         case .none
             return
         if surface: = ask.grip_surface(page, grip)
             to: = dragged(now, grip, x - surface.x, y - surface.y, ratio)
-            field.do_set_frame(r, r.step(), grip.block, Option<|Rect|>.some(to))
+            field.do_set_frame(r, r.step(), grip.block, .some(to))
             // Moving moves everything selected by the same amount. Only the grabbed frame changes
             // size — resized one by one, even the gaps between them change (other products draw
             // complaints for it).
@@ -448,7 +450,7 @@ impl Editor
             return false
         if f: = one.frame
             to: = Rect::{ .x = f.x + dx, .y = f.y + dy, .w = f.w, .h = f.h }
-            field.do_set_frame(r, r.step(), one, Option<|Rect|>.some(to))
+            field.do_set_frame(r, r.step(), one, .some(to))
             return true
         return false
 
@@ -460,17 +462,19 @@ impl Editor
         if r.shut()
             return false
         $b: Block$@ = null
-        switch r.frame_at() case .some(got)
+        switch r.frame_at()
+        case .some(got)
             b = got
         case .none
             return false
-        switch b.frame case .none
+        switch b.frame
+        case .none
             return false
         case .some {}
         r.break_group()
         to: = Rect::{ .x = x, .y = y, .w = w if w > 0.0 else 0.0F32,
             .h = h if h > 0.0 else 0.0F32 }
-        field.do_set_frame(r, r.step(), b, Option<|Rect|>.some(to))
+        field.do_set_frame(r, r.step(), b, .some(to))
         r.break_group()
         return true
 
@@ -501,13 +505,15 @@ impl Editor
         if r.shut()
             return false
         $b: Block$@ = null
-        switch r.frame_at() case .some(got)
+        switch r.frame_at()
+        case .some(got)
             b = got
         case .none
             return false
         // Caution: **Refuse it where it is not a frame.** A step on a paragraph in the flow has no
         // effect (only absolute-coordinate layout reads it).
-        switch b.frame case .none
+        switch b.frame
+        case .none
             return false
         case .some {}
         r.break_group()

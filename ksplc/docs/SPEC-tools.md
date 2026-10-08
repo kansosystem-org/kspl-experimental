@@ -174,12 +174,11 @@ This table lists every option of a compile. Most have a section of their own, li
 | `--std-dir=<DIR>` | where to look for the standard library (`import "std/..."`) ([§2.9.1](#291-locating-the-standard-library---std-dir)). |
 | `--pkg-src-dir=<DIR>` | where to look for the **source** of a package other than `std` ([§2.9.2](#292-the-source-of-a-package-other-than-std---pkg-src-dir)). |
 | `--split=<N>` | splits the generated C into N translation units to compile in parallel (the default 1 is no split) ([§2.6](#26-splitting-the-generated-c-into-several-translation-units---split)). |
-| `--library` | builds a library: only its `#export` functions are visible outside the generated C, and its runtime and std are its own ([§2.10.1](#2101-building-a-library---library)). |
+| `--library=<FILE>` | builds a library and writes its interface to `<FILE>`: a C header for a `.h`, an `extern "C"` block for a `.kspls` / `.kspl`. It can be repeated, so one compilation writes both forms. Only the library's `#export` functions are visible outside the generated C, and its runtime and std are its own ([§2.10.1](#2101-building-a-library---library), [§2.10.2](#2102-writing-its-interfaces---libraryfile)). |
 | `--emit-deps=<FILE>` | on success, writes the list of the sources read to `<FILE>` ([§2.9.3](#293-writing-out-the-list-of-sources-read---emit-deps)). |
 | `--emit-libs=<FILE>` | on success, writes the libraries the program names with `#link` to `<FILE>` as one line of `-l<name>` words, a response file for the C compiler (`@<FILE>`) ([§2.10.4](#2104-writing-out-the-libraries-the-program-names---emit-libs)). |
-| `--emit-interface=<FILE>` | on success, writes a `--library` build's interface to `<FILE>`: a C header for a `.h`, an `extern "C"` block for a `.kspls` / `.kspl` ([§2.10.2](#2102-writing-its-interface---emit-interface)). |
 | `--surface-scope=<pub\|all>` | what `--emit-surface` writes: `pub` (the default), what the package publishes, or `all`, everything a file beside it may reach ([§2.9.4](#294-writing-out-the-published-api---emit-surface)). |
-| `--emit-surface=<FILE>` | writes the record of the API the file publishes to `<FILE>`: not the interface a caller links against (`--emit-interface`), but **the record that two versions are compared by** ([§2.9.4](#294-writing-out-the-published-api---emit-surface)). |
+| `--emit-surface=<FILE>` | writes the record of the API the file publishes to `<FILE>`: not the interface a caller links against (`--library=`), but **the record that two versions are compared by** ([§2.9.4](#294-writing-out-the-published-api---emit-surface)). |
 | `--diagnostic-format=<text\|json>` | how the diagnostics are written to standard error: `text` (the default), for a person, or `json`, one object per line, for a program ([§2.11](#211-diagnostics-a-program-reads---diagnostic-format)). |
 | `--help` | prints the usage and exits with 0. |
 
@@ -199,7 +198,7 @@ After 50 errors the compiler stops reporting. One early mistake often causes man
 
 When the errors reach 50, the compiler prints "Too many errors (>= 50). Further errors are suppressed." as an error (itself one of the 50) and reports no more. A compile and `ksplc lint` both do this.
 
-**A failed compile shows none of ksplc's insides**: only the diagnostic and one line of `<category>/<variant>`. The path through ksplc (the functions a `?` passed the error out of, `?` being the operator that hands an error to the caller) is nothing the writer can fix. It would only distract from the cause (as with Error in [§5.2](#52-the-diagnostics-four-weights)).
+**A failed compile shows none of ksplc's insides**: only the diagnostic and one line of `<category>/<variant>`. The path through ksplc (the functions a `!` passed the error out of, `!` being the operator that hands an error to the caller) is nothing the writer can fix. It would only distract from the cause (as with Error in [§5.2](#52-the-diagnostics-four-weights)).
 
 To chase an unexpected failure while developing ksplc, set the environment variable `KSPLC_INTERNAL_TRACE` to any non-empty value. The failing path is then added as `stack backtrace:`. It reaches the language server's analysis process (`lsp-worker`) too. **An unexpected breakdown of ksplc itself is always reported**, with the tree as the analysis left it, whatever this setting.
 
@@ -328,7 +327,7 @@ An *artifact* is one thing a build makes: a program or a library. Sections 2.1 t
 | | Source (a `.kspls`) | Binary (a `.a` / `.so` / `.dll` plus its interface) |
 | :-- | :-- | :-- |
 | **Receiver** | `--std-dir` / `--pkg-src-dir` (telling it a place, mainly through `KSPLC_STD_DIR` / `KSPLC_PKG_SRC_DIR`) | none: a C program includes the header, a KSPL program imports the `extern "C"` block |
-| **Provider** | none (a folder is simply placed) | `--library` (the library, its insides private), `--emit-interface` (its interface) |
+| **Provider** | none (a folder is simply placed) | `--library=` (the library, its insides private, and its interfaces) |
 | **Record** (neither side) | `--emit-deps` (the sources read → the rebuild verdict, `run`'s cache), `--emit-surface` (the published API → comparing versions) | `--emit-libs` (the libraries the program names → the link line) |
 
 Note: `ksplc emit-runtime` stands apart from both: it writes the runtime that `--to=llvm`'s IR links ([§2.10.5](#2105-writing-the-runtime-for-llvm-ir-ksplc-emit-runtime)).
@@ -423,7 +422,7 @@ ksplc --emit-surface=tensor.surface ksai/tensor.kspls out.c
 ```
 
 ```
-ksai/tensor	Tensor<|T|>.matmul	pub fn matmul(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>?Tensor_error	the product of two matrices
+ksai/tensor	Tensor<|T|>.matmul	pub fn matmul(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>!Tensor_error	the product of two matrices
 ```
 
 The columns are separated by tabs, and the lines are sorted by key:
@@ -451,7 +450,7 @@ Note: **The parts' rows and the file's own row are for a reference to read, not 
 
 **The scope decides which declarations are written** (`--surface-scope`, [§2.3](#23-the-other-compiler-options)). The record that two versions are matched by is always made at `pub`, since nobody outside relies on a declaration that is not `pub`. `all` serves a package that publishes nothing: an application's files reach one another with visibility unset, so at `pub` its record is empty. Any other name is refused. A mistyped scope that defaulted to `pub` would write only the published declarations and look as if it had worked.
 
-**It is kept apart from `--emit-interface`**, which writes one build's `#export` functions in C ("The published API is recorded in the repository" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)).
+**It is kept apart from a library's interface** (`--library=`), which writes one build's `#export` functions in C ("The published API is recorded in the repository" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)).
 
 **Only `pub` declarations come out**: unset visibility (inside the package alone) and `priv` are not API. A `trait`'s required methods come out even when `priv`: nobody can call them, but a conforming type has to provide them. Of a `struct`'s fields only the `pub` ones come out. Of an `enum`, every variant comes out with its tag value, since a `switch` can take them apart, which makes the variants API.
 
@@ -465,14 +464,15 @@ You can hand someone a library built from KSPL without its source, as C librarie
 
 **A library built from KSPL ships as C does: its object or shared library, and its interface.** Its callers reach it through its `#export` functions alone. KSPL's own types (a slice, a `Result`, a trait value, a generic, a method) do not cross a binary, and travel as source ([§2.9](#29-source-crossing-the-boundary-where-it-is-read-from-and-what-is-recorded)). The grounds are "A library built from KSPL crosses as C, holding its own runtime" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md).
 
-The diagram shows one vendor compiling `greet.kspls` twice, once per interface, and the two kinds of customer each using one.
+The diagram shows one vendor compiling `greet.kspls` once, writing both interfaces, and the two kinds of customer each using one. The C compiler builds the library from the generated `greet.c`.
 
 ```mermaid
 flowchart LR
-    subgraph V["each vendor (one compilation per interface)"]
-        G["ksplc --library --emit-interface=greet.h greet.kspls greet.c"] --> GA["libgreet.a / libgreet.so<br/>greet's runtime and std, private"]
-        G --> GH["greet.h"]
-        K["ksplc --library --emit-interface=greet_api.kspls greet.kspls greet.c"] --> GK["greet_api.kspls"]
+    subgraph V["each vendor (one compilation)"]
+        G["ksplc --library=greet.h --library=greet_api.kspls greet.kspls greet.c"] --> GH["greet.h"]
+        G --> GK["greet_api.kspls"]
+        G --> GC["greet.c"]
+        GC -->|"the C compiler"| GA["libgreet.a / libgreet.so<br/>greet's runtime and std, private"]
     end
     GA --> C["a C program<br/>#include &quot;greet.h&quot;"]
     GH --> C
@@ -482,11 +482,11 @@ flowchart LR
 
 #### 2.10.1 Building a library (`--library`)
 
-With `--library`, **only the `#export` functions have external linkage** in the generated C, which means only they are visible to other files at link time. Every other definition is `static` (visible only inside its own file): the program's own, std's (the monomorphized bodies included, that is, a generic's copy made for each type it is used with) and the runtime's, data as well as functions. So any number of libraries built from KSPL link into one program, statically or as shared libraries, whichever `ksplc` built each: none can see another's runtime or std.
+With `--library=`, **only the `#export` functions have external linkage** in the generated C, which means only they are visible to other files at link time. Every other definition is `static` (visible only inside its own file): the program's own, std's (the monomorphized bodies included, that is, a generic's copy made for each type it is used with) and the runtime's, data as well as functions. So any number of libraries built from KSPL link into one program, statically or as shared libraries, whichever `ksplc` built each: none can see another's runtime or std.
 
 **The C compiler guarantees it**, not the linker: a `static` symbol is private on every toolchain, MSVC's included, with no version script or export list.
 
-| Under `--library` | What happens | The reason |
+| Under `--library=` | What happens | The reason |
 | :-- | :-- | :-- |
 | a `main` in the input | refused (a compile error) | the program that links the library has its own; the library is entered through its `#export` functions |
 | an `#export` variable or `const` | refused (a compile error) | a DLL's data needs a mark on the caller's side that no one header can choose for every build; export a function returning it |
@@ -509,9 +509,9 @@ The rest behaves as in a program: allocation, formatting numbers (which reads no
 
 **On Windows an `#export` is marked `__declspec(dllexport)`** in a library. A DLL needs that mark to export it with every toolchain, and it matches what MinGW exports unmarked. Linked as a static library, the functions are exported from the program's executable too.
 
-#### 2.10.2 Writing its interface (`--emit-interface`)
+#### 2.10.2 Writing its interfaces (`--library=<FILE>`)
 
-`--emit-interface=<FILE>` writes, on success, the interface of the `--library` build it is given with: the file a caller needs in order to call the library. **The extension picks the form**, and any other is refused. One compilation writes one, so a library with both is compiled twice.
+`--library=<FILE>` writes, on success, the library's interface to `<FILE>`: the file a caller needs in order to call the library. **The extension picks the form**, and any other is refused. **Repeat the option for the second form**: one compilation writes every interface it names, and a path named twice is refused. A library is always built with an interface, since without one a caller could reach it only through declarations written by hand. The option is named for the library, unlike `--emit-libs` and `--emit-surface`: those only add a file beside the output, while this one changes what the generated C is.
 
 | `<FILE>` | The form | Read by |
 | :-- | :-- | :-- |
@@ -554,8 +554,7 @@ The commands build the library and its two interfaces, then link each customer:
 
 ```sh
 # the vendor: the library and its two interfaces, from one source
-ksplc --library --emit-interface=greet.h greet.kspls greet.c
-ksplc --library --emit-interface=greet_api.kspls greet.kspls greet.c
+ksplc --library=greet.h --library=greet_api.kspls greet.kspls greet.c
 clang -std=c99 -c greet.c -o greet.o && ar rcs libgreet.a greet.o
 clang -std=c99 greet.c -fPIC -shared -o libgreet.so $(ksplc info link-libs)
 
@@ -740,6 +739,8 @@ Note: **Width is measured in the brace notation, in both notations**, so one pro
 
 **A line is never broken after a `catch`.** After `catch` or `catch <name>`, only the next line's column tells a handler from a continued line, so the handler would be read as the block's first statement ("What disappears, and what does not" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)). The line runs past the width instead, the one place the width gives way. This holds in the brace notation too, since one rule covers both.
 
+**Each arm of a `switch` starts a line at the `switch`'s column**, an empty one (`case .a {}`) included. The first goes on the line below the `switch`. In the brace notation an arm after a block that closes on a line of its own follows that `}` (`} case .b {`); after an arm written on one line, such as `case .a {}`, it starts the next line, as every arm does in the indentation notation, where no `}` is written. No arm is indented under its `switch`, which opens no block ("No lines are added, and `switch` gets no block" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)). Where the breaks between statements are held back, as in a closure written inside a call's brackets, the arms stay on the `switch`'s line with them.
+
 **The `import`s are sorted by name**, with no `--style` switch:
 
 * **Only the `import`s at the file's head** are sorted, up to the first other declaration.
@@ -783,6 +784,9 @@ flowchart LR
 
 * **Hover**: on a variable or a function, it shows the inferred type, the function's signature and a struct's fields, with the declaration's own description below: the `//<` on its line and the run below it ("The documentation a declaration carries" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)).
   * **A name the description points at links to its declaration** (`` `Map.set` `` opens `std/ds.kspls` at that line). It is resolved as [W0211] resolves it, through the description's scope (a function's parameters and locals before its file's names), so a linked name is never one the compiler calls stale. The completion list's descriptions carry the same links. A link is an absolute `file://` URI with the line after `#L`, whatever spelling the client asked in. The editor's Markdown renderer opens it, not the client's own mapping of document names.
+  * **On a literal it shows the literal's type**, the one it takes where it stands: `4` in `size: Sz = 4` shows `Sz`, `'a'` shows `U8`, `null` the pointer or `Option` it fills in. Where the compiler gives that literal no type (an array's length, an enum's tag value) the hover is empty.
+  * **Where a name is bound it shows what a use of it shows**: `words: std.ds.List<|U8[]|>` on `$words: = List<|U8[]|>.new(arena)` as on a later `words`, and likewise for a parameter, a `for`'s item, `if v: = opt`, `catch e` and a pattern's payload.
+  * **On a mark it answers nothing.** A bracket, a comma, an operator, `::`, `<|` and `|>`, and a keyword such as `priv` or `fn` name no declaration, so the hover there is empty. A position at a name's end still answers that name: with the caret just past `free`, on the `(` of `free()`, it shows `free`.
 * **Jump to definition**: from a use to its declaration, including a typedef or an enum variant in another file.
   * **Where the server finds nothing, the VS Code extension searches the text itself.** That search is the editor's, not this server's. It skips two things: a word the language spells itself (`else`, `fn`, `true` and the rest), and a lookup the reader has moved on from.
   * On a name where it is declared, it jumps to the definition of the variable's type.
@@ -940,7 +944,7 @@ A code off by default is advice that matters only for one kind of system, and is
 
 **There are no named combinations (presets)**: a name enabling one code would only be a second way to write the per-code setting. To cover a directory tree, list the codes in `ksplc.cfg` (for example `kssrv/ksplc.cfg`).
 
-**A code on by default is useful whatever is being built**: [H0701]'s `Option<|T|>` is an enum resolved at compile time, so it serves either kind of system without touching run-time timing.
+**A code on by default is useful whatever is being built**: [H0701]'s `T?` is an enum resolved at compile time, so it serves either kind of system without touching run-time timing.
 
 ### 5.4 The list of diagnostic codes
 
@@ -1007,11 +1011,12 @@ The language rules are "2.3 Literals" and "6.8 Integer arithmetic: folding, over
 | I0502 | a naming-convention violation |
 | I0601 | an unnecessary mutability marker |
 | I0602 | detecting a hand-made ownership struct (off by default) |
-| I0701 | error propagation using '?' is recommended |
+| I0701 | error propagation using '!' is recommended |
 | I0801 | a comment a round trip through the indentation notation moves |
 | H0301 | unnecessary brackets |
 | H0302 | a type written twice |
-| H0701 | a proposal to adopt `Option<\|T\|>` for a raw-pointer return value that can return null |
+| H0303 | an optional spelled out as `Option<\|T\|>` |
+| H0701 | a proposal to adopt `T?` for a raw-pointer return value that can return null |
 | H0801 | a guard clause is recommended |
 | H0802 | a wrap at a call inside an argument |
 | H0803 | a function exceeds 300 lines |
@@ -1061,13 +1066,13 @@ The result of `&` / `|` / `^` is compared without brackets, as in `a & b == c`. 
 * **Fix**: bracket the intended grouping (`(a & b) == c`). [H0301]'s "unneeded brackets" does not look at binary operations, so both can be followed.
 
 #### [W0109] An early exit before the `defer` that frees an `Owned` value
-A value that must be freed can leave the function before its `defer` (the statement that frees it at the end of the block) is reached, so it leaks. A `?`, `return`, `throw`, or a `break` / `continue` out of the block stands between binding a value whose type conforms to `Owned` and the `defer name.free()` later in the same block. That path leaves before the `defer` is registered, so the value is never freed. The finding sits on the exit and names both lines.
+A value that must be freed can leave the function before its `defer` (the statement that frees it at the end of the block) is reached, so it leaks. A `!`, `return`, `throw`, or a `break` / `continue` out of the block stands between binding a value whose type conforms to `Owned` and the `defer name.free()` later in the same block. That path leaves before the `defer` is registered, so the value is never freed. The finding sits on the exit and names both lines.
 * **Only a later `defer` in the same block starts the question**: a value freed by hand, passed on or kept has another shape, and is not read as a leak.
 * **Not reported**: a `return` that returns the value itself (the caller owns it then), a statement freeing it by hand on the exiting path (`if bad { x.free(); return }`), and an exit inside a closure, which leaves only the closure.
 * **Fix**: put the `defer` on the line right after the binding, so it runs on every exit. A type that allocates only on its first write (`Str_builder.new()`) leaks nothing on that path, but moving the `defer` up costs nothing there either.
 
 #### [W0201] Unreachable code
-Code that never runs, because it follows a `return`, a `throw`, a `for` that never ends (no condition, and no `break` leaves it) or the like.
+Code that never runs, because it follows a `return`, a `throw`, a `for` that never ends (no condition, and no `break` leaves it) or the like. What follows a labelled `switch`, `if` or block that a `break` to its label leaves is reachable, whatever its branches end in.
 * **Fix**: delete it. A function returning a value needs no `return` after a `for` that never ends ("Loops" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md#72-loops)).
 
 #### [W0202] An unused expression with no side effect
@@ -1135,8 +1140,8 @@ Off by default ([§5.3](#53-enabling-disabling-or-promoting-a-diagnostic-to-an-e
 * **Fix**: consider explicit ownership through an arena or `defer`. It is not there to forbid ARC: a deliberate exception may stay. To exclude one file while it is enabled, write `##lint(W0601 = off);`.
 
 #### [W0701] An unhandled Result type
-A function that can fail returns `T?E` (a value `T` or an error `E`). It is called, its return value is not received, and neither a `catch` nor a `?` is written.
-* **Fix**: a discarded result hides the failure. Handle it with `catch`, or pass it to the caller with `?`.
+A function that can fail returns `T!E` (a value `T` or an error `E`). It is called, its return value is not received, and neither a `catch` nor a `!` is written.
+* **Fix**: a discarded result hides the failure. Handle it with `catch`, or pass it to the caller with `!`.
 
 #### [W0702] The use of a deprecated symbol
 A function or type marked `#deprecated` is used.
@@ -1249,9 +1254,9 @@ A variable or parameter declared with the mutability marker `$` is never reassig
 Off by default ([§5.3](#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg)). Reported where a struct not conforming to `Ref_counted` holds a raw-pointer field and defines its own `free` method: hand-made ownership. Structs under `std/` are out of scope (ARC's own primitives, such as `Arena` and `List`, would make the advice circular).
 * **Fix**: following `Rc<|T|>` / `Arc<|T|>`, consider conforming it to `Ref_counted` so that reference counting manages its lifetime ("8.4 The memory management model: `defer` / ARC / arenas" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md)).
 
-#### [I0701] Error propagation using '?' is recommended
+#### [I0701] Error propagation using '!' is recommended
 A `catch` that only rethrows the caught error, as in `catch e { throw e; }`.
-* **Fix**: replace the whole `catch` block with the `?` operator, which propagates the error (hands it to the caller) more safely and concisely.
+* **Fix**: replace the whole `catch` block with the `!` operator, which propagates the error (hands it to the caller) more safely and concisely.
 
 #### [I0801] A comment a round trip through the indentation notation moves
 A comment after a closing `}` cannot survive conversion to the indentation notation, which has no line for that `}`. In the brace notation, a line comment stands after a `}` that the indentation notation leaves out: a block's close outside every bracket, with the statement's `;` between them where the block ends one (`}; // …`). Converting moves the comment and converting back does not return it, so it speaks for different code ("Formatting, and the round trip that holds the two notations to one program" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)). **What is reported is what the formatter does** with its default settings (the formatter itself is asked), so a short block written on one line, which formatting unfolds, is reported too.
@@ -1261,20 +1266,30 @@ A comment after a closing `}` cannot survive conversion to the indentation notat
 ### 5.7 The list of hints (H)
 
 #### [H0301] Unnecessary brackets
-Brackets `()` that change nothing. They stand around the condition of an `if`, a `for`, a `switch` and the like, or around the receiver of a postfix operator (`.`/`[`/`(`/`@`/`$`/`::`/`?`) that binds the same without them: an identifier, a path, a literal, an existing postfix chain and so on (`(fc1_lora$).forward(x)`, `(r::U8).is_space()`).
+Brackets `()` that change nothing. They stand around the condition of an `if`, a `for`, a `switch` and the like, or around the receiver of a postfix operator (`.`/`[`/`(`/`@`/`$`/`::`/`!`) that binds the same without them: an identifier, a path, a literal, an existing postfix chain and so on (`(fc1_lora$).forward(x)`, `(r::U8).is_space()`).
 * **Fix**: delete the brackets. An expression whose binding would change without them (a binary, unary or ternary operation, a `catch`, a `sizeof`, an upcast) is out of scope, since there the brackets are needed.
 
 #### [H0302] A type written twice
-A local's annotation that its initializer already says. The same type is written at the initializer's head, as a struct literal (`p: Point = Point::{ … }`), a cast (`n: U8 = U8::v`), an enum variant (`k: Kind = Kind.small`) or a call made through the type (`xs: List<|I32|> = List<|I32|>.new(arena)`); or the annotation is `Bool` over `true` / `false`. Deleting it leaves the variable's type as it is. **Only a type the text shows is reported**: `count: Sz = items.len` is not, since there the annotation is the one place a reader without hover sees the type ("A type is redundant only where it is written twice" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)).
-* **Fix**: delete the type the editor dims (`p: = Point::{ … }`); a `const` loses its `:` with it (`const k = Kind.small`).
-* **Not reported**: an annotation doing work, such as a literal taking its type from it (`$i: Sz = 0`), a conversion it drives (`wide: I64 = small`) or a right side typed by it (`::{ … }`, `.small`); and another name for the type (`spot: Spot = Point::{ … }`, `Spot` a typedef). A cast [I0301] calls unnecessary is left to [I0301]: deleting both would leave the value's own type. Inside a generic, a call through a type is not reported (`b: Box<|T|> = Box<|T|>.make(v)`). The compiler checks a generic's body once per instantiation (once per set of type arguments it is used with), and an `impl` written for one instantiation alone (`impl Box<|I32|>`) can give `make` another return type there. So the annotation can repeat the type for one instantiation and be needed for another, while the advice is about the one line both share. The other shapes name their type in the text, which is the same for every instantiation, so they are reported, once per line however many instantiations check it.
+A type written where the line, or the place the value goes, already says it. It has two shapes, each with its own message.
 
-#### [H0701] A proposal to adopt `Option<|T|>` for a raw-pointer return value that can return null
-A function returning a raw pointer (`T@`) does `return null;` on some path, so a caller can forget to check for null. It is on by default, whatever is being built ([§5.3](#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg)). Out of scope: anything under `std/` (the foundational primitives), and a function with `#export` (the FFI boundary with C, where `Option<|T|>` is not ABI-compatible: C cannot read its memory layout).
-* **Fix**: return `Option<|T|>` instead, as `Option<|T|>.some(value)` / `Option<|T|>.none`. The `switch`'s exhaustiveness check then stops callers from forgetting to handle the absent value.
+* **A local's annotation that its initializer already says.** The same type is written at the initializer's head, as a struct literal (`p: Point = Point::{ … }`), a cast (`n: U8 = U8::v`), an enum variant (`k: Kind = Kind.small`) or a call made through the type (`xs: List<|I32|> = List<|I32|>.new(arena)`); or the annotation is `Bool` over `true` / `false`. Deleting it leaves the variable's type as it is. **Only a type the text shows is reported**: `count: Sz = items.len` is not, since there the annotation is the one place a reader without hover sees the type ("A type is redundant only where it is written twice" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)).
+* **An enum's type written at its variant where the place already gives it.** The places are the nine where the type name may be left out ("6.6.2 Where the type may be omitted" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md)): the right side of a declaration with a written type (`const usual: Kind = Kind.small`), the right side of `=` (`held = Option<|I32|>.some(3)`), a direct argument of a call (`kinds.push(Kind.small)`, a call through a function value's too), a variant's payload (`.some(Kind.small)`), a struct literal's field (`Slot::{ .kind = Kind.small }`), an array literal's element (`::{ Kind.small, Kind.big(3) }`), what a `catch` stands in for (`sized(n) catch Kind.small`, or after `fallback`), the right side of `return` (`return Option<|I32|>.some(n)` in a function returning `I32?`) and the right side of `throw` (`throw Fault.lost`); in each, either side of an `if … else` standing there too (`return Option<|I32|>.some(n) if ok else Option<|I32|>.none`). The variant's type is the one the place expects (a `T!E` function's `T` for a `return`, its `E` for a `throw`), so `.small` finds the same variant and the program does not change.
+* **Fix**: delete the type the editor dims: the annotation (`p: = Point::{ … }`; a `const` loses its `:` with it, `const k = Kind.small`), or the variant's type up to its `.` (`kinds.push(.small)`, `return .some(n)`, `throw .lost`, `catch .small`).
+* **Not reported**: an annotation doing work, such as a literal taking its type from it (`$i: Sz = 0`), a conversion it drives (`wide: I64 = small`) or a right side typed by it (`::{ … }`, `.small`); and another name for the type (`spot: Spot = Point::{ … }`, `Spot` a typedef). A cast [I0301] calls unnecessary is left to [I0301]: deleting both would leave the value's own type. Inside a generic, a call through a type is not reported (`b: Box<|T|> = Box<|T|>.make(v)`). The compiler checks a generic's body once per instantiation (once per set of type arguments it is used with), and an `impl` written for one instantiation alone (`impl Box<|I32|>`) can give `make` another return type there. So the annotation can repeat the type for one instantiation and be needed for another, while the advice is about the one line both share. The other shapes name their type in the text, which is the same for every instantiation, so they are reported, once per line however many instantiations check it.
+* **Not reported at a variant**: a declaration whose annotation is reported (`k: Kind = Kind.small` loses the annotation, so the line has one fix), and every place outside the nine, where the name stays: an inferred declaration (`k: = Kind.small`), an argument a generic infers its type from (`same(Kind.small)`), a comparison (`mode == Mode.on`), either side of an `if … else` standing outside the nine and a compound assignment such as `+=`. A struct literal keeps its type at these places too (`return Point::{ … }`).
+
+#### [H0303] An optional spelled out as `Option<|T|>`
+A type writes an optional in the long form (`Option<|I32|>`) where `I32?` says the same. The two are one type ("`T?` is sugar for `Option<|T|>`" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)), so one spelling keeps a reader from wondering whether they differ. It applies wherever a type is written: an annotation, a parameter, a return type, a field, a `typedef`'s right side and a type argument (`List<|Option<|F32|>|>`, even in an expression such as `List<|Option<|F32|>|>.create(arena)`).
+* **Fix**: write `T?` (`I32?`, `List<|F32?|>`). A result or a function type is grouped first: `(I32!Io_error)?`, `(fn(n: I32): I32)?`.
+* **Not reported**: an expression whose head is `Option` itself (`Option<|I32|>.none`, `Option<|I32|>.some(n)`), where `?` cannot stand; an `impl` target (`impl<|T|> Option<|T|>`); and another name for the type (a `typedef` of it).
+
+#### [H0701] A proposal to adopt `T?` for a raw-pointer return value that can return null
+A function returning a raw pointer (`T@`) does `return null;` on some path, so a caller can forget to check for null. It is on by default, whatever is being built ([§5.3](#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg)). Out of scope: anything under `std/` (the foundational primitives), and a function with `#export` (the FFI boundary with C, where `T?` is not ABI-compatible: C cannot read its memory layout).
+* **Fix**: return `T?` instead, as `.some(value)` / `.none`. The `switch`'s exhaustiveness check then stops callers from forgetting to handle the absent value.
 
 #### [H0801] A guard clause is recommended
-An `if` block always ends with a `return`, a `break` or the like, and an `else` block follows.
+An `if` block always leaves, so control never reaches the code after the `if` from it, and an `else` block follows. It leaves by a `return`, a `throw`, a `fallback`, a `break` or `continue` of a loop or of an enclosing label, a call declared not to return (`panic`), a `for` that never ends, or an inner `if` or `switch` all of whose branches leave.
+* **Not reported**: an `if` that a `break` to its own label leaves (`ui: if c`). `break ui` continues after the `if`, so without the `else` its body would run after the `break` as well, and a `break ui` inside the `else` would be left with no label.
 * **Fix**: the code after the `if` already acts as the `else`. Remove the `else` to reduce the indentation, into the "reject first and leave" shape.
 
 #### [H0802] A wrap at a call inside an argument

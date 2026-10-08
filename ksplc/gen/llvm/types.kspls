@@ -219,7 +219,8 @@ impl Genllvm_ctx
 
         info: = r.env.get_info(real_id)
 
-        switch info case .void_type
+        switch info
+        case .void_type
             return r.s("void")
         case .pointer(_base_id)
             // Modern LLVM (v15+) uses Opaque Pointers.
@@ -259,7 +260,8 @@ impl Genllvm_ctx
         real_id: = r.env.get_clean_real_type(type_id)
         if r.env.is_fn_ptr(real_id)
             return false // ptr
-        switch r.env.get_info(real_id) case .void_type
+        switch r.env.get_info(real_id)
+        case .void_type
             return false
         case .pointer(_base_id)
             return false
@@ -292,7 +294,8 @@ impl Genllvm_ctx
         //< taken from here: an `#align(N)` struct's N, and ksplc's own for a laid one (`is_laid`),
         //< whose packed type LLVM takes for byte-aligned. An array asks of its element.
         real_id: = r.env.get_clean_real_type(type_id)
-        switch r.env.get_info(real_id) case .array(elem_id, _size)
+        switch r.env.get_info(real_id)
+        case .array(elem_id, _size)
             return r.get_struct_align(elem_id)
         case .enum_type(def)
             // A tagged union's type aligns to 8 at most (its words are i64 at most).
@@ -343,7 +346,8 @@ impl Genllvm_ctx
         if depth >= max_llvm_type_depth
             return false
         real_id: = r.env.get_clean_real_type(type_id)
-        switch r.env.get_info(real_id) case .array(elem_id, _size)
+        switch r.env.get_info(real_id)
+        case .array(elem_id, _size)
             return r.is_laid(elem_id, depth + 1)
         case .result(b, e_id)
             // The same for a Result: by LLVM's alignments its `val` would sit right after the
@@ -374,7 +378,8 @@ impl Genllvm_ctx
             return idx
         $piece: I32 = 0
         $pos: Sz = 0
-        switch r.env.get_info(real_id) case .result(b, e_id)
+        switch r.env.get_info(real_id)
+        case .result(b, e_id)
             offs: Sz[3] = ::{ 0, r.sema.result_err_offset(real_id),
                 r.sema.result_val_offset(real_id) }
             sizes: Sz[3] = ::{ 1, r.sema.type_layout(e_id).size,
@@ -430,7 +435,8 @@ fn emit_complex_types(cg: Genllvm_ctx$@)
         cg.env.mangle_type_id_to(type_id, cg.scratch)
         m_slice: = cg.scratch.slice()
         if seen.admit(type_id)
-            switch info case .result(base_id, err_id)
+            switch info
+            case .result(base_id, err_id)
                 // A Result is the struct { is_err (i8), error_code, val }.
                 if cg.is_laid(type_id, 0)
                     emit_laid_result(cg, m_slice, type_id, base_id, err_id)
@@ -450,7 +456,8 @@ impl Ast_node
         if r == null
             return
 
-        switch r.kind_id case .k_decl_struct
+        switch r.kind_id
+        case .k_decl_struct
             r.emit_llvm_struct(cg)
         case .k_decl_enum
             r.emit_llvm_enum(cg)

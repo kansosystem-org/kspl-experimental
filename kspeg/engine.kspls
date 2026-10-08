@@ -266,10 +266,10 @@ impl Target
     pub fn parse_rule( //< parses the source from the start with that rule and returns the tree
         r: Self$@,
         name: U8[],
-    ): Node$@?Kspeg_signal
+    ): Node$@!Kspeg_signal
         r_id: = r.get_rule_id(name)
         if r_id == -1
-            throw Kspeg_signal.fatal("Rule not found")
+            throw .fatal("Rule not found")
         start: = r.pos
         // **A syntax error is read from a run that skips nothing.** A rule skipped by its first
         // byte records no label, so the skipping run's `expected …` comes up short. A run that
@@ -279,20 +279,21 @@ impl Target
         r.ran_twice = false
         if r.checks_first_byte
             root = r.run_rule(r_id, start, true) catch e
-                switch e case .fatal
+                switch e
+                case .fatal
                     throw e
                 default {}
                 fallback null
-            if root != null && r.leaves_text()?
+            if root != null && r.leaves_text()!
                 root = null
         if root == null
             r.ran_twice = r.checks_first_byte
-            root = r.run_rule(r_id, start, false)?
+            root = r.run_rule(r_id, start, false)!
         if root.children.len > 0
             return root.children.get(0)
         return null
 
-    priv fn leaves_text(r: Self$@): Bool?Kspeg_signal //<
+    priv fn leaves_text(r: Self$@): Bool!Kspeg_signal //<
         //< whether more than whitespace is left unread
         //<
         //< Caution: **Do not compare the position with the length alone.** A parse ends before the
@@ -300,10 +301,10 @@ impl Target
         //< would count as stopping short and be parsed twice.
         end: = r.pos
         defer r.pos = end
-        r.handle_space_skipping()?
+        r.handle_space_skipping()!
         return r.pos < r.source.len
 
-    priv fn run_rule(r: Self$@, r_id: I32, start: Sz, filtered: Bool): Node$@?Kspeg_signal //<
+    priv fn run_rule(r: Self$@, r_id: I32, start: Sz, filtered: Bool): Node$@!Kspeg_signal //<
         //< One run of that rule from `start`, under the Root node it returns
         //<
         //< Caution: **Start each run afresh**: the position, the failure record, the whitespace
@@ -324,10 +325,10 @@ impl Target
         r.fail.order_expected()
         return root
 
-    priv fn get_rule(r: Self$@, name: U8[]): Rule$@?Kspeg_signal //< looks up one rule by name
+    priv fn get_rule(r: Self$@, name: U8[]): Rule$@!Kspeg_signal //< looks up one rule by name
         r_id: = r.get_rule_id(name)
         if r_id == -1
-            throw Kspeg_signal.fatal("Rule not found in map")
+            throw .fatal("Rule not found in map")
         return r.rules.get(r_id).rule
 
     pub fn keywords_by_rule( //< every rule and the keywords inside it, except the synthesized one
@@ -348,7 +349,7 @@ impl Target
             result.push(r.arena.create(rk))
         return result
 
-    priv fn handle_space_skipping(r: Self$@): Void?Kspeg_signal
+    priv fn handle_space_skipping(r: Self$@): Void!Kspeg_signal
         if r.space_cache_valid && r.pos == r.space_cache_pos
             r.pos = r.space_cache_end
             return
@@ -372,12 +373,12 @@ impl Target
                     r.is_syntax_mode = prev_syn
                 r.is_suppressed = true
                 r.is_syntax_mode = false
-                try_parse(space_rule, r, null)?
+                try_parse(space_rule, r, null)!
         r.space_cache_pos = start
         r.space_cache_end = r.pos
         r.space_cache_valid = true
 
-priv fn try_parse(rule: Rule$@, ctx: Target$@, parent: Node$@): Bool?Kspeg_signal //<
+priv fn try_parse(rule: Rule$@, ctx: Target$@, parent: Node$@): Bool!Kspeg_signal //<
     //< Applies it once and returns whether it matched
     //<
     //< A `mismatch` returns `false`; a `fatal` is passed up.
@@ -385,13 +386,14 @@ priv fn try_parse(rule: Rule$@, ctx: Target$@, parent: Node$@): Bool?Kspeg_signa
     //< error turns into "this branch did not match": silently, inside a choice's dropped branch, an
     //< optional or a repetition, and it shows up far away as "input that should match does not".
     ok: = rule.parse(ctx, parent) catch e
-        switch e case .fatal(_msg)
+        switch e
+        case .fatal(_msg)
             throw e
         default {}
         fallback false
     return ok
 
-priv fn run_suppressed(ctx: Target$@, inner_rule: Rule$@): Bool?Kspeg_signal //<
+priv fn run_suppressed(ctx: Target$@, inner_rule: Rule$@): Bool!Kspeg_signal //<
     //< The helper and_pred and not_pred share: set is_suppressed and try inner_rule once
     //<
     //< Restoring ctx.pos differs per caller, so it is left to them.
@@ -399,15 +401,16 @@ priv fn run_suppressed(ctx: Target$@, inner_rule: Rule$@): Bool?Kspeg_signal //<
     // Caution: **Restore it in a `defer`** (the reason is in handle_space_skipping).
     defer ctx.is_suppressed = prev_sup
     ctx.is_suppressed = true
-    return try_parse(inner_rule, ctx, null)?
+    return try_parse(inner_rule, ctx, null)!
 
 priv fn resolve_rule(ctx: Target$@, rule: Rule$@) //< turns each reference into its rule's index
     if rule == null
         return
-    switch rule$ case .reference(name)
+    switch rule$
+    case .reference(name)
         r_id: = ctx.get_rule_id(name)
         if r_id >= 0
-            rule$ = Rule.resolved_ref(r_id)
+            rule$ = .resolved_ref(r_id)
         return
     default {}
     $kids: = List<|Rule$@|>.new(null)
@@ -417,7 +420,7 @@ priv fn resolve_rule(ctx: Target$@, rule: Rule$@) //< turns each reference into 
         resolve_rule(ctx, kid)
 
 impl Rule
-    priv fn parse_skippable(r: Self$@, ctx: Target$@, parent: Node$@): Bool?Kspeg_signal //<
+    priv fn parse_skippable(r: Self$@, ctx: Target$@, parent: Node$@): Bool!Kspeg_signal //<
         //< Tries it once as a skippable attempt (the step `*`, `+` and `?` share)
         //<
         //< Caution: The parse goes on when the attempt fails, so a failure **before** reading began
@@ -431,15 +434,15 @@ impl Rule
         // **Restore it in a `defer`** (the reason is in handle_space_skipping).
         defer ctx.fail.skippable_start = prev
         if ctx.is_syntax_mode
-            ctx.handle_space_skipping()?
+            ctx.handle_space_skipping()!
         ctx.fail.skippable_start = ctx.pos
         ctx.pos = saved
-        return try_parse(r, ctx, parent)?
+        return try_parse(r, ctx, parent)!
 
-    fn consume_while_progressing(r: Self$@, ctx: Target$@, parent: Node$@): Void?Kspeg_signal
+    fn consume_while_progressing(r: Self$@, ctx: Target$@, parent: Node$@): Void!Kspeg_signal
         for
             before_pos: = ctx.pos
-            ok: = r.parse_skippable(ctx, parent)?
+            ok: = r.parse_skippable(ctx, parent)!
             if !ok || ctx.pos == before_pos
                 break
 
@@ -447,7 +450,7 @@ impl Rule
         r: Self$@,
         ctx: Target$@,
         parent: Node$@, //< where the nodes go; null while matching only to test
-    ): Bool?Kspeg_signal
+    ): Bool!Kspeg_signal
         start_pos: = ctx.pos
         start_len: = parent.children.len if parent != null else 0
 
@@ -459,7 +462,7 @@ impl Rule
             // The position is kept here (the reason is at `depth_exceeded_pos`).
             ctx.depth_exceeded = true
             ctx.depth_exceeded_pos = start_pos
-            throw Kspeg_signal.fatal("nesting too deep")
+            throw .fatal("nesting too deep")
 
         result: = r.parse_impl(ctx, parent) catch e
             ctx.pos = start_pos
@@ -469,7 +472,7 @@ impl Rule
         return result
 
     priv fn parse_reference(r: Self$@, ctx: Target$@, parent: Node$@, r_id: I32, start_pos: Sz):
-        Bool?Kspeg_signal
+        Bool!Kspeg_signal
         rule_entry: = ctx.rules.get(r_id)
         name: = rule_entry.name
         is_void: = name.len > 0 && (name.ptr + 0)$ == '_'
@@ -488,7 +491,7 @@ impl Rule
         prof.calls += 1
         return r.parse_reference_impl(ctx, parent, r_id, start_pos, is_void, is_upper, prof)
     priv fn parse_reference_impl(_r: Self$@, ctx: Target$@, parent: Node$@, r_id: I32,
-        start_pos: Sz, is_void: Bool, is_upper: Bool, prof: Rule_prof$@): Bool?Kspeg_signal //<
+        start_pos: Sz, is_void: Bool, is_upper: Bool, prof: Rule_prof$@): Bool!Kspeg_signal //<
             //< Parses the rule r_id names, once parse_reference has counted the call
             //<
             //< parse_reference has already worked out is_void and is_upper, so the name is not
@@ -518,7 +521,7 @@ impl Rule
                     if parent != null && cached.node != null
                         parent.add_child(cached.node)
                     return true
-                throw Kspeg_signal.mismatch
+                throw .mismatch
 
         ctx.is_syntax_mode = rule_entry.skips_space
         ctx.is_suppressed = is_void || is_upper
@@ -578,27 +581,29 @@ impl Rule
                 .set(key,
                 Memo_val::{ .is_success = true, .end_pos = ctx.pos, .node = result_node })
         return true
-    priv fn parse_impl(r: Self$@, ctx: Target$@, parent: Node$@): Bool?Kspeg_signal
+    priv fn parse_impl(r: Self$@, ctx: Target$@, parent: Node$@): Bool!Kspeg_signal
         $start_pos: = ctx.pos
         val: Rule = r$
         $is_atomic: = false
 
-        switch val case .literal, .keyword_literal, .keyword_set, .wildcard, .char_class,
-            .reference, .resolved_ref
+        switch val
+        case .literal, .keyword_literal, .keyword_set, .wildcard, .char_class, .reference,
+            .resolved_ref
             is_atomic = true
         default {}
 
         if is_atomic && ctx.is_syntax_mode
-            ctx.handle_space_skipping()?
+            ctx.handle_space_skipping()!
             start_pos = ctx.pos
 
-        switch val case .literal(text)
+        switch val
+        case .literal(text)
             if ctx.source.starts_with(text, ctx.pos)
                 ctx.pos += text.len
                 ctx.add_node(parent, "Literal", text, start_pos)
                 return true
             ctx.track_fail(start_pos, text)
-            throw Kspeg_signal.mismatch
+            throw .mismatch
         case .keyword_set(set)
             // Every keyword consists only of `_Boundary`'s characters (checked when it is folded),
             // so a keyword with no boundary character after it means the whole extracted run is
@@ -624,7 +629,7 @@ impl Rule
                     ctx.source.sub(start_pos, end - start_pos), start_pos)
                 return true
             ctx.track_keywords_tried(set.order, set.order.len, start_pos)
-            throw Kspeg_signal.mismatch
+            throw .mismatch
         case .keyword_literal(text)
             if ctx.source.starts_with(text, ctx.pos)
                 saved_pos: = ctx.pos
@@ -642,7 +647,7 @@ impl Rule
                     prev_syn: = ctx.is_syntax_mode
                     ctx.is_syntax_mode = false
 
-                    try_parse(boundary_rule, ctx, null)?
+                    try_parse(boundary_rule, ctx, null)!
                     has_boundary = ctx.pos != lookahead_pos
 
                     ctx.is_suppressed = prev_sup
@@ -652,12 +657,12 @@ impl Rule
                 if has_boundary
                     ctx.pos = saved_pos
                     ctx.track_fail(start_pos, text)
-                    throw Kspeg_signal.mismatch
+                    throw .mismatch
 
                 ctx.add_node(parent, "Keyword" if ctx.is_syntax_mode else "Literal", text, start_pos)
                 return true
             ctx.track_fail(start_pos, text)
-            throw Kspeg_signal.mismatch
+            throw .mismatch
         case .wildcard
             if ctx.pos < ctx.source.len
                 text: = ctx.source.sub(ctx.pos, 1)
@@ -665,13 +670,13 @@ impl Rule
                 ctx.add_node(parent, "Wildcard", text, start_pos)
                 return true
             ctx.track_fail(start_pos, "any character")
-            throw Kspeg_signal.mismatch
+            throw .mismatch
         case .recover(stops)
             // **In a run that is not lenient it matches nothing**, which keeps the branch dead for
             // the compiler.
             if !ctx.is_lenient
                 ctx.track_fail(start_pos, "a statement")
-                throw Kspeg_signal.mismatch
+                throw .mismatch
             $i: = ctx.pos
             for i < ctx.source.len && stops.find_char(ctx.source[i]) < 0
                 i += 1
@@ -679,14 +684,14 @@ impl Rule
             // above it loop forever at the same position.
             if i == ctx.pos
                 ctx.track_fail(start_pos, "a statement")
-                throw Kspeg_signal.mismatch
+                throw .mismatch
             text: = ctx.source.sub(ctx.pos, i - ctx.pos)
             ctx.pos = i
             ctx.add_node(parent, "Broken", text, start_pos)
             return true
         case .sequence(rules)
             for i in Range.asc(rules.len)
-                rules.get(i).parse(ctx, parent)?
+                rules.get(i).parse(ctx, parent)!
             return true
         case .choice(rules)
             // **Once another branch reads the input, the dropped branch's failure no longer counts
@@ -696,33 +701,33 @@ impl Rule
             p0: = ctx.fail.max_fail_pos
             n0: = ctx.fail.expected_label_count
             for i in Range.asc(rules.len)
-                success: = try_parse(rules.get(i), ctx, parent)?
+                success: = try_parse(rules.get(i), ctx, parent)!
                 if success
                     if i > 0
                         ctx.fail.demote_expected_since(p0, n0)
                     return true
-            throw Kspeg_signal.mismatch
+            throw .mismatch
         case .zero_or_more(inner_rule)
-            inner_rule.consume_while_progressing(ctx, parent)?
+            inner_rule.consume_while_progressing(ctx, parent)!
             return true
         case .one_or_more(inner_rule)
-            inner_rule.parse(ctx, parent)?
-            inner_rule.consume_while_progressing(ctx, parent)?
+            inner_rule.parse(ctx, parent)!
+            inner_rule.consume_while_progressing(ctx, parent)!
             return true
         case .optional(inner_rule)
-            inner_rule.parse_skippable(ctx, parent)?
+            inner_rule.parse_skippable(ctx, parent)!
             return true
         case .and_pred(inner_rule)
             saved_pos: = ctx.pos
-            success: = run_suppressed(ctx, inner_rule)?
+            success: = run_suppressed(ctx, inner_rule)!
             ctx.pos = saved_pos
             if !success
-                throw Kspeg_signal.mismatch
+                throw .mismatch
             return true
         case .not_pred(inner_rule)
-            success: = run_suppressed(ctx, inner_rule)?
+            success: = run_suppressed(ctx, inner_rule)!
             if success
-                throw Kspeg_signal.mismatch
+                throw .mismatch
             return true
         case .char_class(ranges)
             if ctx.pos < ctx.source.len &&
@@ -732,7 +737,7 @@ impl Rule
                 ctx.add_node(parent, "Char_class", text, start_pos)
                 return true
             ctx.track_fail(start_pos, "character class")
-            throw Kspeg_signal.mismatch
+            throw .mismatch
         case .resolved_ref(r_id)
             // A rule that cannot begin with the next byte is not entered (`First_bytes` in
             // `rule.kspls`).
@@ -743,8 +748,8 @@ impl Rule
                 if !target.first.can_be_empty && (ctx.is_syntax_mode || !target.skips_space) &&
                     (ctx.pos >= ctx.source.len ||
                     !target.first.allows(ctx.source[ctx.pos]))
-                    throw Kspeg_signal.mismatch
-            return r.parse_reference(ctx, parent, r_id, start_pos)?
+                    throw .mismatch
+            return r.parse_reference(ctx, parent, r_id, start_pos)!
         case .reference(_name)
             // `load_rules` resolves every reference that names a rule, so one left names none.
-            throw Kspeg_signal.fatal("Undefined reference")
+            throw .fatal("Undefined reference")

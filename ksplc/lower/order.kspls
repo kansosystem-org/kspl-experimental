@@ -110,15 +110,16 @@ impl Ast_node
         //< What running this expression at another point of its statement could change
         //<
         //< Caution: **Count everything Lower moves into statements as `acts`** (`&&`, a
-        //< conditional, `catch`, `?`, a user operator): it already runs ahead of the expression
+        //< conditional, `catch`, `!`, a user operator): it already runs ahead of the expression
         //< around it.
         if r == null
             return .fixed
         if depth >= max_order_depth
             return .acts
-        switch r.kind_id case .k_integer, .k_float, .k_bool, .k_char, .k_string, .k_null,
-            .k_literal, .k_keyword, .k_empty, .k_type_expr, .k_type_path, .k_generic_path,
-            .k_expr_sizeof, .k_expr_offsetof, .k_enum_init, .k_implicit_enum
+        switch r.kind_id
+        case .k_integer, .k_float, .k_bool, .k_char, .k_string, .k_null, .k_literal, .k_keyword,
+            .k_empty, .k_type_expr, .k_type_path, .k_generic_path, .k_expr_sizeof, .k_expr_offsetof,
+            .k_enum_init, .k_implicit_enum
             return .fixed
         case .k_identifier, .k_expr_path
             return r.binding_order_class()
@@ -153,8 +154,8 @@ impl Ast_node
         op: = r.get_postfix_op()
         recv: = r.get_postfix_receiver()
         op_text: = op.text if op != null else ""
-        // A call, a `?` and a subscript (its bounds check stops the program) act.
-        if op_text.equals("(") || op_text.equals("?") || op_text.equals("[") ||
+        // A call, a `!` and a subscript (its bounds check stops the program) act.
+        if op_text.equals("(") || op_text.equals("!") || op_text.equals("[") ||
             r.def_node.is_fn_decl()
             return .acts
         if op_text.equals("@")
@@ -174,7 +175,8 @@ impl Ast_node
         //<
         if r == null || depth >= max_order_depth
             return false
-        switch r.kind_id case .k_integer, .k_char, .k_expr_sizeof, .k_expr_offsetof
+        switch r.kind_id
+        case .k_integer, .k_char, .k_expr_sizeof, .k_expr_offsetof
             return true
         case .k_identifier, .k_expr_path
             d: = r.def_node
@@ -194,7 +196,8 @@ impl Ast_node
         if d == null || d.sym_ptr == null
             return .reads
         sym: = Sema_symbol$@::d.sym_ptr
-        switch sym.kind case .variable
+        switch sym.kind
+        case .variable
             return .reads if sym.flags.is_mut else .fixed
         default
             return .fixed
@@ -205,7 +208,8 @@ impl Ast_node
         if d == null || d.sym_ptr == null
             return false
         sym: = Sema_symbol$@::d.sym_ptr
-        switch sym.kind case .variable
+        switch sym.kind
+        case .variable
             return true
         default
             return false

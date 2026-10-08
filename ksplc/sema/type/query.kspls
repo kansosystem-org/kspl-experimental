@@ -34,7 +34,7 @@ const max_alias_chain_depth: Sz = 1000 //<
 fn is_result_inner_field(name: U8[]): Bool //<
     //< Whether the name is one of the three fields inside a Result
     //<
-    //< **These are names not on KSPL's surface** — they are used only under `?` and `catch`, and
+    //< **These are names not on KSPL's surface** — they are used only under `!` and `catch`, and
     //< user code can neither write nor read them. The code that rejects them (`../body/dot.kspls`
     //< and `../body/struct_literal.kspls`) asks here.
     //< Note: The fields' order itself is in `../../gen/c/decl.kspls`. Here only the names are
@@ -58,7 +58,8 @@ impl sema_type_env.Env
         //< Strips one level of the immutability qualifier on this type itself
         //<
         //< The element's or pointee's is kept.
-        switch r.get_info(id) case .const_of(b)
+        switch r.get_info(id)
+        case .const_of(b)
             return b
         default
             return id
@@ -70,7 +71,8 @@ impl sema_type_env.Env
         //< copied to can be written. What a slice or a pointer points at is untouched — it is still
         //< the original value, whose immutability stays.
         stripped: = r.strip_const(id)
-        switch r.get_info(r.get_real_type(stripped)) case .array(b, sz)
+        switch r.get_info(r.get_real_type(stripped))
+        case .array(b, sz)
             return r.make_array(r.copy_value_type(b), sz)
         default
             return stripped
@@ -90,7 +92,8 @@ impl sema_type_env.Env
         //< It returns the type with the immutability qualifiers stripped at every nested level
         //<
         //< Aliases are not resolved (the reason is in same_shape_ignoring_const).
-        switch r.get_info(id) case .const_of(b)
+        switch r.get_info(id)
+        case .const_of(b)
             return r.strip_const_deep(b)
         case .pointer(b)
             sb: = r.strip_const_deep(b)
@@ -133,13 +136,16 @@ impl sema_type_env.Env
             return false
         ab: = r.strip_const(a)
         eb: = r.strip_const(e)
-        switch r.get_info(ab) case .pointer(b1)
-            switch r.get_info(eb) case .pointer(b2)
+        switch r.get_info(ab)
+        case .pointer(b1)
+            switch r.get_info(eb)
+            case .pointer(b2)
                 return r.is_const_compatible_at(b1, b2, depth + 1, limit)
             default
                 return false
         case .array(b1, s1)
-            switch r.get_info(eb) case .array(b2, s2)
+            switch r.get_info(eb)
+            case .array(b2, s2)
                 // A fixed-length array's **elements**' immutability is not matched: an array is
                 // always copied, so the copy's binding decides it ("The two axes of mutability" in
                 // docs/SPEC-language.md).
@@ -151,7 +157,8 @@ impl sema_type_env.Env
             default
                 return false
         case .fn_type(s1)
-            switch r.get_info(eb) case .fn_type(s2)
+            switch r.get_info(eb)
+            case .fn_type(s2)
                 return r.same_signature(s1, s2)
             default
                 return false
@@ -219,7 +226,8 @@ impl sema_type_env.Env
         //< Whether there is an immutability qualifier at any nested level
         //<
         //< It is the check for whether a view is read-only.
-        switch r.get_info(id) case .const_of(_b)
+        switch r.get_info(id)
+        case .const_of(_b)
             return true
         case .pointer(b)
             return r.has_const_deep(b)
@@ -252,7 +260,8 @@ impl sema_type_env.Env
         //< Seeing through drops an immutability qualifier too, so an immutable non-pointer such as
         //< `U8 immut` comes out true as well.
         r_id: = r.get_clean_real_type(id)
-        switch r.get_info(r_id) case .pointer(b)
+        switch r.get_info(r_id)
+        case .pointer(b)
             return b
         default
             return r_id
@@ -298,7 +307,8 @@ impl sema_type_env.Env
         //< docs/SPEC-language.md), and the type a table, a vtable or a definition is looked up by.
         $cur: = r.get_real_type(id)
         for _d in Range.asc(max_type_unwrap_depth)
-            switch r.get_info(cur) case .pointer(b), .const_of(b)
+            switch r.get_info(cur)
+            case .pointer(b), .const_of(b)
                 cur = r.get_real_type(b)
             default
                 return cur
@@ -320,7 +330,7 @@ impl sema_type_env.Env
             return false
         return r.strip_const(r.strip_ptr(ret_id)) == r.strip_const(node.type_id)
 
-    fn method_receiver_permission(r: Self$@, def_node: Ast_node$@): Option<|Receiver_permission|> //<
+    fn method_receiver_permission(r: Self$@, def_node: Ast_node$@): Receiver_permission? //<
         //< The permission the method declared at `def_node` demands of its receiver
         //<
         //< None where `def_node` has no signature with a first parameter. The call's check (`v.m()`
@@ -328,12 +338,12 @@ impl sema_type_env.Env
         //< both read it here, so the two cannot disagree.
         sig_node: = def_node.find_child(.k_type_fn_sig) if def_node != null else null
         if sig_node == null
-            return Option<|Receiver_permission|>.none
+            return .none
         $params: = base_ast_ext.Param_cursor.new(sig_node.find_child(.k_param_list), false)
         if first_param: = params.next()
             need: = r.receiver_permission(first_param.get_decl_type_node())
-            return Option<|Receiver_permission|>.some(need)
-        return Option<|Receiver_permission|>.none
+            return .some(need)
+        return .none
 
     priv fn receiver_permission(r: Self$@, p_type: Ast_node$@): Receiver_permission //<
         //< Reads the permission a method demands of its receiver from the type annotation `p_type`
@@ -369,8 +379,10 @@ impl sema_type_env.Env
         $t: = r.get_clean_real_type(base_tid)
         for r.is_pointer(t)
             t = r.get_clean_real_type(r.strip_ptr(t))
-        switch r.get_info(t) case .struct_type(def)
-            switch def.get_field(name) case .some(f)
+        switch r.get_info(t)
+        case .struct_type(def)
+            switch def.get_field(name)
+            case .some(f)
                 return f.type_id
             default
                 return I32::sema_type_env.Builtin_type_id.unknown
@@ -391,20 +403,23 @@ impl sema_type_env.Env
         //< ksplc/docs/DESIGN.md), or `is_result` is true (via get_clean_real_type) while
         //< `strip_result` strips nothing.
         r_id: = r.get_clean_real_type(id)
-        switch r.get_info(r_id) case .result(b, _e)
+        switch r.get_info(r_id)
+        case .result(b, _e)
             return b
         default
             return r_id
     fn strip_array(r: Self$@, id: I32): I32
         r_id: = r.get_clean_real_type(id)
-        switch r.get_info(r_id) case .array(b, _s)
+        switch r.get_info(r_id)
+        case .array(b, _s)
             return b
         default
             return r_id
 
     fn get_result_err_id(r: Self$@, id: I32): I32 //<
         //< Transparent to the outer immutability qualifier, as strip_result is
-        switch r.get_info(r.get_clean_real_type(id)) case .result(_b, e)
+        switch r.get_info(r.get_clean_real_type(id))
+        case .result(_b, e)
             return e
         default
             return I32::sema_type_env.Builtin_type_id.i32_type
@@ -420,14 +435,16 @@ impl sema_type_env.Env
     fn is_result(r: Self$@, id: I32): Bool
         return r.get_info(r.get_clean_real_type(id)).is_result()
     fn array_len(r: Self$@, id: I32): I32 //< a fixed-length array's element count (else 0)
-        switch r.get_info(r.get_clean_real_type(id)) case .array(_b, size)
+        switch r.get_info(r.get_clean_real_type(id))
+        case .array(_b, size)
             return size
         default
             return 0
     fn is_scalar_enum(r: Self$@, id: I32): Bool //< whether it is an enum with no payload anywhere
         //<
         //< Both backends carry one as an integer, not as a `{ tag, payload }`.
-        switch r.get_info(r.get_clean_real_type(id)) case .enum_type(def)
+        switch r.get_info(r.get_clean_real_type(id))
+        case .enum_type(def)
             return def.is_scalar()
         default
             return false
@@ -435,19 +452,21 @@ impl sema_type_env.Env
         //<
         //< The real type, where a scalar enum stands for its base type.
         real_id: = r.get_clean_real_type(id)
-        switch r.get_info(real_id) case .enum_type(def)
+        switch r.get_info(real_id)
+        case .enum_type(def)
             if def.is_scalar()
                 return r.get_clean_real_type(def.base_type_id)
         default {}
         return real_id
-    fn trait_def_of_receiver(r: Self$@, id: I32): Option<|Trait_def$@|> //<
+    fn trait_def_of_receiver(r: Self$@, id: I32): Trait_def$@? //<
         //< The trait a method call's receiver of type id is, through any pointer levels
         //<
         //< None where it is not a trait: then the call is a direct one, not through a vtable.
-        switch r.get_info(r.get_real_type(r.strip_ptr_full(id))) case .trait_type(d)
-            return Option<|Trait_def$@|>.some(d)
+        switch r.get_info(r.get_real_type(r.strip_ptr_full(id)))
+        case .trait_type(d)
+            return .some(d)
         default
-            return Option<|Trait_def$@|>.none
+            return .none
 
     fn const_elem_of(r: Self$@, id: I32): Bool //<
         //< Whether the element descended to by a subscript (`[i]`) is immutable
@@ -511,7 +530,8 @@ impl sema_type_env.Env
     fn get_primitive_bit_size(r: Self$@, id: I32): I32 //<
         //< The bit count of a value on the machine this compile is for (`Sz`'s is the machine's)
         real_id: = r.get_clean_real_type(id)
-        switch real_id case I32::sema_type_env.Builtin_type_id.size_type
+        switch real_id
+        case I32::sema_type_env.Builtin_type_id.size_type
             return I32::(base_target.current().sz_bytes * 8)
         case I32::sema_type_env.Builtin_type_id.i64_type,
             I32::sema_type_env.Builtin_type_id.u64_type,
@@ -556,7 +576,8 @@ impl sema_type_env.Env
 
         entry: = r.id_to_type.get(real_id)
         if entry != null
-            switch entry.info case .enum_type(def)
+            switch entry.info
+            case .enum_type(def)
                 if def.is_scalar()
                     return true
             default {}
@@ -580,7 +601,8 @@ impl sema_type_env.Env
         return I32::sema_type_env.Builtin_type_id.unknown
 
     priv fn scalar_base(r: Self$@, id: I32): I32
-        switch r.get_info(id) case .enum_type(d)
+        switch r.get_info(id)
+        case .enum_type(d)
             if d.is_scalar()
                 return r.get_real_type(d.base_type_id)
         default {}
@@ -626,7 +648,8 @@ impl sema_type_env.Env
         return false
 
     priv fn strip_alias(r: Self$@, id: I32): I32
-        switch r.get_info(id) case .alias_type(b)
+        switch r.get_info(id)
+        case .alias_type(b)
             return b
         default
             return id

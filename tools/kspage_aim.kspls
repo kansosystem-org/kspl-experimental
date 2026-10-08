@@ -170,7 +170,7 @@ fn write_page( //< writes the page for the URL, readable by its owner alone, and
     open_url: U8[], //< the URL to move on to, token included
     dir: U8[], //< the folder it goes in
     arena: Arena$@, //< where the path goes
-): U8[]?fs.Fs_error
+): U8[]!fs.Fs_error
     $text: = Str_builder.new()
     defer text.free()
     return fs.write_unique(dir, page_prefix, page_ext, page_text(open_url, text@), arena)
@@ -208,7 +208,7 @@ fn sweep_pages(dir: U8[], now: I64, arena: Arena$@) //< removes the pages handed
         if now - info.mtime > page_keep_s
             fs.remove_path(path) catch {}
 
-fn write_owned(path: U8[], data: U8[], arena: Arena$@): Void?fs.Fs_error //<
+fn write_owned(path: U8[], data: U8[], arena: Arena$@): Void!fs.Fs_error //<
     //< Replaces a file with one only its owner may read
     //<
     //< **The note and the log hold the token as the page does**, so they are written the same way.
@@ -216,10 +216,10 @@ fn write_owned(path: U8[], data: U8[], arena: Arena$@): Void?fs.Fs_error //<
     //< had, and a reader that opened it before keeps reading what is written into it.
     dir: = parent_of(path)
     name: = sys.get_file_name(path)
-    fresh: = fs.write_unique(dir, arena.text().s(name).c('-').take(), ".new", data, arena)?
+    fresh: = fs.write_unique(dir, arena.text().s(name).c('-').take(), ".new", data, arena)!
     fs.rename_path(fresh, path) catch
         fs.remove_path(fresh) catch {}
-        throw fs.Fs_error.operation_failed
+        throw .operation_failed
 
 priv const max_records: Sz = 8 //< the cap on the records listed in the note
     //<

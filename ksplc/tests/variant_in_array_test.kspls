@@ -1,0 +1,42 @@
+//< An enum's `.variant` written as an array literal's element takes the element's type
+//<
+//< The element expects the immutable form of its type (`Kind immut`), which names no enum, so the
+//< variant is looked up past that mark and past an alias. Each shape is read back by value.
+import "std/verdict"
+
+priv enum Kind
+    small
+    big(n: I32)
+
+priv typedef Sort = Kind
+
+priv const fixed: Kind[2] = ::{ .big(7), .small }
+
+impl Kind
+    priv fn size(r: Self): I32 //< the payload, or 0 for `small`
+        switch r
+        case .big(n)
+            return n
+        case .small
+            return 0
+
+fn test_variant_in_array()
+    verdict.start("[enum] a variant written short in an array literal test...")
+    $local: Kind[2] = ::{ .small, .big(3) }
+    typed: = Kind[2]::{ .big(4), .small }
+    slice: = Kind[]::{ .big(5) }
+    aliased: Sort[1] = ::{ .big(6) }
+    held: Kind?[2] = ::{ .some(.big(8)), .none }
+    local[0] = .big(1)
+    assert(local[0].size() == 1 && local[1].size() == 3, "a local's written type")
+    assert(typed[0].size() == 4 && typed[1].size() == 0, "the literal's own type")
+    assert(slice[0].size() == 5, "a slice literal")
+    assert(aliased[0].size() == 6, "an alias of the enum")
+    assert(fixed[0].size() == 7 && fixed[1].size() == 0, "a top-level const")
+    $inner: = 0
+    switch held[0]
+    case .some(k)
+        inner = k.size()
+    case .none {}
+    assert(inner == 8 && held[1].is_none(), "a payload inside an element")
+    verdict.pass("")

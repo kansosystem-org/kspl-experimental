@@ -132,7 +132,7 @@ impl<|T|> Queue<|T|>
         r.count += 1
         task.wake(Void$@::r.count@, false)
         return true
-    fn recv_for(r: Self$@, ticks: U64): Option<|T|> //< recv with a timeout
+    fn recv_for(r: Self$@, ticks: U64): T? //< recv with a timeout
         //<
         //< some if something arrived, none if it stayed empty until the timeout.
         assert(ticks > 0,
@@ -143,13 +143,13 @@ impl<|T|> Queue<|T|>
         for r.count == 0
             _cur: = task.require_current()
             if task.current_tick() >= deadline
-                return Option<|T|>.none
+                return .none
             st = task.block_and_rearm_until(Void$@::r.count@, deadline, st)
         v: = (r.buf + r.head)$
         r.head = (r.head + 1) % r.cap
         r.count -= 1
         task.wake(Void$@::r.cap@, false)
-        return Option<|T|>.some(v)
+        return .some(v)
     fn try_send(r: Self$@, v: T): Bool //< send's non-blocking version
         //<
         //< If it is full it returns false at once. An ISR cannot block, so an ISR always sends with
@@ -163,18 +163,18 @@ impl<|T|> Queue<|T|>
         r.count += 1
         task.wake(Void$@::r.count@, false)
         return true
-    fn try_recv(r: Self$@): Option<|T|> //< recv's non-blocking version
+    fn try_recv(r: Self$@): T? //< recv's non-blocking version
         //<
         //< If it is empty it returns none at once (safe from an ISR too).
         st: = task.irq_save()
         defer task.irq_restore(st)
         if r.count == 0
-            return Option<|T|>.none
+            return .none
         v: = (r.buf + r.head)$
         r.head = (r.head + 1) % r.cap
         r.count -= 1
         task.wake(Void$@::r.cap@, false)
-        return Option<|T|>.some(v)
+        return .some(v)
 
 // ============================ The priority-inheriting mutex ============================
 struct Mutex //<
@@ -329,11 +329,10 @@ impl Event
                 return cur
             _cur: = task.require_current()
             st = task.block_and_rearm(Void$@::r, st)
-    fn wait_for(r: Self$@, wanted: U32, mode: Event_mode, clear_on_exit: Bool, ticks: U64):
-        Option<|U32|> //<
-            //< wait with a timeout: some (the flags when it held), or none on the timeout
-            //<
-            //< To check without waiting, use `get` (there is no `wait_for(…, 0)`).
+    fn wait_for(r: Self$@, wanted: U32, mode: Event_mode, clear_on_exit: Bool, ticks: U64): U32? //<
+        //< wait with a timeout: some (the flags when it held), or none on the timeout
+        //<
+        //< To check without waiting, use `get` (there is no `wait_for(…, 0)`).
         assert(ticks > 0, "Event.wait_for: ticks must be greater than 0 (read get() to poll)")
         $st: = task.irq_save()
         defer task.irq_restore(st)
@@ -345,10 +344,10 @@ impl Event
             if satisfied
                 if clear_on_exit
                     r.bits &= ~wanted
-                return Option<|U32|>.some(cur)
+                return .some(cur)
             _cur: = task.require_current()
             if task.current_tick() >= deadline
-                return Option<|U32|>.none
+                return .none
             st = task.block_and_rearm_until(Void$@::r, deadline, st)
     fn set(r: Self$@, set: U32) //<
         //< Sets the named bits and wakes every waiter

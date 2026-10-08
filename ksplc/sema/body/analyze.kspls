@@ -62,7 +62,7 @@ impl Sema_ctx
             return
         r.clear_scratch()
             .s("main() must return nothing, an integer (used as the process exit code), or a Result \
-                of either ('Void?E' / 'I32?E'), but returns '\{r.env.get_str(ret_id)\}'. A value of \
+                of either ('Void!E' / 'I32!E'), but returns '\{r.env.get_str(ret_id)\}'. A value of \
                 this type cannot become an exit code, so it would be silently discarded.")
         r.err(main_sym.node, r.scratch.slice())
 
@@ -72,7 +72,7 @@ impl Sema_ctx
         //< A `main` (the program that links the library has its own), an `#export` variable or
         //< constant (a DLL's data needs a mark on its user's side that no header can choose), and
         //< an input exporting no function (the library would hold nothing a caller can reach).
-        if r.suppress_errors || !base_core.config.library
+        if r.suppress_errors || !base_core.is_library()
             return
         if main_sym: = r.env.find_main_symbol()
             r.err(main_sym.node,
@@ -169,7 +169,8 @@ impl Sema_ctx
                 continue
 
             $kind_str: U8$[] = "symbol"
-            switch sym.kind case .function(_v)
+            switch sym.kind
+            case .function(_v)
                 kind_str = "function"
             case .constant
                 kind_str = "constant"
@@ -256,7 +257,7 @@ impl Ast_node
         c.warn(r, c.scratch.slice())
 
     fn lint_nullable_pointer_return(r: Self$@, c: Sema_ctx$@, block: Ast_node$@, base_ret_id: I32) //<
-        //< [H0701] Suggests Option<|T|> where a function returns a raw pointer that can be null
+        //< [H0701] Suggests `T?` where a function returns a raw pointer that can be null
         //<
         //< It is a Hint, not an Information: existing code often returns null for "not found", and
         //< an Information would break CI's gate that requires zero items.
@@ -270,8 +271,8 @@ impl Ast_node
             return
         c.clear_scratch()
             .s("[H0701] Function '\{c.fn_ctx.name\}' can return a null pointer ('return null' on \
-                some path). Consider returning 'Option<|T|>' instead so the compiler forces callers \
-                to handle the no-value case explicitly.")
+                some path). Consider returning 'T?' instead so the compiler forces callers to \
+                handle the no-value case explicitly.")
         c.hint(r, c.scratch.slice())
 
     fn contains_return_null(r: Self$@): Bool //<
@@ -286,47 +287,49 @@ impl Ast_node
                 return true
         return false
 
-    fn is_guaranteed_to_leave(r: Self$@, from_catch: Bool): Bool //<
+    fn is_guaranteed_to_leave(r: Self$@, any_exit: Bool): Bool //<
         //< Whether control cannot fall off the end of `r`
         //<
-        //< **A catch block has three exits that a function body lacks**: `fallback` passes the
-        //< value out, and `break` / `continue` leave for the enclosing loop ("Catching an error
-        //< (`catch`)" in `../../../docs/SPEC-language.md`). `from_catch` says which set counts.
+        //< **Two questions, two sets of exits.** Without `any_exit` (the missing-return check: does
+        //< C get a `return`) only `return`, `throw` and an endless loop count. With it (a catch
+        //< block, and [H0801] of an `if` branch: can control reach what follows) `fallback`,
+        //< `break`, `continue` and a call declared not to return count too.
         // **Control continues after a statement a `break` leaves**, whatever its inside does:
         // `blk: { if c { break blk; } return 1; }` can still reach the end.
         if r == null || r.is_left_by_break()
             return false
-        switch r.kind_id case .k_stmt_return, .k_stmt_throw
+        switch r.kind_id
+        case .k_stmt_return, .k_stmt_throw
             return true
         case .k_stmt_fallback, .k_stmt_break, .k_stmt_continue
-            return from_catch
+            return any_exit
         case .k_stmt_loop
             // **Control never leaves a loop with no condition and no `break`** (`con.exit(); for
             // {}` is how a freestanding probe stops), in a function body as in a catch block.
             return r.is_endless_loop()
         case .k_stmt_expr
-            // **A call declared not to return ends the block.** Only a catch block asks this
-            // (whether the value is passed out); a function body asks whether C gets a `return`.
-            return from_catch && r.children.len > 0 && r.get_child(0).is_noreturn_call()
+            // **A call declared not to return ends the block.** Only `any_exit` asks this; a
+            // function body asks whether C gets a `return`.
+            return any_exit && r.children.len > 0 && r.get_child(0).is_noreturn_call()
         case .k_stmt_block
             for child in r.children
-                if child.is_guaranteed_to_leave(from_catch)
+                if child.is_guaranteed_to_leave(any_exit)
                     return true
             return false
         case .k_stmt_if
             then_block: = r.get_if_then_block()
             else_block: = r.get_if_else_block()
             return then_block != null && else_block != null &&
-                then_block.is_guaranteed_to_leave(from_catch) &&
-                else_block.is_guaranteed_to_leave(from_catch)
+                then_block.is_guaranteed_to_leave(any_exit) &&
+                else_block.is_guaranteed_to_leave(any_exit)
         case .k_stmt_match
-            return r.ret_stmt_match(from_catch)
+            return r.ret_stmt_match(any_exit)
         case .k_stmt_labeled_block
-            return r.children.len > 1 && r.get_child(1).is_guaranteed_to_leave(from_catch)
+            return r.children.len > 1 && r.get_child(1).is_guaranteed_to_leave(any_exit)
         default
             return false
 
-    fn ret_stmt_match(r: Self$@, from_catch: Bool): Bool //<
+    fn ret_stmt_match(r: Self$@, any_exit: Bool): Bool //<
         //< Whether every case of the switch, its default included, is sure to leave.
         //<
         //< Note: has_default needs no check. sema/body/match.kspls requires 'default' on a non-enum
@@ -341,7 +344,7 @@ impl Ast_node
                 for $j: = i + 1; j < r.children.len; j += 1
                     c2: = r.get_child(j)
                     if c2.kind_id == .k_stmt_block
-                        has_ret = c2.is_guaranteed_to_leave(from_catch)
+                        has_ret = c2.is_guaranteed_to_leave(any_exit)
                         break
                     if c2.is_keyword("case") || c2.is_keyword("default")
                         break

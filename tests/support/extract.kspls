@@ -2,11 +2,18 @@
 //<
 //< **Each suite is a file of its own**, as every other name in `mk/test.mk`'s table is, so the
 //< two share this body rather than one file taking flags.
+//<
+//< **A package's suites run apart**, side by side, each a run of its own under the usual time limit
+//< (`verdict.default_timeout_ms`): one limit over the whole `make test` grows too short as the
+//< package grows. A package names them as `ksplc/Makefile` does: `SUITES` lists them, `make
+//< test-<name>` runs one, and `make test SUITES=` runs the rest of `make test`.
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
+import "std/io"
 import "std/mem" { Arena }
 import "std/str" // `arena.text()` and `trim_spaces`
+import "std/subproc"
 import "std/sys"
 import "std/verdict"
 import "tests/support/harness"
@@ -55,14 +62,17 @@ priv fn copy_package(dir: U8[], to: U8[]): Bool //<
     return rels.len > 0
 
 priv fn make_in(copy: U8[], deps: U8[], target: U8[], more: U8[][], arena: Arena$@):
-    verdict.Run_out //<
-        //< Runs the copy's own `make <target>`
-        //<
-        //< It passes make the compiler, `std`, where its dependencies are, a scratch folder beside
-        //< the copy (a folder inside it would belong to the package), and `more`.
-        //<
-        //< Caution: **Set both paths again every time**, or the caller's leftovers let a run that
-        //< should find nothing pass.
+    verdict.Run_out //< runs the copy's own `make <target>` (`make_args`)
+    return harness.make(make_args(copy, deps, target, more, arena))
+
+priv fn make_args(copy: U8[], deps: U8[], target: U8[], more: U8[][], arena: Arena$@): U8[][] //<
+    //< The arguments for the copy's own `make <target>`
+    //<
+    //< They pass make the compiler, `std`, where its dependencies are, a scratch folder beside the
+    //< copy (a folder inside it would belong to the package), and `more`.
+    //<
+    //< Caution: **Set both paths again every time**, or the caller's leftovers let a run that
+    //< should find nothing pass.
     sys.set_env("KSPLC_STD_DIR", harness.std_dir())
     if deps.len > 0
         sys.set_env("KSPLC_PKG_SRC_DIR", deps)
@@ -76,7 +86,29 @@ priv fn make_in(copy: U8[], deps: U8[], target: U8[], more: U8[][], arena: Arena
     args.push(arena.text().s("SCRATCH=\{scratch\}").take())
     for a in more
         args.push(a)
-    return harness.make(args.slice())
+    return args.slice()
+
+priv const suites_mk: U8[] = "kanso-extract-suites: ; @echo $(SUITES)\n" //<
+    //< The makefile read after the copy's own, to ask it for its `SUITES`
+
+priv fn suites_of(copy: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< The suites the copy's `Makefile` names in `SUITES`; empty where it names none
+    //<
+    //< **make answers**, reading a second makefile placed beside the copy (one inside it would
+    //< belong to the package).
+    $out: = List<|U8[]|>.new(arena)
+    mk: = fs.join(sys.get_dir_name(copy), "suites.mk", arena)
+    io.write_file(mk, suites_mk) catch
+        return out
+    r: = harness
+        .make(U8[][]::{ "-C", copy, "--no-print-directory", "-s", "-f", "Makefile", "-f", mk,
+        "kanso-extract-suites" })
+    if r.code != 0
+        return out
+    for w in r.out.trim_spaces().split(' ', arena)
+        if w.trim_spaces().len > 0
+            out.push(w.trim_spaces())
+    return out
 
 priv fn offers(copy: U8[], target: U8[]): Bool //< whether the copy's `Makefile` holds that target
     //<
@@ -126,12 +158,25 @@ priv fn case_alone(dir: U8[], arena: Arena$@) //<
         h: = make_in(copy, uses, "self-host", U8[][]::{}, arena)
         verdict.check(arena.text().s("\{dir\} rebuilds itself from the copy").take(), h.code == 0,
             h.out)
-    // **The checks run side by side** (CI runs ksplc's suites here, the longest wait otherwise);
-    // each line carries its suite's name, so interleaving stays readable.
+    // **The rest of `make test` goes first, then the suites side by side** (CI runs ksplc's suites
+    // here, the longest wait otherwise), each its own run and check.
     jobs: = arena.text().s("-j\{verdict.jobs()\}").take()
-    r: = make_in(copy, uses, "test", U8[][]::{ jobs }, arena)
+    r: = make_in(copy, uses, "test", U8[][]::{ jobs, "SUITES=" }, arena)
     if verdict.check(name, r.code == 0, r.out)
         relay_skips(dir, r.out, arena)
+    suites: = suites_of(copy, arena)
+    $items: = List<|subproc.Job|>.new(arena)
+    for s in suites
+        target: = arena.text().s("test-\{s\}").take()
+        items
+            .push(subproc.Job::{ .argv = harness
+            .make_argv(make_args(copy, uses, target, U8[][]::{}, arena)), .cwd = "" })
+    outs: = harness.run_all(items.slice(), arena.text().s("extract_\{dir\}").take())
+    for i in Range.asc(outs.len)
+        o: = outs.get(i)
+        passed: = arena.text().s("\{dir\}'s suite \{suites.get(i)\} passes from the copy").take()
+        if verdict.check(passed, o.code == 0, o.out)
+            relay_skips(dir, o.out, arena)
     // The seeds are the repository's files, as `make test-<name>-fuzz` passes them, so a finding
     // repeats from the same two numbers.
     if offers(copy, "test-fuzz")
@@ -147,7 +192,7 @@ priv fn case_alone(dir: U8[], arena: Arena$@) //<
     fs.remove_path(fs.join(copy, taken, arena)) catch
         verdict.check(proof, false, arena.text().s("cannot take \{taken\} away").take())
         return
-    lost: = make_in(copy, uses, "test", U8[][]::{}, arena)
+    lost: = make_in(copy, uses, "test", U8[][]::{ "SUITES=" }, arena)
     verdict.check(proof, lost.code != 0, lost.out)
 
 fn run(only: U8[], except: U8[]): I32 //<

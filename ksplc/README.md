@@ -173,7 +173,7 @@ The design is chapter 1 of [`ksplc/docs/DESIGN.md`](docs/DESIGN.md); the rules f
 * [`worker.kspls`](lsp/worker.kspls) — builds the state a request is answered from, and routes each method from one table.
 * [`state.kspls`](lsp/state.kspls) — what lasts between requests (the open documents' texts, the analysed state, the arena's rewind point).
 * [`msg.kspls`](lsp/msg.kspls) — reads and writes the JSON-RPC messages.
-* Each answer has its own file, reading the state alone, never the dispatch: navigation ([`nav.kspls`](lsp/nav.kspls)), how a declaration's types and signature are spelt ([`spell.kspls`](lsp/spell.kspls)), hover ([`hover.kspls`](lsp/hover.kspls)), completion ([`complete.kspls`](lsp/complete.kspls)), references and renaming ([`uses.kspls`](lsp/uses.kspls)), the call hierarchy ([`call_hier.kspls`](lsp/call_hier.kspls)), semantic tokens (the colouring of each word by what it is, [`semtok.kspls`](lsp/semtok.kspls)), and which files are in the workspace ([`workspace.kspls`](lsp/workspace.kspls)).
+* Each answer has its own file, reading the state alone, never the dispatch: which node a position stands on ([`position.kspls`](lsp/position.kspls)), navigation ([`nav.kspls`](lsp/nav.kspls)), how a declaration's types and signature are spelt ([`spell.kspls`](lsp/spell.kspls)), hover ([`hover.kspls`](lsp/hover.kspls)), completion ([`complete.kspls`](lsp/complete.kspls)), references and renaming ([`uses.kspls`](lsp/uses.kspls)), the call hierarchy ([`call_hier.kspls`](lsp/call_hier.kspls)), semantic tokens (the colouring of each word by what it is, [`semtok.kspls`](lsp/semtok.kspls)), and which files are in the workspace ([`workspace.kspls`](lsp/workspace.kspls)).
 
 ```sh
 make test-lsp   # starts the server once and drives every request against it
@@ -206,7 +206,7 @@ What `ksplc fmt` and `--style` promise is [`ksplc/docs/SPEC-tools.md`](docs/SPEC
 | :-- | :-- | :-- |
 | [`keywords.kspls`](tools/keywords.kspls) | Derives the keyword list from the grammar | — |
 | [`surface.kspls`](tools/surface.kspls) | The record of the API a package offers | `--emit-surface=` |
-| [`interface.kspls`](tools/interface.kspls) | A library's interface, a C header or an `extern "C"` block, from its `#export` functions | `--emit-interface=` |
+| [`interface.kspls`](tools/interface.kspls) | A library's interface, a C header or an `extern "C"` block, from its `#export` functions | `--library=` |
 | [`doc.kspls`](tools/doc.kspls) | What a file, an entry or a folder publishes, rendered from the source as the reference to read | `ksplc doc` |
 | [`explain.kspls`](tools/explain.kspls) | Prints a diagnostic code's section of the tools specification | `ksplc explain` |
 | [`run.kspls`](tools/run.kspls) | Compiles, links and runs a program in one command | `ksplc run` |
@@ -288,7 +288,6 @@ Rules for every fixture folder:
 
 **Each file near the line cap, and how it splits.** `tests/negative/deep_*` is material that confirms a limit itself, so once split, the test would no longer hold (the check excludes it by name).
 
-* [`ksplc/tests/suite/fmt_test.kspls`](tests/suite/fmt_test.kspls): what splits out is the material: the `src_*` constants, pairs of an input and its expected output, which are data read only by the cases below them. Where it goes is a new `fmt_material.kspls` under `ksplc/tests/support/`.
 * [`ksplc/tests/suite/std_dir_test.kspls`](tests/suite/std_dir_test.kspls): what splits out is the band of a package that names itself (`[package]` in its folder's `ksplc.cfg`: the `named_*` material and the cases on it), which asks nothing about where `std` is. Where it goes is a new `std_dir_named.kspls` under `ksplc/tests/support/`. The helpers both halves call (`case_dir`, `run_exe` and `ksplc_env`) go down with it, and the suite imports them back.
 
 **How to choose the cut is "Choosing where to split a file" in [`docs/DESIGN.md`](../docs/DESIGN.md).** This package adds two constraints of its own:

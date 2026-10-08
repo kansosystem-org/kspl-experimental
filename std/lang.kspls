@@ -77,16 +77,16 @@ pub struct Panic_info //< what a panic in the previous run left behind, for this
 
 // It clears the record as it reads it; otherwise it is reported again on the next start.
 #cfg(freestanding)
-pub fn take_panic_record(): Option<|Panic_info|> //< the panic the previous run left, if any
+pub fn take_panic_record(): Panic_info? //< the panic the previous run left, if any
     if _panic_rec.magic != panic_magic
-        return Option<|Panic_info|>.none
+        return .none
     // Caution: **Report a missing fragment as a length of 0** (the stack was not read, so claiming
     // a fragment makes the reader see stale values).
     words: = panic_stack_words if _panic_rec.sp != 0 else 0
     info: = Panic_info::{ .msg = U8$[]::{ .ptr = _panic_rec.msg[0]@, .len = _panic_rec.msg_len },
         .sp = _panic_rec.sp, .stack_len = words }
     _panic_rec.magic = 0
-    return Option<|Panic_info|>.some(info)
+    return .some(info)
 
 #cfg(freestanding)
 pub fn panic_stack_word( //< one word of the kept stack
@@ -214,14 +214,15 @@ impl Panic_msg
 // ============================ Option ============================ Puts "is there a value or not"
 // in the type. Only a switch can take the value out, and the exhaustiveness check makes a missing
 // "absent" case a compile error.
-// For shared ownership use Rc/Arc (std/refcount); to propagate a failure use `?E`.
+// For shared ownership use Rc/Arc (std/refcount); to propagate a failure use `!E`.
 pub enum Option<|T|> //< a value that may be absent; the `switch` forces the absent case
     some(value: T) //< there is a value
     none //< there is no value
 
 impl<|T|> Option<|T|>
     pub fn is_some(r: Self): Bool //< whether there is a value
-        switch r case .some(_)
+        switch r
+        case .some(_)
             return true
         case .none
             return false
@@ -233,7 +234,8 @@ impl<|T|> Option<|T|>
         r: Self,
         alt: T, //< what is returned if there is no value
     ): T
-        switch r case .some(v)
+        switch r
+        case .some(v)
             return v
         case .none
             return alt
@@ -242,7 +244,8 @@ impl<|T|> Option<|T|>
         r: Self,
         alt: fn(): T, //< a plain function pointer, which captures nothing
     ): T
-        switch r case .some(v)
+        switch r
+        case .some(v)
             return v
         case .none
             return alt()
@@ -252,22 +255,24 @@ pub fn map<|T, U|>( //< applies a function to the value, if there is one
     //< **It is a free function, so write both type arguments** (`map<|I32, Sz|>(o, f)`). A method
     //< with its own type parameter (`fn map<|U|>`) would work as well, as `std/seq`'s `select` does
     //< ("A name on the impl that the receiver does not fix" in `../docs/DESIGN.md`).
-    o: Option<|T|>, //< the value that may be absent
+    o: T?, //< the value that may be absent
     f: fn(x: T): U, //< what the value becomes, if there is one
-): Option<|U|> //< `f`'s result, or none if `o` is none
-    switch o case .some(v)
-        return Option<|U|>.some(f(v))
+): U? //< `f`'s result, or none if `o` is none
+    switch o
+    case .some(v)
+        return .some(f(v))
     case .none
-        return Option<|U|>.none
+        return .none
 
 pub fn and_then<|T, U|>( //< chains a step that may itself return nothing
-    o: Option<|T|>, //< the value that may be absent
-    f: fn(x: T): Option<|U|>, //< the next step, which may also return nothing
-): Option<|U|> //< what `f` returns, or none if `o` is none
-    switch o case .some(v)
+    o: T?, //< the value that may be absent
+    f: fn(x: T): U?, //< the next step, which may also return nothing
+): U? //< what `f` returns, or none if `o` is none
+    switch o
+    case .some(v)
         return f(v)
     case .none
-        return Option<|U|>.none
+        return .none
 
 // ============================ A subsequence's length ============================
 pub fn sub_count( //< how many elements a sub-range really holds once clamped
@@ -396,7 +401,7 @@ pub trait Iter<|T|> //< a sequence that only yields items in order, with no leng
     //< "the i-th" item.
     //< Caution: **Write the receiver as `Self`.** The implementation may take a `Self$@` and
     //< advance the position (the thunk bridges the value and the pointer).
-    fn next(r: Self): Option<|T|> //< the next element, or nothing at the end
+    fn next(r: Self): T? //< the next element, or nothing at the end
 
     pub fn count(r: Self): Sz //< how many elements it yields; it allocates nothing
         $n: Sz = 0

@@ -10,17 +10,15 @@
 //   store.save(doc, sheet, sb@);
 //   got: = store.load(sb.slice(), arena)?;
 // ==========================================
-import "kspage/model/collect" { Collect }
 import "kspage/model/day"
 import "kspage/model/doc" + { Doc, Block, Rect }
 import "kspage/model/font" + { Font }
 import "kspage/model/limit"
-import "kspage/model/marker" { Marker }
 import "kspage/model/paint" + { Font_spec, Ink }
 import "kspage/model/paper" + { Paper }
 import "kspage/model/run" { Inline }
 import "kspage/model/style" + { Number_spec, Sheet, Style }
-import "kspage/model/style_when" + { Compare, When }
+import "kspage/model/style_when" + { When }
 import "std/ds" { List }
 import "std/json" + { Val, Json_builder, Obj_builder }
 import "std/mem" { Arena }
@@ -121,7 +119,7 @@ priv fn number_into($ob: Obj_builder, b: Json_builder$@, spec: Number_spec): Obj
         ob = ob.set("dated", b.str_val(dated))
     return ob
 
-priv fn checked(v: Val, dflt: I64, fits: fn(got: I64): Bool): Sz?Store_error //<
+priv fn checked(v: Val, dflt: I64, fits: fn(got: I64): Bool): Sz!Store_error //<
     //< Reads a number only if it is inside the allowed range
     //<
     //< Caution: **Do not decide the range here** (`kspage/model/limit` holds it; `fits` checks it).
@@ -129,15 +127,15 @@ priv fn checked(v: Val, dflt: I64, fits: fn(got: I64): Bool): Sz?Store_error //<
     //< back negative and slips under the limit.
     got: = v.as_int64(dflt)
     if !fits(got)
-        throw Store_error.out_of_range
+        throw .out_of_range
     return Sz::got
 
-priv fn read_number(v: Val): Number_spec?Store_error //<
+priv fn read_number(v: Val): Number_spec!Store_error //<
     //< Builds how a number is shown from the text
     $spec: Number_spec = style.plain_number()
     places: = v.get("places")
     if present(places)
-        spec.places = Option<|Sz|>.some(checked(places, 0I64, limit.places_fits)?)
+        spec.places = .some(checked(places, 0I64, limit.places_fits)!)
     spec.grouped = v.get("grouped").as_bool(false)
     spec.percent = v.get("percent").as_bool(false)
     if present(v.get("prefix"))
@@ -166,13 +164,13 @@ priv fn read_when(v: Val): When //<
     //< give an answer that depends on the writer's order.
     $out: When = style_when.no_when()
     if present(v.get("when_above"))
-        out.how = Compare.above
+        out.how = .above
         out.than = as_f32(v.get("when_above"), 0.0)
     else if present(v.get("when_below"))
-        out.how = Compare.below
+        out.how = .below
         out.than = as_f32(v.get("when_below"), 0.0)
     else if present(v.get("when_equal"))
-        out.how = Compare.equal
+        out.how = .equal
         out.than = as_f32(v.get("when_equal"), 0.0)
     else
         return out
@@ -227,7 +225,8 @@ fn style_val(b: Json_builder$@, s: Style$@): Val //< writes one style as text
         ob = when_into(b, ob, how, s.when)
     // The marker. Which of the two fields is present gives the kind (a separate kind field could
     // get out of step).
-    switch s.marker case .bullet(glyph)
+    switch s.marker
+    case .bullet(glyph)
         ob = ob.set("bullet", b.str_val(glyph))
     case .number(after)
         ob = ob.set("number_after", b.str_val(after))
@@ -360,13 +359,14 @@ priv fn inline_val(b: Json_builder$@, n: Inline$@): Val
         ob = ob.set("refers", b.str_val(n.refers))
     return ob.build()
 
-priv fn sizes_val(b: Json_builder$@, specs: List<|Option<|F32|>|>$@): Val //<
+priv fn sizes_val(b: Json_builder$@, specs: List<|F32?|>$@): Val //<
     //< Writes the list of column widths and row heights
     //<
     //< An unset entry is null (packed together, the entries would shift).
     $out: = b.arr()
     for $i: Sz = 0; i < specs.len; i += 1
-        switch specs.get(i) case .some(v)
+        switch specs.get(i)
+        case .some(v)
             out = out.push(b.float_val(v))
         case .none
             out = out.push(b.null_val())
@@ -452,7 +452,8 @@ fn save(d: Doc$@, sheet: Sheet$@, out: Str_builder$@) //<
 priv fn present(v: Val): Bool //< whether a field is present
     //<
     //< `null` counts as "not present".
-    switch v case .null_val
+    switch v
+    case .null_val
         return false
     default {}
     return true
@@ -473,16 +474,16 @@ fn read_spec(v: Val): Font_spec //< builds the font settings from the text
     $spec: Font_spec = paint.inherit_all()
     family: = v.get("family")
     if present(family)
-        spec.family = Option<|U8[]|>.some(family.as_str())
+        spec.family = .some(family.as_str())
     size_px: = v.get("size_px")
     if present(size_px)
-        spec.size_px = Option<|F32|>.some(as_f32(size_px, 0.0))
+        spec.size_px = .some(as_f32(size_px, 0.0))
     weight: = v.get("weight")
     if present(weight)
-        spec.weight = Option<|U16|>.some(U16::weight.as_int(400))
+        spec.weight = .some(U16::weight.as_int(400))
     italic: = v.get("italic")
     if present(italic)
-        spec.italic = Option<|Bool|>.some(italic.as_bool(false))
+        spec.italic = .some(italic.as_bool(false))
     return spec
 
 fn read_ink(v: Val): Ink //< builds a color's settings from the text
@@ -496,18 +497,18 @@ fn read_ink(v: Val): Ink //< builds a color's settings from the text
     if present(background)
         ink.background = paint.color_from(background.as_str())
     if present(v.get("underline"))
-        ink.underline = Option<|Bool|>.some(v.get("underline").as_bool(false))
+        ink.underline = .some(v.get("underline").as_bool(false))
     if present(v.get("strike"))
-        ink.strike = Option<|Bool|>.some(v.get("strike").as_bool(false))
+        ink.strike = .some(v.get("strike").as_bool(false))
     return ink
 
-fn read_style(sheet: Sheet$@, v: Val): Style$@?Store_error //<
+fn read_style(sheet: Sheet$@, v: Val): Style$@!Store_error //<
     //< Builds one style from the text, adds it to the end of the table and returns it
     //<
     //< `Sheet.add` sets the defaults (setting them here too would put the default in two places).
     s: = sheet.add(v.get("name").as_str(), read_spec(v))
     s.ink = read_ink(v)
-    s.number = read_number(v)?
+    s.number = read_number(v)!
     s.space_before = as_f32(v.get("space_before"), s.space_before)
     s.space_after = as_f32(v.get("space_after"), s.space_after)
     s.indent = as_f32(v.get("indent"), s.indent)
@@ -515,21 +516,21 @@ fn read_style(sheet: Sheet$@, v: Val): Style$@?Store_error //<
     s.width = as_f32(v.get("width"), s.width)
     s.height = as_f32(v.get("height"), s.height)
     s.line_spacing = as_f32(v.get("line_spacing"), s.line_spacing)
-    s.columns = checked(v.get("columns"), 0I64, limit.columns_fits)?
+    s.columns = checked(v.get("columns"), 0I64, limit.columns_fits)!
     s.column_gap = as_f32(v.get("column_gap"), s.column_gap)
-    s.outline = checked(v.get("outline"), 0I64, limit.outline_fits)?
+    s.outline = checked(v.get("outline"), 0I64, limit.outline_fits)!
     // Read in a fixed order (the reason is at `read_when`).
-    s.collect = Collect.none
+    s.collect = .none
     if v.get("contents").as_bool(false)
-        s.collect = Collect.contents
+        s.collect = .contents
     else if v.get("notes").as_bool(false)
-        s.collect = Collect.notes
+        s.collect = .notes
     else if v.get("bars").as_bool(false)
-        s.collect = Collect.bars
+        s.collect = .bars
     else if v.get("lines").as_bool(false)
-        s.collect = Collect.lines
+        s.collect = .lines
     if v.get("source").as_bool(false) || v.get("imports").as_bool(false)
-        throw Store_error.withdrawn
+        throw .withdrawn
     s.when = read_when(v)
     s.rule_width = as_f32(v.get("rule_width"), s.rule_width)
     if present(v.get("rule_color"))
@@ -540,15 +541,15 @@ fn read_style(sheet: Sheet$@, v: Val): Style$@?Store_error //<
         s.shape = style.shape_from(v.get("shape").as_str())
     // The marker comes first (the order is fixed, as at `read_when`).
     if present(v.get("bullet"))
-        s.marker = Marker.bullet(v.get("bullet").as_str())
+        s.marker = .bullet(v.get("bullet").as_str())
     else if present(v.get("number_after"))
-        s.marker = Marker.number(v.get("number_after").as_str())
+        s.marker = .number(v.get("number_after").as_str())
     else if present(v.get("serial_after"))
         before: = v.get("serial_before").as_str()
-        s.marker = Marker.serial(before, v.get("serial_after").as_str())
+        s.marker = .serial(before, v.get("serial_after").as_str())
     else if present(v.get("outline_after"))
         sep: = v.get("outline_sep").as_str()
-        s.marker = Marker.outline(sep, v.get("outline_after").as_str())
+        s.marker = .outline(sep, v.get("outline_after").as_str())
     s.wrap = v.get("wrap").as_bool(s.wrap)
     s.break_before = v.get("break_before").as_bool(s.break_before)
     // A name that is in no table is the same as naming none (the split then keeps the style), so
@@ -564,12 +565,12 @@ fn read_style(sheet: Sheet$@, v: Val): Style$@?Store_error //<
         s.arrange = style.arrange_from(v.get("arrange").as_str())
     return s
 
-priv fn read_sheet(v: Val, arena: Arena$@): Sheet$@?Store_error
+priv fn read_sheet(v: Val, arena: Arena$@): Sheet$@!Store_error
     sheet: = Sheet.new(read_font(v.get("root"), font.default_root()), arena)
     sheet.paper = read_paper(v)
     styles: = v.get("styles").arr_list(arena)
     for $i: Sz = 0; i < styles.len; i += 1
-        read_style(sheet, styles.get(i))?
+        read_style(sheet, styles.get(i))!
     return sheet
 
 priv fn read_rect(v: Val): Rect
@@ -580,24 +581,24 @@ priv fn read_rect(v: Val): Rect
         .h = as_f32(v.get("h"), 0.0),
     }
 
-priv fn read_sizes(v: Val, into: List<|Option<|F32|>|>$@, arena: Arena$@) //<
+priv fn read_sizes(v: Val, into: List<|F32?|>$@, arena: Arena$@) //<
     //< Reads the list and appends it to `into`
     //<
     //< null means "not set".
     list: = v.arr_list(arena)
     for $i: Sz = 0; i < list.len; i += 1
         got: = list.get(i)
-        $spec: = Option<|F32|>.none
+        $spec: F32? = .none
         if present(got)
-            spec = Option<|F32|>.some(as_f32(got, 0.0))
+            spec = .some(as_f32(got, 0.0))
         into.push(spec)
 
-priv fn span_of(v: Val): Sz?Store_error //< reads the size of a merge
+priv fn span_of(v: Val): Sz!Store_error //< reads the size of a merge
     //<
     //< Absent, it is 1 (not merged).
     return checked(v, 1I64, limit.span_fits)
 
-fn read_block(v: Val, arena: Arena$@): Block$@?Store_error //<
+fn read_block(v: Val, arena: Arena$@): Block$@!Store_error //<
     //< Builds one block, with its whole tree, from the text
     //<
     //< It is the counterpart of `block_val`.
@@ -606,12 +607,12 @@ fn read_block(v: Val, arena: Arena$@): Block$@?Store_error //<
     blk.name = v.get("name").as_str()
     frame: = v.get("frame")
     if present(frame)
-        blk.frame = Option<|Rect|>.some(read_rect(frame))
+        blk.frame = .some(read_rect(frame))
     // Caution: **Read null as "not set".** Skipped, the entries after it shift one place forward.
     read_sizes(v.get("columns"), blk.column_widths, arena)
     read_sizes(v.get("rows"), blk.row_heights, arena)
-    blk.span_cols = span_of(v.get("span_cols"))?
-    blk.span_rows = span_of(v.get("span_rows"))?
+    blk.span_cols = span_of(v.get("span_cols"))!
+    blk.span_rows = span_of(v.get("span_rows"))!
     // The image.
     // Caution: **Read its size along with it** (the core cannot read an image to learn its size).
     blk.image = v.get("image").as_str()
@@ -619,7 +620,7 @@ fn read_block(v: Val, arena: Arena$@): Block$@?Store_error //<
     blk.image_h = as_f32(v.get("image_h"), 0.0)
     blk.chart = v.get("chart").as_str()
     if present(v.get("aim")) || present(v.get("tie_from")) || present(v.get("tie_to"))
-        throw Store_error.withdrawn
+        throw .withdrawn
     blk.aside = v.get("aside").as_str()
     // Absent, it is 0 (it appears at every step).
     blk.step = v.get("step").as_int(0)
@@ -634,33 +635,33 @@ fn read_block(v: Val, arena: Arena$@): Block$@?Store_error //<
         made.refers = n.get("refers").as_str()
     children: = v.get("children").arr_list(arena)
     for $i: Sz = 0; i < children.len; i += 1
-        blk.children.push(read_block(children.get(i), arena)?)
+        blk.children.push(read_block(children.get(i), arena)!)
     return blk
 
-fn load(src: U8[], arena: Arena$@): Loaded?Store_error //<
+fn load(src: U8[], arena: Arena$@): Loaded!Store_error //<
     //< Reads the document and the styles back from the text
     //<
     //< Caution: **Put the parsed text and the document on the same arena.** A style's name is a
     //< pointer into the parsed text, not a copy, so if the text is on another arena, the name
     //< dangles once that arena is freed.
     root: = json.parse(src, arena) catch
-        throw Store_error.broken
+        throw .broken
     // Caution: **Only this one name is read.** The version field is the product's name, so renaming
     // the product stops every saved document from opening ("An earlier name is not read" in
     // `../docs/DESIGN.md`).
     said: = root.get("kspage").as_int64(0)
     if said != version
-        throw Store_error.unknown_version
+        throw .unknown_version
     // Caution: **An `origin` key from an older text is not read** (the saved versions it divided
     // are gone); the text opens without it, and the next save drops it.
     d: = Doc.new(arena)
     blocks: = root.get("blocks").arr_list(arena)
     for $i: Sz = 0; i < blocks.len; i += 1
-        d.blocks.push(read_block(blocks.get(i), arena)?)
+        d.blocks.push(read_block(blocks.get(i), arena)!)
     // The page's header and footer. Without them they stay empty (the empty bands `Doc.new` made
     // are kept).
     if present(root.get("header"))
-        d.header = read_block(root.get("header"), arena)?
+        d.header = read_block(root.get("header"), arena)!
     if present(root.get("footer"))
-        d.footer = read_block(root.get("footer"), arena)?
-    return Loaded::{ .doc = d, .sheet = read_sheet(root.get("sheet"), arena)? }
+        d.footer = read_block(root.get("footer"), arena)!
+    return Loaded::{ .doc = d, .sheet = read_sheet(root.get("sheet"), arena)! }

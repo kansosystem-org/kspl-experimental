@@ -40,12 +40,12 @@ fn make_link(root: U8[], name: U8[], target: U8[], arena: Arena$@): Bool //<
     r: = subproc.run_capture(U8[][]::{ "ln", "-s", target, at }, "", 10000, 4096, arena)
     return !r.spawn_failed && r.exit_code == 0 && fs.is_link(at)
 
-fn cases(token: U8[], root: U8[], arena: Arena$@): Void?client.Http_end
+fn cases(token: U8[], root: U8[], arena: Arena$@): Void!client.Http_end
     auth: = client.bearer_head(token, arena)
 
     // --- Tokens --- **The page itself needs no token.** The page is how the token is passed on,
     // so requiring one there leaves no way to pass it.
-    page: = client.get(local_port, "/", "", arena)?
+    page: = client.get(local_port, "/", "", arena)!
     ok1: = page.status == 200 && page.body.equals("root index\n")
     verdict.check("even on --local the page is handed out without a token", ok1,
         client.shown(page, arena))
@@ -53,22 +53,22 @@ fn cases(token: U8[], root: U8[], arena: Arena$@): Void?client.Http_end
     // read it, and any program on this machine could read the root. The page reads its pictures
     // through `/api/file`.
     for target in U8[][]::{ "/sub/one.txt", "/sub/", "/style.css" }
-        other: = client.get(local_port, target, "", arena)?
+        other: = client.get(local_port, target, "", arena)!
         nm_o: = arena.text().s("--local hands out no file but the page without a token: ").s(target)
             .take()
         verdict.check(nm_o, other.status == 401, client.shown(other, arena))
-    with_token: = client.get(local_port, "/sub/one.txt", auth, arena)?
+    with_token: = client.get(local_port, "/sub/one.txt", auth, arena)!
     verdict.check("--local hands out a file under the root to the token",
         with_token.status == 200 && with_token.body.equals("one\n"),
         client.shown(with_token, arena))
     // **A page whose name is re-pointed at 127.0.0.1 (DNS rebinding) sends its own name**, so a
     // request naming another host is refused, the page and a request with the token included.
     rebound: = "Host: attacker.example\r\n"
-    r_page: = client.get(local_port, "/", rebound, arena)?
+    r_page: = client.get(local_port, "/", rebound, arena)!
     verdict.check("--local refuses a Host other than the loopback: the page", r_page.status == 403,
         client.shown(r_page, arena))
     r_api: = client.get(local_port, "/api/status",
-        arena.text().s(rebound).s(auth).take(), arena)?
+        arena.text().s(rebound).s(auth).take(), arena)!
     verdict.check("--local refuses a Host other than the loopback: with the token, in JSON",
         r_api.status == 403 && client.is_json(r_api), client.shown(r_api, arena))
 
@@ -76,7 +76,7 @@ fn cases(token: U8[], root: U8[], arena: Arena$@): Void?client.Http_end
     // This also checks that the existing endpoints need one.
     for target in U8[][]::{ "/api/status", "/api/file?path=sub/one.txt",
         "/api/stat?path=sub/one.txt" }
-        r: = client.get(local_port, target, "", arena)?
+        r: = client.get(local_port, target, "", arena)!
         nm: = arena.text().s("--local refuses a request with no token: ").s(target).take()
         verdict.check(nm, r.status == 401, client.shown(r, arena))
     // Caution: **Do not put the raw header in the check's name.** A CRLF in it breaks the output's
@@ -85,19 +85,19 @@ fn cases(token: U8[], root: U8[], arena: Arena$@): Void?client.Http_end
     bad_heads: U8[][3] = ::{ "Authorization: Bearer \r\n", "Authorization: Bearer deadbeef\r\n",
         "Authorization: deadbeef\r\n" }
     for i in Range.asc(3)
-        r: = client.get(local_port, "/api/file?path=sub/one.txt", bad_heads[i], arena)?
+        r: = client.get(local_port, "/api/file?path=sub/one.txt", bad_heads[i], arena)!
         nm: = arena.text().s("--local refuses a token that does not match: ").s(bad_names[i]).take()
         verdict.check(nm, r.status == 401, client.shown(r, arena))
     // Caution: A token that merely **starts with** the real one must not pass (a prefix match would
     // let it through).
     longer: = client.bearer_head(arena.text().s(token).c('x').take(), arena)
-    extra: = client.get(local_port, "/api/file?path=sub/one.txt", longer, arena)?
+    extra: = client.get(local_port, "/api/file?path=sub/one.txt", longer, arena)!
     verdict.check("--local refuses characters appended behind the token", extra.status == 401,
         client.shown(extra, arena))
 
     // **It must declare that it is for local use.** The page reads this and shows the local tools
     // (rather than having to probe the server to find out).
-    st0: = client.get(local_port, "/api/status", auth, arena)?
+    st0: = client.get(local_port, "/api/status", auth, arena)!
     verdict.check("--local's status declares it is for local use",
         client.doc_of(st0, arena).get("local").as_bool(false), client.shown(st0, arena))
     verdict.check("--local's status carries no policy (none is trained)",
@@ -105,7 +105,7 @@ fn cases(token: U8[], root: U8[], arena: Arena$@): Void?client.Http_end
         client.shown(st0, arena))
 
     // --- Reading ---
-    got: = client.get(local_port, "/api/file?path=sub/one.txt", auth, arena)?
+    got: = client.get(local_port, "/api/file?path=sub/one.txt", auth, arena)!
     ok2: = got.status == 200 && got.body.equals("one\n")
     verdict.check("GET /api/file returns the content", ok2, client.shown(got, arena))
     // Caution: **Do not guess the type from the content.** The receiver trusts a guessed type and
@@ -116,28 +116,28 @@ fn cases(token: U8[], root: U8[], arena: Arena$@): Void?client.Http_end
 
     // A path the static serving refuses must be refused here too.
     for q in U8[][]::{ "path=../secret.txt", "path=%2e%2e/secret.txt", "path=sub/../../secret.txt" }
-        r: = client.get(local_port, arena.text().s("/api/file?\{q\}").take(), auth, arena)?
+        r: = client.get(local_port, arena.text().s("/api/file?\{q\}").take(), auth, arena)!
         nm: = arena.text().s("/api/file refuses outside the root too: \{q\}").take()
         verdict.check(nm, r.status == 403, client.shown(r, arena))
-    missing: = client.get(local_port, "/api/file?path=nope.txt", auth, arena)?
+    missing: = client.get(local_port, "/api/file?path=nope.txt", auth, arena)!
     verdict.check("a name that is not there is 404", missing.status == 404,
         client.shown(missing, arena))
     // On some OSes `fopen` succeeds on a folder. Judged by the read result alone, it looks like a
     // broken file.
-    folder: = client.get(local_port, "/api/file?path=sub", auth, arena)?
+    folder: = client.get(local_port, "/api/file?path=sub", auth, arena)!
     verdict.check("a folder is not returned as a file", folder.status == 404,
         client.shown(folder, arena))
-    named: = client.get(local_port, "/api/file", auth, arena)?
+    named: = client.get(local_port, "/api/file", auth, arena)!
     verdict.check("/api/file with no name is 400", named.status == 400,
         client.shown(named, arena))
     head_raw: = client.raw("HEAD", "/api/file?path=sub/one.txt", auth, "", arena)
-    heads: = client.request(local_port, head_raw, 1, client.default_timeout_ms, true, arena)?
+    heads: = client.request(local_port, head_raw, 1, client.default_timeout_ms, true, arena)!
     client.check_405("there is no HEAD on /api/file", heads.get(0), arena)
     verdict.check("the HEAD refused on /api/file is JSON's", client.is_json(heads.get(0)),
         heads.get(0).head)
 
     // --- Has it changed ---
-    st: = client.get(local_port, "/api/stat?path=sub/one.txt", auth, arena)?
+    st: = client.get(local_port, "/api/stat?path=sub/one.txt", auth, arena)!
     doc: = client.doc_of(st, arena)
     ok3: =
         st.status == 200 && doc.get("size").as_int(-1) == 4 &&
@@ -146,19 +146,19 @@ fn cases(token: U8[], root: U8[], arena: Arena$@): Void?client.Http_end
     // Caution: **Do not return the content.** Returned here, the same content comes by two paths.
     verdict.check("/api/stat does not return the content", st.body.find_str("one") < 0,
         client.shown(st, arena))
-    st_gone: = client.get(local_port, "/api/stat?path=nope.txt", auth, arena)?
+    st_gone: = client.get(local_port, "/api/stat?path=nope.txt", auth, arena)!
     verdict.check("/api/stat on a name that is not there is 404", st_gone.status == 404,
         client.shown(st_gone, arena))
 
     // --- Writing ---
-    put: = client.put_file(local_port, "/api/file?path=sub/two.txt", auth, put_body, arena)?
+    put: = client.put_file(local_port, "/api/file?path=sub/two.txt", auth, put_body, arena)!
     ok4: =
         put.status == 200 &&
         client.doc_of(put, arena).get("wrote").as_int(-1) == put_body.len
     verdict.check("PUT /api/file returns the length written", ok4, client.shown(put, arena))
     // Caution: **Compare the written string byte by byte.** A length check alone passes even with
     // the encoding broken.
-    back: = client.get(local_port, "/api/file?path=sub/two.txt", auth, arena)?
+    back: = client.get(local_port, "/api/file?path=sub/two.txt", auth, arena)!
     ok5: = back.status == 200 && back.body.equals(put_body)
     verdict.check("the string written comes back byte for byte", ok5,
         client.shown(back, arena))
@@ -167,19 +167,19 @@ fn cases(token: U8[], root: U8[], arena: Arena$@): Void?client.Http_end
     part: = fs.join(root, "sub/two.txt.kssrv-part", arena)
     verdict.check("no half-written file is left", !fs.exists(part), part)
     // Writing twice adds no file (it replaces the one of the same name).
-    again: = client.put_file(local_port, "/api/file?path=sub/two.txt", auth, "second\n", arena)?
-    twice: = client.get(local_port, "/api/file?path=sub/two.txt", auth, arena)?
+    again: = client.put_file(local_port, "/api/file?path=sub/two.txt", auth, "second\n", arena)!
+    twice: = client.get(local_port, "/api/file?path=sub/two.txt", auth, arena)!
     ok6: = again.status == 200 && twice.body.equals("second\n")
     verdict.check("writing twice replaces", ok6, client.shown(twice, arena))
     // Caution: Apply the root check to writing too (fix reading alone and a path outside the root
     // can still be written).
-    out: = client.put_file(local_port, "/api/file?path=%2e%2e/secret.txt", auth, "x", arena)?
+    out: = client.put_file(local_port, "/api/file?path=%2e%2e/secret.txt", auth, "x", arena)!
     verdict.check("PUT refuses outside the root too", out.status == 403,
         client.shown(out, arena))
     // **The name written first is checked too**: the body goes to `<name>.kssrv-part` and is
     // renamed after, so a link standing there would take the write outside the root.
     if make_link(root, "doc.md.kssrv-part", "../put_target.txt", arena)
-        via: = client.put_file(local_port, "/api/file?path=doc.md", auth, "x", arena)?
+        via: = client.put_file(local_port, "/api/file?path=doc.md", auth, "x", arena)!
         verdict.check("PUT refuses a link at the name it writes first",
             via.status == 403 && !fs.exists(fs.join(root, "../put_target.txt", arena)),
             client.shown(via, arena))
@@ -191,7 +191,7 @@ fn cases(token: U8[], root: U8[], arena: Arena$@): Void?client.Http_end
     // **Check that the local cap is higher.** Without that, a single document cannot be written
     // back (it does not fit the outward-facing cap).
     big: = client.filler(local_body, arena)
-    wide: = client.put_file(local_port, "/api/file?path=sub/big.txt", auth, big, arena)?
+    wide: = client.put_file(local_port, "/api/file?path=sub/big.txt", auth, big, arena)!
     ok7: =
         wide.status == 200 &&
         client.doc_of(wide, arena).get("wrote").as_int(-1) == local_body
@@ -202,10 +202,10 @@ fn cases(token: U8[], root: U8[], arena: Arena$@): Void?client.Http_end
     // token, and the car's endpoints are not there: local use trains no policy (the car cannot
     // reach the loopback).
     for gone in U8[][]::{ "/api/run", "/api/plugins", "/api/list", "/api/pilot" }
-        r: = client.get(local_port, gone, auth, arena)?
+        r: = client.get(local_port, gone, auth, arena)!
         nm_g: = arena.text().s("--local answers files only: ").s(gone).s(" is not there").take()
         verdict.check(nm_g, r.status == 404, client.shown(r, arena))
     car: = client.post_json(local_port, "/api/car", auth, "{\"dist_mm\":250,\"line\":2,\"seq\":1}",
-        client.default_timeout_ms, arena)?
+        client.default_timeout_ms, arena)!
     verdict.check("--local answers files only: /api/car is not there", car.status == 404,
         client.shown(car, arena))

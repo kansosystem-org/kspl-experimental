@@ -24,9 +24,9 @@ struct Edge //< the cell border being dragged
     found: Bool
 
 fn no_edge(): Edge
-    return Edge::{ .table = null, .axis = Axis.column, .index = 0, .found = false }
+    return Edge::{ .table = null, .axis = .column, .index = 0, .found = false }
 
-fn edge_origin(page: Page$@, edge: Edge): Option<|F32|> //<
+fn edge_origin(page: Page$@, edge: Edge): F32? //<
     //< That column's left edge (or the row's top edge)
     //<
     //< Caution: **Compute it again after every layout** (a drag can move the columns before it).
@@ -34,13 +34,14 @@ fn edge_origin(page: Page$@, edge: Edge): Option<|F32|> //<
         cell: = page.cells.get(i)
         if cell.table != edge.table
             continue
-        switch edge.axis case .column
+        switch edge.axis
+        case .column
             if cell.column == edge.index
-                return Option<|F32|>.some(cell.rect.x)
+                return .some(cell.rect.x)
         case .row
             if cell.row == edge.index
-                return Option<|F32|>.some(cell.rect.y)
-    return Option<|F32|>.none
+                return .some(cell.rect.y)
+    return .none
 
 priv const edge_reach: F32 = 4.0 //< the distance within which a border is grabbed
     //<
@@ -63,11 +64,10 @@ fn edge_at(page: Page$@, x: F32, y: F32): Edge //<
         inside_y: = y >= r.y && y <= r.y + r.h
         inside_x: = x >= r.x && x <= r.x + r.w
         if inside_y && within(x, r.x + r.w)
-            return Edge::{ .table = cell.table, .axis = Axis.column, .index = cell.column,
+            return Edge::{ .table = cell.table, .axis = .column, .index = cell.column,
                 .found = true }
         if inside_x && within(y, r.y + r.h)
-            return Edge::{ .table = cell.table, .axis = Axis.row, .index = cell.row,
-                .found = true }
+            return Edge::{ .table = cell.table, .axis = .row, .index = cell.row, .found = true }
     return no_edge()
 
 struct Cell_at //< the cell the cursor is in
@@ -210,7 +210,7 @@ fn head_band_count(page: Page$@): Sz //< how many top-level tables the page hold
             n += 1
     return n
 
-priv fn table_at(page: Page$@, i: Sz): Option<|Block$@|> //< the i-th top-level table
+priv fn table_at(page: Page$@, i: Sz): Block$@? //< the i-th top-level table
     //<
     //< The tables come in document order.
     $n: Sz = 0
@@ -219,9 +219,9 @@ priv fn table_at(page: Page$@, i: Sz): Option<|Block$@|> //< the i-th top-level 
         if !opens_table(page, cell)
             continue
         if n == i
-            return Option<|Block$@|>.some(cell.table)
+            return .some(cell.table)
         n += 1
-    return Option<|Block$@|>.none
+    return .none
 
 fn head_band_at(page: Page$@, i: Sz): Head_band //< the i-th top-level table's heading band
     if table: = table_at(page, i)
@@ -316,7 +316,8 @@ priv fn grip_in(one: Framed$@, x: F32, y: F32): Grip //< one frame's handle
     //< **There are eight handles.**
     //< Caution: **Do not decide "inside a figure" by whether characters are drawn there.** Another
     //< frame's characters can lie under it, and only part of the figure would be grabbable.
-    switch one.block.frame case .none
+    switch one.block.frame
+    case .none
         return no_grip()
     case .some {}
     r: = one.rect
@@ -357,7 +358,7 @@ fn grip_at(page: Page$@, x: F32, y: F32): Grip //< the handle of the frame at (x
             return got
     return no_grip()
 
-fn frame_under(page: Page$@, x: F32, y: F32): Option<|Block$@|> //<
+fn frame_under(page: Page$@, x: F32, y: F32): Block$@? //<
     //< The innermost frame containing (x, y)
     //<
     //< **It is separate from a handle**: over a character too, it is inside that frame. It selects
@@ -367,24 +368,24 @@ fn frame_under(page: Page$@, x: F32, y: F32): Option<|Block$@|> //<
         i -= 1
         got: = page.frames.get(i)
         if got.rect.holds(x, y)
-            return Option<|Block$@|>.some(got.block)
-    return Option<|Block$@|>.none
+            return .some(got.block)
+    return .none
 
-fn frame_rect(page: Page$@, b: Block$@): Option<|Rect|> //<
+fn frame_rect(page: Page$@, b: Block$@): Rect? //<
     //< Where b was laid out (screen coordinates)
     for $i: Sz = 0; i < page.frames.len; i += 1
         got: = page.frames.get(i)
         if got.block == b
-            return Option<|Rect|>.some(got.rect)
-    return Option<|Rect|>.none
+            return .some(got.rect)
+    return .none
 
-fn grip_surface(page: Page$@, grip: Grip): Option<|Rect|> //<
+fn grip_surface(page: Page$@, grip: Grip): Rect? //<
     //< The position of the slide holding the grabbed frame
     for $i: Sz = 0; i < page.frames.len; i += 1
         got: = page.frames.get(i)
         if got.block == grip.block
-            return Option<|Rect|>.some(got.surface.rect)
-    return Option<|Rect|>.none
+            return .some(got.surface.rect)
+    return .none
 // ---- The container that holds a figure ----
 
 struct Framer //< the container at the clicked position
@@ -442,11 +443,11 @@ struct Fit //< what a column or row would be if fitted to its contents
     //< **`size` is `none` where fitting means "remove the setting".** A row with no set height is
     //< already laid out to its contents, so fitting a row removes the setting; a column with no set
     //< width takes an equal share of the region instead, so a column's fitting carries a size.
-    size: Option<|F32|>
+    size: F32?
     found: Bool
 
 fn no_fit(): Fit
-    return Fit::{ .size = Option<|F32|>.none, .found = false }
+    return Fit::{ .size = .none, .found = false }
 
 priv const fit_pad: F32 = 12.0 //< the space left beside the widest text
     //<
@@ -487,7 +488,7 @@ fn fit_at(page: Page$@, edge: Edge): Fit //< that border's column or row fitted 
     if !edge.found || edge.table == null
         return no_fit()
     if edge.axis == Axis.row
-        return Fit::{ .size = Option<|F32|>.none, .found = true }
+        return Fit::{ .size = .none, .found = true }
     $wide: F32 = 0.0
     for $i: Sz = 0; i < page.cells.len; i += 1
         cell: = page.cells.get(i)
@@ -499,5 +500,4 @@ fn fit_at(page: Page$@, edge: Edge): Fit //< that border's column or row fitted 
         if got > wide
             wide = got
     size: = wide + fit_pad
-    return Fit::{ .size = Option<|F32|>.some(size if size > fit_least else fit_least),
-        .found = true }
+    return Fit::{ .size = .some(size if size > fit_least else fit_least), .found = true }

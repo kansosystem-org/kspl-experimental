@@ -73,11 +73,12 @@ impl Ast_node
         kind: = r.kind_id
         // Caution: **Write it before every statement, not only where the line changes.** The
         // statements Lower hoists out of one line follow each other there, and without one each C
-        // line between counts as a source line: `?`'s trace named line 14 for a `?` on line 12.
+        // line between counts as a source line: `!`'s trace named line 14 for a `!` on line 12.
         if kind != .k_stmt_block && kind != .k_stmt_label
             c.emit_line_directive(r, true)
 
-        switch kind case .k_stmt_block
+        switch kind
+        case .k_stmt_block
             r.emit_block_stmt(c)
         case .k_stmt_return
             r.emit_return_stmt(c)
@@ -130,8 +131,8 @@ impl Ast_node
         //<
         //< Then the following `break;` may be omitted.
         for $i: = I32::r.children.len - 1; i >= 0; i -= 1
-            switch r.get_child(i).kind_id case .k_stmt_return, .k_stmt_throw, .k_stmt_break,
-                .k_stmt_continue, .k_stmt_goto
+            switch r.get_child(i).kind_id
+            case .k_stmt_return, .k_stmt_throw, .k_stmt_break, .k_stmt_continue, .k_stmt_goto
                 return true
             case .k_empty, .k_stmt_label { // skip a trailing empty statement or label
             } default
@@ -395,7 +396,8 @@ impl Ast_node
             return
         $v_name_node: Ast_node$@ = null
         $payload_start_idx: Sz = 0
-        switch r.extract_match_variant() case .variant(vn, ps)
+        switch r.extract_match_variant()
+        case .variant(vn, ps)
             v_name_node = vn
             payload_start_idx = ps
         default
@@ -404,7 +406,8 @@ impl Ast_node
             return
         variant_name: = v_name_node.text
         $variant_def: sema_type_def.Enum_variant$@ = null
-        switch enum_def_ptr.get_variant(variant_name) case .some(d)
+        switch enum_def_ptr.get_variant(variant_name)
+        case .some(d)
             variant_def = d
         case .none
             return
@@ -440,7 +443,8 @@ impl Ast_node
                     "emit_match_case: empty match_pattern")
 
                 $is_v_match: = false
-                switch pat_node.extract_match_variant() case .variant(v_name_node, _p_start)
+                switch pat_node.extract_match_variant()
+                case .variant(v_name_node, _p_start)
                     if is_enum && v_name_node != null
                         variant_name: = v_name_node.text
                         $mangled_variant: = variant_name.mangle_c_identifier()
@@ -452,7 +456,8 @@ impl Ast_node
                 if !is_v_match
                     c.s("    case ")
                     $expr_node: Ast_node$@ = null
-                    switch pat_node.first_expr() case .some(fe)
+                    switch pat_node.first_expr()
+                    case .some(fe)
                         expr_node = fe
                     case .none
                         expr_node = pat_node.get_child(0)
@@ -487,7 +492,8 @@ impl Ast_node
         //<
         //< Caution: **Do not emit a constant's name**: a C `const` object is no integer constant
         //< expression, so `case kspl_f_one:` is refused (gcc -O0 says so, -O2 lets it pass).
-        switch c.sema.try_eval_constexpr_wide(r) case .some(v)
+        switch c.sema.try_eval_constexpr_wide(r)
+        case .some(v)
             c.s("(").t(r.type_id).s(")")
             if v == -9223372036854775807I64 - 1
                 c.s("(-9223372036854775807LL - 1)")
@@ -514,7 +520,7 @@ impl Ast_node
         if expr_node != null
             is_res: = c.env.is_result(c.current_ret_id)
             if is_res
-                // A new error starts the chain again; a `?`'s propagation (lower sets ival=1)
+                // A new error starts the chain again; a `!`'s propagation (lower sets ival=1)
                 // extends it. Extending only would mix a handled failure's frame into the next
                 // error's trace.
 

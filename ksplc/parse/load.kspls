@@ -72,7 +72,7 @@ fn layout_noted_files(arena: Arena$@): List<|U8[]|> //<
         out.push(e.key)
     return out
 
-fn layout_notes_for(file: U8[]): Option<|List<|parse_layout.Note|>$@|> //<
+fn layout_notes_for(file: U8[]): List<|parse_layout.Note|>$@? //<
     //< The notes the indentation conversion left for `file`, if any were recorded
     //<
     //< Caution: **Return an `Option`.** A file with no notes is ordinary (the brace notation), and
@@ -192,9 +192,9 @@ priv fn rule_kind(rule: U8[]): base_ast_kinds.Ast_kind //< it looks up the kind 
             return .k_literal
     return Ast_node.peek_kind_id(rule)
 
-fn to_ast_node(knode: kspeg.Node$@, file_name: U8[], depth: Sz): Option<|Ast_node$@|>
+fn to_ast_node(knode: kspeg.Node$@, file_name: U8[], depth: Sz): Ast_node$@?
     if knode == null
-        return Option<|Ast_node$@|>.none
+        return .none
     if depth >= parse_normalize.max_parse_tree_depth
         io.err()
             .s("\nfatal: source nesting too deep to convert to AST (possible unbounded recursive \
@@ -209,7 +209,7 @@ fn to_ast_node(knode: kspeg.Node$@, file_name: U8[], depth: Sz): Option<|Ast_nod
     for raw_child in knode.children
         if child: = to_ast_node(raw_child, file_name, depth + 1)
             anode.add_child(child)
-    return Option<|Ast_node$@|>.some(anode)
+    return .some(anode)
 
 fn kanso_space_skipper(ctx: kspeg.Target$@) //<
     //< It moves `ctx.pos` past whitespace and `//` line comments
@@ -246,11 +246,13 @@ impl Parse_error
             //< reported once.
         $why: = Str_builder.new()
         defer why.free()
-        switch e case .io(io_err)
+        switch e
+        case .io(io_err)
             // Caution: **Print the absolute name.** Some import names are looked up from the
             // **working directory** rather than beside the entry file, and a relative name hides
             // which folder was searched (`to_absolute` in `base/locate.kspls`).
-            switch io_err case .file_not_found(p)
+            switch io_err
+            case .file_not_found(p)
                 why.s("import not found: '\{wanted\}' (looked for \{base_locate.to_absolute(p)\})")
             case .read_failed(p)
                 why.s("import could not be read: '\{wanted\}' (\{base_locate.to_absolute(p)\})")
@@ -263,7 +265,7 @@ impl Parse_error
         print_at_import(why.slice(), decl, importer, importer_src)
         return true
 
-fn parse_raw_ast(src: U8[], file_path: U8[], parser: kspeg.Target$@): Ast_node$@?Parse_error
+fn parse_raw_ast(src: U8[], file_path: U8[], parser: kspeg.Target$@): Ast_node$@!Parse_error
     // The KSPEG arena is reused and rewound: one request to the OS, and each parse's garbage is
     // gone.
     if kspeg_arena == null
@@ -279,7 +281,8 @@ fn parse_raw_ast(src: U8[], file_path: U8[], parser: kspeg.Target$@): Ast_node$@
 
     t_kspeg_start: = sys.mono_us()
     raw_kspeg_ast: = target_parser.parse_rule("program") catch e
-        switch e case .fatal(fatal_msg)
+        switch e
+        case .fatal(fatal_msg)
             // Caution: When cut off by depth, report the recorded position (the engine's
             // depth_exceeded_pos): backtracking has moved `pos` back to the start, so it is at line
             // 1.
@@ -301,12 +304,14 @@ fn parse_raw_ast(src: U8[], file_path: U8[], parser: kspeg.Target$@): Ast_node$@
         // a recovered tree, would list a dozen unrelated errors behind one missing bracket. **Only
         // the editor takes this path** (`recover_syntax` in `../base/core.kspls`).
         if base_core.config.recover_syntax
-            switch e case .mismatch
-                switch parse_leniently(src, file_path, parser) case .some(tree)
+            switch e
+            case .mismatch
+                switch parse_leniently(src, file_path, parser)
+                case .some(tree)
                     return tree
                 default {}
             default {}
-        throw Parse_error.syntax_error
+        throw .syntax_error
 
     if base_core.config.enable_stats
         for p in target_parser.prof_list
@@ -333,24 +338,23 @@ fn parse_raw_ast(src: U8[], file_path: U8[], parser: kspeg.Target$@): Ast_node$@
 
     return raw_ast
 
-priv fn parse_leniently(src: U8[], file_path: U8[], parser: kspeg.Target$@):
-    Option<|Ast_node$@|> //<
-        //< The second parse, with the recovery branches on
-        //<
-        //< None where even that fails. **It uses its own `Target`**, leaving the first run's
-        //< position and failure record alone; the memo shared with the grammar starts empty
-        //< (`begin` in `kspeg/memo.kspls`), so nothing found with the branches off is reused. **It
-        //< prints no diagnostic.**
+priv fn parse_leniently(src: U8[], file_path: U8[], parser: kspeg.Target$@): Ast_node$@? //<
+    //< The second parse, with the recovery branches on
+    //<
+    //< None where even that fails. **It uses its own `Target`**, leaving the first run's
+    //< position and failure record alone; the memo shared with the grammar starts empty
+    //< (`begin` in `kspeg/memo.kspls`), so nothing found with the branches off is reused. **It
+    //< prints no diagnostic.**
     $lenient: = kspeg.Target.new(src, kspeg_arena)
     defer lenient.free_memo()
     lenient.share_grammar_from(parser)
     lenient.space_skipper = kanso_space_skipper
     lenient.is_lenient = true
     tree: = lenient.parse_rule("program") catch
-        return Option<|Ast_node$@|>.none
+        return .none
     took_recovery = true
     got: = to_ast_node(tree, file_path, 0).unwrap_or(null)
-    return Option<|Ast_node$@|>.none if got == null else Option<|Ast_node$@|>.some(got)
+    return .none if got == null else .some(got)
 
 priv fn print_at_import(why: U8[], decl: Ast_node$@, importer: U8[], importer_src: U8[]) //<
     //< It prints one rejection at the position of the import that caused it
@@ -358,7 +362,7 @@ priv fn print_at_import(why: U8[], decl: Ast_node$@, importer: U8[], importer_sr
     starts: = importer_src.line_starts(base_core.arena)
     base_diag.print_diagnostic(importer, importer_src, info.offset, info.span, why, .error, starts)
 
-priv fn read_source(file_path: U8[]): U8[]?Parse_error //< it reads one file
+priv fn read_source(file_path: U8[]): U8[]!Parse_error //< it reads one file
     //<
     //< **The name already identifies the file**: one without an extension went through
     //< `name_as_found` (`../base/locate.kspls`) when resolved, so nothing is looked up twice.
@@ -368,14 +372,15 @@ priv fn read_source(file_path: U8[]): U8[]?Parse_error //< it reads one file
         throw read_error(e, base_core.arena.dup_str(file_path))
 
 priv fn read_error(e: io.Io_error, failed_path: U8[]): Parse_error
-    switch e case .read_failed
-        return Parse_error.io(.read_failed(failed_path))
+    switch e
+    case .read_failed
+        return .io(.read_failed(failed_path))
     default {}
-    return Parse_error.io(.file_not_found(failed_path))
+    return .io(.file_not_found(failed_path))
 
 fn load_and_parse_file(import_path: U8[], loaded_files: List<|U8$[]|>$@, root_file: Ast_node$@,
     parser: kspeg.Target$@, source_map: Map<|U8[], U8$[]|>$@, import_stack: List<|U8$[]|>$@,
-    src_is_disk: Bool): Void?Parse_error //<
+    src_is_disk: Bool): Void!Parse_error //<
         //< It reads and parses the file `import_path` names, adding its declarations to `root_file`
         //<
         //< **`src_is_disk` says the given source is the file's own bytes**, not a buffer being
@@ -422,7 +427,7 @@ fn load_and_parse_file(import_path: U8[], loaded_files: List<|U8$[]|>$@, root_fi
         $file_path: = Str_builder.new()
         defer file_path.free()
         base_locate.append_file_path(import_path, laid_out, file_path@)
-        raw: = read_source(file_path.slice())?
+        raw: = read_source(file_path.slice())!
         // The notes are only collected (the reason is at `layout_notes` above).
         laid_notes: = List<|parse_layout.Note|>.create(base_core.arena)
         mended: = parse_layout.mend(raw, laid_out, laid_notes, base_core.arena)
@@ -459,8 +464,8 @@ fn load_and_parse_file(import_path: U8[], loaded_files: List<|U8$[]|>$@, root_fi
     t_cache_end: = sys.mono_us()
     prof.cache_us += t_cache_end - t_cache_start
     if !hit
-        parse_into_decls(perm_src, import_path, parser, decls)?
-        append_enum_variant_names(decls, import_path, parser)?
+        parse_into_decls(perm_src, import_path, parser, decls)!
+        append_enum_variant_names(decls, import_path, parser)!
         // **A source is stored unless it is a buffer being typed into**, whose entry per keystroke
         // would fill the cache up; bytes from disk are worth an entry however they arrive ("The
         // workspace walk reads through the AST cache" in `../docs/DESIGN.md`).
@@ -485,7 +490,7 @@ fn load_and_parse_file(import_path: U8[], loaded_files: List<|U8$[]|>$@, root_fi
         written_refusal: = base_package.refused_written(next_path)
         if written_refusal.len > 0
             print_at_import(written_refusal, decl, import_path, perm_src)
-            throw Parse_error.syntax_error
+            throw .syntax_error
         $resolved_str: = import_path.resolve_import_path(next_path)
         defer resolved_str.free()
         perm_slice: = base_core.arena.dup_str(resolved_str.slice())
@@ -495,11 +500,11 @@ fn load_and_parse_file(import_path: U8[], loaded_files: List<|U8$[]|>$@, root_fi
         refusal: = base_package.refused_use(import_path, perm_slice)
         if refusal.len > 0
             print_at_import(refusal, decl, import_path, perm_src)
-            throw Parse_error.syntax_error
+            throw .syntax_error
         load_and_parse_file(perm_slice, loaded_files, root_file, parser, source_map, import_stack,
             false) catch e
             if e.report_bad_import(decl, next_path, import_path, perm_src)
-                throw Parse_error.syntax_error
+                throw .syntax_error
             throw e
 
     // **An embedded file follows the rule for an imported one**: a package that declares its name
@@ -515,32 +520,32 @@ fn load_and_parse_file(import_path: U8[], loaded_files: List<|U8$[]|>$@, root_fi
         written_refusal: = base_package.refused_written(written)
         if written_refusal.len > 0
             print_at_import(written_refusal, decl, import_path, perm_src)
-            throw Parse_error.syntax_error
+            throw .syntax_error
         refusal: = base_package.refused_use(import_path,
             import_path.resolve_embed_path(written))
         if refusal.len > 0
             print_at_import(refusal, decl, import_path, perm_src)
-            throw Parse_error.syntax_error
+            throw .syntax_error
 
     for decl in decls
         root_file.add_child(decl)
 
 fn parse_synth_decls(src: U8[], file_path: U8[], parser: kspeg.Target$@,
-    out: List<|Ast_node$@|>$@): Void?Parse_error //<
+    out: List<|Ast_node$@|>$@): Void!Parse_error //<
         //< It turns an assembled KSPL source string into top-level declarations appended to `out`.
         //<
         //< Caution: **Synthesize declarations through here.** A hand-built AST shows its mistakes
         //< only in the generated C and must track every change to a declaration's shape (the
         //< grammar `ksplc/kspl.kspeg` would stop being the canonical source).
-    parse_into_decls(base_core.arena.dup_str(src), file_path, parser, out)?
+    parse_into_decls(base_core.arena.dup_str(src), file_path, parser, out)!
 
 priv fn parse_into_decls(src: U8$[], path: U8[], parser: kspeg.Target$@,
-    out: List<|Ast_node$@|>$@): Void?Parse_error //<
+    out: List<|Ast_node$@|>$@): Void!Parse_error //<
         //< It parses and normalizes a whole source, appending its top-level declarations to `out`
         //<
         //< **One path for a file's text and for a synthesized declaration's**, so the two cannot
         //< disagree on the tree's shape. `src` must outlive the tree (the nodes point into it).
-    raw: = parse_raw_ast(src, path, parser)?
+    raw: = parse_raw_ast(src, path, parser)!
     t_norm_start: = sys.mono_us()
     file_node: = raw.normalize_ast(src, 0).unwrap_or(null)
     prof.norm_us += sys.mono_us() - t_norm_start
@@ -550,12 +555,12 @@ priv fn parse_into_decls(src: U8$[], path: U8[], parser: kspeg.Target$@,
     // A tree too deep to check is rejected as this file's failure, **not the whole run's**. The
     // diagnostic naming the place is already printed (`validate_layout` in `../base/ast.kspls`).
     if !file_node.validate_layout(src, path)
-        throw Parse_error.syntax_error
+        throw .syntax_error
     for child in file_node.children
         out.push(child.unwrap_top_level())
 
 priv fn append_enum_variant_names(decls: List<|Ast_node$@|>$@, file_path: U8[],
-    parser: kspeg.Target$@): Void?Parse_error //<
+    parser: kspeg.Target$@): Void!Parse_error //<
         //< For each enum this file declares, it adds a synthesized `variant_name(): U8[]` to root
         //<
         //< Only the compiler knows a variant name's spelling.
@@ -607,7 +612,7 @@ priv fn append_enum_variant_names(decls: List<|Ast_node$@|>$@, file_path: U8[],
         return
 
     from: = decls.len
-    parse_synth_decls(src.slice(), file_path, parser, decls)?
+    parse_synth_decls(src.slice(), file_path, parser, decls)!
     // **One impl per enum, in the order written** (a top-level `impl` stays one declaration).
     base_diag.ice_assert(decls.len - from == origins.len,
         "variant_name synthesis: the impls parsed do not match the enums")

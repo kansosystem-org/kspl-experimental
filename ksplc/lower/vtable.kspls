@@ -16,7 +16,7 @@ import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/def" as sema_type_def
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
-import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
+import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/ds" { List, Map }
 
 priv fn vtable_key(c: Sema_ctx$@, target_id: I32, trait_id: I32): U8[] //<
@@ -225,7 +225,8 @@ priv fn emit_trait_vtable(c: Sema_ctx$@, t_id: I32, i_id: I32, loc: base_ast.Loc
         return
 
     $trait_def: sema_type_def.Trait_def$@ = null
-    switch c.env.get_trait_def(c.env.get_str(i_id)) case .some(id)
+    switch c.env.get_trait_def(c.env.get_str(i_id))
+    case .some(id)
         trait_def = id
     case .none
         return
@@ -260,8 +261,8 @@ priv fn emit_trait_vtable(c: Sema_ctx$@, t_id: I32, i_id: I32, loc: base_ast.Loc
         parts.thunk_fn
             .add_child(build_thunk_body(c, parts, target, req_m, i_id, clean_t_id, loc))
 
-        lower_ctx.register_synth_symbol(parts.thunk_fn,
-            sema_type_scope.Sym_kind.function(false), perm_thunk_name, req_m.type_id)
+        lower_ctx.register_synth_symbol(parts.thunk_fn, .function(false), perm_thunk_name,
+            req_m.type_id)
         out_decls.push(parts.thunk_fn)
 
         // Caution: **Put the separator in front**, or each one skipped leaves an extra `,`.
@@ -291,7 +292,6 @@ priv fn emit_trait_vtable(c: Sema_ctx$@, t_id: I32, i_id: I32, loc: base_ast.Loc
     vtable_const.add_child(vtable_init)
     vtable_const.type_id = vtable_type_id
 
-    lower_ctx.register_synth_symbol(vtable_const, sema_type_scope.Sym_kind.constant, perm_const_name,
-        vtable_type_id)
+    lower_ctx.register_synth_symbol(vtable_const, .constant, perm_const_name, vtable_type_id)
 
     out_decls.push(vtable_const)

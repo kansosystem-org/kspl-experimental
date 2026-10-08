@@ -1,0 +1,197 @@
+//< What a hover says on a value: a literal, and a name where it is bound
+//<
+//< Not a suite; part of `../suite/lsp_test.kspls`.
+//< **A literal shows the type it took in its place, and no name**: `4` in `size: Sz = 4` is `Sz`.
+//< Shown as `type 4`, it read as a declaration named after the literal, and an integer read `I32`
+//< wherever it stood.
+//< **A name where it is bound reads as it does where it is used** (`words: List<|U8[]|>`), for
+//< every kind of binding: a declaration with or without a written type, a parameter, a `for`'s
+//< item, an `if v: = opt`, a `catch e` and a pattern's payload. On a declaration whose type is a
+//< struct it read as that struct, and references there listed the struct's uses.
+import "ksplc/tests/support/lsp_client"
+import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, end_text, is_missing }
+import "std/chars"
+import "std/ds" { List }
+import "std/json" + { Json_builder }
+import "std/jsonrpc"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+priv const normal_ms: I32 = 15000 //<
+    //< The read timeout (the same as the suite's `normal_ms`)
+
+priv const values_src: U8[] =
+    """import "std/ds" { List }
+
+priv struct Pair
+    a: I32
+    b: U8[]
+
+priv enum Shape
+    dot
+    circle(r: F64)
+
+priv fn maybe(): I32?
+    return .none
+
+priv fn fail(): I32!U8[]
+    return 1
+
+fn run(n: Sz, names: List<|U8[]|>$@): Sz
+    $words: = List<|U8[]|>.new(null)
+    defer words.free()
+    size: Sz = 4
+    text: = "str"
+    letter: = 'a'
+    ratio: = 1.5
+    nothing: U8@ = null
+    yes: = true
+    pair: = Pair::{ .a = 1, .b = "x" }
+    $total: Sz = size + n + names.len + text.len + Sz::letter
+    for w in words
+        total += w.len
+    for i in Range.asc(3)
+        total += i
+    if v: = maybe()
+        total += Sz::v
+    got: = fail() catch e
+        fallback I32::e.len
+    switch Shape.circle(ratio)
+    case .circle(r)
+        total += Sz::r
+    default {}
+    return total + Sz::got + Sz::pair.a + pair.b.len + (1 if yes && nothing == null else 0)
+"""
+
+priv const values_uri: U8[] = "file:///values_probe.kspls"
+
+priv struct Ask //< a position in the probe, and what a hover there should show
+    line: U8[] //< the start of its line
+    needle: U8[] //< the text it stands in, first found in that line
+    step: Sz //< how many characters into `needle`
+    name: U8[] //< what stands there, for the check's label
+    want: U8[] //< the whole line the answer shows; empty where the answer is `null`
+    count: Sz //< for references, how many places the name has in the probe
+
+priv const literal_asks: Ask[10] = ::{ //< the literals, each with the type it took
+    Ask::{ .line = "    size: Sz", .needle = "4", .name = "an integer given a type", .want = "Sz" },
+    Ask::{ .line = "    for i in", .needle = "3)", .name = "an integer passed as an `Sz`",
+        .want = "Sz" },
+    Ask::{ .line = "    pair: =", .needle = "1,", .name = "an integer given a field's type",
+        .want = "I32" },
+    Ask::{ .line = "    text: =", .needle = "\"str", .step = 1, .name = "a string",
+        .want = "U8[]" },
+    Ask::{ .line = "    pair: =", .needle = "\"x", .step = 1,
+        .name = "a string given a field's type", .want = "U8[]" },
+    Ask::{ .line = "    letter: =", .needle = "'a", .step = 1, .name = "a character",
+        .want = "U8" },
+    Ask::{ .line = "    ratio: =", .needle = "1.5", .step = 1, .name = "a float", .want = "F64" },
+    Ask::{ .line = "    nothing: U8@", .needle = "null", .step = 1,
+        .name = "a null given a pointer's type", .want = "U8@" },
+    Ask::{ .line = "    yes: =", .needle = "true", .step = 1, .name = "a Bool", .want = "Bool" },
+    Ask::{ .line = "    for w in", .needle = " in", .step = 1,
+        .name = "the 'in' of a for, beside its copied collection" },
+}
+
+priv const bound_asks: Ask[12] = ::{ //< the names where they are bound, and fields set by name
+    Ask::{ .line = "    $words: =", .needle = "words", .step = 1,
+        .name = "a declaration of a struct's type, inferred",
+        .want = "words: std.ds.List<|U8[]|>" },
+    Ask::{ .line = "    nothing: U8@", .needle = "nothing", .step = 1,
+        .name = "a declaration of a pointer's type, written", .want = "nothing: U8@" },
+    Ask::{ .line = "    text: =", .needle = "text", .step = 1,
+        .name = "a declaration of a slice's type, inferred", .want = "text: U8[]" },
+    Ask::{ .line = "    size: Sz", .needle = "size", .step = 1,
+        .name = "a declaration of a primitive type, written", .want = "size: Sz" },
+    Ask::{ .line = "fn run", .needle = "names", .step = 1, .name = "a parameter",
+        .want = "names: std.ds.List<|U8[]|>$@" },
+    Ask::{ .line = "    for w", .needle = "w ", .name = "a for's item, by index",
+        .want = "w: U8[]" },
+    Ask::{ .line = "    for i", .needle = "i ", .name = "a for's item, from a Range",
+        .want = "i: Sz" },
+    Ask::{ .line = "    if v", .needle = "v:", .name = "an if's binding", .want = "v: I32" },
+    Ask::{ .line = "    got: = fail() catch e", .needle = " e", .step = 1,
+        .name = "a catch's binding", .want = "e: U8[]" },
+    Ask::{ .line = "    case .circle(r)", .needle = "r)", .name = "a pattern's payload",
+        .want = "r: F64" },
+    Ask::{ .line = "    pair: =", .needle = ".a", .step = 1,
+        .name = "a field set by name in a struct literal", .want = "field a: I32" },
+    Ask::{ .line = "    pair: =", .needle = ".b", .step = 1,
+        .name = "a second field set by name in a struct literal", .want = "field b: U8[]" },
+}
+
+priv fn request_at(c: jsonrpc.Client$@, method: U8[], ask: Ask, arena: Arena$@):
+    json.Val!jsonrpc.Rpc_end //<
+        //< That request at that position (references count the declaration)
+    col: = col_in_line(values_src, ask.line, ask.needle, arena) + ask.step
+    $b: = Json_builder.new(arena)
+    doc: = b.obj().set("uri", b.str_val(values_uri)).build()
+    pos: = b.obj().set("line", b.int_val(decl_line(values_src, ask.line, arena)))
+        .set("character", b.int_val(col)).build()
+    ctx: = b.obj().set("includeDeclaration", b.bool_val(true)).build()
+    params: = b.obj().set("textDocument", doc).set("position", pos).set("context", ctx).build()
+    return c.request(method, params, normal_ms, arena)
+
+priv fn shown_line(text: U8[]): U8[] //< the answer's first line inside its code fence
+    body: = text.strip_prefix("```kspl\n")
+    at: = body.find_char('\n')
+    return body.sub(0, at) if at >= 0 else body
+
+priv fn check_asks(c: jsonrpc.Client$@, asks: Ask[], arena: Arena$@) //<
+    //< Each hover shows exactly what that position's `want` says
+    for ask in asks
+        label: = arena.text().s("a hover on ").s(ask.name).s(" shows ")
+            .s(ask.want if ask.want.len > 0 else "nothing").take()
+        got: = request_at(c, "textDocument/hover", ask, arena) catch e
+            verdict.check(label, false, end_text(e))
+            continue
+        text: = lsp_client.hover_text(got)
+        ok: =
+            (is_missing(got.get("result")) if ask.want.len == 0
+            else shown_line(text).equals(ask.want))
+        verdict.check(label, ok,
+            lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
+
+priv const ref_asks: Ask[2] = ::{ //< the names whose references are listed, each with its count
+    Ask::{ .line = "    $words: =", .needle = "words", .step = 1, .name = "words", .count = 3 },
+    Ask::{ .line = "    for w", .needle = "w ", .name = "w", .count = 2 },
+}
+
+priv fn check_refs(c: jsonrpc.Client$@, arena: Arena$@) //<
+    //< References from where a name is bound list that name's places, each on the name itself
+    lines: = values_src.lines(arena)
+    for ask in ref_asks
+        label: = arena.text().s("references from where '").s(ask.name).s("' is bound list its ")
+            .s("\{ask.count\} places, each on it").take()
+        got: = request_at(c, "textDocument/references", ask, arena) catch e
+            verdict.check(label, false, end_text(e))
+            continue
+        spots: = got.get("result").arr_list(arena)
+        $off: = List<|U8[]|>.new(arena)
+        for spot in spots
+            r: = spot.get("range")
+            line: = Sz::r.get("start").get("line").as_int(-1I32)
+            from: = Sz::r.get("start").get("character").as_int(-1I32)
+            to: = Sz::r.get("end").get("character").as_int(-1I32)
+            on: =
+                (lines.get(line).sub(from, to - from)
+                if line < lines.len && from <= to && to <= lines.get(line).len else "")
+            uri: = spot.get("uri").as_str()
+            if !uri.equals(values_uri) || !on.equals(ask.name)
+                off
+                    .push(arena.text().s(uri).s(":\{line + 1\}:\{from\} '").s(on).s("'").take())
+        found: = arena.text().s("\{spots.len\} found, off: ").s(lsp_client.join(off@, arena)).take()
+        verdict.check(label, off.len == 0 && spots.len == ask.count,
+            lsp_client.why(c, found, arena))
+
+fn check_hover_values(c: jsonrpc.Client$@, arena: Arena$@)
+    _sent: = c.notify("textDocument/didOpen",
+        lsp_client.did_open(values_uri, values_src, arena), arena)
+    defer lsp_client.close(c, values_uri, arena)
+    check_asks(c, Ask[]::literal_asks, arena)
+    // Caution: **These come after the literals**, which hold an empty answer a dead worker would
+    // give too: an answer here shows the analysis is standing.
+    check_asks(c, Ask[]::bound_asks, arena)
+    check_refs(c, arena)

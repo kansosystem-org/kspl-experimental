@@ -130,7 +130,7 @@ priv struct Placed //< what the runs start, and where they work
     root: U8[]
     tmp: U8[]
 
-priv fn link_cases(root: U8[], arena: Arena$@): Void?client.Http_end //<
+priv fn link_cases(root: U8[], arena: Arena$@): Void!client.Http_end //<
     //< Checks that a link from inside the root to outside it cannot be followed
     //<
     //< **It needs the root, so `serve_cases` (HTTP only) cannot call it.**
@@ -140,7 +140,7 @@ priv fn link_cases(root: U8[], arena: Arena$@): Void?client.Http_end //<
         local.make_link(root, "dlink", "..", arena) &&
         local.make_link(root, "bk\\sl", "..", arena)
         for target in link_escapes
-            r: = client.get(port, target, "", arena)?
+            r: = client.get(port, target, "", arena)!
             nm_l: = arena.text().s("a link inside the root cannot get outside: \{target\}").take()
             ok_l: = r.status == 403 && r.body.find_str("secret") < 0
             d_l: = client.shown(r, arena)
@@ -150,14 +150,14 @@ priv fn link_cases(root: U8[], arena: Arena$@): Void?client.Http_end //<
         fs.mkdir(fs.join(root, "ix", arena)) catch {}
         if local.make_link(root, "ix/index.html", "../../secret.txt", arena)
             for target in U8[][]::{ "/ix", "/ix/", "/ix/index.html" }
-                r: = client.get(port, target, "", arena)?
+                r: = client.get(port, target, "", arena)!
                 nm_i: = arena.text().s("a link at a folder's index cannot get outside: \{target\}")
                     .take()
                 verdict.check(nm_i, r.status == 403 && r.body.find_str("secret") < 0,
                     client.shown(r, arena))
         // Caution: **Check that a legitimate file still passes**, or refusing everything would
         // pass.
-        fine: = client.get(port, "/index.html", "", arena)?
+        fine: = client.get(port, "/index.html", "", arena)!
         verdict.check("an ordinary file passes even with links turned away", fine.status == 200,
             client.shown(fine, arena))
     else
@@ -287,24 +287,24 @@ priv fn serve_stop_and_check(exe: U8[], root: U8[], tmp: U8[], arena: Arena$@) /
         if srv.child.alive()
             srv.stop()
 
-priv fn stop_cases(token: U8[], srv: Running$@, arena: Arena$@): Void?client.Http_end
+priv fn stop_cases(token: U8[], srv: Running$@, arena: Arena$@): Void!client.Http_end
     auth: = client.bearer_head(token, arena)
     // Caution: **A stop without the token is refused, and the server stays up**, or any page in the
     // browser could end it.
-    bare: = client.post_empty(stop_port, "/api/stop", arena)?
+    bare: = client.post_empty(stop_port, "/api/stop", arena)!
     verdict.check("POST /api/stop without the token is a 401", bare.status == 401,
         client.shown(bare, arena))
     wrong: = client.post_json(stop_port, "/api/stop", "Authorization: Bearer deadbeef\r\n", "",
-        client.default_timeout_ms, arena)?
+        client.default_timeout_ms, arena)!
     verdict.check("POST /api/stop with a token that does not match is a 401", wrong.status == 401,
         client.shown(wrong, arena))
     client.check_405("GET /api/stop is 405",
-        client.get(stop_port, "/api/stop", auth, arena)?, arena)
-    st: = client.get(stop_port, "/api/status", auth, arena)?
+        client.get(stop_port, "/api/stop", auth, arena)!, arena)
+    st: = client.get(stop_port, "/api/status", auth, arena)!
     verdict.check("a refused stop leaves it answering",
         st.status == 200 && srv.child.alive(), client.shown(st, arena))
     // **The answer comes before it stops**, so the asker can tell a stop from a broken connection.
-    asked: = client.post_json(stop_port, "/api/stop", auth, "", client.default_timeout_ms, arena)?
+    asked: = client.post_json(stop_port, "/api/stop", auth, "", client.default_timeout_ms, arena)!
     verdict.check("POST /api/stop with the token is answered", asked.status == 200,
         client.shown(asked, arena))
     verdict.check("it stops once it has answered", wait_gone(srv.child@), srv.log(arena))
@@ -364,29 +364,29 @@ priv fn serve_page_and_check(exe: U8[], root: U8[], tmp: U8[], arena: Arena$@) /
         $bad: = c2
         bad.kill()
 
-priv fn page_cases(arena: Arena$@): Void?client.Http_end //<
+priv fn page_cases(arena: Arena$@): Void!client.Http_end //<
     //< The answers when `--page` is given
-    slash: = client.get(page_port, "/", "", arena)?
+    slash: = client.get(page_port, "/", "", arena)!
     ok: = slash.status == 200 && slash.body.equals(page_body)
     verdict.check("--page: GET / returns the page named", ok, client.shown(slash, arena))
-    named: = client.get(page_port, "/index.html", "", arena)?
+    named: = client.get(page_port, "/index.html", "", arena)!
     ok2: = named.status == 200 && named.body.equals(page_body)
     verdict.check("--page: GET /index.html returns the same page too", ok2,
         client.shown(named, arena))
     // **Only the two at the root are replaced** (not a subfolder's index).
-    sub: = client.get(page_port, "/sub/", "", arena)?
+    sub: = client.get(page_port, "/sub/", "", arena)!
     ok3: = sub.status == 200 && sub.body.equals("sub index\n")
     verdict.check("--page: a lower level's index.html is not swapped", ok3,
         client.shown(sub, arena))
-    other: = client.get(page_port, "/style.css", "", arena)?
+    other: = client.get(page_port, "/style.css", "", arena)!
     ok4: = other.status == 200 && other.body.equals("body{}\n")
     verdict.check("--page: other files under the root stay as they are", ok4,
         client.shown(other, arena))
     // **The client must not reach that page by its path**; only whoever starts the server names it.
-    by_path: = client.get(page_port, "/ui/app.html", "", arena)?
+    by_path: = client.get(page_port, "/ui/app.html", "", arena)!
     verdict.check("--page: the client cannot reach it by that path", by_path.status == 404,
         client.shown(by_path, arena))
-    up: = client.get(page_port, "/../ui/app.html", "", arena)?
+    up: = client.get(page_port, "/../ui/app.html", "", arena)!
     verdict.check("--page: a path climbing upward is turned away", up.status == 403,
         client.shown(up, arena))
 
@@ -426,69 +426,69 @@ priv fn token_from(out_log: U8[], arena: Arena$@): U8[] //< extracts the token f
             return line.sub_from(at + token_line.len)
     return ""
 
-priv fn run_cases(root: U8[], arena: Arena$@): Void?client.Http_end
-    serve_cases(arena)?
-    api_cases(root, arena)?
-    blob: = car.pilot_cases(port, arena)?
-    car.car_cases(port, blob, arena)?
-    keepalive_cases(arena)?
+priv fn run_cases(root: U8[], arena: Arena$@): Void!client.Http_end
+    serve_cases(arena)!
+    api_cases(root, arena)!
+    blob: = car.pilot_cases(port, arena)!
+    car.car_cases(port, blob, arena)!
+    keepalive_cases(arena)!
 
 // --- static serving, percent-decoding, escaping outside the root ---
-priv fn serve_cases(arena: Arena$@): Void?client.Http_end
-    slash: = client.get(port, "/", "", arena)?
+priv fn serve_cases(arena: Arena$@): Void!client.Http_end
+    slash: = client.get(port, "/", "", arena)!
     ok2: = slash.status == 200 && slash.body.equals("root index\n")
     d3: = client.shown(slash, arena)
     verdict.check("GET / returns index.html", ok2, d3)
     ctype: = client.header(slash.head, "content-type")
     verdict.check("the Content-Type is chosen from the extension",
         ctype.starts_with("text/html"), ctype)
-    sub: = client.get(port, "/sub", "", arena)?
+    sub: = client.get(port, "/sub", "", arena)!
     ok4: = sub.status == 200 && sub.body.equals("sub index\n")
     d5: = client.shown(sub, arena)
     verdict.check("a directory returns the index.html below it", ok4, d5)
 
     // Look the file up after decoding, or a name with %20 cannot be reached.
-    enc: = client.get(port, "/a%2Bb%20c.txt", "", arena)?
+    enc: = client.get(port, "/a%2Bb%20c.txt", "", arena)!
     ok6: = enc.status == 200 && enc.body.equals("plus and space\n")
     d7: = client.shown(enc, arena)
     verdict.check("a file can be fetched by its name with %XX resolved", ok6, d7)
     // A "+" in a path is not a space (a "+" for a space is only a form-encoding convention).
-    plus: = client.get(port, "/a+b%20c.txt", "", arena)?
+    plus: = client.get(port, "/a+b%20c.txt", "", arena)!
     ok8: = plus.status == 200 && plus.body.equals("plus and space\n")
     d9: = client.shown(plus, arena)
     verdict.check("a '+' in a path stays a '+'", ok8, d9)
-    broken: = client.get(port, "/%zz", "", arena)?
+    broken: = client.get(port, "/%zz", "", arena)!
     d10: = arena.text().s("\{broken.status\}").take()
     verdict.check("a broken %XX is a 400", broken.status == 400, d10)
 
     for target in escapes
-        r: = client.get(port, target, "", arena)?
+        r: = client.get(port, target, "", arena)!
         nm11: = arena.text().s("it cannot get outside the root: \{target\}").take()
         ok12: = r.status == 403 && r.body.find_str("secret") < 0
         d13: = client.shown(r, arena)
         verdict.check(nm11, ok12, d13)
     // A double encoding is resolved only once (`%252e` is a name `%2e`, not a `.`).
-    twice: = client.get(port, "/%252e%252e/secret.txt", "", arena)?
+    twice: = client.get(port, "/%252e%252e/secret.txt", "", arena)!
     ok14: = twice.status == 404 && twice.body.find_str("secret") < 0
     d15: = client.shown(twice, arena)
     verdict.check("a double encoding is not resolved (a 404, not a 200)", ok14, d15)
 
     for target in reinterpreted
-        r: = client.get(port, target, "", arena)?
+        r: = client.get(port, target, "", arena)!
         nm16: = arena.text().s("a name the OS rereads is not taken: \{target\}").take()
         ok17: = r.status == 403 && r.body.find_str("root index") < 0
         d18: = client.shown(r, arena)
         verdict.check(nm16, ok17, d18)
     // Only a step that is exactly a device name is refused; a partial match would refuse
     // console.js.
-    js: = client.get(port, "/console.js", "", arena)?
+    js: = client.get(port, "/console.js", "", arena)!
     ok19: = js.status == 200 && js.body.equals("// console\n")
     d20: = client.shown(js, arena)
     verdict.check("an ordinary file merely starting with a device name is distributed", ok19, d20)
 
 // --- the JSON API and the methods ---
-priv fn api_cases(root: U8[], arena: Arena$@): Void?client.Http_end
-    st: = client.get(port, "/api/status", "", arena)?
+priv fn api_cases(root: U8[], arena: Arena$@): Void!client.Http_end
+    st: = client.get(port, "/api/status", "", arena)!
     doc: = client.doc_of(st, arena)
     ok21: =
         st.status == 200 &&
@@ -498,12 +498,12 @@ priv fn api_cases(root: U8[], arena: Arena$@): Void?client.Http_end
     verdict.check("GET /api/status returns JSON", ok21, d22)
 
     // **No endpoint lists a folder**: the page asks for each file by name.
-    gone: = client.get(port, "/api/list", "", arena)?
+    gone: = client.get(port, "/api/list", "", arena)!
     verdict.check("there is no listing endpoint", gone.status == 404,
         client.shown(gone, arena))
 
     // Caution: **Say whether it is for local use**, or the page can only find out by probing.
-    told: = client.doc_of(client.get(port, "/api/status", "", arena)?, arena)
+    told: = client.doc_of(client.get(port, "/api/status", "", arena)!, arena)
     verdict.check("the outward status says it is not local-facing",
         !told.get("local").as_bool(false), client.dump_of(told, arena))
 
@@ -511,19 +511,19 @@ priv fn api_cases(root: U8[], arena: Arena$@): Void?client.Http_end
     // could read and write under the root. It must be **404**, not 405 or 401 (a 401 says "an
     // endpoint that works with a token is here").
     for target in U8[][]::{ "/api/file?path=sub/one.txt", "/api/stat?path=sub/one.txt" }
-        r: = client.get(port, target, "", arena)?
+        r: = client.get(port, target, "", arena)!
         nm: = arena.text().s("without a token there is no endpoint: ").s(target).take()
         verdict.check(nm, r.status == 404, client.shown(r, arena))
     spawned: = client.post_json(port, "/api/run", "", "{\"cmd\":\"ksplc\",\"args\":[\"lsp\"]}",
-        5000I32, arena)?
+        5000I32, arena)!
     verdict.check("under the shape with no token a process cannot be started",
         spawned.status == 404, client.shown(spawned, arena))
     // Facing outward there is no token to protect a stop, so there is no stop: the checks after
     // this one show the server still answering.
-    halt: = client.post_empty(port, "/api/stop", arena)?
+    halt: = client.post_empty(port, "/api/stop", arena)!
     verdict.check("without a token there is no stopping it", halt.status == 404,
         client.shown(halt, arena))
-    wrote: = client.put_file(port, "/api/file?path=sub/hack.txt", "", "x", arena)?
+    wrote: = client.put_file(port, "/api/file?path=sub/hack.txt", "", "x", arena)!
     verdict.check("under the shape with no token it cannot write", wrote.status == 404,
         client.shown(wrote, arena))
     // **Check the folder after the refusal**, or a write after the refusal goes unnoticed.
@@ -533,14 +533,14 @@ priv fn api_cases(root: U8[], arena: Arena$@): Void?client.Http_end
     // Caution: **Do not silently truncate a body over the cap**, or the server handles half of what
     // it received. It is checked once the request is parsed, for every endpoint, so one is tried.
     over: = client.put_file(port, "/api/file?path=sub/big.txt", "",
-        client.filler(over_outward_body, arena), arena)?
+        client.filler(over_outward_body, arena), arena)!
     verdict.check("a body past the cap is a 413", over.status == 413,
         client.shown(over, arena))
-    lingered: = sends_after_413(arena)?
+    lingered: = sends_after_413(arena)!
     verdict.check("after a 413 it reads the rest of the body rather than resetting", lingered,
         "the rest of the body was refused (a reset, which on Windows can swallow the 413)")
 
-    nope: = client.get(port, "/api/nope", "", arena)?
+    nope: = client.get(port, "/api/nope", "", arena)!
     ok29: =
         nope.status == 404 &&
         client.doc_of(nope, arena).get("status").as_int(0) == 404
@@ -548,17 +548,17 @@ priv fn api_cases(root: U8[], arena: Arena$@): Void?client.Http_end
     verdict.check("an unknown API is a JSON 404", ok29, d30)
     // **Every entry point names its methods**, the reading ones too, and refuses the rest in JSON.
     client.check_405("POST /api/status is 405",
-        client.post_empty(port, "/api/status", arena)?, arena)
+        client.post_empty(port, "/api/status", arena)!, arena)
     api_head: = client.request(port, client.raw("HEAD", "/api/status", "", "", arena), 1,
-        client.default_timeout_ms, true, arena)?
+        client.default_timeout_ms, true, arena)!
     verdict.check("HEAD /api/status is a JSON 405",
         api_head.get(0).status == 405 && client.is_json(api_head.get(0)),
         api_head.get(0).head)
 
     client.check_405("anything but GET/HEAD is a 405",
-        client.post_empty(port, "/index.html", arena)?, arena)
+        client.post_empty(port, "/index.html", arena)!, arena)
     head: = client.request(port, client.raw("HEAD", "/style.css", "", "", arena), 1,
-        client.default_timeout_ms, true, arena)?
+        client.default_timeout_ms, true, arena)!
     hd: = head.get(0)
     // A HEAD has no body, but the Content-Length gives the body's length (with 0, the client takes
     // it as "an empty file").
@@ -570,7 +570,7 @@ priv fn api_cases(root: U8[], arena: Arena$@): Void?client.Http_end
     // **No answer to a HEAD carries a body, a refusal's included**: the client reads the next
     // answer where the head ends, so a body sent after it is taken for that answer.
     for target in U8[][]::{ "/style.css", "/no-such.txt", "/api/status" }
-        $s: = client.head_stream(port, target, arena)?
+        $s: = client.head_stream(port, target, arena)!
         rest: = s.drain(client.default_timeout_ms, arena)
         said: = s.head(arena)
         s.free()
@@ -582,19 +582,19 @@ priv const rest_of_body: Sz = 4 * 1024 * 1024 //< what is sent after the 413
     //<
     //< Past every socket buffer, so a server that reset the connection fails the send.
 
-priv fn sends_after_413(arena: Arena$@): Bool?client.Http_end //<
+priv fn sends_after_413(arena: Arena$@): Bool!client.Http_end //<
     //< Whether the rest of a body past the cap is still taken once the 413 has been read
     //<
     //< Caution: **Send the rest only after reading the 413**: the server has closed its sending
     //< side by then, so this tests what it does with the bytes still coming (`conn.Conn` in
     //< `kssrv/conn.kspls`).
-    $c: = client.Conn.open(port)?
+    $c: = client.Conn.open(port)!
     defer c.free()
     head: = arena.text().s("PUT /api/file?path=sub/big.txt HTTP/1.1\r\nHost: 127.0.0.1\r\n")
         .s("Content-Length: \{over_outward_body + rest_of_body\}\r\n\r\n").take()
-    c.send(head)?
-    c.send(client.filler(over_outward_body, arena))?
-    r: = c.next(false, client.default_timeout_ms, arena)?
+    c.send(head)!
+    c.send(client.filler(over_outward_body, arena))!
+    r: = c.next(false, client.default_timeout_ms, arena)!
     if r.status != 413
         return false
     c.send(client.filler(rest_of_body, arena)) catch
@@ -602,11 +602,11 @@ priv fn sends_after_413(arena: Arena$@): Bool?client.Http_end //<
     return true
 
 // --- keep-alive ---
-priv fn keepalive_cases(arena: Arena$@): Void?client.Http_end
+priv fn keepalive_cases(arena: Arena$@): Void!client.Http_end
     // **A client that closes its sending half after the request still gets the answer**: `read`
     // returning 0 is not "the peer is gone" (`peer_done` in `kssrv/conn.kspls`), and the connection
     // closes once the answer is out.
-    $half: = client.open_stream(port, "/index.html", "", arena)?
+    $half: = client.open_stream(port, "/index.html", "", arena)!
     verdict.check("the write half alone can be closed", half.shut_write(),
         "shutdown(SHUT_WR) does not go through")
     after: = half.drain(client.default_timeout_ms, arena)
@@ -616,7 +616,7 @@ priv fn keepalive_cases(arena: Arena$@): Void?client.Http_end
     raw: = arena.text().s(client.raw("GET", "/style.css", "", "", arena))
         .s(client.raw("GET", "/sub/one.txt", "", "", arena))
         .s(client.raw("GET", "/", "Connection: close\r\n", "", arena)).take()
-    got: = client.request(port, raw, 3, client.default_timeout_ms, false, arena)?
+    got: = client.request(port, raw, 3, client.default_timeout_ms, false, arena)!
     ok70: =
         got.len == 3 && got.get(0).status == 200 && got.get(1).status == 200 &&
         got.get(2).status == 200 && got.get(1).body.equals("one\n")

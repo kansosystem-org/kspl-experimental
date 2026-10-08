@@ -55,7 +55,8 @@ priv enum Worker_end //< the reason a worker was given up on
 
 impl Worker_end
     priv fn worker_end_text(e: Self): U8[]
-        switch e case .done
+        switch e
+        case .done
             return "done"
         case .hang
             return "no output within the watchdog window (hang)"
@@ -95,12 +96,13 @@ priv fn pump_worker_output(worker: subproc.Piped_child, arena: Arena$@): Worker_
     for
         got: =
             worker.read(U8$[]::{ .ptr = rbuf, .len = cap }, worker_timeout_ms) catch e
-            switch e case .timed_out
-                ok = Worker_end.hang
+            switch e
+            case .timed_out
+                ok = .hang
             case .closed
-                ok = Worker_end.exited
+                ok = .exited
             case .failed
-                ok = Worker_end.read_error
+                ok = .read_error
             break
         acc.s(U8$[]::{ .ptr = rbuf, .len = got })
         search_from: = 0 if scanned < overlap else scanned - overlap
@@ -112,12 +114,12 @@ priv fn pump_worker_output(worker: subproc.Piped_child, arena: Arena$@): Worker_
                 relay_stripping_alive(acc.slice().sub(0, idx), clean@)
                 io.out().s(clean.slice())
                 io.out().flush()
-            ok = Worker_end.done
+            ok = .done
             break
         scanned = acc.slice().len
     return ok
 
-priv fn spawn_worker(): Option<|subproc.Piped_child|> //< it starts one worker
+priv fn spawn_worker(): subproc.Piped_child? //< it starts one worker
     //<
     //< **A failed start is `none`, not 0.** The worker is restarted on the next round, and without
     //< "not there yet" in the type, a write to a missing worker would be accepted. This is the only
@@ -125,15 +127,15 @@ priv fn spawn_worker(): Option<|subproc.Piped_child|> //< it starts one worker
     cmd_args: = sys.args()
     child: =
         subproc.spawn_piped(U8[][]::{ cmd_args[0], "lsp-worker" }, "") catch
-        return Option<|subproc.Piped_child|>.none
-    return Option<|subproc.Piped_child|>.some(child)
+        return .none
+    return .some(child)
 
-priv fn exchange(w: Option<|subproc.Piped_child|>, frame: U8$[], arena: Arena$@): Worker_end //<
+priv fn exchange(w: subproc.Piped_child?, frame: U8$[], arena: Arena$@): Worker_end //<
     //< It writes one framed message to the worker and relays what it answers, up to the marker
     if c: = w
         if c.write(frame)
             return pump_worker_output(c, arena)
-    return Worker_end.write_failed
+    return .write_failed
 priv struct Lsp_docs //< the open documents' texts, and what the worker has made of them
     //<
     //< It restores a restarted worker's state, sends each document's analysis again, and
@@ -237,21 +239,21 @@ priv fn quarantine(docs: Lsp_docs$@, uri: U8[], end: Worker_end) //<
     io.err().s("ksplc lsp: quarantining '\{uri\}': \{end.worker_end_text()\}\n")
     docs.poison(uri) // this text crashes it every time -> quarantine
 
-priv fn restart_worker(docs: Lsp_docs$@, lost_uri: U8[], arena: Arena$@):
-    Option<|subproc.Piped_child|> //<
-        //< It starts a worker and hands it every unquarantined open document's text, unanalysed
-        //<
-        //< **Nothing is analysed here**, so the next request waits for its own document alone.
-        //< Each handed document is marked unchecked, to be analysed later (`check_doc`): the
-        //< diagnostics on screen came from a worker that has just failed. `lost_uri` names the
-        //< document of the message lost in the restart, which goes first. None where no worker
-        //< could take the texts; the next message starts one again.
+priv fn restart_worker(docs: Lsp_docs$@, lost_uri: U8[], arena: Arena$@): subproc.Piped_child? //<
+    //< It starts a worker and hands it every unquarantined open document's text, unanalysed
+    //<
+    //< **Nothing is analysed here**, so the next request waits for its own document alone.
+    //< Each handed document is marked unchecked, to be analysed later (`check_doc`): the
+    //< diagnostics on screen came from a worker that has just failed. `lost_uri` names the
+    //< document of the message lost in the restart, which goes first. None where no worker
+    //< could take the texts; the next message starts one again.
     for
         w: = spawn_worker()
         if w.is_none()
             return w
         handed: = hand_over(docs, w, lost_uri, arena)
-        switch handed case .done
+        switch handed
+        case .done
             return w
         default {}
         // Caution: **Start again from the first document, never carry on in a new worker.** The
@@ -259,12 +261,13 @@ priv fn restart_worker(docs: Lsp_docs$@, lost_uri: U8[], arena: Arena$@):
         // the new: their requests would answer nothing.
         if c: = w
             c.kill()
-        switch handed case .write_failed
-            return Option<|subproc.Piped_child|>.none
+        switch handed
+        case .write_failed
+            return .none
         default {}
 
-priv fn hand_over(docs: Lsp_docs$@, w: Option<|subproc.Piped_child|>, lost_uri: U8[],
-    arena: Arena$@): Worker_end //<
+priv fn hand_over(docs: Lsp_docs$@, w: subproc.Piped_child?, lost_uri: U8[], arena: Arena$@):
+    Worker_end //<
         //< It hands a new worker each document `restart_worker` restores; done where all went over
         //<
         //< A document whose text alone brings the worker down (its conversion fails on it every
@@ -279,7 +282,8 @@ priv fn hand_over(docs: Lsp_docs$@, w: Option<|subproc.Piped_child|>, lost_uri: 
         handed: = exchange(w, frame.slice(), arena)
         frame.free()
         arena.restore(mark)
-        switch handed case .done
+        switch handed
+        case .done
             docs.unchecked.set(e.key, 1)
             if e.key.equals(lost_uri)
                 docs.first = e.key
@@ -288,10 +292,10 @@ priv fn hand_over(docs: Lsp_docs$@, w: Option<|subproc.Piped_child|>, lost_uri: 
         default
             quarantine(docs, e.key, handed)
             return handed
-    return Worker_end.done
+    return .done
 
-priv fn check_doc(docs: Lsp_docs$@, worker: Option<|subproc.Piped_child|>, uri: U8[],
-    arena: Arena$@): Option<|subproc.Piped_child|> //<
+priv fn check_doc(docs: Lsp_docs$@, worker: subproc.Piped_child?, uri: U8[], arena: Arena$@):
+    subproc.Piped_child? //<
         //< It has the worker analyse one unchecked document, as a didOpen of its text
         //<
         //< The worker publishes the document's diagnostics, which replace those on screen. A
@@ -300,7 +304,8 @@ priv fn check_doc(docs: Lsp_docs$@, worker: Option<|subproc.Piped_child|>, uri: 
     $frame: = build_doc_frame("textDocument/didOpen", uri, text, arena)
     defer frame.free()
     end: = exchange(worker, frame.slice(), arena)
-    switch end case .done
+    switch end
+    case .done
         _checked: = docs.unchecked.remove(uri)
         return worker
     case .write_failed
@@ -362,7 +367,7 @@ fn ksplc_lsp_read_editor(r: Editor_reader$@): Void$@ //<
         // A cheap look first: only a body naming `exit` is parsed here.
         $last: = !got
         if got && body.slice().find_str("\"exit\"") >= 0
-            doc: = json.parse(body.slice(), arena) catch json.Val.null_val
+            doc: = json.parse(body.slice(), arena) catch .null_val
             last = doc.get("method").as_str().equals("exit")
         box: = r.inbox.lock()
         if got
@@ -374,14 +379,14 @@ fn ksplc_lsp_read_editor(r: Editor_reader$@): Void$@ //<
             break
     return null
 
-priv fn start_editor_reader(): Option<|Editor_reader$@|> //<
+priv fn start_editor_reader(): Editor_reader$@? //<
     //< It starts the reading thread; none where the OS gives no thread or lock
     $inbox: =
         thread.Mutex<|Inbox|>.new(Inbox::{ .frames = Str_builder.new(), .ended = false }) catch
-        return Option<|Editor_reader$@|>.none
+        return .none
     arrived: = thread.Cond_var.new() catch
         inbox.free()
-        return Option<|Editor_reader$@|>.none
+        return .none
     r: = mem.alloc_as<|Editor_reader|>()
     r.inbox = inbox
     r.arrived = arrived
@@ -389,8 +394,8 @@ priv fn start_editor_reader(): Option<|Editor_reader$@|> //<
         r.inbox.free()
         r.arrived.free()
         dealloc(Void$@::r)
-        return Option<|Editor_reader$@|>.none
-    return Option<|Editor_reader$@|>.some(r)
+        return .none
+    return .some(r)
 
 impl Editor_reader
     priv fn next(r: Self$@, taken: Str_builder$@, wait: Bool, arena: Arena$@): Inbound //<
@@ -401,7 +406,7 @@ impl Editor_reader
             got: = jsonrpc.take_frame(taken, arena) catch
                 continue // the frame was dropped with its header; the next one follows
             if body: = got
-                return Inbound.message(body)
+                return .message(body)
             box: = r.inbox.lock()
             for wait && box.frames.len == 0 && !box.ended
                 r.arrived.wait(r.inbox@)
@@ -412,7 +417,7 @@ impl Editor_reader
                 continue
             ended: = box.ended
             r.inbox.unlock()
-            return Inbound.ended if ended else Inbound.idle
+            return .ended if ended else .idle
 
     priv fn free(r: Self$@) //< it waits for the thread to stop, at `exit` or the end of input
         r.reading.join_and_free()
@@ -428,12 +433,13 @@ impl Editor_reader: Owned {}
 fn run_lsp_supervisor(base_parser: kspeg.Target$@): Void
     // Where no worker or no reading thread can be started, it runs in-process instead.
     worker: = spawn_worker()
-    switch reader_beside(worker) case .some(reader)
+    switch reader_beside(worker)
+    case .some(reader)
         supervise(reader, worker)
     default
         lsp_worker.run_lsp_worker(base_parser)
 
-priv fn reader_beside(worker: Option<|subproc.Piped_child|>): Option<|Editor_reader$@|> //<
+priv fn reader_beside(worker: subproc.Piped_child?): Editor_reader$@? //<
     //< The reading thread, started once a worker is; none, the worker killed, where either fails
     //<
     //< Caution: **Start the reading thread last.** Once started it takes standard input, which the
@@ -443,9 +449,9 @@ priv fn reader_beside(worker: Option<|subproc.Piped_child|>): Option<|Editor_rea
         if started.is_none()
             c.kill()
         return started
-    return Option<|Editor_reader$@|>.none
+    return .none
 
-priv fn supervise(reader: Editor_reader$@, first_worker: Option<|subproc.Piped_child|>) //<
+priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) //<
     //< It relays the editor's messages to the worker until `shutdown` or the end of input
     defer reader.free()
     $worker: = first_worker
@@ -463,7 +469,8 @@ priv fn supervise(reader: Editor_reader$@, first_worker: Option<|subproc.Piped_c
         // time, so a request waits for at most one of them.
         idle_work: = worker.is_some() && docs.next_unchecked().len > 0
         $msg_body: U8[] = ""
-        switch reader.next(taken@, !idle_work, arena) case .message(body)
+        switch reader.next(taken@, !idle_work, arena)
+        case .message(body)
             msg_body = body
         case .idle
             worker = check_doc(docs@, worker, docs.next_unchecked(), arena)
@@ -471,7 +478,7 @@ priv fn supervise(reader: Editor_reader$@, first_worker: Option<|subproc.Piped_c
         case .ended
             break
 
-        doc: = json.parse(msg_body, arena) catch json.Val.null_val
+        doc: = json.parse(msg_body, arena) catch .null_val
         method: = doc.get("method").as_str()
         id_val: = doc.get("id")
         params: = doc.get("params")
@@ -487,7 +494,8 @@ priv fn supervise(reader: Editor_reader$@, first_worker: Option<|subproc.Piped_c
         jsonrpc.frame_into(frame@, msg_body)
         end: = exchange(worker, frame.slice(), arena)
         $handled: = false
-        switch end case .done
+        switch end
+        case .done
             handled = true
         default {}
 
@@ -500,7 +508,8 @@ priv fn supervise(reader: Editor_reader$@, first_worker: Option<|subproc.Piped_c
             worker = restart_worker(docs@, named, arena)
             // A request awaiting an answer gets an empty one, so the editor is not left waiting.
             $has_id: = true
-            switch id_val case .null_val
+            switch id_val
+            case .null_val
                 has_id = false
             default {}
             if has_id

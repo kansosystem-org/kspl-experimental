@@ -18,7 +18,6 @@ import "ksplc/lsp/server" as lsp_server
 import "ksplc/lsp/worker" as lsp_worker
 import "ksplc/parse/load" as parse_load
 import "ksplc/pipeline"
-import "ksplc/sema/session/ctx" { Bodies }
 import "ksplc/tools/doc" as tools_doc
 import "ksplc/tools/explain" as tools_explain
 import "ksplc/tools/interface" as tools_interface
@@ -76,6 +75,7 @@ priv enum Mode //< what the tool was asked to do
 impl Mode
     priv fn new(): Self
         base_core.config.defines = List<|U8[]|>.create(base_core.arena)
+        base_core.config.interface_paths = List<|U8[]|>.create(base_core.arena)
 
         $fmt_in_place: = false
         $to_name: U8[] = ""
@@ -116,8 +116,6 @@ impl Mode
         p.str_opt("--emit-deps", deps_path@, "where to write the list of every source read")
         p.str_opt("--emit-libs", libs_path@,
             "where to write the libraries the program names with #link, as -l words")
-        p.str_opt("--emit-interface", base_core.config.interface_path@,
-            "where to write a --library build's interface: a .h for C, a .kspls or .kspl for KSPL")
         p.str_opt("--emit-surface", base_core.config.surface_path@,
             "where to write the record of the API being published (for putting one version against \
                 another)")
@@ -145,13 +143,15 @@ impl Mode
             "put the time taken per phase out (for fmt, how often its cache answered)")
         p.flag("--freestanding", base_core.config.is_freestanding@,
             "generate for an environment with no OS")
-        p.flag("--library", base_core.config.library@,
-            "build a library: only #export functions are visible outside it, its runtime and std \
-                are its own")
+        p.str_list_opt("--library", base_core.config.interface_paths,
+            "build a library and write its interface there: a .h for C, a .kspls or .kspl for KSPL \
+                (it can be repeated); only #export functions are visible outside it, its runtime \
+                and std are its own")
         p.flag("--in-place", fmt_in_place@, "write the formatting result back into the source")
 
         p.parse(sys.args(), base_core.arena) catch e
-            switch e case .help_requested
+            switch e
+            case .help_requested
                 // On run, argp passes a `--help` after the script to the script, so this one is
                 // ksplc's.
                 usage.print_usage()
@@ -220,9 +220,9 @@ impl Mode
         if base_core.config.unit_count > 1 && base_core.is_llvm_target()
             usage
                 .error_exit("--split: only the C backend can split output into translation units.\n")
-        if base_core.config.library
+        if base_core.is_library()
             refuse_with_library()
-        check_interface_path()
+            check_interface_paths()
         if base_core.config.is_freestanding
             // It ties is_freestanding to cfg(freestanding), so this flag alone enables std/sys's
             // freestanding panic and the like, with no --define=freestanding to remember.
@@ -264,7 +264,8 @@ impl Mode
                 usage.error_exit(usage.usage_for_topics("info", usage.info_topics()))
             topic: = usage.parse_info_topic(in_files.get(0))
             usage.refuse_unread_std_dir(p, topic)
-            switch topic case .machine
+            switch topic
+            case .machine
                 check_machine(mode_name)
             default {}
             mode = .info(topic)
@@ -317,14 +318,15 @@ impl Mode
 
         return mode
 
-    priv fn dispatch(r: Self): Void?pipeline.Compile_error //<
+    priv fn dispatch(r: Self): Void!pipeline.Compile_error //<
         //< it dispatches to the handling for each mode
         //<
         //< **Only a mode that parses builds the grammar** (`kspl_parser`): a query an editor or
         //< build script makes at every start-up need not pay for it. run neither: on a cache hit,
         //< start-up alone is enough (a build calls ksplc again as a child, which parses).
-        switch r case .info(topic)
-            answer_info(topic)?
+        switch r
+        case .info(topic)
+            answer_info(topic)!
         case .clean
             arena: = Arena.new(8 * 1024)
             defer arena.free()
@@ -334,14 +336,14 @@ impl Mode
                 base_cache.exit_unlocated("ksplc")
             io.out().s("ksplc: cleared ").s(dir.slice()).c('\n')
         case .emit_runtime(out_path)
-            pipeline.emit_runtime(out_path)?
+            pipeline.emit_runtime(out_path)!
         case .explain(code)
             if !tools_explain.print_explanation(code, base_core.arena)
                 msg: = base_core.arena.text().s("ksplc explain: '").s(code)
                     .s("' is registered but has no section in ksplc/docs/SPEC-tools.md\n").take()
                 usage.error_exit(msg)
         case .doc(target)
-            parser: = kspl_parser()?
+            parser: = kspl_parser()!
             defer parser.free_memo()
             if !tools_doc.print_doc(target, parser)
                 sys.exit(1)
@@ -350,9 +352,9 @@ impl Mode
         case .build(in_path, out_path, flags)
             tools_run.build_program(in_path, out_path, flags) // it does not return
         case .fmt(fmt_files, in_place, config, to)
-            parser: = kspl_parser()?
+            parser: = kspl_parser()!
             defer parser.free_memo()
-            // Caution: **Format the rest even where one fails.** A `?` here leaves every later file
+            // Caution: **Format the rest even where one fails.** A `!` here leaves every later file
             // unformatted, the tree formatted partway without anyone seeing it, and a retry
             // stopping at the same place. format_file has printed each file's diagnostics; the
             // failed names go last.
@@ -369,14 +371,14 @@ impl Mode
                 io.err().s("\nfmt failed on \{failed.len\} file(s):\n")
                 for f in failed
                     io.err().s("  -> ").s(f).c('\n')
-                throw pipeline.Compile_error.fmt_failed
+                throw .fmt_failed
         case .lsp
-            parser: = kspl_parser()?
+            parser: = kspl_parser()!
             defer parser.free_memo()
             base_core.append_defines_from_env()
             lsp_server.run_lsp_supervisor(parser)
         case .lsp_worker
-            parser: = kspl_parser()?
+            parser: = kspl_parser()!
             defer parser.free_memo()
             // Caution: **Set the defines on both the supervisor and the worker.** The worker
             // analyses, and the supervisor only relays. With only one, code under a `#cfg` goes
@@ -384,13 +386,13 @@ impl Mode
             base_core.append_defines_from_env()
             lsp_worker.run_lsp_worker(parser)
         case .lint(in_path)
-            parser: = kspl_parser()?
+            parser: = kspl_parser()!
             defer parser.free_memo()
-            run_compiler(in_path, "", "", "", parser, true)?
+            run_compiler(in_path, "", "", "", parser, true)!
         case .compile(in_path, out_path, deps_path, libs_path)
-            parser: = kspl_parser()?
+            parser: = kspl_parser()!
             defer parser.free_memo()
-            run_compiler(in_path, out_path, deps_path, libs_path, parser, false)?
+            run_compiler(in_path, out_path, deps_path, libs_path, parser, false)!
 
 priv fn check_machine(face: U8[]) //<
     //< It refuses a machine ksplc has no widths for, listing the ones it has
@@ -438,32 +440,36 @@ priv fn refuse_with_library() //<
                 bare-metal runtime's helpers (__aeabi_memcpy and the like) by name from any object, \
                 so they cannot be private. A bare-metal image is built from source\n")
 
-priv fn check_interface_path() //<
-    //< It refuses an `--emit-interface` that cannot be written
+priv fn check_interface_paths() //<
+    //< It refuses a `--library=` interface that cannot be written
     //<
-    //< The interface is a library's (`--library`), and its form follows the extension, so any other
-    //< name would leave the reader guessing what was meant.
-    path: = base_core.config.interface_path
-    if path.len == 0
-        return
-    if !base_core.config.library
-        usage
-            .error_exit("--emit-interface: it writes a library's interface; build the library with \
-                --library\n")
-    switch tools_interface.form_of(path) case .none
-        usage
-            .error_exit(base_core.arena.text().s("--emit-interface: '").s(path)
-            .s("' names neither form: end it in .h for C, or in .kspls or .kspl for KSPL\n").take())
-    default {}
+    //< The form follows the extension, so any other name would leave the reader guessing what was
+    //< meant; a path named twice would be written twice.
+    paths: = base_core.config.interface_paths
+    for i in Range.asc(paths.len)
+        path: = paths.get(i)
+        switch tools_interface.form_of(path)
+        case .none
+            why: = base_core.arena.text().s("--library: '").s(path)
+                .s("' names neither form of interface: end it in .h for C, or in .kspls or .kspl \
+                    for KSPL\n").take()
+            usage.error_exit(why)
+        default {}
+        for j in Range.asc(i)
+            if paths.get(j).equals(path)
+                why: = base_core.arena.text().s("--library: '").s(path).s("' is named twice\n")
+                    .take()
+                usage.error_exit(why)
 
-priv fn kspl_parser(): kspeg.Target$@?pipeline.Compile_error //<
+priv fn kspl_parser(): kspeg.Target$@!pipeline.Compile_error //<
     //< The parser the embedded grammar builds; the caller frees its memo (`free_memo`)
     $meta: = kspeg_notation.Meta.new(kspl_grammar, base_core.arena)
     return meta.parse_grammar() catch e
-        throw pipeline.Compile_error.parse(.kspeg(e))
+        throw .parse(.kspeg(e))
 
-priv fn answer_info(topic: usage.Info_topic): Void?pipeline.Compile_error //< it answers a query
-    switch topic case .std_dir
+priv fn answer_info(topic: usage.Info_topic): Void!pipeline.Compile_error //< it answers a query
+    switch topic
+    case .std_dir
         io.out().s(base_locate.std_dir()).c('\n')
     case .link_libs
         print_flag_words(tools_run.append_link_libs)
@@ -477,7 +483,7 @@ priv fn answer_info(topic: usage.Info_topic): Void?pipeline.Compile_error //< it
         io.out().s(dir.slice()).c('\n')
     case .keywords
         // The only subject that needs the grammar.
-        parser: = kspl_parser()?
+        parser: = kspl_parser()!
         defer parser.free_memo()
         tools_keywords.run_keyword_dump(parser)
     case .machine
@@ -524,7 +530,7 @@ priv fn print_diag_summary(compiler: pipeline.Compiler$@, is_lint: Bool) //<
         io.out().s(".\n")
 
 priv fn run_compiler(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: U8[],
-    parser: kspeg.Target$@, is_lint: Bool): Void?pipeline.Compile_error
+    parser: kspeg.Target$@, is_lint: Bool): Void!pipeline.Compile_error
     start_time: = sys.mono_us()
     mod_name: = in_path.strip_kspl_ext()
 
@@ -533,7 +539,7 @@ priv fn run_compiler(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: 
     parse_load.prof.init()
     compiler: = pipeline.Compiler.new(parser)
     defer compiler.free()
-    compiler.parse_file(mod_name, "", false)?
+    compiler.parse_file(mod_name, "", false)!
 
     expected_max: = I32::base_ast_kinds.Ast_kind.k_max
     current_size: = base_core.pools.get_kind_pool_size()
@@ -551,7 +557,7 @@ priv fn run_compiler(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: 
     // `pipeline.print_stats_report` after every stage (base/stats.kspls collects them).
     base_stats.stages.parse = base_stats.end_stage(t0, t1)
 
-    compiler.run_semantic_analysis(mod_name, is_lint, false, Bodies.everywhere) catch {}
+    compiler.run_semantic_analysis(mod_name, is_lint, false, .everywhere) catch {}
 
     // Caution: **Print the summary only once, after every stage has finished.** Printed after
     // sema, it misses what Lower and the code generation added and fails while saying "0 error(s)".
@@ -564,18 +570,19 @@ priv fn run_compiler(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: 
         errs = compiler.sema.diags.counts.errors
 
     if !compiler.is_valid || errs > 0
-        throw pipeline.Compile_error.sema(.analysis_failed)
+        throw .sema(.analysis_failed)
     if is_lint
         return
 
-    // Caution: **Write the interface before lower**, which rewrites the names it reads.
-    $interface_text: U8[] = ""
-    if base_core.config.interface_path.len > 0
-        interface_text = tools_interface.render(compiler.root_file, compiler.sema,
-            tools_interface.form_of(base_core.config.interface_path),
-            base_core.config.interface_path, compiler.base_parser)
+    // Caution: **Write the interfaces before lower**, which rewrites the names they read. **Stop
+    // at the first refused**: the next form would report the same refusal again.
+    $interface_texts: = List<|U8[]|>.new(base_core.arena)
+    for path in base_core.config.interface_paths
+        text: = tools_interface.render(compiler.root_file, compiler.sema,
+            tools_interface.form_of(path), path, compiler.base_parser)
+        interface_texts.push(text)
         if compiler.sema.diags.counts.errors > errs
-            throw pipeline.Compile_error.sema(.analysis_failed)
+            throw .sema(.analysis_failed)
     $surface_text: U8[] = ""
     if base_core.config.surface_path.len > 0
         // The API record copies the spelling as written, so it needs a tree that still has its
@@ -588,13 +595,13 @@ priv fn run_compiler(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: 
                 catch null
         surface_text = tools_surface.render_surface(raw_root, main_src, compiler.sema.main_file)
 
-    compiler.run_lower_and_codegen(out_path)?
+    compiler.run_lower_and_codegen(out_path)!
     // Lower and the code generation also report diagnostics with sema.err() (the retain/release
     // insertion reaching its depth limit, and the like). The errs check above comes before that,
     // so without checking the error count again here it would exit with code 0 while printing
     // errors (and the caller could not detect that the build failed).
     if compiler.sema.diags.counts.errors > errs
-        throw pipeline.Compile_error.sema(.analysis_failed)
+        throw .sema(.analysis_failed)
     // It writes only after success. A failed compilation's dependency list would look like "the
     // latest" next time (`ksplc run`'s cache would reuse a broken build).
     if deps_path.len > 0
@@ -603,13 +610,13 @@ priv fn run_compiler(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: 
     // without the library and fail on undefined names, far from the cause.
     if libs_path.len > 0
         tools_run.write_libs_file(libs_path, compiler.root_file) catch e
-            throw pipeline.Compile_error.io(e)
+            throw .io(e)
     if base_core.config.surface_path.len > 0
         io.write_file(base_core.config.surface_path, surface_text) catch {}
     // Caution: **An interface that fails to write fails the compile**, as a libs file does.
-    if base_core.config.interface_path.len > 0
-        io.write_file(base_core.config.interface_path, interface_text) catch e
-            throw pipeline.Compile_error.io(e)
+    for i in Range.asc(interface_texts.len)
+        io.write_file(base_core.config.interface_paths.get(i), interface_texts.get(i)) catch e
+            throw .io(e)
 
     end_time: = sys.mono_us()
 
@@ -625,7 +632,8 @@ impl io.Io_error
         //< it.
         $msg: = Str_builder.new()
         defer msg.free()
-        switch r case .file_not_found(path)
+        switch r
+        case .file_not_found(path)
             msg.s("\{kind\}/file_not_found: file not found or unreadable: \{path\}\n")
         case .read_failed(path)
             msg.s("\{kind\}/read_failed: failed to read file: \{path\}\n")
@@ -643,22 +651,26 @@ impl pipeline.Compile_error
         //< identifier unchanged.
         $msg: = Str_builder.new()
         defer msg.free()
-        switch r$ case .parse(p_err)
-            switch p_err case .syntax_error
+        switch r$
+        case .parse(p_err)
+            switch p_err
+            case .syntax_error
                 msg.s("parse/syntax_error: compilation terminated (see diagnostics above)\n")
             case .circular_import(path)
                 msg
                     .s("parse/circular_import: circular import across directory boundaries is \
                         forbidden: \{path\}\n")
             case .kspeg(kspeg_err)
-                switch kspeg_err case .fatal(e_msg)
+                switch kspeg_err
+                case .fatal(e_msg)
                     msg.s("parse/kspeg: \{e_msg\}\n")
                 default
                     msg.s("parse/kspeg: failed to parse kspl.kspeg grammar itself\n")
             case .io(io_err)
                 io_err.report_and_exit("parse/io") // the helper reports and exits
         case .sema(s_err)
-            switch s_err case .analysis_failed
+            switch s_err
+            case .analysis_failed
                 msg.s("sema/analysis_failed: compilation terminated (see diagnostics above)\n")
             case .not_constant
                 msg.s("sema/not_constant: expression is not a compile-time constant\n")
@@ -691,18 +703,20 @@ priv fn apply_lint_setting(spec: U8[]) //< it applies one `--lint=CODE=level`
     level_name: = spec.sub_from(eq + 1)
     if !base_lint_codes.is_known(code)
         usage.error_exit("--lint: unknown diagnostic code\n")
-    switch base_lint_codes.Lint_level.parse(level_name) case .some(level)
+    switch base_lint_codes.Lint_level.parse(level_name)
+    case .some(level)
         base_lint_codes.set_global_level(code, level)
         // Raising it to an error also means "run that check" (the intent must be to reject it in an
         // ordinary build too).
-        switch level case .error
+        switch level
+        case .error
             base_core.config.run_lint_checks = true
         default {}
     case .none
         usage.error_exit("--lint: unknown level (expected 'off', 'on', or 'error')\n")
 
 const internal_trace_env_name: U8[] = "KSPLC_INTERNAL_TRACE" //<
-    //< The environment variable that decides whether ksplc prints its own `?` propagation trace
+    //< The environment variable that decides whether ksplc prints its own `!` propagation trace
     //<
     //< `sys.print_trace` prints the trace.
 
@@ -718,7 +732,7 @@ priv fn print_internal_trace() //<
         if v.len > 0
             sys.print_trace()
 
-fn main(): Void?I32
+fn main(): Void!I32
     with_setup:
         base_setup.init()
         defer base_setup.fin()

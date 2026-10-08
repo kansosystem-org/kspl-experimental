@@ -429,7 +429,7 @@ An *invariant* is a rule that always holds. Breaking one causes SEGVs (crashes f
 | **An AST node's pointer is unique (No Node Sharing)** | never reuse an instance, not even a dummy `empty` node filling a slot; allocate each with `Ast_node.new` | Sema keys the type environment on a node's address. A shared node makes the type information collide and causes a SEGV |
 | **Normalizing the string (text)** | a leaf's `text` (`Identifier`, `Keyword`, `Primitive_type`) keeps no surrounding whitespace at all, and symbol nodes (`()`, `,`, `;`, `{}`) vanish entirely from the AST | a leaf (a node with no children) holds exactly its word |
 | **A string literal is zero-copy, with symmetric escapes** | the KSPEG engine keeps a slice of the source rather than unescaping. An ordinary string is written out as that slice, escapes and all. A raw string (`"""`) is escaped to C's rules on output (an actual newline → `\n` …) | nothing is copied, and an escape comes out as it went in |
-| **Fixing the type expressions** | the raw pointer `@`, a slice/array `[]` and an exception union `?` each parse as a separate `type_postfix` node. The postfix mutability marker `$` (the language specification §3.2) stays at the head of the `text` of the `type_postfix` it was written on (`"$@"` / `"$[]"`) | which level a `$` belongs to stays known (the caution below) |
+| **Fixing the type expressions** | the raw pointer `@`, a slice/array `[]` and an exception union `!` each parse as a separate `type_postfix` node. The postfix mutability marker `$` (the language specification §3.2) stays at the head of the `text` of the `type_postfix` it was written on (`"$@"` / `"$[]"`) | which level a `$` belongs to stays known (the caution below) |
 | **Attributes and visibility go at the head** | always first among the target node's children (in a fixed-length node, as an `attribute_list` node at `[0]`) | anywhere else, Sema loses track of what `pub` and the like apply to |
 | **The position information (Source_loc) propagates exactly** | when `elide_node` discards a needless parent and lifts its child up, the child's own `loc` must never be overwritten | a compile error then reports the exact position |
 
@@ -514,7 +514,7 @@ Caution: When adding an accessor, confirm that the kind really comes at that ind
 | **`expr_offsetof`** | `[0]`: `Keyword("offsetof")`<br>`[1]`: `type_expr`<br>`[2]`: `Identifier` (the field's name) | renamed from `expr_unary` by `set_kind` (`parse/normalize.kspls`). The `k_expr_unary` branch in `parse/normalize_stmt.kspls` drops the separating symbols, not `is_trivia_node` in `parse/normalize.kspls` (`expr_unary` is not in `is_flatten_target`, so that path is never taken). The same branch drops the round brackets, so `expr_sizeof` can read `[1]` as its target, and it drops the comma between `offsetof`'s two children |
 | **`expr_ternary`** | `[0]`: `expr` (the condition)<br>`[1]`: `expr` (the value where true)<br>`[2]`: `expr` (the value where false) | the `value if condition else value` syntax. Without a condition it normalizes into the value itself |
 | **`expr_catch_chain`** | `[0]`: `expr` (the left-hand side)<br>`[1]`: `expr_catch` | a run such as `a catch b catch c` is piled into left-associative two-element nodes by `treeify_expr` (`parse/normalize_stmt.kspls`); with no `catch` it vanishes |
-| **`expr_postfix`** | `[0]`: `expr_primary` (the receiver)<br>`[1]`: `Literal` or `Keyword` (`.`, `[`, `(`, `@`, `::`, `?`)<br>`[2...]`: the elements accessed | |
+| **`expr_postfix`** | `[0]`: `expr_primary` (the receiver)<br>`[1]`: `Literal` or `Keyword` (`.`, `[`, `(`, `@`, `::`, `!`)<br>`[2...]`: the elements accessed | |
 | **`expr_implicit_dot`** | `[0]`: `Identifier` (a method or variant name)<br>`[1]?: expr_args` | a dot access with the receiver omitted (`.ok` or `.free()`), used by Desugar's method-chain expansion and by Sema's implicit resolution of an enum |
 | **`expr_catch`** | `[0]`: `Keyword("catch")`<br>`[1]?: Identifier` (the error variable)<br>`[2]: stmt_block / expr` | one `catch`, as `expr_catch_chain`'s right-hand element |
 | **`struct_literal`** | `[0]?: type_path / type_expr`<br>`[1...]: expr_field_init` | a compound literal, renamed from `expr_compound` by normalizing |
@@ -612,7 +612,7 @@ Read their reasons at `desugar_node` in `parse/desugar.kspls` before adding a De
 | | `for x in`'s **collection expression** moved aside into a temporary variable | `desugar_for_in_loop` in `parse/desugar.kspls` |
 | | an anonymous function or closure → `_anon_fn_N` plus an environment struct plus impls for `Callable` | `desugar_fn_lit` in `parse/desugar_closure.kspls` ([3.5.1](#351-synthesizing-a-closure-makes-a-kspl-source-string-and-puts-it-through-the-same-parser)) |
 | | `if v: = X { }` → a `switch` shape (**the rejection is Sema's**) | `desugar_if_bind` in `parse/desugar.kspls` |
-| | a **written** `T[]` / `T$[]` → `Slice<\|T\|>` / `Slice<\|$T\|>` | `fold_slice_postfixes` in `parse/desugar_slice.kspls` |
+| | a **written** `T[]` / `T$[]` → `Slice<\|T\|>` / `Slice<\|$T\|>`, and `T?` → `Option<\|T\|>` | `fold_sugar_postfixes` in `parse/desugar_slice.kspls` |
 | **Sema** | `for x in`'s shape (an index or `next()`, decided by the subject's type) | `expand_for_in` in `sema/body/for_in.kspls` ([4.3.10](#4310-for-x-in-is-expanded-in-sema-because-its-shape-depends-on-the-types)) |
 | | the rejection that holds `if v: =` to an `Option` | `infer_match_stmt` in `sema/body/match.kspls` |
 | | an implicit conversion, an upcast, a `Result` wrap → `expr_postfix ::` / `expr_upcast` / `result_wrap` | `apply_type_coercion` in `sema/body/coerce.kspls` |
@@ -621,7 +621,7 @@ Read their reasons at `desugar_node` in `parse/desugar.kspls` before adding a De
 | | instantiating a generic | `instantiate_struct` / `instantiate_fn` in `sema/decl/mono.kspls` |
 | | a general-purpose access → a dedicated node (`method_access` / `enum_init`) | `infer_dot_access` / `infer_namespace_access` in `sema/body/dot.kspls` |
 | | a **synthesized** slice (a string literal's type, the reflection table) | `slice_type_of` in `sema/decl/mono.kspls` |
-| **Lower** | hoisting short-circuit evaluation `&&` / `\|\|`, `?` (`result_unwrap`), and `catch` / `fallback` | `lower_logical_op` / `lower_try_op` / `lower_expr_catch_chain` in `lower/expr.kspls` |
+| **Lower** | hoisting short-circuit evaluation `&&` / `\|\|`, `!` (`result_unwrap`), and `catch` / `fallback` | `lower_logical_op` / `lower_try_op` / `lower_expr_catch_chain` in `lower/expr.kspls` |
 | | operator overloading `a + b` / `a[i]` → a method-call node (**Sema decides which method, Lower builds the call**) | `lower_user_operator` in `lower/expr.kspls` |
 | | moving an index aside (a slice's `at` needs the receiver's address) | `lower_postfix_index_operator` in `lower/expr.kspls` |
 | | `defer`'s cleanup, a labelled `break` / `continue` | `inject_cleanups` / `lower_loop_jump` in `lower/defer.kspls` |
@@ -696,7 +696,8 @@ The compiler adds a method `variant_name()` to every `enum`. It returns the vari
 ```kspls
 impl E
     pub fn variant_name(r: E): U8[]
-        switch r case .alpha
+        switch r
+        case .alpha
             return "alpha"
         case .beta
             return "beta"
@@ -714,7 +715,7 @@ impl E
 **It is placed at the `enum`'s name, and is marked as made by the compiler.** Parsed from a string, its positions are the string's. Read in the file, they land on whatever the file's first lines hold. Unplaced, the editor would colour the `Mode` of `impl Mode` over the path in an `import` line, and a hover or a jump there would answer the `enum`.
 
 * `place_as_made` in `base/ast_ext.kspls` places every node at the name, so a diagnostic, and the jump from a written `e.variant_name()`, land on what it was made for.
-* It also marks the `impl` and its method. The language server's walks by position skip what `made_by_compiler` answers (`lsp/semtok.kspls`, `lsp/nav.kspls`, `lsp/uses.kspls`).
+* It also marks the `impl` and its method. The language server's walks by position skip what `made_by_compiler` answers (`lsp/semtok.kspls`, `lsp/position.kspls`, `lsp/uses.kspls`).
 * The mark lives in `ival`, which the AST cache keeps.
 
 Swift's synthesized conformances take the same two steps (an implicit declaration, placed at the type), as rustc marks what a derive expands (`Span::from_expansion`).
@@ -811,7 +812,7 @@ Source text reaches ksplc from the disk and from the editor. Each place runs the
 
 Fixed at one place only, the others answer about a different program from the one a compile sees. Written once per place, one gets skipped. A language server reading the disk raw takes a Windows checkout's `\r\n` files for another program when it renames across them.
 
-**A comment notation is removed from two places.** `kanso_space_skipper` in `parse/load.kspls` is a KSPL-side hook plugged into the engine. It skips whitespace and comments in place of the grammar's `_Space`. Remove a notation from only one, and a form the grammar does not accept passes silently. `make test-negative` holds the two removed notations: block comments, and the error type left out of `T?`.
+**A comment notation is removed from two places.** `kanso_space_skipper` in `parse/load.kspls` is a KSPL-side hook plugged into the engine. It skips whitespace and comments in place of the grammar's `_Space`. Remove a notation from only one, and a form the grammar does not accept passes silently. `make test-negative` holds the two removed notations: block comments, and the error type left out of `T!`.
 
 ### 3.10 A literal's escapes are decided in one place
 
@@ -1042,7 +1043,7 @@ In KSPL, a `$` written in a type makes that level writable, and a level without 
 | `U8[]$@` | `U8 immut[]@` | `ptr(slice(const_of(U8)))` |
 | `U8$[]@` | `U8[] immut@` | `ptr(const_of(slice(U8)))` |
 
-**The marker is postfix because `@` and `[]` are.** A prefix marker would commute with them on the string (`"immut " + "U8[]"` and `"immut U8" + "[]"` are both `"immut U8[]"`), merging the table's second and third rows into one type id. As a postfix, it simply joins `get_or_add`'s chain of end tests (`?` → the marker → `@` → `[]` → `[N]`). A type name holds no space, so it conflicts with no other end test.
+**The marker is postfix because `@` and `[]` are.** A prefix marker would commute with them on the string (`"immut " + "U8[]"` and `"immut U8" + "[]"` are both `"immut U8[]"`), merging the table's second and third rows into one type id. As a postfix, it simply joins `get_or_add`'s chain of end tests (`!` → the marker → `@` → `[]` → `[N]`). A type name holds no space, so it conflicts with no other end test.
 
 **The APIs that ask about a mark differ in the tier they look at**, and a wrong pick silently decides wrongly. A *tier* is one level of a type: in `U8[]@`, the pointer, the slice and the `U8` are three tiers. This is the one correspondence table:
 
@@ -1378,7 +1379,7 @@ Caution: **Do not list here a kind that nothing makes.** It only adds reading br
 | **`generic_path`** | `[0...]: Identifier` | the resolved flat name of an instantiated generic function or struct. |
 | **`generic_method`** | `[0...]: Identifier` | an instantiated generic method. |
 | **`expr_upcast`** | `[0]: expr` (the original value) | raises a concrete type's value to a trait (a fat pointer). Sema makes it on an assignment or argument pass to a trait; Genc expands it into building a fat pointer with a vtable. |
-| **`result_wrap`** | `[0]: expr` (the value inside) | wraps a plain success value into the success case of a Result type (`T?E`). Sema makes it where a non-Result value reaches a context returning a Result. |
+| **`result_wrap`** | `[0]: expr` (the value inside) | wraps a plain success value into the success case of a Result type (`T!E`). Sema makes it where a non-Result value reaches a context returning a Result. |
 
 A *fat pointer* is a pair of pointers: one to the value, one to its vtable (§5.2). A *tagged union* is an enum whose variants carry data, plus a number (the tag) saying which variant it holds.
 
@@ -1516,7 +1517,7 @@ The steps, one by one:
 
   | file | what it handles |
   | :-- | :-- |
-  | `lower/expr.kspls` | hoisting short-circuit evaluation, `?`, `catch` / `fallback` |
+  | `lower/expr.kspls` | hoisting short-circuit evaluation, `!`, `catch` / `fallback` |
   | `lower/order.kspls` | fixing the order of a call's, an operator's and a compound literal's operands |
   | `lower/defer.kspls` | flattening `defer`, cleaning up after a labelled `break` / `continue` |
 
@@ -1527,7 +1528,7 @@ The steps, one by one:
 * **C leaves the order of a call's arguments, an operator's two sides and a compound literal's fields open, so Lower fixes it** (`Operand_order` in `lower/order.kspls`). gcc takes a call's arguments from the right and clang from the left, while the language evaluates left to right (the language specification §6.5.1).
   * An operand moves into a `_mir_tmp_` ahead of the statement when C could run it on the wrong side of another. That is when it is not `fixed` (a literal, a constant, an immutable binding, a fixed address) and a later operand acts (calls, can stop the program, or is hoisted itself), or when it acts and a later one is not `fixed`.
   * A place its consumer reaches by address (a method receiver taking `Self@`) fixes only its address, so the callee still sees the writes the later arguments make.
-  * Caution: **Count everything Lower hoists as acting** (`&&`, a conditional, `catch`, `?`, a user operator). Hoisted, it runs ahead of the expression around it, so an earlier operand that only reads must move too.
+  * Caution: **Count everything Lower hoists as acting** (`&&`, a conditional, `catch`, `!`, a user operator). Hoisted, it runs ahead of the expression around it, so an earlier operand that only reads must move too.
   * **Only inside a function body.** A top-level initializer runs nothing at run time, and a temporary moved out of it would land at file scope.
   * `tests/suite/backend_equiv_test.kspls` builds `tests/prog/equiv.kspls`'s C under gcc as well as clang, since only the two together show an order C left open.
 * **Verifying the types (`lower/verify.kspls`)** ends the order. One pass over the tree confirms that `x$`'s and `x@`'s types agree in pointer depth (`x@` takes `x`'s address, `x$` reads through a pointer), and a mismatch stops with an ICE.
@@ -1587,6 +1588,8 @@ Caution: **Call it after the functions have been dropped.** A type named only in
 **Key it by the type ID passed through `Env.c_repr_type_id`.** Bodies differing only in the immutability at the declared position fold into one struct in C (4.3.3). Counting on the plain ID drops the other one when only one is reached, and C stops with `unknown type name` (the typedef for `Job.argv`, a `U8[][]`, vanishes).
 
 **What is walked is `Env`'s declarations, not the tree.** The field types the generated C emits come from `Struct_def` / `Enum_def`, so a field's node in the tree may carry no type.
+
+**A composite type naming a dropped instance is dropped with it.** Sema registers every array, `T!E` and function type it meets (`Env.complex_types`), and C declares each ahead of its use. One that only a dropped function used, and that names a dropped instance (`fn(Box_I32*)`, `Cell_I64[2]`), names a struct C never sees. So `drop_orphan_complex_types` removes every composite naming one at any depth, a pointer included, folded as the walk folds. It also removes a `T!E` nothing live names, to keep the C small; an array or function type naming only live types stays, as it is correct C.
 
 **Here a mistake is never silent.** Dropping too little leaves a typedef nobody uses, which is still correct C; dropping too much stops the C compiler with `unknown type name`.
 
@@ -1682,7 +1685,7 @@ Every KSPL value has one fixed layout in memory, and both backends follow it, so
 
 The three longer rows:
 
-* **Results**: a Result's alignment is its fields' own, as C's struct has it (`U8?U8` is 3 bytes). **One holding a laid value is laid as a struct is** (see Structs below): its fields sit at sema's offsets (`result_err_offset` / `result_val_offset` in `sema/decl/layout.kspls`).
+* **Results**: a Result's alignment is its fields' own, as C's struct has it (`U8!U8` is 3 bytes). **One holding a laid value is laid as a struct is** (see Structs below): its fields sit at sema's offsets (`result_err_offset` / `result_val_offset` in `sema/decl/layout.kspls`).
 * **Enums**: an enum with a payload is a *tagged union*: a tag that says which variant is active, then room for the largest payload. The tag has the enum's base type (`I32` where none is written; genc's `tag` field is that type too, not a C `enum`). The buffer is sized from the type layout. On LLVM it is `{ <tag>, [N x iW] }`, the words `W` bytes wide for the alignment (8 at most), so the type has sema's size. **A payload field is reached by its byte offset** from the value's start (`enum_payload_offset` plus `payload_field_offset`; `payload_field_ptr` in `gen/llvm/types.kspls`). It is never reached through a struct of the payload's types, which LLVM would lay out by its own alignments.
 * **Structs**: on LLVM a struct is `{ <the fields> }`, laid out by LLVM's own alignments, which agree with C's. **One that is, or holds, an `#align(N)` struct, or a tagged union aligned past 8, is laid instead** (`is_laid` in `gen/llvm/types.kspls`). No LLVM type carries such an alignment, so the struct is written *packed* (no automatic gaps). Each field sits at sema's offset, with `i8` padding bytes between and after. A field's element index is counted past the padding (`field_index`), and every alloca and global of it is told the alignment (`get_struct_align`). Unlaid, a field after it would sit elsewhere than C and `offsetof` say.
 
@@ -1800,7 +1803,7 @@ C needs a name declared before it is used. Genc therefore writes everything in a
 
 **The call chain** dispatches on `kind_id` in three tiers (`file` / `stmt` / `expr`) and returns to `Ast_node.emit` (`ksplc/gen/c/root.kspls`) between them: `emit_functions_and_impls` → `emit_fn_def` (`gen/c/decl.kspls`) → `emit_stmt` (`gen/c/stmt.kspls`, reached through `Ast_node.emit`'s default branch) → `emit_expr` (`gen/c/expr.kspls`). The emitters of declaration bodies (`emit_struct_decl` / `emit_enum_decl` / `emit_trait_decl` / `emit_impl_decl`) live in `gen/c/types.kspls`, not `gen/c/decl.kspls`. Type strings are formatted in `gen/c/ctx.kspls` (`t()` / `map_c_type_to`).
 
-**A `#line` goes before every statement, not only where the line changes** (`emit_stmt` in `gen/c/stmt.kspls`). A `#line` directive tells the C compiler and the debugger which `.kspls` line the following C came from. C counts each line it reads past a directive as one more source line, and Lower expands one line into several statements: `x: = f()?` becomes a temporary, an `if` and a `throw`. Written only on a change, the `throw`'s `KSPL_RECORD_TRACE()` read two lines past the `?`, and a loop's `for` sat three lines past the loop after its init; so does the debugger's position. A loop's `for` gets one of its own after its init for the same reason. **The route a `?` records is genllvm's too**: it calls the same runtime functions with the line `sema.line_of` gives and the file `recorded_name_to` writes (`base/locate.kspls`), so the printed route agrees between the backends.
+**A `#line` goes before every statement, not only where the line changes** (`emit_stmt` in `gen/c/stmt.kspls`). A `#line` directive tells the C compiler and the debugger which `.kspls` line the following C came from. C counts each line it reads past a directive as one more source line, and Lower expands one line into several statements: `x: = f()!` becomes a temporary, an `if` and a `throw`. Written only on a change, the `throw`'s `KSPL_RECORD_TRACE()` read two lines past the `!`, and a loop's `for` sat three lines past the loop after its init; so does the debugger's position. A loop's `for` gets one of its own after its init for the same reason. **The route a `!` records is genllvm's too**: it calls the same runtime functions with the line `sema.line_of` gives and the file `recorded_name_to` writes (`base/locate.kspls`), so the printed route agrees between the backends.
 
 **The generated C is kept free of warnings.** Nobody reads it, so warnings left alone pile up until a new one goes unnoticed. `make test-c-warnings` (`tests/suite/c_warnings_test.kspls`) compiles the generated C of ksplc, of `make debug`'s executable and of `--freestanding` with `-Wall -Wextra -O2 -fsyntax-only` on every C compiler found. It fails on a single warning.
 
@@ -2552,7 +2555,7 @@ Hovering a generic declaration shows it the way you wrote it (with `Self` and `T
 
 1. **`Self` is not shown as a concrete type.** The type node of `fn next(r: Self)` in `trait Iter<|T|>` carries the id of `Slice<|U8|>`, an instantiation that happens to exist, and would read `fn next(r: U8[])`. `Self` beats every type id (`write_type_of` in `lsp/spell.kspls`): it is a fixed spelling, not a type to resolve ("5.1 Traits (`trait`)" in `../../docs/SPEC-language.md`). The test "is this `Self`" and its spelling (`self_type_spelling`) live with the rest of the spelling in `base/ast_spell.kspls`, written with its `$`. The type's name drops the `$` (`extract_type_name`, so `impl U8$[]` is found as `impl U8[]`), and `r: Self$@` would read `r: Self@`, a receiver that cannot be written through.
 2. **A trait's requirement keeps its owner** (not `std.lang.free` for `trait Owned`'s `free`). An impl's method carries its owner inside `sym.name` (`out.probe.Point.area`); a trait's does not, and a generic trait's requirement has no symbol. A method whose name is still bare takes its owner from the declaration it stands in (`find_owner_in_tree` in `lsp/hover.kspls`). It is read off the tree, not the type tables, where a generic trait nothing instantiated has no entry.
-3. **The internal name does not reach the screen** (§11.3 forbids it). The copy and the source node of `pub fn at_ref` in the `Slice` impl cover the same offset, and when the copy answers, the hover reads `std.lang.Slice.std_lang_Slice_U8_Const_at_ref`. At an equal score the walk prefers the node whose text is the source's text at that position (`is_source_text` in `lsp/nav.kspls`). This is a preference, not a filter, so a synthesized node still answers where it is the only one.
+3. **The internal name does not reach the screen** (§11.3 forbids it). The copy and the source node of `pub fn at_ref` in the `Slice` impl cover the same offset, and when the copy answers, the hover reads `std.lang.Slice.std_lang_Slice_U8_Const_at_ref`. At an equal score the walk prefers the node whose text is the source's text at that position (`is_source_text` in `lsp/position.kspls`). This is a preference, not a filter, so a synthesized node still answers where it is the only one: at its own position, not over the length of its text, which measures nothing on screen. Measured by its text, the `Slice` a `U8[]` is read as answered on the `]|>` after it.
 
 **The type arguments are the answer at a call, not on the declaration.** `List<|U8[]|>.new(arena)` calls that one instantiation, so its hover names it. The declaration stands for every instantiation, so it shows the generic's own name (`keep_args` in `find_owner_of_fn`). Run the two together and one of them lies.
 
@@ -2568,6 +2571,12 @@ Only a bare name takes the module of the file that declares it (`write_full_name
 
 **A label is shown as a label, and a jump to it lands on it.** Classified like a value, `with_setup:` in `main.kspls` reads `with_setup: with_setup` (a variable typed by its own name), and a jump from `break outer` finds nothing. The hover says `label <name>` wherever a name stands in a label's place: where it is written, or where a `break` / `continue` names it (`is_label_name` in `lsp/hover.kspls`). The label a jump leaves is recorded by the one search that decides it, sema's, on the jump's own name (`name_node` on `Jump_label` in `sema/session/ctx.kspls`). So the editor matches no name a second way.
 
+**A position answers for the name it touches, and a mark names nothing.** The walk by position (`traverse_and_find_best` in `lsp/position.kspls`) counts a position at a name's end as on it, since an editor asks at the caret just past a name. A mark (a bracket, a comma, an operator: the grammar's fixed spellings) is no target. Answered from the node around it, the `)` of `words.free()` read `fn )()`, a function by that name, and the `,` after `words@` read `fn @()`. Two kinds of node span marks besides their names, so each is held to its names. A path whose names are nodes of their own is not a target itself, or `List<|U8[]|>.new` answers on its `<|` and `|>` with the whole path as the name. A declaration, the last resort for its dropped `:`, reaches only to where its type or value begins (`declarator_span`), not over the marks inside its value. A keyword answers only through what it stands for, the `const` of a declaration that declaration; the walk that borrows an enclosing node's type (`walk_path_for_type` in `lsp/hover.kspls`) would label that type with the keyword's spelling (`type priv`). A `)` answering for its call was weighed and not taken: the call's name a few characters to the left already answers it. `check_hover_marks` in `tests/support/lsp_marks.kspls` asks at each kind of mark, then at the names beside them.
+
+**A literal shows the type it took, and nothing else.** `4` in `size: Sz = 4` is an `Sz`, passed to `Range.asc` it is an `Sz`, and in `Pair::{ .a = 1 }` it is the field's `I32`, so the hover reads the type the analysis left on that literal's node (`send_literal_type` in `lsp/hover.kspls`). Guessed from the spelling, every integer read `I32`. And labelled like a declaration, the literal read as one named after itself (`type 4`, `type "str"`, `type null`). The value is not repeated: it is the text under the caret. Where nothing was analysed (an array's length, an enum's tag value, an import's path) the hover is empty rather than guessed.
+
+**A name where it is bound reads as it does where it is used.** `$words: = List<|U8[]|>.new(arena)` shows `words: std.ds.List<|U8[]|>` on both lines. Every request asks the one question "which declaration does this name stand for" (`get_definition_node` in `lsp/nav.kspls`), and on a declared name it answered with the declared type's declaration, which the jump wants ("4.1 The features supported" in [`SPEC-tools.md`](SPEC-tools.md)). The hover then showed the struct, and references and renaming listed and renamed `List`. That step now belongs to the jump alone (`handle_definition`). **A binding the compiler builds keeps the name as written**, at its own position: the item of `for w in words` and the `v` of `if v: = opt` were rebuilt at the statement's position, so the hover found the `_for_coll` copy instead, or nothing, and references, matched by position, took the copy's places for the item's. A pattern's binding carries its type on its node, as a `catch e` does, so the place it is written has one to show. `check_hover_values` in `tests/support/lsp_values.kspls` asks at each kind of literal and of binding.
+
 ### 10.12 A document URI is converted to the logical name on the way in, and back to the editor's spelling on the way out
 
 The editor names files by URI (`file:///home/me/proj/std/lang.kspls`), while the compiler names them by a short project-relative name (`std/lang`). The server converts at the door, both ways. **Inside the compiler a file has one identity: its logical name, relative to the project root** (`to_project_relative` in `base/locate.kspls`; why relative is §13.3). The editor names the same file by a URI, so the LSP's boundary converts both ways.
@@ -2578,7 +2587,7 @@ flowchart LR
     C -->|"out: back in the spelling<br/>the request used"| E
 ```
 
-**Without the inbound half**, `mod_name_perm` reads `/home/me/proj/std/lang` while the document's AST records `std/lang`. `traverse_and_find_best` (in `lsp/nav.kspls`) rejects any node whose file does not `equals` the target, so every node of the open document is rejected. Hover, go-to-definition, references, renaming and completion then answer `null` for any client sending an absolute URI. Without the outbound half, a logical name goes back with no scheme, and a fixed `file://` in front gives `file://std/lang.kspls`, whose *host* reads `std`.
+**Without the inbound half**, `mod_name_perm` reads `/home/me/proj/std/lang` while the document's AST records `std/lang`. `traverse_and_find_best` (in `lsp/position.kspls`) rejects any node whose file does not `equals` the target, so every node of the open document is rejected. Hover, go-to-definition, references, renaming and completion then answer `null` for any client sending an absolute URI. Without the outbound half, a logical name goes back with no scheme, and a fixed `file://` in front gives `file://std/lang.kspls`, whose *host* reads `std`.
 
 **The URI becomes the logical name once, on the way in, and an answer goes back in the spelling the request used.** `Uri_style` in `base/locate.kspls` holds the two bits a client shows: whether `file://` was written, and whether the path was written from the root.
 
@@ -2728,7 +2737,7 @@ If the same check is written twice, a fix reaches one copy and not the other. **
 * **The walk over the structural markers.** Deriving `Move_only` follows an `enum`'s payloads and an array's elements as well as a `struct`'s fields, in the one walk `has_structural_marker`. Without them, a struct that holds an array of owning handles (`H[2]`) can be copied silently.
 * **Resolving an operator trait.** Unary and binary operators, `[]` reads and `[]=` writes all use the one `resolve_operator_call` in `sema/decl/trait_check.kspls`. Each caller handles all three `Op_method` cases (`user` / `builtin` / `failed`). A trait implemented with no method found by name is the compiler's own inconsistency, and silently taking the built-in path would ignore the user's implementation.
 * **The subscript's type.** `Index` / `Index_mut` / `Index_place` take it from the implementation's declaration, for reads and writes alike (`operator_index_param_id` in `sema/decl/trait_check.kspls`). Fixed at `Sz`, `m["k"]` on a `Map<|U8[], I32|>` would always fail with "expected 'Sz'". An instantiated method's parameter node can lack its `type_id` even after the names are substituted, so the type is resolved again in the declaring file's context.
-* **`?` and `catch`.** Both accept a Result and nothing else (`sema/body/postfix.kspls`, and `infer_catch_chain` in `sema/body/expr.kspls`). Miss the check in one, and the C reads `.is_err` on a non-Result, so the C compiler fails with zero diagnostics from ksplc (Principle 2).
+* **`!` and `catch`.** Both accept a Result and nothing else (`sema/body/postfix.kspls`, and `infer_catch_chain` in `sema/body/expr.kspls`). Miss the check in one, and the C reads `.is_err` on a non-Result, so the C compiler fails with zero diagnostics from ksplc (Principle 2).
 
 **`a[i]` on a type that implements `Index_place` (the index that returns a place) is resolved before `Index` / `Index_mut`.** `infer_postfix_array` in `sema/body/postfix.kspls` does it, probing with `has_implemented_operator_trait`. (`check_operator_trait` reports a missing implementation, so it cannot probe.) `at` returns a mutable pointer to the element, but the node's `type_id` is the pointee (the element type). `lower_postfix_index_operator` in `lower/expr.kspls` rebuilds the node as `a.at(i)$`, a dereference in place with no temporary. So reading, assigning, compound assigning and `a[i]@` all take genc's one path for postfix `$` (`(*(...))`). The `get` side returns a value via a temporary, so `a[i]@` there would point at a temporary, and is refused.
 
@@ -2770,12 +2779,12 @@ An error is reported at the line in your code that caused it, in the names you w
 
 | The user wrote | Shown as | Not shown as |
 | :-- | :-- | :-- |
-| `Option<\|I32\|>` | `Option<\|I32\|>` | `std_lang_Option_I32` |
+| `I32?` | `I32?` | `std_lang_Option_I32` |
 | a function the compiler synthesized | as the source calls it | `_anon_fn_1` |
 | an environment the compiler synthesized | reworded in a note | `_anon_env_1` |
 | `Names` from `typedef Names = List<\|U8[]\|>;` | `Names` | `List<\|U8[]\|>` |
 
-Shown `std_lang_Option_I32`, someone who wrote `Option<|I32|>` cannot match it to their code. Synthesized names are not shown either. An alias is shown by its own name, unresolved: `Names` is what the user wrote, and resolving it would name a type the line does not spell.
+Shown `std_lang_Option_I32`, someone who wrote `I32?` cannot match it to their code. Synthesized names are not shown either. An alias is shown by its own name, unresolved: `Names` is what the user wrote, and resolving it would name a type the line does not spell.
 
 ### 11.4 While a generic is being instantiated, a diagnostic that depends on a type argument is not emitted
 
@@ -3093,7 +3102,7 @@ Caution: A variable declaration, an argument and a `return` are not enough. Stru
 | `x`, `a.b`, `xs[i]`, `p$`, `(p + i)$` | yes | yes |
 | `f().x` | no: it reads a temporary already counted | no |
 
-**A Result built around a place, or unwrapped from one, reads that place.** `return e.value` in a `V?E` function wraps `e.value`, and `v: = r catch …` and `r?` take `r`'s payload while `r` still owns it. The verdict looks through the wrap and the unwrap to the place and retains it at its own type. Missed, the place and the copy are both released, and the value is freed under the copy.
+**A Result built around a place, or unwrapped from one, reads that place.** `return e.value` in a `V!E` function wraps `e.value`, and `v: = r catch …` and `r!` take `r`'s payload while `r` still owns it. The verdict looks through the wrap and the unwrap to the place and retains it at its own type. Missed, the place and the copy are both released, and the value is freed under the copy.
 
 **A dereference does not demand a place expression of its receiver**, because a pointer leads to existing memory however it was computed. Demanding it lets `(p + i)$` (pointer arithmetic, then a dereference) slip through. A container's element reads and writes then get no retain/release. A `List`'s `get` steals the stored count (a use after free), and its `set` leaks the value it overwrites. The verdict asks only whether cloning is safe, so for the receiver it looks only for a call (`arc_has_call`).
 
@@ -3107,7 +3116,7 @@ Caution: **Do not make a `return`'s retain depend on there being a cleanup.** In
 
 A counted value that nobody stores, such as the result of a call used as a statement, is held by a hidden temporary and released, so it does not leak. A call's result, a literal, and a field read off one arrive counted once, and whoever takes the value (a binding, an argument, a field of a literal, a `return`) takes that count. **Where nothing takes it, the count is held by nobody and the value leaks**: a call made a statement, a field read off a call, a method's `Self@` receiver built in place, a `switch` subject built in place, a success a statement's `catch` throws away.
 
-* **Decide "nothing owns it yet" before lowering** (`is_arc_fresh`). Lowered, a catch or a `?` becomes a temporary's name, and a name looks like a place. A binding and a `return` decide there too, or the same `return f()?` gets a retain it does not need.
+* **Decide "nothing owns it yet" before lowering** (`is_arc_fresh`). Lowered, a catch or a `!` becomes a temporary's name, and a name looks like a place. A binding and a `return` decide there too, or the same `return f()!` gets a retain it does not need.
 * **A value that is only read lives to the end of its block** (`arc_hoist_owned`), as `x: = f();` written there would, so a view read off it stays valid that long. A statement throwing it away releases it at once (`arc_release_now`). A statement's `catch` releases the Result after the branch, which frees the success alone.
 * **A managed field read off such a temporary is retained** (`lower_arc_field_of_fresh`), so it carries the one count every taker of a non-place value expects.
 * Caution: **A temporary hoisted where the statements move into a block of their own** (a ternary's branch, `&&`'s right side, a loop's condition, an `else if`'s condition, a catch's substitute) **is declared at the statement's own level with a flag** (`stmt_decls`, `relocating`). Declared inside, it would be out of scope where the block's cleanups run. Released unflagged, a branch not taken would release garbage, and a loop's condition would overwrite the previous turn's value without releasing it.
@@ -3308,7 +3317,7 @@ The terms this document assumes, grouped by the part of the compiler they belong
 
 | Term | What it means | Where |
 | :-- | :-- | :-- |
-| **Lowering** | rearranging nested control structure (`defer`, the short-circuiting `&&`/`\|\|`, `?`, a labelled `break`) into a shallow combination of `if` and `goto`: the Lower layer's job | §5 |
+| **Lowering** | rearranging nested control structure (`defer`, the short-circuiting `&&`/`\|\|`, `!`, a labelled `break`) into a shallow combination of `if` and `goto`: the Lower layer's job | §5 |
 | **MIR** (mid-level intermediate representation) | the flat, backend-neutral tree that Lower's first walk leaves. ksplc keeps it in the same `Ast_node`s, not in a type of its own | §5.2 |
 | **Name mangling** | transforming a symbol name by a regular rule to avoid collisions. A `priv` symbol becomes `kspl_priv_{file name}_{original name}` | §5.2 |
 | **A thunk** / **a vtable** | the go-between function and the table of function pointers that make a trait's dynamic dispatch, defined where Lower makes them | §5.2 |

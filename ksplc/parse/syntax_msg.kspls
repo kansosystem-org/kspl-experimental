@@ -87,6 +87,21 @@ priv fn forbidden_spelling_hint(src: U8[], pos: Sz): U8[] //<
         return "\n  Note: a bare block carries a label. Name what that level is there for \
             ('while_locked: { ... }'); a block with no heading cannot be told from a continuation \
             of the statement before it."
+    // A block under a `switch`: C's, Go's, Swift's and Rust's `switch x {`, or a `.kspls` `case`
+    // indented under its head, whose `{` the indentation reader put there.
+    if pos < src.len && src[pos] == '{' && is_switch_head(src, line_start(src, pos), pos)
+        return "\n  Note: a 'switch' opens no block of its own; each 'case' and 'default' opens \
+            one. Put them in the column of 'switch', the first 'case' on the line below it."
+    // `?` after a value (`f()?`): only a type takes it, so the failure lands on it there.
+    if pos < src.len && src[pos] == '?'
+        return "\n  Note: '?' marks an optional type ('I32?' is 'Option<|I32|>') and does nothing \
+            after a value: 'f()!' passes a call's failure on, and 'if v: = x' takes an optional's \
+            value out."
+    // A result in the old spelling (`I32?Io_error`): `I32?` is whole, so the name after it fails.
+    before: = skip_space_back(src, pos)
+    if before >= 0 && src[before] == '?' && pos < src.len && src[pos].is_alpha()
+        return "\n  Note: a result is written with '!' ('I32!Io_error'); 'I32?' is an optional, and \
+            no name follows it."
     // The range syntax `a..b` / the slice syntax `a[i..j]`: the failure lands on the second `.`.
     if pos >= 1 && pos < src.len && src[pos] == '.' && src[pos - 1] == '.'
         return "\n  Note: KSPL has no range syntax ('a..b'). Write the bounds in the loop header \
@@ -99,11 +114,11 @@ priv fn forbidden_spelling_hint(src: U8[], pos: Sz): U8[] //<
         return "\n  Note: KSPL has no trailing closure. Pass the closure inside the call's \
             parentheses ('f(xs, fn(x: I32; ): Bool { return x > 0 })'), or bind it to a name first \
             and pass the name."
-    // A Result's error type omitted (`fn f(): T? {`): the text before the failure position ends
-    // with a `?`.
-    if prev >= 0 && src[prev] == '?'
-        return "\n  Note: the error type of a Result cannot be omitted. Write 'T?E' (for example \
-            'I32?Io_error'); there is no 'T?' shorthand."
+    // A Result's error type omitted (`fn f(): T! {`): the text before the failure position ends
+    // with a `!`.
+    if prev >= 0 && src[prev] == '!'
+        return "\n  Note: the error type of a Result cannot be omitted. Write 'T!E' (for example \
+            'I32!Io_error'); there is no 'T!' shorthand."
     // A postfixed `if` (`return x if cond;` / `return if cond;`): an unmatched ternary's shape.
     // Caution: A ternary (`a if cond else b`) exists, so do not say "an `if` cannot be written";
     // what is missing is a branch.
@@ -118,6 +133,17 @@ priv fn forbidden_spelling_hint(src: U8[], pos: Sz): U8[] //<
             of them — it only separates the fields inside a payload ('mid(level: I32, tone: \
             U8)')."
     return ""
+
+priv fn is_switch_head(src: U8[], from: Sz, to: Sz): Bool //<
+    //< Whether the line's text up to `to` is a `switch` and its subject alone, a label allowed
+    //<
+    //< **A `case` written makes it not**: a `{` failing after one is that arm's own.
+    $code: = src.sub(from, to - from).trim_spaces()
+    e: = word_end(code, 0)
+    if e > 0 && e < code.len && code[e] == ':' && !code.starts_with("::", e)
+        code = code.sub_from(e + 1).trim_spaces()
+    return starts_with_word(code, "switch") && code.find_str(" case ") < 0 &&
+        !ends_with_word(code, "case")
 
 priv fn odd_indent_name(src: U8[], pos: Sz): U8[] //<
     //< The name of what starts the failing line looking like whitespace but is not, or empty

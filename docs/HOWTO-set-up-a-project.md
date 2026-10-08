@@ -77,7 +77,7 @@ The steps it takes, and how to take them apart (to ship objects without the sour
 
 **A project that names itself is found from any folder.** Put a `ksplc.cfg` holding `[package]` and `name = myapp` at its top, and `import "myapp/hw"` finds `hw.kspls` in that top folder. `ksplc info package` names the package of the current folder. The details are in "A package that names itself (`[package]`)" in [`ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md).
 
-Note: **A library can also be handed over without its KSPL source**, built with `--library` and used through the C interface the compiler writes for it ("Shipping a library and using it" in [`ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)).
+Note: **A library can also be handed over without its KSPL source**, built with `--library=` and used through the C interface the compiler writes beside it ("Shipping a library and using it" in [`ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)).
 
 ## VS Code (syntax highlighting, the Language Server, debugging)
 

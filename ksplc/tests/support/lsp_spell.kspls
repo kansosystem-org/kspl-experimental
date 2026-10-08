@@ -10,7 +10,6 @@ import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, end_text }
 import "std/chars"
 import "std/fs"
 import "std/io"
-import "std/json"
 import "std/jsonrpc"
 import "std/mem" { Arena }
 import "std/str"
@@ -341,7 +340,7 @@ impl<|T|> Quad3<|T|> {
   }
 }
 
-fn wrap<|T|>(c: Cell3<|T|>@): Pair3<|T|>?I32 {
+fn wrap<|T|>(c: Cell3<|T|>@): Pair3<|T|>!I32 {
   throw 1;
 }
 
@@ -551,7 +550,7 @@ fn check_hover_prelude(c: jsonrpc.Client$@, arena: Arena$@)
 // A document is named back in the spelling it was asked in
 // ==========================================
 
-priv const spell_file: U8[] = "lsp/nav.kspls" //<
+priv const spell_file: U8[] = "lsp/position.kspls" //<
     //< A file asked about by its logical name, whose answers must come back in that spelling
     //<
     //< **A file's identity inside the compiler is its project-relative logical name**, so an answer
@@ -566,7 +565,7 @@ priv fn def_uri_under(c: jsonrpc.Client$@, uri: U8[], src: U8[], arena: Arena$@)
     pos: = lsp_client.at_pos(uri, decl_line(src, spell_decl, arena),
         col_in_line(src, spell_decl, "find_path", arena) + 1, arena)
     got: = c.request("textDocument/definition", pos, heavy_ms, arena) catch
-        fallback json.Val.null_val
+        fallback .null_val
     return got.get("result").get("uri").as_str()
 
 fn check_uri_spelling(c: jsonrpc.Client$@, top: U8[], arena: Arena$@) //<
@@ -580,8 +579,8 @@ fn check_uri_spelling(c: jsonrpc.Client$@, top: U8[], arena: Arena$@) //<
         lsp_client.why(c, arena.text().s("'").s(flat).s("'").take(), arena))
     full: = lsp_client.uri_of(top, spell_file, arena)
     back: = def_uri_under(c, full, src, arena)
-    // Caution: **Check the whole URI, not just the end.** `file://lsp/nav.kspls` ends the same way
-    // and is a URI whose *host* reads `lsp`, which opens nothing.
+    // Caution: **Check the whole URI, not just the end.** `file://lsp/position.kspls` ends the same
+    // way and is a URI whose *host* reads `lsp`, which opens nothing.
     verdict.check("asked by the absolute file:// URI, it answers by that URI",
         back.equals(full),
         lsp_client.why(c, arena.text().s("'").s(back).s("'").take(), arena))

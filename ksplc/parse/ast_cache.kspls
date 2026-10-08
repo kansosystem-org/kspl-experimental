@@ -239,11 +239,11 @@ impl Cursor
         return out
 
 priv fn read_subtree(cur: Cursor$@, strs: List<|U8[]|>$@, logical_name: U8[], budget: Sz$@):
-    Option<|Ast_node$@|> //<
+    Ast_node$@? //<
         //< It reads one node and its subtree in pre-order, subtracting each one read from `budget`.
     if cur.bad || budget$ <= 0
         cur.bad = true
-        return Option<|Ast_node$@|>.none
+        return .none
     budget$ -= 1
     kind_raw: = cur.u32()
     ival: = cur.u32()
@@ -251,17 +251,17 @@ priv fn read_subtree(cur: Cursor$@, strs: List<|U8[]|>$@, logical_name: U8[], bu
     text_id: = cur.u32()
     n_children: = cur.u32()
     if cur.bad
-        return Option<|Ast_node$@|>.none
+        return .none
     // Caution: Keep kind_id within this ksplc's kinds, or it points past ast_kinds' pool
     // downstream.
     if kind_raw == 0 || I32::kind_raw >= I32::base_ast_kinds.Ast_kind.k_max
         cur.bad = true
-        return Option<|Ast_node$@|>.none
+        return .none
     $text: U8[] = ""
     if text_id != 0
         if Sz::text_id > strs.len
             cur.bad = true
-            return Option<|Ast_node$@|>.none
+            return .none
         text = strs.get(Sz::text_id - 1)
     // A childless node shares the empty list rather than allocating one
     // (base/ast.empty_child_list).
@@ -270,15 +270,16 @@ priv fn read_subtree(cur: Cursor$@, strs: List<|U8[]|>$@, logical_name: U8[], bu
         .text = text, .loc = base_ast.Loc.at(logical_name, Sz::offset), .children = empty }
     node: = base_core.arena.create(fresh)
     if n_children == 0
-        return Option<|Ast_node$@|>.some(node)
+        return .some(node)
     kids: = base_ast.new_ast_node_list()
     for $i: U32 = 0; i < n_children; i += 1
-        switch read_subtree(cur, strs, logical_name, budget) case .some(child)
+        switch read_subtree(cur, strs, logical_name, budget)
+        case .some(child)
             kids.push(child)
         case .none
-            return Option<|Ast_node$@|>.none
+            return .none
     node.children = kids
-    return Option<|Ast_node$@|>.some(node)
+    return .some(node)
 
 fn load(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@): Bool //<
     //< True where decls could be restored from the cache
@@ -325,7 +326,8 @@ fn load(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@): Bool //<
     $budget: = n_nodes
     roots: = List<|Ast_node$@|>.create(base_core.arena)
     for _i in Range.asc(n_roots)
-        switch read_subtree(cur@, strs, logical_name, budget@) case .some(node)
+        switch read_subtree(cur@, strs, logical_name, budget@)
+        case .some(node)
             if cur.bad
                 stats.misses += 1
                 return false

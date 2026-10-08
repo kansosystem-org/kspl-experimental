@@ -28,15 +28,16 @@ priv fn bound_contains_generic(bound: U8[], gen_name: U8[]): Bool //<
 priv fn type_str_mentions_generic(param_type_str: U8[], gen_name: U8[]): Bool //<
     //< Whether param_type_str holds the type variable gen_name, bare or inside another type
     //<
-    //< For example Option<|T|>, T[], T@, T? or Container<|X, gen_name, ...|>.
+    //< For example Option<|T|>, T[], T@, T! or Container<|X, gen_name, ...|>.
     if param_type_str.equals(gen_name)
         return true
-    // One level of `[]` / `@` / `?` (as in `T[]`) is stripped before comparing.
+    // One level of `[]` / `@` / `!` (as in `T[]`) is stripped before comparing.
     if param_type_str.strip_suffix("[]").equals(gen_name) ||
         param_type_str.strip_suffix("@").equals(gen_name) ||
-        param_type_str.strip_suffix("?").equals(gen_name)
+        param_type_str.strip_suffix("!").equals(gen_name)
         return true
-    switch param_type_str.find_generic_bounds() case .found(_s, ins, ine, _e)
+    switch param_type_str.find_generic_bounds()
+    case .found(_s, ins, ine, _e)
         return bound_contains_generic(param_type_str.sub(ins, ine - ins), gen_name)
     default
         return false
@@ -68,20 +69,22 @@ priv fn extract_generic_binding(c: Sema_ctx$@, expected_str: U8[], arg_id: I32):
     if found_key.len > 0
         orig_arg_str = found_key
 
-    switch orig_arg_str.find_generic_bounds() case .found(_s, ins, ine, _e)
+    switch orig_arg_str.find_generic_bounds()
+    case .found(_s, ins, ine, _e)
         return orig_arg_str.sub(ins, ine - ins)
     default
         // Otherwise from the instantiation of the trait it conforms to.
         named: = trait_impl_spelling(c, expected_str, clean_arg_id)
-        switch named.find_generic_bounds() case .found(_s2, ins2, ine2, _e2)
+        switch named.find_generic_bounds()
+        case .found(_s2, ins2, ine2, _e2)
             return named.sub(ins2, ine2 - ins2)
         default {}
         if expected_str.ends_with("[]") && arg_str.ends_with("[]")
             return arg_str.strip_suffix("[]")
         if expected_str.ends_with("@") && arg_str.ends_with("@")
             return arg_str.strip_suffix("@")
-        if expected_str.ends_with("?") && arg_str.ends_with("?")
-            return arg_str.strip_suffix("?")
+        if expected_str.ends_with("!") && arg_str.ends_with("!")
+            return arg_str.strip_suffix("!")
     return arg_str
 
 priv fn positional_generic_binding(c: Sema_ctx$@, expected_str: U8[], gen_name: U8[], arg_id: I32):
@@ -91,7 +94,8 @@ priv fn positional_generic_binding(c: Sema_ctx$@, expected_str: U8[], gen_name: 
         //< It serves the path that must not return the whole list.
         //< Caution: **If the counts do not match, return empty**, or another variable's binding is
         //< taken.
-    switch expected_str.find_generic_bounds() case .found(_s, ins, ine, _e)
+    switch expected_str.find_generic_bounds()
+    case .found(_s, ins, ine, _e)
         whole: = extract_generic_binding(c, expected_str, arg_id)
         return positional_in(c, expected_str.sub(ins, ine - ins), whole, gen_name)
     default
@@ -112,9 +116,11 @@ priv fn positional_in(c: Sema_ctx$@, want: U8[], whole: U8[], gen_name: U8[]): U
             return base_core.arena.dup_str(a)
         if w.starts_with("$") && w.sub_from(1).equals(gen_name) && a.starts_with("$")
             return base_core.arena.dup_str(a.sub_from(1))
-        switch w.find_generic_bounds() case .found(_s, wi, we, _e)
+        switch w.find_generic_bounds()
+        case .found(_s, wi, we, _e)
             spelled: = instance_spelling(c, a)
-            switch spelled.find_generic_bounds() case .found(_s2, ai, ae, _e2)
+            switch spelled.find_generic_bounds()
+            case .found(_s2, ai, ae, _e2)
                 inner: =
                     positional_in(c, w.sub(wi, we - wi), spelled.sub(ai, ae - ai), gen_name)
                 if inner.len > 0
@@ -172,7 +178,8 @@ priv fn binding_for_generic(c: Sema_ctx$@, p_list: Ast_node$@, args_node: Ast_no
         if arg_node.is_literal(",")
             continue
         $target_param: Ast_node$@ = null
-        switch params.next() case .some(pn)
+        switch params.next()
+        case .some(pn)
             target_param = pn
         case .none
             break
@@ -275,7 +282,8 @@ priv fn extract_inferred_generic_arg(c: Sema_ctx$@, def_node: Ast_node$@, args_n
 
     $params: = params_from(p_list, param_offset)
     $target_param: Ast_node$@ = null
-    switch params.next() case .some(pn)
+    switch params.next()
+    case .some(pn)
         target_param = pn
     case .none
         return arg0_str

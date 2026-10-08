@@ -55,19 +55,21 @@ priv fn run_built(exe: U8[], arena: Arena$@): Built //< it runs a built executab
     r: = harness.run(U8[][]::{ exe })
     return built(true, arena.text().s(r.out).s("exit=\{r.code\}\n").take())
 
-priv fn is_clang(cc: U8[]): Option<|Bool|> //< whether cc is clang, none where it does not run
+priv fn is_clang(cc: U8[]): Bool? //< whether cc is clang, none where it does not run
     r: = harness.run(U8[][]::{ cc, "--version" })
     if r.code != 0
-        return Option<|Bool|>.none
-    return Option<|Bool|>.some(r.out.find_str("clang") >= 0)
+        return .none
+    return .some(r.out.find_str("clang") >= 0)
 
 priv fn other_cc(): U8[] //< the other family's C compiler (gcc beside clang), empty where none
     //<
     //< Caution: **Ask the compiler what it is.** macOS's `gcc` is clang, and a build under it would
     //< pass for the gcc check while seeing clang's order.
-    switch is_clang(harness.cc()) case .some(mine)
+    switch is_clang(harness.cc())
+    case .some(mine)
         other: = "gcc" if mine else "clang"
-        switch is_clang(other) case .some(theirs)
+        switch is_clang(other)
+        case .some(theirs)
             if theirs != mine
                 return other
         default {}

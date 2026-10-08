@@ -219,7 +219,7 @@ priv fn scan_phys(src: U8[], notes: List<|Note|>$@, semis: List<|Insert|>$@, are
         blank: = code_end <= code_start
         no: = out.len + 1
         if tab_at >= 0 && !blank
-            notes.push(Note::{ .kind = Note_kind.tab, .line = no })
+            notes.push(Note::{ .kind = .tab, .line = no })
         out
             .push(Phys::{ .line = no, .indent = indent, .code_start = code_start,
             .code_end = code_end, .line_end = line_end, .blank = blank, .inner = inner })
@@ -605,13 +605,12 @@ fn to_braces(src: U8[], notes: List<|Note|>$@, arena: Arena$@): U8[] //<
                 stack.set(stack.len - 1, top_now)
             else if top_now.body != cur.indent
                 notes
-                    .push(Note::{ .kind = Note_kind.ragged(top_now.body, cur.indent),
-                    .line = cur.line })
+                    .push(Note::{ .kind = .ragged(top_now.body, cur.indent), .line = cur.line })
         next_deeper: = n + 1 < lines.len && lines.get(n + 1).indent > cur.indent
         if next_deeper
             ins.push(Insert::{ .at = cur.code_end, .text = " {" })
             stack.push(Frame::{ .indent = cur.indent, .head = cur.head, .body = 0 })
-        else if !cur.attr && !closes_inline_block(src, cur)
+        else if !cur.attr && !closes_inline_block(src, cur) && !arms_follow(cur, lines@, n)
             ins.push(Insert::{ .at = cur.code_end, .text = ";" })
         last_end = cur.code_end
     for stack.len > 0
@@ -649,6 +648,18 @@ priv fn closes_inline_block(src: U8[], cur: Logical): Bool //<
     //< Caution: **Add no terminator**: `fn f() {};` is not in the grammar. The heading word tells
     //< it apart, as an `x: = T::{ … }` ends in a `}` too but is a value and needs one.
     return cur.code_end > 0 && src[cur.code_end - 1] == '}' && is_block_head(cur.head)
+
+priv fn arms_follow(cur: Logical, lines: List<|Logical|>@, n: Sz): Bool //<
+    //< Whether `cur` (the `n`th line) is a `switch`'s head whose first `case` is the next line
+    //<
+    //< **The head then takes no terminator**: the `case` continues it, as a later arm continues the
+    //< `}` before it. A comment or blank line between them is no logical line, so changes nothing.
+    //< Caution: **Only at the head's own column.** A deeper `case` would open a block `switch` does
+    //< not have, and a shallower one belongs to the level outside; both stay refused.
+    if !cur.head.equals("switch") || n + 1 >= lines.len
+        return false
+    next: = lines.get(n + 1)
+    return next.indent == cur.indent && next.head.equals("case")
 
 priv fn close_block(ins: List<|Insert|>$@, top: Frame, at: Sz) //<
     //< It closes a block, with a `;` after unless its heading word is in `block_heads`

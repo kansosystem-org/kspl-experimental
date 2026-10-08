@@ -42,7 +42,8 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
     ): Self$@
         for i in Range.asc(src.len)
             c: = (src.ptr + i)$
-            switch c case '"'
+            switch c
+            case '"'
                 r.s("\\\"")
             case '\\'
                 r.s("\\\\")
@@ -173,17 +174,17 @@ priv fn write_utf8(dst: U8$@, cp: I32): Sz //<
     return n
 
 impl U8[]
-    pub fn to_cstr(r: U8[]): Option<|U8$@|> //<
+    pub fn to_cstr(r: U8[]): U8$@? //<
         //< a new NUL-terminated copy, or none if r holds a NUL
         //<
         //< Caution: The caller must `dealloc()` it. A KSPL string has a length, so it can hold a
         //< NUL, but C treats the first NUL as the end.
         if r.contains_nul()
-            return Option<|U8$@|>.none
+            return .none
         buf: = U8$@::alloc(r.len + 1)
         mem.copy(Void$@::buf, Void$@::r.ptr, r.len)
         (buf + r.len)$ = 0U8
-        return Option<|U8$@|>.some(buf)
+        return .some(buf)
 
     pub fn split( //< the pieces between the separators, as views into the original
         //<
@@ -284,7 +285,7 @@ impl U8[]
         //< std/docs/DESIGN.md.
         r: U8[],
         arena: Arena$@, //< where the unescaped bytes go
-    ): U8[]?Str_error
+    ): U8[]!Str_error
         // The output is never longer than the input, so r.len + 1 is enough.
         buf_ptr: = U8$@::arena.alloc(r.len + 1)
         $w: Sz = 0
@@ -297,7 +298,7 @@ impl U8[]
                 if ec == 'u'
                     cp: = r.hex4(i + 1)
                     if cp < 0
-                        throw Str_error.invalid_format
+                        throw .invalid_format
                     if cp >= 0
                         $code: I32 = cp
                         $adv: I32 = 5
@@ -313,12 +314,12 @@ impl U8[]
                         // at a later check or in another language's string type. It is treated the
                         // same as a broken `\u`.
                         if code >= 0xD800 && code <= 0xDFFF
-                            throw Str_error.invalid_format
+                            throw .invalid_format
                         w += write_utf8(buf_ptr + w, code)
                         i += adv
                         continue
                 if ec.is_alnum() && ec != 'n' && ec != 'r' && ec != 't' && ec != 'b' && ec != 'f'
-                    throw Str_error.invalid_format
+                    throw .invalid_format
                 (buf_ptr + w)$ =
                     ('\n' if ec == 'n'
                     else ('\r' if ec == 'r'

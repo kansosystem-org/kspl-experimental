@@ -11,7 +11,6 @@ import "ksplc/base/as_written" as base_as_written
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_doc" as base_ast_doc
 import "ksplc/base/core" as base_core
-import "ksplc/base/diag" as base_diag
 import "ksplc/base/lines" as base_lines
 import "ksplc/fmt/style" as fmt_style
 import "ksplc/fmt/text" as fmt_text
@@ -61,7 +60,8 @@ priv fn report_notes_of(sema: Sema_ctx$@, file: U8[], src: U8[],
         $span: Sz = 1
         for at + span < src.len && src[at + span] != '\n' && span < 40
             span += 1
-        switch nt.kind case .ragged(want, got)
+        switch nt.kind
+        case .ragged(want, got)
             // **It has no code, because a code could be switched off**, leaving two readings that
             // run differently ("The list of diagnostic codes" in `ksplc/docs/SPEC-tools.md`).
             $msg: = Str_builder.new()
@@ -69,8 +69,7 @@ priv fn report_notes_of(sema: Sema_ctx$@, file: U8[], src: U8[],
             msg
                 .s("this line sits \{got\} columns in, but its siblings sit \{want\}; it still \
                     joins the same block, so the reader and the compiler would disagree")
-            sema.report_diagnostic_at(file, src, at, span, base_diag.Diagnostic_severity.error,
-                msg.slice())
+            sema.report_diagnostic_at(file, src, at, span, .error, msg.slice())
         case .tab {
             // **A tab gets no code**: a line at column 0 stops on a syntax error first, so a code
             // would never fire. `tests/layout_indent_test.kspls` checks that it is found; the
@@ -129,8 +128,7 @@ priv fn report_doc_marks(files: List<|Read_file|>@, sema: Sema_ctx$@) //<
                     .s("[W0209] This //< continues nothing. The line above it carries no //< of its \
                         own, so what is written here reaches neither the editor\'s hover nor the \
                         record.")
-                sema.report_diagnostic_at(f.name, src, mark, 3,
-                    base_diag.Diagnostic_severity.warning, msg.slice())
+                sema.report_diagnostic_at(f.name, src, mark, 3, .warning, msg.slice())
             // **The line below holds the anchor's whole description.** `is_continuation_line`
             // returns false past the end, so the last line needs no case of its own.
             if base_ast_doc.is_bare_summary(src, at) &&
@@ -146,8 +144,7 @@ priv fn report_doc_marks(files: List<|Read_file|>@, sema: Sema_ctx$@) //<
                     .s("[W0210] This //< carries no text and nothing continues it below, so the \
                         entry says nothing. Write the description behind the mark, or on //< lines \
                         under it.")
-                sema.report_diagnostic_at(f.name, src, head, 3,
-                    base_diag.Diagnostic_severity.warning, msg2.slice())
+                sema.report_diagnostic_at(f.name, src, head, 3, .warning, msg2.slice())
             opens = base_ast_doc.opens_a_summary_run(src, at)
             at = stop + 1
 
@@ -160,7 +157,8 @@ priv fn report_summary_fault(file: U8[], src: U8[], at: Sz, fault: base_ast_doc.
         //< in `../docs/DESIGN.md`).
     $why: = Str_builder.new()
     defer why.free()
-    switch fault case .none
+    switch fault
+    case .none
         return
     case .too_long(lines)
         why
@@ -174,8 +172,7 @@ priv fn report_summary_fault(file: U8[], src: U8[], at: Sz, fault: base_ast_doc.
                 line holding only the mark.")
     // Caution: **Point at the start of the line, not at the mark** (the reason is at `[W0210]`).
     head: = base_lines.skip_blanks(src, at)
-    sema.report_diagnostic_at(file, src, head, 3, base_diag.Diagnostic_severity.warning,
-        why.slice())
+    sema.report_diagnostic_at(file, src, head, 3, .warning, why.slice())
 
 priv fn report_comments(files: List<|Read_file|>@, root_file: Ast_node$@, sema: Sema_ctx$@) //<
     //< It reads every line comment once, for the warnings about a comment's marks and names
@@ -206,7 +203,8 @@ priv fn report_comments(files: List<|Read_file|>@, root_file: Ast_node$@, sema: 
                 from = p.end
                 name: = text.sub(p.at, p.len)
                 pointed: = sema_session_pointer.pointed_at(sema, root_file, f.name, at + p.at, name)
-                switch pointed case .missing(part)
+                switch pointed
+                case .missing(part)
                     report_pointer(sema, f.name, src, at + p.at, stop, name, part)
                 default {}
             at = parse_layout.next_line_comment(src, stop)
@@ -240,8 +238,7 @@ priv fn report_displaced_comments(files: List<|Read_file|>@, parser: kspeg.Targe
                     so a round trip through .kspls moves it off this line and does not bring it \
                     back. Put it on the line of the code it speaks for, or on a line of its own.")
             sema.report_diagnostic_at(f.name, f.src,
-                fmt_text.given_offset(fmt.src, at, f.src), 2,
-                base_diag.Diagnostic_severity.information, msg.slice())
+                fmt_text.given_offset(fmt.src, at, f.src), 2, .information, msg.slice())
 
 priv fn as_written_at(sema: Sema_ctx$@, file: U8[], src: U8[], pos: Sz, line_end: Sz): Sz //<
     //< Where position `pos` of a comment is in the file as written
@@ -276,8 +273,8 @@ priv fn report_unread_mark(sema: Sema_ctx$@, file: U8[], src: U8[], at: Sz, line
                 nor `ksplc doc`. A description goes behind the thing it describes, on that thing's \
                 own line (`fn add(a: I32, b: I32): I32 //< adds two numbers`), and runs on below it \
                 in //< lines one step in; a remark for whoever edits the code is an ordinary //.")
-    sema.report_diagnostic_at(file, src, as_written_at(sema, file, src, at, line_end), 3,
-        base_diag.Diagnostic_severity.warning, msg.slice())
+    sema.report_diagnostic_at(file, src, as_written_at(sema, file, src, at, line_end), 3, .warning,
+        msg.slice())
 
 priv fn report_pointer(sema: Sema_ctx$@, file: U8[], src: U8[], pos: Sz, line_end: Sz, name: U8[],
     part: Sz) //< One `[W0211]`, placed under the name as the file is written
@@ -301,5 +298,4 @@ priv fn report_pointer(sema: Sema_ctx$@, file: U8[], src: U8[], pos: Sz, line_en
             pointer leads nowhere. Point at what is there now; a name another file adds is tied to \
             that file (`\{name\}` in `<file>`), and another language's name is introduced as its \
             own (Python's `json.dumps`).")
-    sema.report_diagnostic_at(file, src, shown, name.len, base_diag.Diagnostic_severity.warning,
-        msg.slice())
+    sema.report_diagnostic_at(file, src, shown, name.len, .warning, msg.slice())

@@ -126,7 +126,7 @@ priv struct Compiler //<
     pos: Sz
     depth: Sz
     stack: Stack_limit //< where the group nesting stops short of the stack's end, beside `depth`
-    err: Option<|Regex_error|>
+    err: Regex_error?
     groups: Sz //<
         //< The number of capturing groups assigned so far.
         //<
@@ -164,8 +164,9 @@ impl Compiler
     fn fail(r: Self$@, e: Regex_error) //< remembers only the first error found
         //<
         //< Later errors follow from the first one.
-        switch r.err case .none
-            r.err = Option<|Regex_error|>.some(e)
+        switch r.err
+        case .none
+            r.err = .some(e)
         default {}
 
     fn failed(r: Self$@): Bool //<
@@ -416,7 +417,8 @@ impl Compiler
 
 // ==================== Matching (by backtracking) ====================
 fn atom_matches(atom: Rx_node$@, c: U8): Bool
-    switch atom.kind case .lit
+    switch atom.kind
+    case .lit
         return c == atom.ch
     case .any
         return c != '\n'
@@ -558,7 +560,8 @@ fn match_seq(seq: List<|Rx_node$@|>$@, idx: Sz, text: U8[], ti: Sz, out_end: Sz$
         out_end$ = ti
         return true
     node: = seq.get(idx)
-    switch node.kind case .lit, .any, .class
+    switch node.kind
+    case .lit, .any, .class
         if ti < text.len && atom_matches(node, (text.ptr + ti)$)
             return match_seq(seq, idx + 1, text, ti + 1, out_end, run, depth + 1, caps)
         return false
@@ -649,10 +652,9 @@ impl Regex
         //< Caution: **On failure, free the tree before throwing.** The parse returns the whole tree
         //< even on an error (Compiler's description says why); this is the only place it is freed.
         pattern: U8[], //< the pattern's text
-    ): Regex$@?Regex_error
+    ): Regex$@!Regex_error
         $c: = Compiler::{ .pat = pattern, .pos = 0, .depth = 0,
-            .stack = Stack_limit.later(stack_margin, stack_ask_depth),
-            .err = Option<|Regex_error|>.none, .groups = 0 }
+            .stack = Stack_limit.later(stack_margin, stack_ask_depth), .err = .none, .groups = 0 }
         $alts: = c.parse_alts()
         if c.pos < c.pat.len
             // a ')' is left over == there was no matching '('
@@ -666,7 +668,7 @@ impl Regex
         r.anchored = alts_all_anchored(alts@)
         return r
 
-    priv fn find_from(r: Self$@, text: U8[], from: Sz): Match?Regex_error //<
+    priv fn find_from(r: Self$@, text: U8[], from: Sz): Match!Regex_error //<
         //< Finds the first matched span in text, starting at `from`
         //<
         //< **The returned position counts from the start of text.**
@@ -684,17 +686,17 @@ impl Regex
                 if match_seq(alt@, 0, text, start, end@, run@, 0, caps@)
                     return Match::{ .start = start, .end = end, .caps = caps }
                 if run.cut || run.steps >= max_match_steps
-                    throw Regex_error.too_complex
+                    throw .too_complex
             // **A pattern starting with `^` cannot match by moving the start**; trying would waste
             // a line's length of attempts per line scanned.
             if r.anchored
                 break
-        throw Regex_error.no_match
+        throw .no_match
 
     pub fn find( //< the first matched span; fails when nothing matches
         r: Self$@,
         text: U8[], //< the text to search
-    ): Match?Regex_error
+    ): Match!Regex_error
         return r.find_from(text, 0)
 
     pub fn find_all( //< every matched span; the search resumes past each one
@@ -706,12 +708,13 @@ impl Regex
         r: Self$@,
         text: U8[], //< the text to search
         arena: Arena$@, //< the arena for the list
-    ): List<|Match|>?Regex_error
+    ): List<|Match|>!Regex_error
         $out: = List<|Match|>.new(arena)
         $from: Sz = 0
         for from <= text.len
             m: = r.find_from(text, from) catch e
-                switch e case .no_match
+                switch e
+                case .no_match
                     break
                 default
                     out.free()
@@ -726,9 +729,10 @@ impl Regex
         //< budget ran out before the whole text was tried, so a match may still stand in it.
         r: Self$@,
         text: U8[], //< the text to search
-    ): Bool?Regex_error
+    ): Bool!Regex_error
         _m: = r.find(text) catch e
-            switch e case .no_match
+            switch e
+            case .no_match
                 return false
             default
                 throw e

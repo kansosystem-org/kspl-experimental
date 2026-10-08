@@ -49,90 +49,90 @@ struct Gate //< one gate: what `make` is asked for, and where it runs
 // file that is not formatted fails the formatter's check with the reason, where lint would only
 // name a line.
 const gates: Gate[30] = ::{
-    Gate::{ .log = "selfhost", .args = "self-host", .par = Par.serial, .verdict = true,
-        .shard = Shard.core, .macos = true },
-    Gate::{ .log = "debug", .args = "debug", .par = Par.serial, .verdict = true,
-        .shard = Shard.rest, .macos = true },
-    Gate::{ .log = "fmt_tree", .args = "test-fmt-tree", .par = Par.serial, .verdict = true,
-        .shard = Shard.rest, .macos = false },
-    Gate::{ .log = "lint", .args = "lint", .par = Par.parallel, .verdict = true,
-        .shard = Shard.rest, .macos = true },
-    Gate::{ .log = "lint_cfg", .args = "lint-cfg", .par = Par.parallel, .verdict = true,
-        .shard = Shard.rest, .macos = false },
+    Gate::{ .log = "selfhost", .args = "self-host", .par = .serial, .verdict = true,
+        .shard = .core, .macos = true },
+    Gate::{ .log = "debug", .args = "debug", .par = .serial, .verdict = true, .shard = .rest,
+        .macos = true },
+    Gate::{ .log = "fmt_tree", .args = "test-fmt-tree", .par = .serial, .verdict = true,
+        .shard = .rest, .macos = false },
+    Gate::{ .log = "lint", .args = "lint", .par = .parallel, .verdict = true, .shard = .rest,
+        .macos = true },
+    Gate::{ .log = "lint_cfg", .args = "lint-cfg", .par = .parallel, .verdict = true,
+        .shard = .rest, .macos = false },
     // **Only this `-j` shrinks the suites' time**, and the order they start in settles it (`SUITES`
     // in `mk/test.mk`, longest first; the halves are cut at `SUITES_B` there). Caution: **keep
     // `--output-sync=target`**, or one suite's `RESULT:` lines scatter among another's.
-    Gate::{ .log = "suites_a", .args = "test-suites-a", .par = Par.synced, .verdict = false,
-        .shard = Shard.core, .macos = false },
+    Gate::{ .log = "suites_a", .args = "test-suites-a", .par = .synced, .verdict = false,
+        .shard = .core, .macos = false },
     // The QEMU run covers the Cortex-M demos; the link check stays to notice a demo falling out of
     // QEMU's list. **One make for both**, so stage1's check is paid once (no verdict: one log).
-    Gate::{ .log = "link_abi", .args = "test-ksos-link test-llvm-abi", .par = Par.synced,
-        .verdict = false, .shard = Shard.core, .macos = false },
-    Gate::{ .log = "fm", .args = "test-freestanding-math", .par = Par.serial, .verdict = true,
-        .shard = Shard.core, .macos = true },
-    Gate::{ .log = "simd", .args = "test-simd", .par = Par.serial, .verdict = true,
-        .shard = Shard.core, .macos = true },
-    // On a fall, remake the record with `make surface` and commit it with its diff.
-    Gate::{ .log = "surface", .args = "test-surface", .par = Par.serial, .verdict = true,
-        .shard = Shard.core, .macos = false },
-    // The tour is generated from its program; `make tour` remakes it.
-    Gate::{ .log = "docs", .args = "test-docs", .par = Par.serial, .verdict = true,
-        .shard = Shard.core, .macos = false },
-    Gate::{ .log = "suites_b", .args = "test-suites-b", .par = Par.synced, .verdict = false,
-        .shard = Shard.rest, .macos = false },
-    Gate::{ .log = "run", .args = "run", .par = Par.serial, .verdict = true, .shard = Shard.rest,
+    Gate::{ .log = "link_abi", .args = "test-ksos-link test-llvm-abi", .par = .synced,
+        .verdict = false, .shard = .core, .macos = false },
+    Gate::{ .log = "fm", .args = "test-freestanding-math", .par = .serial, .verdict = true,
+        .shard = .core, .macos = true },
+    Gate::{ .log = "simd", .args = "test-simd", .par = .serial, .verdict = true, .shard = .core,
         .macos = true },
-    Gate::{ .log = "selfhost_llvm", .args = "LLVM=1 self-host STATS=1", .par = Par.serial,
-        .verdict = true, .shard = Shard.rest, .macos = true },
+    // On a fall, remake the record with `make surface` and commit it with its diff.
+    Gate::{ .log = "surface", .args = "test-surface", .par = .serial, .verdict = true,
+        .shard = .core, .macos = false },
+    // The tour is generated from its program; `make tour` remakes it.
+    Gate::{ .log = "docs", .args = "test-docs", .par = .serial, .verdict = true, .shard = .core,
+        .macos = false },
+    Gate::{ .log = "suites_b", .args = "test-suites-b", .par = .synced, .verdict = false,
+        .shard = .rest, .macos = false },
+    Gate::{ .log = "run", .args = "run", .par = .serial, .verdict = true, .shard = .rest,
+        .macos = true },
+    Gate::{ .log = "selfhost_llvm", .args = "LLVM=1 self-host STATS=1", .par = .serial,
+        .verdict = true, .shard = .rest, .macos = true },
     // Caution: **Put the run-time tests through the LLVM backend too.** A self-host that passes
     // does not tread a shape ksplc itself never uses, so a broken genllvm goes unseen. Windows runs
     // it as well: only Win64 passes arguments on the stack, where a wrong argument type shows.
-    Gate::{ .log = "debug_llvm", .args = "LLVM=1 debug", .par = Par.serial, .verdict = true,
-        .shard = Shard.rest, .macos = true },
+    Gate::{ .log = "debug_llvm", .args = "LLVM=1 debug", .par = .serial, .verdict = true,
+        .shard = .rest, .macos = true },
     // Peak memory alone settles it; the time is only recorded (`tests/tools/perf_guard.kspls`).
-    Gate::{ .log = "perf", .args = "perf-log", .par = Par.serial, .verdict = false,
-        .shard = Shard.rest, .macos = false },
+    Gate::{ .log = "perf", .args = "perf-log", .par = .serial, .verdict = false, .shard = .rest,
+        .macos = false },
     // macOS runs these of ksplc's own suites, which the jobs above reach through `suites_a`. It
     // leaves out `perf` (the baseline is Linux's) and what is platform-independent; it keeps what
     // meets Apple's toolchain only there (`fm`, `emit_runtime`).
-    Gate::{ .log = "lsp", .args = "test-lsp", .par = Par.serial, .verdict = true,
-        .shard = Shard.none, .macos = true },
-    Gate::{ .log = "negative", .args = "test-negative", .par = Par.serial, .verdict = true,
-        .shard = Shard.none, .macos = true },
-    Gate::{ .log = "equiv", .args = "test-equiv", .par = Par.serial, .verdict = true,
-        .shard = Shard.none, .macos = true },
-    Gate::{ .log = "emit_runtime", .args = "test-emit-runtime", .par = Par.serial, .verdict = true,
-        .shard = Shard.none, .macos = true },
+    Gate::{ .log = "lsp", .args = "test-lsp", .par = .serial, .verdict = true, .shard = .none,
+        .macos = true },
+    Gate::{ .log = "negative", .args = "test-negative", .par = .serial, .verdict = true,
+        .shard = .none, .macos = true },
+    Gate::{ .log = "equiv", .args = "test-equiv", .par = .serial, .verdict = true, .shard = .none,
+        .macos = true },
+    Gate::{ .log = "emit_runtime", .args = "test-emit-runtime", .par = .serial, .verdict = true,
+        .shard = .none, .macos = true },
     // Each needs a tool only the devcontainer image holds: `<ucontext.h>`, `qemu-system-arm`, node,
     // wasm-ld and a browser, `desktop-file-validate`, libopenblas, ThreadSanitizer. **A browser and
     // the validator are required here** (`KSPAGE_REQUIRE_*`): the image bundles them, so their
     // absence is a fault, not the place.
-    Gate::{ .log = "ksos_posix", .args = "test-ksos-posix", .par = Par.serial, .verdict = false,
-        .shard = Shard.linux, .macos = false },
-    Gate::{ .log = "ksos_qemu", .args = "test-ksos-qemu", .par = Par.serial, .verdict = false,
-        .shard = Shard.linux, .macos = false },
-    Gate::{ .log = "js_syntax", .args = "test-js-syntax", .par = Par.serial, .verdict = true,
-        .shard = Shard.linux, .macos = false },
-    Gate::{ .log = "kspage_wasm", .args = "test-kspage-wasm", .par = Par.serial, .verdict = true,
-        .shard = Shard.linux, .macos = false },
+    Gate::{ .log = "ksos_posix", .args = "test-ksos-posix", .par = .serial, .verdict = false,
+        .shard = .linux, .macos = false },
+    Gate::{ .log = "ksos_qemu", .args = "test-ksos-qemu", .par = .serial, .verdict = false,
+        .shard = .linux, .macos = false },
+    Gate::{ .log = "js_syntax", .args = "test-js-syntax", .par = .serial, .verdict = true,
+        .shard = .linux, .macos = false },
+    Gate::{ .log = "kspage_wasm", .args = "test-kspage-wasm", .par = .serial, .verdict = true,
+        .shard = .linux, .macos = false },
     Gate::{ .log = "kspage_browser", .args = "test-kspage-browser KSPAGE_REQUIRE_BROWSER=1",
-        .par = Par.serial, .verdict = true, .shard = Shard.linux, .macos = false },
+        .par = .serial, .verdict = true, .shard = .linux, .macos = false },
     // No substitute for the `file://` gate above: one sees the page with a server, the other
     // without.
     Gate::{ .log = "kspage_served", .args = "test-kspage-served KSPAGE_REQUIRE_BROWSER=1",
-        .par = Par.serial, .verdict = true, .shard = Shard.linux, .macos = false },
+        .par = .serial, .verdict = true, .shard = .linux, .macos = false },
     Gate::{ .log = "kspage_desktop", .args = "test-kspage-desktop KSPAGE_REQUIRE_DESKTOP=1",
-        .par = Par.serial, .verdict = true, .shard = Shard.linux, .macos = false },
+        .par = .serial, .verdict = true, .shard = .linux, .macos = false },
     // Caution: **Build and run the BLAS backend for real.** `lint-cfg` reads its branch, but only
     // a link shows whether the FFI is right.
-    Gate::{ .log = "debug_blas", .args = "BLAS=1 debug", .par = Par.serial, .verdict = true,
-        .shard = Shard.linux, .macos = false },
-    Gate::{ .log = "race", .args = "test-race", .par = Par.serial, .verdict = true,
-        .shard = Shard.linux, .macos = false },
+    Gate::{ .log = "debug_blas", .args = "BLAS=1 debug", .par = .serial, .verdict = true,
+        .shard = .linux, .macos = false },
+    Gate::{ .log = "race", .args = "test-race", .par = .serial, .verdict = true, .shard = .linux,
+        .macos = false },
     // Needs no tool of the image's: it is here because Linux's minute costs least, and the release
     // checks each platform's own (`.github/workflows/release.yml`). It pays one `-O2` build.
-    Gate::{ .log = "selfhost_ship", .args = "self-host-ship", .par = Par.serial, .verdict = true,
-        .shard = Shard.linux, .macos = false },
+    Gate::{ .log = "selfhost_ship", .args = "self-host-ship", .par = .serial, .verdict = true,
+        .shard = .linux, .macos = false },
 }
 
 enum Set //< a set of gates one command runs, named as `make` names it
@@ -146,19 +146,20 @@ enum Set //< a set of gates one command runs, named as `make` names it
 const set_order: Set[6] = ::{ Set.ci, Set.ci_linux, Set.ci_linux_only, Set.ci_macos,
     Set.ci_shard_core, Set.ci_shard_rest } //< every set, so a name can be read back
 
-fn set_from(name: U8[], arena: Arena$@): Option<|Set|> //< the set a name spells, if any
+fn set_from(name: U8[], arena: Arena$@): Set? //< the set a name spells, if any
     //<
     //< **A name is the variant's with `_` written `-`** (`ci-shard-core`), so `make`, the workflow
     //< and this table spell it one way.
     for s in set_order
         if s.variant_name().replace("_", "-", arena).equals(name)
-            return Option<|Set|>.some(s)
-    return Option<|Set|>.none
+            return .some(s)
+    return .none
 
 impl Set
     fn runs(s: Self, g: Gate): Bool //< whether this set runs that gate
         shared: = g.shard == Shard.core || g.shard == Shard.rest
-        switch s case .ci
+        switch s
+        case .ci
             return shared
         case .ci_linux
             return shared || g.shard == Shard.linux

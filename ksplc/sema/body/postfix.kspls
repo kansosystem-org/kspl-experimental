@@ -21,7 +21,7 @@ import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/str" { Str_builder }
 
-fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error
+fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error
     node.ice_assert(node.children.len >= 2, "expr_postfix must have at least 2 children (expr, op)")
     left: = node.get_postfix_receiver()
     if base_core.config.run_lint_checks &&
@@ -47,8 +47,8 @@ fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error
         // Caution: Check this before resolving the type. Resolving `io` as a type reports it
         // undefined.
         if read_as_path(c, node, left, as_type_node, op_node)
-            return infer(node, c, expected_id)?
-        as_target_id = as_type_node.resolve_type(c)?
+            return infer(node, c, expected_id)!
+        as_target_id = as_type_node.resolve_type(c)!
         as_type_node.type_id = as_target_id
         pass_expected_id = I32::sema_type_env.Builtin_type_id.unknown
     else if op.equals("@")
@@ -58,14 +58,14 @@ fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error
         // and `@` makes a mutable pointer: a write to ROM passes **with no diagnostic on either
         // backend**.
         pass_expected_id = I32::sema_type_env.Builtin_type_id.unknown
-    else if op.equals("catch") || op.equals("?")
+    else if op.equals("catch") || op.equals("!")
         if !sema_type_env.is_unknown(expected_id)
             pass_expected_id = I32::sema_type_env.Builtin_type_id.unknown
 
     // Try it **before** `left.infer_expr`, or `.fmt`'s resolution fails first with "no such
     // method".
-    if op.equals("(") && sema_body_dot.try_rewrite_enum_fmt(node, left, c)?
-        return infer(node, c, expected_id)?
+    if op.equals("(") && sema_body_dot.try_rewrite_enum_fmt(node, left, c)!
+        return infer(node, c, expected_id)!
 
     // **A primitive type before a `.` is a namespace, not a value** (`Sz.width()`); asking for its
     // value is what `infer_primitive_type` rejects.
@@ -77,7 +77,7 @@ fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error
         outer_callee: = c.fn_ctx.callee
         c.fn_ctx.callee = left if op.equals("(") else null
         defer c.fn_ctx.callee = outer_callee
-        target_id = left.infer_expr(c, pass_expected_id)?
+        target_id = left.infer_expr(c, pass_expected_id)!
     $type_id: = I32::sema_type_env.Builtin_type_id.unknown
 
     if op.equals(".")
@@ -129,13 +129,13 @@ fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error
         recv_id: = c.env.receiver_base_id(target_id)
         type_id = sema_body_dot.infer_dot_access(c, node, left, target_id, recv_id, expected_id)
     else if op.equals("(")
-        type_id = sema_body_call.infer(c, node, left, target_id, expected_id)?
+        type_id = sema_body_call.infer(c, node, left, target_id, expected_id)!
     else if op.equals("[")
         type_id =
-            infer_postfix_array(c, node, target_id, c.env.receiver_base_id(target_id), expected_id)?
+            infer_postfix_array(c, node, target_id, c.env.receiver_base_id(target_id), expected_id)!
     else if op.equals("::")
         if c.env.is_result(target_id)
-            c.err(node, "cannot directly cast a Result type. Unwrap it using '?' or 'catch' first.")
+            c.err(node, "cannot directly cast a Result type. Unwrap it using '!' or 'catch' first.")
         if node.children.len >= 3
             // A struct type is an aggregate in C, so a C cast `(StructType)value` is invalid. It is
             // allowed only where the value already has that type (a no-op) and rejected here
@@ -145,7 +145,8 @@ fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error
             src_real_id: = c.env.get_real_type(target_id)
             if as_real_id != src_real_id
                 $is_struct_target: = false
-                switch c.env.get_info(as_real_id) case .struct_type(_)
+                switch c.env.get_info(as_real_id)
+                case .struct_type(_)
                     is_struct_target = true
                 default {}
                 // Caution: **Do not reject `Slice<|T|>` here.** `U8$[]::buf` is the legitimate
@@ -183,7 +184,7 @@ fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error
             c.err(node,
                 "cannot take the address of an element accessed through the 'Index' interface; \
                     'get' returns a copy, so '@' would yield the address of a temporary")
-            throw Sema_error.analysis_failed
+            throw .analysis_failed
         // The general form: `@` on a non-place (a return value, a literal, a computed result)
         // becomes `&temporary` in C, and the user gets a **raw C compiler error** instead of
         // KSPL's.
@@ -192,7 +193,7 @@ fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error
                 "cannot take the address of a call result, literal, or computed value; '@' would \
                     yield the address of a temporary. Bind it first (`x: = ...;`) and take the \
                     address of that.")
-            throw Sema_error.analysis_failed
+            throw .analysis_failed
         $pointee_id: = target_id
         if c.env.is_array(target_id)
             pointee_id = c.env.strip_array(target_id)
@@ -212,14 +213,14 @@ fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error
                 .s("cannot dereference non-pointer type '\{c.env.get_str(target_id)\}'")
             c.err(node, c.scratch.slice())
         type_id = c.env.strip_ptr(target_id)
-    else if op.equals("?")
+    else if op.equals("!")
         if c.fn_ctx.in_defer
-            c.err(node, "cannot use '?' operator (which may throw) inside a defer block")
+            c.err(node, "cannot use '!' operator (which may throw) inside a defer block")
         if !sema_type_env.is_unknown(target_id) && !c.env.is_result(target_id)
-            c.err(node, "'?' operator can only be applied to a Result type")
+            c.err(node, "'!' operator can only be applied to a Result type")
         else if !sema_type_env.is_unknown(c.fn_ctx.ret_id) &&
             !c.env.is_result(c.fn_ctx.ret_id)
-            c.err(node, "cannot use '?' operator in a function that does not return a Result type")
+            c.err(node, "cannot use '!' operator in a function that does not return a Result type")
         else if !sema_type_env.is_unknown(target_id) &&
             !sema_type_env.is_unknown(c.fn_ctx.ret_id)
             target_err_id: = c.env.get_real_type(c.env.get_result_err_id(target_id))
@@ -229,7 +230,7 @@ fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error
                 t_err_str: = c.env.get_str(target_err_id)
                 r_err_str: = c.env.get_str(ret_err_id)
                 c.clear_scratch()
-                    .s("cannot propagate error of type '\{t_err_str\}' using '?' operator. The \
+                    .s("cannot propagate error of type '\{t_err_str\}' using '!' operator. The \
                         enclosing function expects error type '\{r_err_str\}'.")
                 c.err(node, c.scratch.slice())
         type_id = c.env.strip_result(target_id)
@@ -305,7 +306,8 @@ priv fn path_meant(c: Sema_ctx$@, owner: Ast_node$@, is_module: Bool, operand: A
         return true
     if _sym: = c.symtab.peek(name.text)
         return false
-    switch sema_session_pointer.read_in_scope(c, c.file_name, name.text) case .not_a_pointer {}
+    switch sema_session_pointer.read_in_scope(c, c.file_name, name.text)
+    case .not_a_pointer {}
     default
         return false
     $dotted: = Str_builder.new()
@@ -314,7 +316,8 @@ priv fn path_meant(c: Sema_ctx$@, owner: Ast_node$@, is_module: Bool, operand: A
         if part.kind_id == .k_identifier
             dotted.s(part.text).c('.')
     dotted.s(name.text)
-    switch sema_session_pointer.read_in_scope(c, c.file_name, dotted.slice()) case .found(_decl)
+    switch sema_session_pointer.read_in_scope(c, c.file_name, dotted.slice())
+    case .found(_decl)
         return true
     default
         return false
@@ -350,7 +353,8 @@ priv fn is_aggregate_value(c: Sema_ctx$@, id: I32): Bool //<
     //< Whether a value of the type is an aggregate (a struct or slice, an array, a Result...)
     //<
     //< A tagged union counts; a scalar enum does not.
-    switch c.env.get_info(id) case .struct_type(_d)
+    switch c.env.get_info(id)
+    case .struct_type(_d)
         return true
     case .array(_b, _n)
         return true
@@ -422,7 +426,8 @@ priv fn check_slice_elem_size(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32
     //< (`U8[]` ↔ `I8[]`, `U32[]` ↔ `I32[]`) keeps the check's meaning.
     dst_elem: = c.env.get_clean_real_type(c.env.slice_elem(as_target_id))
     $src_elem: = c.env.slice_elem(src_id)
-    switch c.env.get_info(c.env.get_clean_real_type(src_id)) case .array(base_id, _n)
+    switch c.env.get_info(c.env.get_clean_real_type(src_id))
+    case .array(base_id, _n)
         src_elem = base_id
     default {}
     src_elem = c.env.get_clean_real_type(src_elem)
@@ -447,10 +452,10 @@ priv fn check_slice_elem_size(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32
             ... }')").slice()
     c.err(node, msg)
 
-priv fn const_index(c: Sema_ctx$@, index_node: Ast_node$@): Option<|I32|> //<
+priv fn const_index(c: Sema_ctx$@, index_node: Ast_node$@): I32? //<
     //< The index's value if it is known at translation time
     if index_node == null
-        return Option<|I32|>.none
+        return .none
     return c.try_eval_constexpr(index_node)
 
 fn index_is_static_in_range(c: Sema_ctx$@, index_node: Ast_node$@, size: I32): Bool //<
@@ -460,7 +465,8 @@ fn index_is_static_in_range(c: Sema_ctx$@, index_node: Ast_node$@, size: I32): B
     //< omission of the run-time check must agree (the same reason as shift_amount_in_range in
     //< sema/body/binary.kspls). **Arrays only**: a slice's length is a run-time value, so its check
     //< stays even for a constant index.
-    switch const_index(c, index_node) case .some(idx)
+    switch const_index(c, index_node)
+    case .some(idx)
         return idx >= 0 && idx < size
     case .none
         return false
@@ -469,16 +475,19 @@ fn index_is_static_in_range(c: Sema_ctx$@, index_node: Ast_node$@, size: I32): B
 // `[]` is allowed **only on what carries its own length** (a slice, an array, an Index /
 // Index_place type); a raw pointer cannot be bounds-checked, so the user is pointed to `(p + i)$`.
 priv fn infer_postfix_array(c: Sema_ctx$@, node: Ast_node$@, target_id: I32, recv_id: I32,
-    expected_id: I32): I32?Sema_error
+    expected_id: I32): I32!Sema_error
     // Only `index_route` decides the route (sema/decl/access.kspls); decided apart from the
     // assignment side, the two could resolve differently.
     route: = c.index_route(node.get_postfix_receiver(), recv_id)
-    switch route case .by_value {} default
+    switch route
+    case .by_value {}
+    default
         place_method: = route.index_route_method()
         next_op: = node.get_postfix_member()
-        switch c.resolve_operator_method(recv_id, place_method) case .some(method_sym)
+        switch c.resolve_operator_method(recv_id, place_method)
+        case .some(method_sym)
             node.def_node = method_sym.node
-            next_op.infer_expr(c, c.operator_index_param_id(method_sym))?
+            next_op.infer_expr(c, c.operator_index_param_id(method_sym))!
             // The node's type is the element, not the returned pointer; lower rebuilds the
             // dereference as `at(i)$` / `at_ref(i)$` (lower/expr.kspls). `at_ref` returns
             // `Output@`, so the element is immutable, which is what rejects a write.
@@ -489,10 +498,11 @@ priv fn infer_postfix_array(c: Sema_ctx$@, node: Ast_node$@, target_id: I32, rec
             place_trait: = route.index_route_trait()
             c.report_operator_method_missing(recv_id, place_trait, place_method, node)
             return I32::sema_type_env.Builtin_type_id.unknown
-    switch c.resolve_operator_call(recv_id, "Index", "get", "Index access", "[]", node) case .user(method_sym)
+    switch c.resolve_operator_call(recv_id, "Index", "get", "Index access", "[]", node)
+    case .user(method_sym)
         next_op: = node.get_postfix_member()
         node.def_node = method_sym.node
-        next_op.infer_expr(c, c.operator_index_param_id(method_sym))?
+        next_op.infer_expr(c, c.operator_index_param_id(method_sym))!
         node.type_id = method_sym.type_id
         return method_sym.type_id
     case .failed
@@ -501,11 +511,12 @@ priv fn infer_postfix_array(c: Sema_ctx$@, node: Ast_node$@, target_id: I32, rec
 
     next_op: = node.get_postfix_member()
     if next_op != null
-        next_op.infer_expr(c, I32::sema_type_env.Builtin_type_id.size_type)?
+        next_op.infer_expr(c, I32::sema_type_env.Builtin_type_id.size_type)!
 
         if base_core.config.run_lint_checks && c.env.is_array(recv_id)
             info: = c.env.get_info(recv_id)
-            switch info case .array(_b, size)
+            switch info
+            case .array(_b, size)
                 if idx_val: = const_index(c, next_op)
                     if idx_val >= size
                         c.clear_scratch()

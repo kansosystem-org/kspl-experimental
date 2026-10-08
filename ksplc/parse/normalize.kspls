@@ -31,9 +31,10 @@ fn is_expr_wrapper_kind(kind_id: base_ast_kinds.Ast_kind): Bool //<
     //< **The raw tree's reader never creates them** (`to_ast_node` in `load.kspls`); it asks this
     //< one list. A statement's wrapper is not on it: its raw child count still changes (the `;` is
     //< dropped), so the reader and `is_pass_through` would disagree about it.
-    switch kind_id case .k_expr_ternary, .k_expr_catch_chain, .k_expr_or, .k_expr_and, .k_expr_cmp,
-        .k_expr_add, .k_expr_mul, .k_expr_cast, .k_expr_unary, .k_expr_postfix, .k_expr,
-        .k_expr_primary, .k_assign_op, .k_type_arg, .k_string_part, .k_literal
+    switch kind_id
+    case .k_expr_ternary, .k_expr_catch_chain, .k_expr_or, .k_expr_and, .k_expr_cmp, .k_expr_add,
+        .k_expr_mul, .k_expr_cast, .k_expr_unary, .k_expr_postfix, .k_expr, .k_expr_primary,
+        .k_assign_op, .k_type_arg, .k_string_part, .k_literal
         return true
     default
         return false
@@ -42,7 +43,8 @@ impl Ast_node
     priv fn should_drop_by_cfg(r: Ast_node$@): Bool
         if r == null
             return false
-        switch r.get_attribute("cfg") case .some(attr)
+        switch r.get_attribute("cfg")
+        case .some(attr)
             $is_neg: = false
             target_str: = attr.cfg_flag_name(is_neg@)
             // Caution: **Do not drop a shape other than `cfg(flag)` / `cfg(!flag)`**; kept, sema's
@@ -67,9 +69,9 @@ impl Ast_node
         case .none
             return false
 
-    fn normalize_ast(r: Ast_node$@, src: U8$[], depth: Sz): Option<|Ast_node$@|>
+    fn normalize_ast(r: Ast_node$@, src: U8$[], depth: Sz): Ast_node$@?
         if r == null
-            return Option<|Ast_node$@|>.none
+            return .none
         if depth >= max_parse_tree_depth
             io.err()
                 .s("\nfatal: AST nesting too deep to normalize (possible unbounded recursive \
@@ -81,7 +83,7 @@ impl Ast_node
         r.apply_modifiers_to_targets()
         if r.should_drop_by_cfg()
             r.morph(.k_empty, "")
-            return Option<|Ast_node$@|>.some(r)
+            return .some(r)
         // In place (destructively), saving the allocation of new lists.
         $write_idx: Sz = 0
         for $i: = 0; i < r.children.len; i += 1
@@ -90,16 +92,17 @@ impl Ast_node
                 write_idx += 1
         r.children.len = write_idx
 
-        switch r.elide_node() case .some(elided)
+        switch r.elide_node()
+        case .some(elided)
             if elided != r
-                return Option<|Ast_node$@|>.some(elided)
+                return .some(elided)
 
             treeified: = elided.treeify_expr()
             if treeified != null
-                return Option<|Ast_node$@|>.some(treeified.normalize_by_kind())
-            return Option<|Ast_node$@|>.none
+                return .some(treeified.normalize_by_kind())
+            return .none
         case .none
-            return Option<|Ast_node$@|>.none
+            return .none
 
     fn is_modifier(r: Ast_node$@): Bool
         if r == null
@@ -117,10 +120,11 @@ impl Ast_node
     priv fn is_decl_or_stmt(r: Ast_node$@): Bool
         if r == null
             return false
-        switch r.kind_id case .k_stmt, .k_top_level_item, .k_decl_top, .k_loop_init, .k_loop_step,
-            .k_stmt_return, .k_stmt_throw, .k_stmt_fallback, .k_stmt_expr, .k_decl_extern,
-            .k_decl_extern_block, .k_decl_extern_struct, .k_decl_var, .k_decl_const, .k_stmt_break,
-            .k_stmt_labeled_block, .k_stmt_continue, .k_decl_embed, .k_decl_alias
+        switch r.kind_id
+        case .k_stmt, .k_top_level_item, .k_decl_top, .k_loop_init, .k_loop_step, .k_stmt_return,
+            .k_stmt_throw, .k_stmt_fallback, .k_stmt_expr, .k_decl_extern, .k_decl_extern_block,
+            .k_decl_extern_struct, .k_decl_var, .k_decl_const, .k_stmt_break, .k_stmt_labeled_block,
+            .k_stmt_continue, .k_decl_embed, .k_decl_alias
             return true
         default
             return false
@@ -132,8 +136,8 @@ impl Ast_node
         //< (`is_expr_wrapper_kind`).
         if r == null
             return false
-        switch r.kind_id case .k_empty, .k_stmt, .k_top_level_item, .k_decl_top, .k_loop_init,
-            .k_loop_step
+        switch r.kind_id
+        case .k_empty, .k_stmt, .k_top_level_item, .k_decl_top, .k_loop_init, .k_loop_step
             return true
         default
             return is_expr_wrapper_kind(r.kind_id)
@@ -147,26 +151,27 @@ impl Ast_node
         //< moves them to the end.
         if r == null
             return false
-        switch r.kind_id case .k_decl_extern, .k_decl_extern_block, .k_decl_extern_struct,
-            .k_decl_var, .k_decl_const, .k_decl_embed, .k_decl_alias, .k_decl_struct, .k_decl_enum,
+        switch r.kind_id
+        case .k_decl_extern, .k_decl_extern_block, .k_decl_extern_struct, .k_decl_var,
+            .k_decl_const, .k_decl_embed, .k_decl_alias, .k_decl_struct, .k_decl_enum,
             .k_decl_trait, .k_decl_fn, .k_decl_fn_proto, .k_decl_impl, .k_decl_import,
             .k_decl_directive
             return true
         default
             return false
 
-    priv fn elide_attributed_stmt(r: Ast_node$@): Option<|Ast_node$@|> //<
+    priv fn elide_attributed_stmt(r: Ast_node$@): Ast_node$@? //<
         //< It handles the attributes put on a statement and removes the `stmt` wrapper
         //<
         //< Its one meaningful attribute, `#cfg`, is already applied (`should_drop_by_cfg`).
         //< Caution: **Discard nothing but `#cfg`**, or an attribute with no effect on a statement
         //< passes with no diagnostic (Principle 5).
         if r.kind_id != .k_stmt
-            return Option<|Ast_node$@|>.none
+            return .none
         // **Check for attributes before allocating a new list** (the reason is at
         // `clean_and_classify_stmt`).
         if r.find_child(.k_attribute_list) == null
-            return Option<|Ast_node$@|>.none
+            return .none
         $inner: Ast_node$@ = null
         kept: = base_ast.new_ast_node_list()
         $saw_attrs: = false
@@ -179,20 +184,21 @@ impl Ast_node
             else if inner == null
                 inner = c
             else
-                return Option<|Ast_node$@|>.none
+                return .none
         if inner == null || !saw_attrs
-            return Option<|Ast_node$@|>.none
+            return .none
         if kept.len > 0
             leftover: = Ast_node.new(.k_attribute_list, "attribute_list", r.loc)
             for attr in kept
                 leftover.add_child(attr)
             inner.add_child(leftover)
-        return Option<|Ast_node$@|>.some(inner)
+        return .some(inner)
 
     priv fn is_flatten_target(r: Ast_node$@): Bool
         if r == null
             return false
-        switch r.kind_id case .k_decl_extern_struct, .k_decl_struct, .k_decl_enum, .k_decl_trait,
+        switch r.kind_id
+        case .k_decl_extern_struct, .k_decl_struct, .k_decl_enum, .k_decl_trait,
             .k_expr_implicit_dot, .k_implicit_enum, .k_stmt_break, .k_stmt_continue, .k_decl_embed,
             .k_decl_alias, .k_decl_fn, .k_decl_fn_proto, .k_decl_impl, .k_decl_import,
             .k_decl_import_selector_list, .k_decl_import_selector, .k_decl_directive, .k_stmt_match,
@@ -370,7 +376,8 @@ impl Ast_node
             if first_idx < r.children.len
                 first: = r.get_child(first_idx)
                 if first.kind_id == .k_literal || first.kind_id == .k_keyword
-                    switch map_keyword_to_decl_kind(first.text) case .valid(k, t)
+                    switch map_keyword_to_decl_kind(first.text)
+                    case .valid(k, t)
                         r.set_kind(k)
                         r.text = t
                     default {}
@@ -382,14 +389,14 @@ impl Ast_node
                 child.kind_id == .k_primitive_type || child.kind_id == .k_type_atom
                 r.text = child.text
 
-    priv fn elide_node(r: Ast_node$@): Option<|Ast_node$@|>
+    priv fn elide_node(r: Ast_node$@): Ast_node$@?
         if r == null
-            return Option<|Ast_node$@|>.none
+            return .none
 
         if r.kind_id == .k_visibility && r.children.len > 0
             vis: = r.get_child(0)
             vis.set_kind(.k_keyword)
-            return Option<|Ast_node$@|>.some(vis)
+            return .some(vis)
 
         if r.kind_id == .k_type_args || r.kind_id == .k_type_gen_params
             r.normalize_type_args_text()
@@ -401,7 +408,7 @@ impl Ast_node
             r.clean_and_classify_stmt()
 
         if stmt_node: = r.elide_attributed_stmt()
-            return Option<|Ast_node$@|>.some(stmt_node)
+            return .some(stmt_node)
 
         if r.kind_id == .k_expr_primary && r.children.len == 3 &&
             r.get_child(0).is_literal("(")
@@ -410,9 +417,9 @@ impl Ast_node
             // non-negative).
             inner: = r.get_child(1)
             inner.ival = (inner.ival - 1) if inner.ival < 0 else -1
-            return Option<|Ast_node$@|>.some(inner)
+            return .some(inner)
         if r.children.len == 1 && r.is_pass_through()
-            return Option<|Ast_node$@|>.some(r.get_child(0))
+            return .some(r.get_child(0))
         // A prefixed cast (three children, type_expr "::" expr_unary) becomes the k_expr_postfix
         // shape [receiver, "::", type] that every later stage already handles.
         if r.kind_id == .k_expr_cast && r.children.len == 3
@@ -421,7 +428,7 @@ impl Ast_node
             value_node: = r.get_child(2)
             postfix: = Ast_node.new(.k_expr_postfix, "::", r.loc)
             postfix.add_child(value_node).add_child(colon_node).add_child(type_node)
-            return Option<|Ast_node$@|>.some(postfix)
+            return .some(postfix)
 
         r.elide_type_paths()
         r.normalize_type_atom()
@@ -431,12 +438,13 @@ impl Ast_node
         // just the visibility into it and sema's W0206 reports a symbol named "unknown".
         if (r.kind_id == .k_decl_var || r.kind_id == .k_decl_const) && r.children.len == 0
             r.morph(.k_empty, "")
-        return Option<|Ast_node$@|>.some(r)
+        return .some(r)
 
     priv fn normalize_type_postfix(r: Ast_node$@)
         $has_inner: = false
         $inner_node: Ast_node$@ = null
         $is_err: = false
+        $is_opt: = false
         $is_at: = false
         $is_slice_or_array: = false
         $is_mut_mark: = false // the postfix `$` (`T$[]` / `T$@`): the target/element is writable
@@ -444,7 +452,8 @@ impl Ast_node
         r.flatten_inline_nodes()
         for c in r.children
             if c.kind_id == .k_literal
-                is_err = is_err || c.text.equals("?")
+                is_err = is_err || c.text.equals("!")
+                is_opt = is_opt || c.text.equals("?")
                 is_at = is_at || c.text.equals("@")
                 is_slice_or_array = is_slice_or_array || c.text.equals("[")
                 is_mut_mark = is_mut_mark || c.text.equals("$")
@@ -456,10 +465,12 @@ impl Ast_node
         clean: = base_ast.new_ast_node_list()
         if is_err
             if has_inner
-                r.text = wrap_child_text("?", inner_node.text, "")
+                r.text = wrap_child_text("!", inner_node.text, "")
                 clean.push(inner_node)
             else
-                r.text = "?"
+                r.text = "!"
+        else if is_opt
+            r.text = "?"
         else if is_at
             r.text = "@"
         else if is_slice_or_array
@@ -503,7 +514,8 @@ impl Ast_node
             r.text = "implicit_enum"
 
     priv fn normalize_by_kind(r: Ast_node$@): Ast_node$@
-        switch r.kind_id case .k_expr_args
+        switch r.kind_id
+        case .k_expr_args
             r.text = "args"
         case .k_match_pattern
             r.normalize_match_pattern()

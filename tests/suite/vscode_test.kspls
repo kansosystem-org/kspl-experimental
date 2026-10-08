@@ -63,17 +63,18 @@ priv fn strip_line_comments(text: U8[], arena: Arena$@): U8$[] //<
 priv fn is_obj(v: json.Val): Bool //< whether it is an object
     //<
     //< `get` returns `null_val` for a missing key too, so this tells "could not be read" apart.
-    switch v case .obj_val(_o)
+    switch v
+    case .obj_val(_o)
         return true
     default {}
     return false
 
 priv fn load_jsonc(path: U8[], arena: Arena$@): json.Val
     text: = io.read_file(path) catch
-        return json.Val.null_val
+        return .null_val
     defer dealloc(Void$@::text.ptr)
     return json.parse(strip_line_comments(text, arena), arena) catch
-        return json.Val.null_val
+        return .null_val
 
 priv struct Make_cmd //<
     //< The make target and the `VAR=` variable names read out of `command`'s literal text
@@ -383,6 +384,192 @@ priv fn check_extension(root: U8[], arena: Arena$@) //<
             gap.push(arena.text().s("not on the braced side: \{x\}").take())
     verdict.check_list("extension: the templates' line-up agrees across the two notations",
         braced.len, "templates", gap@, "")
+    check_templates(dir, arena)
+
+priv enum Place //< where the check puts a template: where an editor inserts it
+    body //< a statement, in a function body whose locals name its placeholders; it is compiled
+    file //< a declaration, as an item of the file
+    after_value //< what follows a value (`g() catch …`), as a local's initializer
+    value //< a value, as a local's initializer
+
+priv struct Template_use //< one template, the place it is read in, and what its cursor line holds
+    name: U8[]
+    place: Place
+    line: U8[] //<
+        //< What a line holding only a `$N` holds, in the brace notation
+        //<
+        //< **That line is where the writer goes on**, so it holds what the place takes next: a
+        //< statement in a body, a method in an `impl`, nothing in a `struct`. The indentation
+        //< notation drops its last `;`.
+
+priv const templates: Template_use[16] = ::{
+    ::{ .name = "Main Function", .place = .file, .line = "f();" },
+    ::{ .name = "Function Definition", .place = .file, .line = "f();" },
+    ::{ .name = "Method Definition", .place = .file, .line = "f();" },
+    ::{ .name = "Struct Definition", .place = .file, .line = "" },
+    ::{ .name = "Enum (Tagged Union)", .place = .file, .line = "" },
+    ::{ .name = "Impl Block", .place = .file, .line = "fn g() {}" },
+    ::{ .name = "Embed Resource", .place = .file, .line = "" },
+    ::{ .name = "Extern Block", .place = .file, .line = "" },
+    ::{ .name = "Loop (C-Style)", .place = .body, .line = "f();" },
+    ::{ .name = "Loop (While-Style)", .place = .body, .line = "f();" },
+    ::{ .name = "Loop (Infinite)", .place = .body, .line = "f();" },
+    ::{ .name = "Match Statement", .place = .body, .line = "f();" },
+    ::{ .name = "Defer Statement", .place = .body, .line = "f();" },
+    ::{ .name = "Catch Block", .place = .after_value, .line = "" },
+    ::{ .name = "Catch Fallback Expression", .place = .after_value, .line = "" },
+    ::{ .name = "Sizeof Expression", .place = .value, .line = "" },
+} //<
+    //< Every template of the two files, each read where an editor would insert it
+    //<
+    //< **The parser reads what an editor would insert**, so a template in a shape the notation
+    //< refuses (a `case` indented under its `switch`, a return type after `->`) fails here, not in
+    //< the writer's file. **A statement template is compiled too**: the locals before it name its
+    //< placeholders (`body_head`), so one that cannot work as typed (a loop counter that cannot
+    //< change) fails as well. A template added to a file and not here fails, by the count.
+
+priv const body_head: U8[] =
+    "priv enum Pick {
+    variant;
+    other;
+}
+
+priv fn f() {}
+
+priv fn free(_p: I32) {}
+
+fn main() {
+    len: Sz = 3;
+    condition: = len > 2;
+    expr: = Pick.other;
+    ptr: I32 = 0;
+" //<
+        //< What stands before a statement template (brace notation): a local for each placeholder
+        //<
+        //< Caution: **A local here stands only for a template's placeholder.** Rename the
+        //< placeholder and it fails as an unknown name: rename it here too, in both notations.
+
+priv const body_head_laid: U8[] =
+    "priv enum Pick
+    variant
+    other
+
+priv fn f() {}
+
+priv fn free(_p: I32) {}
+
+fn main()
+    len: Sz = 3
+    condition: = len > 2
+    expr: = Pick.other
+    ptr: I32 = 0
+" //< `body_head` in the indentation notation
+
+priv fn is_cursor_line(t: U8[], from: Sz): Bool //<
+    //< Whether the line holds only a `$N` from `from` on (past its tabs)
+    if from + 1 >= t.len || t[from] != '$'
+        return false
+    for c in t.sub_from(from + 1)
+        if !c.is_digit()
+            return false
+    return true
+
+priv fn expand_template(body: json.Val, use: Template_use, laid: Bool, arena: Arena$@): U8[] //<
+    //< A template's text with its placeholders filled, in the file its place gives
+    //<
+    //< `${1:expr}` becomes `expr`, `\$` a `$`, a line holding only a `$N` the use's `line`, and a
+    //< `$N` among other text nothing (where the cursor ends).
+    $b: = Str_builder.new()
+    defer b.free()
+    $indent: U8[] = "    "
+    $lead: = false
+    switch use.place
+    case .body
+        b.s(body_head_laid if laid else body_head)
+    case .file
+        indent = ""
+    case .after_value, .value
+        b.s("fn main()" if laid else "fn main() {").s("\n    x: = ")
+        if use.place == .after_value
+            b.s("g() ")
+        lead = true
+    $lines: = body.arr_list(arena)
+    for line in lines.slice()
+        t: = line.as_str()
+        if !lead
+            b.s(indent)
+        lead = false
+        $tabs: Sz = 0
+        for tabs < t.len && t[tabs] == '\t'
+            tabs += 1
+        if is_cursor_line(t, tabs)
+            for _ in Range.asc(tabs)
+                b.s("    ")
+            b.s(use.line.strip_suffix(";") if laid else use.line).c('\n')
+            continue
+        $i: Sz = 0
+        for i < t.len
+            if t[i] == '\t'
+                b.s("    ")
+                i += 1
+            else if t[i] == '\\' && i + 1 < t.len
+                b.c(t[i + 1])
+                i += 2
+            else if t[i] == '$' && i + 1 < t.len && t[i + 1] == '{'
+                rest: = t.sub_from(i)
+                colon: = rest.find_char(':')
+                close: = rest.find_char('}')
+                b.s(rest.sub(colon + 1, close - colon - 1))
+                i += close + 1
+            else if t[i] == '$'
+                i += 1
+                for i < t.len && t[i].is_digit()
+                    i += 1
+            else
+                b.c(t[i])
+                i += 1
+        b.c('\n')
+    if !laid && use.place == .body
+        b.s("}\n")
+    else if !laid && use.place != .file
+        b.s(";\n}\n")
+    return arena.dup_str(b.slice())
+
+priv fn check_templates(dir: U8[], arena: Arena$@) //<
+    //< Checks that each template reads where an editor inserts it, in both notations
+    $bad: = List<|U8[]|>.new(arena)
+    work: = harness.sandbox("vscode_templates") catch
+        verdict.check("extension: each template reads where it is inserted", false,
+            "the material's place cannot be made")
+        return
+    for laid in Range.asc(2)
+        file: = "snippets-kspls.json" if laid == 1 else "snippets.json"
+        listed: = prefixes_of(fs.join(dir, file, arena), arena).len
+        if listed != templates.len
+            bad
+                .push(arena.text().s("\{file\}: \{listed\} templates, \{templates.len\} read here")
+                .take())
+        all: = load_jsonc(fs.join(dir, file, arena), arena)
+        for use in templates
+            body: = all.get(use.name).get("body")
+            if body.arr_list(arena).len == 0
+                bad
+                    .push(arena.text().s("\{file\}: \{use.name\}: not in the file").take())
+                continue
+            src: = expand_template(body, use, laid == 1, arena)
+            path: = fs.join(work, "t.kspls" if laid == 1 else "t.kspl", arena)
+            io.write_file(path, src) catch
+                bad
+                    .push(arena.text().s("\{file\}: \{use.name\}: cannot write the material").take())
+                continue
+            $r: = harness.ksplc_bare(U8[][]::{ "fmt", path })
+            if use.place == .body
+                r = harness.ksplc(U8[][]::{ path, fs.join(work, "t.c", arena) })
+            if r.code != 0
+                bad
+                    .push(arena.text().s("\{file\}: \{use.name\}:\n\{src\}\{r.out\}").take())
+    verdict.check_list("extension: each template reads where it is inserted", templates.len * 2,
+        "templates", bad@, "")
 
 priv fn note_missing(missing: List<|U8[]|>$@, dir: U8[], rel: U8[], arena: Arena$@)
     if rel.len == 0

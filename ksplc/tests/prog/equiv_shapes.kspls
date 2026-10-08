@@ -19,7 +19,8 @@ priv enum Ev_arr //< a payload holding a fixed-size array, assigned as a whole v
 
 impl Ev
     priv fn tag_of(r: Self@): I32 //< a switch on `r$` of a read-only receiver, which is marked
-        switch r$ case .none
+        switch r$
+        case .none
             return 0
         case .one
             return 1
@@ -27,29 +28,31 @@ impl Ev
             return 2
 
 priv fn bool_word(b: Bool): U8[] //< a switch on a Bool, both values named and no default
-    switch b case true
+    switch b
+    case true
         return "yes"
     case false
         return "no"
 
 impl Ev_arr
     priv fn flip(r: Self$@)
-        switch r$ case .pair(v)
-            r$ = Ev_arr.pair(::{ v[1], v[0] })
+        switch r$
+        case .pair(v)
+            r$ = .pair(::{ v[1], v[0] })
         case .none {}
 
 priv struct Ev_row
     priv k: U8
     priv e: Ev
 
-priv const g_evs: Ev[3] = ::{ Ev.none, Ev.one(200), Ev.two(-7, 9) } //<
+priv const g_evs: Ev[3] = ::{ .none, .one(200), .two(-7, 9) } //<
     //< A global holding tagged unions, which LLVM cannot fill through their named type
     //<
     //< Caution: **Keep variants of different sizes, an `I64` among them, and one inside a struct.**
     //< genllvm lays such a value out as packed bytes; one shape alone hides a misplaced payload.
-priv const g_ev_rows: Ev_row[2] = ::{::{ .k = 1, .e = Ev.two(5, 6) },
-    ::{ .e = Ev.one(7), .k = 2 } }
-priv $g_ev_mut: Ev = Ev.two(3, 4)
+priv const g_ev_rows: Ev_row[2] = ::{::{ .k = 1, .e = .two(5, 6) },
+    ::{ .e = .one(7), .k = 2 } }
+priv $g_ev_mut: Ev = .two(3, 4)
 
 // A side effect that shows the evaluation order. The call order is recorded as digits (12 where 1
 // came first, 21 where 2 did).
@@ -90,7 +93,8 @@ impl Eval_pair
 
 impl Ev
     priv fn val(e: Self): I64
-        switch e case .none
+        switch e
+        case .none
             return -1
         case .one(a)
             return a
@@ -101,9 +105,9 @@ fn tagged_union_lines(b: Str_builder$@) //< tagged unions in array literals and 
     //<
     //< An element of a `const` array carries the immutability mark, which both backends once took
     //< for another type: C named `Const_Ev`, LLVM read every element as the first variant.
-    locals: Ev[3] = ::{ Ev.none, Ev.one(200), Ev.two(-7, 9) }
-    $muts: Ev[2] = ::{ Ev.two(1, 2), Ev.none }
-    muts[1] = Ev.one(3)
+    locals: Ev[3] = ::{ .none, .one(200), .two(-7, 9) }
+    $muts: Ev[2] = ::{ .two(1, 2), .none }
+    muts[1] = .one(3)
     b.s("evs=")
     for e in locals
         b.s("\{e.val()\},")
@@ -114,14 +118,15 @@ fn tagged_union_lines(b: Str_builder$@) //< tagged unions in array literals and 
     for row in g_ev_rows
         b.s("\{row.k\}:\{row.e.val()\},")
     b.s("\{g_ev_mut.val()\}")
-    g_ev_mut = Ev.one(8)
+    g_ev_mut = .one(8)
     b.s("/\{g_ev_mut.val()\}")
     $pair: = Ev_arr.pair(::{ 1, 2 })
     pair.flip()
-    switch pair case .pair(v)
+    switch pair
+    case .pair(v)
         b.s("/\{v[0]\}\{v[1]\}")
     case .none {}
-    pair = Ev_arr.none
+    pair = .none
     b.s("/\{pair\}")
     copy: = locals[2]
     b.s("/\{locals[1].tag_of()\}\{copy.tag_of()\}/").s(bool_word(muts.len > 1))
@@ -178,20 +183,20 @@ priv enum Narrow_tag: U8 //< a tagged union with a one-byte tag, which C held as
     wide(p: U8, al: Aligned16) //< a payload aligned past 8, behind a field of its own
 
 priv const g_aligned: Aligned_holder = ::{ .x = 1, .al = ::{ .a = 2 }, .y = 3 }
-priv const g_narrow: Narrow_tag[2] = ::{ Narrow_tag.two(4, 5),
-    Narrow_tag.wide(6, ::{ .a = 7 }) }
+priv const g_narrow: Narrow_tag[2] = ::{ .two(4, 5), .wide(6, ::{ .a = 7 }) }
 
 priv enum Layout_err: U8 //< a one-byte error, so a Result's `val` follows it closely
     bad
 
-priv fn aligned_ok(a: U8): Aligned16?Layout_err
+priv fn aligned_ok(a: U8): Aligned16!Layout_err
     if a == 0
-        throw Layout_err.bad
+        throw .bad
     return ::{ .a = a }
 
 impl Narrow_tag
     priv fn sum(r: Self): I32
-        switch r case .one(a)
+        switch r
+        case .one(a)
             return a
         case .two(b, c)
             return b * 10 + c
@@ -211,7 +216,7 @@ fn layout_lines(b: Str_builder$@) //< `#align(N)` nested, and a narrow tag, laid
     b.s(" narrow=\{sizeof(Narrow_tag)\}/\{n.sum()\}/\{g_narrow[0].sum()\}/\{g_narrow[1].sum()\}")
     // A Result holding an over-aligned value: LLVM put `val` right after the error, so the stride
     // and the value's alignment differed from C's. And one of bytes alone, whose size C gives as 3.
-    rs: (Aligned16?Layout_err)[2] = ::{ aligned_ok(4), aligned_ok(5) }
+    rs: (Aligned16!Layout_err)[2] = ::{ aligned_ok(4), aligned_ok(5) }
     got: = rs[1] catch Aligned16::{}
-    b.s(" result=\{Sz::rs[1]@ - Sz::rs[0]@\}/\{sizeof(Aligned16?Layout_err)\}/")
-        .s("\{(Sz::rs[0]@) % 16\}/\{got.a\}/\{sizeof(U8?Layout_err)\}\n")
+    b.s(" result=\{Sz::rs[1]@ - Sz::rs[0]@\}/\{sizeof(Aligned16!Layout_err)\}/")
+        .s("\{(Sz::rs[0]@) % 16\}/\{got.a\}/\{sizeof(U8!Layout_err)\}\n")

@@ -44,7 +44,7 @@ fn main(): I32
         compare(served, copy_path, arena)
     return verdict.finish()
 
-priv fn fetch(exe: U8[], root: U8[], work: U8[], arena: Arena$@): Option<|pilot.Blob|> //<
+priv fn fetch(exe: U8[], root: U8[], work: U8[], arena: Arena$@): pilot.Blob? //<
     //< The policy the server serves; the server is stopped before this returns
     started: =
         bring_up(exe, root, work, "kssrv", copy_port, U8[][]::{},
@@ -54,13 +54,13 @@ priv fn fetch(exe: U8[], root: U8[], work: U8[], arena: Arena$@): Option<|pilot.
         r: = client.get(copy_port, "/api/pilot", "", arena) catch e
             srv.failed("GET /api/pilot is answered", e.reason(), arena)
             srv.stop()
-            return Option<|pilot.Blob|>.none
+            return .none
         srv.stop()
         blob: = car.to_blob(r.body, arena)
         verdict.check("the policy handed out can be read", r.status == 200 && blob.is_some(),
             client.shown(r, arena))
         return blob
-    return Option<|pilot.Blob|>.none
+    return .none
 
 priv fn compare(served: pilot.Blob, copy_path: U8[], arena: Arena$@) //<
     //< Compares the copy with the served policy: first its version, then its move at every point
@@ -84,9 +84,9 @@ priv fn compare(served: pilot.Blob, copy_path: U8[], arena: Arena$@) //<
     verdict.check_list("the copy has not gone stale", car.dist_steps * car.line_count, "points",
         found@, fresh)
 
-priv fn read_blob(path: U8[], arena: Arena$@): Option<|pilot.Blob|> //< the copy, read as a policy
+priv fn read_blob(path: U8[], arena: Arena$@): pilot.Blob? //< the copy, read as a policy
     body: = io.read_file(path) catch
-        return Option<|pilot.Blob|>.none
+        return .none
     data: = U8[]::arena.dup_str(body)
     dealloc(body.ptr)
     return car.to_blob(data, arena)

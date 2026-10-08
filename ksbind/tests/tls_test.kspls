@@ -76,7 +76,8 @@ priv const pong: U8[] = "pong" //< what the peer answers
 #export
 fn tls_test_peer(peer: Tls_peer$@): Void$@
     conn: = peer.listener.accept() catch panic("accept should succeed once a client connects")
-    switch peer.act case .no_tls
+    switch peer.act
+    case .no_tls
         // Reads and discards the client's ClientHello, acting as a peer that speaks no TLS.
         buf: U8[256] = ::{}
         conn.read(U8$[]::buf) catch {}
@@ -84,7 +85,8 @@ fn tls_test_peer(peer: Tls_peer$@): Void$@
         ssl: = tls.SSL_new(peer.ctx)
         assert(ssl != null, "the peer's SSL should be made")
         assert(tls.SSL_set_fd(ssl, conn.raw_fd()) == 1, "the peer's socket should be set")
-        switch peer.act case .refused
+        switch peer.act
+        case .refused
             // The client refuses the certificate, so the handshake ends here, on the peer's side
             // too.
             SSL_accept(ssl)
@@ -99,7 +101,8 @@ fn tls_test_peer(peer: Tls_peer$@): Void$@
                 have += n
             assert((U8$[]::got).equals(ping), "the peer should read ping")
             assert(tls.SSL_write(ssl, Void@::pong.ptr, 4) == 4, "the peer should answer pong")
-            switch peer.act case .echo_then_close
+            switch peer.act
+            case .echo_then_close
                 tls.SSL_shutdown(ssl)
             default {} // `.echo_then_cut` sends no close_notify: the socket closes under it.
         tls.SSL_free(ssl)
@@ -173,7 +176,8 @@ impl Test_ca
             made")
         file: = fs.join(dir, "ca.pem", arena)
         $c_file: U8$@ = null
-        switch file.to_cstr() case .some(p)
+        switch file.to_cstr()
+        case .some(p)
             c_file = p
         case .none
             panic("the scratch path holds no NUL")
@@ -217,12 +221,13 @@ priv fn connect_to_peer(port: I32, ctx: tls.SSL_CTX$@, act: Peer_act, host: U8[]
     t: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@) catch panic("thread spawn failed")
     $seen: = Tls_seen.connected
     s: = tls.Tls_stream.connect(host, port) catch e
-        switch e case .handshake_failed
-            seen = Tls_seen.handshake_failed
+        switch e
+        case .handshake_failed
+            seen = .handshake_failed
         case .cert_verify_failed
-            seen = Tls_seen.cert_verify_failed
+            seen = .cert_verify_failed
         default
-            seen = Tls_seen.other
+            seen = .other
         fallback null
     if s != null
         s.free()
@@ -260,17 +265,17 @@ priv fn round_trip_then(port: I32, act: Peer_act, arena: Arena$@): After_pong //
     $after: = After_pong.end
     $rest: U8[8] = ::{}
     n: = s.read(U8$[]::rest) catch
-        after = After_pong.error
+        after = .error
         fallback 0
     if n > 0
-        after = After_pong.more
+        after = .more
     s.free()
     t.join_and_free()
     return after
 
 fn test_tls_handshake_failure_against_non_tls_peer()
     verdict.start("[Tls] the handshake failing and cleaning up against a non-TLS peer test...")
-    seen: = connect_to_peer(17659, null, Peer_act.no_tls, "127.0.0.1")
+    seen: = connect_to_peer(17659, null, .no_tls, "127.0.0.1")
     assert(seen == Tls_seen.handshake_failed,
         "TLS against a plain TCP peer must fail as handshake_failed")
     verdict.pass("Against a non-TLS peer it becomes handshake_failed correctly and cleans up.")
@@ -278,7 +283,7 @@ fn test_tls_handshake_failure_against_non_tls_peer()
 fn test_tls_untrusted_certificate_is_refused()
     verdict.start("[Tls] a certificate no CA signed being refused as such test...")
     ctx: = self_signed_ctx()
-    seen: = connect_to_peer(17666, ctx, Peer_act.refused, "127.0.0.1")
+    seen: = connect_to_peer(17666, ctx, .refused, "127.0.0.1")
     tls.SSL_CTX_free(ctx)
     assert(seen == Tls_seen.cert_verify_failed,
         "a self-signed certificate must fail as cert_verify_failed, not as a broken handshake")
@@ -292,7 +297,7 @@ fn test_tls_other_host_is_refused()
     defer ca.free()
     // **The CA is trusted, so only the host name check stands between**: without it, this connects.
     ctx: = ca.issue_ctx("other.test")
-    seen: = connect_to_peer(17667, ctx, Peer_act.refused, "localhost")
+    seen: = connect_to_peer(17667, ctx, .refused, "localhost")
     tls.SSL_CTX_free(ctx)
     assert(seen == Tls_seen.cert_verify_failed,
         "a certificate for another host must fail as cert_verify_failed")
@@ -303,7 +308,7 @@ fn test_tls_round_trip_ends_at_close_notify()
     verdict.start("[Tls] a verified connection carrying bytes both ways, then ending test...")
     arena: = Arena.new(4 * 1024)
     defer arena.free()
-    after: = round_trip_then(17668, Peer_act.echo_then_close, arena)
+    after: = round_trip_then(17668, .echo_then_close, arena)
     assert(after == After_pong.end, "a read after the peer's close_notify must give 0")
     verdict.pass("A certificate the trusted CA issued connects, carries both ways, and ends at 0.")
 
@@ -314,6 +319,6 @@ fn test_tls_cut_connection_is_an_error()
     defer arena.free()
     // **Read as an end, a cut would pass for the whole of what was sent**: whoever can drop the TCP
     // connection could cut a reply short unnoticed.
-    after: = round_trip_then(17669, Peer_act.echo_then_cut, arena)
+    after: = round_trip_then(17669, .echo_then_cut, arena)
     assert(after == After_pong.error, "a read after a cut with no close_notify must fail")
     verdict.pass("A connection cut without a close_notify fails, rather than reading as an end.")

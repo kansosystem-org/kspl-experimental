@@ -76,37 +76,37 @@ priv fn hunt_block(h: Hunt$@, b: Block$@) //< looks at one block in the same ord
     for $i: Sz = 0; i < b.children.len; i += 1
         hunt_block(h, b.children.get(i))
 
-priv fn hunt(d: Doc$@, needle: U8[], at: Inline$@, offset: Sz, back: Bool): Option<|Selection|>
+priv fn hunt(d: Doc$@, needle: U8[], at: Inline$@, offset: Sz, back: Bool): Selection?
     $h: = Hunt::{ .needle = needle, .at = at, .offset = offset, .past = false, .back = back,
         .hit = Selection::{ .from = null, .from_offset = 0, .to = null, .to_offset = 0 },
         .found = false }
     for $i: Sz = 0; i < d.blocks.len; i += 1
         hunt_block(h@, d.blocks.get(i))
-    return Option<|Selection|>.some(h.hit) if h.found else Option<|Selection|>.none
+    return .some(h.hit) if h.found else .none
 
-fn next_match(d: Doc$@, needle: U8[], at: Inline$@, offset: Sz, wrap: Bool): Option<|Selection|> //<
+fn next_match(d: Doc$@, needle: U8[], at: Inline$@, offset: Sz, wrap: Bool): Selection? //<
     //< The first position where needle starts, after (at, offset)
     //<
     //< **Where wrap is true it goes back to the start once at the end.** **Where `at` is null it
     //< searches from the document's start.** An empty needle is not searched for.
     if needle.len <= 0
-        return Option<|Selection|>.none
+        return .none
     if sp: = hunt(d, needle, at, offset, false)
-        return Option<|Selection|>.some(sp)
+        return .some(sp)
     if !wrap || at == null
-        return Option<|Selection|>.none
+        return .none
     return hunt(d, needle, null, 0, false)
 
-fn prev_match(d: Doc$@, needle: U8[], at: Inline$@, offset: Sz, wrap: Bool): Option<|Selection|> //<
+fn prev_match(d: Doc$@, needle: U8[], at: Inline$@, offset: Sz, wrap: Bool): Selection? //<
     //< The last position where needle starts, before (at, offset)
     //<
     //< **It follows the same rules as `next_match`.**
     if needle.len <= 0
-        return Option<|Selection|>.none
+        return .none
     if sp: = hunt(d, needle, at, offset, true)
-        return Option<|Selection|>.some(sp)
+        return .some(sp)
     if !wrap || at == null
-        return Option<|Selection|>.none
+        return .none
     return hunt(d, needle, null, 0, true)
 
 fn count_matches(d: Doc$@, needle: U8[]): Sz //<

@@ -132,7 +132,7 @@ struct Ast_node
         //< A number whose meaning depends on the node's kind
         //<
         //< On an `Identifier` (a field reference) it is the virtual field's number, on a
-        //< `stmt_throw` 0 = a new error / 1 = a `?`'s propagation, on a declaration whether the
+        //< `stmt_throw` 0 = a new error / 1 = a `!`'s propagation, on a declaration whether the
         //< compiler made it (`made_by_compiler` in `ast_ext.kspls`), and on a `for` / `if` /
         //< `switch` / labelled block whether a `break` leaves it (`is_left_by_break` there). Make 0
         //< the plain case, so a forgotten value is the safe one; the `break` mark cannot be, as
@@ -206,7 +206,8 @@ impl U8[]
         //< The contents of the `<|…|>` of a realized name (`Box<|I32 immut|>`)
         //<
         //< Empty where it is not a generic.
-        switch r.find_generic_bounds() case .found(_s, inner_start, inner_end, _e)
+        switch r.find_generic_bounds()
+        case .found(_s, inner_start, inner_end, _e)
             return r.sub(inner_start, inner_end - inner_start)
         default {}
         return ""
@@ -255,7 +256,8 @@ impl U8[]
         return r.len
 
     fn get_generic_base_name(r: U8[]): U8[]
-        switch r.find_generic_bounds() case .found(start_idx, _is, _ie, _end)
+        switch r.find_generic_bounds()
+        case .found(start_idx, _is, _ie, _end)
             return r.sub(0, start_idx)
         default
             return r
@@ -465,15 +467,16 @@ impl Ast_node
     fn build_bool_literal(val: Bool, loc: Loc): Ast_node$@
         return Ast_node.new(.k_bool, "true" if val else "false", loc)
 
-    fn build_inferred_var_decl(var_name: U8[], init_expr: Ast_node$@, loc: Loc): Ast_node$@ //<
+    fn build_inferred_var_decl(name: Ast_node$@, init_expr: Ast_node$@, loc: Loc): Ast_node$@ //<
         //< It synthesizes a decl_var with no type annotation (`name: = init_expr;`)
         //<
         //< Unlike build_var_decl, it leaves the type to inference. The decl_var's text is
         //< "var_synth", neither "var" nor "let".
+        //< **`name` is the identifier itself**, so a name the user wrote (a `for … in`'s item)
+        //< keeps the position it was written at, where the editor and a diagnostic find it.
         return Ast_node.new(.k_decl_var, "var_synth", loc)
             .add_child(Ast_node.new(.k_empty, "", loc))
-            .add_child(Ast_node.new(.k_keyword, "var", loc))
-            .add_child(Ast_node.build_ident(var_name, 0, loc))
+            .add_child(Ast_node.new(.k_keyword, "var", loc)).add_child(name)
             .add_child(Ast_node.new(.k_empty, "", loc)).add_child(init_expr)
     // --- Core Operations ---
 
@@ -569,25 +572,25 @@ impl Ast_node
                 return c
         return null
 
-    fn find_deep_child(r: Self$@, target_id: base_ast_kinds.Ast_kind): Option<|Ast_node$@|>
+    fn find_deep_child(r: Self$@, target_id: base_ast_kinds.Ast_kind): Ast_node$@?
         return r.find_deep_child_impl(target_id, 0)
 
     priv fn find_deep_child_impl(r: Self$@, target_id: base_ast_kinds.Ast_kind, depth: Sz):
-        Option<|Ast_node$@|> //<
+        Ast_node$@? //<
             //< Depth-guarded, since a postfix chain escapes max_parse_depth (see max_clone_depth).
         if r == null
-            return Option<|Ast_node$@|>.none
+            return .none
         if depth >= max_find_deep_child_depth
             io.err()
                 .s("\nfatal: AST node nesting too deep to search (possible unbounded \
                     pointer/array/deref chain).\n")
             sys.exit(1)
         if r.kind_id == target_id
-            return Option<|Ast_node$@|>.some(r)
+            return .some(r)
         for c in r.children
             if res: = c.find_deep_child_impl(target_id, depth + 1)
-                return Option<|Ast_node$@|>.some(res)
-        return Option<|Ast_node$@|>.none
+                return .some(res)
+        return .none
 
     fn find_text(r: Self$@, target_id: base_ast_kinds.Ast_kind): U8[]
         c: = r.find_child(target_id)
@@ -595,14 +598,14 @@ impl Ast_node
             return c.text
         return ""
 
-    fn first_expr(r: Self$@): Option<|Ast_node$@|>
+    fn first_expr(r: Self$@): Ast_node$@?
         if r == null
-            return Option<|Ast_node$@|>.none
+            return .none
         for c in r.children
             if c.kind_id != .k_keyword && c.kind_id != .k_literal && c.kind_id != .k_attribute &&
                 c.kind_id != .k_visibility && c.kind_id != .k_attribute_list
-                return Option<|Ast_node$@|>.some(c)
-        return Option<|Ast_node$@|>.none
+                return .some(c)
+        return .none
 
     fn get_span_length(r: Self$@): Sz
         if r.children.len == 0
@@ -667,7 +670,8 @@ impl Ast_node
         if len > 0 && r.get_child(len - 1).kind_id == .k_attribute_list
             len -= 1
 
-        switch r.kind_id case .k_decl_var, .k_decl_const
+        switch r.kind_id
+        case .k_decl_var, .k_decl_const
             r.ice_assert(len == 5,
                 "AST Validation Error: decl_var/decl_const must have exactly 5 children")
             child1: = r.get_child(1)

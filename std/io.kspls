@@ -16,7 +16,7 @@ pub enum Io_error //< why a read, a write or an open failed
     invalid_arg //< an argument is invalid, such as a path containing a NUL
 
 pub trait Reader //< anything bytes can be read from
-    fn read(r: Self, $buf: U8$[]): Sz?Io_error //< fills buf; returns the count read, 0 at the end
+    fn read(r: Self, $buf: U8$[]): Sz!Io_error //< fills buf; returns the count read, 0 at the end
 
 pub struct File_stream //< one open file to write to, read from and close
     pub stream: Void$@ //< the C `FILE *`; null means standard output
@@ -53,9 +53,9 @@ impl File_stream: Writer //< so it can be used wherever a `Writer` is expected
         return r
 
 impl File_stream: Reader //< so it can be used wherever a `Reader` is expected
-    pub fn read(r: Self$@, buf: U8$[]): Sz?Io_error //< fills the buffer; 0 means the end
+    pub fn read(r: Self$@, buf: U8$[]): Sz!Io_error //< fills the buffer; 0 means the end
         if r.stream == null
-            throw Io_error.invalid_arg
+            throw .invalid_arg
         if buf.len == 0
             return 0
         return libc.fread(Void$@::buf.ptr, 1, buf.len, r.stream)
@@ -64,21 +64,21 @@ impl File_stream: Owned //< it owns the handle and releases it in `free()`
     pub fn free(r: Self$@) //< closes the handle; a failure while closing is not reported
         //<
         //< That is `Owned`'s contract.
-        //< Caution: **To know whether the written data arrived, call `sync()?` before freeing it.**
+        //< Caution: **To know whether the written data arrived, call `sync()!` before freeing it.**
         if r.stream != null
             _res: = libc.fclose(r.stream)
             r.stream = null
 
 impl File_stream
-    pub fn sync(r: Self$@): Void?Io_error //< flushes buffered data and reports a failure
+    pub fn sync(r: Self$@): Void!Io_error //< flushes buffered data and reports a failure
         //<
         //< It does not mean the data reached the disk (the OS's own sync covers that).
         //< `Writer.flush()` returns `Self$@` for chaining, so only this method can report a
         //< failure.
         if r.stream == null
-            throw Io_error.invalid_arg
+            throw .invalid_arg
         if libc.fflush(r.stream) != 0
-            throw Io_error.close_failed
+            throw .close_failed
 
 // Set by set_line_buffered(): a write to stdout containing a newline flushes at once.
 priv $line_buffered: Bool = false
@@ -96,7 +96,7 @@ pub fn err(): Writer //< standard error, opened on the first call
         g_stderr.stream = libc.get_stderr()
     return g_stderr
 
-priv fn fopen_checked(path: U8[], mode: U8[]): Void$@?Io_error //<
+priv fn fopen_checked(path: U8[], mode: U8[]): Void$@!Io_error //<
     //< Opens path with mode and returns the FILE*, after checking that it opened
     //<
     //< Caution: **Do not use `libc.fopen`.** It is the narrow (ANSI) API, so on Windows a non-ASCII
@@ -105,13 +105,15 @@ priv fn fopen_checked(path: U8[], mode: U8[]): Void$@?Io_error //<
     // The C side would use only the part of a path before a NUL, so such a path is not opened; the
     // call fails instead (see str.to_cstr).
     $path_buf: U8$@ = null
-    switch path.to_cstr() case .some(p)
+    switch path.to_cstr()
+    case .some(p)
         path_buf = p
     case .none
         throw open_error(path, mode)
     defer dealloc(Void$@::path_buf)
     $mode_buf: U8$@ = null
-    switch mode.to_cstr() case .some(m)
+    switch mode.to_cstr()
+    case .some(m)
         mode_buf = m
     case .none
         throw open_error(path, mode)
@@ -119,7 +121,7 @@ priv fn fopen_checked(path: U8[], mode: U8[]): Void$@?Io_error //<
     // On POSIX a directory opens for reading and reads as nothing; Windows refuses it. It is
     // refused here on both, before its size is asked.
     if mode.len > 0 && mode[0] == 'r' && is_dir_path(path)
-        throw Io_error.read_failed(path)
+        throw .read_failed(path)
     file: = kspl_fopen_cstr(path_buf, mode_buf)
     if file == null
         throw open_error(path, mode)
@@ -138,18 +140,18 @@ priv fn open_error(path: U8[], mode: U8[]): Io_error //< the reason it could not
     //< "not found" hides that **the file exists but cannot be opened** (on Windows, while another
     //< process holds it or it is marked read-only).
     if mode.len > 0 && mode[0] == 'r'
-        return Io_error.file_not_found(path)
-    return Io_error.write_failed(path)
+        return .file_not_found(path)
+    return .write_failed(path)
 
 pub fn open( //< opens a file, handling a non-ASCII path on Windows too
     //<
     //< A child process started while it is open does not get it.
     path: U8[], //< the file to open
     mode: U8[], //< `r`, `w` or `a`, then any of `+` and `b`, and `x` after `w`; another letter fails
-): File_stream?Io_error //< the open file, which the caller frees; fails if it cannot be opened
-    return File_stream::{ .stream = fopen_checked(path, mode)? }
+): File_stream!Io_error //< the open file, which the caller frees; fails if it cannot be opened
+    return File_stream::{ .stream = fopen_checked(path, mode)! }
 
-pub fn read_file(path: U8[]): U8[]?Io_error //<
+pub fn read_file(path: U8[]): U8[]!Io_error //<
     //< The whole file, on the heap; the caller frees it with `mem.dealloc(text.ptr)`
     //<
     //< A `/proc` file that reports 0 bytes, and a pipe, are still read to the end.
@@ -162,13 +164,13 @@ pub fn read_file_capped( //< the file's first `cap` bytes, or the whole file if 
     path: U8[], //< the file to read
     cap: Sz, //< the most bytes it reads
     arena: Arena$@, //< where the bytes go; null means the heap, freed with `mem.dealloc(text.ptr)`
-): U8[]?Io_error //< the bytes; fails if the file cannot be opened or read
+): U8[]!Io_error //< the bytes; fails if the file cannot be opened or read
     return read_upto(path, cap if cap > 0 else 0, arena)
 
 priv const no_cap: Sz = -1 //< `read_upto`'s cap for the whole file, however long
 
-priv fn read_upto(path: U8[], cap: Sz, arena: Arena$@): U8[]?Io_error
-    file: = fopen_checked(path, "rb")?
+priv fn read_upto(path: U8[], cap: Sz, arena: Arena$@): U8[]!Io_error
+    file: = fopen_checked(path, "rb")!
     defer libc.fclose(file)
 
     // Caution: **Leave the size to kspl_file_size.** C's fseek / ftell use `long`, whose width
@@ -196,7 +198,7 @@ priv fn read_upto(path: U8[], cap: Sz, arena: Arena$@): U8[]?Io_error
     if libc.ferror(file) != 0
         if arena == null
             dealloc(Void$@::buffer)
-        throw Io_error.read_failed(path)
+        throw .read_failed(path)
     return U8[]::{ .ptr = buffer, .len = len }
 
 priv const read_step: Sz = 64 * 1024 //< the first buffer size for a file of unknown size
@@ -204,9 +206,9 @@ priv const read_step: Sz = 64 * 1024 //< the first buffer size for a file of unk
 pub fn write_file( //< writes the whole file, creating or replacing it
     path: U8[], //< the file to write
     data: U8[], //< its whole new content
-): Void?Io_error //< `write_failed` when any of it did not land, the last buffer's flush included
+): Void!Io_error //< `write_failed` when any of it did not land, the last buffer's flush included
     // "wb", like read_file's "rb": text mode converts newlines on Windows and breaks binary data.
-    file: = fopen_checked(path, "wb")?
+    file: = fopen_checked(path, "wb")!
     written: =
         libc.fwrite(Void$@::data.ptr, 1, data.len, file) if data.len > 0 else 0
     // Caution: **Check the close too.** A buffered write is refused only when the buffer is
@@ -214,16 +216,16 @@ pub fn write_file( //< writes the whole file, creating or replacing it
     // written.
     closed: = libc.fclose(file) == 0
     if written != data.len || !closed
-        throw Io_error.write_failed(path)
+        throw .write_failed(path)
 
 pub fn copy( //< reads to the end, writes it all out, and returns how much was copied
     src: Reader, //< where the bytes come from
     dst: Writer, //< where they go
-): Sz?Io_error //< the number of bytes copied; fails if a read fails
+): Sz!Io_error //< the number of bytes copied; fails if a read fails
     $buf: U8[4096] = ::{}
     $total_bytes: Sz = 0
     for
-        bytes_read: = src.read(U8$[]::buf)?
+        bytes_read: = src.read(U8$[]::buf)!
         if bytes_read == 0
             break
         dst.s(U8$[]::{ .ptr = buf@, .len = bytes_read })

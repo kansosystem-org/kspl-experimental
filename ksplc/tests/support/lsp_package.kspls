@@ -9,7 +9,7 @@ import "ksplc/tests/support/lsp_client"
 import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, end_text }
 import "std/chars"
 import "std/fs"
-import "std/json" + { Json_builder }
+import "std/json" { Json_builder }
 import "std/jsonrpc"
 import "std/mem" { Arena }
 import "std/str"
@@ -33,7 +33,7 @@ priv fn def_uri(c: jsonrpc.Client$@, uri: U8[], arena: Arena$@): U8[] //<
     pos: = lsp_client.at_pos(uri, decl_line(own_user, own_call, arena),
         col_in_line(own_user, own_call, "hit", arena) + 1, arena)
     got: = c.request("textDocument/definition", pos, heavy_ms, arena) catch
-        fallback json.Val.null_val
+        fallback .null_val
     return got.get("result").get("uri").as_str()
 
 priv fn marks_on(c: jsonrpc.Client$@, uri: U8[], arena: Arena$@): I32 //<
@@ -92,7 +92,7 @@ fn run(exe: U8[], arena: Arena$@)
         .set("textDocument", b.obj().set("uri", b.str_val("lib.kspls")).build())
         .set("position", at_hit).set("newName", b.str_val("tap")).build()
     renamed: = c.request("textDocument/rename", params, heavy_ms, arena) catch
-        fallback json.Val.null_val
+        fallback .null_val
     changes: = renamed.get("result").get("changes")
     verdict.check("a rename reaches the callers in its other folders",
         changes.has_key("lib.kspls") && changes.has_key("use/user.kspls"),
@@ -105,7 +105,7 @@ fn run(exe: U8[], arena: Arena$@)
     why: =
         c.request("textDocument/hover", lsp_client.at_pos(gated, 1, 8, arena), normal_ms, arena)
         catch
-        fallback json.Val.null_val
+        fallback .null_val
     said: = lsp_client.hover_text(why)
     verdict.check("what an unraised #cfg leaves out of it answers with the reason",
         said.find_str("not analyzed") >= 0,

@@ -45,16 +45,16 @@ fn fits_block(s: Style$@): Bool //< whether that style applies to a paragraph
     //< are containers.
     if s == null
         return false
-    return s.arrange.same_arrange(Arrange.flow)
+    return s.arrange.same_arrange(.flow)
 
 fn arrange_from(name: U8[]): Arrange //< reads a way of laying out from a name
     //<
     //< **An unknown name means flow** (a typo is easier to fix when you can see it laid out).
     if name.equals("grid")
-        return Arrange.grid
+        return .grid
     if name.equals("absolute")
-        return Arrange.absolute
-    return Arrange.flow
+        return .absolute
+    return .flow
 
 enum Shape //< the shape drawn in the band a block takes up
     //<
@@ -88,26 +88,26 @@ fn shape_from(name: U8[]): Shape //< reads a shape from a name
     //<
     //< **An unknown name means a box** (the reason is at `arrange_from`).
     if name.equals("round_box")
-        return Shape.round_box
+        return .round_box
     if name.equals("ellipse")
-        return Shape.ellipse
+        return .ellipse
     if name.equals("triangle")
-        return Shape.triangle
+        return .triangle
     if name.equals("diamond")
-        return Shape.diamond
+        return .diamond
     if name.equals("fall_line")
-        return Shape.fall_line
+        return .fall_line
     if name.equals("rise_line")
-        return Shape.rise_line
+        return .rise_line
     if name.equals("fall_arrow")
-        return Shape.fall_arrow
+        return .fall_arrow
     if name.equals("rise_arrow")
-        return Shape.rise_arrow
+        return .rise_arrow
     if name.equals("fall_arrow_back")
-        return Shape.fall_arrow_back
+        return .fall_arrow_back
     if name.equals("rise_arrow_back")
-        return Shape.rise_arrow_back
-    return Shape.box
+        return .rise_arrow_back
+    return .box
 
 enum Align //< where a line's contents sit within the column
     //<
@@ -132,12 +132,12 @@ fn align_from(name: U8[]): Align //< reads an alignment from a name
     //<
     //< **An unknown name means left** (the default).
     if name.equals("center")
-        return Align.center
+        return .center
     if name.equals("right")
-        return Align.right
+        return .right
     if name.equals("justify")
-        return Align.justify
-    return Align.left
+        return .justify
+    return .left
 
 fn next_ord(sheet: Sheet$@, name: U8[], ord: Sz): Sz //<
     //< The position within a run of numbered siblings
@@ -147,7 +147,8 @@ fn next_ord(sheet: Sheet$@, name: U8[], ord: Sz): Sz //<
     //< share one numbering. The rule lives here alone, or the screen and the written HTML
     //< disagree.
     if s: = sheet.find(name)
-        switch s.marker case .number(_a)
+        switch s.marker
+        case .number(_a)
             return ord + 1
         case .bullet, .none, .serial, .outline {}
     return 0
@@ -158,7 +159,7 @@ struct Number_spec //<
     //< It covers the currency, the digit separator, the percent, the decimal places and the date.
     //< **It applies only where text is made from the value** (`expr/calc.kspls`); typed text stays
     //< as typed. The sign goes in front (`-$1,200`), or it looks like a subtraction.
-    places: Option<|Sz|> //<
+    places: Sz? //<
         //< The decimal places. **Not set means "as many as needed"** (trailing zeros are dropped).
     grouped: Bool //< whether the whole part is split every three digits
     percent: Bool //<
@@ -174,8 +175,8 @@ struct Number_spec //<
         //< apply** (the screen could not show which of the two applied).
 
 fn plain_number(): Number_spec //< no formatting (the number stays plain)
-    return Number_spec::{ .places = Option<|Sz|>.none, .grouped = false, .percent = false,
-        .prefix = "", .suffix = "", .dated = Dating.none }
+    return Number_spec::{ .places = .none, .grouped = false, .percent = false, .prefix = "",
+        .suffix = "", .dated = .none }
 
 struct Look //< the inherited look, all in one (resolved)
     //<
@@ -235,7 +236,7 @@ struct Style //< one style
     // is a frame on the cells' style (neighbouring edges overlap).
     rule_width: F32
     rule_color: U32
-    fill: Option<|U32|> //<
+    fill: U32? //<
         //< The color that fills the band the block takes up
         //<
         //< **Not set paints nothing.**
@@ -327,7 +328,8 @@ fn cell_like(s: Style$@): Bool //<
     //< one style. A divider draws a line too but has no inner space; the space tells them apart.
     if s.outline > 0 || !s.wrap || s.pad <= 0.0
         return false
-    switch s.marker case .none
+    switch s.marker
+    case .none
         return true
     case .bullet, .number, .serial, .outline {}
     return false
@@ -393,20 +395,20 @@ fn plain_style(name: U8[], font: Font_spec): Style //< a style named `name` that
         .space_after = 0.0,
         .indent = 0.0,
         .pad = 0.0,
-        .align = Align.left,
+        .align = .left,
         .wrap = true,
         .break_before = false,
         .in_chapters = true,
         .next = "",
         .line_spacing = 0.0,
         .outline = 0,
-        .collect = Collect.none,
-        .marker = Marker.none,
+        .collect = .none,
+        .marker = .none,
         .rule_width = 0.0,
         .rule_color = 0U32,
-        .fill = Option<|U32|>.none,
-        .shape = Shape.box,
-        .arrange = Arrange.flow,
+        .fill = .none,
+        .shape = .box,
+        .arrange = .flow,
         .width = 0.0,
         .height = 0.0,
         .columns = 0,
@@ -478,31 +480,31 @@ impl Sheet
         //< **An unknown name means flow**, as the layout treats it (a typo still lays out).
         if s: = r.find(name)
             return s.arrange
-        return Arrange.flow
+        return .flow
 
-    fn find(r: Self$@, name: U8[]): Option<|Style$@|>
+    fn find(r: Self$@, name: U8[]): Style$@?
         if r.memo > 0 && r.memo <= r.styles.len
             had: = r.styles.get(r.memo - 1)
             if had.name.equals(name)
-                return Option<|Style$@|>.some(had)
+                return .some(had)
         for $i: Sz = 0; i < r.styles.len; i += 1
             s: = r.styles.get(i)
             if s.name.equals(name)
                 r.memo = i + 1
-                return Option<|Style$@|>.some(s)
-        return Option<|Style$@|>.none
-fn when_style(sheet: Sheet$@, name: U8[], text: U8[]): Option<|Style$@|> //<
+                return .some(s)
+        return .none
+fn when_style(sheet: Sheet$@, name: U8[], text: U8[]): Style$@? //<
     //< The style laid over name's style, where its condition matches that text
     //<
     //< **Only the look is laid over**: the caller reads the spacing and the layout from the plain
     //< style (a line height that moved with a value would confuse the reader). **A condition that
     //< points at its own style is applied once** (there is no second pass, so no loop).
     if sheet == null
-        return Option<|Style$@|>.none
+        return .none
     if s: = sheet.find(name)
         if style_when.suits(s.when, text)
             return sheet.find(s.when.then)
-    return Option<|Style$@|>.none
+    return .none
 
 const drawn_color: U32 = 0x4472c4U32 //< the color for drawn content (a chart, a diagram)
     //<
@@ -514,7 +516,7 @@ fn draws(s: Style$@): Bool //<
     //<
     //< **Keep it apart from the page's decoration**: a bar's or a diagram box's fill is the content
     //< itself, not a table's grid. **Do not look at the block** (a style cannot reach it).
-    return s.collect.charted() || !s.shape.same_shape(Shape.box)
+    return s.collect.charted() || !s.shape.same_shape(.box)
 
 fn linked(s: Style$@): Bool //<
     //< Whether this style **looks like a link** (whether it has both a color and an underline)
@@ -522,7 +524,8 @@ fn linked(s: Style$@): Bool //<
     //< **It does not mean "is a link"**; use it only to find the one link look in a table the same
     //< code made (`link_style` in `../share/markdown_style.kspls`), where no other style has both a
     //< color and an underline.
-    switch s.ink.underline case .some(u)
+    switch s.ink.underline
+    case .some(u)
         if !u
             return false
     case .none

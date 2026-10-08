@@ -10,6 +10,7 @@ import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/core" as base_core
 import "ksplc/lsp/msg" as lsp_msg
 import "ksplc/lsp/nav" as lsp_nav
+import "ksplc/lsp/position" as lsp_position
 import "ksplc/lsp/spell" as lsp_spell
 import "ksplc/lsp/state" { Doc_state }
 import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
@@ -76,16 +77,16 @@ fn swap_in_mark(src: U8[], at: Sz, arena: Arena$@): Swapped //<
     b: = arena.text().s(src.sub(0, start)).s(pick_mark).s(src.sub_from(stop))
     return Swapped::{ .text = b.take(), .prefix = src.sub(start, at - start), .offset = start }
 
-priv fn find_mark(node: Ast_node$@): Option<|Ast_node$@|> //<
+priv fn find_mark(node: Ast_node$@): Ast_node$@? //<
     //< It looks for the synthesized name's node in the analysed tree
     if node == null
-        return Option<|Ast_node$@|>.none
+        return .none
     if node.kind_id == .k_identifier && node.text.equals(pick_mark)
-        return Option<|Ast_node$@|>.some(node)
+        return .some(node)
     for child in node.children
         if got: = find_mark(child)
-            return Option<|Ast_node$@|>.some(got)
-    return Option<|Ast_node$@|>.none
+            return .some(got)
+    return .none
 
 priv fn named_by(node: Ast_node$@): Pick //< the name and kind of that declaration
     //<
@@ -95,7 +96,8 @@ priv fn named_by(node: Ast_node$@): Pick //< the name and kind of that declarati
         return Pick::{ .name = "", .kind = 0, .node = null, .type_id = 0 }
     $kind: I32 = 0
     $own_type: I32 = 0
-    switch node.kind_id case .k_decl_fn
+    switch node.kind_id
+    case .k_decl_fn
         kind = kind_function
     case .k_decl_struct
         kind = kind_struct
@@ -258,7 +260,8 @@ fn handle_completion(state: Doc_state$@, swapped: Swapped, id_val: json.Val, are
         send_none(id_val, arena)
         return
     $mark: Ast_node$@ = null
-    switch find_mark(state.root_file) case .some(m)
+    switch find_mark(state.root_file)
+    case .some(m)
         mark = m
     default
         send_none(id_val, arena)
@@ -267,8 +270,8 @@ fn handle_completion(state: Doc_state$@, swapped: Swapped, id_val: json.Val, are
     // Caution: **Free the list's buffer**, which is on the heap though the list is on the arena
     // (`find_path_at_params`'s contract); otherwise each request leaks one.
     defer path.free()
-    lsp_nav.find_path_at_offset(state.root_file, state.sema, swapped.offset, state.mod_name_perm,
-        path)
+    lsp_position.find_path_at_offset(state.root_file, state.sema, swapped.offset,
+        state.mod_name_perm, path)
     $out: = List<|Pick|>.new(arena)
     recv: = lsp_nav.dot_receiver_of(state.sema, path, mark)
     head: = qualifier_of(path, mark)
@@ -311,10 +314,12 @@ priv fn picks_of_type(c: Sema_ctx$@, raw: U8[], prefix: U8[], out: List<|Pick|>$
     // Fields.
     // **Look a generic up by its base name too** (a `List<|U8[]|>` is registered under
     // `List`).
-    switch c.env.get_struct_def(raw) case .some(sd)
+    switch c.env.get_struct_def(raw)
+    case .some(sd)
         add_fields(sd, prefix, out)
     case .none
-        switch c.env.get_struct_def(base_only) case .some(sd2)
+        switch c.env.get_struct_def(base_only)
+        case .some(sd2)
             add_fields(sd2, prefix, out)
         default
             add_declared_fields(c, raw, prefix, out)
@@ -334,7 +339,8 @@ priv fn add_declared_fields(c: Sema_ctx$@, raw: U8[], prefix: U8[], out: List<|P
     //<
     //< Caution: **Only for a generic.** Any other struct has its entry, and one not found by that
     //< name is a name that did not resolve (a bare `P.`), not one to work around.
-    switch lsp_nav.struct_decl_of(c, raw) case .some(decl)
+    switch lsp_nav.struct_decl_of(c, raw)
+    case .some(decl)
         if decl.find_child(.k_type_gen_params) == null
             return
         for f in decl.children
@@ -353,7 +359,8 @@ priv fn add_methods(c: Sema_ctx$@, type_name: U8[], prefix: U8[], out: List<|Pic
     type_id: = c.env.type_to_id.get(type_name) catch 0
     if type_id != 0
         c.ensure_instance_methods(type_id) catch {}
-    switch c.env.methods_of(type_name) case .some(m)
+    switch c.env.methods_of(type_name)
+    case .some(m)
         for e in m.items()
             add_pick(out, e.key, kind_method, prefix, e.value.node, 0)
     default {}
@@ -388,12 +395,15 @@ priv fn add_by_dot_prefix_syms(map: Map<|U8[], sema_type_scope.Sema_symbol$@|>$@
 
         // Caution: **List only what can be called from outside**, or C declarations and internal
         // helpers mix in as candidates that are an error once chosen.
-        switch e.value.vis case .public {} default
+        switch e.value.vis
+        case .public {}
+        default
             continue
         add_pick(out, tail, kind_of_sym(e.value), prefix, e.value.node, 0)
 
 priv fn kind_of_sym(sym: sema_type_scope.Sema_symbol$@): I32
-    switch sym.kind case .function(_v)
+    switch sym.kind
+    case .function(_v)
         return kind_function
     case .struct_def, .generic_struct
         return kind_struct

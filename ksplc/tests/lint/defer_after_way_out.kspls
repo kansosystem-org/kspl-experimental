@@ -1,9 +1,9 @@
 //< [W0109] An exit between an `Owned` value's binding and the `defer` that frees it
 //<
-//< The `?` in late() and the `continue` in per_round() leave before the `defer` is registered;
-//< a `defer` right after the binding, a value handed back, a hand free and a closure's `?` do not.
+//< The `!` in late() and the `continue` in per_round() leave before the `defer` is registered;
+//< a `defer` right after the binding, a value handed back, a hand free and a closure's `!` do not.
 //< **The line numbers name the way out and the two lines the message gives.** Mend them on a move.
-// EXPECT: defer_after_way_out.kspls:25:8: warning: [W0109] 'arena' leaks if this '?' leaves
+// EXPECT: defer_after_way_out.kspls:25:8: warning: [W0109] 'arena' leaks if this '!' leaves
 // EXPECT: registered only on line 26. Put the defer on the line after 'arena' is bound (line 24)
 // EXPECT: defer_after_way_out.kspls:54:7: warning: [W0109] 'buf' leaks if this 'continue' leaves
 // EXPECT-NOT: defer_after_way_out.kspls:32:
@@ -15,21 +15,21 @@ import "std/mem" { Arena }
 priv enum E
   bad
 
-priv fn step(ok: Bool): I32?E //< a road that may throw
+priv fn step(ok: Bool): I32!E //< a road that may throw
   if !ok
     throw E.bad
   return 1
 
-priv fn late(ok: Bool): I32?E //< the `?` leaves before the `defer` (a finding)
+priv fn late(ok: Bool): I32!E //< the `!` leaves before the `defer` (a finding)
   arena: = Arena.new(1024)
-  n: = step(ok)?
+  n: = step(ok)!
   defer arena.free()
   return n
 
-priv fn early(ok: Bool): I32?E //< the `defer` straight after the binding (not a finding)
+priv fn early(ok: Bool): I32!E //< the `defer` straight after the binding (not a finding)
   arena: = Arena.new(1024)
   defer arena.free()
-  return step(ok)?
+  return step(ok)!
 
 priv fn handed(ok: Bool): Arena$@ //< the value handed back is the caller's (not a finding)
   arena: = Arena.new(1024)
@@ -56,9 +56,9 @@ priv fn per_round(n: I32): I32 //< a `continue` before the round's `defer` (a fi
     total += i
   return total
 
-priv fn in_closure(ok: Bool): I32?E //< a closure's `?` leaves the closure alone (not a finding)
+priv fn in_closure(ok: Bool): I32!E //< a closure's `!` leaves the closure alone (not a finding)
   arena: = Arena.new(64)
-  f: = fn(x: I32; ): I32?E { return step(x > 0)?; }
+  f: = fn(x: I32; ): I32!E { return step(x > 0)!; }
   defer arena.free()
   return f.call(I32::ok)
 

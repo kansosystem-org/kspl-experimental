@@ -73,7 +73,7 @@ impl<|T|> Tensor<|T|>
                 b.s("\n  dims:")
                 for $k: = 0; k < I32::ndim && k < 16; k += 1
                     b.s(" [\{k\}]=\{shape[k]\}")
-                // To identify the caller: a panic has no call history (only `?` builds a trace),
+                // To identify the caller: a panic has no call history (only `!` builds a trace),
                 // and several callers build the same shape. An arena's usage says which allocation
                 // this is (near the start means the first call).
                 // **Do not dereference a null arena**: null means "use the global heap"
@@ -121,12 +121,12 @@ impl<|T|> Tensor<|T|>
     pub fn matmul( //< the matrix product, in a newly allocated tensor
         r: Self$@,
         rhs: Tensor<|T|>, //< the right-hand matrix; its rows must match this one's columns
-    ): Tensor<|T|>?Tensor_error
+    ): Tensor<|T|>!Tensor_error
         m: = r.shape[0]
         n: = rhs.shape[1] if rhs.shape.len == 2 else 0
         out_shape: Sz[2] = ::{ m, n }
         out: = Tensor<|T|>.new(Sz[]::out_shape, r.arena)
-        r.matmul_into(rhs, out)?
+        r.matmul_into(rhs, out)!
         return out
     pub fn matmul_into( //< the matrix product, written into a tensor the caller owns
         //<
@@ -134,27 +134,27 @@ impl<|T|> Tensor<|T|>
         r: Self$@,
         rhs: Tensor<|T|>, //< the right-hand matrix; its rows must match this one's columns
         out: Tensor<|T|>, //< where the product goes; it must already be shaped `[m, n]`
-    ): Void?Tensor_error
+    ): Void!Tensor_error
         if r.shape.len != 2 || rhs.shape.len != 2
-            throw Tensor_error.rank_mismatch
+            throw .rank_mismatch
         m: = r.shape[0]
         k: = r.shape[1]
         if k != rhs.shape[0] || k <= 0
-            throw Tensor_error.shape_mismatch
+            throw .shape_mismatch
         n: = rhs.shape[1]
         // Caution: **Divide rather than multiply.** Where `Sz` is 32 bits, `m * n` can wrap to a
         // smaller `out`'s size, and the kernel would write past it.
         fits: = out.size == 0 if n == 0 else out.size % n == 0 && out.size / n == m
         if m < 0 || n < 0 || !fits
-            throw Tensor_error.shape_mismatch
+            throw .shape_mismatch
         matmul_kernel<|T|>(out.data, r.data, rhs.data, m, k, n)
-    fn add_bias(r: Self$@, bias: Tensor<|T|>): Tensor<|T|>?Tensor_error //<
+    fn add_bias(r: Self$@, bias: Tensor<|T|>): Tensor<|T|>!Tensor_error //<
         //< Broadcast addition (for adding a bias)
         if r.shape.len < 2
-            throw Tensor_error.rank_mismatch
+            throw .rank_mismatch
         n: = r.shape[r.shape.len - 1]
         if bias.size != n
-            throw Tensor_error.shape_mismatch
+            throw .shape_mismatch
 
         out: = Tensor<|T|>.new(r.shape, r.arena)
         rows: = r.size / n
@@ -170,12 +170,12 @@ impl<|T|> Tensor<|T|>
         r: Self$@,
         weight: Tensor<|T|>, //< the per-element gain, as long as the last dimension
         eps: T, //< added under the square root, so a row of zeros does not divide by zero
-    ): Tensor<|T|>?Tensor_error
+    ): Tensor<|T|>!Tensor_error
         if r.shape.len < 2
-            throw Tensor_error.rank_mismatch
+            throw .rank_mismatch
         n: = r.shape[r.shape.len - 1]
         if weight.size != n
-            throw Tensor_error.shape_mismatch
+            throw .shape_mismatch
 
         out: = Tensor<|T|>.new(r.shape, r.arena)
         rows: = r.size / n
@@ -203,26 +203,26 @@ impl<|T|> Tensor<|T|>
         for i in Range.asc(r.size)
             (out.data + i)$ = (r.data + i)$ * factor
         return out
-    fn matmul_transb(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>?Tensor_error //<
+    fn matmul_transb(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>!Tensor_error //<
         //< The matrix product with the right side transposed (for Q * K^T; a zero-copy transpose)
         if r.shape.len != 2 || rhs.shape.len != 2
-            throw Tensor_error.rank_mismatch
+            throw .rank_mismatch
         m: = r.shape[0]
         k: = r.shape[1]
         n: = rhs.shape[0] // rhs is transposed, so its row count becomes n
         if k != rhs.shape[1]
-            throw Tensor_error.shape_mismatch
+            throw .shape_mismatch
 
         out_shape: Sz[2] = ::{ m, n }
         out: = Tensor<|T|>.new(Sz[]::out_shape, r.arena)
         transb_kernel<|T|>(out.data, r.data, rhs.data, m, k, n)
         return out
-    pub fn softmax(r: Self$@): Tensor<|T|>?Tensor_error //<
+    pub fn softmax(r: Self$@): Tensor<|T|>!Tensor_error //<
         //< each row turned into weights that sum to 1
         //<
         //< The row's maximum is subtracted first, so a large value does not overflow.
         if r.shape.len < 2
-            throw Tensor_error.rank_mismatch
+            throw .rank_mismatch
         n: = r.shape[r.shape.len - 1]
         rows: = r.size / n
         out: = Tensor<|T|>.new(r.shape, r.arena)
@@ -247,11 +247,11 @@ impl<|T|> Tensor<|T|>
     pub fn apply_rope( //< rotates each pair of elements by its position, so the order is encoded
         r: Self$@,
         start_pos: Sz, //< the position of the first row, so a continued run keeps rotating from there
-    ): Tensor<|T|>?Tensor_error
+    ): Tensor<|T|>!Tensor_error
         if r.shape.len < 2
-            throw Tensor_error.rank_mismatch
+            throw .rank_mismatch
         if r.shape[r.shape.len - 1] % 2 != 0
-            throw Tensor_error.shape_mismatch
+            throw .shape_mismatch
         return r.rope_rotate(start_pos, false)
     fn rope_rotate(r: Self$@, start_pos: Sz, invert: Bool): Tensor<|T|> //<
         //< Rotates each adjacent pair (2j, 2j+1) by the angle θ
@@ -287,16 +287,16 @@ impl<|T|> Tensor<|T|>
                     (out.data + idx2)$ = v1 * sin_val + v2 * cos_val
         return out
     fn apply_rope_neox(r: Self$@, start_pos: Sz, head_dim: Sz, theta: F64):
-        Tensor<|T|>?Tensor_error //<
+        Tensor<|T|>!Tensor_error //<
             //< The RoPE of the NeoX/Llama/Qwen family, pairing each head's first half with its last
             //<
             //< apply_rope is the interleaved style (pair 2j, 2j+1), while HF Llama/Qwen pair the
             //< first half's j with the second half's j+hd/2 (rotate_half), per head of head_dim,
             //< with its own base theta (1e6 for Qwen2.5). r's shape is [seq, n_heads*head_dim].
         if r.shape.len != 2
-            throw Tensor_error.rank_mismatch
+            throw .rank_mismatch
         if head_dim % 2 != 0
-            throw Tensor_error.shape_mismatch
+            throw .shape_mismatch
         seq: = r.shape[0]
         width: = r.shape[1]
         half: = head_dim / 2
@@ -316,30 +316,30 @@ impl<|T|> Tensor<|T|>
                     (out.data + idx1)$ = x1 * cos_val - x2 * sin_val
                     (out.data + idx2)$ = x2 * cos_val + x1 * sin_val
         return out
-    fn update_row(r: Self$@, row_idx: Sz, src: Tensor<|T|>): Void?Tensor_error //<
+    fn update_row(r: Self$@, row_idx: Sz, src: Tensor<|T|>): Void!Tensor_error //<
         //< Overwrites row `row_idx` (for saving into the KV cache)
         if r.shape.len < 2 || src.shape.len < 2
-            throw Tensor_error.rank_mismatch
+            throw .rank_mismatch
         dim: = r.shape[r.shape.len - 1]
         if src.shape[src.shape.len - 1] != dim
-            throw Tensor_error.shape_mismatch
+            throw .shape_mismatch
         // In the KV cache (Self_attention/Gqa_attention.forward) row_idx is the generation
         // position, which goes past the allocated rows once the sequence outgrows max_seq_len; this
         // stops that.
         if row_idx >= r.shape[0]
-            throw Tensor_error.out_of_bounds
+            throw .out_of_bounds
 
         offset: = row_idx * dim
         for i in Range.asc(dim)
             (r.data + offset + i)$ = (src.data + i)$
-    fn view_rows(r: Self$@, first: Sz, num_rows: Sz, arena: Arena$@): Tensor<|T|>?Tensor_error //<
+    fn view_rows(r: Self$@, first: Sz, num_rows: Sz, arena: Arena$@): Tensor<|T|>!Tensor_error //<
         //< Builds a zero-copy view of `num_rows` rows from `first`
         //<
         //< It serves reading the KV cache so far, or a sequence's tail.
         if r.shape.len != 2
-            throw Tensor_error.rank_mismatch
+            throw .rank_mismatch
         if first + num_rows > r.shape[0]
-            throw Tensor_error.out_of_bounds
+            throw .out_of_bounds
         dim: = r.shape[1]
 
         shape_ptr: = Sz$@::arena.alloc(2 * sizeof(Sz))
@@ -358,9 +358,9 @@ impl<|T|> Tensor<|T|>
     // contract, so `checked_add` / `checked_sub` / `checked_mul` hold the body and the operator
     // panics on their error (so a shape mismatch stays available as a recoverable error).
     // ---------------------------------------------------------
-    priv fn elementwise_out(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>?Tensor_error
+    priv fn elementwise_out(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>!Tensor_error
         if r.size != rhs.size
-            throw Tensor_error.shape_mismatch
+            throw .shape_mismatch
         return Tensor<|T|>.new(r.shape, r.arena)
 
     pub fn checked_add( //< element-wise sum; rejects shapes that do not match
@@ -370,8 +370,8 @@ impl<|T|> Tensor<|T|>
         //< (the property the SIMD gate in `tests` checks).
         r: Self$@,
         rhs: Tensor<|T|>, //< the other tensor, which must be the same shape
-    ): Tensor<|T|>?Tensor_error
-        out: = r.elementwise_out(rhs)?
+    ): Tensor<|T|>!Tensor_error
+        out: = r.elementwise_out(rhs)!
         for i in Range.asc(r.size)
             (out.data + i)$ = (r.data + i)$ + (rhs.data + i)$
         return out
@@ -379,8 +379,8 @@ impl<|T|> Tensor<|T|>
     pub fn checked_sub( //< element-wise difference; rejects shapes that do not match
         r: Self$@,
         rhs: Tensor<|T|>, //< the other tensor, which must be the same shape
-    ): Tensor<|T|>?Tensor_error
-        out: = r.elementwise_out(rhs)?
+    ): Tensor<|T|>!Tensor_error
+        out: = r.elementwise_out(rhs)!
         for i in Range.asc(r.size)
             (out.data + i)$ = (r.data + i)$ - (rhs.data + i)$
         return out
@@ -388,8 +388,8 @@ impl<|T|> Tensor<|T|>
     pub fn checked_mul( //< element-wise product; rejects shapes that do not match
         r: Self$@,
         rhs: Tensor<|T|>, //< the other tensor, which must be the same shape
-    ): Tensor<|T|>?Tensor_error
-        out: = r.elementwise_out(rhs)?
+    ): Tensor<|T|>!Tensor_error
+        out: = r.elementwise_out(rhs)!
         for i in Range.asc(r.size)
             (out.data + i)$ = (r.data + i)$ * (rhs.data + i)$
         return out

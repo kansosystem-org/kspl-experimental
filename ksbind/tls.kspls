@@ -68,10 +68,10 @@ pub enum Tls_error //< why a secure connection could not be opened or used
         //< the certificate or host name did not verify, so the handshake was refused
     io_failed //< a send or receive failed, or the connection ended without the peer's close_notify
 
-priv fn transferred(n: I32): Sz?Tls_error //<
+priv fn transferred(n: I32): Sz!Tls_error //<
     //< Turns the return value of an OpenSSL write (0 or negative on failure) into a byte count
     if n <= 0
-        throw Tls_error.io_failed
+        throw .io_failed
     return Sz::n
 
 pub struct Tls_stream //< a TCP connection with TLS on top, which owns its resources
@@ -79,40 +79,41 @@ pub struct Tls_stream //< a TCP connection with TLS on top, which owns its resou
     priv ctx: SSL_CTX$@
     priv ssl: SSL$@
 
-priv fn client_ctx(): SSL_CTX$@?Tls_error //<
+priv fn client_ctx(): SSL_CTX$@!Tls_error //<
     //< A client context that verifies the peer against the default CA store, at TLS 1.2 or above
     //<
     //< Caution: **State the lower bound outright.** `TLS_client_method` allows 1.0 up, so otherwise
     //< openssl.cnf's MinProtocol decides, and a loose environment connects at 1.0 or 1.1.
     ctx: = SSL_CTX_new(TLS_client_method())
     if ctx == null
-        throw Tls_error.ctx_failed
+        throw .ctx_failed
     SSL_CTX_set_verify(ctx, ssl_verify_peer, null)
     if SSL_CTX_ctrl(ctx, ssl_ctrl_set_min_proto_version, tls1_2_version, null) != 1 ||
         SSL_CTX_set_default_verify_paths(ctx) != 1
         SSL_CTX_free(ctx)
-        throw Tls_error.ctx_failed
+        throw .ctx_failed
     return ctx
 
-priv fn client_ssl(ctx: SSL_CTX$@, fd: I32, host: U8[]): SSL$@?Tls_error //<
+priv fn client_ssl(ctx: SSL_CTX$@, fd: I32, host: U8[]): SSL$@!Tls_error //<
     //< One connection's SSL on a connected socket, sending `host` as SNI and verifying against it
     //<
     //< Caution: **A host name holding a NUL, or longer than OpenSSL takes, fails rather than being
     //< cut**: cut, verification would pass for another host.
     $c_host: U8$@ = null
-    switch host.to_cstr() case .some(p)
+    switch host.to_cstr()
+    case .some(p)
         c_host = p
     case .none
-        throw Tls_error.ctx_failed
+        throw .ctx_failed
     defer dealloc(Void$@::c_host)
     ssl: = SSL_new(ctx)
     if ssl == null
-        throw Tls_error.ctx_failed
+        throw .ctx_failed
     if SSL_set_fd(ssl, fd) != 1 ||
         SSL_ctrl(ssl, ssl_ctrl_set_tlsext_hostname, tlsext_nametype_host_name, Void$@::c_host) != 1
         || SSL_set1_host(ssl, Void@::c_host) != 1
         SSL_free(ssl)
-        throw Tls_error.ctx_failed
+        throw .ctx_failed
     return ssl
 
 priv fn close_ssl(ssl: SSL$@) //< shuts down (trying to send a close_notify) and frees the SSL
@@ -123,9 +124,9 @@ impl Tls_stream
     pub fn connect( //< connects, then does the TLS handshake, verifying the certificate
         host: U8[], //< the host name to connect to; SNI and the certificate check also use it
         port: I32, //< the port on that host
-    ): Tls_stream$@?Tls_error
+    ): Tls_stream$@!Tls_error
         tcp: = net.Tcp_stream.connect(host, port) catch
-            throw Tls_error.connect_failed
+            throw .connect_failed
         ctx: = client_ctx() catch e
             tcp.free()
             throw e
@@ -142,7 +143,7 @@ impl Tls_stream
             close_ssl(ssl)
             SSL_CTX_free(ctx)
             tcp.free()
-            throw Tls_error.handshake_failed if verified else Tls_error.cert_verify_failed
+            throw .handshake_failed if verified else .cert_verify_failed
 
         s: = mem.alloc_as<|Tls_stream|>()
         s.tcp = tcp
@@ -153,13 +154,13 @@ impl Tls_stream
     pub fn write( //< sends and returns how much was sent; a partial send is normal, so loop
         r: Self$@,
         buf: U8[], //< the bytes to send
-    ): Sz?Tls_error
+    ): Sz!Tls_error
         return transferred(SSL_write(r.ssl, Void@::buf.ptr, I32::clamp_tls_io_len(buf.len)))
 
     pub fn read( //< receives and returns how much arrived; 0 only after the peer's close_notify
         r: Self$@,
         buf: U8$[], //< where the bytes go
-    ): Sz?Tls_error
+    ): Sz!Tls_error
         // `SSL_get_error` reads this thread's error queue, so a failure left there before would be
         // taken for this call's.
         ERR_clear_error()
@@ -170,7 +171,7 @@ impl Tls_stream
         // returns 0 too; read as an end, whoever can drop it could cut a reply short unnoticed.
         if SSL_get_error(r.ssl, n) == ssl_error_zero_return
             return 0
-        throw Tls_error.io_failed
+        throw .io_failed
 
     pub fn free(r: Self$@) //< closes the connection and frees everything it owns
         close_ssl(r.ssl)

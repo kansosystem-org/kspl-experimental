@@ -37,17 +37,18 @@ priv struct Match_variant_ref //<
     def: sema_type_def.Enum_variant$@
 
 priv fn resolve_match_pattern_variant(pn: Ast_node$@, e_def: sema_type_def.Enum_def$@):
-    Option<|Match_variant_ref$@|> //<
+    Match_variant_ref$@? //<
         //< It resolves, from e_def, the variant that the pattern node pn names.
         //<
         //< It is null where the name is unknown or the variant undefined.
-    switch pn.extract_match_variant() case .variant(v_name_node, p_start)
+    switch pn.extract_match_variant()
+    case .variant(v_name_node, p_start)
         if v_name_node != null && e_def != null
             if v_def: = e_def.get_variant(v_name_node.text)
                 mvr: = Match_variant_ref::{ .p_start = I32::p_start, .def = v_def }
-                return Option<|Match_variant_ref$@|>.some(base_core.arena.create(mvr))
+                return .some(base_core.arena.create(mvr))
     default {}
-    return Option<|Match_variant_ref$@|>.none
+    return .none
 
 impl Ast_node
     fn emit_llvm_stmt(r: Ast_node$@, cg: Genllvm_ctx$@) //<
@@ -60,7 +61,8 @@ impl Ast_node
             k != .k_stmt_labeled_block
             return
 
-        switch r.kind_id case .k_stmt_block, .k_loop_init, .k_loop_step
+        switch r.kind_id
+        case .k_stmt_block, .k_loop_init, .k_loop_step
             for child in r.children
                 child.emit_llvm_stmt(cg)
         case .k_stmt_return
@@ -134,7 +136,7 @@ impl Ast_node
     priv fn emit_llvm_trace_frame(r: Ast_node$@, cg: Genllvm_ctx$@) //<
         //< Records the frame a failure leaves through, as genc's KSPL_START_TRACE / RECORD_TRACE do
         //<
-        //< A new error starts the route again; a `?`'s propagation (lower sets ival=1) extends it.
+        //< A new error starts the route again; a `!`'s propagation (lower sets ival=1) extends it.
         //< The file is the one a `#line` names and the function its C symbol, so the route the
         //< program prints is the same from either backend.
         $file: = Str_builder.new()
@@ -483,7 +485,8 @@ priv fn collect_match_cases(r: Ast_node$@, cg: Genllvm_ctx$@, e_def: sema_type_d
                     if !resolved_as_variant
                         $eval_target: = pn
                         if pn.kind_id == .k_match_pattern
-                            switch pn.first_expr() case .some(fe)
+                            switch pn.first_expr()
+                            case .some(fe)
                                 eval_target = fe
                             case .none
                                 eval_target =

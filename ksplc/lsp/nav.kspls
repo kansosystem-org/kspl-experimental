@@ -5,6 +5,7 @@ import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/base/locate" as base_locate
 import "ksplc/lsp/msg" as lsp_msg
+import "ksplc/lsp/position" as lsp_position
 import "ksplc/lsp/state" { Doc_state }
 import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
@@ -26,9 +27,6 @@ struct Enum_resolve_result
     variant_node: Ast_node$@
     enum_node: Ast_node$@
 
-const max_walk_depth: Sz = 2000 //<
-    //< The depth limit on recursive AST walks, shared with call_hier.kspls and uses.kspls
-
 fn write_full_name(name: U8[], file: U8[], out: Str_builder$@) //<
     //< A declaration's name as the whole program knows it (its key in `symtab.by_fqn`)
     //<
@@ -46,7 +44,8 @@ fn write_full_name(name: U8[], file: U8[], out: Str_builder$@) //<
 priv fn get_base_type_id(env: sema_type_env.Env$@, id: I32): I32
     $curr: = id
     for _d in Range.asc(100)
-        switch env.get_info(curr) case .pointer(b)
+        switch env.get_info(curr)
+        case .pointer(b)
             curr = b
         case .result(b, _e)
             curr = b
@@ -54,136 +53,19 @@ priv fn get_base_type_id(env: sema_type_env.Env$@, id: I32): I32
             break
     return curr
 
-priv fn is_source_text(node: Ast_node$@, src: U8[]): Bool //<
-    //< Whether that node's text is the text at its own position in the source
-    //<
-    //< **A monomorphized copy borrows the template's position** ("A diagnostic points at" in
-    //< `../docs/DESIGN.md` names the rule) while its identifier carries the internal name, so both
-    //< cover the offset; the editor asks about the one matching the text on screen.
-    if src.len == 0 || node.text.len == 0
-        return true
-    if node.loc.offset + node.text.len > src.len
-        return false
-    return src.sub(node.loc.offset, node.text.len).equals(node.text)
-
-priv fn traverse_and_find_best(node: Ast_node$@, offset: Sz, target_file: U8$[],
-    current_path: List<|Ast_node$@|>$@, best_path: List<|Ast_node$@|>$@, best_score: Sz$@,
-    best_is_src: Bool$@, src: U8[], depth: Sz)
-    // **Compiler-generated nodes are not clickable** (`made_by_compiler` in
-    // `../base/ast_ext.kspls`).
-    if node == null || depth > max_walk_depth || node.made_by_compiler()
-        return
-
-    if node.loc.file().len > 0 && !node.loc.file().equals(target_file)
-        if node.kind_id != .k_file && node.kind_id != .k_decl_import
-            return
-
-    current_path.push(node)
-
-    // A variable or constant declaration is the last resort for a click on the declarator ':',
-    // which normalization drops from the AST. Its span comes from get_span_offset(), since its
-    // text.len is the synthesized keyword's.
-    is_decl_marker: = node.kind_id == .k_decl_var || node.kind_id == .k_decl_const
-    start: = node.loc.offset
-    span: = node.get_span_offset().span if is_decl_marker else node.text.len
-    end: = start + span
-
-    if offset >= start && offset <= end
-        // The 'var' / 'let' keyword child is synthesized with decl_var's own loc and has no text in
-        // the source, so it is not a click target; the ':' goes to is_decl_marker instead.
-        is_fake_var_kw: =
-            node.kind_id == .k_keyword &&
-            (node.text.equals("var") || node.text.equals("let"))
-        // A generic method call's member name (`x.create<|T|>(...)`) is a k_generic_method.
-        is_valid: =
-            node.kind_id == .k_identifier || node.kind_id == .k_literal ||
-            (node.kind_id == .k_keyword && !is_fake_var_kw) || node.kind_id == .k_primitive_type ||
-            node.kind_id == .k_string || node.kind_id == .k_char || node.kind_id == .k_integer ||
-            node.kind_id == .k_float || node.kind_id == .k_bool || node.kind_id == .k_null ||
-            node.kind_id == .k_expr_path || node.kind_id == .k_type_path ||
-            node.kind_id == .k_generic_path || node.kind_id == .k_generic_method || is_decl_marker
-
-        if is_valid
-            $score: = span
-            // Where they overlap at a boundary, an identifier or a path is chosen over a literal.
-            if node.kind_id == .k_identifier || node.kind_id == .k_expr_path ||
-                node.kind_id == .k_type_path || node.kind_id == .k_generic_path ||
-                node.kind_id == .k_generic_method || node.kind_id == .k_primitive_type
-                // score is unsigned: a plain subtraction below 10000 wraps and inverts the
-                // preference.
-                score = score - 10000 if score >= 10000 else 0
-            here_is_src: = is_source_text(node, src)
-            // A tie still goes to the later node, except where that one is not the text on screen.
-            takes_it: =
-                score < best_score$ ||
-                (score == best_score$ && (here_is_src || !best_is_src$))
-            if takes_it
-                best_score$ = score
-                best_is_src$ = here_is_src
-                best_path.len = 0
-                for path_node in current_path
-                    best_path.push(path_node)
-
-    for child in node.children
-        traverse_and_find_best(child, offset, target_file, current_path, best_path, best_score,
-            best_is_src, src, depth + 1)
-
-    current_path.len -= 1
-
-fn find_path_at_offset(root_file: Ast_node$@, sema: Sema_ctx$@, offset: Sz, target_file: U8$[],
-    path: List<|Ast_node$@|>$@)
-    if sema != null && target_file.len > 0
-        sema.set_current_file(target_file)
-
-    $best_score: Sz = 99999999
-    $best_is_src: = false
-    $src: U8[] = ""
-    if sema != null
-        held: = base_core.source_of(sema.source_map,
-            U8[]::{ .ptr = target_file.ptr, .len = target_file.len })
-        src = U8[]::{ .ptr = held.ptr, .len = held.len }
-    current_path: = base_core.arena.create(List<|Ast_node$@|>.new(null))
-    defer current_path.free()
-
-    if root_file != null
-        traverse_and_find_best(root_file, offset, target_file, current_path, path, best_score@,
-            best_is_src@, src, 0)
-
-    if path.len == 0 && sema != null
-        for entry in sema.generics.templates.items()
-            traverse_and_find_best(entry.value, offset, target_file, current_path, path,
-                best_score@, best_is_src@, src, 0)
-
-    // A click exactly at a declared name's end (the ':' position) takes the whole declaration,
-    // jumping to the type; a click inside the name is unaffected.
-    if path.len >= 2
-        last: = path.get(path.len - 1)
-        decl_p: = path.get(path.len - 2)
-        if last.kind_id == .k_identifier &&
-            (decl_p.kind_id == .k_decl_var || decl_p.kind_id == .k_decl_const) &&
-            decl_p.get_var_decl_id() == last && offset == last.loc.offset + last.text.len
-            path.len -= 1
-
-    if path.len > 0 && sema != null
-        target_node: = path.get(path.len - 1)
-        if target_node.loc.file().len > 0
-            sema.set_current_file(target_node.loc.file())
-
-fn find_path_at_params(state: Doc_state$@, params: json.Val): List<|Ast_node$@|>$@ //<
-    //< The AST path to the position in an LSP request's params; the caller frees its buffer
-    path: = base_core.arena.create(List<|Ast_node$@|>.new(null))
-    find_path_at_offset(state.root_file, state.sema,
-        lsp_msg.offset_at(state.src_perm, params), state.mod_name_perm, path)
-    return path
-
 fn handle_definition(state: Doc_state$@, params: json.Val, id_val: json.Val, arena: Arena$@) //<
     //< It answers a jump to the definition: the place the name under the cursor is declared
-    path: = find_path_at_params(state, params)
+    path: = lsp_position.find_path_at_params(state, params)
     defer path.free()
     $def_node: Ast_node$@ = null
     if path.len > 0
         def_node = resolve_def_node(state.sema, state.root_file, path, path.get(path.len - 1))
             .def_node
+    // **Only the jump goes on to the type** from where a name is declared; elsewhere the name
+    // stands for its declaration (`get_definition_node`).
+    if path.len > 0 && state.sema != null
+        if type_def: = resolve_decl_type_def(state.sema, path, path.get(path.len - 1))
+            def_node = type_def
     if def_node == null
         lsp_msg.send_null_response(id_val, arena)
         return
@@ -211,7 +93,7 @@ fn handle_definition(state: Doc_state$@, params: json.Val, id_val: json.Val, are
         b.location(style.spell(def_file), line, col, line, col + text_len), arena)
 
 priv fn resolve_decl_type_def(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, target_node: Ast_node$@):
-    Option<|Ast_node$@|> //<
+    Ast_node$@? //<
         //< It resolves a click on a declaration's 'const' keyword or name to the type's definition
     $p: Ast_node$@ = null
     if target_node.kind_id == .k_keyword && target_node.text.equals("const") && path.len >= 2
@@ -223,7 +105,7 @@ priv fn resolve_decl_type_def(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, target_
             parent.get_var_decl_id() == target_node
             p = parent
     if p == null
-        return Option<|Ast_node$@|>.none
+        return .none
 
     type_id: = p.type_id
     if type_id > 10
@@ -233,11 +115,11 @@ priv fn resolve_decl_type_def(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, target_
 
             t_sym: = c.symtab.resolve(clean_name) catch null
             if t_sym != null
-                return Option<|Ast_node$@|>.some(t_sym.node)
+                return .some(t_sym.node)
             gen_st: = c.generics.templates.get(clean_name) catch null
             if gen_st != null
-                return Option<|Ast_node$@|>.some(gen_st)
-    return Option<|Ast_node$@|>.none
+                return .some(gen_st)
+    return .none
 
 struct Dot_receiver //< the receiver of a `<receiver>.<name>`, and that type's name
     //<
@@ -284,11 +166,12 @@ priv fn type_name_of(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, node: Ast_node$@
     //< instantiated it carries none**, so the type is read from the declarations: a local's, then
     //< each field's along a chain (`r.wo.weights`), taken from the generic's own declaration —
     //< nothing specializes one, so its instances all hold what it declares.
-    if node == null || depth > max_walk_depth
+    if node == null || depth > lsp_position.max_walk_depth
         return ""
     if node.type_id != 0
         return c.env.get_str(get_base_type_id(c.env, node.type_id))
-    switch node.kind_id case .k_identifier
+    switch node.kind_id
+    case .k_identifier
         return local_type_name(c, path, node, depth)
     case .k_expr_path
         // A body nothing analysed keeps a name, and a name with its fields, as a path (`r.inner`).
@@ -316,7 +199,7 @@ priv fn call_type_name(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, callee: Ast_no
         //< name on a known type, and a function's bare name, each name one declaration. Its return
         //< type is used where it is `Self` (the receiver's) or one sema resolved; written text
         //< alone belongs to the declaring file, which is not in scope here, so it stops the walk.
-    if callee == null || depth > max_walk_depth
+    if callee == null || depth > lsp_position.max_walk_depth
         return ""
     $fn_node: Ast_node$@ = null
     $self_name: U8[] = ""
@@ -325,14 +208,16 @@ priv fn call_type_name(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, callee: Ast_no
         self_name = type_name_of(c, path, callee.get_postfix_receiver(), depth + 1)
         member: = callee.get_postfix_member()
         if self_name.len > 0 && member != null
-            switch member_of(c, self_name, member.text) case .some(m)
+            switch member_of(c, self_name, member.text)
+            case .some(m)
                 fn_node = m
             case .none {}
     else
         $name: = callee
         if callee.kind_id == .k_expr_path && callee.children.len == 1
             name = callee.get_child(0)
-        switch function_of(c, path, name) case .some(f)
+        switch function_of(c, path, name)
+        case .some(f)
             fn_node = f
         case .none {}
     if !fn_node.is_fn_decl()
@@ -344,23 +229,23 @@ priv fn call_type_name(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, callee: Ast_no
         return self_name
     return declared_type_name(c, ret) if ret.type_id != 0 else ""
 
-priv fn function_of(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, name: Ast_node$@):
-    Option<|Ast_node$@|> //<
-        //< The function a bare name calls, or none where the name is a value's (a local shadows it)
+priv fn function_of(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, name: Ast_node$@): Ast_node$@? //<
+    //< The function a bare name calls, or none where the name is a value's (a local shadows it)
     if name == null || name.kind_id != .k_identifier
-        return Option<|Ast_node$@|>.none
-    switch local_decl_of(c, path, name) case .some(d)
+        return .none
+    switch local_decl_of(c, path, name)
+    case .some(d)
         if d.is_fn_decl()
-            return Option<|Ast_node$@|>.some(d)
-        return Option<|Ast_node$@|>.none
+            return .some(d)
+        return .none
     case .none {}
     named: = c.read_written_name(name)
     $f: = named.template
     if f == null && named.sym != null
         f = named.sym.node
     if f.is_fn_decl()
-        return Option<|Ast_node$@|>.some(f)
-    return Option<|Ast_node$@|>.none
+        return .some(f)
+    return .none
 
 priv fn path_type_name(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, node: Ast_node$@, end: Sz,
     depth: Sz): U8[] //<
@@ -386,7 +271,8 @@ fn folded_receiver_type(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, mark: Ast_nod
         at += 1
     if at == 0 || at >= p.children.len
         return ""
-    switch local_decl_of(c, path, p.get_child(0)) case .some(decl)
+    switch local_decl_of(c, path, p.get_child(0))
+    case .some(decl)
         if decl.kind_id != .k_fn_param && decl.kind_id != .k_decl_var &&
             decl.kind_id != .k_decl_const
             return ""
@@ -394,13 +280,12 @@ fn folded_receiver_type(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, mark: Ast_nod
         return ""
     return path_type_name(c, path, p, at, 0)
 
-priv fn local_decl_of(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, name: Ast_node$@):
-    Option<|Ast_node$@|> //<
-        //< What a name on the path is declared by, found the way the hover finds a local
+priv fn local_decl_of(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, name: Ast_node$@): Ast_node$@? //<
+    //< What a name on the path is declared by, found the way the hover finds a local
     if name == null || name.kind_id != .k_identifier
-        return Option<|Ast_node$@|>.none
+        return .none
     if name.def_node != null
-        return Option<|Ast_node$@|>.some(name.def_node)
+        return .some(name.def_node)
     return resolve_fallback_parent_def(c, path, name, name.text)
 
 priv fn local_type_name(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, name: Ast_node$@, depth: Sz):
@@ -410,7 +295,8 @@ priv fn local_type_name(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, name: Ast_nod
         //< Caution: **`Self` is the enclosing impl's type**, not a type of that name; so is an `r`
         //< written with no type at all.
     $local: Ast_node$@ = null
-    switch local_decl_of(c, path, name) case .some(d)
+    switch local_decl_of(c, path, name)
+    case .some(d)
         local = d
     case .none
         return ""
@@ -452,12 +338,13 @@ priv fn field_type_name(c: Sema_ctx$@, owner: U8[], field: Ast_node$@): U8[] //<
     //< The type a field of `owner`'s declaration names, or "" where it has no such field
     if field == null || field.kind_id != .k_identifier
         return ""
-    switch field_of(c, owner, field.text) case .some(f)
+    switch field_of(c, owner, field.text)
+    case .some(f)
         return declared_type_name(c, f.get_decl_type_node())
     case .none
         return ""
 
-fn struct_decl_of(c: Sema_ctx$@, owner: U8[]): Option<|Ast_node$@|> //<
+fn struct_decl_of(c: Sema_ctx$@, owner: U8[]): Ast_node$@? //<
     //< The declaration of the struct a type's name stands for, a generic's own where it is one
     //<
     //< **A generic nothing instantiated has no struct entry**, so its fields are read here, by the
@@ -469,21 +356,22 @@ fn struct_decl_of(c: Sema_ctx$@, owner: U8[]): Option<|Ast_node$@|> //<
         if sym != null
             decl = sym.node
     if decl == null || decl.kind_id != .k_decl_struct
-        return Option<|Ast_node$@|>.none
-    return Option<|Ast_node$@|>.some(decl)
+        return .none
+    return .some(decl)
 
-priv fn field_of(c: Sema_ctx$@, owner: U8[], name: U8[]): Option<|Ast_node$@|> //<
+priv fn field_of(c: Sema_ctx$@, owner: U8[], name: U8[]): Ast_node$@? //<
     //< The field of that name in the struct a type's name stands for
-    switch struct_decl_of(c, owner) case .some(decl)
+    switch struct_decl_of(c, owner)
+    case .some(decl)
         for f in decl.children
             if f.kind_id == .k_struct_field
                 id_n: = f.find_child(.k_identifier)
                 if id_n != null && id_n.text.equals(name)
-                    return Option<|Ast_node$@|>.some(f)
+                    return .some(f)
     case .none {}
-    return Option<|Ast_node$@|>.none
+    return .none
 
-priv fn member_of(c: Sema_ctx$@, raw_type: U8[], name: U8[]): Option<|Ast_node$@|> //<
+priv fn member_of(c: Sema_ctx$@, raw_type: U8[], name: U8[]): Ast_node$@? //<
     //< What a `.name` names on a type: a method on its table, a field, or a `<type>.<name>` method
     //<
     //< **The hover and a call's type both ask here**, so the two cannot disagree on which
@@ -498,11 +386,12 @@ priv fn member_of(c: Sema_ctx$@, raw_type: U8[], name: U8[]): Option<|Ast_node$@
     if methods: = c.env.methods_of(raw_type)
         method_sym: = methods.get(name) catch null
         if method_sym != null
-            return Option<|Ast_node$@|>.some(method_sym.node)
+            return .some(method_sym.node)
 
     $struct_def: sema_type_def.Struct_def$@ = null
     $resolved_struct_name: = raw_type
-    switch c.env.get_struct_def(raw_type) case .some(sd)
+    switch c.env.get_struct_def(raw_type)
+    case .some(sd)
         struct_def = sd
     case .none
         if sd2: = c.env.get_struct_def(base_type_only)
@@ -517,11 +406,12 @@ priv fn member_of(c: Sema_ctx$@, raw_type: U8[], name: U8[]): Option<|Ast_node$@
                 if field_node.kind_id == .k_struct_field
                     fid: = field_node.find_child(.k_identifier)
                     if fid != null && fid.text.equals(name)
-                        return Option<|Ast_node$@|>.some(field_node)
+                        return .some(field_node)
     // A generic nothing instantiated has no struct entry of its own: its fields are those its
     // declaration holds.
-    switch field_of(c, raw_type, name) case .some(f)
-        return Option<|Ast_node$@|>.some(f)
+    switch field_of(c, raw_type, name)
+    case .some(f)
+        return .some(f)
     case .none {}
     $method_prefix: = Str_builder.new()
     defer method_prefix.free()
@@ -530,22 +420,23 @@ priv fn member_of(c: Sema_ctx$@, raw_type: U8[], name: U8[]): Option<|Ast_node$@
 
     gen_m: = c.generics.templates.get(full_m_name) catch null
     if gen_m != null
-        return Option<|Ast_node$@|>.some(gen_m)
+        return .some(gen_m)
 
     method_sym: = c.symtab.resolve(full_m_name) catch null
     if method_sym != null && method_sym.node != null
-        return Option<|Ast_node$@|>.some(method_sym.node)
-    return Option<|Ast_node$@|>.none
+        return .some(method_sym.node)
+    return .none
 
 priv fn resolve_dot_access_def(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, target_node: Ast_node$@,
-    target_text: U8[]): Ast_node$@?I32
+    target_text: U8[]): Ast_node$@!I32
     got: = dot_receiver_of(c, path, target_node)
     recv_node: = got.node
     if recv_node == null
         throw 1
     raw_type: = got.type_name
     if raw_type.len > 0
-        switch member_of(c, raw_type, target_text) case .some(m)
+        switch member_of(c, raw_type, target_text)
+        case .some(m)
             return m
         case .none {}
     if recv_node.kind_id == .k_identifier
@@ -558,33 +449,35 @@ priv fn resolve_dot_access_def(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, target
     return null
 
 priv fn resolve_fallback_parent_def(_c: Sema_ctx$@, path: List<|Ast_node$@|>$@,
-    target_node: Ast_node$@, target_text: U8[]): Option<|Ast_node$@|>
+    target_node: Ast_node$@, target_text: U8[]): Ast_node$@?
     for $i: = path.len; i > 0; i -= 1
         p: = path.get(i - 1)
 
-        switch p.kind_id case .k_decl_fn, .k_decl_fn_proto, .k_decl_struct, .k_decl_enum,
-            .k_decl_impl, .k_decl_trait, .k_decl_alias
+        switch p.kind_id
+        case .k_decl_fn, .k_decl_fn_proto, .k_decl_struct, .k_decl_enum, .k_decl_impl,
+            .k_decl_trait, .k_decl_alias
             gen_params: = p.find_child(.k_type_gen_params)
             if gen_params != null
                 for param in gen_params.children
                     if param.kind_id == .k_type_gen_param
                         id_n: = param.find_child(.k_identifier)
                         if id_n != null && id_n.text.equals(target_text)
-                            return Option<|Ast_node$@|>.some(param)
+                            return .some(param)
                     else if param.kind_id == .k_identifier && param.text.equals(target_text)
-                        return Option<|Ast_node$@|>.some(param)
+                        return .some(param)
         default {}
 
-        switch p.kind_id case .k_decl_fn, .k_decl_fn_proto
+        switch p.kind_id
+        case .k_decl_fn, .k_decl_fn_proto
             params: = p.get_fn_params()
             if params != null
                 for param in params.children
                     if param.kind_id == .k_fn_param
                         id_n: = param.find_child(.k_identifier)
                         if id_n != null && id_n.text.equals(target_text)
-                            return Option<|Ast_node$@|>.some(param)
+                            return .some(param)
                         if param.text.equals(target_text)
-                            return Option<|Ast_node$@|>.some(param)
+                            return .some(param)
         case .k_stmt_block
             for stmt in p.children
                 if stmt.loc.offset > target_node.loc.offset
@@ -592,28 +485,30 @@ priv fn resolve_fallback_parent_def(_c: Sema_ctx$@, path: List<|Ast_node$@|>$@,
                 if stmt.kind_id == .k_decl_var || stmt.kind_id == .k_decl_const
                     id_n: = stmt.get_var_decl_id()
                     if id_n != null && id_n.text.equals(target_text)
-                        return Option<|Ast_node$@|>.some(stmt)
+                        return .some(stmt)
         case .k_match_pattern
             for bind_var in p.children
                 if bind_var.kind_id == .k_identifier
                     if bind_var.text.equals(target_text)
-                        return Option<|Ast_node$@|>.some(bind_var)
+                        return .some(bind_var)
         default {}
-    return Option<|Ast_node$@|>.none
+    return .none
 
-fn get_definition_node(c: Sema_ctx$@, path: List<|Ast_node$@|>$@): Option<|Ast_node$@|>
+fn get_definition_node(c: Sema_ctx$@, path: List<|Ast_node$@|>$@): Ast_node$@? //<
+    //< The declaration the path's last node stands for; on a declared name, that declaration
+    //<
+    //< Caution: **Not the declared type's.** The hover, references and renaming all start here, so
+    //< on `$words: = List<|U8[]|>.new(arena)` they showed, listed and renamed `List`.
     if c == null || path.len == 0
-        return Option<|Ast_node$@|>.none
+        return .none
     target_node: = path.get(path.len - 1)
 
-    if kw_def: = resolve_decl_type_def(c, path, target_node)
-        return Option<|Ast_node$@|>.some(kw_def)
-
     if target_node.def_node != null
-        return Option<|Ast_node$@|>.some(target_node.def_node)
-    switch target_node.kind_id case .k_keyword, .k_literal, .k_empty, .k_string, .k_char,
-        .k_integer, .k_float, .k_bool, .k_null
-        return Option<|Ast_node$@|>.none
+        return .some(target_node.def_node)
+    switch target_node.kind_id
+    case .k_keyword, .k_literal, .k_empty, .k_string, .k_char, .k_integer, .k_float, .k_bool,
+        .k_null
+        return .none
     default {}
 
     if path.len >= 2
@@ -623,16 +518,16 @@ fn get_definition_node(c: Sema_ctx$@, path: List<|Ast_node$@|>$@): Option<|Ast_n
         // lookup by the bare name would find a same-named function elsewhere (a method `put` read
         // as the prelude's `std.lang.put`).
         if p.is_fn_decl() && p.find_child(.k_identifier) == target_node
-            return Option<|Ast_node$@|>.some(p)
+            return .some(p)
         if p.kind_id == .k_decl_import || p.kind_id == .k_decl_embed
             id_n: = p.find_child(.k_identifier)
             if id_n != null && id_n == target_node
-                return Option<|Ast_node$@|>.some(p)
+                return .some(p)
 
         if p.def_node != null
-            switch p.kind_id case .k_expr_path, .k_type_path, .k_generic_path, .k_method_access,
-                .k_expr_postfix
-                return Option<|Ast_node$@|>.some(p.def_node)
+            switch p.kind_id
+            case .k_expr_path, .k_type_path, .k_generic_path, .k_method_access, .k_expr_postfix
+                return .some(p.def_node)
             default {}
 
     target_text: = target_node.text.get_generic_base_name()
@@ -648,10 +543,10 @@ fn get_definition_node(c: Sema_ctx$@, path: List<|Ast_node$@|>$@): Option<|Ast_n
                 fqn: = c.resolve_fqn_for_type(full_str)
                 sym: = c.symtab.resolve(fqn) catch null
                 if sym != null
-                    return Option<|Ast_node$@|>.some(sym.node)
+                    return .some(sym.node)
                 gen: = c.generics.templates.get(fqn) catch null
                 if gen != null
-                    return Option<|Ast_node$@|>.some(gen)
+                    return .some(gen)
 
     $was_dot_access: = true
     dot_def: = resolve_dot_access_def(c, path, target_node, target_text) catch
@@ -659,25 +554,25 @@ fn get_definition_node(c: Sema_ctx$@, path: List<|Ast_node$@|>$@): Option<|Ast_n
         fallback null
     if was_dot_access
         if dot_def != null
-            return Option<|Ast_node$@|>.some(dot_def)
-        return Option<|Ast_node$@|>.none
+            return .some(dot_def)
+        return .none
 
     local_def: = target_node.def_node
     if local_def != null
-        return Option<|Ast_node$@|>.some(local_def)
+        return .some(local_def)
 
     alias: = c.peek_file_alias(c.file_name, target_text)
     if alias != null && alias.decl_node != null
-        return Option<|Ast_node$@|>.some(alias.decl_node)
+        return .some(alias.decl_node)
 
     sym: = c.symtab.resolve(target_text) catch null
     if sym != null
-        return Option<|Ast_node$@|>.some(sym.node)
+        return .some(sym.node)
 
     // A template is keyed by its FQN alone (register_template in sema/decl/declare.kspls).
     gen_st: = c.generics.templates.get(c.resolve_fqn_for_type(target_text)) catch null
     if gen_st != null
-        return Option<|Ast_node$@|>.some(gen_st)
+        return .some(gen_st)
 
     type_id: = c.env.type_to_id.get(target_text) catch 0
     if type_id > 10
@@ -685,25 +580,24 @@ fn get_definition_node(c: Sema_ctx$@, path: List<|Ast_node$@|>$@): Option<|Ast_n
         t_name: = c.env.get_str(base_id)
         t_sym: = c.symtab.resolve(t_name) catch null
         if t_sym != null
-            return Option<|Ast_node$@|>.some(t_sym.node)
+            return .some(t_sym.node)
 
     return resolve_fallback_parent_def(c, path, target_node, target_text)
 
-fn find_parent_enum(node: Ast_node$@, target: Ast_node$@): Option<|Ast_node$@|>
+fn find_parent_enum(node: Ast_node$@, target: Ast_node$@): Ast_node$@?
     return find_parent_enum_depth(node, target, 0)
 
-priv fn find_parent_enum_depth(node: Ast_node$@, target: Ast_node$@, depth: Sz):
-    Option<|Ast_node$@|>
-    if node == null || depth > max_walk_depth
-        return Option<|Ast_node$@|>.none
+priv fn find_parent_enum_depth(node: Ast_node$@, target: Ast_node$@, depth: Sz): Ast_node$@?
+    if node == null || depth > lsp_position.max_walk_depth
+        return .none
     if node.kind_id == .k_decl_enum
         for child in node.children
             if child == target
-                return Option<|Ast_node$@|>.some(node)
+                return .some(node)
     for child in node.children
         if res: = find_parent_enum_depth(child, target, depth + 1)
-            return Option<|Ast_node$@|>.some(res)
-    return Option<|Ast_node$@|>.none
+            return .some(res)
+    return .none
 
 fn declared_doc(c: Sema_ctx$@, def_node: Ast_node$@): U8[] //<
     //< The documentation a declaration carries, read from the source it was declared in
@@ -765,7 +659,8 @@ fn linked_doc(c: Sema_ctx$@, root: Ast_node$@, def_node: Ast_node$@): U8[] //<
         from = p.end
         pointed: = sema_session_pointer.pointed_at(c, root, file, def_node.loc.offset,
             doc.sub(p.at, p.len))
-        switch pointed case .found(node)
+        switch pointed
+        case .found(node)
             target: = place_of(c, node)
             if target.len > 0
                 out.s(doc.sub(copied, p.open - copied)).c('[')
@@ -813,7 +708,8 @@ fn resolve_enum_variant_def(sema: Sema_ctx$@, _root_file: Ast_node$@,
         return res
     parent: = path.get(path.len - 2)
 
-    switch parent.kind_id case .k_enum_init, .k_enum_init_call, .k_expr_postfix
+    switch parent.kind_id
+    case .k_enum_init, .k_enum_init_call, .k_expr_postfix
         $is_target: = false
         for child in parent.children
             if child == target_node

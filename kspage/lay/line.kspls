@@ -56,7 +56,7 @@ struct Pen //< the state partway through the layout
     // Where consecutive blocks form one fence (a block of code), that fill's band.
     // **Do not start it again mid-fence**, or the fill comes out striped. **Save it before entering
     // a child and restore it on return** (`place_siblings` in `flow.kspls`).
-    fence: Option<|Panel$@|>
+    fence: Panel$@?
     fence_from: Placed
     arena: Arena$@
 fn new_pen(dst: Page$@, at: Rect, page_height: F32, arena: Arena$@): Pen$@ //<
@@ -71,14 +71,14 @@ fn new_pen(dst: Page$@, at: Rect, page_height: F32, arena: Arena$@): Pen$@ //<
         .left = at.x,
         .right = at.x + at.w,
         .page_height = page_height,
-        .align = Align.left,
+        .align = .left,
         .lead = 0.0,
         .wrap = true,
         .line_no = 0,
         .mark = "",
         .mark_left = at.x,
         .rise = 0.0,
-        .fence = Option<|Panel$@|>.none,
+        .fence = .none,
         .fence_from = placed_of(dst),
         .arena = arena,
     }
@@ -112,13 +112,14 @@ priv fn midpoint(text: U8[], lo: Sz, hi: Sz): Sz //<
 // **Do not measure character by character.** It first checks whether all that is left fits, and
 // bisects only where it does not (the grounds are "How text flows" in
 // [`../docs/DESIGN.md`](../docs/DESIGN.md)). **Return both the break and the width to lay out.**
-priv fn measure_fit(src: Font_source, font: Font, text: U8[], start: Sz, avail: F32,
-    told: Option<|F32|>): Fit_at
+priv fn measure_fit(src: Font_source, font: Font, text: U8[], start: Sz, avail: F32, told: F32?):
+    Fit_at
     // Where all that is left fits it does not search (**the vast majority**). **Return the measured
     // width**: the text the caller lays out is exactly the one just measured.
     // Where the caller passes a width it remembers, nothing is measured (`told`).
     $whole: F32 = 0.0
-    switch told case .some(w)
+    switch told
+    case .some(w)
         whole = w
     case .none
         whole = src.measure_width(font, text.sub(start, text.len - start))
@@ -188,7 +189,7 @@ priv fn stretch_line(p: Pen$@) //<
     //< **It is called only when a line breaks partway** (on a paragraph's last line a few
     //< characters would scatter across the column). A box's width runs to where its last character
     //< ends, and the next box starts one character gap past that.
-    if !p.align.same_align(Align.justify) || p.out.boxes.len <= p.line_start
+    if !p.align.same_align(.justify) || p.out.boxes.len <= p.line_start
         return
     $chars: Sz = 0
     for $i: Sz = p.line_start; i < p.out.boxes.len; i += 1
@@ -215,7 +216,7 @@ priv fn slack(p: Pen$@): F32 //<
     //< **Where there is no leftover nothing is shifted** (shifted by a negative amount, a wrapped
     //< line would go outside the column). It is done when the line is closed.
     // **Justifying does not shift**, so a paragraph's last line sits where a left-aligned one does.
-    if p.align.same_align(Align.left) || p.align.same_align(Align.justify) ||
+    if p.align.same_align(.left) || p.align.same_align(.justify) ||
         p.out.boxes.len <= p.line_start
         return 0.0
     last: = p.out.boxes.get(p.out.boxes.len - 1)
@@ -223,7 +224,7 @@ priv fn slack(p: Pen$@): F32 //<
     if room <= 0.0
         return 0.0
     half: F32 = room * 0.5F32
-    return room if p.align.same_align(Align.right) else half
+    return room if p.align.same_align(.right) else half
 priv fn place(p: Pen$@, text: U8[], look: Look, w: F32, from: Inline$@, offset: Sz) //<
     //< Lays one box into the current line (the y is set when the line is closed)
     m: = p.out.metrics(look.font)
@@ -274,7 +275,7 @@ priv fn fit(p: Pen$@, text: U8[], look: Look, from: Inline$@, at: Sz, avail: F32
         if had: = from.known_fit(look.font, avail, at)
             return had
     // **"The whole width" can only be passed from a line's start.**
-    told: = from.known_whole(look.font, at) if from != null else Option<|F32|>.none
+    told: F32? = from.known_whole(look.font, at) if from != null else .none
     got: = measure_fit(p.out.src, look.font, text, at, avail, told)
     if from != null
         from.remember_fit(look.font, avail, got)

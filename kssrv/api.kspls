@@ -83,7 +83,7 @@ priv fn query_value(params: url.Query_param$@, name: U8[]): U8[] //<
         p = p.next
     return ""
 
-fn rel_or_refuse(c: conn.Conn$@, query: U8[], root: U8[]): Option<|U8[]|> //<
+fn rel_or_refuse(c: conn.Conn$@, query: U8[], root: U8[]): U8[]? //<
     //< Takes the relative path under the root from `path=`
     //<
     //< Caution: **Run the query's value through static serving's check (`fs.stays_under`), after
@@ -92,13 +92,13 @@ fn rel_or_refuse(c: conn.Conn$@, query: U8[], root: U8[]): Option<|U8[]|> //<
     //< means no `path=`, or the root itself.
     params: = url.parse_query(query, c.arena) catch _e
         queue_json_error(c, 400)
-        return Option<|U8[]|>.none
+        return .none
     got: = rel_under(root, query_value(params, "path"))
     if !got.is_some()
         queue_json_error(c, 403)
     return got
 
-fn rel_under(root: U8[], path: U8[]): Option<|U8[]|> //<
+fn rel_under(root: U8[], path: U8[]): U8[]? //<
     //< The path with its leading `/`s dropped, if it stays under the root (`fs.stays_under`)
     //<
     //< Empty means the root itself. Static serving and the endpoints taking `path=` both ask this.
@@ -106,8 +106,8 @@ fn rel_under(root: U8[], path: U8[]): Option<|U8[]|> //<
     for rel.len > 0 && rel[0] == '/'
         rel = rel.sub_from(1)
     if rel.len > 0 && !fs.stays_under(root, rel)
-        return Option<|U8[]|>.none
-    return Option<|U8[]|>.some(rel)
+        return .none
+    return .some(rel)
 
 // ==========================================
 // The local-use endpoints (files, and whether something changed)
@@ -117,7 +117,8 @@ fn rel_under(root: U8[], path: U8[]): Option<|U8[]|> //<
 // ==========================================
 fn queue_api_file(c: conn.Conn$@, t: conn.Target, req: http.Request$@, root: U8[], keep: Bool)
     $rel: U8[] = ""
-    switch rel_or_refuse(c, t.query, root) case .some(r)
+    switch rel_or_refuse(c, t.query, root)
+    case .some(r)
         rel = r
     case .none
         return
@@ -185,7 +186,8 @@ fn queue_api_stat(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
     //< it). **Nothing is missed**: it returns "how things are now", not "how many times it
     //< changed", so it catches up however many changes happen in between.
     $rel: U8[] = ""
-    switch rel_or_refuse(c, query, root) case .some(r)
+    switch rel_or_refuse(c, query, root)
+    case .some(r)
         rel = r
     case .none
         return
@@ -279,7 +281,9 @@ priv fn reaches(c: conn.Conn$@, ctx: conn.Ctx$@, r: Reach): Bool //<
     //< Where it does not, the 404 is already queued.
     local: = ctx.token.len > 0
     $here: = true
-    switch r case .both {} case .local
+    switch r
+    case .both {}
+    case .local
         here = local
     case .outward
         here = !local
@@ -336,13 +340,13 @@ priv const routes: Route[7] = ::{ //<
     //<
     //< **The guards run once, here, for every row**: decided per endpoint, a new one forgets one.
     //< `/api/file` has no `HEAD`: `/api/stat` gives the size and whether it exists (Principle 6).
-    Route::{ .path = "/api/file", .reach = Reach.local, .methods = "GET PUT ", .api = Api.file },
-    Route::{ .path = "/api/stat", .reach = Reach.local, .methods = "GET ", .api = Api.stat },
-    Route::{ .path = "/api/here", .reach = Reach.local, .methods = "GET ", .api = Api.here },
-    Route::{ .path = "/api/stop", .reach = Reach.local, .methods = "POST ", .api = Api.stop },
-    Route::{ .path = "/api/status", .reach = Reach.both, .methods = "GET ", .api = Api.status },
-    Route::{ .path = "/api/car", .reach = Reach.outward, .methods = "POST ", .api = Api.car },
-    Route::{ .path = "/api/pilot", .reach = Reach.outward, .methods = "GET ", .api = Api.pilot },
+    Route::{ .path = "/api/file", .reach = .local, .methods = "GET PUT ", .api = .file },
+    Route::{ .path = "/api/stat", .reach = .local, .methods = "GET ", .api = .stat },
+    Route::{ .path = "/api/here", .reach = .local, .methods = "GET ", .api = .here },
+    Route::{ .path = "/api/stop", .reach = .local, .methods = "POST ", .api = .stop },
+    Route::{ .path = "/api/status", .reach = .both, .methods = "GET ", .api = .status },
+    Route::{ .path = "/api/car", .reach = .outward, .methods = "POST ", .api = .car },
+    Route::{ .path = "/api/pilot", .reach = .outward, .methods = "GET ", .api = .pilot },
 }
 
 priv fn takes(r: Route, method: U8[]): Bool //< whether the route takes that method
@@ -376,7 +380,8 @@ impl Api
     priv fn queue(r: Self, c: conn.Conn$@, t: conn.Target, req: http.Request$@, ctx: conn.Ctx$@,
         keep: Bool) //<
             //< Hands one request to this endpoint, once `queue_api`'s guards have passed
-        switch r case .file
+        switch r
+        case .file
             queue_api_file(c, t, req, ctx.root, keep)
         case .stat
             queue_api_stat(c, t.query, ctx.root, keep)

@@ -5,9 +5,8 @@
 //< here. **Do not put a slice out at the boundary** ("The restrictions on types at the FFI
 //< boundary" in the language spec).
 import "kspage/model/limit"
-import "kspage/model/marker"
 import "kspage/model/paint"
-import "kspage/model/style" + { Arrange }
+import "kspage/model/style"
 import "kspage/model/style_when"
 import "kspage/port/web/state" + { doc_arena, ed, ensure, input, input_cap, sheet }
 import "kspage/write/shape"
@@ -67,18 +66,18 @@ fn kspage_web_set_style_look(i: Sz, family_len: Sz, has_size: I32, size: F32, ha
     if family_len >= 0
         // Caution: Copy the name; the arena is rewritten on the next keystroke.
         name: = U8[]::{ .ptr = input@, .len = family_len }
-        fresh.font.family = Option<|U8[]|>.some(doc_arena.dup_str(name))
+        fresh.font.family = .some(doc_arena.dup_str(name))
     if has_size != 0
-        fresh.font.size_px = Option<|F32|>.some(size)
+        fresh.font.size_px = .some(size)
     if has_weight != 0
-        fresh.font.weight = Option<|U16|>.some(U16::I32::weight)
+        fresh.font.weight = .some(U16::I32::weight)
     if has_italic != 0
-        fresh.font.italic = Option<|Bool|>.some(italic != 0)
+        fresh.font.italic = .some(italic != 0)
     fresh.ink = paint.inherit_ink()
     if has_color != 0
-        fresh.ink.color = Option<|U32|>.some(U32::color)
+        fresh.ink.color = .some(U32::color)
     if has_back != 0
-        fresh.ink.background = Option<|U32|>.some(U32::back)
+        fresh.ink.background = .some(U32::back)
     ed.set_look(sheet.styles.get(i), fresh)
     return 1
 
@@ -127,7 +126,7 @@ fn kspage_web_set_style_number(i: Sz, affix_len: Sz, has_places: I32, places: F3
     $fresh: style.Style = sheet.styles.get(i)$
     fresh.number = style.plain_number()
     if has_places != 0
-        fresh.number.places = Option<|Sz|>.some(I32::places)
+        fresh.number.places = .some(I32::places)
     fresh.number.grouped = grouped != 0
     fresh.number.percent = percent != 0
     fresh.number.dated = state.dating_at(dated)
@@ -151,7 +150,7 @@ fn kspage_web_add_style(len: Sz): Sz
     name: = U8[]::{ .ptr = input@, .len = len }
     if !style.name_plain(name)
         return -2
-    if made: = ed.add_style(sheet, name, Arrange.flow)
+    if made: = ed.add_style(sheet, name, .flow)
         for $i: Sz = 0; i < sheet.styles.len; i += 1
             if sheet.styles.get(i) == made
                 return i
@@ -272,8 +271,7 @@ fn kspage_web_set_style_edge(i: Sz, width: F32, color: F32, has_fill: I32, fill:
     $fresh: style.Style = sheet.styles.get(i)$
     fresh.rule_width = width if width > 0.0 else 0.0
     fresh.rule_color = U32::color
-    fresh.fill =
-        Option<|U32|>.some(U32::fill) if has_fill != 0 else Option<|U32|>.none
+    fresh.fill = .some(U32::fill) if has_fill != 0 else .none
     fresh.shape = state.shape_at(kind)
     ed.set_look(sheet.styles.get(i), fresh)
     return 1
@@ -319,10 +317,8 @@ fn kspage_web_set_style_decor(i: Sz, has_under: I32, under: I32, has_strike: I32
     if !state.has_style(i)
         return 0
     $fresh: style.Style = sheet.styles.get(i)$
-    fresh.ink.underline =
-        Option<|Bool|>.some(under != 0) if has_under != 0 else Option<|Bool|>.none
-    fresh.ink.strike =
-        Option<|Bool|>.some(strike != 0) if has_strike != 0 else Option<|Bool|>.none
+    fresh.ink.underline = .some(under != 0) if has_under != 0 else .none
+    fresh.ink.strike = .some(strike != 0) if has_strike != 0 else .none
     ed.set_look(sheet.styles.get(i), fresh)
     return 1
 
@@ -339,7 +335,8 @@ fn kspage_web_style_mark(i: Sz, kind: F32$@): Sz
     state.out.clear()
     if !state.has_style(i)
         return 0
-    switch sheet.styles.get(i).marker case .bullet(glyph)
+    switch sheet.styles.get(i).marker
+    case .bullet(glyph)
         kind$ = 1.0
         state.out.s(glyph)
     case .number(after)
@@ -367,17 +364,17 @@ fn kspage_web_set_style_mark(i: Sz, kind: I32, len: Sz): I32
     both: = U8[]::{ .ptr = input@, .len = len }
     // Caution: Copy the text; the arena is rewritten on the next keystroke.
     text: = doc_arena.dup_str(both)
-    fresh.marker = marker.Marker.none
+    fresh.marker = .none
     if kind == 1
-        fresh.marker = marker.Marker.bullet(text)
+        fresh.marker = .bullet(text)
     else if kind == 2
-        fresh.marker = marker.Marker.number(text)
+        fresh.marker = .number(text)
     else if kind == 3
         two: = split_kept(both)
-        fresh.marker = marker.Marker.serial(two.head, two.tail)
+        fresh.marker = .serial(two.head, two.tail)
     else if kind == 4
         two: = split_kept(both)
-        fresh.marker = marker.Marker.outline(two.head, two.tail)
+        fresh.marker = .outline(two.head, two.tail)
     ed.set_look(sheet.styles.get(i), fresh)
     return 1
 

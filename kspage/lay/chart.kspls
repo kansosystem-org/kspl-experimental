@@ -11,7 +11,7 @@ import "kspage/lay/page" { Box, Figure, Page, Panel }
 import "kspage/model/collect" { Collect }
 import "kspage/model/doc" { Block, Doc, Rect }
 import "kspage/model/panel_paint" + { Panel_paint }
-import "kspage/model/style" + { Look, Sheet, Shape, Style }
+import "kspage/model/style" + { Look, Sheet, Shape }
 import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/str"
@@ -42,7 +42,9 @@ priv fn read_area(text: U8[]): Area //< reads `<name>!<cell>` or `<name>!<cell>:
     if name.len <= 0
         return no_area()
     a: = addr.parse_addr(c@)
-    switch a.kind case .spot {} case .unreadable
+    switch a.kind
+    case .spot {}
+    case .unreadable
         return no_area()
     case .out_of_range
         return no_area()
@@ -50,7 +52,9 @@ priv fn read_area(text: U8[]): Area //< reads `<name>!<cell>` or `<name>!<cell>:
     if addr.at(c@) == ':'
         c.pos += 1
         b = addr.parse_addr(c@)
-        switch b.kind case .spot {} case .unreadable
+        switch b.kind
+        case .spot {}
+        case .unreadable
             return no_area()
         case .out_of_range
             return no_area()
@@ -65,16 +69,16 @@ priv fn read_area(text: U8[]): Area //< reads `<name>!<cell>` or `<name>!<cell>:
         .found = true,
     }
 
-priv fn named(b: Block$@, name: U8[]): Option<|Block$@|> //< the block of that name
+priv fn named(b: Block$@, name: U8[]): Block$@? //< the block of that name
     //<
     //< **Search the nesting too.** Where two have the same name it is the earlier one in document
     //< order (as `find_grid` in `../expr/calc.kspls`).
     if b.name.len > 0 && b.name.equals(name)
-        return Option<|Block$@|>.some(b)
+        return .some(b)
     for $i: Sz = 0; i < b.children.len; i += 1
         if got: = named(b.children.get(i), name)
-            return Option<|Block$@|>.some(got)
-    return Option<|Block$@|>.none
+            return .some(got)
+    return .none
 
 fn collect_figures(d: Doc$@, b: Block$@, sheet: Sheet$@, out: List<|Figure|>$@, arena: Arena$@) //<
     //< Where b is a chart, collects its range's values into out
@@ -150,11 +154,12 @@ priv fn drawn(base: Panel_paint): Panel_paint //<
     //< would have different colors (Principle 4).
     if base.width > 0.0
         return base
-    switch base.fill case .some
+    switch base.fill
+    case .some
         return base
     case .none {}
     return Panel_paint::{ .width = 1.0F32, .color = base.color,
-        .fill = Option<|U32|>.some(style.drawn_color), .shape = base.shape }
+        .fill = .some(style.drawn_color), .shape = base.shape }
 
 priv fn band(dst: Page$@, b: Block$@, at: Rect, paint: Panel_paint, form: Shape, arena: Arena$@) //<
     //< Lays out one band
@@ -194,8 +199,7 @@ priv fn place_bars(dst: Page$@, b: Block$@, points: List<|Figure|>$@, s: Scale, 
         // **A negative value grows below 0** (the smaller y of the two is the top edge).
         high: = top if top < zero else zero
         low: = zero if top < zero else top
-        band(dst, b, Rect::{ .x = x, .y = high, .w = wide, .h = low - high }, paint, Shape.box,
-            arena)
+        band(dst, b, Rect::{ .x = x, .y = high, .w = wide, .h = low - high }, paint, .box, arena)
         label(dst, p.label, look, at.x + slot * F32::i, top - label_h, slot, arena)
 
 priv fn place_line(dst: Page$@, b: Block$@, points: List<|Figure|>$@, s: Scale, at: Rect,
@@ -234,7 +238,7 @@ fn place(dst: Page$@, b: Block$@, sheet: Sheet$@, at: Rect, look: Look, kind: Co
         height = s.height
     if height <= 0.0 || b.chart.len <= 0
         return 0.0
-    paint: = drawn(panel_paint.paint_of(found, Option<|Style$@|>.none))
+    paint: = drawn(panel_paint.paint_of(found, .none))
     // **Choose from what was collected** (`collect_figures`).
     points: = List<|Figure|>.create(arena)
     for $i: Sz = 0; i < dst.figures.len; i += 1
@@ -246,7 +250,7 @@ fn place(dst: Page$@, b: Block$@, sheet: Sheet$@, at: Rect, look: Look, kind: Co
     tall: = height - label_h
     s: = scale_of(points)
     if tall > 0.0 && points.len > 0
-        if kind.same_collect(Collect.lines)
+        if kind.same_collect(.lines)
             place_line(dst, b, points, s,
                 Rect::{ .x = at.x, .y = top, .w = at.w, .h = tall }, look, paint, tall, arena)
         else
@@ -255,8 +259,7 @@ fn place(dst: Page$@, b: Block$@, sheet: Sheet$@, at: Rect, look: Look, kind: Co
     // The axis. **Where the line width is 0 it is not drawn.**
     if paint.width > 0.0 && tall > 0.0
         zero: = y_of(0.0, s, top, tall)
-        axis: = Panel_paint::{ .width = paint.width, .color = paint.color,
-            .fill = Option<|U32|>.none, .shape = Shape.fall_line }
-        band(dst, b, Rect::{ .x = at.x, .y = zero, .w = at.w, .h = 0.0 }, axis, Shape.fall_line,
-            arena)
+        axis: = Panel_paint::{ .width = paint.width, .color = paint.color, .fill = .none,
+            .shape = .fall_line }
+        band(dst, b, Rect::{ .x = at.x, .y = zero, .w = at.w, .h = 0.0 }, axis, .fall_line, arena)
     return height

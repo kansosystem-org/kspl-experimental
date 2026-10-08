@@ -8,11 +8,11 @@ ksbind/db	Column_kind.integer	integer	a whole number
 ksbind/db	Column_kind.null_value	null_value	SQL's NULL
 ksbind/db	Column_kind.text	text	text
 ksbind/db	Db	pub struct Db	one open database, which prepares statements
-ksbind/db	Db.exec	pub fn exec(r: Self$@, sql: U8[]): Void?Db_error	prepares, steps and frees in one call, for SQL with no parameters and no rows. Use it for one `CREATE TABLE` / `INSERT` / `UPDATE` / `DELETE`; SQL holding a second statement is refused, as by `prepare`.
+ksbind/db	Db.exec	pub fn exec(r: Self$@, sql: U8[]): Void!Db_error	prepares, steps and frees in one call, for SQL with no parameters and no rows. Use it for one `CREATE TABLE` / `INSERT` / `UPDATE` / `DELETE`; SQL holding a second statement is refused, as by `prepare`.
 ksbind/db	Db.free	pub fn free(r: Self$@)	closes the database and frees it. Caution: **The name must be `free`.** The use-after-free check treats a call as a release when "the receiver's type conforms to `Owned` and the method called is `free`" (get_free_call_receiver in ksplc/sema/flow/track.kspls). Under a different name, `c.free(); c.query(…);` compiles with no diagnostics ([W0107] reports it).
 ksbind/db	Db.last_insert_rowid	pub fn last_insert_rowid(r: Self$@): I64	the row id the last `INSERT` created
-ksbind/db	Db.open	pub fn open(path: U8[]): Db$@?Db_error	opens a database, creating the file if it does not exist
-ksbind/db	Db.prepare	pub fn prepare(r: Self$@, sql: U8[]): Statement$@?Db_error	prepares one statement from SQL; a second statement after it is refused. Caution: The caller frees it with `stmt.free()`.
+ksbind/db	Db.open	pub fn open(path: U8[]): Db$@!Db_error	opens a database, creating the file if it does not exist
+ksbind/db	Db.prepare	pub fn prepare(r: Self$@, sql: U8[]): Statement$@!Db_error	prepares one statement from SQL; a second statement after it is refused. Caution: The caller frees it with `stmt.free()`.
 ksbind/db	Db:Owned	impl Db: Owned	it owns its memory and releases it with `free()`
 ksbind/db	Db_error	pub enum Db_error	why a database operation failed
 ksbind/db	Db_error.bind_failed	bind_failed	a parameter could not be bound: an index out of range or similar
@@ -24,21 +24,21 @@ ksbind/db	Db_error.prepare_failed	prepare_failed	the SQL could not be prepared: 
 ksbind/db	Db_error.several_statements	several_statements	the SQL holds a second statement after the first. Caution: **`prepare` and `exec` take one statement**; run each on its own. Taken, the rest would be dropped without a word.
 ksbind/db	Db_error.step_failed	step_failed	the step returned something other than a row or the end
 ksbind/db	Statement	pub struct Statement	one prepared statement, which is bound, stepped and read
-ksbind/db	Statement.bind_f64	pub fn bind_f64(r: Self$@, idx: I32, val: F64): Void?Db_error	binds a floating-point number to a parameter
-ksbind/db	Statement.bind_i64	pub fn bind_i64(r: Self$@, idx: I32, val: I64): Void?Db_error	binds an integer to a parameter
-ksbind/db	Statement.bind_null	pub fn bind_null(r: Self$@, idx: I32): Void?Db_error	binds SQL's NULL to a parameter
-ksbind/db	Statement.bind_row	pub fn bind_row<|T: reflect.Reflectable|>(r: Self$@, v: T@): Void?Db_error	binds a whole table type to `:field` parameters. **It matches by name** (`:field`, and the column's name when reading). Caution: **If it matched by position, swapping two columns in the SQL would silently read the wrong one** for as long as their types agree. `v` is a `T@`: passed by value, the field offsets would point into a temporary.
-ksbind/db	Statement.bind_text	pub fn bind_text(r: Self$@, idx: I32, val: U8[]): Void?Db_error	binds text to a parameter
+ksbind/db	Statement.bind_f64	pub fn bind_f64(r: Self$@, idx: I32, val: F64): Void!Db_error	binds a floating-point number to a parameter
+ksbind/db	Statement.bind_i64	pub fn bind_i64(r: Self$@, idx: I32, val: I64): Void!Db_error	binds an integer to a parameter
+ksbind/db	Statement.bind_null	pub fn bind_null(r: Self$@, idx: I32): Void!Db_error	binds SQL's NULL to a parameter
+ksbind/db	Statement.bind_row	pub fn bind_row<|T: reflect.Reflectable|>(r: Self$@, v: T@): Void!Db_error	binds a whole table type to `:field` parameters. **It matches by name** (`:field`, and the column's name when reading). Caution: **If it matched by position, swapping two columns in the SQL would silently read the wrong one** for as long as their types agree. `v` is a `T@`: passed by value, the field offsets would point into a temporary.
+ksbind/db	Statement.bind_text	pub fn bind_text(r: Self$@, idx: I32, val: U8[]): Void!Db_error	binds text to a parameter
 ksbind/db	Statement.column_bytes	pub fn column_bytes(r: Self$@, col: I32): Sz	the length of that text column, for allocating a buffer of that size
 ksbind/db	Statement.column_count	pub fn column_count(r: Self$@): I32	how many columns a row of this statement has
 ksbind/db	Statement.column_f64	pub fn column_f64(r: Self$@, col: I32): F64	that column of the current row, as a floating-point number
 ksbind/db	Statement.column_i64	pub fn column_i64(r: Self$@, col: I32): I64	that column of the current row, as an integer
 ksbind/db	Statement.column_kind	pub fn column_kind(r: Self$@, col: I32): Column_kind	what kind of value that column of the current row holds
-ksbind/db	Statement.column_text	pub fn column_text(r: Self$@, col: I32, buf: U8$[]): Sz?Db_error	copies that text column out, and returns how many bytes it copied
+ksbind/db	Statement.column_text	pub fn column_text(r: Self$@, col: I32, buf: U8$[]): Sz!Db_error	copies that text column out, and returns how many bytes it copied
 ksbind/db	Statement.free	pub fn free(r: Self$@)	frees the prepared statement
-ksbind/db	Statement.read_row	pub fn read_row<|T: reflect.Reflectable|>(r: Self$@, out: T$@, arena: Arena$@): Void?Db_error	reads the current row into a whole table type. **If no column matches a field, it fails** (the reason is at `Db_error`). Caution: **Copy the names into `arena`.** The names sqlite returns become invalid on the next `step()`.
-ksbind/db	Statement.reset	pub fn reset(r: Self$@): Void?Db_error	rewinds to run again, keeping the bound values
-ksbind/db	Statement.step	pub fn step(r: Self$@): Step_result?Db_error	runs to the next row, or to the end
+ksbind/db	Statement.read_row	pub fn read_row<|T: reflect.Reflectable|>(r: Self$@, out: T$@, arena: Arena$@): Void!Db_error	reads the current row into a whole table type. **If no column matches a field, it fails** (the reason is at `Db_error`). Caution: **Copy the names into `arena`.** The names sqlite returns become invalid on the next `step()`.
+ksbind/db	Statement.reset	pub fn reset(r: Self$@): Void!Db_error	rewinds to run again, keeping the bound values
+ksbind/db	Statement.step	pub fn step(r: Self$@): Step_result!Db_error	runs to the next row, or to the end
 ksbind/db	Statement:Owned	impl Statement: Owned	it owns its memory and releases it with `free()`
 ksbind/db	Step_result	pub enum Step_result	the result of one step of a statement
 ksbind/db	Step_result.done	done	the statement ran to the end, and there is no current row
@@ -50,8 +50,8 @@ ksbind/tls	Tls_error.ctx_failed	ctx_failed	OpenSSL setup failed (SSL_CTX_new, SS
 ksbind/tls	Tls_error.handshake_failed	handshake_failed	SSL_connect (the handshake) failed for a reason other than the next one
 ksbind/tls	Tls_error.io_failed	io_failed	a send or receive failed, or the connection ended without the peer's close_notify
 ksbind/tls	Tls_stream	pub struct Tls_stream	a TCP connection with TLS on top, which owns its resources
-ksbind/tls	Tls_stream.connect	pub fn connect(host: U8[], port: I32): Tls_stream$@?Tls_error	connects, then does the TLS handshake, verifying the certificate
+ksbind/tls	Tls_stream.connect	pub fn connect(host: U8[], port: I32): Tls_stream$@!Tls_error	connects, then does the TLS handshake, verifying the certificate
 ksbind/tls	Tls_stream.free	pub fn free(r: Self$@)	closes the connection and frees everything it owns
-ksbind/tls	Tls_stream.read	pub fn read(r: Self$@, buf: U8$[]): Sz?Tls_error	receives and returns how much arrived; 0 only after the peer's close_notify
-ksbind/tls	Tls_stream.write	pub fn write(r: Self$@, buf: U8[]): Sz?Tls_error	sends and returns how much was sent; a partial send is normal, so loop
+ksbind/tls	Tls_stream.read	pub fn read(r: Self$@, buf: U8$[]): Sz!Tls_error	receives and returns how much arrived; 0 only after the peer's close_notify
+ksbind/tls	Tls_stream.write	pub fn write(r: Self$@, buf: U8[]): Sz!Tls_error	sends and returns how much was sent; a partial send is normal, so loop
 ksbind/tls	Tls_stream:Owned	impl Tls_stream: Owned	it owns its memory and frees it with `free()`

@@ -77,8 +77,8 @@ priv fn populate_source_map_from_store(server: Server$@,
 priv fn init_doc_compiler(server: Server$@, ptr: Doc_state$@): pipeline.Compiler$@
     // Caution: **The URI becomes the one logical name here** (`doc_name` above). The AST records a
     // file by its logical name; with only the scheme stripped an absolute URI would not match it,
-    // so `traverse_and_find_best` rejects every node of the open document and the editor shows
-    // nothing.
+    // so `traverse_and_find_best` (`position.kspls`) rejects every node of the open document and
+    // the editor shows nothing.
     ptr.mod_name_perm = base_core.arena.dup_str(doc_name(ptr.uri_perm).strip_kspl_ext())
 
     compiler: = pipeline.Compiler.new(server.base_parser)
@@ -96,7 +96,8 @@ priv fn search_word(hint: U8[], src: U8[], params: json.Val): U8[] //<
     if hint.len > 0
         dot: = hint.rfind_char('.')
         return hint.sub_from(dot + 1) if dot >= 0 else hint
-    switch params.get("position") case .null_val
+    switch params.get("position")
+    case .null_val
         return ""
     default {}
     return word_at(src, lsp_msg.offset_at(src, params))
@@ -136,7 +137,8 @@ priv fn build_workspace_state(server: Server$@, target_uri: U8[], search_hint: U
         .create(Doc_state::{ .arena_state = arena_state, .uri_perm = uri_perm })
 
     $target_src: U8[] = ""
-    switch server.docs.open_text(target_uri) case .some(text)
+    switch server.docs.open_text(target_uri)
+    case .some(text)
         target_src = text
     default {}
 
@@ -245,11 +247,10 @@ priv fn build_document_state(server: Server$@, src: U8[], uri: U8[], send_diag: 
     // **Only this document's bodies are checked.** The hover, the jump, the colouring and this
     // document's diagnostics rely on this state, and none looks inside another file's body (the
     // grounds are "A `didOpen` checks one document's bodies" in `../docs/DESIGN.md`).
-    compiler.run_semantic_analysis(doc_path(ptr.uri_perm), true, quiet, Bodies.main_file) catch {}
+    compiler.run_semantic_analysis(doc_path(ptr.uri_perm), true, quiet, .main_file) catch {}
     if send_diag
         if !compiler.is_valid && base_diag.lsp_diags.list.len == 0
-            lsp_msg.send_single_diagnostic(uri, base_diag.Diagnostic_severity.error, 0, 0, 0,
-                "Semantic Error")
+            lsp_msg.send_single_diagnostic(uri, .error, 0, 0, 0, "Semantic Error")
         else
             lsp_msg.send_diagnostics_list(uri, base_diag.lsp_diags.list@)
 
@@ -307,16 +308,16 @@ impl Server
             answer_unknown(id_val, arena)
 
     priv fn document_state(r: Self$@, params: json.Val, id_val: json.Val, arena: Arena$@):
-        Option<|Doc_state$@|> //<
+        Doc_state$@? //<
             //< The analysed state of the document a request names
             //<
             //< Where that document is not open, it answers null itself and returns none.
         uri: = params.get("textDocument").get("uri").as_str()
         r.ensure_latest_state(uri)
         if r.latest_state != null && r.latest_state.uri_perm.equals(uri)
-            return Option<|Doc_state$@|>.some(r.latest_state)
+            return .some(r.latest_state)
         lsp_msg.send_null_response(id_val, arena)
-        return Option<|Doc_state$@|>.none
+        return .none
 
     priv fn workspace_state(r: Self$@, params: json.Val): Doc_state$@ //<
         //< The workspace analysed for one request; the caller discards it (`Doc_state.discard`)
@@ -326,7 +327,8 @@ impl Server
         //< hierarchy has no position, so its search word is the `item.data` the server returned.
         uri_node: = params.get("textDocument")
         $has_doc: = true
-        switch uri_node case .null_val
+        switch uri_node
+        case .null_val
             has_doc = false
         default {}
         uri: =
@@ -345,7 +347,8 @@ impl Server
         //< keystroke.
         uri: = params.get("textDocument").get("uri").as_str()
         $text: U8[] = ""
-        switch r.docs.open_text(uri) case .some(t)
+        switch r.docs.open_text(uri)
+        case .some(t)
             text = t
         default
             lsp_complete.send_none(id_val, arena)
@@ -366,7 +369,8 @@ impl Server
     fn ensure_latest_state(r: Self$@, uri: U8[])
         if r.latest_state != null && r.latest_state.uri_perm.equals(uri)
             return
-        switch r.docs.open_text(uri) case .some(text)
+        switch r.docs.open_text(uri)
+        case .some(text)
             r.reset_current_state()
             r.latest_state = build_document_state(r, text, uri, false)
         default {}
@@ -418,7 +422,7 @@ impl Server
             text_doc.get("text").as_str(), notes@, scratch)
 
     priv fn store_converted(r: Self$@, uri: U8[], sent: U8[],
-        notes: List<|parse_layout.Note|>$@, scratch: Arena$@): Option<|U8[]|> //<
+        notes: List<|parse_layout.Note|>$@, scratch: Arena$@): U8[]? //<
             //< It stores a document's text in the brace notation and returns it; none if not stored
             //<
             //< The indentation notation is converted into braces here (`parse/layout.kspls`).
@@ -429,11 +433,11 @@ impl Server
             //< from the old text is discarded with it.
         src: = parse_layout.mend(sent, uri.is_laid_out(), notes, scratch).code
         if uri.len == 0 || src.len == 0
-            return Option<|U8[]|>.none
+            return .none
         // A reopened document lands here too (the entry is kept; see `Doc_cache`).
         r.docs.put(uri, src)
         r.reset_current_state()
-        return Option<|U8[]|>.some(src)
+        return .some(src)
 
     fn handle_did_close(r: Self$@, params: json.Val)
         uri: = params.get("textDocument").get("uri").as_str()
@@ -471,7 +475,9 @@ priv fn completion_options($b: Json_builder): json.Val //<
 
 priv fn answer_unknown(id_val: json.Val, arena: Arena$@) //<
     //< A method this server does not handle: an error to a request, nothing to a notification
-    switch id_val case .null_val {} default
+    switch id_val
+    case .null_val {}
+    default
         lsp_msg.send_error_response(id_val, -32601, "Method not found", arena)
 
 fn run_lsp_worker(base_parser: kspeg.Target$@): Void
@@ -502,7 +508,7 @@ fn run_lsp_worker(base_parser: kspeg.Target$@): Void
         // nothing until it arrives, so without it the answer is held back and the worker seems
         // hung.
         doc: = json.parse(payload.slice(), msg_arena) catch
-            lsp_msg.send_error_response(json.Val.null_val, -32700, "Parse error", msg_arena)
+            lsp_msg.send_error_response(.null_val, -32700, "Parse error", msg_arena)
             lsp_msg.send_worker_done()
             continue
 

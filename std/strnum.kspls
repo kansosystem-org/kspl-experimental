@@ -75,9 +75,9 @@ priv const pow10_exact: F64[_] = ::{
 }
 
 impl U8[]
-    priv fn parse_int_core(r: U8[], start: Sz, out_is_neg: Bool$@): I64?Strnum_error
+    priv fn parse_int_core(r: U8[], start: Sz, out_is_neg: Bool$@): I64!Strnum_error
         if start < 0 || start >= r.len
-            throw Strnum_error.out_of_bounds
+            throw .out_of_bounds
         $i: = start
         if (r.ptr + i)$ == '-'
             out_is_neg$ = true
@@ -96,27 +96,27 @@ impl U8[]
         for i < r.len && (r.ptr + i).is_digit()
             d: U64 = (r.ptr + i)$ - '0'
             if mag > (limit - d) / 10U64
-                throw Strnum_error.out_of_bounds
+                throw .out_of_bounds
             mag = mag * 10U64 + d
             i += 1
         if i == digit_start
-            throw Strnum_error.invalid_format
+            throw .invalid_format
         // `0 - mag` in unsigned arithmetic gives I64's minimum even for 2^63.
         return I64::(U64::0 - mag) if out_is_neg$ else I64::mag
 
     pub fn parse_size( //< scans digits from a given position and stops at the first non-digit
         r: U8[],
         start: Sz = 0, //< the position to start scanning at
-    ): Sz?Strnum_error
+    ): Sz!Strnum_error
         $is_neg: = false
-        v: = r.parse_int_core(start, is_neg@)?
+        v: = r.parse_int_core(start, is_neg@)!
         if is_neg
-            throw Strnum_error.invalid_format
+            throw .invalid_format
         // Caution: **Refuse what `Sz` cannot hold.** Where it is 32 bits, a length of 2^32 + 5
         // would read as 5, so a body boundary (`http`'s Content-Length) would disagree with the
         // sender's.
         if I64::(Sz::v) != v
-            throw Strnum_error.out_of_bounds
+            throw .out_of_bounds
         return Sz::v
 
     // ==========================================
@@ -127,30 +127,30 @@ impl U8[]
     // require **the whole string to be a number**; surrounding whitespace is allowed.
     //     "12abc".parse_size()  -> 12   (a scan; it just stopped here)
     //     "12abc".to_i64()       -> a failure (the whole string is not a number)
-    pub fn to_i64(r: U8[]): I64?Strnum_error //< the whole string as an integer, or a failure
+    pub fn to_i64(r: U8[]): I64!Strnum_error //< the whole string as an integer, or a failure
         body: = r.trim_spaces()
         if body.len == 0
-            throw Strnum_error.invalid_format
+            throw .invalid_format
         $i: Sz = 1 if (body.ptr + 0)$ == '-' || (body.ptr + 0)$ == '+' else 0
         if i >= body.len
-            throw Strnum_error.invalid_format // only a sign
+            throw .invalid_format // only a sign
         for i < body.len
             if !(body.ptr + i).is_digit()
-                throw Strnum_error.invalid_format
+                throw .invalid_format
             i += 1
         // Caution: Do not apply the sign again here. The minimum's absolute value does not fit an
         // I64, so `-v` wraps. parse_int_core applies the sign as it accumulates.
         $is_neg: = false
-        return body.parse_int_core(0, is_neg@)?
+        return body.parse_int_core(0, is_neg@)!
 
-    pub fn to_f64(r: U8[]): F64?Strnum_error //< the whole string as a floating-point number
+    pub fn to_f64(r: U8[]): F64!Strnum_error //< the whole string as a floating-point number
         //<
         //< The shape is JSON's number (`-12.5e-3`). **It does not use `strtod`**: freestanding has
         //< no libc, and the same value on both targets matters more than strtod's `inf`, `nan` and
         //< hex floating point, which are **not accepted** here.
         body: = r.trim_spaces()
         if body.len == 0
-            throw Strnum_error.invalid_format
+            throw .invalid_format
         $i: Sz = 0
         neg: = (body.ptr + 0)$ == '-'
         if neg || (body.ptr + 0)$ == '+'
@@ -174,7 +174,7 @@ impl U8[]
             // broken JSON number only here, and std/json, which checks the syntax first, would
             // disagree.
             if seen == 0
-                throw Strnum_error.invalid_format
+                throw .invalid_format
             i += 1
             frac_start: = i
             for i < body.len && (body.ptr + i).is_digit()
@@ -185,9 +185,9 @@ impl U8[]
                 seen += 1
                 i += 1
             if i == frac_start
-                throw Strnum_error.invalid_format // `1.` is not a number
+                throw .invalid_format // `1.` is not a number
         if seen == 0
-            throw Strnum_error.invalid_format // only a sign and a decimal point
+            throw .invalid_format // only a sign and a decimal point
         if i < body.len && ((body.ptr + i)$ == 'e' || (body.ptr + i)$ == 'E')
             i += 1
             esign: = i < body.len && (body.ptr + i)$ == '-'
@@ -202,10 +202,10 @@ impl U8[]
                     ev = ev * 10I64 + I64::((body.ptr + i)$ - '0')
                 i += 1
             if i == exp_start
-                throw Strnum_error.invalid_format
+                throw .invalid_format
             exp10 += -ev if esign else ev
         if i != body.len
-            throw Strnum_error.invalid_format // there is junk at the end
+            throw .invalid_format // there is junk at the end
         // The fast path. If every digit was taken and both the significand and the power fit an F64
         // exactly, the result is rounded only once.
         fast_exact: =

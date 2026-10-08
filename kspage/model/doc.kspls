@@ -39,7 +39,7 @@ struct Block
     inlines: List<|Inline$@|>$@ //< the contents held directly
     children: List<|Block$@|>$@ //<
         //< The nested blocks. **They can exist alongside `inlines`.**
-    frame: Option<|Rect|> //<
+    frame: Rect? //<
         //< Where it is placed
         //<
         //< **Only the absolute-coordinate layout reads this** (flow and grid place a thing relative
@@ -52,13 +52,13 @@ struct Block
         //< **0 means "always shown"**; 1 or more shows once the presentation reaches that step.
         //< Caution: **Do not put it into the style** (as with `frame`, the step differs frame by
         //< frame).
-    column_widths: List<|Option<|F32|>|>$@ //<
+    column_widths: List<|F32?|>$@ //<
         //< The width of each column
         //<
         //< **Only the grid layout reads this.** **Not in the style**: there, resizing one table's
         //< column would resize every table of the same name. Empty, `none`, and fewer entries than
         //< columns all size to the contents.
-    row_heights: List<|Option<|F32|>|>$@ //<
+    row_heights: List<|F32?|>$@ //<
         //< The height of each row (set the same way as `column_widths`).
     // How many rows and columns one cell covers (a merge). **1 means "not merged"** (there is no
     // 0).
@@ -118,23 +118,24 @@ impl Block
         r.inlines.push(n)
         return n
 
-    priv fn specs(r: Self@, axis: Axis): List<|Option<|F32|>|>$@
-        switch axis case .column
+    priv fn specs(r: Self@, axis: Axis): List<|F32?|>$@
+        switch axis
+        case .column
             return r.column_widths
         case .row
             return r.row_heights
 
-    fn size_of(r: Self@, axis: Axis, i: Sz): Option<|F32|> //<
+    fn size_of(r: Self@, axis: Axis, i: Sz): F32? //<
         //< The setting for the i-th column's width (or row's height)
         //<
         //< **Where nothing is written it is "not set"** (there may be fewer or more settings than
         //< cells).
         list: = r.specs(axis)
         if i < 0 || i >= list.len
-            return Option<|F32|>.none
+            return .none
         return list.get(i)
 
-    fn set_size(r: Self$@, axis: Axis, i: Sz, v: Option<|F32|>) //<
+    fn set_size(r: Self$@, axis: Axis, i: Sz, v: F32?) //<
         //< Sets the i-th column's width (or row's height)
         //<
         //< Caution: **Fill the gaps with "not set".** Close them up and everything after shifts one
@@ -143,7 +144,7 @@ impl Block
             return
         list: = r.specs(axis)
         for list.len <= i
-            list.push(Option<|F32|>.none)
+            list.push(.none)
         list.set(i, v)
 
     fn open_line(r: Self$@, axis: Axis, at: Sz) //< adds one row (or column)
@@ -153,32 +154,32 @@ impl Block
         list: = r.specs(axis)
         if at < 0 || at > list.len
             return
-        list.insert(at, Option<|F32|>.none)
+        list.insert(at, .none)
 
-    fn close_line(r: Self$@, axis: Axis, at: Sz): Option<|F32|> //<
+    fn close_line(r: Self$@, axis: Axis, at: Sz): F32? //<
         //< Removes one row's (or column's) size setting and returns it
         //<
         //< **It is used to put one back.**
         list: = r.specs(axis)
         if at < 0 || at >= list.len
-            return Option<|F32|>.none
+            return .none
         got: = list.get(at)
         list.remove_at(at)
         return got
 
-    fn first_run(r: Self@): Option<|Inline$@|> //<
+    fn first_run(r: Self@): Inline$@? //<
         //< The first text in this block, in document order
         //<
         //< Caution: **Walk into the children too**, or a paragraph inside a cell is missed. A block
         //< may have no text (a picture), so it returns an `Option`.
         if r.inlines.len > 0
-            return Option<|Inline$@|>.some(r.inlines.get(0))
+            return .some(r.inlines.get(0))
         for $i: Sz = 0; i < r.children.len; i += 1
             if n: = r.children.get(i).first_run()
-                return Option<|Inline$@|>.some(n)
-        return Option<|Inline$@|>.none
+                return .some(n)
+        return .none
 
-    fn last_run(r: Self@): Option<|Inline$@|> //<
+    fn last_run(r: Self@): Inline$@? //<
         //< The last text in this block, in document order
         //<
         //< Caution: **Walk from the end**, children first: a child is laid out after its parent's
@@ -187,10 +188,10 @@ impl Block
         for i > 0
             i -= 1
             if n: = r.children.get(i).last_run()
-                return Option<|Inline$@|>.some(n)
+                return .some(n)
         if r.inlines.len > 0
-            return Option<|Inline$@|>.some(r.inlines.get(r.inlines.len - 1))
-        return Option<|Inline$@|>.none
+            return .some(r.inlines.get(r.inlines.len - 1))
+        return .none
 
     fn holds(r: Self@, n: Inline$@): Bool //< whether n lies inside this block
         //<
@@ -264,7 +265,8 @@ impl Block
         //< **A column count here is "the most children any row has"**, lower than `grid_columns`
         //< where a merge exists. **Adding and removing a column count the grid's columns**
         //< (`tiles_of`, through `slot_in`), the number that identifies the cursor's cell.
-        switch axis case .row
+        switch axis
+        case .row
             return r.children.len
         case .column
             $n: Sz = 0
@@ -289,7 +291,8 @@ impl Block
             style = r.children.get(0).style
             if r.children.get(0).children.len > 0
                 cell_style = r.children.get(0).children.get(0).style
-        switch axis case .row
+        switch axis
+        case .row
             row: = new_block(style, arena)
             for $c: Sz = 0; c < cells; c += 1
                 row.add_child(cell_style).add_text("")
@@ -311,7 +314,8 @@ impl Block
             //< how many columns each row's cell covered (**0 where the row ends short**, null to
             //< record nothing), so that putting it back returns each row the way it came.
         gone: = List<|Block$@|>.create(arena)
-        switch axis case .row
+        switch axis
+        case .row
             if at < 0 || at >= r.children.len
                 return gone
             gone.push(r.children.get(at))
@@ -341,7 +345,8 @@ impl Block
             //< cell widens that cell (Excel's behavior). **Where it is filled, a removal is being
             //< undone**, each row going back the way `detach_line` took it.
             //< **The table alone cannot tell that way** (`Line_op` in `write/record.kspls`).
-        switch axis case .row
+        switch axis
+        case .row
             if blocks.len > 0 && at >= 0 && at <= r.children.len
                 r.children.insert(at, blocks.get(0))
         case .column
@@ -437,10 +442,10 @@ fn new_block(style: U8[], arena: Arena$@): Block$@ //< makes one block (attached
         .name = "",
         .inlines = List<|Inline$@|>.create(arena),
         .children = List<|Block$@|>.create(arena),
-        .frame = Option<|Rect|>.none,
+        .frame = .none,
         .step = 0,
-        .column_widths = List<|Option<|F32|>|>.create(arena),
-        .row_heights = List<|Option<|F32|>|>.create(arena),
+        .column_widths = List<|F32?|>.create(arena),
+        .row_heights = List<|F32?|>.create(arena),
         .span_rows = 1,
         .span_cols = 1,
         .chart = "",
@@ -456,7 +461,7 @@ fn add_framed_child(r: Block$@, style: U8[], at: Rect): Block$@ //<
     //<
     //< The absolute-coordinate layout reads the frame.
     b: = r.add_child(style)
-    b.frame = Option<|Rect|>.some(at)
+    b.frame = .some(at)
     return b
 
 struct Neighbors //< what lies before and after an inline within the document
@@ -529,7 +534,8 @@ impl Doc
         return arena.create(d)
 
     fn chrome_of(r: Self$@, which: Chrome): Block$@ //< the band at the page's top or bottom
-        switch which case .header
+        switch which
+        case .header
             return r.header
         case .footer
             return r.footer
@@ -623,15 +629,15 @@ impl Doc
             out.blocks.push(at)
         return out
 
-    fn block_at(r: Self$@, p: Path): Option<|Block$@|> //< the block the path points at
+    fn block_at(r: Self$@, p: Path): Block$@? //< the block the path points at
         //<
         //< **Where the tree has changed it points somewhere else** (or nowhere).
         if p.blocks.len <= 0
-            return Option<|Block$@|>.none
+            return .none
         got: = r.walked(p, p.blocks.len)
         if !got.found
-            return Option<|Block$@|>.none
-        return Option<|Block$@|>.some(got.block)
+            return .none
+        return .some(got.block)
 
     fn slot_of(r: Self$@, p: Path): Owner //<
         //< The parent block of where the path points, and the index
@@ -643,15 +649,15 @@ impl Doc
             return no_owner()
         return r.walked(p, p.blocks.len - 1)
 
-    fn inline_at(r: Self$@, p: Path): Option<|Inline$@|> //< the text the path points at
+    fn inline_at(r: Self$@, p: Path): Inline$@? //< the text the path points at
         //<
         //< It has the same caveat as `block_at`.
         if p.run < 0
-            return Option<|Inline$@|>.none
+            return .none
         if b: = r.block_at(p)
             if p.run < b.inlines.len
-                return Option<|Inline$@|>.some(b.inlines.get(p.run))
-        return Option<|Inline$@|>.none
+                return .some(b.inlines.get(p.run))
+        return .none
 
     fn parent_of(r: Self$@, b: Block$@): Owner //<
         //< b's parent, and b's index among its children

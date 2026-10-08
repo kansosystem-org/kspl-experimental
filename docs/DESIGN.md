@@ -20,7 +20,7 @@ Start with the eight Development Principles. Each chapter after them applies the
 | :-- | :-- | :-- |
 | | [Development Principles](#development-principles) | The eight that come first, in every folder |
 | **The language**: what a program means | [1. Symbols and syntax](#1-symbols-and-syntax) | Why `@` and `$` are postfix, and why immutability is the default |
-| | [2. The type system](#2-the-type-system) | How far inference reaches, where conversion applies, the rules slices and generics share, and why the size type is signed |
+| | [2. The type system](#2-the-type-system) | How far inference reaches, where conversion applies, the rules slices and generics share, why the size type is signed, and how an optional value is written |
 | | [3. Traits and markers](#3-traits-and-markers) | How a contract is carried, and when to use an attribute rather than a trait |
 | | [4. Ownership and lifetime](#4-ownership-and-lifetime) | What is protected in a language with no borrow checker |
 | | [5. Concurrency](#5-concurrency) | What the type system does not guarantee, and what stands in its place |
@@ -50,7 +50,7 @@ KSPL reads like C written left to right. These are the forms the chapters use mo
 | `U8[4]` | A fixed-length array of four bytes | `uint8_t a[4]` |
 | `List<\|I32\|>` | A generic type given the type argument `I32` | C++'s `List<int>` |
 | `I64::x` | Convert `x` to `I64` (a cast) | `(int64_t)x` |
-| `T?E` | A result: a `T` on success, an error `E` on failure | — |
+| `T!E` | A result: a `T` on success, an error `E` on failure | — |
 | `Sz` | The signed size and index type | `ptrdiff_t` |
 | `fn m(r: Self@)` | A method; `r` is its *receiver*, the `a` in `a.m()` | `void m(const T *r)` |
 | `pub` / `priv` | Visible from every file / from this file only; with neither, from this package | — |
@@ -157,7 +157,7 @@ Each chapter below applies the principles to one subject, and [`ksplc/docs/DESIG
    **A check that ordinary code slips past is trusted more than it deserves**: a program passes it and still breaks, and its writer trusts it the more for having passed. Half-protecting is worse than not protecting at all.
 
    * **Before forbidding something, confirm that no ordinary way of writing slips past the check.** Where one does, the type system does not state the rule.
-     * Failure (`T?E`), the absence of a value (`Option`) and being uninitialized cannot be slipped past, so the type system states them.
+     * Failure (`T!E`), the absence of a value (`Option`) and being uninitialized cannot be slipped past, so the type system states them.
      * Lifetime (who frees what, and when) and sharing (which threads may touch a value) can be, through raw pointers and top-level variables, so the type system leaves them out (chapters 4 and 5).
    * **What the type system does not state, the type's name does.** `Rc` (one thread), `Arc` (shareable), `Mutex<|T|>`, `Atomic_sz` and `Move_only` put the choice in front of whoever calls: misuse is made visible instead of stopped.
    * **A check that sees only some forms says so.** The convention checks read literal text and miss some forms, so their rules state that a form escaping the check is still a violation. Otherwise green is read as "the rule is kept".
@@ -232,7 +232,7 @@ C's prefix `&` / `*` has three well-known problems, and postfix keeps none of th
 | **It needs an extra operator** | `(*p).x` is cumbersome, so C added `->` | `.` dereferences automatically, so `p.x` works on a value and a pointer alike |
 | **Declarations mislead the reader** | The `b` in `int *a, b;` is not a pointer, and `int (*fp)(void)` reads from the inside out. Declaring and taking an address are prefix, member access infix | Expressions and types run one way: `val@` has the type `I32@`, both postfix |
 
-**The grammar closes in one rule**: `.` `[]` `()` `@` `$` `?` all fit `expr_postfix = expr_primary ( … )*`, "a primary expression followed by any number of postfixes". Parentheses are needed only to apply a postfix to the result of a binary operation (`(ptr + i)$`), where the meaning needs them anyway.
+**The grammar closes in one rule**: `.` `[]` `()` `@` `$` `!` all fit `expr_postfix = expr_primary ( … )*`, "a primary expression followed by any number of postfixes". Parentheses are needed only to apply a postfix to the result of a binary operation (`(ptr + i)$`), where the meaning needs them anyway.
 
 ### 1.2 Why the symbols are `@` and `$`
 
@@ -246,7 +246,7 @@ A postfix operator appears directly after a complete expression. That is also wh
 | 2. **It has no compound assignment `X=`** | Dereferencing is most often an assignment target, `p$ = v`. With `^`, `p^ = v` (assigning through a dereference) and `p ^= v` (XOR assignment) would differ only by a space | `!` too, since there is `!=` |
 | 3. **It is not already taken** | `#` is attributes, `'` `"` `\` are characters and strings, `` ` `` sits badly with the surrounding tools, and `~` is prefix bitwise NOT | `#` `'` `"` `\` `` ` `` `~` |
 
-Exactly two ASCII symbols pass. `@`, read as "at" (an address), takes the address, and `$`, the inverse, dereferences. Error propagation's `?` meets the same conditions (there is no `?=`), so it too can be postfix.
+Exactly two ASCII symbols pass. `@`, read as "at" (an address), takes the address, and `$`, the inverse, dereferences. **Error propagation's `!` is postfix although condition 2 rules it out for dereferencing**: what it yields is a value, never an assignment target, so `f()! = v` means nothing. A postfix `!` is therefore read only where no `=` follows it, and `a!=b` still compares (9.2.2 below).
 
 The one operator deliberately made **prefix** is the type cast `T::v`. Its left side is a *type*, which no reader mistakes for an expression. What it still costs the parser, and why `::` does not go to paths instead, is 1.2.3 below.
 
@@ -364,12 +364,20 @@ The compiler calls a local's type annotation redundant only when the same line a
 | `count: Sz = items.len` | No | The annotation is the one place the type stands in the text |
 | `$i: Sz = 0` | No | Deleting it changes the type: the literal would be `I32` |
 | `wide: I64 = small` | No | The conversion follows the annotation |
+| `return Option<\|I32\|>.some(n)` in a function returning `I32?`, `kinds.push(Kind.small)` | Yes, the variant's type | The signature or the parameter already says it |
+| `k: = Kind.small`, `mode == Mode.on` | No | Nothing else says the type |
 
 * **Inferable is not redundant.** In `count: Sz = items.len` the annotation is the one place the type stands in the text. A model reads the text and cannot hover (§12.4 below). A person in KSPL's editor sees it only by hovering. So removing every inferable type would take it from the readers least able to recover it.
 * **Deleting it keeps the type.** An annotation doing work is not reported: a literal takes its type from it, a conversion follows it, and `::{ … }` or `.small` are typed by it. Nor is a cast that [I0301] calls unnecessary, since deleting both would leave the value's own type.
 * **The verdict holds for every type argument.** The check compares what is written, so a generic's line reads the same in each instantiation. A call is the exception: its type is its callee's, which an impl for one instance can change, so a call inside a generic is left alone.
 
-**What is given up**: leaving out every type that could be left out. `count: Sz = items.len` stays, and so does an annotation written from habit.
+**An enum's type at its variant goes where the place already gives it.** In the places where the language lets the name go (a declaration's written type, the place `=` assigns to, a call's parameter, a variant's payload, a struct literal's field or an array literal's element, the value a `catch` stands in for, the function's return and error types: "6.6.2 Where the type may be omitted" in [`SPEC-language.md`](SPEC-language.md)), `return Option<|I32|>.some(n)` writes the type twice, once in the signature and once at the value. [H0302] reports the second, so the tree reads `return .some(n)`, `kinds.push(.small)`, `held = .none` and `throw .lost`.
+
+* **The variant's name stays, and it says which value.** What goes is the enum's name, which the signature or the declaration still writes and the compiler checks the value against. At a `return` or a `throw` that is the function's own signature; at a call it is the parameter, which a reader looks up to learn what the argument means anyway; at `=` it is the variable's declaration, in a payload, a field or an element the variant's, the struct's or the array's, and after `catch` the call it stands in for.
+* **Only where the variant's type is the one the place expects.** Then `.small` is looked up in the same enum, and the program does not change. An `if … else` in such a place passes the type to both sides: the whole expression takes the place's type, and each side takes the whole's, so `return .some(n) if ok else .none` needs no name either. Where nothing fixes the type the name stays: a comparison, an `if … else` in no such place (`v: = .ok if c else .err`), and an argument a generic infers its type from, which the value decides.
+* **One fix per line.** In a declaration whose annotation the initializer repeats, the annotation is reported and the variant keeps its type: `k: = Kind.small` and `k: Kind = .small` say the same, and two hints on one line would pull against each other.
+
+**What is given up**: leaving out every type that could be left out. `count: Sz = items.len` stays, and so does an annotation written from habit. And a call's line no longer names an argument's enum: the reader of `kinds.push(.small)` finds `Kind` in the parameter.
 
 ### 2.2 Why implicit conversion stops at what loses nothing
 
@@ -394,17 +402,17 @@ C's answer, converting to the unsigned side, makes `-1 < 1u` false; that is the 
 
 #### 2.2.1 Conversion also applies inside a Result
 
-A function returning `T?E` (a `T`, or an error `E`) may `return` any value that converts to `T`.
+A function returning `T!E` (a `T`, or an error `E`) may `return` any value that converts to `T`.
 
-When the expected type is `T?E`, the value is converted to the success type `T`, then wrapped.
+When the expected type is `T!E`, the value is converted to the success type `T`, then wrapped.
 
 ```kspls
-priv fn f(): Shape?Err
+priv fn f(): Shape!Err
     p: = mem.alloc_as<|Sq|>()
     return p // the Sq$@ -> Shape upcast works inside a Result too
 ```
 
-**Do not wrap only on an exact match.** Then no value needing conversion could pass under a Result, and `fn f(): Trait?Err` could only `throw`: its type writable, its success unreturnable (writable but ineffective). Diagnostics speak of the success type too: `return "str";` gives `expected 'I32'`, not `expected 'I32?E'`.
+**Do not wrap only on an exact match.** Then no value needing conversion could pass under a Result, and `fn f(): Trait!Err` could only `throw`: its type writable, its success unreturnable (writable but ineffective). Diagnostics speak of the success type too: `return "str";` gives `expected 'I32'`, not `expected 'I32!E'`.
 
 ### 2.3 A slice is a std struct, and the rules for generics apply to it unchanged
 
@@ -651,6 +659,27 @@ The operators `Bool` takes, and the answers arithmetic would silently change, ar
 
 Caution: **A proposal to make it unsigned must answer all three points above.** Point 1 can be replaced by "check the order before taking the difference", but forgetting that check still silently yields an enormous length.
 
+### 2.12 `T?` is sugar for `Option<|T|>`
+
+A value that may be absent is written `T?`. It is `std/lang`'s `Option<|T|>`, folded in the parse as `T[]` is folded into `Slice<|T|>` (2.3.1).
+
+| Written | Desugared to |
+| :-- | :-- |
+| `I32?` | `Option<\|I32\|>` |
+| `U8[]?` | `Option<\|Slice<\|U8\|>\|>`: an optional slice |
+| `U8?[]` | `Slice<\|Option<\|U8\|>\|>`: a slice of optional bytes |
+| `I32?!E` | a result whose value may be absent |
+| `(I32!E)?` | an optional result |
+
+* **The marks fold from the left**, as `[]` does (`fold_sugar_postfixes` in `ksplc/parse/desugar_slice.kspls`), so the order written is the order read.
+* **`?` is the mark Swift, Kotlin and C# give an optional value**, so their readers read it on sight. A result is marked with `!` (9.2.2 below), so `?` names absence alone.
+* **Diagnostics show the sugar**, as they do for a slice; an optional result is written in brackets, `(T!E)?`.
+* **`T!E?` is refused.** The `!` takes the whole type after it, so the `?` would land on the error type, and an absent error is a failure with nothing to say. The note names both readings the writer may have meant.
+* **The long form stays writable, and lint [H0303] asks a type for the short one.** An expression that names the type has no other spelling (`Option<|I32|>.none`, where a `?` cannot stand), so refusing the long form would leave it with none; a type written `Option<|I32|>` is pointed at `I32?`, so the tree spells an optional one way (Principle 6).
+* **A `?` after a value marks nothing.** There is no early return of an absent value (Rust's `?` on an `Option`): `if v: = x` takes the value out (9.2.3 below), and keeping it the one way keeps what a `?` means to one thing.
+
+**What is given up**: "may be absent" (`I32?`) and "may fail" (`I32!E`) differ by one mark, so a signature is read to its last character.
+
 ---
 
 ## 3. Traits and markers
@@ -856,7 +885,7 @@ flowchart LR
 
 **`offset` is in the table** because adding up sizes from `kind` cannot give it. Padding intervenes (the `b` of `struct { a: U8; b: I64; }` is at 8, not 1), `#packed` stops the padding, and `#align(N)` overrides a struct's alignment. One place in ksplc interprets those and the alignment rules ("4.3.1 A layout is computed when it is first asked for" in [`../ksplc/docs/DESIGN.md`](../ksplc/docs/DESIGN.md)). A walker that added up sizes would be a second implementation of the layout rules, and a divergence would produce no diagnostic. Given `offset`, the walker needs only "where" and "how to convert", never "how many bytes".
 
-**An `Option<|T|>` field that is `.none` writes no key**, and an explicit `null` is refused as a difference in kind. serde, Swift's `Codable` and Jackson read a missing key and a `null` as one state, and a user who needs the difference reaches for a double wrapper. Here the two are already different values, and `null` is not made a second spelling of "missing" (chapter 9).
+**A `T?` field that is `.none` writes no key**, and an explicit `null` is refused as a difference in kind. serde, Swift's `Codable` and Jackson read a missing key and a `null` as one state, and a user who needs the difference reaches for a double wrapper. Here the two are already different values, and `null` is not made a second spelling of "missing" (chapter 9).
 
 **A container of containers, and an option holding a container or an option, are not covered.** A form that can be written but not walked would be "writable but ineffective" (Principle 5). What blocks them is in "Known holes, and what would fill them" in [`../std/docs/DESIGN.md`](../std/docs/DESIGN.md).
 
@@ -998,9 +1027,9 @@ Caution: **Do not reject a call's result either, and do not widen the check to "
 
 ### 4.4 Why an early exit before a `defer` is warned about, and how narrowly
 
-If a block can be left (by `?`, `return`, `throw`, `break` or `continue`) after a value is acquired but before the `defer` that frees it, the compiler warns: on that path the value leaks.
+If a block can be left (by `!`, `return`, `throw`, `break` or `continue`) after a value is acquired but before the `defer` that frees it, the compiler warns: on that path the value leaks.
 
-**A `?`, `return`, `throw`, `break` or `continue` between an `Owned` value's binding and the `defer` that frees it in the same block is [W0109].** That path leaves before the `defer` is registered, so what was acquired leaks. The language does not stop it, since a `defer` is its own statement (§9.1).
+**A `!`, `return`, `throw`, `break` or `continue` between an `Owned` value's binding and the `defer` that frees it in the same block is [W0109].** That path leaves before the `defer` is registered, so what was acquired leaks. The language does not stop it, since a `defer` is its own statement (§9.1).
 
 * **It asks only where a later `defer` in the same block frees the value.** A value freed by hand, passed on or kept has another shape, and calling it a leak would be a false report (the exemptions are under [W0109] in `ksplc/docs/SPEC-tools.md`).
 * **A shape rather than every path.** Checkers that follow a resource along every path pay in false reports. A rule read off the code as written, like Error Prone's `MustBeClosed`, does not. The gap before a `defer` is such a rule.
@@ -1229,7 +1258,7 @@ flowchart LR
 * **A shared copy ties every artifact to one compiler and one std.** Each must leave its runtime out, one artifact must supply it, and a library built by another version must be stopped at the link, by a version in every symbol name. Folding the duplicates needs weak symbols, which pick one definition without a word wherever the names agree. Every guard is a mark that a toolchain may honour or not, so each object format needs its own proof.
 * **A private copy needs none of that.** Nothing two libraries hold can meet, so libraries from different vendors and different compiler versions sit in one program. The person linking them names no runtime and learns no rule.
 * **`static` hides a symbol on every toolchain, a static archive included.** That holds because the compiler writes a library as one translation unit. A compiler that writes a library as many objects can hide symbols only in a shared library (a version script, a definition file), and two of its static archives collide on their copies of the standard library.
-* **C's interface is the one every caller already links.** A C program includes a header; a KSPL program imports an `extern "C"` block. Both are written by the compilation that writes the library (`--emit-interface`), so neither drifts from it.
+* **C's interface is the one every caller already links.** A C program includes a header; a KSPL program imports an `extern "C"` block. Both are written by the compilation that writes the library (`--library=`), so neither drifts from it.
 
 **What is given up**:
 
@@ -1416,7 +1445,8 @@ These spellings are not part of KSPL. The right column says what to write instea
 | :-- | :-- |
 | `Fstring` (a separate prefixed string form for formatting, like Python's `f"…"`; an `expr_primary` alternative) | `Literal` (an ordinary string literal, which formats values in place with `\{x\}`) |
 | Block comments `/* */` | Line comments `//` |
-| The abbreviated error type `T?` | `T?I32` |
+| The abbreviated error type `T!` | `T!I32` |
+| `?` for a result (`T?E`, `f()?`) | `!` (`T!E`, `f()!`); 9.2.2 below gives the grounds |
 | Escapes outside the ten (`\b` `\x41` `\101`) | The character itself, with no backslash (`\\` for a backslash, `\uXXXX` for a code point) |
 | A built-in `Char` type | `U8`, printed as a character with the format specifier `\{b:c\}` |
 | Multi-byte character literals (`'あ'` / `'ab'`) | A string (`U8[]`); a character literal holds exactly one byte |
@@ -1543,7 +1573,13 @@ Every loop over a sequence is written `for x in xs`. The type of `xs` decides ho
 
 #### 9.2.2 Failure
 
-**There is one way to convey failure, `T?E`** (a result that is either a `T` or an error `E`). `std/io.kspls` uses `?Io_error` and `std/fs.kspls` uses `?Fs_error`, with no `Option` or `Bool` mixed into the same file for failure. `exists` / `is_dir` stay `Bool`: they answer a question, and "does not exist" is a normal answer, not a failure.
+**There is one way to convey failure, `T!E`** (a result that is either a `T` or an error `E`). `std/io.kspls` uses `!Io_error` and `std/fs.kspls` uses `!Fs_error`, with no `Option` or `Bool` mixed into the same file for failure. `exists` / `is_dir` stay `Bool`: they answer a question, and "does not exist" is a normal answer, not a failure.
+
+**A result is marked with `!`, in its type (`T!E`) and where its failure is passed on (`f()!`), and `?` marks nothing.** `!` reads as what it is, a place where the function may stop and hand a failure back, and `?` means absence, as Swift, Kotlin and C# spell an optional value (`T?`, 2.12 above).
+
+* **Two rules make it parse without ambiguity.** A postfix `!` is read only where no `=` follows it, so `a!=b` compares and `f()! == x` needs its space. A `!` at a line's end ends the statement, and one at a line's start continues the line before (a wrapped `T!E`); a statement never begins with a prefix `!`, whose value would be thrown away.
+* **The old spelling is refused, naming the new one**: a syntax error on a `?` carries a note writing `T!E` and `f()!`.
+* **What is given up**: a reader of Swift, Kotlin, C# or TypeScript reads `x!` as "assume it is present", a crash or an unchecked promise, where KSPL's `f()!` quietly passes a failure up. And Rust's `?`, which means exactly what KSPL's `!` does, is no longer shared.
 
 #### 9.2.3 Unwrapping an `Option`
 
@@ -1596,12 +1632,12 @@ Some pairs look like two ways of doing one thing, but each covers cases the othe
 
 **Nor is a `const` inside a function.** It looks like an unmarked immutable binding (`n: Sz = 4;`). But only a `const`, fixed at compile time and holding no memory, can size an array (`I32$[n]`; the unmarked one is refused with `array size must be a positive constant expression`).
 
-**A raw pointer's `null` remains in three places only.** Elsewhere, `Option<|T|>` says whether a value is present, and lint [H0701] finds a raw pointer's `null` being returned. `T?E` is not the answer here: it says "it failed, and this is why", not "there is no value" (the "one way to convey failure" above).
+**A raw pointer's `null` remains in three places only.** Elsewhere, `T?` says whether a value is present, and lint [H0701] finds a raw pointer's `null` being returned. `T!E` is not the answer here: it says "it failed, and this is why", not "there is no value" (the "one way to convey failure" above).
 
 | Where it remains | Reason |
 | :-- | :-- |
 | Under `std/` | Foundational primitives: moving to `Option` would require rewriting every caller |
-| Functions carrying `#export` | The FFI boundary with C (where C code calls KSPL): `Option<\|T\|>` is not ABI-compatible with C's null convention, that is, its memory layout differs from what C expects |
+| Functions carrying `#export` | The FFI boundary with C (where C code calls KSPL): `T?` is not ABI-compatible with C's null convention, that is, its memory layout differs from what C expects |
 | Tree walking in `ksplc/base` (`find_child` / `unwrap_top_level` / generating notation) | The same reason, suppressed with its grounds in the file-opening `##lint(H0701 = off)` |
 
 **No unmigrated case can exist outside these three**: the repository requires zero diagnostics even at Hint level (`make lint`).
@@ -1765,7 +1801,7 @@ By the heading's column alone, the line at 4 would join the block. A person sees
 
 Note: **Japanese input most easily slips in the ideographic space** (U+3000, a full-width space). The syntax error it causes says nothing about the cause, since on screen the line looks correctly indented. So `odd_indent_name` in `ksplc/parse/syntax_msg.kspls` adds a Note naming the character, as Python names it in `invalid non-printable character U+00A0`. It is a Note rather than a lint because the syntax error comes first, and the program never reaches sema.
 
-**A lone `return`, `throw` or `fallback`, and a `?` at a line's end, end the statement.** A bare `return` returns nothing, and `f()?` passes an error on to the caller, so neither waits for more. A `?` at the start of a line continues one (a wrapped `T?E` type). That is the one place where a line's end and its start are read differently.
+**A lone `return`, `throw` or `fallback`, and a `!` at a line's end, end the statement.** A bare `return` returns nothing, and `f()!` passes an error on to the caller, so neither waits for more. A `!` at the start of a line continues one (a wrapped `T!E` type). That is the one place where a line's end and its start are read differently.
 
 **A value that splits where no mark continues it goes in parentheses.** Two kinds of value are written with words that also stand alone:
 
@@ -1813,9 +1849,25 @@ Converting between the notations never adds or removes a line, so line numbers i
 
 **Columns shift only at the end of a line** (back by what was inserted), so the columns before an end-of-line comment do not change. **The `;` a one-line block leaves out stands in the space before its `}`**, so it moves no column either. With no space there it is inserted, and the rest of that line reads one column late until `ksplc fmt` puts the space in.
 
-**Do not make a block under `switch`.** `switch` carries no braces (its `case` and `default` do). So the first `case` goes on the same line as `switch`, and each later one at the `switch`'s column, which is the column of the brace notation's `} case … {`.
+**Do not make a block under `switch`.** `switch` carries no braces (its `case` and `default` do). So every `case` and `default` stands at the `switch`'s column: the first on the line below the `switch`, and each later one on the line after the arm before it, where the brace notation's `} case … {` puts it or below an empty arm's `{}`.
 
-**Do not align with Python.** Python's `match` carries a block of its own, so one level of indent is required. KSPL's `switch` does not, so a level there would create a block where no brace exists. That departs from "only blocks and terminators disappear" (§10.1), and makes the reader carry a special case for `switch`.
+**The first arm goes below the `switch`, not on its line.** On the `switch`'s line it would be the one arm with another shape:
+
+* **The arms line up.** Every `case` starts a line at one column, so a reader scans them as a list, and a search for `^ *case` finds each.
+* **A change to one arm touches that arm's lines alone.** Adding an arm in front, removing the first, or reordering them leaves the `switch`'s line as it is, so a diff shows only the arms that changed.
+* **A long subject and a long first pattern do not share a line**, so neither is broken to fit the width.
+
+**So the `switch`'s line goes on into a `case` at its own column.** That is the continuation a later arm already has after its `}`, so the reader adds no new kind of rule: the `switch`'s line simply takes no terminator (`arms_follow` in [`../ksplc/parse/layout.kspls`](../ksplc/parse/layout.kspls)). The line it goes on into is the next with code, as for every continuation, so a comment written over the first arm stays there.
+
+* **A `case` indented under the `switch` is refused, not read as the first arm** ("Do not align with Python" below). The error's Note says where the arms go, for whoever writes the indented shape of Python's `match` or the braced block of other languages' `switch` (`../ksplc/tests/negative/switch_arms_in_a_block.kspl` and `../ksplc/tests/negative/laid_switch_case_indented.kspls`).
+* **A shallower `case` is not taken in.** It belongs to the level outside, by the same columns that close any level (§10.2).
+* **Only a `case` continues it.** The grammar's first arm is always a `case`, so a `default` standing first is a compile error on either line.
+
+**The one-line form is still read, and `ksplc fmt` writes the arm below.** Where the first `case` stands is layout, like a break inside brackets: the program is the same either way, and the formatter gives it one spelling.
+
+**An empty arm (`case .a {}`) keeps a line of its own too**, and so does the arm after it. Joined (`case .a {} default`), the next arm would be the one a search for `^ *case` misses, and an edit to either arm would touch the other's line. The joined form is still read, as the one-line first arm is.
+
+**Do not align with Python.** Python's `match` carries a block of its own, so one level of indent is required. KSPL's `switch` does not, so a level there would create a block where no brace exists. That departs from "only blocks and terminators disappear" (§10.1), and the arms of one `switch` would stand at two columns, the first below it and the rest where each `}` closes.
 
 ### 10.5 Only one stage rewrites, and only before the parser
 
@@ -2031,13 +2083,13 @@ In each case nobody is told (Principle 5). So `///` is a compiler warning (`[W02
 
 * **`//<` is an ordinary line comment**, so editors, `grep` and every existing tool keep working on it.
 * **`fmt` keeps the shape.** A signature broken one parameter per line stays broken, the trailing comma deciding it (black's magic trailing comma). Decided on width alone, the shape is lost on the next run, which is what a marker behind each parameter meets in practice.
-* **One reader serves four consumers.** The record (`ksplc --emit-surface`'s fourth column), a library's interface (`--emit-interface`), the hover and the completion list all read `ksplc/base/ast_doc.kspls` (Principle 6). The summary crosses the artefact boundary, so a caller holding only a library's header still gets it in its editor.
+* **One reader serves four consumers.** The record (`ksplc --emit-surface`'s fourth column), a library's interface (`--library=`), the hover and the completion list all read `ksplc/base/ast_doc.kspls` (Principle 6). The summary crosses the artefact boundary, so a caller holding only a library's header still gets it in its editor.
 
 ```mermaid
 flowchart LR
     S["the doc comments<br/>in the source"] --> R["one reader<br/>ksplc/base/ast_doc.kspls"]
     R --> A["the record<br/>(--emit-surface)"]
-    R --> B["a library's interface<br/>(--emit-interface)"]
+    R --> B["a library's interface<br/>(--library=)"]
     R --> C[the editor's hover]
     R --> D[the completion list]
 ```
@@ -2323,9 +2375,9 @@ Each package's public API is listed in a text file in the repository (`SURFACE.t
 | Rust's `cargo-public-api` | Keeps the record in the repository for review; its diff carries auto-derives and blanket impls | The record in the repository. Derived items stay out from the start: what counts as API is the declarations actually written, with no instantiated body |
 | Swift | The toolchain itself emits the record, since a separate analyzer would drift with nobody noticing; it needs the whole SDK | The toolchain emits it, and one entry-point file suffices |
 
-**Do not merge the record with a library's interface** (`--emit-interface`). It looks like Principle 6, but the purposes differ:
+**Do not merge the record with a library's interface** (`--library=`). It looks like Principle 6, but the purposes differ:
 
-| | The interface (`--emit-interface`) | The record (`--emit-surface`) |
+| | The interface (`--library=`) | The record (`--emit-surface`) |
 | :-- | :-- | :-- |
 | What it holds | Only the `#export` functions, spelled in C | Every `pub` declaration as written |
 | Which build | One build | Every `#cfg` branch included |
@@ -2749,7 +2801,7 @@ Built by the POSIX tools instead, `ksplc.exe` would depend on `msys-2.0.dll`. `M
 
 | Property | What it gives a model |
 | :-- | :-- |
-| **A function can be judged from its text.** Nothing is allocated implicitly, and no failure is missing from a type (`T?E`, `Option<\|T\|>`) | A model reviewing or generating code needs no knowledge of hidden run-time behaviour |
+| **A function can be judged from its text.** Nothing is allocated implicitly, and no failure is missing from a type (`T!E`, `T?`) | A model reviewing or generating code needs no knowledge of hidden run-time behaviour |
 | **Generated code converges on one spelling.** One means per purpose (Principle 6) and one formatter (`ksplc fmt`) | No equivalent spellings to drift between |
 | **The verdict is mechanical.** Not one warning is let stand (Principle 2). A warning, an information or a hint carries a code that `ksplc explain <code>` expands on request, and an error says in its own message what to write instead | A generated completion is judged by whether `ksplc` accepts it, not by opinion |
 | **An agent reads the verdict as fields.** `--diagnostic-format=json` writes each diagnostic as one JSON object per line, with its code, place and message apart ("2.11 Diagnostics a program reads" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)) | No reworded message breaks the reader |

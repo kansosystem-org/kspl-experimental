@@ -62,43 +62,43 @@ fn empty(): Policy //< a policy with nothing read into it yet
 priv fn dim(t: Tensor<|F32|>, i: Sz): Sz
     return 0 if i >= t.shape.len else t.shape[i]
 
-fn load(blob: U8[], arena: Arena$@): Policy?Pilot_error //<
+fn load(blob: U8[], arena: Arena$@): Policy!Pilot_error //<
     //< Reads the one file given and returns a policy ready to decide with
     //<
     //< blob belongs to the caller.
     //< Caution: **Keep it alive as long as the returned Policy is used** (the weights point
     //< straight into blob, zero copy; see get_tensor in ksai/safetensors).
     $sf: = st.Safetensors.load_from_bytes(blob, arena) catch
-        throw Pilot_error.bad_blob
+        throw .bad_blob
     meta: = sf.metadata.get("__metadata__")
     if !meta.get("kspl_pilot").as_str().equals(format_version)
-        throw Pilot_error.bad_version
+        throw .bad_version
     far_mm: = meta.get("far_mm").as_str().to_i64() catch
-        throw Pilot_error.bad_meta
+        throw .bad_meta
     if far_mm <= 0I64
-        throw Pilot_error.bad_meta
+        throw .bad_meta
 
     w1: = sf.get_tensor<|F32|>("fc1.weight", arena) catch
-        throw Pilot_error.missing
+        throw .missing
     b1: = sf.get_tensor<|F32|>("fc1.bias", arena) catch
-        throw Pilot_error.missing
+        throw .missing
     w2: = sf.get_tensor<|F32|>("fc2.weight", arena) catch
-        throw Pilot_error.missing
+        throw .missing
     b2: = sf.get_tensor<|F32|>("fc2.bias", arena) catch
-        throw Pilot_error.missing
+        throw .missing
     man: = sf.get_tensor<|F32|>("maneuvers", arena) catch
-        throw Pilot_error.missing
+        throw .missing
 
     hidden: = dim(w1, 1)
     actions: = dim(w2, 1)
     // Caution: Check every shape before building. Miss even one and a later matmul reads outside
     // blob.
     if dim(w1, 0) != feature_count || hidden == 0 || actions == 0
-        throw Pilot_error.bad_shape
+        throw .bad_shape
     if dim(b1, 0) != hidden || dim(w2, 0) != hidden || dim(b2, 0) != actions
-        throw Pilot_error.bad_shape
+        throw .bad_shape
     if dim(man, 0) != actions || dim(man, 1) != drive_fields
-        throw Pilot_error.bad_shape
+        throw .bad_shape
 
     // The same nn.Mlp as the producer: one forward pass, not a copy of the formula.
     $mlp: = nn.Mlp<|F32|>.new(feature_count, hidden, actions, arena)

@@ -33,7 +33,8 @@ enum Named_value //< what a name written where a type goes names instead
 
 impl Named_value
     fn word(r: Self$@): U8[] //< the noun the diagnostic uses
-        switch r$ case .function
+        switch r$
+        case .function
             return "a function"
         case .variable
             return "a variable"
@@ -89,7 +90,7 @@ priv fn spelled_before_args(parts: Path_parts): U8[] //<
         b.s(part.text)
     return base_core.pools.name_text(b.slice())
 
-fn written_name_of(type_node: Ast_node$@): Option<|Ast_node$@|> //<
+fn written_name_of(type_node: Ast_node$@): Ast_node$@? //<
     //< The name a type expression is written as, where it is no more than a name
     //<
     //< A postfix (`U8[4]`, `Foo@`) or a function type makes it more.
@@ -98,7 +99,7 @@ fn written_name_of(type_node: Ast_node$@): Option<|Ast_node$@|> //<
         return .none
     return written_clause_of(type_node)
 
-fn written_clause_of(type_node: Ast_node$@): Option<|Ast_node$@|> //<
+fn written_clause_of(type_node: Ast_node$@): Ast_node$@? //<
     //< The name a type expression is built on (`ds.List<|I64|>` of `ds.List<|I64|>@`)
     //<
     //< A bare path, an identifier and an atom holding either are a name; a function type or a
@@ -215,7 +216,7 @@ priv fn spelled_name(path: Ast_node$@): U8[] //< a path's segments joined by `.`
         is_first = false
     return base_core.pools.name_text(b.slice())
 
-fn name_path_of(node: Ast_node$@): Option<|Ast_node$@|> //<
+fn name_path_of(node: Ast_node$@): Ast_node$@? //<
     //< The path a value's name is written as, or none where node writes no name
     //<
     //< A `.` chain of names not yet inferred (`m.N` in an array's size, the target of an
@@ -285,7 +286,7 @@ priv fn template_named(c: Sema_ctx$@, name: U8[]): U8[] //<
         return imported
     return ""
 
-priv fn value_at(c: Sema_ctx$@, name: U8[]): Option<|Named_value|> //<
+priv fn value_at(c: Sema_ctx$@, name: U8[]): Named_value? //<
     //< What a name, short or an FQN, names if it is a function's or a variable's
     //<
     //< **A value's name is not a type** (`x: twice`, `sizeof(twice)`). Let through, it reaches C as
@@ -297,7 +298,8 @@ priv fn value_at(c: Sema_ctx$@, name: U8[]): Option<|Named_value|> //<
         return .none
     if sym.kind.names_function()
         return .some(.function)
-    switch sym.kind case .variable
+    switch sym.kind
+    case .variable
         return .some(.variable)
     default
         return .none
@@ -347,7 +349,8 @@ impl Sema_ctx
         // the type's name, it is one of whatever the name before it names; after the type
         // arguments, one of the type.
         if w.args != null
-            switch kind case .found
+            switch kind
+            case .found
                 return .names_value(.type_member)
             default
                 return kind
@@ -355,7 +358,8 @@ impl Sema_ctx
             if r.file_has_type(w.alias_file, w.name)
                 return .names_value(.type_member)
             return .not_found
-        switch kind case .found
+        switch kind
+        case .found
             return .names_value(.type_member)
         case .names_value(_w)
             return .names_value(.value_member)
@@ -412,18 +416,18 @@ impl Sema_ctx
             return .elsewhere
         return .not_found
 
-    fn alias_reaching(r: Self$@, name: U8[]): Option<|Alias_reach|> //<
+    fn alias_reaching(r: Self$@, name: U8[]): Alias_reach? //<
         //< The import alias of this file whose file declares name where this file can see it
         //<
         //< It answers for a name written without the alias that reaches it (`twice` after `import
         //< "p" as _m`). An import nobody wrote (std/lang's) is not asked: its names come in bare.
         return r.alias_where(name, "")
 
-    fn alias_naming(r: Self$@, path: U8[]): Option<|Alias_reach|> //<
+    fn alias_naming(r: Self$@, path: U8[]): Alias_reach? //<
         //< The import alias of this file that names the file at path, if one does
         return r.alias_where("", path)
 
-    priv fn alias_where(r: Self$@, name: U8[], path: U8[]): Option<|Alias_reach|> //<
+    priv fn alias_where(r: Self$@, name: U8[], path: U8[]): Alias_reach? //<
         //< The first written import alias of this file naming path, or declaring name where seen
         prefix: = base_core.arena.text().s(r.file_name).s("::").take()
         for i in Range.asc(r.aliases.files.cap)
@@ -513,7 +517,7 @@ impl Sema_ctx
         return r.generics.templates.get(w.fqn) catch null
 
     fn instance_written(r: Self$@, w: Written_type, args: I32[], site: Ast_node$@):
-        Str_builder?Sema_error //<
+        Str_builder!Sema_error //<
             //< The instance of the generic type w names, binding args, made where site writes it
             //<
             //< A violated constraint is reported at site, the user's line, not the template's
@@ -532,7 +536,7 @@ impl Sema_ctx
         $w: = Written_name::{ .parts = named_fn(path), .spelled = spelled_name(path), .fqn = "",
             .head_file = "", .sym = null, .template = null,
             .fn_tmpl = sema_decl_mono.Fn_instance::{ .template = "", .owner = 0,
-            .args = I32[]::{} }, .owner_id = 0, .reach = Name_reach.nowhere }
+            .args = I32[]::{} }, .owner_id = 0, .reach = .nowhere }
         w.fqn = w.spelled
         if path == null
             return w
@@ -669,7 +673,7 @@ impl Sema_ctx
         if w.sym != null || w.template != null
             w.reach = .alias
 
-    priv fn member_through_type(r: Self$@, path: Ast_node$@): Option<|Sema_symbol$@|> //<
+    priv fn member_through_type(r: Self$@, path: Ast_node$@): Sema_symbol$@? //<
         //< The member a path names through the type it begins with
         //<
         //< `Box<|I32|>.keep`, `Self.get`, `Ints.get` after `typedef Ints = Box<|I32|>`. The type is
@@ -725,7 +729,7 @@ impl Sema_ctx
             return node.type_id
         return sema_decl_resolve.own_fn_type_id(decl, r) catch node.type_id
 
-    fn instance_method(r: Self$@, owner_id: I32, name: U8[]): Option<|Sema_symbol$@|> //<
+    fn instance_method(r: Self$@, owner_id: I32, name: U8[]): Sema_symbol$@? //<
         //< The method an instance of a generic type holds under name, from its own table
         //<
         //< **A method reached through an instance** (`Box<|I64|>.mk`, `Ints.get` after `typedef
@@ -735,6 +739,6 @@ impl Sema_ctx
         //< arguments in order: a method of `impl Box<|I64|>` declares none, and a renaming import
         //< or a typedef spells a name no template has.
         if !r.env.instance_of(r.env.receiver_base_id(owner_id)).is_some()
-            return Option<|Sema_symbol$@|>.none
+            return .none
         return r
             .resolve_type_method_fqn(join_dotted_name(r.env.base_type_name(owner_id), name))

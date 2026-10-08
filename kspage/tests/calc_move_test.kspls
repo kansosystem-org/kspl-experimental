@@ -2,7 +2,7 @@ import "kspage/expr/calc"
 import "kspage/lay/caret"
 import "kspage/lay/flow"
 import "kspage/lay/page"
-import "kspage/model/doc" { Axis, Block, Doc }
+import "kspage/model/doc" { Block, Doc }
 import "kspage/model/fixed_font" as fixed
 import "kspage/model/paint"
 import "kspage/model/style" + { Sheet }
@@ -56,7 +56,7 @@ fn test_inserting_a_row_moves_the_references_below_it() //<
 
     ed: = edit.new_editor(d)
     caret_at(ed, t, 0, 0)
-    assert(ed.add_line(place(d, sheet, arena), Axis.row), "the row could be added")
+    assert(ed.add_line(place(d, sheet, arena), .row), "the row could be added")
     assert(t.children.len == 4, "the rows grow by one")
     assert(cell_source(t, 0, 1).equals("=A1:A4.sum()"), "the range swallows the row added")
     assert(cell_source(t, 0, 2).equals("=A4+1"), "a formula pointing at a cell that was below slips")
@@ -85,7 +85,7 @@ fn test_dropping_a_row_breaks_only_what_pointed_at_it() //<
     calc.recalc(d, sheet)
     ed: = edit.new_editor(d)
     caret_at(ed, t, 1, 0)
-    assert(ed.drop_line(place(d, sheet, arena), Axis.row), "the row could be deleted")
+    assert(ed.drop_line(place(d, sheet, arena), .row), "the row could be deleted")
     assert(t.children.len == 2, "the rows drop by one")
     assert(cell_source(t, 0, 1).equals("=A1:A2.sum()"), "the range shrinks by the row that went")
     assert(cell_source(t, 0, 2).equals("=#REF!*2"), "the row that went can no longer be pointed at")
@@ -120,7 +120,7 @@ fn test_inserting_a_column_moves_the_references_to_its_right() //< a column move
 
     ed: = edit.new_editor(d)
     caret_at(ed, t, 0, 0)
-    assert(ed.add_line(place(d, sheet, arena), Axis.column), "the column could be added")
+    assert(ed.add_line(place(d, sheet, arena), .column), "the column could be added")
     assert(cell_source(t, 1, 0).equals("=A1:C1.sum()"),
         "the column range swallows the column added too")
     assert(cell_source(t, 1, 2).equals("=C1*2"),
@@ -156,7 +156,7 @@ fn test_references_from_elsewhere_move_too() //<
     calc.recalc(d, sheet)
     ed: = edit.new_editor(d)
     caret_at(ed, src, 0, 0)
-    assert(ed.add_line(place(d, sheet, arena), Axis.row), "the row could be added")
+    assert(ed.add_line(place(d, sheet, arena), .row), "the row could be added")
     assert(cell_source(other, 0, 0).equals("=detail!A3"), "a reference from another table slips")
     bare: = cell_source(other, 0, 1)
     assert(bare.equals("=A1"), "a reference with no name stays on its own table")
@@ -189,7 +189,7 @@ fn test_the_row_and_its_formulas_undo_together() //<
     calc.recalc(d, sheet)
     ed: = edit.new_editor(d)
     caret_at(ed, t, 0, 0)
-    assert(ed.add_line(place(d, sheet, arena), Axis.row), "the row could be added")
+    assert(ed.add_line(place(d, sheet, arena), .row), "the row could be added")
     assert(cell_source(t, 0, 1).equals("=A3*2"), "the formula slipped")
 
     assert(ed.undo(), "it can be put back in one")
@@ -230,7 +230,7 @@ fn test_a_number_format_dresses_the_answer()
 
     $money: style.Number_spec = style.plain_number()
     money.grouped = true
-    money.places = Option<|Sz|>.some(0)
+    money.places = .some(0)
     money.prefix = "$"
     money.suffix = " USD"
     // Round before grouping; take the integer part first and 1,234 and .5 would fall apart.
@@ -239,12 +239,12 @@ fn test_a_number_format_dresses_the_answer()
 
     $pct: style.Number_spec = style.plain_number()
     pct.percent = true
-    pct.places = Option<|Sz|>.some(1)
+    pct.places = .some(1)
     pct.suffix = "%"
     assert(shown_with(pct, "=A1/10000", arena).equals("12.3%"), "a per cent shows a hundredfold")
 
     $two: style.Number_spec = style.plain_number()
-    two.places = Option<|Sz|>.some(2)
+    two.places = .some(2)
     // Drop the leading 0 after the point and 1.05 would become "1.5".
     assert(shown_with(two, "=1.05", arena).equals("1.05"), "the 0 above the decimal is written too")
     assert(shown_with(two, "=1", arena).equals("1.00"), "set the places and it is filled with 0")
@@ -322,7 +322,7 @@ fn test_an_absolute_reference_is_read_and_written_back() //<
     // Add a row and the number moves, `$` or not (because the cell itself moves).
     ed: = edit.new_editor(d)
     caret_at(ed, t, 0, 0)
-    assert(ed.add_line(place(d, sheet, arena), Axis.row), "the row could be added")
+    assert(ed.add_line(place(d, sheet, arena), .row), "the row could be added")
     assert(cell_source(t, 0, 1).equals("=$A$3*2"), "the mark is left and the number moves")
     verdict.pass("a `$` goes round as a text, and moves when rows are added or taken away.")
 
@@ -347,7 +347,7 @@ fn test_filling_down_shifts_the_relative_parts() //<
     sheet: = base.grid_sheet(arena)
     ed: = edit.new_editor(d)
     caret_at(ed, t, 0, 1)
-    assert(ed.fill_along(place(d, sheet, arena), Axis.row), "it copied downwards")
+    assert(ed.fill_along(place(d, sheet, arena), .row), "it copied downwards")
     assert(cell_source(t, 1, 1).equals("=A2*$A$1"), "the second row points one below")
     assert(cell_source(t, 2, 1).equals("=A3*$A$1"), "the third row slips in the same shape")
 
@@ -380,7 +380,7 @@ fn test_filling_right_shifts_the_columns() //< it copies to the right by the sam
     sheet: = base.grid_sheet(arena)
     ed: = edit.new_editor(d)
     caret_at(ed, t, 1, 0)
-    assert(ed.fill_along(place(d, sheet, arena), Axis.column), "it copied rightwards")
+    assert(ed.fill_along(place(d, sheet, arena), .column), "it copied rightwards")
     assert(cell_source(t, 1, 1).equals("=B1+1"), "one to the right points at the next column")
     assert(cell_source(t, 1, 2).equals("=C1+1"), "the next one slips in the same shape")
     calc.recalc(d, sheet)
@@ -598,7 +598,7 @@ fn test_sorting_refuses_across_a_vertical_merge() //<
 
     ed: = edit.new_editor(d)
     caret_at(ed, t, 1, 1)
-    assert(ed.merge_cell(place(d, sheet, arena), Axis.row), "it could be merged downwards")
+    assert(ed.merge_cell(place(d, sheet, arena), .row), "it could be merged downwards")
     caret_at(ed, t, 1, 0)
     assert(ed.sort_rows(place(d, sheet, arena), false).variant_name().equals("merged"),
         "where a merge is there it does not sort, and says the merge is why")

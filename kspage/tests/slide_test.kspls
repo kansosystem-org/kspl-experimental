@@ -4,11 +4,11 @@ import "kspage/lay/flow"
 import "kspage/model/doc" + { Block, Doc, Rect }
 import "kspage/model/fixed_font" as fixed
 import "kspage/model/paint"
-import "kspage/model/style" { Sheet, Arrange, Shape }
+import "kspage/model/style" { Sheet }
 import "kspage/tests/base"
 import "kspage/write/block"
 import "kspage/write/edit"
-import "kspage/write/insert" + { Sketch }
+import "kspage/write/insert"
 import "kspage/write/shape"
 import "kspage/write/typing"
 import "std/mem" { Arena }
@@ -27,7 +27,7 @@ priv fn slide_sheet(name: U8[], arena: Arena$@): Sheet$@ //<
     //< A sheet where only the style `name` is a 240px-high slide placing each child on its own
     sheet: = Sheet.new(base.root_font(), arena)
     s: = sheet.add(name, paint.inherit_all())
-    s.arrange = Arrange.absolute
+    s.arrange = .absolute
     s.height = 240.0
     return sheet
 
@@ -165,7 +165,7 @@ priv fn sized_slide_sheet(arena: Arena$@): Sheet$@ //<
     //< A slide with both width and height set
     sheet: = Sheet.new(base.root_font(), arena)
     s: = sheet.add("slide", paint.inherit_all())
-    s.arrange = Arrange.absolute
+    s.arrange = .absolute
     s.width = 160.0
     s.height = 240.0
     return sheet
@@ -311,7 +311,8 @@ fn test_a_ratio_drag_keeps_the_shape() //<
     assert(corner.found && corner.resize, "the bottom-right corner can be grasped")
     ed.drag_frame(page, corner, 140.0, 65.0, true)
     ed.break_group()
-    switch framed.frame case .some(f)
+    switch framed.frame
+    case .some(f)
         assert(base.near(f.w, 120.0), "the width stays as it was dragged")
         assert(base.near(f.h, 60.0), "the height follows by the ratio")
     case .none
@@ -321,7 +322,8 @@ fn test_a_ratio_drag_keeps_the_shape() //<
     assert(side.found && side.wide && !side.tall, "the right edge can be grasped")
     ed.drag_frame(wide, side, 100.0, 50.0, true)
     ed.break_group()
-    switch framed.frame case .some(f)
+    switch framed.frame
+    case .some(f)
         assert(base.near(f.w, 80.0), "the width goes as far as it was dragged")
         assert(base.near(f.h, 60.0), "the height does not move")
     case .none
@@ -476,14 +478,15 @@ fn test_a_surface_is_inserted_after_the_caret() //<
     page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
     ed.caret = caret.at(head, 0)
 
-    assert(ed.insert_surface(page, sheet, "slide", Sketch.whole).surfaced(), "it can be inserted")
+    assert(ed.insert_surface(page, sheet, "slide", .whole).surfaced(), "it can be inserted")
     assert(d.blocks.len == 2, "one grows behind the paragraph")
     made: = d.blocks.get(1)
     assert(made.children.len == 1, "the frame inside is one")
     box: = made.children.get(0)
     assert(ed.caret.inline == box.inlines.get(0), "the cursor goes into that frame")
     // The frame is the whole slide; a child with no position could not be grabbed or moved.
-    switch box.frame case .some(f)
+    switch box.frame
+    case .some(f)
         assert(base.near(f.w, 160.0) && base.near(f.h, 240.0),
             "the frame is the whole size the style says")
     case .none
@@ -508,12 +511,12 @@ fn test_a_surface_needs_a_style_that_says_its_size() //< it does not create a mi
     bare: = Sheet.new(base.root_font(), arena)
     page: = flow.layout(d, bare, fixed.make(), 300.0, arena)
     ed.caret = caret.at(head, 0)
-    no_name: = ed.insert_surface(page, bare, "slide", Sketch.whole)
+    no_name: = ed.insert_surface(page, bare, "slide", .whole)
     assert(no_name.variant_name().equals("no_style"),
         "with a name that is not there it says the style is missing")
     // A width of 0 means "the container's width", so before layout the frame's size is unknown.
     wide: = slide_sheet("slide", arena)
-    no_width: = ed.insert_surface(page, wide, "slide", Sketch.whole)
+    no_width: = ed.insert_surface(page, wide, "slide", .whole)
     assert(no_width.variant_name().equals("no_style"),
         "with a style holding no width it says the same")
     assert(d.blocks.len == 1, "with either, the document does not change")
@@ -538,20 +541,20 @@ fn test_a_refused_slide_says_why() //< each refusal carries its own reason
     ed: = edit.new_editor(d)
     page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
     ed.caret = caret.at(cell, 0)
-    assert(ed.insert_surface(page, sheet, "slide", Sketch.whole).variant_name().equals("in_cell"),
+    assert(ed.insert_surface(page, sheet, "slide", .whole).variant_name().equals("in_cell"),
         "inside a table's cell it says so")
     ed.caret = caret.nowhere()
-    assert(ed.insert_surface(page, sheet, "slide", Sketch.whole).variant_name().equals("nowhere"),
+    assert(ed.insert_surface(page, sheet, "slide", .whole).variant_name().equals("nowhere"),
         "with the cursor in no paragraph it says so")
     ed.caret = caret.at(head, 0)
-    assert(ed.insert_surface(page, sheet, "slide", Sketch.whole).surfaced(),
-        "in the body it goes in")
+    assert(ed.insert_surface(page, sheet, "slide", .whole).surfaced(), "in the body it goes in")
     verdict.pass("a refused slide names its reason.")
 
 priv fn frame_of(b: Block$@): Rect //< a frame's position
     //<
     //< **There is no child without a position** (a sketch gives every child a frame).
-    switch b.frame case .some(f)
+    switch b.frame
+    case .some(f)
         return f
     case .none
         assert(false, "a frame's place goes in")
@@ -572,7 +575,7 @@ fn test_a_sketch_lays_out_the_frames_of_a_new_surface() //<
     page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
     ed.caret = caret.at(head, 0)
 
-    assert(ed.insert_surface(page, sheet, "slide", Sketch.titled).surfaced(),
+    assert(ed.insert_surface(page, sheet, "slide", .titled).surfaced(),
         "it can be inserted as a title and a body")
     titled: = d.blocks.get(1)
     assert(titled.children.len == 2, "the frames are two")
@@ -592,7 +595,7 @@ fn test_a_sketch_lays_out_the_frames_of_a_new_surface() //<
     assert(ed.caret.inline == first, "the cursor goes into the first frame")
     assert(ed.undo(), "it can be put back in one")
 
-    assert(ed.insert_surface(page, sheet, "slide", Sketch.halved).surfaced(),
+    assert(ed.insert_surface(page, sheet, "slide", .halved).surfaced(),
         "it can be inserted as a title and two columns")
     halved: = d.blocks.get(1)
     assert(halved.children.len == 3, "the frames are three")
@@ -618,7 +621,7 @@ fn test_one_frame_is_dropped_from_the_surface() //< one frame can be removed fro
     ed: = edit.new_editor(d)
     page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
     ed.caret = caret.at(head, 0)
-    assert(ed.insert_surface(page, sheet, "slide", Sketch.halved).surfaced(),
+    assert(ed.insert_surface(page, sheet, "slide", .halved).surfaced(),
         "it can be inserted as a title and two columns")
     made: = d.blocks.get(1)
 
@@ -726,17 +729,17 @@ fn test_a_shape_lands_in_the_slide_and_undoes_as_one_step() //<
     ed: = edit.new_editor(d)
     page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
     ed.caret = caret.at(head, 0)
-    assert(ed.insert_surface(page, sheet, "slide", Sketch.whole).surfaced(),
-        "the slide can be inserted")
+    assert(ed.insert_surface(page, sheet, "slide", .whole).surfaced(), "the slide can be inserted")
     slide: = d.blocks.get(1)
     placed: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
 
-    assert(ed.insert_shape(placed, sheet, "figure", Shape.fall_arrow), "the shape can be added")
+    assert(ed.insert_shape(placed, sheet, "figure", .fall_arrow), "the shape can be added")
     assert(slide.children.len == 2, "the slide's children grow by one")
     made: = slide.children.get(1)
     assert(made.inlines.len == 0, "it holds no text")
     // The slide is 160 × 240, so the middle half is 80 × 120 from (40, 60).
-    switch made.frame case .some(f)
+    switch made.frame
+    case .some(f)
         assert(base.near(f.x, 40.0) && base.near(f.y, 60.0), "it comes out at the slide's middle")
         assert(base.near(f.w, 80.0) && base.near(f.h, 120.0), "the size is half the slide's")
     case .none
@@ -750,7 +753,7 @@ fn test_a_shape_lands_in_the_slide_and_undoes_as_one_step() //<
             found = true
             assert(base.near(one.rect.h, 120.0), "the band is the frame's height")
             assert(one.width > 0.0, "one line goes in so that it can be seen")
-            assert(one.shape.same_shape(Shape.fall_arrow), "the shape reaches the band")
+            assert(one.shape.same_shape(.fall_arrow), "the shape reaches the band")
     assert(found, "one band comes out")
 
     assert(ed.undo(), "it can be put back in one")
@@ -774,7 +777,7 @@ fn test_a_shape_hangs_on_a_paragraph() //<
 
     ed: = edit.new_editor(d)
     ed.caret = caret.at(n, 0)
-    put: = ed.insert_shape(page, sheet, "figure", Shape.rise_line)
+    put: = ed.insert_shape(page, sheet, "figure", .rise_line)
     assert(put, "it can be added to a paragraph")
     assert(d.blocks.get(0).children.len == 1, "it goes in as that paragraph's child")
 
@@ -803,7 +806,7 @@ fn test_a_drawn_shape_needs_a_holder() //< nothing can be drawn where there is n
     page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
 
     ed: = edit.new_editor(d)
-    put: = ed.draw_shape(page, sheet, "figure", Shape.box, 5000.0, 5000.0, 40.0, 20.0)
+    put: = ed.draw_shape(page, sheet, "figure", .box, 5000.0, 5000.0, 40.0, 20.0)
     assert(!put, "outside the document nothing is drawn")
     assert(d.blocks.get(0).children.len == 0, "the document does not change")
     assert(sheet.find("figure").is_none(), "no style is made either")
@@ -825,12 +828,14 @@ fn test_a_picked_frame_takes_numbers() //<
     page: = flow.layout(d, sheet, fixed.make(), 320.0, arena)
 
     ed.pick_at(page, 90.0, 85.0)
-    switch ed.frame_at() case .some(got)
+    switch ed.frame_at()
+    case .some(got)
         assert(got == figure, "the frame at the place pressed is picked")
     case .none
         assert(false, "there is a frame picked")
     assert(ed.place_frame(10.0, 20.0, 30.0, 40.0), "the place and the size can be set by numbers")
-    switch figure.frame case .some(r)
+    switch figure.frame
+    case .some(r)
         assert(base.near(r.x, 10.0) && base.near(r.y, 20.0), "it becomes the place handed over")
         assert(base.near(r.w, 30.0) && base.near(r.h, 40.0), "it becomes the size handed over")
     case .none
@@ -856,7 +861,7 @@ fn test_a_table_in_the_flow_is_not_a_frame() //< a table in the flow is not a fr
     d: = Doc.new(arena)
     sheet: = sized_slide_sheet(arena)
     grid: = sheet.add("grid", paint.inherit_all())
-    grid.arrange = Arrange.grid
+    grid.arrange = .grid
     d.add_block("").add_text("body")
     t: = d.add_block("grid")
     t.add_child("").add_child("").add_text("cell")

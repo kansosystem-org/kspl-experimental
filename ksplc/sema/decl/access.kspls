@@ -60,7 +60,8 @@ enum Index_route //< what a subscript (`a[i]`) resolves to
 impl Index_route
     fn index_route_trait(route: Self): U8[] //<
         //< The trait that provides that route, for diagnostics
-        switch route case .place
+        switch route
+        case .place
             return "Index_place"
         case .ref_place
             return "Index_ref"
@@ -72,7 +73,8 @@ impl Index_route
         //< **`Index_place`'s and `Index_ref`'s differ on purpose**: the resolution looks up the
         //< name (resolve_operator_method in sema/decl/resolve.kspls), so one name would leave a
         //< type implementing both undecided.
-        switch route case .place
+        switch route
+        case .place
             return "at"
         case .ref_place
             return "at_ref"
@@ -175,10 +177,10 @@ impl Sema_ctx
         writable: = recv_node == null || !r.place_is_readonly(recv_node)
         if r.env.has_implemented_operator_trait(base_id, "Index_place") &&
             (writable || !r.index_place_wants_writable(base_id))
-            return Index_route.place
+            return .place
         if r.env.has_implemented_operator_trait(base_id, "Index_ref")
-            return Index_route.ref_place
-        return Index_route.by_value
+            return .ref_place
+        return .by_value
 
     fn index_only_reads(r: Self$@, route: Index_route, recv_id: I32): Bool //<
         //< Whether the subscript returns only a read-only place (`Index_ref` without `Index_mut`)
@@ -186,7 +188,8 @@ impl Sema_ctx
         //< Only the assignment's diagnostics use it; with `Index_mut` the error is "assigned into a
         //< read-only receiver".
         $is_ref: = false
-        switch route case .ref_place
+        switch route
+        case .ref_place
             is_ref = true
         default {}
         if !is_ref
@@ -294,7 +297,8 @@ impl Sema_ctx
             if sym == null
                 return false
             if const_only
-                switch sym.kind case .constant
+                switch sym.kind
+                case .constant
                     return true
                 default
                     return false
@@ -348,7 +352,8 @@ impl Sema_ctx
         slice_elem: = r.env.slice_struct_elem(id)
         if slice_elem != 0
             return r.elem_is_mut_or_deeper(slice_elem, seen)
-        switch r.env.get_info(id) case .array(base_id, _size)
+        switch r.env.get_info(id)
+        case .array(base_id, _size)
             return r.elem_is_mut_or_deeper(base_id, seen)
         default
             return false
@@ -561,7 +566,7 @@ impl Sema_ctx
 
 priv fn field_symbol(field: Struct_field$@): Sema_symbol$@ //<
     //< A struct field seen as a symbol, so the visibility rules read it as they read a declaration
-    sym: = Sema_symbol.new(sema_type_scope.Sym_kind.variable, field.name, field.node)
+    sym: = Sema_symbol.new(.variable, field.name, field.node)
     sym.vis = field.vis
     return sym
 
@@ -580,18 +585,18 @@ priv fn check_one_member(c: Sema_ctx$@, member: Ast_node$@, limit: I32, kind: U8
             '\{owner\}'")
     c.err(member, c.scratch.slice())
 
-fn impl_target_symbol(c: Sema_ctx$@, impl_node: Ast_node$@): Option<|Sema_symbol$@|> //<
+fn impl_target_symbol(c: Sema_ctx$@, impl_node: Ast_node$@): Sema_symbol$@? //<
     //< An `impl`'s target type's declaration (none for a built-in or extern target)
     //<
     //< Caution: **Look it up by name.** The target's type node gets its type id only in body
     //< analysis, so while declarations are collected it is still 0 (collect_impl_decl looks it up
     //< the same way).
     if impl_node.get_decl_type_node() == null
-        return Option<|Sema_symbol$@|>.none
+        return .none
     sym: = c.symtab.resolve_fqn(c.impl_target_fqn(impl_node)) catch null
     if sym == null || !sym.kind.is_type()
-        return Option<|Sema_symbol$@|>.none
-    return Option<|Sema_symbol$@|>.some(sym)
+        return .none
+    return .some(sym)
 
 fn check_member_visibility_width(root: Ast_node$@, c: Sema_ctx$@) //< checks every member's width
     //<
@@ -603,7 +608,8 @@ fn check_member_visibility_width(root: Ast_node$@, c: Sema_ctx$@) //< checks eve
         $owner_rank: I32 = -1
         $owner: = ""
         $kind: = "method"
-        switch n.kind_id case .k_decl_struct
+        switch n.kind_id
+        case .k_decl_struct
             owner_rank = vis_rank(n.get_visibility())
             owner = n.get_decl_id_text()
             kind = "field"
@@ -619,6 +625,7 @@ fn check_member_visibility_width(root: Ast_node$@, c: Sema_ctx$@) //< checks eve
         if owner_rank < 0
             continue
         for member in n.children
-            switch member.kind_id case .k_struct_field, .k_decl_fn, .k_decl_fn_proto
+            switch member.kind_id
+            case .k_struct_field, .k_decl_fn, .k_decl_fn_proto
                 check_one_member(c, member, owner_rank, kind, owner)
             default {}

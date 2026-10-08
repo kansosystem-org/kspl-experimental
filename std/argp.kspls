@@ -57,22 +57,23 @@ priv struct Cmd //< a command selected by a positional argument's name (`fmt` / 
         //< interpreted** (in `ksplc run script.kspl --verbose`, the `--verbose` belongs to the
         //< script).
 
-priv fn store_value(o: Opt$@, val: U8[]): Void?Argp_error //<
+priv fn store_value(o: Opt$@, val: U8[]): Void!Argp_error //<
     //< Interprets the value by o's kind and stores it in the destination
-    switch o.kind case .str_val(out)
+    switch o.kind
+    case .str_val(out)
         out$ = val
     case .int_val(out)
         out$ = val.to_i64() catch
-            throw Argp_error.bad_value(o.name)
+            throw .bad_value(o.name)
     case .f64_val(out)
         out$ = val.to_f64() catch
-            throw Argp_error.bad_value(o.name)
+            throw .bad_value(o.name)
     case .str_list(out)
         out.push(val)
     default
         // A flag or command takes no value; parse_list refuses `=value` earlier, but it is not
         // ignored.
-        throw Argp_error.unexpected_value(o.name)
+        throw .unexpected_value(o.name)
 
 priv const help_column: Sz = 26 //< the column where the description starts
     //<
@@ -163,7 +164,7 @@ impl Parser
         name: U8[], //< the name as typed
         help: U8[], //< the one line shown beside it in the usage
     )
-        r.add(name, help, Kind.command, false)
+        r.add(name, help, .command, false)
 
     pub fn str_opt( //< a string, written as `--name=<value>`
         r: Self$@,
@@ -171,7 +172,7 @@ impl Parser
         out: U8[]$@, //< where the value goes; its current value is the default
         help: U8[], //< the one line shown beside it in the usage
     )
-        r.add(name, help, Kind.str_val(out), false)
+        r.add(name, help, .str_val(out), false)
 
     pub fn str_required( //< a string that cannot be omitted; omitting it gives `missing_required`
         r: Self$@,
@@ -179,7 +180,7 @@ impl Parser
         out: U8[]$@, //< where the value goes
         help: U8[], //< the one line shown beside it in the usage
     )
-        r.add(name, help, Kind.str_val(out), true)
+        r.add(name, help, .str_val(out), true)
 
     pub fn int_opt( //< an integer; a value that cannot be read gives `bad_value`
         r: Self$@,
@@ -187,7 +188,7 @@ impl Parser
         out: I64$@, //< where the value goes; its current value is the default
         help: U8[], //< the one line shown beside it in the usage
     )
-        r.add(name, help, Kind.int_val(out), false)
+        r.add(name, help, .int_val(out), false)
 
     pub fn f64_opt( //< a floating-point number; a value that cannot be read gives `bad_value`
         r: Self$@,
@@ -195,7 +196,7 @@ impl Parser
         out: F64$@, //< where the value goes; its current value is the default
         help: U8[], //< the one line shown beside it in the usage
     )
-        r.add(name, help, Kind.f64_val(out), false)
+        r.add(name, help, .f64_val(out), false)
 
     pub fn flag( //< a switch taking no value (Python's `action="store_true"`)
         r: Self$@,
@@ -203,7 +204,7 @@ impl Parser
         out: Bool$@, //< set to true when the name is given
         help: U8[], //< the one line shown beside it in the usage
     )
-        r.add(name, help, Kind.flag(out), false)
+        r.add(name, help, .flag(out), false)
 
     pub fn str_list_opt( //< a string that can be given any number of times
         //<
@@ -214,7 +215,7 @@ impl Parser
         out: List<|U8[]|>$@, //< where each value is pushed, in the order given
         help: U8[], //< the one line shown beside it in the usage
     )
-        r.add(name, help, Kind.str_list(out), false)
+        r.add(name, help, .str_list(out), false)
 
     pub fn append_names( //< pushes every declared name, in declaration order
         //<
@@ -260,18 +261,18 @@ impl Parser
                 return c
         return null
 
-    priv fn set_command(r: Self$@, name: U8[]): Void?Argp_error //< selects a command
+    priv fn set_command(r: Self$@, name: U8[]): Void!Argp_error //< selects a command
         //<
         //< A second one throws multiple_commands.
         if r.command.len > 0
-            throw Argp_error.multiple_commands(name)
+            throw .multiple_commands(name)
         r.command = name
 
     pub fn parse( //< reads the process's own arguments, skipping the program name at the start
         r: Self$@,
         a: sys.Args, //< what `sys.args()` returned
         arena: Arena$@, //< the arena the parsed values are allocated in
-    ): Void?Argp_error
+    ): Void!Argp_error
         $argv: = List<|U8[]|>.new(arena)
         for $i: Sz = 1; i < a.len; i += 1
             argv.push(a[i])
@@ -282,7 +283,7 @@ impl Parser
         //< Also for arguments from elsewhere, such as a configuration file or a test.
         r: Self$@,
         argv: List<|U8[]|>$@, //< the arguments, **without** the program's own name
-    ): Void?Argp_error
+    ): Void!Argp_error
         // subcommand_trailing's rest, pushed once its target has arrived.
         $trail: List<|U8[]|>$@ = null
         for $i: Sz = 0; i < argv.len; i += 1
@@ -293,20 +294,20 @@ impl Parser
                 trail.push(arg)
                 continue
             if arg.equals("--help")
-                throw Argp_error.help_requested
+                throw .help_requested
             // A misspelling with a single `-` (`-out=X`) is refused too, not passed on to rest. A
             // lone `-` is positional and means "standard input".
             if !arg.starts_with("-") || arg.equals("-")
                 c: = r.find_cmd(arg)
                 if c != null
-                    r.set_command(c.name)?
+                    r.set_command(c.name)!
                     if c.trailing != null
                         trail = c.trailing
                     continue
                 // subcommand_trailing's target is accepted whether declared or not (trail takes the
                 // rest).
                 if !r.takes_positional && trail == null
-                    throw Argp_error.unexpected_arg(arg)
+                    throw .unexpected_arg(arg)
                 r.rest.push(arg)
                 continue
             // Matching has two steps: 1. the whole argument (`--in-place`); 2. split at the first
@@ -325,27 +326,28 @@ impl Parser
                         has_val = true
             if o == null
                 // Reports **the argument as given**, so the user finds what they typed.
-                throw Argp_error.unknown_option(arg)
+                throw .unknown_option(arg)
             o.seen = true
-            switch o.kind case .flag(out)
+            switch o.kind
+            case .flag(out)
                 if has_val
-                    throw Argp_error.unexpected_value(name)
+                    throw .unexpected_value(name)
                 out$ = true
             case .command
                 if has_val
-                    throw Argp_error.unexpected_value(name)
-                r.set_command(o.name)?
+                    throw .unexpected_value(name)
+                r.set_command(o.name)!
             default
                 // **A value is joined with `=`, never taken from the next argument**, so nothing
                 // depends on guessing whether the next argument is a value or an item.
                 if !has_val
-                    throw Argp_error.missing_value(name)
+                    throw .missing_value(name)
                 o.seen_empty = o.seen_empty || val.len == 0
-                store_value(o, val)?
+                store_value(o, val)!
         for i in Range.asc(r.opts.len)
             o: = r.opts.at(i)
             if o.required && !o.seen
-                throw Argp_error.missing_required(o.name)
+                throw .missing_required(o.name)
 
     pub fn print_usage(r: Self$@) //< writes the whole usage to standard output
         out: = io.out()
@@ -384,7 +386,8 @@ impl Parser
             line.s("  ")
             line.s(o.name)
             // Only ASCII before the column (see `help_column`).
-            switch o.kind case .int_val(_o)
+            switch o.kind
+            case .int_val(_o)
                 line.s("=<int>")
             case .f64_val(_o)
                 line.s("=<num>")
@@ -412,7 +415,8 @@ impl Parser
         arena: Arena$@, //< the arena the parsed values are allocated in
     )
         r.parse(a, arena) catch e
-            switch e case .help_requested
+            switch e
+            case .help_requested
                 r.print_usage()
                 sys.exit(0)
             default
@@ -426,7 +430,8 @@ impl Argp_error: Formattable //< so a failure can be written straight into a mes
         //< Interpolation expands into a chain of calls on a Writer ("The expansion specification
         //< for string interpolation" in docs/SPEC-language.md); returning a `U8[]` would leave the
         //< caller managing a temporary buffer's lifetime.
-        switch r case .help_requested
+        switch r
+        case .help_requested
             return w.s("help requested")
         case .unknown_option(n)
             return w.s("unknown option '").s(n).s("'")

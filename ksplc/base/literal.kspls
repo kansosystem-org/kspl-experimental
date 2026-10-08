@@ -154,7 +154,7 @@ fn literal_fault(text: U8[], one_byte: Bool): Literal_check //<
     //< Caution: **Pass `one_byte` as true for a character literal**, which neither `'é'` nor `'€'`
     //< fits; forget it and only the leading byte silently remains.
     span: = text.literal_span()
-    ok: = Literal_check::{ .fault = Literal_fault.none, .at = -1, .len = 0 }
+    ok: = Literal_check::{ .fault = .none, .at = -1, .len = 0 }
     if span.is_raw
         return ok
     $j: Sz = span.start
@@ -169,24 +169,24 @@ fn literal_fault(text: U8[], one_byte: Bool): Literal_check //<
             continue
         ec: = (text.ptr + j + 1)$
         if !is_known_escape(ec)
-            return Literal_check::{ .fault = Literal_fault.unknown, .at = j, .len = 2 }
+            return Literal_check::{ .fault = .unknown, .at = j, .len = 2 }
         if ec != 'u'
             j += 2
             continue
         cp: = escape_code_point(text, j)
         if cp < 0 || j + 6 > span.end
-            return Literal_check::{ .fault = Literal_fault.short_hex, .at = j,
+            return Literal_check::{ .fault = .short_hex, .at = j,
                 .len = 6 if j + 6 <= span.end else span.end - j }
         if cp >= 0xD800 && cp <= 0xDFFF
-            return Literal_check::{ .fault = Literal_fault.surrogate, .at = j, .len = 6 }
+            return Literal_check::{ .fault = .surrogate, .at = j, .len = 6 }
         if one_byte && cp > 0x7F
-            return Literal_check::{ .fault = Literal_fault.wide_in_char, .at = j, .len = 6 }
+            return Literal_check::{ .fault = .wide_in_char, .at = j, .len = 6 }
         j += 6
     // **A character literal is one byte**, so `'€'` and `'ab'` are rejected, or char_literal_byte
     // **silently returns only the leading byte**. **Count with literal_span's byte_len**; a recount
     // here would be off by a `\uXXXX`'s extra bytes.
     if one_byte && span.byte_len != 1
-        return Literal_check::{ .fault = Literal_fault.wide_char_body, .at = span.start,
+        return Literal_check::{ .fault = .wide_char_body, .at = span.start,
             .len = span.end - span.start }
     return ok
 

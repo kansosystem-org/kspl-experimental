@@ -37,7 +37,7 @@ struct Inline
         //< Caution: **Do not overwrite the typed text**, or undo gets mixed in when a formula cell
         //< is typed over. The arena is reused. **Two functions set it**: `recalc` in
         //< `expr/calc.kspls` and `number_refs` in `model/number.kspls`.
-    priv number: Option<|F64|> //<
+    priv number: F64? //<
         //< The number of the computed value
         //<
         //< Caution: **Set it together with the text** (`show_value`); a chart reads this one.
@@ -82,7 +82,7 @@ impl Inline
     fn shows_value(r: Self@): Bool //< whether a computed value is present
         return r.shown != null && r.shown.len > 0
 
-    fn figure(r: Self@): Option<|F64|> //< the number of the computed value
+    fn figure(r: Self@): F64? //< the number of the computed value
         //<
         //< **Like the text, it is not part of the document** (none where it is not a number). A
         //< chart reads this.
@@ -97,7 +97,7 @@ impl Inline
             return r.text()
         return U8[]::{ .ptr = r.shown.ptr, .len = r.shown.len }
 
-    priv fn same_value(r: Self@, s: U8[], num: Option<|F64|>): Bool //<
+    priv fn same_value(r: Self@, s: U8[], num: F64?): Bool //<
         //< Whether it is the same value as now
         //<
         //< Caution: **Compare both the text and the number** (the same formatting may hide a
@@ -108,7 +108,8 @@ impl Inline
         if !now.equals(s)
             return false
         if a: = r.number
-            switch num case .some(b)
+            switch num
+            case .some(b)
                 return a == b
             case .none
                 return false
@@ -116,7 +117,7 @@ impl Inline
             return false
         return true
 
-    fn show_value(r: Self$@, s: U8[], num: Option<|F64|>, arena: Arena$@) //<
+    fn show_value(r: Self$@, s: U8[], num: F64?, arena: Arena$@) //<
         //< Sets the computed value (the text and the number)
         //<
         //< The arena is reused.
@@ -160,31 +161,31 @@ impl Inline
             r.fit_font.family.len == font.family.len && r.fit_font.size_px == font.size_px &&
             r.fit_font.weight == font.weight && r.fit_font.italic == font.italic
 
-    fn known_fit(r: Self@, font: Font, avail: F32, start: Sz): Option<|Fit_at|> //<
+    fn known_fit(r: Self@, font: Font, avail: F32, start: Sz): Fit_at? //<
         //< The cached result
         //<
         //< Caution: **Return it only for the same "typeface and space" pair.**
         if r.fits == null || !r.same_ask(font, avail)
-            return Option<|Fit_at|>.none
+            return .none
         for i in Range.asc(r.fits.len)
             had: = r.fits.get(i)
             if had.start == start
-                return Option<|Fit_at|>.some(had)
-        return Option<|Fit_at|>.none
+                return .some(had)
+        return .none
 
-    fn known_whole(r: Self@, font: Font, start: Sz): Option<|F32|> //<
+    fn known_whole(r: Self@, font: Font, start: Sz): F32? //<
         //< The cached "width from start to the end"
         //<
         //< **The space is not checked** (that value does not depend on the space).
         if r.fits == null || r.fit_font.family.ptr != font.family.ptr ||
             r.fit_font.family.len != font.family.len || r.fit_font.size_px != font.size_px ||
             r.fit_font.weight != font.weight || r.fit_font.italic != font.italic
-            return Option<|F32|>.none
+            return .none
         for i in Range.asc(r.fits.len)
             had: = r.fits.get(i)
             if had.start == start
-                return Option<|F32|>.some(had.whole)
-        return Option<|F32|>.none
+                return .some(had.whole)
+        return .none
 
     fn remember_fit(r: Self$@, font: Font, avail: F32, got: Fit_at) //<
         //< remembers a measured result
@@ -229,9 +230,9 @@ impl Inline
 
 fn new_inline(style: U8[], arena: Arena$@): Inline$@ //<
     //< makes one empty inline (attached to nothing)
-    n: = Inline::{ .buf = List<|U8|>.create(arena), .style = style, .shown = null,
-        .number = Option<|F64|>.none, .href = "", .note = "", .remark = "", .remark_by = "",
-        .refers = "", .fits = null, .fit_avail = 0.0,
+    n: = Inline::{ .buf = List<|U8|>.create(arena), .style = style, .shown = null, .number = .none,
+        .href = "", .note = "", .remark = "", .remark_by = "", .refers = "", .fits = null,
+        .fit_avail = 0.0,
         .fit_font = Font::{ .family = "", .size_px = 0.0, .weight = 0U16, .italic = false } }
     return arena.create(n)
 
@@ -264,7 +265,7 @@ priv const allowed_schemes: U8[][3] = ::{ "http", "https", "mailto" } //< the sc
 priv fn scheme_end(s: U8[]): Sz //< where the scheme's name ends (the `:`'s position)
     //<
     //< **-1 where there is none.**
-    //< **Where a `/`, a `?` or a `#` comes first it is not a scheme** (`a/b:c` is a path).
+    //< **Where a `/`, a `!` or a `#` comes first it is not a scheme** (`a/b:c` is a path).
     //< **Whatever stands before the `:` counts, whatever characters it holds**, so the list of
     //< schemes allowed decides it: a relative path cannot hold a `:` ahead of its first `/` either
     //< (it would read as a scheme), and nothing rests on knowing which characters a browser

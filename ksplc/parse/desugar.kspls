@@ -80,11 +80,11 @@ impl Ast_node
         // fields (`too many initializers for struct`).
         if r.kind_id == .k_struct_literal
             r.desugar_slice_elems()
-        // It rewrites a written `T[]` into `Slice<|$T|>`.
+        // It rewrites a written `T[]` into `Slice<|$T|>`, and `T?` into `Option<|T|>`.
         // Caution: **Finish it before descending into the children.** It folds the run of
         // postfixes, so with the children walked first the inner level would look doubled.
         if r.kind_id == .k_type_expr
-            r.fold_slice_postfixes()
+            r.fold_sugar_postfixes()
         // A block walks its children itself: a closure's temporaries go **before** their statement,
         // so walking and flushing alternate per statement. Walked here like any node, a nested
         // block's temporaries would come out before the first statement and capture a name not yet
@@ -213,7 +213,8 @@ impl Ast_node
         // The collection expression is copied into a temporary.
         // Caution: **Copy it here**, or an expression with side effects runs again every iteration;
         // only this layer, which rebuilds the statement list, can insert it.
-        new_children.push(Ast_node.build_inferred_var_decl(coll_name, coll_expr, loc))
+        coll_id: = Ast_node.build_ident(coll_name, 0, loc)
+        new_children.push(Ast_node.build_inferred_var_decl(coll_id, coll_expr, loc))
 
         // **The loop itself is not expanded here**: an index or `next()` depends on the
         // collection's type, which this layer does not know (`ksplc/sema/body/for_in.kspls` expands
@@ -422,7 +423,7 @@ impl Ast_node
         none_block: =
             (else_block if else_block != null
             else Ast_node.new(.k_stmt_block, "stmt_block", loc))
-        return Ast_node.build_option_match(subject, name_node.text, then_block, none_block,
+        return Ast_node.build_option_match(subject, name_node, then_block, none_block,
             r.safe_get_child(0), base_ast_ext.if_bind_mark, loc)
 
 fn next_anon_serial(ctx: Desugar_ctx$@, file: U8[]): Sz //<

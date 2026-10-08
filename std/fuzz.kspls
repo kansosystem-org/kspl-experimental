@@ -107,7 +107,7 @@ pub fn setup( //< reads `<program> <work folder> [seed folder ...]`, and makes t
     program: U8[], //< how the usage names the program under test (`<reader>`)
     seed_dirs: Bool, //< whether seed folders may follow the work folder
     arena: Arena$@, //< where the paths and the text go
-): Setup?U8[] //< the command line; fails with the line to stop on
+): Setup!U8[] //< the command line; fails with the line to stop on
     usage: = arena.text().s(program).s(" <work folder>")
         .s(" [seed folder ...]" if seed_dirs else "").take()
     p.positional(usage)
@@ -128,7 +128,7 @@ pub fn setup( //< reads `<program> <work folder> [seed folder ...]`, and makes t
             dirs.push(p.rest.get(i))
     if seed_dirs && dirs.len == 0
         dirs.push(".")
-    check_dirs(dirs.slice(), arena)?
+    check_dirs(dirs.slice(), arena)!
     again: = arena.text().s(run_as)
     for a in p.rest
         again.s(" \"").s(a).s("\"")
@@ -140,7 +140,7 @@ pub fn check_dirs( //< fails unless every seed folder stands
     //< path broken on its way here would fuzz with fewer seeds and pass.
     dirs: U8[][], //< the seed folders
     arena: Arena$@, //< where the text goes
-): Void?U8[] //< fails with the line to stop on
+): Void!U8[] //< fails with the line to stop on
     for d in dirs
         if !fs.is_dir(d)
             throw arena.text().s("the seed folder ").s(d).s(" does not stand").take()
@@ -322,12 +322,12 @@ pub struct Campaign //< one fuzz run: the program under test, the input it reads
     pub reach_div: Sz //< at least one trial in this many must be accepted (`check_reach`)
     pub again: U8[] //< the command that starts this fuzz run, without the two numbers
 
-priv fn read_once(c: Campaign@, k: Input_kind, data: U8[], arena: Arena$@): Trial?io.Io_error //<
+priv fn read_once(c: Campaign@, k: Input_kind, data: U8[], arena: Arena$@): Trial!io.Io_error //<
     //< Writes the bytes to the work folder's input file, and runs one trial on it
     //<
     //< The file is overwritten every trial.
     path: = fs.join(c.work, arena.text().s("mutant").s(k.ext).take(), arena)
-    io.write_file(path, data)?
+    io.write_file(path, data)!
     $argv: = List<|U8[]|>.new(arena)
     for a in c.argv
         argv.push(a)
@@ -383,7 +383,7 @@ pub fn scatter( //< runs the trials, checks that they reached the program, and r
     what: U8[], //< what is scattered, as the heading names it (`byte sequences`)
     o: Opts, //< the two numbers of the run
     arena: Arena$@, //< where the inputs, the outputs and the findings go
-): Void?U8[] //< fails with the line to stop on: no seed, or a trial that could not be run
+): Void!U8[] //< fails with the line to stop on: no seed, or a trial that could not be run
     $kinds: = List<|Input_kind|>.new(arena)
     for k in c.kinds
         if count_of(seeds, k.name) > 0

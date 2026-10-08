@@ -42,14 +42,14 @@ import "std/str" { Str_builder }
 import "std/strfmt"
 import "std/sys"
 
-fn emit_runtime(out_path: U8[]): Void?Compile_error //<
+fn emit_runtime(out_path: U8[]): Void!Compile_error //<
     //< It writes the runtime's source as one translation unit (`emit-runtime`)
     //<
     //< The user builds it with their own tools rather than using a prebuilt `.a` ("Embedding the
     //< runtime" in ksplc/docs/DESIGN.md). **The contents change with `--freestanding`**, so emit it
     //< with the same options as the generated C it links with. **No analysis runs at all.**
     $out_file: = io.open(out_path, "w") catch e
-        throw Compile_error.io(e)
+        throw .io(e)
     gen_runtime.write_unit(out_file)
     out_file.flush()
     out_file.free()
@@ -168,7 +168,7 @@ impl Compiler
     // Caution: **`src_is_disk` is the caller's promise that the override is the file's own bytes.**
     // It lets the AST cache keep them; a buffer being edited must not claim it.
     fn parse_file(r: Self$@, file_path: U8[], src_override: U8[], src_is_disk: Bool):
-        Void?Compile_error
+        Void!Compile_error
         // **A logical name is always relative to the project root** or the package's top; with an
         // absolute path the mangled names change per machine (`name_entry` in base/package.kspls).
         clean_mod: = base_package.name_entry(file_path).strip_kspl_ext()
@@ -192,18 +192,18 @@ impl Compiler
             parse_load.load_and_parse_file(lang_file, r.loaded_files, r.root_file, r.base_parser,
                 r.source_map, lang_stack, false) catch e
                 r.has_load_error = true
-                throw Compile_error.parse(e)
+                throw .parse(e)
         import_stack: = List<|U8$[]|>.create(base_core.arena)
         parse_load.load_and_parse_file(perm_file, r.loaded_files, r.root_file, r.base_parser,
             r.source_map, import_stack, src_is_disk) catch e
             r.has_load_error = true
-            throw Compile_error.parse(e)
+            throw .parse(e)
 
     // Caution: **`Bodies.main_file` is only for the editor's document view.** It checks only
     // `main_file`'s bodies, so nothing that needs another file's call sites (references, renaming,
     // call hierarchy) may be built on it. Compiling and linting pass `everywhere`.
     fn run_semantic_analysis(r: Self$@, main_file: U8[], is_lint: Bool, suppress_errors: Bool,
-        bodies: Bodies): Void?Sema_error
+        bodies: Bodies): Void!Sema_error
         // Desugar runs here, once over root_file, not in parse_file, which the LSP's workspace walk
         // (lsp/worker.build_workspace_state) calls per file. ksplc.cfg is checked here too.
         for loaded in r.loaded_files
@@ -216,7 +216,7 @@ impl Compiler
         // does not poison" in `ksplc/docs/DESIGN.md`).
         quiet: = suppress_errors || r.has_load_error
         if !parse_desugar.run(r.root_file, r.base_parser, r.source_map) && !quiet
-            throw Sema_error.analysis_failed
+            throw .analysis_failed
         base_stats.stages.desugar = base_stats.end_stage(t1, sys.mono_us())
 
         env: = sema_type_env.Env.new()
@@ -245,7 +245,7 @@ impl Compiler
 
         t3: = sys.mono_us()
         sema_session_prof.prof.init()
-        sema_decl_collect.run(r.root_file, sema)?
+        sema_decl_collect.run(r.root_file, sema)!
         t_collect: = sys.mono_us()
         sema_session_prof.prof.collect_us = t_collect - t3
         // Caution: **After Pass 0 of the collecting, not before it** (the reason is at
@@ -276,7 +276,7 @@ impl Compiler
 
         r.is_valid = r.is_valid && !sema.has_error()
         if !r.is_valid
-            throw Sema_error.analysis_failed
+            throw .analysis_failed
 
     fn free(r: Self$@)
         if r.source_map != null
@@ -284,9 +284,9 @@ impl Compiler
         if r.sema != null
             r.sema.free()
 
-    fn run_lower_and_codegen(r: Self$@, out_path: U8[]): Void?Compile_error
+    fn run_lower_and_codegen(r: Self$@, out_path: U8[]): Void!Compile_error
         if !r.is_valid || r.sema == null || r.root_file == null
-            throw Compile_error.sema(.analysis_failed)
+            throw .sema(.analysis_failed)
 
         t3: = sys.mono_us()
         lower_root.run(r.sema, r.root_file)
@@ -306,15 +306,16 @@ impl Compiler
         base_stats.stages.lower = base_stats.end_stage(t3, t4)
 
         $codegen_failed: = false
-        switch base_core.config.target case .c
+        switch base_core.config.target
+        case .c
             units: = base_core.unit_count_or_one()
             if units > 1
-                codegen_failed = r.emit_c_units(out_path, units)?
+                codegen_failed = r.emit_c_units(out_path, units)!
             else
-                codegen_failed = r.emit_c_part(out_path, gen_c_ctx.whole_output)?
+                codegen_failed = r.emit_c_part(out_path, gen_c_ctx.whole_output)!
         case .llvm
             $out_file: = io.open(out_path, "w") catch e
-                throw Compile_error.io(e)
+                throw .io(e)
             cg: = Genllvm_ctx.new(out_file, r.sema, r.source_map)
             defer cg.free()
             gen_llvm_module.run(r.root_file, cg, r.root_file.loc.file())
@@ -322,11 +323,11 @@ impl Compiler
             codegen_failed = cg.had_error
             out_file.free()
         if codegen_failed
-            throw Compile_error.codegen
+            throw .codegen
 
         base_stats.stages.backend = base_stats.end_stage(t4, sys.mono_us())
 
-    fn emit_c_units(r: Self$@, out_path: U8[], units: Sz): Bool?Compile_error //<
+    fn emit_c_units(r: Self$@, out_path: U8[], units: Sz): Bool!Compile_error //<
         //< It writes the generated C split into several translation units
         //<
         //< `out_path` gives only the `<stem>` (its last extension dropped); **no file of that name
@@ -347,7 +348,7 @@ impl Compiler
             .unit_index = 0, .shared_header = "" }
         // Caution: **Pass each path as an arena copy.** A failed open carries the path out in its
         // error, which main prints after this frame's `path` is freed (it read freed memory).
-        $failed: = r.emit_c_part(base_core.arena.dup_str(path.slice()), shared)?
+        $failed: = r.emit_c_part(base_core.arena.dup_str(path.slice()), shared)!
 
         for i in Range.asc(units)
             path.len = 0
@@ -355,13 +356,13 @@ impl Compiler
             unit: = gen_c_ctx.Emit_split::{ .part = .unit, .unit_count = units, .unit_index = i,
                 .shared_header = header_name.slice() }
             failed =
-                r.emit_c_part(base_core.arena.dup_str(path.slice()), unit)? || failed
+                r.emit_c_part(base_core.arena.dup_str(path.slice()), unit)! || failed
         return failed
 
-    fn emit_c_part(r: Self$@, path: U8[], split: gen_c_ctx.Emit_split): Bool?Compile_error //<
+    fn emit_c_part(r: Self$@, path: U8[], split: gen_c_ctx.Emit_split): Bool!Compile_error //<
         //< It writes one file of the generated C, the part `split` names
         $out_file: = io.open(path, "w") catch e
-            throw Compile_error.io(e)
+            throw .io(e)
         cg: = Genc_ctx.new(out_file, r.sema, r.source_map, split)
         defer cg.free()
         gen_c_root.run(r.root_file, cg)

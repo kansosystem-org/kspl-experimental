@@ -42,7 +42,7 @@ pub fn content_length( //< the length the header declares, or none if it is abse
     //< overflow.
     head: U8[], //< the header lines, without the blank line that ends them
     limit: Sz, //< the largest length the caller accepts
-): Option<|Sz|>
+): Sz?
     $at: Sz = 0
     for at < head.len
         $end: = at
@@ -54,15 +54,15 @@ pub fn content_length( //< the length the header declares, or none if it is abse
             continue
         digits: = line.sub_from(length_tag.len).trim_spaces()
         if digits.len == 0
-            return Option<|Sz|>.none
+            return .none
         $n: Sz = 0
         for d in digits
             v: = Sz::(d - '0')
             if !d.is_digit() || n > limit / 10 || n * 10 > limit - v
-                return Option<|Sz|>.none
+                return .none
             n = n * 10 + v
-        return Option<|Sz|>.some(n)
-    return Option<|Sz|>.none
+        return .some(n)
+    return .none
 
 pub fn frame_into( //< writes the header and then the body to the destination
     //<
@@ -95,21 +95,21 @@ pub fn take_frame( //< cuts out one whole frame, or nothing if none is complete 
     //< failure forever.
     acc: Str_builder$@, //< what has arrived so far; the frame cut out is removed from it
     arena: Arena$@, //< where the body is copied to
-): Option<|U8[]|>?Rpc_end //< the body, or none for now; a bad length header fails with broken
+): U8[]?!Rpc_end //< the body, or none for now; a bad length header fails with broken
     text: = U8[]::acc.slice()
     sep: = text.find_str(frame_sep)
     if sep < 0
-        return Option<|U8[]|>.none
+        return .none
     body_at: = sep + frame_sep.len
     want: = content_length(text.sub(0, sep), max_body_bytes).unwrap_or(0)
     if want == 0
         acc.drop_prefix(body_at)
-        throw Rpc_end.broken
+        throw .broken
     if body_at + want > text.len
-        return Option<|U8[]|>.none
+        return .none
     body: = U8[]::arena.dup_str(text.sub(body_at, want))
     acc.drop_prefix(body_at + want)
-    return Option<|U8[]|>.some(body)
+    return .some(body)
 
 priv const chunk: Sz = 64 * 1024 //< the most bytes taken in one read
 priv const max_drain: Sz = 8 //< the most chunks of standard error drained at a time
@@ -147,8 +147,8 @@ pub struct Client //< exchanges JSON-RPC messages with a child connected by pipe
 pub fn spawn( //< starts a child and attaches to its pipes
     argv: U8[][], //< the program and its arguments
     cwd: U8[], //< the working directory; empty inherits the parent's
-): Client?subproc.Spawn_error //< the client, freed by the caller; fails if the child cannot start
-    child: = subproc.spawn_piped(argv, cwd)?
+): Client!subproc.Spawn_error //< the client, freed by the caller; fails if the child cannot start
+    child: = subproc.spawn_piped(argv, cwd)!
     return Client::{ .child = child, .next_id = 1, .acc = Str_builder.new(),
         .err = Str_builder.new(),
         .out_buf = U8$[]::{ .ptr = U8$@::alloc(chunk), .len = chunk },
@@ -188,18 +188,18 @@ impl Client
         params: json.Val, //< the parameters sent with it
         timeout_ms: I32, //< how long the whole round trip may take
         arena: Arena$@, //< where the text and the response are built
-    ): json.Val?Rpc_end
+    ): json.Val!Rpc_end
         id: = r.next_id
         r.next_id += 1
         if !r.send_raw(encode(method, params, id, arena))
-            throw Rpc_end.closed
+            throw .closed
         deadline: = sys.mono_us() + I64::timeout_ms * 1000I64
         for sys.mono_us() <= deadline
             left_ms: = (deadline - sys.mono_us()) / 1000I64 + 1I64
-            msg: = r.read_msg(I32::left_ms, arena)?
+            msg: = r.read_msg(I32::left_ms, arena)!
             if msg.get("id").as_int(-1) == id
                 return msg
-        throw Rpc_end.timed_out
+        throw .timed_out
 
     pub fn read_msg( //< reads one frame and returns it as JSON
         //<
@@ -208,31 +208,32 @@ impl Client
         r: Self$@,
         timeout_ms: I32, //< how long this one call may take
         arena: Arena$@, //< where the response is built
-    ): json.Val?Rpc_end
+    ): json.Val!Rpc_end
         deadline: = sys.mono_us() + I64::timeout_ms * 1000I64
         for sys.mono_us() <= deadline
             r.drain_err()
-            taken: = take_frame(r.acc@, arena)?
+            taken: = take_frame(r.acc@, arena)!
             if body: = taken
                 return json.parse(body, arena) catch
-                    throw Rpc_end.broken
+                    throw .broken
             got: = r.read_step(read_slice_ms)
             if got == closed_step
                 r.drain_err()
-                throw Rpc_end.closed
+                throw .closed
             if got == fail_step
                 r.drain_err()
-                throw Rpc_end.broken
+                throw .broken
             if got > 0
                 r.acc.s(U8$[]::{ .ptr = r.out_buf.ptr, .len = got })
         r.drain_err()
-        throw Rpc_end.timed_out
+        throw .timed_out
 
     priv fn read_step(r: Self$@, ms: I32): I32 //< reads one step from standard output
         //<
         //< The marks tell a slice that ran out apart from a close or a failure.
         n: = r.child.read(r.out_buf, ms) catch e
-            switch e case .timed_out
+            switch e
+            case .timed_out
                 return again_step
             case .closed
                 return closed_step

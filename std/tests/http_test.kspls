@@ -98,7 +98,8 @@ fn test_http_parse_buffered()
     assert(req.version.equals("HTTP/1.1"), "version must be parsed correctly")
     assert(req.body.equals("hello"), "body must be sliced by Content-Length")
 
-    switch req.headers.find("host") case .some(v)
+    switch req.headers.find("host")
+    case .some(v)
         assert(v.equals("example.com"), "Host header lookup must be case-insensitive")
     case .none
         panic("Host header should be found")
@@ -163,7 +164,8 @@ fn test_http_parse_buffered()
 priv fn parse_error(src: U8[], max_body: Sz, arena: Arena$@): U8[] //<
     //< How `parse_request` refuses src with that body limit: the error's name, or `accepted`
     _r: = http.parse_request(src, max_body, arena) catch e
-        switch e case .incomplete
+        switch e
+        case .incomplete
             return "incomplete"
         case .head_too_large
             return "head_too_large"
@@ -317,7 +319,8 @@ priv fn build_error(status: I32, head: http.Header$@, body: U8[], arena: Arena$@
     $out: = Str_builder.new()
     defer out.free()
     http.format_response(out@, status, head, body) catch e
-        switch e case .length_mismatch
+        switch e
+        case .length_mismatch
             return "length_mismatch"
         case .unsupported_transfer_encoding
             return "unsupported_transfer_encoding"
@@ -360,7 +363,8 @@ fn test_http_response_length()
 priv fn response_error(src: U8[], arena: Arena$@): U8[] //<
     //< How `parse_response` refuses src: the error's name, or `accepted`
     _r: = http.parse_response(src, arena) catch e
-        switch e case .unsupported_close_delimited
+        switch e
+        case .unsupported_close_delimited
             return "unsupported_close_delimited"
         case .incomplete
             return "incomplete"
@@ -407,7 +411,8 @@ fn test_http_socket_roundtrip()
     for bad in U8[][]::{ "/a b", "/a\tb" }
         $refused: = false
         http.write_request(client, "GET", bad, null, "") catch e
-            switch e case .invalid_request_line
+            switch e
+            case .invalid_request_line
                 refused = true
             default {}
         assert(refused, "write_request must refuse whitespace inside the target")
@@ -415,7 +420,8 @@ fn test_http_socket_roundtrip()
     $mismatch: = false
     http.write_request(client, "POST", "/echo",
         http.headers(arena).add("Content-Length", "1").build(), "ping") catch e
-        switch e case .length_mismatch
+        switch e
+        case .length_mismatch
             mismatch = true
         default {}
     assert(mismatch, "write_request must refuse a Content-Length that is not the body's")
@@ -427,7 +433,8 @@ fn test_http_socket_roundtrip()
     resp_ok: =
         resp.status == 200 && resp.reason.equals("OK") && resp.body.equals("pong")
     assert(resp_ok, "client must parse the server's response correctly")
-    switch resp.headers.find("content-type") case .some(v)
+    switch resp.headers.find("content-type")
+    case .some(v)
         assert(v.equals("text/plain"), "Content-Type header must round-trip correctly")
     case .none
         panic("Content-Type header should be found")

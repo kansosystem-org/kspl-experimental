@@ -78,18 +78,18 @@ impl Meta
             return true
         return false
 
-    priv fn parse_identifier(r: Self$@): U8[]?Kspeg_signal
+    priv fn parse_identifier(r: Self$@): U8[]!Kspeg_signal
         r.skip_ws()
         start: = r.pos
         if r.is_eof() || !r.peek().is_alpha()
-            throw Kspeg_signal.mismatch
+            throw .mismatch
 
         r.pos += 1
         for !r.is_eof() && r.peek().is_alnum()
             r.pos += 1
         return r.source.sub(start, r.pos - start)
 
-    priv fn unescape_string(r: Self$@, raw: U8[], ascii_only: Bool): U8[]?Kspeg_signal //<
+    priv fn unescape_string(r: Self$@, raw: U8[], ascii_only: Bool): U8[]!Kspeg_signal //<
         //< Checks the escapes in a quoted literal and returns it unescaped in the arena
         //<
         //< Caution: **Set `ascii_only` for a character class**, which is a byte-at-a-time table
@@ -99,23 +99,23 @@ impl Meta
         for i < raw.len
             if (raw.ptr + i)$ == '\\'
                 if i + 1 >= raw.len || !is_kspeg_escape((raw.ptr + i + 1)$)
-                    throw Kspeg_signal.fatal(bad_escape_msg)
+                    throw .fatal(bad_escape_msg)
                 if ascii_only && (raw.ptr + i + 1)$ == 'u' && !is_ascii_escape(raw, i + 2)
-                    throw Kspeg_signal.fatal(wide_in_class_msg)
+                    throw .fatal(wide_in_class_msg)
                 i += 2
                 continue
             i += 1
         return raw.unescape_to_arena(r.arena) catch
-            throw Kspeg_signal.fatal("Invalid escape in a literal")
+            throw .fatal("Invalid escape in a literal")
 
-    priv fn scan_until(r: Self$@, close_ch: U8, err_msg: U8[]): U8[]?Kspeg_signal //<
+    priv fn scan_until(r: Self$@, close_ch: U8, err_msg: U8[]): U8[]!Kspeg_signal //<
         //< parse_primary's scan of a quoted string or a character class
         //<
         //< It returns the raw text before close_ch, and skips close_ch.
         start: = r.pos
         for
             if r.is_eof()
-                throw Kspeg_signal.fatal(err_msg)
+                throw .fatal(err_msg)
             if r.peek() == '\\'
                 r.pos += 2
                 continue
@@ -126,13 +126,13 @@ impl Meta
         r.pos += 1
         return raw
 
-    priv fn parse_primary(r: Self$@): Rule$@?Kspeg_signal
+    priv fn parse_primary(r: Self$@): Rule$@!Kspeg_signal
         // A '(' recurses parse_choice -> parse_sequence -> parse_prefix -> parse_suffix ->
         // parse_primary, so both limits are checked here too, as in Rule.parse.
         r.depth += 1
         defer r.depth -= 1
         if r.depth > max_parse_depth || r.stack.near()
-            throw Kspeg_signal.fatal("Grammar definition nested too deeply")
+            throw .fatal("Grammar definition nested too deeply")
 
         r.skip_ws()
         c: = r.peek()
@@ -141,15 +141,15 @@ impl Meta
         if c == '"' || is_kw
             quote: = c
             r.pos += 1
-            raw_text: = r.scan_until(quote, "Unterminated literal")?
-            unescaped: = r.unescape_string(raw_text, false)?
+            raw_text: = r.scan_until(quote, "Unterminated literal")!
+            unescaped: = r.unescape_string(raw_text, false)!
             rule: = Rule.keyword_literal(unescaped) if is_kw else Rule.literal(unescaped)
             return r.arena.create(rule)
 
         if c == '['
             r.pos += 1
-            raw_text: = r.scan_until(']', "Unterminated character class")?
-            unescaped: = r.unescape_string(raw_text, true)?
+            raw_text: = r.scan_until(']', "Unterminated character class")!
+            unescaped: = r.unescape_string(raw_text, true)!
             return r.arena.create(Rule.char_class(unescaped))
 
         if c == '.'
@@ -162,34 +162,34 @@ impl Meta
         if c == '~'
             r.pos += 1
             if r.pos >= r.source.len || r.source[r.pos] != '"'
-                throw Kspeg_signal.fatal("Expected a string of stopping bytes after '~'")
+                throw .fatal("Expected a string of stopping bytes after '~'")
             r.pos += 1
-            raw_stops: = r.scan_until('"', "Unterminated stopping-byte set")?
-            stops: = r.unescape_string(raw_stops, false)?
+            raw_stops: = r.scan_until('"', "Unterminated stopping-byte set")!
+            stops: = r.unescape_string(raw_stops, false)!
             if stops.len == 0
-                throw Kspeg_signal.fatal("'~' wants at least one stopping byte")
+                throw .fatal("'~' wants at least one stopping byte")
             return r.arena.create(Rule.recover(stops))
 
         if c == '('
             r.pos += 1
-            inner: = r.parse_choice()?
+            inner: = r.parse_choice()!
             if !r.match_str(")")
-                throw Kspeg_signal.fatal("Expected closing parenthesis ')'")
+                throw .fatal("Expected closing parenthesis ')'")
             return inner
 
         start_pos: = r.pos
-        ident: = r.parse_identifier()?
+        ident: = r.parse_identifier()!
 
         r.skip_ws()
         if !r.is_eof() && r.peek() == '='
             r.pos = start_pos
-            throw Kspeg_signal.mismatch
+            throw .mismatch
 
         r.pos = start_pos + ident.len
         return r.arena.create(Rule.reference(ident))
 
-    priv fn parse_suffix(r: Self$@): Rule$@?Kspeg_signal
-        base_rule: = r.parse_primary()?
+    priv fn parse_suffix(r: Self$@): Rule$@!Kspeg_signal
+        base_rule: = r.parse_primary()!
         if r.match_str("?")
             return r.arena.create(Rule.optional(base_rule))
         if r.match_str("*")
@@ -198,16 +198,16 @@ impl Meta
             return r.arena.create(Rule.one_or_more(base_rule))
         return base_rule
 
-    priv fn parse_prefix(r: Self$@): Rule$@?Kspeg_signal
+    priv fn parse_prefix(r: Self$@): Rule$@!Kspeg_signal
         if r.match_str("&")
-            return r.arena.create(Rule.and_pred(r.parse_suffix()?))
+            return r.arena.create(Rule.and_pred(r.parse_suffix()!))
         if r.match_str("!")
-            return r.arena.create(Rule.not_pred(r.parse_suffix()?))
+            return r.arena.create(Rule.not_pred(r.parse_suffix()!))
         return r.parse_suffix()
 
-    priv fn parse_sequence(r: Self$@): Rule$@?Kspeg_signal
+    priv fn parse_sequence(r: Self$@): Rule$@!Kspeg_signal
         rules: = List<|Rule$@|>.create(r.arena)
-        rules.push(r.parse_prefix()?)
+        rules.push(r.parse_prefix()!)
         for
             saved_pos: = r.pos
             next_rule: = r.parse_prefix() catch
@@ -216,34 +216,34 @@ impl Meta
             rules.push(next_rule)
         return rules.get(0) if rules.len == 1 else r.arena.create(Rule.sequence(rules))
 
-    priv fn parse_choice(r: Self$@): Rule$@?Kspeg_signal
+    priv fn parse_choice(r: Self$@): Rule$@!Kspeg_signal
         rules: = List<|Rule$@|>.create(r.arena)
-        rules.push(r.parse_sequence()?)
+        rules.push(r.parse_sequence()!)
         for r.match_str("|")
             seq: = r.parse_sequence() catch
-                throw Kspeg_signal.fatal("Expected sequence after '|'")
+                throw .fatal("Expected sequence after '|'")
             rules.push(seq)
         return rules.get(0) if rules.len == 1 else r.arena.create(Rule.choice(rules))
 
-    priv fn parse_definition(r: Self$@): Rule_entry$@?Kspeg_signal
-        name: = r.parse_identifier()?
+    priv fn parse_definition(r: Self$@): Rule_entry$@!Kspeg_signal
+        name: = r.parse_identifier()!
         if !r.match_str("=")
-            throw Kspeg_signal.fatal("Expected '=' in rule definition")
+            throw .fatal("Expected '=' in rule definition")
 
         rule: = r.parse_choice() catch
-            throw Kspeg_signal.fatal("Invalid rule body")
+            throw .fatal("Invalid rule body")
         return r.arena.create(Rule_entry::{ .name = name, .rule = rule })
 
     pub fn parse_grammar( //< reads the whole grammar and returns a target loaded with its rules
         r: Self$@,
-    ): engine.Target$@?Kspeg_signal
+    ): engine.Target$@!Kspeg_signal
         rules: = List<|Rule_entry$@|>.create(r.arena)
 
         for
             r.skip_ws()
             if r.is_eof()
                 break
-            def_res: = r.parse_definition()?
+            def_res: = r.parse_definition()!
             rules.push(def_res)
 
         const default_rules_str: U8[] = "\n_Space = [ \\t\\r\\n]*\n_Boundary = [A-Za-z0-9_]\n"
@@ -252,7 +252,7 @@ impl Meta
             default_meta.skip_ws()
             if default_meta.is_eof()
                 break
-            def_res: = default_meta.parse_definition()?
+            def_res: = default_meta.parse_definition()!
 
             $found: = false
             for i in Range.asc(rules.len)
@@ -274,7 +274,8 @@ impl Meta
                 boundary_rule = entry.rule
                 break
         $kw_rule: Rule$@ = null
-        switch keyword_set_boundary(boundary_rule, keywords) case .some(ranges)
+        switch keyword_set_boundary(boundary_rule, keywords)
+        case .some(ranges)
             kw_rule = keyword_set_rule(keywords, ranges, r.arena)
         case .none
             choice_rules: = List<|Rule$@|>.create(r.arena)
@@ -295,20 +296,21 @@ impl Meta
         for entry in rules
             fold_keyword_choices(entry.rule, boundary_rule, r.arena)
 
-        r.check_rule_names(rules)?
+        r.check_rule_names(rules)!
 
         ctx: = r.arena.create(engine.Target.new(r.source, r.arena))
         ctx.load_rules(rules)
         // Caution: **After load_rules**, which works out what each rule can begin with.
-        switch left_recursive_rule(rules) case .some(name)
+        switch left_recursive_rule(rules)
+        case .some(name)
             why: = r.arena.text().s("Rule '").s(name)
                 .s("' can enter itself before reading a character (left recursion), so it never \
                     ends").take()
-            throw Kspeg_signal.fatal(why)
+            throw .fatal(why)
         case .none {}
         return ctx
 
-    priv fn check_rule_names(r: Self$@, rules: List<|Rule_entry$@|>$@): Void?Kspeg_signal //<
+    priv fn check_rule_names(r: Self$@, rules: List<|Rule_entry$@|>$@): Void!Kspeg_signal //<
         //< Rejects a rule defined twice, and a reference to another rule that names no rule
         //<
         //< A name defined twice would leave one definition silently unused, whichever won.
@@ -318,8 +320,7 @@ impl Meta
         defined: = r.arena.create(Map<|U8[], Bool|>.new_with_cap(256, r.arena))
         for entry in rules
             if defined.get(entry.name) catch false
-                throw Kspeg_signal
-                    .fatal(r.arena.text().s("Rule '").s(entry.name).s("' is defined twice").take())
+                throw .fatal(r.arena.text().s("Rule '").s(entry.name).s("' is defined twice").take())
             defined.set(entry.name, true)
         // Caution: **Also name the rule that refers to it.** The name alone may be referred to from
         // many places, and no line and column can be given: a grammar may be embedded in an
@@ -330,6 +331,5 @@ impl Meta
             for want in refs
                 found: = defined.get(want) catch false
                 if !found
-                    throw Kspeg_signal
-                        .fatal(r.arena.text().s("Undefined rule '").s(want).s("' referenced from '")
-                        .s(entry.name).s("'").take())
+                    throw .fatal(r.arena.text().s("Undefined rule '").s(want)
+                        .s("' referenced from '").s(entry.name).s("'").take())

@@ -11,7 +11,7 @@ import "kspage/lay/caret"
 import "kspage/lay/flow"
 import "kspage/lay/page" { Page }
 import "kspage/model/collect" { Collect }
-import "kspage/model/doc" + { Axis, Block, Rect }
+import "kspage/model/doc" + { Block, Rect }
 import "kspage/model/number"
 import "kspage/model/run"
 import "kspage/model/style" + { Arrange, Sheet, Shape, Style }
@@ -37,7 +37,8 @@ impl Surface_end
     fn surfaced(e: Self): Bool //< whether the slide was inserted
         //<
         //< It answers only yes or no (where the reason is wanted, switch on the result).
-        switch e case .done
+        switch e
+        case .done
             return true
         default
             return false
@@ -56,10 +57,10 @@ fn sketch_from(name: U8[]): Sketch //< gets a sketch from a name
     //<
     //< An unknown name gives one frame filling the slide (there must always be one frame).
     if name.equals("titled")
-        return Sketch.titled
+        return .titled
     if name.equals("halved")
-        return Sketch.halved
-    return Sketch.whole
+        return .halved
+    return .whole
 
 priv const pad_share: F32 = 0.0625F32 //< the margin around a frame, and the title's height
     //<
@@ -67,14 +68,14 @@ priv const pad_share: F32 = 0.0625F32 //< the margin around a frame, and the tit
     //< changes).
 priv const title_share: F32 = 0.2F32
 
-priv fn role_of(sheet: Sheet$@, how: Arrange, sized: Bool): Option<|Style$@|> //<
+priv fn role_of(sheet: Sheet$@, how: Arrange, sized: Bool): Style$@? //<
     //< The first of the styles with that arrangement
     //<
     //< Caution: **Do not look it up by name.** A hard-coded name silently breaks the day the
     //< document renames the style (the rule `dressed` in `theme.kspls` follows), so it is found by
     //< part. Where there is none, the caller makes one by name.
     if sheet == null
-        return Option<|Style$@|>.none
+        return .none
     for $i: Sz = 0; i < sheet.styles.len; i += 1
         one: = sheet.styles.get(i)
         if !one.arrange.same_arrange(how)
@@ -82,44 +83,44 @@ priv fn role_of(sheet: Sheet$@, how: Arrange, sized: Bool): Option<|Style$@|> //
         // Only a style with a size counts as a slide (without one, a frame's size is undefined).
         if sized && (one.width <= 0.0F32 || one.height <= 0.0F32)
             continue
-        return Option<|Style$@|>.some(one)
-    return Option<|Style$@|>.none
+        return .some(one)
+    return .none
 
-priv fn fitting(sheet: Sheet$@, name: U8[], how: Arrange, sized: Bool): Option<|Style$@|> //<
+priv fn fitting(sheet: Sheet$@, name: U8[], how: Arrange, sized: Bool): Style$@? //<
     //< Returns the style of that name if it fits the shape wanted
     //<
     //< Null where it does not fit — an existing name's arrangement is not changed (the rule
     //< `styled` in `shape.kspls` follows).
     if sheet == null || name.len <= 0
-        return Option<|Style$@|>.none
+        return .none
     if got: = sheet.find(name)
         if !got.arrange.same_arrange(how)
-            return Option<|Style$@|>.none
+            return .none
         if sized && (got.width <= 0.0F32 || got.height <= 0.0F32)
-            return Option<|Style$@|>.none
-        return Option<|Style$@|>.some(got)
-    return Option<|Style$@|>.none
+            return .none
+        return .some(got)
+    return .none
 
-priv fn named_collector(sheet: Sheet$@, name: U8[], what: Collect): Option<|Style$@|> //<
+priv fn named_collector(sheet: Sheet$@, name: U8[], what: Collect): Style$@? //<
     //< Returns the style of that name if it fits the collection wanted
     if sheet == null || name.len <= 0
-        return Option<|Style$@|>.none
+        return .none
     if got: = sheet.find(name)
         if got.collect.same_collect(what)
-            return Option<|Style$@|>.some(got)
-    return Option<|Style$@|>.none
+            return .some(got)
+    return .none
 
-priv fn collector_of(sheet: Sheet$@, what: Collect): Option<|Style$@|> //<
+priv fn collector_of(sheet: Sheet$@, what: Collect): Style$@? //<
     //< The style found by what it collects
     //<
     //< Not by its arrangement (a collecting block flows too, like the body).
     if sheet == null
-        return Option<|Style$@|>.none
+        return .none
     for $i: Sz = 0; i < sheet.styles.len; i += 1
         one: = sheet.styles.get(i)
         if one.collect.same_collect(what)
-            return Option<|Style$@|>.some(one)
-    return Option<|Style$@|>.none
+            return .some(one)
+    return .none
 
 priv fn sketched(made: Block$@, plan: Sketch, wide: F32, high: F32) //<
     //< Places a sketch's frames on the slide
@@ -133,7 +134,8 @@ priv fn sketched(made: Block$@, plan: Sketch, wide: F32, high: F32) //<
     body_y: = pad_y + title_h + pad_y
     body_h: = high - body_y - pad_y
     inner: = wide - pad_x - pad_x
-    switch plan case .whole
+    switch plan
+    case .whole
         framed(made, 0.0, 0.0, wide, high)
     case .titled
         framed(made, pad_x, pad_y, inner, title_h)
@@ -155,11 +157,11 @@ priv fn holds_frames(sheet: Sheet$@, name: U8[]): Bool //< whether the style can
     //< A grid and a collected block cannot (a shape drawn over a table belongs to the cell). A
     //< slide needs a size (a frame's position comes from it). An unknown name flows.
     if room: = sheet.find(name)
-        if room.arrange.same_arrange(Arrange.absolute)
+        if room.arrange.same_arrange(.absolute)
             return room.width > 0.0 && room.height > 0.0
-        if room.arrange.same_arrange(Arrange.grid)
+        if room.arrange.same_arrange(.grid)
             return false
-        return room.collect.same_collect(Collect.none)
+        return room.collect.same_collect(.none)
     return true
 
 priv fn first_spot(sheet: Sheet$@, holder: Block$@): Rect //<
@@ -169,7 +171,7 @@ priv fn first_spot(sheet: Sheet$@, holder: Block$@): Rect //<
     //< the flow decide it differently: on a slide, half its size, centered; in the flow (no size),
     //< a fixed size a little inside the top left.
     if room: = sheet.find(holder.style)
-        if room.arrange.same_arrange(Arrange.absolute) && room.width > 0.0 && room.height > 0.0
+        if room.arrange.same_arrange(.absolute) && room.width > 0.0 && room.height > 0.0
             return Rect::{ .x = room.width / 4.0F32, .y = room.height / 4.0F32,
                 .w = room.width / 2.0F32, .h = room.height / 2.0F32 }
     return Rect::{ .x = 8.0, .y = 8.0, .w = 120.0, .h = 80.0 }
@@ -185,13 +187,14 @@ impl Editor
         //< restyling it would move every cell already using it.
         for $i: Sz = 0; i < sheet.styles.len; i += 1
             s: = sheet.styles.get(i)
-            if style.cell_like(s) && s.align.same_align(style.Align.left)
+            if style.cell_like(s) && s.align.same_align(.left)
                 return s.name
         if had: = sheet.find(look.cell_names[0])
             return had.name
-        switch r.styled(st, sheet, look.cell_names[0], Arrange.flow) case .some(made)
+        switch r.styled(st, sheet, look.cell_names[0], .flow)
+        case .some(made)
             $want: Style = made$
-            look.dress_cell(want@, style.Align.left)
+            look.dress_cell(want@, .left)
             field.do_set_look(r, st, made, want)
             return made.name
         case .none
@@ -227,13 +230,15 @@ impl Editor
         // document renames the style; by part alone, two styles with the same part leave neither
         // choosable.
         $s: Style$@ = null
-        switch fitting(sheet, name, Arrange.grid, false) case .some(by_name)
+        switch fitting(sheet, name, .grid, false)
+        case .some(by_name)
             s = by_name
         case .none
-            if got: = role_of(sheet, Arrange.grid, false)
+            if got: = role_of(sheet, .grid, false)
                 s = got
         if s == null
-            switch r.styled(st, sheet, name, Arrange.grid) case .some(made_style)
+            switch r.styled(st, sheet, name, .grid)
+            case .some(made_style)
                 s = made_style
             case .none
                 return false
@@ -252,7 +257,7 @@ impl Editor
         if across > 0.0F32
             share: = across / F32::cols
             for $c: Sz = 0; c < cols; c += 1
-                edit.do_set_size(r, st, made, Axis.column, c, Option<|F32|>.some(share))
+                edit.do_set_size(r, st, made, .column, c, .some(share))
         head: = made.children.get(0).children.get(0)
         r.caret = caret.at(head.inlines.get(0), 0)
         r.break_group()
@@ -267,22 +272,24 @@ impl Editor
             //< container's width", unknown before layout). The frames inside come from the sketch
             //< (`Sketch`).
         if r.shut()
-            return Surface_end.shut
+            return .shut
         // Say which of the two stopped it (the reason is at `Surface_end`).
         if ask.cell_of(page, r.caret).found
-            return Surface_end.in_cell
+            return .in_cell
         room: = r.room_after_caret(page)
         if !room.found
-            return Surface_end.nowhere
+            return .nowhere
         // Nothing creates one here (the core does not decide the size).
         $s: Style$@ = null
-        switch fitting(sheet, name, Arrange.absolute, true) case .some(by_name)
+        switch fitting(sheet, name, .absolute, true)
+        case .some(by_name)
             s = by_name
         case .none
-            switch role_of(sheet, Arrange.absolute, true) case .some(got)
+            switch role_of(sheet, .absolute, true)
+            case .some(got)
                 s = got
             case .none
-                return Surface_end.no_style
+                return .no_style
         r.break_group()
         st: = r.step()
         made: = doc.new_block(s.name, r.arena)
@@ -291,7 +298,7 @@ impl Editor
         box: = made.children.get(0)
         r.caret = caret.at(box.inlines.get(0), 0)
         r.break_group()
-        return Surface_end.done
+        return .done
 
     fn insert_gathered(r: Self$@, page: Page$@, sheet: Sheet$@, name: U8[], what: Collect): Bool //<
         //< Inserts a table of contents or a list of notes after the paragraph the cursor is in
@@ -306,12 +313,14 @@ impl Editor
         r.break_group()
         st: = r.step()
         $done: = false
-        $found: Option<|Style$@|> = named_collector(sheet, name, what)
-        switch found case .none
+        $found: Style$@? = named_collector(sheet, name, what)
+        switch found
+        case .none
             found = collector_of(sheet, what)
         case .some {}
-        switch found case .none
-            found = r.styled(st, sheet, name, Arrange.flow)
+        switch found
+        case .none
+            found = r.styled(st, sheet, name, .flow)
         case .some {}
         if s: = found
             if !s.collect.same_collect(what)
@@ -363,7 +372,7 @@ impl Editor
         r.break_group()
         st: = r.step()
         $done: = false
-        if s: = r.styled(st, sheet, name, Arrange.flow)
+        if s: = r.styled(st, sheet, name, .flow)
             r.charted(st, s, what)
             made: = doc.new_block(s.name, r.arena)
             // Caution: Copy the range. The caller's text is gone at the next call.
@@ -387,8 +396,9 @@ impl Editor
         if fresh.rule_width <= 0.0
             fresh.rule_width = 1.0F32
             moved = true
-        switch fresh.fill case .none
-            fresh.fill = Option<|U32|>.some(style.drawn_color)
+        switch fresh.fill
+        case .none
+            fresh.fill = .some(style.drawn_color)
             moved = true
         case .some {}
         if !moved
@@ -405,7 +415,8 @@ impl Editor
         //< screen's).
         $fresh: Style = s$
         fresh.shape = what
-        switch fresh.fill case .none
+        switch fresh.fill
+        case .none
             if fresh.rule_width <= 0.0
                 fresh.rule_width = 2.0F32
                 fresh.rule_color = style.drawn_color
@@ -424,8 +435,9 @@ impl Editor
             return false
         $slide: Block$@ = null
         if b: = r.holder_at(page)
-            switch sheet.find(b.style) case .some(room)
-                if room.arrange.same_arrange(Arrange.absolute)
+            switch sheet.find(b.style)
+            case .some(room)
+                if room.arrange.same_arrange(.absolute)
                     slide = b
             case .none {}
         if slide == null
@@ -464,10 +476,10 @@ impl Editor
         r.break_group()
         st: = r.step()
         $done: = false
-        if s: = r.styled(st, sheet, name, Arrange.flow)
+        if s: = r.styled(st, sheet, name, .flow)
             r.dressed(st, s, what)
             made: = doc.new_block(s.name, r.arena)
-            made.frame = Option<|Rect|>.some(spot)
+            made.frame = .some(spot)
             // Caution: **Add it at the end** (what comes later in the document is drawn on top).
             edit.do_block(r, st, slide, slide.children.len, true, made)
             // Leave the added shape selected, or the handles and number fields point at another
@@ -501,7 +513,9 @@ impl Editor
         // Split the inline where the cursor is. If it does not split, the cursor is at an end — at
         // the start it goes before, at the end after.
         $at: Sz = own.index + 1
-        switch edit.split_run(r, st, here, r.caret.offset) case .some {} case .none
+        switch edit.split_run(r, st, here, r.caret.offset)
+        case .some {}
+        case .none
             if r.caret.offset <= 0
                 at = own.index
         // No text is inserted: the number is counted anew at every layout (`number.number_refs`)

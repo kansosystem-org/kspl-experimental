@@ -25,35 +25,35 @@ pub struct List_seq<|T|> //< the start of a chain; reads a `List` and advances a
     priv i: Sz
 
 impl<|T|> List_seq<|T|>: Iter<|T|> //< so a `for` can drive it
-    pub fn next(r: Self$@): Option<|T|> //< the next element, or nothing at the end
+    pub fn next(r: Self$@): T? //< the next element, or nothing at the end
         if r.i >= r.xs.len
-            return Option<|T|>.none
+            return .none
         v: = r.xs.get(r.i)
         r.i += 1
-        return Option<|T|>.some(v)
+        return .some(v)
 
 pub struct Keep<|S, T|> //< the adapter that lets through only elements meeting a condition
     priv src: S
     priv pred: Callable1<|T, Bool|>
 
 impl<|S: Iter<|T|>, T|> Keep<|S, T|>: Iter<|T|> //< so a `for` can drive it
-    pub fn next(r: Self$@): Option<|T|> //< the next element that meets the condition, or nothing
+    pub fn next(r: Self$@): T? //< the next element that meets the condition, or nothing
         for
             if v: = r.src.next()
                 if r.pred.call(v)
-                    return Option<|T|>.some(v)
+                    return .some(v)
             else
-                return Option<|T|>.none
+                return .none
 
 pub struct Conv<|S, T, U|> //< the adapter that passes each element through a function
     priv src: S
     priv f: Callable1<|T, U|>
 
 impl<|S: Iter<|T|>, T, U|> Conv<|S, T, U|>: Iter<|U|> //< so a `for` can drive it
-    pub fn next(r: Self$@): Option<|U|> //< the next element, already converted, or nothing
+    pub fn next(r: Self$@): U? //< the next element, already converted, or nothing
         if v: = r.src.next()
-            return Option<|U|>.some(r.f.call(v))
-        return Option<|U|>.none
+            return .some(r.f.call(v))
+        return .none
 
 // Caution: **Write the same three methods for each adapter**; only then can they be called from any
 // adapter (as free functions, calls read inside out). `count` is `Iter`'s default body
@@ -171,20 +171,20 @@ impl<|T|> List<|T|>
                 return false
         return true
 
-    pub fn first(r: Self@): T?Seq_error //< the first element; fails when there is none
+    pub fn first(r: Self@): T!Seq_error //< the first element; fails when there is none
         if r.len == 0
-            throw Seq_error.empty_sequence
+            throw .empty_sequence
         return (r.ptr + 0)$
 
     pub fn first_where( //< the first element that meets the condition; fails when none does
         r: Self@,
         pred: Callable1<|T, Bool|>, //< the condition the wanted element meets
-    ): T?Seq_error
+    ): T!Seq_error
         for i in Range.asc(r.len)
             item: = (r.ptr + i)$
             if pred.call(item)
                 return item
-        throw Seq_error.no_match
+        throw .no_match
 
     pub fn distinct( //< a new list keeping the first of each group of equal elements, in order
         //<
@@ -257,10 +257,10 @@ impl<|T|> List<|T|>
         to.free()
         return from
 
-    priv fn pick_extreme(r: Self@, cmp: Callable2<|T, T, I32|>, want_max: Bool): T?Seq_error //<
+    priv fn pick_extreme(r: Self@, cmp: Callable2<|T, T, I32|>, want_max: Bool): T!Seq_error //<
         //< min_by and max_by in one (want_max picks the maximum)
         if r.len == 0
-            throw Seq_error.empty_sequence
+            throw .empty_sequence
         $best: = (r.ptr + 0)$
         for $i: Sz = 1; i < r.len; i += 1
             item: = (r.ptr + i)$
@@ -273,11 +273,11 @@ impl<|T|> List<|T|>
     pub fn min_by( //< the smallest element; fails when there is none
         r: Self@,
         cmp: Callable2<|T, T, I32|>, //< < 0, 0 or > 0 as `a` is below, equal to or above `b`
-    ): T?Seq_error
-        return r.pick_extreme(cmp, false)?
+    ): T!Seq_error
+        return r.pick_extreme(cmp, false)!
 
     pub fn max_by( //< the largest element; fails when there is none
         r: Self@,
         cmp: Callable2<|T, T, I32|>, //< < 0, 0 or > 0 as `a` is below, equal to or above `b`
-    ): T?Seq_error
-        return r.pick_extreme(cmp, true)?
+    ): T!Seq_error
+        return r.pick_extreme(cmp, true)!

@@ -34,8 +34,9 @@ impl Ast_node
         for child in r.children
             child.apply_abi_recursive(c)
 
-        switch kind case .k_decl_fn, .k_decl_var, .k_decl_const, .k_decl_embed, .k_decl_struct,
-            .k_decl_enum, .k_decl_alias, .k_decl_trait
+        switch kind
+        case .k_decl_fn, .k_decl_var, .k_decl_const, .k_decl_embed, .k_decl_struct, .k_decl_enum,
+            .k_decl_alias, .k_decl_trait
             r.transform_decl_name(c)
         case .k_expr_postfix
             op_node: = r.get_postfix_op()
@@ -52,7 +53,8 @@ impl Ast_node
         r.ice_assert(id_node != null, "transform_decl_name: declaration node missing identifier")
 
         $sym: Sema_symbol$@ = null
-        switch get_global_symbol_by_def(r) case .some(s)
+        switch get_global_symbol_by_def(r)
+        case .some(s)
             sym = s
         case .none
             return
@@ -198,13 +200,15 @@ impl Ast_node
             base_id = obj_node.type_id
             for
                 info: = c.env.get_info(base_id)
-                switch info case .pointer(inner_id)
+                switch info
+                case .pointer(inner_id)
                     base_id = inner_id
                 default
                     break
 
         info: = c.env.get_info(c.env.get_real_type(base_id))
-        switch info case .trait_type(_d)
+        switch info
+        case .trait_type(_d)
             return
         default {}
 
@@ -233,7 +237,8 @@ impl Ast_node
             return
 
         base_name: = r.get_path_name()
-        switch get_global_symbol_by_def(r.def_node) case .some(sym)
+        switch get_global_symbol_by_def(r.def_node)
+        case .some(sym)
             w: = c.clear_scratch()
             get_c_identifier_for_sym_to(sym, base_name, w)
             r.flatten_to_identifier(w.slice())
@@ -253,7 +258,8 @@ impl Ast_node
     priv fn is_generic_inst_node(r: Ast_node$@): Bool
         if r == null
             return false
-        switch get_global_symbol_by_def(r) case .some(sym)
+        switch get_global_symbol_by_def(r)
+        case .some(sym)
             return sym.flags.is_generated_instance
         case .none
             return false
@@ -312,19 +318,19 @@ priv fn is_private_symbol(sym: Sema_symbol$@): Bool //<
         return false
     return sym.kind.is_value() && !sym.has_program_unique_c_name()
 
-priv fn get_global_symbol_by_def(def_node: Ast_node$@): Option<|Sema_symbol$@|> //<
+priv fn get_global_symbol_by_def(def_node: Ast_node$@): Sema_symbol$@? //<
     //< The symbol of a definition node, found through `sym_ptr` only
     //<
     //< Caution: **Do not search the table for it.** Every path that adds to the global table sets
     //< `sym.node.sym_ptr` (define_symbol in `sema/decl/scope.kspls`, `sema/session/ctx.kspls`,
     //< `sema/decl/mono.kspls`); a new path must too, or the name is emitted unmangled.
     if def_node == null || def_node.sym_ptr == null
-        return Option<|Sema_symbol$@|>.none
+        return .none
     sym: = Sema_symbol$@::def_node.sym_ptr
     if sym.flags.is_global || sym.flags.is_method
-        return Option<|Sema_symbol$@|>.some(sym)
+        return .some(sym)
     // A local variable is not mangled.
-    return Option<|Sema_symbol$@|>.none
+    return .none
 
 priv fn write_kspl_prefixed_to(name: U8[], w: Writer): Writer
     if name.starts_with("kspl_")

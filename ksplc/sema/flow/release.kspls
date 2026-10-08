@@ -84,18 +84,18 @@ fn call_arg_for_param(callee: Ast_node$@, args_node: Ast_node$@, param_idx: Sz, 
     return args_node.get_child(at) if at < args_node.children.len else null
 
 impl Ast_node
-    fn get_free_call_receiver(r: Self$@, c: Sema_ctx$@): Option<|Ast_node$@|> //<
+    fn get_free_call_receiver(r: Self$@, c: Sema_ctx$@): Ast_node$@? //<
         //< The receiver node where the method call is a release method, or null for any other call
         //<
         //< **It decides by whether the receiver's type conforms to `Owned`, not by the name** (a
         //< `free` without it gets [W0107] at the declaration).
         member: = r.get_postfix_member()
         if member == null || !member.text.equals("free")
-            return Option<|Ast_node$@|>.none
+            return .none
         receiver: = r.get_postfix_receiver()
         if receiver == null || !c.env.is_owned(receiver.type_id)
-            return Option<|Ast_node$@|>.none
-        return Option<|Ast_node$@|>.some(receiver)
+            return .none
+        return .some(receiver)
 
     fn is_arena_handout(r: Self$@, c: Sema_ctx$@): Bool //<
         //< Whether this expression is a call where an arena hands out a pointer
@@ -130,7 +130,7 @@ impl Ast_node
         first: = args.get_child(0)
         return first != null && is_arena_type(c, first.type_id)
 
-    fn get_free_fn_arg(r: Self$@): Option<|Ast_node$@|> //<
+    fn get_free_fn_arg(r: Self$@): Ast_node$@? //<
         //< The released argument node, where the call is to a free function like `dealloc(x)`
         //<
         //< Such a function releases its actual argument.
@@ -138,11 +138,11 @@ impl Ast_node
         //< release is identified here.
         callee: = r.get_postfix_receiver()
         if callee == null || !is_free_fn_path(callee)
-            return Option<|Ast_node$@|>.none
+            return .none
         args_node: = r.find_child(.k_expr_args)
         if args_node == null || args_node.children.len != 1
-            return Option<|Ast_node$@|>.none
-        return Option<|Ast_node$@|>.some(args_node.get_child(0))
+            return .none
+        return .some(args_node.get_child(0))
     fn body_frees_param_directly(r: Self$@, param_name: U8[], c: Sema_ctx$@): Bool //<
         //< Whether the body's top-level statements always free the formal parameter param_name
         //<

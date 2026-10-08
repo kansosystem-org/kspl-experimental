@@ -24,7 +24,7 @@ import "ksplc/sema/type/arc" as sema_type_arc
 import "ksplc/sema/type/def" as sema_type_def
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
-import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
+import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/ds" { List }
 import "std/str" { Str_builder }
 
@@ -66,7 +66,7 @@ impl Arc_helper_parts
         return ref_node
 
 fn synth_arc_stmt(lctx: Lowering_ctx$@, recv: Ast_node$@, type_id: I32, method_name: U8[],
-    loc: base_ast.Loc): Option<|Ast_node$@|> //<
+    loc: base_ast.Loc): Ast_node$@? //<
         //< It synthesizes the statement `recv.<method>()` for a `Ref_counted` retain or release
         //<
         //< def_node holds the resolved declaration, so the ABI pass adds self and mangles the name.
@@ -81,13 +81,13 @@ fn synth_arc_stmt(lctx: Lowering_ctx$@, recv: Ast_node$@, type_id: I32, method_n
     if s: = lctx.sema.resolve_type_method_fqn(fqn_b.slice())
         sym = s
     if sym == null || sym.node == null
-        return Option<|Ast_node$@|>.none
+        return .none
 
     void_id: = I32::sema_type_env.Builtin_type_id.void_type
     args: = Ast_node.new(.k_expr_args, "args", loc)
     call: = lower_expr.build_linked_method_call(recv, sym.node, args, void_id, loc)
     stmt: = Ast_node.new(.k_stmt_expr, "expr", loc).add_child(call)
-    return Option<|Ast_node$@|>.some(stmt)
+    return .some(stmt)
 
 priv fn expand_place_index_ops(lctx: Lowering_ctx$@, n: Ast_node$@, depth: Sz) //<
     //< It expands each place-returning subscript `l[i]` in a place expression's copy to `l.at(i)$`
@@ -137,13 +137,14 @@ priv fn arc_helper_ptr_type(lctx: Lowering_ctx$@, real_id: I32): I32 //<
     //< first element, so a `T[N]$@` parameter would disagree with the call's type.
     //< Read-only, since `retain` / `release` take `Self@`: a read-only array copied by `for x in`
     //< passes as it is, where a writable parameter discarded C's `const` (Principle 2).
-    switch lctx.sema.env.get_info(real_id) case .array(elem_id, _size)
+    switch lctx.sema.env.get_info(real_id)
+    case .array(elem_id, _size)
         return lctx.sema.env.make_ptr(lctx.sema.env.make_const(elem_id))
     default
         return lctx.sema.env.make_ptr(lctx.sema.env.make_const(real_id))
 
 priv fn get_or_create_arc_helper(lctx: Lowering_ctx$@, type_id: I32, method_name: U8[],
-    loc: base_ast.Loc, depth: Sz): Option<|Ast_node$@|> //<
+    loc: base_ast.Loc, depth: Sz): Ast_node$@? //<
         //< The per-type chain helper `fn kspl_arc_<method>_<type>(p: T@)`, created once
         //<
         //< Caution: The argument must be **a pointer**. By value, lowering a cleanup again for each
@@ -156,7 +157,7 @@ priv fn get_or_create_arc_helper(lctx: Lowering_ctx$@, type_id: I32, method_name
     key: = key_b.slice()
     existing: = lctx.arc_helpers.get(key) catch null
     if existing != null
-        return Option<|Ast_node$@|>.some(existing)
+        return .some(existing)
 
     $name_b: = Str_builder.new()
     defer name_b.free()
@@ -178,7 +179,7 @@ priv fn get_or_create_arc_helper(lctx: Lowering_ctx$@, type_id: I32, method_name
     for op in ops
         body.add_child(op)
     helper.add_child(body)
-    return Option<|Ast_node$@|>.some(helper)
+    return .some(helper)
 
 priv fn build_arc_helper_signature(lctx: Lowering_ctx$@, helper_name: U8[], ptr_id: I32,
     loc: base_ast.Loc): Arc_helper_parts //<
@@ -188,15 +189,15 @@ priv fn build_arc_helper_signature(lctx: Lowering_ctx$@, helper_name: U8[], ptr_
     params: = Ast_node.new(.k_param_list, "params", loc).add_child(param)
     void_id: = I32::sema_type_env.Builtin_type_id.void_type
     helper_fn: = Ast_node.build_synth_fn(helper_name, params, "Void", void_id, loc)
-    lower_ctx.register_synth_symbol(helper_fn, sema_type_scope.Sym_kind.function(false), helper_name,
-        void_id)
+    lower_ctx.register_synth_symbol(helper_fn, .function(false), helper_name, void_id)
     return Arc_helper_parts::{ .helper_fn = helper_fn, .param = param, .ptr_id = ptr_id }
 
 priv fn emit_arc_owned_positions(lctx: Lowering_ctx$@, parts: Arc_helper_parts, real_id: I32,
     method_name: U8[], out: List<|Ast_node$@|>$@, depth: Sz) //<
         //< The helper's body: it recurses into each owning position of the type, reached through p.
     loc: = parts.helper_fn.loc
-    switch lctx.sema.env.get_info(real_id) case .struct_type(def)
+    switch lctx.sema.env.get_info(real_id)
+    case .struct_type(def)
         for f_idx in Range.asc(def.fields_list.len)
             f: = def.fields_list.get(f_idx)
             if !lctx.sema.env.type_is_managed(f.type_id)
@@ -381,7 +382,7 @@ impl Ast_node
         //< Such a value arrives counted once, and whoever takes it takes that count. One nothing
         //< takes is owned by a temporary (arc_hoist_owned) or released on the spot
         //< (arc_release_now).
-        //< Caution: **Decide it before lowering**, which turns a catch or a `?` into a temporary.
+        //< Caution: **Decide it before lowering**, which turns a catch or a `!` into a temporary.
         if r == null || r.kind_id == .k_empty ||
             !lctx.sema.env.type_is_managed(r.type_id)
             return false
@@ -444,13 +445,13 @@ impl Ast_node
             emit_managed_op(lctx, r.clone(), r.type_id, "retain", lctx.pre_stmts, 0)
         return true
 
-    fn arc_bare_copy_source(r: Self$@): Option<|Ast_node$@|> //<
+    fn arc_bare_copy_source(r: Self$@): Ast_node$@? //<
         //< It returns the expression itself where it reads existing memory (a place expression)
         //<
         //< That expression can be cloned as the retain's receiver, at its own type.
         //< A newly built value (a call, a compound literal) is already +1 and returns none.
         //< Caution: **Look through a Result built or unwrapped around a place**: `return e.value`
-        //< in a `V?E` function, `v: = r catch …` and `r?` copy what `e.value` or `r` still owns,
+        //< in a `V!E` function, `v: = r catch …` and `r!` copy what `e.value` or `r` still owns,
         //< and the place's retain is that copy's count. Missed, both are released and the value is
         //< freed early.
         $curr: = r.arc_unwrapped()
@@ -459,11 +460,11 @@ impl Ast_node
         else if curr != null && curr.kind_id == .k_expr_catch_chain
             curr = curr.get_catch_chain_expr().arc_unwrapped()
         else if curr != null && curr.kind_id == .k_expr_postfix && curr.get_postfix_op() != null &&
-            curr.get_postfix_op().text.equals("?")
+            curr.get_postfix_op().text.equals("!")
             curr = curr.get_postfix_receiver().arc_unwrapped()
         if curr != null && curr.is_arc_place_expr(0)
-            return Option<|Ast_node$@|>.some(curr)
-        return Option<|Ast_node$@|>.none
+            return .some(curr)
+        return .none
 
     priv fn arc_unwrapped(r: Self$@): Ast_node$@ //< the expression a parenthesis holds, or itself
         if r != null && r.kind_id == .k_expr_primary && r.children.len > 0
@@ -552,7 +553,8 @@ impl Ast_node
         if left == null || right == null || !lctx.sema.env.type_is_managed(left.type_id)
             return
         arc_retain_copied_value(right, lctx)
-        switch left.arc_bare_copy_source() case .some(dst)
+        switch left.arc_bare_copy_source()
+        case .some(dst)
             emit_managed_op(lctx, dst.clone(), left.type_id, "release", lctx.pre_stmts, 0)
         case .none
             // Caution: **Never omit the release silently.** Here the left side contains a call

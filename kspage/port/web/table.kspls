@@ -36,7 +36,8 @@ fn kspage_web_add_line(axis: I32): I32
 fn kspage_web_merge_cells(): I32
     if page == null
         return 0
-    switch ed.merge_range(page) case .done
+    switch ed.merge_range(page)
+    case .done
         return 1
     case .shut
         return -1
@@ -83,7 +84,8 @@ fn kspage_web_drop_line(axis: I32): I32
 fn kspage_web_sort_rows(down: I32): I32
     if page == null
         return 0
-    switch ed.sort_rows(page, down != 0) case .done
+    switch ed.sort_rows(page, down != 0)
+    case .done
         return 1
     case .outside
         return 0
@@ -150,7 +152,8 @@ priv fn room_of(spot: ask.Cell_at, axis: Axis): F32 //<
         c: = page.cells.get(i)
         if c.table != spot.table
             continue
-        switch axis case .column
+        switch axis
+        case .column
             if c.column == spot.column && c.block.span_cols == 1 && c.rect.w > best
                 best = c.rect.w
         case .row
@@ -173,16 +176,18 @@ fn kspage_web_cell_sizes(out: F32$@)
     if !spot.found
         return
     (out + 4)$ = 1.0
-    switch spot.table.size_of(Axis.column, spot.column) case .some(v)
+    switch spot.table.size_of(.column, spot.column)
+    case .some(v)
         out$ = v
         (out + 5)$ = 1.0
     case .none {}
-    switch spot.table.size_of(Axis.row, spot.row) case .some(v)
+    switch spot.table.size_of(.row, spot.row)
+    case .some(v)
         (out + 1)$ = v
         (out + 6)$ = 1.0
     case .none {}
-    (out + 2)$ = room_of(spot, Axis.column)
-    (out + 3)$ = room_of(spot, Axis.row)
+    (out + 2)$ = room_of(spot, .column)
+    (out + 3)$ = room_of(spot, .row)
 
 // Sets the width of the cursor's column (`axis` 1) or the height of its row (0) by number. 1 if
 // set.
@@ -193,7 +198,7 @@ fn kspage_web_set_cell_size(axis: I32, v: F32): I32
     if page == null
         return 0
     which: = Axis.column if axis != 0 else Axis.row
-    spec: = Option<|F32|>.none if v < 0.0 else Option<|F32|>.some(v)
+    spec: F32? = .none if v < 0.0 else .some(v)
     return 1 if ed.set_line_size(page, which, spec) else 0
 
 // ---- Filtering the rows ----
@@ -263,19 +268,19 @@ fn kspage_web_column_values(): Sz
     made.build().dump(state.out@)
     return state.out.len
 
-priv fn set_on(table: Block$@, column: Sz): Option<|U8[]|> //<
+priv fn set_on(table: Block$@, column: Sz): U8[]? //<
     //< The set of values a filter on that column keeps, if it is a set filter
     //<
     //< A filter by condition is not a set, so none is returned and every checkbox shows as checked
     //< (it keeps no choice among them).
     had: = sheet.over.filters
     if had == null
-        return Option<|U8[]|>.none
+        return .none
     for $i: Sz = 0; i < had.len; i += 1
         f: = had.get(i)
         if f.table == table && f.column == column && f.keep == filter.Keep.one_of
-            return Option<|U8[]|>.some(f.text)
-    return Option<|U8[]|>.none
+            return .some(f.text)
+    return .none
 
 // Filters the cursor's column to the rows whose cell shows one of the chosen values: the set is
 // the `len` bytes written into `kspage_web_input_buffer()`, one value per line with a line break
@@ -293,7 +298,7 @@ fn kspage_web_filter_values(len: Sz): I32
         return 0
     // Caution: **Copy the text** (the same reason as `kspage_web_filter`).
     set: = doc_arena.dup_str(U8[]::{ .ptr = input@, .len = len })
-    made: = filter.make_filter(spot.table, spot.column, filter.Keep.one_of, set)
+    made: = filter.make_filter(spot.table, spot.column, .one_of, set)
     if sheet.over.filters == null
         sheet.over.filters = List<|Filter|>.create(doc_arena)
     drop_filters(spot.table, spot.column, true)

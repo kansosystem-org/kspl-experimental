@@ -4,6 +4,7 @@ import "ksplc/base/core" as base_core
 import "ksplc/base/locate" as base_locate
 import "ksplc/lsp/msg" as lsp_msg
 import "ksplc/lsp/nav" as lsp_nav
+import "ksplc/lsp/position" as lsp_position
 import "ksplc/lsp/state" { Doc_state }
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/scope" { Sema_symbol }
@@ -220,7 +221,7 @@ priv fn build_callee_id_set(root: Ast_node$@): Map<|U8[], I32|>$@ //<
     return set
 
 priv fn collect_callee_ids(node: Ast_node$@, set: Map<|U8[], I32|>$@, depth: Sz)
-    if node == null || depth > lsp_nav.max_walk_depth
+    if node == null || depth > lsp_position.max_walk_depth
         return
     info: = node.extract_call_target()
     if info.range_node != null
@@ -230,7 +231,7 @@ priv fn collect_callee_ids(node: Ast_node$@, set: Map<|U8[], I32|>$@, depth: Sz)
 
 priv fn mark_fn_ids(node: Ast_node$@, set: Map<|U8[], I32|>$@, depth: Sz) //<
     //< It registers the function identifiers inside a call's callee (`foo` / `usb.send_frame`)
-    if node == null || depth > lsp_nav.max_walk_depth
+    if node == null || depth > lsp_position.max_walk_depth
         return
     if node.kind_id == .k_identifier && is_fn_or_impl_decl(node.def_node)
         $key: = Str_builder.new()
@@ -257,7 +258,7 @@ priv fn is_fn_ref_use(node: Ast_node$@, callee_ids: Map<|U8[], I32|>$@): Bool //
 priv fn find_incoming_calls(node: Ast_node$@, idx: Fqn_lookup_idx$@, target_fqn: U8[],
     caller_def: Ast_node$@, callee_ids: Map<|U8[], I32|>$@,
     map: Map<|U8[], Call_hier_entry$@|>$@, depth: Sz)
-    if node == null || depth > lsp_nav.max_walk_depth
+    if node == null || depth > lsp_position.max_walk_depth
         return
 
     $current_caller: = caller_def
@@ -280,7 +281,7 @@ priv fn find_incoming_calls(node: Ast_node$@, idx: Fqn_lookup_idx$@, target_fqn:
 priv fn find_outgoing_calls(node: Ast_node$@, idx: Fqn_lookup_idx$@, caller_def: Ast_node$@,
     callee_ids: Map<|U8[], I32|>$@, map: Map<|U8[], Call_hier_entry$@|>$@, depth: Sz) //<
         //< Unlike find_incoming_calls' current_caller, caller_def never changes in the recursion.
-    if node == null || depth > lsp_nav.max_walk_depth
+    if node == null || depth > lsp_position.max_walk_depth
         return
 
     info: = node.extract_call_target()
@@ -293,24 +294,23 @@ priv fn find_outgoing_calls(node: Ast_node$@, idx: Fqn_lookup_idx$@, caller_def:
 
     for child in node.children
         find_outgoing_calls(child, idx, caller_def, callee_ids, map, depth + 1)
-priv fn find_def_by_fqn(node: Ast_node$@, idx: Fqn_lookup_idx$@, target_fqn: U8[]):
-    Option<|Ast_node$@|> //<
-        //< It looks for the definition node matching target_fqn in the whole AST
-        //<
-        //< Not Symbol_table.resolve(): it tries current_file (whichever was walked last) and then
-        //< FQN keys, so a function in an unrelated file can fail to resolve.
+priv fn find_def_by_fqn(node: Ast_node$@, idx: Fqn_lookup_idx$@, target_fqn: U8[]): Ast_node$@? //<
+    //< It looks for the definition node matching target_fqn in the whole AST
+    //<
+    //< Not Symbol_table.resolve(): it tries current_file (whichever was walked last) and then
+    //< FQN keys, so a function in an unrelated file can fail to resolve.
     return find_def_by_fqn_depth(node, idx, target_fqn, 0)
 
 priv fn find_def_by_fqn_depth(node: Ast_node$@, idx: Fqn_lookup_idx$@, target_fqn: U8[], depth: Sz):
-    Option<|Ast_node$@|>
-    if node == null || depth > lsp_nav.max_walk_depth
-        return Option<|Ast_node$@|>.none
+    Ast_node$@?
+    if node == null || depth > lsp_position.max_walk_depth
+        return .none
     if is_fn_or_impl_decl(node) && compute_def_fqn(idx, node).equals(target_fqn)
-        return Option<|Ast_node$@|>.some(node)
+        return .some(node)
     for child in node.children
         if found: = find_def_by_fqn_depth(child, idx, target_fqn, depth + 1)
-            return Option<|Ast_node$@|>.some(found)
-    return Option<|Ast_node$@|>.none
+            return .some(found)
+    return .none
 priv fn resolve_def_by_fqn(root: Ast_node$@, c: Sema_ctx$@, idx: Fqn_lookup_idx$@,
     target_fqn: U8[]): Ast_node$@ //<
         //< It resolves target_fqn's definition node
@@ -330,7 +330,7 @@ priv fn resolve_def_by_fqn(root: Ast_node$@, c: Sema_ctx$@, idx: Fqn_lookup_idx$
 
 fn prepare_call_hierarchy(state: Doc_state$@, params: json.Val, id_val: json.Val, arena: Arena$@)
     $b: = Json_builder.new(arena)
-    path: = lsp_nav.find_path_at_params(state, params)
+    path: = lsp_position.find_path_at_params(state, params)
     defer path.free()
 
     if path.len > 0

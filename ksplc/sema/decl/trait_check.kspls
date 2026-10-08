@@ -35,7 +35,7 @@ enum Op_method //< an operator trait's resolution result
 
 impl Sema_ctx
     fn add_trait_method(r: Self$@, m_node: Ast_node$@, trait_def: sema_type_def.Trait_def$@,
-        trait_vis: sema_type_scope.Visibility): Sema_symbol$@?Sema_error //<
+        trait_vis: sema_type_scope.Visibility): Sema_symbol$@!Sema_error //<
             //< Builds the symbol for a trait method's prototype and registers it in trait_def
             //<
             //< It also resolves the prototype's types. registry and mono read the result.
@@ -86,7 +86,7 @@ impl Sema_ctx
                                 the receiver. Write 'Self'")
                 param_ordinal += 1
                 if p_type != null
-                    param.type_id = p_type.resolve_and_apply_type(r)?
+                    param.type_id = p_type.resolve_and_apply_type(r)!
                     // An omitted annotation (`fn draw(r);`) is an "Unknown" type_expr, not null:
                     // check the resolved type ID, as infer_fn in infer.kspls does.
                     if param.type_id == r.env.get_or_add("Unknown") ||
@@ -95,7 +95,7 @@ impl Sema_ctx
 
         type_node: = m_node.get_decl_type_node()
         if type_node != null
-            m_sym.type_id = type_node.resolve_and_apply_type(r)?
+            m_sym.type_id = type_node.resolve_and_apply_type(r)!
             // infer_fn's check, for a prototype with no body. The impl does not cover it: a `priv`
             // target makes it `priv`, and the type leaks through a `pub trait`.
             r.check_type_vis_leak(type_node, m_sym.vis, "return type", "interface method")
@@ -219,7 +219,8 @@ impl Sema_ctx
         real_trait: = r.env.get_real_type(trait_id)
         trait_info: = r.env.get_info(real_trait)
         $trait_def: sema_type_def.Trait_def$@ = null
-        switch trait_info case .trait_type(d)
+        switch trait_info
+        case .trait_type(d)
             trait_def = d
         default
             $sb: = Str_builder.new()
@@ -330,11 +331,13 @@ impl Sema_ctx
             //< Caution: Split, each caller must handle "`user_defined` but not found", and easily
             //< reverts silently to the built-in meaning (Principle 5). The contradiction is
             //< reported here.
-        switch r.check_operator_trait(type_id, trait_name, err_prefix, op, err_node) case .error
+        switch r.check_operator_trait(type_id, trait_name, err_prefix, op, err_node)
+        case .error
             return .failed
         case .user_defined
-            switch r.resolve_operator_method(type_id, method_name) case .some(sym)
-                return Op_method.user(sym)
+            switch r.resolve_operator_method(type_id, method_name)
+            case .some(sym)
+                return .user(sym)
             case .none
                 r.report_operator_method_missing(type_id, trait_name, method_name, err_node)
                 return .failed
@@ -354,7 +357,8 @@ impl Sema_ctx
         //< Looks up the index operator's method from the receiver's type and returns its index type
         //<
         //< `Sz` if it cannot be found.
-        switch r.resolve_operator_method(recv_type_id, method_name) case .some(sym)
+        switch r.resolve_operator_method(recv_type_id, method_name)
+        case .some(sym)
             return r.operator_index_param_id(sym)
         case .none
             return I32::sema_type_env.Builtin_type_id.size_type
@@ -422,7 +426,8 @@ impl Sema_ctx
             $is_tagged: = false
             entry: = r.env.id_to_type.get(real_type)
             if entry != null
-                switch entry.info case .enum_type(def)
+                switch entry.info
+                case .enum_type(def)
                     is_simple_enum = def.is_scalar()
                     is_tagged = !is_simple_enum
                 default {}

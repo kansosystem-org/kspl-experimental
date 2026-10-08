@@ -17,6 +17,10 @@ struct Fmt_flags
     force_next_nl: Bool
     last_was_no_space: Bool
     in_type_expr: Bool
+    last_was_postfix_mark: Bool //<
+        //< Whether the last token was a postfix `!` (`f()!`, `T!E`), not a prefix "not"
+        //<
+        //< It spaces as an operand's tail: no operator spacing after it, as after `)`.
 // ---------------------------------------------------------
 // Spacing & Wrapping Rules
 // ---------------------------------------------------------
@@ -45,7 +49,7 @@ fn calc_spacing_requirement(last_txt: U8[], text: U8[], flags: Fmt_flags, no_spa
         require_space = true
 
     is_op_current: = text.is_op()
-    is_op_last: = last_txt.is_op()
+    is_op_last: = last_txt.is_op() && !flags.last_was_postfix_mark
 
     if is_op_current
         if text.equals(">") || text.equals("<") || text.equals("*") || text.equals("&")
@@ -87,7 +91,8 @@ fn calc_spacing_requirement(last_txt: U8[], text: U8[], flags: Fmt_flags, no_spa
         if !last_txt.is_space_required_keyword() && !is_op_last && !last_txt.equals(",") &&
             !last_txt.equals(":")
             require_space = false
-        if last_txt.equals("?") || (last_txt.equals("|>") && flags.last_was_no_space)
+        if flags.last_was_postfix_mark ||
+            (last_txt.equals("|>") && flags.last_was_no_space)
             require_space = false
 
     if text.equals("<|") || last_txt.equals("(") || last_txt.equals("[") ||
@@ -102,7 +107,7 @@ fn calc_spacing_requirement(last_txt: U8[], text: U8[], flags: Fmt_flags, no_spa
     if text.equals(">") && no_space_mode
         require_space = false
 
-    if last_txt.is_unary_prefix()
+    if last_txt.is_unary_prefix() && !flags.last_was_postfix_mark
         keep_space: =
             text.equals("{") || text.is_compound_sigil() || text.equals("=") ||
             text.is_space_required_keyword()

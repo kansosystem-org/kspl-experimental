@@ -14,10 +14,10 @@
 import "kspage/expr/addr" + { Addr, Reader, broken_ref }
 import "kspage/expr/shown"
 import "kspage/expr/value" { Cell_error, Fold, Value, fn_kind, folded, number, rounded, take }
-import "kspage/model/day" + { Dating }
+import "kspage/model/day"
 import "kspage/model/doc" { Doc, Block }
 import "kspage/model/run" { Inline }
-import "kspage/model/style" + { Arrange, Number_spec, Sheet }
+import "kspage/model/style" + { Number_spec, Sheet }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -67,14 +67,14 @@ priv fn new_book(sheet: Sheet$@, arena: Arena$@, kept: Arena$@, editing: Inline$
         .create(Book::{ .grids = grids, .sheet = sheet, .arena = arena, .kept = kept,
         .editing = editing })
 
-priv fn find_grid(book: Book$@, name: U8[]): Option<|Grid$@|> //< the table a name points at
+priv fn find_grid(book: Book$@, name: U8[]): Grid$@? //< the table a name points at
     //<
     //< **Where two have the same name it is the earlier one in document order.**
     for $i: Sz = 0; i < book.grids.len; i += 1
         g: = book.grids.get(i)
         if g.table.name.len > 0 && g.table.name.equals(name)
-            return Option<|Grid$@|>.some(g)
-    return Option<|Grid$@|>.none
+            return .some(g)
+    return .none
 
 priv fn new_grid(table: Block$@, book: Book$@): Grid$@
     arena: = book.arena
@@ -103,16 +103,16 @@ priv fn new_grid(table: Block$@, book: Book$@): Grid$@
             g.anchor.set(t.row * cols + t.column, t.block)
     return arena.create(g)
 
-priv fn cell_inline(g: Grid$@, r: Sz, c: Sz): Option<|Inline$@|> //<
+priv fn cell_inline(g: Grid$@, r: Sz, c: Sz): Inline$@? //<
     //< The inline holding cell (r, c)'s text
     //<
     //< **Only a merge's upper-left cell holds a value.**
     if r < 0 || r >= g.rows || c < 0 || c >= g.cols
-        return Option<|Inline$@|>.none
+        return .none
     cell: = g.anchor.get(r * g.cols + c)
     if cell == null || cell.inlines.len <= 0
-        return Option<|Inline$@|>.none
-    return Option<|Inline$@|>.some(cell.inlines.get(0))
+        return .none
+    return .some(cell.inlines.get(0))
 
 // ---- Computing a formula ----
 
@@ -172,7 +172,7 @@ priv fn take_span(g: Grid$@, f: Fold$@, a: Addr, b: Addr) //< folds the cells fr
     c1: = b.col if a.col <= b.col else a.col
     if r0 < 0 || c0 < 0 || r1 >= g.rows || c1 >= g.cols
         f.broken = true
-        f.err = Cell_error.no_cell
+        f.err = .no_cell
         return
     for $r: Sz = r0; r <= r1; r += 1
         for $c: Sz = c0; c <= c1; c += 1
@@ -242,8 +242,7 @@ priv fn parse_fold(p: P$@, g: Grid$@, a: Addr, b: Addr): Value //<
         return Cell_error.no_name.failed()
     if !eat(p, '(') || !eat(p, ')')
         return Cell_error.syntax.failed()
-    $f: = Fold::{ .kind = kind, .acc = 0.0, .seen = 0, .broken = false,
-        .err = Cell_error.syntax }
+    $f: = Fold::{ .kind = kind, .acc = 0.0, .seen = 0, .broken = false, .err = .syntax }
     take_span(g, f@, a, b)
     return folded(f@)
 
@@ -255,14 +254,16 @@ priv fn parse_place(p: P$@): Value //< a position or a range
     $g: Grid$@ = p.g
     name: = addr.parse_table_name(p.c@)
     if name.len > 0
-        switch find_grid(p.book, name) case .some(other)
+        switch find_grid(p.book, name)
+        case .some(other)
             g = other
         case .none
             // An unknown name is rejected: taken as its own table, it would silently give another
             // cell.
             return Cell_error.no_name.failed()
     a: = addr.parse_addr(p.c@)
-    switch a.kind case .unreadable
+    switch a.kind
+    case .unreadable
         return Cell_error.syntax.failed()
     case .out_of_range
         // **The text did parse.** A number too large is the same "there is no cell" as `=A999` (one
@@ -275,7 +276,8 @@ priv fn parse_place(p: P$@): Value //< a position or a range
         return value_at(g, a.row, a.col)
     p.c.pos += 1
     b: = addr.parse_addr(p.c@)
-    switch b.kind case .unreadable
+    switch b.kind
+    case .unreadable
         return Cell_error.syntax.failed()
     case .out_of_range
         return Cell_error.no_cell.failed()
@@ -480,7 +482,7 @@ priv fn literal_of(text: U8[], spec: Number_spec): Value //< reads a text as a n
     //< a date and a text meant as a number would become one too); otherwise as a number.
     if text.len <= 0
         return Cell_error.not_number.failed()
-    if !spec.dated.same_dating(Dating.none)
+    if !spec.dated.same_dating(.none)
         if n: = day.day_of(text)
             return number(F64::n)
     v: = text.to_f64() catch
@@ -501,7 +503,8 @@ priv fn eval(src: U8[], book: Book$@, g: Grid$@): Value //< computes one text as
 
 priv fn compute(g: Grid$@, r: Sz, c: Sz): Value
     $n: Inline$@ = null
-    switch cell_inline(g, r, c) case .some(v)
+    switch cell_inline(g, r, c)
+    case .some(v)
         n = v
     case .none
         return Cell_error.no_cell.failed()
@@ -544,7 +547,7 @@ priv fn show(n: Inline$@, v: Value, book: Book$@, out: Str_builder$@) //<
     //< Caution: **Clear the value of a text that is not a formula.** Otherwise the old value still
     //< shows after the formula is typed over. **Nothing is set on the run being typed in.**
     // A number is set on every cell, formula or not: **a chart reads it**.
-    num: = Option<|F64|>.some(v.num) if v.ok else Option<|F64|>.none
+    num: F64? = .some(v.num) if v.ok else .none
     if !n.is_formula() || n == book.editing
         // Caution: **Clear only the text and set the number** (a chart reads this cell too).
         n.show_value("", num, book.kept)
@@ -572,7 +575,7 @@ priv fn show_free(n: Inline$@, book: Book$@, out: Str_builder$@) //< one text in
     //< Where it is a formula, it is computed and its value set as the text to show.
     if !n.is_formula()
         // **No number is set either** (a chart never reads a text outside a cell).
-        n.show_value("", Option<|F64|>.none, book.kept)
+        n.show_value("", .none, book.kept)
         return
     show(n, eval(n.text(), book, null), book, out)
 
@@ -583,7 +586,7 @@ priv fn show_prose(b: Block$@, sheet: Sheet$@, book: Book$@, out: Str_builder$@)
     //< The runs from the second on, and a table's or row's own texts, count as the body.
     for $i: Sz = 0; i < b.inlines.len; i += 1
         show_free(b.inlines.get(i), book, out)
-    if !sheet.arrange_of(b.style).same_arrange(Arrange.grid)
+    if !sheet.arrange_of(b.style).same_arrange(.grid)
         for $i: Sz = 0; i < b.children.len; i += 1
             show_prose(b.children.get(i), sheet, book, out)
         return
@@ -605,7 +608,7 @@ priv fn collect(b: Block$@, sheet: Sheet$@, book: Book$@) //<
     //< A table inside a cell counts as another table.
     //< Caution: **Collect them all before computing.** Otherwise a formula pointing at a table not
     //< yet collected reads "unknown name", and the result depends on the order written.
-    if sheet.arrange_of(b.style).same_arrange(Arrange.grid)
+    if sheet.arrange_of(b.style).same_arrange(.grid)
         book.grids.push(new_grid(b, book))
     for $i: Sz = 0; i < b.children.len; i += 1
         collect(b.children.get(i), sheet, book)
@@ -626,7 +629,7 @@ fn takes_formula(d: Doc$@, sheet: Sheet$@, n: Inline$@): Bool //<
     return false
 
 priv fn seek_cell(b: Block$@, sheet: Sheet$@, n: Inline$@): Bool
-    if sheet.arrange_of(b.style).same_arrange(Arrange.grid)
+    if sheet.arrange_of(b.style).same_arrange(.grid)
         for $r: Sz = 0; r < b.children.len; r += 1
             row: = b.children.get(r)
             for $c: Sz = 0; c < row.children.len; c += 1

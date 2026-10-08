@@ -37,28 +37,27 @@ priv const grown: Grown[4] = ::{
             than a stack exhaustion at translation time",
         .guard = "max_type_layout_depth in ksplc/sema/decl/layout.kspls",
         .expect = "type definition nesting too deep", .limit = 1000, .depth = 1500,
-        .chain = Chain.struct_field },
+        .chain = .struct_field },
     Grown::{ .stem = "deep_arc_field_chain",
         .why =
         "that a chain holding an ARC-managed type deep inside is refused as a safe error rather \
             than a stack exhaustion from the automatic insertion of retain/release",
         .guard = "max_arc_emit_depth in ksplc/lower/arc.kspls",
         .expect = "type nesting too deep for automatic retain/release", .limit = 1000,
-        .depth = 1200, .chain = Chain.arc_field },
+        .depth = 1200, .chain = .arc_field },
     Grown::{ .stem = "deep_generic_chain",
         .why =
         "that a monomorphization chain by way of differently named generic structs is refused as a \
             safe error rather than a stack exhaustion",
         .guard = "max_mono_depth in ksplc/sema/decl/mono.kspls",
         .expect = "generic type instantiation chain too deep", .limit = 128, .depth = 600,
-        .chain = Chain.generic_mono },
+        .chain = .generic_mono },
     Grown::{ .stem = "deep_alias_chain",
         .why =
         "that a long acyclic chain of type aliases is refused as a safe error rather than a stack \
             exhaustion at translation time",
         .guard = "max_alias_chain_depth in ksplc/sema/type/query.kspls",
-        .expect = "typedef chain too deep", .limit = 1000, .depth = 1500,
-        .chain = Chain.type_alias },
+        .expect = "typedef chain too deep", .limit = 1000, .depth = 1500, .chain = .type_alias },
 }
 priv fn write_head(out: Str_builder$@, g: Grown) //< the fixture's header
     //<
@@ -103,7 +102,8 @@ priv fn write_alias_chain(out: Str_builder$@, depth: Sz) //< the alias chain
     out.s("typedef A\{depth\} = I32;\n\nfn main() {\n  x: A0 = 0;\n}\n")
 
 priv fn write_body(out: Str_builder$@, g: Grown)
-    switch g.chain case .struct_field
+    switch g.chain
+    case .struct_field
         write_struct_chain(out, g.depth)
     case .arc_field
         write_arc_chain(out, g.depth)

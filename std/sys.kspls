@@ -119,21 +119,22 @@ pub fn exit( //< ends the process at once, without unwinding
 // keep it past a change.
 // **It exists only on the `#cfg(!freestanding)` side**, like `set_env` / `unset_env`.
 #cfg(!freestanding)
-pub fn get_env(name: U8[]): Option<|U8[]|> //< an environment variable, or nothing when unset
+pub fn get_env(name: U8[]): U8[]? //< an environment variable, or nothing when unset
     // The C side would cut a name at a NUL, so such a name gives .none (see str.to_cstr).
     $name_buf: U8$@ = null
-    switch name.to_cstr() case .some(p)
+    switch name.to_cstr()
+    case .some(p)
         name_buf = p
     case .none
-        return Option<|U8[]|>.none
+        return .none
     defer dealloc(Void$@::name_buf)
     // Caution: **Do not use `libc.getenv`.** Windows's narrow API returns the current code page, so
     // passing its result straight into a path mixes two encodings ("Paths are held in UTF-8, and
     // converted to the wide API on Windows" in `std/docs/DESIGN.md`).
     val: = kspl_get_env(name_buf)
     if val == null
-        return Option<|U8[]|>.none
-    return Option<|U8[]|>.some(str.from_cstr(U8$@::val))
+        return .none
+    return .some(str.from_cstr(U8$@::val))
 
 #cfg(!freestanding)
 extern "C"
@@ -181,13 +182,15 @@ pub fn set_env( //< sets an environment variable, which children inherit
     if value.len <= 0
         return false
     $name_buf: U8$@ = null
-    switch name.to_cstr() case .some(p)
+    switch name.to_cstr()
+    case .some(p)
         name_buf = p
     case .none
         return false
     defer dealloc(Void$@::name_buf)
     $val_buf: U8$@ = null
-    switch value.to_cstr() case .some(p)
+    switch value.to_cstr()
+    case .some(p)
         val_buf = p
     case .none
         return false
@@ -199,7 +202,8 @@ pub fn set_env( //< sets an environment variable, which children inherit
 #cfg(!freestanding)
 pub fn unset_env(name: U8[]): Bool //< deletes an environment variable, which children inherit
     $name_buf: U8$@ = null
-    switch name.to_cstr() case .some(p)
+    switch name.to_cstr()
+    case .some(p)
         name_buf = p
     case .none
         return false
@@ -210,19 +214,20 @@ pub fn unset_env(name: U8[]): Bool //< deletes an environment variable, which ch
 // `get_dir_name`). **It decides by matching argv[0].** The environment variable is inherited by
 // grandchildren too, so the value also carries the path of the executable the launcher started.
 #cfg(!freestanding)
-pub fn script_path(): Option<|U8[]|> //< the script being run, if a launcher started this
+pub fn script_path(): U8[]? //< the script being run, if a launcher started this
     $raw: U8[] = ""
-    switch get_env(script_env_name) case .some(v)
+    switch get_env(script_env_name)
+    case .some(v)
         raw = v
     case .none
-        return Option<|U8[]|>.none
+        return .none
     sep: = raw.find_char('\n')
     if sep < 0
-        return Option<|U8[]|>.none
+        return .none
     a: = args()
     if a.len == 0 || !raw.sub(0, sep).equals(a.get(0))
-        return Option<|U8[]|>.none
-    return Option<|U8[]|>.some(raw.sub_from(sep + 1))
+        return .none
+    return .some(raw.sub_from(sep + 1))
 
 // The running program's **path as typed** (without the folder).
 // Caution: **Do not keep two paths**: argp uses the same `prog` for the usage and for errors, so
@@ -230,7 +235,8 @@ pub fn script_path(): Option<|U8[]|> //< the script being run, if a launcher sta
 // **Do not use `caller_file` instead**: it embeds the absolute path of the machine that built it.
 #cfg(!freestanding)
 pub fn program_name(): U8[] //< this program's name for messages, without folder or extension
-    switch script_path() case .some(p)
+    switch script_path()
+    case .some(p)
         return get_file_name(p)
     case .none {}
     a: = args()

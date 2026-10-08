@@ -43,13 +43,12 @@ priv fn shifted_days(y: I64, m: I64, d: I64): I64 //<
     day_of_era: = in_era * 365I64 + in_era / 4I64 - in_era / 100I64 + day_of_year
     return era * days_per_400 + day_of_era
 
-fn days_of(y: I64, m: I64, d: I64): Option<|I64|> //< the days from the origin day to y-m-d
+fn days_of(y: I64, m: I64, d: I64): I64? //< the days from the origin day to y-m-d
     //<
     //< **A date that does not exist on the calendar is not returned** (2026-02-30 and the like).
     if d < 1I64 || d > month_days(y, m)
-        return Option<|I64|>.none
-    return Option<|I64|>
-        .some(shifted_days(y, m, d) - shifted_days(epoch_year, 1I64, 1I64))
+        return .none
+    return .some(shifted_days(y, m, d) - shifted_days(epoch_year, 1I64, 1I64))
 
 struct Civil //< the year, the month and the day computed from a count of days
     //<
@@ -99,10 +98,10 @@ fn dating_from(name: U8[]): Dating //< reads a way of showing a date from a name
     //<
     //< **An unknown name means "do not show it as a date".**
     if name.equals("plain")
-        return Dating.plain
+        return .plain
     if name.equals("long")
-        return Dating.long
-    return Dating.none
+        return .long
+    return .none
 
 priv fn two(out: Str_builder$@, v: I64) //< writes it padded to two digits
     //<
@@ -115,7 +114,8 @@ fn write_day(out: Str_builder$@, days: I64, how: Dating) //< writes a count of d
     //<
     //< **With `Dating.none` it writes nothing** (the caller writes it as a number).
     c: = civil_of(days)
-    switch how case .plain
+    switch how
+    case .plain
         out.s("\{c.year\}").c('-')
         two(out, c.month)
         out.c('-')
@@ -173,50 +173,50 @@ priv fn month_at(text: U8[], from: Sz): I64 //<
             return i
     return 0I64
 
-priv fn read_plain(text: U8[]): Option<|I64|> //<
+priv fn read_plain(text: U8[]): I64? //<
     //< Reads a date written as digits separated by `-` (`2026-08-18`)
     y: = number_at(text, 0, "-")
     if !y.ok
-        return Option<|I64|>.none
+        return .none
     m_from: = y.end + 1
     m: = number_at(text, m_from, "-")
     if !m.ok
-        return Option<|I64|>.none
+        return .none
     d_from: = m.end + 1
     d: = number_at(text, d_from, "")
     // Caution: **Allow nothing left unread**, or a typo silently becomes a date.
     if !d.ok || d.end != text.len
-        return Option<|I64|>.none
+        return .none
     year: = number_of(text, 0, y.end)
     // **Reject a year above the cap**, or too many digits become a different year (`days_of`
     // rejects a bad month or day).
     if year > number_cap
-        return Option<|I64|>.none
+        return .none
     return days_of(year, number_of(text, m_from, m.end), number_of(text, d_from, d.end))
 
-priv fn read_long(text: U8[]): Option<|I64|> //<
+priv fn read_long(text: U8[]): I64? //<
     //< Reads a date with the month written out (`18 August 2026`)
     d: = number_at(text, 0, " ")
     if !d.ok
-        return Option<|I64|>.none
+        return .none
     month: = month_at(text, d.end + 1)
     if month == 0I64
-        return Option<|I64|>.none
+        return .none
     names: = U8[][]::month_names
     y_from: = d.end + 1 + names[Sz::month].len + 1
     y: = number_at(text, y_from, "")
     // Caution: **Allow nothing left unread** (the reason is at `read_plain`).
     if !y.ok || y.end != text.len
-        return Option<|I64|>.none
+        return .none
     year: = number_of(text, y_from, y.end)
     if year > number_cap
-        return Option<|I64|>.none
+        return .none
     return days_of(year, month, number_of(text, 0, d.end))
 
-fn day_of(text: U8[]): Option<|I64|> //< reads a text as a date
+fn day_of(text: U8[]): I64? //< reads a text as a date
     //<
     //< **Only the two formats it writes can be read.** Where it cannot read the text it returns
     //< nothing (0 would turn a typo into the origin day).
     if v: = read_plain(text)
-        return Option<|I64|>.some(v)
+        return .some(v)
     return read_long(text)

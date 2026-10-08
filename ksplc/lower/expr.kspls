@@ -1,6 +1,6 @@
 //< Lowers an expression: what a C expression cannot hold is hoisted before its statement
 //<
-//< A short-circuit `&&` / `||`, a `?`, a `catch` chain with its `fallback`, a user operator or
+//< A short-circuit `&&` / `||`, a `!`, a `catch` chain with its `fallback`, a user operator or
 //< cast, and a conditional value each become temporaries and plain statements in `pre_stmts`.
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
@@ -149,7 +149,7 @@ impl Ast_node
             u.err_type_id, loc)
         throw_node: = Ast_node.new(.k_stmt_throw, "throw", loc)
         // Caution: Set ival=1 (propagation). Without it genc starts the chain again as "a new
-        // error", so only the last level of the `?` trace remains (the meaning of ival in
+        // error", so only the last level of the `!` trace remains (the meaning of ival in
         // base/ast.kspls).
         throw_node.ival = 1
         throw_node.add_child(Ast_node.new(.k_keyword, "throw", loc))
@@ -413,7 +413,7 @@ impl Ast_node
                     if new_recv != null
                         r.set_child(0, new_recv)
 
-            if op_text.equals("?")
+            if op_text.equals("!")
                 r.lower_try_op(lctx)
                 return
 
@@ -548,7 +548,8 @@ impl Ast_node
         // A top-level initializer has no statement to hoist into (the temporary would land at file
         // scope), and its condition is a constant there, so the branch it picks takes its place.
         if !lctx.in_fn_body
-            switch lctx.sema.try_eval_constexpr_wide(cond_node) case .some(v)
+            switch lctx.sema.try_eval_constexpr_wide(cond_node)
+            case .some(v)
                 chosen: = true_node if v != 0 else false_node
                 chosen.lower(lctx)
                 r$ = chosen$

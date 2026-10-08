@@ -18,7 +18,8 @@ fn test_db_crud_roundtrip()
     nul_path[9] = 'x'
     $cut: = false
     _z: = db.Db.open(U8[]::nul_path) catch e
-        switch e case .open_failed
+        switch e
+        case .open_failed
             cut = true
         default {}
         fallback null
@@ -53,8 +54,10 @@ fn test_db_crud_roundtrip()
         null should not fail")
     nul_row: = nul.step() catch panic("select null step failed")
     $saw_null: = false
-    switch nul_row case .row
-        switch nul.column_kind(0) case .null_value
+    switch nul_row
+    case .row
+        switch nul.column_kind(0)
+        case .null_value
             saw_null = true
         default {}
     default {}
@@ -67,7 +70,8 @@ fn test_db_crud_roundtrip()
     $buf: U8[64] = ::{}
     for
         r: = sel.step() catch panic("select step failed")
-        switch r case .row
+        switch r
+        case .row
             n: = sel.column_text(0, U8$[]::buf) catch panic("column_text failed")
             name: = U8$[]::{ .ptr = buf@, .len = n }
             age: = sel.column_i64(1)
@@ -134,7 +138,8 @@ fn test_db_row_roundtrip()
     $partial: Person = ::{}
     $missing: U8[] = ""
     thin.read_row(partial@, arena) catch e
-        switch e case .missing_column(which)
+        switch e
+        case .missing_column(which)
             missing = which
         default
             panic("expected missing_column")
@@ -153,13 +158,15 @@ fn test_db_one_statement_at_a_time()
     // Run, the first would make `t` and the second would silently never make `u`.
     $refused: = false
     conn.exec("CREATE TABLE t (n INTEGER); CREATE TABLE u (n INTEGER)") catch e
-        switch e case .several_statements
+        switch e
+        case .several_statements
             refused = true
         default {}
     assert(refused, "SQL holding two statements is refused as several_statements")
     $none_ran: = false
     _t: = conn.prepare("SELECT n FROM t") catch e
-        switch e case .prepare_failed
+        switch e
+        case .prepare_failed
             none_ran = true
         default {}
         fallback null
@@ -195,7 +202,8 @@ priv fn refused_field(conn: db.Db$@, select: U8[], arena: Arena$@): U8[] //<
     $back: Bounded = ::{}
     $which: U8[] = ""
     sel.read_row(back@, arena) catch e
-        switch e case .column_type(name)
+        switch e
+        case .column_type(name)
             which = name
         default
             panic("expected column_type")
@@ -233,7 +241,8 @@ fn test_db_row_out_of_range()
     huge: Unsigned_wide = ::{ .big = 0xFFFFFFFFFFFFFFFF }
     $unwritten: U8[] = ""
     ins.bind_row(huge@) catch e
-        switch e case .column_type(name)
+        switch e
+        case .column_type(name)
             unwritten = name
         default
             panic("expected column_type")

@@ -27,7 +27,7 @@ fn run(root: Ast_node$@, cg: Genc_ctx$@)
         return
     if cg.writes_decls()
         // Before the runtime, which reads it (`KSPL_LINK` in gen/runtime/core.h).
-        if base_core.config.library
+        if base_core.is_library()
             cg.s("#define KSPL_LIBRARY 1\n")
         gen_runtime.write_decls(cg)
     else
@@ -62,7 +62,8 @@ priv fn emit_layout_checks(cg: Genc_ctx$@) //<
         f: = folded.get(i)
         cg.emit_line_directive(f.at, true)
         cg.s("typedef char kspl_folded_for_\{machine.slice()\}_\{i\}[(")
-        switch f.measure case .size
+        switch f.measure
+        case .size
             cg.s("sizeof(").t(f.type_id).s(")")
         case .field_offset(field)
             cg.s("offsetof(").t(f.type_id).s(", ").s(field).s(")")
@@ -89,7 +90,8 @@ impl Ast_node
         if r == null
             return
 
-        switch r.kind_id case .k_file
+        switch r.kind_id
+        case .k_file
             r.emit_file_node(cg)
         case .k_decl_enum
             r.emit_enum_decl(cg)
@@ -141,7 +143,8 @@ impl Ast_node
             // A slice needs no forward declaration. **Only what passed the filter is recorded**
             // (`Mangle_seen`).
             $skip: = false
-            switch cg.env.get_info(t_id) case .array(_b, s)
+            switch cg.env.get_info(t_id)
+            case .array(_b, s)
                 if s == -1
                     skip = true
             default {}
@@ -395,7 +398,8 @@ priv fn node_block(curr: Ast_node$@, cg: Genc_ctx$@, type_pending: Map<|I32, I32
         info: = cg.env.get_info(t_id)
         // A pointer needs only a forward declaration, so it is no dependency; a slice, array,
         // result and the like embedded by value need the element's complete definition first.
-        switch info case .pointer(_base_id)
+        switch info
+        case .pointer(_base_id)
             is_value_dep = false
         case .array(base_id, _size_str)
             is_value_dep = true
@@ -625,7 +629,8 @@ priv fn decl_identity_of(cg: Genc_ctx$@, type_id: I32): I32 //<
 priv fn complex_block(cg: Genc_ctx$@, type_id: I32, type_pending: Map<|I32, I32|>$@,
     self_real_type: I32): Dep_block
     info: = cg.env.get_info(type_id)
-    switch info case .array(base_id, _size_str)
+    switch info
+    case .array(base_id, _size_str)
         real_base: = decl_identity_of(cg, base_id)
         if is_real_type_pending(type_pending, real_base, self_real_type)
             return Dep_block::{ .id = real_base, .name = "" }
@@ -662,7 +667,8 @@ priv fn fn_typedef_named_by(cg: Genc_ctx$@, type_id: I32): I32 //<
     //< which has no forward form.
     $cur: = type_id
     for _depth in Range.asc(64)
-        switch cg.env.get_info(cur) case .pointer(b), .const_of(b)
+        switch cg.env.get_info(cur)
+        case .pointer(b), .const_of(b)
             cur = b
         case .fn_type(_sig)
             return cur

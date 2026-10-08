@@ -1,8 +1,7 @@
 import "kspage/lay/flow"
 import "kspage/model/collect" { Collect }
-import "kspage/model/doc" + { Axis, Doc, Rect }
+import "kspage/model/doc" + { Doc, Rect }
 import "kspage/model/fixed_font" as fixed
-import "kspage/model/marker"
 import "kspage/model/paint"
 import "kspage/model/style" { Sheet }
 import "kspage/share/store"
@@ -26,8 +25,8 @@ priv fn sample_sheet(arena: Arena$@): Sheet$@ //<
     sheet: = Sheet.new(base.root_font(), arena)
 
     $big: paint.Font_spec = paint.inherit_all()
-    big.size_px = Option<|F32|>.some(28.0)
-    big.weight = Option<|U16|>.some(700U16)
+    big.size_px = .some(28.0)
+    big.weight = .some(700U16)
     h1: = sheet.add("h1", big)
     h1.space_after = 8.0
     // The heading's depth and the contents setting.
@@ -36,14 +35,14 @@ priv fn sample_sheet(arena: Arena$@): Sheet$@ //<
     // second heading and the outline would fill with empty entries.**
     h1.next = "body"
     toc: = sheet.add("toc", paint.inherit_all())
-    toc.collect = Collect.contents
+    toc.collect = .contents
 
     body: = sheet.add("body", paint.inherit_all())
     body.space_after = 12.0
 
     $slanted: paint.Font_spec = paint.inherit_all()
-    slanted.family = Option<|U8[]|>.some("serif")
-    slanted.italic = Option<|Bool|>.some(true)
+    slanted.family = .some("serif")
+    slanted.italic = .some(true)
     sheet.add("em", slanted)
 
     item: = sheet.add("item", paint.inherit_all())
@@ -84,10 +83,10 @@ priv fn sample_doc(arena: Arena$@): Doc$@ //<
     // The name survives the round trip separately from the style's name.
     t.name = "detail"
     // An empty column is kept in the list too; dropped, every column after it would shift forward.
-    t.set_size(Axis.column, 0, Option<|F32|>.some(40.0))
-    t.set_size(Axis.column, 1, Option<|F32|>.none)
+    t.set_size(.column, 0, .some(40.0))
+    t.set_size(.column, 1, .none)
     // A row's height.
-    t.set_size(Axis.row, 0, Option<|F32|>.some(30.0))
+    t.set_size(.row, 0, .some(30.0))
     r: = t.add_child("")
     r.add_child("").add_text("a")
     // A formula cell holds the typed text, not the computed value.
@@ -160,7 +159,8 @@ fn test_the_reloaded_document_lays_out_the_same()
 priv fn family_is_unset(sheet: Sheet$@, name: U8[]): Bool //<
     //< An unset field comes back unset (it is not filled with the current value)
     if s: = sheet.find(name)
-        switch s.font.family case .none
+        switch s.font.family
+        case .none
             return true
         case .some(_v)
             return false
@@ -174,41 +174,45 @@ fn test_colors_survive_the_round_trip() //< a color survives the round trip
     defer arena.free()
     sheet: = sample_sheet(arena)
     h1: = sheet.find("h1").unwrap_or(null)
-    h1.ink.color = Option<|U32|>.some(0x102030U32)
-    h1.ink.background = Option<|U32|>.some(0xfffffeU32)
+    h1.ink.color = .some(0x102030U32)
+    h1.ink.background = .some(0xfffffeU32)
     back: = base.round_trip(sample_doc(arena), sheet, arena)
 
     got: = back.sheet.find("h1").unwrap_or(null)
     assert(got != null, "the style comes back")
-    switch got.ink.color case .some(v)
+    switch got.ink.color
+    case .some(v)
         assert(v == 0x102030U32, "the text colour comes back")
     case .none
         assert(false, "the writing of the text colour comes back")
-    switch got.ink.background case .some(v)
+    switch got.ink.background
+    case .some(v)
         assert(v == 0xfffffeU32, "the ground's colour comes back too")
     case .none
         assert(false, "the writing of the ground's colour comes back too")
     // The number format. Lost, the currency symbol would disappear.
     h1.number.grouped = true
-    h1.number.places = Option<|Sz|>.some(2)
+    h1.number.places = .some(2)
     h1.number.prefix = "$"
     h1.number.suffix = " USD"
     again: = base.round_trip(sample_doc(arena), sheet, arena).sheet.find("h1").unwrap_or(null)
     assert(again.number.grouped, "the grouping of figures comes back")
     affix: = again.number.prefix.equals("$") && again.number.suffix.equals(" USD")
     assert(affix, "the texts put before and behind come back too")
-    switch again.number.places case .some(v)
+    switch again.number.places
+    case .some(v)
         assert(v == 2, "the decimal places come back too")
     case .none
         assert(false, "the writing of the decimal places comes back")
     // The line and the fill. Lost, a table's grid would disappear.
     h1.rule_width = 2.0
     h1.rule_color = 0xccccccU32
-    h1.fill = Option<|U32|>.some(0xeeeeeeU32)
+    h1.fill = .some(0xeeeeeeU32)
     edged: = base.round_trip(sample_doc(arena), sheet, arena).sheet.find("h1").unwrap_or(null)
     assert(base.near(edged.rule_width, 2.0), "the line's thickness comes back")
     assert(edged.rule_color == 0xccccccU32, "the line's colour comes back too")
-    switch edged.fill case .some(v)
+    switch edged.fill
+    case .some(v)
         assert(v == 0xeeeeeeU32, "the fill's colour comes back too")
     case .none
         assert(false, "the writing of the fill comes back")
@@ -234,19 +238,21 @@ fn test_colors_survive_the_round_trip() //< a color survives the round trip
     assert(tables == 1, "the table comes back")
     // The line settings. **`false` comes back too** (lost, a line would reappear where the parent's
     // was removed).
-    h1.ink.underline = Option<|Bool|>.some(false)
-    h1.ink.strike = Option<|Bool|>.some(true)
+    h1.ink.underline = .some(false)
+    h1.ink.strike = .some(true)
     lined: = base.round_trip(sample_doc(arena), sheet, arena).sheet.find("h1").unwrap_or(null)
-    switch lined.ink.underline case .some(v)
+    switch lined.ink.underline
+    case .some(v)
         assert(!v, "`do not draw the underline` comes back")
     case .none
         assert(false, "the writing of the underline comes back")
     assert(paint.drawn(lined.ink.strike), "the strike-through comes back too")
     // The marker: **both the kind and the text** (the text alone would mix up a bullet and a
     // number).
-    h1.marker = marker.Marker.number(")")
+    h1.marker = .number(")")
     marked: = base.round_trip(sample_doc(arena), sheet, arena).sheet.find("h1").unwrap_or(null)
-    switch marked.marker case .number(after)
+    switch marked.marker
+    case .number(after)
         assert(after.equals(")"), "the text put behind the number comes back")
     case .bullet(_g)
         assert(false, "it comes back as a number, not as a mark")
@@ -259,9 +265,10 @@ fn test_colors_survive_the_round_trip() //< a color survives the round trip
         assert(false, "the writing of the mark comes back")
     // A running number keeps **both the text before it and after** (in `Figure 1.` the `Figure `
     // and the `.` are one setting).
-    h1.marker = marker.Marker.serial("Figure ", ". ")
+    h1.marker = .serial("Figure ", ". ")
     serial: = base.round_trip(sample_doc(arena), sheet, arena).sheet.find("h1").unwrap_or(null)
-    switch serial.marker case .serial(before, after)
+    switch serial.marker
+    case .serial(before, after)
         assert(before.equals("Figure ") && after.equals(". "),
             "the texts before and behind a running number come back")
     case .number(_a)
@@ -275,9 +282,13 @@ fn test_colors_survive_the_round_trip() //< a color survives the round trip
     // A style with nothing set comes back unset (it is not filled with the current value).
     plain: = back.sheet.find("body").unwrap_or(null)
     if plain != null
-        switch plain.ink.color case .none {} case .some(_v)
+        switch plain.ink.color
+        case .none {}
+        case .some(_v)
             assert(false, "a style with nothing written keeps its colour unwritten")
-        switch plain.fill case .none {} case .some(_v)
+        switch plain.fill
+        case .none {}
+        case .some(_v)
             assert(false, "a style with nothing written keeps its fill unwritten too")
     verdict
         .pass("the colour, the line and the fill all go round the trip, and what was unwritten \
@@ -308,7 +319,8 @@ fn test_frames_survive_the_round_trip()
     // The last block's child is the frame that has a position.
     last: = back.doc.blocks.get(back.doc.blocks.len - 1)
     framed: = last.children.get(0)
-    switch framed.frame case .some(f)
+    switch framed.frame
+    case .some(f)
         assert(base.near(f.x, 10.0) && base.near(f.y, 20.0), "the top left is left")
         assert(base.near(f.w, 100.0) && base.near(f.h, 50.0), "the size is left too")
     case .none
@@ -336,16 +348,18 @@ fn test_column_widths_survive_the_round_trip()
     assert(back.doc.blocks.get(0).name.len == 0, "no name grows on a block that has none")
     assert(table.column_widths.len == 2, "the row of columns is left, length and all")
     assert(table.row_heights.len == 1, "the row of rows is left too")
-    switch table.size_of(Axis.row, 0) case .some(v)
+    switch table.size_of(.row, 0)
+    case .some(v)
         assert(base.near(v, 30.0), "the row's height as written is left")
     case .none
         panic("the row's height has fallen away")
-    switch table.size_of(Axis.column, 0) case .some(v)
+    switch table.size_of(.column, 0)
+    case .some(v)
         assert(base.near(v, 40.0), "the width as written is left")
     case .none
         panic("the width written has fallen away")
     // No width appears on a column with nothing set.
-    if _v: = table.size_of(Axis.column, 1)
+    if _v: = table.size_of(.column, 1)
         panic("a width has grown on a column with nothing written")
     verdict.pass("a column's width is left with its row, columns with nothing written and all.")
 
@@ -416,7 +430,7 @@ fn test_a_formula_survives_the_round_trip() //<
     defer arena.free()
     before: = sample_doc(arena)
     cell_was: = before.blocks.get(3).children.get(0).children.get(1).inlines.get(0)
-    cell_was.show_value("999", Option<|F64|>.some(999.0), arena)
+    cell_was.show_value("999", .some(999.0), arena)
     back: = base.round_trip(before, sample_sheet(arena), arena)
 
     table: = back.doc.blocks.get(3)
@@ -443,7 +457,9 @@ fn test_broken_text_is_rejected()
     arena: = Arena.new(64 * 1024)
     defer arena.free()
     store.load("{ this is not JSON", arena) catch e
-        switch e case .broken {} case .unknown_version, .out_of_range, .withdrawn
+        switch e
+        case .broken {}
+        case .unknown_version, .out_of_range, .withdrawn
             panic("a broken text is to be refused as broken")
         verdict.pass("a text that cannot be solved as JSON is not read.")
         return
@@ -455,7 +471,9 @@ fn test_an_unknown_version_is_rejected()
     defer arena.free()
     // Valid JSON is still not read where the version differs.
     store.load("{\"kspage\":99,\"sheet\":{},\"blocks\":[]}", arena) catch e
-        switch e case .unknown_version {} case .broken, .out_of_range, .withdrawn
+        switch e
+        case .unknown_version {}
+        case .broken, .out_of_range, .withdrawn
             panic("a version that differs is to be refused as unknown_version")
         verdict.pass("a text of a version it does not know is not even read in part.")
         return
@@ -479,7 +497,9 @@ fn test_only_the_one_name_opens() //< only the one version field opens a text
     assert(out.slice().find_str("\"kspage\"") >= 0, "what is written back carries the version field")
     // **A version under another field name is refused**, not opened as version 0.
     store.load("{\"kswrite\":6,\"sheet\":{},\"blocks\":[]}", arena) catch e
-        switch e case .unknown_version {} case .broken, .out_of_range, .withdrawn
+        switch e
+        case .unknown_version {}
+        case .broken, .out_of_range, .withdrawn
             panic("a version under another field name is to be refused as unknown_version")
         verdict.pass("the one version field reads, and a version under another name is refused.")
         return
@@ -528,7 +548,9 @@ fn test_a_number_out_of_range_is_rejected() //<
 priv fn refused(arena: Arena$@, text: U8[], what: U8[]) //<
     //< Checks that it refused, and refused with `out_of_range`
     store.load(text, arena) catch e
-        switch e case .out_of_range {} case .broken, .unknown_version, .withdrawn
+        switch e
+        case .out_of_range {}
+        case .broken, .unknown_version, .withdrawn
             io.out().s("the refusal differs: ").s(what).s("\n")
             panic("a number outside the range is to be refused as out_of_range")
         return
@@ -587,7 +609,9 @@ fn test_a_tied_line_is_refused() //< a text holding a line tied between two fram
 priv fn withdrawn(arena: Arena$@, text: U8[], what: U8[]) //<
     //< Checks that it refused, and refused with `withdrawn`
     store.load(text, arena) catch e
-        switch e case .withdrawn {} case .broken, .unknown_version, .out_of_range
+        switch e
+        case .withdrawn {}
+        case .broken, .unknown_version, .out_of_range
             io.out().s("the refusal differs: ").s(what).s("\n")
             panic("what is no longer carried is to be refused as withdrawn")
         return
@@ -636,9 +660,9 @@ fn test_the_outline_survives_the_round_trip() //<
 
     head: = back.sheet.find("h1").unwrap_or(null)
     assert(head != null && head.outline == 1, "the heading's depth is left")
-    assert(head.collect.same_collect(Collect.none), "a heading is no table of contents")
+    assert(head.collect.same_collect(.none), "a heading is no table of contents")
     toc: = back.sheet.find("toc").unwrap_or(null)
-    gathers: = toc != null && toc.collect.same_collect(Collect.contents)
+    gathers: = toc != null && toc.collect.same_collect(.contents)
     assert(gathers, "the contents mark is left")
     assert(toc.outline == 0, "a table of contents is no heading")
     assert(head.next.equals("body"), "the style named as what follows is left")

@@ -13,7 +13,7 @@ import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
-import "std/json" + { Json_builder }
+import "std/json" { Json_builder }
 import "std/jsonrpc"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
@@ -82,8 +82,8 @@ priv const global_head: U8[] = "  Location is global '" //< where the report nam
 priv fn races_in(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //< One line per report in a sanitizer's log: its summary, and the global it names
     //<
-    //< **The global goes with it**: an error's trace records at a `?`, so a summary alone points
-    //< at the `?` and not at what raced. **A pure function of one text** (`report_samples`).
+    //< **The global goes with it**: an error's trace records at a `!`, so a summary alone points
+    //< at the `!` and not at what raced. **A pure function of one text** (`report_samples`).
     $out: = List<|U8[]|>.new(arena)
     $open: = false
     $on: U8[] = ""
@@ -438,7 +438,7 @@ impl Lsp_session
         //< A hover at document k's call, which must name fn_name and k
         at: = lsp_client.at_pos(r.uri(k, arena), 4, 12, arena)
         got: = r.c.request("textDocument/hover", at, lsp_wait_ms, arena) catch
-            fallback json.Val.null_val
+            fallback .null_val
         text: = lsp_client.hover_text(got)
         want: = arena.text().s(fn_name).s("\{k\}").take()
         if text.find_str(want) < 0
@@ -471,7 +471,7 @@ priv fn play_lsp_session(exe: U8[], log_dir: U8[], top: U8[], arena: Arena$@): L
     $b: = Json_builder.new(arena)
     _init: =
         s.c.request("initialize", b.obj().build(), lsp_wait_ms, arena) catch
-        fallback json.Val.null_val
+        fallback .null_val
     _ready: = s.c.notify("initialized", b.obj().build(), arena)
     for k in Range.asc(lsp_docs)
         _sent: = s.c
@@ -492,9 +492,9 @@ priv fn play_lsp_session(exe: U8[], log_dir: U8[], top: U8[], arena: Arena$@): L
         s.change(k, "sum", arena)
     for k in Range.asc(lsp_docs)
         s.hover(k, "sum", "after the edits", arena)
-    _down: = s.c.request("shutdown", json.Val.null_val, lsp_wait_ms, arena) catch
-        fallback json.Val.null_val
-    _bye: = s.c.notify("exit", json.Val.null_val, arena)
+    _down: = s.c.request("shutdown", .null_val, lsp_wait_ms, arena) catch
+        fallback .null_val
+    _bye: = s.c.notify("exit", .null_val, arena)
     deadline: = sys.mono_us() + lsp_exit_ms * 1000I64
     for s.c.alive() && sys.mono_us() < deadline
         sys.sleep_ms(20)

@@ -47,7 +47,7 @@ struct Caret //< a position in the document
         //< Only the `inline`/`offset` end moves; the selection's direction is which end comes
         //< first.
     anchor_offset: Sz
-    goal: Option<|F32|> //<
+    goal: F32? //<
         //< The goal column for ↑ and ↓ (the screen's x); none means the current column
         //<
         //< It is remembered so that passing through a short line does not pull the column in.
@@ -65,7 +65,7 @@ fn at(inline: Inline$@, offset: Sz): Caret //<
     //< Caution: **Go through this when setting a position.** Rewrite the fields directly and the
     //< goal column and the wrap reading keep their old values.
     return Caret::{ .inline = inline, .offset = offset, .preedit = 0, .anchor = inline,
-        .anchor_offset = offset, .goal = Option<|F32|>.none, .at_line_start = false }
+        .anchor_offset = offset, .goal = .none, .at_line_start = false }
 
 fn nowhere(): Caret //< the cursor pointing nowhere
     return at(null, 0)
@@ -81,7 +81,7 @@ fn collapse(c: Caret$@) //< the cleanup after a move
     //< it).
     c.anchor = c.inline
     c.anchor_offset = c.offset
-    c.goal = Option<|F32|>.none
+    c.goal = .none
     c.at_line_start = false
 
 priv fn after_move(c: Caret$@, extend: Bool) //< the cleanup after a move that may extend
@@ -91,7 +91,7 @@ priv fn after_move(c: Caret$@, extend: Bool) //< the cleanup after a move that m
     if !extend
         collapse(c)
         return
-    c.goal = Option<|F32|>.none
+    c.goal = .none
     c.at_line_start = false
 
 priv fn away(v: F32): F32
@@ -169,7 +169,7 @@ fn hit_test(page: Page$@, x: F32, y: F32): Caret //<
     found.at_line_start = into == 0 && best.offset > 0
     return found
 
-fn inline_under(page: Page$@, x: F32, y: F32): Option<|Inline$@|> //<
+fn inline_under(page: Page$@, x: F32, y: F32): Inline$@? //<
     //< The text of the box that (x, y) is exactly on
     //<
     //< **It does not snap to the nearest** (outside a box, there is none).
@@ -179,8 +179,8 @@ fn inline_under(page: Page$@, x: F32, y: F32): Option<|Inline$@|> //<
         if b.inline == null
             continue
         if b.rect.holds(x, y)
-            return Option<|Inline$@|>.some(b.inline)
-    return Option<|Inline$@|>.none
+            return .some(b.inline)
+    return .none
 
 fn carry_tail(c: Caret$@, n: Inline$@, at: Sz, tail: Inline$@) //<
     //< Carries along a cursor that has moved into the second half of a split
@@ -269,7 +269,7 @@ struct Cursor //< the vertical bar for drawing the cursor (x / y / height)
     h: F32
     found: Bool //< false where it points at nothing, or not in that layout
 
-priv fn row_beyond(page: Page$@, y: F32, h: F32, dir: I32): Option<|F32|> //<
+priv fn row_beyond(page: Page$@, y: F32, h: F32, dir: I32): F32? //<
     //< The vertical middle of the next line beyond the line at y..y+h
     //<
     //< **It looks through the laid-out lines; it guesses no distance.** Step by the line's own
@@ -295,7 +295,7 @@ priv fn row_beyond(page: Page$@, y: F32, h: F32, dir: I32): Option<|F32|> //<
                 continue
         near = b
     if near == null
-        return Option<|F32|>.none
+        return .none
     // **Of that line, the lowest box is returned.** On a line mixing sizes the small box's middle
     // is inside the big box but not the other way round, so aiming at the big box's middle, the
     // small text on that line could not be reached.
@@ -304,7 +304,7 @@ priv fn row_beyond(page: Page$@, y: F32, h: F32, dir: I32): Option<|F32|> //<
         b: = page.boxes.get(i)
         if b.inline != null && same_row(near, b) && b.rect.y > best.rect.y
             best = b
-    return Option<|F32|>.some(best.rect.y + best.rect.h * 0.5F32)
+    return .some(best.rect.y + best.rect.h * 0.5F32)
 
 fn step_vertical(page: Page$@, c: Caret$@, dir: I32, extend: Bool) //<
     //< The cursor one line up (dir negative) or down (dir positive)
@@ -319,7 +319,8 @@ fn step_vertical(page: Page$@, c: Caret$@, dir: I32, extend: Bool) //<
     if v: = c.goal
         goal = v
     $to: F32 = 0.0
-    switch row_beyond(page, cur.y, cur.h, dir) case .some(mid)
+    switch row_beyond(page, cur.y, cur.h, dir)
+    case .some(mid)
         to = mid
     // **Where there is no line that way, it does not move** (the document's first and last lines).
     case .none
@@ -333,7 +334,7 @@ fn step_vertical(page: Page$@, c: Caret$@, dir: I32, extend: Bool) //<
     after_move(c, extend)
     // Caution: **Remember it again after it is forgotten.** `after_move` forgets it, so swapping
     // the order makes it have no effect.
-    c.goal = Option<|F32|>.some(goal)
+    c.goal = .some(goal)
     c.at_line_start = moved.at_line_start
 
 priv fn same_row(a: Box$@, b: Box$@): Bool //< whether box a and box b lie on the same line
@@ -514,7 +515,7 @@ fn cursor(page: Page$@, c: Caret): Cursor //< where the cursor is now
     //< The cursor remembers how a wrap position is read.
     return cursor_in(page, c, c.at_line_start)
 
-fn cell_frame(page: Page$@, c: Caret): Option<|Rect|> //<
+fn cell_frame(page: Page$@, c: Caret): Rect? //<
     //< the rectangle of the cell the cursor is in
     //<
     //< Outside a table, none.
@@ -522,11 +523,11 @@ fn cell_frame(page: Page$@, c: Caret): Option<|Rect|> //<
     //< the contents cannot be used instead). **It returns the innermost cell**: searched from the
     //< end, since `Page.cells` has the outer ones first.
     if c.inline == null
-        return Option<|Rect|>.none
+        return .none
     $i: Sz = page.cells.len
     for i > 0
         i -= 1
         cell: = page.cells.get(i)
         if cell.block.holds(c.inline)
-            return Option<|Rect|>.some(cell.rect)
-    return Option<|Rect|>.none
+            return .some(cell.rect)
+    return .none

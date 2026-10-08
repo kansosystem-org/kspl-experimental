@@ -160,7 +160,7 @@ impl Genc_ctx
         //< **In a library every one is `static`** (`--library`), its forward declaration a
         //< tentative definition. Elsewhere the forward declaration is `extern` and the definition
         //< has no word.
-        if base_core.config.library
+        if base_core.is_library()
             return file_local_word
         return "" if definition else "extern "
 
@@ -269,7 +269,8 @@ impl Genc_ctx
         base_str: = r.env.get_str(type_id)
         $res: = w
 
-        switch info case .unknown
+        switch info
+        case .unknown
             return res.s("auto")
         case .void_type
             return res.s("void")
@@ -344,7 +345,8 @@ impl Genc_ctx
         if depth >= max_c_type_depth
             return 0
         real_id: = r.env.get_clean_real_type(type_id)
-        switch r.env.get_info(real_id) case .array(base_id, _size)
+        switch r.env.get_info(real_id)
+        case .array(base_id, _size)
             // In C an array is **a `{ T data[N]; }` struct rather than a bare array**
             // (gen/c/decl.kspls). The wrapping struct and the `data` make two levels.
             return 2 + r.zero_init_depth(base_id, depth + 1)
@@ -400,14 +402,16 @@ priv fn emits_c_const(env: sema_type_env.Env$@, type_id: I32): Bool //<
     // `const const Const_U8_Array_4`.
     // A slice differs: the type name alone expresses it and emits no `const `, so the declaration
     // does (the reason is in map_c_type_to_impl's slice branch).
-    switch env.get_info(env.get_real_type(type_id)) case .array(base_id, _sz)
+    switch env.get_info(env.get_real_type(type_id))
+    case .array(base_id, _sz)
         if env.is_const(base_id)
             return true
     default {}
     if !env.is_const(type_id)
         return false
     info: = env.get_info(type_id)
-    switch info case .pointer(_b)
+    switch info
+    case .pointer(_b)
         return false
     case .array(_b, _s)
         return false

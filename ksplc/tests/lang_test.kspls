@@ -11,14 +11,15 @@ import "std/verdict"
 // std/lang: null safety through Option<|T|>. Presence is in the type, and the value is reached
 // only through a switch whose exhaustiveness check forces the absent case.
 // ==========================================
-priv fn option_lookup(key: I32): Option<|I32|>
+priv fn option_lookup(key: I32): I32?
     // Returns a value only where key == 1, and "absent" otherwise.
     if key == 1
-        return Option<|I32|>.some(42)
-    return Option<|I32|>.none
+        return .some(42)
+    return .none
 
 priv fn option_unwrap_or(key: I32, alt: I32): I32
-    switch option_lookup(key) case .some(v)
+    switch option_lookup(key)
+    case .some(v)
         return v
     case .none
         return alt
@@ -29,14 +30,15 @@ fn test_option_null_safety()
     assert(option_unwrap_or(1, -1) == 42, "some(42) must yield the contained value")
     assert(option_unwrap_or(9, -1) == -1, "none must force the fallback path")
 
-    // The monomorphization at another type argument (Option<|Bool|>) works independently too.
-    ob: = Option<|Bool|>.some(true)
+    // The monomorphization at another type argument (`Bool?`) works independently too.
+    ob: Bool? = .some(true)
     $got: = false
-    switch ob case .some(b)
+    switch ob
+    case .some(b)
         got = b
     case .none
         got = false
-    assert(got, "Option<|Bool|>.some(true) must extract true via switch")
+    assert(got, "a `Bool?` holding .some(true) must extract true via switch")
 
     verdict
         .pass("the presence of a value is expressed by the type and taken out with a switch alone \
@@ -49,10 +51,10 @@ fn test_option_null_safety()
 fn double_i32(x: I32): I32
     return x * 2
 
-fn half_if_even(x: I32): Option<|I32|>
+fn half_if_even(x: I32): I32?
     if x % 2 == 0
-        return Option<|I32|>.some(x / 2)
-    return Option<|I32|>.none
+        return .some(x / 2)
+    return .none
 
 fn neg_one(): I32
     return -1
@@ -61,8 +63,8 @@ fn test_option_combinators()
     verdict
         .start("[Option] the combinator methods (is_some/unwrap_or/map/and_then and so on) test...")
 
-    some_val: = Option<|I32|>.some(21)
-    none_val: = Option<|I32|>.none
+    some_val: I32? = .some(21)
+    none_val: I32? = .none
 
     assert(some_val.is_some(), "some(21).is_some() must be true")
     assert(!some_val.is_none(), "some(21).is_none() must be false")
@@ -82,7 +84,7 @@ fn test_option_combinators()
     assert(halved_val == 21, "42.and_then(half_if_even) must yield some(21) since 42 is even")
 
     // The chain works directly on the producing expression.
-    chained: = map<|I32, I32|>(Option<|I32|>.some(7), double_i32).unwrap_or(0)
+    chained: = map<|I32, I32|>(.some(7), double_i32).unwrap_or(0)
     assert(chained == 14, "chaining directly on a temporary Option must work")
 
     verdict.pass("an Option can be composed and taken out without using a switch.")
@@ -271,21 +273,22 @@ fn test_selective_import()
         .pass("the selective import takes effect for a type, a function, a constant, an enum's \
             variant and an alias alike, and lives together with a renaming and an ordinary alias.")
 
-fn first_or<|T|>(v: T, has: Bool): Option<|T|> //<
+fn first_or<|T|>(v: T, has: Bool): T? //<
     //< A free generic function whose return type builds another generic from its own T
     //<
     //< It is a free function, not an impl method, and its return type is Option<|T|>.
     //< The return type is resolved in collect.kspls's registration while T is still unbound; T must
     //< not be taken for a real type (an unsubstituted "T" in the C), called or not.
     if has
-        return Option<|T|>.some(v)
-    return Option<|T|>.none
+        return .some(v)
+    return .none
 
 fn test_generic_fn_returning_own_type_param()
     verdict
         .start("[Generics] a free function returning another generic built from its own type \
             parameter test...")
-    switch first_or(42, true) case .some(v)
+    switch first_or(42, true)
+    case .some(v)
         assert(v == 42, "first_or(42, true) must yield some(42)")
     case .none
         assert(false, "first_or(42, true) must not yield none")
@@ -716,9 +719,9 @@ fn test_negative_const_type_arg()
 priv enum Nr_error
     bad
 
-priv fn nr_probe(ok: Bool): I32?Nr_error
+priv fn nr_probe(ok: Bool): I32!Nr_error
     if !ok
-        throw Nr_error.bad
+        throw .bad
     return 7
 
 priv fn nr_via_fallback(ok: Bool): I32
@@ -734,12 +737,12 @@ fn test_noreturn_as_catch_value()
     assert(nr_via_fallback(true) == 7, "the same in the fallback statement")
     verdict.pass("a `#noreturn` call passes as catch's alternative value.")
 
-priv fn bind_probe(n: I32): Option<|I32|> //<
+priv fn bind_probe(n: I32): I32? //<
     //< `if name: = expr { … }` binds an Option ("Branching" in `../../docs/SPEC-language.md`)
     //<
     //< Caution: **Check that the body is skipped when the binding fails**, or a non-empty `.none`
     //< branch passes. **Check that `else` means "when there was none" too.**
-    return Option<|I32|>.some(n * 2) if n > 0 else Option<|I32|>.none
+    return .some(n * 2) if n > 0 else .none
 
 fn test_if_binds_option()
     verdict.start("[Lang] if binds an Option test...")
@@ -762,8 +765,8 @@ fn test_if_binds_option()
     assert(got == 27, "the bindings do not mix even nested")
     verdict.pass("`if name: = expr` binds an Option, and does nothing where there is none.")
 
-priv fn only_if(n: I32, want: I32): Option<|I32|> //< `n * 10` where n is `want`, none otherwise
-    return Option<|I32|>.some(n * 10) if n == want else Option<|I32|>.none
+priv fn only_if(n: I32, want: I32): I32? //< `n * 10` where n is `want`, none otherwise
+    return .some(n * 10) if n == want else .none
 
 priv fn bind_else_bind(n: I32, with_else: Bool): I32 //<
     //< Which branch a binding `else if` after a binding `if` takes, plus the value it bound

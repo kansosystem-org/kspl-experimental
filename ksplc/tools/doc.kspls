@@ -67,22 +67,22 @@ priv fn folder_path_of(name: U8[]): U8[] //< the folder a name such as `std` or 
         return base_locate.std_dir()
     return base_locate.embed_disk_path(name)
 
-priv fn read_lines(path: U8[], logical: U8[], parser: kspeg.Target$@): Option<|List<|Entry|>|> //<
+priv fn read_lines(path: U8[], logical: U8[], parser: kspeg.Target$@): List<|Entry|>? //<
     //< One file's entries, or none where it cannot be read or parsed (the reason is printed)
     //<
     //< **The bytes are mended as the loader mends them** (`parse_layout.mend`), so a `.kspls` file
     //< gives the record the same text a compile gives it.
     raw: = io.read_file(path) catch e
         io.err().s("ksplc doc: cannot read \{path\}: \{e\}\n")
-        return Option<|List<|Entry|>|>.none
+        return .none
     defer dealloc(Void$@::raw.ptr)
     $notes: = List<|parse_layout.Note|>.new(base_core.arena)
     src: = base_core.arena
         .dup_str(parse_layout.mend(raw, path.is_laid_out(), notes@, base_core.arena).code)
     parse_source_fix.mask_shebang(src)
     root: Ast_node$@ = parse_load.parse_raw_ast(src, logical, parser) catch
-        return Option<|List<|Entry|>|>.none
-    return Option<|List<|Entry|>|>.some(entries_of(tools_surface.surface_lines(root, src)))
+        return .none
+    return .some(entries_of(tools_surface.surface_lines(root, src)))
 
 // ==========================================
 // Rendering. **Every heading's anchor is the one the renderer gives it**, so the contents' links
@@ -402,7 +402,8 @@ priv fn write_folder(name: U8[], dir: U8[], parser: kspeg.Target$@, out: Str_bui
         rest: = path.sub_from(dir.len + 1)
         logical: = base_core.arena.text().s(name).c('/')
             .s(rest.strip_suffix(".kspls").strip_suffix(".kspl")).take()
-        switch read_lines(path, logical, parser) case .some(rows)
+        switch read_lines(path, logical, parser)
+        case .some(rows)
             if entries_in(rows@) == 0
                 continue
             out.s("* `").s(logical).s("` — \{entries_in(rows@)\} entries")
@@ -444,7 +445,8 @@ fn print_doc(target: U8[], parser: kspeg.Target$@): Bool //<
             return false
         io.out().s(out.slice())
         return true
-    switch read_lines(path, name, parser) case .some(rows)
+    switch read_lines(path, name, parser)
+    case .some(rows)
         if key.len == 0
             write_file(name, rows@, out@)
         else if write_one(name, rows@, key, out@) == 0

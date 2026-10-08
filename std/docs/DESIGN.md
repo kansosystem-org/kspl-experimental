@@ -41,7 +41,7 @@ When adding or changing a file, check whether the table can gain a row. If it ca
   * [Indexing costs one comparison, and the stop is called out of line](#indexing-costs-one-comparison-and-the-stop-is-called-out-of-line)
   * [The ring buffer neither blocks nor locks](#the-ring-buffer-neither-blocks-nor-locks)
 * [Failures and the log](#failures-and-the-log)
-  * [A failure is returned as `T?E`](#a-failure-is-returned-as-te)
+  * [A failure is returned as `T!E`](#a-failure-is-returned-as-te)
   * [Logs and diagnostics share level names, not meaning](#logs-and-diagnostics-share-level-names-not-meaning)
   * [A line that is not emitted is not built](#a-line-that-is-not-emitted-is-not-built)
   * [The destination is the caller's, not a global](#the-destination-is-the-callers-not-a-global)
@@ -111,8 +111,8 @@ When adding or changing a file, check whether the table can gain a row. If it ca
 | **`T@` / `T$@`** | A pointer to a `T`. Without `$`, you may only read through it; with `$`, you may also write |
 | **`U8[]` / `U8$[]`** | A slice: a pointer plus a length. `U8[]` is a read-only byte string; `U8$[]` is one whose bytes may be rewritten. A `$` before a variable's name (`$x: = 1`) instead lets the variable itself change later. The two kinds of `$` are "4.2 The two axes of mutability" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md#42-the-two-axes-of-mutability) |
 | **view** | A slice that points into memory something else owns. Making one copies nothing, and it stays valid only as long as that memory does |
-| **`T?E`** | The return type of a function that may fail: it holds either the result `T` or the failure `E`. The caller must take it apart with `catch` or `?` ("8.3 Error handling" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md#83-error-handling)) |
-| **`Option<\|T\|>`** | Either a value or none. The value comes out only through `switch` or `if v: = …`, so a forgotten check does not compile |
+| **`T!E`** | The return type of a function that may fail: it holds either the result `T` or the failure `E`. The caller must take it apart with `catch` or `!` ("8.3 Error handling" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md#83-error-handling)) |
+| **`Option<\|T\|>`**, written `T?` | Either a value or none. The value comes out only through `switch` or `if v: = …`, so a forgotten check does not compile |
 | **panic** | The program stops with a message. `std` keeps it mostly for a mistake in the program itself, such as an index out of range; bad input comes back as a value |
 | **trait / impl / conforms** | A trait names methods a type must have; an `impl` block supplies them for one type, and the type then *conforms* to the trait (Java's interface and its `implements` are close) |
 | **generic / instantiation** | A type or function with type parameters, such as `List<\|T\|>`. The compiler makes one copy per set of type arguments used (an *instantiation*, or *specialization*), so each one costs translation time |
@@ -135,7 +135,7 @@ When adding or changing a file, check whether the table can gain a row. If it ca
 | Memory: who frees what | `mem`, `refcount`, `ds` | [Memory and ownership](#memory-and-ownership) |
 | Text, numbers, bytes | `chars`, `str`, `strfmt`, `strnum`, `buf`, `bytes` | [Strings, numbers and bytes](#strings-numbers-and-bytes) |
 | Lists, maps, loops, chains | `ds`, `seq`, `lang`, `ring` | [Containers and iteration](#containers-and-iteration) |
-| Reporting failures, logging | every file's `T?E`, `log` | [Failures and the log](#failures-and-the-log) |
+| Reporting failures, logging | every file's `T!E`, `log` | [Failures and the log](#failures-and-the-log) |
 | Arguments, output, tests, children, the clock | `argp`, `io`, `verdict`, `fuzz`, `subproc`, `sys`, `time` | [The process](#the-process-its-arguments-its-output-its-children-and-the-clock) |
 | Paths and directories | `fs` | [Files and paths](#files-and-paths) |
 | Locks, threads, sockets, JSON | `thread`, `reactor`, `stack_limit`, `net`, `jsonrpc`, `reflect`, `json`, `json_struct` | [Threads, networking and the data formats](#threads-networking-and-the-data-formats) |
@@ -166,9 +166,9 @@ Each row is a bug or attack that other libraries are known for, and what the `st
 
 | File | The problem | Seen in | What `std` does |
 | :-- | :-- | :-- | :-- |
-| `str` | **A NUL byte cuts a string short** ("the poison NUL byte"). A KSPL string carries its length, so it may hold a byte 0. C reads a string only up to its first 0, so converting to a C string silently drops everything after it. PHP and Java had path checks bypassed this way | C's strings | `to_cstr()` returns `Option<\|U8$@\|>`: `.none` when the input holds a NUL. `switch` must cover every case, so the caller has to handle it. `contains_nul()` is public too |
+| `str` | **A NUL byte cuts a string short** ("the poison NUL byte"). A KSPL string carries its length, so it may hold a byte 0. C reads a string only up to its first 0, so converting to a C string silently drops everything after it. PHP and Java had path checks bypassed this way | C's strings | `to_cstr()` returns `U8$@?`: `.none` when the input holds a NUL. `switch` must cover every case, so the caller has to handle it. `contains_nul()` is public too |
 | `checked_int` | **Signed overflow is undefined behavior**: the C compiler may assume it never happens, so optimization changes the result | C's integer arithmetic | The plain operators wrap around (`mod 2^N`) whatever the signedness: the generated code goes through the unsigned type of the same width, which erases C's undefined behavior. **Only detecting overflow is chosen by type** (`Ci8` through `Cu64`). There is no wrapping type, since the plain operators already are that |
-| `option` | **Null references**: a forgotten check for `null` still compiles | A raw pointer's `null` | `Option<\|T\|>`'s content comes out only through `switch`. The linter's [H0701] proposes `Option<\|T\|>` for a raw pointer returned as `null` |
+| `option` | **Null references**: a forgotten check for `null` still compiles | A raw pointer's `null` | `T?`'s content comes out only through `switch`. The linter's [H0701] proposes `T?` for a raw pointer returned as `null` |
 | `mem` | **Double free and use after free** | `malloc` / `free` | The arena (`Arena`) is the main route, and `defer` shows in the code where memory is freed. The compiler traces the paths for a use after the free |
 
 **Randomness**
@@ -467,7 +467,7 @@ As arguments to one method, a type with nothing to apply them to could only igno
 
 **Why the byte order has no default**: a mix-up silently garbles the value and no type catches it, so the intended order is written every time.
 
-**Why there is no checked version**: out of range panics, as a slice index does. Returning a `Result` would put a `?` on most calls, whose bounds are already known, and bury them. Where the input's length cannot be trusted, check `len` before the call.
+**Why there is no checked version**: out of range panics, as a slice index does. Returning a `Result` would put a `!` on most calls, whose bounds are already known, and bury them. Where the input's length cannot be trusted, check `len` before the call.
 
 **Why it holds `crc32`**: it has two users, the image checksum a boot ROM requires and an append-only log's record check. It does no pre- or post-processing: the initial value and the final inversion differ by purpose. The boot ROM also reverses the bit order of input and result against the standard, so any default would silently give one caller a different value. Bit reversal stays out while it has one caller (Principle 1; std can take it once there are several).
 
@@ -504,7 +504,7 @@ Every loop over a collection is written `for x in xs`. The type of `xs`, not the
 | The subject's type has | `for x in` expands to |
 | :-- | :-- |
 | A `.len` field and an index (`List`, arrays) | Indexing, `xs[i]` |
-| A conformance to `std/lang`'s `Iter<\|T\|>` (`next(): Option<\|T\|>`) | Calling `next()` until it returns none |
+| A conformance to `std/lang`'s `Iter<\|T\|>` (`next(): T?`) | Calling `next()` until it returns none |
 
 The rule is `docs/SPEC-language.md` 7.2, the reasoning `docs/DESIGN.md` 9.2.
 
@@ -611,21 +611,21 @@ Caution: **Only the wraparound is guaranteed, not the memory's bounds.** `Ring<|
 
 | What happened | How `std` tells you | Examples |
 | :-- | :-- | :-- |
-| An operation that can fail did fail: a file, a socket, input that does not parse | It returns `T?E`, and you take it apart with `catch` or `?` | `?Fs_error`, `?Io_error`, `Net_error.bad_port`, `Json_error` |
+| An operation that can fail did fail: a file, a socket, input that does not parse | It returns `T!E`, and you take it apart with `catch` or `!` | `!Fs_error`, `!Io_error`, `Net_error.bad_port`, `Json_error` |
 | A yes-or-no question | A `Bool`; "no" is a normal answer | `fs.exists`, `fs.is_dir` |
-| A value that may be absent | `Option<\|T\|>`, none when absent | `to_cstr()` on text holding a NUL, `Piped_child.exit_code` while the child runs |
+| A value that may be absent | `T?`, none when absent | `to_cstr()` on text holding a NUL, `Piped_child.exit_code` while the child runs |
 | Output that did not fit a fixed buffer | The writer counts the dropped bytes | `Buf_writer.overflowed()` |
 | A mistake in the program itself | A panic: the program stops with a message | `xs[i]` out of range, `std/bytes` read past the end, a `Mutex` locked twice by one thread |
 
-### A failure is returned as `T?E`
+### A failure is returned as `T!E`
 
-Every file reports failure the same way, as `T?E`. A function that answers a yes-or-no question stays a `Bool`.
+Every file reports failure the same way, as `T!E`. A function that answers a yes-or-no question stays a `Bool`.
 
-Returned as a `Bool` or an `Option`, failures would make the caller read each signature for the function's style. `std/fs.kspls` returns every failure as `?Fs_error`, as `std/io.kspls` does with `?Io_error`.
+Returned as a `Bool` or an `Option`, failures would make the caller read each signature for the function's style. `std/fs.kspls` returns every failure as `!Fs_error`, as `std/io.kspls` does with `!Io_error`.
 
-Caution: **Do not mix `Option`, `Bool` and `?Fs_error` in one file**, or the caller must remember per function how to receive a failure.
+Caution: **Do not mix `Option`, `Bool` and `!Fs_error` in one file**, or the caller must remember per function how to receive a failure.
 
-**A predicate stays a `Bool`.** `fs.exists` / `fs.is_dir` answer a question, and "it does not exist" is a normal answer; as `?Fs_error` they would put a `catch` on every normal path. Do not conflate a failure with a no.
+**A predicate stays a `Bool`.** `fs.exists` / `fs.is_dir` answer a question, and "it does not exist" is a normal answer; as `!Fs_error` they would put a `catch` on every normal path. Do not conflate a failure with a no.
 
 **Do not split into variants what cannot be told apart.** `fs.Fs_error.operation_failed` does not distinguish "already exists", "no permission" and "the parent is missing". The C runtime (`ksplc/gen/runtime/hosted.c`) does not pass `errno`, the C library's number for why a call failed, up to KSPL. To subdivide it, pass `errno` up first. A variant pretending to know leads the caller to write a wrong branch.
 
@@ -665,7 +665,7 @@ if w: = log.at(.hint)
 
 With the level off, the body does not run, so nothing is interpolated or allocated. That is Rust's guarantee, with no macro, no second way of writing a value, and no new notation, since `if <name>: = <expr>` binding an Option is the language's own idiom. `say(lv, text)` remains for a literal or a `U8[]` already available: the narrower path, not the cheaper one.
 
-**`Option<|Writer|>` is not worth a typedef.** `typedef Opt_w = Option<|Writer|>` would name the same type, but a shorter name pays only where the type is written, and a caller writes `if w: = lg.at(.error)`, naming no type.
+**`Writer?` is not worth a typedef.** `typedef Opt_w = Writer?` would name the same type, but a shorter name pays only where the type is written, and a caller writes `if w: = lg.at(.error)`, naming no type.
 
 ### The destination is the caller's, not a global
 
@@ -771,7 +771,7 @@ Caution: **The code that keeps the panic record must not itself crash.** On free
 
 **The names on the `RESULT:` line are copied into the tally's own room** (`Names` in `std/verdict.kspls`). A name passed to `check` is often built in the caller's scratch arena and freed straight after, so a view kept until `finish` would read freed memory. An allocation would make the tally the one part of a failing run that can itself fail.
 
-**A child's run is read here too** (`run_child` / `run_children`), since a check on a compiler or a tool asks two things of it: how it ended and what it wrote. Its stdout and stderr come back as one text, since a diagnostic appears on either, by version and path. A run that could not start or was killed says so in that text, so the code alone never passes for "it ended non-zero". `run_child` waits at most `default_timeout_ms` unless the check passes its own limit. `run_children` runs `jobs()` children side by side and returns them in the input's order, so the code that judges has one form, sequential or parallel.
+**A child's run is read here too** (`run_child` / `run_children`), since a check on a compiler or a tool asks two things of it: how it ended and what it wrote. Its stdout and stderr come back as one text, since a diagnostic appears on either, by version and path. A run that could not start or was killed says so in that text, so the code alone never passes for "it ended non-zero". `run_child` waits at most `default_timeout_ms` unless the check passes its own limit. `run_children` runs `jobs()` children side by side, each under `default_timeout_ms`, and returns them in the input's order, so the code that judges has one form, sequential or parallel.
 
 **A finding is indented on the lines below its `FAIL` line**: the gates read a line by its head (`FAIL `, `RESULT:`), so a finding at a line's head could be read as a verdict.
 
@@ -825,6 +825,8 @@ The implementation is "Writing when nobody is left to read it" in [`../../ksplc/
 **Why not `run_capture` on threads**: each call copies its output into the caller's arena, which is not safe to share between threads, so each thread would need an arena of its own and its results copied back. Processes side by side keep the scheduling and every copy on the caller's one thread.
 
 **Why results are reaped in submission order**: they then match the input, so the caller carries no mapping. The cost: one slow item at the front leaves the slots behind it idle; reaping in completion order would keep the slots full, but leave restoring the order to the caller.
+
+**Each child has a time limit of its own**, counted from its start, as `run_capture`'s is; past it, the child is killed and comes back `timed_out` with what it wrote by then, and the rest run on. A limit over the whole batch instead would grow too short as the batch grows, and a slow child would take the others' results down with it. Waiting with a limit means looking again after a pause, since POSIX's `waitpid` takes no time limit: the pauses start at 1 ms and double up to 10 ms, so a slot stands idle at most 10 ms after its child ends. Submission order keeps every child's limit honoured: children start in order, so each one's deadline falls no earlier than those of the children reaped before it.
 
 ### Three ways to start a child process, split by where its output goes
 
@@ -924,7 +926,7 @@ Any other code is the child's own, a negative one included. The table's copy in 
 
 **Exit code 3 is not read as an abort.** It is what a program that ends normally with 3 gives (robocopy's "files copied, extra files present"), so reading it as 134 would report a crash that did not happen. The cost: a program built against msvcrt, or UCRT without fault reporting, that calls `abort()` reads as 3.
 
-**Whether the child has finished is not one of the codes.** `Piped_child.exit_code` returns an `Option<|I32|>`, none while the child runs. A number set aside for "still running" is also some child's exit code: Windows's `exit(-1)` ends with -1, which would read as "not finished" forever. A kill by `Child.kill` or `Piped_child.kill` reaps the child and gives no code, since nothing can read the handle afterwards.
+**Whether the child has finished is not one of the codes.** `Piped_child.exit_code` returns an `I32?`, none while the child runs. A number set aside for "still running" is also some child's exit code: Windows's `exit(-1)` ends with -1, which would read as "not finished" forever. A kill by `Child.kill` or `Piped_child.kill` reaps the child and gives no code, since nothing can read the handle afterwards.
 
 ### A child holds only the streams it is handed
 
@@ -1162,7 +1164,7 @@ The *reactor* (`std/reactor.kspls`) is one thread that watches many non-blocking
 | | `std/thread.kspls` | `std/reactor.kspls` |
 | :-- | :-- | :-- |
 | Where it suits | CPU-bound parallel work. Calling a blocking API as it is. Few connections, a thread for each | Many connections (hundreds or more), without a stack for each. Waiting that is almost all I/O |
-| The cost | A stack per connection. Shared state needs a lock | One thread, so no synchronization, but the caller must make the socket `set_nonblocking()` (its failure comes back as `?Net_error`: do not discard it, or [W0701] fires) |
+| The cost | A stack per connection. Shared state needs a lock | One thread, so no synchronization, but the caller must make the socket `set_nonblocking()` (its failure comes back as `!Net_error`: do not discard it, or [W0701] fires) |
 
 Both can be used together: accept with the reactor, and hand only the heavy work to a worker thread.
 
@@ -1481,7 +1483,7 @@ Caution: **Do not cut by area (networking, cryptography, strings) — that makes
 
 Caution: **Do not take a `pub` in `std/` off as "unused".** `std/` is distributed, `pub` is the contract with its users outside, and no reference inside the repository does not mean no contract.
 
-**The failure type shows what a walk cannot decide**: a caller that only receives a `T?E` with `catch e` never writes `E`'s name. `std/regex`'s `Regex_error`, the failure type of `compile` / `find` / `find_all` themselves, appears nowhere outside `std/regex.kspls`, so a walk calls it "a `pub` nobody uses"; a result struct and a trait fare the same.
+**The failure type shows what a walk cannot decide**: a caller that only receives a `T!E` with `catch e` never writes `E`'s name. `std/regex`'s `Regex_error`, the failure type of `compile` / `find` / `find_all` themselves, appears nowhere outside `std/regex.kspls`, so a walk calls it "a `pub` nobody uses"; a result struct and a trait fare the same.
 
 **So [I0402], which flags a `pub` used only within its package, is not enabled in `std/`**: judging by the references one compilation sees, it calls the published API itself, with no users yet, "unneeded". It may be enabled in a unit building an executable (which ones is "13.1 A test inspecting the inside of a unit goes inside that unit" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)).
 

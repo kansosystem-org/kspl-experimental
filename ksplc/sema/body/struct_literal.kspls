@@ -7,6 +7,7 @@
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/sema/body/expr" as sema_body_expr
+import "ksplc/sema/body/lint_stmt" as sema_body_lint_stmt
 import "ksplc/sema/decl/access" as sema_decl_access
 import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
@@ -24,7 +25,8 @@ fn size_inferred_array_literal(node: Ast_node$@, c: Sema_ctx$@, type_node: Ast_n
         //< The count comes from the initializers and the largest [idx] written.
     $arr_base_id: I32 = 0
     $is_unsized: = false
-    switch c.env.get_info(base_struct_id) case .array(b_id, size)
+    switch c.env.get_info(base_struct_id)
+    case .array(b_id, size)
         is_unsized = (size == -1)
         arr_base_id = b_id
     default {}
@@ -95,7 +97,8 @@ priv fn has_no_fields(c: Sema_ctx$@, id: I32): Bool //< whether this type has fi
     if c.env.is_numeric(id) || c.env.is_bool(id) || c.env.is_result(id) ||
         sema_type_env.is_void(c.env.get_real_type(id))
         return true
-    switch c.env.get_info(c.env.get_real_type(id)) case .enum_type(_def)
+    switch c.env.get_info(c.env.get_real_type(id))
+    case .enum_type(_def)
         return true
     default {}
     return false
@@ -104,7 +107,7 @@ priv fn wrote_result_inner_fields(node: Ast_node$@): Bool //<
     //< Whether the literal tries to build a Result by hand (`::{ .is_err = …, .val = … }`)
     //<
     //< Only for this form can the message name the right approach.
-    //< It is recognized by the field names, since the expected type here has the `?` stripped.
+    //< It is recognized by the field names, since the expected type here has the `!` stripped.
     for child in node.children
         if child != null && child.kind_id == .k_expr_field_init
             if name_node: = child.get_field_init_name()
@@ -120,13 +123,13 @@ priv fn report_fieldless_literal(node: Ast_node$@, c: Sema_ctx$@, whole_id: I32)
         .s("' has no fields to fill, so it cannot be built with '::{ ... }'")
     if wrote_result_inner_fields(node)
         c.scratch
-            .s(". A Result is built by returning a value or throwing an error, and read with '?' or \
+            .s(". A Result is built by returning a value or throwing an error, and read with '!' or \
                 'catch'")
     else
         c.scratch.s(". Write the value itself")
     c.err(node, c.scratch.slice())
 
-fn infer_struct_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error
+fn infer_struct_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error
     $type_node: = node.get_struct_literal_type()
     if type_node != null && type_node.kind_id != .k_type_expr &&
         type_node.kind_id != .k_expr_path && type_node.kind_id != .k_type_path
@@ -135,9 +138,9 @@ fn infer_struct_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32):
     $actual_id: = I32::sema_type_env.Builtin_type_id.unknown
     if type_node != null
         if type_node.kind_id == .k_type_expr
-            actual_id = type_node.resolve_type(c)?
+            actual_id = type_node.resolve_type(c)!
         else
-            actual_id = type_node.infer_expr(c, I32::sema_type_env.Builtin_type_id.unknown)?
+            actual_id = type_node.infer_expr(c, I32::sema_type_env.Builtin_type_id.unknown)!
         type_node.type_id = actual_id
     else
         if sema_type_env.is_unknown(expected_id) || sema_type_env.is_void(expected_id)
@@ -199,7 +202,8 @@ fn infer_struct_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32):
     // Result, struct_def is the stripped struct, so counting fields alone reads
     // `::{ .ptr = …, .len = … }` as a struct literal.
     $is_struct_shape: = struct_def != null
-    switch c.env.get_info(c.env.strip_result(c.env.strip_ptr(actual_id))) case .array(_ab, _asz)
+    switch c.env.get_info(c.env.strip_result(c.env.strip_ptr(actual_id)))
+    case .array(_ab, _asz)
         is_struct_shape = false
     case .result(_rb, _re)
         is_struct_shape = false
@@ -218,7 +222,8 @@ fn infer_struct_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32):
                 if fnn: = child.get_field_init_name()
                     field_name_node = fnn
 
-                switch info case .array(arr_base_id, _size)
+                switch info
+                case .array(arr_base_id, _size)
                     field_expected_id = arr_base_id
                     is_array = true
                 default {}
@@ -230,13 +235,14 @@ fn infer_struct_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32):
                     // known yet".
                     $arr_size: I32 = -1
                     switch c.env
-                        .get_info(c.env.strip_result(c.env.strip_ptr(actual_id))) case .array(_ab,
-                        asz)
+                        .get_info(c.env.strip_result(c.env.strip_ptr(actual_id)))
+                    case .array(_ab, asz)
                         arr_size = asz
                     default {}
                     if idx_node: = child.get_field_init_index()
-                        idx_node.infer_expr(c, I32::sema_type_env.Builtin_type_id.size_type)?
-                        switch c.try_eval_constexpr(idx_node) case .some(at)
+                        idx_node.infer_expr(c, I32::sema_type_env.Builtin_type_id.size_type)!
+                        switch c.try_eval_constexpr(idx_node)
+                        case .some(at)
                             current_field_idx = at
                         case .none {}
                     if arr_size >= 0 && current_field_idx >= Sz::arr_size
@@ -279,7 +285,10 @@ fn infer_struct_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32):
                 val_node: = child.get_field_init_expr()
                 if val_node != null
                     val_node.def_node = child.def_node
-                    val_node.infer_expr(c, field_expected_id)?
+                    val_node.infer_expr(c, field_expected_id)!
+                    sema_body_lint_stmt.lint_type_given(c, val_node, field_expected_id,
+                        "The element's type already gives it." if is_array
+                        else "The field's type already gives it.")
     if is_struct_shape
         check_omitted_fields_visibility(node, c, struct_def, written@, clean_name)
     return actual_id

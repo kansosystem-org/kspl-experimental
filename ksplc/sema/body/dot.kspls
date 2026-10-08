@@ -28,7 +28,7 @@ import "std/chars"
 import "std/ds" { List }
 import "std/str" { Str_builder }
 
-fn try_rewrite_enum_fmt(node: Ast_node$@, left: Ast_node$@, c: Sema_ctx$@): Bool?Sema_error //<
+fn try_rewrite_enum_fmt(node: Ast_node$@, left: Ast_node$@, c: Sema_ctx$@): Bool!Sema_error //<
     //< Rewrites `\{e\}` on an enum into `w.s(e.variant_name())`
     //<
     //< A string interpolation `\{e\}` desugars into `put(w, e)`; it is rewritten only for an enum.
@@ -62,7 +62,8 @@ fn try_rewrite_enum_fmt(node: Ast_node$@, left: Ast_node$@, c: Sema_ctx$@): Bool
         return false
     base_id: = c.env.get_clean_real_type(c.env.receiver_base_id(sym.type_id))
     $is_enum: = false
-    switch c.env.get_info(base_id) case .enum_type(_def)
+    switch c.env.get_info(base_id)
+    case .enum_type(_def)
         is_enum = true
     default {}
     if !is_enum
@@ -77,7 +78,8 @@ fn try_rewrite_enum_fmt(node: Ast_node$@, left: Ast_node$@, c: Sema_ctx$@): Bool
     c.ensure_instance_methods(base_id) catch {}
     if _user_fmt: = t_entry.get_method("fmt")
         return false // the fmt the user wrote is respected
-    switch t_entry.get_method("variant_name") case .none
+    switch t_entry.get_method("variant_name")
+    case .none
         return false // no variant_name was synthesized (for a const generic, for example)
     case .some {}
 
@@ -90,7 +92,7 @@ fn try_rewrite_enum_fmt(node: Ast_node$@, left: Ast_node$@, c: Sema_ctx$@): Bool
     return true
 
 fn infer_namespace_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
-    sym_ptr: Sema_symbol$@, is_enum: Bool, expected_id: I32): I32?Sema_error
+    sym_ptr: Sema_symbol$@, is_enum: Bool, expected_id: I32): I32!Sema_error
     member_node: = node.get_postfix_member()
     node.ice_assert(member_node != null, "Missing member identifier after namespace access")
     member_name: = member_node.text
@@ -123,7 +125,8 @@ fn infer_namespace_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
             owner_id = cid
             inst_name.free()
             if inst_def: = c.env.get_enum_def(c.env.get_str(cid))
-                switch inst_def.get_variant(member_name) case .some(_v)
+                switch inst_def.get_variant(member_name)
+                case .some(_v)
                     node.set_kind(.k_enum_init)
                     node.type_id = cid
                     return cid
@@ -136,7 +139,8 @@ fn infer_namespace_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
         enum_name: = c.env.get_str(c.env.get_real_type(sym_ptr.type_id))
         $variant_def: sema_type_def.Enum_variant$@ = null
         if enum_def: = c.env.get_enum_def(enum_name)
-            switch enum_def.get_variant(member_name) case .some(d)
+            switch enum_def.get_variant(member_name)
+            case .some(d)
                 variant_def = d
             case .none {}
 
@@ -186,12 +190,12 @@ fn infer_namespace_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
         // A call stops here: its own lookup would find the template's member and build it from
         // nothing, or report the name undefined a second time.
         if !is_value
-            throw Sema_error.analysis_failed
+            throw .analysis_failed
         return I32::sema_type_env.Builtin_type_id.unknown
     has_owner: = owner_id != 0 && !sema_type_env.is_unknown(owner_id)
     if is_value && has_owner
         return sema_body_resolve_path.infer_method_value(node, c, owner_id, left, member_node,
-            type_args_node, expected_id)?
+            type_args_node, expected_id)!
     // **A generic method called through its type** has no function until the call instantiates
     // it, from the type left names and the method's own type arguments (sema/body/call.kspls).
     // The type is recorded on the path's owner for that, since the flattened path no longer
@@ -211,10 +215,10 @@ fn infer_namespace_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
         if c.has_failed_constraint(c.env.base_type_name(owner_id))
             sema_decl_name.named_fn(node).owner.type_id = owner_id
             return I32::sema_type_env.Builtin_type_id.unknown
-    return sema_body_resolve_path.infer_path_expr(node, c, expected_id)?
+    return sema_body_resolve_path.infer_path_expr(node, c, expected_id)!
 
 fn check_builtin_dot_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, recv_id: I32,
-    member_node: Ast_node$@): Option<|I32|> //<
+    member_node: Ast_node$@): I32? //<
         //< Resolves a member of a built-in type: a slice's, a Result's or an array's; else none
         //<
         //< recv_id is the receiver type with pointers already stripped by the caller's
@@ -234,7 +238,8 @@ fn check_builtin_dot_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, r
     if slice_base != 0
         is_slice = true
         base_slice_id = slice_base
-    switch target_info case .result(_base_id, err_id)
+    switch target_info
+    case .result(_base_id, err_id)
         is_result = true
         result_err_id = err_id
     case .array(_b, s)
@@ -247,25 +252,25 @@ fn check_builtin_dot_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, r
     if is_slice && member_name_raw.equals("len")
         member_node.ival = 1
         member_node.type_id = I32::sema_type_env.Builtin_type_id.size_type
-        return Option<|I32|>.some(member_node.type_id)
+        return .some(member_node.type_id)
     if is_slice && member_name_raw.equals("ptr")
         member_node.ival = 0
         member_node.type_id = c.env.make_ptr(base_slice_id)
-        return Option<|I32|>.some(member_node.type_id)
+        return .some(member_node.type_id)
     if is_result
         if sema_type_query.is_result_inner_field(member_name_raw)
             c.err(node,
-                "direct access to Result internal fields is forbidden. Use '?' or 'catch' for error \
+                "direct access to Result internal fields is forbidden. Use '!' or 'catch' for error \
                     handling.")
 
             if member_name_raw.equals("is_err")
                 member_node.ival = 0
-                return Option<|I32|>.some(I32::sema_type_env.Builtin_type_id.bool_type)
+                return .some(I32::sema_type_env.Builtin_type_id.bool_type)
             if member_name_raw.equals("val")
                 member_node.ival = 2
-                return Option<|I32|>.some(c.env.strip_result(recv_id))
+                return .some(c.env.strip_result(recv_id))
             member_node.ival = 1 // error_code
-            return Option<|I32|>.some(result_err_id)
+            return .some(result_err_id)
     if is_array && member_name_raw.equals("len")
         if arr_size >= 0
             member_node.ival = arr_size
@@ -277,11 +282,11 @@ fn check_builtin_dot_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, r
             defer sb.free()
             sb.s("\{arr_size\}")
             node.morph(.k_integer, sb.slice())
-            return Option<|I32|>.some(I32::sema_type_env.Builtin_type_id.size_type)
+            return .some(I32::sema_type_env.Builtin_type_id.size_type)
 
         c.err(node, "cannot get length of array with unresolved size")
-        return Option<|I32|>.some(I32::sema_type_env.Builtin_type_id.size_type)
-    return Option<|I32|>.none
+        return .some(I32::sema_type_env.Builtin_type_id.size_type)
+    return .none
 
 fn format_spec_item(method_name: U8[]): U8[] //<
     //< Returns the format spec item whose desugaring calls method_name, or empty if there is none
@@ -320,7 +325,8 @@ priv fn reject_slotless_trait_call(c: Sema_ctx$@, recv_id: I32, member_name_raw:
         //< Caution: **Do not let a method with no slot pass.** A method with a default body is not
         //< in the vtable (has_vtable_slot in `../../base/ast_ext.kspls`). **Call this on both the
         //< found and the not-found path**; a trait value's method takes the found path.
-    switch c.env.get_info(c.env.receiver_base_id(recv_id)) case .trait_type(slot_def)
+    switch c.env.get_info(c.env.receiver_base_id(recv_id))
+    case .trait_type(slot_def)
         for m_sym in slot_def.methods_list
             if m_sym.name.equals(member_name_raw) && !m_sym.node.has_vtable_slot()
                 c.clear_scratch()
@@ -376,7 +382,8 @@ fn infer_dot_access(c: Sema_ctx$@, node: Ast_node$@, _left: Ast_node$@, target_i
         $found_sym: Sema_symbol$@ = null
 
         if s_entry != null
-            switch s_entry.info case .struct_type(struct_def)
+            switch s_entry.info
+            case .struct_type(struct_def)
                 for f_idx in Range.asc(struct_def.fields_list.len)
                     field: = struct_def.fields_list.get(f_idx)
                     if !field.name.equals(member_name_raw)
@@ -424,8 +431,7 @@ fn infer_dot_access(c: Sema_ctx$@, node: Ast_node$@, _left: Ast_node$@, target_i
                 // Caution: Create one here, or the visibility and import checks below are skipped
                 // entirely (a `priv` generic method becomes callable from another file).
                 m_name: = base_core.arena.dup_str(full_m_name)
-                found_sym = Sema_symbol.new(sema_type_scope.Sym_kind.generic_fn, m_name,
-                    generic_fn_node)
+                found_sym = Sema_symbol.new(.generic_fn, m_name, generic_fn_node)
                 found_sym.vis = generic_fn_node.get_visibility()
                 found_sym.flags.is_method = true
                 found_sym.apply_attributes()
@@ -498,7 +504,8 @@ fn infer_dot_access(c: Sema_ctx$@, node: Ast_node$@, _left: Ast_node$@, target_i
             // visibility, so a `priv` one ends up here. Report the access violation, as for an
             // impl's priv method, not a false "no such method".
             $vis_reported: = false
-            switch c.env.get_info(recv_id) case .trait_type(trait_def)
+            switch c.env.get_info(recv_id)
+            case .trait_type(trait_def)
                 for m_sym in trait_def.methods_list
                     if m_sym.name.equals(member_name_raw)
                         c.check_visibility_and_mark_used(m_sym, member_node)
@@ -592,7 +599,8 @@ priv fn refuse_method_value_on_value(c: Sema_ctx$@, member_node: Ast_node$@, rec
 
 priv fn is_declared_type(c: Sema_ctx$@, type_id: I32): Bool //<
     //< Whether a declaration names the type (struct, enum or trait), aliases and marks stripped
-    switch c.env.get_info(c.env.get_clean_real_type(type_id)) case .struct_type(_def)
+    switch c.env.get_info(c.env.get_clean_real_type(type_id))
+    case .struct_type(_def)
         return true
     case .enum_type(_def)
         return true

@@ -30,9 +30,10 @@ priv const max_laid_depth: Sz = 1000 //< how deep holds_laid_value looks into fi
 
 priv const max_float_fold_depth: Sz = 256 //< how deep fold_float follows nested expressions
 
-priv fn rounded_as(cg: Genllvm_ctx$@, folded: Option<|F64|>, type_id: I32): Option<|F64|> //<
+priv fn rounded_as(cg: Genllvm_ctx$@, folded: F64?, type_id: I32): F64? //<
     //< A folded value rounded to `F32` where the node's type is one
-    switch folded case .some(v)
+    switch folded
+    case .some(v)
         if cg.env.get_clean_real_type(type_id) == (I32::sema_type_env.Builtin_type_id.f32_type)
             narrowed: = F32::v
             return .some(narrowed)
@@ -165,7 +166,8 @@ impl Ast_node
         if r == null || r.kind_id == .k_empty || r.is_typed_null()
             cg.s("zeroinitializer")
             return
-        switch r.kind_id case .k_null
+        switch r.kind_id
+        case .k_null
             cg.s("zeroinitializer")
         case .k_bool
             cg.s("1" if r.text.equals("true") else "0")
@@ -254,7 +256,8 @@ impl Ast_node
             r.emit_llvm_const_scalar_expr(cg)
             return
         src_id: = cg.env.get_clean_real_type(target.type_id)
-        switch cg.env.get_info(src_id) case .array(_base_id, size)
+        switch cg.env.get_info(src_id)
+        case .array(_base_id, size)
             cg.s("{ ptr ").s(target.emit_llvm_lvalue(cg)).s(", i64 \{size\} }")
             return
         default {}
@@ -268,16 +271,19 @@ impl Ast_node
         // for genc; sema folds integers only. A float cast to an integer (`I32::2.9`) truncates to
         // zero.
         if cg.env.is_float(r.type_id)
-            switch r.fold_float(cg, 0) case .some(f)
+            switch r.fold_float(cg, 0)
+            case .some(f)
                 cg.s(gen_llvm_ctx.format_f64_hex(f))
                 return
             case .none {}
-        switch cg.sema.try_eval_constexpr_wide(r) case .some(v)
+        switch cg.sema.try_eval_constexpr_wide(r)
+        case .some(v)
             cg.s("\{v\}")
             return
         case .none {}
         if cg.env.is_integer(r.type_id) && r.is_explicit_cast()
-            switch r.get_postfix_receiver().fold_float(cg, 0) case .some(f)
+            switch r.get_postfix_receiver().fold_float(cg, 0)
+            case .some(f)
                 cg.s("\{I64::f\}")
                 return
             case .none {}
@@ -290,7 +296,7 @@ impl Ast_node
         cg.had_error = true
         cg.s("0")
 
-    priv fn fold_float(r: Ast_node$@, cg: Genllvm_ctx$@, depth: Sz): Option<|F64|> //<
+    priv fn fold_float(r: Ast_node$@, cg: Genllvm_ctx$@, depth: Sz): F64? //<
         //< The value of a constant floating-point expression, or none where it is not one
         //<
         //< A literal, a constant's name, `-`, `+ - * /`, parentheses and a cast from a number. An
@@ -298,7 +304,8 @@ impl Ast_node
         if r == null || depth >= max_float_fold_depth
             return .none
         $v: F64 = 0.0
-        switch r.kind_id case .k_float
+        switch r.kind_id
+        case .k_float
             $clean: = Str_builder.new()
             defer clean.free()
             _stop: = r.text.append_clean_number(clean@, "Ff")
@@ -307,14 +314,16 @@ impl Ast_node
         case .k_expr_primary
             return r.get_primary_inner_expr().fold_float(cg, depth + 1)
         case .k_identifier, .k_expr_path
-            switch r.const_init_expr(cg.sema) case .some(init)
+            switch r.const_init_expr(cg.sema)
+            case .some(init)
                 return rounded_as(cg, init.fold_float(cg, depth + 1), r.type_id)
             case .none
                 return .none
         case .k_expr_unary
             if !r.get_unary_op().text.equals("-")
                 return .none
-            switch r.get_unary_target().fold_float(cg, depth + 1) case .some(a)
+            switch r.get_unary_target().fold_float(cg, depth + 1)
+            case .some(a)
                 v = -a
             case .none
                 return .none
@@ -326,23 +335,26 @@ impl Ast_node
             src: = r.get_postfix_receiver()
             if cg.env.is_float(src.type_id)
                 return rounded_as(cg, src.fold_float(cg, depth + 1), r.type_id)
-            switch cg.sema.try_eval_constexpr_wide(src) case .some(n)
+            switch cg.sema.try_eval_constexpr_wide(src)
+            case .some(n)
                 v = F64::n
             case .none
                 return .none
         default
             return .none
-        return rounded_as(cg, Option<|F64|>.some(v), r.type_id)
+        return rounded_as(cg, .some(v), r.type_id)
 
-    priv fn fold_float_binary(r: Ast_node$@, cg: Genllvm_ctx$@, depth: Sz): Option<|F64|> //<
+    priv fn fold_float_binary(r: Ast_node$@, cg: Genllvm_ctx$@, depth: Sz): F64? //<
         //< fold_float's `+ - * /`
         $a: F64 = 0.0
         $b: F64 = 0.0
-        switch r.get_binary_left().fold_float(cg, depth + 1) case .some(x)
+        switch r.get_binary_left().fold_float(cg, depth + 1)
+        case .some(x)
             a = x
         case .none
             return .none
-        switch r.get_binary_right().fold_float(cg, depth + 1) case .some(y)
+        switch r.get_binary_right().fold_float(cg, depth + 1)
+        case .some(y)
             b = y
         case .none
             return .none
@@ -358,7 +370,7 @@ impl Ast_node
             v = a / b
         else
             return .none
-        return rounded_as(cg, Option<|F64|>.some(v), r.type_id)
+        return rounded_as(cg, .some(v), r.type_id)
 
     priv fn emit_llvm_const_aggregate(r: Ast_node$@, cg: Genllvm_ctx$@, type_id: I32) //<
         //< A compound literal `::{ ... }`
@@ -377,7 +389,8 @@ impl Ast_node
         // Strip the immutability qualifier: `const Row[_]`'s element is `const_of(Row)`, which
         // unstripped is neither struct nor array and ends in an ICE. The layout is the base type's.
         real_id: = cg.env.get_clean_real_type(type_id)
-        switch cg.env.get_info(real_id) case .array(elem_id, size)
+        switch cg.env.get_info(real_id)
+        case .array(elem_id, size)
             r.emit_llvm_const_array(cg, elem_id, size)
         case .struct_type(s_def)
             r.emit_llvm_const_struct(cg, s_def)
@@ -503,7 +516,8 @@ impl Ast_node
         real_id: = cg.env.get_clean_real_type(type_id)
         lay: = cg.sema.type_layout(real_id)
         $parts: = Laid_parts.new(cg, as_type)
-        switch cg.env.get_info(real_id) case .array(elem_id, size)
+        switch cg.env.get_info(real_id)
+        case .array(elem_id, size)
             $slots: = r.const_array_slots(cg, size)
             defer slots.free()
             elem_size: = cg.sema.type_layout(elem_id).size
@@ -538,7 +552,8 @@ impl Ast_node
         r.ice_assert(inner.kind_id == .k_enum_init,
             "genllvm: a tagged union in a global initializer is not a variant")
         $v_def: sema_type_def.Enum_variant$@ = null
-        switch e_def.get_variant(inner.last_child().text) case .some(v)
+        switch e_def.get_variant(inner.last_child().text)
+        case .some(v)
             v_def = v
         case .none
             r.ice_panic("genllvm: a global initializer names a variant its enum lacks")
@@ -560,7 +575,8 @@ impl Ast_node
         r.ice_assert(id_node != null, "emit_llvm_embed_decl: embed_decl missing Identifier")
         id: = id_node.text
         $file_data: U8[] = ""
-        switch gen_embed.read(r, cg.source_map) case .some(d)
+        switch gen_embed.read(r, cg.source_map)
+        case .some(d)
             file_data = d
         default
             cg.had_error = true
@@ -768,7 +784,8 @@ impl Genllvm_ctx
         real_id: = r.env.get_clean_real_type(type_id)
         if r.is_laid(real_id, 0)
             return true // its named type is packed with padding no field-by-field constant fills
-        switch r.env.get_info(real_id) case .enum_type(def)
+        switch r.env.get_info(real_id)
+        case .enum_type(def)
             return !def.is_scalar()
         case .struct_type(def)
             for f in def.fields_list

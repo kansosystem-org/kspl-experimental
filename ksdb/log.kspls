@@ -140,12 +140,12 @@ impl Log
         r: Self$@,
         kind: U16, //< the caller's own tag; `iter` returns it and `last` matches on it
         payload: U8[],
-    ): Void?Ksdb_error
+    ): Void!Ksdb_error
         if payload.len > max_payload
-            throw Ksdb_error.too_large
+            throw .too_large
         span: = record_span(payload.len)
         if span > r.store.sector_size
-            throw Ksdb_error.too_large
+            throw .too_large
         // Caution: **Do not stop at a region that is not erased.** A half-written record can remain
         // in a sector beyond `tail`'s, which `open` does not check. Skip it; when nothing fits any
         // more, throw `full`.
@@ -155,7 +155,7 @@ impl Log
             if r.store.sector_base(r.tail) != r.store.sector_base(r.tail + span - 1)
                 r.tail = r.store.next_sector(r.tail)
             if r.tail + span > r.store.capacity
-                throw Ksdb_error.full
+                throw .full
             if is_erased(r.store, r.tail, span)
                 found = true
             else
@@ -172,19 +172,19 @@ impl Log
         // counts.
         if payload.len > 0
             if !r.store.program_at(r.tail + header_size, payload)
-                throw Ksdb_error.write_failed
+                throw .write_failed
         if !r.store.program_at(r.tail, U8[]::head)
-            throw Ksdb_error.write_failed
+            throw .write_failed
         r.tail += span
 
-    pub fn reset(r: Self$@): Void?Ksdb_error //< erases the whole medium; the records are lost
+    pub fn reset(r: Self$@): Void!Ksdb_error //< erases the whole medium; the records are lost
         //<
         //< Use it before a device's first write (a device is erased when it leaves the factory, not
         //< after it has been written), and after someone has copied the records off a full log.
         $at: Sz = 0
         for at < r.store.capacity
             if !r.store.erase_sector(at)
-                throw Ksdb_error.write_failed
+                throw .write_failed
             at += r.store.sector_size
         r.tail = 0
 
@@ -220,13 +220,13 @@ impl Log
         r: Self$@,
         kind: U16,
         dst: U8$[], //< the destination; if it is shorter than the content, it throws `too_small`
-    ): Sz?Ksdb_error
+    ): Sz!Ksdb_error
         $found_at: Sz = 0
         $found_len: Sz = 0
         if !r.find_last(kind, found_at@, found_len@)
-            throw Ksdb_error.not_found
+            throw .not_found
         if found_len > dst.len
-            throw Ksdb_error.too_small
+            throw .too_small
         if found_len > 0
             v: = dst.sub_mut(0, found_len)
             r.store.read_at(found_at, v)

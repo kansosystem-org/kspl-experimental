@@ -21,7 +21,7 @@ priv const iter_trait_fqn: U8[] = "std.lang.Iter" //<
     //< The trait whose implementers `for x in` loops over with `next()`
 
 impl Ast_node
-    fn expand_for_in(r: Self$@, c: Sema_ctx$@): Void?Sema_error //<
+    fn expand_for_in(r: Self$@, c: Sema_ctx$@): Void!Sema_error //<
         //< Expands the loop if it carries the mark (a bare identifier at the init position)
         item_id: = r.get_loop_init()
         if item_id == null || item_id.kind_id != .k_identifier
@@ -29,7 +29,7 @@ impl Ast_node
         coll_ref: = r.get_loop_cond()
         // **Infer here**: the temporary's declaration is the statement just before, so it is typed
         // now.
-        coll_id: = coll_ref.infer_expr(c, 0)?
+        coll_id: = coll_ref.infer_expr(c, 0)!
         // **Check `Iter` first**, or a type that supports both silently loses the `Iter` its writer
         // declared (Principle 5); the index form is for a subject that declares nothing.
         if c.env.implemented_trait_instance(coll_id, iter_trait_fqn) != 0
@@ -62,9 +62,11 @@ impl Ast_node
             .add_child(Ast_node.new(.k_literal, "[", loc))
             .add_child(Ast_node.build_ident(idx_name, 0, loc))
 
-        idx_decl: = Ast_node.build_inferred_var_decl(idx_name,
+        idx_decl: = Ast_node.build_inferred_var_decl(Ast_node.build_ident(idx_name, 0, loc),
             Ast_node.build_int_literal(0, loc), loc)
-        item_decl: = Ast_node.build_inferred_var_decl(item_id.text, idx_expr, loc)
+        // **The item's declaration stands where its name is written**, not at the `for` with
+        // the temporaries: a reference is matched by position, so it would take theirs for its own.
+        item_decl: = Ast_node.build_inferred_var_decl(item_id, idx_expr, item_id.loc)
         r.replace_loop_parts(idx_decl, cond_expr, step_stmt, item_decl)
 
     priv fn build_step_loop(r: Self$@, item_id: Ast_node$@, coll_ref: Ast_node$@) //<
@@ -78,7 +80,7 @@ impl Ast_node
             0, loc)
         none_block: = Ast_node.new(.k_stmt_block, "stmt_block", loc)
             .add_child(Ast_node.new(.k_stmt_break, "break", loc))
-        step: = Ast_node.build_option_match(call, item_id.text, r.get_loop_block(), none_block, null,
+        step: = Ast_node.build_option_match(call, item_id, r.get_loop_block(), none_block, null,
             base_ast_ext.for_in_mark, loc)
 
         loop_children: = base_ast.new_ast_node_list()

@@ -217,7 +217,7 @@ priv fn arc_store_into_array(v: Rc<|I32|>): Rc<|I32|>[2]
     return ::{ v, v }
 
 priv fn arc_store_into_enum(v: Rc<|I32|>): Arc_wrap
-    return Arc_wrap.filled(v)
+    return .filled(v)
 
 fn test_arc_retain_on_every_copy_site()
     verdict
@@ -233,7 +233,8 @@ fn test_arc_retain_on_every_copy_site()
     assert(elem_alive, "an Rc stored into an array-literal element must stay alive with the array")
 
     e: = arc_store_into_enum(Rc<|I32|>.new(7))
-    switch e case .filled(inner)
+    switch e
+    case .filled(inner)
         payload_alive: = arc_is_alive(inner@)
         assert(payload_alive, "an Rc stored into an enum payload must stay alive with the enum")
     default
@@ -281,7 +282,8 @@ priv struct Arc_aggregate
 
 priv fn arc_enum_payload_body()
     e: = Arc_multi.two(3, Rc<|I32|>.new(10))
-    switch e case .two(t, v)
+    switch e
+    case .two(t, v)
         assert(t == 3 && v.get()$ == 10, "enum payload must be readable")
     default
         panic("enum lost its variant")
@@ -294,7 +296,7 @@ priv fn arc_array_element_body()
 
 priv fn arc_aggregate_nest_body()
     $g: = Arc_aggregate::{ .arr = ::{ Rc<|I32|>.new(1), Rc<|I32|>.new(2) },
-        .e = Arc_multi.nested(Arc_holder::{ .v = Rc<|I32|>.new(3) }) }
+        .e = .nested(Arc_holder::{ .v = Rc<|I32|>.new(3) }) }
     assert(g.arr[1].get()$ == 2, "an array field inside a struct must be readable")
     // Leaving the scope: two array elements and a struct field inside the enum's payload.
 
@@ -303,7 +305,7 @@ priv fn arc_place_expr_copy_body() //< a copy from a place expression (`g.arr[0]
     //< Without a retain here, the destination's release **frees memory that should still be alive**
     //< (a use after free).
     $g: = Arc_aggregate::{ .arr = ::{ Rc<|I32|>.new(1), Rc<|I32|>.new(2) },
-        .e = Arc_multi.one(Rc<|I32|>.new(3)) }
+        .e = .one(Rc<|I32|>.new(3)) }
     release_on_exit:
         _from_elem: = g.arr[0]
         _from_field: = g.arr
@@ -323,7 +325,8 @@ priv fn arc_multi_exit_body(n: I32): I32 //<
             return arr[0].get()$
         if i == 2
             break
-    switch e case .two(_t, v)
+    switch e
+    case .two(_t, v)
         return v.get()$ - n + arr[1].get()$
     default
         return arr[1].get()$
@@ -360,18 +363,18 @@ fn test_arc_aggregate_cascade_release()
         .pass("a live enum variant's payload and every array element were chain-released through a \
             struct, through nesting and on every exit route.")
 // ==========================================
-// std/mem: a Result's (`T?E`) success payload is an owning position too.
-// Received with `catch` or `?`, the value moves to the binding and balances, so if the walk over
+// std/mem: a Result's (`T!E`) success payload is an owning position too.
+// Received with `catch` or `!`, the value moves to the binding and balances, so if the walk over
 // owning positions skips Result, **only a Result thrown away unreceived** leaks.
 // ==========================================
 priv enum Arc_err
     failed
 
-priv fn arc_make_ok(): Rc<|I32|>?Arc_err
+priv fn arc_make_ok(): Rc<|I32|>!Arc_err
     return Rc<|I32|>.new(5)
 
-priv fn arc_make_err(): Rc<|I32|>?Arc_err
-    throw Arc_err.failed
+priv fn arc_make_err(): Rc<|I32|>!Arc_err
+    throw .failed
 
 priv fn arc_result_dropped_body() //<
     //< The shape that throws a Result away using neither catch nor ?
@@ -385,7 +388,7 @@ priv fn arc_result_unwrapped_body() //< the receiving shape
     assert(v.get()$ == 5, "an unwrapped Result payload must be readable")
 
 priv struct Arc_result_holder
-    r: Rc<|I32|>?Arc_err
+    r: Rc<|I32|>!Arc_err
 
 priv fn arc_result_in_struct_body()
     h: = Arc_result_holder::{ .r = arc_make_ok() }
@@ -414,12 +417,12 @@ fn test_arc_result_payload_release()
             all balanced (the error side holds no payload).")
 // ==========================================
 // std/mem: a Result built around a place, or unwrapped from one, copies what the place owns.
-// `return entry.value` in a `V?E` function and `v: = r catch …` on a binding both leave the
+// `return entry.value` in a `V!E` function and `v: = r catch …` on a binding both leave the
 // place owning too, so each copy needs its own count. A missing one frees the value under the
 // copy; the heap still balances while the freed memory reads as before, so a weak handle and the
 // final balance are what tell.
 // ==========================================
-priv fn arc_unwrap_place(r: Rc<|I32|>?Arc_err): Rc<|I32|> //< unwraps a Result it does not give up
+priv fn arc_unwrap_place(r: Rc<|I32|>!Arc_err): Rc<|I32|> //< unwraps a Result it does not give up
     v: = r catch
         fallback Rc<|I32|>.new(0)
     return v
@@ -467,7 +470,7 @@ priv fn arc_zero_slot_assign_body() //< an assignment into an empty slot
     arr[0] = arr[1] // assigning a zero value over a live handle -> the 7 is freed
 
 priv fn arc_zero_aggregate_body() //< the zero value of an enum's payload and of a struct's field
-    opts: Option<|Rc<|I32|>|>[2] = ::{}
+    opts: Rc<|I32|>?[2] = ::{}
     _o2: = opts
     slots: Arc_slot[2] = ::{}
     _s2: = slots
@@ -683,9 +686,9 @@ priv fn arc_duo(v: I32): Arc_duo
 priv fn arc_duo_pass(p: Arc_duo): Arc_duo
     return p
 
-priv fn arc_maybe_duo(v: I32): Arc_duo?Arc_err
+priv fn arc_maybe_duo(v: I32): Arc_duo!Arc_err
     if v < 0
-        throw Arc_err.failed
+        throw .failed
     return arc_duo(v)
 
 priv fn arc_unbound_body(): I32
@@ -698,7 +701,8 @@ priv fn arc_unbound_body(): I32
     defer sb.free()
     sb.s("\{arc_duo(5).n\}")
     $sum: = arc_duo(6).n + Arc_duo::{ .a = Rc<|I32|>.new(7), .n = 7 }.n
-    switch arc_store_into_enum(Rc<|I32|>.new(8)) case .filled(v)
+    switch arc_store_into_enum(Rc<|I32|>.new(8))
+    case .filled(v)
         sum += v.get()$
     default {}
     sum += arc_duo(9).n if sum > 0 else 0

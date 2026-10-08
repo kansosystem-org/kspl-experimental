@@ -1,11 +1,11 @@
 import "kspage/lay/ask"
 import "kspage/lay/caret"
 import "kspage/lay/flow"
-import "kspage/model/doc" { Axis, Doc }
+import "kspage/model/doc" { Doc }
 import "kspage/model/filter"
 import "kspage/model/fixed_font" as fixed
 import "kspage/model/paint"
-import "kspage/model/style" { Sheet, Arrange, Shape }
+import "kspage/model/style" { Sheet }
 import "kspage/tests/base"
 import "kspage/write/cells"
 import "kspage/write/edit"
@@ -39,13 +39,14 @@ fn test_a_shape_hangs_on_a_cell() //< a figure can be drawn on a table cell too
     spot: = page.cells.get(0)
 
     ed: = edit.new_editor(d)
-    put: = ed.draw_shape(page, sheet, "figure", Shape.box, spot.rect.x + 2.0F32,
-        spot.rect.y + 2.0F32, 30.0, 12.0)
+    put: = ed.draw_shape(page, sheet, "figure", .box, spot.rect.x + 2.0F32, spot.rect.y + 2.0F32,
+        30.0, 12.0)
     assert(put, "on a cell it can be drawn")
     cell: = table.children.get(0).children.get(0)
     assert(cell.children.len == 1, "it goes in as that cell's child")
     // **A frame's position is from the cell's top left** (not screen coordinates).
-    switch cell.children.get(0).frame case .some(f)
+    switch cell.children.get(0).frame
+    case .some(f)
         assert(base.near(f.x, 2.0) && base.near(f.y, 2.0),
             "the place pressed becomes the frame's top left")
         assert(base.near(f.w, 30.0) && base.near(f.h, 12.0), "it comes out the size dragged")
@@ -185,7 +186,7 @@ fn test_an_empty_table_still_takes_room() //<
     assert(one.w > 0.0, "an empty cell gets a width too")
     $grid: Sz = -1
     for $i: Sz = 0; i < page.regions.len; i += 1
-        if page.regions.get(i).kind.same_arrange(Arrange.grid)
+        if page.regions.get(i).kind.same_arrange(.grid)
             grid = i
     assert(grid >= 0, "there is a table region")
     box: = page.regions.get(grid).rect
@@ -202,7 +203,7 @@ fn test_a_specified_column_takes_the_width_it_asks_for() //<
     defer arena.free()
     d: = Doc.new(arena)
     table: = base.two_by_two(d)
-    table.set_size(Axis.column, 0, Option<|F32|>.some(50.0))
+    table.set_size(.column, 0, .some(50.0))
 
     page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
     assert(base.near(page.cells.get(0).rect.w, 50.0), "the first column is the width named")
@@ -222,7 +223,7 @@ fn test_a_specified_width_does_not_shrink() //< a set width does not shrink
     row.add_child("cell").add_text("a")
     row.add_child("cell").add_text("あいうえお")
     row.add_child("cell").add_text("かきくけこ")
-    table.set_size(Axis.column, 0, Option<|F32|>.some(60.0))
+    table.set_size(.column, 0, .some(60.0))
 
     // Of the 100px given, the 60px set stays; the other two want 32px each (two characters a line)
     // of the 40px left, so each shrinks proportionally to 20px.
@@ -242,8 +243,8 @@ fn test_specified_widths_may_overflow_the_container() //<
     defer arena.free()
     d: = Doc.new(arena)
     table: = base.two_by_two(d)
-    table.set_size(Axis.column, 0, Option<|F32|>.some(120.0))
-    table.set_size(Axis.column, 1, Option<|F32|>.some(120.0))
+    table.set_size(.column, 0, .some(120.0))
+    table.set_size(.column, 1, .some(120.0))
 
     page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 100.0, arena)
     assert(base.near(page.cells.get(0).rect.w, 120.0), "it is as named even past what is given")
@@ -259,7 +260,7 @@ fn test_a_short_or_negative_spec_is_taken_safely() //< a width list may be short
     defer arena.free()
     d: = Doc.new(arena)
     table: = base.two_by_two(d)
-    table.set_size(Axis.column, 0, Option<|F32|>.some(-30.0))
+    table.set_size(.column, 0, .some(-30.0))
 
     page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
     assert(base.near(page.cells.get(0).rect.w, 0.0), "a naming that goes negative becomes 0")
@@ -275,7 +276,7 @@ fn test_column_widths_are_ignored_outside_a_grid() //<
     defer arena.free()
     d: = Doc.new(arena)
     table: = base.two_by_two(d)
-    table.set_size(Axis.column, 0, Option<|F32|>.some(50.0))
+    table.set_size(.column, 0, .some(50.0))
 
     // `table` is laid out with a style that does not make it a grid.
     plain: = Sheet.new(base.root_font(), arena)
@@ -342,8 +343,7 @@ fn test_typing_a_width_sets_the_column_width() //<
 
     page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
     ed.caret = caret.at(page.cells.get(0).block.inlines.get(0), 0)
-    assert(ed.set_line_size(page, Axis.column, Option<|F32|>.some(50.0)),
-        "the number typed goes through")
+    assert(ed.set_line_size(page, .column, .some(50.0)), "the number typed goes through")
 
     moved: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
     assert(base.near(moved.cells.get(0).rect.w, 50.0),
@@ -366,7 +366,7 @@ fn test_clearing_a_width_returns_to_the_content_width() //<
     defer arena.free()
     d: = Doc.new(arena)
     table: = base.two_by_two(d)
-    table.set_size(Axis.column, 0, Option<|F32|>.some(120.0))
+    table.set_size(.column, 0, .some(120.0))
     sheet: = base.grid_sheet(arena)
     ed: = edit.new_editor(d)
 
@@ -374,17 +374,15 @@ fn test_clearing_a_width_returns_to_the_content_width() //<
     assert(base.near(page.cells.get(0).rect.w, 120.0),
         "before it is taken off it is the width typed")
     // Outside the table nothing happens, **and it does not report success as though it had acted.**
-    assert(!ed.set_line_size(page, Axis.column, Option<|F32|>.none),
-        "outside the table it does not act")
+    assert(!ed.set_line_size(page, .column, .none), "outside the table it does not act")
     ed.caret = caret.at(page.cells.get(0).block.inlines.get(0), 0)
-    assert(ed.set_line_size(page, Axis.column, Option<|F32|>.none),
-        "the word to take it off goes through")
+    assert(ed.set_line_size(page, .column, .none), "the word to take it off goes through")
 
     gone: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
     assert(base.near(gone.cells.get(0).rect.w, 8.0),
         "the naming comes off and it goes back to the contents' width")
 
-    assert(ed.set_line_size(page, Axis.column, Option<|F32|>.some(0.0)), "0 can be typed too")
+    assert(ed.set_line_size(page, .column, .some(0.0)), "0 can be typed too")
     flat: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
     assert(base.near(flat.cells.get(0).rect.w, 0.0), "0 is a column of width 0")
     verdict.pass("empty the field and the naming comes off, while 0 is left as width 0.")
@@ -447,7 +445,7 @@ fn test_a_specified_row_takes_the_height_it_asks_for() //< a row with a set heig
     d: = Doc.new(arena)
     table: = base.two_by_two(d)
     // The second row stays at its contents' one line (19.2px).
-    table.set_size(Axis.row, 0, Option<|F32|>.some(50.0))
+    table.set_size(.row, 0, .some(50.0))
 
     page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
     assert(base.near(page.cells.get(0).rect.h, 50.0), "the first row is the height named")
@@ -469,8 +467,8 @@ fn test_a_specified_height_does_not_grow_with_its_content() //<
     // Contents of three lines in a 40px column (57.6px) go into a row 20px tall.
     cell: = row.add_child("cell")
     cell.add_text("あいうえお")
-    table.set_size(Axis.column, 0, Option<|F32|>.some(40.0))
-    table.set_size(Axis.row, 0, Option<|F32|>.some(20.0))
+    table.set_size(.column, 0, .some(40.0))
+    table.set_size(.row, 0, .some(20.0))
 
     page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
     assert(base.near(page.cells.get(0).rect.h, 20.0),
@@ -494,7 +492,8 @@ fn test_a_row_edge_is_found_below_a_cell() //< a border is caught below as well
     page: = flow.layout(d, base.grid_sheet(arena), fixed.make(), 200.0, arena)
     edge: = ask.edge_at(page, 2.0, 19.2)
     assert(edge.found && edge.table == table, "on the border the table comes back")
-    switch edge.axis case .row
+    switch edge.axis
+    case .row
         assert(edge.index == 0, "the row above is caught")
     case .column
         assert(false, "the border below is caught as a row")
@@ -618,7 +617,7 @@ fn test_a_row_is_added_after_the_caret() //< one row is inserted after the curso
 
     page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
     ed.caret = caret.at(page.boxes.get(0).inline, 0)
-    assert(ed.add_line(page, Axis.row), "it was added")
+    assert(ed.add_line(page, .row), "it was added")
     assert(table.children.len == 3, "the rows grow by one")
     // The added row is empty but holds one text, so the cursor can stand in it.
     made: = table.children.get(1)
@@ -641,7 +640,7 @@ fn test_a_column_is_added_to_every_row() //< a column is added the same way
 
     page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
     ed.caret = caret.at(page.boxes.get(0).inline, 0)
-    assert(ed.add_line(page, Axis.column), "it was added")
+    assert(ed.add_line(page, .column), "it was added")
     assert(table.children.get(0).children.len == 3, "the first row gains a column")
     assert(table.children.get(1).children.len == 3, "the second row gains one too")
     assert(ed.undo(), "it can be put back in one")
@@ -655,14 +654,14 @@ fn test_dropping_a_row_moves_its_size_spec_too() //<
     defer arena.free()
     d: = Doc.new(arena)
     table: = base.two_by_two(d)
-    table.set_size(Axis.row, 0, Option<|F32|>.some(30.0))
-    table.set_size(Axis.row, 1, Option<|F32|>.some(50.0))
+    table.set_size(.row, 0, .some(30.0))
+    table.set_size(.row, 1, .some(50.0))
     sheet: = base.grid_sheet(arena)
     ed: = edit.new_editor(d)
 
     page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
     ed.caret = caret.at(page.boxes.get(0).inline, 0)
-    assert(ed.drop_line(page, Axis.row), "it was deleted")
+    assert(ed.drop_line(page, .row), "it was deleted")
     assert(table.children.len == 1, "the rows fall by one")
     // If the settings did not move, the remaining row would stay 30px.
     after: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
@@ -689,8 +688,8 @@ fn test_the_last_line_is_kept() //< the last one is not deleted
 
     page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
     ed.caret = caret.at(page.boxes.get(0).inline, 0)
-    assert(!ed.drop_line(page, Axis.row), "with only one row it is not deleted")
-    assert(!ed.drop_line(page, Axis.column), "with only one column it is not deleted")
+    assert(!ed.drop_line(page, .row), "with only one row it is not deleted")
+    assert(!ed.drop_line(page, .column), "with only one column it is not deleted")
     assert(table.children.len == 1, "the table stays as it was")
     verdict.pass("the last row and the last column are kept.")
 
@@ -706,8 +705,8 @@ fn test_lines_are_only_added_inside_a_table() //< nothing can be added outside a
 
     page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
     ed.caret = caret.at(page.boxes.get(0).inline, 0)
-    assert(!ed.add_line(page, Axis.row), "on the body nothing can be added")
-    assert(!ed.drop_line(page, Axis.row), "on the body nothing can be deleted")
+    assert(!ed.add_line(page, .row), "on the body nothing can be added")
+    assert(!ed.drop_line(page, .row), "on the body nothing can be deleted")
     verdict.pass("a row and a column can be touched only inside a table.")
 
 // ---- nesting the arrangements ----
@@ -890,7 +889,7 @@ fn test_a_filter_leaves_rows_out_of_the_layout() //<
         row.add_child("cell").add_text(names[i])
     sheet: = base.grid_sheet(arena)
     sheet.over.filters = List<|filter.Filter|>.create(arena)
-    sheet.over.filters.push(filter.make_filter(table, 0, filter.Keep.above, "8"))
+    sheet.over.filters.push(filter.make_filter(table, 0, .above, "8"))
     page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
     $rows_laid: Sz = 0
     $row_two: = false
@@ -921,7 +920,7 @@ fn test_a_filter_leaves_rows_out_of_the_layout() //<
     assert(five, "the row kept for the cursor is laid though it fails the condition")
     sheet.over.kept_row = null
     sheet.over.filters.len = 0
-    sheet.over.filters.push(filter.make_filter(table, 1, filter.Keep.holds, "T"))
+    sheet.over.filters.push(filter.make_filter(table, 1, .holds, "T"))
     held: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
     $shown: Sz = 0
     for $i: Sz = 0; i < held.cells.len; i += 1

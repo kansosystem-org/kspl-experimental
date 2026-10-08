@@ -5,10 +5,8 @@
 //< is there and add only where there is none.
 //< Do not decide the look here, or looks the text does not hold creep in; the look is set in the
 //< table beforehand ([`markdown_look.kspls`](markdown_look.kspls)).
-import "kspage/model/collect" { Collect }
-import "kspage/model/marker" { Marker }
 import "kspage/model/paint" + { Accent }
-import "kspage/model/style" + { Sheet, Style, Arrange }
+import "kspage/model/style" + { Sheet, Style }
 import "kspage/share/markdown"
 import "kspage/share/markdown_look" { apart_name, body_name, cell_names, divider_name, grid_name,
     head_names, item_name, notes_name, step_name }
@@ -21,14 +19,16 @@ priv fn free_name(sheet: Sheet$@, want: U8[], arena: Arena$@): U8[] //<
     //<
     //< Caution: **Do not make two styles of the same name** — the later one can no longer be looked
     //< up. One more than the number of styles in the table always finds a free name.
-    switch sheet.find(want) case .none
+    switch sheet.find(want)
+    case .none
         return want
     case .some {}
     for $n: Sz = 2; n <= sheet.styles.len + 1; n += 1
         $sb: = Str_builder.new()
         defer sb.free()
         sb.s(want).s("-\{n\}")
-        switch sheet.find(sb.slice()) case .none
+        switch sheet.find(sb.slice())
+        case .none
             return arena.dup_str(sb.slice())
         case .some {}
     return want
@@ -39,7 +39,8 @@ priv fn add_style(sheet: Sheet$@, want: U8[], arena: Arena$@): Style$@ //< adds 
     return sheet.add(free_name(sheet, want, arena), paint.inherit_all())
 
 priv fn unmarked(s: Style$@): Bool //< whether it is a style holding no mark
-    switch s.marker case .none
+    switch s.marker
+    case .none
         return true
     case .bullet, .number, .serial, .outline {}
     return false
@@ -64,7 +65,8 @@ fn list_style(sheet: Sheet$@, kind: Sz, arena: Arena$@): U8[] //<
     //< style. An added one gets "• " (written out as `-`).
     for $i: Sz = 0; i < sheet.styles.len; i += 1
         s: = sheet.styles.get(i)
-        switch s.marker case .bullet(_g)
+        switch s.marker
+        case .bullet(_g)
             if kind == 1
                 return s.name
         case .number(_a)
@@ -73,10 +75,10 @@ fn list_style(sheet: Sheet$@, kind: Sz, arena: Arena$@): U8[] //<
         case .none, .serial, .outline {}
     if kind == 2
         fresh: = add_style(sheet, step_name, arena)
-        fresh.marker = Marker.number(". ")
+        fresh.marker = .number(". ")
         return fresh.name
     made: = add_style(sheet, item_name, arena)
-    made.marker = Marker.bullet("• ")
+    made.marker = .bullet("• ")
     return made.name
 
 fn code_style(sheet: Sheet$@, info: U8[], bold: Bool, italic: Bool, arena: Arena$@): U8[] //<
@@ -87,9 +89,9 @@ fn code_style(sheet: Sheet$@, info: U8[], bold: Bool, italic: Bool, arena: Arena
     //< another style** (`` **`x`** ``), so the emphasis is compared too.
     $want: Accent = paint.inherit_accent()
     if bold
-        want.bold = Option<|Bool|>.some(true)
+        want.bold = .some(true)
     if italic
-        want.italic = Option<|Bool|>.some(true)
+        want.italic = .some(true)
     wanted: = coded_name(info, bold, italic)
     $model: Style$@ = null
     for $i: Sz = 0; i < sheet.styles.len; i += 1
@@ -118,11 +120,11 @@ priv fn same_accent(s: Style$@, want: Accent): Bool //<
     //< a style that cancels the bold).
     $got: Accent = paint.inherit_accent()
     if w: = s.font.weight
-        got.bold = Option<|Bool|>.some(w >= paint.bold_weight)
+        got.bold = .some(w >= paint.bold_weight)
     got.italic = s.font.italic
     return same_flag(got.bold, want.bold) && same_flag(got.italic, want.italic)
 
-priv fn same_flag(a: Option<|Bool|>, b: Option<|Bool|>): Bool
+priv fn same_flag(a: Bool?, b: Bool?): Bool
     return paint.drawn(a) == paint.drawn(b)
 
 priv fn coded_name(info: U8[], bold: Bool, italic: Bool): U8[] //< the code style's name
@@ -172,9 +174,11 @@ priv fn plain(s: Style$@): Bool //< whether it is a style holding no part at all
         return false
     if _v: = s.fill
         return false
-    switch s.collect case .none {} default
+    switch s.collect
+    case .none {}
+    default
         return false
-    return s.arrange.same_arrange(Arrange.flow) && s.align.same_align(style.Align.left)
+    return s.arrange.same_arrange(.flow) && s.align.same_align(.left)
 
 fn divider_style(sheet: Sheet$@, ruled: Bool, arena: Arena$@): U8[] //<
     //< The name of a divider's style
@@ -195,21 +199,23 @@ fn grid_style(sheet: Sheet$@, arena: Arena$@): U8[] //< the name of a table's st
     //< It is a style that lays out as a grid (decided by the layout, not by the name).
     for $i: Sz = 0; i < sheet.styles.len; i += 1
         s: = sheet.styles.get(i)
-        switch s.arrange case .grid
+        switch s.arrange
+        case .grid
             return s.name
         case .flow, .absolute {}
     fresh: = add_style(sheet, grid_name, arena)
-    fresh.arrange = Arrange.grid
+    fresh.arrange = .grid
     return fresh.name
 
 fn notes_style(sheet: Sheet$@, arena: Arena$@): U8[]
     for $i: Sz = 0; i < sheet.styles.len; i += 1
         s: = sheet.styles.get(i)
-        switch s.collect case .notes
+        switch s.collect
+        case .notes
             return s.name
         case .none, .contents, .bars, .lines {}
     fresh: = add_style(sheet, notes_name, arena)
-    fresh.collect = Collect.notes
+    fresh.collect = .notes
     return fresh.name
 
 fn accent_style(sheet: Sheet$@, bold: Bool, italic: Bool, arena: Arena$@): U8[] //<
@@ -222,9 +228,9 @@ fn accent_style(sheet: Sheet$@, bold: Bool, italic: Bool, arena: Arena$@): U8[] 
         return ""
     $want: Accent = paint.inherit_accent()
     if bold
-        want.bold = Option<|Bool|>.some(true)
+        want.bold = .some(true)
     if italic
-        want.italic = Option<|Bool|>.some(true)
+        want.italic = .some(true)
     $sb: = Str_builder.new()
     defer sb.free()
     if !paint.span_name(paint.inherit_ink(), want, sb@)
@@ -261,9 +267,9 @@ fn cell_style(sheet: Sheet$@, want: style.Align, arena: Arena$@): U8[] //<
     return fresh.name
 
 priv fn cell_name(want: style.Align): U8[] //< the cell style names, per alignment
-    if want.same_align(style.Align.center)
+    if want.same_align(.center)
         return cell_names[1]
-    return cell_names[2] if want.same_align(style.Align.right) else cell_names[0]
+    return cell_names[2] if want.same_align(.right) else cell_names[0]
 
 fn link_style(sheet: Sheet$@, bold: Bool, italic: Bool, arena: Arena$@): U8[] //<
     //< The name of a link's run style
@@ -286,9 +292,9 @@ fn link_style(sheet: Sheet$@, bold: Bool, italic: Bool, arena: Arena$@): U8[] //
     // Only one function builds the name (`paint.span_name`).
     $want: Accent = paint.inherit_accent()
     if bold
-        want.bold = Option<|Bool|>.some(true)
+        want.bold = .some(true)
     if italic
-        want.italic = Option<|Bool|>.some(true)
+        want.italic = .some(true)
     $sb: = Str_builder.new()
     defer sb.free()
     if !paint.span_name(found.ink, want, sb@)

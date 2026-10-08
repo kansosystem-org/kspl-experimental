@@ -4,7 +4,7 @@ import "kspage/lay/page" { Page }
 import "kspage/model/doc" { Doc, Chrome }
 import "kspage/model/fixed_font" as fixed
 import "kspage/model/paint"
-import "kspage/model/style" { Sheet, Arrange }
+import "kspage/model/style" { Sheet }
 import "kspage/tests/base"
 import "std/mem" { Arena }
 import "std/str"
@@ -130,7 +130,7 @@ fn test_a_moved_block_leaves_no_panel_behind() //<
     defer arena.free()
     d: = Doc.new(arena)
     sheet: = paper(2, arena)
-    sheet.add("lit", paint.inherit_all()).fill = Option<|U32|>.some(0xeeeeeeU32)
+    sheet.add("lit", paint.inherit_all()).fill = .some(0xeeeeeeU32)
     d.add_block("body").add_text("あい")
     d.add_block("lit").add_text("うえおか")
 
@@ -235,7 +235,7 @@ fn test_a_surface_is_never_split() //< a slide does not split
     d: = Doc.new(arena)
     sheet: = paper(4, arena)
     s: = sheet.add("slide", paint.inherit_all())
-    s.arrange = Arrange.absolute
+    s.arrange = .absolute
     s.height = 48.0
     d.add_block("body").add_text("あい")
     slide: = d.add_block("slide")
@@ -278,12 +278,12 @@ fn test_the_page_marks_are_filled_when_the_band_is_placed() //<
     d: = Doc.new(arena)
     d.footer.inlines.get(0).insert(0, "{page}/{pages}")
 
-    one: = band(d, Chrome.footer, bordered(arena), 2, 5, arena)
+    one: = band(d, .footer, bordered(arena), 2, 5, arena)
     assert(one.boxes.len == 1, "the band is one row")
     assert(one.boxes.get(0).text.equals("2/5"),
         "the mark becomes the page as it is now and the count of all the sheets")
     // Laid out for one more page, the document's text is still the mark.
-    two: = band(d, Chrome.footer, bordered(arena), 3, 5, arena)
+    two: = band(d, .footer, bordered(arena), 3, 5, arena)
     assert(two.boxes.get(0).text.equals("3/5"), "on the next page the number alone changes")
     kept: = d.footer.inlines.get(0).text()
     assert(kept.equals("{page}/{pages}"), "the document's text is still the mark")
@@ -302,12 +302,12 @@ fn test_the_band_sits_inside_the_paper_margins() //< the band sits inside the pa
     d.footer.inlines.get(0).insert(0, "うえ")
     sheet: = bordered(arena)
 
-    top: = band(d, Chrome.header, sheet, 1, 1, arena)
+    top: = band(d, .header, sheet, 1, 1, arena)
     assert(base.near(top.boxes.get(0).rect.x, 16.0), "the band's left is inside by the left margin")
     assert(base.near(top.boxes.get(0).rect.y, 0.0), "the header starts from the page's top edge")
     assert(base.near(top.boxes.get(0).rect.w, 32.0), "the band's width is the same as the column's")
 
-    bottom: = band(d, Chrome.footer, sheet, 1, 1, arena)
+    bottom: = band(d, .footer, sheet, 1, 1, arena)
     // The page is 76.8px and the bottom margin 19.2px, so it is below 57.6.
     assert(base.near(bottom.boxes.get(0).rect.y, 57.6),
         "the footer starts from the head of the bottom margin")
@@ -322,20 +322,20 @@ fn test_an_empty_band_places_nothing() //< an empty band is not laid out
     defer arena.free()
     d: = Doc.new(arena)
 
-    empty: = band(d, Chrome.header, bordered(arena), 1, 1, arena)
+    empty: = band(d, .header, bordered(arena), 1, 1, arena)
     assert(empty.boxes.len == 0, "empty, there is no box")
     // With no margin there is nowhere to put it, text or not.
     d.header.inlines.get(0).insert(0, "あい")
     flat: = Sheet.new(base.root_font(), arena)
     flat.paper.width = 64.0
     flat.paper.height = 76.8
-    tight: = band(d, Chrome.header, flat, 1, 1, arena)
+    tight: = band(d, .header, flat, 1, 1, arena)
     assert(tight.boxes.len == 0, "with no margin it is not laid")
     // With no paper size set, neither the header nor the footer is laid out (they appear per page).
     loose: = Sheet.new(base.root_font(), arena)
     loose.paper.top = 19.2
     loose.paper.bottom = 19.2
-    free: = band(d, Chrome.header, loose, 1, 1, arena)
+    free: = band(d, .header, loose, 1, 1, arena)
     assert(free.boxes.len == 0, "with no page it is not laid")
     verdict
         .pass("on an empty band, a page with no margin, and a document with no page, no band is \

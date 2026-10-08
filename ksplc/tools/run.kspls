@@ -287,7 +287,7 @@ priv fn append_dep_line(path: U8[], out: Str_builder$@): Bool //<
 // The libraries the program names (`#link` on an `extern` block)
 // ==========================================
 
-fn write_libs_file(libs_path: U8[], root: Ast_node$@): Void?io.Io_error //<
+fn write_libs_file(libs_path: U8[], root: Ast_node$@): Void!io.Io_error //<
     //< It writes the libraries the kept `extern` blocks name into the libs file (`--emit-libs=`)
     //<
     //< One line of `-l<name>` words (the shape `info link-libs` answers in), empty where none is
@@ -300,7 +300,7 @@ fn write_libs_file(libs_path: U8[], root: Ast_node$@): Void?io.Io_error //<
     for i in Range.asc(names.len)
         out.s(" " if i > 0 else "").s("-l").s(names.get(i))
     out.c('\n')
-    io.write_file(libs_path, out.slice())?
+    io.write_file(libs_path, out.slice())!
 
 fn append_program_libs(root: Ast_node$@, names: List<|U8[]|>$@) //<
     //< It appends the libraries the kept `extern` blocks name, in the order a link needs them
@@ -358,7 +358,8 @@ priv fn exit_mkdir_failed(what: U8[], path: U8[], e: fs.Fs_error) //<
     //< path alone does not tell a name problem from a permission problem.
     $at: = Str_builder.new()
     defer at.free()
-    switch e case .mkdir_failed(part)
+    switch e
+    case .mkdir_failed(part)
         at.s("\n  failed at: ").s(part)
     default {}
     io.err().s("ksplc run: cannot create the \{what\}: \{path\}\{at.slice()\}\n")
@@ -609,7 +610,8 @@ priv fn hold_slot(path: U8[]): fs.File_lock //<
     //< the slot's, so two builds at once would take each other's files. The OS releases it if ksplc
     //< dies.
     lock: = fs.File_lock.try_take(path) catch e
-        switch e case .held_elsewhere
+        switch e
+        case .held_elsewhere
             io.err().s("ksplc run: waiting for another run of this script to finish building it\n")
         default
             exit_lock_failed(path)

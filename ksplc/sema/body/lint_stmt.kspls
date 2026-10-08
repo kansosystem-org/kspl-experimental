@@ -3,6 +3,7 @@ import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
+import "ksplc/sema/body/analyze" as sema_body_analyze
 import "ksplc/sema/body/coerce" as sema_body_coerce
 import "ksplc/sema/flow/release" as sema_flow_release
 import "ksplc/sema/session/ctx" { Sema_ctx }
@@ -317,7 +318,7 @@ fn lint_lock_escape(c: Sema_ctx$@, block: Ast_node$@) //<
 fn lint_defer_gap(c: Sema_ctx$@, node: Ast_node$@) //<
     //< [W0109] An exit between an `Owned` value's binding and the `defer` that frees it
     //<
-    //< A `?`, `return`, `throw`, `break` or `continue` there leaves before the `defer` is
+    //< A `!`, `return`, `throw`, `break` or `continue` there leaves before the `defer` is
     //< registered, so the value leaks on that path. Every block of the body is walked, a closure's
     //< included; the check reads the code as written, so a generic's instantiations are skipped.
     if !base_core.config.run_lint_checks || node == null || c.is_instantiating()
@@ -356,7 +357,7 @@ priv fn lint_block_defer_gap(c: Sema_ctx$@, block: Ast_node$@) //<
 
 priv fn report_defer_gap(c: Sema_ctx$@, way: Ast_node$@, name: U8[], bound: Sz, freed: Sz) //<
     //< Reports [W0109] at the exit, naming the line to move the `defer` to
-    $what: U8[] = "?"
+    $what: U8[] = "!"
     k: = way.kind_id
     if k == .k_stmt_return
         what = "return"
@@ -390,31 +391,31 @@ impl Ast_node
                 return true
         return false
 
-    priv fn way_out(r: Self$@, name: U8[], in_loop: Bool): Option<|Ast_node$@|> //<
+    priv fn way_out(r: Self$@, name: U8[], in_loop: Bool): Ast_node$@? //<
         //< The first node in the subtree that leaves the block holding it
         //<
-        //< That is a `?`, a `return` that does not pass `name` on, a `throw`, or a `break` or
+        //< That is a `!`, a `return` that does not pass `name` on, a `throw`, or a `break` or
         //< `continue` that targets no loop inside the subtree.
         //< A closure's body is its own function, so an exit there leaves only the closure.
         if r == null || r.kind_id == .k_expr_fn_lit
-            return Option<|Ast_node$@|>.none
+            return .none
         k: = r.kind_id
         if k == .k_expr_postfix
             op: = r.get_postfix_op()
-            if op != null && op.text.equals("?")
-                return Option<|Ast_node$@|>.some(r)
+            if op != null && op.text.equals("!")
+                return .some(r)
         if k == .k_stmt_return
             e: = r.get_return_expr()
             if e == null || !e.refs_ident(name)
-                return Option<|Ast_node$@|>.some(r)
-            return Option<|Ast_node$@|>.none
+                return .some(r)
+            return .none
         if k == .k_stmt_throw || ((k == .k_stmt_break || k == .k_stmt_continue) && !in_loop)
-            return Option<|Ast_node$@|>.some(r)
+            return .some(r)
         nested: = in_loop || k == .k_stmt_loop
         for child in r.children
             if way: = child.way_out(name, nested)
-                return Option<|Ast_node$@|>.some(way)
-        return Option<|Ast_node$@|>.none
+                return .some(way)
+        return .none
 
 priv fn lint_lock_return_escape(c: Sema_ctx$@, stmt: Ast_node$@,
     borrows: List<|Lock_borrow$@|>$@)
@@ -467,9 +468,10 @@ fn lint_if_stmt(c: Sema_ctx$@, r: Ast_node$@, then_block: Ast_node$@, else_block
                     c.information(r,
                         "[I0308] Redundant if-return for boolean. Consider returning the condition \
                             directly.")
-        last_stmt: = then_block.last_child()
-        k: = last_stmt.kind_id
-        if k == .k_stmt_return || k == .k_stmt_throw || k == .k_stmt_break || k == .k_stmt_continue
+        // **Only where no `break` leaves this `if`**: `break ui` continues after it, so without
+        // the `else` its body would run after the `break` too, and a `break ui` inside the `else`
+        // would be left with no label.
+        if !r.is_left_by_break() && then_block.is_guaranteed_to_leave(true)
             c.hint(r,
                 "[H0801] The 'if' block unconditionally exits. Consider removing 'else' and \
                     unindenting its contents (Guard clause pattern).")
@@ -684,10 +686,51 @@ fn lint_repeated_type(c: Sema_ctx$@, type_node: Ast_node$@, expr_node: Ast_node$
     if named.len > 0 && named.equals(type_node.text)
         c.hint(type_node,
             "[H0302] Unnecessary type annotation. The initializer already names the type.")
+        return
+    // **One fix per line**: where the annotation stays, the type an enum's variant writes may go.
+    lint_type_given(c, expr_node, declared_id, "The declared type already gives it.")
+
+fn lint_type_given(c: Sema_ctx$@, value: Ast_node$@, expected_id: I32, giver: U8[]) //<
+    //< [H0302] Reports an enum's type written at its variant where the place already gives it
+    //<
+    //< The caller is one of the places where `.variant` alone is allowed ("6.6.2 Where the type may
+    //< be omitted" in `docs/SPEC-language.md` lists them; `expected_id` is the type it fixes).
+    //< **Only where deleting the name keeps the value**: the variant's type is the expected type
+    //< itself (a `!E`'s success side for a `return`), so `.variant` is looked up in the same enum.
+    //< giver ends the message, naming what gives the type.
+    if !base_core.config.run_lint_checks || value == null ||
+        sema_type_env.is_unknown(expected_id)
+        return
+    // A `return` into a `!E` wraps its value; the variant is the one inside.
+    $v: = value
+    if v.kind_id == .k_result_wrap && v.children.len == 1
+        v = v.get_child(0)
+    // **An `if … else` passes the place's type to both sides**, so each side is a place of its own.
+    if v.kind_id == .k_expr_ternary && v.children.len == 3
+        lint_type_given(c, v.get_ternary_true(), expected_id, giver)
+        lint_type_given(c, v.get_ternary_false(), expected_id, giver)
+        return
+    wanted: =
+        c.env.strip_result(expected_id) if c.env.is_result(expected_id) else expected_id
+    // The immutable mark is no other enum: an array literal's element expects `Kind immut`.
+    if c.env.strip_const(v.type_id) != c.env.strip_const(wanted)
+        return
+    if v.kind_id == .k_enum_init_call && v.children.len > 0
+        v = v.get_child(0)
+    // Written, it is `<type> . <variant>`; a `.variant` already left out holds the variant alone.
+    if v.kind_id != .k_enum_init || v.children.len != 3
+        return
+    named: = v.get_child(0)
+    dot: = v.get_child(1)
+    if dot.loc.offset <= named.loc.offset
+        return
+    c.clear_scratch().s("[H0302] Unnecessary type name. \{giver\}")
+    c.hint_over(named, dot.loc.offset - named.loc.offset, c.scratch.slice())
 
 priv fn named_type_text(c: Sema_ctx$@, expr: Ast_node$@, declared_id: I32): U8[] //<
     //< The type an initializer names at its start, spelled as a `type_expr` spells it, or empty
-    switch expr.kind_id case .k_struct_literal
+    switch expr.kind_id
+    case .k_struct_literal
         if expr.children.len > 0 && expr.get_child(0).kind_id == .k_type_expr
             return expr.get_child(0).text
     case .k_enum_init
@@ -716,7 +759,9 @@ priv fn cast_target_text(c: Sema_ctx$@, cast: Ast_node$@, declared_id: I32): U8[
     if !c.is_instantiating() && value.type_id != 0 && real_src != real_dst
         kind: = sema_body_coerce.implicit_cast_kind(c, real_src, real_dst, value.type_id,
             declared_id)
-        switch kind case .none {} default
+        switch kind
+        case .none {}
+        default
             return ""
     return cast.get_child(2).text
 

@@ -78,11 +78,13 @@ priv fn mark_roots(root: Ast_node$@, c: Sema_ctx$@, w: Walk$@) //<
     //< functions. 3. References from a non-function top-level initializer (a vtable naming a thunk
     //< **as data**). 4. What the backend's entry point calls from a template string
     //< (find_backtrace_symbol in `sema/type/env.kspls`).
-    switch c.env.find_main_symbol() case .some(ms)
+    switch c.env.find_main_symbol()
+    case .some(ms)
         if ms.node != null
             w.mark(ms.node)
     default {}
-    switch c.env.find_backtrace_symbol() case .some(bs)
+    switch c.env.find_backtrace_symbol()
+    case .some(bs)
         if bs.node != null
             w.mark(bs.node)
     default {}
@@ -133,17 +135,17 @@ priv fn collect_inst_types(c: Sema_ctx$@, out: Map<|Sz, Bool|>$@) //<
             continue
         out.set(Sz::n, true)
 
-priv fn inst_node_of(c: Sema_ctx$@, tid: I32): Option<|Ast_node$@|> //<
+priv fn inst_node_of(c: Sema_ctx$@, tid: I32): Ast_node$@? //<
     //< The node that defines the type with this ID
     //<
     //< It asks the instance's record (a linear walk would be O(N^2)).
     key: = c.env.instance_key(tid)
     if key.len == 0
-        return Option<|Ast_node$@|>.none
+        return .none
     n: = c.env.instantiated_nodes.get(key) catch null
     if n == null
-        return Option<|Ast_node$@|>.none
-    return Option<|Ast_node$@|>.some(n)
+        return .none
+    return .some(n)
 priv fn mark_type(c: Sema_ctx$@, seen: Map<|I32, Bool|>$@, work: List<|I32|>$@, id: I32) //<
     //< It marks a type and, if it was not looked into yet, pushes it onto the work queue
     //<
@@ -227,7 +229,7 @@ fn prune_unreachable_types(root: Ast_node$@, c: Sema_ctx$@) //<
             reached.set(Sz::d, true)
             mark_referenced_types(d, c, seen, work, 0)
 
-    drop_orphan_complex_types(c, seen)
+    drop_orphan_complex_types(c, insts, reached, seen)
 
     kept: = base_ast.new_ast_node_list()
     for child_node in root.children
@@ -238,19 +240,56 @@ fn prune_unreachable_types(root: Ast_node$@, c: Sema_ctx$@) //<
         kept.push(child_node)
     root.children = kept
 
-priv fn drop_orphan_complex_types(c: Sema_ctx$@, seen: Map<|I32, Bool|>$@) //<
-    //< It removes from the registry only the `T?E`s that refer to dropped instances
-    //<
-    //< **`complex_types` stays as sema registered it**, so it still has a dropped function's `T?E`.
-    //< Caution: **Remove only `T?E`.** A top-level `const`'s initializer can also need an array
-    //< type, and that path does not add to `seen`.
+priv fn names_dropped_inst(c: Sema_ctx$@, tid: I32, insts: Map<|Sz, Bool|>$@,
+    reached: Map<|Sz, Bool|>$@, depth: Sz): Bool //<
+        //< Whether the type tid names an instance this pass drops, at any depth
+        //<
+        //< A pointer counts: C needs the struct's name declared for `S*` too.
+    if tid == 0 || depth >= lower_root.max_lower_depth
+        return false
+    switch c.env.get_info(tid)
+    case .pointer(base_id)
+        return names_dropped_inst(c, base_id, insts, reached, depth + 1)
+    case .const_of(base_id)
+        return names_dropped_inst(c, base_id, insts, reached, depth + 1)
+    case .alias_type(base_id)
+        return names_dropped_inst(c, base_id, insts, reached, depth + 1)
+    case .array(base_id, _size)
+        return names_dropped_inst(c, base_id, insts, reached, depth + 1)
+    case .result(base_id, err_id)
+        return names_dropped_inst(c, base_id, insts, reached, depth + 1) ||
+            names_dropped_inst(c, err_id, insts, reached, depth + 1)
+    case .fn_type(sig)
+        if names_dropped_inst(c, sig.ret_id, insts, reached, depth + 1)
+            return true
+        for p in sig.params
+            if names_dropped_inst(c, p, insts, reached, depth + 1)
+                return true
+        return false
+    default
+        // Caution: **Fold it as mark_type does** (`c_repr_type_id`): `U8[]` and its immutable form
+        // are one C struct, which is kept when either is reached.
+        if d: = inst_node_of(c, c.env.c_repr_type_id(c.env.get_real_type(tid)))
+            return (insts.get(Sz::d) catch false) && !(reached.get(Sz::d) catch false)
+        return false
+
+priv fn drop_orphan_complex_types(c: Sema_ctx$@, insts: Map<|Sz, Bool|>$@,
+    reached: Map<|Sz, Bool|>$@, seen: Map<|I32, Bool|>$@) //<
+        //< It removes from the registry the composite types that only dropped code used
+        //<
+        //< **`complex_types` stays as sema registered it**: a dropped function's `T!E`, array or
+        //< function type is still there. **One naming a dropped instance goes**, at any depth, as
+        //< it names a struct C never sees; **a `T!E` nothing live names goes too**, for size.
+        //< Caution: **Drop by `seen` only a `T!E`.** A top-level `const`'s initializer can also
+        //< need an array type, and that path does not add to `seen`.
     live: = List<|I32|>.create(base_core.arena)
     for tid in c.env.complex_types.slice()
-        $wrap: = false
-        switch c.env.get_info(tid) case .result(_base_id, _err_id)
-            wrap = true
+        $keep: = !names_dropped_inst(c, tid, insts, reached, 0)
+        switch c.env.get_info(tid)
+        case .result(_base_id, _err_id)
+            keep = keep && (seen.get(tid) catch false)
         default {}
-        if !wrap || (seen.get(tid) catch false)
+        if keep
             live.push(tid)
     c.env.complex_types.len = 0
     for tid in live.slice()
@@ -301,7 +340,8 @@ impl Ast_node
                 !sym.name.equals("main") && !sym.name.equals("kspl_main")
                 return false
 
-        switch r.kind_id case .k_decl_struct, .k_decl_enum, .k_decl_trait, .k_decl_alias
+        switch r.kind_id
+        case .k_decl_struct, .k_decl_enum, .k_decl_trait, .k_decl_alias
             return true
         case .k_decl_impl
             for ch in r.children
@@ -310,7 +350,8 @@ impl Ast_node
             return false
         case .k_decl_extern, .k_decl_extern_block
             for ch in r.children
-                switch ch.kind_id case .k_decl_fn_proto, .k_decl_var, .k_decl_extern_struct
+                switch ch.kind_id
+                case .k_decl_fn_proto, .k_decl_var, .k_decl_extern_struct
                     if ch.is_alive_for_backend()
                         return true
                 default

@@ -21,7 +21,8 @@ impl Ast_node
     fn emit_expr(r: Self$@, c: Genc_ctx$@)
         r.ice_assert(r != null, "emit_expr: node is null")
 
-        switch r.kind_id case .k_integer
+        switch r.kind_id
+        case .k_integer
             r.emit_integer(c)
         case .k_float
             r.emit_float(c)
@@ -193,7 +194,8 @@ impl Ast_node
             // Caution: **Where it can be folded, emit a value, not an expression.** Chaining
             // `const A1 = A0 + 1;` over n levels nests n deep and hits C's parenthesis depth limit.
             // Only constant references are replaced; a `sizeof` stays as C's `sizeof`.
-            switch c.sema.try_eval_constexpr_wide(init) case .some(v)
+            switch c.sema.try_eval_constexpr_wide(init)
+            case .some(v)
                 c.s("((").t(r.type_id).s(")\{v\})")
                 return true
             case .none {}
@@ -242,7 +244,7 @@ impl Ast_node
                 return
         c.s("(Sz)sizeof(").t(target.type_id).s(")")
 
-    priv fn sizeof_root_name(r: Ast_node$@): Option<|Ast_node$@|> //<
+    priv fn sizeof_root_name(r: Ast_node$@): Ast_node$@? //<
         //< The local variable a `sizeof` operand reads through `.`, `[`, `@` and `$`, if any
         $cur: = r
         for cur != null && cur.kind_id == .k_expr_postfix
@@ -439,7 +441,7 @@ impl Ast_node
         inner: = r.get_result_wrap_inner()
         if sema_type_env.is_void(inner.type_id)
             c.s("(")
-            // Skip an empty node: a Void `return f()?;` leaves a k_empty (lower_try_op in
+            // Skip an empty node: a Void `return f()!;` leaves a k_empty (lower_try_op in
             // lower/expr.kspls), which would make an `(a, , b)` the C compiler rejects.
             // Caution: A Void that is not empty must always be emitted. The call in a `return
             // plainvoid(x);` appears only here, so skipping it removes the call too.
@@ -603,7 +605,8 @@ priv fn get_c_expr_precedence(node: Ast_node$@): I32
         if op != null
             return get_c_precedence(op.text)
         return 10
-    switch k case .k_expr_unary, .k_expr_sizeof, .k_expr_offsetof, .k_expr_upcast
+    switch k
+    case .k_expr_unary, .k_expr_sizeof, .k_expr_offsetof, .k_expr_upcast
         return 13
     case .k_literal, .k_identifier, .k_expr_path, .k_type_path, .k_generic_path, .k_expr_primary,
         .k_string, .k_char, .k_integer, .k_float, .k_bool, .k_null

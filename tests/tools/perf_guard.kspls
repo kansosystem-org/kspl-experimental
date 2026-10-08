@@ -128,7 +128,7 @@ priv fn digits_value(s: U8[]): I64 //< drops the grouping commas and returns an 
             return -1I64
     return v
 
-priv fn max_capture(text: U8[], pattern: U8[], path: U8[], arena: Arena$@): I64?Guard_error //<
+priv fn max_capture(text: U8[], pattern: U8[], path: U8[], arena: Arena$@): I64!Guard_error //<
     //< The largest number the pattern captures across the whole log
     //<
     //< Caution: **Take the worst value.** One log holds stage1 and stage2; the first or the average
@@ -136,46 +136,46 @@ priv fn max_capture(text: U8[], pattern: U8[], path: U8[], arena: Arena$@): I64?
     //< being printed records an "improvement".
     re: = regex.Regex.compile(pattern) catch
         io.err().s("[perf_guard] the pattern cannot be read: ").s(pattern).s("\n")
-        throw Guard_error.failed
+        throw .failed
     defer re.free()
     ms: = re.find_all(text, arena) catch
         io.err().s("[perf_guard] the scan was cut short: ").s(pattern).s("\n")
-        throw Guard_error.failed
+        throw .failed
     if ms.len == 0
         io.err().s("[perf_guard] no metrics found in ").s(path).s("\n")
-        throw Guard_error.failed
+        throw .failed
     $best: I64 = 0
     for m in ms
         v: = digits_value(m.group(1, text))
         if v < 0I64
             io.err().s("[perf_guard] the value is too large: ").s(m.group(1, text)).s("\n")
-            throw Guard_error.failed
+            throw .failed
         if v > best
             best = v
     return best
 
-priv fn parse_headroom(text: U8[], path: U8[], arena: Arena$@): Headroom?Guard_error //<
+priv fn parse_headroom(text: U8[], path: U8[], arena: Arena$@): Headroom!Guard_error //<
     //< Reads the distance to the carry from the log
     //<
     //< Caution: **Take the value nearest the edge**; with several measurements, the far one reads
     //< as "there is still slack".
     re: = regex.Regex.compile(headroom_pattern) catch
         io.err().s("[perf_guard] the pattern cannot be read: ").s(headroom_pattern).s("\n")
-        throw Guard_error.failed
+        throw .failed
     defer re.free()
     ms: = re.find_all(text, arena) catch
         io.err().s("[perf_guard] the scan was cut short: ").s(headroom_pattern).s("\n")
-        throw Guard_error.failed
+        throw .failed
     if ms.len == 0
         io.err().s("[perf_guard] no arena headroom found in ").s(path).s("\n")
-        throw Guard_error.failed
+        throw .failed
     $out: = Headroom::{ .free = value_ceiling, .step = 0I64 }
     for m in ms
         free: = digits_value(m.group(1, text))
         step: = digits_value(m.group(2, text))
         if free < 0I64 || step < 0I64
             io.err().s("[perf_guard] the value is too large: ").s(m.group(1, text)).s("\n")
-            throw Guard_error.failed
+            throw .failed
         if free < out.free
             out = Headroom::{ .free = free, .step = step }
     return out
@@ -187,19 +187,19 @@ priv struct Reading //< everything read out of one log
     head: Headroom
     shapes: Shapes
 
-priv fn parse_log(path: U8[], arena: Arena$@): Reading?Guard_error //<
+priv fn parse_log(path: U8[], arena: Arena$@): Reading!Guard_error //<
     //< Reads the indicators and the distance to the carry from one log
     text: = io.read_file(path) catch
         io.err().s("[perf_guard] the log cannot be read: ").s(path).s("\n")
-        throw Guard_error.failed
+        throw .failed
     defer dealloc(Void$@::text.ptr)
     return Reading::{ .metrics = Metrics::{ .compile_ms =
-        max_capture(text, time_pattern, path, arena)?,
-        .peak_bytes = max_capture(text, peak_pattern, path, arena)?,
-        .ast_bytes = max_capture(text, ast_pattern, path, arena)? },
-        .head = parse_headroom(text, path, arena)?,
-        .shapes = Shapes::{ .node = max_capture(text, node_pattern, path, arena)?,
-        .kids = max_capture(text, kids_pattern, path, arena)? } }
+        max_capture(text, time_pattern, path, arena)!,
+        .peak_bytes = max_capture(text, peak_pattern, path, arena)!,
+        .ast_bytes = max_capture(text, ast_pattern, path, arena)! },
+        .head = parse_headroom(text, path, arena)!,
+        .shapes = Shapes::{ .node = max_capture(text, node_pattern, path, arena)!,
+        .kids = max_capture(text, kids_pattern, path, arena)! } }
 
 priv fn baseline_path(arena: Arena$@): U8[] //< the baseline's path
     //<
@@ -230,7 +230,7 @@ priv fn write_baseline(path: U8[], cur: Baseline, arena: Arena$@): Bool //<
         return false
     return true
 
-priv fn read_baseline(path: U8[], arena: Arena$@): Baseline?Guard_error //<
+priv fn read_baseline(path: U8[], arena: Arena$@): Baseline!Guard_error //<
     //< Reads the baseline, which differs per machine
     //<
     //< The time varies with the machine and its load, and the two memory figures move when a `#cfg`
@@ -241,11 +241,11 @@ priv fn read_baseline(path: U8[], arena: Arena$@): Baseline?Guard_error //<
     //< source.
     text: = io.read_file(path) catch
         io.err().s("[perf_guard] the baseline cannot be read: ").s(path).s("\n")
-        throw Guard_error.failed
+        throw .failed
     defer dealloc(Void$@::text.ptr)
     root: = json.parse(text, arena) catch
         io.err().s("[perf_guard] the baseline does not resolve as JSON: ").s(path).s("\n")
-        throw Guard_error.failed
+        throw .failed
     // **A missing key or a wrong kind is refused, not filled with a default** (filled in, an old
     // baseline shows only as "the value was 0").
     // Caution: **Print the name the error carries as it is**: folded into "something went wrong",
@@ -253,7 +253,8 @@ priv fn read_baseline(path: U8[], arena: Arena$@): Baseline?Guard_error //<
     $out: Baseline = ::{}
     json_struct.into_struct(root, out@, arena) catch e
         io.err().s("[perf_guard] the baseline cannot be read: ")
-        switch e case .missing_field(name)
+        switch e
+        case .missing_field(name)
             io.err().s("the key '\{name\}' is absent")
         case .field_type(name)
             // `<root>`: the content is not an object (Json_error in std/json.kspls).
@@ -264,7 +265,7 @@ priv fn read_baseline(path: U8[], arena: Arena$@): Baseline?Guard_error //<
         default
             io.err().s("it does not resolve as JSON")
         io.err().s(". Add --update to `make perf-log`'s recipe and take the measurements again\n")
-        throw Guard_error.failed
+        throw .failed
     return out
 
 priv fn ratio_text(base: I64, cur: I64, arena: Arena$@): U8[] //< the ratio against the baseline

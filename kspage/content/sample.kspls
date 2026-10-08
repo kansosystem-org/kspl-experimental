@@ -5,12 +5,10 @@
 //<
 //< **Do not put it in the bridge code.** The boundary's shape and the sample's contents change
 //< for different reasons.
-import "kspage/model/collect" { Collect }
-import "kspage/model/doc" { Axis, Doc, Rect, add_framed_child }
+import "kspage/model/doc" { Doc, Rect, add_framed_child }
 import "kspage/model/font"
-import "kspage/model/marker"
 import "kspage/model/paint"
-import "kspage/model/style" { Sheet, Arrange }
+import "kspage/model/style" { Sheet }
 import "std/mem" { Arena }
 
 struct Made //< the assembled document, and its style table
@@ -28,8 +26,8 @@ fn styles(a: Arena$@): Sheet$@ //< the style table that a new, untouched documen
     sheet: = Sheet.new(font.default_root(), a)
 
     $big: paint.Font_spec = paint.inherit_all()
-    big.size_px = Option<|F32|>.some(28.0)
-    big.weight = Option<|U16|>.some(700U16)
+    big.size_px = .some(28.0)
+    big.weight = .some(700U16)
     h1: = sheet.add("heading", big)
     h1.space_after = 8.0
     // The heading's depth. **This is what the contents collect** (not the style's name).
@@ -41,7 +39,7 @@ fn styles(a: Arena$@): Sheet$@ //< the style table that a new, untouched documen
     // The contents. **What is inside does not go into the document** (it is built from the headings
     // at every layout). The indent is the step for one level of depth.
     toc: = sheet.add("contents", paint.inherit_all())
-    toc.collect = Collect.contents
+    toc.collect = .contents
     toc.indent = 16.0
     toc.space_after = 12.0
     // **A collecting block is not followed by itself** (a second would lay out the same contents).
@@ -49,7 +47,7 @@ fn styles(a: Arena$@): Sheet$@ //< the style table that a new, untouched documen
 
     // The notes' list. **The numbers do not go into the document** (they are counted at layout).
     notes: = sheet.add("footnote", paint.inherit_all())
-    notes.collect = Collect.notes
+    notes.collect = .notes
     notes.space_before = 12.0
     notes.next = "body"
 
@@ -57,26 +55,26 @@ fn styles(a: Arena$@): Sheet$@ //< the style table that a new, untouched documen
     body.space_after = 12.0
 
     $bold: paint.Font_spec = paint.inherit_all()
-    bold.weight = Option<|U16|>.some(700U16)
+    bold.weight = .some(700U16)
     sheet.add("strong", bold)
 
     // The line decorations. **The measurements do not change** (they are not part of the typeface).
-    sheet.add("underline", paint.inherit_all()).ink.underline = Option<|Bool|>.some(true)
-    sheet.add("strikethrough", paint.inherit_all()).ink.strike = Option<|Bool|>.some(true)
+    sheet.add("underline", paint.inherit_all()).ink.underline = .some(true)
+    sheet.add("strikethrough", paint.inherit_all()).ink.strike = .some(true)
 
     // A bullet list. **The mark sits in the space the indent leaves.**
     item: = sheet.add("bullet", paint.inherit_all())
     item.indent = 24.0
-    item.marker = marker.Marker.bullet("• ")
+    item.marker = .bullet("• ")
 
     // Numbered. **A paragraph without a number in between restarts the count at 1.**
     step: = sheet.add("numbered", paint.inherit_all())
     step.indent = 32.0
-    step.marker = marker.Marker.number(". ")
+    step.marker = .number(". ")
 
     // The style that lays the children out in rows and columns (the document does not say "table").
     table: = sheet.add("table", paint.inherit_all())
-    table.arrange = Arrange.grid
+    table.arrange = .grid
     table.space_before = 12.0
     table.space_after = 12.0
     // It adds space at the column's left edge and draws the grid. **The cell's style carries the
@@ -94,8 +92,8 @@ fn styles(a: Arena$@): Sheet$@ //< the style table that a new, untouched documen
     head_cell.pad = 4.0
     head_cell.rule_width = 1.0
     head_cell.rule_color = 0xccccccU32
-    head_cell.fill = Option<|U32|>.some(0xf0f0f0U32)
-    head_cell.ink.color = Option<|U32|>.some(0x1a1a1aU32)
+    head_cell.fill = .some(0xf0f0f0U32)
+    head_cell.ink.color = .some(0x1a1a1aU32)
 
     // The number format for an amount. **It applies only to a formula's result** (not typed
     // numbers).
@@ -104,13 +102,13 @@ fn styles(a: Arena$@): Sheet$@ //< the style table that a new, untouched documen
     money.rule_width = 1.0
     money.rule_color = 0xccccccU32
     money.number.grouped = true
-    money.number.places = Option<|Sz|>.some(0)
+    money.number.places = .some(0)
     money.number.prefix = "$"
 
     // A block of code. **It does not wrap** (wrapped, the space at the break is lost and the indent
     // depth changes). The style's typeface gives the fixed width.
     $mono: paint.Font_spec = paint.inherit_all()
-    mono.family = Option<|U8[]|>.some("monospace")
+    mono.family = .some("monospace")
     code: = sheet.add("code", mono)
     code.wrap = false
     code.space_before = 12.0
@@ -120,8 +118,8 @@ fn styles(a: Arena$@): Sheet$@ //< the style table that a new, untouched documen
     code.pad = 10.0
     code.line_spacing = 1.35
     // **Set the fill and the text color as a pair** (as in a heading cell).
-    code.fill = Option<|U32|>.some(0xf5f5f5U32)
-    code.ink.color = Option<|U32|>.some(0x1a1a1aU32)
+    code.fill = .some(0xf5f5f5U32)
+    code.ink.color = .some(0x1a1a1aU32)
     // The box's outline: one line marks the edge in the background's color.
     code.rule_width = 1.0
     code.rule_color = 0xd8d8d8U32
@@ -140,7 +138,7 @@ fn styles(a: Arena$@): Sheet$@ //< the style table that a new, untouched documen
     // A slide, which places its children at fixed positions. **The style sets the height** (from
     // the contents, slides of one style would differ).
     slide: = sheet.add("slide", paint.inherit_all())
-    slide.arrange = Arrange.absolute
+    slide.arrange = .absolute
     // **The style sets a slide's size in both directions** (with no width, the frames move with the
     // window's width).
     slide.width = 620.0
@@ -234,8 +232,8 @@ fn build(a: Arena$@): Made //< the document for the demo
     calc_t.name = "detail"
     // The quantity and price widths are set; the amount column sizes to its contents. **The table
     // holds the width, not the style.**
-    calc_t.set_size(Axis.column, 0, Option<|F32|>.some(64.0))
-    calc_t.set_size(Axis.column, 1, Option<|F32|>.some(64.0))
+    calc_t.set_size(.column, 0, .some(64.0))
+    calc_t.set_size(.column, 1, .some(64.0))
     head2: = calc_t.add_child("")
     head2.add_child("heading-cell").add_text("Qty", "strong")
     head2.add_child("heading-cell").add_text("Price", "strong")

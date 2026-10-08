@@ -24,13 +24,13 @@ import "kspeg/engine" as kspeg
 import "kspeg/notation" as kspeg_notation
 
 $meta: = kspeg_notation.Meta.new(grammar_text, arena)
-parser: = meta.parse_grammar()?
+parser: = meta.parse_grammar()!
 defer parser.free_memo()
 
 $t: = kspeg.Target.new(source, arena)
 defer t.free_memo()
 t.share_grammar_from(parser)
-node: = t.parse_rule("program")?
+node: = t.parse_rule("program")!
 ```
 
 | Line | What it does |

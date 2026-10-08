@@ -1,13 +1,11 @@
 import "kspage/lay/caret"
 import "kspage/lay/flow"
 import "kspage/lay/page" { Page }
-import "kspage/model/collect" { Collect }
 import "kspage/model/doc" + { Doc, Rect }
 import "kspage/model/fixed_font" as fixed
-import "kspage/model/marker"
 import "kspage/model/number"
 import "kspage/model/paint"
-import "kspage/model/style" { Align, Arrange, Sheet }
+import "kspage/model/style" { Arrange, Sheet }
 import "kspage/tests/base"
 import "std/mem" { Arena }
 import "std/str"
@@ -95,7 +93,7 @@ fn test_style_name_changes_the_font() //< a style's name changes the font
     defer arena.free()
     sheet: = Sheet.new(base.root_font(), arena)
     $big: paint.Font_spec = paint.inherit_all()
-    big.size_px = Option<|F32|>.some(32.0)
+    big.size_px = .some(32.0)
     sheet.add("h1", big)
 
     d: = Doc.new(arena)
@@ -113,7 +111,7 @@ fn test_unspecified_fields_are_inherited() //< an unset field is inherited from 
     defer arena.free()
     sheet: = Sheet.new(base.root_font(), arena)
     $bold: paint.Font_spec = paint.inherit_all()
-    bold.weight = Option<|U16|>.some(700U16)
+    bold.weight = .some(700U16)
     sheet.add("strong", bold)
 
     d: = Doc.new(arena)
@@ -218,7 +216,7 @@ fn test_mixed_sizes_align_on_the_baseline() //<
     defer arena.free()
     sheet: = Sheet.new(base.root_font(), arena)
     $big: paint.Font_spec = paint.inherit_all()
-    big.size_px = Option<|F32|>.some(32.0)
+    big.size_px = .some(32.0)
     sheet.add("big", big)
 
     d: = Doc.new(arena)
@@ -266,7 +264,7 @@ fn test_regions_group_the_document_by_arrangement() //<
     sheet: = Sheet.new(base.root_font(), arena)
     base.table_style(sheet)
     slide: = sheet.add("slide", paint.inherit_all())
-    slide.arrange = Arrange.absolute
+    slide.arrange = .absolute
     slide.width = 120.0
     slide.height = 60.0
     d: = Doc.new(arena)
@@ -281,11 +279,10 @@ fn test_regions_group_the_document_by_arrangement() //<
     page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
     // Split per paragraph it would be five; consecutive flow is merged into one.
     assert(page.regions.len == 4, "the regions are four")
-    assert(is_kind(page, 0, Arrange.flow), "the first is writing")
-    assert(is_kind(page, 1, Arrange.grid), "the second is a table")
-    assert(is_kind(page, 2, Arrange.absolute), "the third is a presentation's slide")
-    assert(is_kind(page, 3, Arrange.flow),
-        "behind the table and the slide comes another writing region")
+    assert(is_kind(page, 0, .flow), "the first is writing")
+    assert(is_kind(page, 1, .grid), "the second is a table")
+    assert(is_kind(page, 2, .absolute), "the third is a presentation's slide")
+    assert(is_kind(page, 3, .flow), "behind the table and the slide comes another writing region")
     assert(base.near(page.regions.get(0).rect.h, 38.4),
         "the writing region covers the two paragraphs that ran on")
     assert(base.near(page.regions.get(0).rect.w, 300.0),
@@ -328,7 +325,7 @@ fn test_an_empty_slide_keeps_the_band_as_its_region() //<
     defer arena.free()
     sheet: = Sheet.new(base.root_font(), arena)
     slide: = sheet.add("slide", paint.inherit_all())
-    slide.arrange = Arrange.absolute
+    slide.arrange = .absolute
     slide.width = 120.0
     slide.height = 60.0
     d: = Doc.new(arena)
@@ -359,7 +356,7 @@ fn test_an_empty_table_does_not_split_the_flow_region() //<
     page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
     assert(page.regions.len == 1,
         "a table region with no height is not remembered, so the writing is one region")
-    assert(is_kind(page, 0, Arrange.flow), "what is left is the writing region")
+    assert(is_kind(page, 0, .flow), "what is left is the writing region")
     assert(base.near(page.regions.get(0).rect.h, 38.4), "it covers the two paragraphs with one")
     verdict
         .pass("an empty table becomes no region, and the writing before and behind comes together \
@@ -375,8 +372,8 @@ fn test_alignment_moves_the_line_inside_the_column() //<
     arena: = Arena.new(64 * 1024)
     defer arena.free()
     sheet: = Sheet.new(base.root_font(), arena)
-    sheet.add("mid", paint.inherit_all()).align = Align.center
-    sheet.add("end", paint.inherit_all()).align = Align.right
+    sheet.add("mid", paint.inherit_all()).align = .center
+    sheet.add("end", paint.inherit_all()).align = .right
     d: = Doc.new(arena)
     d.add_block("body").add_text("abcd")
     d.add_block("mid").add_text("abcd")
@@ -401,7 +398,7 @@ fn test_justified_lines_reach_both_edges() //<
     arena: = Arena.new(64 * 1024)
     defer arena.free()
     sheet: = Sheet.new(base.root_font(), arena)
-    sheet.add("both", paint.inherit_all()).align = Align.justify
+    sheet.add("both", paint.inherit_all()).align = .justify
     d: = Doc.new(arena)
     d.add_block("both").add_text("あいうえおかきくけこ")
 
@@ -427,7 +424,7 @@ fn test_a_justified_line_spreads_across_every_box() //<
     arena: = Arena.new(64 * 1024)
     defer arena.free()
     sheet: = Sheet.new(base.root_font(), arena)
-    sheet.add("both", paint.inherit_all()).align = Align.justify
+    sheet.add("both", paint.inherit_all()).align = .justify
     d: = Doc.new(arena)
     para: = d.add_block("both")
     para.add_text("あいう")
@@ -456,7 +453,7 @@ fn test_a_click_on_a_justified_line_lands_on_the_letter_it_hits() //<
     arena: = Arena.new(64 * 1024)
     defer arena.free()
     sheet: = Sheet.new(base.root_font(), arena)
-    sheet.add("both", paint.inherit_all()).align = Align.justify
+    sheet.add("both", paint.inherit_all()).align = .justify
     d: = Doc.new(arena)
     d.add_block("both").add_text("あいうえおかきくけこ")
     page: = flow.layout(d, sheet, fixed.make(), 100.0, arena)
@@ -481,7 +478,7 @@ fn test_alignment_is_not_inherited_by_the_next_block() //<
     arena: = Arena.new(64 * 1024)
     defer arena.free()
     sheet: = Sheet.new(base.root_font(), arena)
-    sheet.add("end", paint.inherit_all()).align = Align.right
+    sheet.add("end", paint.inherit_all()).align = .right
     d: = Doc.new(arena)
     right: = d.add_block("end")
     right.add_text("abcd")
@@ -527,7 +524,7 @@ fn test_a_bullet_hangs_in_the_indent() //<
     sheet: = Sheet.new(base.root_font(), arena)
     item: = sheet.add("item", paint.inherit_all())
     item.indent = 24.0
-    item.marker = marker.Marker.bullet("*")
+    item.marker = .bullet("*")
     d: = Doc.new(arena)
     // 64px minus the 24px indent leaves 40px = five ASCII characters, so it breaks into two lines.
     d.add_block("item").add_text("aaa bbb")
@@ -560,7 +557,7 @@ fn test_numbering_counts_consecutive_siblings() //<
     sheet: = Sheet.new(base.root_font(), arena)
     step: = sheet.add("step", paint.inherit_all())
     step.indent = 32.0
-    step.marker = marker.Marker.number(".")
+    step.marker = .number(".")
     d: = Doc.new(arena)
     d.add_block("step").add_text("a")
     d.add_block("step").add_text("b")
@@ -585,7 +582,7 @@ fn test_nested_numbering_starts_over() //< a nested list is a new sequence
     sheet: = Sheet.new(base.root_font(), arena)
     step: = sheet.add("step", paint.inherit_all())
     step.indent = 32.0
-    step.marker = marker.Marker.number(".")
+    step.marker = .number(".")
     d: = Doc.new(arena)
     d.add_block("step").add_text("a")
     second: = d.add_block("step")
@@ -610,10 +607,10 @@ priv fn figures_and_text(d: Doc$@, arena: Arena$@): Sheet$@ //<
     sheet: = Sheet.new(base.root_font(), arena)
     fig: = sheet.add("figure", paint.inherit_all())
     fig.indent = 40.0
-    fig.marker = marker.Marker.serial("Figure ", ". ")
+    fig.marker = .serial("Figure ", ". ")
     cht: = sheet.add("chart", paint.inherit_all())
     cht.indent = 40.0
-    cht.marker = marker.Marker.serial("Chart ", ". ")
+    cht.marker = .serial("Chart ", ". ")
     d.add_block("figure").add_text("a")
     d.add_block("body").add_text("b")
     d.add_block("chart").add_text("c")
@@ -649,7 +646,7 @@ fn test_a_serial_number_counts_nested_figures() //<
     sheet: = Sheet.new(base.root_font(), arena)
     fig: = sheet.add("figure", paint.inherit_all())
     fig.indent = 40.0
-    fig.marker = marker.Marker.serial("Figure ", ". ")
+    fig.marker = .serial("Figure ", ". ")
     base.table_style(sheet)
     d.add_block("figure").add_text("a")
     grid: = d.add_block("table")
@@ -673,7 +670,7 @@ fn test_a_fill_covers_the_block_but_not_its_spacing() //<
     defer arena.free()
     sheet: = Sheet.new(base.root_font(), arena)
     lit: = sheet.add("lit", paint.inherit_all())
-    lit.fill = Option<|U32|>.some(0xeeeeeeU32)
+    lit.fill = .some(0xeeeeeeU32)
     lit.rule_width = 2.0
     lit.rule_color = 0xff0000U32
     lit.space_before = 10.0
@@ -693,7 +690,8 @@ fn test_a_fill_covers_the_block_but_not_its_spacing() //<
     assert(base.near(band.w, 300.0), "the band is the column's whole width")
     assert(page.panels.get(0).width == 2.0, "the line's thickness carries over")
     assert(page.panels.get(0).color == 0xff0000U32, "the line's colour carries over too")
-    switch page.panels.get(0).fill case .some(v)
+    switch page.panels.get(0).fill
+    case .some(v)
         assert(v == 0xeeeeeeU32, "the fill's colour carries over too")
     case .none
         assert(false, "the fill carries over")
@@ -765,7 +763,7 @@ priv fn outlined(arena: Arena$@): Sheet$@ //<
     sheet.add("h1", paint.inherit_all()).outline = 1
     sheet.add("h2", paint.inherit_all()).outline = 2
     toc: = sheet.add("toc", paint.inherit_all())
-    toc.collect = Collect.contents
+    toc.collect = .contents
     // This is the width each depth level indents by.
     toc.indent = 16.0
     return sheet
@@ -827,7 +825,7 @@ fn test_a_note_puts_a_raised_mark_after_its_run() //<
     defer arena.free()
     sheet: = Sheet.new(base.root_font(), arena)
     notes: = sheet.add("footnote", paint.inherit_all())
-    notes.collect = Collect.notes
+    notes.collect = .notes
     d: = Doc.new(arena)
     p: = d.add_block("body")
     marked: = p.add_text("a")
@@ -856,7 +854,7 @@ fn test_note_numbers_follow_the_document_order() //<
     arena: = Arena.new(64 * 1024)
     defer arena.free()
     sheet: = Sheet.new(base.root_font(), arena)
-    sheet.add("footnote", paint.inherit_all()).collect = Collect.notes
+    sheet.add("footnote", paint.inherit_all()).collect = .notes
     d: = Doc.new(arena)
     p: = d.add_block("body")
     first: = p.add_text("a")

@@ -62,7 +62,7 @@ fn new_editor(d: Doc$@): Editor$@ //<
         .doc = d,
         .caret = caret.nowhere(),
         .pick = null,
-        .again = Again.none,
+        .again = .none,
         .read_only = false,
         .undone = List<|Step$@|>.create(arena),
         .redone = List<|Step$@|>.create(arena),
@@ -124,11 +124,10 @@ fn do_remove(e: Editor$@, into: Step$@, n: Inline$@, at: Sz, len: Sz)
         push_op(into, e.arena, n, at, true, 0, n.text().sub(at, len))
     n.remove(at, len)
 
-fn do_set_size(e: Editor$@, into: Step$@, table: Block$@, axis: Axis, index: Sz,
-    v: Option<|F32|>) //<
-        //< Sets a column's width (or a row's height) while recording.
-        //<
-        //< Caution: **Do not change the table directly, just as with text.**
+fn do_set_size(e: Editor$@, into: Step$@, table: Block$@, axis: Axis, index: Sz, v: F32?) //<
+    //< Sets a column's width (or a row's height) while recording.
+    //<
+    //< Caution: **Do not change the table directly, just as with text.**
     if into != null
         // Moving the same position again and again adds nothing (the first saved setting undoes
         // it).
@@ -136,12 +135,12 @@ fn do_set_size(e: Editor$@, into: Step$@, table: Block$@, axis: Axis, index: Sz,
             // Save the old value before changing it.
             op: = Size_op::{ .table = table, .axis = axis, .index = index,
                 .was = table.size_of(axis, index) }
-            keep(e, into, Op.size(e.arena.create(op)))
+            keep(e, into, .size(e.arena.create(op)))
 
     table.set_size(axis, index, v)
 
 fn do_line(e: Editor$@, into: Step$@, table: Block$@, axis: Axis, at: Sz, put_back: Bool,
-    blocks: List<|Block$@|>$@, spans: List<|Sz|>$@, size: Option<|F32|>) //<
+    blocks: List<|Block$@|>$@, spans: List<|Sz|>$@, size: F32?) //<
         //< Removes a row (or column), or restores it, while recording.
         //<
         //< Caution: **Do not touch the table directly.**
@@ -154,8 +153,8 @@ fn do_line(e: Editor$@, into: Step$@, table: Block$@, axis: Axis, at: Sz, put_ba
         if into != null
             op: = Line_op::{ .table = table, .axis = axis, .at = at, .put_back = false,
                 .blocks = List<|Block$@|>.create(e.arena),
-                .spans = List<|Sz|>.create(e.arena), .size = Option<|F32|>.none }
-            keep(e, into, Op.line(e.arena.create(op)))
+                .spans = List<|Sz|>.create(e.arena), .size = .none }
+            keep(e, into, .line(e.arena.create(op)))
         return
     // Caution: **Save it before removing it.** Once removed, which block it was cannot be read.
     took: = List<|Sz|>.create(e.arena)
@@ -164,7 +163,7 @@ fn do_line(e: Editor$@, into: Step$@, table: Block$@, axis: Axis, at: Sz, put_ba
     if into != null
         op: = Line_op::{ .table = table, .axis = axis, .at = at, .put_back = true, .blocks = gone,
             .spans = took, .size = was }
-        keep(e, into, Op.line(e.arena.create(op)))
+        keep(e, into, .line(e.arena.create(op)))
 
 fn do_run(e: Editor$@, into: Step$@, b: Block$@, at: Sz, put_back: Bool, n: Inline$@) //<
     //< Removes one inline or restores it, while recording
@@ -177,7 +176,7 @@ fn do_run(e: Editor$@, into: Step$@, b: Block$@, at: Sz, put_back: Bool, n: Inli
         b.inlines.insert(at, n)
         if into != null
             op: = Run_op::{ .block = b, .at = at, .put_back = false, .run = null }
-            keep(e, into, Op.run(e.arena.create(op)))
+            keep(e, into, .run(e.arena.create(op)))
         return
     if at < 0 || at >= b.inlines.len
         return
@@ -185,7 +184,7 @@ fn do_run(e: Editor$@, into: Step$@, b: Block$@, at: Sz, put_back: Bool, n: Inli
         // Caution: **Copy it before removing it.** Once removed, which inline it was cannot be
         // read.
         op: = Run_op::{ .block = b, .at = at, .put_back = true, .run = b.inlines.get(at) }
-        keep(e, into, Op.run(e.arena.create(op)))
+        keep(e, into, .run(e.arena.create(op)))
     b.inlines.remove_at(at)
 
 fn do_block(e: Editor$@, into: Step$@, parent: Block$@, at: Sz, put_back: Bool, b: Block$@) //<
@@ -200,14 +199,14 @@ fn do_block(e: Editor$@, into: Step$@, parent: Block$@, at: Sz, put_back: Bool, 
         kin.insert(at, b)
         if into != null
             op: = Block_op::{ .parent = parent, .at = at, .put_back = false, .block = null }
-            keep(e, into, Op.block(e.arena.create(op)))
+            keep(e, into, .block(e.arena.create(op)))
         return
     if at < 0 || at >= kin.len
         return
     if into != null
         // Caution: **Copy it before removing it.** Once removed, which block it was cannot be read.
         op: = Block_op::{ .parent = parent, .at = at, .put_back = true, .block = kin.get(at) }
-        keep(e, into, Op.block(e.arena.create(op)))
+        keep(e, into, .block(e.arena.create(op)))
     kin.remove_at(at)
 
 fn replace_source(e: Editor$@, into: Step$@, n: Inline$@, s: U8[]) //< replaces the text with `s`
@@ -232,7 +231,7 @@ fn shift_formulas(e: Editor$@, into: Step$@, table: Block$@, axis: Axis, at: Sz,
 
 // ---- laying a style on ----
 
-fn split_run(e: Editor$@, into: Step$@, n: Inline$@, offset: Sz): Option<|Inline$@|> //<
+fn split_run(e: Editor$@, into: Step$@, n: Inline$@, offset: Sz): Inline$@? //<
     //< Splits `n` in two at `offset` and returns the second half
     //<
     //< Where the split is at an end it does nothing and returns null.
@@ -241,10 +240,10 @@ fn split_run(e: Editor$@, into: Step$@, n: Inline$@, offset: Sz): Option<|Inline
     text: = n.text()
     // An inline that refers to something is not split either (its text is one whole name).
     if offset <= 0 || offset >= text.len || n.is_formula() || n.refers.len > 0
-        return Option<|Inline$@|>.none
+        return .none
     own: = e.doc.owner_of(n)
     if !own.found
-        return Option<|Inline$@|>.none
+        return .none
     tail: = run.new_inline(n.style, e.arena)
     // Caution: **Copy the link too** (the second half points at the same place).
     tail.href = n.href
@@ -257,7 +256,7 @@ fn split_run(e: Editor$@, into: Step$@, n: Inline$@, offset: Sz): Option<|Inline
     do_insert(e, into, tail, 0, text.sub(offset, text.len - offset))
     do_remove(e, into, n, offset, text.len - offset)
     caret.carry_tail(e.caret@, n, offset, tail)
-    return Option<|Inline$@|>.some(tail)
+    return .some(tail)
 
 fn merge_runs(e: Editor$@, into: Step$@, b: Block$@) //<
     //< Joins neighbouring inlines with the same style and the same link into one
@@ -288,7 +287,8 @@ priv fn apply_inverse(e: Editor$@, st: Step$@, into: Step$@) //<
     //< Caution: **Apply them from the back**, or the position a later change looked at shifts. Undo
     //< and redo both go through here (two places would diverge when a kind is added).
     for $i: Sz = st.ops.len; i > 0; i -= 1
-        switch st.ops.get(i - 1) case .text(op)
+        switch st.ops.get(i - 1)
+        case .text(op)
             if op.put_back
                 do_insert(e, into, op.inline, op.at,
                     U8[]::{ .ptr = op.text.ptr, .len = op.text.len })

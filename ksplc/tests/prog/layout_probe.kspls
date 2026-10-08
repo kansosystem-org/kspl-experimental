@@ -42,7 +42,7 @@ struct Lined
     p: U8@
 
 struct Spec //< what reflection walks: an option over `Sz` is read past its tag at a folded offset
-    count: Option<|Sz|>
+    count: Sz?
     after: I32
 
 impl Spec: reflect.Reflectable {}
@@ -65,7 +65,7 @@ const slice_bytes: Sz = sizeof(U8[])
 const trait_bytes: Sz = sizeof(Shape)
 const tight_bytes: Sz = sizeof(Tight)
 const lined_bytes: Sz = sizeof(Lined)
-const result_bytes: Sz = sizeof(I64?U8)
+const result_bytes: Sz = sizeof(I64!U8)
 const wide_d_at: Sz = offsetof(Wide, d)
 const tight_d_at: Sz = offsetof(Tight, d)
 // Named through constants, so the C holds each folded number; a `sizeof` here would stay C's.
@@ -98,7 +98,8 @@ fn word_bits_top(): Sz //< `Sz`'s bits, by a top-level initializer
 
 #export
 fn word_bits_case(): Sz //< a pointer's bits, by a `case` label
-    switch sizeof(U8@) case 4
+    switch sizeof(U8@)
+    case 4
         return 32
     case 8
         return 64
@@ -126,9 +127,10 @@ fn cast_len(): Sz //< a slice cast that stands on two element sizes being equal
 fn json_count(): I64 //< reflection writing an option over `Sz`, read back
     $a: = mem.Arena.from_buffer(Void$@::heap@, heap.len)
     $b: = json.Json_builder.new(a@)
-    s: Spec = ::{ .count = Option<|Sz|>.some(7), .after = 99 }
-    v: = json_struct.from_struct(s@, b@) catch json.Val.null_val
-    switch v.get("count") case .int_val(i)
+    s: Spec = ::{ .count = .some(7), .after = 99 }
+    v: = json_struct.from_struct(s@, b@) catch .null_val
+    switch v.get("count")
+    case .int_val(i)
         return i
     default
         return -1
@@ -136,10 +138,11 @@ fn json_count(): I64 //< reflection writing an option over `Sz`, read back
 #export
 fn json_after(): I32 //< reflection reading into the option, and the field after it left whole
     $a: = mem.Arena.from_buffer(Void$@::heap@, heap.len)
-    v: = json.parse("{\"count\": 7, \"after\": 99}", a@) catch json.Val.null_val
-    $s: Spec = ::{ .count = Option<|Sz|>.none, .after = 0 }
+    v: = json.parse("{\"count\": 7, \"after\": 99}", a@) catch .null_val
+    $s: Spec = ::{ .count = .none, .after = 0 }
     json_struct.into_struct(v, s@, a@) catch {}
-    switch s.count case .some(n)
+    switch s.count
+    case .some(n)
         return s.after if n == 7 else -2
     default
         return -1

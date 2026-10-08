@@ -94,9 +94,9 @@ impl<|T|> Weak_rc<|T|>
     pub fn clone(r: Self$@): Weak_rc<|T|> //< one more weak handle to the same value
         r.ctrl.weak += 1
         return ::{ .ctrl = r.ctrl }
-    pub fn upgrade(r: Self$@): Rc<|T|>?Weak_error //< an owner again, if the value is still alive
+    pub fn upgrade(r: Self$@): Rc<|T|>!Weak_error //< an owner again, if the value is still alive
         if r.ctrl.strong == 0
-            throw Weak_error.value_dropped
+            throw .value_dropped
         r.ctrl.strong += 1
         return ::{ .ctrl = r.ctrl }
 
@@ -201,14 +201,14 @@ impl<|T|> Weak_arc<|T|>
     pub fn clone(r: Self$@): Weak_arc<|T|> //< one more weak handle to the same value
         kspl_atomic_add(r.ctrl.weak@, 1)
         return ::{ .ctrl = r.ctrl }
-    pub fn upgrade(r: Self$@): Arc<|T|>?Weak_error //< an owner again, if the value is still alive
+    pub fn upgrade(r: Self$@): Arc<|T|>!Weak_error //< an owner again, if the value is still alive
         //<
         //< A plain fetch-add could raise strong from 0 to 1, so a CAS increments only a non-zero
         //< value it read, and retries when another thread changed it first.
         for
             current: = kspl_atomic_add(r.ctrl.strong@, 0) // an atomic read
             if current == 0
-                throw Weak_error.value_dropped
+                throw .value_dropped
             observed: = kspl_atomic_cas(r.ctrl.strong@, current, current + 1)
             if observed == current
                 break

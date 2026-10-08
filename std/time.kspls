@@ -74,7 +74,8 @@ pub fn from_epoch( //< turns epoch seconds into a calendar date and time
     }
 
 priv fn month_name(m: I32): U8[]
-    switch m case 1
+    switch m
+    case 1
         return "Jan"
     case 2
         return "Feb"
@@ -102,7 +103,8 @@ priv fn month_name(m: I32): U8[]
         return "???"
 
 priv fn weekday_name(w: I32): U8[]
-    switch w case 0
+    switch w
+    case 0
         return "Sun"
     case 1
         return "Mon"
@@ -124,7 +126,7 @@ pub const rfc1123_len: Sz = 29 //< the length of the RFC 1123 form, which is alw
     //< The caller provides an array of this size.
 pub const iso8601_len: Sz = 20 //< the length of the ISO 8601 form, which is always the same
 
-priv fn check_fields(dt: Datetime): Void?Time_error //< checks that every field fits the format
+priv fn check_fields(dt: Datetime): Void!Time_error //< checks that every field fits the format
     //<
     //< **A year out of range fails; it is not cut to its last 4 digits**: the year 10000 would read
     //< back as 0000, and a negative year produces bytes that are not digits. ISO 8601's expanded
@@ -134,7 +136,7 @@ priv fn check_fields(dt: Datetime): Void?Time_error //< checks that every field 
         dt.day <= 31 && dt.hour >= 0 && dt.hour <= 23 && dt.minute >= 0 && dt.minute <= 59 &&
         dt.second >= 0 && dt.second <= 59 && dt.weekday >= 0 && dt.weekday <= 6
     if !fits
-        throw Time_error.out_of_range
+        throw .out_of_range
 
 priv fn put_dec(out: U8$[], at: Sz, n: Sz, v: I32) //<
     //< Writes v into out[at..at+n) in decimal, right-aligned and zero-padded
@@ -156,9 +158,9 @@ pub fn write_rfc1123( //< writes the form HTTP uses, without allocating
     //< Caution: **Do not take a `Writer`** (the file header gives the reason).
     dt: Datetime, //< the moment to write
     out: U8$[], //< the destination; its first `rfc1123_len` bytes are written
-): Void?Time_error
+): Void!Time_error
     assert(out.len >= rfc1123_len, "time.write_rfc1123: out is shorter than rfc1123_len")
-    check_fields(dt)?
+    check_fields(dt)!
     put_str(out, 0, weekday_name(dt.weekday))
     put_str(out, 3, ", ")
     put_dec(out, 5, 2, dt.day)
@@ -179,9 +181,9 @@ pub fn write_iso8601( //< writes the ISO 8601 / RFC 3339 form, without allocatin
     //< The form is `1994-11-15T08:12:31Z`.
     dt: Datetime, //< the moment to write
     out: U8$[], //< the destination; its first `iso8601_len` bytes are written
-): Void?Time_error
+): Void!Time_error
     assert(out.len >= iso8601_len, "time.write_iso8601: out is shorter than iso8601_len")
-    check_fields(dt)?
+    check_fields(dt)!
     put_dec(out, 0, 4, I32::dt.year)
     out[4] = '-'
     put_dec(out, 5, 2, dt.month)

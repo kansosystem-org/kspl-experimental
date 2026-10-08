@@ -127,7 +127,7 @@ struct Sema_ctx
         //< is_instantiating().
     layout: Layout_state
     resolving: Resolving_state
-    infer_expr_fn: fn(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32?Sema_error //<
+    infer_expr_fn: fn(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error //<
         //< Hands an expression's type inference to the layer above (ksplc/sema/body)
         //<
         //< **This is the only way decl can call body**: if decl imported body, parse would reject
@@ -137,7 +137,7 @@ struct Sema_ctx
         //< Caution: **Do not add more uses.** Each one blurs the layering between decl and body.
 
 impl Sema_ctx
-    fn find_generic_arg(r: Self$@, param_name: U8[]): Option<|Generic_arg|> //<
+    fn find_generic_arg(r: Self$@, param_name: U8[]): Generic_arg? //<
         //< Looks up the current binding of a type variable by name
         //<
         //< **This is the only function that looks up a binding by name.** **Search from the end:**
@@ -148,8 +148,8 @@ impl Sema_ctx
         for j in Range.desc(r.generics.args.len)
             g_arg: = r.generics.args.get(j)
             if r.env.get_str(g_arg.param_name_id).equals(param_name)
-                return Option<|Generic_arg|>.some(g_arg)
-        return Option<|Generic_arg|>.none
+                return .some(g_arg)
+        return .none
 
     fn new(source: U8$[], file_name: U8[], env: sema_type_env.Env$@,
         global_scope: Map<|I32, Sema_symbol$@|>$@, source_map: Map<|U8[], U8$[]|>$@): Sema_ctx
@@ -204,7 +204,7 @@ impl Sema_ctx
             },
             .suppress_errors = false,
             // Every caller but the editor wants every body; the editor narrows it per request.
-            .bodies = Bodies.everywhere,
+            .bodies = .everywhere,
             .body_names = null,
             .source_map = source_map,
             .jump_stack = base_core.arena.create(List<|Jump_label|>.new(null)),
@@ -278,13 +278,17 @@ impl Sema_ctx
         return r.diags.counts.errors > 0
 
     fn err(r: Self$@, node: Ast_node$@, msg: U8[])
-        r.report_diagnostic(node, base_diag.Diagnostic_severity.error, msg)
+        r.report_diagnostic(node, .error, msg)
     fn warn(r: Self$@, node: Ast_node$@, msg: U8[])
-        r.report_diagnostic(node, base_diag.Diagnostic_severity.warning, msg)
+        r.report_diagnostic(node, .warning, msg)
     fn information(r: Self$@, node: Ast_node$@, msg: U8[])
-        r.report_diagnostic(node, base_diag.Diagnostic_severity.information, msg)
+        r.report_diagnostic(node, .information, msg)
     fn hint(r: Self$@, node: Ast_node$@, msg: U8[])
-        r.report_diagnostic(node, base_diag.Diagnostic_severity.hint, msg)
+        r.report_diagnostic(node, .hint, msg)
+    fn hint_over(r: Self$@, node: Ast_node$@, span: Sz, msg: U8[]) //<
+        //< A hint from node's start over span bytes, where the node's span is not the text meant
+        r.report_core(r.file_for_node(node), r.source_for_node(node),
+            node.get_span_offset().offset, span, node != null, .hint, msg)
 
     fn make_fqn(r: Self$@, name: U8[]): U8[] //<
         //< The fully qualified name, qualified by the current file
@@ -335,7 +339,8 @@ impl Sema_ctx
         //< **Ask it before work done only for that diagnostic**: a check off by default (W0601)
         //< would otherwise pay its whole cost on every declaration and print nothing. The level is
         //< decided by lint_level_for_file alone, as in report_core.
-        switch r.lint_level_for_file(r.file_for_node(node), code) case .off
+        switch r.lint_level_for_file(r.file_for_node(node), code)
+        case .off
             return true
         default {}
         return false
@@ -389,10 +394,11 @@ impl Sema_ctx
         $eff_sev: = sev
         code: = base_diag.code_of(msg)
         if code.len > 0
-            switch r.lint_level_for_file(file, code) case .off
+            switch r.lint_level_for_file(file, code)
+            case .off
                 return
             case .error
-                eff_sev = base_diag.Diagnostic_severity.error
+                eff_sev = .error
             default {}
         if !base_core.config.is_lint &&
             (eff_sev == base_diag.Diagnostic_severity.information ||
@@ -422,7 +428,8 @@ impl Sema_ctx
                 base_diag.print_diagnostic(file, src, offset, span, cap.slice(), eff_sev, starts)
                 r.diags.counts.errors += 1
             return
-        switch eff_sev case .error
+        switch eff_sev
+        case .error
             r.diags.counts.errors += 1
         case .warning
             r.diags.counts.warnings += 1
@@ -674,7 +681,8 @@ impl Sema_ctx
                 else if sym.kind.is_value()
                     $allow_upper: = false
                     if sym.flags.is_global
-                        switch sym.kind case .constant
+                        switch sym.kind
+                        case .constant
                             allow_upper = true
                         default {}
                     if !allow_upper
@@ -731,13 +739,15 @@ impl Ast_node
                         ksplc/base/lint_codes.kspls for the full list)")
                 c.err(code_node, c.scratch.slice())
                 continue
-            switch base_lint_codes.Lint_level.parse(level_node.text) case .some(level)
+            switch base_lint_codes.Lint_level.parse(level_node.text)
+            case .some(level)
                 c.diags.lint_settings
                     .push(Lint_setting_entry::{ .file = r.loc.file(), .code = code_node.text,
                     .level = level })
                 // Promoting to error also runs that check; this Pass 0 comes before every check, so
                 // it is in time.
-                switch level case .error
+                switch level
+                case .error
                     base_core.config.run_lint_checks = true
                 default {}
             case .none

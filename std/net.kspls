@@ -72,20 +72,20 @@ pub enum Net_error //< why a socket operation failed
 impl Net_error
     priv fn would_block_or(other: Self): Net_error //<
         //< would_block if the socket is just not ready yet; otherwise the real I/O error `other`
-        return Net_error.would_block if kspl_net_would_block() else other
+        return .would_block if kspl_net_would_block() else other
 
 priv const default_backlog: I32 = 128
 
 priv const port_max: I32 = 65535 //< the largest port: a socket address holds 16 bits
 
-priv fn checked_port(port: I32): Void?Net_error //< refuses a port no socket address can hold
+priv fn checked_port(port: I32): Void!Net_error //< refuses a port no socket address can hold
     //<
     //< Caution: **Refuse, never wrap.** C's 16-bit field would turn 83659 into 18123 and -1 into
     //< 65535, so the socket would bind or reach another port in silence.
     if port < 0 || port > port_max
-        throw Net_error.bad_port
+        throw .bad_port
 
-priv fn transferred(n: I32): Sz?Net_error //<
+priv fn transferred(n: I32): Sz!Net_error //<
     //< Turns the return value of a C send or receive (negative on failure) into a byte count
     //<
     //< send/recv/send_to/recv_from all use this one check.
@@ -99,22 +99,22 @@ pub fn resolve_one( //< resolves a name to one address string and returns its le
     //< and this narrows the candidates to one. It returns the resolver's first candidate.
     host: U8[], //< the name to resolve
     out: U8$[], //< where the address text goes; at least `addr_text_max` long
-): Sz?Net_error //< the length of the address in `out`; fails on a short `out` or an unknown name
+): Sz!Net_error //< the length of the address in `out`; fails on a short `out` or an unknown name
     if out.len < addr_text_max
-        throw Net_error.addr_buffer_too_small
+        throw .addr_buffer_too_small
     $n: Sz = 0
     if kspl_net_resolve(host.ptr, host.len, out.ptr, out.len, n@) != 0
-        throw Net_error.resolve_failed
+        throw .resolve_failed
     return n
 
 // ============================ Tcp_listener ============================
-priv fn handle_set_nonblocking(handle: I64): Void?Net_error //< makes a handle non-blocking
+priv fn handle_set_nonblocking(handle: I64): Void!Net_error //< makes a handle non-blocking
     //<
-    //< All three socket types use it. **It can fail, so it returns `?Net_error`**: a discarded
+    //< All three socket types use it. **It can fail, so it returns `!Net_error`**: a discarded
     //< `Bool` would not trigger [W0701], and the failure would pass unnoticed
-    //< ("A failure is returned as `T?E`" in std/docs/DESIGN.md).
+    //< ("A failure is returned as `T!E`" in std/docs/DESIGN.md).
     if !kspl_net_set_nonblocking(handle)
-        throw Net_error.set_option_failed
+        throw .set_option_failed
 
 pub struct Tcp_listener //< a socket that waits for incoming connections
     priv handle: I64
@@ -127,18 +127,18 @@ impl Tcp_listener
         //< candidates overlapped" in std/docs/DESIGN.md); to accept both, open two listeners.
         host: U8[], //< the address to listen on; empty means `"0.0.0.0"`
         port: I32, //< the port to listen on
-    ): Tcp_listener$@?Net_error
-        checked_port(port)?
+    ): Tcp_listener$@!Net_error
+        checked_port(port)!
         h: = kspl_tcp_listen(host.ptr, host.len, port, default_backlog)
         if h < 0
-            throw Net_error.resolve_failed
+            throw .resolve_failed
         if h == 0
-            throw Net_error.bind_failed
+            throw .bind_failed
         l: = mem.alloc_as<|Tcp_listener|>()
         l.handle = h
         return l
 
-    pub fn accept(r: Self$@): Tcp_stream$@?Net_error //< accepts the next waiting connection
+    pub fn accept(r: Self$@): Tcp_stream$@!Net_error //< accepts the next waiting connection
         //<
         //< The stream it returns is blocking on every OS, whatever the listener's mode.
         h: = kspl_tcp_accept(r.handle)
@@ -158,9 +158,9 @@ impl Tcp_listener
         //< Only for registering; send/recv/accept still go only through this type's methods.
         return r.handle
 
-    pub fn set_nonblocking(r: Self$@): Void?Net_error //<
+    pub fn set_nonblocking(r: Self$@): Void!Net_error //<
         //< makes it non-blocking, for use with `std/reactor`
-        handle_set_nonblocking(r.handle)?
+        handle_set_nonblocking(r.handle)!
 
 // ============================ Tcp_stream ============================
 pub struct Tcp_stream //< one connection that can be written to and read from
@@ -225,8 +225,8 @@ fn connect_over( //< the overlapped attempts `Tcp_stream.connect` makes over res
     //< one it returns is blocking. Package-wide, so `std/tests` can hand it candidates of its own.
     candidates: U8[][], //< address texts, at most `max_candidates`, in the order to try them
     port: I32, //< the port on each
-): Tcp_stream$@?Net_error
-    checked_port(port)?
+): Tcp_stream$@!Net_error
+    checked_port(port)!
     $live: I64[max_candidates] = ::{}
     flight: = I64$[]::live
     $seen: U8[max_candidates] = ::{}
@@ -251,12 +251,12 @@ fn connect_over( //< the overlapped attempts `Tcp_stream.connect` makes over res
         if won.winner != 0
             if !kspl_net_set_blocking(won.winner)
                 kspl_tcp_close(won.winner)
-                throw Net_error.connect_failed
+                throw .connect_failed
             return Tcp_stream.connected_stream(won.winner)
         in_flight = won.left
     for i in Range.asc(in_flight)
         kspl_tcp_close(live[i])
-    throw Net_error.connect_failed
+    throw .connect_failed
 
 pub struct Peer_addr //< the address of the peer of a connection
     //<
@@ -265,14 +265,14 @@ pub struct Peer_addr //< the address of the peer of a connection
     pub port: I32 //< the peer's port
 
 impl Tcp_stream
-    priv fn connected_stream(h: I64): Tcp_stream$@?Net_error //<
+    priv fn connected_stream(h: I64): Tcp_stream$@!Net_error //<
         //< Wraps the raw handle that a connect returned (0 means failure) in a Tcp_stream
         //<
         //< accept does not use this: it checks would_block only on failure.
         if h < 0
-            throw Net_error.resolve_failed
+            throw .resolve_failed
         if h == 0
-            throw Net_error.connect_failed
+            throw .connect_failed
         s: = mem.alloc_as<|Tcp_stream|>()
         s.handle = h
         return s
@@ -283,7 +283,7 @@ impl Tcp_stream
         //< tries the candidates overlapped" in `std/docs/DESIGN.md`.
         host: U8[], //< the name or address to connect to
         port: I32, //< the port on that host
-    ): Tcp_stream$@?Net_error
+    ): Tcp_stream$@!Net_error
         $texts: U8[candidate_hold] = ::{}
         $lens: Sz[max_candidates] = ::{}
         hold: = U8$[]::texts
@@ -291,7 +291,7 @@ impl Tcp_stream
             kspl_net_resolve_all(host.ptr, host.len, hold.ptr, candidate_text_max,
             (Sz$[]::lens).ptr, max_candidates)
         if got == -1
-            throw Net_error.resolve_failed
+            throw .resolve_failed
         if got < 0
             panic("std/net: the runtime keeps more candidates than Tcp_stream.connect holds")
         $candidates: U8[][max_candidates] = ::{}
@@ -307,8 +307,8 @@ impl Tcp_stream
         //< name, use `connect`.
         host: U8[], //< the address to connect to; only one candidate is tried
         port: I32, //< the port on that host
-    ): Tcp_stream$@?Net_error
-        checked_port(port)?
+    ): Tcp_stream$@!Net_error
+        checked_port(port)!
         return Tcp_stream
             .connected_stream(kspl_tcp_connect_nonblocking(host.ptr, host.len, port))
 
@@ -323,7 +323,7 @@ impl Tcp_stream
         //< silently truncates).
         r: Self$@,
         buf: U8[], //< the bytes to send
-    ): Sz?Net_error
+    ): Sz!Net_error
         return transferred(kspl_tcp_send(r.handle, buf.ptr, buf.len))
 
     pub fn write_all( //< sends every byte in a loop; a non-blocking socket may still fail
@@ -333,18 +333,18 @@ impl Tcp_stream
         //< yourself.
         r: Self$@,
         buf: U8[], //< the bytes sent
-    ): Void?Net_error
+    ): Void!Net_error
         $sent: Sz = 0
         for sent < buf.len
-            n: = r.write(buf.sub(sent, buf.len - sent))?
+            n: = r.write(buf.sub(sent, buf.len - sent))!
             if n == 0
-                throw Net_error.io_failed // no progress is possible (the peer closed)
+                throw .io_failed // no progress is possible (the peer closed)
             sent += n
 
     pub fn read( //< receives and returns how much arrived; 0 means the peer closed
         r: Self$@,
         buf: U8$[], //< where the bytes go
-    ): Sz?Net_error
+    ): Sz!Net_error
         return transferred(kspl_tcp_recv(r.handle, buf.ptr, buf.len))
 
     pub fn peer( //< the address of the peer
@@ -353,13 +353,13 @@ impl Tcp_stream
         //< server.
         r: Self$@,
         host_out: U8$[], //< where the address text goes; at least `addr_text_max` long
-    ): Peer_addr?Net_error
+    ): Peer_addr!Net_error
         if host_out.len < addr_text_max
-            throw Net_error.addr_buffer_too_small
+            throw .addr_buffer_too_small
         $host_len: Sz = 0
         $port: I32 = 0
         if kspl_tcp_peer(r.handle, host_out.ptr, host_out.len, host_len@, port@) < 0
-            throw Net_error.io_failed // the peer is already gone
+            throw .io_failed // the peer is already gone
         return Peer_addr::{ .host_len = host_len, .port = port }
 
     pub fn free(r: Self$@) //< closes the connection and frees it
@@ -377,18 +377,18 @@ impl Tcp_stream
         //< with that library's. `free()` still closes the socket.
         return kspl_net_raw_fd(r.handle)
 
-    pub fn set_nonblocking(r: Self$@): Void?Net_error //<
+    pub fn set_nonblocking(r: Self$@): Void!Net_error //<
         //< makes it non-blocking, for use with `std/reactor`
-        handle_set_nonblocking(r.handle)?
+        handle_set_nonblocking(r.handle)!
 
-    pub fn shut_write(r: Self$@): Void?Net_error //<
+    pub fn shut_write(r: Self$@): Void!Net_error //<
         //< closes only the sending half, to signal the end
         //<
         //< **This is not a disconnection.** The peer's `read` returns 0, while this side **can
         //< still read and wait for a response**.
         //< Caution: **Do not use it instead of closing** (only `free` releases the memory).
         if kspl_net_shutdown_write(r.handle) != 0
-            throw Net_error.io_failed // the peer is already gone, or the socket is already closed
+            throw .io_failed // the peer is already gone, or the socket is already closed
 
 // ============================ Udp_socket ============================
 pub struct Udp_recv_result //< one received datagram, and who sent it
@@ -405,13 +405,13 @@ impl Udp_socket
         //< The host works as in `Tcp_listener.bind`.
         host: U8[], //< the address to bind to; empty means `"0.0.0.0"`
         port: I32, //< the port; 0 lets the OS choose a free one
-    ): Udp_socket$@?Net_error
-        checked_port(port)?
+    ): Udp_socket$@!Net_error
+        checked_port(port)!
         h: = kspl_udp_open(host.ptr, host.len, port)
         if h < 0
-            throw Net_error.resolve_failed
+            throw .resolve_failed
         if h == 0
-            throw Net_error.bind_failed
+            throw .bind_failed
         u: = mem.alloc_as<|Udp_socket|>()
         u.handle = h
         return u
@@ -423,12 +423,12 @@ impl Udp_socket
         buf: U8[], //< the payload
         host: U8[], //< the destination as an **address string**, not a name
         port: I32, //< the destination's port
-    ): Sz?Net_error
-        checked_port(port)?
+    ): Sz!Net_error
+        checked_port(port)!
         raw: =
             kspl_udp_send_to(r.handle, buf.ptr, buf.len, host.ptr, host.len, port)
         if raw == -2
-            throw Net_error.addr_not_numeric
+            throw .addr_not_numeric
         return transferred(raw)
 
     pub fn recv_from( //< receives one datagram and returns its size and who sent it
@@ -438,17 +438,17 @@ impl Udp_socket
         r: Self$@,
         buf: U8$[], //< where the payload goes
         from_host_out: U8$[], //< where the sender's address text goes; at least `addr_text_max` long
-    ): Udp_recv_result?Net_error
+    ): Udp_recv_result!Net_error
         if from_host_out.len < addr_text_max
-            throw Net_error.addr_buffer_too_small
+            throw .addr_buffer_too_small
         $from_host_len: Sz = 0
         $from_port: I32 = 0
         raw: =
             kspl_udp_recv_from(r.handle, buf.ptr, buf.len, from_host_out.ptr, from_host_out.len,
             from_host_len@, from_port@)
         if raw == -3
-            throw Net_error.datagram_too_long
-        n: = transferred(raw)?
+            throw .datagram_too_long
+        n: = transferred(raw)!
         return Udp_recv_result::{
             .len = n,
             .from_host_len = from_host_len,
@@ -463,9 +463,9 @@ impl Udp_socket
         //< the raw handle, the only thing `std/reactor` uses to register the socket
         return r.handle
 
-    pub fn set_nonblocking(r: Self$@): Void?Net_error //<
+    pub fn set_nonblocking(r: Self$@): Void!Net_error //<
         //< makes it non-blocking, for use with `std/reactor`
-        handle_set_nonblocking(r.handle)?
+        handle_set_nonblocking(r.handle)!
 
 impl Tcp_listener: Owned {} //< it owns its resources and frees them with `free()`.
 impl Tcp_stream: Owned {} //< it owns its socket and memory and frees them with `free()`

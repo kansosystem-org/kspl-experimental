@@ -4,11 +4,9 @@
 //< the body's size).
 //< Caution: **Give each part exactly one style**, or the table's order decides which one the
 //< reader takes.
-import "kspage/model/collect" { Collect }
 import "kspage/model/font" { Font }
-import "kspage/model/marker" { Marker }
 import "kspage/model/paint"
-import "kspage/model/style" { Sheet, Style, Align, Arrange }
+import "kspage/model/style" { Sheet, Style, Align }
 import "kspage/share/markdown"
 import "std/mem" { Arena }
 
@@ -68,14 +66,14 @@ priv fn add_heads(sheet: Sheet$@, root: Font) //< the six heading levels
     //< headings by it.
     for $i: Sz = 0; i < 6; i += 1
         $spec: paint.Font_spec = paint.inherit_all()
-        spec.size_px = Option<|F32|>.some(root.size_px * head_scale[i])
-        spec.weight = Option<|U16|>.some(700U16)
+        spec.size_px = .some(root.size_px * head_scale[i])
+        spec.weight = .some(700U16)
         h: = sheet.add(head_names[i], spec)
         h.outline = i + 1
         // Caution: **Leave more space above**, or nobody can tell which paragraph a heading heads.
         spaced(h, gap * 1.5F32, gap * 0.5F32)
         if i == 5
-            h.ink.color = Option<|U32|>.some(faint_ink)
+            h.ink.color = .some(faint_ink)
 
 priv fn add_paras(sheet: Sheet$@) //< a paragraph, a bullet list and a numbered list
     //<
@@ -88,7 +86,7 @@ priv fn add_paras(sheet: Sheet$@) //< a paragraph, a bullet list and a numbered 
     // A bullet list. The bullet sits in the indent.
     item: = sheet.add(item_name, paint.inherit_all())
     item.indent = step_indent
-    item.marker = Marker.bullet("• ")
+    item.marker = .bullet("• ")
     spaced(item, 0.0, gap * 0.25F32)
     item.line_spacing = 1.5
 
@@ -96,13 +94,13 @@ priv fn add_paras(sheet: Sheet$@) //< a paragraph, a bullet list and a numbered 
     // from 1.**
     step: = sheet.add(step_name, paint.inherit_all())
     step.indent = step_indent
-    step.marker = Marker.number(". ")
+    step.marker = .number(". ")
     spaced(step, 0.0, gap * 0.25F32)
     step.line_spacing = 1.5
 
     // The list of notes. The number is not stored in the document.
     notes: = sheet.add(notes_name, paint.inherit_all())
-    notes.collect = Collect.notes
+    notes.collect = .notes
     spaced(notes, gap * 1.5F32, 0.0)
 
 priv fn add_code(sheet: Sheet$@, root: Font) //< a code block and inline code
@@ -112,8 +110,8 @@ priv fn add_code(sheet: Sheet$@, root: Font) //< a code block and inline code
     //< `markdown.kspls` decides the name, which reads back as "declares no language"; any other
     //< name declares a language.
     $mono: paint.Font_spec = paint.inherit_all()
-    mono.family = Option<|U8[]|>.some("monospace")
-    mono.size_px = Option<|F32|>.some(root.size_px * 0.85F32)
+    mono.family = .some("monospace")
+    mono.size_px = .some(root.size_px * 0.85F32)
     code: = sheet.add(markdown.plain_code_name, mono)
     // It does not wrap (wrapping loses the space at the break and changes the indent depth).
     code.wrap = false
@@ -122,8 +120,8 @@ priv fn add_code(sheet: Sheet$@, root: Font) //< a code block and inline code
     // Caution: **Do not fake it with the line height's ratio** (`pad` in `../model/style.kspls`).
     code.pad = gap
     code.line_spacing = 1.45
-    code.fill = Option<|U32|>.some(code_fill)
-    code.ink.color = Option<|U32|>.some(dark_ink)
+    code.fill = .some(code_fill)
+    code.ink.color = .some(dark_ink)
     code.rule_width = 1.0
     code.rule_color = line_color
 
@@ -132,12 +130,12 @@ priv fn add_table(sheet: Sheet$@) //< a table
     //< The cell styles hold the grid; styles do not inherit, so each alignment's cell carries the
     //< line and the padding.
     grid: = sheet.add(grid_name, paint.inherit_all())
-    grid.arrange = Arrange.grid
+    grid.arrange = .grid
     spaced(grid, gap, gap)
 
-    add_cell(sheet, cell_names[0], Align.left)
-    add_cell(sheet, cell_names[1], Align.center)
-    add_cell(sheet, cell_names[2], Align.right)
+    add_cell(sheet, cell_names[0], .left)
+    add_cell(sheet, cell_names[1], .center)
+    add_cell(sheet, cell_names[2], .right)
 
 priv fn add_cell(sheet: Sheet$@, name: U8[], want: Align) //< one cell
     dress_cell(sheet.add(name, paint.inherit_all()), want)
@@ -163,8 +161,8 @@ priv fn add_marks(sheet: Sheet$@) //< a divider and a link
 
     // A link. The color and the underline go together (`linked` in `../model/style.kspls`).
     link: = sheet.add(link_name, paint.inherit_all())
-    link.ink.color = Option<|U32|>.some(link_color)
-    link.ink.underline = Option<|Bool|>.some(true)
+    link.ink.color = .some(link_color)
+    link.ink.underline = .some(true)
 
 fn sheet_for(root: Font, arena: Arena$@): Sheet$@ //<
     //< The style table passed in when Markdown is read

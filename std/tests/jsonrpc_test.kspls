@@ -17,7 +17,8 @@ import "std/verdict"
 priv fn taken_or(acc: Str_builder$@, arena: Arena$@): U8[]
     got: = jsonrpc.take_frame(acc, arena) catch
         return "(broken)"
-    switch got case .some(body)
+    switch got
+    case .some(body)
         return body
     case .none
         return "(none)"
@@ -107,7 +108,8 @@ fn test_jsonrpc_encode()
     defer out.free()
     jsonrpc.frame_into(out@, req)
     body: = jsonrpc.take_frame(out@, arena) catch panic("a freshly framed body must be takeable")
-    switch body case .some(text)
+    switch body
+    case .some(text)
         doc: = json.parse(text, arena) catch panic("the framed body must parse as JSON")
         assert(doc.get("id").as_int(-1) == 3, "the id must survive the round trip")
         assert(doc.get("params").get("n").as_int(0) == 7, "the params must survive the round trip")
@@ -149,7 +151,8 @@ fn test_jsonrpc_stderr_flood(ksplc: U8[]) //<
     // No frame comes. **The test checks that it ends with "closed"**; without draining, the peer
     // stalls on standard error and the timeout expires.
     _frame: = c.read_msg(60000, arena) catch e
-        switch e case .closed
+        switch e
+        case .closed
             kept: = c.err_tail().len
             assert(kept > 0, "the child's output on stderr must be kept")
             // Caution: **Check what is held, not only what is handed out**: the flood is far longer
@@ -200,7 +203,8 @@ fn test_jsonrpc_notification_burst(ksplc: U8[]) //<
     defer c.free()
     $b: = Json_builder.new(arena)
     got: = c.request("probe", b.obj().build(), 60000, arena) catch e
-        switch e case .broken
+        switch e
+        case .broken
             panic("the answer was given up on behind the notifications")
         case .timed_out
             panic("the answer did not arrive in time")

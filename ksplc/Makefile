@@ -65,6 +65,8 @@ suite_ship := ship
 suite_generic-matrix := generic_matrix
 suite_layout-targets := layout_targets
 # **List them by how long they take, the longest first**: `make -j` starts them in this order.
+# Caution: **Keep `make test SUITES=` the whole rest of `make test`.** A check that runs each suite
+# apart, under a time limit of its own, runs that first and then `make test-<name>` per name here.
 SUITES := lsp run generic-matrix thin-use negative runtime write-perm std-dir emit-runtime ship \
   property limits lint cli kspls split equiv ast-cache broken-pipe config output-flush ext-import \
   debug-line decl-macros spawn slice-struct one-main file-path place visibility fmt doc \

@@ -201,7 +201,11 @@ fn ksplc_bare(args: U8[][]): verdict.Run_out //<
         argv.push(a)
     return run(argv.slice())
 
-fn make(args: U8[][]): verdict.Run_out //< runs `make` once
+fn make(args: U8[][]): verdict.Run_out //< runs `make` once (`make_argv`)
+    return run(make_argv(args))
+
+fn make_argv(args: U8[][]): U8[][] //<
+    //< The argv that runs `make` with these arguments, for one run or for a `subproc.Job`
     //<
     //< **Do not let it rebuild stage1 (`-o`)**: under `make -j test-ci` another suite may be
     //< running it, and on Windows a running exe cannot be replaced. **Do not call `make` by name
@@ -218,13 +222,13 @@ fn make(args: U8[][]): verdict.Run_out //< runs `make` once
     argv.push(fs.join("out", "ksplc_stage1.exe", arena))
     for a in args
         argv.push(a)
-    return run(argv.slice())
+    return argv.slice()
 
 // ==========================================
 // The temporary directory
 // ==========================================
 
-fn sandbox(name: U8[]): U8[]?fs.Fs_error //<
+fn sandbox(name: U8[]): U8[]!fs.Fs_error //<
     //< Makes a workspace for this suite only and returns it (`out/tmp/<name>_<mark>`)
     //<
     //< Caution: **Do not delete a fixed folder and then create it**: where it cannot be deleted (a
@@ -282,7 +286,7 @@ priv fn clear_tree(dir: U8[], depth: Sz)
 // The files git knows
 // ==========================================
 
-fn tracked(): List<|U8[]|>?Run_error //<
+fn tracked(): List<|U8[]|>!Run_error //<
     //< The tracked files plus the untracked files that are not ignored
     //<
     //< Caution: **Do not pass a wildcard to `git ls-files`** (the reason is at `tracked_matching`
@@ -290,8 +294,8 @@ fn tracked(): List<|U8[]|>?Run_error //<
     //< absent until committed and slips past the check.
     arena: = suite_arena
     $out: = List<|U8[]|>.new(arena)
-    collect_ls_files(U8[][]::{ "git", "ls-files" }, out@, arena)?
-    collect_ls_files(U8[][]::{ "git", "ls-files", "--others", "--exclude-standard" }, out@, arena)?
+    collect_ls_files(U8[][]::{ "git", "ls-files" }, out@, arena)!
+    collect_ls_files(U8[][]::{ "git", "ls-files", "--others", "--exclude-standard" }, out@, arena)!
     return out
 
 enum Run_error
@@ -382,11 +386,11 @@ fn tracked_matching(patterns: U8[][]): List<|U8[]|> //<
                 .s("there is a pattern matching not one tracked file: \{p\}").take())
     return out
 
-priv fn collect_ls_files(argv: U8[][], out: List<|U8[]|>$@, arena: Arena$@): Void?Run_error
+priv fn collect_ls_files(argv: U8[][], out: List<|U8[]|>$@, arena: Arena$@): Void!Run_error
     r: = run(argv)
     if r.code != 0
         _ok: = verdict.check("git ls-files ran", false, r.out)
-        throw Run_error.failed
+        throw .failed
     for ln in r.out.lines(arena)
         path: = ln.trim_spaces()
         if path.len > 0
