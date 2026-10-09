@@ -2,7 +2,6 @@ import "kspage/model/doc" + { Doc, Rect }
 import "kspage/model/paint"
 import "kspage/model/style" { Sheet }
 import "kspage/share/markdown"
-import "kspage/share/markdown_read"
 import "kspage/tests/base"
 import "std/chars"
 import "std/mem" { Arena }
@@ -10,7 +9,7 @@ import "std/str" { Str_builder }
 import "std/verdict"
 
 // ==========================================
-// kspage: checks exporting to Markdown and reading it back (a golden test).
+// kspage: checks exporting to Markdown (a golden test).
 //
 // Contents that Markdown has a syntax for are written in that syntax, and contents it has none for
 // become a mark.
@@ -60,20 +59,23 @@ priv fn sample_sheet(arena: Arena$@): Sheet$@ //<
     $slant: paint.Font_spec = paint.inherit_all()
     slant.italic = .some(true)
     sheet.add("em", slant)
+    // Inline code that is bold: a style that does not wrap is code wherever it stands.
+    bold_code: = sheet.add("code-bold", bold)
+    bold_code.wrap = false
+    sheet.add("kspl", paint.inherit_all()).wrap = false
+    right: = sheet.add("cell-right", paint.inherit_all())
+    right.align = .right
+    middle: = sheet.add("cell-center", paint.inherit_all())
+    middle.align = .center
     return sheet
 
-fn test_headings_become_hashes_and_keep_their_number()
+fn test_headings_become_hashes_and_keep_their_number(arena: Arena$@)
     verdict.start("[kspage/markdown] a heading becoming a count of # test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.add_block("h1").add_text("To begin with")
     d.add_block("h2").add_text("The settlement")
 
-    $sb: = Str_builder.new()
-    defer sb.free()
-    markdown.write(d, sample_sheet(arena), sb@)
-    out: = sb.slice()
+    out: = md_of(d, sample_sheet(arena), arena)
     // The chapter number is written as text: Markdown numbers no heading, so unwritten it is lost.
     assert(base.has(out, "# 1. To begin with\n"), "depth 1 becomes one # and a chapter number")
     assert(base.has(out, "## 1.1. The settlement\n"), "depth 2 becomes two #")
@@ -81,20 +83,15 @@ fn test_headings_become_hashes_and_keep_their_number()
     assert(base.has(out, "To begin with\n\n## "), "an empty row goes in between the lumps")
     verdict.pass("the depth becomes the count of #, and the chapter number is left as text.")
 
-fn test_markers_become_list_syntax()
+fn test_markers_become_list_syntax(arena: Arena$@)
     verdict.start("[kspage/markdown] a bullet's mark becoming text test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.add_block("item").add_text("a")
     d.add_block("item").add_text("b")
     d.add_block("step").add_text("one")
     d.add_block("step").add_text("two")
 
-    $sb: = Str_builder.new()
-    defer sb.free()
-    markdown.write(d, sample_sheet(arena), sb@)
-    out: = sb.slice()
+    out: = md_of(d, sample_sheet(arena), arena)
     // The style's bullet (`• `) is not written. Written, two bullets would stand side by side.
     assert(base.has(out, "- a\n- b\n"), "the items with a mark stand one after another")
     assert(!base.has(out, "• "), "the style's mark does not come out in the text")
@@ -106,36 +103,26 @@ fn test_markers_become_list_syntax()
     verdict
         .pass("a mark comes over into Markdown's text, and no gap opens between items that run on.")
 
-fn test_a_nested_item_is_indented()
+fn test_a_nested_item_is_indented(arena: Arena$@)
     verdict.start("[kspage/markdown] a nested item being indented test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     top: = d.add_block("item")
     top.add_text("outer")
     top.add_child("item").add_text("inner")
 
-    $sb: = Str_builder.new()
-    defer sb.free()
-    markdown.write(d, sample_sheet(arena), sb@)
-    out: = sb.slice()
+    out: = md_of(d, sample_sheet(arena), arena)
     assert(base.has(out, "- outer\n  - inner\n"), "the child item goes in by two spaces")
     verdict.pass("one step in is two spaces.")
 
-fn test_unwrapped_paragraphs_become_one_fence()
+fn test_unwrapped_paragraphs_become_one_fence(arena: Arena$@)
     verdict.start("[kspage/markdown] paragraphs that do not wrap becoming one fence test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.add_block("code").add_text("fn main() {")
     d.add_block("code").add_text("  x: = 1;")
     d.add_block("code").add_text("}")
     d.add_block("body").add_text("the paragraph behind")
 
-    $sb: = Str_builder.new()
-    defer sb.free()
-    markdown.write(d, sample_sheet(arena), sb@)
-    out: = sb.slice()
+    out: = md_of(d, sample_sheet(arena), arena)
     // It is not fenced per paragraph. Fenced one at a time, a code block would be cut at every
     // line.
     body: = "```\nfn main() {\n  x: = 1;\n}\n```\n"
@@ -145,10 +132,8 @@ fn test_unwrapped_paragraphs_become_one_fence()
     assert(base.has(out, "\n\nthe paragraph behind"), "behind the fence is another lump")
     verdict.pass("what ran on comes together, and the text inside stays as it was.")
 
-fn test_a_grid_becomes_a_pipe_table()
+fn test_a_grid_becomes_a_pipe_table(arena: Arena$@)
     verdict.start("[kspage/markdown] a grid becoming a GFM table test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = d.add_block("table")
     t.add_text("sales")
@@ -161,10 +146,7 @@ fn test_a_grid_becomes_a_pipe_table()
     cell: = row.add_child("cell").add_text("=1+2")
     cell.show_value("3", .some(3.0), arena)
 
-    $sb: = Str_builder.new()
-    defer sb.free()
-    markdown.write(d, sample_sheet(arena), sb@)
-    out: = sb.slice()
+    out: = md_of(d, sample_sheet(arena), arena)
     // The first row is the heading. A GFM table has no form without a heading.
     assert(base.has(out, "| item | count |\n| --- | --- |\n| pencil | 3 |\n"),
         "the first row becomes the heading")
@@ -175,10 +157,8 @@ fn test_a_grid_becomes_a_pipe_table()
     verdict
         .pass("the cells stand by their values, and the parting row goes in below the first row.")
 
-fn test_links_and_accents_become_inline_syntax()
+fn test_links_and_accents_become_inline_syntax(arena: Arena$@)
     verdict.start("[kspage/markdown] a link and a strengthening becoming text test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     p: = d.add_block("body")
     p.add_text("plain and ")
@@ -187,10 +167,7 @@ fn test_links_and_accents_become_inline_syntax()
     linked: = p.add_text("here")
     linked.href = "https://example.test/a b"
 
-    $sb: = Str_builder.new()
-    defer sb.free()
-    markdown.write(d, sample_sheet(arena), sb@)
-    out: = sb.slice()
+    out: = md_of(d, sample_sheet(arena), arena)
     assert(base.has(out, "plain and **bold***slanted*"),
         "only the strengthening laid on comes out in the text")
     // A target holding a space is fenced with `<>`. Unfenced, it would end there.
@@ -198,10 +175,8 @@ fn test_links_and_accents_become_inline_syntax()
         "the destination becomes the link's text")
     verdict.pass("a strengthening becomes ** and *, and a link becomes [text](destination).")
 
-fn test_a_link_the_screen_refuses_stays_text()
+fn test_a_link_the_screen_refuses_stays_text(arena: Arena$@)
     verdict.start("[kspage/markdown] a link that cannot be opened staying text test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     p: = d.add_block("body")
     scripted: = p.add_text("run")
@@ -213,50 +188,37 @@ fn test_a_link_the_screen_refuses_stays_text()
     // markup.
     broken: = p.add_text(" end")
     broken.href = "x)\n\n<b>INJECTED</b>"
-    $sb: = Str_builder.new()
-    defer sb.free()
-    markdown.write(d, sample_sheet(arena), sb@)
-    out: = sb.slice()
-    // **The same rule as the screen and the HTML export** (`safe_href` in
+    out: = md_of(d, sample_sheet(arena), arena)
+    // **The same rule as the screen** (`safe_href` in
     // `kspage/model/run.kspls`): the text stays, the link goes.
     assert(base.has(out, "run and shown end") && !base.has(out, "javascript:") &&
         !base.has(out, "data:"), "a link to a scheme that cannot be opened is written as its text")
     assert(!base.has(out, "\n<b>INJECTED"), "a link's target cannot start a line of its own")
-    verdict.pass("the Markdown hands on no link that the screen and the HTML refuse.")
+    verdict.pass("the Markdown hands on no link that the screen refuses.")
 
-fn test_notes_become_footnotes()
+fn test_notes_become_footnotes(arena: Arena$@)
     verdict.start("[kspage/markdown] a note becoming a footnote's text test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     p: = d.add_block("body")
     n: = p.add_text("body")
     n.note = "the note's text"
     d.add_block("notelist")
 
-    $sb: = Str_builder.new()
-    defer sb.free()
-    markdown.write(d, sample_sheet(arena), sb@)
-    out: = sb.slice()
+    out: = md_of(d, sample_sheet(arena), arena)
     // The number is the list position; counted separately by mark and by list, they would diverge.
     assert(base.has(out, "body[^1]\n"), "the mark comes out behind the run")
     assert(base.has(out, "[^1]: the note's text\n"),
         "the list comes out in the block of the style that gathers")
     verdict.pass("the mark and the list stand at the same number.")
 
-fn test_the_contents_is_generated_in_the_markdown()
+fn test_the_contents_is_generated_in_the_markdown(arena: Arena$@)
     verdict.start("[kspage/markdown] the table of contents becoming a bullet list test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.add_block("toc")
     d.add_block("h1").add_text("To begin with")
     d.add_block("h2").add_text("The settlement")
 
-    $sb: = Str_builder.new()
-    defer sb.free()
-    markdown.write(d, sample_sheet(arena), sb@)
-    out: = sb.slice()
+    out: = md_of(d, sample_sheet(arena), arena)
     // The headings after the table of contents are collected first; the depth is the list level.
     assert(base.has(out, "- To begin with\n  - The settlement\n"),
         "the headings stand at their depths")
@@ -264,27 +226,20 @@ fn test_the_contents_is_generated_in_the_markdown()
         .pass("a table of contents the document does not hold is built from the headings and \
             written.")
 
-fn test_a_serial_marker_is_written_as_text()
+fn test_a_serial_marker_is_written_as_text(arena: Arena$@)
     verdict.start("[kspage/markdown] a running number coming out as text test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.add_block("figure").add_text("laying out")
     d.add_block("figure").add_text("flowing")
 
-    $sb: = Str_builder.new()
-    defer sb.free()
-    markdown.write(d, sample_sheet(arena), sb@)
-    out: = sb.slice()
+    out: = md_of(d, sample_sheet(arena), arena)
     // A marker Markdown has no syntax for is written as text (dropped silently, it would vanish).
     assert(base.has(out, "Figure 1. laying out\n"), "a running number comes out as text")
     assert(base.has(out, "Figure 2. flowing\n"), "what it counts is the whole document")
     verdict.pass("a mark with no text of its own is laid as the mark itself, as text.")
 
-fn test_what_has_no_spelling_is_told_in_a_comment()
+fn test_what_has_no_spelling_is_told_in_a_comment(arena: Arena$@)
     verdict.start("[kspage/markdown] contents with no text becoming a mark test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     face: = d.add_block("surface")
     face.name = "drawing"
@@ -292,10 +247,7 @@ fn test_what_has_no_spelling_is_told_in_a_comment()
     bar: = d.add_block("chart")
     bar.chart = "detail!A2:A4"
 
-    $sb: = Str_builder.new()
-    defer sb.free()
-    markdown.write(d, sample_sheet(arena), sb@)
-    out: = sb.slice()
+    out: = md_of(d, sample_sheet(arena), arena)
     // They are not dropped silently: someone who sees only the text could not see what is gone.
     told_face: = base.has(out,
         "<!-- kspage: a slide's layout (drawing) has no way of being written in Markdown -->")
@@ -307,15 +259,13 @@ fn test_what_has_no_spelling_is_told_in_a_comment()
     assert(base.has(out, "the text inside the box"), "the slide's contents carry on as the flow")
     verdict.pass("contents with no text say in a comment what is missing.")
 
-fn test_a_sized_slide_and_chart_are_told_in_a_comment() //<
+fn test_a_sized_slide_and_chart_are_told_in_a_comment(arena: Arena$@) //<
     //< A slide with its size and a chart with its height are dropped the same way, and counted
     //<
     //< **Markdown has no place for where a frame sits nor for a chart**, so they go the way of
     //< every other thing it cannot hold: a comment in the text, and a count the save reports before
     //< writing. The frames' words stay.
     verdict.start("[kspage/markdown] a sized slide and a chart being told in a comment test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     face: = d.add_block("plan")
     face.name = "plan1"
@@ -327,7 +277,7 @@ fn test_a_sized_slide_and_chart_are_told_in_a_comment() //<
 
     $sb: = Str_builder.new()
     defer sb.free()
-    dropped: = markdown.write(d, sample_sheet(arena), sb@)
+    markdown.write(d, sample_sheet(arena), sb@)
     out: = sb.slice()
     told_face: = base.has(out,
         "<!-- kspage: a slide's layout (plan1) has no way of being written in Markdown -->")
@@ -337,13 +287,10 @@ fn test_a_sized_slide_and_chart_are_told_in_a_comment() //<
     assert(told_bars, "a chart with a height becomes a mark")
     assert(base.has(out, "the reader"), "the frame's words carry on as the flow")
     assert(out.find_str("```") < 0, "no fence is written for either")
-    assert(dropped == 2, "both are counted as dropped, for the save to say before writing")
-    verdict.pass("a sized slide and a chart are told in a comment and counted.")
+    verdict.pass("a sized slide and a chart are told in a comment.")
 
-fn test_a_merged_cell_is_told_in_a_comment()
+fn test_a_merged_cell_is_told_in_a_comment(arena: Arena$@)
     verdict.start("[kspage/markdown] a merged cell becoming a mark test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = d.add_block("table")
     t.name = "detail"
@@ -355,10 +302,7 @@ fn test_a_merged_cell_is_told_in_a_comment()
     next.add_child("cell").add_text("a")
     next.add_child("cell").add_text("b")
 
-    $sb: = Str_builder.new()
-    defer sb.free()
-    markdown.write(d, sample_sheet(arena), sb@)
-    out: = sb.slice()
+    out: = md_of(d, sample_sheet(arena), arena)
     // A GFM table holds one field per cell and no more.
     told_merge: = base.has(out,
         "<!-- kspage: a merged cell (detail) has no way of being written in Markdown -->")
@@ -367,10 +311,8 @@ fn test_a_merged_cell_is_told_in_a_comment()
     assert(base.has(out, "| summary |  |\n"), "a cell that is covered becomes an empty field")
     verdict.pass("a merge is told in a mark, and what is covered becomes an empty field.")
 
-fn test_only_what_would_read_differently_is_escaped()
+fn test_only_what_would_read_differently_is_escaped(arena: Arena$@)
     verdict.start("[kspage/markdown] escaping only what would read differently test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.add_block("body").add_text("snake_case is inside a word")
     d.add_block("body").add_text("_strong_ is at a word's edge")
@@ -380,10 +322,7 @@ fn test_only_what_would_read_differently_is_escaped()
     row: = t.add_child("row")
     row.add_child("cell").add_text("a|b")
 
-    $sb: = Str_builder.new()
-    defer sb.free()
-    markdown.write(d, sample_sheet(arena), sb@)
-    out: = sb.slice()
+    out: = md_of(d, sample_sheet(arena), arena)
     // A `_` inside a word is not emphasis; escaped there too, the text would stop reading.
     assert(base.has(out, "snake_case is inside a word"),
         "the underline inside a word is not escaped")
@@ -396,10 +335,8 @@ fn test_only_what_would_read_differently_is_escaped()
     assert(base.has(out, "| a\\|b |"), "the pipe inside a cell is escaped")
     verdict.pass("what is escaped is the characters that read differently there, and no more.")
 
-fn test_a_remark_and_an_aside_are_left_out()
+fn test_a_remark_and_an_aside_are_left_out(arena: Arena$@)
     verdict.start("[kspage/markdown] an annotation and an aside not being written test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     p: = d.add_block("body")
     p.aside = "the presenter's aside"
@@ -407,290 +344,95 @@ fn test_a_remark_and_an_aside_are_left_out()
     n.remark = "change this here"
     n.remark_by = "the writer"
 
-    $sb: = Str_builder.new()
-    defer sb.free()
-    markdown.write(d, sample_sheet(arena), sb@)
-    out: = sb.slice()
-    // Neither is part of the document (the same rule as the HTML export).
+    out: = md_of(d, sample_sheet(arena), arena)
+    // Neither is part of the document (the same rule as printing).
     assert(base.has(out, "body"), "the text itself comes out")
     assert(!base.has(out, "change this here"), "the annotation is not written")
     assert(!base.has(out, "the presenter's aside"), "the aside is not written")
     verdict.pass("what is no part of the document does not come out in the text.")
-priv fn bare_sheet(arena: Arena$@): Sheet$@ //< a sheet with no styles at all
-    //<
-    //< Empty, since what is checked is **that the reader adds the styles it needs**.
-    return Sheet.new(base.root_font(), arena)
-
-priv fn round(src: U8[], arena: Arena$@): U8[] //< reads a text and writes it out again
-    sheet: = bare_sheet(arena)
-    d: = markdown_read.read(src, sheet, arena)
+priv fn md_of(d: Doc$@, sheet: Sheet$@, arena: Arena$@): U8[] //< d written out as Markdown
     $sb: = Str_builder.new()
     defer sb.free()
     markdown.write(d, sheet, sb@)
     return arena.dup_str(sb.slice())
 
-fn test_the_written_spelling_reads_back_to_itself() //<
-    //< **The reader and the writer mesh here**: break either and the text changes
-    verdict.start("[kspage/markdown] the text written out reading back to itself test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
-    src: = arena.text()
-        .s("# title\n\nbody and **bold** and [here](https://example.test)\n\n- a\n- b\n\n1. one\n2. \
-            two\n\n")
-        .s("```\nfn main() {\n  x: = 1;\n}\n```\n\n| item | count |\n| --- | --- |\n| pencil | 3 \
-            |\n").take()
-    once: = round(src, arena)
-    assert(once.equals(src), "read and written out it comes out the same text")
-    // Caution: **The second round must be the same too.** Where the form changes on the first, the
-    // text would change every time it is opened.
-    twice: = round(once, arena)
-    assert(twice.equals(once), "the second time it is the same text too")
-    verdict.pass("the text written out comes back the same shape when it is read.")
-
-priv fn stays_code(src: U8[], lines: Sz, arena: Arena$@) //<
-    //< Reads `src` and checks it is a code block of `lines` lines, which goes round as written
-    d: = markdown_read.read(src, bare_sheet(arena), arena)
-    assert(d.blocks.len == lines, "each line of the fence is a line of code")
-    for i in Range.asc(d.blocks.len)
-        got: = d.blocks.get(i)
-        assert(got.children.len == 0 && got.chart.len == 0, "no frame and no chart is built")
-    assert(round(src, arena).equals(src), "it goes round as written")
-
-fn test_a_slide_or_chart_fence_stays_code() //<
-    //< A fence naming `kspage-slide` or `kspage-chart` is read as the code block it is, whole
+fn test_a_code_span_keeps_its_accent_outside(arena: Arena$@) //<
+    //< Inline code is the innermost mark
     //<
-    //< **No language is special**: the text is a code block whose language is that name, and it
-    //< goes round as written.
-    verdict.start("[kspage/markdown] a slide's or a chart's fence staying code test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
-    slide: = arena.text().s("```kspage-slide 620x120 #plan1\n")
-        .s("frame #one at 24,16 size 180x64 style cell\n").s("  the **reader**\n")
-        .s("tie #one -> #two style em\n").s("```\n").take()
-    chart: = arena.text().s("```kspage-chart bars 120 #sales1\n").s("detail!C2:C4\n").s("```\n")
-        .take()
-    stays_code(slide, 3, arena)
-    stays_code(chart, 1, arena)
-    verdict.pass("a slide's or a chart's fence stays a lump of code, whole.")
+    //< **Emphasis and a link go outside it** (`` **`x`** `` and `` [`x`](u) ``): inside, a mark is
+    //< plain text, so `` `**x**` `` would show the stars.
+    verdict.start("[kspage/markdown] inline code keeping its emphasis outside test...")
+    d: = Doc.new(arena)
+    p: = d.add_block("body")
+    p.add_text("plain ")
+    p.add_text("code", "code")
+    p.add_text(" and ")
+    p.add_text("bold", "code-bold")
+    p.add_text(" and ")
+    p.add_text("link.md", "code").href = "link.md"
+    p.add_text(" and ")
+    p.add_text("holding a ` inside", "code")
 
-fn test_the_reader_adds_the_styles_it_needs()
-    verdict.start("[kspage/markdown] the styles it needs being added test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
-    sheet: = bare_sheet(arena)
-    d: = markdown_read.read("## a deep title\n\n- a\n\n```\ncode\n```\n", sheet, arena)
-    assert(d.blocks.len == 3, "a heading, an item and a fence make three lumps")
-    // A heading is a style with no marker (the chapter number is in the text; a marker doubles it).
-    head: = sheet.find(d.blocks.get(0).style)
-    $level: Sz = 0
-    if s: = head
-        level = s.outline
-        assert(!s.marker.serialed(), "the heading's style holds no running-number mark")
-    assert(level == 2, "`##` becomes a style of depth 2")
-    verdict.pass("it looks by shape, and adds where there is none.")
+    out: = md_of(d, sample_sheet(arena), arena)
+    assert(base.has(out, "plain `code` and"), "plain inline code is fenced once")
+    assert(base.has(out, "**`bold`**"), "the emphasis goes outside the fence")
+    assert(base.has(out, "[`link.md`](link.md)"), "the link goes outside the fence")
+    assert(!base.has(out, "\\`"), "inline code is not escaped")
+    // **A text holding a `` ` `` gets a longer fence** (with the same count, it would close there).
+    assert(base.has(out, "``holding a ` inside``"), "a text holding a mark gets a longer fence")
+    verdict.pass("inline code is fenced innermost, and its fence outgrows what it holds.")
 
-fn test_an_existing_style_is_used_again()
-    verdict.start("[kspage/markdown] a style that is there being used again test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
-    sheet: = bare_sheet(arena)
-    mine: = sheet.add("my-heading", paint.inherit_all())
-    mine.outline = 1
-    before: = sheet.styles.len
-    d: = markdown_read.read("# title\n", sheet, arena)
-    assert(d.blocks.get(0).style.equals("my-heading"), "it uses the style whose depth matches")
-    assert(sheet.styles.len == before, "the styles do not grow")
-    verdict.pass("it looks by shape and not by name, so the styles do not grow per document.")
-
-fn test_a_fence_keeps_what_looks_like_markdown()
-    verdict.start("[kspage/markdown] what is inside a fence staying text test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
-    sheet: = bare_sheet(arena)
-    d: = markdown_read.read("```\n# not a heading\n- nor an item\n```\n", sheet, arena)
-    assert(d.blocks.len == 2, "inside the fence it becomes two paragraphs")
-    first: = d.blocks.get(0).inlines.get(0).showing()
-    // Inside a fence nothing is escaped, so a `#` is just text too.
-    assert(first.equals("# not a heading"), "the text inside goes in as it stands")
-    verdict.pass("the fence is taken first, so the marks inside it are text.")
-
-fn test_a_table_needs_a_rule_row()
-    verdict.start("[kspage/markdown] with no parting row it being no table test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
-    sheet: = bare_sheet(arena)
-    d: = markdown_read.read("| item | count |\n| pencil | 3 |\n", sheet, arena)
-    // As in GFM, a text with no separator row is not a table.
-    assert(d.blocks.len == 1, "the rows that ran on become one paragraph")
-    assert(d.blocks.get(0).children.len == 0, "they do not become cells")
-    verdict
-        .pass("a text that is no table goes in as a paragraph (there is no text it cannot read).")
-
-fn test_a_note_reaches_its_run()
-    verdict.start("[kspage/markdown] a note reaching its run test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
-    sheet: = bare_sheet(arena)
-    d: = markdown_read.read("body[^1]\n\n[^1]: the note's text\n", sheet, arena)
-    // The definition comes after the body, so it is collected before the mark is read.
-    n: = d.blocks.get(0).inlines.get(0)
-    assert(n.note.equals("the note's text"),
-        "the text of the definition goes on the run holding the mark")
-    // The definition's line itself does not go into the document (the notes list builds it).
-    assert(d.blocks.len == 2, "it becomes the two of the body and the list")
-    verdict.pass("the mark is the run's to hold, and the list builds the definition.")
-
-fn test_a_comment_and_an_escape_are_read_as_written()
-    verdict.start("[kspage/markdown] a comment and an escaped character test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
-    sheet: = bare_sheet(arena)
-    src: =
-        "<!-- kspage: a graph has no way of being written in Markdown -->\n\n2 \\* 3 and \
-            \\_underline\\_\n"
-    d: = markdown_read.read(src, sheet, arena)
-    // A comment is skipped (it is not recoverable contents).
-    assert(d.blocks.len == 1, "the comment does not go into the document")
-    got: = d.blocks.get(0).inlines.get(0).showing()
-    assert(got.equals("2 * 3 and _underline_"), "an escaped character is that character itself")
-    verdict.pass("a mark goes straight through, and an escaped character comes back into the text.")
-fn test_a_mark_without_a_meaning_stays_as_text() //<
-    //< **What would be lost with the text if it were dropped is kept as text.**
-    verdict.start("[kspage/markdown] a mark pointing nowhere being left as text test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
-    sheet: = bare_sheet(arena)
-    d: = markdown_read.read("body[^9] and ![](one.png)![](two.png)\n", sheet, arena)
-    b: = d.blocks.get(0)
-    // A mark with no definition does not become a note (its text is nowhere).
-    assert(b.inlines.get(0).note.len <= 0, "a mark with no definition does not become a note")
-    // Caution: The second picture does not overwrite it (the first picture would be silently lost).
-    assert(b.image.equals("one.png"), "the first picture is left")
-    $seen: = Str_builder.new()
-    defer seen.free()
-    for $i: Sz = 0; i < b.inlines.len; i += 1
-        seen.s(b.inlines.get(i).showing())
-    assert(base.has(seen.slice(), "[^9]"), "a mark pointing nowhere is left as text")
-    assert(base.has(seen.slice(), "![](two.png)"), "the second picture is left as text")
-    verdict.pass("a mark it cannot read is laid as text.")
-fn test_a_code_span_survives_the_round_trip() //<
-    //< Inline code (`` ` ``) survives the round trip as an inline.
-    //<
-    //< **It must not be read as text.** Read so, the `` ` `` would become a body character and be
-    //< escaped on the way back, so **the text would change over the round trip**. **Emphasis and a
-    //< link are outside it** (`` **`x`** `` and `` [`x`](u) ``): inside, a mark is plain text.
-    verdict.start("[kspage/markdown] a code text going round the trip test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
-
-    back: =
-        round("plain `code`, and **`bold`**, and *`slanted`*, and [`link.md`](link.md).\n", arena)
-    assert(base.has(back, "plain `code`, and"), "the plain code text comes back as it stands")
-    // **It must not come out as `****`** (inlines fenced one at a time), which means something
-    // else.
-    assert(base.has(back, "**`bold`**"), "the code inside bold comes back")
-    assert(!base.has(back, "****"), "the runs that ran on are not wrapped one at a time")
-    assert(base.has(back, "*`slanted`*"), "the code inside italic comes back")
-    assert(base.has(back, "[`link.md`](link.md)"), "the code inside a link comes back")
-    assert(!base.has(back, "\\`"), "a code text is not escaped")
-
-    // **A text holding a `` ` `` must get a longer fence** (with the same count, it would read as
-    // closing there).
-    nested: = round("``holding a ` inside`` text.\n", arena)
-    assert(base.has(nested, "``holding a ` inside``"),
-        "a code text holding a mark inside comes back too")
-    verdict.pass("a code text goes round the trip set with a strengthening and with a link alike.")
-
-fn test_a_link_stays_one_link_when_its_text_changes_accent() //<
+fn test_a_link_stays_one_link_when_its_text_changes_accent(arena: Arena$@) //<
     //< Even where the emphasis changes mid-text, a link stays one link
     //<
     //< **A link is outside the emphasis.** Write a link per break and the links multiply by the
     //< inlines the break made, which nobody notices on the screen (the text reads the same).
     verdict.start("[kspage/markdown] the strengthening changing mid-link test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
+    d: = Doc.new(arena)
+    p: = d.add_block("body")
+    p.add_text("before").href = "u"
+    p.add_text("bold", "strong").href = "u"
+    p.add_text("after").href = "u"
 
-    bold: = round("[before**bold**after](u)\n", arena)
-    assert(base.has(bold, "[before**bold**after](u)"), "bold in the middle does not part the link")
-    assert(!base.has(bold, "](u)["), "the link has not grown into two")
-
-    slant: = round("[before *slanted* after](u)\n", arena)
-    assert(base.has(slant, "[before *slanted* after](u)"),
-        "italic in the middle does not part the link either")
-
-    // **The fence goes outside the group, once.**
-    assert(!base.has(bold, "****"), "the runs that ran on are not wrapped one at a time")
-
-    // Emphasis that reaches one end also fits inside the link.
-    edge: = round("[**head**then tail](u)\n", arena)
-    assert(base.has(edge, "[**head**then tail](u)"), "a link whose head is bold is one too")
+    out: = md_of(d, sample_sheet(arena), arena)
+    assert(base.has(out, "[before**bold**after](u)"), "bold in the middle does not part the link")
+    assert(!base.has(out, "](u)["), "the link has not grown into two")
     verdict.pass("a link stays one even where the strengthening changes mid-text.")
 
-fn test_a_fence_keeps_the_language_it_names() //< a fence's language survives the round trip
+fn test_a_fence_names_its_language(arena: Arena$@) //<
+    //< A fence's style name is the language it declares, and the plain one declares none
     //<
     //< **It must not be lost.** Lost, ` ```kspl ` becomes ` ``` ` and **every tool that collects
     //< the source fences breaks there**.
-    verdict.start("[kspage/markdown] a fence's naming going round the trip test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
+    verdict.start("[kspage/markdown] a fence naming its language test...")
+    d: = Doc.new(arena)
+    d.add_block("kspl").add_text("fn main() {}")
+    d.add_block("body").add_text("text.")
+    d.add_block("code").add_text("a plain fence")
 
-    back: = round("```kspl\nfn main() {}\n```\n\ntext.\n\n```\na plain fence\n```\n", arena)
-    assert(base.has(back, "```kspl\n"), "the language it named comes back")
+    out: = md_of(d, sample_sheet(arena), arena)
+    assert(base.has(out, "```kspl\nfn main() {}\n```\n"), "the style's name is the language")
     // **No name appears on a fence that declares none** (not ```code from the style's name).
-    assert(base.has(back, "```\na plain fence"), "a fence that named none comes back naming none")
-    verdict.pass("a fence's naming is not lost, and does not grow where there was none.")
-fn test_a_divider_survives_and_keeps_fences_apart() //<
-    //< A divider line survives the round trip, and keeps neighbouring fences apart
+    assert(base.has(out, "```\na plain fence"), "the plain fence names none")
+    verdict.pass("a fence names its language, and names none where it has none.")
+
+fn test_a_column_keeps_its_alignment(arena: Arena$@) //<
+    //< The first row's cell styles give each column's alignment
     //<
-    //< **A divider is the model's part**: a block with no contents that collects none. The style
-    //< decides whether a line is drawn; one that draws none does not appear in the text.
-    verdict.start("[kspage/markdown] a parting going round the trip test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
+    //< **Left is the default and is written `---`.** The column decides the alignment, not each
+    //< cell, so a later row does not change it.
+    verdict.start("[kspage/markdown] a column's alignment test...")
+    d: = Doc.new(arena)
+    t: = d.add_block("table")
+    head: = t.add_child("row")
+    head.add_child("cell").add_text("name")
+    head.add_child("cell-right").add_text("count")
+    head.add_child("cell-center").add_text("middle")
+    row: = t.add_child("row")
+    row.add_child("cell-right").add_text("a")
+    row.add_child("cell-right").add_text("1")
+    row.add_child("cell").add_text("x")
 
-    back: = round("before.\n\n---\n\nafter.\n", arena)
-    assert(base.has(back, "\n---\n"), "the parting line comes back")
-    // **It must not become body text**, escaped into `\---`.
-    assert(!base.has(back, "\\---"), "the parting does not become an escaped body")
-
-    // **Fences of the same language separated by one empty line must come back as two**; joined,
-    // they would be one band on the screen too.
-    two: = round("```kspl\nfn a() {}\n```\n\n```kspl\nfn b() {}\n```\n", arena)
-    assert(count_of(two, "```kspl") == 2,
-        "neighbouring fences of the same language come back as two")
-    // What separates them is a divider that draws no line, so nothing is added to the text.
-    assert(!base.has(two, "---"), "a parting that only parts does not come out in the text")
-
-    // **An empty line inside a fence is not a divider** (it holds one empty inline).
-    blank: = round("```\na\n\nb\n```\n", arena)
-    assert(count_of(blank, "```") == 2, "an empty row inside a fence does not cut the fence")
-    verdict.pass("a parting goes round the trip, and keeps neighbouring fences apart.")
-
-priv fn count_of(text: U8[], part: U8[]): Sz
-    $n: Sz = 0
-    $at: Sz = 0
-    for at < text.len
-        got: = text.sub_from(at).find_str(part)
-        if got < 0
-            return n
-        n += 1
-        at += got + part.len
-    return n
-fn test_a_column_keeps_its_alignment() //< a column's alignment survives the round trip
-    //<
-    //< **An explicit left (`:--`) becomes the default**: it looks the same as `---`, and kept
-    //< separate the style table would grow by the number of cells.
-    verdict.start("[kspage/markdown] a column's alignment going round the trip test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
-
-    back: = round("| name | count | middle |\n| :-- | --: | :-: |\n| a | 1 | x |\n", arena)
-    assert(base.has(back, "--: |"), "right alignment comes back")
-    assert(base.has(back, ":-: |"), "the centre comes back")
-    assert(base.has(back, "| --- |"), "writing left out loud comes to what stands")
-    // **The column decides the alignment, not each cell.** Adding one row alone must not change a
-    // column's alignment.
-    assert(count_of(back, "--: |") == 1, "the alignment's text comes out in the parting row alone")
-    verdict
-        .pass("the centre and the right go round the trip, and left written out loud comes to what \
-            stands.")
+    out: = md_of(d, sample_sheet(arena), arena)
+    assert(base.has(out, "| --- | --: | :-: |\n"), "the parting row carries each column's side")
+    verdict.pass("each column's alignment comes from its first row.")

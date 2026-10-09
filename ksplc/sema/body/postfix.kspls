@@ -166,10 +166,8 @@ fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error
                     if !cast_resolved
                         // Caution: Show the name as written (`List<|I32|>`), not the instance's
                         // registered name (`std_ds_List_I32`), which the writer never wrote.
-                        $shown: = c.env.display_str(as_target_id)
-                        defer shown.free()
-                        msg: = c.clear_scratch().s("cannot cast to struct type '")
-                            .s(shown.slice())
+                        shown: = c.env.display(as_target_id)
+                        msg: = c.clear_scratch().s("cannot cast to struct type '").s(shown)
                             .s("'; structs do not support direct value casts (use a constructor, a \
                                 struct literal, or an 'operator.Cast' implementation instead)")
                             .slice()
@@ -341,12 +339,9 @@ priv fn check_scalar_cast_source(c: Sema_ctx$@, node: Ast_node$@, as_target_id: 
                 that holds the value"
     if what.len == 0
         return
-    $src_shown: = c.env.display_str(src_id)
-    defer src_shown.free()
-    $dst_shown: = c.env.display_str(as_target_id)
-    defer dst_shown.free()
-    c.clear_scratch().s("cannot cast '").s(src_shown.slice()).s("' to '").s(dst_shown.slice())
-        .s("': ").s(what)
+    src_shown: = c.env.display(src_id)
+    dst_shown: = c.env.display(as_target_id)
+    c.clear_scratch().s("cannot cast '").s(src_shown).s("' to '").s(dst_shown).s("': ").s(what)
     c.err(node, c.scratch.slice())
 
 priv fn is_aggregate_value(c: Sema_ctx$@, id: I32): Bool //<
@@ -383,12 +378,9 @@ priv fn check_slice_cast_source(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I
         check_slice_elem_size(c, node, as_target_id, src_id)
         check_slice_cast_writability(c, node, as_target_id)
         return
-    $src_shown: = c.env.display_str(src_id)
-    defer src_shown.free()
-    $dst_shown: = c.env.display_str(as_target_id)
-    defer dst_shown.free()
-    msg: = c.clear_scratch().s("cannot cast '").s(src_shown.slice()).s("' to slice type '")
-        .s(dst_shown.slice())
+    src_shown: = c.env.display(src_id)
+    dst_shown: = c.env.display(as_target_id)
+    msg: = c.clear_scratch().s("cannot cast '").s(src_shown).s("' to slice type '").s(dst_shown)
         .s("'; only a slice or a fixed-size array carries the pointer and length a slice needs. \
             Note that a prefix cast swallows the whole postfix chain, so 'T[]::x.f()' means \
             'T[]::(x.f())' — write '(T[]::x).f()' if you meant to cast the receiver").slice()
@@ -409,10 +401,8 @@ priv fn check_slice_cast_writability(c: Sema_ctx$@, node: Ast_node$@, as_target_
     if !is_literal && !c.root_binding_is_immutable(src, true)
         return
     what: = "a string literal" if is_literal else "a 'const' declaration"
-    $shown: = c.env.display_str(as_target_id)
-    defer shown.free()
-    msg: = c.clear_scratch().s("cannot cast ").s(what).s(" to the mutable slice type '")
-        .s(shown.slice())
+    shown: = c.env.display(as_target_id)
+    msg: = c.clear_scratch().s("cannot cast ").s(what).s(" to the mutable slice type '").s(shown)
         .s("'; the descriptor carries a writable pointer, and read-only storage ends up in \
             '.rodata' (ROM on a freestanding target), so writing through it faults with no \
             diagnostic. Copy into storage you own, or cast to the immutable slice type").slice()
@@ -440,12 +430,9 @@ priv fn check_slice_elem_size(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32
         c.record_folded(dst_elem, .size, dst_size, node)
         c.record_folded(src_elem, .size, src_size, node)
         return
-    $src_shown: = c.env.display_str(src_id)
-    defer src_shown.free()
-    $dst_shown: = c.env.display_str(as_target_id)
-    defer dst_shown.free()
-    msg: = c.clear_scratch().s("cannot cast '").s(src_shown.slice()).s("' to '")
-        .s(dst_shown.slice())
+    src_shown: = c.env.display(src_id)
+    dst_shown: = c.env.display(as_target_id)
+    msg: = c.clear_scratch().s("cannot cast '").s(src_shown).s("' to '").s(dst_shown)
         .s("': the element size changes (\{src_size\} -> \{dst_size\} bytes) but the length is \
             carried over unchanged, so the bounds check would allow reading past the end. Build the \
             descriptor yourself if you mean to reinterpret the bytes ('T$[]::{ .ptr = ..., .len = \
@@ -533,16 +520,15 @@ priv fn infer_postfix_array(c: Sema_ctx$@, node: Ast_node$@, target_id: I32, rec
         // The receiver has no length: a raw pointer, or a type that cannot be indexed.
         // Caution: Do not merge these two into one diagnostic. Only the former can be pointed to
         // `(p + i)$`; merged, the advice would offer a forbidden form as the fix.
-        $shown: = c.env.display_str(target_id)
-        defer shown.free()
+        shown: = c.env.display(target_id)
         if c.env.is_pointer(c.env.get_real_type(target_id))
             c.clear_scratch()
-                .s("cannot index '\{shown.slice()\}': it points at something that does not carry a \
-                    length, so the index cannot be bounds-checked. Write '(p + i)$' to walk a raw \
-                    pointer, or use a slice ('T$[]') which carries its length.")
+                .s("cannot index '\{shown\}': it points at something that does not carry a length, \
+                    so the index cannot be bounds-checked. Write '(p + i)$' to walk a raw pointer, \
+                    or use a slice ('T$[]') which carries its length.")
             c.err(node, c.scratch.slice())
         else
-            c.clear_scratch().s("type '\{shown.slice()\}' does not support indexing")
+            c.clear_scratch().s("type '\{shown\}' does not support indexing")
             c.err(node, c.scratch.slice())
         return I32::sema_type_env.Builtin_type_id.unknown
 

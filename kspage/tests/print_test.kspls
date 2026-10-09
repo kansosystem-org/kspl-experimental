@@ -25,11 +25,9 @@ priv fn paper(lines: Sz, arena: Arena$@): Sheet$@ //< one line is 19.2px
     sheet.paper.height = 19.2 * F32::lines
     return sheet
 
-fn test_without_a_page_height_nothing_is_split() //<
+fn test_without_a_page_height_nothing_is_split(arena: Arena$@) //<
     //< A document with no page height is one continuous run
     verdict.start("[kspage/print] with no page height test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     // A width of 32px = two characters. Six characters, so three lines.
     d.add_block("body").add_text("あいうえおか")
@@ -39,12 +37,10 @@ fn test_without_a_page_height_nothing_is_split() //<
     assert(base.near(page.boxes.get(2).rect.y, 38.4), "the third row is two rows lower down")
     verdict.pass("write no page height and it is one run, unsplit.")
 
-fn test_a_line_is_never_split_across_papers() //< it does not split mid-line
+fn test_a_line_is_never_split_across_papers(arena: Arena$@) //< it does not split mid-line
     //<
     //< A line that does not fit starts whole at the top of the next page.
     verdict.start("[kspage/print] not splitting mid-row test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     // Three paragraphs of two lines, so moving whole and splitting can be told apart.
     for $i: Sz = 0; i < 3; i += 1
@@ -57,12 +53,10 @@ fn test_a_line_is_never_split_across_papers() //< it does not split mid-line
     assert(base.near(page.boxes.get(4).rect.y, 76.8), "the third is from the third sheet's head")
     verdict.pass("a row does not cross a page, and starts from the next page's head.")
 
-fn test_a_block_that_fits_moves_whole() //< a block that fits on a page moves whole
+fn test_a_block_that_fits_moves_whole(arena: Arena$@) //< a block that fits on a page moves whole
     //<
     //< Split to leave one line alone, the reader could not follow the paragraph.
     verdict.start("[kspage/print] sending a lump that fits over whole test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     // A paragraph of one line and a paragraph of two. The page is two lines tall.
     d.add_block("body").add_text("あい")
@@ -78,13 +72,11 @@ fn test_a_block_that_fits_moves_whole() //< a block that fits on a page moves wh
     assert(base.near(page.boxes.get(2).rect.y, 57.6), "what carries on from it is on the same page")
     verdict.pass("a lump that fits a page is sent whole to the next page, unsplit.")
 
-fn test_a_block_taller_than_a_paper_is_not_moved() //<
+fn test_a_block_taller_than_a_paper_is_not_moved(arena: Arena$@) //<
     //< A block that does not fit on one page is not moved
     //<
     //< Moved, it would not fit either, and would only waste the rest of the page.
     verdict.start("[kspage/print] a lump that does not fit one sheet test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.add_block("body").add_text("あい")
     // A paragraph of four lines on a page of two, so it fits nowhere it could move.
@@ -99,12 +91,10 @@ fn test_a_block_taller_than_a_paper_is_not_moved() //<
     verdict
         .pass("a lump that does not fit one sheet is not sent, and is split at the grain of a row.")
 
-fn test_a_table_row_is_never_split() //< it does not split mid-table-row
+fn test_a_table_row_is_never_split(arena: Arena$@) //< it does not split mid-table-row
     //<
     //< Where a row crosses a page once laid out, it is laid out again.
     verdict.start("[kspage/print] a table's row not splitting test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = paper(3, arena)
     base.table_style(sheet)
@@ -123,11 +113,9 @@ fn test_a_table_row_is_never_split() //< it does not split mid-table-row
     assert(base.near(page.cells.get(1).rect.h, 38.4), "the height stays two rows")
     verdict.pass("a table's row does not cross a page, and is sent whole to the next page.")
 
-fn test_a_moved_block_leaves_no_panel_behind() //<
+fn test_a_moved_block_leaves_no_panel_behind(arena: Arena$@) //<
     //< A moved block's band is laid out again with it; left behind, the fill would be stranded
     verdict.start("[kspage/print] the band of a lump sent over not being left test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = paper(2, arena)
     sheet.add("lit", paint.inherit_all()).fill = .some(0xeeeeeeU32)
@@ -140,11 +128,9 @@ fn test_a_moved_block_leaves_no_panel_behind() //<
         "the band starts from the second sheet's head too")
     verdict.pass("the band of a lump sent over is not left on the page it came from.")
 
-fn test_margins_narrow_the_column_and_the_band() //<
+fn test_margins_narrow_the_column_and_the_band(arena: Arena$@) //<
     //< The margin narrows the column, and also lowers the height that fits on one page
     verdict.start("[kspage/print] the margin narrowing the column and the page's contents test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.add_block("body").add_text("あいうえおかきく")
     sheet: = Sheet.new(base.root_font(), arena)
@@ -167,14 +153,12 @@ fn test_margins_narrow_the_column_and_the_band() //<
         "the third row starts from the second sheet's head")
     verdict.pass("the margin narrows the column, and lowers the height that fits one page.")
 
-fn test_the_reading_width_stops_and_centers_the_column() //<
+fn test_the_reading_width_stops_and_centers_the_column(arena: Arena$@) //<
     //< The body's width limits the column there, and splits the rest evenly left and right
     //<
     //< **It has no effect where the paper's width is set**, or two settings would decide a line's
     //< length.
     verdict.start("[kspage/print] stopping the column at the body's width test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.add_block("body").add_text("あいうえおかきく")
     sheet: = Sheet.new(base.root_font(), arena)
@@ -207,13 +191,11 @@ fn test_the_reading_width_stops_and_centers_the_column() //<
         "then it is not moved in (taking off the margin is left to the printer)")
     verdict.pass("the body's width stops the column and parts the rest evenly left and right.")
 
-fn test_margins_taller_than_the_paper_stop_the_split() //<
+fn test_margins_taller_than_the_paper_stop_the_split(arena: Arena$@) //<
     //< Where the margins alone fill the page it does not split
     //<
     //< Moved, it would never fit, and it would loop forever.
     verdict.start("[kspage/print] where the margin fills the page test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.add_block("body").add_text("あいうえおか")
     sheet: = Sheet.new(base.root_font(), arena)
@@ -226,12 +208,10 @@ fn test_margins_taller_than_the_paper_stop_the_split() //<
     assert(base.near(page.boxes.get(2).rect.y, 38.4), "it stacks in one run, unsplit")
     verdict.pass("where the margin alone fills the page it does not split.")
 
-fn test_a_surface_is_never_split() //< a slide does not split
+fn test_a_surface_is_never_split(arena: Arena$@) //< a slide does not split
     //<
     //< Its size is known in advance, so where it does not fit it moves whole to the next page.
     verdict.start("[kspage/print] a slide not splitting test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = paper(4, arena)
     s: = sheet.add("slide", paint.inherit_all())
@@ -268,13 +248,11 @@ priv fn bordered(arena: Arena$@): Sheet$@ //< a page with margins
     sheet.paper.bottom = 19.2
     return sheet
 
-fn test_the_page_marks_are_filled_when_the_band_is_placed() //<
+fn test_the_page_marks_are_filled_when_the_band_is_placed(arena: Arena$@) //<
     //< The band's page mark is filled in at every layout
     //<
     //< **The document's text does not change** (it stays `{page}`).
     verdict.start("[kspage/print] the band's page mark test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.footer.inlines.get(0).insert(0, "{page}/{pages}")
 
@@ -291,12 +269,11 @@ fn test_the_page_marks_are_filled_when_the_band_is_placed() //<
         .pass("the band's mark is handed out every time it is laid, and the document's text does \
             not change.")
 
-fn test_the_band_sits_inside_the_paper_margins() //< the band sits inside the page's margin
+fn test_the_band_sits_inside_the_paper_margins(arena: Arena$@) //<
+    //< the band sits inside the page's margin
     //<
     //< **The coordinates are from the page's top left.**
     verdict.start("[kspage/print] where the band lives test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.header.inlines.get(0).insert(0, "あい")
     d.footer.inlines.get(0).insert(0, "うえ")
@@ -314,12 +291,10 @@ fn test_the_band_sits_inside_the_paper_margins() //< the band sits inside the pa
     verdict
         .pass("the band is laid inside the page's margin, with the page's top left as the origin.")
 
-fn test_an_empty_band_places_nothing() //< an empty band is not laid out
+fn test_an_empty_band_places_nothing(arena: Arena$@) //< an empty band is not laid out
     //<
     //< Lay out an empty band at the page's edge and the margin looks narrower by that much.
     verdict.start("[kspage/print] an empty band test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
 
     empty: = band(d, .header, bordered(arena), 1, 1, arena)
@@ -340,12 +315,10 @@ fn test_an_empty_band_places_nothing() //< an empty band is not laid out
     verdict
         .pass("on an empty band, a page with no margin, and a document with no page, no band is \
             laid.")
-fn test_a_picture_is_never_split() //< a picture does not split
+fn test_a_picture_is_never_split(arena: Arena$@) //< a picture does not split
     //<
     //< Its size is known in advance, so where it does not fit it moves whole to the next page.
     verdict.start("[kspage/print] a picture not splitting test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.add_block("body").add_text("あい")
     shot: = d.add_block("body")
@@ -367,14 +340,12 @@ fn test_a_picture_is_never_split() //< a picture does not split
     assert(base.near(next_top, 76.8), "a picture that does not fit is sent whole to the next page")
     verdict.pass("a picture does not split, and where it does not fit it is sent to the next page.")
 
-fn test_a_document_that_just_fits_is_one_paper() //<
+fn test_a_document_that_just_fits_is_one_paper(arena: Arena$@) //<
     //< A document that fits one page exactly is one page
     //<
     //< **Do not count the space after the last block** (`Page.height` includes it): 81.6px of
     //< contents on an 81.6px band would come out as **two** pages, the second blank.
     verdict.start("[kspage/print] the count of sheets of a document that fits exactly test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     for $i: Sz = 0; i < 3; i += 1
         d.add_block("body").add_text("\u3042\u3044")
@@ -401,11 +372,9 @@ fn test_a_document_that_just_fits_is_one_paper() //<
         .pass("a document that fits exactly is one sheet, the space behind does not grow it, and \
             what does not fit is counted.")
 
-fn test_a_zero_band_is_one_paper() //<
+fn test_a_zero_band_is_one_paper(arena: Arena$@) //<
     //< A band of 0 means no split, so the page count is 1 (nothing divides by 0)
     verdict.start("[kspage/print] one sheet where the band is 0 test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.add_block("body").add_text("abc")
     d.add_block("body").add_text("def")

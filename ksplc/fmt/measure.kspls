@@ -7,8 +7,9 @@ import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/literal" as base_literal
 import "ksplc/fmt/kinds" as fmt_kinds
 import "ksplc/fmt/source" { skip_space_from }
+import "ksplc/fmt/space" { join_string_lines }
 import "std/chars" // the one-character checks and cuts
-import "std/str" // `equals`
+import "std/str" { Str_builder } // and `equals`
 
 impl Ast_node
     fn get_assign_op_len(r: Ast_node$@, src: U8[]): Sz
@@ -65,6 +66,20 @@ impl Ast_node
             return 0
         return base_literal.literal_end(src, c_start) - c_start
 
+    fn get_string_width(r: Ast_node$@, src: U8[]): Sz //<
+        //< How wide the string the node opens is written: its joined spelling's length
+        //<
+        //< Caution: **Measure what the printer writes, not the source.** A literal continued with
+        //< `\` spans the line break and the next line's indent there, so a chain holding one looked
+        //< too wide to stay on its line, and the next run, reading the joined literal, put it back
+        //< (`join_string_lines` in `space.kspls`, which `write_token` lays out from).
+        span: = r.get_string_span(src)
+        $joined: = Str_builder.new()
+        defer joined.free()
+        if join_string_lines(U8[]::{ .ptr = src.ptr + r.loc.offset, .len = span }, joined@)
+            return joined.len
+        return span
+
     priv fn is_string_token(r: Ast_node$@): Bool //< a string or character literal, pieces and all
         return r.kind_id == .k_string || r.kind_id == .k_string_interp || r.kind_id == .k_char
 
@@ -111,7 +126,7 @@ impl Ast_node
             return 0
         kind: = r.kind_id
         if kind == .k_string_interp || kind == .k_string
-            return r.get_string_span(src)
+            return r.get_string_width(src)
 
         // A stmt_block and the like always span several lines, so this only reports "large" (which
         // tips the caller's wrapping decision to the safe side).

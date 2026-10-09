@@ -6,7 +6,6 @@
 //< arena away.
 //< `Inline` is split out into `run.kspls` to keep each file under 1000 lines (the reason is at
 //< its top); a file that needs it by name imports that one.
-import "kspage/model/locate" + { Path }
 // How one run is stored. **The reference goes one way only** (`run.kspls` points at no `Block`).
 import "kspage/model/run" + { Inline }
 import "std/ds" { List }
@@ -32,8 +31,8 @@ struct Block
     name: U8[] //<
         //< The name that identifies this one block
         //<
-        //< In HTML, `style` is the class and this is the id; it names one thing, so it is not
-        //< shared. **A name is used in three places**: a formula points at a table
+        //< `style` is shared by many blocks; this names one, so it is not shared. **A name is used
+        //< in three places**: a formula points at a table
         //< (`expr/calc.kspls`), a line connects a slide's frames (`kspage/absolute`), and the body
         //< refers to a block that has a running number (`Inline.refers`).
     inlines: List<|Inline$@|>$@ //< the contents held directly
@@ -564,100 +563,6 @@ impl Doc
         for $i: Sz = 0; i < r.blocks.len; i += 1
             scan_block(s@, r.blocks.get(i))
         return Neighbors::{ .prev = s.prev, .next = s.next }
-
-    fn path_of(r: Self$@, cur: Inline$@): Path //< the path that points at cur
-        //<
-        //< **Where `found` is false the other fields are not read.**
-        $out: Path = locate.no_path(r.arena)
-        for $i: Sz = 0; i < r.blocks.len; i += 1
-            if locate.seek_path(r.blocks.get(i), cur, out@)
-                out.blocks.insert(0, i)
-                return out
-        return out
-
-    fn path_of_block(r: Self$@, b: Block$@, at: Sz): Path //<
-        //< The path that points at b, with at set as the text's index
-        //<
-        //< It points at the block so that it can carry adding a run (the text is not there yet).
-        $out: Path = locate.no_path(r.arena)
-        for $i: Sz = 0; i < r.blocks.len; i += 1
-            if locate.seek_block(r.blocks.get(i), b, out@)
-                out.blocks.insert(0, i)
-                out.run = at
-                return out
-        return out
-
-    priv fn walked(r: Self$@, p: Path, deep: Sz): Owner //< where the path leads after deep levels
-        //<
-        //< **Where `block` is null and `found` is true it is the document's top level** (the same
-        //< promise as `parent_of`). `index` is the index at the next level, and -1 where the path
-        //< has been walked to the end.
-        if !p.found || deep < 0 || deep > p.blocks.len
-            return no_owner()
-        $b: Block$@ = null
-        for $i: Sz = 0; i < deep; i += 1
-            k: = p.blocks.get(i)
-            kin: = r.kin_of(b)
-            if k < 0 || k >= kin.len
-                return no_owner()
-            b = kin.get(k)
-        $at: Sz = -1
-        if deep < p.blocks.len
-            at = p.blocks.get(deep)
-        return Owner::{ .block = b, .index = at, .found = true }
-
-    fn sheet_path(r: Self$@): Path //< the path that points at the style table
-        //<
-        //< **It points nowhere in the tree** (its list of indices is empty): styles are found by
-        //< name.
-        $out: Path = locate.no_path(r.arena)
-        out.found = true
-        return out
-
-    fn path_of_slot(r: Self$@, parent: Block$@, at: Sz): Path //<
-        //< The path that points at parent's at-th child (`run` is -1)
-        //<
-        //< **It can point at a position that does not exist yet** (it is used to point at where a
-        //< block is inserted). Where parent is null it is the document's top level.
-        if parent == null
-            $top: Path = locate.no_path(r.arena)
-            top.blocks.push(at)
-            top.found = true
-            return top
-        out: = r.path_of_block(parent, -1)
-        if out.found
-            out.blocks.push(at)
-        return out
-
-    fn block_at(r: Self$@, p: Path): Block$@? //< the block the path points at
-        //<
-        //< **Where the tree has changed it points somewhere else** (or nowhere).
-        if p.blocks.len <= 0
-            return .none
-        got: = r.walked(p, p.blocks.len)
-        if !got.found
-            return .none
-        return .some(got.block)
-
-    fn slot_of(r: Self$@, p: Path): Owner //<
-        //< The parent block of where the path points, and the index
-        //<
-        //< **The last level may be a position that does not exist yet** (where a thing is
-        //< inserted); the caller checks whether it is in range. **Where `block` is null and `found`
-        //< is true it is the document's top level.**
-        if p.blocks.len <= 0
-            return no_owner()
-        return r.walked(p, p.blocks.len - 1)
-
-    fn inline_at(r: Self$@, p: Path): Inline$@? //< the text the path points at
-        //<
-        //< It has the same caveat as `block_at`.
-        if p.run < 0
-            return .none
-        if b: = r.block_at(p)
-            if p.run < b.inlines.len
-                return .some(b.inlines.get(p.run))
-        return .none
 
     fn parent_of(r: Self$@, b: Block$@): Owner //<
         //< b's parent, and b's index among its children

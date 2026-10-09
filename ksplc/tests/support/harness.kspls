@@ -43,6 +43,12 @@ fn begin(chunk_size: Sz): Arena$@ //< starts a suite, and returns the arena it a
     more = rest.slice()
     fs.mkdir_all(scratch) catch panic("the scratch place cannot be made")
     refuse_inside_package(scratch)
+    // **This run works in a folder of its own**: what an earlier run left where it could not be
+    // deleted (the Makefile empties the place where it can) is never read as this run's.
+    scratch = fs.mkdir_unique(scratch, "run_", suite_arena) catch
+        fallback ""
+    if scratch.len == 0
+        panic("this run's folder in the scratch place cannot be made")
     std_path = settle_std_dir()
     return suite_arena
 
@@ -166,12 +172,12 @@ fn cc_target(): U8[] //< the C compiler's target triple (`cc -dumpmachine`), emp
 // Scratch
 // ==========================================
 
-fn tmp_dir(): U8[] //< this suite's scratch directory, emptied by the Makefile before each run
+fn tmp_dir(): U8[] //< this run's scratch directory, a fresh folder inside the place it was given
     return scratch
 
 fn sandbox(name: U8[]): U8[]!fs.Fs_error //< a directory of its own for one case, made fresh
     //<
-    //< Nothing removes it: the Makefile empties the whole scratch directory before the next run.
+    //< Nothing removes it: the Makefile empties the whole scratch place before the next run.
     return fs.mkdir_unique(scratch, suite_arena.text().s(name).c('_').take(), suite_arena)
 
 // ==========================================

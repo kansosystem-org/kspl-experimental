@@ -371,6 +371,8 @@ enum Shade
 | 2 | The line ends in an operator, `,`, `=` or `:`, or in `as`, `in` or `catch` | `total: = a +` with `b` on the next line |
 | 3 | The next line starts with `.`, a closing bracket or an operator | A chain of calls with each `.s(…)` on a line of its own |
 
+**A comment line or a blank line in between changes nothing**: rules 2 and 3 read the next line with code, so a comment may stand between an `=` and its value, or between two links of a chain.
+
 **After `catch`, the column decides.** After `f() catch` or `f() catch e`, a next line at the statement's own column continues the statement, and a deeper line opens the handler (the code run on an error, [8.3](#83-error-handling)). So a line is not broken right after `catch`: `ksplc fmt` lets such a line run past the width instead.
 
 **A line holding only `return`, `throw` or `fallback` is a statement of its own.** A `!` at a line's end is a rethrow (`f()!`, passing an error on to the caller) and ends the statement; a `!` at a line's start continues the line before (a wrapped `T!E` type).

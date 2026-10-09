@@ -363,42 +363,28 @@ impl Editor
             r.undone.push(r.open)
         r.open = null
 
-    fn forget_history(r: Self$@) //< throws the whole undo record away
-        //<
-        //< It is called only when the document has been reloaded (what is remembered points at the
-        //< old document).
-        r.open = null
-        r.undone.len = 0
-        r.redone.len = 0
-
     fn undo(r: Self$@): Bool //<
         //< Goes back one step, and returns true if it did.
         //<
         //< Caution: **Do not undo while read-only.** The `do_*` below stop, but the record alone
         //< would move a step and report "undone" when nothing has changed.
-        r.break_group()
-        if r.undone.len <= 0 || r.shut()
-            return false
-        st: = r.undone.get(r.undone.len - 1)
-        r.undone.len -= 1
-        back: = new_step(st.after, r.arena)
-        apply_inverse(r, st, back)
-        back.after = st.before
-        r.redone.push(back)
-        r.caret = st.before
-        return true
+        return r.step_over(r.undone, r.redone)
 
     fn redo(r: Self$@): Bool //< redoes one undone step
         //<
         //< True if redone.
+        return r.step_over(r.redone, r.undone)
+
+    priv fn step_over(r: Self$@, from: List<|Step$@|>$@, to: List<|Step$@|>$@): Bool //<
+        //< Reverses the last step of `from` and records the reversal in `to` (undo and redo alike)
         r.break_group()
-        if r.redone.len <= 0 || r.shut()
+        if from.len <= 0 || r.shut()
             return false
-        st: = r.redone.get(r.redone.len - 1)
-        r.redone.len -= 1
-        forward: = new_step(st.after, r.arena)
-        apply_inverse(r, st, forward)
-        forward.after = st.before
-        r.undone.push(forward)
+        st: = from.get(from.len - 1)
+        from.len -= 1
+        back: = new_step(st.after, r.arena)
+        apply_inverse(r, st, back)
+        back.after = st.before
+        to.push(back)
         r.caret = st.before
         return true

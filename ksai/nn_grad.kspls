@@ -205,43 +205,6 @@ impl<|T|> nn.Rms_norm<|T|>
         u.update(r.weight, g.dw)
 
 impl<|T|> nn.Embedding<|T|>
-    pub fn backward( //< one SGD step on the single row for one token
-        //<
-        //< The input layer: there is no earlier layer to pass a gradient to.
-        r: Self$@,
-        token_id: I32, //< which row moves; a token outside the vocabulary stops the run
-        dy: Tensor<|T|>, //< the gradient of that row's output
-        lr: F64, //< the learning rate
-    )
-        // As on the forward side (`nn.kspls`): unchecked, `token_id` can make an out-of-bounds
-        // write.
-        if token_id < 0 || Sz::token_id >= r.weight.shape[0]
-            panic("Embedding.backward: token_id out of bounds")
-        dim: = r.weight.shape[1]
-        offset: = Sz::token_id * dim
-        lr_t: = T::lr
-        for i in Range.asc(dim)
-            (r.weight.data + offset + i)$ =
-                (r.weight.data + offset + i)$ - lr_t * (dy.data + i)$
-    pub fn backward_seq( //< the same over a whole sequence, one row per position
-        r: Self$@,
-        tokens: I32$[], //< which row moves at each position; a token outside the vocabulary stops it
-        count: Sz, //< how many positions to use, counted from the start
-        dx: Tensor<|T|>, //< the gradient of each position's output, one row each
-        lr: F64, //< the learning rate
-    )
-        dim: = r.weight.shape[1]
-        vocab_size: = r.weight.shape[0]
-        lr_t: = T::lr
-        for i in Range.asc(count)
-            token_id: = (tokens.ptr + i)$
-            if token_id < 0 || Sz::token_id >= vocab_size
-                panic("Embedding.backward_seq: token_id out of bounds")
-            woff: = Sz::token_id * dim
-            doff: = i * dim
-            for j in Range.asc(dim)
-                (r.weight.data + woff + j)$ =
-                    (r.weight.data + woff + j)$ - lr_t * (dx.data + doff + j)$
     pub fn backward_seq_grads( //<
         //< the whole table's gradient: each position's row is added into its token's row
         //<

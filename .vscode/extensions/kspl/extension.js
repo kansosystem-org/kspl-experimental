@@ -504,12 +504,8 @@ exports.activate = function (context) {
                     );
                     return new vsc.Location(defUri, range);
                 }
-
-                const ident = getIdentifierAtPosition(document, position);
-                if (!ident) return null;
-
-                const def = await findDefinition(document, ident.word, token);
-                if (def) return new vsc.Location(def.uri, def.position);
+                // **No guess where the server knows none**: a text search lands on another thing of
+                // the same name, shown with the same confidence as a real answer.
                 return null;
             }
         })),
@@ -538,7 +534,16 @@ exports.activate = function (context) {
         sendDidOpenOnce(editor.document);
     });
     context.subscriptions.push(
-        track(vsc.languages.registerDocumentSymbolProvider(selector, new KansoDocumentSymbolProvider())),
+        // The outline is the server's, read from the syntax tree it already keeps for the document
+        // (`ksplc/lsp/outline.kspls`): no guess from the text, and nothing parsed twice.
+        track(vsc.languages.registerDocumentSymbolProvider(selector, {
+            async provideDocumentSymbols(document, token) {
+                const result = await sendRequest("textDocument/documentSymbol", {
+                    textDocument: { uri: getRelativeUri(document.uri) }
+                }, token);
+                return Array.isArray(result) ? result.map(toDocumentSymbol) : [];
+            }
+        })),
         // The list of what can be written here.
         // **Register no trigger character.** The server declares none on purpose: a declared `.`
         // puts the list up unasked, this feature's most frequent complaint.
@@ -601,7 +606,7 @@ exports.activate = function (context) {
                         let uri = resolveUri(r.uri);
                         let range = new vsc.Range(r.range.start.line, r.range.start.character, r.range.end.line, r.range.end.character);
                         let sRange = new vsc.Range(r.selectionRange.start.line, r.selectionRange.start.character, r.selectionRange.end.line, r.selectionRange.end.character);
-                        let item = new vsc.CallHierarchyItem(r.kind || vsc.SymbolKind.Function, r.name, r.detail || "", uri, range, sRange);
+                        let item = new vsc.CallHierarchyItem(vscodeKind(r.kind), r.name, r.detail || "", uri, range, sRange);
                         item.data = r.data;
                         return item;
                     });
@@ -623,7 +628,7 @@ exports.activate = function (context) {
                         let uri = resolveUri(r.uri);
                         let range = new vsc.Range(r.range.start.line, r.range.start.character, r.range.end.line, r.range.end.character);
                         let sRange = new vsc.Range(r.selectionRange.start.line, r.selectionRange.start.character, r.selectionRange.end.line, r.selectionRange.end.character);
-                        let callerItem = new vsc.CallHierarchyItem(r.kind || vsc.SymbolKind.Function, r.name, r.detail || "", uri, range, sRange);
+                        let callerItem = new vsc.CallHierarchyItem(vscodeKind(r.kind), r.name, r.detail || "", uri, range, sRange);
                         callerItem.data = r.data;
                         let fromRanges = inc.fromRanges.map(fr => new vsc.Range(fr.start.line, fr.start.character, fr.end.line, fr.end.character));
                         return new vsc.CallHierarchyIncomingCall(callerItem, fromRanges);
@@ -646,7 +651,7 @@ exports.activate = function (context) {
                         let uri = resolveUri(r.uri);
                         let range = new vsc.Range(r.range.start.line, r.range.start.character, r.range.end.line, r.range.end.character);
                         let sRange = new vsc.Range(r.selectionRange.start.line, r.selectionRange.start.character, r.selectionRange.end.line, r.selectionRange.end.character);
-                        let calleeItem = new vsc.CallHierarchyItem(r.kind || vsc.SymbolKind.Function, r.name, r.detail || "", uri, range, sRange);
+                        let calleeItem = new vsc.CallHierarchyItem(vscodeKind(r.kind), r.name, r.detail || "", uri, range, sRange);
                         calleeItem.data = r.data;
                         let fromRanges = out.fromRanges.map(fr => new vsc.Range(fr.start.line, fr.start.character, fr.end.line, fr.end.character));
                         return new vsc.CallHierarchyOutgoingCall(calleeItem, fromRanges);
@@ -711,128 +716,19 @@ function getIdentifierAtPosition(document, position) {
     return { word: document.getText(wordRange), range: wordRange };
 }
 
-// The line and character an offset falls on. **Counted here** because the file below is read as
-// bytes and never becomes a document, so there is no `positionAt` to ask. A `Position`'s character
-// is in UTF-16 units, which is what a JavaScript string index already is.
-function positionOf(text, offset) {
-    const before = text.slice(0, offset);
-    const line = (before.match(/\n/g) || []).length;
-    return new vsc.Position(line, offset - before.lastIndexOf("\n") - 1);
+// A symbol kind from the server as VS Code numbers it; a function where the server sent none.
+// Caution: **The protocol counts symbol kinds from 1, VS Code's enum from 0**, so the number is one
+// lower here; passed as it is, a function would show as a variable. **Every answer that carries a
+// kind goes through here** (the outline and the call hierarchy alike).
+function vscodeKind(kind) {
+    return kind ? kind - 1 : vsc.SymbolKind.Function;
 }
 
-// The words the language spells itself, which no file declares. **The fallback below must not go
-// looking for one**: its patterns are loose (`^\\s*else\\b` matches a plain `else` line in the
-// indented notation), so a keyword press lands in an unrelated file, or reads every source in the
-// tree for an answer that cannot exist.
-// Note: **The compiler keeps no single keyword table** (each parse site matches its own), so this
-// list is the extension's own; `tests/support/conventions_lsp.kspls` holds it against the grammar
-// that colours these same words.
-const KSPL_WORDS = new Set([
-    "if", "else", "for", "in", "break", "continue", "return", "throw", "catch", "fallback",
-    "switch", "case", "default", "defer", "import", "extern", "embed", "as",
-    "fn", "struct", "enum", "impl", "typedef", "trait",
-    "pub", "priv", "const",
-    "sizeof", "offsetof",
-    "true", "false", "null"
-]);
-
-function getMaskedText(text) {
-    const regex = /"""[\s\S]*?"""|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\/\*[\s\S]*?\*\/|\/\/.*/g;
-    return text.replace(regex, m => m.replace(/[^\r\n]/g, ' '));
-}
-
-async function findDefinition(document, word, token) {
-    // Declared nowhere (see KSPL_WORDS), so the search below can only cost time or land wrong.
-    if (KSPL_WORDS.has(word)) return null;
-    const structFieldRegex = new RegExp(`^\\s*(?:pub\\s+)?${word}\\s*:\\s*[A-Za-z_]`, 'm');
-    const keywordDefRegex = new RegExp(`(?:^|\\s)(?:(?:pub\\s+|priv\\s+)?)(?:fn|struct|enum|impl|typedef|const)(?:\\s*<\\|[\\s\\S]*?\\|>)?\\s+(?:[a-zA-Z_]\\w*\\s*,\\s*)*${word}\\b`, 'm');
-    const argRegex = new RegExp(`\\b${word}\\s*:\\s*[A-Za-z_]`, 'm');
-    const enumVariantRegex = new RegExp(`^\\s*${word}\\b(?:\\s*\\([^)]*\\))?(?:\\s*=\\s*[^;#]+)?\\s*(?:#.*)?\\s*;?`, 'm');
-
-    const regexes = [keywordDefRegex, argRegex, structFieldRegex, enumVariantRegex];
-    const text = getMaskedText(document.getText());
-    
-    for (const regex of regexes) {
-        let match = text.match(regex);
-        if (match) {
-            const targetPos = document.positionAt(match.index + match[0].indexOf(word));
-            return { uri: document.uri, position: targetPos };
-        }
-    }
-
-    // Caution: **Read the bytes; do not open the file as a document.** `openTextDocument` registers
-    // it with the editor, `onDidOpenTextDocument` fires, this side sends a `didOpen`, and each
-    // `didOpen` has the language server analyse that file's whole import tree, so one lookup turns
-    // into hundreds and everything the reader does next queues behind them.
-    // **Look at the token on every turn.** The editor does not wait for a reader who moved on, but
-    // this loop would read on to the last file, piling reads behind what they do next.
-    const decoder = new TextDecoder();
-    const files = await vsc.workspace.findFiles('**/*.{kspls,kspl}', '**/out/**');
-    for (const file of files) {
-        if (token && token.isCancellationRequested) return null;
-        if (file.fsPath === document.uri.fsPath) continue;
-        try {
-            const raw = decoder.decode(await vsc.workspace.fs.readFile(file));
-            const docText = getMaskedText(raw);
-            for (const regex of regexes) {
-                const m = docText.match(regex);
-                if (m) {
-                    const at = m.index + m[0].indexOf(word);
-                    return { uri: file, position: positionOf(docText, at) };
-                }
-            }
-        } catch (e) {}
-    }
-    return null;
-}
-
-class KansoDocumentSymbolProvider {
-    provideDocumentSymbols(document, token) {
-        const symbols = [];
-        const maskedText = getMaskedText(document.getText());
-        const regex = /(?:(?:^|\s)(?:(?:pub|priv)\s+)?(fn|struct|enum|impl|typedef|const)(?:\s*<\|[\s\S]*?\|>)?\s+([a-zA-Z_]\w*))|([{}])/gm;
-        let match;
-        const stack = [];         
-        let pendingSymbol = null;
-        while ((match = regex.exec(maskedText)) !== null) {
-            const keyword = match[1];
-            const name = match[2];
-            const brace = match[3];
-            const pos = document.positionAt(match.index);
-            if (keyword && name) {
-                let kind = vsc.SymbolKind.Variable;
-                let isContainer = false; 
-                if (keyword === "fn") { kind = vsc.SymbolKind.Function; isContainer = true; }
-                else if (keyword === "struct") { kind = vsc.SymbolKind.Struct; isContainer = true; }
-                else if (keyword === "enum") { kind = vsc.SymbolKind.Enum; isContainer = true; }
-                else if (keyword === "impl") { kind = vsc.SymbolKind.Class; isContainer = true; }
-                else if (keyword === "typedef") { kind = vsc.SymbolKind.TypeParameter; }
-                else if (keyword === "const") { kind = vsc.SymbolKind.Constant; }
-                
-                const nameIndex = match[0].lastIndexOf(name);
-                const selectionRange = new vsc.Range(document.positionAt(match.index + nameIndex), document.positionAt(match.index + nameIndex + name.length));
-                const range = new vsc.Range(pos, document.positionAt(match.index + match[0].length));
-                const symbol = new vsc.DocumentSymbol(name, keyword, kind, range, selectionRange);
-                if (pendingSymbol) { this.addSymbolToTree(symbols, stack, pendingSymbol); pendingSymbol = null; }
-                if (isContainer) { pendingSymbol = symbol; } else { this.addSymbolToTree(symbols, stack, symbol); }
-            } else if (brace === '{') {
-                if (pendingSymbol) { this.addSymbolToTree(symbols, stack, pendingSymbol); stack.push(pendingSymbol); pendingSymbol = null; }
-                else { stack.push(null); }
-            } else if (brace === '}') {
-                if (pendingSymbol) { this.addSymbolToTree(symbols, stack, pendingSymbol); pendingSymbol = null; }
-                if (stack.length > 0) {
-                    const poppedSymbol = stack.pop();
-                    if (poppedSymbol) { poppedSymbol.range = new vsc.Range(poppedSymbol.range.start, document.positionAt(match.index + 1)); }
-                }
-            }
-        }
-        if (pendingSymbol) this.addSymbolToTree(symbols, stack, pendingSymbol);
-        return symbols;
-    }
-    addSymbolToTree(rootSymbols, stack, symbol) {
-        for (let i = stack.length - 1; i >= 0; i--) {
-            if (stack[i] !== null) { stack[i].children.push(symbol); return; }
-        }
-        rootSymbols.push(symbol);
-    }
+// One `DocumentSymbol` of the server's answer, its children turned likewise.
+function toDocumentSymbol(said) {
+    const range = (r) => new vsc.Range(r.start.line, r.start.character, r.end.line, r.end.character);
+    const symbol = new vsc.DocumentSymbol(said.name, "", vscodeKind(said.kind), range(said.range),
+        range(said.selectionRange));
+    symbol.children = (said.children || []).map(toDocumentSymbol);
+    return symbol;
 }

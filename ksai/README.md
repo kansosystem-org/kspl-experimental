@@ -151,8 +151,8 @@ The bundled weights `examples/llama_engine/mini_llama.safetensors` (vocabulary 1
 
 | Gate | What it uses them for |
 | :-- | :-- |
-| `make run` (CI's AI step) | `llama_engine` really trains, and reports for itself that the loss fell |
-| `make test-extract` (runs this folder's `make test` from a copy) | `llama_engine` trains from a folder holding nothing else. `qwen_infer` reads small Qwen-shaped weights written by a fixed formula and gives the reference answers ([`tests/examples_qwen.kspls`](tests/examples_qwen.kspls)). `fim_coder` trains a few steps on a corpus written on the spot, writes the same weights on one thread and two, and answers a hole ([`tests/examples_fim.kspls`](tests/examples_fim.kspls)) |
+| `make run` (CI's AI step on macOS) | `llama_engine` really trains, and reports for itself that the loss fell |
+| `make test-extract` (runs this folder's `make test` from a copy) | `llama_engine` trains from a folder holding nothing else (Linux and Windows run this in place of `make run`). `qwen_infer` reads small Qwen-shaped weights written by a fixed formula and gives the reference answers ([`tests/examples_qwen.kspls`](tests/examples_qwen.kspls)). `fim_coder` trains a few steps on a corpus written on the spot, writes the same weights on one thread and two, and answers a hole ([`tests/examples_fim.kspls`](tests/examples_fim.kspls)) |
 | `make test-simd` | Compiles `llama_engine` and `qwen_infer` to C and checks that each `ksai` loop whose comment names it auto-vectorizes at `-O3` |
 | `make lint` | Every example's `main.kspls` is in `LINT_TARGETS` (`mk/lint.mk`) |
 | `make test-ksos-link` / `make test-ksos-qemu` | `ksos`'s Cortex-M demo `embed`s the weights, bringing trained weights into an environment with no file system |

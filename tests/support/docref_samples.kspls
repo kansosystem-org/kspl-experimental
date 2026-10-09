@@ -309,20 +309,26 @@ fn quoted_head_defects(arena: Arena$@): List<|U8[]|> //< the samples the heading
                 .push(arena.text().s("'").s(s.text).s("' was judged wrong").take())
     return bad
 
+priv fn note_mismatch(bad: List<|U8[]|>$@, text: U8[], want: U8[], got: U8[], arena: Arena$@) //<
+    //< Records that `text` gave `got` where `want` was due, unless they agree
+    if !got.equals(want)
+        bad
+            .push(arena.text().s("'\{text\}' should give '\{want\}' but gave '\{got\}'").take())
+
+priv fn pairs_of(hits: List<|refs.Hit|>, arena: Arena$@): U8[] //<
+    //< the hits as "text extra", spaced
+    got: = arena.text()
+    for j in Range.asc(hits.len)
+        h: = hits.get(j)
+        got.s(" " if j > 0 else "").s(h.text).s(" ").s(h.extra)
+    return got.take()
+
 fn quote_defects(arena: Arena$@): List<|U8[]|> //<
     //< Passes each sample to cite and checks the "path and name" pairs picked up
     $bad: = List<|U8[]|>.new(arena)
     for s in quote_samples
         hits: = cite.find_doc_quotes(s.text, U8[][]::sample_dirs, arena)
-        got: = arena.text()
-        for j in Range.asc(hits.len)
-            h: = hits.get(j)
-            got.s(" " if j > 0 else "").s(h.text).s(" ").s(h.extra)
-        line: = got.take()
-        if !line.equals(s.want)
-            bad
-                .push(arena.text().s("'").s(s.text).s("' should give '").s(s.want).s("' but gave '")
-                .s(line).c('\'').take())
+        note_mismatch(bad@, s.text, s.want, pairs_of(hits, arena), arena)
     return bad
 
 struct Own_sample //<
@@ -378,15 +384,7 @@ fn section_defects(arena: Arena$@): List<|U8[]|> //<
     $bad: = List<|U8[]|>.new(arena)
     for s in sec_samples
         hits: = cite.find_sections(s.text, U8[][]::sample_dirs, arena)
-        got: = arena.text()
-        for j in Range.asc(hits.len)
-            h: = hits.get(j)
-            got.s(" " if j > 0 else "").s(h.text).s(" ").s(h.extra)
-        line: = got.take()
-        if !line.equals(s.want)
-            bad
-                .push(arena.text().s("'").s(s.text).s("' should give '").s(s.want).s("' but gave '")
-                .s(line).c('\'').take())
+        note_mismatch(bad@, s.text, s.want, pairs_of(hits, arena), arena)
     return bad
 
 fn symbol_defects(arena: Arena$@): List<|U8[]|> //<
@@ -424,10 +422,7 @@ fn sym_word_defects(arena: Arena$@): List<|U8[]|> //<
         if member.len > 0
             got.s(" ").s(member)
         words: = got.take()
-        if !words.equals(s.want)
-            bad
-                .push(arena.text().s("'").s(s.text).s("' should give '").s(s.want).s("' but gave '")
-                .s(words).s("'").take())
+        note_mismatch(bad@, s.text, s.want, words, arena)
     return bad
 
 struct Kspage_link_sample //<
@@ -479,10 +474,7 @@ fn kspage_link_defects(arena: Arena$@): List<|U8[]|> //<
             if h.extra.len > 0
                 got.c('#').s(h.extra)
         line: = got.take()
-        if !line.equals(s.want)
-            bad
-                .push(arena.text().s("'").s(s.text).s("' should give '").s(s.want).s("' but gave '")
-                .s(line).c('\'').take())
+        note_mismatch(bad@, s.text, s.want, line, arena)
     return bad
 
 struct Md_link_sample //<
@@ -518,10 +510,7 @@ fn md_link_defects(arena: Arena$@): List<|U8[]|> //<
             got.s("" if first else " ").s(h.text)
             first = false
         line: = got.take()
-        if !line.equals(s.want)
-            bad
-                .push(arena.text().s("'").s(s.text).s("' should give '").s(s.want).s("' but gave '")
-                .s(line).c('\'').take())
+        note_mismatch(bad@, s.text, s.want, line, arena)
     return bad
 
 // ==========================================

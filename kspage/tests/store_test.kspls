@@ -113,10 +113,8 @@ priv fn sample_doc(arena: Arena$@): Doc$@ //<
     d.footer.inlines.get(0).insert(0, "{page}/{pages}")
     return d
 
-fn test_a_document_survives_the_round_trip()
+fn test_a_document_survives_the_round_trip(arena: Arena$@)
     verdict.start("[kspage/store] the text not changing over the round trip test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
     sheet: = sample_sheet(arena)
     d: = sample_doc(arena)
 
@@ -133,10 +131,8 @@ fn test_a_document_survives_the_round_trip()
     assert(same, "written, read and written again it comes out the same text")
     verdict.pass("over a round trip the text does not change by one character.")
 
-fn test_the_reloaded_document_lays_out_the_same()
+fn test_the_reloaded_document_lays_out_the_same(arena: Arena$@)
     verdict.start("[kspage/store] being laid in the same places after a reading back test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
     sheet: = sample_sheet(arena)
     d: = sample_doc(arena)
     back: = base.round_trip(d, sheet, arena)
@@ -166,12 +162,10 @@ priv fn family_is_unset(sheet: Sheet$@, name: U8[]): Bool //<
             return false
     return false
 
-fn test_colors_survive_the_round_trip() //< a color survives the round trip
+fn test_colors_survive_the_round_trip(arena: Arena$@) //< a color survives the round trip
     //<
     //< **Lost, the color would disappear every time it is saved and opened.**
     verdict.start("[kspage/store] the colours going round the trip test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
     sheet: = sample_sheet(arena)
     h1: = sheet.find("h1").unwrap_or(null)
     h1.ink.color = .some(0x102030U32)
@@ -294,10 +288,8 @@ fn test_colors_survive_the_round_trip() //< a color survives the round trip
         .pass("the colour, the line and the fill all go round the trip, and what was unwritten \
             comes back unwritten.")
 
-fn test_unset_font_fields_stay_unset()
+fn test_unset_font_fields_stay_unset(arena: Arena$@)
     verdict.start("[kspage/store] what was unwritten coming back unwritten test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
     sheet: = sample_sheet(arena)
     back: = base.round_trip(sample_doc(arena), sheet, arena)
 
@@ -310,10 +302,8 @@ fn test_unset_font_fields_stay_unset()
         .pass("what was unwritten is not filled with what stands, and the inheritance comes back \
             alive.")
 
-fn test_frames_survive_the_round_trip()
+fn test_frames_survive_the_round_trip(arena: Arena$@)
     verdict.start("[kspage/store] a frame's place being left over the round trip test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
     back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
 
     // The last block's child is the frame that has a position.
@@ -330,10 +320,8 @@ fn test_frames_survive_the_round_trip()
         panic("a place has grown on a block that has none")
     verdict.pass("a frame's place is left where it was there, and does not grow where it was not.")
 
-fn test_column_widths_survive_the_round_trip()
+fn test_column_widths_survive_the_round_trip(arena: Arena$@)
     verdict.start("[kspage/store] a column's width being left over the round trip test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
     back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
 
     // The table is the block whose style is named `table`.
@@ -363,11 +351,9 @@ fn test_column_widths_survive_the_round_trip()
         panic("a width has grown on a column with nothing written")
     verdict.pass("a column's width is left with its row, columns with nothing written and all.")
 
-fn test_the_bands_survive_the_round_trip()
+fn test_the_bands_survive_the_round_trip(arena: Arena$@)
     verdict
         .start("[kspage/store] the page's header and footer being left over the round trip test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
     back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
 
     assert(back.doc.header.inlines.get(0).text().equals("confidential"), "the header's text is left")
@@ -384,10 +370,8 @@ fn test_the_bands_survive_the_round_trip()
         .pass("a band's text goes round the trip as the mark, and an empty band comes back ready to \
             type into.")
 
-fn test_the_arrangement_survives_the_round_trip()
+fn test_the_arrangement_survives_the_round_trip(arena: Arena$@)
     verdict.start("[kspage/store] the arrangement being left over the round trip test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
     back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
 
     page: = flow.layout(back.doc, back.sheet, fixed.make(), 200.0, arena)
@@ -405,10 +389,9 @@ fn test_the_arrangement_survives_the_round_trip()
         "the second column starts right by the first column's width as written")
     verdict.pass("the arrangement the style says is left in the text too.")
 
-fn test_every_way_of_collecting_survives_the_round_trip() //< each `Collect` reads back as saved
+fn test_every_way_of_collecting_survives_the_round_trip(arena: Arena$@) //<
+    //< each `Collect` reads back as saved
     verdict.start("[kspage/store] every way of collecting being left over the round trip test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
     ways: = Collect[4]::{ Collect.contents, Collect.notes, Collect.bars, Collect.lines }
     sheet: = Sheet.new(base.root_font(), arena)
     for way in ways
@@ -421,13 +404,11 @@ fn test_every_way_of_collecting_survives_the_round_trip() //< each `Collect` rea
         assert(got.collect.same_collect(way), "the way of collecting is read back as saved")
     verdict.pass("every way of collecting comes back as it was saved.")
 
-fn test_a_formula_survives_the_round_trip() //<
+fn test_a_formula_survives_the_round_trip(arena: Arena$@) //<
     //< Only the typed text is stored, nothing else
     //<
     //< With the value written in, an old value would be left behind after the formula changes.
     verdict.start("[kspage/store] a formula being left over the round trip test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
     before: = sample_doc(arena)
     cell_was: = before.blocks.get(3).children.get(0).children.get(1).inlines.get(0)
     cell_was.show_value("999", .some(999.0), arena)
@@ -439,10 +420,8 @@ fn test_a_formula_survives_the_round_trip() //<
     assert(!cell.shows_value(), "the value worked out does not go in")
     verdict.pass("what goes into what is saved is the text typed and nothing else.")
 
-fn test_an_empty_document_round_trips()
+fn test_an_empty_document_round_trips(arena: Arena$@)
     verdict.start("[kspage/store] an empty document going round the trip test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = Sheet.new(base.root_font(), arena)
     back: = base.round_trip(d, sheet, arena)
@@ -452,10 +431,8 @@ fn test_an_empty_document_round_trips()
         "the place the inheritance sets off from is left")
     verdict.pass("an empty document goes round the trip without crashing.")
 
-fn test_broken_text_is_rejected()
+fn test_broken_text_is_rejected(arena: Arena$@)
     verdict.start("[kspage/store] a broken text being refused test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     store.load("{ this is not JSON", arena) catch e
         switch e
         case .broken {}
@@ -465,10 +442,8 @@ fn test_broken_text_is_rejected()
         return
     panic("a broken text must not be readable")
 
-fn test_an_unknown_version_is_rejected()
+fn test_an_unknown_version_is_rejected(arena: Arena$@)
     verdict.start("[kspage/store] a version it does not know being refused test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     // Valid JSON is still not read where the version differs.
     store.load("{\"kspage\":99,\"sheet\":{},\"blocks\":[]}", arena) catch e
         switch e
@@ -479,13 +454,11 @@ fn test_an_unknown_version_is_rejected()
         return
     panic("a version it does not know must not be readable")
 
-fn test_only_the_one_name_opens() //< only the one version field opens a text
+fn test_only_the_one_name_opens(arena: Arena$@) //< only the one version field opens a text
     //<
     //< The version field's name is the product's own, so a document saved under an earlier name
     //< does not open. **A different version number is a separate test** (above).
     verdict.start("[kspage/store] only the one version field opening a text test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     named: =
         "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"body\",\"runs\":[{\"text\":\"a\"}]}]}"
     got: = store.load(named, arena) catch _e
@@ -505,15 +478,13 @@ fn test_only_the_one_name_opens() //< only the one version field opens a text
         return
     panic("a version under another field name must not be readable")
 
-fn test_a_number_out_of_range_is_rejected() //<
+fn test_a_number_out_of_range_is_rejected(arena: Arena$@) //<
     //< A text with a number outside the range is refused
     //<
     //< **It is about how many times loops run.** A merge's column count, a column count and a
     //< heading's depth each decide how much work there is, so a ten-byte text with 2 billion loops
     //< until the layout exhausts memory (`Block.tiles_of` creates that many covering columns).
     verdict.start("[kspage/store] a number outside the range being refused test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
     refused(arena,
         "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"table\",\"children\":[{\"style\":\"line\",\"children\":[{\"style\":\"cell\",\"span_cols\":2000000000}]}]}]}",
         "a merge of too many columns")
@@ -557,12 +528,11 @@ priv fn refused(arena: Arena$@, text: U8[], what: U8[]) //<
     io.out().s("it was read after all: ").s(what).s("\n")
     panic("a number outside the range must not be readable")
 
-fn test_a_window_onto_source_is_refused() //< a text holding a window onto source is refused whole
+fn test_a_window_onto_source_is_refused(arena: Arena$@) //<
+    //< a text holding a window onto source is refused whole
     //<
     //< **Dropping the window would lose what it held at the next save**, so the text is not opened.
     verdict.start("[kspage/store] a window onto source code being refused test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     withdrawn(arena,
         "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"body\",\"aim\":{\"path\":\"a.kspl\"}}]}",
         "a block pointing at source")
@@ -574,13 +544,12 @@ fn test_a_window_onto_source_is_refused() //< a text holding a window onto sourc
         "a style collecting imports")
     verdict.pass("a text holding a window onto source is refused rather than opened without it.")
 
-fn test_an_old_origin_mark_is_left_behind() //< a text from before carrying `origin` still opens
+fn test_an_old_origin_mark_is_left_behind(arena: Arena$@) //<
+    //< a text from before carrying `origin` still opens
     //<
     //< The mark divided the saved versions, which are gone: the text opens as it was, and the next
     //< save no longer writes it.
     verdict.start("[kspage/store] an old origin mark being left behind test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     old: = "{\"kspage\":6,\"sheet\":{},\"origin\":\"m1\",\"blocks\":[{\"style\":\"body\"}]}"
     got: = store.load(old, arena) catch _e
         panic("a text carrying an old origin mark is to open")
@@ -592,13 +561,12 @@ fn test_an_old_origin_mark_is_left_behind() //< a text from before carrying `ori
     assert(again.slice().find_str("origin") < 0, "the next save does not write the mark")
     verdict.pass("an old text's origin mark is read past, and not written again.")
 
-fn test_a_tied_line_is_refused() //< a text holding a line tied between two frames is refused
+fn test_a_tied_line_is_refused(arena: Arena$@) //<
+    //< a text holding a line tied between two frames is refused
     //<
     //< **Dropping the line would lose it at the next save**, so the text is not opened, as with a
     //< window onto source.
     verdict.start("[kspage/store] a line tied between two frames being refused test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     tied: = arena.text().s("{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"slide\",")
         .s("\"children\":[{\"style\":\"line\",\"tie_from\":\"a\",\"tie_to\":\"b\"}]}]}").take()
     withdrawn(arena, tied, "a line tied between two frames")
@@ -617,12 +585,11 @@ priv fn withdrawn(arena: Arena$@, text: U8[], what: U8[]) //<
         return
     io.out().s("it was read after all: ").s(what).s("\n")
     panic("what is no longer carried must not be readable")
-fn test_a_link_survives_the_round_trip() //< a link's target survives the round trip too
+fn test_a_link_survives_the_round_trip(arena: Arena$@) //<
+    //< a link's target survives the round trip too
     //<
     //< **Lost, the link would disappear every time it is opened.**
     verdict.start("[kspage/store] a link's destination being left over the round trip test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
     back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
 
     // The body is `ordinary characters and ` and `slanted characters`; the second is the link.
@@ -630,12 +597,11 @@ fn test_a_link_survives_the_round_trip() //< a link's target survives the round 
     assert(body.inlines.get(1).href.equals("https://example.com/"), "the destination is left")
     assert(body.inlines.get(0).href.len == 0, "no destination grows on a run that has none")
     verdict.pass("a link's destination does not change over the round trip.")
-fn test_a_picture_survives_the_round_trip() //< a picture's source and size survive too
+fn test_a_picture_survives_the_round_trip(arena: Arena$@) //<
+    //< a picture's source and size survive too
     //<
     //< **Lost, the picture would disappear or get no space reserved.**
     verdict.start("[kspage/store] a picture being left over the round trip test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
     back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
 
     $shot: doc.Block$@ = null
@@ -649,13 +615,11 @@ fn test_a_picture_survives_the_round_trip() //< a picture's source and size surv
     // No picture appears on a block that has none.
     assert(back.doc.blocks.get(0).image.len == 0, "a block with no picture is left as it was")
     verdict.pass("a picture goes round the trip with its source and its size.")
-fn test_the_outline_survives_the_round_trip() //<
+fn test_the_outline_survives_the_round_trip(arena: Arena$@) //<
     //< The heading's depth and the contents setting survive the round trip too
     //<
     //< **Lost, the table of contents would come up empty.**
     verdict.start("[kspage/store] the heading and the contents mark going round the trip test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
     back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
 
     head: = back.sheet.find("h1").unwrap_or(null)
@@ -669,15 +633,13 @@ fn test_the_outline_survives_the_round_trip() //<
     // **A style that names none writes nothing**, so it comes back naming none, not itself.
     assert(toc.next.len == 0, "a style that names none carries none back")
     verdict.pass("the heading's depth, the contents mark and what follows all go round the trip.")
-fn test_the_saved_text_reads_as_a_diff() //<
+fn test_the_saved_text_reads_as_a_diff(arena: Arena$@) //<
     //< The saved text is split into lines, so two versions one word apart differ by one line too
     //<
     //< **Not packed onto one line**: there, one changed word is the whole document to git's diff,
     //< its merge and `grep`. **The indent width is not copied** — only whether it splits into lines
     //< and how many differ.
     verdict.start("[kspage/store] the text saved reading as a diff test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
     sheet: = sample_sheet(arena)
     $was: = Str_builder.new()
     defer was.free()
@@ -732,12 +694,11 @@ priv fn line_end(text: U8[], at: Sz): Sz //<
         i += 1
     return i
 
-fn test_a_note_survives_the_round_trip() //< a note's text survives the round trip too
+fn test_a_note_survives_the_round_trip(arena: Arena$@) //<
+    //< a note's text survives the round trip too
     //<
     //< **The number is not stored** (it is counted where notes are listed).
     verdict.start("[kspage/store] a note being left over the round trip test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
     $sb: = Str_builder.new()
     defer sb.free()
     store.save(sample_doc(arena), sample_sheet(arena), sb@)

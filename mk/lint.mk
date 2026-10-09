@@ -87,7 +87,7 @@ LINT_TARGETS := ksplc/main.kspls tests/debug/main.kspls ksai/examples/llama_engi
 	tools/surface.kspls tools/ci.kspls \
 	tools/tour.kspls \
 	tools/kspage_doc.kspls \
-	ksai/benches/run_bench.kspls tools/lsp_client.kspls \
+	ksai/benches/run_bench.kspls \
 	kspage/port/web/bundle.kspls kspage/tests/open_prog.kspls ksai/tests/read_prog.kspls \
 	std/tests/read_prog.kspls $(filter-out $(LINT_TARGETS_OWN),$(wildcard */tests/fuzz_main.kspls)) \
 	ksai/tests/main.kspls ksbind/tests/main.kspls ksdb/tests/main.kspls kspeg/tests/main.kspls \

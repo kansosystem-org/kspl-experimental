@@ -453,7 +453,7 @@ function kspageSide(ui) {
     });
     return box;
   };
-  // The viewer's overrides. **The document does not change** (not saved, not in the HTML or on
+  // The viewer's overrides. **The document does not change** (not saved, not in an export or on
   // paper); the page holds them (the core knows no colors). **The two fields are one override**
   // (passing one alone deletes the other).
   const wearOver = () => {

@@ -117,9 +117,8 @@ priv fn wrote_result_inner_fields(node: Ast_node$@): Bool //<
     return false
 
 priv fn report_fieldless_literal(node: Ast_node$@, c: Sema_ctx$@, whole_id: I32)
-    $shown: = c.env.display_str(whole_id)
-    defer shown.free()
-    c.clear_scratch().s("'").s(shown.slice())
+    shown: = c.env.display(whole_id)
+    c.clear_scratch().s("'").s(shown)
         .s("' has no fields to fill, so it cannot be built with '::{ ... }'")
     if wrote_result_inner_fields(node)
         c.scratch
@@ -173,9 +172,7 @@ fn infer_struct_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32):
     if struct_sym_ptr != null
         c.check_visibility_and_mark_used(struct_sym_ptr, node)
 
-    $struct_def: sema_type_def.Struct_def$@ = null
-    if sd: = c.env.get_struct_def(clean_name)
-        struct_def = sd
+    struct_def: = c.env.get_struct_def(clean_name).unwrap_or(null)
     $current_field_idx: Sz = 0
 
     actual_id = size_inferred_array_literal(node, c, type_node, actual_id, base_struct_id)
@@ -218,9 +215,7 @@ fn infer_struct_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32):
                 // stripped: from it the `.ptr` of `U8[]$[]` reads `U8@`, not `U8[]@`, and a `U8$[]`
                 // strips to a scalar and **no field's type is checked at all**.
                 info: = c.env.get_info(c.env.strip_result(c.env.strip_ptr(actual_id)))
-                $field_name_node: Ast_node$@ = null
-                if fnn: = child.get_field_init_name()
-                    field_name_node = fnn
+                field_name_node: = child.get_field_init_name().unwrap_or(null)
 
                 switch info
                 case .array(arr_base_id, _size)

@@ -233,7 +233,7 @@ Every rule in the grammar file needs a matching entry in a hand-written list of 
 
 The *grammar* (`ksplc/kspl.kspeg`) is the file of rules that says what KSPL text may look like; the parser reads it. Each node in the tree records its *kind* (which rule made it) as a number.
 
-**Once a rule is added to the grammar (`ksplc/kspl.kspeg`), add its enum value and its `builtin_name` case to `ksplc/base/ast_kinds.kspls` by hand**; nothing generates them. Here is why a miss is caught:
+**Once a rule is added to the grammar (`ksplc/kspl.kspeg`), add its enum value to `ksplc/base/ast_kinds.kspls` by hand**; nothing generates it. `builtin_name` gives the value's own name past `k_`, so only a rule the grammar spells otherwise (its capitalised token rules, such as `Format_spec`) needs a case there too. Here is why a miss is caught:
 
 1. At start-up, `Global_pools.init()` interns `builtin_name(i)` for `1` to `Ast_kind.k_max`, in order (*interning* gives each distinct string a number, §1.5).
 2. When the parser makes a node for a rule (`"Format_spec"`, say), it interns the rule's name into the same pool.
@@ -715,7 +715,7 @@ impl E
 **It is placed at the `enum`'s name, and is marked as made by the compiler.** Parsed from a string, its positions are the string's. Read in the file, they land on whatever the file's first lines hold. Unplaced, the editor would colour the `Mode` of `impl Mode` over the path in an `import` line, and a hover or a jump there would answer the `enum`.
 
 * `place_as_made` in `base/ast_ext.kspls` places every node at the name, so a diagnostic, and the jump from a written `e.variant_name()`, land on what it was made for.
-* It also marks the `impl` and its method. The language server's walks by position skip what `made_by_compiler` answers (`lsp/semtok.kspls`, `lsp/position.kspls`, `lsp/uses.kspls`).
+* It also marks the `impl` and its method. The language server's walks by position skip what `made_by_compiler` answers (`lsp/semtok.kspls`, `lsp/outline.kspls`, `lsp/position.kspls`, `lsp/uses.kspls`).
 * The mark lives in `ival`, which the AST cache keeps.
 
 Swift's synthesized conformances take the same two steps (an implicit declaration, placed at the type), as rustc marks what a derive expands (`Span::from_expansion`).
@@ -1395,7 +1395,7 @@ A *fat pointer* is a pair of pointers: one to the value, one to its vtable (§5.
    * Caution: **Look at the places that pass a kind in a variable too.** `map_keyword_to_decl_kind` in `parse/normalize.kspls` is the only one, and it returns declaration and statement kinds alone.
 2. **Do not stop at a static count.** Place a temporary `ice_assert` at the generating choke points (`Ast_node.new` and `set_kind`) and run `make test-suites`. ksplc's own translation is the largest input, so a kind that never fires there is dead. Erase the check before committing.
 3. **Erasing a kind renumbers the enum.** The number is the kind's position in `Ast_kind`, interned up front (§1.3). The disk cache stores kinds as numbers, but ksplc's identity in its key (§3.7) keeps an old entry from being read under a new number.
-4. **Erase its `builtin_name` branch with it.** Left behind, the name alone lives on, and the next reader takes it as "it is there".
+4. **Erase its `builtin_name` case with it, where it has one.** Left behind, the name alone lives on, and the next reader takes it as "it is there".
 
 ### 4.5 The extra rules concerning the type system
 
@@ -1456,7 +1456,7 @@ Caution: **Group the rows by the position the declaration was written at, not by
 
 When the C backend translates `ksplc/main.kspls` (warm), Infer takes several times as long as Collect, over several times as many bodies as there are separate declarations. Deciding the deferred constraints and the layouts takes a few milliseconds.
 
-**Infer's top is nearly all generic instantiation.** The same few generics recur at the top by name (`List<|U8[]|>`'s methods, `Option<|U8[]|>`, `Arena.create`), each with matching counts across its methods. That shows the instantiation happens all together, not for the used methods alone. There are two places that queue a body (`queue_fn_body` in `sema/decl/mono_queue.kspls`). The call site queues on demand, while the method-table builder queues them all at once.
+**Infer's top is nearly all generic instantiation.** The same few generics recur at the top by name (`List<|U8[]|>`'s methods, `U8[]?`, `Arena.create`), each with matching counts across its methods. That shows the instantiation happens all together, not for the used methods alone. There are two places that queue a body (`queue_fn_body` in `sema/decl/mono_queue.kspls`). The call site queues on demand, while the method-table builder queues them all at once.
 
 Note: **Dead-code elimination (`lower/prune.kspls`) drops about half of the function declarations it sees**, each body already type-checked per instantiation. [4.3.9](#439-instantiations-two-axes-and-which-of-them-to-change) says why that is not the wasted work it looks like.
 
@@ -1579,7 +1579,7 @@ Caution: **Walk the edges by `def_node`, never by name.** `def_node` is the link
 
 The linker's removal of unreferenced sections also shrinks the executable (`CFLAGS` in the `Makefile`, and `ksplc/tools/run.kspls`). But it does not cut the generated C, so it does nothing for clang's time, while pruning cuts the lines clang reads. Their aims differ, so both are kept.
 
-**Type declarations are dropped likewise** (`prune_unreachable_types`). A generic's signature makes its return and parameter types even where it is never called. Instantiate one `List<|X|>`, and `std/seq`'s `where` / `select` bring in `List_seq<|X|>` / `Keep<|…|>` / `Option<|X|>` / `Callable1<|X, Bool|>`.
+**Type declarations are dropped likewise** (`prune_unreachable_types`). A generic's signature makes its return and parameter types even where it is never called. Instantiate one `List<|X|>`, and `std/seq`'s `where` / `select` bring in `List_seq<|X|>` / `Keep<|…|>` / `X?` / `Callable1<|X, Bool|>`.
 
 Caution: **Call it after the functions have been dropped.** A type named only in a signature stops being named only once that function drops; called first, it drops nothing.
 
@@ -3030,7 +3030,7 @@ Caution: **Do not consult it with the qualification stripped.** A short name ans
 
 **Two gates hold it.** `make test-conventions` checks that every registered code has a section and every section a code (`tests/support/conventions_match.kspls`). `make test-cli` checks that each section prints alone, without running into the next (`case_explain` in `tests/suite/cli_test.kspls`).
 
-**What is given up**: the executable carries the whole specification to print a few lines of it, and an edit to that document rebuilds ksplc (it is in `KSPL_SRCS`).
+**What is given up**: the executable carries the whole specification to print a few lines of it, and an edit to that document rebuilds ksplc (it is in `KSPL_SRCS`). **The seed is not re-baked for an edit to the document alone**: every compiler built from the sources embeds the text as it is, and only the seed's own binary, which no command asks for an explanation, keeps the older one until the next re-bake.
 
 ### 11.14 Diagnostics for a program are one JSON object per line
 

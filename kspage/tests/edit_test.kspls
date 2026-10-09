@@ -28,20 +28,16 @@ priv fn one_line(text: U8[], width: F32, arena: Arena$@): Page$@ //<
     d.add_block("body").add_text(text)
     return flow.layout(d, Sheet.new(base.root_font(), arena), fixed.make(), width, arena)
 
-fn test_added_text_is_copied_into_the_document()
+fn test_added_text_is_copied_into_the_document(arena: Arena$@)
     verdict.start("[kspage/edit] a text added becoming the document's own test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("abc")
     // Readable contents show the caller's text is copied (it need not be kept alive).
     assert(n.text().equals("abc"), "the text copied over can be read")
     verdict.pass("a text added is copied over to the document's side.")
 
-fn test_insert_and_backspace_change_the_text()
+fn test_insert_and_backspace_change_the_text(arena: Arena$@)
     verdict.start("[kspage/edit] typing and deleting changing the text test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("ac")
     ed: = edit.new_editor(d)
@@ -56,11 +52,9 @@ fn test_insert_and_backspace_change_the_text()
     assert(ed.caret.offset == 1, "the cursor goes back to where it deleted")
     verdict.pass("typing inserts, and deleting takes the one in front.")
 
-fn test_backspace_removes_a_whole_character() //<
+fn test_backspace_removes_a_whole_character(arena: Arena$@) //<
     //< A multi-byte character is deleted whole, not a byte at a time
     verdict.start("[kspage/edit] deleting going by the character test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("あい")
     // `あい` is six bytes in UTF-8.
@@ -72,10 +66,8 @@ fn test_backspace_removes_a_whole_character() //<
     assert(ed.caret.offset == 3, "the cursor goes back to a character's boundary too")
     verdict.pass("a character of more than one byte goes whole.")
 
-fn test_moving_steps_by_characters()
+fn test_moving_steps_by_characters(arena: Arena$@)
     verdict.start("[kspage/edit] moving left and right going by the character test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("aあb")
     ed: = edit.new_editor(d)
@@ -89,10 +81,9 @@ fn test_moving_steps_by_characters()
     assert(ed.caret.offset == 1, "going back is by the character too")
     verdict.pass("moving left and right goes on by characters, not by bytes.")
 
-fn test_moving_stops_at_both_ends() //< it stops at both ends (it does not overshoot)
+fn test_moving_stops_at_both_ends(arena: Arena$@) //<
+    //< it stops at both ends (it does not overshoot)
     verdict.start("[kspage/edit] stopping at both ends test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("ab")
     ed: = edit.new_editor(d)
@@ -104,11 +95,9 @@ fn test_moving_stops_at_both_ends() //< it stops at both ends (it does not overs
     assert(ed.caret.offset == 2, "it does not go behind the end")
     verdict.pass("it stops at the ends and does not stick out.")
 
-fn test_clicking_lands_on_a_character_boundary() //<
+fn test_clicking_lands_on_a_character_boundary(arena: Arena$@) //<
     //< The clicked point becomes a position in the document
     verdict.start("[kspage/edit] the place pressed becoming a character's boundary test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     page: = one_line("abcd", 300.0, arena)
     // ASCII is 8px each: 13px is nearer the break at 16px than the one at 8px, and at the midpoint
     // (12px) it takes the break on the left.
@@ -121,11 +110,9 @@ fn test_clicking_lands_on_a_character_boundary() //<
     assert(head.offset == 0, "press in front of it and it is the head")
     verdict.pass("the place pressed becomes the nearest character's boundary.")
 
-fn test_clicking_picks_the_row_that_was_clicked() //<
+fn test_clicking_picks_the_row_that_was_clicked(arena: Arena$@) //<
     //< Clicked on another line, it lands in that line's box
     verdict.start("[kspage/edit] sitting in the box of the row pressed test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     // A width of 40px = two one-em characters. `あいうえお` becomes three lines.
     page: = one_line("あいうえお", 40.0, arena)
     // The left edge of the second line (y = 19.2 to 38.4) is clicked.
@@ -134,10 +121,8 @@ fn test_clicking_picks_the_row_that_was_clicked() //<
     assert(c.offset == 6, "it sits at the second row's head")
     verdict.pass("it sits in the box of the row pressed, and does not jump to the row beside.")
 
-fn test_cursor_stands_where_the_caret_points() //< the cursor position can be drawn
+fn test_cursor_stands_where_the_caret_points(arena: Arena$@) //< the cursor position can be drawn
     verdict.start("[kspage/edit] the place the cursor stands being found test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     page: = one_line("abcd", 300.0, arena)
     n: = page.boxes.get(0).inline
 
@@ -151,11 +136,9 @@ fn test_cursor_stands_where_the_caret_points() //< the cursor position can be dr
     assert(base.near(tail.h, 19.2), "the height is the row's height")
     verdict.pass("the cursor stands where it points, and does not go out even at the end.")
 
-fn test_typing_then_relayout_shows_the_new_text() //<
+fn test_typing_then_relayout_shows_the_new_text(arena: Arena$@) //<
     //< Lay it out again after typing and the changed text shows
     verdict.start("[kspage/edit] what was typed coming out in the next laying-out test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = Sheet.new(base.root_font(), arena)
     n: = d.add_block("body").add_text("ab")
@@ -169,11 +152,9 @@ fn test_typing_then_relayout_shows_the_new_text() //<
     assert(page.boxes.get(0).text.equals("abcd"), "the text typed comes out")
     verdict.pass("what was typed comes out in the next laying-out.")
 
-fn test_a_caret_pointing_nowhere_does_nothing() //<
+fn test_a_caret_pointing_nowhere_does_nothing(arena: Arena$@) //<
     //< A cursor pointing nowhere does nothing when typing or deleting
     verdict.start("[kspage/edit] a caret pointing nowhere doing nothing test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     ed: = edit.new_editor(d)
     // The state right after clicking into an empty document; it must not crash.
@@ -191,11 +172,9 @@ fn test_a_caret_pointing_nowhere_does_nothing() //<
     page: = flow.layout(d, Sheet.new(base.root_font(), arena), fixed.make(), 300.0, arena)
     assert(!caret.cursor(page, ed.caret).found, "there is nowhere to stand either")
     verdict.pass("where it points nowhere nothing happens, and it does not crash.")
-fn test_cursor_measures_instead_of_prorating_bytes() //<
+fn test_cursor_measures_instead_of_prorating_bytes(arena: Arena$@) //<
     //< The cursor's position comes from the measured width, not the byte count
     verdict.start("[kspage/edit] the cursor's place being decided by the width measured test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     // Caution: Mix ASCII (1 byte, 8px) with one-em characters (3 bytes, 16px). A byte-count ratio
     // then lands inside a character; unmixed, no difference shows.
     page: = one_line("aあb", 300.0, arena)
@@ -216,11 +195,9 @@ fn test_cursor_measures_instead_of_prorating_bytes() //<
 
 // ---- moving across inlines and blocks ----
 
-fn test_moving_crosses_into_the_next_run() //<
+fn test_moving_crosses_into_the_next_run(arena: Arena$@) //<
     //< It moves into the next inline (inside the same block)
     verdict.start("[kspage/edit] crossing into the run beside test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     b: = d.add_block("body")
     first: = b.add_text("ab")
@@ -236,10 +213,8 @@ fn test_moving_crosses_into_the_next_run() //<
         "from the head it goes back to the end of the run in front")
     verdict.pass("← and → cross a run's break.")
 
-fn test_moving_crosses_into_the_next_block() //< it moves into the next block
+fn test_moving_crosses_into_the_next_block(arena: Arena$@) //< it moves into the next block
     verdict.start("[kspage/edit] crossing into the next paragraph test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     head: = d.add_block("body").add_text("ab")
     tail: = d.add_block("body").add_text("cd")
@@ -254,12 +229,11 @@ fn test_moving_crosses_into_the_next_block() //< it moves into the next block
         "it goes back to the end of the paragraph in front")
     verdict.pass("← and → cross a paragraph's break too.")
 
-fn test_moving_visits_children_after_their_parent() //< a nested child is visited in order too
+fn test_moving_visits_children_after_their_parent(arena: Arena$@) //<
+    //< a nested child is visited in order too
     //<
     //< The order is the layout's (the block itself first, the children after).
     verdict.start("[kspage/edit] a child block coming after its parent test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     parent: = d.add_block("body")
     own: = parent.add_text("ab")
@@ -271,10 +245,9 @@ fn test_moving_visits_children_after_their_parent() //< a nested child is visite
     assert(ed.caret.inline == kid && ed.caret.offset == 0, "after its own inlines comes the child")
     verdict.pass("the order it runs is the order the laying-out lays them.")
 
-fn test_moving_stops_at_the_ends_of_the_document() //< it stops at both ends of the document
+fn test_moving_stops_at_the_ends_of_the_document(arena: Arena$@) //<
+    //< it stops at both ends of the document
     verdict.start("[kspage/edit] stopping at both ends of the document test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     only: = d.add_block("body").add_text("ab")
     ed: = edit.new_editor(d)
@@ -286,14 +259,12 @@ fn test_moving_stops_at_the_ends_of_the_document() //< it stops at both ends of 
     assert(ed.caret.inline == only && ed.caret.offset == 2, "there is nothing behind the end")
     verdict.pass("it stops at the document's ends.")
 
-fn test_backspace_at_the_start_stops_at_the_block_edge() //<
+fn test_backspace_at_the_start_stops_at_the_block_edge(arena: Arena$@) //<
     //< Deleting at a paragraph's start does not reach the paragraph before
     //<
     //< The caller joins paragraphs (`join_prev` in `write/block.kspls`), and deletes forward
     //< (`delete_forward` in `write/typing.kspls`).
     verdict.start("[kspage/edit] deleting at a paragraph's head not reaching in front test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     head: = d.add_block("body").add_text("ab")
     tail: = d.add_block("body").add_text("cd")
@@ -306,10 +277,9 @@ fn test_backspace_at_the_start_stops_at_the_block_edge() //<
     assert(ed.caret.inline == tail && ed.caret.offset == 0, "the cursor does not move either")
     verdict.pass("deleting at a paragraph's head does not reach the paragraph in front.")
 
-fn test_vertical_movement_walks_the_rows() //< moving up and down works over the laid-out lines
+fn test_vertical_movement_walks_the_rows(arena: Arena$@) //<
+    //< moving up and down works over the laid-out lines
     verdict.start("[kspage/edit] moving up and down crossing the rows test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("あいうえお")
     page: = flow.layout(d, Sheet.new(base.root_font(), arena), fixed.make(), 40.0, arena)
@@ -332,10 +302,8 @@ priv fn three_rows(arena: Arena$@): Page$@ //<
     d.add_block("body").add_text("abcdef")
     return flow.layout(d, Sheet.new(base.root_font(), arena), fixed.make(), 300.0, arena)
 
-fn test_vertical_movement_keeps_the_goal_column()
+fn test_vertical_movement_keeps_the_goal_column(arena: Arena$@)
     verdict.start("[kspage/edit] the column not shrinking on a short row test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     page: = three_rows(arena)
     d: = page.boxes.get(0).inline
     ed: = edit.new_editor(Doc.new(arena))
@@ -350,11 +318,9 @@ fn test_vertical_movement_keeps_the_goal_column()
     assert(ed.caret.offset == 6, "on the third row it returns to the column it had")
     verdict.pass("passing through a short row does not shrink the column it aims at.")
 
-fn test_moving_sideways_forgets_the_goal_column() //<
+fn test_moving_sideways_forgets_the_goal_column(arena: Arena$@) //<
     //< Moving sideways forgets the goal column
     verdict.start("[kspage/edit] moving sideways forgetting the column aimed at test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     page: = three_rows(arena)
     head: = page.boxes.get(0).inline
     ed: = edit.new_editor(Doc.new(arena))
@@ -369,11 +335,9 @@ fn test_moving_sideways_forgets_the_goal_column() //<
     assert(ed.caret.offset == 0, "on the third row it aims at the column it stands in")
     verdict.pass("after moving sideways it aims afresh at the column it stands in.")
 
-fn test_a_wrap_boundary_is_read_by_how_it_was_reached() //<
+fn test_a_wrap_boundary_is_read_by_how_it_was_reached(arena: Arena$@) //<
     //< A wrap position reads as one line's end or the next line's start, by how it was reached
     verdict.start("[kspage/edit] reading a wrap's place by the way it was reached test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     // 40px = two one-em characters: `あいうえお` is three lines, and byte 6 is the wrap position.
     page: = one_line("あいうえお", 40.0, arena)
     n: = page.boxes.get(0).inline
@@ -395,11 +359,9 @@ fn test_a_wrap_boundary_is_read_by_how_it_was_reached() //<
     assert(base.near(clicked.y, 19.2), "it stands at the head of the row pressed too")
     verdict.pass("a wrap's place stands on the row the way it was reached says.")
 
-fn test_vertical_movement_crosses_a_gathered_block() //<
+fn test_vertical_movement_crosses_a_gathered_block(arena: Arena$@) //<
     //< ↓ steps over a block built at layout time, and over the space under a heading
     verdict.start("[kspage/edit] moving down crossing a block gathered test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
     sheet: = Sheet.new(base.root_font(), arena)
     head: = sheet.add("heading", paint.inherit_all())
     head.outline = 1
@@ -429,11 +391,9 @@ fn test_vertical_movement_crosses_a_gathered_block() //<
     assert(ed.caret.inline.text().equals("Title"), "and comes home to the heading")
     verdict.pass("moving up and down steps over a block gathered at laying time.")
 
-fn test_vertical_movement_stops_at_the_first_and_last_row() //<
+fn test_vertical_movement_stops_at_the_first_and_last_row(arena: Arena$@) //<
     //< It does not go past the lines at either end
     verdict.start("[kspage/edit] moving up and down stopping at the ends test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("あいうえお")
     page: = flow.layout(d, Sheet.new(base.root_font(), arena), fixed.make(), 40.0, arena)
@@ -450,12 +410,10 @@ fn test_vertical_movement_stops_at_the_first_and_last_row() //<
 
 // ---- composition (IME) ----
 
-fn test_preedit_is_replaced_not_appended() //<
+fn test_preedit_is_replaced_not_appended(arena: Arena$@) //<
     //< The composing text is replaced (it does not pile up)
     verdict
         .start("[kspage/edit] the text being composed being swapped rather than piled up test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("ab")
     ed: = edit.new_editor(d)
@@ -471,10 +429,8 @@ fn test_preedit_is_replaced_not_appended() //<
     assert(ed.caret.offset == 10, "the cursor stands behind the composing")
     verdict.pass("the text being composed is swapped rather than piled up.")
 
-fn test_preedit_commit_keeps_the_text()
+fn test_preedit_commit_keeps_the_text(arena: Arena$@)
     verdict.start("[kspage/edit] the text being left once it is committed test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("ab")
     ed: = edit.new_editor(d)
@@ -485,10 +441,8 @@ fn test_preedit_commit_keeps_the_text()
     assert(ed.caret.preedit == 0, "it is composing no more")
     verdict.pass("committed, the text is left and only the mark is dropped.")
 
-fn test_preedit_cancel_removes_the_text()
+fn test_preedit_cancel_removes_the_text(arena: Arena$@)
     verdict.start("[kspage/edit] the text going when it is called off test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("ab")
     ed: = edit.new_editor(d)
@@ -500,11 +454,9 @@ fn test_preedit_cancel_removes_the_text()
         "the cursor returns to the place it had too")
     verdict.pass("called off, both the text and the cursor return to what they were.")
 
-fn test_a_cancelled_composition_leaves_no_undo_step() //<
+fn test_a_cancelled_composition_leaves_no_undo_step(arena: Arena$@) //<
     //< A cancelled composition leaves no undo step
     verdict.start("[kspage/edit] a composing broken off leaving no step test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("ab")
     ed: = edit.new_editor(d)
@@ -517,11 +469,9 @@ fn test_a_cancelled_composition_leaves_no_undo_step() //<
     assert(n.text().equals("ab"), "put back, the text does not change")
     verdict.pass("a composing broken off leaves no undo step.")
 
-fn test_a_committed_composition_undoes_as_one_step() //<
+fn test_a_committed_composition_undoes_as_one_step(arena: Arena$@) //<
     //< A committed composition goes into the record (while composing it is not recorded)
     verdict.start("[kspage/edit] a committed composing being put back in one test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("ab")
     ed: = edit.new_editor(d)
@@ -534,11 +484,9 @@ fn test_a_committed_composition_undoes_as_one_step() //<
     assert(ed.redo() && n.text().equals("aにほんb"), "it can be done again")
     verdict.pass("a committed composing is put back in one.")
 
-fn test_moving_during_a_composition_records_it() //<
+fn test_moving_during_a_composition_records_it(arena: Arena$@) //<
     //< Moving while composing commits that text (it is not left out of the record)
     verdict.start("[kspage/edit] what was composed before moving going onto the record test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("ab")
     ed: = edit.new_editor(d)
@@ -549,14 +497,12 @@ fn test_moving_during_a_composition_records_it() //<
     assert(ed.undo() && n.text().equals("ab"), "what was committed before the move goes back")
     verdict.pass("what was composed before moving goes onto the record too.")
 
-fn test_deleting_ahead_is_refused_during_composition() //<
+fn test_deleting_ahead_is_refused_during_composition(arena: Arena$@) //<
     //< Delete while composing is for the composition to handle (it deletes no character)
     //<
     //< Unguarded, the character after the composing text would be deleted, outside the composition
     //< window, where the typist cannot see it.
     verdict.start("[kspage/edit] Delete being refused during a composing test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("abcd")
     page: = flow.layout(d, Sheet.new(base.root_font(), arena), fixed.make(), 300.0, arena)
@@ -569,14 +515,12 @@ fn test_deleting_ahead_is_refused_during_composition() //<
     assert(ed.caret.preedit == 3, "it is composing still")
     verdict.pass("Delete during a composing does not shrink the text.")
 
-fn test_cancelling_when_not_composing_keeps_the_selection() //<
+fn test_cancelling_when_not_composing_keeps_the_selection(arena: Arena$@) //<
     //< Cancelling while not composing does not collapse the selection
     //<
     //< This happens: cancelled right after a composition starts, only "cancelled" arrives, with a
     //< length of 0 (`compositionend` in `kspage/port/web/keys.js`).
     verdict.start("[kspage/edit] breaking off while not composing keeping the choice test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("abcd")
     ed: = edit.new_editor(d)
@@ -588,11 +532,9 @@ fn test_cancelling_when_not_composing_keeps_the_selection() //<
     assert(n.text().equals("abcd"), "the text does not change either")
     verdict.pass("breaking off while not composing does not fold the choice.")
 
-fn test_backspace_during_composition_cancels_it() //<
+fn test_backspace_during_composition_cancels_it(arena: Arena$@) //<
     //< Backspace while composing cancels the whole composition, not one character
     verdict.start("[kspage/edit] deleting during a composing calling the whole of it off test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("ab")
     ed: = edit.new_editor(d)
@@ -604,11 +546,9 @@ fn test_backspace_during_composition_cancels_it() //<
     assert(ed.caret.preedit == 0, "it is composing no more")
     verdict.pass("deleting during a composing calls the whole of it off.")
 
-fn test_typing_during_composition_commits_first() //<
+fn test_typing_during_composition_commits_first(arena: Arena$@) //<
     //< Typing while composing commits it first, and then inserts
     verdict.start("[kspage/edit] typing during a composing committing it first test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("ab")
     ed: = edit.new_editor(d)
@@ -619,10 +559,8 @@ fn test_typing_during_composition_commits_first() //<
     assert(ed.caret.preedit == 0, "it is composing no more")
     verdict.pass("typing during a composing commits it first and then goes in.")
 
-fn test_composing_boxes_are_marked() //< a composing box gets a mark
+fn test_composing_boxes_are_marked(arena: Arena$@) //< a composing box gets a mark
     verdict.start("[kspage/edit] the composing boxes getting a mark test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = Sheet.new(base.root_font(), arena)
     n: = d.add_block("body").add_text("ab")
@@ -643,10 +581,8 @@ fn test_composing_boxes_are_marked() //< a composing box gets a mark
     verdict.pass("only a composing box gets a mark, and it is dropped once committed.")
 // ---- selection ----
 
-fn test_extending_keeps_the_anchor() //< move with Shift held and the anchor stays
+fn test_extending_keeps_the_anchor(arena: Arena$@) //< move with Shift held and the anchor stays
     verdict.start("[kspage/edit] the anchor being left when it is stretched test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("abcd")
     ed: = edit.new_editor(d)
@@ -663,13 +599,11 @@ fn test_extending_keeps_the_anchor() //< move with Shift held and the anchor sta
     assert(!caret.has_selection(ed.caret), "move without stretching and it folds")
     verdict.pass("stretched, where it set off is left; unstretched, it folds.")
 
-fn test_selection_is_ordered_by_the_document() //<
+fn test_selection_is_ordered_by_the_document(arena: Arena$@) //<
     //< The selection is put back in document order
     //<
     //< Extended to the left, the start and the end are not swapped.
     verdict.start("[kspage/edit] the range chosen standing in the document's order test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("abcd")
     // It extends one character left from 3 (the anchor is the later one).
@@ -680,10 +614,8 @@ fn test_selection_is_ordered_by_the_document() //<
     assert(sp.from_offset == 2 && sp.to_offset == 3, "the front is the smaller one")
     verdict.pass("stretched left, the range still stands front to back.")
 
-fn test_deleting_a_selection_removes_just_that_range()
+fn test_deleting_a_selection_removes_just_that_range(arena: Arena$@)
     verdict.start("[kspage/edit] only what was chosen going test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("abcd")
     ed: = edit.new_editor(d)
@@ -698,10 +630,9 @@ fn test_deleting_a_selection_removes_just_that_range()
     assert(ed.caret.offset == 1 && !held, "the cursor folds at the range's head")
     verdict.pass("only what was chosen goes, and the cursor stands at its head.")
 
-fn test_typing_over_a_selection_replaces_it() //< typing with a selection replaces it
+fn test_typing_over_a_selection_replaces_it(arena: Arena$@) //<
+    //< typing with a selection replaces it
     verdict.start("[kspage/edit] what was chosen being swapped for the character typed test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("abcd")
     ed: = edit.new_editor(d)
@@ -715,12 +646,11 @@ fn test_typing_over_a_selection_replaces_it() //< typing with a selection replac
     assert(!caret.has_selection(ed.caret), "once typed it folds")
     verdict.pass("what was chosen is swapped for the character typed.")
 
-fn test_deleting_a_selection_across_blocks() //< a selection across paragraphs can be deleted too
+fn test_deleting_a_selection_across_blocks(arena: Arena$@) //<
+    //< a selection across paragraphs can be deleted too
     //<
     //< The inlines in between are deleted whole.
     verdict.start("[kspage/edit] a choice across paragraphs going test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     head: = d.add_block("body").add_text("abc")
     middle: = d.add_block("body").add_text("XYZ")
@@ -737,11 +667,9 @@ fn test_deleting_a_selection_across_blocks() //< a selection across paragraphs c
     assert(ed.caret.inline == head && ed.caret.offset == 1, "the cursor stands at the range's head")
     verdict.pass("a choice across paragraphs goes with its ends and its middle right.")
 
-fn test_selection_rects_cover_just_the_range() //<
+fn test_selection_rects_cover_just_the_range(arena: Arena$@) //<
     //< The painted rectangles cover the selection and no more
     verdict.start("[kspage/edit] the paint covering only what was chosen test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = Sheet.new(base.root_font(), arena)
     // Four ASCII characters = 8px each, 32px in all.

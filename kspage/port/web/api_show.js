@@ -4,7 +4,7 @@
 // them; the cutting is a view, and the document does not change.**
 // ==========================================
 function kspageApiShow(ks) {
-  const { w, outText, scratch, nums, draw, paintCrop, paintChrome, paperOf, regionAt } = ks;
+  const { w, outText, scratch, nums, draw, acted, paintCrop, paintChrome, paperOf, regionAt } = ks;
   Object.assign(ks.api, {
     // Draws page `i` onto `target`'s canvas at 1:1 (a document that is not split is one sheet).
     // **The margins apply here** (the layout knows none); printing uses one canvas per page.
@@ -107,9 +107,7 @@ function kspageApiShow(ks) {
     // document's order** (the slide list is a layout result). One undo restores it.
     moveSurface(from, to) {
       if (from < 0 || to < 0 || from === to) return false;
-      const done = w.kspage_web_move_surface(from, to) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_move_surface(from, to));
     },
     // The speaker's notes on slide `i` (**empty if none**). **It is separate from `aside`**, which
     // reads the cursor's container; while presenting, the cursor need not be in that slide.

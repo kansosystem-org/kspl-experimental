@@ -464,7 +464,7 @@ The port layer (`port/`) is something else: the boot and the C/asm glue (startup
 | Demo | What it proves |
 | :-- | :-- |
 | `make ksos-cm-uart-probe` | **it is genuine memory-mapped I/O, not ARM semihosting** (`ksos/demo/common/semihost_console.kspls`, the `BKPT` trap). With QEMU's `serial0` redirected to a file apart from the console, only UART0's output appears in that file. |
-| `make ksos-cm-uart-echo` | the receive path, polled (`getc`/`try_getc`). `ksos/tests/uart_echo_test.py` sends bytes over a Unix domain socket and matches the echo (`RESULT: PASS`). |
+| `make ksos-cm-uart-echo` | the receive path, polled (`getc`). `ksos/tests/uart_echo_test.py` sends bytes over a Unix domain socket and matches the echo (`RESULT: PASS`). |
 | `make ksos-cm-uart-irq-echo` | the receive path **driven by an interrupt** (below) |
 
 `uart_irq.kspls` turns on CTRL's RX_INTEN and NVIC IRQ0 (UART0's RX in QEMU's board definition; the NVIC is the Cortex-M's interrupt controller). The ISR `uart0_irq0_handler`, joined to the shared vector table through a weak symbol, raises a flag the caller watches while resting on `WFI` (an instruction that sleeps until an interrupt). `WFI` has no other way out, so wrong NVIC or ISR wiring hangs it. An echo from `ksos/tests/uart_irq_echo_test.py` is direct evidence that a real interrupt woke the CPU.

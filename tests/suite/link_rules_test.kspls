@@ -16,6 +16,7 @@ import "std/str"
 import "std/sys"
 import "std/verdict"
 import "tests/support/harness"
+import "tests/support/harness_text"
 
 priv const triple_var: U8[] = "KANSO_STAND_IN_TRIPLE" //< what the stand-in answers `-dumpmachine`
 
@@ -47,12 +48,6 @@ priv fn words(text: U8[], arena: Arena$@): List<|U8[]|> //< the words text holds
         start = i + 1
     return out
 
-priv fn has(xs: List<|U8[]|>@, w: U8[]): Bool
-    for x in xs
-        if x.equals(w)
-            return true
-    return false
-
 priv fn sets_stack(word: U8[]): Bool //< whether a linker option sets the stack's size
     //<
     //< Each linker spells it its own way (`/STACK:`, `--stack,`, ld64's `-stack_size,`).
@@ -74,15 +69,15 @@ priv fn disagreements(ldlibs: U8[], libs: U8[], flags: U8[], arena: Arena$@): Li
     f: = words(flags, arena)
     $bad: = List<|U8[]|>.new(arena)
     for w in m
-        if !has(l@, w) && !has(f@, w)
+        if !harness_text.has(l@, w) && !harness_text.has(f@, w)
             bad
                 .push(arena.text().s("LDLIBS holds `\{w\}`, which ksplc neither links nor passes")
                 .take())
     for w in l
-        if !has(m@, w)
+        if !harness_text.has(m@, w)
             bad.push(arena.text().s("ksplc links `\{w\}`, which LDLIBS lacks").take())
     for w in f
-        if sets_stack(w) && !has(m@, w)
+        if sets_stack(w) && !harness_text.has(m@, w)
             bad.push(arena.text().s("ksplc passes `\{w\}`, which LDLIBS lacks").take())
     return bad
 

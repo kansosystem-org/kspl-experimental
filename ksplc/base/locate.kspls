@@ -34,10 +34,9 @@ fn is_std_file(file_path: U8[]): Bool //< whether that definition comes from std
     return file_path.starts_with(std_prefix)
 
 fn std_name(rest: U8[]): U8[] //< the logical name of the file at `rest` under std's folder
-    $out: = Str_builder.new()
-    defer out.free()
+    out: = base_core.arena.text()
     out.s(std_prefix).s(rest)
-    return base_core.arena.dup_str(out.slice())
+    return out.take()
 
 fn package_of(file_path: U8[]): U8[] //< the name of the package that file belongs to
     //<
@@ -204,10 +203,9 @@ fn disk_name(logical: U8[]): U8[] //<
     rest: = logical.sub_from(unit.len + 1)
     if root.len == 0
         return rest
-    $out: = Str_builder.new()
-    defer out.free()
+    out: = base_core.arena.text()
     out.s(root).c('/').s(rest)
-    return base_core.arena.dup_str(out.slice())
+    return out.take()
 
 fn package_dir(unit: U8[]): U8[] //<
     //< The folder a package's files are read from
@@ -220,10 +218,9 @@ fn package_dir(unit: U8[]): U8[] //<
     root: = package_root(unit)
     if root.len == 0
         return unit
-    $out: = Str_builder.new()
-    defer out.free()
+    out: = base_core.arena.text()
     out.s(root).c('/').s(unit)
-    return base_core.arena.dup_str(out.slice())
+    return out.take()
 
 priv const os_path_bytes: Sz = 4096 //<
     //< The size of the temporary buffer a path the OS reports is copied into
@@ -314,11 +311,10 @@ fn cwd(): U8[] //< the working directory with `/` separators; empty where it can
     //< levels also drops a rooted path's leading empty level, which makes it relative.
     $buf: U8[os_path_bytes] = ::{}
     root: = sys.cwd(U8$[]::{ .ptr = buf[0]@, .len = os_path_bytes })
-    $out: = Str_builder.new()
-    defer out.free()
+    out: = base_core.arena.text()
     for c in root
         out.c('/' if sys.is_path_sep(c) else c)
-    return base_core.arena.dup_str(out.slice())
+    return out.take()
 
 fn to_absolute(path: U8[]): U8[] //<
     //< The absolute path as seen from the working directory, for a diagnostic
@@ -410,12 +406,11 @@ impl Uri_style
         $named: = Str_builder.new()
         defer named.free()
         append_file_path(name, base_core.default_is_laid_out(), named@)
-        $out: = Str_builder.new()
-        defer out.free()
+        out: = base_core.arena.text()
         if r.has_scheme
             out.s(base_core.file_uri_scheme)
         out.s(to_absolute(named.slice()) if r.is_absolute else named.slice())
-        return base_core.arena.dup_str(out.slice())
+        return out.take()
 
 fn append_file_path(import_path: U8[], laid_out: Bool, out: Str_builder$@) //<
     //< It writes into out the file path to read for an import path (a file's logical name)
@@ -494,7 +489,6 @@ fn name_as_found(logical: U8[]): U8[] //<
     append_file_path(logical, !base_core.default_is_laid_out(), other@)
     if !fs.exists(other.slice())
         return logical
-    $named: = Str_builder.new()
-    defer named.free()
+    named: = base_core.arena.text()
     named.s(logical).s(base_core.spelt_out_ext())
-    return base_core.arena.dup_str(named.slice())
+    return named.take()

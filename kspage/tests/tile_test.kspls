@@ -26,11 +26,9 @@ import "std/verdict"
 
 // ---- merging cells ----
 
-fn test_a_merged_cell_spans_its_columns() //<
+fn test_a_merged_cell_spans_its_columns(arena: Arena$@) //<
     //< A cell merged across is as wide as the columns it covers put together
     verdict.start("[kspage/tile] the breadth of a cell merged across test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     table: = base.two_by_two(d)
     // The first cell of the first row is merged to the right and the covered cell removed (one
@@ -48,11 +46,9 @@ fn test_a_merged_cell_spans_its_columns() //<
         "the second column of the row below is where it was")
     verdict.pass("a merge across comes to the breadth of the columns it covers put together.")
 
-fn test_a_merged_cell_spans_its_rows() //<
+fn test_a_merged_cell_spans_its_rows(arena: Arena$@) //<
     //< A cell merged downward is as tall as the rows it covers put together
     verdict.start("[kspage/tile] the height of a cell merged downwards test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     table: = base.two_by_two(d)
     // The first cell of the first row is merged downward over the second row's first column.
@@ -69,13 +65,11 @@ fn test_a_merged_cell_spans_its_rows() //<
         "the cell of the row below goes into the right column")
     verdict.pass("a merge downwards comes to the height of the rows it covers put together.")
 
-fn test_a_merged_cell_does_not_widen_its_columns() //<
+fn test_a_merged_cell_does_not_widen_its_columns(arena: Arena$@) //<
     //< A merged cell does not decide a column's width
     //<
     //< **Otherwise the narrow columns would all widen at once.**
     verdict.start("[kspage/tile] a merged cell not widening a column test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     table: = base.two_by_two(d)
     head: = table.children.get(0)
@@ -91,11 +85,9 @@ fn test_a_merged_cell_does_not_widen_its_columns() //<
     assert(base.near(page.cells.get(0).rect.w, 16.0), "the merged cell stays two columns wide")
     verdict.pass("a merged cell does not decide a column's width.")
 
-fn test_merging_absorbs_the_next_cell_and_undoes_in_one_step() //<
+fn test_merging_absorbs_the_next_cell_and_undoes_in_one_step(arena: Arena$@) //<
     //< It absorbs the neighbour, merges, and undoes in one step
     verdict.start("[kspage/tile] merging cells and going back in one test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     table: = base.two_by_two(d)
     sheet: = base.grid_sheet(arena)
@@ -116,11 +108,9 @@ fn test_merging_absorbs_the_next_cell_and_undoes_in_one_step() //<
     assert(head.children.get(1).inlines.get(0).text().equals("b"), "it goes back with its text")
     verdict.pass("a merge takes the neighbour in, and one step puts it back.")
 
-fn test_splitting_puts_the_covered_cells_back() //<
+fn test_splitting_puts_the_covered_cells_back(arena: Arena$@) //<
     //< Split the merge and an empty cell comes back where it was covering
     verdict.start("[kspage/tile] the cells coming back when a merge is parted test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     table: = base.two_by_two(d)
     sheet: = base.grid_sheet(arena)
@@ -140,11 +130,9 @@ fn test_splitting_puts_the_covered_cells_back() //<
         "the cell that comes back is empty")
     verdict.pass("parted, an empty cell comes back where it was covering.")
 
-fn test_the_frame_marks_the_cell_the_caret_is_in() //<
+fn test_the_frame_marks_the_cell_the_caret_is_in(arena: Arena$@) //<
     //< The cell the cursor is in, and only that cell, gets the frame
     verdict.start("[kspage/tile] the frame pointing at the cell the cursor is in test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.add_block("body").add_text("outside")
     base.two_by_two(d)
@@ -167,11 +155,9 @@ fn test_the_frame_marks_the_cell_the_caret_is_in() //<
         assert(false, "on the body no frame comes out")
     verdict.pass("the frame fences the cell the cursor is in and nothing else.")
 
-fn test_the_frame_is_the_innermost_cell() //<
+fn test_the_frame_is_the_innermost_cell(arena: Arena$@) //<
     //< In a table within a table, the inner cell gets the frame
     verdict.start("[kspage/tile] the frame becoming the inner cell test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     outer: = d.add_block("table")
     row: = outer.add_child("row")
@@ -196,12 +182,11 @@ fn test_the_frame_is_the_innermost_cell() //<
     case .none
         assert(false, "the frame comes out inside a nesting too")
     verdict.pass("in a nesting the innermost cell becomes the frame.")
-fn test_a_cell_does_not_split_into_paragraphs() //< inside a cell no paragraph is split
+fn test_a_cell_does_not_split_into_paragraphs(arena: Arena$@) //<
+    //< inside a cell no paragraph is split
     //<
     //< Split, that row alone would gain a cell and the table's shape would break.
     verdict.start("[kspage/tile] not splitting a paragraph inside a cell test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     table: = base.two_by_two(d)
     ed: = edit.new_editor(d)
@@ -215,13 +200,11 @@ fn test_a_cell_does_not_split_into_paragraphs() //< inside a cell no paragraph i
     assert(table.children.get(0).children.len == 2, "the first row's cells stay two too")
     verdict
         .pass("pressed inside a cell no paragraph splits, and the table's shape does not change.")
-fn test_a_table_is_inserted_after_the_caret() //<
+fn test_a_table_is_inserted_after_the_caret(arena: Arena$@) //<
     //< An empty table can be inserted after the paragraph the cursor is in
     //<
     //< **Where there is no grid style it makes one**, or the table would be laid out as paragraphs.
     verdict.start("[kspage/tile] a table being insertable test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     head: = d.add_block("body").add_text("body")
     d.add_block("body").add_text("after")
@@ -261,13 +244,11 @@ fn test_a_table_is_inserted_after_the_caret() //<
     assert(sheet.styles.len == 0, "the style table goes back too")
     verdict.pass("a table goes in behind the cursor's paragraph, and goes back in one.")
 
-fn test_a_table_takes_the_size_pressed() //<
+fn test_a_table_takes_the_size_pressed(arena: Arena$@) //<
     //< The size is the click's: three rows and four columns give three rows of four cells
     //<
     //< Below one row or one column nothing is inserted (there is no table without cells).
     verdict.start("[kspage/tile] the size pressed test...")
-    arena: = Arena.new(1024 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     head: = d.add_block("body").add_text("body")
     sheet: = Sheet.new(base.root_font(), arena)
@@ -286,14 +267,12 @@ fn test_a_table_takes_the_size_pressed() //<
     assert(after.cells.len == 12, "twelve cells are laid")
     verdict.pass("a table takes the size pressed, and refuses a size with nothing in it.")
 
-fn test_a_fresh_table_spans_the_text() //<
+fn test_a_fresh_table_spans_the_text(arena: Arena$@) //<
     //< A new table's columns get equal shares of the width it is laid out to
     //<
     //< So it spans the text and keeps that width when the page is laid out wider. The table's
     //< indent and padding narrow what the columns share, as the flow narrows any block.
     verdict.start("[kspage/tile] a fresh table's width test...")
-    arena: = Arena.new(1024 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     head: = d.add_block("body").add_text("body")
     sheet: = Sheet.new(base.root_font(), arena)
@@ -324,15 +303,13 @@ fn test_a_fresh_table_spans_the_text() //<
     assert(ed.undo() && d.blocks.len == 1, "one undo takes the table and its widths back")
     verdict.pass("a fresh table spans the text it was put into, and holds that width.")
 
-fn test_the_heading_band_is_the_first_row() //<
+fn test_the_heading_band_is_the_first_row(arena: Arena$@) //<
     //< Every top-level table gives a band: its rectangle and its first row's
     //<
     //< A table inside a cell gives none.
     //<
     //< It is what the window keeps in view while the table scrolls under the tools.
     verdict.start("[kspage/tile] the heading band test...")
-    arena: = Arena.new(1024 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.add_block("body").add_text("above")
     outer: = d.add_block("table")
@@ -381,11 +358,9 @@ priv fn merged_head(d: Doc$@): Block$@ //<
     r1.add_child("cell").add_text("b")
     return table
 
-fn test_a_column_past_the_end_reaches_the_merged_row_too() //<
+fn test_a_column_past_the_end_reaches_the_merged_row_too(arena: Arena$@) //<
     //< A column added past the grid's end goes into the merged row as well
     verdict.start("[kspage/grid] a column put in past the end reaching the merged row test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     table: = merged_head(d)
     sheet: = base.grid_sheet(arena)
@@ -406,11 +381,9 @@ fn test_a_column_past_the_end_reaches_the_merged_row_too() //<
     assert(table.children.get(1).children.len == 2, "and so does the plain row")
     verdict.pass("a column put in past the end reaches the row holding a merge too.")
 
-fn test_a_column_over_a_merge_widens_it() //<
+fn test_a_column_over_a_merge_widens_it(arena: Arena$@) //<
     //< A column landing on a cell that spans more than one column widens that cell
     verdict.start("[kspage/grid] a column put in over a merge widening it test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     table: = merged_head(d)
     sheet: = base.grid_sheet(arena)
@@ -432,11 +405,9 @@ fn test_a_column_over_a_merge_widens_it() //<
     assert(table.children.get(1).children.len == 2, "and the plain row gives its cell up")
     verdict.pass("a column put in over a merge widens the merge, and one undo narrows it back.")
 
-fn test_dropping_a_column_narrows_a_merge_and_comes_home() //<
+fn test_dropping_a_column_narrows_a_merge_and_comes_home(arena: Arena$@) //<
     //< Removing a column narrows the cell that spans it, and one undo restores the span
     verdict.start("[kspage/grid] taking a column off narrowing a merge test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     table: = merged_head(d)
     sheet: = base.grid_sheet(arena)
@@ -458,11 +429,9 @@ fn test_dropping_a_column_narrows_a_merge_and_comes_home() //<
 
 // ---- repeating the last command ----
 
-fn test_doing_it_again_puts_another_column_in() //<
+fn test_doing_it_again_puts_another_column_in(arena: Arena$@) //<
     //< F4 runs the last command again, where the cursor is now
     verdict.start("[kspage/tile] doing the last command again test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     table: = base.two_by_two(d)
     sheet: = base.grid_sheet(arena)

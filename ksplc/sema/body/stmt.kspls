@@ -41,10 +41,9 @@ priv const guaranteed_block_nesting: Sz = 64 //<
 
 priv fn report_bad_ptr_compound_op(c: Sema_ctx$@, node: Ast_node$@, type_id: I32, op_text: U8[]) //<
     //< Rejects an operator that cannot be applied to a pointer
-    $shown: = c.env.display_str(type_id)
-    defer shown.free()
+    shown: = c.env.display(type_id)
     c.clear_scratch().s("operator '\{op_text\}' cannot be applied to the pointer type ")
-        .s("'\{shown.slice()\}'. Only '+=' and '-=' move a pointer, and they take an integer step ")
+        .s("'\{shown\}'. Only '+=' and '-=' move a pointer, and they take an integer step ")
         .s("(it counts elements, like 'p = p + i')")
     c.err(node, c.scratch.slice())
 
@@ -54,12 +53,10 @@ priv fn report_bad_ptr_step(c: Sema_ctx$@, node: Ast_node$@, type_id: I32, right
         //<
         //< Caution: **Do not merge it with the operator message.** In `p += q` the `+=` is fine, so
         //< "`+=` cannot be used" does not say how to fix it.
-    $l_shown: = c.env.display_str(type_id)
-    defer l_shown.free()
-    $r_shown: = c.env.display_str(right_id)
-    defer r_shown.free()
-    c.clear_scratch().s("the step of '\{op_text\}' on the pointer type '\{l_shown.slice()\}' must ")
-        .s("be an integer (it counts elements), but got '\{r_shown.slice()\}'")
+    l_shown: = c.env.display(type_id)
+    r_shown: = c.env.display(right_id)
+    c.clear_scratch().s("the step of '\{op_text\}' on the pointer type '\{l_shown\}' must ")
+        .s("be an integer (it counts elements), but got '\{r_shown\}'")
     c.err(node, c.scratch.slice())
 
 priv const no_name_label: U8[] = "_" //< the label for a level with no name
@@ -405,11 +402,10 @@ impl Ast_node
                 c.fn_ctx.catch_value_unread = prev_unread
                 if !sema_type_env.is_unknown(type_id) && !sema_type_env.is_void(type_id)
                     if c.env.is_result(type_id)
-                        $shown: = c.env.display_str(type_id)
-                        defer shown.free()
+                        shown: = c.env.display(type_id)
                         c.clear_scratch()
-                            .s("[W0701] Result of type '\{shown.slice()\}' is ignored. Handle the \
-                                error using '!' or 'catch'.")
+                            .s("[W0701] Result of type '\{shown\}' is ignored. Handle the error \
+                                using '!' or 'catch'.")
                         c.warn(left, c.scratch.slice())
                     else if base_core.config.run_lint_checks && !left.has_side_effect()
                         c.clear_scratch()

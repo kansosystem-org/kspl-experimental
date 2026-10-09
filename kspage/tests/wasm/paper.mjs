@@ -46,7 +46,7 @@ export const opens = material({
 });
 
 export async function run(ks, open) {
-  const { w, mem, scratch, read, out, stage, geom, boxOf, find, save, html, load,
+  const { w, mem, scratch, read, out, stage, geom, boxOf, find, save, md, load,
     surfaceAt } = ks;
 
   // --- A slide inside the flow (absolute coordinates) ---
@@ -338,7 +338,7 @@ export async function run(ks, open) {
     "putting a note beside does not grow the boxes");
   check(save().indexOf("pause here") >= 0,
     "the remembrance goes into the text saved");
-  check(html().indexOf("pause here") < 0, "it does not come out in the HTML written out");
+  check(md().indexOf("pause here") < 0, "it does not come out in the Markdown written out");
   w.kspage_web_undo();
   check(asideOf() === "", "one step takes it off");
 }

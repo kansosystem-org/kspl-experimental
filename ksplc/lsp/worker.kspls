@@ -15,6 +15,7 @@ import "ksplc/lsp/complete" as lsp_complete
 import "ksplc/lsp/hover" as lsp_hover
 import "ksplc/lsp/msg" as lsp_msg
 import "ksplc/lsp/nav" as lsp_nav
+import "ksplc/lsp/outline" as lsp_outline
 import "ksplc/lsp/semtok" as lsp_semtok
 import "ksplc/lsp/state" { Doc_state, Server }
 import "ksplc/lsp/uses" as lsp_uses
@@ -293,6 +294,9 @@ impl Server
         else if method.equals("textDocument/semanticTokens/full")
             if st: = r.document_state(params, id_val, arena)
                 lsp_semtok.handle(st, id_val, arena)
+        else if method.equals("textDocument/documentSymbol")
+            if st: = r.document_state(params, id_val, arena)
+                lsp_outline.handle(st, id_val, arena)
         else if method.equals("textDocument/rename") ||
             method.equals("textDocument/references")
             ws: = r.workspace_state(params)
@@ -457,6 +461,7 @@ priv fn answer_initialize(id_val: json.Val, arena: Arena$@)
         .set("codeActionProvider", b.bool_val(false))
         .set("inlayHintProvider", b.bool_val(false))
         .set("callHierarchyProvider", b.bool_val(true))
+        .set("documentSymbolProvider", b.bool_val(true))
     // The colouring of names. **It is not a substitute for the grammar's colouring** — it is
     // layered over the editor's own colouring (the heading of `semtok.kspls`).
     .set("semanticTokensProvider", lsp_semtok.provider(b@))

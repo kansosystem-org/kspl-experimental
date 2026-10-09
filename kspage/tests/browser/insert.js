@@ -6,8 +6,8 @@ function kspageProbeInsert(ks) {
   // 16. The buttons that insert a table and a slide.
   //
   // **A button takes the focus**; unreturned, it cannot be typed on straight after the press.
-  // Whether it went in is seen by the counts of tables and slides in the HTML written out.
-  const tables = () => app.html().split("<table").length;
+  // Whether it went in is seen by the counts of tables and slides in the document.
+  const tables = ks.tableCount;
   pressAt(8);
   const wasTables = tables();
   const wasSurfaces = app.surfaceCount();
@@ -28,8 +28,8 @@ function kspageProbeInsert(ks) {
   // table of that size goes in (Word's shape — `fly.js`'s `kspageGridPick`).
   const gridCell = (cols, rows) => document.querySelector(
     `#table-size .grid-cell[aria-label="${cols} columns × ${rows} rows"]`);
-  const rowsIn = () => (app.html().match(/<tr[\s>]/g) || []).length;
-  const cellsIn = () => (app.html().match(/<t[dh][\s>]/g) || []).length;
+  const rowsIn = ks.rowCount;
+  const cellsIn = ks.cellCount;
   openMenu("put-table");
   const four3 = gridCell(4, 3);
   check(four3 !== null, "the grid holds a cell for four columns by three rows");
@@ -156,14 +156,12 @@ function kspageProbeInsert(ks) {
   // 17. A region's frame, and the characters' and background's colours.
   //
   // **What is inside the canvas does not come out in the DOM**, so the row of regions and the
-  // painted colour are looked at. **The frame must come out neither in printing nor in the HTML
-  // written out** (it is the editing screen's).
+  // painted colour are looked at. **The frame must not come out in printing** (it is the
+  // editing screen's).
   const kinds = app.regions().map((one) => one.kind);
   check(kinds.length > 1, "there are two or more regions (" + kinds.join(",") + ")");
   check(kinds.includes("flow") && kinds.includes("grid"),
     "the prose region and the table region are apart");
-  // With a frame mixed into the HTML written out, a dotted line comes out where it is handed to.
-  check(app.html().indexOf("kspage-region") < 0, "no region comes out in the HTML written out");
 
   // A colour goes into a style, looked at by the canvas's pixels. **This can be seen nowhere else**
   // — the colour can reach the box and still not be drawn unless laid down again at drawing time.

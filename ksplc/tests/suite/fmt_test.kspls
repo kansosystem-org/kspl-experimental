@@ -19,10 +19,12 @@ import "std/str" // `arena.text()`
 import "std/sys"
 import "std/verdict"
 
-priv fn fmt(path: U8[]): verdict.Run_out //< the formatting's result
+priv fn fmt(path: U8[], style: U8[] = ""): verdict.Run_out //< the formatting's result
     //<
-    //< On failure, code is non-zero and out holds that output.
-    return harness.run(U8[][]::{ harness.ksplc_exe(), "fmt", path })
+    //< On failure, code is non-zero and out holds that output. A `style` is passed as `--style=`.
+    if style.len == 0
+        return harness.run(U8[][]::{ harness.ksplc_exe(), "fmt", path })
+    return harness.run(U8[][]::{ harness.ksplc_exe(), "fmt", style, path })
 
 priv fn write_src(slot: U8[], name: U8[], body: U8[], arena: Arena$@): U8[] //<
     //< It returns the path of the working directory holding one input file, or empty on failure
@@ -45,15 +47,16 @@ priv fn case_stable(slot: U8[], file: U8[], name: U8[], src: U8[], arena: Arena$
     //< Checks that formatting an already formatted shape changes nothing
     case_becomes(slot, file, name, src, src, arena)
 
-priv fn case_becomes(slot: U8[], file: U8[], name: U8[], src: U8[], want: U8[], arena: Arena$@) //<
-    //< Checks that formatting `src` writes `want`
-    //<
-    //< The file's name (`a.kspl` or `a.kspls`) decides the notation.
+priv fn case_becomes(slot: U8[], file: U8[], name: U8[], src: U8[], want: U8[], arena: Arena$@,
+    style: U8[] = "") //<
+        //< Checks that formatting `src` (with `style`, a whole `--style=…`) writes `want`
+        //<
+        //< The file's name (`a.kspl` or `a.kspls`) decides the notation.
     path: = write_src(slot, file, src, arena)
     if path.len == 0
         verdict.check(name, false, "cannot place the material")
         return
-    r: = fmt(path)
+    r: = fmt(path, style)
     if r.code != 0
         verdict.check(name, false, arena.text().s("fmt failed\n\{r.out\}").take())
         return
@@ -85,24 +88,6 @@ priv fn case_idempotent(arena: Arena$@) //<
         .s("it changed on the second\n--- first ---\n\{first.out\}--- second ---\n\{second.out\}")
         .take())
 
-priv fn case_summary_below(arena: Arena$@) //<
-    //< A description too long for its line leaves the mark and moves one level in
-    //<
-    //< **The three unmoved shapes test the other half**: a formatter moving every trailing mark
-    //< down would pass the first alone, and the run after a return type would quietly become the
-    //< declaration's own.
-    name: = "a description too long for its line stands below the mark"
-    path: = write_src("below", "a.kspl", fmt_material.src_summary_in, arena)
-    if path.len == 0
-        verdict.check(name, false, "cannot place the material")
-        return
-    r: = fmt(path)
-    if r.code != 0
-        verdict.check(name, false, arena.text().s("fmt failed\n\{r.out\}").take())
-        return
-    verdict.check(name, r.out.equals(fmt_material.src_summary_out),
-        differs(fmt_material.src_summary_out, r.out, arena))
-
 priv fn case_carried_string(arena: Arena$@) //<
     //< A string too long for the line is carried onto the next one, at a space
     //<
@@ -129,72 +114,6 @@ priv fn case_carried_string(arena: Arena$@) //<
         second.code == 0 && second.out.equals(r.out),
         arena.text().s("--- first ---\n\{r.out\}--- second ---\n\{second.out\}").take())
 
-priv fn case_split_value(arena: Arena$@) //<
-    //< A value too long for its line breaks only where the break is read back as the same value
-    //<
-    //< **The input is the one-line shape, not the answer**, as with a carried string.
-    name: = "a value too long for its line takes parentheses or stays on the `return` line"
-    path: = write_src("choice", "a.kspl", fmt_material.src_choice_in, arena)
-    if path.len == 0
-        verdict.check(name, false, "cannot place the material")
-        return
-    r: = fmt(path)
-    if r.code != 0
-        verdict.check(name, false, arena.text().s("fmt failed\n\{r.out\}").take())
-        return
-    verdict.check(name, r.out.equals(fmt_material.src_choice_out),
-        differs(fmt_material.src_choice_out, r.out, arena))
-
-priv fn case_inner_comment(arena: Arena$@) //<
-    //< A comment inside the braces is written unbroken at the right level
-    //<
-    //< **Both are idempotent, so `test-fmt-tree` does not catch them**: the expected value is
-    //< written here.
-    name: = "a comment inside the braces is put out unbroken at the right level"
-    path: = write_src("innercmt", "a.kspl", fmt_material.src_inner_comment_in, arena)
-    if path.len == 0
-        verdict.check(name, false, "cannot place the material")
-        return
-    r: = fmt(path)
-    if r.code != 0
-        verdict.check(name, false, arena.text().s("fmt failed\n\{r.out\}").take())
-        return
-    verdict.check(name, r.out.equals(fmt_material.src_inner_comment_in),
-        differs(fmt_material.src_inner_comment_in, r.out, arena))
-
-priv fn case_blank_lines(arena: Arena$@) //<
-    //< It drops a blank line with nothing to separate above from below
-    //<
-    //< Caution: **Check that the blank line after `}` is kept.** It is the writer's paragraph
-    //< separator; dropped, functions and methods run into one another.
-    name: = "the blank lines at a block's two ends are dropped and the one after `}` is kept"
-    path: = write_src("blank", "a.kspl", fmt_material.src_blank_in, arena)
-    if path.len == 0
-        verdict.check(name, false, "cannot place the material")
-        return
-    r: = fmt(path)
-    if r.code != 0
-        verdict.check(name, false, arena.text().s("fmt failed\n\{r.out\}").take())
-        return
-    verdict.check(name, r.out.equals(fmt_material.src_blank_out),
-        differs(fmt_material.src_blank_out, r.out, arena))
-
-priv fn case_import_order(arena: Arena$@) //< it sorts the `import` lines by name
-    //<
-    //< Caution: **Check that the file's heading does not move.** It sits right above the first
-    //< import, so "a comment right above belongs to the import below" would move it along.
-    name: = "the imports are sorted by name (the heading does not move)"
-    path: = write_src("imports", "a.kspl", fmt_material.src_imports_in, arena)
-    if path.len == 0
-        verdict.check(name, false, "cannot place the material")
-        return
-    r: = fmt(path)
-    if r.code != 0
-        verdict.check(name, false, arena.text().s("fmt failed\n\{r.out\}").take())
-        return
-    verdict.check(name, r.out.equals(fmt_material.src_imports_out),
-        differs(fmt_material.src_imports_out, r.out, arena))
-
 priv fn case_bare_line(arena: Arena$@) //<
     //< A block written on one line leaves out its last `;` only in the indentation notation
     //<
@@ -218,42 +137,6 @@ priv fn case_bare_line(arena: Arena$@) //<
         differs(fmt_material.src_bare_line_out, laid.out, arena))
     verdict.check(back, braced.out.equals(fmt_material.src_bare_line_braced),
         differs(fmt_material.src_bare_line_braced, braced.out, arena))
-
-priv fn case_short_blocks(arena: Arena$@) //<
-    //< `AllowShortBlocks: true` folds only a one-statement block with no comment
-    //<
-    //< Caution: **Check that a branch with a comment is not folded.** Folded, the comment breaks
-    //< across the brace, and so does the round trip back.
-    name: = "AllowShortBlocks folds only a one-statement block with no comment"
-    path: = write_src("short", "a.kspl", fmt_material.src_short_in, arena)
-    if path.len == 0
-        verdict.check(name, false, "cannot place the material")
-        return
-    r: = harness
-        .run(U8[][]::{ harness.ksplc_exe(), "fmt", "--style=AllowShortBlocks: true", path })
-    if r.code != 0
-        verdict.check(name, false, arena.text().s("fmt failed\n\{r.out\}").take())
-        return
-    verdict.check(name, r.out.equals(fmt_material.src_short_out),
-        differs(fmt_material.src_short_out, r.out, arena))
-
-priv fn case_short_functions(arena: Arena$@) //<
-    //< `AllowShortFunctions: true` folds the body of a `fn` only when it is one statement
-    //<
-    //< Caution: **Test the bodies that are not folded too.** Folding a two-statement body, one with
-    //< a comment, or one over the column width breaks the comment or the width setting.
-    name: = "AllowShortFunctions folds the body of a one-statement fn"
-    path: = write_src("shortfn", "a.kspl", fmt_material.src_short_fn_in, arena)
-    if path.len == 0
-        verdict.check(name, false, "cannot place the material")
-        return
-    r: = harness
-        .run(U8[][]::{ harness.ksplc_exe(), "fmt", "--style=AllowShortFunctions: true", path })
-    if r.code != 0
-        verdict.check(name, false, arena.text().s("fmt failed\n\{r.out\}").take())
-        return
-    verdict.check(name, r.out.equals(fmt_material.src_short_fn_out),
-        differs(fmt_material.src_short_fn_out, r.out, arena))
 
 priv fn case_unknown_style_key(arena: Arena$@) //<
     //< Checks that an unknown `--style` key is not silently ignored
@@ -311,7 +194,13 @@ fn main(): I32
     case_stable("closurel", "a.kspls", "a closure's `;` stays on its signature's line (indentation)",
         fmt_material.src_closure_sep_layout, arena)
     case_carried_string(arena)
-    case_split_value(arena)
+    case_becomes("rejoined", "a.kspl",
+        "a chain holding a carried string that fits is joined in one formatting",
+        fmt_material.src_rejoined_in, fmt_material.src_rejoined_out, arena)
+    // The input is the one-line shape, not the answer, as with a carried string.
+    case_becomes("choice", "a.kspl",
+        "a value too long for its line takes parentheses or stays on the `return` line",
+        fmt_material.src_choice_in, fmt_material.src_choice_out, arena)
     case_becomes("defer", "a.kspl", "a defer holding one statement is written without its block",
         fmt_material.src_defer_in, fmt_material.src_defer_out, arena)
     case_becomes("firstarm", "a.kspl", "a switch's first arm goes below it, at its column",
@@ -331,13 +220,36 @@ fn main(): I32
         fmt_material.src_choice_out, arena)
     case_stable("choicel", "a.kspls", "a split value in parentheses does not move (indentation)",
         fmt_material.src_choice_layout, arena)
-    case_summary_below(arena)
-    case_inner_comment(arena)
-    case_blank_lines(arena)
-    case_import_order(arena)
-    case_short_blocks(arena)
+    // The three unmoved shapes test the other half: a formatter moving every trailing mark down
+    // would pass the first alone, and the run after a return type would quietly become the
+    // declaration's own.
+    case_becomes("below", "a.kspl", "a description too long for its line stands below the mark",
+        fmt_material.src_summary_in, fmt_material.src_summary_out, arena)
+    // Idempotent either way, so `test-fmt-tree` does not catch it: the expected value is here.
+    case_stable("innercmt", "a.kspl",
+        "a comment inside the braces is put out unbroken at the right level",
+        fmt_material.src_inner_comment_in, arena)
+    // Caution: Check that the blank line after `}` is kept. It is the writer's paragraph
+    // separator; dropped, functions and methods run into one another.
+    case_becomes("blank", "a.kspl",
+        "the blank lines at a block's two ends are dropped and the one after `}` is kept",
+        fmt_material.src_blank_in, fmt_material.src_blank_out, arena)
+    // Caution: Check that the file's heading does not move. It sits right above the first import,
+    // so "a comment right above belongs to the import below" would move it along.
+    case_becomes("imports", "a.kspl", "the imports are sorted by name (the heading does not move)",
+        fmt_material.src_imports_in, fmt_material.src_imports_out, arena)
+    // Caution: Check that a branch with a comment is not folded. Folded, the comment breaks across
+    // the brace, and so does the round trip back.
+    case_becomes("short", "a.kspl",
+        "AllowShortBlocks folds only a one-statement block with no comment",
+        fmt_material.src_short_in, fmt_material.src_short_out, arena,
+        "--style=AllowShortBlocks: true")
     case_idempotent(arena)
-    case_short_functions(arena)
+    // Caution: Test the bodies that are not folded too. Folding a two-statement body, one with a
+    // comment, or one over the column width breaks the comment or the width setting.
+    case_becomes("shortfn", "a.kspl", "AllowShortFunctions folds the body of a one-statement fn",
+        fmt_material.src_short_fn_in, fmt_material.src_short_fn_out, arena,
+        "--style=AllowShortFunctions: true")
     case_bare_line(arena)
     case_unknown_style_key(arena)
     fmt_cache.run(arena)

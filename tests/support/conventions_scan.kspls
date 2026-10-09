@@ -9,6 +9,7 @@ import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/str"
+import "std/verdict"
 
 fn find_all(text: U8[], head: U8[], tail: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Picks up every text between head and tail, one at a time
@@ -107,11 +108,6 @@ fn kspl_specs_with(extra: U8[][], arena: Arena$@): U8[][] //<
         out.push(one)
     return out.slice()
 
-fn text_skip(rel: U8[]): Bool //< whether the file is generated
-    //<
-    //< Its canonical source is checked instead.
-    return rel.equals("ksplc/seed.c")
-
 fn strip_code(line: U8[], arena: Arena$@): U8[] //<
     //< Drops the string literals and the line comment from a line
     //<
@@ -193,6 +189,13 @@ struct Sample
 
 // Runs the judgment over the table and returns the samples it got wrong.
 //
+fn check_samples(title: U8[], samples: Sample[], table: U8[],
+    decide: fn(text: U8[], arena: Arena$@): Bool, arena: Arena$@) //<
+        //< One check that `decide` judges every sample of the table named `table` as it says
+    $bad: = misjudged(samples, decide, arena)
+    verdict.check_list(title, samples.len, "samples", bad@,
+        arena.text().s("the table of what is hit and what is not is `\{table\}`").take())
+
 // Caution: **`decide` must be a pure function of one text**: if it also reads a file, the samples
 // can no longer be passed in.
 fn misjudged(samples: Sample[], decide: fn(text: U8[], arena: Arena$@): Bool, arena: Arena$@):

@@ -39,10 +39,8 @@ fn one_row(d: Doc$@, a: U8[], b: U8[]): Block$@ //< a table with one row
     add_cell(r, b)
     return t
 
-fn test_a_formula_shows_its_value()
+fn test_a_formula_shows_its_value(arena: Arena$@)
     verdict.start("[kspage/calc] a formula becoming its value test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = one_row(d, "=1+2*3", "=(1+2)*3")
 
@@ -51,10 +49,8 @@ fn test_a_formula_shows_its_value()
     assert(cell_text(t, 0, 1).equals("9"), "the brackets change what comes first")
     verdict.pass("a formula is solved, and the text seen turns into the value.")
 
-fn test_a_reference_reads_another_cell()
+fn test_a_reference_reads_another_cell(arena: Arena$@)
     verdict.start("[kspage/calc] a reference reading another cell test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = one_row(d, "2", "=A1*3")
 
@@ -63,11 +59,9 @@ fn test_a_reference_reads_another_cell()
     assert(cell_text(t, 0, 1).equals("6"), "the value referred to goes in")
     verdict.pass("a formula can read another cell of the same table.")
 
-fn test_dependencies_resolve_regardless_of_order() //<
+fn test_dependencies_resolve_regardless_of_order(arena: Arena$@) //<
     //< Resolved in dependency order, not row order (a row may depend on one after it)
     verdict.start("[kspage/calc] the dependencies solving whatever the order test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = d.add_block("table")
     add_cell(add_row(t), "=A2+1")
@@ -80,10 +74,8 @@ fn test_dependencies_resolve_regardless_of_order() //<
     assert(cell_text(t, 0, 0).equals("3"), "a cell that comes first is solved too")
     verdict.pass("the order it solves is the order of the dependencies, not the order written.")
 
-fn test_a_cycle_is_reported()
+fn test_a_cycle_is_reported(arena: Arena$@)
     verdict.start("[kspage/calc] going round in circles coming out as a mark test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = one_row(d, "=B1", "=A1")
 
@@ -94,10 +86,8 @@ fn test_a_cycle_is_reported()
     verdict
         .pass("a reference that goes round back to itself comes out as a mark instead of circling.")
 
-fn test_unreadable_things_are_reported()
+fn test_unreadable_things_are_reported(arena: Arena$@)
     verdict.start("[kspage/calc] what cannot be solved coming out as a mark test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = d.add_block("table")
     r0: = add_row(t)
@@ -121,10 +111,8 @@ fn test_unreadable_things_are_reported()
         "a formula with something left unread is #SYNTAX! too")
     verdict.pass("what cannot be solved comes out as a mark that says how to fix it.")
 
-fn test_a_fraction_keeps_its_digits()
+fn test_a_fraction_keeps_its_digits(arena: Arena$@)
     verdict.start("[kspage/calc] the fraction not being lost test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = one_row(d, "=1/4", "=-(1+2)*3")
 
@@ -134,10 +122,8 @@ fn test_a_fraction_keeps_its_digits()
     assert(cell_text(t, 0, 1).equals("-9"), "the one-sided minus and the brackets act")
     verdict.pass("a whole number comes out whole, and a fraction comes out a fraction.")
 
-fn test_a_nested_table_calculates_on_its_own()
+fn test_a_nested_table_calculates_on_its_own(arena: Arena$@)
     verdict.start("[kspage/calc] a table inside a cell being solved on its own test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     outer: = d.add_block("table")
     row: = add_row(outer)
@@ -155,10 +141,9 @@ fn test_a_nested_table_calculates_on_its_own()
     assert(cell_text(outer, 0, 1).equals("20"), "the outer formula looks at the outer table")
     verdict.pass("each table is solved with cells of its own.")
 
-fn test_typing_edits_the_formula_itself() //< what is typed into is the typed text (the formula)
+fn test_typing_edits_the_formula_itself(arena: Arena$@) //<
+    //< what is typed into is the typed text (the formula)
     verdict.start("[kspage/calc] typing changing the formula itself test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = one_row(d, "2", "=A1*3")
     sheet: = base.grid_sheet(arena)
@@ -173,14 +158,12 @@ fn test_typing_edits_the_formula_itself() //< what is typed into is the typed te
     assert(cell_text(t, 0, 1).equals("78"), "it is worked out afresh with the formula changed")
     verdict.pass("what is typed is the formula itself, and the value is worked out afresh.")
 
-fn test_undo_after_a_recalc_restores_the_typed_text() //<
+fn test_undo_after_a_recalc_restores_the_typed_text(arena: Arena$@) //<
     //< Type over it after a recalculation and undo still restores the typed text
     //<
     //< **Put the value into the document and the record's offsets get out of step with the shown
     //< text**; the restored text would break (the formula is longer than its value).
     verdict.start("[kspage/calc] undoing after a recalculation test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = one_row(d, "2", "=A1:A1.sum()*3")
     sheet: = base.grid_sheet(arena)
@@ -201,10 +184,8 @@ fn test_undo_after_a_recalc_restores_the_typed_text() //<
     assert(cell_text(t, 0, 1).equals("6"), "the value returns too")
     verdict.pass("a recalculation does not move the text typed, so an undo does not mix them.")
 
-fn test_undo_brings_the_formula_back()
+fn test_undo_brings_the_formula_back(arena: Arena$@)
     verdict.start("[kspage/calc] the formula coming back when it is put back test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = one_row(d, "2", "=A1*3")
     sheet: = base.grid_sheet(arena)
@@ -229,10 +210,8 @@ priv fn one_column(d: Doc$@, a: U8[], b: U8[], c: U8[]): Block$@ //<
     add_cell(add_row(t), c)
     return t
 
-fn test_sum_adds_up_a_range()
+fn test_sum_adds_up_a_range(arena: Arena$@)
     verdict.start("[kspage/calc] a range being added up test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = one_column(d, "1", "2", "=A1:A2.sum()")
 
@@ -240,11 +219,9 @@ fn test_sum_adds_up_a_range()
     assert(cell_text(t, 2, 0).equals("3"), "the numbers inside the range are added")
     verdict.pass("a range is folded into one number.")
 
-fn test_a_range_skips_what_is_not_a_number() //<
+fn test_a_range_skips_what_is_not_a_number(arena: Arena$@) //<
     //< What a range points at is "the numbers in here"
     verdict.start("[kspage/calc] a range skipping a cell that is no number test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = d.add_block("table")
     add_cell(add_row(t), "head")
@@ -259,12 +236,11 @@ fn test_a_range_skips_what_is_not_a_number() //<
     assert(cell_text(t, 3, 1).equals("1"), "only the numbers are counted too")
     verdict.pass("neither an empty cell nor a cell of words is counted inside a range.")
 
-fn test_a_broken_cell_in_a_range_is_carried_out() //< a broken formula's mark is passed through
+fn test_a_broken_cell_in_a_range_is_carried_out(arena: Arena$@) //<
+    //< a broken formula's mark is passed through
     //<
     //< Skipped, the total alone would look right.
     verdict.start("[kspage/calc] a broken formula inside a range carrying out test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = one_column(d, "1", "=A2", "=A1:A2.sum()")
 
@@ -273,10 +249,8 @@ fn test_a_broken_cell_in_a_range_is_carried_out() //< a broken formula's mark is
     assert(cell_text(t, 2, 0).equals("#CYCLE!"), "that mark carries as far as the total")
     verdict.pass("a broken formula comes out through the range.")
 
-fn test_the_smallest_the_largest_and_the_count()
+fn test_the_smallest_the_largest_and_the_count(arena: Arena$@)
     verdict.start("[kspage/calc] the smallest, the largest and the count test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = d.add_block("table")
     add_cell(add_row(t), "4")
@@ -293,10 +267,8 @@ fn test_the_smallest_the_largest_and_the_count()
     assert(cell_text(t, 3, 2).equals("3"), "the count of numbers")
     verdict.pass("there are four the operations that fold a range.")
 
-fn test_folding_nothing() //< the result when there is no number differs per case
+fn test_folding_nothing(arena: Arena$@) //< the result when there is no number differs per case
     verdict.start("[kspage/calc] folding a range holding no number test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = one_column(d, "x", "=A1:A1.sum()", "=A1:A1.min()")
 
@@ -305,10 +277,9 @@ fn test_folding_nothing() //< the result when there is no number differs per cas
     assert(cell_text(t, 2, 0).equals("#VALUE!"), "the smallest value is none")
     verdict.pass("the total is 0, but the smallest value is none.")
 
-fn test_a_fold_takes_one_range_and_no_arguments() //< an aggregate takes one range, no arguments
+fn test_a_fold_takes_one_range_and_no_arguments(arena: Arena$@) //<
+    //< an aggregate takes one range, no arguments
     verdict.start("[kspage/calc] a fold taking one range alone test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = d.add_block("table")
     r0: = add_row(t)
@@ -324,10 +295,8 @@ fn test_a_fold_takes_one_range_and_no_arguments() //< an aggregate takes one ran
     assert(cell_text(t, 1, 1).equals("#SYNTAX!"), "no argument can be handed to anything that folds")
     verdict.pass("a fold takes one range alone, and the rest is written as an addition.")
 
-fn test_a_range_may_be_given_backwards() //< the order of the ends does not matter
+fn test_a_range_may_be_given_backwards(arena: Arena$@) //< the order of the ends does not matter
     verdict.start("[kspage/calc] a range being written backwards test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = one_column(d, "1", "2", "=A2:A1.sum()")
 
@@ -335,10 +304,8 @@ fn test_a_range_may_be_given_backwards() //< the order of the ends does not matt
     assert(cell_text(t, 2, 0).equals("3"), "written bottom to top it is the same range")
     verdict.pass("a range's ends may be written from either side.")
 
-fn test_a_bad_range_or_name_is_reported()
+fn test_a_bad_range_or_name_is_reported(arena: Arena$@)
     verdict.start("[kspage/calc] a wrong range or name coming out as a mark test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = one_column(d, "1", "=A1:Z9.sum()", "=A1.nope()")
     // A name that is no aggregate is refused too (it does not mix with a value's methods).
@@ -354,11 +321,9 @@ fn test_a_bad_range_or_name_is_reported()
     assert(cell_text(t, 4, 0).equals("#NAME!"), "a folding function cannot be written on a value")
     verdict.pass("both a range that sticks out and a name it does not know are refused there.")
 
-fn test_the_source_of_a_cell_is_its_formula() //<
+fn test_the_source_of_a_cell_is_its_formula(arena: Arena$@) //<
     //< The value is what shows, but the typed text (the formula) can be read as it is
     verdict.start("[kspage/calc] the formula being left behind the value seen test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = one_row(d, "2", "=A1*3")
     calc.recalc(d, base.grid_sheet(arena))
@@ -371,12 +336,10 @@ fn test_the_source_of_a_cell_is_its_formula() //<
     assert(bare, "in a cell with no formula the text seen is the text typed as it stands")
     verdict.pass("what is seen is the value, and the text typed can be taken apart from it.")
 
-fn test_a_cells_source_can_be_replaced() //< a formula can be replaced whole
+fn test_a_cells_source_can_be_replaced(arena: Arena$@) //< a formula can be replaced whole
     //<
     //< **It is one step, undone in one.**
     verdict.start("[kspage/calc] a formula being swapped whole test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = one_row(d, "2", "=A1*3")
     sheet: = base.grid_sheet(arena)
@@ -395,11 +358,9 @@ fn test_a_cells_source_can_be_replaced() //< a formula can be replaced whole
     assert(cell_text(t, 0, 1).equals("6"), "in one it returns to the formula it had")
     verdict.pass("a formula is swapped whole, and put back in one.")
 
-fn test_what_takes_a_formula() //<
+fn test_what_takes_a_formula(arena: Arena$@) //<
     //< Only a cell, or a text that already holds a formula, may be replaced whole
     verdict.start("[kspage/calc] where a formula may be swapped test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     body: = d.add_block("body")
     prose: = body.add_text("ordinary prose")
@@ -416,13 +377,11 @@ fn test_what_takes_a_formula() //<
     assert(!calc.takes_formula(d, sheet, null), "pointing nowhere, it does not open")
     verdict.pass("what opens is a cell, and a text that already holds a formula, and nothing else.")
 
-fn test_a_recalc_does_not_move_the_caret() //<
+fn test_a_recalc_does_not_move_the_caret(arena: Arena$@) //<
     //< A recalculation does not change the typed text, so the cursor does not move either
     //<
     //< **Put the value into the text and it shrinks, and the cursor lands outside.**
     verdict.start("[kspage/calc] a recalculation not moving the caret test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = one_row(d, "=1+2", "x")
 
@@ -456,10 +415,8 @@ priv fn two_tables(d: Doc$@, name: U8[], ref_text: U8[]): Block$@ //<
     add_cell(dr, ref_text)
     return dst
 
-fn test_a_formula_reaches_another_table_by_name()
+fn test_a_formula_reaches_another_table_by_name(arena: Arena$@)
     verdict.start("[kspage/calc] pointing at another table by name test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     dst: = two_tables(d, "other", "=other!B2+1")
 
@@ -467,14 +424,12 @@ fn test_a_formula_reaches_another_table_by_name()
     assert(cell_text(dst, 0, 0).equals("41"), "a cell of the table the name points at can be read")
     verdict.pass("a formula can point at another table's cell by name.")
 
-fn test_naming_from_a_cell_lands_on_the_table() //<
+fn test_naming_from_a_cell_lands_on_the_table(arena: Arena$@) //<
     //< A name can be given to a table from the screen
     //<
     //< **Checked nowhere else**, from setting the name to a formula using it (the section above
     //< writes the name into the source).
     verdict.start("[kspage/calc] a name put on the table from inside a cell test...")
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = base.grid_sheet(arena)
     src: = d.add_block("table")
@@ -503,12 +458,11 @@ fn test_naming_from_a_cell_lands_on_the_table() //<
     assert(cell_text(dst, 0, 0).equals("21"), "the name put on points at the other table")
     verdict.pass("a name put on from inside a cell goes on the table, and a formula refers to it.")
 
-fn test_an_unknown_table_name_is_reported() //< where a name cannot be resolved it is #NAME!
+fn test_an_unknown_table_name_is_reported(arena: Arena$@) //<
+    //< where a name cannot be resolved it is #NAME!
     //<
     //< It is not treated as pointing at its own table.
     verdict.start("[kspage/calc] a table name it does not know becoming a mark test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     dst: = two_tables(d, "other", "=elsewhere!A1")
 
@@ -517,12 +471,10 @@ fn test_an_unknown_table_name_is_reported() //< where a name cannot be resolved 
         "a name that cannot be referred to comes out as a mark")
     verdict.pass("a table name it does not know comes out as #NAME!.")
 
-fn test_a_span_can_cross_tables() //< a range can span tables too
+fn test_a_span_can_cross_tables(arena: Arena$@) //< a range can span tables too
     //<
     //< The name applies to the whole range.
     verdict.start("[kspage/calc] a range crossing the tables test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     dst: = two_tables(d, "other", "=other!A1:B2.sum()")
 
@@ -530,10 +482,9 @@ fn test_a_span_can_cross_tables() //< a range can span tables too
     assert(cell_text(dst, 0, 0).equals("100"), "another table's range can be folded")
     verdict.pass("a range can point at another table by name too.")
 
-fn test_a_table_without_a_name_cannot_be_reached() //< a table with no name cannot be referred to
+fn test_a_table_without_a_name_cannot_be_reached(arena: Arena$@) //<
+    //< a table with no name cannot be referred to
     verdict.start("[kspage/calc] a table with no name not being pointed at test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     dst: = two_tables(d, "", "=other!A1")
 
@@ -541,10 +492,8 @@ fn test_a_table_without_a_name_cannot_be_reached() //< a table with no name cann
     assert(cell_text(dst, 0, 0).equals("#NAME!"), "a table holding no name cannot be referred to")
     verdict.pass("a table with no name cannot be pointed at from any formula.")
 
-fn test_a_cycle_across_tables_is_found() //< a cycle is found across tables too
+fn test_a_cycle_across_tables_is_found(arena: Arena$@) //< a cycle is found across tables too
     verdict.start("[kspage/calc] going round in circles across the tables test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     first: = d.add_block("table")
     first.name = "x"
@@ -561,10 +510,9 @@ fn test_a_cycle_across_tables_is_found() //< a cycle is found across tables too
     assert(cell_text(second, 0, 0).equals("#CYCLE!"), "the other table becomes the same mark")
     verdict.pass("going round in circles is found across the tables too.")
 
-fn test_a_table_may_point_forward() //< a table written first may refer to a table written later
+fn test_a_table_may_point_forward(arena: Arena$@) //<
+    //< a table written first may refer to a table written later
     verdict.start("[kspage/calc] pointing at a table written later test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     first: = d.add_block("table")
     first.name = "earlier"
@@ -580,12 +528,10 @@ fn test_a_table_may_point_forward() //< a table written first may refer to a tab
     verdict.pass("the order the tables were written does not change what can be pointed at.")
 // ---- a formula in prose ----
 
-fn test_a_formula_in_prose_is_solved() //< a formula in prose is resolved too
+fn test_a_formula_in_prose_is_solved(arena: Arena$@) //< a formula in prose is resolved too
     //<
     //< Prose has no table of its own, so it refers by name.
     verdict.start("[kspage/calc] a formula in prose being solved test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = d.add_block("table")
     t.name = "data"
@@ -603,12 +549,10 @@ fn test_a_formula_in_prose_is_solved() //< a formula in prose is resolved too
     assert(got.text().equals("=data!B1*2"), "the text typed (the formula) is left")
     verdict.pass("a formula in prose is solved too, pointing at a table's cell by name.")
 
-fn test_prose_cannot_use_a_bare_address() //< prose has no table of its own
+fn test_prose_cannot_use_a_bare_address(arena: Arena$@) //< prose has no table of its own
     //<
     //< An address written without a table name cannot be resolved.
     verdict.start("[kspage/calc] prose not being able to point at a bare address test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = d.add_block("table")
     t.name = "data"
@@ -624,11 +568,9 @@ fn test_prose_cannot_use_a_bare_address() //< prose has no table of its own
     assert(folded.showing().equals("#REF!"), "a range with no name cannot be folded either")
     verdict.pass("a formula in prose cannot point without writing which table by name.")
 
-fn test_a_second_run_in_a_cell_is_prose() //<
+fn test_a_second_run_in_a_cell_is_prose(arena: Arena$@) //<
     //< A cell's second inline onward is prose (the table resolves only the first inline)
     verdict.start("[kspage/calc] a cell's second run being prose test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = d.add_block("table")
     t.name = "data"
@@ -644,13 +586,11 @@ fn test_a_second_run_in_a_cell_is_prose() //<
     verdict.pass("a cell is its first inline alone, and the rest is prose.")
 // ---- an address that is too large ----
 
-fn test_an_overlong_address_does_not_wrap_onto_a_cell() //<
+fn test_an_overlong_address_does_not_wrap_onto_a_cell(arena: Arena$@) //<
     //< An address's number accumulates digits from the formula's text
     //<
     //< There is no limit on the digit count, so a plain multiplication would overflow.
     verdict.start("[kspage/calc] an address too large not wrapping onto a cell test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = d.add_block("table")
     r: = add_row(t)
@@ -669,11 +609,9 @@ fn test_an_overlong_address_does_not_wrap_onto_a_cell() //<
         "it is the same mark as a number that is merely large")
     verdict.pass("an address too large comes out as no cell rather than wrapping round.")
 
-fn test_an_overlong_span_endpoint_is_reported() //<
+fn test_an_overlong_span_endpoint_is_reported(arena: Arena$@) //<
     //< Even where a range's end is too large, no aggregate result is given
     verdict.start("[kspage/calc] a range endpoint too large test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = d.add_block("table")
     r: = add_row(t)
@@ -685,10 +623,9 @@ fn test_an_overlong_span_endpoint_is_reported() //<
     verdict.pass("where a range's end is too large it comes out as no cell too.")
 // ---- comparing, choosing and rounding ----
 
-fn test_a_comparison_answers_one_or_zero() //< a comparison gives 1 (true) or 0 (false)
+fn test_a_comparison_answers_one_or_zero(arena: Arena$@) //<
+    //< a comparison gives 1 (true) or 0 (false)
     verdict.start("[kspage/calc] the answer of a comparison test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = d.add_block("table")
     r: = add_row(t)
@@ -709,12 +646,10 @@ fn test_a_comparison_answers_one_or_zero() //< a comparison gives 1 (true) or 0 
     assert(cell_text(t, 0, 6).equals("1"), "equal can be compared too")
     verdict.pass("the answer of a comparison is 1 or 0.")
 
-fn test_comparisons_do_not_chain() //< a comparison takes one operator only
+fn test_comparisons_do_not_chain(arena: Arena$@) //< a comparison takes one operator only
     //<
     //< Written as a chain, it is refused as something left unread.
     verdict.start("[kspage/calc] comparisons not being written in a chain test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = one_row(d, "1", "=1<2<3")
 
@@ -723,13 +658,11 @@ fn test_comparisons_do_not_chain() //< a comparison takes one operator only
         "a formula that compares in a chain cannot be read")
     verdict.pass("a comparison is one only, and written in a chain it is refused.")
 
-fn test_if_picks_a_side_and_drops_the_other_error() //<
+fn test_if_picks_a_side_and_drops_the_other_error(arena: Arena$@) //<
     //< The conditional form gives the value of the chosen side
     //<
     //< It drops the error on the side not chosen.
     verdict.start("[kspage/calc] the three-part form picking a side test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = d.add_block("table")
     r: = add_row(t)
@@ -751,12 +684,10 @@ fn test_if_picks_a_side_and_drops_the_other_error() //<
         .pass("the three-part form comes out the value of the branch picked, and drops the other \
             branch's error.")
 
-fn test_picks_chain_to_the_right() //< the conditional form chains to the right
+fn test_picks_chain_to_the_right(arena: Arena$@) //< the conditional form chains to the right
     //<
     //< **The same syntax as KSPL's: one form to remember.**
     verdict.start("[kspage/calc] the three-part form chaining test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = d.add_block("table")
     r: = add_row(t)
@@ -770,12 +701,10 @@ fn test_picks_chain_to_the_right() //< the conditional form chains to the right
     verdict
         .pass("the three-part form chains to the right, and comes out the value where it matched.")
 
-fn test_methods_chain_on_a_value() //< methods can be chained
+fn test_methods_chain_on_a_value(arena: Arena$@) //< methods can be chained
     //<
     //< **It continues from an aggregated value too.**
     verdict.start("[kspage/calc] the methods chaining test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = d.add_block("table")
     r0: = add_row(t)
@@ -795,12 +724,10 @@ fn test_methods_chain_on_a_value() //< methods can be chained
     assert(cell_text(t, 1, 3).equals("18"), "the day comes out too")
     verdict.pass("a method can carry on from a value any number of times.")
 
-fn test_round_changes_the_value_itself() //< rounding changes the value itself
+fn test_round_changes_the_value_itself(arena: Arena$@) //< rounding changes the value itself
     //<
     //< A half rounds away from 0.
     verdict.start("[kspage/calc] a rounding changing the value itself test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = d.add_block("table")
     r: = add_row(t)
@@ -820,13 +747,11 @@ fn test_round_changes_the_value_itself() //< rounding changes the value itself
     assert(cell_text(t, 0, 4).equals("#VALUE!"), "a place it cannot hold is refused")
     verdict.pass("`round` rounds the value itself.")
 
-fn test_a_plain_number_rounds_at_its_last_digit() //<
+fn test_a_plain_number_rounds_at_its_last_digit(arena: Arena$@) //<
     //< A number with no decimal places set is written rounded at its last digit
     //<
     //< Truncated, 1.23 would show as `1.229999` (F64's 1.23 is a little below 1.23).
     verdict.start("[kspage/calc] the text of a number with no places set test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     t: = d.add_block("table")
     r: = add_row(t)

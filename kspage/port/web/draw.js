@@ -359,8 +359,8 @@ function kspageDraw(ks) {
   const SKETCHES = ["whole", "titled", "halved"];
   // A region's frame, outlining in pale gray the band that is prose, a table or a slide, with a
   // label (the frame alone does not say which tool applies there).
-  // Caution: **Draw it only on the editing screen** — printing, presenting and the HTML all go
-  // through `paintBoxes`, so there it would reach the page. **Draw it before the text.**
+  // Caution: **Draw it only on the editing screen** — printing and presenting go through
+  // `paintBoxes` too, so there it would reach the page. **Draw it before the text.**
   function paintRegions(g) {
     const count = w.kspage_web_region_count();
     if (count <= 0) return;
@@ -728,6 +728,13 @@ function kspageDraw(ks) {
         ks.api.onCramped(back);
       }
     }
+  };
+  // **An entry point that acted redraws, and says so** (`api*.js`): the wasm answers 0 for "did
+  // nothing", anything else for "acted".
+  ks.acted = (code) => {
+    const done = code !== 0;
+    if (done) ks.draw();
+    return done;
   };
   // **The helpers passed to the code that draws onto another canvas
   // ([`draw_crop.js`](draw_crop.js)).** Printing, previews and thumbnails go through the same path

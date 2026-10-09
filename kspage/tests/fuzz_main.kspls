@@ -24,10 +24,9 @@ priv const max_seed_bytes: I64 = 64I64 * 1024I64 //< the size limit for a file u
     //<
     //< Caution: **Do not drop the small end.** A file of a few bytes has its own ways of breaking.
 
-priv const kinds: fuzz.Input_kind[4] = ::{ //<
+priv const kinds: fuzz.Input_kind[3] = ::{ //<
     //< The kinds of document the opener reads (`open_prog <kind> <file>`), and their files' endings
     fuzz.Input_kind::{ .name = "doc", .ext = ".kspage" },
-    fuzz.Input_kind::{ .name = "md", .ext = ".md" },
     fuzz.Input_kind::{ .name = "csv", .ext = ".csv" },
     fuzz.Input_kind::{ .name = "txt", .ext = ".txt" },
 }
@@ -47,11 +46,13 @@ priv fn push_files(out: List<|fuzz.Sample|>$@, dirs: U8[][], ending: U8[], kind:
 priv fn collect_seeds(dirs: U8[][], arena: Arena$@): List<|fuzz.Sample|> //<
     //< The document written on the spot, the Markdown under `dirs`, and this package's sources
     //<
+    //< A `.md` is fed as text, the way kspage opens it.
+    //<
     //< Caution: **Mix real files in** — from generated text alone, mutation misses the shapes a
     //< person writes (tables, quotations, nesting).
     $out: = List<|fuzz.Sample|>.new(arena)
     seeds.built_seeds(out@, "an assembled document", arena)
-    push_files(out@, dirs, ".md", "md", arena)
+    push_files(out@, dirs, ".md", "txt", arena)
     push_files(out@, U8[][]::{ "." }, ".kspls", "txt", arena)
     return out
 

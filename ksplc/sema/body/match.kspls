@@ -45,9 +45,7 @@ impl Ast_node
         // Caution: **Look the enum up with the immutability mark stripped**: `r$` of an `r: Self@`
         // and an immutable binding's copy carry it, and under it no enum is found.
         enum_name: = ctx.env.get_str(ctx.env.get_clean_real_type(target_id))
-        $enum_def: sema_type_def.Enum_def$@ = null
-        if d: = ctx.env.get_enum_def(enum_name)
-            enum_def = d
+        enum_def: = ctx.env.get_enum_def(enum_name).unwrap_or(null)
 
         // A switch synthesized to unwrap an `Option` is accepted only where the subject is one;
         // **otherwise errors mention a `.some` / `.none` the user did not write.** Once expanded it
@@ -57,7 +55,7 @@ impl Ast_node
         spelling: = r.synthesized_option_spelling()
         // Caution: **Apply it to `Option` only**, which has exactly two variants; a user's enum can
         // grow, and then **a new variant silently goes unhandled**.
-        // **Check the resolved name, not the written one**, or `typedef Opt = Option<|W|>` is
+        // **Check the resolved name, not the written one**, or `typedef Opt = W?` is
         // rejected while a `switch` on the same value passes. The message still names what the user
         // wrote.
         subject_base: = ctx.env.instance_base(ctx.env.get_clean_real_type(target_id))
@@ -76,9 +74,8 @@ impl Ast_node
         if enum_def == null && !ctx.env.is_integer(target_id) && !ctx.env.is_bool(target_id) &&
             !sema_type_env.is_unknown(target_id)
             // Show the type as written (`U8[]`), not its C spelling.
-            $shown: = ctx.env.display_str(target_id)
-            defer shown.free()
-            ctx.clear_scratch().s("cannot 'switch' on '").s(shown.slice())
+            shown: = ctx.env.display(target_id)
+            ctx.clear_scratch().s("cannot 'switch' on '").s(shown)
                 .s("': only scalars (integers, 'Bool', enums) can be matched. Comparing anything \
                     else hides an O(N) cost behind a branch; use 'if' with '.equals()' instead")
             ctx.err(cond_node, ctx.scratch.slice())

@@ -1,7 +1,7 @@
 //< Writes Markdown
 //<
-//< Note: The reader is [`markdown_read.kspls`](markdown_read.kspls) (split off for the per-file
-//< line cap). **This side decides the text's format**; the reader is what reads this text back.
+//< **It is an export only**: kspage does not read Markdown back, so what Markdown cannot hold is
+//< said in a comment in the text (`notice`) rather than kept.
 import "kspage/model/doc" as _doc + { Doc, Block, Tile }
 import "kspage/model/fence"
 import "kspage/model/marker"
@@ -18,7 +18,7 @@ priv struct Sink //<
     //< Where the output goes, and everything that is counted anew at layout time
     //<
     //< The numbers do not come from the document: chapter, running and note numbers are counted at
-    //< layout time, so they come from the layout's list (as in `html.kspls`).
+    //< layout time, so they come from the layout's list.
     out: Str_builder$@
     sheet: Sheet$@
     heads: List<|number.Heading|>$@
@@ -29,12 +29,6 @@ priv struct Sink //<
         //< The marker of the item written just before (`list_kind`).
         //<
         //< No empty line goes in while the same marker continues.
-    dropped: Sz //<
-        //< How many things Markdown could not hold and so dropped.
-        //<
-        //< Some get a comment (`notice`), some do not (an annotation, a memo). What matters is
-        //< whether anything was dropped: this text can be written back into the original file, so
-        //< dropping silently leaves nobody able to notice.
 
 priv fn at_line_head(s: Sink$@): Bool //< whether it is at the start of a line
     got: = s.out.slice()
@@ -136,7 +130,6 @@ priv fn notice(s: Sink$@, what: U8[], detail: U8[]) //<
     //<
     //< Caution: **Do not drop them silently** — someone who sees only the text cannot see what is
     //< missing. Markdown passes an HTML comment through without showing it.
-    s.dropped += 1
     start_block(s, 0)
     s.out.s("<!-- kspage: ")
     comment_into(s.out, what)
@@ -192,8 +185,8 @@ priv fn fence_for(text: U8[]): Sz //<
 priv fn code_into(out: Str_builder$@, text: U8[]) //< writes inline code
     //<
     //< The inside is not escaped.
-    //< Caution: **Where an end is a `` ` ``, add one space** (without it, it joins the fence). The
-    //< reader drops one space where both ends have one, so it does not grow over a round trip.
+    //< Caution: **Where an end is a `` ` ``, add one space** (without it, it joins the fence).
+    //< CommonMark drops one space where both ends have one, so the shown text does not grow.
     n: = fence_for(text)
     pad: = text.len > 0 && (text[0] == '`' || text[text.len - 1] == '`')
     for $k: Sz = 0; k < n; k += 1
@@ -230,8 +223,8 @@ priv fn dest_into(out: Str_builder$@, url: U8[]) //< writes the link's target
 
 priv fn linkable(url: U8[]): Bool //< whether a target may be written as a link
     //<
-    //< Caution: **Keep to what the screen and `html.kspls` open** (`safe_href` in
-    //< `../model/run.kspls`), or the Markdown hands on a `javascript:` or `data:` link they refuse.
+    //< Caution: **Keep to what the screen opens** (`safe_href` in `../model/run.kspls`), or the
+    //< Markdown hands on a `javascript:` or `data:` link it refuses.
     //< **A control character is refused too**: a line break ends the target, and what follows lands
     //< in the file as markup.
     for c in url
@@ -286,10 +279,6 @@ priv fn group_into(s: Sink$@, b: Block$@, from: Sz, end: Sz, head: Bool, cell: B
     // A note's mark. Whichever inline of the group holds it, it is written after the link.
     for $i: Sz = from; i < end; i += 1
         n: = b.inlines.get(i)
-        // Caution: **An annotation is not written into the text, but count that it was dropped**
-        // (the reason is at `dropped`).
-        if n.remark.len > 0
-            s.dropped += 1
         if n.note.len > 0
             no: = number.note_number(s.notes, n)
             if no > 0
@@ -371,8 +360,8 @@ priv fn write_mark(s: Sink$@, st: Style$@, b: Block$@, ord: Sz): Bool //<
 priv fn write_image(s: Sink$@, b: Block$@): Bool //< writes a picture
     //<
     //< True if anything was written.
-    //< The size is not written (Markdown has no syntax for it). The caption comes after the picture
-    //< (the same order as `html.kspls`).
+    //< The size is not written (Markdown has no syntax for it). The caption comes after the
+    //< picture, as on the screen.
     if b.image.len <= 0
         return false
     s.out.s("![](")
@@ -395,8 +384,7 @@ priv fn write_contents(s: Sink$@, depth: Sz) //< writes the table of contents
 priv fn write_note_list(s: Sink$@, depth: Sz) //< writes the list of notes
     //<
     //< The number is the row's position, as where the mark is written. **No list is added
-    //< unasked**: with no block of the collecting style, only the marks are written (as in
-    //< `html.kspls`).
+    //< unasked**: with no block of the collecting style, only the marks are written.
     start_block(s, 0)
     for $i: Sz = 0; i < s.notes.len; i += 1
         lead_in(s, depth)
@@ -404,11 +392,9 @@ priv fn write_note_list(s: Sink$@, depth: Sz) //< writes the list of notes
         escape_into(s.out, s.notes.get(i).text, false, false)
         s.out.c('\n')
 
-const plain_code_name: U8[] = "code" //< the style name of a fence that declares no language
+priv const plain_code_name: U8[] = "code" //< the style name of a fence that declares no language
     //<
-    //< This side decides the text's format (see the header). A fence with a language (` ```kspl `)
-    //< becomes a style of that name, the same mapping as a style's name becoming an HTML class
-    //< (the header of `../model/style.kspls`).
+    //< Any other fence style's name is the language it declares (` ```kspl `).
 
 priv fn fence_lang(name: U8[]): U8[] //< the language a fence declares
     //<
@@ -494,8 +480,7 @@ priv fn align_of(s: Sink$@, tiles: List<|Tile|>$@, column: Sz): style.Align //<
     //< That column's alignment
     //<
     //< There is one per column, set by the first row's cell ("any row holding one" would let one
-    //< added row change the whole column). Left is not written into the text (`rule_align` in
-    //< `markdown_read.kspls`).
+    //< added row change the whole column). Left is the default, written `---`.
     for $i: Sz = 0; i < tiles.len; i += 1
         one: = tiles.get(i)
         if one.row != 0 || one.column != column || one.block == null
@@ -554,8 +539,8 @@ priv fn write_block(s: Sink$@, b: Block$@, depth: Sz, ord: Sz) //< writes one bl
         st = got
     // A divider block. Only the one that draws a line appears in the text.
     //
-    // One that draws no line only separates neighbouring fences; reading makes it again, so a round
-    // trip neither adds nor removes one (`keep_apart` in `markdown_read.kspls`).
+    // One that draws no line only separates neighbouring fences, which the text already shows (a
+    // fence is closed before the next opens).
     if fence.divides(s.sheet, b)
         if st != null && st.rule_width > 0.0
             start_block(s, 0)
@@ -576,9 +561,6 @@ priv fn write_block(s: Sink$@, b: Block$@, depth: Sz, ord: Sz) //< writes one bl
             // frames' words go on as paragraphs.
             notice(s, "a slide's layout", b.name)
         case .flow {}
-    // Count a memo too, though it is not written (the reason is at `dropped`).
-    if b.aside.len > 0
-        s.dropped += 1
     // Caution: **Report the columns too.** Markdown cannot split a sheet into columns; the order is
     // lost, the contents stay.
     if b.step > 0
@@ -642,15 +624,14 @@ priv fn write_blocks(s: Sink$@, blocks: List<|Block$@|>$@, depth: Sz) //<
             ord = style.next_ord(s.sheet, blocks.get(k).style, ord)
         i = next
 
-fn write(d: Doc$@, sheet: Sheet$@, out: Str_builder$@): Sz //< writes a document as Markdown text
+fn write(d: Doc$@, sheet: Sheet$@, out: Str_builder$@) //< writes a document as Markdown text
     //<
     //< Caution: **Assign the numbers before writing starts** (the headings after the table of
-    //< contents are needed too; the same order as `html.kspls`).
+    //< contents are needed too).
     heads: = List<|number.Heading|>.create(d.arena)
     notes: = List<|number.Note|>.create(d.arena)
     serials: = List<|number.Serial|>.create(d.arena)
     number.number_all(d.blocks, sheet, heads, notes, serials, d.arena, d.arena)
     $s: = Sink::{ .out = out, .sheet = sheet, .heads = heads, .notes = notes, .serials = serials,
-        .arena = d.arena, .in_list = 0, .dropped = 0 }
+        .arena = d.arena, .in_list = 0 }
     write_blocks(s@, d.blocks, 0)
-    return s.dropped

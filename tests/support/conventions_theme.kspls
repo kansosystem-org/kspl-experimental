@@ -1,4 +1,4 @@
-//< Kspage's look: colours kept as roles, and each style named by one class (not the suite)
+//< Kspage's look: colours kept as roles, and style names that hold no whitespace (not the suite)
 //<
 //< Caution: **Do not write a colour directly into a rule.** Each one escapes the roles, and only
 //< that place keeps the old colour when the screen turns light or dark.
@@ -231,9 +231,8 @@ priv const style_samples: Sample[7] = ::{
 }
 
 priv fn check_theme_fires(arena: Arena$@)
-    $a: = scan.misjudged(Sample[]::color_samples, holds_color, arena)
-    verdict.check_list("the judgment of whether it holds a colour can fire", color_samples.len,
-        "samples", a@, "the table of what is hit and what is not is `color_samples`")
+    scan.check_samples("the judgment of whether it holds a colour can fire",
+        Sample[]::color_samples, "color_samples", holds_color, arena)
 
     $b: = List<|U8[]|>.new(arena)
     for i in Range.asc(hex6_samples.len)
@@ -255,11 +254,10 @@ priv fn check_theme_fires(arena: Arena$@)
                 .s(" as \{got\} (it should be \{contrast_want[i]\})").take())
     verdict.check_list("the contrast's reckoning can fire", contrast_want.len, "pairs", c@, "")
 
-    $d: = scan.misjudged(Sample[]::style_samples, spaced_style_name, arena)
-    verdict.check_list("the reading of a style's name written down can fire", style_samples.len,
-        "samples", d@, "the table of what is hit and what is not is `style_samples`")
+    scan.check_samples("the reading of a style's name written down can fire",
+        Sample[]::style_samples, "style_samples", spaced_style_name, arena)
 
-// ---- A style's name comes out as one class ----
+// ---- A style's name holds no whitespace ----
 
 // The marks with which the product writes a style's name.
 // Caution: **Do not search for the names themselves**: a table of names needs a fix for each name
@@ -271,7 +269,7 @@ priv const style_where: U8[][2] = ::{ "kspage/*.kspls", ":!kspage/tests/" } //<
     //< Where the product's names are written
     //<
     //< **`kspage/tests/` is left out**: a check there makes a name holding a space on purpose
-    //< (`html_test.kspls`'s `2col <x>`), and others hold one as a fixture.
+    //< (`style_test.kspls`'s refusal), and others hold one as a fixture.
 
 priv fn name_at(line: U8[], from: Sz): Sz //<
     //< The position of the first byte of a style's name written at or after from, or -1.
@@ -291,8 +289,9 @@ priv fn name_at(line: U8[], from: Sz): Sz //<
 priv fn spaced_style_name(line: U8[], _arena: Arena$@): Bool //<
     //< Whether that line writes a style's name that holds whitespace
     //<
-    //< **Such a name gets no style at all in the HTML**: `class` splits on whitespace, and no
-    //< escaping makes it one class. **A name in prose is not read here.**
+    //< **The screen refuses such a name** (`name_plain` in `kspage/model/style.kspls` says why), so
+    //< the product writing one would make a style nobody could type. **A name in prose is not read
+    //< here.**
     $i: Sz = 0
     for i < line.len
         at: = name_at(line, i)
@@ -336,7 +335,8 @@ priv fn check_style_names(arena: Arena$@)
                 bad
                     .push(arena.text().s(rel).s(":\{i\}: ").s(line.trim_spaces()).take())
     verdict.check_list("a style's name written down holds no whitespace", seen, "names", bad@,
-        "join the words with a hyphen (`kspage/docs/DESIGN.md`'s \"The mapping into HTML\")")
+        "join the words with a hyphen (`kspage/docs/DESIGN.md`'s \"A style name holds no \
+            whitespace\")")
     verdict.check("the reading of the names written down still finds them",
         seen >= style_names_floor,
         arena.text().s("read \{seen\} (the floor is \{style_names_floor\})").take())

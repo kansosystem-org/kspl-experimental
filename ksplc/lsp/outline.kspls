@@ -1,0 +1,181 @@
+//< `textDocument/documentSymbol`: the outline of one document, read from its syntax tree
+//<
+//< It lists what the file declares (functions, types, a type's fields and variants, an `impl`'s
+//< and a trait's members, constants), nested as written. **It reads the tree already kept for the
+//< document** (`Doc_state.root_file`), so it parses nothing and resolves no import; a function's
+//< body is read only for where it ends.
+//< Caution: **Answer what the tree holds and nothing more.** A document that does not parse gets
+//< the declarations parsed around the error ("Only the editor's parse recovers from a syntax
+//< error" in `../docs/DESIGN.md`), as the colouring does; nothing is guessed from the text.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as _base_ast_ext
+import "ksplc/base/ast_kinds" as base_ast_kinds
+import "ksplc/base/core" as _base_core
+import "ksplc/lsp/msg" as lsp_msg
+import "ksplc/lsp/state" { Doc_state }
+import "std/chars" // `sub`
+import "std/ds" { List }
+import "std/json" + { Json_builder }
+import "std/mem" { Arena }
+import "std/str" // `equals`
+
+// The LSP's symbol kinds that are sent. The numbers are the protocol's (`SymbolKind`).
+priv const s_namespace: I32 = 3I32
+priv const s_method: I32 = 6I32
+priv const s_field: I32 = 8I32
+priv const s_enum: I32 = 10I32
+priv const s_interface: I32 = 11I32
+priv const s_function: I32 = 12I32
+priv const s_variable: I32 = 13I32
+priv const s_constant: I32 = 14I32
+priv const s_member: I32 = 22I32
+priv const s_struct: I32 = 23I32
+priv const s_type: I32 = 26I32
+
+priv struct Ctx //< what every step of the walk shares
+    src: U8[]
+    file: U8[]
+    starts: List<|Sz|>$@
+    b: Json_builder$@
+
+priv fn kind_of(k: base_ast_kinds.Ast_kind, in_type: Bool): I32 //<
+    //< The symbol kind of a declaration, or -1 for a node that is not one
+    //<
+    //< `in_type` says the walk is inside an `impl` or a trait, where a function is a method.
+    switch k
+    case .k_decl_fn, .k_decl_fn_proto
+        return s_method if in_type else s_function
+    case .k_decl_struct
+        return s_struct
+    case .k_decl_enum
+        return s_enum
+    case .k_decl_trait
+        return s_interface
+    case .k_decl_alias
+        return s_type
+    case .k_decl_impl
+        return s_namespace
+    case .k_struct_field
+        return s_field
+    case .k_enum_variant
+        return s_member
+    case .k_decl_const
+        return s_constant
+    case .k_decl_var_item
+        return s_variable
+    default
+        return -1I32
+
+priv fn holds_members(k: base_ast_kinds.Ast_kind): Bool //<
+    //< Whether the walk enters this declaration for its members
+    //<
+    //< **A function, a constant and a variable are not entered**: what is inside a body is no part
+    //< of the outline, and a constant's initializer can hold a function literal.
+    switch k
+    case .k_decl_struct, .k_decl_enum, .k_decl_trait, .k_decl_impl
+        return true
+    default
+        return false
+
+priv fn name_node(node: Ast_node$@): Ast_node$@ //< the identifier that names a declaration
+    if node.kind_id == .k_decl_const || node.kind_id == .k_decl_var_item
+        return node.get_var_decl_id()
+    return node.find_child(.k_identifier)
+
+priv fn impl_name(c: Ctx$@, node: Ast_node$@): U8[] //<
+    //< An `impl`'s header as written, up to its line's end (`impl Align: Formattable`)
+    //<
+    //< **The header is shown as written**, not resolved: an impl's type may come through an
+    //< import's alias, and resolving it is the analysis's work, not the outline's.
+    from: Sz = node.loc.offset
+    if from >= c.src.len
+        return "impl"
+    $to: Sz = from
+    for to < c.src.len && c.src[to] != '\n' && c.src[to] != '{'
+        to += 1
+    $end: Sz = to
+    for end > from &&
+        (c.src[end - 1] == ' ' || c.src[end - 1] == '\t' || c.src[end - 1] == '\r')
+        end -= 1
+    return c.src.sub(from, end - from)
+
+priv fn end_of(c: Ctx$@, node: Ast_node$@): Sz //<
+    //< The furthest byte any part of the declaration reaches in this file
+    //<
+    //< Caution: **Do not take the last child's span alone** (`get_span_length`): normalization
+    //< reorders children, so the last one need not be the furthest, and the range would end inside
+    //< the body.
+    if node == null || !node.loc.file().equals(c.file)
+        return 0
+    $far: Sz = node.loc.offset + node.text.len
+    for ch in node.children
+        got: = end_of(c, ch)
+        if got > far
+            far = got
+    return far
+
+priv fn range_of(c: Ctx$@, off: Sz, len: Sz): json.Val //< the LSP range of `len` bytes at `off`
+    at: = off if off <= c.src.len else c.src.len
+    end: = at + len if at + len <= c.src.len else c.src.len
+    s: = c.src.get_line_char(at, c.starts)
+    e: = c.src.get_line_char(end, c.starts)
+    return c.b.range(s.line, s.character, e.line, e.character)
+
+priv fn symbol(c: Ctx$@, node: Ast_node$@, kind: I32, in_type: Bool): json.Val? //<
+    //< One declaration as a `DocumentSymbol`, its members nested, or none where it has no name
+    $name: U8[] = ""
+    $sel_off: Sz = node.loc.offset
+    $sel_len: Sz = 0
+    if node.kind_id == .k_decl_impl
+        name = impl_name(c, node)
+        sel_len = name.len
+    else
+        id: = name_node(node)
+        if id == null || id.text.len <= 0 || !id.loc.file().equals(c.file)
+            return .none
+        name = id.text
+        sel_off = id.loc.offset
+        sel_len = id.text.len
+    $kids: = c.b.arr()
+    if holds_members(node.kind_id)
+        inner: = in_type || node.kind_id == .k_decl_impl || node.kind_id == .k_decl_trait
+        for ch in node.children
+            kids = members(c, ch, inner, kids)
+    // **The whole declaration is the range, the name the selection** (the editor puts the cursor
+    // on the selection and highlights the range); the selection must lie inside the range.
+    whole: = range_of(c, node.loc.offset, end_of(c, node) - node.loc.offset)
+    sel: = range_of(c, sel_off, sel_len)
+    return .some(c.b.obj().set("name", c.b.str_val(name)).set("kind", c.b.int_val(kind))
+        .set("range", whole).set("selectionRange", sel).set("children", kids.build()).build())
+
+priv fn members(c: Ctx$@, node: Ast_node$@, in_type: Bool, $out: json.Array_builder):
+    json.Array_builder //<
+        //< Adds the declarations at or under `node` to `out`, stopping at each one found
+        //<
+        //< **Nothing the compiler generated is listed** (`made_by_compiler`), and nothing from
+        //< another file (normalization can bring one in).
+    if node == null || node.made_by_compiler() || !node.loc.file().equals(c.file)
+        return out
+    kind: = kind_of(node.kind_id, in_type)
+    if kind >= 0I32
+        if got: = symbol(c, node, kind, in_type)
+            out = out.push(got)
+        return out
+    for ch in node.children
+        out = members(c, ch, in_type, out)
+    return out
+
+fn handle(state: Doc_state$@, id_val: json.Val, arena: Arena$@) //<
+    //< It answers `textDocument/documentSymbol` with the document's declarations, nested
+    //<
+    //< Caution: **Answer an empty list for a document with no tree**, not null: the editor shows
+    //< an empty outline either way, and an empty list says the request was understood.
+    $b: = Json_builder.new(arena)
+    $top: = b.arr()
+    if state != null && state.root_file != null
+        src: = state.src_perm
+        $c: = Ctx::{ .src = src, .file = state.mod_name_perm, .starts = src.line_starts(arena),
+            .b = b@ }
+        for ch in state.root_file.children
+            top = members(c@, ch, false, top)
+    lsp_msg.send_response(id_val, top.build(), arena)

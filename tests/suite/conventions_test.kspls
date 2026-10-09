@@ -606,9 +606,8 @@ priv const declares_names: U8[][6] = ::{ "Add", "Adder", "take", "hidden", "Miss
 priv const declares_want: Bool[6] = ::{ true, true, true, false, false, false }
 
 priv fn check_named_std_fires(arena: Arena$@)
-    $a: = scan.misjudged(Sample[]::panic_samples, panic_off, arena)
-    verdict.check_list("the verdict on the letter when it stops can fire", panic_samples.len,
-        "samples", a@, "the letters that hit and do not are the table `panic_samples`")
+    scan.check_samples("the verdict on the letter when it stops can fire",
+        Sample[]::panic_samples, "panic_samples", panic_off, arena)
 
     $b: = List<|U8[]|>.new(arena)
     for i in Range.asc(fqn_samples.len)
@@ -643,14 +642,12 @@ priv const raw_samples: Sample[6] = ::{ Sample::{ .text = "  w = w.s(\"\"\"", .h
     Sample::{ .text = "  w = w.s(\"\"\"one line\"\"\");", .hits = false } }
 
 priv fn check_raw_fires(arena: Arena$@)
-    $bad: = scan.misjudged(Sample[]::raw_samples, opens_raw, arena)
-    verdict.check_list("the reading of where a `\"\"\"` text opens can fire", raw_samples.len,
-        "samples", bad@, "the lines that hit and do not are the table `raw_samples`")
+    scan.check_samples("the reading of where a `\"\"\"` text opens can fire",
+        Sample[]::raw_samples, "raw_samples", opens_raw, arena)
 
 priv fn check_result_fires(arena: Arena$@)
-    $bad: = scan.misjudged(Sample[]::result_samples, result_form_ok, arena)
-    verdict.check_list("the verdict on the verdict line's letter can fire", result_samples.len,
-        "samples", bad@, "the letters that hit and do not are the table `result_samples`")
+    scan.check_samples("the verdict on the verdict line's letter can fire",
+        Sample[]::result_samples, "result_samples", result_form_ok, arena)
 
 priv fn check_result_line(arena: Arena$@)
     $seen: Sz = 0
@@ -790,6 +787,59 @@ priv fn check_folder_names(arena: Arena$@) //<
     verdict.check_list("a folder holding many of a kind is named in the plural", seen,
         "folder names", bad@, "rename it, and mend what named it (`make test-docref` counts those)")
 
+// ==========================================
+// A test is called from a runner **A `fn test_…` that no runner names never runs**, and every
+// gate stays green with it gone. A runner names a test through its file (`x_test.test_y`), so the
+// name must stand after a `.` somewhere.
+// ==========================================
+priv fn calls_in(src: U8[], name: U8[]): Sz //< how often `name(` is called in src, not defined
+    $n: Sz = 0
+    $i: Sz = 0
+    for i < src.len
+        at: = src.sub_from(i).find_str(name)
+        if at < 0
+            break
+        p: = i + Sz::at
+        defined: = p >= 3 && src.sub(p - 3, 3).equals("fn ")
+        if !htext.is_word_before(src, p) && p + name.len < src.len && src[p + name.len] == '(' &&
+            !defined
+            n += 1
+        i = p + name.len
+    return n
+
+priv fn check_tests_registered(arena: Arena$@)
+    $called: = Str_builder.new() // every `.test_…` name, each between spaces
+    defer called.free()
+    called.c(' ')
+    for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+        src: = harness.read_under_root(rel)
+        $i: Sz = 0
+        for i + 6 < src.len
+            at: = src.sub_from(i).find_str(".test_")
+            if at < 0
+                break
+            $e: = i + Sz::at + 1
+            for e < src.len && htext.is_word_at(src, e)
+                e += 1
+            called.s(src.sub(i + Sz::at + 1, e - i - Sz::at - 1)).c(' ')
+            i = e
+    $seen: Sz = 0
+    $bad: = List<|U8[]|>.new(arena)
+    for rel in harness
+        .tracked_matching(U8[][]::{ "*/tests/*.kspls", "tools/ai_assist/tests/*.kspls" })
+        src: = harness.read_under_root(rel)
+        for line in src.lines(arena)
+            t: = line.strip_prefix("pub ")
+            if !t.starts_with("fn test_") || t.find_char('(') < 0
+                continue
+            name: = t.sub(3, t.find_char('(') - 3)
+            seen += 1
+            wanted: = arena.text().s(" ").s(name).s(" ").take()
+            if called.slice().find_str(wanted) < 0 && calls_in(src, name) == 0
+                bad.push(arena.text().s(rel).s(": ").s(name).take())
+    verdict.check_list("every test function is called from a runner", seen, "tests", bad@,
+        "call it from its package's test runner, its folder's all.kspls (or remove the test)")
+
 fn main(): I32
     arena: = harness.begin(1024 * 1024 * 1024)
     cspell.run(arena)
@@ -809,6 +859,7 @@ fn main(): I32
     check_summary_inside(arena)
     check_file_summary_first(arena)
     check_folder_names(arena)
+    check_tests_registered(arena)
     cnotice.run(arena)
     cline.run(arena)
     crule.run(arena)

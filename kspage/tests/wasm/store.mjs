@@ -1,17 +1,17 @@
 import { check, near } from "./shell.mjs";
 import { material, para, grid } from "./material.mjs";
 
-export const subject = "Taking a document in and out, and writing it out as HTML.";
+export const subject = "Taking a document in and out, and writing it out as Markdown.";
 
 // What it takes in and out.
-// Caution: **Give it one of everything that comes out in the HTML's mapping** (a grid, a cell, a
-// named run, a sized style, a formula), or the one missed breaks with nobody looking. **Make the
+// Caution: **Give it one of everything the saved text maps** (a grid, a cell, a named run, a sized
+// style, a formula), or the one missed breaks with nobody looking. **Make the
 // first block a paragraph holding text** (box 0). **Give the formula a style that shapes it**, so
 // "$360" shows the value came out, not the formula.
 //
 // The style names (`heading`, `body`, `strong`, `table`, `cell`, `amount`) and the amount's
 // money sign (`$`) are the document's own, defined by `kspage/content`'s sample, so they stay as
-// they are until that side moves (the HTML needles below hold the same names).
+// they are until that side moves.
 export const opens = material({
   styles: [
     { name: "heading", size_px: 28.0, weight: 700, space_after: 8.0 },
@@ -31,7 +31,7 @@ export const opens = material({
 });
 
 export function run(ks) {
-  const { w, textOf, type, save, html, load, measured, vmetrics } = ks;
+  const { w, textOf, type, save, md, load, measured, vmetrics } = ks;
 
   // --- A blank document ---
   //
@@ -96,23 +96,17 @@ export function run(ks) {
   for (let i = 0; i < 300; i += 1) {
     w.kspage_web_layout(300);
     w.kspage_web_save();
-    w.kspage_web_html();
+    w.kspage_web_markdown();
   }
   check(w.kspage_web_layout(300) === wasSteady,
     "placed afresh hundreds of times the same answer comes out");
 
-  // --- Writing it out as HTML ---
+  // --- Writing it out as Markdown ---
   // **It uses the same arena over again** (the next writing out ends the earlier one).
-  const page = html();
-  check(page.indexOf("<!doctype html>") === 0, "it becomes one HTML that opens as it stands");
-  check(page.indexOf("<table class=\"table\">") >= 0, "a grid's style becomes a table");
-  check(page.indexOf("<td class=\"cell\">") >= 0, "a cell becomes a td");
-  check(page.indexOf("<span class=\"strong\">") >= 0, "a run carrying a name becomes a span");
-  check(page.indexOf(".heading { font-size: 28px;") >= 0,
-    "a style's name becomes a rule in the CSS");
+  const page = md();
   // What comes out in the writing is the value, not the formula.
-  check(page.indexOf("=A2*B2") < 0 && page.indexOf(">$360<") >= 0,
-    "the HTML written out holds the value and not the formula");
+  check(page.indexOf("=A2*B2") < 0 && page.indexOf("| $360 |") >= 0,
+    "the Markdown written out holds the value and not the formula");
   check(save() !== page, "the writing out and the saving are different texts");
 
   // --- A document that does not fit is refused ---

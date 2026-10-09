@@ -417,39 +417,10 @@ function kspageProbeLocal(ks) {
       child.close();
     }
 
-    // ---- Editing a Markdown text as it stands ----
-    //
-    // **This can be seen nowhere else**: writing back in the shape it was opened in is the page's,
-    // so the wasm misses "it was writing back as JSON".
-    // Caution: **Read the text written back with its own `fetch`** (the reason is in the header).
-    const md = "# A title\n\nBody with `code` and [`link.md`](link.md).\n";
-    const mdPut = await fetch(at("doc.md"),
-      { method: "PUT", headers: head, body: md });
-    ks.check(mdPut.ok, "the Markdown text can be laid down");
-    clear();
-    ks.check(await ks.app.openDoc("doc.md"), "the Markdown text can be opened");
-    ks.check(ks.app.text().indexOf("A title") >= 0,
-      "the content goes in (" + ks.app.text().slice(0, 8) + ")");
-    // Caution: **Write it back in the shape it was opened in.** Written back as JSON, the same
-    // thing sits in two files with nothing to settle which is the newer.
-    box.value = "doc.md";
-    box.dispatchEvent(new Event("change", { bubbles: true }));
-    clear();
-    document.getElementById("save").click();
-    ks.check(await untilSays("Saved ("), "the Markdown document can be saved");
-    const mdBack = await fetch(at("doc.md"), { headers: head });
-    const mdGot = mdBack.ok ? await mdBack.text() : "";
-    ks.check(mdGot.indexOf("# A title") >= 0,
-      "the text written back is Markdown");
-    ks.check(mdGot.indexOf("\"kspage\"") < 0, "it does not write back as JSON");
-    // **The code text must not fall away** (it is the round trip's point).
-    ks.check(mdGot.indexOf("`code`") >= 0 && mdGot.indexOf("[`link.md`](link.md)") >= 0,
-      "the code text and the link both write back");
-
     // ---- Editing the plain text shape (`.txt` and source) as it stands ----
     //
-    // **This can be seen nowhere else**: the page settles the shape from the name (as for Markdown
-    // above). **Write it back without changing one byte** — a text is the compiler's input, and a
+    // **This can be seen nowhere else**: the page settles the shape from the name, so the wasm
+    // misses "it was writing back as JSON". **Write it back without changing one byte** — a text is the compiler's input, and a
     // dropped trailing space makes a different file; the shapes easiest to drop are put in on
     // purpose.
     const src = "fn main(): I32 {\n\treturn 0;   \n}\n\n\n# this is no heading\n- nor a bullet";
@@ -612,15 +583,15 @@ function kspageProbeLocal(ks) {
       "what was typed before the window opened is held back ("
         + (canKeep ? keptYy.length : "this page cannot remember") + ")");
     // **A `.md` chosen in the file field (a browser without the window) sets aside the same way**,
-    // and opens as Markdown by its name.
+    // and opens as the plain text it is.
     typeAtEnd("ww");
     const byMd = ks.app.keepCount();
     clear();
     ks.pickFile(document.getElementById("file"),
       new TextEncoder().encode("# Taken in\n\nA line taken in.\n"), "taken.md", "text/markdown");
     ks.check(await untilSays("Loaded it"), "a .md opens through the file field over typing");
-    ks.check(ks.app.markdown().indexOf("# Taken in") === 0,
-      "a .md chosen there opens as Markdown (" + ks.app.markdown().slice(0, 12) + ")");
+    ks.check(ks.app.plainText() === "# Taken in\n\nA line taken in.\n",
+      "a .md chosen there opens as plain text (" + ks.app.plainText().slice(0, 12) + ")");
     ks.check(ks.app.keepCount() === byMd + 1,
       "the document typed in is set aside when a .md opens (" + ks.app.keepCount() + ")");
     ks.check(ks.app.pathNow() === "" && box.value === "", "a .md from the file field lives in no file");

@@ -163,8 +163,7 @@ priv fn plan_body(readme: U8[], arena: Arena$@): U8[] //<
     //<
     //< Caution: **Do not decide it by the heading's depth.** Limited to `## `, a README that puts
     //< the section one level deeper comes out empty, and a written split is called "not named".
-    $out: = Str_builder.new()
-    defer out.free()
+    out: = arena.text()
     $depth: Sz = 0
     ls: = readme.lines(arena)
     for ln in ls
@@ -177,7 +176,7 @@ priv fn plan_body(readme: U8[], arena: Arena$@): U8[] //<
             continue
         if depth > 0
             out.s(ln).c('\n')
-    return arena.dup_str(out.slice())
+    return out.take()
 
 priv fn planned(readme: U8[], rel: U8[], arena: Arena$@): Bool //<
     //< Whether that README's splitting section names that path
@@ -305,9 +304,8 @@ priv fn check_plans(near: List<|U8[]|>@, arena: Arena$@) //<
         stale@, "where one is over, delete that sentence and write how it splits")
 
 priv fn check_fires(arena: Arena$@)
-    $h: = scan.misjudged(Sample[]::none_samples, claims_none, arena)
-    verdict.check_list("the judgment of \"no file is over it\" can fire", none_samples.len,
-        "samples", h@, "the table of what is hit and what is not is `none_samples`")
+    scan.check_samples("the judgment of \"no file is over it\" can fire", Sample[]::none_samples,
+        "none_samples", claims_none, arena)
     $k: = List<|U8[]|>.new(arena)
     for s in plan_samples
         if planned(s.readme, s.rel, arena) != s.hits
@@ -566,7 +564,7 @@ priv struct Lone_file //< a small file kept apart though one file alone imports 
     path: U8[]
     why: U8[]
 
-priv const lone_files: Lone_file[8] = ::{
+priv const lone_files: Lone_file[9] = ::{
     Lone_file::{ .path = "ksbind/tests/all.kspls",
         .why =
         "a package's test entry point that `make debug` cannot link, so one runner imports it" },
@@ -576,6 +574,8 @@ priv const lone_files: Lone_file[8] = ::{
         .why = "a driver: a part any program may import, though one demo does today" },
     Lone_file::{ .path = "ksos/drivers/rp2040/servo.kspls",
         .why = "a driver: a part any program may import, though one demo does today" },
+    Lone_file::{ .path = "kspage/tests/trip.kspls",
+        .why = "the `pub` entry points a root suite calls, kept out of kspage's own files" },
     Lone_file::{ .path = "ksplc/base/setup.kspls",
         .why = "base's list of heap owners, kept out of core.kspls, which each of them imports" },
     Lone_file::{ .path = "ksplc/tests/extern_path/handle.kspls",

@@ -10,19 +10,10 @@ TEST_JOBS ?= $(HOST_CORES)
 ci_run = ./$(SEED_EXE) run tools/ci.kspls --make='$(MAKE)' --jobs=$(TEST_JOBS)
 
 ## Gates|ci|Every gate runnable on this environment
-ci: $(SEED_EXE)
-	@$(ci_run) $@
-
 ## Gates|ci-linux|Every Linux gate (`ci` plus what has its tool on Linux only)
-ci-linux: $(SEED_EXE)
-	@$(ci_run) $@
-
 ## Gates|ci-linux-only|Only what has its tool on Linux alone
-ci-linux-only: $(SEED_EXE)
-	@$(ci_run) $@
-
 ## Gates|ci-macos|Every gate run on macOS
-ci-macos: $(SEED_EXE)
+ci ci-linux ci-linux-only ci-macos: $(SEED_EXE)
 	@$(ci_run) $@
 
 ## Gates|ci-shard-*|One job's share of `ci` (the names are `Shard` in `tools/ci_gates.kspls`)

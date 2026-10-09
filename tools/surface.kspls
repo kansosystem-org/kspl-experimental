@@ -58,11 +58,10 @@ priv fn stem_of(path: U8[], arena: Arena$@): U8[] //< the temporary file's name
     //< folders overwrite one temporary file.
     dot: = path.rfind_char('.')
     cut: = path if dot <= 0 else path.sub(0, dot)
-    $s: = Str_builder.new()
-    defer s.free()
+    s: = arena.text()
     for ch in cut
         s.c('_' if ch == '/' || ch == '\\' else ch)
-    return arena.dup_str(s.slice())
+    return s.take()
 
 priv fn built(pkg: U8[], ksplc: U8[], arena: Arena$@): U8[]!fs.Fs_error //<
     //< Runs ksplc on each file in turn and collects one package's API
@@ -101,8 +100,7 @@ priv fn declarations_only(body: U8[], arena: Arena$@): U8[] //<
     //< **The record holds only the declarations** (the reason is at `rows.is_declaration`).
     //< **Writing and checking both go through here**; filter only one and every parameter looks
     //< missing to the other.
-    $out: = Str_builder.new()
-    defer out.free()
+    out: = arena.text()
     $ls: = body.lines(null)
     defer ls.free()
     for ln in ls
@@ -112,7 +110,7 @@ priv fn declarations_only(body: U8[], arena: Arena$@): U8[] //<
         if one.len > 0 && !rows.is_declaration(one.get(0))
             continue
         out.s(ln).c('\n')
-    return arena.dup_str(out.slice())
+    return out.take()
 
 priv fn record_path(pkg: U8[], arena: Arena$@): U8[]
     return fs.join(pkg, record_name, arena)

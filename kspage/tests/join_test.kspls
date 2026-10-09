@@ -19,12 +19,10 @@ import "std/verdict"
 // line 19.2px.
 // ==========================================
 
-fn test_a_paragraph_splits_at_the_caret() //< splits a paragraph in two
+fn test_a_paragraph_splits_at_the_caret(arena: Arena$@) //< splits a paragraph in two
     //<
     //< **The cursor moves to the second paragraph** (typing can continue right away).
     verdict.start("[kspage/shape] a paragraph splitting at the cursor test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("abcd")
     sheet: = Sheet.new(base.root_font(), arena)
@@ -41,11 +39,9 @@ fn test_a_paragraph_splits_at_the_caret() //< splits a paragraph in two
         "the cursor is at the back paragraph's head")
     verdict.pass("a paragraph splits in two at the cursor.")
 
-fn test_a_style_names_what_follows_it() //<
+fn test_a_style_names_what_follows_it(arena: Arena$@) //<
     //< Enter at a heading's end continues in the style the heading names
     verdict.start("[kspage/shape] the style a paragraph ended goes on in test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     sheet: = Sheet.new(base.root_font(), arena)
     head: = sheet.add("heading", paint.inherit_all())
     head.outline = 1
@@ -70,11 +66,9 @@ fn test_a_style_names_what_follows_it() //<
     assert(d.blocks.get(1).style.equals("heading"), "split part way along, the style is kept")
     verdict.pass("a style names what follows it, and it acts at the paragraph's end alone.")
 
-fn test_a_style_naming_none_is_copied_as_before() //<
+fn test_a_style_naming_none_is_copied_as_before(arena: Arena$@) //<
     //< A style that names nothing continues in itself
     verdict.start("[kspage/shape] a style naming none being copied test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     sheet: = Sheet.new(base.root_font(), arena)
     sheet.add("body", paint.inherit_all())
     d: = Doc.new(arena)
@@ -86,13 +80,11 @@ fn test_a_style_naming_none_is_copied_as_before() //<
     assert(d.blocks.get(1).style.equals("body"), "the same style again")
     verdict.pass("a style naming nothing goes on in itself.")
 
-fn test_splitting_at_an_edge_leaves_both_paragraphs_usable() //<
+fn test_splitting_at_an_edge_leaves_both_paragraphs_usable(arena: Arena$@) //<
     //< Split at an edge, each paragraph still keeps one text
     //<
     //< Otherwise the cursor could not stand there.
     verdict.start("[kspage/shape] both paragraphs being usable even split at an edge test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("ab")
     sheet: = Sheet.new(base.root_font(), arena)
@@ -123,15 +115,13 @@ priv fn press_backspace(ed: edit.Editor$@, page: Page$@) //<
         return
     ed.backspace()
 
-fn test_backspace_at_a_cell_head_leaves_the_cell_before_it() //<
+fn test_backspace_at_a_cell_head_leaves_the_cell_before_it(arena: Arena$@) //<
     //< Backspace at a cell's start takes no text from the cell before it
     //<
     //< Where it cannot join (a cell, a container's first child), doing nothing is right; deleting
     //< across the break would take a character from a text not visible from the clicked place.
     verdict
         .start("[kspage/edit] a Backspace at a cell's head not shrinking the cell in front test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = Sheet.new(base.root_font(), arena)
     base.table_style(sheet)
@@ -148,15 +138,13 @@ fn test_backspace_at_a_cell_head_leaves_the_cell_before_it() //<
     assert(next.text().equals("い"), "the cell one is in does not change either")
     verdict.pass("at a cell's head the cell in front is not deleted.")
 
-fn test_backspace_at_the_first_child_leaves_the_paragraph_before_it() //<
+fn test_backspace_at_the_first_child_leaves_the_paragraph_before_it(arena: Arena$@) //<
     //< Backspace at a container's first child's start takes no text from the paragraph before it
     //<
     //< A list's first item is one (what it would join onto is not in its list).
     verdict
         .start("[kspage/edit] a Backspace at the first child not shrinking the paragraph in front \
             test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = Sheet.new(base.root_font(), arena)
     item: = sheet.add("item", paint.inherit_all())
@@ -172,11 +160,9 @@ fn test_backspace_at_the_first_child_leaves_the_paragraph_before_it() //<
     assert(first.text().equals("item"), "the item's text does not change either")
     verdict.pass("at the first child's head the paragraph in front is not deleted.")
 
-fn test_a_paragraph_joins_the_previous_one() //<
+fn test_a_paragraph_joins_the_previous_one(arena: Arena$@) //<
     //< Joined at a paragraph's start, it goes onto the end of the paragraph before
     verdict.start("[kspage/shape] a paragraph joining onto the one in front test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     head: = d.add_block("body").add_text("ab")
     tail: = d.add_block("body").add_text("cd")
@@ -192,12 +178,11 @@ fn test_a_paragraph_joins_the_previous_one() //<
     assert(ed.caret.inline == head && ed.caret.offset == 2, "the cursor stands at the joint")
     verdict.pass("joined at a paragraph's head it goes onto the end of the paragraph in front.")
 
-fn test_joining_needs_the_start_of_a_paragraph() //< anywhere but the start it does not join
+fn test_joining_needs_the_start_of_a_paragraph(arena: Arena$@) //<
+    //< anywhere but the start it does not join
     //<
     //< Joined, what is before the clicked place would move.
     verdict.start("[kspage/shape] not joining unless at the head test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.add_block("body").add_text("ab")
     tail: = d.add_block("body").add_text("cd")
@@ -212,13 +197,11 @@ fn test_joining_needs_the_start_of_a_paragraph() //< anywhere but the start it d
     assert(d.blocks.len == 2, "the paragraphs stay two")
     verdict.pass("it joins at a paragraph's head, and only where a paragraph in front is there.")
 
-fn test_splitting_then_joining_restores_the_paragraph() //<
+fn test_splitting_then_joining_restores_the_paragraph(arena: Arena$@) //<
     //< Split and then joined, it comes back as it was
     //<
     //< Going back gives the same result (one undo of the split).
     verdict.start("[kspage/shape] splitting and joining coming back as it was test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("abcd")
     sheet: = Sheet.new(base.root_font(), arena)
@@ -250,13 +233,11 @@ priv fn three_items(d: Doc$@, arena: Arena$@): Page$@ //<
     d.add_block("item").add_text("ghi")
     return flow.layout(d, sheet, fixed.make(), 200.0, arena)
 
-fn test_deleting_across_paragraphs_joins_them() //<
+fn test_deleting_across_paragraphs_joins_them(arena: Arena$@) //<
     //< Deleted across paragraphs, the spanned paragraphs join into one
     //<
     //< **Not joined, the emptied paragraph's marker (a bullet's "•") would be left.**
     verdict.start("[kspage/shape] the paragraphs joining when it is deleted across them test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     page: = three_items(d, arena)
     head: = d.blocks.get(0).inlines.get(0)
@@ -272,13 +253,11 @@ fn test_deleting_across_paragraphs_joins_them() //<
     assert(ed.caret.inline == head && ed.caret.offset == 1, "the cursor stands at the joint")
     verdict.pass("deleted across paragraphs, the paragraphs crossed join into one.")
 
-fn test_undoing_a_joined_delete_restores_every_paragraph() //<
+fn test_undoing_a_joined_delete_restores_every_paragraph(arena: Arena$@) //<
     //< Deleting and joining are one undo
     //<
     //< Split into two, one undo would leave the paragraph still split.
     verdict.start("[kspage/shape] the deleting and joining going back in one test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     page: = three_items(d, arena)
 
@@ -295,13 +274,11 @@ fn test_undoing_a_joined_delete_restores_every_paragraph() //<
     assert(!ed.undo(), "there is one step to go back by and no more")
     verdict.pass("what was deleted and joined comes back in one undo.")
 
-fn test_deleting_across_cells_keeps_the_table() //<
+fn test_deleting_across_cells_keeps_the_table(arena: Arena$@) //<
     //< Where it spans table cells, only the contents are deleted
     //<
     //< Joined, the cell would disappear and the table would break.
     verdict.start("[kspage/shape] the table not falling apart even across cells test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = Sheet.new(base.root_font(), arena)
     base.table_style(sheet)
@@ -321,14 +298,12 @@ fn test_deleting_across_cells_keeps_the_table() //<
     assert(b.text().equals("d"), "the cell behind loses what was selected too")
     verdict.pass("deleted across cells, no cell goes.")
 
-fn test_delete_takes_the_next_character_then_the_break() //<
+fn test_delete_takes_the_next_character_then_the_break(arena: Arena$@) //<
     //< Delete removes the one character after the cursor
     //<
     //< At a paragraph's end it joins the next paragraph.
     verdict
         .start("[kspage/shape] Delete deleting the next character and a paragraph's break test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = Sheet.new(base.root_font(), arena)
     head: = d.add_block("body").add_text("あい")
@@ -356,12 +331,11 @@ fn test_delete_takes_the_next_character_then_the_break() //<
         .pass("Delete deletes the next character, and at a paragraph's end joins the next \
             paragraph.")
 
-fn test_joining_stops_at_a_table() //< a paragraph holding a table or a slide is not joined
+fn test_joining_stops_at_a_table(arena: Arena$@) //<
+    //< a paragraph holding a table or a slide is not joined
     //<
     //< Joined, it would move its children too, with nothing to decide whose children come first.
     verdict.start("[kspage/shape] the joining stopping at a table test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = Sheet.new(base.root_font(), arena)
     base.table_style(sheet)
@@ -397,14 +371,12 @@ priv fn head_table_image(d: Doc$@, arena: Arena$@): Page$@ //<
     d.add_block("body").add_text("cd")
     return flow.layout(d, sheet, fixed.make(), 200.0, arena)
 
-fn test_a_table_is_dropped_whole_from_inside_a_cell() //<
+fn test_a_table_is_dropped_whole_from_inside_a_cell(arena: Arena$@) //<
     //< Deletes the whole table from inside a cell
     //<
     //< **The cursor moves to after the removed place** (typing on while it points at a deleted text
     //< would make text that is nowhere in the document).
     verdict.start("[kspage/shape] a table being deletable whole from inside a cell test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     page: = head_table_image(d, arena)
     cell: = d.blocks.get(1).children.get(0).children.get(0).inlines.get(0)
@@ -420,12 +392,11 @@ fn test_a_table_is_dropped_whole_from_inside_a_cell() //<
     assert(d.blocks.len == 4, "the table comes back")
     verdict.pass("a table can be deleted whole from inside a cell.")
 
-fn test_a_picture_is_dropped_but_a_paragraph_is_not() //< a picture is a container too
+fn test_a_picture_is_dropped_but_a_paragraph_is_not(arena: Arena$@) //<
+    //< a picture is a container too
     //<
     //< An ordinary paragraph is not a container, so it is not removed this way.
     verdict.start("[kspage/shape] the picture going and the paragraph not test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     page: = head_table_image(d, arena)
 
@@ -440,12 +411,11 @@ fn test_a_picture_is_dropped_but_a_paragraph_is_not() //< a picture is a contain
     assert(d.blocks.len == 3, "the row does not change either")
     verdict.pass("a holder goes whole, and an ordinary paragraph does not.")
 
-fn test_joining_stops_at_a_picture() //< a picture's block is not joined as a paragraph
+fn test_joining_stops_at_a_picture(arena: Arena$@) //<
+    //< a picture's block is not joined as a paragraph
     //<
     //< Joined, another paragraph's text would land where the picture is.
     verdict.start("[kspage/shape] the joining stopping at a picture test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     page: = head_table_image(d, arena)
     pic: = d.blocks.get(2).inlines.get(0)

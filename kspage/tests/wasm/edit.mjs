@@ -51,7 +51,7 @@ export const opens = material({
 });
 
 export function run(ks) {
-  const { w, scratch, str, read, out, stage, feed, geom, boxOf, textOf, find, type, save, html,
+  const { w, scratch, str, read, out, stage, feed, geom, boxOf, textOf, find, type, save,
     csv, load, typed, setTyped, styleNames, surfaceAt } = ks;
 
   // --- Taking CSV in and out ---
@@ -69,16 +69,16 @@ export function run(ks) {
   check(asCsv.indexOf("$360") >= 0 || asCsv.indexOf("\"$360\"") >= 0,
     "the value comes out as the way of showing says");
   // Read it in and a table goes in behind the paragraph the cursor is in.
-  const tablesBefore = html().split("<table").length;
+  const tables = () => save().split('"style": "table"').length;
+  const tablesBefore = tables();
   w.kspage_web_click(0, 10, 0);
   const csvIn = (text) => w.kspage_web_insert_csv(feed(text), stage("table"));
   check(csvIn("a,\"b,c\"\n1,2\n") === 1, "a table can be put in from CSV");
-  check(html().split("<table").length === tablesBefore + 1, "the tables grow by one");
+  check(tables() === tablesBefore + 1, "the tables grow by one");
   w.kspage_web_layout(300);
   check(find("b,c") >= 0, "a splitter inside quotes goes in as text");
   w.kspage_web_undo();
-  check(html().split("<table").length === tablesBefore,
-    "one step takes the table put in away");
+  check(tables() === tablesBefore, "one step takes the table put in away");
 
   // --- Sorting the rows ---
   // Caution: **A formula has to go on pointing at its own row.** Unshifted, it reads another row's
@@ -383,11 +383,11 @@ export function run(ks) {
   check(out(w.kspage_web_selection_text()) === "Qty",
     "it can be chosen on as far as the edge");
   // Choosing the whole document takes more than the page that is seen.
-  const htmlLen = html().length;
+  const savedLen = save().length;
   check(w.kspage_web_select_all() === 1, "the whole document can be chosen");
   const picked = out(w.kspage_web_selection_text());
   check(picked.length > 0, `the text chosen can be taken (${picked.length} bytes)`);
-  check(html().length === htmlLen, "choosing does not change the document");
+  check(save().length === savedLen, "choosing does not change the document");
   w.kspage_web_layout(300);
 
   // --- Moving from cell to cell by Tab ---
@@ -471,12 +471,6 @@ export function run(ks) {
   // Were the content in the document, the heading's text would come out twice in it.
   const savedTwice = save().split(`"text": "${headLine}"`).length - 1;
   check(savedTwice === 1, `the heading's text rides the document once only (${savedTwice})`);
-  // **An item is a link** (contents where pressing does nothing are not written out). The id it
-  // flies to is made the same way as the heading's, so the two stay in step.
-  const wrote = html();
-  check(wrote.includes(`margin-left:0px"><a href="#kspage-h1">${headLine}</a></div>`),
-    "the contents in the HTML written out become a link");
-  check(wrote.includes(`id="kspage-h1"`), "the same name goes on the heading's side");
   // Change the heading and the contents change too (they hold no copy).
   w.kspage_web_click(geom(0)[0] + 1, geom(0)[1] + 1, 0);
   type("!");
@@ -529,7 +523,6 @@ export function run(ks) {
     "the note goes into the text written out");
   check(!savedNote.includes(`"text": "1 the note's text"`),
     "the number does not go into the text");
-  check(html().includes("<sup>1</sup>"), "in the HTML written out it becomes a sup");
   w.kspage_web_undo();
   w.kspage_web_undo();
   w.kspage_web_layout(300);
@@ -561,8 +554,6 @@ export function run(ks) {
   check(putImage("picture.png", 0, 40) === 0, "an image with no size is not inserted");
   check(save().includes("\"image\": \"picture.png\""),
     "where it came from goes into the text written out");
-  check(html().includes("<img src=\"picture.png\" width=\"80\""),
-    "in the HTML written out it becomes an img");
   w.kspage_web_undo();
   w.kspage_web_layout(300);
   check(w.kspage_web_picture_count() === wasPictures,

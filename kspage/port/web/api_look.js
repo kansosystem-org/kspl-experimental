@@ -11,7 +11,7 @@
 // in an F32).
 // ==========================================
 function kspageApiLook(ks) {
-  const { w, canvas, enc, outText, colorText, colorNum, scratch, nums, draw, stage, handOver,
+  const { w, canvas, enc, outText, colorText, colorNum, scratch, nums, draw, acted, stage, handOver,
     SHAPES, ALIGNS, COMPARES, MARKS, PAIRED_MARKS, DATINGS, COLLECTS } = ks;
   // Caution: **Add it to the same `app`** (the page sees one handle).
   Object.assign(ks.api, {
@@ -25,10 +25,8 @@ function kspageApiLook(ks) {
     // Replaces style `i`'s heading depth and what it collects, whole.
     setStyleOutline(i, spec) {
       const kind = COLLECTS.indexOf(spec.collect || COLLECTS[0]);
-      const done = w.kspage_web_set_style_outline(i, spec.level || 0,
-        kind < 0 ? 0 : kind) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_set_style_outline(i, spec.level || 0,
+        kind < 0 ? 0 : kind));
     },
     // The style name of the cursor's inline. Empty means the parent's.
     style() {
@@ -40,9 +38,7 @@ function kspageApiLook(ks) {
     setStyle(name) {
       const len = stage(name);
       if (len < 0) return false;
-      const done = w.kspage_web_set_style(len) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_set_style(len));
     },
     // The text of the band at the page's top ("header") or bottom ("footer"), with `{page}` and
     // `{pages}` as they are.
@@ -55,24 +51,20 @@ function kspageApiLook(ks) {
     setChrome(which, text) {
       const len = text.length > 0 ? stage(text) : 0;
       if (len < 0) return false;
-      const done = w.kspage_web_set_chrome(which === "footer" ? 1 : 0, len) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_set_chrome(which === "footer" ? 1 : 0, len));
     },
     // Applies colors (text color, background, underline, strikethrough) to the selection. **It
     // replaces the whole**: an omitted field is "unset (the parent's)", and passing none removes
     // it. A color is `#rrggbb` text.
     paintSpan(spec) {
       const has = (v) => (v === null || v === undefined ? 0 : 1);
-      const done = w.kspage_web_paint_span(
+      return acted(w.kspage_web_paint_span(
         has(spec.color), spec.color ? colorNum(spec.color) : 0,
         has(spec.background), spec.background ? colorNum(spec.background) : 0,
         has(spec.underline), spec.underline ? 1 : 0,
         has(spec.strike), spec.strike ? 1 : 0,
         has(spec.bold), spec.bold ? 1 : 0,
-        has(spec.italic), spec.italic ? 1 : 0) !== 0;
-      if (done) draw();
-      return done;
+        has(spec.italic), spec.italic ? 1 : 0));
     },
     // Toggles bold or italic, leaving the other styling; true if applied. **The styling is replaced
     // whole**, so the settings are read and only that field changed, between "set" and "the
@@ -125,15 +117,13 @@ function kspageApiLook(ks) {
     setStyleLook(i, spec) {
       const len = spec.family === null ? -1 : stage(spec.family);
       if (len < -1) return false;
-      const done = w.kspage_web_set_style_look(i, len,
+      return acted(w.kspage_web_set_style_look(i, len,
         spec.sizePx === null ? 0 : 1, spec.sizePx === null ? 0 : spec.sizePx,
         spec.weight === null ? 0 : 1, spec.weight === null ? 0 : spec.weight,
         spec.italic === null ? 0 : 1, spec.italic ? 1 : 0,
         spec.color === null ? 0 : 1, spec.color === null ? 0 : colorNum(spec.color),
         spec.background === null ? 0 : 1,
-        spec.background === null ? 0 : colorNum(spec.background)) !== 0;
-      if (done) draw();
-      return done;
+        spec.background === null ? 0 : colorNum(spec.background)));
     },
     // Style `i`'s number format. **The decimal places can be "unset"** (as many as needed). It
     // applies only where text is made from a value (plain typed text stays).
@@ -162,13 +152,11 @@ function kspageApiLook(ks) {
       const affix = `${spec.prefix || ""}\t${spec.suffix || ""}`;
       const len = affix === "\t" ? 0 : stage(affix);
       if (len < 0) return false;
-      const done = w.kspage_web_set_style_number(i, len,
+      return acted(w.kspage_web_set_style_number(i, len,
         spec.places === null || spec.places === undefined ? 0 : 1,
         spec.places === null || spec.places === undefined ? 0 : spec.places,
         spec.grouped ? 1 : 0, spec.percent ? 1 : 0,
-        Math.max(DATINGS.indexOf(spec.dated), 0)) !== 0;
-      if (done) draw();
-      return done;
+        Math.max(DATINGS.indexOf(spec.dated), 0)));
     },
     // Style `i`'s paragraph settings: the alignment is "left" / "center" / "right" / "justify". **A
     // line height multiple of 0 means "unset"** (the font's height). **With `wrap` false, text
@@ -193,12 +181,10 @@ function kspageApiLook(ks) {
     // Replaces style `i`'s paragraph settings whole.
     setStylePara(i, spec) {
       const at = ALIGNS.indexOf(spec.align);
-      const done = w.kspage_web_set_style_para(i, at < 0 ? 0 : at, spec.spacing || 0,
+      return acted(w.kspage_web_set_style_para(i, at < 0 ? 0 : at, spec.spacing || 0,
         spec.spaceBefore || 0, spec.spaceAfter || 0, spec.indent || 0,
         spec.wrap === false ? 0 : 1, spec.columns || 0, spec.columnGap || 0,
-        spec.pad || 0) !== 0;
-      if (done) draw();
-      return done;
+        spec.pad || 0));
     },
     // Style `i`'s border and fill. **Only the fill can be "unset"** (no line is thickness 0, so its
     // color always comes back); a color as `#rrggbb` text.
@@ -216,13 +202,11 @@ function kspageApiLook(ks) {
     // (`cell`).
     // Caution: **Pass the shape too** (omitted, it reverts to a rectangle).
     setStyleEdge(i, spec) {
-      const done = w.kspage_web_set_style_edge(i, spec.width || 0,
+      return acted(w.kspage_web_set_style_edge(i, spec.width || 0,
         colorNum(spec.color || "#000000"),
         spec.fill === null || spec.fill === undefined ? 0 : 1,
         spec.fill ? colorNum(spec.fill) : 0,
-        Math.max(SHAPES.indexOf(spec.shape), 0)) !== 0;
-      if (done) draw();
-      return done;
+        Math.max(SHAPES.indexOf(spec.shape), 0)));
     },
     // The armed tool; **`null` means none** (clicking selects text). The shape is `SHAPES`'s text,
     // `name` the style applied to it, and `lock` keeps it armed after drawing (PowerPoint's "lock
@@ -246,17 +230,13 @@ function kspageApiLook(ks) {
     drawShape(name, shape, x, y, wide, tall) {
       const len = stage(name);
       if (len <= 0) return false;
-      const done = w.kspage_web_draw_shape(len, Math.max(SHAPES.indexOf(shape), 0),
-        x, y, wide, tall) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_draw_shape(len, Math.max(SHAPES.indexOf(shape), 0),
+        x, y, wide, tall));
     },
     // Removes the selected frame if it holds no text. **On a frame with text it is false** (the key
     // handler then deletes one character).
     dropPicked() {
-      const done = w.kspage_web_drop_picked() !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_drop_picked());
     },
     // The contents of the current slide (**empty outside one**), **in stacking order** (a later one
     // is drawn on top). `name` is the document's, empty where none (the screen makes a label).
@@ -283,21 +263,15 @@ function kspageApiLook(ks) {
     // Selects item `i` of the list, **one at a time**; the cursor does not move (a shape has
     // nowhere for it).
     pickObject(i) {
-      const done = w.kspage_web_pick_object(i) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_pick_object(i));
     },
     // Moves the selected frame by (dx, dy).
     moveFrames(dx, dy) {
-      const done = w.kspage_web_move_frames(dx, dy) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_move_frames(dx, dy));
     },
     // Moves the selected frame one place in the stacking order. **False at either end.**
     raiseObject(up) {
-      const done = w.kspage_web_raise_object(up ? 1 : 0) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_raise_object(up ? 1 : 0));
     },
     // Adds one shape to the cursor's container, **to the slide itself inside a slide** (otherwise
     // the paragraph or cell). A missing style is made; for an existing one only the shape changes.
@@ -305,9 +279,7 @@ function kspageApiLook(ks) {
     insertShape(name, shape) {
       const len = stage(name);
       if (len <= 0) return false;
-      const done = w.kspage_web_insert_shape(len, Math.max(SHAPES.indexOf(shape), 0)) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_insert_shape(len, Math.max(SHAPES.indexOf(shape), 0)));
     },
     // The style name of the cursor's paragraph. **Empty means the parent's.** **It is separate from
     // the inline style** (`style()`); the marker and the arrangement belong here.
@@ -348,9 +320,7 @@ function kspageApiLook(ks) {
     setName(text) {
       const len = text.length > 0 ? stage(text) : 0;
       if (len < 0) return false;
-      const done = w.kspage_web_set_name(len) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_set_name(len));
     },
     // Inserts at the cursor text that refers to the target by name. **Only a paragraph with a
     // running number can be referred to** (nothing else has text to show). The number is recounted
@@ -360,9 +330,7 @@ function kspageApiLook(ks) {
       w.kspage_web_layout(ks.width);
       const len = stage(name);
       if (len <= 0) return false;
-      const done = w.kspage_web_insert_refer(len) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_insert_refer(len));
     },
     // Merges every cell the selection covers into its top-left cell — **drag across and click
     // once** (Excel's way). **Empty if merged, else the reason** (the rule of `setBlockStyle`). One
@@ -379,9 +347,7 @@ function kspageApiLook(ks) {
     // Splits the merged cell the cursor is in; empty cells come back where it covered.
     splitCell() {
       w.kspage_web_layout(ks.width);
-      const done = w.kspage_web_split_cell() !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_split_cell());
     },
     // The link target of the cursor's inline. **Empty means it is not a link.**
     href() {
@@ -393,9 +359,7 @@ function kspageApiLook(ks) {
     setHref(text) {
       const len = text.length > 0 ? stage(text) : 0;
       if (len < 0) return false;
-      const done = w.kspage_web_set_href(len) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_set_href(len));
     },
     // The link target exactly at document position (x, y); **not moved to what is nearby** (empty
     // outside).
@@ -431,20 +395,16 @@ function kspageApiLook(ks) {
       const len = stage(spec.then || "");
       if (len < 0) return false;
       const at = COMPARES.indexOf(spec.how);
-      const done = w.kspage_web_set_style_when(i, at < 0 ? 0 : at,
-        Number(spec.than) || 0, len) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_set_style_when(i, at < 0 ? 0 : at,
+        Number(spec.than) || 0, len));
     },
     // Replaces style `i`'s line settings whole.
     setStyleDecor(i, spec) {
-      const done = w.kspage_web_set_style_decor(i,
+      return acted(w.kspage_web_set_style_decor(i,
         spec.underline === null || spec.underline === undefined ? 0 : 1,
         spec.underline ? 1 : 0,
         spec.strike === null || spec.strike === undefined ? 0 : 1,
-        spec.strike ? 1 : 0) !== 0;
-      if (done) draw();
-      return done;
+        spec.strike ? 1 : 0));
     },
     // Style `i`'s marker; the kind is `MARKS`'s text. **The text's meaning depends on the kind**
     // (the bullet itself, or the text after the number). **Running and chapter numbers have two
@@ -471,9 +431,7 @@ function kspageApiLook(ks) {
         ? `${spec.before || ""}\t${spec.text || ""}` : (spec.text || "");
       const len = both ? stage(both) : 0;
       if (len < 0) return false;
-      const done = w.kspage_web_set_style_mark(i, at < 0 ? 0 : at, len) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_set_style_mark(i, at < 0 ? 0 : at, len));
     },
     // Adds one style with a name and returns its index (the existing one's where the name exists).
     // **A refusal comes back as its reason**: -1 "no name", -2 "the name holds a space" (with one
@@ -508,9 +466,7 @@ function kspageApiLook(ks) {
     // Applies theme `i` to the style table; **one undo restores it all.** With the same colors
     // again it is false (no step that does nothing is recorded).
     wearTheme(i) {
-      const done = w.kspage_web_wear_theme(i) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_wear_theme(i));
     },
   });
 }

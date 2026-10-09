@@ -18,27 +18,23 @@ pub enum Checked_error //< why an operation could not give a result
 pub struct Ci8 //< a checked `I8`
     pub val: I8 //< the plain value
 
+priv fn fit_ci8(wide: I16): Ci8!Checked_error //< a widened result back in Ci8, if it fits
+    if wide > I16::127 || wide < I16::(-128)
+        throw .overflow
+    return Ci8::{ .val = I8::wide }
+
 impl Ci8
     pub fn new(v: I8): Ci8 //< wraps a plain value
         return Ci8::{ .val = v }
     pub fn checked_add(r: Self, rhs: Ci8): Ci8!Checked_error //<
         //< the sum, or an error if it does not fit
-        wide: I16 = r.val + rhs.val
-        if wide > I16::127 || wide < I16::(-128)
-            throw .overflow
-        return Ci8::{ .val = I8::wide }
+        return fit_ci8(r.val + rhs.val)!
     pub fn checked_sub(r: Self, rhs: Ci8): Ci8!Checked_error //<
         //< the difference, or an error if it does not fit
-        wide: I16 = r.val - rhs.val
-        if wide > I16::127 || wide < I16::(-128)
-            throw .overflow
-        return Ci8::{ .val = I8::wide }
+        return fit_ci8(r.val - rhs.val)!
     pub fn checked_mul(r: Self, rhs: Ci8): Ci8!Checked_error //<
         //< the product, or an error if it does not fit
-        wide: I16 = r.val * rhs.val
-        if wide > I16::127 || wide < I16::(-128)
-            throw .overflow
-        return Ci8::{ .val = I8::wide }
+        return fit_ci8(r.val * rhs.val)!
     pub fn checked_neg(r: Self): Ci8!Checked_error //<
         //< the negated value, or an error if it does not fit
         //<
@@ -84,27 +80,23 @@ impl I8: Cast<|Ci8|> //< so `Ci8::v` turns a plain value into a checked one
 pub struct Ci16 //< a checked `I16`
     pub val: I16 //< the plain value
 
+priv fn fit_ci16(wide: I32): Ci16!Checked_error //< a widened result back in Ci16, if it fits
+    if wide > 32767 || wide < -32768
+        throw .overflow
+    return Ci16::{ .val = I16::wide }
+
 impl Ci16
     pub fn new(v: I16): Ci16 //< wraps a plain value
         return Ci16::{ .val = v }
     pub fn checked_add(r: Self, rhs: Ci16): Ci16!Checked_error //<
         //< the sum, or an error if it does not fit
-        wide: I32 = r.val + rhs.val
-        if wide > 32767 || wide < -32768
-            throw .overflow
-        return Ci16::{ .val = I16::wide }
+        return fit_ci16(r.val + rhs.val)!
     pub fn checked_sub(r: Self, rhs: Ci16): Ci16!Checked_error //<
         //< the difference, or an error if it does not fit
-        wide: I32 = r.val - rhs.val
-        if wide > 32767 || wide < -32768
-            throw .overflow
-        return Ci16::{ .val = I16::wide }
+        return fit_ci16(r.val - rhs.val)!
     pub fn checked_mul(r: Self, rhs: Ci16): Ci16!Checked_error //<
         //< the product, or an error if it does not fit
-        wide: I32 = r.val * rhs.val
-        if wide > 32767 || wide < -32768
-            throw .overflow
-        return Ci16::{ .val = I16::wide }
+        return fit_ci16(r.val * rhs.val)!
     pub fn checked_neg(r: Self): Ci16!Checked_error //<
         //< the negated value, or an error if it does not fit
         if r.val == I16::(-32768)
@@ -146,27 +138,23 @@ impl I16: Cast<|Ci16|> //< so `Ci16::v` turns a plain value into a checked one
 pub struct Ci32 //< a checked `I32`
     pub val: I32 //< the plain value
 
+priv fn fit_ci32(wide: I64): Ci32!Checked_error //< a widened result back in Ci32, if it fits
+    if wide > I64::2147483647 || wide < I64::(-2147483647 - 1)
+        throw .overflow
+    return Ci32::{ .val = I32::wide }
+
 impl Ci32
     pub fn new(v: I32): Ci32 //< wraps a plain value
         return Ci32::{ .val = v }
     pub fn checked_add(r: Self, rhs: Ci32): Ci32!Checked_error //<
         //< the sum, or an error if it does not fit
-        wide: I64 = r.val + rhs.val
-        if wide > I64::2147483647 || wide < I64::(-2147483647 - 1)
-            throw .overflow
-        return Ci32::{ .val = I32::wide }
+        return fit_ci32(r.val + rhs.val)!
     pub fn checked_sub(r: Self, rhs: Ci32): Ci32!Checked_error //<
         //< the difference, or an error if it does not fit
-        wide: I64 = r.val - rhs.val
-        if wide > I64::2147483647 || wide < I64::(-2147483647 - 1)
-            throw .overflow
-        return Ci32::{ .val = I32::wide }
+        return fit_ci32(r.val - rhs.val)!
     pub fn checked_mul(r: Self, rhs: Ci32): Ci32!Checked_error //<
         //< the product, or an error if it does not fit
-        wide: I64 = r.val * rhs.val
-        if wide > I64::2147483647 || wide < I64::(-2147483647 - 1)
-            throw .overflow
-        return Ci32::{ .val = I32::wide }
+        return fit_ci32(r.val * rhs.val)!
     pub fn checked_neg(r: Self): Ci32!Checked_error //<
         //< the negated value, or an error if it does not fit
         if r.val == -2147483647 - 1
@@ -299,15 +287,17 @@ impl I64: Cast<|Ci64|> //< so `Ci64::v` turns a plain value into a checked one
 pub struct Cu8 //< a checked `U8`
     pub val: U8 //< the plain value
 
+priv fn fit_cu8(wide: U16): Cu8!Checked_error //< a widened result back in Cu8, if it fits
+    if wide > U16::255
+        throw .overflow
+    return Cu8::{ .val = U8::wide }
+
 impl Cu8
     pub fn new(v: U8): Cu8 //< wraps a plain value
         return Cu8::{ .val = v }
     pub fn checked_add(r: Self, rhs: Cu8): Cu8!Checked_error //<
         //< the sum, or an error if it does not fit
-        wide: U16 = r.val + rhs.val
-        if wide > U16::255
-            throw .overflow
-        return Cu8::{ .val = U8::wide }
+        return fit_cu8(r.val + rhs.val)!
     pub fn checked_sub(r: Self, rhs: Cu8): Cu8!Checked_error //<
         //< the difference, or an error if it does not fit
         if rhs.val > r.val
@@ -315,10 +305,7 @@ impl Cu8
         return Cu8::{ .val = r.val - rhs.val }
     pub fn checked_mul(r: Self, rhs: Cu8): Cu8!Checked_error //<
         //< the product, or an error if it does not fit
-        wide: U16 = r.val * rhs.val
-        if wide > U16::255
-            throw .overflow
-        return Cu8::{ .val = U8::wide }
+        return fit_cu8(r.val * rhs.val)!
     pub fn checked_div(r: Self, rhs: Cu8): Cu8!Checked_error //<
         //< the quotient, or an error for a 0 divisor
         if rhs.val == 0
@@ -349,15 +336,17 @@ impl U8: Cast<|Cu8|> //< so `Cu8::v` turns a plain value into a checked one
 pub struct Cu16 //< a checked `U16`
     pub val: U16 //< the plain value
 
+priv fn fit_cu16(wide: U32): Cu16!Checked_error //< a widened result back in Cu16, if it fits
+    if wide > U32::65535
+        throw .overflow
+    return Cu16::{ .val = U16::wide }
+
 impl Cu16
     pub fn new(v: U16): Cu16 //< wraps a plain value
         return Cu16::{ .val = v }
     pub fn checked_add(r: Self, rhs: Cu16): Cu16!Checked_error //<
         //< the sum, or an error if it does not fit
-        wide: U32 = r.val + rhs.val
-        if wide > U32::65535
-            throw .overflow
-        return Cu16::{ .val = U16::wide }
+        return fit_cu16(r.val + rhs.val)!
     pub fn checked_sub(r: Self, rhs: Cu16): Cu16!Checked_error //<
         //< the difference, or an error if it does not fit
         if rhs.val > r.val
@@ -365,10 +354,7 @@ impl Cu16
         return Cu16::{ .val = r.val - rhs.val }
     pub fn checked_mul(r: Self, rhs: Cu16): Cu16!Checked_error //<
         //< the product, or an error if it does not fit
-        wide: U32 = r.val * rhs.val
-        if wide > U32::65535
-            throw .overflow
-        return Cu16::{ .val = U16::wide }
+        return fit_cu16(r.val * rhs.val)!
     pub fn checked_div(r: Self, rhs: Cu16): Cu16!Checked_error //<
         //< the quotient, or an error for a 0 divisor
         if rhs.val == 0
@@ -400,15 +386,17 @@ impl U16: Cast<|Cu16|> //< so `Cu16::v` turns a plain value into a checked one
 pub struct Cu32 //< a checked `U32`
     pub val: U32 //< the plain value
 
+priv fn fit_cu32(wide: U64): Cu32!Checked_error //< a widened result back in Cu32, if it fits
+    if wide > U64::4294967295
+        throw .overflow
+    return Cu32::{ .val = U32::wide }
+
 impl Cu32
     pub fn new(v: U32): Cu32 //< wraps a plain value
         return Cu32::{ .val = v }
     pub fn checked_add(r: Self, rhs: Cu32): Cu32!Checked_error //<
         //< the sum, or an error if it does not fit
-        wide: U64 = r.val + rhs.val
-        if wide > U64::4294967295
-            throw .overflow
-        return Cu32::{ .val = U32::wide }
+        return fit_cu32(r.val + rhs.val)!
     pub fn checked_sub(r: Self, rhs: Cu32): Cu32!Checked_error //<
         //< the difference, or an error if it does not fit
         if rhs.val > r.val
@@ -416,10 +404,7 @@ impl Cu32
         return Cu32::{ .val = r.val - rhs.val }
     pub fn checked_mul(r: Self, rhs: Cu32): Cu32!Checked_error //<
         //< the product, or an error if it does not fit
-        wide: U64 = r.val * rhs.val
-        if wide > U64::4294967295
-            throw .overflow
-        return Cu32::{ .val = U32::wide }
+        return fit_cu32(r.val * rhs.val)!
     pub fn checked_div(r: Self, rhs: Cu32): Cu32!Checked_error //<
         //< the quotient, or an error for a 0 divisor
         if rhs.val == 0

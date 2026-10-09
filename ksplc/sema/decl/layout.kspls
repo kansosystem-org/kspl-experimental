@@ -77,12 +77,11 @@ impl Sema_ctx
         //< Caution: Keep the wording and the position in this one place; per-caller copies drift.
         if r.has_error()
             return
-        $name: = r.env.display_str(type_id)
-        defer name.free()
+        name: = r.env.display(type_id)
         r.clear_scratch()
-            .s("recursive data structure with infinite size detected: this field embeds \
-                '\{name.slice()\}' by value, which contains it again. Hold it through a pointer \
-                ('@') or a slice to break the cycle")
+            .s("recursive data structure with infinite size detected: this field embeds '\{name\}' \
+                by value, which contains it again. Hold it through a pointer ('@') or a slice to \
+                break the cycle")
         r.err(r.layout.field, r.scratch.slice())
 
     priv fn reset_layout_memo(r: Self$@) //< recreates the cache of measured layouts
@@ -319,8 +318,7 @@ impl Sema_ctx
         clean_name: = r.env.base_type_name(real_id)
         // Caution: Use `display_str`'s name in the diagnostic; `clean_name` is internal and not in
         // the user's source.
-        $shown: = r.env.display_str(type_id)
-        defer shown.free()
+        shown: = r.env.display(type_id)
         $resolving: = List<|I32|>.new(null)
         defer resolving.free()
         if struct_def: = r.env.get_struct_def(clean_name)
@@ -328,14 +326,13 @@ impl Sema_ctx
                 field_name)
             if !walk.stopped
                 r.clear_scratch()
-                    .s("'offsetof' names a field that '\{shown.slice()\}' does not have: \
-                        '\{field_name\}'")
+                    .s("'offsetof' names a field that '\{shown\}' does not have: '\{field_name\}'")
                 r.err(err_node, r.scratch.slice())
                 throw .invalid_argument
             return walk.size
         r.clear_scratch()
-            .s("'offsetof' needs a struct type, but '\{shown.slice()\}' is not one (only a struct \
-                has named fields at fixed offsets)")
+            .s("'offsetof' needs a struct type, but '\{shown\}' is not one (only a struct has named \
+                fields at fixed offsets)")
         r.err(err_node, r.scratch.slice())
         throw .invalid_argument
 

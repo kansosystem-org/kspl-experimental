@@ -1,0 +1,130 @@
+import "ksplc/tests/support/lsp_client"
+import "ksplc/tests/support/lsp_read" { is_missing }
+import "std/ds" { List }
+import "std/json"
+import "std/jsonrpc"
+import "std/mem" { Arena }
+import "std/str" // `equals`
+import "std/verdict"
+
+// ==========================================
+// The outline (`textDocument/documentSymbol`): what a file declares, nested as written.
+//
+// **This is not a suite of its own**; one would start the language server a second time, so it
+// uses the suite's client ("Files near the limit and how they split" in `../../README.md`).
+// ==========================================
+
+priv const normal_ms: I32 = 15000
+
+// **A local inside a body and a constant's own value are no part of the outline**; `inner` and
+// `helper` are there to be left out.
+priv const outline_src: U8[] =
+    """priv const limit: Sz = 4;
+
+struct Pair {
+  left: I32;
+  right: I32;
+}
+
+enum Side {
+  near;
+  far;
+}
+
+trait Shape {
+  fn area(r: Self): I32;
+}
+
+impl Pair {
+  fn sum(r: Self@): I32 {
+    inner: = 1;
+    return r.left + r.right + inner;
+  }
+}
+
+fn main(): I32 {
+  helper: = 2;
+  return helper;
+}
+"""
+priv const outline_uri: U8[] = "file:///o.kspl"
+
+// The source cut off inside `main`: the declarations before the error still come back.
+priv const broken_src: U8[] = "struct Kept {\n  a: I32;\n}\n\nfn main(): I32 {\n  var x = 1;\n}\n"
+priv const broken_uri: U8[] = "file:///ob.kspl"
+
+priv struct Seen //< one symbol as the check reads it
+    name: U8[]
+    kind: I32
+    depth: Sz
+    inside: Bool //< whether the selection lies inside the range
+
+priv fn line_char(v: json.Val): I64 //< a position as one number, the line before the character
+    return v.get("line").as_int64(-1I64) * 100000I64 + v.get("character").as_int64(-1I64)
+
+priv fn collect(list: json.Val, depth: Sz, out: List<|Seen|>$@, arena: Arena$@)
+    for one in list.arr_list(arena)
+        range: = one.get("range")
+        sel: = one.get("selectionRange")
+        inside: =
+            line_char(range.get("start")) <= line_char(sel.get("start")) &&
+            line_char(sel.get("end")) <= line_char(range.get("end"))
+        out
+            .push(Seen::{ .name = one.get("name").as_str(),
+            .kind = one.get("kind").as_int(-1I32), .depth = depth, .inside = inside })
+        collect(one.get("children"), depth + 1, out, arena)
+
+priv fn found(seen: List<|Seen|>$@, name: U8[], kind: I32, depth: Sz): Bool //<
+    //< Whether `seen` holds that name with that kind at that depth
+    for s in seen.slice()
+        if s.name.equals(name) && s.kind == kind && s.depth == depth
+            return true
+    return false
+
+priv fn ask(c: jsonrpc.Client$@, uri: U8[], src: U8[], arena: Arena$@): json.Val //<
+    //< Opens `src` and returns the answer to `documentSymbol` (null where none came)
+    _open: = c.notify("textDocument/didOpen", lsp_client.did_open(uri, src, arena), arena)
+    got: =
+        c.request("textDocument/documentSymbol", lsp_client.at_doc(uri, arena), normal_ms, arena)
+        catch
+        fallback .null_val
+    lsp_client.close(c, uri, arena)
+    return got
+
+fn run(c: jsonrpc.Client$@, caps: json.Val, arena: Arena$@) //<
+    //< Checks the outline of a source that parses and of one that does not
+    verdict.check("it names documentSymbol among its capabilities",
+        caps.get("documentSymbolProvider").as_bool(false), lsp_client.dump(caps, arena))
+
+    got: = ask(c, outline_uri, outline_src, arena)
+    d: = lsp_client.dump(got, arena)
+    $seen: = List<|Seen|>.new(arena)
+    collect(got.get("result"), 0, seen@, arena)
+    // The protocol's numbers: Constant 14, Struct 23, Field 8, Enum 10, EnumMember 22,
+    // Interface 11, Method 6, Function 12.
+    verdict.check("the top-level declarations come out at the top",
+        found(seen@, "limit", 14I32, 0) && found(seen@, "Pair", 23I32, 0) &&
+        found(seen@, "Side", 10I32, 0) && found(seen@, "Shape", 11I32, 0) &&
+        found(seen@, "main", 12I32, 0), d)
+    verdict.check("a type's fields and variants nest under it",
+        found(seen@, "left", 8I32, 1) && found(seen@, "right", 8I32, 1) &&
+        found(seen@, "near", 22I32, 1) && found(seen@, "far", 22I32, 1), d)
+    verdict.check("an impl's and a trait's functions nest under them as methods",
+        found(seen@, "sum", 6I32, 1) && found(seen@, "area", 6I32, 1), d)
+    $stray: = false
+    $outside: = false
+    for s in seen.slice()
+        if s.name.equals("inner") || s.name.equals("helper")
+            stray = true
+        if !s.inside
+            outside = true
+    verdict.check("nothing inside a body comes out", !stray, d)
+    verdict.check("each name's place lies inside its declaration's range", !outside, d)
+
+    // **A document that fails to parse gets what parsed around the error**, as its colouring does.
+    bad: = ask(c, broken_uri, broken_src, arena)
+    $bad_seen: = List<|Seen|>.new(arena)
+    collect(bad.get("result"), 0, bad_seen@, arena)
+    verdict.check("a source that does not parse still lists what parsed",
+        !is_missing(bad.get("result")) && found(bad_seen@, "Kept", 23I32, 0),
+        lsp_client.dump(bad, arena))

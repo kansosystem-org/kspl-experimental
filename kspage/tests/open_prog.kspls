@@ -4,14 +4,12 @@
 //< Caution: **Do not stop at reading it.** kspage breaks where the numbers read are **used** (a
 //< merge's column count, a heading's depth); read and thrown away, fuzzing finds nothing.
 //< **The result is only the exit code**: 0 means "opened and laid out", 1 means "refused";
-//< anything else is a finding. Usage: `open_prog <kind> <file>` (the kind is doc / md / csv / txt).
+//< anything else is a finding. Usage: `open_prog <kind> <file>` (the kind is doc / csv / txt).
 import "kspage/lay/flow"
 import "kspage/model/doc" { Doc }
 import "kspage/model/fixed_font" as fixed
 import "kspage/model/style" { Sheet }
-import "kspage/share/html"
 import "kspage/share/markdown"
-import "kspage/share/markdown_read"
 import "kspage/share/store"
 import "kspage/share/text"
 import "kspage/tests/base"
@@ -34,13 +32,11 @@ priv fn used(d: Doc$@, sheet: Sheet$@, arena: Arena$@) //< uses the document tha
     store.save(d, sheet, out@)
     out.clear()
     markdown.write(d, sheet, out@)
-    out.clear()
-    html.write(d, sheet, fixed.make(), out@)
 
 fn main(): I32
     args: = sys.args()
     if args.len < 3
-        io.err().s("Usage: kspage_open <doc|md|csv|txt> <file>\n")
+        io.err().s("Usage: kspage_open <doc|csv|txt> <file>\n")
         return 2
     kind: = args[1]
     src: = io.read_file(args[2]) catch
@@ -64,9 +60,9 @@ fn main(): I32
             used(d, sheet, arena)
             return 0
         return 1
-    sheet: = Sheet.new(base.root_font(), arena)
-    d: =
-        (text.read(src, sheet, arena) if kind.equals("txt")
-        else markdown_read.read(src, sheet, arena))
-    used(d, sheet, arena)
-    return 0
+    if kind.equals("txt")
+        sheet: = Sheet.new(base.root_font(), arena)
+        used(text.read(src, sheet, arena), sheet, arena)
+        return 0
+    io.err().s("unknown kind: \{kind\}\n")
+    return 2

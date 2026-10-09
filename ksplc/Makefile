@@ -23,7 +23,10 @@ test-answers:
 # --- The checks that drive the compiler from outside (`make test-suites`) ---
 # A suite is a program `RUNNER` (the ksplc handed over) runs, inspecting `UNDER` (this folder's
 # compiler, made where missing), never the same one, or a broken compiler and a failed check look
-# alike. `SCRATCH` holds each suite's scratch, a place of its own, emptied before it runs.
+# alike. `SCRATCH` holds each suite's scratch, a place of its own, emptied before it runs where it
+# can be (each run then works in a fresh folder inside it, so a leftover is never read).
+# Caution: **Do not let a folder that cannot be emptied stop the suite**: on Windows a file a virus
+# scanner or a sync client holds cannot be deleted, and every run from then on would fail.
 # Caution: **Keep `SCRATCH` outside this folder**, where a case's material would belong to package
 # `ksplc`; the suites refuse such a place.
 RUNNER ?= $(KSPLC)
@@ -82,7 +85,7 @@ test-suites: $(addprefix test-,$(SUITES))
 
 test-%: $(UNDER)
 	$(if $(suite_$*),,$(error no suite is named $*; the names are SUITES in this file))
-	@rm -rf "$(SCRATCH)/$*"
+	@rm -rf "$(SCRATCH)/$*" || true
 	KANSO_SUITE=$* "$(RUNNER)" run tests/suite/$(suite_$*)_test.kspls "$(UNDER)" "$(SCRATCH)/$*" \
 		$(suite_args_$*)
 

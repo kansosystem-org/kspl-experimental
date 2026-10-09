@@ -59,11 +59,14 @@ function kspageProbeLink(ks) {
   openMenu("put-toc");
   // `text()` is the laid-out boxes joined, so it grows once the entries come out (that they do not
   // go into the document is the wasm checks').
+  // The Markdown written out lists the entries as items, so they are counted there too.
+  const items = () => (app.markdown().match(/^ *- /gm) || []).length;
   const beforeToc = app.text().length;
+  const itemsBefore = items();
   document.getElementById("put-toc").click();
   check(app.text().length > beforeToc, "a press puts the contents' entries out on the screen");
-  check(app.html().indexOf("margin-left:0px\">") >= 0,
-    "the contents' entries come out in what is written out");
+  const itemsWithToc = items();
+  check(itemsWithToc > itemsBefore, "the contents' entries come out in what is written out");
   check(document.activeElement === ime, "after the press the focus goes back to the input field");
   // The style's field is wired to the heading's depth. **0 is "not a heading".**
   openMenu("style-apply");
@@ -78,8 +81,7 @@ function kspageProbeLink(ks) {
   check(app.styleOutline(headAt).level === 0, "changing the field changes the depth too");
   check(ks.flyTick("style-collect") === "Do not gather",
     "the set for how it gathers gets the mark too (" + ks.flyTick("style-collect") + ")");
-  check(app.html().indexOf("margin-left:0px\">") < 0,
-    "taking the heading off empties the contents too");
+  check(items() < itemsWithToc, "taking the heading off takes its entries out too");
   undoKey();
   check(app.styleOutline(headAt).level === 1, "one undo puts the depth back");
 

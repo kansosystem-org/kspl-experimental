@@ -49,12 +49,11 @@ export const opens = material({
 });
 
 export function run(ks) {
-  const { w, scratch, read, out, stage, geom, boxOf, find, save, html, styleNames } = ks;
+  const { w, scratch, read, out, stage, geom, boxOf, find, save, md, styleNames } = ks;
 
   // --- Laying a decoration on what is chosen ---
   // **Do not have a run carry a colour directly.** The style's name is built out of the
-  // specification and then laid on, so the mapping onto `class` does not break in the HTML
-  // written out either.
+  // specification and then laid on, so the run still names a style.
   const wasStyleCount = w.kspage_web_style_count();
   w.kspage_web_layout(300);
   const at = find(lead);
@@ -150,11 +149,11 @@ export function run(ks) {
     === "https://example.com/", "on the box, where the link goes can be drawn");
   check(w.kspage_web_href_at(linkGeom[0] - 50, linkGeom[1] - 50) === 0,
     "outside it nothing can be drawn");
-  // It goes into both the text written out and the HTML.
+  // It goes into both the text saved and the Markdown written out.
   check(save().includes("\"href\": \"https://example.com/\""),
     "where the link goes goes into the text written out");
-  check(html().includes("<a href=\"https://example.com/\">"),
-    "in the HTML written out it becomes an a");
+  check(md().includes("](https://example.com/)"),
+    "in the Markdown written out it becomes a link");
   // Taken off, both where it goes and how it looks return.
   check(setHref("") === 1, "the link can be taken off");
   check(hrefNow() === "", "where the link goes is gone");
@@ -202,6 +201,4 @@ export function run(ks) {
   w.kspage_web_layout(300);
   check(decorOf(bodyAt)[0] === 0, "in one step the line's specification is gone");
   check(near(boxOf(linedBox)[2], wasWidth), "putting the line out does not change the width");
-  check(html().includes("text-decoration-line: underline"),
-    "the line goes into the HTML written out too");
 }

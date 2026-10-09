@@ -19,7 +19,7 @@ function kspageProbeNote(ks) {
   document.getElementById("note-apply").click();
   check(app.note() === "the note's text", "the button is wired to the note");
   check(document.activeElement === ime, "after the press the focus goes back to the input field");
-  check(app.html().indexOf("<sup>1</sup>") >= 0, "the mark comes out in what is written out");
+  check(app.markdown().indexOf("[^1]") >= 0, "the mark comes out in what is written out");
   openMenu("put-notes");
   const beforeNotes = app.text().length;
   document.getElementById("put-notes").click();
@@ -46,7 +46,7 @@ function kspageProbeNote(ks) {
   check(document.getElementById("remark-by").textContent === "Alice",
     "the writer comes out beside it (" + document.getElementById("remark-by").textContent + ")");
   // **It does not come out in the flow**, neither in what is written out nor on the page.
-  check(app.html().indexOf("better not stated so flatly here") < 0,
+  check(app.markdown().indexOf("better not stated so flatly here") < 0,
     "the remark does not come out in what is written out");
   document.getElementById("remark-clear").click();
   check(app.remark() === "" && app.remarkBy() === "",
@@ -62,13 +62,13 @@ function kspageProbeNote(ks) {
     "the style of the paragraph it is in comes out on the row ("
       + ks.flyNow("block-style") + ")");
   check(ks.flyTick("block-style") === "heading", "the style landed gets the mark");
-  const bullets = () => (app.html().match(/• /g) || []).length;
+  const bullets = () => ks.savedBlocks().filter((b) => b.style === "bullet").length;
   const wasBullets = bullets();
   check(ks.flyPick("block-style", "bullet"), "the bullet-list row is lined up");
   check(app.blockStyle() === "bullet",
     "it lands on the paragraph the moment it is pressed");
   check(bullets() === wasBullets + 1,
-    "the row-head mark comes out on the paragraph it landed on too");
+    "the document holds one more bullet paragraph");
   // **A style with a different way of arranging must not come out on the row.** Landed, the
   // paragraph's text waits for a cell and loses where to be laid.
   // Caution: **Do not stop it by refusing** — do not line up what can be chosen and is then refused
@@ -80,7 +80,7 @@ function kspageProbeNote(ks) {
   // "Unset" is the row that inherits from the parent; the shut row's right goes empty.
   check(ks.flyPick("block-style", "Unset"), "the Unset row is lined up");
   check(app.blockStyle() === "" && bullets() === wasBullets,
-    "taking it off deletes the row-head mark too");
+    "taking it off leaves no bullet paragraph behind");
   check(ks.flyNow("block-style") === "",
     "taking it off puts the row's right back to empty");
   undoKey();
@@ -91,7 +91,7 @@ function kspageProbeNote(ks) {
   // **It must land on the whole range selected**, as the neighbouring "styles" and "paragraphs"
   // lists do. **It must not land on a table's cells** — landed, the grid vanishes and the cells
   // turn into flow.
-  const cells = () => (app.html().match(/<td/g) || []).length;
+  const cells = ks.cellCount;
   const wasCells = cells();
   ime.dispatchEvent(new KeyboardEvent("keydown",
     { key: "a", ctrlKey: true, bubbles: true, cancelable: true }));
@@ -350,7 +350,7 @@ function kspageProbeNote(ks) {
   check(csvY > 0, "a table's cell can be pressed");
   check(app.csv().indexOf(",") >= 0,
     "over a cell the CSV comes out (" + app.csv().slice(0, 8) + ")");
-  const csvTables = () => app.html().split("<table").length;
+  const csvTables = ks.tableCount;
   const csvWas = csvTables();
   pressAt(8);
   check(app.insertCsv("a,b\nc,d\n", "table"), "a table can be put in from CSV");

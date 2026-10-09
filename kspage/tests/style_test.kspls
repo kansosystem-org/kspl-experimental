@@ -33,11 +33,9 @@ priv fn run_text(d: Doc$@, i: Sz): U8[]
 priv fn run_style(d: Doc$@, i: Sz): U8[]
     return runs_of(d).get(i).style
 
-fn test_a_style_splits_the_run_at_the_selection() //<
+fn test_a_style_splits_the_run_at_the_selection(arena: Arena$@) //<
     //< The inline splits at the ends of the selection, and the style applies only to its middle
     verdict.start("[kspage/edit] a style parting the run at what was chosen test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("abcdef")
     ed: = edit.new_editor(d)
@@ -55,13 +53,11 @@ fn test_a_style_splits_the_run_at_the_selection() //<
         "the part after it stays the parent's too")
     verdict.pass("a style parts the run at the ends of the range chosen and lies on it.")
 
-fn test_clearing_a_style_merges_the_runs_back() //<
+fn test_clearing_a_style_merges_the_runs_back(arena: Arena$@) //<
     //< Apply it and remove it and the inline goes back to one
     //<
     //< Not joined, the inlines would multiply at every click.
     verdict.start("[kspage/edit] the runs coming back together when it is taken off test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("abcdef")
     ed: = edit.new_editor(d)
@@ -79,11 +75,9 @@ fn test_clearing_a_style_merges_the_runs_back() //<
     assert(run_text(d, 0).equals("abcdef"), "the text is as it was")
     verdict.pass("neighbouring runs of the same style come together into one.")
 
-fn test_a_style_undoes_in_one_step() //<
+fn test_a_style_undoes_in_one_step(arena: Arena$@) //<
     //< Splitting, applying and joining are all undone in one step
     verdict.start("[kspage/edit] a style being put back in one test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("abcdef")
     ed: = edit.new_editor(d)
@@ -99,11 +93,9 @@ fn test_a_style_undoes_in_one_step() //<
     assert(run_style(d, 1).equals("strong"), "the style lies on it afresh too")
     verdict.pass("a style puts the parting, the laying on and the coming together back in one.")
 
-fn test_without_a_selection_the_whole_run_takes_the_style() //<
+fn test_without_a_selection_the_whole_run_takes_the_style(arena: Arena$@) //<
     //< With nothing selected, it applies to the whole inline the cursor is in
     verdict.start("[kspage/edit] laying it on with nothing chosen taking the whole run test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     body: = d.add_block("body")
     body.add_text("abc")
@@ -117,12 +109,11 @@ fn test_without_a_selection_the_whole_run_takes_the_style() //<
     assert(run_style(d, 0).equals(""), "the run beside does not move")
     verdict.pass("with nothing chosen, it lies on the whole run it stands in.")
 
-fn test_a_run_with_a_formula_is_not_split() //< an inline holding a formula is not split
+fn test_a_run_with_a_formula_is_not_split(arena: Arena$@) //<
+    //< an inline holding a formula is not split
     //<
     //< Split, the second half would drop out of the next recalculation and keep an old value.
     verdict.start("[kspage/edit] a run holding a formula not being parted test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     body: = d.add_block("body")
     n: = body.add_text("=1+1")
@@ -136,10 +127,9 @@ fn test_a_run_with_a_formula_is_not_split() //< an inline holding a formula is n
     assert(runs_of(d).get(0).text().equals("=1+1"), "the formula is left")
     verdict.pass("a run holding a formula is not parted, and it lies on the whole.")
 
-fn test_a_style_crosses_paragraphs() //< it applies to a selection across paragraphs too
+fn test_a_style_crosses_paragraphs(arena: Arena$@) //<
+    //< it applies to a selection across paragraphs too
     verdict.start("[kspage/edit] a style crossing the paragraphs test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     first: = d.add_block("body").add_text("abcd")
     next: = d.add_block("body").add_text("efgh")
@@ -158,11 +148,9 @@ fn test_a_style_crosses_paragraphs() //< it applies to a selection across paragr
     assert(tail.get(1).style.equals(""), "what was not chosen does not move")
     verdict.pass("a style lies on a choice across the paragraphs too.")
 
-fn test_the_caret_follows_a_merged_run() //<
+fn test_the_caret_follows_a_merged_run(arena: Arena$@) //<
     //< A cursor that pointed at a joined inline follows it to where it was joined
     verdict.start("[kspage/edit] the cursor following where it was joined test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     body: = d.add_block("body")
     body.add_text("ab")
@@ -183,11 +171,9 @@ fn test_the_caret_follows_a_merged_run() //<
 
 // ---- applying a color to the selection ----
 
-fn test_painting_a_span_makes_one_style_and_applies_it() //<
+fn test_painting_a_span_makes_one_style_and_applies_it(arena: Arena$@) //<
     //< A color applied without a name creates one style named from the settings, and applies it
     verdict.start("[kspage/edit] laying a decoration on what was chosen test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("abcdef")
     sheet: = Sheet.new(base.root_font(), arena)
@@ -221,11 +207,9 @@ fn test_painting_a_span_makes_one_style_and_applies_it() //<
     assert(runs_of(d).len == 1, "the run comes back to one too")
     verdict.pass("a decoration lies on it as a style whose name is built out of the naming.")
 
-fn test_painting_nothing_clears_the_look() //<
+fn test_painting_nothing_clears_the_look(arena: Arena$@) //<
     //< With nothing set at all, the applied color is removed
     verdict.start("[kspage/edit] taking a decoration off test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("abcd")
     sheet: = Sheet.new(base.root_font(), arena)
@@ -246,14 +230,12 @@ fn test_painting_nothing_clears_the_look() //<
     assert(run_style(d, 0).equals(""), "the style's name goes back to empty")
     verdict.pass("with nothing named, the decoration comes off.")
 
-fn test_bold_and_italic_apply_without_a_name() //<
+fn test_bold_and_italic_apply_without_a_name(arena: Arena$@) //<
     //< Bold and italic can be applied without a name
     //<
     //< **The weight and the italic change the metrics**, so they go into the style's font part.
     //< **`Not so` is a setting too** (an inline can be made not bold inside a bold paragraph).
     verdict.start("[kspage/style] laying bold and italic on test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("abcd")
     sheet: = Sheet.new(base.root_font(), arena)
@@ -315,11 +297,9 @@ priv fn sheet_with(name: U8[], arena: Arena$@): style.Sheet$@
     s.font.size_px = .some(28.0)
     return sheet
 
-fn test_changing_a_style_moves_everything_with_that_name() //<
+fn test_changing_a_style_moves_everything_with_that_name(arena: Arena$@) //<
     //< Change one style and every place that uses that name changes
     verdict.start("[kspage/edit] changing a style moving everything of that name test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.add_block("h1").add_text("a")
     d.add_block("h1").add_text("b")
@@ -345,14 +325,12 @@ fn test_changing_a_style_moves_everything_with_that_name() //<
         "where it goes back to is before the changing")
     verdict.pass("a style is shared by name, so changing it moves them all.")
 
-fn test_asking_whether_a_look_changed_takes_no_room() //<
+fn test_asking_whether_a_look_changed_takes_no_room(arena: Arena$@) //<
     //< Applying the same look or the same paper again leaves the document's arena as it was
     //<
     //< Caution: **Compare in an arena of its own.** In the document's, every press on the ribbon
     //< grows an arena that is never given back (on the page, a fixed one).
     verdict.start("[kspage/edit] asking whether a look changed taking no room test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.add_block("h1").add_text("a")
     sheet: = sheet_with("h1", arena)
@@ -366,11 +344,9 @@ fn test_asking_whether_a_look_changed_takes_no_room() //<
 
 // ---- color ----
 
-fn test_colors_are_inherited_like_the_font() //<
+fn test_colors_are_inherited_like_the_font(arena: Arena$@) //<
     //< A color is inherited as the font is, and the inline's setting beats the paragraph's
     verdict.start("[kspage/style] a colour being inherited as the font is test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     b: = d.add_block("h1")
     b.add_text("a")
@@ -391,13 +367,11 @@ fn test_colors_are_inherited_like_the_font() //<
     assert(back_is(page, 1, 0x00ff00U32), "a ground not named is inherited from the paragraph")
     verdict.pass("a colour is inherited, and the run's naming beats the parent's.")
 
-fn test_lines_are_inherited_and_can_be_turned_off() //<
+fn test_lines_are_inherited_and_can_be_turned_off(arena: Arena$@) //<
     //< The underline and the strikethrough are inherited as a color is
     //<
     //< `false` removes the parent's line.
     verdict.start("[kspage/style] the underline being inherited, and being rubbed out test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     b: = d.add_block("h1")
     b.add_text("a")
@@ -434,13 +408,11 @@ priv fn back_is(page: Page$@, i: Sz, want: U32): Bool
         return v == want
     return false
 
-fn test_an_unset_color_stays_unset_in_the_box() //<
+fn test_an_unset_color_stays_unset_in_the_box(arena: Arena$@) //<
     //< An unset color reaches the box as `not set`
     //<
     //< Filled with black, it would be unreadable where the screen is dark.
     verdict.start("[kspage/style] a colour not named reaching the box unnamed test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.add_block("body").add_text("a")
     page: = flow.layout(d, Sheet.new(base.root_font(), arena), fixed.make(), 300.0, arena)
@@ -485,11 +457,9 @@ priv fn is_unset(text: U8[]): Bool
     case .some(_v)
         return false
 
-fn test_a_style_field_can_go_back_to_unspecified() //<
+fn test_a_style_field_can_go_back_to_unspecified(arena: Arena$@) //<
     //< A field reverts to `not set`; reverted to 0, a value would appear where it was inherited
     verdict.start("[kspage/edit] a style being put back to unnamed test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.add_block("h1").add_text("a")
     sheet: = sheet_with("h1", arena)
@@ -504,12 +474,10 @@ fn test_a_style_field_can_go_back_to_unspecified() //<
     assert(base.near(page.boxes.get(0).font.size_px, 16.0), "it returns to the parent's size")
     verdict.pass("put back to unnamed, it is inherited from the parent.")
 
-fn test_a_style_change_undoes_in_one_step() //< one undo restores what was changed
+fn test_a_style_change_undoes_in_one_step(arena: Arena$@) //< one undo restores what was changed
     //<
     //< The style table is saved with the document.
     verdict.start("[kspage/edit] a style's changing being put back in one test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.add_block("h1").add_text("a")
     sheet: = sheet_with("h1", arena)
@@ -528,12 +496,10 @@ fn test_a_style_change_undoes_in_one_step() //< one undo restores what was chang
     assert(ed.redo() && ed.undo(), "done again, it can be put back")
     verdict.pass("a style's changing is put back in one too.")
 
-fn test_a_new_style_can_be_added_once() //< a style can be created
+fn test_a_new_style_can_be_added_once(arena: Arena$@) //< a style can be created
     //<
     //< The same name is not created twice (the later one could never be looked up).
     verdict.start("[kspage/edit] a style being made test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = sheet_with("h1", arena)
     ed: = edit.new_editor(d)
@@ -550,15 +516,13 @@ fn test_a_new_style_can_be_added_once() //< a style can be created
     assert(ed.redo() && sheet.styles.len == 2, "done again, it comes back")
     verdict.pass("a style can be made, and put back in one.")
 
-fn test_a_typed_style_name_holding_a_space_is_refused() //<
+fn test_a_typed_style_name_holding_a_space_is_refused(arena: Arena$@) //<
     //< The function where a person names a style rejects a name holding whitespace
     //<
     //< **Only that function rejects it**: `Sheet.add` still accepts one, since a name read from a
-    //< text goes into the table as it is and the export folds it (`kspage/docs/DESIGN.md`'s "The
-    //< mapping into HTML").
+    //< saved text goes into the table as it is (`kspage/docs/DESIGN.md`'s "A style name holds no
+    //< whitespace").
     verdict.start("[kspage/edit] a style's name holding a space being turned away test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = sheet_with("h1", arena)
     ed: = edit.new_editor(d)
@@ -580,11 +544,9 @@ fn test_a_typed_style_name_holding_a_space_is_refused() //<
         .pass("the entry point a person names a style at turns whitespace away, and the model does \
             not.")
 
-fn test_a_style_keeps_the_arrangement_it_was_made_with() //<
+fn test_a_style_keeps_the_arrangement_it_was_made_with(arena: Arena$@) //<
     //< The arrangement is set when the style is created and at no other time
     verdict.start("[kspage/edit] the arrangement being fixed when it is made test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = sheet_with("h1", arena)
     ed: = edit.new_editor(d)
@@ -601,12 +563,10 @@ fn test_a_style_keeps_the_arrangement_it_was_made_with() //<
 priv fn run_href(d: Doc$@, i: Sz): U8[]
     return runs_of(d).get(i).href
 
-fn test_a_link_marks_the_span_and_paints_it() //< the selection becomes a link
+fn test_a_link_marks_the_span_and_paints_it(arena: Arena$@) //< the selection becomes a link
     //<
     //< **The target and the look are applied in the same step.**
     verdict.start("[kspage/edit] making what was chosen a link test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("abcdef")
     sheet: = Sheet.new(base.root_font(), arena)
@@ -632,12 +592,11 @@ fn test_a_link_marks_the_span_and_paints_it() //< the selection becomes a link
         "neither the destination nor the look is left")
     verdict.pass("a link lays the destination and the look on in one step, and comes off in one.")
 
-fn test_an_empty_destination_clears_the_link() //< with an empty target the link is removed
+fn test_an_empty_destination_clears_the_link(arena: Arena$@) //<
+    //< with an empty target the link is removed
     //<
     //< **The look is restored with it.**
     verdict.start("[kspage/edit] taking a link off test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("abcd")
     sheet: = Sheet.new(base.root_font(), arena)
@@ -653,13 +612,11 @@ fn test_an_empty_destination_clears_the_link() //< with an empty target the link
     assert(run_style(d, 0).len == 0, "the look goes back to the parent's too")
     verdict.pass("with an empty destination, both the destination and the look come off.")
 
-fn test_neighbouring_links_with_different_destinations_stay_apart() //<
+fn test_neighbouring_links_with_different_destinations_stay_apart(arena: Arena$@) //<
     //< Neighbouring inlines with different targets are not joined
     //<
     //< Joined, two links would become one target.
     verdict.start("[kspage/edit] runs of differing destinations not coming together test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("abcd")
     sheet: = Sheet.new(base.root_font(), arena)
@@ -679,13 +636,11 @@ fn test_neighbouring_links_with_different_destinations_stay_apart() //<
     assert(run_href(d, 1).equals("https://example.com/b"),
         "the back half points at another destination")
     verdict.pass("where the destinations differ, neighbouring runs do not come together.")
-fn test_a_run_carrying_a_note_is_not_merged_away() //<
+fn test_a_run_carrying_a_note_is_not_merged_away(arena: Arena$@) //<
     //< An inline with a note is not joined either
     //<
     //< The mark appears after that inline's text, so joining would move the mark.
     verdict.start("[kspage/edit] a run carrying a note not coming together test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("abcd")
     ed: = edit.new_editor(d)

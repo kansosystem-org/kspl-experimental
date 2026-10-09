@@ -232,12 +232,16 @@ impl Ast_node
             return r.eval_offsetof(c, depth)!
         case .k_identifier, .k_expr_path, .k_type_path, .k_expr_postfix, .k_method_access
             return r.eval_ident_or_path(c, depth)!
-        case .k_enum_init
-            // A scalar enum's variant (`Color.green`, a k_enum_init) folds to its tag (valid in
-            // codegen after mangling too).
-            real_type_id: = c.env.get_real_type(r.type_id)
+        case .k_enum_init, .k_implicit_enum, .k_expr_implicit_dot
+            // A scalar enum's variant folds to its tag (valid in codegen after mangling too),
+            // written in full (`Color.green`, a k_enum_init) or short where the place gives the
+            // type (`.green`). Caution: **Look past the immutable mark** a const array's element
+            // carries, or the short form names no enum.
+            real_type_id: = c.env.get_clean_real_type(r.type_id)
+            variant: =
+                (r.last_child() if r.kind_id == .k_enum_init else r.get_implicit_enum_variant())
             if e_def: = c.env.get_enum_def(c.env.get_str(real_type_id))
-                switch e_def.get_variant(r.last_child().text)
+                switch e_def.get_variant(variant.text if variant != null else "")
                 case .some(v_def)
                     return v_def.tag_value
                 case .none {}
@@ -476,9 +480,7 @@ impl Ast_node
                 c.suppress_errors = true
                 // A type is resolved here; an expression needs type inference (infer_expr_fn in
                 // sema/session/ctx.kspls), and so does a value's name read as a type.
-                $value: Ast_node$@ = null
-                if v: = target.sizeof_named_value(c)
-                    value = v
+                value: = target.sizeof_named_value(c).unwrap_or(null)
                 if value != null && c.infer_expr_fn != null
                     type_id = c.infer_expr_fn(value, c,
                         I32::sema_type_env.Builtin_type_id.unknown)!

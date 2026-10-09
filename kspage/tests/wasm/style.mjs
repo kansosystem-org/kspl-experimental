@@ -60,7 +60,7 @@ export const opens = material({
 });
 
 export function run(ks) {
-  const { w, scratch, read, out, stage, geom, boxOf, textOf, find, save, html, md, load,
+  const { w, scratch, read, out, stage, geom, boxOf, textOf, find, save, md, load,
     setTyped, leaveCell, styleNames, styleOf, setStyle, paraOf, panelAt } = ks;
 
   // --- Laying a style on ---
@@ -300,7 +300,6 @@ export function run(ks) {
   check(lookOf(styleNames().indexOf("heading"))[7] === RED,
     "read back, the colour is still there");
   // Caution: Take the length first and then ask for the place (writing out widens memory).
-  check(html().includes("color: #ff0000"), "the colour goes into the HTML written out");
 
   // A style can be made. The same name is not made twice.
   const hadStyles = w.kspage_web_style_count();
@@ -312,7 +311,8 @@ export function run(ks) {
   check(w.kspage_web_style_count() === hadStyles, "one step returns to before it was made");
 
   // A name holding a space is turned away, **and the reason comes back as its own number** (it
-  // could never be one HTML class; `kspage/docs/DESIGN.md`'s "The mapping into HTML").
+  // would cut a Markdown fence's language short; `kspage/docs/DESIGN.md`'s "A style name holds no
+  // whitespace").
   // Caution: **Look at -2 and not merely at "below zero"** — the number says which refusal it is,
   // or the screen asks for a name already typed in.
   check(w.kspage_web_add_style(stage("page break")) === -2,
@@ -359,7 +359,6 @@ export function run(ks) {
   const next = geom(mark + 1);
   check(next[0] >= said[0] + said[2] - 0.001,
     `the body starts from the mark's right (mark ${said[0]}+${said[2]} / body ${next[0]})`);
-  check(html().includes("- "), "the mark goes into the HTML written out too");
   // **In Markdown the mark becomes the text itself** (the style's mark does not come out).
   check(md().includes("- "), "the mark goes into the Markdown written out too");
   w.kspage_web_undo();
@@ -424,8 +423,6 @@ export function run(ks) {
   check(painted !== null && painted[3] > 0, "the band has a height");
   // It has to go into the text written out too, and stay after being read back.
   check(save().includes("#eeeeee"), "the fill goes into the text written out");
-  check(html().includes("background-color: #eeeeee"),
-    "the fill goes into the HTML written out too");
   w.kspage_web_undo();
   w.kspage_web_layout(300);
   check(edgeOf(body)[2] === 0, "one step takes the fill's settlement away");

@@ -145,9 +145,7 @@ impl Sema_ctx
         $param_ordinal: Sz = 0
         $impl_cur: = base_ast_ext.Param_cursor.new(impl_params, false)
         for rp in base_ast_ext.Param_cursor.new(req_params, false)
-            $ip: Ast_node$@ = null
-            if got: = impl_cur.next()
-                ip = got
+            ip: = impl_cur.next().unwrap_or(null)
             if ip == null
                 break
             if param_ordinal >= 1
@@ -240,20 +238,17 @@ impl Sema_ctx
         $success: = true
 
         for req_m in trait_def.methods_list
-            $impl_m: Sema_symbol$@ = null
-            if im: = t_entry.get_method(req_m.name)
-                impl_m = im
+            impl_m: = t_entry.get_method(req_m.name).unwrap_or(null)
 
             if impl_m == null
                 // Caution: **Show the trait as written** (`std.lang.Eq<|S|>`), not its instance's
                 // mangled name (`std_lang_Eq_S`).
-                $trait_shown: = r.env.display_str(trait_id)
-                defer trait_shown.free()
+                trait_shown: = r.env.display(trait_id)
                 $err_sb: = Str_builder.new()
                 defer err_sb.free()
                 err_sb
                     .s("Type '\{target_str\}' does not implement required method '\{req_m.name\}' \
-                        of interface '\{trait_shown.slice()\}'")
+                        of interface '\{trait_shown\}'")
                 r.err(err_node, err_sb.slice())
                 success = false
             else
@@ -310,13 +305,11 @@ impl Sema_ctx
         if err_node != null
             // Caution: **Do not show an internal name** such as `get_str`'s `std_ds_Hashable_K`
             // (the head top of `../type/display.kspls`).
-            $target_shown: = r.env.display_str(r.env.get_real_type(target_id))
-            defer target_shown.free()
-            $trait_shown: = r.env.display_str(trait_id)
-            defer trait_shown.free()
+            target_shown: = r.env.display(r.env.get_real_type(target_id))
+            trait_shown: = r.env.display(trait_id)
             r.clear_scratch()
-                .s("type '\{target_shown.slice()\}' does not explicitly implement interface \
-                    '\{trait_shown.slice()\}'")
+                .s("type '\{target_shown\}' does not explicitly implement interface \
+                    '\{trait_shown\}'")
             r.err(err_node, r.scratch.slice())
             r.clear_scratch()
                 .s("If the implementation exists in another file, check for circular imports or \

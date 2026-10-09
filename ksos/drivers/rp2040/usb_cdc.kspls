@@ -228,40 +228,14 @@ priv fn handle_get_descriptor(value: U32, want: U32) //< GET_DESCRIPTOR
     else
         stall_ep0(true) // a type not provided, such as DEVICE_QUALIFIER (6)
 
-// The answer to NCM's GET_NTB_PARAMETERS (28 bytes; GetNtbParameters in CDC NCM 1.0).
-// **If this is not answered, the host does not bring the link up.** It is NCM's only mandatory
-// class request.
-// wNtbOutMaxDatagrams = 1 makes the host put one frame in each NTB, which keeps parsing simple.
-const desc_ntb_params: U8[28] = ::{
-    28,
-    0, // wLength
-    1,
-    0, // bmNtbFormatsSupported: 16-bit only
-    0x00,
-    0x08,
-    0x00,
-    0x00, // dwNtbInMaxSize  = 2048
-    4,
-    0, // wNdpInDivisor
-    0,
-    0, // wNdpInPayloadRemainder
-    4,
-    0, // wNdpInAlignment
-    0,
-    0, // wPadding1
-    0x00,
-    0x08,
-    0x00,
-    0x00, // dwNtbOutMaxSize = 2048
-    4,
-    0, // wNdpOutDivisor
-    0,
-    0, // wNdpOutPayloadRemainder
-    4,
-    0, // wNdpOutAlignment
-    1,
-    0, // wNtbOutMaxDatagrams
-}
+// The answer to NCM's only mandatory class request, GET_NTB_PARAMETERS (CDC NCM 1.0): **left
+// unanswered, the host does not bring the link up.** The fields, little-endian: wLength 28;
+// bmNtbFormatsSupported 1 (16-bit only); dwNtbInMaxSize 2048; wNdpInDivisor 4;
+// wNdpInPayloadRemainder 0; wNdpInAlignment 4; wPadding1 0; dwNtbOutMaxSize 2048; wNdpOutDivisor 4;
+// wNdpOutPayloadRemainder 0; wNdpOutAlignment 4; wNtbOutMaxDatagrams 1, which makes the host put
+// one frame in each NTB and keeps parsing simple.
+const desc_ntb_params: U8[28] = ::{ 28, 0, 1, 0, 0x00, 0x08, 0x00, 0x00, 4, 0, 0, 0, 4, 0, 0, 0,
+    0x00, 0x08, 0x00, 0x00, 4, 0, 0, 0, 4, 0, 1, 0 }
 
 priv fn handle_ncm_request(req: U32, want: U32): Bool //< NCM's class requests
     //<

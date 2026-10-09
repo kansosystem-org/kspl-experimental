@@ -215,8 +215,7 @@ impl U8[]
     ): U8[]
         if old.len == 0
             return arena.dup_str(r)
-        $b: = Str_builder.new()
-        defer b.free()
+        b: = arena.text()
         $pos: Sz = 0
         for pos < r.len
             rest: = r.sub_from(pos)
@@ -226,18 +225,7 @@ impl U8[]
                 break
             b.s(rest.sub(0, idx)).s(new)
             pos += idx + old.len
-        return arena.dup_str(b.slice())
-
-    pub fn replace_first( //< a new string with only the first occurrence replaced
-        r: U8[],
-        old: U8[], //< the text to find; empty does nothing
-        new: U8[], //< the text to put in its place
-        arena: Arena$@, //< where the new string goes; null uses the global heap
-    ): U8[]
-        idx: = r.find_str(old)
-        if old.len == 0 || idx < 0
-            return arena.dup_str(r)
-        return arena.text().s(r.sub(0, idx)).s(new).s(r.sub_from(idx + old.len)).take()
+        return b.take()
 
     // Use this for a text file, not `split('\n', ...)`: lines of a CRLF file from Windows would
     // keep the `\r` and not compare equal, and `"a\n"` would give two elements rather than one
@@ -268,13 +256,12 @@ impl U8[]
         parts: List<|U8[]|>, //< the pieces, taken by value so a call's result can be passed directly
         arena: Arena$@, //< where the joined string goes
     ): U8[]
-        $b: = Str_builder.new()
-        defer b.free()
+        b: = arena.text()
         for i in Range.asc(parts.len)
             if i > 0
                 b.s(r)
             b.s(parts.get(i))
-        return arena.dup_str(b.slice())
+        return b.take()
 
     pub fn unescape_to_arena( //< turns the text of a string literal back into the bytes it means
         //<

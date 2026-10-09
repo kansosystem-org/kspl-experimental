@@ -255,9 +255,8 @@ priv fn infer_unary_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
     // truncate `-1` and `-2`, so **both return `true`**; `!` is the negation (Principle 5; the
     // binary counterpart is `is_bool_arith_operand` in `binary.kspls`).
     if (op.equals("-") || op.equals("~")) && c.env.is_bool(inner_type_id)
-        $shown: = c.env.display_str(inner_type_id)
-        defer shown.free()
-        c.clear_scratch().s("Unary operator '\{op\}' cannot be applied to '\{shown.slice()\}'; ")
+        shown: = c.env.display(inner_type_id)
+        c.clear_scratch().s("Unary operator '\{op\}' cannot be applied to '\{shown\}'; ")
             .s("use '!' to negate, and convert first ('I32::flag') for arithmetic")
         c.err(node, c.scratch.slice())
         return I32::sema_type_env.Builtin_type_id.unknown
@@ -503,11 +502,10 @@ priv fn infer_implicit_enum_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I
     case .some(d)
         enum_def = d
     case .none
-        $shown: = c.env.display_str(expected_id)
-        defer shown.free()
+        shown: = c.env.display(expected_id)
         c.clear_scratch()
             .s("'.\{node.get_implicit_enum_variant().text\}' needs an enum here, but the expected \
-                type is '\{shown.slice()\}'. Write the value in full")
+                type is '\{shown\}'. Write the value in full")
         c.err(node, c.scratch.slice())
         return expected_id
 

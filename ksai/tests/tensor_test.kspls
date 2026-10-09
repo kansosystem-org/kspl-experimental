@@ -274,9 +274,10 @@ fn test_safetensors_roundtrip(arena: Arena$@)
 // touched, so removing one rejection still passes at the time.
 // ==========================================
 
-priv fn blob_of(header: U8[], payload_len: Sz, arena: Arena$@): U8[] //<
-    //< Builds a whole safetensors byte sequence from a header and the data part's length
+priv fn blob_of(header: U8[], payload_len: Sz, arena: Arena$@, payload: U8[] = ""): U8[] //<
+    //< Builds a whole safetensors byte sequence from a header and the data part
     //<
+    //< The data part is `payload` followed by `payload_len` zero bytes.
     //< **Pad with spaces up to an 8-byte boundary** (as the writer does;
     //< `Safetensors_writer.finish`).
     $hdr: = Str_builder.new()
@@ -287,12 +288,11 @@ priv fn blob_of(header: U8[], payload_len: Sz, arena: Arena$@): U8[] //<
     len_bytes: U8[8] = ::{}
     len_slice: = U8$[]::len_bytes
     len_slice.put_u64_le(0, U64::hdr.len)
-    $blob: = Str_builder.new()
-    defer blob.free()
-    blob.s(U8$[]::len_bytes).s(hdr.slice())
+    blob: = arena.text()
+    blob.s(U8$[]::len_bytes).s(hdr.slice()).s(payload)
     for _i in Range.asc(payload_len)
         blob.c(0U8)
-    return arena.dup_str(blob.slice())
+    return blob.take()
 
 priv fn refuses(what: U8$[], header: U8[], payload_len: Sz, arena: Arena$@) //<
     //< That the declared range is rejected
@@ -390,19 +390,9 @@ fn test_safetensors_refuses_a_mismatch(arena: Arena$@) //<
     // Caution: **Try it with a type narrower than the file's.** An F32 file read as F64 overruns
     // the file, so the range check catches it even with the dtype check removed, and the test would
     // not fail. Safetensors_writer writes F32 only, so this one is built by hand.
-    $hdr: = Str_builder.new()
-    defer hdr.free()
-    hdr.s("{\"w\":{\"dtype\":\"F64\",\"shape\":[2],\"data_offsets\":[0,16]}}")
-    for (hdr.len + 8) % 8 != 0
-        hdr.s(" ")
-    len_bytes: U8[8] = ::{}
-    len_slice: = U8$[]::len_bytes
-    len_slice.put_u64_le(0, U64::hdr.len)
-    payload: U8[16] = ::{}
-    $blob: = Str_builder.new()
-    defer blob.free()
-    blob.s(U8$[]::len_bytes).s(hdr.slice()).s(U8[]::payload)
-    $f64_file: = ai_st.Safetensors.load_from_bytes(blob.slice(), arena) catch panic("the hand-built \
+    blob: =
+        blob_of("{\"w\":{\"dtype\":\"F64\",\"shape\":[2],\"data_offsets\":[0,16]}}", 16, arena)
+    $f64_file: = ai_st.Safetensors.load_from_bytes(blob, arena) catch panic("the hand-built \
         safetensors blob must parse")
     $narrow: = false
     f64_file.get_tensor<|F32|>("w", arena) catch
@@ -412,24 +402,14 @@ fn test_safetensors_refuses_a_mismatch(arena: Arena$@) //<
 
     // The header contradicts itself. **Do not take the size from `shape` alone** (the reason is at
     // `ai_st.Safetensors.get_tensor`).
-    $bad_hdr: = Str_builder.new()
-    defer bad_hdr.free()
-    bad_hdr
-        .s("{\"a\":{\"dtype\":\"F32\",\"shape\":[4],\"data_offsets\":[0,8]},\"b\":{\"dtype\":\"F32\",\"shape\":[2],\"data_offsets\":[8,16]}}")
-    for (bad_hdr.len + 8) % 8 != 0
-        bad_hdr.s(" ")
-    bad_len: U8[8] = ::{}
-    bad_len_slice: = U8$[]::bad_len
-    bad_len_slice.put_u64_le(0, U64::bad_hdr.len)
     $neighbor: F32[4] = ::{ 1.0F32, 2.0F32, 99.0F32, 98.0F32 }
     neighbor_head: = neighbor[0]@
     neighbor_bytes: = U8[]::{ .ptr = U8$@::neighbor_head, .len = 16 }
-    $bad_blob: = Str_builder.new()
-    defer bad_blob.free()
-    bad_blob.s(U8$[]::bad_len).s(bad_hdr.slice()).s(neighbor_bytes)
-    $inconsistent: =
-        ai_st.Safetensors.load_from_bytes(bad_blob.slice(), arena) catch panic("the hand-built \
-            safetensors blob must parse")
+    bad_blob: =
+        blob_of("{\"a\":{\"dtype\":\"F32\",\"shape\":[4],\"data_offsets\":[0,8]},\"b\":{\"dtype\":\"F32\",\"shape\":[2],\"data_offsets\":[8,16]}}",
+        0, arena, neighbor_bytes)
+    $inconsistent: = ai_st.Safetensors.load_from_bytes(bad_blob, arena) catch panic("the hand-built \
+        safetensors blob must parse")
     $refused_span: = false
     inconsistent.get_tensor<|F32|>("a", arena) catch
         refused_span = true

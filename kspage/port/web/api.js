@@ -19,8 +19,8 @@ function kspageApi(ks) {
     return await api.goSpot(spot);
   };
 
-  const { w, mem, canvas, enc, str, outText, colorText, colorNum, scratch, nums, draw, stage, type,
-  compose, ime, bar, paperOf, armGroupBreak, handOver,
+  const { w, mem, canvas, enc, str, outText, colorText, colorNum, scratch, nums, draw, acted, stage,
+  type, compose, ime, bar, paperOf, armGroupBreak, handOver,
   SHAPES, ALIGNS, MARKS, DATINGS, COLLECTS, SKETCHES } = ks;
   // The handler for exhausted memory — **the last safety net**: the core stops once the arena runs
   // out (`panic` in `../../../std/lang.kspls`), so unhandled **the screen freezes**.
@@ -128,10 +128,7 @@ function kspageApi(ks) {
     // The largest document that can be opened, in bytes (**"unreadable" and "too large" are
     // reported apart**, with opposite fixes); **not copied into the page** (the two would drift).
     docLimit() { return w.kspage_web_doc_limit(); },
-    // The number dropped from the Markdown just written, **asked right after `markdown()`**; if not
-    // 0, writing that text back to the file **deletes something**, so it is never dropped silently.
-    markdownDropped() { return w.kspage_web_markdown_dropped(); },
-    // Whether it is open read-only, **not a property of the document** (neither saved nor in HTML).
+    // Whether it is open read-only, **not a property of the document** (neither saved nor exported).
     // Caution: **Not just a flag for hiding the tools** — the core refuses (`write/edit.kspls`'s
     // `shut`), stopping what gets past the hidden tools (shortcuts, pasting).
     readOnly() { return w.kspage_web_read_only() !== 0; },
@@ -261,14 +258,10 @@ function kspageApi(ks) {
     },
     // Adds a row or column after the cursor, or deletes the cursor's (false outside a table).
     addLine(axis) {
-      const done = w.kspage_web_add_line(axis === "column" ? 1 : 0) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_add_line(axis === "column" ? 1 : 0));
     },
     dropLine(axis) {
-      const done = w.kspage_web_drop_line(axis === "column" ? 1 : 0) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_drop_line(axis === "column" ? 1 : 0));
     },
     // The selection's text; **a paragraph break is one newline.** Empty with nothing selected.
     selectionText() {
@@ -281,17 +274,13 @@ function kspageApi(ks) {
       const bytes = enc.encode(text);
       if (bytes.length <= 0) return false;
       if (!handOver(bytes)) return false;
-      const done = w.kspage_web_paste(bytes.length) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_paste(bytes.length));
     },
     // Finds and selects text (true if found); **past the end it wraps**, continuing from there.
     find(needle, back) {
       const len = stage(needle);
       if (len <= 0) return false;
-      const done = w.kspage_web_find(len, back ? 1 : 0) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_find(len, back ? 1 : 0));
     },
     // How often that text appears in the document, **without a redraw** (the selection would
     // flicker mid-typing); it can differ from the number replaced (a formula is found, not
@@ -316,9 +305,7 @@ function kspageApi(ks) {
     insertTable(name, rows, cols) {
       const len = stage(name);
       if (len <= 0) return false;
-      const done = w.kspage_web_insert_table(len, rows, cols) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_insert_table(len, rows, cols));
     },
     // **The template is not kept** (the frames belong to the document); empty if the slide went in,
     // else **the reason**, **never merged into one** (the rule of `setBlockStyle`).
@@ -344,22 +331,16 @@ function kspageApi(ks) {
       const bytes = enc.encode(src);
       if (bytes.length <= 0 || imgW <= 0 || imgH <= 0) return false;
       if (!handOver(bytes)) return false;
-      const done = w.kspage_web_insert_image(bytes.length, imgW, imgH) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_insert_image(bytes.length, imgW, imgH));
     },
     // Deletes the cursor's whole container (a table, a slide, an image), **never a paragraph**.
     dropHolder() {
-      const done = w.kspage_web_drop_holder() !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_drop_holder());
     },
     // Removes the cursor's frame from a slide. **The last frame is not removed** (a slide with none
     // could not be clicked into); the whole slide is `dropHolder`.
     dropFrame() {
-      const done = w.kspage_web_drop_frame() !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_drop_frame());
     },
     // The memo on the cursor's container (**empty outside one**; on a slide, the speaker's notes).
     aside() {
@@ -370,9 +351,7 @@ function kspageApi(ks) {
     setAside(text) {
       const len = text.length > 0 ? stage(text) : 0;
       if (len < 0) return false;
-      const done = w.kspage_web_set_aside(len) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_set_aside(len));
     },
     // CSV of the cursor's table, the shown text rather than formulas (**empty outside a table**).
     csv() {
@@ -387,9 +366,7 @@ function kspageApi(ks) {
       if (!handOver(bytes)) return false;
       const len = stage(name);
       if (len <= 0) return false;
-      const done = w.kspage_web_insert_csv(bytes.length, len) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_insert_csv(bytes.length, len));
     },
     // Sorts the rows under the heading by the cursor's column (**the heading never moves**); `how`
     // is "down" (smallest first) or "up". Empty if sorted, else **the reason**, **never merged into
@@ -409,18 +386,14 @@ function kspageApi(ks) {
     // Copies the cell's text into the cells beyond it, up to the table's edge (autofill); `how` is
     // "down" or "right". **References inside a formula shift** (only `$A$1` stays put).
     fillAlong(how) {
-      const done = w.kspage_web_fill_along(how === "right" ? 1 : 0) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_fill_along(how === "right" ? 1 : 0));
     },
     // Inserts one collecting block after the cursor's paragraph (`what` "contents" or "notes");
     // **its contents are not inserted** (built at every layout), and a missing style is made.
     insertGathered(name, what) {
       const len = stage(name);
       if (len <= 0) return false;
-      const done = w.kspage_web_insert_gathered(len, what === "notes" ? 2 : 1) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_insert_gathered(len, what === "notes" ? 2 : 1));
     },
     // Inserts one chart after the cursor's paragraph (`kind` "bars" / "lines"). **The range needs
     // the table's name** (`Details!C2:C4`; a chart in the flow has no table of its own), and **the
@@ -428,9 +401,7 @@ function kspageApi(ks) {
     insertChart(name, range, kind) {
       const len = stage(`${name}\t${range}`);
       if (len <= 0) return false;
-      const done = w.kspage_web_insert_chart(len, Math.max(COLLECTS.indexOf(kind), 0)) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_insert_chart(len, Math.max(COLLECTS.indexOf(kind), 0)));
     },
     // The note on the cursor's inline. **Empty means none.**
     note() {
@@ -441,9 +412,7 @@ function kspageApi(ks) {
     setNote(text) {
       const len = text.length > 0 ? stage(text) : 0;
       if (len < 0) return false;
-      const done = w.kspage_web_set_note(len) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_set_note(len));
     },
     // The comment on the cursor's inline, and who wrote it. **Empty text means none.**
     remark() {
@@ -462,9 +431,7 @@ function kspageApi(ks) {
     setRemark(text) {
       const len = stage(api.author + "\t" + text);
       if (len < 0) return false;
-      const done = w.kspage_web_set_remark(len) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_set_remark(len));
     },
     // Loads an image and measures its natural size (**asynchronous**; null if unreadable).
     measureImage(src) {
@@ -504,16 +471,12 @@ function kspageApi(ks) {
     // Sets the step at which the selected frame appears; true if set. **0 means "always"** (it also
     // removes the setting); **a negative value becomes 0.**
     setFrameStep(at) {
-      const done = w.kspage_web_set_frame_step(at > 0 ? at : 0) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_set_frame_step(at > 0 ? at : 0));
     },
     // Places the selected frame by number (true if it did), **offset from the slide's top left**.
     placeFrame(spec) {
-      const done = w.kspage_web_place_frame(spec.x || 0, spec.y || 0,
-        spec.w || 0, spec.h || 0) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_place_frame(spec.x || 0, spec.y || 0,
+        spec.w || 0, spec.h || 0));
     },
     // The cursor's cell frame ([x, y, w, h]) or null, after layout: ask again after a resize.
     cellFrame() {
@@ -606,9 +569,7 @@ function kspageApi(ks) {
     },
     // Sets the column width (`axis` 1) or row height (0); **a negative means "unset"**, 0 is 0.
     setCellSize(axis, v) {
-      const done = w.kspage_web_set_cell_size(axis, v) !== 0;
-      if (done) draw();
-      return done;
+      return acted(w.kspage_web_set_cell_size(axis, v));
     },
     // The text a person typed in the cursor's cell (the formula, if there is one).
     // **Do not name it `source`** — on this page "source" means a program's text.

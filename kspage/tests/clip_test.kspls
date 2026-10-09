@@ -47,10 +47,8 @@ priv fn para(d: Doc$@, i: Sz): U8[] //< reads one paragraph's text
 
 // ---- copying out ----
 
-fn test_the_selected_text_comes_out_as_typed()
+fn test_the_selected_text_comes_out_as_typed(arena: Arena$@)
     verdict.start("[kspage/clip] the text selected coming out as it stands test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     $sb: = Str_builder.new()
     defer sb.free()
     d: = Doc.new(arena)
@@ -66,11 +64,9 @@ fn test_the_selected_text_comes_out_as_typed()
     assert(picked(d, ed.caret, sb@).equals("bc"), "only what was selected comes out")
     verdict.pass("only the range selected comes out, as the text was typed.")
 
-fn test_paragraph_breaks_come_out_as_one_newline() //<
+fn test_paragraph_breaks_come_out_as_one_newline(arena: Arena$@) //<
     //< **A paragraph break is one newline.** Without it, the paragraphs would join when pasted back
     verdict.start("[kspage/clip] a paragraph's break becoming one newline test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     $sb: = Str_builder.new()
     defer sb.free()
     d: = Doc.new(arena)
@@ -85,13 +81,11 @@ fn test_paragraph_breaks_come_out_as_one_newline() //<
         "the paragraph between is carried by a newline too")
     verdict.pass("across paragraphs, one newline goes in per break.")
 
-fn test_styled_runs_in_one_paragraph_stay_on_one_line() //<
+fn test_styled_runs_in_one_paragraph_stay_on_one_line(arena: Arena$@) //<
     //< **No newline is added where inlines split within a paragraph**
     //<
     //< Applying a style splits the inlines, and a mere bold would multiply the paragraphs.
     verdict.start("[kspage/clip] a style within a paragraph not growing the newlines test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     $sb: = Str_builder.new()
     defer sb.free()
     d: = Doc.new(arena)
@@ -113,10 +107,8 @@ fn test_styled_runs_in_one_paragraph_stay_on_one_line() //<
 
 // ---- pasting in ----
 
-fn test_pasting_puts_the_text_at_the_caret()
+fn test_pasting_puts_the_text_at_the_caret(arena: Arena$@)
     verdict.start("[kspage/clip] the text pasted going in at the cursor test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("ad")
     page: = plain_page(d, arena)
@@ -130,14 +122,12 @@ fn test_pasting_puts_the_text_at_the_caret()
     assert(!ed.paste(page, ""), "an empty text is not pasted")
     verdict.pass("a text with no newline goes in at the cursor as it stands.")
 
-fn test_pasting_lines_makes_paragraphs() //<
+fn test_pasting_lines_makes_paragraphs(arena: Arena$@) //<
     //< **The paragraph count grows by the number of newlines**
     //<
     //< Folded into one paragraph, the newlines would be lost (an `Inline` cannot hold them as
     //< text).
     verdict.start("[kspage/clip] a newline becoming a paragraph's break test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.add_block("body").add_text("")
     page: = plain_page(d, arena)
@@ -152,11 +142,9 @@ fn test_pasting_lines_makes_paragraphs() //<
     assert(para(d, 2).equals("three"), "the third row is the third paragraph")
     verdict.pass("a paragraph splits per newline, and a `\\r\\n` is one break too.")
 
-fn test_pasting_lines_inside_a_paragraph_keeps_the_tail() //<
+fn test_pasting_lines_inside_a_paragraph_keeps_the_tail(arena: Arena$@) //<
     //< Paste several lines mid-paragraph and the second half stays after the last line
     verdict.start("[kspage/clip] the back half being left when pasting mid-paragraph test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("az")
     page: = plain_page(d, arena)
@@ -170,14 +158,12 @@ fn test_pasting_lines_inside_a_paragraph_keeps_the_tail() //<
     assert(para(d, 1).equals("cz"), "the original back half is left behind the last row")
     verdict.pass("pasted mid-paragraph, the paragraph's back half is not deleted.")
 
-fn test_pasting_replaces_the_selection_in_one_undo_step() //<
+fn test_pasting_replaces_the_selection_in_one_undo_step(arena: Arena$@) //<
     //< **Where something is selected, pasting replaces it**
     //<
     //< Inserted without deleting, typing over would become adding.
     //< **One paste is one undo**, not one per line.
     verdict.start("[kspage/clip] a paste replacing in one step test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("aXYd")
     page: = plain_page(d, arena)
@@ -197,13 +183,11 @@ fn test_pasting_replaces_the_selection_in_one_undo_step() //<
     assert(!ed.undo(), "there is one hand to go back by and no more")
     verdict.pass("a paste replaces what was selected, and goes back in one.")
 
-fn test_pasting_inside_a_cell_folds_the_newlines() //<
+fn test_pasting_inside_a_cell_folds_the_newlines(arena: Arena$@) //<
     //< **Inside a cell no paragraph is split** (the cell would grow and the table would break)
     //<
     //< A newline becomes one space.
     verdict.start("[kspage/clip] a newline becoming a space inside a cell test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     table: = d.add_block("table")
     row: = table.add_child("row")
@@ -223,11 +207,9 @@ fn test_pasting_inside_a_cell_folds_the_newlines() //<
     verdict
         .pass("pasted into a cell the table's shape does not change, and a newline becomes a space.")
 
-fn test_a_copied_range_pastes_back_the_same() //<
+fn test_a_copied_range_pastes_back_the_same(arena: Arena$@) //<
     //< Copied out and pasted back, it gives the same shape (both directions share one rule)
     verdict.start("[kspage/clip] copying and pasting back giving the same shape test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     $sb: = Str_builder.new()
     defer sb.free()
     d: = Doc.new(arena)
@@ -250,11 +232,9 @@ fn test_a_copied_range_pastes_back_the_same() //<
     verdict.pass("paste the text carried out back and it lines up at the same breaks.")
 // ---- find and replace ----
 
-fn test_finding_walks_the_document_and_wraps() //<
+fn test_finding_walks_the_document_and_wraps(arena: Arena$@) //<
     //< It searches in document order, and at the end it wraps to the start
     verdict.start("[kspage/find] the order of looking and the coming round test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     head: = d.add_block("body").add_text("ax ay")
     tail: = d.add_block("body").add_text("az")
@@ -278,10 +258,9 @@ fn test_finding_walks_the_document_and_wraps() //<
     assert(!ed.find_next(""), "an empty text is not looked for")
     verdict.pass("the order of looking is the document's order, and at the edge it comes round.")
 
-fn test_finding_crosses_runs_but_not_blocks() //< it crosses inlines but not paragraphs
+fn test_finding_crosses_runs_but_not_blocks(arena: Arena$@) //<
+    //< it crosses inlines but not paragraphs
     verdict.start("[kspage/find] crossing runs but not paragraphs test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     b: = d.add_block("body")
     first: = b.add_text("ab")
@@ -299,11 +278,9 @@ fn test_finding_crosses_runs_but_not_blocks() //< it crosses inlines but not par
     assert(!ed.find_next("de"), "it does not cross a paragraph")
     verdict.pass("looking crosses runs and does not cross paragraphs.")
 
-fn test_replacing_undoes_in_one_step() //<
+fn test_replacing_undoes_in_one_step(arena: Arena$@) //<
     //< One replacement is one undo, and replacing all is also undone in one
     verdict.start("[kspage/find] a replacing going back in one test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("axayaz")
     ed: = edit.new_editor(d)
@@ -321,13 +298,11 @@ fn test_replacing_undoes_in_one_step() //<
     assert(ed.replace_all("no such text", "X") == 0, "where there is none it is 0")
     verdict.pass("one replacing is one undo, and even a text that grows stops.")
 
-fn test_a_formula_cell_is_not_replaced() //<
+fn test_a_formula_cell_is_not_replaced(arena: Arena$@) //<
     //< A formula's text is not replaced (changed, what it points at and means would change too)
     //<
     //< **The typed text is searched** (a position in the value is no position in the document).
     verdict.start("[kspage/find] not typing over a cell holding a formula test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     b: = d.add_block("body")
     plain: = b.add_text("12")

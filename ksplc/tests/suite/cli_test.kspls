@@ -342,18 +342,20 @@ priv fn case_explain(arena: Arena$@) //<
         "usage: ksplc explain")
     ng_case("explain: an option is turned away", U8[][]::{ "explain", "--stats", "W0702" },
         "does not take effect")
-    // The registered codes are `base/lint_codes.kspls`'s `code.equals("W0702")` lines.
+    // The registered codes are `base/lint_codes.kspls`'s quoted codes (`"W0702"`).
     reg: = io.read_file("base/lint_codes.kspls") catch
         verdict.check("explain prints each registered code's section alone", false,
             "base/lint_codes.kspls cannot be read")
         return
-    rx: =
-        regex.Regex.compile("code\\.equals\\(\"([WIH][0-9][0-9][0-9][0-9])\"\\)") catch
+    rx: = regex.Regex.compile("\"([WIH][0-9][0-9][0-9][0-9])\"") catch
         verdict.check("explain prints each registered code's section alone", false,
             "the pattern for a registered code does not compile")
         return
     defer rx.free()
-    found: = rx.find_all(reg, arena) catch
+    // `off_by_default` names some codes again; only `codes`, before it, lists each once.
+    at: = reg.find_str("priv const off_by_default")
+    listed: = reg if at < 0 else reg.sub(0, at)
+    found: = rx.find_all(listed, arena) catch
         verdict.check("explain prints each registered code's section alone", false,
             "the registered codes cannot be read")
         return
@@ -361,7 +363,7 @@ priv fn case_explain(arena: Arena$@) //<
     defer bad.free()
     $seen: Sz = 0
     for m in found
-        code: = m.group(1, reg)
+        code: = m.group(1, listed)
         seen += 1
         r: = cli(U8[][]::{ "explain", code })
         head: = arena.text().s("#### [").s(code).s("]").take()

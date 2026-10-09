@@ -15,20 +15,15 @@ KANSO_REQUIRE_ASAN ?=
 # -O1, as the sanitizer slows it; `-g` and the frame pointer keep a stop's call row readable.
 ASAN_CFLAGS := -O1 -g -fno-omit-frame-pointer -fsanitize=address
 
-.PHONY: examples llama_engine qwen_infer fim_coder test test-fuzz
-examples: llama_engine qwen_infer fim_coder
+EXAMPLES := llama_engine qwen_infer fim_coder
+.PHONY: examples $(EXAMPLES) test test-fuzz
+examples: $(EXAMPLES)
 
 # Caution: **Quote every path** — a folder whose name holds a space splits an unquoted one.
 # `ksplc build` compiles and links each, optimised by default as the examples ship: both do a
 # model's arithmetic element by element.
-llama_engine:
-	"$(KSPLC)" build $(BLAS_FLAGS) examples/llama_engine/main.kspls "$(OUT)/llama_engine.exe"
-
-qwen_infer:
-	"$(KSPLC)" build $(BLAS_FLAGS) examples/qwen_infer/main.kspls "$(OUT)/qwen_infer.exe"
-
-fim_coder:
-	"$(KSPLC)" build $(BLAS_FLAGS) examples/fim_coder/main.kspls "$(OUT)/fim_coder.exe"
+$(EXAMPLES):
+	"$(KSPLC)" build $(BLAS_FLAGS) examples/$@/main.kspls "$(OUT)/$@.exe"
 
 # The examples are built and run with the tests, so one that stops building fails here (as
 # Cargo builds `examples/` on `cargo test`).

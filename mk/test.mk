@@ -88,7 +88,6 @@ suite_vscode       := suite/vscode_test.kspls
 suite_docref       := suite/docref_test.kspls
 suite_conventions  := suite/conventions_test.kspls
 suite_docsnippet   := suite/docsnippet_test.kspls
-suite_mdtrip       := suite/mdtrip_test.kspls
 suite_textrip      := suite/textrip_test.kspls
 suite_lsp-tree     := suite/lsp_tree_test.kspls
 suite_pytools      := suite/pytools_test.kspls
@@ -109,7 +108,7 @@ suite_lint-gate    := suite/lint_gate_test.kspls
 # prints the numbers. `lsp-tree` leads, as its minute is spent waiting on the language server.
 # `PRIVATE_SUITES` stands only where `private/` does (the root `Makefile`).
 SUITES := lsp-tree extract-ksplc extract-rest kspls-trip c-warnings conventions docref pilot-copy \
-  deps spec-claims mdtrip textrip docsnippet vscode recipe-bytes lint-gate link-rules keywords \
+  deps spec-claims textrip docsnippet vscode recipe-bytes lint-gate link-rules keywords \
   pytools $(PRIVATE_SUITES)
 
 # Linux's image alone holds their tool (`js-syntax`: node; `race`: clang's ThreadSanitizer): out of

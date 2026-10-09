@@ -25,6 +25,7 @@ import "std/strfmt" as _strfmt
 import "std/sys"
 import "std/verdict"
 import "tests/support/harness"
+import "tests/support/harness_text"
 
 priv struct Hit //< one finding on a recipe line
     line: Sz
@@ -418,17 +419,11 @@ priv fn is_hidden(name: U8[]): Bool
             return true
     return false
 
-priv fn any_equals(names: List<|U8[]|>@, want: U8[]): Bool
-    for t in names
-        if t.equals(want)
-            return true
-    return false
-
 priv fn check_phony_rules(names: Names@, arena: Arena$@) //<
     //< That a name listed in `.PHONY` has a rule
     $bad: = List<|U8[]|>.new(arena)
     for one in names.said
-        if !any_equals(names.have@, one.name)
+        if !harness_text.has(names.have@, one.name)
             bad
                 .push(arena.text().s(one.where).s(": ").s(one.name).take())
     verdict.check_list("a name in `.PHONY` has a rule", names.said.len, "names", bad@,
@@ -465,7 +460,7 @@ priv fn check_help_docs(names: Names@, arena: Arena$@) //<
     for d in names.docs
         if d.spec.ends_with("*")
             continue
-        if !any_equals(names.have@, d.spec)
+        if !harness_text.has(names.have@, d.spec)
             stale.push(arena.text().s(d.where).s(": ").s(d.spec).take())
     verdict.check_list("`make help`'s explanations point at targets that really exist",
         names.docs.len, "lines", stale@,
@@ -501,7 +496,7 @@ priv fn check_help_groups(names: Names@, arena: Arena$@) //<
         return
     $unknown: = List<|U8[]|>.new(arena)
     for d in names.docs
-        if !any_equals(known@, d.group)
+        if !harness_text.has(known@, d.group)
             unknown
                 .push(arena.text().s(d.where).s(": ").s(d.group).take())
     verdict.check_list("`make help`'s groups are in `mk/help.mk`'s row", names.docs.len, "lines",

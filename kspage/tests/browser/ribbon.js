@@ -234,7 +234,7 @@ function kspageProbeRibbon(ks) {
     "the refusal's colour is held as a role (" + denied.getPropertyValue("--warn") + ")");
   // **What is pressed is not "Save"** (the answer goes past a wait. The reason is at the same
   // place in `menu.js`).
-  document.getElementById("export").click();
+  document.getElementById("export-md").click();
   check(!document.getElementById("note").classList.contains("warn"),
     "a tiding of something done gets no colour");
   // Where it is now comes out on the band too. **Do not leave it empty** (half the reasons a press

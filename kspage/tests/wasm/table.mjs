@@ -295,7 +295,6 @@ export function run(ks) {
   // old document's tables, whose arena the opening frees.
   const others = {
     "a saved text": () => ks.load(opens),
-    "Markdown": () => w.kspage_web_load_markdown(ks.feed("# Another\n\nIts own text.\n")),
     "a text form": () => w.kspage_web_load_plain_text(ks.feed("Its own text.\n"), 0),
     "the manual": () => w.kspage_web_load_manual(),
   };

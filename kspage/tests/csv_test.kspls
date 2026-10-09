@@ -17,13 +17,11 @@ import "std/verdict"
 priv fn cell_text(t: Block$@, r: Sz, c: Sz): U8[]
     return t.children.get(r).children.get(c).inlines.get(0).text()
 
-fn test_a_field_with_commas_and_quotes_survives_the_round_trip() //<
+fn test_a_field_with_commas_and_quotes_survives_the_round_trip(arena: Arena$@) //<
     //< The quoting rule is shared by the reader and the writer
     //<
     //< With two rules, it could not read what it wrote itself.
     verdict.start("[kspage/csv] a fenced field going round test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     src: = "a,\"b,c\",\"d\"\"e\"\n1,2,3\n"
     $made: Block$@ = null
     if got: = csv.read_table(src, "table", arena)
@@ -39,12 +37,11 @@ fn test_a_field_with_commas_and_quotes_survives_the_round_trip() //<
     assert(out.slice().equals(src), "written out it goes back to the original text")
     verdict.pass("a fenced field goes round under the same quoting.")
 
-fn test_short_rows_are_padded_to_the_widest() //< the rows come out as long as the longest row
+fn test_short_rows_are_padded_to_the_widest(arena: Arena$@) //<
+    //< the rows come out as long as the longest row
     //<
     //< Not padded, the cell count differs row by row and the column count is undefined.
     verdict.start("[kspage/csv] short rows coming out even test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     $made: Block$@ = null
     if got: = csv.read_table("a\nb,c,d\ne,f\n", "table", arena)
         made = got
@@ -55,21 +52,17 @@ fn test_short_rows_are_padded_to_the_widest() //< the rows come out as long as t
     assert(cell_text(made, 2, 1).equals("f"), "the text of the row behind stays as it was")
     verdict.pass("the rows come out the length of the longest row.")
 
-fn test_an_empty_source_makes_no_table() //< an empty text makes no table
+fn test_an_empty_source_makes_no_table(arena: Arena$@) //< an empty text makes no table
     //<
     //< A table with no rows has no column count.
     verdict.start("[kspage/csv] an empty text making no table test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     if _got: = csv.read_table("", "table", arena)
         assert(false, "no table is built from an empty text")
     verdict.pass("no table is built from an empty text.")
 
-fn test_inserting_a_csv_table_undoes_as_one_step() //<
+fn test_inserting_a_csv_table_undoes_as_one_step(arena: Arena$@) //<
     //< It inserts after the paragraph the cursor is in
     verdict.start("[kspage/csv] inserting a table from CSV test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("here")
     sheet: = base.grid_sheet(arena)

@@ -152,9 +152,8 @@ priv fn shown_type(c: Sema_ctx$@, type_node: Ast_node$@): U8[] //<
     //< The type a header names, as displayed, or "" where the analysis resolved none
     if c == null || type_node == null || type_node.type_id == 0
         return ""
-    $shown: = c.env.display_str(type_node.type_id)
-    defer shown.free()
-    return base_core.arena.dup_str(shown.slice())
+    shown: = c.env.display(type_node.type_id)
+    return base_core.arena.dup_str(shown)
 
 priv fn owns_fn(entry: sema_type_def.Entry$@, def_node: Ast_node$@): Bool //<
     //< Whether that entry's table (`Entry.methods` in `../sema/type/def`) holds the declaration
@@ -228,9 +227,8 @@ priv fn append_enum_variant_hover(hover_text: Str_builder$@, ctx: Hover_ctx$@, s
                 hover_text.s(", ")
             field: = variant_def.payload_fields.get(i)
             hover_text.s("\{field.name\}: ")
-            $t_str: = state.sema.env.display_str(field.type_id)
-            defer t_str.free()
-            hover_text.s(t_str.slice())
+            t_str: = state.sema.env.display(field.type_id)
+            hover_text.s(t_str)
         hover_text.s(")")
     hover_text.s(" = \{variant_def.tag_value\}")
 
@@ -293,14 +291,13 @@ priv fn answer_at(state: Doc_state$@, path: List<|Ast_node$@|>$@, $target_node: 
         defer formatted_name.free()
 
         if ctx.type_id != 0 && state.sema != null
-            $tmp: = state.sema.env.display_str(ctx.type_id)
-            defer tmp.free()
+            tmp: = state.sema.env.display(ctx.type_id)
             if ctx.def_node != null && ctx.def_node.kind_id == .k_enum_variant
                 id_n: = ctx.def_node.find_child(.k_identifier)
                 sub_name: = id_n.text if id_n != null else ""
-                formatted_name.s("\{tmp.slice()\}.\{sub_name\}")
+                formatted_name.s("\{tmp\}.\{sub_name\}")
             else
-                formatted_name.s(tmp.slice())
+                formatted_name.s(tmp)
         else
             formatted_name.s(ctx.fallback_str.slice())
         $def_code: = Str_builder.new()
@@ -413,11 +410,10 @@ priv fn send_literal_type(state: Doc_state$@, literal: Ast_node$@, id_val: json.
     if state.sema == null || literal.type_id == 0
         lsp_msg.send_null_response(id_val, arena)
         return
-    $shown: = state.sema.env.display_str(literal.type_id)
-    defer shown.free()
+    shown: = state.sema.env.display(literal.type_id)
     $md: = Str_builder.new()
     defer md.free()
-    md.s("```kspl\n").s(shown.slice()).s("\n```")
+    md.s("```kspl\n").s(shown).s("\n```")
     send_markdown(id_val, md.slice(), arena)
 
 priv fn resolve_hover_target(state: Doc_state$@, path: List<|Ast_node$@|>$@,
@@ -735,9 +731,8 @@ priv fn get_fqn_name(state: Doc_state$@, ctx: Hover_ctx$@, target_node: Ast_node
         if sym.flags.is_generated_instance && is_fn_def && target_node.text.len > 0
             orig_name = target_node.text
         else if sym.flags.is_generated_instance && state.sema != null
-            $src: = state.sema.env.display_str(sym.type_id)
-            defer src.free()
-            shown_sb.s(src.slice())
+            src: = state.sema.env.display(sym.type_id)
+            shown_sb.s(src)
             orig_name = shown_sb.slice()
 
         d_kind: = ctx.def_node.kind_id

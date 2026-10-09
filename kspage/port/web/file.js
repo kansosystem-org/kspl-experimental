@@ -23,9 +23,8 @@ function kspageFile(ui) {
   const nameOf = (ext) => (docName.value.trim() || "kspage") + ext;
   // The saved text's format, **not in the document** ("how it was opened", like read-only).
   // **Written back in the format it was opened** (as JSON, one document sits in two files with no
-  // way to tell which is newer; `../../docs/DESIGN.md`'s "Markdown is edited as itself").
+  // way to tell which is newer).
   const KIND_JSON = "json";
-  const KIND_MD = "md";
   const KIND_TEXT = "text";
 
   // The identity per document. **A number cannot stand in for it** (a closed number is reused, and
@@ -44,13 +43,12 @@ function kspageFile(ui) {
     seen: { path: "", body: "" }, seenAt: new WeakMap() };
   // Decides from the name how to open (**a new document is kspage's JSON format**) — **in one
   // place**, or the format opened and the format written back differ per path (Principle 4). **An
-  // unknown extension is plain text**; the core decides whether it is text
-  // (`../../share/text.kspls`'s `texty`).
+  // unknown extension is plain text** (`.md` included: Markdown is edited as the text it is); the
+  // core decides whether it is text (`../../share/text.kspls`'s `texty`).
   // Caution: **Read `.json` as kspage's format too** — older documents use it, and read as text
   // their tables, formulas and styling collapse into one paragraph. Only `bodyExt` decides writing.
   const kindOf = (name) => {
     const low = (name || "").toLowerCase();
-    if (low.endsWith(".md")) return KIND_MD;
     return low.endsWith(".kspage") || low.endsWith(".json") ? KIND_JSON : KIND_TEXT;
   };
   // The language the name declares (the extension itself); **no list here** — any name passes, and
@@ -61,16 +59,12 @@ function kspageFile(ui) {
   };
   // Reads the text in that format, **returning the reason for refusing as it is**.
   const readAs = (kind, text, name) => {
-    if (kind === KIND_MD) return app.loadMarkdown(text);
     return kind === KIND_TEXT ? app.loadPlainText(text, spokenOf(name)) : app.load(text);
   };
   // **Only this function decides the saved extension** (scattered, the default name and the
   // picker's declaration would split: "saved, yet cannot be opened"). **Plain text adds none**:
   // `.kspls.txt` would no longer be the file the compiler reads.
-  const bodyExt = () => {
-    if (kf.openKind === KIND_MD) return ".md";
-    return kf.openKind === KIND_TEXT ? "" : ".kspage";
-  };
+  const bodyExt = () => (kf.openKind === KIND_TEXT ? "" : ".kspage");
   const keepName = () => {
     try {
       localStorage.setItem(NAME_KEY, docName.value.trim());
@@ -101,17 +95,15 @@ function kspageFile(ui) {
   // **List `.json` too** (else an older document cannot be chosen); the first is what is saved.
   const BODY_KIND = { description: "A kspage document",
     accept: { "application/json": [".kspage", ".json"] } };
-  const MD_KIND = { description: "A Markdown document", accept: { "text/markdown": [".md"] } };
-  // **No list of extensions**: plain text can have any name, and an unlisted text would become
-  // unchoosable; the picker always offers "all files" (`kindOf` decides how it is read).
-  const TEXT_KIND = { description: "Plain text", accept: { "text/plain": [".txt"] } };
-  const kindPick = (kind) => (kind === KIND_MD ? MD_KIND : kind === KIND_TEXT ? TEXT_KIND
-    : BODY_KIND);
-  const typeOf = (kind) => (kind === KIND_MD ? "text/markdown"
-    : kind === KIND_TEXT ? "text/plain" : "application/json");
+  // **No full list of extensions**: plain text can have any name, and the picker always offers
+  // "all files" (`kindOf` decides how it is read). `.md` is named beside `.txt`, the text people
+  // open most, so a browser without the picker does not hide it behind "all files".
+  const TEXT_KIND = { description: "Plain text", accept: { "text/plain": [".txt", ".md"] } };
+  const kindPick = (kind) => (kind === KIND_TEXT ? TEXT_KIND : BODY_KIND);
+  const typeOf = (kind) => (kind === KIND_TEXT ? "text/plain" : "application/json");
   // What "Open" offers, **one list for the picker and the file field** (written twice, the field
   // of a browser without the picker hid what the picker opens).
-  const OPEN_KINDS = [BODY_KIND, MD_KIND, TEXT_KIND];
+  const OPEN_KINDS = [BODY_KIND, TEXT_KIND];
   file.accept = OPEN_KINDS.flatMap((k) => Object.entries(k.accept)
     .flatMap(([type, exts]) => [...exts, type])).join(",");
   // Where the current document writes back.
@@ -201,8 +193,7 @@ function kspageFile(ui) {
     if (ui.keepSync) ui.keepSync();
   };
   // The current document as text **in the format it was opened in**, for writing back and compare.
-  const bodyText = () => (kf.openKind === KIND_MD ? app.markdown()
-    : kf.openKind === KIND_TEXT ? app.plainText() : app.save());
+  const bodyText = () => (kf.openKind === KIND_TEXT ? app.plainText() : app.save());
   // ---- Replacing the document ----
   // **A window holds one document**, so opening another replaces it, and **nothing typed is lost
   // by that**: the outgoing document's unsaved text is set aside as a draft, which "Bring the draft
@@ -217,7 +208,7 @@ function kspageFile(ui) {
   // replaces the document ends here** (per path, one would skip a step and lose a draft or save
   // into the previous document's file). The notice's tail for what was set aside is `kf.aside`.
   // Caution: **Mint the identity before `remember`**; **a path compares with the text read from
-  // it**, the rest with their own text, so Markdown does not look changed on opening.
+  // it**, the rest with their own text, so a text form does not look changed on opening.
   const settleIn = (out, kind, where, read) => {
     kf.openKind = kind;
     kf.docId = mintDoc();
@@ -266,7 +257,7 @@ function kspageFile(ui) {
 
   // Caution: **Put the entry points on `kf` before passing it to `save.js`** (that file touches
   // nothing except through `kf`).
-  Object.assign(kf, { KIND_JSON, KIND_MD, KIND_TEXT, app, bindBody, bodyExt, bodyText, canBind,
+  Object.assign(kf, { KIND_JSON, KIND_TEXT, app, bindBody, bodyExt, bodyText, canBind,
     deny, forgetWhere, keepName, kindOf, kindPick, layIn, nameInPath, nameOf, pathBox, pathOf,
     planOpen, recalled, remember, say, takeChosen, takeName, typeOf, ui, whyNotRead });
   kspageSave(kf);
@@ -288,8 +279,8 @@ function kspageFile(ui) {
   document.getElementById("open-manual").addEventListener("click", () => {
     const out = planOpen();
     const made = app.loadManual();
-    // Caution: **Decide the opening format anew per document** (an earlier Markdown document is no
-    // reason to write the manual as Markdown); **it lives in no file**, so no save lands elsewhere.
+    // Caution: **Decide the opening format anew per document** (an earlier text document is no
+    // reason to write the manual as text); **it lives in no file**, so no save lands elsewhere.
     if (made) settleIn(out, KIND_JSON, NOWHERE, "");
     tell(made, "Opened the manual" + kf.aside, "The manual could not be opened");
     app.focus();

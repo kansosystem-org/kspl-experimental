@@ -48,7 +48,7 @@ impl<|T|> Tensor<|T|>
     fn grad_matmul_input(r: Self$@, w: Tensor<|T|>): Tensor<|T|> //<
         //< The "allocate and return" version (a thin wrapper over `_into`), on `r.arena`
         $out_shape: Sz[2] = ::{ r.shape[0], w.shape[0] }
-        dx: = Tensor<|T|>.new(Sz$[]::{ .ptr = out_shape@, .len = 2 }, r.arena)
+        dx: = Tensor<|T|>.new(Sz$[]::out_shape, r.arena)
         r.grad_matmul_input_into(w, dx)
         return dx
     // dW = X^T @ dY   (self=X:[m,k], dy=dY:[m,n] → out:[k,n])
@@ -94,23 +94,9 @@ impl<|T|> Tensor<|T|>
         dy: Tensor<|T|>, //< the gradient of the product's output, [m,n]
     ): Tensor<|T|>
         $out_shape: Sz[2] = ::{ r.shape[1], dy.shape[1] }
-        dw: = Tensor<|T|>.new(Sz$[]::{ .ptr = out_shape@, .len = 2 }, r.arena)
+        dw: = Tensor<|T|>.new(Sz$[]::out_shape, r.arena)
         r.grad_matmul_weight_into(dy, dw)
         return dw
-    priv fn grad_bias(r: Self$@): Tensor<|T|> //<
-        //< The bias addition's backward pass: dbias[j] = Σ_r dY[r,j]   (self=dY:[m,n] → dbias:[n])
-        assert(r.shape.len >= 2, "grad_bias expects >= 2D tensor")
-        n: = r.shape[r.shape.len - 1]
-        rows: = r.size / n
-
-        $out_shape: Sz[1] = ::{ n }
-        dbias: = Tensor<|T|>.new(Sz$[]::{ .ptr = out_shape@, .len = 1 }, r.arena)
-        for j in Range.asc(n)
-            $s: T = 0.0
-            for rr in Range.asc(rows)
-                s = s + (r.data + rr * n + j)$
-            (dbias.data + j)$ = s
-        return dbias
     // --- The backward pass of the activation functions -----------
     fn grad_silu(r: Self$@, dy: Tensor<|T|>): Tensor<|T|> //<
         //< SiLU:  dX = dY * (s + x*s*(1-s)),  s = sigmoid(x)   (self=X, dy=dY)

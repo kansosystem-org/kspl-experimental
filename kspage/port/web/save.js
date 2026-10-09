@@ -10,7 +10,7 @@
 // "The boundary between the core and the browser".
 // ==========================================
 function kspageSave(kf) {
-  const { KIND_MD, app, bindBody, bodyExt, bodyText, canBind, deny, forgetWhere, keepName, kindOf,
+  const { app, bindBody, bodyExt, bodyText, canBind, deny, forgetWhere, keepName, kindOf,
     kindPick, layIn, nameInPath, nameOf, pathBox, pathOf, planOpen, recalled, remember, say,
     takeChosen, takeName, typeOf, ui, whyNotRead } = kf;
   //
@@ -125,17 +125,6 @@ function kspageSave(kf) {
     say(msg);
     app.focus();
   }
-  // Saving with the local server present:
-  // **Where no question is needed, do not ask** — with the path empty, **it writes under `kssrv`'s
-  // folder by the field's name**, and that path goes into the field.
-  // Caution: **Do not silently overwrite an existing file** (the default name `kspage` can clash):
-  // it refuses and says where the field is. What was dropped is reported on its own line.
-  const sayLost = (lost) => {
-    if (lost > 0) {
-      deny("There are " + lost + " settings Markdown cannot hold, and they were lost from the file written out");
-    }
-  };
-
   // Whether the document the save was made for is still the one shown.
   // Caution: **A save waits on the write, and the view can change meanwhile** (a failed drop
   // restores the old place; one that opens stays). So the path and the text are stored after the
@@ -144,6 +133,11 @@ function kspageSave(kf) {
   // The note added when the shown document is not the one written (its next save asks again).
   const MOVED = ". Another document came into view while it was written, and that one does not "
     + "take this file";
+  // Saving with the local server present:
+  // **Where no question is needed, do not ask** — with the path empty, **it writes under `kssrv`'s
+  // folder by the field's name**, and that path goes into the field.
+  // Caution: **Do not silently overwrite an existing file** (the default name `kspage` can clash):
+  // it refuses and says where the field is.
   const saveLocal = async (body, mine) => {
     const path = pathOf();
     if (path) {
@@ -151,7 +145,7 @@ function kspageSave(kf) {
       return;
     }
     // Caution: **Do not write the extension here** — only `file.js`'s `bodyExt` decides it, or a
-    // Markdown or text document would be offered kspage's extension.
+    // text document would be offered kspage's extension.
     const first = nameOf(bodyExt());
     if (await ui.localStat(first)) {
       deny(first + " is already there. To overwrite it, enter it into " + pathIsAt);
@@ -193,21 +187,16 @@ function kspageSave(kf) {
     const mine = kf.docId;
     // **Build the text before any await** (an await ends the click's user activation).
     const body = bodyText();
-    // Caution: **Where anything will be dropped, say so before writing**, or **nobody notices what
-    // vanished** from a Markdown document (`api.js`'s `markdownDropped`).
-    const lost = kf.openKind === KIND_MD ? app.markdownDropped() : 0;
     // **Where it opened is where it writes back**: a handle from the dialog, else the path; with
     // the path empty, under the served folder by name (the dialog could land outside it, where no
     // path reopens it). The path then goes into the field and the tab's record.
     if (ui.localHere && ui.localHere() && !kf.bodyAt) {
       await saveLocal(body, mine);
-      sayLost(lost);
       return;
     }
     if (!canBind) {
       download(body, nameOf(bodyExt()), typeOf(kf.openKind),
         "Downloaded a copy (this browser cannot write back to a file)");
-      sayLost(lost);
       return;
     }
     // **A target just chosen in the dialog is written as it is** — choosing an existing file is the
@@ -249,7 +238,6 @@ function kspageSave(kf) {
     const here = stillHere(mine);
     if (here) remember("", body);
     say("Saved (" + at.name + ")" + (here ? "" : MOVED));
-    sayLost(lost);
     app.focus();
   };
   document.getElementById("save").addEventListener("click", saveToFile);

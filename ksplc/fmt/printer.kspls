@@ -8,7 +8,7 @@
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_doc" { is_continuation_line }
 import "ksplc/base/ast_ext" as base_ast_ext
-import "ksplc/base/lines" { line_start, skip_blanks }
+import "ksplc/base/lines" { line_start }
 import "ksplc/fmt/kinds" as fmt_kinds
 import "ksplc/fmt/measure" as fmt_measure
 import "ksplc/fmt/source" as fmt_source
@@ -206,23 +206,33 @@ impl Formatter
         //< example, a value that starts below its `=`).
         //< A line carries on in two cases: inside a bracket, and after a mark that breaks a value
         //< off (`breaks_off_a_value` in `../parse/line_cont.kspls`).
+        return r.carries_on(r.comment_follows_code())
+
+    fn carries_on(r: Self$@, comment_between: Bool): Bool //<
+        //< in_continuation's answer, where `comment_between` says a comment follows the last code
+        //<
+        //< The caller about to write a comment passes true: the comment and the code after it take
+        //< the wrapping indent alike (`write_pre_comment_sep` in `trivia.kspls`).
         if r.paren_depth > 0 && r.indent_level == r.paren_indent_level
             return true
-        // **Only where a comment ended the line.** A line the formatter broke itself, or one broken
-        // between a level's items (`::{ … }`'s), already takes its indent from that level, and true
-        // there would push every such item one step further in.
+        // **Only where a comment follows the code**, on its line or on lines of its own below. A
+        // line the formatter broke itself, or one broken between a level's items (`::{ … }`'s),
+        // already takes its indent from that level, and true there would push every such item one
+        // step further in.
         line: = r.out.slice()
-        if r.code_end > line.len || !r.comment_trails(line)
+        if r.code_end > line.len || !comment_between
             return false
         // Read the line's code, not its last token: whether a `:` marks a label or a heading
         // depends on what stands before it on the line.
         b: = line_start(line, r.code_end)
         return breaks_off_a_value(line.sub(b, r.code_end - b).trim_spaces())
 
-    priv fn comment_trails(r: Self$@, line: U8[]): Bool //<
-        //< Whether what follows the line's code, apart from blanks, is a comment
-        i: = skip_blanks(line, r.code_end)
-        return i + 1 < line.len && line[i] == '/' && line[i + 1] == '/'
+    priv fn comment_follows_code(r: Self$@): Bool //<
+        //< Whether a comment was written after the last code, on its line or on a line below
+        line: = r.out.slice()
+        if r.code_end > line.len
+            return false
+        return line.sub_from(r.code_end).find_str("//") >= 0
 
     fn write_nl(r: Self$@)
         r.flags.wrap_indent = r.in_continuation()
@@ -566,7 +576,11 @@ impl Formatter
             return
 
         if node.kind_id == .k_string_interp || node.kind_id == .k_string
-            r.catch_up_trivia(node.loc.offset, true)
+            // Caution: **Keep the line break where a comment stands before the string.** Pulled
+            // up, a comment on a line of its own moves onto the line above, and after a `//<`
+            // there it would join the summary's text.
+            r.catch_up_trivia(node.loc.offset,
+                !fmt_source.has_comment_in(r.src, r.last_offset, node.loc.offset))
             // A whole string (its \{...\} interpolations included) is one token, so its leading
             // space and its wrapping are decided by calc_spacing_requirement / check_line_wrap, as
             // for the other leaves.

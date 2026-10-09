@@ -29,8 +29,8 @@ function kspageProbeShow(ks) {
   }
 
   // 15. Enter is wired to what splits a paragraph (**untaken, a line break goes into the hidden
-  // input field**), seen by the count of blocks in the HTML written out.
-  const blocks = () => app.html().split("<div").length;
+  // input field**), seen by the count of blocks in the document.
+  const blocks = () => ks.savedBlocks().length;
   // Caution: **Lay it over the body before pressing.** Inside a table's cell it does not split, so
   // "it does not grow on a press" would be the correct answer.
   pressAt(8);

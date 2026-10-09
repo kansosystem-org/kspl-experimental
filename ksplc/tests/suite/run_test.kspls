@@ -44,13 +44,17 @@ priv const spare_edge_secs: I64 = 300 //< how far outside or inside that window 
 // Running, and the cache
 // ==========================================
 
-priv fn case_runs_and_caches(work: U8[], arena: Arena$@): run_case.Result //<
-    //< It runs, the second run gives the same answer, and the cache is really made
+priv fn first_round(work: U8[], arena: Arena$@): run_case.Result //<
+    //< Writes the usual script, `s.kspl`, and its import into work, and runs it once for `v=1`
     if !run_case.write_script(work, "s.kspl", run_progs.script_src, 1, arena)
         return run_case.failed("cannot place the material")
+    return run_case.expect_out(run_case.run_script(fs.join(work, "s.kspl", arena), arena), "v=1",
+        "the first round failed", arena)
+
+priv fn case_runs_and_caches(work: U8[], arena: Arena$@): run_case.Result //<
+    //< It runs, the second run gives the same answer, and the cache is really made
     s: = fs.join(work, "s.kspl", arena)
-    first: = run_case.expect_out(run_case.run_script(s, arena), "v=1", "the first round failed",
-        arena)
+    first: = first_round(work, arena)
     if first.state != run_case.state_ok
         return first
     second: = run_case.expect_out(run_case.run_script(s, arena), "v=1",
@@ -78,11 +82,8 @@ priv fn case_edit_entry_rebuilds(work: U8[], arena: Arena$@): run_case.Result //
 
 priv fn case_edit_import_rebuilds(work: U8[], arena: Arena$@): run_case.Result //<
     //< It is rebuilt when only the imported file is edited (the entry file's hash misses it)
-    if !run_case.write_script(work, "s.kspl", run_progs.script_src, 1, arena)
-        return run_case.failed("cannot place the material")
     s: = fs.join(work, "s.kspl", arena)
-    first: = run_case.expect_out(run_case.run_script(s, arena), "v=1", "the first round failed",
-        arena)
+    first: = first_round(work, arena)
     if first.state != run_case.state_ok
         return first
     io.write_file(fs.join(work, "helper.kspl", arena), run_case.helper_src(42, arena)) catch
@@ -96,11 +97,8 @@ priv fn case_new_settings_file_rebuilds(work: U8[], arena: Arena$@): run_case.Re
     //< **Comparing the files read misses it**, as no file of that name was read. A file searched
     //< for and not found is listed as such (`write_deps_file` in `ksplc/tools/run.kspls`), and its
     //< appearance makes the result stale.
-    if !run_case.write_script(work, "s.kspl", run_progs.script_src, 1, arena)
-        return run_case.failed("cannot place the material")
     s: = fs.join(work, "s.kspl", arena)
-    first: = run_case.expect_out(run_case.run_script(s, arena), "v=1", "the first round failed",
-        arena)
+    first: = first_round(work, arena)
     if first.state != run_case.state_ok
         return first
     // An unknown section is rejected whenever the file is read, so the error shows it was read.
@@ -150,11 +148,8 @@ priv fn case_unchanged_objects_are_reused(work: U8[], arena: Arena$@): run_case.
     //<
     //< Neither the count (the sweep keeps it the same) nor "one or more left in place" (a leftover
     //< of a broken sweep counts) will do: the check is **that no more than one is new**.
-    if !run_case.write_script(work, "s.kspl", run_progs.script_src, 1, arena)
-        return run_case.failed("cannot place the material")
     s: = fs.join(work, "s.kspl", arena)
-    first: = run_case.expect_out(run_case.run_script(s, arena), "v=1", "the first round failed",
-        arena)
+    first: = first_round(work, arena)
     if first.state != run_case.state_ok
         return first
     before: = run_cache.obj_state(work, 0I64, arena)
@@ -208,11 +203,7 @@ priv fn sweep_over_fakes(work: U8[], used_at: I64, before: Sz$@, arena: Arena$@)
     //< script, whose new slot triggers the sweep. before receives the slot count before that.
     //< Caution: **Make more than the cap**, or the sweep does not run and it goes green without
     //< one.
-    if !run_case.write_script(work, "s.kspl", run_progs.script_src, 1, arena)
-        return run_case.failed("cannot place the material")
-    s: = fs.join(work, "s.kspl", arena)
-    first: = run_case.expect_out(run_case.run_script(s, arena), "v=1", "the first round failed",
-        arena)
+    first: = first_round(work, arena)
     if first.state != run_case.state_ok
         return first
     root: = run_case.run_root(work, arena)

@@ -309,13 +309,10 @@ priv fn report_field_called(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, f
     //< its `call`) and a pointer to a function pointer (dereferenced first).
     member: = left.get_postfix_member().text
     owner_id: = c.env.receiver_base_id(left.get_postfix_receiver().type_id)
-    $owner: = c.env.display_str(owner_id)
-    defer owner.free()
-    $held: = c.env.display_str(field_id)
-    defer held.free()
+    owner: = c.env.display(owner_id)
+    held: = c.env.display(field_id)
     c.clear_scratch()
-        .s("cannot call '\{member\}': it is a field of '\{owner.slice()\}' (type \
-            '\{held.slice()\}'), not a method.")
+        .s("cannot call '\{member\}': it is a field of '\{owner\}' (type '\{held\}'), not a method.")
     if holds_call_method(c, field_id)
         c.scratch.s(" Call what it holds through 'call': '.\{member\}.call(...)'")
     else if c.env.is_fn_ptr(c.env.strip_ptr(field_id))
@@ -468,11 +465,9 @@ fn infer(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32, expe
     // plain variable it would emit `I32 y = x(1);` with no diagnostic and a raw C error.
     if sym != null && sym.kind.is_var_or_const() && !is_fn_ptr && !is_method_access &&
         !sema_type_env.is_unknown(target_id)
-        $shown: = c.env.display_str(target_id)
-        defer shown.free()
+        shown: = c.env.display(target_id)
         c.clear_scratch()
-            .s("cannot call '\{sym.name\}': it is a value of type '\{shown.slice()\}', not a \
-                function")
+            .s("cannot call '\{sym.name\}': it is a value of type '\{shown\}', not a function")
         // A pointer to a function pointer becomes callable once dereferenced, so say how.
         if c.env.is_fn_ptr(c.env.strip_ptr(target_id))
             c.scratch.s(". Dereference it first: '\{sym.name\}$(...)'")
@@ -614,12 +609,8 @@ priv fn check_and_infer_intrinsic(c: Sema_ctx$@, node: Ast_node$@, left: Ast_nod
             c.err(node, "__kspl_asm_volatile requires at least one string argument")
         return finish_intrinsic(node, left, void_id)
 
-    $arg1: Ast_node$@ = null
-    if a1: = args_node.get_arg_at(0)
-        arg1 = a1
-    $arg2: Ast_node$@ = null
-    if a2: = args_node.get_arg_at(1)
-        arg2 = a2
+    arg1: = args_node.get_arg_at(0).unwrap_or(null)
+    arg2: = args_node.get_arg_at(1).unwrap_or(null)
 
     if intr == .read_volatile
         if arg1 != null

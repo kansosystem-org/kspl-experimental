@@ -194,10 +194,9 @@ priv fn return_key(key: U8[]): U8[] //< the key of a declaration's return value
     //< **It sorts after every parameter** (a second `~` sorts after a digit), as in the signature.
     if key.len == 0
         return ""
-    $s: = Str_builder.new()
-    defer s.free()
+    s: = base_core.arena.text()
     s.s(key).c(part_mark).c(part_mark)
-    return base_core.arena.dup_str(s.slice())
+    return s.take()
 
 priv fn add_parts(lines: List<|Line|>$@, key: U8[], n: Ast_node$@, src: U8[]) //<
     //< The descriptions the parameters and the return value carry
@@ -387,8 +386,7 @@ fn render_surface(raw_root: Ast_node$@, src: U8[], file: U8[]): U8[] //<
     //< A line is `<logical name> <key> <spelling>` and, where there is one, `<documentation>`
     //< (tab-separated), in ascending key order. **No heading**: `make surface` writes one once.
     lines: = surface_lines(raw_root, src)
-    $out: = Str_builder.new()
-    defer out.free()
+    out: = base_core.arena.text()
     for l in lines
         out.s(file).c(col).s(l.key).c(col).s(l.text)
         // **The column is left off where there is no documentation**, or every such entry carries a
@@ -396,4 +394,4 @@ fn render_surface(raw_root: Ast_node$@, src: U8[], file: U8[]): U8[] //<
         if l.doc.len > 0
             out.c(col).s(l.doc)
         out.c('\n')
-    return base_core.arena.dup_str(out.slice())
+    return out.take()

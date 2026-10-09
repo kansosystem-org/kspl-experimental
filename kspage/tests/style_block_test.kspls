@@ -34,11 +34,9 @@ priv fn alert_sheet(arena: Arena$@): Sheet$@ //< a style table with a style call
     cell.when.then = "risky"
     return sheet
 
-fn test_a_value_above_the_bound_is_drawn_with_the_other_style() //<
+fn test_a_value_above_the_bound_is_drawn_with_the_other_style(arena: Arena$@) //<
     //< Only where a value matches the rule is it drawn in the applied style's color
     verdict.start("[kspage/style] the look changing by the value test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     d.add_block("cell").add_text("120")
     d.add_block("cell").add_text("80")
@@ -53,12 +51,10 @@ fn test_a_value_above_the_bound_is_drawn_with_the_other_style() //<
     assert(page.boxes.get(2).ink.color.is_none(), "a text that is no number stays plain too")
     verdict.pass("only a value the rule fits is drawn in the style laid over.")
 
-fn test_the_fill_is_layered_field_by_field() //< the fill is applied on top too
+fn test_the_fill_is_layered_field_by_field(arena: Arena$@) //< the fill is applied on top too
     //<
     //< **Apply it field by field**: a field the rule does not set stays as it was.
     verdict.start("[kspage/style] a fill lying over field by field test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = alert_sheet(arena)
     // The plain cell's thin line stays, since the rule sets no line.
@@ -75,14 +71,12 @@ fn test_the_fill_is_layered_field_by_field() //< the fill is applied on top too
     assert(kept, "the line the rule does not hold stays plain")
     verdict.pass("what is laid behind lies over field by field.")
 
-fn test_a_condition_does_not_move_the_layout() //<
+fn test_a_condition_does_not_move_the_layout(arena: Arena$@) //<
     //< The rule changes only the look
     //<
     //< Neither the spacing nor the indent changes (a row height that changed by value could not be
     //< read).
     verdict.start("[kspage/style] the rule not moving where things are laid test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = alert_sheet(arena)
     // A large spacing and an indent on the applied style still change nothing.
@@ -108,13 +102,11 @@ priv fn one_item(d: Doc$@, arena: Arena$@): Sheet$@ //<
     d.add_block("item").add_text("abc")
     return sheet
 
-fn test_taking_the_paragraph_style_off_removes_the_mark() //<
+fn test_taking_the_paragraph_style_off_removes_the_mark(arena: Arena$@) //<
     //< Remove a paragraph's style and its marker goes too
     //<
     //< **Deleting the text leaves the marker**: the paragraph's style shows it, not the text.
     verdict.start("[kspage/shape] the mark going when a paragraph's style is taken off test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = one_item(d, arena)
     n: = d.blocks.get(0).inlines.get(0)
@@ -132,11 +124,9 @@ fn test_taking_the_paragraph_style_off_removes_the_mark() //<
     assert(bare.boxes.get(0).text.equals("abc"), "what is left is the body alone")
     verdict.pass("what deletes the mark is taking the paragraph's style off.")
 
-fn test_a_plain_paragraph_takes_the_item_style() //<
+fn test_a_plain_paragraph_takes_the_item_style(arena: Arena$@) //<
     //< Applied to a plain paragraph the marker appears, and one undo removes it
     verdict.start("[kspage/shape] a plain paragraph becoming a bullet list test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = Sheet.new(base.root_font(), arena)
     item: = sheet.add("item", paint.inherit_all())
@@ -159,13 +149,11 @@ fn test_a_plain_paragraph_takes_the_item_style() //<
     assert(back.boxes.len == 1, "the mark goes too")
     verdict.pass("it lies on a plain paragraph, and goes back in one.")
 
-fn test_a_paragraph_refuses_a_style_arranged_another_way() //<
+fn test_a_paragraph_refuses_a_style_arranged_another_way(arena: Arena$@) //<
     //< A style with a different arrangement is not applied
     //<
     //< Applied, the paragraph's text would wait for cells or frames and have nowhere to go.
     verdict.start("[kspage/shape] refusing a style arranged differently test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = one_item(d, arena)
     n: = d.blocks.get(0).inlines.get(0)
@@ -199,13 +187,11 @@ priv fn three_items(d: Doc$@, arena: Arena$@): Sheet$@ //<
     d.add_block("item").add_text("ghi")
     return sheet
 
-fn test_a_paragraph_style_covers_every_selected_paragraph() //<
+fn test_a_paragraph_style_covers_every_selected_paragraph(arena: Arena$@) //<
     //< It applies to every paragraph in the selection
     //<
     //< **Not only one**: an inline style applies to a range, and the same menu must do the same.
     verdict.start("[kspage/block] lying on every paragraph selected test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = three_items(d, arena)
     head: = d.blocks.get(0).inlines.get(0)
@@ -248,13 +234,11 @@ priv fn text_around_table(d: Doc$@, arena: Arena$@): Sheet$@ //<
     d.add_block("body").add_text("after")
     return sheet
 
-fn test_a_paragraph_style_leaves_the_table_alone() //<
+fn test_a_paragraph_style_leaves_the_table_alone(arena: Arena$@) //<
     //< Selected across a table, it does not apply to the cells or the table itself
     //<
     //< Applied, the grid would turn into flow and the table would break.
     verdict.start("[kspage/block] not lying on the cells even across a table test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     sheet: = text_around_table(d, arena)
     head: = d.blocks.get(0).inlines.get(0)

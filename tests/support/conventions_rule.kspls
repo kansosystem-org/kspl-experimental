@@ -12,6 +12,7 @@ import "std/str"
 import "std/verdict"
 import "tests/support/conventions_scan" as scan + { Sample }
 import "tests/support/harness"
+import "tests/support/harness_text"
 
 priv const rule_doc: U8[] = "docs/DESIGN.md" //< where the numbers come from
 priv const rule_head: U8[] = "## Development Principles" //<
@@ -71,12 +72,6 @@ priv fn take_numbers(line: U8[], from: Sz, out: List<|U8[]|>$@) //<
         return
     out.push(line.sub(from, n - from))
 
-priv fn known(names: List<|U8[]|>@, want: U8[]): Bool
-    for n in names
-        if n.equals(want)
-            return true
-    return false
-
 priv fn check_cites(arena: Arena$@)
     $numbers: = numbers_in_doc(arena)
     $seen: Sz = 0
@@ -88,7 +83,7 @@ priv fn check_cites(arena: Arena$@)
             i += 1
             for n in cited(line, arena)
                 seen += 1
-                if !known(numbers@, n)
+                if !harness_text.has(numbers@, n)
                     bad
                         .push(arena.text().s(rel).s(":\{i\}: there is no ").s(cite_word).s(n).take())
     verdict.check_list("a Principle's number named really exists", seen, "namings", bad@,
@@ -107,9 +102,8 @@ priv fn cites(line: U8[], arena: Arena$@): Bool
     return cited(line, arena).len > 0
 
 priv fn check_fires(arena: Arena$@)
-    $h: = scan.misjudged(Sample[]::cite_samples, cites, arena)
-    verdict.check_list("the judgment that picks a number up can fire", cite_samples.len, "samples",
-        h@, "the table of what is hit and what is not is `cite_samples`")
+    scan.check_samples("the judgment that picks a number up can fire", Sample[]::cite_samples,
+        "cite_samples", cites, arena)
 
 fn run(arena: Arena$@)
     check_cites(arena)

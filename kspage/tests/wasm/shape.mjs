@@ -45,7 +45,7 @@ export const opens = material({
 });
 
 export function run(ks) {
-  const { w, scratch, read, out, stage, geom, textOf, find, save, html, load, typed, setTyped,
+  const { w, scratch, read, out, stage, geom, textOf, find, save, load, typed, setTyped,
     leaveCell, styleNames, paraOf, panelAt, surfaceAt } = ks;
 
   // Caution: **Take the material's likeness here** (the sections onward put it back from this).
@@ -86,11 +86,8 @@ export function run(ks) {
   check(styleNames().indexOf("figure-arrow") >= 0,
     "one style of the name handed over is made");
   check(save().indexOf("figure-arrow") >= 0, "that name goes into the text saved");
-  // An ellipse is the shape with rounded corners, so it comes out in the HTML too.
   check(w.kspage_web_insert_shape(stage("figure-ellipse"), 1) === 1,
     "an ellipse can be added too");
-  check(html().indexOf("border-radius: 50%") >= 0,
-    "an ellipse becomes a round corner in the HTML");
   w.kspage_web_undo();
   w.kspage_web_undo();
   w.kspage_web_layout(300);
@@ -166,12 +163,8 @@ export function run(ks) {
   check(save().indexOf("diamond") >= 0, "the diamond's name goes into the text saved");
   check(w.kspage_web_insert_shape(stage("figure-round"), 8) === 1,
     "a rounded square can be added too");
-  check(html().indexOf("border-radius: 8px") >= 0,
-    "a rounded square has round corners in the HTML too");
   check(w.kspage_web_insert_shape(stage("figure-triangle"), 9) === 1,
     "a triangle can be added too");
-  check(html().indexOf("clip-path: polygon(50% 0, 100% 100%, 0 100%)") >= 0,
-    "a triangle becomes a polygon's clipping in the HTML");
 
   // --- The frame's eight handles ---
   // **A corner is both measures, the middle of an edge is one, the rest of the edge moves it.**
@@ -205,8 +198,7 @@ export function run(ks) {
 
   // --- At which step it comes out (showing it in stages) ---
   //
-  // **Narrowing the steps is the showing side's settlement**: saved, but biting on neither the
-  // page nor the HTML. **Not narrowing is the default** (printing shows everything).
+  // **Narrowing the steps is the showing side's settlement**: saved, but not biting on the page. **Not narrowing is the default** (printing shows everything).
   check(w.kspage_web_frame_step() === 0, "a frame comes out at any time by default");
   check(w.kspage_web_set_frame_step(1) === 1, "a step can be settled for the frame chosen");
   check(w.kspage_web_frame_step() === 1, "the step settled can be read back");
@@ -284,7 +276,6 @@ export function run(ks) {
     check(w.kspage_web_set_style_para(twoAt, 0, was[1], was[2], was[3], was[4], 1, 3, 8) === 1,
       "the count of columns can be swapped");
     check(paraOf(twoAt)[6] === 3, "the count swapped in comes back");
-    check(html().indexOf("column-count: 3") >= 0, "it comes out in the HTML written out too");
     // **Outside the range it is not taken** (`kspage/model/limit`; rounded, the count would be at
     // odds with the screen). Refused, the count stays.
     check(w.kspage_web_set_style_para(twoAt, 0, was[1], was[2], was[3], was[4], 1, -2, 8) === 0,
@@ -362,8 +353,6 @@ export function run(ks) {
     "the whole row is drawn afresh (the bar beside it shrinks)");
   w.kspage_web_undo();
   leaveCell();
-  check(html().indexOf("detail!C2:C3") < 0,
-    "neither the range nor the bars come out in the HTML written out");
   // A line joins point to point. Between two points there is one.
   check(chartIn("chart-line", "detail!C2:C3", 4) === 1, "a line chart can be put in too");
   w.kspage_web_layout(300);

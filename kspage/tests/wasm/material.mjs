@@ -13,8 +13,8 @@
 // another's measures (the same way of breaking as sticking to the sample). The tools that build
 // them are what is shared.
 //
-// The style names the sections reach for are the document's (`kspage/content`'s sample and
-// `kspage/share/markdown_look.kspls`), so they stay as they are until those sides move.
+// The style names the sections reach for are the document's (`kspage/content`'s sample), so they
+// stay as they are until that side moves.
 
 // A head is a style's name alone, or the fields (a block holding `name` / `columns` / `frame`
 // takes the fields).

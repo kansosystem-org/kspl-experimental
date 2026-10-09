@@ -128,10 +128,9 @@ priv fn same_twice(doc: Doc$@, sheet: Sheet$@, arena: Arena$@): Bool
 priv fn text_of(head: U8[], i: Sz, arena: Arena$@): U8[] //< the built text
     //<
     //< **Interpolation can only be written inside `Writer`'s `.s()`**.
-    $b: = Str_builder.new()
-    defer b.free()
+    b: = arena.text()
     b.s(head).s("\{i\}")
-    return arena.dup_str(b.slice())
+    return b.take()
 
 // ==========================================
 // The documents matched
@@ -198,12 +197,10 @@ priv fn one_letter_shows(arena: Arena$@): Bool //<
     dc: = dump_page(flow.layout(c, sheet, fixed.make(), width, arena), arena)
     return !da.equals(dc) && da.len > 0
 
-fn test_layout_is_the_same_twice()
+fn test_layout_is_the_same_twice(arena: Arena$@)
     verdict
         .start("[kspage/relayout] laying the same document out twice putting the same thing out \
             test...")
-    arena: = Arena.new(1024 * 1024)
-    defer arena.free()
     assert(same_twice(flat_doc(arena), Sheet.new(base.root_font(), arena), arena), "a flat document")
     assert(same_twice(nested_doc(arena), Sheet.new(base.root_font(), arena), arena),
         "a document with nesting")

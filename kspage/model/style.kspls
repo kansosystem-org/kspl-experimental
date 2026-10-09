@@ -1,7 +1,7 @@
 //< Named styles, looked up by name, and their inheritance
 //<
-//< A block and an inline each name their style; they never hold a size or a weight. **This is
-//< what makes writing HTML a mechanical mapping** (the style name becomes the class name).
+//< A block and an inline each name their style; they never hold a size or a weight, so changing a
+//< style changes every block that names it.
 //< A look is inherited as "the parent's resolved font + the child's settings".
 //< Caution: **Write "not set" as `Option`'s `.none`.** With 0 or an empty text as the mark, some
 //< fields cannot tell it from a real value (no weight is 0, but italic `false` is a real
@@ -87,27 +87,17 @@ impl Shape
 fn shape_from(name: U8[]): Shape //< reads a shape from a name
     //<
     //< **An unknown name means a box** (the reason is at `arrange_from`).
-    if name.equals("round_box")
-        return .round_box
-    if name.equals("ellipse")
-        return .ellipse
-    if name.equals("triangle")
-        return .triangle
-    if name.equals("diamond")
-        return .diamond
-    if name.equals("fall_line")
-        return .fall_line
-    if name.equals("rise_line")
-        return .rise_line
-    if name.equals("fall_arrow")
-        return .fall_arrow
-    if name.equals("rise_arrow")
-        return .rise_arrow
-    if name.equals("fall_arrow_back")
-        return .fall_arrow_back
-    if name.equals("rise_arrow_back")
-        return .rise_arrow_back
+    for s in all_shapes
+        if s.variant_name().equals(name)
+            return s
     return .box
+
+priv const all_shapes: Shape[11] = ::{ .box, .round_box, .ellipse, .triangle, .diamond, .fall_line,
+    .rise_line, .fall_arrow, .rise_arrow, .fall_arrow_back, .rise_arrow_back } //<
+        //< Every shape, for reading one back by its name
+        //<
+        //< Caution: **List a new variant here too**, or its name reads back as a box (`make test`
+        //< pins every name).
 
 enum Align //< where a line's contents sit within the column
     //<
@@ -144,7 +134,7 @@ fn next_ord(sheet: Sheet$@, name: U8[], ord: Sz): Sz //<
     //<
     //< ord is the number of the sibling before.
     //< Caution: **Go back to 0 when an unnumbered sibling comes between**, or two lists far apart
-    //< share one numbering. The rule lives here alone, or the screen and the written HTML
+    //< share one numbering. The rule lives here alone, or the screen and the written Markdown
     //< disagree.
     if s: = sheet.find(name)
         switch s.marker
@@ -241,7 +231,7 @@ struct Style //< one style
         //<
         //< **Not set paints nothing.**
         //< **It is separate from the character background (`Ink.background`)**; when a style has
-        //< both, the narrower one, the characters', wins on the screen and in HTML alike.
+        //< both, the narrower one, the characters', wins.
     shape: Shape //<
         //< The shape the band is drawn in
         //<
@@ -323,9 +313,9 @@ fn cell_like(s: Style$@): Bool //<
     //< Whether the style has a table cell's features
     //<
     //< That is a flowing paragraph with inner space, no mark and no heading depth.
-    //< **This is the one place that recognizes a cell by its features**: the Markdown reader and
-    //< inserting a table from the screen both ask it, so a typed table and one read from text use
-    //< one style. A divider draws a line too but has no inner space; the space tells them apart.
+    //< **This is the one place that recognizes a cell by its features**: inserting a table from the
+    //< screen asks it, so every table in a document uses one style. A divider draws a line too but
+    //< has no inner space; the space tells them apart.
     if s.outline > 0 || !s.wrap || s.pad <= 0.0
         return false
     switch s.marker
@@ -334,26 +324,17 @@ fn cell_like(s: Style$@): Bool //<
     case .bullet, .number, .serial, .outline {}
     return false
 
-fn class_byte(c: U8): U8 //< the byte that a name's byte becomes inside a class
-    //<
-    //< **A hyphen replaces whitespace**, and every other byte stays as it is.
-    //< Caution: **Do not look for an escaping that covers whitespace instead**: a `.`, a `<` or a
-    //< leading digit can be escaped and still match, but `class` **splits on whitespace**, so a
-    //< name holding one can never be one class ("The mapping into HTML" in `../docs/DESIGN.md`).
-    // **Do not cut the set down to the space**: all five are HTML's whitespace, and a name holding
-    // a tab splits into two classes just the same.
-    if c == ' ' || c == '\t' || c == '\n' || c == 0x0CU8 || c == '\r'
-        return '-'
-    return c
-
 fn name_plain(name: U8[]): Bool //<
-    //< Whether that name appears unchanged in the written HTML
+    //< Whether that name holds no whitespace
     //<
-    //< That is, `class_byte` above leaves every byte of it alone.
-    //< A name read from a text comes out folded; kspage's own names all have this shape
-    //< (`column-body`), so the entry point rejects only a name nothing in the product wanted.
+    //< A code style's name is the language its Markdown fence declares, and a fence's declaration
+    //< ends at whitespace, so `my code` would be written out as `my` ("A style name holds no
+    //< whitespace" in `../docs/DESIGN.md`). kspage's own names all have this shape (`column-body`),
+    //< so the entry point rejects only a name nothing in the product wanted.
+    // **Do not cut the set down to the space**: a tab or a line break ends the declaration too.
     for $i: Sz = 0; i < name.len; i += 1
-        if class_byte(name[i]) != name[i]
+        c: = name[i]
+        if c == ' ' || c == '\t' || c == '\n' || c == 0x0CU8 || c == '\r'
             return false
     return true
 
@@ -517,19 +498,3 @@ fn draws(s: Style$@): Bool //<
     //< **Keep it apart from the page's decoration**: a bar's or a diagram box's fill is the content
     //< itself, not a table's grid. **Do not look at the block** (a style cannot reach it).
     return s.collect.charted() || !s.shape.same_shape(.box)
-
-fn linked(s: Style$@): Bool //<
-    //< Whether this style **looks like a link** (whether it has both a color and an underline)
-    //<
-    //< **It does not mean "is a link"**; use it only to find the one link look in a table the same
-    //< code made (`link_style` in `../share/markdown_style.kspls`), where no other style has both a
-    //< color and an underline.
-    switch s.ink.underline
-    case .some(u)
-        if !u
-            return false
-    case .none
-        return false
-    if _c: = s.ink.color
-        return true
-    return false

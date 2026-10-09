@@ -190,7 +190,6 @@ function entryPoints(host) {
     type: type,
     compose: compose,
     save: () => out(w.kspage_web_save()),
-    html: () => out(w.kspage_web_html()),
     md: () => out(w.kspage_web_markdown()),
     csv: () => out(w.kspage_web_csv()),
     load: (text) => w.kspage_web_load(feed(text)),

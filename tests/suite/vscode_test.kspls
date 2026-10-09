@@ -12,7 +12,6 @@ import "std/fs"
 import "std/io"
 import "std/json"
 import "std/mem" { Arena, dealloc }
-import "std/seq"
 import "std/str" { Str_builder }
 import "std/verdict"
 import "tests/support/harness"
@@ -121,11 +120,6 @@ priv fn labels_of(tasks: json.Val, arena: Arena$@): List<|U8[]|>
         out.push(t.get("label").as_str())
     return out
 
-priv fn has_label(labels: List<|U8[]|>$@, name: U8[]): Bool
-    return labels.any(fn(l: U8[]; name: U8[]): Bool {
-        return l.equals(name);
-    })
-
 priv fn arg_text(a: json.Val): U8[] //< one argument's text, written bare or quoted (`value`)
     return a.as_str() if !is_obj(a) else a.get("value").as_str()
 
@@ -162,7 +156,7 @@ priv fn check_make_targets(tasks: json.Val, arena: Arena$@) //<
         if !cmd.found
             continue
         name: = arena.text().s("tasks.json[\{label\}]: 'make \{cmd.target\}' really exists").take()
-        verdict.check(name, has_label(names@, cmd.target),
+        verdict.check(name, htext.has(names@, cmd.target),
             "neither `make help` lists it nor is it a suite's `test-<name>`")
 
 priv fn check_launch(launch: json.Val, labels: List<|U8[]|>$@, root: U8[], arena: Arena$@) //<
@@ -173,7 +167,7 @@ priv fn check_launch(launch: json.Val, labels: List<|U8[]|>$@, root: U8[], arena
         if pre.len > 0
             title: = arena.text()
                 .s("launch.json[\{name\}]: preLaunchTask '\{pre\}' is in tasks.json").take()
-            verdict.check(title, has_label(labels, pre), "")
+            verdict.check(title, htext.has(labels, pre), "")
         for cmd in c.get("initCommands").arr_list(arena)
             rel: = workspace_rel(cmd.as_str(), 0)
             if rel.len == 0
@@ -232,7 +226,7 @@ priv fn check_release_assets(root: U8[], arena: Arena$@) //<
             d: = dep.as_str()
             title: = harness.arena().text()
                 .s("release-assets tasks.json[\{label\}]: dependsOn '\{d\}' is there").take()
-            verdict.check(title, has_label(labels@, d), "")
+            verdict.check(title, htext.has(labels@, d), "")
     for c in launch.get("configurations").arr_list(arena)
         pre: = c.get("preLaunchTask").as_str()
         if pre.len == 0
@@ -240,7 +234,7 @@ priv fn check_release_assets(root: U8[], arena: Arena$@) //<
         cfg_name: = c.get("name").as_str()
         title: = harness.arena().text()
             .s("release-assets launch.json[\{cfg_name\}]: preLaunchTask '\{pre\}' is there").take()
-        verdict.check(title, has_label(labels@, pre), "")
+        verdict.check(title, htext.has(labels@, pre), "")
     check_build_task(tasks, launch, arena)
 
 priv const build_label: U8[] = "kanso-build-current-file" //< the task F5 builds with
@@ -315,11 +309,6 @@ priv fn prefixes_of(path: U8[], arena: Arena$@): List<|U8[]|> //<
             out.push(arena.dup_str(rest.sub(0, end)))
     return out
 
-priv fn has_text(items: List<|U8[]|>$@, want: U8[]): Bool
-    return items.any(fn(x: U8[]; want: U8[]): Bool {
-        return x.equals(want);
-    })
-
 priv fn check_extension(root: U8[], arena: Arena$@) //<
     //< Checks that the files the extension points at exist
     //<
@@ -377,10 +366,10 @@ priv fn check_extension(root: U8[], arena: Arena$@) //<
     $laid_p: = prefixes_of(fs.join(dir, "snippets-kspls.json", arena), arena)
     $gap: = List<|U8[]|>.new(arena)
     for x in braced.slice()
-        if !has_text(laid_p@, x)
+        if !htext.has(laid_p@, x)
             gap.push(arena.text().s("not on the laid-out side: \{x\}").take())
     for x in laid_p.slice()
-        if !has_text(braced@, x)
+        if !htext.has(braced@, x)
             gap.push(arena.text().s("not on the braced side: \{x\}").take())
     verdict.check_list("extension: the templates' line-up agrees across the two notations",
         braced.len, "templates", gap@, "")

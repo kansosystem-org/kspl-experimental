@@ -310,20 +310,29 @@ priv fn check_fires(work: U8[], arena: Arena$@) //<
     verdict.check("a race written on purpose is reported", reports_in(log_dir, arena).len > 0,
         "the program built with the sanitizer ran and nothing was reported")
 
-priv fn race_debug(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena: Arena$@) //<
-    //< Every package's own tests in one program, as `make debug` runs them
-    name: = "the tests `make debug` runs run with no data race"
-    root: = harness.root()
-    b: =
-        build(root, fs.join(root, "tests/debug/main.kspls", arena),
-        fs.join(work, "debug_tests.exe", arena), opt_for_run, arena)
-    if b.exe.len == 0
-        verdict.check(name, false, b.why)
-        return
-    deps.s(b.deps)
-    runs
-        .push(Raced::{ .name = name, .dir = root, .argv = kept(U8[][]::{ b.exe }, arena),
-        .log_dir = fs.join(work, "debug_log", arena), .env = kept(U8[][]::{}, arena) })
+priv fn race_tests(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena: Arena$@) //<
+    //< The packages whose own tests start threads: std's, and ksplc's
+    //<
+    //< **Only these**: the other packages' tests start none (`check_covered` holds it), so the
+    //< sanitizer's time on them would watch one thread. Each runs from its folder, as its own
+    //< `make test` runs it.
+    std_name: = "std's own tests run with no data race"
+    std_exes: =
+        build_all(std_name, "std", U8[][]::{ "std/tests/main.kspls" }, work, deps, arena)
+    if std_exes.len > 0
+        runs
+            .push(Raced::{ .name = std_name, .dir = harness.std_dir(),
+            .argv = kept(U8[][]::{ std_exes.get(0), harness.ksplc_exe() }, arena),
+            .log_dir = fs.join(work, "std_log", arena), .env = pkg_env(arena) })
+    ksplc_name: = "ksplc's own tests run with no data race"
+    ksplc_exes: =
+        build_all(ksplc_name, "ksplc", U8[][]::{ "ksplc/tests/main.kspls" }, work, deps, arena)
+    if ksplc_exes.len > 0
+        runs
+            .push(Raced::{ .name = ksplc_name,
+            .dir = fs.join(harness.root(), "ksplc", arena),
+            .argv = kept(U8[][]::{ ksplc_exes.get(0) }, arena),
+            .log_dir = fs.join(work, "ksplc_log", arena), .env = pkg_env(arena) })
 
 priv fn kept(words: U8[][], arena: Arena$@): U8[][] //< the words, copied onto the arena
     //<
@@ -570,7 +579,7 @@ fn main(): I32
     $deps: = Str_builder.new()
     defer deps.free()
     $runs: = List<|Raced|>.new(arena)
-    race_debug(work, deps@, runs@, arena)
+    race_tests(work, deps@, runs@, arena)
     race_ksai(work, deps@, runs@, arena)
     race_ksbind(work, deps@, runs@, arena)
     race_lsp(work, deps@, arena)

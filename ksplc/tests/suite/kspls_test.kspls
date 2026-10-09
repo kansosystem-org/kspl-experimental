@@ -11,21 +11,17 @@ import "ksplc/tests/support/harness"
 import "ksplc/tests/support/kspls_crlf"
 import "ksplc/tests/support/kspls_doc"
 import "ksplc/tests/support/lsp_client"
+import "ksplc/tests/support/lsp_read"
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
-import "std/json"
 import "std/jsonrpc"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt
 import "std/sys"
 import "std/verdict"
-
-priv const pair_dir: U8[] = "tests/kspls" //< where the twins are placed
-    //<
-    //< A `<name>.kspls` pairs with the `<name>.kspl` beside it.
 
 priv const normal_ms: I32 = 15000
 
@@ -69,13 +65,14 @@ priv fn same_program(name: U8[], a: U8[], b: U8[], stem: U8[], arena: Arena$@): 
 priv fn check_pair(work: U8[], stem: U8[], arena: Arena$@) //< it checks one pair of twins
     //<
     //< Caution: **Give them the same name in the same directory**; symbol names are made from it.
-    braced: = pair_path(stem, ".kspl", arena)
-    laid: = pair_path(stem, ".kspls", arena)
+    braced: = kspls_crlf.pair_path(stem, ".kspl", arena)
+    laid: = kspls_crlf.pair_path(stem, ".kspls", arena)
     in_braced: = fs.join(work, arena.text().s(stem).s(".kspl").take(), arena)
     in_laid: = fs.join(work, arena.text().s(stem).s(".kspls").take(), arena)
     gen_a: = fs.join(work, "braced.c", arena)
     gen_b: = fs.join(work, "laid.c", arena)
-    if !copy_into(braced, in_braced, stem, arena) || !copy_into(laid, in_laid, stem, arena)
+    if !kspls_crlf.copy_into(braced, in_braced, stem, arena) ||
+        !kspls_crlf.copy_into(laid, in_laid, stem, arena)
         return
     ra: = harness.ksplc(U8[][]::{ in_braced, gen_a })
     if !verdict.check(arena.text().s(stem).s(": the brace side builds").take(), ra.code == 0,
@@ -90,23 +87,12 @@ priv fn check_pair(work: U8[], stem: U8[], arena: Arena$@) //< it checks one pai
     b: = harness.read_generated(gen_b)
     same_program(stem, a, b, stem, arena)
 
-priv fn pair_path(stem: U8[], ext: U8[], arena: Arena$@): U8[]
-    return fs.join(pair_dir, arena.text().s(stem).s(ext).take(), arena)
-
-priv fn copy_into(from: U8[], to: U8[], stem: U8[], arena: Arena$@): Bool
-    src: = io.read_file(from) catch
-        return verdict.check(arena.text().s(stem).s(": the twins can be read").take(), false, from)
-    io.write_file(to, src) catch
-        return verdict.check(arena.text().s(stem).s(": they can be copied to the working directory")
-            .take(), false, to)
-    return true
-
 priv fn pair_stems(arena: Arena$@): List<|U8[]|> //< it collects the twins' names
     //<
     //< Caution: **Do not keep a list of names** — a pair added later would be missed. The folder is
     //< the list.
     $out: = List<|U8[]|>.new(arena)
-    names: = fs.read_dir(pair_dir, arena) catch
+    names: = fs.read_dir(kspls_crlf.pair_dir, arena) catch
         return out
     for leaf in names
         if leaf.ends_with(".kspls")
@@ -149,13 +135,6 @@ priv const call_col_at: Sz = 7
 priv const decl_line: I64 = 2I64 //< the line `twice`'s declaration is on (0-based)
     //<
     //< It is the `priv fn twice` line of `probe_src`.
-
-priv fn is_missing(v: json.Val): Bool
-    switch v
-    case .null_val
-        return true
-    default {}
-    return false
 
 priv fn check_diagnostics(c: jsonrpc.Client$@, arena: Arena$@) //< the squiggles
     //<
@@ -210,11 +189,11 @@ priv fn check_definition(c: jsonrpc.Client$@, arena: Arena$@) //< jumping to a d
     res: = got.get("result")
     $line: I64 = -1I64
     $uri: U8[] = ""
-    if is_missing(res)
+    if lsp_read.is_missing(res)
         verdict.check("the jump-to-definition destination points at the indentation notation's line",
             false, lsp_client.dump(got, arena))
         return
-    one: = res if is_missing(res.get_at(0)) else res.get_at(0)
+    one: = res if lsp_read.is_missing(res.get_at(0)) else res.get_at(0)
     uri = one.get("uri").as_str()
     line = one.get("range").get("start").get("line").as_int64(-1I64)
     seen: = arena.text().s("destination=\{uri\} line=\{line\}").take()
@@ -870,8 +849,8 @@ fn main(): I32
     init: =
         c.request("initialize", lsp_client.at_doc(probe_uri, arena), normal_ms, arena) catch
         return harness.fatal("initialize does not return")
-    if !verdict.check("the language server comes up", !is_missing(init.get("result")),
-        lsp_client.dump(init, arena))
+    if !verdict.check("the language server comes up",
+        !lsp_read.is_missing(init.get("result")), lsp_client.dump(init, arena))
         return harness.finish()
     check_diagnostics(c@, arena)
     check_hover(c@, arena)

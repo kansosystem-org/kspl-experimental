@@ -61,27 +61,19 @@ fn init_out(pin: U32) //< makes pin an SIO output (Low to start)
 fn init_in(pin: U32) //< makes pin an SIO input
     //<
     //< **No pull is set: the other end must drive High/Low itself**, or the value floats. For a
-    //< pull, use init_in_pull.
+    //< pull, follow it with `set_pull`.
     select_function(pin, funcsel_sio)
     mmio.write32(sio_gpio_oe_clr, 1U32 << pin)
 
-fn init_in_pull(pin: U32, up: Bool) //<
-    //< Makes pin an SIO input with a pull-up (up=true) or a pull-down
-    init_in(pin)
-    pad_addr: = pads_bank0_base + 0x04 + 4 * pin
-    pad: = mmio.read32(pad_addr)
-    cleared: = pad & ~(pad_pue | pad_pde)
-    mmio.write32(pad_addr, cleared | (pad_pue if up else pad_pde))
-
 fn read(pin: U32): Bool //< true if pin's input is High
     //<
-    //< Call it after init_in / init_in_pull.
+    //< Call it after init_in.
     return (mmio.read32(sio_gpio_in) & (1U32 << pin)) != 0
 
 fn set_pull(pin: U32, up: Bool, down: Bool) //< changes only pin's pull-up/pull-down
     //<
-    //< It does not touch FUNCSEL: it is **for a pull on a pin with another function, such as
-    //< I2C** (init_in_pull switches the pin back to SIO).
+    //< It does not touch FUNCSEL, so it serves an SIO input (after `init_in`) and **a pin with
+    //< another function, such as I2C**, alike.
     pad_addr: = pads_bank0_base + 0x04 + 4 * pin
     pad: = mmio.read32(pad_addr)
     $v: U32 = pad & ~(pad_pue | pad_pde)

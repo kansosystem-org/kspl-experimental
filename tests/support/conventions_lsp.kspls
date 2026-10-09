@@ -21,13 +21,13 @@ priv const vscode_client: U8[] = ".vscode/extensions/kspl/extension.js"
 // A declaration, and the method it promises.
 // Caution: **Fail where a declaration not listed here appears**, or a newly added one silently
 // escapes the check ("an entry point that does nothing when pressed").
-priv const cap_names: U8[][9] = ::{ "hoverProvider", "definitionProvider", "renameProvider",
+priv const cap_names: U8[][10] = ::{ "hoverProvider", "definitionProvider", "renameProvider",
     "referencesProvider", "callHierarchyProvider", "semanticTokensProvider", "codeActionProvider",
-    "inlayHintProvider", "completionProvider" }
-priv const cap_methods: U8[][9] = ::{ "textDocument/hover", "textDocument/definition",
+    "inlayHintProvider", "completionProvider", "documentSymbolProvider" }
+priv const cap_methods: U8[][10] = ::{ "textDocument/hover", "textDocument/definition",
     "textDocument/rename", "textDocument/references", "textDocument/prepareCallHierarchy",
     "textDocument/semanticTokens/full", "textDocument/codeAction", "textDocument/inlayHint",
-    "textDocument/completion" }
+    "textDocument/completion", "textDocument/documentSymbol" }
 
 priv fn served(arena: Arena$@): List<|U8[]|> //< the methods the server handles
     //<
@@ -243,65 +243,6 @@ priv fn check_recovery_wake(arena: Arena$@) //<
             .s("` stands on \{seen\} lines of code; it is to stand").s(" on one").take())
     verdict.check_list("the recovering branches are woken from the editor's entry point alone", seen,
         "places", bad@, "")
-
-// ==========================================
-// The words the definition fallback refuses to search for **The extension holds its own list**
-// (the compiler keeps no single keyword table), so the grammar colouring these words is the check.
-// Caution: **Fail where the guard names a word the grammar does not colour**: such a word silently
-// stops jumping to a real declaration of that name.
-// ==========================================
-priv const guard_head: U8[] = "const KSPL_WORDS = new Set(["
-priv const grammar_files: U8[][2] = ::{ ".vscode/extensions/kspl/tmLanguage.json",
-    ".vscode/extensions/kspl/tmLanguage-kspls.json" }
-
-priv const guard_floor: Sz = 30 //<
-    //< The fewest words the guard may list
-    //<
-    //< Caution: **Fail where the count comes out short**: a broken reading empties the list and
-    //< goes green having checked nothing.
-
-priv fn guarded_words(arena: Arena$@): List<|U8[]|> //< the words listed in the extension's guard
-    $out: = List<|U8[]|>.new(arena)
-    src: = harness.read_under_root(vscode_client)
-    at: = src.find_str(guard_head)
-    if at < 0
-        return out
-    rest: = src.sub_from(at + guard_head.len)
-    end: = rest.find_str("]);")
-    if end < 0
-        return out
-    for w in scan.find_all(rest.sub(0, end), "\"", "\"", arena)
-        scan.push_unique(out@, w)
-    return out
-
-priv fn grammar_colours(word: U8[], arena: Arena$@): Bool //<
-    //< Whether either grammar matches that word as a whole word
-    for rel in grammar_files
-        src: = harness.read_under_root(rel)
-        if src.find_str(arena.text().s("(").s(word).s("|").take()) >= 0 ||
-            src.find_str(arena.text().s("|").s(word).s(")").take()) >= 0 ||
-            src.find_str(arena.text().s("|").s(word).s("|").take()) >= 0 ||
-            src.find_str(arena.text().s("(").s(word).s(")").take()) >= 0
-            return true
-    return false
-
-priv fn check_guard_words(arena: Arena$@)
-    seen: = guarded_words(arena)
-    $bad: = List<|U8[]|>.new(arena)
-    for i in Range.asc(seen.len)
-        got: = seen.get(i)
-        if !grammar_colours(got, arena)
-            bad
-                .push(arena.text().s(got)
-                .s(": the definition fallback refuses to look for it, and no ")
-                .s("grammar colours it as a word of the language").take())
-    if seen.len < guard_floor
-        short: = arena.text()
-            .s("read \{seen.len\} words (the floor is \{guard_floor\}) — the reading of the guard \
-                broke").take()
-        bad.push(short)
-    verdict.check_list("the words the definition fallback skips are words of the language",
-        seen.len, "words", bad@, "")
 
 // ==========================================
 // What the extension leaves out matches what `.gitignore` says **The name of the build output
@@ -558,7 +499,6 @@ priv fn check_wind_back(arena: Arena$@)
 fn run(arena: Arena$@)
     check_recovery_wake(arena)
     check_body_views(arena)
-    check_guard_words(arena)
     check_exclude(arena)
     check_wind_back(arena)
     check_cap_says_fires(arena)

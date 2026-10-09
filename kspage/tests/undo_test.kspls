@@ -19,10 +19,8 @@ import "std/verdict"
 
 // ---- undoing ----
 
-fn test_undo_puts_typed_text_back()
+fn test_undo_puts_typed_text_back(arena: Arena$@)
     verdict.start("[kspage/edit] what was typed going back test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("ab")
     ed: = edit.new_editor(d)
@@ -35,10 +33,8 @@ fn test_undo_puts_typed_text_back()
     assert(ed.caret.offset == 2, "the cursor goes back to before the typing too")
     verdict.pass("what was typed goes back, and the cursor comes home too.")
 
-fn test_undo_puts_deleted_text_back()
+fn test_undo_puts_deleted_text_back(arena: Arena$@)
     verdict.start("[kspage/edit] what was deleted going back test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("ab")
     ed: = edit.new_editor(d)
@@ -51,10 +47,8 @@ fn test_undo_puts_deleted_text_back()
     assert(n.text().equals("ab"), "the text deleted comes back")
     verdict.pass("the text deleted comes back as it was.")
 
-fn test_redo_reapplies_what_was_undone()
+fn test_redo_reapplies_what_was_undone(arena: Arena$@)
     verdict.start("[kspage/edit] a redo acting test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("ab")
     ed: = edit.new_editor(d)
@@ -68,10 +62,9 @@ fn test_redo_reapplies_what_was_undone()
     assert(!ed.redo(), "there is nothing left to redo")
     verdict.pass("what was put back can be redone.")
 
-fn test_typing_in_a_row_undoes_as_one_step() //< continuous typing undoes as one step
+fn test_typing_in_a_row_undoes_as_one_step(arena: Arena$@) //<
+    //< continuous typing undoes as one step
     verdict.start("[kspage/edit] what was typed on going back in one test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("")
     ed: = edit.new_editor(d)
@@ -85,12 +78,10 @@ fn test_typing_in_a_row_undoes_as_one_step() //< continuous typing undoes as one
     assert(n.text().equals(""), "the three characters go back together")
     verdict.pass("what was typed on goes back in one.")
 
-fn test_moving_breaks_the_undo_group() //< a move ends the step
+fn test_moving_breaks_the_undo_group(arena: Arena$@) //< a move ends the step
     //<
     //< Otherwise typing at two separate places would undo as one.
     verdict.start("[kspage/edit] a move breaking the undo's step test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("..")
     ed: = edit.new_editor(d)
@@ -106,11 +97,9 @@ fn test_moving_breaks_the_undo_group() //< a move ends the step
     assert(n.text().equals(".."), "the second time what came earlier goes back too")
     verdict.pass("the step breaks where it moved, and they go back apart.")
 
-fn test_undo_restores_a_selection_delete_across_blocks() //<
+fn test_undo_restores_a_selection_delete_across_blocks(arena: Arena$@) //<
     //< A deleted selection comes back as one too (across paragraphs as well)
     verdict.start("[kspage/edit] an deleting across paragraphs going back test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     head: = d.add_block("body").add_text("abc")
     middle: = d.add_block("body").add_text("XYZ")
@@ -128,10 +117,9 @@ fn test_undo_restores_a_selection_delete_across_blocks() //<
     assert(tail.text().equals("def"), "the last comes back too")
     verdict.pass("an deleting across paragraphs goes back together too.")
 
-fn test_committing_a_composition_breaks_the_group() //< committing a composition ends the step
+fn test_committing_a_composition_breaks_the_group(arena: Arena$@) //<
+    //< committing a composition ends the step
     verdict.start("[kspage/edit] committing a composing breaking the step test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("")
     ed: = edit.new_editor(d)
@@ -147,11 +135,9 @@ fn test_committing_a_composition_breaks_the_group() //< committing a composition
     assert(n.text().equals(""), "the second time what was composed goes back too")
     verdict.pass("committing a composing breaks the step, and they go back apart.")
 
-fn test_undo_on_an_empty_history_does_nothing() //<
+fn test_undo_on_an_empty_history_does_nothing(arena: Arena$@) //<
     //< Where there is nothing to undo, nothing happens
     verdict.start("[kspage/edit] nothing happening where there is nowhere to go back to test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("ab")
     ed: = edit.new_editor(d)
@@ -161,11 +147,9 @@ fn test_undo_on_an_empty_history_does_nothing() //<
     assert(n.text().equals("ab"), "the text does not change")
     verdict.pass("where there is nowhere to go back to, nothing happens.")
 
-fn test_writing_after_undo_drops_the_redo() //<
+fn test_writing_after_undo_drops_the_redo(arena: Arena$@) //<
     //< Writing something else after an undo discards what could be redone
     verdict.start("[kspage/edit] writing after going back leaving nothing to redo test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     d: = Doc.new(arena)
     n: = d.add_block("body").add_text("")
     ed: = edit.new_editor(d)
@@ -179,12 +163,11 @@ fn test_writing_after_undo_drops_the_redo() //<
     assert(n.text().equals("b"), "only what was written is left")
     verdict.pass("write after going back and what could be redone is thrown away.")
 
-fn test_the_caret_moves_to_the_edges_of_the_placed_line() //< it moves to a line's start and end
+fn test_the_caret_moves_to_the_edges_of_the_placed_line(arena: Arena$@) //<
+    //< it moves to a line's start and end
     //<
     //< **On a wrapped line it is that line's edge** (not the paragraph's).
     verdict.start("[kspage/edit] moving to a row's edges test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     sheet: = Sheet.new(base.root_font(), arena)
     doc: = Doc.new(arena)
     // ASCII is 8px, so 12 characters fit in 100px; the last break within that is byte 10's space.
@@ -211,12 +194,11 @@ fn test_the_caret_moves_to_the_edges_of_the_placed_line() //< it moves to a line
     assert(ed.caret.offset == 19, "only the end moves")
     verdict.pass("a row's edge is the edge of the row laid.")
 
-fn test_a_line_edge_stays_inside_the_cell() //< in a cell, a line's edge is in the cell too
+fn test_a_line_edge_stays_inside_the_cell(arena: Arena$@) //<
+    //< in a cell, a line's edge is in the cell too
     //<
     //< **It does not move into the neighbouring cell.**
     verdict.start("[kspage/edit] a row's edge not leaving a cell test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     sheet: = Sheet.new(base.root_font(), arena)
     base.table_style(sheet)
     doc: = Doc.new(arena)
@@ -233,12 +215,10 @@ fn test_a_line_edge_stays_inside_the_cell() //< in a cell, a line's edge is in t
     assert(ed.caret.offset == 2, "it is the end of that cell's text")
     verdict.pass("a row's edge stops inside the cell.")
 
-fn test_select_all_spans_the_whole_document() //< the whole document can be selected
+fn test_select_all_spans_the_whole_document(arena: Arena$@) //< the whole document can be selected
     //<
     //< **The start is the document's start and the end its end.**
     verdict.start("[kspage/edit] selecting the whole document test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     doc: = Doc.new(arena)
     head: = doc.add_block("body").add_text("a")
     // A block with no text (an image) is skipped.

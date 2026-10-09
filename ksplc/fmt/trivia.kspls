@@ -124,13 +124,16 @@ impl Formatter
             // Caution: **Ask whether the line continues; do not just clear the flag.** A comment
             // among a bracket's wrapped elements takes their indent; at column 0 the indentation
             // notation reads a new top-level item and inserts a `{` where the element was.
-            r.flags.wrap_indent = r.in_continuation()
+            r.flags.wrap_indent = r.carries_on(true)
             r.flags.force_next_nl = false
             return
         if new_lines > 1 && !is_suppressed && !r.blank_groups_nothing(0)
             r.write_blank_line()
         else if new_lines > 0 && !is_suppressed
             r.write_nl()
+            // **A comment on its own line partway through a value takes the value's indent**, as
+            // the code after it does (`carries_on` in `printer.kspls`).
+            r.flags.wrap_indent = r.carries_on(true)
         else if !r.flags.is_line_start
             r.write_space()
 

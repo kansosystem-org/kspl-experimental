@@ -9,7 +9,7 @@ import "kspage/tests/base"
 import "std/mem" { Arena }
 import "std/verdict"
 
-fn test_a_name_finds_the_same_style_wherever_it_sits() //<
+fn test_a_name_finds_the_same_style_wherever_it_sits(arena: Arena$@) //<
     //< The name lookup remembers the last one found
     //<
     //< **The answer is pinned**: a change in the returned style would silently change the applied
@@ -17,8 +17,6 @@ fn test_a_name_finds_the_same_style_wherever_it_sits() //<
     verdict
         .start("[kspage/style] the answer looked up by name not changing with the place in the \
             table test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     sheet: = Sheet.new(base.root_font(), arena)
     sheet.add("z", paint.inherit_all()).indent = 1.0
     sheet.add("a", paint.inherit_all()).indent = 2.0
@@ -42,13 +40,11 @@ fn test_a_name_finds_the_same_style_wherever_it_sits() //<
             assert(false, "a is not found")
     verdict.pass("remembering or not, the style found is decided by the name.")
 
-fn test_two_styles_with_one_name_keep_the_first() //<
+fn test_two_styles_with_one_name_keep_the_first(arena: Arena$@) //<
     //< **Where the same name was added twice, the one added first is the answer.**
     verdict
         .start("[kspage/style] the earlier one being found where the same name is there twice \
             test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     sheet: = Sheet.new(base.root_font(), arena)
     sheet.add("body", paint.inherit_all()).indent = 7.0
     sheet.add("body", paint.inherit_all()).indent = 9.0
@@ -59,15 +55,13 @@ fn test_two_styles_with_one_name_keep_the_first() //<
         assert(false, "body is not found")
     verdict.pass("the one added first is the answer.")
 
-fn test_a_missing_name_is_found_after_it_is_added() //<
+fn test_a_missing_name_is_found_after_it_is_added(arena: Arena$@) //<
     //< A missing name is found once it is added
     //<
     //< Caution: **Do not remember "there was none".** Remembered, a style added later could never
     //< be found.
     verdict
         .start("[kspage/style] a name that was missed being found once it is added later test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     sheet: = Sheet.new(base.root_font(), arena)
     sheet.add("body", paint.inherit_all()).indent = 1.0
     if _s: = sheet.find("added later")
@@ -79,7 +73,7 @@ fn test_a_missing_name_is_found_after_it_is_added() //<
     case .none
         assert(false, "added and yet it is not found (the miss is remembered)")
     verdict.pass("a miss is not remembered, so a style added later is found.")
-fn test_a_shrunk_sheet_does_not_break_the_memo() //<
+fn test_a_shrunk_sheet_does_not_break_the_memo(arena: Arena$@) //<
     //< Looking a style up still works after the style table shrinks
     //<
     //< **The style table shrinks** on an undo (`remove_at` in `../../kspage/write/edit.kspls`, `len
@@ -87,8 +81,6 @@ fn test_a_shrunk_sheet_does_not_break_the_memo() //<
     //<
     //< Read there, it panics — **and in wasm the page freezes** (the panic ends in `for {}`).
     verdict.start("[kspage/style] being found even where the style table shrinks test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
     sheet: = Sheet.new(base.root_font(), arena)
     sheet.add("a", paint.inherit_all()).indent = 1.0
     sheet.add("b", paint.inherit_all()).indent = 2.0

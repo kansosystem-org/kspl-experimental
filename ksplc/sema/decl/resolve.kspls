@@ -624,13 +624,12 @@ priv fn apply_type_postfixes(c: Sema_ctx$@, base_tid: I32, r: Ast_node$@): I32!S
                 // No expression produces a pointer to a fixed-length array (`a@` decays, as in C),
                 // so it is rejected (Principle 5 of docs/DESIGN.md).
                 if c.env.is_array(current_tid) && !c.suppress_errors
-                    $shown: = c.env.display_str(current_tid)
-                    defer shown.free()
+                    shown: = c.env.display(current_tid)
                     c.clear_scratch()
-                        .s("cannot take a pointer to a fixed-size array ('\{shown.slice()\}@'): '@' \
-                            on an array decays to a pointer to its first element, so no expression \
-                            can produce this type. Use 'T$[]' (a slice, which carries its length) \
-                            or 'T$@' (a pointer to the first element).")
+                        .s("cannot take a pointer to a fixed-size array ('\{shown\}@'): '@' on an \
+                            array decays to a pointer to its first element, so no expression can \
+                            produce this type. Use 'T$[]' (a slice, which carries its length) or \
+                            'T$@' (a pointer to the first element).")
                     c.err(p, c.scratch.slice())
                 current_tid = c.env.make_ptr(qualified)
             else if pt.starts_with("[")
@@ -638,15 +637,14 @@ priv fn apply_type_postfixes(c: Sema_ctx$@, base_tid: I32, r: Ast_node$@): I32!S
                 // they are part of the array's value, so the binding that holds it decides (unlike
                 // `T$[]`, `T$@`).
                 if has_mut_mark && p.children.len > 0 && !c.suppress_errors
-                    $shown_arr: = c.env.display_str(current_tid)
-                    defer shown_arr.free()
+                    shown_arr: = c.env.display(current_tid)
                     c.clear_scratch()
                         .s("a fixed-size array cannot carry '$' on its element type \
-                            ('\{shown_arr.slice()\}[N]'): element writability comes from the \
-                            binding, not the type. Write '$name: \{shown_arr.slice()\}[N]' for a \
-                            writable array (a struct field is writable when its receiver is). '$' \
-                            on the element stage is only for slices ('T$[]') and pointers ('T$@'), \
-                            which refer to a different object.")
+                            ('\{shown_arr\}[N]'): element writability comes from the binding, not \
+                            the type. Write '$name: \{shown_arr\}[N]' for a writable array (a \
+                            struct field is writable when its receiver is). '$' on the element \
+                            stage is only for slices ('T$[]') and pointers ('T$@'), which refer to \
+                            a different object.")
                     c.err(p, c.scratch.slice())
                 if p.children.len > 0
                     size_node: = p.get_child(0)

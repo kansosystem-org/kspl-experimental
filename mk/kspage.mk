@@ -11,16 +11,10 @@ KSPAGE_WEB := $(OUT_DIR)/kspage_web
 kspage_make = $(call pkg_make,kspage) OUT=../$(OUT_DIR)/kspage WEB=../$(KSPAGE_WEB)
 
 ## Run|kspage-web|Build the wasm for the browser
-kspage-web: $(STAGE1_EXE)
-	@$(kspage_make) web
-
 ## Gates|test-kspage-wasm|Run the browser's wasm under node
-test-kspage-wasm: $(STAGE1_EXE)
-	@$(kspage_make) test-wasm
-
 ## Gates|test-kspage-browser|Look at the input plumbing in a real browser
-test-kspage-browser: $(STAGE1_EXE)
-	@$(kspage_make) test-browser
+kspage-web test-kspage-wasm test-kspage-browser: $(STAGE1_EXE)
+	@$(kspage_make) $(subst kspage-,,$@)
 
 ## Gates|test-kspage-served|Look at the page `kssrv --local` served
 test-kspage-served: $(STAGE1_EXE) kssrv
@@ -31,7 +25,7 @@ test-kspage-served: $(STAGE1_EXE) kssrv
 # ==========================================
 # Caution: **The URL is `tools/kspage_open.kspls`'s alone** (a root and a document that do not
 # line up give an empty page, nothing said); **keep `--show`**, or a run with no screen waits.
-KSPAGE_DOC ?= README.md
+KSPAGE_DOC ?= kspage/content/manual.kspage
 KSPAGE_SERVE_PORT ?= 8080
 
 ## Run|kspage-serve|Serve one document and put out the URL (`KSPAGE_DOC=` / `KSPAGE_SERVE_PORT=`)
@@ -99,7 +93,7 @@ test-kspage-desktop: | $(OUT_DIR)
 		'Name=kspage' 'Comment=Open this file with kspage in a browser' \
 		"Exec=$$here/$(KSPAGE_OPEN_EXE) %f" \
 		"Path=$$here" 'Terminal=false' 'NoDisplay=true' \
-		'MimeType=application/x-kspage;text/plain;text/markdown;text/csv;application/json;' \
+		'MimeType=application/x-kspage;text/plain;text/csv;application/json;' \
 		> $(KSPAGE_DESKTOP)
 	@if command -v desktop-file-validate >/dev/null 2>&1; then \
 		desktop-file-validate $(KSPAGE_DESKTOP) || exit 1; \

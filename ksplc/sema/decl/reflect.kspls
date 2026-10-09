@@ -156,13 +156,12 @@ impl Sema_ctx
                 if spec.sub.len == 0
                     ok = false
             else if k.len == 0
-                $shown: = r.env.display_str(f.type_id)
-                defer shown.free()
+                shown: = r.env.display(f.type_id)
                 r.clear_scratch()
-                    .s("field '\{f.name\}' has type '\{shown.slice()\}', which 'Reflectable' cannot \
-                        derive a table entry for (covered: the integer types, F32, F64, Bool, U8[], \
-                        a nested struct of those, and List<|T|> / T? of those); write the \
-                        'fields()' body by hand")
+                    .s("field '\{f.name\}' has type '\{shown\}', which 'Reflectable' cannot derive \
+                        a table entry for (covered: the integer types, F32, F64, Bool, U8[], a \
+                        nested struct of those, and List<|T|> / T? of those); write the 'fields()' \
+                        body by hand")
                 r.err(site, r.scratch.slice())
                 ok = false
             rows.push(spec)
@@ -178,9 +177,7 @@ impl Sema_ctx
             //< `struct_field`), for the same reason as the container check in collect_field_kinds.
         inner_id: =
             r.list_elem_type(f.type_id) if is_list else r.option_inner_type(f.type_id)
-        $inner_node: Ast_node$@ = null
-        if found: = r.list_elem_node(f_type)
-            inner_node = found
+        inner_node: = r.list_elem_node(f_type).unwrap_or(null)
         inner_kind: = r.field_kind_name(inner_id)
         // **Decide it first:** `clause_names` writes to scratch.
         nested: =
@@ -190,9 +187,8 @@ impl Sema_ctx
         if inner_kind.len == 0 || nested
             // **Show the type as a diagnostic shows it** (`List<|I64|>`, `I64?`), not an instance's
             // internal name (`std_ds_List_I64_Ptr`) or the tree's folded `Option<|I64|>`.
-            $spelled: = r.env.display_str(f.type_id)
-            defer spelled.free()
-            r.clear_scratch().s("field '\{f.name\}' has type '\{spelled.slice()\}'")
+            spelled: = r.env.display(f.type_id)
+            r.clear_scratch().s("field '\{f.name\}' has type '\{spelled\}'")
             if nested && is_list
                 r.scratch
                     .s(": 'Reflectable' does not cover a list whose element is itself a list; write \
@@ -276,9 +272,7 @@ impl Sema_ctx
 
     priv fn list_elem_node(_r: Self$@, f_type: Ast_node$@): Ast_node$@? //<
         //< The clause of the `T` of `List<|T|>`
-        $args: Ast_node$@ = null
-        if found: = f_type.find_deep_child(.k_type_args)
-            args = found
+        args: = f_type.find_deep_child(.k_type_args).unwrap_or(null)
         if args == null
             return .none
         for c in args.children
@@ -603,8 +597,7 @@ priv fn join3(a: U8[], b: U8[], c: U8[]): U8[]
 
 priv fn flatten_name(spelling: U8[]): U8[] //<
     //< Collapses a type's name into one identifier (`a.B[2]` → `a_B_2_`)
-    $s: = Str_builder.new()
-    defer s.free()
+    s: = base_core.arena.text()
     for ch in spelling
         s.c(ch if ch.is_alpha() || ch.is_digit() || ch == '_' else '_')
-    return base_core.arena.dup_str(s.slice())
+    return s.take()

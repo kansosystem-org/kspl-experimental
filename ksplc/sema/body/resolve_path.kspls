@@ -47,10 +47,8 @@ priv fn fn_value_type_id(node: Ast_node$@, c: Sema_ctx$@, sym: Sema_symbol$@, ex
         c.env.is_const_compatible(actual_id, exp_real)
         return expected_id
 
-    $exp: = c.env.display_str(exp_real)
-    defer exp.free()
-    $act: = c.env.display_str(actual_id)
-    defer act.free()
+    exp: = c.env.display(exp_real)
+    act: = c.env.display(actual_id)
     c.clear_scratch()
     // Caution: Do not show a synthesized name (`_anon_fn_1`), which the user did not write ("A
     // diagnostic points at 'the position the user wrote'" in ksplc/docs/DESIGN.md); name the
@@ -65,7 +63,7 @@ priv fn fn_value_type_id(node: Ast_node$@, c: Sema_ctx$@, sym: Sema_symbol$@, ex
         c.scratch.s("'")
     else
         c.scratch.s("function '\{sym.name\}'")
-    c.scratch.s(" cannot be used as '\{exp.slice()\}': its own type is '\{act.slice()\}'")
+    c.scratch.s(" cannot be used as '\{exp\}': its own type is '\{act\}'")
     c.append_missing_capture_list_note(exp_real)
     c.err(node, c.scratch.slice())
     return expected_id
@@ -220,9 +218,8 @@ fn infer_method_value(node: Ast_node$@, c: Sema_ctx$@, owner_id: I32, owner: Ast
             fn_tmpl.template = found_tmpl.fqn
             fn_tmpl.owner = found_tmpl.owner
         if tmpl == null
-            $shown: = c.env.display_str(owner_real)
-            defer shown.free()
-            c.clear_scratch().s("type '\{shown.slice()\}' has no method named '\{member.text\}'")
+            shown: = c.env.display(owner_real)
+            c.clear_scratch().s("type '\{shown\}' has no method named '\{member.text\}'")
             c.err(member, c.scratch.slice())
             return I32::sema_type_env.Builtin_type_id.unknown
         if own_args == null

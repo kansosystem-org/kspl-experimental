@@ -19,10 +19,10 @@ function kspageProbeMenu(ks) {
   // **What is pressed is not "Save"**: holding no file, Save opens a window to choose a place,
   // which opens only inside a person's press (a headless browser has none); a command answering in
   // the same press is looked at, and real overwriting is confirmed by hand (`kspage/README.md`).
-  openMenu("export");
-  document.getElementById("export").focus();
-  document.getElementById("export").click();
-  check(document.getElementById("note").textContent === "Wrote it out as HTML",
+  openMenu("export-md");
+  document.getElementById("export-md").focus();
+  document.getElementById("export-md").click();
+  check(document.getElementById("note").textContent === "Wrote it out as Markdown",
     "the command's tiding comes out");
   // The debug log: **the document's content must not go in**; the falling text is read by taking
   // `URL.createObjectURL` over (a real fall cannot be seen in a headless browser).
@@ -266,7 +266,7 @@ function kspageProbeMenu(ks) {
     "the texts before and after the number go in from the fields ("
       + serial.before + "|" + serial.text + ")");
   // **Count over the whole document.** With body text in between it does not go back to 1.
-  check(app.html().indexOf("Fig. 1. ") >= 0 && app.html().indexOf("Fig. 2. ") >= 0,
+  check(app.markdown().indexOf("Fig. 1. ") >= 0 && app.markdown().indexOf("Fig. 2. ") >= 0,
     "the serial numbers come out in what is written out");
   undoKey();
   check(app.styleMark(itemAt).kind === "bullet",
@@ -315,7 +315,7 @@ function kspageProbeMenu(ks) {
   check(tools !== null && tools.querySelectorAll("button").length > 0,
     "the row of shortcuts is there ("
       + (tools === null ? 0 : tools.querySelectorAll("button").length) + ")");
-  const tableCount = () => app.html().split("<table").length;
+  const tableCount = ks.tableCount;
   pressAt(8);
   const toolWas = tableCount();
   // The Table shortcut inserts at the size landed on Insert's grid (2 × 2 until pressed).

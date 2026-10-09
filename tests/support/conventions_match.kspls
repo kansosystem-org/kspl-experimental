@@ -57,9 +57,8 @@ priv const code_samples: Sample[10] = ::{
 }
 
 priv fn check_code_fires(arena: Arena$@)
-    $bad: = scan.misjudged(Sample[]::code_samples, is_code, arena)
-    verdict.check_list("the judgment of a diagnostic code's text can fire", code_samples.len,
-        "samples", bad@, "the table of what is hit and what is not is `code_samples`")
+    scan.check_samples("the judgment of a diagnostic code's text can fire",
+        Sample[]::code_samples, "code_samples", is_code, arena)
 
 priv fn codes_only(xs: List<|U8[]|>@, arena: Arena$@): List<|U8[]|>
     $out: = List<|U8[]|>.new(arena)
@@ -71,7 +70,7 @@ priv fn codes_only(xs: List<|U8[]|>@, arena: Arena$@): List<|U8[]|>
 priv fn check_codes(arena: Arena$@): List<|U8[]|>
     reg: = harness.read_under_root(registry)
     spec: = harness.read_under_root(spec_tools)
-    $raw_impl: = scan.find_all(reg, "code.equals(\"", "\")", arena)
+    $raw_impl: = scan.find_all(reg, "\"", "\"", arena)
     $raw_detail: = scan.find_line_starts(spec, "#### [", "]", arena)
     $codes: = codes_only(raw_impl@, arena)
     $detail: = codes_only(raw_detail@, arena)
@@ -369,7 +368,8 @@ priv fn check_ast_kinds(arena: Arena$@)
         if !word_only(n)
             continue
         members.push(n)
-    // The string `builtin_name` returns is the value compared with a grammar rule's name.
+    // The string `builtin_name` returns is the value compared with a grammar rule's name: a case's
+    // own string, and the variant's name past `k_` for a kind with no case (its `default`).
     $kinds: = List<|U8[]|>.new(arena)
     $names: = List<|U8[]|>.new(arena)
     lines: = src.lines(arena)
@@ -418,7 +418,7 @@ priv fn check_ast_kinds(arena: Arena$@)
         if k.equals("k_unknown") || k.equals("k_max")
             continue
         at: = find_sig_name(kinds@, k)
-        spelled: = "" if at == 0 else names.get(at - 1)
+        spelled: = k.sub_from(2) if at == 0 else names.get(at - 1)
         if spelled.len > 0 && scan.has(rules@, spelled)
             continue
         if mentions_kind(all, k)
@@ -845,10 +845,8 @@ priv const status_samples: Sample[6] = ::{
 }
 
 priv fn check_status_table(arena: Arena$@)
-    $bad: = scan.misjudged(Sample[]::status_samples, status_tables_disagree, arena)
-    verdict.check_list("the judgment of the NTSTATUS tables' agreement can fire",
-        status_samples.len, "samples", bad@,
-        "the table of what is hit and what is not is `status_samples`")
+    scan.check_samples("the judgment of the NTSTATUS tables' agreement can fire",
+        Sample[]::status_samples, "status_samples", status_tables_disagree, arena)
     c: = c_status_rows(harness.read_under_root(status_c), arena)
     doc: = doc_status_rows(harness.read_under_root(status_doc), arena)
     $gaps: = List<|U8[]|>.new(arena)

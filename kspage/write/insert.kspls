@@ -14,8 +14,7 @@ import "kspage/model/collect" { Collect }
 import "kspage/model/doc" + { Block, Rect }
 import "kspage/model/number"
 import "kspage/model/run"
-import "kspage/model/style" + { Arrange, Sheet, Shape, Style }
-import "kspage/share/markdown_look" as look
+import "kspage/model/style" + { Align, Arrange, Sheet, Shape, Style }
 import "kspage/write/block"
 import "kspage/write/edit" + { Editor }
 import "kspage/write/field"
@@ -176,25 +175,38 @@ priv fn first_spot(sheet: Sheet$@, holder: Block$@): Rect //<
                 .w = room.width / 2.0F32, .h = room.height / 2.0F32 }
     return Rect::{ .x = 8.0, .y = 8.0, .w = 120.0, .h = 80.0 }
 
+priv const cell_name: U8[] = "cell" //< the name of the style a new table's cells get
+priv const line_color: U32 = 0xd0d7deU32 //< the color of the lines a new table is drawn with
+
+priv fn dress_cell(cell: Style$@, want: Align) //<
+    //< Sets a new cell style's look: the padding, and the line the grid is drawn with
+    //<
+    //< Caution: **Always set the padding** — it is what marks a style as a cell (`cell_like` in
+    //< `../model/style.kspls`). A divider draws a line too, but has no padding.
+    cell.align = want
+    cell.pad = 6.0
+    cell.rule_width = 1.0
+    cell.rule_color = line_color
+
 impl Editor
     priv fn cell_styled(r: Self$@, st: Step$@, sheet: Sheet$@): U8[] //<
         //< The name of the style a new table's cells get
         //<
-        //< It is found by the part the Markdown reader uses to recognize a cell (`cell_like`), so a
-        //< table typed in and one read from text share a style. **Where there is none it is made
-        //< through the record** (one undo), styled by `dress_cell`.
+        //< It is found by the part that marks a style as a cell (`cell_like`), so every table in
+        //< one document shares a style. **Where there is none it is made through the record** (one
+        //< undo), styled by `dress_cell`.
         //< Caution: **A style that already has the name is used as it is**, whatever its look —
         //< restyling it would move every cell already using it.
         for $i: Sz = 0; i < sheet.styles.len; i += 1
             s: = sheet.styles.get(i)
             if style.cell_like(s) && s.align.same_align(.left)
                 return s.name
-        if had: = sheet.find(look.cell_names[0])
+        if had: = sheet.find(cell_name)
             return had.name
-        switch r.styled(st, sheet, look.cell_names[0], .flow)
+        switch r.styled(st, sheet, cell_name, .flow)
         case .some(made)
             $want: Style = made$
-            look.dress_cell(want@, .left)
+            dress_cell(want@, .left)
             field.do_set_look(r, st, made, want)
             return made.name
         case .none

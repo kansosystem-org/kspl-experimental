@@ -1,6 +1,6 @@
 // ==========================================
 // kspage's JS side — turning the document into text and text into a document (the same `app` as
-// [`api.js`](api.js)): the saved form (JSON), exports (HTML, Markdown), text form (`.txt` and
+// [`api.js`](api.js)): the saved form (JSON), exports (Markdown), text form (`.txt` and
 // source) and reading them back.
 // Caution: **Do not merge the reasons for refusing into one** — each has a different fix, so the
 // core's answer is passed on as it is. **Read memory only after getting the arena** (wasm memory
@@ -10,12 +10,7 @@ function kspageApiIo(ks) {
   // **`cramps` is `api.js`'s, on `ks`** (one handler for full memory; with two, one skips cleanup).
   const { w, enc, outText, draw, cramps, handOver } = ks;
   Object.assign(ks.api, {
-    // Makes HTML of the current document and its styles. **This one cannot be reloaded.**
-    html() {
-      const len = w.kspage_web_html();
-      return outText(len);
-    },
-    // Makes Markdown of the current document and its styles. **Nor can this.**
+    // Makes Markdown of the current document. **It cannot be reloaded.**
     markdown() {
       const len = w.kspage_web_markdown();
       return outText(len);
@@ -37,18 +32,6 @@ function kspageApiIo(ks) {
       if (got === 0) return "broken";
       // What kspage no longer carries (`withdrawn` in `inout.kspls`).
       if (got === -3) return "withdrawn";
-      if (got < 0) return "too_big";
-      draw();
-      return "";
-    },
-    // A new document from Markdown text, answering as `load` does (**the current document is not
-    // kept**: an import, not a merge).
-    loadMarkdown(text) {
-      const bytes = enc.encode(text);
-      if (!handOver(bytes)) return "too_big";
-      const got = cramps(() => w.kspage_web_load_markdown(bytes.length));
-      if (got === null) return "cramped";
-      if (got === 0) return "broken";
       if (got < 0) return "too_big";
       draw();
       return "";

@@ -24,32 +24,27 @@ import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/str"
 
-priv struct Op_traits
+priv struct Op_traits //< the method and trait an operator calls on a user type
+    op: U8[]
     method_name: U8[]
     trait_name: U8[]
 
-priv fn get_op_traits(op: U8[]): Op_traits
-    if op.equals("+")
-        return Op_traits::{ .method_name = "add", .trait_name = "Add" }
-    if op.equals("-")
-        return Op_traits::{ .method_name = "sub", .trait_name = "Sub" }
-    if op.equals("*")
-        return Op_traits::{ .method_name = "mul", .trait_name = "Mul" }
-    if op.equals("/")
-        return Op_traits::{ .method_name = "div", .trait_name = "Div" }
-    if op.equals("==")
-        return Op_traits::{ .method_name = "eq", .trait_name = "Eq" }
-    if op.equals("!=")
-        return Op_traits::{ .method_name = "ne", .trait_name = "Eq" }
-    if op.equals("<")
-        return Op_traits::{ .method_name = "lt", .trait_name = "Ord" }
-    if op.equals("<=")
-        return Op_traits::{ .method_name = "le", .trait_name = "Ord" }
-    if op.equals(">")
-        return Op_traits::{ .method_name = "gt", .trait_name = "Ord" }
-    if op.equals(">=")
-        return Op_traits::{ .method_name = "ge", .trait_name = "Ord" }
-    return Op_traits::{ .method_name = "", .trait_name = "" }
+priv const op_traits: Op_traits[10] = ::{ Op_traits::{ .op = "+", .method_name = "add",
+    .trait_name = "Add" }, Op_traits::{ .op = "-", .method_name = "sub", .trait_name = "Sub" },
+    Op_traits::{ .op = "*", .method_name = "mul", .trait_name = "Mul" },
+    Op_traits::{ .op = "/", .method_name = "div", .trait_name = "Div" },
+    Op_traits::{ .op = "==", .method_name = "eq", .trait_name = "Eq" },
+    Op_traits::{ .op = "!=", .method_name = "ne", .trait_name = "Eq" },
+    Op_traits::{ .op = "<", .method_name = "lt", .trait_name = "Ord" },
+    Op_traits::{ .op = "<=", .method_name = "le", .trait_name = "Ord" },
+    Op_traits::{ .op = ">", .method_name = "gt", .trait_name = "Ord" },
+    Op_traits::{ .op = ">=", .method_name = "ge", .trait_name = "Ord" } }
+
+priv fn get_op_traits(op: U8[]): Op_traits //< op's row in `op_traits`; empty names for none
+    for row in op_traits
+        if row.op.equals(op)
+            return row
+    return Op_traits::{ .op = op, .method_name = "", .trait_name = "" }
 
 priv fn const_divisor(ctx: Sema_ctx$@, right_node: Ast_node$@): I32? //<
     //< The divisor's value if it is known at translation time, .none if not
@@ -157,10 +152,8 @@ fn reject_float_remainder(ctx: Sema_ctx$@, node: Ast_node$@, type_id: I32, op_te
     //< truncates, Python's `%` floors), so the one meant is written out.
     if !ctx.env.is_float(type_id) || (!op_text.equals("%") && !op_text.equals("%="))
         return false
-    $shown: = ctx.env.display_str(type_id)
-    defer shown.free()
-    ctx.clear_scratch()
-        .s("operator '\{op_text\}' does not apply to '\{shown.slice()\}'; write the ")
+    shown: = ctx.env.display(type_id)
+    ctx.clear_scratch().s("operator '\{op_text\}' does not apply to '\{shown\}'; write the ")
         .s("remainder meant ('a - b * F64::(I64::(a / b))' rounds the quotient toward zero)")
     ctx.err(node, ctx.scratch.slice())
     return true
@@ -311,10 +304,9 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!S
         bad_id: = left_type_id if ctx.env.is_slice(left_type_id) else right_type_id
         // Caution: Show the sugar the user wrote, not the internal name (`U8 immut[]` /
         // `std_lang_Slice_U8_Const`; `../type/display.kspls`).
-        $shown: = ctx.env.display_str(bad_id)
-        defer shown.free()
+        shown: = ctx.env.display(bad_id)
         ctx.clear_scratch()
-            .s("Operator '\{op_text\}' cannot be applied to slice type '\{shown.slice()\}'; ")
+            .s("Operator '\{op_text\}' cannot be applied to slice type '\{shown\}'; ")
             .s("slices have no arithmetic or ordering (compare contents with 'equals', read \
                 elements with '[]')")
         ctx.err(node, ctx.scratch.slice())
@@ -326,9 +318,8 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!S
     // `== != < > <= >=` (Rust has `bool: Ord` too) and `& | ^` (logic without short-circuiting).
     if is_bool_arith_operand(ctx, left_type_id, right_type_id, op_text, is_shift)
         bad_id: = left_type_id if ctx.env.is_bool(left_type_id) else right_type_id
-        $shown: = ctx.env.display_str(bad_id)
-        defer shown.free()
-        ctx.clear_scratch().s("Operator '\{op_text\}' cannot be applied to '\{shown.slice()\}'; ")
+        shown: = ctx.env.display(bad_id)
+        ctx.clear_scratch().s("Operator '\{op_text\}' cannot be applied to '\{shown\}'; ")
             .s("convert first ('I32::flag') for arithmetic and bit operations, or use ")
             .s("'&&' / '||' for logic ('&' / '|' / '^' when both sides must be evaluated)")
         ctx.err(node, ctx.scratch.slice())
@@ -429,12 +420,9 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!S
     if op_text.equals("-") && ctx.env.is_pointer(left_type_id) &&
         ctx.env.is_pointer(right_type_id)
         if !points_to_same(ctx, left_type_id, right_type_id)
-            $l_shown: = ctx.env.display_str(left_type_id)
-            defer l_shown.free()
-            $r_shown: = ctx.env.display_str(right_type_id)
-            defer r_shown.free()
-            ctx.clear_scratch()
-                .s("cannot subtract '\{r_shown.slice()\}' from '\{l_shown.slice()\}'; ")
+            l_shown: = ctx.env.display(left_type_id)
+            r_shown: = ctx.env.display(right_type_id)
+            ctx.clear_scratch().s("cannot subtract '\{r_shown\}' from '\{l_shown\}'; ")
                 .s("two pointers can be subtracted only when they point to the same type ")
                 .s("(the answer counts elements, so the element size must be one)")
             ctx.err(node, ctx.scratch.slice())
@@ -517,13 +505,10 @@ priv fn report_no_common_type(ctx: Sema_ctx$@, node: Ast_node$@, op_text: U8[],
         //< Rejects two numeric operands neither of which holds every value of the other
         //<
         //< An integer literal against a float is named as such: the fix is writing it as a float.
-    $l_shown: = ctx.env.display_str(left_id)
-    defer l_shown.free()
-    $r_shown: = ctx.env.display_str(right_id)
-    defer r_shown.free()
+    l_shown: = ctx.env.display(left_id)
+    r_shown: = ctx.env.display(right_id)
     ctx.clear_scratch()
-        .s("implicit conversion between '\{l_shown.slice()\}' and '\{r_shown.slice()\}' is \
-            forbidden ")
+        .s("implicit conversion between '\{l_shown\}' and '\{r_shown\}' is forbidden ")
         .s("to prevent data loss: neither holds every value of the other, so '\{op_text\}' has no \
             type ").s("to compute in. Use explicit '::' cast")
     has_lit: =
@@ -549,12 +534,10 @@ priv fn pointer_arith_ok(ctx: Sema_ctx$@, op_text: U8[], left_id: I32, right_id:
 priv fn report_bad_pointer_arith(ctx: Sema_ctx$@, node: Ast_node$@, op_text: U8[], left_id: I32,
     right_id: I32) //<
         //< Rejects a disallowed form and lists the three allowed forms.
-    $l_shown: = ctx.env.display_str(left_id)
-    defer l_shown.free()
-    $r_shown: = ctx.env.display_str(right_id)
-    defer r_shown.free()
-    ctx.clear_scratch().s("operator '\{op_text\}' cannot be applied to '\{l_shown.slice()\}' and ")
-        .s("'\{r_shown.slice()\}'. Pointer arithmetic has three forms: 'p + i' and 'p - i' step by ")
+    l_shown: = ctx.env.display(left_id)
+    r_shown: = ctx.env.display(right_id)
+    ctx.clear_scratch().s("operator '\{op_text\}' cannot be applied to '\{l_shown\}' and ")
+        .s("'\{r_shown\}'. Pointer arithmetic has three forms: 'p + i' and 'p - i' step by ")
         .s("elements and give a pointer, and 'p - q' (same pointee type) counts the elements \
             between ")
     ctx.scratch.s("them")

@@ -356,6 +356,49 @@
       }
       return -1;
     };
+    // The document as saved, block by block (each with its `depth`) and whether its style lays it
+    // out as a grid: **what a section counts is the document, read from the one text that reads
+    // back**, not from the screen.
+    const savedBlocks = () => {
+      const doc = JSON.parse(app.save());
+      const grids = new Set(doc.sheet.styles.filter((s) => s.arrange === "grid")
+        .map((s) => s.name));
+      const out = [];
+      const walk = (list, depth) => {
+        for (const b of list || []) {
+          out.push({ style: b.style, depth: depth, grid: grids.has(b.style) });
+          walk(b.children, depth + 1);
+        }
+      };
+      walk(doc.blocks, 0);
+      return out;
+    };
+    // The counts sections ask of it: tables, their rows and their cells.
+    const tableCount = () => savedBlocks().filter((b) => b.grid).length;
+    const cellCount = () => {
+      const all = savedBlocks();
+      let n = 0;
+      all.forEach((b, i) => {
+        if (b.grid) {
+          for (let k = i + 1; k < all.length && all[k].depth > b.depth; k += 1) {
+            if (all[k].depth === b.depth + 2) n += 1;
+          }
+        }
+      });
+      return n;
+    };
+    const rowCount = () => {
+      const all = savedBlocks();
+      let n = 0;
+      all.forEach((b, i) => {
+        if (b.grid) {
+          for (let k = i + 1; k < all.length && all[k].depth > b.depth; k += 1) {
+            if (all[k].depth === b.depth + 1) n += 1;
+          }
+        }
+      });
+      return n;
+    };
     // The head of a place a fixture speaks of, **not opening with a folder this repo carries**
     // (`make test-docref` would read it as a citation of a missing file).
     const notAPath = "notes";
@@ -366,6 +409,7 @@
       spot: spot, press: press, pressAt: pressAt, keyIn: keyIn, undoKey: undoKey,
       menuOf: menuOf, openMenu: openMenu, findCell: findCell, findBlock: findBlock,
       flyLabels: flyLabels, flyNow: flyNow, flyTick: flyTick, flyPick: flyPick,
+      savedBlocks: savedBlocks, tableCount: tableCount, rowCount: rowCount, cellCount: cellCount,
       dpr: window.devicePixelRatio || 1,
       // A section carrying asynchronous work holds with this and calls what it returns when done.
       hold: hold,

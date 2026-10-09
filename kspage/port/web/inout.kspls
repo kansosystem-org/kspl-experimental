@@ -1,17 +1,14 @@
 //< The entry points for importing and exporting the document
 //<
-//< Saving and reloading the reloadable text (JSON), exporting for display (HTML / Markdown), and
-//< importing Markdown.
-//< Caution: **Do not mix the reloadable text with the exports.** Exported HTML and Markdown do not
-//< carry the styles, so they cannot be reloaded (`../../docs/DESIGN.md`'s "Saving and loading are
+//< Saving and reloading the reloadable text (JSON), opening and saving plain text, and exporting
+//< to Markdown.
+//< Caution: **Do not mix the reloadable text with the exports.** Exported Markdown does not carry
+//< the styles, so it cannot be reloaded (`../../docs/DESIGN.md`'s "Saving and loading are
 //< separate from exporting").
 //< It is split from [`bridge.kspls`](bridge.kspls) for the 1000-line-per-file cap.
 import "kspage/port/web/state"
 import "kspage/port/web/state" { doc, doc_arena, ed, ensure, in_arena, in_ptr, load_arena, sheet }
-import "kspage/share/html"
 import "kspage/share/markdown"
-import "kspage/share/markdown_look"
-import "kspage/share/markdown_read"
 import "kspage/share/store"
 import "kspage/share/text"
 import "kspage/write/edit" as _edit
@@ -46,29 +43,12 @@ fn kspage_web_save(): Sz
     store.save(doc, sheet, state.out@)
     return state.out.len
 
-// Writes the current document and its styles as HTML and returns the length. **It cannot be
-// reloaded.**
-#export
-fn kspage_web_html(): Sz
-    ensure()
-    state.out.clear()
-    html.write(doc, sheet, state.source(), state.out@)
-    return state.out.len
-
-// The number of things dropped from the Markdown just written.
-// Caution: **Ask right after writing** (the next write replaces it, as with `state.out`). If it is
-// not 0, writing that text back to the original file **deletes something**.
-#export
-fn kspage_web_markdown_dropped(): Sz
-    ensure()
-    return state.md_dropped
-
 // Writes the current document and its styles as Markdown and returns the length.
 #export
 fn kspage_web_markdown(): Sz
     ensure()
     state.out.clear()
-    state.md_dropped = markdown.write(doc, sheet, state.out@)
+    markdown.write(doc, sheet, state.out@)
     return state.out.len
 
 // Writes the current document as a text form and returns the length — not one box's text after
@@ -179,11 +159,10 @@ fn kspage_web_load_blank()
     ensure()
     state.blank()
 
-// Reads the `len` bytes in the arena as a text form.
+// Reads the `len` bytes in the arena as a text form, refusing what is not text (`text.texty`).
 // Caution: **Pass the declaration (the language) before the text** (the line style is named after
-// it, `text.sheet_for`). Refuse what is not text (`text.texty`). **Follow
-// `kspage_web_load_markdown`'s steps** — without the same arena and gate, this path alone crashes
-// the page.
+// it). **Make the style table anew**: names into the old one dangle once its arena is freed.
+// **Put it through the gate** (`state.room_for`), or a text from outside crashes the page.
 #export
 fn kspage_web_load_plain_text(len: Sz, spoken_len: Sz): I32
     if in_ptr == null || len <= 0 || spoken_len > len
@@ -201,28 +180,6 @@ fn kspage_web_load_plain_text(len: Sz, spoken_len: Sz): I32
     got: = text.read(src, made, load_arena)
     // One line is one block, so the gate matters most here ("Plain text holds one line per
     // block" in `../../docs/DESIGN.md`).
-    if !state.room_for(got, made, doc_arena)
-        state.drop_load()
-        return too_big
-    state.adopt(load_arena, got, made)
-    return 1
-
-// Reads the `len` bytes in the arena as Markdown; 1 if read. **It becomes a new document** (it is
-// not merged into the current one).
-// Caution: **Make the style table anew too** — a new document lives in a new arena, and names
-// pointing into the old table dangle once it is freed. Only the inheritance root is kept.
-#export
-fn kspage_web_load_markdown(len: Sz): I32
-    if in_ptr == null || len <= 0
-        return 0
-    // The arena is global (as `kspage_web_load`).
-    load_arena = Arena.new(64 * 1024)
-    // Caution: **Pass a table that carries the look** — with an empty one the reader decides the
-    // roles alone, and headings and body come out the same size, with no rules or background color.
-    made: = markdown_look.sheet_for(sheet.root, load_arena)
-    got: = markdown_read.read(U8[]::{ .ptr = in_ptr, .len = len }, made, load_arena)
-    // Put this through the gate too — the text comes from outside, and a few bytes can make many
-    // blocks (a run of `- ` makes a block per line).
     if !state.room_for(got, made, doc_arena)
         state.drop_load()
         return too_big

@@ -13,7 +13,7 @@ This document says why kspage has the shape it has: each decision, its reasons, 
 * [What it does not hold](#what-it-does-not-hold)
 * [The body is not available to a screen reader](#the-body-is-not-available-to-a-screen-reader)
 * [How the built-in manual is written](#how-the-built-in-manual-is-written)
-* [Why the styles are not made HTML/CSS themselves](#why-the-styles-are-not-made-htmlcss-themselves)
+* [Why the styles are kspage's own, not CSS](#why-the-styles-are-kspages-own-not-css)
 * [The core and the port](#the-core-and-the-port)
 * [The boundary between the core and the browser](#the-boundary-between-the-core-and-the-browser)
 * [The document model](#the-document-model)
@@ -30,7 +30,7 @@ This document says why kspage has the shape it has: each decision, its reasons, 
 * [Pages and printing](#pages-and-printing)
 * [Saving and loading the document](#saving-and-loading-the-document)
 * [A document's past lives in its files](#a-documents-past-lives-in-its-files)
-* [The mapping into HTML](#the-mapping-into-html)
+* [A style name holds no whitespace](#a-style-name-holds-no-whitespace)
 * [The wording on the screen](#the-wording-on-the-screen)
 * [The tools, the menus and the panels](#the-tools-the-menus-and-the-panels)
 * [What a document received is trusted with](#what-a-document-received-is-trusted-with)
@@ -76,18 +76,18 @@ kspage's own types (`Doc`, `Block`, `Inline`, `Style`, `Page`, `Box`, `Caret`, `
 
 ## What it is aimed at
 
-**kspage aims to replace Word, Excel and PowerPoint.** It serves all three uses in one document, with nothing to set up first. It is not meant to sit beside them or to cover only part of their work.
+**kspage is one editing system for documents, spreadsheets and presentations.** It serves all three uses in one document, with nothing to set up first.
 
-**The aim decides what counts as a fault.** Suppose the aim were only "a place to write a design document beside the code". A `.docx` file it cannot open would then be out of scope. Under the real aim, that file is the first wall a person meets, since they have only the document they were sent.
+**Word, Excel and PowerPoint are where a feature starts, not a list to match.** A feature begins from how those three do it, since that is what people already know (the screen's words follow them too: "The wording on the screen" below). Whether kspage has the feature at all is decided one feature at a time, on review: it is added where the three uses need it and dropped where its cost outweighs what it gives, so that the whole stays simple. Being a complete replacement for the three is not the aim.
 
-**The aim is not a claim that it is reached.** Two lists keep the gaps in view:
+**So a feature the three have and kspage lacks is not by that alone a fault.** It is either a gap still to fill or a feature left out on purpose, and the two are kept apart. Two lists keep them in view:
 
 | The list | Where it is |
 | :-- | :-- |
 | What kspage cannot do | the manual's last chapter ([`content/manual.kspage`](../content/manual.kspage)) |
 | What is decided never to change | ["Accepted limits"](#accepted-limits-what-is-decided-not-to-change) below |
 
-Neither list shrinks because the aim grew. An aim written without its gaps makes a reader trust what is not there.
+A feature dropped on review moves to the second list with its reason. An aim written without its gaps makes a reader trust what is not there.
 
 ## Why the three can be made one
 
@@ -114,7 +114,7 @@ A compiler can be cut by the order of processing: read, check, then generate. **
 | 1 | `model` | the document and the styles |
 | 2 | `expr` | a cell's formula and its value |
 | 3 | `lay` | layout |
-| 4 | `share` | the external formats (Markdown, HTML, CSV) |
+| 4 | `share` | the external formats (the saved text, plain text, Markdown) |
 | 5 | `write` | editing |
 | 6 | `port/` | the screen |
 
@@ -145,7 +145,7 @@ How kspage feels to use is based on the existing office suites, but they are not
 | **It does not compete on the number of functions** | only what cannot be written with what exists is added | A function for a formula that can already be written makes two ways of saying one thing |
 | **There is no time axis** | no slide transitions, no moving elements | Below |
 
-**Why there is no time axis.** A slide is a block that holds a place, not a separate type (["How a grid and absolute coordinates are laid out"](#how-a-grid-and-absolute-coordinates-are-laid-out)). A time axis would put into the document what cannot be carried into the printed page, the exported HTML or a diff: paper cannot say "this paragraph appears 0.4 seconds later". Nor can an effect live on the screen alone. An effect that cannot be written into the document is lost on saving, so what was written would silently disappear. kspage's worth is being writable as one document, not winning as a presentation program.
+**Why there is no time axis.** A slide is a block that holds a place, not a separate type (["How a grid and absolute coordinates are laid out"](#how-a-grid-and-absolute-coordinates-are-laid-out)). A time axis would put into the document what cannot be carried into the printed page, the exported Markdown or a diff: paper cannot say "this paragraph appears 0.4 seconds later". Nor can an effect live on the screen alone. An effect that cannot be written into the document is lost on saving, so what was written would silently disappear. kspage's worth is being writable as one document, not winning as a presentation program.
 
 Note: **An order can be held**, since on the page it flattens to everything shown (["Showing frames in turn is an order, not a timeline"](#showing-frames-in-turn-is-an-order-not-a-timeline) below).
 
@@ -188,13 +188,11 @@ To edit it, run `make kspage-serve KSPAGE_DOC=kspage/content/manual.kspage`, cha
 | **Say where each action is**, down to "under `Paragraph style` in the `Style` menu", in the label's own words | Otherwise the feature is explained and still cannot be reached |
 | **Quote a label in the manual's text with “ ”, not with "** | The text is prose a reader sees, so typographic quotes are right for it |
 
-## Why the styles are not made HTML/CSS themselves
+## Why the styles are kspage's own, not CSS
 
-kspage's styles are its own, not CSS. Only the shape of the document is kept close to HTML's, so that exporting to HTML is a simple mapping.
+kspage's styles are its own, not CSS. **With a layout of its own, kspage would have to implement CSS again** to give borrowed styles their meaning.
 
-A document written once must also work on the web as it stands. That is no reason to make the styles HTML and CSS: **with a layout of its own, kspage would have to implement CSS again** to give the borrowed styles their meaning.
-
-Instead, **only the structure is kept close to HTML's**: a tree of blocks, a row of runs inside each, and styles referenced by name. So HTML export is a mechanical mapping: a block becomes an element, and a style name becomes a class. This is what referencing styles by name is for. With sizes and weights held on a block, the HTML writer would have to work the name back out of the values.
+**A block and a run name their style; neither holds a size or a weight.** A document is a tree of blocks, a row of runs inside each, and styles referenced by name. So changing a style changes every block that names it, and what reads the document (the saved text, the Markdown writer) reads one name, not a pile of values to work a name back out of.
 
 ## The core and the port
 
@@ -295,11 +293,11 @@ kspage refuses to open a document that would not fit in its memory, and it refus
 | Tier | Where | What it does |
 | :--: | :-- | :-- |
 | 1. **The byte sieve** | `kspage_web_load_buffer` | It guarantees nothing. It only turns away a size that plainly cannot fit, before the arena for the text is prepared |
-| 2. **The gate on the count of blocks** | `kspage_web_load` / `kspage_web_load_markdown` | After reading and before the swap, it counts the blocks and refuses when layout and writing back will not fit |
+| 2. **The gate on the count of blocks** | `kspage_web_load` / `kspage_web_load_plain_text` | After reading and before the swap, it counts the blocks and refuses when layout and writing back will not fit |
 | 3. **The last net** | `panic_hook` -> the JS throws | It catches what passes the gate: reading itself comes before the count of blocks is known |
 
 * **The gate means something only before the swap**: afterwards, the open document is already gone.
-* **Send Markdown through the same gate.** If only one route is guarded, the page dies the same way through the other.
+* **Send plain text through the same gate.** If only one route is guarded, the page dies the same way through the other.
 * **Why the last net is needed**: a packed text (a row of `{}`, three bytes per block) can use up the arena within the cap while it is being read. A cap fitted to reading's worst case would stop that too, but **cutting every ordinary document to a quarter, to stop a shape the net already handles, is not a fair exchange.**
 
 **The net calls a JS entry point that throws.** The wasm holds no code that raises an exception, so only the JS side can throw. A freestanding panic (the error stop of a build with no standard library) records the reason and stops at `for {}` (`../../std/lang.kspls`), so an unhandled panic freezes the screen. The exception passes through the wasm frames to the catch at the caller (`port/web/api.js`'s `cramps`).
@@ -404,7 +402,7 @@ Note: `make test-kspage-browser` checks these three in a real browser, but **not
 
 The page's side paints the boxes and bands layout produced, in a fixed order, and adds only what belongs to the editing screen. Each rule below keeps what is painted the same on screen, on paper and in export.
 
-**Only the editing screen draws a region's frame** (the dotted outline of a prose, table or slide region). Printing, presenting and the HTML written out all go through what draws boxes, so a frame drawn there would appear on the page too.
+**Only the editing screen draws a region's frame** (the dotted outline of a prose, table or slide region). Printing and presenting go through what draws boxes too, so a frame drawn there would appear on the page.
 
 **When printing, paint the background white and set the text colour to black** (a colour a style sets is kept). The screen's colours follow light and dark mode, so a dark screen's white text would not show on paper.
 
@@ -653,7 +651,7 @@ Layout remembers the last style it found, so the ten or so lookups one block mak
 
 **Do not remember "there was none"**: a style of that name added later could then never be found (adding does not clear the memory). The lookup checks the name before returning, so a stale memory is merely a miss.
 
-**No index of names is added.** One memory is enough where it hits, and an index would shorten only the miss: a document pointing at a name not in its table, fixed by changing the faulty document. If documents full of misses appear, the answer is bisecting an array of indices sorted by name. (The order of `styles` itself must not move: saving, the HTML and matching read that order.)
+**No index of names is added.** One memory is enough where it hits, and an index would shorten only the miss: a document pointing at a name not in its table, fixed by changing the faulty document. If documents full of misses appear, the answer is bisecting an array of indices sorted by name. (The order of `styles` itself must not move: saving and matching read that order.)
 
 **`Map` is not used.** The key names come from a document, so colliding keys can be crafted (the decision in `../../std/docs/DESIGN.md`; the check is `make test-conventions`).
 
@@ -763,7 +761,7 @@ The line comes from bands layout leaves behind (`Page.regions`). The outermost b
 | **Merge consecutive flow into one region** | Split per paragraph, one continuous piece of prose would look like as many regions as it has paragraphs |
 | **Shrink a table's or a slide's region to its laid-out content's width**; down the page it stays a band (the space before and after a paragraph belongs to its region too) | Otherwise a page-wide frame would surround a narrow table |
 | **Regions are recorded only when the whole document is laid out** (`flow.layout`) | What lays out a region's inside again (`place_blocks`) also lays out nested content, so recording there would add a region per table cell |
-| **The frame is drawn only on the editing screen**; printing, the one-slide-at-a-time view and the exported HTML carry none | It is not content but a guide to which kind of tool is in use where the cursor is |
+| **The frame is drawn only on the editing screen**; printing and the one-slide-at-a-time view carry none | It is not content but a guide to which kind of tool is in use where the cursor is |
 
 ### Flow and the grid call each other
 
@@ -1031,7 +1029,7 @@ A style holds the look and the arrangement, and blocks and runs share it by name
 
 Making part of a run bold splits the run at the selection's two ends and gives the middle part another style name. A run never holds a weight or a size of its own.
 
-From the screen, only **the style name** of text can be changed (`Editor.set_style`). Weight and size held on a run directly would break the HTML mapping ("Why the styles are not made HTML/CSS themselves").
+From the screen, only **the style name** of text can be changed (`Editor.set_style`). Weight and size held on a run directly would step around the styles ("Why the styles are kspage's own, not CSS").
 
 A run has one style, so styling part of a run splits it at the selection's two ends and writes the name on the runs between. **With nothing selected, it applies to the cursor's whole run** (there is nowhere to split). For example, making "world" bold:
 
@@ -1112,7 +1110,7 @@ The text and background colours belong to the style (`Style.ink`) and are inheri
 
 **The background is inherited like the text colour.** Otherwise a background set on a paragraph's style would appear nowhere, since boxes exist only where there is text and a paragraph has no box of its own. Only the boxes are painted, like a highlighter (the fill band, below, paints a whole paragraph or cell).
 
-**The highlight goes over the band's fill**: the narrower one on top. Where one style sets both, the same one wins on screen and in the exported HTML.
+**The highlight goes over the band's fill**: the narrower one on top.
 
 **It can be unset**: unset text is drawn in the screen's default colour, where black would be unreadable on a dark screen. Do not use 0 to mean unset. Black (`#000000`) is a real value, so it is held in `Option`, as italic's `false` is.
 
@@ -1127,8 +1125,6 @@ Note: The rule colour has the same problem, and its default black is a dark scre
 Underline and strikethrough belong to the style (`Ink.underline` / `Ink.strike`) and are inherited with the font. **Do not put them in `Font`**: like a colour, a line changes neither the width nor the height, so it is not part of the measuring key.
 
 **`false` means "draw none"**; if it meant unset, one run inside an underlined paragraph could not have its line removed (as with italic's `false`).
-
-**In the exported HTML, "draw none" has no effect**: CSS's `text-decoration` propagates to children and cannot be cancelled by one, so the parent's line is drawn through it. The screen can remove it, so here alone the two look different.
 
 **Write both as one declaration** (`text-decoration-line: underline line-through`); written separately, the later overrides the earlier and only one line appears.
 
@@ -1160,8 +1156,6 @@ A shape is **the same band with an outline other than a rectangle** (`Style.shap
 
 **A band on a frame closes at the frame's height, not the content's**: at absolute coordinates the frame's size is fixed first. Closed at the content's height, a frame with no text (a shape) would be 0 high and vanish.
 
-Lines and arrows do not appear in the exported HTML (their position is not written, so their ends are unknown); an ellipse does, since rounded corners give the same shape.
-
 ### Alignment and leading are per paragraph, and take effect when the line is closed
 
 Alignment (left, centre, right, justified) and leading (the line spacing) belong to the paragraph's style, and are not inherited. Alignment is applied once a line is full, by shifting or spreading its boxes.
@@ -1181,8 +1175,6 @@ Neither alignment nor leading is inherited (like the space before and after a pa
 Caution: **Do not include the last letter space in a box's width.** A box ends where its last character does, and the next box starts one letter space further on. Then, however many boxes a line is split into, its right edge meets the column's, by one rule for every box (width = measured width + (characters − 1) × spacing).
 
 **Hit-testing must add the same spacing** (`caret.width_to`), or the visible character and the click position drift apart along the line. Drawing uses the spacing it is given as is; spread again, it would drift from what layout computed.
-
-**Do not write the letter spacing into the exported HTML**: the browser decides its own line breaks, so copied spacing would slip line by line. `text-align: justify` is written instead, leaving the spreading to the browser.
 
 The leading is a multiple of the line height (`Style.line_spacing`); 0 means unset and keeps the font's height (like a slide's width). **Apply it to the line height only**; applied to the font size, it would grow the characters when the aim was to space the lines.
 
@@ -1205,8 +1197,6 @@ Whether a paragraph wraps belongs to its style too (`Style.wrap`). **Where it is
 **Wrapping changes the text**: the whitespace after a break is dropped rather than carried to the next line (`lay/line.kspls`'s `skip_spaces`), so code aligned in columns with spaces comes apart where it wraps. Overflowing is better than changing the text: the reader can scroll across, but dropped whitespace cannot be put back.
 
 **This is not inherited either** (like alignment and leading), and it is set on the pen again at the start of every paragraph, or the paragraph after a non-wrapping one would stop wrapping too.
-
-**In the exported HTML, use `white-space: pre`**; stopping only the wrapping would let the browser collapse runs of whitespace, changing the indentation on export.
 
 **The monospace comes from the style's font** (`Font_spec.family`). The core has no notion of "code": as `Arrange` sets the arrangement, the style says the look.
 
@@ -1304,7 +1294,7 @@ A list's bullet or number belongs to the style (`Style.marker`), and layout draw
 
 **A number counts consecutive numbered siblings.** A paragraph without a marker in between restarts it at 1; otherwise two separate lists would number on from each other. A nested level is a separate sequence, so a child's number starts from 1.
 
-**The counting is `style.next_ord`**, which layout (`flow`) and the HTML writer (`html`) both call.
+**The counting is `style.next_ord`**, which layout (`flow`) and the Markdown writer both call.
 
 **The marker's box points at nothing in the document** (`Box.inline` is null). Hit-testing must skip it, or a click inside the marker would land as a position in the body (in Japanese prose, the middle of a character). Being a box, it is drawn, printed and shown in the one-slide view with nothing extra.
 
@@ -1312,7 +1302,7 @@ A list's bullet or number belongs to the style (`Style.marker`), and layout draw
 
 **Where the indent is narrower than the marker, move the paragraph's left edge right until the marker fits.** Otherwise the marker overlaps the first character, and the number seems to vanish in a heading or a figure title with no indent set. It moves once per paragraph, so wrapped lines share the left edge. A set indent wider than the marker is kept (the left edge does not shift with the number of digits).
 
-**Write it into the exported HTML as text**: `::before` or CSS counters cannot restart the count where an unnumbered paragraph comes between. The text from the same counting is written as is (HTML is not read back, so it never mixes into the document).
+**Write it into the exported Markdown as text** where Markdown has no form for it (a figure's number). The text from the same counting is written as is (Markdown is not read back, so it never mixes into the document).
 
 ### A graph is built from its range at every layout
 
@@ -1322,7 +1312,7 @@ A list's bullet or number belongs to the style (`Style.marker`), and layout draw
 
 **What is read is the computed number** (`Inline.figure`), since the number cannot be recovered from the visible text with its grouping and units. So the document is recalculated before layout (`calc.recalc`).
 
-Caution: **Do not add a drawing primitive.** A bar is a painted band (`Panel`), a line is a band's diagonal, and a value's text is a box (`Box`): all shapes layout already produces. A new primitive would be needed at once by the canvas, the HTML and page export.
+Caution: **Do not add a drawing primitive.** A bar is a painted band (`Panel`), a line is a band's diagonal, and a value's text is a box (`Box`): all shapes layout already produces. A new primitive would be needed at once by the canvas and page export.
 
 **Values are collected before layout starts** (`chart.collect_figures`), since the range finds its table by name anywhere in the document.
 
@@ -1338,7 +1328,7 @@ A bar starts from 0, and the axis is drawn at 0; showing only the differences wo
 
 A table is a block laid out as a grid. These sections say how its sizes, merges and rows are held, and how a person moves through it and narrows it.
 
-**A table's first row is its heading by position**, with no setting and nothing to switch on: the saved Markdown (GFM, GitHub's flavour of Markdown) reads it so, and the sort, the heading kept in view and the column filter take it the same way.
+**A table's first row is its heading by position**, with no setting and nothing to switch on: the exported Markdown (GFM, GitHub's flavour of Markdown) writes it so, and the sort, the heading kept in view and the column filter take it the same way.
 
 ### The table holds its cells' sizes, and a set size does not move
 
@@ -1426,7 +1416,7 @@ The merged cell holds its span (`Block.span_rows` / `span_cols`), not its style 
 
 **Do not leave a covered cell in the row**: merging removes it, since, left standing, its text would be in the document yet nowhere on screen. Unmerging puts an empty cell back; restoring its text is the undo's job.
 
-**Where each cell stands is counted in one place only** (`Block.tiles_of`): layout, formula addresses and HTML export all need it, and with copies one table could take three shapes. A covered position has no cell, so the next cell moves right.
+**Where each cell stands is counted in one place only** (`Block.tiles_of`): layout, formula addresses and Markdown export all need it, and with copies one table could take three shapes. A covered position has no cell, so the next cell moves right.
 
 **A merged cell sets neither a column's width nor a row's height**, which would need a rule for which column its content's width counts toward. Content that does not fit overflows (as with a set width). A vertical merge's height is filled in after the rows it covers are laid out (their cells decide their heights).
 
@@ -1466,9 +1456,9 @@ A table or a slide goes **after** the cursor's paragraph (`Editor.insert_table` 
 
 The Insert menu picks a new table's size on a grid of up to 10 × 8; the ribbon's button inserts at the size last picked. The new cells take the document's cell style, which is made if it is missing.
 
-**The Insert menu chooses the size on a 10 × 8 grid, and the button inserts at the size last chosen (2 × 2 at first).** This is Word's cap, and a larger table grows with "Insert a row", as there. Every other office suite uses this form. The ribbon's Table button inserts at that size rather than opening the grid: the ribbon is a row of shortcuts that act, and a menu opened there would not stay open. Columns come first ("4 × 3" is four across), as in all three products. The cap is the menu's: the core refuses only a size with no cell (a table read from text can be any size).
+**The Insert menu chooses the size on a 10 × 8 grid, and the button inserts at the size last chosen (2 × 2 at first).** This is Word's cap, and a larger table grows with "Insert a row", as there. Every other office suite uses this form. The ribbon's Table button inserts at that size rather than opening the grid: the ribbon is a row of shortcuts that act, and a menu opened there would not stay open. Columns come first ("4 × 3" is four across), as in all three products. The cap is the menu's: the core refuses only a size with no cell (a table in a saved document can be any size).
 
-**The cells take the cell style, found by its role, and created through the record where the document has none.** One predicate identifies a cell style: `cell_like` in [`model/style.kspls`](../model/style.kspls), a flow paragraph with inner space and no marker. The Markdown reader asks the same one, so tables typed in and read from text share one style. A missing one is made inside the insertion's step (`Editor.styled`), its look taken from the one place that look is written (`dress_cell` in [`share/markdown_look.kspls`](../share/markdown_look.kspls)). Each cell gets an empty run, without which it could not be clicked into.
+**The cells take the cell style, found by its role, and created through the record where the document has none.** One predicate identifies a cell style: `cell_like` in [`model/style.kspls`](../model/style.kspls), a flow paragraph with inner space and no marker, so every table inserted into one document shares one style. A missing one is made inside the insertion's step (`Editor.styled`), its look written in one place (`dress_cell` in [`write/insert.kspls`](../write/insert.kspls)). Each cell gets an empty run, without which it could not be clicked into.
 
 | The rule | Why |
 | :-- | :-- |
@@ -1476,7 +1466,7 @@ The Insert menu picks a new table's size on a grid of up to 10 × 8; the ribbon'
 | **An existing style with the cell style's name is used as it is**, whatever its look | Restyling it would change every cell using it, and a document that made its cells bare on purpose keeps them bare |
 | **No heading row is made** | Word, Excel and Google Docs insert a plain grid; only Writer styles the first row as a heading. The exported GFM takes the first row as the heading by position anyway, so leaving the look to the person loses nothing |
 
-**A new table's columns get set widths, equal shares of the width it is laid out at**: the container of the cursor's paragraph, less what the table's own style takes off a block (indent and inner space). The one function flow uses computes it (`contents_width` in `lay/flow.kspls`), so the widths set and the layout cannot disagree. The table spans the text width from the start, and a column keeps its width while typed text wraps inside it. Layout's rule is untouched (an unset column still follows its content, as in a table read from text), and the widths go through the record, so one undo takes them with the table. Where the cursor is in no laid-out container, no width is set.
+**A new table's columns get set widths, equal shares of the width it is laid out at**: the container of the cursor's paragraph, less what the table's own style takes off a block (indent and inner space). The one function flow uses computes it (`contents_width` in `lay/flow.kspls`), so the widths set and the layout cannot disagree. The table spans the text width from the start, and a column keeps its width while typed text wraps inside it. Layout's rule is untouched (an unset column still follows its content, as in a table whose widths were never set), and the widths go through the record, so one undo takes them with the table. Where the cursor is in no laid-out container, no width is set.
 
 ### A move past the table's end adds a row, and Enter moves down a row
 
@@ -1521,7 +1511,7 @@ Rules and fills come with the copy. The web's sticky heading (CSS's `position: s
 
 A filter hides a table's rows in this window only. The document does not change, nothing is saved, and undo does not see it.
 
-**A table's rows are narrowed by a condition held with the window, not the document.** The condition (one per column: is, is not, contains, above, below, empty, not empty) lives in `Over.filters` ([`model/over.kspls`](../model/over.kspls), [`model/filter.kspls`](../model/filter.kspls)), beside the text size and whether marks are revealed. These are the reader's own settings, which never reach the text, the HTML or the record. Nothing is saved, no other window is touched, the undo does not see it, and "Show all rows" is the way back. Other suites use this shape, answering the complaint "my filter hid rows for everyone". Written out as Markdown, a filtered document carries every row.
+**A table's rows are narrowed by a condition held with the window, not the document.** The condition (one per column: is, is not, contains, above, below, empty, not empty) lives in `Over.filters` ([`model/over.kspls`](../model/over.kspls), [`model/filter.kspls`](../model/filter.kspls)), beside the text size and whether marks are revealed. These are the reader's own settings, which never reach the text, an export or the record. Nothing is saved, no other window is touched, the undo does not see it, and "Show all rows" is the way back. Other suites use this shape, answering the complaint "my filter hid rows for everyone". Written out as Markdown, a filtered document carries every row.
 
 **Layout asks one question; the document is left alone.** `grid.place_rows` asks `filter.row_shown` for each row. A row left out takes no height but keeps its number, so formulas still point at it and merged cells are fixed up by number.
 
@@ -1597,7 +1587,7 @@ Caution: **Do not move the origin**: every day in every saved document would shi
 
 ### A table is pointed at by name
 
-A formula points at another table's cell as `the table's name!the place`, such as `detail!C4`. **The name belongs to the block, not to the style** (`Block.name`; "Only the block holds its position" above): in HTML terms `style` is a class and `name` an id.
+A formula points at another table's cell as `the table's name!the place`, such as `detail!C4`. **The name belongs to the block, not to the style** (`Block.name`; "Only the block holds its position" above): many blocks share a style, and a name picks out one.
 
 **An unknown name gives `#NAME!`**; falling back to the formula's own table would silently give another cell's value. A table with no name cannot be pointed at.
 
@@ -1687,11 +1677,11 @@ Caution: **Do not merge the two.** If the number format changed the value, merel
 
 **A conditional style is a rule the style holds** (`Style.when`): "where the value is greater than this number, lay the style of this name over it". Layout applies it, and nothing is written into the document.
 
-What is laid over is a name; a colour or a weight held directly would also break the mapping into HTML, where a name becomes a class as it is.
+What is laid over is a name; a colour or a weight held directly would step around the styles ("Why the styles are kspage's own, not CSS").
 
 **Only the look is laid over** (font, colour, fill, border). Spacing, indent and alignment stay as the plain style has them, since a row whose height moved with the value would lose the reader's place. The fill and the border are laid over field by field (`panel_paint.paint_of`); laid over whole, the condition's style would drop the plain fill or border on exactly the cells that met it.
 
-**Nothing is written into the document** ("What layout recomputes every time" above), and nothing reaches exported HTML, where a class is fixed by name and cannot follow the value.
+**Nothing is written into the document** ("What layout recomputes every time" above), and nothing reaches the exported Markdown, which carries no look.
 
 ### Changing a formula replaces its source text whole
 
@@ -1775,7 +1765,7 @@ Each frame on a slide can carry a step number. During a slideshow the frames app
 | 0 | always |
 | 1 or more | once the show has reached that step |
 
-There is no time axis ("What it does not hold" above), only an order. An order flattens by itself: with no narrowing, every frame shows. So printing and the HTML need nothing special.
+There is no time axis ("What it does not hold" above), only an order. An order flattens by itself: with no narrowing, every frame shows. So printing and the export need nothing special.
 
 **The block holds the step, not the style** ("Only the block holds its position" above).
 
@@ -1977,7 +1967,7 @@ The header and footer are whole-document settings (`Doc.header` / `Doc.footer`),
 
 The page number is counted at layout ("What layout recomputes every time" above): `{page}` is the current page and `{pages}` the total. **The document's text keeps the placeholder.** With the number written in, merely changing the paper size would change the document's text.
 
-**A band cannot be reached by a path** (the address of a place in the document). Paths count positions by index in `blocks`, so none points at a band, and search does not go through it. A band's edit can still be undone, since its text changes through the same `Editor` as typing.
+**A band is not in `blocks`**, so search does not go through it. A band's edit can still be undone, since its text changes through the same `Editor` as typing.
 
 ### The printing fits the page into the printable region
 
@@ -2006,7 +1996,7 @@ What is borrowed is the default paper of the bundled documents (`a4_portrait` in
 
 ## Saving and loading the document
 
-A document is saved as one JSON text that holds both the content and the styles ([`share/store.kspls`](../share/store.kspls)). Only this text reads back into kspage; HTML and Markdown are one-way exports.
+A document is saved as one JSON text that holds both the content and the styles ([`share/store.kspls`](../share/store.kspls)). Only this text reads back into kspage; Markdown and CSV are one-way exports.
 
 **The document and its styles are saved together.** Saved apart, one could travel without the other, and the look would drift.
 
@@ -2044,12 +2034,11 @@ Opening a saved text replaces the whole document, and everything that pointed in
 
 ### Saving and loading are separate from exporting
 
-**Export to HTML and Markdown cannot be read back.** In HTML a style shrinks to its name, and in Markdown even the name is lost. Both are for showing the document and for keeping it beside the code. Only the JSON reads back, and neither is used in place of the other.
+**Export to Markdown cannot be read back.** Even a style's name is lost. It is for keeping the document beside the code. Only the JSON reads back, and neither is used in place of the other.
 
 | Format | Written by | Reads back into the same document? | What it is for |
 | :-- | :-- | :-- | :-- |
 | JSON (`.kspage`) | [`share/store.kspls`](../share/store.kspls) | yes | keeping the document |
-| HTML | [`share/html.kspls`](../share/html.kspls) | no: a style shrinks to its name | showing it on the web |
 | Markdown | [`share/markdown.kspls`](../share/markdown.kspls) | no: even the style's name is lost | keeping it beside the code |
 | CSV | [`write/csv.kspls`](../write/csv.kspls) | only one table's shown text | handing a table's values to another tool |
 
@@ -2071,49 +2060,15 @@ Kspage keeps no history of changes and no saved versions of its own. To keep an 
 
 An `origin` key, which earlier texts carry to keep one document's versions together, is read past and not written again ([`share/store.kspls`](../share/store.kspls)'s `load`), so those texts open as they were.
 
-## The mapping into HTML
+## A style name holds no whitespace
 
-Exporting to HTML turns each block into an HTML element, each style name into a `class`, and the table of styles into CSS rules. [`share/html.kspls`](../share/html.kspls) writes it, by three rules:
+A name a person types for a new style may not hold whitespace (a space, a tab, a line break). kspage's own names already join words with a hyphen (`column-body`).
 
-* **A block becomes an element**: `div`, or for a style with `Arrange.grid` a `table`, with `tr` for its children and `td` for its grandchildren. A table's own text goes into `caption`. Text cannot stand directly inside a `table`, and a `caption` comes before the rows, where the core also flows that text.
-* **A style's name becomes the `class`.** This is why styles are referred to by name ("Why the styles are not made HTML/CSS themselves" above).
-* **The style table becomes CSS rules.** There is no rule for the table element: CSS's default table fits columns to their contents, capped at the container's width. There is none for an unset field either: CSS font properties inherit from the parent too, so leaving one out already means "as the parent has it". Spacing before and after a paragraph and the indent (`margin`) inherit in neither.
+**A code style's name is the language its Markdown fence declares**, and a fence's declaration ends at whitespace ("Rules the Markdown writer keeps" below). A style named `my code` would be written out as a fence of language `my`.
 
-Caution: **Escape the name as a CSS identifier.** Unescaped, a `.` inside it reads as the start of another selector. A leading digit is escaped too, since an identifier cannot begin with one.
+**The entry point where a person names a style refuses such a name** ([`write/shape.kspls`](../write/shape.kspls)'s `add_style`; the reason reaches the screen as its own code in [`port/web/face_edit.kspls`](../port/web/face_edit.kspls)). `make test-conventions` checks the names the product writes.
 
-**Whitespace inside a name is folded to a hyphen, the same way in the rule and in the tag.** Escaping cannot handle whitespace, because `class` splits on it. For a style named `page break`:
-
-| | The CSS rule | The tag | What the browser does |
-| :-- | :-- | :-- | :-- |
-| Escaped in the rule only | `.page\ break` | `class="page break"` | The tag has two classes, `page` and `break`; the rule expects one class of that whole text, so the paragraph silently loses its look, and only in exported HTML |
-| Folded in both | `.page-break` | `class="page-break"` | One class, and the rule matches |
-
-The fold is [`model/style.kspls`](../model/style.kspls)'s `class_byte`, used by both [`share/html.kspls`](../share/html.kspls)'s `css_ident` and its `class_attr`. It covers HTML's five whitespace bytes (space, tab, line feed, form feed, carriage return); folding only the space would still split a name holding a tab.
-
-Folding instead of escaping would make two names that differ only in whitespace one class. So **the entry point where a person names a style refuses such a name** ([`write/shape.kspls`](../write/shape.kspls)'s `add_style`; the reason reaches the screen as its own code in [`port/web/face_edit.kspls`](../port/web/face_edit.kspls)). Names and classes stay one to one, and exported HTML carries the person's own names.
-
-Note: Every name kspage writes itself already has that shape, so only names nothing in the product needs are refused. `make test-conventions` checks the names the product writes.
-
-**Do not push the refusal down into the model or the reader.** [`model/style.kspls`](../model/style.kspls)'s `Sheet.add` takes whatever name a text holds; the reader refuses nothing and changes no text ("The Markdown reader accepts any text" below). Inserting a table, a chart or a code block derives its style name from one already in the table of styles. So a refusal down there would make a document that was read in silently refuse every insertion. A name from a text goes in as it is and comes out folded.
-
-**The other products' two approaches cannot be borrowed, because they store a reference where kspage stores a name.**
-
-* No machine name stands beside the one a person sees (as Word's `MsoNormal` does). Here the name is the style's identity ("A style is looked up by name once" above) and the saved file points at it, so a second name would be a second identity (Principle 6: one means to one purpose).
-* No slug (a cleaned-up copy of the name) is made on export; it reaches the same collision another way.
-
-What remains, at the cost of one hyphen, is refusing the name where it is typed, which a product storing a reference cannot do.
-
-**The line-spacing multiple cannot be written as it is.** kspage applies it to one line's height, not to the font size ("Alignment and leading are per paragraph, and take effect when the line is closed" above), so the exported HTML alone would pack its lines tight. A line's height divided by the font size is constant per typeface, since both scale with the em. So multiplying the number by that ratio gives the screen's height, and the exporter needs an entry point for measuring the typeface (`html.write` takes a `Font_source`).
-
-**The layout may still differ.** Line breaking and whitespace collapsing follow the browser's rules, not the core's; the canvas is where the same layout is seen.
-
-**A frame's position (`frame`) is not written.** Rebuilt in CSS, a slide would leave it unknowable whether the core's layout or the browser's is the source, so a frame's block exports only its flowing contents.
-
-**One `<a>` wraps each stretch of consecutive runs with the same destination, not each run.** A run (a stretch of text with one style) splits wherever the formatting changes, so a link with a bold word in the middle would become three `<a>`s.
-
-Caution: **The screen cannot show this, since all three lead to the same place.** Yet a screen reader announces "three links", and selecting and copying break part way.
-
-The Markdown export follows the same rule ("The parting is in two stages" in "What a Markdown round trip drops" below). **Only runs inside a link are grouped**: grouping runs with no link too would detach a note's mark from its run.
+**Do not push the refusal down into the model or the loader.** [`model/style.kspls`](../model/style.kspls)'s `Sheet.add` takes whatever name a saved text holds, and loading changes no name. Inserting a table, a chart or a code block derives its style name from one already in the table of styles, so a refusal down there would make a document that was read in silently refuse every insertion.
 
 ## The wording on the screen
 
@@ -2195,7 +2150,7 @@ The fixed words, each in place of a plain word of our own:
 | **entry point** | a place in the code that callers reach | `door` / `mouth`: no other editor, nor Rust, Swift or Java, replaces `entry point`. **Something pressed on the screen** takes the screen's own words — a menu item, the ribbon's tools |
 | **character** / **text** / **font** | one unit of text / the text itself / the set that fixes its look | `letter`, for all three: every product says **Font colour** (the ribbon has it and **Highlight colour**), not "The letter's colour". `letter` is not turned away everywhere: a word with several senses needs a replacement per sense, and four ordinary uses stay — CSS's `letter spacing`, Excel's **column letter**, the **Letter** paper size, and a letter one writes |
 | **change** / **fix** / **edit** | altering a document, a style or a field / repairing a defect / altering a generated file by hand | `mend`, for all three, which puts a "Mend" button beside a report reading "Changed the style". Word's ribbon says "Modify", which Microsoft's own writing guide says not to use |
-| **path** / **way** / **operation** | a place in a document, or a file's place / a means of doing something / a countable act | `road`, for all three, though the type is `Path` ([`model/locate.kspls`](../model/locate.kspls)). Where "the road that X" would stand for an operation, the noun goes ("what X", or a gerund in a heading). `route` is no answer — a synonym is the same calque spelled differently |
+| **path** / **way** / **operation** | a place in a document, or a file's place / a means of doing something / a countable act | `road`, for all three. Where "the road that X" would stand for an operation, the noun goes ("what X", or a gerund in a heading). `route` is no answer — a synonym is the same calque spelled differently |
 | **theme** | the document's set of colours and typefaces, and the page's own look | `skin`. The word is the document's (the office suites kspage is compared with mostly give Theme to the document; [`write/theme.kspls`](../write/theme.kspls) holds it). The page has no theme of its own: its look follows the screen's light or dark ("The page's look is a few roles, following the screen" below). The fill and the border solved for one block are `Panel_paint` ([`model/panel_paint.kspls`](../model/panel_paint.kspls)), named with the drawing layer's word |
 | **delete** | removing a row, a column or an object | `erase`: beside the menu's "Delete the row" it gives one operation two words on one screen; Microsoft, Google, LibreOffice and VS Code all say delete |
 
@@ -2415,7 +2370,7 @@ Note: The page holds the labels and texts in one place (`port/web/command.js`), 
 
 **The log downloads as a text file.** The document's text does not go in, or reporting a fault would mean handing over what was written; a gate checks this. In go the styles' list and the names listed in the fields, the styles applied now, the numbering and page settings, the messages and refusals shown, and the keys that carried a command (not the characters typed). A mismatch shows here: the faults reported from use are slips between "the document's styles" and "the styles listed in the field".
 
-**It is called "Download the debug log".** Do not say "write out", which copies the document into another format (HTML, Markdown, CSV), and this is not the document. What a browser passes to the user is a download (the same distinction Word and Excel make between "export" and "download").
+**It is called "Download the debug log".** Do not say "write out", which copies the document into another format (Markdown, CSV), and this is not the document. What a browser passes to the user is a download (the same distinction Word and Excel make between "export" and "download").
 
 ### The '?' menu does not copy the manual
 
@@ -2550,7 +2505,7 @@ A viewer can change how a document looks on their own screen (for example, the c
 
 * **A per-viewer override that no document holds brings two complaints**: a "change how it looks" that changes the contents too (darkened pictures, dropped tables), and a choice made again every time.
 
-**The overrides are a layer** (`Sheet.over` in [`model/style.kspls`](../model/style.kspls)). The document does not change: they reach neither the saved text nor the HTML. They do not act when printing, since a page per viewer would make printouts disagree. The list's thumbnails are pages too, so they show the document's colours.
+**The overrides are a layer** (`Sheet.over` in [`model/style.kspls`](../model/style.kspls)). The document does not change: they reach neither the saved text nor an export. They do not act when printing, since a page per viewer would make printouts disagree. The list's thumbnails are pages too, so they show the document's colours.
 
 **They survive reading the document again and go with the viewer** (`carried` in [`model/over.kspls`](../model/over.kspls)). The exception is the filters, which point at the old document's tables. Kept per document, the overrides would be chosen again every time.
 
@@ -2560,7 +2515,7 @@ A viewer can change how a document looks on their own screen (for example, the c
 
 **This screen alone remembers them.**
 
-**There is no width or text size of the viewer's own.** The browser's zoom enlarges what is read and narrows the line ("Whether the browser or the page holds the zoom" above); a second means beside it would be two for one purpose (Principle 6). A size of the viewer's own would also have to be kept off the page's header and footer, the HTML written out and the printed page, one caller at a time, and one forgotten would make a printout differ per reader.
+**There is no width or text size of the viewer's own.** The browser's zoom enlarges what is read and narrows the line ("Whether the browser or the page holds the zoom" above); a second means beside it would be two for one purpose (Principle 6). A size of the viewer's own would also have to be kept off the page's header and footer and the printed page, one caller at a time, and one forgotten would make a printout differ per reader.
 
 ### What a theme holds
 
@@ -2623,12 +2578,12 @@ Some numbers in a document decide how much work layout does. Each has a fixed ra
 
 | The field | The range | Where it comes from |
 | :-- | :-- | :-- |
-| A merge's rows and columns (`Block.span_rows` / `span_cols`) | 1 to 1000 | the same as HTML's `colspan` |
+| A merge's rows and columns (`Block.span_rows` / `span_cols`) | 1 to 1000 | the same as a browser's cap on a table cell's span |
 | A column set's columns (`Style.columns`) | 0 to 64 | Word allows 45 (paper width ÷ a ½-inch minimum column) |
 | A heading's depth (`Style.outline`) | 0 to 9 | where Word and ODF stop |
 | The decimal places (`Number_spec.places`) | 0 to 9 | 10 to that power still fits an I64 |
 
-Caution: **Do not round into range.** HTML silently rounds a `colspan` down to 1000, so the file says 5000 and the screen shows 1000. That is a field that does not act as written (Principle 5: nothing writable but ineffective).
+Caution: **Do not round into range.** Rounded, the file says 5000 and the screen shows 1000. That is a field that does not act as written (Principle 5: nothing writable but ineffective).
 
 Refusing, as Word's field does, tells the writer what happened.
 
@@ -2650,7 +2605,7 @@ Note: **A gate watches this.** It feeds deliberately broken documents ([`../test
 
 Kspage runs no macros, but text inside a document can still do harm: a link can run code, a picture address can tell another server you opened the file. So every place that uses such text lets through only a short list of known-safe forms.
 
-**Holding no macros closes only that one hole.** Every entry point that uses the document's text as it stands is the same hole. Even with no code to run, what was received decides a link's scheme, a picture's source and the HTML written out.
+**Holding no macros closes only that one hole.** Every entry point that uses the document's text as it stands is the same hole. Even with no code to run, what was received decides a link's scheme, a picture's source and the text written out.
 
 **Each entry point decides whom it trusts and which schemes it lets through, as listed below.** (A *scheme* is the part of an address before the `:`, such as `https` or `javascript`.)
 
@@ -2661,7 +2616,6 @@ Caution: **Do not list the dangerous ones and turn those away.** The next one to
 | Opening and writing out a link ([`model/run.kspls`](../model/run.kspls)'s `safe_href`) | a relative path, `#`, `http`, `https`, `mailto` | a shared document with a `javascript:` link runs that code in the page of whoever presses it |
 | A picture from an outside server ([`port/web/draw.js`](../port/web/draw.js)'s `outside`) | embedded (`data:`), or from where the page came from, judged by the address the browser will fetch (`//host/p.png` is outside) | on opening, the other server learns that the document was opened, and from where (a tracking pixel) |
 | Pointing at a path and opening it ([`port/web/save.js`](../port/web/save.js)'s `isSafePath`) | a path with no scheme and no `..` | opening what lies outside the folder served (`%2e%2e%2f` and `..\` are decoded before the check) |
-| A CSS value written out ([`share/html.kspls`](../share/html.kspls)'s `css_value`) | only characters that cannot break out of the declaration | one font name could slip any rule into the HTML written out |
 
 **A `:` ahead of the first `/`, `?` or `#` makes what stands before it a scheme, whatever characters that holds.** A browser deletes a tab, LF and CR anywhere in an address, so a link written `java`, tab, `script:` opens as `javascript:`. Deleting those three before the check would leave the check resting on a list of what browsers delete. Read this way, the schemes allowed decide alone:
 
@@ -2673,8 +2627,6 @@ Caution: **Do not list the dangerous ones and turn those away.** The next one to
 | `./a:b` | a relative path (a `/` comes before the `:`) | let through |
 
 A relative path loses nothing: one holding a `:` ahead of its first `/` would read as a scheme in a browser anyway, so `./a:b` is the way to write it.
-
-**Do not use `escape_html` for CSS.** HTML escaping does not act inside a `<style>`: `;` and `}` pass straight through, and an entity such as `&lt;` lands in the value. The escaping follows the destination: an attribute, text, a CSS value and a CSS name each need their own.
 
 Caution: **Tell the user what was stopped.** Stopped silently, an empty frame looks like a failed read, and the screen seems not to respond.
 
@@ -2882,7 +2834,7 @@ The other products do the same: Word names its zip `.docx`, not `.zip`.
 
 **This does not make two formats for writing.** One function writes (`port/web/file.js`'s `bodyExt`), and `kindOf` only reads files that already exist. This is the same reason a version is kept ([`share/store.kspls`](../share/store.kspls)'s version).
 
-**Write a document back in the form it was opened in.** Do not move a document opened from `.json` to `.kspage`, or two files would stand side by side with nothing to say which is newer (the same reason as "Markdown is edited as itself"). Whoever wants to move it can use "save as".
+**Write a document back in the form it was opened in.** Do not move a document opened from `.json` to `.kspage`, or two files would stand side by side with nothing to say which is newer (the same reason a Markdown export is a copy, not a second home: "A `.md` opens as plain text"). Whoever wants to move it can use "save as".
 
 ### The saved text is laid out to read well in a diff
 
@@ -2908,7 +2860,7 @@ Caution: **Accept only a relative path on the same origin.** A scheme (`https:` 
 
 ### Read-only belongs to how a document was opened, not to the document
 
-Caution: **Do not write it into the document.** Written in, it becomes a lie: a copy calls itself "read-only" and anyone can edit it anyway (the same reason a theme's name is not written into the document). So it appears in neither the saved text nor the HTML written out.
+Caution: **Do not write it into the document.** Written in, it becomes a lie: a copy calls itself "read-only" and anyone can edit it anyway (the same reason a theme's name is not written into the document). So it appears in neither the saved text nor an export.
 
 It lives with the reader's overrides (`Sheet.over`), and **survives reloading the document** ([`port/web/state.kspls`](../port/web/state.kspls)'s `new_edit`).
 
@@ -2947,7 +2899,7 @@ Do not let whether the local server runs decide it. The same press would put the
 
 **Report the size embedded.** Unreported, a few photographs reach the cap on what can be opened, and nobody can see what is heavy (a `data:` text is 4/3 the original bytes).
 
-**In the HTML written out, a reference stays relative.** Move the page elsewhere and the picture disappears, so a page that must be self-contained uses embedding. This is a trade-off: neither can be made the default with the other taken away.
+**A reference stays relative**, in the saved text and in the Markdown written out. Move the document elsewhere without the picture and it disappears, so a document that must be self-contained uses embedding. This is a trade-off: neither can be made the default with the other taken away.
 
 ## More than one window, and opening from the desktop
 
@@ -3043,13 +2995,23 @@ Caution: **Do not make "New" the place defaults are laid down.** "Where the body
 
 ## Markdown, plain text and source
 
-Kspage opens Markdown files, plain text and program source as they are, and writes them back in the same format. These texts are kept beside code, so they must stay readable by every other tool.
+Kspage opens plain text and program source as they are, and writes them back byte for byte. A `.md` is one of these texts. These texts are kept beside code, so they must stay readable by every other tool. Markdown is also a format kspage writes, as a one-way export.
+
+### A `.md` opens as plain text
+
+A `.md` file opens with each line as one paragraph, as any text does, and saves back byte for byte ("Plain text holds one line per block" below). Kspage does not read Markdown into headings, lists and tables.
+
+**Reading Markdown in would cost a second format to keep whole.** A reader turns the text into styled blocks, and writing back must then give the same text again. That needs a reader, a table of looks handed to it, rules for every notation the writer must reproduce, and a check that sends real files through and back; the check promises only a fixed point, not the bytes the person typed. Every editor and code host already shows Markdown rendered, so what kspage would add is small next to that cost.
+
+**Opened as text, a `.md` loses nothing.** A notation, a trailing space or a line break stays as typed, so the tools around the file (diff, `grep`, the checks that read text) see exactly what was there.
+
+**The export stays.** A document made in kspage can still be written out as Markdown to keep beside the code. It is a copy for reading, not a second home for the document: the `.kspage` stays the one to edit, since a copy without styles cannot say which of the two is newer.
 
 ### The mapping into Markdown
 
 Exporting to Markdown writes everything Markdown has a form for in that form. Content Markdown cannot express is written as a hidden comment, so it is never dropped silently. The look is dropped.
 
-[`share/markdown.kspls`](../share/markdown.kspls) writes it, **for keeping a document beside the code**. Like HTML it does not read back into the same document, since no style is carried into the text ("Saving and loading are separate from exporting" above).
+[`share/markdown.kspls`](../share/markdown.kspls) writes it, **for keeping a document beside the code**. It does not read back: kspage opens a `.md` as plain text ("A `.md` opens as plain text" below), and no style is carried into the text ("Saving and loading are separate from exporting" above).
 
 **Contents with a Markdown form are written in that form; contents without one are written as a mark.**
 
@@ -3061,7 +3023,7 @@ Exporting to Markdown writes everything Markdown has a form for in that form. Co
 | A grid (a table) | a GFM table (GitHub's table syntax) |
 | A link | `[text](destination)` |
 | Emphasis on a run | `**` and `*` |
-| **Merged cells, a block inside a cell, where a slide's frames sit, and a chart** | a mark, `<!-- kspage: ... -->`: an HTML comment that Markdown passes through unseen. A slide's frames' words still go on as paragraphs ("A slide and a chart are not carried in Markdown" below) |
+| **Merged cells, a block inside a cell, where a slide's frames sit, and a chart** | a mark, `<!-- kspage: ... -->`: an HTML comment that Markdown passes through unseen. A slide's frames' words still go on as paragraphs. **No fence of kspage's own carries them**: only kspage would read it, and every other tool would show it as code |
 | The look (colour, sizes, alignment, a picture's size, a column's width, a row's height) | nothing |
 
 **A mark is written only where contents are lost.** The look is dropped wholesale; a mark for each part of it would bury the text, so this section says it once.
@@ -3076,71 +3038,23 @@ Note: Both numbers come from the same place the layout uses (`kspage/model/numbe
 
 **A table's first row is its heading**, since GFM has no table without one. As with CSV, export writes the text shown, not the formula.
 
-### The Markdown reader accepts any text
+### Rules the Markdown writer keeps
 
-Reading Markdown never fails. A line the reader does not recognise becomes an ordinary paragraph, and the text typed is kept exactly.
+**Inline code is the innermost mark.** Emphasis and a link go outside it (`` **`x`** ``, `` [`x`](u) ``): inside a fence a mark is plain text. A text holding a `` ` `` gets a longer fence. Its style is code by role, the same role as a code block's (it does not wrap); the writer never looks at the name.
 
-[`share/markdown_read.kspls`](../share/markdown_read.kspls) reads it.
-
-Caution: **A line it does not recognise goes in as a paragraph**, so reading never fails. Refusing would silently drop the lines it cannot read. In a format like Markdown, where any text reads as prose, the person would not know what was lost.
-
-**The text typed is not changed** (as in "What it does not hold"). A chapter number or a list number written in the text goes in as text where it stands. So a heading gets a style with no number mark; with one, export would double the number. A numbered list's marker, by contrast, is not taken from the text: an item's number is counted at layout, so it is renumbered by the same rule.
-
-**A style is looked up by its shape, and added where none matches.** Looked up by name, merely renaming a style would make the next import build another one. Only the emphasis style's name is built in one place, shared with the code that applies emphasis (`paint.span_name`). With two places, the same emphasis would appear twice in the table.
-
-**A row gets no style name**, since the text gives no way to choose one. A cell takes the cell style of its column's alignment, found by its part, as a table inserted from the menu finds it (`cell_style` in [`share/markdown_style.kspls`](../share/markdown_style.kspls)). Why a left-aligned cell takes one too is in "What a Markdown round trip drops" below. A picture gets a fixed size: at size 0 it is not laid out, so an imported picture would silently vanish.
-
-### Markdown is edited as itself (no second copy is kept)
-
-A `.md` file opened in kspage is saved back as that `.md` file. There is never a `.kspage` copy beside it.
-
-**Do not sync an exported text back into a separately kept document.** With two copies, one of them without styles, nothing tells which is newer. So the `.kspage` is not made the source of a generated `.md`, since that is the two-copy shape itself.
-
-**A document opened from a `.md` is written back to a `.md`**, so there is one copy. Write it back in the format it was opened in; saved as a `.kspage`, it would become two copies at once. A document kept as text (a `.md` in git, say) can then be edited in kspage while the tools around it work unchanged: diff, `grep`, the checks that read text.
-
-**If anything will be dropped, say so before writing.** Written back over the original, a silent drop cannot be noticed by anyone. The count lives in one place, [`share/markdown.kspls`](../share/markdown.kspls)'s `Sink.dropped`. It takes what can be marked in the text (`notice`) and what cannot (annotations, asides): the person needs to know not "what was dropped" but "whether anything was".
-
-**The annotations (`Inline.remark`) and the asides (`Block.aside`) are not written**, and get no mark. They are not the document's contents, so nothing is dropped from the flow. They still count as dropped: the file is written back, so their absence must be reported.
-
-### A slide and a chart are not carried in Markdown
-
-**Markdown has no form for where a box sits, nor for a chart**, so both go the way of everything else it cannot hold: a comment in the text, and a count the save reports before it writes ("If anything will be dropped, say so before writing" above). A slide's frames keep their words, written as paragraphs.
-
-**No fence of kspage's own carries them.** Only kspage would read such a fence, and every other tool would show it as code; the place to keep a slide whole is the `.kspage` file. So no fence language is reserved: a fence naming `kspage-slide` or `kspage-chart` is a code block like any other, kept whole, its language a style's name ("What a Markdown round trip drops" below).
-
-### What a Markdown round trip drops
-
-Reading a `.md` file and writing it back must lose no content. A check sends every Markdown file in this repository through kspage and back to prove it.
-
-Whether the repository's documents can be held in kspage depends first on **whether the round trip drops any content**. (A *round trip* is reading a text in and writing it out again.) Once something is dropped, nobody can say what was lost on the day a document moved. [`../../tests/suite/mdtrip_test.kspls`](../../tests/suite/mdtrip_test.kspls) watches this by sending the repository's own `.md` files through. Do not test on small made-up texts alone: code inside bold or a link, and consecutive fences, appear only in the real thing.
-
-**What is required is a fixed point, not sameness with the original.** A choice of notation, such as a `*` bullet becoming `-`, is not content. Reading the written text in again must change it no further, the same idea as self-hosting's diff-zero (the compiler rebuilt by itself gives the same output). Separately, the counts of headings, code spans, fence languages and link targets must not go down.
-
-```mermaid
-flowchart LR
-  orig["A .md file"] --> one["Read and write"] --> t1["Text 1"]
-  t1 --> two["Read and write again"] --> t2["Text 2"]
-  t2 -.->|must equal| t1
-  orig -.->|may differ in notation only| t1
-```
-
-**A code span (`` ` ``) is read as a run.** Kept as literal text, the `` ` `` would become a character of the body, be escaped on writing back, and change the text across the round trip. Its style has the same role as a code block's (it does not wrap). It gets no role of its own, because a run reads neither the wrap setting nor the fill, and the theme applies the monospace by looking at that one role.
-
-**The language a fence names is kept as a style name.** Dropped, ` ```kspl ` becomes ` ``` `, and every tool that collects the source's fences misses them (in this repository, [`../../tests/suite/docsnippet_test.kspls`](../../tests/suite/docsnippet_test.kspls)). A style name becomes the HTML class unchanged, so Markdown's naming is the same mapping.
+**The language a fence declares is the fence style's name.** Dropped, ` ```kspl ` becomes ` ``` `, and every tool that collects the source's fences misses them (in this repository, [`../../tests/suite/docsnippet_test.kspls`](../../tests/suite/docsnippet_test.kspls)). The plain code style declares none.
 
 **Consecutive runs are wrapped together per emphasis.** Code inside bold splits into three runs (`this document (` / `DESIGN.md` / `)`), so wrapping each run in `**` would write `**...****` ... `****...**`.
 
-**The parting is in two stages: by link target first, then by emphasis inside that.** Parting by both at once splits a link wherever the emphasis changes inside its text. A `[...](...)` is written per piece, so one link multiplies into as many links as it has runs. The rendered text does not change, so nothing shows on the screen; only the gate that counts notices. This is the rule of the HTML mapping ("The mapping into HTML" above) carried out in the writer, not a separate one.
+**The parting is in two stages: by link target first, then by emphasis inside that.** Parting by both at once splits a link wherever the emphasis changes inside its text. A `[...](...)` is written per piece, so one link multiplies into as many links as it has runs. The rendered text does not show it, yet a screen reader announces each piece as a link. **Only runs inside a link are grouped**: grouping runs with no link too would detach a note's mark from its run.
 
-**A break is "a block that holds no content and collects none"** (`divides` in `model/fence.kspls`). A *break* is the horizontal rule Markdown writes as `---`. Add neither a field nor a name for it. It is recognised by role, so renaming a style does not break it (Principle 1). Its look is the style's: a line under a style that draws one, only space under one that does not.
+**A break is "a block that holds no content and collects none"** (`divides` in `model/fence.kspls`). A *break* is the horizontal rule Markdown writes as `---`. Add neither a field nor a name for it. It is recognised by role, so renaming a style does not break it (Principle 1). Its look is the style's: a line under a style that draws one, only space under one that does not. Only a break that draws a line is written.
 
-**A break is never taken into a fence.** Taken in, two fences with a break between would become one block: one band on the screen, and one ``` pair in the text. So two fences separated by one blank line round-trip as two. Where a fence begins with the same style as the block before it, the reader puts a break between them. That break is not written into the text. The next reading rebuilds it from "there are two fences", so it does not multiply across round trips.
+**A break is never taken into a fence.** Taken in, two fences with a break between would become one block: one band on the screen, and one ``` pair in the text.
 
 **Do not mistake a collecting block for a break.** The table of contents, the footnote list, a chart and a figure assemble their content at every layout. So in the document they hold neither text nor children, and mistaken for breaks, the list disappears whole. Nor mistake a blank line inside a fence, which holds one empty run.
 
-**A setext underline is not read as a heading** (a setext heading is a line underlined with `===` or `---`), since the reader takes only `#` headings. Read as body characters, a `---` would join the paragraph before it, so reading it as a break is the nearer answer.
-
-**A column's alignment is held by the style of that column's cells.** Do not add a field to the table. `Style.align` already means "the alignment of a row's content", so a table field would hold one thing two ways (Principle 6: one means to one purpose). The role looked for is a flowing paragraph with inner padding and no marker, of that alignment. The padding tells it apart:
+**A column's alignment is held by the style of that column's cells.** Do not add a field to the table. `Style.align` already means "the alignment of a row's content", so a table field would hold one thing two ways (Principle 6: one means to one purpose). The padding tells a cell from the other blocks that draw nothing of their own:
 
 | Block | Inner padding | Draws a line |
 | :-- | :-- | :-- |
@@ -3148,49 +3062,17 @@ flowchart LR
 | A break | no | yes |
 | A bare paragraph | no | no |
 
-**Give a left-aligned cell a style too.** A block with no style name cannot hold a style, so it would stay as its parent has it, and neither the grid line nor the padding could be written anywhere. Nothing goes into the text, so the round trip does not move.
+**It is one per column.** Markdown can write alignment only per column, so the writer takes the header row's cells. A different alignment in a lower row cannot be written. Taking "any row that holds one" would let adding one row change the whole column's alignment. Left is the default, written `---`.
 
-**An explicit left (`:--`) is folded into the default.** It looks the same as `---`, so holding the two apart in the document means nothing. In this repository `:--` far outnumbers centre and right together, and only those two carry content that could be lost. So holding alignment for them alone is enough; otherwise the styles' table grows by the number of cells.
-
-**It is one per column.** Markdown can write alignment only per column, so the writer takes the header row's cells. A different alignment in a lower row cannot be written. Taking "any row that holds one" would let adding one row change the whole column's alignment.
-
-### Markdown's look comes from a style table passed in before reading
-
-The reader only decides what each line *is* (a heading, a list, code). How it *looks* comes from a ready-made table of styles that is handed to the reader before it starts.
-
-**The reader decides roles only and writes no look.**
-
-Caution: **Writing into a style what is not in the text grows a look that is not in the text.** A `#` says "this is a heading", not "this is 32px bold".
-
-Yet with roles alone, the size, the background colour and the rules are nowhere.
-
-**A table carrying the look is passed in before reading** ([`share/markdown_look.kspls`](../share/markdown_look.kspls)). The reader always "uses what is there and adds a style only where there is none", so a table passed in is taken up unchanged.
-
-Caution: **Do not apply the table after reading.** Applied afterwards, it misses the styles the reader added (a fence naming a language, a code span with emphasis).
-
-**Carry one style per role, no more.** With two of one role, the table's row order decides which is taken, since the reader looks up by role and takes the first found.
-
-**Do not hold two sets of style names.** The names carried in the table and the names the reader adds where the table lacks them are the same names. With two sets, one document would carry different names depending on how it was opened (Principle 4: one canonical source). So `markdown_look.kspls` holds the one set, and the reader uses it.
-
-**A role missing from the table is added by following a style of the same role that is there.** Do not add it bare. A fence naming a language (` ```kspl `) and a code span with emphasis (`` **`x`** ``) each carry a different style name and so become new styles, yet every one of them is code by role. Added bare, a fence that names its language alone comes out as plain body text, with no monospace, background or frame.
-
-**Give a bare paragraph a name too.** A block with no name cannot hold a style, so neither the space before and after nor the line height could be written anywhere. Its role is "no role": a paragraph that is no heading, list, code, cell or break, and carries no marker.
-
-**A break alone is told apart by name.** A break that draws no line has nothing but its empty content (its role's definition), so style fields cannot tell it from a bare paragraph. The distinction lives in this one place; held in two, the paragraph after a break would take the break's style.
-
-**A link's colour is the theme's to hold.** Given the body's colour, the clickable place would vanish into the text. Which style is a link is not read from the style: a colour plus an underline is a link-like look, not a link, and a heading given both looks the same. So the document is asked. The run holds a link's target (see "A link: the run holds where it points, and the style holds the look" above), so the style a run with a target wears is the link style. Walk the document once, first; walking it per style would go over the document once for every style. The test on the look (`linked` in `model/style.kspls`) is needed only to find the one link look in a table one made oneself. That is the reader's case, where no other style carries a colour and an underline.
-
-**Swapping this table does not move the round trip.** Neither style names nor measurements are written into the `.md`.
-
-Caution: **So the round-trip check runs with this table.** Run with an empty one, a round trip broken by an added look would go unnoticed.
+**The annotations (`Inline.remark`) and the asides (`Block.aside`) are not written**, and get no mark. They are not the document's contents, so nothing is dropped from the flow.
 
 ### Plain text holds one line per block
 
-A `.txt` file or a program's source opens with each line as one paragraph, and saves back byte for byte identical.
+A `.txt` file, a `.md` file or a program's source opens with each line as one paragraph, and saves back byte for byte identical.
 
-This is how kspage opens a `.txt` or a program's source ([`share/text.kspls`](../share/text.kspls)).
+This is how kspage opens a `.txt`, a `.md` or a program's source ([`share/text.kspls`](../share/text.kspls)).
 
-**It round-trips byte for byte.** Markdown's "fixed point" is not enough here ("What a Markdown round trip drops" above). That one does not count a choice of notation as content, whereas this text is a compiler's or a tool's input, where one byte different is another file. [`../../tests/suite/textrip_test.kspls`](../../tests/suite/textrip_test.kspls) watches it by sending every file git knows through whole.
+**It round-trips byte for byte.** A "fixed point" (the written text, read again, changes no further) is not enough here. That one does not count a choice of notation as content, whereas this text is a compiler's or a tool's input, where one byte different is another file. [`../../tests/suite/textrip_test.kspls`](../../tests/suite/textrip_test.kspls) watches it by sending every file git knows through whole.
 
 | What | What kspage does | Why |
 | :-- | :-- | :-- |
@@ -3413,6 +3295,18 @@ One window cannot show two documents side by side. Open a second window instead.
 
 * **A second pane that takes typing is large.** Every lookup by id would have to ask which pane is current, or the ids would be kept in two sets, and every part wired to `ui` would be touched.
 * **A second read-only pane is small, but buys almost nothing.** Another document already opens in another window (from a link inside a document, or with `?doc=` when the server serves the page). There the size, the arrangement and a second screen are all real. Another place in the same document opens the same way ("Another place in the same document is seen in another window" above). With that means already there, a second goes against Principle 6.
+
+### Accepted limit 3: a document cannot be written out as HTML
+
+A document goes out as a printed page (PDF), as Markdown, or a table as CSV; there is no HTML export.
+
+**Why it was dropped.** An HTML export is a second rendering of the document with rules the screen does not use: styles turned into CSS classes and rules, a line's leading scaled to CSS's measure, escaping for a stylesheet. It carried its own tests and checks, and the layout could still differ, since the browser breaks the lines. Printing already gives a page that looks as the screen does, and the Markdown export keeps a document beside the code.
+
+### Accepted limit 4: a `.md` file is not read as Markdown
+
+A `.md` opens as plain text, one line a paragraph, and saves back byte for byte ("A `.md` opens as plain text" above). It is not turned into headings, lists and tables.
+
+**Why it was dropped.** Reading Markdown into styled blocks needed a reader, a table of looks handed to it, and a check that real files survive the trip there and back, and it promised only that the text settled, not that it stayed as typed. Every code host and editor already shows Markdown rendered.
 
 ## Further reading
 

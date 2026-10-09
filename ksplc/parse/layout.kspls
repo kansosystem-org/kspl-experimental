@@ -423,29 +423,27 @@ priv fn merge(src: U8[], phys: List<|Phys|>@, arena: Arena$@): List<|Logical|>
         $code_end: = p.code_end
         $j: = i + 1
         for j < phys.len
-            q: = phys.get(j)
+            $k: = j
+            // Caution: **Do not cut at a comment line.** A comment may stand partway through a
+            // wrapped expression (the run of `.set(…)` in `ksplc/lsp/worker.kspls`) or between an
+            // `=` and its value; the next line with code decides, by the same test as a line right
+            // below.
+            for k < phys.len && phys.get(k).blank && !phys.get(k).inner
+                k += 1
+            if k >= phys.len
+                break
+            q: = phys.get(k)
             if q.inner
                 if !q.blank
                     code_end = q.code_end
-                j += 1
-                continue
-            // Caution: **Do not cut at a comment line.** A comment may stand partway through a
-            // wrapped expression (the run of `.set(…)` in `ksplc/lsp/worker.kspls`); the next line
-            // with code decides.
-            if q.blank
-                $k: = j
-                for k < phys.len && phys.get(k).blank && !phys.get(k).inner
-                    k += 1
-                if k >= phys.len || !starts_cont(src[phys.get(k).code_start])
-                    break
-                j = k
+                j = k + 1
                 continue
             if ends_in_catch(src.sub(0, code_end)) && q.indent > indent
                 break // the level after a `catch` is a block, not a continuation
             if !continues(src, code_end, p.code_start, q.code_start)
                 break
             code_end = q.code_end
-            j += 1
+            j = k + 1
         out
             .push(Logical::{ .line = p.line, .indent = indent, .head = head,
             .code_start = p.code_start, .code_end = code_end, .attr = is_attribute(head) })
@@ -678,8 +676,7 @@ priv fn splice(src: U8[], ins: List<|Insert|>@, arena: Arena$@): U8[] //<
             order.set(b - 1, order.get(b))
             order.set(b, x)
             b -= 1
-    $out: = Str_builder.new()
-    defer out.free()
+    out: = arena.text()
     $at: Sz = 0
     for k in Range.asc(order.len)
         one: = ins.get(order.get(k))
@@ -690,4 +687,4 @@ priv fn splice(src: U8[], ins: List<|Insert|>@, arena: Arena$@): U8[] //<
         at += one.drop
     if at < src.len
         out.s(src.sub_from(at))
-    return arena.dup_str(out.slice())
+    return out.take()
